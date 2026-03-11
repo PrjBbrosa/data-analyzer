@@ -863,16 +863,205 @@ class TimeDomainCanvas(FigureCanvas):
         return stats
 
 
+class AxisEditDialog(QDialog):
+    """双击坐标轴弹出的编辑对话框"""
+    def __init__(self, parent, ax, axis='x'):
+        super().__init__(parent)
+        self.ax = ax
+        self.axis = axis
+        self.setWindowTitle(f"{'X' if axis == 'x' else 'Y'}轴设置")
+        self.setMinimumWidth(280)
+        layout = QFormLayout(self)
+
+        if axis == 'x':
+            lo, hi = ax.get_xlim()
+            label = ax.get_xlabel()
+        else:
+            lo, hi = ax.get_ylim()
+            label = ax.get_ylabel()
+
+        self.spin_min = QDoubleSpinBox()
+        self.spin_min.setRange(-1e15, 1e15)
+        self.spin_min.setDecimals(4)
+        self.spin_min.setValue(lo)
+        layout.addRow("最小值:", self.spin_min)
+
+        self.spin_max = QDoubleSpinBox()
+        self.spin_max.setRange(-1e15, 1e15)
+        self.spin_max.setDecimals(4)
+        self.spin_max.setValue(hi)
+        layout.addRow("最大值:", self.spin_max)
+
+        self.edit_label = QLineEdit(label)
+        layout.addRow("标签:", self.edit_label)
+
+        self.chk_auto = QCheckBox("自动范围")
+        layout.addRow(self.chk_auto)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        layout.addRow(bb)
+
+    def get_values(self):
+        return self.spin_min.value(), self.spin_max.value(), self.edit_label.text(), self.chk_auto.isChecked()
+
+
 class PlotCanvas(FigureCanvas):
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(20, 12), dpi=100);
         super().__init__(self.fig);
         self.setParent(parent)
-        self.mpl_connect('scroll_event', self._on_scroll);
+        self.mpl_connect('scroll_event', self._on_scroll)
+        self.mpl_connect('button_press_event', self._on_click)
         self.setFocusPolicy(Qt.StrongFocus)
+        self._remarks = []  # [(ax_index, x, y, annotation_artist, dot_artist)]
+        self._line_data = {}  # {ax_index: (xdata, ydata)} for snapping
+        self._remark_enabled = False
+        self._last_scroll_t = 0  # 滚轮节流
+        self._scroll_timer = QTimer()
+        self._scroll_timer.setSingleShot(True)
+        self._scroll_timer.timeout.connect(lambda: self.draw_idle())
 
     def clear(self):
+        self._remarks = []
+        self._line_data = {}
         self.fig.clear()
+
+    def set_remark_enabled(self, enabled):
+        self._remark_enabled = enabled
+
+    def store_line_data(self, ax_index, xdata, ydata):
+        """存储曲线数据用于remark吸附"""
+        self._line_data[ax_index] = (np.array(xdata), np.array(ydata))
+
+    def _snap_to_curve(self, ax_index, x_click):
+        """将点击位置吸附到最近的曲线数据点"""
+        if ax_index not in self._line_data:
+            return None, None
+        xd, yd = self._line_data[ax_index]
+        if len(xd) == 0:
+            return None, None
+        idx = np.argmin(np.abs(xd - x_click))
+        return float(xd[idx]), float(yd[idx])
+
+    def _add_remark(self, ax, ax_index, x, y):
+        """在指定位置添加remark标注"""
+        # 格式化标签
+        if abs(x) >= 1000:
+            x_str = f"{x:.1f}"
+        elif abs(x) >= 1:
+            x_str = f"{x:.2f}"
+        else:
+            x_str = f"{x:.4f}"
+        if abs(y) >= 1000:
+            y_str = f"{y:.1f}"
+        elif abs(y) >= 0.01:
+            y_str = f"{y:.4f}"
+        else:
+            y_str = f"{y:.2e}"
+
+        ann = ax.annotate(
+            f"({x_str}, {y_str})",
+            xy=(x, y), xytext=(15, 15),
+            textcoords='offset points',
+            fontsize=8, color='#222',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffcc', edgecolor='#999', alpha=0.9),
+            arrowprops=dict(arrowstyle='->', color='#666', lw=1),
+            zorder=100
+        )
+        # 标记点
+        dot, = ax.plot(x, y, 'o', color='red', markersize=5, zorder=101)
+        self._remarks.append((ax_index, x, y, ann, dot))
+        self.draw_idle()
+
+    def _remove_remark_at(self, ax_index, x_click, y_click):
+        """删除最近的remark"""
+        if not self._remarks:
+            return
+        ax = self.fig.axes[ax_index] if ax_index < len(self.fig.axes) else None
+        if ax is None:
+            return
+        # 查找最近的remark (按像素距离)
+        best_idx, best_dist = -1, float('inf')
+        for i, (ai, rx, ry, ann, dot) in enumerate(self._remarks):
+            if ai != ax_index:
+                continue
+            # 转换为显示坐标计算距离
+            try:
+                disp = ax.transData.transform((rx, ry))
+                click_disp = ax.transData.transform((x_click, y_click))
+                dist = np.sqrt((disp[0] - click_disp[0])**2 + (disp[1] - click_disp[1])**2)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx = i
+            except:
+                pass
+        if best_idx >= 0 and best_dist < 50:  # 50像素内
+            _, _, _, ann, dot = self._remarks.pop(best_idx)
+            ann.remove()
+            dot.remove()
+            self.draw_idle()
+
+    def _on_click(self, e):
+        if e.inaxes is None or e.xdata is None:
+            return
+        # 找到点击的是哪个axes
+        ax_index = -1
+        for i, ax in enumerate(self.fig.axes):
+            if e.inaxes == ax:
+                ax_index = i
+                break
+        if ax_index < 0:
+            return
+
+        if e.button == 3:  # 右键删除remark
+            self._remove_remark_at(ax_index, e.xdata, e.ydata)
+            return
+
+        if e.button == 1 and e.dblclick:
+            # 双击坐标轴编辑 - 判断点击位置
+            ax = e.inaxes
+            # 获取axes在figure中的像素范围
+            bbox = ax.get_window_extent()
+            # 点击位置相对于axes的百分比
+            rel_x = (e.x - bbox.x0) / bbox.width
+            rel_y = (e.y - bbox.y0) / bbox.height
+            # 如果点击在底部15%区域, 编辑X轴
+            if rel_y < 0.15:
+                self._edit_axis(ax, 'x')
+                return
+            # 如果点击在左侧15%区域, 编辑Y轴
+            if rel_x < 0.15:
+                self._edit_axis(ax, 'y')
+                return
+
+        if e.button == 1 and not e.dblclick and self._remark_enabled:
+            # 左键单击添加remark (吸附到曲线)
+            x, y = self._snap_to_curve(ax_index, e.xdata)
+            if x is not None:
+                self._add_remark(e.inaxes, ax_index, x, y)
+
+    def _edit_axis(self, ax, axis):
+        """弹出坐标轴编辑对话框"""
+        dlg = AxisEditDialog(self.parent(), ax, axis)
+        if dlg.exec_() == QDialog.Accepted:
+            vmin, vmax, label, auto = dlg.get_values()
+            if axis == 'x':
+                if auto:
+                    ax.autoscale(axis='x')
+                else:
+                    ax.set_xlim(vmin, vmax)
+                if label:
+                    ax.set_xlabel(label)
+            else:
+                if auto:
+                    ax.autoscale(axis='y')
+                else:
+                    ax.set_ylim(vmin, vmax)
+                if label:
+                    ax.set_ylabel(label)
+            self.draw_idle()
 
     def set_tick_density(self, x, y):
         for ax in self.fig.axes:
@@ -892,7 +1081,14 @@ class PlotCanvas(FigureCanvas):
             lo, hi = ax.get_ylim(); c = e.ydata or (lo + hi) / 2; ax.set_ylim(c - (c - lo) * f, c + (hi - c) * f)
         else:
             lo, hi = ax.get_ylim(); d = (hi - lo) * 0.1 * step; ax.set_ylim(lo + d, hi + d)
-        self.draw_idle()
+        # 节流：快速滚动时延迟重绘，避免pcolormesh等重量级图形卡顿
+        now = _time.monotonic() * 1000
+        if now - self._last_scroll_t < 50:
+            # 滚动太快，延迟重绘
+            self._scroll_timer.start(60)
+        else:
+            self.draw_idle()
+        self._last_scroll_t = now
 
 
 class StatisticsPanel(QFrame):
@@ -1316,6 +1512,13 @@ class MainWindow(QMainWindow):
         self.btn_fft = QPushButton("▶ FFT");
         self.btn_fft.setStyleSheet("font-weight:bold;");
         fc.addWidget(self.btn_fft)
+        self.chk_fft_remark = QCheckBox("标注")
+        self.chk_fft_remark.setToolTip("左键点击曲线添加标注，右键删除标注")
+        fc.addWidget(self.chk_fft_remark)
+        self.chk_fft_autoscale = QCheckBox("自适应")
+        self.chk_fft_autoscale.setToolTip("自动匹配有效频率范围")
+        self.chk_fft_autoscale.setChecked(True)
+        fc.addWidget(self.chk_fft_autoscale)
         fc.addStretch();
         fl.addLayout(fc)
         self.canvas_fft = PlotCanvas(self);
@@ -1414,6 +1617,8 @@ class MainWindow(QMainWindow):
         self.btn_export.clicked.connect(self.export_excel)
         self.btn_reset.clicked.connect(self._reset_cursors)
         self.btn_rebuild_time.clicked.connect(self.rebuild_time_axis)
+        self.chk_fft_remark.stateChanged.connect(
+            lambda st: self.canvas_fft.set_remark_enabled(st == Qt.Checked))
         # 横坐标设置
         self.combo_xaxis.currentIndexChanged.connect(self._on_xaxis_mode_changed)
         self.btn_apply_xaxis.clicked.connect(self._apply_xaxis)
@@ -1738,6 +1943,32 @@ class MainWindow(QMainWindow):
         if len(rpm) != n: QMessageBox.warning(self, "提示", f"长度不匹配 ({n} vs {len(rpm)})"); return None
         return rpm
 
+    @staticmethod
+    def _fft_auto_xlim(freq, amp):
+        """自适应计算FFT频率范围，取整到 1/2/5/10/20/50/100... 序列"""
+        if len(freq) < 2 or len(amp) < 2:
+            return freq[-1] if len(freq) else 100
+        # 找到包含99%能量的频率
+        cumulative = np.cumsum(amp ** 2)
+        total = cumulative[-1]
+        if total < 1e-20:
+            return freq[-1]
+        # 99%能量截止
+        idx_99 = np.searchsorted(cumulative, total * 0.99)
+        f_cutoff = freq[min(idx_99, len(freq) - 1)]
+        # 给一些余量 (1.2x)
+        f_cutoff *= 1.2
+        # 取整到好看的数值序列: 1, 2, 5, 10, 20, 50, 100, 200, 500 ...
+        nice_vals = []
+        for exp in range(-1, 7):
+            for m in [1, 2, 5]:
+                nice_vals.append(m * 10 ** exp)
+        nice_vals.sort()
+        for nv in nice_vals:
+            if nv >= f_cutoff:
+                return nv
+        return freq[-1]
+
     def do_fft(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 10: QMessageBox.warning(self, "提示", "请选择有效信号"); return
@@ -1764,20 +1995,34 @@ class MainWindow(QMainWindow):
                 _, psd = FFTAnalyzer.compute_psd(sig, fs, win, nfft)
 
             self.canvas_fft.clear()
+
+            # 自适应频率范围计算
+            if self.chk_fft_autoscale.isChecked():
+                x_max = self._fft_auto_xlim(freq, amp)
+            else:
+                x_max = fs / 2
+
+            psd_db = 10 * np.log10(psd + 1e-12)
+
             ax1 = self.canvas_fft.fig.add_subplot(2, 1, 1)
             ax1.plot(freq, amp, '#1f77b4', lw=0.8);
             ax1.set_xlabel('Frequency (Hz)');
             ax1.set_ylabel('Amplitude')
             ax1.set_title(f'FFT - {self.combo_sig.currentText()} (窗:{win}, NFFT:{nfft or "auto"})');
             ax1.grid(True, alpha=0.25, ls='--');
-            ax1.set_xlim(0, fs / 2)
+            ax1.set_xlim(0, x_max)
             ax2 = self.canvas_fft.fig.add_subplot(2, 1, 2)
-            ax2.plot(freq, 10 * np.log10(psd + 1e-12), '#d62728', lw=0.8);
+            ax2.plot(freq, psd_db, '#d62728', lw=0.8);
             ax2.set_xlabel('Frequency (Hz)');
             ax2.set_ylabel('PSD (dB)')
             ax2.set_title('功率谱密度');
             ax2.grid(True, alpha=0.25, ls='--');
-            ax2.set_xlim(0, fs / 2)
+            ax2.set_xlim(0, x_max)
+
+            # 存储曲线数据用于remark吸附
+            self.canvas_fft.store_line_data(0, freq, amp)
+            self.canvas_fft.store_line_data(1, freq, psd_db)
+
             self.canvas_fft.fig.tight_layout()
             self.canvas_fft.set_tick_density(self.spin_xt.value(), self.spin_yt.value())
             self.canvas_fft.draw();
