@@ -1003,7 +1003,47 @@ class PlotCanvas(FigureCanvas):
             dot.remove()
             self.draw_idle()
 
+    def _find_axis_for_dblclick(self, e):
+        """根据双击像素位置判断应编辑哪个axes的哪个轴。
+        检测范围包括axes外部的刻度标签区域（更符合用户直觉）。
+        返回 (ax, 'x'|'y') 或 (None, None)。
+        """
+        px, py = e.x, e.y
+        MARGIN = 45  # 像素：axes外部可点击的边距（覆盖刻度数字区域）
+        best = (None, None)
+        best_dist = float('inf')
+        for ax in self.fig.axes:
+            bbox = ax.get_window_extent()
+            # --- X轴区域：axes下方 MARGIN 像素范围内，水平方向在axes范围内 ---
+            if bbox.x0 - 10 <= px <= bbox.x1 + 10:
+                if bbox.y0 - MARGIN <= py <= bbox.y0 + 20:
+                    dist = abs(py - bbox.y0)
+                    if dist < best_dist:
+                        best = (ax, 'x')
+                        best_dist = dist
+            # --- Y轴区域：axes左侧 MARGIN 像素范围内，垂直方向在axes范围内 ---
+            if bbox.y0 - 10 <= py <= bbox.y1 + 10:
+                if bbox.x0 - MARGIN <= px <= bbox.x0 + 20:
+                    dist = abs(px - bbox.x0)
+                    if dist < best_dist:
+                        best = (ax, 'y')
+                        best_dist = dist
+                # --- 右侧Y轴（colorbar等）：axes右侧 MARGIN 像素范围内 ---
+                if bbox.x1 - 20 <= px <= bbox.x1 + MARGIN:
+                    dist = abs(px - bbox.x1)
+                    if dist < best_dist:
+                        best = (ax, 'y')
+                        best_dist = dist
+        return best
+
     def _on_click(self, e):
+        # 双击编辑坐标轴 — 优先处理，不要求点击在axes内部
+        if e.button == 1 and e.dblclick:
+            ax, axis = self._find_axis_for_dblclick(e)
+            if ax is not None:
+                self._edit_axis(ax, axis)
+                return
+
         if e.inaxes is None or e.xdata is None:
             return
         # 找到点击的是哪个axes
@@ -1018,23 +1058,6 @@ class PlotCanvas(FigureCanvas):
         if e.button == 3:  # 右键删除remark
             self._remove_remark_at(ax_index, e.xdata, e.ydata)
             return
-
-        if e.button == 1 and e.dblclick:
-            # 双击坐标轴编辑 - 判断点击位置
-            ax = e.inaxes
-            # 获取axes在figure中的像素范围
-            bbox = ax.get_window_extent()
-            # 点击位置相对于axes的百分比
-            rel_x = (e.x - bbox.x0) / bbox.width
-            rel_y = (e.y - bbox.y0) / bbox.height
-            # 如果点击在底部15%区域, 编辑X轴
-            if rel_y < 0.15:
-                self._edit_axis(ax, 'x')
-                return
-            # 如果点击在左侧15%区域, 编辑Y轴
-            if rel_x < 0.15:
-                self._edit_axis(ax, 'y')
-                return
 
         if e.button == 1 and not e.dblclick and self._remark_enabled:
             # 左键单击添加remark (吸附到曲线)
