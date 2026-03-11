@@ -1244,7 +1244,7 @@ class MultiFileChannelWidget(QWidget):
                 m = t in ci.text(0).lower();
                 ci.setHidden(not m);
                 v += m
-            fi.setHidden(v == 0 and t)
+            fi.setHidden(v == 0 and len(t) > 0)
 
     def _all(self):
         # 统计总共要勾选多少通道
