@@ -319,7 +319,7 @@ class OrderAnalyzer:
 
             # 提取各阶次能量
             oa = np.zeros(len(orders))
-            freq_per_order = seg_rpm / 60.0
+            freq_per_order = abs(seg_rpm) / 60.0
             if freq_per_order > 0:
                 for j, o in enumerate(orders):
                     of = o * freq_per_order
@@ -363,7 +363,7 @@ class OrderAnalyzer:
             freq = np.fft.fftfreq(nfft, 1 / fs)[:nfft // 2]
             amp = 2 * np.abs(fft_r[:nfft // 2]) / seg_sz
 
-            freq_per_order = sr / 60.0
+            freq_per_order = abs(sr) / 60.0
             if freq_per_order > 0:
                 for j, o in enumerate(orders):
                     of = o * freq_per_order
@@ -396,8 +396,8 @@ class OrderAnalyzer:
             freq = np.fft.fftfreq(nfft, 1 / fs)[:nfft // 2]
             amp = 2 * np.abs(fft_r[:nfft // 2]) / seg_sz
 
-            of = target * sr / 60.0
-            bw = 0.25 * sr / 60.0
+            of = target * abs(sr) / 60.0
+            bw = 0.25 * abs(sr) / 60.0
             m = (freq >= of - bw) & (freq <= of + bw)
             rt.append(sr)
             oa.append(np.sqrt(np.mean(amp[m] ** 2)) if np.any(m) else 0)
