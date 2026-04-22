@@ -119,6 +119,9 @@ class TimeDomainCanvas(FigureCanvas):
             ax0 = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax0)
             for i in range(1, len(vis)):
                 tw = ax0.twinx(); self.axes_list.append(tw)
+                tw.spines['left'].set_visible(False)
+                tw.spines['top'].set_visible(False)
+                tw.spines['bottom'].set_visible(False)
                 if i >= 2:
                     tw.spines['right'].set_position(('outward', 60 * (i - 1)))
             for ax, (name, t, sig, color, unit) in zip(self.axes_list, vis):
