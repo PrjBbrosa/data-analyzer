@@ -56,6 +56,22 @@ class TimeDomainCanvas(FigureCanvas):
         self._ax = None;
         self._bx = None
 
+    def full_reset(self):
+        """Clear figure AND all cursor/dual-cursor/background state.
+        Use this on file close; use clear() for redraws within a session."""
+        self.clear()
+        self._bg = None
+        self._cursor_artists = []
+        self._a_artists = []
+        self._b_artists = []
+        self._ax = None
+        self._bx = None
+        self._placing = 'A'
+        self._cursor_visible = False
+        self._dual = False
+        self.span_selector = None
+        self.draw_idle()
+
     def plot_channels(self, ch_list, mode='overlay', xlabel='Time (s)'):
         self.clear()
         vis = [(n, t, s, c, u) for n, v, t, s, c, u in ch_list if v]
@@ -267,6 +283,11 @@ class PlotCanvas(FigureCanvas):
         self._remarks = []
         self._line_data = {}
         self.fig.clear()
+
+    def full_reset(self):
+        """Clear figure AND remarks/stored-line-data."""
+        self.clear()
+        self.draw_idle()
 
     def set_remark_enabled(self, enabled):
         self._remark_enabled = enabled
