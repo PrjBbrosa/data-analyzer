@@ -39,6 +39,11 @@ supersedes: []
 ---
 ```
 
+`tags` lists **content tags only** (e.g., `fft`, `window`, `rework-risk`). Do
+NOT duplicate `role` inside `tags` — role lives in its own field and in the
+`## <role>` heading of `LESSONS.md`. Always write `supersedes: []` as an
+explicit empty list, never as `supersedes:` (null).
+
 ## Merge-on-conflict write protocol (MANDATORY order)
 
 1. `Read` this file (you're doing it).
@@ -49,9 +54,14 @@ supersedes: []
    - Update the existing row in `../LESSONS.md` in place.
    - Do NOT create a new file.
    - Only add to `supersedes` if you are fully replacing the old content.
+   - **If multiple candidates match:** pick the one with the latest `updated`
+     date; if still tied, return `status: needs_info` to the orchestrator
+     rather than guessing.
 4. **If no same-topic lesson exists:** create a new file
    `<role>/YYYY-MM-DD-<slug>.md` and append a new row to `../LESSONS.md`.
 5. Return `lessons_added` and `lessons_merged` arrays to the caller.
+6. **If either write fails** (lesson file or index row), surface the error to
+   the caller and do NOT retry silently — partial writes must be reported.
 
 ## Master index format
 
@@ -75,5 +85,13 @@ If you cannot state a non-obvious insight, do NOT write a lesson.
 ## Reading protocol (at agent startup)
 
 1. `Read docs/lessons-learned/LESSONS.md`.
-2. Filter rows by your role tag AND keyword match against the incoming task.
+2. Restrict to rows under your role's `## <role>` heading, then keyword-match
+   the bracketed content tags (e.g., `[fft]`, `[window]`) against the
+   incoming task. Role selection is by heading; relevance filtering is by
+   content tag.
 3. `Read` at most 5 full lesson bodies, highest keyword-hit count first.
+
+## Out-of-scope for the reader
+
+Ignore `.gitkeep` entries under role directories — they exist only to
+preserve empty directories in git. They are not lessons.
