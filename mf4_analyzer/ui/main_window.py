@@ -32,14 +32,7 @@ from PyQt5.QtCore import Qt, QTimer
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.ticker import MaxNLocator
 
-try:
-    from asammdf import MDF
-
-    HAS_ASAMMDF = True
-except ImportError:
-    HAS_ASAMMDF = False
-
-from ..io import DataLoader, FileData
+from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer, OrderAnalyzer
 from .canvases import TimeDomainCanvas, PlotCanvas
 from .dialogs import ChannelEditorDialog, ExportDialog
