@@ -609,6 +609,14 @@ class MainWindow(QMainWindow):
         # re-fill combo_xaxis_ch if still in channel mode
         if self.combo_xaxis.currentIndex() == 1:
             self._on_xaxis_mode_changed(1)
+            if self._custom_xaxis_fid is not None and self._custom_xaxis_ch is not None:
+                target = (self._custom_xaxis_fid, self._custom_xaxis_ch)
+                for i in range(self.combo_xaxis_ch.count()):
+                    if self.combo_xaxis_ch.itemData(i) == target:
+                        self.combo_xaxis_ch.blockSignals(True)
+                        self.combo_xaxis_ch.setCurrentIndex(i)
+                        self.combo_xaxis_ch.blockSignals(False)
+                        break
 
         self.plot_time()  # re-renders remaining channels or clears if empty
 
