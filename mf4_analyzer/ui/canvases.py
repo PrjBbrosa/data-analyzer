@@ -96,8 +96,7 @@ class TimeDomainCanvas(FigureCanvas):
         vis = [(n, t, s, c, u) for n, v, t, s, c, u in ch_list if v]
         if not vis: self.draw(); return
         if mode == 'subplot' and len(vis) > 1:
-            n = len(vis);
-            first = None
+            n = len(vis); first = None
             for i, (name, t, sig, color, unit) in enumerate(vis):
                 ax = self.fig.add_subplot(n, 1, i + 1, sharex=first) if i > 0 else self.fig.add_subplot(n, 1, 1)
                 if i == 0: first = ax
@@ -105,32 +104,53 @@ class TimeDomainCanvas(FigureCanvas):
                 td, sd = self._ds(t, sig)
                 ax.plot(td, sd, color=color, lw=0.8)
                 self.channel_data[name] = (t, sig, color, unit)
-                ax.set_ylabel(name[:22], fontsize=8, color=color)
+                label = f"{name[:22]} ({unit})" if unit else name[:22]
+                ax.set_ylabel(label, fontsize=8, color=color)
                 ax.tick_params(axis='y', colors=color, labelsize=7)
-                ax.spines['left'].set_color(color);
-                ax.spines['left'].set_linewidth(2)
+                ax.spines['left'].set_color(color); ax.spines['left'].set_linewidth(2)
                 ax.grid(True, alpha=0.25, ls='--')
                 if i < n - 1:
                     ax.tick_params(axis='x', labelbottom=False)
                 else:
                     ax.set_xlabel(xlabel, fontsize=9)
             self.fig.subplots_adjust(hspace=0.05, left=0.12, right=0.96, top=0.97, bottom=0.07)
-        else:
-            ax = self.fig.add_subplot(1, 1, 1);
-            self.axes_list.append(ax)
-            for name, t, sig, color, unit in vis:
+        elif mode == 'overlay' and len(vis) >= 2:
+            # Per-channel twin-Y axes
+            ax0 = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax0)
+            for i in range(1, len(vis)):
+                tw = ax0.twinx(); self.axes_list.append(tw)
+                if i >= 2:
+                    tw.spines['right'].set_position(('outward', 60 * (i - 1)))
+            for ax, (name, t, sig, color, unit) in zip(self.axes_list, vis):
                 td, sd = self._ds(t, sig)
-                ax.plot(td, sd, color=color, lw=0.8, label=name[:18], alpha=0.85)
+                ax.plot(td, sd, color=color, lw=0.8)
                 self.channel_data[name] = (t, sig, color, unit)
-            ax.legend(loc='upper right', fontsize=7, ncol=min(3, len(vis)))
-            ax.set_xlabel(xlabel, fontsize=9);
+                label = f"{name[:18]} ({unit})" if unit else name[:18]
+                ax.set_ylabel(label, color=color, fontsize=8)
+                ax.tick_params(axis='y', colors=color, labelsize=7)
+                side = 'left' if ax is ax0 else 'right'
+                ax.spines[side].set_color(color); ax.spines[side].set_linewidth(1.5)
+            ax0.set_xlabel(xlabel, fontsize=9)
+            ax0.grid(True, alpha=0.25, ls='--')
+            right = max(0.95 - 0.06 * max(0, len(vis) - 2), 0.60)
+            self.fig.subplots_adjust(left=0.08, right=right, top=0.97, bottom=0.08)
+        else:
+            # single channel
+            ax = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax)
+            name, t, sig, color, unit = vis[0]
+            td, sd = self._ds(t, sig)
+            ax.plot(td, sd, color=color, lw=0.8)
+            self.channel_data[name] = (t, sig, color, unit)
+            label = f"{name[:22]} ({unit})" if unit else name[:22]
+            ax.set_ylabel(label, fontsize=8, color=color)
+            ax.tick_params(axis='y', colors=color, labelsize=7)
+            ax.set_xlabel(xlabel, fontsize=9)
             ax.grid(True, alpha=0.25, ls='--')
             self.fig.tight_layout(pad=0.5)
         for ax in self.axes_list:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=10, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=6, min_n_ticks=3))
-        self.draw();
-        self._refresh = True
+        self.draw(); self._refresh = True
 
     def _ds(self, t, sig):
         n = len(sig)
@@ -250,8 +270,11 @@ class TimeDomainCanvas(FigureCanvas):
         for i, vl in enumerate(self._cursor_artists):
             if i < len(self.axes_list): vl.set_xdata([x, x]); vl.set_visible(True); self.axes_list[i].draw_artist(vl)
         info = [f"t={x:.4f}s"]
-        for ch, (tf, sf, _, _) in self.channel_data.items():
-            if len(tf): idx = min(np.searchsorted(tf, x), len(sf) - 1); info.append(f"{ch[:18]}={sf[idx]:.4g}")
+        for ch, (tf, sf, _, u) in self.channel_data.items():
+            if len(tf):
+                idx = min(np.searchsorted(tf, x), len(sf) - 1)
+                unit_s = f" {u}" if u else ""
+                info.append(f"{ch[:18]}={sf[idx]:.4g}{unit_s}")
         self.fig.canvas.blit(self.fig.bbox)
         self.cursor_info.emit("  │  ".join(info))
 
@@ -275,9 +298,15 @@ class TimeDomainCanvas(FigureCanvas):
             info.append(f"ΔT={dx:.4f}s")
             if abs(dx) > 1e-12: info.append(f"1/ΔT={1 / abs(dx):.2f}Hz")
             xlo, xhi = min(self._ax, self._bx), max(self._ax, self._bx)
-            for ch, (tf, sf, _, _) in self.channel_data.items():
-                if len(tf): m = (tf >= xlo) & (tf <= xhi); seg = sf[m]
-                if len(seg): dual.append(f"{ch[:20]}:Min={np.min(seg):.4g} Max={np.max(seg):.4g}  Avg={np.mean(seg):.4g} RMS={np.sqrt(np.mean(seg ** 2)):.4g}")
+            for ch, (tf, sf, _, u) in self.channel_data.items():
+                if not len(tf): continue
+                m = (tf >= xlo) & (tf <= xhi); seg = sf[m]
+                if not len(seg): continue
+                unit_s = f" {u}" if u else ""
+                dual.append(
+                    f"{ch[:20]}:Min={np.min(seg):.4g}{unit_s} Max={np.max(seg):.4g}{unit_s} "
+                    f"Avg={np.mean(seg):.4g}{unit_s} RMS={np.sqrt(np.mean(seg ** 2)):.4g}{unit_s}"
+                )
         if hover is not None:
             self._ensure_artists()
             for i, vl in enumerate(self._cursor_artists):

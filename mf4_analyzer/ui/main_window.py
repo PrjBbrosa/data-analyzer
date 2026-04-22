@@ -652,6 +652,15 @@ class MainWindow(QMainWindow):
         checked = self.channel_list.get_checked_channels()
         if not checked: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
 
+        mode = 'subplot' if self.combo_mode.currentIndex() == 0 else 'overlay'
+        if mode == 'overlay' and len(checked) > 5:
+            ans = QMessageBox.question(
+                self, "确认",
+                f"overlay 下 {len(checked)} 个通道会产生 {len(checked)} 根 Y 轴，右侧可能拥挤。继续？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                return
+
         # 获取自定义横坐标数据
         custom_x = None
         if self._custom_xaxis_fid and self._custom_xaxis_ch:
@@ -683,7 +692,6 @@ class MainWindow(QMainWindow):
                         'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit}
         if not data: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
 
-        mode = 'subplot' if self.combo_mode.currentIndex() == 0 else 'overlay'
         xlabel = self._custom_xlabel or 'Time (s)'
         self.canvas_time.plot_channels(data, mode, xlabel=xlabel)
         self.canvas_time.set_tick_density(self.spin_xt.value(), self.spin_yt.value())
