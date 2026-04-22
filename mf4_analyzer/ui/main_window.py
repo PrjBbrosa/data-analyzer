@@ -37,6 +37,7 @@ from ..signal import FFTAnalyzer, OrderAnalyzer
 from .canvases import TimeDomainCanvas, PlotCanvas
 from .dialogs import ChannelEditorDialog, ExportDialog
 from .widgets import StatisticsPanel, MultiFileChannelWidget
+from .axis_lock_toolbar import AxisLockBar
 
 
 class MainWindow(QMainWindow):
@@ -239,9 +240,13 @@ class MainWindow(QMainWindow):
             "background:#0d1117;color:#58a6ff;padding:2px;font-family:monospace;font-size:15px;");
         self.lbl_dual.setWordWrap(True);
         self.lbl_dual.setVisible(False)
-        tl.addWidget(self.toolbar_time);
-        tl.addWidget(self.lbl_cursor);
-        tl.addWidget(self.lbl_dual);
+        self.axis_lock = AxisLockBar(self)
+        tb_row = QHBoxLayout()
+        tb_row.addWidget(self.toolbar_time, stretch=1)
+        tb_row.addWidget(self.axis_lock)
+        tl.addLayout(tb_row)
+        tl.addWidget(self.lbl_cursor)
+        tl.addWidget(self.lbl_dual)
         tl.addWidget(self.canvas_time, stretch=1)
         self.stats = StatisticsPanel();
         tl.addWidget(self.stats)
@@ -366,6 +371,7 @@ class MainWindow(QMainWindow):
         self.chk_cursor.stateChanged.connect(lambda st: self.canvas_time.set_cursor_visible(st == Qt.Checked))
         self.canvas_time.cursor_info.connect(self.lbl_cursor.setText)
         self.canvas_time.dual_cursor_info.connect(self.lbl_dual.setText)
+        self.axis_lock.lock_changed.connect(self.canvas_time.set_axis_lock)
         self.spin_xt.valueChanged.connect(self._update_all_tick_density)
         self.spin_yt.valueChanged.connect(self._update_all_tick_density)
         self.chk_dual.stateChanged.connect(self._dual_changed)

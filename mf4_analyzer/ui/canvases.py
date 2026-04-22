@@ -9,6 +9,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.widgets import SpanSelector
 from matplotlib.ticker import MaxNLocator
+from matplotlib.patches import Rectangle
 
 from .dialogs import AxisEditDialog
 
@@ -42,6 +43,12 @@ class TimeDomainCanvas(FigureCanvas):
         self.mpl_connect('draw_event', lambda e: setattr(self, '_refresh', True))
         self.mpl_connect('button_press_event', self._on_click)
         self.setFocusPolicy(Qt.StrongFocus)
+        self._axis_lock = None     # None | 'x' | 'y'
+        self._rb_start = None      # (x, y) at press
+        self._rb_ax = None
+        self._rb_patch = None
+        self.mpl_connect('button_release_event', self._on_release)
+        self.mpl_connect('key_press_event', self._on_key)
 
     def clear(self):
         self.fig.clear();
@@ -179,7 +186,24 @@ class TimeDomainCanvas(FigureCanvas):
         self._refresh = False
 
     def _on_click(self, e):
-        if not self._dual or not self._cursor_visible or e.inaxes is None or e.xdata is None or e.button != 1: return
+        # Axis-lock mode short-circuits dual-cursor and initiates rubber-band
+        if self._axis_lock is not None and e.button == 1 and e.inaxes is not None \
+                and e.xdata is not None and e.ydata is not None:
+            self._rb_start = (e.xdata, e.ydata)
+            self._rb_ax = e.inaxes
+            xlo, xhi = e.inaxes.get_xlim()
+            ylo, yhi = e.inaxes.get_ylim()
+            if self._axis_lock == 'x':
+                self._rb_patch = Rectangle((e.xdata, ylo), 0, yhi - ylo,
+                                           facecolor='#007AFF', alpha=0.18, edgecolor='#007AFF', lw=0.8)
+            else:
+                self._rb_patch = Rectangle((xlo, e.ydata), xhi - xlo, 0,
+                                           facecolor='#007AFF', alpha=0.18, edgecolor='#007AFF', lw=0.8)
+            e.inaxes.add_patch(self._rb_patch)
+            self.draw_idle()
+            return
+        if not self._dual or not self._cursor_visible or e.inaxes is None or e.xdata is None or e.button != 1:
+            return
         if self._placing == 'A':
             self._ax = e.xdata; self._placing = 'B'
         else:
@@ -187,6 +211,18 @@ class TimeDomainCanvas(FigureCanvas):
         self._update_dual()
 
     def _on_move(self, e):
+        # Rubber-band update has priority
+        if self._rb_start is not None and self._rb_patch is not None and e.inaxes is self._rb_ax \
+                and e.xdata is not None and e.ydata is not None:
+            x0, y0 = self._rb_start
+            if self._axis_lock == 'x':
+                self._rb_patch.set_x(min(x0, e.xdata))
+                self._rb_patch.set_width(abs(e.xdata - x0))
+            else:
+                self._rb_patch.set_y(min(y0, e.ydata))
+                self._rb_patch.set_height(abs(e.ydata - y0))
+            self.draw_idle()
+            return
         if not self._cursor_visible or e.inaxes is None or e.xdata is None: return
         now = _time.monotonic() * 1000
         if now - self._last_t < 33: return
@@ -254,6 +290,41 @@ class TimeDomainCanvas(FigureCanvas):
             lo, hi = ax.get_ylim(); d = (hi - lo) * 0.1 * step; ax.set_ylim(lo + d, hi + d)
         self._refresh = True;
         self.draw_idle()
+
+    def set_axis_lock(self, mode):
+        """mode in {'x', 'y', 'none'}."""
+        self._axis_lock = None if mode == 'none' else mode
+        if self.span_selector is not None:
+            self.span_selector.set_active(self._axis_lock is None)
+        self._cancel_rb()
+
+    def _cancel_rb(self):
+        if self._rb_patch is not None:
+            try: self._rb_patch.remove()
+            except Exception: pass
+        self._rb_patch = None
+        self._rb_start = None
+        self._rb_ax = None
+        self.draw_idle()
+
+    def _on_release(self, e):
+        if self._axis_lock is None or self._rb_start is None or self._rb_ax is None:
+            return
+        if e.inaxes is not self._rb_ax or e.xdata is None or e.ydata is None:
+            self._cancel_rb(); return
+        x0, y0 = self._rb_start
+        x1, y1 = e.xdata, e.ydata
+        ax = self._rb_ax
+        if self._axis_lock == 'x' and abs(x1 - x0) > 1e-9:
+            ax.set_xlim(min(x0, x1), max(x0, x1))
+        elif self._axis_lock == 'y' and abs(y1 - y0) > 1e-9:
+            ax.set_ylim(min(y0, y1), max(y0, y1))
+        self._cancel_rb()
+        self._refresh = True
+
+    def _on_key(self, e):
+        if e.key == 'escape':
+            self._cancel_rb()
 
     def get_statistics(self, time_range=None):
         stats = {}
