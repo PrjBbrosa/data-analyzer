@@ -1,6 +1,6 @@
 """Expected-value tests for `FFTAnalyzer.compute_fft` amplitude normalization.
 
-The implementation under test (at ``MF4 Data Analyzer V1.py`` line 247) does:
+The implementation under test (now at ``mf4_analyzer/signal/fft.py``) does:
 
     amp = 2 * np.abs(fft_r[:nh]) / n / np.mean(w)
 
@@ -13,50 +13,20 @@ gain is exact and no scalloping loss applies) through ``compute_fft`` with
 various windows and confirm the recovered peak is within 1% of the true
 amplitude.
 
-The test does NOT import the main module at module scope, because that file
-imports PyQt5 / matplotlib Qt5Agg / asammdf / mdfreader. To keep this unit
-test isolated from the UI stack, we extract the ``FFTAnalyzer`` class body
-from the source file via ``ast`` and ``exec`` it in a minimal namespace that
-only exposes ``numpy``. This preserves the exact source code under test.
+We import ``FFTAnalyzer`` directly from ``mf4_analyzer.signal.fft``. The
+signal subpackage is, by design, free of PyQt5 / matplotlib / asammdf
+dependencies (enforced by the companion guard test
+``test_signal_no_gui_import.py``), so this direct import keeps the unit
+test isolated from the UI stack.
 """
 
 from __future__ import annotations
 
-import ast
-import os
 import unittest
-from pathlib import Path
 
 import numpy as np
 
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-MAIN_FILE = REPO_ROOT / "MF4 Data Analyzer V1.py"
-
-
-def _load_fft_analyzer():
-    """Return the `FFTAnalyzer` class from the main source file.
-
-    We parse the source with `ast`, find the `FFTAnalyzer` ClassDef node,
-    unparse it, and exec it in a namespace containing only `numpy as np`.
-    This avoids importing PyQt5 / matplotlib / asammdf at test time.
-    """
-    source = MAIN_FILE.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    class_node = None
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == "FFTAnalyzer":
-            class_node = node
-            break
-    if class_node is None:
-        raise RuntimeError("FFTAnalyzer class not found in main source file")
-    class_src = ast.unparse(class_node)
-    namespace: dict = {"np": np}
-    exec(class_src, namespace)
-    return namespace["FFTAnalyzer"]
-
-
-FFTAnalyzer = _load_fft_analyzer()
+from mf4_analyzer.signal.fft import FFTAnalyzer
 
 
 class FFTAmplitudeNormalizationTests(unittest.TestCase):
