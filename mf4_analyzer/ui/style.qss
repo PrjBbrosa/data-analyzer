@@ -1,6 +1,6 @@
 /* MF4 Analyzer — macOS-style global QSS */
 
-QWidget { font-family: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif; }
+QWidget { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
 
 QPushButton, QToolButton {
     border: 1px solid #D1D1D6;
@@ -13,6 +13,7 @@ QPushButton:hover, QToolButton:hover { background: #F2F2F7; }
 QPushButton:pressed, QToolButton:pressed { background: #E5E5EA; }
 QPushButton:disabled, QToolButton:disabled { color: #8E8E93; background: #F9F9FB; }
 
+/* Named variants — activated via widget.setObjectName("primary" | "danger" | "accent" | "success") in main_window.py (wired in Task 7). */
 QPushButton#primary {
     background: #007AFF; color: white; border: 1px solid #007AFF;
     font-weight: 600;
@@ -92,6 +93,10 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar:horizontal { height: 9px; background: transparent; }
 QScrollBar::handle:horizontal { background: #C7C7CC; border-radius: 4px; min-width: 20px; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::sub-page:vertical, QScrollBar::add-page:vertical,
+QScrollBar::sub-page:horizontal, QScrollBar::add-page:horizontal {
+    background: transparent;
+}
 
 QCheckBox { spacing: 6px; }
 QCheckBox::indicator {
