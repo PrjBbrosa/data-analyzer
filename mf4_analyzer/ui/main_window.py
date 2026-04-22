@@ -38,6 +38,7 @@ from .canvases import TimeDomainCanvas, PlotCanvas
 from .dialogs import ChannelEditorDialog, ExportDialog
 from .widgets import StatisticsPanel, MultiFileChannelWidget
 from .axis_lock_toolbar import AxisLockBar
+from .icons import Icons
 
 
 class MainWindow(QMainWindow):
@@ -78,14 +79,18 @@ class MainWindow(QMainWindow):
         g = QGroupBox("📂 文件管理");
         gl = QVBoxLayout(g)
         br = QHBoxLayout()
-        self.btn_load = QPushButton("➕ 添加");
-        self.btn_load.setStyleSheet("font-weight:bold;background:#2196F3;color:white;");
+        self.btn_load = QPushButton(" 添加")
+        self.btn_load.setIcon(Icons.add_file())
+        self.btn_load.setObjectName("primary")
         br.addWidget(self.btn_load)
-        self.btn_close = QPushButton("✖ 关闭");
-        self.btn_close.setStyleSheet("background:#f44336;color:white;");
+        self.btn_close = QPushButton(" 关闭")
+        self.btn_close.setIcon(Icons.close_file())
+        self.btn_close.setObjectName("danger")
         br.addWidget(self.btn_close)
-        self.btn_close_all = QPushButton("全部");
-        self.btn_close_all.setMaximumWidth(50);
+        self.btn_close_all = QPushButton("全部")
+        self.btn_close_all.setIcon(Icons.close_all())
+        self.btn_close_all.setObjectName("danger")
+        self.btn_close_all.setMaximumWidth(70)
         br.addWidget(self.btn_close_all)
         gl.addLayout(br)
         self.file_tabs = QTabWidget();
@@ -108,8 +113,9 @@ class MainWindow(QMainWindow):
         self.combo_mode.addItems(['Subplot', 'Overlay']);
         ml2.addWidget(self.combo_mode);
         gl.addLayout(ml2)
-        self.btn_plot = QPushButton("📈 绘图");
-        self.btn_plot.setStyleSheet("font-weight:bold;");
+        self.btn_plot = QPushButton(" 绘图")
+        self.btn_plot.setIcon(Icons.plot())
+        self.btn_plot.setObjectName("primary")
         gl.addWidget(self.btn_plot)
         ch = QHBoxLayout()
         self.chk_cursor = QCheckBox("游标");
@@ -122,11 +128,11 @@ class MainWindow(QMainWindow):
         ch.addStretch();
         gl.addLayout(ch)
         bh = QHBoxLayout()
-        self.btn_edit = QPushButton("🔧 编辑");
-        self.btn_edit.setStyleSheet("background:#FF9800;color:white;");
+        self.btn_edit = QPushButton("🔧 编辑")
+        self.btn_edit.setObjectName("accent")
         bh.addWidget(self.btn_edit)
-        self.btn_export = QPushButton("📥 导出");
-        self.btn_export.setStyleSheet("background:#4CAF50;color:white;");
+        self.btn_export = QPushButton("📥 导出")
+        self.btn_export.setObjectName("success")
         bh.addWidget(self.btn_export)
         gl.addLayout(bh);
         lay.addWidget(g)
@@ -205,7 +211,8 @@ class MainWindow(QMainWindow):
         self.spin_fs.setSuffix(" Hz");
         fl.addRow("Fs:", self.spin_fs)
         # 时间轴重建按钮
-        self.btn_rebuild_time = QPushButton("🔄 重建时间轴");
+        self.btn_rebuild_time = QPushButton(" 重建时间轴")
+        self.btn_rebuild_time.setIcon(Icons.rebuild_time())
         self.btn_rebuild_time.setToolTip("根据Fs重新生成当前文件的时间轴")
         fl.addRow(self.btn_rebuild_time)
         h = QHBoxLayout();
