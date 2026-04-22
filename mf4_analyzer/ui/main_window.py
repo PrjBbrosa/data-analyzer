@@ -540,30 +540,77 @@ class MainWindow(QMainWindow):
 
     def _close(self, fid):
         if fid not in self.files: return
-        del self.files[fid];
+        del self.files[fid]
         self.channel_list.remove_file(fid)
         for i in range(self.file_tabs.count()):
             if self._get_tab_fid(i) == fid: self.file_tabs.removeTab(i); break
         self._active = list(self.files.keys())[0] if self.files else None
-        self._update_info();
-        self._update_combos();
-        self.plot_time()
+        self._update_info()
+        self._reset_plot_state(scope='file')
         self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
 
     def close_all(self):
         if not self.files: return
         if QMessageBox.question(self, "确认", f"关闭全部 {len(self.files)} 文件?",
                                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: return
-        for fid in list(self.files.keys()): self._close(fid)
-        self.canvas_time.clear();
-        self.canvas_time.draw();
-        self.stats.update_stats({})
+        for fid in list(self.files.keys()):
+            del self.files[fid]
+            self.channel_list.remove_file(fid)
+        while self.file_tabs.count():
+            self.file_tabs.removeTab(0)
+        self._active = None
+        self._update_info()
+        self._reset_plot_state(scope='all')
+        self.statusBar.showMessage("已关闭全部")
 
     def _update_info(self):
         if not self.files: self.lbl_info.setText("未加载文件"); return
         self.lbl_info.setText("\n".join(
             [f"{'▶' if fid == self._active else '  '} {fd.short_name}: {len(fd.data)}" for fid, fd in
              self.files.items()]))
+
+    def _reset_plot_state(self, scope='file'):
+        """Wipe plot-related state after a file close. scope in {'file', 'all'}.
+        Kept scope-parameterised for future divergence; today both paths share code."""
+        self.canvas_time.full_reset()
+        self.canvas_fft.full_reset()
+        self.canvas_order.full_reset()
+        self.stats.update_stats({})
+        self.lbl_cursor.setText("")
+        self.lbl_dual.setText("")
+        self.lbl_dual.setVisible(False)
+        self.chk_cursor.blockSignals(True); self.chk_cursor.setChecked(False); self.chk_cursor.blockSignals(False)
+        self.chk_dual.blockSignals(True); self.chk_dual.setChecked(False); self.chk_dual.blockSignals(False)
+
+        # Invalidate custom X axis pointer if the source file is gone
+        if self._custom_xaxis_fid is not None and self._custom_xaxis_fid not in self.files:
+            self._custom_xaxis_fid = None
+            self._custom_xaxis_ch = None
+            self._custom_xlabel = None
+            self.combo_xaxis.blockSignals(True)
+            self.combo_xaxis.setCurrentIndex(0)
+            self.combo_xaxis.blockSignals(False)
+            self.combo_xaxis_ch.setEnabled(False)
+
+        self.combo_xaxis_ch.clear()
+        self._update_combos()  # rebuilds combo_sig/combo_rpm from current self.files
+
+        if not self.files:
+            self.spin_start.blockSignals(True); self.spin_start.setValue(0); self.spin_start.blockSignals(False)
+            self.spin_end.blockSignals(True); self.spin_end.setValue(0); self.spin_end.blockSignals(False)
+            self.spin_fs.blockSignals(True); self.spin_fs.setValue(1000); self.spin_fs.blockSignals(False)
+        else:
+            max_t = max((fd.time_array[-1] for fd in self.files.values() if len(fd.time_array) > 0), default=0)
+            if self.spin_end.value() > max_t: self.spin_end.setValue(max_t)
+            if self.spin_start.value() > max_t: self.spin_start.setValue(0)
+            if self._active in self.files:
+                self.spin_fs.blockSignals(True); self.spin_fs.setValue(self.files[self._active].fs); self.spin_fs.blockSignals(False)
+
+        # re-fill combo_xaxis_ch if still in channel mode
+        if self.combo_xaxis.currentIndex() == 1:
+            self._on_xaxis_mode_changed(1)
+
+        self.plot_time()  # re-renders remaining channels or clears if empty
 
     def _update_combos(self):
         self.combo_sig.clear();
