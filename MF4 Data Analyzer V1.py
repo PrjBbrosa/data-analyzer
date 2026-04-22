@@ -225,6 +225,11 @@ class FileData:
 
 
 class FFTAnalyzer:
+    """Static methods for FFT, PSD, and averaged-FFT (Welch) computations on time-domain signals.
+
+    Provides `compute_fft`, `compute_psd`, `compute_averaged_fft`, and `get_window` for spectral analysis.
+    """
+
     @staticmethod
     def get_window(name, n):
         wins = {
