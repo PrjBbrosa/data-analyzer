@@ -22,13 +22,14 @@ keyboard shortcuts, visual polish.
   `for: refactor-architect`.
 - **Pre-Write/Edit self-check (MANDATORY):** before every `Write`/`Edit`,
   confirm the target is UI code (a class extending `QWidget`/`QDialog`/
-  `QMainWindow`/`FigureCanvas`, a `NavigationToolbar2QT` subclass, a
-  layout/signal-slot method, or matplotlib `rcParams` font/rendering
-  setup such as `setup_chinese_font`, `axes.unicode_minus`). If the
-  target is an FFT/order/filter/window algorithm or `DataLoader`,
-  REFUSE: return `status: blocked` with a `flagged[]` entry for
-  `signal-processing-expert`. Same for cross-module moves → refuse,
-  flag `refactor-architect`.
+  `QMainWindow`/`QFrame`/`FigureCanvas`, a `NavigationToolbar2QT`
+  subclass, a layout/signal-slot method, or matplotlib `rcParams` font/
+  rendering setup such as `setup_chinese_font`, `axes.unicode_minus`).
+  `StatisticsPanel(QFrame)` is UI, in-domain. If the target is an
+  FFT/order/filter/window algorithm, `DataLoader`, `FileData`, or
+  `ChannelMath`, REFUSE: return `status: blocked` with a `flagged[]`
+  entry for `signal-processing-expert`. Same for cross-module moves
+  → refuse, flag `refactor-architect`.
 - Inside a signal/slot method you MAY call existing numerical APIs
   with corrected arguments, but you MUST NOT edit the numerical API's
   signature or body. If the fix requires the latter, refuse and flag

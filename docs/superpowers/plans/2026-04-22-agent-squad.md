@@ -369,8 +369,9 @@ amplitude / PSD scaling, zero-padding correctness.
 
 1. `Read docs/lessons-learned/README.md`.
 2. `Read docs/lessons-learned/LESSONS.md`.
-3. `Grep docs/lessons-learned/signal-processing/` by task keywords;
-   also pull every LESSONS.md row tagged `[signal]`.
+3. Restrict to rows under the `## signal-processing` heading and
+   keyword-match content tags (`[fft]`, `[window]`, `[order]`, etc.).
+   Also `Grep docs/lessons-learned/signal-processing/` by task keywords.
 4. `Read` up to 5 lesson bodies, highest keyword hits first.
 
 ## Required skills
@@ -471,8 +472,9 @@ keyboard shortcuts, visual polish.
 
 1. `Read docs/lessons-learned/README.md`.
 2. `Read docs/lessons-learned/LESSONS.md`.
-3. `Grep docs/lessons-learned/pyqt-ui/` by task keywords; also pull
-   every LESSONS.md row tagged `[ui]`.
+3. Restrict to rows under the `## pyqt-ui` heading and keyword-match
+   content tags (`[widget]`, `[canvas]`, `[axis-edit]`, etc.). Also
+   `Grep docs/lessons-learned/pyqt-ui/` by task keywords.
 4. `Read` up to 5 lesson bodies, highest keyword hits first.
 
 ## UI verification requirement
@@ -580,8 +582,9 @@ adjusting `sys.path` / entry-point wiring.
 
 1. `Read docs/lessons-learned/README.md`.
 2. `Read docs/lessons-learned/LESSONS.md`.
-3. `Grep docs/lessons-learned/refactor/` by task keywords; also pull
-   every LESSONS.md row tagged `[arch]` or `[perf]`.
+3. Restrict to rows under the `## refactor` heading and keyword-match
+   content tags (`[arch]`, `[perf]`, `[import-cycle]`, etc.). Also
+   `Grep docs/lessons-learned/refactor/` by task keywords.
 4. `Read` up to 5 lesson bodies, highest keyword hits first.
 
 ## Required skills
@@ -741,13 +744,36 @@ Task(
 )
 ```
 
+- [ ] **Step 1.5: Pre-dispatch sanity check**
+
+```bash
+ls -1 .claude/agents/*.md | wc -l     # must print 4
+python -c "import yaml, pathlib; [yaml.safe_load(p.read_text(encoding='utf-8').split('---')[1]) for p in pathlib.Path('.claude/agents').glob('*.md')]"
+```
+
+Expected: 4 files, all frontmatter parses without error.
+
 - [ ] **Step 2: Observe and verify**
 
-Required observations:
-- Orchestrator's return JSON includes `done: ["<the subtask>"]`.
-- `files_changed` includes `MF4 Data Analyzer V1.py`.
-- `lessons_added` is empty (nothing non-obvious to keep).
-- `docs/lessons-learned/.state.yml:top_level_completions` incremented to `1`.
+Required observations (from the orchestrator return JSON):
+- `top_level_status: done`.
+- `subtasks` is a non-empty array (orchestrator MUST NOT drop specialist
+  returns — see §Return contract in `squad-orchestrator.md`).
+- `subtasks[0].expert == "signal-processing-expert"`.
+- `subtasks[0].files_changed` includes `MF4 Data Analyzer V1.py`.
+- `subtasks[0].tests_run == []` AND `subtasks[0].notes` mentions
+  "docstring-only" (TDD exclusion). If `tests_run` is missing or
+  non-empty with no numeric test, the sig-proc agent misapplied TDD.
+- `lessons_added == []` (adding a docstring is not a non-obvious
+  insight — nothing to keep).
+
+Filesystem side-effects:
+- `docs/lessons-learned/.state.yml` — `top_level_completions: 1`,
+  `last_prune_at: 0`, `schema_version: 1` (RMW must preserve
+  `schema_version` and `last_prune_at`).
+- A new file under
+  `docs/lessons-learned/orchestrator/decompositions/2026-04-22-*.md`
+  with ≥ 4 columns.
 
 If any of the above fails, fix the relevant agent file and re-dispatch. Log each failure as a `cause: rework` lesson under `orchestrator/` — this is the squad's first real use.
 
@@ -802,14 +828,23 @@ This is a trap: one issue is UI (label text), the other is numeric (window-mean 
 
 - [ ] **Step 2: Observe and verify**
 
-Required observations:
-- Decomposition table contains exactly two subtasks, one assigned to
-  `pyqt-ui-engineer`, one to `signal-processing-expert`.
+Required observations (decomposition + specialist returns):
+- Decomposition table has EXACTLY 2 rows — one to `pyqt-ui-engineer`
+  (label), one to `signal-processing-expert` (amplitude scaling).
+- `subtasks[pyqt-ui-engineer].ui_verified == true` OR
+  `subtasks[pyqt-ui-engineer].notes` contains "headless" (display
+  unavailable fallback, `status: needs_info` acceptable in that case).
+- `subtasks[signal-processing-expert].tests_run` is non-empty —
+  amplitude-scaling IS a numeric change, TDD must fire.
 - Neither specialist's `files_changed` overlaps with the other's hard
   boundary (signal-processing did not touch label text; pyqt-ui did not
   touch the amplitude normalization).
 - No `flagged` entries (orchestrator anticipated both).
-- `top_level_completions` incremented to `2`.
+- `top_level_completions: 2` in `.state.yml` — not 3 (rework must NOT
+  double-increment).
+- If the orchestrator had to self-correct routing on a first attempt,
+  `Grep` the new `pyqt-ui/` lesson for `label` — the rework lesson
+  should name the keyword that was missing.
 
 If the orchestrator sent both issues to one specialist, record a
 `cause: rework` lesson under `orchestrator/` named

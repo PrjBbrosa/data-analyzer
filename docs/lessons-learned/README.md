@@ -95,3 +95,8 @@ If you cannot state a non-obvious insight, do NOT write a lesson.
 
 Ignore `.gitkeep` entries under role directories — they exist only to
 preserve empty directories in git. They are not lessons.
+
+Also ignore `orchestrator/decompositions/` and `orchestrator/prune-reports/`
+— these are audit trails written by `squad-orchestrator`, NOT lessons.
+Only files directly under `<role>/YYYY-MM-DD-<slug>.md` and matching the
+frontmatter schema count as lessons.

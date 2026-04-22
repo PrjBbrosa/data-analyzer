@@ -163,8 +163,12 @@ System prompt sections (common to all four agents):
   entry; does not fix.
 - **Startup protocol:**
   1. `Read docs/lessons-learned/LESSONS.md`.
-  2. `Grep` lessons in `signal-processing/` by task keywords AND pull all
-     master-index rows tagged `[signal]`.
+  2. Restrict to rows under the `## signal-processing` heading, then
+     keyword-match bracketed content tags (`[fft]`, `[window]`, `[order]`,
+     etc.). Also `Grep docs/lessons-learned/signal-processing/` by task
+     keywords for body content. (README.md is authoritative on the
+     reading protocol; `[signal]` is NOT a valid content tag — role lives
+     in its own frontmatter field and in the heading.)
   3. `Read` the ≤ 5 most relevant lesson bodies.
 - **Return contract (same for every expert):**
   ```json
@@ -193,7 +197,9 @@ System prompt sections (common to all four agents):
 - **Hard boundaries:** Does not alter numeric formulas, FFT/order algorithm
   internals, or file loaders. On spotting an algorithm defect, returns a
   `flagged` entry.
-- **Startup protocol:** Same pattern; tag filter `[ui]`.
+- **Startup protocol:** Same pattern as §3.2 step 2, but restrict to the
+  `## pyqt-ui` heading and keyword-match content tags (`[widget]`,
+  `[canvas]`, `[axis-edit]`, etc.).
 - **Skills:** No automatic skill invocation. Follows the CLAUDE.md rule that
   UI changes must be verified by starting the app and exercising the feature;
   if the agent cannot start the app, it explicitly says so in its return
@@ -206,7 +212,9 @@ System prompt sections (common to all four agents):
 - **Tools:** `Read, Edit, Write, Grep, Glob, Bash`.
 - **Hard boundaries:** Does not introduce new features. Does not change
   numeric results or user-visible UI behavior.
-- **Startup protocol:** Same pattern; tag filters `[arch]`, `[perf]`.
+- **Startup protocol:** Same pattern as §3.2 step 2, but restrict to the
+  `## refactor` heading and keyword-match content tags (`[arch]`,
+  `[perf]`, `[import-cycle]`, etc.).
 - **Privilege:** The only agent allowed to move code across modules in bulk.
   When the move crosses a domain (e.g., pulling `FFTAnalyzer` out of the
   monolith), it may execute the relocation but must NOT change function
@@ -280,7 +288,10 @@ the rework is detected, not deferred to task completion.
 At agent startup, to keep token cost constant as the corpus grows:
 
 1. `Read docs/lessons-learned/LESSONS.md` once.
-2. Filter rows by role tag AND keyword match against the incoming task.
+2. Restrict to rows under the agent's `## <role>` heading, then
+   keyword-match the bracketed content tags against the incoming task.
+   (Role lives in its own heading and frontmatter field — it is NOT a
+   content tag. See README.md §"tags rule".)
 3. `Read` at most 5 full lesson bodies (highest keyword hit count wins ties).
 
 ### 4.5 Anti-bloat review

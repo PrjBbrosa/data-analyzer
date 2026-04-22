@@ -44,11 +44,14 @@ yourself — those go to specialists.
 
 | Keyword match | Dispatch to |
 |---|---|
-| FFT, order, Welch, window, amplitude, filter, resample, tacho | `signal-processing-expert` |
-| PyQt, widget, dialog, canvas, toolbar, layout, signal/slot, axis-edit, font | `pyqt-ui-engineer` |
+| FFT, order, Welch, window, amplitude, filter, resample, tacho, loader, MDF, CSV, HDF5, channel-math, derivative, integral, moving-avg, DataLoader, FileData, ChannelMath | `signal-processing-expert` |
+| PyQt, widget, dialog, canvas, toolbar, layout, signal/slot, axis-edit, font, label, text, color, tick, tick-label, QFrame, StatisticsPanel, stats-panel | `pyqt-ui-engineer` |
 | refactor, module, package, import, performance, relocation | `refactor-architect` |
 
 If keywords overlap, split into multiple subtasks rather than picking one.
+When a keyword names a **surface** (plot, canvas, axis, label, color, tick)
+rather than a **computation** (FFT, Welch, filter), prefer
+`pyqt-ui-engineer` even if a computation keyword also matches.
 
 ## Return contract (when you finish a top-level task)
 
@@ -60,11 +63,25 @@ Return a single object to the caller (the main Claude):
   "done": ["<subtask>..."],
   "blocked": [{"subtask": "...", "reason": "..."}],
   "flagged": [{"from": "<expert>", "for": "<expert>", "issue": "..."}],
+  "subtasks": [
+    {
+      "expert": "<agent name>",
+      "status": "done" | "blocked" | "needs_info",
+      "files_changed": ["<path>..."],
+      "notes": "...",
+      "...role_specific_fields": "pass-through (ui_verified / tests_run / tests_before / tests_after / files_moved)"
+    }
+  ],
   "lessons_added": ["<path>..."],
   "lessons_merged": ["<path>..."],
   "prune_report": null
 }
 ```
+
+`subtasks[]` is a pass-through of each specialist's full return object,
+keeping role-specific fields intact. Do NOT drop `ui_verified`,
+`tests_run`, `tests_before`, `tests_after`, or `files_moved` — downstream
+observers (rework detector, Task 8/9 verifier) rely on them.
 
 - `top_level_status: done` when every subtask returned `status: done`.
 - `top_level_status: partial` when some subtasks succeeded and others
@@ -84,18 +101,36 @@ Return a single object to the caller (the main Claude):
   decomposition) or surface the expert's own lesson.
 - Top-level task completion → increment
   `docs/lessons-learned/.state.yml:top_level_completions` by doing a
-  full read-modify-write cycle: `Read` the file, parse both fields,
-  increment, then `Write` the full 2-line file back. Do NOT attempt
-  concurrent increments; if two orchestrator runs race, accept the
-  later-write-wins outcome and log a decomposition lesson about the
-  conflict. Then if
-  `top_level_completions - last_prune_at >= 20` produce a prune report:
-  `Grep docs/lessons-learned/orchestrator/decompositions/` for every
-  lesson file path referenced in the last 20 decompositions; list
-  lessons NOT referenced AND with `updated` older than 6 months in
-  `prune_report`; bump `last_prune_at` to the current
-  `top_level_completions`.
-- Unexpected `flagged` entries → write a decomposition lesson.
+  full read-modify-write cycle: `Read` the file, parse ALL fields
+  (`top_level_completions`, `last_prune_at`, and `schema_version`),
+  increment `top_level_completions`, then `Write` the full file back
+  preserving every field. Do NOT attempt concurrent increments; if two
+  orchestrator runs race, accept the later-write-wins outcome and log
+  a decomposition lesson about the conflict. Then if
+  `top_level_completions - last_prune_at >= 20`, produce a prune report:
+  - Enumerate the last-20 decompositions: `Glob
+    docs/lessons-learned/orchestrator/decompositions/*.md` → sort
+    descending by filename (date-then-slug) → take 20.
+  - `Grep` every lesson-file path referenced inside those 20
+    decomposition files.
+  - Walk the lesson corpus with `Glob
+    docs/lessons-learned/{signal-processing,pyqt-ui,refactor,orchestrator}/*.md`;
+    for each, `Read` the frontmatter and parse `updated`.
+  - Candidates = lessons NOT in the reference-set AND `updated` more
+    than 6 months ago.
+  - Write the full candidate list to
+    `docs/lessons-learned/orchestrator/prune-reports/YYYY-MM-DD-prune.md`
+    and return ONLY the file path + summary counts inside the
+    response's `prune_report` field (do NOT inline the full list).
+  - Bump `last_prune_at` to the current `top_level_completions`.
+- A `flagged` entry whose `for` specialist was NOT already in any
+  subtask's `depends_on` chain → write a decomposition lesson (the
+  flag caused a re-dispatch you did not anticipate). Expected flags
+  between dependent subtasks do NOT trigger a lesson.
+- **Retry cap:** if the same `(subtask_slug, expert)` pair returns
+  `blocked` or `needs_info` twice consecutively, STOP. Return
+  `top_level_status: blocked` with both failure traces. Do NOT try
+  a third time — escalate to the user.
 
 ## Rework detection rule
 

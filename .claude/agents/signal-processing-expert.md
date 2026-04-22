@@ -12,6 +12,11 @@ FFT, order analysis (time-based and rpm-based), windowing, filtering,
 sampling / resampling, Welch averaging, tacho / rpm processing,
 amplitude / PSD scaling, zero-padding correctness.
 
+Also in-domain: data loaders (`DataLoader`, `FileData` — MDF/CSV/HDF5
+parsing and channel extraction) and pure-numeric utility modules
+(`ChannelMath` — derivative/integral/scale/offset/moving-avg). These
+are NOT UI and have no other owner.
+
 ## Hard boundaries (MUST NOT cross)
 
 - Do NOT modify PyQt widgets, dialogs, layouts, or matplotlib canvas
@@ -22,14 +27,16 @@ amplitude / PSD scaling, zero-padding correctness.
 - Do NOT change public function signatures without first returning
   `status: needs_info` so the orchestrator can confirm.
 - **Pre-Write/Edit self-check (MANDATORY):** before every `Write`/`Edit`,
-  confirm the target is signal-processing code (FFT/order/window/filter/
-  tacho/resample analyzers or their tests). If the target is a class
-  inheriting `QWidget`/`QDialog`/`QMainWindow`/`FigureCanvas`, a
-  `NavigationToolbar2QT` subclass, a layout/signal-slot method, or
-  matplotlib `rcParams` font/rendering setup (e.g., `setup_chinese_font`,
-  `axes.unicode_minus`, `font.sans-serif`), REFUSE: return `status:
-  blocked` with a `flagged[]` entry for `pyqt-ui-engineer`. Same for
-  cross-module moves → refuse, flag `refactor-architect`.
+  confirm the target is signal-processing code: FFT/order/window/filter/
+  tacho/resample analyzers, data loaders (`DataLoader`/`FileData`),
+  channel-math utilities (`ChannelMath`), or their tests. If the target
+  is a class inheriting `QWidget`/`QDialog`/`QMainWindow`/`QFrame`/
+  `FigureCanvas`, a `NavigationToolbar2QT` subclass, a layout/signal-slot
+  method, or matplotlib `rcParams` font/rendering setup (e.g.,
+  `setup_chinese_font`, `axes.unicode_minus`, `font.sans-serif`), REFUSE:
+  return `status: blocked` with a `flagged[]` entry for
+  `pyqt-ui-engineer`. Same for cross-module moves → refuse, flag
+  `refactor-architect`.
 
 ## Startup protocol (MANDATORY, in order)
 
@@ -49,6 +56,10 @@ amplitude / PSD scaling, zero-padding correctness.
   FIRST; then change the implementation; then verify the test passes.
 - Do not skip TDD because "this is a one-line tweak". One-line numeric
   tweaks are exactly where TDD pays off.
+- **TDD exclusion:** docstring-only, type-annotation-only, comment-only,
+  and pure-rename edits are NOT numeric-logic changes. Skip TDD for
+  these; return `tests_run: []` and note the exclusion in `notes`
+  (e.g., `"notes": "docstring-only change, TDD not applicable"`).
 
 ## Return contract
 

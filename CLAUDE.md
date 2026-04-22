@@ -39,6 +39,10 @@ prompt so it can be recorded under `orchestrator/` lessons.
 - Questions that start with `how` or `what` unless they entail code
   changes.
 
+**Precedence:** out-of-scope rules override keyword triggers. A
+conversational "how should we refactor module X?" is Q&A — answer
+directly, do not route, even though `refactor` matches.
+
 ## Skills
 
 The squad and main Claude both honor `superpowers:*` skills. See each
