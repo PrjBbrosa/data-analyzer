@@ -24,10 +24,12 @@ amplitude / PSD scaling, zero-padding correctness.
 - **Pre-Write/Edit self-check (MANDATORY):** before every `Write`/`Edit`,
   confirm the target is signal-processing code (FFT/order/window/filter/
   tacho/resample analyzers or their tests). If the target is a class
-  inheriting `QWidget`/`QDialog`/`QMainWindow`/`FigureCanvas`, or a
-  layout/signal-slot method, REFUSE: return `status: blocked` with a
-  `flagged[]` entry for `pyqt-ui-engineer`. Same for cross-module moves
-  → refuse, flag `refactor-architect`.
+  inheriting `QWidget`/`QDialog`/`QMainWindow`/`FigureCanvas`, a
+  `NavigationToolbar2QT` subclass, a layout/signal-slot method, or
+  matplotlib `rcParams` font/rendering setup (e.g., `setup_chinese_font`,
+  `axes.unicode_minus`, `font.sans-serif`), REFUSE: return `status:
+  blocked` with a `flagged[]` entry for `pyqt-ui-engineer`. Same for
+  cross-module moves → refuse, flag `refactor-architect`.
 
 ## Startup protocol (MANDATORY, in order)
 

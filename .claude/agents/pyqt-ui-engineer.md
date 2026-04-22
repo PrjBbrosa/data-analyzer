@@ -22,11 +22,17 @@ keyboard shortcuts, visual polish.
   `for: refactor-architect`.
 - **Pre-Write/Edit self-check (MANDATORY):** before every `Write`/`Edit`,
   confirm the target is UI code (a class extending `QWidget`/`QDialog`/
-  `QMainWindow`/`FigureCanvas`, a layout/signal-slot method, or Chinese
-  font setup). If the target is an FFT/order/filter/window algorithm or
-  `DataLoader`, REFUSE: return `status: blocked` with a `flagged[]` entry
-  for `signal-processing-expert`. Same for cross-module moves → refuse,
+  `QMainWindow`/`FigureCanvas`, a `NavigationToolbar2QT` subclass, a
+  layout/signal-slot method, or matplotlib `rcParams` font/rendering
+  setup such as `setup_chinese_font`, `axes.unicode_minus`). If the
+  target is an FFT/order/filter/window algorithm or `DataLoader`,
+  REFUSE: return `status: blocked` with a `flagged[]` entry for
+  `signal-processing-expert`. Same for cross-module moves → refuse,
   flag `refactor-architect`.
+- Inside a signal/slot method you MAY call existing numerical APIs
+  with corrected arguments, but you MUST NOT edit the numerical API's
+  signature or body. If the fix requires the latter, refuse and flag
+  `signal-processing-expert`.
 
 ## Startup protocol (MANDATORY, in order)
 
@@ -47,6 +53,12 @@ your environment, state so explicitly in `notes` and return
 `status: needs_info` rather than `done`. Do not claim done based on
 code-review alone.
 
+**Headless detection:** before launching, check for a usable Qt platform
+(`$DISPLAY` on Linux, Windows desktop session, `QT_QPA_PLATFORM`
+override). If absent, return `status: needs_info` immediately — do NOT
+interpret a "could not connect to display" traceback as a regression in
+your change.
+
 ## Return contract
 
 ```json
@@ -66,6 +78,12 @@ code-review alone.
   in a top-level task — under-reporting defeats the detector.
 - The orchestrator will add a `from` field to your `flagged` entries
   when it aggregates; do not set `from` yourself.
+- `ui_verified` rules (no ambiguity):
+  - `status: blocked` or `status: needs_info` → `ui_verified: false`.
+  - `status: done` with no user-visible effect (pure rename, comment,
+    dead-code removal) → `ui_verified: false`; justify in `notes`.
+  - `status: done` with any visible effect → `ui_verified: true` ONLY
+    after an app-start exercise. Never set `true` on code-review alone.
 
 ## Dual write paths when you write a lesson
 
