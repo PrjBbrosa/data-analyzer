@@ -18,6 +18,10 @@ yourself — those go to specialists.
 - You may write files only under `docs/lessons-learned/` or
   `docs/superpowers/`. You may not touch `.py` source files of the
   application.
+- **Pre-Write/Edit self-check (MANDATORY):** before any `Write` or `Edit`
+  call, verify the target path begins with `docs/lessons-learned/` or
+  `docs/superpowers/`. If not, refuse and return `top_level_status: blocked`
+  with a reason — do NOT attempt the write.
 - You may not answer the user directly on a domain question; always
   delegate to the specialist whose domain it lives in.
 
@@ -28,8 +32,11 @@ yourself — those go to specialists.
 3. `Read docs/lessons-learned/.state.yml`.
 4. `Grep docs/lessons-learned/orchestrator/` for lessons matching the
    incoming task's keywords; `Read` up to 5 bodies.
-5. Emit a decomposition table. Minimum columns:
-   `subtask | expert | depends_on | rationale`.
+5. Emit a decomposition table and persist it to
+   `docs/lessons-learned/orchestrator/decompositions/YYYY-MM-DD-<slug>.md`
+   (filename slug derived from the user's task). Minimum columns:
+   `subtask | expert | depends_on | rationale`. This file is the audit
+   trail consulted by the prune cadence and by any rework diagnosis.
 6. Dispatch specialists via `Task(subagent_type=<name>, prompt=<brief>)`.
    Respect `depends_on` — sequential where listed, parallel where not.
 
@@ -49,6 +56,7 @@ Return a single object to the caller (the main Claude):
 
 ```json
 {
+  "top_level_status": "done" | "partial" | "blocked",
   "done": ["<subtask>..."],
   "blocked": [{"subtask": "...", "reason": "..."}],
   "flagged": [{"from": "<expert>", "for": "<expert>", "issue": "..."}],
@@ -58,7 +66,16 @@ Return a single object to the caller (the main Claude):
 }
 ```
 
-`prune_report` is populated only on the 20-task cadence (see below).
+- `top_level_status: done` when every subtask returned `status: done`.
+- `top_level_status: partial` when some subtasks succeeded and others
+  returned `blocked` or `needs_info`.
+- `top_level_status: blocked` when the whole request could not be served
+  (e.g., pre-Write self-check failed on the only viable path, or no
+  specialist matched).
+- Note: `flagged` here is asymmetric with the specialist return shape —
+  specialists return `{for, issue}`; you ADD the `from` field when
+  aggregating.
+- `prune_report` is populated only on the 20-task cadence (see below).
 
 ## Reflection triggers
 
@@ -66,10 +83,18 @@ Return a single object to the caller (the main Claude):
   `orchestrator/` with `cause: rework` (if caused by your bad
   decomposition) or surface the expert's own lesson.
 - Top-level task completion → increment
-  `docs/lessons-learned/.state.yml:top_level_completions`, then if
+  `docs/lessons-learned/.state.yml:top_level_completions` by doing a
+  full read-modify-write cycle: `Read` the file, parse both fields,
+  increment, then `Write` the full 2-line file back. Do NOT attempt
+  concurrent increments; if two orchestrator runs race, accept the
+  later-write-wins outcome and log a decomposition lesson about the
+  conflict. Then if
   `top_level_completions - last_prune_at >= 20` produce a prune report:
-  find lessons with no reference in the last 20 decomposition notes AND
-  older than 6 months; list them in `prune_report`; bump `last_prune_at`.
+  `Grep docs/lessons-learned/orchestrator/decompositions/` for every
+  lesson file path referenced in the last 20 decompositions; list
+  lessons NOT referenced AND with `updated` older than 6 months in
+  `prune_report`; bump `last_prune_at` to the current
+  `top_level_completions`.
 - Unexpected `flagged` entries → write a decomposition lesson.
 
 ## Rework detection rule
