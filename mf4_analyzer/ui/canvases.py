@@ -70,6 +70,7 @@ class TimeDomainCanvas(FigureCanvas):
         self._cursor_visible = False
         self._dual = False
         self.span_selector = None
+        self._last_t = 0
         self.draw_idle()
 
     def plot_channels(self, ch_list, mode='overlay', xlabel='Time (s)'):
@@ -287,6 +288,7 @@ class PlotCanvas(FigureCanvas):
     def full_reset(self):
         """Clear figure AND remarks/stored-line-data."""
         self.clear()
+        self._remark_enabled = False
         self.draw_idle()
 
     def set_remark_enabled(self, enabled):
