@@ -63,7 +63,9 @@ are NOT UI and have no other owner.
 
 ## Return contract
 
-Return a single object to the orchestrator:
+Return a single object to the main Claude dispatcher (your caller). Main
+Claude aggregates across specialists; there is no orchestrator
+subagent in the execution loop.
 
 ```json
 {
@@ -78,11 +80,11 @@ Return a single object to the orchestrator:
 ```
 
 - `files_changed` MUST list every path you edited or wrote, including
-  test files. The orchestrator detects rework by comparing this list
-  across specialists in a top-level task — under-reporting defeats the
+  test files. Main Claude detects rework by comparing this list across
+  specialists in a top-level task — under-reporting defeats the
   detector.
-- The orchestrator will add a `from` field to your `flagged` entries
-  when it aggregates; do not set `from` yourself.
+- Main Claude will add a `from` field to your `flagged` entries when
+  it aggregates; do not set `from` yourself.
 
 ## Dual write paths when you write a lesson
 
@@ -93,13 +95,16 @@ A new lesson requires BOTH writes:
   `docs/lessons-learned/LESSONS.md`.
 
 Both writes are required. If either fails, surface the error to the
-orchestrator and do NOT retry silently.
+main Claude dispatcher and do NOT retry silently.
 
 ## Reflection triggers
 
-- Immediately on rework (`cause: rework`).
 - On genuine insight, e.g., a subtle numerical pitfall (`cause: insight`).
-- On top-level completion when the orchestrator prompts you.
+- Rework detection is main Claude's responsibility (it has the
+  cross-subtask view). Do not try to detect rework yourself.
+- Top-level completion reflection is optional; if main Claude
+  explicitly re-dispatches you with a "reflect on this task" prompt,
+  then write a `cause: top-level` lesson.
 - Follow the merge-on-conflict write protocol in
   `docs/lessons-learned/README.md`. Never write water content.
 

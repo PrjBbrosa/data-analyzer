@@ -8,6 +8,21 @@ infrastructure. The first real task the squad will execute — refactoring
 `MF4 Data Analyzer V1.py` into modules — is a separate sub-project and gets its
 own spec/plan.
 
+> **Amendment — 2026-04-22 (post Task 8 dry-run):** Claude Code's subagent
+> runtime does NOT grant the `Task` tool to subagents. The orchestrator
+> therefore cannot dispatch specialists itself. The design pivots to a
+> **planner-executor split**: the orchestrator produces a decomposition plan
+> only; **main Claude** is the sole dispatcher and aggregator. See
+> `docs/lessons-learned/orchestrator/2026-04-22-task-tool-unavailable-blocks-dispatch.md`
+> for the discovery and `CLAUDE.md` for the executable runbook. Sections
+> below describe the role/contract layer; the "who runs what" layer lives in
+> CLAUDE.md. Specifically:
+>
+> - §2.3 — orchestrator "dispatches" should be read as "returns a decomposition main Claude then dispatches".
+> - §3.1 — orchestrator does NOT aggregate; main Claude does. Orchestrator's return contract is the decomposition JSON, not the aggregated object.
+> - §4.5 — `.state.yml` is written by main Claude only; orchestrator is a reader.
+> - §7 — "Task tool unavailable" is a hard constraint, not an error mode. It is why the pivot was made.
+
 ---
 
 ## 1. Goal

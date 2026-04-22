@@ -60,6 +60,9 @@ adjusting `sys.path` / entry-point wiring.
 
 ## Return contract
 
+Return a single object to the main Claude dispatcher (your caller).
+Main Claude aggregates across specialists.
+
 ```json
 {
   "status": "done" | "blocked" | "needs_info",
@@ -75,11 +78,11 @@ adjusting `sys.path` / entry-point wiring.
 ```
 
 - `files_changed` MUST list every path edited/moved (both sides of a
-  move). The orchestrator detects rework by comparing this list across
+  move). Main Claude detects rework by comparing this list across
   specialists in a top-level task — under-reporting defeats the
   detector.
-- The orchestrator will add a `from` field to your `flagged` entries
-  when it aggregates; do not set `from` yourself.
+- Main Claude will add a `from` field to your `flagged` entries when
+  it aggregates; do not set `from` yourself.
 - If `tests_before: fail` you MUST return `status: blocked` — never
   refactor on top of a broken baseline.
 - If `tests_after: fail` you MUST return `status: blocked` and list
@@ -94,14 +97,16 @@ A new lesson requires BOTH writes:
   `docs/lessons-learned/LESSONS.md`.
 
 Both writes are required. If either fails, surface the error to the
-orchestrator and do NOT retry silently.
+main Claude dispatcher and do NOT retry silently.
 
 ## Reflection triggers
 
-- Immediately on rework (`cause: rework`).
-- Top-level completion when the orchestrator prompts you.
 - Genuine insight on import-cycle patterns, circular reference traps,
-  or perf regressions.
+  or perf regressions (`cause: insight`).
+- Rework detection is main Claude's job — you do not see other
+  specialists' outputs.
+- Top-level reflection: only when main Claude re-dispatches you with
+  an explicit "reflect on this task" prompt.
 
 ## Skills you must honor
 

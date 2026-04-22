@@ -6,6 +6,8 @@ Write protocol: `docs/lessons-learned/README.md`.
 
 ## orchestrator
 
+- [task-tool-unavailable-blocks-dispatch](orchestrator/2026-04-22-task-tool-unavailable-blocks-dispatch.md) [dispatch][tooling][blocker] — orchestrator cannot fulfil any request if `Task` is absent from its tool list.
+
 ## signal-processing
 
 ## pyqt-ui

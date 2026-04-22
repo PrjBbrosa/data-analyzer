@@ -74,11 +74,12 @@ your change.
 }
 ```
 
-- `files_changed` MUST list every path you edited or wrote. The
-  orchestrator detects rework by comparing this list across specialists
-  in a top-level task — under-reporting defeats the detector.
-- The orchestrator will add a `from` field to your `flagged` entries
-  when it aggregates; do not set `from` yourself.
+- `files_changed` MUST list every path you edited or wrote. Main
+  Claude (the dispatcher) detects rework by comparing this list across
+  specialists in a top-level task — under-reporting defeats the
+  detector.
+- Main Claude will add a `from` field to your `flagged` entries when
+  it aggregates; do not set `from` yourself.
 - `ui_verified` rules (no ambiguity):
   - `status: blocked` or `status: needs_info` → `ui_verified: false`.
   - `status: done` with no user-visible effect (pure rename, comment,
@@ -95,13 +96,16 @@ A new lesson requires BOTH writes:
   `docs/lessons-learned/LESSONS.md`.
 
 Both writes are required. If either fails, surface the error to the
-orchestrator and do NOT retry silently.
+main Claude dispatcher and do NOT retry silently.
 
 ## Reflection triggers
 
-- Immediately on rework (`cause: rework`).
-- Top-level completion when the orchestrator prompts you.
 - Genuine insight on Qt quirks, font fallback, repaint pitfalls, etc.
+  (`cause: insight`).
+- Rework detection is main Claude's job — you do not see other
+  specialists' outputs and should not try to diagnose rework.
+- Top-level reflection: only when main Claude re-dispatches you with
+  an explicit "reflect on this task" prompt.
 
 ## Skills you must honor
 

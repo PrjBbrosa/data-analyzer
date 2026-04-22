@@ -732,17 +732,35 @@ EOF
 **Files:**
 - Create: `docs/superpowers/specs/2026-04-22-agent-squad-bringup-notes.md`
 
-- [ ] **Step 1: Dispatch a trivial task to the squad**
+- [ ] **Step 1: Run the Squad runbook (main Claude drives four phases)**
 
-In a fresh Claude Code session (or via the `Task` tool from this one), dispatch:
+> **Architecture note:** Per the spec addendum (post-pivot 2026-04-22),
+> subagents cannot use `Task`. Main Claude is the dispatcher. The runbook
+> is in `CLAUDE.md`.
 
+**Phase 1 — Plan:**
 ```
 Task(
   subagent_type="squad-orchestrator",
-  description="Dry-run: docstring for FFTAnalyzer",
-  prompt="Add a short module-level docstring at the top of the FFTAnalyzer class in 'MF4 Data Analyzer V1.py'. This is a smoke test of the squad — no numeric changes, no UI changes. You should decompose into a single subtask and dispatch to signal-processing-expert."
+  description="Dry-run: plan FFTAnalyzer docstring",
+  prompt="mode: plan\n\nuser request:\nAdd a short module-level docstring at the top of the FFTAnalyzer class in 'MF4 Data Analyzer V1.py'. Smoke test — no numeric changes."
 )
 ```
+Expect `{mode: plan, status: ok, decomposition: [{expert: signal-processing-expert, ...}], ...}`.
+
+**Phase 2 — Execute:**
+```
+Task(
+  subagent_type="signal-processing-expert",
+  description="<from decomposition.subtask>",
+  prompt="<decomposition[0].brief>"
+)
+```
+Expect `{status: done, files_changed: ["MF4 Data Analyzer V1.py"], tests_run: [], notes: "docstring-only, TDD not applicable"}`.
+
+**Phase 3 — Aggregate:** main Claude builds the aggregated JSON per CLAUDE.md Phase 3 rules. No rework expected (single subtask).
+
+**Phase 4 — State:** main Claude RMWs `.state.yml` → `top_level_completions: 1`. No prune (1 < 20).
 
 - [ ] **Step 1.5: Pre-dispatch sanity check**
 
