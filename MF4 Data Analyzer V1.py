@@ -2035,7 +2035,7 @@ class MainWindow(QMainWindow):
             ax1 = self.canvas_fft.fig.add_subplot(2, 1, 1)
             ax1.plot(freq, amp, '#1f77b4', lw=0.8);
             ax1.set_xlabel('Frequency (Hz)');
-            ax1.set_ylabel('Amplitude')
+            ax1.set_ylabel('幅值')
             ax1.set_title(f'FFT - {self.combo_sig.currentText()} (窗:{win}, NFFT:{nfft or "auto"})');
             ax1.grid(True, alpha=0.25, ls='--');
             ax1.set_xlim(0, x_max)
@@ -2170,7 +2170,7 @@ class MainWindow(QMainWindow):
             ax1 = self.canvas_order.fig.add_subplot(2, 1, 1)
             ax1.plot(rt, oa, '#1f77b4', lw=1);
             ax1.set_xlabel('RPM');
-            ax1.set_ylabel('Amplitude')
+            ax1.set_ylabel('幅值')
             ax1.set_title(f'阶次 {to} 跟踪 - {self.combo_sig.currentText()}');
             ax1.grid(True, alpha=0.25, ls='--')
             ax2 = self.canvas_order.fig.add_subplot(2, 1, 2)

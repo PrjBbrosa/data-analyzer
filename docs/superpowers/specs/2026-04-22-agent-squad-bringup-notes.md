@@ -95,3 +95,93 @@ advances on completion, not on blocked runs.
   a docstring-adjacent edit or emit a headless-environment note.
 - Confirm `top_level_completions` goes to 2, not 3 (no rework
   double-increment).
+
+---
+
+## Cross-domain boundary (Task 9) — PASS first try
+
+### Phase 1 — Plan
+
+Orchestrator returned the plan-mode contract with exactly 2 subtasks,
+both with `depends_on: []` → dispatchable in parallel:
+
+| subtask_slug | expert | rationale |
+|---|---|---|
+| `fft-ylabel-to-zh` | `pyqt-ui-engineer` | Y-label is a surface-keyword; route to UI even though "FFT" matches computation |
+| `fft-amp-window-mean-normalization-sanity` | `signal-processing-expert` | numeric scaling is sig-proc domain |
+
+Audit: `docs/lessons-learned/orchestrator/decompositions/2026-04-22-fft-ylabel-zh-and-amp-scaling-sanity.md`.
+
+### Phase 2 — Execute (parallel)
+
+**pyqt-ui-engineer** → `status: done`, `ui_verified: false` (headless
+env, per agent's headless-detection rule). Changed both FFT amplitude
+Y-labels to `'幅值'` at lines 2038 and 2173. Left the colorbar at line
+2142 alone (correct — that's an order-spectrum colorbar, different
+visual concern). `files_changed: ["MF4 Data Analyzer V1.py"]`.
+
+**signal-processing-expert** → `status: done`, all 6 expected-value
+tests pass. Confirmed `amp = 2 * |FFT| / n / mean(w)` is the correct
+normalization for Hanning/Hamming/Blackman, survives DC offset
+rejection, and is invariant under 4x zero-padding. Did NOT edit the
+monolith — only added `tests/test_fft_amplitude_normalization.py`.
+Noted a non-obvious technical detail: the test uses `ast.unparse` +
+`exec` to import `FFTAnalyzer` in isolation because the main file
+eagerly imports PyQt5 / matplotlib / asammdf at module scope, which
+would drag the whole UI stack into every unit test. `files_changed:
+["tests/test_fft_amplitude_normalization.py"]`.
+
+Main Claude re-ran the tests locally via `unittest` (pytest not in the
+venv): 6/6 OK, 48 ms. Specialist's claim verified independently.
+
+### Phase 3 — Aggregate + rework detection
+
+- `subtasks[0].files_changed ∩ subtasks[1].files_changed = ∅`
+  (`MF4 Data Analyzer V1.py` vs `tests/test_fft_amplitude_normalization.py`)
+  → **no rework detected**.
+- `flagged: []` on both → no re-dispatch.
+- Boundary discipline held: UI specialist did not touch any numeric
+  code; sig-proc specialist did not touch any UI code and did not
+  edit the monolith at all (correctly deferred to "no fix needed").
+
+Aggregated:
+
+```json
+{
+  "top_level_status": "done",
+  "done": ["fft-ylabel-to-zh", "fft-amp-window-mean-normalization-sanity"],
+  "blocked": [],
+  "flagged": [],
+  "subtasks": [
+    {
+      "expert": "pyqt-ui-engineer",
+      "status": "done",
+      "ui_verified": false,
+      "files_changed": ["MF4 Data Analyzer V1.py"],
+      "notes": "Changed 2 FFT Y-labels to '幅值'. Headless env → ui_verified:false."
+    },
+    {
+      "expert": "signal-processing-expert",
+      "status": "done",
+      "tests_run": ["tests/test_fft_amplitude_normalization.py::FFTAmplitudeNormalizationTests::test_hanning_recovers_unit_amplitude_within_1pct", "...", "..."],
+      "files_changed": ["tests/test_fft_amplitude_normalization.py"],
+      "notes": "Amp normalization correct; added 6 TDD expected-value tests, all pass."
+    }
+  ],
+  "lessons_added": [],
+  "lessons_merged": [],
+  "prune_report_path": null
+}
+```
+
+### Phase 4 — State
+
+`.state.yml`: `top_level_completions 1 → 2`. `last_prune_at: 0`
+(1 < 20, no prune). `schema_version: 1` preserved.
+
+### PASS
+
+First try on the new runbook. Boundary discipline verified across both
+"easy" (UI text change) and "tricky" (sig-proc sanity check with
+potential temptation to edit correct code) subtasks. Squad architecture
+works end-to-end.
