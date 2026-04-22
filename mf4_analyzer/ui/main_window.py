@@ -581,6 +581,7 @@ class MainWindow(QMainWindow):
         self.canvas_time.full_reset()
         self.canvas_fft.full_reset()
         self.canvas_order.full_reset()
+        self.axis_lock.reset()
         self.stats.update_stats({})
         self.lbl_cursor.setText("")
         self.lbl_dual.setText("")

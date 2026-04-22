@@ -42,3 +42,11 @@ class AxisLockBar(QWidget):
         else:
             if not self.btn_x.isChecked() and not self.btn_y.isChecked():
                 self.lock_changed.emit('none')
+
+    def reset(self):
+        """Programmatically clear both toggles without emitting lock_changed.
+        Call this on file close so the UI stays consistent with the canvas."""
+        for b in (self.btn_x, self.btn_y):
+            b.blockSignals(True)
+            b.setChecked(False)
+            b.blockSignals(False)

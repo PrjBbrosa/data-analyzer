@@ -51,6 +51,10 @@ class TimeDomainCanvas(FigureCanvas):
         self.mpl_connect('key_press_event', self._on_key)
 
     def clear(self):
+        # Drop any in-flight rubber-band refs before fig.clear discards the axes.
+        self._rb_patch = None
+        self._rb_start = None
+        self._rb_ax = None
         self.fig.clear();
         self.axes_list = [];
         self.lines = {};
@@ -64,8 +68,15 @@ class TimeDomainCanvas(FigureCanvas):
         self._bx = None
 
     def full_reset(self):
-        """Clear figure AND all cursor/dual-cursor/background state.
+        """Clear figure AND all cursor/dual-cursor/background/axis-lock state.
         Use this on file close; use clear() for redraws within a session."""
+        if self._rb_patch is not None:
+            try: self._rb_patch.remove()
+            except Exception: pass
+        self._rb_patch = None
+        self._rb_start = None
+        self._rb_ax = None
+        self._axis_lock = None
         self.clear()
         self._bg = None
         self._cursor_artists = []
@@ -319,8 +330,8 @@ class TimeDomainCanvas(FigureCanvas):
             ax.set_xlim(min(x0, x1), max(x0, x1))
         elif self._axis_lock == 'y' and abs(y1 - y0) > 1e-9:
             ax.set_ylim(min(y0, y1), max(y0, y1))
-        self._cancel_rb()
         self._refresh = True
+        self._cancel_rb()
 
     def _on_key(self, e):
         if e.key == 'escape':
