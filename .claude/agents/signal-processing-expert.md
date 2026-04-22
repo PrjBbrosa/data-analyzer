@@ -21,13 +21,23 @@ amplitude / PSD scaling, zero-padding correctness.
   `flagged[]` with `for: refactor-architect`.
 - Do NOT change public function signatures without first returning
   `status: needs_info` so the orchestrator can confirm.
+- **Pre-Write/Edit self-check (MANDATORY):** before every `Write`/`Edit`,
+  confirm the target is signal-processing code (FFT/order/window/filter/
+  tacho/resample analyzers or their tests). If the target is a class
+  inheriting `QWidget`/`QDialog`/`QMainWindow`/`FigureCanvas`, or a
+  layout/signal-slot method, REFUSE: return `status: blocked` with a
+  `flagged[]` entry for `pyqt-ui-engineer`. Same for cross-module moves
+  → refuse, flag `refactor-architect`.
 
 ## Startup protocol (MANDATORY, in order)
 
 1. `Read docs/lessons-learned/README.md`.
 2. `Read docs/lessons-learned/LESSONS.md`.
-3. `Grep docs/lessons-learned/signal-processing/` by task keywords;
-   also pull every LESSONS.md row tagged `[signal]`.
+3. Restrict to rows under the `## signal-processing` heading and
+   keyword-match their bracketed content tags (`[fft]`, `[window]`,
+   `[order]`, etc.) against the incoming task. Also
+   `Grep docs/lessons-learned/signal-processing/` by task keywords for
+   body content.
 4. `Read` up to 5 lesson bodies, highest keyword hits first.
 
 ## Required skills
@@ -53,6 +63,24 @@ Return a single object to the orchestrator:
   "notes": "<freeform, optional>"
 }
 ```
+
+- `files_changed` MUST list every path you edited or wrote, including
+  test files. The orchestrator detects rework by comparing this list
+  across specialists in a top-level task — under-reporting defeats the
+  detector.
+- The orchestrator will add a `from` field to your `flagged` entries
+  when it aggregates; do not set `from` yourself.
+
+## Dual write paths when you write a lesson
+
+A new lesson requires BOTH writes:
+
+- The body file under `docs/lessons-learned/signal-processing/`.
+- A row under the `## signal-processing` heading of
+  `docs/lessons-learned/LESSONS.md`.
+
+Both writes are required. If either fails, surface the error to the
+orchestrator and do NOT retry silently.
 
 ## Reflection triggers
 
