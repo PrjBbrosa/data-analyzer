@@ -60,3 +60,69 @@ def test_file_row_click_emits_activated(qapp, qtbot):
     with qtbot.waitSignal(nav.file_activated, timeout=200) as blocker:
         nav._activate("f0")
     assert blocker.args == ["f0"]
+
+
+from unittest.mock import patch
+from PyQt5.QtCore import Qt
+
+
+def test_channel_search_filters(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    # "speed" matches channel named "speed"; "xyz" matches nothing
+    nav.channel_list.search.setText("xyz")
+    fi = nav.channel_list._file_items["f0"]
+    for i in range(fi.childCount()):
+        assert fi.child(i).isHidden()
+    nav.channel_list.search.setText("speed")
+    visible = [not fi.child(i).isHidden() for i in range(fi.childCount())]
+    assert any(visible)
+
+
+def test_channel_all_button_checks(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    nav.channel_list._all()
+    fi = nav.channel_list._file_items["f0"]
+    for i in range(fi.childCount()):
+        assert fi.child(i).checkState(0) == Qt.Checked
+
+
+def test_channel_none_button_clears(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    nav.channel_list._all()
+    nav.channel_list._none()
+    fi = nav.channel_list._file_items["f0"]
+    for i in range(fi.childCount()):
+        assert fi.child(i).checkState(0) == Qt.Unchecked
+
+
+def test_channel_inv_button_toggles(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    fi = nav.channel_list._file_items["f0"]
+    fi.child(0).setCheckState(0, Qt.Checked)
+    nav.channel_list._inv()
+    assert fi.child(0).checkState(0) == Qt.Unchecked
+    assert fi.child(1).checkState(0) == Qt.Checked
+
+
+def test_channel_over_threshold_warns(qapp, qtbot, monkeypatch):
+    # Craft a FakeFd with many channels to trigger the >8 warn.
+    class WideFd(FakeFd):
+        def get_signal_channels(self):
+            return [f"ch{i}" for i in range(20)]
+        def get_color_palette(self):
+            return ["#000"] * 20
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", WideFd())
+    with patch('mf4_analyzer.ui.widgets.QMessageBox.question',
+               return_value=False) as q:
+        nav.channel_list._all()
+    assert q.called
