@@ -9,6 +9,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.widgets import SpanSelector
 from matplotlib.ticker import MaxNLocator
+from matplotlib.patches import Rectangle
 
 from .dialogs import AxisEditDialog
 
@@ -42,8 +43,18 @@ class TimeDomainCanvas(FigureCanvas):
         self.mpl_connect('draw_event', lambda e: setattr(self, '_refresh', True))
         self.mpl_connect('button_press_event', self._on_click)
         self.setFocusPolicy(Qt.StrongFocus)
+        self._axis_lock = None     # None | 'x' | 'y'
+        self._rb_start = None      # (x, y) at press
+        self._rb_ax = None
+        self._rb_patch = None
+        self.mpl_connect('button_release_event', self._on_release)
+        self.mpl_connect('key_press_event', self._on_key)
 
     def clear(self):
+        # Drop any in-flight rubber-band refs before fig.clear discards the axes.
+        self._rb_patch = None
+        self._rb_start = None
+        self._rb_ax = None
         self.fig.clear();
         self.axes_list = [];
         self.lines = {};
@@ -56,13 +67,36 @@ class TimeDomainCanvas(FigureCanvas):
         self._ax = None;
         self._bx = None
 
+    def full_reset(self):
+        """Clear figure AND all cursor/dual-cursor/background/axis-lock state.
+        Use this on file close; use clear() for redraws within a session."""
+        if self._rb_patch is not None:
+            try: self._rb_patch.remove()
+            except Exception: pass
+        self._rb_patch = None
+        self._rb_start = None
+        self._rb_ax = None
+        self._axis_lock = None
+        self.clear()
+        self._bg = None
+        self._cursor_artists = []
+        self._a_artists = []
+        self._b_artists = []
+        self._ax = None
+        self._bx = None
+        self._placing = 'A'
+        self._cursor_visible = False
+        self._dual = False
+        self.span_selector = None
+        self._last_t = 0
+        self.draw_idle()
+
     def plot_channels(self, ch_list, mode='overlay', xlabel='Time (s)'):
         self.clear()
         vis = [(n, t, s, c, u) for n, v, t, s, c, u in ch_list if v]
         if not vis: self.draw(); return
         if mode == 'subplot' and len(vis) > 1:
-            n = len(vis);
-            first = None
+            n = len(vis); first = None
             for i, (name, t, sig, color, unit) in enumerate(vis):
                 ax = self.fig.add_subplot(n, 1, i + 1, sharex=first) if i > 0 else self.fig.add_subplot(n, 1, 1)
                 if i == 0: first = ax
@@ -70,32 +104,56 @@ class TimeDomainCanvas(FigureCanvas):
                 td, sd = self._ds(t, sig)
                 ax.plot(td, sd, color=color, lw=0.8)
                 self.channel_data[name] = (t, sig, color, unit)
-                ax.set_ylabel(name[:22], fontsize=8, color=color)
+                label = f"{name[:22]} ({unit})" if unit else name[:22]
+                ax.set_ylabel(label, fontsize=8, color=color)
                 ax.tick_params(axis='y', colors=color, labelsize=7)
-                ax.spines['left'].set_color(color);
-                ax.spines['left'].set_linewidth(2)
+                ax.spines['left'].set_color(color); ax.spines['left'].set_linewidth(2)
                 ax.grid(True, alpha=0.25, ls='--')
                 if i < n - 1:
                     ax.tick_params(axis='x', labelbottom=False)
                 else:
                     ax.set_xlabel(xlabel, fontsize=9)
             self.fig.subplots_adjust(hspace=0.05, left=0.12, right=0.96, top=0.97, bottom=0.07)
-        else:
-            ax = self.fig.add_subplot(1, 1, 1);
-            self.axes_list.append(ax)
-            for name, t, sig, color, unit in vis:
+        elif mode == 'overlay' and len(vis) >= 2:
+            # Per-channel twin-Y axes
+            ax0 = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax0)
+            for i in range(1, len(vis)):
+                tw = ax0.twinx(); self.axes_list.append(tw)
+                tw.spines['left'].set_visible(False)
+                tw.spines['top'].set_visible(False)
+                tw.spines['bottom'].set_visible(False)
+                if i >= 2:
+                    tw.spines['right'].set_position(('outward', 60 * (i - 1)))
+            for ax, (name, t, sig, color, unit) in zip(self.axes_list, vis):
                 td, sd = self._ds(t, sig)
-                ax.plot(td, sd, color=color, lw=0.8, label=name[:18], alpha=0.85)
+                ax.plot(td, sd, color=color, lw=0.8)
                 self.channel_data[name] = (t, sig, color, unit)
-            ax.legend(loc='upper right', fontsize=7, ncol=min(3, len(vis)))
-            ax.set_xlabel(xlabel, fontsize=9);
+                label = f"{name[:18]} ({unit})" if unit else name[:18]
+                ax.set_ylabel(label, color=color, fontsize=8)
+                ax.tick_params(axis='y', colors=color, labelsize=7)
+                side = 'left' if ax is ax0 else 'right'
+                ax.spines[side].set_color(color); ax.spines[side].set_linewidth(1.5)
+            ax0.set_xlabel(xlabel, fontsize=9)
+            ax0.grid(True, alpha=0.25, ls='--')
+            right = max(0.95 - 0.06 * max(0, len(vis) - 2), 0.60)
+            self.fig.subplots_adjust(left=0.08, right=right, top=0.97, bottom=0.08)
+        else:
+            # single channel
+            ax = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax)
+            name, t, sig, color, unit = vis[0]
+            td, sd = self._ds(t, sig)
+            ax.plot(td, sd, color=color, lw=0.8)
+            self.channel_data[name] = (t, sig, color, unit)
+            label = f"{name[:22]} ({unit})" if unit else name[:22]
+            ax.set_ylabel(label, fontsize=8, color=color)
+            ax.tick_params(axis='y', colors=color, labelsize=7)
+            ax.set_xlabel(xlabel, fontsize=9)
             ax.grid(True, alpha=0.25, ls='--')
             self.fig.tight_layout(pad=0.5)
         for ax in self.axes_list:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=10, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=6, min_n_ticks=3))
-        self.draw();
-        self._refresh = True
+        self.draw(); self._refresh = True
 
     def _ds(self, t, sig):
         n = len(sig)
@@ -162,7 +220,24 @@ class TimeDomainCanvas(FigureCanvas):
         self._refresh = False
 
     def _on_click(self, e):
-        if not self._dual or not self._cursor_visible or e.inaxes is None or e.xdata is None or e.button != 1: return
+        # Axis-lock mode short-circuits dual-cursor and initiates rubber-band
+        if self._axis_lock is not None and e.button == 1 and e.inaxes is not None \
+                and e.xdata is not None and e.ydata is not None:
+            self._rb_start = (e.xdata, e.ydata)
+            self._rb_ax = e.inaxes
+            xlo, xhi = e.inaxes.get_xlim()
+            ylo, yhi = e.inaxes.get_ylim()
+            if self._axis_lock == 'x':
+                self._rb_patch = Rectangle((e.xdata, ylo), 0, yhi - ylo,
+                                           facecolor='#007AFF', alpha=0.18, edgecolor='#007AFF', lw=0.8)
+            else:
+                self._rb_patch = Rectangle((xlo, e.ydata), xhi - xlo, 0,
+                                           facecolor='#007AFF', alpha=0.18, edgecolor='#007AFF', lw=0.8)
+            e.inaxes.add_patch(self._rb_patch)
+            self.draw_idle()
+            return
+        if not self._dual or not self._cursor_visible or e.inaxes is None or e.xdata is None or e.button != 1:
+            return
         if self._placing == 'A':
             self._ax = e.xdata; self._placing = 'B'
         else:
@@ -170,6 +245,18 @@ class TimeDomainCanvas(FigureCanvas):
         self._update_dual()
 
     def _on_move(self, e):
+        # Rubber-band update has priority
+        if self._rb_start is not None and self._rb_patch is not None and e.inaxes is self._rb_ax \
+                and e.xdata is not None and e.ydata is not None:
+            x0, y0 = self._rb_start
+            if self._axis_lock == 'x':
+                self._rb_patch.set_x(min(x0, e.xdata))
+                self._rb_patch.set_width(abs(e.xdata - x0))
+            else:
+                self._rb_patch.set_y(min(y0, e.ydata))
+                self._rb_patch.set_height(abs(e.ydata - y0))
+            self.draw_idle()
+            return
         if not self._cursor_visible or e.inaxes is None or e.xdata is None: return
         now = _time.monotonic() * 1000
         if now - self._last_t < 33: return
@@ -186,8 +273,11 @@ class TimeDomainCanvas(FigureCanvas):
         for i, vl in enumerate(self._cursor_artists):
             if i < len(self.axes_list): vl.set_xdata([x, x]); vl.set_visible(True); self.axes_list[i].draw_artist(vl)
         info = [f"t={x:.4f}s"]
-        for ch, (tf, sf, _, _) in self.channel_data.items():
-            if len(tf): idx = min(np.searchsorted(tf, x), len(sf) - 1); info.append(f"{ch[:18]}={sf[idx]:.4g}")
+        for ch, (tf, sf, _, u) in self.channel_data.items():
+            if len(tf):
+                idx = min(np.searchsorted(tf, x), len(sf) - 1)
+                unit_s = f" {u}" if u else ""
+                info.append(f"{ch[:18]}={sf[idx]:.4g}{unit_s}")
         self.fig.canvas.blit(self.fig.bbox)
         self.cursor_info.emit("  │  ".join(info))
 
@@ -211,9 +301,15 @@ class TimeDomainCanvas(FigureCanvas):
             info.append(f"ΔT={dx:.4f}s")
             if abs(dx) > 1e-12: info.append(f"1/ΔT={1 / abs(dx):.2f}Hz")
             xlo, xhi = min(self._ax, self._bx), max(self._ax, self._bx)
-            for ch, (tf, sf, _, _) in self.channel_data.items():
-                if len(tf): m = (tf >= xlo) & (tf <= xhi); seg = sf[m]
-                if len(seg): dual.append(f"{ch[:20]}:Min={np.min(seg):.4g} Max={np.max(seg):.4g}  Avg={np.mean(seg):.4g} RMS={np.sqrt(np.mean(seg ** 2)):.4g}")
+            for ch, (tf, sf, _, u) in self.channel_data.items():
+                if not len(tf): continue
+                m = (tf >= xlo) & (tf <= xhi); seg = sf[m]
+                if not len(seg): continue
+                unit_s = f" {u}" if u else ""
+                dual.append(
+                    f"{ch[:20]}:Min={np.min(seg):.4g}{unit_s} Max={np.max(seg):.4g}{unit_s} "
+                    f"Avg={np.mean(seg):.4g}{unit_s} RMS={np.sqrt(np.mean(seg ** 2)):.4g}{unit_s}"
+                )
         if hover is not None:
             self._ensure_artists()
             for i, vl in enumerate(self._cursor_artists):
@@ -237,6 +333,41 @@ class TimeDomainCanvas(FigureCanvas):
             lo, hi = ax.get_ylim(); d = (hi - lo) * 0.1 * step; ax.set_ylim(lo + d, hi + d)
         self._refresh = True;
         self.draw_idle()
+
+    def set_axis_lock(self, mode):
+        """mode in {'x', 'y', 'none'}."""
+        self._axis_lock = None if mode == 'none' else mode
+        if self.span_selector is not None:
+            self.span_selector.set_active(self._axis_lock is None)
+        self._cancel_rb()
+
+    def _cancel_rb(self):
+        if self._rb_patch is not None:
+            try: self._rb_patch.remove()
+            except Exception: pass
+        self._rb_patch = None
+        self._rb_start = None
+        self._rb_ax = None
+        self.draw_idle()
+
+    def _on_release(self, e):
+        if self._axis_lock is None or self._rb_start is None or self._rb_ax is None:
+            return
+        if e.inaxes is not self._rb_ax or e.xdata is None or e.ydata is None:
+            self._cancel_rb(); return
+        x0, y0 = self._rb_start
+        x1, y1 = e.xdata, e.ydata
+        ax = self._rb_ax
+        if self._axis_lock == 'x' and abs(x1 - x0) > 1e-9:
+            ax.set_xlim(min(x0, x1), max(x0, x1))
+        elif self._axis_lock == 'y' and abs(y1 - y0) > 1e-9:
+            ax.set_ylim(min(y0, y1), max(y0, y1))
+        self._refresh = True
+        self._cancel_rb()
+
+    def _on_key(self, e):
+        if e.key == 'escape':
+            self._cancel_rb()
 
     def get_statistics(self, time_range=None):
         stats = {}
@@ -267,6 +398,12 @@ class PlotCanvas(FigureCanvas):
         self._remarks = []
         self._line_data = {}
         self.fig.clear()
+
+    def full_reset(self):
+        """Clear figure AND remarks/stored-line-data."""
+        self.clear()
+        self._remark_enabled = False
+        self.draw_idle()
 
     def set_remark_enabled(self, enabled):
         self._remark_enabled = enabled

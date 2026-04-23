@@ -37,6 +37,8 @@ from ..signal import FFTAnalyzer, OrderAnalyzer
 from .canvases import TimeDomainCanvas, PlotCanvas
 from .dialogs import ChannelEditorDialog, ExportDialog
 from .widgets import StatisticsPanel, MultiFileChannelWidget
+from .axis_lock_toolbar import AxisLockBar
+from .icons import Icons
 
 
 class MainWindow(QMainWindow):
@@ -77,14 +79,18 @@ class MainWindow(QMainWindow):
         g = QGroupBox("📂 文件管理");
         gl = QVBoxLayout(g)
         br = QHBoxLayout()
-        self.btn_load = QPushButton("➕ 添加");
-        self.btn_load.setStyleSheet("font-weight:bold;background:#2196F3;color:white;");
+        self.btn_load = QPushButton(" 添加")
+        self.btn_load.setIcon(Icons.add_file())
+        self.btn_load.setObjectName("primary")
         br.addWidget(self.btn_load)
-        self.btn_close = QPushButton("✖ 关闭");
-        self.btn_close.setStyleSheet("background:#f44336;color:white;");
+        self.btn_close = QPushButton(" 关闭")
+        self.btn_close.setIcon(Icons.close_file())
+        self.btn_close.setObjectName("danger")
         br.addWidget(self.btn_close)
-        self.btn_close_all = QPushButton("全部");
-        self.btn_close_all.setMaximumWidth(50);
+        self.btn_close_all = QPushButton("全部")
+        self.btn_close_all.setIcon(Icons.close_all())
+        self.btn_close_all.setObjectName("danger")
+        self.btn_close_all.setMaximumWidth(70)
         br.addWidget(self.btn_close_all)
         gl.addLayout(br)
         self.file_tabs = QTabWidget();
@@ -107,8 +113,9 @@ class MainWindow(QMainWindow):
         self.combo_mode.addItems(['Subplot', 'Overlay']);
         ml2.addWidget(self.combo_mode);
         gl.addLayout(ml2)
-        self.btn_plot = QPushButton("📈 绘图");
-        self.btn_plot.setStyleSheet("font-weight:bold;");
+        self.btn_plot = QPushButton(" 绘图")
+        self.btn_plot.setIcon(Icons.plot())
+        self.btn_plot.setObjectName("primary")
         gl.addWidget(self.btn_plot)
         ch = QHBoxLayout()
         self.chk_cursor = QCheckBox("游标");
@@ -121,11 +128,11 @@ class MainWindow(QMainWindow):
         ch.addStretch();
         gl.addLayout(ch)
         bh = QHBoxLayout()
-        self.btn_edit = QPushButton("🔧 编辑");
-        self.btn_edit.setStyleSheet("background:#FF9800;color:white;");
+        self.btn_edit = QPushButton("🔧 编辑")
+        self.btn_edit.setObjectName("accent")
         bh.addWidget(self.btn_edit)
-        self.btn_export = QPushButton("📥 导出");
-        self.btn_export.setStyleSheet("background:#4CAF50;color:white;");
+        self.btn_export = QPushButton("📥 导出")
+        self.btn_export.setObjectName("success")
         bh.addWidget(self.btn_export)
         gl.addLayout(bh);
         lay.addWidget(g)
@@ -204,7 +211,8 @@ class MainWindow(QMainWindow):
         self.spin_fs.setSuffix(" Hz");
         fl.addRow("Fs:", self.spin_fs)
         # 时间轴重建按钮
-        self.btn_rebuild_time = QPushButton("🔄 重建时间轴");
+        self.btn_rebuild_time = QPushButton(" 重建时间轴")
+        self.btn_rebuild_time.setIcon(Icons.rebuild_time())
         self.btn_rebuild_time.setToolTip("根据Fs重新生成当前文件的时间轴")
         fl.addRow(self.btn_rebuild_time)
         h = QHBoxLayout();
@@ -239,9 +247,13 @@ class MainWindow(QMainWindow):
             "background:#0d1117;color:#58a6ff;padding:2px;font-family:monospace;font-size:15px;");
         self.lbl_dual.setWordWrap(True);
         self.lbl_dual.setVisible(False)
-        tl.addWidget(self.toolbar_time);
-        tl.addWidget(self.lbl_cursor);
-        tl.addWidget(self.lbl_dual);
+        self.axis_lock = AxisLockBar(self)
+        tb_row = QHBoxLayout()
+        tb_row.addWidget(self.toolbar_time, stretch=1)
+        tb_row.addWidget(self.axis_lock)
+        tl.addLayout(tb_row)
+        tl.addWidget(self.lbl_cursor)
+        tl.addWidget(self.lbl_dual)
         tl.addWidget(self.canvas_time, stretch=1)
         self.stats = StatisticsPanel();
         tl.addWidget(self.stats)
@@ -366,6 +378,7 @@ class MainWindow(QMainWindow):
         self.chk_cursor.stateChanged.connect(lambda st: self.canvas_time.set_cursor_visible(st == Qt.Checked))
         self.canvas_time.cursor_info.connect(self.lbl_cursor.setText)
         self.canvas_time.dual_cursor_info.connect(self.lbl_dual.setText)
+        self.axis_lock.lock_changed.connect(self.canvas_time.set_axis_lock)
         self.spin_xt.valueChanged.connect(self._update_all_tick_density)
         self.spin_yt.valueChanged.connect(self._update_all_tick_density)
         self.chk_dual.stateChanged.connect(self._dual_changed)
@@ -540,30 +553,86 @@ class MainWindow(QMainWindow):
 
     def _close(self, fid):
         if fid not in self.files: return
-        del self.files[fid];
+        del self.files[fid]
         self.channel_list.remove_file(fid)
         for i in range(self.file_tabs.count()):
             if self._get_tab_fid(i) == fid: self.file_tabs.removeTab(i); break
         self._active = list(self.files.keys())[0] if self.files else None
-        self._update_info();
-        self._update_combos();
-        self.plot_time()
+        self._update_info()
+        self._reset_plot_state(scope='file')
         self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
 
     def close_all(self):
         if not self.files: return
         if QMessageBox.question(self, "确认", f"关闭全部 {len(self.files)} 文件?",
                                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: return
-        for fid in list(self.files.keys()): self._close(fid)
-        self.canvas_time.clear();
-        self.canvas_time.draw();
-        self.stats.update_stats({})
+        for fid in list(self.files.keys()):
+            del self.files[fid]
+            self.channel_list.remove_file(fid)
+        while self.file_tabs.count():
+            self.file_tabs.removeTab(0)
+        self._active = None
+        self._update_info()
+        self._reset_plot_state(scope='all')
+        self.statusBar.showMessage("已关闭全部")
 
     def _update_info(self):
         if not self.files: self.lbl_info.setText("未加载文件"); return
         self.lbl_info.setText("\n".join(
             [f"{'▶' if fid == self._active else '  '} {fd.short_name}: {len(fd.data)}" for fid, fd in
              self.files.items()]))
+
+    def _reset_plot_state(self, scope='file'):
+        """Wipe plot-related state after a file close. scope in {'file', 'all'}.
+        Kept scope-parameterised for future divergence; today both paths share code."""
+        self.canvas_time.full_reset()
+        self.canvas_fft.full_reset()
+        self.canvas_order.full_reset()
+        self.axis_lock.reset()
+        self.stats.update_stats({})
+        self.lbl_cursor.setText("")
+        self.lbl_dual.setText("")
+        self.lbl_dual.setVisible(False)
+        self.chk_cursor.blockSignals(True); self.chk_cursor.setChecked(False); self.chk_cursor.blockSignals(False)
+        self.chk_dual.blockSignals(True); self.chk_dual.setChecked(False); self.chk_dual.blockSignals(False)
+
+        # Invalidate custom X axis pointer if the source file is gone
+        if self._custom_xaxis_fid is not None and self._custom_xaxis_fid not in self.files:
+            self._custom_xaxis_fid = None
+            self._custom_xaxis_ch = None
+            self._custom_xlabel = None
+            self.combo_xaxis.blockSignals(True)
+            self.combo_xaxis.setCurrentIndex(0)
+            self.combo_xaxis.blockSignals(False)
+            self.combo_xaxis_ch.setEnabled(False)
+
+        self.combo_xaxis_ch.clear()
+        self._update_combos()  # rebuilds combo_sig/combo_rpm from current self.files
+
+        if not self.files:
+            self.spin_start.blockSignals(True); self.spin_start.setValue(0); self.spin_start.blockSignals(False)
+            self.spin_end.blockSignals(True); self.spin_end.setValue(0); self.spin_end.blockSignals(False)
+            self.spin_fs.blockSignals(True); self.spin_fs.setValue(1000); self.spin_fs.blockSignals(False)
+        else:
+            max_t = max((fd.time_array[-1] for fd in self.files.values() if len(fd.time_array) > 0), default=0)
+            if self.spin_end.value() > max_t: self.spin_end.setValue(max_t)
+            if self.spin_start.value() > max_t: self.spin_start.setValue(0)
+            if self._active in self.files:
+                self.spin_fs.blockSignals(True); self.spin_fs.setValue(self.files[self._active].fs); self.spin_fs.blockSignals(False)
+
+        # re-fill combo_xaxis_ch if still in channel mode
+        if self.combo_xaxis.currentIndex() == 1:
+            self._on_xaxis_mode_changed(1)
+            if self._custom_xaxis_fid is not None and self._custom_xaxis_ch is not None:
+                target = (self._custom_xaxis_fid, self._custom_xaxis_ch)
+                for i in range(self.combo_xaxis_ch.count()):
+                    if self.combo_xaxis_ch.itemData(i) == target:
+                        self.combo_xaxis_ch.blockSignals(True)
+                        self.combo_xaxis_ch.setCurrentIndex(i)
+                        self.combo_xaxis_ch.blockSignals(False)
+                        break
+
+        self.plot_time()  # re-renders remaining channels or clears if empty
 
     def _update_combos(self):
         self.combo_sig.clear();
@@ -589,6 +658,15 @@ class MainWindow(QMainWindow):
         if not self.files: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
         checked = self.channel_list.get_checked_channels()
         if not checked: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
+
+        mode = 'subplot' if self.combo_mode.currentIndex() == 0 else 'overlay'
+        if mode == 'overlay' and len(checked) > 5:
+            ans = QMessageBox.question(
+                self, "确认",
+                f"overlay 下 {len(checked)} 个通道会产生 {len(checked)} 根 Y 轴，右侧可能拥挤。继续？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                return
 
         # 获取自定义横坐标数据
         custom_x = None
@@ -621,7 +699,6 @@ class MainWindow(QMainWindow):
                         'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit}
         if not data: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
 
-        mode = 'subplot' if self.combo_mode.currentIndex() == 0 else 'overlay'
         xlabel = self._custom_xlabel or 'Time (s)'
         self.canvas_time.plot_channels(data, mode, xlabel=xlabel)
         self.canvas_time.set_tick_density(self.spin_xt.value(), self.spin_yt.value())
