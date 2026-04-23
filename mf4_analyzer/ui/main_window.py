@@ -1,4 +1,21 @@
 """MainWindow: top-level QMainWindow assembling the application UI."""
+
+# PHASE-2 SHIM EXIT PLAN
+# Task 2.3 (Inspector persistent top)  → removes combo_xaxis/combo_xaxis_ch/edit_xlabel/
+#                                         btn_apply_xaxis/chk_range/spin_start/spin_end/
+#                                         spin_xt/spin_yt shims
+# Task 2.4 (Inspector time contextual) → removes combo_mode/chk_cursor/chk_dual shims
+# Task 2.5 (Inspector FFT contextual)  → removes combo_sig/spin_fs/combo_win/combo_nfft/
+#                                         spin_overlap/chk_fft_autoscale/chk_fft_remark/
+#                                         btn_fft/btn_rebuild_time shims
+# Task 2.6 (Inspector Order contextual)→ removes combo_rpm/spin_rf/spin_mo/spin_order_res/
+#                                         combo_order_nfft/spin_time_res/spin_rpm_res/
+#                                         spin_to/btn_ot/btn_or/btn_ok/lbl_order_progress shims
+# Task 2.9 (ChartStack cursor pill)    → removes lbl_cursor/lbl_dual shims
+# Task 2.10 (Stats strip)              → removes self.stats/tabs shims
+# Task 3.4 (axis lock popover)         → deletes axis_lock_toolbar.py
+# At end of Phase 2 the `_legacy_hidden` holder must be empty.
+
 import numpy as np
 import pandas as pd
 from pathlib import Path
