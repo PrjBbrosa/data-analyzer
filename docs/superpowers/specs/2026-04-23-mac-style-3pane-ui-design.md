@@ -320,7 +320,7 @@
 - segmented control：`#e8e8ed` 底 + 选中 segment 白底 + 轻阴影
 - `关闭活动文件` 按钮去掉（改到左栏每行 `✕`）
 - `全部关闭` 移到左栏文件头部 kebab `⋯`（保留 QMessageBox 二次确认）
-- **`截图` 按钮不在 v1 范围**（当前代码无实现；保留到未来增强）
+- **`截图` 按钮不在 v1 范围**（当前代码无实现；保留到未来增强）— 注：这仅指 "screenshot" 按钮；绘图按钮 `btn_plot`（re-plot 时域）**保留**，位置见 §6.2 时域下部 `▶ 绘图` 按钮
 
 ### 7.1 启用状态矩阵
 
@@ -446,14 +446,61 @@ mf4_analyzer/ui/
     export_sheet.py           # 原 ExportDialog 改造
     axis_lock_popover.py      # 原 AxisLockBar 改造
     rebuild_time_popover.py   # 原 btn_rebuild_time 对话框
-  canvases.py                 # 保留；cursor pill 定位逻辑调整
+  canvases.py                 # 保留；cursor pill 不在此处
   widgets.py                  # StatisticsPanel 改为 stats strip + 展开 tree; MultiFileChannelWidget 迁入 file_navigator
-  axis_lock_toolbar.py        # 内容搬迁后删除
+  axis_lock_toolbar.py        # **DELETE**（内容全部搬入 drawers/axis_lock_popover.py，不保留过渡文件）
   icons.py                    # 保留，新增 segmented / kebab / close 图标
   style.qss                   # 全面重写为浅色 tokens
 ```
 
 **`main_window.py` 职责**：仅装配三栏容器 + toolbar + 路由信号。现分析方法（`plot_time / do_fft / do_order_*`）保留，但表单读值改为从 Inspector 子组件读（Inspector 暴露 getter）。
+
+### 12.1 状态 / 单例归属（消除跨模块歧义）
+
+下表明确每个跨模块的状态片段由哪个模块独占拥有；其他模块只能通过 API 访问：
+
+| 状态片段 | 拥有模块 | 说明 |
+|---|---|---|
+| `files: OrderedDict[str, FileData]` | `main_window.py` | 保留现行，所有模块通过 MainWindow 的 getter/signal 访问 |
+| `_active: Optional[str]`（活动文件 id） | `main_window.py` | 同上；切换通过 `set_active_file(fid)` 方法 |
+| `_custom_xlabel / _custom_xaxis_fid / _custom_xaxis_ch` | `main_window.py` | 保留现行（xaxis state） |
+| `inspector_state_dict`（各模式下部输入的缓存） | `inspector.py` 的 `Inspector` 类 | 切模式时由 Inspector 自己读写，MainWindow 不触碰 |
+| Cursor pill widget（单例） | `chart_stack.py` 的 `ChartStack` 类 | 浮于当前 active canvas 上，**不依附于 canvas 类**；监听当前 canvas 的 `cursor_info` / `dual_cursor_info` 信号；切换模式时 re-wire 信号 |
+| `_reset_plot_state(scope)` 实现 | `main_window.py` | 保留现位置；内部调用 `chart_stack.full_reset_all()` + `inspector.reset_to_defaults()` + 左栏 `file_navigator.refresh_combos()` |
+| Axis lock state（`None/X/Y`） | `drawers/axis_lock_popover.py` + `TimeDomainCanvas` | popover 是 UI 载体；状态值由 TimeDomainCanvas 持有（`_axis_lock`），popover 通过 signal 设置 |
+| FFT `_remark_enabled` | `PlotCanvas` | 保留现位置；Inspector FFT 下部 checkbox 通过 signal 写入 |
+
+### 12.2 信号路由表（emitter → handler）
+
+| Signal | Emitter | Handler | 作用 |
+|---|---|---|---|
+| `MultiFileChannelWidget.channels_changed` | `file_navigator.py` | `MainWindow._ch_changed` | 时域模式下 auto re-plot；FFT/阶次模式下刷新 Inspector 信号下拉候选 |
+| `Toolbar.file_add_requested` | `toolbar.py` | `MainWindow.load_files` | 弹 QFileDialog |
+| `Toolbar.channel_editor_requested` | `toolbar.py` | `MainWindow.open_editor` | 显示通道编辑 drawer |
+| `Toolbar.export_requested` | `toolbar.py` | `MainWindow.export_excel` | 显示导出 sheet |
+| `Toolbar.mode_changed(str)` | `toolbar.py` | `MainWindow._on_mode_changed` | 切换 `ChartStack.currentIndex` + 切换 `Inspector` 下部上下文 |
+| `Toolbar.cursor_reset_requested` | `toolbar.py` | `TimeDomainCanvas.reset_cursors` | 重置游标（保留现 `_reset_cursors` 行为） |
+| `Toolbar.axis_lock_requested` | `toolbar.py` | 显示 `axis_lock_popover` | popover 内 radio → `TimeDomainCanvas.set_axis_lock(mode)` |
+| `FileNavigator.file_activated(fid)` | `file_navigator.py` | `MainWindow.set_active_file` | 切换 active + 刷新 `spin_fs` + 刷新 combos |
+| `FileNavigator.file_close_requested(fid)` | `file_navigator.py` | `MainWindow._close` | 保留现 `_close` 行为 |
+| `FileNavigator.close_all_requested` | `file_navigator.py` | `MainWindow.close_all` | 保留二次确认 |
+| `Inspector.plot_time_requested` | `inspector.py` | `MainWindow.plot_time` | `▶ 绘图` 按钮触发 |
+| `Inspector.fft_requested` | `inspector.py` | `MainWindow.do_fft` | `▶ 计算 FFT` 触发 |
+| `Inspector.order_time_requested` | `inspector.py` | `MainWindow.do_order_time` | `▶ 时间-阶次` 触发 |
+| `Inspector.order_rpm_requested` | `inspector.py` | `MainWindow.do_order_rpm` | `▶ 转速-阶次` 触发 |
+| `Inspector.order_track_requested` | `inspector.py` | `MainWindow.do_order_track` | `▶ 阶次跟踪` 触发 |
+| `Inspector.xaxis_apply_requested` | `inspector.py` | `MainWindow._apply_xaxis` | `应用` 按钮 |
+| `Inspector.rebuild_time_requested(fs)` | `inspector.py`（popover 内） | `MainWindow.rebuild_time_axis(fid, fs)` | 目标 fid 由 Inspector 依据当前信号下拉解析 |
+| `Inspector.tick_density_changed(xt, yt)` | `inspector.py` | `MainWindow._update_all_tick_density` | 保留现行为 |
+| `Inspector.remark_toggled(bool)` | `inspector.py` | `PlotCanvas.set_remark_enabled` | FFT `标注` checkbox |
+| `TimeDomainCanvas.cursor_info(str)` | `canvases.py` | `ChartStack` cursor pill | 单游标读数 |
+| `TimeDomainCanvas.dual_cursor_info(str)` | `canvases.py` | `ChartStack` cursor pill | 双游标读数（第二行） |
+| `TimeDomainCanvas.span_selected(xmin, xmax)` | `canvases.py`（新增；封装 `_on_span`） | `Inspector` 的 range 节 | 拖选 → 写入 `spin_start/end`，更新 stats |
+
+**布线原则：**
+- 子组件通过 Qt signal emit；MainWindow 作为中心节点订阅并调度分析方法
+- 子组件不直接互相 import；保持解耦，便于未来测试
+- Inspector 暴露只读 getter（如 `get_range() -> (bool, float, float)`, `get_fft_params() -> dict`, `get_order_params() -> dict`）供 MainWindow 的分析方法调用
 
 ## 13. 交互一致性规则
 
