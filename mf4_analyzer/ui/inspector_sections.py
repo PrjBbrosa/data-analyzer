@@ -1,7 +1,8 @@
 """Inspector section widgets (Phase 2 incremental).
 
-PersistentTop implemented; TimeContextual / FFTContextual / OrderContextual
-remain as Phase 1 stubs — they will be replaced in subsequent commits.
+PersistentTop and TimeContextual implemented; FFTContextual /
+OrderContextual remain as Phase 1 stubs — they will be replaced in
+subsequent commits.
 """
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
@@ -151,14 +152,65 @@ class PersistentTop(QWidget):
 
 
 class TimeContextual(QWidget):
+    """Time-domain contextual: plot-mode segmented, cursor segmented, plot button."""
+
     plot_time_requested = pyqtSignal()
     cursor_mode_changed = pyqtSignal(str)  # 'off' | 'single' | 'dual'
     plot_mode_changed = pyqtSignal(str)    # 'subplot' | 'overlay'
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("[time-contextual stub]", self))
+        root = QVBoxLayout(self)
+        root.setSpacing(6)
+
+        g = QGroupBox("绘图模式")
+        gl = QHBoxLayout(g)
+        self._btn_subplot = QPushButton("Subplot")
+        self._btn_overlay = QPushButton("Overlay")
+        for b in (self._btn_subplot, self._btn_overlay):
+            b.setCheckable(True)
+            gl.addWidget(b)
+        self._btn_subplot.setChecked(True)
+        self._plot_mode = 'subplot'
+        self._btn_subplot.clicked.connect(lambda: self.set_plot_mode('subplot'))
+        self._btn_overlay.clicked.connect(lambda: self.set_plot_mode('overlay'))
+        root.addWidget(g)
+
+        g = QGroupBox("游标")
+        gl = QHBoxLayout(g)
+        self._cursor_buttons = {}
+        for label, key in [('Off', 'off'), ('Single', 'single'), ('Dual', 'dual')]:
+            b = QPushButton(label)
+            b.setCheckable(True)
+            gl.addWidget(b)
+            b.clicked.connect(lambda _=False, k=key: self.set_cursor_mode(k))
+            self._cursor_buttons[key] = b
+        self._cursor_mode = 'single'
+        self._cursor_buttons['single'].setChecked(True)
+        root.addWidget(g)
+
+        self.btn_plot = QPushButton("▶ 绘图")
+        root.addWidget(self.btn_plot)
+        self.btn_plot.clicked.connect(self.plot_time_requested)
+        root.addStretch()
+
+    def set_cursor_mode(self, mode):
+        self._cursor_mode = mode
+        for k, b in self._cursor_buttons.items():
+            b.setChecked(k == mode)
+        self.cursor_mode_changed.emit(mode)
+
+    def cursor_mode(self):
+        return self._cursor_mode
+
+    def set_plot_mode(self, mode):
+        self._plot_mode = mode
+        self._btn_subplot.setChecked(mode == 'subplot')
+        self._btn_overlay.setChecked(mode == 'overlay')
+        self.plot_mode_changed.emit(mode)
+
+    def plot_mode(self):
+        return self._plot_mode
 
 
 class FFTContextual(QWidget):
