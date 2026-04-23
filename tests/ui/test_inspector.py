@@ -59,3 +59,22 @@ def test_time_contextual_plot_button_emits(qapp, qtbot):
     tc = TimeContextual()
     with qtbot.waitSignal(tc.plot_time_requested, timeout=200):
         tc.btn_plot.click()
+
+
+# ---- Task 2.5: FFTContextual ----
+
+def test_fft_contextual_defaults(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    fc = FFTContextual()
+    p = fc.get_params()
+    assert p['window'] in ('hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop')
+    assert 'nfft' in p
+    assert 0 <= p['overlap'] <= 0.9
+    assert isinstance(p['autoscale'], bool)
+
+
+def test_fft_contextual_fft_button_emits(qapp, qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    fc = FFTContextual()
+    with qtbot.waitSignal(fc.fft_requested, timeout=200):
+        fc.btn_fft.click()

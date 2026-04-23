@@ -1,8 +1,8 @@
 """Inspector section widgets (Phase 2 incremental).
 
-PersistentTop and TimeContextual implemented; FFTContextual /
-OrderContextual remain as Phase 1 stubs — they will be replaced in
-subsequent commits.
+PersistentTop, TimeContextual, and FFTContextual implemented;
+OrderContextual remains a Phase 1 stub — it will be replaced in the
+next commit.
 """
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
@@ -214,15 +214,111 @@ class TimeContextual(QWidget):
 
 
 class FFTContextual(QWidget):
+    """FFT contextual: signal/Fs/params/options + compute button."""
+
     fft_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)
     remark_toggled = pyqtSignal(bool)
-    signal_changed = pyqtSignal(object)
+    signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("[fft-contextual stub]", self))
+        root = QVBoxLayout(self)
+        root.setSpacing(6)
+
+        g = QGroupBox("分析信号")
+        fl = QFormLayout(g)
+        self.combo_sig = QComboBox()
+        fl.addRow("信号:", self.combo_sig)
+        self.spin_fs = QDoubleSpinBox()
+        self.spin_fs.setRange(1, 1e6)
+        self.spin_fs.setValue(1000)
+        self.spin_fs.setSuffix(" Hz")
+        fs_row = QHBoxLayout()
+        fs_row.addWidget(self.spin_fs)
+        self.btn_rebuild = QPushButton("⏱")
+        self.btn_rebuild.setMaximumWidth(30)
+        self.btn_rebuild.setToolTip("重建时间轴")
+        fs_row.addWidget(self.btn_rebuild)
+        fl.addRow("Fs:", fs_row)
+        root.addWidget(g)
+
+        g = QGroupBox("谱参数")
+        fl = QFormLayout(g)
+        self.combo_win = QComboBox()
+        self.combo_win.addItems(
+            ['hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop']
+        )
+        fl.addRow("窗函数:", self.combo_win)
+        self.combo_nfft = QComboBox()
+        self.combo_nfft.addItems(
+            ['自动', '512', '1024', '2048', '4096', '8192', '16384']
+        )
+        fl.addRow("NFFT:", self.combo_nfft)
+        self.spin_overlap = QSpinBox()
+        self.spin_overlap.setRange(0, 90)
+        self.spin_overlap.setValue(50)
+        self.spin_overlap.setSuffix(" %")
+        fl.addRow("重叠:", self.spin_overlap)
+        root.addWidget(g)
+
+        g = QGroupBox("选项")
+        gl = QVBoxLayout(g)
+        self.chk_autoscale = QCheckBox("自适应频率范围")
+        self.chk_autoscale.setChecked(True)
+        gl.addWidget(self.chk_autoscale)
+        self.chk_remark = QCheckBox("点击标注")
+        gl.addWidget(self.chk_remark)
+        root.addWidget(g)
+
+        self.btn_fft = QPushButton("▶ 计算 FFT")
+        root.addWidget(self.btn_fft)
+        root.addStretch()
+
+        self.btn_fft.clicked.connect(self.fft_requested)
+        self.btn_rebuild.clicked.connect(
+            lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
+        )
+        self.chk_remark.toggled.connect(self.remark_toggled)
+        # §6.3 Fs rule: spin_fs reflects selected signal's source file Fs.
+        # MainWindow will call set_fs via the signal_changed relay.
+
+    def _on_sig_index_changed(self):
+        self.signal_changed.emit(self.combo_sig.currentData())
+
+    def set_signal_candidates(self, candidates):
+        self.combo_sig.blockSignals(True)
+        self.combo_sig.clear()
+        for text, data in candidates:
+            self.combo_sig.addItem(text, data)
+        self.combo_sig.blockSignals(False)
+        try:
+            self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
+        except TypeError:
+            pass
+        self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
+        self._on_sig_index_changed()  # emit for newly-populated default
+
+    def current_signal(self):
+        return self.combo_sig.currentData()
+
+    def get_params(self):
+        nfft_text = self.combo_nfft.currentText()
+        return dict(
+            window=self.combo_win.currentText(),
+            nfft=None if nfft_text == '自动' else int(nfft_text),
+            overlap=self.spin_overlap.value() / 100.0,
+            autoscale=self.chk_autoscale.isChecked(),
+            remark=self.chk_remark.isChecked(),
+        )
+
+    def fs(self):
+        return self.spin_fs.value()
+
+    def set_fs(self, fs):
+        self.spin_fs.blockSignals(True)
+        self.spin_fs.setValue(fs)
+        self.spin_fs.blockSignals(False)
 
 
 class OrderContextual(QWidget):
