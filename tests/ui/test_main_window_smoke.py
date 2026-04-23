@@ -37,3 +37,30 @@ def test_mode_change_routes_to_chart_stack(qapp, qtbot):
     w.toolbar.btn_mode_fft.click()
     assert w.chart_stack.current_mode() == 'fft'
     assert w.inspector.contextual_widget_name() == 'fft'
+
+
+def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
+    """If user selects a custom X channel whose length != data, warn and abort."""
+    import pandas as pd
+    import numpy as np
+    from PyQt5.QtWidgets import QMessageBox
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+    # Second csv with different length
+    df = pd.DataFrame({"time": np.linspace(0, 1, 500), "pressure": np.random.randn(500)})
+    p2 = tmp_path / "shorter.csv"; df.to_csv(p2, index=False)
+
+    w = MainWindow(); qtbot.addWidget(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv, str(p2)], "")):
+        w.load_files()
+    # Pick custom X from file 2's channel while file 1 checked
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+    w.inspector.top._combo_xaxis_ch.setCurrentIndex(
+        w.inspector.top._combo_xaxis_ch.count() - 1  # last candidate (from file 2)
+    )
+    qapp.processEvents()
+    with patch.object(QMessageBox, 'warning') as warn:
+        w._apply_xaxis()
+    assert warn.called

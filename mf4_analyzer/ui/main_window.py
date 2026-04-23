@@ -213,6 +213,11 @@ class MainWindow(QMainWindow):
         self.inspector.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.inspector.signal_changed.connect(self._on_inspector_signal_changed)
 
+        # Populate xaxis channel candidates whenever user flips to 'channel' mode.
+        self.inspector.top.combo_xaxis.currentIndexChanged.connect(
+            lambda i: self._on_xaxis_mode_changed('channel' if i == 1 else 'time')
+        )
+
         # Custom X axis state (unchanged)
         self._custom_xlabel = None
         self._custom_xaxis_fid = None
@@ -285,40 +290,61 @@ class MainWindow(QMainWindow):
         # Navigator already confirmed; skip the second confirm here
         self.close_all()
 
-    def _on_xaxis_mode_changed(self, idx):
-        """横坐标模式切换"""
-        use_channel = (idx == 1)
-        self.combo_xaxis_ch.setEnabled(use_channel)
-        if use_channel:
-            # 填充可用通道
-            self.combo_xaxis_ch.clear()
+    def _on_xaxis_mode_changed(self, mode):
+        """横坐标模式切换 — populate Inspector candidates when switching to 'channel'.
+
+        Accepts 'channel'/'time' strings (Inspector wire) or 1/0 ints (legacy
+        callers such as _reset_plot_state) for backwards compatibility.
+        """
+        if mode == 1:
+            mode = 'channel'
+        elif mode == 0:
+            mode = 'time'
+        if mode == 'channel':
+            cands = []
             for fid, fd in self.files.items():
                 px = f"[{fd.short_name}] "
                 for ch in fd.channels:
-                    self.combo_xaxis_ch.addItem(px + ch, (fid, ch))
+                    cands.append((px + ch, (fid, ch)))
+            self.inspector.top.set_xaxis_candidates(cands)
 
     def _apply_xaxis(self):
         """应用横坐标设置"""
-        mode = self.combo_xaxis.currentIndex()
-        if mode == 0:
-            # 自动(时间)
-            self._custom_xlabel = self.edit_xlabel.text().strip() or None
+        mode = self.inspector.top.xaxis_mode()
+        if mode == 'time':
+            self._custom_xlabel = self.inspector.top.xaxis_label() or None
             self._custom_xaxis_fid = None
             self._custom_xaxis_ch = None
         else:
-            # 指定通道
-            idx = self.combo_xaxis_ch.currentIndex()
-            if idx < 0:
+            data = self.inspector.top.xaxis_channel_data()
+            if not data:
                 QMessageBox.warning(self, "提示", "请选择横坐标通道")
                 return
-            data = self.combo_xaxis_ch.itemData(idx)
-            if data:
-                self._custom_xaxis_fid, self._custom_xaxis_ch = data
-            self._custom_xlabel = self.edit_xlabel.text().strip() or self._custom_xaxis_ch
+            fid, ch = data
+            if fid not in self.files or ch not in self.files[fid].data.columns:
+                QMessageBox.warning(self, "提示", "横坐标通道不存在")
+                return
+            # §6.1 validation: length must match every file whose channels are
+            # currently checked for plotting (not every loaded file).
+            xlen = len(self.files[fid].data)
+            checked = self.navigator.get_checked_channels()  # [(fid, ch, color), ...]
+            plotted_fids = {cfid for cfid, _, _ in checked}
+            if not plotted_fids:
+                plotted_fids = {fid}
+            for cfid in plotted_fids:
+                if cfid in self.files and len(self.files[cfid].data) != xlen:
+                    QMessageBox.warning(
+                        self, "提示",
+                        "横坐标通道长度与当前绘图通道所在文件不匹配",
+                    )
+                    return
+            self._custom_xaxis_fid = fid
+            self._custom_xaxis_ch = ch
+            self._custom_xlabel = self.inspector.top.xaxis_label() or ch
 
         # 重新绘图
         self.plot_time()
-        self.statusBar.showMessage(f"横坐标已更新: {self._custom_xlabel or 'Time (s)'}")
+        self.statusBar.showMessage(f"横坐标已更新")
 
     def _update_all_tick_density(self):
         """更新所有图表的刻度密度"""
@@ -488,31 +514,34 @@ class MainWindow(QMainWindow):
         self.plot_time()  # re-renders remaining channels or clears if empty
 
     def _update_combos(self):
-        self.combo_sig.clear();
-        self.combo_rpm.clear();
-        self.combo_rpm.addItem("None", None)
+        sig_cands = []
+        rpm_cands = []
         for fid, fd in self.files.items():
             px = f"[{fd.short_name}] "
             for ch in fd.get_signal_channels():
-                self.combo_sig.addItem(px + ch, (fid, ch));
-                self.combo_rpm.addItem(px + ch, (fid, ch))
+                sig_cands.append((px + ch, (fid, ch)))
+                rpm_cands.append((px + ch, (fid, ch)))
+        self.inspector.fft_ctx.set_signal_candidates(sig_cands)
+        self.inspector.order_ctx.set_signal_candidates(sig_cands)
+        self.inspector.order_ctx.set_rpm_candidates(rpm_cands)
 
     def _ch_changed(self):
         if self.files and self.tabs.currentIndex() == 0: self.plot_time()
 
     def _on_span(self, xmin, xmax):
-        self.spin_start.setValue(xmin);
-        self.spin_end.setValue(xmax);
-        self.chk_range.setChecked(True)
+        self.inspector.top.set_range_from_span(xmin, xmax)
         st = self.canvas_time.get_statistics(time_range=(xmin, xmax))
-        if st: self.stats.update_stats(st)
+        # Task 2.10 will create chart_stack.stats_strip; until then, skip.
+        stats_strip = getattr(self.chart_stack, 'stats_strip', None)
+        if stats_strip is not None:
+            stats_strip.update_stats(st or {})
 
     def plot_time(self):
         if not self.files: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
         checked = self.channel_list.get_checked_channels()
         if not checked: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
 
-        mode = 'subplot' if self.combo_mode.currentIndex() == 0 else 'overlay'
+        mode = self.inspector.time_ctx.plot_mode()
         if mode == 'overlay' and len(checked) > 5:
             ans = QMessageBox.question(
                 self, "确认",
@@ -529,6 +558,9 @@ class MainWindow(QMainWindow):
                 if self._custom_xaxis_ch in xfd.data.columns:
                     custom_x = xfd.data[self._custom_xaxis_ch].values.copy()
 
+        range_enabled = self.inspector.top.range_enabled()
+        range_lo, range_hi = self.inspector.top.range_values()
+
         data = [];
         st = {}
         for fid, ch, color in checked:
@@ -544,17 +576,19 @@ class MainWindow(QMainWindow):
             sig = fd.data[ch].values.copy()
             unit = fd.channel_units.get(ch, '');
             name = fd.get_prefixed_channel(ch)
-            if self.chk_range.isChecked(): m = (t >= self.spin_start.value()) & (t <= self.spin_end.value()); t, sig = \
-            t[m], sig[m]
+            if range_enabled:
+                m = (t >= range_lo) & (t <= range_hi)
+                t, sig = t[m], sig[m]
             if len(sig) == 0: continue
             data.append((name, True, t, sig, color, unit))
             st[name] = {'min': np.min(sig), 'max': np.max(sig), 'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
                         'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit}
         if not data: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
 
-        xlabel = self._custom_xlabel or 'Time (s)'
+        xlabel = self._custom_xlabel or self.inspector.top.xaxis_label() or 'Time (s)'
         self.canvas_time.plot_channels(data, mode, xlabel=xlabel)
-        self.canvas_time.set_tick_density(self.spin_xt.value(), self.spin_yt.value())
+        xt, yt = self.inspector.top.tick_density()
+        self.canvas_time.set_tick_density(xt, yt)
         self.canvas_time.enable_span_selector(self._on_span);
         self.stats.update_stats(st);
         self.tabs.setCurrentIndex(0)
@@ -603,30 +637,41 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "错误", str(e))
 
     def _get_sig(self):
-        idx = self.combo_sig.currentIndex()
-        if idx < 0: return None, None, None
-        d = self.combo_sig.itemData(idx)
-        if not d: return None, None, None
-        fid, ch = d
-        if fid not in self.files: return None, None, None
+        mode = self.toolbar.current_mode()
+        if mode == 'fft':
+            data = self.inspector.fft_ctx.current_signal()
+        else:
+            data = self.inspector.order_ctx.current_signal()
+        if not data:
+            return None, None, None
+        fid, ch = data
+        if fid not in self.files:
+            return None, None, None
         fd = self.files[fid]
-        if ch not in fd.data.columns: return None, None, None
+        if ch not in fd.data.columns:
+            return None, None, None
         return fd.time_array, fd.data[ch].values, fd.fs
 
     def _get_rpm(self, n):
-        idx = self.combo_rpm.currentIndex()
-        if idx <= 0: QMessageBox.warning(self, "提示", "请选择转速信号"); return None
-        d = self.combo_rpm.itemData(idx)
-        if not d: return None
-        fid, ch = d
-        if fid not in self.files: return None
+        data = self.inspector.order_ctx.current_rpm()
+        if not data:
+            QMessageBox.warning(self, "提示", "请选择转速信号")
+            return None
+        fid, ch = data
+        if fid not in self.files:
+            return None
         fd = self.files[fid]
-        if ch not in fd.data.columns: return None
-        rpm = fd.data[ch].values.copy() * self.spin_rf.value()
-        if self.chk_range.isChecked() and fd.time_array is not None:
-            m = (fd.time_array >= self.spin_start.value()) & (fd.time_array <= self.spin_end.value());
+        if ch not in fd.data.columns:
+            return None
+        factor = self.inspector.order_ctx.rpm_factor()
+        rpm = fd.data[ch].values.copy() * factor
+        if self.inspector.top.range_enabled() and fd.time_array is not None:
+            lo, hi = self.inspector.top.range_values()
+            m = (fd.time_array >= lo) & (fd.time_array <= hi)
             rpm = rpm[m]
-        if len(rpm) != n: QMessageBox.warning(self, "提示", f"长度不匹配 ({n} vs {len(rpm)})"); return None
+        if len(rpm) != n:
+            QMessageBox.warning(self, "提示", f"长度不匹配 ({n} vs {len(rpm)})")
+            return None
         return rpm
 
     @staticmethod
@@ -658,16 +703,15 @@ class MainWindow(QMainWindow):
     def do_fft(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 10: QMessageBox.warning(self, "提示", "请选择有效信号"); return
-        if self.chk_range.isChecked() and t is not None:
-            m = (t >= self.spin_start.value()) & (t <= self.spin_end.value());
+        if self.inspector.top.range_enabled() and t is not None:
+            lo, hi = self.inspector.top.range_values()
+            m = (t >= lo) & (t <= hi)
             sig = sig[m]
-        fs = self.spin_fs.value();
-        win = self.combo_win.currentText()
-
-        # 获取NFFT
-        nfft_text = self.combo_nfft.currentText()
-        nfft = None if nfft_text == '自动' else int(nfft_text)
-        overlap = self.spin_overlap.value() / 100.0
+        fft_params = self.inspector.fft_ctx.get_params()
+        win = fft_params['window']
+        nfft = fft_params['nfft']
+        overlap = fft_params['overlap']
+        fs = self.inspector.fft_ctx.fs()
 
         try:
             self.statusBar.showMessage('计算FFT...');
@@ -683,7 +727,7 @@ class MainWindow(QMainWindow):
             self.canvas_fft.clear()
 
             # 自适应频率范围计算
-            if self.chk_fft_autoscale.isChecked():
+            if fft_params['autoscale']:
                 x_max = self._fft_auto_xlim(freq, amp)
             else:
                 x_max = fs / 2
@@ -694,7 +738,7 @@ class MainWindow(QMainWindow):
             ax1.plot(freq, amp, '#1f77b4', lw=0.8);
             ax1.set_xlabel('Frequency (Hz)');
             ax1.set_ylabel('幅值')
-            ax1.set_title(f'FFT - {self.combo_sig.currentText()} (窗:{win}, NFFT:{nfft or "auto"})');
+            ax1.set_title(f'FFT - {self.inspector.fft_ctx.combo_sig.currentText()} (窗:{win}, NFFT:{nfft or "auto"})');
             ax1.grid(True, alpha=0.25, ls='--');
             ax1.set_xlim(0, x_max)
             ax2 = self.canvas_fft.fig.add_subplot(2, 1, 2)
@@ -710,7 +754,8 @@ class MainWindow(QMainWindow):
             self.canvas_fft.store_line_data(1, freq, psd_db)
 
             self.canvas_fft.fig.tight_layout()
-            self.canvas_fft.set_tick_density(self.spin_xt.value(), self.spin_yt.value())
+            xt, yt = self.inspector.top.tick_density()
+            self.canvas_fft.set_tick_density(xt, yt)
             self.canvas_fft.draw();
             self.tabs.setCurrentIndex(1)
             pi = np.argmax(amp[1:]) + 1;
@@ -721,28 +766,30 @@ class MainWindow(QMainWindow):
     def _order_progress(self, current, total):
         """Order分析进度回调"""
         pct = int(current / total * 100) if total > 0 else 0
-        self.lbl_order_progress.setText(f"{pct}%")
+        self.inspector.order_ctx.set_progress(f"{pct}%")
         QApplication.processEvents()
 
     def do_order_time(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 100: QMessageBox.warning(self, "提示", "请选择有效信号"); return
-        if self.chk_range.isChecked() and t is not None:
-            m = (t >= self.spin_start.value()) & (t <= self.spin_end.value());
+        if self.inspector.top.range_enabled() and t is not None:
+            lo, hi = self.inspector.top.range_values()
+            m = (t >= lo) & (t <= hi)
             t, sig = t[m], sig[m]
         rpm = self._get_rpm(len(sig))
         if rpm is None: return
-        fs = self.spin_fs.value()
+        fs = self.inspector.order_ctx.fs()
 
         # 获取参数
-        nfft = int(self.combo_order_nfft.currentText())
-        order_res = self.spin_order_res.value()
-        time_res = self.spin_time_res.value()
-        max_ord = self.spin_mo.value()
+        op = self.inspector.order_ctx.get_params()
+        nfft = op['nfft']
+        order_res = op['order_res']
+        time_res = op['time_res']
+        max_ord = op['max_order']
 
         try:
             self.statusBar.showMessage('计算时间-阶次谱...');
-            self.lbl_order_progress.setText("0%")
+            self.inspector.order_ctx.set_progress("0%")
             QApplication.processEvents()
 
             tb, ords, om = OrderAnalyzer.compute_order_spectrum_time_based(
@@ -754,37 +801,40 @@ class MainWindow(QMainWindow):
             im = ax.pcolormesh(tb, ords, om.T, shading='gouraud', cmap='jet')
             ax.set_xlabel('Time (s)');
             ax.set_ylabel('Order')
-            ax.set_title(f'时间-阶次谱 - {self.combo_sig.currentText()} (分辨率:{order_res})')
+            ax.set_title(f'时间-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} (分辨率:{order_res})')
             self.canvas_order.fig.colorbar(im, ax=ax, label='RMS')
             self.canvas_order.fig.tight_layout()
-            self.canvas_order.set_tick_density(self.spin_xt.value(), self.spin_yt.value())
+            xt, yt = self.inspector.top.tick_density()
+            self.canvas_order.set_tick_density(xt, yt)
             self.canvas_order.draw();
             self.tabs.setCurrentIndex(2)
-            self.lbl_order_progress.setText("")
+            self.inspector.order_ctx.set_progress("")
             self.statusBar.showMessage(f'完成 | {len(tb)} 时间点 × {len(ords)} 阶次')
         except Exception as e:
-            self.lbl_order_progress.setText("")
+            self.inspector.order_ctx.set_progress("")
             QMessageBox.critical(self, '错误', str(e))
 
     def do_order_rpm(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 100: QMessageBox.warning(self, "提示", "请选择有效信号"); return
-        if self.chk_range.isChecked() and t is not None:
-            m = (t >= self.spin_start.value()) & (t <= self.spin_end.value());
+        if self.inspector.top.range_enabled() and t is not None:
+            lo, hi = self.inspector.top.range_values()
+            m = (t >= lo) & (t <= hi)
             sig = sig[m]
         rpm = self._get_rpm(len(sig))
         if rpm is None: return
-        fs = self.spin_fs.value()
+        fs = self.inspector.order_ctx.fs()
 
         # 获取参数
-        nfft = int(self.combo_order_nfft.currentText())
-        order_res = self.spin_order_res.value()
-        rpm_res = self.spin_rpm_res.value()
-        max_ord = self.spin_mo.value()
+        op = self.inspector.order_ctx.get_params()
+        nfft = op['nfft']
+        order_res = op['order_res']
+        rpm_res = op['rpm_res']
+        max_ord = op['max_order']
 
         try:
             self.statusBar.showMessage('计算转速-阶次谱...');
-            self.lbl_order_progress.setText("0%")
+            self.inspector.order_ctx.set_progress("0%")
             QApplication.processEvents()
 
             ords, rb, om = OrderAnalyzer.compute_order_spectrum(
@@ -796,29 +846,32 @@ class MainWindow(QMainWindow):
             im = ax.pcolormesh(ords, rb, om, shading='gouraud', cmap='jet')
             ax.set_xlabel('Order');
             ax.set_ylabel('RPM')
-            ax.set_title(f'转速-阶次谱 - {self.combo_sig.currentText()} (阶次分辨率:{order_res}, RPM分辨率:{rpm_res})')
+            ax.set_title(f'转速-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} (阶次分辨率:{order_res}, RPM分辨率:{rpm_res})')
             self.canvas_order.fig.colorbar(im, ax=ax, label='Amplitude')
             self.canvas_order.fig.tight_layout()
-            self.canvas_order.set_tick_density(self.spin_xt.value(), self.spin_yt.value())
+            xt, yt = self.inspector.top.tick_density()
+            self.canvas_order.set_tick_density(xt, yt)
             self.canvas_order.draw();
             self.tabs.setCurrentIndex(2)
-            self.lbl_order_progress.setText("")
+            self.inspector.order_ctx.set_progress("")
             self.statusBar.showMessage(f'转速-阶次谱完成 | {len(rb)} RPM × {len(ords)} 阶次')
         except Exception as e:
-            self.lbl_order_progress.setText("")
+            self.inspector.order_ctx.set_progress("")
             QMessageBox.critical(self, '错误', str(e))
 
     def do_order_track(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 100: QMessageBox.warning(self, "提示", "请选择有效信号"); return
-        if self.chk_range.isChecked() and t is not None:
-            m = (t >= self.spin_start.value()) & (t <= self.spin_end.value());
+        if self.inspector.top.range_enabled() and t is not None:
+            lo, hi = self.inspector.top.range_values()
+            m = (t >= lo) & (t <= hi)
             sig = sig[m]
         rpm = self._get_rpm(len(sig))
         if rpm is None: return
-        fs = self.spin_fs.value();
-        to = self.spin_to.value()
-        nfft = int(self.combo_order_nfft.currentText())
+        fs = self.inspector.order_ctx.fs()
+        to = self.inspector.order_ctx.target_order()
+        op = self.inspector.order_ctx.get_params()
+        nfft = op['nfft']
 
         try:
             self.statusBar.showMessage(f'跟踪阶次 {to}...');
@@ -829,7 +882,7 @@ class MainWindow(QMainWindow):
             ax1.plot(rt, oa, '#1f77b4', lw=1);
             ax1.set_xlabel('RPM');
             ax1.set_ylabel('幅值')
-            ax1.set_title(f'阶次 {to} 跟踪 - {self.combo_sig.currentText()}');
+            ax1.set_title(f'阶次 {to} 跟踪 - {self.inspector.order_ctx.combo_sig.currentText()}');
             ax1.grid(True, alpha=0.25, ls='--')
             ax2 = self.canvas_order.fig.add_subplot(2, 1, 2)
             ax2.plot(rpm, '#2ca02c', lw=0.5);
@@ -838,7 +891,8 @@ class MainWindow(QMainWindow):
             ax2.set_title('转速曲线');
             ax2.grid(True, alpha=0.25, ls='--')
             self.canvas_order.fig.tight_layout()
-            self.canvas_order.set_tick_density(self.spin_xt.value(), self.spin_yt.value())
+            xt, yt = self.inspector.top.tick_density()
+            self.canvas_order.set_tick_density(xt, yt)
             self.canvas_order.draw();
             self.tabs.setCurrentIndex(2)
             self.statusBar.showMessage(f'阶次 {to} 跟踪完成')
