@@ -64,3 +64,21 @@ def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
     with patch.object(QMessageBox, 'warning') as warn:
         w._apply_xaxis()
     assert warn.called
+
+
+def test_file_activation_updates_inspector_fs_and_range(qapp, qtbot, loaded_csv):
+    from unittest.mock import patch
+    import pytest
+    from mf4_analyzer.ui.main_window import MainWindow
+    w = MainWindow(); qtbot.addWidget(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    fid = next(iter(w.files))
+    fd = w.files[fid]
+    # activation should have pushed fs + range-limit to inspector
+    # (QDoubleSpinBox default decimals=2 rounds fs, so compare with tolerance)
+    assert w.inspector.fft_ctx.fs() == pytest.approx(fd.fs, abs=0.01)
+    assert w.inspector.order_ctx.fs() == pytest.approx(fd.fs, abs=0.01)
+    # range limit upper bound should match time_array tail
+    assert w.inspector.top.spin_end.maximum() >= fd.time_array[-1]

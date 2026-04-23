@@ -165,8 +165,6 @@ class MainWindow(QMainWindow):
         self.lbl_order_progress = QLabel("", self._legacy_hidden)
         # Existing QLabels used in plot_time's status updates
         self.lbl_info = QLabel("", self._legacy_hidden)
-        self.lbl_cursor = QLabel("", self._legacy_hidden)
-        self.lbl_dual = QLabel("", self._legacy_hidden)
         # StatisticsPanel legacy alias — the real strip lives on ChartStack
         from .widgets import StatisticsPanel
         self.stats = StatisticsPanel(self._legacy_hidden)
@@ -282,6 +280,15 @@ class MainWindow(QMainWindow):
     def _on_file_activated(self, fid):
         self._active = fid
         self._update_info()
+        if fid and fid in self.files:
+            fd = self.files[fid]
+            self.inspector.fft_ctx.set_fs(fd.fs)
+            self.inspector.order_ctx.set_fs(fd.fs)
+            if len(fd.time_array):
+                self.inspector.top.set_range_limits(0, fd.time_array[-1])
+        self.toolbar.set_enabled_for_mode(
+            self.toolbar.current_mode(), has_file=bool(self.files)
+        )
 
     def _on_file_close_requested(self, fid):
         self._close(fid)
