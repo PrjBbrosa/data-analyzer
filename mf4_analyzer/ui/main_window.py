@@ -54,346 +54,228 @@ class MainWindow(QMainWindow):
         self._connect()
 
     def _init_ui(self):
-        cw = QWidget();
+        from PyQt5.QtWidgets import QSplitter, QVBoxLayout, QWidget
+        from PyQt5.QtCore import Qt
+
+        from .chart_stack import ChartStack
+        from .file_navigator import FileNavigator
+        from .inspector import Inspector
+        from .toolbar import Toolbar
+
+        cw = QWidget()
         self.setCentralWidget(cw)
-        ml = QHBoxLayout(cw);
-        ml.setContentsMargins(5, 5, 5, 5)
-        sp = QSplitter(Qt.Horizontal)
-        sp.addWidget(self._left());
-        sp.addWidget(self._right());
-        sp.setSizes([320, 1080])
-        ml.addWidget(sp)
-        self.statusBar = QStatusBar();
+        root = QVBoxLayout(cw)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.toolbar = Toolbar(self)
+        root.addWidget(self.toolbar)
+
+        splitter = QSplitter(Qt.Horizontal, self)
+        self.navigator = FileNavigator(self)
+        self.chart_stack = ChartStack(self)
+        self.inspector = Inspector(self)
+        splitter.addWidget(self.navigator)
+        splitter.addWidget(self.chart_stack)
+        splitter.addWidget(self.inspector)
+        splitter.setSizes([220, 920, 260])
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        splitter.setCollapsible(2, False)
+        self.navigator.setMinimumWidth(180)
+        self.chart_stack.setMinimumWidth(400)
+        self.inspector.setMinimumWidth(220)
+        root.addWidget(splitter, stretch=1)
+
+        # Compatibility aliases so legacy methods that still reference old
+        # widget names compile and run in Phase 1. Each alias is removed in
+        # the Phase 2 task that rewrites its consumer method.
+        self.canvas_time = self.chart_stack.canvas_time
+        self.canvas_fft = self.chart_stack.canvas_fft
+        self.canvas_order = self.chart_stack.canvas_order
+        self.channel_list = self.navigator.channel_list
+        # Phase-1 placeholder shims for widgets that Phase 2 will kill:
+        # plot_time / do_fft / do_order_* still read .spin_start / .spin_end /
+        # .spin_fs / .combo_sig / .combo_rpm / .spin_xt / .spin_yt / .chk_range
+        # / .chk_fft_autoscale etc. Alias them to the Inspector's real widgets
+        # once Inspector has them (Phase 2). Until Phase 2 lands, the old
+        # widget objects are kept alive as **hidden off-screen children** of
+        # MainWindow so existing methods don't AttributeError.
+        from PyQt5.QtWidgets import (
+            QCheckBox, QComboBox, QDoubleSpinBox, QLabel, QSpinBox, QTabWidget,
+        )
+        self._legacy_hidden = QWidget(self)
+        self._legacy_hidden.setVisible(False)
+        self.btn_load = self.toolbar.btn_add
+        self.btn_close = self.toolbar.btn_edit   # unused in Phase 1; wired off
+        self.btn_close_all = self.toolbar.btn_export  # unused; wired off
+        self.btn_plot = self.toolbar.btn_mode_time  # unused in Phase 1
+        self.combo_mode = QComboBox(self._legacy_hidden); self.combo_mode.addItems(['Subplot', 'Overlay'])
+        self.chk_cursor = QCheckBox(self._legacy_hidden)
+        self.chk_dual = QCheckBox(self._legacy_hidden)
+        self.btn_reset = self.toolbar.btn_cursor_reset
+        self.btn_edit = self.toolbar.btn_edit
+        self.btn_export = self.toolbar.btn_export
+        self.combo_xaxis = QComboBox(self._legacy_hidden); self.combo_xaxis.addItems(['自动(时间)', '指定通道'])
+        self.combo_xaxis_ch = QComboBox(self._legacy_hidden)
+        self.edit_xlabel = QLabel("", self._legacy_hidden)
+        self.btn_apply_xaxis = QLabel("", self._legacy_hidden)
+        self.chk_range = QCheckBox(self._legacy_hidden)
+        self.spin_start = QDoubleSpinBox(self._legacy_hidden); self.spin_start.setRange(0, 1e9)
+        self.spin_end = QDoubleSpinBox(self._legacy_hidden); self.spin_end.setRange(0, 1e9)
+        self.spin_xt = QSpinBox(self._legacy_hidden); self.spin_xt.setRange(3, 30); self.spin_xt.setValue(10)
+        self.spin_yt = QSpinBox(self._legacy_hidden); self.spin_yt.setRange(3, 20); self.spin_yt.setValue(6)
+        self.combo_sig = QComboBox(self._legacy_hidden)
+        self.combo_rpm = QComboBox(self._legacy_hidden); self.combo_rpm.addItem("None", None)
+        self.spin_fs = QDoubleSpinBox(self._legacy_hidden); self.spin_fs.setRange(1, 1e6); self.spin_fs.setValue(1000)
+        self.btn_rebuild_time = QLabel("", self._legacy_hidden)
+        self.spin_rf = QDoubleSpinBox(self._legacy_hidden); self.spin_rf.setRange(0.0001, 10000); self.spin_rf.setValue(1)
+        self.combo_win = QComboBox(self._legacy_hidden); self.combo_win.addItems(['hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop'])
+        self.combo_nfft = QComboBox(self._legacy_hidden); self.combo_nfft.addItems(['自动', '512', '1024', '2048', '4096', '8192', '16384'])
+        self.spin_overlap = QSpinBox(self._legacy_hidden); self.spin_overlap.setRange(0, 90); self.spin_overlap.setValue(50)
+        self.btn_fft = QLabel("", self._legacy_hidden)
+        self.chk_fft_remark = QCheckBox(self._legacy_hidden)
+        self.chk_fft_autoscale = QCheckBox(self._legacy_hidden); self.chk_fft_autoscale.setChecked(True)
+        self.spin_mo = QSpinBox(self._legacy_hidden); self.spin_mo.setRange(1, 100); self.spin_mo.setValue(20)
+        self.spin_order_res = QDoubleSpinBox(self._legacy_hidden); self.spin_order_res.setRange(0.01, 1.0); self.spin_order_res.setValue(0.1)
+        self.combo_order_nfft = QComboBox(self._legacy_hidden); self.combo_order_nfft.addItems(['512', '1024', '2048', '4096', '8192']); self.combo_order_nfft.setCurrentText('1024')
+        self.spin_time_res = QDoubleSpinBox(self._legacy_hidden); self.spin_time_res.setRange(0.01, 1.0); self.spin_time_res.setValue(0.05)
+        self.spin_rpm_res = QSpinBox(self._legacy_hidden); self.spin_rpm_res.setRange(1, 100); self.spin_rpm_res.setValue(10)
+        self.spin_to = QDoubleSpinBox(self._legacy_hidden); self.spin_to.setRange(0.5, 100); self.spin_to.setValue(1)
+        self.btn_ot = QLabel("", self._legacy_hidden)
+        self.btn_or = QLabel("", self._legacy_hidden)
+        self.btn_ok = QLabel("", self._legacy_hidden)
+        self.lbl_order_progress = QLabel("", self._legacy_hidden)
+        # Existing QLabels used in plot_time's status updates
+        self.lbl_info = QLabel("", self._legacy_hidden)
+        self.lbl_cursor = QLabel("", self._legacy_hidden)
+        self.lbl_dual = QLabel("", self._legacy_hidden)
+        # StatisticsPanel legacy alias — the real strip lives on ChartStack
+        from .widgets import StatisticsPanel
+        self.stats = StatisticsPanel(self._legacy_hidden)
+        # old tabs object — only ever .setCurrentIndex(n) is called; create a real hidden one
+        self.tabs = QTabWidget(self._legacy_hidden)
+        for _ in range(3):
+            self.tabs.addTab(QWidget(), "")
+
+        from PyQt5.QtWidgets import QStatusBar
+        self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
-        self.statusBar.showMessage("Ready - 支持同时打开多个文件进行对比分析")
-
-    def _left(self):
-        scroll = QScrollArea();
-        scroll.setWidgetResizable(True);
-        scroll.setMinimumWidth(290);
-        scroll.setMaximumWidth(400)
-        p = QWidget();
-        lay = QVBoxLayout(p);
-        lay.setSpacing(5)
-
-        g = QGroupBox("📂 文件管理");
-        gl = QVBoxLayout(g)
-        br = QHBoxLayout()
-        self.btn_load = QPushButton(" 添加")
-        self.btn_load.setIcon(Icons.add_file())
-        self.btn_load.setObjectName("primary")
-        br.addWidget(self.btn_load)
-        self.btn_close = QPushButton(" 关闭")
-        self.btn_close.setIcon(Icons.close_file())
-        self.btn_close.setObjectName("danger")
-        br.addWidget(self.btn_close)
-        self.btn_close_all = QPushButton("全部")
-        self.btn_close_all.setIcon(Icons.close_all())
-        self.btn_close_all.setObjectName("danger")
-        self.btn_close_all.setMaximumWidth(70)
-        br.addWidget(self.btn_close_all)
-        gl.addLayout(br)
-        self.file_tabs = QTabWidget();
-        self.file_tabs.setTabsClosable(True);
-        self.file_tabs.setMaximumHeight(80);
-        gl.addWidget(self.file_tabs)
-        self.lbl_info = QLabel("未加载文件");
-        self.lbl_info.setStyleSheet("color:#666;font-size:9px;");
-        gl.addWidget(self.lbl_info)
-        lay.addWidget(g)
-
-        g = QGroupBox("通道选择");
-        gl = QVBoxLayout(g)
-        self.channel_list = MultiFileChannelWidget()
-        self.channel_list.setMinimumHeight(280)  # 确保能显示6-10个通道
-        gl.addWidget(self.channel_list)
-        ml2 = QHBoxLayout();
-        ml2.addWidget(QLabel("模式:"))
-        self.combo_mode = QComboBox();
-        self.combo_mode.addItems(['Subplot', 'Overlay']);
-        ml2.addWidget(self.combo_mode);
-        gl.addLayout(ml2)
-        self.btn_plot = QPushButton(" 绘图")
-        self.btn_plot.setIcon(Icons.plot())
-        self.btn_plot.setObjectName("primary")
-        gl.addWidget(self.btn_plot)
-        ch = QHBoxLayout()
-        self.chk_cursor = QCheckBox("游标");
-        ch.addWidget(self.chk_cursor)
-        self.chk_dual = QCheckBox("双游标");
-        ch.addWidget(self.chk_dual)
-        self.btn_reset = QPushButton("重置");
-        self.btn_reset.setMaximumWidth(45);
-        ch.addWidget(self.btn_reset);
-        ch.addStretch();
-        gl.addLayout(ch)
-        bh = QHBoxLayout()
-        self.btn_edit = QPushButton("🔧 编辑")
-        self.btn_edit.setObjectName("accent")
-        bh.addWidget(self.btn_edit)
-        self.btn_export = QPushButton("📥 导出")
-        self.btn_export.setObjectName("success")
-        bh.addWidget(self.btn_export)
-        gl.addLayout(bh);
-        lay.addWidget(g)
-
-
-        # 横坐标设置
-        g = QGroupBox("横坐标");
-        gl3 = QVBoxLayout(g)
-        h1 = QHBoxLayout()
-        h1.addWidget(QLabel("来源:"))
-        self.combo_xaxis = QComboBox();
-        self.combo_xaxis.addItems(['自动(时间)', '指定通道']);
-        h1.addWidget(self.combo_xaxis)
-        gl3.addLayout(h1)
-        h2 = QHBoxLayout()
-        h2.addWidget(QLabel("通道:"))
-        self.combo_xaxis_ch = QComboBox();
-        self.combo_xaxis_ch.setEnabled(False);
-        h2.addWidget(self.combo_xaxis_ch)
-        gl3.addLayout(h2)
-        h3 = QHBoxLayout()
-        h3.addWidget(QLabel("标签:"))
-        self.edit_xlabel = QLineEdit();
-        self.edit_xlabel.setPlaceholderText("Time (s)");
-        self.edit_xlabel.setMaximumWidth(100);
-        h3.addWidget(self.edit_xlabel)
-        gl3.addLayout(h3)
-        self.btn_apply_xaxis = QPushButton("应用");
-        self.btn_apply_xaxis.setMaximumWidth(60);
-        gl3.addWidget(self.btn_apply_xaxis)
-        lay.addWidget(g)
-
-
-        g = QGroupBox("范围");
-        gl2 = QVBoxLayout(g)
-        self.chk_range = QCheckBox("使用选定范围");
-        gl2.addWidget(self.chk_range)
-        h1 = QHBoxLayout();
-        h1.addWidget(QLabel("开始:"))
-        self.spin_start = QDoubleSpinBox();
-        self.spin_start.setDecimals(3);
-        self.spin_start.setSuffix(" s");
-        h1.addWidget(self.spin_start);
-        gl2.addLayout(h1)
-        h2 = QHBoxLayout();
-        h2.addWidget(QLabel("结束:"))
-        self.spin_end = QDoubleSpinBox();
-        self.spin_end.setDecimals(3);
-        self.spin_end.setSuffix(" s");
-        h2.addWidget(self.spin_end);
-        gl2.addLayout(h2)
-        lay.addWidget(g)
-
-        g = QGroupBox("刻度");
-        fl = QFormLayout(g)
-        self.spin_xt = QSpinBox();
-        self.spin_xt.setRange(3, 30);
-        self.spin_xt.setValue(10);
-        fl.addRow("X:", self.spin_xt)
-        self.spin_yt = QSpinBox();
-        self.spin_yt.setRange(3, 20);
-        self.spin_yt.setValue(6);
-        fl.addRow("Y:", self.spin_yt)
-        lay.addWidget(g)
-
-
-        g = QGroupBox("分析信号");
-        fl = QFormLayout(g)
-        self.combo_sig = QComboBox();
-        fl.addRow("信号:", self.combo_sig)
-        self.combo_rpm = QComboBox();
-        fl.addRow("转速:", self.combo_rpm)
-        self.spin_fs = QDoubleSpinBox();
-        self.spin_fs.setRange(1, 1e6);
-        self.spin_fs.setValue(1000);
-        self.spin_fs.setSuffix(" Hz");
-        fl.addRow("Fs:", self.spin_fs)
-        # 时间轴重建按钮
-        self.btn_rebuild_time = QPushButton(" 重建时间轴")
-        self.btn_rebuild_time.setIcon(Icons.rebuild_time())
-        self.btn_rebuild_time.setToolTip("根据Fs重新生成当前文件的时间轴")
-        fl.addRow(self.btn_rebuild_time)
-        h = QHBoxLayout();
-        h.addWidget(QLabel("RPM系数:"))
-        self.spin_rf = QDoubleSpinBox();
-        self.spin_rf.setRange(0.0001, 10000);
-        self.spin_rf.setValue(1);
-        self.spin_rf.setDecimals(4);
-        h.addWidget(self.spin_rf);
-        fl.addRow(h)
-        lay.addWidget(g)
-
-        lay.addStretch();
-        scroll.setWidget(p);
-        return scroll
-
-    def _right(self):
-        p = QWidget();
-        lay = QVBoxLayout(p);
-        lay.setContentsMargins(0, 0, 0, 0)
-        self.tabs = QTabWidget()
-
-        tt = QWidget();
-        tl = QVBoxLayout(tt);
-        tl.setContentsMargins(2, 2, 2, 2)
-        self.canvas_time = TimeDomainCanvas(self);
-        self.toolbar_time = NavigationToolbar(self.canvas_time, self)
-        self.lbl_cursor = QLabel("");
-        self.lbl_cursor.setStyleSheet("background:#1e1e1e;color:#0f0;padding:2px;font-family:monospace;font-size:15px;")
-        self.lbl_dual = QLabel("");
-        self.lbl_dual.setStyleSheet(
-            "background:#0d1117;color:#58a6ff;padding:2px;font-family:monospace;font-size:15px;");
-        self.lbl_dual.setWordWrap(True);
-        self.lbl_dual.setVisible(False)
-        self.axis_lock = AxisLockBar(self)
-        tb_row = QHBoxLayout()
-        tb_row.addWidget(self.toolbar_time, stretch=1)
-        tb_row.addWidget(self.axis_lock)
-        tl.addLayout(tb_row)
-        tl.addWidget(self.lbl_cursor)
-        tl.addWidget(self.lbl_dual)
-        tl.addWidget(self.canvas_time, stretch=1)
-        self.stats = StatisticsPanel();
-        tl.addWidget(self.stats)
-        self.tabs.addTab(tt, "📈 时域")
-
-        ft = QWidget();
-        fl = QVBoxLayout(ft);
-        fl.setContentsMargins(2, 2, 2, 2)
-        fc = QHBoxLayout()
-        fc.addWidget(QLabel("窗函数:"))
-        self.combo_win = QComboBox();
-        self.combo_win.addItems(['hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop']);
-        fc.addWidget(self.combo_win)
-        fc.addWidget(QLabel("FFT点数:"))
-        self.combo_nfft = QComboBox();
-        self.combo_nfft.addItems(['自动', '512', '1024', '2048', '4096', '8192', '16384']);
-        fc.addWidget(self.combo_nfft)
-        fc.addWidget(QLabel("重叠:"))
-        self.spin_overlap = QSpinBox();
-        self.spin_overlap.setRange(0, 90);
-        self.spin_overlap.setValue(50);
-        self.spin_overlap.setSuffix("%");
-        fc.addWidget(self.spin_overlap)
-        self.btn_fft = QPushButton("▶ FFT");
-        self.btn_fft.setStyleSheet("font-weight:bold;");
-        fc.addWidget(self.btn_fft)
-        self.chk_fft_remark = QCheckBox("标注")
-        self.chk_fft_remark.setToolTip("左键点击曲线添加标注，右键删除标注")
-        fc.addWidget(self.chk_fft_remark)
-        self.chk_fft_autoscale = QCheckBox("自适应")
-        self.chk_fft_autoscale.setToolTip("自动匹配有效频率范围")
-        self.chk_fft_autoscale.setChecked(True)
-        fc.addWidget(self.chk_fft_autoscale)
-        fc.addStretch();
-        fl.addLayout(fc)
-        self.canvas_fft = PlotCanvas(self);
-        self.toolbar_fft = NavigationToolbar(self.canvas_fft, self)
-        fl.addWidget(self.toolbar_fft);
-        fl.addWidget(self.canvas_fft, stretch=1)
-        self.tabs.addTab(ft, "📊 FFT")
-
-        ot = QWidget();
-        ol = QVBoxLayout(ot);
-        ol.setContentsMargins(2, 2, 2, 2)
-        # 第一行参数
-        oc1 = QHBoxLayout()
-        oc1.addWidget(QLabel("最大阶次:"))
-        self.spin_mo = QSpinBox();
-        self.spin_mo.setRange(1, 100);
-        self.spin_mo.setValue(20);
-        oc1.addWidget(self.spin_mo)
-        oc1.addWidget(QLabel("阶次分辨率:"))
-        self.spin_order_res = QDoubleSpinBox();
-        self.spin_order_res.setRange(0.01, 1.0);
-        self.spin_order_res.setValue(0.1);
-        self.spin_order_res.setSingleStep(0.05);
-        oc1.addWidget(self.spin_order_res)
-        oc1.addWidget(QLabel("目标阶次:"))
-        self.spin_to = QDoubleSpinBox();
-        self.spin_to.setRange(0.5, 100);
-        self.spin_to.setValue(1);
-        oc1.addWidget(self.spin_to)
-        oc1.addStretch();
-        ol.addLayout(oc1)
-        # 第二行参数
-        oc2 = QHBoxLayout()
-        oc2.addWidget(QLabel("FFT点数:"))
-        self.combo_order_nfft = QComboBox();
-        self.combo_order_nfft.addItems(['512', '1024', '2048', '4096', '8192']);
-        self.combo_order_nfft.setCurrentText('1024');
-        oc2.addWidget(self.combo_order_nfft)
-        oc2.addWidget(QLabel("时间分辨率:"))
-        self.spin_time_res = QDoubleSpinBox();
-        self.spin_time_res.setRange(0.01, 1.0);
-        self.spin_time_res.setValue(0.05);
-        self.spin_time_res.setSingleStep(0.01);
-        self.spin_time_res.setSuffix("s");
-        oc2.addWidget(self.spin_time_res)
-        oc2.addWidget(QLabel("RPM分辨率:"))
-        self.spin_rpm_res = QSpinBox();
-        self.spin_rpm_res.setRange(1, 100);
-        self.spin_rpm_res.setValue(10);
-        self.spin_rpm_res.setSuffix(" rpm");
-        oc2.addWidget(self.spin_rpm_res)
-        oc2.addStretch();
-        ol.addLayout(oc2)
-        # 按钮行
-        ob = QHBoxLayout()
-        self.btn_ot = QPushButton("▶ 时间-阶次");
-        self.btn_ot.setStyleSheet("font-weight:bold;");
-        ob.addWidget(self.btn_ot)
-        self.btn_or = QPushButton("▶ 转速-阶次");
-        ob.addWidget(self.btn_or)
-        self.btn_ok = QPushButton("▶ 阶次跟踪");
-        ob.addWidget(self.btn_ok)
-        self.lbl_order_progress = QLabel("");
-        self.lbl_order_progress.setStyleSheet("color:#888;");
-        ob.addWidget(self.lbl_order_progress)
-        ob.addStretch();
-        ol.addLayout(ob)
-        self.canvas_order = PlotCanvas(self);
-        self.toolbar_order = NavigationToolbar(self.canvas_order, self)
-        ol.addWidget(self.toolbar_order);
-        ol.addWidget(self.canvas_order, stretch=1)
-        self.tabs.addTab(ot, "🔄 阶次")
-
-        lay.addWidget(self.tabs);
-        return p
+        self.statusBar.showMessage("Ready")
 
     def _connect(self):
-        self.btn_load.clicked.connect(self.load_files)
-        self.btn_close.clicked.connect(self.close_active)
-        self.btn_close_all.clicked.connect(self.close_all)
-        self.file_tabs.currentChanged.connect(self._tab_changed)
-        self.file_tabs.tabCloseRequested.connect(self._tab_close)
-        self.btn_plot.clicked.connect(self.plot_time)
-        self.btn_fft.clicked.connect(self.do_fft)
-        self.btn_ot.clicked.connect(self.do_order_time)
-        self.btn_or.clicked.connect(self.do_order_rpm)
-        self.btn_ok.clicked.connect(self.do_order_track)
-        self.channel_list.channels_changed.connect(self._ch_changed)
-        self.chk_cursor.stateChanged.connect(lambda st: self.canvas_time.set_cursor_visible(st == Qt.Checked))
-        self.canvas_time.cursor_info.connect(self.lbl_cursor.setText)
-        self.canvas_time.dual_cursor_info.connect(self.lbl_dual.setText)
-        self.axis_lock.lock_changed.connect(self.canvas_time.set_axis_lock)
-        self.spin_xt.valueChanged.connect(self._update_all_tick_density)
-        self.spin_yt.valueChanged.connect(self._update_all_tick_density)
-        self.chk_dual.stateChanged.connect(self._dual_changed)
-        self.btn_edit.clicked.connect(self.open_editor)
-        self.btn_export.clicked.connect(self.export_excel)
-        self.btn_reset.clicked.connect(self._reset_cursors)
-        self.btn_rebuild_time.clicked.connect(self.rebuild_time_axis)
-        self.chk_fft_remark.stateChanged.connect(
-            lambda st: self.canvas_fft.set_remark_enabled(st == Qt.Checked))
-        # 横坐标设置
-        self.combo_xaxis.currentIndexChanged.connect(self._on_xaxis_mode_changed)
-        self.btn_apply_xaxis.clicked.connect(self._apply_xaxis)
-        self._custom_xlabel = None  # 自定义X轴标签
-        self._custom_xaxis_fid = None  # 自定义X轴来源文件
-        self._custom_xaxis_ch = None  # 自定义X轴来源通道
+        # --- New-module wiring ---
+        self.toolbar.file_add_requested.connect(self.load_files)
+        self.toolbar.channel_editor_requested.connect(self.open_editor)
+        self.toolbar.export_requested.connect(self.export_excel)
+        self.toolbar.mode_changed.connect(self._on_mode_changed)
+        self.toolbar.cursor_reset_requested.connect(self._reset_cursors)
+        self.toolbar.axis_lock_requested.connect(self._show_axis_lock_popover)
+
+        self.navigator.channels_changed.connect(self._ch_changed)
+        self.navigator.file_activated.connect(self._on_file_activated)
+        self.navigator.file_close_requested.connect(self._on_file_close_requested)
+        self.navigator.close_all_requested.connect(self._on_close_all_requested)
+
+        # Canvas cursor signals are owned by ChartStack; MainWindow doesn't
+        # need to subscribe (ChartStack updates the pill itself).
+
+        # Inspector signals wire up in Phase 2 when real sections land. In
+        # Phase 1, these are no-ops but must exist so Task 2.x edits are
+        # minimal additions rather than rewrites.
+        self.inspector.plot_time_requested.connect(self.plot_time)
+        self.inspector.fft_requested.connect(self.do_fft)
+        self.inspector.order_time_requested.connect(self.do_order_time)
+        self.inspector.order_rpm_requested.connect(self.do_order_rpm)
+        self.inspector.order_track_requested.connect(self.do_order_track)
+        self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
+        self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
+        self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
+        self.inspector.remark_toggled.connect(self.canvas_fft.set_remark_enabled)
+        self.inspector.cursor_mode_changed.connect(self._on_cursor_mode_changed)
+        self.inspector.plot_mode_changed.connect(self._on_plot_mode_changed)
+        self.inspector.signal_changed.connect(self._on_inspector_signal_changed)
+
+        # Custom X axis state (unchanged)
+        self._custom_xlabel = None
+        self._custom_xaxis_fid = None
+        self._custom_xaxis_ch = None
+        self._plot_mode = 'subplot'
+        self._axis_lock_widget = None
+
+    def _on_mode_changed(self, mode):
+        self.chart_stack.set_mode(mode)
+        self.inspector.set_mode(mode)
+        self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
+        # §6.2 auto re-plot on entering time mode with checked channels
+        if mode == 'time' and self.files and self.navigator.get_checked_channels():
+            self.plot_time()
+
+    def _on_cursor_mode_changed(self, mode):
+        self.canvas_time.set_cursor_visible(mode != 'off')
+        self.canvas_time.set_dual_cursor_mode(mode == 'dual')
+
+    def _on_plot_mode_changed(self, mode):
+        self._plot_mode = mode
+        self.plot_time()
+
+    def _update_all_tick_density_pair(self, xt, yt):
+        self.canvas_time.set_tick_density(xt, yt)
+        from matplotlib.ticker import MaxNLocator
+        for ax in self.canvas_fft.fig.axes:
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
+        self.canvas_fft.draw_idle()
+        for ax in self.canvas_order.fig.axes:
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
+        self.canvas_order.draw_idle()
+
+    def _show_axis_lock_popover(self, anchor):
+        # Phase 1 placeholder — Phase 3 replaces with drawers/axis_lock_popover.py.
+        # Canvas is the single source of truth for axis-lock state (§12.1).
+        cur = self.canvas_time._axis_lock or 'none'
+        next_state = {'none': 'x', 'x': 'y', 'y': 'none'}[cur]
+        self.canvas_time.set_axis_lock(next_state)
+        self.statusBar.showMessage(f"轴锁: {next_state}")
+
+    def _show_rebuild_popover(self, anchor, mode='fft'):
+        # Phase 1 placeholder — Phase 3 replaces.
+        # `mode` identifies which Inspector section emitted (needed for signal→file resolution).
+        self.rebuild_time_axis()
+
+    def _on_inspector_signal_changed(self, mode, data):
+        """Fs auto-sync per §6.3: spin_fs reflects selected signal's source file Fs."""
+        if not data:
+            return
+        fid, _ch = data
+        if fid not in self.files:
+            return
+        fs = self.files[fid].fs
+        if mode == 'fft':
+            self.inspector.fft_ctx.set_fs(fs)
+        elif mode == 'order':
+            self.inspector.order_ctx.set_fs(fs)
+
+    def _on_file_activated(self, fid):
+        self._active = fid
+        self._update_info()
+
+    def _on_file_close_requested(self, fid):
+        self._close(fid)
+
+    def _on_close_all_requested(self):
+        # Navigator already confirmed; skip the second confirm here
+        self._close_all_confirmed()
+
+    def _close_all_confirmed(self):
+        for fid in list(self.files.keys()):
+            del self.files[fid]
+            self.navigator.remove_file(fid)
+        self._active = None
+        self._update_info()
+        self._reset_plot_state(scope='all')
+        self.statusBar.showMessage("已关闭全部")
 
     def _on_xaxis_mode_changed(self, idx):
         """横坐标模式切换"""
@@ -503,8 +385,7 @@ class MainWindow(QMainWindow):
             self._fc += 1
             fd = FileData(fp, data, chs, units, len(self.files));
             self.files[fid] = fd
-            self._add_tab(fid, fd);
-            self.channel_list.add_file(fid, fd);
+            self.navigator.add_file(fid, fd)
             self._update_combos()
             if fd.time_array is not None and len(fd.time_array):
                 self.spin_start.setRange(0, max(self.spin_end.maximum(), fd.time_array[-1]))
@@ -517,64 +398,21 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 
-    def _add_tab(self, fid, fd):
-        tw = QWidget();
-        tw.setProperty("file_id", fid)  # 存储file_id到widget属性
-        lay = QVBoxLayout(tw);
-        lay.setContentsMargins(3, 3, 3, 3)
-        lbl = QLabel(f"📄 {fd.filename}\n{len(fd.data)} 行\nFs: {fd.fs:.1f} Hz");
-        lbl.setStyleSheet("font-size:9px;color:#555;");
-        lay.addWidget(lbl);
-        lay.addStretch()
-        idx = self.file_tabs.addTab(tw, fd.short_name[:10]);
-        self.file_tabs.setTabToolTip(idx, str(fd.filepath))
-        self.file_tabs.setCurrentIndex(idx);
-        self._active = fid
-
-    def _get_tab_fid(self, idx):
-        """获取指定tab的file_id"""
-        if idx < 0: return None
-        w = self.file_tabs.widget(idx)
-        return w.property("file_id") if w else None
-
-    def _tab_changed(self, idx):
-        fid = self._get_tab_fid(idx)
-        if fid:
-            self._active = fid;
-            self._update_info()
-            if fid in self.files: self.spin_fs.setValue(self.files[fid].fs)
-
-    def _tab_close(self, idx):
-        fid = self._get_tab_fid(idx)
-        if fid: self._close(fid)
-
     def close_active(self):
         if self._active: self._close(self._active)
 
     def _close(self, fid):
         if fid not in self.files: return
         del self.files[fid]
-        self.channel_list.remove_file(fid)
-        for i in range(self.file_tabs.count()):
-            if self._get_tab_fid(i) == fid: self.file_tabs.removeTab(i); break
-        self._active = list(self.files.keys())[0] if self.files else None
+        self.navigator.remove_file(fid)
+        self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
         self._reset_plot_state(scope='file')
         self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
 
     def close_all(self):
-        if not self.files: return
-        if QMessageBox.question(self, "确认", f"关闭全部 {len(self.files)} 文件?",
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes: return
-        for fid in list(self.files.keys()):
-            del self.files[fid]
-            self.channel_list.remove_file(fid)
-        while self.file_tabs.count():
-            self.file_tabs.removeTab(0)
-        self._active = None
-        self._update_info()
-        self._reset_plot_state(scope='all')
-        self.statusBar.showMessage("已关闭全部")
+        """Legacy entry; navigator's kebab path is canonical. Not bound to UI."""
+        self._close_all_confirmed()
 
     def _update_info(self):
         if not self.files: self.lbl_info.setText("未加载文件"); return
