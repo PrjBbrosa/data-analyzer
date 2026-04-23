@@ -283,16 +283,7 @@ class MainWindow(QMainWindow):
 
     def _on_close_all_requested(self):
         # Navigator already confirmed; skip the second confirm here
-        self._close_all_confirmed()
-
-    def _close_all_confirmed(self):
-        for fid in list(self.files.keys()):
-            del self.files[fid]
-            self.navigator.remove_file(fid)
-        self._active = None
-        self._update_info()
-        self._reset_plot_state(scope='all')
-        self.statusBar.showMessage("已关闭全部")
+        self.close_all()
 
     def _on_xaxis_mode_changed(self, idx):
         """横坐标模式切换"""
@@ -428,8 +419,15 @@ class MainWindow(QMainWindow):
         self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
 
     def close_all(self):
-        """Legacy entry; navigator's kebab path is canonical. Not bound to UI."""
-        self._close_all_confirmed()
+        if not self.files:
+            return
+        for fid in list(self.files.keys()):
+            del self.files[fid]
+            self.navigator.remove_file(fid)
+        self._active = None
+        self._update_info()
+        self._reset_plot_state(scope='all')
+        self.statusBar.showMessage("已关闭全部")
 
     def _update_info(self):
         if not self.files: self.lbl_info.setText("未加载文件"); return
