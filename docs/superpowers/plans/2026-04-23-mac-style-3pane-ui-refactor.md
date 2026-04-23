@@ -78,6 +78,10 @@ Create `tests/ui/__init__.py` (empty).
 Create `tests/ui/conftest.py`:
 ```python
 """Shared pytest fixtures for UI tests."""
+import os
+# Force offscreen Qt platform for headless CI *before* QApplication exists
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 import pytest
 from PyQt5.QtWidgets import QApplication
 
@@ -523,8 +527,9 @@ class TimeContextual(QWidget):
 
 class FFTContextual(QWidget):
     fft_requested = pyqtSignal()
-    rebuild_time_requested = pyqtSignal(object)  # anchor widget for popover
+    rebuild_time_requested = pyqtSignal(object)
     remark_toggled = pyqtSignal(bool)
+    signal_changed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -536,6 +541,8 @@ class OrderContextual(QWidget):
     order_time_requested = pyqtSignal()
     order_rpm_requested = pyqtSignal()
     order_track_requested = pyqtSignal()
+    rebuild_time_requested = pyqtSignal(object)
+    signal_changed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -565,11 +572,13 @@ class Inspector(QWidget):
     order_rpm_requested = pyqtSignal()
     order_track_requested = pyqtSignal()
     xaxis_apply_requested = pyqtSignal()
-    rebuild_time_requested = pyqtSignal(object)
+    rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order')
     tick_density_changed = pyqtSignal(int, int)
     remark_toggled = pyqtSignal(bool)
     cursor_mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
+    # Fs auto-sync: relayed from fft_ctx/order_ctx combo_sig change
+    signal_changed = pyqtSignal(str, object)  # (mode, (fid, ch) | None)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -594,11 +603,19 @@ class Inspector(QWidget):
         self.time_ctx.cursor_mode_changed.connect(self.cursor_mode_changed)
         self.time_ctx.plot_mode_changed.connect(self.plot_mode_changed)
         self.fft_ctx.fft_requested.connect(self.fft_requested)
-        self.fft_ctx.rebuild_time_requested.connect(self.rebuild_time_requested)
+        self.fft_ctx.rebuild_time_requested.connect(
+            lambda a: self.rebuild_time_requested.emit(a, 'fft'))
         self.fft_ctx.remark_toggled.connect(self.remark_toggled)
+        # Phase 2 adds signal_changed emitter on FFTContextual
+        self.fft_ctx.signal_changed.connect(
+            lambda d: self.signal_changed.emit('fft', d))
         self.order_ctx.order_time_requested.connect(self.order_time_requested)
         self.order_ctx.order_rpm_requested.connect(self.order_rpm_requested)
         self.order_ctx.order_track_requested.connect(self.order_track_requested)
+        self.order_ctx.rebuild_time_requested.connect(
+            lambda a: self.rebuild_time_requested.emit(a, 'order'))
+        self.order_ctx.signal_changed.connect(
+            lambda d: self.signal_changed.emit('order', d))
 
     def set_mode(self, mode):
         idx = {'time': 0, 'fft': 1, 'order': 2}[mode]
@@ -620,10 +637,12 @@ git add mf4_analyzer/ui/inspector.py mf4_analyzer/ui/inspector_sections.py tests
 git commit -m "feat(ui): add Inspector skeleton + stubbed sections"
 ```
 
-### Task 1.5: Refactor MainWindow to 3-pane splitter
+### Task 1.5: Atomic MainWindow refactor (3-pane + signal wiring)
+
+> **Important:** This task is intentionally large and atomic. Removing `_left / _right` without also rewriting `_connect`, `_load_one`, `_close`, `close_all`, and the dozens of `self.btn_load / self.file_tabs / self.spin_start / self.combo_sig / self.channel_list / self.lbl_info / self.tabs / self.stats` references in `plot_time`, `do_fft`, `do_order_*`, `_update_combos`, `_ch_changed`, `_update_info`, `_reset_cursors`, and `_reset_plot_state` causes the `__init__` to crash before any test runs. Keep compatibility **aliases** set in `_init_ui` so dependent methods keep compiling, then migrate them method-by-method in the same task.
 
 **Files:**
-- Modify: `mf4_analyzer/ui/main_window.py` (_init_ui only)
+- Modify: `mf4_analyzer/ui/main_window.py` (full refactor of `_init_ui`, `_connect`, and compatibility aliases)
 
 - [ ] **Step 1: Add smoke test first**
 
@@ -690,11 +709,76 @@ def _init_ui(self):
     self.inspector.setMinimumWidth(220)
     root.addWidget(splitter, stretch=1)
 
-    # Legacy compatibility aliases so existing methods keep working in Phase 1
+    # Compatibility aliases so legacy methods that still reference old
+    # widget names compile and run in Phase 1. Each alias is removed in
+    # the Phase 2 task that rewrites its consumer method.
     self.canvas_time = self.chart_stack.canvas_time
     self.canvas_fft = self.chart_stack.canvas_fft
     self.canvas_order = self.chart_stack.canvas_order
     self.channel_list = self.navigator.channel_list
+    # Phase-1 placeholder shims for widgets that Phase 2 will kill:
+    # plot_time / do_fft / do_order_* still read .spin_start / .spin_end /
+    # .spin_fs / .combo_sig / .combo_rpm / .spin_xt / .spin_yt / .chk_range
+    # / .chk_fft_autoscale etc. Alias them to the Inspector's real widgets
+    # once Inspector has them (Phase 2). Until Phase 2 lands, the old
+    # widget objects are kept alive as **hidden off-screen children** of
+    # MainWindow so existing methods don't AttributeError.
+    from PyQt5.QtWidgets import (
+        QCheckBox, QComboBox, QDoubleSpinBox, QLabel, QSpinBox, QTabWidget,
+    )
+    self._legacy_hidden = QWidget(self)
+    self._legacy_hidden.setVisible(False)
+    self.btn_load = self.toolbar.btn_add
+    self.btn_close = self.toolbar.btn_edit   # unused in Phase 1; wired off
+    self.btn_close_all = self.toolbar.btn_export  # unused; wired off
+    self.btn_plot = self.toolbar.btn_mode_time  # unused in Phase 1
+    self.combo_mode = QComboBox(self._legacy_hidden); self.combo_mode.addItems(['Subplot', 'Overlay'])
+    self.chk_cursor = QCheckBox(self._legacy_hidden)
+    self.chk_dual = QCheckBox(self._legacy_hidden)
+    self.btn_reset = self.toolbar.btn_cursor_reset
+    self.btn_edit = self.toolbar.btn_edit
+    self.btn_export = self.toolbar.btn_export
+    self.combo_xaxis = QComboBox(self._legacy_hidden); self.combo_xaxis.addItems(['自动(时间)', '指定通道'])
+    self.combo_xaxis_ch = QComboBox(self._legacy_hidden)
+    self.edit_xlabel = QLabel("", self._legacy_hidden)
+    self.btn_apply_xaxis = QLabel("", self._legacy_hidden)
+    self.chk_range = QCheckBox(self._legacy_hidden)
+    self.spin_start = QDoubleSpinBox(self._legacy_hidden); self.spin_start.setRange(0, 1e9)
+    self.spin_end = QDoubleSpinBox(self._legacy_hidden); self.spin_end.setRange(0, 1e9)
+    self.spin_xt = QSpinBox(self._legacy_hidden); self.spin_xt.setRange(3, 30); self.spin_xt.setValue(10)
+    self.spin_yt = QSpinBox(self._legacy_hidden); self.spin_yt.setRange(3, 20); self.spin_yt.setValue(6)
+    self.combo_sig = QComboBox(self._legacy_hidden)
+    self.combo_rpm = QComboBox(self._legacy_hidden); self.combo_rpm.addItem("None", None)
+    self.spin_fs = QDoubleSpinBox(self._legacy_hidden); self.spin_fs.setRange(1, 1e6); self.spin_fs.setValue(1000)
+    self.btn_rebuild_time = QLabel("", self._legacy_hidden)
+    self.spin_rf = QDoubleSpinBox(self._legacy_hidden); self.spin_rf.setRange(0.0001, 10000); self.spin_rf.setValue(1)
+    self.combo_win = QComboBox(self._legacy_hidden); self.combo_win.addItems(['hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop'])
+    self.combo_nfft = QComboBox(self._legacy_hidden); self.combo_nfft.addItems(['自动', '512', '1024', '2048', '4096', '8192', '16384'])
+    self.spin_overlap = QSpinBox(self._legacy_hidden); self.spin_overlap.setRange(0, 90); self.spin_overlap.setValue(50)
+    self.btn_fft = QLabel("", self._legacy_hidden)
+    self.chk_fft_remark = QCheckBox(self._legacy_hidden)
+    self.chk_fft_autoscale = QCheckBox(self._legacy_hidden); self.chk_fft_autoscale.setChecked(True)
+    self.spin_mo = QSpinBox(self._legacy_hidden); self.spin_mo.setRange(1, 100); self.spin_mo.setValue(20)
+    self.spin_order_res = QDoubleSpinBox(self._legacy_hidden); self.spin_order_res.setRange(0.01, 1.0); self.spin_order_res.setValue(0.1)
+    self.combo_order_nfft = QComboBox(self._legacy_hidden); self.combo_order_nfft.addItems(['512', '1024', '2048', '4096', '8192']); self.combo_order_nfft.setCurrentText('1024')
+    self.spin_time_res = QDoubleSpinBox(self._legacy_hidden); self.spin_time_res.setRange(0.01, 1.0); self.spin_time_res.setValue(0.05)
+    self.spin_rpm_res = QSpinBox(self._legacy_hidden); self.spin_rpm_res.setRange(1, 100); self.spin_rpm_res.setValue(10)
+    self.spin_to = QDoubleSpinBox(self._legacy_hidden); self.spin_to.setRange(0.5, 100); self.spin_to.setValue(1)
+    self.btn_ot = QLabel("", self._legacy_hidden)
+    self.btn_or = QLabel("", self._legacy_hidden)
+    self.btn_ok = QLabel("", self._legacy_hidden)
+    self.lbl_order_progress = QLabel("", self._legacy_hidden)
+    # Existing QLabels used in plot_time's status updates
+    self.lbl_info = QLabel("", self._legacy_hidden)
+    self.lbl_cursor = QLabel("", self._legacy_hidden)
+    self.lbl_dual = QLabel("", self._legacy_hidden)
+    # StatisticsPanel legacy alias — the real strip lives on ChartStack
+    from .widgets import StatisticsPanel
+    self.stats = StatisticsPanel(self._legacy_hidden)
+    # old tabs object — only ever .setCurrentIndex(n) is called; create a real hidden one
+    self.tabs = QTabWidget(self._legacy_hidden)
+    for _ in range(3):
+        self.tabs.addTab(QWidget(), "")
 
     from PyQt5.QtWidgets import QStatusBar
     self.statusBar = QStatusBar()
@@ -702,30 +786,196 @@ def _init_ui(self):
     self.statusBar.showMessage("Ready")
 ```
 
-- [ ] **Step 4: Stub out old left-pane builder**
+> **Why the legacy shims:** `plot_time / do_fft / do_order_*` still reference `self.spin_fs.value()` etc. Keeping hidden shim widgets lets the test suite run + app launch in Phase 1 without breaking those methods. Phase 2 tasks migrate each consumer to the real Inspector API and the corresponding shim is deleted at the end of the migration task.
 
-In `main_window.py`, the old `_left()` / `_right()` methods should be removed or kept but un-called. Keep them temporarily for reference but remove the `self._init_ui() ... sp = QSplitter; sp.addWidget(self._left())` etc from the old flow. If they exist, either delete or comment out; `_init_ui` shown above replaces them entirely.
+- [ ] **Step 4: Delete old `_left / _right` builders**
 
-Also delete the old `file_tabs`, `lbl_info`, `btn_load`, `btn_close`, `btn_close_all`, etc attribute creation from `_left()`/`_right()` since the new toolbar + navigator + inspector own those. For **Phase 1 compatibility**, we will add shim attributes in Task 1.6.
+Remove the entire `def _left(self):` and `def _right(self):` methods from `main_window.py`. They are no longer reachable (new `_init_ui` above replaces the call).
 
-- [ ] **Step 5: Run — expect PASS smoke**
+- [ ] **Step 5: Rewrite `_connect` to a minimum that wires the new widgets and keeps dependent methods compiling**
+
+Replace the body of `MainWindow._connect` with:
+
+```python
+def _connect(self):
+    # --- New-module wiring ---
+    self.toolbar.file_add_requested.connect(self.load_files)
+    self.toolbar.channel_editor_requested.connect(self.open_editor)
+    self.toolbar.export_requested.connect(self.export_excel)
+    self.toolbar.mode_changed.connect(self._on_mode_changed)
+    self.toolbar.cursor_reset_requested.connect(self._reset_cursors)
+    self.toolbar.axis_lock_requested.connect(self._show_axis_lock_popover)
+
+    self.navigator.channels_changed.connect(self._ch_changed)
+    self.navigator.file_activated.connect(self._on_file_activated)
+    self.navigator.file_close_requested.connect(self._on_file_close_requested)
+    self.navigator.close_all_requested.connect(self._on_close_all_requested)
+
+    # Canvas cursor signals are owned by ChartStack; MainWindow doesn't
+    # need to subscribe (ChartStack updates the pill itself).
+
+    # Inspector signals wire up in Phase 2 when real sections land. In
+    # Phase 1, these are no-ops but must exist so Task 2.x edits are
+    # minimal additions rather than rewrites.
+    self.inspector.plot_time_requested.connect(self.plot_time)
+    self.inspector.fft_requested.connect(self.do_fft)
+    self.inspector.order_time_requested.connect(self.do_order_time)
+    self.inspector.order_rpm_requested.connect(self.do_order_rpm)
+    self.inspector.order_track_requested.connect(self.do_order_track)
+    self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
+    self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
+    self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
+    self.inspector.remark_toggled.connect(self.canvas_fft.set_remark_enabled)
+    self.inspector.cursor_mode_changed.connect(self._on_cursor_mode_changed)
+    self.inspector.plot_mode_changed.connect(self._on_plot_mode_changed)
+    self.inspector.signal_changed.connect(self._on_inspector_signal_changed)
+
+    # Custom X axis state (unchanged)
+    self._custom_xlabel = None
+    self._custom_xaxis_fid = None
+    self._custom_xaxis_ch = None
+    self._plot_mode = 'subplot'
+    self._axis_lock_widget = None
+```
+
+- [ ] **Step 6: Add placeholder slots**
+
+Add these methods to `MainWindow` (after `_connect`):
+
+```python
+def _on_mode_changed(self, mode):
+    self.chart_stack.set_mode(mode)
+    self.inspector.set_mode(mode)
+    self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
+    # §6.2 auto re-plot on entering time mode with checked channels
+    if mode == 'time' and self.files and self.navigator.get_checked_channels():
+        self.plot_time()
+
+def _on_cursor_mode_changed(self, mode):
+    self.canvas_time.set_cursor_visible(mode != 'off')
+    self.canvas_time.set_dual_cursor_mode(mode == 'dual')
+
+def _on_plot_mode_changed(self, mode):
+    self._plot_mode = mode
+    self.plot_time()
+
+def _update_all_tick_density_pair(self, xt, yt):
+    self.canvas_time.set_tick_density(xt, yt)
+    from matplotlib.ticker import MaxNLocator
+    for ax in self.canvas_fft.fig.axes:
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
+    self.canvas_fft.draw_idle()
+    for ax in self.canvas_order.fig.axes:
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
+    self.canvas_order.draw_idle()
+
+def _show_axis_lock_popover(self, anchor):
+    # Phase 1 placeholder — Phase 3 replaces with drawers/axis_lock_popover.py.
+    # Canvas is the single source of truth for axis-lock state (§12.1).
+    cur = self.canvas_time._axis_lock or 'none'
+    next_state = {'none': 'x', 'x': 'y', 'y': 'none'}[cur]
+    self.canvas_time.set_axis_lock(next_state)
+    self.statusBar.showMessage(f"轴锁: {next_state}")
+
+def _show_rebuild_popover(self, anchor, mode='fft'):
+    # Phase 1 placeholder — Phase 3 replaces.
+    # `mode` identifies which Inspector section emitted (needed for signal→file resolution).
+    self.rebuild_time_axis()
+
+def _on_inspector_signal_changed(self, mode, data):
+    """Fs auto-sync per §6.3: spin_fs reflects selected signal's source file Fs."""
+    if not data:
+        return
+    fid, _ch = data
+    if fid not in self.files:
+        return
+    fs = self.files[fid].fs
+    if mode == 'fft':
+        self.inspector.fft_ctx.set_fs(fs)
+    elif mode == 'order':
+        self.inspector.order_ctx.set_fs(fs)
+
+def _on_file_activated(self, fid):
+    self._active = fid
+    self._update_info()
+
+def _on_file_close_requested(self, fid):
+    self._close(fid)
+
+def _on_close_all_requested(self):
+    # Navigator already confirmed; skip the second confirm here
+    self._close_all_confirmed()
+
+def _close_all_confirmed(self):
+    for fid in list(self.files.keys()):
+        del self.files[fid]
+        self.navigator.remove_file(fid)
+    self._active = None
+    self._update_info()
+    self._reset_plot_state(scope='all')
+    self.statusBar.showMessage("已关闭全部")
+```
+
+- [ ] **Step 7: Migrate `_load_one` to use Navigator**
+
+In `_load_one`, replace:
+```python
+self._add_tab(fid, fd);
+self.channel_list.add_file(fid, fd);
+```
+with:
+```python
+self.navigator.add_file(fid, fd)
+```
+
+Also delete calls to `_add_tab`, `_get_tab_fid`, `_tab_changed`, `_tab_close` methods and the helpers themselves — they belong to the old QTabWidget flow which no longer exists.
+
+In `_close(fid)`, replace the loop that walks `file_tabs.count()` with:
+```python
+def _close(self, fid):
+    if fid not in self.files: return
+    del self.files[fid]
+    self.navigator.remove_file(fid)
+    self._active = self.navigator._active_fid  # navigator picks fallback
+    self._update_info()
+    self._reset_plot_state(scope='file')
+    self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
+```
+
+Delete the original `close_all` body (with its QMessageBox) — the kebab in FileNavigator already confirms. Keep the method as `self._close_all_confirmed()` shim:
+```python
+def close_all(self):
+    """Legacy entry; navigator's kebab path is canonical. Not bound to UI."""
+    self._close_all_confirmed()
+```
+
+- [ ] **Step 8: Run — smoke tests expected PASS**
 
 Run: `pytest tests/ui/test_main_window_smoke.py -v`
-Expected: 2 passed
+Expected: 2 passed.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Launch app manually**
+
+Run: `python -m mf4_analyzer.app`
+Expected: 3-pane layout appears; toolbar ＋ loads file, navigator shows row, clicking row switches active, ✕ closes. Time domain / FFT / Order buttons in current Inspector stubs do nothing visible (Phase 2 wires them), but other existing code paths still work via shim widgets. No crashes.
+
+- [ ] **Step 10: Commit**
 
 ```bash
 git add mf4_analyzer/ui/main_window.py tests/ui/test_main_window_smoke.py
-git commit -m "refactor(ui): MainWindow uses 3-pane QSplitter + new modules"
+git commit -m "refactor(ui): atomic MainWindow 3-pane + signal wiring + shim aliases"
 ```
 
-### Task 1.6: Wire signals per §12.2 routing table
+### Task 1.6: Integration tests + legacy shim exit plan
+
+Task 1.5 already wired everything Phase 1 needs. This task adds integration tests that exercise the full Phase 1 flow and documents the shim-removal checklist that Phase 2 must close.
 
 **Files:**
-- Modify: `mf4_analyzer/ui/main_window.py` (_connect method)
+- Modify: `tests/ui/test_main_window_smoke.py`
 
-- [ ] **Step 1: Write behavioral test**
+- [ ] **Step 1: Add behavioral tests**
 
 Append to `tests/ui/test_main_window_smoke.py`:
 ```python
@@ -748,149 +998,38 @@ def test_mode_change_routes_to_chart_stack(qapp, qtbot):
     assert w.inspector.contextual_widget_name() == 'fft'
 ```
 
-- [ ] **Step 2: Run — likely fails on mode change test**
+- [ ] **Step 2: Run tests — expect PASS**
 
-- [ ] **Step 3: Rewrite `_connect` method in `main_window.py`**
+Run: `pytest tests/ui/test_main_window_smoke.py -v`
+Expected: 4 passed (2 smoke + 2 integration).
 
-Replace the body of `_connect`:
+- [ ] **Step 3: Document shim exit plan**
+
+Add a comment block at the top of `main_window.py` summarizing which legacy shim widgets each Phase 2 task will remove:
+
 ```python
-def _connect(self):
-    # --- Toolbar ---
-    self.toolbar.file_add_requested.connect(self.load_files)
-    self.toolbar.channel_editor_requested.connect(self.open_editor)
-    self.toolbar.export_requested.connect(self.export_excel)
-    self.toolbar.mode_changed.connect(self._on_mode_changed)
-    self.toolbar.cursor_reset_requested.connect(self._reset_cursors)
-    self.toolbar.axis_lock_requested.connect(self._show_axis_lock_popover)
-
-    # --- Navigator ---
-    self.navigator.channels_changed.connect(self._ch_changed)
-
-    # --- Chart canvases ---
-    self.canvas_time.cursor_info.connect(self._on_cursor_info)
-    self.canvas_time.dual_cursor_info.connect(self._on_dual_cursor_info)
-
-    # --- Inspector ---
-    self.inspector.plot_time_requested.connect(self.plot_time)
-    self.inspector.fft_requested.connect(self.do_fft)
-    self.inspector.order_time_requested.connect(self.do_order_time)
-    self.inspector.order_rpm_requested.connect(self.do_order_rpm)
-    self.inspector.order_track_requested.connect(self.do_order_track)
-    self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
-    self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
-    self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
-    self.inspector.remark_toggled.connect(self.canvas_fft.set_remark_enabled)
-    self.inspector.cursor_mode_changed.connect(self._on_cursor_mode_changed)
-    self.inspector.plot_mode_changed.connect(self._on_plot_mode_changed)
-
-    # Custom X axis state (unchanged)
-    self._custom_xlabel = None
-    self._custom_xaxis_fid = None
-    self._custom_xaxis_ch = None
+# PHASE-2 SHIM EXIT PLAN
+# Task 2.3 (Inspector persistent top)  → removes combo_xaxis/combo_xaxis_ch/edit_xlabel/
+#                                         btn_apply_xaxis/chk_range/spin_start/spin_end/
+#                                         spin_xt/spin_yt shims
+# Task 2.4 (Inspector time contextual) → removes combo_mode/chk_cursor/chk_dual shims
+# Task 2.5 (Inspector FFT contextual)  → removes combo_sig/spin_fs/combo_win/combo_nfft/
+#                                         spin_overlap/chk_fft_autoscale/chk_fft_remark/
+#                                         btn_fft/btn_rebuild_time shims
+# Task 2.6 (Inspector Order contextual)→ removes combo_rpm/spin_rf/spin_mo/spin_order_res/
+#                                         combo_order_nfft/spin_time_res/spin_rpm_res/
+#                                         spin_to/btn_ot/btn_or/btn_ok/lbl_order_progress shims
+# Task 2.9 (ChartStack cursor pill)    → removes lbl_cursor/lbl_dual shims
+# Task 2.10 (Stats strip)              → removes self.stats/tabs shims
+# Task 3.4 (axis lock popover)         → deletes axis_lock_toolbar.py
+# At end of Phase 2 the `_legacy_hidden` holder must be empty.
 ```
 
-- [ ] **Step 4: Add slot stubs**
-
-Add to `main_window.py`:
-```python
-def _on_mode_changed(self, mode):
-    self.chart_stack.set_mode(mode)
-    self.inspector.set_mode(mode)
-    self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
-
-def _on_cursor_info(self, text):
-    # Phase 1: no-op until ChartStack owns the pill
-    pass
-
-def _on_dual_cursor_info(self, text):
-    pass
-
-def _on_cursor_mode_changed(self, mode):
-    self.canvas_time.set_cursor_visible(mode != 'off')
-    self.canvas_time.set_dual_cursor_mode(mode == 'dual')
-
-def _on_plot_mode_changed(self, mode):
-    # mode 'subplot' | 'overlay'; store for plot_time consumption
-    self._plot_mode = mode
-    self.plot_time()
-
-def _update_all_tick_density_pair(self, xt, yt):
-    self.canvas_time.set_tick_density(xt, yt)
-    from matplotlib.ticker import MaxNLocator
-    for ax in self.canvas_fft.fig.axes:
-        ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
-    self.canvas_fft.draw_idle()
-    for ax in self.canvas_order.fig.axes:
-        ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
-        ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
-    self.canvas_order.draw_idle()
-
-def _show_axis_lock_popover(self, anchor):
-    # Phase 1: reuse old AxisLockBar in a transient window; Phase 3 replaces with popover
-    from .axis_lock_toolbar import AxisLockBar
-    if not hasattr(self, '_axis_lock_widget'):
-        self._axis_lock_widget = AxisLockBar(self)
-        self._axis_lock_widget.lock_changed.connect(self.canvas_time.set_axis_lock)
-    gp = anchor.mapToGlobal(anchor.rect().bottomLeft())
-    self._axis_lock_widget.move(gp)
-    self._axis_lock_widget.show()
-
-def _show_rebuild_popover(self, anchor):
-    # Phase 1 placeholder: reuse the current rebuild_time_axis dialog
-    self.rebuild_time_axis()
-```
-
-- [ ] **Step 5: Update `load_files` / `_load_one` to use `self.navigator`**
-
-In `main_window.py`, replace every `self.channel_list.add_file(...)` / `self.channel_list.remove_file(...)` etc. with `self.navigator.add_file(...)` / `self.navigator.remove_file(...)`. Note: `self.channel_list` is already aliased to `self.navigator.channel_list`, so read-side calls still work, but prefer navigator API for additions.
-
-Also update `_load_one` to replace the old `self._add_tab(fid, fd)` call with `self.navigator.add_file(fid, fd)` (Phase 1: FileNavigator uses the existing MultiFileChannelWidget internally, so add_file handles it). The active file state (`self._active = fid`) stays in MainWindow.
-
-- [ ] **Step 6: Update `_tab_changed / _tab_close` → Navigator signal handlers**
-
-Add:
-```python
-def _on_file_activated(self, fid):
-    self._active = fid
-    self._update_info()
-    if fid in self.files:
-        # Phase 2: Inspector will expose setter for spin_fs; Phase 1 skip
-        pass
-
-def _on_file_close_requested(self, fid):
-    self._close(fid)
-
-def _on_close_all_requested(self):
-    self.close_all()
-```
-
-Connect in `_connect`:
-```python
-self.navigator.file_activated.connect(self._on_file_activated)
-self.navigator.file_close_requested.connect(self._on_file_close_requested)
-self.navigator.close_all_requested.connect(self._on_close_all_requested)
-```
-
-Note: Phase 1 the FileNavigator does NOT yet emit these (no file-list UI). That wiring comes in Phase 2. But the slot exists now so Phase 2 only needs to emit.
-
-- [ ] **Step 7: Run smoke + new tests**
-
-Run: `pytest tests/ui/ -v`
-Expected: all passing. If any test fails, read the error and fix the corresponding slot or signal binding.
-
-- [ ] **Step 8: Launch the app manually and verify it still works**
-
-Run: `python -m mf4_analyzer.app`
-Expected: app launches, can load a CSV, time-domain plot renders, FFT / Order buttons still work via the new inspector stubs (tied to old body methods). If the inspector stubs emit nothing (which they don't yet), verify you can still plot via code path as a sanity check.
-
-Note: since Phase 1 inspector stubs don't emit plot_time_requested, time-domain plotting via UI is broken until Phase 2 delivers real Inspector sections. This is acceptable — the test suite + app-launch verify the wiring is solid.
-
-- [ ] **Step 9: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add mf4_analyzer/ui/main_window.py tests/ui/test_main_window_smoke.py
-git commit -m "refactor(ui): wire Toolbar/Navigator/Inspector signals in MainWindow"
+git commit -m "test(ui): add MainWindow integration tests + shim exit plan"
 ```
 
 ### Task 1.7: Delete old `_left / _right` builders; clean up
@@ -1107,9 +1246,13 @@ class FileNavigator(QWidget):
             row.deleteLater()
         self.channel_list.remove_file(fid)
         if self._active_fid == fid:
-            self._active_fid = next(iter(self._rows), None)
-            if self._active_fid is not None:
-                self._rows[self._active_fid].set_active(True)
+            new_active = next(iter(self._rows), None)
+            self._active_fid = None  # force _activate to re-emit
+            if new_active is not None:
+                self._activate(new_active)
+            else:
+                # No files left; still notify MainWindow so Inspector resets
+                self.file_activated.emit("")
         self._refresh_header()
 
     def file_list_count(self):
@@ -1631,11 +1774,26 @@ class FFTContextual(QWidget):
         self.btn_fft.clicked.connect(self.fft_requested)
         self.btn_rebuild.clicked.connect(lambda: self.rebuild_time_requested.emit(self.btn_rebuild))
         self.chk_remark.toggled.connect(self.remark_toggled)
+        # §6.3 Fs rule: spin_fs reflects selected signal's source file Fs.
+        # MainWindow will call set_fs via the signal_changed relay.
+
+    signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
+
+    def _on_sig_index_changed(self):
+        self.signal_changed.emit(self.combo_sig.currentData())
 
     def set_signal_candidates(self, candidates):
+        self.combo_sig.blockSignals(True)
         self.combo_sig.clear()
         for text, data in candidates:
             self.combo_sig.addItem(text, data)
+        self.combo_sig.blockSignals(False)
+        try:
+            self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
+        except TypeError:
+            pass
+        self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
+        self._on_sig_index_changed()  # emit for newly-populated default
 
     def current_signal(self):
         return self.combo_sig.currentData()
@@ -1707,6 +1865,8 @@ class OrderContextual(QWidget):
     order_time_requested = pyqtSignal()
     order_rpm_requested = pyqtSignal()
     order_track_requested = pyqtSignal()
+    rebuild_time_requested = pyqtSignal(object)   # anchor widget
+    signal_changed = pyqtSignal(object)            # (fid, ch) tuple or None
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1723,7 +1883,14 @@ class OrderContextual(QWidget):
         self.spin_fs.setRange(1, 1e6)
         self.spin_fs.setValue(1000)
         self.spin_fs.setSuffix(" Hz")
-        fl.addRow("Fs:", self.spin_fs)
+        fs_row = QHBoxLayout()
+        fs_row.addWidget(self.spin_fs)
+        self.btn_rebuild = QPushButton("⏱")
+        self.btn_rebuild.setMaximumWidth(30)
+        self.btn_rebuild.setToolTip("重建时间轴")
+        self.btn_rebuild.clicked.connect(lambda: self.rebuild_time_requested.emit(self.btn_rebuild))
+        fs_row.addWidget(self.btn_rebuild)
+        fl.addRow("Fs:", fs_row)
         self.spin_rf = QDoubleSpinBox()
         self.spin_rf.setRange(0.0001, 10000)
         self.spin_rf.setDecimals(4)
@@ -1783,10 +1950,21 @@ class OrderContextual(QWidget):
         self.btn_or.clicked.connect(self.order_rpm_requested)
         self.btn_ok.clicked.connect(self.order_track_requested)
 
+    def _on_sig_index_changed(self):
+        self.signal_changed.emit(self.combo_sig.currentData())
+
     def set_signal_candidates(self, candidates):
+        self.combo_sig.blockSignals(True)
         self.combo_sig.clear()
         for text, data in candidates:
             self.combo_sig.addItem(text, data)
+        self.combo_sig.blockSignals(False)
+        try:
+            self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
+        except TypeError:
+            pass
+        self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
+        self._on_sig_index_changed()
 
     def set_rpm_candidates(self, candidates):
         self.combo_rpm.clear()
@@ -1953,11 +2131,19 @@ def _apply_xaxis(self):
         if fid not in self.files or ch not in self.files[fid].data.columns:
             QMessageBox.warning(self, "提示", "横坐标通道不存在")
             return
-        # allow different files but verify length matches data length of each plotted channel
+        # §6.1 validation: length must match every file whose channels are
+        # currently checked for plotting (not every loaded file).
         xlen = len(self.files[fid].data)
-        for other_fid, fd in self.files.items():
-            if len(fd.data) != xlen:
-                QMessageBox.warning(self, "提示", "横坐标通道长度与部分文件数据不匹配")
+        checked = self.navigator.get_checked_channels()  # [(fid, ch, color), ...]
+        plotted_fids = {cfid for cfid, _, _ in checked}
+        if not plotted_fids:
+            plotted_fids = {fid}  # nothing plotted yet, will auto-plot after apply
+        for cfid in plotted_fids:
+            if cfid in self.files and len(self.files[cfid].data) != xlen:
+                QMessageBox.warning(
+                    self, "提示",
+                    "横坐标通道长度与当前绘图通道所在文件不匹配",
+                )
                 return
         self._custom_xaxis_fid = fid
         self._custom_xaxis_ch = ch
@@ -1998,16 +2184,16 @@ def _update_combos(self):
     self.inspector.order_ctx.set_rpm_candidates(rpm_cands)
 ```
 
-- [ ] **Step 8: Update `_on_span` to push range back into Inspector**
+- [ ] **Step 8: Update `_on_span` to push range into Inspector + update stats strip**
 
 ```python
 def _on_span(self, xmin, xmax):
     self.inspector.top.set_range_from_span(xmin, xmax)
     st = self.canvas_time.get_statistics(time_range=(xmin, xmax))
-    if st:
-        # Phase 2 stats strip goes via chart_stack; Phase 1/2 still via widgets.StatisticsPanel
-        pass
+    self.chart_stack.stats_strip.update_stats(st or {})
 ```
+
+`SpanSelector` is created inside `TimeDomainCanvas.enable_span_selector(self._on_span)` which `plot_time` already calls after drawing. No §12.2 signal refactor is needed; the callback path stays as-is but now terminates in the Inspector + stats strip instead of the discarded `self.stats` reference.
 
 - [ ] **Step 9: Wire cursor + plot-mode signals**
 
@@ -2252,17 +2438,24 @@ Find every `self.stats.update_stats(...)` and replace with `self.chart_stack.sta
 
 ```python
 # tests/ui/test_chart_stack.py
-def test_stats_strip_update(qapp):
+def test_stats_strip_update(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.show()
+    qtbot.waitExposed(cs)
     cs.stats_strip.update_stats({'ch1': {'min': 0, 'max': 10, 'mean': 5, 'rms': 6, 'std': 2, 'p2p': 10, 'unit': 'V'}})
     assert 'ch1' in cs.stats_strip._lbl_summary.text()
 
-def test_stats_strip_toggle(qapp):
+def test_stats_strip_toggle(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.show()
+    qtbot.waitExposed(cs)
     assert not cs.stats_strip._panel.isVisible()
     cs.stats_strip.toggle()
+    qapp.processEvents()
     assert cs.stats_strip._panel.isVisible()
 ```
 
@@ -2316,44 +2509,91 @@ git add mf4_analyzer/ui/main_window.py
 git commit -m "feat(ui): file activation updates Inspector Fs + range limits"
 ```
 
-### Task 2.12: Channel search / All / None / Inv are preserved
+### Task 2.12: Channel search / All / None / Inv behavioral tests
+
+Behavioral tests that actually observe filtering, bulk checking, and the
+>8-channel warning branch — not just that the widgets exist.
 
 **Files:**
-- Verify only; no code changes (already in `MultiFileChannelWidget`)
+- Modify: `tests/ui/test_file_navigator.py`
 
-- [ ] **Step 1: Add assertion test**
+- [ ] **Step 1: Add behavioral tests**
 
 ```python
 # tests/ui/test_file_navigator.py
-def test_channel_search_and_bulk_preserved(qapp):
+from unittest.mock import patch
+from PyQt5.QtCore import Qt
+
+
+def test_channel_search_filters(qapp, qtbot):
     nav = FileNavigator()
+    qtbot.addWidget(nav)
     nav.add_file("f0", FakeFd())
-    # search widget exists with placeholder
-    assert nav.channel_list.search.placeholderText().startswith("🔍")
-    # All/None/Inv buttons exist
-    btns = nav.channel_list.findChildren(type(nav.channel_list.search.__class__.__base__))
-    # fall-back: scan layout for QPushButton objects
-    from PyQt5.QtWidgets import QPushButton
-    pbs = [c for c in nav.channel_list.findChildren(QPushButton)]
-    labels = [b.text() for b in pbs]
-    assert 'All' in labels and 'None' in labels and 'Inv' in labels
+    # "speed" matches channel named "speed"; "xyz" matches nothing
+    nav.channel_list.search.setText("xyz")
+    fi = nav.channel_list._file_items["f0"]
+    for i in range(fi.childCount()):
+        assert fi.child(i).isHidden()
+    nav.channel_list.search.setText("speed")
+    visible = [not fi.child(i).isHidden() for i in range(fi.childCount())]
+    assert any(visible)
+
+
+def test_channel_all_button_checks(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    nav.channel_list._all()
+    fi = nav.channel_list._file_items["f0"]
+    for i in range(fi.childCount()):
+        assert fi.child(i).checkState(0) == Qt.Checked
+
+
+def test_channel_none_button_clears(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    nav.channel_list._all()
+    nav.channel_list._none()
+    fi = nav.channel_list._file_items["f0"]
+    for i in range(fi.childCount()):
+        assert fi.child(i).checkState(0) == Qt.Unchecked
+
+
+def test_channel_inv_button_toggles(qapp, qtbot):
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", FakeFd())
+    fi = nav.channel_list._file_items["f0"]
+    fi.child(0).setCheckState(0, Qt.Checked)
+    nav.channel_list._inv()
+    assert fi.child(0).checkState(0) == Qt.Unchecked
+    assert fi.child(1).checkState(0) == Qt.Checked
+
+
+def test_channel_over_threshold_warns(qapp, qtbot, monkeypatch):
+    # Craft a FakeFd with many channels and monkeypatch MAX threshold low.
+    class WideFd(FakeFd):
+        def get_signal_channels(self): return [f"ch{i}" for i in range(20)]
+        def get_color_palette(self): return ["#000"] * 20
+    nav = FileNavigator()
+    qtbot.addWidget(nav)
+    nav.add_file("f0", WideFd())
+    with patch('mf4_analyzer.ui.widgets.QMessageBox.question',
+               return_value=False) as q:
+        nav.channel_list._all()
+    assert q.called
 ```
 
-- [ ] **Step 2: Run test**
+- [ ] **Step 2: Run — expect PASS**
 
 Run: `pytest tests/ui/test_file_navigator.py -v`
-Expected: passes; if not, it means FileNavigator wrapping broke `MultiFileChannelWidget` accessors — fix by ensuring the widget is a direct child not hidden.
 
-- [ ] **Step 3: Manual verify bulk-select warning**
-
-Run: `python -m mf4_analyzer.app`
-Load a CSV that has >8 channels (or edit `MAX_CHANNELS_WARNING = 2` temporarily), click `All` → confirm dialog appears.
-
-- [ ] **Step 4: Commit (if any fix)**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add tests/ui/test_file_navigator.py
-git commit -m "test(ui): verify channel search/All/None/Inv preserved"
+git commit -m "test(ui): behavioral tests for channel search/All/None/Inv/warn"
 ```
 
 ---
@@ -2565,11 +2805,45 @@ git commit -m "feat(ui): export dialog as top-anchored sheet"
 
 ```python
 # tests/ui/test_drawers.py
-def test_rebuild_time_popover_returns_fs(qapp):
+def test_rebuild_time_popover_returns_fs(qapp, qtbot):
     from mf4_analyzer.ui.drawers.rebuild_time_popover import RebuildTimePopover
     p = RebuildTimePopover(parent=None, target_filename="data.mf4", current_fs=1000)
+    qtbot.addWidget(p)
     p.spin_fs.setValue(500)
     assert p.new_fs() == 500
+
+
+def test_rebuild_time_popover_anchors_below_widget(qapp, qtbot):
+    from PyQt5.QtWidgets import QPushButton
+    from mf4_analyzer.ui.drawers.rebuild_time_popover import RebuildTimePopover
+    anchor = QPushButton("⏱")
+    qtbot.addWidget(anchor)
+    anchor.move(100, 200)
+    anchor.show()
+    qtbot.waitExposed(anchor)
+    p = RebuildTimePopover(parent=None, target_filename="d.mf4", current_fs=1000)
+    qtbot.addWidget(p)
+    p.show_at(anchor)
+    qtbot.waitExposed(p)
+    # popover top-left should equal anchor.mapToGlobal(bottomLeft)
+    expected = anchor.mapToGlobal(anchor.rect().bottomLeft())
+    assert abs(p.pos().x() - expected.x()) < 3
+    assert abs(p.pos().y() - expected.y()) < 3
+
+
+def test_rebuild_time_popover_does_not_close_on_spin_interaction(qapp, qtbot):
+    from mf4_analyzer.ui.drawers.rebuild_time_popover import RebuildTimePopover
+    p = RebuildTimePopover(parent=None, target_filename="d.mf4", current_fs=1000)
+    qtbot.addWidget(p)
+    p.show()
+    qtbot.waitExposed(p)
+    # Spinbox focus must not close the popover (regression test for Qt.Popup bug)
+    p.spin_fs.setFocus()
+    qapp.processEvents()
+    assert p.isVisible()
+    p.spin_fs.setValue(500)
+    qapp.processEvents()
+    assert p.isVisible()
 ```
 
 - [ ] **Step 2: Implement**
@@ -2587,8 +2861,12 @@ from PyQt5.QtWidgets import (
 class RebuildTimePopover(QDialog):
     def __init__(self, parent, target_filename, current_fs):
         super().__init__(parent)
-        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint | Qt.Popup)
-        self.setModal(True)
+        # §8.1: frameless QDialog with manual focus-out close. NOT Qt.Popup
+        # because Qt.Popup + child QSpinBox can close when the spin buttons
+        # take focus; the dialog must stay open while user edits Fs.
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        self.setModal(False)
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
         root.addWidget(QLabel("重建时间轴"))
@@ -2619,6 +2897,17 @@ class RebuildTimePopover(QDialog):
         gp = anchor_widget.mapToGlobal(anchor_widget.rect().bottomLeft())
         self.move(gp)
         self.show()
+        self.spin_fs.setFocus()
+        self.activateWindow()
+
+    # §8.1: auto-close when focus leaves the popover *and* its descendants.
+    # Qt emits WindowDeactivate when the app itself loses active window.
+    def event(self, ev):
+        from PyQt5.QtCore import QEvent
+        if ev.type() == QEvent.WindowDeactivate and self.isVisible():
+            # close with reject so exec_() returns non-Accepted
+            self.reject()
+        return super().event(ev)
 ```
 
 - [ ] **Step 3: Update `MainWindow._show_rebuild_popover`**
@@ -2696,7 +2985,9 @@ class AxisLockPopover(QDialog):
 
     def __init__(self, parent=None, current='none'):
         super().__init__(parent)
-        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint | Qt.Popup)
+        # §8.1: frameless QDialog with WindowDeactivate → close. NOT Qt.Popup.
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setModal(False)
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)
         root.addWidget(QLabel("轴锁（按方向拖选缩放）"))
@@ -2716,23 +3007,29 @@ class AxisLockPopover(QDialog):
         gp = anchor.mapToGlobal(anchor.rect().bottomLeft())
         self.move(gp)
         self.show()
+        self.activateWindow()
+
+    def event(self, ev):
+        from PyQt5.QtCore import QEvent
+        if ev.type() == QEvent.WindowDeactivate and self.isVisible():
+            self.close()
+        return super().event(ev)
 ```
 
 - [ ] **Step 3: Update `MainWindow._show_axis_lock_popover`**
 
+Canvas is single source of truth for axis-lock state (§12.1). Popover initializes from `canvas_time._axis_lock`, mutates via `set_axis_lock`.
+
 ```python
 def _show_axis_lock_popover(self, anchor):
     from .drawers.axis_lock_popover import AxisLockPopover
-    current = getattr(self, '_axis_lock_state', 'none')
+    current = self.canvas_time._axis_lock or 'none'
     pop = AxisLockPopover(self, current=current)
-    pop.lock_changed.connect(self._set_axis_lock)
+    pop.lock_changed.connect(self.canvas_time.set_axis_lock)
     pop.show_at(anchor)
-    pop.exec_()
-
-def _set_axis_lock(self, mode):
-    self._axis_lock_state = mode
-    self.canvas_time.set_axis_lock(mode)
 ```
+
+Delete the placeholder `_axis_lock_state` attribute on MainWindow if it was introduced in Phase 1 — canvas owns the value.
 
 - [ ] **Step 4: Delete old module**
 
@@ -2750,12 +3047,25 @@ Run: Grep `from .axis_lock_toolbar import` across `mf4_analyzer/` — none shoul
 def test_axis_lock_popover_emits(qapp, qtbot):
     from mf4_analyzer.ui.drawers.axis_lock_popover import AxisLockPopover
     p = AxisLockPopover(current='none')
+    qtbot.addWidget(p)
     with qtbot.waitSignal(p.lock_changed, timeout=200) as bl:
         for b in p._grp.buttons():
             if b.property('lock_key') == 'x':
                 b.setChecked(True)
                 break
     assert bl.args == ['x']
+
+
+def test_axis_lock_popover_anchors(qapp, qtbot):
+    from PyQt5.QtWidgets import QPushButton
+    from mf4_analyzer.ui.drawers.axis_lock_popover import AxisLockPopover
+    anchor = QPushButton("🔒"); qtbot.addWidget(anchor); anchor.move(50, 100); anchor.show()
+    qtbot.waitExposed(anchor)
+    p = AxisLockPopover(current='x'); qtbot.addWidget(p)
+    p.show_at(anchor); qtbot.waitExposed(p)
+    expected = anchor.mapToGlobal(anchor.rect().bottomLeft())
+    assert abs(p.pos().x() - expected.x()) < 3
+    assert abs(p.pos().y() - expected.y()) < 3
 ```
 
 - [ ] **Step 6: Run**
@@ -2774,31 +3084,118 @@ git rm mf4_analyzer/ui/axis_lock_toolbar.py
 git commit -m "feat(ui): axis lock as frameless popover; delete old toolbar strip"
 ```
 
-### Task 3.5: Remove obsolete cursor_label + AxisLockBar imports
+### Task 3.5: Rewrite `_reset_cursors` + `_reset_plot_state` for new widget topology
+
+The old `_reset_cursors` and `_reset_plot_state` touch `self.lbl_cursor / self.lbl_dual / self.stats / self.chk_cursor / self.chk_dual / self.combo_xaxis_ch` — all of which were either deleted or migrated by Task 2.3–2.10. They'll crash on the first file close if not rewritten. This task finishes the migration by rewriting both methods against the real widget topology.
 
 **Files:**
 - Modify: `mf4_analyzer/ui/main_window.py`
 
-- [ ] **Step 1: Grep for dead imports**
+- [ ] **Step 1: Rewrite `_reset_cursors`**
 
-Run: Grep `from .axis_lock_toolbar` — should be gone.
-Run: Grep `AxisLockBar` — should not appear.
-Run: Grep `self.lbl_cursor` or `self.lbl_dual` — should be fully removed.
+```python
+def _reset_cursors(self):
+    """Reset both single and dual cursor state on the time-domain canvas."""
+    self.canvas_time._ax = self.canvas_time._bx = None
+    self.canvas_time._placing = 'A'
+    self.canvas_time._refresh = True
+    self.canvas_time.draw_idle()
+    # Clear the ChartStack-owned cursor pill (no more lbl_cursor/lbl_dual)
+    self.chart_stack._cursor_pill.setText("")
+    self.chart_stack._cursor_dual_pill.setText("")
+    self.chart_stack._cursor_pill.setVisible(False)
+    self.chart_stack._cursor_dual_pill.setVisible(False)
+    self.statusBar.showMessage("游标已重置")
+```
 
-- [ ] **Step 2: Remove import lines**
+- [ ] **Step 2: Rewrite `_reset_plot_state`**
 
-If any remain in `main_window.py`, remove.
+```python
+def _reset_plot_state(self, scope='file'):
+    """Wipe plot-related state after a file close.
+    scope in {'file', 'all'}; both paths currently share code.
+    """
+    self.chart_stack.full_reset_all()
+    # Cursor pill (ChartStack owns both)
+    self.chart_stack._cursor_pill.setText("")
+    self.chart_stack._cursor_pill.setVisible(False)
+    self.chart_stack._cursor_dual_pill.setText("")
+    self.chart_stack._cursor_dual_pill.setVisible(False)
+    # Stats strip
+    self.chart_stack.stats_strip.update_stats({})
+    # Inspector cursor mode → back to 'single' default
+    self.inspector.time_ctx.set_cursor_mode('single')
+    # Axis-lock popover is transient; canvas state resets in full_reset()
+    # Invalidate custom X axis pointer if source gone
+    if self._custom_xaxis_fid is not None and self._custom_xaxis_fid not in self.files:
+        self._custom_xaxis_fid = None
+        self._custom_xaxis_ch = None
+        self._custom_xlabel = None
+        self.inspector.top.set_xaxis_mode('time')
+    # Refill candidates
+    if self.inspector.top.xaxis_mode() == 'channel':
+        self._on_xaxis_mode_changed('channel')
+    self._update_combos()
+    if not self.files:
+        self.inspector.top.set_range_limits(0, 0)
+        self.inspector.top.spin_start.setValue(0)
+        self.inspector.top.spin_end.setValue(0)
+    else:
+        max_t = max(
+            (fd.time_array[-1] for fd in self.files.values() if len(fd.time_array)),
+            default=0,
+        )
+        self.inspector.top.set_range_limits(0, max_t)
+        lo, hi = self.inspector.top.range_values()
+        if hi > max_t:
+            self.inspector.top.spin_end.setValue(max_t)
+        if lo > max_t:
+            self.inspector.top.spin_start.setValue(0)
+        if self._active in self.files:
+            fs = self.files[self._active].fs
+            self.inspector.fft_ctx.set_fs(fs)
+            self.inspector.order_ctx.set_fs(fs)
+    # Re-plot remaining channels (or clear if empty)
+    self.plot_time()
+```
 
-- [ ] **Step 3: Run full suite**
+- [ ] **Step 3: Delete dead imports / references**
+
+Grep `main_window.py` for:
+- `self.lbl_cursor` / `self.lbl_dual` / `self.stats.` / `self.chk_cursor` / `self.chk_dual` / `self.combo_xaxis_ch` / `self.combo_xaxis` / `self.chk_range` / `self.spin_start` / `self.spin_end` / `self.spin_fs` / `self.combo_sig` / `self.combo_rpm` / `self.spin_fs` / `self.spin_xt` / `self.spin_yt` / `self.chk_fft_autoscale` / `self.chk_fft_remark` / `self.combo_win` / `self.combo_nfft` / `self.spin_overlap` / `self.spin_mo` / `self.spin_order_res` / `self.combo_order_nfft` / `self.spin_time_res` / `self.spin_rpm_res` / `self.spin_to` / `self.spin_rf` / `self.btn_load` / `self.btn_close` / `self.btn_close_all` / `self.btn_plot` / `self.btn_reset` / `self.btn_edit` / `self.btn_export` / `self.btn_rebuild_time` / `self.btn_fft` / `self.btn_ot` / `self.btn_or` / `self.btn_ok` / `self.btn_apply_xaxis` / `self.edit_xlabel` / `self.lbl_info` / `self.lbl_order_progress` / `self.tabs` / `self.combo_mode` / `self._legacy_hidden` / `from .axis_lock_toolbar`
+
+All should be gone. If any remain, remove them or replace with Inspector/ChartStack/Navigator API calls.
+
+- [ ] **Step 4: Delete the `_legacy_hidden` holder**
+
+Remove `self._legacy_hidden = QWidget(self)` from `_init_ui` — all shim widgets should now be unreferenced. Its disappearance is the Phase 2 completion signal.
+
+- [ ] **Step 5: Run full suite**
 
 Run: `pytest -v`
-Expected: all pass.
+Expected: all pass; close-file flow no longer crashes; `_reset_plot_state` path covered by `test_close_file_resets_plot` smoke.
 
-- [ ] **Step 4: Commit (if any changes)**
+- [ ] **Step 6: Add close-flow smoke test**
+
+```python
+# tests/ui/test_main_window_smoke.py
+def test_close_file_resets_inspector(qapp, qtbot, loaded_csv):
+    from unittest.mock import patch
+    w = MainWindow(); qtbot.addWidget(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    assert w.files
+    w._close(next(iter(w.files)))
+    # No crash; stats strip shows placeholder
+    assert '—' in w.chart_stack.stats_strip._lbl_summary.text()
+```
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add mf4_analyzer/ui/main_window.py
-git commit -m "chore(ui): clean up obsolete imports after drawer migration"
+git add mf4_analyzer/ui/main_window.py tests/ui/test_main_window_smoke.py
+git commit -m "refactor(ui): rewrite _reset_cursors/_reset_plot_state against new widgets"
 ```
 
 ---
