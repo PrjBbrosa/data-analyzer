@@ -78,3 +78,25 @@ def test_fft_contextual_fft_button_emits(qapp, qtbot):
     fc = FFTContextual()
     with qtbot.waitSignal(fc.fft_requested, timeout=200):
         fc.btn_fft.click()
+
+
+# ---- Task 2.6: OrderContextual ----
+
+def test_order_contextual_params(qapp):
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    p = oc.get_params()
+    for k in ('max_order', 'order_res', 'time_res', 'rpm_res', 'nfft'):
+        assert k in p
+    assert oc.target_order() > 0
+
+
+def test_order_contextual_emits(qapp, qtbot):
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    with qtbot.waitSignal(oc.order_time_requested, timeout=200):
+        oc.btn_ot.click()
+    with qtbot.waitSignal(oc.order_rpm_requested, timeout=200):
+        oc.btn_or.click()
+    with qtbot.waitSignal(oc.order_track_requested, timeout=200):
+        oc.btn_ok.click()

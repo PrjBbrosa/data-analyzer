@@ -1,8 +1,9 @@
-"""Inspector section widgets (Phase 2 incremental).
+"""Inspector section widgets (Phase 2).
 
-PersistentTop, TimeContextual, and FFTContextual implemented;
-OrderContextual remains a Phase 1 stub — it will be replaced in the
-next commit.
+PersistentTop hosts the always-visible xaxis/range/tick-density controls.
+TimeContextual / FFTContextual / OrderContextual host the mode-specific
+parameter cards. Public getter/setter names are a contract consumed by
+MainWindow's analysis methods — do not rename without updating callers.
 """
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
@@ -322,13 +323,148 @@ class FFTContextual(QWidget):
 
 
 class OrderContextual(QWidget):
+    """Order-analysis contextual: source/params/3 compute btns + tracking sub-group."""
+
     order_time_requested = pyqtSignal()
     order_rpm_requested = pyqtSignal()
     order_track_requested = pyqtSignal()
-    rebuild_time_requested = pyqtSignal(object)
-    signal_changed = pyqtSignal(object)
+    rebuild_time_requested = pyqtSignal(object)  # anchor widget
+    signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("[order-contextual stub]", self))
+        root = QVBoxLayout(self)
+        root.setSpacing(6)
+
+        g = QGroupBox("信号源")
+        fl = QFormLayout(g)
+        self.combo_sig = QComboBox()
+        fl.addRow("信号:", self.combo_sig)
+        self.combo_rpm = QComboBox()
+        fl.addRow("转速:", self.combo_rpm)
+        self.spin_fs = QDoubleSpinBox()
+        self.spin_fs.setRange(1, 1e6)
+        self.spin_fs.setValue(1000)
+        self.spin_fs.setSuffix(" Hz")
+        fs_row = QHBoxLayout()
+        fs_row.addWidget(self.spin_fs)
+        self.btn_rebuild = QPushButton("⏱")
+        self.btn_rebuild.setMaximumWidth(30)
+        self.btn_rebuild.setToolTip("重建时间轴")
+        self.btn_rebuild.clicked.connect(
+            lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
+        )
+        fs_row.addWidget(self.btn_rebuild)
+        fl.addRow("Fs:", fs_row)
+        self.spin_rf = QDoubleSpinBox()
+        self.spin_rf.setRange(0.0001, 10000)
+        self.spin_rf.setDecimals(4)
+        self.spin_rf.setValue(1)
+        fl.addRow("RPM系数:", self.spin_rf)
+        root.addWidget(g)
+
+        g = QGroupBox("谱参数")
+        fl = QFormLayout(g)
+        self.spin_mo = QSpinBox()
+        self.spin_mo.setRange(1, 100)
+        self.spin_mo.setValue(20)
+        fl.addRow("最大阶次:", self.spin_mo)
+        self.spin_order_res = QDoubleSpinBox()
+        self.spin_order_res.setRange(0.01, 1.0)
+        self.spin_order_res.setValue(0.1)
+        self.spin_order_res.setSingleStep(0.05)
+        fl.addRow("阶次分辨率:", self.spin_order_res)
+        self.spin_time_res = QDoubleSpinBox()
+        self.spin_time_res.setRange(0.01, 1.0)
+        self.spin_time_res.setValue(0.05)
+        self.spin_time_res.setSuffix(" s")
+        fl.addRow("时间分辨率:", self.spin_time_res)
+        self.spin_rpm_res = QSpinBox()
+        self.spin_rpm_res.setRange(1, 100)
+        self.spin_rpm_res.setValue(10)
+        self.spin_rpm_res.setSuffix(" rpm")
+        fl.addRow("RPM分辨率:", self.spin_rpm_res)
+        self.combo_nfft = QComboBox()
+        self.combo_nfft.addItems(['512', '1024', '2048', '4096', '8192'])
+        self.combo_nfft.setCurrentText('1024')
+        fl.addRow("FFT点数:", self.combo_nfft)
+        root.addWidget(g)
+
+        two_btns = QHBoxLayout()
+        self.btn_ot = QPushButton("▶ 时间-阶次")
+        self.btn_or = QPushButton("▶ 转速-阶次")
+        two_btns.addWidget(self.btn_ot)
+        two_btns.addWidget(self.btn_or)
+        root.addLayout(two_btns)
+
+        g = QGroupBox("阶次跟踪")
+        fl = QFormLayout(g)
+        self.spin_to = QDoubleSpinBox()
+        self.spin_to.setRange(0.5, 100)
+        self.spin_to.setValue(1)
+        fl.addRow("目标阶次:", self.spin_to)
+        self.btn_ok = QPushButton("▶ 阶次跟踪")
+        fl.addRow(self.btn_ok)
+        root.addWidget(g)
+
+        self.lbl_progress = QLabel("")
+        root.addWidget(self.lbl_progress)
+        root.addStretch()
+
+        self.btn_ot.clicked.connect(self.order_time_requested)
+        self.btn_or.clicked.connect(self.order_rpm_requested)
+        self.btn_ok.clicked.connect(self.order_track_requested)
+
+    def _on_sig_index_changed(self):
+        self.signal_changed.emit(self.combo_sig.currentData())
+
+    def set_signal_candidates(self, candidates):
+        self.combo_sig.blockSignals(True)
+        self.combo_sig.clear()
+        for text, data in candidates:
+            self.combo_sig.addItem(text, data)
+        self.combo_sig.blockSignals(False)
+        try:
+            self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
+        except TypeError:
+            pass
+        self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
+        self._on_sig_index_changed()
+
+    def set_rpm_candidates(self, candidates):
+        self.combo_rpm.clear()
+        self.combo_rpm.addItem("None", None)
+        for text, data in candidates:
+            self.combo_rpm.addItem(text, data)
+
+    def current_signal(self):
+        return self.combo_sig.currentData()
+
+    def current_rpm(self):
+        return self.combo_rpm.currentData()
+
+    def fs(self):
+        return self.spin_fs.value()
+
+    def set_fs(self, fs):
+        self.spin_fs.blockSignals(True)
+        self.spin_fs.setValue(fs)
+        self.spin_fs.blockSignals(False)
+
+    def rpm_factor(self):
+        return self.spin_rf.value()
+
+    def get_params(self):
+        return dict(
+            max_order=self.spin_mo.value(),
+            order_res=self.spin_order_res.value(),
+            time_res=self.spin_time_res.value(),
+            rpm_res=self.spin_rpm_res.value(),
+            nfft=int(self.combo_nfft.currentText()),
+        )
+
+    def target_order(self):
+        return self.spin_to.value()
+
+    def set_progress(self, text):
+        self.lbl_progress.setText(text)
