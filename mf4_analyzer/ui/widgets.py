@@ -26,7 +26,6 @@ class StatisticsPanel(QFrame):
         self.tree.setHeaderLabels(['Channel', 'Min', 'Max', 'Mean', 'RMS', 'Std', 'P-P'])
         self.tree.setAlternatingRowColors(True);
         self.tree.setRootIsDecorated(False);
-        self.tree.setStyleSheet("font-size:15px;")
         h = self.tree.header();
         h.setStretchLastSection(False);
         h.setSectionResizeMode(0, QHeaderView.Stretch)
