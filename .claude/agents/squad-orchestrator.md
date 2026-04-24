@@ -91,6 +91,15 @@ in the brief:
 - Treat Graphite Lab, Aero Glass, and Signal Studio as later optional
   themes unless the user explicitly selects one.
 
+For screenshot feedback about narrow panes, overlapping Inspector
+controls, left navigator file-list height, scrollbars, splitters, or
+responsive layout, route to `pyqt-ui-engineer` and cite:
+
+- `docs/lessons-learned/pyqt-ui/2026-04-24-responsive-pane-containers.md`
+
+The brief should ask for container-level scroll/splitter/stretch fixes
+before changing form semantics or label placement.
+
 If keywords overlap, split into multiple subtasks rather than picking one.
 When a keyword names a **surface** (plot, canvas, axis, label, color, tick)
 rather than a **computation** (FFT, Welch, filter), prefer

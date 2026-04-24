@@ -47,6 +47,12 @@ Implementation guidance:
   chart tools on the right.
 - For file/channel panes, show active state with a subtle tinted row and
   a narrow accent indicator rather than a full saturated block.
+- For responsive pane issues, fix the container first: inspect scroll
+  areas, splitter sizing, stretch factors, and min/max constraints before
+  changing form structure or label placement.
+- For the left navigator, file-list capacity should be handled with a
+  resizable vertical splitter/file region rather than a small fixed
+  maximum height that only shows one loaded file.
 - For channels, keep color swatches synchronized with matplotlib line
   colors.
 - For ChartStack, make the chart workspace feel like the primary work
@@ -54,6 +60,13 @@ Implementation guidance:
   clean cursor pill, and compact stats strip.
 - For Inspector, use compact section headers, aligned form rows, and
   one clear primary action per context.
+- For right Inspector overflow, preserve compact `QFormLayout` rows and
+  use a pane-level `QScrollArea` unless the user explicitly requests a
+  different field layout.
+- For narrow-pane, overlap, clipping, splitter, or multi-file navigator
+  feedback, consult
+  `docs/lessons-learned/pyqt-ui/2026-04-24-responsive-pane-containers.md`
+  before editing.
 - Avoid broad glass/blur effects in the first PyQt5 implementation.
   Semi-transparent surfaces and shadows are acceptable, but CSS-like
   `backdrop-filter` should not be treated as a v1 requirement.

@@ -15,6 +15,8 @@ Write protocol: `docs/lessons-learned/README.md`.
 
 ## pyqt-ui
 
+- [responsive-pane-containers](pyqt-ui/2026-04-24-responsive-pane-containers.md) [layout][inspector][navigator] — Use scroll/splitters before changing forms.
+
 ## refactor
 
 - [cross-layer-constant-promote-to-package-root](refactor/2026-04-22-cross-layer-constant-promote-to-package-root.md) [layering][constants][dependency-rules] — When two layers forbidden from importing each other share a constant, hoist it to the package root, do not duplicate it.
