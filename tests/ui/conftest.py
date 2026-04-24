@@ -1,4 +1,5 @@
 """Shared pytest fixtures for UI tests."""
+import gc
 import os
 # Force offscreen Qt platform for headless CI *before* QApplication exists
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -12,6 +13,19 @@ def qapp():
     """Session-wide QApplication so each test reuses the instance."""
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def _collect_mpl_cycles_between_tests():
+    # matplotlib Figure/FigureCanvasQTAgg hold strong reference cycles
+    # (figure.canvas <-> canvas.figure plus mpl_connect lambdas capturing
+    # self). Tests that don't register widgets with qtbot leave zombies
+    # behind; once enough accumulate, a subsequent paintEvent allocation
+    # trips Python's cyclic GC mid-QPainter.drawImage and segfaults on
+    # Windows. Forcing a collection between tests keeps the heap clean so
+    # no collection fires inside a live paint path.
+    yield
+    gc.collect()
 
 
 @pytest.fixture
