@@ -490,7 +490,7 @@ mf4_analyzer/ui/
 | `Inspector.order_rpm_requested` | `inspector.py` | `MainWindow.do_order_rpm` | `▶ 转速-阶次` 触发 |
 | `Inspector.order_track_requested` | `inspector.py` | `MainWindow.do_order_track` | `▶ 阶次跟踪` 触发 |
 | `Inspector.xaxis_apply_requested` | `inspector.py` | `MainWindow._apply_xaxis` | `应用` 按钮 |
-| `Inspector.rebuild_time_requested(fs)` | `inspector.py`（popover 内） | `MainWindow.rebuild_time_axis(fid, fs)` | 目标 fid 由 Inspector 依据当前信号下拉解析 |
+| `Inspector.rebuild_time_requested(anchor, mode)` | `inspector.py`（relayed from fft_ctx/order_ctx btn_rebuild） | `MainWindow._show_rebuild_popover(anchor, mode)` | `mode` ∈ {'fft', 'order'} identifies which contextual emitted; `_show_rebuild_popover` resolves target_fid from that contextual's current_signal() → opens popover → on accept calls `fd.rebuild_time_axis(new_fs)` directly on the FileData object |
 | `Inspector.tick_density_changed(xt, yt)` | `inspector.py` | `MainWindow._update_all_tick_density` | 保留现行为 |
 | `Inspector.remark_toggled(bool)` | `inspector.py` | `PlotCanvas.set_remark_enabled` | FFT `标注` checkbox |
 | `TimeDomainCanvas.cursor_info(str)` | `canvases.py` | `ChartStack` cursor pill | 单游标读数 |
