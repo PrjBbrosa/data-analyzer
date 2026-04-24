@@ -82,3 +82,16 @@ def test_file_activation_updates_inspector_fs_and_range(qapp, qtbot, loaded_csv)
     assert w.inspector.order_ctx.fs() == pytest.approx(fd.fs, abs=0.01)
     # range limit upper bound should match time_array tail
     assert w.inspector.top.spin_end.maximum() >= fd.time_array[-1]
+
+
+def test_close_file_resets_inspector(qapp, qtbot, loaded_csv):
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+    w = MainWindow(); qtbot.addWidget(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    assert w.files
+    w._close(next(iter(w.files)))
+    # No crash; stats strip shows placeholder
+    assert '—' in w.chart_stack.stats_strip._lbl_summary.text()
