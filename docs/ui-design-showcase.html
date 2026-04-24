@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MF4 Analyzer UI Design Showcase</title>
+  <style>
+    :root {
+      --page: #eef2f7;
+      --ink: #111827;
+      --muted: #64748b;
+      --line: #d7dee8;
+      --surface: #ffffff;
+      --surface-2: #f8fafc;
+      --accent: #1769e0;
+      --accent-2: #0f9f8f;
+      --danger: #dc2626;
+      --warning: #d97706;
+      --chart-1: #2563eb;
+      --chart-2: #059669;
+      --chart-3: #dc2626;
+      --chart-4: #7c3aed;
+      --shadow: 0 24px 70px rgba(15, 23, 42, 0.14);
+      --soft-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+      --radius: 14px;
+      color-scheme: light;
+      font-family: Inter, "SF Pro Display", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% 8%, rgba(23, 105, 224, 0.12), transparent 30%),
+        radial-gradient(circle at 90% 20%, rgba(15, 159, 143, 0.12), transparent 34%),
+        linear-gradient(135deg, #f8fafc 0%, var(--page) 52%, #e8eef6 100%);
+      color: var(--ink);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .shell {
+      width: min(1540px, calc(100vw - 48px));
+      margin: 0 auto;
+      padding: 34px 0 48px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 22px;
+      align-items: end;
+      margin-bottom: 24px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 860px;
+      font-size: clamp(30px, 4vw, 56px);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+
+    .intro {
+      margin: 14px 0 0;
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.7;
+    }
+
+    .meta-card {
+      min-width: 300px;
+      padding: 16px;
+      border: 1px solid rgba(148, 163, 184, 0.34);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.7);
+      box-shadow: var(--soft-shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .meta-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .meta-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .theme-switcher {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 24px 0;
+    }
+
+    .theme-card {
+      position: relative;
+      min-height: 126px;
+      padding: 16px;
+      border: 1px solid rgba(148, 163, 184, 0.34);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.74);
+      color: var(--ink);
+      text-align: left;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+      transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .theme-card:hover,
+    .theme-card.active {
+      transform: translateY(-2px);
+      border-color: color-mix(in srgb, var(--accent) 48%, #ffffff);
+      box-shadow: 0 16px 42px rgba(15, 23, 42, 0.13);
+    }
+
+    .theme-card.active::after {
+      content: "";
+      position: absolute;
+      inset: auto 16px 13px 16px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    .theme-card b {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 16px;
+    }
+
+    .theme-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .swatches {
+      display: flex;
+      gap: 6px;
+      margin-top: 13px;
+    }
+
+    .swatches i {
+      width: 22px;
+      height: 22px;
+      border: 1px solid rgba(15, 23, 42, 0.1);
+      border-radius: 50%;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34);
+    }
+
+    .stage {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .preview-frame {
+      overflow: hidden;
+      min-height: 760px;
+      border: 1px solid rgba(100, 116, 139, 0.28);
+      border-radius: 24px;
+      background: var(--frame-bg, #e8eef6);
+      box-shadow: var(--shadow);
+    }
+
+    .app-mock {
+      height: 100%;
+      min-height: 760px;
+      display: grid;
+      grid-template-rows: 48px 1fr 34px;
+      background: var(--app-bg, #f1f5f9);
+      color: var(--app-text, #111827);
+    }
+
+    .commandbar {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 16px;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--app-line, #d7dee8);
+      background: var(--bar-bg, rgba(255, 255, 255, 0.84));
+      backdrop-filter: blur(16px);
+    }
+
+    .command-group {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .command-group.right {
+      justify-content: flex-end;
+    }
+
+    .tool,
+    .seg {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      height: 32px;
+      min-width: 32px;
+      border: 1px solid var(--button-line, rgba(148, 163, 184, 0.5));
+      border-radius: 8px;
+      background: var(--button-bg, #ffffff);
+      color: var(--app-text, #111827);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .tool.icon-only {
+      width: 34px;
+      padding: 0;
+    }
+
+    .tool.primary {
+      border-color: color-mix(in srgb, var(--theme-accent, #1769e0) 82%, #000000);
+      background: var(--theme-accent, #1769e0);
+      color: #ffffff;
+    }
+
+    .icon {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .segmented {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--button-line, rgba(148, 163, 184, 0.5));
+      border-radius: 10px;
+      background: var(--seg-bg, rgba(15, 23, 42, 0.06));
+    }
+
+    .seg {
+      min-width: 66px;
+      border: none;
+      background: transparent;
+      color: var(--muted-on-app, #64748b);
+    }
+
+    .seg.active {
+      background: var(--seg-active, #ffffff);
+      color: var(--app-text, #111827);
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.13);
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 245px minmax(520px, 1fr) 285px;
+      min-height: 0;
+    }
+
+    .pane {
+      min-width: 0;
+      padding: 12px;
+      border-right: 1px solid var(--app-line, #d7dee8);
+      background: var(--pane-bg, #f8fafc);
+    }
+
+    .pane.right {
+      border-right: none;
+      border-left: 1px solid var(--app-line, #d7dee8);
+    }
+
+    .pane-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      color: var(--app-text, #111827);
+      font-size: 12px;
+      font-weight: 780;
+    }
+
+    .count {
+      min-width: 24px;
+      height: 20px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 999px;
+      background: var(--quiet-chip, rgba(15, 23, 42, 0.06));
+      color: var(--muted-on-app, #64748b);
+      font-size: 11px;
+    }
+
+    .file-row {
+      position: relative;
+      padding: 10px 11px 10px 14px;
+      margin-bottom: 7px;
+      border: 1px solid var(--row-line, transparent);
+      border-radius: 10px;
+      background: var(--row-bg, transparent);
+    }
+
+    .file-row.active {
+      border-color: color-mix(in srgb, var(--theme-accent, #1769e0) 24%, transparent);
+      background: var(--active-row, rgba(23, 105, 224, 0.1));
+    }
+
+    .file-row.active::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 10px;
+      bottom: 10px;
+      width: 3px;
+      border-radius: 999px;
+      background: var(--theme-accent, #1769e0);
+    }
+
+    .file-row b {
+      display: block;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 12px;
+    }
+
+    .file-row span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted-on-app, #64748b);
+      font-size: 11px;
+    }
+
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      height: 32px;
+      padding: 0 9px;
+      margin: 12px 0 8px;
+      border: 1px solid var(--input-line, #d7dee8);
+      border-radius: 8px;
+      background: var(--input-bg, #ffffff);
+      color: var(--muted-on-app, #64748b);
+      font-size: 12px;
+    }
+
+    .mini-actions {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    .mini-actions span {
+      display: grid;
+      place-items: center;
+      height: 26px;
+      border: 1px solid var(--button-line, rgba(148, 163, 184, 0.5));
+      border-radius: 7px;
+      background: var(--button-bg, #ffffff);
+      color: var(--app-text, #111827);
+      font-size: 11px;
+      font-weight: 680;
+    }
+
+    .channel {
+      display: grid;
+      grid-template-columns: 16px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 28px;
+      padding: 5px 7px;
+      border-radius: 7px;
+      color: var(--channel-text, var(--app-text, #111827));
+      font-size: 11px;
+    }
+
+    .channel:nth-child(odd) {
+      background: var(--channel-alt, rgba(15, 23, 42, 0.035));
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      background: var(--c, var(--chart-1));
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--c, #2563eb) 18%, transparent);
+    }
+
+    .unit {
+      color: var(--muted-on-app, #64748b);
+      font-size: 10px;
+    }
+
+    .chart-zone {
+      min-width: 0;
+      padding: 14px;
+      background: var(--chart-zone, #f1f5f9);
+    }
+
+    .chart-card {
+      height: 100%;
+      min-height: 640px;
+      display: grid;
+      grid-template-rows: 38px 1fr 54px;
+      overflow: hidden;
+      border: 1px solid var(--chart-line, #d7dee8);
+      border-radius: 14px;
+      background: var(--chart-surface, #ffffff);
+      box-shadow: var(--chart-shadow, 0 10px 30px rgba(15, 23, 42, 0.07));
+    }
+
+    .chart-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--chart-line, #d7dee8);
+      background: var(--chart-head, #ffffff);
+    }
+
+    .nav-icons {
+      display: flex;
+      gap: 9px;
+      color: var(--muted-on-app, #64748b);
+    }
+
+    .chart-title {
+      color: var(--app-text, #111827);
+      font-size: 12px;
+      font-weight: 740;
+    }
+
+    .plot {
+      position: relative;
+      padding: 22px 24px 22px 28px;
+    }
+
+    .plot svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .cursor-pill {
+      position: absolute;
+      left: 28px;
+      bottom: 18px;
+      max-width: min(720px, calc(100% - 56px));
+      padding: 8px 10px;
+      border: 1px solid var(--pill-line, rgba(148, 163, 184, 0.38));
+      border-radius: 8px;
+      background: var(--pill-bg, rgba(255, 255, 255, 0.9));
+      color: var(--app-text, #111827);
+      font-size: 11px;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.11);
+      backdrop-filter: blur(12px);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 9px 12px;
+      border-top: 1px solid var(--chart-line, #d7dee8);
+      background: var(--stats-bg, #f8fafc);
+      color: var(--muted-on-app, #64748b);
+      font-size: 11px;
+    }
+
+    .stats strong {
+      color: var(--app-text, #111827);
+    }
+
+    .section {
+      margin-bottom: 11px;
+      padding: 12px;
+      border: 1px solid var(--section-line, #d7dee8);
+      border-radius: 12px;
+      background: var(--section-bg, #ffffff);
+      box-shadow: var(--section-shadow, none);
+    }
+
+    .section h3 {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+      color: var(--app-text, #111827);
+      font-size: 12px;
+      letter-spacing: 0;
+    }
+
+    .field {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      gap: 8px;
+      align-items: center;
+      margin-top: 8px;
+      color: var(--muted-on-app, #64748b);
+      font-size: 11px;
+    }
+
+    .control {
+      min-height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 8px;
+      border: 1px solid var(--input-line, #d7dee8);
+      border-radius: 7px;
+      background: var(--input-bg, #ffffff);
+      color: var(--app-text, #111827);
+      font-size: 11px;
+    }
+
+    .toggle-row,
+    .button-row {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin-top: 9px;
+    }
+
+    .button-row.three {
+      grid-template-columns: repeat(3, 1fr);
+    }
+
+    .choice,
+    .action {
+      display: grid;
+      place-items: center;
+      min-height: 30px;
+      border: 1px solid var(--button-line, rgba(148, 163, 184, 0.5));
+      border-radius: 8px;
+      background: var(--button-bg, #ffffff);
+      color: var(--app-text, #111827);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .choice.active,
+    .action.primary {
+      border-color: var(--theme-accent, #1769e0);
+      background: var(--theme-accent, #1769e0);
+      color: #ffffff;
+    }
+
+    .statusbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-top: 1px solid var(--app-line, #d7dee8);
+      background: var(--bar-bg, rgba(255, 255, 255, 0.84));
+      color: var(--muted-on-app, #64748b);
+      font-size: 11px;
+    }
+
+    .notes {
+      display: grid;
+      gap: 14px;
+    }
+
+    .note-panel {
+      padding: 18px;
+      border: 1px solid rgba(148, 163, 184, 0.32);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.74);
+      box-shadow: var(--soft-shadow);
+    }
+
+    .note-panel h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .note-panel p,
+    .note-panel li {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .note-panel p {
+      margin: 0;
+    }
+
+    .note-panel ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .token-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .token {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .token i {
+      width: 22px;
+      height: 22px;
+      flex: 0 0 22px;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      border-radius: 6px;
+      background: var(--token-color);
+    }
+
+    .roadmap {
+      display: grid;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .step b {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--accent) 12%, #ffffff);
+      color: var(--accent);
+      font-size: 12px;
+    }
+
+    .step span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    body.theme-precision {
+      --theme-accent: #1769e0;
+      --frame-bg: #e8eef6;
+      --app-bg: #f1f5f9;
+      --app-text: #111827;
+      --app-line: #d7dee8;
+      --pane-bg: #f8fafc;
+      --bar-bg: rgba(255, 255, 255, 0.88);
+      --button-bg: #ffffff;
+      --button-line: #cbd5e1;
+      --seg-bg: #e5eaf1;
+      --seg-active: #ffffff;
+      --muted-on-app: #64748b;
+      --quiet-chip: #e8eef6;
+      --active-row: rgba(23, 105, 224, 0.1);
+      --input-bg: #ffffff;
+      --input-line: #d7dee8;
+      --channel-alt: rgba(15, 23, 42, 0.035);
+      --chart-zone: #edf2f8;
+      --chart-surface: #ffffff;
+      --chart-line: #d7dee8;
+      --chart-head: #fbfdff;
+      --stats-bg: #f8fafc;
+      --section-bg: #ffffff;
+      --section-line: #d7dee8;
+    }
+
+    body.theme-graphite {
+      --theme-accent: #38bdf8;
+      --page: #0f172a;
+      --ink: #e5eefb;
+      --muted: #9aa9bd;
+      --line: #334155;
+      --surface: #111827;
+      --surface-2: #0f172a;
+      --app-bg: #0b1120;
+      --app-text: #e5eefb;
+      --app-line: #253247;
+      --pane-bg: #101827;
+      --bar-bg: rgba(15, 23, 42, 0.92);
+      --button-bg: #172235;
+      --button-line: #2d3b50;
+      --seg-bg: #0f172a;
+      --seg-active: #233249;
+      --muted-on-app: #9aa9bd;
+      --quiet-chip: #1d2a3f;
+      --active-row: rgba(56, 189, 248, 0.14);
+      --input-bg: #0f172a;
+      --input-line: #2d3b50;
+      --channel-alt: rgba(255, 255, 255, 0.035);
+      --chart-zone: #0d1526;
+      --chart-surface: #0f172a;
+      --chart-line: #263449;
+      --chart-head: #111c2f;
+      --stats-bg: #111c2f;
+      --section-bg: #111c2f;
+      --section-line: #2d3b50;
+      --pill-bg: rgba(15, 23, 42, 0.86);
+      --pill-line: rgba(148, 163, 184, 0.28);
+      --chart-shadow: 0 20px 50px rgba(0, 0, 0, 0.26);
+      color-scheme: dark;
+    }
+
+    body.theme-aero {
+      --theme-accent: #0e7490;
+      --page: #e8f2f5;
+      --ink: #102a43;
+      --muted: #607383;
+      --app-bg: linear-gradient(135deg, #e7f3f5 0%, #eef5fb 55%, #f4f7fb 100%);
+      --app-text: #102a43;
+      --app-line: rgba(120, 144, 156, 0.28);
+      --pane-bg: rgba(255, 255, 255, 0.46);
+      --bar-bg: rgba(255, 255, 255, 0.56);
+      --button-bg: rgba(255, 255, 255, 0.64);
+      --button-line: rgba(100, 116, 139, 0.28);
+      --seg-bg: rgba(255, 255, 255, 0.4);
+      --seg-active: rgba(255, 255, 255, 0.86);
+      --muted-on-app: #607383;
+      --quiet-chip: rgba(255, 255, 255, 0.62);
+      --active-row: rgba(14, 116, 144, 0.12);
+      --input-bg: rgba(255, 255, 255, 0.62);
+      --input-line: rgba(100, 116, 139, 0.24);
+      --channel-alt: rgba(255, 255, 255, 0.34);
+      --chart-zone: rgba(255, 255, 255, 0.18);
+      --chart-surface: rgba(255, 255, 255, 0.7);
+      --chart-line: rgba(100, 116, 139, 0.24);
+      --chart-head: rgba(255, 255, 255, 0.56);
+      --stats-bg: rgba(255, 255, 255, 0.54);
+      --section-bg: rgba(255, 255, 255, 0.58);
+      --section-line: rgba(100, 116, 139, 0.24);
+      --section-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+      --pill-bg: rgba(255, 255, 255, 0.7);
+    }
+
+    body.theme-signal {
+      --theme-accent: #0f766e;
+      --page: #f3f4ee;
+      --ink: #1f2933;
+      --muted: #6b7280;
+      --app-bg: #f5f4ef;
+      --app-text: #1f2933;
+      --app-line: #d8d6cc;
+      --pane-bg: #fbfaf5;
+      --bar-bg: #fbfaf5;
+      --button-bg: #ffffff;
+      --button-line: #d8d6cc;
+      --seg-bg: #e7e4d9;
+      --seg-active: #ffffff;
+      --muted-on-app: #6b7280;
+      --quiet-chip: #e8e5dc;
+      --active-row: rgba(15, 118, 110, 0.12);
+      --input-bg: #ffffff;
+      --input-line: #d8d6cc;
+      --channel-alt: rgba(31, 41, 51, 0.035);
+      --chart-zone: #efede5;
+      --chart-surface: #fffefa;
+      --chart-line: #d8d6cc;
+      --chart-head: #fffefa;
+      --stats-bg: #fbfaf5;
+      --section-bg: #fffefa;
+      --section-line: #d8d6cc;
+    }
+
+    .theme-graphite .meta-card,
+    .theme-graphite .theme-card,
+    .theme-graphite .note-panel {
+      background: rgba(15, 23, 42, 0.78);
+      border-color: rgba(148, 163, 184, 0.24);
+    }
+
+    .theme-graphite .theme-card.active,
+    .theme-graphite .theme-card:hover {
+      border-color: rgba(56, 189, 248, 0.58);
+    }
+
+    .theme-graphite .step b {
+      background: rgba(56, 189, 248, 0.12);
+      color: #38bdf8;
+    }
+
+    @media (max-width: 1280px) {
+      .stage {
+        grid-template-columns: 1fr;
+      }
+
+      .notes {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 980px) {
+      .shell {
+        width: min(100vw - 24px, 820px);
+        padding-top: 20px;
+      }
+
+      .topbar,
+      .theme-switcher,
+      .notes {
+        grid-template-columns: 1fr;
+      }
+
+      .meta-card {
+        min-width: 0;
+      }
+
+      .preview-frame,
+      .app-mock {
+        min-height: 940px;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .pane,
+      .pane.right {
+        border: none;
+        border-bottom: 1px solid var(--app-line, #d7dee8);
+      }
+
+      .chart-card {
+        min-height: 460px;
+      }
+
+      .commandbar {
+        grid-template-columns: 1fr;
+      }
+
+      .command-group,
+      .command-group.right {
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+    }
+  </style>
+</head>
+<body class="theme-precision">
+  <svg width="0" height="0" style="position:absolute">
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M7 17h13M4 17h1M14 5v4M8 15v4"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12c3.2-7 5.8 7 9 0s5.8 7 9 0"/></symbol>
+    <symbol id="i-bars" viewBox="0 0 24 24"><path d="M4 19V5M9 19v-8M14 19V8M19 19v-5"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></symbol>
+    <symbol id="i-crosshair" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><circle cx="12" cy="12" r="5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><path d="M7 11V8a5 5 0 0 1 10 0v3"/><path d="M6 11h12v10H6z"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7"/><path d="M6 10v10h12V10"/></symbol>
+    <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="M15 15l5 5M10 7v6M7 10h6"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 4h12l2 2v14H5z"/><path d="M8 4v6h8M8 20v-6h8v6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="M15 15l5 5"/></symbol>
+    <symbol id="i-axis" viewBox="0 0 24 24"><path d="M5 19V5M5 19h14"/><path d="M9 15l3-4 3 2 4-7"/></symbol>
+  </svg>
+
+  <main class="shell">
+    <section class="topbar">
+      <div>
+        <p class="eyebrow">MF4 / CSV / Excel Data Analyzer</p>
+        <h1>现代高级 UI 方向提案</h1>
+        <p class="intro">下面是围绕当前三栏结构整理的四套可落地视觉方案。它们不是营销页，而是直接模拟分析工具的真实工作台：文件、通道、图表、参数、统计和状态栏都放进了同一个预览里。</p>
+      </div>
+      <aside class="meta-card">
+        <strong>建议落地方式</strong>
+        <p>先统一 QSS token、图标和工具栏，再逐步升级左侧通道树、图表工作区、Inspector 和弹层。这样视觉提升明显，同时不影响现有分析逻辑。</p>
+      </aside>
+    </section>
+
+    <nav class="theme-switcher" aria-label="设计方案选择">
+      <button class="theme-card active" data-theme="precision">
+        <b>Precision Light</b>
+        <span>工程软件首选。明亮、干净、专业，适合长时间看图和调参。</span>
+        <span class="swatches"><i style="background:#1769e0"></i><i style="background:#f8fafc"></i><i style="background:#111827"></i><i style="background:#0f9f8f"></i></span>
+      </button>
+      <button class="theme-card" data-theme="graphite">
+        <b>Graphite Lab</b>
+        <span>深色实验室风格。强调曲线和光标，适合暗环境、演示和高对比数据。</span>
+        <span class="swatches"><i style="background:#38bdf8"></i><i style="background:#0f172a"></i><i style="background:#e5eefb"></i><i style="background:#22c55e"></i></span>
+      </button>
+      <button class="theme-card" data-theme="aero">
+        <b>Aero Glass</b>
+        <span>轻透明和柔和层次。更现代、更有产品感，但需要克制使用透明度。</span>
+        <span class="swatches"><i style="background:#0e7490"></i><i style="background:#e8f2f5"></i><i style="background:#ffffff"></i><i style="background:#f59e0b"></i></span>
+      </button>
+      <button class="theme-card" data-theme="signal">
+        <b>Signal Studio</b>
+        <span>温润的仪器工作台风格。低刺激、稳定，适合生产环境和数据审查。</span>
+        <span class="swatches"><i style="background:#0f766e"></i><i style="background:#f5f4ef"></i><i style="background:#1f2933"></i><i style="background:#b45309"></i></span>
+      </button>
+    </nav>
+
+    <section class="stage">
+      <div class="preview-frame">
+        <div class="app-mock">
+          <header class="commandbar">
+            <div class="command-group">
+              <span class="tool primary"><svg class="icon"><use href="#i-plus"></use></svg>添加文件</span>
+              <span class="tool"><svg class="icon"><use href="#i-sliders"></use></svg>编辑通道</span>
+              <span class="tool"><svg class="icon"><use href="#i-export"></use></svg>导出</span>
+            </div>
+            <div class="segmented">
+              <span class="seg active"><svg class="icon"><use href="#i-wave"></use></svg>时域</span>
+              <span class="seg"><svg class="icon"><use href="#i-bars"></use></svg>FFT</span>
+              <span class="seg"><svg class="icon"><use href="#i-grid"></use></svg>阶次</span>
+            </div>
+            <div class="command-group right">
+              <span class="tool icon-only" title="游标复位"><svg class="icon"><use href="#i-crosshair"></use></svg></span>
+              <span class="tool icon-only" title="轴锁定"><svg class="icon"><use href="#i-lock"></use></svg></span>
+            </div>
+          </header>
+
+          <div class="workspace">
+            <aside class="pane">
+              <div class="pane-title">文件源 <span class="count">2</span></div>
+              <div class="file-row active">
+                <b>Recorder_2024-01-2</b>
+                <span>6603 行 · 256.0 Hz · 27.23 s</span>
+              </div>
+              <div class="file-row">
+                <b>Recorder_2024-01-3</b>
+                <span>7250 行 · 512.0 Hz · 28.32 s</span>
+              </div>
+
+              <div class="pane-title" style="margin-top:16px">通道 <span class="count">42</span></div>
+              <div class="search"><svg class="icon"><use href="#i-search"></use></svg>Filter channel...</div>
+              <div class="mini-actions"><span>All</span><span>None</span><span>Inv</span></div>
+              <div class="channel"><i class="dot" style="--c:var(--chart-1)"></i><b>Rte_TempDrv_C...</b><span class="unit">degC</span></div>
+              <div class="channel"><i class="dot" style="--c:var(--chart-2)"></i><b>Rte_ChattRed_Z...</b><span class="unit">rpm</span></div>
+              <div class="channel"><i class="dot" style="--c:var(--chart-3)"></i><b>CXEX_D6_Basic...</b><span class="unit">Nm</span></div>
+              <div class="channel"><i class="dot" style="--c:var(--chart-4)"></i><b>cMcuTempLast...</b><span class="unit">V</span></div>
+              <div class="channel"><i class="dot" style="--c:#0891b2"></i><b>Rte_DMS_yActu...</b><span class="unit">%</span></div>
+              <div class="channel"><i class="dot" style="--c:#ea580c"></i><b>Rte_TLC_mSum...</b><span class="unit">A</span></div>
+              <div class="channel"><i class="dot" style="--c:#be123c"></i><b>Rte_RackPosC...</b><span class="unit">mm</span></div>
+              <div class="channel"><i class="dot" style="--c:#64748b"></i><b>Rte_FricComp...</b><span class="unit">N</span></div>
+            </aside>
+
+            <section class="chart-zone">
+              <div class="chart-card">
+                <div class="chart-head">
+                  <div class="nav-icons">
+                    <svg class="icon"><use href="#i-home"></use></svg>
+                    <svg class="icon"><use href="#i-zoom"></use></svg>
+                    <svg class="icon"><use href="#i-save"></use></svg>
+                  </div>
+                  <div class="chart-title">Time Domain · Overlay · 3 channels</div>
+                </div>
+                <div class="plot">
+                  <svg viewBox="0 0 860 430" preserveAspectRatio="none" role="img" aria-label="信号曲线预览">
+                    <defs>
+                      <linearGradient id="areaA" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="#2563eb" stop-opacity=".14"/>
+                        <stop offset="1" stop-color="#2563eb" stop-opacity="0"/>
+                      </linearGradient>
+                    </defs>
+                    <rect x="0" y="0" width="860" height="430" fill="transparent"/>
+                    <g stroke="currentColor" opacity=".13" stroke-width="1">
+                      <path d="M54 26V386M168 26V386M282 26V386M396 26V386M510 26V386M624 26V386M738 26V386"/>
+                      <path d="M54 70H826M54 132H826M54 194H826M54 256H826M54 318H826M54 380H826"/>
+                    </g>
+                    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M54 344 C88 260 118 218 146 214 C196 208 230 192 276 168 C330 142 378 122 426 82 C452 60 476 48 498 74 C526 110 544 174 574 184 C620 198 672 172 718 156 C768 138 800 112 826 72" stroke="var(--chart-1)" stroke-width="3"/>
+                      <path d="M54 305 L92 305 L92 210 L104 305 L128 305 L128 210 L142 305 L188 305 L188 218 L206 305 L268 305 L268 218 L296 305 L352 305 L352 224 L398 305 L458 305 L458 186 L496 305 L544 305 L544 206 L588 305 L640 305 L640 184 L682 305 L724 305 L724 174 L770 305 L826 86" stroke="var(--chart-2)" stroke-width="2.2"/>
+                      <path d="M54 180 C140 178 210 176 286 178 C368 181 440 176 520 178 C600 180 676 176 760 178 C790 179 812 178 826 178" stroke="var(--chart-3)" stroke-width="2"/>
+                    </g>
+                    <path d="M54 344 C88 260 118 218 146 214 C196 208 230 192 276 168 C330 142 378 122 426 82 C452 60 476 48 498 74 C526 110 544 174 574 184 C620 198 672 172 718 156 C768 138 800 112 826 72 L826 386 L54 386Z" fill="url(#areaA)"/>
+                    <path d="M538 26V386" stroke="var(--danger)" stroke-width="1.5" stroke-dasharray="5 5"/>
+                    <g fill="var(--muted-on-app)" font-size="13">
+                      <text x="48" y="414">3</text><text x="164" y="414">6</text><text x="278" y="414">9</text><text x="390" y="414">12</text><text x="504" y="414">15</text><text x="620" y="414">18</text><text x="736" y="414">21</text>
+                    </g>
+                  </svg>
+                  <div class="cursor-pill">t=19.112s · Temp=29.72 degC · ChattRed=17.84 rpm · Basic=0</div>
+                </div>
+                <div class="stats">
+                  <span><strong>Rte_TempDrv_C...</strong> min=29.51 · max=30.02 · rms=29.78 · p2p=0.51</span>
+                  <span>Range 0.00s - 27.23s</span>
+                </div>
+              </div>
+            </section>
+
+            <aside class="pane right">
+              <div class="section">
+                <h3><svg class="icon"><use href="#i-axis"></use></svg>横坐标</h3>
+                <div class="field"><span>来源</span><span class="control">自动(时间)</span></div>
+                <div class="field"><span>通道</span><span class="control">-</span></div>
+                <div class="field"><span>标签</span><span class="control">Time (s)</span></div>
+                <div class="action" style="margin-top:10px">应用</div>
+              </div>
+              <div class="section">
+                <h3><svg class="icon"><use href="#i-crosshair"></use></svg>范围</h3>
+                <div class="field"><span>启用</span><span class="control">使用选定范围</span></div>
+                <div class="field"><span>开始</span><span class="control">0.000 s</span></div>
+                <div class="field"><span>结束</span><span class="control">27.228 s</span></div>
+              </div>
+              <div class="section">
+                <h3><svg class="icon"><use href="#i-wave"></use></svg>绘图模式</h3>
+                <div class="toggle-row">
+                  <span class="choice">Subplot</span>
+                  <span class="choice active">Overlay</span>
+                </div>
+              </div>
+              <div class="section">
+                <h3><svg class="icon"><use href="#i-crosshair"></use></svg>游标</h3>
+                <div class="button-row three">
+                  <span class="choice">Off</span>
+                  <span class="choice active">Single</span>
+                  <span class="choice">Dual</span>
+                </div>
+                <div class="action primary" style="margin-top:10px">绘图</div>
+              </div>
+            </aside>
+          </div>
+
+          <footer class="statusbar">
+            <span>游标已重置</span>
+            <span>2 files · 3 channels · Fs 256 Hz</span>
+          </footer>
+        </div>
+      </div>
+
+      <aside class="notes">
+        <section class="note-panel">
+          <h2 id="scheme-title">Precision Light</h2>
+          <p id="scheme-copy">推荐作为默认方向。它最适合当前工具：高可读、低学习成本、适合长时间处理通道和图表。</p>
+          <div class="token-grid" id="scheme-tokens">
+            <span class="token"><i style="--token-color:#1769e0"></i>主操作蓝</span>
+            <span class="token"><i style="--token-color:#f8fafc"></i>面板底色</span>
+            <span class="token"><i style="--token-color:#111827"></i>主文字</span>
+            <span class="token"><i style="--token-color:#0f9f8f"></i>辅助强调</span>
+          </div>
+        </section>
+
+        <section class="note-panel">
+          <h2>落地优先级</h2>
+          <div class="roadmap">
+            <div class="step"><b>1</b><span>统一 QSS token、字体、边框、按钮、输入框、滚动条。</span></div>
+            <div class="step"><b>2</b><span>替换 toolbar 和 pane 内 emoji，改成统一线性图标。</span></div>
+            <div class="step"><b>3</b><span>升级左侧文件 row、通道颜色 swatch、图表颜色同步。</span></div>
+            <div class="step"><b>4</b><span>重做 ChartStack 工作区、cursor pill、stats strip 和 Inspector section。</span></div>
+          </div>
+        </section>
+
+        <section class="note-panel">
+          <h2>选择建议</h2>
+          <ul>
+            <li>默认产品：选 Precision Light。</li>
+            <li>夜间/演示：可提供 Graphite Lab 作为后续主题。</li>
+            <li>想要更现代：Aero Glass 适合展示，但透明度要克制。</li>
+            <li>生产/标定环境：Signal Studio 更耐看，视觉疲劳低。</li>
+          </ul>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const schemes = {
+      precision: {
+        title: "Precision Light",
+        copy: "推荐作为默认方向。它最适合当前工具：高可读、低学习成本、适合长时间处理通道和图表。",
+        tokens: [
+          ["#1769e0", "主操作蓝"],
+          ["#f8fafc", "面板底色"],
+          ["#111827", "主文字"],
+          ["#0f9f8f", "辅助强调"]
+        ]
+      },
+      graphite: {
+        title: "Graphite Lab",
+        copy: "适合做第二主题。深色能突出曲线、游标和频谱，但右侧参数面板需要控制对比度，避免刺眼。",
+        tokens: [
+          ["#38bdf8", "高亮蓝"],
+          ["#0f172a", "实验室底色"],
+          ["#e5eefb", "主文字"],
+          ["#22c55e", "数据绿"]
+        ]
+      },
+      aero: {
+        title: "Aero Glass",
+        copy: "更现代、更有产品感，适合宣传截图和高端感升级。实现时建议只在 pane 和 toolbar 使用半透明。",
+        tokens: [
+          ["#0e7490", "深青主色"],
+          ["#e8f2f5", "冷雾背景"],
+          ["#ffffff", "玻璃面板"],
+          ["#f59e0b", "警示强调"]
+        ]
+      },
+      signal: {
+        title: "Signal Studio",
+        copy: "偏仪器和工作台质感，温和、稳定、耐看。适合长时间数据审查和生产环境使用。",
+        tokens: [
+          ["#0f766e", "信号绿"],
+          ["#f5f4ef", "温润底色"],
+          ["#1f2933", "主文字"],
+          ["#b45309", "状态强调"]
+        ]
+      }
+    };
+
+    const body = document.body;
+    const cards = document.querySelectorAll(".theme-card");
+    const title = document.getElementById("scheme-title");
+    const copy = document.getElementById("scheme-copy");
+    const tokens = document.getElementById("scheme-tokens");
+
+    cards.forEach((card) => {
+      card.addEventListener("click", () => {
+        const theme = card.dataset.theme;
+        body.className = `theme-${theme}`;
+        cards.forEach((item) => item.classList.toggle("active", item === card));
+        const scheme = schemes[theme];
+        title.textContent = scheme.title;
+        copy.textContent = scheme.copy;
+        tokens.innerHTML = scheme.tokens
+          .map(([color, label]) => `<span class="token"><i style="--token-color:${color}"></i>${label}</span>`)
+          .join("");
+      });
+    });
+  </script>
+</body>
+</html>

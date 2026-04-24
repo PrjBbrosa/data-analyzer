@@ -8,6 +8,7 @@ from ..dialogs import ExportDialog
 class ExportSheet(QDialog):
     def __init__(self, parent, chs):
         super().__init__(parent)
+        self.setObjectName("SheetSurface")
         self.setModal(True)
         self.setWindowTitle("导出 Excel")
         self._inner = ExportDialog(self, chs)

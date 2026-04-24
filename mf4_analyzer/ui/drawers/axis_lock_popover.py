@@ -10,6 +10,7 @@ class AxisLockPopover(QDialog):
 
     def __init__(self, parent=None, current='none'):
         super().__init__(parent)
+        self.setObjectName("PopoverSurface")
         # §8.1: frameless QDialog with WindowDeactivate → close. NOT Qt.Popup.
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.setModal(False)

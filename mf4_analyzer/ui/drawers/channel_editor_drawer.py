@@ -15,6 +15,7 @@ class ChannelEditorDrawer(QDialog):
 
     def __init__(self, parent, fd):
         super().__init__(parent)
+        self.setObjectName("DrawerSurface")
         self.setWindowTitle(f"通道编辑 — {fd.filename}")
         self.setModal(True)
         self._inner = ChannelEditorDialog(self, fd)

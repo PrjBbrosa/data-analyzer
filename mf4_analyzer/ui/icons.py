@@ -1,13 +1,18 @@
-"""macOS-style QIcon factories. All icons drawn programmatically via QPainter.
-No external image assets. Icons render at 2x DPR for Retina sharpness."""
+"""Precision Light QIcon factories drawn programmatically via QPainter.
+
+No external image assets. Icons render at 2x DPR for sharpness and keep
+the PyQt app independent from web/icon-font packages.
+"""
 from contextlib import contextmanager
 from PyQt5.QtCore import Qt, QRectF, QPointF
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QBrush, QFont, QPainterPath
 
-BLUE = QColor('#007AFF')
-GRAY = QColor('#48484A')
-RED = QColor('#FF3B30')
-GREEN = QColor('#34C759')  # reserved; matches #success in style.qss
+BLUE = QColor('#1769E0')
+GRAY = QColor('#475569')
+MUTED = QColor('#64748B')
+RED = QColor('#DC2626')
+GREEN = QColor('#059669')
+AMBER = QColor('#D97706')
 
 
 def _canvas(size=20):
@@ -34,6 +39,14 @@ def _pen(color, w=1.5):
     pen.setCapStyle(Qt.RoundCap)
     pen.setJoinStyle(Qt.RoundJoin)
     return pen
+
+
+def _line_icon(draw, color=GRAY, size=20):
+    with _painting(size) as (pix, p):
+        p.setPen(_pen(color, 1.7))
+        p.setBrush(Qt.NoBrush)
+        draw(p)
+    return QIcon(pix)
 
 
 def _padlock(p, color):
@@ -77,26 +90,101 @@ class Icons:
 
     @classmethod
     def add_file(cls):
+        def draw(p):
+            p.drawRoundedRect(QRectF(4, 3, 10, 14), 2, 2)
+            p.drawLine(QPointF(7, 7), QPointF(11, 7))
+            p.drawLine(QPointF(7, 10), QPointF(11, 10))
+            p.drawLine(QPointF(15, 10), QPointF(19, 10))
+            p.drawLine(QPointF(17, 8), QPointF(17, 12))
+        return _line_icon(draw, BLUE)
+
+    @classmethod
+    def file(cls):
+        def draw(p):
+            p.drawRoundedRect(QRectF(5, 3, 11, 14), 2, 2)
+            p.drawLine(QPointF(8, 7), QPointF(13, 7))
+            p.drawLine(QPointF(8, 10), QPointF(13, 10))
+            p.drawLine(QPointF(8, 13), QPointF(11, 13))
+        return _line_icon(draw, MUTED)
+
+    @classmethod
+    def edit_channels(cls):
+        def draw(p):
+            p.drawLine(QPointF(4, 6), QPointF(11, 6))
+            p.drawLine(QPointF(15, 6), QPointF(18, 6))
+            p.drawEllipse(QRectF(11, 4, 4, 4))
+            p.drawLine(QPointF(4, 14), QPointF(7, 14))
+            p.drawLine(QPointF(11, 14), QPointF(18, 14))
+            p.drawEllipse(QRectF(7, 12, 4, 4))
+        return _line_icon(draw, GRAY)
+
+    @classmethod
+    def export(cls):
+        def draw(p):
+            p.drawLine(QPointF(10, 3), QPointF(10, 12))
+            p.drawLine(QPointF(6, 8), QPointF(10, 12))
+            p.drawLine(QPointF(14, 8), QPointF(10, 12))
+            p.drawRoundedRect(QRectF(4, 14, 12, 4), 1.5, 1.5)
+        return _line_icon(draw, GRAY)
+
+    @classmethod
+    def mode_time(cls):
+        def draw(p):
+            path = QPainterPath()
+            path.moveTo(3, 10)
+            path.cubicTo(5, 3, 8, 17, 10, 10)
+            path.cubicTo(12, 3, 15, 17, 17, 10)
+            p.drawPath(path)
+        return _line_icon(draw, BLUE)
+
+    @classmethod
+    def mode_fft(cls):
+        def draw(p):
+            p.drawLine(QPointF(4, 17), QPointF(16, 17))
+            p.drawLine(QPointF(5, 17), QPointF(5, 8))
+            p.drawLine(QPointF(9, 17), QPointF(9, 4))
+            p.drawLine(QPointF(13, 17), QPointF(13, 11))
+            p.drawLine(QPointF(17, 17), QPointF(17, 6))
+        return _line_icon(draw, BLUE)
+
+    @classmethod
+    def mode_order(cls):
+        def draw(p):
+            for x in (4, 10, 16):
+                for y in (4, 10, 16):
+                    p.drawRect(QRectF(x, y, 3, 3))
+        return _line_icon(draw, BLUE)
+
+    @classmethod
+    def cursor_reset(cls):
+        def draw(p):
+            p.drawLine(QPointF(10, 3), QPointF(10, 7))
+            p.drawLine(QPointF(10, 13), QPointF(10, 17))
+            p.drawLine(QPointF(3, 10), QPointF(7, 10))
+            p.drawLine(QPointF(13, 10), QPointF(17, 10))
+            p.drawEllipse(QRectF(6, 6, 8, 8))
+        return _line_icon(draw, GRAY)
+
+    @classmethod
+    def axis_lock(cls):
         with _painting() as (pix, p):
-            # circle outline
-            p.setPen(_pen(BLUE, 1.5))
-            p.setBrush(Qt.NoBrush)
-            p.drawEllipse(QRectF(3, 3, 14, 14))
-            # plus
-            p.drawLine(QPointF(10, 6), QPointF(10, 14))
-            p.drawLine(QPointF(6, 10), QPointF(14, 10))
+            _padlock(p, GRAY)
         return QIcon(pix)
 
     @classmethod
+    def menu(cls):
+        def draw(p):
+            for y in (6, 10, 14):
+                p.drawPoint(QPointF(10, y))
+        icon = _line_icon(draw, GRAY)
+        return icon
+
+    @classmethod
     def close_file(cls):
-        with _painting() as (pix, p):
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(RED))
-            p.drawRoundedRect(QRectF(3, 3, 14, 14), 4, 4)
-            p.setPen(_pen(QColor(255, 255, 255), 1.8))
-            p.drawLine(QPointF(7, 7), QPointF(13, 13))
-            p.drawLine(QPointF(13, 7), QPointF(7, 13))
-        return QIcon(pix)
+        def draw(p):
+            p.drawLine(QPointF(6, 6), QPointF(14, 14))
+            p.drawLine(QPointF(14, 6), QPointF(6, 14))
+        return _line_icon(draw, RED)
 
     @classmethod
     def close_all(cls):

@@ -63,13 +63,13 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.navigator)
         splitter.addWidget(self.chart_stack)
         splitter.addWidget(self.inspector)
-        splitter.setSizes([220, 920, 260])
+        splitter.setSizes([250, 900, 300])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
         splitter.setCollapsible(2, False)
-        self.navigator.setMinimumWidth(180)
+        self.navigator.setMinimumWidth(220)
         self.chart_stack.setMinimumWidth(400)
-        self.inspector.setMinimumWidth(220)
+        self.inspector.setMinimumWidth(280)
         root.addWidget(splitter, stretch=1)
 
         # Convenience aliases pointing to children of ChartStack / Navigator —
@@ -655,16 +655,16 @@ class MainWindow(QMainWindow):
             psd_db = 10 * np.log10(psd + 1e-12)
 
             ax1 = self.canvas_fft.fig.add_subplot(2, 1, 1)
-            ax1.plot(freq, amp, '#1f77b4', lw=0.8);
+            ax1.plot(freq, amp, '#2563eb', lw=1.0);
             ax1.set_xlabel('Frequency (Hz)');
-            ax1.set_ylabel('幅值')
+            ax1.set_ylabel('Amplitude', labelpad=10)
             ax1.set_title(f'FFT - {self.inspector.fft_ctx.combo_sig.currentText()} (窗:{win}, NFFT:{nfft or "auto"})');
             ax1.grid(True, alpha=0.25, ls='--');
             ax1.set_xlim(0, x_max)
             ax2 = self.canvas_fft.fig.add_subplot(2, 1, 2)
-            ax2.plot(freq, psd_db, '#d62728', lw=0.8);
+            ax2.plot(freq, psd_db, '#dc2626', lw=1.0);
             ax2.set_xlabel('Frequency (Hz)');
-            ax2.set_ylabel('PSD (dB)')
+            ax2.set_ylabel('PSD (dB)', labelpad=10)
             ax2.set_title('功率谱密度');
             ax2.grid(True, alpha=0.25, ls='--');
             ax2.set_xlim(0, x_max)
@@ -673,7 +673,7 @@ class MainWindow(QMainWindow):
             self.canvas_fft.store_line_data(0, freq, amp)
             self.canvas_fft.store_line_data(1, freq, psd_db)
 
-            self.canvas_fft.fig.tight_layout()
+            self.canvas_fft.fig.subplots_adjust(left=0.11, right=0.98, top=0.91, bottom=0.09, hspace=0.42)
             xt, yt = self.inspector.top.tick_density()
             self.canvas_fft.set_tick_density(xt, yt)
             self.canvas_fft.draw();
@@ -798,7 +798,7 @@ class MainWindow(QMainWindow):
             ax1 = self.canvas_order.fig.add_subplot(2, 1, 1)
             ax1.plot(rt, oa, '#1f77b4', lw=1);
             ax1.set_xlabel('RPM');
-            ax1.set_ylabel('幅值')
+            ax1.set_ylabel('Amplitude', labelpad=10)
             ax1.set_title(f'阶次 {to} 跟踪 - {self.inspector.order_ctx.combo_sig.currentText()}');
             ax1.grid(True, alpha=0.25, ls='--')
             ax2 = self.canvas_order.fig.add_subplot(2, 1, 2)

@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
 class RebuildTimePopover(QDialog):
     def __init__(self, parent, target_filename, current_fs):
         super().__init__(parent)
+        self.setObjectName("PopoverSurface")
         # §8.1: frameless QDialog with manual focus-out close. NOT Qt.Popup
         # because Qt.Popup + child QSpinBox can close when the spin buttons
         # take focus; the dialog must stay open while user edits Fs.
@@ -29,9 +30,11 @@ class RebuildTimePopover(QDialog):
         btns = QHBoxLayout()
         btns.addStretch()
         self.btn_cancel = QPushButton("取消")
+        self.btn_cancel.setProperty("role", "tool")
         self.btn_cancel.clicked.connect(self.reject)
         btns.addWidget(self.btn_cancel)
         self.btn_ok = QPushButton("确定")
+        self.btn_ok.setProperty("role", "primary")
         self.btn_ok.setDefault(True)
         self.btn_ok.clicked.connect(self.accept)
         btns.addWidget(self.btn_ok)

@@ -12,7 +12,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QBrush
+from PyQt5.QtGui import QColor, QBrush, QIcon, QPainter, QPen, QPixmap
+
+
+def _swatch_icon(color, size=14):
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setPen(QPen(QColor(color), 1))
+    p.setBrush(QBrush(QColor(color)))
+    p.drawRoundedRect(2, 2, size - 4, size - 4, 3, 3)
+    p.end()
+    return QIcon(pix)
 
 
 class StatisticsPanel(QFrame):
@@ -50,18 +62,21 @@ class MultiFileChannelWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0);
         layout.setSpacing(2)
         self.search = QLineEdit();
-        self.search.setPlaceholderText("🔍 Filter...");
+        self.search.setObjectName("channelSearch")
+        self.search.setPlaceholderText("Filter channel...");
         self.search.textChanged.connect(self._filter);
         layout.addWidget(self.search)
         bl = QHBoxLayout()
         for lbl, fn in [("All", self._all), ("None", self._none), ("Inv", self._inv)]:
             b = QPushButton(lbl);
             b.setMaximumWidth(40);
+            b.setProperty("role", "tool")
             b.clicked.connect(fn);
             bl.addWidget(b)
         bl.addStretch();
         layout.addLayout(bl)
         self.tree = QTreeWidget();
+        self.tree.setObjectName("channelTree")
         self.tree.setHeaderLabels(['Channel', 'Pts']);
         self.tree.setColumnWidth(0, 165)
         self.tree.setAlternatingRowColors(True)
@@ -74,7 +89,7 @@ class MultiFileChannelWidget(QWidget):
 
     def add_file(self, fid, fd):
         self._files[fid] = fd
-        fi = QTreeWidgetItem([f"📁 {fd.short_name}", f"{len(fd.data)}"])
+        fi = QTreeWidgetItem([fd.short_name, f"{len(fd.data)}"])
         # 不使用AutoTristate，手动控制文件级勾选
         fi.setFlags(fi.flags() | Qt.ItemIsUserCheckable)
         fi.setCheckState(0, Qt.Unchecked)
@@ -91,7 +106,9 @@ class MultiFileChannelWidget(QWidget):
             ci.setFlags(ci.flags() | Qt.ItemIsUserCheckable);
             ci.setCheckState(0, Qt.Unchecked)
             ci.setData(0, Qt.UserRole, ('channel', fid, ch));
-            ci.setForeground(0, QBrush(QColor(color)))
+            ci.setIcon(0, _swatch_icon(color))
+            ci.setForeground(0, QBrush(QColor('#111827')))
+            ci.setForeground(1, QBrush(QColor('#64748b')))
             fi.addChild(ci)
         self.tree.addTopLevelItem(fi);
         self._file_items[fid] = fi
@@ -220,7 +237,9 @@ class StatsStrip(QFrame):
         lay.setContentsMargins(6, 4, 6, 4)
         top = QHBoxLayout()
         self._btn_expand = QToolButton()
-        self._btn_expand.setText("▸")
+        self._btn_expand.setObjectName("statsExpand")
+        self._btn_expand.setText(">")
+        self._btn_expand.setProperty("role", "tool")
         self._btn_expand.clicked.connect(self.toggle)
         top.addWidget(self._btn_expand)
         self._lbl_summary = QLabel("— 无通道 —")
@@ -232,7 +251,7 @@ class StatsStrip(QFrame):
 
     def toggle(self):
         self._expanded = not self._expanded
-        self._btn_expand.setText("▾" if self._expanded else "▸")
+        self._btn_expand.setText("v" if self._expanded else ">")
         self._panel.setVisible(self._expanded)
 
     def update_stats(self, stats):

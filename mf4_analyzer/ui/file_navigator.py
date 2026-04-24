@@ -1,10 +1,12 @@
 """Left pane: file list (replacing QTabWidget) + channel tree."""
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox,
     QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 
+from .icons import Icons
 from .widgets import MultiFileChannelWidget
 
 
@@ -17,14 +19,26 @@ class _FileRow(QFrame):
         self.fid = fid
         self.setObjectName("fileRow")
         self._active = False
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 6, 6, 6)
-        lay.setSpacing(2)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(7)
+        self._accent = QFrame(self)
+        self._accent.setObjectName("fileAccent")
+        self._accent.setFixedWidth(3)
+        outer.addWidget(self._accent)
+
+        lay = QVBoxLayout()
+        lay.setContentsMargins(4, 7, 7, 7)
+        lay.setSpacing(3)
         top = QHBoxLayout()
-        self._lbl_name = QLabel(f"📄 {fd.short_name}")
+        self._lbl_name = QLabel(fd.short_name)
+        self._lbl_name.setObjectName("fileRowName")
         top.addWidget(self._lbl_name, stretch=1)
         self._btn_close = QToolButton()
-        self._btn_close.setText("✕")
+        self._btn_close.setIcon(Icons.close_file())
+        self._btn_close.setIconSize(QSize(13, 13))
+        self._btn_close.setToolTip("关闭文件")
+        self._btn_close.setProperty("role", "tool")
         self._btn_close.setAutoRaise(True)
         self._btn_close.clicked.connect(lambda: self.close_requested.emit(self.fid))
         top.addWidget(self._btn_close)
@@ -35,6 +49,7 @@ class _FileRow(QFrame):
         )
         self._lbl_meta.setObjectName("fileRowMeta")
         lay.addWidget(self._lbl_meta)
+        outer.addLayout(lay, stretch=1)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -44,8 +59,11 @@ class _FileRow(QFrame):
     def set_active(self, active):
         self._active = active
         self.setProperty("active", "true" if active else "false")
+        self._accent.setProperty("active", "true" if active else "false")
         self.style().unpolish(self)
         self.style().polish(self)
+        self._accent.style().unpolish(self._accent)
+        self._accent.style().polish(self._accent)
 
 
 class FileNavigator(QWidget):
@@ -64,11 +82,18 @@ class FileNavigator(QWidget):
 
         # Header with kebab
         head = QHBoxLayout()
-        self._lbl_header = QLabel("文件 (0)")
+        self._lbl_header = QLabel("文件")
+        self._lbl_header.setObjectName("paneHeader")
         head.addWidget(self._lbl_header)
         head.addStretch()
+        self._lbl_count = QLabel("0")
+        self._lbl_count.setObjectName("paneCount")
+        head.addWidget(self._lbl_count)
         self._btn_kebab = QToolButton()
-        self._btn_kebab.setText("⋯")
+        self._btn_kebab.setIcon(Icons.menu())
+        self._btn_kebab.setIconSize(QSize(16, 16))
+        self._btn_kebab.setToolTip("文件操作")
+        self._btn_kebab.setProperty("role", "tool")
         self._btn_kebab.setAutoRaise(True)
         self._btn_kebab.clicked.connect(self._open_kebab)
         head.addWidget(self._btn_kebab)
@@ -81,6 +106,7 @@ class FileNavigator(QWidget):
         self._file_layout.setSpacing(2)
         self._file_layout.addStretch()
         scroll = QScrollArea()
+        scroll.setObjectName("fileScroll")
         scroll.setWidgetResizable(True)
         scroll.setWidget(self._file_holder)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -164,4 +190,4 @@ class FileNavigator(QWidget):
                 self.close_all_requested.emit()
 
     def _refresh_header(self):
-        self._lbl_header.setText(f"文件 ({len(self._rows)})")
+        self._lbl_count.setText(str(len(self._rows)))

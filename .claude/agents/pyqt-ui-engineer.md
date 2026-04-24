@@ -13,6 +13,51 @@ PyQt5 widgets, dialogs, layouts, signal/slot wiring, matplotlib
 span select, axis edit, annotations), Chinese font configuration,
 keyboard shortcuts, visual polish.
 
+## Persistent UI design direction
+
+Default visual direction for this project is **Precision Light**, as
+captured in `docs/ui-design-showcase.html`. Use it as the baseline for
+future visual polish unless the user explicitly requests another theme.
+
+Core orientation:
+
+- Treat the app as a professional engineering/data-analysis workbench,
+  not a decorative dashboard or marketing page.
+- Preserve the existing three-pane topology: left data/file navigator,
+  center chart workspace, right inspector/parameter pane.
+- Prefer high readability, clear hierarchy, compact density, and low
+  visual fatigue over ornamental effects.
+- Use restrained neutral surfaces with a single primary blue for
+  selected states and primary commands.
+- Keep chart/data colors separate from UI chrome colors so signal lines,
+  channel swatches, and legends remain unambiguous.
+- Replace emoji-style UI affordances with one consistent line-icon
+  language, preferably implemented in `ui/icons.py` via `QPainter` or
+  equivalent PyQt-native icons.
+- First implementation target is Precision Light. Graphite Lab, Aero
+  Glass, and Signal Studio are optional later themes, not the default
+  scope.
+
+Implementation guidance:
+
+- Put theme tokens in `style.qss` / palette helpers rather than hard
+  coding ad hoc colors across widgets.
+- For toolbar work, keep the command-bar grouping:
+  file/data actions on the left, mode segmented control in the center,
+  chart tools on the right.
+- For file/channel panes, show active state with a subtle tinted row and
+  a narrow accent indicator rather than a full saturated block.
+- For channels, keep color swatches synchronized with matplotlib line
+  colors.
+- For ChartStack, make the chart workspace feel like the primary work
+  surface: quiet outer background, white chart surface, slim toolbar,
+  clean cursor pill, and compact stats strip.
+- For Inspector, use compact section headers, aligned form rows, and
+  one clear primary action per context.
+- Avoid broad glass/blur effects in the first PyQt5 implementation.
+  Semi-transparent surfaces and shadows are acceptable, but CSS-like
+  `backdrop-filter` should not be treated as a v1 requirement.
+
 ## Hard boundaries (MUST NOT cross)
 
 - Do NOT alter numeric formulas, FFT/order algorithm internals, or file

@@ -3,7 +3,7 @@
 Phase 1: bare-bones container + mode getter/setter. Stats strip and
 cursor pill land in Phase 2.
 """
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import QSize, pyqtSignal
 from PyQt5.QtWidgets import QLabel, QStackedWidget, QVBoxLayout, QWidget
 
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
@@ -19,10 +19,13 @@ class _ChartCard(QWidget):
     """Canvas + its NavigationToolbar in a vertical layout."""
     def __init__(self, canvas, parent=None):
         super().__init__(parent)
+        self.setObjectName("chartCard")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.canvas = canvas
         self.toolbar = NavigationToolbar(canvas, self)
+        self.toolbar.setObjectName("chartToolbar")
+        self.toolbar.setIconSize(QSize(16, 16))
         lay.addWidget(self.toolbar)
         lay.addWidget(canvas, stretch=1)
 
@@ -33,7 +36,8 @@ class ChartStack(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(10, 10, 10, 0)
+        lay.setSpacing(8)
         self.stack = QStackedWidget(self)
         self.canvas_time = TimeDomainCanvas(self)
         self.canvas_fft = PlotCanvas(self)

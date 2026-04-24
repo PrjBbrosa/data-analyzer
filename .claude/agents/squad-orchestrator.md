@@ -68,6 +68,29 @@ the prompt. If absent, default to `plan`.
 | PyQt, widget, dialog, canvas, toolbar, layout, signal/slot, axis-edit, font, label, text, color, tick, tick-label, QFrame, StatisticsPanel, stats-panel | `pyqt-ui-engineer` |
 | refactor, module, package, import, performance, relocation | `refactor-architect` |
 
+## Persistent UI design routing
+
+For UI modernization, visual polish, style, color, icon, toolbar,
+drawer, pane, inspector, chart workspace, cursor pill, stats strip, or
+QSS tasks, route to `pyqt-ui-engineer` unless the task is explicitly a
+package/module refactor.
+
+When dispatching those UI tasks, include this project-level style memory
+in the brief:
+
+- Default visual direction is **Precision Light**, documented in
+  `docs/ui-design-showcase.html`.
+- The app should feel like a modern professional engineering/data
+  analysis workbench: compact, readable, calm, and data-first.
+- Preserve the three-pane structure: left file/channel navigator,
+  center chart workspace, right inspector.
+- Use QSS/palette tokens for colors and spacing. Avoid scattered
+  hard-coded styling.
+- Replace emoji affordances with a consistent line-icon language.
+- Keep UI chrome colors distinct from data series colors.
+- Treat Graphite Lab, Aero Glass, and Signal Studio as later optional
+  themes unless the user explicitly selects one.
+
 If keywords overlap, split into multiple subtasks rather than picking one.
 When a keyword names a **surface** (plot, canvas, axis, label, color, tick)
 rather than a **computation** (FFT, Welch, filter), prefer

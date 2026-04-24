@@ -13,6 +13,38 @@ from matplotlib.patches import Rectangle
 
 from .dialogs import AxisEditDialog
 
+CHART_FACE = '#ffffff'
+AXIS_TEXT = '#475569'
+AXIS_LINE = '#cbd5e1'
+GRID_LINE = '#d7dee8'
+PRIMARY = '#1769e0'
+DANGER = '#dc2626'
+
+
+def _apply_axes_style(ax, grid=True):
+    ax.set_facecolor(CHART_FACE)
+    ax.tick_params(axis='both', colors=AXIS_TEXT, labelsize=8)
+    ax.xaxis.label.set_color(AXIS_TEXT)
+    ax.yaxis.label.set_color(AXIS_TEXT)
+    ax.title.set_color('#111827')
+    for spine in ax.spines.values():
+        spine.set_color(AXIS_LINE)
+        spine.set_linewidth(0.8)
+    if grid:
+        ax.grid(True, color=GRID_LINE, alpha=0.78, ls='--', lw=0.7)
+
+
+def _compact_axis_label(name, unit='', max_chars=22):
+    text = str(name)
+    if len(text) > max_chars:
+        text = text[:max_chars - 3] + '...'
+    return f"{text} ({unit})" if unit else text
+
+
+def _set_series_ylabel(ax, label, color, labelpad=10):
+    ax.set_ylabel(label, fontsize=8, color=color, labelpad=labelpad)
+    ax.yaxis.label.set_clip_on(False)
+
 
 class TimeDomainCanvas(FigureCanvas):
     MAX_PTS = 8000
@@ -21,10 +53,11 @@ class TimeDomainCanvas(FigureCanvas):
     span_selected = pyqtSignal(float, float)
 
     def __init__(self, parent=None):
-        self.fig = Figure(figsize=(10, 6), dpi=100)
+        self.fig = Figure(figsize=(10, 6), dpi=100, facecolor=CHART_FACE)
         super().__init__(self.fig)
         self.setParent(parent)
         self.axes_list = [];
+        self._overlay_mode = False
         self.lines = {};
         self.channel_data = {}
         self.span_selector = None
@@ -95,6 +128,7 @@ class TimeDomainCanvas(FigureCanvas):
     def plot_channels(self, ch_list, mode='overlay', xlabel='Time (s)'):
         self.clear()
         vis = [(n, t, s, c, u) for n, v, t, s, c, u in ch_list if v]
+        self._overlay_mode = mode == 'overlay' and len(vis) >= 2
         if not vis: self.draw(); return
         if mode == 'subplot' and len(vis) > 1:
             n = len(vis); first = None
@@ -102,24 +136,26 @@ class TimeDomainCanvas(FigureCanvas):
                 ax = self.fig.add_subplot(n, 1, i + 1, sharex=first) if i > 0 else self.fig.add_subplot(n, 1, 1)
                 if i == 0: first = ax
                 self.axes_list.append(ax)
+                _apply_axes_style(ax)
                 td, sd = self._ds(t, sig)
-                ax.plot(td, sd, color=color, lw=0.8)
+                ax.plot(td, sd, color=color, lw=1.05)
                 self.channel_data[name] = (t, sig, color, unit)
-                label = f"{name[:22]} ({unit})" if unit else name[:22]
-                ax.set_ylabel(label, fontsize=8, color=color)
+                label = _compact_axis_label(name, unit, max_chars=20)
+                _set_series_ylabel(ax, label, color, labelpad=12)
                 ax.tick_params(axis='y', colors=color, labelsize=7)
                 ax.spines['left'].set_color(color); ax.spines['left'].set_linewidth(2)
-                ax.grid(True, alpha=0.25, ls='--')
                 if i < n - 1:
                     ax.tick_params(axis='x', labelbottom=False)
                 else:
-                    ax.set_xlabel(xlabel, fontsize=9)
-            self.fig.subplots_adjust(hspace=0.05, left=0.12, right=0.96, top=0.97, bottom=0.07)
+                    ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
+            self.fig.subplots_adjust(hspace=0.08, left=0.17, right=0.96, top=0.96, bottom=0.08)
         elif mode == 'overlay' and len(vis) >= 2:
             # Per-channel twin-Y axes
             ax0 = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax0)
+            _apply_axes_style(ax0)
             for i in range(1, len(vis)):
                 tw = ax0.twinx(); self.axes_list.append(tw)
+                _apply_axes_style(tw, grid=False)
                 tw.spines['left'].set_visible(False)
                 tw.spines['top'].set_visible(False)
                 tw.spines['bottom'].set_visible(False)
@@ -127,30 +163,29 @@ class TimeDomainCanvas(FigureCanvas):
                     tw.spines['right'].set_position(('outward', 60 * (i - 1)))
             for ax, (name, t, sig, color, unit) in zip(self.axes_list, vis):
                 td, sd = self._ds(t, sig)
-                ax.plot(td, sd, color=color, lw=0.8)
+                ax.plot(td, sd, color=color, lw=1.05)
                 self.channel_data[name] = (t, sig, color, unit)
-                label = f"{name[:18]} ({unit})" if unit else name[:18]
-                ax.set_ylabel(label, color=color, fontsize=8)
+                label = _compact_axis_label(name, unit, max_chars=18)
+                _set_series_ylabel(ax, label, color, labelpad=12)
                 ax.tick_params(axis='y', colors=color, labelsize=7)
                 side = 'left' if ax is ax0 else 'right'
                 ax.spines[side].set_color(color); ax.spines[side].set_linewidth(1.5)
-            ax0.set_xlabel(xlabel, fontsize=9)
-            ax0.grid(True, alpha=0.25, ls='--')
-            right = max(0.95 - 0.06 * max(0, len(vis) - 2), 0.60)
-            self.fig.subplots_adjust(left=0.08, right=right, top=0.97, bottom=0.08)
+            ax0.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
+            right = max(0.93 - 0.065 * max(0, len(vis) - 2), 0.58)
+            self.fig.subplots_adjust(left=0.15, right=right, top=0.96, bottom=0.09)
         else:
             # single channel
             ax = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax)
+            _apply_axes_style(ax)
             name, t, sig, color, unit = vis[0]
             td, sd = self._ds(t, sig)
-            ax.plot(td, sd, color=color, lw=0.8)
+            ax.plot(td, sd, color=color, lw=1.05)
             self.channel_data[name] = (t, sig, color, unit)
-            label = f"{name[:22]} ({unit})" if unit else name[:22]
-            ax.set_ylabel(label, fontsize=8, color=color)
+            label = _compact_axis_label(name, unit, max_chars=24)
+            _set_series_ylabel(ax, label, color, labelpad=12)
             ax.tick_params(axis='y', colors=color, labelsize=7)
-            ax.set_xlabel(xlabel, fontsize=9)
-            ax.grid(True, alpha=0.25, ls='--')
-            self.fig.tight_layout(pad=0.5)
+            ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
+            self.fig.subplots_adjust(left=0.17, right=0.96, top=0.95, bottom=0.11)
         for ax in self.axes_list:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=10, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=6, min_n_ticks=3))
@@ -182,7 +217,7 @@ class TimeDomainCanvas(FigureCanvas):
                 self.span_selected.emit(float(xmin), float(xmax))
                 cb(xmin, xmax)
             self.span_selector = SpanSelector(self.axes_list[-1], _onselect, 'horizontal', useblit=True, interactive=True,
-                                              props=dict(alpha=0.2, facecolor='yellow'))
+                                              props=dict(alpha=0.16, facecolor=PRIMARY))
 
     def set_cursor_visible(self, v):
         self._cursor_visible = v
@@ -205,7 +240,7 @@ class TimeDomainCanvas(FigureCanvas):
         if self._cursor_artists: return
         for ax in self.axes_list:
             self._cursor_artists.append(
-                ax.axvline(x=0, color='red', lw=0.7, ls='--', alpha=0.7, animated=True, visible=False))
+                ax.axvline(x=0, color=DANGER, lw=0.8, ls='--', alpha=0.75, animated=True, visible=False))
         self._refresh = True
 
     def _ensure_dual(self):
@@ -233,10 +268,10 @@ class TimeDomainCanvas(FigureCanvas):
             ylo, yhi = e.inaxes.get_ylim()
             if self._axis_lock == 'x':
                 self._rb_patch = Rectangle((e.xdata, ylo), 0, yhi - ylo,
-                                           facecolor='#007AFF', alpha=0.18, edgecolor='#007AFF', lw=0.8)
+                                           facecolor=PRIMARY, alpha=0.16, edgecolor=PRIMARY, lw=0.8)
             else:
                 self._rb_patch = Rectangle((xlo, e.ydata), xhi - xlo, 0,
-                                           facecolor='#007AFF', alpha=0.18, edgecolor='#007AFF', lw=0.8)
+                                           facecolor=PRIMARY, alpha=0.16, edgecolor=PRIMARY, lw=0.8)
             e.inaxes.add_patch(self._rb_patch)
             self.draw_idle()
             return
@@ -384,7 +419,7 @@ class TimeDomainCanvas(FigureCanvas):
 
 class PlotCanvas(FigureCanvas):
     def __init__(self, parent=None):
-        self.fig = Figure(figsize=(20, 12), dpi=100);
+        self.fig = Figure(figsize=(20, 12), dpi=100, facecolor=CHART_FACE);
         super().__init__(self.fig);
         self.setParent(parent)
         self.mpl_connect('scroll_event', self._on_scroll)
@@ -402,6 +437,7 @@ class PlotCanvas(FigureCanvas):
         self._remarks = []
         self._line_data = {}
         self.fig.clear()
+        self.fig.set_facecolor(CHART_FACE)
 
     def full_reset(self):
         """Clear figure AND remarks/stored-line-data."""
@@ -446,13 +482,13 @@ class PlotCanvas(FigureCanvas):
             f"({x_str}, {y_str})",
             xy=(x, y), xytext=(15, 15),
             textcoords='offset points',
-            fontsize=8, color='#222',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffcc', edgecolor='#999', alpha=0.9),
-            arrowprops=dict(arrowstyle='->', color='#666', lw=1),
+            fontsize=8, color='#111827',
+            bbox=dict(boxstyle='round,pad=0.35', facecolor='#ffffff', edgecolor='#94a3b8', alpha=0.95),
+            arrowprops=dict(arrowstyle='->', color='#64748b', lw=1),
             zorder=100
         )
         # 标记点
-        dot, = ax.plot(x, y, 'o', color='red', markersize=5, zorder=101)
+        dot, = ax.plot(x, y, 'o', color=DANGER, markersize=5, zorder=101)
         self._remarks.append((ax_index, x, y, ann, dot))
         self.draw_idle()
 
@@ -569,6 +605,7 @@ class PlotCanvas(FigureCanvas):
 
     def set_tick_density(self, x, y):
         for ax in self.fig.axes:
+            _apply_axes_style(ax)
             ax.xaxis.set_major_locator(MaxNLocator(nbins=x, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=y, min_n_ticks=3))
         self.draw_idle()
