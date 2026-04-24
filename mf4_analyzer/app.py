@@ -24,9 +24,6 @@ def _load_stylesheet(app):
 
 
 def main():
-    bootstrap_pyqt5 = _import_symbol("_qt_bootstrap", "bootstrap_pyqt5")
-    bootstrap_pyqt5()
-
     import matplotlib
 
     matplotlib.use("Qt5Agg", force=True)
