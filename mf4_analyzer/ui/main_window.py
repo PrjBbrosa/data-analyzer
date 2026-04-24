@@ -165,9 +165,6 @@ class MainWindow(QMainWindow):
         self.lbl_order_progress = QLabel("", self._legacy_hidden)
         # Existing QLabels used in plot_time's status updates
         self.lbl_info = QLabel("", self._legacy_hidden)
-        # StatisticsPanel legacy alias — the real strip lives on ChartStack
-        from .widgets import StatisticsPanel
-        self.stats = StatisticsPanel(self._legacy_hidden)
         # old tabs object — only ever .setCurrentIndex(n) is called; create a real hidden one
         self.tabs = QTabWidget(self._legacy_hidden)
         for _ in range(3):
@@ -475,7 +472,7 @@ class MainWindow(QMainWindow):
         self.canvas_fft.full_reset()
         self.canvas_order.full_reset()
         self.axis_lock.reset()
-        self.stats.update_stats({})
+        self.chart_stack.stats_strip.update_stats({})
         self.lbl_cursor.setText("")
         self.lbl_dual.setText("")
         self.lbl_dual.setVisible(False)
@@ -538,15 +535,12 @@ class MainWindow(QMainWindow):
     def _on_span(self, xmin, xmax):
         self.inspector.top.set_range_from_span(xmin, xmax)
         st = self.canvas_time.get_statistics(time_range=(xmin, xmax))
-        # Task 2.10 will create chart_stack.stats_strip; until then, skip.
-        stats_strip = getattr(self.chart_stack, 'stats_strip', None)
-        if stats_strip is not None:
-            stats_strip.update_stats(st or {})
+        self.chart_stack.stats_strip.update_stats(st or {})
 
     def plot_time(self):
-        if not self.files: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
+        if not self.files: self.canvas_time.clear(); self.canvas_time.draw(); self.chart_stack.stats_strip.update_stats({}); return
         checked = self.channel_list.get_checked_channels()
-        if not checked: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
+        if not checked: self.canvas_time.clear(); self.canvas_time.draw(); self.chart_stack.stats_strip.update_stats({}); return
 
         mode = self.inspector.time_ctx.plot_mode()
         if mode == 'overlay' and len(checked) > 5:
@@ -590,14 +584,14 @@ class MainWindow(QMainWindow):
             data.append((name, True, t, sig, color, unit))
             st[name] = {'min': np.min(sig), 'max': np.max(sig), 'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
                         'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit}
-        if not data: self.canvas_time.clear(); self.canvas_time.draw(); self.stats.update_stats({}); return
+        if not data: self.canvas_time.clear(); self.canvas_time.draw(); self.chart_stack.stats_strip.update_stats({}); return
 
         xlabel = self._custom_xlabel or self.inspector.top.xaxis_label() or 'Time (s)'
         self.canvas_time.plot_channels(data, mode, xlabel=xlabel)
         xt, yt = self.inspector.top.tick_density()
         self.canvas_time.set_tick_density(xt, yt)
         self.canvas_time.enable_span_selector(self._on_span);
-        self.stats.update_stats(st);
+        self.chart_stack.stats_strip.update_stats(st);
         self.tabs.setCurrentIndex(0)
         self.statusBar.showMessage(f"绘制: {len(checked)} 通道, {len(set(fid for fid, _, _ in checked))} 文件")
 

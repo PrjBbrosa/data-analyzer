@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import QLabel, QStackedWidget, QVBoxLayout, QWidget
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
 from .canvases import PlotCanvas, TimeDomainCanvas
+from .widgets import StatsStrip
 
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'order': 2}
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
@@ -41,6 +42,10 @@ class ChartStack(QWidget):
         self.stack.addWidget(_ChartCard(self.canvas_fft))
         self.stack.addWidget(_ChartCard(self.canvas_order))
         lay.addWidget(self.stack, stretch=1)
+
+        # Stats strip mounted at the bottom (Task 2.10)
+        self.stats_strip = StatsStrip(self)
+        lay.addWidget(self.stats_strip)
 
         # Cursor pill (owned by ChartStack; floats over active canvas)
         self._cursor_pill = QLabel("", self.stack)

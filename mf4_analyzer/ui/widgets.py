@@ -205,3 +205,47 @@ class MultiFileChannelWidget(QWidget):
                                                        Qt.Unchecked if ci.checkState(0) == Qt.Checked else Qt.Checked)
         self._updating = False;
         self.channels_changed.emit()
+
+
+class StatsStrip(QFrame):
+    """Compact stats line + click-to-expand full table.
+
+    Collapsed: one-liner per channel joined with ' │ '.
+    Expanded: full StatisticsPanel with the 6-metric tree.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PyQt5.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout
+        self._expanded = False
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 4, 6, 4)
+        top = QHBoxLayout()
+        self._btn_expand = QToolButton()
+        self._btn_expand.setText("▸")
+        self._btn_expand.clicked.connect(self.toggle)
+        top.addWidget(self._btn_expand)
+        self._lbl_summary = QLabel("— 无通道 —")
+        top.addWidget(self._lbl_summary, stretch=1)
+        lay.addLayout(top)
+        self._panel = StatisticsPanel(self)
+        self._panel.setVisible(False)
+        lay.addWidget(self._panel)
+
+    def toggle(self):
+        self._expanded = not self._expanded
+        self._btn_expand.setText("▾" if self._expanded else "▸")
+        self._panel.setVisible(self._expanded)
+
+    def update_stats(self, stats):
+        if not stats:
+            self._lbl_summary.setText("— 无通道 —")
+            self._panel.update_stats({})
+            return
+        parts = []
+        for ch, s in stats.items():
+            parts.append(
+                f"● {ch}: min={s['min']:.3g} max={s['max']:.3g} "
+                f"rms={s['rms']:.3g} p2p={s['p2p']:.3g}"
+            )
+        self._lbl_summary.setText(" │ ".join(parts))
+        self._panel.update_stats(stats)
