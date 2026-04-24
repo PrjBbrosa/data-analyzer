@@ -14,6 +14,7 @@ def test_toolbar_mode_changed_emits(qapp, qtbot):
     with qtbot.waitSignal(tb.mode_changed, timeout=200) as blocker:
         tb.btn_mode_fft.click()
     assert blocker.args == ['fft']
+    assert tb.btn_mode_fft.isChecked()
 
 
 def test_toolbar_enabled_matrix(qapp):

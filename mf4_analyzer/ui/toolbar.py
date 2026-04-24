@@ -1,6 +1,6 @@
 """Top three-segment toolbar: file actions · mode switcher · canvas actions."""
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QWidget
+from PyQt5.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QWidget
 
 
 class Toolbar(QWidget):
@@ -32,6 +32,13 @@ class Toolbar(QWidget):
                   self.btn_cursor_reset, self.btn_axis_lock):
             lay.addWidget(b)
         lay.addStretch()
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        for key, b in [('time', self.btn_mode_time), ('fft', self.btn_mode_fft), ('order', self.btn_mode_order)]:
+            b.setCheckable(True)
+            b.setProperty("segment", key)
+            self._mode_group.addButton(b)
+        self.btn_mode_time.setChecked(True)
         self._current_mode = 'time'
         self._wire()
 
@@ -39,9 +46,8 @@ class Toolbar(QWidget):
         self.btn_add.clicked.connect(self.file_add_requested)
         self.btn_edit.clicked.connect(self.channel_editor_requested)
         self.btn_export.clicked.connect(self.export_requested)
-        self.btn_mode_time.clicked.connect(lambda: self._set_mode('time'))
-        self.btn_mode_fft.clicked.connect(lambda: self._set_mode('fft'))
-        self.btn_mode_order.clicked.connect(lambda: self._set_mode('order'))
+        for key, b in [('time', self.btn_mode_time), ('fft', self.btn_mode_fft), ('order', self.btn_mode_order)]:
+            b.clicked.connect(lambda _=False, k=key: self._set_mode(k))
         self.btn_cursor_reset.clicked.connect(self.cursor_reset_requested)
         self.btn_axis_lock.clicked.connect(lambda: self.axis_lock_requested.emit(self.btn_axis_lock))
 
@@ -49,6 +55,10 @@ class Toolbar(QWidget):
         if mode == self._current_mode:
             return
         self._current_mode = mode
+        # Sync checked state in case this was called programmatically
+        mapping = {'time': self.btn_mode_time, 'fft': self.btn_mode_fft, 'order': self.btn_mode_order}
+        if mode in mapping:
+            mapping[mode].setChecked(True)
         self.mode_changed.emit(mode)
 
     def set_enabled_for_mode(self, mode, has_file):

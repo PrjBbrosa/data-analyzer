@@ -96,3 +96,20 @@ StatsStrip {
 
 /* Statusbar */
 QStatusBar { background: #f7f7f9; color: #6e6e73; border-top: 1px solid #e5e5e7; }
+
+/* Toolbar mode buttons as macOS-style segmented control */
+Toolbar QPushButton[segment="time"],
+Toolbar QPushButton[segment="fft"],
+Toolbar QPushButton[segment="order"] {
+    background: #e8e8ed;
+    border: none;
+    border-radius: 5px;
+    margin: 0 1px;
+    padding: 5px 16px;
+    color: #6e6e73;
+}
+Toolbar QPushButton[segment]:checked {
+    background: #ffffff;
+    color: #1d1d1f;
+    border: 1px solid #d2d2d7;
+}
