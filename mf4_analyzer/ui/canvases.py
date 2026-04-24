@@ -148,7 +148,7 @@ class TimeDomainCanvas(FigureCanvas):
                     ax.tick_params(axis='x', labelbottom=False)
                 else:
                     ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
-            self.fig.subplots_adjust(hspace=0.08, left=0.17, right=0.96, top=0.96, bottom=0.08)
+            self.fig.tight_layout()
         elif mode == 'overlay' and len(vis) >= 2:
             # Per-channel twin-Y axes
             ax0 = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax0)
@@ -171,8 +171,12 @@ class TimeDomainCanvas(FigureCanvas):
                 side = 'left' if ax is ax0 else 'right'
                 ax.spines[side].set_color(color); ax.spines[side].set_linewidth(1.5)
             ax0.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
+            # Overlay keeps the right-hand margin adjustment because multiple twinx
+            # spines require space; tight_layout cannot reason about twinx stacks.
+            # Use tight_layout first to fix left/top/bottom, then carve the right.
+            self.fig.tight_layout()
             right = max(0.93 - 0.065 * max(0, len(vis) - 2), 0.58)
-            self.fig.subplots_adjust(left=0.15, right=right, top=0.96, bottom=0.09)
+            self.fig.subplots_adjust(right=right)
         else:
             # single channel
             ax = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax)
@@ -185,7 +189,7 @@ class TimeDomainCanvas(FigureCanvas):
             _set_series_ylabel(ax, label, color, labelpad=12)
             ax.tick_params(axis='y', colors=color, labelsize=7)
             ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
-            self.fig.subplots_adjust(left=0.17, right=0.96, top=0.95, bottom=0.11)
+            self.fig.tight_layout()
         for ax in self.axes_list:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=10, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=6, min_n_ticks=3))

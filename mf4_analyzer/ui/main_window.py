@@ -678,7 +678,7 @@ class MainWindow(QMainWindow):
             self.canvas_fft.store_line_data(0, freq, amp)
             self.canvas_fft.store_line_data(1, freq, psd_db)
 
-            self.canvas_fft.fig.subplots_adjust(left=0.11, right=0.98, top=0.91, bottom=0.09, hspace=0.42)
+            self.canvas_fft.fig.tight_layout()
             xt, yt = self.inspector.top.tick_density()
             self.canvas_fft.set_tick_density(xt, yt)
             self.canvas_fft.draw();
