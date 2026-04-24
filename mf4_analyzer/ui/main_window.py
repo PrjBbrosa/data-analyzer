@@ -13,7 +13,7 @@
 #                                         spin_to/btn_ot/btn_or/btn_ok/lbl_order_progress shims
 # Task 2.9 (ChartStack cursor pill)    → removes lbl_cursor/lbl_dual shims
 # Task 2.10 (Stats strip)              → removes self.stats/tabs shims
-# Task 3.4 (axis lock popover)         → deletes axis_lock_toolbar.py
+# Task 3.4 (axis lock popover)         → done; axis_lock_toolbar.py deleted
 # At end of Phase 2 the `_legacy_hidden` holder must be empty.
 
 import numpy as np
@@ -54,7 +54,6 @@ from ..signal import FFTAnalyzer, OrderAnalyzer
 from .canvases import TimeDomainCanvas, PlotCanvas
 from .dialogs import ChannelEditorDialog, ExportDialog
 from .widgets import StatisticsPanel, MultiFileChannelWidget
-from .axis_lock_toolbar import AxisLockBar
 from .icons import Icons
 
 
@@ -249,17 +248,40 @@ class MainWindow(QMainWindow):
         self.canvas_order.draw_idle()
 
     def _show_axis_lock_popover(self, anchor):
-        # Phase 1 placeholder — Phase 3 replaces with drawers/axis_lock_popover.py.
-        # Canvas is the single source of truth for axis-lock state (§12.1).
-        cur = self.canvas_time._axis_lock or 'none'
-        next_state = {'none': 'x', 'x': 'y', 'y': 'none'}[cur]
-        self.canvas_time.set_axis_lock(next_state)
-        self.statusBar.showMessage(f"轴锁: {next_state}")
+        from .drawers.axis_lock_popover import AxisLockPopover
+        current = self.canvas_time._axis_lock or 'none'
+        pop = AxisLockPopover(self, current=current)
+        pop.lock_changed.connect(self.canvas_time.set_axis_lock)
+        pop.show_at(anchor)
 
     def _show_rebuild_popover(self, anchor, mode='fft'):
-        # Phase 1 placeholder — Phase 3 replaces.
-        # `mode` identifies which Inspector section emitted (needed for signal→file resolution).
-        self.rebuild_time_axis()
+        from PyQt5.QtWidgets import QDialog, QMessageBox
+        if mode == 'fft':
+            sig_data = self.inspector.fft_ctx.current_signal()
+        else:
+            sig_data = self.inspector.order_ctx.current_signal()
+        target_fid = sig_data[0] if sig_data and sig_data[0] in self.files else self._active
+        if not target_fid or target_fid not in self.files:
+            QMessageBox.warning(self, "提示", "请先选择信号")
+            return
+        fd = self.files[target_fid]
+        from .drawers.rebuild_time_popover import RebuildTimePopover
+        pop = RebuildTimePopover(self, fd.filename, fd.fs)
+        pop.show_at(anchor)
+        if pop.exec_() == QDialog.Accepted:
+            new_fs = pop.new_fs()
+            old_max = fd.time_array[-1] if len(fd.time_array) else 0
+            fd.rebuild_time_axis(new_fs)
+            new_max = fd.time_array[-1] if len(fd.time_array) else 0
+            current_hi = self.inspector.top.spin_end.maximum()
+            self.inspector.top.set_range_limits(0, max(current_hi, new_max))
+            if target_fid == self._active:
+                self.inspector.fft_ctx.set_fs(new_fs)
+                self.inspector.order_ctx.set_fs(new_fs)
+            self.plot_time()
+            self.statusBar.showMessage(
+                f"时间轴已重建: {fd.short_name} | Fs={new_fs} | {old_max:.1f}s → {new_max:.3f}s"
+            )
 
     def _on_inspector_signal_changed(self, mode, data):
         """Fs auto-sync per §6.3: spin_fs reflects selected signal's source file Fs."""
@@ -596,29 +618,44 @@ class MainWindow(QMainWindow):
         self.statusBar.showMessage(f"绘制: {len(checked)} 通道, {len(set(fid for fid, _, _ in checked))} 文件")
 
     def open_editor(self):
-        if not self.files or not self._active or self._active not in self.files: QMessageBox.warning(self, "提示",
-                                                                                                     "请先加载文件"); return
-        fd = self.files[self._active];
-        dlg = ChannelEditorDialog(self, fd)
-        if dlg.exec_() == QDialog.Accepted:
-            for name, (arr, unit) in dlg.new_channels.items(): fd.data[name] = arr; fd.channels.append(name);
+        if not self.files or not self._active or self._active not in self.files:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "提示", "请先加载文件")
+            return
+        fd = self.files[self._active]
+        from .drawers.channel_editor_drawer import ChannelEditorDrawer
+        drawer = ChannelEditorDrawer(self, fd)
+        drawer.applied.connect(lambda nc, rm: self._apply_channel_edits(self._active, nc, rm))
+        drawer.exec_()
+
+
+    def _apply_channel_edits(self, fid, new_channels, removed_channels):
+        fd = self.files[fid]
+        for name, (arr, unit) in new_channels.items():
+            fd.data[name] = arr
+            fd.channels.append(name)
             fd.channel_units[name] = unit
-            for name in dlg.removed_channels:
-                if name in fd.data.columns: fd.data = fd.data.drop(columns=[name])
-                if name in fd.channels: fd.channels.remove(name)
-                fd.channel_units.pop(name, None)
-            self.channel_list.remove_file(self._active);
-            self.channel_list.add_file(self._active, fd);
-            self._update_combos()
-            self.statusBar.showMessage(f"编辑: +{len(dlg.new_channels)} -{len(dlg.removed_channels)}");
-            self.plot_time()
+        for name in removed_channels:
+            if name in fd.data.columns:
+                fd.data = fd.data.drop(columns=[name])
+            if name in fd.channels:
+                fd.channels.remove(name)
+            fd.channel_units.pop(name, None)
+        self.navigator.remove_file(fid)
+        self.navigator.add_file(fid, fd)
+        self._update_combos()
+        self.statusBar.showMessage(
+            f"编辑: +{len(new_channels)} -{len(removed_channels)}"
+        )
+        self.plot_time()
 
     def export_excel(self):
         if not self.files or not self._active: QMessageBox.warning(self, "提示", "请先加载文件"); return
         fd = self.files[self._active];
         chs = fd.get_signal_channels()
         if not chs: return
-        dlg = ExportDialog(self, chs)
+        from .drawers.export_sheet import ExportSheet
+        dlg = ExportSheet(self, chs)
         if dlg.exec_() == QDialog.Accepted:
             sel = dlg.get_selected()
             if not sel: return
