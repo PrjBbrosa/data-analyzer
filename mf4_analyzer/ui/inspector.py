@@ -31,7 +31,7 @@ class Inspector(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(0)
 
         self._scroll = QScrollArea(self)

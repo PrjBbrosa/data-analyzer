@@ -76,7 +76,7 @@ class FileNavigator(QWidget):
         self._rows = {}        # fid -> _FileRow
         self._active_fid = None
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(4)
 
         splitter = QSplitter(Qt.Vertical, self)

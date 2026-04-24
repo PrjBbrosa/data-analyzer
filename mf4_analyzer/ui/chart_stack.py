@@ -120,8 +120,8 @@ class ChartStack(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(4, 8, 4, 0)
-        lay.setSpacing(6)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(4)
         self.stack = QStackedWidget(self)
         self.canvas_time = TimeDomainCanvas(self)
         self.canvas_fft = PlotCanvas(self)
