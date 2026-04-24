@@ -106,13 +106,11 @@ def test_time_chart_card_removes_subplots_config_button(qapp, qtbot):
         assert act.text().lower() not in ('subplots', 'configure subplots')
 
 
-def test_fft_card_still_has_subplots_button(qapp, qtbot):
-    """Only time card strips the button — FFT / Order keep the default toolbar."""
+def test_fft_card_also_strips_subplots_button(qapp, qtbot):
+    """Subplots action is stripped from every card since tight_layout is the default."""
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     qtbot.addWidget(cs)
-    # Per spec §3.2 we strip Subplots from ALL cards (tight_layout is the
-    # default everywhere). So this test also asserts absence on FFT card.
     fft_card = cs.stack.widget(1)
     for act in fft_card.toolbar.actions():
         assert act.text().lower() not in ('subplots', 'configure subplots')

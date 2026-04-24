@@ -1,6 +1,6 @@
 """Center pane: QStackedWidget holding the three canvases + stats strip."""
 from PyQt5.QtCore import QSize, pyqtSignal
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QStackedWidget, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QFrame, QLabel, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
