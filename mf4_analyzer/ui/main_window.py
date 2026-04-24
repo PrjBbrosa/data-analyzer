@@ -204,9 +204,10 @@ class MainWindow(QMainWindow):
             new_max = fd.time_array[-1] if len(fd.time_array) else 0
             current_hi = self.inspector.top.spin_end.maximum()
             self.inspector.top.set_range_limits(0, max(current_hi, new_max))
-            if target_fid == self._active:
-                self.inspector.fft_ctx.set_fs(new_fs)
-                self.inspector.order_ctx.set_fs(new_fs)
+            for ctx in (self.inspector.fft_ctx, self.inspector.order_ctx):
+                sig_data = ctx.current_signal()
+                if sig_data is not None and sig_data[0] == target_fid:
+                    ctx.set_fs(new_fs)
             self.plot_time()
             self.statusBar.showMessage(
                 f"时间轴已重建: {fd.short_name} | Fs={new_fs} | {old_max:.1f}s → {new_max:.3f}s"
@@ -230,8 +231,12 @@ class MainWindow(QMainWindow):
         self._update_info()
         if fid and fid in self.files:
             fd = self.files[fid]
-            self.inspector.fft_ctx.set_fs(fd.fs)
-            self.inspector.order_ctx.set_fs(fd.fs)
+            # Only push Fs to each contextual if its signal dropdown points at
+            # the active file (or has no selection yet). Per §6.3 Fs rule.
+            for ctx in (self.inspector.fft_ctx, self.inspector.order_ctx):
+                sig_data = ctx.current_signal()
+                if sig_data is None or sig_data[0] == fid:
+                    ctx.set_fs(fd.fs)
             if len(fd.time_array):
                 self.inspector.top.set_range_limits(0, fd.time_array[-1])
         self.toolbar.set_enabled_for_mode(
