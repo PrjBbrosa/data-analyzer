@@ -210,3 +210,15 @@ Verification after this pass:
 .\.venv\Scripts\python.exe -m pytest tests -q
 # 53 passed
 ```
+
+Follow-up after a second narrow-inspector screenshot:
+
+- Replaced the persistent Inspector top section's horizontal form rows with vertical field blocks (`label` above control), so `横坐标` / `范围` / `刻度` no longer stack under narrow pane widths.
+- Removed the QSS triangle-arrow hack that rendered as square/dot artifacts in spinbox and combobox controls.
+
+Verification:
+
+```bash
+.\.venv\Scripts\python.exe -m pytest tests -q
+# 53 passed
+```

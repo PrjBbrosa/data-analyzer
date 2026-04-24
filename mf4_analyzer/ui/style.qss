@@ -138,11 +138,10 @@ QComboBox::drop-down:hover {
 
 QComboBox::down-arrow {
     image: none;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid #64748b;
+    width: 7px;
+    height: 5px;
+    border: none;
+    background: transparent;
 }
 
 QSpinBox,
@@ -180,21 +179,19 @@ QDoubleSpinBox::down-button:hover {
 QSpinBox::up-arrow,
 QDoubleSpinBox::up-arrow {
     image: none;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-bottom: 5px solid #64748b;
+    width: 7px;
+    height: 5px;
+    border: none;
+    background: transparent;
 }
 
 QSpinBox::down-arrow,
 QDoubleSpinBox::down-arrow {
     image: none;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid #64748b;
+    width: 7px;
+    height: 5px;
+    border: none;
+    background: transparent;
 }
 
 QComboBox QAbstractItemView {
@@ -407,7 +404,7 @@ Inspector {
 
 Inspector QGroupBox {
     margin-top: 10px;
-    padding: 14px 10px 10px;
+    padding: 18px 10px 10px;
     border: 1px solid #d7dee8;
     border-radius: 12px;
     background-color: #ffffff;
@@ -420,6 +417,23 @@ Inspector QGroupBox::title {
     padding: 0 5px;
     color: #334155;
     background-color: #ffffff;
+}
+
+QWidget#inspectorField {
+    background: transparent;
+}
+
+QLabel#fieldLabel {
+    color: #334155;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QWidget#inspectorField QLineEdit,
+QWidget#inspectorField QComboBox,
+QWidget#inspectorField QSpinBox,
+QWidget#inspectorField QDoubleSpinBox {
+    min-height: 28px;
 }
 
 Inspector QPushButton[role="choice"] {
