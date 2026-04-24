@@ -433,7 +433,7 @@ Inspector QPushButton[role="primary"] {
 
 /* Chart stack */
 ChartStack {
-    background-color: #edf2f8;
+    background-color: #ffffff;
 }
 
 QWidget#chartCard {
