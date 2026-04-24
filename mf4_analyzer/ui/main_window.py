@@ -67,6 +67,7 @@ class MainWindow(QMainWindow):
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
         splitter.setCollapsible(2, False)
+        splitter.setHandleWidth(3)
         self.navigator.setMinimumWidth(220)
         self.chart_stack.setMinimumWidth(400)
         self.inspector.setMinimumWidth(280)

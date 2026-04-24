@@ -23,7 +23,8 @@ QSplitter::handle {
 }
 
 QSplitter::handle:horizontal {
-    width: 1px;
+    width: 3px;
+    background-color: #cbd5e1;
 }
 
 QSplitter::handle:vertical {
@@ -253,7 +254,8 @@ Toolbar {
 }
 
 Toolbar QPushButton {
-    min-height: 28px;
+    min-height: 24px;
+    padding: 3px 10px;
 }
 
 Toolbar QPushButton[segment="time"],
@@ -507,4 +509,32 @@ QStatusBar {
     background-color: #f8fafc;
     color: #64748b;
     border-top: 1px solid #d7dee8;
+}
+
+/* Chart toolbar — segmented controls (Subplot/Overlay, Off/Single/Dual) */
+QWidget#chartToolbar QPushButton[role="chart-choice"] {
+    min-height: 22px;
+    margin: 0 2px;
+    padding: 2px 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background-color: transparent;
+    color: #64748b;
+    font-weight: 600;
+}
+
+QWidget#chartToolbar QPushButton[role="chart-choice"]:hover {
+    background-color: #eef2f7;
+    color: #334155;
+}
+
+QWidget#chartToolbar QPushButton[role="chart-choice"]:checked {
+    background-color: #ffffff;
+    border-color: #cbd5e1;
+    color: #0f3f8f;
+}
+
+QFrame#chartToolbarSep {
+    margin: 3px 4px;
+    color: #d7dee8;
 }

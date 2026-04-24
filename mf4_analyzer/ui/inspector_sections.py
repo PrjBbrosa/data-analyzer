@@ -87,10 +87,8 @@ class PersistentTop(QWidget):
         fl.addRow("结束:", _fit_field(self.spin_end))
         root.addWidget(g)
 
-        # ------- Tick density group (§6.1 ▸ 刻度, default collapsed) -------
+        # ------- Tick density group (§6.1 ▸ 刻度) -------
         g = QGroupBox("刻度")
-        g.setCheckable(True)
-        g.setChecked(False)
         fl = QFormLayout(g)
         _configure_form(fl)
         self.spin_xt = QSpinBox()
@@ -101,17 +99,6 @@ class PersistentTop(QWidget):
         self.spin_yt.setRange(3, 20)
         self.spin_yt.setValue(6)
         fl.addRow("Y:", _fit_field(self.spin_yt))
-
-        def _toggle_ticks(checked):
-            self.spin_xt.setVisible(checked)
-            self.spin_yt.setVisible(checked)
-            for i in range(fl.rowCount()):
-                lbl = fl.itemAt(i, QFormLayout.LabelRole)
-                if lbl and lbl.widget():
-                    lbl.widget().setVisible(checked)
-
-        g.toggled.connect(_toggle_ticks)
-        _toggle_ticks(False)  # apply initial collapsed state
         root.addWidget(g)
 
         self._wire()
