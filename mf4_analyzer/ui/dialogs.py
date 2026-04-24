@@ -174,7 +174,7 @@ class ChannelEditorDialog(QDialog):
             # 生成名称
             name = self.edit_name2.text().strip()
             if not name:
-                name = f"{op_symbols[op]}_{ch_a[:8]}_{ch_b[:8]}"
+                name = f"{op_symbols[op]}_{ch_a}_{ch_b}"
             while name in self.fd.data.columns or name in self.new_channels: name += "_1"
 
             # 合并单位

@@ -27,7 +27,6 @@ class PersistentTop(QWidget):
 
     xaxis_apply_requested = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
-    range_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -82,8 +81,10 @@ class PersistentTop(QWidget):
         gl.addLayout(h)
         root.addWidget(g)
 
-        # ------- Tick density group -------
+        # ------- Tick density group (§6.1 ▸ 刻度, default collapsed) -------
         g = QGroupBox("刻度")
+        g.setCheckable(True)
+        g.setChecked(False)
         fl = QFormLayout(g)
         self.spin_xt = QSpinBox()
         self.spin_xt.setRange(3, 30)
@@ -93,6 +94,17 @@ class PersistentTop(QWidget):
         self.spin_yt.setRange(3, 20)
         self.spin_yt.setValue(6)
         fl.addRow("Y:", self.spin_yt)
+
+        def _toggle_ticks(checked):
+            self.spin_xt.setVisible(checked)
+            self.spin_yt.setVisible(checked)
+            for i in range(fl.rowCount()):
+                lbl = fl.itemAt(i, QFormLayout.LabelRole)
+                if lbl and lbl.widget():
+                    lbl.widget().setVisible(checked)
+
+        g.toggled.connect(_toggle_ticks)
+        _toggle_ticks(False)  # apply initial collapsed state
         root.addWidget(g)
 
         self._wire()
@@ -104,9 +116,6 @@ class PersistentTop(QWidget):
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
         self.spin_xt.valueChanged.connect(self._emit_ticks)
         self.spin_yt.valueChanged.connect(self._emit_ticks)
-        self.chk_range.toggled.connect(lambda _: self.range_changed.emit())
-        self.spin_start.valueChanged.connect(lambda _: self.range_changed.emit())
-        self.spin_end.valueChanged.connect(lambda _: self.range_changed.emit())
 
     def _emit_ticks(self):
         self.tick_density_changed.emit(self.spin_xt.value(), self.spin_yt.value())

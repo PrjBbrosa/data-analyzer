@@ -18,6 +18,7 @@ class TimeDomainCanvas(FigureCanvas):
     MAX_PTS = 8000
     cursor_info = pyqtSignal(str)
     dual_cursor_info = pyqtSignal(str)
+    span_selected = pyqtSignal(float, float)
 
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(10, 6), dpi=100)
@@ -177,7 +178,10 @@ class TimeDomainCanvas(FigureCanvas):
 
     def enable_span_selector(self, cb):
         if self.axes_list:
-            self.span_selector = SpanSelector(self.axes_list[-1], cb, 'horizontal', useblit=True, interactive=True,
+            def _onselect(xmin, xmax):
+                self.span_selected.emit(float(xmin), float(xmax))
+                cb(xmin, xmax)
+            self.span_selector = SpanSelector(self.axes_list[-1], _onselect, 'horizontal', useblit=True, interactive=True,
                                               props=dict(alpha=0.2, facecolor='yellow'))
 
     def set_cursor_visible(self, v):

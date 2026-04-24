@@ -1,7 +1,7 @@
 """Left pane: file list (replacing QTabWidget) + channel tree."""
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton,
+    QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox,
     QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
 

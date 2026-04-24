@@ -10,38 +10,19 @@ from collections import OrderedDict
 
 from PyQt5.QtWidgets import (
     QApplication,
-    QCheckBox,
-    QComboBox,
     QDialog,
-    QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPushButton,
-    QScrollArea,
-    QSpinBox,
     QSplitter,
     QStatusBar,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 from PyQt5.QtCore import Qt, QTimer
 
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.ticker import MaxNLocator
-
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer, OrderAnalyzer
-from .canvases import TimeDomainCanvas, PlotCanvas
-from .dialogs import ChannelEditorDialog, ExportDialog
-from .widgets import StatisticsPanel, MultiFileChannelWidget
-from .icons import Icons
 
 
 class MainWindow(QMainWindow):
@@ -225,6 +206,10 @@ class MainWindow(QMainWindow):
             self.inspector.fft_ctx.set_fs(fs)
         elif mode == 'order':
             self.inspector.order_ctx.set_fs(fs)
+
+    def set_active_file(self, fid):
+        """Public entrypoint matching §12.1 contract."""
+        self._on_file_activated(fid)
 
     def _on_file_activated(self, fid):
         self._active = fid
