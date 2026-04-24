@@ -92,7 +92,7 @@ class TimeChartCard(_ChartCard):
         return self._plot_mode
 
     def set_plot_mode(self, mode):
-        if mode not in ('subplot', 'overlay'):
+        if mode not in ('subplot', 'overlay') or mode == self._plot_mode:
             return
         self._plot_mode = mode
         self.btn_subplot.setChecked(mode == 'subplot')
@@ -104,7 +104,7 @@ class TimeChartCard(_ChartCard):
         return self._cursor_mode
 
     def set_cursor_mode(self, mode):
-        if mode not in ('off', 'single', 'dual'):
+        if mode not in ('off', 'single', 'dual') or mode == self._cursor_mode:
             return
         self._cursor_mode = mode
         for k, b in self._cursor_buttons.items():

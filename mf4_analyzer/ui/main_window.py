@@ -127,7 +127,6 @@ class MainWindow(QMainWindow):
         self._custom_xlabel = None
         self._custom_xaxis_fid = None
         self._custom_xaxis_ch = None
-        self._plot_mode = 'subplot'
         self._axis_lock_widget = None
 
     def _on_mode_changed(self, mode):
@@ -147,7 +146,6 @@ class MainWindow(QMainWindow):
         self.canvas_time.set_dual_cursor_mode(mode == 'dual')
 
     def _on_plot_mode_changed(self, mode):
-        self._plot_mode = mode
         self.plot_time()
 
     def _update_all_tick_density_pair(self, xt, yt):

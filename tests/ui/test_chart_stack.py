@@ -114,3 +114,33 @@ def test_fft_card_also_strips_subplots_button(qapp, qtbot):
     fft_card = cs.stack.widget(1)
     for act in fft_card.toolbar.actions():
         assert act.text().lower() not in ('subplots', 'configure subplots')
+
+
+def test_set_plot_mode_noop_does_not_emit(qapp, qtbot):
+    """set_plot_mode with the current mode should not re-emit."""
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    # default is 'subplot'; calling with 'subplot' again should not emit.
+    assert cs.plot_mode() == 'subplot'
+    # qtbot.waitSignal with timeout=50 and check=[] — use a different approach:
+    received = []
+    cs.plot_mode_changed.connect(lambda m: received.append(m))
+    cs.set_plot_mode('subplot')
+    assert received == []
+    # sanity: a real change does still emit
+    cs.set_plot_mode('overlay')
+    assert received == ['overlay']
+
+
+def test_set_cursor_mode_noop_does_not_emit(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    assert cs.cursor_mode() == 'off'
+    received = []
+    cs.cursor_mode_changed.connect(lambda m: received.append(m))
+    cs.set_cursor_mode('off')
+    assert received == []
+    cs.set_cursor_mode('dual')
+    assert received == ['dual']
