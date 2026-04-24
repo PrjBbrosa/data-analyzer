@@ -390,7 +390,7 @@ class MainWindow(QMainWindow):
         self.chart_stack._cursor_dual_pill.setVisible(False)
         # Stats strip
         self.chart_stack.stats_strip.update_stats({})
-        # Inspector cursor mode → back to 'single' default
+        # Chart-card cursor mode → back to 'off' default (spec §8)
         self.chart_stack.set_cursor_mode('off')
         # Invalidate custom X axis pointer if source gone
         if self._custom_xaxis_fid is not None and self._custom_xaxis_fid not in self.files:

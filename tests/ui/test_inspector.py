@@ -83,3 +83,11 @@ def test_order_contextual_emits(qapp, qtbot):
         oc.btn_or.click()
     with qtbot.waitSignal(oc.order_track_requested, timeout=200):
         oc.btn_ok.click()
+
+
+def test_inspector_no_longer_exposes_mode_signals(qapp):
+    """Spec §9: after 2026-04-24 cleanup, Inspector no longer relays
+    plot_mode_changed / cursor_mode_changed — those are on ChartStack now."""
+    insp = Inspector()
+    assert not hasattr(insp, 'plot_mode_changed')
+    assert not hasattr(insp, 'cursor_mode_changed')
