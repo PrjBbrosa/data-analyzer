@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>MF4 Analyzer — Section-label schemes</title>
+<style>
+  :root{
+    --base:#f5f7fb;
+    --card:#ffffff;
+    --hover:#eef2f7;
+    --hairline:#eef2f7;
+    --hairline-strong:#dfe5ee;
+    --ink:#111827;
+    --muted:#64748b;
+    --caption:#475569;
+    --accent:#1769e0;
+    --accent-soft:#e8efff;
+    --accent-border:#c7d2fe;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#e9edf3;color:var(--ink);font-family:"Microsoft YaHei","Segoe UI","PingFang SC","SF Pro Text",sans-serif;font-size:12px}
+  .page{max-width:1280px;margin:24px auto;padding:0 20px 48px}
+  h1{font-size:18px;font-weight:700;margin:0 0 4px}
+  .subtitle{font-size:13px;color:var(--muted);margin:0 0 24px}
+
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));
+    gap:20px;
+  }
+  .sample{
+    border:1px solid var(--hairline-strong);
+    border-radius:12px;
+    background:#ffffff;
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+  }
+  .sample-title{
+    padding:10px 14px;
+    border-bottom:1px solid var(--hairline);
+    font-size:12px;
+    font-weight:700;
+    color:var(--ink);
+    background:#fafbfd;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+  }
+  .sample-title .tag{color:var(--muted);font-weight:500}
+  .pane{
+    background:var(--base);
+    padding:14px 10px 16px;
+    min-height:260px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .card{
+    background:var(--card);
+    border:1px solid var(--hairline-strong);
+    border-radius:10px;
+    padding:8px 10px;
+  }
+  .card .name{font-size:13px;font-weight:700;color:var(--ink)}
+  .card .meta{font-size:11px;color:var(--muted);margin-top:2px}
+  .card.active{border-color:var(--accent);background:#f5f8ff}
+
+  /* Section-level container (emulates pane header row) */
+  .sec{display:flex;align-items:center;gap:8px}
+  .sec .count{font-size:11px;font-weight:600;color:var(--muted)}
+  .sec .kebab{
+    margin-left:auto;width:22px;height:22px;display:inline-flex;align-items:center;
+    justify-content:center;border:1px solid var(--hairline-strong);border-radius:6px;color:var(--muted);
+  }
+
+  /* ========== Variant styles (only the title element differs) ========== */
+
+  /* A. Plain bold (current) */
+  .v-a .title{font-size:13px;font-weight:700;color:var(--ink)}
+
+  /* B. Compact bold + letter spacing (subtle "header-y" feel) */
+  .v-b .title{font-size:12px;font-weight:700;color:var(--ink);letter-spacing:2px}
+
+  /* C. Title with hairline below spanning full pane */
+  .v-c .sec{position:relative;padding-bottom:6px;border-bottom:1px solid var(--hairline-strong)}
+  .v-c .title{font-size:13px;font-weight:700;color:var(--ink)}
+
+  /* D. Left accent bar + bold title */
+  .v-d .title{font-size:13px;font-weight:700;color:var(--ink);position:relative;padding-left:10px}
+  .v-d .title::before{content:"";position:absolute;left:0;top:3px;bottom:3px;width:3px;border-radius:2px;background:var(--accent)}
+
+  /* E. Soft pill background */
+  .v-e .title{font-size:11px;font-weight:700;color:var(--caption);background:var(--hover);padding:3px 10px;border-radius:10px;letter-spacing:0.5px}
+
+  /* F. Muted uppercase-style (caption tier) */
+  .v-f .title{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:3px;text-transform:uppercase}
+
+  /* G. Colored title (ink → accent) */
+  .v-g .title{font-size:13px;font-weight:700;color:var(--accent)}
+
+  /* H. Outlined chip */
+  .v-h .title{font-size:11px;font-weight:700;color:var(--caption);border:1px solid var(--hairline-strong);padding:2px 8px;border-radius:8px;letter-spacing:0.5px}
+
+  /* Inspector section (taller, multiple groups) */
+  .ins-pane{
+    background:var(--base);
+    padding:12px 10px 14px;
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+  .ins-group{display:flex;flex-direction:column;gap:6px}
+  .ins-field{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink)}
+  .ins-field label{color:var(--caption);min-width:44px}
+  .ins-field .input{
+    flex:1;height:24px;border:1px solid var(--hairline-strong);border-radius:7px;background:#fff;
+    display:flex;align-items:center;padding:0 8px;color:var(--ink);
+  }
+  .ins-field .input.muted{color:var(--muted)}
+
+  .ins-group .gtitle{font-size:13px;font-weight:700;color:var(--ink)}
+  .ins-v-a .gtitle{font-size:13px;font-weight:700;color:var(--ink)}
+  .ins-v-b .gtitle{font-size:12px;font-weight:700;color:var(--ink);letter-spacing:2px}
+  .ins-v-c .gtitle{padding-bottom:4px;border-bottom:1px solid var(--hairline-strong);font-size:13px;font-weight:700;color:var(--ink)}
+  .ins-v-d .gtitle{padding-left:10px;border-left:3px solid var(--accent);font-size:13px;font-weight:700;color:var(--ink)}
+  .ins-v-e .gtitle{align-self:flex-start;font-size:11px;font-weight:700;color:var(--caption);background:var(--hover);padding:3px 10px;border-radius:10px;letter-spacing:0.5px}
+  .ins-v-f .gtitle{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:3px;text-transform:uppercase}
+  .ins-v-g .gtitle{font-size:13px;font-weight:700;color:var(--accent)}
+  .ins-v-h .gtitle{align-self:flex-start;font-size:11px;font-weight:700;color:var(--caption);border:1px solid var(--hairline-strong);padding:2px 8px;border-radius:8px;letter-spacing:0.5px}
+
+  .section-heading{font-size:14px;font-weight:700;margin:32px 0 12px}
+  .note{color:var(--muted);font-size:12px;margin:4px 0 0}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Section-label schemes</h1>
+  <p class="subtitle">同一段内容（"文件" pane + 2 张文件卡片；Inspector 的 "范围"/"刻度"），只替换标题呈现形式。每格右上角是方案代号。</p>
+
+  <div class="section-heading">A. Pane 标题（文件区）</div>
+
+  <div class="grid">
+    <!-- A -->
+    <div class="sample v-a">
+      <div class="sample-title">A. Plain bold 13/700<span class="tag">当前</span></div>
+      <div class="pane">
+        <div class="sec"><span class="title">文件</span><span class="count">2</span><span class="kebab">⋯</span></div>
+        <div class="card active"><div class="name">Normal temperature</div><div class="meta">13414 行 · 100.0 Hz · 134.14 s</div></div>
+        <div class="card"><div class="name">Low temperature</div><div class="meta">96091 行 · 100.0 Hz · 960.91 s</div></div>
+      </div>
+    </div>
+
+    <!-- B -->
+    <div class="sample v-b">
+      <div class="sample-title">B. Tracking 12/700 + 2px letter-spacing<span class="tag">header-y</span></div>
+      <div class="pane">
+        <div class="sec"><span class="title">文件</span><span class="count">2</span><span class="kebab">⋯</span></div>
+        <div class="card active"><div class="name">Normal temperature</div><div class="meta">13414 行 · 100.0 Hz · 134.14 s</div></div>
+        <div class="card"><div class="name">Low temperature</div><div class="meta">96091 行 · 100.0 Hz · 960.91 s</div></div>
+      </div>
+    </div>
+
+    <!-- C -->
+    <div class="sample v-c">
+      <div class="sample-title">C. Bold + full-width hairline below<span class="tag">GitHub 风</span></div>
+      <div class="pane">
+        <div class="sec"><span class="title">文件</span><span class="count">2</span><span class="kebab">⋯</span></div>
+        <div class="card active"><div class="name">Normal temperature</div><div class="meta">13414 行 · 100.0 Hz · 134.14 s</div></div>
+        <div class="card"><div class="name">Low temperature</div><div class="meta">96091 行 · 100.0 Hz · 960.91 s</div></div>
+      </div>
+    </div>
+
+    <!-- D -->
+    <div class="sample v-d">
+      <div class="sample-title">D. 左竖条 accent + bold<span class="tag">Linear 风</span></div>
+      <div class="pane">
+        <div class="sec"><span class="title">文件</span><span class="count">2</span><span class="kebab">⋯</span></div>
+        <div class="card active"><div class="name">Normal temperature</div><div class="meta">13414 行 · 100.0 Hz · 134.14 s</div></div>
+        <div class="card"><div class="name">Low temperature</div><div class="meta">96091 行 · 100.0 Hz · 960.91 s</div></div>
+      </div>
+    </div>
+
+    <!-- E -->
+    <div class="sample v-e">
+      <div class="sample-title">E. 软填色 pill<span class="tag">Notion tag 风</span></div>
+      <div class="pane">
+        <div class="sec"><span class="title">文件</span><span class="count">2</span><span class="kebab">⋯</span></div>
+        <div class="card active"><div class="name">Normal temperature</div><div class="meta">13414 行 · 100.0 Hz · 134.14 s</div></div>
+        <div class="card"><div class="name">Low temperature</div><div class="meta">96091 行 · 100.0 Hz · 960.91 s</div></div>
+      </div>
+    </div>
+
+    <!-- F -->
+    <div class="sample v-f">
+      <div class="sample-title">F. Muted caps (11/700 + 3px tracking)<span class="tag">Figma 侧栏风</span></div>
+      <div class="pane">
+        <div class="sec"><span class="title">文件</span><span class="count">2</span><span class="kebab">⋯</span></div>
+        <div class="card active"><div class="name">Normal temperature</div><div class="meta">13414 行 · 100.0 Hz · 134.14 s</div></div>
+        <div class="card"><div class="name">Low temperature</div><div class="meta">96091 行 · 100.0 Hz · 960.91 s</div></div>
+      </div>
+    </div>
+
+    <!-- G -->
+    <div class="sample v-g">
+      <div class="sample-title">G. Colored title (蓝)<span class="tag">Stripe dashboard 风</span></div>
+      <div class="pane">
+        <div class="sec"><span class="title">文件</span><span class="count">2</span><span class="kebab">⋯</span></div>
+        <div class="card active"><div class="name">Normal temperature</div><div class="meta">13414 行 · 100.0 Hz · 134.14 s</div></div>
+        <div class="card"><div class="name">Low temperature</div><div class="meta">96091 行 · 100.0 Hz · 960.91 s</div></div>
+      </div>
+    </div>
+
+    <!-- H -->
+    <div class="sample v-h">
+      <div class="sample-title">H. 细边 chip<span class="tag">轻盈</span></div>
+      <div class="pane">
+        <div class="sec"><span class="title">文件</span><span class="count">2</span><span class="kebab">⋯</span></div>
+        <div class="card active"><div class="name">Normal temperature</div><div class="meta">13414 行 · 100.0 Hz · 134.14 s</div></div>
+        <div class="card"><div class="name">Low temperature</div><div class="meta">96091 行 · 100.0 Hz · 960.91 s</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-heading">B. Inspector 分组标题（"横坐标 / 范围 / 刻度"）</div>
+
+  <div class="grid">
+    <!-- A -->
+    <div class="sample">
+      <div class="sample-title">A. Plain bold<span class="tag">当前</span></div>
+      <div class="ins-pane ins-v-a">
+        <div class="ins-group"><div class="gtitle">横坐标</div>
+          <div class="ins-field"><label>来源:</label><span class="input">自动 (时间)</span></div>
+          <div class="ins-field"><label>标签:</label><span class="input muted">Time (s)</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">范围</div>
+          <div class="ins-field"><label>开始:</label><span class="input">0.000 s</span></div>
+          <div class="ins-field"><label>结束:</label><span class="input">134.141 s</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">刻度</div>
+          <div class="ins-field"><label>X:</label><span class="input">10</span></div>
+          <div class="ins-field"><label>Y:</label><span class="input">6</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- B -->
+    <div class="sample">
+      <div class="sample-title">B. Tracking 12/700<span class="tag">header-y</span></div>
+      <div class="ins-pane ins-v-b">
+        <div class="ins-group"><div class="gtitle">横坐标</div>
+          <div class="ins-field"><label>来源:</label><span class="input">自动 (时间)</span></div>
+          <div class="ins-field"><label>标签:</label><span class="input muted">Time (s)</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">范围</div>
+          <div class="ins-field"><label>开始:</label><span class="input">0.000 s</span></div>
+          <div class="ins-field"><label>结束:</label><span class="input">134.141 s</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">刻度</div>
+          <div class="ins-field"><label>X:</label><span class="input">10</span></div>
+          <div class="ins-field"><label>Y:</label><span class="input">6</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- C -->
+    <div class="sample">
+      <div class="sample-title">C. Hairline below<span class="tag">GitHub</span></div>
+      <div class="ins-pane ins-v-c">
+        <div class="ins-group"><div class="gtitle">横坐标</div>
+          <div class="ins-field"><label>来源:</label><span class="input">自动 (时间)</span></div>
+          <div class="ins-field"><label>标签:</label><span class="input muted">Time (s)</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">范围</div>
+          <div class="ins-field"><label>开始:</label><span class="input">0.000 s</span></div>
+          <div class="ins-field"><label>结束:</label><span class="input">134.141 s</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">刻度</div>
+          <div class="ins-field"><label>X:</label><span class="input">10</span></div>
+          <div class="ins-field"><label>Y:</label><span class="input">6</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- D -->
+    <div class="sample">
+      <div class="sample-title">D. 左竖条 accent<span class="tag">Linear</span></div>
+      <div class="ins-pane ins-v-d">
+        <div class="ins-group"><div class="gtitle">横坐标</div>
+          <div class="ins-field"><label>来源:</label><span class="input">自动 (时间)</span></div>
+          <div class="ins-field"><label>标签:</label><span class="input muted">Time (s)</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">范围</div>
+          <div class="ins-field"><label>开始:</label><span class="input">0.000 s</span></div>
+          <div class="ins-field"><label>结束:</label><span class="input">134.141 s</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">刻度</div>
+          <div class="ins-field"><label>X:</label><span class="input">10</span></div>
+          <div class="ins-field"><label>Y:</label><span class="input">6</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- E -->
+    <div class="sample">
+      <div class="sample-title">E. 软填色 pill<span class="tag">Notion</span></div>
+      <div class="ins-pane ins-v-e">
+        <div class="ins-group"><div class="gtitle">横坐标</div>
+          <div class="ins-field"><label>来源:</label><span class="input">自动 (时间)</span></div>
+          <div class="ins-field"><label>标签:</label><span class="input muted">Time (s)</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">范围</div>
+          <div class="ins-field"><label>开始:</label><span class="input">0.000 s</span></div>
+          <div class="ins-field"><label>结束:</label><span class="input">134.141 s</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">刻度</div>
+          <div class="ins-field"><label>X:</label><span class="input">10</span></div>
+          <div class="ins-field"><label>Y:</label><span class="input">6</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- F -->
+    <div class="sample">
+      <div class="sample-title">F. Muted caps<span class="tag">Figma 侧栏</span></div>
+      <div class="ins-pane ins-v-f">
+        <div class="ins-group"><div class="gtitle">横坐标</div>
+          <div class="ins-field"><label>来源:</label><span class="input">自动 (时间)</span></div>
+          <div class="ins-field"><label>标签:</label><span class="input muted">Time (s)</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">范围</div>
+          <div class="ins-field"><label>开始:</label><span class="input">0.000 s</span></div>
+          <div class="ins-field"><label>结束:</label><span class="input">134.141 s</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">刻度</div>
+          <div class="ins-field"><label>X:</label><span class="input">10</span></div>
+          <div class="ins-field"><label>Y:</label><span class="input">6</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- G -->
+    <div class="sample">
+      <div class="sample-title">G. Colored title (蓝)<span class="tag">Stripe</span></div>
+      <div class="ins-pane ins-v-g">
+        <div class="ins-group"><div class="gtitle">横坐标</div>
+          <div class="ins-field"><label>来源:</label><span class="input">自动 (时间)</span></div>
+          <div class="ins-field"><label>标签:</label><span class="input muted">Time (s)</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">范围</div>
+          <div class="ins-field"><label>开始:</label><span class="input">0.000 s</span></div>
+          <div class="ins-field"><label>结束:</label><span class="input">134.141 s</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">刻度</div>
+          <div class="ins-field"><label>X:</label><span class="input">10</span></div>
+          <div class="ins-field"><label>Y:</label><span class="input">6</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- H -->
+    <div class="sample">
+      <div class="sample-title">H. 细边 chip<span class="tag">轻盈</span></div>
+      <div class="ins-pane ins-v-h">
+        <div class="ins-group"><div class="gtitle">横坐标</div>
+          <div class="ins-field"><label>来源:</label><span class="input">自动 (时间)</span></div>
+          <div class="ins-field"><label>标签:</label><span class="input muted">Time (s)</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">范围</div>
+          <div class="ins-field"><label>开始:</label><span class="input">0.000 s</span></div>
+          <div class="ins-field"><label>结束:</label><span class="input">134.141 s</span></div>
+        </div>
+        <div class="ins-group"><div class="gtitle">刻度</div>
+          <div class="ins-field"><label>X:</label><span class="input">10</span></div>
+          <div class="ins-field"><label>Y:</label><span class="input">6</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">告诉我选 A / B / C / D / E / F / G / H（pane 标题和 Inspector 分组标题可以挑不同方案，或保持一致）。选定后我把对应样式落到 <code>style.qss</code>。</p>
+</div>
+</body>
+</html>

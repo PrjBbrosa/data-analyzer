@@ -1,14 +1,26 @@
 """Center pane: QStackedWidget holding the three canvases + stats strip."""
-from PyQt5.QtCore import QSize, pyqtSignal
-from PyQt5.QtWidgets import QFrame, QLabel, QPushButton, QStackedWidget, QVBoxLayout, QWidget
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtWidgets import (
+    QFrame, QLabel, QPushButton, QSizePolicy, QStackedWidget,
+    QToolButton, QVBoxLayout, QWidget,
+)
 
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
 from .canvases import PlotCanvas, TimeDomainCanvas
+from .icons import Icons
 from .widgets import StatsStrip
 
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'order': 2}
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
+
+# Two-line hint strings shown in the right-hand region of the chart toolbar.
+# Key = current toolbar.mode ('pan' | 'zoom' | '' for idle).
+_TOOL_HINTS = {
+    'pan': "<b>移动曲线</b><br>左键拖动平移 · 右键拖动缩放坐标轴",
+    'zoom': "<b>框选缩放</b><br>拖动鼠标框选矩形区域放大 · Home 键可复位",
+    '': "<b>浏览</b><br>鼠标滚轮缩放 · 点击 ✥ 启用平移 · 点击 ⌕ 启用缩放",
+}
 
 
 def _strip_subplots_action(toolbar):
@@ -21,10 +33,15 @@ def _strip_subplots_action(toolbar):
             return
 
 
+def _find_action(toolbar, text_lower):
+    for act in toolbar.actions():
+        if (act.text() or '').strip().lower() == text_lower:
+            return act
+    return None
+
+
 def _vline():
     f = QFrame()
-    f.setFrameShape(QFrame.VLine)
-    f.setFrameShadow(QFrame.Plain)
     f.setObjectName("chartToolbarSep")
     f.setFixedWidth(1)
     return f
@@ -32,6 +49,9 @@ def _vline():
 
 class _ChartCard(QWidget):
     """Canvas + its NavigationToolbar in a vertical layout."""
+
+    axis_lock_requested = pyqtSignal(object)  # anchor widget for the popover
+
     def __init__(self, canvas, parent=None):
         super().__init__(parent)
         self.setObjectName("chartCard")
@@ -42,8 +62,65 @@ class _ChartCard(QWidget):
         self.toolbar.setObjectName("chartToolbar")
         self.toolbar.setIconSize(QSize(16, 16))
         _strip_subplots_action(self.toolbar)
+
+        # Insert an axis-lock button immediately after the Pan action.
+        self._axis_lock_btn = QToolButton(self.toolbar)
+        self._axis_lock_btn.setIcon(Icons.axis_lock())
+        self._axis_lock_btn.setIconSize(QSize(16, 16))
+        self._axis_lock_btn.setToolTip("轴锁定")
+        self._axis_lock_btn.setAutoRaise(True)
+        self._axis_lock_btn.clicked.connect(
+            lambda: self.axis_lock_requested.emit(self._axis_lock_btn)
+        )
+        pan_act = _find_action(self.toolbar, 'pan')
+        if pan_act is not None:
+            acts = self.toolbar.actions()
+            idx = acts.index(pan_act)
+            before = acts[idx + 1] if idx + 1 < len(acts) else None
+            if before is not None:
+                self.toolbar.insertWidget(before, self._axis_lock_btn)
+            else:
+                self.toolbar.addWidget(self._axis_lock_btn)
+        else:
+            self.toolbar.addWidget(self._axis_lock_btn)
+
+        # Two-line hint label that fills the remaining toolbar space.
+        self._hint_label = QLabel(self.toolbar)
+        self._hint_label.setObjectName("chartHint")
+        self._hint_label.setTextFormat(Qt.RichText)
+        self._hint_label.setWordWrap(True)
+        self._hint_label.setMinimumWidth(140)
+        self._hint_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._hint_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.toolbar.addWidget(self._hint_label)
+
+        # Only pan/zoom toggling changes the hint; one-shot buttons don't.
+        for act in self.toolbar.actions():
+            name = (act.text() or '').strip().lower()
+            if name in ('pan', 'zoom'):
+                act.triggered.connect(self._refresh_hint)
+
+        # Default: activate the pan tool.
+        mode = str(getattr(self.toolbar, 'mode', '')).lower()
+        if 'pan' not in mode:
+            self.toolbar.pan()
+        self._refresh_hint()
+
         lay.addWidget(self.toolbar)
         lay.addWidget(canvas, stretch=1)
+
+    # ---- hint handling ----
+    def _current_mode_key(self):
+        mode = str(getattr(self.toolbar, 'mode', '')).lower()
+        if 'pan' in mode:
+            return 'pan'
+        if 'zoom' in mode:
+            return 'zoom'
+        return ''
+
+    def _refresh_hint(self, *_):
+        key = self._current_mode_key()
+        self._hint_label.setText(_TOOL_HINTS.get(key, _TOOL_HINTS['']))
 
 
 class TimeChartCard(_ChartCard):
@@ -116,6 +193,7 @@ class ChartStack(QWidget):
     mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
     cursor_mode_changed = pyqtSignal(str)
+    axis_lock_requested = pyqtSignal(object)  # anchor widget
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -127,9 +205,13 @@ class ChartStack(QWidget):
         self.canvas_fft = PlotCanvas(self)
         self.canvas_order = PlotCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
+        self._fft_card = _ChartCard(self.canvas_fft)
+        self._order_card = _ChartCard(self.canvas_order)
         self.stack.addWidget(self._time_card)
-        self.stack.addWidget(_ChartCard(self.canvas_fft))
-        self.stack.addWidget(_ChartCard(self.canvas_order))
+        self.stack.addWidget(self._fft_card)
+        self.stack.addWidget(self._order_card)
+        for card in (self._time_card, self._fft_card, self._order_card):
+            card.axis_lock_requested.connect(self.axis_lock_requested)
         lay.addWidget(self.stack, stretch=1)
 
         # Stats strip mounted at the bottom (Task 2.10)

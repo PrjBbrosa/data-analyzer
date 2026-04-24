@@ -89,14 +89,14 @@ class Icons:
         return QIcon(pix)
 
     @classmethod
-    def add_file(cls):
+    def add_file(cls, color=None):
         def draw(p):
             p.drawRoundedRect(QRectF(4, 3, 10, 14), 2, 2)
             p.drawLine(QPointF(7, 7), QPointF(11, 7))
             p.drawLine(QPointF(7, 10), QPointF(11, 10))
             p.drawLine(QPointF(15, 10), QPointF(19, 10))
             p.drawLine(QPointF(17, 8), QPointF(17, 12))
-        return _line_icon(draw, BLUE)
+        return _line_icon(draw, color or BLUE)
 
     @classmethod
     def file(cls):

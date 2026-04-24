@@ -93,6 +93,7 @@ class MainWindow(QMainWindow):
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.toolbar.cursor_reset_requested.connect(self._reset_cursors)
         self.toolbar.axis_lock_requested.connect(self._show_axis_lock_popover)
+        self.chart_stack.axis_lock_requested.connect(self._show_axis_lock_popover)
 
         self.navigator.channels_changed.connect(self._ch_changed)
         self.navigator.file_activated.connect(self._on_file_activated)

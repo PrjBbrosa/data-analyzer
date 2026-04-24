@@ -1,5 +1,6 @@
 """Top three-segment toolbar: file actions · mode switcher · canvas actions."""
 from PyQt5.QtCore import QSize, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QPushButton, QWidget
 
 from .icons import Icons
@@ -30,7 +31,7 @@ class Toolbar(QWidget):
         right.setSpacing(7)
 
         self.btn_add = QPushButton("添加文件", self)
-        self.btn_add.setIcon(Icons.add_file())
+        self.btn_add.setIcon(Icons.add_file(QColor("#ffffff")))
         self.btn_add.setProperty("role", "primary")
         self.btn_edit = QPushButton("编辑通道", self)
         self.btn_edit.setIcon(Icons.edit_channels())
