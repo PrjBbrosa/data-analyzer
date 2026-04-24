@@ -26,6 +26,13 @@ QSplitter::handle:horizontal {
     width: 1px;
 }
 
+QSplitter::handle:vertical {
+    height: 6px;
+    margin: 2px 20px;
+    border-radius: 3px;
+    background-color: #cbd5e1;
+}
+
 QSplitter::handle:hover {
     background-color: #b7c4d3;
 }
@@ -136,14 +143,6 @@ QComboBox::drop-down:hover {
     background-color: #eef2f7;
 }
 
-QComboBox::down-arrow {
-    image: none;
-    width: 7px;
-    height: 5px;
-    border: none;
-    background: transparent;
-}
-
 QSpinBox,
 QDoubleSpinBox {
     padding-right: 22px;
@@ -174,24 +173,6 @@ QSpinBox::down-button:hover,
 QDoubleSpinBox::up-button:hover,
 QDoubleSpinBox::down-button:hover {
     background-color: #eef2f7;
-}
-
-QSpinBox::up-arrow,
-QDoubleSpinBox::up-arrow {
-    image: none;
-    width: 7px;
-    height: 5px;
-    border: none;
-    background: transparent;
-}
-
-QSpinBox::down-arrow,
-QDoubleSpinBox::down-arrow {
-    image: none;
-    width: 7px;
-    height: 5px;
-    border: none;
-    background: transparent;
 }
 
 QComboBox QAbstractItemView {
@@ -327,6 +308,10 @@ QLabel#paneCount {
     font-weight: 700;
 }
 
+QWidget#fileArea {
+    background-color: #f8fafc;
+}
+
 #fileRow {
     border: 1px solid transparent;
     border-radius: 10px;
@@ -402,6 +387,15 @@ Inspector {
     border-left: 1px solid #d7dee8;
 }
 
+QScrollArea#inspectorScroll {
+    border: none;
+    background-color: #f8fafc;
+}
+
+QScrollArea#inspectorScroll > QWidget > QWidget {
+    background-color: #f8fafc;
+}
+
 Inspector QGroupBox {
     margin-top: 10px;
     padding: 18px 10px 10px;
@@ -417,23 +411,6 @@ Inspector QGroupBox::title {
     padding: 0 5px;
     color: #334155;
     background-color: #ffffff;
-}
-
-QWidget#inspectorField {
-    background: transparent;
-}
-
-QLabel#fieldLabel {
-    color: #334155;
-    font-size: 11px;
-    font-weight: 700;
-}
-
-QWidget#inspectorField QLineEdit,
-QWidget#inspectorField QComboBox,
-QWidget#inspectorField QSpinBox,
-QWidget#inspectorField QDoubleSpinBox {
-    min-height: 28px;
 }
 
 Inspector QPushButton[role="choice"] {

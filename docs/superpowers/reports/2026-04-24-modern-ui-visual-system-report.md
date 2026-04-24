@@ -211,9 +211,10 @@ Verification after this pass:
 # 53 passed
 ```
 
-Follow-up after a second narrow-inspector screenshot:
+Follow-up after subsequent layout review:
 
-- Replaced the persistent Inspector top section's horizontal form rows with vertical field blocks (`label` above control), so `横坐标` / `范围` / `刻度` no longer stack under narrow pane widths.
+- Latest decision: keep compact form rows and solve narrow-window overflow with a dedicated vertical `QScrollArea` on the right Inspector.
+- The left navigator now uses a vertical splitter between the file list and channel tree. The file list gets a larger initial height and can be resized by dragging the divider, so multiple loaded files are visible before the channel tree.
 - Removed the QSS triangle-arrow hack that rendered as square/dot artifacts in spinbox and combobox controls.
 
 Verification:

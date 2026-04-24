@@ -40,19 +40,6 @@ def _fit_field(widget):
     return widget
 
 
-def _field_block(label, widget):
-    box = QWidget()
-    box.setObjectName("inspectorField")
-    lay = QVBoxLayout(box)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(3)
-    lbl = QLabel(label)
-    lbl.setObjectName("fieldLabel")
-    lay.addWidget(lbl)
-    lay.addWidget(_fit_field(widget))
-    return box
-
-
 class PersistentTop(QWidget):
     """Xaxis / Range / Ticks sections (always visible)."""
 
@@ -66,63 +53,62 @@ class PersistentTop(QWidget):
 
         # ------- Xaxis group -------
         g = QGroupBox("横坐标")
-        gl = QVBoxLayout(g)
-        gl.setContentsMargins(10, 8, 10, 10)
-        gl.setSpacing(7)
+        fl = QFormLayout(g)
+        _configure_form(fl)
         self.combo_xaxis = QComboBox()
         self.combo_xaxis.addItems(['自动(时间)', '指定通道'])
-        gl.addWidget(_field_block("来源", self.combo_xaxis))
+        fl.addRow("来源:", _fit_field(self.combo_xaxis))
         self._combo_xaxis_ch = QComboBox()
         self._combo_xaxis_ch.setEnabled(False)
-        gl.addWidget(_field_block("通道", self._combo_xaxis_ch))
+        fl.addRow("通道:", _fit_field(self._combo_xaxis_ch))
         self.edit_xlabel = QLineEdit()
         self.edit_xlabel.setPlaceholderText("Time (s)")
-        gl.addWidget(_field_block("标签", self.edit_xlabel))
+        fl.addRow("标签:", _fit_field(self.edit_xlabel))
         self.btn_apply_xaxis = QPushButton("应用")
         self.btn_apply_xaxis.setProperty("role", "primary")
-        gl.addWidget(self.btn_apply_xaxis)
+        fl.addRow(self.btn_apply_xaxis)
         root.addWidget(g)
 
         # ------- Range group -------
         g = QGroupBox("范围")
-        gl = QVBoxLayout(g)
-        gl.setContentsMargins(10, 8, 10, 10)
-        gl.setSpacing(7)
+        fl = QFormLayout(g)
+        _configure_form(fl)
         self.chk_range = QCheckBox("使用选定范围")
-        gl.addWidget(self.chk_range)
+        fl.addRow(self.chk_range)
         self.spin_start = QDoubleSpinBox()
         self.spin_start.setDecimals(3)
         self.spin_start.setSuffix(" s")
         self.spin_start.setRange(0, 1e9)
-        gl.addWidget(_field_block("开始", self.spin_start))
+        fl.addRow("开始:", _fit_field(self.spin_start))
         self.spin_end = QDoubleSpinBox()
         self.spin_end.setDecimals(3)
         self.spin_end.setSuffix(" s")
         self.spin_end.setRange(0, 1e9)
-        gl.addWidget(_field_block("结束", self.spin_end))
+        fl.addRow("结束:", _fit_field(self.spin_end))
         root.addWidget(g)
 
         # ------- Tick density group (§6.1 ▸ 刻度, default collapsed) -------
         g = QGroupBox("刻度")
         g.setCheckable(True)
         g.setChecked(False)
-        gl = QVBoxLayout(g)
-        gl.setContentsMargins(10, 8, 10, 10)
-        gl.setSpacing(7)
+        fl = QFormLayout(g)
+        _configure_form(fl)
         self.spin_xt = QSpinBox()
         self.spin_xt.setRange(3, 30)
         self.spin_xt.setValue(10)
-        x_block = _field_block("X", self.spin_xt)
-        gl.addWidget(x_block)
+        fl.addRow("X:", _fit_field(self.spin_xt))
         self.spin_yt = QSpinBox()
         self.spin_yt.setRange(3, 20)
         self.spin_yt.setValue(6)
-        y_block = _field_block("Y", self.spin_yt)
-        gl.addWidget(y_block)
+        fl.addRow("Y:", _fit_field(self.spin_yt))
 
         def _toggle_ticks(checked):
-            x_block.setVisible(checked)
-            y_block.setVisible(checked)
+            self.spin_xt.setVisible(checked)
+            self.spin_yt.setVisible(checked)
+            for i in range(fl.rowCount()):
+                lbl = fl.itemAt(i, QFormLayout.LabelRole)
+                if lbl and lbl.widget():
+                    lbl.widget().setVisible(checked)
 
         g.toggled.connect(_toggle_ticks)
         _toggle_ticks(False)  # apply initial collapsed state

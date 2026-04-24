@@ -4,8 +4,8 @@ Owns the inspector_state_dict (per section 12.1 of the design spec):
 caches the user's last input on each mode's contextual widget so that
 switching modes preserves context.
 """
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QStackedWidget, QVBoxLayout, QWidget
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import QFrame, QScrollArea, QStackedWidget, QVBoxLayout, QWidget
 
 from .inspector_sections import (
     FFTContextual,
@@ -34,16 +34,32 @@ class Inspector(QWidget):
         super().__init__(parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
-        self.top = PersistentTop(self)
-        lay.addWidget(self.top)
-        self.contextual_stack = QStackedWidget(self)
-        self.time_ctx = TimeContextual(self)
-        self.fft_ctx = FFTContextual(self)
-        self.order_ctx = OrderContextual(self)
+        lay.setSpacing(0)
+
+        self._scroll = QScrollArea(self)
+        self._scroll.setObjectName("inspectorScroll")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        lay.addWidget(self._scroll)
+
+        self._scroll_body = QWidget(self._scroll)
+        body_lay = QVBoxLayout(self._scroll_body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(6)
+
+        self.top = PersistentTop(self._scroll_body)
+        body_lay.addWidget(self.top)
+        self.contextual_stack = QStackedWidget(self._scroll_body)
+        self.time_ctx = TimeContextual(self._scroll_body)
+        self.fft_ctx = FFTContextual(self._scroll_body)
+        self.order_ctx = OrderContextual(self._scroll_body)
         self.contextual_stack.addWidget(self.time_ctx)
         self.contextual_stack.addWidget(self.fft_ctx)
         self.contextual_stack.addWidget(self.order_ctx)
-        lay.addWidget(self.contextual_stack, stretch=1)
+        body_lay.addWidget(self.contextual_stack)
+        body_lay.addStretch(1)
+        self._scroll.setWidget(self._scroll_body)
         self._wire()
 
     def _wire(self):

@@ -1,9 +1,8 @@
 """Left pane: file list (replacing QTabWidget) + channel tree."""
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtCore import QSize
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox,
-    QScrollArea, QToolButton, QVBoxLayout, QWidget,
+    QScrollArea, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
 from .icons import Icons
@@ -80,6 +79,16 @@ class FileNavigator(QWidget):
         lay.setContentsMargins(4, 4, 4, 4)
         lay.setSpacing(4)
 
+        splitter = QSplitter(Qt.Vertical, self)
+        splitter.setObjectName("navigatorSplitter")
+        lay.addWidget(splitter, stretch=1)
+
+        file_area = QWidget(self)
+        file_area.setObjectName("fileArea")
+        file_lay = QVBoxLayout(file_area)
+        file_lay.setContentsMargins(0, 0, 0, 0)
+        file_lay.setSpacing(4)
+
         # Header with kebab
         head = QHBoxLayout()
         self._lbl_header = QLabel("文件")
@@ -97,7 +106,7 @@ class FileNavigator(QWidget):
         self._btn_kebab.setAutoRaise(True)
         self._btn_kebab.clicked.connect(self._open_kebab)
         head.addWidget(self._btn_kebab)
-        lay.addLayout(head)
+        file_lay.addLayout(head)
 
         # File list (scrollable rows)
         self._file_holder = QWidget()
@@ -110,13 +119,17 @@ class FileNavigator(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setWidget(self._file_holder)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setMaximumHeight(200)
-        lay.addWidget(scroll)
+        scroll.setMinimumHeight(150)
+        file_lay.addWidget(scroll, stretch=1)
+        splitter.addWidget(file_area)
 
         # Channel tree
         self.channel_list = MultiFileChannelWidget(self)
         self.channel_list.channels_changed.connect(self.channels_changed)
-        lay.addWidget(self.channel_list, stretch=1)
+        self.channel_list.setMinimumHeight(260)
+        splitter.addWidget(self.channel_list)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([260, 520])
 
     # ---- public API used by MainWindow ----
     def add_file(self, fid, fd):
