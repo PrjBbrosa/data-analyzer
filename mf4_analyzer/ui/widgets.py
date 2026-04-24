@@ -78,7 +78,15 @@ class MultiFileChannelWidget(QWidget):
         self.tree = QTreeWidget();
         self.tree.setObjectName("channelTree")
         self.tree.setHeaderLabels(['Channel', 'Pts']);
-        self.tree.setColumnWidth(0, 165)
+        header = self.tree.header()
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        header.setStretchLastSection(True)
+        header.setMinimumSectionSize(40)
+        header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # Pts header right-aligned to match the right-aligned numeric cells.
+        self.tree.headerItem().setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+        self.tree.setColumnWidth(0, 220)
         self.tree.setAlternatingRowColors(True)
         self.tree.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.tree)
@@ -90,6 +98,7 @@ class MultiFileChannelWidget(QWidget):
     def add_file(self, fid, fd):
         self._files[fid] = fd
         fi = QTreeWidgetItem([fd.short_name, f"{len(fd.data)}"])
+        fi.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
         # 不使用AutoTristate，手动控制文件级勾选
         fi.setFlags(fi.flags() | Qt.ItemIsUserCheckable)
         fi.setCheckState(0, Qt.Unchecked)
@@ -103,6 +112,7 @@ class MultiFileChannelWidget(QWidget):
             color = palette[i % len(palette)];
             self._colors[(fid, ch)] = color
             ci = QTreeWidgetItem([ch, str(len(fd.data))])
+            ci.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
             ci.setFlags(ci.flags() | Qt.ItemIsUserCheckable);
             ci.setCheckState(0, Qt.Unchecked)
             ci.setData(0, Qt.UserRole, ('channel', fid, ch));

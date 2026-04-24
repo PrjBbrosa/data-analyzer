@@ -49,7 +49,7 @@ class PersistentTop(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         root = QVBoxLayout(self)
-        root.setSpacing(6)
+        root.setSpacing(10)
 
         # ------- Xaxis group -------
         g = QGroupBox("横坐标")
@@ -167,7 +167,7 @@ class TimeContextual(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         root = QVBoxLayout(self)
-        root.setSpacing(6)
+        root.setSpacing(10)
 
         self.btn_plot = QPushButton("绘图")
         self.btn_plot.setIcon(Icons.plot())
@@ -189,7 +189,7 @@ class FFTContextual(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         root = QVBoxLayout(self)
-        root.setSpacing(6)
+        root.setSpacing(10)
 
         g = QGroupBox("分析信号")
         fl = QFormLayout(g)
@@ -306,7 +306,7 @@ class OrderContextual(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         root = QVBoxLayout(self)
-        root.setSpacing(6)
+        root.setSpacing(10)
 
         g = QGroupBox("信号源")
         fl = QFormLayout(g)

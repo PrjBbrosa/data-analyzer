@@ -2,11 +2,44 @@
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox,
-    QScrollArea, QSplitter, QToolButton, QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
 from .icons import Icons
 from .widgets import MultiFileChannelWidget
+
+
+class _ElidedLabel(QLabel):
+    """QLabel that elides its text to fit available width and exposes the full
+    string via tooltip when truncation occurs."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._full_text = ""
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(0)
+        self.setText(text)
+
+    def setText(self, text):
+        self._full_text = text or ""
+        self._apply_elided()
+
+    def fullText(self):
+        return self._full_text
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elided()
+
+    def _apply_elided(self):
+        fm = self.fontMetrics()
+        avail = max(0, self.width())
+        elided = fm.elidedText(self._full_text, Qt.ElideRight, avail)
+        super().setText(elided)
+        if elided != self._full_text:
+            self.setToolTip(self._full_text)
+        else:
+            self.setToolTip("")
 
 
 class _FileRow(QFrame):
@@ -27,20 +60,26 @@ class _FileRow(QFrame):
         outer.addWidget(self._accent)
 
         lay = QVBoxLayout()
-        lay.setContentsMargins(4, 7, 7, 7)
-        lay.setSpacing(3)
+        lay.setContentsMargins(4, 8, 7, 8)
+        lay.setSpacing(4)
         top = QHBoxLayout()
-        self._lbl_name = QLabel(fd.short_name)
+        top.setSpacing(8)
+        fp = getattr(fd, "filepath", None)
+        if fp is not None:
+            full_name = fp.stem
+        else:
+            full_name = getattr(fd, "filename", "") or getattr(fd, "short_name", "")
+        self._lbl_name = _ElidedLabel(full_name)
         self._lbl_name.setObjectName("fileRowName")
         top.addWidget(self._lbl_name, stretch=1)
         self._btn_close = QToolButton()
         self._btn_close.setIcon(Icons.close_file())
-        self._btn_close.setIconSize(QSize(13, 13))
+        self._btn_close.setIconSize(QSize(16, 16))
         self._btn_close.setToolTip("关闭文件")
         self._btn_close.setProperty("role", "tool")
         self._btn_close.setAutoRaise(True)
         self._btn_close.clicked.connect(lambda: self.close_requested.emit(self.fid))
-        top.addWidget(self._btn_close)
+        top.addWidget(self._btn_close, 0, Qt.AlignVCenter)
         lay.addLayout(top)
         dur = fd.time_array[-1] if len(fd.time_array) else 0
         self._lbl_meta = QLabel(
@@ -91,6 +130,8 @@ class FileNavigator(QWidget):
 
         # Header with kebab
         head = QHBoxLayout()
+        head.setContentsMargins(10, 6, 6, 4)
+        head.setSpacing(8)
         self._lbl_header = QLabel("文件")
         self._lbl_header.setObjectName("paneHeader")
         head.addWidget(self._lbl_header)
