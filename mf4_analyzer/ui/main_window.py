@@ -49,7 +49,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("MF4/CSV/Excel 数据分析工具 v5.0 - 多文件支持")
         self.setGeometry(100, 100, 1450, 850);
-        self.setMinimumSize(900, 600)
+        # Spec §9 minimum window size: 1100 × 640.
+        self.setMinimumSize(1100, 640)
         self.files = OrderedDict();
         self._fc = 0;
         self._active = None
