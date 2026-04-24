@@ -95,15 +95,14 @@ def test_inspector_no_longer_exposes_mode_signals(qapp):
 
 def test_persistent_top_tick_group_not_checkable(qapp):
     """刻度 GroupBox must be always-open per spec §3.3 (2026-04-24 cleanup)."""
+    from PyQt5.QtWidgets import QGroupBox
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     pt = PersistentTop()
-    # The groupbox that contains spin_xt / spin_yt — find it.
+    # Walk up from spin_xt to its QGroupBox ancestor.
     parent_gb = pt.spin_xt.parentWidget()
-    # Walk up to QGroupBox
-    while parent_gb is not None and type(parent_gb).__name__ != 'QGroupBox':
+    while parent_gb is not None and not isinstance(parent_gb, QGroupBox):
         parent_gb = parent_gb.parentWidget()
     assert parent_gb is not None, "spin_xt has no QGroupBox ancestor"
     assert not parent_gb.isCheckable()
-    assert pt.spin_xt.isVisibleTo(pt) or True  # visibility only meaningful once shown
     # Key contract: tick density reflects current spin values (not zero).
     assert pt.tick_density() == (10, 6)
