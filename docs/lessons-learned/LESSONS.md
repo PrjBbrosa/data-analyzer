@@ -8,6 +8,8 @@ Write protocol: `docs/lessons-learned/README.md`.
 
 - [task-tool-unavailable-blocks-dispatch](orchestrator/2026-04-22-task-tool-unavailable-blocks-dispatch.md) [dispatch][tooling][architecture][planner-executor-split] — Task absence is EXPECTED, not a blocker; orchestrator plans, main Claude dispatches.
 - [move-then-tighten-causes-cross-specialist-rework](orchestrator/2026-04-22-move-then-tighten-causes-cross-specialist-rework.md) [decomposition][rework][cross-specialist] — Splitting "create file body" and "tighten file imports" across two specialists causes file-level rework; fold mechanical metadata edits into the body creator's brief unless domain expertise is required.
+- [refactor-then-ui-same-file-boundary-disjoint](orchestrator/2026-04-24-refactor-then-ui-same-file-boundary-disjoint.md) [rework][boundary-adjustment][cross-specialist] — Rework detection fires on refactor→ui sequential edits of the same file even when method scopes are disjoint; the fix is enumerating forbidden methods per brief, not disabling the rule.
+- [parallel-same-file-drawer-task-collision](orchestrator/2026-04-24-parallel-same-file-drawer-task-collision.md) [decomposition][parallel-serialization] — Parallelising same-expert tasks that each touch the same shared file (even for 1-line edits) causes `git add` commit-collision races; serialize or bundle shared-file edits into a single specialist's brief.
 
 ## signal-processing
 
