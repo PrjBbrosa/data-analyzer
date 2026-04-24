@@ -133,9 +133,13 @@ class MainWindow(QMainWindow):
         self.chart_stack.set_mode(mode)
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
-        # §6.2 auto re-plot on entering time mode with checked channels
+        # §6.2 auto re-plot on entering time mode with checked channels.
+        # Defer by one tick: QStackedWidget has not yet laid out the newly
+        # visible canvas, and drawing now paints onto a backing store that is
+        # discarded when the layout pass fires (observed regression: plot
+        # blanks after fft → time toggle).
         if mode == 'time' and self.files and self.navigator.get_checked_channels():
-            self.plot_time()
+            QTimer.singleShot(0, self.plot_time)
 
     def _on_cursor_mode_changed(self, mode):
         self.canvas_time.set_cursor_visible(mode != 'off')
