@@ -19,23 +19,22 @@ QGroupBox {
 }
 
 QSplitter::handle {
-    background-color: #d7dee8;
+    margin: 0;
+    background-color: #cbd5e1;
 }
 
 QSplitter::handle:horizontal {
     width: 3px;
-    background-color: #cbd5e1;
+    margin: 0;
 }
 
 QSplitter::handle:vertical {
-    height: 6px;
-    margin: 2px 20px;
-    border-radius: 3px;
-    background-color: #cbd5e1;
+    height: 3px;
+    margin: 0;
 }
 
 QSplitter::handle:hover {
-    background-color: #b7c4d3;
+    background-color: #94a3b8;
 }
 
 /* Scrollbars */
