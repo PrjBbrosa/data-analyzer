@@ -254,18 +254,19 @@ Toolbar {
 }
 
 Toolbar QPushButton {
-    min-height: 24px;
-    padding: 3px 10px;
+    min-height: 22px;
+    padding: 2px 10px;
 }
 
 Toolbar QPushButton[segment="time"],
 Toolbar QPushButton[segment="fft"],
 Toolbar QPushButton[segment="order"] {
-    min-width: 66px;
+    min-width: 60px;
+    min-height: 20px;
     margin: 0 1px;
-    padding: 4px 12px;
+    padding: 2px 10px;
     border: none;
-    border-radius: 7px;
+    border-radius: 6px;
     background-color: transparent;
     color: #64748b;
 }
@@ -282,9 +283,9 @@ Toolbar QPushButton[segment]:checked {
 }
 
 QWidget#modeSegment {
-    padding: 3px;
+    padding: 2px;
     border: 1px solid #d7dee8;
-    border-radius: 10px;
+    border-radius: 8px;
     background-color: #e8eef6;
 }
 

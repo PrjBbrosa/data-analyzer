@@ -19,7 +19,7 @@ class Toolbar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 3, 10, 3)
+        lay.setContentsMargins(10, 2, 10, 2)
         lay.setSpacing(8)
 
         left = QHBoxLayout()
