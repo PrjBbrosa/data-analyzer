@@ -113,8 +113,8 @@ class MainWindow(QMainWindow):
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
         self.inspector.remark_toggled.connect(self.canvas_fft.set_remark_enabled)
-        self.inspector.cursor_mode_changed.connect(self._on_cursor_mode_changed)
-        self.inspector.plot_mode_changed.connect(self._on_plot_mode_changed)
+        self.chart_stack.cursor_mode_changed.connect(self._on_cursor_mode_changed)
+        self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.inspector.signal_changed.connect(self._on_inspector_signal_changed)
 
         # Populate xaxis channel candidates whenever user flips to 'channel' mode.
@@ -391,7 +391,7 @@ class MainWindow(QMainWindow):
         # Stats strip
         self.chart_stack.stats_strip.update_stats({})
         # Inspector cursor mode → back to 'single' default
-        self.inspector.time_ctx.set_cursor_mode('single')
+        self.chart_stack.set_cursor_mode('off')
         # Invalidate custom X axis pointer if source gone
         if self._custom_xaxis_fid is not None and self._custom_xaxis_fid not in self.files:
             self._custom_xaxis_fid = None
@@ -450,7 +450,7 @@ class MainWindow(QMainWindow):
         checked = self.channel_list.get_checked_channels()
         if not checked: self.canvas_time.clear(); self.canvas_time.draw(); self.chart_stack.stats_strip.update_stats({}); return
 
-        mode = self.inspector.time_ctx.plot_mode()
+        mode = self.chart_stack.plot_mode()
         if mode == 'overlay' and len(checked) > 5:
             ans = QMessageBox.question(
                 self, "确认",

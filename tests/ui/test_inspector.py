@@ -37,23 +37,6 @@ def test_persistent_top_apply_emits(qapp, qtbot):
 
 # ---- Task 2.4: TimeContextual ----
 
-def test_time_contextual_cursor_segmented(qapp, qtbot):
-    from mf4_analyzer.ui.inspector_sections import TimeContextual
-    tc = TimeContextual()
-    with qtbot.waitSignal(tc.cursor_mode_changed, timeout=200) as bl:
-        tc.set_cursor_mode('dual')
-    assert bl.args == ['dual']
-    assert tc.cursor_mode() == 'dual'
-
-
-def test_time_contextual_plot_mode(qapp, qtbot):
-    from mf4_analyzer.ui.inspector_sections import TimeContextual
-    tc = TimeContextual()
-    with qtbot.waitSignal(tc.plot_mode_changed, timeout=200) as bl:
-        tc.set_plot_mode('overlay')
-    assert bl.args == ['overlay']
-
-
 def test_time_contextual_plot_button_emits(qapp, qtbot):
     from mf4_analyzer.ui.inspector_sections import TimeContextual
     tc = TimeContextual()

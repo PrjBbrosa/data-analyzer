@@ -25,8 +25,6 @@ class Inspector(QWidget):
     rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order')
     tick_density_changed = pyqtSignal(int, int)
     remark_toggled = pyqtSignal(bool)
-    cursor_mode_changed = pyqtSignal(str)
-    plot_mode_changed = pyqtSignal(str)
     # Fs auto-sync: relayed from fft_ctx/order_ctx combo_sig change
     signal_changed = pyqtSignal(str, object)  # (mode, (fid, ch) | None)
 
@@ -66,8 +64,6 @@ class Inspector(QWidget):
         self.top.xaxis_apply_requested.connect(self.xaxis_apply_requested)
         self.top.tick_density_changed.connect(self.tick_density_changed)
         self.time_ctx.plot_time_requested.connect(self.plot_time_requested)
-        self.time_ctx.cursor_mode_changed.connect(self.cursor_mode_changed)
-        self.time_ctx.plot_mode_changed.connect(self.plot_mode_changed)
         self.fft_ctx.fft_requested.connect(self.fft_requested)
         self.fft_ctx.rebuild_time_requested.connect(
             lambda a: self.rebuild_time_requested.emit(a, 'fft'))
