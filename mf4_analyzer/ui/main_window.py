@@ -93,7 +93,9 @@ class MainWindow(QMainWindow):
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.toolbar.cursor_reset_requested.connect(self._reset_cursors)
         self.toolbar.axis_lock_requested.connect(self._show_axis_lock_popover)
-        self.chart_stack.axis_lock_requested.connect(self._show_axis_lock_popover)
+        self.chart_stack.image_copied.connect(
+            lambda msg: self.statusBar.showMessage(msg, 2000)
+        )
 
         self.navigator.channels_changed.connect(self._ch_changed)
         self.navigator.file_activated.connect(self._on_file_activated)
@@ -301,11 +303,7 @@ class MainWindow(QMainWindow):
         self.canvas_time._placing = 'A'
         self.canvas_time._refresh = True
         self.canvas_time.draw_idle()
-        # Clear the ChartStack-owned cursor pill (no more lbl_cursor/lbl_dual)
-        self.chart_stack._cursor_pill.setText("")
-        self.chart_stack._cursor_dual_pill.setText("")
-        self.chart_stack._cursor_pill.setVisible(False)
-        self.chart_stack._cursor_dual_pill.setVisible(False)
+        self.chart_stack.clear_cursor_pill()
         self.statusBar.showMessage("游标已重置")
 
     def load_files(self):
@@ -383,11 +381,7 @@ class MainWindow(QMainWindow):
         scope in {'file', 'all'}; both paths currently share code.
         """
         self.chart_stack.full_reset_all()
-        # Cursor pill (ChartStack owns both)
-        self.chart_stack._cursor_pill.setText("")
-        self.chart_stack._cursor_pill.setVisible(False)
-        self.chart_stack._cursor_dual_pill.setText("")
-        self.chart_stack._cursor_dual_pill.setVisible(False)
+        self.chart_stack.clear_cursor_pill()
         # Stats strip
         self.chart_stack.stats_strip.update_stats({})
         # Chart-card cursor mode → back to 'off' default (spec §8)

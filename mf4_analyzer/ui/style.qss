@@ -372,13 +372,20 @@ QWidget#chartToolbar {
     border-bottom: 1px solid #eef2f7;
 }
 
-#cursorPill {
-    padding: 6px 9px;
-    border: 1px solid #eef2f7;
-    border-radius: 8px;
-    background-color: #ffffff;
+QFrame#cursorPill {
+    border: 1px solid #d8e0eb;
+    border-radius: 9px;
+    background-color: rgba(255, 255, 255, 235);
+    color: #111827;
+}
+QFrame#cursorPill QLabel#cursorPillPrimary {
     color: #111827;
     font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}
+QFrame#cursorPill QLabel#cursorPillDetail {
+    background: transparent;
 }
 
 StatsStrip {
