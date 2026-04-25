@@ -27,6 +27,8 @@ class Inspector(QWidget):
     remark_toggled = pyqtSignal(bool)
     # Fs auto-sync: relayed from fft_ctx/order_ctx combo_sig change
     signal_changed = pyqtSignal(str, object)  # (mode, (fid, ch) | None)
+    # Preset save/load acknowledgement (level, message) — surfaced as toasts
+    preset_acknowledged = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -78,6 +80,8 @@ class Inspector(QWidget):
             lambda a: self.rebuild_time_requested.emit(a, 'order'))
         self.order_ctx.signal_changed.connect(
             lambda d: self.signal_changed.emit('order', d))
+        self.fft_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
+        self.order_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
 
     def set_mode(self, mode):
         idx = {'time': 0, 'fft': 1, 'order': 2}[mode]

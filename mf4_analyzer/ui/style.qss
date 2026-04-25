@@ -346,6 +346,88 @@ Inspector QGroupBox::title {
     background-color: transparent;
 }
 
+/* Mode-specific contextual blocks — subtle tinted cards to flag the
+ * extra options that only appear in FFT / Order mode. */
+QWidget#fftContextual {
+    border: 1px solid #dde7f5;
+    border-radius: 10px;
+    background-color: #eef4ff;
+}
+QWidget#orderContextual {
+    border: 1px solid #f1e3cf;
+    border-radius: 10px;
+    background-color: #fff5e8;
+}
+
+/* Preset slot buttons inside FFT/Order contextual */
+QPushButton[role="preset-load"] {
+    min-height: 26px;
+    padding: 3px 6px;
+    font-weight: 600;
+}
+QPushButton[role="preset-load"][filled="true"] {
+    background-color: #ffffff;
+    border-color: #b7c4d3;
+    color: #0f3f8f;
+}
+QPushButton[role="preset-load"]:disabled {
+    color: #a3aebd;
+    background-color: transparent;
+    border: 1px dashed #cdd5e0;
+}
+QPushButton[role="preset-save"] {
+    min-height: 22px;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #64748b;
+    background-color: transparent;
+    border: 1px solid transparent;
+}
+QPushButton[role="preset-save"]:hover {
+    color: #334155;
+    background-color: #eef2f7;
+    border-color: #dfe5ee;
+}
+
+/* ============ Toast (floating acknowledgement) ============ */
+QFrame#toast {
+    border: 1px solid #dfe5ee;
+    border-radius: 10px;
+    background-color: #ffffff;
+}
+QFrame#toast[level="success"] {
+    border-color: #a7d4b1;
+    background-color: #eaf7ee;
+}
+QFrame#toast[level="warning"] {
+    border-color: #f0d090;
+    background-color: #fdf6e3;
+}
+QFrame#toast[level="error"] {
+    border-color: #e8a8a8;
+    background-color: #fbecec;
+}
+QLabel#toastText {
+    color: #111827;
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}
+QLabel#toastIcon {
+    min-width: 18px;
+    max-width: 18px;
+    qproperty-alignment: AlignCenter;
+    border-radius: 9px;
+    color: #ffffff;
+    background-color: #1769e0;
+    font-weight: 700;
+    font-size: 12px;
+}
+QLabel#toastIcon[level="success"] { background-color: #16a34a; }
+QLabel#toastIcon[level="warning"] { background-color: #d97706; color: #ffffff; }
+QLabel#toastIcon[level="error"]   { background-color: #dc2626; }
+
 Inspector QPushButton[role="choice"] {
     min-height: 28px;
     font-weight: 700;

@@ -40,10 +40,10 @@ def test_mode_change_routes_to_chart_stack(qapp, qtbot):
 
 
 def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
-    """If user selects a custom X channel whose length != data, warn and abort."""
+    """If user selects a custom X channel whose length != data, surface a
+    non-blocking warning toast and abort."""
     import pandas as pd
     import numpy as np
-    from PyQt5.QtWidgets import QMessageBox
     from unittest.mock import patch
     from mf4_analyzer.ui.main_window import MainWindow
     # Second csv with different length
@@ -61,9 +61,14 @@ def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
         w.inspector.top._combo_xaxis_ch.count() - 1  # last candidate (from file 2)
     )
     qapp.processEvents()
-    with patch.object(QMessageBox, 'warning') as warn:
+    # Validation feedback now goes through MainWindow.toast (non-blocking)
+    # rather than QMessageBox.warning.
+    with patch.object(MainWindow, 'toast') as toast:
         w._apply_xaxis()
-    assert warn.called
+    assert toast.called
+    levels = [call.args[1] if len(call.args) > 1 else call.kwargs.get('level')
+              for call in toast.call_args_list]
+    assert 'warning' in levels
 
 
 def test_file_activation_updates_inspector_fs_and_range(qapp, qtbot, loaded_csv):

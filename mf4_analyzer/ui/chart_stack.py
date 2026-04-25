@@ -21,6 +21,7 @@ class CursorPill(QFrame):
         lay.setSpacing(4)
         self._primary = QLabel("", self)
         self._primary.setObjectName("cursorPillPrimary")
+        self._primary.setTextFormat(Qt.RichText)
         self._primary.setTextInteractionFlags(Qt.NoTextInteraction)
         self._detail = QLabel("", self)
         self._detail.setObjectName("cursorPillDetail")
