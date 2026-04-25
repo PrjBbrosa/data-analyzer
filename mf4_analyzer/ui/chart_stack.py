@@ -5,6 +5,100 @@ from PyQt5.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
+
+class CursorPill(QFrame):
+    """Draggable floating pill with a primary line (time / A·B / ΔT) and an
+    optional detail block (per-channel Min/Max/Avg/RMS as RichText). The
+    user can drag it anywhere inside the canvas area."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("cursorPill")
+        self.setCursor(Qt.OpenHandCursor)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 7, 10, 8)
+        lay.setSpacing(4)
+        self._primary = QLabel("", self)
+        self._primary.setObjectName("cursorPillPrimary")
+        self._primary.setTextFormat(Qt.RichText)
+        self._primary.setTextInteractionFlags(Qt.NoTextInteraction)
+        self._detail = QLabel("", self)
+        self._detail.setObjectName("cursorPillDetail")
+        self._detail.setTextFormat(Qt.RichText)
+        self._detail.setTextInteractionFlags(Qt.NoTextInteraction)
+        self._detail.setVisible(False)
+        lay.addWidget(self._primary)
+        lay.addWidget(self._detail)
+        self._drag_offset = None
+        # User-positioned flag — true after first manual drag, so resize events
+        # respect the chosen spot instead of snapping back to default corner.
+        self._user_placed = False
+
+    def primary_text(self):
+        return self._primary.text()
+
+    def set_primary(self, text):
+        self._primary.setText(text)
+        self.adjustSize()
+
+    def set_detail_html(self, html):
+        if html:
+            self._detail.setText(html)
+            self._detail.setVisible(True)
+        else:
+            self._detail.clear()
+            self._detail.setVisible(False)
+        self.adjustSize()
+
+    def has_detail(self):
+        return self._detail.isVisible() and bool(self._detail.text())
+
+    def clear(self):
+        self._primary.clear()
+        self._detail.clear()
+        self._detail.setVisible(False)
+        self.setVisible(False)
+
+    def mark_user_placed(self, value=True):
+        self._user_placed = bool(value)
+
+    def is_user_placed(self):
+        return self._user_placed
+
+    # ---- drag handling ----
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._drag_offset = e.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._drag_offset is not None and (e.buttons() & Qt.LeftButton):
+            parent = self.parentWidget()
+            new_top_left = self.mapToParent(e.pos() - self._drag_offset)
+            if parent is not None:
+                pw, ph = parent.width(), parent.height()
+                x = max(0, min(new_top_left.x(), pw - self.width()))
+                y = max(0, min(new_top_left.y(), ph - self.height()))
+                self.move(x, y)
+            else:
+                self.move(new_top_left)
+            self._user_placed = True
+            e.accept()
+            return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self._drag_offset is not None:
+            self._drag_offset = None
+            self.setCursor(Qt.OpenHandCursor)
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
+
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
 from .canvases import PlotCanvas, TimeDomainCanvas
@@ -50,7 +144,7 @@ def _vline():
 class _ChartCard(QWidget):
     """Canvas + its NavigationToolbar in a vertical layout."""
 
-    axis_lock_requested = pyqtSignal(object)  # anchor widget for the popover
+    copy_image_requested = pyqtSignal()  # emitted when the toolbar copy btn is clicked
 
     def __init__(self, canvas, parent=None):
         super().__init__(parent)
@@ -63,42 +157,51 @@ class _ChartCard(QWidget):
         self.toolbar.setIconSize(QSize(16, 16))
         _strip_subplots_action(self.toolbar)
 
-        # Insert an axis-lock button immediately after the Pan action.
-        self._axis_lock_btn = QToolButton(self.toolbar)
-        self._axis_lock_btn.setIcon(Icons.axis_lock())
-        self._axis_lock_btn.setIconSize(QSize(16, 16))
-        self._axis_lock_btn.setToolTip("轴锁定")
-        self._axis_lock_btn.setAutoRaise(True)
-        self._axis_lock_btn.clicked.connect(
-            lambda: self.axis_lock_requested.emit(self._axis_lock_btn)
-        )
-        pan_act = _find_action(self.toolbar, 'pan')
-        if pan_act is not None:
-            acts = self.toolbar.actions()
-            idx = acts.index(pan_act)
-            before = acts[idx + 1] if idx + 1 < len(acts) else None
-            if before is not None:
-                self.toolbar.insertWidget(before, self._axis_lock_btn)
-            else:
-                self.toolbar.addWidget(self._axis_lock_btn)
+        # Insert "copy as image" button right before the matplotlib Save action
+        # (or append if save action isn't found). This places it alongside the
+        # other matplotlib nav icons so it reads as a sibling action.
+        self._copy_btn = QToolButton(self.toolbar)
+        self._copy_btn.setIcon(Icons.copy_image())
+        self._copy_btn.setIconSize(QSize(16, 16))
+        self._copy_btn.setToolTip("复制为图片（含游标线和读数）")
+        self._copy_btn.setAutoRaise(True)
+        self._copy_btn.clicked.connect(self.copy_image_requested)
+        save_act = _find_action(self.toolbar, 'save')
+        if save_act is not None:
+            self.toolbar.insertWidget(save_act, self._copy_btn)
         else:
-            self.toolbar.addWidget(self._axis_lock_btn)
+            self.toolbar.addWidget(self._copy_btn)
 
-        # Two-line hint label that fills the remaining toolbar space.
+        # Two-line hint label sits at the LEFT of the toolbar (just after the
+        # nav icons). Preferred size policy keeps it tight; matplotlib's own
+        # locLabel — already Expanding + AlignRight — naturally takes the
+        # remaining slack and pushes the (x, y) readout to the right.
         self._hint_label = QLabel(self.toolbar)
         self._hint_label.setObjectName("chartHint")
         self._hint_label.setTextFormat(Qt.RichText)
         self._hint_label.setWordWrap(True)
         self._hint_label.setMinimumWidth(140)
-        self._hint_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._hint_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self._hint_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.toolbar.addWidget(self._hint_label)
+        loc_label = getattr(self.toolbar, 'locLabel', None)
+        loc_action = None
+        if loc_label is not None:
+            for act in self.toolbar.actions():
+                if self.toolbar.widgetForAction(act) is loc_label:
+                    loc_action = act
+                    break
+        if loc_action is not None:
+            self.toolbar.insertWidget(loc_action, self._hint_label)
+        else:
+            self.toolbar.addWidget(self._hint_label)
 
         # Only pan/zoom toggling changes the hint; one-shot buttons don't.
+        # Subclasses (TimeChartCard) listen to this same signal to flip the
+        # axis-lock chip group enabled state.
         for act in self.toolbar.actions():
             name = (act.text() or '').strip().lower()
             if name in ('pan', 'zoom'):
-                act.triggered.connect(self._refresh_hint)
+                act.triggered.connect(self._on_nav_mode_toggled)
 
         # Default: activate the pan tool.
         mode = str(getattr(self.toolbar, 'mode', '')).lower()
@@ -108,6 +211,10 @@ class _ChartCard(QWidget):
 
         lay.addWidget(self.toolbar)
         lay.addWidget(canvas, stretch=1)
+
+    def _on_nav_mode_toggled(self, *_):
+        """Hook subclasses can extend; base only refreshes the hint text."""
+        self._refresh_hint()
 
     # ---- hint handling ----
     def _current_mode_key(self):
@@ -164,6 +271,23 @@ class TimeChartCard(_ChartCard):
         self._cursor_mode = 'off'
         self._cursor_buttons['off'].setChecked(True)
 
+        # Axis-lock chips on the right edge — only effective during zoom mode.
+        # Selection is remembered across mode switches; chips merely grey out
+        # when zoom is inactive.
+        self.toolbar.addWidget(_vline())
+        self._lock_buttons = {}
+        for label, key in [('无', 'none'), ('X', 'x'), ('Y', 'y')]:
+            b = QPushButton(label, self.toolbar)
+            b.setCheckable(True)
+            b.setProperty("role", "chart-choice")
+            b.setFlat(True)
+            self.toolbar.addWidget(b)
+            self._lock_buttons[key] = b
+            b.clicked.connect(lambda _=False, k=key: self.set_axis_lock(k))
+        self._axis_lock = 'none'
+        self._lock_buttons['none'].setChecked(True)
+        self._sync_lock_enabled()
+
     # ----- plot mode -----
     def plot_mode(self):
         return self._plot_mode
@@ -188,12 +312,43 @@ class TimeChartCard(_ChartCard):
             b.setChecked(k == mode)
         self.cursor_mode_changed.emit(mode)
 
+    # ----- axis lock (chip group) -----
+    def axis_lock(self):
+        return self._axis_lock
+
+    def set_axis_lock(self, key):
+        if key not in ('none', 'x', 'y'):
+            return
+        self._axis_lock = key
+        for k, b in self._lock_buttons.items():
+            b.setChecked(k == key)
+        # Push to canvas only when zoom is the active nav tool — outside zoom
+        # the rubber-band lock has no effect anyway, but keeping the canvas
+        # state aligned avoids a stale lock if user re-enters zoom.
+        if self._is_zoom_active():
+            self.canvas.set_axis_lock(key)
+
+    def _is_zoom_active(self):
+        return 'zoom' in str(getattr(self.toolbar, 'mode', '')).lower()
+
+    def _sync_lock_enabled(self):
+        zoom = self._is_zoom_active()
+        for b in self._lock_buttons.values():
+            b.setEnabled(zoom)
+        # Apply or detach the lock when the user enters/leaves zoom mode.
+        self.canvas.set_axis_lock(self._axis_lock if zoom else 'none')
+
+    def _on_nav_mode_toggled(self, *_):
+        # Extend base behavior: refresh hint AND chip enabled state.
+        super()._on_nav_mode_toggled()
+        self._sync_lock_enabled()
+
 
 class ChartStack(QWidget):
     mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
     cursor_mode_changed = pyqtSignal(str)
-    axis_lock_requested = pyqtSignal(object)  # anchor widget
+    image_copied = pyqtSignal(str)  # status text for the main window
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -211,24 +366,24 @@ class ChartStack(QWidget):
         self.stack.addWidget(self._fft_card)
         self.stack.addWidget(self._order_card)
         for card in (self._time_card, self._fft_card, self._order_card):
-            card.axis_lock_requested.connect(self.axis_lock_requested)
+            card.copy_image_requested.connect(
+                lambda c=card: self._copy_card_image(c)
+            )
         lay.addWidget(self.stack, stretch=1)
 
         # Stats strip mounted at the bottom (Task 2.10)
         self.stats_strip = StatsStrip(self)
         lay.addWidget(self.stats_strip)
 
-        # Cursor pill (owned by ChartStack; floats over active canvas)
-        self._cursor_pill = QLabel("", self.stack)
-        self._cursor_pill.setObjectName("cursorPill")
-        self._cursor_pill.setVisible(False)
-        self._cursor_dual_pill = QLabel("", self.stack)
-        self._cursor_dual_pill.setObjectName("cursorPill")
-        self._cursor_dual_pill.setWordWrap(True)
-        self._cursor_dual_pill.setVisible(False)
+        # Single draggable cursor pill (owned by ChartStack; floats over the
+        # active canvas card). Default position is the top-right corner so it
+        # stays clear of Y-axis labels and the typical data-of-interest area;
+        # the user can drag it elsewhere — see CursorPill.mark_user_placed.
+        self._pill = CursorPill(self.stack)
+        self._pill.setVisible(False)
         self.canvas_time.cursor_info.connect(self._on_cursor_info)
         self.canvas_time.dual_cursor_info.connect(self._on_dual_cursor_info)
-        self.stack.currentChanged.connect(lambda _i: self._reposition_pills())
+        self.stack.currentChanged.connect(lambda _i: self._reposition_pill())
 
         # Relay time-card control signals up to MainWindow consumers.
         self._time_card.plot_mode_changed.connect(self.plot_mode_changed)
@@ -265,40 +420,75 @@ class ChartStack(QWidget):
         self.canvas_fft.full_reset()
         self.canvas_order.full_reset()
 
+    def _copy_card_image(self, card):
+        """Copy the card's canvas to the clipboard. For the time-domain card,
+        the floating cursor pill (if visible and overlapping the canvas) is
+        composited onto the captured pixmap so the screenshot matches what
+        the user sees on screen."""
+        from PyQt5.QtGui import QPainter
+        from PyQt5.QtWidgets import QApplication
+        canvas = card.canvas
+        pix = canvas.grab()
+        if (card is self.stack.currentWidget()
+                and card is self._time_card
+                and self._pill.isVisible()):
+            canvas_origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
+            pill_geo = self._pill.geometry()
+            rel_x = pill_geo.x() - canvas_origin.x()
+            rel_y = pill_geo.y() - canvas_origin.y()
+            # Draw only when the pill actually overlaps the canvas rect.
+            if (rel_x + pill_geo.width() > 0 and rel_x < pix.width()
+                    and rel_y + pill_geo.height() > 0 and rel_y < pix.height()):
+                painter = QPainter(pix)
+                painter.drawPixmap(rel_x, rel_y, self._pill.grab())
+                painter.end()
+        QApplication.clipboard().setPixmap(pix)
+        self.image_copied.emit("已复制图为图片")
+
     def _on_cursor_info(self, text):
-        self._cursor_pill.setText(text)
-        self._cursor_pill.adjustSize()
-        self._cursor_pill.setVisible(self.current_mode() == 'time')
-        self._reposition_pills()
+        self._pill.set_primary(text)
+        self._pill.setVisible(self.current_mode() == 'time')
+        self._reposition_pill()
 
     def _on_dual_cursor_info(self, text):
-        self._cursor_dual_pill.setText(text)
-        self._cursor_dual_pill.adjustSize()
-        self._cursor_dual_pill.setVisible(bool(text) and self.current_mode() == 'time')
-        self._reposition_pills()
+        self._pill.set_detail_html(text)
+        if self.current_mode() == 'time' and (text or self._pill.primary_text()):
+            self._pill.setVisible(True)
+        self._reposition_pill()
 
-    def _reposition_pills(self):
-        visible = self.current_mode() == 'time'
-        if not visible:
-            self._cursor_pill.setVisible(False)
-            self._cursor_dual_pill.setVisible(False)
+    def _reposition_pill(self):
+        if self.current_mode() != 'time':
+            self._pill.setVisible(False)
             return
-        card = self.stack.currentWidget()
-        h = card.height() if card is not None else self.stack.height()
-        pill_h = self._cursor_pill.sizeHint().height()
-        self._cursor_pill.move(8, max(h - pill_h - 8, 0))
-        if self._cursor_dual_pill.text():
-            dh = self._cursor_dual_pill.sizeHint().height()
-            self._cursor_dual_pill.move(8, max(h - pill_h - dh - 12, 0))
-        self._cursor_pill.raise_()
-        self._cursor_dual_pill.raise_()
+        if self._pill.is_user_placed():
+            # Re-clamp into the visible area in case the window shrank.
+            pw, ph = self.stack.width(), self.stack.height()
+            x = max(0, min(self._pill.x(), pw - self._pill.width()))
+            y = max(0, min(self._pill.y(), ph - self._pill.height()))
+            self._pill.move(x, y)
+        else:
+            # Default anchor: top-right of the canvas area (under the toolbar)
+            # with an 8 px inset so the pill never covers toolbar buttons.
+            card = self.stack.currentWidget()
+            w = card.width() if card is not None else self.stack.width()
+            y_top = 8
+            if card is not None and hasattr(card, 'canvas'):
+                origin = card.canvas.mapTo(self.stack, card.canvas.rect().topLeft())
+                y_top = origin.y() + 8
+            self._pill.move(max(w - self._pill.width() - 8, 0), y_top)
+        self._pill.raise_()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._reposition_pills()
+        self._reposition_pill()
+
+    def clear_cursor_pill(self):
+        """Clear pill content and hide it; preserves the user-placed flag so a
+        subsequent cursor activation reappears at the spot the user chose."""
+        self._pill.clear()
 
     def cursor_pill_text(self):
-        return self._cursor_pill.text()
+        return self._pill.primary_text()
 
     def cursor_pill_visible(self):
-        return self._cursor_pill.isVisible()
+        return self._pill.isVisible()

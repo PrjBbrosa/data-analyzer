@@ -85,6 +85,23 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.statusBar)
         self.statusBar.showMessage("Ready")
 
+        # Floating toast (constructed lazily on first use; the parent must
+        # be the main window so the toast floats above the central canvas).
+        from .widgets import Toast
+        self._toast = Toast(self)
+
+    # ---- public toast helper ----
+    def toast(self, msg, level='info'):
+        """Show a transient acknowledgement toast at the bottom of the window."""
+        if not msg:
+            return
+        self._toast.show_message(msg, level=level)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if hasattr(self, '_toast') and self._toast.isVisible():
+            self._toast._reposition()
+
     def _connect(self):
         # --- New-module wiring ---
         self.toolbar.file_add_requested.connect(self.load_files)
@@ -93,7 +110,13 @@ class MainWindow(QMainWindow):
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.toolbar.cursor_reset_requested.connect(self._reset_cursors)
         self.toolbar.axis_lock_requested.connect(self._show_axis_lock_popover)
-        self.chart_stack.axis_lock_requested.connect(self._show_axis_lock_popover)
+        self.chart_stack.image_copied.connect(
+            lambda msg: (self.statusBar.showMessage(msg, 2000),
+                         self.toast(msg, 'success'))
+        )
+        self.inspector.preset_acknowledged.connect(
+            lambda level, msg: self.toast(msg, level)
+        )
 
         self.navigator.channels_changed.connect(self._ch_changed)
         self.navigator.file_activated.connect(self._on_file_activated)
@@ -169,14 +192,14 @@ class MainWindow(QMainWindow):
         pop.show_at(anchor)
 
     def _show_rebuild_popover(self, anchor, mode='fft'):
-        from PyQt5.QtWidgets import QDialog, QMessageBox
+        from PyQt5.QtWidgets import QDialog
         if mode == 'fft':
             sig_data = self.inspector.fft_ctx.current_signal()
         else:
             sig_data = self.inspector.order_ctx.current_signal()
         target_fid = sig_data[0] if sig_data and sig_data[0] in self.files else self._active
         if not target_fid or target_fid not in self.files:
-            QMessageBox.warning(self, "提示", "请先选择信号")
+            self.toast("请先选择信号", "warning")
             return
         fd = self.files[target_fid]
         from .drawers.rebuild_time_popover import RebuildTimePopover
@@ -196,6 +219,10 @@ class MainWindow(QMainWindow):
             self.plot_time()
             self.statusBar.showMessage(
                 f"时间轴已重建: {fd.short_name} | Fs={new_fs} | {old_max:.1f}s → {new_max:.3f}s"
+            )
+            self.toast(
+                f"已重建时间轴 · Fs={new_fs}",
+                "success",
             )
 
     def _on_inspector_signal_changed(self, mode, data):
@@ -267,11 +294,11 @@ class MainWindow(QMainWindow):
         else:
             data = self.inspector.top.xaxis_channel_data()
             if not data:
-                QMessageBox.warning(self, "提示", "请选择横坐标通道")
+                self.toast("请选择横坐标通道", "warning")
                 return
             fid, ch = data
             if fid not in self.files or ch not in self.files[fid].data.columns:
-                QMessageBox.warning(self, "提示", "横坐标通道不存在")
+                self.toast("横坐标通道不存在", "warning")
                 return
             # §6.1 validation: length must match every file whose channels are
             # currently checked for plotting (not every loaded file).
@@ -282,10 +309,7 @@ class MainWindow(QMainWindow):
                 plotted_fids = {fid}
             for cfid in plotted_fids:
                 if cfid in self.files and len(self.files[cfid].data) != xlen:
-                    QMessageBox.warning(
-                        self, "提示",
-                        "横坐标通道长度与当前绘图通道所在文件不匹配",
-                    )
+                    self.toast("横坐标通道长度与当前绘图通道不一致", "warning")
                     return
             self._custom_xaxis_fid = fid
             self._custom_xaxis_ch = ch
@@ -294,6 +318,7 @@ class MainWindow(QMainWindow):
         # 重新绘图
         self.plot_time()
         self.statusBar.showMessage(f"横坐标已更新")
+        self.toast("横坐标已更新", "success")
 
     def _reset_cursors(self):
         """Reset both single and dual cursor state on the time-domain canvas."""
@@ -301,12 +326,9 @@ class MainWindow(QMainWindow):
         self.canvas_time._placing = 'A'
         self.canvas_time._refresh = True
         self.canvas_time.draw_idle()
-        # Clear the ChartStack-owned cursor pill (no more lbl_cursor/lbl_dual)
-        self.chart_stack._cursor_pill.setText("")
-        self.chart_stack._cursor_dual_pill.setText("")
-        self.chart_stack._cursor_pill.setVisible(False)
-        self.chart_stack._cursor_dual_pill.setVisible(False)
+        self.chart_stack.clear_cursor_pill()
         self.statusBar.showMessage("游标已重置")
+        self.toast("游标已重置", "info")
 
     def load_files(self):
         fps, _ = QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.csv *.xlsx *.xls)")
@@ -341,6 +363,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, self.plot_time)
             self._update_info()
             self.statusBar.showMessage(f"✅ 已加载: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件")
+            self.toast(f"已加载 {p.name} · {len(data)} 行", "success")
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 
@@ -349,16 +372,19 @@ class MainWindow(QMainWindow):
 
     def _close(self, fid):
         if fid not in self.files: return
+        name = self.files[fid].short_name
         del self.files[fid]
         self.navigator.remove_file(fid)
         self._active = self.navigator._active_fid  # navigator picks fallback
         self._update_info()
         self._reset_plot_state(scope='file')
         self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
+        self.toast(f"已关闭 {name}", "info")
 
     def close_all(self):
         if not self.files:
             return
+        n = len(self.files)
         for fid in list(self.files.keys()):
             del self.files[fid]
             self.navigator.remove_file(fid)
@@ -366,6 +392,7 @@ class MainWindow(QMainWindow):
         self._update_info()
         self._reset_plot_state(scope='all')
         self.statusBar.showMessage("已关闭全部")
+        self.toast(f"已关闭全部 {n} 个文件", "info")
 
     def _update_info(self):
         """Surface active-file summary via the status bar (no more lbl_info shim)."""
@@ -383,11 +410,7 @@ class MainWindow(QMainWindow):
         scope in {'file', 'all'}; both paths currently share code.
         """
         self.chart_stack.full_reset_all()
-        # Cursor pill (ChartStack owns both)
-        self.chart_stack._cursor_pill.setText("")
-        self.chart_stack._cursor_pill.setVisible(False)
-        self.chart_stack._cursor_dual_pill.setText("")
-        self.chart_stack._cursor_dual_pill.setVisible(False)
+        self.chart_stack.clear_cursor_pill()
         # Stats strip
         self.chart_stack.stats_strip.update_stats({})
         # Chart-card cursor mode → back to 'off' default (spec §8)
@@ -504,8 +527,7 @@ class MainWindow(QMainWindow):
 
     def open_editor(self):
         if not self.files or not self._active or self._active not in self.files:
-            from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "提示", "请先加载文件")
+            self.toast("请先加载文件", "warning")
             return
         fd = self.files[self._active]
         from .drawers.channel_editor_drawer import ChannelEditorDrawer
@@ -532,10 +554,15 @@ class MainWindow(QMainWindow):
         self.statusBar.showMessage(
             f"编辑: +{len(new_channels)} -{len(removed_channels)}"
         )
+        self.toast(
+            f"通道已更新: 新增 {len(new_channels)} · 删除 {len(removed_channels)}",
+            "success",
+        )
         self.plot_time()
 
     def export_excel(self):
-        if not self.files or not self._active: QMessageBox.warning(self, "提示", "请先加载文件"); return
+        if not self.files or not self._active:
+            self.toast("请先加载文件", "warning"); return
         fd = self.files[self._active];
         chs = fd.get_signal_channels()
         if not chs: return
@@ -556,7 +583,13 @@ class MainWindow(QMainWindow):
                     m = (fd.time_array >= lo) & (fd.time_array <= hi);
                     df = df.loc[m].reset_index(drop=True)
                 df.to_excel(fp, index=False, engine='openpyxl')
-                QMessageBox.information(self, "成功", f"导出: {len(df)} 行 × {len(df.columns)} 列")
+                self.statusBar.showMessage(
+                    f"导出完成: {Path(fp).name} ({len(df)} 行 × {len(df.columns)} 列)"
+                )
+                self.toast(
+                    f"已导出 {Path(fp).name} · {len(df)} 行 × {len(df.columns)} 列",
+                    "success",
+                )
             except Exception as e:
                 QMessageBox.critical(self, "错误", str(e))
 
@@ -579,7 +612,7 @@ class MainWindow(QMainWindow):
     def _get_rpm(self, n):
         data = self.inspector.order_ctx.current_rpm()
         if not data:
-            QMessageBox.warning(self, "提示", "请选择转速信号")
+            self.toast("请选择转速信号", "warning")
             return None
         fid, ch = data
         if fid not in self.files:
@@ -594,26 +627,41 @@ class MainWindow(QMainWindow):
             m = (fd.time_array >= lo) & (fd.time_array <= hi)
             rpm = rpm[m]
         if len(rpm) != n:
-            QMessageBox.warning(self, "提示", f"长度不匹配 ({n} vs {len(rpm)})")
+            self.toast(f"信号与转速长度不匹配 ({n} vs {len(rpm)})", "warning")
             return None
         return rpm
 
     @staticmethod
     def _fft_auto_xlim(freq, amp):
-        """自适应计算FFT频率范围，取整到 1/2/5/10/20/50/100... 序列"""
+        """自适应计算 FFT 频率范围。
+
+        策略：忽略 DC 分量，找到「最高的有意义峰位」——即幅值仍达到全频段
+        峰值 1% 以上的最高频率点；再取 1.3x 余量并向上取整到
+        1/2/5/10/20/50/100… 美观刻度。该算法相比单纯的累计能量法对
+        包含直流偏置或低频主导分量的信号更鲁棒。
+        """
         if len(freq) < 2 or len(amp) < 2:
             return freq[-1] if len(freq) else 100
-        # 找到包含99%能量的频率
-        cumulative = np.cumsum(amp ** 2)
-        total = cumulative[-1]
-        if total < 1e-20:
+
+        amp = np.asarray(amp, dtype=float)
+        # 跳过 DC：从 index 1 起；若分辨率极低也至少保留 1 个点
+        body = amp[1:] if len(amp) > 1 else amp
+        peak = float(np.max(body)) if len(body) else 0.0
+        if peak <= 0 or not np.isfinite(peak):
             return freq[-1]
-        # 99%能量截止
-        idx_99 = np.searchsorted(cumulative, total * 0.99)
-        f_cutoff = freq[min(idx_99, len(freq) - 1)]
-        # 给一些余量 (1.2x)
-        f_cutoff *= 1.2
-        # 取整到好看的数值序列: 1, 2, 5, 10, 20, 50, 100, 200, 500 ...
+
+        # 「最高有意义谱线」：amp >= 1% 峰值的最大频率索引（含 DC 偏移 +1）
+        threshold = peak * 0.01
+        meaningful = np.where(body >= threshold)[0]
+        if len(meaningful) == 0:
+            return freq[-1]
+        idx = int(meaningful[-1]) + 1
+        f_cutoff = float(freq[min(idx, len(freq) - 1)])
+        # 再加 1.3x 余量，避免恰好压在最右一根谱线上
+        f_cutoff *= 1.3
+        # 与最大可达频率取小，防止超过 Nyquist
+        f_cutoff = min(f_cutoff, float(freq[-1]))
+
         nice_vals = []
         for exp in range(-1, 7):
             for m in [1, 2, 5]:
@@ -626,7 +674,8 @@ class MainWindow(QMainWindow):
 
     def do_fft(self):
         t, sig, fs = self._get_sig()
-        if sig is None or len(sig) < 10: QMessageBox.warning(self, "提示", "请选择有效信号"); return
+        if sig is None or len(sig) < 10:
+            self.toast("请选择有效信号", "warning"); return
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
@@ -683,6 +732,7 @@ class MainWindow(QMainWindow):
             self.canvas_fft.draw();
             pi = np.argmax(amp[1:]) + 1;
             self.statusBar.showMessage(f'FFT峰值: {freq[pi]:.2f} Hz ({amp[pi]:.4f})')
+            self.toast(f"FFT 完成 · 峰值 {freq[pi]:.2f} Hz", "success")
         except Exception as e:
             QMessageBox.critical(self, 'FFT错误', str(e))
 
@@ -694,7 +744,8 @@ class MainWindow(QMainWindow):
 
     def do_order_time(self):
         t, sig, fs = self._get_sig()
-        if sig is None or len(sig) < 100: QMessageBox.warning(self, "提示", "请选择有效信号"); return
+        if sig is None or len(sig) < 100:
+            self.toast("请选择有效信号", "warning"); return
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
@@ -732,13 +783,15 @@ class MainWindow(QMainWindow):
             self.canvas_order.draw();
             self.inspector.order_ctx.set_progress("")
             self.statusBar.showMessage(f'完成 | {len(tb)} 时间点 × {len(ords)} 阶次')
+            self.toast(f"时间-阶次谱完成 · {len(tb)} × {len(ords)}", "success")
         except Exception as e:
             self.inspector.order_ctx.set_progress("")
             QMessageBox.critical(self, '错误', str(e))
 
     def do_order_rpm(self):
         t, sig, fs = self._get_sig()
-        if sig is None or len(sig) < 100: QMessageBox.warning(self, "提示", "请选择有效信号"); return
+        if sig is None or len(sig) < 100:
+            self.toast("请选择有效信号", "warning"); return
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
@@ -776,13 +829,15 @@ class MainWindow(QMainWindow):
             self.canvas_order.draw();
             self.inspector.order_ctx.set_progress("")
             self.statusBar.showMessage(f'转速-阶次谱完成 | {len(rb)} RPM × {len(ords)} 阶次')
+            self.toast(f"转速-阶次谱完成 · {len(rb)} × {len(ords)}", "success")
         except Exception as e:
             self.inspector.order_ctx.set_progress("")
             QMessageBox.critical(self, '错误', str(e))
 
     def do_order_track(self):
         t, sig, fs = self._get_sig()
-        if sig is None or len(sig) < 100: QMessageBox.warning(self, "提示", "请选择有效信号"); return
+        if sig is None or len(sig) < 100:
+            self.toast("请选择有效信号", "warning"); return
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
@@ -816,5 +871,6 @@ class MainWindow(QMainWindow):
             self.canvas_order.set_tick_density(xt, yt)
             self.canvas_order.draw();
             self.statusBar.showMessage(f'阶次 {to} 跟踪完成')
+            self.toast(f"阶次 {to} 跟踪完成", "success")
         except Exception as e:
             QMessageBox.critical(self, '错误', str(e))

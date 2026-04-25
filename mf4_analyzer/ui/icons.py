@@ -172,6 +172,34 @@ class Icons:
         return QIcon(pix)
 
     @classmethod
+    def copy_image(cls):
+        """Two stacked rounded rectangles + small mountain glyph — 'copy chart
+        as image' action."""
+        with _painting() as (pix, p):
+            # back card
+            p.setPen(_pen(MUTED, 1.3))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(QRectF(2.5, 2.5, 11, 11), 1.6, 1.6)
+            # front card filled white
+            p.setPen(_pen(BLUE, 1.4))
+            p.setBrush(QBrush(QColor(255, 255, 255)))
+            p.drawRoundedRect(QRectF(6.5, 6.5, 11, 11), 1.6, 1.6)
+            # tiny mountain inside front card
+            p.setPen(_pen(BLUE, 1.3))
+            path = QPainterPath()
+            path.moveTo(8, 15.5)
+            path.lineTo(10.5, 12)
+            path.lineTo(12, 13.5)
+            path.lineTo(14, 11)
+            path.lineTo(16, 15.5)
+            p.drawPath(path)
+            # sun dot
+            p.setBrush(QBrush(BLUE))
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(QPointF(14.5, 9), 0.9, 0.9)
+        return QIcon(pix)
+
+    @classmethod
     def menu(cls):
         def draw(p):
             for y in (6, 10, 14):

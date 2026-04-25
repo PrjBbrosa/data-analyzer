@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Chart Toolbar 提案 Demo</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: #f5f7fb; color: #111827;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    font-size: 13px;
+  }
+  h1 { font-size: 16px; margin: 0 0 6px; color: #111827; }
+  .sub { color: #64748b; font-size: 12px; margin-bottom: 18px; }
+
+  .chart-card {
+    background: #fff;
+    border: 1px solid #eef2f7;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04);
+    margin-bottom: 24px;
+  }
+
+  /* ---------- toolbar ---------- */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border-bottom: 1px solid #eef2f7;
+    background: #fff;
+    min-height: 40px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+  .nav-icons { display: flex; gap: 2px; }
+  .icon-btn {
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #475569;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 14px;
+    user-select: none;
+  }
+  .icon-btn:hover { background: #f1f5f9; }
+  .icon-btn.active {
+    background: #e8efff;
+    border-color: #1769e0;
+    color: #1769e0;
+  }
+
+  .vline {
+    width: 1px; height: 22px;
+    background: #e2e8f0;
+    margin: 0 6px;
+  }
+
+  .hint {
+    color: #475569;
+    line-height: 1.25;
+    padding: 0 10px;
+    min-width: 180px;
+    white-space: nowrap;
+  }
+  .hint b { color: #111827; font-weight: 600; }
+  .hint .small { color: #94a3b8; font-size: 11px; }
+
+  .spacer { flex: 1 1 auto; }
+
+  .xy-readout {
+    color: #475569;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    padding: 0 12px;
+    white-space: nowrap;
+  }
+
+  /* chip group */
+  .chip-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+  }
+  .chip-label {
+    color: #94a3b8;
+    font-size: 11px;
+    margin: 0 6px 0 2px;
+    user-select: none;
+  }
+  .chip {
+    padding: 4px 11px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #475569;
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+    border-right-width: 0;
+    transition: background 0.12s, color 0.12s;
+  }
+  .chip:first-of-type { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+  .chip:last-of-type {
+    border-right-width: 1px;
+    border-top-right-radius: 6px; border-bottom-right-radius: 6px;
+  }
+  .chip:hover:not(.disabled):not(.active) { background: #f1f5f9; }
+  .chip.active {
+    background: #1769e0;
+    color: #fff;
+    border-color: #1769e0;
+  }
+  .chip.active + .chip { border-left-color: #1769e0; }
+  .chip.disabled {
+    color: #cbd5e1;
+    background: #fafbfc;
+    cursor: not-allowed;
+  }
+
+  /* ---------- canvas mock ---------- */
+  .canvas {
+    position: relative;
+    height: 280px;
+    background: #fff;
+    background-image:
+      linear-gradient(to right, #eef2f7 1px, transparent 1px),
+      linear-gradient(to bottom, #eef2f7 1px, transparent 1px);
+    background-size: 60px 50px;
+  }
+  .canvas svg {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+  }
+  .y-axis-label {
+    position: absolute;
+    left: 8px; top: 50%;
+    transform: translateY(-50%) rotate(-90deg);
+    transform-origin: left center;
+    color: #16a394;
+    font-size: 10px;
+    line-height: 1.2;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .y-axis-label .file { color: #64748b; }
+
+  /* status panel */
+  .status {
+    background: #fff;
+    border: 1px solid #eef2f7;
+    border-radius: 10px;
+    padding: 14px 18px;
+    color: #475569;
+    line-height: 1.5;
+    font-size: 12px;
+  }
+  .status code {
+    background: #f1f5f9;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    color: #1769e0;
+  }
+  .status .row { margin-bottom: 6px; }
+  .status .row b { color: #111827; }
+
+  .legend {
+    margin-top: 8px; color: #94a3b8; font-size: 11px;
+  }
+
+  .compare-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    margin-top: 12px;
+  }
+  .compare-grid h3 {
+    font-size: 13px; margin: 0 0 8px; color: #475569;
+  }
+  .compare-grid .label-tag {
+    display: inline-block;
+    padding: 2px 8px; border-radius: 4px;
+    font-size: 10px; font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .label-tag.before { background: #fef2f2; color: #b91c1c; }
+  .label-tag.after  { background: #ecfdf5; color: #047857; }
+
+  .mini-toolbar {
+    display: flex; align-items: center; gap: 4px;
+    padding: 6px 10px;
+    border: 1px solid #eef2f7;
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+    flex-wrap: nowrap;
+  }
+</style>
+</head>
+<body>
+
+<h1>Chart Toolbar 改造提案 — 交互 Demo</h1>
+<div class="sub">点击 <b>Pan / Zoom / Off</b> 看「锁: 无 / X / Y」chip 组的启用状态变化；点击右侧 chip 立即生效。</div>
+
+<!-- ============ Main interactive card ============ -->
+<div class="chart-card">
+  <div class="toolbar">
+    <!-- matplotlib nav icons -->
+    <div class="nav-icons">
+      <button class="icon-btn" title="Home">⌂</button>
+      <button class="icon-btn" title="Back">‹</button>
+      <button class="icon-btn" title="Forward">›</button>
+      <button class="icon-btn" id="btnPan"   title="Pan">✥</button>
+      <button class="icon-btn" id="btnZoom"  title="Zoom">⌕</button>
+      <button class="icon-btn" title="Save">💾</button>
+    </div>
+
+    <!-- LEFT: hint -->
+    <div class="hint" id="hint">
+      <b>移动曲线</b><br>
+      <span class="small">左键拖动平移 · 右键拖动缩放</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <!-- RIGHT: (x,y) coords -->
+    <div class="xy-readout" id="xy">(x, y) = (81.89, 0.024)</div>
+
+    <div class="vline"></div>
+
+    <!-- chip: plot mode -->
+    <div class="chip-group" id="grpPlot">
+      <span class="chip-label">视图:</span>
+      <button class="chip active" data-plot="subplot">Subplot</button>
+      <button class="chip"        data-plot="overlay">Overlay</button>
+    </div>
+
+    <div class="vline"></div>
+
+    <!-- chip: axis lock (NEW — replaces the popover button) -->
+    <div class="chip-group" id="grpLock">
+      <span class="chip-label">锁:</span>
+      <button class="chip active disabled" data-lock="none">无</button>
+      <button class="chip disabled"        data-lock="x">X</button>
+      <button class="chip disabled"        data-lock="y">Y</button>
+    </div>
+
+    <div class="vline"></div>
+
+    <!-- chip: cursor mode -->
+    <div class="chip-group" id="grpCursor">
+      <span class="chip-label">游标:</span>
+      <button class="chip active" data-cur="off">Off</button>
+      <button class="chip"        data-cur="single">Single</button>
+      <button class="chip"        data-cur="dual">Dual</button>
+    </div>
+  </div>
+
+  <!-- canvas mock -->
+  <div class="canvas">
+    <div class="y-axis-label">
+      <span class="file">[TLC_TAS_RPS_2ms_2]</span><br>
+      ERD6_01_01_A0_D_xxx
+    </div>
+    <svg viewBox="0 0 800 280" preserveAspectRatio="none">
+      <path d="M 60 200
+               C 140 60, 220 240, 300 110
+               S 460 230, 540 90
+               S 700 220, 780 130"
+            fill="none" stroke="#1769e0" stroke-width="1.6"/>
+    </svg>
+  </div>
+</div>
+
+<!-- ============ Status read-out ============ -->
+<div class="status">
+  <div class="row"><b>Toolbar 模式：</b><code id="stMode">pan</code></div>
+  <div class="row"><b>轴锁状态：</b><code id="stLock">none</code> <span id="stLockNote" style="color:#94a3b8;"></span></div>
+  <div class="row"><b>视图模式：</b><code id="stPlot">subplot</code></div>
+  <div class="row"><b>游标模式：</b><code id="stCur">off</code></div>
+  <div class="legend">轴锁 chip 仅在 <b>Zoom</b> 模式可点；切到 Pan / Off 时整组灰显并自动复位为「无」。</div>
+</div>
+
+<!-- ============ Before / After comparison ============ -->
+<h1 style="margin-top:32px;">Before / After 工具栏对比</h1>
+
+<div class="compare-grid">
+  <div>
+    <span class="label-tag before">BEFORE</span>
+    <div class="mini-toolbar">
+      <div class="nav-icons">
+        <button class="icon-btn">⌂</button>
+        <button class="icon-btn">‹</button>
+        <button class="icon-btn">›</button>
+        <button class="icon-btn">✥</button>
+        <button class="icon-btn" style="background:#f1f5f9;">🔒</button>
+        <button class="icon-btn">⌕</button>
+        <button class="icon-btn">💾</button>
+      </div>
+      <div class="xy-readout" style="padding-left:6px;">(x, y) = (81.89, 0.024)</div>
+      <div class="hint" style="text-align:center; padding:0 8px;">
+        <b>移动曲线</b><br><span class="small">左键拖动平移 · …</span>
+      </div>
+      <div class="chip-group">
+        <button class="chip active">Subplot</button>
+        <button class="chip">Overlay</button>
+      </div>
+      <div class="vline"></div>
+      <div class="chip-group">
+        <button class="chip active">Off</button>
+        <button class="chip">Single</button>
+        <button class="chip">Dual</button>
+      </div>
+    </div>
+    <div class="legend">问题：(x,y) 在左、说明在中间、独立锁按钮要点开 popover 才能选 X/Y。</div>
+  </div>
+
+  <div>
+    <span class="label-tag after">AFTER</span>
+    <div class="mini-toolbar">
+      <div class="nav-icons">
+        <button class="icon-btn">⌂</button>
+        <button class="icon-btn">‹</button>
+        <button class="icon-btn">›</button>
+        <button class="icon-btn">✥</button>
+        <button class="icon-btn">⌕</button>
+        <button class="icon-btn">💾</button>
+      </div>
+      <div class="hint" style="padding:0 10px;">
+        <b>移动曲线</b><br><span class="small">左键拖动平移 · …</span>
+      </div>
+      <div class="spacer"></div>
+      <div class="xy-readout">(x, y) = (81.89, 0.024)</div>
+      <div class="vline"></div>
+      <div class="chip-group">
+        <button class="chip active">Subplot</button>
+        <button class="chip">Overlay</button>
+      </div>
+      <div class="vline"></div>
+      <div class="chip-group">
+        <span class="chip-label">锁:</span>
+        <button class="chip active disabled">无</button>
+        <button class="chip disabled">X</button>
+        <button class="chip disabled">Y</button>
+      </div>
+      <div class="vline"></div>
+      <div class="chip-group">
+        <button class="chip active">Off</button>
+        <button class="chip">Single</button>
+        <button class="chip">Dual</button>
+      </div>
+    </div>
+    <div class="legend">说明在左、(x,y) 推到右、锁变成行内 chip（pan/off 时灰显，zoom 时启用）。</div>
+  </div>
+</div>
+
+<script>
+  const HINTS = {
+    pan:  ['移动曲线', '左键拖动平移 · 右键拖动缩放'],
+    zoom: ['框选缩放', '拖动鼠标框选矩形区域放大 · Home 键复位'],
+    off:  ['浏览', '滚轮缩放 · 点击 ✥ 平移 · 点击 ⌕ 框选'],
+  };
+
+  const state = {
+    mode: 'pan',         // 'pan' | 'zoom' | 'off'
+    lock: 'none',        // 'none' | 'x' | 'y'
+    plot: 'subplot',     // 'subplot' | 'overlay'
+    cursor: 'off',       // 'off' | 'single' | 'dual'
+  };
+
+  const el = {
+    btnPan:  document.getElementById('btnPan'),
+    btnZoom: document.getElementById('btnZoom'),
+    hint:    document.getElementById('hint'),
+    grpLock: document.getElementById('grpLock'),
+    grpPlot: document.getElementById('grpPlot'),
+    grpCur:  document.getElementById('grpCursor'),
+    stMode:  document.getElementById('stMode'),
+    stLock:  document.getElementById('stLock'),
+    stLockNote: document.getElementById('stLockNote'),
+    stPlot:  document.getElementById('stPlot'),
+    stCur:   document.getElementById('stCur'),
+  };
+
+  function setMode(m) {
+    state.mode = m;
+    if (m !== 'zoom') state.lock = 'none';   // auto-reset when leaving zoom
+    render();
+  }
+
+  el.btnPan.addEventListener('click', () => setMode(state.mode === 'pan' ? 'off' : 'pan'));
+  el.btnZoom.addEventListener('click', () => setMode(state.mode === 'zoom' ? 'off' : 'zoom'));
+
+  // chip handlers
+  el.grpLock.querySelectorAll('button[data-lock]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (state.mode !== 'zoom') return;     // disabled outside zoom
+      state.lock = btn.dataset.lock;
+      render();
+    });
+  });
+  el.grpPlot.querySelectorAll('button[data-plot]').forEach(btn => {
+    btn.addEventListener('click', () => { state.plot = btn.dataset.plot; render(); });
+  });
+  el.grpCur.querySelectorAll('button[data-cur]').forEach(btn => {
+    btn.addEventListener('click', () => { state.cursor = btn.dataset.cur; render(); });
+  });
+
+  function render() {
+    // nav icon active state
+    el.btnPan.classList.toggle('active', state.mode === 'pan');
+    el.btnZoom.classList.toggle('active', state.mode === 'zoom');
+
+    // hint text
+    const [h1, h2] = HINTS[state.mode];
+    el.hint.innerHTML = `<b>${h1}</b><br><span class="small">${h2}</span>`;
+
+    // lock chips
+    const lockEnabled = state.mode === 'zoom';
+    el.grpLock.querySelectorAll('button[data-lock]').forEach(btn => {
+      btn.classList.toggle('disabled', !lockEnabled);
+      btn.classList.toggle('active', btn.dataset.lock === state.lock);
+    });
+
+    // plot chips
+    el.grpPlot.querySelectorAll('button[data-plot]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.plot === state.plot);
+    });
+
+    // cursor chips
+    el.grpCur.querySelectorAll('button[data-cur]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.cur === state.cursor);
+    });
+
+    // status panel
+    el.stMode.textContent = state.mode;
+    el.stLock.textContent = state.lock;
+    el.stLockNote.textContent = lockEnabled
+      ? '（zoom 模式可改）'
+      : '（仅 zoom 模式生效，已灰显）';
+    el.stPlot.textContent = state.plot;
+    el.stCur.textContent = state.cursor;
+  }
+
+  render();
+</script>
+</body>
+</html>

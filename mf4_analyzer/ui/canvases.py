@@ -34,16 +34,88 @@ def _apply_axes_style(ax, grid=True):
         ax.grid(True, color=GRID_LINE, alpha=0.78, ls='--', lw=0.7)
 
 
+def _split_prefixed_label(text):
+    """Return (prefix, rest) for labels shaped like '[filename] channel'.
+    Returns (None, text) when the pattern doesn't match."""
+    if text.startswith('[') and ']' in text:
+        i = text.index(']')
+        rest = text[i + 1:].lstrip()
+        if rest:
+            return text[:i + 1], rest
+    return None, text
+
+
 def _compact_axis_label(name, unit='', max_chars=22):
+    """Channel-name only — units are now drawn separately above the axis."""
     text = str(name)
-    if len(text) > max_chars:
-        text = text[:max_chars - 3] + '...'
-    return f"{text} ({unit})" if unit else text
+    if len(text) <= max_chars:
+        return text
+    prefix, rest = _split_prefixed_label(text)
+    if prefix is not None:
+        return f"{prefix}\n{rest}"
+    return text[:max_chars - 3] + '...'
 
 
-def _set_series_ylabel(ax, label, color, labelpad=10):
+def _set_series_ylabel(ax, label, color, labelpad=10, unit='', side='left'):
     ax.set_ylabel(label, fontsize=8, color=color, labelpad=labelpad)
     ax.yaxis.label.set_clip_on(False)
+    if unit:
+        # Horizontal unit chip at the very top of the spine (above tick labels).
+        x_anchor = 0.0 if side == 'left' else 1.0
+        ha = 'left' if side == 'left' else 'right'
+        ax.text(
+            x_anchor, 1.012, unit,
+            transform=ax.transAxes,
+            ha=ha, va='bottom',
+            fontsize=8, color=color, fontweight='600',
+            clip_on=False,
+        )
+
+
+def _format_dual_html(rows):
+    """rows: list of (channel_name, mn, mx, avg, rms, unit_suffix, color).
+    Channel name is rendered on its own line (file prefix + name split when
+    the source matches '[file] channel'); stats follow as a 4-column row.
+    Channel name and numeric cells are tinted with the channel's plot color."""
+    from html import escape
+    parts = ['<table cellspacing="0" cellpadding="0" '
+             'style="font-size:11px; color:#111827;">']
+    for i, row in enumerate(rows):
+        if len(row) >= 7:
+            ch, mn, mx, avg, rms, u, color = row[:7]
+        else:
+            ch, mn, mx, avg, rms, u = row[:6]
+            color = '#111827'
+        prefix, rest = _split_prefixed_label(ch)
+        if prefix is not None:
+            name_html = (f'<span style="color:#64748b;">{escape(prefix)}</span>'
+                         f'<br/><b style="color:{color};">{escape(rest)}</b>')
+        else:
+            name_html = f'<b style="color:{color};">{escape(ch)}</b>'
+        top_pad = '8px' if i > 0 else '0'
+        parts.append(
+            f'<tr><td colspan="4" style="padding-top:{top_pad}; padding-bottom:2px;">'
+            f'{name_html}</td></tr>'
+        )
+        cell = (f'padding:1px 8px 1px 0; color:{color}; font-family:'
+                '\'SF Mono\',Menlo,Consolas,monospace;')
+        lab = 'padding:1px 4px 1px 0; color:#94a3b8;'
+        parts.append(
+            f'<tr>'
+            f'<td style="{lab}">Min</td>'
+            f'<td style="{cell}" align="right">{mn:.4g}{escape(u)}</td>'
+            f'<td style="{lab}; padding-left:8px;">Max</td>'
+            f'<td style="{cell}" align="right">{mx:.4g}{escape(u)}</td>'
+            f'</tr>'
+            f'<tr>'
+            f'<td style="{lab}">Avg</td>'
+            f'<td style="{cell}" align="right">{avg:.4g}{escape(u)}</td>'
+            f'<td style="{lab}; padding-left:8px;">RMS</td>'
+            f'<td style="{cell}" align="right">{rms:.4g}{escape(u)}</td>'
+            f'</tr>'
+        )
+    parts.append('</table>')
+    return ''.join(parts)
 
 
 class TimeDomainCanvas(FigureCanvas):
@@ -141,7 +213,7 @@ class TimeDomainCanvas(FigureCanvas):
                 ax.plot(td, sd, color=color, lw=1.05)
                 self.channel_data[name] = (t, sig, color, unit)
                 label = _compact_axis_label(name, unit, max_chars=20)
-                _set_series_ylabel(ax, label, color, labelpad=12)
+                _set_series_ylabel(ax, label, color, labelpad=12, unit=unit, side='left')
                 ax.tick_params(axis='y', colors=color, labelsize=7)
                 ax.spines['left'].set_color(color); ax.spines['left'].set_linewidth(2)
                 if i < n - 1:
@@ -166,9 +238,9 @@ class TimeDomainCanvas(FigureCanvas):
                 ax.plot(td, sd, color=color, lw=1.05)
                 self.channel_data[name] = (t, sig, color, unit)
                 label = _compact_axis_label(name, unit, max_chars=18)
-                _set_series_ylabel(ax, label, color, labelpad=12)
-                ax.tick_params(axis='y', colors=color, labelsize=7)
                 side = 'left' if ax is ax0 else 'right'
+                _set_series_ylabel(ax, label, color, labelpad=12, unit=unit, side=side)
+                ax.tick_params(axis='y', colors=color, labelsize=7)
                 ax.spines[side].set_color(color); ax.spines[side].set_linewidth(1.5)
             ax0.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
             # Overlay keeps the right-hand margin adjustment because multiple twinx
@@ -186,7 +258,7 @@ class TimeDomainCanvas(FigureCanvas):
             ax.plot(td, sd, color=color, lw=1.05)
             self.channel_data[name] = (t, sig, color, unit)
             label = _compact_axis_label(name, unit, max_chars=24)
-            _set_series_ylabel(ax, label, color, labelpad=12)
+            _set_series_ylabel(ax, label, color, labelpad=12, unit=unit, side='left')
             ax.tick_params(axis='y', colors=color, labelsize=7)
             ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
             self.fig.tight_layout()
@@ -315,14 +387,21 @@ class TimeDomainCanvas(FigureCanvas):
         self.fig.canvas.restore_region(self._bg)
         for i, vl in enumerate(self._cursor_artists):
             if i < len(self.axes_list): vl.set_xdata([x, x]); vl.set_visible(True); self.axes_list[i].draw_artist(vl)
-        info = [f"t={x:.4f}s"]
-        for ch, (tf, sf, _, u) in self.channel_data.items():
+        from html import escape
+        sep = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>')
+        parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
+        for ch, (tf, sf, color, u) in self.channel_data.items():
             if len(tf):
                 idx = min(np.searchsorted(tf, x), len(sf) - 1)
                 unit_s = f" {u}" if u else ""
-                info.append(f"{ch[:18]}={sf[idx]:.4g}{unit_s}")
+                name = ch[:18]
+                parts.append(
+                    f'<span style="color:{color};">'
+                    f'{escape(name)}=<b>{sf[idx]:.4g}{escape(unit_s)}</b>'
+                    f'</span>'
+                )
         self.fig.canvas.blit(self.fig.bbox)
-        self.cursor_info.emit("  │  ".join(info))
+        self.cursor_info.emit(sep.join(parts))
 
     def _update_dual(self, hover=None):
         self._ensure_dual()
@@ -344,23 +423,33 @@ class TimeDomainCanvas(FigureCanvas):
             info.append(f"ΔT={dx:.4f}s")
             if abs(dx) > 1e-12: info.append(f"1/ΔT={1 / abs(dx):.2f}Hz")
             xlo, xhi = min(self._ax, self._bx), max(self._ax, self._bx)
-            for ch, (tf, sf, _, u) in self.channel_data.items():
+            for ch, (tf, sf, color, u) in self.channel_data.items():
                 if not len(tf): continue
                 m = (tf >= xlo) & (tf <= xhi); seg = sf[m]
                 if not len(seg): continue
-                unit_s = f" {u}" if u else ""
-                dual.append(
-                    f"{ch[:20]}:Min={np.min(seg):.4g}{unit_s} Max={np.max(seg):.4g}{unit_s} "
-                    f"Avg={np.mean(seg):.4g}{unit_s} RMS={np.sqrt(np.mean(seg ** 2)):.4g}{unit_s}"
-                )
+                u_suffix = f" {u}" if u else ""
+                dual.append((
+                    ch,
+                    float(np.min(seg)),
+                    float(np.max(seg)),
+                    float(np.mean(seg)),
+                    float(np.sqrt(np.mean(seg ** 2))),
+                    u_suffix,
+                    color,
+                ))
         if hover is not None:
             self._ensure_artists()
             for i, vl in enumerate(self._cursor_artists):
                 if i < len(self.axes_list): vl.set_xdata([hover] * 2); vl.set_visible(True); self.axes_list[
                     i].draw_artist(vl)
         self.fig.canvas.blit(self.fig.bbox)
-        self.cursor_info.emit("  │  ".join(info) if info else "Click A")
-        self.dual_cursor_info.emit("\n".join(dual) if dual else "")
+        if info:
+            primary_html = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+                            .join(f'<span style="color:#111827;">{p}</span>' for p in info))
+        else:
+            primary_html = "Click A"
+        self.cursor_info.emit(primary_html)
+        self.dual_cursor_info.emit(_format_dual_html(dual) if dual else "")
 
     def _on_scroll(self, e):
         if e.inaxes is None: return
