@@ -383,6 +383,10 @@ class TimeDomainCanvas(FigureCanvas):
         self._monotonicity_cache = {}
         self._monotonicity_cache_hits = 0
         self._monotonicity_cache_misses = 0
+        # Mouse-press flag for hover short-circuit during active drag.
+        self._mouse_button_pressed = False
+        self.mpl_connect('button_press_event', self._track_mouse_press)
+        self.mpl_connect('button_release_event', self._track_mouse_release)
 
     def clear(self):
         # Drop any in-flight rubber-band refs before fig.clear discards the axes.
@@ -890,7 +894,22 @@ class TimeDomainCanvas(FigureCanvas):
         self._bg = self.fig.canvas.copy_from_bbox(self.fig.bbox)
         self._refresh = False
 
+    def _track_mouse_press(self, e):
+        self._mouse_button_pressed = True
+
+    def _track_mouse_release(self, e):
+        self._mouse_button_pressed = False
+
     def _on_click(self, e):
+        # Double-click on axis label region → open AxisEditDialog (priority over
+        # dual-cursor / rubber-band logic). Routes to all 4 canvases via the
+        # _axis_interaction helper.
+        if e.button == 1 and e.dblclick:
+            from ._axis_interaction import find_axis_for_dblclick, edit_axis_dialog
+            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, 45)
+            if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
+                self.draw_idle()
+            return
         # Axis-lock mode short-circuits dual-cursor and initiates rubber-band
         if self._axis_lock is not None and e.button == 1 and e.inaxes is not None \
                 and e.xdata is not None and e.ydata is not None:
@@ -916,6 +935,20 @@ class TimeDomainCanvas(FigureCanvas):
         self._update_dual()
 
     def _on_move(self, e):
+        # Hover affordance for axis-edit dblclick. Only short-circuit during
+        # active drag (mouse button currently held); pan/zoom modes themselves
+        # do NOT short-circuit because the default UI state is pan-active and
+        # we still want the hover hint to fire when the user is just looking.
+        if not self._mouse_button_pressed:
+            from ._axis_interaction import find_axis_for_dblclick
+            from PyQt5.QtCore import Qt
+            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, 45)
+            if ax is not None:
+                self.setCursor(Qt.PointingHandCursor)
+                self.setToolTip("双击编辑坐标轴")
+            else:
+                self.unsetCursor()
+                self.setToolTip("")
         # Rubber-band update has priority
         if self._rb_start is not None and self._rb_patch is not None and e.inaxes is self._rb_ax \
                 and e.xdata is not None and e.ydata is not None:

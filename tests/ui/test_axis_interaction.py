@@ -45,3 +45,64 @@ def test_find_axis_no_hit_returns_none():
     )
     assert hit_ax is None
     assert axis is None
+
+
+def test_timedomain_canvas_dblclick_opens_axis_dialog(qtbot, monkeypatch):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.canvases import TimeDomainCanvas
+
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(600, 400)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    # Plot something so axes have a bbox
+    ax = canvas.fig.add_subplot(111)
+    ax.plot([0, 1, 2], [0, 1, 4])
+    canvas.draw()
+
+    # Stub the dialog to auto-accept and return a fixed range
+    from mf4_analyzer.ui import _axis_interaction
+    called = {}
+
+    def fake_edit(parent_widget, ax_, axis):
+        called['axis'] = axis
+        ax_.set_xlim(0, 10) if axis == 'x' else ax_.set_ylim(0, 10)
+        return True
+
+    monkeypatch.setattr(_axis_interaction, 'edit_axis_dialog', fake_edit)
+
+    # Synthesize a dblclick event in the X-axis gutter
+    bbox = ax.get_window_extent()
+    from matplotlib.backend_bases import MouseEvent
+    e = MouseEvent('button_press_event', canvas, x=(bbox.x0 + bbox.x1) / 2,
+                   y=bbox.y0 - 30, button=1, dblclick=True)
+    canvas.callbacks.process('button_press_event', e)
+
+    assert called.get('axis') == 'x'
+    assert ax.get_xlim() == (0, 10)
+
+
+def test_timedomain_canvas_hover_axis_changes_cursor(qtbot, monkeypatch):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.canvases import TimeDomainCanvas
+
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(600, 400)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    ax = canvas.fig.add_subplot(111)
+    ax.plot([0, 1, 2], [0, 1, 4])
+    canvas.draw()
+
+    bbox = ax.get_window_extent()
+    from matplotlib.backend_bases import MouseEvent
+    e = MouseEvent('motion_notify_event', canvas, x=bbox.x0 - 30,
+                   y=(bbox.y0 + bbox.y1) / 2, button=None)
+    canvas.callbacks.process('motion_notify_event', e)
+
+    assert canvas.cursor().shape() == Qt.PointingHandCursor
+    assert canvas.toolTip() == "双击编辑坐标轴"
