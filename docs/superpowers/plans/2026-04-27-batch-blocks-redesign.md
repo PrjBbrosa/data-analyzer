@@ -1687,17 +1687,41 @@ def test_path_pending_to_loaded_transition(qtbot, tmp_path):
 
 def test_run_disabled_while_probing(qtbot, tmp_path):
     """BatchSheet.is_runnable() must be False while any file is in
-    path_pending or probing state (spec §7)."""
+    path_pending OR probing state (spec §7).
+
+    Two assertions: one for each state, since the user can land in either
+    (path_pending = just queued, probing = worker actively reading channels_db).
+    """
     from mf4_analyzer.ui.drawers.batch import BatchSheet
     sheet = BatchSheet(None, files={})
     qtbot.addWidget(sheet)
-    # Stub probe to never complete in this test
     fl = sheet._input_panel._file_list
-    fl._probe_signals_for = lambda path: (_ for _ in ()).throw(
-        RuntimeError("probe should not be called synchronously here"))
-    # Force a path_pending row directly
-    fl._set_row_state(str(tmp_path / "pending.mf4"), "path_pending")
+
+    # Need a runnable signal otherwise other panels gate is_runnable.
+    fl.add_loaded_file(0, "ok.mf4", frozenset({"sig"}))
+    sheet._input_panel._signal_picker.set_selected(("sig",))
+    sheet._analysis_panel.set_method("fft")
+    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+    qtbot.wait(20)
+    assert sheet.is_runnable() is True   # baseline
+
+    # path_pending blocks
+    p1 = str(tmp_path / "pending.mf4")
+    fl._set_row_state(p1, "path_pending")
+    qtbot.wait(20)
     assert sheet.is_runnable() is False
+    fl.remove_path(p1)
+
+    # probing blocks
+    p2 = str(tmp_path / "probing.mf4")
+    fl._set_row_state(p2, "probing")
+    qtbot.wait(20)
+    assert sheet.is_runnable() is False
+    fl.remove_path(p2)
+
+    # Once cleared, runnable again
+    qtbot.wait(20)
+    assert sheet.is_runnable() is True
 
 
 def test_pipeline_strip_recomputes_on_input_changes(qtbot):
@@ -2316,7 +2340,12 @@ git commit -m "chore(batch): post-redesign cleanup sweep"
   - §5 component decomposition → Waves 4/5/6 file structure
   - §6 data flows → Waves 5 (config flow), 6 (run flow), 7 (preset IO flow)
   - §7 error/edge table → distributed (Wave 2 backend, Waves 5/6 UI)
-  - §8 test plan → tests created in Waves 1-6
+  - §8 test plan → tests created in Waves 1-7 (W1 dataclass, W2 runner,
+    W3 preset IO, W4 smoke, W5 panel widgets, W6 task list + thread,
+    W7 toolbar/apply_preset). The "5GB metadata probe performance smoke"
+    from spec §8 stays in W5 manual smoke (Step 9 of Wave 5 already lists
+    "add a real .mf4 from disk, see probe complete"; spec §8 itself
+    classifies it as manual)
   - §9 PR slicing → IS this plan
   - §10 migration → Wave 4 imports + Wave 8 cleanup
 - [ ] Type consistency: `BatchProgressEvent`, `BatchRunResult.status`,
