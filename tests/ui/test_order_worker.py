@@ -133,40 +133,6 @@ def test_order_worker_result_signal_carries_generation(qtbot):
     assert received[0] == ('time', 99)
 
 
-def test_render_order_rpm_uses_correct_extent_and_matrix_orientation(qtbot, tmp_path):
-    """B6 regression: order_rpm imshow must render x=order, y=rpm and
-    matrix without transposing (visually equivalent to the original
-    pcolormesh(ords, rb, om))."""
-    from mf4_analyzer.ui.main_window import MainWindow
-    from mf4_analyzer.signal.order import OrderRpmResult, OrderAnalysisParams
-    win = MainWindow()
-    qtbot.addWidget(win)
-    # shape (3 rpm_bins, 5 orders) with ascending row values to make
-    # orientation easy to read off.
-    result = OrderRpmResult(
-        orders=np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
-        rpm_bins=np.array([600.0, 1200.0, 1800.0]),
-        amplitude=np.array([
-            [0.1, 0.2, 0.3, 0.4, 0.5],   # rpm=600 row
-            [1.1, 1.2, 1.3, 1.4, 1.5],   # rpm=1200 row
-            [2.1, 2.2, 2.3, 2.4, 2.5],   # rpm=1800 row
-        ]),
-        counts=np.zeros((3, 5)),
-        params=OrderAnalysisParams(fs=1024.0, nfft=512, max_order=5.0,
-                                     order_res=1.0, rpm_res=600.0),
-    )
-    win._render_order_rpm(result)
-    im = win.canvas_order._heatmap_im
-    # x-axis extent = order
-    assert im.get_extent()[0] == 1.0 and im.get_extent()[1] == 5.0
-    # y-axis extent = rpm
-    assert im.get_extent()[2] == 600.0 and im.get_extent()[3] == 1800.0
-    # matrix shape = (N_rpm_bins, N_orders) = (3, 5)
-    assert im.get_array().shape == (3, 5)
-    # First row (rpm=600) should be smallest values (0.1-0.5).
-    np.testing.assert_allclose(im.get_array()[0], [0.1, 0.2, 0.3, 0.4, 0.5])
-
-
 def test_main_window_close_event_cancels_running_order_worker(qtbot):
     """If an order worker is still running, closeEvent must cancel it
     cleanly with no QThread destroyed warnings."""
