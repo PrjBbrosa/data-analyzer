@@ -505,10 +505,21 @@ QWidget#chartCard {
     background-color: #ffffff;
 }
 
-NavigationToolbar2QT,
-QWidget#chartToolbar {
+/* Chart toolbar — compact spacing & padding (post-i18n). Three selectors
+ * to cover Qt style resolution variations: QToolBar (matplotlib subclass),
+ * QWidget (object-name match), and the matplotlib subclass name. */
+QToolBar#chartToolbar,
+QWidget#chartToolbar,
+NavigationToolbar2QT#chartToolbar,
+NavigationToolbar2QT {
     background-color: #ffffff;
     border-bottom: 1px solid #eef2f7;
+    spacing: 1px;
+    padding: 1px;
+}
+QToolBar#chartToolbar QToolButton,
+QWidget#chartToolbar QToolButton {
+    padding: 2px 4px;
 }
 
 QFrame#cursorPill {
