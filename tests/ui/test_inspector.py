@@ -680,7 +680,7 @@ def test_fft_time_presets_use_preset_bar(qtbot):
 
 def test_fft_time_preset_bar_default_button_names_match_builtins(qtbot):
     """Default button labels for the FFTTime preset bar must read as the
-    builtin display names: 诊断模式 / 幅值精度 / 高频细节 (R3 C)."""
+    builtin display names: 配置1 / 配置2 / 配置3 (Wave 2 #2.13)."""
     from PyQt5.QtWidgets import QPushButton
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     # Use a fresh QSettings org/app per test by wiping any prior overrides
@@ -692,9 +692,9 @@ def test_fft_time_preset_bar_default_button_names_match_builtins(qtbot):
     qtbot.addWidget(ctx)
     btns = ctx.preset_bar.findChildren(QPushButton)
     texts = [b.text() for b in btns]
-    assert "诊断模式" in texts
-    assert "幅值精度" in texts
-    assert "高频细节" in texts
+    assert "配置1" in texts
+    assert "配置2" in texts
+    assert "配置3" in texts
 
 
 def test_fft_time_preset_bar_menu_includes_reset_to_default(qtbot, monkeypatch):
@@ -1016,3 +1016,49 @@ def test_btn_rebuild_outer_size_compact(qapp):
             f"{ctx_cls.__name__}.btn_rebuild maxHeight={btn.maximumHeight()} "
             "> 24 (R3 紧凑化 fix-4)."
         )
+
+
+# ---- Wave 2 Task 2.13: builtin preset display names → 配置1/2/3 ----
+#
+# PresetBar exposes per-slot text via the internal ``_load_btns[n].text()``
+# accessor (no public ``slot_text`` getter), and writes overrides through
+# ``_write(slot, name, params)`` (no public ``set_slot_override``). Both
+# tests below honor the plan's intent — default labels read 配置1/2/3 and
+# reset-to-default still surfaces those names — while using the real API.
+
+def test_fft_time_preset_bar_default_names(qtbot):
+    """Default slot labels for the FFTTime preset bar must be the new
+    builtin display names: 配置1 / 配置2 / 配置3 (Wave 2 #2.13)."""
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    s = QSettings("MF4Analyzer", "DataAnalyzer")
+    for slot in (1, 2, 3):
+        s.remove(f"fft_time/preset_override/{slot}")
+    w = FFTTimeContextual()
+    qtbot.addWidget(w)
+    bar = w.preset_bar
+    # PresetBar exposes per-slot text via ``_load_btns[n].text()``.
+    assert bar._load_btns[1].text() == '配置1'
+    assert bar._load_btns[2].text() == '配置2'
+    assert bar._load_btns[3].text() == '配置3'
+
+
+def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
+    """After resetting an overridden slot, the slot text must restore to
+    the new builtin name (配置1) — not the legacy 诊断模式 (Wave 2 #2.13).
+    """
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    s = QSettings("MF4Analyzer", "DataAnalyzer")
+    for slot in (1, 2, 3):
+        s.remove(f"fft_time/preset_override/{slot}")
+    w = FFTTimeContextual()
+    qtbot.addWidget(w)
+    bar = w.preset_bar
+    # Override slot 1 with a custom display name, then reset to default.
+    # Real API: ``_write(slot, name, params)`` persists a JSON override.
+    bar._write(1, 'Custom A', {})
+    bar._refresh_states()
+    assert bar._load_btns[1].text() == 'Custom A'
+    bar._reset_to_default(1)
+    assert bar._load_btns[1].text() == '配置1'

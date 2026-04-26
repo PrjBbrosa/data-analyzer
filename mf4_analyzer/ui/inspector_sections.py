@@ -94,8 +94,8 @@ class PresetBar(QWidget):
     parameters that the bar treats as the slot's "default":
 
     - The slot button shows ``builtin_defaults[slot]['display_name']`` when
-      no user override exists (so the FFT-vs-Time bar reads as 诊断模式 /
-      幅值精度 / 高频细节 out of the box).
+      no user override exists (so the FFT-vs-Time bar reads as 配置1 /
+      配置2 / 配置3 out of the box).
     - Left-click loads either the user override (if any) or the builtin.
     - The right-click menu adds a "重置为默认" entry that removes the
       override and restores the builtin.
@@ -1353,7 +1353,7 @@ class FFTTimeContextual(QWidget):
         gl = QVBoxLayout(g)
         gl.setSpacing(4)
         # The preset_bar is single-row, builtin-aware: each slot starts with
-        # its builtin display name (诊断模式 / 幅值精度 / 高频细节), left-click
+        # its builtin display name (配置1 / 配置2 / 配置3), left-click
         # loads (override-or-builtin), right-click menu integrates 保存当前 /
         # 重命名 / 重置为默认.
         builtin_defaults = {
@@ -1527,9 +1527,9 @@ class FFTTimeContextual(QWidget):
     # User-facing display names for the three builtin slots (R3 C —
     # what the PresetBar shows on the slot button when no override exists).
     _BUILTIN_PRESET_DISPLAY = {
-        'diagnostic': '诊断模式',
-        'amplitude_accuracy': '幅值精度',
-        'high_frequency': '高频细节',
+        'diagnostic': '配置1',
+        'amplitude_accuracy': '配置2',
+        'high_frequency': '配置3',
     }
 
     def _builtin_preset_full_params(self, name):
