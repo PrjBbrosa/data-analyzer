@@ -40,6 +40,17 @@ from .fft import one_sided_amplitude
 # 64 MB ~ 16 M cells, e.g. 4097-bin x 4096-frame.
 _MAX_AMPLITUDE_BYTES = 64 * 1024 * 1024
 
+# Default relative-jitter tolerance for the time-axis uniformity check.
+# Hoisted to module scope (T2, 2026-04-26) so the FileData pre-flight in
+# mf4_analyzer.io.file_data.is_time_axis_uniform can reuse the SAME
+# threshold the analyzer's _validate_time_axis would apply -- otherwise
+# the pre-flight could pass input the worker would then reject, leaving
+# the user in the exact loop the fix was meant to remove.
+# Kept as a public module attribute (no leading underscore) precisely so
+# downstream pre-flights may import it; do NOT inline this constant
+# elsewhere.
+DEFAULT_TIME_JITTER_TOLERANCE: float = 1e-3
+
 
 @dataclass(frozen=True)
 class SpectrogramParams:
@@ -165,7 +176,7 @@ class SpectrogramAnalyzer:
         unit: str = '',
         progress_callback: Optional[Callable[[int, int], None]] = None,
         cancel_token: Optional[Callable[[], bool]] = None,
-        time_jitter_tolerance: float = 1e-3,
+        time_jitter_tolerance: float = DEFAULT_TIME_JITTER_TOLERANCE,
         max_amplitude_bytes: int = _MAX_AMPLITUDE_BYTES,
     ) -> SpectrogramResult:
         """Compute the 2D spectrogram for ``signal`` on uniform ``time``.

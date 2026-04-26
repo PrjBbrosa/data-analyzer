@@ -1129,7 +1129,78 @@ class MainWindow(QMainWindow):
                 return nv
         return freq[-1]
 
+    def _check_uniform_or_prompt(self, fd, mode):
+        """Pre-flight non-uniform time-axis check, run BEFORE worker dispatch.
+
+        Returns ``True`` when ``fd.time_array`` is uniform-enough for
+        ``SpectrogramAnalyzer._validate_time_axis`` to accept, OR when
+        the user accepted the rebuild popover (in which case
+        ``fd.time_array`` is now ``arange(n)/fs`` -- guaranteed
+        uniform). Returns ``False`` when the axis is non-uniform AND
+        the user dismissed the popover; the caller must abort.
+
+        ``mode`` selects the popover anchor (``'fft'`` -> the standard
+        FFT contextual's ``btn_rebuild``; ``'fft_time'`` -> the FFT vs
+        Time contextual's ``btn_rebuild``; ``'order'`` -> the order
+        contextual's ``btn_rebuild``).
+
+        T2 (2026-04-26): collapses the prior worker -> failed -> popover
+        -> retry round-trip into a single synchronous gate. This also
+        eliminates the H4 latent bug in ``_fft_time_retry_pending``
+        lifecycle (the flag was cleared in ``_retry``'s ``finally``
+        before the worker could ever fail again). See
+        ``docs/superpowers/reports/2026-04-26-nonuniform-fft-T2-fix.md``.
+        """
+        if fd is None or not hasattr(fd, 'is_time_axis_uniform'):
+            # Either no file selected, or a duck-typed stand-in (test
+            # fakes) that has no axis to validate. Defer to the worker.
+            return True
+        if fd.is_time_axis_uniform():
+            return True
+        # Seed the popover's spin_fs with the median-dt estimate so the
+        # user only has to confirm rather than retype Fs from scratch.
+        if hasattr(fd, 'suggested_fs_from_time_axis'):
+            suggested = fd.suggested_fs_from_time_axis()
+            if np.isfinite(suggested) and suggested > 0:
+                fd.fs = float(suggested)
+        if mode == 'fft':
+            anchor = self.inspector.fft_ctx.btn_rebuild
+        elif mode == 'fft_time':
+            anchor = self.inspector.fft_time_ctx.btn_rebuild
+        else:
+            anchor = self.inspector.order_ctx.btn_rebuild
+        self.toast(
+            "时间轴非均匀，无法直接做时频分析。"
+            "已为你打开“重建时间轴”，请确认 Fs 后重试。",
+            "warning",
+        )
+        self.statusBar.showMessage("时间轴非均匀，请重建后重试")
+        return self._show_rebuild_popover(anchor, mode=mode)
+
     def do_fft(self):
+        t, sig, fs = self._get_sig()
+        if sig is None or len(sig) < 10:
+            self.toast("请选择有效信号", "warning"); return
+        # Pre-flight: route non-uniform axes through the rebuild popover
+        # BEFORE running the FFT. ``compute_fft`` itself does not consume
+        # ``t`` (it samples by index + fs), so the FFT path used to
+        # silently produce garbage from a jittered axis -- this gate
+        # makes the FFT vs Time pre-flight (H1 root cause) consistent
+        # across all spectral entry points (H3 mitigation).
+        mode = self.toolbar.current_mode()
+        ctx_mode = 'fft' if mode == 'fft' else 'order'
+        sig_data = (
+            self.inspector.fft_ctx.current_signal()
+            if ctx_mode == 'fft'
+            else self.inspector.order_ctx.current_signal()
+        )
+        fid = sig_data[0] if sig_data else None
+        fd = self.files.get(fid) if fid else None
+        if not self._check_uniform_or_prompt(fd, ctx_mode):
+            return
+        # Re-fetch t/sig: the popover Accept branch rebuilt
+        # ``fd.time_array`` to ``arange(n)/fs``, so the local ``t`` we
+        # captured before the popover is now stale.
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 10:
             self.toast("请选择有效信号", "warning"); return
@@ -1735,6 +1806,21 @@ class MainWindow(QMainWindow):
         if sig is None or len(sig) < 2:
             self.toast("请选择有效信号", "warning")
             return
+        # Pre-flight uniformity gate (T2, 2026-04-26): if the time axis
+        # is non-uniform we route through the rebuild popover BEFORE
+        # dispatching the worker. This collapses the old "worker raises
+        # -> failed handler reopens popover -> deferred retry" path
+        # (which had a latent retry-flag lifecycle bug, H4 in T1
+        # diagnosis) into a single synchronous gate.
+        if not self._check_uniform_or_prompt(fd, 'fft_time'):
+            return
+        # The popover Accept branch rebuilt ``fd.time_array`` to
+        # ``arange(n)/fs`` and cleared the per-fid cache; refresh the
+        # locals we captured pre-popover.
+        fid, ch, t, sig, fd = self._get_fft_time_signal()
+        if sig is None or len(sig) < 2:
+            self.toast("请选择有效信号", "warning")
+            return
         p = self.inspector.fft_time_ctx.get_params()
         if self.inspector.top.range_enabled():
             lo, hi = self.inspector.top.range_values()
@@ -1774,13 +1860,13 @@ class MainWindow(QMainWindow):
         # Stash everything the finished handler needs to cache + render.
         # ``_render_fft_time`` re-reads display options from ``p`` so we
         # pass it through; ``key`` is the cache slot the result belongs
-        # in. ``nfft`` is captured for the status string. ``force`` is
-        # captured so T11 (non-uniform UX) can replay the compute with
-        # the same flag after a successful 重建时间轴 popover.
+        # in. (T2 2026-04-26: ``force`` no longer needs to be stashed --
+        # the prior non-uniform auto-retry path that consumed it has
+        # been replaced by the synchronous ``_check_uniform_or_prompt``
+        # pre-flight at the top of this method.)
         self._fft_time_pending = {
             'cache_key': key,
             'render_params': p,
-            'force': bool(force),
         }
         worker = FFTTimeWorker(sig, t, params, channel_name=ch, unit=unit)
         thread = QThread(self)
@@ -1869,82 +1955,21 @@ class MainWindow(QMainWindow):
         ``cancel_token`` returns truthy) — the message string itself
         carries the distinction, no separate signal needed.
 
-        T11 non-uniform UX: when ``message`` contains the substring
-        ``non-uniform time axis`` (the marker that
-        ``SpectrogramAnalyzer.compute`` raises for jitter > tolerance,
-        per Spec §5.1), replace the cryptic raw error with a
-        Chinese-language toast that points the user at 重建时间轴, then
-        auto-open the rebuild popover anchored on the FFT vs Time
-        contextual's ``btn_rebuild``. If the user clicks Accept, the
-        popover internally rebuilds and clears the per-fid cache, and
-        we replay :meth:`do_fft_time` with the same ``force`` flag the
-        original click used. ``self._fft_time_retry_pending`` caps the
-        retry at 1 — if the rebuild somehow fails to fix the jitter,
-        the second compute's error surfaces verbatim so the user is
-        not trapped in an auto-rebuild loop.
+        T2 (2026-04-26) removed the in-handler auto-rebuild + retry
+        branch that previously handled ``non-uniform time axis``
+        errors. Non-uniform inputs are now caught synchronously by
+        :meth:`_check_uniform_or_prompt` BEFORE worker dispatch (see
+        ``do_fft_time``). The handler's earlier ``_fft_time_retry_pending``
+        flag had a latent lifecycle bug (cleared in the deferred
+        ``_retry``'s ``finally`` before the next worker could fail);
+        deleting the retry path eliminates that risk and simplifies the
+        contract: every worker failure now surfaces verbatim. If the
+        worker still raises ``non-uniform time axis`` (e.g. a future
+        regression or a genuinely racy axis mutation), the message
+        surfaces as a normal error toast and the user can click
+        重建时间轴 manually.
         """
         msg = str(message)
-        if 'non-uniform time axis' in msg and not getattr(
-            self, '_fft_time_retry_pending', False
-        ):
-            # Parse "relative_jitter=<float>" if present; round to 2 dp
-            # for display. Robust to wording changes — only the
-            # substring ``non-uniform time axis`` is required to enter
-            # this branch; missing the jitter token just omits it from
-            # the toast.
-            import re
-            m = re.search(r'relative_jitter\s*=\s*([0-9]+(?:\.[0-9]+)?)', msg)
-            if m:
-                try:
-                    jitter_str = f"{float(m.group(1)):.2f}"
-                except ValueError:
-                    jitter_str = None
-            else:
-                jitter_str = None
-            if jitter_str is not None:
-                friendly = (
-                    f"时间轴非均匀（jitter≈{jitter_str}），无法直接做时频分析。"
-                    "已为你打开“重建时间轴”，请确认 Fs 后重试。"
-                )
-            else:
-                friendly = (
-                    "时间轴非均匀，无法直接做时频分析。"
-                    "已为你打开“重建时间轴”，请确认 Fs 后重试。"
-                )
-            self.toast(friendly, "warning")
-            self.statusBar.showMessage(
-                "FFT vs Time · 时间轴非均匀，请重建后重试"
-            )
-            # Auto-open the popover anchored on the FFT vs Time tab's
-            # rebuild button. Re-entry guard set BEFORE the modal so a
-            # nested failure inside the retry compute cannot recurse.
-            #
-            # The retry compute is deferred via ``QTimer.singleShot(0)``
-            # so the worker QThread has time to fully exit (its
-            # ``thread.finished`` slot ``_on_fft_time_thread_done``
-            # clears ``self._fft_time_thread``). Without the defer, the
-            # immediate retry hits the ``isRunning()`` re-entry guard
-            # at the top of :meth:`do_fft_time` because the failed
-            # handler runs as a queued slot BEFORE the thread cleanup
-            # has drained.
-            anchor = self.inspector.fft_time_ctx.btn_rebuild
-            pending = getattr(self, '_fft_time_pending', None) or {}
-            force = bool(pending.get('force', False))
-            self._fft_time_retry_pending = True
-            accepted = False
-            try:
-                accepted = self._show_rebuild_popover(anchor, mode='fft_time')
-            finally:
-                if accepted:
-                    def _retry():
-                        try:
-                            self.do_fft_time(force=force)
-                        finally:
-                            self._fft_time_retry_pending = False
-                    QTimer.singleShot(0, _retry)
-                else:
-                    self._fft_time_retry_pending = False
-            return
         self.toast(msg, "error")
         self.statusBar.showMessage(f"FFT vs Time 错误: {message}")
 
