@@ -121,11 +121,6 @@ class OrderWorker(QThread):
                     self._sig, self._rpm, self._t, self._params,
                     progress_callback=cb_progress, cancel_token=cb_cancel,
                 )
-            elif self._kind == 'rpm':
-                r = OrderAnalyzer.compute_rpm_order_result(
-                    self._sig, self._rpm, self._params,
-                    progress_callback=cb_progress, cancel_token=cb_cancel,
-                )
             elif self._kind == 'track':
                 r = OrderAnalyzer.extract_order_track_result(
                     self._sig, self._rpm, self._params,
@@ -301,7 +296,6 @@ class MainWindow(QMainWindow):
         self.inspector.plot_time_requested.connect(self.plot_time)
         self.inspector.fft_requested.connect(self.do_fft)
         self.inspector.order_time_requested.connect(self.do_order_time)
-        self.inspector.order_rpm_requested.connect(self.do_order_rpm)
         self.inspector.order_track_requested.connect(self.do_order_track)
         # T6: Inspector publishes a cancel intent without knowing about
         # the worker; MainWindow translates it into ``OrderWorker.cancel``.
@@ -1315,32 +1309,6 @@ class MainWindow(QMainWindow):
         self._dispatch_order_worker('time', sig, rpm, t, params,
                                      status_msg='计算时间-阶次谱...')
 
-    def do_order_rpm(self):
-        t, sig, fs = self._get_sig()
-        if sig is None or len(sig) < 100:
-            self.toast("请选择有效信号", "warning")
-            return
-        if self.inspector.top.range_enabled() and t is not None:
-            lo, hi = self.inspector.top.range_values()
-            m = (t >= lo) & (t <= hi)
-            sig = sig[m]
-        rpm = self._get_rpm(len(sig))
-        if rpm is None:
-            return
-        fs = self.inspector.order_ctx.fs()
-        op = self.inspector.order_ctx.get_params()
-        from ..signal.order import OrderAnalysisParams
-        params = OrderAnalysisParams(
-            fs=fs,
-            nfft=int(op['nfft']),
-            window=op.get('window', 'hanning'),
-            max_order=float(op['max_order']),
-            order_res=float(op['order_res']),
-            rpm_res=float(op['rpm_res']),
-        )
-        self._dispatch_order_worker('rpm', sig, rpm, None, params,
-                                     status_msg='计算转速-阶次谱...')
-
     def do_order_track(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 100:
@@ -1452,8 +1420,6 @@ class MainWindow(QMainWindow):
         self.inspector.order_ctx.btn_cancel.setEnabled(False)
         if kind == 'time':
             self._render_order_time(result)
-        elif kind == 'rpm':
-            self._render_order_rpm(result)
         elif kind == 'track':
             self._render_order_track(result)
 
@@ -1495,53 +1461,6 @@ class MainWindow(QMainWindow):
         )
         self.toast(
             f"时间-阶次谱完成 · {len(result.times)} × {len(result.orders)}",
-            "success",
-        )
-
-    def _render_order_rpm(self, result):
-        title = (
-            f"转速-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} "
-            f"(阶次分辨率:{result.params.order_res}, "
-            f"RPM分辨率:{result.params.rpm_res})"
-        )
-        # B6 regression guard: original `pcolormesh(ords, rb, om)` is
-        # x=order, y=rpm with ``om.shape = (N_rpm_bins, N_orders)``.
-        # imshow's ``matrix.shape`` is ``(rows, cols) = (Y, X)``, i.e.
-        # ``(N_rpm_bins, N_orders)`` — so DO NOT transpose here.
-        # Transposing AND swapping extents was the round-1 double-reversal
-        # bug; tests/ui/test_order_worker.py guards it.
-        self.canvas_order.plot_or_update_heatmap(
-            matrix=result.amplitude,
-            x_extent=(float(result.orders[0]), float(result.orders[-1])),
-            y_extent=(float(result.rpm_bins[0]), float(result.rpm_bins[-1])),
-            x_label='Order',
-            y_label='RPM',
-            title=title,
-            cmap='turbo',
-            interp='bilinear',
-            cbar_label='Amplitude',
-        )
-        xt, yt = self.inspector.top.tick_density()
-        self.canvas_order.set_tick_density(xt, yt)
-        self._remember_batch_preset(
-            "当前转速-阶次", "order_rpm",
-            self.inspector.order_ctx.current_signal(),
-            {
-                'fs': result.params.fs,
-                'nfft': result.params.nfft,
-                'max_order': result.params.max_order,
-                'order_res': result.params.order_res,
-                'rpm_res': result.params.rpm_res,
-                'rpm_factor': self.inspector.order_ctx.rpm_factor(),
-            },
-            rpm_signal=self.inspector.order_ctx.current_rpm(),
-        )
-        self.statusBar.showMessage(
-            f'转速-阶次谱完成 | {len(result.rpm_bins)} RPM × '
-            f'{len(result.orders)} 阶次'
-        )
-        self.toast(
-            f"转速-阶次谱完成 · {len(result.rpm_bins)} × {len(result.orders)}",
             "success",
         )
 
