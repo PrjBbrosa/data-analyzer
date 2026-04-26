@@ -493,6 +493,91 @@ def test_legacy_progress_callback_still_works(tmp_path):
     assert calls == [(1, 1)]
 
 
+def test_progress_callback_count_excludes_failed_tasks(tmp_path):
+    """Legacy contract: progress_callback fires once per task_done, never on
+    task_failed (per spec §4.4 / §8)."""
+    fd_ok = _make_fd(tmp_path, "ok", channels=("sig",), idx=0)
+    fd_bad = _make_fd(tmp_path, "bad", channels=("other",), idx=1)
+    preset = AnalysisPreset.free_config(
+        name="pf", method="fft", target_signals=("sig",),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 1024},
+    )
+    preset = replace(preset, file_ids=(0, 1))
+    calls = []
+    result = BatchRunner({0: fd_ok, 1: fd_bad}).run(
+        preset, tmp_path / "out",
+        progress_callback=lambda i, n: calls.append((i, n)),
+    )
+    # 2 tasks total: 1 done (fd_ok), 1 failed (fd_bad missing 'sig')
+    assert result.status == "partial"
+    assert len(calls) == 1   # only the completed task bumped progress
+
+
+def test_all_disk_files_failed_yields_per_task_failures(tmp_path):
+    """If every file in selection fails to load, runner emits task_failed for
+    each (not a blanket blocked) — spec §3.2, §7."""
+    def loader(path):
+        raise IOError(f"corrupt: {path}")
+    preset = AnalysisPreset.free_config(
+        name="adf", method="fft", target_signals=("sig",),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 1024},
+    )
+    preset = replace(preset, file_paths=("/fake/a.mf4", "/fake/b.mf4"))
+    events = []
+    result = BatchRunner({}, loader=loader).run(
+        preset, tmp_path / "out", on_event=events.append,
+    )
+    failed = [e for e in events if e.kind == "task_failed"]
+    assert len(failed) == 2
+    assert result.status == "blocked"  # all-failed maps to blocked
+    # but events still document each failure
+    assert all("corrupt" in (e.error or "") for e in failed)
+
+
+def test_target_signals_multi_signal_expansion(tmp_path):
+    """N files × M target_signals → N*M task_done events (spec §8)."""
+    fd_a = _make_fd(tmp_path, "a", channels=("vib_x", "vib_y"), idx=0)
+    fd_b = _make_fd(tmp_path, "b", channels=("vib_x", "vib_y"), idx=1)
+    preset = AnalysisPreset.free_config(
+        name="mm", method="fft", target_signals=("vib_x", "vib_y"),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 1024},
+    )
+    preset = replace(preset, file_ids=(0, 1))
+    events = []
+    result = BatchRunner({0: fd_a, 1: fd_b}).run(
+        preset, tmp_path / "out", on_event=events.append,
+    )
+    done = [e for e in events if e.kind == "task_done"]
+    assert len(done) == 4   # 2 files × 2 signals
+    assert result.status == "done"
+
+
+def test_cancel_no_half_written_files(tmp_path):
+    """Cancellation happens at task BOUNDARIES; the in-flight task must finish
+    its file write before cancel takes effect (spec §4.5)."""
+    fds = {0: _make_fd(tmp_path, "a", idx=0),
+           1: _make_fd(tmp_path, "b", idx=1)}
+    preset = AnalysisPreset.free_config(
+        name="cw", method="fft", target_signals=("sig",),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 1024},
+    )
+    preset = replace(preset, file_ids=(0, 1))
+    token = threading.Event()
+    def on_event(e):
+        if e.kind == "task_done" and e.task_index == 1:
+            token.set()
+    BatchRunner(fds).run(preset, tmp_path / "out",
+                          on_event=on_event, cancel_token=token)
+    out = tmp_path / "out"
+    csvs = list(out.glob("*.csv"))
+    # The first task's file must exist and be complete (parseable)
+    assert any("a_sig_fft" in p.name for p in csvs)
+    for p in csvs:
+        # No partial writes — file is complete CSV
+        text = p.read_text()
+        assert text.endswith("\n") or len(text) > 50
+
+
 def test_dual_callback_ordering(tmp_path):
     fd = _make_fd(tmp_path, "a", idx=0)
     preset = AnalysisPreset.from_current_single(
@@ -565,6 +650,11 @@ class BatchProgressEvent:
 ```
 
 - [ ] **Step 4: Implement `_default_loader` and BatchRunner constructor**
+
+> **Note** (vs spec §4.3): Spec §4.3 wrote `loader.load_file(path)`, but
+> the actual `mf4_analyzer/io/loader.py` exposes `DataLoader.load_mf4`,
+> not a top-level `load_file`. This plan uses the existing API; behavior
+> is the same. Spec §4.3 should be considered to read `DataLoader.load_mf4`.
 
 ```python
 def _default_loader(path):
@@ -646,21 +736,25 @@ Replace the existing `_expand_tasks` body with:
             return
         files_iter = list(self._resolve_files(preset))
         if preset.target_signals:
-            # Phase 1: any (file, signal) pair runnable?
-            has_any_runnable = False
+            # Phase 1: will phase 2 yield ANY task at all?
+            # _LoadFailure entries DO count — phase 2 yields them so run() can
+            # surface task_failed rows (per spec §3.2 / §7: disk-load failures
+            # become per-task ✗, not a blanket blocked status).
+            has_any_yield = False
             for fid, fd in files_iter:
                 if isinstance(fd, _LoadFailure):
-                    continue
+                    has_any_yield = True
+                    break
                 for ch in preset.target_signals:
                     if ch in fd.data.columns:
-                        has_any_runnable = True
+                        has_any_yield = True
                         break
-                if has_any_runnable:
+                if has_any_yield:
                     break
-            if not has_any_runnable:
-                return  # → run() blocked path
+            if not has_any_yield:
+                return  # → run() blocked path (UI rule § 7 normally pre-empts this)
             # Phase 2: yield full cartesian product (load failures and missing
-            # signals surface as task_failed via _run_one).
+            # signals surface as task_failed via run() try/except).
             for fid, fd in files_iter:
                 for ch in preset.target_signals:
                     yield fid, fd, ch
@@ -759,6 +853,11 @@ Replace the existing `run` body:
                         file_name=fname, signal=signal_name,
                         method=preset.method,
                     ))
+                # progress_callback fires ONLY on task_done (legacy contract
+                # was "called once per completed task"). Failed tasks do NOT
+                # bump it — see spec §4.4 / §8.
+                if progress_callback:
+                    progress_callback(index, total)
             except Exception as exc:
                 items.append(BatchItemResult(
                     method=preset.method, file_id=fid,
@@ -773,8 +872,6 @@ Replace the existing `run` body:
                         file_name=fname, signal=signal_name,
                         method=preset.method, error=str(exc),
                     ))
-            if progress_callback:
-                progress_callback(index, total)
 
         if cancelled:
             status = 'cancelled'
@@ -1066,7 +1163,13 @@ See spec §4.2."
 - Create: `mf4_analyzer/ui/drawers/batch/pipeline_strip.py`
 - Modify: `mf4_analyzer/ui/main_window.py` (import path)
 - Delete: `mf4_analyzer/ui/drawers/batch_sheet.py`
-- Modify: `tests/ui/test_drawers.py` (relocate batch sheet smoke test)
+- Modify: `tests/ui/test_drawers.py` (3 import sites, lines 38, 56, plus the
+  test bodies that exercise the old QTabWidget-based BatchSheet — these
+  tests test pre-redesign UX and should be **deleted** since waves 5/6/7
+  cover the new dialog comprehensively)
+- Modify: `tests/ui/test_order_smoke.py:66` — patch target string
+  `'mf4_analyzer.ui.drawers.batch_sheet.BatchSheet'` →
+  `'mf4_analyzer.ui.drawers.batch.BatchSheet'`
 
 ### Wave brief for orchestrator
 
@@ -1268,30 +1371,53 @@ to:
 from .drawers.batch import BatchSheet
 ```
 
-- [ ] **Step 7: Delete old `batch_sheet.py`**
+- [ ] **Step 7: Update `tests/ui/test_order_smoke.py`**
+
+Edit `tests/ui/test_order_smoke.py` line 66:
+```python
+# OLD: 'mf4_analyzer.ui.drawers.batch_sheet.BatchSheet', FakeSheet,
+'mf4_analyzer.ui.drawers.batch.BatchSheet', FakeSheet,
+```
+
+- [ ] **Step 8: Replace pre-redesign BatchSheet tests in `tests/ui/test_drawers.py`**
+
+The two tests at lines 36-65 (`test_batch_sheet_current_single_returns_current_preset`
+and `test_batch_sheet_without_current_preset_starts_on_free_config`) probe
+the old QTabWidget UX (`tabs.setTabEnabled`). Delete them — Waves 5-7 add
+comprehensive replacements (`tests/ui/test_batch_smoke.py`, `_input_panel.py`,
+`_method_buttons.py`, `_signal_picker.py`, `_task_list.py`, `_runner_thread.py`,
+`_toolbar.py`).
+
+Use the Edit tool to remove those two functions plus their `BatchSheet` import
+from `tests/ui/test_drawers.py`.
+
+- [ ] **Step 9: Delete old `batch_sheet.py`**
 
 ```bash
 rm mf4_analyzer/ui/drawers/batch_sheet.py
 ```
 
-- [ ] **Step 8: Run smoke tests**
+- [ ] **Step 10: Run smoke + order tests**
 
 ```bash
-pytest tests/ui/test_batch_smoke.py tests/ui/test_drawers.py -v
+pytest tests/ui/test_batch_smoke.py tests/ui/test_drawers.py tests/ui/test_order_smoke.py -v
 ```
-Expected: green.
+Expected: green (no `mf4_analyzer.ui.drawers.batch_sheet` import errors,
+no failed patches).
 
-- [ ] **Step 9: Manual smoke (optional but recommended)**
+- [ ] **Step 11: Manual smoke (optional but recommended)**
 
 Run the app, click 批处理 — confirm dialog opens at 1080×760 with three
 disabled toolbar buttons, three pipeline cards, three detail placeholders,
 and Cancel/运行 footer. The dialog accepts cancel; clicking 运行 returns
 the placeholder preset (which Wave 7 verifies works end-to-end).
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add mf4_analyzer/ui/drawers/batch tests/ui/test_batch_smoke.py mf4_analyzer/ui/main_window.py
+git add mf4_analyzer/ui/drawers/batch tests/ui/test_batch_smoke.py \
+        mf4_analyzer/ui/main_window.py tests/ui/test_order_smoke.py \
+        tests/ui/test_drawers.py
 git rm mf4_analyzer/ui/drawers/batch_sheet.py
 git commit -m "refactor(batch): relocate batch_sheet to drawers/batch/ package shell
 
@@ -1300,6 +1426,10 @@ Replace single-file batch_sheet.py with a package containing sheet.py
 __init__.py re-exports. Layout is the placeholder skeleton for waves
 5-7; constructor signature and module-level public API
 (BatchSheet(parent, files, current_preset=None)) preserved.
+
+Migrate dependent test fixtures: test_order_smoke.py patches the new
+module path; pre-redesign tests in test_drawers.py removed (waves 5-7
+add coverage of the new layout).
 
 See spec §3.1, §5."
 ```
@@ -1356,6 +1486,39 @@ flow, Chinese font support. No threading yet.
 - INPUT / ANALYSIS / OUTPUT panel changes → `_recompute_pipeline_status()`
 - `get_preset()` returns a real `AnalysisPreset.free_config(...)` enriched
   via `dataclasses.replace` with `file_ids` / `file_paths` from FileListWidget
+
+**Public BatchSheet / panel accessors** (consumed by Wave 7's `apply_preset`
+and tests):
+
+```python
+class BatchSheet(QDialog):
+    # Accessors (read current UI state)
+    def method(self) -> str: ...                          # 'fft' / 'order_*'
+    def selected_signals(self) -> tuple[str, ...]: ...    # from SignalPickerPopup
+    def rpm_channel(self) -> str: ...                     # InputPanel
+    def time_range(self) -> tuple[float, float] | None: ...  # InputPanel
+    def file_ids(self) -> tuple: ...                      # FileListWidget loaded entries
+    def file_paths(self) -> tuple[str, ...]: ...          # FileListWidget disk entries
+    def params(self) -> dict: ...                         # DynamicParamForm
+    def output_dir(self) -> str: ...                      # OutputPanel
+    def export_data(self) -> bool: ...
+    def export_image(self) -> bool: ...
+    def data_format(self) -> str: ...
+
+    # Mutators (Wave 7 apply_preset path)
+    def apply_method(self, method: str) -> None: ...
+    def apply_signals(self, signals: tuple[str, ...]) -> None: ...
+    def apply_rpm_channel(self, ch: str) -> None: ...
+    def apply_time_range(self, rng: tuple[float, float] | None) -> None: ...
+    def apply_params(self, params: dict) -> None: ...
+    def apply_outputs(self, out: BatchOutput) -> None: ...
+    def apply_files(self, file_ids: tuple, file_paths: tuple[str, ...]) -> None: ...
+    def apply_preset(self, preset: AnalysisPreset) -> None: ...  # composes the above
+```
+
+These accessors are the contract Wave 7 binds against; specialists adding
+panels in Wave 5 must expose equivalent panel-level methods that BatchSheet
+delegates to.
 
 ### Tasks (high-level — specialist applies TDD per component)
 
@@ -1554,29 +1717,56 @@ See spec §3.2, §3.3, §3.4."
 This wave makes the dialog functional end-to-end (run real batch from UI).
 
 **Components**:
-1. `TaskListWidget`: collapsible header + list of rows. Each row shows
-   icon (⏸/⟳/✓/✗/—) + `file · signal · method` + optional error tooltip.
-   Slots: `apply_dry_run(tasks: list[tuple[str, str, str]])`,
-   `on_event(event: BatchProgressEvent)`. Emits no signals (read-only).
+1. `TaskListWidget`: collapsible header + body. Header reads
+   `▾ N 任务待执行 · M 输出` (idle) or `进度 i/N  [progress bar]  ~Ts 剩余`
+   (running). Body is a list of rows: icon (⏸/⟳/✓/✗/—) + `file · signal ·
+   method` + optional error tooltip. Slots:
+   - `apply_dry_run(tasks: list[tuple[str, str, str]], outputs_per_task: int)`
+   - `on_event(event: BatchProgressEvent)` — drives icon transitions and
+     header progress; ETA computed as
+     `(now - run_start) / max(done, 1) * (total - done)`
+   - `on_run_started()` / `on_run_finished(result)` — toggle header mode
+   Emits no signals (read-only).
 2. `BatchRunnerThread(QThread)`: holds preset/output_dir/runner. Constructor
    takes `runner: BatchRunner`, `preset`, `output_dir`. Defines:
    - `progress = pyqtSignal(object)` (BatchProgressEvent)
    - `finished_with_result = pyqtSignal(object)` (BatchRunResult)
    - `request_cancel()`: sets internal `cancel_token` (threading.Event)
-   - `run(self)`: calls `runner.run(...)` with `on_event=self.progress.emit`
-     and `cancel_token=self._cancel_token`; emits `finished_with_result`
+   - `run(self)`: wraps `runner.run(...)` in `try/except` so any unexpected
+     exception is converted to `BatchRunResult(status='blocked',
+     blocked=[str(exc)])` (so unlock always happens via QThread.finished;
+     see §6.2 unlock contract)
 3. `BatchSheet` updates:
    - Track `_running: bool`. Footer button bar swaps between
-     `[Cancel] [运行]` (idle) and `[中断]` (running).
-   - On 运行: build dry-run task list (re-run `_expand_tasks` synchronously
-     to populate `TaskListWidget`), `lock_editing()`, launch
-     `BatchRunnerThread`. Connect signals.
+     `[Cancel] [运行]` (idle) and `[中断]` (running). Setting `_running=True`
+     and disabling Run button **happens synchronously before** thread.start()
+     to prevent double-click reentrance.
+   - **Dry-run preview is computed from UI state ONLY** (per spec §3.2:
+     disk files use the cached probe set, NOT a full sample load). Add
+     `BatchSheet._build_dry_run_preview()` returning
+     `list[tuple[file_label, signal, method]]` from:
+     - For each `file_id` in `InputPanel.file_ids()`: pull `fd =
+       self._files[fid]`, iterate target_signals, append a row even if
+       signal not in fd.data.columns (UI just shows it; runner emits ✗ at
+       run time).
+     - For each `file_path` in `InputPanel.file_paths()`: pull cached
+       probed signal set from FileListWidget (Wave 5); append rows.
+     - **Never** call `BatchRunner._expand_tasks` for preview — that path
+       triggers `_resolve_files` which would `loader(path)` full-load disk
+       files on the UI thread.
+   - On 运行: `tasks = sheet._build_dry_run_preview()`;
+     `task_list.apply_dry_run(tasks, outputs_per_task)` (where
+     outputs_per_task = export_data + export_image); `lock_editing()`;
+     launch `BatchRunnerThread`. Connect signals.
    - On 中断: call `thread.request_cancel()`; disable button so it can't
      be clicked twice.
-   - On `finished_with_result`: `unlock_editing()`, swap buttons back,
-     toast based on `result.status`.
+   - **Unlock is bound to `QThread.finished` (Qt's built-in signal)**, NOT
+     `finished_with_result`. The `finished_with_result` handler stores the
+     result; the `finished` handler does the unlock + toast based on the
+     stored result. This guarantees unlock even if `runner.run()` raises
+     before `finished_with_result` would be emitted.
    - `closeEvent`: if `_running`, prompt confirmation; if confirmed, route
-     to cancel path then accept close after thread joins.
+     to cancel path; accept close in the QThread.finished handler.
 
 ### Tasks
 
@@ -1588,25 +1778,68 @@ def test_apply_dry_run_renders_rows(qtbot):
     from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
     w = TaskListWidget()
     qtbot.addWidget(w)
-    w.apply_dry_run([("a.mf4", "sig", "fft"), ("b.mf4", "sig", "fft")])
+    w.apply_dry_run([("a.mf4", "sig", "fft"), ("b.mf4", "sig", "fft")],
+                    outputs_per_task=2)
     assert w.row_count() == 2
     assert w.row_icon(0) == "⏸"
+    # Header (idle): "▾ 2 任务待执行 · 4 输出"
+    assert "2 任务" in w.header_text()
+    assert "4 输出" in w.header_text()
 
 
-def test_on_event_updates_icons(qtbot):
+def test_on_event_updates_icons_and_progress(qtbot):
     from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
     from mf4_analyzer.batch import BatchProgressEvent
     w = TaskListWidget()
     qtbot.addWidget(w)
-    w.apply_dry_run([("a.mf4", "sig", "fft")])
+    w.apply_dry_run([("a.mf4", "sig", "fft"), ("b.mf4", "sig", "fft")],
+                    outputs_per_task=1)
+    w.on_run_started()
     w.on_event(BatchProgressEvent(
-        kind="task_started", task_index=1, total=1,
+        kind="task_started", task_index=1, total=2,
         file_name="a.mf4", signal="sig", method="fft"))
     assert w.row_icon(0) == "⟳"
+    # Header (running): includes "进度 0/2" before first done
+    assert "0/2" in w.header_text() or "0 / 2" in w.header_text()
     w.on_event(BatchProgressEvent(
-        kind="task_done", task_index=1, total=1,
+        kind="task_done", task_index=1, total=2,
         file_name="a.mf4", signal="sig", method="fft"))
     assert w.row_icon(0) == "✓"
+    assert "1/2" in w.header_text() or "1 / 2" in w.header_text()
+    # Progress bar value matches
+    assert w.progress_value() == 50  # 1/2 * 100
+
+
+def test_on_event_failed_and_cancelled_icons(qtbot):
+    from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
+    from mf4_analyzer.batch import BatchProgressEvent
+    w = TaskListWidget()
+    qtbot.addWidget(w)
+    w.apply_dry_run([("a.mf4", "sig", "fft"),
+                     ("b.mf4", "sig", "fft"),
+                     ("c.mf4", "sig", "fft")], outputs_per_task=1)
+    w.on_event(BatchProgressEvent(
+        kind="task_failed", task_index=1, total=3,
+        file_name="a.mf4", signal="sig", method="fft",
+        error="missing signal: sig"))
+    assert w.row_icon(0) == "✗"
+    assert "missing" in w.row_tooltip(0).lower()
+    w.on_event(BatchProgressEvent(
+        kind="task_cancelled", task_index=2, total=3,
+        file_name="b.mf4", signal="sig", method="fft"))
+    assert w.row_icon(1) == "—"
+
+
+def test_collapse_toggle(qtbot):
+    from mf4_analyzer.ui.drawers.batch.task_list import TaskListWidget
+    w = TaskListWidget()
+    qtbot.addWidget(w)
+    w.apply_dry_run([("a.mf4", "sig", "fft")], outputs_per_task=1)
+    assert w.is_expanded() is True   # Default expanded
+    w.toggle_collapse()
+    assert w.is_expanded() is False
+    # Body widget hidden when collapsed
+    assert not w._body.isVisible()
 ```
 
 - [ ] **Step 2: Implement `TaskListWidget`**
@@ -1646,12 +1879,19 @@ def test_runner_thread_emits_progress_and_result(qtbot, tmp_path):
 - [ ] **Step 4: Implement `BatchRunnerThread`**
 
 ```python
-"""QThread wrapping BatchRunner.run with cross-thread event forwarding."""
+"""QThread wrapping BatchRunner.run with cross-thread event forwarding.
+
+Wraps run() in try/except so unexpected exceptions become a 'blocked'
+result. Unlock in BatchSheet uses QThread.finished (Qt-emitted) — never
+the result signal — so the dialog can never get stuck locked.
+"""
 from __future__ import annotations
 
 import threading
 
 from PyQt5.QtCore import QThread, pyqtSignal
+
+from ....batch import BatchRunResult
 
 
 class BatchRunnerThread(QThread):
@@ -1669,12 +1909,21 @@ class BatchRunnerThread(QThread):
         self._cancel_token.set()
 
     def run(self):
-        result = self._runner.run(
-            self._preset,
-            self._output_dir,
-            on_event=self.progress.emit,
-            cancel_token=self._cancel_token,
-        )
+        try:
+            result = self._runner.run(
+                self._preset,
+                self._output_dir,
+                on_event=self.progress.emit,
+                cancel_token=self._cancel_token,
+            )
+        except Exception as exc:
+            # Convert unexpected exception to a blocked result so the UI
+            # gets a deterministic value via finished_with_result, and
+            # QThread.finished still fires for unlock.
+            result = BatchRunResult(
+                status='blocked',
+                blocked=[f"runner crashed: {exc}"],
+            )
         self.finished_with_result.emit(result)
 ```
 
@@ -1766,6 +2015,45 @@ def test_apply_preset_free_config_fills_picker(qtbot, tmp_path):
     assert sheet.method() == "order_time"
     assert "vibration_x" in sheet.selected_signals()
     assert sheet.rpm_channel() == "engine_rpm"
+
+
+def test_apply_preset_current_single_round_trip(qtbot, tmp_path, qt_app_files):
+    """current_single preset (from main window) should fill picker with the
+    one captured signal and select that file (spec §6.4)."""
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+    from mf4_analyzer.batch import AnalysisPreset
+    files = qt_app_files  # fixture providing {fid: FileData}
+    sheet = BatchSheet(None, files=files)
+    qtbot.addWidget(sheet)
+    fid = next(iter(files))
+    p = AnalysisPreset.from_current_single(
+        name="cs", method="fft", signal=(fid, "sig"),
+        params={"fs": 1024.0, "window": "hanning", "nfft": 1024,
+                "time_range": (1.0, 5.0)},
+    )
+    sheet.apply_preset(p)
+    assert sheet.method() == "fft"
+    assert sheet.selected_signals() == ("sig",)
+    assert fid in sheet.file_ids()
+    assert sheet.time_range() == (1.0, 5.0)
+
+
+def test_apply_preset_marks_unavailable_signals(qtbot):
+    """Imported preset whose target_signals are not in the file intersection
+    must red-mark them and warn (spec §4.2 partial-missing rule)."""
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+    from mf4_analyzer.batch import AnalysisPreset
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    p = AnalysisPreset.free_config(
+        name="m", method="fft",
+        target_signals=("absent_signal",),
+        params={"window": "hanning", "nfft": 1024},
+    )
+    sheet.apply_preset(p)
+    # Signal still selected, but red-marked
+    assert "absent_signal" in sheet.selected_signals()
+    assert sheet.signals_marked_unavailable() == ("absent_signal",)
 
 
 def test_import_unsupported_version_toasts(qtbot, tmp_path):
