@@ -40,7 +40,7 @@
 
 - 不引入新的分析方法（FFT / order_time / order_rpm / order_track 维持原状）。
 - 不改变 `AnalysisPreset.from_current_single` 的语义（继续支持单文件单信号快照）。
-- 不做 preset 的版本演化 / 迁移机制（v1 schema 直接 break 即可，将来需要时再上 schema_version）。
+- 不做 preset 的迁移机制（仅 v1；遇到未来 v2 直接拒绝加载，提示用户）。
 - 不做 preset 库（presets 目录列表 / 收藏 / 标签等）。
 
 ## 3. UI 设计
@@ -108,9 +108,24 @@ RPM 通道       [engine_rpm           ▾]
 
 **文件管理**：
 - "+ 已加载"：弹小菜单从 `main_window.files` 中挑（多选）
-- "+ 磁盘…"：`QFileDialog.getOpenFileNames` 选 `.mf4`，但只走"路径加入候选"，**不**真去加载（懒加载到运行时）— 否则大文件加进来 batch 对话框就卡顿
-- 列表里 `×` 按钮移除单条
+- "+ 磁盘…"：`QFileDialog.getOpenFileNames` 选 `.mf4`，**不**做完整加载（懒加载到运行时）；仅做 metadata-only probe 读出 channel 名列表（asammdf `MDF(path).channels_db.keys()` 不解码采样数据）— 否则大文件加进来 batch 对话框就卡顿
+- 列表里 `×` 按钮移除单条；列表项右侧显示文件状态徽标（见下表）
 - 文件列表变化 → 重算"信号交集" → 信号 popup 列表刷新
+
+**文件状态机**（每条文件列表项独立持有）：
+
+| 状态 | 触发 | 视觉 | 是否参与信号交集 | 是否参与任务展开 |
+|---|---|---|:-:|:-:|
+| `loaded` | "+ 已加载" 加入；或 `path_pending` 完成探针 | 默认行 | ✓ | ✓ |
+| `path_pending` | "+ 磁盘…" 加入瞬间 | 行末 spinner | ✗（先排除）→ probe 完成后转 `loaded` | — |
+| `probing` | 后台读 channel 列表中（一般 < 1s） | 行末 spinner | ✗ | — |
+| `probe_failed` | metadata 探针失败（坏 mf4） | 行末红 ⚠ + tooltip 错误 | ✗ | ✗ |
+| `loading`（仅运行时） | 运行到该文件、首次读采样 | — | — | — |
+| `load_failed`（仅运行时） | 运行时全量加载失败 | 任务列表对应行 ✗ + tooltip | — | 该文件所有 task 标 ✗ |
+
+**Probe 策略**：磁盘文件加入 → 立刻派一个轻量后台任务（`QThreadPool` 或简短 worker）读 `MDF(path).channels_db`，得到 channel 名集合，缓存在 BatchSheet 内存（`{path: frozenset[str]}`）；探针完成后状态转 `loaded`，触发信号交集重算。**dry-run 任务清单计入 `loaded` 状态文件**；`path_pending` / `probing` 状态期间，底部任务列表标"……正在解析 N 个文件"，运行按钮 disabled。
+
+**运行时读失败处理（`load_failed`）**：`BatchRunner._resolve_files` 全量加载某 disk path 抛异常 → 该文件的**所有任务**直接发 `task_failed` 事件（error="cannot load mf4: ..."），不影响其他文件继续。运行不 fast-fail。
 
 ### 3.3 ANALYSIS 列
 
@@ -205,22 +220,40 @@ NFFT:      [1024]
 
 ## 4. 数据模型
 
-### 4.1 AnalysisPreset 扩展
+### 4.1 AnalysisPreset 扩展（保持单一 dataclass + 序列化白名单 + 工厂校验）
 
-新增字段（`free_config` 来源时使用）：
+新增字段：
 
 ```python
 @dataclass
 class AnalysisPreset:
     # ... 现有字段
-    file_ids: tuple[object, ...] = ()         # 主窗口已加载的文件 id 集合
-    file_paths: tuple[str, ...] = ()          # 通过"+ 磁盘…"加进来的绝对路径
-    target_signals: tuple[str, ...] = ()      # 多选目标信号；空 → 走 signal_pattern 兜底
+    target_signals: tuple[str, ...] = ()       # 多选目标信号；free_config 用
+    # 以下两个是"运行选择" — 仅 free_config 来源 + 仅运行时存在；
+    # 不参与序列化（见 §4.2 白名单）
+    file_ids: tuple[object, ...] = ()
+    file_paths: tuple[str, ...] = ()
 ```
 
+**字段所属 / 不变量**（防 footgun）：
+
+| 字段 | 性质 | 适用 source | 是否序列化到 preset JSON |
+|---|---|---|:-:|
+| `name` / `method` / `params` / `outputs` | 配方 | both | ✓ |
+| `target_signals` / `rpm_channel` / `signal_pattern` | 配方 | `free_config` | ✓ |
+| `signal` / `rpm_signal` | 运行选择 | `current_single` | ✗ |
+| `file_ids` / `file_paths` | 运行选择 | `free_config` | ✗ |
+
+工厂方法增强：
+- `AnalysisPreset.free_config(...)` **不接受** `file_ids` / `file_paths`（这两个是 UI 层运行时状态，由 `BatchSheet.get_preset()` 在返回前注入）
+- 反之 `from_current_single(...)` 不接受 `target_signals` / `file_ids` / `file_paths`
+- 工厂内部 assert 不变量；非法组合直接抛 `ValueError`
+
 兼容性：
-- 老的 `from_current_single` 路径不动（仍通过 `signal=(fid, channel)` 单点传入）
-- `free_config` 路径下，`signal_pattern` 字段保留但不再由 UI 写入；运行时若 `target_signals` 非空则直接用、否则回落到 pattern（保持后端稳定，但 UI 删除入口）
+- 老的 `from_current_single` 路径不动
+- `free_config` 路径下，`signal_pattern` 字段保留作后端兜底；运行时若 `target_signals` 非空则直接用、否则回落到 pattern。UI 不再有 pattern 入口。
+
+> 设计权衡：codex spec review F-4 提议拆成 `AnalysisPreset` + `BatchRunRequest`，但侵入面太大（runner 签名 / current_single 路径都得动）。当前选"单 dataclass + 工厂校验 + 序列化白名单"，依赖工厂强制不变量来防 footgun。如果将来 file_ids/file_paths 出现更多变体，再切到 split。
 
 ### 4.2 PresetFile（新增 JSON 序列化模块）
 
@@ -231,10 +264,11 @@ def save_preset_to_json(preset: AnalysisPreset, path: Path) -> None: ...
 def load_preset_from_json(path: Path) -> AnalysisPreset: ...
 ```
 
-JSON schema（v1，无 schema_version 字段；将来需要时再加）：
+JSON schema v1（**自起始就带 `schema_version`**）：
 
 ```json
 {
+  "schema_version": 1,
   "name": "vibration FFT",
   "method": "fft",
   "target_signals": ["vibration_x", "vibration_y"],
@@ -251,10 +285,20 @@ JSON schema（v1，无 schema_version 字段；将来需要时再加）：
 }
 ```
 
+**白名单序列化**（实现要点）：`save_preset_to_json` 不直接 `dataclasses.asdict(preset)`，而是显式抽取上表 §4.1 中"是否序列化"列为 ✓ 的字段。`file_ids` / `file_paths` / `signal` / `rpm_signal` 即使被错误注入也不会泄漏到磁盘。
+
+**版本处理**：
+- 写入：始终 `schema_version: 1`
+- 读取：
+  - 文件含 `schema_version: 1` → 正常解析
+  - 文件**缺** `schema_version` → 视为 v1（兼容前期手写示例 / 测试 fixture）
+  - 文件含未知版本（如 v2，将来出现破坏性变更时） → 抛 `UnsupportedPresetVersion`，UI 端 toast "preset 文件版本不支持（v2），请用更新版本的应用打开"
+
 **不包含**：`file_ids`、`file_paths`、`outputs.directory` — preset 是"分析配方"，文件和输出目录每次手动选。
 
 加载 preset 时：
-- 若 `target_signals` 中某些信号在当前选中文件里不存在 → 这些信号在 chip 里红色显示 + warning 文字 "信号 X 在当前文件里不可用"，不强制阻止运行（运行时按 Q9 跳过）
+- 若 `target_signals` 中**部分**信号在当前选中文件交集里不存在 → 这些信号在 chip 里红色显示 + warning 文字 "信号 X 在当前文件里不可用"，不强制阻止运行（缺的那部分按 §7 在任务展开时处理）
+- 若 `target_signals` **全部**不可用（交集空 + 用户没换文件）→ INPUT 块标 ⚠，运行 disabled，提示 "导入的 preset 与当前文件无交集，请调整文件或信号"
 - 若 `method` 是 order_*  但 RPM 通道未填 → 走自动识别（沿用 `_guess_rpm_channel`）
 
 ### 4.3 任务展开逻辑
@@ -287,28 +331,73 @@ def _expand_tasks(self, preset):
 - `preset.file_ids` 直接查 `self.files`
 - `preset.file_paths` 走 `loader.load(path)` 懒加载（缓存到 `self.files` 不变；只是 batch 临时持有）
 
-### 4.4 进度事件接口
-
-替换 `progress_callback(index, total)` 为更细粒度的回调：
+### 4.4 进度事件接口 + 取消契约
 
 ```python
 @dataclass
 class BatchProgressEvent:
-    kind: Literal['task_started', 'task_done', 'task_failed']
+    kind: Literal[
+        'task_started',
+        'task_done',
+        'task_failed',
+        'task_cancelled',
+        'run_finished',     # 终态事件，UI 用来释放编辑锁
+    ]
     task_index: int
     total: int
     file_name: str
     signal: str
     method: str
-    error: str | None = None
+    error: str | None = None       # 仅 task_failed
+    final_status: str | None = None  # 仅 run_finished：'done' / 'partial' / 'cancelled' / 'blocked'
+```
 
-def run(self, preset, output_dir, on_event: Callable[[BatchProgressEvent], None] | None = None):
+**`BatchRunResult.status` 取值扩展**：现有 `'done' / 'partial' / 'blocked'` + 新增 `'cancelled'`（用户中断；可能已完成 0~N-1 个 task，剩余标 cancelled）。
+
+**规范签名**（保持向后兼容 + 取消支持）：
+
+```python
+def run(
+    self,
+    preset: AnalysisPreset,
+    output_dir: str | Path,
+    progress_callback: Callable[[int, int], None] | None = None,
+    *,
+    on_event: Callable[[BatchProgressEvent], None] | None = None,
+    cancel_token: threading.Event | None = None,
+) -> BatchRunResult:
     ...
 ```
 
-UI 层接 `on_event`，以此驱动任务列表的图标更新。**保持向后兼容**：`run(preset, output_dir, progress_callback=None, on_event=None)` 两个 kwarg 都接受；当只传老 `progress_callback(index, total)` 时，runner 内部在每个 `task_done` 事件触发后回调一次它，等价于老 API。两者可同时传，互不影响。
+- **位置参数 `progress_callback`** 保留位置 3，与现有签名一致（现有 caller `main_window.open_batch` 和 `tests/test_batch_runner.py` 全都不传 callback，所以新增 `*,` keyword-only 不破坏）
+- **`on_event`** keyword-only，传入即接收上面所有 kind 的事件
+- **`cancel_token`** keyword-only：runner 在每个 task 边界 `if cancel_token and cancel_token.is_set(): break`；break 后剩余 task 各发一次 `task_cancelled` 事件；最终 `BatchRunResult.status = 'cancelled'`
+- **同时传两个 callback**：每个 `task_done` 事件触发后**先**调 `on_event(event)`、**再**调 `progress_callback(index, total)`（保持 progress_callback 语义不变）
 
-UI 端建议：`BatchRunner.run` 在 worker 线程跑（`QThread` 或 `QtConcurrent`），`on_event` 通过 `pyqtSignal` 跨线程发送，避免阻塞 UI（当前 `open_batch` 用 `QApplication.processEvents()` 顶着，不正经）。
+**线程模型**：UI 端用 `BatchRunnerThread(QThread)` 包装 `BatchRunner.run`，`on_event` 通过 `pyqtSignal(object)` 跨线程转发。当前 `main_window.open_batch` 用 `QApplication.processEvents()` 顶着的方式废弃。
+
+### 4.5 取消路径（端到端）
+
+```
+[用户点 "中断" 按钮 或 关闭对话框时弹确认]
+        ↓
+BatchSheet.request_cancel():
+  - cancel_token.set()
+  - "中断" 按钮 disabled，显示 "正在停止…"
+        ↓
+BatchRunner 当前正在跑的 task 不打断（保证文件写入完整，避免半截 csv），完成后检查 token
+        ↓
+runner 跳出循环 → 给剩余每个未启动 task 发 task_cancelled 事件
+        ↓
+runner 发 run_finished(final_status='cancelled')
+        ↓
+BatchRunnerThread.finished signal → BatchSheet.unlock_editing():
+  - 三块详情区 setEnabled(True)
+  - 按钮恢复 [Cancel] [运行]
+  - 任务列表保留 ✓/✗/⏸（cancelled 显示为 "—" 灰色 + tooltip "已取消"）
+```
+
+**说明**：取消"在 task 边界"而不"在 task 内部"。理由：(1) 阶次/FFT 计算用 numpy/scipy，没现成 cancel hook；(2) 写文件中途中断会留半截文件比让 task 完成更糟。代价是单 task 可能要等 1-3 秒才停下，spec 接受。
 
 ## 5. UI 组件分解
 
@@ -396,49 +485,78 @@ BatchSheet.unlock_editing(); 按钮恢复 Cancel/运行；保留状态
 
 | 场景 | 行为 |
 |---|---|
-| 三块未全部 ✓ 就点运行 | 运行按钮 disabled，无需处理 |
+| 三块未全部 ✓ 就点运行 | 运行按钮 disabled |
 | 选了 0 个文件 | INPUT 块标 ⚠，运行 disabled |
 | 选了 0 个目标信号 | INPUT 块标 ⚠，运行 disabled |
 | 信号交集为空 | 信号 popup 列表全灰，提示 "所选文件无共同信号" |
-| 加载磁盘文件失败（坏 mf4） | 文件列表里红色显示 + tooltip 错误，不参与任务展开 |
-| 缺信号文件（导入 preset 后） | 任务展开时该任务直接标 ✗ + "missing signal: X" |
-| 运行中关闭对话框 | 弹确认 "中断当前运行？"；用户确认后取消 worker thread |
-| preset JSON 损坏 / schema 不符 | toast "preset 文件格式不支持" + 不修改当前表单 |
-| 输出目录写入失败 | 第一个 task_failed 事件传出 + 后续 task 全部失败（fast-fail） |
+| 有 `path_pending` / `probing` 状态文件 | 底部任务列表显示 "正在解析 N 个文件…"；运行 disabled 直至探针完成 |
+| 磁盘文件 metadata 探针失败（坏 mf4） | 列表项标 `probe_failed` + 红 ⚠ + tooltip 错误；不参与信号交集和任务展开 |
+| 导入 preset 后**部分** target_signals 在交集中缺失 | 缺的信号 chip 红色显示；可运行；运行时这些信号在任务列表里预先显示 ✗ + "missing in this file" |
+| 导入 preset 后**全部** target_signals 不可用 | INPUT 标 ⚠，运行 disabled，提示 "preset 与当前文件无交集" |
+| 运行时全量加载磁盘文件失败 | 该文件**全部** task 标 ✗（task_failed，error="cannot load mf4: ..."）；其他文件继续；不 fast-fail |
+| 运行中点 "中断" 按钮 | 见 §4.5 取消路径 |
+| 运行中关闭对话框 | 弹确认 "中断当前运行？"；确认 → 走 §4.5 取消路径；取消按钮区间禁用 X 角，避免重复点击 |
+| preset JSON 损坏 / 未知 schema_version | toast "preset 文件格式不支持（v2）" + 不修改当前表单 |
+| 输出目录创建失败（权限/磁盘满） | 在第一个 task 启动前 raise → `BatchRunResult(status='blocked', blocked=['cannot create output dir: ...'])`；运行结束事件 final_status='blocked'；UI 显示错误 toast |
+| 输出目录可创建但运行中某 task 写文件失败 | 该 task 标 task_failed；其他 task 继续 |
 
 ## 8. 测试策略
 
 **单元测试**（`tests/`）：
-- `test_batch_preset_io.py`：preset 序列化/反序列化往返、缺字段降级、坏 JSON 处理
-- `test_batch_runner.py` 扩展：
-  - `target_signals` 路径展开正确
-  - `file_paths` 懒加载路径
-  - `BatchProgressEvent` 全部三种 kind 触发
-  - 缺信号文件行为：task_failed + 错误消息
-  - 老 `progress_callback` 兼容路径
+
+`test_batch_preset_io.py`：
+- 写入 + 读回往返：所有 portable 字段一致
+- 写入文件**不含** `file_ids` / `file_paths` / `signal` / `rpm_signal` / `outputs.directory`（即使 dataclass 上被注入）— 白名单序列化验证
+- `schema_version: 1` 写入正确
+- 读取缺 `schema_version` 字段 → 视为 v1 解析成功
+- 读取 `schema_version: 2` → 抛 `UnsupportedPresetVersion`
+- 读取损坏 JSON → 抛 `ValueError`，错误消息明确
+
+`test_batch_runner.py` 扩展：
+- `target_signals` 多信号正常展开
+- `target_signals` 全部不在文件中 → `BatchRunResult.status == 'blocked'`，blocked 信息明确
+- `target_signals` 部分缺：缺的那部分 task_failed（"missing signal: X"），其余正常
+- `file_paths` 懒加载成功路径
+- `file_paths` 加载失败 → 该文件全部 task 标 task_failed，其他文件继续，不 fast-fail
+- 输出目录创建失败 → 第一个 task 启动前 blocked
+- `BatchProgressEvent` 全部 5 种 kind 都能触发（task_started / done / failed / cancelled / run_finished）
+- `cancel_token` 在两个 task 间被 set → 后续 task_cancelled，最终 status='cancelled'，部分文件可能已生成（验证写入完整，不留半截）
+- 老 `progress_callback`（位置参数 3）兼容路径：调用次数 = 完成 task 数
+- `progress_callback` + `on_event` 同时传：每个 task_done 事件后**先** on_event **后** progress_callback
 
 **UI 测试**（`tests/ui/`）：
-- `test_batch_drawers.py` 重写：
-  - PipelineStrip ✓/⚠ 状态切换
-  - SignalPickerPopup 搜索 + 多选 + 交集过滤
-  - MethodButtons 切换时参数表重渲（field 集合按 method 表）
-  - TaskList 折叠展开、状态图标随事件更新
-  - apply_preset 后表单字段一致
+
+`test_batch_drawers.py` 重写：
+- PipelineStrip ✓/⚠ 状态切换：每块的 0/1 输入对状态的影响
+- SignalPickerPopup：搜索框过滤、多选、交集过滤（仅显示 N/N 文件含的信号）、点击外部收起
+- 文件状态机：
+  - "+ 磁盘…" 加入 → `path_pending` → 探针完成 → `loaded`
+  - 坏 mf4 → `probe_failed`，红 ⚠ + tooltip
+  - 仍有 `probing` 状态时运行按钮 disabled
+- MethodButtons 切换时参数表重渲：fft 切到 order_time → 出现"目标阶次/时间分辨率/RPM 系数" + 共享字段（窗函数/NFFT）保留
+- TaskList 折叠展开、状态图标随 BatchProgressEvent 更新（mock event 流）
+- 取消路径 UI：点 "中断" → cancel_token.set；finished 信号到达后编辑解锁、按钮回到 [Cancel][运行]、任务行 cancelled 显示
+- apply_preset 后表单字段一致；apply 部分缺信号的 preset → 缺信号 chip 红色
 
 **手动测试**（squad 实施时）：
 - 导出 preset → 关闭重开 → 导入 preset → 任务清单一致
-- 跨机器：把 preset 文件拷到同代码的另一台机器，加载后能跑（验证不含 output_dir / 文件路径的设计）
+- 跨机器：把 preset 文件拷到另一台机器，加载后能正常运行（验证不含 output_dir / 文件路径的设计）
+- 加一个 5GB 的 mf4 文件作为 disk file，验证对话框响应正常（probe < 2s）
 
 ## 9. 范围 / 切片建议
 
 squad 实施期建议切片（每片可独立 PR）：
 
-1. **后端先行**：`AnalysisPreset` 字段扩展 + `_expand_tasks` 走 `target_signals` + `BatchProgressEvent` + tests。`batch_preset_io` 同步落地。
-2. **UI 骨架**：`drawers/batch/` package 创建 + 顶部摘要链路 + 三列详情壳（先内嵌静态 widget，逻辑空）。
-3. **UI 详情填充**：`SignalPickerPopup`、`MethodButtons` + 动态参数表、文件列表管理。
-4. **任务列表 + 进度**：`TaskList` widget + `RunnerThread` + 事件接线。
-5. **Preset 导入导出 + 从当前单次填入**：toolbar 三个按钮接线。
-6. **回归 + 删除 `signal_pattern` UI 入口**：保留后端兜底，删除 UI（YAGNI）。
+1. **后端基础**：`AnalysisPreset` 字段扩展 + 工厂校验 + 序列化白名单 contract（不含 IO 实现）。tests 覆盖工厂不变量和字段所属。
+2. **后端 runner 扩展**：`_expand_tasks` 走 `target_signals` + `_resolve_files` 懒加载磁盘文件 + `BatchProgressEvent`（5 种 kind）+ `cancel_token` + 新签名 `run(*, on_event=, cancel_token=)`。tests 覆盖 §8 中所有 runner 用例。
+3. **Preset JSON IO**：`batch_preset_io.py` + schema_version 处理 + 错误类。tests 覆盖往返 + 白名单 + 版本处理。
+4. **UI 骨架**：`drawers/batch/` package 创建 + 顶部摘要链路 + 三列详情壳（先内嵌静态 widget，逻辑空）。
+5. **UI 详情填充**：`SignalPickerPopup`、`MethodButtons` + 动态参数表、文件列表管理（含状态机 + metadata probe worker）。
+6. **任务列表 + 进度 + 取消**：`TaskList` widget + `BatchRunnerThread` + 事件 → UI 接线 + 中断按钮 + 关闭对话框确认。
+7. **Preset 导入导出 + 从当前单次填入**：toolbar 三个按钮接线。
+8. **回归 + 删除 `signal_pattern` UI 入口**：保留后端兜底，删除 UI（YAGNI）。
+
+> 切片调整说明（vs codex F-2 / F-3 反馈）：原 PR 1 把数据模型 / 任务展开 / 事件 API / JSON IO 全揉一起风险高；现在拆成 1+2+3 三个独立 PR，IO 与 runner 解耦；PR 6 显式包含取消路径（不再隐藏在"任务列表 + 进度"里）。
 
 每片 squad 走一次 plan → execute → review，依次合入。
 
