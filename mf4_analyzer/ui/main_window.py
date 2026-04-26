@@ -23,6 +23,7 @@ from PyQt5.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer, OrderAnalyzer
+from .canvases import CHART_TIGHT_LAYOUT_KW
 
 
 class FFTTimeWorker(QObject):
@@ -1248,7 +1249,7 @@ class MainWindow(QMainWindow):
             self.canvas_fft.store_line_data(0, freq, amp)
             self.canvas_fft.store_line_data(1, freq, psd_db)
 
-            self.canvas_fft.fig.tight_layout()
+            self.canvas_fft.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
             xt, yt = self.inspector.top.tick_density()
             self.canvas_fft.set_tick_density(xt, yt)
             self.canvas_fft.draw();
@@ -1500,7 +1501,7 @@ class MainWindow(QMainWindow):
         ax2.grid(True, alpha=0.25, ls='--')
 
         try:
-            self.canvas_order.fig.tight_layout()
+            self.canvas_order.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
         except Exception:
             pass
         xt, yt = self.inspector.top.tick_density()
