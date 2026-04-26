@@ -137,21 +137,3 @@ def test_batch_order_time_csv_shape(tmp_path):
     df = pd.read_csv(result.items[0].data_path)
     assert list(df.columns) == ["time_s", "order", "amplitude"]
     assert len(df) > 0
-
-
-def test_batch_order_rpm_csv_shape(tmp_path):
-    fd = _make_file(tmp_path)
-    preset = AnalysisPreset.free_config(
-        name="order rpm batch",
-        method="order_rpm",
-        signal_pattern="sig",
-        rpm_channel="rpm",
-        params={"fs": 1024.0, "nfft": 512, "max_order": 5.0,
-                "order_res": 0.5, "rpm_res": 100.0},
-        outputs=BatchOutput(export_data=True, export_image=False),
-    )
-    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
-    assert result.status == "done"
-    df = pd.read_csv(result.items[0].data_path)
-    assert list(df.columns) == ["rpm", "order", "amplitude"]
-    assert len(df) > 0

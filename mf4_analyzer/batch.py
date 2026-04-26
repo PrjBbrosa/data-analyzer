@@ -86,7 +86,7 @@ class BatchRunResult:
 
 
 class BatchRunner:
-    SUPPORTED_METHODS = {'fft', 'order_time', 'order_rpm', 'order_track'}
+    SUPPORTED_METHODS = {'fft', 'order_time', 'order_track'}
 
     def __init__(self, files):
         self.files = files
@@ -191,9 +191,6 @@ class BatchRunner:
             if method == 'order_time':
                 df = self._compute_order_time_dataframe(sig, rpm, time, fs, preset.params)
                 image_payload = ('order_time', df)
-            elif method == 'order_rpm':
-                df = self._compute_order_rpm_dataframe(sig, rpm, fs, preset.params)
-                image_payload = ('order_rpm', df)
             elif method == 'order_track':
                 df = self._compute_order_track_dataframe(sig, rpm, fs, preset.params)
                 image_payload = ('order_track', df)
@@ -256,7 +253,6 @@ class BatchRunner:
             max_order=float(params.get('max_order', params.get('max_ord', 20))),
             order_res=float(params.get('order_res', 0.1)),
             time_res=float(params.get('time_res', 0.05)),
-            rpm_res=float(params.get('rpm_res', 10)),
             target_order=float(params.get('target_order', params.get('target', 1.0))),
         )
 
@@ -273,21 +269,6 @@ class BatchRunner:
             result.orders,
             result.amplitude,
             x_name='time_s',
-            y_name='order',
-        )
-
-    @classmethod
-    def _compute_order_rpm_dataframe(cls, sig, rpm, fs, params):
-        result = OrderAnalyzer.compute_rpm_order_result(
-            sig,
-            rpm,
-            cls._order_params(fs, params),
-        )
-        return _matrix_to_long_dataframe(
-            result.rpm_bins,
-            result.orders,
-            result.amplitude,
-            x_name='rpm',
             y_name='order',
         )
 
