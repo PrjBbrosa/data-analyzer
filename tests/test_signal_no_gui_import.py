@@ -57,10 +57,15 @@ else:
 # The actual rule check: importing the signal layer must NOT trigger
 # either poisoned import.
 import mf4_analyzer.signal.fft  # noqa: F401
+import mf4_analyzer.signal.spectrogram  # noqa: F401
 
-# A sanity smoke: the class must exist and be callable.
+# A sanity smoke: the classes must exist and be callable.
 from mf4_analyzer.signal.fft import FFTAnalyzer
 assert hasattr(FFTAnalyzer, 'compute_fft'), 'FFTAnalyzer.compute_fft missing'
+
+from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+assert hasattr(SpectrogramAnalyzer, 'compute'), 'SpectrogramAnalyzer.compute missing'
+assert hasattr(SpectrogramAnalyzer, 'amplitude_to_db'), 'SpectrogramAnalyzer.amplitude_to_db missing'
 
 print('clean')
 """

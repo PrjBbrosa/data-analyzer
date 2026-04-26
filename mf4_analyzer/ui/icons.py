@@ -156,6 +156,21 @@ class Icons:
         return _line_icon(draw, BLUE)
 
     @classmethod
+    def mode_fft_time(cls):
+        """Time-frequency glyph: stacked horizontal bands (frequency rows
+        across time) — distinguishes from mode_fft (vertical bars) and
+        mode_order (3x3 grid)."""
+        def draw(p):
+            # bottom axes (time x · freq y)
+            p.drawLine(QPointF(3, 17), QPointF(17, 17))
+            p.drawLine(QPointF(3, 3), QPointF(3, 17))
+            # three horizontal bands at increasing intensity (drawn as dashes)
+            p.drawLine(QPointF(5, 14), QPointF(16, 14))
+            p.drawLine(QPointF(5, 10), QPointF(13, 10))
+            p.drawLine(QPointF(5, 6), QPointF(15, 6))
+        return _line_icon(draw, BLUE)
+
+    @classmethod
     def cursor_reset(cls):
         def draw(p):
             p.drawLine(QPointF(10, 3), QPointF(10, 7))

@@ -72,9 +72,13 @@ class _FileRow(QFrame):
         self._lbl_name = _ElidedLabel(full_name)
         self._lbl_name.setObjectName("fileRowName")
         top.addWidget(self._lbl_name, stretch=1)
+        # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) on the file-row
+        # close button. The icon stays 16x16 but the outer chrome was
+        # eating ~30px before, dwarfing every other element on the row.
         self._btn_close = QToolButton()
         self._btn_close.setIcon(Icons.close_file())
         self._btn_close.setIconSize(QSize(16, 16))
+        self._btn_close.setFixedSize(QSize(24, 24))
         self._btn_close.setToolTip("关闭文件")
         self._btn_close.setProperty("role", "tool")
         self._btn_close.setAutoRaise(True)
@@ -139,9 +143,13 @@ class FileNavigator(QWidget):
         self._lbl_count = QLabel("0")
         self._lbl_count.setObjectName("paneCount")
         head.addWidget(self._lbl_count)
+        # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) — same as
+        # _btn_close above; kebab is admin-only and shouldn't dwarf the
+        # "文件" header label.
         self._btn_kebab = QToolButton()
         self._btn_kebab.setIcon(Icons.menu())
         self._btn_kebab.setIconSize(QSize(16, 16))
+        self._btn_kebab.setFixedSize(QSize(24, 24))
         self._btn_kebab.setToolTip("文件操作")
         self._btn_kebab.setProperty("role", "tool")
         self._btn_kebab.setAutoRaise(True)

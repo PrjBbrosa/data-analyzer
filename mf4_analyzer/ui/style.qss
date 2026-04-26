@@ -182,10 +182,23 @@ QToolButton[role="primary"]:hover {
     border-color: #135abd;
 }
 
+/* 2026-04-26 R3 紧凑化 fix-4: tool buttons are icon-only chrome
+ * around 16x16 icons; outer chrome must hug the icon, not pad to a
+ * full 30x30 button. We let setFixedSize(24, 24) on the host widget
+ * govern the outer dimensions and only ask QSS for tight internal
+ * padding and to override the heavier 26px global min-height. The
+ * absence of min-width / min-height here matters: with the global
+ * "QPushButton{min-height:26px}" rule above, even setFixedSize is
+ * inflated by Qt's CSS sizing math (min-height + padding + border).
+ * Setting min-* to 0 here lets setFixedSize win. This selector is
+ * scoped via [role="tool"] — toolbar / segment / primary /
+ * preset-load buttons keep their own padding rules. */
 QPushButton[role="tool"],
 QToolButton[role="tool"] {
-    min-width: 30px;
-    padding: 4px 7px;
+    min-width: 0;
+    min-height: 0;
+    padding: 1px 4px;
+    border: 1px solid #dfe5ee;
 }
 
 /* Toolbar */
@@ -200,6 +213,7 @@ Toolbar QPushButton {
 }
 Toolbar QPushButton[segment="time"],
 Toolbar QPushButton[segment="fft"],
+Toolbar QPushButton[segment="fft_time"],
 Toolbar QPushButton[segment="order"] {
     min-width: 60px;
     min-height: 20px;
@@ -325,25 +339,65 @@ QScrollArea#inspectorScroll > QWidget > QWidget {
     background-color: #f5f7fb;
 }
 
-/* QGroupBox: no frame. Separation comes from a bold 13/700 title + generous
- * vertical rhythm (title padding + root layout spacing). */
+/* QGroupBox: no frame. Separation comes from a 12/600 title with a
+ * 1px hairline underline (R3 #3-B compactification). The underline
+ * replaces the heavier 13/700 typography for a tighter visual rhythm
+ * while still cleanly separating sections inside tinted contextual
+ * cards. */
 Inspector QGroupBox {
-    margin-top: 10px;
-    padding: 22px 2px 8px;
+    margin-top: 6px;
+    padding: 12px 2px 6px;
     border: none;
     border-radius: 0;
     background-color: transparent;
-    font-weight: 700;
+    font-weight: 600;
 }
 Inspector QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 2px;
-    padding: 4px 0 4px 0;
+    left: 0;
+    right: 0;
+    padding: 2px 0 4px 0;
     color: #111827;
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 12px;
+    font-weight: 600;
     background-color: transparent;
+    border-bottom: 1px solid #dfe5ee;
+}
+
+/* The same underline rhythm for our custom group-header rows
+ * (QFrame#inspectorGroupHeader) so the visual matches across the
+ * native QGroupBox flavour and the QFrame-with-button flavour used
+ * when a group title needs an inline action button (R3 #9). */
+Inspector QFrame#inspectorGroupHeader {
+    border: none;
+    border-bottom: 1px solid #dfe5ee;
+    background-color: transparent;
+    padding: 2px 0;
+}
+Inspector QFrame#inspectorGroupHeader QLabel#inspectorGroupTitle {
+    color: #111827;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: transparent;
+}
+
+/* 2026-04-26 R3 紧凑化 fix-2:
+ * The sig-card QFrames (fftSignalCard / orderSignalCard / fftTimeSignalCard)
+ * are wrappers that group "分析信号" / "信号源" header + fields inside the
+ * already-tinted contextual cards. Without this rule, the global
+ * "QFrame { background-color: #ffffff }" rule above paints them white and
+ * breaks the tinted backdrop bleed-through, producing the screenshot
+ * complaint that "信号源 / 分析信号 都变成白底" after R3. We re-transparentize
+ * them here AND drop their border, so the tinted contextual is the visual
+ * surface and the sig_card is invisible chrome. See lesson
+ * pyqt-ui/2026-04-26-inspector-content-max-width-and-tinted-card-bleed.md.
+ */
+Inspector QFrame#fftSignalCard,
+Inspector QFrame#orderSignalCard,
+Inspector QFrame#fftTimeSignalCard {
+    background-color: transparent;
+    border: none;
 }
 
 /* Mode-specific contextual blocks — subtle tinted cards to flag the

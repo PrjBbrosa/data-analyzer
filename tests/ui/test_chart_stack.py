@@ -3,7 +3,8 @@ from mf4_analyzer.ui.chart_stack import ChartStack
 
 def test_chart_stack_has_three_canvases(qapp):
     cs = ChartStack()
-    assert cs.count() == 3
+    # Four canvases after Task 3 (time / fft / fft_time / order); test name kept for git history.
+    assert cs.count() == 4
 
 
 def test_chart_stack_set_mode(qapp):
@@ -144,3 +145,126 @@ def test_set_cursor_mode_noop_does_not_emit(qapp, qtbot):
     assert received == []
     cs.set_cursor_mode('dual')
     assert received == ['dual']
+
+
+def test_chart_stack_exposes_fft_time_card(qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    stack = ChartStack()
+    qtbot.addWidget(stack)
+    stack.set_mode('fft_time')
+
+    assert stack.current_mode() == 'fft_time'
+    assert stack.canvas_fft_time is not None
+    assert stack.stack.currentWidget() is stack._fft_time_card
+
+
+# ---- Task 5: SpectrogramCanvas rendering, cursor, hover ----
+
+def test_spectrogram_canvas_plots_main_and_slice(qtbot):
+    import numpy as np
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+
+    canvas = SpectrogramCanvas()
+    qtbot.addWidget(canvas)
+    result = SpectrogramResult(
+        times=np.array([0.1, 0.2, 0.3]),
+        frequencies=np.array([10.0, 20.0, 30.0]),
+        amplitude=np.array([[1, 2, 3], [2, 4, 6], [1, 3, 5]], dtype=np.float32),
+        params=SpectrogramParams(fs=100.0, nfft=8, window='hanning', overlap=0.5),
+        channel_name='demo',
+        unit='V',
+    )
+
+    canvas.plot_result(result, amplitude_mode='amplitude', cmap='viridis')
+
+    assert len(canvas.fig.axes) >= 2
+    assert canvas.selected_index() == 0
+
+
+def test_spectrogram_canvas_applies_dynamic_and_freq_range(qtbot):
+    import numpy as np
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+
+    canvas = SpectrogramCanvas()
+    qtbot.addWidget(canvas)
+    # Magnitudes spanning ~120 dB.
+    amp = np.array([[1e-6, 1e-3], [1e-3, 1.0], [1.0, 0.1]], dtype=np.float32)
+    result = SpectrogramResult(
+        times=np.array([0.1, 0.2]),
+        frequencies=np.array([10.0, 100.0, 200.0]),
+        amplitude=amp,
+        params=SpectrogramParams(fs=400.0, nfft=8, db_reference=1.0),
+        channel_name='demo',
+    )
+
+    canvas.plot_result(
+        result,
+        amplitude_mode='amplitude_db',
+        cmap='turbo',
+        dynamic='60 dB',
+        freq_range=(0.0, 150.0),
+    )
+
+    im = canvas._ax_spec.images[0]
+    vmin, vmax = im.get_clim()
+    assert (vmax - vmin) == 60.0          # dynamic="60 dB" applied
+    assert canvas._ax_spec.get_ylim()[1] <= 150.0  # freq_range applied
+
+
+def test_spectrogram_canvas_emits_cursor_info_on_hover(qtbot):
+    import numpy as np
+    from matplotlib.backend_bases import MouseEvent
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+
+    canvas = SpectrogramCanvas()
+    qtbot.addWidget(canvas)
+    result = SpectrogramResult(
+        times=np.array([0.0, 0.1, 0.2]),
+        frequencies=np.array([0.0, 50.0, 100.0]),
+        amplitude=np.ones((3, 3), dtype=np.float32),
+        params=SpectrogramParams(fs=200.0, nfft=8),
+        channel_name='demo',
+    )
+    canvas.plot_result(result, amplitude_mode='amplitude')
+    canvas.draw()
+
+    seen = []
+    canvas.cursor_info.connect(seen.append)
+
+    # Synthesize hover at data coords (t=0.1, f=50).
+    ax = canvas._ax_spec
+    x_pix, y_pix = ax.transData.transform((0.1, 50.0))
+    evt = MouseEvent('motion_notify_event', canvas, x_pix, y_pix)
+    evt.inaxes = ax
+    evt.xdata = 0.1
+    evt.ydata = 50.0
+    canvas._on_motion(evt)
+
+    assert seen, "cursor_info should fire on hover"
+    assert '0.1' in seen[-1] or 't=0.1' in seen[-1]
+
+
+# ---- Task 9: SpectrogramCanvas export pixmaps ----
+
+def test_spectrogram_canvas_export_pixmaps(qtbot):
+    import numpy as np
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+
+    canvas = SpectrogramCanvas()
+    qtbot.addWidget(canvas)
+    result = SpectrogramResult(
+        times=np.array([0.1, 0.2]),
+        frequencies=np.array([10.0, 20.0]),
+        amplitude=np.ones((2, 2), dtype=np.float32),
+        params=SpectrogramParams(fs=100.0, nfft=8),
+        channel_name='demo',
+    )
+    canvas.plot_result(result, amplitude_mode='amplitude')
+
+    assert not canvas.grab_full_view().isNull()
+    assert not canvas.grab_main_chart().isNull()

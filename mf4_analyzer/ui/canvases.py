@@ -1,7 +1,10 @@
 """Matplotlib canvases: TimeDomainCanvas and PlotCanvas."""
 import time as _time
+from collections import OrderedDict
+
 import numpy as np
 
+import matplotlib as _mpl
 from PyQt5.QtWidgets import QDialog
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 
@@ -13,12 +16,37 @@ from matplotlib.patches import Rectangle
 
 from .dialogs import AxisEditDialog
 
+# ----------------------------------------------------------------------
+# Phase 1 item 5: free Matplotlib rcParams wins.
+#
+# Apply once at module import — these are global to the matplotlib
+# backend so they don't need to be re-set per-canvas (and we MUST NOT
+# re-set them per replot or per draw, which would burn CPU on every
+# plot_channels call). Values per the time-domain plot performance
+# spec; thresholds are conservative enough to leave the visual output
+# unchanged at typical canvas sizes.
+# ----------------------------------------------------------------------
+_mpl.rcParams['path.simplify'] = True
+_mpl.rcParams['path.simplify_threshold'] = 0.8
+_mpl.rcParams['agg.path.chunksize'] = 10000
+
 CHART_FACE = '#ffffff'
 AXIS_TEXT = '#475569'
 AXIS_LINE = '#cbd5e1'
 GRID_LINE = '#d7dee8'
 PRIMARY = '#1769e0'
 DANGER = '#dc2626'
+
+
+def _is_monotonic_array(t):
+    """Return True iff ``t`` is non-decreasing. Empty / single-sample → True."""
+    if t is None:
+        return True
+    arr = np.asarray(t)
+    if arr.size < 2:
+        return True
+    # np.all(np.diff(t) >= 0) allocates diff but matches the spec's contract.
+    return bool(np.all(np.diff(arr) >= 0))
 
 
 def _apply_axes_style(ax, grid=True):
@@ -132,7 +160,32 @@ class TimeDomainCanvas(FigureCanvas):
         self._overlay_mode = False
         self.lines = {};
         self.channel_data = {}
+        # data_id parallel dict: {channel_name: data_id}. Kept separate
+        # from channel_data so the cursor/dual-cursor/get_statistics
+        # readers (which expect a 4-tuple value) don't change shape.
+        self._channel_data_id = {}
+        # Per-channel Line2D references so the viewport-refresh path can
+        # call set_data() in-place without rebuilding axes.
+        self._channel_lines = {}
+        # Per-channel monotonicity flag, populated once per plot_channels
+        # build (Phase 1 item 6 follow-up F-1). _refresh_visible_data
+        # reads this dict and passes the cached boolean into
+        # _envelope_cached / _envelope so the hot path does not re-run
+        # _is_monotonic_array on every viewport change.
+        self._channel_is_monotonic = {}
         self.span_selector = None
+        # ----- viewport refresh wiring (Phase 1 items 2 + 5) -----
+        # The "primary" axis is the one whose xlim_changed we listen to.
+        # In subplot mode the axes share x via sharex, so a single
+        # connection suffices; in overlay mode all twinx siblings share
+        # the same x, so we listen on axes_list[0].
+        self._primary_xaxis_ax = None
+        self._xlim_cid = None
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(40)  # ~25 FPS coalesce window
+        self._refresh_timer.timeout.connect(self._refresh_visible_data)
+        self._refresh_pending = False
         self._cursor_visible = False;
         self._bg = None;
         self._cursor_artists = [];
@@ -155,16 +208,38 @@ class TimeDomainCanvas(FigureCanvas):
         self._rb_patch = None
         self.mpl_connect('button_release_event', self._on_release)
         self.mpl_connect('key_press_event', self._on_key)
+        # --- viewport-aware envelope caches (Phase 1 items 4 + 6) ----
+        # LRU cache keyed by (data_id, channel_name, quantized_xlim, pixel_width).
+        self._envelope_cache_capacity = 64
+        self._envelope_cache = OrderedDict()
+        self._envelope_cache_hits = 0
+        self._envelope_cache_misses = 0
+        # Monotonicity cache keyed by (custom_xaxis_fid, custom_xaxis_ch).
+        self._monotonicity_cache = {}
+        self._monotonicity_cache_hits = 0
+        self._monotonicity_cache_misses = 0
 
     def clear(self):
         # Drop any in-flight rubber-band refs before fig.clear discards the axes.
         self._rb_patch = None
         self._rb_start = None
         self._rb_ax = None
+        # Disconnect the xlim_changed callback before the axis it was
+        # attached to is destroyed by fig.clear() — otherwise stale
+        # callbacks accumulate on rebuild and fire against dangling axes.
+        self._disconnect_xlim_listener()
+        # Also cancel any pending refresh tied to the soon-to-be-gone axes.
+        if self._refresh_timer.isActive():
+            self._refresh_timer.stop()
+        self._refresh_pending = False
         self.fig.clear();
         self.axes_list = [];
         self.lines = {};
         self.channel_data = {}
+        self._channel_data_id = {}
+        self._channel_lines = {}
+        self._channel_is_monotonic = {}
+        self._primary_xaxis_ax = None
         self._cursor_artists = [];
         self._a_artists = [];
         self._b_artists = [];
@@ -198,20 +273,43 @@ class TimeDomainCanvas(FigureCanvas):
         self.draw_idle()
 
     def plot_channels(self, ch_list, mode='overlay', xlabel='Time (s)'):
+        """Build the figure for ``ch_list``.
+
+        ``ch_list`` is a list of tuples shaped either as
+        ``(name, visible, t, sig, color, unit)`` (legacy) or
+        ``(name, visible, t, sig, color, unit, data_id)`` (preferred —
+        the optional trailing ``data_id`` lets the viewport refresh path
+        key the envelope cache per-source-file).
+        """
         self.clear()
-        vis = [(n, t, s, c, u) for n, v, t, s, c, u in ch_list if v]
+        vis = []
+        for row in ch_list:
+            visible = row[1]
+            if not visible:
+                continue
+            if len(row) >= 7:
+                name, _, t, sig, color, unit, data_id = row[:7]
+            else:
+                name, _, t, sig, color, unit = row[:6]
+                data_id = None
+            vis.append((name, t, sig, color, unit, data_id))
         self._overlay_mode = mode == 'overlay' and len(vis) >= 2
         if not vis: self.draw(); return
         if mode == 'subplot' and len(vis) > 1:
             n = len(vis); first = None
-            for i, (name, t, sig, color, unit) in enumerate(vis):
+            for i, (name, t, sig, color, unit, data_id) in enumerate(vis):
                 ax = self.fig.add_subplot(n, 1, i + 1, sharex=first) if i > 0 else self.fig.add_subplot(n, 1, 1)
                 if i == 0: first = ax
                 self.axes_list.append(ax)
                 _apply_axes_style(ax)
                 td, sd = self._ds(t, sig)
-                ax.plot(td, sd, color=color, lw=1.05)
+                line, = ax.plot(td, sd, color=color, lw=1.05)
                 self.channel_data[name] = (t, sig, color, unit)
+                self._channel_data_id[name] = data_id
+                self._channel_lines[name] = (ax, line)
+                # F-1: cache monotonicity once per build so the refresh
+                # path does not re-scan np.diff(t) on every xlim change.
+                self._channel_is_monotonic[name] = _is_monotonic_array(t)
                 label = _compact_axis_label(name, unit, max_chars=20)
                 _set_series_ylabel(ax, label, color, labelpad=12, unit=unit, side='left')
                 ax.tick_params(axis='y', colors=color, labelsize=7)
@@ -233,10 +331,14 @@ class TimeDomainCanvas(FigureCanvas):
                 tw.spines['bottom'].set_visible(False)
                 if i >= 2:
                     tw.spines['right'].set_position(('outward', 60 * (i - 1)))
-            for ax, (name, t, sig, color, unit) in zip(self.axes_list, vis):
+            for ax, (name, t, sig, color, unit, data_id) in zip(self.axes_list, vis):
                 td, sd = self._ds(t, sig)
-                ax.plot(td, sd, color=color, lw=1.05)
+                line, = ax.plot(td, sd, color=color, lw=1.05)
                 self.channel_data[name] = (t, sig, color, unit)
+                self._channel_data_id[name] = data_id
+                self._channel_lines[name] = (ax, line)
+                # F-1: cache monotonicity once per build (see subplot branch).
+                self._channel_is_monotonic[name] = _is_monotonic_array(t)
                 label = _compact_axis_label(name, unit, max_chars=18)
                 side = 'left' if ax is ax0 else 'right'
                 _set_series_ylabel(ax, label, color, labelpad=12, unit=unit, side=side)
@@ -253,10 +355,14 @@ class TimeDomainCanvas(FigureCanvas):
             # single channel
             ax = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax)
             _apply_axes_style(ax)
-            name, t, sig, color, unit = vis[0]
+            name, t, sig, color, unit, data_id = vis[0]
             td, sd = self._ds(t, sig)
-            ax.plot(td, sd, color=color, lw=1.05)
+            line, = ax.plot(td, sd, color=color, lw=1.05)
             self.channel_data[name] = (t, sig, color, unit)
+            self._channel_data_id[name] = data_id
+            self._channel_lines[name] = (ax, line)
+            # F-1: cache monotonicity once per build (see subplot branch).
+            self._channel_is_monotonic[name] = _is_monotonic_array(t)
             label = _compact_axis_label(name, unit, max_chars=24)
             _set_series_ylabel(ax, label, color, labelpad=12, unit=unit, side='left')
             ax.tick_params(axis='y', colors=color, labelsize=7)
@@ -265,9 +371,36 @@ class TimeDomainCanvas(FigureCanvas):
         for ax in self.axes_list:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=10, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=6, min_n_ticks=3))
+        # ----- Phase 1 item 2: hook xlim_changed for viewport refresh -----
+        # Connect ONCE on the primary x-axis. In subplot mode all axes
+        # share x via sharex so listening on axes_list[0] is sufficient;
+        # in overlay mode all twinx siblings share the same x, so the
+        # primary axis is again axes_list[0].
+        if self.axes_list:
+            self._primary_xaxis_ax = self.axes_list[0]
+            self._connect_xlim_listener(self._primary_xaxis_ax)
         self.draw(); self._refresh = True
 
-    def _ds(self, t, sig):
+    def _ds(self, t, sig, xlim=None, pixel_width=None):
+        """Downsample for display.
+
+        Backwards-compatible: when ``xlim`` and ``pixel_width`` are both
+        supplied AND ``t`` is monotonic, delegate to the viewport-aware
+        :meth:`_envelope`. Otherwise fall back to the legacy fixed-size
+        full-series min/max reduction capped by :attr:`MAX_PTS`.
+
+        Statistics callers MUST NOT pass through this method — see
+        :meth:`get_statistics`.
+        """
+        if xlim is not None and pixel_width is not None:
+            return self._envelope(t, sig, xlim=xlim, pixel_width=pixel_width)
+        return self._ds_legacy(t, sig)
+
+    def _ds_legacy(self, t, sig):
+        """Original fixed-size full-series min/max reducer.
+
+        Kept as the non-monotonic fallback path for custom x-axis data.
+        """
         n = len(sig)
         if n <= self.MAX_PTS: return t, sig
         bs = n // (self.MAX_PTS // 2)
@@ -279,6 +412,368 @@ class TimeDomainCanvas(FigureCanvas):
             idx.extend([s + np.argmin(c), s + np.argmax(c)])
         idx = np.unique(np.clip(idx, 0, n - 1))
         return t[idx], sig[idx]
+
+    # ----------------------------------------------------------------
+    # viewport-aware envelope (Phase 1 item 1)
+    # ----------------------------------------------------------------
+
+    def _envelope(self, t, sig, xlim, pixel_width, *, is_monotonic=None):
+        """Viewport-aware min/max envelope for the visible x-range.
+
+        Parameters
+        ----------
+        t, sig : np.ndarray
+            Same length 1-D arrays. ``t`` should be monotonic for the
+            fast path; non-monotonic input falls back to the legacy
+            full-series :meth:`_ds_legacy`.
+        xlim : tuple(float, float)
+            Visible x-axis range ``(x0, x1)``.
+        pixel_width : int
+            Approximate pixel width of the visible axes — sets the
+            target bucket count.
+        is_monotonic : Optional[bool]
+            Precomputed monotonicity of ``t`` (F-1 follow-up to Phase 1
+            item 6). When provided, ``_envelope`` trusts it and skips the
+            O(n) ``np.diff(t)`` scan. When ``None`` (ad-hoc callers,
+            tests), falls back to the uncached scan as a safety net.
+
+        Returns
+        -------
+        (t_out, sig_out) : tuple of np.ndarray
+            Time-ordered (min, max) sample pairs per pixel bucket. When
+            the visible point count is already small, the raw visible
+            slice is returned unchanged. NaN buckets are preserved as
+            NaN breaks so the polyline keeps its discontinuity.
+        """
+        t = np.asarray(t)
+        sig = np.asarray(sig)
+        n_total = len(sig)
+        if n_total == 0:
+            return t, sig
+        if pixel_width is None or pixel_width < 1:
+            pixel_width = 1
+
+        # Non-monotonic x → legacy full-series reduction. searchsorted is
+        # invalid here, and per the Phase 1 spec we keep the old fallback.
+        # Trust the precomputed flag when supplied; otherwise scan as a
+        # safety net for ad-hoc callers (tests, future code paths).
+        if n_total >= 2:
+            if is_monotonic is None:
+                is_monotonic = _is_monotonic_array(t)
+            if not is_monotonic:
+                return self._ds_legacy(t, sig)
+
+        x0, x1 = float(xlim[0]), float(xlim[1])
+        if x1 < x0:
+            x0, x1 = x1, x0
+        # Visible window via searchsorted (monotonic t).
+        i0 = int(np.searchsorted(t, x0, side='left'))
+        i1 = int(np.searchsorted(t, x1, side='right'))
+        if i1 <= i0:
+            # No visible samples → return empty arrays of the right dtype.
+            return t[i0:i0], sig[i0:i0]
+
+        t_vis = t[i0:i1]
+        s_vis = sig[i0:i1]
+        n_vis = len(s_vis)
+
+        # Small-visible shortcut: don't bother bucketing.
+        if n_vis <= 2 * pixel_width:
+            return t_vis, s_vis
+
+        # Bucket count: ~one bucket per pixel.
+        n_buckets = int(pixel_width)
+        bs = max(1, n_vis // n_buckets)
+        # Adjust n_buckets to the integer floor — the last bucket may be
+        # slightly larger to cover the tail (handled below).
+        n_buckets = max(1, n_vis // bs)
+
+        # Pre-allocate output: at most 2 samples per bucket.
+        out_t = np.empty(2 * n_buckets, dtype=t_vis.dtype)
+        out_s = np.empty(2 * n_buckets, dtype=np.result_type(s_vis.dtype,
+                                                              np.float64))
+        out_count = 0
+
+        # Determine NaN handling per-bucket.
+        for b in range(n_buckets):
+            s_start = b * bs
+            # Last bucket absorbs the remainder so no samples are dropped.
+            s_end = n_vis if b == n_buckets - 1 else s_start + bs
+            seg = s_vis[s_start:s_end]
+            if seg.size == 0:
+                continue
+            # NaN classification.
+            nan_mask = np.isnan(seg) if np.issubdtype(seg.dtype,
+                                                        np.floating) else None
+            if nan_mask is not None and nan_mask.all():
+                # All-NaN bucket → emit a single NaN break at the bucket
+                # midpoint so the polyline disconnects.
+                mid_idx = s_start + seg.size // 2
+                out_t[out_count] = t_vis[mid_idx]
+                out_s[out_count] = np.nan
+                out_count += 1
+                continue
+            if nan_mask is not None and nan_mask.any():
+                rel_lo = int(np.nanargmin(seg))
+                rel_hi = int(np.nanargmax(seg))
+            else:
+                rel_lo = int(np.argmin(seg))
+                rel_hi = int(np.argmax(seg))
+            lo_idx = s_start + rel_lo
+            hi_idx = s_start + rel_hi
+            # Emit min/max in TIME ORDER so the line traversal is monotonic.
+            if lo_idx <= hi_idx:
+                out_t[out_count] = t_vis[lo_idx]
+                out_s[out_count] = s_vis[lo_idx]
+                out_count += 1
+                if hi_idx != lo_idx:
+                    out_t[out_count] = t_vis[hi_idx]
+                    out_s[out_count] = s_vis[hi_idx]
+                    out_count += 1
+            else:
+                out_t[out_count] = t_vis[hi_idx]
+                out_s[out_count] = s_vis[hi_idx]
+                out_count += 1
+                out_t[out_count] = t_vis[lo_idx]
+                out_s[out_count] = s_vis[lo_idx]
+                out_count += 1
+
+        return out_t[:out_count], out_s[:out_count]
+
+    # ----------------------------------------------------------------
+    # Envelope LRU cache (Phase 1 item 4)
+    # ----------------------------------------------------------------
+
+    def _envelope_cached(self, t, sig, xlim, *, data_id, channel_name,
+                         pixel_width, is_monotonic=None):
+        """Cache-front for :meth:`_envelope`.
+
+        Cache key: ``(data_id, channel_name, quantized_xlim, pixel_width)``
+        where ``quantized_xlim`` snaps to the bucket width (~one screen
+        pixel) so sub-pixel jitter during pan still hits the same entry.
+
+        ``is_monotonic`` is forwarded to :meth:`_envelope` on cache
+        misses (F-1 follow-up). It does NOT participate in the cache key:
+        the result for a given ``(data_id, channel_name, xlim,
+        pixel_width)`` is deterministic regardless of which path the
+        miss took, so partitioning entries by the flag would only add
+        misses without changing outputs.
+
+        Returned arrays are shared with the LRU cache; callers must
+        treat them as read-only.
+        """
+        if pixel_width is None or pixel_width < 1:
+            pixel_width = 1
+        x0, x1 = float(xlim[0]), float(xlim[1])
+        if x1 < x0:
+            x0, x1 = x1, x0
+        span = x1 - x0
+        # Quantize to one bucket-width (i.e. ~1 pixel). This is roughly
+        # 1/pixel_width of the view span, well within the 0.5%-1% target
+        # for typical canvas widths (>=200 px). Guard against zero span.
+        q = (span / pixel_width) if span > 0 else 1.0
+        if q <= 0:
+            q = 1.0
+        qx0 = int(round(x0 / q))
+        qx1 = int(round(x1 / q))
+        key = (data_id, channel_name, qx0, qx1, int(pixel_width))
+        cache = self._envelope_cache
+        if key in cache:
+            cache.move_to_end(key)
+            self._envelope_cache_hits += 1
+            return cache[key]
+        self._envelope_cache_misses += 1
+        result = self._envelope(t, sig, xlim=(x0, x1), pixel_width=pixel_width,
+                                 is_monotonic=is_monotonic)
+        cache[key] = result
+        # LRU eviction.
+        while len(cache) > self._envelope_cache_capacity:
+            cache.popitem(last=False)
+        return result
+
+    def invalidate_envelope_cache(self, reason: str, *, data_id=None,
+                                   channel=None):
+        """Invalidate envelope cache entries.
+
+        With no filters, drops everything (file load/close, plot mode
+        change). With ``data_id`` and/or ``channel`` set, drops only
+        matching entries (channel-edit / per-file invalidation).
+        """
+        if data_id is None and channel is None:
+            self._envelope_cache.clear()
+            return
+        keys_to_drop = []
+        for k in self._envelope_cache:
+            k_data_id, k_channel = k[0], k[1]
+            if data_id is not None and k_data_id != data_id:
+                continue
+            if channel is not None and k_channel != channel:
+                continue
+            keys_to_drop.append(k)
+        for k in keys_to_drop:
+            self._envelope_cache.pop(k, None)
+
+    # ----------------------------------------------------------------
+    # Monotonicity cache for custom x-axis arrays (Phase 1 item 6)
+    # ----------------------------------------------------------------
+
+    def _is_monotonic(self, t, custom_xaxis_fid=None, custom_xaxis_ch=None):
+        """Return whether ``t`` is non-decreasing.
+
+        When ``(custom_xaxis_fid, custom_xaxis_ch)`` is provided, the
+        result is cached and reused on subsequent calls until invalidated
+        via :meth:`invalidate_monotonicity_cache`.
+        """
+        key = (custom_xaxis_fid, custom_xaxis_ch)
+        if key != (None, None):
+            cached = self._monotonicity_cache.get(key)
+            if cached is not None:
+                self._monotonicity_cache_hits += 1
+                return cached
+        self._monotonicity_cache_misses += 1
+        result = _is_monotonic_array(np.asarray(t))
+        if key != (None, None):
+            self._monotonicity_cache[key] = result
+        return result
+
+    # ----------------------------------------------------------------
+    # Viewport refresh wiring (Phase 1 item 2)
+    # ----------------------------------------------------------------
+
+    def _connect_xlim_listener(self, ax):
+        """Attach an xlim_changed callback to ``ax`` (single connection)."""
+        # Defensive: drop any prior connection so structural rebuilds
+        # don't pile up callbacks against dangling axes.
+        self._disconnect_xlim_listener()
+        self._xlim_cid = ax.callbacks.connect('xlim_changed',
+                                              self._on_xlim_changed)
+
+    def _disconnect_xlim_listener(self):
+        """Disconnect the xlim_changed callback if one is live."""
+        if self._xlim_cid is not None and self._primary_xaxis_ax is not None:
+            try:
+                self._primary_xaxis_ax.callbacks.disconnect(self._xlim_cid)
+            except Exception:
+                pass
+        self._xlim_cid = None
+
+    def _on_xlim_changed(self, _ax):
+        """Coalesce rapid xlim updates into a single refresh."""
+        # If a refresh is already pending, do not start another timer —
+        # the existing timer's tick will pick up the latest xlim.
+        if self._refresh_pending:
+            return
+        self._refresh_pending = True
+        # Single-shot timer; 40 ms ≈ 25 Hz coalesce window.
+        self._refresh_timer.start()
+
+    def _flush_pending_refresh(self):
+        """Drain any pending refresh immediately (end-of-pan/zoom)."""
+        if not self._refresh_pending:
+            return
+        if self._refresh_timer.isActive():
+            self._refresh_timer.stop()
+        # Run synchronously so the final post-release frame uses
+        # full-detail envelope output instead of waiting another 40 ms.
+        self._refresh_visible_data()
+
+    def _refresh_visible_data(self):
+        """Recompute envelope output for the current xlim and update lines.
+
+        Called via the QTimer started in :meth:`_on_xlim_changed` and
+        immediately on mouse-release. Does NOT clear axes, rebuild lines,
+        re-create the SpanSelector, call ``tight_layout()``, or rewire
+        tick density — only ``Line2D.set_data`` followed by
+        ``draw_idle()``.
+        """
+        # Always clear the pending flag at the start; if a new xlim_changed
+        # arrives while we're computing, it can schedule a fresh refresh.
+        self._refresh_pending = False
+        if not self._channel_lines or self._primary_xaxis_ax is None:
+            return
+        try:
+            xlim = self._primary_xaxis_ax.get_xlim()
+        except Exception:
+            return
+        # Pixel width strategy:
+        #   - Subplot mode: every axes shares the same x-extent, so the
+        #     primary axis bbox width is the canonical pixel count.
+        #   - Overlay mode: twinx siblings literally share the primary
+        #     axis's x bbox, so the same primary-axis bbox width applies.
+        # In both cases the primary axis bbox width is what we want.
+        try:
+            pixel_width = int(max(1, self._primary_xaxis_ax.bbox.width))
+        except Exception:
+            pixel_width = int(max(1, self.fig.bbox.width))
+        any_changed = False
+        for name, (ax, line) in self._channel_lines.items():
+            entry = self.channel_data.get(name)
+            if entry is None:
+                continue
+            t, sig, _color, _unit = entry
+            data_id = self._channel_data_id.get(name)
+            if data_id is None:
+                # No stable cache key — fall back to the legacy reducer
+                # so non-monotonic / unkeyed streams still render.
+                td, sd = self._ds_legacy(t, sig)
+            else:
+                # F-1: pass the precomputed monotonicity flag so
+                # _envelope skips the per-call np.diff(t) scan. The
+                # dict is populated in plot_channels and cleared in
+                # invalidate_monotonicity_cache; if a caller manages
+                # to land here without populating it (e.g. external
+                # mutation of channel_data), `is_monotonic=None` lets
+                # _envelope fall back to the uncached scan as a safety
+                # net rather than silently mis-classifying the array.
+                is_monotonic = self._channel_is_monotonic.get(name)
+                td, sd = self._envelope_cached(
+                    t, sig, xlim,
+                    data_id=data_id,
+                    channel_name=name,
+                    pixel_width=pixel_width,
+                    is_monotonic=is_monotonic,
+                )
+            line.set_data(td, sd)
+            any_changed = True
+        if any_changed:
+            # Cursor blit-cache assumes the static background; the line
+            # data underneath has changed so the cache must be rebuilt
+            # before the next cursor frame.
+            self._refresh = True
+            self.draw_idle()
+
+    def invalidate_monotonicity_cache(self, custom_xaxis_fid=None,
+                                       custom_xaxis_ch=None):
+        """Drop monotonicity-cache entries.
+
+        With no filters, clear everything. Otherwise drop entries that
+        match the supplied filter components (None acts as a wildcard).
+
+        F-1 follow-up: also clears the per-channel ``_channel_is_monotonic``
+        dict. The dict is keyed by display channel name (e.g.
+        ``"[A] sig1"``) which does not align with ``(fid, ch)`` filters,
+        and every main_window invalidation site is followed by a
+        ``plot_time()`` that rebuilds the dict via ``plot_channels``.
+        Conservative full-clear here keeps the cache coherent and is a
+        no-op cost (the rebuild repopulates immediately).
+        """
+        # Per-channel monotonicity flag — always full-cleared so the
+        # next refresh either recomputes (if it lands before
+        # plot_channels) or sees a freshly populated dict (after
+        # plot_channels rebuilds).
+        self._channel_is_monotonic.clear()
+        if custom_xaxis_fid is None and custom_xaxis_ch is None:
+            self._monotonicity_cache.clear()
+            return
+        to_drop = []
+        for (fid, ch) in self._monotonicity_cache:
+            if custom_xaxis_fid is not None and fid != custom_xaxis_fid:
+                continue
+            if custom_xaxis_ch is not None and ch != custom_xaxis_ch:
+                continue
+            to_drop.append((fid, ch))
+        for k in to_drop:
+            self._monotonicity_cache.pop(k, None)
 
     def set_tick_density(self, x, y):
         for ax in self.axes_list:
@@ -483,19 +978,29 @@ class TimeDomainCanvas(FigureCanvas):
         self.draw_idle()
 
     def _on_release(self, e):
-        if self._axis_lock is None or self._rb_start is None or self._rb_ax is None:
-            return
-        if e.inaxes is not self._rb_ax or e.xdata is None or e.ydata is None:
-            self._cancel_rb(); return
-        x0, y0 = self._rb_start
-        x1, y1 = e.xdata, e.ydata
-        ax = self._rb_ax
-        if self._axis_lock == 'x' and abs(x1 - x0) > 1e-9:
-            ax.set_xlim(min(x0, x1), max(x0, x1))
-        elif self._axis_lock == 'y' and abs(y1 - y0) > 1e-9:
-            ax.set_ylim(min(y0, y1), max(y0, y1))
-        self._refresh = True
-        self._cancel_rb()
+        # End-of-pan/zoom flush (Phase 1 item 2). Must run AFTER any
+        # rubber-band ``set_xlim``/``set_ylim`` so that the freshly
+        # scheduled xlim_changed debounce is also drained — otherwise
+        # the post-zoom envelope frame is held back behind the 40 ms
+        # timer (B-1). The try/finally guarantees both the rubber-band
+        # branch and every early-return path (no axis lock, missing
+        # press anchor, off-axis release) end with no pending QTimer.
+        try:
+            if self._axis_lock is None or self._rb_start is None or self._rb_ax is None:
+                return
+            if e.inaxes is not self._rb_ax or e.xdata is None or e.ydata is None:
+                self._cancel_rb(); return
+            x0, y0 = self._rb_start
+            x1, y1 = e.xdata, e.ydata
+            ax = self._rb_ax
+            if self._axis_lock == 'x' and abs(x1 - x0) > 1e-9:
+                ax.set_xlim(min(x0, x1), max(x0, x1))
+            elif self._axis_lock == 'y' and abs(y1 - y0) > 1e-9:
+                ax.set_ylim(min(y0, y1), max(y0, y1))
+            self._refresh = True
+            self._cancel_rb()
+        finally:
+            self._flush_pending_refresh()
 
     def _on_key(self, e):
         if e.key == 'escape':
@@ -508,6 +1013,361 @@ class TimeDomainCanvas(FigureCanvas):
             if len(s): stats[ch] = {'min': np.min(s), 'max': np.max(s), 'mean': np.mean(s),
                                     'rms': np.sqrt(np.mean(s ** 2)), 'std': np.std(s), 'p2p': np.ptp(s), 'unit': unit}
         return stats
+
+
+class SpectrogramCanvas(FigureCanvas):
+    """FFT vs Time spectrogram canvas (Task 5 — full body).
+
+    Renders a 2D time-frequency intensity plot in the upper axis with a
+    1D frequency-slice plot underneath. Click on the spectrogram to
+    select a time frame; the slice updates accordingly. Hover emits a
+    cursor readout via :pyattr:`cursor_info`.
+
+    The dB conversion cache (``_db_cache``) is canvas-local and keyed
+    by ``(id(result), db_reference)`` so it is implicitly invalidated
+    whenever a fresh ``SpectrogramResult`` is plotted. Per
+    ``signal-processing/2026-04-25-cache-consumer-must-be-grepped-not-just-surface``
+    the cache is read on the hot path of ``plot_result`` (initial
+    render) and ``_plot_slice`` / ``_on_motion`` (interaction).
+
+    Matplotlib mouse events are connected via figure-level
+    ``mpl_connect`` rather than ``Axes.callbacks`` per
+    ``pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle``. The cids
+    are tracked and explicitly disconnected on ``full_reset`` for
+    defense-in-depth, even though figure-level connections survive
+    ``fig.clear()``.
+    """
+
+    cursor_info = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        self.fig = Figure(figsize=(12, 8), dpi=100, facecolor=CHART_FACE)
+        super().__init__(self.fig)
+        self.setParent(parent)
+        self._result = None
+        self._selected_index = None
+        self._amplitude_mode = 'amplitude_db'
+        self._cmap = 'turbo'
+        self._dynamic = '80 dB'
+        self._freq_range = None
+        self._db_cache = None  # (cache_key, ndarray); cache_key=(id(result), db_reference)
+        # Axes / artist handles set by plot_result.
+        self._ax_spec = None
+        self._ax_slice = None
+        self._colorbar = None
+        self._cursor_line = None
+        # Track figure-level mpl_connect cids so full_reset can drop them.
+        # Figure-level cids survive fig.clear() (axes-level Axes.callbacks
+        # do not — see lessons-learned), but tracking is cheap and lets
+        # full_reset wipe them deterministically per T2's flagged note.
+        self._cid_click = self.mpl_connect('button_press_event', self._on_click)
+        self._cid_motion = self.mpl_connect('motion_notify_event', self._on_motion)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+    def clear(self):
+        self._result = None
+        self._selected_index = None
+        self._db_cache = None
+        self._ax_spec = None
+        self._ax_slice = None
+        self._colorbar = None
+        self._cursor_line = None
+        self.fig.clear()
+        self.fig.set_facecolor(CHART_FACE)
+
+    def _disconnect_mpl_handlers(self):
+        """Drop figure-level mpl cids so a re-init doesn't double-fire.
+
+        Figure-level connections survive ``fig.clear()`` (only
+        ``Axes.callbacks`` are at risk per the lessons-learned doc),
+        but T2's hand-off explicitly asked us to disconnect on
+        ``full_reset`` so a future code path that recreates the
+        canvas cannot leak handlers. Defensive try/except in case the
+        canvas's callback registry has already been torn down.
+        """
+        for cid_attr in ('_cid_click', '_cid_motion'):
+            cid = getattr(self, cid_attr, None)
+            if cid is not None:
+                try:
+                    self.mpl_disconnect(cid)
+                except Exception:
+                    pass
+            setattr(self, cid_attr, None)
+
+    def full_reset(self):
+        self._disconnect_mpl_handlers()
+        self.clear()
+        # Re-arm the handlers so the canvas remains interactive after a
+        # full reset (matches the original __init__ contract).
+        self._cid_click = self.mpl_connect('button_press_event', self._on_click)
+        self._cid_motion = self.mpl_connect('motion_notify_event', self._on_motion)
+        self.draw_idle()
+
+    def selected_index(self):
+        return self._selected_index
+
+    def has_result(self):
+        return self._result is not None
+
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
+    def plot_result(self, result, amplitude_mode='amplitude_db', cmap='turbo',
+                    dynamic='80 dB', freq_range=None):
+        """Render ``result`` as a spectrogram with a frequency-slice strip.
+
+        Parameters
+        ----------
+        result : SpectrogramResult
+            The compute output. ``result.amplitude`` is shape
+            ``(freq_bins, frames)``.
+        amplitude_mode : {'amplitude', 'amplitude_db'}
+            Whether to display linear amplitude or dB.
+        cmap : str
+            Matplotlib colormap name for the 2D image.
+        dynamic : {'Auto', '60 dB', '80 dB'}
+            Color-limit policy. Only meaningful in ``amplitude_db`` mode.
+        freq_range : tuple(float, float) or None
+            ``(lo, hi)`` Hz. ``hi <= 0`` or ``hi <= lo`` falls back to
+            the Nyquist bin (``frequencies[-1]``).
+        """
+        self.clear()
+        self._result = result
+        self._amplitude_mode = amplitude_mode
+        self._cmap = cmap
+        self._dynamic = dynamic
+        self._freq_range = freq_range
+        self._selected_index = 0
+
+        gs = self.fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.28)
+        self._ax_spec = self.fig.add_subplot(gs[0, 0])
+        self._ax_slice = self.fig.add_subplot(gs[1, 0])
+
+        z = self._display_matrix(result, amplitude_mode)
+        extent = [
+            float(result.times[0]),
+            float(result.times[-1]),
+            float(result.frequencies[0]),
+            float(result.frequencies[-1]),
+        ]
+        vmin, vmax = self._color_limits(z, amplitude_mode, dynamic)
+        im = self._ax_spec.imshow(
+            z,
+            origin='lower',
+            aspect='auto',
+            extent=extent,
+            cmap=cmap,
+            interpolation='nearest',
+            vmin=vmin,
+            vmax=vmax,
+        )
+        self._colorbar = self.fig.colorbar(im, ax=self._ax_spec, pad=0.01)
+        self._ax_spec.set_xlabel('Time (s)')
+        self._ax_spec.set_ylabel('Frequency (Hz)')
+        if freq_range is not None:
+            lo, hi = freq_range
+            if hi <= 0 or hi <= lo:
+                hi = float(result.frequencies[-1])
+            self._ax_spec.set_ylim(lo, hi)
+        # White vertical cursor line at the currently selected frame.
+        x0 = float(result.times[0])
+        self._cursor_line = self._ax_spec.axvline(x0, color='#ffffff', lw=1.2)
+        self._plot_slice()
+        # tight_layout warns "Axes that are not compatible with
+        # tight_layout" because of the colorbar — suppress the user
+        # warning, the resulting layout is still acceptable.
+        import warnings as _warnings
+        with _warnings.catch_warnings():
+            _warnings.simplefilter('ignore', UserWarning)
+            try:
+                self.fig.tight_layout()
+            except Exception:
+                pass
+        self.draw_idle()
+
+    def _color_limits(self, z, amplitude_mode, dynamic):
+        """Choose (vmin, vmax) for ``imshow`` based on amplitude mode and policy.
+
+        Linear amplitude or 'Auto' dB → ``(nanmin, nanmax)``.
+        '80 dB' / '60 dB' (only in dB mode) → ``(zmax - N, zmax)``.
+        """
+        zmax = float(np.nanmax(z))
+        if amplitude_mode == 'amplitude_db':
+            if dynamic == '80 dB':
+                return zmax - 80.0, zmax
+            if dynamic == '60 dB':
+                return zmax - 60.0, zmax
+            # 'Auto' (or any other label) → let the data dictate.
+            return float(np.nanmin(z)), zmax
+        # Linear amplitude.
+        return float(np.nanmin(z)), zmax
+
+    def _display_matrix(self, result, amplitude_mode):
+        """Return the matrix to render. dB conversion is memoized per result.
+
+        Cache key is ``(id(result), db_reference)`` so a re-render with
+        the same result reuses the converted array, but a new
+        ``SpectrogramResult`` (different ``id``) or a different
+        ``db_reference`` invalidates implicitly.
+        """
+        if amplitude_mode == 'amplitude_db':
+            ref = float(result.params.db_reference)
+            cache_key = (id(result), ref)
+            if self._db_cache is None or self._db_cache[0] != cache_key:
+                from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+                db = SpectrogramAnalyzer.amplitude_to_db(
+                    result.amplitude, ref
+                ).astype(np.float32, copy=False)
+                self._db_cache = (cache_key, db)
+            return self._db_cache[1]
+        return result.amplitude
+
+    def _plot_slice(self):
+        """Redraw the lower 1D frequency-slice axis at ``_selected_index``."""
+        if self._ax_slice is None:
+            return
+        self._ax_slice.clear()
+        if self._result is None or self._selected_index is None:
+            return
+        z = self._display_matrix(self._result, self._amplitude_mode)
+        # z has shape (freq_bins, frames); slice along time axis.
+        idx = max(0, min(int(self._selected_index), z.shape[1] - 1))
+        y = z[:, idx]
+        self._ax_slice.plot(self._result.frequencies, y, color=PRIMARY, lw=1.0)
+        self._ax_slice.set_xlabel('Frequency (Hz)')
+        self._ax_slice.set_ylabel(
+            'Amplitude dB' if self._amplitude_mode == 'amplitude_db' else 'Amplitude'
+        )
+        self._ax_slice.grid(True, color=GRID_LINE, alpha=0.78, ls='--', lw=0.7)
+        if self._freq_range is not None:
+            lo, hi = self._freq_range
+            if hi <= 0 or hi <= lo:
+                hi = float(self._result.frequencies[-1])
+            self._ax_slice.set_xlim(lo, hi)
+
+    # ------------------------------------------------------------------
+    # Interaction
+    # ------------------------------------------------------------------
+    def select_time_index(self, idx):
+        """Programmatic selection. Clamps to ``[0, frames-1]``."""
+        if self._result is None:
+            return
+        n_frames = len(self._result.times)
+        if n_frames == 0:
+            return
+        idx = max(0, min(int(idx), n_frames - 1))
+        self._selected_index = idx
+        if self._cursor_line is not None:
+            x = float(self._result.times[idx])
+            self._cursor_line.set_xdata([x, x])
+        self._plot_slice()
+        self.draw_idle()
+
+    def _on_click(self, event):
+        if self._result is None or event.inaxes is not self._ax_spec:
+            return
+        if event.xdata is None:
+            return
+        idx = int(np.argmin(np.abs(self._result.times - event.xdata)))
+        self.select_time_index(idx)
+
+    def _on_motion(self, event):
+        if self._result is None or event.inaxes is not self._ax_spec:
+            # Clear the readout pill when the pointer leaves the
+            # spectrogram axis (or before a result has been plotted).
+            self.cursor_info.emit('')
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        t_idx = int(np.argmin(np.abs(self._result.times - event.xdata)))
+        f_idx = int(np.argmin(np.abs(self._result.frequencies - event.ydata)))
+        z = self._display_matrix(self._result, self._amplitude_mode)
+        # Defensive bounds — argmin can never index out of range, but a
+        # zero-shape matrix would; bail silently in that pathological case.
+        if z.shape[0] == 0 or z.shape[1] == 0:
+            return
+        val = float(z[f_idx, t_idx])
+        unit = 'dB' if self._amplitude_mode == 'amplitude_db' else (self._result.unit or '')
+        msg = (
+            f"t={self._result.times[t_idx]:.4g} s · "
+            f"f={self._result.frequencies[f_idx]:.4g} Hz · "
+            f"{val:.4g} {unit}"
+        ).rstrip()
+        self.cursor_info.emit(msg)
+
+    # ------------------------------------------------------------------
+    # Export (Plan Task 9 / T8 — clipboard pixmaps)
+    # ------------------------------------------------------------------
+    def grab_full_view(self):
+        """Return a ``QPixmap`` of the entire canvas (spectrogram + slice).
+
+        Phase-1 export contract used by ``MainWindow._copy_fft_time_image``
+        with ``mode='full'``. Whether or not a result has been plotted,
+        this returns the current canvas pixmap; the MainWindow caller
+        guards on :meth:`has_result` before invoking, so a blank pixmap
+        cannot reach the clipboard.
+        """
+        return self.grab()
+
+    def grab_main_chart(self):
+        """Return a ``QPixmap`` of the spectrogram-image region only.
+
+        Crops to the bounding box of ``_ax_spec`` plus its colorbar so
+        the lower frequency-slice strip is excluded. If the bounding box
+        is unavailable (no result plotted, layout not yet realized, or
+        an exception during transform conversion), falls back to
+        :meth:`grab_full_view` so the export button never returns a null
+        pixmap when ``has_result()`` is True.
+
+        Phase-1 caveat: under pytest-qt headless / offscreen Qt
+        platforms the figure layout has not actually rendered to a
+        backing store, so ``ax.bbox`` may report stale or zero-size
+        coordinates. The full-canvas fallback is the safe default; the
+        validation report (T10) flags the headless limitation for
+        the user.
+        """
+        # Defensive: no axis, no result, no layout → fall through.
+        if self._result is None or self._ax_spec is None:
+            return self.grab_full_view()
+        try:
+            # Build a Qt-pixel rect that encloses the spectrogram axis
+            # and its colorbar (right-pad). matplotlib reports bboxes
+            # in figure-pixel coords with origin at bottom-left; Qt's
+            # rect coords have origin at top-left, so we flip y.
+            from PyQt5.QtCore import QRect
+            ax_bbox = self._ax_spec.get_tightbbox(self.fig.canvas.get_renderer())
+            if self._colorbar is not None:
+                cb_bbox = self._colorbar.ax.get_tightbbox(self.fig.canvas.get_renderer())
+                # Union the two bboxes manually so we don't miss the
+                # colorbar tick labels on the right edge.
+                x0 = min(ax_bbox.x0, cb_bbox.x0)
+                y0 = min(ax_bbox.y0, cb_bbox.y0)
+                x1 = max(ax_bbox.x1, cb_bbox.x1)
+                y1 = max(ax_bbox.y1, cb_bbox.y1)
+            else:
+                x0, y0, x1, y1 = ax_bbox.x0, ax_bbox.y0, ax_bbox.x1, ax_bbox.y1
+            fig_h = self.fig.bbox.height
+            # Clamp to the canvas's device pixel rect; an out-of-range
+            # crop returns a null pixmap.
+            dpr = self.devicePixelRatioF() if hasattr(self, 'devicePixelRatioF') else 1.0
+            qx = int(max(0, x0 / dpr))
+            qy = int(max(0, (fig_h - y1) / dpr))
+            qw = int(max(1, (x1 - x0) / dpr))
+            qh = int(max(1, (y1 - y0) / dpr))
+            # Sanity: a degenerate rect (offscreen / unrealized layout)
+            # should fall back rather than yield a null/stripe pixmap.
+            if qw < 10 or qh < 10:
+                return self.grab_full_view()
+            rect = QRect(qx, qy, qw, qh)
+            pix = self.grab(rect)
+            if pix.isNull():
+                return self.grab_full_view()
+            return pix
+        except Exception:
+            # Any layout/transform glitch → safe fallback.
+            return self.grab_full_view()
 
 
 class PlotCanvas(FigureCanvas):

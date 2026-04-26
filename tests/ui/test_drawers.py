@@ -33,6 +33,34 @@ def test_export_sheet_constructs(qapp):
     assert sheet.get_selected() == ["speed", "torque"]  # default all-checked
 
 
+def test_batch_sheet_current_single_returns_current_preset(qapp):
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.drawers.batch_sheet import BatchSheet
+
+    preset = AnalysisPreset.from_current_single(
+        name="current fft",
+        method="fft",
+        signal=(1, "a"),
+        params={"fs": 1000.0, "nfft": 1024},
+    )
+    sheet = BatchSheet(parent=None, files={1: FakeFD()}, current_preset=preset)
+
+    selected = sheet.get_preset()
+
+    assert sheet.tabs.isTabEnabled(0)
+    assert selected.source == "current_single"
+    assert selected.signal == (1, "a")
+
+
+def test_batch_sheet_without_current_preset_starts_on_free_config(qapp):
+    from mf4_analyzer.ui.drawers.batch_sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={1: FakeFD()}, current_preset=None)
+
+    assert not sheet.tabs.isTabEnabled(0)
+    assert sheet.tabs.currentIndex() == 1
+
+
 def test_axis_lock_popover_emits(qapp, qtbot):
     from mf4_analyzer.ui.drawers.axis_lock_popover import AxisLockPopover
     p = AxisLockPopover(current='none')
