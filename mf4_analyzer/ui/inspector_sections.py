@@ -1087,7 +1087,7 @@ class OrderContextual(QWidget):
         root.addWidget(self.lbl_progress)
 
         # T6: cancel-compute button. Sits at the END of the layout so it
-        # never crowds the primary "时间-阶次 / 转速-阶次 / 阶次跟踪" buttons.
+        # never crowds the primary "时间-阶次 / 阶次跟踪" buttons.
         # ``clicked.connect(cancel_requested)`` re-emits without arguments;
         # MainWindow listens to ``cancel_requested``, not the button.
         self.btn_cancel = QPushButton("取消计算", self)
