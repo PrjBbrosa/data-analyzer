@@ -971,7 +971,6 @@ class OrderContextual(QWidget):
     """Order-analysis contextual: source/params/3 compute btns + tracking sub-group."""
 
     order_time_requested = pyqtSignal()
-    order_rpm_requested = pyqtSignal()
     order_track_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
@@ -1048,11 +1047,6 @@ class OrderContextual(QWidget):
         self.spin_time_res.setValue(0.05)
         self.spin_time_res.setSuffix(" s")
         fl.addRow("时间分辨率:", _fit_field(self.spin_time_res))
-        self.spin_rpm_res = QSpinBox()
-        self.spin_rpm_res.setRange(1, 100)
-        self.spin_rpm_res.setValue(10)
-        self.spin_rpm_res.setSuffix(" rpm")
-        fl.addRow("RPM分辨率:", _fit_field(self.spin_rpm_res))
         self.combo_nfft = QComboBox()
         self.combo_nfft.addItems(['512', '1024', '2048', '4096', '8192'])
         self.combo_nfft.setCurrentText('1024')
@@ -1063,14 +1057,10 @@ class OrderContextual(QWidget):
         # in this widget after construction.
         root.addWidget(g)
 
-        two_btns = QHBoxLayout()
         self.btn_ot = QPushButton("时间-阶次")
         self.btn_ot.setProperty("role", "primary")
-        self.btn_or = QPushButton("转速-阶次")
-        self.btn_or.setProperty("role", "primary")
-        two_btns.addWidget(self.btn_ot)
-        two_btns.addWidget(self.btn_or)
-        root.addLayout(two_btns)
+        self.btn_ot.setMinimumHeight(32)
+        root.addWidget(self.btn_ot)
 
         g = QGroupBox("阶次跟踪")
         fl = QFormLayout(g)
@@ -1109,7 +1099,6 @@ class OrderContextual(QWidget):
         root.addStretch()
 
         self.btn_ot.clicked.connect(self.order_time_requested)
-        self.btn_or.clicked.connect(self.order_rpm_requested)
         self.btn_ok.clicked.connect(self.order_track_requested)
 
         # R3 B + 2026-04-26 紧凑化 fix-3: pin labels & cap fields so
@@ -1128,7 +1117,6 @@ class OrderContextual(QWidget):
             max_order=self.spin_mo.value(),
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
-            rpm_res=self.spin_rpm_res.value(),
             nfft=self.combo_nfft.currentText(),
             target_order=self.spin_to.value(),
         )
@@ -1142,8 +1130,6 @@ class OrderContextual(QWidget):
             self.spin_order_res.setValue(float(d['order_res']))
         if 'time_res' in d:
             self.spin_time_res.setValue(float(d['time_res']))
-        if 'rpm_res' in d:
-            self.spin_rpm_res.setValue(int(d['rpm_res']))
         if 'nfft' in d:
             i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
@@ -1195,7 +1181,6 @@ class OrderContextual(QWidget):
             max_order=self.spin_mo.value(),
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
-            rpm_res=self.spin_rpm_res.value(),
             nfft=int(self.combo_nfft.currentText()),
         )
 
