@@ -1156,6 +1156,12 @@ class SpectrogramCanvas(FigureCanvas):
         # full_reset wipe them deterministically per T2's flagged note.
         self._cid_click = self.mpl_connect('button_press_event', self._on_click)
         self._cid_motion = self.mpl_connect('motion_notify_event', self._on_motion)
+        # Mouse-press tracking is used by _on_motion to short-circuit the
+        # axis-edit hover affordance during an active drag (e.g. while
+        # the user is clicking-and-dragging in the spectrogram axis).
+        self._mouse_button_pressed = False
+        self.mpl_connect('button_press_event', self._track_mouse_press)
+        self.mpl_connect('button_release_event', self._track_mouse_release)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1359,7 +1365,20 @@ class SpectrogramCanvas(FigureCanvas):
         self._plot_slice()
         self.draw_idle()
 
+    def _track_mouse_press(self, e):
+        self._mouse_button_pressed = True
+
+    def _track_mouse_release(self, e):
+        self._mouse_button_pressed = False
+
     def _on_click(self, event):
+        # Double-click on any axis (main spec OR slice) → open AxisEditDialog
+        if event.button == 1 and event.dblclick:
+            from ._axis_interaction import find_axis_for_dblclick, edit_axis_dialog
+            ax, axis = find_axis_for_dblclick(self.fig, event.x, event.y, 45)
+            if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
+                self.draw_idle()
+            return
         if self._result is None or event.inaxes is not self._ax_spec:
             return
         if event.xdata is None:
@@ -1368,6 +1387,18 @@ class SpectrogramCanvas(FigureCanvas):
         self.select_time_index(idx)
 
     def _on_motion(self, event):
+        # Axis hover affordance — fires regardless of toolbar mode, only
+        # short-circuits during active drag (mouse button currently held).
+        if not self._mouse_button_pressed:
+            from ._axis_interaction import find_axis_for_dblclick
+            from PyQt5.QtCore import Qt
+            ax, axis = find_axis_for_dblclick(self.fig, event.x, event.y, 45)
+            if ax is not None:
+                self.setCursor(Qt.PointingHandCursor)
+                self.setToolTip("双击编辑坐标轴")
+            else:
+                self.unsetCursor()
+                self.setToolTip("")
         if self._result is None or event.inaxes is not self._ax_spec:
             # Clear the readout pill when the pointer leaves the
             # spectrogram axis (or before a result has been plotted).

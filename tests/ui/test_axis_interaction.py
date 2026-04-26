@@ -176,3 +176,63 @@ def test_plot_canvas_hover_short_circuit_during_drag(qtbot):
     canvas.callbacks.process('motion_notify_event', e)
     # Cursor should NOT be PointingHandCursor since drag is active
     assert canvas.cursor().shape() != Qt.PointingHandCursor
+
+
+def test_spectrogram_canvas_dblclick_main_axis(qtbot, monkeypatch):
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+    canvas = SpectrogramCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(800, 600)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    canvas.draw()
+
+    # SpectrogramCanvas creates 2 axes (spec + slice) via gridspec; both
+    # should accept dblclick.
+    from mf4_analyzer.ui import _axis_interaction
+    hits = []
+    def fake_edit(parent, ax_, axis):
+        hits.append((ax_, axis))
+        return True
+    monkeypatch.setattr(_axis_interaction, 'edit_axis_dialog', fake_edit)
+
+    # Force the canvas to build its 2-axes layout (plot_result requires a
+    # SpectrogramResult; we instead build the gridspec directly so the
+    # test exercises only the dblclick wiring, not the rendering path).
+    canvas._ax_spec = canvas.fig.add_subplot(2, 1, 1)
+    canvas._ax_slice = canvas.fig.add_subplot(2, 1, 2)
+    canvas.draw()
+
+    main_ax = canvas._ax_spec
+    bbox = main_ax.get_window_extent()
+    from matplotlib.backend_bases import MouseEvent
+    e = MouseEvent('button_press_event', canvas, x=bbox.x0 - 30,
+                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
+    canvas.callbacks.process('button_press_event', e)
+    assert any(ax is main_ax for ax, _ in hits)
+
+
+def test_spectrogram_canvas_dblclick_slice_axis(qtbot, monkeypatch):
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+    canvas = SpectrogramCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(800, 600)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    canvas.draw()
+    from mf4_analyzer.ui import _axis_interaction
+    hits = []
+    monkeypatch.setattr(_axis_interaction, 'edit_axis_dialog',
+                        lambda p, ax, axis: (hits.append((ax, axis)), True)[1])
+
+    canvas._ax_spec = canvas.fig.add_subplot(2, 1, 1)
+    canvas._ax_slice = canvas.fig.add_subplot(2, 1, 2)
+    canvas.draw()
+
+    slice_ax = canvas._ax_slice
+    bbox = slice_ax.get_window_extent()
+    from matplotlib.backend_bases import MouseEvent
+    e = MouseEvent('button_press_event', canvas, x=bbox.x0 - 30,
+                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
+    canvas.callbacks.process('button_press_event', e)
+    assert any(ax is slice_ax for ax, _ in hits)
