@@ -105,7 +105,7 @@ class BatchSheet(QDialog):
         self.edit_name = QLineEdit("custom batch")
         form.addRow("名称:", self.edit_name)
         self.combo_method = QComboBox()
-        self.combo_method.addItems(["fft", "order_time", "order_rpm", "order_track"])
+        self.combo_method.addItems(["fft", "order_time", "order_track"])
         form.addRow("方法:", self.combo_method)
         self.edit_pattern = QLineEdit()
         self.edit_pattern.setPlaceholderText("留空=所有信号；支持包含匹配或正则")
@@ -140,10 +140,6 @@ class BatchSheet(QDialog):
         self.spin_time_res.setDecimals(3)
         self.spin_time_res.setValue(0.05)
         pf.addRow("时间分辨率:", self.spin_time_res)
-        self.spin_rpm_res = QDoubleSpinBox()
-        self.spin_rpm_res.setRange(0.1, 10000)
-        self.spin_rpm_res.setValue(10)
-        pf.addRow("RPM分辨率:", self.spin_rpm_res)
         self.spin_target = QDoubleSpinBox()
         self.spin_target.setRange(0.001, 1000)
         self.spin_target.setValue(1)
@@ -190,7 +186,6 @@ class BatchSheet(QDialog):
             "max_order": self.spin_max_order.value(),
             "order_res": self.spin_order_res.value(),
             "time_res": self.spin_time_res.value(),
-            "rpm_res": self.spin_rpm_res.value(),
             "target_order": self.spin_target.value(),
             "rpm_factor": self.spin_rpm_factor.value(),
         }
