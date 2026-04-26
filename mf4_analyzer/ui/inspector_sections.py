@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
-    QGridLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -39,8 +40,36 @@ def _preset_settings():
     return QSettings(_PRESET_ORG, _PRESET_APP)
 
 
+def _make_group_header(title, action_button=None, parent=None):
+    """Build a QFrame styled as a group title bar.
+
+    Layout: [QLabel(title)] addStretch [optional action_button].
+
+    Used in place of ``QGroupBox::title`` when a group needs an inline
+    action button (R3 #9 — rebuild_time icon moved out of the Fs row).
+    The frame carries ``objectName='inspectorGroupHeader'`` so the QSS
+    rule defined in ``style.qss`` (Inspector QFrame#inspectorGroupHeader)
+    paints the same hairline underline that ``QGroupBox::title`` uses
+    for the rest of the Inspector — see R3 #3-B.
+    """
+    frame = QFrame(parent)
+    frame.setObjectName("inspectorGroupHeader")
+    frame.setAttribute(Qt.WA_StyledBackground, True)
+    box = QHBoxLayout(frame)
+    box.setContentsMargins(0, 0, 0, 0)
+    box.setSpacing(4)
+    lbl = QLabel(title, frame)
+    lbl.setObjectName("inspectorGroupTitle")
+    box.addWidget(lbl, 0)
+    box.addStretch(1)
+    if action_button is not None:
+        action_button.setParent(frame)
+        box.addWidget(action_button, 0)
+    return frame
+
+
 class PresetBar(QWidget):
-    """Three-slot preset bar: load / save row, persisted via QSettings.
+    """Three-slot preset bar: single row of slot buttons (R3 #8).
 
     Storage format (JSON per slot)::
 
@@ -54,51 +83,86 @@ class PresetBar(QWidget):
     params dict) and ``apply_fn`` (restore params from such a dict). The bar
     emits ``acknowledged(level, msg)`` so the host can surface a toast.
 
-    Renaming / clearing are reachable via right-click on the load button.
+    The previous separate "存为 N" save row was removed — left-click on a
+    slot loads the saved preset (or, when the slot is empty, prompts to
+    save the current params), and right-click opens a menu with full
+    save / rename / clear / reset operations.
+
+    Builtin-aware mode (R3 C)
+    -------------------------
+    When ``builtin_defaults`` is supplied, each slot has a fallback dict of
+    parameters that the bar treats as the slot's "default":
+
+    - The slot button shows ``builtin_defaults[slot]['display_name']`` when
+      no user override exists (so the FFT-vs-Time bar reads as 诊断模式 /
+      幅值精度 / 高频细节 out of the box).
+    - Left-click loads either the user override (if any) or the builtin.
+    - The right-click menu adds a "重置为默认" entry that removes the
+      override and restores the builtin.
+
+    Storage key in builtin mode: ``{kind}/preset_override/{slot}`` (so the
+    namespace is independent from the legacy ``{kind}/preset/{slot}`` used
+    by the FFT / Order bars).
     """
 
     SLOTS = (1, 2, 3)
     NAME_MAX_LEN = 12
     acknowledged = pyqtSignal(str, str)  # level, message
 
-    def __init__(self, kind, collect_fn, apply_fn, parent=None):
+    def __init__(
+        self, kind, collect_fn, apply_fn, parent=None, builtin_defaults=None,
+    ):
+        """Construct a preset bar.
+
+        Parameters
+        ----------
+        kind : str
+            Namespace (e.g. ``'fft'`` / ``'order'`` / ``'fft_time'``) used
+            in the QSettings key.
+        collect_fn : callable[[], dict]
+            Returns the current params snapshot (JSON-serializable dict).
+        apply_fn : callable[[dict], None]
+            Restores a previously-saved params snapshot.
+        builtin_defaults : dict[int, dict] | None
+            Mapping ``slot -> {'display_name': str, 'params': dict}``.
+            When provided, the bar runs in builtin-aware mode (see class
+            docstring).
+        """
         super().__init__(parent)
-        self._kind = kind  # 'fft' or 'order'
+        self._kind = kind
         self._collect = collect_fn
         self._apply = apply_fn
+        self._builtins = builtin_defaults  # None => legacy mode
 
-        gl = QGridLayout(self)
-        gl.setContentsMargins(0, 0, 0, 0)
-        gl.setHorizontalSpacing(6)
-        gl.setVerticalSpacing(4)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
         self._load_btns = {}
-        self._save_btns = {}
-        for i, n in enumerate(self.SLOTS):
+        for n in self.SLOTS:
             ld = QPushButton(self._default_name(n), self)
             ld.setProperty("role", "preset-load")
             ld.setProperty("filled", "false")
             ld.setContextMenuPolicy(Qt.CustomContextMenu)
-            ld.clicked.connect(lambda _=False, slot=n: self._load(slot))
+            ld.clicked.connect(lambda _=False, slot=n: self._on_left_click(slot))
             ld.customContextMenuRequested.connect(
                 lambda pos, slot=n: self._show_menu(slot, pos)
             )
-            sv = QPushButton(f"存为 {n}", self)
-            sv.setProperty("role", "preset-save")
-            sv.setToolTip(f"把当前参数保存到「{self._default_name(n)}」槽位")
-            sv.clicked.connect(lambda _=False, slot=n: self._save(slot))
-            gl.addWidget(ld, 0, i)
-            gl.addWidget(sv, 1, i)
+            row.addWidget(ld, 1)
             self._load_btns[n] = ld
-            self._save_btns[n] = sv
         self._refresh_states()
 
     # ---- naming helpers ----
-    @staticmethod
-    def _default_name(slot):
+    def _default_name(self, slot):
+        if self._builtins and slot in self._builtins:
+            entry = self._builtins[slot]
+            if isinstance(entry, dict) and entry.get('display_name'):
+                return str(entry['display_name'])
         return f"配置 {slot}"
 
     # ---- persistence helpers ----
     def _key(self, slot):
+        if self._builtins is not None:
+            return f"{self._kind}/preset_override/{slot}"
         return f"{self._kind}/preset/{slot}"
 
     def _read(self, slot):
@@ -129,18 +193,39 @@ class PresetBar(QWidget):
     def _delete(self, slot):
         _preset_settings().remove(self._key(slot))
 
+    def _builtin_params(self, slot):
+        if not self._builtins or slot not in self._builtins:
+            return None
+        entry = self._builtins[slot]
+        if isinstance(entry, dict) and 'params' in entry:
+            return entry['params']
+        return None
+
     def _refresh_states(self):
         for n in self.SLOTS:
             entry = self._read(n)
             btn = self._load_btns[n]
             if entry is None:
-                btn.setText(self._default_name(n))
-                btn.setEnabled(False)
-                btn.setProperty("filled", "false")
-                btn.setToolTip(
-                    "（空槽位 — 用下方“存为”按钮保存当前参数；"
-                    "保存后可右键重命名 / 清空）"
-                )
+                # Empty slot. In builtin mode the slot still loads the
+                # builtin, so it is enabled and shows the builtin display
+                # name. In legacy mode the slot is enabled but reads as
+                # "＋ 配置 N" — left-click will save current params.
+                if self._builtins is not None:
+                    btn.setText(self._default_name(n))
+                    btn.setEnabled(True)
+                    btn.setProperty("filled", "false")
+                    btn.setToolTip(
+                        f"内置预设「{self._default_name(n)}」\n"
+                        "左键加载 · 右键菜单可保存当前 / 重命名 / 重置为默认"
+                    )
+                else:
+                    btn.setText(f"＋ {self._default_name(n)}")
+                    btn.setEnabled(True)
+                    btn.setProperty("filled", "false")
+                    btn.setToolTip(
+                        "空槽位 — 左键保存当前参数；右键菜单整合 "
+                        "保存 / 重命名 / 清空"
+                    )
             else:
                 name, params = entry
                 btn.setText(name)
@@ -161,9 +246,26 @@ class PresetBar(QWidget):
                 items.append(f"{k}={'是' if v else '否'}")
             else:
                 items.append(f"{k}={v}")
-        return f"{name}\n{', '.join(items)}\n（右键可重命名 / 清空）"
+        suffix = (
+            "（右键可重命名 / 重置为默认）"
+            if self._builtins is not None
+            else "（右键可重命名 / 清空）"
+        )
+        return f"{name}\n{', '.join(items)}\n{suffix}"
 
     # ---- actions ----
+    def _on_left_click(self, slot):
+        """Slot left-click: load if filled, else save current (legacy
+        mode) or load builtin (builtin mode).
+        """
+        entry = self._read(slot)
+        if entry is None and self._builtins is None:
+            # Legacy mode + empty slot → primary action is "save current".
+            self._save(slot)
+            return
+        # Filled slot OR builtin fallback → load.
+        self._load(slot)
+
     def _save(self, slot):
         try:
             params = self._collect()
@@ -179,9 +281,16 @@ class PresetBar(QWidget):
     def _load(self, slot):
         entry = self._read(slot)
         if entry is None:
-            self.acknowledged.emit("warning", f"「{self._default_name(slot)}」是空的")
-            return
-        name, params = entry
+            # In builtin mode, fall back to the builtin params.
+            params = self._builtin_params(slot)
+            if params is None:
+                self.acknowledged.emit(
+                    "warning", f"「{self._default_name(slot)}」是空的",
+                )
+                return
+            name = self._default_name(slot)
+        else:
+            name, params = entry
         try:
             self._apply(params)
         except Exception as e:
@@ -192,11 +301,15 @@ class PresetBar(QWidget):
     def _rename(self, slot):
         entry = self._read(slot)
         if entry is None:
-            # Should never reach here — menu disables rename on empty slots —
-            # but guard anyway.
-            self.acknowledged.emit("warning", "请先保存参数再重命名")
-            return
-        current, params = entry
+            # In builtin mode, allow rename of the builtin itself by
+            # promoting the builtin params into a saved override.
+            params = self._builtin_params(slot)
+            if params is None:
+                self.acknowledged.emit("warning", "请先保存参数再重命名")
+                return
+            current = self._default_name(slot)
+        else:
+            current, params = entry
         new_name, ok = QInputDialog.getText(
             self,
             "重命名配置",
@@ -234,20 +347,49 @@ class PresetBar(QWidget):
         self._refresh_states()
         self.acknowledged.emit("info", f"已清空「{name}」")
 
+    def _reset_to_default(self, slot):
+        """Builtin-aware reset: drop the user override, builtin restores
+        as the slot's effective preset on the next load.
+        """
+        if self._builtins is None:
+            return
+        self._delete(slot)
+        self._refresh_states()
+        self.acknowledged.emit(
+            "info", f"已重置为内置「{self._default_name(slot)}」",
+        )
+
     def _show_menu(self, slot, pos):
         btn = self._load_btns[slot]
         menu = QMenu(self)
+        act_save = menu.addAction("保存当前到本槽位")
         act_rename = menu.addAction("重命名…")
-        act_clear = menu.addAction("清空")
+        if self._builtins is not None:
+            act_reset = menu.addAction("重置为默认")
+            act_clear = None
+        else:
+            act_reset = None
+            act_clear = menu.addAction("清空")
         entry = self._read(slot)
-        # Both actions need a saved preset to operate on.
-        act_rename.setEnabled(entry is not None)
-        act_clear.setEnabled(entry is not None)
+        # Save is always allowed (it's the primary write path now).
+        act_save.setEnabled(True)
+        # Rename works if there's any preset — saved override OR builtin.
+        rename_target = entry is not None or self._builtin_params(slot) is not None
+        act_rename.setEnabled(rename_target)
+        if act_clear is not None:
+            act_clear.setEnabled(entry is not None)
+        if act_reset is not None:
+            # Reset only makes sense if a user override actually exists.
+            act_reset.setEnabled(entry is not None)
         chosen = menu.exec_(btn.mapToGlobal(pos))
-        if chosen is act_rename:
+        if chosen is act_save:
+            self._save(slot)
+        elif chosen is act_rename:
             self._rename(slot)
-        elif chosen is act_clear:
+        elif act_clear is not None and chosen is act_clear:
             self._clear(slot)
+        elif act_reset is not None and chosen is act_reset:
+            self._reset_to_default(slot)
 
 
 def _configure_form(form):
@@ -255,18 +397,134 @@ def _configure_form(form):
     form.setRowWrapPolicy(QFormLayout.DontWrapRows)
     form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
     form.setFormAlignment(Qt.AlignTop)
-    form.setHorizontalSpacing(8)
-    form.setVerticalSpacing(8)
+    # Compact rhythm: tightened from H=8 V=8 to H=6 V=4 (2026-04-26
+    # 紧凑化 pass) so a typical Inspector card fits more rows without
+    # scrolling on narrow screens.
+    form.setHorizontalSpacing(6)
+    form.setVerticalSpacing(4)
 
 
-def _fit_field(widget):
+def _fit_field(widget, *, max_width=None):
+    """Make ``widget`` happy in a ``QFormLayout`` field cell.
+
+    Sets size-policy to Expanding/Fixed and clears any minimumWidth so the
+    widget can shrink with the column. Optional ``max_width`` caps the
+    widget's outer width — without a cap, Expanding controls grow
+    unboundedly whenever the parent pane (splitter slot) widens, which is
+    the root cause of the "toggle a checkbox → pane visually balloons"
+    defect addressed in the 2026-04-26 紧凑化 fix-3 pass.
+    """
     widget.setMinimumWidth(0)
     widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    if max_width is not None:
+        widget.setMaximumWidth(int(max_width))
     return widget
 
 
+# 2026-04-26 R3 紧凑化 fix-3:
+# Default cap for short numeric / single-token combo fields. "0.000 s",
+# "10 rpm", "0.10", "1024" all fit in well under this width. The long-text
+# exception is the signal/source combo (combo_sig) which carries multi-token
+# user-facing labels and keeps a generous cap of _LONG_FIELD_MAX_WIDTH.
+_SHORT_FIELD_MAX_WIDTH = 110
+_LONG_FIELD_MAX_WIDTH = 260
+
+
+def _pair_field(widget_a, label_b_text, widget_b):
+    """Wrap two side-by-side controls into a single QFormLayout field.
+
+    Returns a host ``QWidget`` whose internal QHBoxLayout lays out
+    ``[widget_a, QLabel(label_b_text), widget_b]`` with tight margins, so
+    the resulting "field" still satisfies the form's label+field row
+    contract and ``QFormLayout.labelForField(host)`` resolves to the
+    row's leading label.
+    """
+    host = QWidget()
+    box = QHBoxLayout(host)
+    box.setContentsMargins(0, 0, 0, 0)
+    box.setSpacing(6)
+    box.addWidget(_fit_field(widget_a), 1)
+    inline_label = QLabel(label_b_text)
+    inline_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    box.addWidget(inline_label, 0)
+    box.addWidget(_fit_field(widget_b), 1)
+    return host
+
+
+def _enforce_label_widths(widget, *, max_field_width=None):
+    """Pin every QFormLayout label's minimumWidth to its sizeHint width
+    and (optionally) cap every uncapped field's maximumWidth.
+
+    R3 B fix for the OrderContextual case: long Chinese labels like
+    "阶次分辨率:" were getting squeezed by greedy ``QSizePolicy.Expanding``
+    fields when the Inspector pane was narrow, causing the visual label
+    column to elide / wrap. We pin minimumWidth on every label so the
+    QFormLayout's label column never shrinks below the natural label
+    text, then cap the field column so the spinner / combo no longer
+    swallows the slack.
+
+    2026-04-26 R3 紧凑化 fix-3 amendment: only apply the cap to fields
+    that are still at the default ``QWIDGETSIZE_MAX``. This lets callers
+    set a *wider* cap (e.g. ``_LONG_FIELD_MAX_WIDTH`` for a signal-name
+    combo) explicitly *before* invoking the helper, without having those
+    intentional wide caps clobbered to the helper's narrower default.
+    """
+    from PyQt5.QtWidgets import QFormLayout, QLabel
+    QWIDGETSIZE_MAX = 16777215
+    forms = widget.findChildren(QFormLayout)
+    for fl in forms:
+        for r in range(fl.rowCount()):
+            lbl_item = fl.itemAt(r, QFormLayout.LabelRole)
+            fld_item = fl.itemAt(r, QFormLayout.FieldRole)
+            if lbl_item is not None:
+                lbl = lbl_item.widget()
+                if isinstance(lbl, QLabel) and lbl.text().strip():
+                    natural = lbl.sizeHint().width()
+                    if lbl.minimumWidth() < natural:
+                        lbl.setMinimumWidth(natural)
+            if fld_item is not None and max_field_width is not None:
+                fld = fld_item.widget()
+                if fld is not None and fld.maximumWidth() >= QWIDGETSIZE_MAX:
+                    fld.setMaximumWidth(int(max_field_width))
+
+
+def _set_form_row_visible(form, field_widget, visible):
+    """Hide/show a QFormLayout row by toggling both its label and field.
+
+    Qt 5.13 added ``QFormLayout.setRowVisible`` but PyQt5 5.15.x does not
+    bind it on this build; falling back to widget-level toggling keeps
+    the row truly absent from the visual flow rather than just disabled.
+
+    For paired-field rows (`_pair_field` hosts wrapping two spin boxes
+    plus an inline label), toggling the wrapper alone leaves each inner
+    widget's own ``WA_WState_Hidden`` flag untouched, so
+    ``inner.isHidden()`` keeps returning False until the user fires the
+    toggled signal. We therefore propagate the visibility flag down to
+    the wrapper's direct child widgets so callers (and tests) see the
+    expected hidden state on every individual control.
+    """
+    field_widget.setVisible(visible)
+    for child in field_widget.findChildren(QWidget, options=Qt.FindDirectChildrenOnly):
+        child.setVisible(visible)
+    label = form.labelForField(field_widget)
+    if label is not None:
+        label.setVisible(visible)
+
+
 class PersistentTop(QWidget):
-    """Xaxis / Range / Ticks sections (always visible)."""
+    """Xaxis / Range / Ticks sections.
+
+    R3 #6: the three sections live inside a collapsible container that
+    defaults to collapsed (single-row affordance reading "▶ 图表设置 (时间轴
+    · 范围 · 刻度)"). The collapsed state is persisted via QSettings under
+    ``_SETTINGS_KEY`` so layouts survive between sessions.
+
+    All public attributes / methods documented on the class remain
+    reachable regardless of collapser state — programmatic getters / setters
+    work even while the body widget is hidden.
+    """
+
+    _SETTINGS_KEY = "inspector/persistent_top/expanded"
 
     xaxis_apply_requested = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
@@ -274,12 +532,51 @@ class PersistentTop(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         root = QVBoxLayout(self)
-        root.setSpacing(10)
+        # 紧凑化【3】: tightened from 10 → 6 (2026-04-26).
+        root.setSpacing(6)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        # ------- Collapser handle -------
+        # R3 #6: single-row toggle that reveals the inner three groups.
+        # We use QToolButton so the arrow icon is rendered natively (no
+        # painter call into icons.py for an admin affordance) and so the
+        # button gets a proper "checkable" semantics.
+        self.btn_collapser = QToolButton(self)
+        self.btn_collapser.setObjectName("inspectorCollapser")
+        self.btn_collapser.setCheckable(True)
+        self.btn_collapser.setAutoRaise(True)
+        self.btn_collapser.setText("图表设置 (时间轴 · 范围 · 刻度)")
+        self.btn_collapser.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_collapser.setArrowType(Qt.RightArrow)
+        self.btn_collapser.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed,
+        )
+        # Stylistic tweak — left-align the text so the arrow + label hug
+        # the leading edge as a normal collapser would.
+        try:
+            self.btn_collapser.setStyleSheet(
+                "QToolButton#inspectorCollapser { "
+                "  text-align: left; padding: 4px 6px; font-weight: 600; "
+                "  border: none; background: transparent; "
+                "}"
+                "QToolButton#inspectorCollapser:hover { background: #eef2f7; }"
+            )
+        except Exception:  # pragma: no cover — defensive on Qt style failures
+            pass
+        root.addWidget(self.btn_collapser)
+
+        # ------- Collapser body (the three groups live here) -------
+        self._collapser_body = QFrame(self)
+        body_lay = QVBoxLayout(self._collapser_body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(6)
+        root.addWidget(self._collapser_body)
 
         # ------- Xaxis group -------
         g = QGroupBox("横坐标")
         fl = QFormLayout(g)
         _configure_form(fl)
+        self._xaxis_form = fl
         self.combo_xaxis = QComboBox()
         self.combo_xaxis.addItems(['自动(时间)', '指定通道'])
         fl.addRow("来源:", _fit_field(self.combo_xaxis))
@@ -292,49 +589,110 @@ class PersistentTop(QWidget):
         self.btn_apply_xaxis = QPushButton("应用")
         self.btn_apply_xaxis.setProperty("role", "primary")
         fl.addRow(self.btn_apply_xaxis)
-        root.addWidget(g)
+        body_lay.addWidget(g)
 
         # ------- Range group -------
         g = QGroupBox("范围")
         fl = QFormLayout(g)
         _configure_form(fl)
+        self._range_form = fl
         self.chk_range = QCheckBox("使用选定范围")
         fl.addRow(self.chk_range)
+        # 紧凑化【1】: 开始 / 结束 share one form row.
         self.spin_start = QDoubleSpinBox()
         self.spin_start.setDecimals(3)
         self.spin_start.setSuffix(" s")
         self.spin_start.setRange(0, 1e9)
-        fl.addRow("开始:", _fit_field(self.spin_start))
         self.spin_end = QDoubleSpinBox()
         self.spin_end.setDecimals(3)
         self.spin_end.setSuffix(" s")
         self.spin_end.setRange(0, 1e9)
-        fl.addRow("结束:", _fit_field(self.spin_end))
-        root.addWidget(g)
+        self._range_row_host = _pair_field(
+            self.spin_start, "– 结束", self.spin_end,
+        )
+        fl.addRow("开始:", self._range_row_host)
+        body_lay.addWidget(g)
 
         # ------- Tick density group (§6.1 ▸ 刻度) -------
         g = QGroupBox("刻度")
         fl = QFormLayout(g)
         _configure_form(fl)
+        # 紧凑化【1】: X / Y share one form row.
         self.spin_xt = QSpinBox()
         self.spin_xt.setRange(3, 30)
         self.spin_xt.setValue(10)
-        fl.addRow("X:", _fit_field(self.spin_xt))
         self.spin_yt = QSpinBox()
         self.spin_yt.setRange(3, 20)
         self.spin_yt.setValue(6)
-        fl.addRow("Y:", _fit_field(self.spin_yt))
-        root.addWidget(g)
+        self._tick_row_host = _pair_field(
+            self.spin_xt, "Y:", self.spin_yt,
+        )
+        fl.addRow("X:", self._tick_row_host)
+        body_lay.addWidget(g)
 
         self._wire()
+        # Restore persisted collapser state (defaults to collapsed).
+        try:
+            persisted = _preset_settings().value(self._SETTINGS_KEY, False)
+            # QSettings can return strings on some platforms.
+            if isinstance(persisted, str):
+                persisted = persisted.lower() in ("true", "1", "yes")
+            initial_expanded = bool(persisted)
+        except Exception:  # pragma: no cover
+            initial_expanded = False
+        self.btn_collapser.setChecked(initial_expanded)
+        self._sync_collapser(initial_expanded)
+        # 紧凑化【2】: apply initial conditional visibility once everything
+        # is wired (so a programmatic reset before show() also lands).
+        self._update_xaxis_channel_row_visible(self.combo_xaxis.currentIndex())
+        self._update_range_rows_visible(self.chk_range.isChecked())
+
+        # 2026-04-26 R3 紧凑化 fix-3: cap the short numeric fields so toggling
+        # 使用选定范围 / 通道 visibility no longer makes the pane look wider.
+        # The label / xlabel fields keep room for representative text.
+        for sp in (self.spin_start, self.spin_end, self.spin_xt, self.spin_yt):
+            sp.setMaximumWidth(_SHORT_FIELD_MAX_WIDTH)
+        # Long-text fields: xaxis source combo + label LineEdit may host
+        # representative text; keep a generous (but not unbounded) cap.
+        for w in (self.combo_xaxis, self._combo_xaxis_ch, self.edit_xlabel):
+            w.setMaximumWidth(_LONG_FIELD_MAX_WIDTH)
 
     def _wire(self):
         self.combo_xaxis.currentIndexChanged.connect(
             lambda i: self._combo_xaxis_ch.setEnabled(i == 1)
         )
+        # 紧凑化【2】: hide (not just disable) the 通道 row when 自动(时间).
+        self.combo_xaxis.currentIndexChanged.connect(
+            self._update_xaxis_channel_row_visible
+        )
+        # 紧凑化【2】: hide 开始/结束 row entirely when range disabled.
+        self.chk_range.toggled.connect(self._update_range_rows_visible)
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
         self.spin_xt.valueChanged.connect(self._emit_ticks)
         self.spin_yt.valueChanged.connect(self._emit_ticks)
+        # R3 #6: collapser toggle reveals/hides the inner three groups
+        # and persists the choice via QSettings.
+        self.btn_collapser.toggled.connect(self._sync_collapser)
+
+    def _sync_collapser(self, expanded):
+        """Apply the collapser state to the body widget and arrow icon,
+        then persist the choice. Safe to call before show().
+        """
+        expanded = bool(expanded)
+        self._collapser_body.setVisible(expanded)
+        self.btn_collapser.setArrowType(
+            Qt.DownArrow if expanded else Qt.RightArrow,
+        )
+        try:
+            _preset_settings().setValue(self._SETTINGS_KEY, expanded)
+        except Exception:  # pragma: no cover
+            pass
+
+    def _update_xaxis_channel_row_visible(self, index):
+        _set_form_row_visible(self._xaxis_form, self._combo_xaxis_ch, index == 1)
+
+    def _update_range_rows_visible(self, checked):
+        _set_form_row_visible(self._range_form, self._range_row_host, bool(checked))
 
     def _emit_ticks(self):
         self.tick_density_changed.emit(self.spin_xt.value(), self.spin_yt.value())
@@ -417,47 +775,69 @@ class FFTContextual(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
-        root.setSpacing(10)
+        # 紧凑化【3】: tightened from 10 → 6 (2026-04-26).
+        root.setSpacing(6)
 
-        g = QGroupBox("分析信号")
-        fl = QFormLayout(g)
+        # R3 #9: build btn_rebuild *before* the analyse-signal group so we
+        # can hand it off to the group's header row instead of attaching
+        # it to the Fs form field.
+        # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24) replaces the
+        # earlier setMaximumWidth(30) — the icon stays 16x16 but the outer
+        # chrome is no longer big enough to hold two icons side-by-side.
+        self.btn_rebuild = QPushButton("")
+        self.btn_rebuild.setIcon(Icons.rebuild_time())
+        self.btn_rebuild.setIconSize(QSize(16, 16))
+        self.btn_rebuild.setFixedSize(QSize(24, 24))
+        self.btn_rebuild.setProperty("role", "tool")
+        self.btn_rebuild.setToolTip("重建时间轴")
+
+        # ---- 分析信号 (custom header so btn_rebuild docks top-right) ----
+        # 2026-04-26 R3 紧凑化 fix-2: do NOT enable WA_StyledBackground on
+        # this QFrame. Without a paired QSS rule it would render with the
+        # default white QFrame fill and break the tinted contextual card
+        # background bleed-through (see lesson
+        # 2026-04-26-inspector-content-max-width-and-tinted-card-bleed.md).
+        sig_card = QFrame(self)
+        sig_card.setObjectName("fftSignalCard")
+        sig_lay = QVBoxLayout(sig_card)
+        sig_lay.setContentsMargins(0, 0, 0, 0)
+        sig_lay.setSpacing(4)
+        sig_lay.addWidget(_make_group_header("分析信号", self.btn_rebuild))
+        fl = QFormLayout()
         _configure_form(fl)
         self.combo_sig = QComboBox()
-        fl.addRow("信号:", _fit_field(self.combo_sig))
+        # combo_sig hosts long signal names — keep the long-text cap.
+        fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
         self.spin_fs = QDoubleSpinBox()
         self.spin_fs.setRange(1, 1e6)
         self.spin_fs.setValue(1000)
         self.spin_fs.setSuffix(" Hz")
-        fs_row = QHBoxLayout()
-        fs_row.addWidget(_fit_field(self.spin_fs))
-        self.btn_rebuild = QPushButton("")
-        self.btn_rebuild.setIcon(Icons.rebuild_time())
-        self.btn_rebuild.setIconSize(QSize(16, 16))
-        self.btn_rebuild.setMaximumWidth(30)
-        self.btn_rebuild.setProperty("role", "tool")
-        self.btn_rebuild.setToolTip("重建时间轴")
-        fs_row.addWidget(self.btn_rebuild)
-        fl.addRow("Fs:", fs_row)
-        root.addWidget(g)
+        fl.addRow("Fs:", _fit_field(self.spin_fs, max_width=_SHORT_FIELD_MAX_WIDTH))
+        sig_lay.addLayout(fl)
+        root.addWidget(sig_card)
 
         g = QGroupBox("谱参数")
         fl = QFormLayout(g)
         _configure_form(fl)
+        # R3 change A: revert R1's inline 窗函数+NFFT pair — three
+        # independent rows match FFTTimeContextual's 时频参数 group.
+        # 2026-04-26 R3 紧凑化 fix-3: cap each short field so the row
+        # column never balloons when the splitter widens.
         self.combo_win = QComboBox()
         self.combo_win.addItems(
             ['hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop']
         )
-        fl.addRow("窗函数:", _fit_field(self.combo_win))
+        fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_nfft = QComboBox()
         self.combo_nfft.addItems(
             ['自动', '512', '1024', '2048', '4096', '8192', '16384']
         )
-        fl.addRow("NFFT:", _fit_field(self.combo_nfft))
+        fl.addRow("NFFT:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_overlap = QSpinBox()
         self.spin_overlap.setRange(0, 90)
         self.spin_overlap.setValue(50)
         self.spin_overlap.setSuffix(" %")
-        fl.addRow("重叠:", _fit_field(self.spin_overlap))
+        fl.addRow("重叠:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH))
         root.addWidget(g)
 
         g = QGroupBox("选项")
@@ -571,38 +951,48 @@ class OrderContextual(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
-        root.setSpacing(10)
+        # 紧凑化【3】: tightened from 10 → 6 (2026-04-26).
+        root.setSpacing(6)
 
-        g = QGroupBox("信号源")
-        fl = QFormLayout(g)
-        _configure_form(fl)
-        self.combo_sig = QComboBox()
-        fl.addRow("信号:", _fit_field(self.combo_sig))
-        self.combo_rpm = QComboBox()
-        fl.addRow("转速:", _fit_field(self.combo_rpm))
-        self.spin_fs = QDoubleSpinBox()
-        self.spin_fs.setRange(1, 1e6)
-        self.spin_fs.setValue(1000)
-        self.spin_fs.setSuffix(" Hz")
-        fs_row = QHBoxLayout()
-        fs_row.addWidget(_fit_field(self.spin_fs))
+        # R3 #9: build btn_rebuild before the signal-source group so we
+        # can dock it on the group's header row.
+        # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24).
         self.btn_rebuild = QPushButton("")
         self.btn_rebuild.setIcon(Icons.rebuild_time())
         self.btn_rebuild.setIconSize(QSize(16, 16))
-        self.btn_rebuild.setMaximumWidth(30)
+        self.btn_rebuild.setFixedSize(QSize(24, 24))
         self.btn_rebuild.setProperty("role", "tool")
         self.btn_rebuild.setToolTip("重建时间轴")
         self.btn_rebuild.clicked.connect(
             lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
         )
-        fs_row.addWidget(self.btn_rebuild)
-        fl.addRow("Fs:", fs_row)
+
+        # ---- 信号源 (custom header w/ rebuild button) ----
+        # 2026-04-26 R3 紧凑化 fix-2: WA_StyledBackground intentionally OFF.
+        sig_card = QFrame(self)
+        sig_card.setObjectName("orderSignalCard")
+        sig_lay = QVBoxLayout(sig_card)
+        sig_lay.setContentsMargins(0, 0, 0, 0)
+        sig_lay.setSpacing(4)
+        sig_lay.addWidget(_make_group_header("信号源", self.btn_rebuild))
+        fl = QFormLayout()
+        _configure_form(fl)
+        self.combo_sig = QComboBox()
+        fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
+        self.combo_rpm = QComboBox()
+        fl.addRow("转速:", _fit_field(self.combo_rpm, max_width=_LONG_FIELD_MAX_WIDTH))
+        self.spin_fs = QDoubleSpinBox()
+        self.spin_fs.setRange(1, 1e6)
+        self.spin_fs.setValue(1000)
+        self.spin_fs.setSuffix(" Hz")
+        fl.addRow("Fs:", _fit_field(self.spin_fs, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_rf = QDoubleSpinBox()
         self.spin_rf.setRange(0.0001, 10000)
         self.spin_rf.setDecimals(4)
         self.spin_rf.setValue(1)
-        fl.addRow("RPM系数:", _fit_field(self.spin_rf))
-        root.addWidget(g)
+        fl.addRow("RPM系数:", _fit_field(self.spin_rf, max_width=_SHORT_FIELD_MAX_WIDTH))
+        sig_lay.addLayout(fl)
+        root.addWidget(sig_card)
 
         g = QGroupBox("谱参数")
         fl = QFormLayout(g)
@@ -630,6 +1020,10 @@ class OrderContextual(QWidget):
         self.combo_nfft.addItems(['512', '1024', '2048', '4096', '8192'])
         self.combo_nfft.setCurrentText('1024')
         fl.addRow("FFT点数:", _fit_field(self.combo_nfft))
+        # R3 B: pin label widths and cap field widths so long Chinese
+        # labels (e.g. "阶次分辨率:") never wrap or get elided when the
+        # Inspector pane is narrow. _enforce_label_widths walks every form
+        # in this widget after construction.
         root.addWidget(g)
 
         two_btns = QHBoxLayout()
@@ -669,6 +1063,16 @@ class OrderContextual(QWidget):
         self.btn_ot.clicked.connect(self.order_time_requested)
         self.btn_or.clicked.connect(self.order_rpm_requested)
         self.btn_ok.clicked.connect(self.order_track_requested)
+
+        # R3 B + 2026-04-26 紧凑化 fix-3: pin labels & cap fields so
+        # 阶次分辨率 / 时间分辨率 / RPM分辨率 never wrap when the Inspector
+        # pane is narrow, AND short numeric spinners no longer balloon when
+        # the splitter widens. _SHORT_FIELD_MAX_WIDTH is enough for a 6-digit
+        # spinner with the suffix, and frees space for the long Chinese
+        # label column. The signal-source combos in the sig_card retain
+        # their _LONG_FIELD_MAX_WIDTH cap (set explicitly above) — the cap
+        # below applies only to the spec-param form.
+        _enforce_label_widths(self, max_field_width=_SHORT_FIELD_MAX_WIDTH)
 
     def _collect_preset(self):
         return dict(
@@ -752,3 +1156,452 @@ class OrderContextual(QWidget):
 
     def set_progress(self, text):
         self.lbl_progress.setText(text)
+
+
+class FFTTimeContextual(QWidget):
+    """FFT vs Time contextual: signal / time-frequency params / amplitude /
+    range-and-color / presets / actions.
+
+    Public surface consumed by ``Inspector`` and ``MainWindow``:
+
+    Signals
+    -------
+    - ``fft_time_requested`` — primary "compute" button click.
+    - ``force_recompute_requested`` — force-recompute (cache bypass) button.
+    - ``export_full_requested`` — export full view (spectrogram + slice).
+    - ``export_main_requested`` — export main spectrogram only.
+
+    Widgets (referenced by name from MainWindow / tests)
+    ---------------------------------------------------
+    - ``combo_sig`` — analysis signal candidate (``(fid, ch)`` userData).
+    - ``spin_fs`` — sampling frequency (Hz).
+    - ``btn_rebuild`` — relay anchor for "rebuild time axis" host action.
+    - ``combo_nfft`` / ``combo_win`` / ``spin_overlap`` /
+      ``chk_remove_mean`` — analysis parameters.
+    - ``combo_amp_mode`` — Amplitude / Amplitude dB mode.
+    - ``chk_freq_auto`` / ``spin_freq_min`` / ``spin_freq_max`` —
+      frequency range; ``spin_freq_max == 0.0`` means "use Nyquist".
+    - ``combo_dynamic`` — dynamic range (dB) selector.
+    - ``combo_cmap`` — color map selector.
+    - ``btn_compute`` — primary action; disabled iff no candidate.
+    - ``btn_force`` / ``btn_export_full`` / ``btn_export_main`` — secondary
+      actions.
+
+    ``get_params()`` returns a dict whose keys match exactly what
+    ``MainWindow._fft_time_cache_key`` expects: ``signal``, ``fs``,
+    ``nfft``, ``window``, ``overlap``, ``remove_mean``, ``amplitude_mode``,
+    ``db_reference``, ``freq_auto``, ``freq_min``, ``freq_max``,
+    ``dynamic``, ``cmap``.
+
+    Built-in presets (per design §7): ``diagnostic``, ``amplitude_accuracy``,
+    ``high_frequency``.
+    """
+
+    fft_time_requested = pyqtSignal()
+    force_recompute_requested = pyqtSignal()
+    export_full_requested = pyqtSignal()
+    export_main_requested = pyqtSignal()
+    rebuild_time_requested = pyqtSignal(object)  # anchor widget
+    signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("fftTimeContextual")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 8, 10, 8)
+        # 紧凑化【3】: tightened from 10 → 6 (2026-04-26).
+        root.setSpacing(6)
+
+        # ---- 分析信号 (R3 #9: btn_rebuild docked on header bar) ----
+        # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24).
+        self.btn_rebuild = QPushButton("")
+        self.btn_rebuild.setIcon(Icons.rebuild_time())
+        self.btn_rebuild.setIconSize(QSize(16, 16))
+        self.btn_rebuild.setFixedSize(QSize(24, 24))
+        self.btn_rebuild.setProperty("role", "tool")
+        self.btn_rebuild.setToolTip("重建时间轴")
+        self.btn_rebuild.clicked.connect(
+            lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
+        )
+        # 2026-04-26 R3 紧凑化 fix-2: WA_StyledBackground intentionally OFF.
+        sig_card = QFrame(self)
+        sig_card.setObjectName("fftTimeSignalCard")
+        sig_lay = QVBoxLayout(sig_card)
+        sig_lay.setContentsMargins(0, 0, 0, 0)
+        sig_lay.setSpacing(4)
+        sig_lay.addWidget(_make_group_header("分析信号", self.btn_rebuild))
+        fl = QFormLayout()
+        _configure_form(fl)
+        self.combo_sig = QComboBox()
+        fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
+        self.spin_fs = QDoubleSpinBox()
+        self.spin_fs.setRange(1, 1e6)
+        self.spin_fs.setValue(1000)
+        self.spin_fs.setSuffix(" Hz")
+        fl.addRow("Fs:", _fit_field(self.spin_fs, max_width=_SHORT_FIELD_MAX_WIDTH))
+        sig_lay.addLayout(fl)
+        root.addWidget(sig_card)
+
+        # ---- 时频参数 ----
+        # 2026-04-26 R3 紧凑化 fix-3: cap each short field.
+        g = QGroupBox("时频参数")
+        fl = QFormLayout(g)
+        _configure_form(fl)
+        self.combo_nfft = QComboBox()
+        self.combo_nfft.addItems(['512', '1024', '2048', '4096', '8192'])
+        self.combo_nfft.setCurrentText('2048')
+        fl.addRow("FFT 点数:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
+        self.combo_win = QComboBox()
+        self.combo_win.addItems(
+            ['hanning', 'flattop', 'hamming', 'blackman', 'kaiser', 'bartlett']
+        )
+        fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
+        self.spin_overlap = QSpinBox()
+        self.spin_overlap.setRange(0, 90)
+        self.spin_overlap.setValue(75)
+        self.spin_overlap.setSuffix(" %")
+        fl.addRow("重叠:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH))
+        self.chk_remove_mean = QCheckBox("去均值")
+        self.chk_remove_mean.setChecked(True)
+        fl.addRow(self.chk_remove_mean)
+        root.addWidget(g)
+
+        # ---- 幅值 ----
+        g = QGroupBox("幅值")
+        fl = QFormLayout(g)
+        _configure_form(fl)
+        self.combo_amp_mode = QComboBox()
+        self.combo_amp_mode.addItems(['Amplitude dB', 'Amplitude'])
+        fl.addRow("模式:", _fit_field(self.combo_amp_mode, max_width=_SHORT_FIELD_MAX_WIDTH))
+        self.spin_db_ref = QDoubleSpinBox()
+        self.spin_db_ref.setRange(1e-9, 1e9)
+        self.spin_db_ref.setDecimals(6)
+        self.spin_db_ref.setValue(1.0)
+        fl.addRow("dB 参考:", _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH))
+        root.addWidget(g)
+
+        # ---- 范围与色标 ----
+        g = QGroupBox("范围与色标")
+        fl = QFormLayout(g)
+        _configure_form(fl)
+        self._freq_form = fl
+        self.chk_freq_auto = QCheckBox("自动频率范围")
+        self.chk_freq_auto.setChecked(True)
+        fl.addRow(self.chk_freq_auto)
+        # 紧凑化【1】: 频率下限 + 上限 share one form row (label-prefix
+        # "下限:" with inline "上限:" between the two spins).
+        self.spin_freq_min = QDoubleSpinBox()
+        self.spin_freq_min.setRange(0, 1e9)
+        self.spin_freq_min.setDecimals(2)
+        self.spin_freq_min.setSuffix(" Hz")
+        self.spin_freq_min.setMaximumWidth(_SHORT_FIELD_MAX_WIDTH)
+        self.spin_freq_max = QDoubleSpinBox()
+        self.spin_freq_max.setRange(0, 1e9)
+        self.spin_freq_max.setDecimals(2)
+        self.spin_freq_max.setSuffix(" Hz")
+        # 0.0 means "use Nyquist" — see consumer in MainWindow.
+        self.spin_freq_max.setValue(0.0)
+        self.spin_freq_max.setMaximumWidth(_SHORT_FIELD_MAX_WIDTH)
+        self._freq_row_host = _pair_field(
+            self.spin_freq_min, "上限:", self.spin_freq_max,
+        )
+        fl.addRow("下限:", self._freq_row_host)
+        self.combo_dynamic = QComboBox()
+        self.combo_dynamic.addItems(['80 dB', '60 dB', 'Auto'])
+        fl.addRow("动态范围:", _fit_field(self.combo_dynamic, max_width=_SHORT_FIELD_MAX_WIDTH))
+        self.combo_cmap = QComboBox()
+        self.combo_cmap.addItems(['turbo', 'viridis', 'gray'])
+        fl.addRow("色图:", _fit_field(self.combo_cmap, max_width=_SHORT_FIELD_MAX_WIDTH))
+        root.addWidget(g)
+
+        # ---- 预设 (R3 C: builtin-aware PresetBar) ----
+        g = QGroupBox("预设")
+        gl = QVBoxLayout(g)
+        gl.setSpacing(4)
+        # The preset_bar is single-row, builtin-aware: each slot starts with
+        # its builtin display name (诊断模式 / 幅值精度 / 高频细节), left-click
+        # loads (override-or-builtin), right-click menu integrates 保存当前 /
+        # 重命名 / 重置为默认.
+        builtin_defaults = {
+            slot: {
+                'display_name': self._BUILTIN_PRESET_DISPLAY[name],
+                'params': self._builtin_preset_full_params(name),
+            }
+            for slot, name in zip(
+                (1, 2, 3),
+                ('diagnostic', 'amplitude_accuracy', 'high_frequency'),
+            )
+        }
+        self.preset_bar = PresetBar(
+            'fft_time',
+            self._collect_preset,
+            self._apply_preset,
+            parent=self,
+            builtin_defaults=builtin_defaults,
+        )
+        gl.addWidget(self.preset_bar)
+        root.addWidget(g)
+
+        # ---- 操作 ----
+        self.btn_compute = QPushButton("计算时频图")
+        self.btn_compute.setProperty("role", "primary")
+        # Disabled until a signal candidate is provided. The
+        # ``set_signal_candidates`` hook keeps this in sync with the
+        # candidate list.
+        self.btn_compute.setEnabled(False)
+        root.addWidget(self.btn_compute)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+        self.btn_force = QPushButton("强制重算")
+        self.btn_force.setProperty("role", "tool")
+        self.btn_force.setToolTip("绕过缓存并重新计算")
+        action_row.addWidget(self.btn_force)
+        self.btn_export_full = QPushButton("导出完整视图")
+        self.btn_export_full.setIcon(Icons.export())
+        self.btn_export_full.setIconSize(QSize(14, 14))
+        self.btn_export_full.setProperty("role", "tool")
+        action_row.addWidget(self.btn_export_full)
+        self.btn_export_main = QPushButton("导出主图")
+        self.btn_export_main.setIcon(Icons.export())
+        self.btn_export_main.setIconSize(QSize(14, 14))
+        self.btn_export_main.setProperty("role", "tool")
+        action_row.addWidget(self.btn_export_main)
+        root.addLayout(action_row)
+        root.addStretch()
+
+        # ---- wiring ----
+        self.btn_compute.clicked.connect(self.fft_time_requested)
+        self.btn_force.clicked.connect(self.force_recompute_requested)
+        self.btn_export_full.clicked.connect(self.export_full_requested)
+        self.btn_export_main.clicked.connect(self.export_main_requested)
+        # Auto-disable manual freq range fields when "auto" is checked.
+        self.chk_freq_auto.toggled.connect(self._update_freq_fields_enabled)
+        # 紧凑化【2】: also hide the row entirely when in auto mode.
+        self.chk_freq_auto.toggled.connect(self._update_freq_row_visible)
+        self._update_freq_fields_enabled(self.chk_freq_auto.isChecked())
+        self._update_freq_row_visible(self.chk_freq_auto.isChecked())
+
+    # ---- helpers ----
+    def _update_freq_fields_enabled(self, auto_checked):
+        manual = not bool(auto_checked)
+        self.spin_freq_min.setEnabled(manual)
+        self.spin_freq_max.setEnabled(manual)
+
+    def _update_freq_row_visible(self, auto_checked):
+        # auto checked → row hidden; manual → visible.
+        _set_form_row_visible(
+            self._freq_form, self._freq_row_host, not bool(auto_checked),
+        )
+
+    def _on_sig_index_changed(self):
+        self.signal_changed.emit(self.combo_sig.currentData())
+
+    # ---- public API consumed by MainWindow / tests ----
+    def set_signal_candidates(self, candidates):
+        """Repopulate the signal combo, preserving an existing selection
+        (matched by userData) when it remains in the new candidate list.
+
+        The compute button is enabled iff the combo ends with at least one
+        item — this hook is part of the contract verified by
+        ``test_fft_time_compute_button_tracks_signal_candidates``.
+        """
+        prev = self.combo_sig.currentData()
+        self.combo_sig.blockSignals(True)
+        self.combo_sig.clear()
+        keep_idx = -1
+        for i, (text, data) in enumerate(candidates):
+            self.combo_sig.addItem(text, data)
+            if prev is not None and data == prev:
+                keep_idx = i
+        if keep_idx >= 0:
+            self.combo_sig.setCurrentIndex(keep_idx)
+        self.combo_sig.blockSignals(False)
+        # Re-attach signal_changed listener exactly once.
+        try:
+            self.combo_sig.currentIndexChanged.disconnect(
+                self._on_sig_index_changed
+            )
+        except TypeError:
+            pass
+        self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
+        # Compute is enabled iff there is a valid candidate. This is the
+        # T2 hook the mode-plumbing tests rely on — keep it as the LAST
+        # statement so it always reflects the final combo state.
+        self.btn_compute.setEnabled(self.combo_sig.count() > 0)
+
+    def current_signal(self):
+        return self.combo_sig.currentData()
+
+    def fs(self):
+        return self.spin_fs.value()
+
+    def set_fs(self, fs):
+        self.spin_fs.blockSignals(True)
+        self.spin_fs.setValue(float(fs))
+        self.spin_fs.blockSignals(False)
+
+    def get_params(self):
+        mode = self.combo_amp_mode.currentText()
+        return dict(
+            signal=self.combo_sig.currentData(),
+            fs=self.spin_fs.value(),
+            nfft=int(self.combo_nfft.currentText()),
+            window=self.combo_win.currentText(),
+            overlap=self.spin_overlap.value() / 100.0,
+            remove_mean=self.chk_remove_mean.isChecked(),
+            amplitude_mode='amplitude_db' if 'dB' in mode else 'amplitude',
+            db_reference=self.spin_db_ref.value(),
+            freq_auto=self.chk_freq_auto.isChecked(),
+            freq_min=self.spin_freq_min.value(),
+            freq_max=self.spin_freq_max.value(),
+            dynamic=self.combo_dynamic.currentText(),
+            cmap=self.combo_cmap.currentText(),
+        )
+
+    # ---- built-in presets (design §7) ----
+    _BUILTIN_PRESETS = {
+        'diagnostic': dict(
+            window='hanning',
+            nfft=2048,
+            overlap=75,
+            amplitude_mode='Amplitude dB',
+            freq_auto=True,
+            dynamic='80 dB',
+            cmap='turbo',
+        ),
+        'amplitude_accuracy': dict(
+            window='flattop',
+            nfft=4096,
+            overlap=75,
+            amplitude_mode='Amplitude',
+            freq_auto=True,
+            dynamic='Auto',
+            cmap='viridis',
+        ),
+        'high_frequency': dict(
+            window='hanning',
+            nfft=4096,
+            overlap=50,
+            amplitude_mode='Amplitude dB',
+            freq_auto=True,
+            dynamic='60 dB',
+            cmap='turbo',
+        ),
+    }
+
+    # User-facing display names for the three builtin slots (R3 C —
+    # what the PresetBar shows on the slot button when no override exists).
+    _BUILTIN_PRESET_DISPLAY = {
+        'diagnostic': '诊断模式',
+        'amplitude_accuracy': '幅值精度',
+        'high_frequency': '高频细节',
+    }
+
+    def _builtin_preset_full_params(self, name):
+        """Return a JSON-serializable param dict for a builtin preset.
+
+        Mirrors the keys we collect in ``_collect_preset`` so the
+        builtin-aware PresetBar can save / reset / load the same shape
+        round-trip.
+        """
+        cfg = self._BUILTIN_PRESETS.get(name, {})
+        # Spread the legacy compact dict to the full collect_preset shape
+        # — fields we don't override default to "the same value the
+        # widget has at construction time" so an unspecified field doesn't
+        # silently mutate.
+        return {
+            'window': cfg.get('window', 'hanning'),
+            'nfft': cfg.get('nfft', 2048),
+            'overlap': cfg.get('overlap', 75),
+            'amplitude_mode': cfg.get('amplitude_mode', 'Amplitude dB'),
+            'remove_mean': True,
+            'db_reference': 1.0,
+            'freq_auto': cfg.get('freq_auto', True),
+            'freq_min': 0.0,
+            'freq_max': 0.0,
+            'dynamic': cfg.get('dynamic', '80 dB'),
+            'cmap': cfg.get('cmap', 'turbo'),
+        }
+
+    def _collect_preset(self):
+        """Snapshot the current time-frequency params for PresetBar save."""
+        return dict(
+            window=self.combo_win.currentText(),
+            nfft=self.combo_nfft.currentText(),
+            overlap=self.spin_overlap.value(),
+            amplitude_mode=self.combo_amp_mode.currentText(),
+            remove_mean=self.chk_remove_mean.isChecked(),
+            db_reference=self.spin_db_ref.value(),
+            freq_auto=self.chk_freq_auto.isChecked(),
+            freq_min=self.spin_freq_min.value(),
+            freq_max=self.spin_freq_max.value(),
+            dynamic=self.combo_dynamic.currentText(),
+            cmap=self.combo_cmap.currentText(),
+        )
+
+    def _apply_preset(self, d):
+        """Restore previously-saved params from PresetBar load (R3 C).
+
+        Tolerates absent keys so legacy / partial dicts (and the compact
+        builtin shape) all round-trip safely.
+        """
+        if 'window' in d:
+            i = self.combo_win.findText(str(d['window']))
+            if i >= 0:
+                self.combo_win.setCurrentIndex(i)
+        if 'nfft' in d:
+            i = self.combo_nfft.findText(str(d['nfft']))
+            if i >= 0:
+                self.combo_nfft.setCurrentIndex(i)
+        if 'overlap' in d:
+            try:
+                self.spin_overlap.setValue(int(d['overlap']))
+            except (TypeError, ValueError):
+                pass
+        if 'amplitude_mode' in d:
+            i = self.combo_amp_mode.findText(str(d['amplitude_mode']))
+            if i >= 0:
+                self.combo_amp_mode.setCurrentIndex(i)
+        if 'remove_mean' in d:
+            self.chk_remove_mean.setChecked(bool(d['remove_mean']))
+        if 'db_reference' in d:
+            try:
+                self.spin_db_ref.setValue(float(d['db_reference']))
+            except (TypeError, ValueError):
+                pass
+        if 'freq_auto' in d:
+            self.chk_freq_auto.setChecked(bool(d['freq_auto']))
+        if 'freq_min' in d:
+            try:
+                self.spin_freq_min.setValue(float(d['freq_min']))
+            except (TypeError, ValueError):
+                pass
+        if 'freq_max' in d:
+            try:
+                self.spin_freq_max.setValue(float(d['freq_max']))
+            except (TypeError, ValueError):
+                pass
+        if 'dynamic' in d:
+            i = self.combo_dynamic.findText(str(d['dynamic']))
+            if i >= 0:
+                self.combo_dynamic.setCurrentIndex(i)
+        if 'cmap' in d:
+            i = self.combo_cmap.findText(str(d['cmap']))
+            if i >= 0:
+                self.combo_cmap.setCurrentIndex(i)
+
+    def apply_builtin_preset(self, name):
+        """Apply one of the built-in presets (``'diagnostic'``,
+        ``'amplitude_accuracy'``, ``'high_frequency'``).
+
+        Retained for backward compatibility with regression tests and
+        any external regression harness — internally this delegates to
+        the PresetBar's full-params dict so the builtin-aware path and
+        the legacy method stay in sync.
+        """
+        cfg = self._BUILTIN_PRESETS.get(name)
+        if not cfg:
+            return
+        self._apply_preset(self._builtin_preset_full_params(name))

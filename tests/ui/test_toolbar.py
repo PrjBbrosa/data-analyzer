@@ -20,6 +20,7 @@ def test_toolbar_mode_changed_emits(qapp, qtbot):
 def test_toolbar_enabled_matrix(qapp):
     tb = Toolbar()
     tb.set_enabled_for_mode('time', has_file=True)
+    assert tb.btn_batch.isEnabled()
     assert tb.btn_cursor_reset.isEnabled()
     assert tb.btn_axis_lock.isEnabled()
     tb.set_enabled_for_mode('fft', has_file=True)
@@ -27,3 +28,25 @@ def test_toolbar_enabled_matrix(qapp):
     assert not tb.btn_axis_lock.isEnabled()
     tb.set_enabled_for_mode('time', has_file=False)
     assert not tb.btn_edit.isEnabled()
+    assert not tb.btn_batch.isEnabled()
+
+
+def test_toolbar_batch_requested_emits(qapp, qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    with qtbot.waitSignal(tb.batch_requested, timeout=200):
+        tb.btn_batch.click()
+
+
+def test_toolbar_exposes_fft_time_mode(qtbot):
+    from mf4_analyzer.ui.toolbar import Toolbar
+
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    seen = []
+    tb.mode_changed.connect(seen.append)
+    tb.btn_mode_fft_time.click()
+
+    assert tb.current_mode() == 'fft_time'
+    assert seen[-1] == 'fft_time'
+    assert tb.btn_mode_fft_time.text() == 'FFT vs Time'

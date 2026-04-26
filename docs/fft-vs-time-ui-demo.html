@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FFT vs Time UI Demo</title>
+  <style>
+    :root {
+      --bg: #eef2f7;
+      --panel: #f8fafc;
+      --surface: #ffffff;
+      --ink: #111827;
+      --muted: #64748b;
+      --line: #d7dee8;
+      --soft-line: #e7edf5;
+      --primary: #0f6de8;
+      --primary-2: #10a37f;
+      --warn: #d97706;
+      --danger: #dc2626;
+      --shadow: 0 24px 64px rgba(15, 23, 42, 0.14);
+      font-family: Inter, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #f8fafc 0%, #eef2f7 50%, #e5edf6 100%);
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .page {
+      width: min(1680px, calc(100vw - 36px));
+      margin: 0 auto;
+      padding: 28px 0 34px;
+    }
+
+    .brief {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 18px;
+      margin-bottom: 16px;
+      align-items: end;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .brief p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 14px;
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      border: 1px solid rgba(148, 163, 184, 0.34);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.72);
+      padding: 10px 12px;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+
+    .metric b {
+      font-size: 15px;
+    }
+
+    .window {
+      overflow: hidden;
+      min-height: 870px;
+      border: 1px solid rgba(100,116,139,0.28);
+      border-radius: 22px;
+      background: #f1f5f9;
+      box-shadow: var(--shadow);
+    }
+
+    .titlebar {
+      height: 36px;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 14px;
+      align-items: center;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,0.82);
+    }
+
+    .traffic { display: flex; gap: 8px; }
+    .traffic i {
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      display: block;
+    }
+    .traffic i:nth-child(1) { background: #ff5f57; }
+    .traffic i:nth-child(2) { background: #febc2e; }
+    .traffic i:nth-child(3) { background: #28c840; }
+    .titlebar strong { font-size: 13px; color: #334155; }
+
+    .commandbar {
+      height: 74px;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 18px;
+      align-items: center;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--soft-line);
+      background: #f3f6fb;
+    }
+
+    .cmd-group { display: flex; gap: 8px; align-items: center; }
+    .cmd-group.right { justify-content: flex-end; }
+
+    .btn {
+      height: 34px;
+      min-width: 34px;
+      padding: 0 12px;
+      border: 1px solid #cfd9e8;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #1f2937;
+      display: inline-flex;
+      gap: 7px;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 680;
+    }
+
+    .btn.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #ffffff;
+    }
+
+    .btn.icon { width: 36px; padding: 0; }
+
+    .icon {
+      width: 15px;
+      height: 15px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .segments {
+      display: flex;
+      padding: 4px;
+      border: 1px solid #d6e0ee;
+      border-radius: 10px;
+      background: #edf2f8;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.72);
+    }
+
+    .seg {
+      height: 32px;
+      min-width: 92px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: #64748b;
+      font-weight: 740;
+      display: inline-flex;
+      gap: 7px;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .seg.active {
+      color: #074ea2;
+      background: #ffffff;
+      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+    }
+
+    .workspace {
+      min-height: 726px;
+      display: grid;
+      grid-template-columns: 270px minmax(0, 1fr) 332px;
+      background: #f6f8fb;
+    }
+
+    aside {
+      min-width: 0;
+      background: #f3f6fa;
+      border-right: 1px solid var(--soft-line);
+    }
+
+    .left-head,
+    .panel-head {
+      height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--soft-line);
+    }
+
+    .left-head strong,
+    .panel-head strong,
+    .section-title {
+      font-size: 14px;
+      color: #111827;
+    }
+
+    .count {
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .filter {
+      padding: 12px;
+      border-bottom: 1px solid var(--soft-line);
+    }
+
+    .filter input {
+      width: 100%;
+      height: 36px;
+      border: 1px solid #d6e0ee;
+      border-radius: 8px;
+      padding: 0 12px;
+      color: var(--ink);
+      background: #ffffff;
+    }
+
+    .chips { display: flex; gap: 6px; margin-top: 8px; }
+    .chip {
+      height: 28px;
+      padding: 0 10px;
+      border: 1px solid #d6e0ee;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #1e293b;
+      font-size: 12px;
+      font-weight: 720;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .channel-table {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0;
+      font-size: 12px;
+    }
+
+    .channel-table div {
+      padding: 10px 12px;
+      border-bottom: 1px solid #edf2f7;
+    }
+
+    .channel-table .th {
+      color: #64748b;
+      font-weight: 760;
+      background: rgba(255,255,255,0.44);
+    }
+
+    .channel {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: #1f2937;
+      font-weight: 650;
+    }
+
+    .channel i {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 0 3px rgba(15, 109, 232, 0.12);
+    }
+
+    main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: 64px 1fr 70px;
+      background: #ffffff;
+      border-right: 1px solid var(--soft-line);
+    }
+
+    .chart-tools {
+      display: grid;
+      grid-template-columns: auto minmax(200px, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--soft-line);
+      background: #ffffff;
+    }
+
+    .tool-icons { display: flex; gap: 6px; align-items: center; }
+
+    .hint {
+      min-width: 0;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .view-switch {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .view {
+      height: 31px;
+      min-width: 48px;
+      padding: 0 12px;
+      border: 1px solid #d6e0ee;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .view.active {
+      color: #074ea2;
+      border-color: #b7d1f5;
+      background: #eef6ff;
+    }
+
+    .chart-stage {
+      position: relative;
+      overflow: hidden;
+      background: linear-gradient(#ffffff, #fbfdff);
+      padding: 16px 18px 12px 18px;
+    }
+
+    .axis-label {
+      position: absolute;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .x-label { left: 50%; bottom: 20px; transform: translateX(-50%); }
+    .y-label { left: 22px; top: 50%; transform: rotate(-90deg) translateX(-50%); transform-origin: left center; }
+    .z-label { right: 72px; top: 70px; }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border: 1px solid #e4ebf4;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .readout {
+      position: absolute;
+      left: 42px;
+      top: 28px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      max-width: calc(100% - 170px);
+    }
+
+    .readout span {
+      height: 27px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid rgba(203,213,225,0.9);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.86);
+      color: #334155;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 720;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+    }
+
+    .colorbar {
+      position: absolute;
+      right: 35px;
+      top: 86px;
+      bottom: 92px;
+      width: 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(15,23,42,0.18);
+      background: linear-gradient(to top, #14123d, #2445a8, #1f9bbe, #52c96f, #f4d84f, #f26a2e, #aa102a);
+    }
+
+    .colorbar::before,
+    .colorbar::after {
+      position: absolute;
+      left: 22px;
+      color: #64748b;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .colorbar::before { content: "-18 dB"; top: -4px; }
+    .colorbar::after { content: "-82 dB"; bottom: -4px; }
+
+    .bottom-strip {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 14px;
+      border-top: 1px solid var(--soft-line);
+      background: #ffffff;
+    }
+
+    .play {
+      width: 38px;
+      height: 38px;
+      border: 1px solid #d6e0ee;
+      border-radius: 8px;
+      background: #ffffff;
+      font-weight: 900;
+    }
+
+    .timeline {
+      height: 38px;
+      border: 1px solid #dfe7f1;
+      border-radius: 9px;
+      background: linear-gradient(90deg, rgba(15,109,232,0.12) 0 58%, transparent 58%),
+                  #fbfdff;
+      position: relative;
+    }
+
+    .timeline::after {
+      content: "";
+      position: absolute;
+      left: 58%;
+      top: -5px;
+      bottom: -5px;
+      width: 2px;
+      border-radius: 999px;
+      background: var(--primary);
+      box-shadow: 0 0 0 4px rgba(15,109,232,0.1);
+    }
+
+    .status {
+      color: #475569;
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .inspector {
+      background: #f3f6fa;
+    }
+
+    .inspector-scroll {
+      height: calc(100% - 72px);
+      overflow: hidden;
+      padding: 14px;
+    }
+
+    .group {
+      border-bottom: 1px solid #e2e8f0;
+      padding: 0 0 16px;
+      margin-bottom: 17px;
+    }
+
+    .group:last-child { border-bottom: 0; margin-bottom: 0; }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 11px;
+    }
+
+    .section-title small {
+      color: #64748b;
+      font-size: 11px;
+    }
+
+    .field {
+      display: grid;
+      grid-template-columns: 86px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 9px;
+      font-size: 13px;
+      color: #1f2937;
+      font-weight: 650;
+    }
+
+    .field input,
+    .field select {
+      width: 100%;
+      height: 34px;
+      border: 1px solid #d6e0ee;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #111827;
+      padding: 0 10px;
+    }
+
+    .toggle-row {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+
+    .toggle {
+      height: 30px;
+      padding: 0 10px;
+      border: 1px solid #d6e0ee;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .toggle.active {
+      color: #074ea2;
+      border-color: #b7d1f5;
+      background: #eef6ff;
+    }
+
+    .primary-wide {
+      width: 100%;
+      height: 42px;
+      border: 0;
+      border-radius: 8px;
+      color: #ffffff;
+      background: var(--primary);
+      font-weight: 800;
+      margin-top: 4px;
+    }
+
+    .subtle-note {
+      margin: 8px 0 0;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .foot {
+      height: 30px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 12px;
+      border-top: 1px solid var(--soft-line);
+      background: #f8fafc;
+      color: #64748b;
+      font-size: 12px;
+    }
+
+    @media (max-width: 1180px) {
+      .brief { grid-template-columns: 1fr; }
+      .workspace { grid-template-columns: 230px minmax(0, 1fr); }
+      .inspector { display: none; }
+      .commandbar { grid-template-columns: 1fr; height: auto; }
+      .segments { width: max-content; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="brief">
+      <div>
+        <h1>FFT vs Time 模块 UI Demo</h1>
+        <p>这个 mockup 展示新增时频分析后的界面组织：顶部增加 FFT vs Time，中央画布支持 2D Spectrogram / 3D Waterfall，右侧参数面板只暴露和当前模式有关的控制。</p>
+      </div>
+      <div class="metric-row">
+        <div class="metric"><span>推荐首版</span><b>2D Spectrogram</b></div>
+        <div class="metric"><span>高级视图</span><b>3D Waterfall</b></div>
+        <div class="metric"><span>交互目标</span><b>Cursor + Slice</b></div>
+      </div>
+    </div>
+
+    <div class="window">
+      <div class="titlebar">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <strong>MF4/CSV/Excel 数据分析工具 v5.1 · FFT vs Time Preview</strong>
+      </div>
+
+      <div class="commandbar">
+        <div class="cmd-group">
+          <button class="btn primary">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            添加文件
+          </button>
+          <button class="btn">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4"/></svg>
+            编辑通道
+          </button>
+          <button class="btn">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+            导出
+          </button>
+        </div>
+
+        <div class="segments">
+          <button class="seg">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M4 14c2-6 4 6 6 0s4-6 6 0 4 0 4 0"/></svg>
+            时域
+          </button>
+          <button class="seg">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M5 20V9M10 20V5M15 20v-8M20 20V3"/></svg>
+            FFT
+          </button>
+          <button class="seg active">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M4 18h16M6 15l4-7 4 4 4-9"/></svg>
+            FFT vs Time
+          </button>
+          <button class="seg">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M4 19l16-14M7 7h4v4H7zM13 13h4v4h-4z"/></svg>
+            阶次
+          </button>
+        </div>
+
+        <div class="cmd-group right">
+          <button class="btn icon" title="重置游标">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M8 8l8 8M16 8l-8 8"/></svg>
+          </button>
+          <button class="btn icon" title="锁定坐标">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="6" y="10" width="12" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="workspace">
+        <aside>
+          <div class="left-head">
+            <strong>文件</strong>
+            <span class="count">2 files</span>
+          </div>
+          <div class="filter">
+            <input value="Filter channel..." aria-label="Filter channel">
+            <div class="chips"><span class="chip">All</span><span class="chip">None</span><span class="chip">Inv</span></div>
+          </div>
+          <div class="channel-table">
+            <div class="th">Channel</div><div class="th">Pts</div>
+            <div class="channel"><i></i> Mic_L_pressure</div><div>240k</div>
+            <div class="channel"><i style="background:#10a37f"></i> Acc_Z_engine</div><div>240k</div>
+            <div class="channel"><i style="background:#d97706"></i> RPM</div><div>24k</div>
+          </div>
+        </aside>
+
+        <main>
+          <div class="chart-tools">
+            <div class="tool-icons">
+              <button class="btn icon">⌂</button>
+              <button class="btn icon">←</button>
+              <button class="btn icon">→</button>
+              <button class="btn icon">✥</button>
+              <button class="btn icon">⌕</button>
+              <button class="btn icon">⤢</button>
+              <button class="btn icon">⧉</button>
+            </div>
+            <div class="hint"><b>时频游标</b><br>移动鼠标读取时间、频率、幅值；切换到 3D 后可旋转视角，双击坐标轴编辑范围。</div>
+            <div class="view-switch">
+              <button class="view active" id="btn2d">2D</button>
+              <button class="view" id="btn3d">3D</button>
+              <button class="view">Slice</button>
+              <button class="view">Peak</button>
+            </div>
+          </div>
+
+          <div class="chart-stage">
+            <canvas id="spectrogram" width="1160" height="610"></canvas>
+            <div class="readout">
+              <span>t = 7.42 s</span>
+              <span>f = 412 Hz</span>
+              <span>A = -31.8 dB</span>
+              <span>Window Hann · NFFT 2048 · overlap 75%</span>
+            </div>
+            <div class="colorbar"></div>
+            <div class="axis-label y-label">Frequency (Hz)</div>
+            <div class="axis-label x-label">Time (s)</div>
+            <div class="axis-label z-label">Amplitude (dB)</div>
+          </div>
+
+          <div class="bottom-strip">
+            <button class="play">▶</button>
+            <div class="timeline"></div>
+            <div class="status">Mic_L_pressure · 0-24.0 s · 0-2400 Hz · 186 frames</div>
+          </div>
+        </main>
+
+        <section class="inspector">
+          <div class="panel-head">
+            <strong>FFT vs Time</strong>
+            <span class="count">实时预览</span>
+          </div>
+          <div class="inspector-scroll">
+            <div class="group">
+              <div class="section-title">分析信号 <small>source</small></div>
+              <label class="field">通道:
+                <select><option>Mic_L_pressure</option><option>Acc_Z_engine</option></select>
+              </label>
+              <label class="field">Fs:
+                <input value="10000 Hz">
+              </label>
+            </div>
+
+            <div class="group">
+              <div class="section-title">时频参数 <small>STFT</small></div>
+              <label class="field">FFT点数:
+                <select><option>2048</option><option>1024</option><option>4096</option></select>
+              </label>
+              <label class="field">窗函数:
+                <select><option>Hann</option><option>Hamming</option><option>Flat Top</option></select>
+              </label>
+              <label class="field">重叠:
+                <input value="75 %">
+              </label>
+              <label class="field">平滑:
+                <input value="2 frames">
+              </label>
+            </div>
+
+            <div class="group">
+              <div class="section-title">显示 <small>view</small></div>
+              <div class="toggle-row">
+                <button class="toggle active">Spectrogram</button>
+                <button class="toggle">Waterfall</button>
+                <button class="toggle">Top View</button>
+              </div>
+              <p class="subtle-note">2D 用于精确读数和性能；3D 用于趋势展示、报告截图和异常频带定位。</p>
+            </div>
+
+            <div class="group">
+              <div class="section-title">范围与色标 <small>scale</small></div>
+              <label class="field">频率:
+                <input value="0 - 2400 Hz">
+              </label>
+              <label class="field">动态:
+                <select><option>80 dB</option><option>60 dB</option><option>Auto</option></select>
+              </label>
+              <label class="field">色图:
+                <select><option>Turbo</option><option>Viridis</option><option>Gray</option></select>
+              </label>
+            </div>
+
+            <button class="primary-wide">计算时频图</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="foot">
+        <span>Ready</span>
+        <span>计算缓存: hit 7 / miss 2</span>
+        <span>渲染: 186 × 1024 bins</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('spectrogram');
+    const ctx = canvas.getContext('2d');
+    const btn2d = document.getElementById('btn2d');
+    const btn3d = document.getElementById('btn3d');
+    let mode = '2d';
+
+    function turbo(v) {
+      v = Math.max(0, Math.min(1, v));
+      const r = Math.floor(34 + 230 * Math.exp(-Math.pow((v - 0.75) / 0.34, 2)) + 35 * v);
+      const g = Math.floor(18 + 210 * Math.exp(-Math.pow((v - 0.55) / 0.32, 2)));
+      const b = Math.floor(72 + 180 * Math.exp(-Math.pow((v - 0.25) / 0.28, 2)) - 70 * v);
+      return `rgb(${Math.max(0, Math.min(255, r))},${Math.max(0, Math.min(255, g))},${Math.max(0, Math.min(255, b))})`;
+    }
+
+    function valueAt(t, f) {
+      const ridge1 = Math.exp(-Math.pow((f - (0.18 + 0.18 * Math.sin(t * 5.1))) / 0.035, 2));
+      const ridge2 = Math.exp(-Math.pow((f - (0.45 + 0.11 * Math.cos(t * 3.6))) / 0.05, 2));
+      const burst = Math.exp(-Math.pow((t - 0.62) / 0.055, 2)) * Math.exp(-Math.pow((f - 0.72) / 0.08, 2));
+      const texture = 0.08 * Math.sin(60 * t + 18 * f) + 0.05 * Math.cos(37 * t - 22 * f);
+      return Math.max(0, Math.min(1, 0.11 + 0.52 * ridge1 + 0.35 * ridge2 + 0.62 * burst + texture));
+    }
+
+    function frame() {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+
+      if (mode === '2d') {
+        const left = 58, right = 56, top = 34, bottom = 58;
+        const pw = w - left - right;
+        const ph = h - top - bottom;
+        const cols = 186, rows = 112;
+        for (let x = 0; x < cols; x++) {
+          for (let y = 0; y < rows; y++) {
+            const t = x / (cols - 1);
+            const f = 1 - y / (rows - 1);
+            ctx.fillStyle = turbo(valueAt(t, f));
+            ctx.fillRect(left + x * pw / cols, top + y * ph / rows, Math.ceil(pw / cols) + 1, Math.ceil(ph / rows) + 1);
+          }
+        }
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(left, top, pw, ph);
+        ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+        for (let i = 1; i < 8; i++) {
+          ctx.beginPath(); ctx.moveTo(left + pw * i / 8, top); ctx.lineTo(left + pw * i / 8, top + ph); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(left, top + ph * i / 8); ctx.lineTo(left + pw, top + ph * i / 8); ctx.stroke();
+        }
+        ctx.strokeStyle = '#0f6de8';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(left + pw * 0.58, top); ctx.lineTo(left + pw * 0.58, top + ph); ctx.stroke();
+      } else {
+        const ox = 135, oy = 480;
+        const sx = 4.7, sy = -2.0, sz = 126;
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 1;
+        for (let k = 0; k < 7; k++) {
+          ctx.beginPath();
+          ctx.moveTo(ox + k * 118, oy - k * 28);
+          ctx.lineTo(ox + 790 + k * 4, oy - 120 - k * 28);
+          ctx.stroke();
+        }
+        for (let row = 0; row < 62; row++) {
+          const t = row / 61;
+          ctx.beginPath();
+          for (let col = 0; col < 136; col++) {
+            const f = col / 135;
+            const amp = valueAt(t, f);
+            const x = ox + col * sx + row * 6.2;
+            const y = oy + col * sy - row * 2.7 - amp * sz;
+            if (col === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = turbo(0.2 + valueAt(t, 0.45) * 0.8);
+          ctx.lineWidth = row % 4 === 0 ? 1.45 : 0.8;
+          ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(255,255,255,0.72)';
+        ctx.fillRect(58, 500, 960, 34);
+      }
+
+      ctx.fillStyle = '#475569';
+      ctx.font = '12px Inter, sans-serif';
+      ctx.fillText('0', 58, h - 30);
+      ctx.fillText('24 s', w - 118, h - 30);
+      ctx.fillText('2400 Hz', 18, 42);
+      ctx.fillText('0 Hz', 28, h - 64);
+    }
+
+    btn2d.addEventListener('click', () => {
+      mode = '2d';
+      btn2d.classList.add('active');
+      btn3d.classList.remove('active');
+      frame();
+    });
+    btn3d.addEventListener('click', () => {
+      mode = '3d';
+      btn3d.classList.add('active');
+      btn2d.classList.remove('active');
+      frame();
+    });
+    frame();
+  </script>
+</body>
+</html>

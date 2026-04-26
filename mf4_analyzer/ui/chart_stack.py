@@ -101,11 +101,11 @@ class CursorPill(QFrame):
 
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
-from .canvases import PlotCanvas, TimeDomainCanvas
+from .canvases import PlotCanvas, SpectrogramCanvas, TimeDomainCanvas
 from .icons import Icons
 from .widgets import StatsStrip
 
-_MODE_TO_INDEX = {'time': 0, 'fft': 1, 'order': 2}
+_MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
 
 # Two-line hint strings shown in the right-hand region of the chart toolbar.
@@ -358,14 +358,17 @@ class ChartStack(QWidget):
         self.stack = QStackedWidget(self)
         self.canvas_time = TimeDomainCanvas(self)
         self.canvas_fft = PlotCanvas(self)
+        self.canvas_fft_time = SpectrogramCanvas(self)
         self.canvas_order = PlotCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
         self._fft_card = _ChartCard(self.canvas_fft)
+        self._fft_time_card = _ChartCard(self.canvas_fft_time)
         self._order_card = _ChartCard(self.canvas_order)
         self.stack.addWidget(self._time_card)
         self.stack.addWidget(self._fft_card)
+        self.stack.addWidget(self._fft_time_card)
         self.stack.addWidget(self._order_card)
-        for card in (self._time_card, self._fft_card, self._order_card):
+        for card in (self._time_card, self._fft_card, self._fft_time_card, self._order_card):
             card.copy_image_requested.connect(
                 lambda c=card: self._copy_card_image(c)
             )
@@ -418,6 +421,7 @@ class ChartStack(QWidget):
     def full_reset_all(self):
         self.canvas_time.full_reset()
         self.canvas_fft.full_reset()
+        self.canvas_fft_time.full_reset()
         self.canvas_order.full_reset()
 
     def _copy_card_image(self, card):

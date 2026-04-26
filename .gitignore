@@ -1,4 +1,43 @@
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# macOS
+.DS_Store
+
+# Local Claude / superpowers state
+.claude/
 .superpowers/
+
+# Local sample data (not part of the repo's own tests)
+testdoc/
+
+# Local secrets / dotenv
+.env
+.env.*
+
+# Backup of pre-restore orphan repo (kept locally for safety)
+.git.local-orphan/

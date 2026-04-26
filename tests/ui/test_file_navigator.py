@@ -112,6 +112,28 @@ def test_channel_inv_button_toggles(qapp, qtbot):
     assert fi.child(1).checkState(0) == Qt.Checked
 
 
+def test_navigator_tool_buttons_outer_size_compact(qapp):
+    """fix-4 — file-navigator close + kebab buttons must shrink their
+    outer chrome to <=24px on both axes (icon size kept at 16px)."""
+    nav = FileNavigator()
+    nav.add_file("f0", FakeFd())
+    row = nav._rows["f0"]
+    # Close button on a file row.
+    assert row._btn_close.maximumWidth() <= 24, (
+        f"_btn_close maxWidth={row._btn_close.maximumWidth()} > 24"
+    )
+    assert row._btn_close.maximumHeight() <= 24, (
+        f"_btn_close maxHeight={row._btn_close.maximumHeight()} > 24"
+    )
+    # Kebab button in the file-area header.
+    assert nav._btn_kebab.maximumWidth() <= 24, (
+        f"_btn_kebab maxWidth={nav._btn_kebab.maximumWidth()} > 24"
+    )
+    assert nav._btn_kebab.maximumHeight() <= 24, (
+        f"_btn_kebab maxHeight={nav._btn_kebab.maximumHeight()} > 24"
+    )
+
+
 def test_channel_over_threshold_warns(qapp, qtbot, monkeypatch):
     # Craft a FakeFd with many channels to trigger the >8 warn.
     class WideFd(FakeFd):

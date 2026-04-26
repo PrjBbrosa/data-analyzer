@@ -11,8 +11,9 @@ class Toolbar(QWidget):
     file_add_requested = pyqtSignal()
     channel_editor_requested = pyqtSignal()
     export_requested = pyqtSignal()
+    batch_requested = pyqtSignal()
     # Center segment
-    mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'order'
+    mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
     # Right segment
     cursor_reset_requested = pyqtSignal()
     axis_lock_requested = pyqtSignal(object)  # anchor QPushButton for popover
@@ -37,10 +38,14 @@ class Toolbar(QWidget):
         self.btn_edit.setIcon(Icons.edit_channels())
         self.btn_export = QPushButton("导出", self)
         self.btn_export.setIcon(Icons.export())
+        self.btn_batch = QPushButton("批处理", self)
+        self.btn_batch.setIcon(Icons.export())
         self.btn_mode_time = QPushButton("时域", self)
         self.btn_mode_time.setIcon(Icons.mode_time())
         self.btn_mode_fft = QPushButton("FFT", self)
         self.btn_mode_fft.setIcon(Icons.mode_fft())
+        self.btn_mode_fft_time = QPushButton("FFT vs Time", self)
+        self.btn_mode_fft_time.setIcon(Icons.mode_fft_time())
         self.btn_mode_order = QPushButton("阶次", self)
         self.btn_mode_order.setIcon(Icons.mode_order())
         self.btn_cursor_reset = QPushButton("", self)
@@ -52,12 +57,13 @@ class Toolbar(QWidget):
         self.btn_axis_lock.setToolTip("轴锁定")
         self.btn_axis_lock.setProperty("role", "tool")
 
-        for b in (self.btn_add, self.btn_edit, self.btn_export,
-                  self.btn_mode_time, self.btn_mode_fft, self.btn_mode_order,
+        for b in (self.btn_add, self.btn_edit, self.btn_export, self.btn_batch,
+                  self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
+                  self.btn_mode_order,
                   self.btn_cursor_reset, self.btn_axis_lock):
             b.setIconSize(QSize(16, 16))
 
-        for b in (self.btn_add, self.btn_edit, self.btn_export):
+        for b in (self.btn_add, self.btn_edit, self.btn_export, self.btn_batch):
             left.addWidget(b)
 
         segment_frame = QFrame(self)
@@ -65,7 +71,10 @@ class Toolbar(QWidget):
         segment_frame.setLayout(center)
         self._mode_group = QButtonGroup(self)
         self._mode_group.setExclusive(True)
-        for key, b in [('time', self.btn_mode_time), ('fft', self.btn_mode_fft), ('order', self.btn_mode_order)]:
+        for key, b in [('time', self.btn_mode_time),
+                       ('fft', self.btn_mode_fft),
+                       ('fft_time', self.btn_mode_fft_time),
+                       ('order', self.btn_mode_order)]:
             b.setCheckable(True)
             b.setProperty("segment", key)
             self._mode_group.addButton(b)
@@ -88,7 +97,11 @@ class Toolbar(QWidget):
         self.btn_add.clicked.connect(self.file_add_requested)
         self.btn_edit.clicked.connect(self.channel_editor_requested)
         self.btn_export.clicked.connect(self.export_requested)
-        for key, b in [('time', self.btn_mode_time), ('fft', self.btn_mode_fft), ('order', self.btn_mode_order)]:
+        self.btn_batch.clicked.connect(self.batch_requested)
+        for key, b in [('time', self.btn_mode_time),
+                       ('fft', self.btn_mode_fft),
+                       ('fft_time', self.btn_mode_fft_time),
+                       ('order', self.btn_mode_order)]:
             b.clicked.connect(lambda _=False, k=key: self._set_mode(k))
         self.btn_cursor_reset.clicked.connect(self.cursor_reset_requested)
         self.btn_axis_lock.clicked.connect(lambda: self.axis_lock_requested.emit(self.btn_axis_lock))
@@ -98,7 +111,12 @@ class Toolbar(QWidget):
             return
         self._current_mode = mode
         # Sync checked state in case this was called programmatically
-        mapping = {'time': self.btn_mode_time, 'fft': self.btn_mode_fft, 'order': self.btn_mode_order}
+        mapping = {
+            'time': self.btn_mode_time,
+            'fft': self.btn_mode_fft,
+            'fft_time': self.btn_mode_fft_time,
+            'order': self.btn_mode_order,
+        }
         if mode in mapping:
             mapping[mode].setChecked(True)
         self.mode_changed.emit(mode)
@@ -107,6 +125,7 @@ class Toolbar(QWidget):
         """Implements the §7.1 enabled-state matrix."""
         self.btn_edit.setEnabled(has_file)
         self.btn_export.setEnabled(has_file)
+        self.btn_batch.setEnabled(has_file)
         is_time = (mode == 'time')
         self.btn_cursor_reset.setEnabled(has_file and is_time)
         self.btn_axis_lock.setEnabled(has_file and is_time)

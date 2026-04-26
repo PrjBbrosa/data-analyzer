@@ -19,10 +19,62 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer, OrderAnalyzer
+
+
+class FFTTimeWorker(QObject):
+    """Run :class:`SpectrogramAnalyzer.compute` on a worker QThread.
+
+    Plan Task 7. The worker is a plain ``QObject`` (NOT a QThread
+    subclass); the canonical Qt pattern is to instantiate the worker on
+    the main thread, ``moveToThread(thread)``, and connect
+    ``thread.started`` to ``worker.run``. ``finished``/``failed`` both
+    quit the thread; the cleanup chain
+    (``thread.finished -> worker.deleteLater`` /
+    ``thread.deleteLater``) keeps the QThread from leaking.
+
+    The analyzer's ``compute()`` polls ``cancel_token`` at the top of
+    every frame (see ``signal/spectrogram.py``); flipping
+    ``self._cancelled`` via :meth:`cancel` is the only way to stop a
+    running compute mid-loop.
+    """
+
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, sig, t, params, channel_name, unit):
+        super().__init__()
+        self.sig = sig
+        self.t = t
+        self.params = params
+        self.channel_name = channel_name
+        self.unit = unit
+        self._cancelled = False
+
+    def cancel(self):
+        """Flip the cancel flag; ``compute`` polls it at every frame."""
+        self._cancelled = True
+
+    def run(self):
+        from ..signal import SpectrogramAnalyzer
+        try:
+            result = SpectrogramAnalyzer.compute(
+                self.sig,
+                self.t,
+                self.params,
+                channel_name=self.channel_name,
+                unit=self.unit,
+                progress_callback=self.progress.emit,
+                cancel_token=lambda: self._cancelled,
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        else:
+            self.finished.emit(result)
 
 
 class MainWindow(QMainWindow):
@@ -35,6 +87,24 @@ class MainWindow(QMainWindow):
         self.files = OrderedDict();
         self._fc = 0;
         self._active = None
+        # FFT vs Time LRU cache (Plan Task 6). Keys are produced by
+        # ``_fft_time_cache_key`` from compute-relevant fields ONLY —
+        # display options (amplitude_mode, cmap, dynamic, freq_*) do
+        # not participate, so toggling them re-renders without
+        # recomputing. Capacity 12 = enough to hold a typical
+        # diagnostic / amplitude / high-frequency preset sweep.
+        # Invalidation lives in T7 (file-load / close / channel-edit /
+        # custom-x / rebuild paths); no clear() calls in this task.
+        self._fft_time_cache = OrderedDict()
+        self._fft_time_cache_capacity = 12
+        # FFT vs Time worker thread (Plan Task 7). Both refs are set
+        # in ``do_fft_time`` when a compute is enqueued and cleared in
+        # ``_on_fft_time_thread_done`` when the QThread reports
+        # ``finished``. Re-entry guard in ``do_fft_time`` consults
+        # ``_fft_time_thread.isRunning()``.
+        self._fft_time_thread = None
+        self._fft_time_worker = None
+        self._last_batch_preset = None
         self._init_ui();
         self._connect()
 
@@ -63,7 +133,12 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.navigator)
         splitter.addWidget(self.chart_stack)
         splitter.addWidget(self.inspector)
-        splitter.setSizes([250, 900, 300])
+        # 2026-04-26 R3 紧凑化 fix-5: align inspector default size with
+        # Inspector._scroll_body.maximumWidth (360); the 60px bump from
+        # 300→360 prevents a visible gap on first launch where the splitter
+        # would otherwise hand the inspector less width than its capped
+        # content needs.
+        splitter.setSizes([250, 900, 360])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
         splitter.setCollapsible(2, False)
@@ -78,6 +153,7 @@ class MainWindow(QMainWindow):
         self.canvas_time = self.chart_stack.canvas_time
         self.canvas_fft = self.chart_stack.canvas_fft
         self.canvas_order = self.chart_stack.canvas_order
+        self.canvas_fft_time = self.chart_stack.canvas_fft_time
         self.channel_list = self.navigator.channel_list
 
         from PyQt5.QtWidgets import QStatusBar
@@ -107,6 +183,7 @@ class MainWindow(QMainWindow):
         self.toolbar.file_add_requested.connect(self.load_files)
         self.toolbar.channel_editor_requested.connect(self.open_editor)
         self.toolbar.export_requested.connect(self.export_excel)
+        self.toolbar.batch_requested.connect(self.open_batch)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.toolbar.cursor_reset_requested.connect(self._reset_cursors)
         self.toolbar.axis_lock_requested.connect(self._show_axis_lock_popover)
@@ -142,6 +219,38 @@ class MainWindow(QMainWindow):
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.inspector.signal_changed.connect(self._on_inspector_signal_changed)
 
+        # FFT vs Time wiring (Plan Task 6 + Task 9 export).
+        # The Inspector relays compute / force / export buttons.
+        self.inspector.fft_time_requested.connect(
+            lambda: self.do_fft_time(force=False)
+        )
+        self.inspector.fft_time_force_requested.connect(
+            lambda: self.do_fft_time(force=True)
+        )
+        # Export buttons → clipboard pixmap (Plan Task 9).
+        self.inspector.fft_time_export_full_requested.connect(
+            lambda: self._copy_fft_time_image(mode='full')
+        )
+        self.inspector.fft_time_export_main_requested.connect(
+            lambda: self._copy_fft_time_image(mode='main')
+        )
+        # Fs auto-sync for fft_time_ctx — mirrors what
+        # _on_inspector_signal_changed does for fft / order via the
+        # original Inspector.signal_changed channel. Routed through the
+        # T6 reviewer Important #2 relay so the panel's Fs spinbox
+        # tracks the selected signal's source-file Fs.
+        self.inspector.fft_time_signal_changed.connect(
+            self._on_fft_time_signal_changed
+        )
+        # Hover readout: surface SpectrogramCanvas.cursor_info in the
+        # status bar (reviewer Important #1; design §6.4 mouse-move
+        # readout). Pattern matches canvas_time.cursor_info → ChartStack
+        # CursorPill — the pill is gated to time mode, so the spectrogram
+        # canvas reuses the status bar instead of cloning the pill.
+        self.canvas_fft_time.cursor_info.connect(
+            self._on_fft_time_cursor_info
+        )
+
         # Populate xaxis channel candidates whenever user flips to 'channel' mode.
         self.inspector.top.combo_xaxis.currentIndexChanged.connect(
             lambda i: self._on_xaxis_mode_changed('channel' if i == 1 else 'time')
@@ -152,6 +261,14 @@ class MainWindow(QMainWindow):
         self._custom_xaxis_fid = None
         self._custom_xaxis_ch = None
         self._axis_lock_widget = None
+        # Phase 1 item 4: track range-filter and plot-mode state across
+        # plot_time() calls so we can fire the appropriate envelope-cache
+        # invalidation when either changes (the cache is keyed on raw
+        # (data_id, channel, xlim, pixel_width) and does NOT know whether
+        # the source arrays were range-filtered or which plot layout was
+        # active when the entry was inserted).
+        self._last_range_state = None   # (enabled, lo, hi) or None
+        self._last_plot_mode = None     # 'overlay' / 'subplot' / None
 
     def _on_mode_changed(self, mode):
         self.chart_stack.set_mode(mode)
@@ -192,15 +309,31 @@ class MainWindow(QMainWindow):
         pop.show_at(anchor)
 
     def _show_rebuild_popover(self, anchor, mode='fft'):
+        """Open the 重建时间轴 modal popover for the active selection.
+
+        Returns ``True`` only when the user clicked Accept AND the
+        time-axis rebuild side-effects ran (Fs pushed to contextuals,
+        per-fid FFT vs Time cache cleared, status/toast emitted).
+        Returns ``False`` on early bailout (no selectable signal) and
+        on user cancel (``QDialog.Rejected``). Existing slot callers
+        ignore the return; T11 (non-uniform UX fix) consumes it to
+        decide whether to auto-retry the FFT vs Time compute.
+        """
         from PyQt5.QtWidgets import QDialog
         if mode == 'fft':
             sig_data = self.inspector.fft_ctx.current_signal()
+        elif mode == 'fft_time':
+            # T5 flagged: fft_time_ctx is the source of truth for the
+            # FFT vs Time panel's 重建时间轴 button. Without this branch
+            # the popover would query order_ctx (wrong selection) when
+            # the relay fires with mode='fft_time'.
+            sig_data = self.inspector.fft_time_ctx.current_signal()
         else:
             sig_data = self.inspector.order_ctx.current_signal()
         target_fid = sig_data[0] if sig_data and sig_data[0] in self.files else self._active
         if not target_fid or target_fid not in self.files:
             self.toast("请先选择信号", "warning")
-            return
+            return False
         fd = self.files[target_fid]
         from .drawers.rebuild_time_popover import RebuildTimePopover
         pop = RebuildTimePopover(self, fd.filename, fd.fs)
@@ -212,7 +345,16 @@ class MainWindow(QMainWindow):
             new_max = fd.time_array[-1] if len(fd.time_array) else 0
             current_hi = self.inspector.top.spin_end.maximum()
             self.inspector.top.set_range_limits(0, max(current_hi, new_max))
-            for ctx in (self.inspector.fft_ctx, self.inspector.order_ctx):
+            # FFT vs Time cache: rebuilding the time axis changes both
+            # ``time_range`` and the per-frame timing of cached
+            # SpectrogramResults for this fid. Targeted clear so other
+            # files' cached entries are preserved.
+            self._fft_time_cache_clear_for_fid(target_fid)
+            for ctx in (
+                self.inspector.fft_ctx,
+                self.inspector.fft_time_ctx,
+                self.inspector.order_ctx,
+            ):
                 sig_data = ctx.current_signal()
                 if sig_data is not None and sig_data[0] == target_fid:
                     ctx.set_fs(new_fs)
@@ -224,6 +366,8 @@ class MainWindow(QMainWindow):
                 f"已重建时间轴 · Fs={new_fs}",
                 "success",
             )
+            return True
+        return False
 
     def _on_inspector_signal_changed(self, mode, data):
         """Fs auto-sync per §6.3: spin_fs reflects selected signal's source file Fs."""
@@ -238,6 +382,17 @@ class MainWindow(QMainWindow):
         elif mode == 'order':
             self.inspector.order_ctx.set_fs(fs)
 
+    def _on_fft_time_signal_changed(self, data):
+        """Fs auto-sync for the FFT vs Time panel — mirrors the
+        ``_on_inspector_signal_changed`` Fs behavior for the
+        ``fft_time_ctx`` route. Reviewer Important #2 hand-off."""
+        if not data:
+            return
+        fid, _ch = data
+        if fid not in self.files:
+            return
+        self.inspector.fft_time_ctx.set_fs(self.files[fid].fs)
+
     def set_active_file(self, fid):
         """Public entrypoint matching §12.1 contract."""
         self._on_file_activated(fid)
@@ -249,7 +404,11 @@ class MainWindow(QMainWindow):
             fd = self.files[fid]
             # Only push Fs to each contextual if its signal dropdown points at
             # the active file (or has no selection yet). Per §6.3 Fs rule.
-            for ctx in (self.inspector.fft_ctx, self.inspector.order_ctx):
+            for ctx in (
+                self.inspector.fft_ctx,
+                self.inspector.fft_time_ctx,
+                self.inspector.order_ctx,
+            ):
                 sig_data = ctx.current_signal()
                 if sig_data is None or sig_data[0] == fid:
                     ctx.set_fs(fd.fs)
@@ -263,7 +422,12 @@ class MainWindow(QMainWindow):
         self._close(fid)
 
     def _on_close_all_requested(self):
-        # Navigator already confirmed; skip the second confirm here
+        # Navigator already confirmed; skip the second confirm here.
+        # FFT vs Time cache wipe is also performed inside ``close_all``;
+        # mirroring it here keeps the invariant local to the dispatcher
+        # so future refactors that bypass ``close_all`` (e.g. a partial
+        # close-all flow) still tear the cache down.
+        self._fft_time_cache.clear()
         self.close_all()
 
     def _on_xaxis_mode_changed(self, mode):
@@ -315,6 +479,18 @@ class MainWindow(QMainWindow):
             self._custom_xaxis_ch = ch
             self._custom_xlabel = self.inspector.top.xaxis_label() or ch
 
+        # Cache invalidation site 5: the t-array bound to every plotted
+        # channel just changed (time-axis ↔ custom-channel x-axis), so
+        # every (data_id, channel, xlim, pixel_width) entry is now stale.
+        # Monotonicity cache is also re-keyed by the new fid/ch pair, so
+        # wipe it to be safe.
+        self.canvas_time.invalidate_envelope_cache("custom-x changed")
+        self.canvas_time.invalidate_monotonicity_cache()
+        # FFT vs Time cache: custom-x semantics shift the time_range
+        # interpretation for every fid that the user might subsequently
+        # compute against; wholesale clear is safe at capacity 12 and
+        # matches T5's recommendation in the cache-invalidation handoff.
+        self._fft_time_cache.clear()
         # 重新绘图
         self.plot_time()
         self.statusBar.showMessage(f"横坐标已更新")
@@ -352,6 +528,14 @@ class MainWindow(QMainWindow):
             fd = FileData(fp, data, chs, units, len(self.files));
             self.files[fid] = fd
             self.navigator.add_file(fid, fd)
+            # Cache invalidation site 1: a new file's data_id is now in
+            # play. Drop everything — channel selections will redraw.
+            self.canvas_time.invalidate_envelope_cache("file loaded")
+            self.canvas_time.invalidate_monotonicity_cache()
+            # FFT vs Time cache: scrub any stale entries that share this
+            # freshly minted fid (defensive; fid is monotonic per-session
+            # but the helper is cheap and keeps the invariant tight).
+            self._fft_time_cache_clear_for_fid(fid)
             self._update_combos()
             if fd.time_array is not None and len(fd.time_array):
                 current_hi = self.inspector.top.spin_end.maximum()
@@ -373,6 +557,18 @@ class MainWindow(QMainWindow):
     def _close(self, fid):
         if fid not in self.files: return
         name = self.files[fid].short_name
+        # Cache invalidation site 2: drop entries for this file before
+        # we discard the FileData — capture fid so the per-data_id filter
+        # can match. Same for the monotonicity cache (custom-x source
+        # may also be this file).
+        self.canvas_time.invalidate_envelope_cache(
+            "file closed", data_id=fid
+        )
+        self.canvas_time.invalidate_monotonicity_cache(custom_xaxis_fid=fid)
+        # FFT vs Time cache: per-file targeted clear — the source ndarray
+        # is about to be released, so any cached SpectrogramResult keyed
+        # under this fid is now strictly stale.
+        self._fft_time_cache_clear_for_fid(fid)
         del self.files[fid]
         self.navigator.remove_file(fid)
         self._active = self.navigator._active_fid  # navigator picks fallback
@@ -385,6 +581,11 @@ class MainWindow(QMainWindow):
         if not self.files:
             return
         n = len(self.files)
+        # Cache invalidation site 2 (close-all variant): wipe everything.
+        self.canvas_time.invalidate_envelope_cache("all files closed")
+        self.canvas_time.invalidate_monotonicity_cache()
+        # FFT vs Time cache: every entry is keyed against a now-dead fid.
+        self._fft_time_cache.clear()
         for fid in list(self.files.keys()):
             del self.files[fid]
             self.navigator.remove_file(fid)
@@ -456,10 +657,16 @@ class MainWindow(QMainWindow):
                 sig_cands.append((px + ch, (fid, ch)))
                 rpm_cands.append((px + ch, (fid, ch)))
         self.inspector.fft_ctx.set_signal_candidates(sig_cands)
+        self.inspector.fft_time_ctx.set_signal_candidates(sig_cands)
         self.inspector.order_ctx.set_signal_candidates(sig_cands)
         self.inspector.order_ctx.set_rpm_candidates(rpm_cands)
 
     def _ch_changed(self):
+        # Cache invalidation site 4: the visible channel set changed, so
+        # the Line2D map plot_channels rebuilds will not match the cache
+        # entries from the prior selection. Drop everything; the next
+        # plot_time() will re-prime as needed.
+        self.canvas_time.invalidate_envelope_cache("selection changed")
         if self.files and self.chart_stack.current_mode() == 'time':
             self.plot_time()
 
@@ -474,6 +681,14 @@ class MainWindow(QMainWindow):
         if not checked: self.canvas_time.clear(); self.canvas_time.draw(); self.chart_stack.stats_strip.update_stats({}); return
 
         mode = self.chart_stack.plot_mode()
+        # Cache invalidation site 7: structural plot-mode change (overlay
+        # ↔ subplot) reuses the same (data_id, channel) keys but the line
+        # ownership switches between an axes-stack and a single ax with
+        # twinx siblings. To keep cached envelopes from rendering on the
+        # wrong axes, drop them when the layout changes.
+        if self._last_plot_mode is not None and self._last_plot_mode != mode:
+            self.canvas_time.invalidate_envelope_cache("plot mode changed")
+        self._last_plot_mode = mode
         if mode == 'overlay' and len(checked) > 5:
             ans = QMessageBox.question(
                 self, "确认",
@@ -482,16 +697,35 @@ class MainWindow(QMainWindow):
             if ans != QMessageBox.Yes:
                 return
 
-        # 获取自定义横坐标数据
+        # 获取自定义横坐标数据。
+        # Phase 1 item 3: avoid `.values.copy()` — `to_numpy(copy=False)`
+        # returns the underlying buffer when pandas can; for object /
+        # extension dtypes it may still copy, which is acceptable.
+        # Consumers (TimeDomainCanvas, statistics) treat these arrays as
+        # read-only. The downstream range-filter mask makes a fresh
+        # array via fancy indexing, so no caller mutates `custom_x`.
         custom_x = None
         if self._custom_xaxis_fid and self._custom_xaxis_ch:
             if self._custom_xaxis_fid in self.files:
                 xfd = self.files[self._custom_xaxis_fid]
                 if self._custom_xaxis_ch in xfd.data.columns:
-                    custom_x = xfd.data[self._custom_xaxis_ch].values.copy()
+                    custom_x = xfd.data[self._custom_xaxis_ch].to_numpy(copy=False)
 
         range_enabled = self.inspector.top.range_enabled()
         range_lo, range_hi = self.inspector.top.range_values()
+        # Cache invalidation site 6: the range-filter materializes fresh
+        # `t[m]`, `sig[m]` arrays whose contents differ from the
+        # full-series buffers cached under the same (data_id, channel)
+        # key. Whenever the (enabled, lo, hi) tuple flips, drop cached
+        # entries so the next refresh re-primes against the current
+        # filtered slice.
+        cur_range_state = (
+            (range_enabled, range_lo, range_hi) if range_enabled else (False,)
+        )
+        if (self._last_range_state is not None
+                and self._last_range_state != cur_range_state):
+            self.canvas_time.invalidate_envelope_cache("range filter changed")
+        self._last_range_state = cur_range_state
 
         data = [];
         st = {}
@@ -499,20 +733,25 @@ class MainWindow(QMainWindow):
             fd = self.channel_list.get_file_data(fid)
             if fd is None or ch not in fd.data.columns: continue
 
-            # 使用自定义横坐标或默认时间轴
+            # 使用自定义横坐标或默认时间轴 — by reference; the canvas
+            # treats these arrays as read-only.
             if custom_x is not None and len(custom_x) == len(fd.data):
-                t = custom_x.copy()
+                t = custom_x
             else:
-                t = fd.time_array.copy()
+                t = fd.time_array
 
-            sig = fd.data[ch].values.copy()
+            sig = fd.data[ch].to_numpy(copy=False)
             unit = fd.channel_units.get(ch, '');
             name = fd.get_prefixed_channel(ch)
+            # Only allocate filtered arrays when the user actually asked
+            # for range filtering — otherwise pass the originals through.
             if range_enabled:
                 m = (t >= range_lo) & (t <= range_hi)
                 t, sig = t[m], sig[m]
             if len(sig) == 0: continue
-            data.append((name, True, t, sig, color, unit))
+            # Statistics are computed from the (post-range-filter)
+            # original samples — never from envelope output.
+            data.append((name, True, t, sig, color, unit, fid))
             st[name] = {'min': np.min(sig), 'max': np.max(sig), 'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
                         'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit}
         if not data: self.canvas_time.clear(); self.canvas_time.draw(); self.chart_stack.stats_strip.update_stats({}); return
@@ -538,6 +777,23 @@ class MainWindow(QMainWindow):
 
     def _apply_channel_edits(self, fid, new_channels, removed_channels):
         fd = self.files[fid]
+        # Cache invalidation site 3: each touched channel's underlying
+        # ndarray identity may have changed (added) or vanished (removed).
+        # `fd.get_prefixed_channel(...)` is what plot_channels stashes
+        # under self.channel_data, so use that as the cache key.
+        # FFT vs Time cache: any cached SpectrogramResult keyed under
+        # this fid was computed against pre-edit columns; targeted clear.
+        self._fft_time_cache_clear_for_fid(fid)
+        for name in list(new_channels.keys()) + list(removed_channels):
+            prefixed = fd.get_prefixed_channel(name)
+            self.canvas_time.invalidate_envelope_cache(
+                "channel edited", data_id=fid, channel=prefixed
+            )
+            # If the user edited the column currently used as the custom
+            # x-axis source, drop its monotonicity cache too.
+            self.canvas_time.invalidate_monotonicity_cache(
+                custom_xaxis_fid=fid, custom_xaxis_ch=name
+            )
         for name, (arr, unit) in new_channels.items():
             fd.data[name] = arr
             fd.channels.append(name)
@@ -592,6 +848,98 @@ class MainWindow(QMainWindow):
                 )
             except Exception as e:
                 QMessageBox.critical(self, "错误", str(e))
+
+    def open_batch(self):
+        if not self.files:
+            self.toast("请先加载文件", "warning")
+            return
+        from .drawers.batch_sheet import BatchSheet
+        from ..batch import BatchRunner
+
+        current_preset = self._last_batch_preset or self._build_current_batch_preset()
+        dlg = BatchSheet(self, self.files, current_preset=current_preset)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        preset = dlg.get_preset()
+        output_dir = dlg.output_dir()
+        if not output_dir:
+            self.toast("请选择输出目录", "warning")
+            return
+        try:
+            self.statusBar.showMessage("批处理运行中...")
+            QApplication.processEvents()
+            result = BatchRunner(self.files).run(preset, output_dir)
+        except Exception as e:
+            QMessageBox.critical(self, "批处理错误", str(e))
+            return
+        done = sum(1 for item in result.items if item.status == 'done')
+        if result.status == 'done':
+            msg = f"批处理完成 · {done} 项"
+            self.toast(msg, "success")
+        elif result.status == 'partial':
+            msg = f"批处理部分完成 · {done}/{len(result.items)} 项"
+            self.toast(msg, "warning")
+        else:
+            msg = "批处理未执行"
+            self.toast(msg, "warning")
+        self.statusBar.showMessage(f"{msg} · {output_dir}")
+        if result.blocked:
+            QMessageBox.warning(self, "批处理提示", "\n".join(result.blocked[:8]))
+
+    def _build_current_batch_preset(self):
+        from ..batch import AnalysisPreset
+
+        mode = self.toolbar.current_mode()
+        if mode == 'fft':
+            signal = self.inspector.fft_ctx.current_signal()
+            if signal is None:
+                return None
+            params = self.inspector.fft_ctx.get_params()
+            params['fs'] = self.inspector.fft_ctx.fs()
+            if self.inspector.top.range_enabled():
+                params['time_range'] = self.inspector.top.range_values()
+            return AnalysisPreset.from_current_single(
+                name="当前 FFT",
+                method="fft",
+                signal=signal,
+                params=params,
+            )
+        if mode == 'order':
+            signal = self.inspector.order_ctx.current_signal()
+            rpm_signal = self.inspector.order_ctx.current_rpm()
+            if signal is None:
+                return None
+            params = self.inspector.order_ctx.get_params()
+            params['fs'] = self.inspector.order_ctx.fs()
+            params['rpm_factor'] = self.inspector.order_ctx.rpm_factor()
+            if self.inspector.top.range_enabled():
+                params['time_range'] = self.inspector.top.range_values()
+            return AnalysisPreset.from_current_single(
+                name="当前时间-阶次",
+                method="order_time",
+                signal=signal,
+                params=params,
+                rpm_signal=rpm_signal,
+                rpm_channel=rpm_signal[1] if rpm_signal else '',
+            )
+        return None
+
+    def _remember_batch_preset(self, name, method, signal, params, rpm_signal=None):
+        from ..batch import AnalysisPreset
+
+        if signal is None:
+            return
+        params = dict(params)
+        if self.inspector.top.range_enabled():
+            params['time_range'] = self.inspector.top.range_values()
+        self._last_batch_preset = AnalysisPreset.from_current_single(
+            name=name,
+            method=method,
+            signal=signal,
+            params=params,
+            rpm_signal=rpm_signal,
+            rpm_channel=rpm_signal[1] if rpm_signal else '',
+        )
 
     def _get_sig(self):
         mode = self.toolbar.current_mode()
@@ -730,6 +1078,17 @@ class MainWindow(QMainWindow):
             xt, yt = self.inspector.top.tick_density()
             self.canvas_fft.set_tick_density(xt, yt)
             self.canvas_fft.draw();
+            self._remember_batch_preset(
+                "当前 FFT",
+                "fft",
+                self.inspector.fft_ctx.current_signal(),
+                {
+                    'fs': fs,
+                    'window': win,
+                    'nfft': nfft,
+                    'overlap': overlap,
+                },
+            )
             pi = np.argmax(amp[1:]) + 1;
             self.statusBar.showMessage(f'FFT峰值: {freq[pi]:.2f} Hz ({amp[pi]:.4f})')
             self.toast(f"FFT 完成 · 峰值 {freq[pi]:.2f} Hz", "success")
@@ -782,6 +1141,20 @@ class MainWindow(QMainWindow):
             self.canvas_order.set_tick_density(xt, yt)
             self.canvas_order.draw();
             self.inspector.order_ctx.set_progress("")
+            self._remember_batch_preset(
+                "当前时间-阶次",
+                "order_time",
+                self.inspector.order_ctx.current_signal(),
+                {
+                    'fs': fs,
+                    'nfft': nfft,
+                    'max_order': max_ord,
+                    'order_res': order_res,
+                    'time_res': time_res,
+                    'rpm_factor': self.inspector.order_ctx.rpm_factor(),
+                },
+                rpm_signal=self.inspector.order_ctx.current_rpm(),
+            )
             self.statusBar.showMessage(f'完成 | {len(tb)} 时间点 × {len(ords)} 阶次')
             self.toast(f"时间-阶次谱完成 · {len(tb)} × {len(ords)}", "success")
         except Exception as e:
@@ -828,6 +1201,20 @@ class MainWindow(QMainWindow):
             self.canvas_order.set_tick_density(xt, yt)
             self.canvas_order.draw();
             self.inspector.order_ctx.set_progress("")
+            self._remember_batch_preset(
+                "当前转速-阶次",
+                "order_rpm",
+                self.inspector.order_ctx.current_signal(),
+                {
+                    'fs': fs,
+                    'nfft': nfft,
+                    'max_order': max_ord,
+                    'order_res': order_res,
+                    'rpm_res': rpm_res,
+                    'rpm_factor': self.inspector.order_ctx.rpm_factor(),
+                },
+                rpm_signal=self.inspector.order_ctx.current_rpm(),
+            )
             self.statusBar.showMessage(f'转速-阶次谱完成 | {len(rb)} RPM × {len(ords)} 阶次')
             self.toast(f"转速-阶次谱完成 · {len(rb)} × {len(ords)}", "success")
         except Exception as e:
@@ -870,7 +1257,427 @@ class MainWindow(QMainWindow):
             xt, yt = self.inspector.top.tick_density()
             self.canvas_order.set_tick_density(xt, yt)
             self.canvas_order.draw();
+            self._remember_batch_preset(
+                "当前阶次跟踪",
+                "order_track",
+                self.inspector.order_ctx.current_signal(),
+                {
+                    'fs': fs,
+                    'nfft': nfft,
+                    'target_order': to,
+                    'rpm_factor': self.inspector.order_ctx.rpm_factor(),
+                },
+                rpm_signal=self.inspector.order_ctx.current_rpm(),
+            )
             self.statusBar.showMessage(f'阶次 {to} 跟踪完成')
             self.toast(f"阶次 {to} 跟踪完成", "success")
         except Exception as e:
             QMessageBox.critical(self, '错误', str(e))
+
+    # ------------------------------------------------------------------
+    # FFT vs Time (synchronous compute path, Plan Task 6)
+    # ------------------------------------------------------------------
+    # The cache lives on this MainWindow instance (per session).
+    # Invalidation hooks belong to T7 (file load/close/edit + custom-x +
+    # rebuild); this task adds get/put helpers and the consumer side.
+    # Per ``signal-processing/2026-04-25-cache-consumer-must-be-grepped-not-just-surface``
+    # the cache is read on the per-button-click hot path inside
+    # ``do_fft_time`` — that is the SOLE consumer; no other code path
+    # bypasses ``_fft_time_cache_get``.
+    # Per ``pyqt-ui/2026-04-25-cache-invalidation-event-conditional`` we
+    # do NOT need a last-state diff at the entry of ``do_fft_time`` —
+    # this method is button-triggered (Inspector emits
+    # ``fft_time_requested``), not handler-replayed via
+    # ``QTimer.singleShot`` re-entry.
+
+    def _fft_time_cache_key(self, params):
+        """Build the LRU cache key from compute-relevant fields ONLY.
+
+        Display options (``amplitude_mode``, ``cmap``, ``dynamic``,
+        ``freq_auto``, ``freq_min``, ``freq_max``) are deliberately
+        absent so toggling them re-renders without recomputing.
+        """
+        return (
+            params.get('fid'),
+            params.get('channel'),
+            tuple(params.get('time_range') or (None, None)),
+            float(params.get('fs')),
+            int(params.get('nfft')),
+            str(params.get('window')),
+            float(params.get('overlap')),
+            bool(params.get('remove_mean')),
+            float(params.get('db_reference', 1.0)),
+        )
+
+    def _fft_time_cache_get(self, key):
+        if key not in self._fft_time_cache:
+            return None
+        # LRU: pop and reinsert so the most-recently-used entry is at
+        # the OrderedDict tail.
+        value = self._fft_time_cache.pop(key)
+        self._fft_time_cache[key] = value
+        return value
+
+    def _fft_time_cache_put(self, key, result):
+        if key in self._fft_time_cache:
+            self._fft_time_cache.pop(key)
+        self._fft_time_cache[key] = result
+        while len(self._fft_time_cache) > self._fft_time_cache_capacity:
+            # popitem(last=False) is the LRU eviction (oldest first).
+            self._fft_time_cache.popitem(last=False)
+
+    def _fft_time_cache_clear_for_fid(self, fid):
+        """Drop every cache entry keyed under ``fid``.
+
+        Used by per-file invalidation hooks (file load, single-file
+        close, time-axis rebuild, custom-x change) so a freshly
+        modified file does not see stale results from a prior open.
+        Cache key shape (per ``_fft_time_cache_key``):
+        ``(fid, channel, time_range_tuple, fs, nfft, window, overlap,
+        remove_mean, db_reference)`` — ``key[0]`` is the fid.
+        """
+        keys = [k for k in self._fft_time_cache if k[0] == fid]
+        for k in keys:
+            self._fft_time_cache.pop(k, None)
+
+    def _get_fft_time_signal(self):
+        """Resolve the (fid, channel, time, signal, file_data) tuple
+        for the currently-selected fft_time signal.
+
+        Adapts to this repo's ``FileData`` API: ``fd.data`` is the
+        DataFrame (NOT ``fd.df``), ``fd.time_array`` is the time axis,
+        ``fd.channel_units`` carries unit strings (NOT ``fd.units``).
+        Returns ``(None,) * 5`` when no usable selection exists so
+        ``do_fft_time`` can surface a single warning and bail.
+        """
+        data = self.inspector.fft_time_ctx.current_signal()
+        if not data:
+            return None, None, None, None, None
+        fid, ch = data
+        if fid not in self.files:
+            return None, None, None, None, None
+        fd = self.files[fid]
+        if not hasattr(fd, 'data') or ch not in fd.data.columns:
+            return None, None, None, None, None
+        t = np.asarray(fd.time_array, dtype=float)
+        sig = np.asarray(fd.data[ch].to_numpy(copy=False), dtype=float)
+        return fid, ch, t, sig, fd
+
+    @staticmethod
+    def _normalize_freq_range(p):
+        """Translate the panel's ``freq_*`` fields into the canvas's
+        ``freq_range`` tuple, with a clamp against contradictory
+        ``freq_max <= freq_min`` input.
+
+        Returns ``None`` to mean "auto" (canvas falls back to Nyquist).
+        Reviewer Important #3: when a user toggles auto off and leaves
+        ``freq_max == 0`` while raising ``freq_min``, the panel emits
+        ``(lo>0, hi=0)``; the canvas's silent fallback is correct but
+        confusing. We force ``hi=0`` (auto) whenever ``hi <= lo`` AND
+        ``hi > 0``, and treat the entire pair as auto so the canvas
+        reuses its existing fallback rather than receiving the bogus
+        pair. Documented in
+        ``docs/superpowers/reports/2026-04-25-fft-vs-time-T5-mainwindow-sync-compute.md``.
+        """
+        if p.get('freq_auto', True):
+            return None
+        lo = float(p.get('freq_min', 0.0))
+        hi = float(p.get('freq_max', 0.0))
+        # If freq_max is 0 it already means "auto / use Nyquist" per
+        # FFTTimeContextual contract — pass the (lo, 0) pair through.
+        # If freq_max > 0 but <= freq_min, the user input is
+        # contradictory; force auto so the canvas does not silently
+        # invert or collapse the range.
+        if hi > 0 and hi <= lo:
+            return None
+        return (lo, hi)
+
+    def do_fft_time(self, force=False):
+        """Compute and render the FFT-vs-Time spectrogram on a worker.
+
+        ``force=True`` bypasses the LRU cache; ``force=False`` consults
+        the cache first. Cache hits stay synchronous (no thread).
+        Cache misses dispatch :class:`FFTTimeWorker` on a ``QThread``;
+        results land in :meth:`_on_fft_time_finished`, errors in
+        :meth:`_on_fft_time_failed`. There is no synchronous fallback.
+
+        Re-entry while a worker is still running is dropped with a
+        ``正在计算…`` status message (Plan Task 7 Phase 1: ignore, do
+        not queue). On compute failure the OLD chart stays visible —
+        the failed handler does NOT call ``canvas_fft_time.clear()``.
+        """
+        from ..signal import SpectrogramParams
+        # Re-entry guard: a previous compute is still on the thread.
+        # Phase 1 ignores the click rather than queuing.
+        if (
+            self._fft_time_thread is not None
+            and self._fft_time_thread.isRunning()
+        ):
+            self.statusBar.showMessage("正在计算…")
+            return
+        fid, ch, t, sig, fd = self._get_fft_time_signal()
+        if sig is None or len(sig) < 2:
+            self.toast("请选择有效信号", "warning")
+            return
+        p = self.inspector.fft_time_ctx.get_params()
+        if self.inspector.top.range_enabled():
+            lo, hi = self.inspector.top.range_values()
+            m = (t >= lo) & (t <= hi)
+            t = t[m]; sig = sig[m]
+            if len(sig) < 2:
+                self.toast("当前范围内样本不足", "warning")
+                return
+            time_range = (float(lo), float(hi))
+        else:
+            time_range = (float(t[0]), float(t[-1]))
+        key_params = dict(p, fid=fid, channel=ch, time_range=time_range)
+        key = self._fft_time_cache_key(key_params)
+        cached = None if force else self._fft_time_cache_get(key)
+        if cached is not None:
+            # Cache hit stays on the main thread — no worker needed.
+            self._render_fft_time(cached, p)
+            self.statusBar.showMessage(
+                "使用缓存结果 · "
+                f"{cached.metadata.get('frames', 0)} frames · NFFT {p['nfft']}"
+            )
+            return
+        # SpectrogramParams is the cache key on the analyzer side; build
+        # it from compute-relevant fields only (matches our
+        # _fft_time_cache_key contract).
+        params = SpectrogramParams(
+            fs=float(p['fs']),
+            nfft=int(p['nfft']),
+            window=str(p['window']),
+            overlap=float(p['overlap']),
+            remove_mean=bool(p['remove_mean']),
+            db_reference=float(p.get('db_reference', 1.0)),
+        )
+        unit = ''
+        if fd is not None and hasattr(fd, 'channel_units'):
+            unit = fd.channel_units.get(ch, '') or ''
+        # Stash everything the finished handler needs to cache + render.
+        # ``_render_fft_time`` re-reads display options from ``p`` so we
+        # pass it through; ``key`` is the cache slot the result belongs
+        # in. ``nfft`` is captured for the status string. ``force`` is
+        # captured so T11 (non-uniform UX) can replay the compute with
+        # the same flag after a successful 重建时间轴 popover.
+        self._fft_time_pending = {
+            'cache_key': key,
+            'render_params': p,
+            'force': bool(force),
+        }
+        worker = FFTTimeWorker(sig, t, params, channel_name=ch, unit=unit)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        # Standard QThread cleanup chain. The order matters:
+        #   started -> run        : entry point lives on the worker thread
+        #   finished/failed -> quit: stops the event loop on the worker thread
+        #   finished -> handler   : runs on the MAIN thread (default
+        #                           connection type AutoConnection across
+        #                           threads = QueuedConnection)
+        #   thread.finished -> deleteLater (worker, thread)
+        #   thread.finished -> _on_fft_time_thread_done : clears refs
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(self._on_fft_time_finished)
+        worker.failed.connect(self._on_fft_time_failed)
+        # Optional progress wiring — Phase 1 has no progress dialog,
+        # but the signal is hot so future tasks (T8 export, T9 progress
+        # bar) can subscribe without retrofitting.
+        worker.progress.connect(self._on_fft_time_progress)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_fft_time_thread_done)
+        self._fft_time_thread = thread
+        self._fft_time_worker = worker
+        self.statusBar.showMessage("正在计算…")
+        thread.start()
+
+    def _render_fft_time(self, result, p):
+        """Apply display-only options and draw on the canvas.
+
+        Display fields are NOT part of the cache key; this is the sole
+        place they are read.
+        """
+        freq_range = self._normalize_freq_range(p)
+        self.canvas_fft_time.plot_result(
+            result,
+            amplitude_mode=p['amplitude_mode'],
+            cmap=p['cmap'],
+            dynamic=p['dynamic'],
+            freq_range=freq_range,
+        )
+
+    def _on_fft_time_cursor_info(self, text):
+        """Surface SpectrogramCanvas hover readout in the status bar.
+
+        Empty text (cursor outside ``_ax_spec`` or before a result is
+        plotted) restores the active-file summary so the bar does not
+        remain blank. Reviewer Important #1.
+        """
+        if text:
+            self.statusBar.showMessage(text)
+        else:
+            # Restore default status when the cursor leaves the plot.
+            self._update_info()
+
+    # ---- FFT vs Time worker callbacks (Plan Task 7) ----
+    def _on_fft_time_finished(self, result):
+        """Worker reported success — cache + render on the main thread.
+
+        Runs on the main thread (Qt cross-thread signals default to
+        ``QueuedConnection``), so it is safe to touch the LRU cache and
+        the matplotlib canvas here.
+        """
+        pending = getattr(self, '_fft_time_pending', None) or {}
+        key = pending.get('cache_key')
+        p = pending.get('render_params')
+        if key is not None:
+            self._fft_time_cache_put(key, result)
+        if p is not None:
+            self._render_fft_time(result, p)
+        self.statusBar.showMessage(
+            f"FFT vs Time 完成 · {result.metadata.get('frames', 0)} frames"
+        )
+
+    def _on_fft_time_failed(self, message):
+        """Worker reported failure — keep the previous chart on screen.
+
+        Mirrors the synchronous T5 error pattern: ``toast(error)`` plus
+        a status-bar message; the canvas is NEVER cleared so the user
+        keeps the last-known-good chart while debugging the input.
+
+        Cancel is also routed here (the analyzer raises
+        ``RuntimeError('spectrogram computation cancelled')`` when
+        ``cancel_token`` returns truthy) — the message string itself
+        carries the distinction, no separate signal needed.
+
+        T11 non-uniform UX: when ``message`` contains the substring
+        ``non-uniform time axis`` (the marker that
+        ``SpectrogramAnalyzer.compute`` raises for jitter > tolerance,
+        per Spec §5.1), replace the cryptic raw error with a
+        Chinese-language toast that points the user at 重建时间轴, then
+        auto-open the rebuild popover anchored on the FFT vs Time
+        contextual's ``btn_rebuild``. If the user clicks Accept, the
+        popover internally rebuilds and clears the per-fid cache, and
+        we replay :meth:`do_fft_time` with the same ``force`` flag the
+        original click used. ``self._fft_time_retry_pending`` caps the
+        retry at 1 — if the rebuild somehow fails to fix the jitter,
+        the second compute's error surfaces verbatim so the user is
+        not trapped in an auto-rebuild loop.
+        """
+        msg = str(message)
+        if 'non-uniform time axis' in msg and not getattr(
+            self, '_fft_time_retry_pending', False
+        ):
+            # Parse "relative_jitter=<float>" if present; round to 2 dp
+            # for display. Robust to wording changes — only the
+            # substring ``non-uniform time axis`` is required to enter
+            # this branch; missing the jitter token just omits it from
+            # the toast.
+            import re
+            m = re.search(r'relative_jitter\s*=\s*([0-9]+(?:\.[0-9]+)?)', msg)
+            if m:
+                try:
+                    jitter_str = f"{float(m.group(1)):.2f}"
+                except ValueError:
+                    jitter_str = None
+            else:
+                jitter_str = None
+            if jitter_str is not None:
+                friendly = (
+                    f"时间轴非均匀（jitter≈{jitter_str}），无法直接做时频分析。"
+                    "已为你打开“重建时间轴”，请确认 Fs 后重试。"
+                )
+            else:
+                friendly = (
+                    "时间轴非均匀，无法直接做时频分析。"
+                    "已为你打开“重建时间轴”，请确认 Fs 后重试。"
+                )
+            self.toast(friendly, "warning")
+            self.statusBar.showMessage(
+                "FFT vs Time · 时间轴非均匀，请重建后重试"
+            )
+            # Auto-open the popover anchored on the FFT vs Time tab's
+            # rebuild button. Re-entry guard set BEFORE the modal so a
+            # nested failure inside the retry compute cannot recurse.
+            #
+            # The retry compute is deferred via ``QTimer.singleShot(0)``
+            # so the worker QThread has time to fully exit (its
+            # ``thread.finished`` slot ``_on_fft_time_thread_done``
+            # clears ``self._fft_time_thread``). Without the defer, the
+            # immediate retry hits the ``isRunning()`` re-entry guard
+            # at the top of :meth:`do_fft_time` because the failed
+            # handler runs as a queued slot BEFORE the thread cleanup
+            # has drained.
+            anchor = self.inspector.fft_time_ctx.btn_rebuild
+            pending = getattr(self, '_fft_time_pending', None) or {}
+            force = bool(pending.get('force', False))
+            self._fft_time_retry_pending = True
+            accepted = False
+            try:
+                accepted = self._show_rebuild_popover(anchor, mode='fft_time')
+            finally:
+                if accepted:
+                    def _retry():
+                        try:
+                            self.do_fft_time(force=force)
+                        finally:
+                            self._fft_time_retry_pending = False
+                    QTimer.singleShot(0, _retry)
+                else:
+                    self._fft_time_retry_pending = False
+            return
+        self.toast(msg, "error")
+        self.statusBar.showMessage(f"FFT vs Time 错误: {message}")
+
+    def _on_fft_time_progress(self, current, total):
+        """Optional per-frame progress hook.
+
+        Phase 1 has no progress dialog — this exists so future tasks
+        (T8 export, T9 progress bar) can subscribe without rewiring.
+        Signature mirrors the analyzer's ``progress_callback`` contract.
+        """
+        # Intentionally no UI updates in Phase 1. A status-bar update
+        # here would compete with ``正在计算…`` and the cursor readout,
+        # which is more user-visible noise than value.
+        pass
+
+    def _on_fft_time_thread_done(self):
+        """Worker thread emitted ``finished`` — clear refs.
+
+        Both ``worker`` and ``thread`` are scheduled for deleteLater
+        before this slot fires (per the connect order in
+        :meth:`do_fft_time`); we just drop the local references so the
+        re-entry guard in ``do_fft_time`` lets the next compute through.
+        """
+        self._fft_time_thread = None
+        self._fft_time_worker = None
+
+    # ---- FFT vs Time export (Plan Task 9) ----
+    def _copy_fft_time_image(self, mode='full'):
+        """Copy the FFT vs Time canvas to the system clipboard.
+
+        ``mode='full'`` grabs the whole canvas (spectrogram + slice +
+        colorbar). ``mode='main'`` grabs only the spectrogram + colorbar
+        region; under headless Qt platforms the canvas falls back to
+        the full grab transparently (see SpectrogramCanvas.grab_main_chart).
+
+        Guards on ``canvas_fft_time.has_result()`` so an empty canvas
+        cannot be pushed to the clipboard — a warning toast surfaces
+        instead. ``self.statusBar`` is the QStatusBar attribute (NOT
+        ``self.statusBar()`` — codebase convention verified in T5).
+        """
+        if not self.canvas_fft_time.has_result():
+            self.toast("尚无 FFT vs Time 结果可导出", "warning")
+            return
+        if mode == 'main':
+            pix = self.canvas_fft_time.grab_main_chart()
+            msg = "已复制 FFT vs Time 主图"
+        else:
+            pix = self.canvas_fft_time.grab_full_view()
+            msg = "已复制 FFT vs Time 完整视图"
+        QApplication.clipboard().setPixmap(pix)
+        self.statusBar.showMessage(msg, 2000)
+        self.toast(msg, "success")
