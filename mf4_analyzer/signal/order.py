@@ -27,7 +27,6 @@ class OrderAnalysisParams:
     max_order: float = 20.0
     order_res: float = 0.1
     time_res: float = 0.05
-    rpm_res: float = 10.0
     target_order: float = 1.0
 
 
@@ -36,16 +35,6 @@ class OrderTimeResult:
     times: np.ndarray
     orders: np.ndarray
     amplitude: np.ndarray  # shape (frames, orders)
-    params: OrderAnalysisParams
-    metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class OrderRpmResult:
-    orders: np.ndarray
-    rpm_bins: np.ndarray
-    amplitude: np.ndarray  # shape (rpm_bins, orders)
-    counts: np.ndarray
     params: OrderAnalysisParams
     metadata: dict = field(default_factory=dict)
 
@@ -289,79 +278,6 @@ class OrderAnalyzer:
         )
 
     @staticmethod
-    def compute_rpm_order_result(sig, rpm, params, progress_callback=None, cancel_token=None):
-        sig, rpm, fs, nfft = OrderAnalyzer._validate_common(sig, rpm, params.fs, params.nfft)
-        orders = OrderAnalyzer._orders(params.max_order, params.order_res)
-        rpm_res = float(params.rpm_res)
-        if rpm_res <= 0:
-            raise ValueError("rpm_res must be positive")
-        rpm_min = float(np.nanmin(rpm))
-        rpm_max = float(np.nanmax(rpm))
-        rpm_bins = np.arange(rpm_min, rpm_max + rpm_res * 0.5, rpm_res)
-        if rpm_bins.size == 0:
-            raise ValueError("rpm bins are empty")
-
-        hop = max(nfft // 4, 1)
-        starts = OrderAnalyzer._frame_starts(len(sig), nfft, hop)
-        total = len(starts)
-
-        window_array = get_analysis_window(params.window, nfft)
-        nyquist_clipped = OrderAnalyzer._nyquist_clipped_at_median_rpm(rpm, orders, fs)
-
-        matrix = np.zeros((len(rpm_bins), len(orders)), dtype=float)
-        counts = np.zeros_like(matrix)
-
-        def _check_cancel():
-            if cancel_token is not None and cancel_token():
-                raise RuntimeError("order computation cancelled")
-
-        for batch_start in range(0, total, _ORDER_BATCH_FRAMES):
-            _check_cancel()  # cancel #1: chunk boundary
-            batch_end = min(batch_start + _ORDER_BATCH_FRAMES, total)
-            chunk_starts = starts[batch_start:batch_end]
-
-            _check_cancel()  # cancel #2: before stack
-            frames = np.stack([sig[s:s + nfft] for s in chunk_starts], axis=0)
-            rpm_means = np.array(
-                [float(np.nanmean(rpm[s:s + nfft])) for s in chunk_starts],
-                dtype=float,
-            )
-
-            _check_cancel()  # cancel #3: before FFT batch
-            values_batch = OrderAnalyzer._order_amplitudes_batch(
-                frames, rpm_means, fs, orders, nfft, window_array,
-            )
-
-            # Vectorized broadcast argmin — preserves spec §4 semantics
-            # (NO arithmetic indexing; equivalence verified at boundaries).
-            ri_array = np.argmin(
-                np.abs(rpm_means[:, None] - rpm_bins[None, :]),
-                axis=1,
-            )
-            for i, ri in enumerate(ri_array):
-                matrix[ri] += values_batch[i]
-                counts[ri] += 1  # per-frame counts (broadcast across order columns)
-
-            if progress_callback:
-                progress_callback(batch_end, total)
-
-        if progress_callback:
-            progress_callback(total, total)
-        safe_counts = np.maximum(counts, 1)
-        return OrderRpmResult(
-            orders=orders,
-            rpm_bins=rpm_bins,
-            amplitude=matrix / safe_counts,
-            counts=counts,
-            params=params,
-            metadata={
-                'frames': total,
-                'hop': hop,
-                'nyquist_clipped_at_median_rpm': nyquist_clipped,
-            },
-        )
-
-    @staticmethod
     def extract_order_track_result(sig, rpm, params, progress_callback=None, cancel_token=None):
         sig, rpm, fs, nfft = OrderAnalyzer._validate_common(sig, rpm, params.fs, params.nfft)
         target = float(params.target_order)
@@ -434,21 +350,6 @@ class OrderAnalyzer:
             sig, rpm, t, params, progress_callback=progress_callback
         )
         return result.times, result.orders, result.amplitude
-
-    @staticmethod
-    def compute_order_spectrum(sig, rpm, fs, max_ord=20, rpm_res=10, order_res=0.25, nfft=1024, progress_callback=None):
-        """转速-阶次谱，返回 ``orders, rpm_bins, amplitude[rpm, order]``."""
-        params = OrderAnalysisParams(
-            fs=fs,
-            nfft=nfft,
-            max_order=max_ord,
-            order_res=order_res,
-            rpm_res=rpm_res,
-        )
-        result = OrderAnalyzer.compute_rpm_order_result(
-            sig, rpm, params, progress_callback=progress_callback
-        )
-        return result.orders, result.rpm_bins, result.amplitude
 
     @staticmethod
     def extract_order_track(sig, rpm, fs, target, nfft=1024):
