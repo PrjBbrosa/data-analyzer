@@ -106,3 +106,73 @@ def test_timedomain_canvas_hover_axis_changes_cursor(qtbot, monkeypatch):
 
     assert canvas.cursor().shape() == Qt.PointingHandCursor
     assert canvas.toolTip() == "双击编辑坐标轴"
+
+
+def test_plot_canvas_dblclick_uses_axis_interaction_helper(qtbot, monkeypatch):
+    from mf4_analyzer.ui.canvases import PlotCanvas
+    canvas = PlotCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(600, 400)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    ax = canvas.fig.add_subplot(111)
+    ax.plot([0, 1, 2], [0, 1, 4])
+    canvas.draw()
+
+    from mf4_analyzer.ui import _axis_interaction
+    called = {}
+
+    def fake_edit(parent, ax_, axis):
+        called['axis'] = axis
+        ax_.set_ylim(-1, 99) if axis == 'y' else ax_.set_xlim(-1, 99)
+        return True
+
+    monkeypatch.setattr(_axis_interaction, 'edit_axis_dialog', fake_edit)
+
+    bbox = ax.get_window_extent()
+    from matplotlib.backend_bases import MouseEvent
+    e = MouseEvent('button_press_event', canvas, x=bbox.x0 - 30,
+                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
+    canvas.callbacks.process('button_press_event', e)
+    assert called.get('axis') == 'y'
+
+
+def test_plot_canvas_hover_axis(qtbot):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.canvases import PlotCanvas
+    canvas = PlotCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(600, 400)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    ax = canvas.fig.add_subplot(111)
+    ax.plot([0, 1, 2], [0, 1, 4])
+    canvas.draw()
+
+    bbox = ax.get_window_extent()
+    from matplotlib.backend_bases import MouseEvent
+    e = MouseEvent('motion_notify_event', canvas, x=bbox.x0 - 30,
+                   y=(bbox.y0 + bbox.y1) / 2, button=None)
+    canvas.callbacks.process('motion_notify_event', e)
+    assert canvas.cursor().shape() == Qt.PointingHandCursor
+
+
+def test_plot_canvas_hover_short_circuit_during_drag(qtbot):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.canvases import PlotCanvas
+    canvas = PlotCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(600, 400)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    ax = canvas.fig.add_subplot(111)
+    canvas.draw()
+
+    canvas._mouse_button_pressed = True
+    bbox = ax.get_window_extent()
+    from matplotlib.backend_bases import MouseEvent
+    e = MouseEvent('motion_notify_event', canvas, x=bbox.x0 - 30,
+                   y=(bbox.y0 + bbox.y1) / 2, button=None)
+    canvas.callbacks.process('motion_notify_event', e)
+    # Cursor should NOT be PointingHandCursor since drag is active
+    assert canvas.cursor().shape() != Qt.PointingHandCursor

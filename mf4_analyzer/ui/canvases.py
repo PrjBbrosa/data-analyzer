@@ -1471,6 +1471,12 @@ class PlotCanvas(FigureCanvas):
         self.setParent(parent)
         self.mpl_connect('scroll_event', self._on_scroll)
         self.mpl_connect('button_press_event', self._on_click)
+        # Hover affordance for axis-edit dblclick — track press/release so
+        # we can suppress the hover cursor swap while a drag is in flight.
+        self._mouse_button_pressed = False
+        self.mpl_connect('button_press_event', self._track_mouse_press)
+        self.mpl_connect('button_release_event', self._track_mouse_release)
+        self.mpl_connect('motion_notify_event', self._on_axis_hover)
         self.setFocusPolicy(Qt.StrongFocus)
         self._remarks = []  # [(ax_index, x, y, annotation_artist, dot_artist)]
         self._line_data = {}  # {ax_index: (xdata, ydata)} for snapping
@@ -1674,46 +1680,37 @@ class PlotCanvas(FigureCanvas):
             dot.remove()
             self.draw_idle()
 
-    def _find_axis_for_dblclick(self, e):
-        """根据双击像素位置判断应编辑哪个axes的哪个轴。
-        检测范围包括axes外部的刻度标签区域（更符合用户直觉）。
-        返回 (ax, 'x'|'y') 或 (None, None)。
-        """
-        px, py = e.x, e.y
-        MARGIN = 45  # 像素：axes外部可点击的边距（覆盖刻度数字区域）
-        best = (None, None)
-        best_dist = float('inf')
-        for ax in self.fig.axes:
-            bbox = ax.get_window_extent()
-            # --- X轴区域：axes下方 MARGIN 像素范围内，水平方向在axes范围内 ---
-            if bbox.x0 - 10 <= px <= bbox.x1 + 10:
-                if bbox.y0 - MARGIN <= py <= bbox.y0 + 20:
-                    dist = abs(py - bbox.y0)
-                    if dist < best_dist:
-                        best = (ax, 'x')
-                        best_dist = dist
-            # --- Y轴区域：axes左侧 MARGIN 像素范围内，垂直方向在axes范围内 ---
-            if bbox.y0 - 10 <= py <= bbox.y1 + 10:
-                if bbox.x0 - MARGIN <= px <= bbox.x0 + 20:
-                    dist = abs(px - bbox.x0)
-                    if dist < best_dist:
-                        best = (ax, 'y')
-                        best_dist = dist
-                # --- 右侧Y轴（colorbar等）：axes右侧 MARGIN 像素范围内 ---
-                if bbox.x1 - 20 <= px <= bbox.x1 + MARGIN:
-                    dist = abs(px - bbox.x1)
-                    if dist < best_dist:
-                        best = (ax, 'y')
-                        best_dist = dist
-        return best
+    def _track_mouse_press(self, e):
+        self._mouse_button_pressed = True
+
+    def _track_mouse_release(self, e):
+        self._mouse_button_pressed = False
+
+    def _on_axis_hover(self, e):
+        # Hover affordance for axis-edit dblclick. Skip during active drag
+        # so the cursor/tooltip don't flicker while the user manipulates
+        # remarks or pans. Routes through the shared _axis_interaction
+        # helper for parity with TimeDomainCanvas / SpectrogramCanvas /
+        # OrderTrackCanvas.
+        if self._mouse_button_pressed:
+            return
+        from ._axis_interaction import find_axis_for_dblclick
+        ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, 45)
+        if ax is not None:
+            self.setCursor(Qt.PointingHandCursor)
+            self.setToolTip("双击编辑坐标轴")
+        else:
+            self.unsetCursor()
+            self.setToolTip("")
 
     def _on_click(self, e):
         # 双击编辑坐标轴 — 优先处理，不要求点击在axes内部
         if e.button == 1 and e.dblclick:
-            ax, axis = self._find_axis_for_dblclick(e)
-            if ax is not None:
-                self._edit_axis(ax, axis)
-                return
+            from ._axis_interaction import find_axis_for_dblclick, edit_axis_dialog
+            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, 45)
+            if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
+                self.draw_idle()
+            return
 
         if e.inaxes is None or e.xdata is None:
             return
@@ -1735,27 +1732,6 @@ class PlotCanvas(FigureCanvas):
             x, y = self._snap_to_curve(ax_index, e.xdata)
             if x is not None:
                 self._add_remark(e.inaxes, ax_index, x, y)
-
-    def _edit_axis(self, ax, axis):
-        """弹出坐标轴编辑对话框"""
-        dlg = AxisEditDialog(self.parent(), ax, axis)
-        if dlg.exec_() == QDialog.Accepted:
-            vmin, vmax, label, auto = dlg.get_values()
-            if axis == 'x':
-                if auto:
-                    ax.autoscale(axis='x')
-                else:
-                    ax.set_xlim(vmin, vmax)
-                if label:
-                    ax.set_xlabel(label)
-            else:
-                if auto:
-                    ax.autoscale(axis='y')
-                else:
-                    ax.set_ylim(vmin, vmax)
-                if label:
-                    ax.set_ylabel(label)
-            self.draw_idle()
 
     def set_tick_density(self, x, y):
         for ax in self.fig.axes:
