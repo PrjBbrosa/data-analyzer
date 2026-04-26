@@ -317,7 +317,7 @@ class BatchRunner:
         self._disk_cache: dict[str, FileData] = {}
 ```
 
-`_expand_tasks` 改造（**目标信号全部缺时返回 0 任务，让现有 blocked 路径处理**）：
+`_expand_tasks` 改造（**两阶段：先全缺检测短路 → 再 yield 全部**）：
 
 ```python
 def _expand_tasks(self, preset):
@@ -326,29 +326,31 @@ def _expand_tasks(self, preset):
     if preset.source == 'current_single':
         # ... 不变
         return
-    # free_config: 优先 target_signals；全部缺 → 不 yield → 走 blocked
     files_iter = list(self._resolve_files(preset))
     if preset.target_signals:
-        any_yielded = False
+        # —— 阶段 1：全缺检测。如果 target_signals 中所有信号在所有文件里
+        # 都不存在 → 0 yield → run() 内 `if not tasks:` 走 blocked 分支。
+        has_any_runnable = any(
+            ch in fd.data.columns
+            for fid, fd in files_iter
+            for ch in preset.target_signals
+        )
+        if not has_any_runnable:
+            return  # → BatchRunResult(status='blocked', blocked=['no matching batch tasks'])
+
+        # —— 阶段 2：至少一个可执行 → yield 全部 (file × signal) 笛卡尔积。
+        # 缺的 (file, signal) 对仍然 yield；_run_one 内 `ch not in fd.data.columns`
+        # 时抛 "missing signal: X"，由 run() 转成 task_failed 事件 + ✗ 行。
+        # 这样 UI 端能"预先看到 file_b 不会有 vibration_x"。
         for fid, fd in files_iter:
             for ch in preset.target_signals:
-                if ch in fd.data.columns:
-                    yield fid, fd, ch
-                    any_yielded = True
-                else:
-                    # 部分缺：yield 后由 _run_one 抛 "missing signal"，
-                    # task_failed 事件而非静默丢弃；保留对用户可见的 ✗ 行
-                    yield fid, fd, ch
-                    any_yielded = True
-        # 注意：如果 target_signals 中所有信号在所有文件里都不存在，
-        # 上面循环不会 yield 任何项 → run() 内 `if not tasks` 走
-        # BatchRunResult(status='blocked', blocked=['no matching batch tasks'])
-        # 这与 §7 "全部不可用 → UI 禁用 Run" 共同形成两层防护：
-        # UI 通常拦下；如果调用方绕过 UI 直接构造 preset，runner 仍 fail-soft。
+                yield fid, fd, ch
     else:
         # 兜底：维持老的 pattern 路径（同现状 _matches）
         ...
 ```
+
+> **两层防护**：UI 端 §7 在导入 preset 后若 target_signals 全部不可用就禁用 Run（第一层）；若调用方绕过 UI 直接构造 preset（如测试），runner 端阶段 1 检测兜底（第二层），返回 blocked 而不是抛异常。这与 §6.2.1 描述的 blocked 路径、§8 测试用例 "target_signals 全部不在文件中 → status == 'blocked'" 完全一致。
 
 `_resolve_files`：
 - `preset.file_ids` 直接查 `self.files`
