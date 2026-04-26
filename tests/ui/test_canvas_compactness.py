@@ -106,8 +106,57 @@ def test_tight_layout_uses_kwargs_in_canvases_source():
     src = inspect.getsource(canvases)
     pattern = re.compile(r"self\.fig\.tight_layout\(([^)]*)\)")
     calls = pattern.findall(src)
-    assert len(calls) >= 5, f"expected >=5 tight_layout call sites, got {len(calls)}"
+    # Task 2.10 dropped SpectrogramCanvas.plot_result's tight_layout call
+    # in favor of subplots_adjust(**SPECTROGRAM_SUBPLOT_ADJUST), so the
+    # call-site count went 5 -> 4. The guard's intent is "no bare
+    # default-padded tight_layout calls"; the lower bound just tracks
+    # how many call sites currently exist.
+    assert len(calls) >= 4, f"expected >=4 tight_layout call sites, got {len(calls)}"
     for args in calls:
         assert "CHART_TIGHT_LAYOUT_KW" in args, (
             f"tight_layout call without CHART_TIGHT_LAYOUT_KW kwargs: ({args})"
         )
+
+
+def test_spectrogram_figsize_aligned():
+    """Task 2.10: SpectrogramCanvas figsize must align with the other
+    canvases (10x6) — the legacy 12x8 wasted horizontal real estate."""
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+    canvas = SpectrogramCanvas()
+    assert canvas.fig.get_size_inches().tolist() == [10.0, 6.0]
+
+
+def test_spectrogram_subplotpars_right_leaves_colorbar_room(qtbot):
+    """Task 2.10 (S1-T1 + S1-T3): subplots_adjust(**SPECTROGRAM_SUBPLOT_ADJUST)
+    must produce ``right=0.93`` so the colorbar tightbbox does not overlap
+    the spectrogram axes' tightbbox.
+
+    Notes
+    -----
+    Per ``pyqt-ui/2026-04-25-tightbbox-survives-offscreen-qt`` the bbox
+    path returns usable coords under ``QT_QPA_PLATFORM=offscreen`` once
+    the figure has been drawn — no need to fall back to a full-canvas
+    grab on headless platforms.
+    """
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+    canvas = SpectrogramCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    # Apply the constant directly — full plot_result requires a
+    # SpectrogramResult, which we don't fabricate here. The constant
+    # is wired into plot_result by the implementation under test;
+    # asserting subplots_adjust honors the constant value is enough
+    # to pin the geometry contract.
+    canvas.fig.subplots_adjust(
+        **__import__(
+            'mf4_analyzer.ui.canvases', fromlist=['SPECTROGRAM_SUBPLOT_ADJUST']
+        ).SPECTROGRAM_SUBPLOT_ADJUST
+    )
+    canvas.draw()
+    sp = canvas.fig.subplotpars
+    assert abs(sp.right - 0.93) < 0.005
+    assert abs(sp.left - 0.07) < 0.005
+    assert sp.top >= 0.96

@@ -1153,7 +1153,10 @@ class SpectrogramCanvas(FigureCanvas):
     cursor_info = pyqtSignal(str)
 
     def __init__(self, parent=None):
-        self.fig = Figure(figsize=(12, 8), dpi=100, facecolor=CHART_FACE)
+        # figsize 10x6 aligns SpectrogramCanvas with the other canvases
+        # (TimeDomainCanvas / PlotCanvas) — the legacy 12x8 wasted
+        # horizontal space inside the chart workspace pane.
+        self.fig = Figure(figsize=(10, 6), dpi=100, facecolor=CHART_FACE)
         super().__init__(self.fig)
         self.setParent(parent)
         self._result = None
@@ -1259,7 +1262,7 @@ class SpectrogramCanvas(FigureCanvas):
         self._freq_range = freq_range
         self._selected_index = 0
 
-        gs = self.fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.28)
+        gs = self.fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.18)
         self._ax_spec = self.fig.add_subplot(gs[0, 0])
         self._ax_slice = self.fig.add_subplot(gs[1, 0])
 
@@ -1293,16 +1296,15 @@ class SpectrogramCanvas(FigureCanvas):
         x0 = float(result.times[0])
         self._cursor_line = self._ax_spec.axvline(x0, color='#ffffff', lw=1.2)
         self._plot_slice()
-        # tight_layout warns "Axes that are not compatible with
-        # tight_layout" because of the colorbar — suppress the user
-        # warning, the resulting layout is still acceptable.
-        import warnings as _warnings
-        with _warnings.catch_warnings():
-            _warnings.simplefilter('ignore', UserWarning)
-            try:
-                self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
-            except Exception:
-                pass
+        # subplots_adjust must run AFTER fig.colorbar(...) so the colorbar
+        # geometry is already in place. Do not use tight_layout here — it
+        # cannot reason about the colorbar (it would warn "Axes that are
+        # not compatible with tight_layout") and the resulting margins
+        # are inconsistent across renders. SPECTROGRAM_SUBPLOT_ADJUST
+        # pins left/right/top/bottom so the colorbar tightbbox has
+        # deterministic room and does not collide with the spectrogram
+        # axes — see Task 2.10 of the Wave 2 UI polish plan.
+        self.fig.subplots_adjust(**SPECTROGRAM_SUBPLOT_ADJUST)
         self.draw_idle()
 
     def _color_limits(self, z, amplitude_mode, dynamic):
