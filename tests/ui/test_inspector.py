@@ -820,29 +820,30 @@ def test_inspector_scroll_body_caps_max_width(qapp):
 
 
 def test_persistent_top_range_spinners_have_max_width(qapp):
-    """fix-3 — numeric range spinners (开始 / 结束 in seconds) must cap
-    their max width so toggling 使用选定范围 never makes the pane look
-    wider; '0.000 s' easily fits in ~110px.
-    """
+    """A1 — range spinners share the normal inspector field cap."""
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     pt = PersistentTop()
     for sp in (pt.spin_start, pt.spin_end):
-        assert sp.maximumWidth() <= 110, (
+        assert 200 <= sp.maximumWidth() <= 260, (
             f"{sp.objectName() or type(sp).__name__}.maximumWidth()="
-            f"{sp.maximumWidth()}px — should be <=110px (R3 紧凑化)."
+            f"{sp.maximumWidth()}px — should use the A1 field cap."
         )
 
 
-def test_fft_contextual_short_fields_have_compact_max_width(qapp):
-    """fix-3 — short numeric fields in FFTContextual are capped tightly
-    so they no longer span the whole pane.
-    """
+def test_fft_contextual_fields_use_uniform_max_width(qapp):
+    """A1 — FFTContextual fields use the same full field-column cap."""
     from mf4_analyzer.ui.inspector_sections import FFTContextual
     fc = FFTContextual()
-    for w in (fc.spin_overlap, fc.spin_fs, fc.combo_nfft, fc.combo_win):
-        assert w.maximumWidth() <= 130, (
-            f"FFTContextual short field {w.objectName() or type(w).__name__}"
-            f" maximumWidth={w.maximumWidth()}px > 130 (R3 紧凑化)."
+    fields = (fc.combo_sig, fc.spin_overlap, fc.spin_fs,
+              fc.combo_nfft, fc.combo_win)
+    widths = [w.maximumWidth() for w in fields]
+    assert max(widths) - min(widths) <= 2, (
+        f"FFTContextual fields should share one max width; got {widths}"
+    )
+    for w in fields:
+        assert 200 <= w.maximumWidth() <= 260, (
+            f"FFTContextual field {w.objectName() or type(w).__name__}"
+            f" maximumWidth={w.maximumWidth()}px should use the A1 cap."
         )
 
 
@@ -862,31 +863,104 @@ def test_fft_contextual_signal_combo_keeps_room_for_long_names(qapp):
 
 
 def test_order_contextual_short_numeric_fields_capped_tighter(qapp):
-    """fix-3 — OrderContextual spin_mo / spin_rpm_res etc. were previously
-    capped at 150px; the 紧凑化 pass tightens them to <=110px.
-    """
+    """A1 — OrderContextual fields share the normal inspector field cap."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
     oc = OrderContextual()
     for w in (oc.spin_mo, oc.spin_order_res, oc.spin_time_res,
               oc.spin_rpm_res, oc.spin_rf, oc.spin_to):
-        assert w.maximumWidth() <= 110, (
-            f"OrderContextual short field {w.objectName() or type(w).__name__}"
-            f" maximumWidth={w.maximumWidth()}px > 110 (R3 紧凑化)."
+        assert 200 <= w.maximumWidth() <= 260, (
+            f"OrderContextual field {w.objectName() or type(w).__name__}"
+            f" maximumWidth={w.maximumWidth()}px should use the A1 cap."
         )
 
 
 def test_fft_time_contextual_short_fields_capped(qapp):
-    """fix-3 — FFTTimeContextual numeric fields must also cap tight."""
+    """A1 — FFTTimeContextual fields share the normal field cap."""
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     for w in (ctx.spin_overlap, ctx.spin_fs, ctx.combo_nfft, ctx.combo_win,
               ctx.spin_db_ref, ctx.spin_freq_min, ctx.spin_freq_max,
               ctx.combo_dynamic, ctx.combo_cmap, ctx.combo_amp_mode):
-        assert w.maximumWidth() <= 130, (
-            f"FFTTimeContextual short field "
+        assert 200 <= w.maximumWidth() <= 260, (
+            f"FFTTimeContextual field "
             f"{w.objectName() or type(w).__name__} maximumWidth="
-            f"{w.maximumWidth()}px > 130 (R3 紧凑化)."
+            f"{w.maximumWidth()}px should use the A1 cap."
         )
+
+
+def test_inspector_body_fills_360_width_under_qss(qapp, qtbot):
+    """Styled Inspector body should fill the 360px right pane."""
+    from pathlib import Path
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+        )
+        insp = Inspector()
+        qtbot.addWidget(insp)
+        insp.resize(360, 850)
+        insp.show()
+        qtbot.waitExposed(insp)
+        qtbot.wait(50)
+
+        assert insp.width() == 360
+        assert insp._scroll_body.width() >= 340, (
+            f"Inspector body should fill a 360px pane; body="
+            f"{insp._scroll_body.width()}, viewport={insp._scroll.viewport().width()}"
+        )
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
+def test_fft_contextual_fields_fill_column_under_qss(qapp, qtbot):
+    """A1 layout: FFT fields share the full field-column width."""
+    from pathlib import Path
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+        )
+        insp = Inspector()
+        qtbot.addWidget(insp)
+        insp.resize(360, 850)
+        insp.set_mode('fft')
+        insp.show()
+        qtbot.waitExposed(insp)
+        qtbot.wait(50)
+
+        ctx = insp.fft_ctx
+        fields = [
+            ctx.combo_sig,
+            ctx.spin_fs,
+            ctx.combo_win,
+            ctx.combo_nfft,
+            ctx.spin_overlap,
+        ]
+        widths = [field.width() for field in fields]
+        right_edges = [
+            field.mapTo(ctx, field.rect().topLeft()).x() + field.width()
+            for field in fields
+        ]
+        assert max(widths) - min(widths) <= 2, (
+            "FFT fields should fill the same column width under A1; "
+            f"got {widths}"
+        )
+        assert max(right_edges) - min(right_edges) <= 2, (
+            "FFT fields should share a right edge under A1; "
+            f"got {right_edges}"
+        )
+        assert min(widths) >= 190, (
+            f"Field column should be materially wider than compact 110px; "
+            f"got {widths}"
+        )
+    finally:
+        qapp.setStyleSheet(old_sheet)
 
 
 def test_signal_card_qframes_have_no_white_bleed(qapp):

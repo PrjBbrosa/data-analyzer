@@ -26,10 +26,10 @@ from .inspector_sections import (
 # 2026-04-26 R3 紧凑化 fix-1: cap the Inspector's content width so
 # Expanding children (QSpinBox / QComboBox / QLineEdit) stop growing
 # unboundedly when the right splitter pane is dragged wider. The cap
-# should be just wide enough to host the longest legitimate content
-# (signal-source combo with a representative signal name) — 360 fits
-# the design's three-pane topology (left 250 / chart 900 / right 360).
-_INSPECTOR_CONTENT_MAX_WIDTH = 360
+# should be just wide enough to host the longest legitimate content.
+# The visible right pane is 360px wide; the content body is 344px so the
+# scroll area has room for its scrollbar and 2px pane margins.
+_INSPECTOR_CONTENT_MAX_WIDTH = 344
 
 
 class Inspector(QWidget):
@@ -64,7 +64,7 @@ class Inspector(QWidget):
         # Surplus split-pane width was previously absorbed by host_lay.addStretch,
         # producing a visible empty column on the right at large window sizes.
         # +16 covers the QScrollArea vertical scrollbar + 2px-each-side margins.
-        self.setMaximumWidth(_INSPECTOR_CONTENT_MAX_WIDTH + 16)
+        self.setFixedWidth(_INSPECTOR_CONTENT_MAX_WIDTH + 16)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(0)
@@ -90,7 +90,7 @@ class Inspector(QWidget):
         host_lay.setSpacing(0)
 
         self._scroll_body = QWidget(host)
-        self._scroll_body.setMaximumWidth(_INSPECTOR_CONTENT_MAX_WIDTH)
+        self._scroll_body.setFixedWidth(_INSPECTOR_CONTENT_MAX_WIDTH)
         body_lay = QVBoxLayout(self._scroll_body)
         body_lay.setContentsMargins(0, 0, 0, 0)
         body_lay.setSpacing(6)

@@ -338,6 +338,9 @@ QScrollArea#inspectorScroll {
 QScrollArea#inspectorScroll > QWidget > QWidget {
     background-color: #f5f7fb;
 }
+Inspector QWidget[inspectorFieldHost="true"] {
+    background-color: transparent;
+}
 
 /* QGroupBox: no frame. Separation comes from a 12/600 title with a
  * 1px hairline underline (R3 #3-B compactification). The underline

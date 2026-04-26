@@ -216,11 +216,10 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.navigator)
         splitter.addWidget(self.chart_stack)
         splitter.addWidget(self.inspector)
-        # 2026-04-26 R3 紧凑化 fix-5: align inspector default size with
-        # Inspector._scroll_body.maximumWidth (360); the 60px bump from
-        # 300→360 prevents a visible gap on first launch where the splitter
-        # would otherwise hand the inspector less width than its capped
-        # content needs.
+        # 2026-04-26 R3 紧凑化 fix-5: align the inspector splitter slot with
+        # the fixed visible Inspector width (360). The 60px bump from 300→360
+        # prevents a visible gap on first launch where the splitter would
+        # otherwise hand the inspector less width than its content needs.
         splitter.setSizes([250, 900, 360])
         # 2026-04-26 inspector 右侧空白二次修复:
         # Without explicit stretch factors, QSplitter distributes window-resize
@@ -238,7 +237,7 @@ class MainWindow(QMainWindow):
         splitter.setHandleWidth(3)
         self.navigator.setMinimumWidth(220)
         self.chart_stack.setMinimumWidth(400)
-        self.inspector.setMinimumWidth(280)
+        self.inspector.setMinimumWidth(self.inspector.maximumWidth())
         root.addWidget(splitter, stretch=1)
 
         # Convenience aliases pointing to children of ChartStack / Navigator —

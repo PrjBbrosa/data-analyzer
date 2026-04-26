@@ -49,6 +49,42 @@ def test_main_window_splitter_default_sizes_align_with_inspector_cap(qapp, qtbot
     )
 
 
+def test_main_window_inspector_slot_fixed_at_360_under_qss(qapp, qtbot):
+    """Default app styling keeps the right Inspector slot at 360px.
+
+    This covers the real startup path more closely than the smoke test
+    above because it applies ``style.qss``. The bug report screenshots came
+    from the styled app, where the Inspector body could shrink inside the
+    splitter slot and leave an empty band.
+    """
+    from pathlib import Path
+    from PyQt5.QtWidgets import QSplitter
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+        )
+        w = MainWindow()
+        qtbot.addWidget(w)
+        w.resize(2048, 1228)
+        w.show()
+        qtbot.waitExposed(w)
+        qtbot.wait(50)
+
+        splitter = w.findChild(QSplitter)
+        sizes = splitter.sizes()
+        assert sizes[2] == 360, (
+            f"Inspector splitter slot should stay fixed at 360px; got {sizes}"
+        )
+        assert w.inspector.width() == 360
+        assert w.inspector.minimumWidth() == 360
+        assert w.inspector.maximumWidth() == 360
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_load_csv_flows_through_navigator(qapp, qtbot, loaded_csv):
     from unittest.mock import patch
     from mf4_analyzer.ui.main_window import MainWindow

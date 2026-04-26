@@ -397,6 +397,13 @@ def _configure_form(form):
     form.setRowWrapPolicy(QFormLayout.DontWrapRows)
     form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
     form.setFormAlignment(Qt.AlignTop)
+    form.setContentsMargins(0, 0, 0, 0)
+    parent = form.parentWidget()
+    if isinstance(parent, QGroupBox):
+        margins = parent.contentsMargins()
+        parent.setContentsMargins(
+            margins.left(), margins.top(), 0, margins.bottom(),
+        )
     # Compact rhythm: tightened from H=8 V=8 to H=6 V=4 (2026-04-26
     # 紧凑化 pass) so a typical Inspector card fits more rows without
     # scrolling on narrow screens.
@@ -404,7 +411,7 @@ def _configure_form(form):
     form.setVerticalSpacing(4)
 
 
-def _fit_field(widget, *, max_width=None):
+def _fit_field(widget, *, max_width=None, align_right=True):
     """Make ``widget`` happy in a ``QFormLayout`` field cell.
 
     Sets size-policy to Expanding/Fixed and clears any minimumWidth so the
@@ -413,20 +420,36 @@ def _fit_field(widget, *, max_width=None):
     unboundedly whenever the parent pane (splitter slot) widens, which is
     the root cause of the "toggle a checkbox → pane visually balloons"
     defect addressed in the 2026-04-26 紧凑化 fix-3 pass.
+
+    In the A1 layout, the host fills the QFormLayout field cell and the
+    input is aligned to the trailing edge. This makes fields from separate
+    groups share a right edge even when their label columns differ.
     """
     widget.setMinimumWidth(0)
     widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     if max_width is not None:
         widget.setMaximumWidth(int(max_width))
-    return widget
+    if not align_right:
+        return widget
+
+    host = QWidget()
+    host.setProperty("inspectorFieldHost", True)
+    host.setAttribute(Qt.WA_StyledBackground, False)
+    host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    box = QHBoxLayout(host)
+    box.setContentsMargins(0, 0, 0, 0)
+    box.setSpacing(0)
+    box.addStretch(1)
+    box.addWidget(widget, 100)
+    return host
 
 
-# 2026-04-26 R3 紧凑化 fix-3:
-# Default cap for short numeric / single-token combo fields. "0.000 s",
-# "10 rpm", "0.10", "1024" all fit in well under this width. The long-text
-# exception is the signal/source combo (combo_sig) which carries multi-token
-# user-facing labels and keeps a generous cap of _LONG_FIELD_MAX_WIDTH.
-_SHORT_FIELD_MAX_WIDTH = 110
+# 2026-04-26 R3 紧凑化 fix-3 / A1 follow-up:
+# Default cap for inspector fields. The user chose the A1 layout: inputs
+# should fill the form's field column instead of keeping short numeric
+# values in visibly shorter boxes. Both regular and signal/source fields
+# therefore share the same cap.
+_SHORT_FIELD_MAX_WIDTH = 260
 _LONG_FIELD_MAX_WIDTH = 260
 
 
@@ -443,11 +466,11 @@ def _pair_field(widget_a, label_b_text, widget_b):
     box = QHBoxLayout(host)
     box.setContentsMargins(0, 0, 0, 0)
     box.setSpacing(6)
-    box.addWidget(_fit_field(widget_a), 1)
+    box.addWidget(_fit_field(widget_a, align_right=False), 1)
     inline_label = QLabel(label_b_text)
     inline_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
     box.addWidget(inline_label, 0)
-    box.addWidget(_fit_field(widget_b), 1)
+    box.addWidget(_fit_field(widget_b, align_right=False), 1)
     return host
 
 
@@ -484,8 +507,16 @@ def _enforce_label_widths(widget, *, max_field_width=None):
                         lbl.setMinimumWidth(natural)
             if fld_item is not None and max_field_width is not None:
                 fld = fld_item.widget()
-                if fld is not None and fld.maximumWidth() >= QWIDGETSIZE_MAX:
-                    fld.setMaximumWidth(int(max_field_width))
+                if fld is None:
+                    continue
+                targets = [fld]
+                if bool(fld.property("inspectorFieldHost")):
+                    targets = fld.findChildren(
+                        QWidget, options=Qt.FindDirectChildrenOnly,
+                    )
+                for target in targets:
+                    if target.maximumWidth() >= QWIDGETSIZE_MAX:
+                        target.setMaximumWidth(int(max_field_width))
 
 
 def _set_form_row_visible(form, field_widget, visible):
