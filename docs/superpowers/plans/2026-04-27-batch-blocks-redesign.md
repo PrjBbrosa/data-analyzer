@@ -1504,6 +1504,11 @@ class BatchSheet(QDialog):
     def export_data(self) -> bool: ...
     def export_image(self) -> bool: ...
     def data_format(self) -> str: ...
+    def signals_marked_unavailable(self) -> tuple[str, ...]: ...
+        # Subset of selected_signals that are NOT in the current file
+        # intersection — visualised as red chips. Driven by SignalPickerPopup
+        # state when apply_preset injects signals that aren't in the
+        # intersection.
 
     # Mutators (Wave 7 apply_preset path)
     def apply_method(self, method: str) -> None: ...
@@ -1555,6 +1560,28 @@ def test_picker_marks_partial_signals_grey(qtbot):
     qtbot.addWidget(p)
     assert p.is_disabled("sig_b") is True
     assert "(2/3)" in p.label_for("sig_b")
+
+
+def test_picker_popup_collapses_on_escape(qtbot):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+    p.show_popup()
+    assert p.is_popup_visible() is True
+    qtbot.keyClick(p._popup, Qt.Key_Escape)
+    assert p.is_popup_visible() is False
+
+
+def test_picker_popup_collapses_on_focus_out(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+    p.show_popup()
+    assert p.is_popup_visible() is True
+    p._popup.clearFocus()  # simulate click-away
+    qtbot.wait(50)
+    assert p.is_popup_visible() is False
 ```
 
 - [ ] **Step 2: Implement `SignalPickerPopup`**
@@ -1638,6 +1665,55 @@ def test_intersection_changes_emit_signal(qtbot):
     w.add_loaded_file(1, "b.mf4", frozenset({"sig", "other"}))
     # Intersection should now be {"sig"}
     assert seen[-1] == frozenset({"sig"})
+
+
+def test_path_pending_to_loaded_transition(qtbot, tmp_path):
+    """Disk-add: state should walk path_pending → probing → loaded
+    once probe completes (spec §3.2 file state machine)."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import FileListWidget
+    w = FileListWidget()
+    qtbot.addWidget(w)
+    states = []
+    w.stateChanged.connect(lambda path, state: states.append((path, state)))
+    # Make the probe synchronous and successful
+    w._probe_signals_for = lambda path: frozenset({"sig"})
+    path = str(tmp_path / "x.mf4")
+    w.add_disk_path(path)
+    qtbot.waitUntil(lambda: w.row_state(path) == "loaded", timeout=2000)
+    seen_states = [s for p, s in states if p == path]
+    assert "path_pending" in seen_states
+    assert "loaded" in seen_states
+
+
+def test_run_disabled_while_probing(qtbot, tmp_path):
+    """BatchSheet.is_runnable() must be False while any file is in
+    path_pending or probing state (spec §7)."""
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    # Stub probe to never complete in this test
+    fl = sheet._input_panel._file_list
+    fl._probe_signals_for = lambda path: (_ for _ in ()).throw(
+        RuntimeError("probe should not be called synchronously here"))
+    # Force a path_pending row directly
+    fl._set_row_state(str(tmp_path / "pending.mf4"), "path_pending")
+    assert sheet.is_runnable() is False
+
+
+def test_pipeline_strip_recomputes_on_input_changes(qtbot):
+    """Configuration changes in any panel must propagate to the strip's
+    status badges (spec §3.1 ✓/⚠ logic)."""
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+    sheet = BatchSheet(None, files={})
+    qtbot.addWidget(sheet)
+    # Initially all stages warn (no config)
+    assert sheet.strip.cards[0].stage_status == "warn"
+    # Add file + signal → INPUT goes ok
+    sheet._input_panel._file_list.add_loaded_file(0, "a.mf4",
+                                                   frozenset({"sig"}))
+    sheet._input_panel._signal_picker.set_selected(("sig",))
+    qtbot.wait(20)
+    assert sheet.strip.cards[0].stage_status == "ok"
 ```
 
 - [ ] **Step 6: Implement `FileListWidget` + `InputPanel`**
@@ -1933,6 +2009,46 @@ class BatchRunnerThread(QThread):
 
 ```bash
 pytest tests/ui -v
+```
+
+- [ ] **Step 6.5: Sheet-level cancel UI test (automated)**
+
+Add to `tests/ui/test_batch_runner_thread.py`:
+```python
+def test_sheet_cancel_button_unlocks_editing(qtbot, tmp_path):
+    """Click 中断 → cancel_token set → thread.finished → editing unlocked,
+    buttons restored. Pinned to QThread.finished, not finished_with_result."""
+    import numpy as np, pandas as pd
+    from mf4_analyzer.batch import AnalysisPreset, BatchRunner
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch import BatchSheet
+
+    # Build a 3-file batch so cancel mid-run is observable
+    fds = {}
+    for i in range(3):
+        n = 4096
+        t = np.arange(n) / 512.0
+        df = pd.DataFrame({"Time": t, "sig": np.sin(2*np.pi*50*t)})
+        fds[i] = FileData(tmp_path / f"x{i}.csv", df,
+                          list(df.columns), {}, idx=i)
+    sheet = BatchSheet(None, files=fds)
+    qtbot.addWidget(sheet)
+    sheet.apply_files(file_ids=tuple(fds.keys()), file_paths=())
+    sheet.apply_signals(("sig",))
+    sheet.apply_method("fft")
+    sheet.apply_params({"window": "hanning", "nfft": 512})
+    sheet.apply_outputs(__import__("mf4_analyzer").batch.BatchOutput(
+        export_data=True, export_image=False, data_format="csv"))
+    sheet._output_panel.apply_directory(str(tmp_path / "out"))
+
+    sheet._on_run_clicked()
+    qtbot.waitUntil(lambda: sheet._running is True, timeout=1000)
+    sheet._on_cancel_clicked()  # 中断 button handler
+    qtbot.waitUntil(lambda: sheet._running is False, timeout=5000)
+    # Editing must be re-enabled
+    assert sheet._input_panel.isEnabled()
+    assert sheet._analysis_panel.isEnabled()
+    assert sheet._output_panel.isEnabled()
 ```
 
 - [ ] **Step 7: Manual end-to-end**
