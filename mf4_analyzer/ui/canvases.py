@@ -37,6 +37,24 @@ GRID_LINE = '#d7dee8'
 PRIMARY = '#1769e0'
 DANGER = '#dc2626'
 
+# ----------------------------------------------------------------------
+# Wave 2 Task 2.9: compactness constants.
+#
+# CHART_TIGHT_LAYOUT_KW — tight margins for non-spectrogram canvases.
+#   Default tight_layout pad is 1.08x font size which is loose for the
+#   Chinese fonts we use; pinning pad/h_pad/w_pad gives a denser layout.
+# SPECTROGRAM_SUBPLOT_ADJUST — explicit subplot box for SpectrogramCanvas.
+#   Must be applied via fig.subplots_adjust AFTER fig.colorbar(...) so
+#   colorbar geometry is already in place. (Wired up in Task 2.10.)
+# AXIS_HIT_MARGIN_PX — pixel margin around an axes for hit-detection of
+#   the axis-edit affordance (double-click / hover cursor swap).
+# ----------------------------------------------------------------------
+CHART_TIGHT_LAYOUT_KW = dict(pad=0.4, h_pad=0.6, w_pad=0.4)
+SPECTROGRAM_SUBPLOT_ADJUST = dict(
+    left=0.07, right=0.93, top=0.97, bottom=0.09,
+)
+AXIS_HIT_MARGIN_PX = 45
+
 
 def _is_monotonic_array(t):
     """Return True iff ``t`` is non-decreasing. Empty / single-sample → True."""
@@ -487,7 +505,7 @@ class TimeDomainCanvas(FigureCanvas):
                     ax.tick_params(axis='x', labelbottom=False)
                 else:
                     ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
-            self.fig.tight_layout()
+            self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
         elif mode == 'overlay' and len(vis) >= 2:
             # Per-channel twin-Y axes
             ax0 = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax0)
@@ -517,7 +535,7 @@ class TimeDomainCanvas(FigureCanvas):
             # Overlay keeps the right-hand margin adjustment because multiple twinx
             # spines require space; tight_layout cannot reason about twinx stacks.
             # Use tight_layout first to fix left/top/bottom, then carve the right.
-            self.fig.tight_layout()
+            self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
             right = max(0.93 - 0.065 * max(0, len(vis) - 2), 0.58)
             self.fig.subplots_adjust(right=right)
         else:
@@ -536,7 +554,7 @@ class TimeDomainCanvas(FigureCanvas):
             _set_series_ylabel(ax, label, color, labelpad=12, unit=unit, side='left')
             ax.tick_params(axis='y', colors=color, labelsize=7)
             ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
-            self.fig.tight_layout()
+            self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
         for ax in self.axes_list:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=10, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=6, min_n_ticks=3))
@@ -906,7 +924,7 @@ class TimeDomainCanvas(FigureCanvas):
         # _axis_interaction helper.
         if e.button == 1 and e.dblclick:
             from ._axis_interaction import find_axis_for_dblclick, edit_axis_dialog
-            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, 45)
+            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, AXIS_HIT_MARGIN_PX)
             if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
                 self.draw_idle()
             return
@@ -942,7 +960,7 @@ class TimeDomainCanvas(FigureCanvas):
         if not self._mouse_button_pressed:
             from ._axis_interaction import find_axis_for_dblclick
             from PyQt5.QtCore import Qt
-            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, 45)
+            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, AXIS_HIT_MARGIN_PX)
             if ax is not None:
                 self.setCursor(Qt.PointingHandCursor)
                 self.setToolTip("双击编辑坐标轴")
@@ -1282,7 +1300,7 @@ class SpectrogramCanvas(FigureCanvas):
         with _warnings.catch_warnings():
             _warnings.simplefilter('ignore', UserWarning)
             try:
-                self.fig.tight_layout()
+                self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
             except Exception:
                 pass
         self.draw_idle()
@@ -1375,7 +1393,7 @@ class SpectrogramCanvas(FigureCanvas):
         # Double-click on any axis (main spec OR slice) → open AxisEditDialog
         if event.button == 1 and event.dblclick:
             from ._axis_interaction import find_axis_for_dblclick, edit_axis_dialog
-            ax, axis = find_axis_for_dblclick(self.fig, event.x, event.y, 45)
+            ax, axis = find_axis_for_dblclick(self.fig, event.x, event.y, AXIS_HIT_MARGIN_PX)
             if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
                 self.draw_idle()
             return
@@ -1392,7 +1410,7 @@ class SpectrogramCanvas(FigureCanvas):
         if not self._mouse_button_pressed:
             from ._axis_interaction import find_axis_for_dblclick
             from PyQt5.QtCore import Qt
-            ax, axis = find_axis_for_dblclick(self.fig, event.x, event.y, 45)
+            ax, axis = find_axis_for_dblclick(self.fig, event.x, event.y, AXIS_HIT_MARGIN_PX)
             if ax is not None:
                 self.setCursor(Qt.PointingHandCursor)
                 self.setToolTip("双击编辑坐标轴")
@@ -1622,7 +1640,7 @@ class PlotCanvas(FigureCanvas):
         ax.set_title(title)
         cbar = self.fig.colorbar(im, ax=ax, label=cbar_label)
         try:
-            self.fig.tight_layout()
+            self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
         except Exception:
             pass
         self._heatmap_ax = ax
@@ -1726,7 +1744,7 @@ class PlotCanvas(FigureCanvas):
         if self._mouse_button_pressed:
             return
         from ._axis_interaction import find_axis_for_dblclick
-        ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, 45)
+        ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, AXIS_HIT_MARGIN_PX)
         if ax is not None:
             self.setCursor(Qt.PointingHandCursor)
             self.setToolTip("双击编辑坐标轴")
@@ -1738,7 +1756,7 @@ class PlotCanvas(FigureCanvas):
         # 双击编辑坐标轴 — 优先处理，不要求点击在axes内部
         if e.button == 1 and e.dblclick:
             from ._axis_interaction import find_axis_for_dblclick, edit_axis_dialog
-            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, 45)
+            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, AXIS_HIT_MARGIN_PX)
             if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
                 self.draw_idle()
             return
