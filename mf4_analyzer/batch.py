@@ -28,7 +28,7 @@ class BatchOutput:
     data_format: str = 'csv'
 
 
-@dataclass(frozen=True)
+@dataclass
 class AnalysisPreset:
     name: str
     method: str
@@ -151,6 +151,18 @@ class BatchRunner:
 
     @staticmethod
     def _matches(channel, pattern):
+        """通道名匹配规则：
+
+        - 空 pattern → 匹配所有通道
+        - pattern 大小写不敏感地包含在 channel 中（substring） → 匹配
+        - 否则按 pattern 当正则解析（IGNORECASE，re.search 半匹配） → 匹配
+
+        **注意：** substring 优先级高于 regex。所以包含正则元字符
+        （如 ``motor.speed``）的字面量信号名会先按 substring 匹配；
+        若 substring 未命中，``.`` 才被解释为"任意字符"，可能产生
+        意料之外的命中（如匹配到 ``motorXspeed``）。需要严格字面量
+        匹配的调用方应自行做 `re.escape(pattern)`。
+        """
         if not pattern:
             return True
         channel_l = channel.lower()
@@ -220,11 +232,18 @@ class BatchRunner:
 
     @staticmethod
     def _compute_fft_dataframe(sig, fs, params):
+        nfft_raw = params.get('nfft')
+        if isinstance(nfft_raw, str):
+            nfft = None if nfft_raw.strip() in ('', '自动', 'auto') else int(nfft_raw)
+        elif nfft_raw is None or nfft_raw <= 0:
+            nfft = None
+        else:
+            nfft = int(nfft_raw)
         freq, amp = FFTAnalyzer.compute_fft(
             sig,
             fs,
             win=params.get('window', params.get('win', 'hanning')),
-            nfft=params.get('nfft'),
+            nfft=nfft,
         )
         return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
 
@@ -318,34 +337,39 @@ class BatchRunner:
         from matplotlib.figure import Figure
 
         fig = Figure(figsize=(8, 4.5), dpi=140)
-        ax = fig.subplots()
-        if kind == 'fft':
-            ax.plot(df['frequency_hz'], df['amplitude'], lw=1.0)
-            ax.set_xlabel('Frequency (Hz)')
-            ax.set_ylabel('Amplitude')
-        elif kind == 'order_track':
-            ax.plot(df['rpm'], df['amplitude'], lw=1.0)
-            ax.set_xlabel('RPM')
-            ax.set_ylabel('Amplitude')
-        else:
-            pivot = df.pivot(index=df.columns[1], columns=df.columns[0], values='amplitude')
-            im = ax.imshow(
-                pivot.to_numpy(),
-                aspect='auto',
-                origin='lower',
-                extent=[
-                    float(pivot.columns.min()),
-                    float(pivot.columns.max()),
-                    float(pivot.index.min()),
-                    float(pivot.index.max()),
-                ],
-            )
-            ax.set_xlabel(df.columns[0])
-            ax.set_ylabel(df.columns[1])
-            fig.colorbar(im, ax=ax, label='Amplitude')
-        ax.grid(True, alpha=0.25, ls='--')
-        fig.tight_layout()
-        fig.savefig(path)
+        try:
+            ax = fig.subplots()
+            if kind == 'fft':
+                ax.plot(df['frequency_hz'], df['amplitude'], lw=1.0)
+                ax.set_xlabel('Frequency (Hz)')
+                ax.set_ylabel('Amplitude')
+            elif kind == 'order_track':
+                ax.plot(df['rpm'], df['amplitude'], lw=1.0)
+                ax.set_xlabel('RPM')
+                ax.set_ylabel('Amplitude')
+            else:
+                pivot = df.pivot(index=df.columns[1], columns=df.columns[0], values='amplitude')
+                im = ax.imshow(
+                    pivot.to_numpy(),
+                    aspect='auto',
+                    origin='lower',
+                    extent=[
+                        float(pivot.columns.min()),
+                        float(pivot.columns.max()),
+                        float(pivot.index.min()),
+                        float(pivot.index.max()),
+                    ],
+                    interpolation='bilinear',
+                    cmap='turbo',
+                )
+                ax.set_xlabel(df.columns[0])
+                ax.set_ylabel(df.columns[1])
+                fig.colorbar(im, ax=ax, label='Amplitude')
+            ax.grid(True, alpha=0.25, ls='--')
+            fig.tight_layout()
+            fig.savefig(path)
+        finally:
+            fig.clear()
         return path
 
 
@@ -366,8 +390,11 @@ def _matrix_to_long_dataframe(x_values, y_values, matrix, x_name, y_name):
     x_values = np.asarray(x_values, dtype=float)
     y_values = np.asarray(y_values, dtype=float)
     matrix = np.asarray(matrix, dtype=float)
-    rows = []
-    for xi, x in enumerate(x_values):
-        for yi, y in enumerate(y_values):
-            rows.append((x, y, matrix[xi, yi]))
-    return pd.DataFrame(rows, columns=[x_name, y_name, 'amplitude'])
+    if matrix.shape != (len(x_values), len(y_values)):
+        raise ValueError(
+            f"matrix shape {matrix.shape} does not match "
+            f"({len(x_values)}, {len(y_values)})"
+        )
+    xs = np.repeat(x_values, len(y_values))
+    ys = np.tile(y_values, len(x_values))
+    return pd.DataFrame({x_name: xs, y_name: ys, 'amplitude': matrix.reshape(-1)})

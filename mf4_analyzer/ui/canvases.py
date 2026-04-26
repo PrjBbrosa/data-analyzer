@@ -146,6 +146,171 @@ def _format_dual_html(rows):
     return ''.join(parts)
 
 
+# ----------------------------------------------------------------------
+# Module-level envelope helper (spec §6.4 / plan T4 step 3).
+#
+# Pure function version of the viewport-aware min/max envelope reducer
+# previously embedded in ``TimeDomainCanvas._envelope``. Lives at module
+# scope so non-canvas callers (e.g. ``order_track`` lower-half RPM line)
+# can reuse the exact same downsampling without instantiating a canvas.
+#
+# ``TimeDomainCanvas._envelope`` is now a thin wrapper that forwards
+# here. The wrapper keeps its required-``xlim`` signature; the
+# ``xlim=None`` (full-range) contract belongs to ``build_envelope`` only,
+# per spec §6.4 — this prevents the canvas method's compatibility
+# surface from growing.
+# ----------------------------------------------------------------------
+
+# Default cap mirrors ``TimeDomainCanvas.MAX_PTS = 8000``. Forward
+# referencing the class attribute is impossible because this helper must
+# be defined before the class; the constant is duplicated here and kept
+# in sync deliberately.
+_BUILD_ENVELOPE_LEGACY_MAX_PTS = 8000
+
+
+def _ds_legacy_pure(t, sig, max_pts=_BUILD_ENVELOPE_LEGACY_MAX_PTS):
+    """Module-level twin of :meth:`TimeDomainCanvas._ds_legacy`.
+
+    Verbatim algorithm; ``self.MAX_PTS`` is replaced with the parameter
+    ``max_pts`` defaulting to the same 8000 the canvas uses.
+    """
+    n = len(sig)
+    if n <= max_pts:
+        return t, sig
+    bs = n // (max_pts // 2)
+    if bs < 2:
+        return t, sig
+    idx = []
+    for s in range(0, n, bs):
+        e = min(s + bs, n)
+        c = sig[s:e]
+        idx.extend([s + np.argmin(c), s + np.argmax(c)])
+    idx = np.unique(np.clip(idx, 0, n - 1))
+    return t[idx], sig[idx]
+
+
+def build_envelope(t, sig, *, xlim, pixel_width, is_monotonic=None):
+    """Pure function version of the viewport-aware min/max envelope.
+
+    Parameters
+    ----------
+    t, sig : np.ndarray
+        Same length 1-D arrays. ``t`` should be monotonic for the fast
+        path; non-monotonic input falls back to the legacy full-series
+        reducer (:func:`_ds_legacy_pure`).
+    xlim : tuple(float, float) | None
+        Visible x-axis range ``(x0, x1)``. ``None`` means **full range**
+        and is equivalent to ``(float(t[0]), float(t[-1]))`` — this is
+        the entry used by ``order_track``'s lower-half RPM line which
+        does not own a viewport. Empty ``t`` with ``xlim=None`` returns
+        the inputs untouched.
+    pixel_width : int
+        Approximate pixel width of the visible axes — sets the target
+        bucket count.
+    is_monotonic : Optional[bool]
+        Precomputed monotonicity flag. ``None`` means "scan to verify"
+        (safety net for ad-hoc callers / tests).
+
+    Returns
+    -------
+    (t_out, sig_out) : tuple of np.ndarray
+        Time-ordered (min, max) sample pairs per pixel bucket. Small
+        visible spans are returned unchanged. NaN buckets emit a single
+        NaN break to preserve polyline discontinuities.
+    """
+    # xlim=None → full-range fallback (spec §6.4). Empty input is
+    # special-cased to avoid IndexError on ``t[0]`` / ``t[-1]``.
+    if xlim is None:
+        if len(t) == 0:
+            return np.asarray(t, dtype=float), np.asarray(sig, dtype=float)
+        xlim = (float(t[0]), float(t[-1]))
+
+    t = np.asarray(t)
+    sig = np.asarray(sig)
+    n_total = len(sig)
+    if n_total == 0:
+        return t, sig
+    if pixel_width is None or pixel_width < 1:
+        pixel_width = 1
+
+    # Non-monotonic x → legacy full-series reduction. searchsorted is
+    # invalid here; trust the precomputed flag when supplied, else scan.
+    if n_total >= 2:
+        if is_monotonic is None:
+            is_monotonic = _is_monotonic_array(t)
+        if not is_monotonic:
+            return _ds_legacy_pure(t, sig)
+
+    x0, x1 = float(xlim[0]), float(xlim[1])
+    if x1 < x0:
+        x0, x1 = x1, x0
+    # Visible window via searchsorted (monotonic t).
+    i0 = int(np.searchsorted(t, x0, side='left'))
+    i1 = int(np.searchsorted(t, x1, side='right'))
+    if i1 <= i0:
+        return t[i0:i0], sig[i0:i0]
+
+    t_vis = t[i0:i1]
+    s_vis = sig[i0:i1]
+    n_vis = len(s_vis)
+
+    # Small-visible shortcut: don't bother bucketing.
+    if n_vis <= 2 * pixel_width:
+        return t_vis, s_vis
+
+    # Bucket count: ~one bucket per pixel.
+    n_buckets = int(pixel_width)
+    bs = max(1, n_vis // n_buckets)
+    n_buckets = max(1, n_vis // bs)
+
+    out_t = np.empty(2 * n_buckets, dtype=t_vis.dtype)
+    out_s = np.empty(2 * n_buckets, dtype=np.result_type(s_vis.dtype,
+                                                          np.float64))
+    out_count = 0
+
+    for b in range(n_buckets):
+        s_start = b * bs
+        # Last bucket absorbs the remainder so no samples are dropped.
+        s_end = n_vis if b == n_buckets - 1 else s_start + bs
+        seg = s_vis[s_start:s_end]
+        if seg.size == 0:
+            continue
+        nan_mask = np.isnan(seg) if np.issubdtype(seg.dtype,
+                                                    np.floating) else None
+        if nan_mask is not None and nan_mask.all():
+            mid_idx = s_start + seg.size // 2
+            out_t[out_count] = t_vis[mid_idx]
+            out_s[out_count] = np.nan
+            out_count += 1
+            continue
+        if nan_mask is not None and nan_mask.any():
+            rel_lo = int(np.nanargmin(seg))
+            rel_hi = int(np.nanargmax(seg))
+        else:
+            rel_lo = int(np.argmin(seg))
+            rel_hi = int(np.argmax(seg))
+        lo_idx = s_start + rel_lo
+        hi_idx = s_start + rel_hi
+        # Emit min/max in TIME ORDER so the line traversal is monotonic.
+        if lo_idx <= hi_idx:
+            out_t[out_count] = t_vis[lo_idx]
+            out_s[out_count] = s_vis[lo_idx]
+            out_count += 1
+            if hi_idx != lo_idx:
+                out_t[out_count] = t_vis[hi_idx]
+                out_s[out_count] = s_vis[hi_idx]
+                out_count += 1
+        else:
+            out_t[out_count] = t_vis[hi_idx]
+            out_s[out_count] = s_vis[hi_idx]
+            out_count += 1
+            out_t[out_count] = t_vis[lo_idx]
+            out_s[out_count] = s_vis[lo_idx]
+            out_count += 1
+
+    return out_t[:out_count], out_s[:out_count]
+
+
 class TimeDomainCanvas(FigureCanvas):
     MAX_PTS = 8000
     cursor_info = pyqtSignal(str)
@@ -418,127 +583,23 @@ class TimeDomainCanvas(FigureCanvas):
     # ----------------------------------------------------------------
 
     def _envelope(self, t, sig, xlim, pixel_width, *, is_monotonic=None):
-        """Viewport-aware min/max envelope for the visible x-range.
+        """Thin wrapper around :func:`build_envelope` (spec §6.4).
 
-        Parameters
-        ----------
-        t, sig : np.ndarray
-            Same length 1-D arrays. ``t`` should be monotonic for the
-            fast path; non-monotonic input falls back to the legacy
-            full-series :meth:`_ds_legacy`.
-        xlim : tuple(float, float)
-            Visible x-axis range ``(x0, x1)``.
-        pixel_width : int
-            Approximate pixel width of the visible axes — sets the
-            target bucket count.
-        is_monotonic : Optional[bool]
-            Precomputed monotonicity of ``t`` (F-1 follow-up to Phase 1
-            item 6). When provided, ``_envelope`` trusts it and skips the
-            O(n) ``np.diff(t)`` scan. When ``None`` (ad-hoc callers,
-            tests), falls back to the uncached scan as a safety net.
-
-        Returns
-        -------
-        (t_out, sig_out) : tuple of np.ndarray
-            Time-ordered (min, max) sample pairs per pixel bucket. When
-            the visible point count is already small, the raw visible
-            slice is returned unchanged. NaN buckets are preserved as
-            NaN breaks so the polyline keeps its discontinuity.
+        ``xlim`` stays required here on purpose — the ``xlim=None``
+        full-range contract belongs to the module-level helper only and
+        must not propagate to this method, otherwise ``TimeDomainCanvas``
+        callers gain a compatibility surface they never asked for.
         """
-        t = np.asarray(t)
-        sig = np.asarray(sig)
-        n_total = len(sig)
-        if n_total == 0:
-            return t, sig
-        if pixel_width is None or pixel_width < 1:
-            pixel_width = 1
-
-        # Non-monotonic x → legacy full-series reduction. searchsorted is
-        # invalid here, and per the Phase 1 spec we keep the old fallback.
-        # Trust the precomputed flag when supplied; otherwise scan as a
-        # safety net for ad-hoc callers (tests, future code paths).
-        if n_total >= 2:
-            if is_monotonic is None:
-                is_monotonic = _is_monotonic_array(t)
-            if not is_monotonic:
-                return self._ds_legacy(t, sig)
-
-        x0, x1 = float(xlim[0]), float(xlim[1])
-        if x1 < x0:
-            x0, x1 = x1, x0
-        # Visible window via searchsorted (monotonic t).
-        i0 = int(np.searchsorted(t, x0, side='left'))
-        i1 = int(np.searchsorted(t, x1, side='right'))
-        if i1 <= i0:
-            # No visible samples → return empty arrays of the right dtype.
-            return t[i0:i0], sig[i0:i0]
-
-        t_vis = t[i0:i1]
-        s_vis = sig[i0:i1]
-        n_vis = len(s_vis)
-
-        # Small-visible shortcut: don't bother bucketing.
-        if n_vis <= 2 * pixel_width:
-            return t_vis, s_vis
-
-        # Bucket count: ~one bucket per pixel.
-        n_buckets = int(pixel_width)
-        bs = max(1, n_vis // n_buckets)
-        # Adjust n_buckets to the integer floor — the last bucket may be
-        # slightly larger to cover the tail (handled below).
-        n_buckets = max(1, n_vis // bs)
-
-        # Pre-allocate output: at most 2 samples per bucket.
-        out_t = np.empty(2 * n_buckets, dtype=t_vis.dtype)
-        out_s = np.empty(2 * n_buckets, dtype=np.result_type(s_vis.dtype,
-                                                              np.float64))
-        out_count = 0
-
-        # Determine NaN handling per-bucket.
-        for b in range(n_buckets):
-            s_start = b * bs
-            # Last bucket absorbs the remainder so no samples are dropped.
-            s_end = n_vis if b == n_buckets - 1 else s_start + bs
-            seg = s_vis[s_start:s_end]
-            if seg.size == 0:
-                continue
-            # NaN classification.
-            nan_mask = np.isnan(seg) if np.issubdtype(seg.dtype,
-                                                        np.floating) else None
-            if nan_mask is not None and nan_mask.all():
-                # All-NaN bucket → emit a single NaN break at the bucket
-                # midpoint so the polyline disconnects.
-                mid_idx = s_start + seg.size // 2
-                out_t[out_count] = t_vis[mid_idx]
-                out_s[out_count] = np.nan
-                out_count += 1
-                continue
-            if nan_mask is not None and nan_mask.any():
-                rel_lo = int(np.nanargmin(seg))
-                rel_hi = int(np.nanargmax(seg))
-            else:
-                rel_lo = int(np.argmin(seg))
-                rel_hi = int(np.argmax(seg))
-            lo_idx = s_start + rel_lo
-            hi_idx = s_start + rel_hi
-            # Emit min/max in TIME ORDER so the line traversal is monotonic.
-            if lo_idx <= hi_idx:
-                out_t[out_count] = t_vis[lo_idx]
-                out_s[out_count] = s_vis[lo_idx]
-                out_count += 1
-                if hi_idx != lo_idx:
-                    out_t[out_count] = t_vis[hi_idx]
-                    out_s[out_count] = s_vis[hi_idx]
-                    out_count += 1
-            else:
-                out_t[out_count] = t_vis[hi_idx]
-                out_s[out_count] = s_vis[hi_idx]
-                out_count += 1
-                out_t[out_count] = t_vis[lo_idx]
-                out_s[out_count] = s_vis[lo_idx]
-                out_count += 1
-
-        return out_t[:out_count], out_s[:out_count]
+        if xlim is None:
+            raise TypeError(
+                "TimeDomainCanvas._envelope requires an explicit xlim tuple; "
+                "use build_envelope(...) for the full-range (xlim=None) contract."
+            )
+        return build_envelope(
+            t, sig,
+            xlim=xlim, pixel_width=pixel_width,
+            is_monotonic=is_monotonic,
+        )
 
     # ----------------------------------------------------------------
     # Envelope LRU cache (Phase 1 item 4)
@@ -1385,12 +1446,119 @@ class PlotCanvas(FigureCanvas):
         self._scroll_timer = QTimer()
         self._scroll_timer.setSingleShot(True)
         self._scroll_timer.timeout.connect(lambda: self.draw_idle())
+        # Heatmap reuse handles (spec §6.2 / plan T4 step 7).
+        # ``plot_or_update_heatmap`` populates these; ``clear()`` resets
+        # them. Init here so the first call's ``getattr(..., None)`` is
+        # not the only thing keeping the compat-check honest — the
+        # matplotlib-axes-callbacks-lifecycle lesson applies: stale
+        # handles after a structural rebuild silently bypass the
+        # 4-clause check otherwise.
+        self._heatmap_ax = None
+        self._heatmap_im = None
+        self._heatmap_cbar = None
 
     def clear(self):
         self._remarks = []
         self._line_data = {}
+        # Reset heatmap handles BEFORE fig.clear() so any caller racing
+        # against a partially-cleared figure sees a consistent "no
+        # heatmap" state. fig.clear() destroys the underlying axes; if
+        # we leave the handles dangling, the next plot_or_update_heatmap
+        # may pass clauses 1-3 of the compat check (handles not None,
+        # in fig.axes if Python still holds the ref) yet operate on a
+        # dead artist.
+        self._heatmap_ax = None
+        self._heatmap_im = None
+        self._heatmap_cbar = None
         self.fig.clear()
         self.fig.set_facecolor(CHART_FACE)
+
+    def plot_or_update_heatmap(self, *, matrix, x_extent, y_extent,
+                                x_label, y_label, title,
+                                cmap='turbo', interp='bilinear',
+                                vmin=None, vmax=None,
+                                cbar_label='Amplitude'):
+        """Render a 2-D heatmap; on a compatible second call reuse the
+        existing axes / image / colorbar via ``set_data`` instead of
+        rebuilding (spec §4.2 / §6.2).
+
+        ``matrix`` is shape ``(N_y, N_x)`` matching ``imshow`` row/col
+        layout. ``x_extent`` / ``y_extent`` are ``(min, max)``.
+
+        Compatibility judgement (all 4 must hold to take the
+        ``set_data`` fast path; otherwise fall back to ``clear()`` +
+        rebuild):
+
+        1. Three handles all non-``None``;
+        2. heatmap axes still member of ``fig.axes`` (rules out
+           accidental destruction by external code paths);
+        3. ``len(fig.axes) == 2`` — heatmap + its colorbar exactly,
+           rules out the 2-subplot ``order_track`` layout;
+        4. existing image's array shape equals the new matrix shape —
+           ``AxesImage.set_data`` accepts shape changes but downstream
+           extent/clim wiring becomes brittle; we conservatively rebuild
+           in that case.
+
+        Non-uniform-grid warning: ``imshow`` requires a uniform grid on
+        both axes. If a future caller introduces logarithmic RPM bins
+        etc., do NOT call this method — fall back to ``pcolormesh`` or a
+        dedicated canvas.
+        """
+        m = np.asarray(matrix, dtype=float)
+        if vmin is None:
+            vmin = float(np.nanmin(m))
+        if vmax is None:
+            vmax = float(np.nanmax(m))
+
+        existing_ax = getattr(self, '_heatmap_ax', None)
+        existing_im = getattr(self, '_heatmap_im', None)
+        existing_cbar = getattr(self, '_heatmap_cbar', None)
+        compatible = (
+            existing_ax is not None
+            and existing_im is not None
+            and existing_cbar is not None
+            and existing_ax in self.fig.axes
+            and len(self.fig.axes) == 2
+            and existing_im.get_array().shape == m.shape
+        )
+        if compatible:
+            existing_im.set_data(m)
+            existing_im.set_extent([x_extent[0], x_extent[1],
+                                    y_extent[0], y_extent[1]])
+            existing_im.set_cmap(cmap)
+            existing_im.set_interpolation(interp)
+            existing_im.set_clim(vmin, vmax)
+            existing_ax.set_xlim(x_extent)
+            existing_ax.set_ylim(y_extent)
+            existing_ax.set_xlabel(x_label)
+            existing_ax.set_ylabel(y_label)
+            existing_ax.set_title(title)
+            existing_cbar.update_normal(existing_im)
+            existing_cbar.set_label(cbar_label)
+            self.draw_idle()
+            return
+
+        # Incompatible / first call → rebuild from scratch.
+        self.clear()
+        ax = self.fig.add_subplot(1, 1, 1)
+        im = ax.imshow(
+            m, origin='lower', aspect='auto',
+            extent=[x_extent[0], x_extent[1], y_extent[0], y_extent[1]],
+            cmap=cmap, interpolation=interp,
+            vmin=vmin, vmax=vmax,
+        )
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title(title)
+        cbar = self.fig.colorbar(im, ax=ax, label=cbar_label)
+        try:
+            self.fig.tight_layout()
+        except Exception:
+            pass
+        self._heatmap_ax = ax
+        self._heatmap_im = im
+        self._heatmap_cbar = cbar
+        self.draw_idle()
 
     def full_reset(self):
         """Clear figure AND remarks/stored-line-data."""

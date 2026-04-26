@@ -33,7 +33,7 @@
 - `compute_rpm_order_result` 中的 `counts` 语义改为按帧数累加（`counts[ri] += 1`），`safe_counts = np.maximum(counts, 1)`；高于 Nyquist 的 order 列**保留在 `orders` 数组里**（保持向后兼容形状）但在 `_order_amplitudes_batch` 内通过 `valid_orders_mask` 过滤，对应列恒为 0，counts 仍按帧数累加；同时在 `OrderRpmResult.metadata` 与 `OrderTimeResult.metadata` 加 `nyquist_clipped: int` 标注被裁掉的 order 列数。
 - `compute_rpm_order_result` 中 RPM-bin 索引**保留 `np.argmin` 语义**，但向量化为单次 broadcast：`np.argmin(np.abs(rpm_means[:, None] - rpm_bins[None, :]), axis=1)`。**理由：**算术索引 (`int(x+0.5)` 取上 vs `argmin` 平局取下) 在半-bin 边界、`rpm_min` 附近、`rpm_res` 不能整除区间时与 `argmin` 不等价；保留 `argmin` 免疫这些边界，向量化后单次成本与算术索引同量级（每帧 < 1 µs）。
 - `_order_amplitudes` 内层向量化为新静态方法 `_order_amplitudes_batch(frames, rpm_means, fs, orders, nfft, window_array)`：把所有 frame stack 成 `(N_frames, nfft)`，一次 `np.fft.rfft(... axis=1)`，再用矩阵化 interp 取阶次幅值。**stacking 必须按 chunk 进行**，由模块常量 `_ORDER_BATCH_FRAMES = 256` 控制（`signal/order.py` 顶部），不允许一次 stack 全部 frames。
-- **doubling 严格照搬 `signal/fft.py:one_sided_amplitude`：** `if amps.shape[1] > 2: nfft 偶数 → amps[:, 1:-1] *= 2.0; nfft 奇数 → amps[:, 1:] *= 2.0`，`shape[1] == 2`（即 `nfft <= 2`，含 `nfft == 3` 这种 size-2 边界）保持不动。**禁止**自创 doubling 规则，必须与 `one_sided_amplitude` 的 if/elif 分支一一对齐。
+- **doubling 严格照搬 `signal/fft.py:one_sided_amplitude`：** `if amps.shape[1] > 2: nfft 偶数 → amps[:, 1:-1] *= 2.0; nfft 奇数 → amps[:, 1:] *= 2.0`；`amps.shape[1] == 2`（对应 `nfft ∈ {2, 3}`）保持不动，与 `one_sided_amplitude` 的 `elif amp.size == 2: pass` 完全一一对齐。**禁止**自创 doubling 规则，也不要被 "odd nfft 的 last bin 要 ×2" 的笼统描述误导而把 `nfft=3` 拉出来单独处理。
 - 保留旧的 per-frame `_order_amplitudes` 静态方法**作为测试 baseline**（不再被生产代码调用，但被 `tests/test_order_analysis.py` 用作"向量化等价性"测试的独立基准——避免 baseline 与被测代码同源同 bug）。
 
 **线程层（main_window）：**
@@ -243,20 +243,48 @@ def _on_order_failed(self, msg, generation):
     QMessageBox.critical(self, "错误", msg)
 
 def closeEvent(self, event):
-    """窗口关闭：取消所有 worker，不让 parented QThread 在 running 时被 GC。"""
-    for attr in ('_order_worker', '_spectrogram_worker'):
-        worker = getattr(self, attr, None)
-        if worker is not None and worker.isRunning():
-            try:
-                worker.result_ready.disconnect()
-                worker.failed.disconnect()
-                worker.progress.disconnect()
-            except (TypeError, AttributeError):
-                pass
-            worker.cancel() if hasattr(worker, 'cancel') else None
-            if not worker.wait(2000):
-                worker.terminate()
-                worker.wait(500)
+    """窗口关闭：取消所有 worker，不让 parented QThread 在 running 时被 GC。
+
+    本仓库有两类 worker，要分开处理：
+
+    1. ``_order_worker`` 是 ``QThread`` 子类（本 spec 新增），自带 ``cancel()``。
+       走 ``cancel() + wait + terminate`` 路径。
+
+    2. ``_fft_time_thread + _fft_time_worker`` 是 ``QObject + QThread``
+       配合（``main_window.py:28-77`` 的 ``FFTTimeWorker(QObject)`` +
+       ``main_window.py:1469-1495`` 在 do_fft_time 里 ``moveToThread`` 的
+       ``QThread(self)``）。worker 自身没有 ``isRunning()``，要看 thread。
+       清理协议：``worker.cancel()`` 设 flag → compute 在下一帧自然返回 →
+       emit ``finished/failed`` → ``thread.quit()`` → ``thread.finished``
+       做 deleteLater 清理。closeEvent 的 wait 是给这个收尾时间。
+    """
+    # 1. order worker（QThread 子类）
+    order_worker = getattr(self, '_order_worker', None)
+    if order_worker is not None and order_worker.isRunning():
+        try:
+            order_worker.result_ready.disconnect()
+            order_worker.failed.disconnect()
+            order_worker.progress.disconnect()
+        except (TypeError, AttributeError):
+            pass
+        order_worker.cancel()
+        if not order_worker.wait(2000):
+            order_worker.terminate()
+            order_worker.wait(500)
+
+    # 2. FFT-vs-time（QObject worker on QThread）
+    fft_thread = getattr(self, '_fft_time_thread', None)
+    fft_worker = getattr(self, '_fft_time_worker', None)
+    if fft_thread is not None and fft_thread.isRunning():
+        if fft_worker is not None and hasattr(fft_worker, 'cancel'):
+            fft_worker.cancel()
+        # cancel 是协作式：worker.run 必须在下一次 cancel_token 检查处返回。
+        # 给 quit() 信号链 + wait 一段时间走完 deleteLater，否则强切。
+        fft_thread.quit()
+        if not fft_thread.wait(2000):
+            fft_thread.terminate()
+            fft_thread.wait(500)
+
     super().closeEvent(event)
 ```
 
@@ -326,7 +354,10 @@ def _order_amplitudes_batch(frames, rpm_means, fs, orders, nfft, window_array):
         else:
             amps[:, 1:] *= 2.0
     elif amps.shape[1] == 2:
-        # nfft <= 2：DC + Nyquist，都不 doubling，与 one_sided_amplitude 对齐
+        # amps.shape[1] == 2 对应 nfft ∈ {2, 3}（rfft 输出 nfft//2 + 1 个 bin）。
+        # fft.py:one_sided_amplitude 在 amp.size == 2 时也是 pass——不 doubling。
+        # 本分支必须与之一一对齐；不要被 "odd nfft 内部 bin 要 ×2" 的笼统说法
+        # 误导而把 nfft=3 单独 doubling，那会与 one_sided_amplitude 漂移。
         pass
 
     freq = np.fft.rfftfreq(nfft, 1.0 / fs)
@@ -460,8 +491,25 @@ def build_envelope(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Pure 函数版本的 viewport-aware envelope 下采样。
     与 TimeDomainCanvas._envelope 行为完全一致；TimeDomainCanvas 内部
-    应改为 thin wrapper 调这个函数。"""
+    应改为 thin wrapper 调这个函数。
+
+    **xlim 契约扩展（本 spec 新增）：**
+    - ``xlim=(lo, hi)``：原行为，按视口裁剪
+    - ``xlim=None``：**全范围**，等价于 ``(float(t[0]), float(t[-1]))``
+      —— 这是 ``order_track`` 下半幅 RPM 调用的入口；当前
+      ``TimeDomainCanvas._envelope`` 不支持 None，必须在 build_envelope
+      抽出的同时新增此分支。
+    """
+    if xlim is None:
+        xlim = (float(t[0]), float(t[-1]))
+    # ↓ 之后逻辑与原 TimeDomainCanvas._envelope 一致
 ```
+
+**TimeDomainCanvas._envelope 是否同样接受 None？** 本 spec 不要求。
+TimeDomainCanvas 现有所有调用点都显式传 ``xlim``，没有 None 路径。
+为了不放大兼容性表面，TimeDomainCanvas thin wrapper 保持原签名（必传 xlim），
+None 行为只属于 module-level helper 自身。这点要在 plan T4 的测试里
+显式断言。
 
 ## 7. 验收标准（可测量）
 

@@ -2,6 +2,7 @@ numpy
 pandas
 PyQt5
 matplotlib
+scipy>=1.10
 asammdf
 openpyxl
 pytest>=7.0
