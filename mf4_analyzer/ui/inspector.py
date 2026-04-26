@@ -59,6 +59,12 @@ class Inspector(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # 2026-04-26 fix: cap the inspector widget itself so the splitter cannot
+        # allocate more width than its capped content (_INSPECTOR_CONTENT_MAX_WIDTH).
+        # Surplus split-pane width was previously absorbed by host_lay.addStretch,
+        # producing a visible empty column on the right at large window sizes.
+        # +16 covers the QScrollArea vertical scrollbar + 2px-each-side margins.
+        self.setMaximumWidth(_INSPECTOR_CONTENT_MAX_WIDTH + 16)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(0)

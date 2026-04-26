@@ -944,6 +944,12 @@ class OrderContextual(QWidget):
     order_track_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
+    # T6: cancel intent for the in-flight :class:`OrderWorker`. MainWindow
+    # connects this to ``_cancel_order_compute``; the button at the bottom
+    # of the layout drives it directly via ``clicked``. Disabled until a
+    # worker is actually running (``_dispatch_order_worker`` enables; the
+    # ``_on_order_*`` slots disable on completion / failure).
+    cancel_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1058,6 +1064,17 @@ class OrderContextual(QWidget):
 
         self.lbl_progress = QLabel("")
         root.addWidget(self.lbl_progress)
+
+        # T6: cancel-compute button. Sits at the END of the layout so it
+        # never crowds the primary "时间-阶次 / 转速-阶次 / 阶次跟踪" buttons.
+        # ``clicked.connect(cancel_requested)`` re-emits without arguments;
+        # MainWindow listens to ``cancel_requested``, not the button.
+        self.btn_cancel = QPushButton("取消计算", self)
+        self.btn_cancel.setObjectName("orderCancelBtn")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.cancel_requested)
+        root.addWidget(self.btn_cancel)
+
         root.addStretch()
 
         self.btn_ot.clicked.connect(self.order_time_requested)

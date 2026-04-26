@@ -11,7 +11,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .fft import one_sided_amplitude
+from .fft import get_analysis_window, one_sided_amplitude
+
+
+# Chunk size for vectorized FFT batching. Bounded to keep
+# peak frame-stack memory (BATCH * nfft * 8B) within ~32 MB at extreme nfft.
+_ORDER_BATCH_FRAMES = 256
 
 
 @dataclass(frozen=True)
@@ -96,6 +101,13 @@ class OrderAnalyzer:
 
     @staticmethod
     def _order_amplitudes(frame, rpm_value, fs, orders, nfft, window):
+        """Per-frame order amplitudes. RETAINED AS TEST BASELINE ONLY.
+
+        Production paths now route through ``_order_amplitudes_batch``.
+        This method is preserved unchanged so vectorized-vs-loop
+        equivalence tests have an independent baseline that cannot share
+        a bug with the batched implementation.
+        """
         freq_per_order = abs(float(rpm_value)) / 60.0
         if freq_per_order <= 0 or not np.isfinite(freq_per_order):
             return np.zeros(len(orders), dtype=float)
@@ -114,6 +126,103 @@ class OrderAnalyzer:
         return values
 
     @staticmethod
+    def _order_amplitudes_batch(frames, rpm_means, fs, orders, nfft, window_array):
+        """Vectorized batched order amplitudes.
+
+        Parameters
+        ----------
+        frames : ndarray of shape ``(N_frames, nfft)``
+            Time-domain windows. NOT pre-demeaned; this function removes
+            per-frame mean before windowing.
+        rpm_means : ndarray of shape ``(N_frames,)``
+            Mean RPM per frame.
+        fs : float
+            Sample rate in Hz.
+        orders : ndarray of shape ``(N_orders,)``
+            Order axis (multiples of rotation frequency).
+        nfft : int
+            FFT length.
+        window_array : ndarray of shape ``(nfft,)``
+            Pre-computed analysis window (hoisted by the caller).
+
+        Returns
+        -------
+        ndarray of shape ``(N_frames, N_orders)``
+
+        Notes
+        -----
+        Doubling is byte-for-byte aligned with
+        :func:`mf4_analyzer.signal.fft.one_sided_amplitude`:
+
+        * ``amps.shape[1] > 2`` and ``nfft`` even: ``amps[:, 1:-1] *= 2.0``
+        * ``amps.shape[1] > 2`` and ``nfft`` odd:  ``amps[:, 1:]   *= 2.0``
+        * ``amps.shape[1] == 2``: pass (no doubling)
+
+        ``amps.shape[1] == 2`` corresponds to ``nfft in {2, 3}`` (rfft
+        outputs ``nfft//2 + 1`` bins). Do NOT introduce an ``nfft == 3``
+        special case — that would diverge from ``one_sided_amplitude``.
+
+        Nyquist clipping is NOT performed here. Order columns whose
+        target frequency exceeds Nyquist are zeroed via the per-frame
+        ``valid`` mask so this function stays a pure numerical unit.
+        Aggregate-level Nyquist metadata is set by the caller.
+        """
+        # In-place ops minimize transient chunk-sized buffers so peak
+        # memory stays close to the chunk_frames upper bound (see
+        # ``_ORDER_BATCH_FRAMES`` docstring). ``frames`` is freshly
+        # stacked by the caller and not aliased elsewhere — mutating
+        # it in place would also be safe, but we keep the demean as a
+        # copy for clarity since ``work`` is used downstream.
+        work = frames - frames.mean(axis=1, keepdims=True)
+        work *= window_array  # in-place multiply: no second chunk-sized buffer
+        spectra = np.fft.rfft(work, n=nfft, axis=1)
+        del work  # release demeaned/windowed buffer before amps allocation
+        win_mean = float(np.mean(window_array))
+        amps = np.abs(spectra)
+        del spectra  # release complex buffer (twice the size of float)
+        amps /= nfft
+        amps /= win_mean
+        if amps.shape[1] > 2:
+            if nfft % 2 == 0:
+                amps[:, 1:-1] *= 2.0
+            else:
+                amps[:, 1:] *= 2.0
+        elif amps.shape[1] == 2:
+            # nfft in {2, 3}: DC + Nyquist (or 2-bin rfft); no interior bin.
+            # Mirror one_sided_amplitude's amp.size == 2 branch (pass).
+            pass
+
+        freq = np.fft.rfftfreq(nfft, 1.0 / fs)
+        freq_per_order = np.abs(rpm_means) / 60.0
+        out = np.zeros((len(rpm_means), len(orders)), dtype=float)
+        for i, fpo in enumerate(freq_per_order):
+            if fpo <= 0 or not np.isfinite(fpo):
+                continue
+            order_freq = orders * fpo
+            valid = (order_freq > 0) & (order_freq <= freq[-1])
+            if np.any(valid):
+                out[i, valid] = np.interp(order_freq[valid], freq, amps[i])
+        return out
+
+    @staticmethod
+    def _nyquist_clipped_at_median_rpm(rpm, orders, fs):
+        """Estimate how many order columns are above Nyquist at the
+        dataset's median RPM.
+
+        This is a statistical indicator only — variable-RPM datasets
+        will see different clip counts per frame. The caller stamps it
+        into result ``metadata`` under the key
+        ``nyquist_clipped_at_median_rpm`` to flag this as an at-median
+        estimate, not a frame-level fact.
+        """
+        median_rpm = float(np.nanmedian(rpm))
+        median_fpo = abs(median_rpm) / 60.0
+        nyq = fs * 0.5
+        if median_fpo > 0 and np.isfinite(median_fpo):
+            return int(np.sum(orders * median_fpo > nyq))
+        return 0
+
+    @staticmethod
     def compute_time_order_result(sig, rpm, t, params, progress_callback=None, cancel_token=None):
         sig, rpm, fs, nfft = OrderAnalyzer._validate_common(sig, rpm, params.fs, params.nfft)
         orders = OrderAnalyzer._orders(params.max_order, params.order_res)
@@ -123,42 +232,60 @@ class OrderAnalyzer:
         if total == 0:
             raise ValueError("no complete order-analysis frames")
 
+        window_array = get_analysis_window(params.window, nfft)
+        nyquist_clipped = OrderAnalyzer._nyquist_clipped_at_median_rpm(rpm, orders, fs)
+
         t_arr = None if t is None else OrderAnalyzer._as_float_vector('time', t)
         if t_arr is not None and len(t_arr) != len(sig):
             raise ValueError(f"time and signal length mismatch: {len(t_arr)} vs {len(sig)}")
 
         times = np.zeros(total, dtype=float)
         matrix = np.zeros((total, len(orders)), dtype=float)
-        for idx, start in enumerate(starts):
+
+        def _check_cancel():
             if cancel_token is not None and cancel_token():
                 raise RuntimeError("order computation cancelled")
-            if progress_callback and idx % 20 == 0:
-                progress_callback(idx, total)
-            end = start + nfft
-            frame = sig[start:end]
-            rpm_frame = rpm[start:end]
-            rpm_mean = float(np.nanmean(rpm_frame))
-            if t_arr is not None:
-                times[idx] = float(t_arr[start + nfft // 2])
-            else:
-                times[idx] = (start + nfft / 2.0) / fs
-            matrix[idx] = OrderAnalyzer._order_amplitudes(
-                frame,
-                rpm_mean,
-                fs,
-                orders,
-                nfft,
-                params.window,
+
+        for batch_start in range(0, total, _ORDER_BATCH_FRAMES):
+            _check_cancel()  # cancel #1: chunk boundary
+            batch_end = min(batch_start + _ORDER_BATCH_FRAMES, total)
+            chunk_starts = starts[batch_start:batch_end]
+
+            _check_cancel()  # cancel #2: before stack
+            frames = np.stack([sig[s:s + nfft] for s in chunk_starts], axis=0)
+            rpm_means = np.array(
+                [float(np.nanmean(rpm[s:s + nfft])) for s in chunk_starts],
+                dtype=float,
             )
+            if t_arr is not None:
+                times[batch_start:batch_end] = np.array(
+                    [float(t_arr[s + nfft // 2]) for s in chunk_starts]
+                )
+            else:
+                times[batch_start:batch_end] = np.array(
+                    [(s + nfft / 2.0) / fs for s in chunk_starts]
+                )
+
+            _check_cancel()  # cancel #3: before FFT batch
+            matrix[batch_start:batch_end] = OrderAnalyzer._order_amplitudes_batch(
+                frames, rpm_means, fs, orders, nfft, window_array,
+            )
+            if progress_callback:
+                progress_callback(batch_end, total)
 
         if progress_callback:
             progress_callback(total, total)
+
         return OrderTimeResult(
             times=times,
             orders=orders,
             amplitude=matrix,
             params=params,
-            metadata={'frames': total, 'hop': hop},
+            metadata={
+                'frames': total,
+                'hop': hop,
+                'nyquist_clipped_at_median_rpm': nyquist_clipped,
+            },
         )
 
     @staticmethod
@@ -177,39 +304,61 @@ class OrderAnalyzer:
         hop = max(nfft // 4, 1)
         starts = OrderAnalyzer._frame_starts(len(sig), nfft, hop)
         total = len(starts)
+
+        window_array = get_analysis_window(params.window, nfft)
+        nyquist_clipped = OrderAnalyzer._nyquist_clipped_at_median_rpm(rpm, orders, fs)
+
         matrix = np.zeros((len(rpm_bins), len(orders)), dtype=float)
         counts = np.zeros_like(matrix)
 
-        for idx, start in enumerate(starts):
+        def _check_cancel():
             if cancel_token is not None and cancel_token():
                 raise RuntimeError("order computation cancelled")
-            if progress_callback and idx % 20 == 0:
-                progress_callback(idx, total)
-            end = start + nfft
-            rpm_mean = float(np.nanmean(rpm[start:end]))
-            ri = int(np.argmin(np.abs(rpm_bins - rpm_mean)))
-            values = OrderAnalyzer._order_amplitudes(
-                sig[start:end],
-                rpm_mean,
-                fs,
-                orders,
-                nfft,
-                params.window,
+
+        for batch_start in range(0, total, _ORDER_BATCH_FRAMES):
+            _check_cancel()  # cancel #1: chunk boundary
+            batch_end = min(batch_start + _ORDER_BATCH_FRAMES, total)
+            chunk_starts = starts[batch_start:batch_end]
+
+            _check_cancel()  # cancel #2: before stack
+            frames = np.stack([sig[s:s + nfft] for s in chunk_starts], axis=0)
+            rpm_means = np.array(
+                [float(np.nanmean(rpm[s:s + nfft])) for s in chunk_starts],
+                dtype=float,
             )
-            matrix[ri] += values
-            counts[ri] += values > 0
+
+            _check_cancel()  # cancel #3: before FFT batch
+            values_batch = OrderAnalyzer._order_amplitudes_batch(
+                frames, rpm_means, fs, orders, nfft, window_array,
+            )
+
+            # Vectorized broadcast argmin — preserves spec §4 semantics
+            # (NO arithmetic indexing; equivalence verified at boundaries).
+            ri_array = np.argmin(
+                np.abs(rpm_means[:, None] - rpm_bins[None, :]),
+                axis=1,
+            )
+            for i, ri in enumerate(ri_array):
+                matrix[ri] += values_batch[i]
+                counts[ri] += 1  # per-frame counts (broadcast across order columns)
+
+            if progress_callback:
+                progress_callback(batch_end, total)
 
         if progress_callback:
             progress_callback(total, total)
-        safe_counts = counts.copy()
-        safe_counts[safe_counts == 0] = 1
+        safe_counts = np.maximum(counts, 1)
         return OrderRpmResult(
             orders=orders,
             rpm_bins=rpm_bins,
             amplitude=matrix / safe_counts,
             counts=counts,
             params=params,
-            metadata={'frames': total, 'hop': hop},
+            metadata={
+                'frames': total,
+                'hop': hop,
+                'nyquist_clipped_at_median_rpm': nyquist_clipped,
+            },
         )
 
     @staticmethod
@@ -225,22 +374,37 @@ class OrderAnalyzer:
         amplitudes = np.zeros(total, dtype=float)
         target_arr = np.array([target], dtype=float)
 
-        for idx, start in enumerate(starts):
+        window_array = get_analysis_window(params.window, nfft)
+        # For the single-target track we still report the at-median Nyquist
+        # estimate against the requested target order so the metadata
+        # contract is consistent across all three result types.
+        nyquist_clipped = OrderAnalyzer._nyquist_clipped_at_median_rpm(rpm, target_arr, fs)
+
+        def _check_cancel():
             if cancel_token is not None and cancel_token():
                 raise RuntimeError("order computation cancelled")
-            if progress_callback and idx % 20 == 0:
-                progress_callback(idx, total)
-            end = start + nfft
-            rpm_mean = float(np.nanmean(rpm[start:end]))
-            rpm_values[idx] = rpm_mean
-            amplitudes[idx] = OrderAnalyzer._order_amplitudes(
-                sig[start:end],
-                rpm_mean,
-                fs,
-                target_arr,
-                nfft,
-                params.window,
-            )[0]
+
+        for batch_start in range(0, total, _ORDER_BATCH_FRAMES):
+            _check_cancel()  # cancel #1: chunk boundary
+            batch_end = min(batch_start + _ORDER_BATCH_FRAMES, total)
+            chunk_starts = starts[batch_start:batch_end]
+
+            _check_cancel()  # cancel #2: before stack
+            frames = np.stack([sig[s:s + nfft] for s in chunk_starts], axis=0)
+            rpm_means = np.array(
+                [float(np.nanmean(rpm[s:s + nfft])) for s in chunk_starts],
+                dtype=float,
+            )
+            rpm_values[batch_start:batch_end] = rpm_means
+
+            _check_cancel()  # cancel #3: before FFT batch
+            chunk_amps = OrderAnalyzer._order_amplitudes_batch(
+                frames, rpm_means, fs, target_arr, nfft, window_array,
+            )
+            amplitudes[batch_start:batch_end] = chunk_amps[:, 0]
+
+            if progress_callback:
+                progress_callback(batch_end, total)
 
         if progress_callback:
             progress_callback(total, total)
@@ -248,7 +412,11 @@ class OrderAnalyzer:
             rpm=rpm_values,
             amplitude=amplitudes,
             params=params,
-            metadata={'frames': total, 'hop': hop},
+            metadata={
+                'frames': total,
+                'hop': hop,
+                'nyquist_clipped_at_median_rpm': nyquist_clipped,
+            },
         )
 
     @staticmethod

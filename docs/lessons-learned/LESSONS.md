@@ -18,6 +18,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 
 - [envelope-cache-bucket-width-quantization](signal-processing/2026-04-25-envelope-cache-bucket-width-quantization.md) [envelope][downsample][cache][viewport] — Quantize viewport-cache keys to one bucket width (span/pixel_width), not a fixed percentage; the quantum must come from the same constant that discretizes the result.
 - [cache-consumer-must-be-grepped-not-just-surface](signal-processing/2026-04-25-cache-consumer-must-be-grepped-not-just-surface.md) [cache][hot-path][dead-code][audit] — A cache reachable + invalidatable but never read on the hot path is dead code; grep the uncached helper at the consumer end, not just the cache method on the producer end.
+- [batched-fft-transient-buffers-dominate-chunk-budget](signal-processing/2026-04-26-batched-fft-transient-buffers-dominate-chunk-budget.md) [fft][batch][chunk][memory] — A batched FFT pipeline transiently holds 3-4× chunk-frames-bytes (work + complex spectra + abs); use in-place arithmetic and explicit `del` to keep peak memory inside a 4× headroom contract.
 
 ## pyqt-ui
 

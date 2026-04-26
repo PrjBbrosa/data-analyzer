@@ -77,6 +77,77 @@ class FFTTimeWorker(QObject):
             self.finished.emit(result)
 
 
+class OrderWorker(QThread):
+    """Run :meth:`OrderAnalyzer.compute_*` on a worker QThread.
+
+    Plan Task 5 / spec §4.3. Three signals all carry ``generation``;
+    :class:`MainWindow` uses a generation-token pattern (independent of
+    whether ``cancel()`` ran in time) to decide whether a queued
+    ``result_ready`` belongs to the most-recent dispatch or a stale one.
+
+    Unlike :class:`FFTTimeWorker` (a ``QObject`` moved onto a separate
+    ``QThread``), this is a ``QThread`` subclass: cleanup is simpler,
+    ``cancel()/wait()/terminate()`` all live on the same instance, and
+    no ``moveToThread`` plumbing is needed. ``OrderAnalyzer`` polls
+    ``cancel_token`` per chunk so cancellation is cooperative.
+    """
+
+    result_ready = pyqtSignal(object, str, int)   # (result, kind, generation)
+    failed = pyqtSignal(str, int)                  # (message, generation)
+    progress = pyqtSignal(int, int, int)           # (current, total, generation)
+
+    def __init__(self, kind, sig, rpm, t, params, generation, parent=None):
+        super().__init__(parent)
+        self._kind = kind
+        self._sig = sig
+        self._rpm = rpm
+        self._t = t
+        self._params = params
+        self._generation = int(generation)
+        self._cancelled = False
+
+    def cancel(self):
+        """Flip the cancel flag; ``OrderAnalyzer`` polls it per chunk."""
+        self._cancelled = True
+
+    def run(self):
+        from ..signal import OrderAnalyzer
+        gen = self._generation
+        try:
+            cb_progress = lambda i, n: self.progress.emit(i, n, gen)
+            cb_cancel = lambda: self._cancelled
+            if self._kind == 'time':
+                r = OrderAnalyzer.compute_time_order_result(
+                    self._sig, self._rpm, self._t, self._params,
+                    progress_callback=cb_progress, cancel_token=cb_cancel,
+                )
+            elif self._kind == 'rpm':
+                r = OrderAnalyzer.compute_rpm_order_result(
+                    self._sig, self._rpm, self._params,
+                    progress_callback=cb_progress, cancel_token=cb_cancel,
+                )
+            elif self._kind == 'track':
+                r = OrderAnalyzer.extract_order_track_result(
+                    self._sig, self._rpm, self._params,
+                    progress_callback=cb_progress, cancel_token=cb_cancel,
+                )
+            else:
+                raise ValueError(f"unknown kind: {self._kind}")
+            if self._cancelled:
+                # Cancel landed after compute returned but before emit;
+                # let MainWindow's generation check drop any leftover.
+                return
+            self.result_ready.emit(r, self._kind, gen)
+        except RuntimeError as e:
+            # OrderAnalyzer raises RuntimeError("...cancelled...") when
+            # the cancel_token returns truthy; treat that as silent exit.
+            if 'cancel' in str(e).lower():
+                return
+            self.failed.emit(str(e), gen)
+        except Exception as e:
+            self.failed.emit(str(e), gen)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -104,6 +175,18 @@ class MainWindow(QMainWindow):
         # ``_fft_time_thread.isRunning()``.
         self._fft_time_thread = None
         self._fft_time_worker = None
+        # Order worker (Plan Task 5). ``_order_worker`` is the live
+        # :class:`OrderWorker` (a QThread subclass) or None;
+        # ``_order_generation`` is a monotonically-increasing token used
+        # by :meth:`_dispatch_order_worker` so stale signals from a
+        # cancelled-but-still-emitting worker can be discarded by
+        # comparing ``generation`` in the slots.
+        self._order_worker = None
+        self._order_generation = 0
+        # Cached rpm vector for ``_render_order_track``'s lower subplot
+        # (the :class:`OrderTrackResult` does not echo back the input
+        # rpm sequence, so the dispatcher stashes it here for the slot).
+        self._order_track_pending_rpm = None
         self._last_batch_preset = None
         self._init_ui();
         self._connect()
@@ -139,6 +222,16 @@ class MainWindow(QMainWindow):
         # would otherwise hand the inspector less width than its capped
         # content needs.
         splitter.setSizes([250, 900, 360])
+        # 2026-04-26 inspector 右侧空白二次修复:
+        # Without explicit stretch factors, QSplitter distributes window-resize
+        # growth proportionally across panes by current size. That gives the
+        # inspector pane more "slot" width than its setMaximumWidth(376), and
+        # the surplus inside the slot reads as a visible empty column. Pin the
+        # chart stack as the only stretchy pane; navigator and inspector keep
+        # their initial sizes regardless of window width.
+        splitter.setStretchFactor(0, 0)  # navigator: no stretch
+        splitter.setStretchFactor(1, 1)  # chart_stack: absorbs all extra width
+        splitter.setStretchFactor(2, 0)  # inspector: no stretch
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
         splitter.setCollapsible(2, False)
@@ -211,6 +304,11 @@ class MainWindow(QMainWindow):
         self.inspector.order_time_requested.connect(self.do_order_time)
         self.inspector.order_rpm_requested.connect(self.do_order_rpm)
         self.inspector.order_track_requested.connect(self.do_order_track)
+        # T6: Inspector publishes a cancel intent without knowing about
+        # the worker; MainWindow translates it into ``OrderWorker.cancel``.
+        self.inspector.order_ctx.cancel_requested.connect(
+            self._cancel_order_compute
+        )
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
@@ -857,6 +955,18 @@ class MainWindow(QMainWindow):
         from ..batch import BatchRunner
 
         current_preset = self._last_batch_preset or self._build_current_batch_preset()
+        # T6: a ``current_single`` preset captured before files were
+        # closed/swapped will still hold a (fid, channel) tuple whose
+        # fid no longer exists in ``self.files`` — forwarding it to the
+        # Sheet leads to silent zero-task expansion at run-time. Detect
+        # the case here, toast the user, and start the Sheet from a
+        # clean slate so they can pick "free config" instead.
+        if (current_preset is not None
+                and current_preset.source == 'current_single'):
+            sig = current_preset.signal
+            if sig is None or sig[0] not in self.files:
+                self.toast("当前单次预设已失效，请改用自由配置", "warning")
+                current_preset = None
         dlg = BatchSheet(self, self.files, current_preset=current_preset)
         if dlg.exec_() != QDialog.Accepted:
             return
@@ -1095,184 +1205,391 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, 'FFT错误', str(e))
 
-    def _order_progress(self, current, total):
-        """Order分析进度回调"""
-        pct = int(current / total * 100) if total > 0 else 0
-        self.inspector.order_ctx.set_progress(f"{pct}%")
-        QApplication.processEvents()
+    # ------------------------------------------------------------------
+    # Order analysis (Plan Task 5: dispatch on OrderWorker QThread)
+    # ------------------------------------------------------------------
+    # The synchronous `_order_progress + QApplication.processEvents()`
+    # path was deleted in T5; progress is now signalled via
+    # `OrderWorker.progress` and consumed by `_on_order_progress`. Slot
+    # methods compare the carried `generation` against
+    # `self._order_generation` so a stale worker that has been
+    # cancelled-but-not-yet-stopped cannot mutate UI on the main thread.
+    # See spec §4.3 and lessons:
+    #   - pyqt-ui/2026-04-25-defer-retry-from-worker-failed-slot.md
+    #   - pyqt-ui/2026-04-25-qthread-wait-deadlocks-queued-quit.md
+    #   - pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle.md
 
     def do_order_time(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 100:
-            self.toast("请选择有效信号", "warning"); return
+            self.toast("请选择有效信号", "warning")
+            return
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
             t, sig = t[m], sig[m]
         rpm = self._get_rpm(len(sig))
-        if rpm is None: return
+        if rpm is None:
+            return
         fs = self.inspector.order_ctx.fs()
-
-        # 获取参数
         op = self.inspector.order_ctx.get_params()
-        nfft = op['nfft']
-        order_res = op['order_res']
-        time_res = op['time_res']
-        max_ord = op['max_order']
-
-        try:
-            self.statusBar.showMessage('计算时间-阶次谱...');
-            self.inspector.order_ctx.set_progress("0%")
-            QApplication.processEvents()
-
-            tb, ords, om = OrderAnalyzer.compute_order_spectrum_time_based(
-                sig, rpm, t, fs, max_ord, order_res, time_res, nfft, self._order_progress
-            )
-
-            self.canvas_order.clear();
-            ax = self.canvas_order.fig.add_subplot(1, 1, 1)
-            im = ax.pcolormesh(tb, ords, om.T, shading='gouraud', cmap='jet')
-            ax.set_xlabel('Time (s)');
-            ax.set_ylabel('Order')
-            ax.set_title(f'时间-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} (分辨率:{order_res})')
-            self.canvas_order.fig.colorbar(im, ax=ax, label='RMS')
-            self.canvas_order.fig.tight_layout()
-            xt, yt = self.inspector.top.tick_density()
-            self.canvas_order.set_tick_density(xt, yt)
-            self.canvas_order.draw();
-            self.inspector.order_ctx.set_progress("")
-            self._remember_batch_preset(
-                "当前时间-阶次",
-                "order_time",
-                self.inspector.order_ctx.current_signal(),
-                {
-                    'fs': fs,
-                    'nfft': nfft,
-                    'max_order': max_ord,
-                    'order_res': order_res,
-                    'time_res': time_res,
-                    'rpm_factor': self.inspector.order_ctx.rpm_factor(),
-                },
-                rpm_signal=self.inspector.order_ctx.current_rpm(),
-            )
-            self.statusBar.showMessage(f'完成 | {len(tb)} 时间点 × {len(ords)} 阶次')
-            self.toast(f"时间-阶次谱完成 · {len(tb)} × {len(ords)}", "success")
-        except Exception as e:
-            self.inspector.order_ctx.set_progress("")
-            QMessageBox.critical(self, '错误', str(e))
+        from ..signal.order import OrderAnalysisParams
+        params = OrderAnalysisParams(
+            fs=fs,
+            nfft=int(op['nfft']),
+            window=op.get('window', 'hanning'),
+            max_order=float(op['max_order']),
+            order_res=float(op['order_res']),
+            time_res=float(op['time_res']),
+        )
+        self._dispatch_order_worker('time', sig, rpm, t, params,
+                                     status_msg='计算时间-阶次谱...')
 
     def do_order_rpm(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 100:
-            self.toast("请选择有效信号", "warning"); return
+            self.toast("请选择有效信号", "warning")
+            return
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
             sig = sig[m]
         rpm = self._get_rpm(len(sig))
-        if rpm is None: return
+        if rpm is None:
+            return
         fs = self.inspector.order_ctx.fs()
-
-        # 获取参数
         op = self.inspector.order_ctx.get_params()
-        nfft = op['nfft']
-        order_res = op['order_res']
-        rpm_res = op['rpm_res']
-        max_ord = op['max_order']
-
-        try:
-            self.statusBar.showMessage('计算转速-阶次谱...');
-            self.inspector.order_ctx.set_progress("0%")
-            QApplication.processEvents()
-
-            ords, rb, om = OrderAnalyzer.compute_order_spectrum(
-                sig, rpm, fs, max_ord, rpm_res, order_res, nfft, self._order_progress
-            )
-
-            self.canvas_order.clear();
-            ax = self.canvas_order.fig.add_subplot(1, 1, 1)
-            im = ax.pcolormesh(ords, rb, om, shading='gouraud', cmap='jet')
-            ax.set_xlabel('Order');
-            ax.set_ylabel('RPM')
-            ax.set_title(f'转速-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} (阶次分辨率:{order_res}, RPM分辨率:{rpm_res})')
-            self.canvas_order.fig.colorbar(im, ax=ax, label='Amplitude')
-            self.canvas_order.fig.tight_layout()
-            xt, yt = self.inspector.top.tick_density()
-            self.canvas_order.set_tick_density(xt, yt)
-            self.canvas_order.draw();
-            self.inspector.order_ctx.set_progress("")
-            self._remember_batch_preset(
-                "当前转速-阶次",
-                "order_rpm",
-                self.inspector.order_ctx.current_signal(),
-                {
-                    'fs': fs,
-                    'nfft': nfft,
-                    'max_order': max_ord,
-                    'order_res': order_res,
-                    'rpm_res': rpm_res,
-                    'rpm_factor': self.inspector.order_ctx.rpm_factor(),
-                },
-                rpm_signal=self.inspector.order_ctx.current_rpm(),
-            )
-            self.statusBar.showMessage(f'转速-阶次谱完成 | {len(rb)} RPM × {len(ords)} 阶次')
-            self.toast(f"转速-阶次谱完成 · {len(rb)} × {len(ords)}", "success")
-        except Exception as e:
-            self.inspector.order_ctx.set_progress("")
-            QMessageBox.critical(self, '错误', str(e))
+        from ..signal.order import OrderAnalysisParams
+        params = OrderAnalysisParams(
+            fs=fs,
+            nfft=int(op['nfft']),
+            window=op.get('window', 'hanning'),
+            max_order=float(op['max_order']),
+            order_res=float(op['order_res']),
+            rpm_res=float(op['rpm_res']),
+        )
+        self._dispatch_order_worker('rpm', sig, rpm, None, params,
+                                     status_msg='计算转速-阶次谱...')
 
     def do_order_track(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 100:
-            self.toast("请选择有效信号", "warning"); return
+            self.toast("请选择有效信号", "warning")
+            return
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
             sig = sig[m]
         rpm = self._get_rpm(len(sig))
-        if rpm is None: return
+        if rpm is None:
+            return
         fs = self.inspector.order_ctx.fs()
         to = self.inspector.order_ctx.target_order()
         op = self.inspector.order_ctx.get_params()
-        nfft = op['nfft']
+        from ..signal.order import OrderAnalysisParams
+        params = OrderAnalysisParams(
+            fs=fs,
+            nfft=int(op['nfft']),
+            target_order=float(to),
+        )
+        # Stash rpm so the lower subplot in `_render_order_track` can
+        # plot it; OrderTrackResult itself does not echo the input.
+        self._order_track_pending_rpm = rpm
+        self._dispatch_order_worker('track', sig, rpm, None, params,
+                                     status_msg=f'跟踪阶次 {to}...')
+
+    def _cancel_order_compute(self):
+        """Slot for ``OrderContextual.cancel_requested``.
+
+        Cancellation is cooperative: ``OrderWorker.cancel`` flips a flag
+        that ``compute_*`` polls between batches, so the worker thread
+        keeps running until the next checkpoint. We update the status
+        bar + clear the progress label immediately so the user gets
+        feedback even before the worker actually exits. The button
+        itself is disabled by ``_on_order_result`` / ``_on_order_failed``
+        once the worker emits its terminal signal — disabling it here
+        would make the UI lie if the worker manages to finish before
+        the cancel flag is sampled.
+        """
+        worker = getattr(self, '_order_worker', None)
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            self.statusBar.showMessage('阶次计算已取消')
+            self.inspector.order_ctx.set_progress("")
+
+    def _dispatch_order_worker(self, kind, sig, rpm, t, params, *, status_msg):
+        """Spin up an :class:`OrderWorker`, cancelling any predecessor.
+
+        Increments ``_order_generation`` first so signals from a worker
+        we are about to abort can be discarded by the slots'
+        generation-equality check, even if the queued slot fires after
+        ``cancel()`` (cancel is cooperative, not instantaneous).
+        """
+        # 1. Bump generation token; the new worker carries it forward
+        #    and the slots compare against this value.
+        self._order_generation = getattr(self, '_order_generation', 0) + 1
+        gen = self._order_generation
+
+        # 2. Cancel + disconnect the previous worker if still running.
+        old = getattr(self, '_order_worker', None)
+        if old is not None and old.isRunning():
+            try:
+                old.result_ready.disconnect()
+                old.failed.disconnect()
+                old.progress.disconnect()
+            except TypeError:
+                pass
+            old.cancel()
+            if not old.wait(2000):
+                # wait timed out — escalate to terminate; give 500 ms
+                # for the OS to actually reap the thread.
+                old.terminate()
+                old.wait(500)
+
+        # 3. Build the new worker and wire signals.
+        worker = OrderWorker(kind, sig, rpm, t, params,
+                              generation=gen, parent=self)
+        worker.progress.connect(self._on_order_progress)
+        worker.result_ready.connect(self._on_order_result)
+        worker.failed.connect(self._on_order_failed)
+        self._order_worker = worker
+        self.statusBar.showMessage(status_msg)
+        self.inspector.order_ctx.set_progress("0%")
+        # T6: btn_cancel is now part of OrderContextual unconditionally,
+        # so call setEnabled directly without a defensive getattr.
+        self.inspector.order_ctx.btn_cancel.setEnabled(True)
+        worker.start()
+
+    def _on_order_progress(self, current, total, generation):
+        if generation != getattr(self, '_order_generation', -1):
+            return  # stale; drop
+        if total > 0:
+            self.inspector.order_ctx.set_progress(
+                f"{int(current / total * 100)}%"
+            )
+
+    def _on_order_failed(self, msg, generation):
+        if generation != getattr(self, '_order_generation', -1):
+            return  # stale; drop
+        self.inspector.order_ctx.set_progress("")
+        self.inspector.order_ctx.btn_cancel.setEnabled(False)
+        QMessageBox.critical(self, "错误", msg)
+
+    def _on_order_result(self, result, kind, generation):
+        if generation != getattr(self, '_order_generation', -1):
+            return  # stale; drop
+        self.inspector.order_ctx.set_progress("")
+        self.inspector.order_ctx.btn_cancel.setEnabled(False)
+        if kind == 'time':
+            self._render_order_time(result)
+        elif kind == 'rpm':
+            self._render_order_rpm(result)
+        elif kind == 'track':
+            self._render_order_track(result)
+
+    def _render_order_time(self, result):
+        title = (
+            f"时间-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} "
+            f"(分辨率:{result.params.order_res})"
+        )
+        # `result.amplitude` is (frames, orders) → transpose so imshow
+        # gets (rows=Y_orders, cols=X_times); x_extent=times, y_extent=orders.
+        self.canvas_order.plot_or_update_heatmap(
+            matrix=result.amplitude.T,
+            x_extent=(float(result.times[0]), float(result.times[-1])),
+            y_extent=(float(result.orders[0]), float(result.orders[-1])),
+            x_label='Time (s)',
+            y_label='Order',
+            title=title,
+            cmap='turbo',
+            interp='bilinear',
+            cbar_label='Amplitude',
+        )
+        xt, yt = self.inspector.top.tick_density()
+        self.canvas_order.set_tick_density(xt, yt)
+        self._remember_batch_preset(
+            "当前时间-阶次", "order_time",
+            self.inspector.order_ctx.current_signal(),
+            {
+                'fs': result.params.fs,
+                'nfft': result.params.nfft,
+                'max_order': result.params.max_order,
+                'order_res': result.params.order_res,
+                'time_res': result.params.time_res,
+                'rpm_factor': self.inspector.order_ctx.rpm_factor(),
+            },
+            rpm_signal=self.inspector.order_ctx.current_rpm(),
+        )
+        self.statusBar.showMessage(
+            f'完成 | {len(result.times)} 时间点 × {len(result.orders)} 阶次'
+        )
+        self.toast(
+            f"时间-阶次谱完成 · {len(result.times)} × {len(result.orders)}",
+            "success",
+        )
+
+    def _render_order_rpm(self, result):
+        title = (
+            f"转速-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} "
+            f"(阶次分辨率:{result.params.order_res}, "
+            f"RPM分辨率:{result.params.rpm_res})"
+        )
+        # B6 regression guard: original `pcolormesh(ords, rb, om)` is
+        # x=order, y=rpm with ``om.shape = (N_rpm_bins, N_orders)``.
+        # imshow's ``matrix.shape`` is ``(rows, cols) = (Y, X)``, i.e.
+        # ``(N_rpm_bins, N_orders)`` — so DO NOT transpose here.
+        # Transposing AND swapping extents was the round-1 double-reversal
+        # bug; tests/ui/test_order_worker.py guards it.
+        self.canvas_order.plot_or_update_heatmap(
+            matrix=result.amplitude,
+            x_extent=(float(result.orders[0]), float(result.orders[-1])),
+            y_extent=(float(result.rpm_bins[0]), float(result.rpm_bins[-1])),
+            x_label='Order',
+            y_label='RPM',
+            title=title,
+            cmap='turbo',
+            interp='bilinear',
+            cbar_label='Amplitude',
+        )
+        xt, yt = self.inspector.top.tick_density()
+        self.canvas_order.set_tick_density(xt, yt)
+        self._remember_batch_preset(
+            "当前转速-阶次", "order_rpm",
+            self.inspector.order_ctx.current_signal(),
+            {
+                'fs': result.params.fs,
+                'nfft': result.params.nfft,
+                'max_order': result.params.max_order,
+                'order_res': result.params.order_res,
+                'rpm_res': result.params.rpm_res,
+                'rpm_factor': self.inspector.order_ctx.rpm_factor(),
+            },
+            rpm_signal=self.inspector.order_ctx.current_rpm(),
+        )
+        self.statusBar.showMessage(
+            f'转速-阶次谱完成 | {len(result.rpm_bins)} RPM × '
+            f'{len(result.orders)} 阶次'
+        )
+        self.toast(
+            f"转速-阶次谱完成 · {len(result.rpm_bins)} × {len(result.orders)}",
+            "success",
+        )
+
+    def _render_order_track(self, result):
+        from .canvases import build_envelope
+        # Track is a 2-subplot view that does not share structure with
+        # the heatmap path; force a clean rebuild. After plotting, reset
+        # the heatmap-state attrs so the next heatmap dispatch rebuilds.
+        # See lesson: pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle.md
+        self.canvas_order.clear()
+        ax1 = self.canvas_order.fig.add_subplot(2, 1, 1)
+        ax1.plot(result.rpm, result.amplitude, '#1f77b4', lw=1)
+        ax1.set_xlabel('RPM')
+        ax1.set_ylabel('Amplitude', labelpad=10)
+        ax1.set_title(
+            f'阶次 {result.params.target_order} 跟踪 - '
+            f'{self.inspector.order_ctx.combo_sig.currentText()}'
+        )
+        ax1.grid(True, alpha=0.25, ls='--')
+
+        ax2 = self.canvas_order.fig.add_subplot(2, 1, 2)
+        rpm = getattr(self, '_order_track_pending_rpm', None)
+        if rpm is None:
+            rpm = result.rpm
+        # Envelope downsample over the full sample-index range. xlim=None
+        # tells `build_envelope` to use the natural [0, N-1] span. The
+        # `TimeDomainCanvas._envelope` wrapper rejects xlim=None
+        # (T4-rev1) — only the module-level `build_envelope` honours it.
+        xs_idx = np.arange(len(rpm), dtype=float)
+        pixel_width = max(self.canvas_order.width(), 600)
+        xs, ys = build_envelope(xs_idx, rpm, xlim=None,
+                                 pixel_width=pixel_width, is_monotonic=True)
+        ax2.plot(xs, ys, '#2ca02c', lw=0.8)
+        ax2.set_xlabel('Sample')
+        ax2.set_ylabel('RPM')
+        ax2.set_title('转速曲线')
+        ax2.grid(True, alpha=0.25, ls='--')
 
         try:
-            self.statusBar.showMessage(f'跟踪阶次 {to}...');
-            QApplication.processEvents()
-            rt, oa = OrderAnalyzer.extract_order_track(sig, rpm, fs, to, nfft)
-            self.canvas_order.clear()
-            ax1 = self.canvas_order.fig.add_subplot(2, 1, 1)
-            ax1.plot(rt, oa, '#1f77b4', lw=1);
-            ax1.set_xlabel('RPM');
-            ax1.set_ylabel('Amplitude', labelpad=10)
-            ax1.set_title(f'阶次 {to} 跟踪 - {self.inspector.order_ctx.combo_sig.currentText()}');
-            ax1.grid(True, alpha=0.25, ls='--')
-            ax2 = self.canvas_order.fig.add_subplot(2, 1, 2)
-            ax2.plot(rpm, '#2ca02c', lw=0.5);
-            ax2.set_xlabel('Sample');
-            ax2.set_ylabel('RPM')
-            ax2.set_title('转速曲线');
-            ax2.grid(True, alpha=0.25, ls='--')
             self.canvas_order.fig.tight_layout()
-            xt, yt = self.inspector.top.tick_density()
-            self.canvas_order.set_tick_density(xt, yt)
-            self.canvas_order.draw();
-            self._remember_batch_preset(
-                "当前阶次跟踪",
-                "order_track",
-                self.inspector.order_ctx.current_signal(),
-                {
-                    'fs': fs,
-                    'nfft': nfft,
-                    'target_order': to,
-                    'rpm_factor': self.inspector.order_ctx.rpm_factor(),
-                },
-                rpm_signal=self.inspector.order_ctx.current_rpm(),
-            )
-            self.statusBar.showMessage(f'阶次 {to} 跟踪完成')
-            self.toast(f"阶次 {to} 跟踪完成", "success")
-        except Exception as e:
-            QMessageBox.critical(self, '错误', str(e))
+        except Exception:
+            pass
+        xt, yt = self.inspector.top.tick_density()
+        self.canvas_order.set_tick_density(xt, yt)
+        self.canvas_order.draw_idle()
+
+        # Track took the non-heatmap path; clear heatmap bookkeeping so
+        # the next heatmap dispatch rebuilds rather than trying to reuse
+        # the now-destroyed Axes.
+        self.canvas_order._heatmap_ax = None
+        self.canvas_order._heatmap_im = None
+        self.canvas_order._heatmap_cbar = None
+
+        self._remember_batch_preset(
+            "当前阶次跟踪", "order_track",
+            self.inspector.order_ctx.current_signal(),
+            {
+                'fs': result.params.fs,
+                'nfft': result.params.nfft,
+                'target_order': result.params.target_order,
+                'rpm_factor': self.inspector.order_ctx.rpm_factor(),
+            },
+            rpm_signal=self.inspector.order_ctx.current_rpm(),
+        )
+        self.statusBar.showMessage(
+            f'阶次 {result.params.target_order} 跟踪完成'
+        )
+        self.toast(
+            f"阶次 {result.params.target_order} 跟踪完成", "success"
+        )
+
+    def closeEvent(self, event):
+        """Stop every running worker before the window is destroyed.
+
+        Two distinct lifecycles to handle (spec §4.3):
+
+        1. ``_order_worker`` — a :class:`OrderWorker` (QThread subclass)
+           with built-in ``cancel() + isRunning()``. Cancel, wait, and
+           on timeout escalate to ``terminate()``.
+
+        2. ``_fft_time_thread + _fft_time_worker`` — a
+           ``QObject + QThread`` pair (see :class:`FFTTimeWorker` /
+           :meth:`do_fft_time` near ``main_window.py:1469-1495``). The
+           worker has ``cancel()`` (sets a flag the analyzer polls per
+           frame); the thread is what owns ``isRunning()``. The wired
+           ``thread.finished -> deleteLater`` chain handles cleanup —
+           we just need to give it time to run via ``quit() + wait()``.
+        """
+        # 1. order worker (QThread subclass)
+        order_worker = getattr(self, '_order_worker', None)
+        if order_worker is not None and order_worker.isRunning():
+            try:
+                order_worker.result_ready.disconnect()
+                order_worker.failed.disconnect()
+                order_worker.progress.disconnect()
+            except (TypeError, AttributeError):
+                pass
+            order_worker.cancel()
+            if not order_worker.wait(2000):
+                order_worker.terminate()
+                order_worker.wait(500)
+
+        # 2. FFT-vs-Time (QObject worker + QThread)
+        fft_thread = getattr(self, '_fft_time_thread', None)
+        fft_worker = getattr(self, '_fft_time_worker', None)
+        if fft_thread is not None and fft_thread.isRunning():
+            if fft_worker is not None and hasattr(fft_worker, 'cancel'):
+                fft_worker.cancel()
+            # cancel is cooperative; the analyzer returns at the next
+            # poll, then the wired ``finished/failed -> thread.quit``
+            # connection drains the worker thread's event loop. We
+            # quit() defensively in case the worker is between polls.
+            fft_thread.quit()
+            if not fft_thread.wait(2000):
+                fft_thread.terminate()
+                fft_thread.wait(500)
+
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------
     # FFT vs Time (synchronous compute path, Plan Task 6)

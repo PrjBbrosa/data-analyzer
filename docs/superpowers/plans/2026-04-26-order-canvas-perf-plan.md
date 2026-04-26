@@ -60,53 +60,64 @@ T1 ──────┘
 - Modify: `mf4_analyzer/signal/order.py`
 - Test: `tests/test_order_analysis.py`
 
-- [ ] **Step 1: 写失败测试 — counts 语义按帧数**
+- [ ] **Step 1: 写失败测试 — counts 语义按帧数（helper-level monkeypatch）**
 
-在 `tests/test_order_analysis.py` 末尾追加。**关键：** 用 `OrderAnalyzer._frame_starts` 算真实帧数（`hop = nfft // 4`），构造能区分新旧两种语义的信号。
+**为什么不直接构造稀疏信号：** `compute_rpm_order_result` 内部硬编码 `hop = nfft // 4`，相邻帧 75% overlap。任何"偶数帧有内容、奇数帧全零"的时域信号在重叠窗口下都不能保证 amp 为 0，旧语义 `counts += values > 0` 也能蒙混 PASS（codex round-2 D12）。
+
+**改用 helper-level monkeypatch**，把 `_order_amplitudes_batch` 替换成确定性 stub，让"偶数帧返回非零、奇数帧返回 0"成为铁律，绕开 FFT 的不确定性。在 `tests/test_order_analysis.py` 末尾追加：
 
 ```python
-def test_rpm_order_counts_are_per_frame_not_per_nonzero():
+def test_rpm_order_counts_are_per_frame_not_per_nonzero(monkeypatch):
     """compute_rpm_order_result 的 counts 应按帧数累加，而非按非零幅值次数。
 
-    构造原理：
-    - 恒速 rpm → 所有帧落入同一个 rpm_bin
-    - 信号是「每隔 hop 个 sample 才有一段 tone」的稀疏脉冲序列
-    - 这样 ~半数 frame 是几乎全零（amp ≈ 0），~半数 frame 有 tone
-    - 旧语义 (`counts += values > 0`)：只计有 tone 的帧 → counts ≈ N_with_tone
-    - 新语义 (`counts += 1`)：所有帧都计 → counts == N_total_frames
-    - 两者数值显著不同，可区分
+    用 monkeypatch stub 掉 `_order_amplitudes_batch`，让一半 frame 返回 0、
+    一半返回 1。这样：
+    - 旧语义 (`counts += values > 0`) → counts ≈ N_total/2
+    - 新语义 (`counts += 1`)             → counts == N_total
+    旧实现下断言必然 FAIL；新实现下必然 PASS——彻底排除 FFT leakage 误判。
     """
     from mf4_analyzer.signal.order import OrderAnalyzer, OrderAnalysisParams
+
+    call_state = {'global_idx': 0}
+
+    def stub_batch(frames, rpm_means, fs, orders, nfft, window_array):
+        n_frames_in_chunk = frames.shape[0]
+        out = np.zeros((n_frames_in_chunk, len(orders)), dtype=float)
+        for local_i in range(n_frames_in_chunk):
+            global_i = call_state['global_idx']
+            call_state['global_idx'] += 1
+            if global_i % 2 == 0:
+                out[local_i, :] = 1.0          # 偶数帧：所有 order 都非零
+            # 奇数帧：维持 0
+        return out
+
+    monkeypatch.setattr(
+        OrderAnalyzer, '_order_amplitudes_batch', staticmethod(stub_batch)
+    )
+
+    # 恒速 rpm → 所有帧落入同一个 rpm_bin
     fs = 1024.0
     nfft = 512
-    rpm_const = 600.0
-    rpm_res = 10.0
-
-    # 构造稀疏脉冲：偶数帧有 50 Hz 正弦，奇数帧全零
-    hop = nfft // 4
-    n_frames_target = 12
-    n = nfft + hop * (n_frames_target - 1)
-    rpm = np.full(n, rpm_const)
+    n = nfft * 8                                # 实际帧数 = (n - nfft)/hop + 1，由 _frame_starts 决定
+    rpm = np.full(n, 600.0)
     sig = np.zeros(n)
-    starts = OrderAnalyzer._frame_starts(n, nfft, hop)
-    expected_frames = len(starts)
-    for i, s in enumerate(starts):
-        if i % 2 == 0:
-            t_local = np.arange(nfft) / fs
-            sig[s:s+nfft] += 0.5 * np.sin(2 * np.pi * 50.0 * t_local)
-
     params = OrderAnalysisParams(fs=fs, nfft=nfft, max_order=10.0,
-                                  order_res=0.5, rpm_res=rpm_res)
+                                  order_res=0.5, rpm_res=10.0)
+    expected_frames = len(OrderAnalyzer._frame_starts(n, nfft, max(nfft // 4, 1)))
+    assert expected_frames >= 4   # 否则区分不了 N vs N/2
+
     result = OrderAnalyzer.compute_rpm_order_result(sig, rpm, params)
 
-    # 1) 找到含有 tone 的 bin（恒速下应该只有一个 bin 非空）
     populated_bin = int(np.argmax(result.counts.sum(axis=1)))
-    # 2) 该 bin 的 counts 必须等于真实总帧数（按帧数累加），而非约半数（按非零累加）
-    #    在每个 order 列上都应一致
-    assert np.all(result.counts[populated_bin] == expected_frames), (
+    populated_count = result.counts[populated_bin, 0]   # 任意 order 列都该一致
+
+    # 关键断言：counts 必须等于总帧数，而非约一半
+    assert populated_count == expected_frames, (
         f"counts must be per-frame; expected {expected_frames}, "
-        f"got distribution {np.unique(result.counts[populated_bin])}"
+        f"got {populated_count} (旧 nonzero-count 语义会得 ~{expected_frames // 2})"
     )
+    # 同 bin 的 counts 跨 order 列必须一致（按帧累加）
+    assert np.all(result.counts[populated_bin] == expected_frames)
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -116,7 +127,9 @@ cd "/Users/donghang/Downloads/data analyzer"
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_order_analysis.py::test_rpm_order_counts_are_per_frame_not_per_nonzero -v
 ```
 
-预期：FAIL（旧实现 counts ≈ expected_frames / 2）。
+预期：FAIL（旧实现 `counts += values > 0` → populated_count ≈ expected_frames // 2，断言不等于 expected_frames）。
+
+> ⚠️ **依赖关系：** 这个测试 monkeypatch 了 `_order_amplitudes_batch`，所以要求 Step 12（实现 `_order_amplitudes_batch` + chunked 路径）已经存在才能跑成功。**实际开发顺序：** 先做 Step 12 实现底子（`_order_amplitudes_batch` 创建出来 + chunked 调用），再回头跑 Step 1-4 的 counts TDD。executor 自己控制顺序。
 
 - [ ] **Step 3: 修正 counts 语义**
 
@@ -135,11 +148,11 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_order_analysis.p
             amplitude=matrix / safe_counts,
             counts=counts,
             params=params,
-            metadata={'frames': total, 'hop': hop, 'nyquist_clipped': 0},
+            metadata={'frames': total, 'hop': hop, 'nyquist_clipped_at_median_rpm': 0},
         )
 ```
 
-注意：`counts` 现在是 `(N_rpm_bins, N_orders)`，每行所有列的值相同（按帧数）；NumPy 会把 `+= 1` 广播到整行。`metadata` 多加 `nyquist_clipped` 字段，初始填 0，后续 step 9-10 会写入真实裁剪数。
+注意：`counts` 现在是 `(N_rpm_bins, N_orders)`，每行所有列的值相同（按帧数）；NumPy 会把 `+= 1` 广播到整行。`metadata` 多加 `nyquist_clipped_at_median_rpm` 字段，初始填 0，后续 step 9-10 会写入真实裁剪数。
 
 - [ ] **Step 4: 跑测试确认通过**
 
@@ -348,15 +361,21 @@ _ORDER_BATCH_FRAMES = 256
         from .fft import get_analysis_window
         window_array = get_analysis_window(params.window, nfft)
 
-        # Nyquist clipping mask: which order columns are reachable
-        # at the median rpm? 仅用于 metadata 标注，不裁剪 orders 数组。
+        # Nyquist clipping mask（仅用于 metadata 标注，不裁剪 orders 数组）：
+        # 估算"在中位 RPM 下，有多少 order 列其目标频率 > Nyquist，会被
+        # _order_amplitudes_batch 内部的 valid mask 自动写 0"。
+        #
+        # ⚠️ 注意：变速 RPM 场景下，不同 frame 实际被裁剪的 order 列数会变化
+        #   （取决于该 frame 的瞬时 RPM）。本 metadata 只是"该数据集典型场景下
+        #   大约多少阶被裁"的指示性数字，**不应作为 frame-level 精确判定**。
+        #   字段名带 _at_median_rpm 后缀以提醒消费方这是个统计估算。
         median_rpm = float(np.nanmedian(rpm))
         median_fpo = abs(median_rpm) / 60.0
         nyq = fs * 0.5
         if median_fpo > 0:
-            nyquist_clipped = int(np.sum(orders * median_fpo > nyq))
+            nyquist_clipped_at_median_rpm = int(np.sum(orders * median_fpo > nyq))
         else:
-            nyquist_clipped = 0
+            nyquist_clipped_at_median_rpm = 0
 
         t_arr = None if t is None else OrderAnalyzer._as_float_vector('time', t)
         if t_arr is not None and len(t_arr) != len(sig):
@@ -401,7 +420,7 @@ _ORDER_BATCH_FRAMES = 256
             orders=orders,
             amplitude=matrix,
             params=params,
-            metadata={'frames': total, 'hop': hop, 'nyquist_clipped': nyquist_clipped},
+            metadata={'frames': total, 'hop': hop, 'nyquist_clipped_at_median_rpm': nyquist_clipped_at_median_rpm},
         )
 ```
 
@@ -413,7 +432,7 @@ _ORDER_BATCH_FRAMES = 256
 - 调 `_order_amplitudes_batch` 拿到 `(BATCH, N_orders)` 的 `values_batch`
 - 写回：循环 `for i, ri in enumerate(ri_array): matrix[ri] += values_batch[i]; counts[ri] += 1`（`np.add.at` 也可，注意 counts 要 broadcast `+=1`）
 - `cancel` 检查 3 处同上
-- metadata 加 `nyquist_clipped`（同上策略）
+- metadata 加 `nyquist_clipped_at_median_rpm`（同上策略）
 
 `extract_order_track_result` 改造：
 
@@ -421,7 +440,7 @@ _ORDER_BATCH_FRAMES = 256
 - 外层按 `_ORDER_BATCH_FRAMES` chunk
 - 调 `_order_amplitudes_batch(..., orders=np.array([params.target_order]))`，直接拿一列
 - cancel 检查 3 处同上
-- metadata 加 `nyquist_clipped`
+- metadata 加 `nyquist_clipped_at_median_rpm`
 
 **实现验收：**
 
@@ -478,6 +497,30 @@ def test_vectorized_paths_match_loop_for_all_results():
         )
     np.testing.assert_allclose(r_time.amplitude, expected_full, rtol=1e-9)
 
+    # === rpm-order（codex round-2 A5：本路径之前漏测） ===
+    p_rpm = OrderAnalysisParams(fs=fs, nfft=nfft, max_order=5.0,
+                                  order_res=0.5, rpm_res=200.0)
+    r_rpm = OrderAnalyzer.compute_rpm_order_result(sig, rpm, p_rpm)
+    orders_rpm = OrderAnalyzer._orders(p_rpm.max_order, p_rpm.order_res)
+    rpm_min = float(np.nanmin(rpm))
+    rpm_max = float(np.nanmax(rpm))
+    rpm_bins = np.arange(rpm_min, rpm_max + p_rpm.rpm_res * 0.5, p_rpm.rpm_res)
+    hop_rpm = max(nfft // 4, 1)
+    starts_rpm = OrderAnalyzer._frame_starts(n, nfft, hop_rpm)
+    expected_matrix = np.zeros((len(rpm_bins), len(orders_rpm)))
+    expected_counts = np.zeros((len(rpm_bins), len(orders_rpm)))
+    for s in starts_rpm:
+        rpm_mean = float(np.nanmean(rpm[s:s+nfft]))
+        ri = int(np.argmin(np.abs(rpm_bins - rpm_mean)))     # 与 spec §4 保留 argmin 一致
+        values = OrderAnalyzer._order_amplitudes(
+            sig[s:s+nfft], rpm_mean, fs, orders_rpm, nfft, p_rpm.window
+        )
+        expected_matrix[ri] += values
+        expected_counts[ri] += 1                              # 与 spec §4 counts 帧数语义一致
+    expected_amp = expected_matrix / np.maximum(expected_counts, 1)
+    np.testing.assert_allclose(r_rpm.amplitude, expected_amp, rtol=1e-9)
+    np.testing.assert_array_equal(r_rpm.counts, expected_counts)
+
     # === order-track ===
     p_track = OrderAnalysisParams(fs=fs, nfft=nfft, target_order=2.5)
     r_track = OrderAnalyzer.extract_order_track_result(sig, rpm, p_track)
@@ -504,7 +547,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_order_analysis.p
 - [ ] **Step 17: 写测试 — Nyquist 裁剪 metadata 标注**
 
 ```python
-def test_metadata_records_nyquist_clipped_orders():
+def test_metadata_records_nyquist_clipped_at_median_rpm_orders():
     """高 max_order × 低 RPM 场景下，metadata 应标注被裁剪的 order 列数。"""
     from mf4_analyzer.signal.order import OrderAnalyzer, OrderAnalysisParams
     fs = 1024.0           # Nyquist = 512 Hz
@@ -518,8 +561,8 @@ def test_metadata_records_nyquist_clipped_orders():
     params = OrderAnalysisParams(fs=fs, nfft=nfft, max_order=100.0,
                                   order_res=0.5, time_res=0.1)
     r = OrderAnalyzer.compute_time_order_result(sig, rpm, t, params)
-    assert 'nyquist_clipped' in r.metadata
-    assert r.metadata['nyquist_clipped'] > 0
+    assert 'nyquist_clipped_at_median_rpm' in r.metadata
+    assert r.metadata['nyquist_clipped_at_median_rpm'] > 0
     # 裁剪列对应的 amplitude 必须是 0
     median_fpo = 600.0 / 60.0
     nyq = fs * 0.5
@@ -530,10 +573,10 @@ def test_metadata_records_nyquist_clipped_orders():
 - [ ] **Step 18: 跑测试**
 
 ```bash
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_order_analysis.py::test_metadata_records_nyquist_clipped_orders -v
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_order_analysis.py::test_metadata_records_nyquist_clipped_at_median_rpm_orders -v
 ```
 
-预期：PASS（Step 12 已经把 metadata['nyquist_clipped'] 写入；amplitude 已经因为 `valid` mask 自然为 0）。
+预期：PASS（Step 12 已经把 metadata['nyquist_clipped_at_median_rpm'] 写入；amplitude 已经因为 `valid` mask 自然为 0）。
 
 - [ ] **Step 19: 内存 profile — 极端 nfft 下的 chunk frames 峰值**
 
@@ -587,7 +630,7 @@ git commit -m "fix(order): per-frame counts + vectorize chunked + nyquist mask"
 
 修改清单：
 
-- `mf4_analyzer/signal/order.py`：新增 `_ORDER_BATCH_FRAMES = 256` 模块常量；新增 `_order_amplitudes_batch` 静态方法；保留 `_order_amplitudes` 作 baseline；重写 `compute_time_order_result` / `compute_rpm_order_result` / `extract_order_track_result` 走 chunked + window hoist；`compute_rpm_order_result` 内 `counts += 1` + `safe_counts = np.maximum(counts, 1)` + broadcast argmin；三个 result 的 `metadata` 都加 `nyquist_clipped` 字段。
+- `mf4_analyzer/signal/order.py`：新增 `_ORDER_BATCH_FRAMES = 256` 模块常量；新增 `_order_amplitudes_batch` 静态方法；保留 `_order_amplitudes` 作 baseline；重写 `compute_time_order_result` / `compute_rpm_order_result` / `extract_order_track_result` 走 chunked + window hoist；`compute_rpm_order_result` 内 `counts += 1` + `safe_counts = np.maximum(counts, 1)` + broadcast argmin；三个 result 的 `metadata` 都加 `nyquist_clipped_at_median_rpm` 字段。
 - `tests/test_order_analysis.py`：新增 7 个测试（counts、broadcast argmin 边界等价、target order 幅值恢复、vectorize-vs-loop 全帧三类型、Nyquist metadata、memory budget；不含 cancel / progress 在 T3）。
 
 ---
@@ -965,6 +1008,32 @@ def test_build_envelope_matches_timedomain_envelope_behaviour(qtbot):
     xs2, ys2 = cv.build_envelope(t, sig, xlim=(2.0, 8.0), pixel_width=800)
     np.testing.assert_array_equal(xs1, xs2)
     np.testing.assert_array_equal(ys1, ys2)
+
+
+def test_build_envelope_xlim_none_uses_full_range(qtbot):
+    """codex round-2 G22：order_track 调 build_envelope(xlim=None)。
+    必须等价于 xlim=(t[0], t[-1])，而不是 TypeError。"""
+    n = 50_000
+    t = np.linspace(0.0, 5.0, n)
+    sig = np.sin(2 * np.pi * 2.0 * t)
+    xs_none, ys_none = cv.build_envelope(t, sig, xlim=None, pixel_width=600)
+    xs_full, ys_full = cv.build_envelope(
+        t, sig, xlim=(float(t[0]), float(t[-1])), pixel_width=600
+    )
+    np.testing.assert_array_equal(xs_none, xs_full)
+    np.testing.assert_array_equal(ys_none, ys_full)
+
+
+def test_timedomain_envelope_thin_wrapper_does_not_accept_none(qtbot):
+    """TimeDomainCanvas._envelope 仅是 thin wrapper，**保留必传 xlim** 的原签名。
+    None 行为只属于 module-level helper，不放大 TimeDomainCanvas 的兼容性表面。"""
+    canvas = cv.TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    n = 100
+    t = np.linspace(0.0, 1.0, n)
+    sig = np.zeros(n)
+    # 显式传 xlim 必须成功；传 None 是 build_envelope 的契约，不是 _envelope 的
+    canvas._envelope(t, sig, xlim=(0.0, 1.0), pixel_width=200)
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -975,16 +1044,26 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ui/test_canvases_enve
 
 预期：FAIL（`build_envelope` 不存在）。
 
-- [ ] **Step 3: 把 `TimeDomainCanvas._envelope` 抽成 module-level**
+- [ ] **Step 3: 把 `TimeDomainCanvas._envelope` 抽成 module-level，并新增 `xlim=None` 全范围分支**
 
 在 `canvases.py` `TimeDomainCanvas` 类定义之前新增：
 
 ```python
 def build_envelope(t, sig, *, xlim, pixel_width, is_monotonic=None):
     """Pure 函数版本的 viewport-aware envelope 下采样。
-    与 TimeDomainCanvas._envelope 行为完全一致。
+    与 TimeDomainCanvas._envelope 行为完全一致；额外支持 xlim=None。
+
+    xlim 契约（spec §6.4）：
+    - (lo, hi) → 按视口裁剪（与原 _envelope 一致）
+    - None     → 全范围，等价于 (float(t[0]), float(t[-1]))
+                 这是 order_track 下半幅 RPM 的入口
     """
-    # ↓ 把 TimeDomainCanvas._envelope 当前实现整体复制过来（替换 self.* 为参数）
+    if xlim is None:
+        if len(t) == 0:
+            return np.asarray(t, dtype=float), np.asarray(sig, dtype=float)
+        xlim = (float(t[0]), float(t[-1]))
+    # ↓ 之后逻辑与 TimeDomainCanvas._envelope 当前实现一致
+    # （把 self.* 引用替换为参数；不要再保留 None check 之外的额外行为）
     ...
 ```
 
@@ -1168,9 +1247,16 @@ def test_plot_canvas_heatmap_to_track_to_heatmap_no_colorbar_ghost(qtbot):
         self.draw_idle()
 ```
 
-注意 `clear()` 末尾要把 `_heatmap_*` 属性置 None：
+**两处都要置 None：`__init__` 和 `clear()`**（codex round-2 B8）。`__init__` 负责初始化（避免第一次 `plot_or_update_heatmap` 走 `getattr(self, ..., None)` 兜底而靠默认值）；`clear()` 负责复位（avoid stale handle 撞兼容判定）。
 
 ```python
+    def __init__(self, parent=None):
+        # ... 原有初始化代码 ...
+        # heatmap 复用句柄；plot_or_update_heatmap 写入，clear() 复位
+        self._heatmap_ax = None
+        self._heatmap_im = None
+        self._heatmap_cbar = None
+
     def clear(self):
         self._remarks = []
         self._line_data = {}
@@ -1511,25 +1597,61 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ui/test_order_worker.
             self._render_order_track(result)
 
     def closeEvent(self, event):
-        """窗口关闭：取消所有 worker，避免 parented QThread running 时被销毁。"""
-        for attr in ('_order_worker', '_spectrogram_worker'):
-            worker = getattr(self, attr, None)
-            if worker is not None and worker.isRunning():
-                try:
-                    worker.result_ready.disconnect()
-                    worker.failed.disconnect()
-                    worker.progress.disconnect()
-                except (TypeError, AttributeError):
-                    pass
-                if hasattr(worker, 'cancel'):
-                    worker.cancel()
-                if not worker.wait(2000):
-                    worker.terminate()
-                    worker.wait(500)
+        """窗口关闭：取消所有 worker，避免 parented QThread running 时被销毁。
+
+        本仓库有两类 worker，分开处理（spec §4.3 同步描述）：
+
+        1. ``_order_worker`` 是本 spec 新增的 ``QThread`` 子类，自带 ``cancel()``
+           + 自带 ``isRunning()``。
+
+        2. ``_fft_time_thread + _fft_time_worker`` 是 ``QObject + QThread``
+           配合（``main_window.py:28`` 的 ``FFTTimeWorker(QObject)`` +
+           ``main_window.py:1469-1495`` ``do_fft_time`` 里 ``moveToThread``）。
+           worker 自身 NO ``isRunning()``，要看 thread。worker 已有 ``cancel()``
+           （设 ``_cancelled`` 标志），analyzer 在每帧 poll 后会自然返回，
+           emit ``finished/failed`` → ``thread.quit()`` → 已经 wired 的
+           ``thread.finished -> deleteLater`` 链清理。closeEvent 的 wait 是给
+           这个收尾时间。
+        """
+        # —— 1. order worker（QThread 子类）——
+        order_worker = getattr(self, '_order_worker', None)
+        if order_worker is not None and order_worker.isRunning():
+            try:
+                order_worker.result_ready.disconnect()
+                order_worker.failed.disconnect()
+                order_worker.progress.disconnect()
+            except (TypeError, AttributeError):
+                pass
+            order_worker.cancel()
+            if not order_worker.wait(2000):
+                order_worker.terminate()
+                order_worker.wait(500)
+
+        # —— 2. FFT-vs-time（QObject worker on QThread）——
+        fft_thread = getattr(self, '_fft_time_thread', None)
+        fft_worker = getattr(self, '_fft_time_worker', None)
+        if fft_thread is not None and fft_thread.isRunning():
+            if fft_worker is not None and hasattr(fft_worker, 'cancel'):
+                fft_worker.cancel()
+            # cancel 是协作式的：worker.run 在下一次 cancel_token 检查处返回。
+            # quit() 让 thread 的 event loop 退出，等 worker.finished/failed 触发
+            # 已 wired 的 thread.finished -> deleteLater 清理。
+            fft_thread.quit()
+            if not fft_thread.wait(2000):
+                fft_thread.terminate()
+                fft_thread.wait(500)
+
         super().closeEvent(event)
 ```
 
-> **注意：** `closeEvent` 中处理的 `_spectrogram_worker` 名称必须与 `do_fft_time` 实际持有的 worker 属性名一致。executor 在落地前应 grep `main_window.py` 中 spectrogram worker 的实际属性名（可能是 `self._spec_worker` 或 `self._fft_time_worker`），按真实名称替换。
+> **属性名验证（必跑 grep 一次）：** plan 落地前 executor 应跑：
+>
+> ```bash
+> grep -n "_fft_time_thread\|_fft_time_worker\|FFTTimeWorker" \
+>   "mf4_analyzer/ui/main_window.py" | head -20
+> ```
+>
+> 若实际属性名不是 `_fft_time_thread / _fft_time_worker`（例如老分支叫 `_spec_thread`），按真实名称替换上面 closeEvent 中两处 `getattr(...)`。本 plan 在 `2026-04-26` 时刻的源码确认两个名字就是这个写法（`main_window.py:105-106, 1492-1493, 1655-1656`）。
 
 `_render_order_time` 走新 heatmap API：
 
@@ -1777,7 +1899,7 @@ def test_render_order_rpm_uses_correct_extent_and_matrix_orientation(qtbot, tmp_
     np.testing.assert_allclose(im.get_array()[0], [0.1, 0.2, 0.3, 0.4, 0.5])
 ```
 
-- [ ] **Step 10: 写测试 — closeEvent 不崩 + 取消所有 worker**
+- [ ] **Step 10: 写测试 — closeEvent 不崩 + 同时取消 order 和 fft-time worker**
 
 ```python
 def test_main_window_close_event_cancels_running_order_worker(qtbot):
@@ -1797,7 +1919,6 @@ def test_main_window_close_event_cancels_running_order_worker(qtbot):
     params = OrderAnalysisParams(fs=fs, nfft=nfft, max_order=5.0,
                                   order_res=0.5, time_res=0.001)
 
-    # 直接走 dispatcher 投递长任务
     win._dispatch_order_worker('time', sig, rpm, t, params,
                                 status_msg='测试取消')
     qtbot.waitUntil(lambda: win._order_worker.isRunning(), timeout=2000)
@@ -1805,25 +1926,97 @@ def test_main_window_close_event_cancels_running_order_worker(qtbot):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         win.close()
-        # close 后 worker 应该已不在跑
         assert not win._order_worker.isRunning()
+        thread_warnings = [w for w in caught
+                            if 'QThread' in str(w.message) or 'destroyed' in str(w.message)]
+        assert not thread_warnings, f"unexpected QThread warnings: {thread_warnings}"
+
+
+def test_main_window_close_event_cancels_running_fft_time_thread(qtbot):
+    """codex round-2 C10：若 _fft_time_thread 仍在跑，closeEvent 必须 quit 它。
+    FFTTimeWorker 是 QObject，主体 isRunning 检查在 _fft_time_thread 上。"""
+    import warnings
+    from mf4_analyzer.ui.main_window import MainWindow
+    from PyQt5.QtCore import QThread, QObject, pyqtSignal
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    # 构造一个最小的 stub worker + 真 QThread 模拟正在跑的 fft-time
+    class StubWorker(QObject):
+        finished = pyqtSignal(object)
+        failed = pyqtSignal(str)
+        progress = pyqtSignal(int, int)
+
+        def __init__(self):
+            super().__init__()
+            self._cancelled = False
+
+        def cancel(self):
+            self._cancelled = True
+
+        def run(self):
+            # 简单空转，等 cancel 设位或 thread.quit
+            while not self._cancelled:
+                QThread.msleep(50)
+            self.finished.emit(None)
+
+    worker = StubWorker()
+    thread = QThread(win)
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    worker.finished.connect(thread.quit)
+    win._fft_time_thread = thread
+    win._fft_time_worker = worker
+    thread.start()
+    qtbot.waitUntil(lambda: thread.isRunning(), timeout=2000)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        win.close()
+        assert not thread.isRunning(), "fft-time thread must be stopped on close"
         thread_warnings = [w for w in caught
                             if 'QThread' in str(w.message) or 'destroyed' in str(w.message)]
         assert not thread_warnings, f"unexpected QThread warnings: {thread_warnings}"
 ```
 
-- [ ] **Step 11: 写测试 — 快速连点 stale generation 被丢弃**
+- [ ] **Step 11: 写测试 — stale generation 直接被 _on_order_result 丢弃（确定性版）**
 
 ```python
+def test_on_order_result_drops_stale_generation_deterministically(qtbot):
+    """codex round-2 C11：stale-generation drop 不应依赖 worker timing。
+    直接在 main thread 调 _on_order_result(..., old_gen)，断言 render 不触发。"""
+    from mf4_analyzer.ui.main_window import MainWindow
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    rendered = []
+    win._render_order_time = lambda r: rendered.append(r)
+
+    # 模拟 dispatcher 将 generation 推到 5
+    win._order_generation = 5
+    # 一个旧 worker 的 stale 信号（generation=3）到达
+    fake_result = object()
+    win._on_order_result(fake_result, 'time', 3)
+    assert rendered == [], "stale-generation result must NOT trigger render"
+
+    # 当前 generation 的 result 必须被采纳
+    win._on_order_result(fake_result, 'time', 5)
+    assert rendered == [fake_result]
+
+
 def test_rapid_redispatch_drops_stale_generation(qtbot):
-    """连续 dispatch 三次：只有最新 generation 的 result 应到 _on_order_result。"""
+    """连续 dispatch 三次：只有最新 generation 的 result 应到 _on_order_result。
+
+    本测试覆盖"端到端"路径（dispatcher → worker → signal → slot）；
+    上一测试覆盖"slot 单元层"。两者互补。
+    """
     from mf4_analyzer.ui.main_window import MainWindow
     from mf4_analyzer.signal.order import OrderAnalysisParams
     win = MainWindow()
     qtbot.addWidget(win)
 
     rendered_kinds = []
-    orig_render_time = win._render_order_time
     win._render_order_time = lambda result: rendered_kinds.append(('time', result))
 
     fs = 1024.0
@@ -1835,7 +2028,6 @@ def test_rapid_redispatch_drops_stale_generation(qtbot):
     params = OrderAnalysisParams(fs=fs, nfft=nfft, max_order=5.0,
                                   order_res=0.5, time_res=0.05)
 
-    # 连续 dispatch 三次（dispatcher 自带 cancel + wait + terminate fallback）
     for _ in range(3):
         win._dispatch_order_worker('time', sig, rpm, t, params,
                                     status_msg='rapid')
@@ -1843,7 +2035,6 @@ def test_rapid_redispatch_drops_stale_generation(qtbot):
     qtbot.waitUntil(lambda: not win._order_worker.isRunning(), timeout=10000)
     qtbot.wait(200)   # 让信号 deliver
 
-    # 至多 1 次（最新 generation）—— stale 的 result 必须被 drop
     assert len(rendered_kinds) <= 1
     assert win._order_generation == final_gen
 ```
@@ -2052,6 +2243,17 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests -q
 - [ ] 高峰位置不模糊化（bilinear 不应让窄峰变宽）
 - [ ] 低幅区域不出现 banding
 - [ ] 用户签字接受（report 末尾追加签字栏）
+
+## C. Batch 200 文件内存观察（codex round-2 G24 / D15 → manual）
+
+plan 内的 `tracemalloc` 测试（T1 Step 19-20）只覆盖 single-compute chunk 上界，
+不能等同于 batch 200 文件 + image export。本节用真实 batch 跑一次：
+
+- [ ] `testdoc/` 准备 200 个小 MF4（或同一文件复制 200 份）
+- [ ] 启动 `python -m memory_profiler MF4\ Data\ Analyzer\ V1.py`（或 `psutil` snapshot）
+- [ ] 加载文件 → 选信号 + RPM → 跑「时间-阶次谱」一次 → 触发批处理（free_config + order_time + image=on）
+- [ ] 记录峰值 RSS 增量
+- [ ] 验收：增量 < 200 MB；超阈值则在 spec §11 deferred 中开"batch 内存优化"条目
 ```
 
 - [ ] **Step 9: 修改清单**
@@ -2073,15 +2275,15 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests -q
 | 7-4 视觉清晰度 ≥ gouraud | 🧪 手动 + 用户签字 | manual-smoke §B |
 | 7-5 缓存命中 < 100 ms | ⏸ deferred（依赖 `_order_result_cache`） | — |
 | 7-6 既有测试 PASS | ✅ 自动 | `pytest tests -q` |
-| 7-7 新增 7 项算法测试 PASS | ✅ 自动 | T1 (counts/argmin 边界/target 幅值/vectorize 全帧/Nyquist metadata/memory budget) + T3 (cancel/progress) |
-| 7-8 新增 4 项 UI/worker 测试 PASS | ✅ 自动 | T4 (envelope helper / heatmap reuse + shape change + track-roundtrip) + T5 (worker 5 个) + T6 (smoke 2 个) |
-| 7-9 batch 200 文件内存增量 < 200 MB | ✅ 自动 (tracemalloc step) | T1 Step 19-20 |
+| 7-7 新增 7 项算法测试 PASS | ✅ 自动 | T1 (counts helper-monkeypatch / argmin 边界 / target 幅值 / vectorize 全帧 time+rpm+track / Nyquist metadata / memory budget) + T3 (cancel/progress) |
+| 7-8 新增 4 项 UI/worker 测试 PASS | ✅ 自动 | T4 (envelope helper 含 None 行为 / heatmap reuse + shape change + track-roundtrip) + T5 (worker 5 个 + B6 方向 + closeEvent 双 worker + stale-gen 直测) + T6 (smoke 2 个) |
+| 7-9 batch 200 文件内存增量 < 200 MB | 🧪 **手动**（codex round-2 G24） | manual-smoke §C；plan 内的 tracemalloc step (T1 Step 19-20) 只验 single-compute chunk 上界，不能等同于 batch 200 文件。如需自动化，需新增 `BatchRunner` 多文件 + image export memory test，本期 deferred |
 | 7-10 现有 order 控件行为不变 | 🧪 手动 | manual-smoke §A |
-| 7-11 vectorize-vs-loop 数值一致 | ✅ 自动 | T1 Step 15-16 |
+| 7-11 vectorize-vs-loop 数值一致（time + rpm + track 三路径） | ✅ 自动 | T1 Step 15-16（含 codex round-2 A5 补的 rpm 路径） |
 | 7-12 RPM-bin 索引 broadcast argmin 边界等价 | ✅ 自动 | T1 Step 5-7 |
 | 7-13 order_rpm imshow 轴语义对 | ✅ 自动 + 🧪 手动 | T5 Step 9 (单元测试) + manual-smoke §B |
-| 7-14 closeEvent 正常退出无 QThread warning | ✅ 自动 | T5 Step 10 |
-| 7-15 stale generation 不渲染 | ✅ 自动 | T5 Step 11 |
+| 7-14 closeEvent 正常退出（含 fft-time thread）无 QThread warning | ✅ 自动 | T5 Step 10（两个测试：order worker + fft_time_thread/worker） |
+| 7-15 stale generation 不渲染 | ✅ 自动 | T5 Step 11（两个测试：单元层 `_on_order_result` 直调 + 端到端 dispatcher） |
 
 ## Self-Review Checklist
 
@@ -2102,12 +2304,12 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests -q
 
 2. **Placeholder 扫描**：grep "TODO|TBD|实现细节|稍后"。本 plan 中所有标"由 specialist 落地"的位置均明确给出 spec 引用 + 行为契约 + 完整代码片段。
 
-3. **类型一致性**：
-   - `OrderTimeResult.amplitude` 是 `(N_times, N_orders)`；`_render_order_time` 用 `result.amplitude.T` → `(N_orders, N_times)`，配 x=time / y=order。
-   - `OrderRpmResult.amplitude` 是 `(N_rpm_bins, N_orders)`；`_render_order_rpm` **不转置**，直接传 → `(N_rpm_bins, N_orders) = (rows=Y, cols=X)`，配 x=order / y=rpm（B6 修正）。
+3. **类型一致性**（codex round-2 B6 留意：本节是文档自检，描述必须与 plan T5 实际代码段一致）：
+   - `OrderTimeResult.amplitude` 是 `(N_times, N_orders)`；`_render_order_time` 用 `result.amplitude.T` → `(N_orders, N_times) = (rows=Y, cols=X)`，配 x=time / y=order。
+   - `OrderRpmResult.amplitude` 是 `(N_rpm_bins, N_orders)`；`_render_order_rpm` **不转置**，直接传 → `(N_rpm_bins, N_orders) = (rows=Y, cols=X)`，配 x=order / y=rpm（B6 修正）。**注意：不要再写"用 .T 转成 (N_orders, N_rpm)"——那是 round-1 的旧描述，会让 executor 走双反转 bug。**
    - `plot_or_update_heatmap(matrix=...)` 期望 `(N_y, N_x)`，与上两条均一致。
    - `OrderRpmResult.counts` 形状不变 `(N_rpm_bins, N_orders)`，但语义改为帧数；review report §4.1 已加 API compatibility note。
-   - `OrderTimeResult.metadata` / `OrderRpmResult.metadata` / `OrderTrackResult.metadata` 都新增 `nyquist_clipped: int` 字段。
+   - `OrderTimeResult.metadata` / `OrderRpmResult.metadata` / `OrderTrackResult.metadata` 都新增 `nyquist_clipped_at_median_rpm: int` 字段（注意带 `_at_median_rpm` 后缀，提醒消费方这是基于中位 RPM 的统计估算，不是 frame-level 精确）。
    - `OrderWorker` 三个信号都带 `generation: int`；`MainWindow._on_order_*` 三个 slot 都比对 generation。
 
 ## Squad Routing Hints
