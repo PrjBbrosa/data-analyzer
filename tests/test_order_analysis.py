@@ -82,7 +82,7 @@ def test_time_order_vectorized_matches_loop():
 
 
 def test_vectorized_paths_match_loop_for_all_results():
-    """compute_time/rpm_order_result 与 extract_order_track_result 都必须
+    """compute_time_order_result 与 extract_order_track_result 都必须
     与逐帧 _order_amplitudes 完全一致（rtol=1e-9）。"""
     from mf4_analyzer.signal.order import OrderAnalyzer, OrderAnalysisParams
     fs = 1024.0
