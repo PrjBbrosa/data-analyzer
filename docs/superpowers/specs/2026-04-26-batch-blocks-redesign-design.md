@@ -240,9 +240,12 @@ class AnalysisPreset:
 | 字段 | 性质 | 适用 source | 是否序列化到 preset JSON |
 |---|---|---|:-:|
 | `name` / `method` / `params` / `outputs` | 配方 | both | ✓ |
-| `target_signals` / `rpm_channel` / `signal_pattern` | 配方 | `free_config` | ✓ |
+| `target_signals` / `rpm_channel` | 配方 | `free_config` | ✓ |
+| `signal_pattern` | 后端兜底（UI 不写入） | `free_config` | ✗ |
 | `signal` / `rpm_signal` | 运行选择 | `current_single` | ✗ |
 | `file_ids` / `file_paths` | 运行选择 | `free_config` | ✗ |
+
+> `signal_pattern` 不写入 JSON：UI 已经没有入口，preset 文件保存的是"用户在 UI 里设定的配方"，pattern 只是后端兜底（来自老 API / 编程化构造）。新建 preset 不会有 pattern 值。
 
 工厂方法增强：
 - `AnalysisPreset.free_config(...)` **不接受** `file_ids` / `file_paths`（这两个是 UI 层运行时状态，由 `BatchSheet.get_preset()` 在返回前注入）
@@ -303,7 +306,18 @@ JSON schema v1（**自起始就带 `schema_version`**）：
 
 ### 4.3 任务展开逻辑
 
-`BatchRunner._expand_tasks` 改造：
+`BatchRunner.__init__` 增加可选 `loader` 注入：
+
+```python
+class BatchRunner:
+    def __init__(self, files: dict, loader: Callable[[str], FileData] | None = None):
+        self.files = files
+        # 默认走 mf4_analyzer.io.loader.load_file；测试可注入 mock
+        self._loader = loader or _default_loader
+        self._disk_cache: dict[str, FileData] = {}
+```
+
+`_expand_tasks` 改造（**目标信号全部缺时返回 0 任务，让现有 blocked 路径处理**）：
 
 ```python
 def _expand_tasks(self, preset):
@@ -312,24 +326,42 @@ def _expand_tasks(self, preset):
     if preset.source == 'current_single':
         # ... 不变
         return
-    # free_config: 优先 target_signals
-    files_iter = self._resolve_files(preset)  # file_ids + file_paths 合并
+    # free_config: 优先 target_signals；全部缺 → 不 yield → 走 blocked
+    files_iter = list(self._resolve_files(preset))
     if preset.target_signals:
+        any_yielded = False
         for fid, fd in files_iter:
             for ch in preset.target_signals:
                 if ch in fd.data.columns:
                     yield fid, fd, ch
+                    any_yielded = True
                 else:
-                    # 缺信号：仍 yield，但带 missing 标记
-                    yield fid, fd, ch  # 走 _run_one 时会抛 missing
+                    # 部分缺：yield 后由 _run_one 抛 "missing signal"，
+                    # task_failed 事件而非静默丢弃；保留对用户可见的 ✗ 行
+                    yield fid, fd, ch
+                    any_yielded = True
+        # 注意：如果 target_signals 中所有信号在所有文件里都不存在，
+        # 上面循环不会 yield 任何项 → run() 内 `if not tasks` 走
+        # BatchRunResult(status='blocked', blocked=['no matching batch tasks'])
+        # 这与 §7 "全部不可用 → UI 禁用 Run" 共同形成两层防护：
+        # UI 通常拦下；如果调用方绕过 UI 直接构造 preset，runner 仍 fail-soft。
     else:
-        # 兜底：维持老的 pattern 路径
+        # 兜底：维持老的 pattern 路径（同现状 _matches）
         ...
 ```
 
 `_resolve_files`：
 - `preset.file_ids` 直接查 `self.files`
-- `preset.file_paths` 走 `loader.load(path)` 懒加载（缓存到 `self.files` 不变；只是 batch 临时持有）
+- `preset.file_paths` 走 `self._loader(path)` 懒加载，结果缓存在 `self._disk_cache`（key=path），同一 BatchRunner 实例多次展开复用；不污染 `self.files`（那是 main_window 的真相源）
+
+`_default_loader`：
+```python
+def _default_loader(path: str):
+    from mf4_analyzer.io.loader import load_file
+    return load_file(path)
+```
+
+测试中可以 `BatchRunner(files={}, loader=lambda p: fake_fd)` 注入 fake，覆盖加载成功 / `loader` 抛异常两条路径。
 
 ### 4.4 进度事件接口 + 取消契约
 
@@ -341,16 +373,31 @@ class BatchProgressEvent:
         'task_done',
         'task_failed',
         'task_cancelled',
-        'run_finished',     # 终态事件，UI 用来释放编辑锁
+        'run_finished',     # 终态事件
     ]
-    task_index: int
-    total: int
-    file_name: str
-    signal: str
-    method: str
-    error: str | None = None       # 仅 task_failed
-    final_status: str | None = None  # 仅 run_finished：'done' / 'partial' / 'cancelled' / 'blocked'
+    # 以下 5 字段：task_* 事件必填；run_finished 时全部 None / 0
+    task_index: int | None = None
+    total: int | None = None
+    file_name: str | None = None
+    signal: str | None = None
+    method: str | None = None
+    # 仅 task_failed
+    error: str | None = None
+    # 仅 run_finished：'done' / 'partial' / 'cancelled' / 'blocked'
+    final_status: str | None = None
 ```
+
+**Payload 规则**：
+
+| kind | task_index | total | file_name/signal/method | error | final_status |
+|---|:-:|:-:|:-:|:-:|:-:|
+| task_started | ✓ | ✓ | ✓ | — | — |
+| task_done | ✓ | ✓ | ✓ | — | — |
+| task_failed | ✓ | ✓ | ✓ | ✓ | — |
+| task_cancelled | ✓ | ✓ | ✓ | — | — |
+| run_finished | — | — | — | — | ✓ |
+
+`run_finished` 是语义事件，提示监听者"runner 已结束、final_status 是这个"。**它不替代 `BatchRunResult`**（仍然是 `run()` 的返回值）；UI 端实际编辑解锁仍由 `BatchRunnerThread.finished` 信号触发（QThread 内置），见 §6.2。
 
 **`BatchRunResult.status` 取值扩展**：现有 `'done' / 'partial' / 'blocked'` + 新增 `'cancelled'`（用户中断；可能已完成 0~N-1 个 task，剩余标 cancelled）。
 
@@ -446,16 +493,38 @@ TaskList 重算 dry-run 任务清单
 ```
 [运行] 点击
     ↓
-BatchSheet.lock_editing()  → 三块详情禁用
+BatchSheet.lock_editing()  → 三块详情禁用；按钮区切到 [中断]
     ↓
-RunnerThread.start()  → BatchRunner.run(on_event=signal.emit)
-    ↓ (per task)
-event task_started → TaskList 行图标 ⏸ → ⟳
-event task_done    → TaskList 行图标 ⟳ → ✓
-event task_failed  → TaskList 行图标 ⟳ → ✗ (悬浮 tooltip = error)
-    ↓ (all done)
-BatchSheet.unlock_editing(); 按钮恢复 Cancel/运行；保留状态
+BatchRunnerThread.start()  → BatchRunner.run(on_event=signal.emit, cancel_token=token)
+    ↓ (per task, runner 线程内)
+event task_started   → TaskList 行图标 ⏸ → ⟳
+event task_done      → TaskList 行图标 ⟳ → ✓
+event task_failed    → TaskList 行图标 ⟳ → ✗ (悬浮 tooltip = error)
+event task_cancelled → TaskList 行图标 ⏸ → "—" 灰色 (tooltip "已取消")
+    ↓ (终态)
+event run_finished(final_status='done'|'partial'|'cancelled'|'blocked')
+   - 仅作语义信号；UI 可据此选择不同 toast 文案
+    ↓ (BatchRunnerThread 退出 run loop → QThread.finished 信号)
+BatchSheet._on_thread_finished(result: BatchRunResult):
+   - unlock_editing()：三块详情 setEnabled(True)
+   - 按钮区切回 [Cancel] [运行]
+   - TaskList 保留所有图标状态供回看
+   - 根据 result.status 决定 toast：done / partial(N 失败) / cancelled / blocked(原因)
 ```
+
+**unlock 触发器**：始终为 `QThread.finished` 信号，**不**依赖 `run_finished` 事件（事件可能因 runner 内异常未送达；QThread.finished 由 Qt 自身保证）。`run_finished` 仅作"runner 自报终态"，提供给观察者。
+
+### 6.2.1 blocked 路径（无任务可跑）
+
+```
+runner.run() 内 _expand_tasks 产生 0 个 task
+    ↓
+return BatchRunResult(status='blocked', blocked=['no matching batch tasks'])
+    ↓
+UI 端 _on_thread_finished 看到 status='blocked' → toast "无可执行任务"
+```
+
+> 走到这一步通常意味着 UI 端检查漏了（§7 规则应已经禁用运行按钮）；但若发生，runner 端 fail-soft，不抛异常。
 
 ### 6.3 Preset 导入 / 导出
 
@@ -506,7 +575,7 @@ BatchSheet.unlock_editing(); 按钮恢复 Cancel/运行；保留状态
 
 `test_batch_preset_io.py`：
 - 写入 + 读回往返：所有 portable 字段一致
-- 写入文件**不含** `file_ids` / `file_paths` / `signal` / `rpm_signal` / `outputs.directory`（即使 dataclass 上被注入）— 白名单序列化验证
+- 写入文件**不含** `file_ids` / `file_paths` / `signal` / `rpm_signal` / `signal_pattern` / `outputs.directory`（即使 dataclass 上被注入）— 白名单序列化验证
 - `schema_version: 1` 写入正确
 - 读取缺 `schema_version` 字段 → 视为 v1 解析成功
 - 读取 `schema_version: 2` → 抛 `UnsupportedPresetVersion`
@@ -548,7 +617,7 @@ BatchSheet.unlock_editing(); 按钮恢复 Cancel/运行；保留状态
 squad 实施期建议切片（每片可独立 PR）：
 
 1. **后端基础**：`AnalysisPreset` 字段扩展 + 工厂校验 + 序列化白名单 contract（不含 IO 实现）。tests 覆盖工厂不变量和字段所属。
-2. **后端 runner 扩展**：`_expand_tasks` 走 `target_signals` + `_resolve_files` 懒加载磁盘文件 + `BatchProgressEvent`（5 种 kind）+ `cancel_token` + 新签名 `run(*, on_event=, cancel_token=)`。tests 覆盖 §8 中所有 runner 用例。
+2. **后端 runner 扩展**：`_expand_tasks` 走 `target_signals` + `_resolve_files` 懒加载磁盘文件（含 `loader` 注入）+ `BatchProgressEvent`（5 种 kind）+ `cancel_token` + 新签名 `run(preset, output_dir, progress_callback=None, *, on_event=None, cancel_token=None)`。tests 覆盖 §8 中所有 runner 用例。
 3. **Preset JSON IO**：`batch_preset_io.py` + schema_version 处理 + 错误类。tests 覆盖往返 + 白名单 + 版本处理。
 4. **UI 骨架**：`drawers/batch/` package 创建 + 顶部摘要链路 + 三列详情壳（先内嵌静态 widget，逻辑空）。
 5. **UI 详情填充**：`SignalPickerPopup`、`MethodButtons` + 动态参数表、文件列表管理（含状态机 + metadata probe worker）。
