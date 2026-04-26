@@ -127,9 +127,10 @@ def _strip_subplots_action(toolbar):
             return
 
 
-def _find_action(toolbar, text_lower):
+def _find_action(toolbar, key_lower):
+    """Match by act.data() first (i18n-stable), then by act.text()."""
     for act in toolbar.actions():
-        if (act.text() or '').strip().lower() == text_lower:
+        if act.data() == key_lower or (act.text() or '').strip().lower() == key_lower:
             return act
     return None
 
@@ -154,8 +155,18 @@ class _ChartCard(QWidget):
         self.canvas = canvas
         self.toolbar = NavigationToolbar(canvas, self)
         self.toolbar.setObjectName("chartToolbar")
-        self.toolbar.setIconSize(QSize(16, 16))
+        self.toolbar.setIconSize(QSize(14, 14))
         _strip_subplots_action(self.toolbar)
+
+        # Find Save BEFORE i18n changes labels (text is still 'Save' here);
+        # the reference stays valid after relabel because we keep the QAction.
+        save_act = _find_action(self.toolbar, 'save')
+
+        # Apply Chinese tooltips & drop Back/Forward; this also calls
+        # setData(key) on each retained action so subsequent _find_action
+        # lookups by english key remain stable across locales.
+        from ._toolbar_i18n import apply_chinese_toolbar_labels
+        apply_chinese_toolbar_labels(self.toolbar)
 
         # Insert "copy as image" button right before the matplotlib Save action
         # (or append if save action isn't found). This places it alongside the
@@ -166,7 +177,6 @@ class _ChartCard(QWidget):
         self._copy_btn.setToolTip("复制为图片（含游标线和读数）")
         self._copy_btn.setAutoRaise(True)
         self._copy_btn.clicked.connect(self.copy_image_requested)
-        save_act = _find_action(self.toolbar, 'save')
         if save_act is not None:
             self.toolbar.insertWidget(save_act, self._copy_btn)
         else:
@@ -198,8 +208,11 @@ class _ChartCard(QWidget):
         # Only pan/zoom toggling changes the hint; one-shot buttons don't.
         # Subclasses (TimeChartCard) listen to this same signal to flip the
         # axis-lock chip group enabled state.
+        # Match by act.data() (set by apply_chinese_toolbar_labels) first so
+        # the hookup survives matplotlib locale/text changes; fall back to
+        # english text for any action that wasn't relabeled.
         for act in self.toolbar.actions():
-            name = (act.text() or '').strip().lower()
+            name = act.data() if act.data() else (act.text() or '').strip().lower()
             if name in ('pan', 'zoom'):
                 act.triggered.connect(self._on_nav_mode_toggled)
 
