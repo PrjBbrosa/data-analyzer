@@ -405,6 +405,9 @@ class ChartStack(QWidget):
         self._time_card.plot_mode_changed.connect(self.plot_mode_changed)
         self._time_card.cursor_mode_changed.connect(self.cursor_mode_changed)
 
+        # Initial sync: stats_strip shows iff default mode is 'time'.
+        self.stats_strip.setVisible(self.current_mode() == 'time')
+
     def count(self):
         return self.stack.count()
 
@@ -413,6 +416,7 @@ class ChartStack(QWidget):
         if self.stack.currentIndex() == idx:
             return
         self.stack.setCurrentIndex(idx)
+        self.stats_strip.setVisible(mode == 'time')
         self.mode_changed.emit(mode)
 
     def current_mode(self):
