@@ -90,9 +90,10 @@ def test_time_chart_card_has_segmented_controls(qapp, qtbot):
     # First card in the stack is the time-domain card.
     card = cs.stack.widget(0)
     assert isinstance(card, TimeChartCard)
-    # Four buttons on the card toolbar: Subplot, Overlay, Off, Single, Dual
+    # Five segmented buttons on the card toolbar (post-i18n labels):
+    # 分屏 / 叠加 / 游标关 / 单游标 / 双游标
     texts = {b.text() for b in card.findChildren(type(card.btn_subplot))}
-    assert {'Subplot', 'Overlay', 'Off', 'Single', 'Dual'} <= texts
+    assert {'分屏', '叠加', '游标关', '单游标', '双游标'} <= texts
 
 
 def test_time_chart_card_removes_subplots_config_button(qapp, qtbot):
@@ -268,3 +269,26 @@ def test_spectrogram_canvas_export_pixmaps(qtbot):
 
     assert not canvas.grab_full_view().isNull()
     assert not canvas.grab_main_chart().isNull()
+
+
+# ---- Task 2.7: Chinese segmented buttons + idle hint ----
+
+def test_time_card_segmented_buttons_chinese(qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_mode('time')
+    card = cs._time_card
+    assert card.btn_subplot.text() == '分屏'
+    assert card.btn_overlay.text() == '叠加'
+    assert card._cursor_buttons['off'].text() == '游标关'
+    assert card._cursor_buttons['single'].text() == '单游标'
+    assert card._cursor_buttons['dual'].text() == '双游标'
+    assert card._lock_buttons['none'].text() == '不锁'
+    assert card._lock_buttons['x'].text() == '锁X'
+    assert card._lock_buttons['y'].text() == '锁Y'
+
+
+def test_tool_hints_idle_mentions_dblclick():
+    from mf4_analyzer.ui.chart_stack import _TOOL_HINTS
+    assert '双击坐标轴' in _TOOL_HINTS['']

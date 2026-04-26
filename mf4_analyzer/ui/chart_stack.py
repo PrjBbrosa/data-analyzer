@@ -113,7 +113,7 @@ _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
 _TOOL_HINTS = {
     'pan': "<b>移动曲线</b><br>左键拖动平移 · 右键拖动缩放坐标轴",
     'zoom': "<b>框选缩放</b><br>拖动鼠标框选矩形区域放大 · Home 键可复位",
-    '': "<b>浏览</b><br>鼠标滚轮缩放 · 点击 ✥ 启用平移 · 点击 ⌕ 启用缩放",
+    '': "<b>浏览</b><br>双击坐标轴可设置范围 · 工具栏可启用 平移 / 缩放 / 保存",
 }
 
 
@@ -258,8 +258,8 @@ class TimeChartCard(_ChartCard):
         # subclass, so addWidget puts things inline after the icon group.
         self.toolbar.addWidget(_vline())
 
-        self.btn_subplot = QPushButton("Subplot", self.toolbar)
-        self.btn_overlay = QPushButton("Overlay", self.toolbar)
+        self.btn_subplot = QPushButton("分屏", self.toolbar)
+        self.btn_overlay = QPushButton("叠加", self.toolbar)
         for b in (self.btn_subplot, self.btn_overlay):
             b.setCheckable(True)
             b.setProperty("role", "chart-choice")
@@ -273,7 +273,7 @@ class TimeChartCard(_ChartCard):
         self.toolbar.addWidget(_vline())
 
         self._cursor_buttons = {}
-        for label, key in [('Off', 'off'), ('Single', 'single'), ('Dual', 'dual')]:
+        for label, key in [('游标关', 'off'), ('单游标', 'single'), ('双游标', 'dual')]:
             b = QPushButton(label, self.toolbar)
             b.setCheckable(True)
             b.setProperty("role", "chart-choice")
@@ -289,7 +289,7 @@ class TimeChartCard(_ChartCard):
         # when zoom is inactive.
         self.toolbar.addWidget(_vline())
         self._lock_buttons = {}
-        for label, key in [('无', 'none'), ('X', 'x'), ('Y', 'y')]:
+        for label, key in [('不锁', 'none'), ('锁X', 'x'), ('锁Y', 'y')]:
             b = QPushButton(label, self.toolbar)
             b.setCheckable(True)
             b.setProperty("role", "chart-choice")
