@@ -87,3 +87,114 @@ def test_set_partially_available_keeps_selection_marked_unavailable(qtbot):
     p.set_partially_available({})  # sig_a now nowhere
     assert "sig_a" not in p._selected
     assert received and received[-1] == ()
+
+
+def test_signal_chip_emits_remove_signal(qtbot):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalChip
+    chip = SignalChip("sig_a")
+    qtbot.addWidget(chip)
+    received = []
+    chip.removeRequested.connect(received.append)
+    qtbot.mouseClick(chip._remove_btn, Qt.LeftButton)
+    assert received == ["sig_a"]
+
+
+def test_signal_chip_label_truncates_long_name(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalChip
+    long_name = "A_side.Rte." + "x" * 200
+    chip = SignalChip(long_name, max_label_chars=40)
+    qtbot.addWidget(chip)
+    assert chip._label.toolTip() == long_name
+    assert len(chip._label.text()) <= 41  # 40 + ellipsis "…"
+    assert chip._label.text().endswith("…")
+
+
+def test_picker_display_renders_one_chip_per_selected(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import (
+        SignalPickerPopup, SignalChip,
+    )
+    p = SignalPickerPopup(available_signals=["a", "b", "c"])
+    qtbot.addWidget(p)
+    p.set_selected(("a", "b", "c"))
+    chips = p._display_frame.findChildren(SignalChip)
+    assert sorted(c.name() for c in chips) == ["a", "b", "c"]
+
+
+def test_picker_display_height_grows_with_selection_not_width(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    p = SignalPickerPopup(available_signals=["sig1", "sig2", "sig3"])
+    qtbot.addWidget(p)
+    p.resize(280, 600)
+    p.set_selected(("sig1",))
+    one_h = p._display_frame.sizeHint().height()
+    one_w = p._display_frame.sizeHint().width()
+    p.set_selected(("sig1", "sig2", "sig3"))
+    three_h = p._display_frame.sizeHint().height()
+    three_w = p._display_frame.sizeHint().width()
+    assert three_h > one_h
+    assert three_w == one_w  # width must NOT scale with chip count
+
+
+def test_picker_display_chip_remove_unselects_signal(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import (
+        SignalPickerPopup, SignalChip,
+    )
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+    p.set_selected(("a", "b"))
+    received = []
+    p.selectionChanged.connect(lambda tup: received.append(tup))
+    chip_a = next(c for c in p._display_frame.findChildren(SignalChip)
+                  if c.name() == "a")
+    chip_a._remove_btn.click()
+    assert "a" not in p.selected()
+    assert received[-1] == ("b",)
+
+
+def test_picker_display_clicking_empty_area_opens_popup(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    from PyQt5.QtCore import QPoint, Qt
+    p = SignalPickerPopup(available_signals=["a"])
+    qtbot.addWidget(p)
+    p.show()
+    qtbot.mouseClick(p._display_frame, Qt.LeftButton, pos=QPoint(5, 5))
+    assert p.is_popup_visible() is True
+
+
+def test_picker_single_select_replaces_previous_selection(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    p = SignalPickerPopup(
+        available_signals=["a", "b", "c"], single_select=True,
+    )
+    qtbot.addWidget(p)
+    received = []
+    p.selectionChanged.connect(lambda tup: received.append(tup))
+    p.set_selected(("a",))
+    assert p.selected() == ("a",)
+    p.set_selected(("b",))
+    assert p.selected() == ("b",)
+    # Setting two should be normalized to the first only.
+    p.set_selected(("a", "c"))
+    assert p.selected() == ("a",)
+
+
+def test_picker_single_select_checking_unchecks_others(qtbot):
+    from PyQt5.QtWidgets import QCheckBox
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    from PyQt5.QtCore import Qt
+    p = SignalPickerPopup(
+        available_signals=["a", "b"], single_select=True,
+    )
+    qtbot.addWidget(p)
+    # Find each row's checkbox and toggle them in order
+    boxes: dict[str, QCheckBox] = {}
+    for i in range(p._list.count()):
+        item = p._list.item(i)
+        cb = p._list.itemWidget(item)
+        boxes[item.data(Qt.UserRole)] = cb
+    boxes["a"].setChecked(True)
+    assert p.selected() == ("a",)
+    boxes["b"].setChecked(True)
+    assert p.selected() == ("b",)
+    assert boxes["a"].isChecked() is False  # auto-unchecked

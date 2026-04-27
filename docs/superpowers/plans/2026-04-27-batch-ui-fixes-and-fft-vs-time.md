@@ -71,7 +71,17 @@ Expected: FAIL with `ImportError: cannot import name 'SignalChip'`
 
 - [ ] **Step 1.3: Implement `SignalChip`**
 
-Insert at the top of `mf4_analyzer/ui/drawers/batch/signal_picker.py`, after the existing imports and before `class SignalPickerPopup`:
+First, extend the existing top-of-file imports in `mf4_analyzer/ui/drawers/batch/signal_picker.py` so `QLabel`, `QScrollArea`, and `QSizePolicy` are available — keeping all imports at module top per project style (no inline imports):
+
+```python
+from PyQt5.QtWidgets import (
+    QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
+    QVBoxLayout, QWidget,
+)
+```
+
+Then insert at the top of the file, after imports and before `class SignalPickerPopup`:
 
 ```python
 class SignalChip(QWidget):
@@ -98,7 +108,6 @@ class SignalChip(QWidget):
         lay.setSpacing(4)
 
         display = name if len(name) <= max_label_chars else name[: max_label_chars] + "…"
-        from PyQt5.QtWidgets import QLabel
         self._label = QLabel(display, self)
         self._label.setToolTip(name)
         lay.addWidget(self._label, 1)
@@ -194,14 +203,35 @@ Expected: FAIL with `AttributeError: 'SignalPickerPopup' object has no attribute
 
 - [ ] **Step 2.3: Replace `_display_btn` with `_display_frame` and rebuild logic**
 
-In `mf4_analyzer/ui/drawers/batch/signal_picker.py`, replace the chip-display section in `__init__` (currently lines ~42-53 around the `_display_btn` setup):
+First, add a small `_ClickableFrame` helper class near the top of `mf4_analyzer/ui/drawers/batch/signal_picker.py`, just below `SignalChip` and before `SignalPickerPopup`. This is the **correct** way to make the chip area open the popup: a `QFrame` subclass that emits `clicked` from `mousePressEvent`. **Do NOT** use the `installEventFilter` approach — `eventFilter` on the parent frame would NOT see clicks on chip / scroll children, since QWidget event filtering only fires for events targeted at the watched object itself, and child widgets (chip QLabel, scroll viewport) consume left-button presses before they bubble.
+
+```python
+class _ClickableFrame(QFrame):
+    """QFrame subclass that emits ``clicked`` on left mouse press.
+
+    Used as the chip-display container so a click anywhere inside the
+    frame area (including on the placeholder label or the scroll
+    viewport background) toggles the popup. Children that consume
+    presses themselves (the remove ``×`` button, chip label) shadow this
+    naturally — they get the event first per Qt event delivery rules.
+    """
+
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt API)
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+```
+
+Then replace the chip-display section in `SignalPickerPopup.__init__` (currently lines ~42-53 around the `_display_btn` setup):
 
 ```python
         # ----- chip display frame (replaces single-line button) -----
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        self._display_frame = QFrame(self)
+        self._display_frame = _ClickableFrame(self)
         self._display_frame.setObjectName("SignalPickerDisplay")
         self._display_frame.setFrameShape(QFrame.NoFrame)
         self._display_frame.setStyleSheet(
@@ -211,12 +241,25 @@ In `mf4_analyzer/ui/drawers/batch/signal_picker.py`, replace the chip-display se
         self._display_frame.setMinimumHeight(28)
         # Width is bounded by the parent column; height grows with chip count
         # but is capped at MAX_VISIBLE_ROWS via the internal scroll container.
-        from PyQt5.QtWidgets import QScrollArea, QSizePolicy
         self._display_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        # Click anywhere on the frame (including children that don't consume
+        # the press) toggles the popup. The remove × button is a QPushButton
+        # so it consumes its own press without bubbling.
+        self._display_frame.clicked.connect(self._toggle_popup)
 
         frame_lay = QVBoxLayout(self._display_frame)
         frame_lay.setContentsMargins(4, 4, 4, 4)
         frame_lay.setSpacing(3)
+
+        # Chip-row sizing constants. The display frame's sizeHint must
+        # GROW with chip count (issue-1 contract) up to MAX_VISIBLE_ROWS,
+        # then plateau (further chips scroll). A QScrollArea alone does
+        # NOT propagate inner content size to the parent's sizeHint, so
+        # we explicitly drive _chip_scroll's max/min height from the
+        # current chip count in _refresh_display below.
+        self._CHIP_ROW_HEIGHT = 26   # one chip row's pixel height (incl. spacing)
+        self._CHIP_MAX_VISIBLE_ROWS = 3
+        self._CHIP_FRAME_VPADDING = 8  # frame_lay top+bottom margins (4+4)
 
         # Scrollable inner area for chips (caps the visible height).
         self._chip_scroll = QScrollArea(self._display_frame)
@@ -224,7 +267,12 @@ In `mf4_analyzer/ui/drawers/batch/signal_picker.py`, replace the chip-display se
         self._chip_scroll.setWidgetResizable(True)
         self._chip_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._chip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._chip_scroll.setMaximumHeight(96)  # ~3 chip rows; beyond that scrolls
+        # Hard ceiling on the scroll area's height; _refresh_display sets
+        # the soft height (= row_count * row_height) below this ceiling so
+        # _display_frame.sizeHint() honestly reflects chip count.
+        self._chip_scroll.setMaximumHeight(
+            self._CHIP_MAX_VISIBLE_ROWS * self._CHIP_ROW_HEIGHT
+        )
 
         self._chip_host = QWidget(self._chip_scroll)
         self._chip_layout = QVBoxLayout(self._chip_host)
@@ -236,9 +284,20 @@ In `mf4_analyzer/ui/drawers/batch/signal_picker.py`, replace the chip-display se
 
         self._placeholder_label = QLabel("(未选择信号)  ▾", self._display_frame)
         self._placeholder_label.setStyleSheet("color:#94a3b8; padding:2px 4px;")
+        # Make the placeholder transparent to mouse events so a click on it
+        # bubbles through to _ClickableFrame.mousePressEvent and opens the
+        # popup. (QLabel by default does not consume left-button presses,
+        # but it stops propagation through child→parent in some Qt builds —
+        # WA_TransparentForMouseEvents is the explicit, portable fix.)
+        self._placeholder_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         frame_lay.addWidget(self._placeholder_label)
 
-        self._display_frame.installEventFilter(self)
+        # Likewise for the scroll viewport's empty area: chips themselves
+        # are children of _chip_host; clicks landing on host empty space
+        # should propagate up. QScrollArea.viewport() is a normal QWidget
+        # that does NOT consume left presses, so press events naturally
+        # bubble to _display_frame — no extra setup needed there.
+
         outer.addWidget(self._display_frame, 1)
 ```
 
@@ -256,6 +315,10 @@ Replace the `_refresh_display` method body (currently `:240-245`):
         if not self._selected:
             self._placeholder_label.setVisible(True)
             self._chip_scroll.setVisible(False)
+            # Reset the scroll area's fixed height so the frame collapses
+            # to placeholder height when nothing is selected.
+            self._chip_scroll.setFixedHeight(0)
+            self.updateGeometry()
             return
         self._placeholder_label.setVisible(False)
         self._chip_scroll.setVisible(True)
@@ -264,6 +327,16 @@ Replace the `_refresh_display` method body (currently `:240-245`):
             chip.removeRequested.connect(self._on_chip_remove_requested)
             # Insert before the trailing stretch.
             self._chip_layout.insertWidget(self._chip_layout.count() - 1, chip)
+        # Drive the scroll area's height from the chip count so
+        # _display_frame.sizeHint().height() actually grows with
+        # selection up to MAX_VISIBLE_ROWS, then plateaus (further
+        # chips scroll). Without this, the QScrollArea reports a
+        # fixed minimumSizeHint and the frame's overall sizeHint stays
+        # constant — defeating the issue-1 contract test.
+        visible_rows = min(len(self._selected), self._CHIP_MAX_VISIBLE_ROWS)
+        target_h = visible_rows * self._CHIP_ROW_HEIGHT
+        self._chip_scroll.setFixedHeight(target_h)
+        self.updateGeometry()
 
     def _on_chip_remove_requested(self, name: str) -> None:
         if name not in self._selected:
@@ -286,29 +359,7 @@ Replace the `_refresh_display` method body (currently `:240-245`):
         self.selectionChanged.emit(self._selected)
 ```
 
-Extend `eventFilter` (currently `:250-267`) to also open the popup when clicking the display frame:
-
-```python
-    def eventFilter(self, obj, event):  # noqa: N802 (Qt signature)
-        if obj is self._display_frame:
-            if event.type() == QEvent.MouseButtonRelease:
-                # Clicks land here unless they were swallowed by a chip /
-                # remove-button child first (Qt parent-bubbling).
-                self._toggle_popup()
-                return True
-        if obj is self._popup:
-            etype = event.type()
-            if etype == QEvent.KeyPress and event.key() == Qt.Key_Escape:
-                self.hide_popup()
-                return True
-            if etype == QEvent.FocusOut:
-                new_focus = QApplication.focusWidget()
-                if new_focus is not None and self._popup.isAncestorOf(new_focus):
-                    return False
-                self.hide_popup()
-                return False
-        return super().eventFilter(obj, event)
-```
+**Do NOT add a `_display_frame` branch to `eventFilter`.** The `_ClickableFrame.mousePressEvent` defined above is the sole click handler for the chip area. The existing `eventFilter` body for `self._popup` (currently `:250-267`) is unchanged — leave it as is.
 
 Update the `show_popup` method to use `_display_frame` instead of `_display_btn`:
 
@@ -591,7 +642,17 @@ Expected: FAIL with `AttributeError: 'InputPanel' object has no attribute '_rpm_
 
 - [ ] **Step 4.3: Replace RPM combo with picker + unit + factor**
 
-In `mf4_analyzer/ui/drawers/batch/input_panel.py`, near the top of the file add the unit table:
+First, extend the existing top-of-file imports in `mf4_analyzer/ui/drawers/batch/input_panel.py` to include `QDoubleSpinBox` (the new factor spinbox uses it; we keep all imports at module top per project style):
+
+```python
+from PyQt5.QtWidgets import (
+    QAction, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
+    QPushButton, QVBoxLayout, QWidget,
+)
+```
+
+Then near the top of the file add the unit table:
 
 ```python
 _RPM_UNIT_FACTORS: dict[str, float] = {
@@ -621,12 +682,16 @@ Modify `InputPanel.__init__` so the RPM row is a horizontal trio (picker | unit 
         self._rpm_unit_combo.setMaximumWidth(90)
         rpm_lay.addWidget(self._rpm_unit_combo)
 
-        from PyQt5.QtWidgets import QDoubleSpinBox
+        # NOTE: setDecimals(10) so unit-preset factors with infinite
+        # decimal expansions (1/6 ≈ 0.1666666667, 60/(2π) ≈ 9.5492965855)
+        # round-trip through QDoubleSpinBox without losing more than
+        # ~1e-10 of precision. The display stays readable; the maximum
+        # width below keeps the column from ballooning.
         self._rpm_factor_spin = QDoubleSpinBox(rpm_host)
-        self._rpm_factor_spin.setDecimals(4)
+        self._rpm_factor_spin.setDecimals(10)
         self._rpm_factor_spin.setRange(0.0001, 10000.0)
         self._rpm_factor_spin.setValue(1.0)
-        self._rpm_factor_spin.setMaximumWidth(110)
+        self._rpm_factor_spin.setMaximumWidth(140)
         rpm_lay.addWidget(self._rpm_factor_spin)
 
         # Form row label
@@ -766,9 +831,35 @@ _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
 
 The `_w_rpm_factor` widget can stay as a back-pocket field (it's not referenced by `_METHOD_FIELDS`, and the visibility helper hides it), so no further code change in this file. Optionally delete it for cleanliness — not required for behavior.
 
-- [ ] **Step 5.4: Merge `InputPanel.rpm_params()` into `BatchSheet.get_preset()`**
+- [ ] **Step 5.4: Merge `InputPanel.rpm_params()` into `BatchSheet.get_preset()` AND add a preset-import round-trip**
 
-In `mf4_analyzer/ui/drawers/batch/sheet.py`, update `get_preset` (currently `:645-669`):
+Two writes — the export side (`get_preset`) injects `rpm_factor` from the InputPanel, and the import side (`apply_preset`) restores it BACK to the InputPanel from `preset.params`. **This pair is mandatory** — without the import side, a preset round-trip silently resets the spinbox to its default `1.0` because `_analysis_panel.apply_params` no longer holds `rpm_factor` (Step 5.3 dropped it from `_METHOD_FIELDS`).
+
+Add the import-side helper to `mf4_analyzer/ui/drawers/batch/input_panel.py`:
+
+```python
+    def apply_rpm_factor(self, value: float) -> None:
+        """Restore the RPM factor spinbox + unit combo from a preset.
+
+        Pairs with ``rpm_params()`` so a saved preset's ``rpm_factor``
+        round-trips through export → JSON → import without resetting.
+        Picks the matching unit-preset label if ``value`` matches one
+        within tolerance, else "自定义".
+        """
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return
+        # Sync the spinbox first; _on_rpm_factor_value_changed will then
+        # pick the matching unit ("自定义" if no match) via the existing
+        # bidirectional logic. Do NOT block signals — we want the
+        # combo to follow.
+        self._rpm_factor_spin.setValue(v)
+```
+
+Then in `mf4_analyzer/ui/drawers/batch/sheet.py`:
+
+1. Update `get_preset` (currently `:645-669`):
 
 ```python
     def get_preset(self) -> AnalysisPreset:
@@ -778,6 +869,43 @@ In `mf4_analyzer/ui/drawers/batch/sheet.py`, update `get_preset` (currently `:64
         if rng is not None:
             params["time_range"] = rng
         # ... rest unchanged
+```
+
+2. Update `apply_preset` (currently `:299-342`) so both branches restore `rpm_factor`. Insert this line in BOTH the `current_single` and `free_config` branches, AFTER `self.apply_params(dict(preset.params))`:
+
+```python
+            # Restore the InputPanel-owned rpm_factor field (Step 5.4).
+            if "rpm_factor" in preset.params:
+                self._input_panel.apply_rpm_factor(preset.params["rpm_factor"])
+```
+
+- [ ] **Step 5.4b: Round-trip test**
+
+Append to `tests/ui/test_batch_input_panel.py`:
+
+```python
+def test_input_panel_rpm_factor_round_trips_through_preset(qtbot):
+    """Export -> apply_preset -> get_preset must preserve rpm_factor.
+
+    Regression guard for the rev-2 codex finding: Step 5.3 dropped
+    rpm_factor from DynamicParamForm, so the import path needed an
+    explicit ``apply_rpm_factor`` call to avoid silently resetting
+    the spinbox to 1.0 on round-trip.
+    """
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.apply_method("order_time")
+    sheet._input_panel._rpm_unit_combo.setCurrentText("deg/s")
+    exported = sheet.get_preset()
+    assert abs(exported.params["rpm_factor"] - 1.0 / 6.0) < 1e-9
+
+    # Round-trip via apply_preset on a fresh sheet
+    sheet2 = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet2)
+    sheet2.apply_preset(exported)
+    re_exported = sheet2.get_preset()
+    assert abs(re_exported.params["rpm_factor"] - 1.0 / 6.0) < 1e-9
 ```
 
 - [ ] **Step 5.5: Run tests to verify they pass**
@@ -862,14 +990,38 @@ Expected: FAIL — `set_method` does not exist on `InputPanel`.
 
 - [ ] **Step 6.3: Implement `InputPanel.set_method` + helper**
 
-In `mf4_analyzer/ui/drawers/batch/input_panel.py`, add the constant near the other constants and add the method on `InputPanel`:
+In `mf4_analyzer/ui/drawers/batch/input_panel.py`:
+
+1. Add the constant near the other constants:
 
 ```python
 _RPM_USING_METHODS = frozenset({"order_time", "order_track"})
+```
 
+2. In `InputPanel.__init__`, **after** the RPM row is added to the form via `form.addRow(self._rpm_label_widget, rpm_host)` (Step 4.3), record the row index and the form reference for later toggling, plus an initial visibility flag:
 
-# (inside InputPanel class:)
+```python
+        # Form reference + row index, captured for set_method's takeRow /
+        # insertRow toggle (PyQt5 5.15.11 has no QFormLayout.setRowVisible —
+        # verified against this repo's pinned PyQt5; revisit once we move
+        # to PyQt5 5.15+ where setRowVisible exists). We MUST keep widgets
+        # reparented to ``self`` while detached so they survive the layout
+        # round-trip (matches the DynamicParamForm._render_for pattern).
+        self._form_ref = form
+        # _rpm_row_index = the QFormLayout row position of the RPM row at
+        # construction time (after target-signals row is row 0). We snap
+        # it from getWidgetPosition so the value is honest even if rows
+        # are added in a different order in the future.
+        idx, _role = form.getWidgetPosition(self._rpm_row_host)
+        if idx < 0:
+            raise RuntimeError("RPM row not found in form layout")
+        self._rpm_row_index = idx
+        self._rpm_row_visible = True  # initial state matches addRow above
+```
 
+3. Add the toggle method on `InputPanel` (alongside `_on_rpm_unit_changed` etc.):
+
+```python
     def set_method(self, method: str) -> None:
         """Show/hide the RPM row based on whether the method consumes RPM.
 
@@ -878,10 +1030,47 @@ _RPM_USING_METHODS = frozenset({"order_time", "order_track"})
         lesson, ``BatchSheet.__init__`` MUST call this once after
         constructing both sub-widgets so the initial state is correct
         before ``show()``.
+
+        Implementation note: PyQt5 5.15.11 does NOT expose
+        ``QFormLayout.setRowVisible``, and a plain ``setVisible(False)``
+        on the row's label + field leaves a blank gap (Qt reserves the
+        row's vertical space). We therefore use ``takeRow`` /
+        ``insertRow`` to fully detach and re-insert at the original
+        index — matching the ``DynamicParamForm._render_for`` pattern
+        already in use elsewhere in the batch UI. Detached widgets are
+        reparented to ``self`` so they survive the layout round-trip
+        and can be re-inserted later.
         """
         visible = method in _RPM_USING_METHODS
-        self._rpm_row_host.setVisible(visible)
-        self._rpm_label_widget.setVisible(visible)
+        if visible == self._rpm_row_visible:
+            return
+        if visible:
+            # Re-insert at the original row position. ``insertRow`` accepts
+            # the original index even if rows below have shifted up while
+            # the RPM row was absent.
+            self._form_ref.insertRow(
+                self._rpm_row_index, self._rpm_label_widget, self._rpm_row_host,
+            )
+            self._rpm_label_widget.setVisible(True)
+            self._rpm_row_host.setVisible(True)
+        else:
+            idx, _role = self._form_ref.getWidgetPosition(self._rpm_row_host)
+            if idx >= 0:
+                taken = self._form_ref.takeRow(idx)
+                # Reparent both label and field widgets to ``self`` so they
+                # persist (they're orphaned otherwise once the layout drops
+                # them — Qt would eventually GC them).
+                if taken.labelItem is not None:
+                    lw = taken.labelItem.widget()
+                    if lw is not None:
+                        lw.setParent(self)
+                        lw.hide()
+                if taken.fieldItem is not None:
+                    fw = taken.fieldItem.widget()
+                    if fw is not None:
+                        fw.setParent(self)
+                        fw.hide()
+        self._rpm_row_visible = visible
 ```
 
 - [ ] **Step 6.4: Wire `methodChanged` in `BatchSheet`**
@@ -1009,7 +1198,7 @@ Modify `_run_one` (`:393-431`) to add the `fft_time` branch *before* the `else: 
             image_payload = ('fft', df)
         elif method == 'fft_time':
             sig, time, _ = self._apply_time_range(sig, time, preset.params)
-            df, freq_axis, time_axis = self._compute_fft_time_dataframe(
+            df = self._compute_fft_time_dataframe(
                 sig, time, fs, preset.params, channel_name=signal_name,
             )
             image_payload = ('fft_time', df)
@@ -1064,14 +1253,15 @@ Append the new helper near the other `_compute_*_dataframe` methods:
         )
         # amplitude shape: (freq_bins, frames) — long-format with time as
         # the X axis (matches order_time convention `time_s × order`).
-        df = _matrix_to_long_dataframe(
+        # Transpose so the x-major contract of _matrix_to_long_dataframe
+        # holds: matrix.shape == (len(x_values), len(y_values)).
+        return _matrix_to_long_dataframe(
             result.times,           # x
             result.frequencies,     # y
-            result.amplitude.T,     # transpose so x-major matches helper contract
+            result.amplitude.T,     # (freq_bins, frames) -> (frames, freq_bins)
             x_name='time_s',
             y_name='frequency_hz',
         )
-        return df, result.frequencies, result.times
 ```
 
 - [ ] **Step 7.4: Run tests to verify they pass**
@@ -1124,33 +1314,23 @@ def test_fft_time_amplitude_ceiling_emits_failed_item(tmp_path, monkeypatch):
 
 (`result.blocked` is a list of human-readable failure reasons populated by the existing per-item exception handler — verify by skimming `BatchRunner.run` around the `try/except` that wraps `_run_one`. If the field name differs in this codebase, adapt the assertion to match.)
 
-- [ ] **Step 8.2: Run test to verify it fails**
+- [ ] **Step 8.2: Run the test — should already PASS (TDD note inverted)**
 
 Run: `pytest tests/test_batch_runner.py::test_fft_time_amplitude_ceiling_emits_failed_item -v`
-Expected: FAIL — depending on existing error handling, `_run_one`'s `ValueError` may currently bubble out and the run never produces a `partial` result for this method.
+Expected: **PASS** on the strength of Step 7.3 alone. **This test is intentionally NOT a red→green pair** — by the time Step 8.1 lands, Step 7.3 has already extended `_run_one` to dispatch `fft_time`, and the existing per-task error handler at `mf4_analyzer/batch.py:227-260` already converts the `ValueError` into a `BatchItemResult(status='blocked')` + `result.blocked` entry.
 
-- [ ] **Step 8.3: Verify per-task error funnelling already exists**
+This is one of two non-TDD checkpoints in the plan (the other is Phase 7 Task 10 smoke). The Step 8.1 test is a regression guard, not a driver — its job is to lock in that ceiling overruns surface as per-task failures rather than aborting the run, so future refactors of `BatchRunner.run`'s exception handling don't silently regress this.
 
-Skim `mf4_analyzer/batch.py` `BatchRunner.run` (use Grep to find `try` near the `_run_one` call). The runner already catches per-task exceptions for `order_time`/`order_track`; if so, no additional code is needed and the test should already pass once `fft_time` reaches the same code path.
+- [ ] **Step 8.3: Confirm per-task error funnelling is already in place**
 
-If the existing error handler does *not* wrap `_run_one`, add one. Replace the `for` loop body inside `BatchRunner.run` that calls `_run_one(...)` with:
+`BatchRunner.run` (verified at `mf4_analyzer/batch.py:227-260` as of 2026-04-27) already wraps each `_run_one` call in `try/except Exception` that:
+1. appends a `BatchItemResult(status='blocked', message=str(exc), ...)` to `items`
+2. appends `f"{fname}:{signal_name}: {exc}"` to `blocked`
+3. emits a `BatchProgressEvent(kind='task_failed', error=str(exc), ...)`
 
-```python
-                try:
-                    item = self._run_one(preset, fid, fd, signal, output_dir)
-                    items.append(item)
-                except Exception as exc:  # noqa: BLE001 - per-task isolation
-                    blocked.append(f"{fd.filename}/{signal}: {exc}")
-```
+The `ValueError` raised by `SpectrogramAnalyzer.compute` (real overrun *or* the test's monkeypatched `boom`) flows through this exact path because the fft_time dispatch branch added in Step 7.3 calls `compute` from inside `_run_one`. **No additional code is needed in this step.** If the Step 8.2 test fails, the cause is likely a missing `fft_time` branch (return to Step 7.3) — NOT a need for new try/except wiring. Do not add a redundant handler.
 
-(Keep whatever shape `items`/`blocked` currently have — match the existing code rather than guessing.)
-
-- [ ] **Step 8.4: Run test to verify it passes**
-
-Run: `pytest tests/test_batch_runner.py::test_fft_time_amplitude_ceiling_emits_failed_item -v`
-Expected: PASS
-
-- [ ] **Step 8.5: Extend `_write_image` for `fft_time`**
+- [ ] **Step 8.4: Extend `_write_image` for `fft_time`**
 
 Inspecting current code: `_write_image`'s `else:` branch already pivots a long-format dataframe and renders an `imshow` heatmap with a colorbar — this is exactly what `fft_time` needs. The only addition is a label override and dB rendering option.
 
@@ -1212,17 +1392,17 @@ In `mf4_analyzer/batch.py`, modify `_write_image` (`:531-570`):
         return path
 ```
 
-- [ ] **Step 8.6: Run image export test to verify it passes**
+- [ ] **Step 8.5: Run image export test to verify it passes**
 
 Run: `pytest tests/test_batch_runner.py::test_fft_time_exports_image -v`
 Expected: PASS
 
-- [ ] **Step 8.7: Run the full batch_runner suite for regressions**
+- [ ] **Step 8.6: Run the full batch_runner suite for regressions**
 
 Run: `pytest tests/test_batch_runner.py -v`
 Expected: PASS
 
-- [ ] **Step 8.8: Commit**
+- [ ] **Step 8.7: Commit**
 
 ```bash
 git add mf4_analyzer/batch.py tests/test_batch_runner.py
@@ -1237,6 +1417,7 @@ git commit -m "feat(batch): fft_time PNG render in dB + per-item failure isolati
 
 **Files:**
 - Modify: `mf4_analyzer/ui/drawers/batch/method_buttons.py`
+- Modify: `mf4_analyzer/ui/drawers/batch/sheet.py` — `_METHOD_LABELS` (line 36-40)
 - Test: `tests/ui/test_batch_method_buttons.py` (append)
 
 - [ ] **Step 9.1: Write the failing tests for `fft_time` UI**
@@ -1273,6 +1454,24 @@ def test_param_form_fft_time_overlap_and_remove_mean_round_trip(qtbot):
     assert out["overlap"] == 0.75
     assert out["remove_mean"] is False
     assert out["nfft"] == 512
+
+
+def test_batch_sheet_pipeline_summary_uses_friendly_fft_time_label(qtbot):
+    """_METHOD_LABELS in sheet.py must include fft_time so the pipeline
+    ANALYSIS strip shows 'FFT vs Time · <window>' instead of falling
+    back to the raw 'fft_time' key (codex rev-2 minor finding).
+
+    PipelineStrip API (from pipeline_strip.py): the three cards live on
+    ``strip.cards: list[PipelineCard]``; index 1 is the ANALYSIS card,
+    and its visible summary text is ``cards[1].summary_label.text()``.
+    """
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.apply_method("fft_time")
+    summary = sheet.strip.cards[1].summary_label.text()
+    assert "FFT vs Time" in summary
+    assert "fft_time" not in summary  # raw key must NOT leak through
 ```
 
 - [ ] **Step 9.2: Run tests to verify they fail**
@@ -1306,7 +1505,27 @@ _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
 }
 ```
 
-Inside `DynamicParamForm.__init__`, add the two new widgets next to the existing ones, and the labels:
+Also update the `_METHOD_LABELS` dict in `mf4_analyzer/ui/drawers/batch/sheet.py` (line 36-40) so the pipeline-strip ANALYSIS summary renders the friendly label rather than the raw key:
+
+```python
+_METHOD_LABELS: dict[str, str] = {
+    "fft": "FFT",
+    "fft_time": "FFT vs Time",
+    "order_time": "order_time",
+    "order_track": "order_track",
+}
+```
+
+First, extend the existing top-of-file imports in `mf4_analyzer/ui/drawers/batch/method_buttons.py` to include `QCheckBox` (kept at module top per project style — no inline imports):
+
+```python
+from PyQt5.QtWidgets import (
+    QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
+    QHBoxLayout, QPushButton, QSpinBox, QWidget,
+)
+```
+
+Then inside `DynamicParamForm.__init__`, add the two new widgets next to the existing ones, and update the labels dict:
 
 ```python
         self._labels: dict[str, str] = {
@@ -1333,7 +1552,6 @@ Inside `DynamicParamForm.__init__`, add the two new widgets next to the existing
         self._widgets["overlap"] = self._w_overlap
 
         # remove_mean — QCheckBox
-        from PyQt5.QtWidgets import QCheckBox
         self._w_remove_mean = QCheckBox(self)
         self._w_remove_mean.setChecked(True)
         self._w_remove_mean.toggled.connect(lambda *_: self.paramsChanged.emit())
@@ -1386,9 +1604,17 @@ git commit -m "feat(batch-ui): add FFT vs Time method button + overlap/remove_me
 
 ```python
 def test_batch_smoke_fft_time_fixes_combined(qtbot, tmp_path):
-    """Drives the dialog through: pick fft_time, pick 4 signals (chip
-    layout grows vertically not horizontally), RPM row hides, run a
-    dry-run preview without exception."""
+    """Drives the dialog through: pick fft_time, RPM row hides; add a
+    loaded file with multiple signals; pick first one then grow to four;
+    assert the picker's sizeHint width does not scale with chip count
+    (issue-1 contract) while height does grow (chips stack vertically).
+
+    NOTE: we measure ``_signal_picker.sizeHint()`` rather than
+    ``sheet.width()`` because the dialog itself is fixed by
+    ``resize(1080, 760)`` and would not change regardless of picker
+    behavior — that assertion would silently pass even if the bug
+    returned. The picker-level sizeHint is the honest contract.
+    """
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
     sheet = BatchSheet(parent=None, files={}, current_preset=None)
     qtbot.addWidget(sheet)
@@ -1398,17 +1624,32 @@ def test_batch_smoke_fft_time_fixes_combined(qtbot, tmp_path):
     sheet.apply_method("fft_time")
     assert sheet._input_panel._rpm_row_host.isVisibleTo(sheet) is False
 
-    # Add a fake loaded file and select 4 signals
+    # Add a fake loaded file with five available signals so 1- and 4-chip
+    # selections are both valid.
     sheet._input_panel._file_list.add_loaded_file(
         0, "x.mf4", frozenset({"sig1", "sig2", "sig3", "sig4", "sig5"}),
     )
-    sheet._input_panel._signal_picker.set_selected(("sig1", "sig2", "sig3", "sig4"))
+    qtbot.wait(20)  # let _refresh_signal_universe propagate
 
-    initial_w = sheet.width()
-    qtbot.wait(50)
-    grown_w = sheet.width()
-    # Width should NOT grow as chip count rises (issue-1 contract).
-    assert grown_w <= initial_w + 4  # tolerate 1-2px Qt rounding
+    # 1-chip baseline
+    sheet._input_panel._signal_picker.set_selected(("sig1",))
+    qtbot.wait(20)
+    one_w = sheet._input_panel._signal_picker.sizeHint().width()
+    one_h = sheet._input_panel._signal_picker.sizeHint().height()
+
+    # Grow to 4 chips
+    sheet._input_panel._signal_picker.set_selected(
+        ("sig1", "sig2", "sig3", "sig4"),
+    )
+    qtbot.wait(20)
+    four_w = sheet._input_panel._signal_picker.sizeHint().width()
+    four_h = sheet._input_panel._signal_picker.sizeHint().height()
+
+    # Width must NOT scale with chip count (issue-1 contract).
+    assert four_w == one_w
+    # Height grows with chip count, capped by the chip-scroll's
+    # MAX_VISIBLE_ROWS height (Step 2.3 sets _chip_scroll.maxHeight=96).
+    assert four_h >= one_h
 ```
 
 - [ ] **Step 10.2: Run the smoke test**
@@ -1445,6 +1686,122 @@ This plan has been checked end-to-end:
 
 1. **Spec coverage:** Issue 1 → Phase 1 (Tasks 1-2). Issue 2a → Phase 2 (Task 3). Issue 2b → Phase 3 (Tasks 4-5). Issue 2c → Phase 4 (Task 6). Issue 3 → Phase 5 (Tasks 7-8) + Phase 6 (Task 9). End-to-end → Phase 7 (Task 10).
 2. **Placeholders:** No "TBD"/"add appropriate". Code shown in every implementation step.
-3. **Type consistency:** `SignalChip`, `_display_frame`, `_chip_host`, `_rpm_picker`, `_rpm_unit_combo`, `_rpm_factor_spin`, `_rpm_row_host`, `_rpm_label_widget`, `_RPM_UNIT_FACTORS`, `_RPM_USING_METHODS` — names match across all task references. The `single_select` keyword on `SignalPickerPopup` matches between Phase 2 (where it's added) and Phase 3 (where InputPanel uses it).
+3. **Type consistency:** `SignalChip`, `_ClickableFrame`, `_display_frame`, `_chip_host`, `_chip_scroll`, `_chip_layout`, `_CHIP_ROW_HEIGHT`, `_CHIP_MAX_VISIBLE_ROWS`, `_CHIP_FRAME_VPADDING`, `_rpm_picker`, `_rpm_unit_combo`, `_rpm_factor_spin`, `_rpm_factor_sync_busy`, `_rpm_row_host`, `_rpm_label_widget`, `_form_ref`, `_rpm_row_index`, `_rpm_row_visible`, `apply_rpm_factor`, `rpm_params`, `_RPM_UNIT_FACTORS`, `_RPM_UNIT_CUSTOM`, `_RPM_USING_METHODS` — names match across all task references. The `single_select` keyword on `SignalPickerPopup` matches between Phase 2 (where it's added) and Phase 3 (where InputPanel uses it).
 4. **TDD discipline:** Every task starts with a failing test, runs it red, implements minimal code, runs it green, then commits.
 5. **Squad routing:** When this plan is executed via the squad runbook, expected dispatch is `pyqt-ui-engineer` for Phases 1, 2, 3, 4, 6, 7 and `signal-processing-expert` for Phase 5. Files-overlap rework detection should fire only if both touch `batch.py` (Phase 5 is the sole `batch.py` toucher, so no overlap expected).
+
+## Rev 1 corrections (post-spec-review)
+
+This rev addresses 6 issues found by main Claude during pre-execution
+review of rev 0:
+
+1. **Phase 1 Task 2 — chip-area click handler.** Original used
+   `installEventFilter(self._display_frame)` with the comment "Clicks land
+   here unless they were swallowed by a chip / remove-button child first
+   (Qt parent-bubbling)". This is **wrong**: `eventFilter` on a parent
+   does NOT see events targeted at children. Clicks on the chip
+   `QLabel` background area, the placeholder, or the scroll viewport
+   would never reach the filter.
+   **Fix:** introduced a small `_ClickableFrame(QFrame)` subclass with
+   `mousePressEvent` → `clicked` signal, hooked to `_toggle_popup`. The
+   placeholder gets `WA_TransparentForMouseEvents=True` for belt-and-
+   suspenders portability. The remove × button is a `QPushButton` so it
+   consumes its own press without bubbling — exactly the desired behavior.
+2. **Phase 4 Task 6 Step 6.3 — RPM row visibility.** Original used
+   `setVisible(False)` on label + field. In `QFormLayout` this leaves a
+   blank row gap; PyQt5 5.15.11 (this repo's pinned version) does NOT
+   expose `setRowVisible`.
+   **Fix:** capture form ref + row index at construction time, then use
+   `takeRow` / `insertRow` to fully detach and re-insert the row,
+   reparenting the widgets to `self` while detached so they survive the
+   round-trip. Matches the existing `DynamicParamForm._render_for`
+   pattern.
+3. **Phase 5 Task 7 Step 7.3 — `_compute_fft_time_dataframe` return
+   shape.** Original returned `(df, freq_axis, time_axis)` but only `df`
+   was consumed. **Fix:** return just the dataframe, matching the
+   `_compute_order_time_dataframe` / `_compute_order_track_dataframe`
+   convention.
+4. **Phase 5 Task 8 Step 8.3 — dead-code fallback removed.** Original
+   said "If the existing error handler does not wrap `_run_one`, add
+   one" with sample code. Verified at `mf4_analyzer/batch.py:227-260`
+   that the wrapper is already in place. The fallback is unreachable;
+   left in, it would tempt the executor to add a redundant handler.
+   **Fix:** rewrote Step 8.3 to confirm the existing handler suffices
+   and to point back at Step 7.3 if the test still fails.
+5. **Phase 7 Task 10 Step 10.1 — width assertion gives a false sense of
+   security.** `BatchSheet.resize(1080, 760)` fixes the dialog width;
+   the assertion `grown_w <= initial_w + 4` would pass on the buggy
+   pre-fix code too, so a regression to the horizontal-growth chip
+   layout would not be caught here.
+   **Fix:** changed the smoke test to compare
+   `_signal_picker.sizeHint().width()` between 1-chip and 4-chip
+   states (must stay equal) and `sizeHint().height()` (must grow). The
+   picker-level sizeHint is the honest contract.
+6. **Phase 1 Task 1/2 Steps 1.3 / 2.3 — inline imports.** Original
+   added `QLabel`, `QScrollArea`, `QSizePolicy` via inline `from PyQt5...
+   import` statements scattered through `__init__`. **Fix:** all three
+   moved into the file-top imports block, matching the rest of
+   `mf4_analyzer/ui/drawers/batch/`.
+
+## Rev 2 corrections (post-codex-spec-review)
+
+Codex review of rev 1 (saved at
+`docs/superpowers/reports/2026-04-27-batch-ui-fixes-and-fft-vs-time-spec-review.md`)
+returned **needs revision before plan/merge**. Verdict driven by:
+2 incomplete rev-1 corrections, 3 new blocking issues, 1 warning, 1
+minor.
+
+1. **Rev-1 Fix 1 incomplete — stale `eventFilter` body.** Step 2.3 still
+   contained an "Extend `eventFilter` to also open the popup when
+   clicking the display frame" snippet that contradicted the
+   `_ClickableFrame.mousePressEvent` approach above it. **Fix:** removed
+   the eventFilter snippet entirely and added an explicit "Do NOT add a
+   `_display_frame` branch to `eventFilter`" instruction. The popup-only
+   eventFilter body stays intact.
+2. **Rev-1 Fix 6 incomplete — leftover inline imports.** Step 4.3
+   carried `from PyQt5.QtWidgets import QDoubleSpinBox` and Step 9.3
+   carried `from PyQt5.QtWidgets import QCheckBox`, both inline.
+   **Fix:** added explicit "extend the existing top-of-file imports"
+   blocks to both Steps. `input_panel.py` top imports gain
+   `QDoubleSpinBox`; `method_buttons.py` top imports gain `QCheckBox`.
+3. **NEW blocking — RPM factor decimals (Phase 3 Task 4).** Step 4.3
+   originally used `QDoubleSpinBox.setDecimals(4)`, which rounds 1/6 to
+   0.1667 and 60/(2π) to 9.5493 — failing the 1e-9 / 1e-6 tolerance
+   tests. **Fix:** bumped to `setDecimals(10)` so unit-preset factors
+   round-trip with ≤ 1e-10 precision loss. Spinbox max width grew from
+   110 to 140 px to accommodate the extra digits.
+4. **NEW blocking — chip-frame `sizeHint().height()` does NOT grow.**
+   Step 2.3's `_chip_scroll.setMaximumHeight(96)` alone does not make
+   `_display_frame.sizeHint().height()` honor chip count — `QScrollArea`
+   does NOT propagate inner content size to its parent's sizeHint by
+   default. So Step 2.1's "height grows with selection" test would
+   fail and Phase 7's smoke test wouldn't catch a regression. **Fix:**
+   added `_CHIP_ROW_HEIGHT`, `_CHIP_MAX_VISIBLE_ROWS`, `_CHIP_FRAME_VPADDING`
+   constants and updated `_refresh_display` to call
+   `_chip_scroll.setFixedHeight(min(rows, MAX_VISIBLE_ROWS) * ROW_HEIGHT)`
+   so the frame's sizeHint honestly tracks chip count up to the cap and
+   plateaus past it.
+5. **NEW blocking — `apply_preset` does not restore `rpm_factor`.**
+   Step 5.3 dropped `rpm_factor` from `_METHOD_FIELDS`, so
+   `_analysis_panel.apply_params` no longer touches the spinbox. The
+   InputPanel-owned spinbox would silently reset to its default (1.0)
+   on every preset import, breaking round-trip via the Import preset…
+   toolbar. **Fix:** added `InputPanel.apply_rpm_factor(value)` and a
+   call to it in both branches of `BatchSheet.apply_preset`, plus a new
+   round-trip test (`test_input_panel_rpm_factor_round_trips_through_preset`)
+   in Step 5.4b.
+6. **WARNING — Step 8.2 red/green inconsistency.** Original said
+   "Run test to verify it FAILS" but Step 8.3 confirmed the existing
+   per-task handler at `batch.py:227-260` already converts
+   `ValueError` to a `partial` result, so the test would pass after
+   Step 7.3 alone. **Fix:** rewrote Step 8.2 to expect PASS, with an
+   explicit note that this checkpoint is a regression guard rather
+   than a TDD red→green pair (one of two non-TDD checkpoints in the
+   plan; the other is Phase 7 smoke). Removed redundant Step 8.4.
+7. **MINOR — `_METHOD_LABELS` missing `fft_time`.** The pipeline-strip
+   ANALYSIS summary builds via `_METHOD_LABELS.get(method, method)` so
+   without an `fft_time` entry it would render the raw key. **Fix:**
+   added the entry to Step 9.3 + a regression test
+   (`test_batch_sheet_pipeline_summary_uses_friendly_fft_time_label`)
+   that asserts the friendly label appears in
+   `sheet.strip.cards[1].summary_label.text()`.

@@ -617,3 +617,19 @@ QLabel#chartHint b {
     color: #334155;
     font-weight: 700;
 }
+
+/* Batch signal picker chips */
+#SignalChip {
+    background-color: #eef2f7;
+    border: 1px solid #dfe5ee;
+    border-radius: 6px;
+}
+#SignalChipRemove {
+    color: #64748b;
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-weight: 700;
+    min-height: 18px;
+}
+#SignalChipRemove:hover { color: #ef4444; }

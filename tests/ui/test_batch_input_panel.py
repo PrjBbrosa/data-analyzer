@@ -182,6 +182,133 @@ def test_probe_failed_row_blocks_input_ok(qtbot, tmp_path):
     assert sheet.strip.cards[0].stage_status == "warn"
 
 
+def test_input_panel_rpm_uses_single_select_picker(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p._file_list.add_loaded_file(0, "a.mf4", frozenset({"sig", "rpm_a"}))
+    p._file_list.add_loaded_file(1, "b.mf4", frozenset({"sig", "rpm_a"}))
+    assert isinstance(p._rpm_picker, SignalPickerPopup)
+    assert p._rpm_picker._single_select is True
+
+
+def test_input_panel_rpm_picker_partial_signals_visible_but_disabled(qtbot):
+    """Partial-availability signals must show in the RPM picker (greyed),
+    matching target-signal picker behavior. Resolves the 'RPM 通道无法选择'
+    case where a candidate present in only some files used to vanish."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p._file_list.add_loaded_file(0, "a.mf4", frozenset({"sig", "rpm_x"}))
+    p._file_list.add_loaded_file(1, "b.mf4", frozenset({"sig"}))  # rpm_x only in 1/2
+    assert "rpm_x" in p._rpm_picker.visible_items()
+    assert p._rpm_picker.is_disabled("rpm_x") is True
+
+
+def test_input_panel_rpm_unit_preset_sets_factor(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p._rpm_unit_combo.setCurrentText("deg/s")
+    assert abs(p._rpm_factor_spin.value() - 1.0 / 6.0) < 1e-9
+    p._rpm_unit_combo.setCurrentText("rad/s")
+    assert abs(p._rpm_factor_spin.value() - 60.0 / (2.0 * 3.141592653589793)) < 1e-6
+    p._rpm_unit_combo.setCurrentText("rpm")
+    assert p._rpm_factor_spin.value() == 1.0
+
+
+def test_input_panel_rpm_manual_factor_switches_unit_to_custom(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p._rpm_unit_combo.setCurrentText("rpm")
+    p._rpm_factor_spin.setValue(0.42)
+    assert p._rpm_unit_combo.currentText() == "自定义"
+
+
+def test_input_panel_rpm_row_hidden_for_fft_method(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p.set_method("fft")
+    assert p._rpm_row_host.isVisibleTo(p) is False
+    assert p._rpm_label_widget.isVisibleTo(p) is False
+
+
+def test_input_panel_rpm_row_visible_for_order_time(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p.set_method("order_time")
+    assert p._rpm_row_host.isVisibleTo(p) is True
+    assert p._rpm_label_widget.isVisibleTo(p) is True
+
+
+def test_input_panel_rpm_row_hidden_for_fft_time(qtbot):
+    """fft_time uses RPM-free spectrogram analysis (Phase 5)."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p.set_method("fft_time")
+    assert p._rpm_row_host.isVisibleTo(p) is False
+
+
+def test_batch_sheet_method_change_drives_rpm_visibility(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.show()
+    sheet.apply_method("fft")
+    assert sheet._input_panel._rpm_row_host.isVisibleTo(sheet) is False
+    sheet.apply_method("order_time")
+    assert sheet._input_panel._rpm_row_host.isVisibleTo(sheet) is True
+
+
+def test_input_panel_rpm_factor_round_trips_through_preset(qtbot):
+    """Export -> apply_preset -> get_preset must preserve rpm_factor.
+
+    Regression guard for the rev-2 codex finding: Step 5.3 dropped
+    rpm_factor from DynamicParamForm, so the import path needed an
+    explicit ``apply_rpm_factor`` call to avoid silently resetting
+    the spinbox to 1.0 on round-trip.
+    """
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.apply_method("order_time")
+    sheet._input_panel._rpm_unit_combo.setCurrentText("deg/s")
+    exported = sheet.get_preset()
+    assert abs(exported.params["rpm_factor"] - 1.0 / 6.0) < 1e-9
+
+    # Round-trip via apply_preset on a fresh sheet
+    sheet2 = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet2)
+    sheet2.apply_preset(exported)
+    re_exported = sheet2.get_preset()
+    assert abs(re_exported.params["rpm_factor"] - 1.0 / 6.0) < 1e-9
+
+
+def test_input_panel_rpm_factor_is_returned_in_params(qtbot):
+    """rpm_factor lives in params (existing key) so the BatchRunner
+    backend (batch.py:506,516) keeps reading it unchanged.
+
+    Tolerance note: ``QDoubleSpinBox.setDecimals(10)`` (mandated by
+    rev-2 fix #3) clamps stored precision to 1e-10, so a literal
+    ``params == {"rpm_factor": 1.0 / 6.0}`` cannot hold byte-for-byte
+    when ``1/6`` has ~16 significant decimal digits. The contract is
+    "≤ 1e-10 precision loss" — assert that, mirroring the tolerance
+    used in test_input_panel_rpm_unit_preset_sets_factor.
+    """
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p._rpm_unit_combo.setCurrentText("deg/s")
+    params = p.rpm_params()
+    assert set(params.keys()) == {"rpm_factor"}
+    assert abs(params["rpm_factor"] - 1.0 / 6.0) < 1e-9
+
+
 def test_picker_excludes_time_column(qtbot, tmp_path):
     """Time 列必须从 picker 候选信号中排除 (ultrareview bug_001)."""
     import pandas as pd
