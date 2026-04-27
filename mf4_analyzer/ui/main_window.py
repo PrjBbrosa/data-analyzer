@@ -1201,20 +1201,33 @@ class MainWindow(QMainWindow):
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
             sig = sig[m]
-        fft_params = self.inspector.fft_ctx.get_params()
+        fft_params = self.inspector.fft_ctx.current_params()
         win = fft_params['window']
         nfft = fft_params['nfft']
         overlap = fft_params['overlap']
         fs = self.inspector.fft_ctx.fs()
+        # Wave 2 / SP2 / Task 2.2: Welch averaging + peak-hold dispatch.
+        # Default '单帧' preserves the legacy compute_fft path so existing
+        # presets and snapshots stay backward-compatible.
+        avg_mode = fft_params.get('avg_mode', '单帧')
+        overlap_pct = int(fft_params.get('avg_overlap', 50))
+        avg_overlap = max(0.0, min(0.95, overlap_pct / 100.0))
 
         try:
             self.statusBar.showMessage('计算FFT...');
             QApplication.processEvents()
 
-            if nfft and overlap > 0:
-                # 使用平均FFT (Welch方法)
-                freq, amp, psd = FFTAnalyzer.compute_averaged_fft(sig, fs, win, nfft, overlap)
+            if avg_mode == '线性平均':
+                freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
+                    sig, fs, win, nfft or 1024, avg_overlap,
+                )
+            elif avg_mode == '峰值保持':
+                freq, amp = FFTAnalyzer.compute_peak_hold_fft(
+                    sig, fs, win=win, nfft=nfft or 1024, overlap=avg_overlap,
+                )
+                psd = amp ** 2
             else:
+                # 单帧 — single-frame snapshot (legacy default).
                 freq, amp = FFTAnalyzer.compute_fft(sig, fs, win, nfft)
                 _, psd = FFTAnalyzer.compute_psd(sig, fs, win, nfft)
 

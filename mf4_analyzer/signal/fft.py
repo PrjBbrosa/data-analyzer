@@ -207,3 +207,39 @@ class FFTAnalyzer:
         psd = psd_sum / n_segments / (w_sum ** 2) * 2
         amp = np.sqrt(psd)
         return freq, amp, psd
+
+    @staticmethod
+    def compute_peak_hold_fft(sig, fs, win='hanning', nfft=1024, overlap=0.5):
+        """Per-frequency max amplitude across overlapping FFT segments.
+
+        Wraps :func:`one_sided_amplitude` with a sliding window of length
+        ``nfft`` and overlap fraction ``overlap`` (clamped to [0, 0.95)),
+        taking the per-bin maximum across segments. Used by the FFT 1D
+        ``峰值保持`` averaging mode to preserve transient bursts that a
+        Welch (linear-average) view would smooth out.
+
+        When the signal is shorter than ``nfft`` the function falls back
+        to a single-frame :func:`one_sided_amplitude` over the whole
+        signal so the caller still receives a usable spectrum.
+        """
+        sig = np.asarray(sig, dtype=float)
+        n = len(sig)
+        hop = max(int(nfft * (1 - overlap)), 1)
+        n_seg = max((n - nfft) // hop + 1, 1)
+        peak = None
+        freq = None
+        for i in range(n_seg):
+            s = i * hop
+            if s + nfft > n:
+                break
+            f, a = one_sided_amplitude(
+                sig[s:s + nfft], fs, win=win, nfft=nfft,
+            )
+            if peak is None:
+                peak = a.copy()
+                freq = f
+            else:
+                np.maximum(peak, a, out=peak)
+        if peak is None:
+            freq, peak = one_sided_amplitude(sig, fs, win=win, nfft=nfft)
+        return freq, peak

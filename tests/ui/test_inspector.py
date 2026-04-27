@@ -1170,3 +1170,129 @@ def test_fft_contextual_apply_params_restores_avg(qapp):
     w.apply_params({'avg_mode': '峰值保持', 'avg_overlap': 88})
     assert w.combo_avg_mode.currentText() == '峰值保持'
     assert w.spin_avg_overlap.value() == 88
+
+
+# ---- Task 2.2: averaging routes through DSP helpers ----
+
+def test_welch_average_lowers_noise_floor():
+    """Stationary noisy 10Hz tone → Welch averaging produces lower noise std
+    than a single FFT frame (sanity check that the wired-up code path is
+    correct).
+    """
+    import numpy as np
+    from mf4_analyzer.signal.fft import FFTAnalyzer, one_sided_amplitude
+
+    rng = np.random.default_rng(42)
+    fs = 1000.0
+    n = int(10 * fs)  # 10 seconds
+    t = np.arange(n) / fs
+    sig = np.sin(2 * np.pi * 10 * t) + 0.3 * rng.standard_normal(n)
+
+    # single frame (full nfft window of length 4096)
+    seg = sig[:4096]
+    f1, a1 = one_sided_amplitude(seg, fs, win='hanning', nfft=4096)
+
+    # welch averaging
+    f2, a2, _ = FFTAnalyzer.compute_averaged_fft(
+        sig, fs, win='hanning', nfft=4096, overlap=0.5,
+    )
+    # Outside the 10Hz peak (drop bins near 10Hz), welch noise std should be
+    # lower.
+    mask = np.abs(f1[: len(a2)] - 10.0) > 2.0
+    assert a2[mask].std() < a1[: len(a2)][mask].std() * 0.85, (
+        "Welch averaging should reduce out-of-peak std by at least 15%"
+    )
+
+
+def test_compute_peak_hold_fft_returns_per_bin_max():
+    """``FFTAnalyzer.compute_peak_hold_fft`` must take the per-frequency max
+    across overlapping segments — a transient bursty tone should be
+    preserved at its peak amplitude even when most of the signal is quiet.
+    """
+    import numpy as np
+    from mf4_analyzer.signal.fft import FFTAnalyzer
+
+    fs = 1000.0
+    nfft = 1024
+    n = 8 * nfft
+    t = np.arange(n) / fs
+    # 50 Hz tone, on only inside the second segment (samples 1024:2048).
+    sig = np.zeros(n)
+    seg_start, seg_end = nfft, 2 * nfft
+    sig[seg_start:seg_end] = np.sin(2 * np.pi * 50 * t[seg_start:seg_end])
+
+    freq, peak = FFTAnalyzer.compute_peak_hold_fft(
+        sig, fs, win='hanning', nfft=nfft, overlap=0.5,
+    )
+    # Peak hold preserves the transient: 50 Hz bin must dominate.
+    bin_idx = int(np.argmin(np.abs(freq - 50.0)))
+    assert peak[bin_idx] > 0.1, (
+        f"Peak-hold should preserve transient 50 Hz tone (got "
+        f"{peak[bin_idx]:.4f} at bin {bin_idx}, freq={freq[bin_idx]:.2f} Hz)"
+    )
+    # Sanity: returned arrays match length.
+    assert len(freq) == len(peak)
+
+
+def test_fft_render_dispatches_on_avg_mode(qtbot, monkeypatch):
+    """The FFT render path in main_window must route '线性平均' through
+    compute_averaged_fft and '峰值保持' through compute_peak_hold_fft. Single
+    frame keeps using compute_fft.
+    """
+    import numpy as np
+    from mf4_analyzer.signal.fft import FFTAnalyzer
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    # Stub out the heavy "selected signal" plumbing.
+    fs = 1000.0
+    n = 4096
+    t = np.arange(n) / fs
+    sig = np.sin(2 * np.pi * 10 * t)
+    win._get_sig = lambda: (t, sig, fs)
+    win._check_uniform_or_prompt = lambda fd, mode: True
+    # Empty files dict → _on_inspector_signal_changed early-returns on the
+    # ``fid not in self.files`` guard, so populating fft_ctx candidates does
+    # not trigger an AttributeError on a stub FileData.
+    win.files = {}
+    win.inspector.fft_ctx.set_signal_candidates([("dummy", (None, "ch"))])
+    win.inspector.fft_ctx.spin_fs.setValue(fs)
+
+    calls = []
+    real_avg = FFTAnalyzer.compute_averaged_fft
+    real_peak = FFTAnalyzer.compute_peak_hold_fft
+    real_fft = FFTAnalyzer.compute_fft
+
+    def spy_avg(*a, **kw):
+        calls.append('avg')
+        return real_avg(*a, **kw)
+
+    def spy_peak(*a, **kw):
+        calls.append('peak')
+        return real_peak(*a, **kw)
+
+    def spy_fft(*a, **kw):
+        calls.append('fft')
+        return real_fft(*a, **kw)
+
+    monkeypatch.setattr(FFTAnalyzer, 'compute_averaged_fft', staticmethod(spy_avg))
+    monkeypatch.setattr(FFTAnalyzer, 'compute_peak_hold_fft', staticmethod(spy_peak))
+    monkeypatch.setattr(FFTAnalyzer, 'compute_fft', staticmethod(spy_fft))
+
+    # Single frame
+    win.inspector.fft_ctx.combo_avg_mode.setCurrentText('单帧')
+    win.inspector.fft_ctx.combo_nfft.setCurrentText('1024')
+    win.do_fft()
+    # Linear average
+    win.inspector.fft_ctx.combo_avg_mode.setCurrentText('线性平均')
+    win.inspector.fft_ctx.spin_avg_overlap.setValue(50)
+    win.do_fft()
+    # Peak hold
+    win.inspector.fft_ctx.combo_avg_mode.setCurrentText('峰值保持')
+    win.do_fft()
+
+    assert 'fft' in calls, f"single-frame must use compute_fft (calls={calls})"
+    assert 'avg' in calls, f"线性平均 must call compute_averaged_fft (calls={calls})"
+    assert 'peak' in calls, f"峰值保持 must call compute_peak_hold_fft (calls={calls})"
