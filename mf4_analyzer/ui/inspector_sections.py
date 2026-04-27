@@ -404,6 +404,20 @@ def _configure_form(form):
         parent.setContentsMargins(
             margins.left(), margins.top(), 0, margins.bottom(),
         )
+        # 2026-04-27 fix-4: the global ``Inspector QGroupBox { padding:
+        # 12px 2px 6px; }`` rule wins over Python ``setContentsMargins``
+        # during stylesheet polish, eating ~2px on each side and ~6px at
+        # the bottom. An inline stylesheet on the specific QGroupBox
+        # using ``padding-left/right/bottom`` (not the shorthand) zeros
+        # those without disturbing ``padding-top`` (which still cascades
+        # from the global rule and reserves room for the title baseline).
+        # Without this, the form-layout cells inside the QGroupBox render
+        # ~9px narrower than the matching sig_card cells, breaking A1
+        # field-column alignment.
+        parent.setStyleSheet(
+            "QGroupBox { padding-left: 0; padding-right: 0; "
+            "padding-bottom: 0; }"
+        )
     # Compact rhythm: tightened from H=8 V=8 to H=6 V=4 (2026-04-26
     # 紧凑化 pass) so a typical Inspector card fits more rows without
     # scrolling on narrow screens.
@@ -474,7 +488,7 @@ def _pair_field(widget_a, label_b_text, widget_b):
     return host
 
 
-def _enforce_label_widths(widget, *, max_field_width=None):
+def _enforce_label_widths(widget, *, max_field_width=None, unify_columns=False):
     """Pin every QFormLayout label's minimumWidth to its sizeHint width
     and (optionally) cap every uncapped field's maximumWidth.
 
@@ -491,10 +505,30 @@ def _enforce_label_widths(widget, *, max_field_width=None):
     set a *wider* cap (e.g. ``_LONG_FIELD_MAX_WIDTH`` for a signal-name
     combo) explicitly *before* invoking the helper, without having those
     intentional wide caps clobbered to the helper's narrower default.
+
+    2026-04-27 fix-4 amendment: ``unify_columns=True`` extends the per-
+    label minimum to the GLOBAL max sizeHint across every form in
+    ``widget``. QFormLayout sizes its label column to ``max(label
+    minimumWidth)`` *within its own form* — without this unification, a
+    sig_card form (short labels like "Fs:") and a QGroupBox form (long
+    labels like "窗函数:") render with different label-column widths,
+    which cascades into different field-column widths and breaks the A1
+    "every field shares the same width and right edge" contract enforced
+    by ``test_fft_contextual_fields_fill_column_under_qss``.
     """
     from PyQt5.QtWidgets import QFormLayout, QLabel
     QWIDGETSIZE_MAX = 16777215
     forms = widget.findChildren(QFormLayout)
+    global_max_lbl = 0
+    if unify_columns:
+        for fl in forms:
+            for r in range(fl.rowCount()):
+                lbl_item = fl.itemAt(r, QFormLayout.LabelRole)
+                if lbl_item is None:
+                    continue
+                lbl = lbl_item.widget()
+                if isinstance(lbl, QLabel) and lbl.text().strip():
+                    global_max_lbl = max(global_max_lbl, lbl.sizeHint().width())
     for fl in forms:
         for r in range(fl.rowCount()):
             lbl_item = fl.itemAt(r, QFormLayout.LabelRole)
@@ -503,8 +537,9 @@ def _enforce_label_widths(widget, *, max_field_width=None):
                 lbl = lbl_item.widget()
                 if isinstance(lbl, QLabel) and lbl.text().strip():
                     natural = lbl.sizeHint().width()
-                    if lbl.minimumWidth() < natural:
-                        lbl.setMinimumWidth(natural)
+                    target = max(natural, global_max_lbl)
+                    if lbl.minimumWidth() < target:
+                        lbl.setMinimumWidth(target)
             if fld_item is not None and max_field_width is not None:
                 fld = fld_item.widget()
                 if fld is None:
@@ -896,6 +931,16 @@ class FFTContextual(QWidget):
         root.addWidget(self.btn_fft)
         root.addStretch()
 
+        # 2026-04-27 fix-4: unify the label-column width across the
+        # sig_card form ("信号" / "Fs") and the 谱参数 QGroupBox form
+        # ("窗函数" / "NFFT" / "重叠"). QFormLayout pins each form's label
+        # column to the *form's own* max sizeHint, so without this call
+        # sig_card labels render in a 36px column while the 谱参数 labels
+        # use a 60px column, and the field columns drift apart by ~24px.
+        # ``unify_columns=True`` pins every label to the global max so all
+        # five fields share the same field-column width and right edge.
+        _enforce_label_widths(self, unify_columns=True)
+
         self.btn_fft.clicked.connect(self.fft_requested)
         self.btn_rebuild.clicked.connect(
             lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
@@ -1109,7 +1154,11 @@ class OrderContextual(QWidget):
         # label column. The signal-source combos in the sig_card retain
         # their _LONG_FIELD_MAX_WIDTH cap (set explicitly above) — the cap
         # below applies only to the spec-param form.
-        _enforce_label_widths(self, max_field_width=_SHORT_FIELD_MAX_WIDTH)
+        _enforce_label_widths(
+            self,
+            max_field_width=_SHORT_FIELD_MAX_WIDTH,
+            unify_columns=True,
+        )
 
     def _collect_preset(self):
         return dict(
@@ -1403,6 +1452,11 @@ class FFTTimeContextual(QWidget):
         action_row.addWidget(self.btn_export_main)
         root.addLayout(action_row)
         root.addStretch()
+
+        # 2026-04-27 fix-4: unify label-column width across the sig_card
+        # form and every QGroupBox form so all field columns share the
+        # same width and right edge (see FFTContextual for rationale).
+        _enforce_label_widths(self, unify_columns=True)
 
         # ---- wiring ----
         self.btn_compute.clicked.connect(self.fft_time_requested)
