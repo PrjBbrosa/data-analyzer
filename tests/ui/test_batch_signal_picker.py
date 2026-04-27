@@ -87,3 +87,24 @@ def test_set_partially_available_keeps_selection_marked_unavailable(qtbot):
     p.set_partially_available({})  # sig_a now nowhere
     assert "sig_a" not in p._selected
     assert received and received[-1] == ()
+
+
+def test_signal_chip_emits_remove_signal(qtbot):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalChip
+    chip = SignalChip("sig_a")
+    qtbot.addWidget(chip)
+    received = []
+    chip.removeRequested.connect(received.append)
+    qtbot.mouseClick(chip._remove_btn, Qt.LeftButton)
+    assert received == ["sig_a"]
+
+
+def test_signal_chip_label_truncates_long_name(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalChip
+    long_name = "A_side.Rte." + "x" * 200
+    chip = SignalChip(long_name, max_label_chars=40)
+    qtbot.addWidget(chip)
+    assert chip._label.toolTip() == long_name
+    assert len(chip._label.text()) <= 41  # 40 + ellipsis "…"
+    assert chip._label.text().endswith("…")

@@ -16,9 +16,67 @@ from typing import Iterable, Mapping
 
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication, QCheckBox, QFrame, QHBoxLayout, QLineEdit, QListWidget,
-    QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
+    QVBoxLayout, QWidget,
 )
+
+
+class SignalChip(QWidget):
+    """Single-row chip widget: signal label + remove button.
+
+    Emits ``removeRequested(name)`` when the × button is clicked. The
+    label elides at ``max_label_chars`` with the full name as tooltip
+    so long DBC channel names don't push the chip frame wide.
+    """
+
+    removeRequested = pyqtSignal(str)
+
+    def __init__(
+        self,
+        name: str,
+        max_label_chars: int = 48,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._name = name
+        self.setObjectName("SignalChip")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(6, 2, 4, 2)
+        lay.setSpacing(4)
+
+        display = name if len(name) <= max_label_chars else name[: max_label_chars] + "…"
+        self._label = QLabel(display, self)
+        self._label.setToolTip(name)
+        lay.addWidget(self._label, 1)
+
+        self._remove_btn = QPushButton("×", self)
+        self._remove_btn.setObjectName("SignalChipRemove")
+        self._remove_btn.setFixedSize(18, 18)
+        self._remove_btn.setFlat(True)
+        self._remove_btn.clicked.connect(lambda: self.removeRequested.emit(self._name))
+        lay.addWidget(self._remove_btn)
+
+    def name(self) -> str:
+        return self._name
+
+
+class _ClickableFrame(QFrame):
+    """QFrame subclass that emits ``clicked`` on left mouse press.
+
+    Used as the chip-display container so a click anywhere inside the
+    frame area (including on the placeholder label or the scroll
+    viewport background) toggles the popup. Children that consume
+    presses themselves (the remove ``×`` button, chip label) shadow this
+    naturally — they get the event first per Qt event delivery rules.
+    """
+
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt API)
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class SignalPickerPopup(QWidget):
