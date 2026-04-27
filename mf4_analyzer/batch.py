@@ -154,7 +154,7 @@ def _default_loader(path):
 
 
 class BatchRunner:
-    SUPPORTED_METHODS = {'fft', 'order_time', 'order_track'}
+    SUPPORTED_METHODS = {'fft', 'order_time', 'order_track', 'fft_time'}
 
     def __init__(self, files, loader: Callable | None = None):
         self.files = files
@@ -401,6 +401,12 @@ class BatchRunner:
             sig, time, _ = self._apply_time_range(sig, time, preset.params)
             df = self._compute_fft_dataframe(sig, fs, preset.params)
             image_payload = ('fft', df)
+        elif method == 'fft_time':
+            sig, time, _ = self._apply_time_range(sig, time, preset.params)
+            df = self._compute_fft_time_dataframe(
+                sig, time, fs, preset.params, channel_name=signal_name,
+            )
+            image_payload = ('fft_time', df)
         else:
             rpm = self._rpm_values(fd, preset)
             sig, time, rpm = self._apply_time_range(sig, time, preset.params, rpm=rpm)
@@ -486,6 +492,38 @@ class BatchRunner:
             result.amplitude,
             x_name='time_s',
             y_name='order',
+        )
+
+    @classmethod
+    def _compute_fft_time_dataframe(cls, sig, time, fs, params, *, channel_name=''):
+        """Compute one-sided FFT-vs-time spectrogram and emit long format.
+
+        ``SpectrogramAnalyzer.compute`` returns ``amplitude`` with shape
+        ``(freq_bins, frames)``. ``_matrix_to_long_dataframe`` requires
+        ``matrix.shape == (len(x_values), len(y_values))`` (x-major), so we
+        transpose to ``(frames, freq_bins)`` before flattening. The exported
+        dataframe stays in linear amplitude — the dB conversion is a
+        display-only choice in ``_write_image``.
+        """
+        from .signal.spectrogram import SpectrogramAnalyzer, SpectrogramParams
+        sp = SpectrogramParams(
+            fs=float(fs),
+            nfft=int(params.get('nfft', 1024)),
+            window=str(params.get('window', 'hanning')),
+            overlap=float(params.get('overlap', 0.5)),
+            remove_mean=bool(params.get('remove_mean', True)),
+            db_reference=float(params.get('db_reference', 1.0)),
+        )
+        result = SpectrogramAnalyzer.compute(
+            signal=sig, time=time, params=sp,
+            channel_name=channel_name or 'signal',
+        )
+        return _matrix_to_long_dataframe(
+            result.times,           # x
+            result.frequencies,     # y
+            result.amplitude.T,     # (freq_bins, frames) -> (frames, freq_bins)
+            x_name='time_s',
+            y_name='frequency_hz',
         )
 
     @classmethod
