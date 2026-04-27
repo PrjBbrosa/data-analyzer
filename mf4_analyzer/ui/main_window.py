@@ -1326,7 +1326,37 @@ class MainWindow(QMainWindow):
         if rpm is None:
             return
         fs = self.inspector.order_ctx.fs()
+        # Wave 4 / Task 4.2: pull current_params (extends get_params with
+        # algorithm + samples_per_rev) and branch on algorithm. Default
+        # 'frequency' keeps the existing async OrderWorker dispatch path
+        # so progress/cancel/generation tracking are untouched. The 'cot'
+        # branch runs COTOrderAnalyzer synchronously on the GUI thread —
+        # acceptable for v1 wiring; an async COT worker is out of scope.
+        order_params = self.inspector.order_ctx.current_params()
+        algorithm = order_params.get('algorithm', 'frequency')
         op = self.inspector.order_ctx.get_params()
+        if algorithm == 'cot':
+            from ..signal.order_cot import COTOrderAnalyzer, COTParams
+            try:
+                p = COTParams(
+                    samples_per_rev=int(order_params.get('samples_per_rev', 256)),
+                    nfft=int(op['nfft']),
+                    window=op.get('window', 'hanning'),
+                    max_order=float(op['max_order']),
+                    order_res=float(op['order_res']),
+                    time_res=float(op['time_res']),
+                )
+                self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
+                self.inspector.order_ctx.set_progress("计算中...")
+                result = COTOrderAnalyzer.compute(sig, rpm, t, p)
+            except Exception as e:
+                self.inspector.order_ctx.set_progress("")
+                QMessageBox.critical(self, "错误", str(e))
+                return
+            self.inspector.order_ctx.set_progress("")
+            self._render_order_time(result)
+            return
+
         from ..signal.order import OrderAnalysisParams
         params = OrderAnalysisParams(
             fs=fs,

@@ -1394,3 +1394,45 @@ def test_order_contextual_amp_mode_in_params(qapp):
     w.apply_params({'amplitude_mode': 'Amplitude dB', 'dynamic': '50 dB'})
     assert w.combo_amp_mode.currentText() == 'Amplitude dB'
     assert w.combo_dynamic.currentText() == '50 dB'
+
+
+# ---- Wave 4 / Task 4.2: COT algorithm picker on OrderContextual ----
+
+def test_order_contextual_has_algorithm_combo(qapp):
+    """Plan Task 4.2.1: OrderContextual must expose ``combo_algorithm`` whose
+    items are ['频域映射', 'COT (角域重采样)'] and whose default keeps the
+    pre-COT behaviour ('频域映射') so existing presets render identically."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    w = OrderContextual()
+    assert hasattr(w, 'combo_algorithm')
+    items = [w.combo_algorithm.itemText(i) for i in range(w.combo_algorithm.count())]
+    assert items == ['频域映射', 'COT (角域重采样)']
+    assert w.combo_algorithm.currentText() == '频域映射'  # default keeps existing
+
+
+def test_order_contextual_samples_per_rev_visible_only_for_cot(qapp):
+    """Plan Task 4.2.1: ``spin_samples_per_rev`` exists with default 256 in
+    [64, 2048] and is only enabled when the COT algorithm is picked."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    w = OrderContextual()
+    assert hasattr(w, 'spin_samples_per_rev')
+    assert w.spin_samples_per_rev.value() == 256
+    # default = freq-mapped → spin disabled
+    assert w.spin_samples_per_rev.isEnabled() is False
+    w.combo_algorithm.setCurrentText('COT (角域重采样)')
+    assert w.spin_samples_per_rev.isEnabled() is True
+
+
+def test_order_contextual_algorithm_in_params(qapp):
+    """Plan Task 4.2.1: ``current_params()`` exposes
+    ``algorithm`` ('cot' | 'frequency') and ``samples_per_rev``;
+    ``apply_params()`` round-trips the same keys."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    w = OrderContextual()
+    w.combo_algorithm.setCurrentText('COT (角域重采样)')
+    w.spin_samples_per_rev.setValue(512)
+    p = w.current_params()
+    assert p.get('algorithm') == 'cot'
+    assert p.get('samples_per_rev') == 512
+    w.apply_params({'algorithm': '频域映射', 'samples_per_rev': 256})
+    assert w.combo_algorithm.currentText() == '频域映射'
