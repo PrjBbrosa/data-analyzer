@@ -89,3 +89,24 @@ def test_cot_params_validation():
     with pytest.raises(ValueError):
         COTParams(samples_per_rev=256, nfft=0, max_order=10.0,
                   order_res=0.1, time_res=0.5)
+
+
+def test_cot_params_has_fs_field():
+    """fs is needed by main_window._remember_batch_preset."""
+    p = COTParams(samples_per_rev=256, nfft=1024, max_order=10.0,
+                  order_res=0.05, time_res=0.05, fs=100.0)
+    assert p.fs == 100.0
+
+
+def test_cot_result_params_carries_fs():
+    """COT result must round-trip fs so downstream code can read result.params.fs."""
+    import numpy as np
+    rng = np.random.default_rng(0)
+    fs = 1000.0
+    t = np.arange(int(fs * 5)) / fs
+    rpm = np.full_like(t, 600.0)
+    sig = np.sin(2 * np.pi * 20 * t) + 0.05 * rng.standard_normal(len(t))
+    p = COTParams(samples_per_rev=256, nfft=1024, max_order=10.0,
+                  order_res=0.05, time_res=0.5, fs=fs)
+    res = COTOrderAnalyzer.compute(sig, rpm, t, p)
+    assert res.params.fs == fs

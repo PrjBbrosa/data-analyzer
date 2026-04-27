@@ -28,6 +28,7 @@ class COTParams:
     max_order: float = 20.0
     order_res: float = 0.05
     time_res: float = 0.05      # in seconds, hop in time domain (mapped to angle)
+    fs: float = 0.0             # source sample rate; carried through for batch-preset capture
     min_rpm_floor: float = 10.0  # frames whose mean |rpm| below this are zeroed
 
     def __post_init__(self):

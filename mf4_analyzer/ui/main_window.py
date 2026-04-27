@@ -1345,6 +1345,7 @@ class MainWindow(QMainWindow):
                     max_order=float(op['max_order']),
                     order_res=float(op['order_res']),
                     time_res=float(op['time_res']),
+                    fs=fs,
                 )
                 self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
                 self.inspector.order_ctx.set_progress("计算中...")
