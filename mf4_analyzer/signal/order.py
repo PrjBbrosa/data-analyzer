@@ -74,14 +74,38 @@ class OrderAnalyzer:
         return sig, rpm, fs, nfft
 
     @staticmethod
-    def _orders(max_order, order_res):
+    def _orders(max_order, order_res, fs=None, nfft=None, rpm=None):
+        """Build the order axis, optionally floored at the FFT bin width.
+
+        Legacy two-arg form (``fs``/``nfft``/``rpm`` all ``None``) returns
+        the dense grid ``[order_res, 2*order_res, ..., max_order]`` and is
+        preserved verbatim for backwards compatibility.
+
+        When ``fs``, ``nfft``, and ``rpm`` are all supplied, orders whose
+        target frequency at peak |RPM| falls below the FFT bin resolution
+        ``df = fs / nfft`` are dropped: those columns are dominated by DC
+        leakage and accumulate as a pseudo-order floor in HEAD-style order
+        plots. The cutoff is ``min_order = max(order_res, df * 60 / rpm_max)``.
+
+        If ``rpm_max <= 0`` or any optional argument is ``None``, the floor
+        is a no-op.
+        """
         max_order = float(max_order)
         order_res = float(order_res)
         if max_order <= 0:
             raise ValueError("max_order must be positive")
         if order_res <= 0:
             raise ValueError("order_res must be positive")
-        return np.arange(order_res, max_order + order_res * 0.5, order_res)
+        base = np.arange(order_res, max_order + order_res * 0.5, order_res)
+        if fs is None or nfft is None or rpm is None:
+            return base
+        rpm_arr = np.asarray(rpm, dtype=float)
+        rpm_max = float(np.nanmax(np.abs(rpm_arr))) if rpm_arr.size else 0.0
+        if rpm_max <= 0:
+            return base
+        df = float(fs) / float(nfft)
+        min_order = max(order_res, df * 60.0 / rpm_max)
+        return base[base >= min_order]
 
     @staticmethod
     def _frame_starts(n, nfft, hop):
@@ -214,7 +238,10 @@ class OrderAnalyzer:
     @staticmethod
     def compute_time_order_result(sig, rpm, t, params, progress_callback=None, cancel_token=None):
         sig, rpm, fs, nfft = OrderAnalyzer._validate_common(sig, rpm, params.fs, params.nfft)
-        orders = OrderAnalyzer._orders(params.max_order, params.order_res)
+        orders = OrderAnalyzer._orders(
+            params.max_order, params.order_res,
+            fs=fs, nfft=nfft, rpm=rpm,
+        )
         hop = max(int(fs * float(params.time_res)), 1)
         starts = OrderAnalyzer._frame_starts(len(sig), nfft, hop)
         total = len(starts)
