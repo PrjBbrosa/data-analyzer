@@ -17,10 +17,14 @@ from __future__ import annotations
 import dataclasses
 
 from PyQt5.QtWidgets import (
-    QDialog, QHBoxLayout, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QDialog, QFileDialog, QHBoxLayout, QMessageBox, QPushButton, QVBoxLayout,
+    QWidget,
 )
 
 from ....batch import AnalysisPreset, BatchOutput, BatchRunner
+from ....batch_preset_io import (
+    UnsupportedPresetVersion, load_preset_from_json, save_preset_to_json,
+)
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
 from .output_panel import OutputPanel
@@ -52,15 +56,38 @@ class BatchSheet(QDialog):
         self._last_result = None
         self._close_pending: bool = False
 
+        # W7 toast bookkeeping — populated by ``_toast`` so headless tests
+        # can assert deterministically without mocking the parent's toast
+        # API. Production paths additionally forward to ``parent.toast`` if
+        # the host exposes one (MainWindow does).
+        self._last_toast_text: str = ""
+        self._last_toast_kind: str = ""
+
         root = QVBoxLayout(self)
 
-        # Toolbar (placeholder buttons, Wave 7 wires)
+        # Toolbar — W7 wires three buttons:
+        #   • 从当前单次填入: enabled iff a current_preset was passed in,
+        #     fills the dialog from that preset (spec §6.4 current_single).
+        #   • 导入 preset…  : open JSON, load, apply (warns on
+        #     UnsupportedPresetVersion / corrupt JSON via toast).
+        #   • 导出 preset… : strip runtime fields via dataclasses.replace
+        #     and save to JSON (spec §6.3).
         bar = QHBoxLayout()
         bar.addStretch(1)
-        for label in ("从当前单次填入", "导入 preset…", "导出 preset…"):
-            b = QPushButton(label)
-            b.setEnabled(False)  # enabled in Wave 7
-            bar.addWidget(b)
+
+        self._btn_fill_from_current = QPushButton("从当前单次填入")
+        self._btn_fill_from_current.setEnabled(self._current_preset is not None)
+        self._btn_fill_from_current.clicked.connect(self._on_fill_from_current)
+        bar.addWidget(self._btn_fill_from_current)
+
+        self._btn_import_preset = QPushButton("导入 preset…")
+        self._btn_import_preset.clicked.connect(self._on_import_preset)
+        bar.addWidget(self._btn_import_preset)
+
+        self._btn_export_preset = QPushButton("导出 preset…")
+        self._btn_export_preset.clicked.connect(self._on_export_preset)
+        bar.addWidget(self._btn_export_preset)
+
         root.addLayout(bar)
 
         # Pipeline strip
@@ -270,22 +297,124 @@ class BatchSheet(QDialog):
         self._input_panel.apply_files(file_ids, file_paths)
 
     def apply_preset(self, preset: AnalysisPreset) -> None:
+        """Fill the dialog from a preset (spec §6.4).
+
+        For ``current_single``: narrow the file list to ``preset.signal[0]``
+        and select ``preset.signal[1]``. The captured signal is the only
+        one in scope — the user opted in to "this exact analysis".
+
+        For ``free_config``: keep the current file selection (a free_config
+        preset is a recipe; file selection is local) but apply the recipe
+        fields. Signals not in the current intersection get red-marked via
+        ``signals_marked_unavailable`` (spec §4.2).
+
+        ``time_range`` lives in ``preset.params`` (W2/W6 contract); we
+        round-trip it into the time-range field so the user sees the
+        original window.
+        """
         if preset is None:
             return
-        self.apply_method(preset.method)
-        if preset.target_signals:
-            self.apply_signals(tuple(preset.target_signals))
-        if preset.rpm_channel:
-            self.apply_rpm_channel(preset.rpm_channel)
-        if preset.params:
+
+        if preset.source == "current_single":
+            # Narrow the file list to the captured fid first so the picker
+            # universe is rebuilt against only that file. Empty file_paths
+            # — current_single never carries a disk-only path.
+            if preset.signal is not None:
+                signal_fid, signal_name = preset.signal
+                self.apply_files(file_ids=(signal_fid,), file_paths=())
+                self.apply_signals((signal_name,))
+            self.apply_method(preset.method)
             self.apply_params(dict(preset.params))
-        if preset.outputs:
-            self.apply_outputs(preset.outputs)
-        if preset.file_ids or preset.file_paths:
-            self.apply_files(
-                tuple(preset.file_ids or ()),
-                tuple(preset.file_paths or ()),
-            )
+            self.apply_rpm_channel(preset.rpm_channel or "")
+        else:
+            # free_config: KEEP current files (the file selection is local
+            # to this dialog session per spec §6.4). Apply the recipe.
+            self.apply_signals(tuple(preset.target_signals))
+            self.apply_method(preset.method)
+            self.apply_params(dict(preset.params))
+            self.apply_rpm_channel(preset.rpm_channel or "")
+
+        # Outputs apply in both paths.
+        self.apply_outputs(preset.outputs)
+
+        # time_range round-trip — both sources carry it through params.
+        if "time_range" in preset.params:
+            self.apply_time_range(preset.params["time_range"])
+
+    # ------------------------------------------------------------------
+    # W7: toolbar handlers (preset import / export / fill-from-current)
+    # ------------------------------------------------------------------
+    def _on_fill_from_current(self) -> None:
+        if self._current_preset is None:
+            return
+        self.apply_preset(self._current_preset)
+
+    def _on_import_preset(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入 preset", "", "JSON (*.json)"
+        )
+        if not path:
+            return
+        try:
+            preset = load_preset_from_json(path)
+        except UnsupportedPresetVersion as exc:
+            self._toast(f"不支持的 preset 版本：{exc}", kind="warning")
+            return
+        except (ValueError, OSError) as exc:
+            self._toast(f"preset 解析失败：{exc}", kind="error")
+            return
+        self.apply_preset(preset)
+        self._toast(f"已加载 preset：{preset.name}", kind="success")
+
+    def _on_export_preset(self) -> None:
+        preset = self._build_preset_for_export()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出 preset", "", "JSON (*.json)"
+        )
+        if not path:
+            return
+        try:
+            save_preset_to_json(preset, path)
+        except OSError as exc:
+            self._toast(f"导出失败：{exc}", kind="error")
+            return
+        self._toast(f"已导出 preset 到：{path}", kind="success")
+
+    def _build_preset_for_export(self) -> AnalysisPreset:
+        """Build the recipe-only preset to persist.
+
+        ``save_preset_to_json`` already whitelists the JSON payload; we
+        also strip runtime / legacy fields at the source via
+        ``dataclasses.replace`` so the export invariant matches spec §6.3
+        wording (belt-and-suspenders).
+        """
+        preset = self.get_preset()
+        return dataclasses.replace(
+            preset,
+            file_ids=(),
+            file_paths=(),
+            signal=None,
+            rpm_signal=None,
+            signal_pattern="",
+        )
+
+    def _toast(self, text: str, kind: str = "info") -> None:
+        """Surface a toast to the parent (MainWindow has ``toast``).
+
+        Always records ``_last_toast_*`` so headless tests can assert
+        without needing a parent to mock. Production paths additionally
+        forward to ``parent.toast`` so the user sees the message.
+        """
+        self._last_toast_text = text
+        self._last_toast_kind = kind
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "toast"):
+            try:
+                parent.toast(text, kind)
+            except Exception:  # noqa: BLE001
+                # Toast is purely informational — never let a parent
+                # implementation bug break the toolbar action.
+                pass
 
     # ------------------------------------------------------------------
     # Run-time gates
