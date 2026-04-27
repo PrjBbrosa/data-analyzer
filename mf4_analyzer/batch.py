@@ -40,9 +40,26 @@ class AnalysisPreset:
     rpm_signal: tuple | None = None
     signal_pattern: str = ''
     rpm_channel: str = ''
+    # NEW (configuration; free_config only)
+    target_signals: tuple = ()
+    # NEW (run-time selection; free_config only; injected via dataclasses.replace)
+    file_ids: tuple = ()
+    file_paths: tuple = ()
 
     @classmethod
-    def from_current_single(cls, name, method, signal, params=None, outputs=None, rpm_channel='', rpm_signal=None):
+    def from_current_single(cls, name, method, signal, params=None,
+                            outputs=None, rpm_channel='', rpm_signal=None,
+                            target_signals=None, file_ids=None, file_paths=None):
+        if target_signals:
+            raise ValueError(
+                "target_signals is a free_config-only field; "
+                "use AnalysisPreset.free_config instead"
+            )
+        if file_ids or file_paths:
+            raise ValueError(
+                "file_ids / file_paths are run-time selection fields; "
+                "inject via dataclasses.replace, not from_current_single"
+            )
         return cls(
             name=str(name or 'current analysis'),
             method=str(method),
@@ -55,13 +72,26 @@ class AnalysisPreset:
         )
 
     @classmethod
-    def free_config(cls, name, method, signal_pattern='', rpm_channel='', params=None, outputs=None):
+    def free_config(cls, name, method, signal_pattern='', rpm_channel='',
+                    params=None, outputs=None, target_signals=None,
+                    file_ids=None, file_paths=None):
+        if file_ids:
+            raise ValueError(
+                "file_ids is a run-time selection field; "
+                "inject via dataclasses.replace after free_config()"
+            )
+        if file_paths:
+            raise ValueError(
+                "file_paths is a run-time selection field; "
+                "inject via dataclasses.replace after free_config()"
+            )
         return cls(
             name=str(name or 'custom batch'),
             method=str(method),
             source='free_config',
             signal_pattern=str(signal_pattern or ''),
             rpm_channel=str(rpm_channel or ''),
+            target_signals=tuple(target_signals or ()),
             params=dict(params or {}),
             outputs=outputs or BatchOutput(),
         )
