@@ -35,6 +35,7 @@ from .task_list import TaskListWidget
 
 _METHOD_LABELS: dict[str, str] = {
     "fft": "FFT",
+    "fft_time": "FFT vs Time",
     "order_time": "order_time",
     "order_track": "order_track",
 }

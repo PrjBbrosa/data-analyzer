@@ -1,9 +1,10 @@
 """Method-selector button group + dynamic per-method parameter form.
 
-Exposes exactly THREE method buttons — ``fft``, ``order_time``,
-``order_track``. ``order_rpm`` was removed by upstream commit ``cfb301b``
-and ``batch.BatchRunner.SUPPORTED_METHODS`` no longer accepts it; reflecting
-that here keeps the UI selection in lock-step with the dispatcher (see
+Exposes exactly FOUR method buttons — ``fft``, ``fft_time``,
+``order_time``, ``order_track``. ``order_rpm`` was removed by upstream
+commit ``cfb301b`` and ``batch.BatchRunner.SUPPORTED_METHODS`` no longer
+accepts it; ``fft_time`` was added in Wave 3a so the UI selection stays
+in lock-step with the dispatcher (see
 ``signal-processing/2026-04-27-plan-verbatim-source-must-reconcile-with-recent-removals.md``).
 
 The dynamic parameter form swaps QFormLayout rows on ``set_method`` per
@@ -16,13 +17,14 @@ from __future__ import annotations
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
-    QButtonGroup, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-    QPushButton, QSpinBox, QWidget,
+    QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
+    QHBoxLayout, QPushButton, QSpinBox, QWidget,
 )
 
 
 _METHODS: tuple[tuple[str, str], ...] = (
     ("fft", "FFT"),
+    ("fft_time", "FFT vs Time"),
     ("order_time", "order_time"),
     ("order_track", "order_track"),
 )
@@ -79,6 +81,7 @@ _WINDOWS: tuple[str, ...] = ("hanning", "hamming", "blackman", "rectangular")
 # removed ``order_rpm`` column.
 _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
     "fft": ("window", "nfft"),
+    "fft_time": ("window", "nfft", "overlap", "remove_mean"),
     "order_time": ("window", "nfft", "max_order", "order_res", "time_res"),
     "order_track": ("window", "nfft", "max_order", "target_order"),
 }
@@ -102,6 +105,8 @@ class DynamicParamForm(QWidget):
             "time_res": "时间分辨率",
             "target_order": "目标阶次",
             "rpm_factor": "RPM 系数",
+            "overlap": "重叠率",
+            "remove_mean": "去均值",
         }
 
         self._widgets: dict[str, QWidget] = {}
@@ -159,6 +164,21 @@ class DynamicParamForm(QWidget):
         self._w_rpm_factor.valueChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["rpm_factor"] = self._w_rpm_factor
 
+        # overlap — QDoubleSpinBox 0..0.95
+        self._w_overlap = QDoubleSpinBox(self)
+        self._w_overlap.setRange(0.0, 0.95)
+        self._w_overlap.setSingleStep(0.05)
+        self._w_overlap.setDecimals(2)
+        self._w_overlap.setValue(0.5)
+        self._w_overlap.valueChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._widgets["overlap"] = self._w_overlap
+
+        # remove_mean — QCheckBox
+        self._w_remove_mean = QCheckBox(self)
+        self._w_remove_mean.setChecked(True)
+        self._w_remove_mean.toggled.connect(lambda *_: self.paramsChanged.emit())
+        self._widgets["remove_mean"] = self._w_remove_mean
+
         # Track current method so set_method works idempotently.
         self._current = "fft"
         self._render_for("fft")
@@ -196,6 +216,10 @@ class DynamicParamForm(QWidget):
             params["target_order"] = float(self._w_target_order.value())
         if "rpm_factor" in self.visible_field_names():
             params["rpm_factor"] = float(self._w_rpm_factor.value())
+        if "overlap" in self.visible_field_names():
+            params["overlap"] = float(self._w_overlap.value())
+        if "remove_mean" in self.visible_field_names():
+            params["remove_mean"] = bool(self._w_remove_mean.isChecked())
         return params
 
     def apply_params(self, params: dict) -> None:
@@ -224,6 +248,13 @@ class DynamicParamForm(QWidget):
                     widget.setValue(float(params[key]))
                 except (TypeError, ValueError):
                     pass
+        if "overlap" in params:
+            try:
+                self._w_overlap.setValue(float(params["overlap"]))
+            except (TypeError, ValueError):
+                pass
+        if "remove_mean" in params:
+            self._w_remove_mean.setChecked(bool(params["remove_mean"]))
 
     # ------------------------------------------------------------------
     def _render_for(self, method: str) -> None:
