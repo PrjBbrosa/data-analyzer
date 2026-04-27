@@ -977,7 +977,7 @@ def test_signal_card_qframes_have_no_white_bleed(qapp):
     qss_path = pathlib.Path(__file__).resolve().parents[2] / (
         "mf4_analyzer/ui/style.qss"
     )
-    qss = qss_path.read_text()
+    qss = qss_path.read_text(encoding="utf-8")
     for object_name in (
         "fftSignalCard",
         "orderSignalCard",
