@@ -905,6 +905,37 @@ class FFTContextual(QWidget):
         self.spin_overlap.setValue(50)
         self.spin_overlap.setSuffix(" %")
         fl.addRow("重叠:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH))
+
+        # --- Averaging (Welch / peak-hold) — Wave 2 / SP2 / Task 2.1 ---
+        # 单帧 = single FFT snapshot (legacy default).
+        # 线性平均 = Welch averaging (噪声地板下降).
+        # 峰值保持 = per-frequency max across overlapping segments.
+        self.combo_avg_mode = QComboBox()
+        self.combo_avg_mode.addItems(['单帧', '线性平均', '峰值保持'])
+        self.combo_avg_mode.setCurrentText('单帧')
+        self.combo_avg_mode.setToolTip(
+            "单帧：单次 FFT 快照；线性平均：Welch 多段平均（降噪）；"
+            "峰值保持：每个频率取多段最大值（保留瞬态）。"
+        )
+        fl.addRow(
+            "平均模式:",
+            _fit_field(self.combo_avg_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
+
+        self.spin_avg_overlap = QSpinBox()
+        self.spin_avg_overlap.setRange(0, 95)
+        self.spin_avg_overlap.setValue(50)
+        self.spin_avg_overlap.setSuffix(" %")
+        self.spin_avg_overlap.setEnabled(False)
+        self.spin_avg_overlap.setToolTip("仅在平均/峰值保持模式下生效")
+        fl.addRow(
+            "重叠率:",
+            _fit_field(self.spin_avg_overlap, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
+
+        self.combo_avg_mode.currentTextChanged.connect(
+            lambda txt: self.spin_avg_overlap.setEnabled(txt != '单帧')
+        )
         root.addWidget(g)
 
         g = QGroupBox("选项")
@@ -1011,6 +1042,45 @@ class FFTContextual(QWidget):
         self.spin_fs.blockSignals(True)
         self.spin_fs.setValue(fs)
         self.spin_fs.blockSignals(False)
+
+    # --- Wave 2 / SP2 (Task 2.1): test-friendly param accessors ---
+    # current_params/apply_params extend get_params/_apply_preset with the
+    # newer Welch averaging + linear/dB axis toggles. Existing callers
+    # (main_window, batch presets) continue to use get_params/_collect_preset
+    # without change.
+    def current_params(self):
+        p = self.get_params()
+        p['avg_mode'] = self.combo_avg_mode.currentText()
+        p['avg_overlap'] = int(self.spin_avg_overlap.value())
+        return p
+
+    def apply_params(self, d):
+        if 'window' in d:
+            i = self.combo_win.findText(str(d['window']))
+            if i >= 0:
+                self.combo_win.setCurrentIndex(i)
+        if 'nfft' in d:
+            i = self.combo_nfft.findText(str(d['nfft']))
+            if i >= 0:
+                self.combo_nfft.setCurrentIndex(i)
+        if 'overlap' in d:
+            try:
+                self.spin_overlap.setValue(int(d['overlap']))
+            except (TypeError, ValueError):
+                pass
+        if 'autoscale' in d:
+            self.chk_autoscale.setChecked(bool(d['autoscale']))
+        if 'remark' in d:
+            self.chk_remark.setChecked(bool(d['remark']))
+        if 'avg_mode' in d:
+            i = self.combo_avg_mode.findText(str(d['avg_mode']))
+            if i >= 0:
+                self.combo_avg_mode.setCurrentIndex(i)
+        if 'avg_overlap' in d:
+            try:
+                self.spin_avg_overlap.setValue(int(d['avg_overlap']))
+            except (TypeError, ValueError):
+                pass
 
 
 class OrderContextual(QWidget):

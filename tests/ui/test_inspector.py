@@ -1121,3 +1121,52 @@ def test_spectrogram_canvas_uses_bilinear_interpolation(qtbot):
         f"SpectrogramCanvas imshow interpolation = "
         f"{im.get_interpolation()!r}; expected 'bilinear'."
     )
+
+
+# ---- Wave 2 / SP2: FFT 1D Welch averaging + linear/dB toggle ----
+
+def test_fft_contextual_has_avg_mode_combo(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+    assert hasattr(w, 'combo_avg_mode')
+    items = [w.combo_avg_mode.itemText(i) for i in range(w.combo_avg_mode.count())]
+    assert items == ['单帧', '线性平均', '峰值保持']
+    assert w.combo_avg_mode.currentText() == '单帧'
+
+
+def test_fft_contextual_has_overlap_spin(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+    assert hasattr(w, 'spin_avg_overlap')
+    assert w.spin_avg_overlap.minimum() == 0
+    assert w.spin_avg_overlap.maximum() == 95
+    assert w.spin_avg_overlap.value() == 50
+
+
+def test_fft_contextual_overlap_disabled_in_single_frame_mode(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+    # default avg_mode = '单帧'
+    assert w.spin_avg_overlap.isEnabled() is False
+    w.combo_avg_mode.setCurrentText('线性平均')
+    assert w.spin_avg_overlap.isEnabled() is True
+    w.combo_avg_mode.setCurrentText('单帧')
+    assert w.spin_avg_overlap.isEnabled() is False
+
+
+def test_fft_contextual_avg_mode_in_current_params(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+    w.combo_avg_mode.setCurrentText('线性平均')
+    w.spin_avg_overlap.setValue(75)
+    p = w.current_params()
+    assert p.get('avg_mode') == '线性平均'
+    assert p.get('avg_overlap') == 75
+
+
+def test_fft_contextual_apply_params_restores_avg(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+    w.apply_params({'avg_mode': '峰值保持', 'avg_overlap': 88})
+    assert w.combo_avg_mode.currentText() == '峰值保持'
+    assert w.spin_avg_overlap.value() == 88
