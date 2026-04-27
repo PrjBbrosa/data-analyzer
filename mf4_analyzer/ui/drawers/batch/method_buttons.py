@@ -97,6 +97,10 @@ class DynamicParamForm(QWidget):
         self._form = QFormLayout(self)
         self._form.setContentsMargins(0, 0, 0, 0)
 
+        # rpm_factor is owned by InputPanel (Wave 2 Task 5) — no entry
+        # here on purpose; if a future preset injects an unmapped key it
+        # would surface as a KeyError rather than silently rendering as
+        # an extra row.
         self._labels: dict[str, str] = {
             "window": "窗函数",
             "nfft": "NFFT",
@@ -104,7 +108,6 @@ class DynamicParamForm(QWidget):
             "order_res": "阶次分辨率",
             "time_res": "时间分辨率",
             "target_order": "目标阶次",
-            "rpm_factor": "RPM 系数",
             "overlap": "重叠率",
             "remove_mean": "去均值",
         }
@@ -156,14 +159,6 @@ class DynamicParamForm(QWidget):
         self._w_target_order.valueChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["target_order"] = self._w_target_order
 
-        # rpm_factor
-        self._w_rpm_factor = QDoubleSpinBox(self)
-        self._w_rpm_factor.setRange(0.0001, 10000.0)
-        self._w_rpm_factor.setDecimals(4)
-        self._w_rpm_factor.setValue(1.0)
-        self._w_rpm_factor.valueChanged.connect(lambda *_: self.paramsChanged.emit())
-        self._widgets["rpm_factor"] = self._w_rpm_factor
-
         # overlap — QDoubleSpinBox 0..0.95
         self._w_overlap = QDoubleSpinBox(self)
         self._w_overlap.setRange(0.0, 0.95)
@@ -214,8 +209,6 @@ class DynamicParamForm(QWidget):
             params["time_res"] = float(self._w_time_res.value())
         if "target_order" in self.visible_field_names():
             params["target_order"] = float(self._w_target_order.value())
-        if "rpm_factor" in self.visible_field_names():
-            params["rpm_factor"] = float(self._w_rpm_factor.value())
         if "overlap" in self.visible_field_names():
             params["overlap"] = float(self._w_overlap.value())
         if "remove_mean" in self.visible_field_names():
@@ -241,7 +234,6 @@ class DynamicParamForm(QWidget):
             ("order_res", self._w_order_res),
             ("time_res", self._w_time_res),
             ("target_order", self._w_target_order),
-            ("rpm_factor", self._w_rpm_factor),
         ):
             if key in params:
                 try:

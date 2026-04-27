@@ -134,9 +134,13 @@ class SignalPickerPopup(QWidget):
         # NOT propagate inner content size to the parent's sizeHint, so
         # we explicitly drive _chip_scroll's max/min height from the
         # current chip count in _refresh_display below.
-        self._CHIP_ROW_HEIGHT = 26   # one chip row's pixel height (incl. spacing)
+        # Derive row height from the actual font: SignalChip's
+        # QHBoxLayout adds 2 px top + 2 px bottom margins around the
+        # label, plus chip-layout spacing of 2 px between rows — we
+        # budget +6 px on top of font height to cover that without
+        # clipping on Windows / high-DPI configs.
+        self._CHIP_ROW_HEIGHT = self.fontMetrics().height() + 6
         self._CHIP_MAX_VISIBLE_ROWS = 3
-        self._CHIP_FRAME_VPADDING = 8  # frame_lay top+bottom margins (4+4)
 
         # Scrollable inner area for chips (caps the visible height).
         self._chip_scroll = QScrollArea(self._display_frame)
@@ -399,9 +403,8 @@ class SignalPickerPopup(QWidget):
         if not self._selected:
             self._placeholder_label.setVisible(True)
             self._chip_scroll.setVisible(False)
-            # Reset the scroll area's fixed height so the frame collapses
-            # to placeholder height when nothing is selected.
-            self._chip_scroll.setFixedHeight(0)
+            # An invisible scroll area already drops out of the parent's
+            # sizeHint, so no explicit setFixedHeight reset is needed.
             self.updateGeometry()
             return
         self._placeholder_label.setVisible(False)

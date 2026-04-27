@@ -35,9 +35,10 @@ def test_batch_smoke_fft_time_fixes_combined(qtbot, tmp_path):
     assert sheet._input_panel._rpm_row_host.isVisibleTo(sheet) is False
 
     # Add a fake loaded file with five available signals so 1- and 4-chip
-    # selections are both valid.
+    # selections are both valid. fid=1 (not 0) — 0 is falsy and would be
+    # silently dropped by any future ``if fid:`` check on the runner side.
     sheet._input_panel._file_list.add_loaded_file(
-        0, "x.mf4", frozenset({"sig1", "sig2", "sig3", "sig4", "sig5"}),
+        1, "x.mf4", frozenset({"sig1", "sig2", "sig3", "sig4", "sig5"}),
     )
     qtbot.wait(20)  # let _refresh_signal_universe propagate
 
