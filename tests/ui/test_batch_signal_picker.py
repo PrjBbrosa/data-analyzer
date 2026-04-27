@@ -160,3 +160,41 @@ def test_picker_display_clicking_empty_area_opens_popup(qtbot):
     p.show()
     qtbot.mouseClick(p._display_frame, Qt.LeftButton, pos=QPoint(5, 5))
     assert p.is_popup_visible() is True
+
+
+def test_picker_single_select_replaces_previous_selection(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    p = SignalPickerPopup(
+        available_signals=["a", "b", "c"], single_select=True,
+    )
+    qtbot.addWidget(p)
+    received = []
+    p.selectionChanged.connect(lambda tup: received.append(tup))
+    p.set_selected(("a",))
+    assert p.selected() == ("a",)
+    p.set_selected(("b",))
+    assert p.selected() == ("b",)
+    # Setting two should be normalized to the first only.
+    p.set_selected(("a", "c"))
+    assert p.selected() == ("a",)
+
+
+def test_picker_single_select_checking_unchecks_others(qtbot):
+    from PyQt5.QtWidgets import QCheckBox
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    from PyQt5.QtCore import Qt
+    p = SignalPickerPopup(
+        available_signals=["a", "b"], single_select=True,
+    )
+    qtbot.addWidget(p)
+    # Find each row's checkbox and toggle them in order
+    boxes: dict[str, QCheckBox] = {}
+    for i in range(p._list.count()):
+        item = p._list.item(i)
+        cb = p._list.itemWidget(item)
+        boxes[item.data(Qt.UserRole)] = cb
+    boxes["a"].setChecked(True)
+    assert p.selected() == ("a",)
+    boxes["b"].setChecked(True)
+    assert p.selected() == ("b",)
+    assert boxes["a"].isChecked() is False  # auto-unchecked

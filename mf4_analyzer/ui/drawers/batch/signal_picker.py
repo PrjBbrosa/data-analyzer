@@ -90,11 +90,18 @@ class SignalPickerPopup(QWidget):
         partially_available: Mapping[str, str] | None = None,
         initial_selection: tuple[str, ...] = (),
         parent: QWidget | None = None,
+        *,
+        single_select: bool = False,
     ) -> None:
         super().__init__(parent)
+        self._single_select = bool(single_select)
         self._available: list[str] = list(available_signals)
         self._partial: dict[str, str] = dict(partially_available or {})
-        self._selected: tuple[str, ...] = tuple(initial_selection)
+        # Normalize initial selection if single_select.
+        sel = tuple(initial_selection)
+        if self._single_select and len(sel) > 1:
+            sel = sel[:1]
+        self._selected: tuple[str, ...] = sel
         self._suppress_signal = False
 
         # ----- chip display frame (replaces single-line button) -----
@@ -205,6 +212,8 @@ class SignalPickerPopup(QWidget):
     # ------------------------------------------------------------------
     def set_selected(self, signals: Iterable[str]) -> None:
         new = tuple(s for s in signals)
+        if self._single_select and len(new) > 1:
+            new = new[:1]
         if new == self._selected:
             return
         self._selected = new
@@ -341,6 +350,28 @@ class SignalPickerPopup(QWidget):
     def _on_checkbox_toggled(self, signal: str, checked: bool) -> None:
         if self._suppress_signal:
             return
+        if self._single_select:
+            if checked:
+                # Uncheck siblings without re-emitting per click.
+                self._suppress_signal = True
+                try:
+                    for i in range(self._list.count()):
+                        item = self._list.item(i)
+                        cb = self._list.itemWidget(item)
+                        if not isinstance(cb, QCheckBox):
+                            continue
+                        other = item.data(Qt.UserRole)
+                        if other != signal and cb.isChecked():
+                            cb.setChecked(False)
+                finally:
+                    self._suppress_signal = False
+                self._selected = (signal,)
+            else:
+                self._selected = ()
+            self._refresh_display()
+            self.selectionChanged.emit(self._selected)
+            return
+        # multi-select original path:
         sel = list(self._selected)
         if checked and signal not in sel:
             sel.append(signal)
