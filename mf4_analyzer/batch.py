@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Literal
 import re
+import threading
 
 import numpy as np
 import pandas as pd
@@ -116,49 +118,205 @@ class BatchRunResult:
     blocked: list[str] = field(default_factory=list)
 
 
+@dataclass
+class BatchProgressEvent:
+    kind: Literal[
+        'task_started', 'task_done', 'task_failed',
+        'task_cancelled', 'run_finished',
+    ]
+    task_index: int | None = None
+    total: int | None = None
+    file_name: str | None = None
+    signal: str | None = None
+    method: str | None = None
+    error: str | None = None        # task_failed only
+    final_status: str | None = None  # run_finished only
+
+
+@dataclass
+class _LoadFailure:
+    """Sentinel returned by ``BatchRunner._resolve_files`` when a disk path
+    cannot be loaded. ``_expand_tasks`` still yields tasks for it; ``run``
+    converts each to a ``task_failed`` event with the cached error.
+    """
+    path: str
+    error: str
+
+
+def _default_loader(path):
+    """Default disk loader for ``BatchRunner.file_paths`` resolution.
+
+    Returns FileData. Idx -1 marks "not registered with main_window".
+    """
+    from mf4_analyzer.io import DataLoader, FileData
+    data, chs, units = DataLoader.load_mf4(path)
+    return FileData(path, data, chs, units, idx=-1)
+
+
 class BatchRunner:
     SUPPORTED_METHODS = {'fft', 'order_time', 'order_track'}
 
-    def __init__(self, files):
+    def __init__(self, files, loader: Callable | None = None):
         self.files = files
+        self._loader = loader or _default_loader
+        self._disk_cache: dict[str, object] = {}
 
-    def run(self, preset, output_dir, progress_callback=None):
+    def run(self, preset, output_dir,
+            progress_callback: Callable[[int, int], None] | None = None,
+            *,
+            on_event: Callable[[BatchProgressEvent], None] | None = None,
+            cancel_token: threading.Event | None = None) -> BatchRunResult:
         output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        items = []
-        blocked = []
+        # Output-dir create — fail-fast if impossible
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            err = f"cannot create output dir: {exc}"
+            if on_event:
+                on_event(BatchProgressEvent(
+                    kind='run_finished',
+                    final_status='blocked',
+                ))
+            return BatchRunResult(status='blocked', blocked=[err])
+
         tasks = list(self._expand_tasks(preset))
         if not tasks:
+            if on_event:
+                on_event(BatchProgressEvent(
+                    kind='run_finished', final_status='blocked',
+                ))
             return BatchRunResult(
-                status='blocked',
-                blocked=['no matching batch tasks'],
+                status='blocked', blocked=['no matching batch tasks'],
             )
 
-        for index, task in enumerate(tasks, start=1):
-            fid, fd, signal_name = task
-            try:
-                item = self._run_one(preset, fid, fd, signal_name, output_dir)
-            except Exception as exc:
-                item = BatchItemResult(
-                    method=preset.method,
-                    file_id=fid,
-                    file_name=fd.filename,
-                    signal=signal_name,
-                    status='blocked',
-                    message=str(exc),
-                )
-                blocked.append(f"{fd.filename}:{signal_name}: {exc}")
-            items.append(item)
-            if progress_callback:
-                progress_callback(index, len(tasks))
+        items: list[BatchItemResult] = []
+        blocked: list[str] = []
+        cancelled = False
+        total = len(tasks)
 
-        if blocked and len(blocked) == len(items):
+        for index, task in enumerate(tasks, start=1):
+            fid, fd_or_fail, signal_name = task
+            if cancel_token is not None and cancel_token.is_set():
+                cancelled = True
+                # Emit task_cancelled for this and all remaining
+                for j in range(index, total + 1):
+                    fid_j, fd_j, sig_j = tasks[j - 1]
+                    fname = (fd_j.path if isinstance(fd_j, _LoadFailure)
+                             else getattr(fd_j, 'filename', str(fid_j)))
+                    if on_event:
+                        on_event(BatchProgressEvent(
+                            kind='task_cancelled',
+                            task_index=j, total=total,
+                            file_name=fname, signal=sig_j,
+                            method=preset.method,
+                        ))
+                break
+
+            # Determine file_name for events (works for _LoadFailure too)
+            if isinstance(fd_or_fail, _LoadFailure):
+                fname = fd_or_fail.path
+            else:
+                fname = getattr(fd_or_fail, 'filename', str(fid))
+
+            if on_event:
+                on_event(BatchProgressEvent(
+                    kind='task_started',
+                    task_index=index, total=total,
+                    file_name=fname, signal=signal_name, method=preset.method,
+                ))
+            try:
+                if isinstance(fd_or_fail, _LoadFailure):
+                    raise IOError(fd_or_fail.error)
+                if signal_name not in fd_or_fail.data.columns:
+                    raise ValueError(f"missing signal: {signal_name}")
+                item = self._run_one(preset, fid, fd_or_fail,
+                                     signal_name, output_dir)
+                items.append(item)
+                if on_event:
+                    on_event(BatchProgressEvent(
+                        kind='task_done',
+                        task_index=index, total=total,
+                        file_name=fname, signal=signal_name,
+                        method=preset.method,
+                    ))
+                # progress_callback fires ONLY on task_done (legacy contract
+                # was "called once per completed task"). Failed tasks do NOT
+                # bump it — see spec §4.4 / §8.
+                if progress_callback:
+                    progress_callback(index, total)
+            except Exception as exc:
+                items.append(BatchItemResult(
+                    method=preset.method, file_id=fid,
+                    file_name=fname, signal=signal_name,
+                    status='blocked', message=str(exc),
+                ))
+                blocked.append(f"{fname}:{signal_name}: {exc}")
+                if on_event:
+                    on_event(BatchProgressEvent(
+                        kind='task_failed',
+                        task_index=index, total=total,
+                        file_name=fname, signal=signal_name,
+                        method=preset.method, error=str(exc),
+                    ))
+
+        if cancelled:
+            status = 'cancelled'
+        elif blocked and len(blocked) == len(items):
             status = 'blocked'
         elif blocked:
             status = 'partial'
         else:
             status = 'done'
+
+        if on_event:
+            on_event(BatchProgressEvent(
+                kind='run_finished', final_status=status,
+            ))
         return BatchRunResult(status=status, items=items, blocked=blocked)
+
+    def _resolve_files(self, preset):
+        """Yield (fid, FileData) pairs for the preset.
+
+        For free_config: file_ids resolved via self.files; file_paths
+        lazy-loaded via self._loader, cached on this BatchRunner instance.
+        For current_single: yield (signal[0], self.files[signal[0]]).
+        """
+        if preset.source == 'current_single':
+            if preset.signal is None:
+                return
+            fid = preset.signal[0]
+            fd = self.files.get(fid)
+            if fd is not None:
+                yield fid, fd
+            return
+        # free_config
+        # Legacy compatibility: when neither file_ids nor file_paths is set
+        # (pre-Wave-2 free_config call sites that relied on signal_pattern
+        # selecting from all loaded files), fall back to all registered files.
+        # New call sites that explicitly inject file_ids / file_paths via
+        # dataclasses.replace are unaffected.
+        if not preset.file_ids and not preset.file_paths:
+            for fid, fd in self.files.items():
+                yield fid, fd
+            return
+        for fid in preset.file_ids:
+            fd = self.files.get(fid)
+            if fd is not None:
+                yield fid, fd
+        for path in preset.file_paths:
+            if path in self._disk_cache:
+                yield path, self._disk_cache[path]
+                continue
+            try:
+                fd = self._loader(path)
+            except Exception as exc:
+                # signal back via a sentinel that _expand_tasks/run can detect
+                fail = _LoadFailure(path, str(exc))
+                self._disk_cache[path] = fail
+                yield path, fail
+                continue
+            self._disk_cache[path] = fd
+            yield path, fd
 
     def _expand_tasks(self, preset):
         if preset.method not in self.SUPPORTED_METHODS:
@@ -171,9 +329,36 @@ class BatchRunner:
             if fd is not None and ch in fd.data.columns:
                 yield fid, fd, ch
             return
-
+        files_iter = list(self._resolve_files(preset))
+        if preset.target_signals:
+            # Phase 1: will phase 2 yield ANY task at all?
+            # _LoadFailure entries DO count — phase 2 yields them so run() can
+            # surface task_failed rows (per spec §3.2 / §7: disk-load failures
+            # become per-task failure, not a blanket blocked status).
+            has_any_yield = False
+            for fid, fd in files_iter:
+                if isinstance(fd, _LoadFailure):
+                    has_any_yield = True
+                    break
+                for ch in preset.target_signals:
+                    if ch in fd.data.columns:
+                        has_any_yield = True
+                        break
+                if has_any_yield:
+                    break
+            if not has_any_yield:
+                return  # → run() blocked path (UI rule § 7 normally pre-empts this)
+            # Phase 2: yield full cartesian product (load failures and missing
+            # signals surface as task_failed via run() try/except).
+            for fid, fd in files_iter:
+                for ch in preset.target_signals:
+                    yield fid, fd, ch
+            return
+        # Pattern fallback (existing behavior unchanged for tests)
         pattern = preset.signal_pattern.strip()
-        for fid, fd in self.files.items():
+        for fid, fd in files_iter:
+            if isinstance(fd, _LoadFailure):
+                continue
             for ch in fd.get_signal_channels():
                 if preset.method.startswith('order') and ch == preset.rpm_channel:
                     continue
