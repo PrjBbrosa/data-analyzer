@@ -5,6 +5,15 @@ from pathlib import Path
 from .._palette import FILE_PALETTES
 
 
+# Authoritative set of channel names treated as the time master.
+# Compared case-insensitively. Used both internally by FileData and by
+# UI probe paths (e.g. mf4_analyzer.ui.drawers.batch.input_panel) so the
+# filter stays consistent across loaded-file and disk-probe code paths.
+_TIME_NAMES = frozenset({
+    'time', 't', 'zeit', 'timestamp', 'time_s', 'time(s)', 't(s)',
+})
+
+
 class FileData:
     def __init__(self, fp, df, chs, units, idx=0):
         self.filepath = Path(fp)
@@ -20,7 +29,7 @@ class FileData:
 
         # 尝试从列名识别时间列
         for ch in chs:
-            if ch.lower() in ('time', 't', 'zeit', 'timestamp', 'time_s', 'time(s)', 't(s)'):
+            if ch.lower() in _TIME_NAMES:
                 self.time_array = df[ch].values.astype(float)
                 if len(self.time_array) > 1:
                     dt = np.median(np.diff(self.time_array))
@@ -122,8 +131,7 @@ class FileData:
         return 1.0 / median_dt
 
     def get_signal_channels(self):
-        return [c for c in self.channels if
-                c.lower() not in ('time', 't', 'zeit', 'timestamp', 'time_s', 'time(s)', 't(s)')]
+        return [c for c in self.channels if c.lower() not in _TIME_NAMES]
 
     def get_prefixed_channel(self, ch):
         return f"[{self.short_name}] {ch}"

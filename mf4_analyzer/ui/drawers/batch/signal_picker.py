@@ -16,8 +16,8 @@ from typing import Iterable, Mapping
 
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QCheckBox, QFrame, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QFrame, QHBoxLayout, QLineEdit, QListWidget,
+    QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
 )
 
 
@@ -107,9 +107,13 @@ class SignalPickerPopup(QWidget):
         self.selectionChanged.emit(self._selected)
 
     def set_available(self, available_signals: Iterable[str]) -> None:
+        # Preserve _selected intact across this mutator (ultrareview
+        # bug_002). The settling call is set_partially_available — that
+        # is where reconciliation happens against the COMBINED universe.
+        # Performing it here would drop names that are about to land in
+        # the partial dict during a paired (set_available; set_partial)
+        # universe swap, defeating BatchSheet.signals_marked_unavailable.
         self._available = list(available_signals)
-        # Drop any selection no longer present.
-        self._selected = tuple(s for s in self._selected if s in self._available)
         self._rebuild_list()
         self._refresh_display()
 
@@ -117,8 +121,17 @@ class SignalPickerPopup(QWidget):
         self, partially_available: Mapping[str, str] | None
     ) -> None:
         self._partial = dict(partially_available or {})
-        # Selected items that became partially-available drop out.
-        self._selected = tuple(s for s in self._selected if s not in self._partial)
+        # Reconcile against the now-coherent (available, partial) pair:
+        # keep names present in either set; drop only names that vanished
+        # from BOTH. Emit selectionChanged iff the tuple actually changed
+        # (ultrareview bug_002).
+        keep = tuple(
+            s for s in self._selected
+            if s in self._available or s in self._partial
+        )
+        if keep != self._selected:
+            self._selected = keep
+            self.selectionChanged.emit(self._selected)
         self._rebuild_list()
         self._refresh_display()
 
@@ -241,9 +254,14 @@ class SignalPickerPopup(QWidget):
                 self.hide_popup()
                 return True
             if etype == QEvent.FocusOut:
-                # Defer to event-loop tail so we don't close while the focus
-                # change is still in flight (ensures the popup actually hides
-                # under offscreen Qt where Qt.Popup auto-close may not fire).
+                # If focus moved to a descendant of the popup (e.g. the
+                # search QLineEdit), keep the popup open — otherwise the
+                # user can never click into the inner search field
+                # (ultrareview bug_015). Only hide when focus actually
+                # left the popup subtree.
+                new_focus = QApplication.focusWidget()
+                if new_focus is not None and self._popup.isAncestorOf(new_focus):
+                    return False
                 self.hide_popup()
                 return False
         return super().eventFilter(obj, event)

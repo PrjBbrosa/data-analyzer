@@ -66,12 +66,18 @@ class BatchSheet(QDialog):
         detail_lay.addWidget(self._output_panel, 1)
         root.addWidget(detail, 1)
 
-        # Footer
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("运行")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        # Footer. Hoist the QDialogButtonBox so _recompute_pipeline_status
+        # can toggle the Ok ("运行") button against is_runnable() — without
+        # this gate, an empty config + Run falls through to the legacy
+        # BatchRunner._resolve_files fallback and processes ALL loaded
+        # MainWindow files × every channel (ultrareview bug_018).
+        self._buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        self._buttons.button(QDialogButtonBox.Ok).setText("运行")
+        self._buttons.accepted.connect(self.accept)
+        self._buttons.rejected.connect(self.reject)
+        root.addWidget(self._buttons)
 
         # Wire status recomputation. Each signal is independent — we wire all
         # of them so that any sub-control mutation flows into a single
@@ -101,10 +107,20 @@ class BatchSheet(QDialog):
         fl = self._input_panel._file_list
         loaded_paths = fl.all_loaded_paths()
         any_pending = fl.has_pending_probe()
+        any_failed = fl.has_probe_failed()
         selected = self._input_panel.selected_signals()
         if any_pending:
             input_status = "pending"
             input_summary = "正在解析…"
+        elif any_failed:
+            # A row in probe_failed must surface as warn even when other
+            # config is otherwise complete (ultrareview bug_005). The
+            # runner skips failed rows so is_runnable still allows Run.
+            input_status = "warn"
+            input_summary = (
+                f"{len(loaded_paths)}文件·{len(selected)}信号"
+                if (loaded_paths or selected) else "解析失败"
+            )
         elif not loaded_paths or not selected:
             input_status = "warn"
             input_summary = (
@@ -141,6 +157,12 @@ class BatchSheet(QDialog):
             if export_image:
                 parts.append("PNG")
             self.strip.set_stage(2, "ok", "+".join(parts))
+
+        # Gate the Run (Ok) button on is_runnable() so an empty/partial
+        # config cannot reach BatchRunner's legacy fallback (ultrareview
+        # bug_018). The __init__'s seed call to this method correctly
+        # leaves the OK button disabled at first show.
+        self._buttons.button(QDialogButtonBox.Ok).setEnabled(self.is_runnable())
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -251,12 +273,19 @@ class BatchSheet(QDialog):
         return "batch"
 
     def get_preset(self) -> AnalysisPreset:
+        # Merge the user-typed time_range field into params so
+        # BatchRunner._apply_time_range sees it (ultrareview bug_009).
+        # Empty field → no key, so BatchRunner runs the full signal.
+        params = dict(self.params())
+        rng = self.time_range()
+        if rng is not None:
+            params["time_range"] = rng
         base = AnalysisPreset.free_config(
             name=self._preset_name(),
             method=self.method(),
             target_signals=self.selected_signals(),
             rpm_channel=self.rpm_channel(),
-            params=self.params(),
+            params=params,
             outputs=BatchOutput(
                 export_data=self.export_data(),
                 export_image=self.export_image(),

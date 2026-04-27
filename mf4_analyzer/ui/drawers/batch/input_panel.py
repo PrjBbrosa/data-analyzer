@@ -17,7 +17,6 @@ Two widgets:
 from __future__ import annotations
 
 import os
-import traceback
 from typing import Iterable
 
 from PyQt5.QtCore import (
@@ -29,6 +28,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ....io.file_data import _TIME_NAMES
 from .signal_picker import SignalPickerPopup
 
 
@@ -81,6 +81,10 @@ def _default_probe_signals_for(path: str) -> frozenset:
 
     Pure metadata; does NOT decode samples. Falls back to a clear error if
     asammdf is not installed (so probe_failed surfaces a useful message).
+
+    The time master ('time', 't', etc. — see ``FileData._TIME_NAMES``) is
+    filtered out case-insensitively so it cannot leak into the picker as a
+    selectable signal (ultrareview bug_001).
     """
     try:
         from asammdf import MDF  # type: ignore
@@ -88,7 +92,10 @@ def _default_probe_signals_for(path: str) -> frozenset:
         raise RuntimeError(f"asammdf unavailable: {exc}")
     mdf = MDF(path)
     try:
-        keys = frozenset(mdf.channels_db.keys())
+        keys = frozenset(
+            name for name in mdf.channels_db.keys()
+            if str(name).lower() not in _TIME_NAMES
+        )
     finally:
         try:
             mdf.close()
@@ -255,6 +262,19 @@ class FileListWidget(QWidget):
             for r in self._rows.values()
         )
 
+    def has_probe_failed(self) -> bool:
+        """True iff any row is currently in the ``probe_failed`` state.
+
+        Used by ``BatchSheet._recompute_pipeline_status`` so the INPUT
+        card surfaces a ``warn`` badge instead of ``ok`` when a probe has
+        failed (ultrareview bug_005). Note: ``is_runnable`` deliberately
+        does NOT consult this — the runner skips failed rows so a Run
+        with a probe_failed row visible is still allowed.
+        """
+        return any(
+            r.state == STATE_PROBE_FAILED for r in self._rows.values()
+        )
+
     # ------------------------------------------------------------------
     # Probe lifecycle
     # ------------------------------------------------------------------
@@ -334,9 +354,11 @@ class FileListWidget(QWidget):
         menu = QMenu(self)
         any_added = False
         for fid, fd in (self._files_source or {}).items():
-            label = getattr(fd, "fp", None) or str(fid)
-            label = os.path.basename(str(label))
-            act = QAction(label, menu)
+            # FileData stores the basename in `.filename` already; fall back
+            # to the synthetic fid only when fd is missing it (defensive —
+            # in normal use FileData always populates filename).
+            label = getattr(fd, "filename", None) or str(fid)
+            act = QAction(str(label), menu)
 
             def _trigger(_checked=False, fid=fid, fd=fd):
                 self._add_from_files_source(fid, fd)
@@ -350,15 +372,18 @@ class FileListWidget(QWidget):
         menu.exec_(self._btn_loaded.mapToGlobal(self._btn_loaded.rect().bottomLeft()))
 
     def _add_from_files_source(self, fid, fd) -> None:
-        path = getattr(fd, "fp", None) or str(fid)
-        path = str(path)
+        # FileData.filepath is a Path; coerce to str for the row key. Fall
+        # back to fid only if fd has no filepath (defensive).
+        fp = getattr(fd, "filepath", None)
+        path = str(fp) if fp is not None else str(fid)
         if path in self._rows:
             return
-        # Channels = keys of fd.data (the FileData channel dict). Fall back to
-        # an empty set if anything is missing — the row still becomes 'loaded'
+        # Channels: route through FileData.get_signal_channels() so the
+        # time master is excluded (ultrareview bug_001). Fall back to an
+        # empty set if anything is missing — the row still becomes 'loaded'
         # since the user explicitly imported it from the main window.
         try:
-            channels = frozenset(fd.data.keys())
+            channels = frozenset(fd.get_signal_channels())
         except Exception:  # noqa: BLE001
             channels = frozenset()
         self.add_loaded_file(fid, path, channels)
@@ -536,9 +561,12 @@ class InputPanel(QWidget):
         for fid in file_ids or ():
             fd = (self._file_list._files_source or {}).get(fid)
             if fd is not None:
-                path = str(getattr(fd, "fp", None) or fid)
+                fp = getattr(fd, "filepath", None)
+                path = str(fp) if fp is not None else str(fid)
                 try:
-                    channels = frozenset(fd.data.keys())
+                    # Filter time master via FileData.get_signal_channels()
+                    # (ultrareview bug_001).
+                    channels = frozenset(fd.get_signal_channels())
                 except Exception:  # noqa: BLE001
                     channels = frozenset()
             else:
