@@ -227,6 +227,30 @@ def test_input_panel_rpm_manual_factor_switches_unit_to_custom(qtbot):
     assert p._rpm_unit_combo.currentText() == "自定义"
 
 
+def test_input_panel_rpm_factor_round_trips_through_preset(qtbot):
+    """Export -> apply_preset -> get_preset must preserve rpm_factor.
+
+    Regression guard for the rev-2 codex finding: Step 5.3 dropped
+    rpm_factor from DynamicParamForm, so the import path needed an
+    explicit ``apply_rpm_factor`` call to avoid silently resetting
+    the spinbox to 1.0 on round-trip.
+    """
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.apply_method("order_time")
+    sheet._input_panel._rpm_unit_combo.setCurrentText("deg/s")
+    exported = sheet.get_preset()
+    assert abs(exported.params["rpm_factor"] - 1.0 / 6.0) < 1e-9
+
+    # Round-trip via apply_preset on a fresh sheet
+    sheet2 = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet2)
+    sheet2.apply_preset(exported)
+    re_exported = sheet2.get_preset()
+    assert abs(re_exported.params["rpm_factor"] - 1.0 / 6.0) < 1e-9
+
+
 def test_input_panel_rpm_factor_is_returned_in_params(qtbot):
     """rpm_factor lives in params (existing key) so the BatchRunner
     backend (batch.py:506,516) keeps reading it unchanged.

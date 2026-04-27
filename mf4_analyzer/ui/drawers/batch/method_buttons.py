@@ -79,8 +79,8 @@ _WINDOWS: tuple[str, ...] = ("hanning", "hamming", "blackman", "rectangular")
 # removed ``order_rpm`` column.
 _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
     "fft": ("window", "nfft"),
-    "order_time": ("window", "nfft", "max_order", "order_res", "time_res", "rpm_factor"),
-    "order_track": ("window", "nfft", "max_order", "target_order", "rpm_factor"),
+    "order_time": ("window", "nfft", "max_order", "order_res", "time_res"),
+    "order_track": ("window", "nfft", "max_order", "target_order"),
 }
 
 
