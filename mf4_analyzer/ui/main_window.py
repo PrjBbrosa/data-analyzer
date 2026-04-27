@@ -1239,26 +1239,44 @@ class MainWindow(QMainWindow):
             else:
                 x_max = fs / 2
 
-            psd_db = 10 * np.log10(psd + 1e-12)
+            # Wave 2 / SP2 / Task 2.3: per-subplot Linear/dB toggle.
+            amp_y = fft_params.get('amp_y', 'Linear')
+            psd_y = fft_params.get('psd_y', 'dB')
+            if amp_y == 'dB':
+                amp_disp = 20 * np.log10(
+                    np.clip(amp, 1e-12, None) / max(amp.max(), 1e-12)
+                )
+            else:
+                amp_disp = amp
+            if psd_y == 'dB':
+                psd_disp = 10 * np.log10(psd + 1e-12)
+            else:
+                psd_disp = psd
 
             ax1 = self.canvas_fft.fig.add_subplot(2, 1, 1)
-            ax1.plot(freq, amp, '#2563eb', lw=1.0);
+            ax1.plot(freq, amp_disp, '#2563eb', lw=1.0);
             ax1.set_xlabel('Frequency (Hz)');
-            ax1.set_ylabel('Amplitude', labelpad=10)
+            ax1.set_ylabel(
+                'Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
+                labelpad=10,
+            )
             ax1.set_title(f'FFT - {self.inspector.fft_ctx.combo_sig.currentText()} (窗:{win}, NFFT:{nfft or "auto"})');
             ax1.grid(True, alpha=0.25, ls='--');
             ax1.set_xlim(0, x_max)
             ax2 = self.canvas_fft.fig.add_subplot(2, 1, 2)
-            ax2.plot(freq, psd_db, '#dc2626', lw=1.0);
+            ax2.plot(freq, psd_disp, '#dc2626', lw=1.0);
             ax2.set_xlabel('Frequency (Hz)');
-            ax2.set_ylabel('PSD (dB)', labelpad=10)
+            ax2.set_ylabel(
+                'PSD (dB)' if psd_y == 'dB' else 'PSD',
+                labelpad=10,
+            )
             ax2.set_title('功率谱密度');
             ax2.grid(True, alpha=0.25, ls='--');
             ax2.set_xlim(0, x_max)
 
             # 存储曲线数据用于remark吸附
-            self.canvas_fft.store_line_data(0, freq, amp)
-            self.canvas_fft.store_line_data(1, freq, psd_db)
+            self.canvas_fft.store_line_data(0, freq, amp_disp)
+            self.canvas_fft.store_line_data(1, freq, psd_disp)
 
             self.canvas_fft.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
             xt, yt = self.inspector.top.tick_density()

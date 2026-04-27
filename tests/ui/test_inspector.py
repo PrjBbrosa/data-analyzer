@@ -1296,3 +1296,65 @@ def test_fft_render_dispatches_on_avg_mode(qtbot, monkeypatch):
     assert 'fft' in calls, f"single-frame must use compute_fft (calls={calls})"
     assert 'avg' in calls, f"线性平均 must call compute_averaged_fft (calls={calls})"
     assert 'peak' in calls, f"峰值保持 must call compute_peak_hold_fft (calls={calls})"
+
+
+# ---- Task 2.3: per-subplot linear/dB toggle ----
+
+def test_fft_contextual_has_axis_toggles(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+    assert hasattr(w, 'combo_amp_y')
+    assert hasattr(w, 'combo_psd_y')
+    assert w.combo_amp_y.currentText() == 'Linear'
+    assert w.combo_psd_y.currentText() == 'dB'
+
+
+def test_fft_contextual_axis_toggles_in_params(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+    w.combo_amp_y.setCurrentText('dB')
+    w.combo_psd_y.setCurrentText('Linear')
+    p = w.current_params()
+    assert p.get('amp_y') == 'dB'
+    assert p.get('psd_y') == 'Linear'
+    w.apply_params({'amp_y': 'Linear', 'psd_y': 'dB'})
+    assert w.combo_amp_y.currentText() == 'Linear'
+    assert w.combo_psd_y.currentText() == 'dB'
+
+
+def test_fft_render_honors_axis_toggles(qtbot):
+    """Toggling Amp axis to dB / PSD axis to Linear must change the y-label
+    text on the rendered subplots — this proves the toggles round-trip
+    through the render code in main_window.do_fft.
+    """
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    fs = 1000.0
+    n = 4096
+    t = np.arange(n) / fs
+    sig = np.sin(2 * np.pi * 10 * t)
+    win._get_sig = lambda: (t, sig, fs)
+    win._check_uniform_or_prompt = lambda fd, mode: True
+    win.files = {}
+    win.inspector.fft_ctx.set_signal_candidates([("dummy", (None, "ch"))])
+    win.inspector.fft_ctx.spin_fs.setValue(fs)
+    win.inspector.fft_ctx.combo_avg_mode.setCurrentText('单帧')
+
+    # Default render: amp=Linear, psd=dB.
+    win.do_fft()
+    axes = win.canvas_fft.fig.axes
+    assert len(axes) >= 2
+    assert 'dB' not in axes[0].get_ylabel()
+    assert 'dB' in axes[1].get_ylabel()
+
+    # Flip: amp=dB, psd=Linear.
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText('dB')
+    win.inspector.fft_ctx.combo_psd_y.setCurrentText('Linear')
+    win.do_fft()
+    axes = win.canvas_fft.fig.axes
+    assert 'dB' in axes[0].get_ylabel()
+    assert 'dB' not in axes[1].get_ylabel()

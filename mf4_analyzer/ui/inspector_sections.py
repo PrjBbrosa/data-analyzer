@@ -936,6 +936,23 @@ class FFTContextual(QWidget):
         self.combo_avg_mode.currentTextChanged.connect(
             lambda txt: self.spin_avg_overlap.setEnabled(txt != '单帧')
         )
+
+        # --- Y-axis scale per subplot — Wave 2 / SP2 / Task 2.3 ---
+        # Amplitude defaults Linear (legacy). PSD defaults dB (HEAD-parity).
+        self.combo_amp_y = QComboBox()
+        self.combo_amp_y.addItems(['Linear', 'dB'])
+        self.combo_amp_y.setCurrentText('Linear')
+        fl.addRow(
+            "Amplitude 轴:",
+            _fit_field(self.combo_amp_y, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
+        self.combo_psd_y = QComboBox()
+        self.combo_psd_y.addItems(['Linear', 'dB'])
+        self.combo_psd_y.setCurrentText('dB')
+        fl.addRow(
+            "PSD 轴:",
+            _fit_field(self.combo_psd_y, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
         root.addWidget(g)
 
         g = QGroupBox("选项")
@@ -1052,6 +1069,8 @@ class FFTContextual(QWidget):
         p = self.get_params()
         p['avg_mode'] = self.combo_avg_mode.currentText()
         p['avg_overlap'] = int(self.spin_avg_overlap.value())
+        p['amp_y'] = self.combo_amp_y.currentText()
+        p['psd_y'] = self.combo_psd_y.currentText()
         return p
 
     def apply_params(self, d):
@@ -1081,6 +1100,14 @@ class FFTContextual(QWidget):
                 self.spin_avg_overlap.setValue(int(d['avg_overlap']))
             except (TypeError, ValueError):
                 pass
+        for k, combo in (
+            ('amp_y', self.combo_amp_y),
+            ('psd_y', self.combo_psd_y),
+        ):
+            if k in d:
+                i = combo.findText(str(d[k]))
+                if i >= 0:
+                    combo.setCurrentIndex(i)
 
 
 class OrderContextual(QWidget):
