@@ -40,20 +40,16 @@ DANGER = '#dc2626'
 # ----------------------------------------------------------------------
 # Wave 2 Task 2.9: compactness constants.
 #
-# CHART_TIGHT_LAYOUT_KW — tight margins for non-spectrogram canvases.
-#   Default tight_layout pad is 1.08x font size which is loose for the
-#   Chinese fonts we use; pinning pad/h_pad/w_pad gives a denser layout.
-# SPECTROGRAM_SUBPLOT_ADJUST — explicit subplot box for SpectrogramCanvas.
-#   Must be applied via fig.subplots_adjust AFTER fig.colorbar(...) so
-#   colorbar geometry is already in place. (Wired up in Task 2.10.)
-# AXIS_HIT_MARGIN_PX — pixel margin around an axes for hit-detection of
-#   the axis-edit affordance (double-click / hover cursor swap).
+# Canonical home is `mf4_analyzer/_chart_kw.py` (package root) because
+# `batch.py` also consumes CHART_TIGHT_LAYOUT_KW and must not import
+# from `ui`. Re-exported here so existing `from .canvases import ...`
+# imports keep working without churn.
 # ----------------------------------------------------------------------
-CHART_TIGHT_LAYOUT_KW = dict(pad=0.4, h_pad=0.6, w_pad=0.4)
-SPECTROGRAM_SUBPLOT_ADJUST = dict(
-    left=0.07, right=0.93, top=0.97, bottom=0.09,
+from .._chart_kw import (
+    CHART_TIGHT_LAYOUT_KW,
+    SPECTROGRAM_SUBPLOT_ADJUST,
+    AXIS_HIT_MARGIN_PX,
 )
-AXIS_HIT_MARGIN_PX = 45
 
 
 def _is_monotonic_array(t):

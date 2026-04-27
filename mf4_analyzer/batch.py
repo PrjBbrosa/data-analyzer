@@ -19,6 +19,7 @@ import pandas as pd
 
 from .signal.fft import FFTAnalyzer
 from .signal.order import OrderAnalysisParams, OrderAnalyzer
+from ._chart_kw import CHART_TIGHT_LAYOUT_KW
 
 
 @dataclass(frozen=True)
@@ -347,7 +348,7 @@ class BatchRunner:
                 ax.set_ylabel(df.columns[1])
                 fig.colorbar(im, ax=ax, label='Amplitude')
             ax.grid(True, alpha=0.25, ls='--')
-            fig.tight_layout()
+            fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
             fig.savefig(path)
         finally:
             fig.clear()
