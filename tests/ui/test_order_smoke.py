@@ -63,7 +63,7 @@ def test_open_batch_drops_stale_preset_signal(qtbot, monkeypatch):
 
     toast_msgs = []
     monkeypatch.setattr(
-        'mf4_analyzer.ui.drawers.batch_sheet.BatchSheet', FakeSheet,
+        'mf4_analyzer.ui.drawers.batch.BatchSheet', FakeSheet,
     )
     monkeypatch.setattr(
         win, 'toast',

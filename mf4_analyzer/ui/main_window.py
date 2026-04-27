@@ -945,7 +945,7 @@ class MainWindow(QMainWindow):
         if not self.files:
             self.toast("请先加载文件", "warning")
             return
-        from .drawers.batch_sheet import BatchSheet
+        from .drawers.batch import BatchSheet
         from ..batch import BatchRunner
 
         current_preset = self._last_batch_preset or self._build_current_batch_preset()
