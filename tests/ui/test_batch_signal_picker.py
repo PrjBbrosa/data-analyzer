@@ -108,3 +108,55 @@ def test_signal_chip_label_truncates_long_name(qtbot):
     assert chip._label.toolTip() == long_name
     assert len(chip._label.text()) <= 41  # 40 + ellipsis "…"
     assert chip._label.text().endswith("…")
+
+
+def test_picker_display_renders_one_chip_per_selected(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import (
+        SignalPickerPopup, SignalChip,
+    )
+    p = SignalPickerPopup(available_signals=["a", "b", "c"])
+    qtbot.addWidget(p)
+    p.set_selected(("a", "b", "c"))
+    chips = p._display_frame.findChildren(SignalChip)
+    assert sorted(c.name() for c in chips) == ["a", "b", "c"]
+
+
+def test_picker_display_height_grows_with_selection_not_width(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    p = SignalPickerPopup(available_signals=["sig1", "sig2", "sig3"])
+    qtbot.addWidget(p)
+    p.resize(280, 600)
+    p.set_selected(("sig1",))
+    one_h = p._display_frame.sizeHint().height()
+    one_w = p._display_frame.sizeHint().width()
+    p.set_selected(("sig1", "sig2", "sig3"))
+    three_h = p._display_frame.sizeHint().height()
+    three_w = p._display_frame.sizeHint().width()
+    assert three_h > one_h
+    assert three_w == one_w  # width must NOT scale with chip count
+
+
+def test_picker_display_chip_remove_unselects_signal(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import (
+        SignalPickerPopup, SignalChip,
+    )
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+    p.set_selected(("a", "b"))
+    received = []
+    p.selectionChanged.connect(lambda tup: received.append(tup))
+    chip_a = next(c for c in p._display_frame.findChildren(SignalChip)
+                  if c.name() == "a")
+    chip_a._remove_btn.click()
+    assert "a" not in p.selected()
+    assert received[-1] == ("b",)
+
+
+def test_picker_display_clicking_empty_area_opens_popup(qtbot):
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+    from PyQt5.QtCore import QPoint, Qt
+    p = SignalPickerPopup(available_signals=["a"])
+    qtbot.addWidget(p)
+    p.show()
+    qtbot.mouseClick(p._display_frame, Qt.LeftButton, pos=QPoint(5, 5))
+    assert p.is_popup_visible() is True

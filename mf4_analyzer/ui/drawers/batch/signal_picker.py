@@ -97,18 +97,78 @@ class SignalPickerPopup(QWidget):
         self._selected: tuple[str, ...] = tuple(initial_selection)
         self._suppress_signal = False
 
-        # ----- chip display button -----
+        # ----- chip display frame (replaces single-line button) -----
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        self._display_btn = QPushButton(self)
-        self._display_btn.setObjectName("SignalPickerDisplay")
-        self._display_btn.setMinimumHeight(28)
-        self._display_btn.setStyleSheet(
-            "#SignalPickerDisplay {text-align:left; padding:4px 8px;"
-            " border:1px solid #cbd5e1; border-radius:6px; background:#fff;}"
+
+        self._display_frame = _ClickableFrame(self)
+        self._display_frame.setObjectName("SignalPickerDisplay")
+        self._display_frame.setFrameShape(QFrame.NoFrame)
+        self._display_frame.setStyleSheet(
+            "#SignalPickerDisplay {border:1px solid #cbd5e1; border-radius:6px;"
+            " background:#fff;}"
         )
-        self._display_btn.clicked.connect(self._toggle_popup)
-        outer.addWidget(self._display_btn, 1)
+        self._display_frame.setMinimumHeight(28)
+        # Width is bounded by the parent column; height grows with chip count
+        # but is capped at MAX_VISIBLE_ROWS via the internal scroll container.
+        self._display_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        # Click anywhere on the frame (including children that don't consume
+        # the press) toggles the popup. The remove × button is a QPushButton
+        # so it consumes its own press without bubbling.
+        self._display_frame.clicked.connect(self._toggle_popup)
+
+        frame_lay = QVBoxLayout(self._display_frame)
+        frame_lay.setContentsMargins(4, 4, 4, 4)
+        frame_lay.setSpacing(3)
+
+        # Chip-row sizing constants. The display frame's sizeHint must
+        # GROW with chip count (issue-1 contract) up to MAX_VISIBLE_ROWS,
+        # then plateau (further chips scroll). A QScrollArea alone does
+        # NOT propagate inner content size to the parent's sizeHint, so
+        # we explicitly drive _chip_scroll's max/min height from the
+        # current chip count in _refresh_display below.
+        self._CHIP_ROW_HEIGHT = 26   # one chip row's pixel height (incl. spacing)
+        self._CHIP_MAX_VISIBLE_ROWS = 3
+        self._CHIP_FRAME_VPADDING = 8  # frame_lay top+bottom margins (4+4)
+
+        # Scrollable inner area for chips (caps the visible height).
+        self._chip_scroll = QScrollArea(self._display_frame)
+        self._chip_scroll.setFrameShape(QFrame.NoFrame)
+        self._chip_scroll.setWidgetResizable(True)
+        self._chip_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._chip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # Hard ceiling on the scroll area's height; _refresh_display sets
+        # the soft height (= row_count * row_height) below this ceiling so
+        # _display_frame.sizeHint() honestly reflects chip count.
+        self._chip_scroll.setMaximumHeight(
+            self._CHIP_MAX_VISIBLE_ROWS * self._CHIP_ROW_HEIGHT
+        )
+
+        self._chip_host = QWidget(self._chip_scroll)
+        self._chip_layout = QVBoxLayout(self._chip_host)
+        self._chip_layout.setContentsMargins(0, 0, 0, 0)
+        self._chip_layout.setSpacing(2)
+        self._chip_layout.addStretch(1)
+        self._chip_scroll.setWidget(self._chip_host)
+        frame_lay.addWidget(self._chip_scroll, 1)
+
+        self._placeholder_label = QLabel("(未选择信号)  ▾", self._display_frame)
+        self._placeholder_label.setStyleSheet("color:#94a3b8; padding:2px 4px;")
+        # Make the placeholder transparent to mouse events so a click on it
+        # bubbles through to _ClickableFrame.mousePressEvent and opens the
+        # popup. (QLabel by default does not consume left-button presses,
+        # but it stops propagation through child→parent in some Qt builds —
+        # WA_TransparentForMouseEvents is the explicit, portable fix.)
+        self._placeholder_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        frame_lay.addWidget(self._placeholder_label)
+
+        # Likewise for the scroll viewport's empty area: chips themselves
+        # are children of _chip_host; clicks landing on host empty space
+        # should propagate up. QScrollArea.viewport() is a normal QWidget
+        # that does NOT consume left presses, so press events naturally
+        # bubble to _display_frame — no extra setup needed there.
+
+        outer.addWidget(self._display_frame, 1)
 
         # ----- popup -----
         self._popup = QFrame(self, Qt.Popup)
@@ -197,8 +257,10 @@ class SignalPickerPopup(QWidget):
         return self._selected
 
     def show_popup(self) -> None:
-        # Position popup just under the display button.
-        global_pos = self._display_btn.mapToGlobal(self._display_btn.rect().bottomLeft())
+        # Position popup just under the display frame.
+        global_pos = self._display_frame.mapToGlobal(
+            self._display_frame.rect().bottomLeft()
+        )
         self._popup.move(global_pos)
         self._popup.adjustSize()
         self._popup.show()
@@ -296,11 +358,58 @@ class SignalPickerPopup(QWidget):
             item.setHidden(bool(needle) and needle not in name)
 
     def _refresh_display(self) -> None:
-        if self._selected:
-            chips = "  ".join(f"[{s} x]" for s in self._selected)
-            self._display_btn.setText(f"{chips}  v")
-        else:
-            self._display_btn.setText("(未选择信号)  v")
+        # Tear down existing chip rows (everything except the trailing stretch).
+        while self._chip_layout.count() > 1:
+            item = self._chip_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        if not self._selected:
+            self._placeholder_label.setVisible(True)
+            self._chip_scroll.setVisible(False)
+            # Reset the scroll area's fixed height so the frame collapses
+            # to placeholder height when nothing is selected.
+            self._chip_scroll.setFixedHeight(0)
+            self.updateGeometry()
+            return
+        self._placeholder_label.setVisible(False)
+        self._chip_scroll.setVisible(True)
+        for name in self._selected:
+            chip = SignalChip(name, parent=self._chip_host)
+            chip.removeRequested.connect(self._on_chip_remove_requested)
+            # Insert before the trailing stretch.
+            self._chip_layout.insertWidget(self._chip_layout.count() - 1, chip)
+        # Drive the scroll area's height from the chip count so
+        # _display_frame.sizeHint().height() actually grows with
+        # selection up to MAX_VISIBLE_ROWS, then plateaus (further
+        # chips scroll). Without this, the QScrollArea reports a
+        # fixed minimumSizeHint and the frame's overall sizeHint stays
+        # constant — defeating the issue-1 contract test.
+        visible_rows = min(len(self._selected), self._CHIP_MAX_VISIBLE_ROWS)
+        target_h = visible_rows * self._CHIP_ROW_HEIGHT
+        self._chip_scroll.setFixedHeight(target_h)
+        self.updateGeometry()
+
+    def _on_chip_remove_requested(self, name: str) -> None:
+        if name not in self._selected:
+            return
+        sel = tuple(s for s in self._selected if s != name)
+        self._selected = sel
+        # Mirror the checkbox state in the popup so re-opening shows the
+        # current truth.
+        self._suppress_signal = True
+        try:
+            for i in range(self._list.count()):
+                item = self._list.item(i)
+                if item.data(Qt.UserRole) == name:
+                    cb = self._list.itemWidget(item)
+                    if isinstance(cb, QCheckBox) and cb.isChecked():
+                        cb.setChecked(False)
+        finally:
+            self._suppress_signal = False
+        self._refresh_display()
+        self.selectionChanged.emit(self._selected)
 
     # ------------------------------------------------------------------
     # Event handling for the popup
