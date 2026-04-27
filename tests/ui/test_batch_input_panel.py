@@ -227,6 +227,44 @@ def test_input_panel_rpm_manual_factor_switches_unit_to_custom(qtbot):
     assert p._rpm_unit_combo.currentText() == "自定义"
 
 
+def test_input_panel_rpm_row_hidden_for_fft_method(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p.set_method("fft")
+    assert p._rpm_row_host.isVisibleTo(p) is False
+    assert p._rpm_label_widget.isVisibleTo(p) is False
+
+
+def test_input_panel_rpm_row_visible_for_order_time(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p.set_method("order_time")
+    assert p._rpm_row_host.isVisibleTo(p) is True
+    assert p._rpm_label_widget.isVisibleTo(p) is True
+
+
+def test_input_panel_rpm_row_hidden_for_fft_time(qtbot):
+    """fft_time uses RPM-free spectrogram analysis (Phase 5)."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    p = InputPanel()
+    qtbot.addWidget(p)
+    p.set_method("fft_time")
+    assert p._rpm_row_host.isVisibleTo(p) is False
+
+
+def test_batch_sheet_method_change_drives_rpm_visibility(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet.show()
+    sheet.apply_method("fft")
+    assert sheet._input_panel._rpm_row_host.isVisibleTo(sheet) is False
+    sheet.apply_method("order_time")
+    assert sheet._input_panel._rpm_row_host.isVisibleTo(sheet) is True
+
+
 def test_input_panel_rpm_factor_round_trips_through_preset(qtbot):
     """Export -> apply_preset -> get_preset must preserve rpm_factor.
 

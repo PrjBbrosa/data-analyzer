@@ -156,8 +156,14 @@ class BatchSheet(QDialog):
         self._analysis_panel.methodChanged.connect(
             lambda _m: self._recompute_pipeline_status()
         )
+        # Drive RPM-row visibility from the method (init-sync below).
+        self._analysis_panel.methodChanged.connect(self._input_panel.set_method)
         self._analysis_panel.paramsChanged.connect(self._recompute_pipeline_status)
         self._output_panel.changed.connect(self._recompute_pipeline_status)
+
+        # Init-sync (per conditional-visibility-init-sync lesson): seed the
+        # RPM row before show() so it doesn't flash visible.
+        self._input_panel.set_method(self._analysis_panel.current_method())
 
         # Init-sync — seed badges with the current default state.
         self._recompute_pipeline_status()
