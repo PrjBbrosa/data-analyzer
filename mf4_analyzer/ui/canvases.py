@@ -1567,7 +1567,9 @@ class PlotCanvas(FigureCanvas):
                                 x_label, y_label, title,
                                 cmap='turbo', interp='bilinear',
                                 vmin=None, vmax=None,
-                                cbar_label='Amplitude'):
+                                cbar_label='Amplitude',
+                                amplitude_mode='amplitude',
+                                dynamic='Auto'):
         """Render a 2-D heatmap; on a compatible second call reuse the
         existing axes / image / colorbar via ``set_data`` instead of
         rebuilding (spec §4.2 / §6.2).
@@ -1595,10 +1597,33 @@ class PlotCanvas(FigureCanvas):
         dedicated canvas.
         """
         m = np.asarray(matrix, dtype=float)
-        if vmin is None:
-            vmin = float(np.nanmin(m))
-        if vmax is None:
-            vmax = float(np.nanmax(m))
+        # dB conversion if requested. Reference = current matrix peak.
+        if amplitude_mode == 'amplitude_db':
+            ref = float(np.nanmax(m))
+            if ref <= 0:
+                m_disp = np.full_like(m, fill_value=-100.0)
+            else:
+                with np.errstate(divide='ignore'):
+                    m_disp = 20.0 * np.log10(np.clip(m, 1e-12, None) / ref)
+            if dynamic == '30 dB':
+                m_disp = np.clip(m_disp, -30.0, 0.0)
+            elif dynamic == '50 dB':
+                m_disp = np.clip(m_disp, -50.0, 0.0)
+            elif dynamic == '80 dB':
+                m_disp = np.clip(m_disp, -80.0, 0.0)
+            # 'Auto' = no clip
+            m = m_disp
+            if vmin is None:
+                vmin = float(np.nanmin(m))
+            if vmax is None:
+                vmax = 0.0
+            if 'dB' not in cbar_label:
+                cbar_label = f"{cbar_label} (dB)"
+        else:
+            if vmin is None:
+                vmin = float(np.nanmin(m))
+            if vmax is None:
+                vmax = float(np.nanmax(m))
 
         existing_ax = getattr(self, '_heatmap_ax', None)
         existing_im = getattr(self, '_heatmap_im', None)
