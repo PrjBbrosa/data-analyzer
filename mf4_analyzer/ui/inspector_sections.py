@@ -1194,6 +1194,32 @@ class OrderContextual(QWidget):
         self.combo_nfft.addItems(['512', '1024', '2048', '4096', '8192'])
         self.combo_nfft.setCurrentText('1024')
         fl.addRow("FFT点数:", _fit_field(self.combo_nfft))
+
+        # --- Display (Wave 3 / Task 3.2): HEAD-parity dB rendering ---
+        # combo_amp_mode toggles the heatmap colour scale between linear
+        # amplitude and 20*log10 dB; combo_dynamic picks the dB range
+        # (30/50/80 dB or Auto from data span). Default is Amplitude dB +
+        # 30 dB to match HEAD's order-time render. The Linear/dB toggle
+        # disables the dynamic-range combo when dB is not in use, since
+        # the value would have no rendering effect.
+        self.combo_amp_mode = QComboBox()
+        self.combo_amp_mode.addItems(['Amplitude dB', 'Amplitude'])
+        self.combo_amp_mode.setCurrentText('Amplitude dB')
+        fl.addRow(
+            "模式:",
+            _fit_field(self.combo_amp_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
+        self.combo_dynamic = QComboBox()
+        self.combo_dynamic.addItems(['30 dB', '50 dB', '80 dB', 'Auto'])
+        self.combo_dynamic.setCurrentText('30 dB')
+        fl.addRow(
+            "动态范围:",
+            _fit_field(self.combo_dynamic, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
+        self.combo_amp_mode.currentTextChanged.connect(
+            lambda txt: self.combo_dynamic.setEnabled(txt == 'Amplitude dB')
+        )
+
         # R3 B: pin label widths and cap field widths so long Chinese
         # labels (e.g. "阶次分辨率:") never wrap or get elided when the
         # Inspector pane is narrow. _enforce_label_widths walks every form
@@ -1330,6 +1356,48 @@ class OrderContextual(QWidget):
             time_res=self.spin_time_res.value(),
             nfft=int(self.combo_nfft.currentText()),
         )
+
+    # --- Wave 3 / Task 3.2: test-friendly param accessors ---
+    # current_params/apply_params extend get_params/_apply_preset with the
+    # newer Amplitude-dB display toggles. Existing callers (main_window,
+    # batch presets) keep using get_params/_collect_preset; main_window's
+    # _render_order_time additionally consults current_params() for the
+    # display block (amplitude_mode / dynamic) before invoking
+    # plot_or_update_heatmap.
+    def current_params(self):
+        p = self.get_params()
+        p['amplitude_mode'] = self.combo_amp_mode.currentText()
+        p['dynamic'] = self.combo_dynamic.currentText()
+        return p
+
+    def apply_params(self, d):
+        if 'max_order' in d:
+            try:
+                self.spin_mo.setValue(int(d['max_order']))
+            except (TypeError, ValueError):
+                pass
+        if 'order_res' in d:
+            try:
+                self.spin_order_res.setValue(float(d['order_res']))
+            except (TypeError, ValueError):
+                pass
+        if 'time_res' in d:
+            try:
+                self.spin_time_res.setValue(float(d['time_res']))
+            except (TypeError, ValueError):
+                pass
+        if 'nfft' in d:
+            i = self.combo_nfft.findText(str(d['nfft']))
+            if i >= 0:
+                self.combo_nfft.setCurrentIndex(i)
+        for k, combo in (
+            ('amplitude_mode', self.combo_amp_mode),
+            ('dynamic', self.combo_dynamic),
+        ):
+            if k in d:
+                i = combo.findText(str(d[k]))
+                if i >= 0:
+                    combo.setCurrentIndex(i)
 
     def target_order(self):
         return self.spin_to.value()

@@ -1358,3 +1358,39 @@ def test_fft_render_honors_axis_toggles(qtbot):
     axes = win.canvas_fft.fig.axes
     assert 'dB' in axes[0].get_ylabel()
     assert 'dB' not in axes[1].get_ylabel()
+
+
+# ---- Wave 3 / Task 3.2: OrderContextual dB display controls ----
+
+def test_order_contextual_has_dB_controls(qapp):
+    """Plan Task 3.2.1: OrderContextual must expose amp_mode + dynamic combos
+    with HEAD-parity defaults (Amplitude dB, 30 dB)."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    w = OrderContextual()
+    assert hasattr(w, 'combo_amp_mode')
+    assert hasattr(w, 'combo_dynamic')
+    assert w.combo_amp_mode.currentText() == 'Amplitude dB'
+    assert w.combo_dynamic.currentText() == '30 dB'
+
+
+def test_order_contextual_dynamic_disabled_in_linear(qapp):
+    """Plan Task 3.2.1: dynamic-range combo only meaningful in dB mode."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    w = OrderContextual()
+    w.combo_amp_mode.setCurrentText('Amplitude')
+    assert w.combo_dynamic.isEnabled() is False
+    w.combo_amp_mode.setCurrentText('Amplitude dB')
+    assert w.combo_dynamic.isEnabled() is True
+
+
+def test_order_contextual_amp_mode_in_params(qapp):
+    """Plan Task 3.2.1: current_params() exposes amplitude_mode + dynamic and
+    apply_params() round-trips the same keys."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    w = OrderContextual()
+    w.combo_amp_mode.setCurrentText('Amplitude')
+    p = w.current_params()
+    assert p.get('amplitude_mode') == 'Amplitude'
+    w.apply_params({'amplitude_mode': 'Amplitude dB', 'dynamic': '50 dB'})
+    assert w.combo_amp_mode.currentText() == 'Amplitude dB'
+    assert w.combo_dynamic.currentText() == '50 dB'

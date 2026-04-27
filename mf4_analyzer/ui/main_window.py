@@ -1458,6 +1458,18 @@ class MainWindow(QMainWindow):
             f"时间-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} "
             f"(分辨率:{result.params.order_res})"
         )
+        # Wave 3 / Task 3.2: pull HEAD-parity display knobs from the
+        # OrderContextual. Inspector exposes amplitude_mode ∈
+        # {'Amplitude dB', 'Amplitude'} and dynamic ∈
+        # {'30 dB', '50 dB', '80 dB', 'Auto'}; canvas expects the
+        # internal token 'amplitude_db' / 'amplitude' for the first.
+        ctx = self.inspector.order_ctx
+        order_params = ctx.current_params() if hasattr(ctx, 'current_params') else {}
+        amp_mode_token = (
+            'amplitude_db'
+            if order_params.get('amplitude_mode', 'Amplitude dB') == 'Amplitude dB'
+            else 'amplitude'
+        )
         # `result.amplitude` is (frames, orders) → transpose so imshow
         # gets (rows=Y_orders, cols=X_times); x_extent=times, y_extent=orders.
         self.canvas_order.plot_or_update_heatmap(
@@ -1470,6 +1482,8 @@ class MainWindow(QMainWindow):
             cmap='turbo',
             interp='bilinear',
             cbar_label='Amplitude',
+            amplitude_mode=amp_mode_token,
+            dynamic=order_params.get('dynamic', '30 dB'),
         )
         xt, yt = self.inspector.top.tick_density()
         self.canvas_order.set_tick_density(xt, yt)
