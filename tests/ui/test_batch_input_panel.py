@@ -109,21 +109,22 @@ def test_pipeline_strip_recomputes_on_input_changes(qtbot):
 
 
 def test_run_button_disabled_until_runnable(qtbot, tmp_path):
-    """OK 按钮在未达到可运行配置时必须 disabled (ultrareview bug_018)."""
-    from PyQt5.QtWidgets import QDialogButtonBox
+    """运行按钮在未达到可运行配置时必须 disabled (ultrareview bug_018)."""
     from mf4_analyzer.ui.drawers.batch import BatchSheet
     sheet = BatchSheet(None, files={})
     qtbot.addWidget(sheet)
-    ok = sheet._buttons.button(QDialogButtonBox.Ok)
+    # W6 footer no longer uses QDialogButtonBox; the gated button is the
+    # bare 运行 QPushButton living on the sheet as ``_btn_run``.
+    run_btn = sheet._btn_run
     # Fresh dialog → not runnable
-    assert ok.isEnabled() is False
+    assert run_btn.isEnabled() is False
     # Configure to runnable
     sheet._input_panel._file_list.add_loaded_file(0, "a.mf4", frozenset({"sig"}))
     sheet._input_panel._signal_picker.set_selected(("sig",))
     sheet._analysis_panel.set_method("fft")
     sheet._output_panel.apply_directory(str(tmp_path / "out"))
     qtbot.wait(20)
-    assert ok.isEnabled() is True
+    assert run_btn.isEnabled() is True
 
 
 def test_get_preset_includes_time_range(qtbot, tmp_path):

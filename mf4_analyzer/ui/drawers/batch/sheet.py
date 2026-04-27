@@ -1,23 +1,32 @@
-"""BatchSheet — pipeline-style batch dialog (Wave 5: full detail panels).
+"""BatchSheet — pipeline-style batch dialog (Wave 6: end-to-end runnable).
 
-The toolbar buttons are the W4 placeholders (W7 wires them). The pipeline
-strip and three detail panels are wired into ``_recompute_pipeline_status``
-which is called once at __init__ end (per the conditional-visibility-init-sync
-lesson) so the badge state is correct before ``show()``.
+The pipeline strip and three detail panels are wired into
+``_recompute_pipeline_status`` which is called once at __init__ end (per
+the conditional-visibility-init-sync lesson) so the badge state is
+correct before ``show()``.
+
+Wave 6 adds the bottom task list, the ``BatchRunnerThread`` lifecycle,
+lock/unlock during a run, and a closeEvent confirmation that re-routes
+through the cancel path. **Unlock is bound to ``QThread.finished``**, not
+``finished_with_result`` (spec §6.2): even if ``runner.run()`` raises
+before the result signal would have fired, ``QThread.finished`` still
+arrives via Qt and the dialog re-enables.
 """
 from __future__ import annotations
 
 import dataclasses
 
 from PyQt5.QtWidgets import (
-    QDialog, QDialogButtonBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget,
+    QDialog, QHBoxLayout, QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
-from ....batch import AnalysisPreset, BatchOutput
+from ....batch import AnalysisPreset, BatchOutput, BatchRunner
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
 from .output_panel import OutputPanel
 from .pipeline_strip import PipelineStrip
+from .runner_thread import BatchRunnerThread
+from .task_list import TaskListWidget
 
 
 _METHOD_LABELS: dict[str, str] = {
@@ -36,6 +45,12 @@ class BatchSheet(QDialog):
         self.resize(1080, 760)
         self._files = files or {}
         self._current_preset = current_preset
+
+        # Run-state bookkeeping (W6).
+        self._running: bool = False
+        self._runner_thread: BatchRunnerThread | None = None
+        self._last_result = None
+        self._close_pending: bool = False
 
         root = QVBoxLayout(self)
 
@@ -66,18 +81,39 @@ class BatchSheet(QDialog):
         detail_lay.addWidget(self._output_panel, 1)
         root.addWidget(detail, 1)
 
-        # Footer. Hoist the QDialogButtonBox so _recompute_pipeline_status
-        # can toggle the Ok ("运行") button against is_runnable() — without
-        # this gate, an empty config + Run falls through to the legacy
-        # BatchRunner._resolve_files fallback and processes ALL loaded
-        # MainWindow files × every channel (ultrareview bug_018).
-        self._buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
-        )
-        self._buttons.button(QDialogButtonBox.Ok).setText("运行")
-        self._buttons.accepted.connect(self.accept)
-        self._buttons.rejected.connect(self.reject)
-        root.addWidget(self._buttons)
+        # W6: Task list (collapsible, below detail row, above footer).
+        self._task_list = TaskListWidget(self)
+        root.addWidget(self._task_list)
+
+        # Footer (W6): hand-rolled button row so we can swap layouts between
+        # idle ([Cancel] [运行]) and running ([中断]) modes. The Ok button is
+        # gated on is_runnable() in idle mode (ultrareview bug_018) — without
+        # the gate, an empty config + Run would have fallen through to the
+        # legacy BatchRunner._resolve_files fallback and processed ALL loaded
+        # MainWindow files × every channel.
+        self._footer_host = QWidget(self)
+        self._footer_lay = QHBoxLayout(self._footer_host)
+        self._footer_lay.setContentsMargins(0, 0, 0, 0)
+        self._footer_lay.setSpacing(8)
+        self._footer_lay.addStretch(1)
+
+        # Idle-mode buttons
+        self._btn_cancel = QPushButton("Cancel", self._footer_host)
+        self._btn_cancel.clicked.connect(self.reject)
+        self._footer_lay.addWidget(self._btn_cancel)
+
+        self._btn_run = QPushButton("运行", self._footer_host)
+        self._btn_run.setDefault(True)
+        self._btn_run.clicked.connect(self._on_run_clicked)
+        self._footer_lay.addWidget(self._btn_run)
+
+        # Running-mode button (hidden until a run starts)
+        self._btn_abort = QPushButton("中断", self._footer_host)
+        self._btn_abort.clicked.connect(self._on_cancel_clicked)
+        self._btn_abort.setVisible(False)
+        self._footer_lay.addWidget(self._btn_abort)
+
+        root.addWidget(self._footer_host)
 
         # Wire status recomputation. Each signal is independent — we wire all
         # of them so that any sub-control mutation flows into a single
@@ -158,11 +194,14 @@ class BatchSheet(QDialog):
                 parts.append("PNG")
             self.strip.set_stage(2, "ok", "+".join(parts))
 
-        # Gate the Run (Ok) button on is_runnable() so an empty/partial
+        # Gate the Run button on is_runnable() so an empty/partial
         # config cannot reach BatchRunner's legacy fallback (ultrareview
         # bug_018). The __init__'s seed call to this method correctly
-        # leaves the OK button disabled at first show.
-        self._buttons.button(QDialogButtonBox.Ok).setEnabled(self.is_runnable())
+        # leaves the run button disabled at first show. While a run is in
+        # progress, the run button is hidden behind the 中断 swap, so we
+        # only adjust enabled-state in idle mode.
+        if not self._running:
+            self._btn_run.setEnabled(self.is_runnable())
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -271,6 +310,208 @@ class BatchSheet(QDialog):
     # ------------------------------------------------------------------
     def _preset_name(self) -> str:
         return "batch"
+
+    # ------------------------------------------------------------------
+    # W6: Run / cancel / lock-unlock
+    # ------------------------------------------------------------------
+    def _build_dry_run_preview(self) -> list[tuple[str, str, str]]:
+        """Compute the dry-run task list from UI state ONLY.
+
+        Spec §3.5 / W6 invariant: never call ``BatchRunner._expand_tasks``
+        — that path runs ``_resolve_files`` which would ``loader(path)``
+        full-load disk files on the UI thread and freeze the dialog. Per
+        spec §3.2 disk files use the cached probe set on the file row.
+
+        We append a row even when a signal is missing from a file. The
+        runner will emit ``task_failed`` with ``missing signal: …`` at run
+        time — UI does not pre-judge.
+        """
+        method = self.method() or ""
+        signals = self.selected_signals()
+        rows: list[tuple[str, str, str]] = []
+
+        # Loaded files (file_ids → FileData via self._files)
+        for fid in self._input_panel.file_ids():
+            fd = self._files.get(fid)
+            label = getattr(fd, "filename", None) or str(fid)
+            for sig in signals:
+                rows.append((str(label), str(sig), str(method)))
+
+        # Disk-only paths (cached probe set lives on the FileListWidget row).
+        fl = self._input_panel._file_list
+        for path in self._input_panel.file_paths():
+            row = fl._rows.get(path)
+            label = getattr(row, "label", None) or path
+            # Strip any state badge ("  …" / "  ⚠") that _render_row appends.
+            for trailing in ("  …", "  ⚠"):
+                if label.endswith(trailing):
+                    label = label[: -len(trailing)]
+            for sig in signals:
+                rows.append((str(label), str(sig), str(method)))
+
+        return rows
+
+    def _outputs_per_task(self) -> int:
+        return int(bool(self.export_data())) + int(bool(self.export_image()))
+
+    def _on_run_clicked(self) -> None:
+        """Idle-mode 运行 handler — synchronously locks the dialog and starts
+        the runner thread.
+
+        Reentrance guarantee: ``self._running = True`` and disabling the
+        Run button happens **before** ``thread.start()`` so a fast double-
+        click cannot launch two threads (W6 invariant 2).
+        """
+        if self._running:
+            return
+        if not self.is_runnable():
+            return
+
+        # Build the dry-run preview from UI state (no disk loads).
+        tasks = self._build_dry_run_preview()
+        self._task_list.apply_dry_run(tasks, self._outputs_per_task())
+
+        # Synchronous lock: order matters.
+        self._running = True
+        self._btn_run.setEnabled(False)
+        self.lock_editing()
+        self._task_list.on_run_started()
+
+        # Build runner. We pass the parent's loader contract (BatchRunner
+        # default loader walks DataLoader.load_mf4) — main_window owns the
+        # file map; here we only have the dict already supplied to __init__.
+        runner = BatchRunner(self._files)
+        preset = self.get_preset()
+        output_dir = self.output_dir()
+
+        thread = BatchRunnerThread(runner, preset, output_dir, parent=self)
+        self._runner_thread = thread
+        # AutoConnection is correct in production (live event loop). Both
+        # signals are object-tagged so qtbot can connect bare callables.
+        thread.progress.connect(self._on_runner_progress)
+        thread.finished_with_result.connect(self._on_runner_finished_with_result)
+        thread.finished.connect(self._on_thread_finished)
+        thread.start()
+
+    def _on_cancel_clicked(self) -> None:
+        """Running-mode 中断 handler — sets the cancel token and disables
+        the abort button so it cannot be clicked twice."""
+        if not self._running or self._runner_thread is None:
+            return
+        self._btn_abort.setEnabled(False)
+        self._btn_abort.setText("正在停止…")
+        self._runner_thread.request_cancel()
+
+    def _on_runner_progress(self, event) -> None:
+        # Forward to the task list (updates icons + progress bar + ETA).
+        self._task_list.on_event(event)
+
+    def _on_runner_finished_with_result(self, result) -> None:
+        """Stash the BatchRunResult; the actual unlock happens in
+        ``_on_thread_finished`` (bound to ``QThread.finished``) per spec
+        §6.2 unlock contract."""
+        self._last_result = result
+
+    def _on_thread_finished(self) -> None:
+        """Bound to ``QThread.finished`` — guaranteed to fire by Qt even if
+        ``runner.run()`` raised before ``finished_with_result`` would have
+        emitted (W6 invariant 1).
+        """
+        result = self._last_result
+        self._task_list.on_run_finished(result)
+        self.unlock_editing()
+        self._show_result_toast(result)
+
+        # Clean up thread reference.
+        thread = self._runner_thread
+        self._runner_thread = None
+        if thread is not None:
+            try:
+                thread.deleteLater()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # If the user requested close mid-run, complete it now.
+        if self._close_pending:
+            self._close_pending = False
+            self.close()
+
+    def _show_result_toast(self, result) -> None:
+        """Inline status toast on run completion.
+
+        Only fired when the sheet is currently shown. Headless unit tests
+        never call ``show()`` so they bypass the toast entirely (avoids a
+        Windows offscreen access violation when the modal opens nested
+        under ``qtbot.waitUntil``). A richer toast widget belongs to W7.
+        """
+        if result is None:
+            return
+        if not self.isVisible():
+            return
+        status = getattr(result, "status", "") or ""
+        if not status:
+            return
+        if status == "done":
+            QMessageBox.information(self, "批处理完成", "全部任务已完成。")
+        elif status == "partial":
+            blocked = getattr(result, "blocked", []) or []
+            QMessageBox.warning(
+                self, "批处理部分完成",
+                f"完成，共 {len(blocked)} 个失败任务。",
+            )
+        elif status == "cancelled":
+            QMessageBox.information(self, "批处理已取消", "运行已被用户取消。")
+        elif status == "blocked":
+            blocked = getattr(result, "blocked", []) or []
+            reason = "; ".join(blocked) if blocked else "未知原因"
+            QMessageBox.warning(self, "批处理无法运行", f"原因：{reason}")
+
+    def lock_editing(self) -> None:
+        """Disable detail panels + swap footer to running mode."""
+        self._input_panel.setEnabled(False)
+        self._analysis_panel.setEnabled(False)
+        self._output_panel.setEnabled(False)
+        self._btn_cancel.setVisible(False)
+        self._btn_run.setVisible(False)
+        self._btn_abort.setEnabled(True)
+        self._btn_abort.setText("中断")
+        self._btn_abort.setVisible(True)
+
+    def unlock_editing(self) -> None:
+        """Re-enable detail panels + swap footer back to idle mode.
+
+        Always called from ``_on_thread_finished`` (QThread.finished) so
+        the dialog can never get stuck locked.
+        """
+        self._running = False
+        self._input_panel.setEnabled(True)
+        self._analysis_panel.setEnabled(True)
+        self._output_panel.setEnabled(True)
+        self._btn_abort.setVisible(False)
+        self._btn_cancel.setVisible(True)
+        self._btn_run.setVisible(True)
+        # Re-evaluate Run-button enabled state against current config.
+        self._btn_run.setEnabled(self.is_runnable())
+
+    def closeEvent(self, event):  # noqa: N802 (Qt API)
+        """If a run is in progress, prompt for confirmation and route to
+        the cancel path; the actual close happens once
+        ``_on_thread_finished`` clears ``_running`` (W6 invariant 4).
+        """
+        if self._running:
+            choice = QMessageBox.question(
+                self, "确认关闭",
+                "批量任务正在运行，关闭将取消剩余任务。要继续吗？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if choice == QMessageBox.Yes:
+                self._close_pending = True
+                if self._runner_thread is not None:
+                    self._runner_thread.request_cancel()
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def get_preset(self) -> AnalysisPreset:
         # Merge the user-typed time_range field into params so
