@@ -35,6 +35,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [action-button-on-group-title-needs-qframe-header](pyqt-ui/2026-04-26-action-button-on-group-title-needs-qframe-header.md) [groupbox][title][header][action-button][layout][inspector][wa-styledbackground] — Use QFrame[label+stretch+button] for inline-action titles; pair every wrapper QFrame with a QSS objectName rule or QFrame{bg:#fff} re-polishes white.
 - [inspector-content-max-width-and-tinted-card-bleed](pyqt-ui/2026-04-26-inspector-content-max-width-and-tinted-card-bleed.md) [layout][inspector][splitter][qframe][wa-styledbackground][max-width][rework-risk] — Splitter-pane content must cap maxWidth + left-anchor; wrapper QFrames need paired QSS; setFixedSize on tool buttons needs scoped QSS to escape global QPushButton sizing.
 - [popover-accept-deactivate-race](pyqt-ui/2026-04-26-popover-accept-deactivate-race.md) [qdialog][accept][reject][windowdeactivate][race][idempotency][popover][focus-out][offscreen] — QDialog.done is not idempotent; auto-reject on WindowDeactivate after accept silently flips result. Add _is_closing guard in accept/reject and drive the race manually in offscreen tests.
+- [popup-clearfocus-needs-strongfocus-on-popup-itself](pyqt-ui/2026-04-27-popup-clearfocus-needs-strongfocus-on-popup-itself.md) [popup][focus-out][clearfocus][focus-policy][testing][offscreen] — QWidget.clearFocus() is a no-op when the widget does not own focus; testable focus-out popups must give the popup frame StrongFocus and setFocus(popup) before delegating to inner controls.
 
 ## refactor
 
