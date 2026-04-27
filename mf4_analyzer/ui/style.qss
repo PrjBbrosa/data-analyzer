@@ -600,20 +600,42 @@ QWidget#chartToolbar QPushButton[role="chart-choice"]:checked {
 }
 
 QFrame#chartToolbarSep {
-    margin: 6px 8px;
-    background-color: #cbd5e1;
+    margin-top: 6px;
+    margin-bottom: 6px;
+    margin-left: 12px;
+    margin-right: 12px;
+    background-color: #94a3b8;
     border: none;
 }
 
 QLabel#chartHint {
     padding: 0 12px;
-    color: #64748b;
-    font-size: 11px;
+    color: #374151;
+    font-size: 12px;
     line-height: 14px;
     background-color: transparent;
 }
 
-QLabel#chartHint b {
-    color: #334155;
-    font-weight: 700;
+/* Bottom hint bar — sits beneath the canvas inside each chart card.
+ * Two layers:
+ *   #chartHintPersistent (left, gray) always-on shortcut reminders
+ *   #chartHintContext    (right, blue) mode-driven contextual prompts
+ * The bar itself has a soft tinted backdrop and a hairline top edge so it
+ * reads as a quiet status footer rather than another piece of toolbar. */
+QFrame#chartHintBar {
+    background-color: #f8fafc;
+    border-top: 1px solid #e2e8f0;
+}
+QFrame#chartHintBar QLabel#chartHintPersistent {
+    color: #64748b;
+    font-size: 11px;
+    padding: 2px 8px;
+    background-color: transparent;
+}
+QFrame#chartHintBar QLabel#chartHintContext {
+    color: #2563eb;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    background-color: transparent;
 }

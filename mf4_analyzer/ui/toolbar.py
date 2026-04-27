@@ -1,7 +1,9 @@
 """Top three-segment toolbar: file actions · mode switcher · canvas actions."""
 from PyQt5.QtCore import QSize, pyqtSignal
 from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QPushButton, QWidget
+from PyQt5.QtWidgets import (
+    QButtonGroup, QFrame, QHBoxLayout, QPushButton, QSizePolicy, QWidget,
+)
 
 from .icons import Icons
 
@@ -14,9 +16,6 @@ class Toolbar(QWidget):
     batch_requested = pyqtSignal()
     # Center segment
     mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
-    # Right segment
-    cursor_reset_requested = pyqtSignal()
-    axis_lock_requested = pyqtSignal(object)  # anchor QPushButton for popover
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -24,13 +23,7 @@ class Toolbar(QWidget):
         lay.setContentsMargins(10, 2, 10, 2)
         lay.setSpacing(8)
 
-        left = QHBoxLayout()
-        left.setSpacing(7)
-        center = QHBoxLayout()
-        center.setSpacing(0)
-        right = QHBoxLayout()
-        right.setSpacing(7)
-
+        # ── left group ──────────────────────────────────────────────────────
         self.btn_add = QPushButton("添加文件", self)
         self.btn_add.setIcon(Icons.add_file(QColor("#ffffff")))
         self.btn_add.setProperty("role", "primary")
@@ -40,6 +33,8 @@ class Toolbar(QWidget):
         self.btn_export.setIcon(Icons.export())
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.export())
+
+        # ── center mode segment ─────────────────────────────────────────────
         self.btn_mode_time = QPushButton("时域", self)
         self.btn_mode_time.setIcon(Icons.mode_time())
         self.btn_mode_fft = QPushButton("FFT", self)
@@ -48,24 +43,27 @@ class Toolbar(QWidget):
         self.btn_mode_fft_time.setIcon(Icons.mode_fft_time())
         self.btn_mode_order = QPushButton("阶次", self)
         self.btn_mode_order.setIcon(Icons.mode_order())
-        self.btn_cursor_reset = QPushButton("", self)
-        self.btn_cursor_reset.setIcon(Icons.cursor_reset())
-        self.btn_cursor_reset.setToolTip("重置游标")
-        self.btn_cursor_reset.setProperty("role", "tool")
-        self.btn_axis_lock = QPushButton("", self)
-        self.btn_axis_lock.setIcon(Icons.axis_lock())
-        self.btn_axis_lock.setToolTip("轴锁定")
-        self.btn_axis_lock.setProperty("role", "tool")
 
         for b in (self.btn_add, self.btn_edit, self.btn_export, self.btn_batch,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
-                  self.btn_mode_order,
-                  self.btn_cursor_reset, self.btn_axis_lock):
+                  self.btn_mode_order):
             b.setIconSize(QSize(16, 16))
 
+        # left layout
+        left = QHBoxLayout()
+        left.setSpacing(10)
         for b in (self.btn_add, self.btn_edit, self.btn_export, self.btn_batch):
             left.addWidget(b)
 
+        # Wrap left in a QWidget so it has a concrete sizeHint that the
+        # stretch arithmetic can balance against.
+        left_widget = QWidget(self)
+        left_widget.setLayout(left)
+        left_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+
+        # center layout inside a framed segment widget
+        center = QHBoxLayout()
+        center.setSpacing(0)
         segment_frame = QFrame(self)
         segment_frame.setObjectName("modeSegment")
         segment_frame.setLayout(center)
@@ -80,18 +78,38 @@ class Toolbar(QWidget):
             self._mode_group.addButton(b)
             center.addWidget(b)
 
-        right.addWidget(self.btn_cursor_reset)
-        right.addWidget(self.btn_axis_lock)
+        # ── toolbar layout: left-widget | stretch | segment | stretch | mirror ──
+        # A mirror spacer of the same fixed width as left_widget ensures the
+        # segment_frame sits exactly at the horizontal midpoint.
+        mirror = QWidget(self)
+        mirror.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
 
-        lay.addLayout(left)
+        lay.addWidget(left_widget)
         lay.addStretch(1)
         lay.addWidget(segment_frame)
         lay.addStretch(1)
-        lay.addLayout(right)
+        lay.addWidget(mirror)
 
         self.btn_mode_time.setChecked(True)
         self._current_mode = 'time'
+
+        # Keep mirror width in sync with left_widget after layout is settled.
+        self._left_widget = left_widget
+        self._mirror = mirror
         self._wire()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_mirror()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_mirror()
+
+    def _sync_mirror(self):
+        """Keep the right-side mirror spacer the same width as left_widget."""
+        w = self._left_widget.sizeHint().width()
+        self._mirror.setFixedWidth(max(w, 1))
 
     def _wire(self):
         self.btn_add.clicked.connect(self.file_add_requested)
@@ -103,8 +121,6 @@ class Toolbar(QWidget):
                        ('fft_time', self.btn_mode_fft_time),
                        ('order', self.btn_mode_order)]:
             b.clicked.connect(lambda _=False, k=key: self._set_mode(k))
-        self.btn_cursor_reset.clicked.connect(self.cursor_reset_requested)
-        self.btn_axis_lock.clicked.connect(lambda: self.axis_lock_requested.emit(self.btn_axis_lock))
 
     def _set_mode(self, mode):
         if mode == self._current_mode:
@@ -126,9 +142,6 @@ class Toolbar(QWidget):
         self.btn_edit.setEnabled(has_file)
         self.btn_export.setEnabled(has_file)
         self.btn_batch.setEnabled(has_file)
-        is_time = (mode == 'time')
-        self.btn_cursor_reset.setEnabled(has_file and is_time)
-        self.btn_axis_lock.setEnabled(has_file and is_time)
 
     def current_mode(self):
         return self._current_mode

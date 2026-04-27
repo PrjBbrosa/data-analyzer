@@ -1340,8 +1340,14 @@ class FFTTimeContextual(QWidget):
         )
         fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_overlap = QSpinBox()
-        self.spin_overlap.setRange(0, 90)
-        self.spin_overlap.setValue(75)
+        # HEAD-style smoothness defaults: 88% (closest integer to the 87.5%
+        # spectrogram-smoothness target documented in the FFT-vs-Time
+        # integration plan) with a 95% ceiling so users can dial up the
+        # COLA-safe high-overlap region. The QSpinBox stays integer-percent
+        # so existing presets (overlap=75, 50) and getter/setter int paths
+        # remain untouched.
+        self.spin_overlap.setRange(0, 95)
+        self.spin_overlap.setValue(88)
         self.spin_overlap.setSuffix(" %")
         fl.addRow("重叠:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.chk_remove_mean = QCheckBox("去均值")

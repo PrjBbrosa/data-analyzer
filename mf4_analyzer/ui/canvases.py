@@ -1275,8 +1275,12 @@ class SpectrogramCanvas(FigureCanvas):
             origin='lower',
             aspect='auto',
             extent=extent,
+            # HEAD-style smoothness: bilinear is a pure-display change and
+            # has no measurable cost vs 'nearest' in matplotlib's imshow
+            # path. DSP output is unchanged — only the on-screen pixel
+            # interpolation between frame/bin centres is smoothed.
             cmap=cmap,
-            interpolation='nearest',
+            interpolation='bilinear',
             vmin=vmin,
             vmax=vmax,
         )

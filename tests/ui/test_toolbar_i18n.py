@@ -35,13 +35,17 @@ def test_pan_zoom_save_have_chinese_tooltips(qtbot):
     assert '重置' in found.get('home', '')
 
 
-def test_back_forward_removed(qtbot):
+def test_back_forward_retained_with_chinese_tooltips(qtbot):
+    """Back and Forward are now restored per user request (2026-04-27).
+    They must be present and carry Chinese tooltips."""
     from mf4_analyzer.ui._toolbar_i18n import apply_chinese_toolbar_labels
     toolbar = _build_toolbar(qtbot)
     apply_chinese_toolbar_labels(toolbar)
-    keys = {act.data() for act in toolbar.actions()}
-    assert 'back' not in keys
-    assert 'forward' not in keys
+    found = {act.data(): act.toolTip() for act in toolbar.actions() if act.data()}
+    assert 'back' in found, "Back (上一视图) action must be retained"
+    assert 'forward' in found, "Forward (下一视图) action must be retained"
+    assert '上一视图' in found.get('back', '')
+    assert '下一视图' in found.get('forward', '')
 
 
 def test_act_data_preserved_for_find_action(qtbot):

@@ -1062,3 +1062,62 @@ def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     assert bar._load_btns[1].text() == 'Custom A'
     bar._reset_to_default(1)
     assert bar._load_btns[1].text() == '配置1'
+
+
+# ---- HEAD-style smoothness defaults for FFT-vs-Time spectrogram ----
+#
+# Two coupled changes raise spectrogram visual smoothness without a DSP
+# rewrite:
+#   1. FFTTimeContextual.spin_overlap default 75% → 88% (closest integer
+#      to the 87.5% target on a QSpinBox-percent control), max 90% → 95%.
+#      Doubling the frame count keeps memory inside the existing chunk
+#      budget (see signal-processing/2026-04-26-batched-fft-transient-…).
+#   2. SpectrogramCanvas.plot_result imshow uses interpolation='bilinear'
+#      instead of 'nearest' — pure display-side smoothing, no DSP impact.
+
+def test_fft_time_overlap_default_and_max_target_smooth_spectrogram(qtbot):
+    """The FFT-vs-Time overlap spinbox must default to 88% (the integer
+    realisation of the 87.5% smoothness target) and allow up to 95%.
+    """
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    # Default value — 88% is the closest QSpinBox integer to the 87.5%
+    # smoothness target documented in the FFT-vs-Time integration plan.
+    assert ctx.spin_overlap.value() == 88, (
+        f"FFTTimeContextual.spin_overlap default = "
+        f"{ctx.spin_overlap.value()}; expected 88 (87.5% target)."
+    )
+    # Maximum — must be raised to 95 so users can pick the COLA-safe
+    # high-overlap region for visually smooth spectrograms.
+    assert ctx.spin_overlap.maximum() == 95, (
+        f"FFTTimeContextual.spin_overlap.maximum() = "
+        f"{ctx.spin_overlap.maximum()}; expected 95."
+    )
+
+
+def test_spectrogram_canvas_uses_bilinear_interpolation(qtbot):
+    """SpectrogramCanvas.plot_result must build the imshow with
+    interpolation='bilinear' so the FFT-vs-Time render is visually
+    smooth without any DSP-side change.
+    """
+    import numpy as np
+    from mf4_analyzer.signal.spectrogram import (
+        SpectrogramParams, SpectrogramResult,
+    )
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+    canvas = SpectrogramCanvas()
+    qtbot.addWidget(canvas)
+    result = SpectrogramResult(
+        times=np.array([0.0, 0.1, 0.2]),
+        frequencies=np.array([0.0, 50.0, 100.0]),
+        amplitude=np.ones((3, 3), dtype=np.float32),
+        params=SpectrogramParams(fs=200.0, nfft=8),
+        channel_name='demo',
+    )
+    canvas.plot_result(result, amplitude_mode='amplitude')
+    im = canvas._ax_spec.images[0]
+    assert im.get_interpolation() == 'bilinear', (
+        f"SpectrogramCanvas imshow interpolation = "
+        f"{im.get_interpolation()!r}; expected 'bilinear'."
+    )

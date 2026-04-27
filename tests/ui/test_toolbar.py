@@ -21,13 +21,13 @@ def test_toolbar_enabled_matrix(qapp):
     tb = Toolbar()
     tb.set_enabled_for_mode('time', has_file=True)
     assert tb.btn_batch.isEnabled()
-    assert tb.btn_cursor_reset.isEnabled()
-    assert tb.btn_axis_lock.isEnabled()
+    assert tb.btn_edit.isEnabled()
+    assert tb.btn_export.isEnabled()
     tb.set_enabled_for_mode('fft', has_file=True)
-    assert not tb.btn_cursor_reset.isEnabled()
-    assert not tb.btn_axis_lock.isEnabled()
+    assert tb.btn_batch.isEnabled()
     tb.set_enabled_for_mode('time', has_file=False)
     assert not tb.btn_edit.isEnabled()
+    assert not tb.btn_export.isEnabled()
     assert not tb.btn_batch.isEnabled()
 
 

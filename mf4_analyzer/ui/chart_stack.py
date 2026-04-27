@@ -100,6 +100,7 @@ class CursorPill(QFrame):
         super().mouseReleaseEvent(e)
 
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+import qtawesome as qta
 
 from .canvases import PlotCanvas, SpectrogramCanvas, TimeDomainCanvas
 from .icons import Icons
@@ -108,12 +109,46 @@ from .widgets import StatsStrip
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
 
-# Two-line hint strings shown in the right-hand region of the chart toolbar.
+# Hint strings shown in the chart toolbar.
 # Key = current toolbar.mode ('pan' | 'zoom' | '' for idle).
+# Each value is a (title, detail) tuple: title shown inline, detail in tooltip.
 _TOOL_HINTS = {
-    'pan': "<b>移动曲线</b><br>左键拖动平移 · 右键拖动缩放坐标轴",
-    'zoom': "<b>框选缩放</b><br>拖动鼠标框选矩形区域放大 · Home 键可复位",
-    '': "<b>浏览</b><br>双击坐标轴可设置范围 · 工具栏可启用 平移 / 缩放 / 保存",
+    'pan':  ('移动曲线', '左键拖动平移 · 右键拖动缩放坐标轴'),
+    'zoom': ('框选缩放', '拖动鼠标框选矩形区域放大 · Home 键可复位'),
+    '':     ('浏览模式', '双击坐标轴可设置范围 · 工具栏可启用 平移 / 缩放 / 保存'),
+}
+
+# Bottom hint bar — persistent (always-on) shortcuts.
+# Rendered left-aligned in muted gray inside QFrame#chartHintBar.
+_BOTTOM_HINT_PERSISTENT = (
+    "Ctrl + 滚轮 缩放 X    ·    "
+    "Shift + 滚轮 缩放 Y    ·    "
+    "双击坐标轴 修改范围"
+)
+
+# Bottom hint bar — context layer.
+# Key = _ChartCard._context_hint_key(); empty string means show nothing.
+_BOTTOM_HINT_CONTEXT = {
+    'pan':           '平移模式：左键拖动平移 · 右键拖动缩放',
+    'zoom':          '框选模式：拖出矩形放大 · Esc 取消 · Home 复位',
+    'cursor_single': '单游标：点击放置游标线 · 拖动数据卡到合适位置',
+    'cursor_dual':   '双游标：第 1 次点击放置 A · 第 2 次放置 B · 显示 ΔT 与统计',
+    'spectrogram':   '点击谱图任一时刻可在下方查看该帧频率切片',
+    'idle':          '',
+}
+
+# Icon colour tokens (match Precision Light palette)
+_ICON_COLOR  = '#374151'
+_ICON_ACTIVE = '#2563eb'
+
+# MDI action-key → qtawesome icon name mapping
+_MDI_NAV_ICONS = {
+    'home':    'mdi.home',
+    'back':    'mdi.arrow-left',
+    'forward': 'mdi.arrow-right',
+    'pan':     'mdi.cursor-move',
+    'zoom':    'mdi.magnify-plus-outline',
+    'save':    'mdi.content-save-outline',
 }
 
 
@@ -135,10 +170,23 @@ def _find_action(toolbar, key_lower):
     return None
 
 
+def _apply_mdi_icons(toolbar, active_key=''):
+    """Replace each retained action's icon with its MDI equivalent."""
+    for act in toolbar.actions():
+        key = act.data() if act.data() else (act.text() or '').strip().lower()
+        icon_name = _MDI_NAV_ICONS.get(key)
+        if icon_name is None:
+            continue
+        color = _ICON_ACTIVE if key == active_key else _ICON_COLOR
+        act.setIcon(qta.icon(icon_name, color=color))
+
+
 def _vline():
     f = QFrame()
     f.setObjectName("chartToolbarSep")
     f.setFixedWidth(1)
+    f.setFixedHeight(20)
+    f.setContentsMargins(0, 0, 0, 0)
     return f
 
 
@@ -155,7 +203,13 @@ class _ChartCard(QWidget):
         self.canvas = canvas
         self.toolbar = NavigationToolbar(canvas, self)
         self.toolbar.setObjectName("chartToolbar")
-        self.toolbar.setIconSize(QSize(14, 14))
+        self.toolbar.setIconSize(QSize(18, 18))
+        for act in self.toolbar.actions():
+            btn = self.toolbar.widgetForAction(act)
+            if btn is not None and isinstance(btn, QToolButton):
+                btn.setFixedSize(QSize(32, 32))
+        if self.toolbar.layout() is not None:
+            self.toolbar.layout().setSpacing(8)
         _strip_subplots_action(self.toolbar)
 
         # Find Save BEFORE i18n changes labels (text is still 'Save' here);
@@ -167,13 +221,15 @@ class _ChartCard(QWidget):
         # lookups by english key remain stable across locales.
         from ._toolbar_i18n import apply_chinese_toolbar_labels
         apply_chinese_toolbar_labels(self.toolbar)
+        _apply_mdi_icons(self.toolbar, active_key='pan')
 
         # Insert "copy as image" button right before the matplotlib Save action
         # (or append if save action isn't found). This places it alongside the
         # other matplotlib nav icons so it reads as a sibling action.
         self._copy_btn = QToolButton(self.toolbar)
-        self._copy_btn.setIcon(Icons.copy_image())
-        self._copy_btn.setIconSize(QSize(16, 16))
+        self._copy_btn.setIcon(qta.icon('mdi.content-copy', color=_ICON_COLOR))
+        self._copy_btn.setIconSize(QSize(18, 18))
+        self._copy_btn.setFixedSize(QSize(32, 32))
         self._copy_btn.setToolTip("复制为图片（含游标线和读数）")
         self._copy_btn.setAutoRaise(True)
         self._copy_btn.clicked.connect(self.copy_image_requested)
@@ -190,8 +246,9 @@ class _ChartCard(QWidget):
         self._hint_label.setObjectName("chartHint")
         self._hint_label.setTextFormat(Qt.RichText)
         self._hint_label.setWordWrap(True)
-        self._hint_label.setMinimumWidth(140)
-        self._hint_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self._hint_label.setMinimumWidth(180)
+        self._hint_label.setFixedHeight(28)
+        self._hint_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self._hint_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         loc_label = getattr(self.toolbar, 'locLabel', None)
         loc_action = None
@@ -216,6 +273,28 @@ class _ChartCard(QWidget):
             if name in ('pan', 'zoom'):
                 act.triggered.connect(self._on_nav_mode_toggled)
 
+        # Bottom hint bar (Persistent + Context layers). Sits BELOW the canvas
+        # so it does not jostle the toolbar layout. The persistent label is
+        # always populated; the context label updates via _refresh_bottom_hint
+        # whenever pan/zoom toggles or (in subclasses) cursor mode changes.
+        self._hint_bar = QFrame(self)
+        self._hint_bar.setObjectName("chartHintBar")
+        self._hint_bar.setAttribute(Qt.WA_StyledBackground, True)
+        self._hint_bar.setFixedHeight(22)
+        from PyQt5.QtWidgets import QHBoxLayout
+        bar_lay = QHBoxLayout(self._hint_bar)
+        bar_lay.setContentsMargins(4, 2, 4, 2)
+        bar_lay.setSpacing(0)
+        self._hint_persistent = QLabel(_BOTTOM_HINT_PERSISTENT, self._hint_bar)
+        self._hint_persistent.setObjectName("chartHintPersistent")
+        self._hint_persistent.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._hint_context = QLabel("", self._hint_bar)
+        self._hint_context.setObjectName("chartHintContext")
+        self._hint_context.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        bar_lay.addWidget(self._hint_persistent)
+        bar_lay.addStretch(1)
+        bar_lay.addWidget(self._hint_context)
+
         # Default: activate the pan tool.
         mode = str(getattr(self.toolbar, 'mode', '')).lower()
         if 'pan' not in mode:
@@ -224,6 +303,7 @@ class _ChartCard(QWidget):
 
         lay.addWidget(self.toolbar)
         lay.addWidget(canvas, stretch=1)
+        lay.addWidget(self._hint_bar)
 
     def _on_nav_mode_toggled(self, *_):
         """Hook subclasses can extend; base only refreshes the hint text."""
@@ -238,9 +318,27 @@ class _ChartCard(QWidget):
             return 'zoom'
         return ''
 
+    def _context_hint_key(self):
+        """Return the key into ``_BOTTOM_HINT_CONTEXT`` for the bottom-bar
+        right label. Base mapping: pan/zoom → those keys, otherwise 'idle'.
+        Subclasses override to inject 'cursor_single' / 'cursor_dual' /
+        'spectrogram' when the toolbar is not actively in pan/zoom."""
+        mode = self._current_mode_key()
+        return mode if mode in ('pan', 'zoom') else 'idle'
+
+    def _refresh_bottom_hint(self, *_):
+        key = self._context_hint_key()
+        text = _BOTTOM_HINT_CONTEXT.get(key, '')
+        self._hint_context.setText(text)
+
     def _refresh_hint(self, *_):
         key = self._current_mode_key()
-        self._hint_label.setText(_TOOL_HINTS.get(key, _TOOL_HINTS['']))
+        title, detail = _TOOL_HINTS.get(key, _TOOL_HINTS[''])
+        color = _ICON_ACTIVE if key else _ICON_COLOR
+        self._hint_label.setText(f'<b style="color:{color}">{title}</b>')
+        self._hint_label.setToolTip(f'{title}\n{detail}')
+        _apply_mdi_icons(self.toolbar, active_key=key)
+        self._refresh_bottom_hint()
 
 
 class TimeChartCard(_ChartCard):
@@ -323,7 +421,23 @@ class TimeChartCard(_ChartCard):
         self._cursor_mode = mode
         for k, b in self._cursor_buttons.items():
             b.setChecked(k == mode)
+        # Cursor mode is one of the keys consulted by _context_hint_key,
+        # so refresh the bottom-hint context label whenever it flips.
+        self._refresh_bottom_hint()
         self.cursor_mode_changed.emit(mode)
+
+    def _context_hint_key(self):
+        # Explicit cursor placement takes precedence over the always-on pan
+        # default — when the user enables single / dual cursor, the bottom
+        # context label should reflect THAT, not the resident pan mode.
+        # NB: base __init__ calls _refresh_hint() before TimeChartCard's own
+        # init sets _cursor_mode; getattr fallback keeps that path safe.
+        cm = getattr(self, '_cursor_mode', 'off')
+        if cm == 'single':
+            return 'cursor_single'
+        if cm == 'dual':
+            return 'cursor_dual'
+        return super()._context_hint_key()
 
     # ----- axis lock (chip group) -----
     def axis_lock(self):
@@ -357,6 +471,18 @@ class TimeChartCard(_ChartCard):
         self._sync_lock_enabled()
 
 
+class SpectrogramChartCard(_ChartCard):
+    """Spectrogram (FFT vs Time) chart card. Adds a spectrogram-specific
+    bottom-bar hint when the toolbar isn't in pan/zoom — guides the user to
+    click on the spectrogram to surface the per-frame frequency slice."""
+
+    def _context_hint_key(self):
+        toolbar_key = self._current_mode_key()
+        if toolbar_key in ('pan', 'zoom'):
+            return toolbar_key
+        return 'spectrogram'
+
+
 class ChartStack(QWidget):
     mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
@@ -375,7 +501,7 @@ class ChartStack(QWidget):
         self.canvas_order = PlotCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
         self._fft_card = _ChartCard(self.canvas_fft)
-        self._fft_time_card = _ChartCard(self.canvas_fft_time)
+        self._fft_time_card = SpectrogramChartCard(self.canvas_fft_time)
         self._order_card = _ChartCard(self.canvas_order)
         self.stack.addWidget(self._time_card)
         self.stack.addWidget(self._fft_card)

@@ -273,8 +273,6 @@ class MainWindow(QMainWindow):
         self.toolbar.export_requested.connect(self.export_excel)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
-        self.toolbar.cursor_reset_requested.connect(self._reset_cursors)
-        self.toolbar.axis_lock_requested.connect(self._show_axis_lock_popover)
         self.chart_stack.image_copied.connect(
             lambda msg: (self.statusBar.showMessage(msg, 2000),
                          self.toast(msg, 'success'))

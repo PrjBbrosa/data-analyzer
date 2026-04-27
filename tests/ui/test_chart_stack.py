@@ -291,4 +291,90 @@ def test_time_card_segmented_buttons_chinese(qtbot):
 
 def test_tool_hints_idle_mentions_dblclick():
     from mf4_analyzer.ui.chart_stack import _TOOL_HINTS
-    assert '双击坐标轴' in _TOOL_HINTS['']
+    # _TOOL_HINTS values are (title, detail) tuples since MDI icon refactor;
+    # the '双击坐标轴' phrase lives in the detail string (index 1).
+    assert '双击坐标轴' in _TOOL_HINTS[''][1]
+
+
+# ---- Bottom hint bar (Persistent + Context layers) ----
+
+def test_bottom_hint_bar_persistent_always_present(qapp):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        # Bar exists, is visible, and the persistent label spells the three
+        # always-on shortcuts.
+        assert card._hint_bar is not None
+        assert card._hint_persistent is not None
+        text = card._hint_persistent.text()
+        assert "Ctrl" in text
+        assert "Shift" in text
+        assert "双击坐标轴" in text
+
+
+def test_bottom_hint_bar_context_pan_default(qapp):
+    """Default after construction is pan mode → context label = pan hint."""
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    card = cs._time_card
+    assert "平移模式" in card._hint_context.text()
+
+
+def test_bottom_hint_bar_context_switches_with_cursor_mode(qapp):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    card = cs._time_card
+    # cursor=single → 单游标 hint
+    card.set_cursor_mode('single')
+    assert "单游标" in card._hint_context.text()
+    # cursor=dual → 双游标 hint
+    card.set_cursor_mode('dual')
+    assert "双游标" in card._hint_context.text()
+    # cursor=off → fall back to current toolbar mode hint (pan by default)
+    card.set_cursor_mode('off')
+    assert "平移模式" in card._hint_context.text()
+
+
+def test_bottom_hint_bar_spectrogram_hint(qapp):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    fft_time = cs._fft_time_card
+    # Spectrogram card defaults to pan mode (toolbar.pan() in base init), so
+    # the toolbar-mode hint wins. Force toolbar mode off to surface the
+    # spectrogram-specific hint and confirm the override path.
+    fft_time.toolbar.mode = ''  # type: ignore[attr-defined]
+    fft_time._refresh_bottom_hint()
+    assert "谱图" in fft_time._hint_context.text()
+
+
+def test_bottom_hint_bar_idle_for_base_card_with_no_mode(qapp):
+    """Plain _ChartCard (e.g. fft / order) with no toolbar mode shows empty."""
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    card = cs._fft_card
+    card.toolbar.mode = ''  # type: ignore[attr-defined]
+    card._refresh_bottom_hint()
+    assert card._hint_context.text() == ''
+
+
+def test_bottom_hint_bar_constants_exposed():
+    """Module-level dict MUST expose the documented context keys verbatim."""
+    from mf4_analyzer.ui.chart_stack import (
+        _BOTTOM_HINT_CONTEXT, _BOTTOM_HINT_PERSISTENT,
+    )
+    assert "Ctrl" in _BOTTOM_HINT_PERSISTENT
+    assert "Shift" in _BOTTOM_HINT_PERSISTENT
+    assert "双击坐标轴" in _BOTTOM_HINT_PERSISTENT
+    for key in ('pan', 'zoom', 'cursor_single', 'cursor_dual',
+                'spectrogram', 'idle'):
+        assert key in _BOTTOM_HINT_CONTEXT
+    assert _BOTTOM_HINT_CONTEXT['idle'] == ''
+
+
+def test_bottom_hint_bar_does_not_break_existing_top_hint(qapp):
+    """Sanity: existing in-toolbar _hint_label remains untouched."""
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    card = cs._time_card
+    # Default mode is pan → top hint label paints '移动曲线' title.
+    assert "移动曲线" in card._hint_label.text()
