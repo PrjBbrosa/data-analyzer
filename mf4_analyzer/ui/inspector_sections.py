@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .icons import Icons
+from .widgets.searchable_combo import SearchableComboBox
 
 
 _PRESET_ORG = "MF4Analyzer"
@@ -646,7 +647,7 @@ class PersistentTop(QWidget):
         self.combo_xaxis = QComboBox()
         self.combo_xaxis.addItems(['自动(时间)', '指定通道'])
         fl.addRow("来源:", _fit_field(self.combo_xaxis))
-        self._combo_xaxis_ch = QComboBox()
+        self._combo_xaxis_ch = SearchableComboBox()
         self._combo_xaxis_ch.setEnabled(False)
         fl.addRow("通道:", _fit_field(self._combo_xaxis_ch))
         self.edit_xlabel = QLineEdit()
@@ -871,7 +872,7 @@ class FFTContextual(QWidget):
         sig_lay.addWidget(_make_group_header("分析信号", self.btn_rebuild))
         fl = QFormLayout()
         _configure_form(fl)
-        self.combo_sig = QComboBox()
+        self.combo_sig = SearchableComboBox()
         # combo_sig hosts long signal names — keep the long-text cap.
         fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
         self.spin_fs = QDoubleSpinBox()
@@ -1058,9 +1059,9 @@ class OrderContextual(QWidget):
         sig_lay.addWidget(_make_group_header("信号源", self.btn_rebuild))
         fl = QFormLayout()
         _configure_form(fl)
-        self.combo_sig = QComboBox()
+        self.combo_sig = SearchableComboBox()
         fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
-        self.combo_rpm = QComboBox()
+        self.combo_rpm = SearchableComboBox()
         fl.addRow("转速:", _fit_field(self.combo_rpm, max_width=_LONG_FIELD_MAX_WIDTH))
         self.spin_fs = QDoubleSpinBox()
         self.spin_fs.setRange(1, 1e6)
@@ -1315,7 +1316,7 @@ class FFTTimeContextual(QWidget):
         sig_lay.addWidget(_make_group_header("分析信号", self.btn_rebuild))
         fl = QFormLayout()
         _configure_form(fl)
-        self.combo_sig = QComboBox()
+        self.combo_sig = SearchableComboBox()
         fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
         self.spin_fs = QDoubleSpinBox()
         self.spin_fs.setRange(1, 1e6)

@@ -46,3 +46,23 @@ def test_drop_in_compatible_setCurrentText(qapp):
     cb.setCurrentText("beta")
     assert cb.currentText() == "beta"
     assert cb.currentIndex() == 1
+
+
+from mf4_analyzer.ui.inspector_sections import (
+    TimeContextual, FFTContextual, OrderContextual, FFTTimeContextual,
+)
+from mf4_analyzer.ui.widgets.searchable_combo import SearchableComboBox
+
+
+def test_inspector_channel_combos_are_searchable(qapp):
+    # FFTContextual.combo_sig
+    fft = FFTContextual()
+    assert isinstance(fft.combo_sig, SearchableComboBox), \
+        "FFTContextual.combo_sig must be SearchableComboBox"
+    # OrderContextual.combo_sig and combo_rpm
+    order = OrderContextual()
+    assert isinstance(order.combo_sig, SearchableComboBox)
+    assert isinstance(order.combo_rpm, SearchableComboBox)
+    # FFTTimeContextual.combo_sig
+    fftt = FFTTimeContextual()
+    assert isinstance(fftt.combo_sig, SearchableComboBox)

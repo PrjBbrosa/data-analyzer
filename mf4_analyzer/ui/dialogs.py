@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 from ..signal import ChannelMath
+from .widgets.searchable_combo import SearchableComboBox
 
 
 class ChannelEditorDialog(QDialog):
@@ -38,7 +39,7 @@ class ChannelEditorDialog(QDialog):
         g = QGroupBox("单通道运算");
         gl = QGridLayout(g)
         gl.addWidget(QLabel("源:"), 0, 0)
-        self.combo_src = QComboBox();
+        self.combo_src = SearchableComboBox();
         self.combo_src.addItems(chs);
         gl.addWidget(self.combo_src, 0, 1)
         gl.addWidget(QLabel("运算:"), 1, 0)
@@ -59,7 +60,7 @@ class ChannelEditorDialog(QDialog):
         g2 = QGroupBox("双通道运算 (A ⊕ B)");
         gl2 = QGridLayout(g2)
         gl2.addWidget(QLabel("通道A:"), 0, 0)
-        self.combo_a = QComboBox();
+        self.combo_a = SearchableComboBox();
         self.combo_a.addItems(chs);
         gl2.addWidget(self.combo_a, 0, 1)
         gl2.addWidget(QLabel("运算:"), 1, 0)
@@ -67,7 +68,7 @@ class ChannelEditorDialog(QDialog):
         self.combo_op2.addItems(["A + B", "A - B", "A × B", "A ÷ B", "max(A,B)", "min(A,B)"]);
         gl2.addWidget(self.combo_op2, 1, 1)
         gl2.addWidget(QLabel("通道B:"), 2, 0)
-        self.combo_b = QComboBox();
+        self.combo_b = SearchableComboBox();
         self.combo_b.addItems(chs);
         gl2.addWidget(self.combo_b, 2, 1)
         gl2.addWidget(QLabel("新名称:"), 3, 0)

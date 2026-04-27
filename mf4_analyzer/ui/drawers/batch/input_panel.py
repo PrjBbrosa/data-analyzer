@@ -23,12 +23,13 @@ from PyQt5.QtCore import (
     QObject, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal,
 )
 from PyQt5.QtWidgets import (
-    QAction, QComboBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
+    QAction, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton, QVBoxLayout,
     QWidget,
 )
 
 from ....io.file_data import _TIME_NAMES
+from ...widgets.searchable_combo import SearchableComboBox
 from .signal_picker import SignalPickerPopup
 
 
@@ -432,8 +433,7 @@ class InputPanel(QWidget):
         self._signal_picker = SignalPickerPopup(parent=form_host)
         form.addRow("目标信号", self._signal_picker)
 
-        self._rpm_combo = QComboBox(form_host)
-        self._rpm_combo.setEditable(True)
+        self._rpm_combo = SearchableComboBox(form_host)
         form.addRow("RPM 通道", self._rpm_combo)
 
         self._time_edit = QLineEdit(form_host)
