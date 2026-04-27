@@ -35,13 +35,16 @@ def save_preset_to_json(preset: AnalysisPreset, path: str | Path) -> None:
             "data_format": str(preset.outputs.data_format),
         },
     }
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def load_preset_from_json(path: str | Path) -> AnalysisPreset:
     """Read preset from JSON. Missing schema_version → v1; unknown → reject."""
     path = Path(path)
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as exc:

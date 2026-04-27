@@ -88,3 +88,40 @@ def test_corrupt_json_raises(tmp_path):
     path.write_text("{not json")
     with pytest.raises(ValueError):
         load_preset_from_json(path)
+
+
+def test_round_trip_preserves_chinese_signal_names(tmp_path):
+    """CJK characters must survive write/read on Windows where the default
+    locale encoding (cp1252/cp936) is not UTF-8. ensure_ascii=False in
+    json.dumps is only coherent when paired with an explicit utf-8 file
+    write — otherwise we get UnicodeEncodeError or mojibake.
+    """
+    preset = AnalysisPreset.free_config(
+        name="振动批处理",
+        method="fft",
+        target_signals=("振动_x", "转速"),
+        rpm_channel="转速",
+        params={"window": "hanning", "nfft": 1024, "备注": "中文参数"},
+        outputs=BatchOutput(export_data=True, export_image=True, data_format="csv"),
+    )
+    path = tmp_path / "preset_zh.json"
+
+    # Write must not raise UnicodeEncodeError under any platform default.
+    save_preset_to_json(preset, path)
+
+    # On-disk bytes must be valid UTF-8 and contain the literal CJK glyphs
+    # (proves ensure_ascii=False survived the file write — i.e., we did not
+    # transcode through cp1252 / cp936 / mbcs).
+    raw_bytes = path.read_bytes()
+    decoded = raw_bytes.decode("utf-8")
+    assert "振动批处理" in decoded
+    assert "振动_x" in decoded
+    assert "转速" in decoded
+    assert "中文参数" in decoded
+
+    # Round-trip read returns the same Chinese strings (not mojibake).
+    loaded = load_preset_from_json(path)
+    assert loaded.name == "振动批处理"
+    assert loaded.target_signals == ("振动_x", "转速")
+    assert loaded.rpm_channel == "转速"
+    assert loaded.params["备注"] == "中文参数"
