@@ -583,9 +583,22 @@ class BatchRunner:
                 ax.set_xlabel('RPM')
                 ax.set_ylabel('Amplitude')
             else:
-                pivot = df.pivot(index=df.columns[1], columns=df.columns[0], values='amplitude')
+                pivot = df.pivot(
+                    index=df.columns[1], columns=df.columns[0], values='amplitude'
+                )
+                matrix = pivot.to_numpy()
+                if kind == 'fft_time':
+                    # Render in dB for readability (display-only choice; the
+                    # exported CSV/H5 stays linear amplitude). Mirrors
+                    # SpectrogramAnalyzer.amplitude_to_db: floor at tiny so
+                    # log(0) does not appear.
+                    eps = np.finfo(float).tiny
+                    matrix = 20.0 * np.log10(np.maximum(matrix, eps))
+                    cbar_label = 'Amplitude (dB)'
+                else:
+                    cbar_label = 'Amplitude'
                 im = ax.imshow(
-                    pivot.to_numpy(),
+                    matrix,
                     aspect='auto',
                     origin='lower',
                     extent=[
@@ -599,7 +612,7 @@ class BatchRunner:
                 )
                 ax.set_xlabel(df.columns[0])
                 ax.set_ylabel(df.columns[1])
-                fig.colorbar(im, ax=ax, label='Amplitude')
+                fig.colorbar(im, ax=ax, label=cbar_label)
             ax.grid(True, alpha=0.25, ls='--')
             fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
             fig.savefig(path)
