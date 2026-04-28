@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Spinbox / Combo 箭头方案对比 — 2026-04-28</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --bg-card: #161b22;
+    --bg-card-hi: #1c2330;
+    --bg-mock: #fafbfd;
+    --bg-mock-hover: #eef2f7;
+    --bg-mock-press: #d8e4f5;
+    --border-mock: #dfe5ee;
+    --border-card: #2a3441;
+    --border-sel: #3b82f6;
+    --fg: #e2e8f0;
+    --fg-dim: #94a3b8;
+    --fg-mock: #1e293b;
+    --accent: #3b82f6;
+    --warn: #f59e0b;
+    --good: #10b981;
+    --bad: #ef4444;
+    --code-bg: #0a0f15;
+    --code-fg: #d4d4d8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.5; }
+  code, pre, .mono { font-family: "JetBrains Mono", Consolas, monospace; }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--border-card);
+    background: linear-gradient(180deg, #1a2332 0%, #0f1419 100%);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { margin: 0 0 4px 0; font-size: 18px; font-weight: 600; }
+  header .subtitle { color: var(--fg-dim); font-size: 12px; }
+  .warn-banner {
+    margin: 12px 24px 0 24px; padding: 10px 14px;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-radius: 6px; color: #fcd34d; font-size: 13px;
+  }
+  main { padding: 16px 24px 220px 24px; }
+  .grid {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border-card);
+    border-radius: 10px; padding: 14px; transition: border-color .15s, background .15s;
+    cursor: pointer;
+  }
+  .card:hover { background: var(--bg-card-hi); }
+  .card.selected { border-color: var(--border-sel); box-shadow: 0 0 0 1px var(--border-sel); background: var(--bg-card-hi); }
+  .card-head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  }
+  .scheme-letter {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: #243042; color: #cbd5e1; font-weight: 700; font-size: 13px;
+    flex-shrink: 0;
+  }
+  .card.selected .scheme-letter { background: var(--accent); color: #fff; }
+  .scheme-name { font-weight: 600; font-size: 14px; flex: 1; }
+  .pick-radio {
+    width: 16px; height: 16px; border: 2px solid #475569; border-radius: 50%;
+    flex-shrink: 0; position: relative;
+  }
+  .card.selected .pick-radio { border-color: var(--accent); }
+  .card.selected .pick-radio::after {
+    content: ""; position: absolute; inset: 2px;
+    background: var(--accent); border-radius: 50%;
+  }
+
+  /* Mock widgets */
+  .preview-row {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+    margin: 10px 0;
+  }
+  .preview-cell {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 8px; background: #0a0f15; border-radius: 6px;
+  }
+  .state-label { font-size: 10px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .mock-spinbox, .mock-combo {
+    display: flex; align-items: stretch;
+    background: var(--bg-mock); border: 1px solid var(--border-mock);
+    border-radius: 6px; height: 26px; overflow: hidden;
+    color: var(--fg-mock);
+  }
+  .mock-spinbox .field, .mock-combo .field {
+    flex: 1; padding: 3px 6px; font-size: 11px; display: flex; align-items: center;
+    border-right: 1px solid #eef2f7;
+  }
+  .mock-spinbox .stack {
+    display: flex; flex-direction: column; width: 18px;
+    border-left: 1px solid #eef2f7; background: #fafbfd;
+  }
+  .mock-spinbox .stack > div {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+  }
+  .mock-spinbox .stack > div:first-child { border-bottom: 1px solid #eef2f7; }
+  .mock-combo .drop {
+    width: 22px; display: flex; align-items: center; justify-content: center;
+    border-left: 1px solid #eef2f7; background: #fafbfd;
+  }
+  .preview-cell[data-state="hover"] .mock-spinbox .stack > div,
+  .preview-cell[data-state="hover"] .mock-combo .drop {
+    background: var(--bg-mock-hover);
+  }
+  .preview-cell[data-state="press"] .mock-spinbox .stack > div,
+  .preview-cell[data-state="press"] .mock-combo .drop {
+    background: var(--bg-mock-press);
+  }
+  .preview-cell[data-state="disabled"] .mock-spinbox,
+  .preview-cell[data-state="disabled"] .mock-combo {
+    opacity: 0.55; background: #f5f7fb;
+  }
+
+  /* Family picker (for schemes B/D) */
+  .family-picker {
+    margin: 8px 0;
+    padding: 8px; background: #0a0f15; border-radius: 6px;
+    display: none;
+  }
+  .card[data-needs-family] .family-picker { display: block; }
+  .family-picker label {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-right: 10px; padding: 3px 8px;
+    border-radius: 4px; cursor: pointer; font-size: 11px;
+    background: #1a2332; color: var(--fg-dim);
+  }
+  .family-picker label.active { background: var(--accent); color: #fff; }
+  .family-picker label input { display: none; }
+
+  /* Detail rows */
+  .detail-row {
+    display: grid; grid-template-columns: 80px 1fr; gap: 6px;
+    font-size: 12px; padding: 4px 0; border-top: 1px dashed #1f2937;
+  }
+  .detail-row .key { color: var(--fg-dim); }
+  .detail-row .val { color: var(--fg); }
+  .detail-row .val code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; color: var(--code-fg); font-size: 11px; }
+  .pros-cons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+  .pros, .cons { font-size: 11px; padding: 6px 8px; border-radius: 4px; }
+  .pros { background: rgba(16, 185, 129, 0.10); color: #6ee7b7; border-left: 2px solid var(--good); }
+  .cons { background: rgba(239, 68, 68, 0.10); color: #fca5a5; border-left: 2px solid var(--bad); }
+  .pros::before { content: "✓ "; font-weight: 700; }
+  .cons::before { content: "✗ "; font-weight: 700; }
+
+  /* Sticky prompt panel */
+  .prompt-panel {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(180deg, rgba(15,20,25,0.95), #0a0f15);
+    border-top: 1px solid var(--border-card);
+    padding: 14px 24px; max-height: 200px; overflow: hidden;
+    backdrop-filter: blur(8px);
+    z-index: 5;
+  }
+  .prompt-head {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+  }
+  .prompt-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .prompt-head .selected-info { color: var(--fg-dim); font-size: 12px; flex: 1; }
+  .prompt-head button {
+    padding: 6px 14px; background: var(--accent); color: #fff;
+    border: 0; border-radius: 5px; cursor: pointer; font-size: 12px;
+    font-weight: 600;
+  }
+  .prompt-head button:hover { background: #2563eb; }
+  .prompt-head button.copied { background: var(--good); }
+  .prompt-box {
+    background: var(--code-bg); color: var(--code-fg);
+    padding: 10px 12px; border-radius: 6px;
+    font-family: "JetBrains Mono", Consolas, monospace;
+    font-size: 11px; line-height: 1.55;
+    max-height: 130px; overflow: auto;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* Selectable */
+  .card { user-select: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Spinbox / Combo 箭头方案对比</h1>
+  <div class="subtitle">MF4-data-analyzer · PyQt5 · 2026-04-28 · 选定方案后点底部"复制实现 prompt"</div>
+</header>
+
+<div class="warn-banner">
+  ⚠ 当前已派单实现的是方案 A（QSS border-triangle），但用户未授权直接动手。
+  请挑选目标方案后由 main Claude 重新派单 — 实现 prompt 会包含"回滚 A"指令。
+  方案 B / D 推荐 <code>mdi6.menu-up/down</code> 或 <code>ph.caret-up-fill/down-fill</code>。
+</div>
+
+<main>
+  <div class="grid" id="grid"></div>
+</main>
+
+<div class="prompt-panel">
+  <div class="prompt-head">
+    <h3>📋 实现 Prompt</h3>
+    <div class="selected-info" id="selectedInfo"></div>
+    <button id="copyBtn">复制 Prompt</button>
+  </div>
+  <pre class="prompt-box" id="promptBox"></pre>
+</div>
+
+<script>
+// ============================================================================
+// Arrow SVG renderer — 7 visual families. dir: 'up'|'down'.
+// Returns an inline <svg> string sized to fit a 18×11 px gutter cell.
+// ============================================================================
+function arrowSvg(family, dir, color) {
+  const flip = dir === 'down';
+  const t = flip ? 'transform="scale(1,-1) translate(0,-12)"' : '';
+  const c = color;
+  const map = {
+    'border-triangle': // pure CSS triangle look — wide-base isosceles
+      `<polygon points="2,8 9,2 16,8" fill="${c}"/>`,
+    'caret':           // FA caret-up: chunky, very wide
+      `<path d="M2 9 L9 2 L16 9 Z" fill="${c}"/>`,
+    'chevron':         // FA chevron-up: thick V-line, ~2px stroke
+      `<polyline points="2,8 9,3 16,8" fill="none" stroke="${c}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`,
+    'angle':           // FA angle-up: thin V-line, ~1.4px stroke
+      `<polyline points="3,8 9,3 15,8" fill="none" stroke="${c}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`,
+    'triangle-small':  // mdi6 triangle-small-up: compact filled triangle
+      `<polygon points="5,8 9,4 13,8" fill="${c}"/>`,
+    'arrow-s-fill':    // ri arrow-up-s-fill: filled stylized chevron
+      `<path d="M9 3 L15 9 L13.5 10.4 L9 6.2 L4.5 10.4 L3 9 Z" fill="${c}"/>`,
+    'win-native':      // Windows platform default (very subtle dark grey)
+      `<polygon points="3,8 9,3 15,8" fill="#404040"/>`,
+  };
+  const path = map[family] || map['border-triangle'];
+  return `<svg width="18" height="11" viewBox="0 0 18 11" ${t}>${path}</svg>`;
+}
+
+// Per-state color
+const STATE_COLOR = {
+  rest:     '#475569',
+  hover:    '#1769e0',
+  press:    '#1349a8',
+  disabled: '#cbd5e1',
+};
+
+// ============================================================================
+// Schemes
+// ============================================================================
+const SCHEMES = [
+  {
+    id: 'A', name: 'QSS border-triangle (现行)',
+    family: 'border-triangle',
+    needsFamilyPicker: false,
+    impl: '纯 QSS, <code>border-left/right: transparent + border-bottom/top: solid 5px</code> 画三角；按钮静止态 <code>#fafbfd</code> 浅底。',
+    align: '<b>风险高</b>：combo drop-down 22px、spinbox up/down 各 20×13px，不同 subcontrol 默认 padding 不一致 → 截图已暴露错位。',
+    hidpi: 'CSS triangle 不 scale，2× / 1.5× DPI 下边缘会出现 1px 锯齿。',
+    scope: '仅 <code>style.qss</code>（已实现，未提交）。',
+    pros: ['零外部依赖，纯 QSS', '改动最小，单文件'],
+    cons: ['按钮宽度对齐难保证（已踩坑）', 'HiDPI 下锯齿，不矢量'],
+  },
+  {
+    id: 'B', name: 'qtawesome → QPixmap → QSS image',
+    family: 'mdi6.menu',  // default
+    needsFamilyPicker: true,
+    impl: '启动时调 <code>qtawesome.icon(name, color=&quot;#475569&quot;).pixmap(20,20).save(tmp/up.png)</code>，QSS 用 <code>image: url(<i>tmp</i>/up.png)</code>。需要 4 套图（rest/hover/press/disabled）。',
+    align: '<b>稳</b>：QSS <code>image:</code> 居中渲染，按钮宽度由 QSS <code>width:</code> 锁定，subcontrol 之间统一 22px。',
+    hidpi: '生成时 <code>pixmap(devicePixelRatio×20, ...)</code> 可全分辨率覆盖；矢量字体本身高保真。',
+    scope: '<code>style.qss</code> + 新增图标缓存模块（如 <code>ui/icons.py</code>）+ <code>main_window.__init__</code> 启动时生成。',
+    pros: ['图标家族灵活可换', 'HiDPI 友好，对齐稳', '已装 qtawesome 1.4.2'],
+    cons: ['需写图标缓存模块', '4 状态 × 3 方向 = 12 个 PNG 临时文件'],
+  },
+  {
+    id: 'C', name: 'qtawesome.setIcon (Python 直挂)',
+    family: 'mdi6.menu',
+    needsFamilyPicker: true,
+    impl: 'Python 端遍历每个 QSpinBox/QComboBox，调 <code>findChild</code> 拿到内置 up/down button 然后 <code>setIcon(qta.icon(...))</code>；或写 SpinBoxFactory 包装。',
+    align: '<b>不稳</b>：Qt 内置 spinbox 的 up/down button 不是公共 API，<code>findChild</code> 命名不固定；不同样式可能拿不到。',
+    hidpi: 'qtawesome QIcon 内置多分辨率支持。',
+    scope: '<code>inspector_sections.py</code> + 新增 widget factory + 可能需要在所有 spinbox 创建处插桩。',
+    pros: ['绕过 QSS 限制', 'QIcon 自带 HiDPI'],
+    cons: ['Qt 私有 button 寻址不稳', '改动面铺到每个创建点', '难以集中维护'],
+  },
+  {
+    id: 'D', name: 'SVG 资源 → qrc → QSS image',
+    family: 'mdi6.menu',
+    needsFamilyPicker: true,
+    impl: '把所选 mdi/fa/ph 图标导出为 SVG → 写 <code>resources.qrc</code> → <code>pyrcc5</code> 编译 → QSS 引 <code>:/icons/up.svg</code>。',
+    align: '<b>最稳</b>：SVG 矢量绘制，QSS image 居中，对齐与 B 等同。',
+    hidpi: 'SVG 完美矢量，所有 DPI 同质。',
+    scope: '新增 <code>resources/icons/*.svg</code> + <code>resources.qrc</code> + 编译入口 + <code>style.qss</code> 引用。',
+    pros: ['离线最稳，无运行时依赖', 'SVG 矢量完美 HiDPI', '与 Qt 标准做法一致'],
+    cons: ['需 pyrcc5 编译步骤', '新增构建依赖项'],
+  },
+  {
+    id: 'E', name: '保留 Qt 平台默认指示符',
+    family: 'win-native',
+    needsFamilyPicker: false,
+    impl: '把 <code>QSpinBox::up-button / down-button / QComboBox::drop-down</code> 的 QSS <b>全部删除</b>，只保留 input border / focus / hover；让平台 style (Fusion / WindowsVista) 自己绘制箭头。',
+    align: 'Qt 平台 style 自管，但不同平台外观差异大（Windows = 灰色实三角，macOS = stepper 控件，Linux = 因主题而异）。',
+    hidpi: '取决于平台 style。Fusion 矢量，WindowsVista 是位图，HiDPI 一般。',
+    scope: '只删 <code>style.qss</code> 中相关 subcontrol 块。',
+    pros: ['零工作量', '与系统一致'],
+    cons: ['与项目扁平化设计冲突', '跨平台外观差异大', '失去配色控制'],
+  },
+  {
+    id: 'F', name: '自定义 QProxyStyle 子类',
+    family: 'caret',  // visually like FA caret
+    needsFamilyPicker: false,
+    impl: '<code>class FlatStyle(QProxyStyle): def drawPrimitive(self, el, opt, p, w): if el == PE_IndicatorSpinUp: ...</code>，集中绘制 PE_IndicatorSpinUp/Down/PE_IndicatorArrowDown。',
+    align: '<b>最稳</b>：drawPrimitive 拿到的 rect 来自 Qt subcontrol 计算，宽度对齐由 Qt 保证。',
+    hidpi: 'QPainter 用 setRenderHint(Antialiasing) 矢量绘制，HiDPI 自动 scale。',
+    scope: '新增 <code>ui/flat_style.py</code> + <code>QApplication.setStyle(FlatStyle())</code>，所有 widget 自动套用。',
+    pros: ['最优雅，集中可控', '矢量，HiDPI 完美', '一处改全局生效'],
+    cons: ['代码量最大（~80 行）', '需要熟悉 QStyle API', '可能破坏现有 QSS 选择器'],
+  },
+];
+
+// Family options (for B / C / D)
+const FAMILIES = [
+  { id: 'caret',          label: 'caret (粗实心)',   svgFamily: 'caret',          qta: ['fa6s.caret-up','fa6s.caret-down','ph.caret-up-fill','ph.caret-down-fill'] },
+  { id: 'chevron',        label: 'chevron (V 线)',   svgFamily: 'chevron',        qta: ['fa6s.chevron-up','fa6s.chevron-down','mdi6.chevron-up','mdi6.chevron-down'] },
+  { id: 'angle',          label: 'angle (细 V)',     svgFamily: 'angle',          qta: ['fa6s.angle-up','fa6s.angle-down'] },
+  { id: 'mdi6.menu',      label: 'mdi6 menu (紧凑)', svgFamily: 'triangle-small', qta: ['mdi6.menu-up','mdi6.menu-down'] },
+  { id: 'triangle-small', label: 'triangle-small',   svgFamily: 'triangle-small', qta: ['mdi6.triangle-small-up','mdi6.triangle-small-down'] },
+  { id: 'arrow-s-fill',   label: 'arrow-s (圆角实心)', svgFamily: 'arrow-s-fill', qta: ['ri.arrow-up-s-fill','ri.arrow-down-s-fill'] },
+];
+
+// ============================================================================
+// State
+// ============================================================================
+const state = {
+  selectedScheme: 'A',
+  family: { B: 'mdi6.menu', C: 'mdi6.menu', D: 'mdi6.menu' },  // per-scheme family override
+};
+
+// ============================================================================
+// Render
+// ============================================================================
+function familySvgFor(scheme) {
+  if (!scheme.needsFamilyPicker) return scheme.family;
+  const famId = state.family[scheme.id];
+  const fam = FAMILIES.find(f => f.id === famId);
+  return fam ? fam.svgFamily : scheme.family;
+}
+
+function renderMockSpinbox(svgFamily, stateName) {
+  const c = STATE_COLOR[stateName];
+  return `
+    <div class="mock-spinbox">
+      <div class="field">100.00</div>
+      <div class="stack">
+        <div>${arrowSvg(svgFamily, 'up', c)}</div>
+        <div>${arrowSvg(svgFamily, 'down', c)}</div>
+      </div>
+    </div>
+  `;
+}
+function renderMockCombo(svgFamily, stateName) {
+  const c = STATE_COLOR[stateName];
+  return `
+    <div class="mock-combo">
+      <div class="field">FFT点数 1024</div>
+      <div class="drop">${arrowSvg(svgFamily, 'down', c)}</div>
+    </div>
+  `;
+}
+
+function renderCard(scheme) {
+  const svgFamily = familySvgFor(scheme);
+  const isSel = state.selectedScheme === scheme.id;
+  const states = ['rest', 'hover', 'press', 'disabled'];
+  const stateLabels = { rest: 'Rest', hover: 'Hover', press: 'Pressed', disabled: 'Disabled' };
+
+  let familyHtml = '';
+  if (scheme.needsFamilyPicker) {
+    familyHtml = `
+      <div class="family-picker">
+        <div style="font-size:11px;color:var(--fg-dim);margin-bottom:4px;">图标家族 (qtawesome):</div>
+        ${FAMILIES.map(f => `
+          <label class="${state.family[scheme.id] === f.id ? 'active' : ''}" data-family="${f.id}">
+            <input type="radio" name="family-${scheme.id}" value="${f.id}">
+            ${f.label}
+          </label>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="card ${isSel ? 'selected' : ''}"
+         data-scheme="${scheme.id}"
+         ${scheme.needsFamilyPicker ? 'data-needs-family="1"' : ''}>
+      <div class="card-head">
+        <span class="scheme-letter">${scheme.id}</span>
+        <span class="scheme-name">${scheme.name}</span>
+        <span class="pick-radio"></span>
+      </div>
+
+      <div class="preview-row">
+        ${states.map(s => `
+          <div class="preview-cell" data-state="${s}">
+            <div class="state-label">${stateLabels[s]}</div>
+            ${renderMockSpinbox(svgFamily, s)}
+            ${renderMockCombo(svgFamily, s)}
+          </div>
+        `).join('')}
+      </div>
+
+      ${familyHtml}
+
+      <div class="detail-row"><div class="key">实现</div><div class="val">${scheme.impl}</div></div>
+      <div class="detail-row"><div class="key">对齐</div><div class="val">${scheme.align}</div></div>
+      <div class="detail-row"><div class="key">HiDPI</div><div class="val">${scheme.hidpi}</div></div>
+      <div class="detail-row"><div class="key">改动面</div><div class="val">${scheme.scope}</div></div>
+
+      <div class="pros-cons">
+        <div class="pros">${scheme.pros.join(' · ')}</div>
+        <div class="cons">${scheme.cons.join(' · ')}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAll() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = SCHEMES.map(renderCard).join('');
+
+  // Wire card click → select
+  grid.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', e => {
+      // ignore clicks on family picker
+      if (e.target.closest('.family-picker')) return;
+      state.selectedScheme = card.dataset.scheme;
+      renderAll();
+      updatePrompt();
+    });
+  });
+
+  // Wire family picker
+  grid.querySelectorAll('.family-picker label').forEach(label => {
+    label.addEventListener('click', e => {
+      e.stopPropagation();
+      const card = label.closest('.card');
+      const sid = card.dataset.scheme;
+      const fid = label.dataset.family;
+      state.family[sid] = fid;
+      renderAll();
+      updatePrompt();
+    });
+  });
+
+  updatePrompt();
+}
+
+// ============================================================================
+// Prompt generation
+// ============================================================================
+function buildPrompt() {
+  const sid = state.selectedScheme;
+  const scheme = SCHEMES.find(s => s.id === sid);
+  const famId = state.family[sid] || null;
+  const famObj = famId ? FAMILIES.find(f => f.id === famId) : null;
+  const qtaNames = famObj ? famObj.qta.slice(0, 2).join(' / ') : null;
+
+  const rollback = `
+**Step 0 - 回滚现行 A 方案**
+\`mf4_analyzer/ui/style.qss\` 当前工作树包含 A 方案（border-triangle）的未提交改动；
+直接 \`git checkout -- mf4_analyzer/ui/style.qss\` 回到 origin/main 的版本作为干净基线，
+然后在干净基线上实现选定方案。`.trim();
+
+  const headers = {
+    A: '保留 A 方案，仅修复按钮宽度对齐 bug',
+    B: '方案 B — qtawesome → QPixmap → QSS image',
+    C: '方案 C — qtawesome.setIcon Python 直挂',
+    D: '方案 D — SVG 资源 → qrc → QSS image',
+    E: '方案 E — 保留 Qt 平台默认指示符',
+    F: '方案 F — 自定义 QProxyStyle 子类',
+  };
+
+  const bodies = {
+    A: `
+派给 pyqt-ui-engineer：
+
+任务：保留方案 A 的实现（border-triangle），但修复**按钮宽度对齐不一致**的 bug。
+当前 \`style.qss\` 中 QComboBox::drop-down (22px)、QSpinBox::up-button/down-button (20px)
+不等宽，导致同一行 spinbox 与 combo 的右侧 gutter 错位（截图证据：用户反馈 3）。
+
+要求：
+1. 把 combo drop-down 和 spinbox up/down button 的 width 统一为 **22px**。
+2. 同步调整 \`QSpinBox, QDoubleSpinBox { padding-right }\` 与按钮宽度匹配。
+3. 检查 spinbox 上下 button 等高（border 计算 height 偏差不超过 1px）。
+4. 在 offscreen 渲染验证：取一个含 spinbox + combo 的 inspector，截 PNG 检查像素对齐。
+5. 文件范围：仅 \`mf4_analyzer/ui/style.qss\`。
+6. \`tests/ui/\` 全部跑过。`,
+
+    B: `
+派给 pyqt-ui-engineer：
+
+${rollback}
+
+**Step 1 - 新增图标缓存模块**
+路径：\`mf4_analyzer/ui/icons.py\`
+功能：
+- 接受图标名（如 \`${qtaNames || 'mdi6.menu-up / mdi6.menu-down'}\`），调 \`qtawesome.icon(name, color=...)\`
+  生成 4 套（rest/hover/press/disabled）× 3 方向（up/down/drop-down）的 QPixmap
+- 写入 \`<USER_DATA>/icon-cache/\` 目录（应用启动时一次性生成）
+- 用 \`devicePixelRatio\` 倍率渲染保证 HiDPI
+- 颜色规格：rest \`#475569\`, hover \`#1769e0\`, press \`#1349a8\`, disabled \`#cbd5e1\`
+- 返回每个 pixmap 的绝对路径，供 QSS 模板字符串替换使用
+
+**Step 2 - QSS 模板化**
+\`style.qss\` 改为模板（如 \`style.qss.in\`），含占位符 \`{{ICON_UP}}\` / \`{{ICON_DOWN}}\` / \`{{ICON_DROP}}\` 等；
+\`MainWindow.__init__\` 启动时读模板、替换占位符为绝对路径、setStyleSheet。
+
+**Step 3 - 按钮宽度统一为 22px**
+combo drop-down + spinbox up/down button 全部 22px，padding-right 24px。
+
+**Step 4 - 验证**
+- offscreen 渲染 inspector 4 状态：confirm 4 状态都看到正确颜色的图标
+- HiDPI 测试：临时设 \`os.environ['QT_SCALE_FACTOR']='1.5'\` 跑一次，确认无锯齿
+- \`tests/ui/\` 全绿
+- 选定的 qtawesome 图标：**${qtaNames || '请确认'}**
+
+文件范围：\`mf4_analyzer/ui/style.qss\` (改) + \`mf4_analyzer/ui/icons.py\` (新) + \`mf4_analyzer/ui/main_window.py\` (启动钩子)。`,
+
+    C: `
+派给 pyqt-ui-engineer：
+
+${rollback}
+
+**核心思路**：用 Python 直接给 spinbox 内置 up/down button 调 setIcon。
+
+**Step 1 - 新增 widget factory**
+路径：\`mf4_analyzer/ui/widgets/styled_spinbox.py\`
+- \`StyledSpinBox(QSpinBox)\` / \`StyledDoubleSpinBox(QDoubleSpinBox)\` / \`StyledComboBox(QComboBox)\`
+- 在 __init__ 末尾用 \`findChildren(QToolButton)\` 找到 up/down button，调 setIcon(qta.icon(${qtaNames || 'mdi6.menu-up'}))
+- 注意：私有 child 名取决于 Qt 版本，需做命名 fallback
+
+**Step 2 - 替换所有创建点**
+\`mf4_analyzer/ui/inspector_sections.py\` 内所有 \`QSpinBox()\` / \`QDoubleSpinBox()\` / \`QComboBox()\` 改用 styled 版本。
+
+**Step 3 - 验证**
+确认 findChildren 在 Qt 5.15.11 (本项目版本) 能拿到内置 button。如果 Qt API 变更导致拿不到，立即回退到方案 B。
+
+⚠ **此方案有内置实现风险**，pyqt-ui-engineer 必须先做一个 PoC 验证 \`findChild\` 命中后再继续。
+
+文件范围：\`mf4_analyzer/ui/widgets/styled_spinbox.py\` (新) + \`inspector_sections.py\` + 可能的其它 spinbox 创建点。`,
+
+    D: `
+派给 pyqt-ui-engineer：
+
+${rollback}
+
+**Step 1 - 导出 SVG**
+从 qtawesome 导出 ${qtaNames || 'mdi6.menu-up / mdi6.menu-down'} 为独立 SVG 文件：
+\`\`\`python
+import qtawesome as qta
+icon = qta.icon('${famObj?.qta?.[0] || 'mdi6.menu-up'}', color='#475569')
+# 用 QSvgRenderer 提取或直接从 qtawesome 字体源拷 path
+\`\`\`
+路径：\`resources/icons/spin-up-rest.svg\` 等（4 状态 × 3 方向 = 12 个）。
+
+**Step 2 - 写 qrc**
+\`resources/icons.qrc\`：
+\`\`\`xml
+<RCC><qresource prefix="/icons">
+  <file>spin-up-rest.svg</file>
+  ...
+</qresource></RCC>
+\`\`\`
+\`pyrcc5 -o mf4_analyzer/icons_rc.py resources/icons.qrc\`
+
+**Step 3 - 入口 import**
+\`mf4_analyzer/__init__.py\` 加 \`from . import icons_rc  # noqa\`
+
+**Step 4 - QSS 引用**
+\`QSpinBox::up-arrow { image: url(:/icons/spin-up-rest.svg); }\` 等 12 条规则。
+
+**Step 5 - 按钮宽度统一为 22px**
+
+**Step 6 - 验证**
+- offscreen 4 状态截图
+- 跨 DPI 检查（SVG 矢量保证）
+- \`tests/ui/\` 全绿
+
+文件范围：\`resources/icons/*.svg\` (新) + \`resources/icons.qrc\` (新) + \`mf4_analyzer/icons_rc.py\` (生成) + \`mf4_analyzer/__init__.py\` (注册) + \`mf4_analyzer/ui/style.qss\` (改) + 构建脚本说明。
+
+依赖新增：构建期需 \`pyrcc5\`（pyqt5 自带）。`,
+
+    E: `
+派给 pyqt-ui-engineer：
+
+${rollback}
+
+**核心思路**：让 Qt 平台 style 自己画箭头，QSS 不再 override subcontrol。
+
+**唯一改动**
+\`mf4_analyzer/ui/style.qss\`：
+- 删除所有 \`QSpinBox::up-button\` / \`QSpinBox::down-button\` / \`QSpinBox::up-arrow\` / \`QSpinBox::down-arrow\` 规则
+- 删除所有 \`QDoubleSpinBox::*\` 同上
+- 删除所有 \`QComboBox::drop-down\` / \`QComboBox::down-arrow\` 规则
+- 保留 input border / focus / hover / disabled 规则
+- 保留 padding 调整（避免文字贴边）
+
+**风险确认**
+此方案外观会随 Qt 平台 style 变化（Windows 11 / Fusion / macOS 各不同）。
+在 PR 描述里明确标注：「外观将回归 OS native，不再保证扁平化一致性」。
+
+**验证**
+跑 \`tests/ui/\` 全部，offscreen 截图作为基线（外观会跟项目其它扁平化按钮形成对比）。
+
+文件范围：仅 \`mf4_analyzer/ui/style.qss\`。`,
+
+    F: `
+派给 pyqt-ui-engineer：
+
+${rollback}
+
+**核心思路**：QProxyStyle 子类一处实现，所有 spinbox/combo 自动套用。
+
+**Step 1 - 新增 ProxyStyle**
+路径：\`mf4_analyzer/ui/flat_style.py\`
+\`\`\`python
+class FlatStyle(QProxyStyle):
+    def drawPrimitive(self, el, opt, p, w=None):
+        if el == QStyle.PE_IndicatorSpinUp:
+            self._draw_triangle(p, opt.rect, dir='up', enabled=opt.state & QStyle.State_Enabled)
+            return
+        if el == QStyle.PE_IndicatorSpinDown:
+            self._draw_triangle(p, opt.rect, dir='down', enabled=...)
+            return
+        if el == QStyle.PE_IndicatorArrowDown:
+            self._draw_triangle(p, opt.rect, dir='down', enabled=...)
+            return
+        super().drawPrimitive(el, opt, p, w)
+
+    def _draw_triangle(self, p, rect, dir, enabled):
+        # QPainterPath / drawPolygon, antialiased, color picked by enabled state
+\`\`\`
+
+**Step 2 - 入口注册**
+\`MainWindow.__init__\` 或 \`app/__main__.py\`：
+\`QApplication.setStyle(FlatStyle('Fusion'))\`
+
+**Step 3 - QSS 协调**
+保留 input border 规则；删除 ::up-arrow / ::down-arrow / ::drop-down 内部 image，让 ProxyStyle 接管。
+按钮宽度统一为 22px（QSS 仍负责 ::up-button / ::down-button / ::drop-down 的 width）。
+
+**Step 4 - 验证**
+- offscreen 4 状态截图
+- HiDPI 跑一次
+- \`tests/ui/\` 全绿
+
+文件范围：\`mf4_analyzer/ui/flat_style.py\` (新) + \`mf4_analyzer/ui/style.qss\` (改) + 入口（main_window 或 main 函数）。`,
+  };
+
+  return `## ${headers[sid]}\n\n${bodies[sid].trim()}`;
+}
+
+function updatePrompt() {
+  const sid = state.selectedScheme;
+  const scheme = SCHEMES.find(s => s.id === sid);
+  const famId = state.family[sid] || null;
+  const famObj = famId ? FAMILIES.find(f => f.id === famId) : null;
+  const familyText = famObj && scheme.needsFamilyPicker ? ` · 家族 <code>${famObj.label}</code>` : '';
+  document.getElementById('selectedInfo').innerHTML =
+    `已选：方案 <b>${sid}</b> — ${scheme.name}${familyText}`;
+  document.getElementById('promptBox').textContent = buildPrompt();
+}
+
+// ============================================================================
+// Copy button
+// ============================================================================
+document.getElementById('copyBtn').addEventListener('click', () => {
+  const text = document.getElementById('promptBox').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = '已复制 ✓';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '复制 Prompt'; btn.classList.remove('copied'); }, 1500);
+  });
+});
+
+renderAll();
+</script>
+</body>
+</html>
