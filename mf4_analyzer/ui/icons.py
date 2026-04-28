@@ -280,3 +280,184 @@ class Icons:
             p.drawLine(QPointF(10, 10), QPointF(10, 6))
             p.drawLine(QPointF(10, 10), QPointF(13, 10))
         return QIcon(pix)
+
+
+# =============================================================================
+# QSS subcontrol-arrow icon cache (scheme B: qtawesome -> PNG -> QSS image:url)
+# =============================================================================
+#
+# QSpinBox / QDoubleSpinBox / QComboBox subcontrols (::up-button /
+# ::down-button / ::drop-down) render no platform-default glyph once any
+# QSS rule customizes them. We supply our own arrows by rendering
+# mdi6.menu-up / mdi6.menu-down via qtawesome to per-state PNG files,
+# then referencing them from style.qss via ``image: url("...")``.
+#
+# The cache lives in ~/.mf4-analyzer-cache/icons/ so it persists across
+# runs. Filenames embed an icon-name + color + pixel-size + qtawesome-
+# version hash so a qtawesome upgrade or palette change forces
+# regeneration without manual cleanup.
+#
+# Color palette (matches Precision Light):
+#   rest      #475569   (slate-600 — visible at rest, low contrast)
+#   hover     #1769e0   (interaction blue — primary accent)
+#   press     #1349a8   (interaction blue darkened)
+#   disabled  #cbd5e1   (slate-300 — greyed out)
+#
+# The QSS template in style.qss uses placeholders like
+# ``{{ICON_SPIN_UP_REST}}`` that ``ensure_icon_cache`` substitutes at
+# stylesheet-load time (see mf4_analyzer/app.py).
+
+# Each entry: (placeholder_key, qtawesome_icon_name, color_hex)
+_ARROW_SPECS = (
+    # Spin box up arrow
+    ("ICON_SPIN_UP_REST",     "mdi6.menu-up",   "#475569"),
+    ("ICON_SPIN_UP_HOVER",    "mdi6.menu-up",   "#1769e0"),
+    ("ICON_SPIN_UP_PRESS",    "mdi6.menu-up",   "#1349a8"),
+    ("ICON_SPIN_UP_DISABLED", "mdi6.menu-up",   "#cbd5e1"),
+    # Spin box down arrow
+    ("ICON_SPIN_DOWN_REST",     "mdi6.menu-down", "#475569"),
+    ("ICON_SPIN_DOWN_HOVER",    "mdi6.menu-down", "#1769e0"),
+    ("ICON_SPIN_DOWN_PRESS",    "mdi6.menu-down", "#1349a8"),
+    ("ICON_SPIN_DOWN_DISABLED", "mdi6.menu-down", "#cbd5e1"),
+    # Combo drop-down arrow (separate filenames so QSS can wire them
+    # independently if we ever want a different combo glyph; today they
+    # share mdi6.menu-down so the cached PNGs are byte-identical to spin
+    # down's PNGs but live under their own filename hash).
+    ("ICON_COMBO_DOWN_REST",     "mdi6.menu-down", "#475569"),
+    ("ICON_COMBO_DOWN_HOVER",    "mdi6.menu-down", "#1769e0"),
+    ("ICON_COMBO_DOWN_PRESS",    "mdi6.menu-down", "#1349a8"),
+    ("ICON_COMBO_DOWN_DISABLED", "mdi6.menu-down", "#cbd5e1"),
+)
+
+# Logical (CSS pixel) icon size. The actual rendered PNG is scaled up by
+# devicePixelRatio so the QSS ``image:`` rule still resolves to a crisp
+# 12-logical-px glyph on HiDPI screens.
+_LOGICAL_ARROW_PX = 12
+
+
+def _icon_cache_dir():
+    """Return (and create if missing) the per-user icon cache directory."""
+    from pathlib import Path
+    out = Path.home() / ".mf4-analyzer-cache" / "icons"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def ensure_icon_cache():
+    """Generate per-state subcontrol arrow PNGs and return placeholder map.
+
+    Returns a dict mapping QSS placeholder keys (e.g. ``"ICON_SPIN_UP_REST"``)
+    to absolute filesystem paths of the corresponding cached PNG files. The
+    paths are forward-slash normalized; QSS ``image: url("...")`` on Windows
+    rejects backslashes silently, so callers feeding these into a stylesheet
+    can use the path verbatim.
+
+    Behavior:
+
+    * Cache directory is ``~/.mf4-analyzer-cache/icons/``. PNG filenames
+      embed (icon_name, color_hex, pixel_size, qtawesome.__version__) so a
+      qtawesome upgrade or palette change automatically re-generates without
+      manual invalidation.
+    * Existing non-empty PNGs are reused (skip path).
+    * Renders at ``devicePixelRatio * _LOGICAL_ARROW_PX`` and calls
+      ``setDevicePixelRatio`` on the saved pixmap so HiDPI screens get crisp
+      output without QSS having to know about scale factors.
+    * Logs one debug line after a regeneration pass with timing and count.
+
+    **Ordering constraint**: must be called AFTER ``QApplication`` has been
+    constructed. qtawesome lazy-loads its icon font and emits
+    ``UserWarning: You need to have a running QApplication`` if invoked
+    pre-app; the rendered pixmap also depends on the screen's
+    devicePixelRatio which is only known once QApplication exists.
+    """
+    import time
+    from pathlib import Path
+
+    from PyQt5.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        # Fail loud — wiring this before QApplication is a programmer error.
+        raise RuntimeError(
+            "ensure_icon_cache() requires an existing QApplication; call "
+            "after QApplication(sys.argv).",
+        )
+
+    # Lazy-import qtawesome so module-level imports of icons.py do not pay
+    # the qtawesome font-load cost when only the QPainter Icons class is
+    # used (the existing usage path).
+    import qtawesome as qta
+
+    try:
+        qta_version = qta.__version__
+    except AttributeError:
+        # Defensive: fall back to a stable string so cache filenames are
+        # still deterministic even if qtawesome stops exposing __version__.
+        qta_version = "unknown"
+
+    ratio = app.devicePixelRatio() or 1.0
+    if ratio < 1.0:
+        ratio = 1.0
+    size_px = int(round(_LOGICAL_ARROW_PX * ratio))
+
+    out_dir = _icon_cache_dir()
+    paths = {}
+    generated = 0
+    t0 = time.perf_counter()
+
+    for placeholder, icon_name, color in _ARROW_SPECS:
+        color_slug = color.lstrip("#").lower()
+        # Cache key uses qtawesome version so an upgrade invalidates
+        # automatically. Including the icon_name lets future palette
+        # variants (e.g. mdi6.chevron-up) co-exist in the same dir.
+        filename = (
+            f"{icon_name.replace('.', '_')}_"
+            f"{color_slug}_{size_px}_qta{qta_version}.png"
+        )
+        out_path = out_dir / filename
+
+        if not (out_path.exists() and out_path.stat().st_size > 0):
+            pix = qta.icon(icon_name, color=color).pixmap(size_px, size_px)
+            pix.setDevicePixelRatio(ratio)
+            pix.save(str(out_path), "PNG")
+            generated += 1
+
+        # Forward-slash normalize for QSS image:url consumption on Windows.
+        paths[placeholder] = str(out_path).replace("\\", "/")
+
+    if generated:
+        elapsed = time.perf_counter() - t0
+        # Use stderr-style print rather than logging so it shows up in the
+        # console even before any logging.basicConfig has run.
+        print(
+            f"[mf4_analyzer.ui.icons] generated {generated}/"
+            f"{len(_ARROW_SPECS)} subcontrol-arrow PNGs in {elapsed:.2f}s "
+            f"(cache: {out_dir})",
+        )
+
+    return paths
+
+
+def render_qss_template(template_text, icon_paths):
+    """Substitute ``{{KEY}}`` placeholders in a QSS string with icon paths.
+
+    Parameters
+    ----------
+    template_text : str
+        Raw QSS source that may contain ``{{ICON_*}}`` placeholders.
+    icon_paths : dict[str, str]
+        Mapping from placeholder key (without braces) to absolute icon
+        path. Use the return value of :func:`ensure_icon_cache`.
+
+    Returns
+    -------
+    str
+        Stylesheet with all known placeholders replaced. Unknown
+        placeholders are left untouched (Qt will silently drop ``image:``
+        rules pointing to nonexistent files; this is preferable to a hard
+        failure when adding new placeholders incrementally).
+    """
+    out = template_text
+    for key, path in icon_paths.items():
+        out = out.replace("{{" + key + "}}", path)
+    return out
