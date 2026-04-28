@@ -35,6 +35,7 @@ from .task_list import TaskListWidget
 
 _METHOD_LABELS: dict[str, str] = {
     "fft": "FFT",
+    "fft_time": "FFT vs Time",
     "order_time": "order_time",
     "order_track": "order_track",
 }
@@ -156,8 +157,14 @@ class BatchSheet(QDialog):
         self._analysis_panel.methodChanged.connect(
             lambda _m: self._recompute_pipeline_status()
         )
+        # Drive RPM-row visibility from the method (init-sync below).
+        self._analysis_panel.methodChanged.connect(self._input_panel.set_method)
         self._analysis_panel.paramsChanged.connect(self._recompute_pipeline_status)
         self._output_panel.changed.connect(self._recompute_pipeline_status)
+
+        # Init-sync (per conditional-visibility-init-sync lesson): seed the
+        # RPM row before show() so it doesn't flash visible.
+        self._input_panel.set_method(self._analysis_panel.current_method())
 
         # Init-sync — seed badges with the current default state.
         self._recompute_pipeline_status()
@@ -325,6 +332,9 @@ class BatchSheet(QDialog):
                 self.apply_signals((signal_name,))
             self.apply_method(preset.method)
             self.apply_params(dict(preset.params))
+            # Restore the InputPanel-owned rpm_factor field (Step 5.4).
+            if "rpm_factor" in preset.params:
+                self._input_panel.apply_rpm_factor(preset.params["rpm_factor"])
             self.apply_rpm_channel(preset.rpm_channel or "")
         else:
             # free_config: KEEP current files (the file selection is local
@@ -332,6 +342,9 @@ class BatchSheet(QDialog):
             self.apply_signals(tuple(preset.target_signals))
             self.apply_method(preset.method)
             self.apply_params(dict(preset.params))
+            # Restore the InputPanel-owned rpm_factor field (Step 5.4).
+            if "rpm_factor" in preset.params:
+                self._input_panel.apply_rpm_factor(preset.params["rpm_factor"])
             self.apply_rpm_channel(preset.rpm_channel or "")
 
         # Outputs apply in both paths.
@@ -647,6 +660,9 @@ class BatchSheet(QDialog):
         # BatchRunner._apply_time_range sees it (ultrareview bug_009).
         # Empty field → no key, so BatchRunner runs the full signal.
         params = dict(self.params())
+        # InputPanel-owned rpm_factor (Wave 2 Task 5) — DynamicParamForm no
+        # longer carries it, so we merge from the InputPanel here.
+        params.update(self._input_panel.rpm_params())
         rng = self.time_range()
         if rng is not None:
             params["time_range"] = rng

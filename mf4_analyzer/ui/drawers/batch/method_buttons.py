@@ -1,9 +1,10 @@
 """Method-selector button group + dynamic per-method parameter form.
 
-Exposes exactly THREE method buttons — ``fft``, ``order_time``,
-``order_track``. ``order_rpm`` was removed by upstream commit ``cfb301b``
-and ``batch.BatchRunner.SUPPORTED_METHODS`` no longer accepts it; reflecting
-that here keeps the UI selection in lock-step with the dispatcher (see
+Exposes exactly FOUR method buttons — ``fft``, ``fft_time``,
+``order_time``, ``order_track``. ``order_rpm`` was removed by upstream
+commit ``cfb301b`` and ``batch.BatchRunner.SUPPORTED_METHODS`` no longer
+accepts it; ``fft_time`` was added in Wave 3a so the UI selection stays
+in lock-step with the dispatcher (see
 ``signal-processing/2026-04-27-plan-verbatim-source-must-reconcile-with-recent-removals.md``).
 
 The dynamic parameter form swaps QFormLayout rows on ``set_method`` per
@@ -16,13 +17,14 @@ from __future__ import annotations
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
-    QButtonGroup, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-    QPushButton, QSpinBox, QWidget,
+    QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
+    QHBoxLayout, QPushButton, QSpinBox, QWidget,
 )
 
 
 _METHODS: tuple[tuple[str, str], ...] = (
     ("fft", "FFT"),
+    ("fft_time", "FFT vs Time"),
     ("order_time", "order_time"),
     ("order_track", "order_track"),
 )
@@ -79,8 +81,9 @@ _WINDOWS: tuple[str, ...] = ("hanning", "hamming", "blackman", "rectangular")
 # removed ``order_rpm`` column.
 _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
     "fft": ("window", "nfft"),
-    "order_time": ("window", "nfft", "max_order", "order_res", "time_res", "rpm_factor"),
-    "order_track": ("window", "nfft", "max_order", "target_order", "rpm_factor"),
+    "fft_time": ("window", "nfft", "overlap", "remove_mean"),
+    "order_time": ("window", "nfft", "max_order", "order_res", "time_res"),
+    "order_track": ("window", "nfft", "max_order", "target_order"),
 }
 
 
@@ -94,6 +97,10 @@ class DynamicParamForm(QWidget):
         self._form = QFormLayout(self)
         self._form.setContentsMargins(0, 0, 0, 0)
 
+        # rpm_factor is owned by InputPanel (Wave 2 Task 5) — no entry
+        # here on purpose; if a future preset injects an unmapped key it
+        # would surface as a KeyError rather than silently rendering as
+        # an extra row.
         self._labels: dict[str, str] = {
             "window": "窗函数",
             "nfft": "NFFT",
@@ -101,7 +108,8 @@ class DynamicParamForm(QWidget):
             "order_res": "阶次分辨率",
             "time_res": "时间分辨率",
             "target_order": "目标阶次",
-            "rpm_factor": "RPM 系数",
+            "overlap": "重叠率",
+            "remove_mean": "去均值",
         }
 
         self._widgets: dict[str, QWidget] = {}
@@ -151,13 +159,20 @@ class DynamicParamForm(QWidget):
         self._w_target_order.valueChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["target_order"] = self._w_target_order
 
-        # rpm_factor
-        self._w_rpm_factor = QDoubleSpinBox(self)
-        self._w_rpm_factor.setRange(0.0001, 10000.0)
-        self._w_rpm_factor.setDecimals(4)
-        self._w_rpm_factor.setValue(1.0)
-        self._w_rpm_factor.valueChanged.connect(lambda *_: self.paramsChanged.emit())
-        self._widgets["rpm_factor"] = self._w_rpm_factor
+        # overlap — QDoubleSpinBox 0..0.95
+        self._w_overlap = QDoubleSpinBox(self)
+        self._w_overlap.setRange(0.0, 0.95)
+        self._w_overlap.setSingleStep(0.05)
+        self._w_overlap.setDecimals(2)
+        self._w_overlap.setValue(0.5)
+        self._w_overlap.valueChanged.connect(lambda *_: self.paramsChanged.emit())
+        self._widgets["overlap"] = self._w_overlap
+
+        # remove_mean — QCheckBox
+        self._w_remove_mean = QCheckBox(self)
+        self._w_remove_mean.setChecked(True)
+        self._w_remove_mean.toggled.connect(lambda *_: self.paramsChanged.emit())
+        self._widgets["remove_mean"] = self._w_remove_mean
 
         # Track current method so set_method works idempotently.
         self._current = "fft"
@@ -194,8 +209,10 @@ class DynamicParamForm(QWidget):
             params["time_res"] = float(self._w_time_res.value())
         if "target_order" in self.visible_field_names():
             params["target_order"] = float(self._w_target_order.value())
-        if "rpm_factor" in self.visible_field_names():
-            params["rpm_factor"] = float(self._w_rpm_factor.value())
+        if "overlap" in self.visible_field_names():
+            params["overlap"] = float(self._w_overlap.value())
+        if "remove_mean" in self.visible_field_names():
+            params["remove_mean"] = bool(self._w_remove_mean.isChecked())
         return params
 
     def apply_params(self, params: dict) -> None:
@@ -217,13 +234,19 @@ class DynamicParamForm(QWidget):
             ("order_res", self._w_order_res),
             ("time_res", self._w_time_res),
             ("target_order", self._w_target_order),
-            ("rpm_factor", self._w_rpm_factor),
         ):
             if key in params:
                 try:
                     widget.setValue(float(params[key]))
                 except (TypeError, ValueError):
                     pass
+        if "overlap" in params:
+            try:
+                self._w_overlap.setValue(float(params["overlap"]))
+            except (TypeError, ValueError):
+                pass
+        if "remove_mean" in params:
+            self._w_remove_mean.setChecked(bool(params["remove_mean"]))
 
     # ------------------------------------------------------------------
     def _render_for(self, method: str) -> None:

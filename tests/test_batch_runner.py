@@ -434,7 +434,94 @@ def test_supported_methods_excludes_removed_order_rpm():
     """``order_rpm`` was permanently removed (commit cfb301b) — its handler
     in ``_run_one`` no longer exists. Keeping it in ``SUPPORTED_METHODS`` lets
     a stray preset pass ``_expand_tasks`` and fall through to the
-    ``unsupported method`` raise (silent / undefined). Pin the W1 baseline.
+    ``unsupported method`` raise (silent / undefined). Pin the W1 baseline,
+    extended in W3a (Phase 5) to include ``fft_time``.
     """
-    assert BatchRunner.SUPPORTED_METHODS == {"fft", "order_time", "order_track"}
+    assert BatchRunner.SUPPORTED_METHODS == {
+        "fft", "order_time", "order_track", "fft_time",
+    }
     assert "order_rpm" not in BatchRunner.SUPPORTED_METHODS
+
+
+# ---------------------------------------------------------------------------
+# Wave 3a (Phase 5): fft_time backend dispatch + dataframe + image + ceiling
+# ---------------------------------------------------------------------------
+
+
+def test_fft_time_method_supported(tmp_path):
+    from mf4_analyzer.batch import BatchRunner
+    assert "fft_time" in BatchRunner.SUPPORTED_METHODS
+
+
+def test_fft_time_exports_long_format_dataframe(tmp_path):
+    fd = _make_file(tmp_path, fs=1024.0)
+    from mf4_analyzer.batch import AnalysisPreset, BatchOutput, BatchRunner
+    preset = AnalysisPreset.free_config(
+        name="batch fft_time",
+        method="fft_time",
+        target_signals=("sig",),
+        params={
+            "fs": 1024.0, "window": "hanning", "nfft": 256,
+            "overlap": 0.5, "remove_mean": True,
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    import dataclasses
+    preset = dataclasses.replace(preset, file_ids=(1,))
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+    assert result.status == "done"
+    assert len(result.items) == 1
+    df = pd.read_csv(result.items[0].data_path)
+    assert list(df.columns) == ["time_s", "frequency_hz", "amplitude"]
+    # Frame count must be > 1 with the synthetic 2048-sample input,
+    # nfft=256, overlap=0.5 -> hop=128 -> at least 14 frames.
+    assert df["time_s"].nunique() > 1
+    assert df["frequency_hz"].nunique() == 256 // 2 + 1  # one-sided bins
+
+
+def test_fft_time_exports_image(tmp_path):
+    fd = _make_file(tmp_path, fs=1024.0)
+    from mf4_analyzer.batch import AnalysisPreset, BatchOutput, BatchRunner
+    preset = AnalysisPreset.free_config(
+        name="batch fft_time img",
+        method="fft_time",
+        target_signals=("sig",),
+        params={
+            "fs": 1024.0, "window": "hanning", "nfft": 256,
+            "overlap": 0.5, "remove_mean": True,
+        },
+        outputs=BatchOutput(export_data=False, export_image=True),
+    )
+    import dataclasses
+    preset = dataclasses.replace(preset, file_ids=(1,))
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+    assert result.status == "done"
+    assert result.items[0].image_path is not None
+    assert result.items[0].image_path.endswith(".png")
+
+
+def test_fft_time_amplitude_ceiling_emits_failed_item(tmp_path, monkeypatch):
+    """If the spectrogram analyzer rejects huge inputs (ValueError on
+    >64 MB amplitude matrix), batch must surface that as a per-item
+    failure rather than aborting the whole run."""
+    fd = _make_file(tmp_path, fs=1024.0)
+    from mf4_analyzer.batch import AnalysisPreset, BatchOutput, BatchRunner
+    from mf4_analyzer.signal import spectrogram as sp_mod
+
+    def boom(*args, **kwargs):
+        raise ValueError("spectrogram amplitude matrix exceeds 64 MB")
+
+    monkeypatch.setattr(sp_mod.SpectrogramAnalyzer, "compute", boom)
+
+    preset = AnalysisPreset.free_config(
+        name="boom",
+        method="fft_time",
+        target_signals=("sig",),
+        params={"fs": 1024.0, "nfft": 256, "overlap": 0.5},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    import dataclasses
+    preset = dataclasses.replace(preset, file_ids=(1,))
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+    assert result.status in ("partial", "blocked")
+    assert any("64 MB" in (b or "") for b in result.blocked)

@@ -23,14 +23,29 @@ from PyQt5.QtCore import (
     QObject, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal,
 )
 from PyQt5.QtWidgets import (
-    QAction, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton, QVBoxLayout,
-    QWidget,
+    QAction, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
+    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 from ....io.file_data import _TIME_NAMES
-from ...widgets.searchable_combo import SearchableComboBox
 from .signal_picker import SignalPickerPopup
+
+
+# Unit-preset → rpm_factor coefficient. The "自定义" sentinel leaves the
+# spinbox alone so users can free-type. Factors derived analytically:
+#   rad/s → rpm: 60 / (2π) ≈ 9.5492965855
+#   deg/s → rpm: 1 / 6     ≈ 0.1666666667
+_RPM_UNIT_FACTORS: dict[str, float] = {
+    "rpm":   1.0,
+    "rad/s": 60.0 / (2.0 * 3.141592653589793),
+    "deg/s": 1.0 / 6.0,
+}
+_RPM_UNIT_CUSTOM = "自定义"
+
+# Methods whose backend dispatch consumes RPM. Drives InputPanel.set_method
+# row visibility — fft / fft_time skip the row entirely.
+_RPM_USING_METHODS = frozenset({"order_time", "order_track"})
 
 
 # State machine values (spec §3.2). Run-time-only states (`loading`,
@@ -433,8 +448,58 @@ class InputPanel(QWidget):
         self._signal_picker = SignalPickerPopup(parent=form_host)
         form.addRow("目标信号", self._signal_picker)
 
-        self._rpm_combo = SearchableComboBox(form_host)
-        form.addRow("RPM 通道", self._rpm_combo)
+        # ----- RPM row (single-select picker + unit + factor) -----
+        rpm_host = QWidget(form_host)
+        rpm_lay = QHBoxLayout(rpm_host)
+        rpm_lay.setContentsMargins(0, 0, 0, 0)
+        rpm_lay.setSpacing(6)
+
+        self._rpm_picker = SignalPickerPopup(parent=rpm_host, single_select=True)
+        rpm_lay.addWidget(self._rpm_picker, 1)
+
+        self._rpm_unit_combo = QComboBox(rpm_host)
+        for unit in _RPM_UNIT_FACTORS.keys():
+            self._rpm_unit_combo.addItem(unit)
+        self._rpm_unit_combo.addItem(_RPM_UNIT_CUSTOM)
+        self._rpm_unit_combo.setMaximumWidth(90)
+        rpm_lay.addWidget(self._rpm_unit_combo)
+
+        # NOTE: setDecimals(10) so unit-preset factors with infinite
+        # decimal expansions (1/6 ≈ 0.1666666667, 60/(2π) ≈ 9.5492965855)
+        # round-trip through QDoubleSpinBox without losing more than
+        # ~1e-10 of precision. The display stays readable; the maximum
+        # width below keeps the column from ballooning.
+        self._rpm_factor_spin = QDoubleSpinBox(rpm_host)
+        self._rpm_factor_spin.setDecimals(10)
+        self._rpm_factor_spin.setRange(0.0001, 10000.0)
+        self._rpm_factor_spin.setValue(1.0)
+        self._rpm_factor_spin.setMaximumWidth(140)
+        rpm_lay.addWidget(self._rpm_factor_spin)
+
+        # Form row label
+        self._rpm_label_widget = QLabel("RPM 通道", form_host)
+        form.addRow(self._rpm_label_widget, rpm_host)
+        self._rpm_row_host = rpm_host  # referenced by set_method visibility
+
+        # Form reference + row index, captured for set_method's takeRow /
+        # insertRow toggle (PyQt5 5.15.11 has no QFormLayout.setRowVisible —
+        # verified against this repo's pinned PyQt5; revisit once we move
+        # to PyQt5 5.15+ where setRowVisible exists). We MUST keep widgets
+        # reparented to ``self`` while detached so they survive the layout
+        # round-trip (matches the DynamicParamForm._render_for pattern).
+        self._form_ref = form
+        # _rpm_row_index = the QFormLayout row position of the RPM row at
+        # construction time (after target-signals row is row 0). We snap
+        # it from getWidgetPosition so the value is honest even if rows
+        # are added in a different order in the future.
+        idx, _role = form.getWidgetPosition(self._rpm_row_host)
+        if idx < 0:
+            raise RuntimeError("RPM row not found in form layout")
+        self._rpm_row_index = idx
+        self._rpm_row_visible = True  # initial state matches addRow above
+
+        # Internal flag so unit→factor and factor→unit don't ping-pong.
+        self._rpm_factor_sync_busy = False
 
         self._time_edit = QLineEdit(form_host)
         self._time_edit.setPlaceholderText('留空=全段；"a,b" 表示 [a,b]s')
@@ -445,7 +510,9 @@ class InputPanel(QWidget):
         self._file_list.filesChanged.connect(self._on_files_changed)
         self._file_list.intersectionChanged.connect(self._on_intersection_changed)
         self._signal_picker.selectionChanged.connect(lambda *_: self.changed.emit())
-        self._rpm_combo.currentTextChanged.connect(lambda *_: self.changed.emit())
+        self._rpm_picker.selectionChanged.connect(lambda *_: self.changed.emit())
+        self._rpm_unit_combo.currentTextChanged.connect(self._on_rpm_unit_changed)
+        self._rpm_factor_spin.valueChanged.connect(self._on_rpm_factor_value_changed)
         self._time_edit.textChanged.connect(lambda *_: self.changed.emit())
 
         # Seed picker / RPM with initial empty intersection.
@@ -461,6 +528,87 @@ class InputPanel(QWidget):
     def _on_intersection_changed(self, _intersection: frozenset) -> None:
         self._refresh_signal_universe()
         # changed signal already fired through filesChanged path
+
+    def _on_rpm_unit_changed(self, unit: str) -> None:
+        if unit in _RPM_UNIT_FACTORS:
+            self._rpm_factor_sync_busy = True
+            try:
+                self._rpm_factor_spin.setValue(_RPM_UNIT_FACTORS[unit])
+            finally:
+                self._rpm_factor_sync_busy = False
+        # When unit is "自定义", leave spinbox alone.
+        self.changed.emit()
+
+    def _on_rpm_factor_value_changed(self, value: float) -> None:
+        if self._rpm_factor_sync_busy:
+            self.changed.emit()
+            return
+        # Identify if the new value matches a known unit (within tolerance).
+        match = None
+        for unit, factor in _RPM_UNIT_FACTORS.items():
+            if abs(value - factor) < 1e-6:
+                match = unit
+                break
+        target = match if match is not None else _RPM_UNIT_CUSTOM
+        if self._rpm_unit_combo.currentText() != target:
+            self._rpm_unit_combo.blockSignals(True)
+            try:
+                idx = self._rpm_unit_combo.findText(target)
+                if idx >= 0:
+                    self._rpm_unit_combo.setCurrentIndex(idx)
+            finally:
+                self._rpm_unit_combo.blockSignals(False)
+        self.changed.emit()
+
+    def set_method(self, method: str) -> None:
+        """Show/hide the RPM row based on whether the method consumes RPM.
+
+        Driven by ``BatchSheet`` on ``methodChanged``. Per the
+        ``conditional-visibility-init-sync-and-paired-field-children``
+        lesson, ``BatchSheet.__init__`` MUST call this once after
+        constructing both sub-widgets so the initial state is correct
+        before ``show()``.
+
+        Implementation note: PyQt5 5.15.11 does NOT expose
+        ``QFormLayout.setRowVisible``, and a plain ``setVisible(False)``
+        on the row's label + field leaves a blank gap (Qt reserves the
+        row's vertical space). We therefore use ``takeRow`` /
+        ``insertRow`` to fully detach and re-insert at the original
+        index — matching the ``DynamicParamForm._render_for`` pattern
+        already in use elsewhere in the batch UI. Detached widgets are
+        reparented to ``self`` so they survive the layout round-trip
+        and can be re-inserted later.
+        """
+        visible = method in _RPM_USING_METHODS
+        if visible == self._rpm_row_visible:
+            return
+        if visible:
+            # Re-insert at the original row position. ``insertRow`` accepts
+            # the original index even if rows below have shifted up while
+            # the RPM row was absent.
+            self._form_ref.insertRow(
+                self._rpm_row_index, self._rpm_label_widget, self._rpm_row_host,
+            )
+            self._rpm_label_widget.setVisible(True)
+            self._rpm_row_host.setVisible(True)
+        else:
+            idx, _role = self._form_ref.getWidgetPosition(self._rpm_row_host)
+            if idx >= 0:
+                taken = self._form_ref.takeRow(idx)
+                # Reparent both label and field widgets to ``self`` so they
+                # persist (they're orphaned otherwise once the layout drops
+                # them — Qt would eventually GC them).
+                if taken.labelItem is not None:
+                    lw = taken.labelItem.widget()
+                    if lw is not None:
+                        lw.setParent(self)
+                        lw.hide()
+                if taken.fieldItem is not None:
+                    fw = taken.fieldItem.widget()
+                    if fw is not None:
+                        fw.setParent(self)
+                        fw.hide()
+        self._rpm_row_visible = visible
 
     def _refresh_signal_universe(self) -> None:
         per_file = self._file_list.per_file_channel_sets()
@@ -482,20 +630,9 @@ class InputPanel(QWidget):
         self._signal_picker.set_available(available)
         self._signal_picker.set_partially_available(partial)
 
-        # RPM combo: keep current text if user already typed; just rebuild
-        # the dropdown options. Editable so user can free-type.
-        cur = self._rpm_combo.currentText()
-        self._rpm_combo.blockSignals(True)
-        self._rpm_combo.clear()
-        for name in available:
-            self._rpm_combo.addItem(name)
-        if cur:
-            idx = self._rpm_combo.findText(cur)
-            if idx >= 0:
-                self._rpm_combo.setCurrentIndex(idx)
-            else:
-                self._rpm_combo.setEditText(cur)
-        self._rpm_combo.blockSignals(False)
+        # RPM picker shares the same universe.
+        self._rpm_picker.set_available(available)
+        self._rpm_picker.set_partially_available(partial)
 
     # ------------------------------------------------------------------
     # Accessors
@@ -504,7 +641,16 @@ class InputPanel(QWidget):
         return self._signal_picker.selected()
 
     def rpm_channel(self) -> str:
-        return self._rpm_combo.currentText().strip()
+        sel = self._rpm_picker.selected()
+        return sel[0] if sel else ""
+
+    def rpm_params(self) -> dict:
+        """Return InputPanel-owned analysis params (currently rpm_factor).
+
+        Pairs with ``apply_rpm_factor`` for round-trip preset import/export.
+        BatchSheet.get_preset merges this dict into ``params``.
+        """
+        return {"rpm_factor": float(self._rpm_factor_spin.value())}
 
     def time_range(self) -> tuple[float, float] | None:
         text = self._time_edit.text().strip()
@@ -538,7 +684,25 @@ class InputPanel(QWidget):
         self._signal_picker.set_selected(tuple(signals))
 
     def apply_rpm_channel(self, ch: str) -> None:
-        self._rpm_combo.setEditText(str(ch or ""))
+        self._rpm_picker.set_selected((str(ch),) if ch else ())
+
+    def apply_rpm_factor(self, value: float) -> None:
+        """Restore the RPM factor spinbox + unit combo from a preset.
+
+        Pairs with ``rpm_params()`` so a saved preset's ``rpm_factor``
+        round-trips through export → JSON → import without resetting.
+        Picks the matching unit-preset label if ``value`` matches one
+        within tolerance, else "自定义".
+        """
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return
+        # Sync the spinbox first; _on_rpm_factor_value_changed will then
+        # pick the matching unit ("自定义" if no match) via the existing
+        # bidirectional logic. Do NOT block signals — we want the
+        # combo to follow.
+        self._rpm_factor_spin.setValue(v)
 
     def apply_time_range(self, rng: tuple[float, float] | None) -> None:
         if rng is None:
