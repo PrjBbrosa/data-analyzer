@@ -71,7 +71,6 @@ def test_order_contextual_params(qapp):
     p = oc.get_params()
     for k in ('max_order', 'order_res', 'time_res', 'nfft'):
         assert k in p
-    assert oc.target_order() > 0
 
 
 def test_order_contextual_emits(qapp, qtbot):
@@ -79,8 +78,6 @@ def test_order_contextual_emits(qapp, qtbot):
     oc = OrderContextual()
     with qtbot.waitSignal(oc.order_time_requested, timeout=200):
         oc.btn_ot.click()
-    with qtbot.waitSignal(oc.order_track_requested, timeout=200):
-        oc.btn_ok.click()
 
 
 def test_inspector_no_longer_exposes_mode_signals(qapp):
@@ -129,11 +126,16 @@ def test_fft_time_context_returns_params(qtbot):
     ctx.combo_nfft.setCurrentText('2048')
     ctx.combo_win.setCurrentText('hanning')
     ctx.spin_overlap.setValue(75)
-    ctx.combo_amp_mode.setCurrentText('Amplitude dB')
+    # Wave 4: combo_amp_mode replaced by combo_amp_unit (dB↔Linear) on
+    # the Z axis row; chk_freq_auto / spin_freq_min/max alias the X row;
+    # combo_dynamic replaced by spin_z_floor.
+    ctx.combo_amp_unit.setCurrentText('dB')
     ctx.chk_freq_auto.setChecked(False)
     ctx.spin_freq_min.setValue(50.0)
     ctx.spin_freq_max.setValue(2400.0)
-    ctx.combo_dynamic.setCurrentText('80 dB')
+    ctx.spin_z_floor.setValue(-80.0)
+    ctx.spin_z_ceiling.setValue(0.0)
+    ctx.chk_z_auto.setChecked(False)
 
     params = ctx.get_params()
 
@@ -144,6 +146,7 @@ def test_fft_time_context_returns_params(qtbot):
     assert params['freq_auto'] is False
     assert params['freq_min'] == 50.0
     assert params['freq_max'] == 2400.0
+    # Legacy ``dynamic`` is now synthesised from spin_z_floor.
     assert params['dynamic'] == '80 dB'
     # The 13 keys that MainWindow._fft_time_cache_key consumes.
     for key in (
@@ -298,17 +301,20 @@ def test_fft_contextual_spectrum_params_three_rows(qapp):
     assert -1 not in rows
 
 
-def test_fft_time_freq_min_max_share_one_form_row(qtbot):
-    """FFT-Time 频率下限/上限 collapse to one row."""
-    from PyQt5.QtWidgets import QFormLayout
+def test_fft_time_freq_min_max_share_one_axis_row(qtbot):
+    """Wave 4: 频率下限/上限 are no longer in a QFormLayout — they live
+    in the X row of the new 坐标轴设置 group as spin_x_min / spin_x_max
+    (aliased back to spin_freq_min / spin_freq_max). The old "share one
+    form row" contract becomes "share one axis row widget" → both spins
+    sit inside the same direct parent QWidget host built by
+    ``_build_axis_row``.
+    """
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
-    fl_min, r_min, _ = _form_row_for(ctx.spin_freq_min)
-    fl_max, r_max, _ = _form_row_for(ctx.spin_freq_max)
-    assert isinstance(fl_min, QFormLayout)
-    assert fl_min is fl_max
-    assert r_min == r_max >= 0
+    assert ctx.spin_freq_min is ctx.spin_x_min
+    assert ctx.spin_freq_max is ctx.spin_x_max
+    assert ctx.spin_freq_min.parentWidget() is ctx.spin_freq_max.parentWidget()
 
 
 # ---- 紧凑化【2】条件可见 (hide rows entirely when not relevant) ----
@@ -367,25 +373,27 @@ def test_persistent_top_range_rows_hidden_when_unchecked(qapp):
         pt.hide()
 
 
-def test_fft_time_freq_rows_hidden_when_auto(qtbot):
-    """FFT-Time: when 自动频率范围 is checked (default), 频率下/上限 row hides."""
+def test_fft_time_freq_spins_disabled_when_auto(qtbot):
+    """Wave 4: when 自动 (chk_x_auto / chk_freq_auto alias) is on (default),
+    the freq spins must be DISABLED (not hidden). The new inline 坐标轴设置
+    group keeps every row visible at all times so the user can see the
+    full X/Y/Z structure; the auto checkbox only toggles the spinbox
+    enabled state via _sync_axis_enabled.
+    """
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
     ctx.show()
     try:
-        # Default: chk_freq_auto checked → row hidden.
         assert ctx.chk_freq_auto.isChecked()
-        assert ctx.spin_freq_min.isHidden()
-        assert ctx.spin_freq_max.isHidden()
-        # Uncheck → row reveals.
+        assert not ctx.spin_freq_min.isEnabled()
+        assert not ctx.spin_freq_max.isEnabled()
         ctx.chk_freq_auto.setChecked(False)
-        assert not ctx.spin_freq_min.isHidden()
-        assert not ctx.spin_freq_max.isHidden()
-        # Check again → hidden again.
+        assert ctx.spin_freq_min.isEnabled()
+        assert ctx.spin_freq_max.isEnabled()
         ctx.chk_freq_auto.setChecked(True)
-        assert ctx.spin_freq_min.isHidden()
-        assert ctx.spin_freq_max.isHidden()
+        assert not ctx.spin_freq_min.isEnabled()
+        assert not ctx.spin_freq_max.isEnabled()
     finally:
         ctx.hide()
 
@@ -648,7 +656,7 @@ def test_order_contextual_field_widgets_have_max_width(qapp):
     oc = OrderContextual()
     fields = [
         oc.spin_mo, oc.spin_order_res, oc.spin_time_res,
-        oc.combo_nfft, oc.spin_to, oc.spin_rf,
+        oc.combo_nfft, oc.spin_rf,
     ]
     for f in fields:
         # 16777215 is QWIDGETSIZE_MAX (no cap). We need a real cap.
@@ -865,7 +873,7 @@ def test_order_contextual_short_numeric_fields_capped_tighter(qapp):
     from mf4_analyzer.ui.inspector_sections import OrderContextual
     oc = OrderContextual()
     for w in (oc.spin_mo, oc.spin_order_res, oc.spin_time_res,
-              oc.spin_rf, oc.spin_to):
+              oc.spin_rf):
         assert 200 <= w.maximumWidth() <= 260, (
             f"OrderContextual field {w.objectName() or type(w).__name__}"
             f" maximumWidth={w.maximumWidth()}px should use the A1 cap."
@@ -873,12 +881,16 @@ def test_order_contextual_short_numeric_fields_capped_tighter(qapp):
 
 
 def test_fft_time_contextual_short_fields_capped(qapp):
-    """A1 — FFTTimeContextual fields share the normal field cap."""
+    """A1 — FFTTimeContextual fields share the normal field cap.
+
+    Wave 4: combo_amp_mode + combo_dynamic dropped; spin_freq_min/max are
+    now hosted in the inline 坐标轴设置 group (capped at 72px by the
+    helper, NOT the QFormLayout field cap), so they're excluded here.
+    """
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     for w in (ctx.spin_overlap, ctx.spin_fs, ctx.combo_nfft, ctx.combo_win,
-              ctx.spin_db_ref, ctx.spin_freq_min, ctx.spin_freq_max,
-              ctx.combo_dynamic, ctx.combo_cmap, ctx.combo_amp_mode):
+              ctx.spin_db_ref, ctx.combo_cmap):
         assert 200 <= w.maximumWidth() <= 260, (
             f"FFTTimeContextual field "
             f"{w.objectName() or type(w).__name__} maximumWidth="
@@ -1360,79 +1372,197 @@ def test_fft_render_honors_axis_toggles(qtbot):
     assert 'dB' not in axes[1].get_ylabel()
 
 
-# ---- Wave 3 / Task 3.2: OrderContextual dB display controls ----
+# ---- Wave 3 (axis-settings + COT migration plan): 坐标轴设置 group ----
+#
+# OrderContextual replaces the legacy combo_amp_mode + combo_dynamic combos
+# with an explicit X/Y/Z range group. The dB ↔ Linear toggle now lives on
+# the Z (color scale) row as ``combo_amp_unit``. See Wave 3 of
+# docs/superpowers/plans/2026-04-28-axis-settings-and-cot-migration.md.
 
-def test_order_contextual_has_dB_controls(qapp):
-    """Plan Task 3.2.1: OrderContextual must expose amp_mode + dynamic combos
-    with HEAD-parity defaults (Amplitude dB, 30 dB)."""
+
+def test_order_contextual_has_axis_settings_group(qtbot):
+    """OrderContextual must contain a QGroupBox titled '坐标轴设置' with
+    9 controls: chk_x_auto + spin_x_min + spin_x_max + chk_y_auto +
+    spin_y_min + spin_y_max + chk_z_auto + spin_z_floor + spin_z_ceiling
+    + combo_amp_unit (the dB/Linear dropdown on the Z row)."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
-    w = OrderContextual()
-    assert hasattr(w, 'combo_amp_mode')
-    assert hasattr(w, 'combo_dynamic')
-    assert w.combo_amp_mode.currentText() == 'Amplitude dB'
-    assert w.combo_dynamic.currentText() == '30 dB'
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    for name in (
+        'chk_x_auto', 'spin_x_min', 'spin_x_max',
+        'chk_y_auto', 'spin_y_min', 'spin_y_max',
+        'chk_z_auto', 'spin_z_floor', 'spin_z_ceiling',
+        'combo_amp_unit',
+    ):
+        assert hasattr(oc, name), f'missing {name}'
+
+    # Defaults: x/y auto on, z auto off (mirrors old default 30 dB)
+    assert oc.chk_x_auto.isChecked()
+    assert oc.chk_y_auto.isChecked()
+    assert not oc.chk_z_auto.isChecked()
+    assert oc.spin_z_floor.value() == -30.0
+    assert oc.spin_z_ceiling.value() == 0.0
+    assert oc.combo_amp_unit.currentText() == 'dB'
 
 
-def test_order_contextual_dynamic_disabled_in_linear(qapp):
-    """Plan Task 3.2.1: dynamic-range combo only meaningful in dB mode."""
+def test_order_contextual_combo_amp_mode_and_dynamic_removed(qtbot):
+    """combo_amp_mode and combo_dynamic widgets are gone (their values
+    are now expressed via combo_amp_unit + spin_z_floor/ceiling)."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
-    w = OrderContextual()
-    w.combo_amp_mode.setCurrentText('Amplitude')
-    assert w.combo_dynamic.isEnabled() is False
-    w.combo_amp_mode.setCurrentText('Amplitude dB')
-    assert w.combo_dynamic.isEnabled() is True
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    assert not hasattr(oc, 'combo_amp_mode')
+    assert not hasattr(oc, 'combo_dynamic')
 
 
-def test_order_contextual_amp_mode_in_params(qapp):
-    """Plan Task 3.2.1: current_params() exposes amplitude_mode + dynamic and
-    apply_params() round-trips the same keys."""
+def test_order_contextual_y_max_clamped_by_max_order(qtbot):
+    """When the user changes spin_mo (max_order, calc param), spin_y_max
+    upper bound must follow so display range cannot exceed the calc range."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
-    w = OrderContextual()
-    w.combo_amp_mode.setCurrentText('Amplitude')
-    p = w.current_params()
-    assert p.get('amplitude_mode') == 'Amplitude'
-    w.apply_params({'amplitude_mode': 'Amplitude dB', 'dynamic': '50 dB'})
-    assert w.combo_amp_mode.currentText() == 'Amplitude dB'
-    assert w.combo_dynamic.currentText() == '50 dB'
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    oc.spin_mo.setValue(15)
+    assert oc.spin_y_max.maximum() == 15.0
+    # If user had y_max > 15, it should snap down
+    oc.spin_y_max.setValue(20)
+    assert oc.spin_y_max.value() <= 15.0
 
 
-# ---- Wave 4 / Task 4.2: COT algorithm picker on OrderContextual ----
-
-def test_order_contextual_has_algorithm_combo(qapp):
-    """Plan Task 4.2.1: OrderContextual must expose ``combo_algorithm`` whose
-    items are ['频域映射', 'COT (角域重采样)'] and whose default keeps the
-    pre-COT behaviour ('频域映射') so existing presets render identically."""
+def test_order_contextual_unit_toggle_forces_z_auto(qtbot):
+    """Switching combo_amp_unit dB↔Linear forces chk_z_auto on (per
+    the 2026-04-28 plan: avoids ambiguous unit-conversion semantics)."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
-    w = OrderContextual()
-    assert hasattr(w, 'combo_algorithm')
-    items = [w.combo_algorithm.itemText(i) for i in range(w.combo_algorithm.count())]
-    assert items == ['频域映射', 'COT (角域重采样)']
-    assert w.combo_algorithm.currentText() == '频域映射'  # default keeps existing
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Default: z_auto off, dB unit
+    oc.chk_z_auto.setChecked(False)
+    assert not oc.chk_z_auto.isChecked()
+    oc.combo_amp_unit.setCurrentText('Linear')
+    assert oc.chk_z_auto.isChecked()
 
 
-def test_order_contextual_samples_per_rev_visible_only_for_cot(qapp):
-    """Plan Task 4.2.1: ``spin_samples_per_rev`` exists with default 256 in
-    [64, 2048] and is only enabled when the COT algorithm is picked."""
+def test_order_contextual_current_params_emits_axis_keys(qtbot):
+    """current_params must emit the new axis keys."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
-    w = OrderContextual()
-    assert hasattr(w, 'spin_samples_per_rev')
-    assert w.spin_samples_per_rev.value() == 256
-    # default = freq-mapped → spin disabled
-    assert w.spin_samples_per_rev.isEnabled() is False
-    w.combo_algorithm.setCurrentText('COT (角域重采样)')
-    assert w.spin_samples_per_rev.isEnabled() is True
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    p = oc.current_params()
+    for key in ('x_auto', 'x_min', 'x_max',
+                'y_auto', 'y_min', 'y_max',
+                'z_auto', 'z_floor', 'z_ceiling',
+                'amplitude_mode'):
+        assert key in p, f'missing {key} in current_params'
+    assert isinstance(p['z_auto'], bool)
+    assert p['amplitude_mode'] in ('Amplitude dB', 'Amplitude')
 
 
-def test_order_contextual_algorithm_in_params(qapp):
-    """Plan Task 4.2.1: ``current_params()`` exposes
-    ``algorithm`` ('cot' | 'frequency') and ``samples_per_rev``;
-    ``apply_params()`` round-trips the same keys."""
+def test_order_contextual_apply_preset_legacy_dynamic(qtbot):
+    """_apply_preset must translate legacy 'dynamic' string to new
+    z_auto/z_floor/z_ceiling state."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
-    w = OrderContextual()
-    w.combo_algorithm.setCurrentText('COT (角域重采样)')
-    w.spin_samples_per_rev.setValue(512)
-    p = w.current_params()
-    assert p.get('algorithm') == 'cot'
-    assert p.get('samples_per_rev') == 512
-    w.apply_params({'algorithm': '频域映射', 'samples_per_rev': 256})
-    assert w.combo_algorithm.currentText() == '频域映射'
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Legacy preset shape
+    oc._apply_preset({'amplitude_mode': 'Amplitude dB', 'dynamic': '50 dB'})
+    assert not oc.chk_z_auto.isChecked()
+    assert oc.spin_z_floor.value() == -50.0
+    assert oc.spin_z_ceiling.value() == 0.0
+
+    oc._apply_preset({'amplitude_mode': 'Amplitude dB', 'dynamic': 'Auto'})
+    assert oc.chk_z_auto.isChecked()
+
+
+# ---- Wave 2 (axis-settings + COT migration plan): combo_algorithm removed ----
+#
+# The frequency-domain algorithm picker has been deleted. ``OrderContextual``
+# now always dispatches through the COT analyzer, so ``combo_algorithm`` and
+# its companion ``_on_algo_changed`` no longer exist, and ``current_params``
+# does not emit the ``algorithm`` key. ``spin_samples_per_rev`` is always
+# enabled (no longer gated by an algorithm choice).
+
+def test_order_contextual_has_no_algorithm_picker(qtbot):
+    """combo_algorithm and on_algo_changed are removed; spin_samples_per_rev
+    is always enabled (no longer gated by algorithm choice)."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    assert not hasattr(oc, 'combo_algorithm')
+    assert oc.spin_samples_per_rev.isEnabled()
+
+
+def test_order_contextual_current_params_omits_algorithm(qtbot):
+    """current_params must not emit 'algorithm' key (downstream MainWindow
+    no longer branches on it)."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    p = oc.current_params()
+    assert 'algorithm' not in p
+    assert 'samples_per_rev' in p
+
+
+# ---- Wave 4 (axis-settings + COT migration plan): FFTTimeContextual gains
+# the same 坐标轴设置 group; combo_amp_mode + combo_dynamic + the freq
+# auto/min/max QFormLayout block are migrated into the X / Z rows of the
+# new group. Backward-compat: chk_freq_auto / spin_freq_min / spin_freq_max
+# are preserved as attribute aliases so downstream main_window readers
+# (Wave 5 will retire them) keep working.
+
+def test_fft_time_contextual_has_axis_settings_group(qtbot):
+    """FFTTimeContextual must contain QGroupBox '坐标轴设置' with the same
+    9 controls as OrderContextual but X = freq, Y = amplitude."""
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+
+    for name in (
+        'chk_x_auto', 'spin_x_min', 'spin_x_max',
+        'chk_y_auto', 'spin_y_min', 'spin_y_max',
+        'chk_z_auto', 'spin_z_floor', 'spin_z_ceiling',
+        'combo_amp_unit',
+    ):
+        assert hasattr(fc, name), f'missing {name}'
+
+    assert not hasattr(fc, 'combo_amp_mode')
+    assert not hasattr(fc, 'combo_dynamic')
+    # chk_freq_auto + spin_freq_min/max moved into the axis group
+    # but kept as attribute names for backward-compat with downstream readers
+    # — they now alias to chk_x_auto / spin_x_min / spin_x_max.
+    assert fc.chk_freq_auto is fc.chk_x_auto
+    assert fc.spin_freq_min is fc.spin_x_min
+    assert fc.spin_freq_max is fc.spin_x_max
+
+
+def test_fft_time_contextual_current_params_emits_axis_keys(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+
+    p = fc.current_params() if hasattr(fc, 'current_params') else fc.get_params()
+    for key in ('x_auto', 'x_min', 'x_max',
+                'y_auto', 'y_min', 'y_max',
+                'z_auto', 'z_floor', 'z_ceiling',
+                'amplitude_mode'):
+        assert key in p
+    # Legacy keys preserved for now (Wave 5 callers; safe to keep)
+    assert 'freq_auto' in p
+    assert 'freq_min' in p
+    assert 'freq_max' in p
+
+
+def test_fft_time_contextual_apply_legacy_dynamic_80db(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+    fc._apply_preset({'amplitude_mode': 'Amplitude dB', 'dynamic': '80 dB'})
+    assert not fc.chk_z_auto.isChecked()
+    assert fc.spin_z_floor.value() == -80.0
+    assert fc.spin_z_ceiling.value() == 0.0

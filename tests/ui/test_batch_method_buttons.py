@@ -32,8 +32,6 @@ def test_param_form_no_longer_renders_rpm_factor(qtbot):
     qtbot.addWidget(form)
     form.set_method("order_time")
     assert "rpm_factor" not in form.visible_field_names()
-    form.set_method("order_track")
-    assert "rpm_factor" not in form.visible_field_names()
 
 
 def test_batch_sheet_get_preset_includes_rpm_factor_from_input_panel(qtbot):

@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 
 from .signal.fft import FFTAnalyzer
-from .signal.order import OrderAnalysisParams, OrderAnalyzer
 from ._chart_kw import CHART_TIGHT_LAYOUT_KW
 
 
@@ -154,7 +153,7 @@ def _default_loader(path):
 
 
 class BatchRunner:
-    SUPPORTED_METHODS = {'fft', 'order_time', 'order_track', 'fft_time'}
+    SUPPORTED_METHODS = {'fft', 'order_time', 'fft_time'}
 
     def __init__(self, files, loader: Callable | None = None):
         self.files = files
@@ -413,9 +412,6 @@ class BatchRunner:
             if method == 'order_time':
                 df = self._compute_order_time_dataframe(sig, rpm, time, fs, preset.params)
                 image_payload = ('order_time', df)
-            elif method == 'order_track':
-                df = self._compute_order_track_dataframe(sig, rpm, fs, preset.params)
-                image_payload = ('order_track', df)
             else:  # pragma: no cover - guarded by _expand_tasks
                 raise ValueError(f"unsupported method: {method}")
 
@@ -466,26 +462,37 @@ class BatchRunner:
         )
         return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
 
-    @staticmethod
-    def _order_params(fs, params):
-        return OrderAnalysisParams(
-            fs=fs,
+    @classmethod
+    def _compute_order_time_dataframe(cls, sig, rpm, time, fs, params):
+        """Compute time-order spectrogram via Computed Order Tracking.
+
+        As of 2026-04-28 the legacy frequency-domain path
+        (``OrderAnalyzer`` time-order result builder) is no longer invoked
+        here; COT handles all RPM regimes (sweep, coast-down, steady-state)
+        without smearing. ``samples_per_rev`` defaults to 256 when absent from
+        preset params; the COT pipeline requires ``time`` to be strictly
+        monotonically increasing.
+        """
+        import numpy as np
+        from .signal.order_cot import COTOrderAnalyzer, COTParams
+
+        # Defensive: COT requires strictly monotonic t. Even microsecond
+        # jitter in MF4 timestamps would raise ValueError. If not strict,
+        # rebuild a uniform fallback from len + fs.
+        time_arr = np.asarray(time, dtype=float)
+        if len(time_arr) < 2 or np.any(np.diff(time_arr) <= 0):
+            time_arr = np.arange(len(time_arr), dtype=float) / float(fs)
+
+        cot_params = COTParams(
+            samples_per_rev=int(params.get('samples_per_rev', 256)),
             nfft=int(params.get('nfft', 1024)),
-            window=params.get('window', 'hanning'),
+            window=str(params.get('window', 'hanning')),
             max_order=float(params.get('max_order', params.get('max_ord', 20))),
             order_res=float(params.get('order_res', 0.1)),
             time_res=float(params.get('time_res', 0.05)),
-            target_order=float(params.get('target_order', params.get('target', 1.0))),
+            fs=float(fs),
         )
-
-    @classmethod
-    def _compute_order_time_dataframe(cls, sig, rpm, time, fs, params):
-        result = OrderAnalyzer.compute_time_order_result(
-            sig,
-            rpm,
-            time,
-            cls._order_params(fs, params),
-        )
+        result = COTOrderAnalyzer.compute(sig, rpm, time_arr, cot_params)
         return _matrix_to_long_dataframe(
             result.times,
             result.orders,
@@ -525,15 +532,6 @@ class BatchRunner:
             x_name='time_s',
             y_name='frequency_hz',
         )
-
-    @classmethod
-    def _compute_order_track_dataframe(cls, sig, rpm, fs, params):
-        result = OrderAnalyzer.extract_order_track_result(
-            sig,
-            rpm,
-            cls._order_params(fs, params),
-        )
-        return pd.DataFrame({'rpm': result.rpm, 'amplitude': result.amplitude})
 
     def _rpm_values(self, fd, preset):
         if preset.rpm_signal is not None:
@@ -577,10 +575,6 @@ class BatchRunner:
             if kind == 'fft':
                 ax.plot(df['frequency_hz'], df['amplitude'], lw=1.0)
                 ax.set_xlabel('Frequency (Hz)')
-                ax.set_ylabel('Amplitude')
-            elif kind == 'order_track':
-                ax.plot(df['rpm'], df['amplitude'], lw=1.0)
-                ax.set_xlabel('RPM')
                 ax.set_ylabel('Amplitude')
             else:
                 pivot = df.pivot(

@@ -92,36 +92,102 @@ QDoubleSpinBox:disabled {
     border-color: #eef2f7;
 }
 
-/* Strip hard fills from combo / spin button regions */
+/* Combo / spin button regions — provide a faint resting tint so the
+ * click target is discoverable without hover, plus explicit arrow
+ * glyphs sourced from qtawesome (mdi6.menu-up / mdi6.menu-down) and
+ * cached as PNG files under ~/.mf4-analyzer-cache/icons. The
+ * placeholders below are substituted at startup by
+ * mf4_analyzer.ui.icons.render_qss_template (see app.py loader). See
+ * lesson pyqt-ui/2026-04-28-qss-subcontrol-needs-explicit-arrow-glyph.md.
+ *
+ * Why image:url and not the border-triangle CSS hack: the triangle
+ * width is fixed by the border math, so it does not visually scale
+ * with the gutter button; HiDPI also amplifies its blocky edge. A
+ * vector glyph rasterized to the screen DPR keeps the chevron crisp
+ * across scale factors and aligns naturally inside the 22px gutter.
+ */
 QComboBox::drop-down {
-    width: 20px;
+    width: 22px;
     border: none;
-    background-color: transparent;
+    border-left: 1px solid #eef2f7;
+    background-color: #fafbfd;
 }
 QComboBox::drop-down:hover { background-color: #eef2f7; }
+QComboBox::drop-down:pressed { background-color: #d8e4f5; }
+QComboBox::down-arrow {
+    image: url("{{ICON_COMBO_DOWN_REST}}");
+    width: 12px;
+    height: 12px;
+}
+QComboBox::down-arrow:on,
+QComboBox::down-arrow:hover {
+    image: url("{{ICON_COMBO_DOWN_HOVER}}");
+}
+QComboBox::down-arrow:disabled {
+    image: url("{{ICON_COMBO_DOWN_DISABLED}}");
+}
 
-QSpinBox, QDoubleSpinBox { padding-right: 20px; }
+QSpinBox, QDoubleSpinBox { padding-right: 24px; }
 
 QSpinBox::up-button,
 QDoubleSpinBox::up-button {
-    width: 18px;
+    width: 22px;
     subcontrol-origin: border;
     subcontrol-position: top right;
     border: none;
-    background-color: transparent;
+    border-left: 1px solid #eef2f7;
+    border-bottom: 1px solid #eef2f7;
+    background-color: #fafbfd;
 }
 QSpinBox::down-button,
 QDoubleSpinBox::down-button {
-    width: 18px;
+    width: 22px;
     subcontrol-origin: border;
     subcontrol-position: bottom right;
     border: none;
-    background-color: transparent;
+    border-left: 1px solid #eef2f7;
+    background-color: #fafbfd;
 }
 QSpinBox::up-button:hover,
-QSpinBox::down-button:hover,
 QDoubleSpinBox::up-button:hover,
-QDoubleSpinBox::down-button:hover { background-color: #eef2f7; }
+QSpinBox::down-button:hover,
+QDoubleSpinBox::down-button:hover {
+    background-color: #eef2f7;
+}
+QSpinBox::up-button:pressed,
+QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed,
+QDoubleSpinBox::down-button:pressed {
+    background-color: #d8e4f5;
+}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    image: url("{{ICON_SPIN_UP_REST}}");
+    width: 12px;
+    height: 12px;
+}
+QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {
+    image: url("{{ICON_SPIN_UP_HOVER}}");
+}
+QSpinBox::up-arrow:pressed, QDoubleSpinBox::up-arrow:pressed {
+    image: url("{{ICON_SPIN_UP_PRESS}}");
+}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {
+    image: url("{{ICON_SPIN_UP_DISABLED}}");
+}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    image: url("{{ICON_SPIN_DOWN_REST}}");
+    width: 12px;
+    height: 12px;
+}
+QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {
+    image: url("{{ICON_SPIN_DOWN_HOVER}}");
+}
+QSpinBox::down-arrow:pressed, QDoubleSpinBox::down-arrow:pressed {
+    image: url("{{ICON_SPIN_DOWN_PRESS}}");
+}
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {
+    image: url("{{ICON_SPIN_DOWN_DISABLED}}");
+}
 
 QComboBox QAbstractItemView {
     padding: 4px;

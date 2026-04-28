@@ -37,7 +37,6 @@ _METHOD_LABELS: dict[str, str] = {
     "fft": "FFT",
     "fft_time": "FFT vs Time",
     "order_time": "order_time",
-    "order_track": "order_track",
 }
 
 
@@ -375,6 +374,15 @@ class BatchSheet(QDialog):
             return
         except (ValueError, OSError) as exc:
             self._toast(f"preset 解析失败：{exc}", kind="error")
+            return
+        if preset is None:
+            # load_preset_from_json returns None when the preset
+            # references a method no longer in SUPPORTED_METHODS (e.g.
+            # legacy order_track presets). Surface a warning and skip.
+            self._toast(
+                "导入的预设引用了已移除的方法（如 order_track），已跳过。",
+                kind="warning",
+            )
             return
         self.apply_preset(preset)
         self._toast(f"已加载 preset：{preset.name}", kind="success")

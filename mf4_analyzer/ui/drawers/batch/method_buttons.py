@@ -1,16 +1,16 @@
 """Method-selector button group + dynamic per-method parameter form.
 
-Exposes exactly FOUR method buttons — ``fft``, ``fft_time``,
-``order_time``, ``order_track``. ``order_rpm`` was removed by upstream
-commit ``cfb301b`` and ``batch.BatchRunner.SUPPORTED_METHODS`` no longer
-accepts it; ``fft_time`` was added in Wave 3a so the UI selection stays
-in lock-step with the dispatcher (see
+Exposes exactly THREE method buttons — ``fft``, ``fft_time``,
+``order_time``. ``order_rpm`` was removed by upstream commit ``cfb301b``
+and ``order_track`` was removed 2026-04-28; ``batch.BatchRunner.SUPPORTED_METHODS``
+no longer accepts either, and ``fft_time`` was added in Wave 3a so the UI
+selection stays in lock-step with the dispatcher (see
 ``signal-processing/2026-04-27-plan-verbatim-source-must-reconcile-with-recent-removals.md``).
 
 The dynamic parameter form swaps QFormLayout rows on ``set_method`` per
-spec §3.3 (minus the dropped ``order_rpm`` column). At the end of
-``set_method`` we re-run the visibility helper once to seed the initial
-state — required by
+spec §3.3 (minus the dropped ``order_rpm`` / ``order_track`` columns).
+At the end of ``set_method`` we re-run the visibility helper once to seed
+the initial state — required by
 ``pyqt-ui/2026-04-26-conditional-visibility-init-sync-and-paired-field-children.md``.
 """
 from __future__ import annotations
@@ -26,7 +26,6 @@ _METHODS: tuple[tuple[str, str], ...] = (
     ("fft", "FFT"),
     ("fft_time", "FFT vs Time"),
     ("order_time", "order_time"),
-    ("order_track", "order_track"),
 )
 
 
@@ -83,7 +82,6 @@ _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
     "fft": ("window", "nfft"),
     "fft_time": ("window", "nfft", "overlap", "remove_mean"),
     "order_time": ("window", "nfft", "max_order", "order_res", "time_res"),
-    "order_track": ("window", "nfft", "max_order", "target_order"),
 }
 
 
@@ -107,7 +105,6 @@ class DynamicParamForm(QWidget):
             "max_order": "最大阶次",
             "order_res": "阶次分辨率",
             "time_res": "时间分辨率",
-            "target_order": "目标阶次",
             "overlap": "重叠率",
             "remove_mean": "去均值",
         }
@@ -150,14 +147,6 @@ class DynamicParamForm(QWidget):
         self._w_time_res.setValue(0.1)
         self._w_time_res.valueChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["time_res"] = self._w_time_res
-
-        # target_order
-        self._w_target_order = QDoubleSpinBox(self)
-        self._w_target_order.setRange(0.0, 1000.0)
-        self._w_target_order.setDecimals(2)
-        self._w_target_order.setValue(2.0)
-        self._w_target_order.valueChanged.connect(lambda *_: self.paramsChanged.emit())
-        self._widgets["target_order"] = self._w_target_order
 
         # overlap — QDoubleSpinBox 0..0.95
         self._w_overlap = QDoubleSpinBox(self)
@@ -207,8 +196,6 @@ class DynamicParamForm(QWidget):
             params["order_res"] = float(self._w_order_res.value())
         if "time_res" in self.visible_field_names():
             params["time_res"] = float(self._w_time_res.value())
-        if "target_order" in self.visible_field_names():
-            params["target_order"] = float(self._w_target_order.value())
         if "overlap" in self.visible_field_names():
             params["overlap"] = float(self._w_overlap.value())
         if "remove_mean" in self.visible_field_names():
@@ -233,7 +220,6 @@ class DynamicParamForm(QWidget):
             ("max_order", self._w_max_order),
             ("order_res", self._w_order_res),
             ("time_res", self._w_time_res),
-            ("target_order", self._w_target_order),
         ):
             if key in params:
                 try:

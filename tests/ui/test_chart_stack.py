@@ -205,13 +205,15 @@ def test_spectrogram_canvas_applies_dynamic_and_freq_range(qtbot):
         result,
         amplitude_mode='amplitude_db',
         cmap='turbo',
-        dynamic='60 dB',
+        z_auto=False,
+        z_floor=-60.0,
+        z_ceiling=0.0,
         freq_range=(0.0, 150.0),
     )
 
     im = canvas._ax_spec.images[0]
     vmin, vmax = im.get_clim()
-    assert (vmax - vmin) == 60.0          # dynamic="60 dB" applied
+    assert (vmax - vmin) == 60.0          # z_floor=-60 / z_ceiling=0 applied
     assert canvas._ax_spec.get_ylim()[1] <= 150.0  # freq_range applied
 
 

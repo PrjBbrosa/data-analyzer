@@ -346,7 +346,7 @@ def test_fft_time_failed_compute_keeps_old_chart(qtbot, monkeypatch):
         metadata={'frames': 8, 'hop': 4, 'freq_bins': 4},
     )
     win.canvas_fft_time.plot_result(
-        seed, amplitude_mode='amplitude', cmap='turbo', dynamic='Auto',
+        seed, amplitude_mode='amplitude', cmap='turbo', z_auto=True,
         freq_range=None,
     )
     assert win.canvas_fft_time._ax_spec is not None

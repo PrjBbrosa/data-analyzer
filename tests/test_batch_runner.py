@@ -102,25 +102,6 @@ def test_analysis_preset_replace_after_frozen_removed(tmp_path):
     assert p.outputs.export_data is True   # 原 preset 不被修改
 
 
-def test_free_config_order_track_preset_selects_matching_signals(tmp_path):
-    fd = _make_file(tmp_path)
-    preset = AnalysisPreset.free_config(
-        name="track all sig",
-        method="order_track",
-        signal_pattern="sig",
-        rpm_channel="rpm",
-        params={"fs": 1024.0, "target_order": 2.0, "nfft": 1024},
-        outputs=BatchOutput(export_data=True, export_image=False),
-    )
-
-    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
-
-    assert result.status == "done"
-    assert len(result.items) == 1
-    data = pd.read_csv(result.items[0].data_path)
-    assert list(data.columns) == ["rpm", "amplitude"]
-
-
 def test_batch_order_time_csv_shape(tmp_path):
     fd = _make_file(tmp_path)
     preset = AnalysisPreset.free_config(
@@ -430,17 +411,49 @@ def test_output_dir_create_failure_returns_blocked(tmp_path):
     assert events[-1].final_status == "blocked"
 
 
-def test_supported_methods_excludes_removed_order_rpm():
-    """``order_rpm`` was permanently removed (commit cfb301b) — its handler
-    in ``_run_one`` no longer exists. Keeping it in ``SUPPORTED_METHODS`` lets
-    a stray preset pass ``_expand_tasks`` and fall through to the
-    ``unsupported method`` raise (silent / undefined). Pin the W1 baseline,
-    extended in W3a (Phase 5) to include ``fft_time``.
+def test_supported_methods_excludes_removed_order_rpm_and_order_track():
+    """``order_rpm`` was permanently removed (commit cfb301b) and
+    ``order_track`` was removed 2026-04-28 — neither has a handler in
+    ``_run_one`` any more. Keeping a removed value in
+    ``SUPPORTED_METHODS`` lets a stray preset pass ``_expand_tasks`` and
+    fall through to the ``unsupported method`` raise (silent /
+    undefined). This regression test pins the strict-subset invariant so
+    later plans can't silently re-introduce a ghost handler (per
+    ``signal-processing/2026-04-27-plan-verbatim-source-must-reconcile-with-recent-removals.md``).
     """
     assert BatchRunner.SUPPORTED_METHODS == {
-        "fft", "order_time", "order_track", "fft_time",
+        "fft", "order_time", "fft_time",
     }
     assert "order_rpm" not in BatchRunner.SUPPORTED_METHODS
+    assert "order_track" not in BatchRunner.SUPPORTED_METHODS
+
+
+def test_legacy_order_track_preset_silently_skipped(tmp_path):
+    """A v1 preset whose ``method`` is no longer in ``SUPPORTED_METHODS``
+    (e.g. ``order_track``, removed 2026-04-28) must be skipped at load
+    time, not raise — so import handlers can surface a friendly toast
+    instead of crashing ``_run_one``'s ``else: raise``.
+    """
+    import json
+    from mf4_analyzer.batch_preset_io import load_preset_from_json
+
+    payload = {
+        "schema_version": 1,
+        "name": "legacy track",
+        "method": "order_track",
+        "target_signals": ["sig"],
+        "rpm_channel": "rpm",
+        "params": {"fs": 1024.0, "target_order": 2.0, "nfft": 1024},
+        "outputs": {
+            "export_data": True, "export_image": False, "data_format": "csv",
+        },
+    }
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    # Must not raise. Returning None signals "skip"; the import handler
+    # can render a friendly toast.
+    result = load_preset_from_json(path)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -525,3 +538,97 @@ def test_fft_time_amplitude_ceiling_emits_failed_item(tmp_path, monkeypatch):
     result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
     assert result.status in ("partial", "blocked")
     assert any("64 MB" in (b or "") for b in result.blocked)
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 (2026-04-28): batch order_time must route through COTOrderAnalyzer
+# rather than the legacy frequency-domain OrderAnalyzer.compute_time_order_result.
+# ---------------------------------------------------------------------------
+
+
+def test_compute_order_time_dataframe_uses_cot(monkeypatch):
+    """_compute_order_time_dataframe must route through COTOrderAnalyzer.compute,
+    not OrderAnalyzer.compute_time_order_result.
+
+    Spy both call sites; only the COT spy may be invoked.
+    """
+    from mf4_analyzer import batch as batch_mod
+    from mf4_analyzer.signal import order as order_mod
+    from mf4_analyzer.signal import order_cot as cot_mod
+
+    cot_calls = []
+    legacy_calls = []
+
+    real_cot = cot_mod.COTOrderAnalyzer.compute
+    real_legacy = order_mod.OrderAnalyzer.compute_time_order_result
+
+    def spy_cot(sig, rpm, t, params, **kw):
+        cot_calls.append(('cot', len(sig)))
+        return real_cot(sig, rpm, t, params, **kw)
+
+    def spy_legacy(*a, **kw):
+        legacy_calls.append(('legacy',))
+        return real_legacy(*a, **kw)
+
+    monkeypatch.setattr(cot_mod.COTOrderAnalyzer, 'compute', staticmethod(spy_cot))
+    monkeypatch.setattr(order_mod.OrderAnalyzer, 'compute_time_order_result',
+                        staticmethod(spy_legacy))
+
+    # Synthetic 4 s signal at 1 kHz with constant 1200 RPM, second-order tone
+    import numpy as np
+    fs = 1000.0
+    t = np.arange(0.0, 4.0, 1.0 / fs)
+    rpm_const = 1200.0
+    target_order = 2.0
+    f = target_order * rpm_const / 60.0
+    sig = np.sin(2 * np.pi * f * t)
+    rpm = np.full_like(t, rpm_const)
+
+    params = {
+        'fs': fs, 'nfft': 1024, 'window': 'hanning',
+        'max_order': 5.0, 'order_res': 0.1, 'time_res': 0.05,
+        # samples_per_rev not specified → default 256
+    }
+
+    df = batch_mod.BatchRunner._compute_order_time_dataframe(
+        sig, rpm, t, fs, params)
+
+    assert cot_calls, 'COT path must be invoked'
+    assert not legacy_calls, 'Legacy frequency-domain path must NOT be invoked'
+    assert {'time_s', 'order', 'amplitude'} <= set(df.columns)
+
+
+def test_legacy_preset_with_algorithm_silently_ignored(tmp_path):
+    """A preset emitted before 2026-04-28 may contain {algorithm: 'frequency'}
+    and {dynamic: '30 dB'}. load_preset_from_json must accept it without
+    raising and translate to the new field set."""
+    import json
+    from mf4_analyzer.batch_preset_io import load_preset_from_json
+
+    # W6: schema actually uses target_signals / rpm_channel; the old
+    # 'signal' / 'rpm_signal' top-level keys are silently ignored by
+    # load_preset_from_json. Use the real schema for fixture clarity.
+    legacy = {
+        "method": "order_time",
+        "name": "legacy",
+        "target_signals": ["ch1"],
+        "rpm_channel": "rpm",
+        "params": {
+            "fs": 1000.0, "nfft": 1024, "max_order": 20,
+            "order_res": 0.1, "time_res": 0.05,
+            "algorithm": "frequency",   # legacy
+            "dynamic": "30 dB",          # legacy
+            "amplitude_mode": "Amplitude dB",
+        },
+    }
+    p = tmp_path / "legacy.json"
+    p.write_text(json.dumps(legacy), encoding='utf-8')
+
+    preset = load_preset_from_json(str(p))
+    assert preset is not None  # not silently dropped (method is supported)
+    # 'algorithm' migrated away
+    assert 'algorithm' not in preset.params
+    # 'dynamic' translated
+    assert preset.params.get('z_auto') is False
+    assert preset.params.get('z_floor') == -30.0
+    assert preset.params.get('z_ceiling') == 0.0

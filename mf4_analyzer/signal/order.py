@@ -27,7 +27,6 @@ class OrderAnalysisParams:
     max_order: float = 20.0
     order_res: float = 0.1
     time_res: float = 0.05
-    target_order: float = 1.0
 
 
 @dataclass
@@ -35,14 +34,6 @@ class OrderTimeResult:
     times: np.ndarray
     orders: np.ndarray
     amplitude: np.ndarray  # shape (frames, orders)
-    params: OrderAnalysisParams
-    metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class OrderTrackResult:
-    rpm: np.ndarray
-    amplitude: np.ndarray
     params: OrderAnalysisParams
     metadata: dict = field(default_factory=dict)
 
@@ -237,6 +228,12 @@ class OrderAnalyzer:
 
     @staticmethod
     def compute_time_order_result(sig, rpm, t, params, progress_callback=None, cancel_token=None):
+        """DEPRECATED 2026-04-28: COT is the only production order-tracking path.
+
+        This frequency-domain mapping implementation is retained for one release
+        to support back-compat preset replay in tests. New callers must use
+        ``mf4_analyzer.signal.order_cot.COTOrderAnalyzer.compute``.
+        """
         sig, rpm, fs, nfft = OrderAnalyzer._validate_common(sig, rpm, params.fs, params.nfft)
         orders = OrderAnalyzer._orders(
             params.max_order, params.order_res,
@@ -305,64 +302,6 @@ class OrderAnalyzer:
         )
 
     @staticmethod
-    def extract_order_track_result(sig, rpm, params, progress_callback=None, cancel_token=None):
-        sig, rpm, fs, nfft = OrderAnalyzer._validate_common(sig, rpm, params.fs, params.nfft)
-        target = float(params.target_order)
-        if target <= 0:
-            raise ValueError("target_order must be positive")
-        hop = max(nfft // 4, 1)
-        starts = OrderAnalyzer._frame_starts(len(sig), nfft, hop)
-        total = len(starts)
-        rpm_values = np.zeros(total, dtype=float)
-        amplitudes = np.zeros(total, dtype=float)
-        target_arr = np.array([target], dtype=float)
-
-        window_array = get_analysis_window(params.window, nfft)
-        # For the single-target track we still report the at-median Nyquist
-        # estimate against the requested target order so the metadata
-        # contract is consistent across all three result types.
-        nyquist_clipped = OrderAnalyzer._nyquist_clipped_at_median_rpm(rpm, target_arr, fs)
-
-        def _check_cancel():
-            if cancel_token is not None and cancel_token():
-                raise RuntimeError("order computation cancelled")
-
-        for batch_start in range(0, total, _ORDER_BATCH_FRAMES):
-            _check_cancel()  # cancel #1: chunk boundary
-            batch_end = min(batch_start + _ORDER_BATCH_FRAMES, total)
-            chunk_starts = starts[batch_start:batch_end]
-
-            _check_cancel()  # cancel #2: before stack
-            frames = np.stack([sig[s:s + nfft] for s in chunk_starts], axis=0)
-            rpm_means = np.array(
-                [float(np.nanmean(rpm[s:s + nfft])) for s in chunk_starts],
-                dtype=float,
-            )
-            rpm_values[batch_start:batch_end] = rpm_means
-
-            _check_cancel()  # cancel #3: before FFT batch
-            chunk_amps = OrderAnalyzer._order_amplitudes_batch(
-                frames, rpm_means, fs, target_arr, nfft, window_array,
-            )
-            amplitudes[batch_start:batch_end] = chunk_amps[:, 0]
-
-            if progress_callback:
-                progress_callback(batch_end, total)
-
-        if progress_callback:
-            progress_callback(total, total)
-        return OrderTrackResult(
-            rpm=rpm_values,
-            amplitude=amplitudes,
-            params=params,
-            metadata={
-                'frames': total,
-                'hop': hop,
-                'nyquist_clipped_at_median_rpm': nyquist_clipped,
-            },
-        )
-
-    @staticmethod
     def compute_order_spectrum_time_based(sig, rpm, t, fs, max_ord=20, order_res=0.1, time_res=0.05, nfft=1024,
                                           progress_callback=None):
         """时间-阶次谱，返回 ``times, orders, amplitude[time, order]``."""
@@ -377,14 +316,3 @@ class OrderAnalyzer:
             sig, rpm, t, params, progress_callback=progress_callback
         )
         return result.times, result.orders, result.amplitude
-
-    @staticmethod
-    def extract_order_track(sig, rpm, fs, target, nfft=1024):
-        """单阶次跟踪，返回 ``rpm, amplitude``."""
-        params = OrderAnalysisParams(
-            fs=fs,
-            nfft=nfft,
-            target_order=target,
-        )
-        result = OrderAnalyzer.extract_order_track_result(sig, rpm, params)
-        return result.rpm, result.amplitude

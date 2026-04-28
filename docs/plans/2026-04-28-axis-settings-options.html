@@ -1,0 +1,843 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>坐标轴设置区域方案对比 — 2026-04-28</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --bg-card: #161b22;
+    --bg-card-hi: #1c2330;
+    --border-card: #2a3441;
+    --border-sel: #3b82f6;
+    --fg: #e2e8f0;
+    --fg-dim: #94a3b8;
+    --accent: #3b82f6;
+    --warn: #f59e0b;
+    --good: #10b981;
+    --bad: #ef4444;
+
+    /* App QSS palette (mock surface = matches the real PyQt5 inspector) */
+    --app-bg:        #ffffff;
+    --app-surface:   #f5f7fb;
+    --app-border:    #dfe5ee;
+    --app-border-hi: #b7c4d3;
+    --app-focus:     #1769e0;
+    --app-text:      #1e293b;
+    --app-text-dim:  #64748b;
+    --app-disabled:  #94a3b8;
+    --app-button:    #fafbfd;
+    --app-hover:     #eef2f7;
+    --code-bg: #0a0f15;
+    --code-fg: #d4d4d8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.5; }
+  code, .mono { font-family: "JetBrains Mono", Consolas, monospace; }
+  header {
+    padding: 16px 24px; border-bottom: 1px solid var(--border-card);
+    background: linear-gradient(180deg, #1a2332 0%, #0f1419 100%);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { margin: 0 0 4px 0; font-size: 18px; font-weight: 600; }
+  header .subtitle { color: var(--fg-dim); font-size: 12px; }
+  .info-banner {
+    margin: 12px 24px 0 24px; padding: 10px 14px;
+    background: rgba(59, 130, 246, 0.10);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    border-radius: 6px; color: #93c5fd; font-size: 13px;
+  }
+  .info-banner b { color: #60a5fa; }
+  main { padding: 16px 24px 220px 24px; }
+  .grid {
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border-card);
+    border-radius: 10px; padding: 14px;
+    transition: border-color .15s, background .15s;
+    cursor: pointer;
+  }
+  .card:hover { background: var(--bg-card-hi); }
+  .card.selected { border-color: var(--border-sel); box-shadow: 0 0 0 1px var(--border-sel); background: var(--bg-card-hi); }
+  .card-head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  }
+  .scheme-letter {
+    width: 26px; height: 26px; border-radius: 50%;
+    background: #243042; color: #cbd5e1; font-weight: 700; font-size: 13px;
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .card.selected .scheme-letter { background: var(--accent); color: #fff; }
+  .scheme-name { font-weight: 600; font-size: 14px; flex: 1; }
+  .pick-radio {
+    width: 16px; height: 16px; border: 2px solid #475569; border-radius: 50%;
+    flex-shrink: 0; position: relative;
+  }
+  .card.selected .pick-radio { border-color: var(--accent); }
+  .card.selected .pick-radio::after {
+    content: ""; position: absolute; inset: 2px;
+    background: var(--accent); border-radius: 50%;
+  }
+
+  /* State toggle */
+  .state-toggle {
+    display: flex; gap: 4px; margin: 8px 0 12px 0;
+    padding: 4px; background: #0a0f15; border-radius: 5px; width: fit-content;
+  }
+  .state-toggle button {
+    background: transparent; border: 0; color: var(--fg-dim);
+    padding: 3px 8px; font-size: 10px; border-radius: 3px;
+    cursor: pointer; font-family: inherit;
+  }
+  .state-toggle button.active { background: var(--accent); color: #fff; }
+
+  /* Mock app inspector card */
+  .mock {
+    width: 320px; background: var(--app-bg); color: var(--app-text);
+    border: 1px solid var(--app-border); border-radius: 8px;
+    padding: 12px; margin: 0 auto 12px auto;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    font-size: 12px;
+  }
+  .mock .group {
+    border: 1px solid #e5e9f0; border-radius: 7px;
+    padding: 10px 12px 12px 12px; margin-top: 8px;
+    background: var(--app-bg);
+    position: relative;
+  }
+  .mock .group .title {
+    color: var(--app-text-dim); font-size: 11px; font-weight: 600;
+    margin: -18px 0 8px 0; padding: 0 6px; background: var(--app-bg);
+    width: fit-content;
+  }
+  .mock .axis-label {
+    font-size: 11px; color: var(--app-text); font-weight: 500;
+    margin: 6px 0 4px 0;
+  }
+  .mock .axis-label.first { margin-top: 0; }
+  .mock .form-row {
+    display: grid; grid-template-columns: 60px 1fr; gap: 8px;
+    align-items: center; margin-bottom: 5px; min-height: 24px;
+  }
+  .mock .form-row > label {
+    color: var(--app-text); font-size: 11px; text-align: left;
+  }
+  .mock .form-row.compact { min-height: 22px; margin-bottom: 4px; }
+
+  /* Mock spinbox (qtawesome scheme B style) */
+  .mock-spin {
+    display: flex; align-items: stretch;
+    background: var(--app-bg); border: 1px solid var(--app-border);
+    border-radius: 6px; height: 24px; overflow: hidden;
+  }
+  .mock-spin.focused { border-color: var(--app-focus); box-shadow: 0 0 0 1px var(--app-focus); }
+  .mock-spin.disabled { background: var(--app-surface); border-color: #eef2f7; color: var(--app-disabled); }
+  .mock-spin .v {
+    flex: 1; padding: 2px 8px; font-size: 11px;
+    display: flex; align-items: center;
+    font-family: inherit;
+  }
+  .mock-spin .v.dim { color: var(--app-disabled); }
+  .mock-spin .stk {
+    display: flex; flex-direction: column; width: 22px;
+    border-left: 1px solid var(--app-hover); background: var(--app-button);
+  }
+  .mock-spin .stk > div {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+  }
+  .mock-spin .stk > div:first-child { border-bottom: 1px solid var(--app-hover); }
+  .mock-spin.disabled .stk { opacity: 0.5; }
+
+  /* Mock combobox */
+  .mock-combo {
+    display: flex; align-items: stretch;
+    background: var(--app-bg); border: 1px solid var(--app-border);
+    border-radius: 6px; height: 24px; overflow: hidden;
+  }
+  .mock-combo .v { flex: 1; padding: 2px 8px; font-size: 11px; display: flex; align-items: center; }
+  .mock-combo .drop {
+    width: 22px; display: flex; align-items: center; justify-content: center;
+    border-left: 1px solid var(--app-hover); background: var(--app-button);
+  }
+
+  /* Mock checkbox */
+  .mock-chk {
+    display: inline-flex; align-items: center; gap: 6px;
+    cursor: pointer; user-select: none; font-size: 11px;
+  }
+  .mock-chk .box {
+    width: 13px; height: 13px; border: 1.5px solid #94a3b8;
+    border-radius: 3px; background: var(--app-bg); position: relative;
+    flex-shrink: 0;
+  }
+  .mock-chk.on .box { background: var(--app-focus); border-color: var(--app-focus); }
+  .mock-chk.on .box::after {
+    content: ""; position: absolute; left: 3px; top: 0px;
+    width: 4px; height: 8px;
+    border: solid #fff; border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+
+  /* Inline (scheme B) row */
+  .mock .inline-row {
+    display: grid; grid-template-columns: 56px 50px 1fr 12px 1fr 24px;
+    gap: 5px; align-items: center; margin-bottom: 5px;
+    font-size: 11px;
+  }
+  .mock .inline-row .arrow { text-align: center; color: var(--app-text-dim); }
+  .mock .inline-row .unit { color: var(--app-text-dim); font-size: 10px; }
+
+  /* Tab (scheme C) */
+  .mock-tabs {
+    display: flex; gap: 0; margin-bottom: 6px;
+    border-bottom: 1px solid var(--app-border);
+  }
+  .mock-tabs > button {
+    background: transparent; border: 0; padding: 4px 16px;
+    font-size: 11px; cursor: pointer; color: var(--app-text-dim);
+    border-bottom: 2px solid transparent;
+    font-family: inherit;
+  }
+  .mock-tabs > button.active {
+    color: var(--app-focus); border-bottom-color: var(--app-focus);
+    font-weight: 600;
+  }
+
+  /* LineEdit (scheme D) */
+  .mock-lineedit {
+    background: var(--app-bg); border: 1px solid var(--app-border);
+    border-radius: 6px; padding: 3px 8px; height: 24px;
+    font-size: 11px; display: flex; align-items: center;
+    color: var(--app-text);
+    font-family: "JetBrains Mono", Consolas, monospace;
+  }
+  .mock-lineedit.focused { border-color: var(--app-focus); box-shadow: 0 0 0 1px var(--app-focus); }
+  .mock-lineedit.error { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
+
+  /* Range slider (scheme E) */
+  .mock-rangeslider {
+    height: 18px; padding: 0 8px;
+    display: flex; align-items: center; position: relative;
+  }
+  .mock-rangeslider .track {
+    flex: 1; height: 4px; background: #e5e9f0; border-radius: 2px;
+    position: relative;
+  }
+  .mock-rangeslider .fill {
+    position: absolute; top: 0; height: 100%;
+    background: var(--app-focus); border-radius: 2px;
+  }
+  .mock-rangeslider .h {
+    position: absolute; top: 50%; transform: translate(-50%, -50%);
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--app-bg); border: 2px solid var(--app-focus);
+    cursor: ew-resize;
+  }
+  .mock-rangeslider.disabled .h { border-color: var(--app-disabled); background: #f5f7fb; }
+  .mock-rangeslider.disabled .fill { background: var(--app-disabled); }
+  .mock .slider-label {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--app-text-dim); padding: 0 8px;
+    font-family: "JetBrains Mono", Consolas, monospace;
+  }
+
+  /* Popover (scheme F) */
+  .mock-button {
+    background: var(--app-bg); border: 1px solid var(--app-border);
+    border-radius: 6px; padding: 4px 12px; font-size: 11px;
+    color: var(--app-text); display: inline-flex; align-items: center; gap: 6px;
+    cursor: pointer; font-family: inherit;
+    height: 26px;
+  }
+  .mock-button:hover { background: var(--app-hover); }
+  .mock-popover {
+    margin-top: 6px; padding: 10px;
+    background: var(--app-bg); border: 1px solid var(--app-border);
+    border-radius: 7px; box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    position: relative;
+  }
+  .mock-popover::before {
+    content: ""; position: absolute; top: -7px; left: 16px;
+    width: 12px; height: 12px; background: var(--app-bg);
+    border: 1px solid var(--app-border);
+    border-right: 0; border-bottom: 0;
+    transform: rotate(45deg);
+  }
+
+  /* Detail rows */
+  .detail-row {
+    display: grid; grid-template-columns: 80px 1fr; gap: 6px;
+    font-size: 12px; padding: 4px 0; border-top: 1px dashed #1f2937;
+  }
+  .detail-row .key { color: var(--fg-dim); }
+  .detail-row .val { color: var(--fg); }
+  .pros-cons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+  .pros, .cons { font-size: 11px; padding: 6px 8px; border-radius: 4px; }
+  .pros { background: rgba(16, 185, 129, 0.10); color: #6ee7b7; border-left: 2px solid var(--good); }
+  .cons { background: rgba(239, 68, 68, 0.10); color: #fca5a5; border-left: 2px solid var(--bad); }
+  .pros::before { content: "✓ "; font-weight: 700; }
+  .cons::before { content: "✗ "; font-weight: 700; }
+
+  /* Sticky prompt */
+  .prompt-panel {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(180deg, rgba(15,20,25,0.95), #0a0f15);
+    border-top: 1px solid var(--border-card);
+    padding: 14px 24px; max-height: 200px; overflow: hidden;
+    backdrop-filter: blur(8px);
+    z-index: 5;
+  }
+  .prompt-head {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+  }
+  .prompt-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .prompt-head .selected-info { color: var(--fg-dim); font-size: 12px; flex: 1; }
+  .prompt-head button {
+    padding: 6px 14px; background: var(--accent); color: #fff;
+    border: 0; border-radius: 5px; cursor: pointer; font-size: 12px;
+    font-weight: 600;
+  }
+  .prompt-head button:hover { background: #2563eb; }
+  .prompt-head button.copied { background: var(--good); }
+  .prompt-box {
+    background: var(--code-bg); color: var(--code-fg);
+    padding: 10px 12px; border-radius: 6px;
+    font-family: "JetBrains Mono", Consolas, monospace;
+    font-size: 11px; line-height: 1.55;
+    max-height: 130px; overflow: auto;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  .card { user-select: none; }
+  .footprint-bar {
+    display: flex; gap: 2px; margin-top: 4px;
+    width: 100%; height: 8px;
+  }
+  .footprint-bar .seg {
+    flex: 1; background: #1f2937; border-radius: 1px;
+  }
+  .footprint-bar .seg.fill { background: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>"坐标轴设置" 区域 UI 方案对比</h1>
+  <div class="subtitle">Order time-order 热图 + FFT spectrogram · Y/Z 轴显式控件 · 替换 combo_dynamic 预设 · 2026-04-28</div>
+</header>
+
+<div class="info-banner">
+  ✅ <b>Task 1 已敲定</b>：移除"频域映射"，inspector + batch 全切 COT。<br>
+  📐 <b>Task 2</b>：从下方 6 个方案中选一个，统一在 OrderContextual + FFTContextual 落地"坐标轴设置"控件。<br>
+  💡 提示：每张卡片右上角的 <code>auto-on / auto-off / focus / disabled</code> 切换可看 4 状态渲染。
+</div>
+
+<main>
+  <div class="grid" id="grid"></div>
+</main>
+
+<div class="prompt-panel">
+  <div class="prompt-head">
+    <h3>📋 实现 Prompt</h3>
+    <div class="selected-info" id="selectedInfo"></div>
+    <button id="copyBtn">复制 Prompt</button>
+  </div>
+  <pre class="prompt-box" id="promptBox"></pre>
+</div>
+
+<script>
+// ============================================================================
+// Triangle SVG (mdi6.menu-up/down equivalent — compact filled triangle)
+// ============================================================================
+function tri(dir, color) {
+  const path = dir === 'up'
+    ? '<polygon points="5,8 9,4 13,8" fill="' + color + '"/>'
+    : '<polygon points="5,4 9,8 13,4" fill="' + color + '"/>';
+  return '<svg width="18" height="11" viewBox="0 0 18 11">' + path + '</svg>';
+}
+function chevDown(color) {
+  return '<svg width="14" height="14" viewBox="0 0 14 14"><polygon points="4,5 7,9 10,5" fill="' + color + '"/></svg>';
+}
+
+// ============================================================================
+// State
+// ============================================================================
+const state = {
+  selectedScheme: 'A',
+  perScheme: {
+    A: 'auto-on', B: 'auto-on', C: 'auto-on',
+    D: 'auto-on', E: 'auto-on', F: 'auto-on',
+  }
+};
+
+// ============================================================================
+// Mock control fragments
+// ============================================================================
+function spinbox(value, opts) {
+  opts = opts || {};
+  const cls = ['mock-spin'];
+  if (opts.focus) cls.push('focused');
+  if (opts.disabled) cls.push('disabled');
+  const valCls = opts.disabled ? 'v dim' : 'v';
+  const c = opts.disabled ? '#cbd5e1' : '#475569';
+  return `<div class="${cls.join(' ')}">
+    <div class="${valCls}">${value}</div>
+    <div class="stk"><div>${tri('up', c)}</div><div>${tri('down', c)}</div></div>
+  </div>`;
+}
+function checkbox(checked, label, disabled) {
+  const cls = checked ? 'mock-chk on' : 'mock-chk';
+  const opacity = disabled ? 'opacity:0.5;' : '';
+  return `<span class="${cls}" style="${opacity}"><span class="box"></span>${label}</span>`;
+}
+function lineedit(value, opts) {
+  opts = opts || {};
+  const cls = ['mock-lineedit'];
+  if (opts.focus) cls.push('focused');
+  if (opts.error) cls.push('error');
+  return `<div class="${cls.join(' ')}">${value}</div>`;
+}
+function rangeslider(lo, hi, label, opts) {
+  opts = opts || {};
+  // lo/hi as percentages 0..100
+  const cls = opts.disabled ? 'mock-rangeslider disabled' : 'mock-rangeslider';
+  return `<div>
+    <div class="${cls}">
+      <div class="track">
+        <div class="fill" style="left:${lo}%; right:${100-hi}%;"></div>
+        <div class="h" style="left:${lo}%;"></div>
+        <div class="h" style="left:${hi}%;"></div>
+      </div>
+    </div>
+    ${label ? `<div class="slider-label"><span>${label[0]}</span><span>${label[1]}</span></div>` : ''}
+  </div>`;
+}
+
+// ============================================================================
+// Per-scheme mock renderers — each returns an inner fragment for .mock
+// st: 'auto-on' | 'auto-off' | 'focus' | 'disabled'
+// ============================================================================
+function mockA(st) {  // Stacked GroupBox
+  const yAuto = st === 'auto-on';
+  const zAuto = st === 'auto-on';
+  const focusY = st === 'focus';
+  const disabled = st === 'disabled';
+  const yMin = yAuto ? '0.00' : '2.50';
+  const yMax = yAuto ? '0.00' : '8.75';
+  const zMin = zAuto ? '-30.00' : '-50.00';
+  const zMax = zAuto ? '0.00' : '-10.00';
+  return `
+    <div class="group">
+      <div class="title">坐标轴设置</div>
+      <div class="axis-label first">时间轴 (Y)</div>
+      <div class="form-row"><label></label>${checkbox(yAuto, '自动', disabled)}</div>
+      <div class="form-row"><label>下限:</label>${spinbox(yMin + ' s', {focus: focusY, disabled: disabled || yAuto})}</div>
+      <div class="form-row"><label>上限:</label>${spinbox(yMax + ' s', {disabled: disabled || yAuto})}</div>
+      <div class="axis-label">dB 色阶 (Z)</div>
+      <div class="form-row"><label></label>${checkbox(zAuto, '自动', disabled)}</div>
+      <div class="form-row"><label>下限:</label>${spinbox(zMin + ' dB', {disabled: disabled || zAuto})}</div>
+      <div class="form-row"><label>上限:</label>${spinbox(zMax + ' dB', {disabled: disabled || zAuto})}</div>
+    </div>
+  `;
+}
+
+function mockB(st) {  // Inline 紧凑
+  const auto = st === 'auto-on';
+  const focusY = st === 'focus';
+  const disabled = st === 'disabled';
+  const yMin = auto ? '0.00' : '2.50';
+  const yMax = auto ? '0.00' : '8.75';
+  const zMin = auto ? '-30.00' : '-50.00';
+  const zMax = auto ? '0.00' : '-10.00';
+  return `
+    <div class="group">
+      <div class="title">坐标轴设置</div>
+      <div class="inline-row">
+        <span>时间(Y):</span>
+        ${checkbox(auto, '自动', disabled).replace('mock-chk', 'mock-chk').replace('11px', '10px')}
+        ${spinbox(yMin, {focus: focusY, disabled: disabled || auto})}
+        <span class="arrow">→</span>
+        ${spinbox(yMax, {disabled: disabled || auto})}
+        <span class="unit">s</span>
+      </div>
+      <div class="inline-row">
+        <span>dB色阶:</span>
+        ${checkbox(auto, '自动', disabled).replace('mock-chk', 'mock-chk').replace('11px', '10px')}
+        ${spinbox(zMin, {disabled: disabled || auto})}
+        <span class="arrow">→</span>
+        ${spinbox(zMax, {disabled: disabled || auto})}
+        <span class="unit">dB</span>
+      </div>
+    </div>
+  `;
+}
+
+function mockC(st) {  // Tab Y/Z
+  const auto = st === 'auto-on';
+  const focusY = st === 'focus';
+  const disabled = st === 'disabled';
+  // Show Y tab active by default
+  const min = auto ? '0.00' : '2.50';
+  const max = auto ? '0.00' : '8.75';
+  return `
+    <div class="group">
+      <div class="title">坐标轴设置</div>
+      <div class="mock-tabs">
+        <button class="active">Y · 时间</button>
+        <button>Z · dB色阶</button>
+      </div>
+      <div class="form-row"><label></label>${checkbox(auto, '自动', disabled)}</div>
+      <div class="form-row"><label>下限:</label>${spinbox(min + ' s', {focus: focusY, disabled: disabled || auto})}</div>
+      <div class="form-row"><label>上限:</label>${spinbox(max + ' s', {disabled: disabled || auto})}</div>
+    </div>
+  `;
+}
+
+function mockD(st) {  // Range text
+  const auto = st === 'auto-on';
+  const focusY = st === 'focus';
+  const disabled = st === 'disabled';
+  const isError = st === 'error';
+  const yVal = auto ? 'auto' : '2.5..8.75';
+  const zVal = auto ? 'auto' : '-50..-10';
+  return `
+    <div class="group">
+      <div class="title">坐标轴设置</div>
+      <div class="form-row"><label>时间轴 (Y):</label>${lineedit(yVal, {focus: focusY})}</div>
+      <div class="form-row"><label>dB 色阶 (Z):</label>${lineedit(zVal, {})}</div>
+      <div style="margin-top: 6px; font-size: 10px; color: var(--app-text-dim); font-family: monospace;">
+        语法: <code>auto</code> 或 <code>min..max</code>（如 <code>-30..0</code>）
+      </div>
+    </div>
+  `;
+}
+
+function mockE(st) {  // Range slider
+  const auto = st === 'auto-on';
+  const disabled = st === 'disabled';
+  const yLo = auto ? 0 : 25;
+  const yHi = auto ? 100 : 78;
+  const zLo = auto ? 0 : 25;
+  const zHi = auto ? 100 : 88;
+  const yLabel = auto ? ['0.00s', '12.34s'] : ['2.50s', '8.75s'];
+  const zLabel = auto ? ['-80dB', '0dB'] : ['-50dB', '-10dB'];
+  return `
+    <div class="group">
+      <div class="title">坐标轴设置</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
+        <span class="axis-label first" style="margin:0;">时间轴 (Y)</span>
+        ${checkbox(auto, '自动', disabled)}
+      </div>
+      ${rangeslider(yLo, yHi, yLabel, {disabled: disabled || auto})}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0 2px 0;">
+        <span class="axis-label" style="margin:0;">dB 色阶 (Z)</span>
+        ${checkbox(auto, '自动', disabled)}
+      </div>
+      ${rangeslider(zLo, zHi, zLabel, {disabled: disabled || auto})}
+    </div>
+  `;
+}
+
+function mockF(st) {  // Popover
+  const open = st === 'auto-off' || st === 'focus';
+  const auto = st === 'auto-on';
+  const disabled = st === 'disabled';
+  const yMin = '2.50', yMax = '8.75', zMin = '-50.00', zMax = '-10.00';
+  const buttonLabel = auto
+    ? '坐标轴: 自动 ▼'
+    : (open ? '坐标轴: 配置中… ▼' : `坐标轴: Y[${yMin}..${yMax}] Z[${zMin}..${zMax}] ▼`);
+  let popover = '';
+  if (open) {
+    popover = `
+      <div class="mock-popover">
+        <div class="axis-label first">时间轴 (Y)</div>
+        <div class="form-row"><label>下限:</label>${spinbox(yMin + ' s', {focus: st==='focus'})}</div>
+        <div class="form-row"><label>上限:</label>${spinbox(yMax + ' s', {})}</div>
+        <div class="axis-label">dB 色阶 (Z)</div>
+        <div class="form-row"><label>下限:</label>${spinbox(zMin + ' dB', {})}</div>
+        <div class="form-row"><label>上限:</label>${spinbox(zMax + ' dB', {})}</div>
+      </div>
+    `;
+  }
+  return `
+    <div class="group">
+      <div class="title">坐标轴设置</div>
+      <div style="margin-top:2px;">
+        <button class="mock-button" ${disabled?'disabled style="opacity:0.5;"':''}>${buttonLabel}</button>
+      </div>
+      ${popover}
+    </div>
+  `;
+}
+
+const SCHEMES = [
+  {
+    id: 'A', name: 'Stacked GroupBox（标准）', render: mockA,
+    rows: 8, footprint: 'wide',
+    impl: '两个 axis-label + 每轴 chk + 2 form-row spin。最贴近现有 OrderContextual 的 QFormLayout 风格。',
+    flow: '改 Y 上限：取消"自动" → 点上限 spin → 输入。共 2 步。',
+    consist: '✓ 与"信号源"、"谱参数"卡片排版一致；spin/chk 全部已有 QSS 规则。',
+    legacy: '旧 dynamic="30 dB" → 解析为 floor=-30, ceiling=0, auto=False；可直接落到新 spin。',
+    pros: ['最直观 · 0 学习成本', 'QSS/测试改动最少', '逻辑映射直接：1 控件 = 1 字段'],
+    cons: ['占 8 行，inspector 变长', '4 个 spin 同列对齐需 padding 微调'],
+  },
+  {
+    id: 'B', name: 'Inline 紧凑（一行一轴）', render: mockB,
+    rows: 2, footprint: 'compact',
+    impl: '每轴一行：QHBoxLayout 内 [label][chk][spin][→][spin][unit]。需自定义紧凑 SpinBox 宽度。',
+    flow: '改 Y 上限：取消"自动" → 点右侧 spin → 输入。共 2 步。',
+    consist: '△ 一行 6 控件较密；项目其它表单是单列；与"重建时间轴"等紧凑头不冲突。',
+    legacy: '映射同 A（floor/ceiling 一一对应）。',
+    pros: ['只占 2 行 · 极致紧凑', '所有信息一眼可见', '改动量与 A 接近'],
+    cons: ['320px 宽度下可能挤压 spin', '小屏窄 splitter 下文字溢出风险'],
+  },
+  {
+    id: 'C', name: 'Tab 切换 Y/Z', render: mockC,
+    rows: 4, footprint: 'medium',
+    impl: 'QTabWidget 含 Y / Z 两个 tab，每 tab 内一份 chk + 2 spin。共享 _on_axis_changed 槽。',
+    flow: '改 Z 上限：点 Z tab → 取消自动 → 输入。共 3 步。',
+    consist: '✗ 项目目前没有 inline tab 控件；引入新的视觉 pattern。',
+    legacy: '映射同 A，但需确保两 tab 的 currentParams 都被读取。',
+    pros: ['节省 4 行', '聚焦当前轴时干净'],
+    cons: ['多一次点击切换', '另一轴的值看不见（操作不连贯）', '引入新 pattern'],
+  },
+  {
+    id: 'D', name: 'Range 文本输入 (lineedit)', render: mockD,
+    rows: 3, footprint: 'compact',
+    impl: 'QLineEdit + RegEx validator (`auto|^-?\\d+(\\.\\d+)?\\.\\.-?\\d+(\\.\\d+)?$`)。失焦解析。',
+    flow: '改 Y 上限：点输入框 → 改文本 → Tab 失焦。共 1-2 步。',
+    consist: '✗ 项目无类似文本范围语法；增加学习成本。',
+    legacy: '解析旧 dynamic="30 dB" → "-30..0"；直接显示原文本。',
+    pros: ['最紧凑 · 可粘贴', '配置即文档（语法可见）', '一次改两值'],
+    cons: ['语法门槛 · 易输错', '错误反馈是事后弹', 'spin 上下调节没了'],
+  },
+  {
+    id: 'E', name: 'Range Slider 双手柄', render: mockE,
+    rows: 5, footprint: 'medium',
+    impl: 'Qt 无原生 RangeSlider；需自定义 QWidget 子类（~100 行：paintEvent 画双手柄 + mousePress/Move/Release 拖动）。',
+    flow: '改 Y 上限：取消自动 → 拖右手柄。共 2 步（拖动）。',
+    consist: '✗✗ 全新控件，与项目所有现有控件外观差异大。',
+    legacy: '映射同 A，但需把数值映射到 0..100 百分比。',
+    pros: ['可视化范围比例', '快速粗调 · 拖动有反馈'],
+    cons: ['需新增 ~100 行自定义控件', '精确数值靠 tooltip · 无键盘输入', '改动面最大'],
+  },
+  {
+    id: 'F', name: 'Popover 折叠', render: mockF,
+    rows: 1, footprint: 'tiny',
+    impl: 'QPushButton + QDialog (popover 行为)。按钮文本动态显示当前范围。',
+    flow: '改 Y 上限：点按钮 → popover 打开 → 取消自动 → 改 spin → 关闭。共 4 步。',
+    consist: '△ 项目已有 rebuild_time_popover.py 模式；可复用。',
+    legacy: '映射同 A，按钮文本 "30dB Auto" 等显示概要。',
+    pros: ['最紧凑 · 1 行', '复用现有 popover 模式'],
+    cons: ['多一次点击', '隐藏的范围值难发现', 'popover 关闭机制需仔细处理'],
+  },
+];
+
+// ============================================================================
+// Render
+// ============================================================================
+function renderCard(scheme) {
+  const isSel = state.selectedScheme === scheme.id;
+  const st = state.perScheme[scheme.id];
+  const states = ['auto-on', 'auto-off', 'focus', 'disabled'];
+  const stLabel = { 'auto-on': '自动开', 'auto-off': '自动关', 'focus': '聚焦', 'disabled': '禁用' };
+
+  // Footprint bar (10 segments, fill = scheme.rows / 10 capped)
+  const fillCount = Math.min(10, Math.max(1, Math.round(scheme.rows * 10 / 10)));
+  const segs = Array.from({length: 10}, (_, i) =>
+    `<div class="seg ${i < fillCount ? 'fill' : ''}"></div>`).join('');
+
+  return `
+    <div class="card ${isSel ? 'selected' : ''}" data-scheme="${scheme.id}">
+      <div class="card-head">
+        <span class="scheme-letter">${scheme.id}</span>
+        <span class="scheme-name">${scheme.name}</span>
+        <span class="pick-radio"></span>
+      </div>
+      <div class="state-toggle">
+        ${states.map(s => `<button class="${st===s?'active':''}" data-st="${s}">${stLabel[s]}</button>`).join('')}
+      </div>
+      <div class="mock">
+        ${scheme.render(st)}
+      </div>
+      <div class="detail-row"><div class="key">行数占位</div><div class="val">${scheme.rows} 行 · <span style="color:#94a3b8;font-family:monospace;">${segs.replace(/<div class="seg/g,'<span style="display:inline-block;width:7px;height:7px;margin-right:1px;border-radius:1px;background:#1f2937" class="seg').replace(/<div/g,'<span').replace(/<\/div>/g,'</span>')}</span></div></div>
+      <div class="detail-row"><div class="key">实现</div><div class="val">${scheme.impl}</div></div>
+      <div class="detail-row"><div class="key">操作流程</div><div class="val">${scheme.flow}</div></div>
+      <div class="detail-row"><div class="key">视觉一致</div><div class="val">${scheme.consist}</div></div>
+      <div class="detail-row"><div class="key">旧预设兼容</div><div class="val">${scheme.legacy}</div></div>
+      <div class="pros-cons">
+        <div class="pros">${scheme.pros.join(' · ')}</div>
+        <div class="cons">${scheme.cons.join(' · ')}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAll() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = SCHEMES.map(renderCard).join('');
+
+  // Card click → select
+  grid.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', e => {
+      // Don't fire on inner state toggle / preview
+      if (e.target.closest('.state-toggle')) return;
+      state.selectedScheme = card.dataset.scheme;
+      renderAll();
+      updatePrompt();
+    });
+  });
+
+  // State toggle
+  grid.querySelectorAll('.state-toggle button').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const card = btn.closest('.card');
+      const sid = card.dataset.scheme;
+      state.perScheme[sid] = btn.dataset.st;
+      renderAll();
+    });
+  });
+
+  updatePrompt();
+}
+
+// ============================================================================
+// Prompt
+// ============================================================================
+function buildPrompt() {
+  const sid = state.selectedScheme;
+  const scheme = SCHEMES.find(s => s.id === sid);
+
+  const headers = {
+    A: '方案 A — Stacked GroupBox（标准 QFormLayout）',
+    B: '方案 B — Inline 紧凑（一行一轴）',
+    C: '方案 C — Tab 切换 Y/Z',
+    D: '方案 D — Range 文本输入 (lineedit)',
+    E: '方案 E — Range Slider 双手柄',
+    F: '方案 F — Popover 折叠',
+  };
+
+  const renderHints = {
+    A: 'QGroupBox("坐标轴设置") 内 QFormLayout，含 axis-label + 每轴 chk + 2 spin。8 行布局。',
+    B: 'QGroupBox 内每轴一个 QHBoxLayout：[label][chk][spin_min][→][spin_max][unit]。spin 设 maximumWidth ~70px。',
+    C: 'QGroupBox 内 QTabWidget(2 tab: Y / Z)，每 tab 内 chk + 2 spin。',
+    D: 'QGroupBox 内 2 行 QLineEdit + QRegExpValidator(`(auto|-?\\d+(\\.\\d+)?\\.\\.-?\\d+(\\.\\d+)?)`)。失焦解析。',
+    E: '新增 RangeSlider 自定义 widget 类（~100 行：paintEvent 画轨道+双手柄，mouse press/move/release 处理）。每轴一个 RangeSlider + chk_auto。',
+    F: 'QGroupBox 内 QPushButton 文本动态描述当前范围；点击弹 popover (复用 rebuild_time_popover 模式)，popover 内含 chk + 4 spin。',
+  };
+
+  return `${headers[sid]}
+
+派给 pyqt-ui-engineer：
+
+## Task 1 — 移除 "频域映射"，inspector + batch 全切 COT
+
+### Step 1.1 — Inspector 端
+- \`mf4_analyzer/ui/inspector_sections.py\`
+  - 删除 lines 1222-1260 整个 \`combo_algorithm\` 块（含 \`_on_algo_changed\`）
+  - 删除 lines 1397-1399 \`p['algorithm']\` 输出（保留 \`p['samples_per_rev']\`）
+  - 删除 lines 1430-1442 \`_apply_preset\` 中 \`algorithm\` 解析分支
+  - \`spin_samples_per_rev\` 永久启用（删除 setEnabled 逻辑）
+
+### Step 1.2 — MainWindow 派发
+- \`mf4_analyzer/ui/main_window.py:1326-1328\`
+  - 删除 \`if algorithm == 'cot':\` 分支判断，永远走 COTOrderAnalyzer 路径
+  - 删除 \`order_params.get('algorithm', 'frequency')\` 行
+
+### Step 1.3 — Batch 切换到 COT
+- \`mf4_analyzer/batch.py:478\` \`_compute_order_time_dataframe\`
+  - 改为调 \`COTOrderAnalyzer.compute(sig, rpm, time, COTParams(...))\`，从 \`OrderAnalyzer.compute_time_order_result\` 切换
+  - 注意：COTParams 需要 \`samples_per_rev\` 字段，preset 中未指定时用默认 256
+  - \`time\` 必须是严格单调递增向量；如 batch 数据时间轴不严格单调，需在调用前 \`np.cumsum(np.diff(time))\` 兜底
+- 更新 \`tests/test_batch_runner.py\` 中 order_time 相关用例
+
+### Step 1.4 — 死代码标记
+- \`mf4_analyzer/signal/order.py\` \`OrderAnalyzer.compute_time_order_result\` 在 inspector + batch 不再被调用后，可保留作为 internal API（添加 \`# DEPRECATED: kept for backward-compat preset replay\` 注释）；或一并删除（取决于是否还有 batch_preset_io 的旧预设回放路径需要）
+
+## Task 2 — "坐标轴设置" 区域（${headers[sid]}）
+
+${renderHints[sid]}
+
+### Step 2.1 — OrderContextual（user-facing 截图位置）
+- \`inspector_sections.py\` OrderContextual 类内
+  - 删除 \`combo_dynamic\` (line 1211-1213) 与其 form-row
+  - 在"谱参数" group 之后新增 QGroupBox("坐标轴设置")：
+    * 时间轴 (Y)：${sid==='B'?'inline':sid==='D'?'lineedit':sid==='E'?'rangeslider':sid==='F'?'popover':'chk + spin_y_min + spin_y_max'}
+    * dB 色阶 (Z)：${sid==='B'?'inline':sid==='D'?'lineedit':sid==='E'?'rangeslider':sid==='F'?'popover':'chk + spin_z_floor + spin_z_ceiling'}
+  - 默认值：Y auto=True；Z auto=False, floor=-30, ceiling=0（保持 30 dB 默认行为）
+  - \`get_params()\` 输出 \`{y_auto, y_min, y_max, z_auto, z_floor, z_ceiling}\`
+  - \`_apply_preset()\` 兼容旧 \`dynamic="30 dB"\` 等预设：解析为 z_floor=-30, z_ceiling=0, z_auto=False；旧 \`dynamic="Auto"\` → z_auto=True
+
+### Step 2.2 — FFTContextual（同步对称）
+- \`inspector_sections.py\` FFTContextual 类内
+  - 把现有 chk_freq_auto + spin_freq_min/max 移入新 QGroupBox("坐标轴设置")"频率轴 (X)" 子区
+  - 新增 "幅值轴 (Y)" 子区：chk_y_auto + spin_y_min + spin_y_max（单位 = 取决于 amp_mode：linear 或 dB）
+  - 新增 "dB 色阶 (Z)" 子区（仅 FFT-vs-Time 用）：chk_z_auto + spin_z_floor + spin_z_ceiling
+  - 删除 \`combo_dynamic\` (line 1608-1610)
+  - \`get_params()\` 同 OrderContextual
+
+### Step 2.3 — Canvases 渲染统一
+- \`mf4_analyzer/ui/canvases.py\`
+  - \`_color_limits\` (line 1311) 与 \`plot_or_update_heatmap\` (line 1597) 函数签名改为接受 \`(z_auto: bool, z_floor: float, z_ceiling: float)\` 替代 \`dynamic: str\`
+  - 渲染逻辑：
+    \`\`\`python
+    if z_auto:
+        vmin, vmax = float(np.nanmin(z)), float(np.nanmax(z))
+    else:
+        vmin, vmax = z_floor, z_ceiling
+    \`\`\`
+  - 同时支持 Y 轴：\`if not y_auto: ax.set_ylim(y_min, y_max)\`
+- \`main_window.py\` 调用点更新：
+  - line 1478 \`dynamic=order_params.get('dynamic', '30 dB')\` → 拆为 \`z_auto/z_floor/z_ceiling\`
+  - 任何旧 \`dynamic=\` 的 kwargs 统一删除
+
+### Step 2.4 — 测试
+- \`tests/ui/test_inspector.py\` 更新 OrderContextual / FFTContextual 用例：断言新控件存在 + get_params/apply_params 字段
+- \`tests/ui/test_canvases_envelope.py\` 等渲染测试更新签名
+- offscreen 4 状态截图：auto-on / auto-off / focus / disabled，存到 .pytest-tmp/axis-${sid}-{state}.png
+
+### Step 2.5 — 行为验证
+- 启动 app，order 模式：默认 z_auto=False, z_floor=-30, z_ceiling=0 → 渲染与原 30 dB 一致
+- 取消"自动"，改 z_floor=-50, z_ceiling=-10 → 色阶应变为该范围
+- Y 轴 auto=True 时随数据；auto=False 改 y_min/max 后图像 y 范围按用户设定
+
+## Forbidden / 范围
+- 不要触碰 signal/order_cot.py、order.py 的算法实现（仅删除被 inspector + batch 不再调用的死代码 OK）
+- 不要改其它 inspector 区域（信号源、谱参数、显示模式等）
+- 不要新增 qtawesome 图标依赖（沿用已有 mdi6.menu-up/down 风格）
+
+## 验证
+- \`tests/\` 全绿 (pre-existing test_orders_with_subbin_floor_drops_low_orders 浮点精度失败可忽略)
+- 新增/修改的 spinbox 沿用 22px gutter 紧凑三角图标
+- offscreen 截图 4 张确认不同状态渲染正确
+`;
+}
+
+function updatePrompt() {
+  const sid = state.selectedScheme;
+  const scheme = SCHEMES.find(s => s.id === sid);
+  document.getElementById('selectedInfo').innerHTML =
+    `已选：方案 <b>${sid}</b> — ${scheme.name} · ${scheme.rows} 行占位`;
+  document.getElementById('promptBox').textContent = buildPrompt();
+}
+
+document.getElementById('copyBtn').addEventListener('click', () => {
+  const text = document.getElementById('promptBox').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = '已复制 ✓';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '复制 Prompt'; btn.classList.remove('copied'); }, 1500);
+  });
+});
+
+renderAll();
+</script>
+</body>
+</html>
