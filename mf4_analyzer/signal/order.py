@@ -228,6 +228,12 @@ class OrderAnalyzer:
 
     @staticmethod
     def compute_time_order_result(sig, rpm, t, params, progress_callback=None, cancel_token=None):
+        """DEPRECATED 2026-04-28: COT is the only production order-tracking path.
+
+        This frequency-domain mapping implementation is retained for one release
+        to support back-compat preset replay in tests. New callers must use
+        ``mf4_analyzer.signal.order_cot.COTOrderAnalyzer.compute``.
+        """
         sig, rpm, fs, nfft = OrderAnalyzer._validate_common(sig, rpm, params.fs, params.nfft)
         orders = OrderAnalyzer._orders(
             params.max_order, params.order_res,

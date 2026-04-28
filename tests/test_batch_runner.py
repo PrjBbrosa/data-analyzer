@@ -596,3 +596,39 @@ def test_compute_order_time_dataframe_uses_cot(monkeypatch):
     assert cot_calls, 'COT path must be invoked'
     assert not legacy_calls, 'Legacy frequency-domain path must NOT be invoked'
     assert {'time_s', 'order', 'amplitude'} <= set(df.columns)
+
+
+def test_legacy_preset_with_algorithm_silently_ignored(tmp_path):
+    """A preset emitted before 2026-04-28 may contain {algorithm: 'frequency'}
+    and {dynamic: '30 dB'}. load_preset_from_json must accept it without
+    raising and translate to the new field set."""
+    import json
+    from mf4_analyzer.batch_preset_io import load_preset_from_json
+
+    # W6: schema actually uses target_signals / rpm_channel; the old
+    # 'signal' / 'rpm_signal' top-level keys are silently ignored by
+    # load_preset_from_json. Use the real schema for fixture clarity.
+    legacy = {
+        "method": "order_time",
+        "name": "legacy",
+        "target_signals": ["ch1"],
+        "rpm_channel": "rpm",
+        "params": {
+            "fs": 1000.0, "nfft": 1024, "max_order": 20,
+            "order_res": 0.1, "time_res": 0.05,
+            "algorithm": "frequency",   # legacy
+            "dynamic": "30 dB",          # legacy
+            "amplitude_mode": "Amplitude dB",
+        },
+    }
+    p = tmp_path / "legacy.json"
+    p.write_text(json.dumps(legacy), encoding='utf-8')
+
+    preset = load_preset_from_json(str(p))
+    assert preset is not None  # not silently dropped (method is supported)
+    # 'algorithm' migrated away
+    assert 'algorithm' not in preset.params
+    # 'dynamic' translated
+    assert preset.params.get('z_auto') is False
+    assert preset.params.get('z_floor') == -30.0
+    assert preset.params.get('z_ceiling') == 0.0
