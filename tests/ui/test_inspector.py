@@ -1357,40 +1357,110 @@ def test_fft_render_honors_axis_toggles(qtbot):
     assert 'dB' not in axes[1].get_ylabel()
 
 
-# ---- Wave 3 / Task 3.2: OrderContextual dB display controls ----
+# ---- Wave 3 (axis-settings + COT migration plan): 坐标轴设置 group ----
+#
+# OrderContextual replaces the legacy combo_amp_mode + combo_dynamic combos
+# with an explicit X/Y/Z range group. The dB ↔ Linear toggle now lives on
+# the Z (color scale) row as ``combo_amp_unit``. See Wave 3 of
+# docs/superpowers/plans/2026-04-28-axis-settings-and-cot-migration.md.
 
-def test_order_contextual_has_dB_controls(qapp):
-    """Plan Task 3.2.1: OrderContextual must expose amp_mode + dynamic combos
-    with HEAD-parity defaults (Amplitude dB, 30 dB)."""
+
+def test_order_contextual_has_axis_settings_group(qtbot):
+    """OrderContextual must contain a QGroupBox titled '坐标轴设置' with
+    9 controls: chk_x_auto + spin_x_min + spin_x_max + chk_y_auto +
+    spin_y_min + spin_y_max + chk_z_auto + spin_z_floor + spin_z_ceiling
+    + combo_amp_unit (the dB/Linear dropdown on the Z row)."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
-    w = OrderContextual()
-    assert hasattr(w, 'combo_amp_mode')
-    assert hasattr(w, 'combo_dynamic')
-    assert w.combo_amp_mode.currentText() == 'Amplitude dB'
-    assert w.combo_dynamic.currentText() == '30 dB'
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    for name in (
+        'chk_x_auto', 'spin_x_min', 'spin_x_max',
+        'chk_y_auto', 'spin_y_min', 'spin_y_max',
+        'chk_z_auto', 'spin_z_floor', 'spin_z_ceiling',
+        'combo_amp_unit',
+    ):
+        assert hasattr(oc, name), f'missing {name}'
+
+    # Defaults: x/y auto on, z auto off (mirrors old default 30 dB)
+    assert oc.chk_x_auto.isChecked()
+    assert oc.chk_y_auto.isChecked()
+    assert not oc.chk_z_auto.isChecked()
+    assert oc.spin_z_floor.value() == -30.0
+    assert oc.spin_z_ceiling.value() == 0.0
+    assert oc.combo_amp_unit.currentText() == 'dB'
 
 
-def test_order_contextual_dynamic_disabled_in_linear(qapp):
-    """Plan Task 3.2.1: dynamic-range combo only meaningful in dB mode."""
+def test_order_contextual_combo_amp_mode_and_dynamic_removed(qtbot):
+    """combo_amp_mode and combo_dynamic widgets are gone (their values
+    are now expressed via combo_amp_unit + spin_z_floor/ceiling)."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
-    w = OrderContextual()
-    w.combo_amp_mode.setCurrentText('Amplitude')
-    assert w.combo_dynamic.isEnabled() is False
-    w.combo_amp_mode.setCurrentText('Amplitude dB')
-    assert w.combo_dynamic.isEnabled() is True
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    assert not hasattr(oc, 'combo_amp_mode')
+    assert not hasattr(oc, 'combo_dynamic')
 
 
-def test_order_contextual_amp_mode_in_params(qapp):
-    """Plan Task 3.2.1: current_params() exposes amplitude_mode + dynamic and
-    apply_params() round-trips the same keys."""
+def test_order_contextual_y_max_clamped_by_max_order(qtbot):
+    """When the user changes spin_mo (max_order, calc param), spin_y_max
+    upper bound must follow so display range cannot exceed the calc range."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
-    w = OrderContextual()
-    w.combo_amp_mode.setCurrentText('Amplitude')
-    p = w.current_params()
-    assert p.get('amplitude_mode') == 'Amplitude'
-    w.apply_params({'amplitude_mode': 'Amplitude dB', 'dynamic': '50 dB'})
-    assert w.combo_amp_mode.currentText() == 'Amplitude dB'
-    assert w.combo_dynamic.currentText() == '50 dB'
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    oc.spin_mo.setValue(15)
+    assert oc.spin_y_max.maximum() == 15.0
+    # If user had y_max > 15, it should snap down
+    oc.spin_y_max.setValue(20)
+    assert oc.spin_y_max.value() <= 15.0
+
+
+def test_order_contextual_unit_toggle_forces_z_auto(qtbot):
+    """Switching combo_amp_unit dB↔Linear forces chk_z_auto on (per
+    the 2026-04-28 plan: avoids ambiguous unit-conversion semantics)."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Default: z_auto off, dB unit
+    oc.chk_z_auto.setChecked(False)
+    assert not oc.chk_z_auto.isChecked()
+    oc.combo_amp_unit.setCurrentText('Linear')
+    assert oc.chk_z_auto.isChecked()
+
+
+def test_order_contextual_current_params_emits_axis_keys(qtbot):
+    """current_params must emit the new axis keys."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    p = oc.current_params()
+    for key in ('x_auto', 'x_min', 'x_max',
+                'y_auto', 'y_min', 'y_max',
+                'z_auto', 'z_floor', 'z_ceiling',
+                'amplitude_mode'):
+        assert key in p, f'missing {key} in current_params'
+    assert isinstance(p['z_auto'], bool)
+    assert p['amplitude_mode'] in ('Amplitude dB', 'Amplitude')
+
+
+def test_order_contextual_apply_preset_legacy_dynamic(qtbot):
+    """_apply_preset must translate legacy 'dynamic' string to new
+    z_auto/z_floor/z_ceiling state."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Legacy preset shape
+    oc._apply_preset({'amplitude_mode': 'Amplitude dB', 'dynamic': '50 dB'})
+    assert not oc.chk_z_auto.isChecked()
+    assert oc.spin_z_floor.value() == -50.0
+    assert oc.spin_z_ceiling.value() == 0.0
+
+    oc._apply_preset({'amplitude_mode': 'Amplitude dB', 'dynamic': 'Auto'})
+    assert oc.chk_z_auto.isChecked()
 
 
 # ---- Wave 2 (axis-settings + COT migration plan): combo_algorithm removed ----

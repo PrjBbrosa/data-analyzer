@@ -1194,31 +1194,6 @@ class OrderContextual(QWidget):
         self.combo_nfft.setCurrentText('1024')
         fl.addRow("FFT点数:", _fit_field(self.combo_nfft))
 
-        # --- Display (Wave 3 / Task 3.2): HEAD-parity dB rendering ---
-        # combo_amp_mode toggles the heatmap colour scale between linear
-        # amplitude and 20*log10 dB; combo_dynamic picks the dB range
-        # (30/50/80 dB or Auto from data span). Default is Amplitude dB +
-        # 30 dB to match HEAD's order-time render. The Linear/dB toggle
-        # disables the dynamic-range combo when dB is not in use, since
-        # the value would have no rendering effect.
-        self.combo_amp_mode = QComboBox()
-        self.combo_amp_mode.addItems(['Amplitude dB', 'Amplitude'])
-        self.combo_amp_mode.setCurrentText('Amplitude dB')
-        fl.addRow(
-            "模式:",
-            _fit_field(self.combo_amp_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
-        )
-        self.combo_dynamic = QComboBox()
-        self.combo_dynamic.addItems(['30 dB', '50 dB', '80 dB', 'Auto'])
-        self.combo_dynamic.setCurrentText('30 dB')
-        fl.addRow(
-            "动态范围:",
-            _fit_field(self.combo_dynamic, max_width=_SHORT_FIELD_MAX_WIDTH),
-        )
-        self.combo_amp_mode.currentTextChanged.connect(
-            lambda txt: self.combo_dynamic.setEnabled(txt == 'Amplitude dB')
-        )
-
         # COT is now the only tracking algorithm (Wave 2 of the
         # 2026-04-28 axis-settings + COT migration plan removed the
         # frequency-domain branch). spin_samples_per_rev is therefore
@@ -1237,6 +1212,78 @@ class OrderContextual(QWidget):
         # Inspector pane is narrow. _enforce_label_widths walks every form
         # in this widget after construction.
         root.addWidget(g)
+
+        # ---- 坐标轴设置 (Wave 3 of the 2026-04-28 plan) ----
+        # Replaces the old combo_amp_mode + combo_dynamic combos. The Z
+        # row carries the dB ↔ Linear unit dropdown; floor/ceiling spins
+        # express the dB dynamic range explicitly. Defaults match the
+        # legacy 30 dB behavior (z_auto off, floor=-30, ceiling=0).
+        axis_g = QGroupBox("坐标轴设置")
+        axis_lay = QVBoxLayout(axis_g)
+        axis_lay.setContentsMargins(8, 8, 8, 8)
+        axis_lay.setSpacing(4)
+
+        # Time (X) row
+        self.chk_x_auto = QCheckBox("自动")
+        self.chk_x_auto.setChecked(True)
+        self.spin_x_min = QDoubleSpinBox()
+        self.spin_x_min.setRange(0.0, 1e6)
+        self.spin_x_min.setDecimals(2)
+        self.spin_x_min.setSuffix(' s')
+        self.spin_x_max = QDoubleSpinBox()
+        self.spin_x_max.setRange(0.0, 1e6)
+        self.spin_x_max.setDecimals(2)
+        self.spin_x_max.setSuffix(' s')
+        axis_lay.addWidget(self._build_axis_row(
+            "时间 (X):", self.chk_x_auto,
+            self.spin_x_min, self.spin_x_max, None,
+        ))
+
+        # Order (Y) row — clamped to <= spin_mo
+        self.chk_y_auto = QCheckBox("自动")
+        self.chk_y_auto.setChecked(True)
+        self.spin_y_min = QDoubleSpinBox()
+        self.spin_y_min.setRange(0.0, 100.0)
+        self.spin_y_min.setDecimals(2)
+        self.spin_y_max = QDoubleSpinBox()
+        self.spin_y_max.setRange(0.0, float(self.spin_mo.value()))
+        self.spin_y_max.setDecimals(2)
+        self.spin_y_max.setValue(float(self.spin_mo.value()))
+        axis_lay.addWidget(self._build_axis_row(
+            "阶次 (Y):", self.chk_y_auto,
+            self.spin_y_min, self.spin_y_max, None,
+        ))
+
+        # Color scale (Z) row — has unit dropdown replacing combo_amp_mode
+        self.chk_z_auto = QCheckBox("自动")
+        self.chk_z_auto.setChecked(False)  # default: -30..0 dB (matches legacy 30 dB behavior)
+        self.spin_z_floor = QDoubleSpinBox()
+        self.spin_z_floor.setRange(-200.0, 200.0)
+        self.spin_z_floor.setDecimals(2)
+        self.spin_z_floor.setValue(-30.0)
+        self.spin_z_ceiling = QDoubleSpinBox()
+        self.spin_z_ceiling.setRange(-200.0, 200.0)
+        self.spin_z_ceiling.setDecimals(2)
+        self.spin_z_ceiling.setValue(0.0)
+        self.combo_amp_unit = QComboBox()
+        self.combo_amp_unit.addItems(['dB', 'Linear'])
+        axis_lay.addWidget(self._build_axis_row(
+            "色阶:", self.chk_z_auto,
+            self.spin_z_floor, self.spin_z_ceiling, self.combo_amp_unit,
+        ))
+
+        root.addWidget(axis_g)
+
+        # ---- wiring ----
+        self.chk_x_auto.toggled.connect(self._sync_axis_enabled)
+        self.chk_y_auto.toggled.connect(self._sync_axis_enabled)
+        self.chk_z_auto.toggled.connect(self._sync_axis_enabled)
+        self.combo_amp_unit.currentTextChanged.connect(self._on_amp_unit_changed)
+        self.spin_mo.valueChanged.connect(self._on_max_order_changed)
+        # Seed initial enabled state (per the 2026-04-26 init-sync lesson:
+        # signal-only wiring leaves the spinbox enabled flags in their
+        # constructor default until the user actually toggles a checkbox).
+        self._sync_axis_enabled()
 
         self.btn_ot = QPushButton("时间-阶次")
         self.btn_ot.setProperty("role", "primary")
@@ -1283,6 +1330,53 @@ class OrderContextual(QWidget):
             unify_columns=True,
         )
 
+    # ---- 2026-04-28: axis settings group helpers (Wave 3) ----
+    def _build_axis_row(self, label, chk, spin_min, spin_max, unit_widget):
+        """Build one inline axis row: [label][chk][spin_min][→][spin_max][unit].
+
+        Returns a wrapper QWidget; caller adds it to the parent layout.
+        """
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lbl = QLabel(label)
+        lbl.setMinimumWidth(56)
+        lbl.setMaximumWidth(56)
+        lay.addWidget(lbl)
+        lay.addWidget(chk)
+        spin_min.setMaximumWidth(72)
+        spin_max.setMaximumWidth(72)
+        lay.addWidget(spin_min, 1)
+        lay.addWidget(QLabel('→'))
+        lay.addWidget(spin_max, 1)
+        if unit_widget is not None:
+            lay.addWidget(unit_widget)
+        return row
+
+    def _sync_axis_enabled(self):
+        """Toggle spin enabled state to match each chk_*_auto."""
+        for chk, spins in (
+            (self.chk_x_auto, (self.spin_x_min, self.spin_x_max)),
+            (self.chk_y_auto, (self.spin_y_min, self.spin_y_max)),
+            (self.chk_z_auto, (self.spin_z_floor, self.spin_z_ceiling)),
+        ):
+            enabled = not chk.isChecked()
+            for s in spins:
+                s.setEnabled(enabled)
+
+    def _on_amp_unit_changed(self, _txt):
+        """Switching dB↔Linear forces z_auto on to avoid stale range values
+        in the new unit. Per the 2026-04-28 plan."""
+        self.chk_z_auto.setChecked(True)
+        self._sync_axis_enabled()
+
+    def _on_max_order_changed(self, val):
+        """Clamp spin_y_max upper bound to <= spin_mo (max calc order)."""
+        self.spin_y_max.setMaximum(float(val))
+        if self.spin_y_max.value() > float(val):
+            self.spin_y_max.setValue(float(val))
+
     def _collect_preset(self):
         return dict(
             rpm_factor=self.spin_rf.value(),
@@ -1305,6 +1399,51 @@ class OrderContextual(QWidget):
             i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
+        # ---- Wave 3 (2026-04-28 plan): legacy + new axis-key compat ----
+        # Legacy 'dynamic' key compat — translate to z_floor/ceiling/auto.
+        # Preferred path: explicit z_floor/ceiling/auto keys override the
+        # legacy translation when both are present.
+        if 'dynamic' in d and 'z_floor' not in d:
+            raw = str(d['dynamic'])
+            if raw == 'Auto':
+                self.chk_z_auto.setChecked(True)
+            else:
+                try:
+                    n = float(raw.replace('dB', '').strip())
+                    self.chk_z_auto.setChecked(False)
+                    self.spin_z_floor.setValue(-abs(n))
+                    self.spin_z_ceiling.setValue(0.0)
+                except ValueError:
+                    pass
+        # Legacy 'amplitude_mode' key compat — translate to combo_amp_unit.
+        # blockSignals so this does NOT trip _on_amp_unit_changed and force
+        # z_auto on (which would clobber the dynamic-derived floor/ceiling
+        # we just set).
+        if 'amplitude_mode' in d:
+            val = str(d['amplitude_mode'])
+            target = 'dB' if 'dB' in val else 'Linear'
+            i = self.combo_amp_unit.findText(target)
+            if i >= 0:
+                self.combo_amp_unit.blockSignals(True)
+                self.combo_amp_unit.setCurrentIndex(i)
+                self.combo_amp_unit.blockSignals(False)
+        # Apply new axis keys directly when present (preferred path).
+        for key, attr in (
+            ('z_auto', 'chk_z_auto'), ('y_auto', 'chk_y_auto'), ('x_auto', 'chk_x_auto'),
+        ):
+            if key in d:
+                getattr(self, attr).setChecked(bool(d[key]))
+        for key, attr in (
+            ('z_floor', 'spin_z_floor'), ('z_ceiling', 'spin_z_ceiling'),
+            ('y_min', 'spin_y_min'), ('y_max', 'spin_y_max'),
+            ('x_min', 'spin_x_min'), ('x_max', 'spin_x_max'),
+        ):
+            if key in d:
+                try:
+                    getattr(self, attr).setValue(float(d[key]))
+                except (TypeError, ValueError):
+                    pass
+        self._sync_axis_enabled()
 
     def _on_sig_index_changed(self):
         self.signal_changed.emit(self.combo_sig.currentData())
@@ -1353,21 +1492,35 @@ class OrderContextual(QWidget):
             nfft=int(self.combo_nfft.currentText()),
         )
 
-    # --- Wave 3 / Task 3.2: test-friendly param accessors ---
+    # --- Wave 3 (2026-04-28 plan): test-friendly param accessors ---
     # current_params/apply_params extend get_params/_apply_preset with the
-    # newer Amplitude-dB display toggles. Existing callers (main_window,
-    # batch presets) keep using get_params/_collect_preset; main_window's
-    # _render_order_time additionally consults current_params() for the
-    # display block (amplitude_mode / dynamic) before invoking
-    # plot_or_update_heatmap.
+    # new 坐标轴设置 group: x/y/z auto + min/max + amplitude unit. The
+    # legacy 'amplitude_mode' key is still emitted (mapped from
+    # combo_amp_unit) for backwards compatibility with downstream callers
+    # that have not yet migrated; Wave 5 will switch the canvas render to
+    # consume the explicit z_floor/z_ceiling keys directly.
     def current_params(self):
         p = self.get_params()
-        p['amplitude_mode'] = self.combo_amp_mode.currentText()
-        p['dynamic'] = self.combo_dynamic.currentText()
+        # Map combo_amp_unit ('dB'/'Linear') back to the legacy mode string
+        # so existing canvas code (Wave 5 will retire it) keeps working.
+        p['amplitude_mode'] = (
+            'Amplitude dB' if self.combo_amp_unit.currentText() == 'dB'
+            else 'Amplitude'
+        )
         # Wave 2 (2026-04-28 plan): combo_algorithm has been removed —
         # COT is the only tracking algorithm. ``samples_per_rev`` stays
         # in the param payload because COT consumes it.
         p['samples_per_rev'] = int(self.spin_samples_per_rev.value())
+        # Axis controls (Wave 3): explicit X/Y/Z range + auto flags.
+        p['x_auto'] = bool(self.chk_x_auto.isChecked())
+        p['x_min'] = float(self.spin_x_min.value())
+        p['x_max'] = float(self.spin_x_max.value())
+        p['y_auto'] = bool(self.chk_y_auto.isChecked())
+        p['y_min'] = float(self.spin_y_min.value())
+        p['y_max'] = float(self.spin_y_max.value())
+        p['z_auto'] = bool(self.chk_z_auto.isChecked())
+        p['z_floor'] = float(self.spin_z_floor.value())
+        p['z_ceiling'] = float(self.spin_z_ceiling.value())
         return p
 
     def apply_params(self, d):
@@ -1390,14 +1543,54 @@ class OrderContextual(QWidget):
             i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
-        for k, combo in (
-            ('amplitude_mode', self.combo_amp_mode),
-            ('dynamic', self.combo_dynamic),
+        # ---- Wave 3 (2026-04-28 plan): new axis fields (preferred path) ----
+        for key, attr in (
+            ('x_auto', 'chk_x_auto'),
+            ('y_auto', 'chk_y_auto'),
+            ('z_auto', 'chk_z_auto'),
         ):
-            if k in d:
-                i = combo.findText(str(d[k]))
-                if i >= 0:
-                    combo.setCurrentIndex(i)
+            if key in d:
+                getattr(self, attr).setChecked(bool(d[key]))
+        for key, attr in (
+            ('x_min', 'spin_x_min'), ('x_max', 'spin_x_max'),
+            ('y_min', 'spin_y_min'), ('y_max', 'spin_y_max'),
+            ('z_floor', 'spin_z_floor'), ('z_ceiling', 'spin_z_ceiling'),
+        ):
+            if key in d:
+                try:
+                    getattr(self, attr).setValue(float(d[key]))
+                except (TypeError, ValueError):
+                    pass
+
+        # amplitude_mode → combo_amp_unit (blockSignals so the unit-toggle
+        # handler does not flip z_auto on and stomp explicit z_floor/ceiling
+        # values arriving in the same dict).
+        if 'amplitude_mode' in d:
+            val = str(d['amplitude_mode'])
+            target = 'dB' if 'dB' in val else 'Linear'
+            i = self.combo_amp_unit.findText(target)
+            if i >= 0:
+                self.combo_amp_unit.blockSignals(True)
+                self.combo_amp_unit.setCurrentIndex(i)
+                self.combo_amp_unit.blockSignals(False)
+
+        # Legacy 'dynamic' key compat — translate to z_floor/ceiling/auto.
+        # The new explicit z_floor key (already applied above) takes
+        # precedence; we only fall through to dynamic when z_floor is
+        # absent.
+        if 'dynamic' in d and 'z_floor' not in d:
+            raw = str(d['dynamic'])
+            if raw == 'Auto':
+                self.chk_z_auto.setChecked(True)
+            else:
+                try:
+                    n = float(raw.replace('dB', '').strip())
+                    self.chk_z_auto.setChecked(False)
+                    self.spin_z_floor.setValue(-abs(n))
+                    self.spin_z_ceiling.setValue(0.0)
+                except ValueError:
+                    pass
+
         # Wave 2 (2026-04-28 plan): the algorithm round-trip was dropped
         # along with combo_algorithm. Legacy presets carrying an
         # 'algorithm' key are silently ignored — Wave 6's preset-IO
@@ -1407,6 +1600,8 @@ class OrderContextual(QWidget):
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
             except (TypeError, ValueError):
                 pass
+
+        self._sync_axis_enabled()
 
     def set_progress(self, text):
         self.lbl_progress.setText(text)
