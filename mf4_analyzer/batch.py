@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 
 from .signal.fft import FFTAnalyzer
-from .signal.order import OrderAnalysisParams, OrderAnalyzer
 from ._chart_kw import CHART_TIGHT_LAYOUT_KW
 
 
@@ -463,25 +462,37 @@ class BatchRunner:
         )
         return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
 
-    @staticmethod
-    def _order_params(fs, params):
-        return OrderAnalysisParams(
-            fs=fs,
+    @classmethod
+    def _compute_order_time_dataframe(cls, sig, rpm, time, fs, params):
+        """Compute time-order spectrogram via Computed Order Tracking.
+
+        As of 2026-04-28 the legacy frequency-domain path
+        (``OrderAnalyzer`` time-order result builder) is no longer invoked
+        here; COT handles all RPM regimes (sweep, coast-down, steady-state)
+        without smearing. ``samples_per_rev`` defaults to 256 when absent from
+        preset params; the COT pipeline requires ``time`` to be strictly
+        monotonically increasing.
+        """
+        import numpy as np
+        from .signal.order_cot import COTOrderAnalyzer, COTParams
+
+        # Defensive: COT requires strictly monotonic t. Even microsecond
+        # jitter in MF4 timestamps would raise ValueError. If not strict,
+        # rebuild a uniform fallback from len + fs.
+        time_arr = np.asarray(time, dtype=float)
+        if len(time_arr) < 2 or np.any(np.diff(time_arr) <= 0):
+            time_arr = np.arange(len(time_arr), dtype=float) / float(fs)
+
+        cot_params = COTParams(
+            samples_per_rev=int(params.get('samples_per_rev', 256)),
             nfft=int(params.get('nfft', 1024)),
-            window=params.get('window', 'hanning'),
+            window=str(params.get('window', 'hanning')),
             max_order=float(params.get('max_order', params.get('max_ord', 20))),
             order_res=float(params.get('order_res', 0.1)),
             time_res=float(params.get('time_res', 0.05)),
+            fs=float(fs),
         )
-
-    @classmethod
-    def _compute_order_time_dataframe(cls, sig, rpm, time, fs, params):
-        result = OrderAnalyzer.compute_time_order_result(
-            sig,
-            rpm,
-            time,
-            cls._order_params(fs, params),
-        )
+        result = COTOrderAnalyzer.compute(sig, rpm, time_arr, cot_params)
         return _matrix_to_long_dataframe(
             result.times,
             result.orders,

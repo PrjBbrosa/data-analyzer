@@ -538,3 +538,61 @@ def test_fft_time_amplitude_ceiling_emits_failed_item(tmp_path, monkeypatch):
     result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
     assert result.status in ("partial", "blocked")
     assert any("64 MB" in (b or "") for b in result.blocked)
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 (2026-04-28): batch order_time must route through COTOrderAnalyzer
+# rather than the legacy frequency-domain OrderAnalyzer.compute_time_order_result.
+# ---------------------------------------------------------------------------
+
+
+def test_compute_order_time_dataframe_uses_cot(monkeypatch):
+    """_compute_order_time_dataframe must route through COTOrderAnalyzer.compute,
+    not OrderAnalyzer.compute_time_order_result.
+
+    Spy both call sites; only the COT spy may be invoked.
+    """
+    from mf4_analyzer import batch as batch_mod
+    from mf4_analyzer.signal import order as order_mod
+    from mf4_analyzer.signal import order_cot as cot_mod
+
+    cot_calls = []
+    legacy_calls = []
+
+    real_cot = cot_mod.COTOrderAnalyzer.compute
+    real_legacy = order_mod.OrderAnalyzer.compute_time_order_result
+
+    def spy_cot(sig, rpm, t, params, **kw):
+        cot_calls.append(('cot', len(sig)))
+        return real_cot(sig, rpm, t, params, **kw)
+
+    def spy_legacy(*a, **kw):
+        legacy_calls.append(('legacy',))
+        return real_legacy(*a, **kw)
+
+    monkeypatch.setattr(cot_mod.COTOrderAnalyzer, 'compute', staticmethod(spy_cot))
+    monkeypatch.setattr(order_mod.OrderAnalyzer, 'compute_time_order_result',
+                        staticmethod(spy_legacy))
+
+    # Synthetic 4 s signal at 1 kHz with constant 1200 RPM, second-order tone
+    import numpy as np
+    fs = 1000.0
+    t = np.arange(0.0, 4.0, 1.0 / fs)
+    rpm_const = 1200.0
+    target_order = 2.0
+    f = target_order * rpm_const / 60.0
+    sig = np.sin(2 * np.pi * f * t)
+    rpm = np.full_like(t, rpm_const)
+
+    params = {
+        'fs': fs, 'nfft': 1024, 'window': 'hanning',
+        'max_order': 5.0, 'order_res': 0.1, 'time_res': 0.05,
+        # samples_per_rev not specified → default 256
+    }
+
+    df = batch_mod.BatchRunner._compute_order_time_dataframe(
+        sig, rpm, t, fs, params)
+
+    assert cot_calls, 'COT path must be invoked'
+    assert not legacy_calls, 'Legacy frequency-domain path must NOT be invoked'
+    assert {'time_s', 'order', 'amplitude'} <= set(df.columns)
