@@ -154,7 +154,7 @@ def _default_loader(path):
 
 
 class BatchRunner:
-    SUPPORTED_METHODS = {'fft', 'order_time', 'order_track', 'fft_time'}
+    SUPPORTED_METHODS = {'fft', 'order_time', 'fft_time'}
 
     def __init__(self, files, loader: Callable | None = None):
         self.files = files
@@ -413,9 +413,6 @@ class BatchRunner:
             if method == 'order_time':
                 df = self._compute_order_time_dataframe(sig, rpm, time, fs, preset.params)
                 image_payload = ('order_time', df)
-            elif method == 'order_track':
-                df = self._compute_order_track_dataframe(sig, rpm, fs, preset.params)
-                image_payload = ('order_track', df)
             else:  # pragma: no cover - guarded by _expand_tasks
                 raise ValueError(f"unsupported method: {method}")
 
@@ -475,7 +472,6 @@ class BatchRunner:
             max_order=float(params.get('max_order', params.get('max_ord', 20))),
             order_res=float(params.get('order_res', 0.1)),
             time_res=float(params.get('time_res', 0.05)),
-            target_order=float(params.get('target_order', params.get('target', 1.0))),
         )
 
     @classmethod
@@ -526,15 +522,6 @@ class BatchRunner:
             y_name='frequency_hz',
         )
 
-    @classmethod
-    def _compute_order_track_dataframe(cls, sig, rpm, fs, params):
-        result = OrderAnalyzer.extract_order_track_result(
-            sig,
-            rpm,
-            cls._order_params(fs, params),
-        )
-        return pd.DataFrame({'rpm': result.rpm, 'amplitude': result.amplitude})
-
     def _rpm_values(self, fd, preset):
         if preset.rpm_signal is not None:
             rpm_fid, rpm_ch = preset.rpm_signal
@@ -577,10 +564,6 @@ class BatchRunner:
             if kind == 'fft':
                 ax.plot(df['frequency_hz'], df['amplitude'], lw=1.0)
                 ax.set_xlabel('Frequency (Hz)')
-                ax.set_ylabel('Amplitude')
-            elif kind == 'order_track':
-                ax.plot(df['rpm'], df['amplitude'], lw=1.0)
-                ax.set_xlabel('RPM')
                 ax.set_ylabel('Amplitude')
             else:
                 pivot = df.pivot(

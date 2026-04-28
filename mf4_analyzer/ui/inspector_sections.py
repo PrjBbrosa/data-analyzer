@@ -1114,7 +1114,6 @@ class OrderContextual(QWidget):
     """Order-analysis contextual: source/params/3 compute btns + tracking sub-group."""
 
     order_time_requested = pyqtSignal()
-    order_track_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
     # T6: cancel intent for the in-flight :class:`OrderWorker`. MainWindow
@@ -1271,18 +1270,6 @@ class OrderContextual(QWidget):
         self.btn_ot.setMinimumHeight(32)
         root.addWidget(self.btn_ot)
 
-        g = QGroupBox("阶次跟踪")
-        fl = QFormLayout(g)
-        _configure_form(fl)
-        self.spin_to = QDoubleSpinBox()
-        self.spin_to.setRange(0.5, 100)
-        self.spin_to.setValue(1)
-        fl.addRow("目标阶次:", _fit_field(self.spin_to))
-        self.btn_ok = QPushButton("阶次跟踪")
-        self.btn_ok.setProperty("role", "primary")
-        fl.addRow(self.btn_ok)
-        root.addWidget(g)
-
         g = QGroupBox("预设配置")
         gl = QVBoxLayout(g)
         gl.setSpacing(4)
@@ -1296,7 +1283,7 @@ class OrderContextual(QWidget):
         root.addWidget(self.lbl_progress)
 
         # T6: cancel-compute button. Sits at the END of the layout so it
-        # never crowds the primary "时间-阶次 / 阶次跟踪" buttons.
+        # never crowds the primary "时间-阶次" button.
         # ``clicked.connect(cancel_requested)`` re-emits without arguments;
         # MainWindow listens to ``cancel_requested``, not the button.
         self.btn_cancel = QPushButton("取消计算", self)
@@ -1308,7 +1295,6 @@ class OrderContextual(QWidget):
         root.addStretch()
 
         self.btn_ot.clicked.connect(self.order_time_requested)
-        self.btn_ok.clicked.connect(self.order_track_requested)
 
         # R3 B + 2026-04-26 紧凑化 fix-3: pin labels & cap fields so
         # 阶次分辨率 / 时间分辨率 / RPM分辨率 never wrap when the Inspector
@@ -1331,7 +1317,6 @@ class OrderContextual(QWidget):
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
             nfft=self.combo_nfft.currentText(),
-            target_order=self.spin_to.value(),
         )
 
     def _apply_preset(self, d):
@@ -1347,8 +1332,6 @@ class OrderContextual(QWidget):
             i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
-        if 'target_order' in d:
-            self.spin_to.setValue(float(d['target_order']))
 
     def _on_sig_index_changed(self):
         self.signal_changed.emit(self.combo_sig.currentData())
@@ -1462,9 +1445,6 @@ class OrderContextual(QWidget):
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
             except (TypeError, ValueError):
                 pass
-
-    def target_order(self):
-        return self.spin_to.value()
 
     def set_progress(self, text):
         self.lbl_progress.setText(text)

@@ -122,11 +122,6 @@ class OrderWorker(QThread):
                     self._sig, self._rpm, self._t, self._params,
                     progress_callback=cb_progress, cancel_token=cb_cancel,
                 )
-            elif self._kind == 'track':
-                r = OrderAnalyzer.extract_order_track_result(
-                    self._sig, self._rpm, self._params,
-                    progress_callback=cb_progress, cancel_token=cb_cancel,
-                )
             else:
                 raise ValueError(f"unknown kind: {self._kind}")
             if self._cancelled:
@@ -179,10 +174,6 @@ class MainWindow(QMainWindow):
         # comparing ``generation`` in the slots.
         self._order_worker = None
         self._order_generation = 0
-        # Cached rpm vector for ``_render_order_track``'s lower subplot
-        # (the :class:`OrderTrackResult` does not echo back the input
-        # rpm sequence, so the dispatcher stashes it here for the slot).
-        self._order_track_pending_rpm = None
         self._last_batch_preset = None
         self._init_ui();
         self._connect()
@@ -295,7 +286,6 @@ class MainWindow(QMainWindow):
         self.inspector.plot_time_requested.connect(self.plot_time)
         self.inspector.fft_requested.connect(self.do_fft)
         self.inspector.order_time_requested.connect(self.do_order_time)
-        self.inspector.order_track_requested.connect(self.do_order_track)
         # T6: Inspector publishes a cancel intent without knowing about
         # the worker; MainWindow translates it into ``OrderWorker.cancel``.
         self.inspector.order_ctx.cancel_requested.connect(
@@ -1370,33 +1360,6 @@ class MainWindow(QMainWindow):
         self._dispatch_order_worker('time', sig, rpm, t, params,
                                      status_msg='计算时间-阶次谱...')
 
-    def do_order_track(self):
-        t, sig, fs = self._get_sig()
-        if sig is None or len(sig) < 100:
-            self.toast("请选择有效信号", "warning")
-            return
-        if self.inspector.top.range_enabled() and t is not None:
-            lo, hi = self.inspector.top.range_values()
-            m = (t >= lo) & (t <= hi)
-            sig = sig[m]
-        rpm = self._get_rpm(len(sig))
-        if rpm is None:
-            return
-        fs = self.inspector.order_ctx.fs()
-        to = self.inspector.order_ctx.target_order()
-        op = self.inspector.order_ctx.get_params()
-        from ..signal.order import OrderAnalysisParams
-        params = OrderAnalysisParams(
-            fs=fs,
-            nfft=int(op['nfft']),
-            target_order=float(to),
-        )
-        # Stash rpm so the lower subplot in `_render_order_track` can
-        # plot it; OrderTrackResult itself does not echo the input.
-        self._order_track_pending_rpm = rpm
-        self._dispatch_order_worker('track', sig, rpm, None, params,
-                                     status_msg=f'跟踪阶次 {to}...')
-
     def _cancel_order_compute(self):
         """Slot for ``OrderContextual.cancel_requested``.
 
@@ -1481,8 +1444,6 @@ class MainWindow(QMainWindow):
         self.inspector.order_ctx.btn_cancel.setEnabled(False)
         if kind == 'time':
             self._render_order_time(result)
-        elif kind == 'track':
-            self._render_order_track(result)
 
     def _render_order_time(self, result):
         title = (
@@ -1537,74 +1498,6 @@ class MainWindow(QMainWindow):
         self.toast(
             f"时间-阶次谱完成 · {len(result.times)} × {len(result.orders)}",
             "success",
-        )
-
-    def _render_order_track(self, result):
-        from .canvases import build_envelope
-        # Track is a 2-subplot view that does not share structure with
-        # the heatmap path; force a clean rebuild. After plotting, reset
-        # the heatmap-state attrs so the next heatmap dispatch rebuilds.
-        # See lesson: pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle.md
-        self.canvas_order.clear()
-        ax1 = self.canvas_order.fig.add_subplot(2, 1, 1)
-        ax1.plot(result.rpm, result.amplitude, '#1f77b4', lw=1)
-        ax1.set_xlabel('RPM')
-        ax1.set_ylabel('Amplitude', labelpad=10)
-        ax1.set_title(
-            f'阶次 {result.params.target_order} 跟踪 - '
-            f'{self.inspector.order_ctx.combo_sig.currentText()}'
-        )
-        ax1.grid(True, alpha=0.25, ls='--')
-
-        ax2 = self.canvas_order.fig.add_subplot(2, 1, 2)
-        rpm = getattr(self, '_order_track_pending_rpm', None)
-        if rpm is None:
-            rpm = result.rpm
-        # Envelope downsample over the full sample-index range. xlim=None
-        # tells `build_envelope` to use the natural [0, N-1] span. The
-        # `TimeDomainCanvas._envelope` wrapper rejects xlim=None
-        # (T4-rev1) — only the module-level `build_envelope` honours it.
-        xs_idx = np.arange(len(rpm), dtype=float)
-        pixel_width = max(self.canvas_order.width(), 600)
-        xs, ys = build_envelope(xs_idx, rpm, xlim=None,
-                                 pixel_width=pixel_width, is_monotonic=True)
-        ax2.plot(xs, ys, '#2ca02c', lw=0.8)
-        ax2.set_xlabel('Sample')
-        ax2.set_ylabel('RPM')
-        ax2.set_title('转速曲线')
-        ax2.grid(True, alpha=0.25, ls='--')
-
-        try:
-            self.canvas_order.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
-        except Exception:
-            pass
-        xt, yt = self.inspector.top.tick_density()
-        self.canvas_order.set_tick_density(xt, yt)
-        self.canvas_order.draw_idle()
-
-        # Track took the non-heatmap path; clear heatmap bookkeeping so
-        # the next heatmap dispatch rebuilds rather than trying to reuse
-        # the now-destroyed Axes.
-        self.canvas_order._heatmap_ax = None
-        self.canvas_order._heatmap_im = None
-        self.canvas_order._heatmap_cbar = None
-
-        self._remember_batch_preset(
-            "当前阶次跟踪", "order_track",
-            self.inspector.order_ctx.current_signal(),
-            {
-                'fs': result.params.fs,
-                'nfft': result.params.nfft,
-                'target_order': result.params.target_order,
-                'rpm_factor': self.inspector.order_ctx.rpm_factor(),
-            },
-            rpm_signal=self.inspector.order_ctx.current_rpm(),
-        )
-        self.statusBar.showMessage(
-            f'阶次 {result.params.target_order} 跟踪完成'
-        )
-        self.toast(
-            f"阶次 {result.params.target_order} 跟踪完成", "success"
         )
 
     def closeEvent(self, event):

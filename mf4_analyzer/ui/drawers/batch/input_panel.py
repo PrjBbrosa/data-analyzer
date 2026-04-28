@@ -45,7 +45,7 @@ _RPM_UNIT_CUSTOM = "自定义"
 
 # Methods whose backend dispatch consumes RPM. Drives InputPanel.set_method
 # row visibility — fft / fft_time skip the row entirely.
-_RPM_USING_METHODS = frozenset({"order_time", "order_track"})
+_RPM_USING_METHODS = frozenset({"order_time"})
 
 
 # State machine values (spec §3.2). Run-time-only states (`loading`,

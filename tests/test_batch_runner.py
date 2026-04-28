@@ -102,25 +102,6 @@ def test_analysis_preset_replace_after_frozen_removed(tmp_path):
     assert p.outputs.export_data is True   # 原 preset 不被修改
 
 
-def test_free_config_order_track_preset_selects_matching_signals(tmp_path):
-    fd = _make_file(tmp_path)
-    preset = AnalysisPreset.free_config(
-        name="track all sig",
-        method="order_track",
-        signal_pattern="sig",
-        rpm_channel="rpm",
-        params={"fs": 1024.0, "target_order": 2.0, "nfft": 1024},
-        outputs=BatchOutput(export_data=True, export_image=False),
-    )
-
-    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
-
-    assert result.status == "done"
-    assert len(result.items) == 1
-    data = pd.read_csv(result.items[0].data_path)
-    assert list(data.columns) == ["rpm", "amplitude"]
-
-
 def test_batch_order_time_csv_shape(tmp_path):
     fd = _make_file(tmp_path)
     preset = AnalysisPreset.free_config(
@@ -430,17 +411,49 @@ def test_output_dir_create_failure_returns_blocked(tmp_path):
     assert events[-1].final_status == "blocked"
 
 
-def test_supported_methods_excludes_removed_order_rpm():
-    """``order_rpm`` was permanently removed (commit cfb301b) — its handler
-    in ``_run_one`` no longer exists. Keeping it in ``SUPPORTED_METHODS`` lets
-    a stray preset pass ``_expand_tasks`` and fall through to the
-    ``unsupported method`` raise (silent / undefined). Pin the W1 baseline,
-    extended in W3a (Phase 5) to include ``fft_time``.
+def test_supported_methods_excludes_removed_order_rpm_and_order_track():
+    """``order_rpm`` was permanently removed (commit cfb301b) and
+    ``order_track`` was removed 2026-04-28 — neither has a handler in
+    ``_run_one`` any more. Keeping a removed value in
+    ``SUPPORTED_METHODS`` lets a stray preset pass ``_expand_tasks`` and
+    fall through to the ``unsupported method`` raise (silent /
+    undefined). This regression test pins the strict-subset invariant so
+    later plans can't silently re-introduce a ghost handler (per
+    ``signal-processing/2026-04-27-plan-verbatim-source-must-reconcile-with-recent-removals.md``).
     """
     assert BatchRunner.SUPPORTED_METHODS == {
-        "fft", "order_time", "order_track", "fft_time",
+        "fft", "order_time", "fft_time",
     }
     assert "order_rpm" not in BatchRunner.SUPPORTED_METHODS
+    assert "order_track" not in BatchRunner.SUPPORTED_METHODS
+
+
+def test_legacy_order_track_preset_silently_skipped(tmp_path):
+    """A v1 preset whose ``method`` is no longer in ``SUPPORTED_METHODS``
+    (e.g. ``order_track``, removed 2026-04-28) must be skipped at load
+    time, not raise — so import handlers can surface a friendly toast
+    instead of crashing ``_run_one``'s ``else: raise``.
+    """
+    import json
+    from mf4_analyzer.batch_preset_io import load_preset_from_json
+
+    payload = {
+        "schema_version": 1,
+        "name": "legacy track",
+        "method": "order_track",
+        "target_signals": ["sig"],
+        "rpm_channel": "rpm",
+        "params": {"fs": 1024.0, "target_order": 2.0, "nfft": 1024},
+        "outputs": {
+            "export_data": True, "export_image": False, "data_format": "csv",
+        },
+    }
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    # Must not raise. Returning None signals "skip"; the import handler
+    # can render a friendly toast.
+    result = load_preset_from_json(path)
+    assert result is None
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [silent-boundary-leak-bypasses-rework-detection](orchestrator/2026-04-25-silent-boundary-leak-bypasses-rework-detection.md) [boundary][reporting][reviewer-discipline] — files_changed records files not symbols; specialists must list symbols_touched and reviewers must grep forbidden symbols, otherwise silent overscope passes both rework detection and review.
 - [codex-prompt-file-for-long-review](orchestrator/2026-04-25-codex-prompt-file-for-long-review.md) [codex][review][tooling][shell] — Long Codex prompts with shell syntax must use `--prompt-file`; add `--write` when the output contract includes report artifacts.
 - [interactive-playground-unblocks-ui-alignment](orchestrator/2026-04-26-interactive-playground-unblocks-ui-alignment.md) [ui][alignment][playground][decision-velocity][brainstorming] — When ≥3 UI proposals differ on visual/feel rather than logic, write a one-shot HTML playground (project-QSS palette, per-proposal toggles, copy-out prompt) instead of more text round-trips.
+- [return-type-change-needs-paired-callsite-update](orchestrator/2026-04-28-return-type-change-needs-paired-callsite-update.md) [decomposition][return-type][downstream-coupling][planning-gap] — A function-return-type widening (e.g. T → T | None) is a contract change; bundle the call-site None-guard with the contract change, do not split it across specialists and force a flag round-trip.
 
 ## signal-processing
 
@@ -38,6 +39,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [popup-clearfocus-needs-strongfocus-on-popup-itself](pyqt-ui/2026-04-27-popup-clearfocus-needs-strongfocus-on-popup-itself.md) [popup][focus-out][clearfocus][focus-policy][testing][offscreen] — QWidget.clearFocus() is a no-op when the widget does not own focus; testable focus-out popups must give the popup frame StrongFocus and setFocus(popup) before delegating to inner controls.
 - [modal-from-qthread-finished-segfaults-offscreen](pyqt-ui/2026-04-27-modal-from-qthread-finished-segfaults-offscreen.md) [qmessagebox][qthread][offscreen][segfault][testing][isvisible] — QMessageBox opened from a QThread.finished slot under qtbot.waitUntil on Windows offscreen segfaults; gate toasts on self.isVisible() so hidden test dialogs skip the modal.
 - [qss-padding-overrides-setcontentsmargins](pyqt-ui/2026-04-27-qss-padding-overrides-setcontentsmargins.md) [qss][stylesheet][contentsmargins][qgroupbox][qformlayout][polish] — Global QSS padding wins over Python setContentsMargins; inline per-widget setStyleSheet with long-form padding-left/right/bottom is the survivable override. QFormLayout label columns also need cross-form unification.
+- [qss-subcontrol-needs-explicit-arrow-glyph](pyqt-ui/2026-04-28-qss-subcontrol-needs-explicit-arrow-glyph.md) [qss][stylesheet][subcontrol][arrow][affordance][qtawesome] — Partially styling a subcontrol (drop-down/up-button/down-button) suppresses Qt's default arrow; declare ::down-arrow/::up-arrow with an explicit image:url glyph (qtawesome→PNG cache, forward-slash paths) and a faint resting tint so spinbox/combobox gutters are visible at rest.
 
 ## refactor
 

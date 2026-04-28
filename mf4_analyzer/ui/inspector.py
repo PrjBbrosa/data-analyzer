@@ -40,7 +40,6 @@ class Inspector(QWidget):
     fft_time_export_full_requested = pyqtSignal()
     fft_time_export_main_requested = pyqtSignal()
     order_time_requested = pyqtSignal()
-    order_track_requested = pyqtSignal()
     xaxis_apply_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order')
     tick_density_changed = pyqtSignal(int, int)
@@ -128,7 +127,6 @@ class Inspector(QWidget):
         self.fft_ctx.signal_changed.connect(
             lambda d: self.signal_changed.emit('fft', d))
         self.order_ctx.order_time_requested.connect(self.order_time_requested)
-        self.order_ctx.order_track_requested.connect(self.order_track_requested)
         self.order_ctx.rebuild_time_requested.connect(
             lambda a: self.rebuild_time_requested.emit(a, 'order'))
         self.order_ctx.signal_changed.connect(

@@ -165,8 +165,9 @@ def _format_dual_html(rows):
 #
 # Pure function version of the viewport-aware min/max envelope reducer
 # previously embedded in ``TimeDomainCanvas._envelope``. Lives at module
-# scope so non-canvas callers (e.g. ``order_track`` lower-half RPM line)
-# can reuse the exact same downsampling without instantiating a canvas.
+# scope so non-canvas callers (e.g. callers that need viewport-aware
+# downsampling without owning a full canvas) can reuse the exact same
+# downsampling without instantiating a canvas.
 #
 # ``TimeDomainCanvas._envelope`` is now a thin wrapper that forwards
 # here. The wrapper keeps its required-``xlim`` signature; the
@@ -215,9 +216,9 @@ def build_envelope(t, sig, *, xlim, pixel_width, is_monotonic=None):
     xlim : tuple(float, float) | None
         Visible x-axis range ``(x0, x1)``. ``None`` means **full range**
         and is equivalent to ``(float(t[0]), float(t[-1]))`` — this is
-        the entry used by ``order_track``'s lower-half RPM line which
-        does not own a viewport. Empty ``t`` with ``xlim=None`` returns
-        the inputs untouched.
+        the entry for callers that pass non-viewport-owning series
+        (e.g. RPM auxiliary lines on a multi-subplot figure). Empty
+        ``t`` with ``xlim=None`` returns the inputs untouched.
     pixel_width : int
         Approximate pixel width of the visible axes — sets the target
         bucket count.
@@ -1585,7 +1586,7 @@ class PlotCanvas(FigureCanvas):
         2. heatmap axes still member of ``fig.axes`` (rules out
            accidental destruction by external code paths);
         3. ``len(fig.axes) == 2`` — heatmap + its colorbar exactly,
-           rules out the 2-subplot ``order_track`` layout;
+           rules out 2-subplot mixed layouts;
         4. existing image's array shape equals the new matrix shape —
            ``AxesImage.set_data`` accepts shape changes but downstream
            extent/clim wiring becomes brittle; we conservatively rebuild

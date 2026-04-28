@@ -71,7 +71,6 @@ def test_order_contextual_params(qapp):
     p = oc.get_params()
     for k in ('max_order', 'order_res', 'time_res', 'nfft'):
         assert k in p
-    assert oc.target_order() > 0
 
 
 def test_order_contextual_emits(qapp, qtbot):
@@ -79,8 +78,6 @@ def test_order_contextual_emits(qapp, qtbot):
     oc = OrderContextual()
     with qtbot.waitSignal(oc.order_time_requested, timeout=200):
         oc.btn_ot.click()
-    with qtbot.waitSignal(oc.order_track_requested, timeout=200):
-        oc.btn_ok.click()
 
 
 def test_inspector_no_longer_exposes_mode_signals(qapp):
@@ -648,7 +645,7 @@ def test_order_contextual_field_widgets_have_max_width(qapp):
     oc = OrderContextual()
     fields = [
         oc.spin_mo, oc.spin_order_res, oc.spin_time_res,
-        oc.combo_nfft, oc.spin_to, oc.spin_rf,
+        oc.combo_nfft, oc.spin_rf,
     ]
     for f in fields:
         # 16777215 is QWIDGETSIZE_MAX (no cap). We need a real cap.
@@ -865,7 +862,7 @@ def test_order_contextual_short_numeric_fields_capped_tighter(qapp):
     from mf4_analyzer.ui.inspector_sections import OrderContextual
     oc = OrderContextual()
     for w in (oc.spin_mo, oc.spin_order_res, oc.spin_time_res,
-              oc.spin_rf, oc.spin_to):
+              oc.spin_rf):
         assert 200 <= w.maximumWidth() <= 260, (
             f"OrderContextual field {w.objectName() or type(w).__name__}"
             f" maximumWidth={w.maximumWidth()}px should use the A1 cap."
