@@ -1219,45 +1219,18 @@ class OrderContextual(QWidget):
             lambda txt: self.combo_dynamic.setEnabled(txt == 'Amplitude dB')
         )
 
-        # --- Wave 4 / Task 4.2: tracking algorithm picker ---
-        # combo_algorithm switches between the legacy frequency-domain
-        # mapping path (OrderAnalyzer) and the new Computed Order Tracking
-        # path (COTOrderAnalyzer). Default stays '频域映射' so existing
-        # user presets render identically. spin_samples_per_rev is the only
-        # COT-specific knob exposed here; it is gated to enabled-only when
-        # COT is picked because OrderAnalyzer ignores it.
-        self.combo_algorithm = QComboBox()
-        self.combo_algorithm.addItems(['频域映射', 'COT (角域重采样)'])
-        self.combo_algorithm.setCurrentText('频域映射')
-        self.combo_algorithm.setToolTip(
-            "频域映射：时间域 FFT 后按平均 RPM 把频率换成阶次（变 RPM 会涂抹）。\n"
-            "COT：先把信号重采样到等角度域再 FFT，变 RPM 不涂抹。"
-        )
-        fl.addRow(
-            "跟踪算法:",
-            _fit_field(self.combo_algorithm, max_width=_SHORT_FIELD_MAX_WIDTH),
-        )
-
+        # COT is now the only tracking algorithm (Wave 2 of the
+        # 2026-04-28 axis-settings + COT migration plan removed the
+        # frequency-domain branch). spin_samples_per_rev is therefore
+        # always enabled — no companion algorithm picker gates it.
         self.spin_samples_per_rev = QSpinBox()
         self.spin_samples_per_rev.setRange(64, 2048)
         self.spin_samples_per_rev.setValue(256)
-        self.spin_samples_per_rev.setEnabled(False)
-        self.spin_samples_per_rev.setToolTip("每转角度采样数（仅 COT 启用）")
+        self.spin_samples_per_rev.setToolTip("COT 每转角度采样数")
         fl.addRow(
             "每转样本数:",
             _fit_field(self.spin_samples_per_rev, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
-
-        # Lesson conditional-visibility-init-sync-and-paired-field-children:
-        # signal-only enable-toggling is fine here (single widget, no
-        # _pair_field wrapper), but we still seed the initial state once
-        # so a future programmatic ``apply_params({'algorithm': 'cot'})``
-        # before any ``show()`` keeps spin_samples_per_rev coherent with
-        # the combo selection.
-        def _on_algo_changed(txt):
-            self.spin_samples_per_rev.setEnabled('COT' in txt)
-        self.combo_algorithm.currentTextChanged.connect(_on_algo_changed)
-        _on_algo_changed(self.combo_algorithm.currentText())
 
         # R3 B: pin label widths and cap field widths so long Chinese
         # labels (e.g. "阶次分辨率:") never wrap or get elided when the
@@ -1391,11 +1364,9 @@ class OrderContextual(QWidget):
         p = self.get_params()
         p['amplitude_mode'] = self.combo_amp_mode.currentText()
         p['dynamic'] = self.combo_dynamic.currentText()
-        # Wave 4 / Task 4.2: algorithm picker. Emit normalized tokens
-        # ('cot' | 'frequency') so main_window can branch without parsing
-        # the user-facing Chinese label.
-        algo_txt = self.combo_algorithm.currentText()
-        p['algorithm'] = 'cot' if 'COT' in algo_txt else 'frequency'
+        # Wave 2 (2026-04-28 plan): combo_algorithm has been removed —
+        # COT is the only tracking algorithm. ``samples_per_rev`` stays
+        # in the param payload because COT consumes it.
         p['samples_per_rev'] = int(self.spin_samples_per_rev.value())
         return p
 
@@ -1427,19 +1398,10 @@ class OrderContextual(QWidget):
                 i = combo.findText(str(d[k]))
                 if i >= 0:
                     combo.setCurrentIndex(i)
-        # Wave 4 / Task 4.2: algorithm round-trip. Accept either the
-        # normalized token ('cot'/'frequency') or the user-facing label;
-        # 'COT' substring catches both 'cot' and 'COT (角域重采样)'.
-        if 'algorithm' in d:
-            val = str(d['algorithm'])
-            target = (
-                'COT (角域重采样)'
-                if val == 'cot' or 'COT' in val
-                else '频域映射'
-            )
-            i = self.combo_algorithm.findText(target)
-            if i >= 0:
-                self.combo_algorithm.setCurrentIndex(i)
+        # Wave 2 (2026-04-28 plan): the algorithm round-trip was dropped
+        # along with combo_algorithm. Legacy presets carrying an
+        # 'algorithm' key are silently ignored — Wave 6's preset-IO
+        # migration covers the on-disk shape.
         if 'samples_per_rev' in d:
             try:
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
