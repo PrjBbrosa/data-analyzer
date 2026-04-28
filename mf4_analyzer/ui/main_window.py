@@ -1469,7 +1469,15 @@ class MainWindow(QMainWindow):
             interp='bilinear',
             cbar_label='Amplitude',
             amplitude_mode=amp_mode_token,
-            dynamic=order_params.get('dynamic', '30 dB'),
+            z_auto=bool(order_params.get('z_auto', False)),
+            z_floor=float(order_params.get('z_floor', -30.0)),
+            z_ceiling=float(order_params.get('z_ceiling', 0.0)),
+            x_auto=bool(order_params.get('x_auto', True)),
+            x_min=float(order_params.get('x_min', 0.0)),
+            x_max=float(order_params.get('x_max', 0.0)),
+            y_auto=bool(order_params.get('y_auto', True)),
+            y_min=float(order_params.get('y_min', 0.0)),
+            y_max=float(order_params.get('y_max', 0.0)),
         )
         xt, yt = self.inspector.top.tick_density()
         self.canvas_order.set_tick_density(xt, yt)
@@ -1784,12 +1792,23 @@ class MainWindow(QMainWindow):
         place they are read.
         """
         freq_range = self._normalize_freq_range(p)
+        # Wave 5: legacy ``dynamic: str`` is gone; we forward the explicit
+        # z_auto / z_floor / z_ceiling triplet that FFTTimeContextual now
+        # emits, plus y_auto / y_min / y_max for the manual Y override
+        # (precedes freq_range on the canvas). amplitude_mode is already
+        # the canvas's lowercase token ('amplitude_db' / 'amplitude') in
+        # FFTTimeContextual.get_params, so no translation needed.
         self.canvas_fft_time.plot_result(
             result,
             amplitude_mode=p['amplitude_mode'],
             cmap=p['cmap'],
-            dynamic=p['dynamic'],
+            z_auto=bool(p.get('z_auto', False)),
+            z_floor=float(p.get('z_floor', -80.0)),
+            z_ceiling=float(p.get('z_ceiling', 0.0)),
             freq_range=freq_range,
+            y_auto=bool(p.get('y_auto', True)),
+            y_min=float(p.get('y_min', 0.0)),
+            y_max=float(p.get('y_max', 0.0)),
         )
 
     def _on_fft_time_cursor_info(self, text):

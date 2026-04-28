@@ -1160,7 +1160,6 @@ class SpectrogramCanvas(FigureCanvas):
         self._selected_index = None
         self._amplitude_mode = 'amplitude_db'
         self._cmap = 'turbo'
-        self._dynamic = '80 dB'
         self._freq_range = None
         self._db_cache = None  # (cache_key, ndarray); cache_key=(id(result), db_reference)
         # Axes / artist handles set by plot_result.
@@ -1233,7 +1232,9 @@ class SpectrogramCanvas(FigureCanvas):
     # Rendering
     # ------------------------------------------------------------------
     def plot_result(self, result, amplitude_mode='amplitude_db', cmap='turbo',
-                    dynamic='80 dB', freq_range=None):
+                    z_auto=False, z_floor=-80.0, z_ceiling=0.0,
+                    freq_range=None,
+                    y_auto=True, y_min=0.0, y_max=0.0):
         """Render ``result`` as a spectrogram with a frequency-slice strip.
 
         Parameters
@@ -1245,17 +1246,28 @@ class SpectrogramCanvas(FigureCanvas):
             Whether to display linear amplitude or dB.
         cmap : str
             Matplotlib colormap name for the 2D image.
-        dynamic : {'Auto', '60 dB', '80 dB'}
-            Color-limit policy. Only meaningful in ``amplitude_db`` mode.
+        z_auto, z_floor, z_ceiling : bool, float, float
+            Replaces the legacy ``dynamic: str`` API as of 2026-04-28.
+            When ``z_auto`` is True the colorbar maps the data extent
+            ``(nanmin, nanmax)``. When False the colorbar uses
+            ``(z_floor, z_ceiling)`` directly. Defaults preserve the
+            historical "80 dB → (-80, 0)" feel for callers that opt out
+            of auto.
         freq_range : tuple(float, float) or None
             ``(lo, hi)`` Hz. ``hi <= 0`` or ``hi <= lo`` falls back to
-            the Nyquist bin (``frequencies[-1]``).
+            the Nyquist bin (``frequencies[-1]``). This controls the
+            frequency Y axis only.
+        y_auto, y_min, y_max : bool, float, float
+            Caller-driven manual Y-range override for matplotlib
+            ``set_ylim``. Precedence: when ``y_auto=False`` and
+            ``y_max > y_min``, the resulting ``set_ylim(y_min, y_max)``
+            is applied AFTER ``freq_range`` and overrides whatever
+            ``freq_range`` would have set.
         """
         self.clear()
         self._result = result
         self._amplitude_mode = amplitude_mode
         self._cmap = cmap
-        self._dynamic = dynamic
         self._freq_range = freq_range
         self._selected_index = 0
 
@@ -1270,7 +1282,10 @@ class SpectrogramCanvas(FigureCanvas):
             float(result.frequencies[0]),
             float(result.frequencies[-1]),
         ]
-        vmin, vmax = self._color_limits(z, amplitude_mode, dynamic)
+        vmin, vmax = self._color_limits(
+            z, amplitude_mode,
+            z_auto=z_auto, z_floor=z_floor, z_ceiling=z_ceiling,
+        )
         im = self._ax_spec.imshow(
             z,
             origin='lower',
@@ -1293,6 +1308,11 @@ class SpectrogramCanvas(FigureCanvas):
             if hi <= 0 or hi <= lo:
                 hi = float(result.frequencies[-1])
             self._ax_spec.set_ylim(lo, hi)
+        # Wave 5: caller-driven manual Y override. When y_auto is False
+        # and y_max > y_min, set_ylim(y_min, y_max) wins over whatever
+        # freq_range applied above. Documented precedence in docstring.
+        if not y_auto and y_max > y_min:
+            self._ax_spec.set_ylim(float(y_min), float(y_max))
         # White vertical cursor line at the currently selected frame.
         x0 = float(result.times[0])
         self._cursor_line = self._ax_spec.axvline(x0, color='#ffffff', lw=1.2)
@@ -1308,22 +1328,17 @@ class SpectrogramCanvas(FigureCanvas):
         self.fig.subplots_adjust(**SPECTROGRAM_SUBPLOT_ADJUST)
         self.draw_idle()
 
-    def _color_limits(self, z, amplitude_mode, dynamic):
-        """Choose (vmin, vmax) for ``imshow`` based on amplitude mode and policy.
+    def _color_limits(self, z, amplitude_mode, z_auto, z_floor, z_ceiling):
+        """Choose (vmin, vmax) for imshow.
 
-        Linear amplitude or 'Auto' dB → ``(nanmin, nanmax)``.
-        '80 dB' / '60 dB' (only in dB mode) → ``(zmax - N, zmax)``.
+        Replaces the old ``dynamic: str`` API as of 2026-04-28.
+        ``amplitude_mode`` is kept for backward-compat callers but has no
+        effect on the limits when explicit floor/ceiling are supplied —
+        those win.
         """
-        zmax = float(np.nanmax(z))
-        if amplitude_mode == 'amplitude_db':
-            if dynamic == '80 dB':
-                return zmax - 80.0, zmax
-            if dynamic == '60 dB':
-                return zmax - 60.0, zmax
-            # 'Auto' (or any other label) → let the data dictate.
-            return float(np.nanmin(z)), zmax
-        # Linear amplitude.
-        return float(np.nanmin(z)), zmax
+        if z_auto:
+            return float(np.nanmin(z)), float(np.nanmax(z))
+        return float(z_floor), float(z_ceiling)
 
     def _display_matrix(self, result, amplitude_mode):
         """Return the matrix to render. dB conversion is memoized per result.
@@ -1570,13 +1585,23 @@ class PlotCanvas(FigureCanvas):
                                 vmin=None, vmax=None,
                                 cbar_label='Amplitude',
                                 amplitude_mode='amplitude',
-                                dynamic='Auto'):
+                                z_auto=True, z_floor=-30.0, z_ceiling=0.0,
+                                x_auto=True, x_min=0.0, x_max=0.0,
+                                y_auto=True, y_min=0.0, y_max=0.0):
         """Render a 2-D heatmap; on a compatible second call reuse the
         existing axes / image / colorbar via ``set_data`` instead of
         rebuilding (spec §4.2 / §6.2).
 
         ``matrix`` is shape ``(N_y, N_x)`` matching ``imshow`` row/col
         layout. ``x_extent`` / ``y_extent`` are ``(min, max)``.
+
+        Wave 5 (2026-04-28): the legacy ``dynamic: str`` API is replaced
+        by explicit ``(z_auto, z_floor, z_ceiling)`` and the new
+        ``(x_auto, x_min, x_max)`` / ``(y_auto, y_min, y_max)`` overrides
+        for caller-driven manual axis ranges. When ``*_auto`` is True the
+        canvas falls back to the data extent (``x_extent`` / ``y_extent``);
+        when False AND ``*_max > *_min`` the override wins on BOTH the
+        fast-reuse path and the rebuild path.
 
         Compatibility judgement (all 4 must hold to take the
         ``set_data`` fast path; otherwise fall back to ``clear()`` +
@@ -1606,18 +1631,14 @@ class PlotCanvas(FigureCanvas):
             else:
                 with np.errstate(divide='ignore'):
                     m_disp = 20.0 * np.log10(np.clip(m, 1e-12, None) / ref)
-            if dynamic == '30 dB':
-                m_disp = np.clip(m_disp, -30.0, 0.0)
-            elif dynamic == '50 dB':
-                m_disp = np.clip(m_disp, -50.0, 0.0)
-            elif dynamic == '80 dB':
-                m_disp = np.clip(m_disp, -80.0, 0.0)
-            # 'Auto' = no clip
+            # Wave 5: clip only when the user opts out of z-auto.
+            if not z_auto:
+                m_disp = np.clip(m_disp, float(z_floor), float(z_ceiling))
             m = m_disp
             if vmin is None:
-                vmin = float(np.nanmin(m))
+                vmin = float(z_floor) if not z_auto else float(np.nanmin(m))
             if vmax is None:
-                vmax = 0.0
+                vmax = float(z_ceiling) if not z_auto else 0.0
             if 'dB' not in cbar_label:
                 cbar_label = f"{cbar_label} (dB)"
         else:
@@ -1644,8 +1665,17 @@ class PlotCanvas(FigureCanvas):
             existing_im.set_cmap(cmap)
             existing_im.set_interpolation(interp)
             existing_im.set_clim(vmin, vmax)
-            existing_ax.set_xlim(x_extent)
-            existing_ax.set_ylim(y_extent)
+            # Wave 5: respect x_auto/y_auto on the fast-reuse path so a
+            # second compute click does not silently revert user-set
+            # ranges to the auto extent.
+            if x_auto:
+                existing_ax.set_xlim(x_extent)
+            elif x_max > x_min:
+                existing_ax.set_xlim(float(x_min), float(x_max))
+            if y_auto:
+                existing_ax.set_ylim(y_extent)
+            elif y_max > y_min:
+                existing_ax.set_ylim(float(y_min), float(y_max))
             existing_ax.set_xlabel(x_label)
             existing_ax.set_ylabel(y_label)
             existing_ax.set_title(title)
@@ -1671,6 +1701,12 @@ class PlotCanvas(FigureCanvas):
             self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
         except Exception:
             pass
+        # Wave 5: caller-driven manual range override on the rebuild
+        # path (after tight_layout so it isn't undone).
+        if not x_auto and x_max > x_min:
+            ax.set_xlim(float(x_min), float(x_max))
+        if not y_auto and y_max > y_min:
+            ax.set_ylim(float(y_min), float(y_max))
         self._heatmap_ax = ax
         self._heatmap_im = im
         self._heatmap_cbar = cbar

@@ -27,7 +27,8 @@ def test_heatmap_db_mode_with_30db_clamps_to_minus30_zero(qapp):
     canvas.plot_or_update_heatmap(
         matrix=m, x_extent=(0, 1), y_extent=(0, 1),
         x_label='x', y_label='y', title='t',
-        amplitude_mode='amplitude_db', dynamic='30 dB',
+        amplitude_mode='amplitude_db',
+        z_auto=False, z_floor=-30.0, z_ceiling=0.0,
     )
     im = canvas._heatmap_im
     assert im is not None
@@ -42,7 +43,7 @@ def test_heatmap_linear_mode_passes_through(qapp):
     canvas.plot_or_update_heatmap(
         matrix=m, x_extent=(0, 1), y_extent=(0, 1),
         x_label='x', y_label='y', title='t',
-        amplitude_mode='amplitude', dynamic='Auto',
+        amplitude_mode='amplitude', z_auto=True,
     )
     arr = canvas._heatmap_im.get_array()
     assert arr.max() == pytest.approx(2.0)
@@ -55,7 +56,8 @@ def test_heatmap_db_50db_dynamic(qapp):
     canvas.plot_or_update_heatmap(
         matrix=m, x_extent=(0, 1), y_extent=(0, 1),
         x_label='x', y_label='y', title='t',
-        amplitude_mode='amplitude_db', dynamic='50 dB',
+        amplitude_mode='amplitude_db',
+        z_auto=False, z_floor=-50.0, z_ceiling=0.0,
     )
     arr = canvas._heatmap_im.get_array()
     assert arr.min() >= -50.0

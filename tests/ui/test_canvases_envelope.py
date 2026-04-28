@@ -167,3 +167,57 @@ def test_plot_canvas_heatmap_to_2subplot_to_heatmap_no_colorbar_ghost(qtbot):
     )
     assert len(canvas.fig.axes) == 2   # heatmap + colorbar — no ghost
     assert canvas._heatmap_cbar is not None
+
+
+# -------------------------------------------------------------------
+# Wave 5: new (z_auto, z_floor, z_ceiling, x_*, y_*) signatures
+# -------------------------------------------------------------------
+
+
+def test_color_limits_z_explicit_floor_ceiling():
+    """_color_limits accepts (z_auto=False, z_floor, z_ceiling) and returns them.
+    _color_limits accepts z_auto=True and returns (nanmin, nanmax)."""
+    import numpy as np
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+
+    sc = SpectrogramCanvas()
+    z = np.array([[-50, -10, -5], [-100, -20, 0]], dtype=float)
+
+    vmin, vmax = sc._color_limits(
+        z, amplitude_mode='amplitude_db',
+        z_auto=False, z_floor=-30.0, z_ceiling=0.0,
+    )
+    assert (vmin, vmax) == (-30.0, 0.0)
+
+    vmin, vmax = sc._color_limits(
+        z, amplitude_mode='amplitude_db', z_auto=True,
+        z_floor=999, z_ceiling=999,  # ignored
+    )
+    assert vmin == -100.0
+    assert vmax == 0.0
+
+
+def test_plot_or_update_heatmap_axis_args(qtbot):
+    """plot_or_update_heatmap accepts new (z_auto, z_floor, z_ceiling, x_auto,
+    x_min, x_max, y_auto, y_min, y_max) kwargs without TypeError."""
+    import numpy as np
+    from mf4_analyzer.ui.canvases import PlotCanvas
+
+    pc = PlotCanvas()
+    qtbot.addWidget(pc)
+    m = np.random.RandomState(42).rand(8, 8)
+
+    pc.plot_or_update_heatmap(
+        matrix=m, x_extent=(0, 4), y_extent=(0, 20),
+        x_label='Time (s)', y_label='Order',
+        title='test', cmap='turbo', interp='bilinear',
+        cbar_label='Amplitude',
+        amplitude_mode='amplitude_db',
+        z_auto=False, z_floor=-30.0, z_ceiling=0.0,
+        x_auto=True, x_min=0.0, x_max=0.0,
+        y_auto=False, y_min=2.0, y_max=18.0,
+    )
+    ax = pc.fig.axes[0]
+    lo, hi = ax.get_ylim()
+    assert abs(lo - 2.0) < 0.01
+    assert abs(hi - 18.0) < 0.01
