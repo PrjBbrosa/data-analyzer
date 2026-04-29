@@ -1234,6 +1234,7 @@ class SpectrogramCanvas(FigureCanvas):
     def plot_result(self, result, amplitude_mode='amplitude_db', cmap='turbo',
                     z_auto=False, z_floor=-80.0, z_ceiling=0.0,
                     freq_range=None,
+                    x_auto=True, x_min=0.0, x_max=0.0,
                     y_auto=True, y_min=0.0, y_max=0.0):
         """Render ``result`` as a spectrogram with a frequency-slice strip.
 
@@ -1257,6 +1258,10 @@ class SpectrogramCanvas(FigureCanvas):
             ``(lo, hi)`` Hz. ``hi <= 0`` or ``hi <= lo`` falls back to
             the Nyquist bin (``frequencies[-1]``). This controls the
             frequency Y axis only.
+        x_auto, x_min, x_max : bool, float, float
+            Caller-driven manual X-range override for the time axis. When
+            ``x_auto=False`` and ``x_max > x_min``, ``set_xlim`` is applied
+            after the image is drawn.
         y_auto, y_min, y_max : bool, float, float
             Caller-driven manual Y-range override for matplotlib
             ``set_ylim``. Precedence: when ``y_auto=False`` and
@@ -1303,6 +1308,8 @@ class SpectrogramCanvas(FigureCanvas):
         self._colorbar = self.fig.colorbar(im, ax=self._ax_spec, pad=0.01)
         self._ax_spec.set_xlabel('Time (s)')
         self._ax_spec.set_ylabel('Frequency (Hz)')
+        if not x_auto and x_max > x_min:
+            self._ax_spec.set_xlim(float(x_min), float(x_max))
         if freq_range is not None:
             lo, hi = freq_range
             if hi <= 0 or hi <= lo:

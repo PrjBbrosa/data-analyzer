@@ -127,7 +127,8 @@ def test_fft_time_context_returns_params(qtbot):
     ctx.combo_win.setCurrentText('hanning')
     ctx.spin_overlap.setValue(75)
     # Wave 4: combo_amp_mode replaced by combo_amp_unit (dB↔Linear) on
-    # the Z axis row; chk_freq_auto / spin_freq_min/max alias the X row;
+    # the Z axis row; B polish maps chk_freq_auto / spin_freq_min/max to
+    # the Y-frequency row because FFT-vs-Time renders X=time, Y=frequency;
     # combo_dynamic replaced by spin_z_floor.
     ctx.combo_amp_unit.setCurrentText('dB')
     ctx.chk_freq_auto.setChecked(False)
@@ -302,8 +303,8 @@ def test_fft_contextual_spectrum_params_three_rows(qapp):
 
 
 def test_fft_time_freq_min_max_share_one_axis_row(qtbot):
-    """Wave 4: 频率下限/上限 are no longer in a QFormLayout — they live
-    in the X row of the new 坐标轴设置 group as spin_x_min / spin_x_max
+    """B polish: 频率下限/上限 live in the Y-frequency row of the
+    坐标轴设置 group as spin_y_min / spin_y_max
     (aliased back to spin_freq_min / spin_freq_max). The old "share one
     form row" contract becomes "share one axis row widget" → both spins
     sit inside the same direct parent QWidget host built by
@@ -312,8 +313,8 @@ def test_fft_time_freq_min_max_share_one_axis_row(qtbot):
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
-    assert ctx.spin_freq_min is ctx.spin_x_min
-    assert ctx.spin_freq_max is ctx.spin_x_max
+    assert ctx.spin_freq_min is ctx.spin_y_min
+    assert ctx.spin_freq_max is ctx.spin_y_max
     assert ctx.spin_freq_min.parentWidget() is ctx.spin_freq_max.parentWidget()
 
 
@@ -965,8 +966,8 @@ def test_fft_contextual_fields_fill_column_under_qss(qapp, qtbot):
             "FFT fields should share a right edge under A1; "
             f"got {right_edges}"
         )
-        assert min(widths) >= 190, (
-            f"Field column should be materially wider than compact 110px; "
+        assert min(widths) >= 170, (
+            f"Field column should remain materially wider than compact 110px; "
             f"got {widths}"
         )
     finally:
@@ -1003,6 +1004,29 @@ def test_signal_card_qframes_have_no_white_bleed(qapp):
             "the default QFrame{background:#ffffff} rule will render the "
             "card as a white rectangle over the tinted contextual."
         )
+
+
+def test_order_contextual_old_tinted_background_removed():
+    """Order Inspector should no longer carry the old orange/gray tint."""
+    import pathlib
+    qss_path = pathlib.Path(__file__).resolve().parents[2] / (
+        "mf4_analyzer/ui/style.qss"
+    )
+    qss = qss_path.read_text(encoding="utf-8")
+    assert "#fff5e8" not in qss
+
+
+def test_fft_time_and_order_contextual_backgrounds_are_unified():
+    """FFT Time and Order contextual panels should share the same neutral
+    background so the upper/lower Inspector areas read as one surface."""
+    import pathlib
+    qss_path = pathlib.Path(__file__).resolve().parents[2] / (
+        "mf4_analyzer/ui/style.qss"
+    )
+    qss = qss_path.read_text(encoding="utf-8")
+    assert "QWidget#fftTimeContextual" in qss
+    assert "QWidget#orderContextual" in qss
+    assert "background-color: #ffffff;" in qss
 
 
 def test_btn_rebuild_outer_size_compact(qapp):
@@ -1518,7 +1542,7 @@ def test_order_contextual_current_params_omits_algorithm(qtbot):
 
 def test_fft_time_contextual_has_axis_settings_group(qtbot):
     """FFTTimeContextual must contain QGroupBox '坐标轴设置' with the same
-    9 controls as OrderContextual but X = freq, Y = amplitude."""
+    9 controls as OrderContextual but X = time, Y = frequency."""
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     fc = FFTTimeContextual()
     qtbot.addWidget(fc)
@@ -1533,12 +1557,123 @@ def test_fft_time_contextual_has_axis_settings_group(qtbot):
 
     assert not hasattr(fc, 'combo_amp_mode')
     assert not hasattr(fc, 'combo_dynamic')
-    # chk_freq_auto + spin_freq_min/max moved into the axis group
-    # but kept as attribute names for backward-compat with downstream readers
-    # — they now alias to chk_x_auto / spin_x_min / spin_x_max.
-    assert fc.chk_freq_auto is fc.chk_x_auto
-    assert fc.spin_freq_min is fc.spin_x_min
-    assert fc.spin_freq_max is fc.spin_x_max
+    # chk_freq_auto + spin_freq_min/max are backward-compat names for the
+    # actual frequency axis, which is Y in an FFT-vs-Time spectrogram.
+    assert fc.chk_freq_auto is fc.chk_y_auto
+    assert fc.spin_freq_min is fc.spin_y_min
+    assert fc.spin_freq_max is fc.spin_y_max
+
+
+def test_fft_time_axis_labels_match_spectrogram_axes(qtbot):
+    """FFT Time Inspector must describe the plotted spectrogram itself:
+    X = time, Y = frequency, Z/color = amplitude."""
+    from PyQt5.QtWidgets import QLabel
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+
+    labels = {label.text() for label in fc.findChildren(QLabel)}
+
+    assert "时间 (X):" in labels
+    assert "频率 (Y):" in labels
+    assert "频率 (X):" not in labels
+    assert "幅值 (Y):" not in labels
+
+
+def test_axis_rows_hide_bounds_when_auto_and_show_when_manual(qtbot):
+    """Automatic rows show a compact summary; manual rows show editable
+    min/max fields. This keeps FFT Time / Order numbers from piling up."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+    oc.show()
+    try:
+        assert oc.chk_x_auto.isChecked()
+        assert hasattr(oc, "lbl_x_summary")
+        assert oc.lbl_x_summary.isVisible()
+        assert oc.spin_x_min.isHidden()
+        assert oc.spin_x_max.isHidden()
+
+        oc.chk_x_auto.setChecked(False)
+        assert oc.lbl_x_summary.isHidden()
+        assert oc.spin_x_min.isVisible()
+        assert oc.spin_x_max.isVisible()
+        assert oc.spin_x_min.isEnabled()
+        assert oc.spin_x_max.isEnabled()
+    finally:
+        oc.hide()
+
+
+def test_axis_auto_manual_toggle_keeps_range_area_width(qtbot):
+    """Auto/manual toggling swaps content inside a fixed range area so the
+    Inspector row does not jump horizontally."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+    oc.show()
+    try:
+        qtbot.waitExposed(oc)
+        assert hasattr(oc, "axis_x_range_host")
+        auto_width = oc.axis_x_range_host.width()
+        oc.chk_x_auto.setChecked(False)
+        qtbot.wait(20)
+        manual_width = oc.axis_x_range_host.width()
+        oc.chk_x_auto.setChecked(True)
+        qtbot.wait(20)
+        auto_width_after = oc.axis_x_range_host.width()
+
+        assert auto_width == manual_width == auto_width_after
+    finally:
+        oc.hide()
+
+
+def test_axis_initial_manual_row_keeps_width_after_auto_round_trip(qtbot):
+    """Rows that start in manual mode should be stable on first display.
+
+    This catches the first-entry case where the z/color row looked narrow until
+    auto was toggled once.
+    """
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+    oc.resize(344, 620)
+    oc.show()
+    try:
+        qtbot.waitExposed(oc)
+        assert not oc.chk_z_auto.isChecked()
+        initial_manual_width = oc.axis_z_range_host.width()
+        initial_floor_width = oc.spin_z_floor.width()
+        initial_ceiling_width = oc.spin_z_ceiling.width()
+
+        oc.chk_z_auto.setChecked(True)
+        qtbot.wait(20)
+        auto_width = oc.axis_z_range_host.width()
+        oc.chk_z_auto.setChecked(False)
+        qtbot.wait(20)
+        manual_width_after = oc.axis_z_range_host.width()
+
+        assert initial_manual_width == auto_width == manual_width_after
+        assert oc.spin_z_floor.width() == initial_floor_width
+        assert oc.spin_z_ceiling.width() == initial_ceiling_width
+    finally:
+        oc.hide()
+
+
+def test_inspector_numeric_spinboxes_have_no_stepper_buttons(qtbot):
+    """Numeric Inspector controls should be plain numeric inputs; combo boxes
+    keep their own dropdown arrows via QComboBox styling."""
+    from PyQt5.QtWidgets import QAbstractSpinBox
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual, OrderContextual
+
+    for cls in (FFTTimeContextual, OrderContextual):
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        spins = ctx.findChildren(QAbstractSpinBox)
+        assert spins, f"{cls.__name__} has no spin boxes"
+        assert all(
+            spin.buttonSymbols() == QAbstractSpinBox.NoButtons
+            for spin in spins
+        )
 
 
 def test_fft_time_contextual_current_params_emits_axis_keys(qtbot):

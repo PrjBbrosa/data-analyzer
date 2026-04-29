@@ -15,6 +15,15 @@ See `docs/superpowers/specs/2026-04-22-agent-squad-design.md` for the
 full design, and `docs/lessons-learned/orchestrator/2026-04-22-task-tool-unavailable-blocks-dispatch.md`
 for why the split is mandatory.
 
+## CLAUDE.md parity
+
+`AGENTS.md` is the Codex-facing mirror of `CLAUDE.md`. When `CLAUDE.md`
+changes, compare both files and port any repository-level workflow,
+routing, lessons-learned, state-management, or skill instructions into
+`AGENTS.md`, translating Claude-specific wording to Codex-specific
+wording. Do not copy personal/local Claude-only settings unless they are
+clearly useful for all agents working in this repository.
+
 ## Squad routing (MANDATORY for main Codex)
 
 If the user's message contains any of these tokens (case-insensitive,

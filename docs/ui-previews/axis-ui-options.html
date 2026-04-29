@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Axis UI Options</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #647086;
+      --line: #dbe2ee;
+      --soft: #eef3fa;
+      --blue: #2563eb;
+      --teal: #0f766e;
+      --amber: #b45309;
+      --shadow: 0 14px 34px rgba(31, 42, 68, .12);
+      --radius: 8px;
+      font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, #eef3f9 0, #f8fafc 240px),
+        var(--bg);
+      font-size: 14px;
+    }
+
+    main {
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: end;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .legend {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, .78);
+      border-radius: 999px;
+      padding: 7px 10px;
+      color: #334155;
+      white-space: nowrap;
+    }
+
+    .options {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .option {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .option-head {
+      min-height: 118px;
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #fff, #f9fbfe);
+    }
+
+    .option h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      margin-bottom: 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: #fff;
+      background: var(--blue);
+    }
+
+    .tag.teal { background: var(--teal); }
+    .tag.amber { background: var(--amber); }
+
+    .option p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 315px;
+      min-height: 560px;
+      background: #f8fafc;
+    }
+
+    .plot {
+      padding: 14px;
+      border-right: 1px solid var(--line);
+    }
+
+    .plot-top {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      min-height: 30px;
+    }
+
+    .tabs, .seg {
+      display: flex;
+      gap: 4px;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 7px;
+      padding: 3px;
+    }
+
+    .tab, .seg span {
+      padding: 5px 8px;
+      border-radius: 5px;
+      color: #475569;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .tab.active, .seg span.active {
+      background: #e8f0ff;
+      color: #1d4ed8;
+      font-weight: 600;
+    }
+
+    .plotbox {
+      position: relative;
+      height: 430px;
+      border: 1px solid #cfd8e6;
+      background: #fff;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .plotbox.order-clean {
+      background: #fff;
+    }
+
+    .plotbox::before {
+      content: "";
+      position: absolute;
+      inset: 42px 42px 48px 48px;
+      background:
+        linear-gradient(90deg, rgba(37,99,235,.08), rgba(20,184,166,.08), rgba(245,158,11,.12)),
+        repeating-linear-gradient(0deg, transparent 0 38px, rgba(148,163,184,.2) 39px),
+        repeating-linear-gradient(90deg, transparent 0 48px, rgba(148,163,184,.16) 49px);
+      border-left: 1px solid #94a3b8;
+      border-bottom: 1px solid #94a3b8;
+    }
+
+    .plotbox::after {
+      content: "";
+      position: absolute;
+      inset: 42px 42px 48px 48px;
+      background:
+        radial-gradient(ellipse at 22% 68%, rgba(37,99,235,.58) 0 3%, transparent 7%),
+        radial-gradient(ellipse at 58% 42%, rgba(14,165,233,.5) 0 3%, transparent 8%),
+        linear-gradient(18deg, transparent 0 36%, rgba(37,99,235,.55) 37%, rgba(34,197,94,.28) 41%, transparent 48%),
+        linear-gradient(-10deg, transparent 0 56%, rgba(245,158,11,.46) 57%, rgba(239,68,68,.28) 61%, transparent 67%);
+      opacity: .86;
+      filter: saturate(1.08);
+    }
+
+    .axis-label {
+      position: absolute;
+      color: #475569;
+      font-size: 12px;
+      z-index: 1;
+    }
+
+    .axis-x { left: 46%; bottom: 16px; }
+    .axis-y {
+      left: 12px;
+      top: 46%;
+      transform: rotate(-90deg);
+      transform-origin: center;
+    }
+
+    .colorbar {
+      position: absolute;
+      right: 14px;
+      top: 58px;
+      width: 12px;
+      height: 260px;
+      border: 1px solid rgba(15,23,42,.2);
+      background: linear-gradient(180deg, #ef4444, #f59e0b, #22c55e, #0ea5e9, #1d4ed8);
+      z-index: 1;
+    }
+
+    .side {
+      padding: 14px;
+      background: #fff;
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .panel-title strong {
+      font-size: 13px;
+    }
+
+    .chart-badge {
+      color: #1d4ed8;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      padding: 4px 7px;
+      border-radius: 6px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .group {
+      margin-bottom: 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .group.flat {
+      border-color: transparent;
+      border-radius: 0;
+      border-top: 1px solid var(--line);
+      background: transparent;
+    }
+
+    .group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 34px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .group.flat .group-head {
+      background: transparent;
+      padding-left: 0;
+      padding-right: 0;
+    }
+
+    .rows {
+      padding: 8px 10px 10px;
+    }
+
+    .axis-row {
+      display: grid;
+      grid-template-columns: 62px 54px minmax(0, 1fr);
+      gap: 7px;
+      align-items: center;
+      min-height: 36px;
+      border-bottom: 1px solid #edf2f7;
+    }
+
+    .axis-row:last-child { border-bottom: 0; }
+
+    .label {
+      color: #334155;
+      white-space: nowrap;
+    }
+
+    .check {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: #475569;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .box {
+      width: 14px;
+      height: 14px;
+      border: 1px solid #b9c3d1;
+      border-radius: 2px;
+      background: #fff;
+      position: relative;
+    }
+
+    .box.on::after {
+      content: "";
+      position: absolute;
+      width: 8px;
+      height: 4px;
+      border-left: 2px solid #2563eb;
+      border-bottom: 2px solid #2563eb;
+      transform: rotate(-45deg);
+      left: 2px;
+      top: 3px;
+    }
+
+    .range-chip {
+      min-width: 0;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 9px;
+      border: 1px solid #d8e1ee;
+      border-radius: 6px;
+      background: #f8fbff;
+      color: #475569;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .range-chip span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .edit {
+      color: var(--blue);
+      font-weight: 600;
+      font-size: 12px;
+      flex: 0 0 auto;
+    }
+
+    .range-grid {
+      display: grid;
+      grid-template-columns: 1fr 18px 1fr;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .input, .select {
+      height: 30px;
+      min-width: 0;
+      border: 1px solid #d7dfeb;
+      border-radius: 6px;
+      background: #fff;
+      color: #334155;
+      padding: 0 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .input.no-step::after {
+      content: "";
+      width: 0;
+      height: 0;
+    }
+
+    .select::after {
+      content: "";
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid #64748b;
+      margin-left: 8px;
+      flex: 0 0 auto;
+    }
+
+    .arrow {
+      text-align: center;
+      color: #64748b;
+    }
+
+    .note {
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 7px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      color: #475569;
+      line-height: 1.55;
+      font-size: 12px;
+    }
+
+    .dense-table {
+      display: grid;
+      grid-template-columns: 64px 1fr 1fr;
+      gap: 6px;
+      align-items: center;
+      padding: 10px;
+    }
+
+    .dense-table .head {
+      color: #64748b;
+      font-size: 12px;
+    }
+
+    details {
+      border-top: 1px solid var(--line);
+      padding: 0 10px 10px;
+    }
+
+    summary {
+      cursor: pointer;
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      color: #2563eb;
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    .summary-list {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .summary-item {
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      gap: 8px;
+      padding: 9px;
+      border: 1px solid #e2e8f0;
+      border-radius: 7px;
+      background: #fbfdff;
+    }
+
+    .drawer {
+      margin-top: 12px;
+      border: 1px solid #bfdbfe;
+      border-radius: 7px;
+      background: #eff6ff;
+      overflow: hidden;
+    }
+
+    .drawer .group-head {
+      background: #dbeafe;
+      border-bottom-color: #bfdbfe;
+    }
+
+    .choose {
+      display: flex;
+      gap: 8px;
+      padding: 14px 18px 18px;
+      border-top: 1px solid var(--line);
+      background: #fff;
+    }
+
+    button {
+      border: 1px solid #c7d2fe;
+      background: #eff6ff;
+      color: #1d4ed8;
+      border-radius: 7px;
+      height: 34px;
+      padding: 0 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      border-color: #d7dfeb;
+      background: #fff;
+      color: #334155;
+    }
+
+    .result {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 14px;
+      border: 1px solid #bfdbfe;
+      border-radius: var(--radius);
+      background: #eff6ff;
+    }
+
+    .result code {
+      display: block;
+      white-space: normal;
+      line-height: 1.6;
+      color: #1e3a8a;
+    }
+
+    @media (max-width: 1180px) {
+      .options { grid-template-columns: 1fr; }
+      .workspace { grid-template-columns: 1fr 330px; }
+    }
+
+    @media (max-width: 760px) {
+      main { padding: 14px; }
+      header, .workspace, .result { grid-template-columns: 1fr; }
+      .plot { border-right: 0; border-bottom: 1px solid var(--line); }
+      .legend { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>坐标轴设置 · 三个可选方向</h1>
+        <p class="lead">目标是把控件变轻：数字框去掉上下微调箭头，下拉框保留箭头；FFT Time 和 Order 的 X/Y/色阶只显示属于当前图的含义；密集数字收起来或分层；Order 图和设置区去掉灰底。</p>
+      </div>
+      <div class="legend">
+        <span class="pill">数字框：无上下箭头</span>
+        <span class="pill">下拉框：保留下拉箭头</span>
+        <span class="pill">Order：白底</span>
+      </div>
+    </header>
+
+    <section class="options">
+      <article class="option">
+        <div class="option-head">
+          <span class="tag">推荐 A</span>
+          <h2>自动摘要 + 点“编辑”再展开</h2>
+          <p>最适合现在的问题：默认只看轴名和自动范围，手动时再展开 min/max，数字不会堆在一行。</p>
+        </div>
+        <div class="workspace">
+          <div class="plot">
+            <div class="plot-top">
+              <div class="tabs"><span class="tab active">FFT Time</span><span class="tab">Order</span></div>
+              <span class="pill">X=时间，Y=频率，色阶=幅值</span>
+            </div>
+            <div class="plotbox">
+              <span class="axis-label axis-x">时间 (s)</span>
+              <span class="axis-label axis-y">频率 (Hz)</span>
+              <span class="colorbar"></span>
+            </div>
+          </div>
+          <aside class="side">
+            <div class="panel-title"><strong>坐标轴设置</strong><span class="chart-badge">FFT Time</span></div>
+            <div class="group">
+              <div class="group-head">FFT Time 图</div>
+              <div class="rows">
+                <div class="axis-row">
+                  <span class="label">X 时间</span>
+                  <span class="check"><span class="box on"></span>自动</span>
+                  <span class="range-chip"><span>全时段</span><b class="edit">编辑</b></span>
+                </div>
+                <div class="axis-row">
+                  <span class="label">Y 频率</span>
+                  <span class="check"><span class="box on"></span>自动</span>
+                  <span class="range-chip"><span>0 → Nyquist</span><b class="edit">编辑</b></span>
+                </div>
+                <div class="axis-row">
+                  <span class="label">色阶</span>
+                  <span class="check"><span class="box"></span>自动</span>
+                  <span class="range-grid"><span class="input no-step">-80</span><span class="arrow">→</span><span class="select">dB</span></span>
+                </div>
+              </div>
+            </div>
+            <div class="group">
+              <div class="group-head">色标</div>
+              <div class="rows">
+                <div class="axis-row">
+                  <span class="label">色图</span>
+                  <span></span>
+                  <span class="select">turbo</span>
+                </div>
+              </div>
+            </div>
+            <div class="note">优点：最少改动、最清晰。把不常改的 min/max 收到“编辑”里，能直接解决截图里数字挤成一团的问题。</div>
+          </aside>
+        </div>
+        <div class="choose">
+          <button data-choice="A">选择 A</button>
+          <button class="secondary" data-choice="A-details">看成落地说明</button>
+        </div>
+      </article>
+
+      <article class="option">
+        <div class="option-head">
+          <span class="tag teal">方案 B</span>
+          <h2>当前 Inspector 内，只显示当前图的轴</h2>
+          <p>不新增外层面板。每个 Inspector 仍然独立，只把当前图的 X/Y/色阶语义、自动/手动范围显示清楚。</p>
+        </div>
+        <div class="workspace">
+          <div class="plot">
+            <div class="plot-top">
+              <div class="tabs"><span class="tab active">Order Inspector</span></div>
+              <span class="pill">X=时间，Y=阶次，色阶=幅值</span>
+            </div>
+            <div class="plotbox order-clean">
+              <span class="axis-label axis-x">时间 (s)</span>
+              <span class="axis-label axis-y">阶次 (Order)</span>
+              <span class="colorbar"></span>
+            </div>
+          </div>
+          <aside class="side">
+            <div class="panel-title"><strong>坐标轴设置</strong><span class="chart-badge">Order Inspector</span></div>
+            <div class="group flat">
+              <div class="group-head">自动状态：只显示范围摘要</div>
+              <div class="rows">
+                <div class="axis-row">
+                  <span class="label">X 时间</span>
+                  <span class="check"><span class="box on"></span>自动</span>
+                  <span class="range-chip"><span>全时段</span><b class="edit">锁定</b></span>
+                </div>
+                <div class="axis-row">
+                  <span class="label">Y 阶次</span>
+                  <span class="check"><span class="box on"></span>自动</span>
+                  <span class="range-chip"><span>0 → 最大阶次</span><b class="edit">锁定</b></span>
+                </div>
+              </div>
+            </div>
+            <div class="group flat">
+              <div class="group-head">非自动状态：输入上下限</div>
+              <div class="rows">
+                <div class="axis-row">
+                  <span class="label">X 时间</span>
+                  <span class="check"><span class="box"></span>自动</span>
+                  <span class="range-grid"><span class="input no-step">0.0</span><span class="arrow">→</span><span class="input no-step">176.0</span></span>
+                </div>
+                <div class="axis-row">
+                  <span class="label">Y 阶次</span>
+                  <span class="check"><span class="box"></span>自动</span>
+                  <span class="range-grid"><span class="input no-step">0</span><span class="arrow">→</span><span class="input no-step">20</span></span>
+                </div>
+                <div class="axis-row">
+                  <span class="label">色阶</span>
+                  <span class="check"><span class="box"></span>自动</span>
+                  <span class="range-grid"><span class="input no-step">-80</span><span class="arrow">→</span><span class="select">dB</span></span>
+                </div>
+              </div>
+            </div>
+            <div class="group flat">
+              <div class="group-head">显示</div>
+              <div class="dense-table">
+                <span class="label">色图</span><span class="select">turbo</span><span></span>
+              </div>
+            </div>
+            <div class="note">优点：不新增 Inspector，只修正当前 Inspector 的坐标语义。自动时不堆数字；取消自动后才出现上下限输入框。</div>
+          </aside>
+        </div>
+        <div class="choose">
+          <button data-choice="B">选择 B</button>
+          <button class="secondary" data-choice="B-details">看成落地说明</button>
+        </div>
+      </article>
+
+      <article class="option">
+        <div class="option-head">
+          <span class="tag amber">方案 C</span>
+          <h2>默认只给摘要，高级设置放抽屉</h2>
+          <p>界面最干净，适合多数时候只调色图/单位；完整 min/max 都进“高级坐标范围”。</p>
+        </div>
+        <div class="workspace">
+          <div class="plot">
+            <div class="plot-top">
+              <div class="tabs"><span class="tab active">FFT Time</span><span class="tab">Order</span></div>
+              <span class="pill">范围摘要常驻</span>
+            </div>
+            <div class="plotbox">
+              <span class="axis-label axis-x">时间 (s)</span>
+              <span class="axis-label axis-y">频率 (Hz)</span>
+              <span class="colorbar"></span>
+            </div>
+          </div>
+          <aside class="side">
+            <div class="panel-title"><strong>坐标轴设置</strong><span class="chart-badge">FFT Time</span></div>
+            <div class="summary-list">
+              <div class="summary-item"><b>X 时间</b><span>自动 · 全时段</span></div>
+              <div class="summary-item"><b>Y 频率</b><span>自动 · 0 → Nyquist</span></div>
+              <div class="summary-item"><b>色阶</b><span>手动 · -80 → 0 dB</span></div>
+            </div>
+            <div class="group">
+              <div class="group-head">常用</div>
+              <div class="rows">
+                <div class="axis-row">
+                  <span class="label">色图</span>
+                  <span></span>
+                  <span class="select">turbo</span>
+                </div>
+                <div class="axis-row">
+                  <span class="label">单位</span>
+                  <span></span>
+                  <span class="select">dB</span>
+                </div>
+              </div>
+            </div>
+            <div class="drawer">
+              <div class="group-head">高级坐标范围</div>
+              <details open>
+                <summary>展开 / 收起</summary>
+                <div class="axis-row">
+                  <span class="label">X 时间</span>
+                  <span class="check"><span class="box on"></span>自动</span>
+                  <span class="range-grid"><span class="input no-step">0.0</span><span class="arrow">→</span><span class="input no-step">176.0</span></span>
+                </div>
+                <div class="axis-row">
+                  <span class="label">Y 频率</span>
+                  <span class="check"><span class="box on"></span>自动</span>
+                  <span class="range-grid"><span class="input no-step">0.0</span><span class="arrow">→</span><span class="input no-step">50.0</span></span>
+                </div>
+              </details>
+            </div>
+            <div class="note">优点：最清爽。代价是高级用户每次调 min/max 需要展开抽屉，适合后续再配键盘快捷入口。</div>
+          </aside>
+        </div>
+        <div class="choose">
+          <button data-choice="C">选择 C</button>
+          <button class="secondary" data-choice="C-details">看成落地说明</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="result">
+      <code id="prompt">请选择一个方案。我的建议是 A：收起自动范围，保留快速编辑，改动小且最直接解决数字堆积。</code>
+      <button id="copy">复制选择</button>
+    </section>
+  </main>
+
+  <script>
+    const prompts = {
+      A: "请实施坐标轴 UI 方案 A：数字框取消上下微调按钮，下拉框保留下拉箭头；FFT Time 轴设置固定为 X=时间(s)、Y=频率(Hz)、色阶=幅值(dB)；Order 固定为 X=时间(s)、Y=阶次(Order)、色阶=幅值(dB)；自动范围默认显示摘要，点击编辑再展开 min/max；移除 Order 灰底。",
+      "A-details": "方案 A 落地说明：优先改现有坐标轴面板结构，不大改导航。QDoubleSpinBox/QSpinBox 使用无按钮样式或改为普通数值输入；QComboBox 继续显示下拉箭头。自动勾选时隐藏 min/max 输入，只显示范围摘要和编辑入口；取消自动后显示两个无上下箭头数值框。",
+      B: "请实施坐标轴 UI 方案 B：不新增 Inspector 面板；在当前 FFT Time / Order Inspector 内只显示当前图对应的坐标语义。自动勾选时隐藏上下限输入，仅显示范围摘要；取消自动后显示无上下微调按钮的最小值/最大值输入框；下拉框保留下拉箭头；Order 去灰底。",
+      "B-details": "方案 B 落地说明：当前 Inspector 保持独立。FFT Time 面板显示 X=时间、Y=频率、色阶=幅值；Order 面板显示 X=时间、Y=阶次、色阶=幅值。每一行自动勾选=显示摘要且禁用/隐藏 min-max；非自动=显示 min/max 输入。数字输入框无上下按钮，单位/色图下拉保留箭头。",
+      C: "请实施坐标轴 UI 方案 C：坐标轴设置默认只显示范围摘要和常用色图/单位，高级坐标范围放入可展开抽屉；数字框取消上下微调按钮，下拉保留箭头；Order 去灰底。",
+      "C-details": "方案 C 落地说明：默认面板只保留 X/Y/色阶摘要、色图和单位。高级抽屉里放 min/max 输入，输入框无上下调节按钮。适合极简界面，但高级调参会多一次展开操作。"
+    };
+
+    const prompt = document.getElementById("prompt");
+    document.querySelectorAll("[data-choice]").forEach((button) => {
+      button.addEventListener("click", () => {
+        prompt.textContent = prompts[button.dataset.choice];
+      });
+    });
+
+    document.getElementById("copy").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(prompt.textContent);
+        document.getElementById("copy").textContent = "已复制";
+        setTimeout(() => document.getElementById("copy").textContent = "复制选择", 1100);
+      } catch {
+        prompt.focus();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -22,8 +22,10 @@ from PyQt5.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QAbstractSpinBox,
     QSizePolicy,
     QSpinBox,
+    QStackedLayout,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -440,6 +442,8 @@ def _fit_field(widget, *, max_width=None, align_right=True):
     input is aligned to the trailing edge. This makes fields from separate
     groups share a right edge even when their label columns differ.
     """
+    if isinstance(widget, QAbstractSpinBox):
+        widget.setButtonSymbols(QAbstractSpinBox.NoButtons)
     widget.setMinimumWidth(0)
     widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     if max_width is not None:
@@ -602,12 +606,19 @@ def _set_form_row_visible(form, field_widget, visible):
 #   3. Order-specific spin_y_max ↔ spin_mo clamp (``_on_max_order_changed``)
 #      stays on OrderContextual only; the helper is order-agnostic.
 
-def _build_axis_row(label, chk, spin_min, spin_max, unit_widget):
-    """Build one inline axis row: [label][chk][spin_min][→][spin_max][unit].
+def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
+    """Build one inline axis row.
 
-    Returns a wrapper QWidget; caller adds it to the parent layout.
+    Visual states:
+    - auto checked: [label][chk][summary][unit]
+    - manual:       [label][chk][spin_min][→][spin_max][unit]
+
+    Returns ``(row, parts)``; caller stores ``parts`` so _sync_axis_enabled
+    can toggle summary vs. editable bounds.
     """
     row = QWidget()
+    row.setObjectName("axisRow")
+    row.setAttribute(Qt.WA_StyledBackground, False)
     lay = QHBoxLayout(row)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(4)
@@ -615,15 +626,68 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget):
     lbl.setMinimumWidth(56)
     lbl.setMaximumWidth(56)
     lay.addWidget(lbl)
+    chk.setMinimumWidth(50)
+    chk.setMaximumWidth(50)
     lay.addWidget(chk)
-    spin_min.setMaximumWidth(72)
-    spin_max.setMaximumWidth(72)
-    lay.addWidget(spin_min, 1)
-    lay.addWidget(QLabel('→'))
-    lay.addWidget(spin_max, 1)
+
+    range_host = QWidget(row)
+    range_host.setObjectName("axisRangeHost")
+    range_host.setAttribute(Qt.WA_StyledBackground, False)
+    range_width = 146 if unit_widget is not None else 170
+    spin_width = 64 if unit_widget is not None else 72
+    range_host.setFixedWidth(range_width)
+    range_host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+    stack = QStackedLayout(range_host)
+    stack.setContentsMargins(0, 0, 0, 0)
+    stack.setSpacing(0)
+
+    summary_page = QWidget(range_host)
+    summary_page.setObjectName("axisRangeSummaryPage")
+    summary_page.setAttribute(Qt.WA_StyledBackground, False)
+    summary_lay = QHBoxLayout(summary_page)
+    summary_lay.setContentsMargins(0, 0, 0, 0)
+    summary_lay.setSpacing(0)
+    summary_label.setProperty("axisSummary", True)
+    summary_label.setMinimumWidth(0)
+    summary_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    summary_lay.addWidget(summary_label, 1)
+
+    manual_page = QWidget(range_host)
+    manual_page.setObjectName("axisManualRangePage")
+    manual_page.setAttribute(Qt.WA_StyledBackground, False)
+    manual_lay = QHBoxLayout(manual_page)
+    manual_lay.setContentsMargins(0, 0, 0, 0)
+    manual_lay.setSpacing(4)
+    spin_min.setButtonSymbols(QAbstractSpinBox.NoButtons)
+    spin_max.setButtonSymbols(QAbstractSpinBox.NoButtons)
+    spin_min.setMinimumWidth(spin_width)
+    spin_min.setMaximumWidth(spin_width)
+    spin_max.setMinimumWidth(spin_width)
+    spin_max.setMaximumWidth(spin_width)
+    manual_lay.addWidget(spin_min, 1)
+    arrow = QLabel('→')
+    manual_lay.addWidget(arrow)
+    manual_lay.addWidget(spin_max, 1)
+    stack.addWidget(summary_page)
+    stack.addWidget(manual_page)
+    lay.addWidget(range_host)
     if unit_widget is not None:
+        unit_widget.setMinimumWidth(64)
+        unit_widget.setMaximumWidth(64)
         lay.addWidget(unit_widget)
-    return row
+    return row, dict(
+        label=lbl,
+        checkbox=chk,
+        range_host=range_host,
+        stack=stack,
+        summary_page=summary_page,
+        manual_page=manual_page,
+        summary=summary_label,
+        spin_min=spin_min,
+        arrow=arrow,
+        spin_max=spin_max,
+        unit=unit_widget,
+    )
 
 
 def _make_axis_settings_group(
@@ -642,6 +706,9 @@ def _make_axis_settings_group(
     z_default_auto=False,
     x_default_auto=True,
     y_default_auto=True,
+    x_auto_summary="全时段",
+    y_auto_summary="自动范围",
+    z_auto_summary="自动色阶",
 ):
     """Build the 3-row "坐标轴设置" QGroupBox and attach widgets to ``owner``.
 
@@ -672,6 +739,7 @@ def _make_axis_settings_group(
     lay = QVBoxLayout(g)
     lay.setContentsMargins(8, 8, 8, 8)
     lay.setSpacing(4)
+    owner._axis_row_parts = {}
 
     # ---- X row ----
     owner.chk_x_auto = QCheckBox("自动")
@@ -697,10 +765,14 @@ def _make_axis_settings_group(
     owner.spin_x_max.setValue(float(x_default_max))
     for w in (owner.chk_x_auto, owner.spin_x_min, owner.spin_x_max):
         w.blockSignals(False)
-    lay.addWidget(_build_axis_row(
+    owner.lbl_x_summary = QLabel(x_auto_summary)
+    x_row, x_parts = _build_axis_row(
         x_label, owner.chk_x_auto,
-        owner.spin_x_min, owner.spin_x_max, None,
-    ))
+        owner.spin_x_min, owner.spin_x_max, None, owner.lbl_x_summary,
+    )
+    owner._axis_row_parts['x'] = x_parts
+    owner.axis_x_range_host = x_parts['range_host']
+    lay.addWidget(x_row)
 
     # ---- Y row ----
     owner.chk_y_auto = QCheckBox("自动")
@@ -721,10 +793,14 @@ def _make_axis_settings_group(
     owner.spin_y_max.setValue(float(y_default_max))
     for w in (owner.chk_y_auto, owner.spin_y_min, owner.spin_y_max):
         w.blockSignals(False)
-    lay.addWidget(_build_axis_row(
+    owner.lbl_y_summary = QLabel(y_auto_summary)
+    y_row, y_parts = _build_axis_row(
         y_label, owner.chk_y_auto,
-        owner.spin_y_min, owner.spin_y_max, None,
-    ))
+        owner.spin_y_min, owner.spin_y_max, None, owner.lbl_y_summary,
+    )
+    owner._axis_row_parts['y'] = y_parts
+    owner.axis_y_range_host = y_parts['range_host']
+    lay.addWidget(y_row)
 
     # ---- Z (color scale) row ----
     owner.chk_z_auto = QCheckBox("自动")
@@ -750,10 +826,15 @@ def _make_axis_settings_group(
         owner.spin_z_ceiling, owner.combo_amp_unit,
     ):
         w.blockSignals(False)
-    lay.addWidget(_build_axis_row(
+    owner.lbl_z_summary = QLabel(z_auto_summary)
+    z_row, z_parts = _build_axis_row(
         "色阶:", owner.chk_z_auto,
-        owner.spin_z_floor, owner.spin_z_ceiling, owner.combo_amp_unit,
-    ))
+        owner.spin_z_floor, owner.spin_z_ceiling,
+        owner.combo_amp_unit, owner.lbl_z_summary,
+    )
+    owner._axis_row_parts['z'] = z_parts
+    owner.axis_z_range_host = z_parts['range_host']
+    lay.addWidget(z_row)
 
     # ---- wire signals AFTER seeding initial values ----
     owner.chk_x_auto.toggled.connect(owner._sync_axis_enabled)
@@ -1415,6 +1496,9 @@ class OrderContextual(QWidget):
             z_default_auto=False,
             x_default_auto=True,
             y_default_auto=True,
+            x_auto_summary="全时段",
+            y_auto_summary="0 → 最大阶次",
+            z_auto_summary="自动色阶",
         )
         # Order-specific clamp: spin_y_max upper bound tracks spin_mo. The
         # helper uses a generic 1e9 ceiling; tighten it here so the user
@@ -1478,15 +1562,20 @@ class OrderContextual(QWidget):
     # ---- 2026-04-28: axis settings group helpers (Wave 3 introduced; row-
     # builder lifted to module level in Wave 4 — see _make_axis_settings_group).
     def _sync_axis_enabled(self):
-        """Toggle spin enabled state to match each chk_*_auto."""
-        for chk, spins in (
-            (self.chk_x_auto, (self.spin_x_min, self.spin_x_max)),
-            (self.chk_y_auto, (self.spin_y_min, self.spin_y_max)),
-            (self.chk_z_auto, (self.spin_z_floor, self.spin_z_ceiling)),
-        ):
-            enabled = not chk.isChecked()
-            for s in spins:
-                s.setEnabled(enabled)
+        """Toggle each axis row between auto summary and manual bounds."""
+        for key in ('x', 'y', 'z'):
+            parts = self._axis_row_parts[key]
+            auto = parts['checkbox'].isChecked()
+            parts['stack'].setCurrentWidget(
+                parts['summary_page'] if auto else parts['manual_page']
+            )
+            parts['summary_page'].setVisible(auto)
+            parts['manual_page'].setVisible(not auto)
+            parts['summary'].setVisible(auto)
+            for w in (parts['spin_min'], parts['arrow'], parts['spin_max']):
+                w.setVisible(not auto)
+            for s in (parts['spin_min'], parts['spin_max']):
+                s.setEnabled(not auto)
 
     def _on_amp_unit_changed(self, _txt):
         """Switching dB↔Linear forces z_auto on to avoid stale range values
@@ -1752,17 +1841,16 @@ class FFTTimeContextual(QWidget):
       ``chk_remove_mean`` — analysis parameters.
     - ``spin_db_ref`` — dB reference (linear amplitude).
     - ``combo_cmap`` — color map selector.
-    - 坐标轴设置 group (Wave 4 of the 2026-04-28 plan):
-      ``chk_x_auto`` / ``spin_x_min`` / ``spin_x_max`` — X (freq, Hz);
-      ``chk_y_auto`` / ``spin_y_min`` / ``spin_y_max`` — Y (amplitude,
-      currently unused by the spectrogram render but kept for parity);
+    - 坐标轴设置 group (2026-04-29 B polish):
+      ``chk_x_auto`` / ``spin_x_min`` / ``spin_x_max`` — X time (s);
+      ``chk_y_auto`` / ``spin_y_min`` / ``spin_y_max`` — Y frequency (Hz);
       ``chk_z_auto`` / ``spin_z_floor`` / ``spin_z_ceiling`` — Z (color
       scale); ``combo_amp_unit`` — dB ↔ Linear (replaces the legacy
       ``combo_amp_mode``).
     - Backward-compat aliases for downstream MainWindow callers (Wave 5
-      will retire the legacy names): ``chk_freq_auto`` IS ``chk_x_auto``;
-      ``spin_freq_min`` IS ``spin_x_min``; ``spin_freq_max`` IS
-      ``spin_x_max``. ``spin_freq_max == 0.0`` still means "use Nyquist".
+      will retire the legacy names): ``chk_freq_auto`` IS ``chk_y_auto``;
+      ``spin_freq_min`` IS ``spin_y_min``; ``spin_freq_max`` IS
+      ``spin_y_max``. ``spin_freq_max == 0.0`` still means "use Nyquist".
     - ``btn_compute`` — primary action; disabled iff no candidate.
     - ``btn_force`` / ``btn_export_full`` / ``btn_export_main`` — secondary
       actions.
@@ -1869,32 +1957,35 @@ class FFTTimeContextual(QWidget):
         fl.addRow("dB 参考:", _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH))
         root.addWidget(g)
 
-        # ---- 坐标轴设置 (Wave 4 of the 2026-04-28 plan) ----
-        # X = freq (Hz), Y = amplitude (kept for parity with OrderContextual
-        # though spectrogram render does not currently consume Y), Z = color
-        # scale (carries combo_amp_unit dB↔Linear, replacing combo_amp_mode
-        # + combo_dynamic). Default x_max=0.0 means "use Nyquist" — main
-        # window's existing spin_freq_max==0.0 sentinel survives unchanged.
+        # ---- 坐标轴设置 (2026-04-29 B polish) ----
+        # The rendered FFT-vs-Time spectrogram is X = time, Y = frequency,
+        # Z/color = amplitude. The old Wave 4 labels had X=freq/Y=amp,
+        # which did not match the actual plot and is the user-reported bug.
+        # Default y_max=0.0 means "use Nyquist" — main_window's existing
+        # spin_freq_max==0.0 sentinel survives unchanged via Y aliases.
         # Default z range is -80..0 dB (legacy '80 dB' diagnostic preset).
         axis_g = _make_axis_settings_group(
             self,
-            x_label="频率 (X):", x_unit='Hz',
+            x_label="时间 (X):", x_unit='s',
             x_default_min=0.0, x_default_max=0.0,
-            y_label="幅值 (Y):", y_unit='',
+            y_label="频率 (Y):", y_unit='Hz',
             y_default_min=0.0, y_default_max=0.0,
             z_default_floor=-80.0, z_default_ceiling=0.0,
             z_default_auto=False,
             x_default_auto=True,
             y_default_auto=True,
+            x_auto_summary="全时段",
+            y_auto_summary="0 → Nyquist",
+            z_auto_summary="自动色阶",
         )
         root.addWidget(axis_g)
         # Backward-compat aliases (per plan): downstream main_window callers
         # still read chk_freq_auto / spin_freq_min / spin_freq_max.
         # MUST be set inside __init__ so test_fft_time_contextual_has_axis_
         # settings_group sees them at construction time.
-        self.chk_freq_auto = self.chk_x_auto
-        self.spin_freq_min = self.spin_x_min
-        self.spin_freq_max = self.spin_x_max
+        self.chk_freq_auto = self.chk_y_auto
+        self.spin_freq_min = self.spin_y_min
+        self.spin_freq_max = self.spin_y_max
         # Tighten the freq spin caps so the unit-suffixed Hz column matches
         # the legacy A1 cap (the helper uses 72px which is plenty for 5
         # digits + Hz suffix; no change needed here).
@@ -1984,21 +2075,26 @@ class FFTTimeContextual(QWidget):
 
     # ---- helpers ----
     def _sync_axis_enabled(self):
-        """Toggle spin enabled state to match each chk_*_auto.
+        """Toggle each axis row between auto summary and manual bounds.
 
         Identical body to OrderContextual._sync_axis_enabled — kept as an
         instance method per the Wave 4 plan note (helper wires the signal
         but each class owns the slot so the implementation stays
         overrideable / inspectable).
         """
-        for chk, spins in (
-            (self.chk_x_auto, (self.spin_x_min, self.spin_x_max)),
-            (self.chk_y_auto, (self.spin_y_min, self.spin_y_max)),
-            (self.chk_z_auto, (self.spin_z_floor, self.spin_z_ceiling)),
-        ):
-            enabled = not chk.isChecked()
-            for s in spins:
-                s.setEnabled(enabled)
+        for key in ('x', 'y', 'z'):
+            parts = self._axis_row_parts[key]
+            auto = parts['checkbox'].isChecked()
+            parts['stack'].setCurrentWidget(
+                parts['summary_page'] if auto else parts['manual_page']
+            )
+            parts['summary_page'].setVisible(auto)
+            parts['manual_page'].setVisible(not auto)
+            parts['summary'].setVisible(auto)
+            for w in (parts['spin_min'], parts['arrow'], parts['spin_max']):
+                w.setVisible(not auto)
+            for s in (parts['spin_min'], parts['spin_max']):
+                s.setEnabled(not auto)
 
     def _on_amp_unit_changed(self, _txt):
         """Switching dB↔Linear forces z_auto on to avoid stale range values
@@ -2079,11 +2175,10 @@ class FFTTimeContextual(QWidget):
             remove_mean=self.chk_remove_mean.isChecked(),
             amplitude_mode=amp_mode,
             db_reference=self.spin_db_ref.value(),
-            # Legacy freq_* keys are aliases of the new x_* axis controls;
-            # main_window still consumes them until Wave 5.
-            freq_auto=bool(self.chk_x_auto.isChecked()),
-            freq_min=float(self.spin_x_min.value()),
-            freq_max=float(self.spin_x_max.value()),
+            # Legacy freq_* keys are aliases of the Y-frequency axis.
+            freq_auto=bool(self.chk_y_auto.isChecked()),
+            freq_min=float(self.spin_y_min.value()),
+            freq_max=float(self.spin_y_max.value()),
             dynamic=dynamic_legacy,
             cmap=self.combo_cmap.currentText(),
         )
@@ -2207,9 +2302,9 @@ class FFTTimeContextual(QWidget):
             amplitude_mode=amp_mode,
             remove_mean=self.chk_remove_mean.isChecked(),
             db_reference=self.spin_db_ref.value(),
-            freq_auto=bool(self.chk_x_auto.isChecked()),
-            freq_min=float(self.spin_x_min.value()),
-            freq_max=float(self.spin_x_max.value()),
+            freq_auto=bool(self.chk_y_auto.isChecked()),
+            freq_min=float(self.spin_y_min.value()),
+            freq_max=float(self.spin_y_max.value()),
             dynamic=dynamic_legacy,
             cmap=self.combo_cmap.currentText(),
         )
@@ -2276,18 +2371,18 @@ class FFTTimeContextual(QWidget):
                 self.combo_amp_unit.blockSignals(True)
                 self.combo_amp_unit.setCurrentIndex(i)
                 self.combo_amp_unit.blockSignals(False)
-        # Legacy ``freq_auto/min/max`` map onto the X row of the axis group
-        # (chk_x_auto / spin_x_min/max via the alias attributes).
+        # Legacy ``freq_auto/min/max`` map onto the Y-frequency row of the
+        # axis group (chk_y_auto / spin_y_min/max via the alias attributes).
         if 'freq_auto' in d:
-            self.chk_x_auto.setChecked(bool(d['freq_auto']))
+            self.chk_y_auto.setChecked(bool(d['freq_auto']))
         if 'freq_min' in d:
             try:
-                self.spin_x_min.setValue(float(d['freq_min']))
+                self.spin_y_min.setValue(float(d['freq_min']))
             except (TypeError, ValueError):
                 pass
         if 'freq_max' in d:
             try:
-                self.spin_x_max.setValue(float(d['freq_max']))
+                self.spin_y_max.setValue(float(d['freq_max']))
             except (TypeError, ValueError):
                 pass
 

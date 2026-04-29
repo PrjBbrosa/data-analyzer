@@ -469,17 +469,49 @@ Inspector QFrame#fftTimeSignalCard {
     border: none;
 }
 
-/* Mode-specific contextual blocks — subtle tinted cards to flag the
- * extra options that only appear in FFT / Order mode. */
+/* Mode-specific contextual blocks. FFT keeps its subtle analysis tint;
+ * FFT-vs-Time and Order use the neutral surface so the upper/lower
+ * Inspector areas read as one consistent panel. */
 QWidget#fftContextual {
     border: 1px solid #dde7f5;
     border-radius: 10px;
     background-color: #eef4ff;
 }
+QWidget#fftTimeContextual,
 QWidget#orderContextual {
-    border: 1px solid #f1e3cf;
+    border: 1px solid #dde7f5;
     border-radius: 10px;
-    background-color: #fff5e8;
+    background-color: #ffffff;
+}
+
+Inspector QWidget#axisRow,
+Inspector QWidget#axisRangeHost,
+Inspector QWidget#axisRangeSummaryPage,
+Inspector QWidget#axisManualRangePage {
+    background-color: transparent;
+}
+
+/* Inspector numeric fields are typed inputs, not stepper controls. Keep
+ * QComboBox drop-down arrows above; only spinbox stepper chrome is removed. */
+Inspector QSpinBox,
+Inspector QDoubleSpinBox {
+    padding-right: 8px;
+}
+Inspector QSpinBox::up-button,
+Inspector QDoubleSpinBox::up-button,
+Inspector QSpinBox::down-button,
+Inspector QDoubleSpinBox::down-button {
+    width: 0;
+    border: none;
+    image: none;
+}
+Inspector QSpinBox::up-arrow,
+Inspector QDoubleSpinBox::up-arrow,
+Inspector QSpinBox::down-arrow,
+Inspector QDoubleSpinBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
 }
 
 /* Preset slot buttons inside FFT/Order contextual */

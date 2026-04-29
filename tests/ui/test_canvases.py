@@ -16,8 +16,9 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
-from mf4_analyzer.ui.canvases import PlotCanvas
+from mf4_analyzer.ui.canvases import PlotCanvas, SpectrogramCanvas
 
 
 def test_heatmap_db_mode_with_30db_clamps_to_minus30_zero(qapp):
@@ -61,3 +62,24 @@ def test_heatmap_db_50db_dynamic(qapp):
     )
     arr = canvas._heatmap_im.get_array()
     assert arr.min() >= -50.0
+
+
+def test_spectrogram_manual_x_range_controls_time_axis(qapp):
+    """FFT Time manual X controls are time-axis limits, not frequency limits."""
+    canvas = SpectrogramCanvas()
+    result = SimpleNamespace(
+        times=np.array([0.0, 1.0, 2.0, 3.0]),
+        frequencies=np.array([0.0, 10.0, 20.0]),
+        amplitude=np.ones((3, 4), dtype=float),
+        params=SimpleNamespace(db_reference=1.0),
+    )
+
+    canvas.plot_result(
+        result,
+        amplitude_mode='amplitude',
+        x_auto=False,
+        x_min=1.0,
+        x_max=2.0,
+    )
+
+    assert canvas._ax_spec.get_xlim() == pytest.approx((1.0, 2.0))
