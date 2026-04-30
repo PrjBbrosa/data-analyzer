@@ -127,66 +127,40 @@ QComboBox::down-arrow:disabled {
     image: url("{{ICON_COMBO_DOWN_DISABLED}}");
 }
 
-QSpinBox, QDoubleSpinBox { padding-right: 24px; }
+/* Spin boxes are rendered as plain editable text fields — the right-
+ * gutter stepper buttons were removed (2026-04-29). Users interact via
+ * keyboard / scroll wheel only, so we reclaim the previous 24 px right
+ * padding back to the symmetric 8 px used on every other side. Long-
+ * form ``padding-left`` / ``padding-right`` so the global cascade keeps
+ * the top/bottom values from the rule above (see lesson
+ * pyqt-ui/2026-04-27-qss-padding-overrides-setcontentsmargins.md).
+ *
+ * Combo boxes intentionally KEEP their drop-down + arrow rules below;
+ * the user requirement was 'QComboBox::drop-down 保留不动'. The four
+ * spinbox subcontrols (::up-button / ::down-button / ::up-arrow /
+ * ::down-arrow) are collapsed to zero so no gutter rectangle exists at
+ * all — paired with widget-side ``setButtonSymbols(NoButtons)`` (see
+ * inspector_sections._no_buttons) for double protection against QSS
+ * residue on platforms where Qt's native style still draws a default
+ * stepper. */
+QSpinBox, QDoubleSpinBox {
+    padding-left: 8px;
+    padding-right: 8px;
+}
 
-QSpinBox::up-button,
-QDoubleSpinBox::up-button {
-    width: 22px;
-    subcontrol-origin: border;
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    width: 0;
+    height: 0;
+    border: none;
+    background: transparent;
     subcontrol-position: top right;
-    border: none;
-    border-left: 1px solid #eef2f7;
-    border-bottom: 1px solid #eef2f7;
-    background-color: #fafbfd;
 }
-QSpinBox::down-button,
-QDoubleSpinBox::down-button {
-    width: 22px;
-    subcontrol-origin: border;
-    subcontrol-position: bottom right;
-    border: none;
-    border-left: 1px solid #eef2f7;
-    background-color: #fafbfd;
-}
-QSpinBox::up-button:hover,
-QDoubleSpinBox::up-button:hover,
-QSpinBox::down-button:hover,
-QDoubleSpinBox::down-button:hover {
-    background-color: #eef2f7;
-}
-QSpinBox::up-button:pressed,
-QDoubleSpinBox::up-button:pressed,
-QSpinBox::down-button:pressed,
-QDoubleSpinBox::down-button:pressed {
-    background-color: #d8e4f5;
-}
-QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
-    image: url("{{ICON_SPIN_UP_REST}}");
-    width: 12px;
-    height: 12px;
-}
-QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {
-    image: url("{{ICON_SPIN_UP_HOVER}}");
-}
-QSpinBox::up-arrow:pressed, QDoubleSpinBox::up-arrow:pressed {
-    image: url("{{ICON_SPIN_UP_PRESS}}");
-}
-QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {
-    image: url("{{ICON_SPIN_UP_DISABLED}}");
-}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow,
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
-    image: url("{{ICON_SPIN_DOWN_REST}}");
-    width: 12px;
-    height: 12px;
-}
-QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {
-    image: url("{{ICON_SPIN_DOWN_HOVER}}");
-}
-QSpinBox::down-arrow:pressed, QDoubleSpinBox::down-arrow:pressed {
-    image: url("{{ICON_SPIN_DOWN_PRESS}}");
-}
-QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {
-    image: url("{{ICON_SPIN_DOWN_DISABLED}}");
+    image: none;
+    width: 0;
+    height: 0;
 }
 
 QComboBox QAbstractItemView {
@@ -203,6 +177,33 @@ QCheckBox,
 QRadioButton {
     spacing: 8px;
     color: #334155;
+    background-color: transparent;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #94a3b8;
+    border-radius: 4px;
+    background-color: #ffffff;
+}
+QCheckBox::indicator:hover {
+    border-color: #1769e0;
+    background-color: #f8fbff;
+}
+QCheckBox::indicator:checked {
+    border-color: #1769e0;
+    background-color: #1769e0;
+    image: url("{{ICON_CHECKBOX_CHECKED}}");
+}
+QCheckBox::indicator:disabled {
+    border-color: #dfe5ee;
+    background-color: #f5f7fb;
+}
+QCheckBox::indicator:checked:disabled {
+    border-color: #dfe5ee;
+    background-color: #e2e8f0;
+    image: url("{{ICON_CHECKBOX_CHECKED_DISABLED}}");
 }
 
 /* Buttons */
@@ -410,12 +411,11 @@ Inspector QWidget[inspectorFieldHost="true"] {
 
 /* QGroupBox: no frame. Separation comes from a 12/600 title with a
  * 1px hairline underline (R3 #3-B compactification). The underline
- * replaces the heavier 13/700 typography for a tighter visual rhythm
- * while still cleanly separating sections inside tinted contextual
- * cards. */
+ * replaces the heavier 13/700 typography while keeping enough air
+ * between the underline and the first control row. */
 Inspector QGroupBox {
     margin-top: 6px;
-    padding: 12px 2px 6px;
+    padding: 18px 2px 8px;
     border: none;
     border-radius: 0;
     background-color: transparent;
@@ -426,7 +426,7 @@ Inspector QGroupBox::title {
     subcontrol-position: top left;
     left: 0;
     right: 0;
-    padding: 2px 0 4px 0;
+    padding: 2px 0 6px 0;
     color: #111827;
     font-size: 12px;
     font-weight: 600;
@@ -697,6 +697,13 @@ QWidget#chartToolbar QPushButton[role="chart-choice"]:checked {
     color: #0f3f8f;
 }
 
+QWidget#chartToolbar QLabel#chartAnnotationLabel {
+    margin-left: 2px;
+    margin-right: 2px;
+    color: #475569;
+    font-weight: 600;
+}
+
 QFrame#chartToolbarSep {
     margin-top: 6px;
     margin-bottom: 6px;
@@ -704,6 +711,14 @@ QFrame#chartToolbarSep {
     margin-right: 12px;
     background-color: #94a3b8;
     border: none;
+}
+
+QToolTip {
+    border: 1px solid rgba(203, 213, 225, 220);
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 238);
+    color: #172033;
+    padding: 8px;
 }
 
 QLabel#chartHint {

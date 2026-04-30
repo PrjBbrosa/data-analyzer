@@ -115,7 +115,7 @@ def _set_series_ylabel(ax, label, color, labelpad=10, unit='', side='left'):
 
 
 def _format_dual_html(rows):
-    """rows: list of (channel_name, mn, mx, avg, rms, unit_suffix, color).
+    """rows: list of (channel_name, mn, mx, avg, delta, unit_suffix, color).
     Channel name is rendered on its own line (file prefix + name split when
     the source matches '[file] channel'); stats follow as a 4-column row.
     Channel name and numeric cells are tinted with the channel's plot color."""
@@ -124,9 +124,9 @@ def _format_dual_html(rows):
              'style="font-size:11px; color:#111827;">']
     for i, row in enumerate(rows):
         if len(row) >= 7:
-            ch, mn, mx, avg, rms, u, color = row[:7]
+            ch, mn, mx, avg, delta, u, color = row[:7]
         else:
-            ch, mn, mx, avg, rms, u = row[:6]
+            ch, mn, mx, avg, delta, u = row[:6]
             color = '#111827'
         prefix, rest = _split_prefixed_label(ch)
         if prefix is not None:
@@ -152,12 +152,30 @@ def _format_dual_html(rows):
             f'<tr>'
             f'<td style="{lab}">Avg</td>'
             f'<td style="{cell}" align="right">{avg:.4g}{escape(u)}</td>'
-            f'<td style="{lab}; padding-left:8px;">RMS</td>'
-            f'<td style="{cell}" align="right">{rms:.4g}{escape(u)}</td>'
+            f'<td style="{lab}; padding-left:8px;">△</td>'
+            f'<td style="{cell}" align="right">{delta:.4g}{escape(u)}</td>'
             f'</tr>'
         )
     parts.append('</table>')
     return ''.join(parts)
+
+
+def _interp_cursor_value(t, sig, x):
+    """Value of ``sig`` at cursor time ``x`` using linear interpolation."""
+    t = np.asarray(t, dtype=float)
+    sig = np.asarray(sig, dtype=float)
+    if t.size == 0 or sig.size == 0:
+        return np.nan
+    valid = np.isfinite(t) & np.isfinite(sig)
+    if not np.any(valid):
+        return np.nan
+    t = t[valid]
+    sig = sig[valid]
+    if t.size > 1 and np.any(np.diff(t) < 0):
+        order = np.argsort(t)
+        t = t[order]
+        sig = sig[order]
+    return float(np.interp(float(x), t, sig))
 
 
 # ----------------------------------------------------------------------
@@ -1032,12 +1050,15 @@ class TimeDomainCanvas(FigureCanvas):
                 m = (tf >= xlo) & (tf <= xhi); seg = sf[m]
                 if not len(seg): continue
                 u_suffix = f" {u}" if u else ""
+                delta = _interp_cursor_value(tf, sf, self._bx) - _interp_cursor_value(
+                    tf, sf, self._ax
+                )
                 dual.append((
                     ch,
                     float(np.min(seg)),
                     float(np.max(seg)),
                     float(np.mean(seg)),
-                    float(np.sqrt(np.mean(seg ** 2))),
+                    float(delta),
                     u_suffix,
                     color,
                 ))
@@ -1167,6 +1188,8 @@ class SpectrogramCanvas(FigureCanvas):
         self._ax_slice = None
         self._colorbar = None
         self._cursor_line = None
+        self._remarks = []  # [(ax, annotation_artist, dot_artist)]
+        self._remark_enabled = False
         # Track figure-level mpl_connect cids so full_reset can drop them.
         # Figure-level cids survive fig.clear() (axes-level Axes.callbacks
         # do not — see lessons-learned), but tracking is cheap and lets
@@ -1191,6 +1214,7 @@ class SpectrogramCanvas(FigureCanvas):
         self._ax_slice = None
         self._colorbar = None
         self._cursor_line = None
+        self._remarks = []
         self.fig.clear()
         self.fig.set_facecolor(CHART_FACE)
 
@@ -1216,6 +1240,7 @@ class SpectrogramCanvas(FigureCanvas):
     def full_reset(self):
         self._disconnect_mpl_handlers()
         self.clear()
+        self._remark_enabled = False
         # Re-arm the handlers so the canvas remains interactive after a
         # full reset (matches the original __init__ contract).
         self._cid_click = self.mpl_connect('button_press_event', self._on_click)
@@ -1227,6 +1252,22 @@ class SpectrogramCanvas(FigureCanvas):
 
     def has_result(self):
         return self._result is not None
+
+    def set_remark_enabled(self, enabled):
+        self._remark_enabled = bool(enabled)
+
+    def clear_remarks(self):
+        for _ax, ann, dot in list(self._remarks):
+            for artist in (ann, dot):
+                try:
+                    artist.remove()
+                except Exception:
+                    pass
+        self._remarks = []
+        self.draw_idle()
+
+    def remark_count(self):
+        return len(self._remarks)
 
     # ------------------------------------------------------------------
     # Rendering
@@ -1422,12 +1463,88 @@ class SpectrogramCanvas(FigureCanvas):
             if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
                 self.draw_idle()
             return
+        if (
+            self._remark_enabled
+            and event.inaxes in (self._ax_spec, self._ax_slice)
+            and event.xdata is not None
+            and event.ydata is not None
+        ):
+            if event.button == 3:
+                self._remove_remark_at(event.inaxes, event.xdata, event.ydata)
+                return
+            if event.button == 1:
+                self._add_remark(event.inaxes, event.xdata, event.ydata)
+                return
         if self._result is None or event.inaxes is not self._ax_spec:
             return
         if event.xdata is None:
             return
         idx = int(np.argmin(np.abs(self._result.times - event.xdata)))
         self.select_time_index(idx)
+
+    def _format_remark_label(self, ax, x, y):
+        if self._result is not None and ax is self._ax_spec:
+            t_idx = int(np.argmin(np.abs(self._result.times - x)))
+            f_idx = int(np.argmin(np.abs(self._result.frequencies - y)))
+            z = self._display_matrix(self._result, self._amplitude_mode)
+            val = float(z[f_idx, t_idx])
+            unit = 'dB' if self._amplitude_mode == 'amplitude_db' else (
+                self._result.unit or ''
+            )
+            return (
+                f"t={self._result.times[t_idx]:.4g} s\n"
+                f"f={self._result.frequencies[f_idx]:.4g} Hz\n"
+                f"{val:.4g} {unit}"
+            ).rstrip()
+        return f"({x:.4g}, {y:.4g})"
+
+    def _add_remark(self, ax, x, y):
+        label = self._format_remark_label(ax, x, y)
+        ann = ax.annotate(
+            label,
+            xy=(x, y),
+            xytext=(14, 14),
+            textcoords='offset points',
+            fontsize=8,
+            color='#111827',
+            bbox=dict(
+                boxstyle='round,pad=0.35',
+                facecolor='#ffffff',
+                edgecolor='#94a3b8',
+                alpha=0.95,
+            ),
+            arrowprops=dict(arrowstyle='->', color='#64748b', lw=1),
+            zorder=100,
+        )
+        dot, = ax.plot(x, y, 'o', color=DANGER, markersize=5, zorder=101)
+        self._remarks.append((ax, ann, dot))
+        self.draw_idle()
+
+    def _remove_remark_at(self, ax, x_click, y_click):
+        best_idx, best_dist = -1, float('inf')
+        for i, (remark_ax, ann, dot) in enumerate(self._remarks):
+            if remark_ax is not ax:
+                continue
+            try:
+                rx, ry = dot.get_data()
+                if len(rx) == 0:
+                    continue
+                disp = ax.transData.transform((float(rx[0]), float(ry[0])))
+                click_disp = ax.transData.transform((x_click, y_click))
+                dist = np.sqrt(
+                    (disp[0] - click_disp[0]) ** 2
+                    + (disp[1] - click_disp[1]) ** 2
+                )
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx = i
+            except Exception:
+                pass
+        if best_idx >= 0 and best_dist < 50:
+            _ax, ann, dot = self._remarks.pop(best_idx)
+            ann.remove()
+            dot.remove()
+            self.draw_idle()
 
     def _on_motion(self, event):
         # Axis hover affordance — fires regardless of toolbar mode, only
@@ -1728,6 +1845,19 @@ class PlotCanvas(FigureCanvas):
     def set_remark_enabled(self, enabled):
         self._remark_enabled = enabled
 
+    def clear_remarks(self):
+        for _ai, _x, _y, ann, dot in list(self._remarks):
+            for artist in (ann, dot):
+                try:
+                    artist.remove()
+                except Exception:
+                    pass
+        self._remarks = []
+        self.draw_idle()
+
+    def remark_count(self):
+        return len(self._remarks)
+
     def store_line_data(self, ax_index, xdata, ydata):
         """存储曲线数据用于remark吸附"""
         self._line_data[ax_index] = (np.array(xdata), np.array(ydata))
@@ -1850,8 +1980,9 @@ class PlotCanvas(FigureCanvas):
         if e.button == 1 and not e.dblclick and self._remark_enabled:
             # 左键单击添加remark (吸附到曲线)
             x, y = self._snap_to_curve(ax_index, e.xdata)
-            if x is not None:
-                self._add_remark(e.inaxes, ax_index, x, y)
+            if x is None:
+                x, y = e.xdata, e.ydata
+            self._add_remark(e.inaxes, ax_index, x, y)
 
     def set_tick_density(self, x, y):
         for ax in self.fig.axes:

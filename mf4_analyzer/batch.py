@@ -420,7 +420,11 @@ class BatchRunner:
         if preset.outputs.export_data:
             data_path = self._write_dataframe(df, output_dir / f"{stem}.{preset.outputs.data_format}")
         if preset.outputs.export_image:
-            image_path = self._write_image(image_payload, output_dir / f"{stem}.png")
+            image_path = self._write_image(
+                image_payload,
+                output_dir / f"{stem}.png",
+                params=preset.params,
+            )
 
         return BatchItemResult(
             method=method,
@@ -444,6 +448,55 @@ class BatchRunner:
         if rpm is not None:
             rpm = rpm[mask]
         return sig, time, rpm
+
+    @staticmethod
+    def _suggest_fs_from_time_axis(time, fallback_fs):
+        arr = np.asarray(time, dtype=float)
+        if arr.size < 2:
+            return float(fallback_fs)
+        dt = np.diff(arr)
+        positive = dt[dt > 0]
+        if positive.size == 0:
+            return float(fallback_fs)
+        median_dt = float(np.median(positive))
+        if not np.isfinite(median_dt) or median_dt <= 0:
+            return float(fallback_fs)
+        return 1.0 / median_dt
+
+    @classmethod
+    def _uniform_time_axis_for_spectrogram(cls, time, fs, length):
+        """Return a spectrogram-safe time axis and matching Fs.
+
+        Batch FFT-vs-Time mirrors the single-file UX: jittered MF4
+        timestamps are rebuilt to ``arange(n) / suggested_fs`` using the
+        median-dt estimate instead of failing every task with the raw
+        ``non-uniform time axis`` validator error.
+        """
+        fs = float(fs)
+        if time is None:
+            return np.arange(int(length), dtype=float) / fs, fs
+        time_arr = np.asarray(time, dtype=float)
+        if time_arr.size < 2:
+            return time_arr, fs
+
+        from .signal.spectrogram import (
+            DEFAULT_TIME_JITTER_TOLERANCE,
+            SpectrogramAnalyzer,
+        )
+
+        try:
+            SpectrogramAnalyzer._validate_time_axis(
+                time_arr, fs, DEFAULT_TIME_JITTER_TOLERANCE,
+            )
+            return time_arr, fs
+        except ValueError as exc:
+            if 'non-uniform time axis' not in str(exc):
+                raise
+
+        suggested = cls._suggest_fs_from_time_axis(time_arr, fs)
+        if not (np.isfinite(suggested) and suggested > 0):
+            suggested = fs
+        return np.arange(len(time_arr), dtype=float) / float(suggested), float(suggested)
 
     @staticmethod
     def _compute_fft_dataframe(sig, fs, params):
@@ -513,6 +566,7 @@ class BatchRunner:
         display-only choice in ``_write_image``.
         """
         from .signal.spectrogram import SpectrogramAnalyzer, SpectrogramParams
+        time, fs = cls._uniform_time_axis_for_spectrogram(time, fs, len(sig))
         sp = SpectrogramParams(
             fs=float(fs),
             nfft=int(params.get('nfft', 1024)),
@@ -565,9 +619,26 @@ class BatchRunner:
         return path
 
     @staticmethod
-    def _write_image(payload, path):
+    def _write_image(payload, path, params=None):
         kind, df = payload
         from matplotlib.figure import Figure
+
+        params = params or {}
+        x_auto = bool(params.get('x_auto', True))
+        x_min = float(params.get('x_min', 0.0))
+        x_max = float(params.get('x_max', 0.0))
+        y_auto = bool(params.get('y_auto', True))
+        y_min = float(params.get('y_min', 0.0))
+        y_max = float(params.get('y_max', 0.0))
+        z_auto = bool(params.get('z_auto', True))
+        z_floor = float(params.get('z_floor', -80.0))
+        z_ceiling = float(params.get('z_ceiling', 0.0))
+        default_amp_mode = 'amplitude_db' if kind == 'fft_time' else 'amplitude'
+        amp_mode = str(params.get('amplitude_mode', default_amp_mode)).lower()
+        render_db = 'db' in amp_mode
+        db_reference = float(params.get('db_reference', 1.0) or 1.0)
+        if db_reference <= 0:
+            db_reference = 1.0
 
         fig = Figure(figsize=(8, 4.5), dpi=140)
         try:
@@ -576,21 +647,28 @@ class BatchRunner:
                 ax.plot(df['frequency_hz'], df['amplitude'], lw=1.0)
                 ax.set_xlabel('Frequency (Hz)')
                 ax.set_ylabel('Amplitude')
+                if not x_auto and x_max > x_min:
+                    ax.set_xlim(x_min, x_max)
+                if not y_auto and y_max > y_min:
+                    ax.set_ylim(y_min, y_max)
             else:
                 pivot = df.pivot(
                     index=df.columns[1], columns=df.columns[0], values='amplitude'
                 )
                 matrix = pivot.to_numpy()
-                if kind == 'fft_time':
-                    # Render in dB for readability (display-only choice; the
-                    # exported CSV/H5 stays linear amplitude). Mirrors
-                    # SpectrogramAnalyzer.amplitude_to_db: floor at tiny so
-                    # log(0) does not appear.
+                if render_db:
+                    # Display-only dB choice; exported data stays linear.
                     eps = np.finfo(float).tiny
-                    matrix = 20.0 * np.log10(np.maximum(matrix, eps))
+                    matrix = 20.0 * np.log10(
+                        np.maximum(matrix, eps) / db_reference
+                    )
                     cbar_label = 'Amplitude (dB)'
                 else:
                     cbar_label = 'Amplitude'
+                vmin = vmax = None
+                if not z_auto:
+                    vmin = z_floor
+                    vmax = z_ceiling
                 im = ax.imshow(
                     matrix,
                     aspect='auto',
@@ -603,9 +681,15 @@ class BatchRunner:
                     ],
                     interpolation='bilinear',
                     cmap='turbo',
+                    vmin=vmin,
+                    vmax=vmax,
                 )
                 ax.set_xlabel(df.columns[0])
                 ax.set_ylabel(df.columns[1])
+                if not x_auto and x_max > x_min:
+                    ax.set_xlim(x_min, x_max)
+                if not y_auto and y_max > y_min:
+                    ax.set_ylim(y_min, y_max)
                 fig.colorbar(im, ax=ax, label=cbar_label)
             ax.grid(True, alpha=0.25, ls='--')
             fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)

@@ -11,11 +11,14 @@ dist/
 
 # Virtual envs
 .venv/
+.venv-build-win/
+.build-tools/
 venv/
 env/
 
 # Test / coverage
 .pytest_cache/
+.pytest-tmp/
 .coverage
 htmlcov/
 .tox/
@@ -31,6 +34,9 @@ htmlcov/
 # Local Claude / superpowers state
 .claude/
 .superpowers/
+
+# Local Codex state
+.state/
 
 # Local sample data (not part of the repo's own tests)
 testdoc/

@@ -2,6 +2,13 @@
 import platform
 
 
+def _log(message: str):
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        print(message.encode("ascii", errors="replace").decode("ascii"))
+
+
 # ========== 中文字体配置 ==========
 def setup_chinese_font():
     """配置matplotlib中文字体"""
@@ -32,11 +39,11 @@ def setup_chinese_font():
 
     if selected_font:
         plt.rcParams['font.sans-serif'] = [selected_font] + plt.rcParams['font.sans-serif']
-        print(f"[Font] 使用中文字体: {selected_font}")
+        _log(f"[Font] Using Chinese font: {selected_font}")
     else:
         # 如果没有找到中文字体，尝试使用系统默认
         plt.rcParams['font.sans-serif'] = ['DejaVu Sans'] + font_candidates
-        print("[Font] 警告: 未找到中文字体，可能显示乱码")
+        _log("[Font] Warning: no Chinese font found; text may render incorrectly")
 
     # 解决负号显示问题
     plt.rcParams['axes.unicode_minus'] = False

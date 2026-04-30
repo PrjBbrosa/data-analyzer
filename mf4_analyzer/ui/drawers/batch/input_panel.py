@@ -23,12 +23,13 @@ from PyQt5.QtCore import (
     QObject, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal,
 )
 from PyQt5.QtWidgets import (
-    QAction, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
+    QAbstractSpinBox, QAction, QComboBox, QFileDialog, QFormLayout, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
     QPushButton, QVBoxLayout, QWidget,
 )
 
 from ....io.file_data import _TIME_NAMES
+from ...widgets.compact_spinbox import CompactDoubleSpinBox
 from .signal_picker import SignalPickerPopup
 
 
@@ -469,7 +470,8 @@ class InputPanel(QWidget):
         # round-trip through QDoubleSpinBox without losing more than
         # ~1e-10 of precision. The display stays readable; the maximum
         # width below keeps the column from ballooning.
-        self._rpm_factor_spin = QDoubleSpinBox(rpm_host)
+        self._rpm_factor_spin = CompactDoubleSpinBox(rpm_host)
+        self._rpm_factor_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self._rpm_factor_spin.setDecimals(10)
         self._rpm_factor_spin.setRange(0.0001, 10000.0)
         self._rpm_factor_spin.setValue(1.0)

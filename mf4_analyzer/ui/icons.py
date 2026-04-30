@@ -327,6 +327,9 @@ _ARROW_SPECS = (
     ("ICON_COMBO_DOWN_HOVER",    "mdi6.menu-down", "#1769e0"),
     ("ICON_COMBO_DOWN_PRESS",    "mdi6.menu-down", "#1349a8"),
     ("ICON_COMBO_DOWN_DISABLED", "mdi6.menu-down", "#cbd5e1"),
+    # Checkbox indicator glyphs
+    ("ICON_CHECKBOX_CHECKED",          "mdi6.check", "#ffffff"),
+    ("ICON_CHECKBOX_CHECKED_DISABLED", "mdi6.check", "#94a3b8"),
 )
 
 # Logical (CSS pixel) icon size. The actual rendered PNG is scaled up by

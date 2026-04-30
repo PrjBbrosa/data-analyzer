@@ -294,7 +294,12 @@ class MainWindow(QMainWindow):
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
-        self.inspector.remark_toggled.connect(self.canvas_fft.set_remark_enabled)
+        self.inspector.remark_toggled.connect(
+            lambda enabled: self.chart_stack.set_annotation_enabled('fft', enabled)
+        )
+        self.chart_stack.annotation_enabled_changed.connect(
+            self._on_annotation_enabled_changed
+        )
         self.chart_stack.cursor_mode_changed.connect(self._on_cursor_mode_changed)
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.inspector.signal_changed.connect(self._on_inspector_signal_changed)
@@ -368,6 +373,14 @@ class MainWindow(QMainWindow):
 
     def _on_plot_mode_changed(self, mode):
         self.plot_time()
+
+    def _on_annotation_enabled_changed(self, mode, enabled):
+        if mode == 'fft':
+            chk = self.inspector.fft_ctx.chk_remark
+            if chk.isChecked() != bool(enabled):
+                chk.blockSignals(True)
+                chk.setChecked(bool(enabled))
+                chk.blockSignals(False)
 
     def _update_all_tick_density_pair(self, xt, yt):
         self.canvas_time.set_tick_density(xt, yt)
@@ -930,9 +943,6 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "错误", str(e))
 
     def open_batch(self):
-        if not self.files:
-            self.toast("请先加载文件", "warning")
-            return
         from .drawers.batch import BatchSheet
         from ..batch import BatchRunner
 
@@ -1113,26 +1123,15 @@ class MainWindow(QMainWindow):
         return freq[-1]
 
     def _check_uniform_or_prompt(self, fd, mode):
-        """Pre-flight non-uniform time-axis check, run BEFORE worker dispatch.
+        """Pre-flight non-uniform time-axis check before worker dispatch.
 
-        Returns ``True`` when ``fd.time_array`` is uniform-enough for
-        ``SpectrogramAnalyzer._validate_time_axis`` to accept, OR when
-        the user accepted the rebuild popover (in which case
-        ``fd.time_array`` is now ``arange(n)/fs`` -- guaranteed
-        uniform). Returns ``False`` when the axis is non-uniform AND
-        the user dismissed the popover; the caller must abort.
-
-        ``mode`` selects the popover anchor (``'fft'`` -> the standard
-        FFT contextual's ``btn_rebuild``; ``'fft_time'`` -> the FFT vs
-        Time contextual's ``btn_rebuild``; ``'order'`` -> the order
-        contextual's ``btn_rebuild``).
-
-        T2 (2026-04-26): collapses the prior worker -> failed -> popover
-        -> retry round-trip into a single synchronous gate. This also
-        eliminates the H4 latent bug in ``_fft_time_retry_pending``
-        lifecycle (the flag was cleared in ``_retry``'s ``finally``
-        before the worker could ever fail again). See
-        ``docs/superpowers/reports/2026-04-26-nonuniform-fft-T2-fix.md``.
+        The method name is retained for older call sites/tests, but the
+        current UX no longer opens the rebuild popover automatically.
+        When an MF4 timestamp axis is too jittered for the spectral
+        analyzer, we rebuild it immediately with
+        ``fd.suggested_fs_from_time_axis()`` (median-dt estimate), push
+        that Fs back into the active contextual panel, clear affected FFT
+        vs Time cache entries, and let the compute continue.
         """
         if fd is None or not hasattr(fd, 'is_time_axis_uniform'):
             # Either no file selected, or a duck-typed stand-in (test
@@ -1140,25 +1139,67 @@ class MainWindow(QMainWindow):
             return True
         if fd.is_time_axis_uniform():
             return True
-        # Seed the popover's spin_fs with the median-dt estimate so the
-        # user only has to confirm rather than retype Fs from scratch.
+
         if hasattr(fd, 'suggested_fs_from_time_axis'):
             suggested = fd.suggested_fs_from_time_axis()
-            if np.isfinite(suggested) and suggested > 0:
-                fd.fs = float(suggested)
-        if mode == 'fft':
-            anchor = self.inspector.fft_ctx.btn_rebuild
-        elif mode == 'fft_time':
-            anchor = self.inspector.fft_time_ctx.btn_rebuild
         else:
-            anchor = self.inspector.order_ctx.btn_rebuild
-        self.toast(
-            "时间轴非均匀，无法直接做时频分析。"
-            "已为你打开“重建时间轴”，请确认 Fs 后重试。",
-            "warning",
+            suggested = getattr(fd, 'fs', 0.0)
+        if not (np.isfinite(suggested) and suggested > 0):
+            self.toast("时间轴非均匀，且无法计算有效采样频率。", "warning")
+            self.statusBar.showMessage("时间轴非均匀，无法自动重建")
+            return False
+
+        if not hasattr(fd, 'rebuild_time_axis'):
+            self.toast("时间轴非均匀，当前文件对象不支持自动重建。", "warning")
+            self.statusBar.showMessage("时间轴非均匀，无法自动重建")
+            return False
+
+        target_fid = None
+        for fid, candidate in self.files.items():
+            if candidate is fd:
+                target_fid = fid
+                break
+
+        old_max = fd.time_array[-1] if getattr(fd, 'time_array', None) is not None and len(fd.time_array) else 0.0
+        new_fs = float(suggested)
+        fd.rebuild_time_axis(new_fs)
+        new_max = fd.time_array[-1] if getattr(fd, 'time_array', None) is not None and len(fd.time_array) else 0.0
+
+        if target_fid is not None:
+            self._fft_time_cache_clear_for_fid(target_fid)
+        try:
+            current_hi = self.inspector.top.spin_end.maximum()
+            self.inspector.top.set_range_limits(0, max(current_hi, new_max))
+        except Exception:  # noqa: BLE001 - range refresh is best-effort UI state
+            pass
+
+        for ctx in (
+            self.inspector.fft_ctx,
+            self.inspector.fft_time_ctx,
+            self.inspector.order_ctx,
+        ):
+            try:
+                sig_data = ctx.current_signal()
+            except Exception:  # noqa: BLE001
+                sig_data = None
+            if target_fid is None or (sig_data is not None and sig_data[0] == target_fid):
+                if hasattr(ctx, 'set_fs'):
+                    ctx.set_fs(new_fs)
+
+        try:
+            self.plot_time()
+        except Exception:  # noqa: BLE001 - plot refresh must not block analysis
+            pass
+
+        short_name = getattr(fd, 'short_name', '') or getattr(fd, 'filename', '当前文件')
+        self.statusBar.showMessage(
+            f"时间轴已自动重建: {short_name} | Fs={new_fs:g} | {old_max:.1f}s → {new_max:.3f}s"
         )
-        self.statusBar.showMessage("时间轴非均匀，请重建后重试")
-        return self._show_rebuild_popover(anchor, mode=mode)
+        self.toast(
+            f"时间轴非均匀，已按 Fs={new_fs:g} 自动处理。",
+            "info",
+        )
+        return True
 
     def do_fft(self):
         t, sig, fs = self._get_sig()
@@ -1223,11 +1264,18 @@ class MainWindow(QMainWindow):
 
             self.canvas_fft.clear()
 
-            # 自适应频率范围计算
-            if fft_params['autoscale']:
-                x_max = self._fft_auto_xlim(freq, amp)
+            x_auto = bool(fft_params.get('x_auto', fft_params.get('autoscale', True)))
+            x_min = float(fft_params.get('x_min', 0.0))
+            x_max = float(fft_params.get('x_max', 0.0))
+            if x_auto:
+                xlim = (0.0, self._fft_auto_xlim(freq, amp))
+            elif x_max > x_min:
+                xlim = (x_min, x_max)
             else:
-                x_max = fs / 2
+                xlim = (0.0, fs / 2)
+            y_auto = bool(fft_params.get('y_auto', True))
+            y_min = float(fft_params.get('y_min', 0.0))
+            y_max = float(fft_params.get('y_max', 0.0))
 
             # Wave 2 / SP2 / Task 2.3: per-subplot Linear/dB toggle.
             amp_y = fft_params.get('amp_y', 'Linear')
@@ -1252,7 +1300,9 @@ class MainWindow(QMainWindow):
             )
             ax1.set_title(f'FFT - {self.inspector.fft_ctx.combo_sig.currentText()} (窗:{win}, NFFT:{nfft or "auto"})');
             ax1.grid(True, alpha=0.25, ls='--');
-            ax1.set_xlim(0, x_max)
+            ax1.set_xlim(*xlim)
+            if not y_auto and y_max > y_min:
+                ax1.set_ylim(y_min, y_max)
             ax2 = self.canvas_fft.fig.add_subplot(2, 1, 2)
             ax2.plot(freq, psd_disp, '#dc2626', lw=1.0);
             ax2.set_xlabel('Frequency (Hz)');
@@ -1262,7 +1312,9 @@ class MainWindow(QMainWindow):
             )
             ax2.set_title('功率谱密度');
             ax2.grid(True, alpha=0.25, ls='--');
-            ax2.set_xlim(0, x_max)
+            ax2.set_xlim(*xlim)
+            if not y_auto and y_max > y_min:
+                ax2.set_ylim(y_min, y_max)
 
             # 存储曲线数据用于remark吸附
             self.canvas_fft.store_line_data(0, freq, amp_disp)

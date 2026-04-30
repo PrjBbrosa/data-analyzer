@@ -141,7 +141,7 @@ class Toolbar(QWidget):
         """Implements the §7.1 enabled-state matrix."""
         self.btn_edit.setEnabled(has_file)
         self.btn_export.setEnabled(has_file)
-        self.btn_batch.setEnabled(has_file)
+        self.btn_batch.setEnabled(True)
 
     def current_mode(self):
         return self._current_mode
