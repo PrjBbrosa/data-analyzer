@@ -71,7 +71,11 @@ def update_index(index: Path, lesson_path: str, title: str, trigger: str) -> Non
         return
     text = text.replace("| _none yet_ | Add project-specific lessons with `scripts/lessons/promote.py`. | |\n", "")
     row = f"| [{title}]({lesson_path}) | {trigger} | See lesson |\n"
-    if "| Lesson | Trigger | Checks |" in text:
+    selection = "\n## Selection Rules"
+    if "| Lesson | Trigger | Checks |" in text and selection in text:
+        before, after = text.split(selection, 1)
+        text = before.rstrip() + "\n" + row + selection + after
+    elif "| Lesson | Trigger | Checks |" in text:
         text = text.rstrip() + "\n" + row
     else:
         text = text.rstrip() + "\n\n## Active Lessons\n\n| Lesson | Trigger | Checks |\n| --- | --- | --- |\n" + row
