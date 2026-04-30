@@ -28,7 +28,7 @@ def test_toolbar_enabled_matrix(qapp):
     tb.set_enabled_for_mode('time', has_file=False)
     assert not tb.btn_edit.isEnabled()
     assert not tb.btn_export.isEnabled()
-    assert not tb.btn_batch.isEnabled()
+    assert tb.btn_batch.isEnabled()
 
 
 def test_toolbar_batch_requested_emits(qapp, qtbot):

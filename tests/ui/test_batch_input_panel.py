@@ -218,6 +218,27 @@ def test_input_panel_rpm_unit_preset_sets_factor(qtbot):
     assert p._rpm_factor_spin.value() == 1.0
 
 
+def test_batch_double_spinboxes_display_compact_text_without_losing_precision(qtbot):
+    """Default numeric text should not reserve width for fixed trailing zeroes."""
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    p = InputPanel()
+    qtbot.addWidget(p)
+    assert p._rpm_factor_spin.text() == "1.0"
+
+    p._rpm_factor_spin.setValue(1.23456789)
+    assert abs(p._rpm_factor_spin.value() - 1.23456789) < 1e-9
+    assert p._rpm_factor_spin.text() == "1.23456789"
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("order_time")
+    assert form._w_max_order.text() == "20.0"
+    assert form._w_order_res.text() == "0.05"
+    assert form._w_time_res.text() == "0.1"
+
+
 def test_input_panel_rpm_manual_factor_switches_unit_to_custom(qtbot):
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
     p = InputPanel()
@@ -307,6 +328,69 @@ def test_input_panel_rpm_factor_is_returned_in_params(qtbot):
     params = p.rpm_params()
     assert set(params.keys()) == {"rpm_factor"}
     assert abs(params["rpm_factor"] - 1.0 / 6.0) < 1e-9
+
+
+def test_batch_sheet_get_preset_includes_output_axis_params(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    assert sheet._output_panel.combo_amp_unit.currentText() == "dB"
+    sheet._output_panel.chk_x_auto.setChecked(False)
+    sheet._output_panel.spin_x_min.setValue(1.0)
+    sheet._output_panel.spin_x_max.setValue(2.0)
+    sheet._output_panel.chk_y_auto.setChecked(False)
+    sheet._output_panel.spin_y_min.setValue(3.0)
+    sheet._output_panel.spin_y_max.setValue(4.0)
+    sheet._output_panel.chk_z_auto.setChecked(False)
+    sheet._output_panel.spin_z_floor.setValue(-40.0)
+    sheet._output_panel.spin_z_ceiling.setValue(-5.0)
+    sheet._output_panel.combo_amp_unit.setCurrentText("Linear")
+
+    params = sheet.get_preset().params
+
+    assert params["x_auto"] is False
+    assert params["x_min"] == 1.0
+    assert params["x_max"] == 2.0
+    assert params["y_auto"] is False
+    assert params["y_min"] == 3.0
+    assert params["y_max"] == 4.0
+    assert params["z_auto"] is False
+    assert params["z_floor"] == -40.0
+    assert params["z_ceiling"] == -5.0
+    assert params["amplitude_mode"] == "amplitude"
+
+
+def test_batch_sheet_apply_preset_restores_output_axis_params(qtbot):
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    preset = AnalysisPreset.free_config(
+        name="axis",
+        method="order_time",
+        target_signals=("sig",),
+        params={
+            "x_auto": False, "x_min": 1.0, "x_max": 2.0,
+            "y_auto": False, "y_min": 3.0, "y_max": 4.0,
+            "z_auto": False, "z_floor": -40.0, "z_ceiling": -5.0,
+            "amplitude_mode": "amplitude",
+        },
+    )
+
+    sheet.apply_preset(preset)
+
+    assert sheet._output_panel.chk_x_auto.isChecked() is False
+    assert sheet._output_panel.spin_x_min.value() == 1.0
+    assert sheet._output_panel.spin_x_max.value() == 2.0
+    assert sheet._output_panel.chk_y_auto.isChecked() is False
+    assert sheet._output_panel.spin_y_min.value() == 3.0
+    assert sheet._output_panel.spin_y_max.value() == 4.0
+    assert sheet._output_panel.chk_z_auto.isChecked() is False
+    assert sheet._output_panel.spin_z_floor.value() == -40.0
+    assert sheet._output_panel.spin_z_ceiling.value() == -5.0
+    assert sheet._output_panel.combo_amp_unit.currentText() == "Linear"
 
 
 def test_picker_excludes_time_column(qtbot, tmp_path):

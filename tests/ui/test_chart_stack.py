@@ -34,6 +34,41 @@ def test_cursor_pill_hidden_in_fft_mode(qapp, qtbot):
     assert not cs.cursor_pill_visible()
 
 
+def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    assert not hasattr(cs._time_card, '_annotation_btn')
+    for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
+        assert hasattr(card, '_annotation_btn')
+        assert hasattr(card, '_clear_annotation_btn')
+        assert card._annotation_btn.text() == '开启'
+        assert card._annotation_btn.toolTip()
+
+
+def test_annotation_toolbar_toggles_canvas_modes(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    seen = []
+    cs.annotation_enabled_changed.connect(lambda mode, enabled: seen.append((mode, enabled)))
+
+    cs._fft_card._annotation_btn.click()
+    assert cs.canvas_fft._remark_enabled is True
+    assert cs._fft_card._annotation_btn.text() == '关闭'
+
+    cs._fft_time_card._annotation_btn.click()
+    assert cs.canvas_fft_time._remark_enabled is True
+    assert cs._fft_time_card._annotation_btn.text() == '关闭'
+
+    cs._order_card._annotation_btn.click()
+    assert cs.canvas_order._remark_enabled is True
+    assert cs._order_card._annotation_btn.text() == '关闭'
+
+    assert ('fft', True) in seen
+    assert ('fft_time', True) in seen
+    assert ('order', True) in seen
+
+
 def test_stats_strip_update(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()

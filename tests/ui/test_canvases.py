@@ -18,7 +18,12 @@ import numpy as np
 import pytest
 from types import SimpleNamespace
 
-from mf4_analyzer.ui.canvases import PlotCanvas, SpectrogramCanvas
+from mf4_analyzer.ui.canvases import (
+    PlotCanvas,
+    SpectrogramCanvas,
+    TimeDomainCanvas,
+    _format_dual_html,
+)
 
 
 def test_heatmap_db_mode_with_30db_clamps_to_minus30_zero(qapp):
@@ -83,3 +88,33 @@ def test_spectrogram_manual_x_range_controls_time_axis(qapp):
     )
 
     assert canvas._ax_spec.get_xlim() == pytest.approx((1.0, 2.0))
+
+
+def test_dual_cursor_html_labels_endpoint_delta_with_hollow_triangle():
+    html = _format_dual_html([
+        ("torque", 1.0, 3.0, 2.0, 4.0, " Nm", "#123456"),
+    ])
+
+    assert "RMS" not in html
+    assert "△" in html
+    assert "4 Nm" in html
+
+
+def test_dual_cursor_delta_uses_interpolated_cursor_point_difference(qapp):
+    canvas = TimeDomainCanvas()
+    t = np.array([0.0, 1.0, 2.0], dtype=float)
+    sig = np.array([10.0, 20.0, 50.0], dtype=float)
+    canvas.channel_data["torque"] = (t, sig, "#123456", "Nm")
+    canvas._ax = 0.25
+    canvas._bx = 1.75
+
+    emitted = []
+    canvas.dual_cursor_info.connect(emitted.append)
+    canvas._update_dual()
+
+    assert emitted
+    html = emitted[-1]
+    assert "RMS" not in html
+    assert "△" in html
+    # Linear interpolation: A=12.5, B=42.5, so B-A = 30.0.
+    assert "30 Nm" in html

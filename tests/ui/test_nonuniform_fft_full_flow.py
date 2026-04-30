@@ -125,7 +125,8 @@ def _wire_fake_file(win, monkeypatch, fake_fd):
         amplitude_mode='amplitude', cmap='turbo', dynamic='80 dB',
         freq_auto=True, freq_min=0.0, freq_max=0.0,
     )
-    monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params', lambda: p)
+    monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params',
+                        lambda: dict(p, fs=fake_fd.fs))
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
     # Register fid -> fd so _show_rebuild_popover's lookup succeeds.
     win.files[fid] = fake_fd
@@ -231,13 +232,12 @@ def test_full_flow_accept_dispatches_one_worker_and_caches(qtbot, monkeypatch):
     assert '使用缓存结果' in win.statusBar.currentMessage()
 
 
-def test_full_flow_reject_skips_worker(qtbot, monkeypatch):
-    """Click 计算时频图 -> popover -> Reject -> no worker dispatch,
-    no cache entry, no error toast. The user is left with the inspector
-    open, free to retype Fs and click again -- which is the bug the
-    user originally hit (locked out from recomputing). T2 collapsed
-    that into a synchronous bail; T4 verifies the bail is clean."""
-    from mf4_analyzer.signal import spectrogram as spectrogram_mod
+def test_full_flow_auto_rebuild_does_not_open_popover(qtbot, monkeypatch):
+    """Click 计算时频图 on a non-uniform axis -> auto rebuild -> compute.
+
+    The 2026-04-30 UX contract removes the blocking confirmation step:
+    no rebuild popover should be constructed during normal compute.
+    """
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -245,21 +245,12 @@ def test_full_flow_reject_skips_worker(qtbot, monkeypatch):
 
     fake_fd = _NonUniformFakeFD()
     _wire_fake_file(win, monkeypatch, fake_fd)
-    _patch_popover(monkeypatch, accept=False)
-
-    # Watchdog: SpectrogramAnalyzer.compute MUST NOT be reached.
-    compute_calls = {'n': 0}
-
-    def watchdog_compute(*a, **kw):
-        compute_calls['n'] += 1
-        raise AssertionError(
-            'pre-flight should have aborted before SpectrogramAnalyzer.compute'
-        )
 
     monkeypatch.setattr(
-        spectrogram_mod.SpectrogramAnalyzer,
-        'compute',
-        staticmethod(watchdog_compute),
+        'mf4_analyzer.ui.drawers.rebuild_time_popover.RebuildTimePopover',
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError('auto path must not construct RebuildTimePopover')
+        ),
     )
 
     toasts = []
@@ -268,14 +259,11 @@ def test_full_flow_reject_skips_worker(qtbot, monkeypatch):
         lambda msg, level='info': toasts.append((msg, level)),
     )
 
-    win.do_fft_time(force=True)
+    win.do_fft_time(force=False)
+    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
 
-    # No worker thread was created.
-    assert win._fft_time_thread is None
-    # The analyzer was never reached.
-    assert compute_calls['n'] == 0
-    # Cache stays empty.
-    assert len(win._fft_time_cache) == 0
+    assert fake_fd.is_time_axis_uniform() is True
+    assert len(win._fft_time_cache) == 1
     # No error toast (the pre-flight emitted a warning, not an error).
     assert not any(level == 'error' for _msg, level in toasts)
 
@@ -407,10 +395,10 @@ def test_popover_frame_geometry_inside_available_when_anchor_in_corner(
     )
 
     fake_fd = _NonUniformFakeFD()
-    _wire_fake_file(win, monkeypatch, fake_fd)
+    fid, _ = _wire_fake_file(win, monkeypatch, fake_fd)
     monkeypatch.setattr(win, 'toast', lambda *a, **kw: None)
 
-    win.do_fft_time(force=True)
+    win._show_rebuild_popover(anchor=anchor, mode='fft_time')
     qapp.processEvents()
     qtbot.wait(50)
 
@@ -439,23 +427,11 @@ def test_popover_frame_geometry_inside_available_when_anchor_in_corner(
 # --- T2 reviewer flag: fd.fs side-effect on Reject ------------------
 
 
-def test_reject_path_does_not_silently_mutate_fd_fs(qtbot, monkeypatch):
-    """T2 reviewer noted that ``_check_uniform_or_prompt`` seeds
-    ``fd.fs = suggested_fs_from_time_axis()`` BEFORE invoking the
-    popover, and the seed survives a Reject. The user therefore sees
-    their original ``fd.fs`` quietly replaced by the median-dt estimate
-    even though they cancelled.
-
-    This test documents the current (Reject-mutates) behavior so a
-    future fix can flip the assertion's direction with a single
-    ``not`` -- right now the right thing for T4 is to lock the
-    observed shape so a silent change to the Reject side-effect cannot
-    sneak past CI.
-
-    See ``docs/superpowers/reports/2026-04-26-nonuniform-fft-T4-validation.md``
-    for the decision rationale -- T4 is a regression gate, not a fix
-    cycle, so we record the behavior rather than change it.
-    """
+def test_auto_rebuild_uses_suggested_fs(qtbot, monkeypatch):
+    """The no-prompt path should rebuild with suggested_fs_from_time_axis()."""
+    import numpy as np
+    from mf4_analyzer.signal import spectrogram as spectrogram_mod
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
@@ -467,21 +443,39 @@ def test_reject_path_does_not_silently_mutate_fd_fs(qtbot, monkeypatch):
     # so the seed equals the original. Tweak the fake to return a
     # distinguishable value so we can see the mutation.
     fake_fd.suggested_fs_from_time_axis = lambda: 250.0
-    original_fs = fake_fd.fs
-    suggested = fake_fd.suggested_fs_from_time_axis()
-    assert original_fs != suggested
 
     _wire_fake_file(win, monkeypatch, fake_fd)
-    _patch_popover(monkeypatch, accept=False)
+    monkeypatch.setattr(
+        'mf4_analyzer.ui.drawers.rebuild_time_popover.RebuildTimePopover',
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError('auto path must not construct RebuildTimePopover')
+        ),
+    )
+    good = SpectrogramResult(
+        times=np.linspace(0.0, 1.0, 4),
+        frequencies=np.linspace(0.0, 50.0, 3),
+        amplitude=np.ones((3, 4), dtype=np.float32),
+        params=SpectrogramParams(fs=250.0, nfft=8),
+        channel_name='ch',
+        metadata={'frames': 4, 'hop': 4, 'freq_bins': 3},
+    )
+    seen = {}
+
+    def fake_compute(signal, time, params, **kw):
+        seen['fs'] = params.fs
+        seen['dt'] = float(np.median(np.diff(time)))
+        return good
+
+    monkeypatch.setattr(
+        spectrogram_mod.SpectrogramAnalyzer,
+        'compute',
+        staticmethod(fake_compute),
+    )
     monkeypatch.setattr(win, 'toast', lambda *a, **kw: None)
 
     win.do_fft_time(force=True)
+    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
 
-    # Current observed behavior: the seeded Fs persists even though
-    # the user rejected the popover. If a future fix rolls the seed
-    # back, this assertion will trip and the maintainer can flip it
-    # to ``== original_fs`` to lock the new contract.
-    assert fake_fd.fs == suggested, (
-        'pre-flight seed should currently survive Reject (regression '
-        'gate -- flip this assertion when the bug is fixed)'
-    )
+    assert fake_fd.fs == 250.0
+    assert seen['fs'] == 250.0
+    assert seen['dt'] == pytest.approx(1.0 / 250.0)

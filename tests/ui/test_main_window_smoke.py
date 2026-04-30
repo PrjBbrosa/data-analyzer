@@ -791,27 +791,34 @@ def _stub_fft_time_signal(win, monkeypatch):
 
 class _NonUniformFakeFD:
     """Duck-typed FileData stand-in whose pre-flight predicate returns
-    False so ``MainWindow._check_uniform_or_prompt`` exercises the
-    popover branch.
+    False until ``rebuild_time_axis`` is called.
 
-    T2 (2026-04-26) replaced the post-worker auto-rebuild + retry path
-    with a synchronous pre-flight at the top of ``do_fft_time`` /
-    ``do_fft``. These smoke tests therefore wire the FAILURE through
-    the pre-flight (NOT through the analyzer raising) -- the analyzer
-    is never reached on a non-uniform input under the new contract.
+    The 2026-04-30 UX contract auto-rebuilds the time axis with the
+    median-dt Fs estimate instead of opening a blocking rebuild popover.
     """
 
     def __init__(self):
         import numpy as _np
         self.fs = 100.0
-        self.time_array = _np.linspace(0.0, 1.0, 32)
+        nominal_dt = 1.0 / self.fs
+        dts = _np.resize(_np.array([1.2 * nominal_dt, 0.8 * nominal_dt]), 31)
+        self.time_array = _np.concatenate(([0.0], _np.cumsum(dts)))
         self.channel_units = {'ch': ''}
+        self._uniform = False
+        self.rebuilt_with = None
 
     def is_time_axis_uniform(self, tolerance=None):
-        return False
+        return self._uniform
 
     def suggested_fs_from_time_axis(self):
         return 100.0
+
+    def rebuild_time_axis(self, new_fs):
+        import numpy as _np
+        self.fs = float(new_fs)
+        self.rebuilt_with = float(new_fs)
+        self.time_array = _np.arange(len(self.time_array), dtype=float) / self.fs
+        self._uniform = True
 
 
 def _stub_fft_time_signal_nonuniform(win, monkeypatch):
@@ -823,7 +830,12 @@ def _stub_fft_time_signal_nonuniform(win, monkeypatch):
     fake_fd = _NonUniformFakeFD()
     monkeypatch.setattr(
         win, '_get_fft_time_signal',
-        lambda: ('f1', 'ch', np.linspace(0, 1, 32), np.ones(32), fake_fd),
+        lambda: (
+            'f1', 'ch',
+            np.asarray(fake_fd.time_array, dtype=float),
+            np.ones(32),
+            fake_fd,
+        ),
     )
     p = dict(
         fid='f1', channel='ch', fs=100.0, nfft=8, window='hanning',
@@ -831,47 +843,49 @@ def _stub_fft_time_signal_nonuniform(win, monkeypatch):
         amplitude_mode='amplitude', cmap='turbo', dynamic='80 dB',
         freq_auto=True, freq_min=0.0, freq_max=0.0,
     )
-    monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params', lambda: p)
+    monkeypatch.setattr(win.inspector.fft_time_ctx, 'get_params',
+                        lambda: dict(p, fs=fake_fd.fs))
     monkeypatch.setattr(win.inspector.top, 'range_enabled', lambda: False)
     return p, fake_fd
 
 
-def test_fft_time_non_uniform_friendly_toast(qtbot, monkeypatch):
-    """Pre-flight (T2) must surface the friendly Chinese toast
-    mentioning 重建时间轴 BEFORE any worker is dispatched. The raw
-    analyzer error string must NOT bleed through.
-
-    Updated 2026-04-26: previously this test exercised the
-    post-worker non-uniform handler; T2 replaced that with a
-    synchronous pre-flight, so the toast is now emitted by
-    ``_check_uniform_or_prompt`` and no analyzer call is needed.
-    """
+def test_fft_time_non_uniform_auto_rebuilds_without_popover(qtbot, monkeypatch):
+    """Non-uniform single-file FFT-vs-Time should auto-rebuild and compute."""
+    import numpy as np
     from mf4_analyzer.signal import spectrogram as spectrogram_mod
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
     qtbot.addWidget(win)
 
-    # The analyzer must NOT be reached -- pre-flight should bail first.
+    _, fake_fd = _stub_fft_time_signal_nonuniform(win, monkeypatch)
+    monkeypatch.setattr(
+        win,
+        '_show_rebuild_popover',
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError('auto path must not open rebuild popover')
+        ),
+    )
+
+    good = SpectrogramResult(
+        times=np.linspace(0.0, 1.0, 4),
+        frequencies=np.linspace(0.0, 50.0, 3),
+        amplitude=np.ones((3, 4), dtype=np.float32),
+        params=SpectrogramParams(fs=100.0, nfft=8),
+        channel_name='ch',
+        metadata={'frames': 4, 'hop': 4, 'freq_bins': 3},
+    )
     compute_calls = {'n': 0}
 
-    def watchdog_compute(*a, **kw):
+    def fake_compute(*a, **kw):
         compute_calls['n'] += 1
-        raise AssertionError(
-            'pre-flight should have aborted before SpectrogramAnalyzer.compute'
-        )
+        return good
 
     monkeypatch.setattr(
         spectrogram_mod.SpectrogramAnalyzer,
         'compute',
-        staticmethod(watchdog_compute),
-    )
-    _stub_fft_time_signal_nonuniform(win, monkeypatch)
-    # Stub the rebuild popover Reject so do_fft_time bails after the
-    # toast (no worker, no recursion).
-    monkeypatch.setattr(
-        win, '_show_rebuild_popover',
-        lambda anchor, mode='fft': False,
+        staticmethod(fake_compute),
     )
 
     captured = []
@@ -881,34 +895,18 @@ def test_fft_time_non_uniform_friendly_toast(qtbot, monkeypatch):
     )
 
     win.do_fft_time(force=True)
+    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
 
-    # No worker thread should have spawned -- pre-flight bails.
-    assert win._fft_time_thread is None
-    assert compute_calls['n'] == 0
-
-    warnings = [(msg, level) for msg, level in captured if level == 'warning']
-    assert warnings, 'expected at least one warning toast from pre-flight'
-    msg = warnings[-1][0]
-    # Mentions the rebuild action surface.
-    assert '重建时间轴' in msg
-    # Raw analyzer wording must NOT bleed through.
-    assert 'tolerance' not in msg
-    assert 'relative_jitter=' not in msg
-    # Status-bar message points the user at rebuild.
-    assert '时间轴非均匀' in win.statusBar.currentMessage()
-    assert '请重建' in win.statusBar.currentMessage()
+    assert fake_fd.rebuilt_with == 100.0
+    assert fake_fd.is_time_axis_uniform() is True
+    assert compute_calls['n'] == 1
+    assert len(win._fft_time_cache) == 1
+    assert not any(level == 'warning' and '请重建' in msg for msg, level in captured)
+    assert 'FFT vs Time 错误' not in win.statusBar.currentMessage()
 
 
-def test_fft_time_non_uniform_accept_dispatches_worker_once(qtbot, monkeypatch):
-    """When the user accepts the rebuild popover, the pre-flight
-    immediately proceeds with the (now-uniform) axis. The analyzer
-    runs ONCE -- there is no retry round-trip in the T2 contract.
-
-    Updated 2026-04-26: replaces the prior
-    ``test_fft_time_non_uniform_auto_opens_rebuild_and_retries`` which
-    asserted two ``do_fft_time`` invocations (initial + retry). The new
-    pre-flight model dispatches exactly one worker.
-    """
+def test_fft_time_non_uniform_auto_dispatches_worker_once(qtbot, monkeypatch):
+    """Auto rebuild proceeds inline; there is no retry round-trip."""
     import numpy as np
     from mf4_analyzer.signal import spectrogram as spectrogram_mod
     from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
@@ -916,7 +914,7 @@ def test_fft_time_non_uniform_accept_dispatches_worker_once(qtbot, monkeypatch):
 
     win = MainWindow()
     qtbot.addWidget(win)
-    _stub_fft_time_signal_nonuniform(win, monkeypatch)
+    _, fake_fd = _stub_fft_time_signal_nonuniform(win, monkeypatch)
 
     good = SpectrogramResult(
         times=np.linspace(0.0, 1.0, 4),
@@ -936,21 +934,13 @@ def test_fft_time_non_uniform_accept_dispatches_worker_once(qtbot, monkeypatch):
         spectrogram_mod.SpectrogramAnalyzer, 'compute', staticmethod(fake_compute)
     )
 
-    # _show_rebuild_popover stubbed True (Accepted). Side effect of a
-    # real Accept is that fd.time_array is rebuilt to arange(n)/fs. We
-    # also flip the fake fd's predicate so the second pre-flight check
-    # returns True (the worker would also see a uniform axis in real
-    # life because rebuild_time_axis writes one).
-    accepted_state = {'rebuilt': False}
-
-    def fake_popover(anchor, mode='fft'):
-        accepted_state['rebuilt'] = True
-        # Simulate the popover Accept rebuild side-effect on our fake.
-        fake_fd = win._get_fft_time_signal()[4]
-        fake_fd.is_time_axis_uniform = lambda tolerance=None: True
-        return True
-
-    monkeypatch.setattr(win, '_show_rebuild_popover', fake_popover)
+    monkeypatch.setattr(
+        win,
+        '_show_rebuild_popover',
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError('auto path must not open rebuild popover')
+        ),
+    )
     monkeypatch.setattr(win, 'toast', lambda *a, **kw: None)
 
     invocations = {'count': 0}
@@ -972,51 +962,53 @@ def test_fft_time_non_uniform_accept_dispatches_worker_once(qtbot, monkeypatch):
     assert call_state['compute_calls'] == 1
     # Successful compute pushed exactly one result into the LRU.
     assert len(win._fft_time_cache) == 1
-    # And the popover Accept was actually visited.
-    assert accepted_state['rebuilt'] is True
+    assert fake_fd.rebuilt_with == 100.0
 
 
-def test_fft_time_non_uniform_user_cancel_skips_worker(qtbot, monkeypatch):
-    """When the rebuild popover returns Rejected, the pre-flight
-    aborts -- no worker is dispatched, no analyzer call.
-
-    Updated 2026-04-26: replaces ``test_fft_time_non_uniform_user_cancel_does_not_retry``.
-    The old contract dispatched the worker FIRST, then bailed when the
-    popover was rejected. The new contract bails BEFORE any worker
-    starts, so we assert ``_fft_time_thread is None`` AND
-    ``SpectrogramAnalyzer.compute`` was never invoked.
-    """
+def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch):
+    """The automatic path should use suggested_fs_from_time_axis()."""
+    import numpy as np
     from mf4_analyzer.signal import spectrogram as spectrogram_mod
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
     qtbot.addWidget(win)
-    _stub_fft_time_signal_nonuniform(win, monkeypatch)
+    _, fake_fd = _stub_fft_time_signal_nonuniform(win, monkeypatch)
+    fake_fd.suggested_fs_from_time_axis = lambda: 250.0
 
-    compute_calls = {'n': 0}
+    good = SpectrogramResult(
+        times=np.linspace(0.0, 1.0, 4),
+        frequencies=np.linspace(0.0, 50.0, 3),
+        amplitude=np.ones((3, 4), dtype=np.float32),
+        params=SpectrogramParams(fs=250.0, nfft=8),
+        channel_name='ch',
+        metadata={'frames': 4, 'hop': 4, 'freq_bins': 3},
+    )
+    seen = {}
 
-    def watchdog_compute(*a, **kw):
-        compute_calls['n'] += 1
-        raise AssertionError(
-            'pre-flight should have aborted before SpectrogramAnalyzer.compute'
-        )
+    def fake_compute(signal, time, params, **kw):
+        seen['fs'] = params.fs
+        seen['dt'] = float(np.median(np.diff(time)))
+        return good
 
     monkeypatch.setattr(
         spectrogram_mod.SpectrogramAnalyzer,
         'compute',
-        staticmethod(watchdog_compute),
+        staticmethod(fake_compute),
     )
-
-    # User cancels the popover.
     monkeypatch.setattr(
-        win, '_show_rebuild_popover',
-        lambda anchor, mode='fft': False,
+        win,
+        '_show_rebuild_popover',
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError('auto path must not open rebuild popover')
+        ),
     )
     monkeypatch.setattr(win, 'toast', lambda *a, **kw: None)
 
     win.do_fft_time(force=True)
+    qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=10000)
 
-    # Pre-flight bails synchronously -- no worker thread.
-    assert win._fft_time_thread is None
-    assert compute_calls['n'] == 0
-    assert len(win._fft_time_cache) == 0
+    assert fake_fd.rebuilt_with == 250.0
+    assert seen['fs'] == 250.0
+    assert abs(seen['dt'] - (1.0 / 250.0)) < 1e-12

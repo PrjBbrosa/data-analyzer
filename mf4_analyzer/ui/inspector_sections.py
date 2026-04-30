@@ -6,14 +6,18 @@ parameter cards. Public getter/setter names are a contract consumed by
 MainWindow's analysis methods — do not rename without updating callers.
 """
 import json
+from html import escape
 
-from PyQt5.QtCore import QSettings, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QSettings, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -22,7 +26,6 @@ from PyQt5.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QAbstractSpinBox,
     QSizePolicy,
     QSpinBox,
     QStackedLayout,
@@ -32,6 +35,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .icons import Icons
+from .widgets.compact_spinbox import CompactDoubleSpinBox
 from .widgets.searchable_combo import SearchableComboBox
 
 
@@ -41,6 +45,20 @@ _PRESET_APP = "DataAnalyzer"
 
 def _preset_settings():
     return QSettings(_PRESET_ORG, _PRESET_APP)
+
+
+def _no_buttons(spin):
+    """Strip the up/down stepper from a Q(Double)SpinBox.
+
+    Wave 2a (2026-04-29) collapsed the QSS subcontrol bodies to zero so
+    the right-gutter buttons render no glyph and reserve no width. We
+    pair that with ``setButtonSymbols(NoButtons)`` at every construction
+    site so platforms whose native style still paints a stepper despite
+    the zero-width QSS (Windows fusion / macOS aqua) hide the buttons
+    too. Returns the spin so callers can chain.
+    """
+    spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+    return spin
 
 
 def _make_group_header(title, action_button=None, parent=None):
@@ -69,6 +87,268 @@ def _make_group_header(title, action_button=None, parent=None):
         action_button.setParent(frame)
         box.addWidget(action_button, 0)
     return frame
+
+
+def _preset_value_text(value):
+    if isinstance(value, bool):
+        return '是' if value else '否'
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
+class _PresetHoverCard(QFrame):
+    """Custom preset hover card.
+
+    Qt's native QToolTip supports only a tiny HTML subset, so chip-style
+    parameter summaries must be rendered as real widgets.
+    """
+
+    WIDTH = 360
+
+    def __init__(self):
+        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint)
+        self.setObjectName("presetHoverCard")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setWindowOpacity(0.98)
+        self.setFixedWidth(self.WIDTH)
+        self._root = QVBoxLayout(self)
+        self._root.setContentsMargins(12, 11, 12, 10)
+        self._root.setSpacing(8)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(34)
+        shadow.setOffset(0, 12)
+        shadow.setColor(QColor(15, 23, 42, 44))
+        self.setGraphicsEffect(shadow)
+        self.setStyleSheet("""
+            QFrame#presetHoverCard {
+                border: 1px solid rgba(190, 203, 220, 210);
+                border-radius: 8px;
+                background-color: rgba(255, 255, 255, 242);
+            }
+            QFrame#presetHoverSection {
+                border: 1px solid #d5dfeb;
+                border-radius: 7px;
+                background-color: rgba(255, 255, 255, 176);
+            }
+            QLabel#presetHoverTitle {
+                color: #172033;
+                font-size: 15px;
+                font-weight: 800;
+                background: transparent;
+            }
+            QLabel#presetHoverSub,
+            QLabel#presetHoverFooter {
+                color: #647086;
+                font-size: 12px;
+                background: transparent;
+            }
+            QLabel#presetHoverBadge {
+                padding: 3px 8px;
+                border-radius: 11px;
+                color: #047857;
+                background-color: #e9f9f1;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            QLabel#presetHoverSectionTitle {
+                color: #1f3b63;
+                font-size: 12px;
+                font-weight: 800;
+                background: transparent;
+            }
+            QLabel#presetChip {
+                padding: 3px 7px;
+                border: 1px solid #d5dfeb;
+                border-radius: 10px;
+                background-color: #f1f6fc;
+                font-size: 12px;
+            }
+            QLabel#presetChip[warn="true"] {
+                border-color: #d9b56e;
+            }
+        """)
+
+    def set_summary(self, *, name, params, kind, label_map, current_params=None,
+                    builtin=False):
+        self._clear()
+        params = params if isinstance(params, dict) else {}
+        current_params = current_params if isinstance(current_params, dict) else {}
+
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(2)
+        title = QLabel(str(name), self)
+        title.setObjectName("presetHoverTitle")
+        title_box.addWidget(title)
+        sub = QLabel(f"已保存参数快照 · 来源：{self._kind_label(kind)}", self)
+        sub.setObjectName("presetHoverSub")
+        title_box.addWidget(sub)
+        head.addLayout(title_box, 1)
+        badge = QLabel("内置" if builtin else "已保存", self)
+        badge.setObjectName("presetHoverBadge")
+        badge.setAlignment(Qt.AlignCenter)
+        head.addWidget(badge, 0, Qt.AlignTop)
+        self._root.addLayout(head)
+
+        analysis = self._analysis_specs(params, kind, label_map)
+        if analysis:
+            self._root.addWidget(self._section("分析参数", analysis))
+
+        axes = self._axis_specs(params)
+        if axes:
+            self._root.addWidget(self._section("坐标轴快照", axes))
+
+        status = self._status_specs(params, current_params)
+        if status:
+            self._root.addWidget(self._section("状态判断", status))
+
+        footer = QLabel("左键加载 · 右键保存/重命名/清空        不保存信号与 Fs", self)
+        footer.setObjectName("presetHoverFooter")
+        self._root.addWidget(footer)
+        self.adjustSize()
+
+    def _clear(self):
+        while self._root.count():
+            item = self._root.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+            elif item.layout() is not None:
+                self._clear_layout(item.layout())
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+            elif item.layout() is not None:
+                self._clear_layout(item.layout())
+        layout.deleteLater()
+
+    def _section(self, title, chips):
+        frame = QFrame(self)
+        frame.setObjectName("presetHoverSection")
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(9, 8, 9, 8)
+        lay.setSpacing(6)
+        lbl = QLabel(title, frame)
+        lbl.setObjectName("presetHoverSectionTitle")
+        lay.addWidget(lbl)
+        for row_specs in self._rows(chips):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(5)
+            for label, value, warn in row_specs:
+                row.addWidget(self._chip(label, value, warn), 0)
+            row.addStretch(1)
+            lay.addLayout(row)
+        return frame
+
+    def _chip(self, label, value, warn=False):
+        chip = QLabel(self)
+        chip.setObjectName("presetChip")
+        chip.setProperty("warn", "true" if warn else "false")
+        chip.setTextFormat(Qt.RichText)
+        chip.setText(
+            f'<span style="color:#61708a;font-weight:600;">{escape(str(label))}</span> '
+            f'<span style="color:#0b73e7;font-weight:800;">{escape(str(value))}</span>'
+        )
+        return chip
+
+    def _rows(self, chips):
+        rows = []
+        row = []
+        used = 0
+        for spec in chips:
+            label, value, _warn = spec
+            weight = len(str(label)) + len(str(value)) + 3
+            if row and used + weight > 28:
+                rows.append(row)
+                row = []
+                used = 0
+            row.append(spec)
+            used += weight
+        if row:
+            rows.append(row)
+        return rows
+
+    def _analysis_specs(self, params, kind, label_map):
+        axis_keys = {
+            'x_auto', 'x_min', 'x_max', 'y_auto', 'y_min', 'y_max',
+            'z_auto', 'z_floor', 'z_ceiling',
+        }
+        if kind == 'fft':
+            keys = (
+                'window', 'nfft', 'overlap', 'avg_mode', 'avg_overlap',
+                'amp_y', 'psd_y',
+            )
+        elif kind == 'fft_time':
+            keys = (
+                'window', 'nfft', 'overlap', 'amplitude_mode', 'remove_mean',
+                'db_reference', 'dynamic', 'cmap',
+            )
+        elif kind == 'order':
+            keys = (
+                'max_order', 'order_res', 'time_res', 'nfft',
+                'samples_per_rev', 'amplitude_mode',
+            )
+        else:
+            keys = tuple(k for k in params if k not in axis_keys)
+        specs = []
+        for key in keys:
+            if key in params:
+                specs.append((label_map.get(key, key), _preset_value_text(params[key]), False))
+        return specs
+
+    def _axis_specs(self, params):
+        specs = []
+        for axis in ('x', 'y', 'z'):
+            auto_key = f'{axis}_auto'
+            min_key = f'{axis}_min' if axis != 'z' else 'z_floor'
+            max_key = f'{axis}_max' if axis != 'z' else 'z_ceiling'
+            if auto_key not in params:
+                continue
+            if bool(params.get(auto_key)):
+                value = "自动"
+            elif min_key in params and max_key in params:
+                value = (
+                    f"{_preset_value_text(params[min_key])} → "
+                    f"{_preset_value_text(params[max_key])}"
+                )
+            else:
+                value = "手动"
+            specs.append((axis.upper(), value, False))
+        return specs
+
+    def _status_specs(self, params, current_params):
+        specs = []
+        if current_params:
+            axis_keys = {
+                'x_auto', 'x_min', 'x_max', 'y_auto', 'y_min', 'y_max',
+                'z_auto', 'z_floor', 'z_ceiling',
+            }
+            saved_analysis = {
+                k: params[k] for k in params
+                if k in current_params and k not in axis_keys
+            }
+            analysis_same = all(current_params.get(k) == v for k, v in saved_analysis.items())
+            specs.append(("参数", "一致" if analysis_same else "有差异", not analysis_same))
+            saved_axes = {k: params[k] for k in params if k in current_params and k in axis_keys}
+            if saved_axes:
+                axes_same = all(current_params.get(k) == v for k, v in saved_axes.items())
+                specs.append(("坐标轴", "一致" if axes_same else "有差异", not axes_same))
+        specs.append(("信号/Fs", "不切换", False))
+        return specs
+
+    def _kind_label(self, kind):
+        return {
+            'fft': 'FFT',
+            'fft_time': 'FFT vs Time',
+            'order': 'Order Time',
+        }.get(kind, kind)
 
 
 class PresetBar(QWidget):
@@ -136,6 +416,8 @@ class PresetBar(QWidget):
         self._collect = collect_fn
         self._apply = apply_fn
         self._builtins = builtin_defaults  # None => legacy mode
+        self._hover_card = _PresetHoverCard()
+        self._hover_slot = None
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -146,6 +428,7 @@ class PresetBar(QWidget):
             ld.setProperty("role", "preset-load")
             ld.setProperty("filled", "false")
             ld.setContextMenuPolicy(Qt.CustomContextMenu)
+            ld.installEventFilter(self)
             ld.clicked.connect(lambda _=False, slot=n: self._on_left_click(slot))
             ld.customContextMenuRequested.connect(
                 lambda pos, slot=n: self._show_menu(slot, pos)
@@ -208,6 +491,7 @@ class PresetBar(QWidget):
         for n in self.SLOTS:
             entry = self._read(n)
             btn = self._load_btns[n]
+            btn.setToolTip("")
             if entry is None:
                 # Empty slot. In builtin mode the slot still loads the
                 # builtin, so it is enabled and shows the builtin display
@@ -217,26 +501,118 @@ class PresetBar(QWidget):
                     btn.setText(self._default_name(n))
                     btn.setEnabled(True)
                     btn.setProperty("filled", "false")
-                    btn.setToolTip(
-                        f"内置预设「{self._default_name(n)}」\n"
-                        "左键加载 · 右键菜单可保存当前 / 重命名 / 重置为默认"
-                    )
                 else:
                     btn.setText(f"＋ {self._default_name(n)}")
                     btn.setEnabled(True)
                     btn.setProperty("filled", "false")
-                    btn.setToolTip(
-                        "空槽位 — 左键保存当前参数；右键菜单整合 "
-                        "保存 / 重命名 / 清空"
-                    )
             else:
                 name, params = entry
                 btn.setText(name)
                 btn.setEnabled(True)
                 btn.setProperty("filled", "true")
-                btn.setToolTip(self._format_summary(name, params))
             btn.style().unpolish(btn)
             btn.style().polish(btn)
+
+    def eventFilter(self, obj, event):
+        slot = None
+        for n, btn in self._load_btns.items():
+            if obj is btn:
+                slot = n
+                break
+        if slot is None:
+            return super().eventFilter(obj, event)
+        if event.type() == QEvent.Enter:
+            self._show_hover(slot)
+        elif event.type() in (QEvent.Leave, QEvent.MouseButtonPress):
+            self._hide_hover()
+        return super().eventFilter(obj, event)
+
+    def _show_hover(self, slot):
+        entry = self._read(slot)
+        builtin = False
+        if entry is None:
+            params = self._builtin_params(slot)
+            if params is None:
+                self._hide_hover()
+                return
+            name = self._default_name(slot)
+            builtin = True
+        else:
+            name, params = entry
+        try:
+            current_params = self._collect()
+        except Exception:
+            current_params = {}
+        self._hover_slot = slot
+        self._hover_card.set_summary(
+            name=name,
+            params=params,
+            kind=self._kind,
+            label_map=self._SUMMARY_LABELS,
+            current_params=current_params,
+            builtin=builtin,
+        )
+        self._place_hover(slot)
+        self._hover_card.show()
+        self._hover_card.raise_()
+
+    def _place_hover(self, slot):
+        btn = self._load_btns[slot]
+        card = self._hover_card
+        card.adjustSize()
+        size = card.sizeHint()
+        width = max(card.width(), size.width())
+        height = max(card.height(), size.height())
+        screen = QApplication.screenAt(btn.mapToGlobal(btn.rect().center()))
+        available = screen.availableGeometry() if screen else QApplication.primaryScreen().availableGeometry()
+        center = btn.mapToGlobal(btn.rect().center())
+        x = center.x() - width // 2
+        x = max(available.left() + 8, min(x, available.right() - width - 8))
+        top = btn.mapToGlobal(btn.rect().topLeft())
+        bottom = btn.mapToGlobal(btn.rect().bottomLeft())
+        y = top.y() - height - 10
+        if y < available.top() + 8:
+            y = bottom.y() + 10
+        card.move(QPoint(x, y))
+
+    def _hide_hover(self):
+        self._hover_slot = None
+        if hasattr(self, '_hover_card') and self._hover_card is not None:
+            self._hover_card.hide()
+
+    _SUMMARY_LABELS = {
+        'window': '窗函数',
+        'nfft': 'NFFT',
+        'overlap': '重叠',
+        'avg_mode': '平均模式',
+        'avg_overlap': '平均重叠',
+        'amp_y': 'Amplitude 轴',
+        'psd_y': 'PSD 轴',
+        'amplitude_mode': 'Amplitude 轴',
+        'remove_mean': '去均值',
+        'db_reference': 'dB 参考',
+        'freq_auto': '频率自动',
+        'freq_min': '频率最小',
+        'freq_max': '频率最大',
+        'dynamic': '动态范围',
+        'cmap': '色图',
+        'x_auto': 'X 自动',
+        'x_min': 'X 最小',
+        'x_max': 'X 最大',
+        'y_auto': 'Y 自动',
+        'y_min': 'Y 最小',
+        'y_max': 'Y 最大',
+        'z_auto': 'Z 自动',
+        'z_floor': 'Z 下限',
+        'z_ceiling': 'Z 上限',
+        'autoscale': '自适应频率',
+        'remark': '标注',
+        'rpm_factor': 'RPM 系数',
+        'max_order': '最大阶次',
+        'order_res': '阶次分辨率',
+        'time_res': '时间分辨率',
+        'samples_per_rev': '每转样本数',
+    }
 
     def _format_summary(self, name, params):
         if not isinstance(params, dict):
@@ -244,17 +620,34 @@ class PresetBar(QWidget):
         items = []
         for k, v in params.items():
             if isinstance(v, float):
-                items.append(f"{k}={v:g}")
+                val = f"{v:g}"
             elif isinstance(v, bool):
-                items.append(f"{k}={'是' if v else '否'}")
+                val = '是' if v else '否'
             else:
-                items.append(f"{k}={v}")
+                val = str(v)
+            label = self._SUMMARY_LABELS.get(k, str(k))
+            items.append(
+                '<span style="display:inline-block;margin:2px 4px 2px 0;'
+                'padding:2px 6px;border:1px solid #d5dfeb;'
+                'border-radius:8px;background:#f1f6fc;">'
+                f'<span style="color:#61708a;">{escape(label)}</span> '
+                f'<span style="color:#0b73e7;font-weight:700;">{escape(val)}</span>'
+                '</span>'
+            )
         suffix = (
             "（右键可重命名 / 重置为默认）"
             if self._builtins is not None
             else "（右键可重命名 / 清空）"
         )
-        return f"{name}\n{', '.join(items)}\n{suffix}"
+        return (
+            '<html><body style="font-family:Microsoft YaHei UI, PingFang SC, sans-serif;'
+            'font-size:12px;line-height:1.55;color:#172033;">'
+            f'<div style="font-weight:700;font-size:13px;margin-bottom:3px;">{escape(name)}</div>'
+            '<div style="color:#647086;margin-bottom:6px;">已保存参数快照 · 不保存信号与 Fs</div>'
+            f'<div>{"".join(items)}</div>'
+            f'<div style="color:#647086;margin-top:6px;">{escape(suffix)}</div>'
+            '</body></html>'
+        )
 
     # ---- actions ----
     def _on_left_click(self, slot):
@@ -408,17 +801,18 @@ def _configure_form(form):
             margins.left(), margins.top(), 0, margins.bottom(),
         )
         # 2026-04-27 fix-4: the global ``Inspector QGroupBox { padding:
-        # 12px 2px 6px; }`` rule wins over Python ``setContentsMargins``
+        # 18px 2px 8px; }`` rule wins over Python ``setContentsMargins``
         # during stylesheet polish, eating ~2px on each side and ~6px at
-        # the bottom. An inline stylesheet on the specific QGroupBox
-        # using ``padding-left/right/bottom`` (not the shorthand) zeros
-        # those without disturbing ``padding-top`` (which still cascades
-        # from the global rule and reserves room for the title baseline).
+        # the bottom. A local stylesheet on the specific QGroupBox zeros
+        # the horizontal/bottom padding while explicitly preserving the
+        # extra title-to-content air requested for the persistent top
+        # groups.
         # Without this, the form-layout cells inside the QGroupBox render
         # ~9px narrower than the matching sig_card cells, breaking A1
         # field-column alignment.
         parent.setStyleSheet(
-            "QGroupBox { padding-left: 0; padding-right: 0; "
+            "QGroupBox { padding-top: 22px; "
+            "padding-left: 0; padding-right: 0; "
             "padding-bottom: 0; }"
         )
     # Compact rhythm: tightened from H=8 V=8 to H=6 V=4 (2026-04-26
@@ -606,6 +1000,31 @@ def _set_form_row_visible(form, field_widget, visible):
 #   3. Order-specific spin_y_max ↔ spin_mo clamp (``_on_max_order_changed``)
 #      stays on OrderContextual only; the helper is order-agnostic.
 
+
+class _AxisRangeHost(QWidget):
+    def __init__(self, reserved_width, parent=None):
+        super().__init__(parent)
+        self._reserved_width = int(reserved_width)
+        self._reserved_height = 0
+
+    def set_reserved_height(self, height):
+        self._reserved_height = max(self._reserved_height, int(height))
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        return QSize(
+            max(hint.width(), self._reserved_width),
+            max(hint.height(), self._reserved_height),
+        )
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        return QSize(
+            max(hint.width(), self._reserved_width),
+            max(hint.height(), self._reserved_height),
+        )
+
+
 def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     """Build one inline axis row.
 
@@ -619,22 +1038,37 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     row = QWidget()
     row.setObjectName("axisRow")
     row.setAttribute(Qt.WA_StyledBackground, False)
+    row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     lay = QHBoxLayout(row)
     lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(4)
+    row_gap = 4
+    lay.setSpacing(row_gap)
     lbl = QLabel(label)
     lbl.setMinimumWidth(56)
     lbl.setMaximumWidth(56)
     lay.addWidget(lbl)
-    chk.setMinimumWidth(50)
-    chk.setMaximumWidth(50)
+    chk.setMinimumWidth(54)
+    chk.setMaximumWidth(54)
     lay.addWidget(chk)
 
-    range_host = QWidget(row)
+    unit_width = 66
+    arrow_width = 12
+    manual_gap = 3
+    # All rows reserve the same trailing range area. Rows without a unit use
+    # the unit slot for wider min/max editors so their right edge lines up
+    # with the color row's dB/Linear combo box.
+    range_width_without_unit = 196
+    range_width_with_unit = range_width_without_unit - row_gap - unit_width
+    row.setMinimumWidth(56 + row_gap + 54 + row_gap + range_width_without_unit)
+
+    range_width = (
+        range_width_with_unit if unit_widget is not None
+        else range_width_without_unit
+    )
+    spin_width = int((range_width - arrow_width - (manual_gap * 2)) / 2)
+    range_host = _AxisRangeHost(range_width, row)
     range_host.setObjectName("axisRangeHost")
     range_host.setAttribute(Qt.WA_StyledBackground, False)
-    range_width = 146 if unit_widget is not None else 170
-    spin_width = 64 if unit_widget is not None else 72
     range_host.setFixedWidth(range_width)
     range_host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     stack = QStackedLayout(range_host)
@@ -644,6 +1078,7 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     summary_page = QWidget(range_host)
     summary_page.setObjectName("axisRangeSummaryPage")
     summary_page.setAttribute(Qt.WA_StyledBackground, False)
+    summary_page.setMinimumWidth(range_width)
     summary_lay = QHBoxLayout(summary_page)
     summary_lay.setContentsMargins(0, 0, 0, 0)
     summary_lay.setSpacing(0)
@@ -655,9 +1090,10 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     manual_page = QWidget(range_host)
     manual_page.setObjectName("axisManualRangePage")
     manual_page.setAttribute(Qt.WA_StyledBackground, False)
+    manual_page.setMinimumWidth(range_width)
     manual_lay = QHBoxLayout(manual_page)
     manual_lay.setContentsMargins(0, 0, 0, 0)
-    manual_lay.setSpacing(4)
+    manual_lay.setSpacing(manual_gap)
     spin_min.setButtonSymbols(QAbstractSpinBox.NoButtons)
     spin_max.setButtonSymbols(QAbstractSpinBox.NoButtons)
     spin_min.setMinimumWidth(spin_width)
@@ -666,15 +1102,24 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     spin_max.setMaximumWidth(spin_width)
     manual_lay.addWidget(spin_min, 1)
     arrow = QLabel('→')
+    arrow.setAlignment(Qt.AlignCenter)
+    arrow.setFixedWidth(arrow_width)
     manual_lay.addWidget(arrow)
     manual_lay.addWidget(spin_max, 1)
+    reserved_height = max(spin_min.sizeHint().height(), spin_max.sizeHint().height())
+    if unit_widget is not None:
+        reserved_height = max(reserved_height, unit_widget.sizeHint().height())
+    range_host.set_reserved_height(reserved_height)
+    summary_page.setMinimumHeight(reserved_height)
+    manual_page.setMinimumHeight(reserved_height)
     stack.addWidget(summary_page)
     stack.addWidget(manual_page)
     lay.addWidget(range_host)
     if unit_widget is not None:
-        unit_widget.setMinimumWidth(64)
-        unit_widget.setMaximumWidth(64)
+        unit_widget.setMinimumWidth(unit_width)
+        unit_widget.setMaximumWidth(unit_width)
         lay.addWidget(unit_widget)
+    lay.addStretch(1)
     return row, dict(
         label=lbl,
         checkbox=chk,
@@ -709,20 +1154,22 @@ def _make_axis_settings_group(
     x_auto_summary="全时段",
     y_auto_summary="自动范围",
     z_auto_summary="自动色阶",
+    include_z=True,
 ):
-    """Build the 3-row "坐标轴设置" QGroupBox and attach widgets to ``owner``.
+    """Build the "坐标轴设置" QGroupBox and attach widgets to ``owner``.
 
     Attaches the following attributes on ``owner``::
 
         chk_x_auto, spin_x_min, spin_x_max
         chk_y_auto, spin_y_min, spin_y_max
-        chk_z_auto, spin_z_floor, spin_z_ceiling
-        combo_amp_unit  (the dB ↔ Linear dropdown on the Z row)
+        chk_z_auto, spin_z_floor, spin_z_ceiling  (when include_z=True)
+        combo_amp_unit  (the dB ↔ Linear dropdown on the Z row, when present)
 
     Wires::
 
         chk_*_auto.toggled → owner._sync_axis_enabled
         combo_amp_unit.currentTextChanged → owner._on_amp_unit_changed
+        (when include_z=True)
 
     Initial values (setValue / setCurrentIndex) are applied with
     blockSignals() so the wired slots do NOT fire during construction —
@@ -737,18 +1184,18 @@ def _make_axis_settings_group(
     """
     g = QGroupBox("坐标轴设置")
     lay = QVBoxLayout(g)
-    lay.setContentsMargins(8, 8, 8, 8)
+    lay.setContentsMargins(8, 8, 0, 8)
     lay.setSpacing(4)
     owner._axis_row_parts = {}
 
     # ---- X row ----
     owner.chk_x_auto = QCheckBox("自动")
-    owner.spin_x_min = QDoubleSpinBox()
+    owner.spin_x_min = _no_buttons(CompactDoubleSpinBox())
     owner.spin_x_min.setRange(0.0, 1e9)
     owner.spin_x_min.setDecimals(2)
     if x_unit:
         owner.spin_x_min.setSuffix(f" {x_unit}")
-    owner.spin_x_max = QDoubleSpinBox()
+    owner.spin_x_max = _no_buttons(CompactDoubleSpinBox())
     owner.spin_x_max.setRange(0.0, 1e9)
     owner.spin_x_max.setDecimals(2)
     if x_unit:
@@ -776,12 +1223,12 @@ def _make_axis_settings_group(
 
     # ---- Y row ----
     owner.chk_y_auto = QCheckBox("自动")
-    owner.spin_y_min = QDoubleSpinBox()
+    owner.spin_y_min = _no_buttons(CompactDoubleSpinBox())
     owner.spin_y_min.setRange(0.0, 1e9)
     owner.spin_y_min.setDecimals(2)
     if y_unit:
         owner.spin_y_min.setSuffix(f" {y_unit}")
-    owner.spin_y_max = QDoubleSpinBox()
+    owner.spin_y_max = _no_buttons(CompactDoubleSpinBox())
     owner.spin_y_max.setRange(0.0, 1e9)
     owner.spin_y_max.setDecimals(2)
     if y_unit:
@@ -803,53 +1250,54 @@ def _make_axis_settings_group(
     lay.addWidget(y_row)
 
     # ---- Z (color scale) row ----
-    owner.chk_z_auto = QCheckBox("自动")
-    owner.spin_z_floor = QDoubleSpinBox()
-    owner.spin_z_floor.setRange(-200.0, 200.0)
-    owner.spin_z_floor.setDecimals(2)
-    owner.spin_z_ceiling = QDoubleSpinBox()
-    owner.spin_z_ceiling.setRange(-200.0, 200.0)
-    owner.spin_z_ceiling.setDecimals(2)
-    owner.combo_amp_unit = QComboBox()
-    owner.combo_amp_unit.addItems(['dB', 'Linear'])
-    for w in (
-        owner.chk_z_auto, owner.spin_z_floor,
-        owner.spin_z_ceiling, owner.combo_amp_unit,
-    ):
-        w.blockSignals(True)
-    owner.chk_z_auto.setChecked(bool(z_default_auto))
-    owner.spin_z_floor.setValue(float(z_default_floor))
-    owner.spin_z_ceiling.setValue(float(z_default_ceiling))
-    owner.combo_amp_unit.setCurrentIndex(0)
-    for w in (
-        owner.chk_z_auto, owner.spin_z_floor,
-        owner.spin_z_ceiling, owner.combo_amp_unit,
-    ):
-        w.blockSignals(False)
-    owner.lbl_z_summary = QLabel(z_auto_summary)
-    z_row, z_parts = _build_axis_row(
-        "色阶:", owner.chk_z_auto,
-        owner.spin_z_floor, owner.spin_z_ceiling,
-        owner.combo_amp_unit, owner.lbl_z_summary,
-    )
-    owner._axis_row_parts['z'] = z_parts
-    owner.axis_z_range_host = z_parts['range_host']
-    lay.addWidget(z_row)
+    if include_z:
+        owner.chk_z_auto = QCheckBox("自动")
+        owner.spin_z_floor = _no_buttons(CompactDoubleSpinBox())
+        owner.spin_z_floor.setRange(-200.0, 200.0)
+        owner.spin_z_floor.setDecimals(2)
+        owner.spin_z_ceiling = _no_buttons(CompactDoubleSpinBox())
+        owner.spin_z_ceiling.setRange(-200.0, 200.0)
+        owner.spin_z_ceiling.setDecimals(2)
+        owner.combo_amp_unit = QComboBox()
+        owner.combo_amp_unit.addItems(['dB', 'Linear'])
+        for w in (
+            owner.chk_z_auto, owner.spin_z_floor,
+            owner.spin_z_ceiling, owner.combo_amp_unit,
+        ):
+            w.blockSignals(True)
+        owner.chk_z_auto.setChecked(bool(z_default_auto))
+        owner.spin_z_floor.setValue(float(z_default_floor))
+        owner.spin_z_ceiling.setValue(float(z_default_ceiling))
+        owner.combo_amp_unit.setCurrentIndex(0)
+        for w in (
+            owner.chk_z_auto, owner.spin_z_floor,
+            owner.spin_z_ceiling, owner.combo_amp_unit,
+        ):
+            w.blockSignals(False)
+        owner.lbl_z_summary = QLabel(z_auto_summary)
+        z_row, z_parts = _build_axis_row(
+            "色阶:", owner.chk_z_auto,
+            owner.spin_z_floor, owner.spin_z_ceiling,
+            owner.combo_amp_unit, owner.lbl_z_summary,
+        )
+        owner._axis_row_parts['z'] = z_parts
+        owner.axis_z_range_host = z_parts['range_host']
+        lay.addWidget(z_row)
 
     # ---- wire signals AFTER seeding initial values ----
     owner.chk_x_auto.toggled.connect(owner._sync_axis_enabled)
     owner.chk_y_auto.toggled.connect(owner._sync_axis_enabled)
-    owner.chk_z_auto.toggled.connect(owner._sync_axis_enabled)
-    owner.combo_amp_unit.currentTextChanged.connect(owner._on_amp_unit_changed)
+    if include_z:
+        owner.chk_z_auto.toggled.connect(owner._sync_axis_enabled)
+        owner.combo_amp_unit.currentTextChanged.connect(owner._on_amp_unit_changed)
     return g
-
 
 class PersistentTop(QWidget):
     """Xaxis / Range / Ticks sections.
 
     R3 #6: the three sections live inside a collapsible container that
-    defaults to collapsed (single-row affordance reading "▶ 图表设置 (时间轴
-    · 范围 · 刻度)"). The collapsed state is persisted via QSettings under
+    defaults to collapsed (single-row affordance reading "▶ 图表设置 (横坐标
+    · 时间范围 · 刻度密度)"). The collapsed state is persisted via QSettings under
     ``_SETTINGS_KEY`` so layouts survive between sessions.
 
     All public attributes / methods documented on the class remain
@@ -878,7 +1326,7 @@ class PersistentTop(QWidget):
         self.btn_collapser.setObjectName("inspectorCollapser")
         self.btn_collapser.setCheckable(True)
         self.btn_collapser.setAutoRaise(True)
-        self.btn_collapser.setText("图表设置 (时间轴 · 范围 · 刻度)")
+        self.btn_collapser.setText("图表设置 (横坐标 · 时间范围 · 刻度密度)")
         self.btn_collapser.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.btn_collapser.setArrowType(Qt.RightArrow)
         self.btn_collapser.setSizePolicy(
@@ -925,21 +1373,27 @@ class PersistentTop(QWidget):
         body_lay.addWidget(g)
 
         # ------- Range group -------
-        g = QGroupBox("范围")
+        g = QGroupBox("时间范围")
+        g.setToolTip("限制参与绘图、统计、单次分析和导出的时间窗口（单位：秒）。")
         fl = QFormLayout(g)
         _configure_form(fl)
         self._range_form = fl
-        self.chk_range = QCheckBox("使用选定范围")
+        self.chk_range = QCheckBox("使用选定时间范围")
+        self.chk_range.setToolTip(
+            "勾选后，只使用开始到结束之间的数据；取消勾选则使用全时段。"
+        )
         fl.addRow(self.chk_range)
         # 紧凑化【1】: 开始 / 结束 share one form row.
-        self.spin_start = QDoubleSpinBox()
+        self.spin_start = _no_buttons(CompactDoubleSpinBox())
         self.spin_start.setDecimals(3)
         self.spin_start.setSuffix(" s")
         self.spin_start.setRange(0, 1e9)
-        self.spin_end = QDoubleSpinBox()
+        self.spin_start.setToolTip("时间范围起点，单位为秒。")
+        self.spin_end = _no_buttons(CompactDoubleSpinBox())
         self.spin_end.setDecimals(3)
         self.spin_end.setSuffix(" s")
         self.spin_end.setRange(0, 1e9)
+        self.spin_end.setToolTip("时间范围终点，单位为秒。")
         self._range_row_host = _pair_field(
             self.spin_start, "– 结束", self.spin_end,
         )
@@ -947,20 +1401,23 @@ class PersistentTop(QWidget):
         body_lay.addWidget(g)
 
         # ------- Tick density group (§6.1 ▸ 刻度) -------
-        g = QGroupBox("刻度")
+        g = QGroupBox("坐标刻度密度")
+        g.setToolTip("控制图表 X/Y 轴主刻度的大致数量；数值越大，刻度越密。")
         fl = QFormLayout(g)
         _configure_form(fl)
         # 紧凑化【1】: X / Y share one form row.
-        self.spin_xt = QSpinBox()
+        self.spin_xt = _no_buttons(QSpinBox())
         self.spin_xt.setRange(3, 30)
         self.spin_xt.setValue(10)
-        self.spin_yt = QSpinBox()
+        self.spin_xt.setToolTip("X 轴主刻度的大致数量，范围 3–30。")
+        self.spin_yt = _no_buttons(QSpinBox())
         self.spin_yt.setRange(3, 20)
         self.spin_yt.setValue(6)
+        self.spin_yt.setToolTip("Y 轴主刻度的大致数量，范围 3–20。")
         self._tick_row_host = _pair_field(
-            self.spin_xt, "Y:", self.spin_yt,
+            self.spin_xt, "Y轴:", self.spin_yt,
         )
-        fl.addRow("X:", self._tick_row_host)
+        fl.addRow("X轴:", self._tick_row_host)
         body_lay.addWidget(g)
 
         self._wire()
@@ -981,7 +1438,7 @@ class PersistentTop(QWidget):
         self._update_range_rows_visible(self.chk_range.isChecked())
 
         # 2026-04-26 R3 紧凑化 fix-3: cap the short numeric fields so toggling
-        # 使用选定范围 / 通道 visibility no longer makes the pane look wider.
+        # 时间范围 / 通道 visibility no longer makes the pane look wider.
         # The label / xlabel fields keep room for representative text.
         for sp in (self.spin_start, self.spin_end, self.spin_xt, self.spin_yt):
             sp.setMaximumWidth(_SHORT_FIELD_MAX_WIDTH)
@@ -1141,7 +1598,7 @@ class FFTContextual(QWidget):
         self.combo_sig = SearchableComboBox()
         # combo_sig hosts long signal names — keep the long-text cap.
         fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
-        self.spin_fs = QDoubleSpinBox()
+        self.spin_fs = _no_buttons(CompactDoubleSpinBox())
         self.spin_fs.setRange(1, 1e6)
         self.spin_fs.setValue(1000)
         self.spin_fs.setSuffix(" Hz")
@@ -1166,7 +1623,7 @@ class FFTContextual(QWidget):
             ['自动', '512', '1024', '2048', '4096', '8192', '16384']
         )
         fl.addRow("NFFT:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
-        self.spin_overlap = QSpinBox()
+        self.spin_overlap = _no_buttons(QSpinBox())
         self.spin_overlap.setRange(0, 90)
         self.spin_overlap.setValue(50)
         self.spin_overlap.setSuffix(" %")
@@ -1188,7 +1645,7 @@ class FFTContextual(QWidget):
             _fit_field(self.combo_avg_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
 
-        self.spin_avg_overlap = QSpinBox()
+        self.spin_avg_overlap = _no_buttons(QSpinBox())
         self.spin_avg_overlap.setRange(0, 95)
         self.spin_avg_overlap.setValue(50)
         self.spin_avg_overlap.setSuffix(" %")
@@ -1221,14 +1678,28 @@ class FFTContextual(QWidget):
         )
         root.addWidget(g)
 
-        g = QGroupBox("选项")
-        gl = QVBoxLayout(g)
-        self.chk_autoscale = QCheckBox("自适应频率范围")
-        self.chk_autoscale.setChecked(True)
-        gl.addWidget(self.chk_autoscale)
-        self.chk_remark = QCheckBox("点击标注")
-        gl.addWidget(self.chk_remark)
-        root.addWidget(g)
+        axis_g = _make_axis_settings_group(
+            self,
+            x_label="频率 (X):", x_unit='Hz',
+            x_default_min=0.0, x_default_max=0.0,
+            y_label="幅值 (Y):", y_unit='',
+            y_default_min=0.0, y_default_max=0.0,
+            x_default_auto=True,
+            y_default_auto=True,
+            x_auto_summary="自适应频率",
+            y_auto_summary="自动范围",
+            include_z=False,
+        )
+        for spin in (self.spin_y_min, self.spin_y_max):
+            spin.setRange(-1e12, 1e12)
+        root.addWidget(axis_g)
+        # Backward-compatible alias for old presets and rendering code:
+        # legacy "autoscale" is now the X-axis auto toggle.
+        self.chk_autoscale = self.chk_x_auto
+        # Backward-compatible state holder for old presets/signals. The
+        # user-facing annotation control now lives on the chart toolbar.
+        self.chk_remark = QCheckBox("点击标注", self)
+        self.chk_remark.setVisible(False)
 
         g = QGroupBox("预设配置")
         gl = QVBoxLayout(g)
@@ -1261,15 +1732,61 @@ class FFTContextual(QWidget):
             lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
         )
         self.chk_remark.toggled.connect(self.remark_toggled)
+        self._sync_axis_enabled()
         # §6.3 Fs rule: spin_fs reflects selected signal's source file Fs.
         # MainWindow will call set_fs via the signal_changed relay.
+
+    def _sync_axis_enabled(self):
+        for key in ('x', 'y'):
+            parts = self._axis_row_parts[key]
+            auto = parts['checkbox'].isChecked()
+            parts['stack'].setCurrentWidget(
+                parts['summary_page'] if auto else parts['manual_page']
+            )
+            parts['summary_page'].setVisible(auto)
+            parts['manual_page'].setVisible(not auto)
+            parts['summary'].setVisible(auto)
+            for w in (parts['spin_min'], parts['arrow'], parts['spin_max']):
+                w.setVisible(not auto)
+            for s in (parts['spin_min'], parts['spin_max']):
+                s.setEnabled(not auto)
+
+    def _apply_axis_params(self, d):
+        if 'autoscale' in d and 'x_auto' not in d:
+            self.chk_x_auto.setChecked(bool(d['autoscale']))
+        for key, attr in (
+            ('x_auto', 'chk_x_auto'),
+            ('y_auto', 'chk_y_auto'),
+        ):
+            if key in d:
+                getattr(self, attr).setChecked(bool(d[key]))
+        for key, attr in (
+            ('x_min', 'spin_x_min'), ('x_max', 'spin_x_max'),
+            ('y_min', 'spin_y_min'), ('y_max', 'spin_y_max'),
+        ):
+            if key in d:
+                try:
+                    getattr(self, attr).setValue(float(d[key]))
+                except (TypeError, ValueError):
+                    pass
+        self._sync_axis_enabled()
 
     def _collect_preset(self):
         return dict(
             window=self.combo_win.currentText(),
             nfft=self.combo_nfft.currentText(),
             overlap=self.spin_overlap.value(),
-            autoscale=self.chk_autoscale.isChecked(),
+            avg_mode=self.combo_avg_mode.currentText(),
+            avg_overlap=self.spin_avg_overlap.value(),
+            amp_y=self.combo_amp_y.currentText(),
+            psd_y=self.combo_psd_y.currentText(),
+            autoscale=self.chk_x_auto.isChecked(),
+            x_auto=self.chk_x_auto.isChecked(),
+            x_min=float(self.spin_x_min.value()),
+            x_max=float(self.spin_x_max.value()),
+            y_auto=self.chk_y_auto.isChecked(),
+            y_min=float(self.spin_y_min.value()),
+            y_max=float(self.spin_y_max.value()),
             remark=self.chk_remark.isChecked(),
         )
 
@@ -1284,10 +1801,26 @@ class FFTContextual(QWidget):
                 self.combo_nfft.setCurrentIndex(i)
         if 'overlap' in d:
             self.spin_overlap.setValue(int(d['overlap']))
-        if 'autoscale' in d:
-            self.chk_autoscale.setChecked(bool(d['autoscale']))
+        self._apply_axis_params(d)
         if 'remark' in d:
             self.chk_remark.setChecked(bool(d['remark']))
+        if 'avg_mode' in d:
+            i = self.combo_avg_mode.findText(str(d['avg_mode']))
+            if i >= 0:
+                self.combo_avg_mode.setCurrentIndex(i)
+        if 'avg_overlap' in d:
+            try:
+                self.spin_avg_overlap.setValue(int(d['avg_overlap']))
+            except (TypeError, ValueError):
+                pass
+        for k, combo in (
+            ('amp_y', self.combo_amp_y),
+            ('psd_y', self.combo_psd_y),
+        ):
+            if k in d:
+                i = combo.findText(str(d[k]))
+                if i >= 0:
+                    combo.setCurrentIndex(i)
 
     def _on_sig_index_changed(self):
         self.signal_changed.emit(self.combo_sig.currentData())
@@ -1314,7 +1847,13 @@ class FFTContextual(QWidget):
             window=self.combo_win.currentText(),
             nfft=None if nfft_text == '自动' else int(nfft_text),
             overlap=self.spin_overlap.value() / 100.0,
-            autoscale=self.chk_autoscale.isChecked(),
+            autoscale=self.chk_x_auto.isChecked(),
+            x_auto=bool(self.chk_x_auto.isChecked()),
+            x_min=float(self.spin_x_min.value()),
+            x_max=float(self.spin_x_max.value()),
+            y_auto=bool(self.chk_y_auto.isChecked()),
+            y_min=float(self.spin_y_min.value()),
+            y_max=float(self.spin_y_max.value()),
             remark=self.chk_remark.isChecked(),
         )
 
@@ -1353,8 +1892,7 @@ class FFTContextual(QWidget):
                 self.spin_overlap.setValue(int(d['overlap']))
             except (TypeError, ValueError):
                 pass
-        if 'autoscale' in d:
-            self.chk_autoscale.setChecked(bool(d['autoscale']))
+        self._apply_axis_params(d)
         if 'remark' in d:
             self.chk_remark.setChecked(bool(d['remark']))
         if 'avg_mode' in d:
@@ -1425,12 +1963,12 @@ class OrderContextual(QWidget):
         fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
         self.combo_rpm = SearchableComboBox()
         fl.addRow("转速:", _fit_field(self.combo_rpm, max_width=_LONG_FIELD_MAX_WIDTH))
-        self.spin_fs = QDoubleSpinBox()
+        self.spin_fs = _no_buttons(CompactDoubleSpinBox())
         self.spin_fs.setRange(1, 1e6)
         self.spin_fs.setValue(1000)
         self.spin_fs.setSuffix(" Hz")
         fl.addRow("Fs:", _fit_field(self.spin_fs, max_width=_SHORT_FIELD_MAX_WIDTH))
-        self.spin_rf = QDoubleSpinBox()
+        self.spin_rf = _no_buttons(CompactDoubleSpinBox())
         self.spin_rf.setRange(0.0001, 10000)
         self.spin_rf.setDecimals(4)
         self.spin_rf.setValue(1)
@@ -1441,16 +1979,16 @@ class OrderContextual(QWidget):
         g = QGroupBox("谱参数")
         fl = QFormLayout(g)
         _configure_form(fl)
-        self.spin_mo = QSpinBox()
+        self.spin_mo = _no_buttons(QSpinBox())
         self.spin_mo.setRange(1, 100)
         self.spin_mo.setValue(20)
         fl.addRow("最大阶次:", _fit_field(self.spin_mo))
-        self.spin_order_res = QDoubleSpinBox()
+        self.spin_order_res = _no_buttons(CompactDoubleSpinBox())
         self.spin_order_res.setRange(0.01, 1.0)
         self.spin_order_res.setValue(0.1)
         self.spin_order_res.setSingleStep(0.05)
         fl.addRow("阶次分辨率:", _fit_field(self.spin_order_res))
-        self.spin_time_res = QDoubleSpinBox()
+        self.spin_time_res = _no_buttons(CompactDoubleSpinBox())
         self.spin_time_res.setRange(0.01, 1.0)
         self.spin_time_res.setValue(0.05)
         self.spin_time_res.setSuffix(" s")
@@ -1464,7 +2002,7 @@ class OrderContextual(QWidget):
         # 2026-04-28 axis-settings + COT migration plan removed the
         # frequency-domain branch). spin_samples_per_rev is therefore
         # always enabled — no companion algorithm picker gates it.
-        self.spin_samples_per_rev = QSpinBox()
+        self.spin_samples_per_rev = _no_buttons(QSpinBox())
         self.spin_samples_per_rev.setRange(64, 2048)
         self.spin_samples_per_rev.setValue(256)
         self.spin_samples_per_rev.setToolTip("COT 每转角度采样数")
@@ -1596,6 +2134,20 @@ class OrderContextual(QWidget):
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
             nfft=self.combo_nfft.currentText(),
+            amplitude_mode=(
+                'Amplitude dB' if self.combo_amp_unit.currentText() == 'dB'
+                else 'Amplitude'
+            ),
+            samples_per_rev=int(self.spin_samples_per_rev.value()),
+            x_auto=bool(self.chk_x_auto.isChecked()),
+            x_min=float(self.spin_x_min.value()),
+            x_max=float(self.spin_x_max.value()),
+            y_auto=bool(self.chk_y_auto.isChecked()),
+            y_min=float(self.spin_y_min.value()),
+            y_max=float(self.spin_y_max.value()),
+            z_auto=bool(self.chk_z_auto.isChecked()),
+            z_floor=float(self.spin_z_floor.value()),
+            z_ceiling=float(self.spin_z_ceiling.value()),
         )
 
     def _apply_preset(self, d):
@@ -1611,6 +2163,11 @@ class OrderContextual(QWidget):
             i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
+        if 'samples_per_rev' in d:
+            try:
+                self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
+            except (TypeError, ValueError):
+                pass
         # ---- Wave 3 (2026-04-28 plan): legacy + new axis-key compat ----
         # Legacy 'dynamic' key compat — translate to z_floor/ceiling/auto.
         # Preferred path: explicit z_floor/ceiling/auto keys override the
@@ -1846,7 +2403,7 @@ class FFTTimeContextual(QWidget):
       ``chk_y_auto`` / ``spin_y_min`` / ``spin_y_max`` — Y frequency (Hz);
       ``chk_z_auto`` / ``spin_z_floor`` / ``spin_z_ceiling`` — Z (color
       scale); ``combo_amp_unit`` — dB ↔ Linear (replaces the legacy
-      ``combo_amp_mode``).
+      ``combo_amp_mode``). All four feed the spectrogram render.
     - Backward-compat aliases for downstream MainWindow callers (Wave 5
       will retire the legacy names): ``chk_freq_auto`` IS ``chk_y_auto``;
       ``spin_freq_min`` IS ``spin_y_min``; ``spin_freq_max`` IS
@@ -1905,7 +2462,7 @@ class FFTTimeContextual(QWidget):
         _configure_form(fl)
         self.combo_sig = SearchableComboBox()
         fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
-        self.spin_fs = QDoubleSpinBox()
+        self.spin_fs = _no_buttons(CompactDoubleSpinBox())
         self.spin_fs.setRange(1, 1e6)
         self.spin_fs.setValue(1000)
         self.spin_fs.setSuffix(" Hz")
@@ -1927,7 +2484,7 @@ class FFTTimeContextual(QWidget):
             ['hanning', 'flattop', 'hamming', 'blackman', 'kaiser', 'bartlett']
         )
         fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
-        self.spin_overlap = QSpinBox()
+        self.spin_overlap = _no_buttons(QSpinBox())
         # HEAD-style smoothness defaults: 88% (closest integer to the 87.5%
         # spectrogram-smoothness target documented in the FFT-vs-Time
         # integration plan) with a 95% ceiling so users can dial up the
@@ -1950,7 +2507,7 @@ class FFTTimeContextual(QWidget):
         g = QGroupBox("幅值")
         fl = QFormLayout(g)
         _configure_form(fl)
-        self.spin_db_ref = QDoubleSpinBox()
+        self.spin_db_ref = _no_buttons(CompactDoubleSpinBox())
         self.spin_db_ref.setRange(1e-9, 1e9)
         self.spin_db_ref.setDecimals(6)
         self.spin_db_ref.setValue(1.0)
@@ -2066,9 +2623,10 @@ class FFTTimeContextual(QWidget):
         self.btn_force.clicked.connect(self.force_recompute_requested)
         self.btn_export_full.clicked.connect(self.export_full_requested)
         self.btn_export_main.clicked.connect(self.export_main_requested)
-        # Wave 4: chk_freq_auto / spin_freq_min/max now alias the X row of
-        # the 坐标轴设置 group; their enabled state is driven by
-        # _sync_axis_enabled, which the helper wired to chk_x_auto.toggled.
+        # Wave 4/B polish: chk_freq_auto / spin_freq_min/max alias the
+        # Y-frequency row of the 坐标轴设置 group; their enabled state is
+        # driven by _sync_axis_enabled, which the helper wired to
+        # chk_y_auto.toggled.
         # Seed the initial enabled state once at __init__ end (per the
         # 2026-04-26 init-sync lesson).
         self._sync_axis_enabled()
@@ -2211,7 +2769,7 @@ class FFTTimeContextual(QWidget):
     # QFormLayout block) are gone, so these dicts can no longer be applied
     # naively. _apply_preset performs read-side migration (legacy keys are
     # translated to the new chk_z_auto / spin_z_floor / spin_z_ceiling /
-    # combo_amp_unit + chk_x_auto / spin_x_min/max), so the literals here
+    # combo_amp_unit + chk_y_auto / spin_y_min/max), so the literals here
     # survive untouched. Wave 5 / 6 will rewrite them in the new shape.
     # DEPRECATED key form; survives via _apply_preset legacy migration on load.
     _BUILTIN_PRESETS = {
@@ -2276,6 +2834,17 @@ class FFTTimeContextual(QWidget):
             'freq_max': 0.0,
             'dynamic': cfg.get('dynamic', '80 dB'),
             'cmap': cfg.get('cmap', 'turbo'),
+            'x_auto': True,
+            'x_min': 0.0,
+            'x_max': 0.0,
+            'y_auto': cfg.get('freq_auto', True),
+            'y_min': 0.0,
+            'y_max': 0.0,
+            'z_auto': cfg.get('dynamic') == 'Auto',
+            'z_floor': (
+                -80.0 if cfg.get('dynamic', '80 dB') != '60 dB' else -60.0
+            ),
+            'z_ceiling': 0.0,
         }
 
     def _collect_preset(self):
@@ -2307,6 +2876,15 @@ class FFTTimeContextual(QWidget):
             freq_max=float(self.spin_y_max.value()),
             dynamic=dynamic_legacy,
             cmap=self.combo_cmap.currentText(),
+            x_auto=bool(self.chk_x_auto.isChecked()),
+            x_min=float(self.spin_x_min.value()),
+            x_max=float(self.spin_x_max.value()),
+            y_auto=bool(self.chk_y_auto.isChecked()),
+            y_min=float(self.spin_y_min.value()),
+            y_max=float(self.spin_y_max.value()),
+            z_auto=bool(self.chk_z_auto.isChecked()),
+            z_floor=float(self.spin_z_floor.value()),
+            z_ceiling=float(self.spin_z_ceiling.value()),
         )
 
     def _apply_preset(self, d):
@@ -2314,7 +2892,7 @@ class FFTTimeContextual(QWidget):
 
         Wave 4: legacy ``amplitude_mode`` / ``dynamic`` / ``freq_*`` keys
         are migrated to the new chk_z_auto / spin_z_floor / spin_z_ceiling
-        / combo_amp_unit / chk_x_auto / spin_x_min/max widgets. New keys
+        / combo_amp_unit / chk_y_auto / spin_y_min/max widgets. New keys
         (z_auto, z_floor, z_ceiling, x_auto, x_min, x_max, y_*) are
         applied directly when present and override the legacy translation.
         """

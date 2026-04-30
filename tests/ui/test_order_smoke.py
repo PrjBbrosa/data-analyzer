@@ -80,3 +80,35 @@ def test_open_batch_drops_stale_preset_signal(qtbot, monkeypatch):
         '失效' in msg or 'stale' in msg.lower()
         for kind, msg in toast_msgs
     ), f"expected stale-preset toast, got {toast_msgs}"
+
+
+def test_open_batch_allows_empty_file_map(qtbot, monkeypatch):
+    """Batch can start from disk paths, so the sheet must open with no files."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    captured = {}
+
+    class FakeSheet:
+        def __init__(self, parent, files, current_preset=None):
+            captured["files"] = files
+            captured["current_preset"] = current_preset
+
+        def exec_(self):
+            return 0
+
+    toast_msgs = []
+    monkeypatch.setattr(
+        'mf4_analyzer.ui.drawers.batch.BatchSheet', FakeSheet,
+    )
+    monkeypatch.setattr(
+        win, 'toast',
+        lambda msg, kind='info': toast_msgs.append((kind, msg)),
+    )
+
+    win.open_batch()
+
+    assert captured["files"] == {}
+    assert captured["current_preset"] is None
+    assert not any("请先加载文件" in msg for _kind, msg in toast_msgs)

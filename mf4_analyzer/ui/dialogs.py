@@ -2,11 +2,11 @@
 import numpy as np
 
 from PyQt5.QtWidgets import (
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 from ..signal import ChannelMath
+from .widgets.compact_spinbox import CompactDoubleSpinBox
 from .widgets.searchable_combo import SearchableComboBox
 
 
@@ -47,7 +48,8 @@ class ChannelEditorDialog(QDialog):
         self.combo_op.addItems(["d/dt", "∫dt", "× 系数", "+ 偏移", "滑动平均", "|x| 绝对值"]);
         gl.addWidget(self.combo_op, 1, 1)
         gl.addWidget(QLabel("参数:"), 2, 0)
-        self.spin_p = QDoubleSpinBox();
+        self.spin_p = CompactDoubleSpinBox();
+        self.spin_p.setButtonSymbols(QAbstractSpinBox.NoButtons);
         self.spin_p.setRange(-1e12, 1e12);
         self.spin_p.setValue(1);
         gl.addWidget(self.spin_p, 2, 1)
@@ -245,13 +247,15 @@ class AxisEditDialog(QDialog):
             lo, hi = ax.get_ylim()
             label = ax.get_ylabel()
 
-        self.spin_min = QDoubleSpinBox()
+        self.spin_min = CompactDoubleSpinBox()
+        self.spin_min.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_min.setRange(-1e15, 1e15)
         self.spin_min.setDecimals(4)
         self.spin_min.setValue(lo)
         layout.addRow("最小值:", self.spin_min)
 
-        self.spin_max = QDoubleSpinBox()
+        self.spin_max = CompactDoubleSpinBox()
+        self.spin_max.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_max.setRange(-1e15, 1e15)
         self.spin_max.setDecimals(4)
         self.spin_max.setValue(hi)

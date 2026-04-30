@@ -2,9 +2,11 @@
 from PyQt5.QtCore import Qt, QEvent, QPoint
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
-    QApplication, QDialog, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton,
-    QVBoxLayout,
+    QAbstractSpinBox, QApplication, QDialog, QHBoxLayout, QLabel,
+    QPushButton, QVBoxLayout,
 )
+
+from ..widgets.compact_spinbox import CompactDoubleSpinBox
 
 # Geometry-clipping constants for ``show_at``: keep popover this many pixels
 # inside the available screen rect, and leave this much vertical gap when
@@ -43,7 +45,8 @@ class RebuildTimePopover(QDialog):
         root.addWidget(QLabel(f"目标：[{target_filename}]"))
         h = QHBoxLayout()
         h.addWidget(QLabel("Fs:"))
-        self.spin_fs = QDoubleSpinBox()
+        self.spin_fs = CompactDoubleSpinBox()
+        self.spin_fs.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin_fs.setRange(1, 1e6)
         self.spin_fs.setValue(current_fs)
         self.spin_fs.setSuffix(" Hz")

@@ -120,6 +120,67 @@ def test_batch_order_time_csv_shape(tmp_path):
     assert len(df) > 0
 
 
+def test_batch_heatmap_image_applies_xyz_axis_params(tmp_path, monkeypatch):
+    """Batch PNG rendering must consume output X/Y/Z axis settings."""
+    from matplotlib.figure import Figure
+
+    df = pd.DataFrame({
+        "time_s": [0.0, 1.0, 0.0, 1.0],
+        "order": [1.0, 1.0, 2.0, 2.0],
+        "amplitude": [0.1, 0.2, 0.3, 0.4],
+    })
+    captured = {}
+
+    def spy_savefig(self, path, *args, **kwargs):
+        ax = self.axes[0]
+        captured["xlim"] = ax.get_xlim()
+        captured["ylim"] = ax.get_ylim()
+        captured["clim"] = ax.images[0].get_clim()
+
+    monkeypatch.setattr(Figure, "savefig", spy_savefig)
+
+    BatchRunner._write_image(
+        ("order_time", df),
+        tmp_path / "axis.png",
+        params={
+            "x_auto": False, "x_min": 0.25, "x_max": 0.75,
+            "y_auto": False, "y_min": 1.25, "y_max": 1.75,
+            "z_auto": False, "z_floor": -40.0, "z_ceiling": -5.0,
+        },
+    )
+
+    assert captured["xlim"] == (0.25, 0.75)
+    assert captured["ylim"] == (1.25, 1.75)
+    assert captured["clim"] == (-40.0, -5.0)
+
+
+def test_batch_heatmap_image_can_render_linear_z_scale(tmp_path, monkeypatch):
+    """Batch OUTPUT Z unit should choose between dB and Linear rendering."""
+    from matplotlib.figure import Figure
+
+    df = pd.DataFrame({
+        "time_s": [0.0, 1.0, 0.0, 1.0],
+        "frequency_hz": [10.0, 10.0, 20.0, 20.0],
+        "amplitude": [0.25, 0.5, 1.0, 2.0],
+    })
+    captured = {}
+
+    def spy_savefig(self, path, *args, **kwargs):
+        captured["matrix"] = self.axes[0].images[0].get_array().copy()
+        captured["colorbar_label"] = self.axes[1].get_ylabel()
+
+    monkeypatch.setattr(Figure, "savefig", spy_savefig)
+
+    BatchRunner._write_image(
+        ("fft_time", df),
+        tmp_path / "linear.png",
+        params={"amplitude_mode": "amplitude", "z_auto": True},
+    )
+
+    assert np.asarray(captured["matrix"]).max() == 2.0
+    assert captured["colorbar_label"] == "Amplitude"
+
+
 # ---------------------------------------------------------------------------
 # Wave 2: BatchProgressEvent + cancellation + loader injection (verbatim from
 # plan §Wave 2 Step 1 / spec §3.2, §4.3, §4.4, §4.5, §7, §8).
@@ -490,6 +551,40 @@ def test_fft_time_exports_long_format_dataframe(tmp_path):
     # nfft=256, overlap=0.5 -> hop=128 -> at least 14 frames.
     assert df["time_s"].nunique() > 1
     assert df["frequency_hz"].nunique() == 256 // 2 + 1  # one-sided bins
+
+
+def test_fft_time_batch_auto_rebuilds_nonuniform_time_axis(tmp_path):
+    """Batch FFT-vs-Time should not block on jittered MF4 timestamps."""
+    fs = 500.0
+    n = 2048
+    nominal_dt = 1.0 / fs
+    dts = np.resize(np.array([1.2 * nominal_dt, 0.8 * nominal_dt]), n - 1)
+    t = np.concatenate(([0.0], np.cumsum(dts)))
+    sig = np.sin(2 * np.pi * 40.0 * (np.arange(n, dtype=float) / fs))
+    df = pd.DataFrame({"Time": t, "sig": sig})
+    fd = FileData(tmp_path / "jittered.mf4", df, list(df.columns), {}, idx=0)
+    assert fd.is_time_axis_uniform() is False
+
+    preset = AnalysisPreset.free_config(
+        name="batch fft_time jittered",
+        method="fft_time",
+        target_signals=("sig",),
+        params={
+            "fs": fd.fs, "window": "hanning", "nfft": 256,
+            "overlap": 0.5, "remove_mean": True,
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+    import dataclasses
+    preset = dataclasses.replace(preset, file_ids=(1,))
+
+    result = BatchRunner({1: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    assert result.blocked == []
+    data = pd.read_csv(result.items[0].data_path)
+    assert list(data.columns) == ["time_s", "frequency_hz", "amplitude"]
+    assert data["time_s"].nunique() > 1
 
 
 def test_fft_time_exports_image(tmp_path):

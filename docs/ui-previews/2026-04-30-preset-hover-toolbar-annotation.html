@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>预设配置悬浮说明与标注工具栏方案</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #647086;
+      --line: #d7e0ec;
+      --line-strong: #b8c7da;
+      --blue: #0b73e7;
+      --blue-2: #2563eb;
+      --green: #0f9f6e;
+      --amber: #b7791f;
+      --red: #d64545;
+      --soft-blue: #eaf3ff;
+      --soft-green: #e9f9f1;
+      --soft-amber: #fff6df;
+      --toolbar: #f8fbff;
+      --shadow: 0 18px 42px rgba(31, 45, 71, .16);
+      --glass-shadow: 0 20px 58px rgba(9, 30, 66, .22);
+      --radius: 8px;
+      font-family: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, #eaf1fb 0, #f8fbff 260px, #f4f7fb 100%),
+        var(--bg);
+      font-size: 14px;
+    }
+
+    main {
+      width: min(1420px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 22px 0 32px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0 0 7px;
+      font-size: 23px;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+      max-width: 860px;
+    }
+
+    .scope {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      min-width: 330px;
+    }
+
+    .scope span {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, .8);
+      border-radius: 999px;
+      padding: 7px 10px;
+      color: #334155;
+      white-space: nowrap;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: minmax(680px, 1fr) 380px;
+      min-height: 760px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .canvas-side {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-width: 0;
+      background: #fbfdff;
+      border-right: 1px solid var(--line);
+    }
+
+    .chart-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 76px;
+      padding: 11px 12px;
+      background: linear-gradient(180deg, #fbfdff, #f3f7fc);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tool {
+      width: 54px;
+      height: 54px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: #26364f;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.35);
+    }
+
+    .tool svg {
+      width: 26px;
+      height: 26px;
+      stroke-width: 2.4;
+    }
+
+    .tool.disabled {
+      opacity: .45;
+      background: #f3f6fa;
+    }
+
+    .tool.active {
+      border-color: var(--blue);
+      background: #eaf3ff;
+      color: var(--blue);
+      box-shadow: 0 0 0 2px rgba(11,115,231,.08);
+    }
+
+    .divider {
+      width: 1px;
+      height: 34px;
+      background: var(--line);
+      margin: 0 3px;
+    }
+
+    .toolbar-title {
+      margin-left: 18px;
+      color: var(--blue);
+      font-size: 22px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .toolbar-spacer { flex: 1; }
+
+    .annotate-zone {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 54px;
+      padding: 7px;
+      border: 1px dashed rgba(11,115,231,.35);
+      border-radius: 8px;
+      background: rgba(234,243,255,.55);
+    }
+
+    .annotate-label {
+      padding: 0 6px;
+      font-size: 13px;
+      color: #3b4b63;
+      white-space: nowrap;
+    }
+
+    .anno {
+      height: 38px;
+      min-width: 78px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: #fff;
+      color: #334155;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .anno svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .anno.active {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+      box-shadow: 0 8px 18px rgba(11,115,231,.22);
+    }
+
+    .mode-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+    }
+
+    .mode-btn {
+      height: 34px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: #46556d;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .mode-btn.active {
+      border-color: var(--blue);
+      background: #eaf3ff;
+      color: #0b63ce;
+    }
+
+    .plot-wrap {
+      padding: 16px;
+      min-height: 0;
+    }
+
+    .plot {
+      position: relative;
+      height: 100%;
+      min-height: 520px;
+      border: 1px solid #ccd7e6;
+      border-radius: 7px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.95), rgba(247,250,255,.95)),
+        repeating-linear-gradient(0deg, transparent 0 43px, rgba(148,163,184,.20) 44px),
+        repeating-linear-gradient(90deg, transparent 0 58px, rgba(148,163,184,.16) 59px);
+      overflow: hidden;
+    }
+
+    .plot::before {
+      content: "";
+      position: absolute;
+      left: 70px;
+      right: 44px;
+      top: 56px;
+      bottom: 62px;
+      border-left: 1px solid #94a3b8;
+      border-bottom: 1px solid #94a3b8;
+      background:
+        linear-gradient(110deg, transparent 0 13%, rgba(37,99,235,.60) 14%, rgba(14,165,233,.46) 18%, transparent 24%),
+        linear-gradient(160deg, transparent 0 43%, rgba(16,185,129,.42) 44%, rgba(245,158,11,.42) 50%, transparent 59%),
+        radial-gradient(circle at 72% 34%, rgba(239,68,68,.55) 0 9px, transparent 17px),
+        radial-gradient(circle at 31% 67%, rgba(11,115,231,.45) 0 9px, transparent 18px);
+      opacity: .9;
+    }
+
+    .plot.heatmap::before {
+      background:
+        linear-gradient(90deg, rgba(9,83,150,.78), rgba(14,165,233,.35), rgba(16,185,129,.38), rgba(250,204,21,.55), rgba(239,68,68,.62)),
+        repeating-linear-gradient(0deg, transparent 0 31px, rgba(255,255,255,.18) 32px);
+      filter: saturate(1.05);
+    }
+
+    .plot.order::before {
+      background:
+        linear-gradient(8deg, transparent 0 24%, rgba(11,115,231,.52) 25%, transparent 30%),
+        linear-gradient(13deg, transparent 0 39%, rgba(245,158,11,.48) 40%, transparent 46%),
+        linear-gradient(16deg, transparent 0 54%, rgba(239,68,68,.42) 55%, transparent 61%),
+        radial-gradient(circle at 48% 50%, rgba(16,185,129,.38), transparent 90px);
+    }
+
+    .axis-note {
+      position: absolute;
+      z-index: 2;
+      padding: 7px 9px;
+      border: 1px solid rgba(100,116,139,.25);
+      border-radius: 7px;
+      background: rgba(255,255,255,.78);
+      color: #3b4b63;
+      backdrop-filter: blur(10px);
+      font-size: 12px;
+    }
+
+    .axis-note.x { left: 44%; bottom: 17px; }
+    .axis-note.y { left: 12px; top: 46%; transform: rotate(-90deg); }
+    .axis-note.z { right: 18px; top: 58px; }
+
+    .pin {
+      position: absolute;
+      z-index: 4;
+      left: 57%;
+      top: 33%;
+      display: grid;
+      gap: 4px;
+      color: var(--blue);
+      font-weight: 700;
+      pointer-events: none;
+    }
+
+    .pin::before {
+      content: "";
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: var(--blue);
+      box-shadow: 0 0 0 6px rgba(11,115,231,.14);
+    }
+
+    .pin span {
+      transform: translate(-22px, 0);
+      padding: 4px 7px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.82);
+      border: 1px solid rgba(11,115,231,.22);
+      backdrop-filter: blur(8px);
+      white-space: nowrap;
+    }
+
+    .status-strip {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 10px 16px;
+      border-top: 1px solid var(--line);
+      background: #fff;
+      color: #526075;
+    }
+
+    .status-strip b { color: #26364f; }
+
+    .inspector {
+      position: relative;
+      z-index: 3;
+      padding: 14px 14px 20px;
+      background: linear-gradient(180deg, #eef5ff, #f8fbff 42%, #ffffff);
+      min-width: 0;
+    }
+
+    .group {
+      margin-bottom: 14px;
+      padding-top: 8px;
+    }
+
+    .group h2 {
+      margin: 0 0 11px;
+      padding: 0 0 8px;
+      border-bottom: 1px solid #dfe7f2;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    .field {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 8px;
+    }
+
+    .field label {
+      color: #374151;
+      text-align: right;
+      font-weight: 600;
+    }
+
+    .control {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      padding: 7px 10px;
+      color: #172033;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin: 7px 0;
+      color: #334155;
+      font-weight: 600;
+    }
+
+    .box {
+      width: 18px;
+      height: 18px;
+      border: 1px solid #94a3b8;
+      border-radius: 5px;
+      background: #fff;
+    }
+
+    .box.on {
+      border-color: var(--blue);
+      background: var(--blue);
+      position: relative;
+    }
+
+    .box.on::after {
+      content: "";
+      position: absolute;
+      left: 5px;
+      top: 2px;
+      width: 5px;
+      height: 10px;
+      border: solid #fff;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+
+    .preset-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 9px;
+      margin-top: 10px;
+    }
+
+    .preset {
+      position: relative;
+      height: 64px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #fff;
+      color: #064a98;
+      font-size: 17px;
+      font-weight: 800;
+      cursor: default;
+    }
+
+    .preset::after {
+      content: attr(data-badge);
+      position: absolute;
+      right: 8px;
+      top: 7px;
+      min-width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--green);
+      box-shadow: 0 0 0 4px rgba(15,159,110,.12);
+    }
+
+    .preset.unsaved::after {
+      background: var(--amber);
+      box-shadow: 0 0 0 4px rgba(183,121,31,.14);
+    }
+
+    .preset.empty::after {
+      background: #cbd5e1;
+      box-shadow: none;
+    }
+
+    .preset:hover {
+      border-color: var(--blue);
+      box-shadow: 0 8px 22px rgba(11,115,231,.16);
+    }
+
+    .glass-popover {
+      position: absolute;
+      z-index: 20;
+      top: auto;
+      bottom: 78px;
+      left: -230px;
+      width: 360px;
+      padding: 13px;
+      border: 1px solid rgba(255,255,255,.68);
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.96), rgba(239,246,255,.90)),
+        rgba(255,255,255,.88);
+      box-shadow: var(--glass-shadow), 0 0 0 1px rgba(148,163,184,.18);
+      backdrop-filter: blur(22px) saturate(1.25);
+      opacity: 0;
+      transform: translateY(6px);
+      pointer-events: none;
+      transition: opacity .16s ease, transform .16s ease;
+    }
+
+    .preset-row:has(.preset:nth-child(2):hover) .glass-popover { left: -110px; }
+    .preset-row:has(.preset:nth-child(3):hover) .glass-popover { left: -20px; }
+    .preset-row:has(.preset:hover) .glass-popover {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    body.preview-hover .glass-popover {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    body.preview-hover .preset:first-child {
+      border-color: var(--blue);
+      box-shadow: 0 8px 22px rgba(11,115,231,.16);
+    }
+
+    .pop-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 9px;
+    }
+
+    .pop-title {
+      font-size: 16px;
+      font-weight: 800;
+      color: #10213d;
+    }
+
+    .pop-sub {
+      margin-top: 3px;
+      color: #647086;
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--soft-green);
+      color: #047857;
+      font-weight: 700;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .saved-grid {
+      display: grid;
+      gap: 8px;
+    }
+
+    .saved-section {
+      border: 1px solid rgba(203,213,225,.82);
+      background: rgba(255,255,255,.56);
+      border-radius: 7px;
+      padding: 9px;
+    }
+
+    .saved-section h3 {
+      margin: 0 0 6px;
+      color: #1f3b63;
+      font-size: 12px;
+    }
+
+    .chips {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    .chip {
+      --chip-bg: #f1f6fc;
+      --chip-border: rgba(203,213,225,.82);
+      --chip-key: #61708a;
+      --chip-value: #0b73e7;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 26px;
+      padding: 4px 7px;
+      border-radius: 999px;
+      background: var(--chip-bg);
+      color: var(--chip-value);
+      font-size: 12px;
+      border: 1px solid var(--chip-border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.64);
+      white-space: nowrap;
+    }
+
+    .chip .k {
+      color: var(--chip-key);
+      font-weight: 600;
+    }
+
+    .chip .v {
+      color: var(--chip-value);
+      font-weight: 800;
+    }
+
+    .chip.warn {
+      --chip-border: rgba(183,121,31,.5);
+    }
+
+    .pop-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 10px;
+      padding-top: 9px;
+      border-top: 1px solid rgba(203,213,225,.7);
+      color: #526075;
+      font-size: 12px;
+    }
+
+    .legend-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      color: #526075;
+      font-size: 12px;
+    }
+
+    .dot {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--green);
+    }
+
+    .dot.warn::before { background: var(--amber); }
+    .dot.empty::before { background: #cbd5e1; }
+
+    .note {
+      margin-top: 16px;
+      padding: 12px;
+      border: 1px solid #cfe1fb;
+      border-radius: 8px;
+      background: #f2f7ff;
+      color: #34445d;
+      line-height: 1.58;
+    }
+
+    .note b {
+      color: #0b63ce;
+    }
+
+    @media (max-width: 1120px) {
+      main { width: calc(100vw - 24px); }
+      header { display: block; }
+      .scope { justify-content: flex-start; margin-top: 12px; }
+      .app { grid-template-columns: 1fr; }
+      .canvas-side { border-right: none; border-bottom: 1px solid var(--line); }
+      .chart-toolbar { flex-wrap: wrap; }
+      .toolbar-spacer { flex-basis: 100%; height: 0; }
+      .annotate-zone { width: 100%; justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>预设配置悬浮说明 + 标注工具栏方案</h1>
+        <p class="lead">
+          目标：预设按钮保存完整分析快照；鼠标停留时用磨砂透明浮层说明“保存了什么、是否与当前参数一致、坐标轴状态”；标注功能从右侧参数区移到图表顶部工具栏，并为 FFT、FFT vs Time、Order Time 预留统一入口。
+        </p>
+      </div>
+      <div class="scope">
+        <span>左键加载配置</span>
+        <span>右键管理配置</span>
+        <span>Hover 查看状态</span>
+      </div>
+    </header>
+
+    <section class="app">
+      <div class="canvas-side">
+        <div class="chart-toolbar">
+          <button class="tool" title="复位视图"><span data-lucide="home"></span></button>
+          <button class="tool disabled" title="后退"><span data-lucide="arrow-left"></span></button>
+          <button class="tool disabled" title="前进"><span data-lucide="arrow-right"></span></button>
+          <div class="divider"></div>
+          <button class="tool active" title="移动曲线"><span data-lucide="move"></span></button>
+          <button class="tool" title="框选缩放"><span data-lucide="zoom-in"></span></button>
+          <button class="tool" title="保存图片"><span data-lucide="save"></span></button>
+          <button class="tool" title="复制图片"><span data-lucide="copy"></span></button>
+          <div class="toolbar-title" id="toolbarTitle">移动曲线</div>
+          <div class="toolbar-spacer"></div>
+          <div class="annotate-zone">
+            <span class="annotate-label">标注</span>
+            <button class="anno active" id="annoToggle" title="点击启用/关闭图中标注">
+              <span data-lucide="map-pin"></span>
+              开启
+            </button>
+            <button class="anno" title="清除当前图上的标注">
+              <span data-lucide="eraser"></span>
+              清除
+            </button>
+          </div>
+        </div>
+
+        <div class="mode-row">
+          <button class="mode-btn active" data-mode="fft">FFT</button>
+          <button class="mode-btn" data-mode="fft_time">FFT vs Time</button>
+          <button class="mode-btn" data-mode="order_time">Order Time</button>
+          <span style="color:#647086;">顶部标注按钮跟随当前图表模式生效，不再占用右侧参数区。</span>
+        </div>
+
+        <div class="plot-wrap">
+          <div class="plot" id="plot">
+            <div class="axis-note y" id="axisY">Amplitude / PSD</div>
+            <div class="axis-note x" id="axisX">Frequency (Hz)</div>
+            <div class="axis-note z" id="axisZ">Z: 不适用</div>
+            <div class="pin" id="pin"><span>Peak 128.0 Hz</span></div>
+          </div>
+        </div>
+
+        <div class="status-strip">
+          <span><b id="modeName">FFT</b></span>
+          <span id="statusText">标注开启：点击曲线峰值或任意点添加说明。</span>
+        </div>
+      </div>
+
+      <aside class="inspector">
+        <div class="group">
+          <h2>谱参数</h2>
+          <div class="field"><label>窗函数</label><div class="control">hanning</div></div>
+          <div class="field"><label>NFFT</label><div class="control">4096</div></div>
+          <div class="field"><label>重叠</label><div class="control">50%</div></div>
+          <div class="field"><label>平均模式</label><div class="control">线性平均</div></div>
+          <div class="field"><label>平均重叠率</label><div class="control">75%</div></div>
+          <div class="field"><label>Amplitude 轴</label><div class="control">Linear</div></div>
+          <div class="field"><label>PSD 轴</label><div class="control">dB</div></div>
+        </div>
+
+        <div class="group">
+          <h2>坐标轴设置</h2>
+          <div class="field"><label>X</label><div class="control">手动 0 → 600 Hz</div></div>
+          <div class="field"><label>Y</label><div class="control">自动范围</div></div>
+          <div class="field"><label>Z</label><div class="control">dB -80 → 0</div></div>
+        </div>
+
+        <div class="group">
+          <h2>选项</h2>
+          <div class="check"><span class="box on"></span>自适应频率范围</div>
+        </div>
+
+        <div class="group">
+          <h2>预设配置</h2>
+          <div class="preset-row">
+            <button class="preset">配置 1</button>
+            <button class="preset unsaved">配置 2</button>
+            <button class="preset empty">配置 3</button>
+
+            <div class="glass-popover">
+              <div class="pop-head">
+                <div>
+                  <div class="pop-title">配置 1 · 诊断常用</div>
+                  <div class="pop-sub">最后保存：今天 14:42 · 来源：FFT</div>
+                </div>
+                <span class="badge">已保存</span>
+              </div>
+
+              <div class="saved-grid">
+                <div class="saved-section">
+                  <h3>分析参数</h3>
+                  <div class="chips">
+                    <span class="chip window"><span class="k">窗</span><span class="v">hanning</span></span>
+                    <span class="chip nfft"><span class="k">NFFT</span><span class="v">4096</span></span>
+                    <span class="chip overlap"><span class="k">重叠</span><span class="v">50%</span></span>
+                    <span class="chip avg"><span class="k">平均</span><span class="v">线性</span></span>
+                    <span class="chip avg"><span class="k">均值重叠</span><span class="v">75%</span></span>
+                    <span class="chip scale"><span class="k">Amp</span><span class="v">Linear</span></span>
+                    <span class="chip scale"><span class="k">PSD</span><span class="v">dB</span></span>
+                  </div>
+                </div>
+                <div class="saved-section">
+                  <h3>坐标轴快照</h3>
+                  <div class="chips">
+                    <span class="chip axis-x"><span class="k">X</span><span class="v">0 → 600 Hz</span></span>
+                    <span class="chip axis-y"><span class="k">Y</span><span class="v">自动</span></span>
+                    <span class="chip axis-z"><span class="k">Z</span><span class="v">-80 → 0 dB</span></span>
+                    <span class="chip unit"><span class="k">单位</span><span class="v">dB</span></span>
+                  </div>
+                </div>
+                <div class="saved-section">
+                  <h3>状态判断</h3>
+                  <div class="chips">
+                    <span class="chip ok"><span class="k">谱参数</span><span class="v">一致</span></span>
+                    <span class="chip warn"><span class="k">坐标轴</span><span class="v">X 不同</span></span>
+                    <span class="chip locked"><span class="k">信号/Fs</span><span class="v">不切换</span></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="pop-footer">
+                <span>左键加载 · 右键保存/重命名/清空</span>
+                <span>不保存信号与 Fs</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="legend-row">
+            <span class="dot">已保存</span>
+            <span class="dot warn">当前有差异</span>
+            <span class="dot empty">空槽位</span>
+          </div>
+        </div>
+
+        <div class="note">
+          <b>建议保存范围：</b>保存分析参数、坐标轴设置和显示选项；不保存信号、Fs、文件路径和通用时间范围，避免切换文件后误加载。
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script>
+    const modeData = {
+      fft: {
+        title: "移动曲线",
+        modeName: "FFT",
+        plotClass: "",
+        x: "Frequency (Hz)",
+        y: "Amplitude / PSD",
+        z: "Z: 不适用",
+        pin: "Peak 128.0 Hz",
+        status: "标注开启：点击曲线峰值或任意点添加说明。"
+      },
+      fft_time: {
+        title: "移动时频图",
+        modeName: "FFT vs Time",
+        plotClass: "heatmap",
+        x: "Time (s)",
+        y: "Frequency (Hz)",
+        z: "Z: Amplitude dB",
+        pin: "t=3.20s · 128 Hz",
+        status: "标注开启：点击谱图位置，标注时间、频率与幅值。"
+      },
+      order_time: {
+        title: "移动阶次图",
+        modeName: "Order Time",
+        plotClass: "order",
+        x: "Time (s)",
+        y: "Order",
+        z: "Z: Amplitude dB",
+        pin: "2.0 order · t=5.4s",
+        status: "标注开启：点击阶次脊线，标注阶次、时间与幅值。"
+      }
+    };
+
+    document.querySelectorAll(".mode-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".mode-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const data = modeData[btn.dataset.mode];
+        document.getElementById("toolbarTitle").textContent = data.title;
+        document.getElementById("modeName").textContent = data.modeName;
+        document.getElementById("statusText").textContent = data.status;
+        document.getElementById("axisX").textContent = data.x;
+        document.getElementById("axisY").textContent = data.y;
+        document.getElementById("axisZ").textContent = data.z;
+        document.getElementById("pin").querySelector("span").textContent = data.pin;
+        const plot = document.getElementById("plot");
+        plot.className = `plot ${data.plotClass}`.trim();
+      });
+    });
+
+    const anno = document.getElementById("annoToggle");
+    anno.addEventListener("click", () => {
+      const active = anno.classList.toggle("active");
+      anno.innerHTML = `<span data-lucide="map-pin"></span>${active ? "开启" : "关闭"}`;
+      document.getElementById("pin").style.display = active ? "grid" : "none";
+      lucide.createIcons();
+    });
+
+    window.addEventListener("DOMContentLoaded", () => {
+      if (new URLSearchParams(window.location.search).get("hover") === "1") {
+        document.body.classList.add("preview-hover");
+      }
+      lucide.createIcons();
+    });
+  </script>
+</body>
+</html>

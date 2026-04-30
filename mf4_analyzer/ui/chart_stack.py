@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
 
 class CursorPill(QFrame):
     """Draggable floating pill with a primary line (time / A·B / ΔT) and an
-    optional detail block (per-channel Min/Max/Avg/RMS as RichText). The
+    optional detail block (per-channel Min/Max/Avg/△ as RichText). The
     user can drag it anywhere inside the canvas area."""
 
     def __init__(self, parent=None):
@@ -194,13 +194,15 @@ class _ChartCard(QWidget):
     """Canvas + its NavigationToolbar in a vertical layout."""
 
     copy_image_requested = pyqtSignal()  # emitted when the toolbar copy btn is clicked
+    annotation_enabled_changed = pyqtSignal(bool)
 
-    def __init__(self, canvas, parent=None):
+    def __init__(self, canvas, parent=None, annotations=False):
         super().__init__(parent)
         self.setObjectName("chartCard")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.canvas = canvas
+        self._annotation_enabled = False
         self.toolbar = NavigationToolbar(canvas, self)
         self.toolbar.setObjectName("chartToolbar")
         self.toolbar.setIconSize(QSize(18, 18))
@@ -262,6 +264,9 @@ class _ChartCard(QWidget):
         else:
             self.toolbar.addWidget(self._hint_label)
 
+        if annotations:
+            self._install_annotation_controls(loc_action)
+
         # Only pan/zoom toggling changes the hint; one-shot buttons don't.
         # Subclasses (TimeChartCard) listen to this same signal to flip the
         # axis-lock chip group enabled state.
@@ -304,6 +309,64 @@ class _ChartCard(QWidget):
         lay.addWidget(self.toolbar)
         lay.addWidget(canvas, stretch=1)
         lay.addWidget(self._hint_bar)
+
+    def _insert_toolbar_widget(self, loc_action, widget):
+        if loc_action is not None:
+            self.toolbar.insertWidget(loc_action, widget)
+        else:
+            self.toolbar.addWidget(widget)
+
+    def _install_annotation_controls(self, loc_action):
+        self._insert_toolbar_widget(loc_action, _vline())
+        self._annotation_label = QLabel("标注", self.toolbar)
+        self._annotation_label.setObjectName("chartAnnotationLabel")
+        self._annotation_label.setAlignment(Qt.AlignVCenter)
+        self._insert_toolbar_widget(loc_action, self._annotation_label)
+
+        self._annotation_btn = QPushButton("开启", self.toolbar)
+        self._annotation_btn.setIcon(
+            qta.icon('mdi.map-marker-plus-outline', color=_ICON_COLOR)
+        )
+        self._annotation_btn.setIconSize(QSize(14, 14))
+        self._annotation_btn.setCheckable(True)
+        self._annotation_btn.setProperty("role", "chart-choice")
+        self._annotation_btn.setFlat(True)
+        self._annotation_btn.setToolTip("开启后左键添加标注；右键删除最近标注")
+        self._annotation_btn.clicked.connect(
+            lambda checked=False: self.set_annotation_enabled(checked)
+        )
+        self._insert_toolbar_widget(loc_action, self._annotation_btn)
+
+        self._clear_annotation_btn = QPushButton("清除", self.toolbar)
+        self._clear_annotation_btn.setIcon(qta.icon('mdi.eraser', color=_ICON_COLOR))
+        self._clear_annotation_btn.setIconSize(QSize(14, 14))
+        self._clear_annotation_btn.setProperty("role", "chart-choice")
+        self._clear_annotation_btn.setFlat(True)
+        self._clear_annotation_btn.setToolTip("清除当前图表中的所有标注")
+        self._clear_annotation_btn.clicked.connect(self.clear_annotations)
+        self._insert_toolbar_widget(loc_action, self._clear_annotation_btn)
+
+    def annotation_enabled(self):
+        return self._annotation_enabled
+
+    def set_annotation_enabled(self, enabled, notify=True):
+        self._annotation_enabled = bool(enabled)
+        if hasattr(self.canvas, 'set_remark_enabled'):
+            self.canvas.set_remark_enabled(self._annotation_enabled)
+        btn = getattr(self, '_annotation_btn', None)
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(self._annotation_enabled)
+            btn.setText("关闭" if self._annotation_enabled else "开启")
+            icon_color = _ICON_ACTIVE if self._annotation_enabled else _ICON_COLOR
+            btn.setIcon(qta.icon('mdi.map-marker-plus-outline', color=icon_color))
+            btn.blockSignals(False)
+        if notify:
+            self.annotation_enabled_changed.emit(self._annotation_enabled)
+
+    def clear_annotations(self):
+        if hasattr(self.canvas, 'clear_remarks'):
+            self.canvas.clear_remarks()
 
     def _on_nav_mode_toggled(self, *_):
         """Hook subclasses can extend; base only refreshes the hint text."""
@@ -476,6 +539,9 @@ class SpectrogramChartCard(_ChartCard):
     bottom-bar hint when the toolbar isn't in pan/zoom — guides the user to
     click on the spectrogram to surface the per-frame frequency slice."""
 
+    def __init__(self, canvas, parent=None, annotations=False):
+        super().__init__(canvas, parent, annotations=annotations)
+
     def _context_hint_key(self):
         toolbar_key = self._current_mode_key()
         if toolbar_key in ('pan', 'zoom'):
@@ -487,6 +553,7 @@ class ChartStack(QWidget):
     mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
     cursor_mode_changed = pyqtSignal(str)
+    annotation_enabled_changed = pyqtSignal(str, bool)
     image_copied = pyqtSignal(str)  # status text for the main window
 
     def __init__(self, parent=None):
@@ -500,9 +567,11 @@ class ChartStack(QWidget):
         self.canvas_fft_time = SpectrogramCanvas(self)
         self.canvas_order = PlotCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
-        self._fft_card = _ChartCard(self.canvas_fft)
-        self._fft_time_card = SpectrogramChartCard(self.canvas_fft_time)
-        self._order_card = _ChartCard(self.canvas_order)
+        self._fft_card = _ChartCard(self.canvas_fft, annotations=True)
+        self._fft_time_card = SpectrogramChartCard(
+            self.canvas_fft_time, annotations=True,
+        )
+        self._order_card = _ChartCard(self.canvas_order, annotations=True)
         self.stack.addWidget(self._time_card)
         self.stack.addWidget(self._fft_card)
         self.stack.addWidget(self._fft_time_card)
@@ -530,6 +599,14 @@ class ChartStack(QWidget):
         # Relay time-card control signals up to MainWindow consumers.
         self._time_card.plot_mode_changed.connect(self.plot_mode_changed)
         self._time_card.cursor_mode_changed.connect(self.cursor_mode_changed)
+        for mode, card in (
+            ('fft', self._fft_card),
+            ('fft_time', self._fft_time_card),
+            ('order', self._order_card),
+        ):
+            card.annotation_enabled_changed.connect(
+                lambda enabled, m=mode: self.annotation_enabled_changed.emit(m, enabled)
+            )
 
         # Initial sync: stats_strip shows iff default mode is 'time'.
         self.stats_strip.setVisible(self.current_mode() == 'time')
@@ -560,6 +637,16 @@ class ChartStack(QWidget):
 
     def set_cursor_mode(self, mode):
         self._time_card.set_cursor_mode(mode)
+
+    def set_annotation_enabled(self, mode, enabled, notify=False):
+        cards = {
+            'fft': self._fft_card,
+            'fft_time': self._fft_time_card,
+            'order': self._order_card,
+        }
+        card = cards.get(mode)
+        if card is not None:
+            card.set_annotation_enabled(enabled, notify=notify)
 
     def full_reset_all(self):
         self.canvas_time.full_reset()

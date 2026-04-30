@@ -63,6 +63,63 @@ def test_fft_contextual_fft_button_emits(qapp, qtbot):
         fc.btn_fft.click()
 
 
+def test_fft_contextual_uses_xy_axis_settings_group(qapp):
+    from PyQt5.QtWidgets import QGroupBox
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    titles = {gb.title() for gb in fc.findChildren(QGroupBox)}
+
+    assert "坐标轴设置" in titles
+    assert "选项" not in titles
+    for attr in (
+        "chk_x_auto", "spin_x_min", "spin_x_max",
+        "chk_y_auto", "spin_y_min", "spin_y_max",
+    ):
+        assert hasattr(fc, attr)
+    assert fc.chk_autoscale is fc.chk_x_auto
+    assert fc.chk_x_auto.isChecked()
+    assert fc.chk_y_auto.isChecked()
+
+
+def test_fft_contextual_xy_axis_params_round_trip(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    fc.chk_x_auto.setChecked(False)
+    fc.spin_x_min.setValue(12.5)
+    fc.spin_x_max.setValue(345.0)
+    fc.chk_y_auto.setChecked(False)
+    fc.spin_y_min.setValue(-20.0)
+    fc.spin_y_max.setValue(3.0)
+
+    params = fc.current_params()
+
+    assert params["autoscale"] is False
+    assert params["x_auto"] is False
+    assert params["x_min"] == 12.5
+    assert params["x_max"] == 345.0
+    assert params["y_auto"] is False
+    assert params["y_min"] == -20.0
+    assert params["y_max"] == 3.0
+
+    fc.apply_params({
+        "autoscale": True,
+        "x_min": 5.0,
+        "x_max": 50.0,
+        "y_auto": False,
+        "y_min": -1.0,
+        "y_max": 1.0,
+    })
+
+    assert fc.chk_x_auto.isChecked() is True
+    assert fc.spin_x_min.value() == 5.0
+    assert fc.spin_x_max.value() == 50.0
+    assert fc.chk_y_auto.isChecked() is False
+    assert fc.spin_y_min.value() == -1.0
+    assert fc.spin_y_max.value() == 1.0
+
+
 # ---- Task 2.6: OrderContextual ----
 
 def test_order_contextual_params(qapp):
@@ -571,6 +628,59 @@ def test_preset_bar_acknowledged_signal_preserved(qapp, qtbot):
     bar._delete(1)  # cleanup QSettings
 
 
+def test_preset_bar_summary_uses_name_value_colours(qapp):
+    from mf4_analyzer.ui.inspector_sections import PresetBar
+
+    bar = PresetBar('test_kind_summary', lambda: {}, lambda d: None)
+    html = bar._format_summary('配置 1', {
+        'window': 'hanning',
+        'nfft': '4096',
+        'x_auto': False,
+    })
+
+    assert html.startswith('<html>')
+    assert 'color:#61708a' in html
+    assert 'color:#0b73e7' in html
+    assert '窗函数' in html
+    assert 'hanning' in html
+    assert 'X 自动' in html
+    assert '否' in html
+
+
+def test_preset_bar_uses_custom_hover_card_instead_of_qtooltip(qapp, qtbot):
+    from PyQt5.QtWidgets import QLabel
+    from mf4_analyzer.ui.inspector_sections import PresetBar
+
+    current = lambda: {
+        'window': 'hanning',
+        'nfft': '4096',
+        'overlap': 50,
+        'x_auto': False,
+        'x_min': 0.0,
+        'x_max': 600.0,
+        'z_auto': False,
+        'z_floor': -80.0,
+        'z_ceiling': 0.0,
+    }
+    bar = PresetBar('test_kind_hover_card', current, lambda d: None)
+    qtbot.addWidget(bar)
+    bar._write(1, '配置1', current())
+    bar._refresh_states()
+
+    assert bar._load_btns[1].toolTip() == ''
+    bar._show_hover(1)
+
+    assert bar._hover_card.isVisible()
+    assert bar._hover_card.objectName() == 'presetHoverCard'
+    assert bar._hover_card.findChild(QLabel, 'presetHoverTitle').text() == '配置1'
+    chips = [c.text() for c in bar._hover_card.findChildren(QLabel, 'presetChip')]
+    assert any('窗函数' in c and 'hanning' in c for c in chips)
+    assert any('NFFT' in c and '4096' in c for c in chips)
+    assert any('X' in c and '0 → 600' in c for c in chips)
+    bar._hide_hover()
+    bar._delete(1)
+
+
 # ---- R3 #9: rebuild button moved to group header ----
 
 def test_fft_rebuild_lives_in_header_not_fs_row(qapp):
@@ -804,6 +914,75 @@ def test_fft_time_apply_builtin_preset_still_callable(qtbot):
     assert p['window'] == 'hanning'
 
 
+def test_fft_time_preset_collects_explicit_xyz_axes(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    ctx.chk_x_auto.setChecked(False)
+    ctx.spin_x_min.setValue(1.0)
+    ctx.spin_x_max.setValue(2.5)
+    ctx.chk_y_auto.setChecked(False)
+    ctx.spin_y_min.setValue(20.0)
+    ctx.spin_y_max.setValue(600.0)
+    ctx.chk_z_auto.setChecked(False)
+    ctx.spin_z_floor.setValue(-70.0)
+    ctx.spin_z_ceiling.setValue(-5.0)
+
+    p = ctx._collect_preset()
+
+    for key in (
+        'x_auto', 'x_min', 'x_max',
+        'y_auto', 'y_min', 'y_max',
+        'z_auto', 'z_floor', 'z_ceiling',
+    ):
+        assert key in p
+    assert p['x_auto'] is False
+    assert p['x_min'] == 1.0
+    assert p['x_max'] == 2.5
+    assert p['y_auto'] is False
+    assert p['y_min'] == 20.0
+    assert p['y_max'] == 600.0
+    assert p['z_auto'] is False
+    assert p['z_floor'] == -70.0
+    assert p['z_ceiling'] == -5.0
+
+
+def test_order_preset_collects_explicit_xyz_axes(qtbot):
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    ctx = OrderContextual()
+    qtbot.addWidget(ctx)
+    ctx.chk_x_auto.setChecked(False)
+    ctx.spin_x_min.setValue(0.5)
+    ctx.spin_x_max.setValue(3.0)
+    ctx.chk_y_auto.setChecked(False)
+    ctx.spin_y_min.setValue(1.0)
+    ctx.spin_y_max.setValue(8.0)
+    ctx.combo_amp_unit.setCurrentText('Linear')
+    ctx.chk_z_auto.setChecked(False)
+    ctx.spin_z_floor.setValue(-20.0)
+    ctx.spin_z_ceiling.setValue(4.0)
+
+    p = ctx._collect_preset()
+
+    for key in (
+        'amplitude_mode',
+        'x_auto', 'x_min', 'x_max',
+        'y_auto', 'y_min', 'y_max',
+        'z_auto', 'z_floor', 'z_ceiling',
+    ):
+        assert key in p
+    assert p['amplitude_mode'] == 'Amplitude'
+    assert p['x_auto'] is False
+    assert p['x_min'] == 0.5
+    assert p['x_max'] == 3.0
+    assert p['y_auto'] is False
+    assert p['y_min'] == 1.0
+    assert p['y_max'] == 8.0
+    assert p['z_auto'] is False
+    assert p['z_floor'] == -20.0
+    assert p['z_ceiling'] == 4.0
+
+
 # ---- 2026-04-26 R3 紧凑化 视觉一致性修正 ----
 
 def test_inspector_scroll_body_caps_max_width(qapp):
@@ -1029,6 +1208,43 @@ def test_fft_time_and_order_contextual_backgrounds_are_unified():
     assert "background-color: #ffffff;" in qss
 
 
+def test_checkbox_text_background_is_transparent():
+    """Checkbox labels such as the axis-row 自动 text should not paint a
+    separate rectangle over the contextual panel background."""
+    import pathlib
+    import re
+    qss_path = pathlib.Path(__file__).resolve().parents[2] / (
+        "mf4_analyzer/ui/style.qss"
+    )
+    qss = qss_path.read_text(encoding="utf-8")
+    m = re.search(r"QCheckBox,\s*QRadioButton\s*\{([^}]*)\}", qss, re.DOTALL)
+    assert m, "QCheckBox/QRadioButton rule not found"
+    block = m.group(1)
+    assert "background-color: transparent;" in block
+
+
+def test_checkbox_indicator_has_visible_checked_state():
+    """Checkboxes need an explicit, high-contrast indicator under QSS."""
+    import pathlib
+    import re
+    qss_path = pathlib.Path(__file__).resolve().parents[2] / (
+        "mf4_analyzer/ui/style.qss"
+    )
+    qss = qss_path.read_text(encoding="utf-8")
+    base = re.search(r"QCheckBox::indicator\s*\{([^}]*)\}", qss, re.DOTALL)
+    checked = re.search(
+        r"QCheckBox::indicator:checked\s*\{([^}]*)\}", qss, re.DOTALL,
+    )
+    assert base, "QCheckBox::indicator base rule not found"
+    assert checked, "QCheckBox::indicator:checked rule not found"
+    base_block = base.group(1)
+    checked_block = checked.group(1)
+    assert "width: 16px" in base_block or "width: 18px" in base_block
+    assert "border:" in base_block
+    assert "#1769e0" in checked_block
+    assert "image:" in checked_block
+
+
 def test_btn_rebuild_outer_size_compact(qapp):
     """fix-4 — btn_rebuild outer chrome must shrink to ~24x24 (icon stays
     16x16). Previously setMaximumWidth(30) + default min-height 26 left
@@ -1206,6 +1422,51 @@ def test_fft_contextual_apply_params_restores_avg(qapp):
     w.apply_params({'avg_mode': '峰值保持', 'avg_overlap': 88})
     assert w.combo_avg_mode.currentText() == '峰值保持'
     assert w.spin_avg_overlap.value() == 88
+
+
+def test_fft_preset_collects_extended_analysis_params(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+    w.combo_win.setCurrentText('flattop')
+    w.combo_nfft.setCurrentText('4096')
+    w.spin_overlap.setValue(25)
+    w.combo_avg_mode.setCurrentText('线性平均')
+    w.spin_avg_overlap.setValue(75)
+    w.combo_amp_y.setCurrentText('dB')
+    w.combo_psd_y.setCurrentText('Linear')
+
+    p = w._collect_preset()
+
+    assert p['window'] == 'flattop'
+    assert p['nfft'] == '4096'
+    assert p['overlap'] == 25
+    assert p['avg_mode'] == '线性平均'
+    assert p['avg_overlap'] == 75
+    assert p['amp_y'] == 'dB'
+    assert p['psd_y'] == 'Linear'
+
+
+def test_fft_preset_applies_extended_analysis_params(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+
+    w._apply_preset({
+        'window': 'blackman',
+        'nfft': '8192',
+        'overlap': 35,
+        'avg_mode': '峰值保持',
+        'avg_overlap': 88,
+        'amp_y': 'dB',
+        'psd_y': 'Linear',
+    })
+
+    assert w.combo_win.currentText() == 'blackman'
+    assert w.combo_nfft.currentText() == '8192'
+    assert w.spin_overlap.value() == 35
+    assert w.combo_avg_mode.currentText() == '峰值保持'
+    assert w.spin_avg_overlap.value() == 88
+    assert w.combo_amp_y.currentText() == 'dB'
+    assert w.combo_psd_y.currentText() == 'Linear'
 
 
 # ---- Task 2.2: averaging routes through DSP helpers ----
@@ -1394,6 +1655,40 @@ def test_fft_render_honors_axis_toggles(qtbot):
     axes = win.canvas_fft.fig.axes
     assert 'dB' in axes[0].get_ylabel()
     assert 'dB' not in axes[1].get_ylabel()
+
+
+def test_fft_render_honors_manual_xy_axis_ranges(qtbot):
+    import pytest
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    fs = 1000.0
+    n = 4096
+    t = np.arange(n) / fs
+    sig = np.sin(2 * np.pi * 30 * t)
+    win._get_sig = lambda: (t, sig, fs)
+    win._check_uniform_or_prompt = lambda fd, mode: True
+    win.files = {}
+    win.inspector.fft_ctx.set_signal_candidates([("dummy", (None, "ch"))])
+    win.inspector.fft_ctx.spin_fs.setValue(fs)
+    win.inspector.fft_ctx.combo_avg_mode.setCurrentText('单帧')
+    win.inspector.fft_ctx.chk_x_auto.setChecked(False)
+    win.inspector.fft_ctx.spin_x_min.setValue(10.0)
+    win.inspector.fft_ctx.spin_x_max.setValue(80.0)
+    win.inspector.fft_ctx.chk_y_auto.setChecked(False)
+    win.inspector.fft_ctx.spin_y_min.setValue(-2.0)
+    win.inspector.fft_ctx.spin_y_max.setValue(2.0)
+
+    win.do_fft()
+
+    axes = win.canvas_fft.fig.axes
+    assert len(axes) >= 2
+    for ax in axes[:2]:
+        assert ax.get_xlim() == pytest.approx((10.0, 80.0))
+        assert ax.get_ylim() == pytest.approx((-2.0, 2.0))
 
 
 # ---- Wave 3 (axis-settings + COT migration plan): 坐标轴设置 group ----
@@ -1627,6 +1922,68 @@ def test_axis_auto_manual_toggle_keeps_range_area_width(qtbot):
         oc.hide()
 
 
+def test_axis_auto_rows_reserve_manual_width_before_first_show(qtbot):
+    """Rows that start in auto mode must advertise the manual editor width.
+
+    The Inspector uses size hints during first layout. If an auto row reports
+    only its short summary label width before it is shown, the initial X/Y/Z
+    row reservation is too narrow until the user toggles auto off once.
+    """
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual, OrderContextual
+
+    for cls in (FFTTimeContextual, OrderContextual):
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        ctx.chk_z_auto.setChecked(True)
+
+        for key in ("x", "y", "z"):
+            parts = ctx._axis_row_parts[key]
+            host = parts["range_host"]
+            assert host.sizeHint().width() >= host.minimumWidth(), (
+                f"{cls.__name__}.{key} auto range host reports "
+                f"sizeHint={host.sizeHint().width()}px below reserved "
+                f"minimumWidth={host.minimumWidth()}px before first show"
+            )
+
+
+def test_axis_auto_rows_use_manual_height_on_first_display(qapp, qtbot):
+    """Default auto rows should start at the same height as manual rows."""
+    from pathlib import Path
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+        )
+
+        for mode, ctx_name in (
+            ("fft_time", "fft_time_ctx"),
+            ("order", "order_ctx"),
+        ):
+            inspector = Inspector()
+            qtbot.addWidget(inspector)
+            inspector.resize(360, 850)
+            inspector.set_mode(mode)
+            inspector.show()
+            qtbot.waitExposed(inspector)
+            qapp.processEvents()
+
+            ctx = getattr(inspector, ctx_name)
+            heights = {
+                key: ctx._axis_row_parts[key]["range_host"].height()
+                for key in ("x", "y", "z")
+            }
+            assert len(set(heights.values())) == 1, (
+                f"{mode} default axis row heights should match before any "
+                f"auto/manual toggle, got {heights}"
+            )
+            inspector.hide()
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_axis_initial_manual_row_keeps_width_after_auto_round_trip(qtbot):
     """Rows that start in manual mode should be stable on first display.
 
@@ -1657,6 +2014,120 @@ def test_axis_initial_manual_row_keeps_width_after_auto_round_trip(qtbot):
         assert oc.spin_z_ceiling.width() == initial_ceiling_width
     finally:
         oc.hide()
+
+
+def test_axis_manual_rows_share_columns_and_right_edge(qtbot):
+    """FFT Time and Order axis rows use one visual grid.
+
+    The X/Y labels, automatic checkboxes, range editors, and the rightmost
+    visible frame must line up across X, Y, and color rows.
+    """
+    from PyQt5.QtWidgets import QApplication
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual, OrderContextual
+
+    def left(widget, root):
+        return widget.mapTo(root, widget.rect().topLeft()).x()
+
+    def right(widget, root):
+        return left(widget, root) + widget.width()
+
+    for cls in (FFTTimeContextual, OrderContextual):
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        ctx.resize(370, 760)
+        ctx.show()
+        try:
+            qtbot.waitExposed(ctx)
+            for key in ("x", "y", "z"):
+                ctx._axis_row_parts[key]["checkbox"].setChecked(False)
+            QApplication.processEvents()
+
+            parts = [ctx._axis_row_parts[key] for key in ("x", "y", "z")]
+            label_lefts = {left(p["label"], ctx) for p in parts}
+            checkbox_lefts = {left(p["checkbox"], ctx) for p in parts}
+            range_lefts = {left(p["range_host"], ctx) for p in parts}
+            right_edges = {
+                right(p["unit"] if p["unit"] is not None else p["spin_max"], ctx)
+                for p in parts
+            }
+
+            assert len(label_lefts) == 1, f"{cls.__name__} labels: {label_lefts}"
+            assert len(checkbox_lefts) == 1, (
+                f"{cls.__name__} auto column: {checkbox_lefts}"
+            )
+            assert len(range_lefts) == 1, (
+                f"{cls.__name__} range column: {range_lefts}"
+            )
+            assert len(right_edges) == 1, (
+                f"{cls.__name__} right edges: {right_edges}"
+            )
+        finally:
+            ctx.hide()
+
+
+def test_axis_rows_fit_inspector_and_align_with_panel_right_edge(qapp, qtbot):
+    """Axis rows must not overflow the 360px Inspector pane.
+
+    Their rightmost visible controls should align to the axis group border.
+    In FFT Time that also matches the 色图 dropdown's right edge below.
+    """
+    from pathlib import Path
+    from PyQt5.QtWidgets import QGroupBox
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+        )
+
+        for mode, ctx_name in (
+            ("fft_time", "fft_time_ctx"),
+            ("order", "order_ctx"),
+        ):
+            inspector = Inspector()
+            qtbot.addWidget(inspector)
+            inspector.resize(360, 850)
+            inspector.set_mode(mode)
+            inspector.show()
+            qtbot.waitExposed(inspector)
+            qtbot.wait(50)
+
+            ctx = getattr(inspector, ctx_name)
+            for key in ("x", "y", "z"):
+                ctx._axis_row_parts[key]["checkbox"].setChecked(False)
+            qapp.processEvents()
+
+            axis_group = next(
+                gb for gb in ctx.findChildren(QGroupBox)
+                if gb.title() == "坐标轴设置"
+            )
+            group_right = (
+                axis_group.mapTo(ctx, axis_group.rect().topLeft()).x()
+                + axis_group.width()
+            )
+            if mode == "fft_time":
+                cmap_right = (
+                    ctx.combo_cmap.mapTo(ctx, ctx.combo_cmap.rect().topLeft()).x()
+                    + ctx.combo_cmap.width()
+                )
+                assert cmap_right == group_right
+
+            right_edges = []
+            for key in ("x", "y", "z"):
+                parts = ctx._axis_row_parts[key]
+                last = parts["unit"] if parts["unit"] is not None else parts["spin_max"]
+                right_edges.append(
+                    last.mapTo(ctx, last.rect().topLeft()).x() + last.width()
+                )
+
+            assert right_edges == [group_right, group_right, group_right], (
+                f"{mode} axis rows should align to {group_right}, got {right_edges}"
+            )
+            inspector.hide()
+    finally:
+        qapp.setStyleSheet(old_sheet)
 
 
 def test_inspector_numeric_spinboxes_have_no_stepper_buttons(qtbot):
@@ -1701,3 +2172,82 @@ def test_fft_time_contextual_apply_legacy_dynamic_80db(qtbot):
     assert not fc.chk_z_auto.isChecked()
     assert fc.spin_z_floor.value() == -80.0
     assert fc.spin_z_ceiling.value() == 0.0
+
+
+# ----- Wave 2a (2026-04-29): spinbox stepper buttons removed everywhere
+# in the Inspector. Users only interact via keyboard / scroll wheel. The
+# QSS collapses the four subcontrols to zero AND every constructor pairs
+# with ``setButtonSymbols(QAbstractSpinBox.NoButtons)`` so platforms
+# whose native style ignores the QSS still hide the gutter.
+
+def test_inspector_spinboxes_have_no_button_symbols(qtbot):
+    """Every QSpinBox / QDoubleSpinBox under the Inspector tree must
+    report ``buttonSymbols() == NoButtons``.
+
+    This is the widget-side leg of the double protection described in
+    the QSS comment block — the QSS collapses the subcontrols to zero
+    width AND every construction site sets ``setButtonSymbols`` so the
+    stepper cannot leak through Qt's native style on macOS / Fusion.
+    """
+    from PyQt5.QtWidgets import QAbstractSpinBox, QDoubleSpinBox, QSpinBox
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual,
+        FFTTimeContextual,
+        OrderContextual,
+    )
+    panels = [FFTContextual(), FFTTimeContextual(), OrderContextual()]
+    for p in panels:
+        qtbot.addWidget(p)
+    spins_seen = 0
+    for p in panels:
+        for spin in p.findChildren((QSpinBox, QDoubleSpinBox)):
+            spins_seen += 1
+            assert spin.buttonSymbols() == QAbstractSpinBox.NoButtons, (
+                f"{type(p).__name__}::{spin.objectName() or '<unnamed>'} "
+                f"still has button symbols {spin.buttonSymbols()}"
+            )
+    # Sanity check: we actually iterated through spinboxes (otherwise the
+    # loop above would be a vacuous pass).
+    assert spins_seen >= 6, f"expected >= 6 spinboxes, found {spins_seen}"
+
+
+def test_inspector_spinbox_subcontrols_take_zero_visible_space(qtbot):
+    """QStyle must report zero-width up/down button rects for every
+    spinbox under the Inspector tree once stylesheet polish has run.
+    This catches the case where ``setButtonSymbols`` is set but the QSS
+    is reverted to draw a gutter again (or vice versa).
+    """
+    from PyQt5.QtWidgets import (
+        QApplication,
+        QDoubleSpinBox,
+        QSpinBox,
+        QStyle,
+        QStyleOptionSpinBox,
+    )
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+    fc.show()
+    QApplication.processEvents()
+    spins = fc.findChildren((QSpinBox, QDoubleSpinBox))
+    assert spins, "expected FFTTimeContextual to contain spin boxes"
+    for spin in spins:
+        opt = QStyleOptionSpinBox()
+        spin.initStyleOption(opt) if hasattr(spin, 'initStyleOption') else None
+        # subControlRect returns the geometry the style would paint for
+        # the up/down buttons. With NoButtons + zero-width QSS those
+        # rects must collapse to width 0.
+        up_rect = spin.style().subControlRect(
+            QStyle.CC_SpinBox, opt, QStyle.SC_SpinBoxUp, spin
+        )
+        down_rect = spin.style().subControlRect(
+            QStyle.CC_SpinBox, opt, QStyle.SC_SpinBoxDown, spin
+        )
+        assert up_rect.width() == 0, (
+            f"{spin.objectName() or type(spin).__name__} up button still "
+            f"reserves {up_rect.width()}px"
+        )
+        assert down_rect.width() == 0, (
+            f"{spin.objectName() or type(spin).__name__} down button still "
+            f"reserves {down_rect.width()}px"
+        )
