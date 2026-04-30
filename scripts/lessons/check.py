@@ -15,9 +15,10 @@ from typing import Any
 
 ROOT_MARKERS = (".git", "AGENTS.md", "pyproject.toml", "package.json")
 FAILURE_PATTERNS = re.compile(
-    r"(Traceback|AssertionError|FAILED|ERROR|command not found|No such file|Permission denied|LESSON_REQUIRED)",
+    r"(Traceback|AssertionError|FAILED|ERROR|command not found|No such file|Permission denied)",
     re.IGNORECASE,
 )
+LESSON_REQUIRED_PATTERN = re.compile(r"(?m)^\s*LESSON_REQUIRED\s*:")
 
 
 def find_root(cwd: Path) -> Path:
@@ -68,8 +69,9 @@ def post_tool_hook(root: Path, data: dict[str, Any]) -> None:
     tool_name = data.get("tool_name", "")
     if not response:
         return
-    if FAILURE_PATTERNS.search(response):
-        severity = "lesson_required" if "LESSON_REQUIRED" in response else "observe"
+    explicit_requirement = LESSON_REQUIRED_PATTERN.search(response)
+    if explicit_requirement or FAILURE_PATTERNS.search(response):
+        severity = "lesson_required" if explicit_requirement else "observe"
         append_event(
             root,
             {
@@ -86,12 +88,17 @@ def requirement_reason(root: Path) -> str | None:
     if required_file.exists() and required_file.read_text(encoding="utf-8").strip():
         return required_file.read_text(encoding="utf-8").strip()
 
-    required_events = [
+    relevant_events = [
         event for event in read_events(root)
         if event.get("severity") == "lesson_required"
+        or event.get("kind") in {"lesson_promoted", "requirement_cleared"}
     ]
-    if required_events:
-        return str(required_events[-1].get("summary") or required_events[-1].get("reason") or "lesson_required event")
+    if relevant_events and relevant_events[-1].get("severity") == "lesson_required":
+        return str(
+            relevant_events[-1].get("summary")
+            or relevant_events[-1].get("reason")
+            or "lesson_required event"
+        )
     return None
 
 
