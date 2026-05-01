@@ -1,4 +1,6 @@
 """Tests for the Inspector skeleton (Phase 1) and section widgets (Phase 2)."""
+import pytest
+
 from mf4_analyzer.ui.inspector import Inspector
 
 
@@ -1798,6 +1800,222 @@ def test_order_contextual_unit_toggle_forces_z_auto(qtbot):
     assert oc.chk_z_auto.isChecked()
 
 
+# ---- 2026-05-01 (codex review P7-L1 / P7-L1' fix): toggling combo_amp_unit
+# in either direction must reset spin_z_floor / spin_z_ceiling to the unit's
+# defaults (-30..0 for dB, 0..1 for Linear) so the previous unit's numeric
+# range cannot bleed into the new unit. See
+# docs/superpowers/specs/2026-05-01-codex-review-fixes-design.md §1.
+
+@pytest.mark.parametrize(
+    "from_unit,to_unit,start_floor,start_ceiling,expected_floor,expected_ceiling",
+    [
+        # dB → Linear: stale -30..0 dB values must be cleared to 0..1.
+        ('dB', 'Linear', -30.0, 0.0, 0.0, 1.0),
+        # Linear → dB: stale 0..1 values must be replaced by -30..0 dB.
+        ('Linear', 'dB', 0.5, 0.9, -30.0, 0.0),
+    ],
+)
+def test_order_contextual_unit_toggle_resets_z_range(
+    qtbot, from_unit, to_unit,
+    start_floor, start_ceiling, expected_floor, expected_ceiling,
+):
+    """Spec §1.2 invariant for OrderContextual.
+
+    After toggling combo_amp_unit:
+      - chk_z_auto must be re-enabled (True)
+      - spin_z_floor/spin_z_ceiling must reset to the new unit's default
+        (-30..0 for dB, 0..1 for Linear)
+      - both spinboxes must be disabled (because z_auto is on, _sync_axis
+        flips them off)
+    """
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Set the starting unit silently so we can plant stale values.
+    oc.combo_amp_unit.blockSignals(True)
+    oc.combo_amp_unit.setCurrentText(from_unit)
+    oc.combo_amp_unit.blockSignals(False)
+    oc.chk_z_auto.setChecked(False)
+    oc.spin_z_floor.setValue(start_floor)
+    oc.spin_z_ceiling.setValue(start_ceiling)
+    assert not oc.chk_z_auto.isChecked()
+    assert oc.spin_z_floor.value() == start_floor
+    assert oc.spin_z_ceiling.value() == start_ceiling
+
+    # Trigger handler via user-level signal.
+    oc.combo_amp_unit.setCurrentText(to_unit)
+
+    assert oc.chk_z_auto.isChecked() is True
+    assert oc.spin_z_floor.value() == expected_floor
+    assert oc.spin_z_ceiling.value() == expected_ceiling
+    assert oc.spin_z_floor.isEnabled() is False
+    assert oc.spin_z_ceiling.isEnabled() is False
+
+
+def test_order_contextual_unit_toggle_same_unit_idempotent(qtbot):
+    """Spec §1.5: dB→dB still executes the reset (handler does not branch
+    on equality). User has stale values; re-selecting the same unit clears
+    them to that unit's defaults."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Plant stale dB values.
+    oc.combo_amp_unit.blockSignals(True)
+    oc.combo_amp_unit.setCurrentText('dB')
+    oc.combo_amp_unit.blockSignals(False)
+    oc.chk_z_auto.setChecked(False)
+    oc.spin_z_floor.setValue(-99.0)
+    oc.spin_z_ceiling.setValue(-5.0)
+
+    # Re-emit the same unit. setCurrentText('dB') won't fire because the
+    # combo is already at dB — drive the handler directly to express the
+    # idempotency contract.
+    oc._on_amp_unit_changed('dB')
+
+    assert oc.chk_z_auto.isChecked() is True
+    assert oc.spin_z_floor.value() == -30.0
+    assert oc.spin_z_ceiling.value() == 0.0
+
+
+def test_order_contextual_apply_preset_z_values_survive_unit_change(qtbot):
+    """Spec §5: _apply_preset must not trip _on_amp_unit_changed when it
+    sets combo_amp_unit, otherwise the freshly-applied z_floor/z_ceiling
+    get clobbered."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Force the combo to Linear so the preset's 'Amplitude dB' actually
+    # changes the index (otherwise blockSignals is exercised on a no-op
+    # set and the test is silent).
+    oc.combo_amp_unit.blockSignals(True)
+    oc.combo_amp_unit.setCurrentText('Linear')
+    oc.combo_amp_unit.blockSignals(False)
+
+    oc._apply_preset({
+        'amplitude_mode': 'Amplitude dB',
+        'z_auto': False,
+        'z_floor': -45.0,
+        'z_ceiling': -5.0,
+    })
+
+    assert oc.combo_amp_unit.currentText() == 'dB'
+    assert oc.chk_z_auto.isChecked() is False
+    assert oc.spin_z_floor.value() == -45.0
+    assert oc.spin_z_ceiling.value() == -5.0
+
+
+def test_order_contextual_apply_preset_legacy_dynamic_survives_unit_flip(qtbot):
+    """Strong RED: prove that ``_apply_preset`` actually blocks the
+    ``_on_amp_unit_changed`` handler when it flips ``combo_amp_unit``.
+
+    Order of operations in production (``OrderContextual._apply_preset``):
+
+      1. Legacy ``dynamic`` is processed FIRST and writes
+         ``spin_z_floor=-30, spin_z_ceiling=0, chk_z_auto=False``.
+      2. ``amplitude_mode`` is processed SECOND and calls
+         ``combo_amp_unit.setCurrentIndex(Linear)`` — this is the call
+         that **must** be wrapped in ``blockSignals`` because if the
+         handler fires it forces ``chk_z_auto=True`` and rewrites
+         ``spin_z_floor=0.0, spin_z_ceiling=1.0`` (Linear defaults).
+      3. There are NO explicit ``z_floor`` / ``z_ceiling`` keys in the
+         dict, so step 2's damage is **not** masked by a later setValue.
+
+    The companion test
+    ``test_order_contextual_apply_preset_z_values_survive_unit_change``
+    is structurally weak: it passes explicit ``z_floor`` / ``z_ceiling``
+    keys that re-write the values after the unit flip, so even with
+    ``blockSignals`` removed from production the test still passes.
+    This test removes that masking by relying on the legacy ``dynamic``
+    path alone.
+    """
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Precondition: combo is at 'dB' so the preset's ``Amplitude``
+    # (Linear) actually triggers an index change.
+    oc.combo_amp_unit.blockSignals(True)
+    oc.combo_amp_unit.setCurrentText('dB')
+    oc.combo_amp_unit.blockSignals(False)
+
+    oc._apply_preset({
+        'amplitude_mode': 'Amplitude',  # Linear — flips dB → Linear
+        'dynamic': '30 dB',             # → z_floor=-30, z_ceiling=0
+    })
+
+    # Combo really did flip, proving setCurrentIndex was a real change
+    # (not a no-op that would silently exercise blockSignals on nothing).
+    assert oc.combo_amp_unit.currentText() == 'Linear'
+    # If blockSignals failed on the unit flip, _on_amp_unit_changed would
+    # have set z_auto=True and overwritten floor/ceiling with the Linear
+    # defaults (0.0, 1.0). These three asserts together fail the test.
+    assert oc.chk_z_auto.isChecked() is False, (
+        "z_auto should remain False; if it flipped to True the unit-change "
+        "handler ran when it should have been blocked"
+    )
+    assert oc.spin_z_floor.value() == -30.0, (
+        "spin_z_floor should retain the dynamic-derived -30; if it is 0.0 "
+        "the unit-change handler reset it to the Linear default"
+    )
+    assert oc.spin_z_ceiling.value() == 0.0, (
+        "spin_z_ceiling should retain the dynamic-derived 0; if it is 1.0 "
+        "the unit-change handler reset it to the Linear default"
+    )
+
+
+def test_order_contextual_apply_preset_does_not_emit_unit_signal(qtbot):
+    """Belt-and-suspenders signal-spy form of the survival contract.
+
+    Disconnect the real ``_on_amp_unit_changed`` slot and reconnect a
+    counting probe to ``combo_amp_unit.currentTextChanged``. If
+    ``_apply_preset`` properly wraps its ``setCurrentIndex`` in
+    ``blockSignals``, no emission reaches the probe; if blockSignals is
+    removed or the wrap pair is mis-ordered, the probe records the
+    transition and the test fails.
+
+    Independent of whether the dict carries explicit z keys, this
+    asserts the handler edge is not reached during preset application.
+
+    Note: a ``monkeypatch.setattr(oc, '_on_amp_unit_changed', stub)``
+    does NOT work here because Qt captured the bound method object at
+    connect time; we must disconnect-and-reconnect to redirect the
+    slot.
+    """
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+
+    # Start at dB so the preset's Linear flip is a real index change.
+    oc.combo_amp_unit.blockSignals(True)
+    oc.combo_amp_unit.setCurrentText('dB')
+    oc.combo_amp_unit.blockSignals(False)
+
+    # Replace the real slot with a counting probe.
+    try:
+        oc.combo_amp_unit.currentTextChanged.disconnect(
+            oc._on_amp_unit_changed
+        )
+    except TypeError:
+        pass
+    calls = []
+    oc.combo_amp_unit.currentTextChanged.connect(
+        lambda text: calls.append(text)
+    )
+
+    oc._apply_preset({'amplitude_mode': 'Amplitude'})  # Linear
+
+    assert oc.combo_amp_unit.currentText() == 'Linear', (
+        "precondition: setCurrentIndex must have actually changed the combo"
+    )
+    assert calls == [], (
+        f"currentTextChanged must not emit during _apply_preset's unit flip, "
+        f"got {calls}"
+    )
+
+
 def test_order_contextual_current_params_emits_axis_keys(qtbot):
     """current_params must emit the new axis keys."""
     from mf4_analyzer.ui.inspector_sections import OrderContextual
@@ -2206,6 +2424,160 @@ def test_fft_time_contextual_apply_legacy_dynamic_80db(qtbot):
     assert not fc.chk_z_auto.isChecked()
     assert fc.spin_z_floor.value() == -80.0
     assert fc.spin_z_ceiling.value() == 0.0
+
+
+# ---- 2026-05-01 (codex review P7-L1' fix): FFTTimeContextual must satisfy
+# the same unit-toggle reset invariant as OrderContextual. Closes the test
+# blind spot P7-T1 from the review.
+
+@pytest.mark.parametrize(
+    "from_unit,to_unit,start_floor,start_ceiling,expected_floor,expected_ceiling",
+    [
+        ('dB', 'Linear', -30.0, 0.0, 0.0, 1.0),
+        ('Linear', 'dB', 0.5, 0.9, -30.0, 0.0),
+    ],
+)
+def test_fft_time_contextual_unit_toggle_resets_z_range(
+    qtbot, from_unit, to_unit,
+    start_floor, start_ceiling, expected_floor, expected_ceiling,
+):
+    """Spec §1.2 invariant for FFTTimeContextual."""
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+
+    fc.combo_amp_unit.blockSignals(True)
+    fc.combo_amp_unit.setCurrentText(from_unit)
+    fc.combo_amp_unit.blockSignals(False)
+    fc.chk_z_auto.setChecked(False)
+    fc.spin_z_floor.setValue(start_floor)
+    fc.spin_z_ceiling.setValue(start_ceiling)
+    assert not fc.chk_z_auto.isChecked()
+    assert fc.spin_z_floor.value() == start_floor
+    assert fc.spin_z_ceiling.value() == start_ceiling
+
+    fc.combo_amp_unit.setCurrentText(to_unit)
+
+    assert fc.chk_z_auto.isChecked() is True
+    assert fc.spin_z_floor.value() == expected_floor
+    assert fc.spin_z_ceiling.value() == expected_ceiling
+    assert fc.spin_z_floor.isEnabled() is False
+    assert fc.spin_z_ceiling.isEnabled() is False
+
+
+def test_fft_time_contextual_apply_preset_z_values_survive_unit_change(qtbot):
+    """Spec §5 regression guard for FFTTimeContextual: _apply_preset must
+    not trigger the unit-change handler when it sets combo_amp_unit."""
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+
+    fc.combo_amp_unit.blockSignals(True)
+    fc.combo_amp_unit.setCurrentText('Linear')
+    fc.combo_amp_unit.blockSignals(False)
+
+    fc._apply_preset({
+        'amplitude_mode': 'Amplitude dB',
+        'z_auto': False,
+        'z_floor': -60.0,
+        'z_ceiling': -10.0,
+    })
+
+    assert fc.combo_amp_unit.currentText() == 'dB'
+    assert fc.chk_z_auto.isChecked() is False
+    assert fc.spin_z_floor.value() == -60.0
+    assert fc.spin_z_ceiling.value() == -10.0
+
+
+def test_fft_time_contextual_apply_preset_legacy_dynamic_survives_unit_flip(
+    qtbot,
+):
+    """Strong RED: prove that ``FFTTimeContextual._apply_preset`` blocks
+    the ``_on_amp_unit_changed`` handler when it flips ``combo_amp_unit``.
+
+    Order of operations in production:
+
+      1. Legacy ``dynamic`` is processed FIRST and writes
+         ``spin_z_floor=-30, spin_z_ceiling=0, chk_z_auto=False``.
+      2. ``amplitude_mode`` is processed SECOND and calls
+         ``combo_amp_unit.setCurrentIndex(Linear)`` — must be wrapped
+         in ``blockSignals`` because if the handler fires it forces
+         ``chk_z_auto=True`` and rewrites floor/ceiling to (0.0, 1.0).
+      3. No explicit ``z_floor`` / ``z_ceiling`` keys are present, so
+         step 2's damage is **not** masked by a later setValue.
+
+    The companion test
+    ``test_fft_time_contextual_apply_preset_z_values_survive_unit_change``
+    is structurally weak: it passes explicit ``z_floor`` / ``z_ceiling``
+    keys that re-write the values after the unit flip, so even with
+    ``blockSignals`` removed from production the test still passes.
+    """
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+
+    # Precondition: combo at 'dB' so 'Amplitude' (Linear) actually flips.
+    fc.combo_amp_unit.blockSignals(True)
+    fc.combo_amp_unit.setCurrentText('dB')
+    fc.combo_amp_unit.blockSignals(False)
+
+    fc._apply_preset({
+        'amplitude_mode': 'Amplitude',  # Linear — flips dB → Linear
+        'dynamic': '30 dB',             # → z_floor=-30, z_ceiling=0
+    })
+
+    assert fc.combo_amp_unit.currentText() == 'Linear'
+    assert fc.chk_z_auto.isChecked() is False, (
+        "z_auto should remain False; if it flipped to True the unit-change "
+        "handler ran when it should have been blocked"
+    )
+    assert fc.spin_z_floor.value() == -30.0, (
+        "spin_z_floor should retain the dynamic-derived -30; if it is 0.0 "
+        "the unit-change handler reset it to the Linear default"
+    )
+    assert fc.spin_z_ceiling.value() == 0.0, (
+        "spin_z_ceiling should retain the dynamic-derived 0; if it is 1.0 "
+        "the unit-change handler reset it to the Linear default"
+    )
+
+
+def test_fft_time_contextual_apply_preset_does_not_emit_unit_signal(qtbot):
+    """Belt-and-suspenders signal-spy form of the survival contract for
+    FFTTimeContextual.
+
+    Disconnect the real ``_on_amp_unit_changed`` slot and reconnect a
+    counting probe; assert no emission reaches the probe when
+    ``_apply_preset`` flips the combo. Mirrors
+    ``test_order_contextual_apply_preset_does_not_emit_unit_signal``.
+    """
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+
+    fc.combo_amp_unit.blockSignals(True)
+    fc.combo_amp_unit.setCurrentText('dB')
+    fc.combo_amp_unit.blockSignals(False)
+
+    try:
+        fc.combo_amp_unit.currentTextChanged.disconnect(
+            fc._on_amp_unit_changed
+        )
+    except TypeError:
+        pass
+    calls = []
+    fc.combo_amp_unit.currentTextChanged.connect(
+        lambda text: calls.append(text)
+    )
+
+    fc._apply_preset({'amplitude_mode': 'Amplitude'})  # Linear
+
+    assert fc.combo_amp_unit.currentText() == 'Linear', (
+        "precondition: setCurrentIndex must have actually changed the combo"
+    )
+    assert calls == [], (
+        f"currentTextChanged must not emit during _apply_preset's unit flip, "
+        f"got {calls}"
+    )
 
 
 # ----- Wave 2a (2026-04-29): spinbox stepper buttons removed everywhere

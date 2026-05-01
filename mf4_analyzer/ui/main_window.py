@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
-from ..signal import FFTAnalyzer, OrderAnalyzer
+from ..signal import FFTAnalyzer
 from .canvases import CHART_TIGHT_LAYOUT_KW
 
 
@@ -78,67 +78,6 @@ class FFTTimeWorker(QObject):
             self.finished.emit(result)
 
 
-class OrderWorker(QThread):
-    """Run :meth:`OrderAnalyzer.compute_*` on a worker QThread.
-
-    Plan Task 5 / spec §4.3. Three signals all carry ``generation``;
-    :class:`MainWindow` uses a generation-token pattern (independent of
-    whether ``cancel()`` ran in time) to decide whether a queued
-    ``result_ready`` belongs to the most-recent dispatch or a stale one.
-
-    Unlike :class:`FFTTimeWorker` (a ``QObject`` moved onto a separate
-    ``QThread``), this is a ``QThread`` subclass: cleanup is simpler,
-    ``cancel()/wait()/terminate()`` all live on the same instance, and
-    no ``moveToThread`` plumbing is needed. ``OrderAnalyzer`` polls
-    ``cancel_token`` per chunk so cancellation is cooperative.
-    """
-
-    result_ready = pyqtSignal(object, str, int)   # (result, kind, generation)
-    failed = pyqtSignal(str, int)                  # (message, generation)
-    progress = pyqtSignal(int, int, int)           # (current, total, generation)
-
-    def __init__(self, kind, sig, rpm, t, params, generation, parent=None):
-        super().__init__(parent)
-        self._kind = kind
-        self._sig = sig
-        self._rpm = rpm
-        self._t = t
-        self._params = params
-        self._generation = int(generation)
-        self._cancelled = False
-
-    def cancel(self):
-        """Flip the cancel flag; ``OrderAnalyzer`` polls it per chunk."""
-        self._cancelled = True
-
-    def run(self):
-        from ..signal import OrderAnalyzer
-        gen = self._generation
-        try:
-            cb_progress = lambda i, n: self.progress.emit(i, n, gen)
-            cb_cancel = lambda: self._cancelled
-            if self._kind == 'time':
-                r = OrderAnalyzer.compute_time_order_result(
-                    self._sig, self._rpm, self._t, self._params,
-                    progress_callback=cb_progress, cancel_token=cb_cancel,
-                )
-            else:
-                raise ValueError(f"unknown kind: {self._kind}")
-            if self._cancelled:
-                # Cancel landed after compute returned but before emit;
-                # let MainWindow's generation check drop any leftover.
-                return
-            self.result_ready.emit(r, self._kind, gen)
-        except RuntimeError as e:
-            # OrderAnalyzer raises RuntimeError("...cancelled...") when
-            # the cancel_token returns truthy; treat that as silent exit.
-            if 'cancel' in str(e).lower():
-                return
-            self.failed.emit(str(e), gen)
-        except Exception as e:
-            self.failed.emit(str(e), gen)
-
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -166,14 +105,6 @@ class MainWindow(QMainWindow):
         # ``_fft_time_thread.isRunning()``.
         self._fft_time_thread = None
         self._fft_time_worker = None
-        # Order worker (Plan Task 5). ``_order_worker`` is the live
-        # :class:`OrderWorker` (a QThread subclass) or None;
-        # ``_order_generation`` is a monotonically-increasing token used
-        # by :meth:`_dispatch_order_worker` so stale signals from a
-        # cancelled-but-still-emitting worker can be discarded by
-        # comparing ``generation`` in the slots.
-        self._order_worker = None
-        self._order_generation = 0
         self._last_batch_preset = None
         self._init_ui();
         self._connect()
@@ -286,8 +217,11 @@ class MainWindow(QMainWindow):
         self.inspector.plot_time_requested.connect(self.plot_time)
         self.inspector.fft_requested.connect(self.do_fft)
         self.inspector.order_time_requested.connect(self.do_order_time)
-        # T6: Inspector publishes a cancel intent without knowing about
-        # the worker; MainWindow translates it into ``OrderWorker.cancel``.
+        # Inspector publishes a cancel intent on btn_cancel; the slot is
+        # a forward-looking placeholder kept so the signal has a
+        # connection if/when an async COT worker is introduced. The
+        # current synchronous ``do_order_time`` cannot be cancelled, so
+        # the slot is a no-op (see ``_cancel_order_compute``).
         self.inspector.order_ctx.cancel_requested.connect(
             self._cancel_order_compute
         )
@@ -1342,18 +1276,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, 'FFT错误', str(e))
 
     # ------------------------------------------------------------------
-    # Order analysis (Plan Task 5: dispatch on OrderWorker QThread)
+    # Order analysis (synchronous COT path)
     # ------------------------------------------------------------------
-    # The synchronous `_order_progress + QApplication.processEvents()`
-    # path was deleted in T5; progress is now signalled via
-    # `OrderWorker.progress` and consumed by `_on_order_progress`. Slot
-    # methods compare the carried `generation` against
-    # `self._order_generation` so a stale worker that has been
-    # cancelled-but-not-yet-stopped cannot mutate UI on the main thread.
-    # See spec §4.3 and lessons:
-    #   - pyqt-ui/2026-04-25-defer-retry-from-worker-failed-slot.md
-    #   - pyqt-ui/2026-04-25-qthread-wait-deadlocks-queued-quit.md
-    #   - pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle.md
+    # ``do_order_time`` runs ``COTOrderAnalyzer.compute`` synchronously
+    # on the GUI thread (Wave 2, 2026-04-28). An async COT worker
+    # remains out of scope.
 
     def do_order_time(self):
         t, sig, fs = self._get_sig()
@@ -1369,10 +1296,10 @@ class MainWindow(QMainWindow):
             return
         fs = self.inspector.order_ctx.fs()
         # Wave 2 (2026-04-28 plan): COT is the only tracking algorithm.
-        # The frequency-domain branch (and its async OrderWorker dispatch)
-        # has been deleted alongside combo_algorithm. COTOrderAnalyzer
-        # runs synchronously on the GUI thread — acceptable for v1
-        # wiring; an async COT worker remains out of scope.
+        # The frequency-domain branch has been deleted alongside
+        # combo_algorithm. COTOrderAnalyzer runs synchronously on the
+        # GUI thread — acceptable for v1 wiring; an async COT worker
+        # remains out of scope.
         order_params = self.inspector.order_ctx.current_params()
         op = self.inspector.order_ctx.get_params()
         from ..signal.order_cot import COTOrderAnalyzer, COTParams
@@ -1407,89 +1334,14 @@ class MainWindow(QMainWindow):
         return
 
     def _cancel_order_compute(self):
-        """Slot for ``OrderContextual.cancel_requested``.
+        """Forward-looking placeholder for a future async COT worker.
 
-        Cancellation is cooperative: ``OrderWorker.cancel`` flips a flag
-        that ``compute_*`` polls between batches, so the worker thread
-        keeps running until the next checkpoint. We update the status
-        bar + clear the progress label immediately so the user gets
-        feedback even before the worker actually exits. The button
-        itself is disabled by ``_on_order_result`` / ``_on_order_failed``
-        once the worker emits its terminal signal — disabling it here
-        would make the UI lie if the worker manages to finish before
-        the cancel flag is sampled.
+        Kept so ``OrderContextual.cancel_requested`` has a slot to
+        connect to. The current ``do_order_time`` runs synchronously on
+        the GUI thread and cannot be cancelled mid-compute, so this is
+        a no-op until an async COT worker is introduced.
         """
-        worker = getattr(self, '_order_worker', None)
-        if worker is not None and worker.isRunning():
-            worker.cancel()
-            self.statusBar.showMessage('阶次计算已取消')
-            self.inspector.order_ctx.set_progress("")
-
-    def _dispatch_order_worker(self, kind, sig, rpm, t, params, *, status_msg):
-        """Spin up an :class:`OrderWorker`, cancelling any predecessor.
-
-        Increments ``_order_generation`` first so signals from a worker
-        we are about to abort can be discarded by the slots'
-        generation-equality check, even if the queued slot fires after
-        ``cancel()`` (cancel is cooperative, not instantaneous).
-        """
-        # 1. Bump generation token; the new worker carries it forward
-        #    and the slots compare against this value.
-        self._order_generation = getattr(self, '_order_generation', 0) + 1
-        gen = self._order_generation
-
-        # 2. Cancel + disconnect the previous worker if still running.
-        old = getattr(self, '_order_worker', None)
-        if old is not None and old.isRunning():
-            try:
-                old.result_ready.disconnect()
-                old.failed.disconnect()
-                old.progress.disconnect()
-            except TypeError:
-                pass
-            old.cancel()
-            if not old.wait(2000):
-                # wait timed out — escalate to terminate; give 500 ms
-                # for the OS to actually reap the thread.
-                old.terminate()
-                old.wait(500)
-
-        # 3. Build the new worker and wire signals.
-        worker = OrderWorker(kind, sig, rpm, t, params,
-                              generation=gen, parent=self)
-        worker.progress.connect(self._on_order_progress)
-        worker.result_ready.connect(self._on_order_result)
-        worker.failed.connect(self._on_order_failed)
-        self._order_worker = worker
-        self.statusBar.showMessage(status_msg)
-        self.inspector.order_ctx.set_progress("0%")
-        # T6: btn_cancel is now part of OrderContextual unconditionally,
-        # so call setEnabled directly without a defensive getattr.
-        self.inspector.order_ctx.btn_cancel.setEnabled(True)
-        worker.start()
-
-    def _on_order_progress(self, current, total, generation):
-        if generation != getattr(self, '_order_generation', -1):
-            return  # stale; drop
-        if total > 0:
-            self.inspector.order_ctx.set_progress(
-                f"{int(current / total * 100)}%"
-            )
-
-    def _on_order_failed(self, msg, generation):
-        if generation != getattr(self, '_order_generation', -1):
-            return  # stale; drop
-        self.inspector.order_ctx.set_progress("")
-        self.inspector.order_ctx.btn_cancel.setEnabled(False)
-        QMessageBox.critical(self, "错误", msg)
-
-    def _on_order_result(self, result, kind, generation):
-        if generation != getattr(self, '_order_generation', -1):
-            return  # stale; drop
-        self.inspector.order_ctx.set_progress("")
-        self.inspector.order_ctx.btn_cancel.setEnabled(False)
-        if kind == 'time':
-            self._render_order_time(result)
+        pass
 
     def _render_order_time(self, result):
         title = (
@@ -1555,37 +1407,15 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
-        """Stop every running worker before the window is destroyed.
+        """Stop the FFT-vs-Time worker before the window is destroyed.
 
-        Two distinct lifecycles to handle (spec §4.3):
-
-        1. ``_order_worker`` — a :class:`OrderWorker` (QThread subclass)
-           with built-in ``cancel() + isRunning()``. Cancel, wait, and
-           on timeout escalate to ``terminate()``.
-
-        2. ``_fft_time_thread + _fft_time_worker`` — a
-           ``QObject + QThread`` pair (see :class:`FFTTimeWorker` /
-           :meth:`do_fft_time` near ``main_window.py:1469-1495``). The
-           worker has ``cancel()`` (sets a flag the analyzer polls per
-           frame); the thread is what owns ``isRunning()``. The wired
-           ``thread.finished -> deleteLater`` chain handles cleanup —
-           we just need to give it time to run via ``quit() + wait()``.
+        ``_fft_time_thread + _fft_time_worker`` is a ``QObject + QThread``
+        pair (see :class:`FFTTimeWorker` / :meth:`do_fft_time`). The
+        worker has ``cancel()`` (sets a flag the analyzer polls per
+        frame); the thread is what owns ``isRunning()``. The wired
+        ``thread.finished -> deleteLater`` chain handles cleanup — we
+        just need to give it time to run via ``quit() + wait()``.
         """
-        # 1. order worker (QThread subclass)
-        order_worker = getattr(self, '_order_worker', None)
-        if order_worker is not None and order_worker.isRunning():
-            try:
-                order_worker.result_ready.disconnect()
-                order_worker.failed.disconnect()
-                order_worker.progress.disconnect()
-            except (TypeError, AttributeError):
-                pass
-            order_worker.cancel()
-            if not order_worker.wait(2000):
-                order_worker.terminate()
-                order_worker.wait(500)
-
-        # 2. FFT-vs-Time (QObject worker + QThread)
         fft_thread = getattr(self, '_fft_time_thread', None)
         fft_worker = getattr(self, '_fft_time_worker', None)
         if fft_thread is not None and fft_thread.isRunning():

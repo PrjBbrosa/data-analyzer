@@ -34,8 +34,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ._axis_defaults import z_range_for
 from .icons import Icons
-from .widgets.compact_spinbox import CompactDoubleSpinBox
+from .widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 from .widgets.searchable_combo import SearchableComboBox
 
 
@@ -50,15 +51,15 @@ def _preset_settings():
 def _no_buttons(spin):
     """Strip the up/down stepper from a Q(Double)SpinBox.
 
-    Wave 2a (2026-04-29) collapsed the QSS subcontrol bodies to zero so
-    the right-gutter buttons render no glyph and reserve no width. We
-    pair that with ``setButtonSymbols(NoButtons)`` at every construction
-    site so platforms whose native style still paints a stepper despite
-    the zero-width QSS (Windows fusion / macOS aqua) hide the buttons
-    too. Returns the spin so callers can chain.
+    Thin re-export of :func:`mf4_analyzer.ui.widgets.compact_spinbox.no_buttons`
+    so all spinboxes — Inspector, batch ``method_buttons``, dialogs,
+    popovers — go through one helper that pairs ``setButtonSymbols``
+    with the ``compact=True`` dynamic property that opts the widget
+    into the project's QSS subcontrol collapse rules. Kept private to
+    preserve the existing 20+ call sites; new callers should import
+    ``no_buttons`` directly. Returns ``spin`` for chaining.
     """
-    spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
-    return spin
+    return no_buttons(spin)
 
 
 def _make_group_header(title, action_button=None, parent=None):
@@ -1934,11 +1935,12 @@ class OrderContextual(QWidget):
     order_time_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
-    # T6: cancel intent for the in-flight :class:`OrderWorker`. MainWindow
-    # connects this to ``_cancel_order_compute``; the button at the bottom
-    # of the layout drives it directly via ``clicked``. Disabled until a
-    # worker is actually running (``_dispatch_order_worker`` enables; the
-    # ``_on_order_*`` slots disable on completion / failure).
+    # Placeholder cancel intent — the W4 cleanup (2026-05-01) removed the
+    # ``OrderWorker`` async path along with its dispatch / completion
+    # slots, so this signal currently has no producer and the host slot
+    # is a no-op. ``btn_cancel`` and the wiring are kept as scaffolding
+    # for a future async COT (compute-on-thread) worker; until then the
+    # button stays disabled and the signal is dormant.
     cancel_requested = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -2129,10 +2131,20 @@ class OrderContextual(QWidget):
             for s in (parts['spin_min'], parts['spin_max']):
                 s.setEnabled(not auto)
 
-    def _on_amp_unit_changed(self, _txt):
-        """Switching dB↔Linear forces z_auto on to avoid stale range values
-        in the new unit. Per the 2026-04-28 plan."""
+    def _on_amp_unit_changed(self, text):
+        """Switching dB↔Linear forces z_auto on AND resets z_floor/z_ceiling
+        to the new unit's defaults so the previous unit's numeric range
+        cannot bleed into the new unit. Per the
+        2026-05-01-codex-review-fixes-design.md spec §1.4 contract.
+
+        Order matters: chk_z_auto must be set to True FIRST so that
+        ``_sync_axis_enabled`` (called at the end) sees the auto-on state
+        and disables both spinboxes.
+        """
+        floor, ceiling = z_range_for(text)
         self.chk_z_auto.setChecked(True)
+        self.spin_z_floor.setValue(floor)
+        self.spin_z_ceiling.setValue(ceiling)
         self._sync_axis_enabled()
 
     def _on_max_order_changed(self, val):
@@ -2664,10 +2676,20 @@ class FFTTimeContextual(QWidget):
             for s in (parts['spin_min'], parts['spin_max']):
                 s.setEnabled(not auto)
 
-    def _on_amp_unit_changed(self, _txt):
-        """Switching dB↔Linear forces z_auto on to avoid stale range values
-        in the new unit. Per the 2026-04-28 plan."""
+    def _on_amp_unit_changed(self, text):
+        """Switching dB↔Linear forces z_auto on AND resets z_floor/z_ceiling
+        to the new unit's defaults so the previous unit's numeric range
+        cannot bleed into the new unit. Per the
+        2026-05-01-codex-review-fixes-design.md spec §1.4 contract.
+
+        Order matters: chk_z_auto must be set to True FIRST so that
+        ``_sync_axis_enabled`` (called at the end) sees the auto-on state
+        and disables both spinboxes.
+        """
+        floor, ceiling = z_range_for(text)
         self.chk_z_auto.setChecked(True)
+        self.spin_z_floor.setValue(floor)
+        self.spin_z_ceiling.setValue(ceiling)
         self._sync_axis_enabled()
 
     def _on_sig_index_changed(self):

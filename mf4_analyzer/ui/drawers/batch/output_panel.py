@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....batch import BatchOutput
+from ..._axis_defaults import z_range_for
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
 
 
@@ -125,7 +126,13 @@ class OutputPanel(QWidget):
         self._chk_data.toggled.connect(lambda *_: self.changed.emit())
         self._chk_image.toggled.connect(lambda *_: self.changed.emit())
         self._combo_format.currentTextChanged.connect(lambda *_: self.changed.emit())
-        self.combo_amp_unit.currentTextChanged.connect(lambda *_: self.changed.emit())
+        # User-driven dB↔Linear toggle: per spec §1.4 reset z_auto/z_range
+        # to the new unit's defaults. Programmatic ``apply_axis_params``
+        # path wraps its own ``setCurrentIndex`` in ``blockSignals`` so
+        # preset loads do NOT re-enter this handler. Coalesce the three
+        # internal mutations (chk + 2 spins) into a single ``changed``
+        # emit (§5 风险 OutputPanel emits).
+        self.combo_amp_unit.currentTextChanged.connect(self._on_amp_unit_changed)
         for chk in (self.chk_x_auto, self.chk_y_auto, self.chk_z_auto):
             chk.toggled.connect(self._sync_axis_enabled)
             chk.toggled.connect(lambda *_: self.changed.emit())
@@ -150,6 +157,36 @@ class OutputPanel(QWidget):
             unit_widget.setMinimumWidth(72)
             lay.addWidget(unit_widget)
         return row
+
+    def _on_amp_unit_changed(self, text: str) -> None:
+        """User toggled dB↔Linear on ``combo_amp_unit``.
+
+        Per spec §1.2/§1.4 (2026-05-01-codex-review-fixes): force
+        ``z_auto`` ON and reset (z_floor, z_ceiling) to the new unit's
+        defaults so the previous unit's numeric range cannot bleed into
+        the new unit. Mirrors ``OrderContextual._on_amp_unit_changed`` /
+        ``FFTTimeContextual._on_amp_unit_changed`` in
+        ``inspector_sections.py``.
+
+        Emit-once mitigation (§5 风险 OutputPanel emits): each mutated
+        child widget's own ``toggled`` / ``valueChanged`` signal is
+        normally re-emitted as ``self.changed``. To avoid the batch
+        preset becoming dirty 3+ times for one user action, block the
+        children only (NOT ``self``) while mutating, then emit
+        ``changed`` once at the end.
+        """
+        floor, ceiling = z_range_for(text)
+        for w in (self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling):
+            w.blockSignals(True)
+        try:
+            self.chk_z_auto.setChecked(True)
+            self.spin_z_floor.setValue(floor)
+            self.spin_z_ceiling.setValue(ceiling)
+        finally:
+            for w in (self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling):
+                w.blockSignals(False)
+        self._sync_axis_enabled()
+        self.changed.emit()
 
     def _sync_axis_enabled(self) -> None:
         for chk, lo, hi in (
@@ -215,6 +252,22 @@ class OutputPanel(QWidget):
     def apply_axis_params(self, params: dict) -> None:
         if not params:
             return
+        # Apply combo_amp_unit FIRST under blockSignals so the W2
+        # ``_on_amp_unit_changed`` reset handler does NOT fire on
+        # programmatic preset loads (§1.5 边界: programmatic setters
+        # must round-trip the user's persisted z_floor/z_ceiling/z_auto
+        # intact). Apply checkboxes + spins AFTERWARD so the preset's
+        # numbers win irrespective of any handler that did slip through.
+        if "amplitude_mode" in params:
+            raw = str(params.get("amplitude_mode", ""))
+            target = "dB" if "db" in raw.lower() else "Linear"
+            idx = self.combo_amp_unit.findText(target)
+            if idx >= 0:
+                self.combo_amp_unit.blockSignals(True)
+                try:
+                    self.combo_amp_unit.setCurrentIndex(idx)
+                finally:
+                    self.combo_amp_unit.blockSignals(False)
         for key, widget in (
             ("x_auto", self.chk_x_auto),
             ("y_auto", self.chk_y_auto),
@@ -232,10 +285,4 @@ class OutputPanel(QWidget):
                     widget.setValue(float(params[key]))
                 except (TypeError, ValueError):
                     pass
-        if "amplitude_mode" in params:
-            raw = str(params.get("amplitude_mode", ""))
-            target = "dB" if "db" in raw.lower() else "Linear"
-            idx = self.combo_amp_unit.findText(target)
-            if idx >= 0:
-                self.combo_amp_unit.setCurrentIndex(idx)
         self._sync_axis_enabled()

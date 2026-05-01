@@ -336,6 +336,12 @@ def test_batch_sheet_get_preset_includes_output_axis_params(qtbot):
     sheet = BatchSheet(parent=None, files={}, current_preset=None)
     qtbot.addWidget(sheet)
     assert sheet._output_panel.combo_amp_unit.currentText() == "dB"
+    # Per spec §1.4, switching ``combo_amp_unit`` resets ``z_auto`` and the
+    # z-range spins to the new unit's defaults. To verify that the user's
+    # *manual* axis-range entries round-trip into the preset, set the unit
+    # FIRST, then enter manual ranges; otherwise the unit-toggle would wipe
+    # the z-range we just typed in.
+    sheet._output_panel.combo_amp_unit.setCurrentText("Linear")
     sheet._output_panel.chk_x_auto.setChecked(False)
     sheet._output_panel.spin_x_min.setValue(1.0)
     sheet._output_panel.spin_x_max.setValue(2.0)
@@ -345,7 +351,6 @@ def test_batch_sheet_get_preset_includes_output_axis_params(qtbot):
     sheet._output_panel.chk_z_auto.setChecked(False)
     sheet._output_panel.spin_z_floor.setValue(-40.0)
     sheet._output_panel.spin_z_ceiling.setValue(-5.0)
-    sheet._output_panel.combo_amp_unit.setCurrentText("Linear")
 
     params = sheet.get_preset().params
 

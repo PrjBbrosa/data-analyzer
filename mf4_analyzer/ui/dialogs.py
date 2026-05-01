@@ -302,6 +302,7 @@ class ChartOptionsDialog(QDialog):
         self.setWindowTitle("图表选项")
         self.setMinimumWidth(430)
         self._applied = False
+        self._invalid_axes: list[str] = []
         self._initial = self._read_axes()
 
         root = QVBoxLayout(self)
@@ -592,6 +593,9 @@ class ChartOptionsDialog(QDialog):
         self._sync_auto_fields()
 
     def apply_changes(self):
+        # Reset per-apply error collector; repeated clicks must not carry
+        # invalid-axis state from a previous attempt.
+        self._invalid_axes = []
         ax = self.ax
         ax.set_title(self.edit_title.text())
         self._apply_axis(
@@ -620,6 +624,19 @@ class ChartOptionsDialog(QDialog):
         self._apply_appearance()
         if ax.figure.canvas is not None:
             ax.figure.canvas.draw_idle()
+        if self._invalid_axes:
+            # Log scale + non-positive range: scale switch and label/legend
+            # changes still landed (user may want them), but the manual range
+            # was rejected and the axis fell back to autoscale. Surface that
+            # to the user; do NOT mark _applied so the OK path can refuse to
+            # close.
+            QMessageBox.warning(
+                self,
+                "范围非法",
+                "对数刻度下 X/Y 范围必须 > 0",
+            )
+            self._applied = False
+            return
         self._applied = True
 
     def was_applied(self):
@@ -627,20 +644,24 @@ class ChartOptionsDialog(QDialog):
 
     def _apply_axis(self, *, axis, auto, vmin, vmax, label, scale_text):
         scale = self.TEXT_TO_SCALE.get(scale_text, "linear")
-        if axis == "x":
-            self.ax.set_xscale(scale)
-            if auto:
-                self.ax.autoscale(axis="x")
-            else:
-                self.ax.set_xlim(float(vmin), float(vmax))
-            self.ax.set_xlabel(label)
+        setter_scale = self.ax.set_xscale if axis == "x" else self.ax.set_yscale
+        setter_lim = self.ax.set_xlim if axis == "x" else self.ax.set_ylim
+        setter_label = self.ax.set_xlabel if axis == "x" else self.ax.set_ylabel
+
+        setter_scale(scale)
+        if auto:
+            self.ax.autoscale(axis=axis)
         else:
-            self.ax.set_yscale(scale)
-            if auto:
-                self.ax.autoscale(axis="y")
+            if scale == "log" and (float(vmin) <= 0 or float(vmax) <= 0):
+                # Defer hard error to the apply() aggregator: collect axis,
+                # fall back to autoscale so the chart stays in a usable state
+                # rather than silently keeping a stale (or matplotlib-clamped)
+                # range.
+                self._invalid_axes.append(axis)
+                self.ax.autoscale(axis=axis)
             else:
-                self.ax.set_ylim(float(vmin), float(vmax))
-            self.ax.set_ylabel(label)
+                setter_lim(float(vmin), float(vmax))
+        setter_label(label)
 
     def _editable_lines(self):
         return [line for line in self.ax.get_lines() if line.get_visible()]
@@ -727,4 +748,8 @@ class ChartOptionsDialog(QDialog):
 
     def _accept_with_apply(self):
         self.apply_changes()
+        # If apply rejected (e.g. log + non-positive range), keep the dialog
+        # open so the user can correct the input.
+        if self._invalid_axes:
+            return
         self.accept()

@@ -17,11 +17,11 @@ from __future__ import annotations
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
-    QAbstractSpinBox, QButtonGroup, QCheckBox, QComboBox, QFormLayout,
+    QButtonGroup, QCheckBox, QComboBox, QFormLayout,
     QHBoxLayout, QPushButton, QSpinBox, QWidget,
 )
 
-from ...widgets.compact_spinbox import CompactDoubleSpinBox
+from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 
 
 _METHODS: tuple[tuple[str, str], ...] = (
@@ -120,16 +120,14 @@ class DynamicParamForm(QWidget):
         self._widgets["window"] = self._w_window
 
         # nfft — QSpinBox
-        self._w_nfft = QSpinBox(self)
-        self._w_nfft.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self._w_nfft = no_buttons(QSpinBox(self))
         self._w_nfft.setRange(64, 1 << 20)
         self._w_nfft.setValue(1024)
         self._w_nfft.valueChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["nfft"] = self._w_nfft
 
         # max_order
-        self._w_max_order = CompactDoubleSpinBox(self)
-        self._w_max_order.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self._w_max_order = no_buttons(CompactDoubleSpinBox(self))
         self._w_max_order.setRange(0.0, 1000.0)
         self._w_max_order.setDecimals(2)
         self._w_max_order.setValue(20.0)
@@ -137,8 +135,7 @@ class DynamicParamForm(QWidget):
         self._widgets["max_order"] = self._w_max_order
 
         # order_res
-        self._w_order_res = CompactDoubleSpinBox(self)
-        self._w_order_res.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self._w_order_res = no_buttons(CompactDoubleSpinBox(self))
         self._w_order_res.setRange(0.001, 100.0)
         self._w_order_res.setDecimals(3)
         self._w_order_res.setValue(0.05)
@@ -146,8 +143,7 @@ class DynamicParamForm(QWidget):
         self._widgets["order_res"] = self._w_order_res
 
         # time_res
-        self._w_time_res = CompactDoubleSpinBox(self)
-        self._w_time_res.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self._w_time_res = no_buttons(CompactDoubleSpinBox(self))
         self._w_time_res.setRange(0.001, 100.0)
         self._w_time_res.setDecimals(3)
         self._w_time_res.setValue(0.1)
@@ -155,8 +151,7 @@ class DynamicParamForm(QWidget):
         self._widgets["time_res"] = self._w_time_res
 
         # overlap — QDoubleSpinBox 0..0.95
-        self._w_overlap = CompactDoubleSpinBox(self)
-        self._w_overlap.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self._w_overlap = no_buttons(CompactDoubleSpinBox(self))
         self._w_overlap.setRange(0.0, 0.95)
         self._w_overlap.setSingleStep(0.05)
         self._w_overlap.setDecimals(2)

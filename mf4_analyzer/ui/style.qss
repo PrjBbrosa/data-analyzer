@@ -127,37 +127,47 @@ QComboBox::down-arrow:disabled {
     image: url("{{ICON_COMBO_DOWN_DISABLED}}");
 }
 
-/* Spin boxes are rendered as plain editable text fields — the right-
- * gutter stepper buttons were removed (2026-04-29). Users interact via
- * keyboard / scroll wheel only, so we reclaim the previous 24 px right
- * padding back to the symmetric 8 px used on every other side. Long-
- * form ``padding-left`` / ``padding-right`` so the global cascade keeps
- * the top/bottom values from the rule above (see lesson
+/* Spin boxes that opt-in via ``setProperty('compact', True)`` are
+ * rendered as plain editable text fields — the right-gutter stepper
+ * buttons were removed (2026-04-29). Users interact via keyboard /
+ * scroll wheel only, so we reclaim the previous 24 px right padding
+ * back to the symmetric 8 px used on every other side. Long-form
+ * ``padding-left`` / ``padding-right`` so the global cascade keeps the
+ * top/bottom values from the rule above (see lesson
  * pyqt-ui/2026-04-27-qss-padding-overrides-setcontentsmargins.md).
+ *
+ * The selectors below are scoped to ``[compact="true"]`` (P8-O1, Wave
+ * 5) so any future widget that wants the native stepper — e.g. a
+ * third-party dialog or a debug panel — can simply omit the property
+ * and inherit Qt's default chrome. The constructors that DO opt in
+ * are ``CompactDoubleSpinBox.__init__`` (covers every
+ * project-internal QDoubleSpinBox) and the shared ``no_buttons``
+ * helper in ``widgets/compact_spinbox.py`` (covers QSpinBox via
+ * inspector_sections._no_buttons + drawers/batch/method_buttons).
  *
  * Combo boxes intentionally KEEP their drop-down + arrow rules below;
  * the user requirement was 'QComboBox::drop-down 保留不动'. The four
  * spinbox subcontrols (::up-button / ::down-button / ::up-arrow /
  * ::down-arrow) are collapsed to zero so no gutter rectangle exists at
- * all — paired with widget-side ``setButtonSymbols(NoButtons)`` (see
- * inspector_sections._no_buttons) for double protection against QSS
- * residue on platforms where Qt's native style still draws a default
- * stepper. */
-QSpinBox, QDoubleSpinBox {
+ * all — paired with widget-side ``setButtonSymbols(NoButtons)`` (set
+ * by ``no_buttons`` in widgets/compact_spinbox.py) for double
+ * protection against QSS residue on platforms where Qt's native style
+ * still draws a default stepper. */
+QSpinBox[compact="true"], QDoubleSpinBox[compact="true"] {
     padding-left: 8px;
     padding-right: 8px;
 }
 
-QSpinBox::up-button, QDoubleSpinBox::up-button,
-QSpinBox::down-button, QDoubleSpinBox::down-button {
+QSpinBox[compact="true"]::up-button, QDoubleSpinBox[compact="true"]::up-button,
+QSpinBox[compact="true"]::down-button, QDoubleSpinBox[compact="true"]::down-button {
     width: 0;
     height: 0;
     border: none;
     background: transparent;
     subcontrol-position: top right;
 }
-QSpinBox::up-arrow, QDoubleSpinBox::up-arrow,
-QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+QSpinBox[compact="true"]::up-arrow, QDoubleSpinBox[compact="true"]::up-arrow,
+QSpinBox[compact="true"]::down-arrow, QDoubleSpinBox[compact="true"]::down-arrow {
     image: none;
     width: 0;
     height: 0;
@@ -492,23 +502,26 @@ Inspector QWidget#axisManualRangePage {
 }
 
 /* Inspector numeric fields are typed inputs, not stepper controls. Keep
- * QComboBox drop-down arrows above; only spinbox stepper chrome is removed. */
-Inspector QSpinBox,
-Inspector QDoubleSpinBox {
+ * QComboBox drop-down arrows above; only spinbox stepper chrome is
+ * removed. Selectors are scoped to [compact="true"] (Wave 5, P8-O1) so
+ * the global rules above and these Inspector overrides are gated by the
+ * same dynamic property — see compact_spinbox.no_buttons / __init__. */
+Inspector QSpinBox[compact="true"],
+Inspector QDoubleSpinBox[compact="true"] {
     padding-right: 8px;
 }
-Inspector QSpinBox::up-button,
-Inspector QDoubleSpinBox::up-button,
-Inspector QSpinBox::down-button,
-Inspector QDoubleSpinBox::down-button {
+Inspector QSpinBox[compact="true"]::up-button,
+Inspector QDoubleSpinBox[compact="true"]::up-button,
+Inspector QSpinBox[compact="true"]::down-button,
+Inspector QDoubleSpinBox[compact="true"]::down-button {
     width: 0;
     border: none;
     image: none;
 }
-Inspector QSpinBox::up-arrow,
-Inspector QDoubleSpinBox::up-arrow,
-Inspector QSpinBox::down-arrow,
-Inspector QDoubleSpinBox::down-arrow {
+Inspector QSpinBox[compact="true"]::up-arrow,
+Inspector QDoubleSpinBox[compact="true"]::up-arrow,
+Inspector QSpinBox[compact="true"]::down-arrow,
+Inspector QDoubleSpinBox[compact="true"]::down-arrow {
     image: none;
     width: 0;
     height: 0;
