@@ -12,6 +12,19 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/scripts/lessons/check.py\" --post-tool-hook",
+            "timeout": 10,
+            "statusMessage": "Recording lesson signals"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

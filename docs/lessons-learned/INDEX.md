@@ -15,6 +15,7 @@ lesson by default.
 | [Codex Performance And UI Audit Flow](codex-performance-ui-audit-flow.md) | Performance research before edits; read-only UI audits. | Report-first flow; grep toast/modal paths and related tests |
 | [Codex Order Canvas Wave Review](codex-order-canvas-wave-review.md) | Order-canvas wave reviews, stale-generation tests, strict scope. | `git status`, `git diff`, `git show HEAD:<file>`, scoped pytest |
 | [Codex Publish Flow Lightweight](codex-publish-flow-lightweight.md) | Publish already-local changes: commit, push, open/write PR. | Bounded git status/diff/checks; no audit-style exploration |
+| [Codex Lessons System Maintenance](codex-lessons-system-maintenance.md) | Codex lessons system changes, hook tuning, master-kit sync, or `scripts/lessons/*` edits. | `scripts/lessons/check.py --doctor --verbose` |
 
 ## Selection Rules
 
