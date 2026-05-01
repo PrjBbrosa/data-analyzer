@@ -18,11 +18,12 @@ _ACTION_TOOLTIPS = {
     'save':     ('保存图片', True),
     'subplots': ('', False),
     'configure subplots': ('', False),
+    'customize': ('', False),
 }
 
 
 def apply_chinese_toolbar_labels(toolbar):
-    """Mutate ``toolbar``: drop Subplots action only; replace tooltip text
+    """Mutate ``toolbar``: drop native config actions; replace tooltip text
     on remaining actions (including Back/Forward); preserve the original
     english key in ``act.data()`` so downstream lookups stay stable across
     matplotlib versions and locale changes.

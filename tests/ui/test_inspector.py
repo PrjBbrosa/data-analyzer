@@ -648,7 +648,8 @@ def test_preset_bar_summary_uses_name_value_colours(qapp):
 
 
 def test_preset_bar_uses_custom_hover_card_instead_of_qtooltip(qapp, qtbot):
-    from PyQt5.QtWidgets import QLabel
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QFrame, QLabel
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     current = lambda: {
@@ -672,6 +673,11 @@ def test_preset_bar_uses_custom_hover_card_instead_of_qtooltip(qapp, qtbot):
 
     assert bar._hover_card.isVisible()
     assert bar._hover_card.objectName() == 'presetHoverCard'
+    assert bar._hover_card.testAttribute(Qt.WA_TranslucentBackground)
+    assert int(bar._hover_card.windowFlags()) & int(Qt.NoDropShadowWindowHint)
+    panel = bar._hover_card.findChild(QFrame, 'presetHoverPanel')
+    assert panel is not None
+    assert panel.testAttribute(Qt.WA_StyledBackground)
     assert bar._hover_card.findChild(QLabel, 'presetHoverTitle').text() == '配置1'
     chips = [c.text() for c in bar._hover_card.findChildren(QLabel, 'presetChip')]
     assert any('窗函数' in c and 'hanning' in c for c in chips)
@@ -679,6 +685,16 @@ def test_preset_bar_uses_custom_hover_card_instead_of_qtooltip(qapp, qtbot):
     assert any('X' in c and '0 → 600' in c for c in chips)
     bar._hide_hover()
     bar._delete(1)
+
+
+def test_tooltip_qss_does_not_draw_square_outer_frame():
+    from pathlib import Path
+
+    qss = Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+    tooltip_block = qss[qss.index("QToolTip {"): qss.index("}", qss.index("QToolTip {"))]
+
+    assert "border: none" in tooltip_block
+    assert "border-radius: 8px" in tooltip_block
 
 
 # ---- R3 #9: rebuild button moved to group header ----
@@ -1316,32 +1332,31 @@ def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     assert bar._load_btns[1].text() == '配置1'
 
 
-# ---- HEAD-style smoothness defaults for FFT-vs-Time spectrogram ----
-#
-# Two coupled changes raise spectrogram visual smoothness without a DSP
-# rewrite:
-#   1. FFTTimeContextual.spin_overlap default 75% → 88% (closest integer
-#      to the 87.5% target on a QSpinBox-percent control), max 90% → 95%.
-#      Doubling the frame count keeps memory inside the existing chunk
-#      budget (see signal-processing/2026-04-26-batched-fft-transient-…).
-#   2. SpectrogramCanvas.plot_result imshow uses interpolation='bilinear'
-#      instead of 'nearest' — pure display-side smoothing, no DSP impact.
+# ---- Requested first-open defaults for FFT-vs-Time spectrogram ----
 
-def test_fft_time_overlap_default_and_max_target_smooth_spectrogram(qtbot):
-    """The FFT-vs-Time overlap spinbox must default to 88% (the integer
-    realisation of the 87.5% smoothness target) and allow up to 95%.
-    """
+def test_fft_time_defaults_match_requested_screenshot(qtbot):
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
-    # Default value — 88% is the closest QSpinBox integer to the 87.5%
-    # smoothness target documented in the FFT-vs-Time integration plan.
-    assert ctx.spin_overlap.value() == 88, (
+
+    params = ctx.get_params()
+    assert params['nfft'] == 1024
+    assert params['window'] == 'hanning'
+    assert params['overlap'] == 0.80
+    assert params['remove_mean'] is True
+    assert params['db_reference'] == 1.0
+    assert params['x_auto'] is True
+    assert params['y_auto'] is True
+    assert params['z_auto'] is False
+    assert params['z_floor'] == -70.0
+    assert params['z_ceiling'] == -20.0
+    assert params['cmap'] == 'turbo'
+    assert ctx.spin_overlap.value() == 80, (
         f"FFTTimeContextual.spin_overlap default = "
-        f"{ctx.spin_overlap.value()}; expected 88 (87.5% target)."
+        f"{ctx.spin_overlap.value()}; expected 80."
     )
-    # Maximum — must be raised to 95 so users can pick the COLA-safe
-    # high-overlap region for visually smooth spectrograms.
+    # Keep the raised maximum so existing high-overlap presets/user values
+    # still round-trip.
     assert ctx.spin_overlap.maximum() == 95, (
         f"FFTTimeContextual.spin_overlap.maximum() = "
         f"{ctx.spin_overlap.maximum()}; expected 95."
@@ -1716,13 +1731,32 @@ def test_order_contextual_has_axis_settings_group(qtbot):
     ):
         assert hasattr(oc, name), f'missing {name}'
 
-    # Defaults: x/y auto on, z auto off (mirrors old default 30 dB)
+    # Defaults: x/y auto on, z auto off with the requested first-open range.
     assert oc.chk_x_auto.isChecked()
     assert oc.chk_y_auto.isChecked()
     assert not oc.chk_z_auto.isChecked()
-    assert oc.spin_z_floor.value() == -30.0
-    assert oc.spin_z_ceiling.value() == 0.0
+    assert oc.spin_z_floor.value() == -50.0
+    assert oc.spin_z_ceiling.value() == -10.0
     assert oc.combo_amp_unit.currentText() == 'dB'
+
+
+def test_order_contextual_defaults_match_requested_screenshot(qtbot):
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+    p = oc.current_params()
+
+    assert p['max_order'] == 20
+    assert p['order_res'] == 0.1
+    assert p['time_res'] == 0.05
+    assert p['nfft'] == 2048
+    assert p['samples_per_rev'] == 256
+    assert p['x_auto'] is True
+    assert p['y_auto'] is True
+    assert p['z_auto'] is False
+    assert p['z_floor'] == -50.0
+    assert p['z_ceiling'] == -10.0
 
 
 def test_order_contextual_combo_amp_mode_and_dynamic_removed(qtbot):

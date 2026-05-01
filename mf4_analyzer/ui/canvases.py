@@ -5,7 +5,6 @@ from collections import OrderedDict
 import numpy as np
 
 import matplotlib as _mpl
-from PyQt5.QtWidgets import QDialog
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -13,8 +12,6 @@ from matplotlib.figure import Figure
 from matplotlib.widgets import SpanSelector
 from matplotlib.ticker import MaxNLocator
 from matplotlib.patches import Rectangle
-
-from .dialogs import AxisEditDialog
 
 # ----------------------------------------------------------------------
 # Phase 1 item 5: free Matplotlib rcParams wins.
@@ -63,6 +60,36 @@ def _is_monotonic_array(t):
     return bool(np.all(np.diff(arr) >= 0))
 
 
+def _first_live_axes(fig, preferred=()):
+    """Return the first still-live axes, preferring caller-owned handles."""
+    for ax in preferred:
+        if ax is not None and ax in fig.axes:
+            return ax
+    return fig.axes[0] if fig.axes else None
+
+
+def _open_chart_options_for_axes(canvas, ax=None, preferred=()):
+    from ._axis_interaction import edit_chart_options_dialog
+
+    remembered = getattr(canvas, '_chart_options_ax', None)
+    if ax is None:
+        ax = _first_live_axes(canvas.fig, (remembered,) + tuple(preferred))
+    if ax is None:
+        return False
+    canvas._chart_options_ax = ax
+    if edit_chart_options_dialog(canvas.parent(), ax):
+        canvas.draw_idle()
+        return True
+    return False
+
+
+def _open_chart_options_for_event(canvas, event):
+    from ._axis_interaction import target_axes_for_event
+
+    ax = target_axes_for_event(canvas.fig, event, AXIS_HIT_MARGIN_PX)
+    return _open_chart_options_for_axes(canvas, ax=ax)
+
+
 def _apply_axes_style(ax, grid=True):
     ax.set_facecolor(CHART_FACE)
     ax.tick_params(axis='both', colors=AXIS_TEXT, labelsize=8)
@@ -74,6 +101,26 @@ def _apply_axes_style(ax, grid=True):
         spine.set_linewidth(0.8)
     if grid:
         ax.grid(True, color=GRID_LINE, alpha=0.78, ls='--', lw=0.7)
+
+
+def _apply_heatmap_axes_style(ax):
+    _apply_axes_style(ax)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
+def _apply_heatmap_colorbar_style(cbar):
+    if cbar is None:
+        return
+    cax = cbar.ax
+    cax.grid(False)
+    cax.xaxis.set_visible(False)
+    cax.tick_params(axis='x', which='both', bottom=False, top=False,
+                    labelbottom=False, labeltop=False)
+    for spine in cax.spines.values():
+        spine.set_visible(False)
+    if getattr(cbar, 'outline', None) is not None:
+        cbar.outline.set_visible(False)
 
 
 def _split_prefixed_label(text):
@@ -96,6 +143,18 @@ def _compact_axis_label(name, unit='', max_chars=22):
     if prefix is not None:
         return f"{prefix}\n{rest}"
     return text[:max_chars - 3] + '...'
+
+
+def _middle_ellipsis(text, max_chars=56):
+    text = str(text)
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 8:
+        return text[:max(1, max_chars - 3)] + '...'
+    keep = max_chars - 3
+    left = max(1, keep // 2)
+    right = max(1, keep - left)
+    return f"{text[:left]}...{text[-right:]}"
 
 
 def _set_series_ylabel(ax, label, color, labelpad=10, unit='', side='left'):
@@ -371,6 +430,9 @@ class TimeDomainCanvas(FigureCanvas):
         # _envelope_cached / _envelope so the hot path does not re-run
         # _is_monotonic_array on every viewport change.
         self._channel_is_monotonic = {}
+        self._inside_channel_label_artists = []
+        self._last_channel_label_mode = 'axis'
+        self._chart_options_ax = None
         self.span_selector = None
         # ----- viewport refresh wiring (Phase 1 items 2 + 5) -----
         # The "primary" axis is the one whose xlim_changed we listen to.
@@ -421,6 +483,11 @@ class TimeDomainCanvas(FigureCanvas):
         self.mpl_connect('button_press_event', self._track_mouse_press)
         self.mpl_connect('button_release_event', self._track_mouse_release)
 
+    def open_chart_options_dialog(self, ax=None):
+        return _open_chart_options_for_axes(
+            self, ax=ax, preferred=tuple(self.axes_list)
+        )
+
     def clear(self):
         # Drop any in-flight rubber-band refs before fig.clear discards the axes.
         self._rb_patch = None
@@ -441,6 +508,9 @@ class TimeDomainCanvas(FigureCanvas):
         self._channel_data_id = {}
         self._channel_lines = {}
         self._channel_is_monotonic = {}
+        self._inside_channel_label_artists = []
+        self._last_channel_label_mode = 'axis'
+        self._chart_options_ax = None
         self._primary_xaxis_ax = None
         self._cursor_artists = [];
         self._a_artists = [];
@@ -499,10 +569,12 @@ class TimeDomainCanvas(FigureCanvas):
         if not vis: self.draw(); return
         if mode == 'subplot' and len(vis) > 1:
             n = len(vis); first = None
+            subplot_specs = []
             for i, (name, t, sig, color, unit, data_id) in enumerate(vis):
                 ax = self.fig.add_subplot(n, 1, i + 1, sharex=first) if i > 0 else self.fig.add_subplot(n, 1, 1)
                 if i == 0: first = ax
                 self.axes_list.append(ax)
+                subplot_specs.append((ax, name, color))
                 _apply_axes_style(ax)
                 td, sd = self._ds(t, sig)
                 line, = ax.plot(td, sd, color=color, lw=1.05)
@@ -521,6 +593,10 @@ class TimeDomainCanvas(FigureCanvas):
                 else:
                     ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
             self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
+            self.fig.canvas.draw()
+            if self._subplot_ylabels_need_inside_labels():
+                self._apply_inside_channel_labels(subplot_specs)
+                self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
         elif mode == 'overlay' and len(vis) >= 2:
             # Per-channel twin-Y axes
             ax0 = self.fig.add_subplot(1, 1, 1); self.axes_list.append(ax0)
@@ -582,6 +658,59 @@ class TimeDomainCanvas(FigureCanvas):
             self._primary_xaxis_ax = self.axes_list[0]
             self._connect_xlim_listener(self._primary_xaxis_ax)
         self.draw(); self._refresh = True
+
+    def _subplot_ylabels_need_inside_labels(self):
+        if len(self.axes_list) <= 1:
+            return False
+        renderer = self.fig.canvas.get_renderer()
+        fig_bbox = self.fig.bbox
+        label_bboxes = []
+        for ax in self.axes_list:
+            label = ax.yaxis.label
+            if not label.get_text():
+                continue
+            bbox = label.get_window_extent(renderer).expanded(1.02, 1.04)
+            label_bboxes.append(bbox)
+            ax_bbox = ax.get_window_extent(renderer)
+            if bbox.height > ax_bbox.height * 0.90:
+                return True
+            if bbox.x0 < fig_bbox.x0 + 2:
+                return True
+            for tick in ax.yaxis.get_major_ticks():
+                tick_label = tick.label1
+                if not tick_label.get_visible():
+                    continue
+                tick_bbox = tick_label.get_window_extent(renderer)
+                if bbox.overlaps(tick_bbox):
+                    return True
+        for i, left in enumerate(label_bboxes):
+            for right in label_bboxes[i + 1:]:
+                if left.overlaps(right):
+                    return True
+        return False
+
+    def _apply_inside_channel_labels(self, subplot_specs):
+        self._inside_channel_label_artists = []
+        self._last_channel_label_mode = 'inside'
+        for ax, name, color in subplot_specs:
+            ax.set_ylabel("")
+            label = _middle_ellipsis(name, max_chars=48)
+            artist = ax.text(
+                0.012, 0.985, f"\u25cf {label}",
+                transform=ax.transAxes,
+                ha='left', va='top',
+                fontsize=8, fontweight='700',
+                color=color,
+                bbox={
+                    'boxstyle': 'round,pad=0.24',
+                    'facecolor': (1.0, 1.0, 1.0, 0.86),
+                    'edgecolor': color,
+                    'linewidth': 0.8,
+                },
+                clip_on=False,
+            )
+            artist.set_gid(str(name))
+            self._inside_channel_label_artists.append(artist)
 
     def _ds(self, t, sig, xlim=None, pixel_width=None):
         """Downsample for display.
@@ -934,14 +1063,10 @@ class TimeDomainCanvas(FigureCanvas):
         self._mouse_button_pressed = False
 
     def _on_click(self, e):
-        # Double-click on axis label region → open AxisEditDialog (priority over
-        # dual-cursor / rubber-band logic). Routes to all 4 canvases via the
-        # _axis_interaction helper.
+        # Double-click on the plot face or axis gutter opens the full chart
+        # options dialog for the targeted axes.
         if e.button == 1 and e.dblclick:
-            from ._axis_interaction import find_axis_for_dblclick, edit_axis_dialog
-            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, AXIS_HIT_MARGIN_PX)
-            if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
-                self.draw_idle()
+            _open_chart_options_for_event(self, e)
             return
         # Axis-lock mode short-circuits dual-cursor and initiates rubber-band
         if self._axis_lock is not None and e.button == 1 and e.inaxes is not None \
@@ -978,7 +1103,7 @@ class TimeDomainCanvas(FigureCanvas):
             ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, AXIS_HIT_MARGIN_PX)
             if ax is not None:
                 self.setCursor(Qt.PointingHandCursor)
-                self.setToolTip("双击编辑坐标轴")
+                self.setToolTip("双击打开图表选项")
             else:
                 self.unsetCursor()
                 self.setToolTip("")
@@ -1190,6 +1315,7 @@ class SpectrogramCanvas(FigureCanvas):
         self._cursor_line = None
         self._remarks = []  # [(ax, annotation_artist, dot_artist)]
         self._remark_enabled = False
+        self._chart_options_ax = None
         # Track figure-level mpl_connect cids so full_reset can drop them.
         # Figure-level cids survive fig.clear() (axes-level Axes.callbacks
         # do not — see lessons-learned), but tracking is cheap and lets
@@ -1215,8 +1341,14 @@ class SpectrogramCanvas(FigureCanvas):
         self._colorbar = None
         self._cursor_line = None
         self._remarks = []
+        self._chart_options_ax = None
         self.fig.clear()
         self.fig.set_facecolor(CHART_FACE)
+
+    def open_chart_options_dialog(self, ax=None):
+        return _open_chart_options_for_axes(
+            self, ax=ax, preferred=(self._ax_spec, self._ax_slice)
+        )
 
     def _disconnect_mpl_handlers(self):
         """Drop figure-level mpl cids so a re-init doesn't double-fire.
@@ -1317,9 +1449,16 @@ class SpectrogramCanvas(FigureCanvas):
         self._freq_range = freq_range
         self._selected_index = 0
 
-        gs = self.fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.18)
+        gs = self.fig.add_gridspec(
+            2, 2,
+            height_ratios=[3, 1],
+            width_ratios=[1, 0.025],
+            hspace=0.18,
+            wspace=0.03,
+        )
         self._ax_spec = self.fig.add_subplot(gs[0, 0])
         self._ax_slice = self.fig.add_subplot(gs[1, 0])
+        colorbar_ax = self.fig.add_subplot(gs[0, 1])
 
         z = self._display_matrix(result, amplitude_mode)
         extent = [
@@ -1346,7 +1485,7 @@ class SpectrogramCanvas(FigureCanvas):
             vmin=vmin,
             vmax=vmax,
         )
-        self._colorbar = self.fig.colorbar(im, ax=self._ax_spec, pad=0.01)
+        self._colorbar = self.fig.colorbar(im, cax=colorbar_ax)
         self._ax_spec.set_xlabel('Time (s)')
         self._ax_spec.set_ylabel('Frequency (Hz)')
         if not x_auto and x_max > x_min:
@@ -1456,12 +1595,9 @@ class SpectrogramCanvas(FigureCanvas):
         self._mouse_button_pressed = False
 
     def _on_click(self, event):
-        # Double-click on any axis (main spec OR slice) → open AxisEditDialog
+        # Double-click on any graph face or axis gutter targets that axes.
         if event.button == 1 and event.dblclick:
-            from ._axis_interaction import find_axis_for_dblclick, edit_axis_dialog
-            ax, axis = find_axis_for_dblclick(self.fig, event.x, event.y, AXIS_HIT_MARGIN_PX)
-            if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
-                self.draw_idle()
+            _open_chart_options_for_event(self, event)
             return
         if (
             self._remark_enabled
@@ -1555,7 +1691,7 @@ class SpectrogramCanvas(FigureCanvas):
             ax, axis = find_axis_for_dblclick(self.fig, event.x, event.y, AXIS_HIT_MARGIN_PX)
             if ax is not None:
                 self.setCursor(Qt.PointingHandCursor)
-                self.setToolTip("双击编辑坐标轴")
+                self.setToolTip("双击打开图表选项")
             else:
                 self.unsetCursor()
                 self.setToolTip("")
@@ -1686,10 +1822,12 @@ class PlotCanvas(FigureCanvas):
         self._heatmap_ax = None
         self._heatmap_im = None
         self._heatmap_cbar = None
+        self._chart_options_ax = None
 
     def clear(self):
         self._remarks = []
         self._line_data = {}
+        self._chart_options_ax = None
         # Reset heatmap handles BEFORE fig.clear() so any caller racing
         # against a partially-cleared figure sees a consistent "no
         # heatmap" state. fig.clear() destroys the underlying axes; if
@@ -1702,6 +1840,11 @@ class PlotCanvas(FigureCanvas):
         self._heatmap_cbar = None
         self.fig.clear()
         self.fig.set_facecolor(CHART_FACE)
+
+    def open_chart_options_dialog(self, ax=None):
+        return _open_chart_options_for_axes(
+            self, ax=ax, preferred=(self._heatmap_ax,)
+        )
 
     def plot_or_update_heatmap(self, *, matrix, x_extent, y_extent,
                                 x_label, y_label, title,
@@ -1805,6 +1948,8 @@ class PlotCanvas(FigureCanvas):
             existing_ax.set_title(title)
             existing_cbar.update_normal(existing_im)
             existing_cbar.set_label(cbar_label)
+            _apply_heatmap_axes_style(existing_ax)
+            _apply_heatmap_colorbar_style(existing_cbar)
             self.draw_idle()
             return
 
@@ -1821,6 +1966,8 @@ class PlotCanvas(FigureCanvas):
         ax.set_ylabel(y_label)
         ax.set_title(title)
         cbar = self.fig.colorbar(im, ax=ax, label=cbar_label)
+        _apply_heatmap_axes_style(ax)
+        _apply_heatmap_colorbar_style(cbar)
         try:
             self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
         except Exception:
@@ -1948,18 +2095,15 @@ class PlotCanvas(FigureCanvas):
         ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, AXIS_HIT_MARGIN_PX)
         if ax is not None:
             self.setCursor(Qt.PointingHandCursor)
-            self.setToolTip("双击编辑坐标轴")
+            self.setToolTip("双击打开图表选项")
         else:
             self.unsetCursor()
             self.setToolTip("")
 
     def _on_click(self, e):
-        # 双击编辑坐标轴 — 优先处理，不要求点击在axes内部
+        # 双击图面或坐标轴区域打开完整图表选项。
         if e.button == 1 and e.dblclick:
-            from ._axis_interaction import find_axis_for_dblclick, edit_axis_dialog
-            ax, axis = find_axis_for_dblclick(self.fig, e.x, e.y, AXIS_HIT_MARGIN_PX)
-            if ax is not None and edit_axis_dialog(self.parent(), ax, axis):
-                self.draw_idle()
+            _open_chart_options_for_event(self, e)
             return
 
         if e.inaxes is None or e.xdata is None:
@@ -1985,10 +2129,16 @@ class PlotCanvas(FigureCanvas):
             self._add_remark(e.inaxes, ax_index, x, y)
 
     def set_tick_density(self, x, y):
-        for ax in self.fig.axes:
-            _apply_axes_style(ax)
+        cbar_ax = self._heatmap_cbar.ax if self._heatmap_cbar is not None else None
+        axes = [
+            ax for ax in self.fig.axes
+            if ax is not cbar_ax
+        ]
+        for ax in axes:
+            _apply_heatmap_axes_style(ax)
             ax.xaxis.set_major_locator(MaxNLocator(nbins=x, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=y, min_n_ticks=3))
+        _apply_heatmap_colorbar_style(self._heatmap_cbar)
         self.draw_idle()
 
     def _on_scroll(self, e):

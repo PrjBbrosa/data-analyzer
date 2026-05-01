@@ -660,6 +660,61 @@ QDialog#PopoverSurface {
 }
 QDialog#PopoverSurface QLabel { color: #334155; }
 
+QDialog#ChartOptionsDialog {
+    border: 1px solid #dfe5ee;
+    border-radius: 12px;
+    background-color: #f5f7fb;
+}
+
+QDialog#ChartOptionsDialog QLabel#chartOptionsTitle {
+    color: #111827;
+    font-size: 15px;
+    font-weight: 700;
+    background-color: transparent;
+}
+
+QDialog#ChartOptionsDialog QLabel#chartOptionsSubtitle {
+    color: #64748b;
+    font-size: 12px;
+    background-color: transparent;
+}
+
+QDialog#ChartOptionsDialog QTabWidget::pane {
+    border: 1px solid #dfe5ee;
+    border-radius: 8px;
+    background-color: #ffffff;
+}
+
+QDialog#ChartOptionsDialog QTabBar::tab {
+    min-height: 24px;
+    padding: 4px 14px;
+    margin-right: 4px;
+    border: 1px solid #dfe5ee;
+    border-bottom-color: #dfe5ee;
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+    background-color: #f8fafc;
+    color: #475569;
+    font-weight: 600;
+}
+
+QDialog#ChartOptionsDialog QTabBar::tab:selected {
+    background-color: #ffffff;
+    color: #0f3f8f;
+}
+
+QDialog#ChartOptionsDialog QFrame#chartOptionsGroup {
+    border: 1px solid #d8e3f0;
+    border-radius: 8px;
+    background-color: #ffffff;
+}
+
+QDialog#ChartOptionsDialog QLabel#chartOptionsGroupTitle {
+    color: #0f2749;
+    font-weight: 700;
+    background-color: transparent;
+}
+
 /* Menus and status */
 QMenu {
     padding: 5px;
@@ -714,7 +769,7 @@ QFrame#chartToolbarSep {
 }
 
 QToolTip {
-    border: 1px solid rgba(203, 213, 225, 220);
+    border: none;
     border-radius: 8px;
     background-color: rgba(255, 255, 255, 238);
     color: #172033;
