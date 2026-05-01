@@ -115,7 +115,7 @@ _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
 _TOOL_HINTS = {
     'pan':  ('移动曲线', '左键拖动平移 · 右键拖动缩放坐标轴'),
     'zoom': ('框选缩放', '拖动鼠标框选矩形区域放大 · Home 键可复位'),
-    '':     ('浏览模式', '双击坐标轴可设置范围 · 工具栏可启用 平移 / 缩放 / 保存'),
+    '':     ('浏览模式', '双击图面打开图表选项 · 工具栏可启用 平移 / 缩放 / 保存'),
 }
 
 # Bottom hint bar — persistent (always-on) shortcuts.
@@ -123,7 +123,7 @@ _TOOL_HINTS = {
 _BOTTOM_HINT_PERSISTENT = (
     "Ctrl + 滚轮 缩放 X    ·    "
     "Shift + 滚轮 缩放 Y    ·    "
-    "双击坐标轴 修改范围"
+    "双击图面 图表选项"
 )
 
 # Bottom hint bar — context layer.
@@ -225,9 +225,17 @@ class _ChartCard(QWidget):
         apply_chinese_toolbar_labels(self.toolbar)
         _apply_mdi_icons(self.toolbar, active_key='pan')
 
-        # Insert "copy as image" button right before the matplotlib Save action
-        # (or append if save action isn't found). This places it alongside the
-        # other matplotlib nav icons so it reads as a sibling action.
+        # Insert app-level chart actions right before the matplotlib Save action
+        # (or append if save action isn't found). This places them alongside the
+        # other matplotlib nav icons so they read as sibling actions.
+        self._options_btn = QToolButton(self.toolbar)
+        self._options_btn.setObjectName("chartOptionsButton")
+        self._options_btn.setIcon(qta.icon('mdi.tune-vertical', color=_ICON_COLOR))
+        self._options_btn.setIconSize(QSize(18, 18))
+        self._options_btn.setFixedSize(QSize(32, 32))
+        self._options_btn.setToolTip("图表选项")
+        self._options_btn.setAutoRaise(True)
+        self._options_btn.clicked.connect(self.open_chart_options)
         self._copy_btn = QToolButton(self.toolbar)
         self._copy_btn.setIcon(qta.icon('mdi.content-copy', color=_ICON_COLOR))
         self._copy_btn.setIconSize(QSize(18, 18))
@@ -236,8 +244,10 @@ class _ChartCard(QWidget):
         self._copy_btn.setAutoRaise(True)
         self._copy_btn.clicked.connect(self.copy_image_requested)
         if save_act is not None:
+            self.toolbar.insertWidget(save_act, self._options_btn)
             self.toolbar.insertWidget(save_act, self._copy_btn)
         else:
+            self.toolbar.addWidget(self._options_btn)
             self.toolbar.addWidget(self._copy_btn)
 
         # Two-line hint label sits at the LEFT of the toolbar (just after the
@@ -367,6 +377,12 @@ class _ChartCard(QWidget):
     def clear_annotations(self):
         if hasattr(self.canvas, 'clear_remarks'):
             self.canvas.clear_remarks()
+
+    def open_chart_options(self):
+        opener = getattr(self.canvas, 'open_chart_options_dialog', None)
+        if opener is not None:
+            return opener()
+        return False
 
     def _on_nav_mode_toggled(self, *_):
         """Hook subclasses can extend; base only refreshes the hint text."""

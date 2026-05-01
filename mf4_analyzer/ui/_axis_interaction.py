@@ -59,6 +59,15 @@ def find_axis_for_dblclick(fig, x_px, y_px, margin):
     return best
 
 
+def target_axes_for_event(fig, event, margin):
+    """Return the axes targeted by a chart-options double-click event."""
+    event_ax = getattr(event, 'inaxes', None)
+    if event_ax is not None and event_ax in fig.axes:
+        return event_ax
+    ax, _axis = find_axis_for_dblclick(fig, event.x, event.y, margin)
+    return ax
+
+
 def edit_axis_dialog(parent_widget, ax, axis):
     """Side-effecting: open ``AxisEditDialog`` modal, apply user's choice
     to ``ax``, return ``True`` iff the dialog was accepted.
@@ -87,3 +96,16 @@ def edit_axis_dialog(parent_widget, ax, axis):
         if label:
             ax.set_ylabel(label)
     return True
+
+
+def edit_chart_options_dialog(parent_widget, ax):
+    """Open the lightweight chart options dialog for ``ax``.
+
+    Returns True when the dialog accepted or when the user clicked Apply before
+    closing it, so callers can redraw for both paths.
+    """
+    from .dialogs import ChartOptionsDialog
+
+    dlg = ChartOptionsDialog(parent_widget, ax)
+    accepted = dlg.exec_() == QDialog.Accepted
+    return accepted or dlg.was_applied()

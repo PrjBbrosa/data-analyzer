@@ -104,32 +104,46 @@ class _PresetHoverCard(QFrame):
     parameter summaries must be rendered as real widgets.
     """
 
-    WIDTH = 360
+    WIDTH = 380
 
     def __init__(self):
-        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint)
+        super().__init__(
+            None,
+            Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint,
+        )
         self.setObjectName("presetHoverCard")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setWindowOpacity(0.98)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setWindowOpacity(1.0)
         self.setFixedWidth(self.WIDTH)
-        self._root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 8, 10, 14)
+        outer.setSpacing(0)
+        self._panel = QFrame(self)
+        self._panel.setObjectName("presetHoverPanel")
+        self._panel.setAttribute(Qt.WA_StyledBackground, True)
+        outer.addWidget(self._panel)
+        self._root = QVBoxLayout(self._panel)
         self._root.setContentsMargins(12, 11, 12, 10)
         self._root.setSpacing(8)
-        shadow = QGraphicsDropShadowEffect(self)
+        shadow = QGraphicsDropShadowEffect(self._panel)
         shadow.setBlurRadius(34)
         shadow.setOffset(0, 12)
         shadow.setColor(QColor(15, 23, 42, 44))
-        self.setGraphicsEffect(shadow)
+        self._panel.setGraphicsEffect(shadow)
         self.setStyleSheet("""
             QFrame#presetHoverCard {
+                border: none;
+                background: transparent;
+            }
+            QFrame#presetHoverPanel {
                 border: 1px solid rgba(190, 203, 220, 210);
                 border-radius: 8px;
-                background-color: rgba(255, 255, 255, 242);
+                background-color: #ffffff;
             }
             QFrame#presetHoverSection {
                 border: 1px solid #d5dfeb;
                 border-radius: 7px;
-                background-color: rgba(255, 255, 255, 176);
+                background-color: rgba(248, 251, 255, 232);
             }
             QLabel#presetHoverTitle {
                 color: #172033;
@@ -181,14 +195,14 @@ class _PresetHoverCard(QFrame):
         title_box = QVBoxLayout()
         title_box.setContentsMargins(0, 0, 0, 0)
         title_box.setSpacing(2)
-        title = QLabel(str(name), self)
+        title = QLabel(str(name), self._panel)
         title.setObjectName("presetHoverTitle")
         title_box.addWidget(title)
-        sub = QLabel(f"已保存参数快照 · 来源：{self._kind_label(kind)}", self)
+        sub = QLabel(f"已保存参数快照 · 来源：{self._kind_label(kind)}", self._panel)
         sub.setObjectName("presetHoverSub")
         title_box.addWidget(sub)
         head.addLayout(title_box, 1)
-        badge = QLabel("内置" if builtin else "已保存", self)
+        badge = QLabel("内置" if builtin else "已保存", self._panel)
         badge.setObjectName("presetHoverBadge")
         badge.setAlignment(Qt.AlignCenter)
         head.addWidget(badge, 0, Qt.AlignTop)
@@ -206,7 +220,7 @@ class _PresetHoverCard(QFrame):
         if status:
             self._root.addWidget(self._section("状态判断", status))
 
-        footer = QLabel("左键加载 · 右键保存/重命名/清空        不保存信号与 Fs", self)
+        footer = QLabel("左键加载 · 右键保存/重命名/清空        不保存信号与 Fs", self._panel)
         footer.setObjectName("presetHoverFooter")
         self._root.addWidget(footer)
         self.adjustSize()
@@ -229,7 +243,7 @@ class _PresetHoverCard(QFrame):
         layout.deleteLater()
 
     def _section(self, title, chips):
-        frame = QFrame(self)
+        frame = QFrame(self._panel)
         frame.setObjectName("presetHoverSection")
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(9, 8, 9, 8)
@@ -248,7 +262,7 @@ class _PresetHoverCard(QFrame):
         return frame
 
     def _chip(self, label, value, warn=False):
-        chip = QLabel(self)
+        chip = QLabel(self._panel)
         chip.setObjectName("presetChip")
         chip.setProperty("warn", "true" if warn else "false")
         chip.setTextFormat(Qt.RichText)
@@ -1995,7 +2009,7 @@ class OrderContextual(QWidget):
         fl.addRow("时间分辨率:", _fit_field(self.spin_time_res))
         self.combo_nfft = QComboBox()
         self.combo_nfft.addItems(['512', '1024', '2048', '4096', '8192'])
-        self.combo_nfft.setCurrentText('1024')
+        self.combo_nfft.setCurrentText('2048')
         fl.addRow("FFT点数:", _fit_field(self.combo_nfft))
 
         # COT is now the only tracking algorithm (Wave 2 of the
@@ -2022,15 +2036,15 @@ class OrderContextual(QWidget):
         # so FFTTimeContextual can reuse the same group construction). ----
         # Replaces the old combo_amp_mode + combo_dynamic combos. The Z
         # row carries the dB ↔ Linear unit dropdown; floor/ceiling spins
-        # express the dB dynamic range explicitly. Defaults match the
-        # legacy 30 dB behavior (z_auto off, floor=-30, ceiling=0).
+        # express the dB color range explicitly. Defaults match the requested
+        # first-open UI state (z_auto off, floor=-50, ceiling=-10).
         axis_g = _make_axis_settings_group(
             self,
             x_label="时间 (X):", x_unit='s',
             x_default_min=0.0, x_default_max=0.0,
             y_label="阶次 (Y):", y_unit='',
             y_default_min=0.0, y_default_max=float(self.spin_mo.value()),
-            z_default_floor=-30.0, z_default_ceiling=0.0,
+            z_default_floor=-50.0, z_default_ceiling=-10.0,
             z_default_auto=False,
             x_default_auto=True,
             y_default_auto=True,
@@ -2477,7 +2491,7 @@ class FFTTimeContextual(QWidget):
         _configure_form(fl)
         self.combo_nfft = QComboBox()
         self.combo_nfft.addItems(['512', '1024', '2048', '4096', '8192'])
-        self.combo_nfft.setCurrentText('2048')
+        self.combo_nfft.setCurrentText('1024')
         fl.addRow("FFT 点数:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_win = QComboBox()
         self.combo_win.addItems(
@@ -2485,14 +2499,10 @@ class FFTTimeContextual(QWidget):
         )
         fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_overlap = _no_buttons(QSpinBox())
-        # HEAD-style smoothness defaults: 88% (closest integer to the 87.5%
-        # spectrogram-smoothness target documented in the FFT-vs-Time
-        # integration plan) with a 95% ceiling so users can dial up the
-        # COLA-safe high-overlap region. The QSpinBox stays integer-percent
-        # so existing presets (overlap=75, 50) and getter/setter int paths
-        # remain untouched.
+        # Requested first-open default: 80% overlap. Keep the 95% ceiling so
+        # existing high-overlap presets and user-tuned values remain valid.
         self.spin_overlap.setRange(0, 95)
-        self.spin_overlap.setValue(88)
+        self.spin_overlap.setValue(80)
         self.spin_overlap.setSuffix(" %")
         fl.addRow("重叠:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.chk_remove_mean = QCheckBox("去均值")
@@ -2520,14 +2530,14 @@ class FFTTimeContextual(QWidget):
         # which did not match the actual plot and is the user-reported bug.
         # Default y_max=0.0 means "use Nyquist" — main_window's existing
         # spin_freq_max==0.0 sentinel survives unchanged via Y aliases.
-        # Default z range is -80..0 dB (legacy '80 dB' diagnostic preset).
+        # Default z range is -70..-20 dB per the requested first-open UI state.
         axis_g = _make_axis_settings_group(
             self,
             x_label="时间 (X):", x_unit='s',
             x_default_min=0.0, x_default_max=0.0,
             y_label="频率 (Y):", y_unit='Hz',
             y_default_min=0.0, y_default_max=0.0,
-            z_default_floor=-80.0, z_default_ceiling=0.0,
+            z_default_floor=-70.0, z_default_ceiling=-20.0,
             z_default_auto=False,
             x_default_auto=True,
             y_default_auto=True,

@@ -46,6 +46,44 @@ def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
         assert card._annotation_btn.toolTip()
 
 
+def test_chart_cards_have_chart_options_toolbar_button(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        assert hasattr(card, '_options_btn')
+        assert card._options_btn.objectName() == 'chartOptionsButton'
+        assert card._options_btn.toolTip() == '图表选项'
+        assert card._options_btn.autoRaise()
+
+
+def test_chart_options_toolbar_button_delegates_to_canvas(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    called = []
+
+    def fake_open():
+        called.append(True)
+        return True
+
+    cs.canvas_fft.open_chart_options_dialog = fake_open
+    cs._fft_card._options_btn.click()
+
+    assert called == [True]
+
+
+def test_chart_toolbar_removes_native_customize_button(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        for act in card.toolbar.actions():
+            assert (act.text() or '').strip().lower() != 'customize'
+            assert 'edit axis, curve and image parameters' not in (
+                act.toolTip() or ''
+            ).lower()
+
+
 def test_annotation_toolbar_toggles_canvas_modes(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
@@ -329,8 +367,9 @@ def test_time_card_segmented_buttons_chinese(qtbot):
 def test_tool_hints_idle_mentions_dblclick():
     from mf4_analyzer.ui.chart_stack import _TOOL_HINTS
     # _TOOL_HINTS values are (title, detail) tuples since MDI icon refactor;
-    # the '双击坐标轴' phrase lives in the detail string (index 1).
-    assert '双击坐标轴' in _TOOL_HINTS[''][1]
+    # the double-click chart-options phrase lives in the detail string.
+    assert '双击图面' in _TOOL_HINTS[''][1]
+    assert '图表选项' in _TOOL_HINTS[''][1]
 
 
 # ---- Bottom hint bar (Persistent + Context layers) ----
@@ -346,7 +385,8 @@ def test_bottom_hint_bar_persistent_always_present(qapp):
         text = card._hint_persistent.text()
         assert "Ctrl" in text
         assert "Shift" in text
-        assert "双击坐标轴" in text
+        assert "双击图面" in text
+        assert "图表选项" in text
 
 
 def test_bottom_hint_bar_context_pan_default(qapp):
@@ -401,7 +441,8 @@ def test_bottom_hint_bar_constants_exposed():
     )
     assert "Ctrl" in _BOTTOM_HINT_PERSISTENT
     assert "Shift" in _BOTTOM_HINT_PERSISTENT
-    assert "双击坐标轴" in _BOTTOM_HINT_PERSISTENT
+    assert "双击图面" in _BOTTOM_HINT_PERSISTENT
+    assert "图表选项" in _BOTTOM_HINT_PERSISTENT
     for key in ('pan', 'zoom', 'cursor_single', 'cursor_dual',
                 'spectrogram', 'idle'):
         assert key in _BOTTOM_HINT_CONTEXT

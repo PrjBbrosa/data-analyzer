@@ -47,7 +47,7 @@ def test_find_axis_no_hit_returns_none():
     assert axis is None
 
 
-def test_timedomain_canvas_dblclick_opens_axis_dialog(qtbot, monkeypatch):
+def test_timedomain_canvas_dblclick_opens_chart_options_from_axis_gutter(qtbot, monkeypatch):
     from PyQt5.QtCore import Qt
     from mf4_analyzer.ui.canvases import TimeDomainCanvas
 
@@ -62,16 +62,17 @@ def test_timedomain_canvas_dblclick_opens_axis_dialog(qtbot, monkeypatch):
     ax.plot([0, 1, 2], [0, 1, 4])
     canvas.draw()
 
-    # Stub the dialog to auto-accept and return a fixed range
+    # Stub the dialog to auto-accept and mutate the target axes.
     from mf4_analyzer.ui import _axis_interaction
     called = {}
 
-    def fake_edit(parent_widget, ax_, axis):
-        called['axis'] = axis
-        ax_.set_xlim(0, 10) if axis == 'x' else ax_.set_ylim(0, 10)
+    def fake_edit(parent_widget, ax_):
+        called['ax'] = ax_
+        ax_.set_xlim(0, 10)
         return True
 
-    monkeypatch.setattr(_axis_interaction, 'edit_axis_dialog', fake_edit)
+    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
+                        fake_edit, raising=False)
 
     # Synthesize a dblclick event in the X-axis gutter
     bbox = ax.get_window_extent()
@@ -80,8 +81,43 @@ def test_timedomain_canvas_dblclick_opens_axis_dialog(qtbot, monkeypatch):
                    y=bbox.y0 - 30, button=1, dblclick=True)
     canvas.callbacks.process('button_press_event', e)
 
-    assert called.get('axis') == 'x'
+    assert called.get('ax') is ax
     assert ax.get_xlim() == (0, 10)
+
+
+def test_timedomain_canvas_dblclick_inside_axes_opens_chart_options(qtbot, monkeypatch):
+    from mf4_analyzer.ui.canvases import TimeDomainCanvas
+
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(600, 400)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    ax = canvas.fig.add_subplot(111)
+    ax.plot([0, 1, 2], [0, 1, 4])
+    canvas.draw()
+
+    from mf4_analyzer.ui import _axis_interaction
+    called = {}
+
+    def fake_edit(parent_widget, ax_):
+        called['ax'] = ax_
+        ax_.set_title("edited")
+        return True
+
+    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
+                        fake_edit, raising=False)
+
+    bbox = ax.get_window_extent()
+    from matplotlib.backend_bases import MouseEvent
+    e = MouseEvent('button_press_event', canvas, x=(bbox.x0 + bbox.x1) / 2,
+                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
+    e.inaxes = ax
+    canvas.callbacks.process('button_press_event', e)
+
+    assert called.get('ax') is ax
+    assert ax.get_title() == "edited"
 
 
 def test_timedomain_canvas_hover_axis_changes_cursor(qtbot, monkeypatch):
@@ -105,10 +141,10 @@ def test_timedomain_canvas_hover_axis_changes_cursor(qtbot, monkeypatch):
     canvas.callbacks.process('motion_notify_event', e)
 
     assert canvas.cursor().shape() == Qt.PointingHandCursor
-    assert canvas.toolTip() == "双击编辑坐标轴"
+    assert canvas.toolTip() == "双击打开图表选项"
 
 
-def test_plot_canvas_dblclick_uses_axis_interaction_helper(qtbot, monkeypatch):
+def test_plot_canvas_dblclick_uses_chart_options_helper(qtbot, monkeypatch):
     from mf4_analyzer.ui.canvases import PlotCanvas
     canvas = PlotCanvas()
     qtbot.addWidget(canvas)
@@ -122,19 +158,21 @@ def test_plot_canvas_dblclick_uses_axis_interaction_helper(qtbot, monkeypatch):
     from mf4_analyzer.ui import _axis_interaction
     called = {}
 
-    def fake_edit(parent, ax_, axis):
-        called['axis'] = axis
-        ax_.set_ylim(-1, 99) if axis == 'y' else ax_.set_xlim(-1, 99)
+    def fake_edit(parent, ax_):
+        called['ax'] = ax_
+        ax_.set_ylim(-1, 99)
         return True
 
-    monkeypatch.setattr(_axis_interaction, 'edit_axis_dialog', fake_edit)
+    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
+                        fake_edit, raising=False)
 
     bbox = ax.get_window_extent()
     from matplotlib.backend_bases import MouseEvent
     e = MouseEvent('button_press_event', canvas, x=bbox.x0 - 30,
                    y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
     canvas.callbacks.process('button_press_event', e)
-    assert called.get('axis') == 'y'
+    assert called.get('ax') is ax
+    assert ax.get_ylim() == (-1, 99)
 
 
 def test_plot_canvas_hover_axis(qtbot):
@@ -178,7 +216,7 @@ def test_plot_canvas_hover_short_circuit_during_drag(qtbot):
     assert canvas.cursor().shape() != Qt.PointingHandCursor
 
 
-def test_spectrogram_canvas_dblclick_main_axis(qtbot, monkeypatch):
+def test_spectrogram_canvas_dblclick_main_axis_opens_chart_options(qtbot, monkeypatch):
     from mf4_analyzer.ui.canvases import SpectrogramCanvas
     canvas = SpectrogramCanvas()
     qtbot.addWidget(canvas)
@@ -191,10 +229,13 @@ def test_spectrogram_canvas_dblclick_main_axis(qtbot, monkeypatch):
     # should accept dblclick.
     from mf4_analyzer.ui import _axis_interaction
     hits = []
-    def fake_edit(parent, ax_, axis):
-        hits.append((ax_, axis))
+
+    def fake_edit(parent, ax_):
+        hits.append(ax_)
         return True
-    monkeypatch.setattr(_axis_interaction, 'edit_axis_dialog', fake_edit)
+
+    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
+                        fake_edit, raising=False)
 
     # Force the canvas to build its 2-axes layout (plot_result requires a
     # SpectrogramResult; we instead build the gridspec directly so the
@@ -209,10 +250,10 @@ def test_spectrogram_canvas_dblclick_main_axis(qtbot, monkeypatch):
     e = MouseEvent('button_press_event', canvas, x=bbox.x0 - 30,
                    y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
     canvas.callbacks.process('button_press_event', e)
-    assert any(ax is main_ax for ax, _ in hits)
+    assert any(ax is main_ax for ax in hits)
 
 
-def test_spectrogram_canvas_dblclick_slice_axis(qtbot, monkeypatch):
+def test_spectrogram_canvas_dblclick_slice_axis_opens_chart_options(qtbot, monkeypatch):
     from mf4_analyzer.ui.canvases import SpectrogramCanvas
     canvas = SpectrogramCanvas()
     qtbot.addWidget(canvas)
@@ -222,8 +263,9 @@ def test_spectrogram_canvas_dblclick_slice_axis(qtbot, monkeypatch):
     canvas.draw()
     from mf4_analyzer.ui import _axis_interaction
     hits = []
-    monkeypatch.setattr(_axis_interaction, 'edit_axis_dialog',
-                        lambda p, ax, axis: (hits.append((ax, axis)), True)[1])
+    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
+                        lambda p, ax: (hits.append(ax), True)[1],
+                        raising=False)
 
     canvas._ax_spec = canvas.fig.add_subplot(2, 1, 1)
     canvas._ax_slice = canvas.fig.add_subplot(2, 1, 2)
@@ -235,4 +277,36 @@ def test_spectrogram_canvas_dblclick_slice_axis(qtbot, monkeypatch):
     e = MouseEvent('button_press_event', canvas, x=bbox.x0 - 30,
                    y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
     canvas.callbacks.process('button_press_event', e)
-    assert any(ax is slice_ax for ax, _ in hits)
+    assert any(ax is slice_ax for ax in hits)
+
+
+def test_spectrogram_canvas_dblclick_inside_slice_axis_opens_chart_options(qtbot, monkeypatch):
+    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+    canvas = SpectrogramCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(800, 600)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    canvas.draw()
+    from mf4_analyzer.ui import _axis_interaction
+    hits = []
+    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
+                        lambda p, ax: (hits.append(ax), True)[1],
+                        raising=False)
+
+    canvas._ax_spec = canvas.fig.add_subplot(2, 1, 1)
+    canvas._ax_slice = canvas.fig.add_subplot(2, 1, 2)
+    canvas.draw()
+
+    slice_ax = canvas._ax_slice
+    bbox = slice_ax.get_window_extent()
+    from matplotlib.backend_bases import MouseEvent
+    e = MouseEvent('button_press_event', canvas, x=(bbox.x0 + bbox.x1) / 2,
+                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
+    e.inaxes = slice_ax
+    canvas.callbacks.process('button_press_event', e)
+    assert any(ax is slice_ax for ax in hits)
+
+    hits.clear()
+    canvas.open_chart_options_dialog()
+    assert hits == [slice_ax]

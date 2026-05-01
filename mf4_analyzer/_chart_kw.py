@@ -25,7 +25,7 @@ AXIS_HIT_MARGIN_PX
 
 CHART_TIGHT_LAYOUT_KW = dict(pad=0.4, h_pad=0.6, w_pad=0.4)
 SPECTROGRAM_SUBPLOT_ADJUST = dict(
-    left=0.07, right=0.93, top=0.97, bottom=0.09,
+    left=0.07, right=0.955, top=0.97, bottom=0.09,
 )
 AXIS_HIT_MARGIN_PX = 45
 

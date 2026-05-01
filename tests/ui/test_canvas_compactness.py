@@ -26,7 +26,7 @@ def test_spectrogram_subplot_adjust_constant_defined():
     assert hasattr(canvases, 'SPECTROGRAM_SUBPLOT_ADJUST')
     d = canvases.SPECTROGRAM_SUBPLOT_ADJUST
     assert abs(d['left'] - 0.07) < 1e-9
-    assert abs(d['right'] - 0.93) < 1e-9
+    assert abs(d['right'] - 0.955) < 1e-9
     assert abs(d['top'] - 0.97) < 1e-9
     assert abs(d['bottom'] - 0.09) < 1e-9
 
@@ -75,18 +75,19 @@ def test_ylabel_does_not_overlap_yticks(qtbot):
 
 
 def test_axis_hit_margin_used_in_canvases_source():
-    """Guard: the literal `, 45)` should not appear in find_axis_for_dblclick
-    call sites; all call sites must use the AXIS_HIT_MARGIN_PX constant.
+    """Guard: canvas hit-test call sites must use AXIS_HIT_MARGIN_PX.
+
+    Double-click handling now routes through target_axes_for_event while hover
+    handling still calls find_axis_for_dblclick directly; both paths must use
+    the shared margin constant instead of a literal.
     """
     import inspect
     from mf4_analyzer.ui import canvases
     src = inspect.getsource(canvases)
-    # Each find_axis_for_dblclick call must reference the constant.
-    # Count occurrences of the constant in find_axis_for_dblclick(...) lines.
     import re
-    call_pattern = re.compile(r"find_axis_for_dblclick\([^)]*\)")
+    call_pattern = re.compile(r"(?:find_axis_for_dblclick|target_axes_for_event)\([^)]*\)")
     calls = call_pattern.findall(src)
-    assert len(calls) >= 6, f"expected >=6 call sites, got {len(calls)}: {calls}"
+    assert len(calls) >= 4, f"expected >=4 call sites, got {len(calls)}: {calls}"
     for call in calls:
         assert "AXIS_HIT_MARGIN_PX" in call, (
             f"call site still uses literal margin: {call}"
@@ -128,7 +129,7 @@ def test_spectrogram_figsize_aligned():
 
 def test_spectrogram_subplotpars_right_leaves_colorbar_room(qtbot):
     """Task 2.10 (S1-T1 + S1-T3): subplots_adjust(**SPECTROGRAM_SUBPLOT_ADJUST)
-    must produce ``right=0.93`` so the colorbar tightbbox does not overlap
+    must keep a small right margin so the colorbar tightbbox does not overlap
     the spectrogram axes' tightbbox.
 
     Notes
@@ -157,6 +158,6 @@ def test_spectrogram_subplotpars_right_leaves_colorbar_room(qtbot):
     )
     canvas.draw()
     sp = canvas.fig.subplotpars
-    assert abs(sp.right - 0.93) < 0.005
+    assert abs(sp.right - 0.955) < 0.005
     assert abs(sp.left - 0.07) < 0.005
     assert sp.top >= 0.96
