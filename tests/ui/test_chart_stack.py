@@ -1,3 +1,8 @@
+from pathlib import Path
+
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QSizePolicy
+
 from mf4_analyzer.ui.chart_stack import ChartStack
 
 
@@ -44,6 +49,74 @@ def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
         assert hasattr(card, '_clear_annotation_btn')
         assert card._annotation_btn.text() == '开启'
         assert card._annotation_btn.toolTip()
+
+
+def test_annotation_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
+        loc_label = getattr(card.toolbar, 'locLabel', None)
+        actions = card.toolbar.actions()
+        spacer_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._annotation_spacer
+        )
+        loc_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is loc_label
+        )
+        annotation_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._annotation_label
+        )
+
+        assert spacer_index < annotation_index < loc_index
+        assert (
+            card._annotation_spacer.sizePolicy().horizontalPolicy()
+            == QSizePolicy.Expanding
+        )
+        assert card._annotation_spacer.testAttribute(Qt.WA_StyledBackground)
+
+
+def test_time_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    card = cs._time_card
+    loc_label = getattr(card.toolbar, 'locLabel', None)
+    actions = card.toolbar.actions()
+    spacer_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card._time_controls_spacer
+    )
+    loc_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is loc_label
+    )
+    subplot_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card.btn_subplot
+    )
+    lock_y_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card._lock_buttons['y']
+    )
+
+    assert spacer_index < subplot_index < lock_y_index < loc_index
+    assert (
+        card._time_controls_spacer.sizePolicy().horizontalPolicy()
+        == QSizePolicy.Expanding
+    )
+    assert card._time_controls_spacer.testAttribute(Qt.WA_StyledBackground)
+
+
+def test_annotation_toolbar_spacer_has_toolbar_background_rule():
+    qss = Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+
+    assert "QWidget#chartToolbar QWidget#chartAnnotationSpacer" in qss
+    assert "background-color: #ffffff;" in qss
+    assert "QWidget#chartToolbar QWidget#chartTimeControlsSpacer" in qss
 
 
 def test_chart_cards_have_chart_options_toolbar_button(qapp, qtbot):

@@ -38,6 +38,34 @@ def test_toolbar_batch_requested_emits(qapp, qtbot):
         tb.btn_batch.click()
 
 
+def test_toolbar_inspector_toggle_defaults_on_and_emits(qapp, qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+
+    assert tb.btn_inspector.isCheckable()
+    assert tb.btn_inspector.isChecked()
+
+    with qtbot.waitSignal(tb.inspector_visibility_changed, timeout=200) as blocker:
+        tb.btn_inspector.click()
+
+    assert blocker.args == [False]
+    assert not tb.btn_inspector.isChecked()
+
+    with qtbot.waitSignal(tb.inspector_visibility_changed, timeout=200) as blocker:
+        tb.btn_inspector.click()
+
+    assert blocker.args == [True]
+    assert tb.btn_inspector.isChecked()
+
+
+def test_toolbar_batch_icon_is_distinct_from_export(qapp, qtbot):
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+
+    assert not tb.btn_batch.icon().isNull()
+    assert tb.btn_batch.icon().cacheKey() != tb.btn_export.icon().cacheKey()
+
+
 def test_toolbar_exposes_fft_time_mode(qtbot):
     from mf4_analyzer.ui.toolbar import Toolbar
 

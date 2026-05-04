@@ -85,6 +85,40 @@ def test_main_window_inspector_slot_fixed_at_360_under_qss(qapp, qtbot):
         qapp.setStyleSheet(old_sheet)
 
 
+def test_main_window_inspector_toolbar_toggle_expands_chart_area(qapp, qtbot):
+    from PyQt5.QtWidgets import QSplitter
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1500, 800)
+    w.show()
+    qtbot.waitExposed(w)
+    qtbot.wait(50)
+
+    splitter = w.findChild(QSplitter)
+    before = splitter.sizes()
+    assert w.inspector.isVisible()
+    assert w.toolbar.btn_inspector.isChecked()
+
+    w.toolbar.btn_inspector.click()
+    qtbot.wait(20)
+
+    hidden = splitter.sizes()
+    assert not w.inspector.isVisible()
+    assert not w.toolbar.btn_inspector.isChecked()
+    assert hidden[2] == 0
+    assert hidden[1] > before[1]
+
+    w.toolbar.btn_inspector.click()
+    qtbot.wait(20)
+
+    restored = splitter.sizes()
+    assert w.inspector.isVisible()
+    assert w.toolbar.btn_inspector.isChecked()
+    assert 340 <= restored[2] <= 420
+    assert restored[1] < hidden[1]
+
+
 def test_load_csv_flows_through_navigator(qapp, qtbot, loaded_csv):
     from unittest.mock import patch
     from mf4_analyzer.ui.main_window import MainWindow

@@ -265,6 +265,8 @@ class _ChartCard(QWidget):
         loc_label = getattr(self.toolbar, 'locLabel', None)
         loc_action = None
         if loc_label is not None:
+            loc_label.setMaximumWidth(220)
+            loc_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)
             for act in self.toolbar.actions():
                 if self.toolbar.widgetForAction(act) is loc_label:
                     loc_action = act
@@ -273,6 +275,7 @@ class _ChartCard(QWidget):
             self.toolbar.insertWidget(loc_action, self._hint_label)
         else:
             self.toolbar.addWidget(self._hint_label)
+        self._loc_action = loc_action
 
         if annotations:
             self._install_annotation_controls(loc_action)
@@ -326,12 +329,25 @@ class _ChartCard(QWidget):
         else:
             self.toolbar.addWidget(widget)
 
+    def _insert_right_toolbar_widget(self, loc_action, widget):
+        # Insert before matplotlib's locLabel; the annotation spacer below
+        # owns the flexible width so the controls stay visible at the right.
+        self._insert_toolbar_widget(loc_action, widget)
+
     def _install_annotation_controls(self, loc_action):
-        self._insert_toolbar_widget(loc_action, _vline())
+        self._annotation_spacer = QWidget(self.toolbar)
+        self._annotation_spacer.setObjectName("chartAnnotationSpacer")
+        self._annotation_spacer.setAttribute(Qt.WA_StyledBackground, True)
+        self._annotation_spacer.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred
+        )
+        self._insert_right_toolbar_widget(loc_action, self._annotation_spacer)
+
+        self._insert_right_toolbar_widget(loc_action, _vline())
         self._annotation_label = QLabel("标注", self.toolbar)
         self._annotation_label.setObjectName("chartAnnotationLabel")
         self._annotation_label.setAlignment(Qt.AlignVCenter)
-        self._insert_toolbar_widget(loc_action, self._annotation_label)
+        self._insert_right_toolbar_widget(loc_action, self._annotation_label)
 
         self._annotation_btn = QPushButton("开启", self.toolbar)
         self._annotation_btn.setIcon(
@@ -345,7 +361,7 @@ class _ChartCard(QWidget):
         self._annotation_btn.clicked.connect(
             lambda checked=False: self.set_annotation_enabled(checked)
         )
-        self._insert_toolbar_widget(loc_action, self._annotation_btn)
+        self._insert_right_toolbar_widget(loc_action, self._annotation_btn)
 
         self._clear_annotation_btn = QPushButton("清除", self.toolbar)
         self._clear_annotation_btn.setIcon(qta.icon('mdi.eraser', color=_ICON_COLOR))
@@ -354,7 +370,7 @@ class _ChartCard(QWidget):
         self._clear_annotation_btn.setFlat(True)
         self._clear_annotation_btn.setToolTip("清除当前图表中的所有标注")
         self._clear_annotation_btn.clicked.connect(self.clear_annotations)
-        self._insert_toolbar_widget(loc_action, self._clear_annotation_btn)
+        self._insert_right_toolbar_widget(loc_action, self._clear_annotation_btn)
 
     def annotation_enabled(self):
         return self._annotation_enabled
@@ -430,10 +446,18 @@ class TimeChartCard(_ChartCard):
 
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent)
-        # Append separator + plot-mode + separator + cursor-mode into the
-        # existing toolbar. Matplotlib's NavigationToolbar2QT is a QToolBar
-        # subclass, so addWidget puts things inline after the icon group.
-        self.toolbar.addWidget(_vline())
+        # Right-align time-only controls with the same locLabel insertion
+        # point used by annotation controls on analysis cards.
+        loc_action = getattr(self, '_loc_action', None)
+        self._time_controls_spacer = QWidget(self.toolbar)
+        self._time_controls_spacer.setObjectName("chartTimeControlsSpacer")
+        self._time_controls_spacer.setAttribute(Qt.WA_StyledBackground, True)
+        self._time_controls_spacer.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred
+        )
+        self._insert_right_toolbar_widget(loc_action, self._time_controls_spacer)
+
+        self._insert_right_toolbar_widget(loc_action, _vline())
 
         self.btn_subplot = QPushButton("分屏", self.toolbar)
         self.btn_overlay = QPushButton("叠加", self.toolbar)
@@ -441,13 +465,13 @@ class TimeChartCard(_ChartCard):
             b.setCheckable(True)
             b.setProperty("role", "chart-choice")
             b.setFlat(True)
-            self.toolbar.addWidget(b)
+            self._insert_right_toolbar_widget(loc_action, b)
         self._plot_mode = 'subplot'
         self.btn_subplot.setChecked(True)
         self.btn_subplot.clicked.connect(lambda: self.set_plot_mode('subplot'))
         self.btn_overlay.clicked.connect(lambda: self.set_plot_mode('overlay'))
 
-        self.toolbar.addWidget(_vline())
+        self._insert_right_toolbar_widget(loc_action, _vline())
 
         self._cursor_buttons = {}
         for label, key in [('游标关', 'off'), ('单游标', 'single'), ('双游标', 'dual')]:
@@ -455,7 +479,7 @@ class TimeChartCard(_ChartCard):
             b.setCheckable(True)
             b.setProperty("role", "chart-choice")
             b.setFlat(True)
-            self.toolbar.addWidget(b)
+            self._insert_right_toolbar_widget(loc_action, b)
             self._cursor_buttons[key] = b
             b.clicked.connect(lambda _=False, k=key: self.set_cursor_mode(k))
         self._cursor_mode = 'off'
@@ -464,14 +488,14 @@ class TimeChartCard(_ChartCard):
         # Axis-lock chips on the right edge — only effective during zoom mode.
         # Selection is remembered across mode switches; chips merely grey out
         # when zoom is inactive.
-        self.toolbar.addWidget(_vline())
+        self._insert_right_toolbar_widget(loc_action, _vline())
         self._lock_buttons = {}
         for label, key in [('不锁', 'none'), ('锁X', 'x'), ('锁Y', 'y')]:
             b = QPushButton(label, self.toolbar)
             b.setCheckable(True)
             b.setProperty("role", "chart-choice")
             b.setFlat(True)
-            self.toolbar.addWidget(b)
+            self._insert_right_toolbar_widget(loc_action, b)
             self._lock_buttons[key] = b
             b.clicked.connect(lambda _=False, k=key: self.set_axis_lock(k))
         self._axis_lock = 'none'

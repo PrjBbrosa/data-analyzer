@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QPushButton, QSizePolicy, QWidget,
 )
 
-from .icons import Icons
+from .icons import BLUE, GRAY, Icons
 
 
 class Toolbar(QWidget):
@@ -14,6 +14,7 @@ class Toolbar(QWidget):
     channel_editor_requested = pyqtSignal()
     export_requested = pyqtSignal()
     batch_requested = pyqtSignal()
+    inspector_visibility_changed = pyqtSignal(bool)
     # Center segment
     mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
 
@@ -32,7 +33,12 @@ class Toolbar(QWidget):
         self.btn_export = QPushButton("导出", self)
         self.btn_export.setIcon(Icons.export())
         self.btn_batch = QPushButton("批处理", self)
-        self.btn_batch.setIcon(Icons.export())
+        self.btn_batch.setIcon(Icons.batch())
+        self.btn_inspector = QPushButton("Inspector", self)
+        self.btn_inspector.setIcon(Icons.inspector(BLUE))
+        self.btn_inspector.setCheckable(True)
+        self.btn_inspector.setChecked(True)
+        self.btn_inspector.setToolTip("显示或隐藏右侧 Inspector 面板")
 
         # ── center mode segment ─────────────────────────────────────────────
         self.btn_mode_time = QPushButton("时域", self)
@@ -46,7 +52,7 @@ class Toolbar(QWidget):
 
         for b in (self.btn_add, self.btn_edit, self.btn_export, self.btn_batch,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
-                  self.btn_mode_order):
+                  self.btn_mode_order, self.btn_inspector):
             b.setIconSize(QSize(16, 16))
 
         # left layout
@@ -78,24 +84,31 @@ class Toolbar(QWidget):
             self._mode_group.addButton(b)
             center.addWidget(b)
 
-        # ── toolbar layout: left-widget | stretch | segment | stretch | mirror ──
-        # A mirror spacer of the same fixed width as left_widget ensures the
-        # segment_frame sits exactly at the horizontal midpoint.
-        mirror = QWidget(self)
-        mirror.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        # ── right layout ────────────────────────────────────────────────────
+        right = QHBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(10)
+        right.addStretch(1)
+        right.addWidget(self.btn_inspector)
+
+        # A right widget of the same fixed width as left_widget keeps the
+        # segment_frame exactly centered while hosting right-aligned controls.
+        right_widget = QWidget(self)
+        right_widget.setLayout(right)
+        right_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
 
         lay.addWidget(left_widget)
         lay.addStretch(1)
         lay.addWidget(segment_frame)
         lay.addStretch(1)
-        lay.addWidget(mirror)
+        lay.addWidget(right_widget)
 
         self.btn_mode_time.setChecked(True)
         self._current_mode = 'time'
 
         # Keep mirror width in sync with left_widget after layout is settled.
         self._left_widget = left_widget
-        self._mirror = mirror
+        self._right_widget = right_widget
         self._wire()
 
     def resizeEvent(self, event):
@@ -107,15 +120,16 @@ class Toolbar(QWidget):
         self._sync_mirror()
 
     def _sync_mirror(self):
-        """Keep the right-side mirror spacer the same width as left_widget."""
+        """Keep the right-side control host the same width as left_widget."""
         w = self._left_widget.sizeHint().width()
-        self._mirror.setFixedWidth(max(w, 1))
+        self._right_widget.setFixedWidth(max(w, 1))
 
     def _wire(self):
         self.btn_add.clicked.connect(self.file_add_requested)
         self.btn_edit.clicked.connect(self.channel_editor_requested)
         self.btn_export.clicked.connect(self.export_requested)
         self.btn_batch.clicked.connect(self.batch_requested)
+        self.btn_inspector.clicked.connect(self._on_inspector_clicked)
         for key, b in [('time', self.btn_mode_time),
                        ('fft', self.btn_mode_fft),
                        ('fft_time', self.btn_mode_fft_time),
@@ -145,3 +159,16 @@ class Toolbar(QWidget):
 
     def current_mode(self):
         return self._current_mode
+
+    def _on_inspector_clicked(self, checked):
+        self.set_inspector_visible(checked, notify=False)
+        self.inspector_visibility_changed.emit(bool(checked))
+
+    def set_inspector_visible(self, visible, notify=False):
+        visible = bool(visible)
+        self.btn_inspector.blockSignals(True)
+        self.btn_inspector.setChecked(visible)
+        self.btn_inspector.setIcon(Icons.inspector(BLUE if visible else GRAY))
+        self.btn_inspector.blockSignals(False)
+        if notify:
+            self.inspector_visibility_changed.emit(visible)

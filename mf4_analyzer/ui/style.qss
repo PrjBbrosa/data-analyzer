@@ -772,6 +772,14 @@ QWidget#chartToolbar QLabel#chartAnnotationLabel {
     font-weight: 600;
 }
 
+QWidget#chartToolbar QWidget#chartAnnotationSpacer {
+    background-color: #ffffff;
+}
+
+QWidget#chartToolbar QWidget#chartTimeControlsSpacer {
+    background-color: #ffffff;
+}
+
 QFrame#chartToolbarSep {
     margin-top: 6px;
     margin-bottom: 6px;

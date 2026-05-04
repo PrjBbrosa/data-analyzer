@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self.toolbar)
 
         splitter = QSplitter(Qt.Horizontal, self)
+        self.splitter = splitter
         self.navigator = FileNavigator(self)
         self.chart_stack = ChartStack(self)
         self.inspector = Inspector(self)
@@ -188,12 +189,51 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_toast') and self._toast.isVisible():
             self._toast._reposition()
 
+    def set_inspector_visible(self, visible):
+        visible = bool(visible)
+        splitter = self.splitter
+        sizes = splitter.sizes()
+        if len(sizes) != 3:
+            self.inspector.setVisible(visible)
+            self.toolbar.set_inspector_visible(visible)
+            return
+
+        nav_width = sizes[0] if sizes[0] > 0 else self.navigator.width()
+        total_width = sum(sizes) if sum(sizes) > 0 else splitter.width()
+        restore_width = getattr(
+            self, '_inspector_restore_width', self.inspector.maximumWidth()
+        )
+        restore_width = max(
+            self.inspector.minimumWidth(),
+            min(int(restore_width), self.inspector.maximumWidth()),
+        )
+
+        if visible:
+            self.inspector.setVisible(True)
+            chart_width = max(
+                self.chart_stack.minimumWidth(),
+                total_width - nav_width - restore_width,
+            )
+            splitter.setSizes([nav_width, chart_width, restore_width])
+        else:
+            if sizes[2] > 0:
+                self._inspector_restore_width = sizes[2]
+            self.inspector.setVisible(False)
+            chart_width = max(
+                self.chart_stack.minimumWidth(),
+                total_width - nav_width,
+            )
+            splitter.setSizes([nav_width, chart_width, 0])
+
+        self.toolbar.set_inspector_visible(visible)
+
     def _connect(self):
         # --- New-module wiring ---
         self.toolbar.file_add_requested.connect(self.load_files)
         self.toolbar.channel_editor_requested.connect(self.open_editor)
         self.toolbar.export_requested.connect(self.export_excel)
         self.toolbar.batch_requested.connect(self.open_batch)
+        self.toolbar.inspector_visibility_changed.connect(self.set_inspector_visible)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.chart_stack.image_copied.connect(
             lambda msg: (self.statusBar.showMessage(msg, 2000),

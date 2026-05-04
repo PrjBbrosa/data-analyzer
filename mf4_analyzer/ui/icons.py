@@ -128,6 +128,43 @@ class Icons:
         return _line_icon(draw, GRAY)
 
     @classmethod
+    def batch(cls):
+        """Task-queue glyph for batch processing."""
+        with _painting() as (pix, p):
+            p.setPen(_pen(GRAY, 1.45))
+            p.setBrush(Qt.NoBrush)
+            for y in (5, 10, 15):
+                p.drawRoundedRect(QRectF(3, y - 1.6, 3.2, 3.2), 0.9, 0.9)
+                p.drawLine(QPointF(8, y), QPointF(13.5, y))
+
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(GRAY))
+            play = QPainterPath()
+            play.moveTo(15, 6.2)
+            play.lineTo(18, 10)
+            play.lineTo(15, 13.8)
+            play.closeSubpath()
+            p.drawPath(play)
+        return QIcon(pix)
+
+    @classmethod
+    def inspector(cls, color=None):
+        """Right-side panel glyph for toggling the inspector pane."""
+        color = color or GRAY
+        with _painting() as (pix, p):
+            p.setPen(_pen(color, 1.5))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(QRectF(3, 4, 14, 12), 1.8, 1.8)
+            p.drawLine(QPointF(12, 4.8), QPointF(12, 15.2))
+            p.drawLine(QPointF(5.5, 7), QPointF(9.5, 7))
+            p.drawLine(QPointF(5.5, 10), QPointF(9.5, 10))
+            p.drawLine(QPointF(5.5, 13), QPointF(9.5, 13))
+            p.setPen(_pen(color, 1.25))
+            p.drawLine(QPointF(14, 8), QPointF(15.5, 8))
+            p.drawLine(QPointF(14, 11), QPointF(15.5, 11))
+        return QIcon(pix)
+
+    @classmethod
     def mode_time(cls):
         def draw(p):
             path = QPainterPath()
