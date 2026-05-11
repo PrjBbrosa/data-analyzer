@@ -501,6 +501,10 @@ class TimeChartCard(_ChartCard):
         self._axis_lock = 'none'
         self._lock_buttons['none'].setChecked(True)
         self._sync_lock_enabled()
+        if hasattr(self.canvas, 'overlay_channel_selected'):
+            self.canvas.overlay_channel_selected.connect(
+                self._on_overlay_channel_selected
+            )
 
     # ----- plot mode -----
     def plot_mode(self):
@@ -572,6 +576,17 @@ class TimeChartCard(_ChartCard):
         # Extend base behavior: refresh hint AND chip enabled state.
         super()._on_nav_mode_toggled()
         self._sync_lock_enabled()
+
+    def _on_overlay_channel_selected(self, name):
+        if not name:
+            return
+        mode = str(getattr(self.toolbar, 'mode', '')).lower()
+        if 'pan' in mode:
+            self.toolbar.pan()
+        elif 'zoom' in mode:
+            self.toolbar.zoom()
+        self._sync_lock_enabled()
+        self._refresh_hint()
 
 
 class SpectrogramChartCard(_ChartCard):

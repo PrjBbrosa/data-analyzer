@@ -197,3 +197,196 @@ def test_timedomain_subplot_long_ylabel_switches_to_inside_labels(qtbot):
         assert y >= 0.96
         assert artist.get_gid() == full_name
         assert "..." in artist.get_text() or "…" in artist.get_text()
+
+
+def test_timedomain_overlay_click_selects_curve_for_y_controls(qtbot):
+    from matplotlib.backend_bases import MouseEvent
+
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    t = np.linspace(0.0, 1.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    canvas.draw()
+
+    torque_ax, torque_line = canvas._channel_lines["torque"]
+    x_data = float(torque_line.get_xdata()[30])
+    y_data = float(torque_line.get_ydata()[30])
+    x_pix, y_pix = torque_ax.transData.transform((x_data, y_data))
+    event = MouseEvent(
+        "button_press_event", canvas, x_pix, y_pix, button=1
+    )
+    canvas.callbacks.process("button_press_event", event)
+
+    assert canvas.selected_overlay_channel() == "torque"
+    assert (
+        torque_line.get_linewidth()
+        > canvas._channel_lines["speed"][1].get_linewidth()
+    )
+    assert canvas._channel_lines["speed"][1].get_alpha() < 1.0
+
+
+def test_timedomain_overlay_scroll_y_moves_selected_curve_only(qtbot):
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    t = np.linspace(0.0, 1.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    canvas.select_overlay_channel("torque")
+
+    speed_ax = canvas._channel_lines["speed"][0]
+    torque_ax = canvas._channel_lines["torque"][0]
+    before_speed = speed_ax.get_ylim()
+    before_torque = torque_ax.get_ylim()
+
+    event = SimpleNamespace(
+        inaxes=speed_ax, step=1, key="", xdata=0.5, ydata=0.0
+    )
+    canvas._on_scroll(event)
+
+    assert speed_ax.get_ylim() == pytest.approx(before_speed)
+    assert torque_ax.get_ylim() != pytest.approx(before_torque)
+
+
+def test_timedomain_overlay_shift_wheel_zooms_selected_curve_only(qtbot):
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    t = np.linspace(0.0, 1.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    canvas.select_overlay_channel("torque")
+
+    speed_ax = canvas._channel_lines["speed"][0]
+    torque_ax = canvas._channel_lines["torque"][0]
+    before_speed = speed_ax.get_ylim()
+    before_torque = torque_ax.get_ylim()
+
+    event = SimpleNamespace(
+        inaxes=speed_ax, step=1, key="shift", xdata=0.5, ydata=0.0
+    )
+    canvas._on_scroll(event)
+
+    assert speed_ax.get_ylim() == pytest.approx(before_speed)
+    assert torque_ax.get_ylim() != pytest.approx(before_torque)
+
+
+def test_timedomain_overlay_drag_y_moves_selected_curve_only(qtbot):
+    from matplotlib.backend_bases import MouseEvent
+
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    t = np.linspace(0.0, 1.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    canvas.draw()
+
+    torque_ax, torque_line = canvas._channel_lines["torque"]
+    x_data = float(torque_line.get_xdata()[30])
+    y_data = float(torque_line.get_ydata()[30])
+    x_pix, y_pix = torque_ax.transData.transform((x_data, y_data))
+    press = MouseEvent(
+        "button_press_event", canvas, x_pix, y_pix, button=1
+    )
+    canvas.callbacks.process("button_press_event", press)
+
+    speed_ax = canvas._channel_lines["speed"][0]
+    before_speed = speed_ax.get_ylim()
+    before_torque = torque_ax.get_ylim()
+
+    move = SimpleNamespace(
+        inaxes=speed_ax, x=x_pix, y=y_pix + 30, xdata=0.5, ydata=0.0, button=1
+    )
+    canvas._on_move(move)
+
+    assert speed_ax.get_ylim() == pytest.approx(before_speed)
+    assert torque_ax.get_ylim() != pytest.approx(before_torque)
+
+
+def test_timedomain_overlay_selection_clears_on_replot(qtbot):
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    t = np.linspace(0.0, 1.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    canvas.select_overlay_channel("torque")
+
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("current", True, t, np.cos(t * 4.0), "#2563eb", "A"),
+    ], mode="overlay")
+
+    assert canvas.selected_overlay_channel() is None
+
+
+def test_timedomain_overlay_selection_does_not_retarget_axis_lock_drag(qtbot):
+    from matplotlib.backend_bases import MouseEvent
+
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    t = np.linspace(0.0, 1.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    canvas.select_overlay_channel("torque")
+    canvas.set_axis_lock("x")
+
+    speed_ax, speed_line = canvas._channel_lines["speed"]
+    x_data = float(speed_line.get_xdata()[20])
+    y_data = float(speed_line.get_ydata()[20])
+    x_pix, y_pix = speed_ax.transData.transform((x_data, y_data))
+    press = MouseEvent(
+        "button_press_event", canvas, x_pix, y_pix, button=1
+    )
+    press.inaxes = speed_ax
+    press.xdata = x_data
+    press.ydata = y_data
+    canvas.callbacks.process("button_press_event", press)
+
+    move = SimpleNamespace(
+        inaxes=speed_ax,
+        x=x_pix + 40,
+        y=y_pix,
+        xdata=x_data + 0.2,
+        ydata=y_data,
+        button=1,
+    )
+    canvas._on_move(move)
+
+    assert canvas._rb_ax is speed_ax
+    assert canvas._rb_patch is not None
+    assert canvas._rb_patch.get_width() > 0.0

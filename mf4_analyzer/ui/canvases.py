@@ -408,6 +408,7 @@ class TimeDomainCanvas(FigureCanvas):
     cursor_info = pyqtSignal(str)
     dual_cursor_info = pyqtSignal(str)
     span_selected = pyqtSignal(float, float)
+    overlay_channel_selected = pyqtSignal(object)
 
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(10, 6), dpi=100, facecolor=CHART_FACE)
@@ -433,6 +434,9 @@ class TimeDomainCanvas(FigureCanvas):
         self._inside_channel_label_artists = []
         self._last_channel_label_mode = 'axis'
         self._chart_options_ax = None
+        self._selected_overlay_channel = None
+        self._overlay_pick_radius_px = 12.0
+        self._overlay_y_drag_start = None
         self.span_selector = None
         # ----- viewport refresh wiring (Phase 1 items 2 + 5) -----
         # The "primary" axis is the one whose xlim_changed we listen to.
@@ -511,6 +515,8 @@ class TimeDomainCanvas(FigureCanvas):
         self._inside_channel_label_artists = []
         self._last_channel_label_mode = 'axis'
         self._chart_options_ax = None
+        self._selected_overlay_channel = None
+        self._overlay_y_drag_start = None
         self._primary_xaxis_ax = None
         self._cursor_artists = [];
         self._a_artists = [];
@@ -658,6 +664,136 @@ class TimeDomainCanvas(FigureCanvas):
             self._primary_xaxis_ax = self.axes_list[0]
             self._connect_xlim_listener(self._primary_xaxis_ax)
         self.draw(); self._refresh = True
+
+    def selected_overlay_channel(self):
+        """Currently selected overlay-series name, or ``None``."""
+        return self._selected_overlay_channel
+
+    def select_overlay_channel(self, name):
+        """Select one overlay series as the target for per-series Y controls."""
+        if name is not None and name not in self._channel_lines:
+            return
+        self._selected_overlay_channel = name
+        self._apply_overlay_selection_style()
+        self.overlay_channel_selected.emit(name)
+        self.draw_idle()
+
+    def _apply_overlay_selection_style(self):
+        selected = self._selected_overlay_channel
+        for name, (ax, line) in self._channel_lines.items():
+            side = 'left' if self.axes_list and ax is self.axes_list[0] else 'right'
+            if not self._overlay_mode or selected is None:
+                line.set_alpha(None)
+                line.set_linewidth(1.05)
+                line.set_zorder(2)
+                if side in ax.spines:
+                    ax.spines[side].set_linewidth(1.5)
+                continue
+            is_selected = name == selected
+            line.set_alpha(1.0 if is_selected else 0.42)
+            line.set_linewidth(1.8 if is_selected else 1.0)
+            line.set_zorder(4 if is_selected else 2)
+            if side in ax.spines:
+                ax.spines[side].set_linewidth(2.4 if is_selected else 1.0)
+
+    def _channel_for_axes(self, target_ax):
+        for name, (ax, _line) in self._channel_lines.items():
+            if ax is target_ax:
+                return name
+        return None
+
+    def _selected_overlay_axes(self):
+        if self._selected_overlay_channel is None:
+            return None
+        pair = self._channel_lines.get(self._selected_overlay_channel)
+        return pair[0] if pair is not None else None
+
+    def _select_overlay_channel_from_event(self, event):
+        if not self._overlay_mode or event.button != 1:
+            return False
+        if self._cursor_visible or self._axis_lock is not None:
+            return False
+        from ._axis_interaction import find_axis_for_dblclick
+        hit_ax, axis = find_axis_for_dblclick(
+            self.fig, event.x, event.y, AXIS_HIT_MARGIN_PX
+        )
+        if hit_ax is not None and axis == 'y':
+            name = self._channel_for_axes(hit_ax)
+            if name is not None:
+                self.select_overlay_channel(name)
+                self._retarget_event_to_selected_overlay_axes(event)
+                self._begin_overlay_y_drag(event)
+                return True
+
+        best_name = None
+        best_dist = float('inf')
+        point = np.array([event.x, event.y], dtype=float)
+        for name, (ax, line) in self._channel_lines.items():
+            xdata = np.asarray(line.get_xdata(), dtype=float)
+            ydata = np.asarray(line.get_ydata(), dtype=float)
+            if xdata.size == 0 or ydata.size == 0:
+                continue
+            n = min(xdata.size, ydata.size)
+            xdata = xdata[:n]
+            ydata = ydata[:n]
+            if n > 3000:
+                step = max(1, n // 3000)
+                xdata = xdata[::step]
+                ydata = ydata[::step]
+            coords = ax.transData.transform(np.column_stack([xdata, ydata]))
+            if coords.size == 0:
+                continue
+            dist = float(np.min(np.hypot(coords[:, 0] - point[0],
+                                          coords[:, 1] - point[1])))
+            if dist < best_dist:
+                best_dist = dist
+                best_name = name
+        if best_name is not None and best_dist <= self._overlay_pick_radius_px:
+            self.select_overlay_channel(best_name)
+            self._retarget_event_to_selected_overlay_axes(event)
+            self._begin_overlay_y_drag(event)
+            return True
+        return False
+
+    def _retarget_event_to_selected_overlay_axes(self, event):
+        ax = self._selected_overlay_axes()
+        if not self._overlay_mode or ax is None:
+            return
+        try:
+            event.inaxes = ax
+            event.xdata, event.ydata = ax.transData.inverted().transform(
+                (event.x, event.y)
+            )
+        except Exception:
+            pass
+
+    def _begin_overlay_y_drag(self, event):
+        ax = self._selected_overlay_axes()
+        if ax is None:
+            self._overlay_y_drag_start = None
+            return
+        self._overlay_y_drag_start = (float(event.y), ax.get_ylim())
+
+    def _update_overlay_y_drag(self, event):
+        if self._overlay_y_drag_start is None:
+            return False
+        ax = self._selected_overlay_axes()
+        if ax is None:
+            self._overlay_y_drag_start = None
+            return False
+        button = getattr(event, 'button', None)
+        if button not in (1, None):
+            return False
+        if button is None and not self._mouse_button_pressed:
+            return False
+        start_y, (lo, hi) = self._overlay_y_drag_start
+        height = max(float(ax.bbox.height), 1.0)
+        dy_px = float(event.y) - start_y
+        shift = -dy_px * (hi - lo) / height
+        ax.set_ylim(lo + shift, hi + shift)
+        self._refresh = True
+        self.draw_idle()
+        return True
 
     def _subplot_ylabels_need_inside_labels(self):
         if len(self.axes_list) <= 1:
@@ -1068,6 +1204,8 @@ class TimeDomainCanvas(FigureCanvas):
         if e.button == 1 and e.dblclick:
             _open_chart_options_for_event(self, e)
             return
+        if self._select_overlay_channel_from_event(e):
+            return
         # Axis-lock mode short-circuits dual-cursor and initiates rubber-band
         if self._axis_lock is not None and e.button == 1 and e.inaxes is not None \
                 and e.xdata is not None and e.ydata is not None:
@@ -1118,6 +1256,9 @@ class TimeDomainCanvas(FigureCanvas):
                 self._rb_patch.set_y(min(y0, e.ydata))
                 self._rb_patch.set_height(abs(e.ydata - y0))
             self.draw_idle()
+            return
+        self._retarget_event_to_selected_overlay_axes(e)
+        if self._update_overlay_y_drag(e):
             return
         if not self._cursor_visible or e.inaxes is None or e.xdata is None: return
         now = _time.monotonic() * 1000
@@ -1202,6 +1343,7 @@ class TimeDomainCanvas(FigureCanvas):
         self.dual_cursor_info.emit(_format_dual_html(dual) if dual else "")
 
     def _on_scroll(self, e):
+        self._retarget_event_to_selected_overlay_axes(e)
         if e.inaxes is None: return
         ax = e.inaxes;
         step = e.step;
@@ -1255,6 +1397,7 @@ class TimeDomainCanvas(FigureCanvas):
             self._refresh = True
             self._cancel_rb()
         finally:
+            self._overlay_y_drag_start = None
             self._flush_pending_refresh()
 
     def _on_key(self, e):

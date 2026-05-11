@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QSizePolicy
 
@@ -109,6 +112,51 @@ def test_time_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
         == QSizePolicy.Expanding
     )
     assert card._time_controls_spacer.testAttribute(Qt.WA_StyledBackground)
+
+
+def test_overlay_curve_drag_exits_default_pan_before_y_move(qapp, qtbot):
+    from matplotlib.backend_bases import MouseEvent
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+
+    t = np.linspace(0.0, 1.0, 80)
+    cs.canvas_time.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    cs.canvas_time.draw()
+    assert 'pan' in str(cs._time_card.toolbar.mode).lower()
+
+    torque_ax, torque_line = cs.canvas_time._channel_lines["torque"]
+    x_data = float(torque_line.get_xdata()[30])
+    y_data = float(torque_line.get_ydata()[30])
+    x_pix, y_pix = torque_ax.transData.transform((x_data, y_data))
+    before_xlim = cs.canvas_time.axes_list[0].get_xlim()
+    before_torque_ylim = torque_ax.get_ylim()
+
+    press = MouseEvent(
+        "button_press_event", cs.canvas_time, x_pix, y_pix, button=1
+    )
+    cs.canvas_time.callbacks.process("button_press_event", press)
+    assert cs.canvas_time.selected_overlay_channel() == "torque"
+    assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
+
+    move = MouseEvent(
+        "motion_notify_event", cs.canvas_time, x_pix, y_pix + 30, button=1
+    )
+    cs.canvas_time.callbacks.process("motion_notify_event", move)
+    release = MouseEvent(
+        "button_release_event", cs.canvas_time, x_pix, y_pix + 30, button=1
+    )
+    cs.canvas_time.callbacks.process("button_release_event", release)
+
+    assert cs.canvas_time.axes_list[0].get_xlim() == pytest.approx(before_xlim)
+    assert torque_ax.get_ylim() != pytest.approx(before_torque_ylim)
 
 
 def test_annotation_toolbar_spacer_has_toolbar_background_rule():
