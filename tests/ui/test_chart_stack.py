@@ -106,12 +106,50 @@ def test_time_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
         if card.toolbar.widgetForAction(act) is card._lock_buttons['y']
     )
 
-    assert spacer_index < subplot_index < lock_y_index < loc_index
+    assert loc_index < spacer_index < subplot_index < lock_y_index
+    assert loc_label.minimumWidth() == loc_label.maximumWidth()
     assert (
         card._time_controls_spacer.sizePolicy().horizontalPolicy()
         == QSizePolicy.Expanding
     )
     assert card._time_controls_spacer.testAttribute(Qt.WA_StyledBackground)
+
+
+def test_time_toolbar_loc_label_text_does_not_jostle_right_controls(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(1100, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+
+    card = cs._time_card
+    loc_label = getattr(card.toolbar, 'locLabel', None)
+    before = card._lock_buttons['y'].geometry().topLeft()
+
+    loc_label.setText("(x, y) = (-19.0, 1.153)")
+    qapp.processEvents()
+    after = card._lock_buttons['y'].geometry().topLeft()
+
+    assert after == before
+
+
+def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+
+    cs.set_cursor_mode('dual')
+    cs.canvas_time.cursor_info.emit("A=1.0s")
+    cs.canvas_time.dual_cursor_info.emit("<b>stats</b>")
+    assert cs.cursor_pill_visible()
+
+    cs._time_card.set_cursor_mode('off')
+
+    assert not cs.cursor_pill_visible()
+    assert cs.cursor_pill_text() == ""
 
 
 def test_overlay_curve_drag_exits_default_pan_before_y_move(qapp, qtbot):

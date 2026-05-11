@@ -99,7 +99,16 @@ class MultiFileChannelWidget(QWidget):
 
     def add_file(self, fid, fd):
         self._files[fid] = fd
-        fi = QTreeWidgetItem([fd.short_name, f"{len(fd.data)}"])
+        fp = getattr(fd, "filepath", None)
+        if fp is not None:
+            file_label = fp.stem
+            file_tip = fp.name
+        else:
+            file_tip = getattr(fd, "filename", "") or getattr(fd, "short_name", "")
+            file_label = file_tip.rsplit(".", 1)[0] if "." in file_tip else file_tip
+        fi = QTreeWidgetItem([file_label, f"{len(fd.data)}"])
+        if file_tip:
+            fi.setToolTip(0, file_tip)
         fi.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
         # 不使用AutoTristate，手动控制文件级勾选
         fi.setFlags(fi.flags() | Qt.ItemIsUserCheckable)

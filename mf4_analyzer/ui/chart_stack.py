@@ -250,10 +250,9 @@ class _ChartCard(QWidget):
             self.toolbar.addWidget(self._options_btn)
             self.toolbar.addWidget(self._copy_btn)
 
-        # Two-line hint label sits at the LEFT of the toolbar (just after the
-        # nav icons). Preferred size policy keeps it tight; matplotlib's own
-        # locLabel — already Expanding + AlignRight — naturally takes the
-        # remaining slack and pushes the (x, y) readout to the right.
+        # Two-line hint label sits at the LEFT of the toolbar. Matplotlib's
+        # native locLabel is moved next to it with a fixed width so (x, y)
+        # updates cannot push the right-side chart controls around.
         self._hint_label = QLabel(self.toolbar)
         self._hint_label.setObjectName("chartHint")
         self._hint_label.setTextFormat(Qt.RichText)
@@ -265,17 +264,22 @@ class _ChartCard(QWidget):
         loc_label = getattr(self.toolbar, 'locLabel', None)
         loc_action = None
         if loc_label is not None:
-            loc_label.setMaximumWidth(220)
-            loc_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)
+            loc_label.setObjectName("chartLocLabel")
+            loc_label.setMinimumWidth(190)
+            loc_label.setMaximumWidth(190)
+            loc_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            loc_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             for act in self.toolbar.actions():
                 if self.toolbar.widgetForAction(act) is loc_label:
                     loc_action = act
                     break
         if loc_action is not None:
-            self.toolbar.insertWidget(loc_action, self._hint_label)
+            hint_action = self.toolbar.insertWidget(loc_action, self._hint_label)
+            self.toolbar.removeAction(loc_action)
+            self.toolbar.insertAction(hint_action, loc_action)
         else:
             self.toolbar.addWidget(self._hint_label)
-        self._loc_action = loc_action
+        self._loc_action = None
 
         if annotations:
             self._install_annotation_controls(loc_action)
@@ -653,7 +657,9 @@ class ChartStack(QWidget):
 
         # Relay time-card control signals up to MainWindow consumers.
         self._time_card.plot_mode_changed.connect(self.plot_mode_changed)
-        self._time_card.cursor_mode_changed.connect(self.cursor_mode_changed)
+        self._time_card.cursor_mode_changed.connect(
+            self._on_time_cursor_mode_changed
+        )
         for mode, card in (
             ('fft', self._fft_card),
             ('fft_time', self._fft_time_card),
@@ -692,6 +698,11 @@ class ChartStack(QWidget):
 
     def set_cursor_mode(self, mode):
         self._time_card.set_cursor_mode(mode)
+
+    def _on_time_cursor_mode_changed(self, mode):
+        if mode == 'off':
+            self.clear_cursor_pill()
+        self.cursor_mode_changed.emit(mode)
 
     def set_annotation_enabled(self, mode, enabled, notify=False):
         cards = {

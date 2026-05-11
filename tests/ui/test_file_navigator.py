@@ -43,6 +43,17 @@ def test_file_row_added(qapp):
     assert nav.file_list_count() == 1
 
 
+def test_channel_tree_file_parent_uses_full_filename_stem(qapp):
+    nav = FileNavigator()
+    full = "PK2C_VehSpd_0_TAS_0123456789abcdef.csv"
+    nav.add_file("f0", FakeFd(filename=full, short_name="PK2C_VehSpd_0_TAS"))
+
+    item = nav.channel_list._file_items["f0"]
+
+    assert item.text(0) == "PK2C_VehSpd_0_TAS_0123456789abcdef"
+    assert item.toolTip(0) == full
+
+
 def test_file_row_close_emits(qapp, qtbot):
     nav = FileNavigator()
     nav.add_file("f0", FakeFd())

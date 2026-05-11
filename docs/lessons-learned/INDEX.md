@@ -16,6 +16,7 @@ lesson by default.
 | [Codex Order Canvas Wave Review](codex-order-canvas-wave-review.md) | Order-canvas wave reviews, stale-generation tests, strict scope. | `git status`, `git diff`, `git show HEAD:<file>`, scoped pytest |
 | [Codex Publish Flow Lightweight](codex-publish-flow-lightweight.md) | Publish already-local changes: commit, push, open/write PR. | Bounded git status/diff/checks; no audit-style exploration |
 | [Codex Lessons System Maintenance](codex-lessons-system-maintenance.md) | Codex lessons system changes, hook tuning, master-kit sync, or `scripts/lessons/*` edits. | `scripts/lessons/check.py --doctor --verbose` |
+| [Confirmed Issue List Means Remaining Scope](codex-confirmed-issue-list-means-remaining-scope.md) | Numbered issue follow-ups where the user approves some items and asks a design question about another. | `git status --short`, `git diff --stat`, explicit checklist |
 
 ## Selection Rules
 
