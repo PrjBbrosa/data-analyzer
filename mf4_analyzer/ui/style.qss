@@ -632,6 +632,11 @@ QToolBar#chartToolbar QToolButton,
 QWidget#chartToolbar QToolButton {
     padding: 2px 4px;
 }
+QWidget#chartToolbar QToolButton:disabled {
+    border: 1px solid #e5eaf2;
+    border-radius: 6px;
+    background-color: #f8fafc;
+}
 
 QFrame#cursorPill {
     border: 1px solid #d8e0eb;

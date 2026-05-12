@@ -54,13 +54,17 @@ def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
         assert card._annotation_btn.toolTip()
 
 
-def test_annotation_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
+def test_annotation_toolbar_controls_are_pushed_right_after_hint_label(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
 
     for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
         loc_label = getattr(card.toolbar, 'locLabel', None)
         actions = card.toolbar.actions()
+        hint_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._hint_label
+        )
         spacer_index = next(
             i for i, act in enumerate(actions)
             if card.toolbar.widgetForAction(act) is card._annotation_spacer
@@ -74,7 +78,7 @@ def test_annotation_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtb
             if card.toolbar.widgetForAction(act) is card._annotation_label
         )
 
-        assert spacer_index < annotation_index < loc_index
+        assert loc_index < hint_index < spacer_index < annotation_index
         assert (
             card._annotation_spacer.sizePolicy().horizontalPolicy()
             == QSizePolicy.Expanding
@@ -118,7 +122,7 @@ def test_time_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
 def test_time_toolbar_loc_label_text_does_not_jostle_right_controls(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
-    cs.resize(1100, 520)
+    cs.resize(1500, 520)
     cs.show()
     qtbot.waitExposed(cs)
 
@@ -131,6 +135,49 @@ def test_time_toolbar_loc_label_text_does_not_jostle_right_controls(qapp, qtbot)
     after = card._lock_buttons['y'].geometry().topLeft()
 
     assert after == before
+
+
+def test_chart_toolbar_keeps_back_forward_actions_visible(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(820, 500)
+    cs.show()
+    qtbot.waitExposed(cs)
+    qapp.processEvents()
+    card = cs._time_card
+
+    actions = {act.data(): act for act in card.toolbar.actions() if act.data()}
+    assert {'back', 'forward'} <= set(actions)
+    for key in ('back', 'forward'):
+        widget = card.toolbar.widgetForAction(actions[key])
+        assert widget is not None
+        assert widget.isVisible()
+        assert not widget.icon().isNull()
+
+
+def test_time_toolbar_controls_fit_when_inspector_narrows_chart(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(820, 500)
+    cs.show()
+    qtbot.waitExposed(cs)
+    qapp.processEvents()
+
+    card = cs._time_card
+    controls = [
+        card.btn_subplot,
+        card.btn_overlay,
+        card._cursor_buttons['off'],
+        card._cursor_buttons['single'],
+        card._cursor_buttons['dual'],
+        card._lock_buttons['none'],
+        card._lock_buttons['x'],
+        card._lock_buttons['y'],
+    ]
+    right_edge = card.toolbar.rect().right()
+    for button in controls:
+        assert button.isVisible()
+        assert button.geometry().right() <= right_edge
 
 
 def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
@@ -203,6 +250,13 @@ def test_annotation_toolbar_spacer_has_toolbar_background_rule():
     assert "QWidget#chartToolbar QWidget#chartAnnotationSpacer" in qss
     assert "background-color: #ffffff;" in qss
     assert "QWidget#chartToolbar QWidget#chartTimeControlsSpacer" in qss
+
+
+def test_chart_toolbar_disabled_nav_buttons_have_visible_style():
+    qss = Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+
+    assert "QWidget#chartToolbar QToolButton:disabled" in qss
+    assert "border: 1px solid #e5eaf2;" in qss
 
 
 def test_chart_cards_have_chart_options_toolbar_button(qapp, qtbot):

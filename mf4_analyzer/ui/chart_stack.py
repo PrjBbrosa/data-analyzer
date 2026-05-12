@@ -140,6 +140,8 @@ _BOTTOM_HINT_CONTEXT = {
 # Icon colour tokens (match Precision Light palette)
 _ICON_COLOR  = '#374151'
 _ICON_ACTIVE = '#2563eb'
+_TOOLBAR_COMPACT_WIDTH = 1500
+_QT_WIDGETSIZE_MAX = 16777215
 
 # MDI action-key → qtawesome icon name mapping
 _MDI_NAV_ICONS = {
@@ -212,6 +214,7 @@ class _ChartCard(QWidget):
                 btn.setFixedSize(QSize(32, 32))
         if self.toolbar.layout() is not None:
             self.toolbar.layout().setSpacing(8)
+        self._toolbar_compact = None
         _strip_subplots_action(self.toolbar)
 
         # Find Save BEFORE i18n changes labels (text is still 'Save' here);
@@ -282,7 +285,7 @@ class _ChartCard(QWidget):
         self._loc_action = None
 
         if annotations:
-            self._install_annotation_controls(loc_action)
+            self._install_annotation_controls(None)
 
         # Only pan/zoom toggling changes the hint; one-shot buttons don't.
         # Subclasses (TimeChartCard) listen to this same signal to flip the
@@ -327,6 +330,35 @@ class _ChartCard(QWidget):
         lay.addWidget(canvas, stretch=1)
         lay.addWidget(self._hint_bar)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_responsive_toolbar()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sync_responsive_toolbar()
+
+    def _sync_responsive_toolbar(self):
+        if not self.toolbar.isVisible():
+            return
+        width = self.toolbar.width()
+        if width <= 0:
+            return
+        compact = width < _TOOLBAR_COMPACT_WIDTH
+        if compact == self._toolbar_compact:
+            return
+        self._toolbar_compact = compact
+        self._hint_label.setMinimumWidth(0 if compact else 180)
+        self._hint_label.setMaximumWidth(0 if compact else _QT_WIDGETSIZE_MAX)
+        self._hint_label.setVisible(not compact)
+        loc_label = getattr(self.toolbar, 'locLabel', None)
+        if loc_label is not None:
+            loc_width = 0 if compact else 190
+            loc_label.setMinimumWidth(loc_width)
+            loc_label.setMaximumWidth(loc_width)
+            loc_label.setVisible(not compact)
+        self.toolbar.updateGeometry()
+
     def _insert_toolbar_widget(self, loc_action, widget):
         if loc_action is not None:
             self.toolbar.insertWidget(loc_action, widget)
@@ -334,8 +366,8 @@ class _ChartCard(QWidget):
             self.toolbar.addWidget(widget)
 
     def _insert_right_toolbar_widget(self, loc_action, widget):
-        # Insert before matplotlib's locLabel; the annotation spacer below
-        # owns the flexible width so the controls stay visible at the right.
+        # Insert at the card's right-control zone. Passing ``None`` appends
+        # after the fixed loc/hint labels; TimeDomain uses the same path.
         self._insert_toolbar_widget(loc_action, widget)
 
     def _install_annotation_controls(self, loc_action):
@@ -453,6 +485,7 @@ class TimeChartCard(_ChartCard):
         # Right-align time-only controls with the same locLabel insertion
         # point used by annotation controls on analysis cards.
         loc_action = getattr(self, '_loc_action', None)
+        self._time_separators = []
         self._time_controls_spacer = QWidget(self.toolbar)
         self._time_controls_spacer.setObjectName("chartTimeControlsSpacer")
         self._time_controls_spacer.setAttribute(Qt.WA_StyledBackground, True)
@@ -461,7 +494,9 @@ class TimeChartCard(_ChartCard):
         )
         self._insert_right_toolbar_widget(loc_action, self._time_controls_spacer)
 
-        self._insert_right_toolbar_widget(loc_action, _vline())
+        sep = _vline()
+        self._time_separators.append(sep)
+        self._insert_right_toolbar_widget(loc_action, sep)
 
         self.btn_subplot = QPushButton("分屏", self.toolbar)
         self.btn_overlay = QPushButton("叠加", self.toolbar)
@@ -475,7 +510,9 @@ class TimeChartCard(_ChartCard):
         self.btn_subplot.clicked.connect(lambda: self.set_plot_mode('subplot'))
         self.btn_overlay.clicked.connect(lambda: self.set_plot_mode('overlay'))
 
-        self._insert_right_toolbar_widget(loc_action, _vline())
+        sep = _vline()
+        self._time_separators.append(sep)
+        self._insert_right_toolbar_widget(loc_action, sep)
 
         self._cursor_buttons = {}
         for label, key in [('游标关', 'off'), ('单游标', 'single'), ('双游标', 'dual')]:
@@ -492,7 +529,9 @@ class TimeChartCard(_ChartCard):
         # Axis-lock chips on the right edge — only effective during zoom mode.
         # Selection is remembered across mode switches; chips merely grey out
         # when zoom is inactive.
-        self._insert_right_toolbar_widget(loc_action, _vline())
+        sep = _vline()
+        self._time_separators.append(sep)
+        self._insert_right_toolbar_widget(loc_action, sep)
         self._lock_buttons = {}
         for label, key in [('不锁', 'none'), ('锁X', 'x'), ('锁Y', 'y')]:
             b = QPushButton(label, self.toolbar)
@@ -509,6 +548,40 @@ class TimeChartCard(_ChartCard):
             self.canvas.overlay_channel_selected.connect(
                 self._on_overlay_channel_selected
             )
+        self._time_button_labels = [
+            (self.btn_subplot, '分屏', '分'),
+            (self.btn_overlay, '叠加', '叠'),
+            (self._cursor_buttons['off'], '游标关', '关'),
+            (self._cursor_buttons['single'], '单游标', '单'),
+            (self._cursor_buttons['dual'], '双游标', '双'),
+            (self._lock_buttons['none'], '不锁', '不'),
+            (self._lock_buttons['x'], '锁X', 'X'),
+            (self._lock_buttons['y'], '锁Y', 'Y'),
+        ]
+        for button, full, _compact in self._time_button_labels:
+            button.setToolTip(full)
+        self._time_toolbar_compact = None
+
+    def _sync_responsive_toolbar(self):
+        super()._sync_responsive_toolbar()
+        labels = getattr(self, '_time_button_labels', None)
+        if not labels:
+            return
+        compact = self.toolbar.width() < _TOOLBAR_COMPACT_WIDTH
+        if compact == self._time_toolbar_compact:
+            return
+        self._time_toolbar_compact = compact
+        for button, full, short in labels:
+            button.setText(short if compact else full)
+            if compact:
+                button.setMinimumWidth(0)
+                button.setMaximumWidth(44)
+            else:
+                button.setMinimumWidth(0)
+                button.setMaximumWidth(_QT_WIDGETSIZE_MAX)
+        for sep in self._time_separators:
+            sep.setVisible(not compact)
+        self.toolbar.updateGeometry()
 
     # ----- plot mode -----
     def plot_mode(self):
