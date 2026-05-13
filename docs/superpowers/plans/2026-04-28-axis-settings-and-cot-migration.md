@@ -21,8 +21,8 @@
 
 ### Selected designs (from prior playgrounds)
 
-- **Spinbox/combo arrows** — already implemented as scheme B (`qtawesome → QPixmap → QSS image`) using `mdi6.menu-up/down`. See `docs/plans/2026-04-28-spinbox-arrow-options.html`. New axis-settings rows reuse the existing 22px gutter + compact triangle styling; **no new icon work**.
-- **Axis settings layout** — selected scheme B' (Inline 紧凑, 一行一轴) from `docs/plans/2026-04-28-axis-settings-options.html`. Refined in chat:
+- **Spinbox/combo arrows** — already implemented as scheme B (`qtawesome → QPixmap → QSS image`) using `mdi6.menu-up/down`. See `docs/analyzer/ui-prototypes/2026-04-28-spinbox-arrow-options.html`. New axis-settings rows reuse the existing 22px gutter + compact triangle styling; **no new icon work**.
+- **Axis settings layout** — selected scheme B' (Inline 紧凑, 一行一轴) from `docs/analyzer/ui-prototypes/2026-04-28-axis-settings-options.html`. Refined in chat:
   - **Order view**: 3 rows = `时间(X) [s]`, `阶次(Y) [no unit]`, `色阶 [dB ▼]`
   - **FFT-vs-Time**: 3 rows = `时间(X) [s]`, `频率(Y) [Hz]`, `色阶 [dB ▼]`
   - **FFT 1D**: 2 rows = `频率(X) [Hz]`, `幅值(Y) [dB ▼]` (unit dropdown moves to Y because there is no Z)

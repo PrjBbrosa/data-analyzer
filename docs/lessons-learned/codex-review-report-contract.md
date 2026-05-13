@@ -3,7 +3,7 @@ id: codex-review-report-contract
 status: active
 owners: [codex]
 keywords: [review, code-review, plan-review, spec-review, commit-review, report, citation, evidence, verdict, stdout]
-paths: [docs/code-reviews/*, docs/superpowers/*, mf4_analyzer/*, tests/*]
+paths: [docs/analyzer/reviews/code-reviews/*, docs/superpowers/*, mf4_analyzer/*, tests/*]
 checks: [git show --name-status --oneline, rg -n, nl -ba, rg -n '^## ']
 tests: []
 ---

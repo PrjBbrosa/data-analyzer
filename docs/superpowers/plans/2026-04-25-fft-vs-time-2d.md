@@ -19,7 +19,7 @@
 
 - Design spec: `docs/superpowers/specs/2026-04-25-fft-vs-time-2d-design.md` (revised 2026-04-25)
 - Brainstorm record: `docs/superpowers/specs/2026-04-25-fft-vs-time-2d-brainstorm.md`
-- UI demo: `docs/fft-vs-time-ui-demo.html`
+- UI demo: `docs/analyzer/ui-prototypes/fft-vs-time-ui-demo.html`
 - Existing FFT code: `mf4_analyzer/signal/fft.py`
 - Existing UI topology: `mf4_analyzer/ui/toolbar.py`, `mf4_analyzer/ui/chart_stack.py`, `mf4_analyzer/ui/inspector.py`, `mf4_analyzer/ui/inspector_sections.py`, `mf4_analyzer/ui/canvases.py`, `mf4_analyzer/ui/main_window.py`
 

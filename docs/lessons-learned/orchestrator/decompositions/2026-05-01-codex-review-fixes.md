@@ -2,7 +2,7 @@
 date: 2026-05-01
 slug: codex-review-fixes
 mode: plan
-source_review: docs/code-reviews/2026-05-01-recent-prs-deep-review.md
+source_review: docs/analyzer/reviews/code-reviews/2026-05-01-recent-prs-deep-review.md
 spec: docs/superpowers/specs/2026-05-01-codex-review-fixes-design.md
 plan: docs/superpowers/plans/2026-05-01-codex-review-fixes.md
 ---

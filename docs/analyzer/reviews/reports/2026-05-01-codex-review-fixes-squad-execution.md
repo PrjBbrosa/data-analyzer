@@ -3,7 +3,7 @@
 ## 背景
 
 针对最近合并的 4 个 PR（#7 COT 迁移 + 坐标轴重构、#8 批处理 axes / FFT-time polish、#9 lightweight publish lesson、#10 图表选项 dialog）做深度 review，输出
-`docs/code-reviews/2026-05-01-recent-prs-deep-review.md`，共发现 **3 个 P1 + 4 个 P2**。
+`docs/analyzer/reviews/code-reviews/2026-05-01-recent-prs-deep-review.md`，共发现 **3 个 P1 + 4 个 P2**。
 
 ## 修复范围与执行
 
@@ -86,9 +86,9 @@ baseline 471 → **489 passed**（净 +18）。
 
 | 类别 | 路径 |
 |---|---|
-| 原始 review | `docs/code-reviews/2026-05-01-recent-prs-deep-review.md` |
-| W1 re-review 历史 | `docs/code-reviews/2026-05-01-w1-rereview.md` |
-| Phase 4 终局 review | `docs/code-reviews/2026-05-01-phase4-final-review.md` |
+| 原始 review | `docs/analyzer/reviews/code-reviews/2026-05-01-recent-prs-deep-review.md` |
+| W1 re-review 历史 | `docs/analyzer/reviews/code-reviews/2026-05-01-w1-rereview.md` |
+| Phase 4 终局 review | `docs/analyzer/reviews/code-reviews/2026-05-01-phase4-final-review.md` |
 | Spec — P1 | `docs/superpowers/specs/2026-05-01-codex-review-fixes-design.md` |
 | Plan — P1 | `docs/superpowers/plans/2026-05-01-codex-review-fixes.md` |
 | Spec — P2 | `docs/superpowers/specs/2026-05-01-codex-p2-cleanup-design.md` |

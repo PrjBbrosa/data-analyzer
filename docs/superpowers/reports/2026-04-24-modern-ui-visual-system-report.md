@@ -8,7 +8,7 @@
 
 ## 1. Outputs Created
 
-- `docs/ui-design-showcase.html` — static visual showcase with four selectable design directions.
+- `docs/analyzer/ui-prototypes/ui-design-showcase.html` — static visual showcase with four selectable design directions.
 - `.claude/agents/pyqt-ui-engineer.md` — persistent UI design direction added.
 - `.claude/agents/squad-orchestrator.md` — persistent UI routing memory added.
 - `docs/superpowers/plans/2026-04-24-modern-ui-visual-system.md` — executable implementation plan.
@@ -45,7 +45,7 @@ Added a `Persistent UI design direction` section.
 Key memory:
 
 - Default visual direction is `Precision Light`.
-- Use `docs/ui-design-showcase.html` as the reference.
+- Use `docs/analyzer/ui-prototypes/ui-design-showcase.html` as the reference.
 - Preserve the three-pane topology.
 - Use QSS/palette tokens.
 - Replace emoji affordances with consistent line icons.
@@ -139,7 +139,7 @@ Implementation was executed against the current PyQt codebase using the plan's `
 Primary follow-up:
 
 - Run the app in a real desktop session with representative MF4/CSV/Excel files.
-- Compare against `docs/ui-design-showcase.html`, especially the Precision Light mockup.
+- Compare against `docs/analyzer/ui-prototypes/ui-design-showcase.html`, especially the Precision Light mockup.
 - Tweak spacing/contrast from screenshots if needed.
 
 ---

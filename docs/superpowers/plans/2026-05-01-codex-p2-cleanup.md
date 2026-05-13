@@ -1,7 +1,7 @@
 # Plan — Codex Review P2 Cleanup (2026-05-01)
 
 Spec: `docs/superpowers/specs/2026-05-01-codex-p2-cleanup-design.md`
-Source review: `docs/code-reviews/2026-05-01-recent-prs-deep-review.md`
+Source review: `docs/analyzer/reviews/code-reviews/2026-05-01-recent-prs-deep-review.md`
 
 2 个 P2 → 2 个 wave，独立 RED→GREEN→codex review gate。
 

@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-24
 **Plan:** `docs/superpowers/plans/2026-04-24-modern-ui-visual-system.md`
-**Reference:** `docs/ui-design-showcase.html`
+**Reference:** `docs/analyzer/ui-prototypes/ui-design-showcase.html`
 **Mode:** plan (orchestrator audit for later agent execution)
 
 ## Context

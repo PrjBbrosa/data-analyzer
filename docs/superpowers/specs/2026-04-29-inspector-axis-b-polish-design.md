@@ -5,7 +5,7 @@
 
 ## User-Approved Direction
 
-Use option B from `docs/ui-previews/axis-ui-options.html`, with one correction:
+Use option B from `docs/analyzer/ui-prototypes/axis-ui-options.html`, with one correction:
 the application already has separate Inspector contextual panels. Do not add a
 new Inspector panel, tab strip, or outer mode switch. Optimize the existing
 `FFTTimeContextual` and `OrderContextual` panels in place.

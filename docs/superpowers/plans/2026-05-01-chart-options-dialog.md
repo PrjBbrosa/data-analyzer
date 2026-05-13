@@ -138,7 +138,7 @@ Run the same command and expect PASS.
 ## Task 4: Focused Regression Suite and Review
 
 **Files:**
-- Create: `docs/code-reviews/2026-05-01-chart-options-dialog-review.md`
+- Create: `docs/analyzer/reviews/code-reviews/2026-05-01-chart-options-dialog-review.md`
 
 - [x] **Step 1: Run focused suite**
 
@@ -175,7 +175,7 @@ Expected: no output.
 
 - [x] **Step 3: Write review report**
 
-Create `docs/code-reviews/2026-05-01-chart-options-dialog-review.md` with:
+Create `docs/analyzer/reviews/code-reviews/2026-05-01-chart-options-dialog-review.md` with:
 
 - Verdict
 - Scope reviewed

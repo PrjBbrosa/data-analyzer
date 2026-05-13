@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Upgrade the existing PyQt5 three-pane MF4 Analyzer UI from a plain/default-widget look into a modern professional engineering/data-analysis workbench, using the `Precision Light` direction from `docs/ui-design-showcase.html` as the default visual system.
+**Goal:** Upgrade the existing PyQt5 three-pane MF4 Analyzer UI from a plain/default-widget look into a modern professional engineering/data-analysis workbench, using the `Precision Light` direction from `docs/analyzer/ui-prototypes/ui-design-showcase.html` as the default visual system.
 
 **Scope:** Visual system, QSS, icons, pane hierarchy, chart workspace polish, Inspector polish, and verification. No signal-processing formulas, loaders, channel math, FFT/order algorithms, or feature removals.
 
@@ -12,7 +12,7 @@
 
 **Non-owner:** `signal-processing-expert` is not expected to participate; this is surface/UI work.
 
-**Design reference:** `docs/ui-design-showcase.html`
+**Design reference:** `docs/analyzer/ui-prototypes/ui-design-showcase.html`
 
 **Agent memory:** `.claude/agents/pyqt-ui-engineer.md` and `.claude/agents/squad-orchestrator.md` now record `Precision Light` as the persistent default UI direction.
 
@@ -62,7 +62,7 @@ Target data colors:
 
 **Reference / documentation already added:**
 
-- `docs/ui-design-showcase.html`
+- `docs/analyzer/ui-prototypes/ui-design-showcase.html`
 - `.claude/agents/pyqt-ui-engineer.md`
 - `.claude/agents/squad-orchestrator.md`
 
@@ -492,7 +492,7 @@ Use these as dispatch prompts.
 
 ### Brief 1: `qss-token-baseline`
 
-Implement Phase 1 of `docs/superpowers/plans/2026-04-24-modern-ui-visual-system.md`. You are `pyqt-ui-engineer`. Use `Precision Light` from `docs/ui-design-showcase.html` as the visual baseline. Touch only QSS/palette/font UI files. Do not alter algorithms, loaders, or feature behavior. Return your normal JSON contract with `files_changed`, `ui_verified`, tests attempted, and notes.
+Implement Phase 1 of `docs/superpowers/plans/2026-04-24-modern-ui-visual-system.md`. You are `pyqt-ui-engineer`. Use `Precision Light` from `docs/analyzer/ui-prototypes/ui-design-showcase.html` as the visual baseline. Touch only QSS/palette/font UI files. Do not alter algorithms, loaders, or feature behavior. Return your normal JSON contract with `files_changed`, `ui_verified`, tests attempted, and notes.
 
 ### Brief 2: `icon-system-and-toolbar`
 

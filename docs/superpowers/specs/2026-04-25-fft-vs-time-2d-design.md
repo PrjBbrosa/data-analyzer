@@ -3,7 +3,7 @@
 **Date:** 2026-04-25
 **Author:** collaborative brainstorm with user
 **Status:** revised 2026-04-25 after first plan review (see notes at the end)
-**Related demo:** `docs/fft-vs-time-ui-demo.html`
+**Related demo:** `docs/analyzer/ui-prototypes/fft-vs-time-ui-demo.html`
 **Brainstorm record:** `docs/superpowers/specs/2026-04-25-fft-vs-time-2d-brainstorm.md`
 
 ## 1. Goal

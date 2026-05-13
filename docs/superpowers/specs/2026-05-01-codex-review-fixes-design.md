@@ -1,6 +1,6 @@
 # Spec — Codex Review P1 Fixes (2026-05-01)
 
-源于 `docs/code-reviews/2026-05-01-recent-prs-deep-review.md` 三个 P1 issue：
+源于 `docs/analyzer/reviews/code-reviews/2026-05-01-recent-prs-deep-review.md` 三个 P1 issue：
 
 - **P7-L1** `inspector_sections.py:2132` `OrderContextual._on_amp_unit_changed`
 - **P7-L1'** `inspector_sections.py:2667` `FFTTimeContextual._on_amp_unit_changed`

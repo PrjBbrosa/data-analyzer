@@ -1,7 +1,7 @@
 # Plan — Codex Review P1 Fixes (2026-05-01)
 
 Spec: `docs/superpowers/specs/2026-05-01-codex-review-fixes-design.md`
-Source review: `docs/code-reviews/2026-05-01-recent-prs-deep-review.md`
+Source review: `docs/analyzer/reviews/code-reviews/2026-05-01-recent-prs-deep-review.md`
 
 3 个 P1 issue → 3 个 wave，每个 wave 独立 RED→GREEN→codex review gate。
 

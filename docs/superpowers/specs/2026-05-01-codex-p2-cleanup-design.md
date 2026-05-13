@@ -1,6 +1,6 @@
 # Spec — Codex Review P2 Cleanup (2026-05-01)
 
-源于 `docs/code-reviews/2026-05-01-recent-prs-deep-review.md` 两个 P2 issue：
+源于 `docs/analyzer/reviews/code-reviews/2026-05-01-recent-prs-deep-review.md` 两个 P2 issue：
 
 - **P7-D1** `mf4_analyzer/ui/main_window.py:81` — OrderWorker / `_dispatch_order_worker` 死代码
 - **P8-O1** `mf4_analyzer/ui/style.qss:146` — compact spinbox stepper 样式用全局 QSpinBox / QDoubleSpinBox selector，污染所有 spinbox

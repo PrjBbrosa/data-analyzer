@@ -295,7 +295,7 @@ or a lower detail panel
 UI mockup:
 
 ```text
-docs/fft-vs-time-ui-demo.html
+docs/analyzer/ui-prototypes/fft-vs-time-ui-demo.html
 ```
 
 This file is only a design/demo artifact. It is not part of the runtime app.
