@@ -1,0 +1,8 @@
+{
+  "vehicle": "X04C",
+  "aliases": {
+    "vehicle_speed": ["Rte_VehSpdMain_vAbsAvgVehicleSpeed_xdu16"],
+    "torsion_bar_torque": ["Rte_TAS_mTorsionBarTorque_xds16"],
+    "steering_angle_speed": ["calculation_vSteeringAngleSpeed_xds16"]
+  }
+}

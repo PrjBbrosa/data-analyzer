@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "signals": {
+    "vehicle_speed": {
+      "unit": "km/h",
+      "description": "Vehicle speed used for driving-state filtering."
+    },
+    "torsion_bar_torque": {
+      "unit": "Nm",
+      "description": "Torsion bar torque used for steering feel and ripple analysis."
+    },
+    "steering_angle_speed": {
+      "unit": "deg/s",
+      "description": "Steering angle speed used as order-analysis speed source when available."
+    }
+  }
+}
