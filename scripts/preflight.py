@@ -18,6 +18,8 @@ def main() -> int:
         action="store_true",
         help="exit 2 if mf4 path does not exist (default: exit 0 with a skip note)",
     )
+    parser.add_argument("--vehicle", default="")
+    parser.add_argument("--signal-config-root", default="")
     args = parser.parse_args()
 
     p = Path(args.mf4)
@@ -33,6 +35,8 @@ def main() -> int:
         p,
         expected_channels=tuple(args.expected_channel),
         expected_sha256=args.sha256 or None,
+        signal_config_root=args.signal_config_root or None,
+        vehicle=args.vehicle,
     )
     print(result.to_json())
     return 0 if result.ok else 1

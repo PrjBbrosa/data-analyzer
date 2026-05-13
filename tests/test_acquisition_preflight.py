@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 from asammdf import MDF, Signal
 
@@ -42,3 +44,68 @@ def test_analyze_mf4_reports_problem_when_file_missing(tmp_path):
 
     assert not result.ok
     assert "file does not exist" in result.problems
+
+
+def test_analyze_mf4_without_signal_config_keeps_legacy_behavior(tmp_path):
+    """Module A contract: without signal_config_root/vehicle, expected_channels
+    are interpreted as raw channel names and missing_channels reports raw names.
+    """
+    mf4 = tmp_path / "sample.mf4"
+    _write_mf4(mf4, name="actual")
+
+    result = analyze_mf4(mf4, expected_channels=("missing",))
+
+    assert not result.ok
+    assert result.missing_channels == ("missing",)
+    assert result.resolved_signals == {}
+
+
+def test_analyze_mf4_reports_resolved_standard_signals(tmp_path):
+    mf4 = tmp_path / "sample.mf4"
+    _write_mf4(mf4, name="raw_speed", unit="km/h")
+    root = tmp_path / "signals"
+    vehicles = root / "vehicles"
+    vehicles.mkdir(parents=True)
+    (vehicles / "CAR.json").write_text(
+        json.dumps(
+            {"vehicle": "CAR", "aliases": {"vehicle_speed": ["raw_speed"]}}
+        ),
+        encoding="utf-8",
+    )
+
+    result = analyze_mf4(
+        mf4,
+        expected_channels=("vehicle_speed",),
+        signal_config_root=root,
+        vehicle="CAR",
+    )
+
+    assert result.ok
+    assert result.resolved_signals == {"vehicle_speed": "raw_speed"}
+    assert result.missing_channels == ()
+
+
+def test_analyze_mf4_reports_unresolved_standard_signal_as_missing(tmp_path):
+    mf4 = tmp_path / "sample.mf4"
+    _write_mf4(mf4, name="something_else")
+    root = tmp_path / "signals"
+    vehicles = root / "vehicles"
+    vehicles.mkdir(parents=True)
+    (vehicles / "CAR.json").write_text(
+        json.dumps(
+            {"vehicle": "CAR", "aliases": {"vehicle_speed": ["raw_speed"]}}
+        ),
+        encoding="utf-8",
+    )
+
+    result = analyze_mf4(
+        mf4,
+        expected_channels=("vehicle_speed",),
+        signal_config_root=root,
+        vehicle="CAR",
+    )
+
+    assert not result.ok
+    # Standard name passes through unchanged when no alias matches.
+    assert result.missing_channels == ("vehicle_speed",)
+    assert result.resolved_signals == {}
