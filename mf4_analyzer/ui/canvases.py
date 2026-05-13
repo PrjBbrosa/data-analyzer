@@ -83,11 +83,105 @@ def _open_chart_options_for_axes(canvas, ax=None, preferred=()):
     return False
 
 
+def _clear_canvas_pointer_state(canvas):
+    if hasattr(canvas, '_mouse_button_pressed'):
+        canvas._mouse_button_pressed = False
+    if hasattr(canvas, '_overlay_y_drag_start'):
+        canvas._overlay_y_drag_start = None
+
+
+def _toolbar_mode_key(toolbar):
+    mode = str(getattr(toolbar, 'mode', '')).lower()
+    if 'pan' in mode:
+        return 'pan'
+    if 'zoom' in mode:
+        return 'zoom'
+    return ''
+
+
+def _sync_toolbar_parent_state(parent):
+    if hasattr(parent, '_sync_lock_enabled'):
+        parent._sync_lock_enabled()
+    if hasattr(parent, '_refresh_hint'):
+        parent._refresh_hint()
+
+
+def _deactivate_toolbar_nav_for_modal_event(canvas):
+    parent = canvas.parent()
+    toolbar = getattr(parent, 'toolbar', None)
+    if toolbar is None:
+        return ''
+    mode = _toolbar_mode_key(toolbar)
+    if mode == 'pan':
+        toolbar.pan()
+    elif mode == 'zoom':
+        toolbar.zoom()
+    _sync_toolbar_parent_state(parent)
+    return mode
+
+
+def _restore_toolbar_nav_after_modal_event(canvas, mode):
+    if mode not in ('pan', 'zoom'):
+        return
+    parent = canvas.parent()
+    toolbar = getattr(parent, 'toolbar', None)
+    if toolbar is None:
+        return
+    current = _toolbar_mode_key(toolbar)
+    if current == mode:
+        return
+    if current == 'pan':
+        toolbar.pan()
+    elif current == 'zoom':
+        toolbar.zoom()
+    if mode == 'pan':
+        toolbar.pan()
+    else:
+        toolbar.zoom()
+    _sync_toolbar_parent_state(parent)
+
+
+def _set_span_selector_active(selector, active):
+    setter = getattr(selector, 'set_active', None)
+    if callable(setter):
+        setter(bool(active))
+    else:
+        selector.active = bool(active)
+
+
+def _clear_span_selector_press(selector):
+    for attr in ('_eventpress', '_eventrelease'):
+        if hasattr(selector, attr):
+            setattr(selector, attr, None)
+
+
+def _defer_modal_event_cleanup(canvas, nav_mode, span_selector, span_was_active):
+    def _finish():
+        _clear_canvas_pointer_state(canvas)
+        if span_selector is not None and span_was_active is not None:
+            _clear_span_selector_press(span_selector)
+            _set_span_selector_active(span_selector, span_was_active)
+        _restore_toolbar_nav_after_modal_event(canvas, nav_mode)
+
+    QTimer.singleShot(0, _finish)
+
+
 def _open_chart_options_for_event(canvas, event):
     from ._axis_interaction import target_axes_for_event
 
     ax = target_axes_for_event(canvas.fig, event, AXIS_HIT_MARGIN_PX)
-    return _open_chart_options_for_axes(canvas, ax=ax)
+    nav_mode = _deactivate_toolbar_nav_for_modal_event(canvas)
+    span_selector = getattr(canvas, 'span_selector', None)
+    span_was_active = None
+    if span_selector is not None:
+        span_was_active = bool(getattr(span_selector, 'active', False))
+        if span_was_active:
+            _set_span_selector_active(span_selector, False)
+    _clear_canvas_pointer_state(canvas)
+    try:
+        return _open_chart_options_for_axes(canvas, ax=ax)
+    finally:
+        _defer_modal_event_cleanup(canvas, nav_mode, span_selector, span_was_active)
 
 
 def _apply_axes_style(ax, grid=True):

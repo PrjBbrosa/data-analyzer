@@ -244,6 +244,58 @@ def test_overlay_curve_drag_exits_default_pan_before_y_move(qapp, qtbot):
     assert torque_ax.get_ylim() != pytest.approx(before_torque_ylim)
 
 
+def test_dblclick_chart_options_restores_pan_without_starting_span_selector(
+    qapp, qtbot, monkeypatch
+):
+    from matplotlib.backend_bases import MouseEvent
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+
+    t = np.linspace(0.0, 1.0, 80)
+    cs.canvas_time.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+    ], mode="subplot")
+    cs.canvas_time.enable_span_selector(lambda _xmin, _xmax: None)
+    cs.canvas_time.draw()
+    assert 'pan' in str(cs._time_card.toolbar.mode).lower()
+    span = cs.canvas_time.span_selector
+    assert span is not None
+    assert span.active
+
+    ax = cs.canvas_time.axes_list[0]
+    bbox = ax.get_window_extent()
+    x_pix = (bbox.x0 + bbox.x1) / 2
+    y_pix = (bbox.y0 + bbox.y1) / 2
+
+    from mf4_analyzer.ui import _axis_interaction
+
+    monkeypatch.setattr(
+        _axis_interaction,
+        'edit_chart_options_dialog',
+        lambda parent, target_ax: True,
+        raising=False,
+    )
+
+    press = MouseEvent(
+        "button_press_event", cs.canvas_time, x_pix, y_pix, button=1,
+        dblclick=True,
+    )
+    press.inaxes = ax
+    press.xdata, press.ydata = ax.transData.inverted().transform((x_pix, y_pix))
+    cs.canvas_time.callbacks.process("button_press_event", press)
+    qapp.processEvents()
+
+    assert 'pan' in str(cs._time_card.toolbar.mode).lower()
+    assert span.active
+    assert getattr(span, "_eventpress", None) is None
+    assert not cs.canvas_time._mouse_button_pressed
+
+
 def test_annotation_toolbar_spacer_has_toolbar_background_rule():
     qss = Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
 
