@@ -26,6 +26,11 @@ from ..._axis_defaults import z_range_for
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
 
 
+_GENERIC_DB_Z_RANGE = (-80.0, 0.0)
+_ORDER_TIME_DB_Z_RANGE = (-50.0, -10.0)
+_ORDER_TIME_METHOD = "order_time"
+
+
 def _axis_spin(parent, lo=-1e9, hi=1e9, value=0.0):
     spin = CompactDoubleSpinBox(parent)
     spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
@@ -108,8 +113,12 @@ class OutputPanel(QWidget):
 
         self.chk_z_auto = QCheckBox("自动", axis_group)
         self.chk_z_auto.setChecked(True)
-        self.spin_z_floor = _axis_spin(axis_group, lo=-200.0, hi=200.0, value=-80.0)
-        self.spin_z_ceiling = _axis_spin(axis_group, lo=-200.0, hi=200.0, value=0.0)
+        self.spin_z_floor = _axis_spin(
+            axis_group, lo=-200.0, hi=200.0, value=_GENERIC_DB_Z_RANGE[0],
+        )
+        self.spin_z_ceiling = _axis_spin(
+            axis_group, lo=-200.0, hi=200.0, value=_GENERIC_DB_Z_RANGE[1],
+        )
         self.combo_amp_unit = QComboBox(axis_group)
         self.combo_amp_unit.addItems(["dB", "Linear"])
         self._z_axis_row = self._make_axis_row(
@@ -187,6 +196,47 @@ class OutputPanel(QWidget):
                 w.blockSignals(False)
         self._sync_axis_enabled()
         self.changed.emit()
+
+    def apply_method_defaults(self, method: str) -> None:
+        """Apply method-specific output defaults without clobbering edits."""
+        if not self._is_method_default_z_state():
+            return
+        if method == _ORDER_TIME_METHOD:
+            z_auto = False
+            z_floor, z_ceiling = _ORDER_TIME_DB_Z_RANGE
+        else:
+            z_auto = True
+            z_floor, z_ceiling = _GENERIC_DB_Z_RANGE
+        for w in (self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling):
+            w.blockSignals(True)
+        try:
+            self.chk_z_auto.setChecked(z_auto)
+            self.spin_z_floor.setValue(z_floor)
+            self.spin_z_ceiling.setValue(z_ceiling)
+        finally:
+            for w in (self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling):
+                w.blockSignals(False)
+        self._sync_axis_enabled()
+        self.changed.emit()
+
+    def _is_method_default_z_state(self) -> bool:
+        if self.combo_amp_unit.currentText() != "dB":
+            return False
+        current = (
+            bool(self.chk_z_auto.isChecked()),
+            float(self.spin_z_floor.value()),
+            float(self.spin_z_ceiling.value()),
+        )
+        method_defaults = (
+            (True, *_GENERIC_DB_Z_RANGE),
+            (False, *_ORDER_TIME_DB_Z_RANGE),
+        )
+        return any(
+            current[0] is default[0]
+            and abs(current[1] - default[1]) < 1e-9
+            and abs(current[2] - default[2]) < 1e-9
+            for default in method_defaults
+        )
 
     def _sync_axis_enabled(self) -> None:
         for chk, lo, hi in (

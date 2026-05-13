@@ -366,6 +366,65 @@ def test_batch_sheet_get_preset_includes_output_axis_params(qtbot):
     assert params["amplitude_mode"] == "amplitude"
 
 
+def test_batch_order_time_defaults_use_single_order_z_range(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+
+    assert sheet._output_panel.chk_z_auto.isChecked() is True
+    assert sheet._output_panel.spin_z_floor.value() == -80.0
+    assert sheet._output_panel.spin_z_ceiling.value() == 0.0
+
+    sheet.apply_method("order_time")
+    params = sheet.get_preset().params
+
+    assert sheet._output_panel.chk_z_auto.isChecked() is False
+    assert sheet._output_panel.spin_z_floor.value() == -50.0
+    assert sheet._output_panel.spin_z_ceiling.value() == -10.0
+    assert params["z_auto"] is False
+    assert params["z_floor"] == -50.0
+    assert params["z_ceiling"] == -10.0
+    assert params["amplitude_mode"] == "amplitude_db"
+
+
+def test_batch_order_time_defaults_do_not_clobber_manual_z_range(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    sheet._output_panel.chk_z_auto.setChecked(False)
+    sheet._output_panel.spin_z_floor.setValue(-40.0)
+    sheet._output_panel.spin_z_ceiling.setValue(-5.0)
+
+    sheet.apply_method("order_time")
+
+    assert sheet._output_panel.chk_z_auto.isChecked() is False
+    assert sheet._output_panel.spin_z_floor.value() == -40.0
+    assert sheet._output_panel.spin_z_ceiling.value() == -5.0
+
+
+def test_batch_method_defaults_restore_generic_z_range_when_leaving_order(qtbot):
+    from PyQt5.QtCore import Qt
+
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+    buttons = sheet._analysis_panel._method_group._buttons
+
+    qtbot.mouseClick(buttons["order_time"], Qt.LeftButton)
+    assert sheet._output_panel.chk_z_auto.isChecked() is False
+    assert sheet._output_panel.spin_z_floor.value() == -50.0
+    assert sheet._output_panel.spin_z_ceiling.value() == -10.0
+
+    qtbot.mouseClick(buttons["fft"], Qt.LeftButton)
+
+    assert sheet._output_panel.chk_z_auto.isChecked() is True
+    assert sheet._output_panel.spin_z_floor.value() == -80.0
+    assert sheet._output_panel.spin_z_ceiling.value() == 0.0
+
+
 def test_batch_sheet_apply_preset_restores_output_axis_params(qtbot):
     from mf4_analyzer.batch import AnalysisPreset
     from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet

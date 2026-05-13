@@ -158,6 +158,9 @@ class BatchSheet(QDialog):
         )
         # Drive RPM-row visibility from the method (init-sync below).
         self._analysis_panel.methodChanged.connect(self._input_panel.set_method)
+        self._analysis_panel.methodChanged.connect(
+            self._output_panel.apply_method_defaults
+        )
         self._analysis_panel.paramsChanged.connect(self._recompute_pipeline_status)
         self._output_panel.changed.connect(self._recompute_pipeline_status)
 
