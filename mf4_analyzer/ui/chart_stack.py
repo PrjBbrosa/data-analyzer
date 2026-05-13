@@ -1,5 +1,6 @@
 """Center pane: QStackedWidget holding the three canvases + stats strip."""
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QFrame, QLabel, QPushButton, QSizePolicy, QStackedWidget,
     QToolButton, QVBoxLayout, QWidget,
@@ -153,6 +154,14 @@ _MDI_NAV_ICONS = {
     'save':    'mdi.content-save-outline',
 }
 
+_NAV_SHORTCUTS = {
+    'home': 'H',
+    'back': 'Alt+Left',
+    'forward': 'Alt+Right',
+    'pan': 'P',
+    'zoom': 'Z',
+}
+
 
 def _strip_subplots_action(toolbar):
     """Remove the matplotlib 'Configure subplots' button — tight_layout
@@ -181,6 +190,21 @@ def _apply_mdi_icons(toolbar, active_key=''):
             continue
         color = _ICON_ACTIVE if key == active_key else _ICON_COLOR
         act.setIcon(qta.icon(icon_name, color=color))
+
+
+def _install_nav_shortcuts(card, toolbar):
+    for key, shortcut in _NAV_SHORTCUTS.items():
+        act = _find_action(toolbar, key)
+        if act is None:
+            continue
+        seq = QKeySequence(shortcut)
+        act.setShortcut(seq)
+        act.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+        tip = act.toolTip() or act.text()
+        native = seq.toString(QKeySequence.NativeText)
+        if native and native not in tip:
+            act.setToolTip(f"{tip} ({native})")
+        card.addAction(act)
 
 
 def _vline():
@@ -226,6 +250,7 @@ class _ChartCard(QWidget):
         # lookups by english key remain stable across locales.
         from ._toolbar_i18n import apply_chinese_toolbar_labels
         apply_chinese_toolbar_labels(self.toolbar)
+        _install_nav_shortcuts(self, self.toolbar)
         _apply_mdi_icons(self.toolbar, active_key='pan')
 
         # Insert app-level chart actions right before the matplotlib Save action

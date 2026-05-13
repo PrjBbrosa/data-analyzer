@@ -199,6 +199,35 @@ def test_timedomain_subplot_long_ylabel_switches_to_inside_labels(qtbot):
         assert "..." in artist.get_text() or "…" in artist.get_text()
 
 
+def test_timedomain_subplot_relayouts_after_resize_keep_ticks_visible(qtbot):
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(1000, 420)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+    t = np.linspace(0.0, 10.0, 800)
+
+    canvas.plot_channels([
+        ("[taiyaok ] Rte_TAS_mTorsionBarTorque", True, t, np.sin(t), "#8b5cf6", ""),
+        ("[taiyaok ] Rte_VehSpdMpsA_bSpeed", True, t, 4.0 + np.cos(t), "#00b894", ""),
+        ("[yuandi] Rte_TAS_mTorsionBarTorque", True, t, 2.0 * np.sin(t), "#7c3aed", ""),
+    ], mode="subplot")
+    canvas.draw()
+
+    canvas.resize(430, 420)
+    qtbot.wait(120)
+    canvas.draw()
+
+    renderer = canvas.fig.canvas.get_renderer()
+    leftmost_tick = min(
+        tick.label1.get_window_extent(renderer).x0
+        for ax in canvas.axes_list
+        for tick in ax.yaxis.get_major_ticks()
+        if tick.label1.get_visible()
+    )
+    assert leftmost_tick >= 0
+
+
 def test_timedomain_overlay_click_selects_curve_for_y_controls(qtbot):
     from matplotlib.backend_bases import MouseEvent
 

@@ -527,10 +527,17 @@ class TimeDomainCanvas(FigureCanvas):
         self._channel_is_monotonic = {}
         self._inside_channel_label_artists = []
         self._last_channel_label_mode = 'axis'
+        self._subplot_label_specs = []
         self._chart_options_ax = None
         self._selected_overlay_channel = None
         self._overlay_pick_radius_px = 12.0
         self._overlay_y_drag_start = None
+        self._layout_refresh_timer = QTimer(self)
+        self._layout_refresh_timer.setSingleShot(True)
+        self._layout_refresh_timer.setInterval(40)
+        self._layout_refresh_timer.timeout.connect(
+            self._refresh_layout_for_current_size
+        )
         self.span_selector = None
         # ----- viewport refresh wiring (Phase 1 items 2 + 5) -----
         # The "primary" axis is the one whose xlim_changed we listen to.
@@ -608,6 +615,7 @@ class TimeDomainCanvas(FigureCanvas):
         self._channel_is_monotonic = {}
         self._inside_channel_label_artists = []
         self._last_channel_label_mode = 'axis'
+        self._subplot_label_specs = []
         self._chart_options_ax = None
         self._selected_overlay_channel = None
         self._overlay_y_drag_start = None
@@ -692,6 +700,7 @@ class TimeDomainCanvas(FigureCanvas):
                     ax.tick_params(axis='x', labelbottom=False)
                 else:
                     ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
+            self._subplot_label_specs = subplot_specs
             self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
             self.fig.canvas.draw()
             if self._subplot_ylabels_need_inside_labels():
@@ -758,6 +767,40 @@ class TimeDomainCanvas(FigureCanvas):
             self._primary_xaxis_ax = self.axes_list[0]
             self._connect_xlim_listener(self._primary_xaxis_ax)
         self.draw(); self._refresh = True
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._schedule_layout_refresh()
+
+    def _schedule_layout_refresh(self):
+        if not self.axes_list:
+            return
+        self._layout_refresh_timer.start()
+
+    def _refresh_layout_for_current_size(self):
+        if not self.axes_list:
+            return
+        try:
+            if self._overlay_mode and len(self.axes_list) >= 2:
+                self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
+                right = max(
+                    0.93 - 0.065 * max(0, len(self.axes_list) - 2),
+                    0.58,
+                )
+                self.fig.subplots_adjust(right=right)
+            else:
+                self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
+                if (
+                    len(self.axes_list) > 1
+                    and self._subplot_label_specs
+                    and self._subplot_ylabels_need_inside_labels()
+                ):
+                    self._apply_inside_channel_labels(self._subplot_label_specs)
+                    self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
+            self._refresh = True
+            self.draw_idle()
+        except Exception:
+            pass
 
     def selected_overlay_channel(self):
         """Currently selected overlay-series name, or ``None``."""

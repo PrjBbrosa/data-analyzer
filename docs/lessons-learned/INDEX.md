@@ -18,6 +18,7 @@ lesson by default.
 | [Codex Lessons System Maintenance](codex-lessons-system-maintenance.md) | Codex lessons system changes, hook tuning, master-kit sync, or `scripts/lessons/*` edits. | `scripts/lessons/check.py --doctor --verbose` |
 | [Confirmed Issue List Means Remaining Scope](codex-confirmed-issue-list-means-remaining-scope.md) | Numbered issue follow-ups where the user approves some items and asks a design question about another. | `git status --short`, `git diff --stat`, explicit checklist |
 | [Chart Toolbar Label Order](pyqt-ui/2026-05-12-chart-toolbar-label-order.md) | Chart toolbar layout, Matplotlib locLabel, in-toolbar hint text, or per-card controls. | `tests/ui/test_chart_stack.py` |
+| [Matplotlib Resize And Modal Nav State](pyqt-ui/2026-05-13-matplotlib-resize-and-modal-nav-state.md) | Touching Matplotlib-backed PyQt canvases, splitter/inspector resize behavior, chart-options double-click flows, or chart toolbar navigation actions. | See lesson |
 | [Codex Analyzer Doc Routing](codex-analyzer-doc-routing.md) | Creating, moving, or referencing analyzer-facing documentation and review artifacts. | See lesson |
 
 ## Selection Rules

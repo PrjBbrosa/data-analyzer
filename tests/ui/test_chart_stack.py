@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QSizePolicy
 
 from mf4_analyzer.ui.chart_stack import ChartStack
@@ -117,6 +118,26 @@ def test_time_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
         == QSizePolicy.Expanding
     )
     assert card._time_controls_spacer.testAttribute(Qt.WA_StyledBackground)
+
+
+def test_chart_nav_actions_have_chart_area_shortcuts(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    expected = {
+        "home": "H",
+        "back": "Alt+Left",
+        "forward": "Alt+Right",
+        "pan": "P",
+        "zoom": "Z",
+    }
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        card_action_keys = {act.data() for act in card.actions()}
+        for key, shortcut in expected.items():
+            action = next(act for act in card.toolbar.actions() if act.data() == key)
+            assert action.shortcut().toString(QKeySequence.PortableText) == shortcut
+            assert action.shortcutContext() == Qt.WidgetWithChildrenShortcut
+            assert key in card_action_keys
 
 
 def test_time_toolbar_loc_label_text_does_not_jostle_right_controls(qapp, qtbot):
@@ -242,6 +263,56 @@ def test_overlay_curve_drag_exits_default_pan_before_y_move(qapp, qtbot):
 
     assert cs.canvas_time.axes_list[0].get_xlim() == pytest.approx(before_xlim)
     assert torque_ax.get_ylim() != pytest.approx(before_torque_ylim)
+
+
+def test_dblclick_chart_options_does_not_leave_pan_drag_active(qapp, qtbot, monkeypatch):
+    from matplotlib.backend_bases import MouseEvent
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+
+    t = np.linspace(0.0, 1.0, 80)
+    cs.canvas_time.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    cs.canvas_time.draw()
+    assert 'pan' in str(cs._time_card.toolbar.mode).lower()
+
+    ax = cs.canvas_time.axes_list[0]
+    bbox = ax.get_window_extent()
+    x_pix = (bbox.x0 + bbox.x1) / 2
+    y_pix = (bbox.y0 + bbox.y1) / 2
+    before_xlim = ax.get_xlim()
+
+    from mf4_analyzer.ui import _axis_interaction
+
+    def fake_edit(parent, target_ax):
+        assert target_ax is ax
+        return True
+
+    monkeypatch.setattr(
+        _axis_interaction, 'edit_chart_options_dialog', fake_edit, raising=False
+    )
+
+    press = MouseEvent(
+        "button_press_event", cs.canvas_time, x_pix, y_pix, button=1,
+        dblclick=True,
+    )
+    press.inaxes = ax
+    press.xdata, press.ydata = ax.transData.inverted().transform((x_pix, y_pix))
+    cs.canvas_time.callbacks.process("button_press_event", press)
+
+    move = MouseEvent(
+        "motion_notify_event", cs.canvas_time, x_pix + 120, y_pix, button=None
+    )
+    cs.canvas_time.callbacks.process("motion_notify_event", move)
+
+    assert ax.get_xlim() == pytest.approx(before_xlim)
 
 
 def test_dblclick_chart_options_restores_pan_without_starting_span_selector(
