@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "local-recorder-smoke",
+      "path": "../testdoc/Recorder_2026-04-22_09-14-36.MF4",
+      "path_kind": "local",
+      "sets": ["smoke"],
+      "vehicle": "local_sample",
+      "platform": "unknown",
+      "scenario": "loader_smoke",
+      "issue_tags": [],
+      "expected_channels": [],
+      "required": false
+    }
+  ]
+}
