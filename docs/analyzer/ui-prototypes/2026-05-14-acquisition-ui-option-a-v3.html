@@ -1,0 +1,1446 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Acquisition Cockpit v3 — 采集主屏（单窗 4 态）</title>
+<style>
+  * { box-sizing: border-box; }
+  :root {
+    --surface-base: #f5f7fb;
+    --surface-card: #ffffff;
+    --surface-hover: #eef2f7;
+    --surface-accent: #e8efff;
+    --surface-mute: #f1f5f9;
+    --hairline: #eef2f7;
+    --hairline-strong: #dfe5ee;
+    --ink: #111827;
+    --ink-soft: #475569;
+    --ink-muted: #64748b;
+    --ink-disabled: #94a3b8;
+    --blue: #2563eb;
+    --green: #059669;
+    --orange: #ea580c;
+    --red: #dc2626;
+    --yellow: #ca8a04;
+  }
+  body {
+    margin: 0; padding: 28px 36px 64px;
+    background: var(--surface-base); color: var(--ink);
+    font-family: "Microsoft YaHei", -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+    font-size: 13px; line-height: 1.55;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 700; }
+  h2 { font-size: 17px; margin: 0; font-weight: 700; }
+  h3 { font-size: 13px; margin: 0 0 6px; font-weight: 700; }
+  .page-sub { color: var(--ink-muted); font-size: 13px; margin-bottom: 4px; }
+  .page-meta { color: var(--ink-muted); font-size: 11px; margin-bottom: 28px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; }
+
+  .scene-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+  .scene-tag {
+    font-size: 11px; font-weight: 700;
+    background: var(--blue); color: white;
+    padding: 2px 10px; border-radius: 4px; letter-spacing: 1.2px;
+  }
+  .scene-tag.gray { background: var(--ink-soft); }
+  .scene-tag.green { background: var(--green); }
+  .scene-tag.red { background: var(--red); }
+  .scene-side {
+    margin-left: auto; color: var(--ink-muted); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.4px; text-transform: uppercase;
+  }
+  .scene-tagline { color: var(--ink-soft); font-size: 13.5px; margin-bottom: 14px; }
+  .scene { margin-bottom: 48px; }
+
+  /* ===== state machine diagram ===== */
+  .state-machine {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    padding: 20px 26px;
+    margin-bottom: 32px;
+    font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.85;
+    color: var(--ink-soft);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .state-machine .s-disc { color: var(--ink-disabled); font-weight: 700; }
+  .state-machine .s-conn { color: var(--blue); font-weight: 700; }
+  .state-machine .s-rec { color: var(--red); font-weight: 700; }
+  .state-machine .s-done { color: var(--green); font-weight: 700; }
+  .state-machine .ev { color: var(--ink); font-weight: 700; }
+  .state-machine .cmt { color: var(--ink-muted); font-style: italic; }
+
+  /* ===== window chrome ===== */
+  .mockup {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04), 0 8px 24px rgba(15,23,42,0.04);
+    margin-bottom: 12px;
+  }
+  .mockup-chrome {
+    height: 28px;
+    background: linear-gradient(#f8fafc, #eef2f7);
+    border-bottom: 1px solid var(--hairline);
+    display: flex; align-items: center; padding: 0 12px; gap: 6px;
+    color: var(--ink-muted); font-size: 11px;
+  }
+  .mockup-chrome .dot { width: 11px; height: 11px; border-radius: 50%; background: #cbd5e1; }
+  .mockup-chrome .dot.r { background: #f87171; }
+  .mockup-chrome .dot.y { background: #fbbf24; }
+  .mockup-chrome .dot.g { background: #4ade80; }
+  .mockup-chrome .title { margin-left: 12px; font-weight: 600; color: var(--ink-soft); }
+
+  /* ===== toolbar ===== */
+  .toolbar {
+    display: flex; align-items: center;
+    padding: 8px 14px; gap: 10px;
+    background: var(--surface-card);
+    border-bottom: 1px solid var(--hairline);
+    min-height: 50px;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 12px;
+    background: var(--surface-card);
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    color: var(--ink);
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; user-select: none;
+  }
+  .btn:hover { background: var(--surface-hover); }
+  .btn.primary { background: var(--blue); border-color: var(--blue); color: white; }
+  .btn.primary:hover { background: #1d4ed8; }
+  .btn.record { background: var(--red); border-color: var(--red); color: white; height: 36px; padding: 0 18px; font-size: 13px; }
+  .btn.record:hover { background: #b91c1c; }
+  .btn.arm { background: rgba(202,138,4,0.12); border-color: var(--yellow); color: #92400e; height: 36px; padding: 0 16px; font-size: 12.5px; }
+  .btn.stop { background: var(--red); border-color: var(--red); color: white; height: 36px; padding: 0 18px; font-size: 13px; }
+  .btn.connect { background: var(--blue); border-color: var(--blue); color: white; height: 36px; padding: 0 20px; font-size: 13px; }
+  .btn.ghost { border-color: transparent; background: transparent; }
+  .btn.ghost:hover { background: var(--surface-hover); }
+  .btn.lg { height: 34px; padding: 0 16px; font-size: 13px; }
+  .btn.disabled, .btn:disabled {
+    color: var(--ink-disabled);
+    border-color: var(--hairline);
+    background: var(--surface-card);
+    cursor: not-allowed;
+  }
+  .btn .ico {
+    display: inline-flex; width: 14px; height: 14px;
+    align-items: center; justify-content: center; font-size: 12px;
+  }
+
+  .selector {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 10px; height: 28px;
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    background: var(--surface-card);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .selector .label-key { color: var(--ink-muted); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .selector .label-val { color: var(--ink); font-weight: 600; }
+  .selector .caret { color: var(--ink-muted); margin-left: 2px; }
+
+  .segment {
+    display: inline-flex;
+    background: var(--surface-mute);
+    border-radius: 7px;
+    padding: 2px;
+    border: 1px solid var(--hairline);
+  }
+  .segment .seg {
+    height: 26px; padding: 0 14px;
+    display: inline-flex; align-items: center; gap: 6px;
+    border-radius: 5px;
+    color: var(--ink-soft); font-size: 12px; font-weight: 600;
+    cursor: pointer; user-select: none;
+  }
+  .segment .seg:hover { color: var(--ink); }
+  .segment .seg.active {
+    background: var(--surface-card); color: var(--blue);
+    box-shadow: 0 1px 2px rgba(15,23,42,0.08);
+  }
+
+  .toolbar-spacer { flex: 1; }
+  .toolbar-divider { width: 1px; height: 22px; background: var(--hairline-strong); margin: 0 4px; }
+
+  .rec-indicator {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 0 14px; height: 32px;
+    background: rgba(220,38,38,0.10);
+    border: 1px solid rgba(220,38,38,0.35);
+    border-radius: 8px;
+    font-size: 13px; font-weight: 700;
+    color: var(--red); font-variant-numeric: tabular-nums;
+  }
+  .rec-indicator .blob {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--red);
+    animation: pulse 1.6s infinite;
+  }
+  .rec-indicator.off { background: var(--surface-mute); border-color: var(--hairline-strong); color: var(--ink-muted); }
+  .rec-indicator.off .blob { background: var(--ink-disabled); animation: none; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(220,38,38,0.55); }
+    70% { box-shadow: 0 0 0 8px rgba(220,38,38,0); }
+    100% { box-shadow: 0 0 0 0 rgba(220,38,38,0); }
+  }
+
+  /* ===== health strip (NEW in v3) ===== */
+  .health-strip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px;
+    background: var(--surface-base);
+    border-bottom: 1px solid var(--hairline);
+    font-size: 11.5px;
+  }
+  .health-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 10px; height: 26px;
+    background: var(--surface-card);
+    border: 1px solid var(--hairline-strong);
+    border-radius: 999px;
+    color: var(--ink);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .health-chip .led {
+    width: 8px; height: 8px; border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--ink-disabled);
+  }
+  .health-chip .led.g { background: var(--green); box-shadow: 0 0 0 0 rgba(5,150,105,0.0); animation: ledg 2.4s infinite; }
+  .health-chip .led.y { background: var(--yellow); }
+  .health-chip .led.r { background: var(--red); animation: ledr 1.4s infinite; }
+  .health-chip .led.off { background: var(--ink-disabled); }
+  @keyframes ledg {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(5,150,105,0); }
+    50% { box-shadow: 0 0 0 4px rgba(5,150,105,0.18); }
+  }
+  @keyframes ledr {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0); }
+    50% { box-shadow: 0 0 0 4px rgba(220,38,38,0.30); }
+  }
+  .health-chip .label { color: var(--ink-soft); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .health-chip .val { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .health-spacer { flex: 1; }
+  .health-summary {
+    font-weight: 600; color: var(--ink-soft);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .health-summary.ok { color: var(--green); }
+  .health-summary.err { color: var(--red); }
+
+  /* ===== panes ===== */
+  .panes {
+    display: grid;
+    grid-template-columns: 280px 1fr 300px;
+    height: 580px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .pane-left, .pane-right {
+    background: var(--surface-card);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .pane-left { border-right: 1px solid var(--hairline); }
+  .pane-right { border-left: 1px solid var(--hairline); }
+  .pane-center {
+    background: var(--surface-base);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .pane-head {
+    display: flex; align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface-card);
+    min-height: 40px;
+  }
+  .pane-head .ttl { font-size: 13px; font-weight: 700; }
+  .pane-head .sub { font-size: 11px; color: var(--ink-muted); font-weight: 600; margin-left: auto; }
+  .pane-body { flex: 1; overflow: auto; }
+
+  /* ===== A2L tree with search + filter (LEFT pane) ===== */
+  .search-row {
+    padding: 10px 12px 6px;
+    background: var(--surface-card);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .search-input {
+    width: 100%; height: 30px;
+    padding: 0 10px 0 30px;
+    background: var(--surface-mute);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    color: var(--ink);
+    font-size: 12px;
+    position: relative;
+  }
+  .search-wrap { position: relative; }
+  .search-wrap::before {
+    content: "⌕"; position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--ink-muted); font-size: 14px;
+  }
+  .filter-chips {
+    display: flex; gap: 5px; flex-wrap: wrap;
+    margin-top: 8px;
+  }
+  .filter-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; height: 22px;
+    background: var(--surface-mute);
+    border-radius: 11px;
+    font-size: 10.5px; font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer; user-select: none;
+  }
+  .filter-chip:hover { background: var(--surface-hover); }
+  .filter-chip.on { background: var(--surface-accent); color: var(--blue); }
+  .filter-chip .cnt {
+    background: rgba(0,0,0,0.06);
+    padding: 0 5px; border-radius: 8px;
+    font-size: 10px; font-weight: 700;
+  }
+  .filter-chip.on .cnt { background: rgba(37,99,235,0.18); color: var(--blue); }
+
+  /* batch action bar appears when multi-select */
+  .batch-bar {
+    background: rgba(37,99,235,0.06);
+    border-bottom: 1px solid rgba(37,99,235,0.18);
+    padding: 8px 12px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px;
+  }
+  .batch-bar .count {
+    color: var(--blue); font-weight: 700;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .batch-bar .count .num {
+    background: var(--blue); color: white;
+    padding: 1px 7px; border-radius: 9px;
+    font-size: 10px;
+  }
+  .batch-bar .spacer { flex: 1; }
+  .batch-bar .mini-btn {
+    height: 22px; padding: 0 8px;
+    background: var(--surface-card);
+    border: 1px solid var(--hairline-strong);
+    border-radius: 5px;
+    font-size: 11px; font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .batch-bar .mini-btn:hover { color: var(--ink); border-color: var(--blue); }
+
+  .a2l-tree { font-size: 12px; padding: 4px 4px; font-variant-numeric: tabular-nums; }
+  .a2l-tree .group {
+    padding: 6px 12px 4px;
+    font-size: 10.5px; font-weight: 700; color: var(--ink-muted);
+    letter-spacing: 0.6px; text-transform: uppercase;
+  }
+  .a2l-tree .row {
+    display: grid;
+    grid-template-columns: 16px 1fr auto;
+    gap: 8px; align-items: center;
+    padding: 5px 12px;
+    border-radius: 5px;
+    cursor: pointer;
+    margin: 0 4px;
+  }
+  .a2l-tree .row:hover { background: var(--surface-hover); }
+  .a2l-tree .row.selected { background: var(--surface-accent); }
+  .a2l-tree .row.selected .name b { color: var(--blue); }
+  .a2l-tree .row .check {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    border: 1.5px solid var(--hairline-strong);
+    background: var(--surface-card);
+    display: inline-flex; align-items: center; justify-content: center;
+    color: white;
+    font-size: 10px; font-weight: 700;
+  }
+  .a2l-tree .row .check.on { background: var(--blue); border-color: var(--blue); }
+  .a2l-tree .row .name { display: flex; align-items: baseline; gap: 4px; font-size: 12px; min-width: 0; }
+  .a2l-tree .row .name b { font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .a2l-tree .row .name .unit { color: var(--ink-muted); font-size: 11px; }
+  .a2l-tree .row .event-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 7px;
+    background: var(--surface-mute);
+    border-radius: 4px;
+    font-size: 10.5px; font-weight: 600;
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+  }
+  .a2l-tree .row .event-pill.fast { background: rgba(220,38,38,0.10); color: var(--red); }
+  .a2l-tree .row .event-pill.mid { background: rgba(202,138,4,0.12); color: #92400e; }
+  .a2l-tree .row .event-pill.slow { background: rgba(5,150,105,0.10); color: var(--green); }
+  .a2l-tree .row .event-pill .caret { color: var(--ink-muted); font-size: 9px; }
+  .a2l-tree .row .meta-line {
+    grid-column: 2 / span 2;
+    font-size: 10px; color: var(--ink-muted);
+    font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+    margin-top: -2px;
+  }
+
+  /* dropdown showing alternate events on row hover/click */
+  .event-dropdown {
+    position: absolute;
+    background: var(--surface-card);
+    border: 1px solid var(--hairline-strong);
+    border-radius: 8px;
+    padding: 6px 0;
+    box-shadow: 0 6px 16px rgba(15,23,42,0.10);
+    z-index: 5;
+    min-width: 150px;
+  }
+  .event-dropdown .opt {
+    padding: 6px 14px;
+    font-size: 11.5px;
+    display: flex; align-items: center; gap: 8px;
+    cursor: pointer;
+  }
+  .event-dropdown .opt:hover { background: var(--surface-hover); }
+  .event-dropdown .opt.current { background: var(--surface-accent); color: var(--blue); font-weight: 700; }
+  .event-dropdown .opt .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .event-dropdown .opt .dot.fast { background: var(--red); }
+  .event-dropdown .opt .dot.mid { background: var(--yellow); }
+  .event-dropdown .opt .dot.slow { background: var(--green); }
+  .event-dropdown .div { height: 1px; background: var(--hairline); margin: 4px 0; }
+  .event-dropdown .info { padding: 4px 14px; font-size: 10.5px; color: var(--ink-muted); }
+
+  .left-foot {
+    padding: 10px 14px;
+    background: var(--surface-mute);
+    border-top: 1px solid var(--hairline);
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    line-height: 1.6;
+  }
+  .left-foot b { color: var(--ink); }
+
+  /* ===== center: live charts (always visible when connected) ===== */
+  .live-stage {
+    flex: 1; padding: 14px;
+    display: flex; flex-direction: column; gap: 10px;
+    overflow: auto;
+  }
+  .center-tools {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface-card);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 9px; height: 22px;
+    background: var(--surface-mute);
+    border-radius: 11px;
+    font-size: 11px; font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer; user-select: none;
+  }
+  .chip.on { background: var(--surface-accent); color: var(--blue); }
+
+  .live-card {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 10px 14px 6px;
+  }
+  .live-card .head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+    font-size: 11px; color: var(--ink-muted);
+  }
+  .live-card .head .swatch { width: 10px; height: 10px; border-radius: 2px; }
+  .live-card .head .name { color: var(--ink); font-weight: 700; font-size: 12.5px; }
+  .live-card .head .unit { color: var(--ink-muted); }
+  .live-card .head .stats {
+    color: var(--ink-muted); font-size: 10.5px;
+    font-variant-numeric: tabular-nums; margin-left: 14px;
+  }
+  .live-card .head .raster {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 1px 6px; height: 18px;
+    background: var(--surface-mute);
+    border-radius: 3px;
+    font-family: monospace; font-size: 10px; font-weight: 700;
+    color: var(--ink-soft); margin-left: 6px;
+  }
+  .live-card .head .val {
+    margin-left: auto;
+    font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 16px; font-weight: 700;
+    color: var(--ink); font-variant-numeric: tabular-nums;
+  }
+  .live-card svg { width: 100%; height: 56px; }
+  .live-card.stale .head .val { color: var(--ink-muted); }
+  .live-card.stale svg path { stroke: var(--ink-disabled) !important; }
+
+  /* placeholder for disconnected state */
+  .disc-canvas {
+    flex: 1;
+    background: repeating-linear-gradient(45deg, #f8fafc, #f8fafc 14px, #f1f5f9 14px, #f1f5f9 28px);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 32px;
+  }
+  .disc-canvas .glyph {
+    width: 64px; height: 64px;
+    background: white;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; color: var(--ink-muted);
+    border: 1px solid var(--hairline);
+  }
+  .disc-canvas h3 { font-size: 15px; color: var(--ink); margin-bottom: 0; }
+  .disc-canvas p { color: var(--ink-muted); font-size: 12.5px; max-width: 360px; text-align: center; margin: 0; }
+  .disc-canvas .actions { margin-top: 8px; display: flex; gap: 8px; }
+
+  /* ===== right pane: preflight or quality monitor ===== */
+  .config-section {
+    border-bottom: 1px solid var(--hairline);
+    padding: 14px 14px;
+  }
+  .config-section h4 {
+    font-size: 10.5px; font-weight: 700; color: var(--ink-soft);
+    text-transform: uppercase; letter-spacing: 0.6px;
+    margin: 0 0 10px;
+    display: flex; align-items: center;
+  }
+  .config-section h4 .right {
+    margin-left: auto;
+    font-size: 11px; font-weight: 700;
+    color: var(--green);
+    text-transform: none; letter-spacing: 0;
+  }
+  .config-section h4 .right.warn { color: var(--orange); }
+  .config-section h4 .right.err { color: var(--red); }
+
+  .meter {
+    margin-bottom: 10px;
+  }
+  .meter .top {
+    display: flex; align-items: baseline;
+    font-size: 11.5px; margin-bottom: 4px;
+  }
+  .meter .top .name { color: var(--ink); font-weight: 600; }
+  .meter .top .val {
+    margin-left: auto;
+    font-family: monospace; font-weight: 700;
+    color: var(--ink); font-variant-numeric: tabular-nums;
+  }
+  .meter .top .val.warn { color: var(--orange); }
+  .meter .top .val.err { color: var(--red); }
+  .meter .bar {
+    height: 8px;
+    background: var(--surface-mute);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+  }
+  .meter .bar > i {
+    display: block; height: 100%;
+    background: var(--green);
+    border-radius: 4px;
+  }
+  .meter .bar > i.warn { background: var(--yellow); }
+  .meter .bar > i.err { background: var(--red); }
+  .meter .bar .threshold {
+    position: absolute;
+    width: 1.5px; height: 100%;
+    background: rgba(220,38,38,0.5);
+  }
+  .meter .sub {
+    font-size: 10.5px; color: var(--ink-muted);
+    margin-top: 3px; font-variant-numeric: tabular-nums;
+  }
+
+  .daq-row {
+    display: grid; grid-template-columns: 70px 1fr 60px;
+    gap: 8px; align-items: center;
+    font-size: 11px; margin-bottom: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .daq-row .k {
+    font-family: monospace; font-weight: 700;
+    color: var(--ink-soft);
+  }
+  .daq-row .bar {
+    height: 7px;
+    background: var(--surface-mute);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .daq-row .bar > i { display: block; height: 100%; background: var(--blue); }
+  .daq-row .v { color: var(--ink); text-align: right; font-weight: 600; }
+  .daq-row .v.warn { color: var(--orange); }
+  .daq-row .v.err { color: var(--red); }
+  .daq-row .bar > i.warn { background: var(--yellow); }
+  .daq-row .bar > i.err { background: var(--red); }
+
+  .verdict-banner {
+    padding: 12px 14px;
+    background: rgba(5,150,105,0.10);
+    border: 1px solid rgba(5,150,105,0.25);
+    border-radius: 8px;
+    color: var(--green);
+    font-size: 12px; font-weight: 700;
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 4px;
+  }
+  .verdict-banner.warn {
+    background: rgba(234,88,12,0.08);
+    border-color: rgba(234,88,12,0.25);
+    color: var(--orange);
+  }
+  .verdict-banner.err {
+    background: rgba(220,38,38,0.08);
+    border-color: rgba(220,38,38,0.30);
+    color: var(--red);
+  }
+
+  /* live quality stats (recording state) */
+  .live-stat {
+    display: grid; grid-template-columns: 1fr auto;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--hairline);
+    align-items: center;
+  }
+  .live-stat .name { font-weight: 600; font-size: 12px; }
+  .live-stat .sub {
+    color: var(--ink-muted); font-size: 10.5px;
+    grid-column: 1; margin-top: 2px; font-variant-numeric: tabular-nums;
+  }
+  .live-stat .sub.ok { color: var(--green); }
+  .live-stat .sub.warn { color: var(--orange); }
+  .live-stat .sub.err { color: var(--red); }
+  .live-stat .now {
+    font-family: monospace; font-weight: 700; font-size: 14px;
+    color: var(--ink);
+    grid-row: 1 / span 2; grid-column: 2;
+    font-variant-numeric: tabular-nums;
+  }
+  .live-stat .now.warn { color: var(--orange); }
+  .live-stat .now.err { color: var(--red); }
+
+  /* ===== status bar ===== */
+  .statusbar {
+    height: 28px;
+    background: var(--surface-card);
+    color: var(--ink-muted);
+    font-size: 11px;
+    display: flex; align-items: center; padding: 0 14px; gap: 16px;
+  }
+  .statusbar .grp { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+  .statusbar .grp b { color: var(--ink); }
+  .statusbar .grp .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .statusbar .grp .dot.g { background: var(--green); }
+  .statusbar .grp .dot.r { background: var(--red); }
+  .statusbar .grp .dot.pulse { animation: pulse 1.6s infinite; }
+  .statusbar .spacer { flex: 1; }
+  .statusbar .progress {
+    width: 100px; height: 4px; border-radius: 3px; background: var(--surface-mute); overflow: hidden;
+  }
+  .statusbar .progress > i { display: block; height: 100%; background: var(--blue); border-radius: 3px; }
+
+  /* ===== explanation ===== */
+  .explain {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-top: 8px;
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+  .explain h4 {
+    margin: 0 0 8px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--blue);
+  }
+  .explain ul { margin: 0 0 0 18px; padding: 0; }
+  .explain li { margin-bottom: 6px; }
+  .explain code { background: var(--surface-mute); padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+
+  /* ===== state variant captions ===== */
+  .variant-caption {
+    background: rgba(37,99,235,0.06);
+    border-left: 3px solid var(--blue);
+    padding: 10px 14px;
+    margin: 0 0 10px;
+    font-size: 12px;
+    color: var(--ink-soft);
+  }
+  .variant-caption b { color: var(--blue); }
+</style>
+</head>
+<body>
+
+<h1>采集主屏 v3 · 单窗 4 态</h1>
+<div class="page-sub">把"选信号"和"看实时流"合并为同一屏；连接 / 健康 / 预检都不藏起来</div>
+<div class="page-meta">2026-05-14 · v3 (Scene 1 + Scene 2 合并)</div>
+
+<!-- ===================================================================== -->
+<!-- STATE MACHINE                                                            -->
+<!-- ===================================================================== -->
+<section class="scene">
+  <div class="scene-head">
+    <span class="scene-tag gray">状态机</span>
+    <h2>4 个状态 · 主区永远是 live charts</h2>
+  </div>
+  <p class="scene-tagline">"连接 ECU"是一个独立工序；连上之后 DAQ 持续推数据，主区一直在 stream，"采集"只是开始往磁盘写。这是 CANape / INCA / Vector vADASdeveloper 的标准心智模型。</p>
+
+  <div class="state-machine"><span class="s-disc">[未连接]</span>
+   │
+   │ <span class="ev">连接 ECU</span> ──► 加载 A2L · 建 XCP 会话 · 配置 DAQ list · 启动 receiver thread
+   ▼
+<span class="s-conn">[已连接 · 待机]</span>     <span class="cmt"># 主区 live charts streaming · REC OFF · 主按钮 = [● 采集]</span>
+   │
+   ├─ <span class="ev">勾/取消信号</span> ──► 重配 DAQ list（不录制时允许）
+   │
+   ├─ <span class="ev">● 采集</span>     ──► flush ring buffer · 开始写盘
+   │                          │
+   │                          ▼
+   │                   <span class="s-rec">[录制中]</span>      <span class="cmt"># 主区不变 · 红色 REC + elapsed · 主按钮 = [■ Stop]</span>
+   │                          │
+   │                          │ <span class="ev">■ Stop</span> ──► 关文件 · 跑 preflight · 弹复盘 modal
+   │                          ▼
+   │                   <span class="s-done">[复盘 modal]</span>
+   │                          │
+   │                          │ <span class="ev">保存归档 / 丢弃</span> ──► 回到 [已连接 · 待机]
+   │                          ▼
+   └────────────────────  loop  ─────────────────────────────────────────
+
+  <span class="cmt"># 任何状态：连接异常 / DAQ 错误 / Recorder 崩 → 顶部 health strip 变红 + 自动停录</span>
+</div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- MAIN MOCKUP · 已连接·待机 state (full detail)                            -->
+<!-- ===================================================================== -->
+<section class="scene">
+  <div class="scene-head">
+    <span class="scene-tag green">主屏 · 状态 2/4</span>
+    <h2>已连接 · 待机（streaming, 未录制）</h2>
+    <span class="scene-side">连上 ECU 后 90% 时间停在这一屏</span>
+  </div>
+  <p class="scene-tagline">数据已经在流（看 charts），右栏告诉你"配置是否健康可以录"，主按钮 = [● 采集]。</p>
+
+  <div class="mockup">
+    <div class="mockup-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">Acquisition Cockpit — 已连接 X04C_PPV_01 · DAQ ON · REC OFF</span>
+    </div>
+
+    <!-- toolbar -->
+    <div class="toolbar">
+      <div class="selector"><span class="label-key">A2L</span><span class="label-val">ecu_2.1.a2l</span><span class="caret">▾</span></div>
+      <div class="selector"><span class="label-key">DBC</span><span class="label-val">vehicle_v23.dbc</span><span class="caret">▾</span></div>
+      <div class="selector" style="background: var(--surface-mute);"><span class="label-key">输出</span><span class="label-val">data/runs/20260514_*</span><span class="caret">▾</span></div>
+      <div class="toolbar-divider"></div>
+      <div class="segment">
+        <div class="seg active">采集</div>
+        <div class="seg">回放</div>
+        <div class="seg">历史</div>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <div class="rec-indicator off">
+        <span class="blob"></span>REC OFF
+      </div>
+      <button class="btn record"><span class="ico">●</span>采集</button>
+    </div>
+
+    <!-- health strip (NEW) -->
+    <div class="health-strip">
+      <div class="health-chip" title="Vector VN1610 已识别 · 驱动 v15.2">
+        <span class="led g"></span>
+        <span class="label">HW</span>
+        <span class="val">VN1610</span>
+      </div>
+      <div class="health-chip" title="CAN1 500 kbps OK · CAN2 1 Mbps OK · 0 error frames">
+        <span class="led g"></span>
+        <span class="label">CAN</span>
+        <span class="val">2 ch online</span>
+      </div>
+      <div class="health-chip" title="XCP slave 0x551 已连接 · A2L 校验 sw 2.1.0 匹配">
+        <span class="led g"></span>
+        <span class="label">XCP</span>
+        <span class="val">slave 0x551</span>
+      </div>
+      <div class="health-chip" title="DAQ list 已配置 · 12 信号绑定到 3 个 event">
+        <span class="led g"></span>
+        <span class="label">DAQ</span>
+        <span class="val">12 sig / 3 evt</span>
+      </div>
+      <div class="health-chip" title="Recorder QThread healthy · ring buffer 0% · 写盘 ready">
+        <span class="led g"></span>
+        <span class="label">REC</span>
+        <span class="val">ready</span>
+      </div>
+      <div class="health-spacer"></div>
+      <div class="health-summary ok">✓ 全部正常 · 已连接 00:01:14</div>
+      <button class="btn ghost" style="height: 26px; font-size: 11px;">断开</button>
+    </div>
+
+    <div class="panes">
+      <!-- LEFT pane: A2L tree with search + filter + batch -->
+      <aside class="pane-left">
+        <div class="pane-head">
+          <span class="ttl">A2L Measurement</span>
+          <span class="sub">2 158 · 显示 184 · 选 12</span>
+        </div>
+
+        <div class="search-row">
+          <div class="search-wrap">
+            <input class="search-input" value="" placeholder="搜索 name / 0x40A...">
+          </div>
+          <div class="filter-chips">
+            <span class="filter-chip on">只看已选 <span class="cnt">12</span></span>
+            <span class="filter-chip">有 DAQ <span class="cnt">1 842</span></span>
+            <span class="filter-chip">最近 <span class="cnt">28</span></span>
+            <span class="filter-chip">收藏 <span class="cnt">6</span></span>
+            <span class="filter-chip">组: All ▾</span>
+            <span class="filter-chip">类型 ▾</span>
+          </div>
+        </div>
+
+        <!-- batch bar (visible because 3+ selected) -->
+        <div class="batch-bar">
+          <span class="count"><span class="num">3</span> 已选 · 同 event_10ms</span>
+          <span class="spacer"></span>
+          <span class="mini-btn">批量设 raster ▾</span>
+          <span class="mini-btn">取消</span>
+        </div>
+
+        <div class="pane-body" style="position: relative;">
+          <div class="a2l-tree">
+            <div class="group">POWERTRAIN · 4 选中</div>
+            <div class="row selected" style="position: relative;">
+              <span class="check on">✓</span>
+              <div class="name"><b>EngSpdAvg</b><span class="unit">rpm</span></div>
+              <span class="event-pill mid">@ 10ms<span class="caret">▾</span></span>
+              <!-- inline dropdown demonstration -->
+              <div class="event-dropdown" style="top: 28px; right: 10px;">
+                <div class="opt"><span class="dot fast"></span>event_1ms<span style="margin-left:auto; color: var(--ink-muted); font-size: 10px;">不可用 (A2L)</span></div>
+                <div class="opt current"><span class="dot mid"></span>event_10ms<span style="margin-left:auto; color: var(--blue); font-size: 10px;">当前</span></div>
+                <div class="opt"><span class="dot slow"></span>event_100ms</div>
+                <div class="div"></div>
+                <div class="info">A2L 声明 · 切换会重配 DAQ list</div>
+              </div>
+            </div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>EngTrqAct</b><span class="unit">Nm</span></div>
+              <span class="event-pill mid">@ 10ms<span class="caret">▾</span></span>
+            </div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>ThrPedalPos</b><span class="unit">%</span></div>
+              <span class="event-pill mid">@ 10ms<span class="caret">▾</span></span>
+            </div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>FuelMassFlow</b><span class="unit">kg/h</span></div>
+              <span class="event-pill slow">@ 100ms<span class="caret">▾</span></span>
+            </div>
+
+            <div class="group">CHASSIS · 4 选中</div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>VehSpd_FL</b><span class="unit">km/h</span></div>
+              <span class="event-pill mid">@ 10ms<span class="caret">▾</span></span>
+            </div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>VehSpd_FR</b><span class="unit">km/h</span></div>
+              <span class="event-pill mid">@ 10ms<span class="caret">▾</span></span>
+            </div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>StgWhlAng</b><span class="unit">deg</span></div>
+              <span class="event-pill fast">@ 1ms<span class="caret">▾</span></span>
+            </div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>BrkPedalPos</b><span class="unit">%</span></div>
+              <span class="event-pill mid">@ 10ms<span class="caret">▾</span></span>
+            </div>
+
+            <div class="group">THERMAL · 4 选中</div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>CoolantT</b><span class="unit">℃</span></div>
+              <span class="event-pill slow">@ 100ms<span class="caret">▾</span></span>
+            </div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>OilT</b><span class="unit">℃</span></div>
+              <span class="event-pill slow">@ 100ms<span class="caret">▾</span></span>
+            </div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>AmbientT</b><span class="unit">℃</span></div>
+              <span class="event-pill slow">@ 100ms<span class="caret">▾</span></span>
+            </div>
+            <div class="row selected">
+              <span class="check on">✓</span>
+              <div class="name"><b>HeaterPwr</b><span class="unit">W</span></div>
+              <span class="event-pill slow">@ 100ms<span class="caret">▾</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="left-foot">
+          <b>12 已选 · 14.4 kB/s 预估</b><br>
+          1ms × 1 · 10ms × 7 · 100ms × 4
+        </div>
+      </aside>
+
+      <!-- CENTER: live charts (always visible) -->
+      <main class="pane-center">
+        <div class="center-tools">
+          <span style="font-size: 12px; font-weight: 700;">实时数据流</span>
+          <span style="font-size: 10.5px; color: var(--green); font-weight: 700; margin-left: 4px;">● streaming</span>
+          <span style="flex: 1;"></span>
+          <span class="chip on">last 30s</span>
+          <span class="chip">last 5min</span>
+          <button class="btn ghost" style="height: 24px; font-size: 11px;"><span class="ico">⊟</span>布局</button>
+          <button class="btn ghost" style="height: 24px; font-size: 11px;">y-auto</button>
+        </div>
+        <div class="live-stage">
+          <div class="live-card">
+            <div class="head">
+              <span class="swatch" style="background:#2563eb;"></span>
+              <span class="name">EngSpdAvg</span>
+              <span class="unit">rpm</span>
+              <span class="raster">10ms</span>
+              <span class="stats">μ 1 574 · σ 312</span>
+              <span class="val">1 842</span>
+            </div>
+            <svg viewBox="0 0 800 56" preserveAspectRatio="none">
+              <line x1="0" y1="50" x2="800" y2="50" stroke="#eef2f7"/>
+              <line x1="0" y1="28" x2="800" y2="28" stroke="#eef2f7"/>
+              <line x1="0" y1="6" x2="800" y2="6" stroke="#eef2f7"/>
+              <path d="M0 50 L40 48 L80 44 L120 36 L160 34 L200 30 L240 34 L280 28 L320 22 L360 24 L400 20 L440 26 L480 30 L520 22 L560 18 L600 20 L640 16 L680 22 L720 20 L760 16 L800 14" stroke="#2563eb" stroke-width="1.8" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span class="swatch" style="background:#059669;"></span>
+              <span class="name">VehSpd_FL</span>
+              <span class="unit">km/h</span>
+              <span class="raster">10ms</span>
+              <span class="stats">μ 31.0 · σ 14.2</span>
+              <span class="val">42.3</span>
+            </div>
+            <svg viewBox="0 0 800 56" preserveAspectRatio="none">
+              <line x1="0" y1="28" x2="800" y2="28" stroke="#eef2f7"/>
+              <path d="M0 54 L40 50 L80 48 L120 44 L160 42 L200 40 L240 36 L280 34 L320 32 L360 28 L400 26 L440 24 L480 22 L520 20 L560 20 L600 22 L640 20 L680 18 L720 16 L760 14 L800 12" stroke="#059669" stroke-width="1.8" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span class="swatch" style="background:#ea580c;"></span>
+              <span class="name">StgWhlAng</span>
+              <span class="unit">deg</span>
+              <span class="raster" style="background: rgba(220,38,38,0.10); color: var(--red);">1ms</span>
+              <span class="stats">μ −0.2 · σ 12.6</span>
+              <span class="val">−4.2</span>
+            </div>
+            <svg viewBox="0 0 800 56" preserveAspectRatio="none">
+              <line x1="0" y1="28" x2="800" y2="28" stroke="#eef2f7"/>
+              <path d="M0 28 L30 22 L60 32 L90 38 L120 24 L150 16 L180 22 L210 12 L240 28 L270 36 L300 42 L330 28 L360 24 L390 14 L420 24 L450 38 L480 30 L510 20 L540 12 L570 26 L600 38 L630 32 L660 24 L690 20 L720 30 L750 38 L780 26 L800 30" stroke="#ea580c" stroke-width="1.4" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span class="swatch" style="background:#0891b2;"></span>
+              <span class="name">EngTrqAct</span>
+              <span class="unit">Nm</span>
+              <span class="raster">10ms</span>
+              <span class="stats">μ 142 · σ 38</span>
+              <span class="val">128</span>
+            </div>
+            <svg viewBox="0 0 800 56" preserveAspectRatio="none">
+              <line x1="0" y1="28" x2="800" y2="28" stroke="#eef2f7"/>
+              <path d="M0 50 L40 48 L80 42 L120 36 L160 30 L200 26 L240 28 L280 24 L320 20 L360 24 L400 30 L440 26 L480 20 L520 16 L560 20 L600 24 L640 28 L680 26 L720 22 L760 28 L800 30" stroke="#0891b2" stroke-width="1.6" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span class="swatch" style="background:#64748b;"></span>
+              <span class="name">CoolantT</span>
+              <span class="unit">℃</span>
+              <span class="raster" style="background: rgba(5,150,105,0.10); color: var(--green);">100ms</span>
+              <span class="stats">μ 80.1 · σ 4.2</span>
+              <span class="val">86.4</span>
+            </div>
+            <svg viewBox="0 0 800 56" preserveAspectRatio="none">
+              <line x1="0" y1="28" x2="800" y2="28" stroke="#eef2f7"/>
+              <path d="M0 50 L80 48 L160 46 L240 42 L320 38 L400 32 L480 28 L560 24 L640 20 L720 18 L800 14" stroke="#64748b" stroke-width="1.6" fill="none"/>
+            </svg>
+          </div>
+        </div>
+      </main>
+
+      <!-- RIGHT pane: PRE-FLIGHT (key v3 addition) -->
+      <aside class="pane-right">
+        <div class="pane-head">
+          <span class="ttl">录制预检</span>
+          <span class="sub" style="color: var(--green); font-weight: 700;">✓ ready</span>
+        </div>
+        <div class="pane-body">
+          <!-- CAN bus load -->
+          <div class="config-section">
+            <h4>CAN 总线负载 <span class="right">42% · ok</span></h4>
+            <div class="meter">
+              <div class="top">
+                <span class="name">CAN1 · 500 kbps</span>
+                <span class="val">42%</span>
+              </div>
+              <div class="bar">
+                <i style="width: 42%;"></i>
+                <span class="threshold" style="left: 80%;"></span>
+              </div>
+              <div class="sub">25 kB/s payload · 阈值 80% · 余量 38%</div>
+            </div>
+            <div class="meter">
+              <div class="top">
+                <span class="name">CAN2 · 1 Mbps</span>
+                <span class="val">18%</span>
+              </div>
+              <div class="bar">
+                <i style="width: 18%;"></i>
+                <span class="threshold" style="left: 80%;"></span>
+              </div>
+              <div class="sub">21 kB/s payload · 阈值 80%</div>
+            </div>
+          </div>
+
+          <!-- DAQ slot per event -->
+          <div class="config-section">
+            <h4>DAQ slot · ECU 端容量 <span class="right">3/8 · ok</span></h4>
+            <div class="daq-row">
+              <span class="k">1ms</span>
+              <div class="bar"><i style="width: 12.5%;"></i></div>
+              <span class="v">1/8</span>
+            </div>
+            <div class="daq-row">
+              <span class="k">10ms</span>
+              <div class="bar"><i style="width: 87.5%;" class="warn"></i></div>
+              <span class="v warn">7/8</span>
+            </div>
+            <div class="daq-row">
+              <span class="k">100ms</span>
+              <div class="bar"><i style="width: 50%;"></i></div>
+              <span class="v">4/8</span>
+            </div>
+            <div style="font-size: 10.5px; color: var(--ink-muted); margin-top: 4px;">来自 <code style="background: var(--surface-mute); padding: 1px 4px; border-radius: 3px;">A2L IF_DATA XCP DAQ_EVENT</code></div>
+          </div>
+
+          <!-- Disk -->
+          <div class="config-section">
+            <h4>磁盘写速 <span class="right">14 kB/s · ok</span></h4>
+            <div class="meter">
+              <div class="top">
+                <span class="name">预估</span>
+                <span class="val">14.4 kB/s</span>
+              </div>
+              <div class="sub">50 MB / 小时 · 18.2 GB 可用 · 够录 ~ 360 小时</div>
+            </div>
+            <div class="sub" style="font-size: 10.5px;">磁盘预分配 + 64 KB 批写 · 不在录制路径压缩</div>
+          </div>
+
+          <!-- Total event/s -->
+          <div class="config-section">
+            <h4>采样事件 / 秒 <span class="right">870 · ok</span></h4>
+            <div class="meter">
+              <div class="top">
+                <span class="name">总速率</span>
+                <span class="val">870 evt/s</span>
+              </div>
+              <div class="sub">1ms × 1 = 1000 · 10ms × 7 = 700 · 100ms × 4 = 40<br>合计 1 740 / 2 拆 ring buf</div>
+            </div>
+          </div>
+
+          <!-- Output / verdict -->
+          <div class="config-section" style="border-bottom: none;">
+            <h4>输出</h4>
+            <div style="font-size: 11.5px; color: var(--ink-soft); margin-bottom: 6px;">
+              <div style="margin-bottom: 4px;"><span style="color: var(--ink-muted);">文件:</span> <code style="background: var(--surface-mute); padding: 1px 4px; border-radius: 3px; font-size: 11px;">20260514_bench_run01.MF4</code></div>
+              <div><span style="color: var(--ink-muted);">触发:</span> 立即</div>
+            </div>
+            <div class="verdict-banner">
+              ✓ 4 项预检全部通过 · 可开始录制
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="statusbar">
+      <div class="grp"><span class="dot g"></span>连接 X04C_PPV_01 · DAQ ON</div>
+      <div class="grp">streaming <b>870</b> evt/s · ring buf 0%</div>
+      <div class="grp">A2L <b>2 158</b> measurements · 12 选</div>
+      <div class="spacer"></div>
+      <div class="grp">预估 <b>14.4 kB/s</b></div>
+      <div class="grp">v0.4.0-acq</div>
+    </div>
+  </div>
+
+  <div class="explain">
+    <h4>这一屏吸收了你的 4 个问题</h4>
+    <ul>
+      <li><b>(Q1) 连接 ECU 是独立工序</b> — toolbar 下面的 <b>健康 strip</b> 是连接状态的真理来源（HW / CAN / XCP / DAQ / REC 五个 chip 配 LED）。任一变红，[采集] 按钮失效。CANape 里这块叫"connection status" — 我们让它一直可见而不是藏在菜单。</li>
+      <li><b>(Q1) Arm vs 立即开始</b> — Arm 进入触发等待（"踩油门到 3000 rpm 才开始录"，台架/路试常用）；立即开始 = 现在就写盘。两个并列，不是模式开关。</li>
+      <li><b>(Q2) 搜索 + 过滤</b> — 左栏顶部搜索框 + 6 个 chip：<code>只看已选 / 有 DAQ / 最近 / 收藏 / 组 / 类型</code>。2158 个 measurement 在这套过滤下回收得到 184 个、再到 12 个。</li>
+      <li><b>(Q3) Raster 怎么设</b> — 每个信号行有 <code>@ 10ms ▾</code> 这种 pill，点开是下拉，列出 <b>A2L 声明的 events</b>；不可用的灰显，当前的高亮。这就是 ECU 端的"raster 规则"——通过 A2L 直接展示给用户。</li>
+      <li><b>(Q3) 批量 raster</b> — 选多个信号时左栏顶出现蓝色 batch bar（图中是"3 已选"），下拉只显示<b>全部选中信号都支持的 events 交集</b>，不全支持会提示"X 个信号将跳过"。</li>
+      <li><b>(Q4) 卡顿规避</b> — 右栏的 <b>录制预检</b> 是核心：CAN 负载 / DAQ slot / 磁盘 / 采样事件——任一红线就 disable [采集] 按钮 + 给具体建议。这就是 CANape 没有的"预检阻断"——它让你配出会卡的组合，我们直接拦。</li>
+      <li><b>(Q4) 三线程 + 水位透明</b> — 状态栏里"ring buf 0%"就是 ring buffer 水位（录制时它会动），写盘走 64 KB 批写。本质上把 CANape 内部不透明的部分摆出来给用户看。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- STATE VARIANT 1: 未连接                                                  -->
+<!-- ===================================================================== -->
+<section class="scene">
+  <div class="scene-head">
+    <span class="scene-tag gray">主屏 · 状态 1/4</span>
+    <h2>未连接（启动后第一屏 / 断开后回到这屏）</h2>
+    <span class="scene-side">主区灰占位 · 主按钮 = [连接 ECU]</span>
+  </div>
+  <div class="variant-caption">
+    <b>变了什么：</b> 健康 strip 所有 LED 灰色 → 主按钮变成大蓝 [连接 ECU] → 主区灰色占位 → 右栏从"录制预检"切到"连接前检查清单"（A2L / 硬件 / DAQ 容量 是否能拉起）。
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">Acquisition Cockpit — 未连接</span>
+    </div>
+
+    <div class="toolbar">
+      <div class="selector"><span class="label-key">A2L</span><span class="label-val">ecu_2.1.a2l</span><span class="caret">▾</span></div>
+      <div class="selector"><span class="label-key">DBC</span><span class="label-val">vehicle_v23.dbc</span><span class="caret">▾</span></div>
+      <div class="selector" style="background: var(--surface-mute);"><span class="label-key">输出</span><span class="label-val">data/runs/20260514_*</span><span class="caret">▾</span></div>
+      <div class="toolbar-divider"></div>
+      <div class="segment">
+        <div class="seg active">采集</div>
+        <div class="seg">回放</div>
+        <div class="seg">历史</div>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button class="btn connect"><span class="ico">⌁</span>连接 ECU</button>
+    </div>
+
+    <div class="health-strip" style="opacity: 0.55;">
+      <div class="health-chip"><span class="led off"></span><span class="label">HW</span><span class="val">VN1610</span></div>
+      <div class="health-chip"><span class="led off"></span><span class="label">CAN</span><span class="val">offline</span></div>
+      <div class="health-chip"><span class="led off"></span><span class="label">XCP</span><span class="val">—</span></div>
+      <div class="health-chip"><span class="led off"></span><span class="label">DAQ</span><span class="val">—</span></div>
+      <div class="health-chip"><span class="led off"></span><span class="label">REC</span><span class="val">—</span></div>
+      <div class="health-spacer"></div>
+      <div class="health-summary">未连接 · 点 [连接 ECU] 开始</div>
+    </div>
+
+    <div class="panes" style="height: 420px;">
+      <aside class="pane-left">
+        <div class="pane-head">
+          <span class="ttl">A2L Measurement</span>
+          <span class="sub">2 158 · 选 12（保留）</span>
+        </div>
+        <div class="search-row">
+          <div class="search-wrap"><input class="search-input" value="" placeholder="搜索…"></div>
+          <div class="filter-chips">
+            <span class="filter-chip on">只看已选 <span class="cnt">12</span></span>
+            <span class="filter-chip">有 DAQ <span class="cnt">1 842</span></span>
+            <span class="filter-chip">最近 <span class="cnt">28</span></span>
+          </div>
+        </div>
+        <div class="pane-body" style="opacity: 0.6;">
+          <div class="a2l-tree">
+            <div class="group">POWERTRAIN · 4 选中</div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>EngSpdAvg</b><span class="unit">rpm</span></div><span class="event-pill mid">@ 10ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>EngTrqAct</b><span class="unit">Nm</span></div><span class="event-pill mid">@ 10ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>ThrPedalPos</b><span class="unit">%</span></div><span class="event-pill mid">@ 10ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>FuelMassFlow</b><span class="unit">kg/h</span></div><span class="event-pill slow">@ 100ms</span></div>
+            <div class="group">CHASSIS · 4 选中</div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>VehSpd_FL</b><span class="unit">km/h</span></div><span class="event-pill mid">@ 10ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>StgWhlAng</b><span class="unit">deg</span></div><span class="event-pill fast">@ 1ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>BrkPedalPos</b><span class="unit">%</span></div><span class="event-pill mid">@ 10ms</span></div>
+          </div>
+        </div>
+        <div class="left-foot">连接后立即生效 · 选择已保存</div>
+      </aside>
+
+      <main class="pane-center">
+        <div class="disc-canvas">
+          <div class="glyph">⌁</div>
+          <h3>未连接 ECU</h3>
+          <p>数据流将在连接成功后立即出现在这里。点 <b>[连接 ECU]</b> 用当前 A2L 建 XCP 会话并配置 DAQ list。预计 1–2 秒。</p>
+          <div class="actions">
+            <button class="btn"><span class="ico">⚙</span>连接设置…</button>
+            <button class="btn connect"><span class="ico">⌁</span>连接 ECU</button>
+          </div>
+        </div>
+      </main>
+
+      <aside class="pane-right">
+        <div class="pane-head"><span class="ttl">连接前检查</span></div>
+        <div class="pane-body">
+          <div class="config-section">
+            <h4>A2L · sw 2.1.0 <span class="right">✓ ok</span></h4>
+            <div style="font-size: 11.5px; color: var(--ink-soft); line-height: 1.6;">
+              已解析 <b>2 158</b> measurements<br>
+              IF_DATA XCP <b>3 events</b>: 1ms / 10ms / 100ms<br>
+              DAQ 总容量 <b>24 ODT</b>
+            </div>
+          </div>
+          <div class="config-section">
+            <h4>硬件 <span class="right">✓ 已识别</span></h4>
+            <div style="font-size: 11.5px; color: var(--ink-soft); line-height: 1.6;">
+              Vector VN1610 · drv v15.2<br>
+              CAN1 link up · CAN2 link up
+            </div>
+          </div>
+          <div class="config-section">
+            <h4>当前选择 (12 信号) <span class="right">✓ 可拉起</span></h4>
+            <div class="daq-row"><span class="k">1ms</span><div class="bar"><i style="width: 12.5%;"></i></div><span class="v">1/8</span></div>
+            <div class="daq-row"><span class="k">10ms</span><div class="bar"><i style="width: 87.5%;" class="warn"></i></div><span class="v warn">7/8</span></div>
+            <div class="daq-row"><span class="k">100ms</span><div class="bar"><i style="width: 50%;"></i></div><span class="v">4/8</span></div>
+            <div style="font-size: 10.5px; color: var(--ink-muted); margin-top: 4px;">连接后即可开始 · CAN 负载预估 42% · ok</div>
+          </div>
+          <div class="config-section" style="border-bottom: none;">
+            <div class="verdict-banner">✓ 准备就绪 · 点 [连接 ECU]</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="statusbar">
+      <div class="grp"><span class="dot" style="background: var(--ink-disabled);"></span>未连接</div>
+      <div class="grp">A2L <b>2 158</b> · 选 12</div>
+      <div class="spacer"></div>
+      <div class="grp">v0.4.0-acq</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- STATE VARIANT 2: 录制中                                                  -->
+<!-- ===================================================================== -->
+<section class="scene">
+  <div class="scene-head">
+    <span class="scene-tag red">主屏 · 状态 3/4</span>
+    <h2>录制中（同窗 · 仅状态指示器 + 右栏 + 主按钮变）</h2>
+    <span class="scene-side">主区不变 · 红色 REC 脉动 · 右栏切到实时质量监控</span>
+  </div>
+  <div class="variant-caption">
+    <b>变了什么：</b> 顶栏 [采集] 按钮变成大红 [■ Stop & 复盘] → REC OFF 灰指示器变红色脉动 + elapsed → 右栏从"预检"变成"实时质量监控"（ring buffer 水位 / 写速 / 丢帧 / bus load 实时值）→ 信号勾选/raster 切换被禁用（录制中改 DAQ 会失数据）。
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">Acquisition Cockpit — ● RECORDING · 20260514_bench_run01.MF4</span>
+    </div>
+
+    <div class="toolbar">
+      <div class="rec-indicator">
+        <span class="blob"></span>REC 00:01:47
+      </div>
+      <div class="selector" style="opacity: 0.55;"><span class="label-key">输出</span><span class="label-val">20260514_bench_run01.MF4</span></div>
+      <div class="toolbar-divider"></div>
+      <div class="segment" style="opacity: 0.55;">
+        <div class="seg active">采集</div>
+        <div class="seg">回放</div>
+        <div class="seg">历史</div>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button class="btn lg"><span class="ico">⏸</span>暂停</button>
+      <button class="btn lg"><span class="ico">▣</span>分段</button>
+      <button class="btn stop"><span class="ico">■</span>Stop & 复盘</button>
+    </div>
+
+    <div class="health-strip">
+      <div class="health-chip"><span class="led g"></span><span class="label">HW</span><span class="val">VN1610</span></div>
+      <div class="health-chip"><span class="led g"></span><span class="label">CAN</span><span class="val">2 ch · 42%/18%</span></div>
+      <div class="health-chip"><span class="led g"></span><span class="label">XCP</span><span class="val">slave 0x551</span></div>
+      <div class="health-chip"><span class="led g"></span><span class="label">DAQ</span><span class="val">12 sig active</span></div>
+      <div class="health-chip"><span class="led y"></span><span class="label">REC</span><span class="val">buf 12%</span></div>
+      <div class="health-spacer"></div>
+      <div class="health-summary ok">✓ 录制健康 · samples 10 700 · file 248 kB</div>
+    </div>
+
+    <div class="panes" style="height: 460px;">
+      <aside class="pane-left" style="opacity: 0.75;">
+        <div class="pane-head"><span class="ttl">A2L · 12 active</span><span class="sub" style="color: var(--orange);">录制中只读</span></div>
+        <div class="pane-body">
+          <div class="a2l-tree">
+            <div class="group">POWERTRAIN</div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>EngSpdAvg</b><span class="unit">rpm</span></div><span class="event-pill mid">@ 10ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>EngTrqAct</b><span class="unit">Nm</span></div><span class="event-pill mid">@ 10ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>ThrPedalPos</b><span class="unit">%</span></div><span class="event-pill mid">@ 10ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>FuelMassFlow</b><span class="unit">kg/h</span></div><span class="event-pill slow">@ 100ms</span></div>
+            <div class="group">CHASSIS</div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>VehSpd_FL</b><span class="unit">km/h</span></div><span class="event-pill mid">@ 10ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>StgWhlAng</b><span class="unit">deg</span></div><span class="event-pill fast">@ 1ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>BrkPedalPos</b><span class="unit">%</span></div><span class="event-pill mid">@ 10ms</span></div>
+            <div class="row selected"><span class="check on">✓</span><div class="name"><b>VehSpd_FR</b><span class="unit">km/h</span></div><span class="event-pill mid">@ 10ms</span></div>
+          </div>
+        </div>
+        <div class="left-foot" style="background: rgba(234,88,12,0.06); color: var(--orange);">
+          录制中 · DAQ 配置已冻结<br>
+          停下后才能改信号/raster
+        </div>
+      </aside>
+
+      <main class="pane-center">
+        <div class="center-tools">
+          <span style="font-size: 12px; font-weight: 700; color: var(--red);">● 实时数据流 · 录制中</span>
+          <span style="flex: 1;"></span>
+          <span class="chip on">last 30s</span>
+          <span class="chip">since record start</span>
+        </div>
+        <div class="live-stage">
+          <div class="live-card">
+            <div class="head">
+              <span class="swatch" style="background:#2563eb;"></span>
+              <span class="name">EngSpdAvg</span><span class="unit">rpm</span>
+              <span class="raster">10ms</span>
+              <span class="stats">since rec · μ 1 720 · max 1 980</span>
+              <span class="val">1 842</span>
+            </div>
+            <svg viewBox="0 0 800 56" preserveAspectRatio="none">
+              <line x1="0" y1="28" x2="800" y2="28" stroke="#eef2f7"/>
+              <path d="M0 50 L40 48 L80 44 L120 36 L160 34 L200 30 L240 34 L280 28 L320 22 L360 24 L400 20 L440 26 L480 30 L520 22 L560 18 L600 20 L640 16 L680 22 L720 20 L760 16 L800 14" stroke="#2563eb" stroke-width="1.8" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span class="swatch" style="background:#059669;"></span>
+              <span class="name">VehSpd_FL</span><span class="unit">km/h</span>
+              <span class="raster">10ms</span>
+              <span class="stats">since rec · μ 28.4 · max 58.4</span>
+              <span class="val">42.3</span>
+            </div>
+            <svg viewBox="0 0 800 56" preserveAspectRatio="none">
+              <line x1="0" y1="28" x2="800" y2="28" stroke="#eef2f7"/>
+              <path d="M0 54 L40 50 L80 48 L120 44 L160 42 L200 40 L240 36 L280 34 L320 32 L360 28 L400 26 L440 24 L480 22 L520 20 L560 20 L600 22 L640 20 L680 18 L720 16 L760 14 L800 12" stroke="#059669" stroke-width="1.8" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span class="swatch" style="background:#ea580c;"></span>
+              <span class="name">StgWhlAng</span><span class="unit">deg</span>
+              <span class="raster" style="background: rgba(220,38,38,0.10); color: var(--red);">1ms</span>
+              <span class="stats">since rec · μ −0.2 · σ 12.6</span>
+              <span class="val">−4.2</span>
+            </div>
+            <svg viewBox="0 0 800 56" preserveAspectRatio="none">
+              <line x1="0" y1="28" x2="800" y2="28" stroke="#eef2f7"/>
+              <path d="M0 28 L30 22 L60 32 L90 38 L120 24 L150 16 L180 22 L210 12 L240 28 L270 36 L300 42 L330 28 L360 24 L390 14 L420 24 L450 38 L480 30 L510 20 L540 12 L570 26 L600 38 L630 32 L660 24 L690 20 L720 30 L750 38 L780 26 L800 30" stroke="#ea580c" stroke-width="1.4" fill="none"/>
+            </svg>
+          </div>
+        </div>
+      </main>
+
+      <aside class="pane-right">
+        <div class="pane-head"><span class="ttl">实时质量监控</span><span class="sub" style="color: var(--red);">● live</span></div>
+        <div class="pane-body">
+          <div class="live-stat" style="background: rgba(5,150,105,0.04);">
+            <span class="name">Ring buffer</span>
+            <span class="now">12<span style="font-size: 11px; color: var(--ink-muted);">%</span></span>
+            <span class="sub ok">✓ 健康 · 阈值 70%</span>
+          </div>
+          <div class="live-stat">
+            <span class="name">写盘速率</span>
+            <span class="now">2.4<span style="font-size: 11px; color: var(--ink-muted);"> kB/s</span></span>
+            <span class="sub ok">压缩后 · 与预估一致</span>
+          </div>
+          <div class="live-stat" style="background: rgba(234,88,12,0.04);">
+            <span class="name">丢帧</span>
+            <span class="now warn">3</span>
+            <span class="sub warn">⚠ CAN2 t=87s · 已记录到 problems[]</span>
+          </div>
+          <div class="live-stat">
+            <span class="name">CAN1 bus load</span>
+            <span class="now">42<span style="font-size: 11px; color: var(--ink-muted);">%</span></span>
+            <span class="sub">peak 54% · avg 38%</span>
+          </div>
+          <div class="live-stat">
+            <span class="name">CAN2 bus load</span>
+            <span class="now warn">71<span style="font-size: 11px; color: var(--ink-muted);">%</span></span>
+            <span class="sub warn">peak 81% · 接近 80% 阈值</span>
+          </div>
+          <div class="live-stat">
+            <span class="name">Recorder thread</span>
+            <span class="now" style="font-size: 12px; color: var(--green);">healthy</span>
+            <span class="sub">Qt worker · lag &lt; 8 ms</span>
+          </div>
+          <div class="live-stat" style="border-bottom: none;">
+            <span class="name">磁盘空间</span>
+            <span class="now">18.2<span style="font-size: 11px; color: var(--ink-muted);"> GB</span></span>
+            <span class="sub">预分配 1.5 GB · 余 ~ 200 h</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="statusbar">
+      <div class="grp"><span class="dot r pulse"></span><b style="color: var(--red);">RECORDING</b> · elapsed 00:01:47</div>
+      <div class="grp">samples <b>10 700</b></div>
+      <div class="grp">file <b>248 kB</b> <div class="progress" style="margin-left: 4px;"><i style="width: 18%;"></i></div></div>
+      <div class="spacer"></div>
+      <div class="grp">dropped <b style="color: var(--orange);">3</b></div>
+      <div class="grp">buf <b>12%</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- Note on 复盘 modal                                                       -->
+<!-- ===================================================================== -->
+<section class="scene">
+  <div class="scene-head">
+    <span class="scene-tag green">主屏 · 状态 4/4</span>
+    <h2>复盘 modal（停录后自动弹 · 沿用 v2 设计）</h2>
+  </div>
+  <div class="explain" style="margin-top: 0;">
+    <h4>4/4 状态没变 · 见 v2 的 SCENE 3</h4>
+    <ul>
+      <li>Stop 触发后立即跑 <code>acquisition/preflight.py</code> 自动检查（采样率/通道完整/丢帧/SHA-256）</li>
+      <li>下方 4 字段 manifest 表单（scenario / quality / issue_tags / sets）— 默认值自动从右栏录制参数补</li>
+      <li>3 个出口：<b>丢弃</b>（误触保护）/ <b>仅保存文件</b>（不归档）/ <b>保存并归档</b>（写 manifest.yaml + 触发 regression snapshot）</li>
+      <li>外加 [▷ 在 Analyzer 打开]：跨窗交付给 Analyzer 进程做信号分析</li>
+      <li>关掉模态 = 回到"已连接 · 待机"状态，可以马上开始下一次录制</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- DESIGN DECISIONS BAKED IN                                                -->
+<!-- ===================================================================== -->
+<section style="background: linear-gradient(180deg, #ffffff 0%, #f1f5ff 100%); border: 1px solid #c7d2fe; border-radius: 14px; padding: 22px 26px; margin-top: 28px;">
+  <h2 style="color: var(--blue); margin-bottom: 8px;">v3 一共吸收了 7 个设计决定</h2>
+  <ol style="font-size: 13px; line-height: 1.75; margin: 12px 0 0 22px;">
+    <li><b>合并 Scene 1+2 为单屏 + 4 态机</b> — 主区永远 live，"采集"按钮 = 开始写盘，不是开始 stream</li>
+    <li><b>连接 ECU 是独立工序</b> — 健康 strip 5 灯做状态真理来源，未连接时主按钮变 [连接 ECU]</li>
+    <li><b>搜索 + 6 个过滤 chip</b> — 应对 A2L 2000+ measurement</li>
+    <li><b>每个信号显示 A2L 声明的 events</b>，可切换；不可用的灰显</li>
+    <li><b>多选 → 批量改 raster</b>，下拉只显示选中信号的事件交集</li>
+    <li><b>右栏录制预检</b> — CAN 负载 / DAQ slot / 磁盘 / 采样事件 4 项，任一红就 disable [采集]</li>
+    <li><b>录制中右栏切到实时质量监控</b> — ring buffer 水位是健康度的真理来源，超 70% 自动降帧而非崩</li>
+  </ol>
+</section>
+
+</body>
+</html>

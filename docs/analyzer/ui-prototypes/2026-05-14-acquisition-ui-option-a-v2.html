@@ -1,0 +1,1402 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Acquisition Cockpit v2 — 以实时采集为中心</title>
+<style>
+  * { box-sizing: border-box; }
+  :root {
+    --surface-base: #f5f7fb;
+    --surface-card: #ffffff;
+    --surface-hover: #eef2f7;
+    --surface-accent: #e8efff;
+    --surface-mute: #f1f5f9;
+    --hairline: #eef2f7;
+    --hairline-strong: #dfe5ee;
+    --ink: #111827;
+    --ink-soft: #475569;
+    --ink-muted: #64748b;
+    --ink-disabled: #94a3b8;
+    --blue: #2563eb;
+    --blue-soft: #3b82f6;
+    --green: #059669;
+    --orange: #ea580c;
+    --red: #dc2626;
+    --yellow: #ca8a04;
+  }
+  body {
+    margin: 0; padding: 32px 40px 80px;
+    background: var(--surface-base); color: var(--ink);
+    font-family: "Microsoft YaHei", -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+    font-size: 13px; line-height: 1.55;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 700; }
+  h2 { font-size: 17px; margin: 0; font-weight: 700; }
+  h3 { font-size: 13px; margin: 0 0 6px; font-weight: 700; }
+  .page-sub { color: var(--ink-muted); font-size: 13px; margin-bottom: 4px; }
+  .page-meta { color: var(--ink-muted); font-size: 11px; margin-bottom: 32px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; }
+
+  .scene { margin-bottom: 56px; }
+  .scene-head {
+    display: flex; align-items: baseline; gap: 12px;
+    margin-bottom: 4px;
+  }
+  .scene-tag {
+    font-size: 11px; font-weight: 700;
+    background: var(--blue); color: white;
+    padding: 2px 10px; border-radius: 4px;
+    letter-spacing: 1.2px;
+  }
+  .scene-tag.rec { background: var(--red); }
+  .scene-tag.done { background: var(--green); }
+  .scene-tag.history { background: var(--ink-soft); }
+  .scene-side {
+    margin-left: auto;
+    color: var(--ink-muted);
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0.4px; text-transform: uppercase;
+  }
+  .scene-tagline {
+    color: var(--ink-soft); font-size: 13.5px;
+    margin-bottom: 16px;
+  }
+
+  /* ---- shared window chrome ---- */
+  .mockup {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04), 0 8px 24px rgba(15,23,42,0.04);
+    margin-bottom: 16px;
+  }
+  .mockup-chrome {
+    height: 28px;
+    background: linear-gradient(#f8fafc, #eef2f7);
+    border-bottom: 1px solid var(--hairline);
+    display: flex; align-items: center; padding: 0 12px; gap: 6px;
+    color: var(--ink-muted); font-size: 11px;
+  }
+  .mockup-chrome .dot { width: 11px; height: 11px; border-radius: 50%; background: #cbd5e1; }
+  .mockup-chrome .dot.r { background: #f87171; }
+  .mockup-chrome .dot.y { background: #fbbf24; }
+  .mockup-chrome .dot.g { background: #4ade80; }
+  .mockup-chrome .title { margin-left: 12px; font-weight: 600; color: var(--ink-soft); }
+
+  /* ---- toolbar ---- */
+  .toolbar {
+    display: flex; align-items: center;
+    padding: 8px 14px; gap: 10px;
+    background: var(--surface-card);
+    border-bottom: 1px solid var(--hairline);
+    min-height: 48px;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 12px;
+    background: var(--surface-card);
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    color: var(--ink);
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; user-select: none;
+  }
+  .btn:hover { background: var(--surface-hover); }
+  .btn.primary { background: var(--blue); border-color: var(--blue); color: white; }
+  .btn.primary:hover { background: #1d4ed8; }
+  .btn.record { background: var(--red); border-color: var(--red); color: white; }
+  .btn.record:hover { background: #b91c1c; }
+  .btn.record .ico { color: white; }
+  .btn.arm { background: rgba(202,138,4,0.12); border-color: var(--yellow); color: #92400e; }
+  .btn.stop { background: var(--red); border-color: var(--red); color: white; height: 36px; padding: 0 18px; font-size: 13px; }
+  .btn.ghost { border-color: transparent; background: transparent; }
+  .btn.ghost:hover { background: var(--surface-hover); }
+  .btn.lg { height: 34px; padding: 0 16px; font-size: 13px; }
+  .btn .ico {
+    display: inline-flex; width: 14px; height: 14px;
+    align-items: center; justify-content: center;
+    font-size: 12px;
+  }
+  .btn:disabled, .btn.disabled { color: var(--ink-disabled); border-color: var(--hairline); background: var(--surface-card); cursor: not-allowed; }
+
+  .segment {
+    display: inline-flex;
+    background: var(--surface-mute);
+    border-radius: 7px;
+    padding: 2px;
+    border: 1px solid var(--hairline);
+  }
+  .segment .seg {
+    height: 26px; padding: 0 14px;
+    display: inline-flex; align-items: center; gap: 6px;
+    border-radius: 5px;
+    color: var(--ink-soft); font-size: 12px; font-weight: 600;
+    cursor: pointer; user-select: none;
+  }
+  .segment .seg:hover { color: var(--ink); }
+  .segment .seg.active {
+    background: var(--surface-card);
+    color: var(--blue);
+    box-shadow: 0 1px 2px rgba(15,23,42,0.08);
+  }
+  .segment .seg .ico-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+
+  .toolbar-spacer { flex: 1; }
+  .toolbar-divider { width: 1px; height: 22px; background: var(--hairline-strong); margin: 0 4px; }
+
+  .selector {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 10px; height: 28px;
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    background: var(--surface-card);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .selector .label-key { color: var(--ink-muted); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .selector .label-val { color: var(--ink); font-weight: 600; }
+  .selector .caret { color: var(--ink-muted); margin-left: 2px; }
+
+  .rec-indicator {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 0 14px; height: 32px;
+    background: rgba(220,38,38,0.10);
+    border: 1px solid rgba(220,38,38,0.35);
+    border-radius: 8px;
+    font-size: 13px; font-weight: 700;
+    color: var(--red);
+    font-variant-numeric: tabular-nums;
+  }
+  .rec-indicator .blob {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--red);
+    animation: pulse 1.6s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(220,38,38,0.55); }
+    70% { box-shadow: 0 0 0 8px rgba(220,38,38,0); }
+    100% { box-shadow: 0 0 0 0 rgba(220,38,38,0); }
+  }
+
+  /* ---- panes ---- */
+  .panes {
+    display: grid;
+    grid-template-columns: 260px 1fr 280px;
+    height: 540px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .pane-left, .pane-right {
+    background: var(--surface-card);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .pane-left { border-right: 1px solid var(--hairline); }
+  .pane-right { border-left: 1px solid var(--hairline); }
+  .pane-center {
+    background: var(--surface-base);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .pane-head {
+    display: flex; align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface-card);
+    min-height: 40px;
+  }
+  .pane-head .ttl { font-size: 13px; font-weight: 700; }
+  .pane-head .sub { font-size: 11px; color: var(--ink-muted); font-weight: 600; margin-left: auto; }
+  .pane-body { flex: 1; overflow: auto; }
+  .pane-body.padded { padding: 12px 14px; }
+
+  /* ---- A2L tree (left pane in Setup) ---- */
+  .search {
+    width: 100%;
+    height: 28px; padding: 0 10px;
+    background: var(--surface-mute);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    color: var(--ink);
+    font-size: 12px;
+    margin: 10px 12px 6px;
+    width: calc(100% - 24px);
+  }
+  .a2l-tree { font-size: 12px; padding: 4px 4px; font-variant-numeric: tabular-nums; }
+  .a2l-tree .row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .a2l-tree .row:hover { background: var(--surface-hover); }
+  .a2l-tree .row.selected { background: var(--surface-accent); }
+  .a2l-tree .row.selected .name { color: var(--blue); }
+  .a2l-tree .l1 { padding-left: 4px; font-weight: 700; font-size: 11.5px; color: var(--ink-soft); letter-spacing: 0.4px; text-transform: uppercase; }
+  .a2l-tree .l2 { padding-left: 20px; }
+  .a2l-tree .row .check {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    border: 1.5px solid var(--hairline-strong);
+    background: var(--surface-card);
+    flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: white;
+    font-size: 10px; font-weight: 700;
+  }
+  .a2l-tree .row .check.on {
+    background: var(--blue); border-color: var(--blue);
+  }
+  .a2l-tree .row .name { flex: 1; color: var(--ink); }
+  .a2l-tree .row .name .unit { color: var(--ink-muted); margin-left: 4px; font-size: 11px; }
+  .a2l-tree .row .addr { color: var(--ink-muted); font-family: monospace; font-size: 10.5px; }
+
+  .a2l-foot {
+    border-top: 1px solid var(--hairline);
+    padding: 10px 14px;
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    background: var(--surface-mute);
+    line-height: 1.5;
+  }
+  .a2l-foot b { color: var(--ink); font-weight: 700; }
+
+  /* ---- center: selected signals grid (Setup) ---- */
+  .selected-grid {
+    padding: 14px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .sig-card {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .sig-card .head {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .sig-card .swatch { width: 10px; height: 10px; border-radius: 2px; }
+  .sig-card .name { font-weight: 700; font-size: 12.5px; }
+  .sig-card .meta {
+    margin-left: auto;
+    font-size: 11px; color: var(--ink-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .sig-card .props {
+    display: flex; gap: 12px;
+    font-size: 11px; color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+  }
+  .sig-card .props .k { color: var(--ink-muted); margin-right: 3px; }
+  .sig-card .preview {
+    height: 32px;
+    background: var(--surface-mute);
+    border-radius: 4px;
+    position: relative; overflow: hidden;
+    margin-top: 2px;
+  }
+  .sig-card .preview .placeholder {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ink-muted); font-size: 10.5px;
+  }
+
+  /* ---- center: live charts ---- */
+  .live-stage {
+    flex: 1; padding: 14px;
+    display: flex; flex-direction: column; gap: 10px;
+    overflow: auto;
+  }
+  .live-card {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 10px 14px 6px;
+    display: flex; flex-direction: column;
+  }
+  .live-card .head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+    font-size: 11px; color: var(--ink-muted);
+  }
+  .live-card .head .name { color: var(--ink); font-weight: 700; font-size: 12.5px; }
+  .live-card .head .unit { color: var(--ink-muted); }
+  .live-card .head .val {
+    margin-left: auto;
+    font-family: monospace; font-size: 16px; font-weight: 700;
+    color: var(--ink); font-variant-numeric: tabular-nums;
+  }
+  .live-card .head .stats {
+    color: var(--ink-muted); font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    margin-left: 14px;
+  }
+  .live-card svg { width: 100%; height: 60px; }
+
+  /* ---- right pane: setup config ---- */
+  .config-section {
+    border-bottom: 1px solid var(--hairline);
+    padding: 12px 14px;
+  }
+  .config-section h4 {
+    font-size: 11px; font-weight: 700; color: var(--ink-soft);
+    text-transform: uppercase; letter-spacing: 0.6px;
+    margin: 0 0 8px;
+  }
+  .field {
+    display: flex; flex-direction: column; gap: 4px;
+    margin-bottom: 10px;
+  }
+  .field label { font-size: 11.5px; color: var(--ink-muted); }
+  .field .input {
+    height: 28px; padding: 0 10px;
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    background: var(--surface-card);
+    display: flex; align-items: center;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .field .input.dark-token { font-family: monospace; font-size: 11.5px; color: var(--ink-soft); }
+  .radio-row { display: flex; gap: 6px; margin-top: 2px; }
+  .radio-row .opt {
+    flex: 1;
+    height: 28px;
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    background: var(--surface-card);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11.5px; font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer;
+  }
+  .radio-row .opt.on {
+    background: var(--surface-accent);
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+
+  /* ---- right pane: live stats ---- */
+  .live-stat {
+    display: grid; grid-template-columns: 1fr auto;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--hairline);
+    align-items: center;
+  }
+  .live-stat .name { font-weight: 700; font-size: 12.5px; }
+  .live-stat .sub {
+    color: var(--ink-muted); font-size: 10.5px;
+    grid-column: 1; margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .live-stat .now {
+    font-family: monospace; font-weight: 700; font-size: 14px;
+    color: var(--ink);
+    grid-row: 1 / span 2; grid-column: 2;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- status bar ---- */
+  .statusbar {
+    height: 28px;
+    background: var(--surface-card);
+    color: var(--ink-muted);
+    font-size: 11px;
+    display: flex; align-items: center; padding: 0 14px; gap: 16px;
+  }
+  .statusbar .grp { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+  .statusbar .grp b { color: var(--ink); }
+  .statusbar .grp .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .statusbar .grp .dot.g { background: var(--green); }
+  .statusbar .grp .dot.y { background: var(--yellow); }
+  .statusbar .grp .dot.r { background: var(--red); }
+  .statusbar .grp .dot.pulse { animation: pulse 1.6s infinite; }
+  .statusbar .spacer { flex: 1; }
+  .statusbar .progress {
+    width: 100px; height: 4px; border-radius: 3px; background: var(--surface-mute); overflow: hidden;
+  }
+  .statusbar .progress > i {
+    display: block; height: 100%; background: var(--blue); border-radius: 3px;
+  }
+
+  /* ---- review modal ---- */
+  .modal-wrap {
+    background: rgba(15,23,42,0.42);
+    padding: 32px;
+    border-radius: 12px;
+    display: flex; justify-content: center;
+    border: 1px solid var(--hairline);
+  }
+  .modal {
+    width: 720px;
+    background: var(--surface-card);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 24px 48px rgba(15,23,42,0.25);
+  }
+  .modal-head {
+    padding: 18px 24px 14px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .modal-head .ttl { font-size: 16px; font-weight: 700; }
+  .modal-head .sub { font-size: 12px; color: var(--ink-muted); margin-top: 4px; }
+  .modal-head .filename {
+    font-family: monospace; font-size: 12px; color: var(--ink);
+    background: var(--surface-mute);
+    padding: 2px 6px; border-radius: 4px;
+  }
+  .modal-body { padding: 18px 24px; }
+  .modal-foot {
+    padding: 14px 24px;
+    display: flex; align-items: center; gap: 10px;
+    background: var(--surface-base);
+    border-top: 1px solid var(--hairline);
+  }
+  .modal-foot .spacer { flex: 1; }
+
+  .preflight-result {
+    background: var(--surface-base);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+  .preflight-result .row {
+    display: grid; grid-template-columns: 16px 120px 1fr;
+    gap: 10px; align-items: center;
+    font-size: 12.5px;
+    padding: 4px 0;
+  }
+  .preflight-result .row .ok { color: var(--green); font-weight: 700; }
+  .preflight-result .row .warn { color: var(--orange); font-weight: 700; }
+  .preflight-result .row .k { color: var(--ink-muted); }
+  .preflight-result .row .v { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .preflight-result .row .v.mono { font-family: monospace; font-size: 11.5px; }
+
+  .meta-form {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px;
+  }
+  .meta-form .field { margin-bottom: 0; }
+
+  /* ---- history table ---- */
+  table.assets { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.assets th, table.assets td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--hairline);
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+  }
+  table.assets thead th {
+    font-size: 11px; font-weight: 700; color: var(--ink-soft);
+    text-transform: uppercase; letter-spacing: 0.4px;
+    background: var(--surface-card);
+    position: sticky; top: 0;
+  }
+  table.assets tbody tr { background: var(--surface-card); cursor: pointer; }
+  table.assets tbody tr:hover { background: var(--surface-hover); }
+  table.assets td .name { font-weight: 600; }
+  table.assets td .filename { font-family: monospace; font-size: 11px; color: var(--ink-soft); }
+  .pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 7px; border-radius: 9px;
+    font-size: 10px; font-weight: 700;
+    background: rgba(100,116,139,0.10); color: var(--ink-soft);
+  }
+  .pill.ok { background: rgba(5,150,105,0.12); color: var(--green); }
+  .pill.warn { background: rgba(234,88,12,0.13); color: var(--orange); }
+  .pill.info { background: rgba(37,99,235,0.12); color: var(--blue); }
+
+  .center-tools {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface-card);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 9px; height: 22px;
+    background: var(--surface-mute);
+    border-radius: 11px;
+    font-size: 11px; font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer; user-select: none;
+  }
+  .chip.on { background: var(--surface-accent); color: var(--blue); }
+
+  /* ---- explanation block ---- */
+  .explain {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-top: 6px;
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+  .explain h4 {
+    margin: 0 0 8px;
+    font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--blue);
+  }
+  .explain ul { margin: 0 0 0 18px; padding: 0; }
+  .explain li { margin-bottom: 6px; }
+  .explain code { background: var(--surface-mute); padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+
+  /* ---- comparison block ---- */
+  .changes {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 10px;
+    padding: 16px 22px;
+    margin-bottom: 36px;
+    font-size: 13px;
+    line-height: 1.65;
+  }
+  .changes h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px;
+    color: #92400e; margin: 0 0 8px;
+  }
+  .changes table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .changes th, .changes td { padding: 6px 10px; text-align: left; vertical-align: top; }
+  .changes th { font-weight: 700; color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; border-bottom: 1px solid #fde68a; }
+  .changes td { border-bottom: 1px solid rgba(253,230,138,0.5); }
+  .changes td.from { color: var(--ink-muted); text-decoration: line-through; }
+  .changes td.to { color: var(--ink); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>Acquisition Cockpit · v2</h1>
+<div class="page-sub">把 acquisition UI 的中心从"事后检查"翻转回"当下采集"</div>
+<div class="page-meta">2026-05-14 · 修订自 v1 · branch <code style="background:var(--surface-mute); padding:1px 4px; border-radius:3px;">fix/acquisition-p0-truth-up</code></div>
+
+<!-- ===================================================================== -->
+<!-- WHAT CHANGED                                                            -->
+<!-- ===================================================================== -->
+<div class="changes">
+  <h3>v1 → v2 的关键变化</h3>
+  <table>
+    <thead>
+      <tr><th width="180">主题</th><th width="40%">v1（错位）</th><th>v2（修正）</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>打开应用第一屏</b></td>
+        <td class="from">资产库表格（翻历史 MF4）</td>
+        <td class="to"><b>采集</b>—— A2L 变量树 + 待录信号 + 大 [● Record] 按钮</td>
+      </tr>
+      <tr>
+        <td><b>顶栏 mode 段</b></td>
+        <td class="from">资产 / Preflight / Manifest / Replay / Capture(disabled)</td>
+        <td class="to"><b>采集 / 回放 / 历史</b>（3 个，<code>采集</code> 是默认）</td>
+      </tr>
+      <tr>
+        <td><b>Capture（实时采集）</b></td>
+        <td class="from">"未来功能"，被 disabled，藏在最右</td>
+        <td class="to">主流程。Vector 未就绪时降级为"模拟报文/CAN replay 输入"，UI 不变</td>
+      </tr>
+      <tr>
+        <td><b>实时数据流</b></td>
+        <td class="from">没有</td>
+        <td class="to">主视图 = 多通道 live strip 图表，跟 Analyzer 的画布同款风格</td>
+      </tr>
+      <tr>
+        <td><b>Preflight</b></td>
+        <td class="from">独立 mode，要主动点</td>
+        <td class="to">录完按 Stop 后自动跑，结果出现在"复盘"小模态里</td>
+      </tr>
+      <tr>
+        <td><b>Manifest 编辑</b></td>
+        <td class="from">独立 mode，要主动点</td>
+        <td class="to">同上 — 录完弹的小模态里填 4 个字段 + 保存/丢弃</td>
+      </tr>
+      <tr>
+        <td><b>资产库表格</b></td>
+        <td class="from">最显眼的主视图</td>
+        <td class="to">退到 <code>历史</code> tab，需要的时候才看（典型场景：找旧文件对比）</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ===================================================================== -->
+<!-- SCENE 1: 采集 mode · Idle / Setup                                       -->
+<!-- ===================================================================== -->
+<section class="scene">
+  <div class="scene-head">
+    <span class="scene-tag">SCENE 1</span>
+    <h2>采集 · 准备录制</h2>
+    <span class="scene-side">默认视图 · 应用启动后看到的就是这屏</span>
+  </div>
+  <p class="scene-tagline">左：A2L 变量树（搜索 + 勾选）　中：已选信号卡片（每个有 raster、单位、地址、留出 live preview 占位）　右：录制参数（输出文件、触发、缓冲）</p>
+
+  <div class="mockup">
+    <div class="mockup-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">Acquisition Cockpit — 采集 · 待录 12 信号 · 输出 → 20260514_bench_run01.MF4</span>
+    </div>
+
+    <div class="toolbar">
+      <div class="selector"><span class="label-key">A2L</span><span class="label-val">ecu_2.1.a2l</span><span class="caret">▾</span></div>
+      <div class="selector"><span class="label-key">DBC</span><span class="label-val">vehicle_v23.dbc</span><span class="caret">▾</span></div>
+      <div class="selector" style="background: var(--surface-mute);"><span class="label-key">输出</span><span class="label-val">data/runs/20260514_*</span><span class="caret">▾</span></div>
+      <div class="toolbar-divider"></div>
+      <div class="segment">
+        <div class="seg active">采集</div>
+        <div class="seg">回放</div>
+        <div class="seg">历史</div>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button class="btn arm lg"><span class="ico">⚡</span>Arm（等待触发）</button>
+      <button class="btn record lg"><span class="ico">●</span>立即开始 Record</button>
+    </div>
+
+    <div class="panes">
+      <!-- LEFT: A2L Measurement tree -->
+      <aside class="pane-left">
+        <div class="pane-head">
+          <span class="ttl">A2L Measurement</span>
+          <span class="sub">2 158 项 · 已选 12</span>
+        </div>
+        <input class="search" placeholder="搜索 measurement 名 / address…">
+        <div class="pane-body" style="padding-top: 4px;">
+          <div class="a2l-tree">
+            <div class="row l1"><span>POWERTRAIN ▾</span></div>
+            <div class="row l2 selected">
+              <span class="check on">✓</span>
+              <span class="name">EngSpdAvg<span class="unit">rpm</span></span>
+              <span class="addr">0x40A2D0</span>
+            </div>
+            <div class="row l2 selected">
+              <span class="check on">✓</span>
+              <span class="name">EngTrqAct<span class="unit">Nm</span></span>
+              <span class="addr">0x40A2D4</span>
+            </div>
+            <div class="row l2">
+              <span class="check"></span>
+              <span class="name">EngTrqDes<span class="unit">Nm</span></span>
+              <span class="addr">0x40A2D8</span>
+            </div>
+            <div class="row l2 selected">
+              <span class="check on">✓</span>
+              <span class="name">ThrPedalPos<span class="unit">%</span></span>
+              <span class="addr">0x40A2E0</span>
+            </div>
+            <div class="row l2">
+              <span class="check"></span>
+              <span class="name">FuelMassFlow<span class="unit">kg/h</span></span>
+              <span class="addr">0x40A2E4</span>
+            </div>
+
+            <div class="row l1" style="margin-top: 8px;"><span>CHASSIS ▾</span></div>
+            <div class="row l2 selected">
+              <span class="check on">✓</span>
+              <span class="name">VehSpd_FL<span class="unit">km/h</span></span>
+              <span class="addr">0x40B100</span>
+            </div>
+            <div class="row l2 selected">
+              <span class="check on">✓</span>
+              <span class="name">VehSpd_FR<span class="unit">km/h</span></span>
+              <span class="addr">0x40B104</span>
+            </div>
+            <div class="row l2 selected">
+              <span class="check on">✓</span>
+              <span class="name">StgWhlAng<span class="unit">deg</span></span>
+              <span class="addr">0x40B120</span>
+            </div>
+            <div class="row l2 selected">
+              <span class="check on">✓</span>
+              <span class="name">BrkPedalPos<span class="unit">%</span></span>
+              <span class="addr">0x40B130</span>
+            </div>
+
+            <div class="row l1" style="margin-top: 8px;"><span>THERMAL ▾</span></div>
+            <div class="row l2 selected">
+              <span class="check on">✓</span>
+              <span class="name">CoolantT<span class="unit">℃</span></span>
+              <span class="addr">0x40C040</span>
+            </div>
+            <div class="row l2 selected">
+              <span class="check on">✓</span>
+              <span class="name">OilT<span class="unit">℃</span></span>
+              <span class="addr">0x40C044</span>
+            </div>
+            <div class="row l2">
+              <span class="check"></span>
+              <span class="name">AmbientT<span class="unit">℃</span></span>
+              <span class="addr">0x40C048</span>
+            </div>
+
+            <div class="row l1" style="margin-top: 8px;"><span>HV / BATTERY ▶</span></div>
+            <div class="row l1"><span>STEER / DRIVELINE ▶</span></div>
+            <div class="row l1"><span>DIAGNOSTICS ▶</span></div>
+          </div>
+        </div>
+        <div class="a2l-foot">
+          <b>12 项已选</b> · 预估带宽 <b>14.4 kB/s</b> · 30 分钟约 <b>26 MB</b>
+        </div>
+      </aside>
+
+      <!-- CENTER: selected signals grid -->
+      <main class="pane-center">
+        <div class="center-tools">
+          <span style="font-size: 12px; font-weight: 700;">已选信号 (12)</span>
+          <span class="chip on">All</span>
+          <span class="chip">100 Hz</span>
+          <span class="chip">10 Hz</span>
+          <span class="chip">1 Hz</span>
+          <span style="flex: 1;"></span>
+          <button class="btn ghost"><span class="ico">⊟</span>布局</button>
+          <button class="btn ghost"><span class="ico">↕</span>raster…</button>
+        </div>
+        <div class="selected-grid" style="overflow: auto;">
+          <div class="sig-card">
+            <div class="head">
+              <span class="swatch" style="background:#2563eb;"></span>
+              <span class="name">EngSpdAvg</span>
+              <span class="meta">rpm</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>100 Hz</span><span><span class="k">addr</span>0x40A2D0</span><span><span class="k">type</span>uint16</span></div>
+            <div class="preview"><div class="placeholder">未开始 · 录制后在此实时显示</div></div>
+          </div>
+          <div class="sig-card">
+            <div class="head">
+              <span class="swatch" style="background:#059669;"></span>
+              <span class="name">VehSpd_FL</span>
+              <span class="meta">km/h</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>100 Hz</span><span><span class="k">addr</span>0x40B100</span><span><span class="k">type</span>float</span></div>
+            <div class="preview"><div class="placeholder">未开始</div></div>
+          </div>
+          <div class="sig-card">
+            <div class="head">
+              <span class="swatch" style="background:#dc2626;"></span>
+              <span class="name">VehSpd_FR</span>
+              <span class="meta">km/h</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>100 Hz</span><span><span class="k">addr</span>0x40B104</span><span><span class="k">type</span>float</span></div>
+            <div class="preview"><div class="placeholder">未开始</div></div>
+          </div>
+          <div class="sig-card">
+            <div class="head">
+              <span class="swatch" style="background:#ea580c;"></span>
+              <span class="name">StgWhlAng</span>
+              <span class="meta">deg</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>100 Hz</span><span><span class="k">addr</span>0x40B120</span><span><span class="k">type</span>int16</span></div>
+            <div class="preview"><div class="placeholder">未开始</div></div>
+          </div>
+          <div class="sig-card">
+            <div class="head">
+              <span class="swatch" style="background:#0891b2;"></span>
+              <span class="name">EngTrqAct</span>
+              <span class="meta">Nm</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>100 Hz</span><span><span class="k">addr</span>0x40A2D4</span><span><span class="k">type</span>int16</span></div>
+            <div class="preview"><div class="placeholder">未开始</div></div>
+          </div>
+          <div class="sig-card">
+            <div class="head">
+              <span class="swatch" style="background:#7c3aed;"></span>
+              <span class="name">ThrPedalPos</span>
+              <span class="meta">%</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>100 Hz</span><span><span class="k">addr</span>0x40A2E0</span><span><span class="k">type</span>uint8</span></div>
+            <div class="preview"><div class="placeholder">未开始</div></div>
+          </div>
+          <div class="sig-card">
+            <div class="head">
+              <span class="swatch" style="background:#be123c;"></span>
+              <span class="name">BrkPedalPos</span>
+              <span class="meta">%</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>100 Hz</span><span><span class="k">addr</span>0x40B130</span><span><span class="k">type</span>uint8</span></div>
+            <div class="preview"><div class="placeholder">未开始</div></div>
+          </div>
+          <div class="sig-card">
+            <div class="head">
+              <span class="swatch" style="background:#64748b;"></span>
+              <span class="name">CoolantT</span>
+              <span class="meta">℃</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>10 Hz</span><span><span class="k">addr</span>0x40C040</span><span><span class="k">type</span>int16</span></div>
+            <div class="preview"><div class="placeholder">未开始</div></div>
+          </div>
+          <div class="sig-card" style="opacity: 0.6;">
+            <div class="head">
+              <span class="swatch" style="background:#1e40af;"></span>
+              <span class="name">OilT</span>
+              <span class="meta">℃</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>10 Hz</span><span><span class="k">addr</span>0x40C044</span><span><span class="k">type</span>int16</span></div>
+            <div class="preview"><div class="placeholder">未开始</div></div>
+          </div>
+          <div class="sig-card" style="opacity: 0.6;">
+            <div class="head">
+              <span class="swatch" style="background:#047857;"></span>
+              <span class="name">EngTrqDes / +3 项</span>
+              <span class="meta">…</span>
+            </div>
+            <div class="props"><span><span class="k">raster</span>mixed</span></div>
+            <div class="preview"><div class="placeholder">滚动查看全部 12 项</div></div>
+          </div>
+        </div>
+      </main>
+
+      <!-- RIGHT: recording params -->
+      <aside class="pane-right">
+        <div class="pane-head">
+          <span class="ttl">录制参数</span>
+        </div>
+        <div class="pane-body">
+          <div class="config-section">
+            <h4>输出</h4>
+            <div class="field">
+              <label>文件名模板</label>
+              <div class="input dark-token">{date}_{vehicle}_{scenario}_run{n}.MF4</div>
+            </div>
+            <div class="field">
+              <label>实际生成</label>
+              <div class="input">20260514_bench_run01.MF4</div>
+            </div>
+            <div class="field">
+              <label>vehicle / scenario</label>
+              <div class="input">X04C_PPV_01 · bench_test</div>
+            </div>
+          </div>
+
+          <div class="config-section">
+            <h4>采集源</h4>
+            <div class="field">
+              <label>数据源</label>
+              <div class="radio-row">
+                <div class="opt on">Vector*</div>
+                <div class="opt">CAN replay</div>
+                <div class="opt">合成</div>
+              </div>
+              <small style="font-size: 10.5px; color: var(--ink-muted); margin-top: 3px;">*需 Windows + VN1610。当前 host (macOS) 自动落到"合成 / CAN replay"</small>
+            </div>
+            <div class="field">
+              <label>CAN 通道</label>
+              <div class="input">CAN1 @ 500 kbps · CAN2 @ 1 Mbps</div>
+            </div>
+          </div>
+
+          <div class="config-section">
+            <h4>触发</h4>
+            <div class="field">
+              <div class="radio-row">
+                <div class="opt on">立即</div>
+                <div class="opt">条件</div>
+                <div class="opt">手动 Arm</div>
+              </div>
+            </div>
+            <div class="field" style="opacity: 0.45;">
+              <label>条件表达式</label>
+              <div class="input dark-token">EngSpdAvg &gt; 3000 持续 2 s</div>
+            </div>
+            <div class="field" style="opacity: 0.45;">
+              <label>预录缓冲</label>
+              <div class="input">触发前 5 s</div>
+            </div>
+          </div>
+
+          <div class="config-section" style="border-bottom: none;">
+            <h4>策略</h4>
+            <div class="field">
+              <label>最长录制</label>
+              <div class="input">10 分钟（满则自动分段）</div>
+            </div>
+            <div class="field">
+              <label>磁盘空间</label>
+              <div class="input" style="color: var(--green); font-weight: 600;">18.2 GB 可用 · 充足</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="statusbar">
+      <div class="grp"><span class="dot g"></span>Ready · 等待开始</div>
+      <div class="grp">A2L 解析 <b>2 158</b> measurements · 12 已选</div>
+      <div class="grp">CAN1 <b>online</b> · CAN2 <b>online</b></div>
+      <div class="spacer"></div>
+      <div class="grp">预估 <b>14.4 kB/s</b></div>
+      <div class="grp">v0.4.0-acq</div>
+    </div>
+  </div>
+
+  <div class="explain">
+    <h4>这屏回答了"我怎么开始一次采集"</h4>
+    <ul>
+      <li><b>A2L 树即是你说的"选参数和变量名"</b>。左边支持搜索 + 勾选，地址 / 单位 / 类型直接读 <code>a2l_probe.py</code> 解析的 <code>MeasurementSummary</code>。已选 12 项的预估带宽实时算出来 (14.4 kB/s)。</li>
+      <li><b>中间是"已经选了哪些信号"的可视化预览。</b> 每张卡片留出 32 px 高的小图表区域——录制开始后这块就是该信号的 live preview，停下后这就是该次录制的迷你回放。</li>
+      <li><b>右边是录制参数（触发、buffer、输出文件名模板）。</b> 数据源 radio 里"Vector / CAN replay / 合成"对应当前 <code>can_logger/p0/</code> 的 stub 状态——macOS 上自动落到合成或 replay，Windows 上点亮 Vector，UI 一样。</li>
+      <li><b>Arm vs 立即开始</b>：Arm 进入触发条件等待（适合台架场景"踩油门到 3000 rpm 才开始记"）；立即开始是默认快捷动作。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- SCENE 2: 采集 mode · Recording (live data flow)                         -->
+<!-- ===================================================================== -->
+<section class="scene">
+  <div class="scene-head">
+    <span class="scene-tag rec">SCENE 2</span>
+    <h2>采集 · 录制中（实时数据流）</h2>
+    <span class="scene-side">同一窗口 · 点 Record 后的状态</span>
+  </div>
+  <p class="scene-tagline">中间从"已选信号卡片"切换为多通道 live strip。每张图右上是当前瞬时值（大字号、等宽），右栏从"录制参数"切换为"实时统计 / 异常计数"。</p>
+
+  <div class="mockup">
+    <div class="mockup-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">Acquisition Cockpit — 采集 · ● RECORDING · 20260514_bench_run01.MF4</span>
+    </div>
+
+    <div class="toolbar">
+      <div class="rec-indicator">
+        <span class="blob"></span>
+        REC 00:01:47
+      </div>
+      <div class="selector" style="opacity: 0.55;"><span class="label-key">A2L</span><span class="label-val">ecu_2.1.a2l</span></div>
+      <div class="selector" style="opacity: 0.55;"><span class="label-key">输出</span><span class="label-val">20260514_bench_run01.MF4</span></div>
+      <div class="toolbar-divider"></div>
+      <div class="segment" style="opacity: 0.55;">
+        <div class="seg active">采集</div>
+        <div class="seg">回放</div>
+        <div class="seg">历史</div>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button class="btn lg"><span class="ico">⏸</span>暂停</button>
+      <button class="btn lg"><span class="ico">▣</span>分段</button>
+      <button class="btn stop"><span class="ico">■</span>Stop & 复盘</button>
+    </div>
+
+    <div class="panes">
+      <!-- LEFT: signal list with live values -->
+      <aside class="pane-left">
+        <div class="pane-head">
+          <span class="ttl">通道 (12 active)</span>
+          <span class="sub">点击 = 主图聚焦</span>
+        </div>
+        <div class="pane-body">
+          <div class="a2l-tree">
+            <div class="row l1"><span>RECORDING · 100 Hz ▾</span></div>
+            <div class="row l2 selected">
+              <span class="check on" style="background: #2563eb; border-color: #2563eb;">✓</span>
+              <span class="name">EngSpdAvg</span>
+              <span style="font-family: monospace; font-weight: 700; color: var(--blue);">1842</span>
+            </div>
+            <div class="row l2">
+              <span class="check on" style="background: #059669; border-color: #059669;">✓</span>
+              <span class="name">VehSpd_FL</span>
+              <span style="font-family: monospace; font-weight: 700;">42.3</span>
+            </div>
+            <div class="row l2">
+              <span class="check on" style="background: #dc2626; border-color: #dc2626;">✓</span>
+              <span class="name">VehSpd_FR</span>
+              <span style="font-family: monospace; font-weight: 700;">42.5</span>
+            </div>
+            <div class="row l2">
+              <span class="check on" style="background: #ea580c; border-color: #ea580c;">✓</span>
+              <span class="name">StgWhlAng</span>
+              <span style="font-family: monospace; font-weight: 700;">−4.2</span>
+            </div>
+            <div class="row l2">
+              <span class="check on" style="background: #0891b2; border-color: #0891b2;">✓</span>
+              <span class="name">EngTrqAct</span>
+              <span style="font-family: monospace; font-weight: 700;">128</span>
+            </div>
+            <div class="row l2">
+              <span class="check on" style="background: #7c3aed; border-color: #7c3aed;">✓</span>
+              <span class="name">ThrPedalPos</span>
+              <span style="font-family: monospace; font-weight: 700;">18</span>
+            </div>
+            <div class="row l2">
+              <span class="check on" style="background: #be123c; border-color: #be123c;">✓</span>
+              <span class="name">BrkPedalPos</span>
+              <span style="font-family: monospace; font-weight: 700;">0</span>
+            </div>
+            <div class="row l1" style="margin-top: 8px;"><span>RECORDING · 10 Hz ▾</span></div>
+            <div class="row l2">
+              <span class="check on" style="background: #64748b; border-color: #64748b;">✓</span>
+              <span class="name">CoolantT</span>
+              <span style="font-family: monospace; font-weight: 700;">86.4</span>
+            </div>
+            <div class="row l2">
+              <span class="check on" style="background: #1e40af; border-color: #1e40af;">✓</span>
+              <span class="name">OilT</span>
+              <span style="font-family: monospace; font-weight: 700;">94.0</span>
+            </div>
+            <div class="row l2"><span class="check on" style="background: #047857; border-color: #047857;">✓</span><span class="name">EngTrqDes</span><span style="font-family: monospace; font-weight: 700;">132</span></div>
+            <div class="row l2"><span class="check on" style="background: #b45309; border-color: #b45309;">✓</span><span class="name">FuelMassFlow</span><span style="font-family: monospace; font-weight: 700;">14.8</span></div>
+            <div class="row l2"><span class="check on" style="background: #475569; border-color: #475569;">✓</span><span class="name">AmbientT</span><span style="font-family: monospace; font-weight: 700;">22.1</span></div>
+          </div>
+        </div>
+        <div class="a2l-foot">
+          录制中 · 已写入 <b>248 kB</b> · 文件大小估算 <b>~ 1.5 MB/min</b>
+        </div>
+      </aside>
+
+      <!-- CENTER: live strips -->
+      <main class="pane-center">
+        <div class="center-tools">
+          <span style="font-size: 12px; font-weight: 700;">实时数据流</span>
+          <span class="chip on">last 30s</span>
+          <span class="chip">last 5min</span>
+          <span class="chip">全程</span>
+          <span style="flex: 1;"></span>
+          <button class="btn ghost"><span class="ico">⊟</span>布局…</button>
+          <button class="btn ghost"><span class="ico">↕</span>y-auto</button>
+        </div>
+        <div class="live-stage">
+          <div class="live-card">
+            <div class="head">
+              <span style="display: inline-block; width: 10px; height: 10px; background: #2563eb; border-radius: 2px;"></span>
+              <span class="name">EngSpdAvg</span>
+              <span class="unit">rpm</span>
+              <span class="stats">min 820 · max 1980 · μ 1574</span>
+              <span class="val">1842</span>
+            </div>
+            <svg viewBox="0 0 800 60" preserveAspectRatio="none">
+              <line x1="0" y1="50" x2="800" y2="50" stroke="#eef2f7"/>
+              <line x1="0" y1="30" x2="800" y2="30" stroke="#eef2f7"/>
+              <line x1="0" y1="10" x2="800" y2="10" stroke="#eef2f7"/>
+              <path d="M0 52 L40 50 L80 46 L120 38 L160 36 L200 32 L240 36 L280 30 L320 24 L360 26 L400 22 L440 28 L480 32 L520 24 L560 20 L600 22 L640 18 L680 24 L720 22 L760 18 L800 16" stroke="#2563eb" stroke-width="1.8" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span style="display: inline-block; width: 10px; height: 10px; background: #059669; border-radius: 2px;"></span>
+              <span class="name">VehSpd_FL</span>
+              <span class="unit">km/h</span>
+              <span class="stats">min 0 · max 58.4 · μ 31.0</span>
+              <span class="val">42.3</span>
+            </div>
+            <svg viewBox="0 0 800 60" preserveAspectRatio="none">
+              <line x1="0" y1="50" x2="800" y2="50" stroke="#eef2f7"/>
+              <line x1="0" y1="30" x2="800" y2="30" stroke="#eef2f7"/>
+              <line x1="0" y1="10" x2="800" y2="10" stroke="#eef2f7"/>
+              <path d="M0 56 L40 52 L80 50 L120 46 L160 44 L200 42 L240 38 L280 36 L320 34 L360 30 L400 28 L440 26 L480 24 L520 22 L560 22 L600 24 L640 22 L680 20 L720 18 L760 16 L800 14" stroke="#059669" stroke-width="1.8" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span style="display: inline-block; width: 10px; height: 10px; background: #ea580c; border-radius: 2px;"></span>
+              <span class="name">StgWhlAng</span>
+              <span class="unit">deg</span>
+              <span class="stats">min −22.1 · max +24.4 · μ −0.2</span>
+              <span class="val">−4.2</span>
+            </div>
+            <svg viewBox="0 0 800 60" preserveAspectRatio="none">
+              <line x1="0" y1="30" x2="800" y2="30" stroke="#eef2f7"/>
+              <path d="M0 28 L30 24 L60 32 L90 38 L120 26 L150 18 L180 22 L210 14 L240 28 L270 36 L300 42 L330 30 L360 26 L390 16 L420 24 L450 38 L480 30 L510 22 L540 14 L570 26 L600 38 L630 32 L660 26 L690 22 L720 30 L750 36 L780 28 L800 30" stroke="#ea580c" stroke-width="1.6" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span style="display: inline-block; width: 10px; height: 10px; background: #0891b2; border-radius: 2px;"></span>
+              <span class="name">EngTrqAct</span>
+              <span class="unit">Nm</span>
+              <span class="stats">min 12 · max 268 · μ 142</span>
+              <span class="val">128</span>
+            </div>
+            <svg viewBox="0 0 800 60" preserveAspectRatio="none">
+              <line x1="0" y1="30" x2="800" y2="30" stroke="#eef2f7"/>
+              <path d="M0 50 L40 48 L80 42 L120 38 L160 32 L200 28 L240 30 L280 26 L320 22 L360 26 L400 32 L440 28 L480 22 L520 18 L560 22 L600 26 L640 30 L680 28 L720 24 L760 30 L800 32" stroke="#0891b2" stroke-width="1.6" fill="none"/>
+            </svg>
+          </div>
+          <div class="live-card">
+            <div class="head">
+              <span style="display: inline-block; width: 10px; height: 10px; background: #64748b; border-radius: 2px;"></span>
+              <span class="name">CoolantT</span>
+              <span class="unit">℃</span>
+              <span class="stats">min 72.1 · max 86.4 · 10 Hz</span>
+              <span class="val">86.4</span>
+            </div>
+            <svg viewBox="0 0 800 60" preserveAspectRatio="none">
+              <line x1="0" y1="30" x2="800" y2="30" stroke="#eef2f7"/>
+              <path d="M0 50 L80 48 L160 46 L240 42 L320 38 L400 32 L480 28 L560 24 L640 20 L720 18 L800 14" stroke="#64748b" stroke-width="1.6" fill="none"/>
+            </svg>
+          </div>
+        </div>
+      </main>
+
+      <!-- RIGHT: live stats -->
+      <aside class="pane-right">
+        <div class="pane-head">
+          <span class="ttl">实时质量监控</span>
+        </div>
+        <div class="pane-body">
+          <div class="live-stat" style="background: rgba(5,150,105,0.06);">
+            <span class="name">写盘速率</span>
+            <span class="now">2.4 <span style="font-size:11px; color:var(--ink-muted);">kB/s</span></span>
+            <span class="sub" style="color: var(--green);">✓ 与预估 14.4 一致（压缩后）</span>
+          </div>
+          <div class="live-stat" style="background: rgba(5,150,105,0.06);">
+            <span class="name">缓冲使用</span>
+            <span class="now" style="color: var(--green);">12%</span>
+            <span class="sub" style="color: var(--green);">✓ 远低于阈值 80%</span>
+          </div>
+          <div class="live-stat" style="background: rgba(234,88,12,0.06);">
+            <span class="name">丢帧</span>
+            <span class="now" style="color: var(--orange);">3</span>
+            <span class="sub" style="color: var(--orange);">⚠ CAN2 t=87s · 已记录</span>
+          </div>
+          <div class="live-stat">
+            <span class="name">CAN1 bus load</span>
+            <span class="now">42%</span>
+            <span class="sub">peak 54% · avg 38%</span>
+          </div>
+          <div class="live-stat">
+            <span class="name">CAN2 bus load</span>
+            <span class="now" style="color: var(--orange);">71%</span>
+            <span class="sub" style="color: var(--orange);">peak 81% · 接近饱和</span>
+          </div>
+          <div class="live-stat">
+            <span class="name">磁盘空间</span>
+            <span class="now">18.2 <span style="font-size:11px; color:var(--ink-muted);">GB</span></span>
+            <span class="sub">够录 ~ 200 小时</span>
+          </div>
+          <div class="live-stat" style="border-bottom: none;">
+            <span class="name">Recorder thread</span>
+            <span class="now" style="color: var(--green); font-size: 12px;">healthy</span>
+            <span class="sub">Qt worker · lag &lt; 8 ms</span>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="statusbar">
+      <div class="grp"><span class="dot r pulse"></span><b style="color: var(--red);">RECORDING</b> · elapsed 00:01:47</div>
+      <div class="grp">samples <b>10 700</b> · 12 ch × 100 Hz</div>
+      <div class="grp">file size <b>248 kB</b> <div class="progress" style="margin-left: 4px;"><i style="width: 18%"></i></div></div>
+      <div class="spacer"></div>
+      <div class="grp">dropped <b style="color: var(--orange);">3</b></div>
+      <div class="grp">disk 18.2 GB free</div>
+    </div>
+  </div>
+
+  <div class="explain">
+    <h4>这屏回答了你的"实时数据流"要求</h4>
+    <ul>
+      <li><b>主区是 5 条 live strip（点 <code>last 30s / last 5min / 全程</code> 切窗口）</b>。每张图右上是当前瞬时值用大字号 + 等宽字体显示——台架前一米外的人也读得清。同窗口可滚动看全部 12 通道。</li>
+      <li><b>左栏成为"信号 · 实时值"快速看板</b>。点击信号 = 在主图聚焦它。颜色和左栏 swatch / 主图 stroke 一致，跟 Analyzer 的 <code>_palette.py</code> 是同一套配色。</li>
+      <li><b>右栏切到"质量监控"</b>：写盘速率、缓冲、丢帧、bus load、磁盘空间——录制时唯一需要紧盯的几个数字，每个有"健康 / 警告 / 危险"语义颜色。</li>
+      <li><b>顶栏左上的 REC 00:01:47 红色脉动指示器是状态唯一来源真理。</b> 不管 toolbar 切到哪个 mode、滚到哪一行，这个指示器都告诉你"还在录"。</li>
+      <li><b>底部 Stop & 复盘 是大号红色主按钮。</b> 点了之后自动停掉 recorder、关闭文件、跑 preflight、弹复盘模态（见 SCENE 3）。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- SCENE 3: 复盘 modal — appears after Stop                                -->
+<!-- ===================================================================== -->
+<section class="scene">
+  <div class="scene-head">
+    <span class="scene-tag done">SCENE 3</span>
+    <h2>复盘 · 录完按 Stop 后自动弹出</h2>
+    <span class="scene-side">不是独立 mode · 是 modal · 关掉就回到采集</span>
+  </div>
+  <p class="scene-tagline">Preflight 自动跑完展示结果（沿用 <code style="background: var(--surface-mute); padding:1px 4px; border-radius:3px;">acquisition/preflight.py</code>），下面 4 个字段是 manifest 最关键字段——填了点保存就归档进 <code style="background: var(--surface-mute); padding:1px 4px; border-radius:3px;">data/runs/manifest.yaml</code>。不想存就点丢弃。</p>
+
+  <div class="modal-wrap">
+    <div class="modal">
+      <div class="modal-head">
+        <div class="ttl">录制完成 · 复盘</div>
+        <div class="sub">
+          <span class="filename">20260514_bench_run01.MF4</span>
+          · 02:14 时长 · 1.6 MB · 14 200 samples
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="preflight-result">
+          <div class="row">
+            <span class="ok">✓</span>
+            <span class="k">采样率</span>
+            <span class="v">100.0 Hz（12 ch）· 10.0 Hz（4 ch）— 无漂移</span>
+          </div>
+          <div class="row">
+            <span class="ok">✓</span>
+            <span class="k">duration</span>
+            <span class="v">134.20 s（与预估一致）</span>
+          </div>
+          <div class="row">
+            <span class="ok">✓</span>
+            <span class="k">通道完整</span>
+            <span class="v">12 / 12 期望通道均有数据 · 无 NaN</span>
+          </div>
+          <div class="row">
+            <span class="warn">⚠</span>
+            <span class="k">丢帧</span>
+            <span class="v">CAN2 t=87s 丢 3 帧（已写入 problems 数组）</span>
+          </div>
+          <div class="row">
+            <span class="ok">✓</span>
+            <span class="k">SHA-256</span>
+            <span class="v mono">e91c4d… b8a3</span>
+          </div>
+          <div class="row">
+            <span class="ok">✓</span>
+            <span class="k">兼容 Analyzer</span>
+            <span class="v">通过 <code style="background: var(--surface-mute); padding:1px 4px; border-radius:3px; font-size:11px;">DataLoader.load_mf4()</code> 解析（自动 smoke）</span>
+          </div>
+        </div>
+        <h3 style="margin-bottom: 10px; font-size: 12px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.6px;">归档信息</h3>
+        <div class="meta-form">
+          <div class="field">
+            <label>scenario</label>
+            <div class="input">bench_test</div>
+          </div>
+          <div class="field">
+            <label>quality</label>
+            <div class="input">good</div>
+          </div>
+          <div class="field">
+            <label>issue_tags</label>
+            <div class="input">
+              <span class="pill info">bench</span>
+              <span class="pill info">smoke</span>
+              <span class="pill" style="background: var(--surface-mute); border:1px dashed var(--hairline-strong); color: var(--ink-muted);">+ 添加</span>
+            </div>
+          </div>
+          <div class="field">
+            <label>sets</label>
+            <div class="input">
+              <span class="pill ok">smoke</span>
+              <span class="pill" style="background: var(--surface-mute); border:1px dashed var(--hairline-strong); color: var(--ink-muted);">+ golden / issue</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost">丢弃（不归档）</button>
+        <div class="spacer"></div>
+        <button class="btn"><span class="ico">▷</span>在 Analyzer 打开</button>
+        <button class="btn primary"><span class="ico">⇩</span>保存并归档</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="explain">
+    <h4>为什么把 Preflight 和 Manifest 折进模态而非独立 mode</h4>
+    <ul>
+      <li><b>这是录完后的最自然时刻。</b> 你刚知道文件长啥样，对它的 quality / scenario 印象最清楚。这时候让你填 4 个字段是合理的；过了 1 小时再来填，要重新打开文件、重新看一遍——人会偷懒不填。</li>
+      <li><b>Preflight 不是单独的"工序"</b>。它就是录制完成后的"自动健康检查"，应当无需用户操作。复盘模态展示结果，用户只在出错时关心细节（点开 problems 列表）。</li>
+      <li><b>不强求填字段。</b> 点"保存并归档"按钮就归档（manifest 字段尽量自动补全）。点"丢弃"就当没录过——bench 上误触 Record 的情况很常见，需要这个出口。</li>
+      <li><b>"在 Analyzer 打开"按钮是跨窗联动</b>：刚录的文件直接喂给 Analyzer 进程做信号分析。这是 A 双窗设计的最大价值兑现点。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- SCENE 4: 历史 mode — the asset library (de-prioritized)                  -->
+<!-- ===================================================================== -->
+<section class="scene">
+  <div class="scene-head">
+    <span class="scene-tag history">SCENE 4</span>
+    <h2>历史 · 资产库（旧的"资产"屏，搬到这里）</h2>
+    <span class="scene-side">不是默认视图 · 找历史 MF4 时才进来</span>
+  </div>
+  <p class="scene-tagline">这就是你截图问的那张表，回答的问题是"上次某某 ripple 数据在哪 / 还在 NAS 上吗 / SHA 还对得上吗"——roadmap §3 资产库需求。<b>注意：现在它是次要 tab，不是开屏画面。</b></p>
+
+  <div class="mockup">
+    <div class="mockup-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">Acquisition Cockpit — 历史 · 142 文件 · 4 平台</span>
+    </div>
+
+    <div class="toolbar">
+      <div class="selector"><span class="label-key">A2L</span><span class="label-val">ecu_2.1.a2l</span></div>
+      <div class="toolbar-divider"></div>
+      <div class="segment">
+        <div class="seg">采集</div>
+        <div class="seg">回放</div>
+        <div class="seg active">历史</div>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button class="btn"><span class="ico">⬇</span>同步 NAS</button>
+      <button class="btn"><span class="ico">⇪</span>导出 Manifest</button>
+      <button class="btn primary"><span class="ico">●</span>回到采集</button>
+    </div>
+
+    <div class="panes" style="grid-template-columns: 200px 1fr; height: 460px;">
+      <aside class="pane-left">
+        <div class="pane-head">
+          <span class="ttl">分组</span>
+        </div>
+        <div class="pane-body padded">
+          <div class="a2l-tree">
+            <div class="row l1 selected"><span style="font-size: 11.5px;">▼ 按平台 / 车型</span></div>
+            <div class="row l2">X04C <span style="margin-left:auto; font-size:10.5px; color:var(--ink-muted);">87</span></div>
+            <div class="row l2">X06A <span style="margin-left:auto; font-size:10.5px; color:var(--ink-muted);">28</span></div>
+            <div class="row l2">X12J <span style="margin-left:auto; font-size:10.5px; color:var(--ink-muted);">27</span></div>
+            <div class="row l1" style="margin-top: 10px;"><span style="font-size: 11.5px;">按数据集</span></div>
+            <div class="row l2">smoke <span style="margin-left:auto; font-size:10.5px; color:var(--ink-muted);">6</span></div>
+            <div class="row l2">golden <span style="margin-left:auto; font-size:10.5px; color:var(--ink-muted);">14</span></div>
+            <div class="row l2">issue <span style="margin-left:auto; font-size:10.5px; color:var(--ink-muted);">22</span></div>
+            <div class="row l1" style="margin-top: 10px;"><span style="font-size: 11.5px;">按 tag</span></div>
+            <div class="row l2">ripple <span style="margin-left:auto; font-size:10.5px; color:var(--ink-muted);">9</span></div>
+            <div class="row l2">baseline <span style="margin-left:auto; font-size:10.5px; color:var(--ink-muted);">11</span></div>
+            <div class="row l2">cold_start <span style="margin-left:auto; font-size:10.5px; color:var(--ink-muted);">7</span></div>
+          </div>
+        </div>
+      </aside>
+      <main class="pane-center">
+        <div class="center-tools">
+          <input class="search" style="margin: 0; width: 220px;" placeholder="按 vehicle / scenario 搜索…">
+          <span class="chip on">platform: X04C</span>
+          <span class="chip">issue: ripple</span>
+          <span style="flex: 1;"></span>
+          <span style="font-size: 11px; color: var(--ink-muted);">7 条命中 · 排序 by 日期 ↓</span>
+        </div>
+        <div style="flex: 1; overflow: auto; background: var(--surface-base);">
+          <table class="assets">
+            <thead><tr><th>文件 / 工况</th><th>车型 · ECU SW</th><th>Fs · Duration</th><th>SHA</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td><div class="name">run01 · low-speed steering</div><div class="filename">20260512_x04c_low_temp_ripple_run01.MF4</div></td><td>X04C_PPV_01 · 2.1.0</td><td>1.0 kHz · 28.4 s</td><td><span class="pill ok">✓</span></td><td><span class="pill info">golden</span></td></tr>
+              <tr><td><div class="name">run02 · low-speed steering</div><div class="filename">20260512_x04c_low_temp_ripple_run02.MF4</div></td><td>X04C_PPV_01 · 2.1.0</td><td>800 Hz · 31.0 s</td><td><span class="pill ok">✓</span></td><td><span class="pill warn">Fs drift</span></td></tr>
+              <tr><td><div class="name">run03 · idle</div><div class="filename">20260512_x04c_low_temp_ripple_run03.MF4</div></td><td>X04C_PPV_01 · 2.1.0</td><td>1.0 kHz · 12.7 s</td><td><span class="pill ok">✓</span></td><td><span class="pill info">golden</span></td></tr>
+              <tr><td><div class="name">stationary noise</div><div class="filename">20260430_x04c_stationary_baseline.MF4</div></td><td>X04C_PPV_02 · 2.0.3</td><td>2.0 kHz · 60.0 s</td><td><span class="pill ok">✓</span></td><td><span class="pill ok">ok</span></td></tr>
+              <tr><td><div class="name">ripple confirmation</div><div class="filename">20260418_x04c_ripple_after_doffset.MF4</div></td><td>X04C_PPV_01 · 2.0.4</td><td>1.0 kHz · 22.0 s</td><td><span class="pill ok">✓</span></td><td><span class="pill info">issue</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </main>
+    </div>
+
+    <div class="statusbar">
+      <div class="grp"><span class="dot g"></span>NAS synced</div>
+      <div class="grp">142 文件 · 7 条命中</div>
+      <div class="spacer"></div>
+      <div class="grp">v0.4.0-acq</div>
+    </div>
+  </div>
+
+  <div class="explain">
+    <h4>这就是你截图里那张表 — 现在它在它该在的地方</h4>
+    <ul>
+      <li><b>开发流程里只会偶尔进来：</b> 想找上个月的 ripple 数据做对比、查 SHA 还对不对、看哪些文件应该归 golden 数据集——roadmap §3 里说的那些"按维度检索"的事。</li>
+      <li><b>不再霸占主屏。</b> 想采集就在"采集" tab；想找旧文件就来这里。两件事不再混在一起。</li>
+      <li><b>需要在 Analyzer 里打开就点行右键 / 复盘按钮，跟 SCENE 3 的"在 Analyzer 打开"是同一个通道。</b></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- 总结                                                                    -->
+<!-- ===================================================================== -->
+<section style="background: linear-gradient(180deg, #ffffff 0%, #f1f5ff 100%); border: 1px solid #c7d2fe; border-radius: 14px; padding: 24px 28px; margin-top: 32px;">
+  <h2 style="color: var(--blue); margin-bottom: 6px;">回到你的 3 个问题</h2>
+  <ol style="font-size: 13px; line-height: 1.75; margin: 12px 0 0 22px;">
+    <li><b>"5 个 mode 干嘛的"：</b> 答案是它们错位了——5 个 mode 都是"事后"工具。v2 砍到 3 个 mode（采集 / 回放 / 历史），采集本身就是默认。</li>
+    <li><b>"采集时需要数据流窗口"：</b> SCENE 2 就是。Live strip + 大字号瞬时值 + 实时质量监控 — 主视图就是看流。</li>
+    <li><b>"从 A2L 选好参数变量不就行了"：</b> 是的。SCENE 1 左栏就是 A2L 树勾选 — 12 项一选完，立即出预估带宽和待录卡片，按 Record 就走。Preflight / Manifest 是录完以后的事，不进主流程。</li>
+  </ol>
+</section>
+
+</body>
+</html>
