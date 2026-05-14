@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -71,10 +70,6 @@ def main() -> int:
     manifest_path = REPO_ROOT / args.manifest
     if not manifest_path.exists():
         print(f"{manifest_path} not found; skipped local MF4 smoke dataset")
-        return 0
-
-    if shutil.which(python[0]) is None and not Path(python[0]).exists():
-        print(f"python executable {python[0]} missing; skipped regression")
         return 0
 
     rc = _run(

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -9,14 +10,16 @@ def write_single_signal_mf4(
     *,
     signal_name: str,
     unit: str,
-    timestamps: list[float],
-    samples: list[float],
+    timestamps: Sequence[float] | np.ndarray,
+    samples: Sequence[float] | np.ndarray,
 ) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     ts = np.asarray(timestamps, dtype=float)
     vals = np.asarray(samples, dtype=float)
+    if ts.ndim != 1 or vals.ndim != 1:
+        raise ValueError("timestamps and samples must be 1-D")
     if ts.shape != vals.shape:
         raise ValueError("timestamps and samples must have the same length")
     if ts.size == 0:

@@ -1,18 +1,13 @@
 import json
 
-import numpy as np
-from asammdf import MDF, Signal
+import pytest
 
 from mf4_analyzer.acquisition.preflight import analyze_mf4
+from tests._helpers.mf4_factory import write_single_channel_mf4
 
 
 def _write_mf4(path, name="sig", unit="V"):
-    t = np.array([0.0, 0.01, 0.02, 0.03], dtype=float)
-    y = np.array([1.0, 2.0, 3.0, 4.0], dtype=float)
-    mdf = MDF(version="4.10")
-    mdf.append([Signal(samples=y, timestamps=t, name=name, unit=unit)])
-    mdf.save(str(path), overwrite=True)
-    mdf.close()
+    write_single_channel_mf4(path, name=name, unit=unit)
 
 
 def test_analyze_mf4_reports_ok_for_valid_file(tmp_path):
@@ -25,7 +20,7 @@ def test_analyze_mf4_reports_ok_for_valid_file(tmp_path):
     assert result.rows == 4
     assert "vehicle_speed" in result.channels
     assert result.missing_channels == ()
-    assert abs(result.duration_s - 0.03) < 1e-12
+    assert result.duration_s == pytest.approx(0.03, abs=1e-9)
     assert result.units["vehicle_speed"] == "km/h"
 
 

@@ -4,18 +4,14 @@ import sys
 
 import numpy as np
 import pytest
-from asammdf import MDF, Signal
 
 from mf4_analyzer.acquisition.regression import build_snapshot, compare_snapshot
+from tests._helpers.mf4_factory import write_single_channel_mf4
 
 
 def _write_mf4(path, offset=0.0):
-    t = np.array([0.0, 0.01, 0.02, 0.03], dtype=float)
-    y = np.array([1.0, 2.0, 3.0, 4.0], dtype=float) + offset
-    mdf = MDF(version="4.10")
-    mdf.append([Signal(samples=y, timestamps=t, name="sig", unit="V")])
-    mdf.save(str(path), overwrite=True)
-    mdf.close()
+    samples = np.array([1.0, 2.0, 3.0, 4.0], dtype=float) + offset
+    write_single_channel_mf4(path, name="sig", samples=samples)
 
 
 def test_build_snapshot_contains_stable_metrics(tmp_path):

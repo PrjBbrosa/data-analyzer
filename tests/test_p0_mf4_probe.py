@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from can_logger.p0.mf4_probe import write_single_signal_mf4

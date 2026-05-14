@@ -12,7 +12,7 @@ VALID_PATH_KINDS = ("local", "lfs", "external")
 _VALID_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Mf4DatasetEntry:
     id: str
     path: str
@@ -92,6 +92,8 @@ def load_manifest(path: str | Path) -> list[Mf4DatasetEntry]:
     manifest_path = Path(path)
     with manifest_path.open("r", encoding="utf-8") as f:
         raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise ValueError(f"manifest must be a JSON object, got {type(raw).__name__}")
     if raw.get("version") != 1:
         raise ValueError(f"unsupported manifest version: {raw.get('version')!r}")
     entries = raw.get("entries")

@@ -114,16 +114,16 @@ def analyze_mf4(
     channel_tuple = tuple(channels)
 
     resolved_signals: dict[str, str] = {}
-    expected_raw = expected_channels
+    effective_expected = expected_channels
     if signal_config_root and vehicle:
         from .signals import load_vehicle_mapping, resolve_standard_signals
 
         mapping = load_vehicle_mapping(signal_config_root, vehicle)
         resolved_signals = resolve_standard_signals(channel_tuple, mapping)
-        expected_raw = tuple(
+        effective_expected = tuple(
             resolved_signals.get(ch, ch) for ch in expected_channels
         )
-    missing = tuple(ch for ch in expected_raw if ch not in channel_tuple)
+    missing = tuple(ch for ch in effective_expected if ch not in channel_tuple)
     if missing:
         problems.append("expected channels missing")
 
@@ -133,10 +133,17 @@ def analyze_mf4(
     numeric_cols = [col for col in df.columns if col != "Time"]
     if not numeric_cols:
         problems.append("no numeric signal channels")
+    bad_cols = []
     for col in numeric_cols:
         vals = np.asarray(df[col], dtype=float)
         if np.any(~np.isfinite(vals)):
-            problems.append(f"{col} contains non-finite values")
+            bad_cols.append(col)
+    if bad_cols:
+        preview = ", ".join(bad_cols[:5])
+        suffix = f" (+{len(bad_cols) - 5} more)" if len(bad_cols) > 5 else ""
+        problems.append(
+            f"{len(bad_cols)} channel(s) contain non-finite values: {preview}{suffix}"
+        )
 
     return PreflightResult(
         path=str(p),

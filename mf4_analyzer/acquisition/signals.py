@@ -31,7 +31,10 @@ def load_vehicle_mapping(root: str | Path, vehicle: str) -> VehicleSignalMapping
         raise FileNotFoundError(path)
     with path.open("r", encoding="utf-8") as f:
         raw = json.load(f)
-    aliases = _coerce_aliases(raw.get("aliases", {}))
+    aliases_raw = raw.get("aliases") or {}
+    if not isinstance(aliases_raw, dict):
+        raise ValueError("aliases must be a JSON object")
+    aliases = _coerce_aliases(aliases_raw)
     return VehicleSignalMapping(vehicle=str(raw.get("vehicle", vehicle)), aliases=aliases)
 
 
