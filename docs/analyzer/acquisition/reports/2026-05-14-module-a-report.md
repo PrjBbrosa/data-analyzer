@@ -27,9 +27,9 @@ regression primitives shipped here.
 
 | Gate | Status | Evidence |
 |------|--------|----------|
-| A1 — Manifest schema + loader | green | `tests/test_acquisition_manifest.py` (5 tests) covers required fields, type coercion, and rejection of malformed inputs; `data/manifest.example.json` doubles as a fixture and human-readable template. |
-| A2 — Preflight check (channel + path) | green | `tests/test_acquisition_preflight.py` (3 tests) + CLI smoke: `preflight_valid` exit=0, `preflight_missing_channel` exit=1, `preflight_missing_path_default` exit=0 (skip-note), `preflight_missing_path_require_exists` exit=2. |
-| A3 — Regression snapshot harness | green | `tests/test_acquisition_regression.py` (4 tests) covers snapshot write, load, and diff semantics; `data/snapshots/.gitkeep` reserves the on-disk path. |
+| A1 — Manifest schema + loader | green | `tests/test_acquisition_manifest.py` had 5 tests at Module A handoff; current checkout has 10 test definitions after later required-`sha256` and manifest-id polish. `data/manifest.example.json` doubles as a fixture and human-readable template. |
+| A2 — Preflight check (channel + path) | green | `tests/test_acquisition_preflight.py` had 3 tests at Module A handoff; current checkout has 8 test definitions after alias, loader-failure, and sha256-skip polish. CLI smoke covered `preflight_valid` exit=0, `preflight_missing_channel` exit=1, `preflight_missing_path_default` exit=0 (skip-note), `preflight_missing_path_require_exists` exit=2. |
+| A3 — Regression snapshot harness | green | `tests/test_acquisition_regression.py` had 4 tests at Module A handoff; current checkout has 11 test definitions after missing-channel, new-channel, NaN, CLI-failure, and endian-stability polish. `data/snapshots/.gitkeep` reserves the on-disk path. |
 | A4 — Synthetic signal pin (FFT + COT) | green | `tests/synthetic/test_fft_known_tone.py` and `tests/synthetic/test_cot_known_order.py` (2 tests) pin FFT against a synthetic single-tone input and COT against a known-order synthetic ramp; COT ratio threshold (5×) passed first try. |
 
 ## Commits
@@ -46,6 +46,7 @@ regression primitives shipped here.
 - Baseline before Module A: **517** tests passing.
 - After Module A: **531** tests passing (`tests_after = 531`).
 - New tests per task: Task 1 +5, Task 2 +3, Task 3 +4, Task 4 +2 — total +14 (5+3+4+2 = 14).
+- **Post-execution correction (2026-05-15):** the three counts above are historical Module A handoff counts, not current branch totals. Current inventory by test definition is manifest 10 + preflight 8 + regression 11 + synthetic 2; use fresh pytest output for current PASS/FAIL.
 - CLI smoke coverage on `scripts/preflight.py` exercised four distinct
   exit codes: `0` (valid manifest), `1` (missing channel), `0` (missing
   path, default skip), and `2` (missing path under `--require-exists`).

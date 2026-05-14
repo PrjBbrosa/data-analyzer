@@ -5,14 +5,14 @@
 
 ## Summary
 
-Module C delivered the validation workflow and documentation layer for the acquisition program in three commits. Task 1 added four markdown templates under `docs/analyzer/acquisition/templates/`, Task 2 introduced the consolidated `Validation_Runbook.md` (Change Type Matrix + Template Locations), and Task 3 replaced the earlier bash draft with a cross-platform Python smoke runner at `scripts/acquisition_smoke.py`. All four acceptance gates (C1–C4) PASS. The runner stays inside repo-owned tooling discipline: `sys.executable` over bare `python`, `pathlib` over string path math, `subprocess.run(shell=False)`, and an explicit `os.name == 'nt'` branch for Windows venv layout.
+Module C delivered the validation workflow and documentation layer for the acquisition program in three commits. Task 1 added four markdown templates under `docs/analyzer/acquisition/templates/`, Task 2 introduced the consolidated `Validation_Runbook.md` (Change Type Matrix + Template Locations), and Task 3 replaced the earlier bash draft with a cross-platform Python smoke runner at `scripts/acquisition_smoke.py`. All four acceptance gates (C1–C4) PASS. The runner stays inside repo-owned tooling discipline: `sys.executable` over bare `python`, `pathlib` over string path math, `subprocess.call(cmd, cwd=REPO_ROOT, env=env)` with no shell, and an explicit `os.name == 'nt'` branch for Windows venv layout.
 
 ## Acceptance gates
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
 | C1 | PASS | All 4 templates exist under `docs/analyzer/acquisition/templates/` and are referenced from `Validation_Runbook.md` §Template Locations. |
-| C2 | PASS | `python scripts/acquisition_smoke.py` returns exit 0 with Module A tests passing and `data/manifest.local.json` absent (verified after Module B committed at `616b5d5`). |
+| C2 | PASS | `python scripts/acquisition_smoke.py` returns exit 0 after the acquisition/signal/smoke/synthetic test targets pass and `data/manifest.local.json` is absent (verified after Module B committed at `616b5d5`; target list corrected below for the current checkout). |
 | C3 | PASS | Change Type Matrix in `Validation_Runbook.md` covers UI / signal-algorithm / MF4-import / DBC-A2L / new-vehicle / release-candidate per roadmap. |
 | C4 | PASS | `templates/issue_capture.md` encodes the full roadmap §12 procedure: 10–60s clip, `sets:[issue]`, failing test FIRST, fix, promote. |
 
@@ -26,10 +26,10 @@ Module C delivered the validation workflow and documentation layer for the acqui
 
 ## Tests
 
-The smoke runner is self-checking: its exit code IS the acceptance signal, so there is no separate pytest suite for it.
+The smoke runner is self-checking: its exit code IS the acceptance signal, and Stage 3 polish now adds `tests/test_acquisition_smoke.py` to pin the runner's own control flow.
 
-- **`--skip-regression` mode:** exit 0; 19 tests pass (Module A's unit tests plus Module B's auto-discovered signal tests).
-- **Default mode at final state (`616b5d5`):** exit 0 expected. Stage 1 (regression suite) passes now that Module B's preflight edits are committed. Stage 2 detects `data/manifest.local.json` is absent, prints the skip note, and exits 0 — this is the documented "no local manifest, no MF4 round-trip" path.
+- **`--skip-regression` mode, current checkout:** targets 39 acquisition/synthetic test functions by inventory: manifest 10 + preflight 8 + regression 11 + signals 5 + smoke 3 + synthetic 2. This corrects the stale 19-test claim; the runner/pytest output remains the execution evidence.
+- **Default mode:** runs the same unit/synthetic target list first. If `data/manifest.local.json` is absent, it prints the skip note and exits 0; if present, it runs `scripts/regression.py smoke --manifest <path>` and propagates failure as exit 1.
 
 ## Files changed
 
@@ -39,16 +39,17 @@ The smoke runner is self-checking: its exit code IS the acceptance signal, so th
 - `docs/analyzer/acquisition/templates/issue_capture.md`
 - `docs/analyzer/acquisition/Validation_Runbook.md`
 - `scripts/acquisition_smoke.py`
+- `tests/test_acquisition_smoke.py` (Stage 3 polish coverage for the runner)
 
 ## Symbols touched
 
-The only code symbols touched in Module C live inside `scripts/acquisition_smoke.py`: the module-level constants `REPO_ROOT`, `UNIT_TESTS`, and `SIGNAL_TESTS`; and the helper functions `_python_executable`, `_run`, and `main`. Every other Module C deliverable is markdown (templates and the runbook), so there are no other code surfaces in scope.
+The only code symbols touched in Module C live inside `scripts/acquisition_smoke.py`: the module-level constants `REPO_ROOT` and `UNIT_TESTS`; and the helper functions `_python_executable`, `_run`, and `main`. The earlier `SIGNAL_TESTS` constant has been removed by Stage 3 polish; signal and smoke tests are now listed directly in `UNIT_TESTS`. Every other Module C deliverable is markdown (templates and the runbook) or runner-focused tests, so there are no other code surfaces in scope.
 
 ## Cross-platform discipline
 
 - Uses `sys.executable` rather than a bare `python` invocation.
 - Uses `pathlib` for all path construction instead of `os.path` string operations.
-- Calls `subprocess.run` with `shell=False`.
+- Calls `subprocess.call(cmd, cwd=REPO_ROOT, env=env)`, without `shell=True`.
 - Branches on `os.name == 'nt'` to resolve the venv interpreter path (`Scripts` on Windows vs `bin` on POSIX).
 - Has no bash shebang in the `.py` file.
 - No stale `acquisition_smoke.sh` existed in the tree; the planned `rm` step was a no-op.

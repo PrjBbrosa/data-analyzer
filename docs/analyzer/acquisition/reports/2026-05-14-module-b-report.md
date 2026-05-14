@@ -26,8 +26,8 @@ green across the handoff.
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| B1 — Alias module loads + validates | PASS | `tests/test_acquisition_signals.py` 4/4 green; malformed alias rejected with `ValueError`. |
-| B2 — Preflight reports resolved + unresolved aliases | PASS | `tests/test_acquisition_preflight.py` 6/6 green, including two new positive tests for resolved + missing aliases. |
+| B1 — Alias module loads + validates | PASS | `tests/test_acquisition_signals.py` was 4/4 green at Module B handoff; current checkout has 5 test definitions after the checked-in `X04C.example` config guard. Malformed alias rejection still uses `ValueError`. |
+| B2 — Preflight reports resolved + unresolved aliases | PASS | `tests/test_acquisition_preflight.py` was 6/6 green at Module B handoff; current checkout has 8 test definitions after loader-failure and sha256-skip polish, including the resolved + missing alias tests. |
 | B3 — Module A legacy parity preserved | PASS | `test_analyze_mf4_without_signal_config_keeps_legacy_behavior` green; `analyze_mf4` with no signal config behaves identically to Module A. |
 | B4 — Config files parse and resolve | PASS | `configs/signals/standard_signals.json` parses; `configs/signals/vehicles/X04C.example.json` resolves a synthetic raw-channel list end-to-end. |
 
@@ -40,9 +40,14 @@ green across the handoff.
 
 ## Tests
 
-Combined Module A + Module B + P0 hardware-free run: **22 passed, 1 skipped**
+Combined Module A + Module B + P0 hardware-free run at Module B handoff: **22 passed, 1 skipped**
 (5 manifest + 6 preflight + 4 regression + 4 signals + 2 synthetic + 1 P0
 mf4 = 22 passed; the 1 P0 a2l test is env-gated and skipped).
+
+**Post-execution correction (2026-05-15):** do not reuse the 22/1 count as a
+current branch total. Current test-definition inventory after fix stages is
+manifest 10 + preflight 8 + regression 11 + signals 5 + smoke 3 + synthetic 2
+plus P0 hardware-free 8. Fresh pytest output is still required for PASS/FAIL.
 
 Module B added **7 new tests** total:
 

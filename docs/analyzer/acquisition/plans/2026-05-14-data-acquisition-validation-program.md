@@ -122,6 +122,13 @@ One feature branch per module (each module's spec spells out its branch). Do **n
 
 Module P0 has its own branch (`feat/xcp-acquisition-p0`) per its own plan and does not mix into the offline branches.
 
+**Post-execution note (2026-05-15):** The 2026-05-14 execution used a single
+`feat/acquisition-validation-program` branch for all four modules (A/B/C/P0)
+instead of one branch per module. This worked because specialists' file scopes
+were disjoint, but it weakens the independent-revert boundary the plan
+originally specified. Follow-up plan
+`2026-05-15-acquisition-validation-fixes.md` uses one branch per stage.
+
 ---
 
 ## Final Verification (Program Level)
