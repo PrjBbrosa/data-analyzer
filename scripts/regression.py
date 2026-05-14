@@ -42,7 +42,12 @@ def main() -> int:
             else:
                 print(f"{entry.id}: SKIP — optional file {mf4_path} absent")
             continue
-        current = build_snapshot(mf4_path, channels=entry.expected_channels)
+        try:
+            current = build_snapshot(mf4_path, channels=entry.expected_channels)
+        except ValueError as exc:
+            failed = True
+            print(f"{entry.id}: FAIL — {exc}")
+            continue
         snapshot_path = Path(args.snapshot_dir) / f"{entry.id}.golden.json"
         if args.update or not snapshot_path.exists():
             write_json(snapshot_path, current)

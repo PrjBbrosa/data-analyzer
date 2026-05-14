@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from math import isclose
+import math
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +11,7 @@ from mf4_analyzer.io.loader import DataLoader
 
 
 def _samples_sha256(values: np.ndarray) -> str:
-    arr = np.ascontiguousarray(values, dtype=np.float64)
+    arr = np.ascontiguousarray(values, dtype="<f8")
     return hashlib.sha256(arr.tobytes()).hexdigest()
 
 
@@ -45,7 +45,13 @@ def _metric_dict(values) -> dict[str, float | int | str]:
 def build_snapshot(path: str | Path, *, channels: tuple[str, ...] = ()) -> dict:
     df, loaded_channels, _units = DataLoader.load_mf4(str(path))
     if channels:
-        target_channels = [ch for ch in channels if ch in df.columns]
+        missing = [ch for ch in channels if ch != "Time" and ch not in df.columns]
+        if missing:
+            raise ValueError(
+                f"requested channel not in MF4: {missing[0]}"
+                + (f" (+{len(missing) - 1} more)" if len(missing) > 1 else "")
+            )
+        target_channels = [ch for ch in channels if ch != "Time" and ch in df.columns]
     else:
         target_channels = [ch for ch in loaded_channels if ch != "Time"]
 
@@ -63,9 +69,12 @@ def build_snapshot(path: str | Path, *, channels: tuple[str, ...] = ()) -> dict:
 
 def _within_tol(a, b, *, rel_tol: float, abs_tol: float) -> bool:
     try:
-        return isclose(float(a), float(b), rel_tol=rel_tol, abs_tol=abs_tol)
+        af, bf = float(a), float(b)
     except (TypeError, ValueError):
         return a == b
+    if math.isnan(af) and math.isnan(bf):
+        return True
+    return math.isclose(af, bf, rel_tol=rel_tol, abs_tol=abs_tol)
 
 
 def compare_snapshot(
@@ -113,6 +122,9 @@ def compare_snapshot(
                 diffs.append(
                     f"{ch}.{metric} drift: baseline={baseline_value} current={current_value}"
                 )
+    for ch in current_channels:
+        if ch not in baseline_channels:
+            diffs.append(f"{ch} new in current")
     return diffs
 
 
