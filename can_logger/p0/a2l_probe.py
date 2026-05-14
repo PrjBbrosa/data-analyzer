@@ -25,7 +25,8 @@ def _address_of(measurement) -> int:
     ecu_address = getattr(measurement, "ecu_address", None)
     address = getattr(ecu_address, "address", ecu_address)
     if address is None:
-        return 0
+        name = getattr(measurement, "name", "<unknown>")
+        raise ValueError(f"measurement {name!r} has no ecu_address")
     return int(address)
 
 

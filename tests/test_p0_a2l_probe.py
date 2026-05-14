@@ -18,3 +18,14 @@ def test_p0_real_a2l_has_measurements():
     assert first.name
     assert first.datatype
     assert isinstance(first.address, int)
+
+
+def test_address_of_raises_when_attribute_missing():
+    from can_logger.p0.a2l_probe import _address_of
+
+    class FakeMeasurement:
+        name = "BadMeasurement"
+        # no ecu_address attribute
+
+    with pytest.raises(ValueError, match="BadMeasurement.*ecu_address"):
+        _address_of(FakeMeasurement())
