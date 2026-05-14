@@ -8,6 +8,20 @@
 
 ---
 
+## Capture-First Stance (Update: 2026-05-15)
+
+This module index originally framed the product as "validation workflow". After the 2026-05-15 replay study on `testdoc/*.mf4` (see [`reports/2026-05-15-capture-priority-replay-findings.md`](../reports/2026-05-15-capture-priority-replay-findings.md)), the product framing is restated explicitly:
+
+- The first useful outcome of this product is **recording and saving data**, not validating already-captured MF4.
+- Frame drops, timestamp jumps, bus congestion, and uneven timing are **expected real-world acquisition conditions** that go into capture-health metadata; they are not reasons to fail a capture or block saving the raw MF4.
+- Preflight / replay / alias resolution (Modules A and B) are **post-record diagnostics**. They must never become hard gates on the capture hot path. `analyze_mf4()` returning `ok=False` on a non-monotonic time column is correct as a diagnostic verdict; it is not a recording-success criterion.
+- The next code track is a **CLI-first recorder MVP** (no UI). It can be developed and tested against a fake bus on macOS and does not require the hardware P0 verdict to be PASS to make progress. The cockpit UI design is parked in [`../2026-05-14-cockpit-ui-design-report.md`](../2026-05-14-cockpit-ui-design-report.md); it only ships after CLI recording is stable.
+- The hardware feasibility gate (existing XCP P0) still governs **production DAQ UI on real hardware** — see the updated `## Deferred Until P0 PASS` section below.
+
+This stance does not invalidate Modules A/B/C; it clarifies their role. Validation evidence remains required before any captured MF4 is trusted for downstream FFT/order/regression analysis.
+
+---
+
 ## Source Inputs
 
 This program consolidates:
@@ -77,19 +91,25 @@ Roll-up of each module's gates plus the program-level gate.
 1. **Module A** end-to-end. Foundation is small; ship it first.
 2. **Modules B and C** in parallel branches off `feat/acquisition-offline-foundation` (or `main` after A merges).
 3. **P0** runs whenever Windows + Vector hardware is available; not blocked by A/B/C.
-4. **Production DAQ work (UI tab, streaming, hardware-dependent imports)** is deferred until **both** the program gate G★ is met **and** P0 verdict is PASS or a documented narrow PARTIAL.
+4. **CLI recorder MVP** (the new P1, see capture-priority findings §P1) can start once Module A is in place. It is designed against a fake bus and does **not** wait for P0 PASS, because its acceptance is "MF4 is written and `session_summary.json` is emitted" — independent of real Vector hardware.
+5. **Production DAQ UI on real hardware (cockpit Capture mode, live Vector / XCP streaming, hardware-dependent imports made required)** is deferred until **both** the program gate G★ is met **and** P0 verdict is PASS or a documented narrow PARTIAL.
 
 ---
 
-## Deferred Until P0 PASS
+## Deferred Until P0 PASS (or documented narrow PARTIAL)
 
-Do not implement these until the existing XCP P0 plan has a PASS verdict (or a narrow documented PARTIAL):
+Do not implement these until the existing XCP P0 plan has a **PASS** verdict **or** a documented narrow PARTIAL whose blocker is named and bounded (see §P0 Report 2026-05-14, §Vector Access / §XCP CONNECT And SHORT_UPLOAD for the canonical blocker wording):
 
-- Production DAQ streaming.
-- DAQ UI tab or dock.
-- Realtime plotting of live acquisition values.
-- `requirements.txt` additions for `python-can[vector]`, `pyxcp`, `pya2ldb`, or `pyelftools`.
+- Live DAQ streaming inside the cockpit's Capture state (the live charts wired to a real Vector bus).
+- Making `python-can[vector]`, `pyxcp`, `pya2ldb`, or `pyelftools` required for normal analyzer startup — they remain optional / hardware-gated until P0 clears.
 - Any change that makes acquisition hardware dependencies required for normal analyzer startup.
+
+The following are **NOT** deferred by P0 (explicit allowance — capture-first stance):
+
+- CLI recorder MVP backend (`SessionConfig`, reader/writer threads, bounded queue, `session_summary.json`) — tested against a fake bus.
+- The cockpit UI scaffolding *as a layout / mock-data preview* — design-only iteration; the live Vector wiring is the part that waits.
+- Offline preflight / replay / alias work (Modules A / B / C).
+- Capture-health metadata schema work (dropped frames, queue depth, segment count).
 
 If P0 is BLOCKED because the ECU requires seed/key handshake before SHORT_UPLOAD (a common gating condition not currently exercised by the P0 probes), treat it as PARTIAL pending a follow-up that adds seed/key — and keep working only on:
 
@@ -98,7 +118,8 @@ If P0 is BLOCKED because the ECU requires seed/key handshake before SHORT_UPLOAD
 - synthetic tests,
 - standard signal sidecar,
 - bench/vehicle documentation,
-- resolving the specific P0 blocker.
+- resolving the specific P0 blocker,
+- the CLI recorder MVP backend (fake-bus path).
 
 ---
 

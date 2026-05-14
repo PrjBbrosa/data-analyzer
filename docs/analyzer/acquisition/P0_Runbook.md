@@ -182,8 +182,12 @@ with this run's outcome:
 - `docs/analyzer/acquisition/P0_Runbook.md` contains the actual
   command/output evidence — **THIS DOCUMENT**.
 
-Conclusion: P0 completion gate is in **PARTIAL** state. Do NOT proceed
-to P1 (production DAQ UI) until the verdict is PASS — that requires
-running the Vector Access and XCP CONNECT And SHORT_UPLOAD gates to
-completion on a Windows + Vector + powered-ECU workstation and
-updating this runbook with the actual command output.
+Conclusion: P0 completion gate is in **PARTIAL** state.
+
+**Gate scope (clarified 2026-05-15, see [`reports/2026-05-15-capture-priority-replay-findings.md`](reports/2026-05-15-capture-priority-replay-findings.md)):** this gate governs **production DAQ UI on real Vector hardware** (cockpit Capture state wired to live Vector / XCP). It does **not** govern:
+
+- the CLI recorder MVP backend (fake-bus / synthetic path),
+- cockpit UI scaffolding work that runs against mock data,
+- Modules A / B / C (offline preflight, manifest, regression, alias).
+
+Per the master plan §Deferred Until P0 PASS (or documented narrow PARTIAL), the in-scope deferred work resumes once the verdict is **PASS** or a documented narrow PARTIAL whose blocker is named and bounded. The current PARTIAL with "Vector hardware not present on macOS host" is documented and narrow, but it does not yet authorize hardware-wired UI work — that needs the Vector and XCP CONNECT / SHORT_UPLOAD gates run to completion on a Windows + Vector + powered-ECU workstation, with the actual command output appended above.
