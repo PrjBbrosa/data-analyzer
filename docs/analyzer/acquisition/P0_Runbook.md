@@ -97,17 +97,17 @@ PYTHONPATH=. .venv/bin/python -m can_logger.p0.a2l_probe "$P0_A2L_PATH" --limit 
 Command:
 
 ```text
-(deferred — would be `.\.venv\Scripts\python.exe -m can_logger.p0.vector_probe`
-on the Windows workstation, per P0 plan §Task 4 Step 3)
+.\.venv\Scripts\python.exe -m can_logger.p0.vector_probe --open
 ```
 
-Result: **BLOCKED**.
+Result: **BLOCKED on macOS — hardware not available**.
 
-Reason: requires Vector CAN hardware on Windows; host was macOS
-(Darwin 25.5.0). `python-can[vector]` is not portable to macOS, and
-even with the package installed the `vector` interface needs the
-Vector kernel driver and a physical CANcaseXL or compatible device on
-the bus.
+Reason: code is on disk at `can_logger/p0/vector_probe.py` and imports
+cleanly on macOS without `python-can` installed. Runtime Vector access
+still requires Vector CAN hardware on Windows; host was macOS (Darwin
+25.5.0). `python-can[vector]` is not portable to macOS, and even with
+the package installed the `vector` interface needs the Vector kernel
+driver and a physical CANcaseXL or compatible device on the bus.
 
 Next step: resume on a Windows workstation with Vector CANcaseXL or
 compatible, run the dependency install from the P0 plan §Task 1 Step 4
@@ -123,16 +123,18 @@ allowance.
 Command:
 
 ```text
-(deferred — would be `.\.venv\Scripts\python.exe -m can_logger.p0.xcp_short_upload_probe ...`
-on the Windows workstation, per P0 plan §Task 5 Step 2)
+.\.venv\Scripts\python.exe -m can_logger.p0.xcp_short_upload_probe ...
 ```
 
-Result: **BLOCKED**.
+Result: **BLOCKED on macOS — hardware not available**.
 
-Reason: requires the same Vector hardware as the Vector Access gate
-above, plus a powered ECU on the bus with known cmd_id/resp_id and a
-measurement address (typically sourced from the ECU's A2L). None of
-these are available from the macOS host.
+Reason: code is on disk at `can_logger/p0/xcp_short_upload_probe.py`
+and imports cleanly on macOS without `python-can` or `pyxcp` installed;
+the `decode_raw` helper is hardware-free. Runtime XCP still requires
+the same Vector hardware as the Vector Access gate above, plus a
+powered ECU on the bus with known cmd_id/resp_id and a measurement
+address (typically sourced from the ECU's A2L). None of these are
+available from the macOS host.
 
 Next step: after Vector access is verified, obtain from the calibration
 owner the four target-specific values:
@@ -151,8 +153,11 @@ Verdict: **PARTIAL**
 
 Reasoning: MF4 compatibility test passed (commit `62ae309`); the A2L
 parser is implemented and skip-passes pending a real `P0_A2L_PATH`
-(commit `c5eed55`); the Vector + XCP probes are deferred to a Windows
+(commit `c5eed55`); the Vector + XCP probe modules now exist and import
+cleanly on macOS, but runtime probe execution is deferred to a Windows
 + Vector hardware environment that the macOS host cannot provide.
+Resume path verified to import on macOS; full PASS requires Vector
+hardware on Windows.
 This matches the P0 plan's PARTIAL rule verbatim: "MF4 and A2L passed,
 but a hardware condition blocked Vector or XCP with a narrow next
 action" — the narrow next action is documented inline in the Vector
