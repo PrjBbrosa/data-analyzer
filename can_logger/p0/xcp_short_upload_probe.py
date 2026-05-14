@@ -69,7 +69,13 @@ class RawXcpCanProbe:
             "<BBBBI", CMD_SHORT_UPLOAD, size, 0x00, address_extension, address
         )
         response = self.command(payload)
-        return response[1 : 1 + size]
+        raw = response[1 : 1 + size]
+        if len(raw) != size:
+            raise RuntimeError(
+                f"short XCP SHORT_UPLOAD response: requested size {size} bytes, "
+                f"received {len(raw)} bytes"
+            )
+        return raw
 
 
 def decode_raw(raw: bytes, dtype: str, endian: str):
