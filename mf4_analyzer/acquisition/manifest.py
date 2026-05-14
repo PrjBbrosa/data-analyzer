@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 
 VALID_PATH_KINDS = ("local", "lfs", "external")
+_VALID_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,11 @@ def _entry(raw: dict) -> Mf4DatasetEntry:
     entry_id = str(raw.get("id", "")).strip()
     if not entry_id:
         raise ValueError("entry id is required")
+    if not _VALID_ID.match(entry_id):
+        raise ValueError(
+            f"entry id {entry_id!r} contains invalid characters "
+            f"(allowed: alphanumeric, dash, underscore)"
+        )
     path = str(raw.get("path", "")).strip()
     if not path:
         raise ValueError(f"{entry_id}: path is required")

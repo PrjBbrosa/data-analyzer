@@ -203,3 +203,41 @@ def test_load_manifest_accepts_external_entry_without_sha256(tmp_path):
     entries = load_manifest(manifest)
 
     assert entries[0].sha256 is None
+
+
+@pytest.mark.parametrize("bad_id", ["a/b", "..", "with space", "a..b"])
+def test_load_manifest_rejects_id_with_unsafe_chars(tmp_path, bad_id):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": [
+                    {"id": bad_id, "path": "a.mf4", "sets": ["smoke"], "required": False}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid"):
+        load_manifest(manifest)
+
+
+@pytest.mark.parametrize("good_id", ["abc", "x04c-low-temp", "test_case_01", "abc123"])
+def test_load_manifest_accepts_safe_ids(tmp_path, good_id):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": [
+                    {"id": good_id, "path": "a.mf4", "sets": ["smoke"], "required": False}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    entries = load_manifest(manifest)
+    assert entries[0].id == good_id
