@@ -65,8 +65,8 @@ Avoid bundling all three stages into one branch — Stage 1 has correctness urge
 | Fix-1 | `scripts/regression.py` exits 1 (not 0) when a manifest entry's `expected_channels` includes a name absent from the MF4. Test: `test_compare_snapshot_reports_missing_requested_channel` GREEN. |
 | Fix-2 | `analyze_mf4` on a corrupt/empty MF4 returns `ok=False` with `problems` containing `loader failed: …`, never raises. Test: `test_analyze_mf4_reports_loader_failure_as_problem` GREEN. |
 | Fix-3 | `compare_snapshot` treats `(NaN, NaN)` as equal; reports new channels in current. Tests: `test_compare_snapshot_treats_nan_pair_as_equal` + `test_compare_snapshot_reports_new_channel_in_current` GREEN. |
-| Fix-4 | `_samples_sha256` byte-order portable. Test: `test_samples_sha256_is_byte_order_stable` asserts a fixed hex literal. |
-| Fix-5 | `can_logger/p0/vector_probe.py` + `xcp_short_upload_probe.py` exist and import cleanly on macOS; runtime emits a clear "platform not supported" or "hardware not available" on non-Windows; `P0_Runbook.md` Vector/XCP sections reference real file paths. |
+| Fix-4 | `_samples_sha256` byte-order portable. Test: `test_samples_sha256_is_byte_order_stable` asserts the fixed little-endian hex literal `6bab56d2f81d4b5a2dbf102bf6a6ff7d5211a475fc5f97813f977e8ba714b07d`. |
+| Fix-5 | `can_logger/p0/vector_probe.py` + `xcp_short_upload_probe.py` exist and import cleanly on macOS; `vector_probe.py` emits a clear "Vector interface is only supported on Windows" runtime error on non-Windows; `xcp_short_upload_probe.py` keeps pure decode helpers hardware-free; `P0_Runbook.md` Vector/XCP sections reference real file paths. |
 | Fix-6 | `python scripts/preflight.py <fixture.mf4> --signal-config-root configs/signals --vehicle X04C.example` succeeds in a clean checkout. Test reads the **checked-in** `configs/signals/vehicles/X04C.example.json`, not a tmp fixture. |
 | Fix-7 | `load_manifest` raises `ValueError` for a `required: true` + local entry missing `sha256`. `data/manifest.example.json` continues to parse (it's `required: false`). |
 | Fix-8 | `tests/test_acquisition_smoke.py` covers three paths: `--skip-regression` happy path, manifest-absent exit 0 with skip note, pytest-failure exit 1. |
@@ -367,14 +367,12 @@ def test_samples_sha256_is_byte_order_stable():
     """Hash must be stable across CPU architectures — assert a fixed hex literal
     for a known float64 sequence under little-endian byte order.
     """
-    import hashlib
     import numpy as np
 
     from mf4_analyzer.acquisition.regression import _samples_sha256
 
     arr = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
-    # Pre-computed: hashlib.sha256(arr.astype("<f8").tobytes()).hexdigest()
-    expected = hashlib.sha256(arr.astype("<f8").tobytes()).hexdigest()
+    expected = "6bab56d2f81d4b5a2dbf102bf6a6ff7d5211a475fc5f97813f977e8ba714b07d"
 
     assert _samples_sha256(arr) == expected
 ```
@@ -562,9 +560,156 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 4: Implement `xcp_short_upload_probe.py` with lazy import**
+- [ ] **Step 4: Implement `xcp_short_upload_probe.py` with lazy imports**
 
-Create `can_logger/p0/xcp_short_upload_probe.py` per the P0 plan §Task 5 verbatim, but with `import can` moved inside `main()` so the module imports cleanly on macOS. `decode_raw` and `RawXcpCanProbe` class definitions stay at module level (they don't import `can`).
+Create `can_logger/p0/xcp_short_upload_probe.py`:
+
+```python
+from __future__ import annotations
+
+import argparse
+import struct
+import time
+from typing import Any
+
+
+CMD_CONNECT = 0xFF
+CMD_DISCONNECT = 0xFE
+CMD_SHORT_UPLOAD = 0xF4
+RESP_OK = 0xFF
+
+
+def parse_int(text: str) -> int:
+    return int(text, 0)
+
+
+class RawXcpCanProbe:
+    def __init__(self, bus: Any, *, cmd_id: int, resp_id: int, timeout: float = 0.5):
+        self.bus = bus
+        self.cmd_id = cmd_id
+        self.resp_id = resp_id
+        self.timeout = timeout
+
+    def send(self, payload: bytes) -> None:
+        import can  # type: ignore[import-not-found]
+
+        msg = can.Message(
+            arbitration_id=self.cmd_id,
+            data=payload.ljust(8, b"\x00"),
+            is_extended_id=False,
+        )
+        self.bus.send(msg)
+
+    def recv(self) -> bytes:
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() < deadline:
+            msg = self.bus.recv(timeout=0.05)
+            if msg is None:
+                continue
+            if msg.arbitration_id == self.resp_id:
+                data = bytes(msg.data)
+                if not data:
+                    raise RuntimeError("empty XCP response")
+                return data
+        raise TimeoutError(f"no XCP response on CAN ID 0x{self.resp_id:X}")
+
+    def command(self, payload: bytes) -> bytes:
+        self.send(payload)
+        response = self.recv()
+        if response[0] != RESP_OK:
+            code = response[1] if len(response) > 1 else 0
+            raise RuntimeError(
+                f"negative XCP response: pid=0x{response[0]:02X}, code=0x{code:02X}"
+            )
+        return response
+
+    def connect(self) -> bytes:
+        return self.command(bytes([CMD_CONNECT, 0x00]))
+
+    def disconnect(self) -> None:
+        self.send(bytes([CMD_DISCONNECT]))
+
+    def short_upload(
+        self, *, address: int, size: int, address_extension: int = 0
+    ) -> bytes:
+        payload = struct.pack(
+            "<BBBBI", CMD_SHORT_UPLOAD, size, 0x00, address_extension, address
+        )
+        response = self.command(payload)
+        return response[1 : 1 + size]
+
+
+def decode_raw(raw: bytes, dtype: str, endian: str):
+    endian_prefix = ">" if endian == "big" else "<"
+    formats = {
+        "u8": "B",
+        "s8": "b",
+        "u16": "H",
+        "s16": "h",
+        "u32": "I",
+        "s32": "i",
+        "f32": "f",
+        "f64": "d",
+    }
+    fmt = formats[dtype]
+    needed = struct.calcsize(endian_prefix + fmt)
+    if len(raw) < needed:
+        raise ValueError(f"not enough data for {dtype}: {raw.hex()}")
+    return struct.unpack(endian_prefix + fmt, raw[:needed])[0]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="P0 raw XCP CONNECT + SHORT_UPLOAD probe.")
+    parser.add_argument("--interface", default="vector")
+    parser.add_argument("--channel", default="0")
+    parser.add_argument("--bitrate", type=int, default=500000)
+    parser.add_argument("--app-name", default="CANalyzer")
+    parser.add_argument("--cmd-id", type=parse_int, required=True)
+    parser.add_argument("--resp-id", type=parse_int, required=True)
+    parser.add_argument("--address", type=parse_int, required=True)
+    parser.add_argument("--size", type=int, required=True)
+    parser.add_argument("--address-extension", type=parse_int, default=0)
+    parser.add_argument(
+        "--dtype",
+        choices=["u8", "s8", "u16", "s16", "u32", "s32", "f32", "f64"],
+        default="f32",
+    )
+    parser.add_argument("--endian", choices=["little", "big"], default="little")
+    args = parser.parse_args()
+
+    import can  # type: ignore[import-not-found]
+
+    bus_kwargs = {
+        "interface": args.interface,
+        "channel": args.channel,
+        "bitrate": args.bitrate,
+    }
+    if args.interface == "vector":
+        bus_kwargs["app_name"] = args.app_name
+
+    bus = can.Bus(**bus_kwargs)
+    probe = RawXcpCanProbe(bus, cmd_id=args.cmd_id, resp_id=args.resp_id)
+    try:
+        connect_response = probe.connect()
+        print("connect_response:", connect_response.hex())
+        raw = probe.short_upload(
+            address=args.address,
+            size=args.size,
+            address_extension=args.address_extension,
+        )
+        print("raw:", raw.hex())
+        print("decoded:", decode_raw(raw, args.dtype, args.endian))
+    finally:
+        try:
+            probe.disconnect()
+        finally:
+            bus.shutdown()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
 
 - [ ] **Step 5: Run tests**
 
@@ -818,6 +963,11 @@ if required and path_kind in ("local", "lfs") and not sha256:
     )
 ```
 
+Update existing manifest tests that are not about the sha256 policy to remain intentional:
+
+- In `test_select_entries_filters_by_dataset`, add `"required": False` to the two placeholder entries.
+- In `test_resolve_entry_path_handles_relative_to_manifest`, add `"required": False` to the relative-path placeholder entry.
+
 - [ ] **Step 4: Update example manifest's documentation comment**
 
 `data/manifest.example.json` already has `required: false` so it is exempt. No change needed in the data file itself.
@@ -991,7 +1141,8 @@ def test_smoke_runner_skips_manifest_absent_with_zero_exit(monkeypatch, tmp_path
     assert "not found" in captured.out
 ```
 
-To make `from scripts import acquisition_smoke` work, ensure `scripts/__init__.py` exists (probably does; if not, add an empty one).
+`from scripts import acquisition_smoke` works in this repository via Python's
+namespace-package import from the repo root; do not add `scripts/__init__.py`.
 
 - [ ] **Step 2: Run tests**
 
@@ -1005,7 +1156,6 @@ Expected: 3 GREEN.
 
 ```bash
 git add tests/test_acquisition_smoke.py
-[ -f scripts/__init__.py ] || (touch scripts/__init__.py && git add scripts/__init__.py)
 git commit -m "test(smoke): add subprocess-monkeypatched smoke runner tests"
 ```
 
@@ -1063,7 +1213,7 @@ git commit -m "fix(smoke): make signal test inclusion non-conditional"
 
 - [ ] **Step 1: Module C report**
 
-- Test count: 19 → 21 (or whatever the current `acquisition_smoke.py --skip-regression` reports after Stage 3.2).
+- Test count: 19 → 36 after Stage 3.2 (manifest 8 + preflight 8 + regression 10 + signals 5 + smoke 3 + synthetic 2).
 - `subprocess.run(shell=False)` → `subprocess.call(cmd, cwd=, env=)` — or change the code if `run` is preferred.
 
 - [ ] **Step 2: Master program plan — branch strategy note**
@@ -1123,6 +1273,8 @@ Drop `field(default_factory=lambda: MappingProxyType({}))`.
 In `mf4_analyzer/acquisition/preflight.py`:
 
 ```python
+from dataclasses import dataclass
+import json
 from types import MappingProxyType
 from typing import Mapping
 
@@ -1133,6 +1285,22 @@ _EMPTY_SIGNAL_MAP: Mapping[str, str] = MappingProxyType({})
 class PreflightResult:
     # ... existing fields ...
     resolved_signals: Mapping[str, str] = _EMPTY_SIGNAL_MAP
+
+    def to_json(self) -> str:
+        payload = {
+            "path": self.path,
+            "ok": self.ok,
+            "rows": self.rows,
+            "channels": list(self.channels),
+            "units": dict(self.units),
+            "duration_s": self.duration_s,
+            "estimated_fs_hz": self.estimated_fs_hz,
+            "missing_channels": list(self.missing_channels),
+            "problems": list(self.problems),
+            "sha256": self.sha256,
+            "resolved_signals": dict(self.resolved_signals),
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 ```
 
 Update both call sites that construct `PreflightResult(resolved_signals={...})`:
@@ -1140,6 +1308,14 @@ Update both call sites that construct `PreflightResult(resolved_signals={...})`:
 - File-missing early return: `resolved_signals=_EMPTY_SIGNAL_MAP`
 - Success return: `resolved_signals=MappingProxyType(resolved_signals)` (wrap the local dict)
 - Loader-failure return (added in Task 1.2): `resolved_signals=_EMPTY_SIGNAL_MAP`
+
+Add this assertion to `test_analyze_mf4_reports_resolved_standard_signals` so
+`MappingProxyType` never regresses JSON export:
+
+```python
+payload = json.loads(result.to_json())
+assert payload["resolved_signals"] == {"vehicle_speed": "raw_speed"}
+```
 
 - [ ] **Step 3: Run all preflight + signals tests**
 
@@ -1401,6 +1577,10 @@ Delete the unreachable `shutil.which / Path.exists` check in `scripts/acquisitio
 `scripts/preflight.py` and `scripts/regression.py` — wrap `main()` body:
 
 ```python
+import json
+import sys
+
+
 def main() -> int:
     try:
         return _run()  # extract existing body
@@ -1501,7 +1681,7 @@ Expected:
 - Only intended files modified.
 - All tests GREEN; 1 SKIPPED (A2L env-gated) is acceptable.
 - Smoke runner exits 0.
-- Preflight CLI exits 2 (not exception) on a non-MF4 input — because Task 1.2 traps loader exceptions.
+- Preflight CLI exits 1 and prints `ok=false` JSON with a `loader failed` problem on a non-MF4 input; it must not raise a traceback. CLI usage/config errors still exit 2 after Task 3.7.
 
 ---
 
