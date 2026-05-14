@@ -122,3 +122,25 @@ def test_analyze_mf4_reports_loader_failure_as_problem(tmp_path):
 
     assert not result.ok
     assert any("loader failed" in p for p in result.problems)
+
+
+def test_analyze_mf4_skips_sha256_when_not_requested(tmp_path, monkeypatch):
+    """Hashing a multi-GB MF4 is expensive; do it only when expected_sha256 is set."""
+    from mf4_analyzer.acquisition import preflight as preflight_module
+
+    calls = {"count": 0}
+
+    def fake_sha(_path):
+        calls["count"] += 1
+        return "0" * 64
+
+    monkeypatch.setattr(preflight_module, "sha256_file", fake_sha)
+
+    mf4 = tmp_path / "sample.mf4"
+    _write_mf4(mf4)
+
+    analyze_mf4(mf4)
+    assert calls["count"] == 0, "sha256_file must not be called without expected_sha256"
+
+    analyze_mf4(mf4, expected_sha256="ignored")
+    assert calls["count"] == 1, "sha256_file must be called once when verification requested"

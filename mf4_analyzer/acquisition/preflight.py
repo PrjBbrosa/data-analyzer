@@ -55,6 +55,7 @@ def analyze_mf4(
     signal_config_root: str | Path | None = None,
     vehicle: str = "",
 ) -> PreflightResult:
+    """Analyze an MF4 file, hashing it only when SHA-256 verification is requested."""
     p = Path(path)
     problems: list[str] = []
     if not p.exists():
@@ -72,7 +73,7 @@ def analyze_mf4(
             resolved_signals={},
         )
 
-    actual_sha256 = sha256_file(p)
+    actual_sha256 = sha256_file(p) if expected_sha256 else ""
     if expected_sha256 and actual_sha256.lower() != expected_sha256.lower():
         problems.append("sha256 mismatch")
 
