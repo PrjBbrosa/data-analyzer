@@ -756,11 +756,12 @@ git commit -m "feat(p0): add vector and xcp probe stubs with platform gating"
 **Decision:** Change the runbook demo command to `--vehicle X04C.example`, and document the example→local copy step. Do NOT teach `load_vehicle_mapping` to fall back to `*.example.json` automatically — that would mask "I forgot to install the local mapping" in production.
 
 **Files:**
+- Modify: `.gitignore`
 - Modify: `docs/analyzer/acquisition/Validation_Runbook.md`
 - Modify: `docs/analyzer/acquisition/specs/2026-05-14-module-b-spec.md`
 - Modify: `tests/test_acquisition_signals.py`
 
-- [ ] **Step 1: Write failing test FIRST**
+- [ ] **Step 1: Write checked-in config guard FIRST**
 
 Append to `tests/test_acquisition_signals.py`:
 
@@ -778,7 +779,7 @@ def test_load_vehicle_mapping_resolves_checked_in_example_config():
     assert "vehicle_speed" in mapping.aliases
 ```
 
-- [ ] **Step 2: Run test to verify it passes (because filename matches now)**
+- [ ] **Step 2: Run guard test**
 
 ```bash
 PYTHONPATH=. .venv/bin/python -m pytest tests/test_acquisition_signals.py::test_load_vehicle_mapping_resolves_checked_in_example_config -v
