@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping
 
 import numpy as np
 
 from mf4_analyzer.io.loader import DataLoader
 
 from .manifest import sha256_file
+
+
+_EMPTY_SIGNAL_MAP: Mapping[str, str] = MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -23,10 +28,23 @@ class PreflightResult:
     missing_channels: tuple[str, ...]
     problems: tuple[str, ...]
     sha256: str
-    resolved_signals: dict[str, str] = field(default_factory=dict)
+    resolved_signals: Mapping[str, str] = _EMPTY_SIGNAL_MAP
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False, indent=2, sort_keys=True)
+        payload = {
+            "path": self.path,
+            "ok": self.ok,
+            "rows": self.rows,
+            "channels": list(self.channels),
+            "units": dict(self.units),
+            "duration_s": self.duration_s,
+            "estimated_fs_hz": self.estimated_fs_hz,
+            "missing_channels": list(self.missing_channels),
+            "problems": list(self.problems),
+            "sha256": self.sha256,
+            "resolved_signals": dict(self.resolved_signals),
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
 def _time_stats(df) -> tuple[float, float, list[str]]:
@@ -70,7 +88,7 @@ def analyze_mf4(
             missing_channels=tuple(expected_channels),
             problems=("file does not exist",),
             sha256="",
-            resolved_signals={},
+            resolved_signals=_EMPTY_SIGNAL_MAP,
         )
 
     actual_sha256 = sha256_file(p) if expected_sha256 else ""
@@ -91,7 +109,7 @@ def analyze_mf4(
             missing_channels=tuple(expected_channels),
             problems=(f"loader failed: {exc!r}",),
             sha256=actual_sha256 if expected_sha256 else "",
-            resolved_signals={},
+            resolved_signals=_EMPTY_SIGNAL_MAP,
         )
     channel_tuple = tuple(channels)
 
@@ -131,5 +149,5 @@ def analyze_mf4(
         missing_channels=missing,
         problems=tuple(problems),
         sha256=actual_sha256,
-        resolved_signals=resolved_signals,
+        resolved_signals=MappingProxyType(resolved_signals),
     )

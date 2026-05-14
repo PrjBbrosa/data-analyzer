@@ -83,6 +83,8 @@ def test_analyze_mf4_reports_resolved_standard_signals(tmp_path):
     assert result.ok
     assert result.resolved_signals == {"vehicle_speed": "raw_speed"}
     assert result.missing_channels == ()
+    payload = json.loads(result.to_json())
+    assert payload["resolved_signals"] == {"vehicle_speed": "raw_speed"}
 
 
 def test_analyze_mf4_reports_unresolved_standard_signal_as_missing(tmp_path):

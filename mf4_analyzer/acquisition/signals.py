@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
 
+_EMPTY_ALIAS_MAP: Mapping[str, tuple[str, ...]] = MappingProxyType({})
+
+
 @dataclass(frozen=True)
 class VehicleSignalMapping:
     vehicle: str
-    aliases: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
+    aliases: Mapping[str, tuple[str, ...]] = _EMPTY_ALIAS_MAP
 
 
 def _coerce_aliases(raw: dict) -> Mapping[str, tuple[str, ...]]:
