@@ -64,7 +64,7 @@ Roll-up of each module's gates plus the program-level gate.
 | B3 Legacy parity | Module B | `analyze_mf4` with no signal config matches Module A behavior — test enforced |
 | B4 Configs | Module B | `standard_signals.json` parses, X04C example resolves |
 | C1 Templates | Module C | 4 templates present, referenced from runbook |
-| C2 Smoke runner | Module C | `python scripts/acquisition_smoke.py` correct exit codes |
+| C2 Smoke runner | Module C | `.venv/bin/python scripts/acquisition_smoke.py` or `./scripts/acquisition_smoke.py` correct exit codes |
 | C3 Workflow rule | Module C | Change-type matrix encoded in Validation_Runbook.md |
 | C4 Bug→Regression | Module C | `templates/issue_capture.md` encodes roadmap §12 |
 | P0 | Existing P0 plan | `P0_Runbook.md` verdict ∈ {PASS, PARTIAL} with documented next action |
@@ -143,7 +143,7 @@ PYTHONPATH=. .venv/bin/python -m pytest \
     tests/test_acquisition_regression.py \
     tests/test_acquisition_signals.py \
     tests/synthetic -v
-python scripts/acquisition_smoke.py
+.venv/bin/python scripts/acquisition_smoke.py
 ```
 
 Expected:

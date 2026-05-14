@@ -12,7 +12,7 @@ Module C delivered the validation workflow and documentation layer for the acqui
 | Gate | Status | Evidence |
 | --- | --- | --- |
 | C1 | PASS | All 4 templates exist under `docs/analyzer/acquisition/templates/` and are referenced from `Validation_Runbook.md` §Template Locations. |
-| C2 | PASS | `python scripts/acquisition_smoke.py` returns exit 0 after the acquisition/signal/smoke/synthetic test targets pass and `data/manifest.local.json` is absent (verified after Module B committed at `616b5d5`; target list corrected below for the current checkout). |
+| C2 | PASS | `.venv/bin/python scripts/acquisition_smoke.py --skip-regression` returns exit 0 after the acquisition/signal/smoke/synthetic test targets pass. `./scripts/acquisition_smoke.py` is also runnable from the repo root; avoid bare `python` on this macOS host because no `python` shim is installed. |
 | C3 | PASS | Change Type Matrix in `Validation_Runbook.md` covers UI / signal-algorithm / MF4-import / DBC-A2L / new-vehicle / release-candidate per roadmap. |
 | C4 | PASS | `templates/issue_capture.md` encodes the full roadmap §12 procedure: 10–60s clip, `sets:[issue]`, failing test FIRST, fix, promote. |
 

@@ -36,15 +36,15 @@ Module C does **not** touch `mf4_analyzer/`, the loader, or the alias sidecar.
 From the program index Acceptance Gate Matrix:
 
 - **C1 Templates** — All four `templates/*.md` files exist and are referenced from `Validation_Runbook.md` under §Template Locations.
-- **C2 Smoke runner** — `python scripts/acquisition_smoke.py` exits 0 when Module A tests pass and `data/manifest.local.json` is either valid or absent. Exits 1 only when underlying tests or regression actually fail. Skips local-MF4 smoke cleanly when the manifest is absent; does not require a bash shell.
+- **C2 Smoke runner** — `.venv/bin/python scripts/acquisition_smoke.py` or `./scripts/acquisition_smoke.py` exits 0 when Module A tests pass and `data/manifest.local.json` is either valid or absent. Exits 1 only when underlying tests or regression actually fail. Skips local-MF4 smoke cleanly when the manifest is absent; does not require a bash shell.
 - **C3 Workflow rule** — `Validation_Runbook.md` contains the change-type matrix from roadmap §15 with at minimum: UI changes, signal-processing algorithm changes, MF4 import / channel mapping changes, DBC/A2L or trigger config changes, new vehicle / ECU / harness / DAQ hardware, release candidate. Synthetic tests are listed as **required** (not optional) for algorithm changes.
 - **C4 Bug→Regression** — `templates/issue_capture.md` encodes roadmap §12: capture a 10–60s clip, add a manifest entry under `sets: [issue]` with `issue_tags`, write a failing test **first**, fix, then optionally promote the clip.
 
 ## Execution environment
 
 - Python 3.12; the smoke runner uses only stdlib (`argparse`, `os`, `shutil`, `subprocess`, `sys`, `pathlib`).
-- Run pattern: `python scripts/acquisition_smoke.py` (POSIX) / `py -3.12 scripts/acquisition_smoke.py` (Windows). The runner prefers `$PYTHON`, then the repo `.venv`, then `sys.executable`.
-- Depends on Module A's scripts (`scripts/preflight.py`, `scripts/regression.py`) and test files. Module B is optional — the smoke runner detects `tests/test_acquisition_signals.py` and includes it only when present.
+- Run pattern: `.venv/bin/python scripts/acquisition_smoke.py` or `./scripts/acquisition_smoke.py` (POSIX) / `py -3.12 scripts/acquisition_smoke.py` (Windows). The runner prefers `$PYTHON`, then the repo `.venv`, then `sys.executable`.
+- Depends on Module A's scripts (`scripts/preflight.py`, `scripts/regression.py`) and test files. Stage 3 polish now keeps signal and smoke tests listed directly in `UNIT_TESTS`.
 - Templates ship empty (no confidential vehicle/baseline data committed).
 - No bash dependency: any stale `scripts/acquisition_smoke.sh` is removed during Task 3 Step 1.
 - No CI integration in this module — that is deferred to future Module D.

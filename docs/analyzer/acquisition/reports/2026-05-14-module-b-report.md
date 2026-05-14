@@ -11,8 +11,8 @@ names (e.g. `vehicle_speed`) into per-vehicle raw MF4 channel names without
 modifying the loader, batch, FFT, or order-cot pipelines. A new
 `mf4_analyzer/acquisition/signals.py` module owns the immutable
 `VehicleSignalMapping`, mapping loader, and resolver, and Module A's
-`analyze_mf4` was extended with three optional kwargs (`signal_config_root`,
-`vehicle`, plus the existing `expected_signals`) so the preflight CLI can
+`analyze_mf4` was extended with optional kwargs (`signal_config_root` and
+`vehicle`, alongside the existing `expected_channels`) so the preflight CLI can
 opt into alias resolution. A legacy-parity regression test was added FIRST
 to lock in the Module A contract — calls without a `signal_config_root`
 behave identically to Module A, byte-for-byte. Operationally noteworthy:

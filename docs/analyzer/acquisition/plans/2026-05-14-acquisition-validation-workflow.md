@@ -48,7 +48,7 @@ A cross-platform Python smoke runner replaces the bash variant from earlier draf
 | Gate | Required evidence |
 | --- | --- |
 | C1 Templates | All four `templates/*.md` files exist and are referenced from `Validation_Runbook.md`. |
-| C2 Smoke runner | `python scripts/acquisition_smoke.py` returns exit 0 when Module A tests pass and `data/manifest.local.json` is either valid or absent. Returns exit 1 only when underlying tests or regression actually fail. |
+| C2 Smoke runner | `.venv/bin/python scripts/acquisition_smoke.py` or `./scripts/acquisition_smoke.py` returns exit 0 when Module A tests pass and `data/manifest.local.json` is either valid or absent. Returns exit 1 only when underlying tests or regression actually fail. |
 | C3 Workflow rule | `Validation_Runbook.md` contains the change-type matrix from roadmap §15 with at minimum: UI changes, algorithm changes, MF4 import changes, DBC/A2L changes, new vehicle, release candidate. |
 | C4 Bug→Regression loop | `templates/issue_capture.md` encodes roadmap §12: capture clip, add manifest entry under `sets: [issue]` with `issue_tags`, write a failing test first, then fix. |
 
@@ -309,8 +309,8 @@ and the roadmap `docs/analyzer/acquisition/2026-05-14-data-acquisition-validatio
 
 | Change type | Minimum checks |
 | --- | --- |
-| UI, plot, report formatting | `python scripts/acquisition_smoke.py` (covers unit + smoke dataset) |
-| Signal processing algorithm | `python scripts/acquisition_smoke.py` **and** `pytest tests/synthetic -v` (synthetic = absolute correctness — required for algorithm changes) |
+| UI, plot, report formatting | `.venv/bin/python scripts/acquisition_smoke.py` (covers unit + smoke dataset) |
+| Signal processing algorithm | `.venv/bin/python scripts/acquisition_smoke.py` **and** `.venv/bin/python -m pytest tests/synthetic -v` (synthetic = absolute correctness — required for algorithm changes) |
 | MF4 import or channel mapping | smoke + `scripts/regression.py golden` + cross-vehicle manifest set |
 | DBC/A2L or trigger config | preflight on real MF4 + bench validation template filled |
 | New vehicle / ECU / harness / DAQ hardware | bench validation + vehicle quick check (using the templates) |
@@ -325,14 +325,14 @@ last known-good output. Changing an algorithm without rerunning L1.5 risks
 
 ```bash
 # Cross-platform smoke runner
-python scripts/acquisition_smoke.py
+.venv/bin/python scripts/acquisition_smoke.py
 
 # Per-piece
-python -m pytest tests/synthetic -v
-python scripts/regression.py smoke --manifest data/manifest.local.json
-python scripts/regression.py golden --manifest data/manifest.local.json
-python scripts/preflight.py path/to/file.mf4
-python scripts/preflight.py path/to/file.mf4 \
+.venv/bin/python -m pytest tests/synthetic -v
+.venv/bin/python scripts/regression.py smoke --manifest data/manifest.local.json
+.venv/bin/python scripts/regression.py golden --manifest data/manifest.local.json
+.venv/bin/python scripts/preflight.py path/to/file.mf4
+.venv/bin/python scripts/preflight.py path/to/file.mf4 \
     --signal-config-root configs/signals --vehicle X04C \
     --expected-channel vehicle_speed --expected-channel torsion_bar_torque
 ```
@@ -378,7 +378,7 @@ the fix is merged. See `templates/issue_capture.md`.
 Before committing acquisition validation changes:
 
 ```bash
-python scripts/acquisition_smoke.py
+.venv/bin/python scripts/acquisition_smoke.py
 ```
 
 If `data/manifest.local.json` is missing, the runner still runs unit and
@@ -523,7 +523,7 @@ chmod +x scripts/acquisition_smoke.py
 - [ ] **Step 4: Run locally**
 
 ```bash
-python scripts/acquisition_smoke.py
+.venv/bin/python scripts/acquisition_smoke.py
 ```
 
 Expected outcomes:
@@ -547,7 +547,7 @@ git commit -m "chore: add cross-platform acquisition smoke runner"
 
 ```bash
 git status --short
-python scripts/acquisition_smoke.py
+.venv/bin/python scripts/acquisition_smoke.py
 ls docs/analyzer/acquisition/templates docs/analyzer/acquisition/Validation_Runbook.md
 ```
 

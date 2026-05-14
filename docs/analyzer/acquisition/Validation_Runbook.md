@@ -9,8 +9,8 @@ and the roadmap `docs/analyzer/acquisition/2026-05-14-data-acquisition-validatio
 
 | Change type | Minimum checks |
 | --- | --- |
-| UI, plot, report formatting | `python scripts/acquisition_smoke.py` (covers unit + smoke dataset) |
-| Signal processing algorithm | `python scripts/acquisition_smoke.py` **and** `pytest tests/synthetic -v` (synthetic = absolute correctness — required for algorithm changes) |
+| UI, plot, report formatting | `.venv/bin/python scripts/acquisition_smoke.py` (covers unit + smoke dataset) |
+| Signal processing algorithm | `.venv/bin/python scripts/acquisition_smoke.py` **and** `.venv/bin/python -m pytest tests/synthetic -v` (synthetic = absolute correctness — required for algorithm changes) |
 | MF4 import or channel mapping | smoke + `scripts/regression.py golden` + cross-vehicle manifest set |
 | DBC/A2L or trigger config | preflight on real MF4 + bench validation template filled |
 | New vehicle / ECU / harness / DAQ hardware | bench validation + vehicle quick check (using the templates) |
@@ -40,14 +40,14 @@ use `X04C.example` for clean-repo reproducibility.
 
 ```bash
 # Cross-platform smoke runner
-python scripts/acquisition_smoke.py
+.venv/bin/python scripts/acquisition_smoke.py
 
 # Per-piece
-python -m pytest tests/synthetic -v
-python scripts/regression.py smoke --manifest data/manifest.local.json
-python scripts/regression.py golden --manifest data/manifest.local.json
-python scripts/preflight.py path/to/file.mf4
-python scripts/preflight.py path/to/file.mf4 \
+.venv/bin/python -m pytest tests/synthetic -v
+.venv/bin/python scripts/regression.py smoke --manifest data/manifest.local.json
+.venv/bin/python scripts/regression.py golden --manifest data/manifest.local.json
+.venv/bin/python scripts/preflight.py path/to/file.mf4
+.venv/bin/python scripts/preflight.py path/to/file.mf4 \
     --signal-config-root configs/signals --vehicle X04C.example \
     --expected-channel vehicle_speed --expected-channel torsion_bar_torque
 ```
@@ -93,7 +93,7 @@ the fix is merged. See `templates/issue_capture.md`.
 Before committing acquisition validation changes:
 
 ```bash
-python scripts/acquisition_smoke.py
+.venv/bin/python scripts/acquisition_smoke.py
 ```
 
 If `data/manifest.local.json` is missing, the runner still runs unit and

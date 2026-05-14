@@ -66,7 +66,7 @@ Out of scope:
 - Final smoke passes:
   `.venv/bin/python scripts/acquisition_smoke.py --skip-regression`
 - Non-MF4 preflight CLI returns controlled failure JSON, not a traceback:
-  `python scripts/preflight.py docs/analyzer/acquisition/templates/issue_capture.md --require-exists`
+  `.venv/bin/python scripts/preflight.py docs/analyzer/acquisition/templates/issue_capture.md --require-exists`
   exits 1 with `ok=false` and a `loader failed` problem.
 
 ## Execution Notes

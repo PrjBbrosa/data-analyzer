@@ -67,7 +67,7 @@ Avoid bundling all three stages into one branch — Stage 1 has correctness urge
 | Fix-3 | `compare_snapshot` treats `(NaN, NaN)` as equal; reports new channels in current. Tests: `test_compare_snapshot_treats_nan_pair_as_equal` + `test_compare_snapshot_reports_new_channel_in_current` GREEN. |
 | Fix-4 | `_samples_sha256` byte-order portable. Test: `test_samples_sha256_is_byte_order_stable` asserts the fixed little-endian hex literal `6bab56d2f81d4b5a2dbf102bf6a6ff7d5211a475fc5f97813f977e8ba714b07d`. |
 | Fix-5 | `can_logger/p0/vector_probe.py` + `xcp_short_upload_probe.py` exist and import cleanly on macOS; `vector_probe.py` emits a clear "Vector interface is only supported on Windows" runtime error on non-Windows; `xcp_short_upload_probe.py` keeps pure decode helpers hardware-free; `P0_Runbook.md` Vector/XCP sections reference real file paths. |
-| Fix-6 | `python scripts/preflight.py <fixture.mf4> --signal-config-root configs/signals --vehicle X04C.example` succeeds in a clean checkout. Test reads the **checked-in** `configs/signals/vehicles/X04C.example.json`, not a tmp fixture. |
+| Fix-6 | `.venv/bin/python scripts/preflight.py <fixture.mf4> --signal-config-root configs/signals --vehicle X04C.example` succeeds in a clean checkout. Test reads the **checked-in** `configs/signals/vehicles/X04C.example.json`, not a tmp fixture. |
 | Fix-7 | `load_manifest` raises `ValueError` for a `required: true` + local entry missing `sha256`. `data/manifest.example.json` continues to parse (it's `required: false`). |
 | Fix-8 | `tests/test_acquisition_smoke.py` covers three paths: `--skip-regression` happy path, manifest-absent exit 0 with skip note, pytest-failure exit 1. |
 | Fix-9 | Combined test suite (Module A + B + C + P0 hardware-free + Stage 1/2/3 additions) GREEN; count ≥ original 22 + at least 8 new tests = 30. |
@@ -792,9 +792,9 @@ Expected: PASS (the file `configs/signals/vehicles/X04C.example.json` exists). T
 `docs/analyzer/acquisition/Validation_Runbook.md` Standard Commands section, change:
 
 ```diff
-- python scripts/preflight.py path/to/file.mf4 \
+- .venv/bin/python scripts/preflight.py path/to/file.mf4 \
 -     --signal-config-root configs/signals --vehicle X04C \
-+ python scripts/preflight.py path/to/file.mf4 \
++ .venv/bin/python scripts/preflight.py path/to/file.mf4 \
 +     --signal-config-root configs/signals --vehicle X04C.example \
 ```
 
@@ -1673,8 +1673,8 @@ PYTHONPATH=. .venv/bin/python -m pytest \
     tests/test_p0_vector_probe.py \
     tests/test_p0_xcp_probe.py \
     tests/synthetic -v
-python scripts/acquisition_smoke.py --skip-regression
-python scripts/preflight.py docs/analyzer/acquisition/templates/issue_capture.md --require-exists
+.venv/bin/python scripts/acquisition_smoke.py --skip-regression
+.venv/bin/python scripts/preflight.py docs/analyzer/acquisition/templates/issue_capture.md --require-exists
 ```
 
 Expected:
