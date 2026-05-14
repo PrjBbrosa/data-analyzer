@@ -76,7 +76,22 @@ def analyze_mf4(
     if expected_sha256 and actual_sha256.lower() != expected_sha256.lower():
         problems.append("sha256 mismatch")
 
-    df, channels, units = DataLoader.load_mf4(str(p))
+    try:
+        df, channels, units = DataLoader.load_mf4(str(p))
+    except Exception as exc:
+        return PreflightResult(
+            path=str(p),
+            ok=False,
+            rows=0,
+            channels=(),
+            units={},
+            duration_s=0.0,
+            estimated_fs_hz=0.0,
+            missing_channels=tuple(expected_channels),
+            problems=(f"loader failed: {exc!r}",),
+            sha256=actual_sha256 if expected_sha256 else "",
+            resolved_signals={},
+        )
     channel_tuple = tuple(channels)
 
     resolved_signals: dict[str, str] = {}

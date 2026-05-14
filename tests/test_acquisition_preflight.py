@@ -109,3 +109,16 @@ def test_analyze_mf4_reports_unresolved_standard_signal_as_missing(tmp_path):
     # Standard name passes through unchanged when no alias matches.
     assert result.missing_channels == ("vehicle_speed",)
     assert result.resolved_signals == {}
+
+
+def test_analyze_mf4_reports_loader_failure_as_problem(tmp_path):
+    """A corrupt/empty MF4 must produce ok=False with a loader-failure problem,
+    not raise an exception out of analyze_mf4.
+    """
+    bogus = tmp_path / "bogus.mf4"
+    bogus.write_bytes(b"")
+
+    result = analyze_mf4(bogus)
+
+    assert not result.ok
+    assert any("loader failed" in p for p in result.problems)
