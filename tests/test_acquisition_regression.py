@@ -149,6 +149,7 @@ def test_regression_cli_reports_build_snapshot_value_error(tmp_path, monkeypatch
                         "id": "case",
                         "path": str(mf4),
                         "sets": ["smoke"],
+                        "required": False,
                         "expected_channels": ["missing"],
                     }
                 ],
