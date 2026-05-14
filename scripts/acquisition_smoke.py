@@ -22,9 +22,10 @@ UNIT_TESTS = [
     "tests/test_acquisition_manifest.py",
     "tests/test_acquisition_preflight.py",
     "tests/test_acquisition_regression.py",
+    "tests/test_acquisition_signals.py",
+    "tests/test_acquisition_smoke.py",
     "tests/synthetic",
 ]
-SIGNAL_TESTS = ["tests/test_acquisition_signals.py"]
 
 
 def _python_executable() -> list[str]:
@@ -60,11 +61,7 @@ def main() -> int:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT)
 
-    pytest_targets = list(UNIT_TESTS)
-    if (REPO_ROOT / "tests" / "test_acquisition_signals.py").exists():
-        pytest_targets.extend(SIGNAL_TESTS)
-
-    rc = _run(python + ["-m", "pytest", *pytest_targets, "-v"], env=env)
+    rc = _run(python + ["-m", "pytest", *UNIT_TESTS, "-v"], env=env)
     if rc != 0:
         return 1
 
