@@ -52,3 +52,7 @@ testdoc/
 data/local/
 data/manifest.local.json
 data/snapshots/*.golden.json
+
+# Local-only signal mappings; example files are tracked.
+configs/signals/vehicles/*.json
+!configs/signals/vehicles/*.example.json

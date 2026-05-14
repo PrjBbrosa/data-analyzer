@@ -21,6 +21,21 @@ Regression snapshots cover roadmap layer L2 — **relative** correctness vs the
 last known-good output. Changing an algorithm without rerunning L1.5 risks
 "the snapshot still matches but the math became wrong".
 
+## Local vs example signal mappings
+
+The repo ships only `configs/signals/vehicles/X04C.example.json`. To use the
+real X04C mapping in a deployment, copy it locally (the local file is
+gitignored — see `.gitignore` patterns for `configs/signals/vehicles/*.json`
+excluding `*.example.json`):
+
+```bash
+cp configs/signals/vehicles/X04C.example.json configs/signals/vehicles/X04C.json
+# Edit X04C.json with actual ECU signal names if they differ from the example
+```
+
+Then `--vehicle X04C` resolves to `X04C.json`. The standard commands below
+use `X04C.example` for clean-repo reproducibility.
+
 ## Standard Commands
 
 ```bash
@@ -33,7 +48,7 @@ python scripts/regression.py smoke --manifest data/manifest.local.json
 python scripts/regression.py golden --manifest data/manifest.local.json
 python scripts/preflight.py path/to/file.mf4
 python scripts/preflight.py path/to/file.mf4 \
-    --signal-config-root configs/signals --vehicle X04C \
+    --signal-config-root configs/signals --vehicle X04C.example \
     --expected-channel vehicle_speed --expected-channel torsion_bar_torque
 ```
 

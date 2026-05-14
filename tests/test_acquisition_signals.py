@@ -79,3 +79,18 @@ def test_load_vehicle_mapping_rejects_non_list_alias(tmp_path):
 def test_load_vehicle_mapping_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_vehicle_mapping(tmp_path / "signals", "DOES_NOT_EXIST")
+
+
+def test_load_vehicle_mapping_resolves_checked_in_example_config():
+    """The repo ships an example config; the runbook demo command must
+    resolve against that exact file in a clean checkout.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    mapping = load_vehicle_mapping(
+        repo_root / "configs" / "signals", "X04C.example"
+    )
+
+    assert mapping.vehicle == "X04C"
+    assert "vehicle_speed" in mapping.aliases

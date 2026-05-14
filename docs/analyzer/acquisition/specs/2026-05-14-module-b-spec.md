@@ -27,6 +27,23 @@ Sidecar layer above `DataLoader.load_mf4`. Plan §File Structure:
 
 **Hard constraint — must not change `DataLoader.load_mf4`.** The loader continues to return raw channel names; alias resolution happens entirely in the sidecar, and the legacy-parity gate (B3) regression-tests this.
 
+## Local vs example mapping files
+
+The repo ships only `configs/signals/vehicles/X04C.example.json`. To use the
+real X04C mapping in a deployment, copy it locally (the local file is
+gitignored — see `.gitignore` patterns for `configs/signals/vehicles/*.json`
+excluding `*.example.json`):
+
+```bash
+cp configs/signals/vehicles/X04C.example.json configs/signals/vehicles/X04C.json
+# Edit X04C.json with actual ECU signal names if they differ from the example
+```
+
+Then `--vehicle X04C` resolves to `X04C.json`. Runbook standard commands use
+`X04C.example` for clean-repo reproducibility. `load_vehicle_mapping` should
+continue to resolve exactly the requested `<vehicle>.json`; it must not fall
+back from `X04C` to `X04C.example`.
+
 ## Acceptance gates
 
 From the program index Acceptance Gate Matrix:
