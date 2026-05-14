@@ -56,6 +56,14 @@ def _entry(raw: dict) -> Mf4DatasetEntry:
         raise ValueError(
             f"{entry_id}: path_kind {path_kind!r} not in {VALID_PATH_KINDS}"
         )
+    sha256_raw = raw.get("sha256")
+    sha256 = str(sha256_raw) if sha256_raw else None
+    required = bool(raw.get("required", True))
+    if required and path_kind in ("local", "lfs") and not sha256:
+        raise ValueError(
+            f"{entry_id}: sha256 is required for required={required} "
+            f"path_kind={path_kind!r} entries"
+        )
     return Mf4DatasetEntry(
         id=entry_id,
         path=path,
@@ -68,8 +76,8 @@ def _entry(raw: dict) -> Mf4DatasetEntry:
         expected_channels=_tuple(
             raw.get("expected_channels", []), f"{entry_id}.expected_channels"
         ),
-        sha256=str(raw["sha256"]) if raw.get("sha256") else None,
-        required=bool(raw.get("required", True)),
+        sha256=sha256,
+        required=required,
     )
 
 

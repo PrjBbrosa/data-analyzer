@@ -52,6 +52,10 @@ From the program index Acceptance Gate Matrix:
 
 Gate G★ (program-level) requires A1–A4 plus B1–B4, C1–C4, and the P0 verdict; that aggregate gate is enforced by the master plan, not by this module.
 
+## sha256 policy
+
+Manifest entries with `required: true` and `path_kind` set to `local` or `lfs` must include a non-empty `sha256`. Optional entries with `required: false` may omit `sha256`, so placeholder examples remain parseable. Entries with `path_kind: external` may also omit `sha256` because the remote file may not be locally hashable during manifest loading.
+
 ## Execution environment
 
 - Python 3.12, stdlib (`json`, `hashlib`, `argparse`), `numpy`, `pandas`, `asammdf`, plus the existing `mf4_analyzer.signal.fft.FFTAnalyzer` and `mf4_analyzer.signal.order_cot.COTOrderAnalyzer` / `COTParams`. Pytest for tests.

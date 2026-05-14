@@ -64,8 +64,8 @@ def test_select_entries_filters_by_dataset(tmp_path):
             {
                 "version": 1,
                 "entries": [
-                    {"id": "a", "path": "a.mf4", "sets": ["smoke"]},
-                    {"id": "b", "path": "b.mf4", "sets": ["golden"]},
+                    {"id": "a", "path": "a.mf4", "sets": ["smoke"], "required": False},
+                    {"id": "b", "path": "b.mf4", "sets": ["golden"], "required": False},
                 ],
             }
         ),
@@ -96,7 +96,12 @@ def test_resolve_entry_path_handles_relative_to_manifest(tmp_path):
             {
                 "version": 1,
                 "entries": [
-                    {"id": "rel", "path": "../golden/x.mf4", "sets": ["smoke"]}
+                    {
+                        "id": "rel",
+                        "path": "../golden/x.mf4",
+                        "sets": ["smoke"],
+                        "required": False,
+                    }
                 ],
             }
         ),
@@ -125,3 +130,76 @@ def test_load_manifest_rejects_unknown_path_kind(tmp_path):
 
     with pytest.raises(ValueError, match="path_kind"):
         load_manifest(manifest)
+
+
+def test_load_manifest_rejects_required_local_entry_without_sha256(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": [
+                    {
+                        "id": "needs-hash",
+                        "path": "a.mf4",
+                        "sets": ["smoke"],
+                        "required": True,
+                        "path_kind": "local",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="needs-hash.*sha256"):
+        load_manifest(manifest)
+
+
+def test_load_manifest_accepts_optional_entry_without_sha256(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": [
+                    {
+                        "id": "placeholder",
+                        "path": "a.mf4",
+                        "sets": ["smoke"],
+                        "required": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    entries = load_manifest(manifest)
+
+    assert entries[0].sha256 is None
+
+
+def test_load_manifest_accepts_external_entry_without_sha256(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "entries": [
+                    {
+                        "id": "remote",
+                        "path": "s3://bucket/key.mf4",
+                        "sets": ["golden"],
+                        "required": True,
+                        "path_kind": "external",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    entries = load_manifest(manifest)
+
+    assert entries[0].sha256 is None
