@@ -333,7 +333,7 @@ last known-good output. Changing an algorithm without rerunning L1.5 risks
 .venv/bin/python scripts/regression.py golden --manifest data/manifest.local.json
 .venv/bin/python scripts/preflight.py path/to/file.mf4
 .venv/bin/python scripts/preflight.py path/to/file.mf4 \
-    --signal-config-root configs/signals --vehicle X04C \
+    --signal-config-root configs/signals --vehicle X04C.example \
     --expected-channel vehicle_speed --expected-channel torsion_bar_torque
 ```
 
