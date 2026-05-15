@@ -108,3 +108,24 @@ __all__ = [
     "level_rec",
     "probe_hw_macos_stub",
 ]
+
+
+def _autoload_user_threshold_overrides() -> None:
+    """Apply user threshold overrides at package import.
+
+    Best-effort: any failure (missing file, IO error, schema error, decode
+    error) falls back to defaults silently. ``KeyboardInterrupt`` and
+    ``SystemExit`` are NOT caught.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        overrides = thresholds.load_user_settings()
+        if overrides:
+            thresholds.apply_overrides(overrides)
+    except Exception as exc:  # noqa: BLE001 - silent fallback per spec
+        log.warning("could not auto-load user threshold overrides: %s", exc)
+
+
+_autoload_user_threshold_overrides()
