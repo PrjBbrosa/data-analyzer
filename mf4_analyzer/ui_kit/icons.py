@@ -342,7 +342,7 @@ class Icons:
 #
 # The QSS template in style.qss uses placeholders like
 # ``{{ICON_SPIN_UP_REST}}`` that ``ensure_icon_cache`` substitutes at
-# stylesheet-load time (see mf4_analyzer/app.py).
+# stylesheet-load time (see mf4_analyzer/ui_kit/stylesheet.py).
 
 # Each entry: (placeholder_key, qtawesome_icon_name, color_hex)
 _ARROW_SPECS = (
@@ -470,7 +470,7 @@ def ensure_icon_cache():
         # Use stderr-style print rather than logging so it shows up in the
         # console even before any logging.basicConfig has run.
         print(
-            f"[mf4_analyzer.ui.icons] generated {generated}/"
+            f"[mf4_analyzer.ui_kit.icons] generated {generated}/"
             f"{len(_ARROW_SPECS)} subcontrol-arrow PNGs in {elapsed:.2f}s "
             f"(cache: {out_dir})",
         )
