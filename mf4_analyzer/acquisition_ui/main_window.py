@@ -2,31 +2,28 @@
 
 Spec: ``docs/analyzer/acquisition/specs/2026-05-15-acquisition-cockpit-ui-spec.md``
 Plan: ``docs/analyzer/acquisition/plans/2026-05-15-acquisition-cockpit-ui-implementation.md``
+Polish wave: ``docs/analyzer/acquisition/specs/2026-05-15-cockpit-polish-wave-spec.md``
 
-Stage 4 deliverables wired up here:
+Current deliverables wired up here:
 
 - Toolbar with A2L/DBC/output controls (DBC selector is permanently
-  disabled per spec Product Decisions), mode segment (`采集 / 回放 / 历史`),
-  REC indicator, and stateful main button (`连接 ECU` /
-  `● 采集` / `■ Stop & 复盘`).
+  disabled per spec Product Decisions), Settings, segment marker,
+  mode label (`采集 / 回放 / 历史`), REC indicator, and stateful main
+  button (`连接 ECU` / `● 采集` / `■ Stop & 复盘`).
 - 32 px health strip beneath the toolbar driven by
   ``HealthAggregator.poll_once()`` polled on a ``QTimer`` at
   ``thresholds.HEALTH_POLL_INTERVAL_S``.
 - Three-pane center body: A2L left pane, center live cards, right
   state-aware inspector.
+- Real read-only Replay tab and manifest-backed History tab.
 - Four-state machine (in :mod:`state`) driving page transitions,
   control freeze, and button labels.
 - ``RingBuffer.watermark_changed`` (the non-Qt observer shim) bridged
   to a Qt slot via the shim's ``connect`` API: 30 fps for
   green/yellow_low, 10 fps for red/red_drop, auto-stop on
   red_drop_sustained.
-
-Stage 4 boundaries (NOT implemented here, owned by Stage 5):
-
-- The review modal is a placeholder that closes itself.
-- The stop/flush/finalize sequence and Analyzer handoff live in
-  Stage 5; ``request_stop_recording`` is always called with
-  ``finalized=True`` for the Stage 4 demo.
+- Stop/flush/finalize, ReviewModal, archive, and Analyzer handoff.
+  The no-controller demo path still uses a small placeholder modal.
 """
 
 from __future__ import annotations
@@ -46,6 +43,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -64,6 +62,7 @@ from mf4_analyzer.acquisition_capture.backends import (
     FakeRecorderBackend,
     RecorderBackend,
 )
+from mf4_analyzer.acquisition_capture.config_store import ConfigSchemaError
 from mf4_analyzer.acquisition_capture.controller import CaptureController
 from mf4_analyzer.acquisition_capture.session import SessionSummary
 from mf4_analyzer.acquisition_capture.health import (
@@ -77,12 +76,16 @@ from mf4_analyzer.acquisition_capture.health import (
 )
 from mf4_analyzer.acquisition_capture.ring_buffer import RingBuffer, WatermarkLevel
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.acquisition_ui.history_tab import HistoryTab
+from mf4_analyzer.acquisition_ui.replay_tab import ReplayTab
 from mf4_analyzer.acquisition_ui.review_modal import (
+    ACTION_SAVE_AND_ARCHIVE,
     ReviewContext,
     ReviewModal,
     StopFlushFinalizeResult,
     run_stop_flush_finalize,
 )
+from mf4_analyzer.acquisition_ui.settings_dialog import SettingsDialog
 from mf4_analyzer.acquisition_ui.state import (
     CockpitState,
     CockpitStateMachine,
@@ -97,9 +100,9 @@ from mf4_analyzer.acquisition_ui.widgets.right_panel import RightPanel
 # Spec Product Decisions — DBC selector tooltip (verbatim).
 DBC_DISABLED_TOOLTIP = "Reserved for raw CAN capture; XCP path uses A2L."
 
-# Spec Product Decisions — 回放 tab.
-REPLAY_TAB_TITLE = "回放 (待开放)"
-REPLAY_TAB_BODY = "Reserved for future replay workflow"
+# Spec Product Decisions — mode tabs.
+REPLAY_TAB_TITLE = "回放"
+HISTORY_TAB_TITLE = "历史"
 
 # Spec §State Machine `Disconnected` failure surface text.
 DROPPED_FRAMES_PROMPT_TITLE = "丢帧过多"
@@ -160,8 +163,10 @@ class CockpitMainWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("AcquisitionCockpit")
-        self.setWindowTitle("MF4 采集 Cockpit (Stage 4)")
+        self.setWindowTitle("MF4 采集 Cockpit")
         self.resize(1280, 760)
+        self._settings_load_error: str | None = None
+        self._load_threshold_overrides()
 
         # ----- core state ------------------------------------------------
         self._state_machine = CockpitStateMachine()
@@ -175,6 +180,8 @@ class CockpitMainWindow(QMainWindow):
         self._connection_attempt_started: float | None = None
         self._first_frame_ts: float | None = None
         self._rec_start_ts: float | None = None
+        self._stream_start_ts: float | None = None
+        self._a2l_name: str | None = None
         self._cumulative_rx_count = 0
         self._cumulative_dropped = 0
         self._dropped_prompt_shown = False
@@ -193,6 +200,7 @@ class CockpitMainWindow(QMainWindow):
         self._capture_controller: CaptureController | None = None
         self._last_session_summary: SessionSummary | None = None
         self._review_modal: QDialog | None = None
+        self._settings_dialog: SettingsDialog | None = None
         # Stage 5 hand-off: the most recent stop/flush/finalize run, used
         # by tests (and the eventual history tab) to introspect ordering.
         self._last_stop_result: StopFlushFinalizeResult | None = None
@@ -255,28 +263,27 @@ class CockpitMainWindow(QMainWindow):
         self._health_strip.levels_changed.connect(self._on_health_levels_changed)
         outer.addWidget(self._health_strip)
 
-        # Mode tabs — spec §Toolbar: `采集 / 回放 / 历史`. 回放 (待开放)
-        # is rendered as an inert tab.
+        # Mode tabs — spec §Toolbar: `采集 / 回放 / 历史`.
         self._mode_tabs = QTabWidget(self)
         self._mode_tabs.setObjectName("cockpitModeTabs")
         # 采集 page is the three-pane layout.
         self._mode_tabs.addTab(self._build_acquisition_page(), "采集")
-        self._mode_tabs.addTab(self._build_replay_page(), REPLAY_TAB_TITLE)
-        replay_index = self._mode_tabs.count() - 1
-        # Spec: tab body is a single-line placeholder. We disable the
-        # tab itself so clicks don't navigate to nothing — the title
-        # already says (待开放).
-        self._mode_tabs.setTabEnabled(replay_index, False)
-        # 历史 placeholder for completeness.
-        history_page = QLabel("历史记录将在 Stage 5+ 接入。", self)
-        history_page.setAlignment(Qt.AlignCenter)
-        self._mode_tabs.addTab(history_page, "历史")
+        self._replay_tab = ReplayTab(parent=self)
+        self._mode_tabs.addTab(self._replay_tab, REPLAY_TAB_TITLE)
+        self._history_tab = HistoryTab(parent=self)
+        self._history_tab.analyzer_open_requested.connect(
+            self._on_analyzer_open_requested
+        )
+        self._mode_tabs.addTab(self._history_tab, HISTORY_TAB_TITLE)
+        self._mode_tabs.currentChanged.connect(self._on_mode_tab_changed)
         outer.addWidget(self._mode_tabs, stretch=1)
 
         self.setCentralWidget(central)
         self._status = QStatusBar(self)
         self.setStatusBar(self._status)
-        self._status.showMessage("尚未连接")
+        self._update_status_bar()
+        if self._settings_load_error:
+            self._status.showMessage(f"设置加载失败: {self._settings_load_error}")
 
     def _build_toolbar(self) -> QToolBar:
         toolbar = QToolBar("CockpitToolbar", self)
@@ -305,7 +312,20 @@ class CockpitMainWindow(QMainWindow):
         self._output_btn.clicked.connect(self._on_pick_output_dir)
         toolbar.addWidget(self._output_btn)
 
+        self._settings_action = QAction("设置", self)
+        self._settings_action.setObjectName("cockpitSettingsAction")
+        self._settings_action.triggered.connect(self._open_settings_dialog)
+        toolbar.addAction(self._settings_action)
+
         toolbar.addSeparator()
+
+        self._segment_action = QAction("+ 段", self)
+        self._segment_action.setObjectName("segmentMarkerAction")
+        self._segment_action.setToolTip("标记一段 (M)")
+        self._segment_action.setShortcut("M")
+        self._segment_action.triggered.connect(self._on_mark_segment)
+        toolbar.addAction(self._segment_action)
+        self._segment_action.setVisible(False)
 
         # Mode segmented control mirrors the QTabWidget for the
         # toolbar visual; the source of truth is the tab widget.
@@ -362,16 +382,16 @@ class CockpitMainWindow(QMainWindow):
         layout.addWidget(splitter)
         return page
 
-    def _build_replay_page(self) -> QWidget:
-        page = QWidget(self)
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(8)
-        body = QLabel(REPLAY_TAB_BODY, self)
-        body.setAlignment(Qt.AlignCenter)
-        layout.addWidget(body)
-        layout.addStretch(1)
-        return page
+    def _on_mode_tab_changed(self, index: int) -> None:
+        text = self._mode_tabs.tabText(index) if index >= 0 else "采集"
+        self._mode_label.setText(text)
+
+    def _load_threshold_overrides(self) -> None:
+        try:
+            thresholds.apply_overrides(thresholds.load_user_settings())
+        except (ConfigSchemaError, OSError, UnicodeDecodeError) as exc:
+            self._settings_load_error = str(exc)
+            logger.warning("could not load acquisition settings: %s", exc)
 
     # ------------------------------------------------------------------
     # State transitions / button label management
@@ -385,6 +405,8 @@ class CockpitMainWindow(QMainWindow):
     def _apply_state_to_ui(
         self, old: CockpitState, new: CockpitState
     ) -> None:
+        if hasattr(self, "_segment_action"):
+            self._segment_action.setVisible(new == CockpitState.RECORDING)
         if new == CockpitState.DISCONNECTED:
             self._main_btn.setText("连接 ECU")
             self._main_btn.setEnabled(True)
@@ -401,23 +423,25 @@ class CockpitMainWindow(QMainWindow):
                 if hasattr(self, "_left_pane")
                 else 0,
             )
-            self._status.showMessage("尚未连接")
+            self._update_status_bar()
             self._center.set_recording(False, None)
         elif new == CockpitState.CONNECTED_IDLE:
             self._main_btn.setText("● 采集")
             self._rec_indicator.setText("REC OFF")
             self._center.set_recording(False, None)
             self._refresh_idle_right_panel()
-            self._status.showMessage("已连接 · 待机中")
+            self._update_status_bar()
             # Update record-button enabled state based on latest health.
             self._update_record_button_enabled()
         elif new == CockpitState.RECORDING:
+            if self._rec_start_ts is None:
+                self._rec_start_ts = time.monotonic()
             self._main_btn.setText("■ Stop & 复盘")
             self._main_btn.setEnabled(True)
             self._rec_indicator.setText("● REC")
             self._left_pane.set_frozen(True)
             self._center.set_recording(True, self._rec_start_ts)
-            self._status.showMessage("录制中")
+            self._update_status_bar()
             self._refresh_recording_right_panel()
         elif new == CockpitState.REVIEW_MODAL:
             self._main_btn.setEnabled(False)
@@ -515,6 +539,7 @@ class CockpitMainWindow(QMainWindow):
             # Demo seed: one synthetic measurement.
             selection = [SelectedMeasurement(name="DemoSignal")]
         self._connection_attempt_started = time.monotonic()
+        self._stream_start_ts = self._connection_attempt_started
         self._first_frame_ts = None
         self._fake_xcp_connected = True
         self._fake_rec_state = "off"
@@ -599,6 +624,11 @@ class CockpitMainWindow(QMainWindow):
         modal = self._review_modal
         if isinstance(modal, ReviewModal):
             self._last_review_action = modal.chosen_action
+            if (
+                self._last_review_action == ACTION_SAVE_AND_ARCHIVE
+                and hasattr(self, "_history_tab")
+            ):
+                self._history_tab.reload()
         self._review_modal = None
         # Reset stop_result so the next REVIEW_MODAL entry rebuilds
         # context from a fresh stop sequence.
@@ -716,6 +746,7 @@ class CockpitMainWindow(QMainWindow):
         self._cumulative_rx_count += len(samples)
         # Sync dropped counter from ring buffer (cumulative).
         self._cumulative_dropped = self._ring.dropped_frames
+        self._update_status_bar()
         if (
             self._state_machine.state == CockpitState.RECORDING
             and self._cumulative_dropped > thresholds.DROPPED_FRAMES_PROMPT_TOTAL
@@ -864,6 +895,8 @@ class CockpitMainWindow(QMainWindow):
         configured" rather than crashing.
         """
         self._manifest_path = Path(manifest_path) if manifest_path else None
+        if hasattr(self, "_history_tab"):
+            self._history_tab.set_manifest_path(self._manifest_path)
 
     @property
     def last_session_summary(self) -> SessionSummary | None:
@@ -968,6 +1001,114 @@ class CockpitMainWindow(QMainWindow):
             self._refresh_idle_right_panel()
 
     # ------------------------------------------------------------------
+    # Settings dialog
+    # ------------------------------------------------------------------
+
+    def _open_settings_dialog(self) -> None:
+        if self._settings_dialog is not None:
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+            return
+        dialog = SettingsDialog(self)
+        dialog.settings_saved.connect(self._on_settings_changed)
+        dialog.settings_reset.connect(self._on_settings_reset)
+        dialog.finished.connect(lambda _result: setattr(self, "_settings_dialog", None))
+        self._settings_dialog = dialog
+        dialog.open()
+
+    def _on_settings_changed(self, _values: dict[str, float | int]) -> None:
+        self._apply_threshold_runtime_refresh()
+        self._status.showMessage("设置已保存")
+
+    def _on_settings_reset(self) -> None:
+        self._apply_threshold_runtime_refresh()
+        self._status.showMessage("设置已还原默认")
+
+    def _apply_threshold_runtime_refresh(self) -> None:
+        self._health_timer.setInterval(
+            int(thresholds.HEALTH_POLL_INTERVAL_S * 1000)
+        )
+        self._update_record_button_enabled()
+        if self._state_machine.state == CockpitState.CONNECTED_IDLE:
+            self._refresh_idle_right_panel()
+        elif self._state_machine.state == CockpitState.RECORDING:
+            self._refresh_recording_right_panel()
+
+    # ------------------------------------------------------------------
+    # Segment marker + status bar
+    # ------------------------------------------------------------------
+
+    def _on_mark_segment(self) -> None:
+        if self._state_machine.state != CockpitState.RECORDING:
+            return
+        if self._capture_controller is None:
+            return
+        label, ok = QInputDialog.getText(self, "标记一段", "标签（可选）:")
+        self._capture_controller.mark_segment(label if ok else None)
+
+    def _update_status_bar(self) -> None:
+        if not hasattr(self, "_status"):
+            return
+        state = self._state_machine.state
+        if state == CockpitState.DISCONNECTED:
+            a2l_name = self._a2l_name or "未加载"
+            self._status.showMessage(f"未连接 · A2L: {a2l_name}")
+            return
+        if state == CockpitState.CONNECTED_IDLE:
+            self._status.showMessage(
+                f"streaming · {self._event_rate_per_s()} evt/s · "
+                f"buf {self._ring.level_pct:.1f}%"
+            )
+            return
+        if state == CockpitState.RECORDING:
+            elapsed = self._recording_elapsed_text()
+            self._status.showMessage(
+                f"RECORDING · {elapsed} · {self._sample_count()} samples · "
+                f"{self._recording_file_size_mb():.1f} MB · "
+                f"drop {self._cumulative_dropped} · buf {self._ring.level_pct:.1f}%"
+            )
+
+    def _event_rate_per_s(self) -> int:
+        if self._stream_start_ts is None:
+            return 0
+        elapsed = max(0.0, time.monotonic() - self._stream_start_ts)
+        if elapsed <= 0:
+            return 0
+        return int(round(self._cumulative_rx_count / elapsed))
+
+    def _recording_elapsed_text(self) -> str:
+        if self._rec_start_ts is None:
+            total = 0
+        else:
+            total = int(max(0.0, time.monotonic() - self._rec_start_ts))
+        minutes, seconds = divmod(total, 60)
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _sample_count(self) -> int:
+        if self._capture_controller is not None:
+            try:
+                return int(self._capture_controller.writer.write_count)
+            except Exception:  # noqa: BLE001 - status bar must stay best-effort
+                return int(self._cumulative_rx_count)
+        return int(self._cumulative_rx_count)
+
+    def _recording_file_size_mb(self) -> float:
+        path: Path | None = None
+        if self._capture_controller is not None:
+            try:
+                path = self._capture_controller.config.output_mf4
+            except Exception:  # noqa: BLE001 - injected test controllers are partial
+                path = None
+        elif self._last_session_summary and self._last_session_summary.output_mf4:
+            path = Path(self._last_session_summary.output_mf4)
+        if path is None or not path.exists():
+            return 0.0
+        try:
+            return path.stat().st_size / (1024.0 * 1024.0)
+        except OSError:
+            return 0.0
+
+    # ------------------------------------------------------------------
     # File dialogs
     # ------------------------------------------------------------------
 
@@ -976,7 +1117,8 @@ class CockpitMainWindow(QMainWindow):
             self, "选择 A2L 文件", "", "A2L (*.a2l);;All (*)"
         )
         if path:
-            self._status.showMessage(f"A2L: {Path(path).name}")
+            self._a2l_name = Path(path).name
+            self._update_status_bar()
 
     def _on_pick_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择输出目录", "")
@@ -1127,3 +1269,19 @@ class CockpitMainWindow(QMainWindow):
     @property
     def mode_tabs(self) -> QTabWidget:
         return self._mode_tabs
+
+    @property
+    def replay_tab(self) -> ReplayTab:
+        return self._replay_tab
+
+    @property
+    def history_tab(self) -> HistoryTab:
+        return self._history_tab
+
+    @property
+    def settings_action(self) -> QAction:
+        return self._settings_action
+
+    @property
+    def segment_action(self) -> QAction:
+        return self._segment_action
