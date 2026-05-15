@@ -34,10 +34,10 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..ui_kit.icons import Icons
+from ..ui_kit.widgets.searchable_combo import SearchableComboBox
 from ._axis_defaults import z_range_for
-from .icons import Icons
 from .widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
-from .widgets.searchable_combo import SearchableComboBox
 
 
 _PRESET_ORG = "MF4Analyzer"

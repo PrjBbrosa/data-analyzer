@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QPushButton, QSizePolicy, QWidget,
 )
 
-from .icons import BLUE, GRAY, Icons
+from ..ui_kit.icons import BLUE, GRAY, Icons
 
 
 class Toolbar(QWidget):

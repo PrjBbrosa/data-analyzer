@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QScrollArea, QSizePolicy, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
-from .icons import Icons
+from ..ui_kit.icons import Icons
 from .widgets import MultiFileChannelWidget
 
 

@@ -34,7 +34,7 @@ if ($env:OS -ne "Windows_NT") {
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
-$StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui\style.qss"
+$StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -72,7 +72,7 @@ if (-not $KeepPrevious) {
 New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir | Out-Null
 
 Write-Step "Building folder-style exe with PyInstaller"
-$AddDataStyle = "$StyleQss;mf4_analyzer\ui"
+$AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
 $PyInstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
@@ -89,10 +89,13 @@ $PyInstallerArgs += @(
     "--distpath", $DistDir,
     "--workpath", $WorkDir,
     "--specpath", $SpecDir,
-    "--hidden-import", "mf4_analyzer._fonts",
+    "--hidden-import", "mf4_analyzer.ui_kit",
+    "--hidden-import", "mf4_analyzer.ui_kit.fonts",
+    "--hidden-import", "mf4_analyzer.ui_kit.icons",
+    "--hidden-import", "mf4_analyzer.ui_kit.stylesheet",
+    "--hidden-import", "mf4_analyzer.ui_kit.widgets.searchable_combo",
     "--hidden-import", "mf4_analyzer.ui",
     "--hidden-import", "mf4_analyzer.ui.main_window",
-    "--hidden-import", "mf4_analyzer.ui.icons",
     "--add-data", $AddDataStyle,
     "--collect-all", "qtawesome",
     "--collect-all", "asammdf",

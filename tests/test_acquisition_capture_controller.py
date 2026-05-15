@@ -1,0 +1,153 @@
+"""Tests for ``CaptureController`` start/poll/stop/flush + summary."""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import pytest
+
+from mf4_analyzer.acquisition_capture.backends import (
+    FakeRecorderBackend,
+    ReplayRecorderBackend,
+)
+from mf4_analyzer.acquisition_capture.controller import CaptureController
+from mf4_analyzer.acquisition_capture.session import (
+    SelectedMeasurement,
+    SessionConfig,
+)
+
+
+THREE = (
+    SelectedMeasurement(name="A", unit="rpm"),
+    SelectedMeasurement(name="B", unit="Nm"),
+    SelectedMeasurement(name="C", unit="km/h"),
+)
+
+
+def _config(tmp_path: Path, duration_s: float | None = 1.0) -> SessionConfig:
+    return SessionConfig(
+        output_mf4=tmp_path / "out.mf4",
+        selected=THREE,
+        duration_s=duration_s,
+    )
+
+
+def test_controller_start_stop_writes_finalized_mf4(tmp_path):
+    config = _config(tmp_path, duration_s=0.3)
+    backend = FakeRecorderBackend(samples_per_second=200.0)
+    controller = CaptureController(config, backend)
+    controller.start()
+    assert controller.running
+    deadline = time.monotonic() + 0.5
+    while controller.running and time.monotonic() < deadline:
+        controller.poll_step()
+        time.sleep(0.01)
+    summary = controller.stop()
+    assert summary.output_mf4 == str(config.output_mf4)
+    assert config.output_mf4.exists()
+    assert summary.duration_s > 0
+    assert summary.rx_count > 0
+    assert summary.write_count > 0
+
+
+def test_controller_summary_includes_counters(tmp_path):
+    config = _config(tmp_path, duration_s=0.2)
+    backend = FakeRecorderBackend(samples_per_second=100.0)
+    ctrl = CaptureController(config, backend)
+    ctrl.start()
+    deadline = time.monotonic() + 0.4
+    while ctrl.running and time.monotonic() < deadline:
+        ctrl.poll_step()
+        time.sleep(0.02)
+    summary = ctrl.stop()
+    # All these spec-pinned keys must be populated.
+    for key in [
+        "duration_s",
+        "rx_count",
+        "write_count",
+        "queue_overflow_count",
+        "bus_error_count",
+        "dropped_frames",
+        "max_queue_depth",
+        "segments",
+        "output_mf4",
+    ]:
+        assert hasattr(summary, key)
+
+
+def test_controller_double_start_raises(tmp_path):
+    config = _config(tmp_path)
+    ctrl = CaptureController(config, FakeRecorderBackend())
+    ctrl.start()
+    with pytest.raises(RuntimeError, match="already running"):
+        ctrl.start()
+    ctrl.stop()
+
+
+def test_controller_stop_idempotent_after_first_call(tmp_path):
+    config = _config(tmp_path, duration_s=0.1)
+    ctrl = CaptureController(config, FakeRecorderBackend())
+    ctrl.start()
+    time.sleep(0.15)
+    ctrl.poll_step()  # triggers duration-cap stop
+    summary1 = ctrl.stop()
+    summary2 = ctrl.stop()
+    # Same output_mf4; counters frozen after first stop.
+    assert summary1.output_mf4 == summary2.output_mf4
+    assert summary2.rx_count == summary1.rx_count
+
+
+def test_controller_uses_replay_backend(tmp_path):
+    """Capture loop works against the replay backend with no Vector deps."""
+    config = SessionConfig(
+        output_mf4=tmp_path / "replay.mf4",
+        selected=THREE,
+        duration_s=0.3,
+        backend="replay",
+    )
+    backend = ReplayRecorderBackend(synth_duration_s=0.3, synth_rate_hz=50.0)
+    ctrl = CaptureController(config, backend)
+    ctrl.start()
+    deadline = time.monotonic() + 0.5
+    while ctrl.running and time.monotonic() < deadline:
+        ctrl.poll_step()
+        time.sleep(0.01)
+    summary = ctrl.stop()
+    assert (tmp_path / "replay.mf4").exists()
+    assert summary.write_count > 0
+
+
+def test_controller_drains_ring_to_writer(tmp_path):
+    """Samples land in the writer, not stuck in the ring buffer."""
+    config = _config(tmp_path, duration_s=0.2)
+    backend = FakeRecorderBackend(samples_per_second=100.0)
+    ctrl = CaptureController(config, backend)
+    ctrl.start()
+    deadline = time.monotonic() + 0.3
+    while ctrl.running and time.monotonic() < deadline:
+        ctrl.poll_step()
+        time.sleep(0.01)
+    summary = ctrl.stop()
+    # After stop the ring is empty (controller drained on stop).
+    assert ctrl.ring.level_pct == 0.0
+    # All received samples got into the writer.
+    assert summary.write_count == summary.rx_count
+
+
+def test_controller_records_segment_when_configured(tmp_path):
+    config = SessionConfig(
+        output_mf4=tmp_path / "seg.mf4",
+        selected=THREE,
+        duration_s=0.4,
+        segment_seconds=0.1,
+    )
+    ctrl = CaptureController(config, FakeRecorderBackend(samples_per_second=100.0))
+    ctrl.start()
+    deadline = time.monotonic() + 0.5
+    while ctrl.running and time.monotonic() < deadline:
+        ctrl.poll_step()
+        time.sleep(0.01)
+    summary = ctrl.stop()
+    # Expect at least one segment recorded.
+    assert summary.segments, f"no segments recorded: {summary.to_dict()}"

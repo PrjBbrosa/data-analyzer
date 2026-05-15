@@ -37,43 +37,6 @@ def _configure_high_dpi():
         QGuiApplication.setHighDpiScaleFactorRoundingPolicy(policy_enum.PassThrough)
 
 
-def _load_stylesheet(app):
-    """Load style.qss with subcontrol-arrow icon-cache substitution.
-
-    style.qss is a template containing ``{{ICON_*}}`` placeholders for
-    QComboBox / QSpinBox arrow glyphs. ``ensure_icon_cache`` renders the
-    PNGs into ~/.mf4-analyzer-cache/icons/ on first run (or after a
-    qtawesome / palette change) and returns a placeholder→path map.
-    ``render_qss_template`` substitutes them; placeholder-free QSS for
-    older / external setStyleSheet callers continues to load fine since
-    Qt silently drops unresolved ``image: url(...)`` rules.
-
-    Must run AFTER QApplication construction — qtawesome lazy-loads its
-    icon font lazily and the device-pixel-ratio that drives PNG
-    resolution is read from the QApplication primary screen.
-    """
-    qss = Path(__file__).resolve().parent / "ui" / "style.qss"
-    if not qss.exists():
-        return
-    template = qss.read_text(encoding="utf-8")
-    try:
-        ensure_icon_cache = _import_symbol("ui.icons", "ensure_icon_cache")
-        render_qss_template = _import_symbol("ui.icons", "render_qss_template")
-        icon_paths = ensure_icon_cache()
-        stylesheet = render_qss_template(template, icon_paths)
-    except Exception as exc:
-        # Defensive: if qtawesome import or icon rendering fails (e.g. on
-        # an unusual install), fall back to the raw template. Spinbox
-        # arrows will be invisible (the original bug) but the rest of
-        # the app remains styled. Log so it surfaces in the console.
-        print(
-            f"[mf4_analyzer.app] icon cache generation failed ({exc!r}); "
-            "loading stylesheet without subcontrol arrow glyphs.",
-        )
-        stylesheet = template
-    app.setStyleSheet(stylesheet)
-
-
 def main():
     _configure_high_dpi()
 
@@ -84,12 +47,13 @@ def main():
     from PyQt5.QtWidgets import QApplication
 
     MainWindow = _import_symbol("ui", "MainWindow")
-    setup_chinese_font = _import_symbol("_fonts", "setup_chinese_font")
+    setup_chinese_font = _import_symbol("ui_kit", "setup_chinese_font")
+    load_stylesheet = _import_symbol("ui_kit", "load_stylesheet")
 
     setup_chinese_font()
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
-    _load_stylesheet(app)
+    load_stylesheet(app)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

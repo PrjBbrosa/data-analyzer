@@ -368,7 +368,7 @@ def test_dblclick_chart_options_restores_pan_without_starting_span_selector(
 
 
 def test_annotation_toolbar_spacer_has_toolbar_background_rule():
-    qss = Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
 
     assert "QWidget#chartToolbar QWidget#chartAnnotationSpacer" in qss
     assert "background-color: #ffffff;" in qss
@@ -376,7 +376,7 @@ def test_annotation_toolbar_spacer_has_toolbar_background_rule():
 
 
 def test_chart_toolbar_disabled_nav_buttons_have_visible_style():
-    qss = Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
 
     assert "QWidget#chartToolbar QToolButton:disabled" in qss
     assert "border: 1px solid #e5eaf2;" in qss

@@ -35,16 +35,16 @@ from PyQt5.QtWidgets import (  # noqa: E402
     QVBoxLayout,
 )
 
-from mf4_analyzer.ui.icons import ensure_icon_cache  # noqa: E402
+from mf4_analyzer.ui_kit.icons import ensure_icon_cache  # noqa: E402
 from mf4_analyzer.ui.inspector_sections import (  # noqa: E402
     FFTTimeContextual,
 )
 
 
 def _load_qss(app: QApplication) -> None:
-    """Mirror ``mf4_analyzer.app._load_stylesheet`` so the screenshot
-    renders with the same QSS the live app uses."""
-    qss_path = REPO_ROOT / "mf4_analyzer" / "ui" / "style.qss"
+    """Mirror ``mf4_analyzer.ui_kit.stylesheet.load_stylesheet`` so the
+    screenshot renders with the same QSS the live app uses."""
+    qss_path = REPO_ROOT / "mf4_analyzer" / "ui_kit" / "style.qss"
     template = qss_path.read_text(encoding="utf-8")
     icon_paths = ensure_icon_cache()
     rendered = template

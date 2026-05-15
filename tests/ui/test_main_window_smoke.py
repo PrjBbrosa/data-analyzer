@@ -64,7 +64,7 @@ def test_main_window_inspector_slot_fixed_at_360_under_qss(qapp, qtbot):
     try:
         qapp.setStyle("Fusion")
         qapp.setStyleSheet(
-            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
         )
         w = MainWindow()
         qtbot.addWidget(w)

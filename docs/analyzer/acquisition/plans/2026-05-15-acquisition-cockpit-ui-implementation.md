@@ -73,11 +73,19 @@ assumptions.
 
 - [ ] Confirm the prototype files are in `docs/analyzer/ui-prototypes/`.
 - [ ] Confirm `mf4_analyzer.ui.MainWindow` has a public or addable file-load
-  handoff path. Current implementation has `_load_one(fp)`; plan to add a
-  public wrapper instead of calling the private method from Cockpit.
+  handoff path. Current implementation has `_load_one(fp)` at
+  `mf4_analyzer/ui/main_window.py:580`; **no public wrapper exists today**.
+  Record this gap explicitly; the wrapper `MainWindow.load_file(path)` is
+  owned by Stage 5 (see Stage 5 "Owned files"). Cockpit code in Stages 2–4
+  MUST NOT reference `_load_one`.
 - [ ] Confirm P0 status. If Vector/XCP is still PARTIAL, keep Vector release
   behind the Windows hardware gate.
 - [ ] Confirm local commands use `.venv/bin/python`.
+- [ ] Capture a "Stage 0 gap note" listing the four pieces of green-field
+  scope this plan introduces: `acquisition_capture/health.py`,
+  `acquisition_capture/preflight_estimates.py`, `acquisition_ui/`, and the
+  Stage-5 Analyzer handoff method. Future stages cross-check against this
+  list so nothing gets skipped silently.
 
 **Verification:**
 
@@ -100,11 +108,13 @@ widgets without importing each other's windows.
 **Owned files:**
 
 - Create: `mf4_analyzer/ui_kit/`
-- Move or copy-then-migrate:
-  - `mf4_analyzer/ui/icons.py`
-  - `mf4_analyzer/_fonts.py`
-  - `mf4_analyzer/ui/style.qss`
-  - `mf4_analyzer/ui/widgets/searchable_combo.py`
+- Move or copy-then-migrate (source path → target path):
+  - `mf4_analyzer/ui/icons.py` → `mf4_analyzer/ui_kit/icons.py`
+  - `mf4_analyzer/_fonts.py` (top-level, NOT under `ui/`) →
+    `mf4_analyzer/ui_kit/fonts.py`
+  - `mf4_analyzer/ui/style.qss` → `mf4_analyzer/ui_kit/style.qss`
+  - `mf4_analyzer/ui/widgets/searchable_combo.py` →
+    `mf4_analyzer/ui_kit/widgets/searchable_combo.py`
   - selected drawer primitives only if Cockpit actually needs them
 - Modify:
   - `mf4_analyzer/app.py`
@@ -117,6 +127,11 @@ widgets without importing each other's windows.
   - Analyzer imports still work.
   - `ui_kit` imports without constructing Analyzer `MainWindow`.
   - icon cache still fails loud if called before `QApplication`.
+  - **Import-boundary test** (`tests/ui/test_import_boundaries.py`): assert
+    that `mf4_analyzer.ui_kit.*` modules never import from
+    `mf4_analyzer.ui.*` or `mf4_analyzer.acquisition_ui.*`, and that
+    `mf4_analyzer.ui` never imports from `mf4_analyzer.acquisition_ui`.
+    Use `ast.walk` over the source files, not runtime imports.
 - [ ] Extract `load_stylesheet(app)` from `mf4_analyzer.app._load_stylesheet`
   into `mf4_analyzer/ui_kit/stylesheet.py`.
 - [ ] Move shared icon and font helpers into `ui_kit`; keep thin compatibility
@@ -168,16 +183,24 @@ the recorder.
 ```text
 SessionConfig
 SelectedMeasurement
-RecorderHealth
+RecorderHealth                 # alias for RecHealth; see health.py
 SessionSummary
-RingBuffer
-RecorderBackend
+RingBuffer                     # emits watermark_changed Qt signal
+RecorderBackend                # exposes last_frame_monotonic() too
 FakeRecorderBackend
 ReplayRecorderBackend
 VectorXcpRecorderBackend (stub/lazy, not production yet)
 CaptureController
-Mf4Writer
+Mf4Writer                      # channel-naming contract per spec
 ```
+
+**Health and thresholds modules (new in this stage):**
+
+- `mf4_analyzer/acquisition_capture/health.py` — HwHealth, CanHealth,
+  XcpHealth, DaqHealth, RecHealth dataclasses and their `level()` helpers,
+  plus `HealthAggregator`. See spec §Health Snapshot Model Contract.
+- `mf4_analyzer/acquisition_capture/thresholds.py` — every numeric constant
+  referenced by spec §Threshold Contract. UI must only import from here.
 
 **Tasks:**
 
@@ -197,8 +220,21 @@ Mf4Writer
 - [ ] Implement a writer spike:
   - If `asammdf` supports the needed safe incremental write pattern, wrap it.
   - If not, buffer bounded chunks and write finalized MF4 on stop for the MVP.
+  - **Channel-naming contract (spec §Recorder Backend):** every MF4 channel
+    name MUST equal the A2L measurement `name` verbatim. The spike report
+    pins this contract and the unit test
+    `tests/test_acquisition_capture_writer.py::test_channel_names_match_a2l`
+    proves it (write fake recording → reload via `DataLoader.load_mf4` →
+    assert `set(channels) == set(selected_names)`).
   - Record the decision in
     `docs/analyzer/acquisition/reports/2026-05-15-mf4-writer-spike.md`.
+- [ ] Implement `HealthAggregator` polling loop (default 500 ms):
+  - Pulls `HwHealth` from `vector_probe.probe_hw_snapshot()` (Stage 8 supplies
+    the real implementation; Stage 2 supplies a macOS-friendly stub that
+    returns `ok=False, error="non-windows host"`).
+  - Pulls `RecHealth` from the active backend via `last_frame_monotonic()`
+    and `RingBuffer.level_pct`.
+  - Tests cover the watchdog rule: `last_rx_age_s ≥ 2.0` ⇒ `level == 'red'`.
 - [ ] Add a CLI entry `python -m mf4_analyzer.acquisition_capture` for the
   CLI-first MVP:
   - Accepts `--backend {fake,replay}`, `--duration`, `--output`,
@@ -240,24 +276,62 @@ PYTHONPATH=. .venv/bin/python -m pytest tests/test_p0_mf4_probe.py -v
 - Create: `mf4_analyzer/acquisition_capture/a2l_events.py` or equivalent
 - Create: `mf4_analyzer/acquisition_capture/search.py`
 - Create: `mf4_analyzer/acquisition_capture/config_store.py`
+- Create: `mf4_analyzer/acquisition_capture/preflight_estimates.py`
 - Create tests: `tests/test_acquisition_a2l_events.py`,
   `tests/test_acquisition_measurement_search.py`,
-  `tests/test_acquisition_config_store.py`
+  `tests/test_acquisition_config_store.py`,
+  `tests/test_acquisition_preflight_estimates.py`
 
 **Tasks:**
 
-- [ ] Extend A2L summaries so a measurement can expose available DAQ events
-  and event capacity when the A2L contains `IF_DATA XCP DAQ_EVENT`.
+- [ ] Extend A2L summaries with the data shape so a measurement can expose
+  available DAQ events and event capacity when the A2L contains
+  `IF_DATA XCP DAQ_EVENT`. Output schema: `event_capacity: Mapping[str, int]`,
+  `measurement_events: Mapping[str, tuple[str, ...]]`. When the A2L lacks
+  IF_DATA XCP entirely, both maps are empty and a flag
+  `a2l_has_daq_events: bool` is set false (consumed by §Left Pane fallback).
+  **Scope note for MVP**: the data shape lands in this stage; the actual
+  IF_DATA tree-walking is deferred to Stage 8 alongside production Vector/XCP
+  (cockpit `--demo` consumes `FakeRecorderBackend` event metadata, not real
+  A2L bytes — see spec §Preflight Computation Contract "Deferred: real
+  IF_DATA XCP DAQ_EVENT extraction"). Default-empty-maps tests are sufficient
+  for Stage 3 exit; deep-IF_DATA tests live in Stage 8.
 - [ ] Keep the current `MeasurementSummary` import path compatible or add a
   deliberate migration test.
-- [ ] Implement token-aware search with the spec scores.
-- [ ] Implement address/unit/name mode detection.
+- [ ] Implement token-aware search with the spec scores. The search module
+  returns `SearchHit(measurement, score, match_spans)` where `match_spans`
+  is a list of half-open `(start, end)` character ranges. UI uses these
+  spans directly for blue-highlight rendering — no re-matching in the view.
+- [ ] Implement address/unit/name mode detection. Unit mode applies the
+  normalization rules from spec §Search And Filter Contract (lower-case,
+  strip, `°→deg`, `^` dropped); measurements with empty `phys_unit` are
+  excluded from unit-mode results.
 - [ ] Implement filter state with `有 DAQ` default on and AND semantics.
-- [ ] Implement recent/favorites persistence:
-  - recent: `~/.acquisition-cockpit/recent.json`
+  When `a2l_has_daq_events` is false, the chip auto-disables; the filter
+  module is the source of truth (UI just reflects).
+- [ ] Implement `build_event_intersection(selected) -> set[str]` for the
+  batch-raster dropdown. Empty result returns an empty set; UI disables the
+  dropdown when the set is empty.
+- [ ] Implement recent/favorites persistence per spec §Persistence Contract:
+  - recent: `~/.acquisition-cockpit/recent.json` (schema in spec).
   - favorites and selected raster: per-project `acquisition_config.yaml`
+    with the exact YAML schema from spec §Persistence Contract.
+  - `config_store.load_or_default(project_root)` follows the 4-step lookup
+    order in spec; missing config returns an in-memory default and sets a
+    `pinned: bool` flag that the status bar reads.
 - [ ] Do not require a real A2L in normal CI. Use tiny fixtures or pure unit
   tests for parsing helpers, and keep `P0_A2L_PATH` tests skip-gated.
+- [ ] Implement five preflight-estimate pure functions plus the two band
+  helpers per spec §Preflight Computation Contract:
+  - `estimate_can_bus_load(selected, bitrate_bps)`
+  - `daq_slot_usage(event_name, selected, event_capacity)`
+  - `estimate_throughput_bps(selected)`
+  - `estimate_record_duration_s(throughput_bps, disk_free_bytes)`
+  - `estimate_sample_events_per_s(selected)`
+  - `band_disk_remaining(disk_free_bytes) -> 'green' | 'yellow' | 'red'`
+  - `band_sample_events_per_s(events_per_s) -> 'green' | 'yellow' | 'red'`
+  Each function and each band helper is unit-tested against the
+  green/yellow/red rows in spec §Threshold Contract.
 
 **Verification:**
 
@@ -266,7 +340,8 @@ PYTHONPATH=. .venv/bin/python -m pytest \
   tests/test_p0_a2l_probe.py \
   tests/test_acquisition_a2l_events.py \
   tests/test_acquisition_measurement_search.py \
-  tests/test_acquisition_config_store.py -v
+  tests/test_acquisition_config_store.py \
+  tests/test_acquisition_preflight_estimates.py -v
 ```
 
 **Exit criteria:**
@@ -286,28 +361,57 @@ state transitions. Do not integrate Vector yet.
 - Create: `mf4_analyzer/acquisition_ui/main_window.py`
 - Create: `mf4_analyzer/acquisition_ui/state.py`
 - Create: `mf4_analyzer/acquisition_ui/widgets/`
+- Create: `mf4_analyzer/acquisition_ui/widgets/live_downsampler.py`
 - Create tests: `tests/acquisition_ui/`
 
 **Tasks:**
 
 - [ ] Write state-machine tests first:
-  - disconnected -> connected idle.
+  - disconnected -> connected idle (gated by spec `healthy` predicate:
+    `HwHealth.ok ∧ XcpHealth.connected ∧ first DAQ frame ≤ 3 s`).
+  - connection timeout: 3 s without a frame returns to disconnected and
+    surfaces the first failing predicate name in the right panel.
   - connected idle -> recording.
-  - recording -> review modal.
+  - recording -> review modal (gated by `finalized` predicate from spec).
   - review close -> connected idle.
   - red health disables record.
   - yellow health warns but does not necessarily disable record.
+  - dropped-frames > 100 opens the in-state "继续/停止" prompt; choosing
+    `继续` keeps recording, choosing `停止` triggers the same flow as
+    pressing Stop manually.
 - [ ] Implement `python -m mf4_analyzer.acquisition_ui --demo`.
 - [ ] Build toolbar with A2L/DBC/output controls, mode segment, REC indicator,
   and stateful main button.
 - [ ] Build health strip using a model object so tests can assert button state
   without pixel inspection.
 - [ ] Build the left pane using Stage 3 search/filter models.
-- [ ] Build center live cards with fake/replay streaming data.
+- [ ] Build center live cards with fake/replay streaming data. Sparklines
+  use `widgets/live_downsampler.py`:
+  - Input: N timestamped samples and W target pixels.
+  - Output: W `(min, max)` bins.
+  - A dedicated unit test pins the input/output shape and tolerates
+    `N < W` (one sample per pixel, no interpolation).
+  - Card stats label which window applies (`since 60s` vs `since rec start`),
+    matching spec §State Machine `stats window`.
 - [ ] Build right panel variants for disconnected, idle preflight/readiness,
-  and recording quality monitor.
+  and recording quality monitor. Each row binds to one
+  `*Health` snapshot field; the widget MUST NOT compute thresholds inline.
+  Numbers in the idle panel come from the four pure functions in
+  `acquisition_capture/preflight_estimates.py`.
+- [ ] Wire `RingBuffer.watermark_changed` to `MainWindow.set_target_fps`
+  (30 → 10 fps) and to the auto-stop handler (≥ 95 % for 5 s or disk
+  `< 100 MB`). Test: emit the signal directly and assert the slot fires;
+  no recorder required.
+- [ ] Wire `HealthAggregator.health_changed` to the health-strip view model.
+  Test: simulate `last_rx_age_s = 2.5` and assert the REC chip turns red
+  even when ring buffer fill is 0.
 - [ ] Freeze A2L/raster controls while recording.
-- [ ] Keep `回放` present but disabled or no-op until its own spec.
+- [ ] Keep `回放` present but disabled or no-op until its own spec. Tab
+  header reads `回放 (待开放)` and the body is a single-line placeholder
+  per spec Product Decisions.
+- [ ] DBC selector in the toolbar is `setEnabled(False)` with the tooltip
+  string from spec Product Decisions. Test: clicking the disabled control
+  does not trigger any file dialog or signal emission.
 
 **Verification:**
 
@@ -344,10 +448,25 @@ diagnostics, archive choice, and Analyzer opening.
 
 **Tasks:**
 
-- [ ] Add `MainWindow.load_file(path)` in Analyzer as a public wrapper around
-  the existing private load implementation.
+- [ ] Add `MainWindow.load_file(path: str | Path) -> None` in Analyzer
+  (`mf4_analyzer/ui/main_window.py`) as a public wrapper around the existing
+  private `_load_one` flow. This is the only Analyzer-side modification in
+  the plan; `_load_one` itself stays unchanged.
 - [ ] Add tests proving Cockpit handoff calls the public method only after the
   writer reports finalized.
+- [ ] Encode the `expected_channels` contract in the review-modal flow:
+  - Cockpit passes `expected_channels = tuple(m.name for m in selected)` to
+    `analyze_mf4(...)` verbatim.
+  - This relies on Stage 2's writer channel-naming rule; if that rule is
+    violated the round-trip test there fails before Stage 5 runs.
+  - Add `tests/acquisition_ui/test_review_handoff.py::test_expected_channels`
+    that drives a 1-second fake recording with three measurements and
+    asserts `PreflightResult.missing_channels == ()`.
+- [ ] Honour the `Recording` sub-state prompt: if `dropped_frames` crosses
+  the 100-cumulative threshold while recording, show the non-modal
+  "丢帧过多 · 是否停止？" prompt with two buttons. `继续录制` dismisses;
+  `停止并复盘` runs the same stop/flush/finalize flow as the toolbar Stop.
+  Test pins both branches without involving the real recorder.
 - [ ] Implement stop/flush/finalize sequence:
   - stop backend.
   - drain writer.

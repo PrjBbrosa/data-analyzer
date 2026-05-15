@@ -577,6 +577,23 @@ class MainWindow(QMainWindow):
         fps, _ = QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.csv *.xlsx *.xls)")
         for fp in fps: self._load_one(fp)
 
+    def load_file(self, path) -> None:
+        """Public Analyzer handoff for single-file loads.
+
+        Stage 5 of the Acquisition Cockpit plan
+        (``docs/analyzer/acquisition/plans/2026-05-15-acquisition-cockpit-ui-implementation.md``)
+        wires Cockpit's review modal to this method. Spec §Architecture
+        Contract / Analyzer Handoff pins the contract:
+
+        - Public method, accepts ``str | Path``.
+        - Thin wrapper around the existing private ``_load_one(fp)`` flow.
+        - Cockpit MUST NOT call ``_load_one`` directly.
+
+        This is the only Analyzer-side modification authorized by the
+        plan; ``_load_one``'s body stays unchanged.
+        """
+        self._load_one(str(path))
+
     def _load_one(self, fp):
         try:
             self.statusBar.showMessage(f"加载: {fp}");
