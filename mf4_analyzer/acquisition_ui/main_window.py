@@ -39,19 +39,21 @@ logger = logging.getLogger(__name__)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QAction,
-    QComboBox,
+    QButtonGroup,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QTabWidget,
-    QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -103,6 +105,11 @@ DBC_DISABLED_TOOLTIP = "Reserved for raw CAN capture; XCP path uses A2L."
 # Spec Product Decisions — mode tabs.
 REPLAY_TAB_TITLE = "回放"
 HISTORY_TAB_TITLE = "历史"
+MODE_SEGMENTS = (
+    ("capture", "采集", 0),
+    ("replay", REPLAY_TAB_TITLE, 1),
+    ("history", HISTORY_TAB_TITLE, 2),
+)
 
 # Spec §State Machine `Disconnected` failure surface text.
 DROPPED_FRAMES_PROMPT_TITLE = "丢帧过多"
@@ -182,6 +189,7 @@ class CockpitMainWindow(QMainWindow):
         self._rec_start_ts: float | None = None
         self._stream_start_ts: float | None = None
         self._a2l_name: str | None = None
+        self._output_dir_label = "data/runs"
         self._cumulative_rx_count = 0
         self._cumulative_dropped = 0
         self._dropped_prompt_shown = False
@@ -251,13 +259,13 @@ class CockpitMainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        self._toolbar = self._build_toolbar()
-        self.addToolBar(Qt.TopToolBarArea, self._toolbar)
-
         central = QWidget(self)
         outer = QVBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
+        self._toolbar = self._build_toolbar()
+        outer.addWidget(self._toolbar)
 
         self._health_strip = HealthStrip(self)
         self._health_strip.levels_changed.connect(self._on_health_levels_changed)
@@ -266,6 +274,7 @@ class CockpitMainWindow(QMainWindow):
         # Mode tabs — spec §Toolbar: `采集 / 回放 / 历史`.
         self._mode_tabs = QTabWidget(self)
         self._mode_tabs.setObjectName("cockpitModeTabs")
+        self._neutralize_mode_tab_bar()
         # 采集 page is the three-pane layout.
         self._mode_tabs.addTab(self._build_acquisition_page(), "采集")
         self._replay_tab = ReplayTab(parent=self)
@@ -277,6 +286,7 @@ class CockpitMainWindow(QMainWindow):
         self._mode_tabs.addTab(self._history_tab, HISTORY_TAB_TITLE)
         self._mode_tabs.currentChanged.connect(self._on_mode_tab_changed)
         outer.addWidget(self._mode_tabs, stretch=1)
+        self._sync_mode_segment(self._mode_tabs.currentIndex())
 
         self.setCentralWidget(central)
         self._status = QStatusBar(self)
@@ -285,76 +295,209 @@ class CockpitMainWindow(QMainWindow):
         if self._settings_load_error:
             self._status.showMessage(f"设置加载失败: {self._settings_load_error}")
 
-    def _build_toolbar(self) -> QToolBar:
-        toolbar = QToolBar("CockpitToolbar", self)
-        toolbar.setObjectName("cockpitToolbar")
-        toolbar.setMovable(False)
-        toolbar.setFloatable(False)
+    def _build_toolbar(self) -> QWidget:
+        toolbar = QFrame(self)
+        toolbar.setObjectName("cockpitToolbarBand")
+        toolbar.setFrameShape(QFrame.NoFrame)
+        toolbar.setFixedHeight(50)
+        layout = QHBoxLayout(toolbar)
+        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setSpacing(10)
 
-        self._a2l_btn = QPushButton("A2L 选择", self)
+        self._a2l_btn = self._make_selector_button(
+            "cockpitSelectorA2l", "A2L", "未加载"
+        )
         self._a2l_btn.clicked.connect(self._on_pick_a2l)
-        toolbar.addWidget(self._a2l_btn)
+        layout.addWidget(self._a2l_btn)
 
         # DBC selector — spec Product Decisions: setEnabled(False)
         # with the verbatim tooltip. We use a QPushButton so the click
         # signal is connectable for the test that asserts clicking
         # emits nothing (Qt's disabled state already suppresses
         # ``clicked`` emission).
-        self._dbc_btn = QPushButton("DBC 选择", self)
+        self._dbc_btn = self._make_selector_button(
+            "cockpitSelectorDbc", "DBC", "可选"
+        )
         self._dbc_btn.setEnabled(False)
         self._dbc_btn.setToolTip(DBC_DISABLED_TOOLTIP)
         # If a slot were connected, Qt would still not emit while
         # disabled; we leave it unconnected to match the spec
         # "clicking emits nothing".
-        toolbar.addWidget(self._dbc_btn)
+        layout.addWidget(self._dbc_btn)
 
-        self._output_btn = QPushButton("输出目录", self)
+        self._output_btn = self._make_selector_button(
+            "cockpitSelectorOutput", "输出", self._output_dir_label
+        )
         self._output_btn.clicked.connect(self._on_pick_output_dir)
-        toolbar.addWidget(self._output_btn)
+        layout.addWidget(self._output_btn)
 
         self._settings_action = QAction("设置", self)
         self._settings_action.setObjectName("cockpitSettingsAction")
         self._settings_action.triggered.connect(self._open_settings_dialog)
-        toolbar.addAction(self._settings_action)
+        self._settings_btn = QToolButton(self)
+        self._settings_btn.setObjectName("cockpitSettingsButton")
+        self._settings_btn.setDefaultAction(self._settings_action)
+        self._settings_btn.setText("⚙")
+        self._settings_btn.setToolTip("设置")
+        self._settings_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._settings_btn.setFixedSize(30, 30)
+        layout.addWidget(self._settings_btn)
 
-        toolbar.addSeparator()
+        layout.addWidget(self._toolbar_separator(toolbar))
 
         self._segment_action = QAction("+ 段", self)
         self._segment_action.setObjectName("segmentMarkerAction")
         self._segment_action.setToolTip("标记一段 (M)")
         self._segment_action.setShortcut("M")
         self._segment_action.triggered.connect(self._on_mark_segment)
-        toolbar.addAction(self._segment_action)
         self._segment_action.setVisible(False)
+        self._segment_btn = QToolButton(self)
+        self._segment_btn.setObjectName("segmentMarkerButton")
+        self._segment_btn.setDefaultAction(self._segment_action)
+        self._segment_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._segment_btn.setVisible(False)
+        layout.addWidget(self._segment_btn)
 
-        # Mode segmented control mirrors the QTabWidget for the
-        # toolbar visual; the source of truth is the tab widget.
-        toolbar.addWidget(QLabel("模式:", self))
-        self._mode_label = QLabel("采集", self)
-        font = self._mode_label.font()
-        font.setBold(True)
-        self._mode_label.setFont(font)
-        toolbar.addWidget(self._mode_label)
+        layout.addWidget(self._build_mode_segment(toolbar))
 
         # Stretch.
         spacer = QWidget(self)
-        spacer.setSizePolicy(spacer.sizePolicy().Expanding, spacer.sizePolicy().Preferred)
-        toolbar.addWidget(spacer)
+        spacer.setObjectName("cockpitToolbarSpacer")
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        layout.addWidget(spacer)
 
         # REC indicator (toolbar global).
-        self._rec_indicator = QLabel("REC OFF", self)
+        self._rec_indicator = QLabel("● REC OFF", self)
         self._rec_indicator.setObjectName("cockpitRecIndicator")
-        toolbar.addWidget(self._rec_indicator)
+        self._rec_indicator.setFixedHeight(32)
+        self._rec_indicator.setMinimumWidth(92)
+        self._rec_indicator.setAlignment(Qt.AlignCenter)
+        self._set_visual_property(self._rec_indicator, "recState", "off")
+        layout.addWidget(self._rec_indicator)
 
-        toolbar.addSeparator()
+        layout.addWidget(self._toolbar_separator(toolbar))
 
         # Main stateful button.
         self._main_btn = QPushButton("连接 ECU", self)
         self._main_btn.setProperty("role", "primary")
+        self._main_btn.setFixedHeight(36)
+        self._main_btn.setMinimumWidth(106)
         self._main_btn.clicked.connect(self._on_main_button)
-        toolbar.addWidget(self._main_btn)
+        layout.addWidget(self._main_btn)
 
         return toolbar
+
+    def _make_selector_button(
+        self, object_name: str, key: str, value: str
+    ) -> QPushButton:
+        button = QPushButton("", self)
+        button.setObjectName(object_name)
+        button.setProperty("cockpitSelector", True)
+        button.setFixedHeight(28)
+        widths = {
+            "cockpitSelectorA2l": 130,
+            "cockpitSelectorDbc": 150,
+            "cockpitSelectorOutput": 180,
+        }
+        button.setFixedWidth(widths.get(object_name, 130))
+        button.setCursor(Qt.PointingHandCursor)
+        layout = QHBoxLayout(button)
+        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setSpacing(6)
+
+        key_label = QLabel(key, button)
+        key_label.setObjectName("cockpitSelectorKey")
+        value_label = QLabel(value, button)
+        value_label.setObjectName("cockpitSelectorValue")
+        key_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        value_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        layout.addWidget(key_label, 0, Qt.AlignVCenter)
+        layout.addWidget(value_label, 1, Qt.AlignVCenter)
+        caret = QLabel("▾", button)
+        caret.setObjectName("cockpitSelectorCaret")
+        caret.setAttribute(Qt.WA_TransparentForMouseEvents)
+        layout.addWidget(caret, 0, Qt.AlignVCenter)
+
+        button.setToolTip(value)
+        return button
+
+    def _set_selector_value(
+        self, button: QPushButton, key: str, value: str
+    ) -> None:
+        key_label = button.findChild(QLabel, "cockpitSelectorKey")
+        value_label = button.findChild(QLabel, "cockpitSelectorValue")
+        if key_label is not None:
+            key_label.setText(key)
+        if value_label is not None:
+            value_label.setText(value)
+        button.setToolTip(value)
+
+    def _toolbar_separator(self, parent: QWidget) -> QFrame:
+        separator = QFrame(parent)
+        separator.setObjectName("cockpitToolbarSeparator")
+        separator.setFrameShape(QFrame.VLine)
+        separator.setFrameShadow(QFrame.Plain)
+        separator.setFixedHeight(22)
+        return separator
+
+    def _build_mode_segment(self, parent: QWidget) -> QWidget:
+        segment = QWidget(parent)
+        segment.setObjectName("cockpitModeSegment")
+        segment.setFixedHeight(32)
+        layout = QHBoxLayout(segment)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._mode_button_group = QButtonGroup(self)
+        self._mode_button_group.setExclusive(True)
+        self._mode_buttons: dict[int, QPushButton] = {}
+        for mode, label, index in MODE_SEGMENTS:
+            button = QPushButton(label, segment)
+            button.setCheckable(True)
+            button.setProperty("cockpitMode", mode)
+            button.setFixedHeight(26)
+            button.setMinimumWidth(56)
+            button.clicked.connect(
+                lambda _checked=False, tab_index=index: (
+                    self._on_mode_segment_clicked(tab_index)
+                )
+            )
+            self._mode_button_group.addButton(button, index)
+            self._mode_buttons[index] = button
+            layout.addWidget(button)
+        self._sync_mode_segment(0)
+        return segment
+
+    def _neutralize_mode_tab_bar(self) -> None:
+        tab_bar = self._mode_tabs.tabBar()
+        tab_bar.hide()
+        tab_bar.setEnabled(False)
+        tab_bar.setMinimumHeight(0)
+        tab_bar.setMaximumHeight(0)
+        self._mode_tabs.setDocumentMode(True)
+
+    def _on_mode_segment_clicked(self, index: int) -> None:
+        if hasattr(self, "_mode_tabs"):
+            self._mode_tabs.setCurrentIndex(index)
+        else:
+            self._sync_mode_segment(index)
+
+    def _sync_mode_segment(self, index: int) -> None:
+        if not hasattr(self, "_mode_buttons"):
+            return
+        for button_index, button in self._mode_buttons.items():
+            old = button.blockSignals(True)
+            button.setChecked(button_index == index)
+            button.blockSignals(old)
+
+    @staticmethod
+    def _set_visual_property(widget: QWidget, name: str, value: str) -> None:
+        if widget.property(name) == value:
+            return
+        widget.setProperty(name, value)
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+        widget.update()
 
     def _build_acquisition_page(self) -> QWidget:
         page = QWidget(self)
@@ -383,8 +526,7 @@ class CockpitMainWindow(QMainWindow):
         return page
 
     def _on_mode_tab_changed(self, index: int) -> None:
-        text = self._mode_tabs.tabText(index) if index >= 0 else "采集"
-        self._mode_label.setText(text)
+        self._sync_mode_segment(index if index >= 0 else 0)
 
     def _load_threshold_overrides(self) -> None:
         try:
@@ -406,11 +548,16 @@ class CockpitMainWindow(QMainWindow):
         self, old: CockpitState, new: CockpitState
     ) -> None:
         if hasattr(self, "_segment_action"):
-            self._segment_action.setVisible(new == CockpitState.RECORDING)
+            segment_visible = new == CockpitState.RECORDING
+            self._segment_action.setVisible(segment_visible)
+            if hasattr(self, "_segment_btn"):
+                self._segment_btn.setVisible(segment_visible)
         if new == CockpitState.DISCONNECTED:
             self._main_btn.setText("连接 ECU")
             self._main_btn.setEnabled(True)
-            self._rec_indicator.setText("REC OFF")
+            self._set_visual_property(self._main_btn, "cockpitAction", "connect")
+            self._rec_indicator.setText("● REC OFF")
+            self._set_visual_property(self._rec_indicator, "recState", "off")
             self._right_panel.show_disconnected(
                 snapshot=self._health_aggregator.last,
                 first_frame_received=self._first_frame_ts is not None,
@@ -427,7 +574,9 @@ class CockpitMainWindow(QMainWindow):
             self._center.set_recording(False, None)
         elif new == CockpitState.CONNECTED_IDLE:
             self._main_btn.setText("● 采集")
-            self._rec_indicator.setText("REC OFF")
+            self._set_visual_property(self._main_btn, "cockpitAction", "record")
+            self._rec_indicator.setText("● REC OFF")
+            self._set_visual_property(self._rec_indicator, "recState", "off")
             self._center.set_recording(False, None)
             self._refresh_idle_right_panel()
             self._update_status_bar()
@@ -438,14 +587,18 @@ class CockpitMainWindow(QMainWindow):
                 self._rec_start_ts = time.monotonic()
             self._main_btn.setText("■ Stop & 复盘")
             self._main_btn.setEnabled(True)
+            self._set_visual_property(self._main_btn, "cockpitAction", "stop")
             self._rec_indicator.setText("● REC")
+            self._set_visual_property(self._rec_indicator, "recState", "recording")
             self._left_pane.set_frozen(True)
             self._center.set_recording(True, self._rec_start_ts)
             self._update_status_bar()
             self._refresh_recording_right_panel()
         elif new == CockpitState.REVIEW_MODAL:
             self._main_btn.setEnabled(False)
-            self._rec_indicator.setText("REC OFF")
+            self._set_visual_property(self._main_btn, "cockpitAction", "disabled")
+            self._rec_indicator.setText("● REC OFF")
+            self._set_visual_property(self._rec_indicator, "recState", "off")
             self._left_pane.set_frozen(False)
             self._status.showMessage("复盘")
             self._open_review_modal()
@@ -932,14 +1085,20 @@ class CockpitMainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_health_levels_changed(self, levels: dict) -> None:
-        # Mirror REC chip into the toolbar indicator color.
+        # Mirror REC chip into the toolbar indicator property for QSS.
         rec_level = levels.get("REC", "off")
         if rec_level == "red":
-            self._rec_indicator.setStyleSheet("color: #dc2626; font-weight: 700;")
+            self._rec_indicator.setText("● REC ERROR")
+            self._set_visual_property(self._rec_indicator, "recState", "error")
         elif rec_level == "yellow":
-            self._rec_indicator.setStyleSheet("color: #d97706; font-weight: 700;")
+            self._rec_indicator.setText("● REC WARN")
+            self._set_visual_property(self._rec_indicator, "recState", "warn")
+        elif self._state_machine.state == CockpitState.RECORDING:
+            self._rec_indicator.setText("● REC")
+            self._set_visual_property(self._rec_indicator, "recState", "recording")
         else:
-            self._rec_indicator.setStyleSheet("color: #64748b; font-weight: 600;")
+            self._rec_indicator.setText("● REC OFF")
+            self._set_visual_property(self._rec_indicator, "recState", "off")
         self._update_record_button_enabled()
 
     def _update_record_button_enabled(self) -> None:
@@ -948,8 +1107,10 @@ class CockpitMainWindow(QMainWindow):
         levels = self._health_strip.current_levels()
         if any(level == "red" for level in levels.values()):
             self._main_btn.setEnabled(False)
+            self._set_visual_property(self._main_btn, "cockpitAction", "disabled")
         else:
             self._main_btn.setEnabled(True)
+            self._set_visual_property(self._main_btn, "cockpitAction", "record")
 
     # ------------------------------------------------------------------
     # Right-panel refreshers
@@ -1118,11 +1279,14 @@ class CockpitMainWindow(QMainWindow):
         )
         if path:
             self._a2l_name = Path(path).name
+            self._set_selector_value(self._a2l_btn, "A2L", self._a2l_name)
             self._update_status_bar()
 
     def _on_pick_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择输出目录", "")
         if path:
+            self._output_dir_label = path
+            self._set_selector_value(self._output_btn, "输出", self._output_dir_label)
             self._status.showMessage(f"输出目录: {path}")
 
     # ------------------------------------------------------------------

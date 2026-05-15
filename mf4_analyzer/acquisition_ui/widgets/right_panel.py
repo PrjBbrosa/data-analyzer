@@ -24,8 +24,8 @@ from collections.abc import Mapping, Sequence
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QFormLayout,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QStackedWidget,
     QVBoxLayout,
@@ -49,7 +49,7 @@ from mf4_analyzer.acquisition_capture.preflight_estimates import (
     estimate_throughput_bps,
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
-from mf4_analyzer.acquisition_capture.thresholds import DEFAULT_CAN_BITRATE_BPS
+from mf4_analyzer.acquisition_capture import thresholds
 
 
 # Display tokens. Color tokens stay in this file because they are
@@ -66,6 +66,99 @@ _LEVEL_COLOR = {
 def _format_band_value(level: str, text: str) -> str:
     color = _LEVEL_COLOR.get(level, _LEVEL_COLOR["off"])
     return f'<span style="color:{color}; font-weight:600;">{text}</span>'
+
+
+def _new_value_label(parent: QWidget, object_name: str = "") -> QLabel:
+    label = QLabel("—", parent)
+    if object_name:
+        label.setObjectName(object_name)
+    label.setTextFormat(Qt.RichText)
+    label.setWordWrap(True)
+    return label
+
+
+def _add_header_row(
+    outer: QVBoxLayout,
+    parent: QWidget,
+    title: str,
+    *,
+    substatus: QLabel | None = None,
+) -> QLabel:
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(8)
+    header = QLabel(title, parent)
+    header.setObjectName("paneHeader")
+    row.addWidget(header)
+    row.addStretch(1)
+    if substatus is not None:
+        row.addWidget(substatus)
+    outer.addLayout(row)
+    return header
+
+
+def _add_section(
+    outer: QVBoxLayout,
+    parent: QWidget,
+    title: str,
+) -> tuple[QFrame, QVBoxLayout]:
+    section = QFrame(parent)
+    section.setObjectName("rightMetricSection")
+    layout = QVBoxLayout(section)
+    layout.setContentsMargins(10, 8, 10, 8)
+    layout.setSpacing(4)
+    title_label = QLabel(title, section)
+    title_label.setObjectName("rightMetricTitle")
+    layout.addWidget(title_label)
+    outer.addWidget(section)
+    return section, layout
+
+
+def _add_metric_section(
+    outer: QVBoxLayout,
+    parent: QWidget,
+    title: str,
+    *,
+    value_object_name: str = "",
+) -> QLabel:
+    section, layout = _add_section(outer, parent, title)
+    value = _new_value_label(section, value_object_name)
+    layout.addWidget(value)
+    return value
+
+
+def _add_value_row(
+    layout: QVBoxLayout,
+    parent: QWidget,
+    title: str,
+    value: QLabel,
+) -> None:
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(8)
+    caption = QLabel(title, parent)
+    caption.setObjectName("rightMetricCaption")
+    row.addWidget(caption)
+    row.addStretch(1)
+    row.addWidget(value)
+    layout.addLayout(row)
+
+
+def _add_verdict_banner(
+    outer: QVBoxLayout,
+    parent: QWidget,
+    *,
+    value_object_name: str = "",
+) -> tuple[QFrame, QLabel]:
+    banner = QFrame(parent)
+    banner.setObjectName("rightVerdictBanner")
+    layout = QVBoxLayout(banner)
+    layout.setContentsMargins(10, 8, 10, 8)
+    layout.setSpacing(4)
+    label = _new_value_label(banner, value_object_name)
+    layout.addWidget(label)
+    outer.addWidget(banner)
+    return banner, label
 
 
 # ---------------------------------------------------------------------------
@@ -87,29 +180,22 @@ class DisconnectedPage(_BasePanelPage):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        header = QLabel("连接检查")
-        header.setObjectName("paneHeader")
-        self._outer.addWidget(header)
+        _add_header_row(self._outer, self, "连接前检查")
 
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignLeft)
-        form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(6)
-        self._row_hw = QLabel("…", self)
-        self._row_xcp = QLabel("…", self)
-        self._row_frame = QLabel("…", self)
-        self._row_selection = QLabel("0 项已选", self)
-        form.addRow("HW 可用", self._row_hw)
-        form.addRow("XCP 已连接", self._row_xcp)
-        form.addRow("首帧已收", self._row_frame)
-        form.addRow("已选信号", self._row_selection)
-        self._outer.addLayout(form)
+        self._row_a2l = _add_metric_section(self._outer, self, "A2L")
 
-        self._failure = QLabel(self)
+        section, layout = _add_section(self._outer, self, "硬件")
+        self._row_hw = _new_value_label(section)
+        self._row_xcp = _new_value_label(section)
+        self._row_frame = _new_value_label(section)
+        _add_value_row(layout, section, "HW 可用", self._row_hw)
+        _add_value_row(layout, section, "XCP 已连接", self._row_xcp)
+        _add_value_row(layout, section, "首帧已收", self._row_frame)
+
+        self._row_selection = _add_metric_section(self._outer, self, "当前选择")
+
+        _, self._failure = _add_verdict_banner(self._outer, self)
         self._failure.setObjectName("rightPanelFailure")
-        self._failure.setWordWrap(True)
-        self._outer.addWidget(self._failure)
         self._outer.addStretch(1)
 
     def apply(
@@ -120,9 +206,10 @@ class DisconnectedPage(_BasePanelPage):
         first_failure: str | None,
         selection_count: int,
     ) -> None:
+        self._row_a2l.setText(_format_band_value("off", "--"))
         if snapshot is None:
-            self._row_hw.setText(_format_band_value("off", "—"))
-            self._row_xcp.setText(_format_band_value("off", "—"))
+            self._row_hw.setText(_format_band_value("off", "--"))
+            self._row_xcp.setText(_format_band_value("off", "--"))
         else:
             hw_ok = snapshot.hw.ok
             self._row_hw.setText(
@@ -151,7 +238,7 @@ class DisconnectedPage(_BasePanelPage):
                 f"首个未通过: {first_failure}</span>"
             )
         else:
-            self._failure.setText("")
+            self._failure.setText("等待连接条件")
 
 
 class IdlePreflightPage(_BasePanelPage):
@@ -159,39 +246,46 @@ class IdlePreflightPage(_BasePanelPage):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        header = QLabel("录制准备")
-        header.setObjectName("paneHeader")
-        self._outer.addWidget(header)
+        self._substatus = QLabel("等待选择", self)
+        self._substatus.setObjectName("idleSubstatusLabel")
+        _add_header_row(self._outer, self, "录制预检", substatus=self._substatus)
 
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignLeft)
-        form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(6)
-        self._row_can = QLabel("—", self)
-        self._row_daq = QLabel("—", self)
-        self._row_disk = QLabel("—", self)
-        self._row_duration = QLabel("—", self)
-        self._row_samples = QLabel("—", self)
-        for r in (
-            self._row_can,
-            self._row_daq,
-            self._row_disk,
-            self._row_duration,
-            self._row_samples,
-        ):
-            r.setTextFormat(Qt.RichText)
-        form.addRow("CAN 负载", self._row_can)
-        form.addRow("DAQ 槽位", self._row_daq)
-        form.addRow("磁盘剩余", self._row_disk)
-        form.addRow("估算时长", self._row_duration)
-        form.addRow("样本/秒", self._row_samples)
-        self._outer.addLayout(form)
+        self._row_can = _add_metric_section(
+            self._outer,
+            self,
+            "CAN 总线负载",
+            value_object_name="idleCanValue",
+        )
+        self._row_daq = _add_metric_section(
+            self._outer,
+            self,
+            "DAQ slot · ECU 端容量",
+            value_object_name="idleDaqValue",
+        )
+        self._row_disk = _add_metric_section(
+            self._outer,
+            self,
+            "磁盘写速",
+            value_object_name="idleDiskValue",
+        )
+        self._row_samples = _add_metric_section(
+            self._outer,
+            self,
+            "采样事件 / 秒",
+            value_object_name="idleSamplesValue",
+        )
+        self._row_duration = _add_metric_section(
+            self._outer,
+            self,
+            "输出",
+            value_object_name="idleOutputValue",
+        )
 
-        self._note = QLabel(self)
-        self._note.setWordWrap(True)
-        self._note.setObjectName("rightPanelNote")
-        self._outer.addWidget(self._note)
+        _, self._note = _add_verdict_banner(
+            self._outer,
+            self,
+            value_object_name="idleVerdictBanner",
+        )
         self._outer.addStretch(1)
 
     def apply(
@@ -200,8 +294,10 @@ class IdlePreflightPage(_BasePanelPage):
         selection: Sequence[SelectedMeasurement],
         event_capacity: Mapping[str, int],
         disk_free_bytes: int,
-        bitrate_bps: int = DEFAULT_CAN_BITRATE_BPS,
+        bitrate_bps: int | None = None,
     ) -> None:
+        if bitrate_bps is None:
+            bitrate_bps = thresholds.DEFAULT_CAN_BITRATE_BPS
         if not selection:
             for r in (
                 self._row_can,
@@ -211,6 +307,7 @@ class IdlePreflightPage(_BasePanelPage):
                 self._row_samples,
             ):
                 r.setText(_format_band_value("off", "—"))
+            self._substatus.setText("等待选择")
             self._note.setText("尚未选择测量")
             return
 
@@ -272,6 +369,7 @@ class IdlePreflightPage(_BasePanelPage):
             )
         )
 
+        self._substatus.setText("预检完成")
         self._note.setText("数字仅供参考 · 实际录制按真实样本累计")
 
 
@@ -280,36 +378,14 @@ class RecordingQualityPage(_BasePanelPage):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        header = QLabel("录制质量监控")
-        header.setObjectName("paneHeader")
-        self._outer.addWidget(header)
+        _add_header_row(self._outer, self, "实时质量监控")
 
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignLeft)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(6)
-        self._row_ring = QLabel("—", self)
-        self._row_write = QLabel("—", self)
-        self._row_dropped = QLabel("—", self)
-        self._row_can = QLabel("—", self)
-        self._row_rx_age = QLabel("—", self)
-        self._row_disk = QLabel("—", self)
-        for r in (
-            self._row_ring,
-            self._row_write,
-            self._row_dropped,
-            self._row_can,
-            self._row_rx_age,
-            self._row_disk,
-        ):
-            r.setTextFormat(Qt.RichText)
-        form.addRow("Ring 缓冲", self._row_ring)
-        form.addRow("写入速率", self._row_write)
-        form.addRow("丢帧", self._row_dropped)
-        form.addRow("CAN 负载", self._row_can)
-        form.addRow("最后帧延迟", self._row_rx_age)
-        form.addRow("磁盘剩余", self._row_disk)
-        self._outer.addLayout(form)
+        self._row_ring = _add_metric_section(self._outer, self, "ring buffer")
+        self._row_write = _add_metric_section(self._outer, self, "write rate")
+        self._row_dropped = _add_metric_section(self._outer, self, "dropped frames")
+        self._row_can = _add_metric_section(self._outer, self, "CAN load")
+        self._row_rx_age = _add_metric_section(self._outer, self, "last frame delay")
+        self._row_disk = _add_metric_section(self._outer, self, "disk remaining")
         self._outer.addStretch(1)
 
     def apply(

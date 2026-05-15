@@ -13,6 +13,9 @@ Verifies:
 
 from __future__ import annotations
 
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QFrame, QLabel, QToolButton
+
 from can_logger.p0.a2l_probe import MeasurementSummary
 from mf4_analyzer.acquisition_capture.search import search_measurements
 from mf4_analyzer.acquisition_ui.widgets.left_pane import LeftPane
@@ -50,8 +53,14 @@ def _pool() -> tuple[MeasurementSummary, ...]:
 def test_pool_shows_with_daq_filter_default_on(qapp):
     pane = LeftPane()
     pane.set_pool(_pool(), a2l_has_daq_events=True)
+    assert pane._header.text() == "A2L Measurement"
+    assert pane._search.placeholderText() == "搜索 name / 0x40A..."
     # 有 DAQ defaults on ⇒ OnlyCal (no available_events) is filtered.
     assert pane._list.count() == 2
+    first_row_text = pane._list.item(0).text()
+    assert "EngSpdAvg" in first_row_text
+    assert "rpm" in first_row_text
+    assert "@ 10ms" in first_row_text
 
 
 def test_disabled_daq_chip_on_no_daq_a2l(qapp):
@@ -83,8 +92,6 @@ def test_search_uses_match_spans_from_hit(qapp):
 
 
 def test_selection_change_emits_signal(qapp):
-    from PyQt5.QtCore import Qt
-
     pane = LeftPane()
     fired = []
     pane.selection_changed.connect(lambda: fired.append(True))
@@ -98,8 +105,6 @@ def test_selection_change_emits_signal(qapp):
 
 
 def test_freeze_blocks_selection_changes(qapp):
-    from PyQt5.QtCore import Qt
-
     pane = LeftPane()
     pane.set_pool(_pool(), a2l_has_daq_events=True)
     item = pane._list.item(0)
@@ -110,3 +115,48 @@ def test_freeze_blocks_selection_changes(qapp):
     pane.set_frozen(False)
     item.setCheckState(Qt.Checked)
     assert len(pane.current_selection()) == 1
+
+
+def test_filter_chip_row_has_v3_six_chips(qapp):
+    pane = LeftPane()
+    pane.set_pool(_pool(), a2l_has_daq_events=True)
+    pane.show()
+    qapp.processEvents()
+
+    chip_texts = [
+        chip.text()
+        for chip in pane.findChildren(QToolButton, "filterChip")
+        if chip.isVisible()
+    ]
+    assert chip_texts == ["只看已选", "有 DAQ", "最近", "收藏", "组: All", "类型"]
+
+
+def test_summary_updates_total_visible_selected_counts(qapp):
+    pane = LeftPane()
+    pane.set_pool(_pool(), a2l_has_daq_events=True)
+    summary = pane.findChild(QLabel, "leftPaneSummary")
+
+    assert summary is not None
+    assert summary.text() == "3 · 显示 2 · 选 0"
+    pane._list.item(0).setCheckState(Qt.Checked)
+    assert summary.text() == "3 · 显示 2 · 选 1"
+
+
+def test_batch_bar_appears_for_common_event_selection(qapp):
+    pane = LeftPane()
+    pane.set_pool(_pool(), a2l_has_daq_events=True)
+    pane.show()
+    qapp.processEvents()
+    batch_bar = pane.findChild(QFrame, "leftBatchBar")
+
+    assert batch_bar is not None
+    assert batch_bar.isVisible() is False
+    pane._list.item(0).setCheckState(Qt.Checked)
+    pane._list.item(1).setCheckState(Qt.Checked)
+    qapp.processEvents()
+    assert batch_bar.isVisible() is True
+    assert "已选" in batch_bar.text()
+    assert "event_10ms" in batch_bar.text()
+    assert "选 2" in pane._footer.text()
+    assert "CAN 估算" in pane._footer.text()
+    assert "事件 10ms × 2" in pane._footer.text()

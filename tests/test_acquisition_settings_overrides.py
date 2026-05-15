@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.config_store import ConfigSchemaError
-from mf4_analyzer.acquisition_capture.health import CanHealth, level_can
+from mf4_analyzer.acquisition_capture.health import (
+    CanHealth,
+    HwHealth,
+    level_can,
+    level_hw,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -106,6 +112,46 @@ def test_acquisition_capture_package_import_applies_user_overrides():
     importlib.reload(acquisition_capture)
 
     assert thresholds.CAN_LOAD_GREEN_MAX_PCT == 11.0
+
+
+def test_acquisition_capture_package_import_applies_session_config_defaults():
+    thresholds.save_user_settings(
+        {
+            "version": thresholds.SETTINGS_VERSION,
+            "thresholds": {
+                "DEFAULT_CAN_BITRATE_BPS": 123_456,
+                "HEALTH_POLL_INTERVAL_S": 1.25,
+                "CONNECTION_TIMEOUT_S": 9.0,
+            },
+        }
+    )
+    thresholds.reset_defaults()
+
+    import importlib
+    import mf4_analyzer.acquisition_capture as acquisition_capture
+
+    importlib.reload(acquisition_capture)
+
+    config = acquisition_capture.SessionConfig(
+        output_mf4=Path("/tmp/capture.mf4"),
+        selected=(acquisition_capture.SelectedMeasurement(name="EngineSpeed"),),
+    )
+    assert config.bitrate_bps == 123_456
+    assert config.poll_interval_s == 1.25
+    assert config.connection_timeout_s == 9.0
+
+
+def test_health_level_default_poll_interval_reads_current_threshold():
+    thresholds.apply_overrides({"HEALTH_POLL_INTERVAL_S": 5.0})
+
+    snap = HwHealth(
+        ok=True,
+        driver_version="test",
+        channel_count=1,
+        last_probe_ts=0.0,
+    )
+
+    assert level_hw(snap, now=6.0) == "green"
 
 
 def test_acquisition_capture_package_import_silent_on_corrupt_settings(tmp_path):

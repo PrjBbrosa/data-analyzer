@@ -84,12 +84,18 @@ class RecHealth:
 # ---------------------------------------------------------------------------
 
 
-def level_hw(snap: HwHealth, *, now: float | None = None,
-             poll_interval_s: float = thresholds.HEALTH_POLL_INTERVAL_S) -> HealthLevel:
+def level_hw(
+    snap: HwHealth,
+    *,
+    now: float | None = None,
+    poll_interval_s: float | None = None,
+) -> HealthLevel:
     if snap.error is not None:
         return "red"
     if now is None:
         now = time.monotonic()
+    if poll_interval_s is None:
+        poll_interval_s = thresholds.HEALTH_POLL_INTERVAL_S
     if now - snap.last_probe_ts > thresholds.HEALTH_STALE_FACTOR * poll_interval_s:
         return "off"
     return "green" if snap.ok else "red"

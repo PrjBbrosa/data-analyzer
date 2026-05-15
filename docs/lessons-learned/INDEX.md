@@ -21,6 +21,8 @@ lesson by default.
 | [Matplotlib Resize And Modal Nav State](pyqt-ui/2026-05-13-matplotlib-resize-and-modal-nav-state.md) | Touching Matplotlib-backed PyQt canvases, splitter/inspector resize behavior, chart-options double-click flows, or chart toolbar navigation actions. | See lesson |
 | [Codex Analyzer Doc Routing](codex-analyzer-doc-routing.md) | Creating, moving, or referencing analyzer-facing documentation and review artifacts. | See lesson |
 | [Acquisition Validation Evidence Gates](codex-acquisition-validation-evidence-gates.md) | Acquisition validation docs, preflight/regression tooling, smoke runners, or P0 probe evidence. | See lesson |
+| [Acquisition Threshold Defaults Use Current Values](codex-acquisition-threshold-defaults-use-current-values.md) | Acquisition Cockpit editable thresholds, settings auto-load, `SessionConfig` defaults, health helper defaults, or preflight UI defaults. | See lesson |
+| [Visual Parity Requires Rendered Screenshot](codex-visual-parity-rendered-screenshot.md) | Touching PyQt visual parity, QSS, toolbar controls, compact chips, or a UI implementation that is supposed to match an HTML prototype or screenshot. | See lesson |
 
 ## Selection Rules
 

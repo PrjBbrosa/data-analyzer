@@ -15,6 +15,9 @@ pure helper.
 
 from __future__ import annotations
 
+from PyQt5.QtWidgets import QLabel, QFrame
+
+from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.health import (
     CanHealth,
     DaqHealth,
@@ -26,6 +29,10 @@ from mf4_analyzer.acquisition_capture.health import (
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_ui.widgets import right_panel as rp_module
 from mf4_analyzer.acquisition_ui.widgets.right_panel import RightPanel
+
+
+def _label_texts(widget) -> list[str]:
+    return [label.text() for label in widget.findChildren(QLabel)]
 
 
 def _make_selection(events: list[str | None]) -> list[SelectedMeasurement]:
@@ -62,6 +69,70 @@ def _snapshot(*, can_load: float | None = 42.0) -> HealthSnapshot:
         ),
         captured_at=1.0,
     )
+
+
+def test_disconnected_page_v3_sections_exist(qapp):
+    panel = RightPanel()
+    panel.show_disconnected(
+        snapshot=None,
+        first_frame_received=False,
+        first_failure=None,
+        selection_count=0,
+    )
+
+    texts = _label_texts(panel.disconnected_page)
+    assert "连接前检查" in texts
+    for title in ("A2L", "硬件", "当前选择"):
+        assert title in texts
+    assert panel.disconnected_page.findChild(QFrame, "rightVerdictBanner") is not None
+    panel.close()
+
+
+def test_idle_page_v3_sections_exist(qapp):
+    panel = RightPanel()
+    panel.show_idle(
+        selection=_make_selection(["event_10ms"]),
+        event_capacity={"event_10ms": 8},
+        disk_free_bytes=10 * 1024 ** 3,
+    )
+
+    texts = _label_texts(panel.idle_page)
+    assert "录制预检" in texts
+    for title in (
+        "CAN 总线负载",
+        "DAQ slot · ECU 端容量",
+        "磁盘写速",
+        "采样事件 / 秒",
+        "输出",
+    ):
+        assert title in texts
+    for name in (
+        "idleCanValue",
+        "idleDaqValue",
+        "idleDiskValue",
+        "idleSamplesValue",
+        "idleVerdictBanner",
+    ):
+        assert panel.idle_page.findChild(QLabel, name) is not None
+    panel.close()
+
+
+def test_recording_page_v3_sections_exist(qapp):
+    panel = RightPanel()
+    panel.show_recording(snapshot=_snapshot(), disk_free_bytes=7 * 1024 ** 3)
+
+    texts = _label_texts(panel.recording_page)
+    assert "实时质量监控" in texts
+    for title in (
+        "ring buffer",
+        "write rate",
+        "dropped frames",
+        "CAN load",
+        "last frame delay",
+        "disk remaining",
+    ):
+        assert title in texts
+    panel.close()
 
 
 def test_idle_page_delegates_daq_slot_usage(qapp, monkeypatch):
@@ -146,6 +217,30 @@ def test_idle_page_delegates_can_daq_and_duration_band_helpers(qapp, monkeypatch
     assert "61.0%" in panel.idle_page._row_can.text()
     assert "80.0%" in panel.idle_page._row_daq.text()
     assert "1.0 min" in panel.idle_page._row_duration.text()
+    panel.close()
+
+
+def test_idle_page_uses_current_default_can_bitrate(qapp, monkeypatch):
+    panel = RightPanel()
+    selection = _make_selection(["event_10ms"])
+    event_capacity = {"event_10ms": 8}
+    seen_bitrates: list[int] = []
+
+    monkeypatch.setattr(thresholds, "DEFAULT_CAN_BITRATE_BPS", 250_000)
+
+    def spy_can_load(selected, bitrate_bps):
+        seen_bitrates.append(bitrate_bps)
+        return 12.0
+
+    monkeypatch.setattr(rp_module, "estimate_can_bus_load", spy_can_load)
+
+    panel.show_idle(
+        selection=selection,
+        event_capacity=event_capacity,
+        disk_free_bytes=10 * 1024 ** 3,
+    )
+
+    assert seen_bitrates == [250_000]
     panel.close()
 
 

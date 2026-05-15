@@ -19,6 +19,7 @@ pane stays Qt-only and consumes pre-computed measurement summaries.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -27,7 +28,6 @@ from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -35,6 +35,7 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -59,6 +60,27 @@ from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 # Blue match-highlight color — used to inline-decorate spans in the list
 # row. Project palette interaction blue.
 _MATCH_BLUE = QColor("#1769E0")
+_SELECTED_ROW_BG = QColor("#EAF2FF")
+
+
+class _BatchBar(QFrame):
+    """Small batch-action strip shown when selected rows share an event."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("leftBatchBar")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(6)
+        self._label = QLabel(self)
+        layout.addWidget(self._label)
+        layout.addStretch(1)
+
+    def setText(self, text: str) -> None:
+        self._label.setText(text)
+
+    def text(self) -> str:
+        return self._label.text()
 
 
 class LeftPane(QFrame):
@@ -88,6 +110,7 @@ class LeftPane(QFrame):
         self._config_path: Path | None = None
         self._a2l_has_daq_events: bool = False
         self._frozen: bool = False
+        self._visible_count: int = 0
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -99,31 +122,57 @@ class LeftPane(QFrame):
         outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(6)
 
-        header = QLabel("A2L 测量")
-        header.setObjectName("paneHeader")
-        outer.addWidget(header)
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
+        self._header = QLabel("A2L Measurement", self)
+        self._header.setObjectName("paneHeader")
+        header_row.addWidget(self._header)
+        header_row.addStretch(1)
+        self._summary = QLabel(self)
+        self._summary.setObjectName("leftPaneSummary")
+        header_row.addWidget(self._summary)
+        outer.addLayout(header_row)
 
         self._search = QLineEdit(self)
         self._search.setObjectName("channelSearch")
-        self._search.setPlaceholderText("搜索测量 / 单位 / 0x地址")
+        self._search.setPlaceholderText("搜索 name / 0x40A...")
         self._search.textChanged.connect(self._on_search_text_changed)
         outer.addWidget(self._search)
 
-        # Filter row: 有 DAQ + 只看已选. Other filters declared in spec
-        # (`最近`, `收藏`, `组`, `类型`) are reserved for v2 — render
-        # the two MVP-relevant ones explicitly.
+        filter_rows = QVBoxLayout()
+        filter_rows.setContentsMargins(0, 0, 0, 0)
+        filter_rows.setSpacing(4)
         filter_row = QHBoxLayout()
-        filter_row.setSpacing(8)
-        self._has_daq_chip = QCheckBox("有 DAQ", self)
+        filter_row.setSpacing(4)
+        self._only_selected_chip = self._make_filter_chip("只看已选")
+        self._only_selected_chip.toggled.connect(self._refresh_list)
+        filter_row.addWidget(self._only_selected_chip)
+
+        self._has_daq_chip = self._make_filter_chip("有 DAQ")
         self._has_daq_chip.setChecked(True)  # spec: default on.
         self._has_daq_chip.toggled.connect(self._refresh_list)
         filter_row.addWidget(self._has_daq_chip)
-
-        self._only_selected_chip = QCheckBox("只看已选", self)
-        self._only_selected_chip.toggled.connect(self._refresh_list)
-        filter_row.addWidget(self._only_selected_chip)
+        recent_chip = self._make_filter_chip("最近")
+        recent_chip.setEnabled(False)
+        recent_chip.setToolTip("此筛选将在后续版本启用")
+        filter_row.addWidget(recent_chip)
         filter_row.addStretch(1)
-        outer.addLayout(filter_row)
+        filter_rows.addLayout(filter_row)
+
+        filter_row_2 = QHBoxLayout()
+        filter_row_2.setSpacing(4)
+        for label in ("收藏", "组: All", "类型"):
+            chip = self._make_filter_chip(label)
+            chip.setEnabled(False)
+            chip.setToolTip("此筛选将在后续版本启用")
+            filter_row_2.addWidget(chip)
+        filter_row_2.addStretch(1)
+        filter_rows.addLayout(filter_row_2)
+        outer.addLayout(filter_rows)
+
+        self._batch_bar = _BatchBar(self)
+        self._batch_bar.setVisible(False)
+        outer.addWidget(self._batch_bar)
 
         self._list = QListWidget(self)
         self._list.setObjectName("measurementList")
@@ -143,6 +192,18 @@ class LeftPane(QFrame):
 
         self._refresh_list()
         self._refresh_footer()
+
+    @staticmethod
+    def _make_filter_chip(text: str) -> QToolButton:
+        chip = QToolButton()
+        chip.setObjectName("filterChip")
+        chip.setText(text)
+        chip.setCheckable(True)
+        chip.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        chip.setFocusPolicy(Qt.NoFocus)
+        chip.setFixedHeight(22)
+        chip.setMinimumWidth(52 if len(text) <= 3 else 68)
+        return chip
 
     # ------------------------------------------------------------------
     # Public API
@@ -313,15 +374,17 @@ class LeftPane(QFrame):
         self._list.clear()
         pool = self._filtered_pool()
         hits, used_search = self._hits_for_query(pool)
+        rows: list[tuple[MeasurementSummary, list[tuple[int, int]]]]
         if used_search:
-            for hit in hits:
-                item = self._build_row(hit.measurement, hit.match_spans)
-                self._list.addItem(item)
+            rows = [(hit.measurement, hit.match_spans) for hit in hits]
         else:
-            for m in pool:
-                item = self._build_row(m, [])
-                self._list.addItem(item)
+            rows = [(m, []) for m in pool]
+        self._visible_count = len(rows)
+        for measurement, match_spans in rows:
+            item = self._build_row(measurement, match_spans)
+            self._list.addItem(item)
         self._list.blockSignals(False)
+        self._refresh_summary()
         self._refresh_footer()
 
     def _build_row(
@@ -329,15 +392,20 @@ class LeftPane(QFrame):
         m: MeasurementSummary,
         match_spans: list[tuple[int, int]],
     ) -> QListWidgetItem:
-        text = m.name
+        parts = [m.name]
         if m.unit:
-            text += f"  ·  {m.unit}"
+            parts.append(m.unit)
+        if m.available_events:
+            parts.append(f"@ {_format_event_label(m.available_events[0])}")
+        text = "  ·  ".join(parts)
         item = QListWidgetItem(text)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         item.setCheckState(
             Qt.Checked if m.name in self._selected_names else Qt.Unchecked
         )
         item.setData(Qt.UserRole, m.name)
+        if m.name in self._selected_names:
+            item.setBackground(QBrush(_SELECTED_ROW_BG))
         if match_spans:
             # Spec: highlight matched character ranges in blue. Qt
             # QListWidgetItem only exposes a single foreground brush,
@@ -349,10 +417,16 @@ class LeftPane(QFrame):
             item.setToolTip(f"匹配: {spans_text}")
         return item
 
+    def _refresh_summary(self) -> None:
+        self._summary.setText(
+            f"{len(self._pool)} · 显示 {self._visible_count} · 选 {len(self._selected_names)}"
+        )
+
     def _refresh_footer(self) -> None:
         selected = self._selected_names
+        self._refresh_batch_bar()
         if not selected:
-            self._footer.setText(f"共 {len(self._pool)} 个测量 · 0 已选")
+            self._footer.setText("选 0 · CAN 估算 0.0%")
             return
         chosen = [m for m in self._pool if m.name in selected]
         load = estimate_can_bus_load(
@@ -366,10 +440,31 @@ class LeftPane(QFrame):
             ],
             thresholds.DEFAULT_CAN_BITRATE_BPS,
         )
-        self._footer.setText(
-            f"共 {len(self._pool)} 个测量 · {len(selected)} 已选 · "
-            f"CAN 估算 {load:.1f}%"
+        parts = [f"选 {len(selected)}", f"CAN 估算 {load:.1f}%"]
+        event_counts = Counter(
+            m.available_events[0] for m in chosen if m.available_events
         )
+        if event_counts:
+            distribution = " · ".join(
+                f"{_format_event_label(event)} × {count}"
+                for event, count in sorted(event_counts.items())
+            )
+            parts.append(f"事件 {distribution}")
+        self._footer.setText(" · ".join(parts))
+
+    def _refresh_batch_bar(self) -> None:
+        if len(self._selected_names) < 2:
+            self._batch_bar.setVisible(False)
+            self._batch_bar.setText("")
+            return
+        common = sorted(self.common_events())
+        if not common:
+            self._batch_bar.setVisible(False)
+            self._batch_bar.setText("")
+            return
+        first_event = common[0]
+        self._batch_bar.setText(f"已选 {len(self._selected_names)} · 同 {first_event}")
+        self._batch_bar.setVisible(True)
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -444,5 +539,11 @@ class LeftPane(QFrame):
             self._selected_names.add(name)
         else:
             self._selected_names.discard(name)
-        self._refresh_footer()
+        self._refresh_list()
         self.selection_changed.emit()
+
+
+def _format_event_label(event_name: str) -> str:
+    if event_name.startswith("event_"):
+        return event_name[len("event_") :]
+    return event_name

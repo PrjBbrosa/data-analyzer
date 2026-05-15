@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import time
 
+from PyQt5.QtWidgets import QLabel
+
 from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.health import (
     CanHealth,
+    ChannelHealth,
     DaqHealth,
     HealthSnapshot,
     HwHealth,
@@ -21,6 +24,12 @@ from mf4_analyzer.acquisition_capture.health import (
     XcpHealth,
 )
 from mf4_analyzer.acquisition_ui.widgets.health_strip import HealthStrip
+
+
+def _chip_value(strip: HealthStrip, name: str) -> str:
+    value = strip.chip(name).findChild(QLabel, "healthChipValue")
+    assert value is not None
+    return value.text()
 
 
 def _snap(**overrides) -> HealthSnapshot:
@@ -60,6 +69,60 @@ def test_strip_all_green(qapp):
         "DAQ": "green",
         "REC": "green",
     }
+    for name in strip.CHIP_NAMES:
+        chip = strip.chip(name)
+        assert chip.objectName() == "healthChip"
+        assert chip.findChild(QLabel, "healthChipLed") is not None
+        assert chip.findChild(QLabel, "healthChipLabel") is not None
+        assert _chip_value(strip, name).strip()
+    summary = strip.findChild(QLabel, "healthSummary")
+    assert summary is not None
+    assert summary.text().strip()
+
+
+def test_strip_chip_values_come_from_snapshot_fields(qapp):
+    strip = HealthStrip()
+    strip.apply_snapshot(
+        _snap(
+            hw=HwHealth(
+                ok=True,
+                driver_version="VN1610",
+                channel_count=2,
+                last_probe_ts=time.monotonic(),
+                error=None,
+            ),
+            can=CanHealth(
+                bus_load_pct=22.0,
+                channels=(
+                    ChannelHealth(channel_id="CAN1", bus_load_pct=21.0),
+                    ChannelHealth(channel_id="CAN2", bus_load_pct=22.0),
+                ),
+                bus_error_count=0,
+            ),
+            xcp=XcpHealth(connected=True, slave_id=0x55),
+            daq=DaqHealth(
+                event_capacity={"event_10ms": 32, "event_100ms": 16},
+                event_used={"event_10ms": 7, "event_100ms": 5},
+            ),
+            rec=RecHealth(
+                state="recording",
+                ring_buffer_fill_pct=10.0,
+                dropped_frames=0,
+                write_rate_bps=0.0,
+                last_rx_age_s=0.1,
+                writer_thread_alive=True,
+            ),
+        )
+    )
+
+    assert _chip_value(strip, "HW") == "VN1610"
+    assert _chip_value(strip, "CAN") == "2 ch online"
+    assert "0x55" in _chip_value(strip, "XCP")
+    assert "sig" in _chip_value(strip, "DAQ") or "/" in _chip_value(strip, "DAQ")
+    assert (
+        "recording" in _chip_value(strip, "REC")
+        or "ready" in _chip_value(strip, "REC")
+    )
 
 
 def test_strip_rec_red_on_stale_rx(qapp):

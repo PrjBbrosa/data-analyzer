@@ -59,6 +59,18 @@ _IDLE_WINDOW_S = 60.0
 # capacity to bound memory.
 _SPARK_MAX_POINTS = 4096
 
+_CARD_TRACE_COLORS = (
+    "#2563eb",
+    "#059669",
+    "#ea580c",
+    "#0891b2",
+    "#64748b",
+)
+
+
+def _trace_color_for_index(index: int) -> QColor:
+    return QColor(_CARD_TRACE_COLORS[index % len(_CARD_TRACE_COLORS)])
+
 
 class Sparkline(QWidget):
     """A tiny min/max sparkline painter.
@@ -71,9 +83,16 @@ class Sparkline(QWidget):
     def __init__(self, color: QColor, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._color = color
+        self.setObjectName("liveCardSparkline")
+        self.setProperty("traceColor", self._color.name())
         self._buffer: deque[tuple[float, float]] = deque(maxlen=_SPARK_MAX_POINTS)
         self.setMinimumHeight(36)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def set_trace_color(self, color: QColor) -> None:
+        self._color = QColor(color)
+        self.setProperty("traceColor", self._color.name())
+        self.update()
 
     def push(self, timestamp_s: float, value: float) -> None:
         self._buffer.append((float(timestamp_s), float(value)))
@@ -100,6 +119,13 @@ class Sparkline(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = self.rect()
+        painter.setPen(QPen(QColor("#e5e7eb"), 0.8))
+        for fraction in (0.25, 0.5, 0.75):
+            y = rect.top() + rect.height() * fraction
+            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+        for fraction in (0.25, 0.5, 0.75):
+            x = rect.left() + rect.width() * fraction
+            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
         # Card backdrop already paints; we draw only the line.
         target = max(8, rect.width())
         bins = downsample_minmax(list(self._buffer), target)
@@ -153,14 +179,12 @@ class LiveSignalCard(QFrame):
     - :meth:`refresh` — recompute stats label + sparkline.
     """
 
-    # Reuse the project palette interaction blue for the trace.
-    _TRACE_COLOR = QColor("#1769E0")
-
     def __init__(
         self,
         name: str,
         unit: str = "",
         raster: str | None = None,
+        card_index: int = 0,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -168,6 +192,8 @@ class LiveSignalCard(QFrame):
         self._name = name
         self._unit = unit
         self._raster = raster
+        self._trace_color = _trace_color_for_index(card_index)
+        self.setProperty("traceColor", self._trace_color.name())
         self._recording = False
         self._rec_start_ts: float | None = None
         self._build_ui()
@@ -179,40 +205,69 @@ class LiveSignalCard(QFrame):
 
         header = QHBoxLayout()
         header.setSpacing(8)
+        self._swatch_label = QLabel(self)
+        self._swatch_label.setObjectName("liveCardSwatch")
+        self._swatch_label.setFixedSize(10, 10)
+        header.addWidget(self._swatch_label, 0, Qt.AlignVCenter)
+
         self._name_label = QLabel(self._name, self)
         self._name_label.setObjectName("liveCardName")
         font = self._name_label.font()
         font.setBold(True)
         self._name_label.setFont(font)
         header.addWidget(self._name_label)
-        header.addStretch(1)
-        self._rec_indicator = QLabel("REC OFF", self)
-        self._rec_indicator.setObjectName("liveCardRecIndicator")
-        header.addWidget(self._rec_indicator)
-        outer.addLayout(header)
 
-        meta = QHBoxLayout()
-        meta.setSpacing(8)
-        self._value_label = QLabel("—", self)
-        self._value_label.setObjectName("liveCardValue")
-        meta.addWidget(self._value_label)
         unit_text = self._unit if self._unit else ""
         self._unit_label = QLabel(unit_text, self)
         self._unit_label.setObjectName("liveCardUnit")
-        meta.addWidget(self._unit_label)
-        meta.addStretch(1)
-        if self._raster:
-            self._raster_pill = QLabel(self._raster, self)
-            self._raster_pill.setObjectName("liveCardRaster")
-            meta.addWidget(self._raster_pill)
-        outer.addLayout(meta)
+        header.addWidget(self._unit_label)
 
-        self._spark = Sparkline(self._TRACE_COLOR, self)
-        outer.addWidget(self._spark)
+        self._raster_pill = QLabel(self._raster if self._raster else "--", self)
+        self._raster_pill.setObjectName("liveCardRaster")
+        header.addWidget(self._raster_pill)
 
         self._stats_label = QLabel("μ — · σ — · max — · since 60s", self)
         self._stats_label.setObjectName("liveCardStats")
-        outer.addWidget(self._stats_label)
+        header.addWidget(self._stats_label)
+
+        header.addStretch(1)
+        self._value_label = QLabel("—", self)
+        self._value_label.setObjectName("liveCardValue")
+        self._value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._value_label.setMinimumWidth(72)
+        header.addWidget(self._value_label)
+        outer.addLayout(header)
+
+        status = QHBoxLayout()
+        status.setSpacing(8)
+        self._rec_indicator = QLabel("REC OFF", self)
+        self._rec_indicator.setObjectName("liveCardRecIndicator")
+        status.addWidget(self._rec_indicator)
+        status.addStretch(1)
+        outer.addLayout(status)
+
+        self._spark = Sparkline(self._trace_color, self)
+        outer.addWidget(self._spark)
+        self._apply_trace_color()
+
+    def set_visual_index(self, card_index: int) -> None:
+        self._trace_color = _trace_color_for_index(card_index)
+        self.setProperty("traceColor", self._trace_color.name())
+        self._spark.set_trace_color(self._trace_color)
+        self._apply_trace_color()
+
+    def update_metadata(self, *, unit: str, raster: str | None) -> None:
+        self._unit = unit
+        self._raster = raster
+        self._unit_label.setText(unit if unit else "")
+        self._raster_pill.setText(raster if raster else "--")
+
+    def _apply_trace_color(self) -> None:
+        color_name = self._trace_color.name()
+        self._swatch_label.setProperty("traceColor", color_name)
+        self._swatch_label.setStyleSheet(
+            f"background-color: {color_name}; border-radius: 5px;"
+        )
 
     # ------------------------------------------------------------------
     # Data ingest
@@ -286,12 +341,42 @@ class LiveCardGrid(QWidget):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(12, 12, 12, 12)
         self._layout.setSpacing(8)
-        self._placeholder = QLabel("尚未连接 — 点击「连接 ECU」开始数据流", self)
-        self._placeholder.setAlignment(Qt.AlignCenter)
-        self._placeholder.setObjectName("centerPanePlaceholder")
-        self._layout.addWidget(self._placeholder)
+        self._disconnected_canvas = self._build_disconnected_canvas()
+        self._layout.addWidget(self._disconnected_canvas)
         self._layout.addStretch(1)
         self._cards: dict[str, LiveSignalCard] = {}
+
+    def _build_disconnected_canvas(self) -> QWidget:
+        canvas = QWidget(self)
+        canvas.setObjectName("cockpitDisconnectedCanvas")
+        canvas.setMinimumHeight(180)
+        canvas_layout = QVBoxLayout(canvas)
+        canvas_layout.setContentsMargins(24, 24, 24, 24)
+        canvas_layout.setSpacing(8)
+        canvas_layout.addStretch(1)
+
+        title = QLabel("未连接 ECU", canvas)
+        title.setObjectName("cockpitDisconnectedTitle")
+        title.setAlignment(Qt.AlignCenter)
+        title_font = title.font()
+        title_font.setPointSize(title_font.pointSize() + 3)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        canvas_layout.addWidget(title)
+
+        copy = QLabel("连接后这里会显示实时数据流、当前值和信号趋势。", canvas)
+        copy.setObjectName("cockpitDisconnectedCopy")
+        copy.setAlignment(Qt.AlignCenter)
+        copy.setWordWrap(True)
+        canvas_layout.addWidget(copy)
+
+        action = QLabel("使用上方工具栏「连接 ECU」", canvas)
+        action.setObjectName("cockpitDisconnectedAction")
+        action.setAlignment(Qt.AlignCenter)
+        canvas_layout.addWidget(action)
+
+        canvas_layout.addStretch(1)
+        return canvas
 
     def set_signals(self, signals: list[tuple[str, str, str | None]]) -> None:
         """Replace the cards with a new ``(name, unit, raster)`` list.
@@ -310,14 +395,17 @@ class LiveCardGrid(QWidget):
                 w.setParent(None)
 
         if not signals:
-            self._layout.addWidget(self._placeholder)
+            self._layout.addWidget(self._disconnected_canvas)
             self._layout.addStretch(1)
             return
 
-        for name, unit, raster in signals:
+        for idx, (name, unit, raster) in enumerate(signals):
             card = existing.get(name)
             if card is None:
-                card = LiveSignalCard(name, unit=unit, raster=raster)
+                card = LiveSignalCard(name, unit=unit, raster=raster, card_index=idx)
+            else:
+                card.update_metadata(unit=unit, raster=raster)
+                card.set_visual_index(idx)
             self._cards[name] = card
             self._layout.addWidget(card)
         self._layout.addStretch(1)

@@ -56,12 +56,18 @@ class SessionConfig:
     output_mf4: Path
     selected: tuple[SelectedMeasurement, ...]
     duration_s: float | None = None
-    bitrate_bps: int = thresholds.DEFAULT_CAN_BITRATE_BPS
+    bitrate_bps: int = field(
+        default_factory=lambda: thresholds.DEFAULT_CAN_BITRATE_BPS
+    )
     ring_capacity: int = thresholds.DEFAULT_RING_CAPACITY
     segment_seconds: float | None = None
     backend: str = "fake"   # one of {"fake", "replay", "vector"}
-    poll_interval_s: float = thresholds.HEALTH_POLL_INTERVAL_S
-    connection_timeout_s: float = thresholds.CONNECTION_TIMEOUT_S
+    poll_interval_s: float = field(
+        default_factory=lambda: thresholds.HEALTH_POLL_INTERVAL_S
+    )
+    connection_timeout_s: float = field(
+        default_factory=lambda: thresholds.CONNECTION_TIMEOUT_S
+    )
 
     def __post_init__(self) -> None:
         # Hard validation: output path must point at a writable directory

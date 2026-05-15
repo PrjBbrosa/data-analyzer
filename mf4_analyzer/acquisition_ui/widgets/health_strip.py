@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Mapping
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
+from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from mf4_analyzer.acquisition_capture.health import (
     HealthLevel,
@@ -46,9 +46,9 @@ _LEVEL_BG = {
 
 
 class HealthChip(QFrame):
-    """One labeled LED + chip-name pair (e.g. ``● HW``).
+    """One labeled LED + value chip (e.g. ``● HW VN1610``).
 
-    The chip is a small colored circle next to the chip name. The
+    The chip is a small colored circle next to the chip label and value. The
     ``level`` argument is one of ``"green" | "yellow" | "red" | "off"``
     — the exact set returned by the snapshot ``level_*`` helpers.
     """
@@ -56,18 +56,24 @@ class HealthChip(QFrame):
     def __init__(self, name: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("healthChip")
+        self.setFixedHeight(26)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._name = name
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 2, 8, 2)
+        layout.setContentsMargins(10, 0, 10, 0)
         layout.setSpacing(6)
         self._led = QLabel(self)
         self._led.setObjectName("healthChipLed")
-        self._led.setFixedSize(10, 10)
+        self._led.setFixedSize(8, 8)
         self._led.setAlignment(Qt.AlignCenter)
-        self._text = QLabel(name, self)
-        self._text.setObjectName("healthChipText")
+        self._label = QLabel(name, self)
+        self._label.setObjectName("healthChipLabel")
+        self._value = QLabel("--", self)
+        self._value.setObjectName("healthChipValue")
+        self._value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self._led)
-        layout.addWidget(self._text)
+        layout.addWidget(self._label)
+        layout.addWidget(self._value)
         self.set_level("off")
 
     @property
@@ -75,7 +81,7 @@ class HealthChip(QFrame):
         return self._name
 
     def set_level(self, level: HealthLevel) -> None:
-        """Repaint the LED for the given level. The chip text is invariant."""
+        """Repaint the LED for the given level. The chip label is invariant."""
         bg = _LEVEL_BG.get(level, _LEVEL_BG["off"])
         self._led.setStyleSheet(
             f"background-color: {bg}; border-radius: 5px;"
@@ -87,10 +93,14 @@ class HealthChip(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def set_value(self, text: str) -> None:
+        self._value.setText(text if text else "--")
+
     def set_tooltip(self, text: str) -> None:
         self.setToolTip(text)
         self._led.setToolTip(text)
-        self._text.setToolTip(text)
+        self._label.setToolTip(text)
+        self._value.setToolTip(text)
 
 
 class HealthStrip(QFrame):
@@ -118,16 +128,20 @@ class HealthStrip(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("healthStrip")
-        self.setFixedHeight(32)
+        self.setFixedHeight(42)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 4, 12, 4)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setSpacing(8)
         self._chips: dict[str, HealthChip] = {}
         for name in self.CHIP_NAMES:
             chip = HealthChip(name, self)
             self._chips[name] = chip
             layout.addWidget(chip)
         layout.addStretch(1)
+        self._summary = QLabel("--", self)
+        self._summary.setObjectName("healthSummary")
+        self._summary.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        layout.addWidget(self._summary)
         self._last_levels: dict[str, HealthLevel] = {n: "off" for n in self.CHIP_NAMES}
         self._last_snapshot: HealthSnapshot | None = None
 
@@ -143,7 +157,9 @@ class HealthStrip(QFrame):
             level = new_levels.get(name, "off")
             chip = self._chips[name]
             chip.set_level(level)
+            chip.set_value(self._value_for(name, snapshot, level))
             chip.set_tooltip(self._tooltip_for(name, snapshot))
+        self._summary.setText(self._summary_for(new_levels))
         if new_levels != self._last_levels:
             self._last_levels = dict(new_levels)
             self.levels_changed.emit(dict(new_levels))
@@ -158,6 +174,65 @@ class HealthStrip(QFrame):
     @property
     def last_snapshot(self) -> HealthSnapshot | None:
         return self._last_snapshot
+
+    # ------------------------------------------------------------------
+    # Value wiring
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _value_for(
+        chip_name: str,
+        snap: HealthSnapshot,
+        level: HealthLevel,
+    ) -> str:
+        if chip_name == "HW":
+            if snap.hw.ok and snap.hw.driver_version:
+                return snap.hw.driver_version
+            if snap.hw.ok:
+                return "online"
+            return "offline" if snap.hw.error else "--"
+        if chip_name == "CAN":
+            if snap.can.channels:
+                return f"{len(snap.can.channels)} ch online"
+            if snap.can.bus_load_pct is not None:
+                return f"{snap.can.bus_load_pct:.0f}% load"
+            return "--"
+        if chip_name == "XCP":
+            if snap.xcp.connected and snap.xcp.slave_id is not None:
+                return f"slave 0x{snap.xcp.slave_id:X}"
+            if snap.xcp.connected:
+                return "connected"
+            return "--"
+        if chip_name == "DAQ":
+            if snap.daq.event_capacity:
+                used_total = sum(int(v) for v in snap.daq.event_used.values())
+                event_count = len(snap.daq.event_capacity)
+                return f"{used_total} sig / {event_count} evt"
+            return "--"
+        if chip_name == "REC":
+            if snap.rec.state == "recording":
+                return "recording" if level == "green" else "warn"
+            if snap.rec.state == "off":
+                return "ready" if level == "green" else "--"
+            if snap.rec.state in {"auto_stopped", "error"}:
+                return "warn"
+            return "--"
+        return "--"
+
+    @staticmethod
+    def _summary_for(levels: Mapping[str, HealthLevel]) -> str:
+        ordered_levels: tuple[HealthLevel, ...] = ("red", "yellow", "off", "green")
+        counts = {
+            level: sum(1 for value in levels.values() if value == level)
+            for level in ordered_levels
+        }
+        if counts["red"]:
+            return f"{counts['red']} red"
+        if counts["yellow"]:
+            return f"{counts['yellow']} yellow"
+        if counts["off"]:
+            return f"{counts['off']} off"
+        return f"{counts['green']}/{len(levels)} green"
 
     # ------------------------------------------------------------------
     # Tooltip wiring
