@@ -12,8 +12,7 @@ Plan tasks:
 - Red health disables record.
 - Yellow health warns but does not disable record.
 - Dropped-frames > 100 opens the in-state ``继续/停止`` prompt.
-- 回放 tab header reads ``回放 (待开放)``; body is a single-line
-  placeholder.
+- 回放 tab is enabled and hosts the read-only ReplayTab.
 - DBC selector setEnabled(False) with tooltip from spec Product
   Decisions; clicking emits nothing.
 
@@ -40,10 +39,10 @@ from mf4_analyzer.acquisition_capture.health import (
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_ui.main_window import (
     DBC_DISABLED_TOOLTIP,
-    REPLAY_TAB_BODY,
     REPLAY_TAB_TITLE,
     CockpitMainWindow,
 )
+from mf4_analyzer.acquisition_ui.replay_tab import ReplayTab
 from mf4_analyzer.acquisition_ui.state import (
     HEALTHY_PREDICATE_FIRST_FRAME,
     HEALTHY_PREDICATE_HW,
@@ -277,32 +276,19 @@ def test_dbc_selector_disabled_and_tooltip(qapp):
     window.close()
 
 
-def test_replay_tab_inert_with_placeholder(qapp):
-    """Spec Product Decisions: 回放 tab header reads ``回放 (待开放)`` and
-    body is a single-line placeholder."""
+def test_replay_tab_enabled_with_replay_widget(qapp):
+    """Polish wave: 回放 tab is a usable read-only ReplayTab."""
     window = CockpitMainWindow()
     tabs = window.mode_tabs
-    # Locate the 回放 tab by its title.
     replay_idx = None
     for i in range(tabs.count()):
         if tabs.tabText(i) == REPLAY_TAB_TITLE:
             replay_idx = i
             break
     assert replay_idx is not None
-    assert tabs.isTabEnabled(replay_idx) is False
-    # Body has the placeholder string.
+    assert tabs.isTabEnabled(replay_idx) is True
     page = tabs.widget(replay_idx)
-    found = False
-    for child in page.findChildren(type(page).__bases__[0]):
-        pass
-    # Scan QLabel children for the placeholder text.
-    from PyQt5.QtWidgets import QLabel
-
-    for label in page.findChildren(QLabel):
-        if label.text() == REPLAY_TAB_BODY:
-            found = True
-            break
-    assert found, f"placeholder text {REPLAY_TAB_BODY!r} not found"
+    assert isinstance(page, ReplayTab)
     window.close()
 
 

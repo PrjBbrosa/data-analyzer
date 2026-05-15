@@ -17,7 +17,10 @@ import pytest
 from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_capture.preflight_estimates import (
+    band_can_load,
+    band_daq_slot,
     band_disk_remaining,
+    band_record_duration_s,
     band_sample_events_per_s,
     daq_slot_usage,
     estimate_can_bus_load,
@@ -337,3 +340,22 @@ def test_band_sample_events_per_s_boundary_80k_is_yellow():
     assert (
         band_sample_events_per_s(thresholds.SAMPLE_EVENTS_YELLOW_MAX_PER_S) == "yellow"
     )
+
+
+def test_new_band_helpers_classify_preflight_estimator_outputs():
+    """Smoke-test the Stage 1 helper API against real estimator outputs."""
+    selected = [
+        _measurement("A", event="event_10ms", rate_hz=1000.0, payload_bytes=60),
+        _measurement("B", event="event_10ms", rate_hz=1000.0, payload_bytes=60),
+    ]
+
+    can_pct = estimate_can_bus_load(selected, bitrate_bps=500_000)
+    daq_pct = daq_slot_usage("event_10ms", selected, {"event_10ms": 2})
+    duration_s = estimate_record_duration_s(
+        throughput_bps=1_000_000.0,
+        disk_free_bytes=3_600_000_000,
+    )
+
+    assert band_can_load(can_pct) == "red"
+    assert band_daq_slot(daq_pct) == "red"
+    assert band_record_duration_s(duration_s) == "yellow"

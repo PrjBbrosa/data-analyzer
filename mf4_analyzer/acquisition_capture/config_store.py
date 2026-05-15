@@ -158,6 +158,128 @@ def _load_config_file(path: Path) -> ConfigStore:
     )
 
 
+def toggle_favorite(
+    name: str,
+    *,
+    config_path: Path | None = None,
+    address_hex: str | None = None,
+) -> ConfigStore:
+    """Toggle ``name`` in ``acquisition_config.yaml.favorites``.
+
+    ``config_path`` defaults to ``./acquisition_config.yaml`` so callers
+    that already operate inside the project root can use the compact
+    ``toggle_favorite(name)`` form. Tests and embedded UIs pass an
+    explicit path to avoid mutating the repository root.
+    """
+    path = Path(config_path) if config_path is not None else Path.cwd() / CONFIG_FILENAME
+    if path.exists():
+        store = _load_config_file(path)
+    else:
+        store = _empty_config_for_path(path)
+
+    favorites = [dict(item) for item in store.favorites]
+    before = len(favorites)
+    favorites = [item for item in favorites if item.get("name") != name]
+    if len(favorites) == before:
+        entry: dict[str, Any] = {"name": name}
+        if address_hex:
+            entry["address_hex"] = address_hex
+        favorites.append(entry)
+
+    updated = ConfigStore(
+        pinned=True,
+        source_path=path.resolve(),
+        version=CONFIG_VERSION,
+        a2l_path=store.a2l_path,
+        favorites=favorites,
+        selected=[dict(item) for item in store.selected],
+        filter_state=dict(store.filter_state),
+        threshold_overrides=dict(store.threshold_overrides),
+    )
+    _write_config_file(path, updated)
+    return _load_config_file(path)
+
+
+def _empty_config_for_path(path: Path) -> ConfigStore:
+    return ConfigStore(
+        pinned=True,
+        source_path=path.resolve(),
+        version=CONFIG_VERSION,
+        a2l_path="",
+        favorites=[],
+        selected=[],
+        filter_state={
+            "has_daq": True,
+            "show_selected_only": False,
+            "group": None,
+            "datatype": None,
+        },
+        threshold_overrides={},
+    )
+
+
+def _write_config_file(path: Path, store: ConfigStore) -> None:
+    lines = [
+        f"version: {CONFIG_VERSION}",
+        f"a2l_path: {_format_yaml_scalar(store.a2l_path)}",
+    ]
+    _append_list_of_mappings(lines, "favorites", store.favorites)
+    _append_list_of_mappings(lines, "selected", store.selected)
+    _append_mapping(lines, "filter_state", store.filter_state)
+    _append_mapping(lines, "threshold_overrides", store.threshold_overrides)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _append_list_of_mappings(
+    lines: list[str],
+    key: str,
+    values: list[dict[str, Any]],
+) -> None:
+    if not values:
+        lines.append(f"{key}: []")
+        return
+    lines.append(f"{key}:")
+    for item in values:
+        if not item:
+            lines.append("  - {}")
+            continue
+        first = True
+        for item_key, item_value in item.items():
+            prefix = "  - " if first else "    "
+            lines.append(
+                f"{prefix}{item_key}: {_format_yaml_scalar(item_value)}"
+            )
+            first = False
+
+
+def _append_mapping(
+    lines: list[str],
+    key: str,
+    values: Mapping[str, Any],
+) -> None:
+    if not values:
+        lines.append(f"{key}: {{}}")
+        return
+    lines.append(f"{key}:")
+    for item_key, item_value in values.items():
+        lines.append(f"  {item_key}: {_format_yaml_scalar(item_value)}")
+
+
+def _format_yaml_scalar(value: Any) -> str:
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, int | float):
+        return str(value)
+    text = str(value)
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 # ---------------------------------------------------------------------------
 # Per-user recent list.
 # ---------------------------------------------------------------------------

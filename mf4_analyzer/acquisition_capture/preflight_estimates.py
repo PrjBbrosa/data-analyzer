@@ -3,7 +3,7 @@
 Spec: ``docs/analyzer/acquisition/specs/2026-05-15-acquisition-cockpit-ui-spec.md``
 §Preflight Computation Contract.
 
-All five estimators and the two band helpers are pure and Qt-free. They
+All five estimators and the band helpers are pure and Qt-free. They
 are bound to the right-pane preflight rows whose green/yellow/red bands
 live in ``mf4_analyzer.acquisition_capture.thresholds`` (spec §Threshold
 Contract). The widget reads numbers from here and colors them via band
@@ -137,6 +137,87 @@ def band_disk_remaining(disk_free_bytes: int) -> str:
     if disk_free_bytes < thresholds.DISK_FREE_YELLOW_MIN_BYTES:
         return "red"
     return "yellow"
+
+
+def band_can_load(pct: float) -> str:
+    """Return ``'green' | 'yellow' | 'red'`` for CAN bus load.
+
+    Spec §Threshold Contract:
+        ``< 60%`` -> green, ``60..80%`` -> yellow, ``>= 80%`` -> red.
+    """
+    if pct < thresholds.CAN_LOAD_GREEN_MAX_PCT:
+        return "green"
+    if pct >= thresholds.CAN_LOAD_YELLOW_MAX_PCT:
+        return "red"
+    return "yellow"
+
+
+def band_daq_slot(pct: float) -> str:
+    """Return ``'green' | 'yellow' | 'red'`` for DAQ slot usage.
+
+    Spec §Threshold Contract:
+        ``< 75%`` -> green, ``75..95%`` -> yellow, ``> 95%`` -> red.
+
+    ``daq_slot_usage`` returns ``100.0`` for missing/zero capacity, so
+    that case naturally lands in red.
+    """
+    if pct < thresholds.DAQ_SLOT_GREEN_MAX_PCT:
+        return "green"
+    if pct > thresholds.DAQ_SLOT_YELLOW_MAX_PCT:
+        return "red"
+    return "yellow"
+
+
+def band_record_duration_s(seconds: float) -> str:
+    """Return ``'green' | 'yellow' | 'red'`` for estimated record duration.
+
+    Spec §Threshold Contract:
+        ``> 4 h`` -> green, ``30 min..4 h`` -> yellow, ``< 30 min`` -> red.
+    """
+    if seconds > thresholds.RECORD_DURATION_GREEN_MIN_S:
+        return "green"
+    if seconds < thresholds.RECORD_DURATION_YELLOW_MIN_S:
+        return "red"
+    return "yellow"
+
+
+def band_ring_buffer(pct: float) -> str:
+    """Return ``'green' | 'yellow' | 'red'`` for ring-buffer fill.
+
+    Spec §Threshold Contract:
+        ``0..50%`` -> green, ``50..70%`` -> yellow, ``>= 70%`` -> red.
+    """
+    if pct < thresholds.RING_BUFFER_GREEN_MAX_PCT:
+        return "green"
+    if pct < thresholds.RING_BUFFER_YELLOW_LOW_MAX_PCT:
+        return "yellow"
+    return "red"
+
+
+def band_dropped_frames(count: int) -> str:
+    """Return ``'green' | 'yellow' | 'red'`` for dropped-frame count.
+
+    Spec §Threshold Contract:
+        ``0`` -> green, ``1..10`` -> yellow, ``> 10`` -> red.
+    """
+    if count <= 0:
+        return "green"
+    if count <= thresholds.DROPPED_FRAMES_YELLOW_MAX_PER_WINDOW:
+        return "yellow"
+    return "red"
+
+
+def band_rec_last_rx_age_s(age_s: float) -> str:
+    """Return ``'green' | 'yellow' | 'red'`` for REC last-rx age.
+
+    Spec §Health Snapshot Model Contract:
+        ``< 1 s`` -> green, ``1..2 s`` -> yellow, ``>= 2 s`` -> red.
+    """
+    if age_s >= thresholds.REC_LAST_RX_RED_MIN_S:
+        return "red"
+    if age_s >= thresholds.REC_LAST_RX_YELLOW_MIN_S:
+        return "yellow"
+    return "green"
 
 
 def band_sample_events_per_s(events_per_s: float) -> str:

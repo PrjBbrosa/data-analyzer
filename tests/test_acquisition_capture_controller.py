@@ -25,6 +25,21 @@ THREE = (
 )
 
 
+class _NoopWriter:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.write_count = 0
+        self.is_closed = False
+
+    def append_batch(self, samples) -> None:
+        self.write_count += len(list(samples))
+
+    def finalize(self) -> Path:
+        self.path.write_text("fake mf4", encoding="utf-8")
+        self.is_closed = True
+        return self.path
+
+
 def _config(tmp_path: Path, duration_s: float | None = 1.0) -> SessionConfig:
     return SessionConfig(
         output_mf4=tmp_path / "out.mf4",
@@ -151,3 +166,39 @@ def test_controller_records_segment_when_configured(tmp_path):
     summary = ctrl.stop()
     # Expect at least one segment recorded.
     assert summary.segments, f"no segments recorded: {summary.to_dict()}"
+
+
+def test_mark_segment_appends_to_summary(tmp_path):
+    now = [100.0]
+    config = _config(tmp_path, duration_s=None)
+    ctrl = CaptureController(
+        config,
+        FakeRecorderBackend(samples_per_second=1.0),
+        writer=_NoopWriter(config.output_mf4),
+        clock=lambda: now[0],
+    )
+    ctrl.start()
+
+    now[0] = 102.5
+    ctrl.mark_segment("launch")
+    now[0] = 107.0
+    summary = ctrl.stop()
+
+    assert summary.segments == [
+        {"start_ts": 0.0, "end_ts": 2.5},
+        {"start_ts": 2.5, "end_ts": 7.0, "label": "launch"},
+    ]
+    assert set(summary.to_dict()) == {
+        "version",
+        "duration_s",
+        "rx_count",
+        "write_count",
+        "queue_overflow_count",
+        "bus_error_count",
+        "dropped_frames",
+        "max_queue_depth",
+        "segments",
+        "output_mf4",
+        "auto_stop",
+        "warnings",
+    }

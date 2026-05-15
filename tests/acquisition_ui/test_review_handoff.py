@@ -16,7 +16,9 @@ import json
 from pathlib import Path
 
 import pytest
+from PyQt5.QtCore import Qt
 
+from can_logger.p0.a2l_probe import MeasurementSummary
 from mf4_analyzer.acquisition.manifest import (
     Mf4DatasetEntry,
     load_manifest,
@@ -30,6 +32,7 @@ from mf4_analyzer.acquisition_capture.session import (
     SessionConfig,
     SessionSummary,
 )
+from mf4_analyzer.acquisition_capture.writer import Mf4Writer
 from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
 from mf4_analyzer.acquisition_ui.review_modal import (
     ACTION_DISCARD,
@@ -67,6 +70,69 @@ def _run_one_second_fake(tmp_path: Path, *, signals=None) -> CaptureController:
     for _ in range(10):
         ctrl.poll_step()
     return ctrl
+
+
+class _DroppingWriter:
+    """Writer spy that accepts all samples but persists only kept channels."""
+
+    def __init__(
+        self,
+        path: Path,
+        selected: tuple[SelectedMeasurement, ...],
+        kept_names: tuple[str, ...],
+    ) -> None:
+        kept = tuple(m for m in selected if m.name in kept_names)
+        self._kept_names = set(kept_names)
+        self._inner = Mf4Writer(path, kept)
+
+    def append_batch(self, samples) -> None:
+        self._inner.append_batch(
+            sample for sample in samples if sample[0] in self._kept_names
+        )
+
+    def finalize(self) -> Path:
+        return self._inner.finalize()
+
+    @property
+    def path(self) -> Path:
+        return self._inner.path
+
+    @property
+    def write_count(self) -> int:
+        return self._inner.write_count
+
+    @property
+    def is_closed(self) -> bool:
+        return self._inner.is_closed
+
+
+def _measurement_pool() -> tuple[MeasurementSummary, ...]:
+    return (
+        MeasurementSummary(
+            name="EngSpd",
+            address=0x40000000,
+            datatype="UWORD",
+            unit="rpm",
+            conversion="",
+            available_events=("event_10ms",),
+        ),
+        MeasurementSummary(
+            name="Throttle",
+            address=0x40000004,
+            datatype="UWORD",
+            unit="%",
+            conversion="",
+            available_events=("event_10ms",),
+        ),
+        MeasurementSummary(
+            name="Steering",
+            address=0x40000008,
+            datatype="SWORD",
+            unit="deg",
+            conversion="",
+            available_events=("event_10ms",),
+        ),
+    )
 
 
 def _finalize_and_make_context(
@@ -228,10 +294,9 @@ def test_discard_removes_mf4_and_sidecars(qapp, tmp_path):
     assert not ctx.preflight_sidecar_path.exists()
     assert modal.chosen_action == ACTION_DISCARD
     assert modal.discarded is True
-    # 在 Analyzer 打开 must be disabled after discard, even though save_ok
-    # would otherwise enable it.
-    modal._save_ok = True
-    modal._refresh_action_enabled()
+    # 在 Analyzer 打开 must stay disabled after discard, even when the
+    # public save-only action is called afterward.
+    modal.do_save_only()
     assert modal.is_open_in_analyzer_enabled() is False
 
 
@@ -311,23 +376,33 @@ def test_cockpit_archive_preserves_selected_names_on_dropped_channel(
 ):
     """CR3 finding 4 — Part B.
 
-    Drive Cockpit through a real recording → stop, then SIMULATE the
-    writer dropping a channel by patching the stop result's preflight to
-    a truncated channel tuple. The manifest entry MUST still record the
-    full SELECTED expected_channels tuple, and preflight.missing_channels
-    must surface the dropped one. Otherwise preflight can never detect
-    "missing channel" on a future replay of the same manifest entry.
+    Drive Cockpit through a real recording → stop with a writer spy that
+    persists only two of three selected channels. The manifest entry MUST
+    still record the full SELECTED expected_channels tuple, and
+    preflight.missing_channels must surface the dropped one. Otherwise
+    preflight can never detect "missing channel" on a future replay of
+    the same manifest entry.
     """
-    import dataclasses
-
-    from mf4_analyzer.acquisition_ui.state import CockpitState
-
     manifest_path = tmp_path / "manifest.json"
     window = CockpitMainWindow()
     try:
-        selected_names = ("EngSpd", "Throttle", "Steering")
-        selected = tuple(SelectedMeasurement(name=n) for n in selected_names)
-        ctrl = _run_one_second_fake(tmp_path, signals=selected)
+        window.left_pane.set_pool(_measurement_pool(), a2l_has_daq_events=True)
+        for i in range(window.left_pane._list.count()):
+            window.left_pane._list.item(i).setCheckState(Qt.Checked)
+        selected = tuple(window.left_pane.current_selection())
+        selected_names = tuple(m.name for m in selected)
+        kept_names = selected_names[:-1]
+        missing_name = selected_names[-1]
+        cfg = SessionConfig(output_mf4=tmp_path / "dropped.mf4", selected=selected)
+        writer = _DroppingWriter(cfg.output_mf4, selected, kept_names)
+        ctrl = CaptureController(
+            cfg,
+            FakeRecorderBackend(samples_per_second=20.0),
+            writer=writer,
+        )
+        ctrl.start()
+        for _ in range(10):
+            ctrl.poll_step()
         window.set_capture_controller(ctrl)
         window.set_manifest_target(manifest_path)
         window.state_machine.request_connect(
@@ -336,35 +411,13 @@ def test_cockpit_archive_preserves_selected_names_on_dropped_channel(
             )
         )
         window.state_machine.request_start_recording()
-
-        # Run stop. The left pane selection is empty here, but
-        # request_stop_and_review reads it directly — so we seed the
-        # window's last stop result via run_stop_flush_finalize directly
-        # and then re-open the modal through the public path.
-        result = run_stop_flush_finalize(
-            controller=ctrl, expected_channels=selected_names
-        )
-        # Now simulate the writer dropping "Steering" by truncating the
-        # preflight's channels/missing_channels fields.
-        truncated_preflight = dataclasses.replace(
-            result.preflight,
-            channels=("EngSpd", "Throttle"),
-            missing_channels=("Steering",),
-        )
-        window._last_stop_result = dataclasses.replace(
-            result,
-            preflight=truncated_preflight,
-            selected_measurement_names=selected_names,
-        )
-        # Drive the state machine to REVIEW_MODAL and open the modal.
-        window._state_machine.state = CockpitState.REVIEW_MODAL
-        window._open_review_modal()
+        window.request_stop_and_review()
         modal = window.review_modal
         assert isinstance(modal, ReviewModal)
         # ReviewContext.expected_channels MUST be the full SELECTED set,
         # NOT the truncated written-channel set.
         assert modal.context.expected_channels == selected_names
-        assert modal.context.preflight.missing_channels == ("Steering",)
+        assert modal.context.preflight.missing_channels == (missing_name,)
         # Drive archive — manifest entry must record all three names.
         modal.do_archive()
         assert modal.archive_ok is True
@@ -508,6 +561,7 @@ def test_cockpit_archive_then_open_in_analyzer_real_flow(qapp, tmp_path):
         modal.do_open_in_analyzer()
         qapp.processEvents()
         assert load_calls == [str(ctx_mf4)]
+        assert not modal.isVisible()
     finally:
         if window.review_modal is not None:
             window.review_modal.done(0)

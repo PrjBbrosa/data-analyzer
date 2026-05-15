@@ -14,6 +14,7 @@ class Toolbar(QWidget):
     channel_editor_requested = pyqtSignal()
     export_requested = pyqtSignal()
     batch_requested = pyqtSignal()
+    acquisition_cockpit_requested = pyqtSignal()
     inspector_visibility_changed = pyqtSignal(bool)
     # Center segment
     mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
@@ -34,6 +35,9 @@ class Toolbar(QWidget):
         self.btn_export.setIcon(Icons.export())
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
+        self.btn_acquisition_cockpit = QPushButton("Cockpit", self)
+        self.btn_acquisition_cockpit.setIcon(Icons.plot())
+        self.btn_acquisition_cockpit.setToolTip("打开 Acquisition Cockpit")
         self.btn_inspector = QPushButton("Inspector", self)
         self.btn_inspector.setIcon(Icons.inspector(BLUE))
         self.btn_inspector.setCheckable(True)
@@ -51,6 +55,7 @@ class Toolbar(QWidget):
         self.btn_mode_order.setIcon(Icons.mode_order())
 
         for b in (self.btn_add, self.btn_edit, self.btn_export, self.btn_batch,
+                  self.btn_acquisition_cockpit,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
                   self.btn_mode_order, self.btn_inspector):
             b.setIconSize(QSize(16, 16))
@@ -58,7 +63,13 @@ class Toolbar(QWidget):
         # left layout
         left = QHBoxLayout()
         left.setSpacing(10)
-        for b in (self.btn_add, self.btn_edit, self.btn_export, self.btn_batch):
+        for b in (
+            self.btn_add,
+            self.btn_edit,
+            self.btn_export,
+            self.btn_batch,
+            self.btn_acquisition_cockpit,
+        ):
             left.addWidget(b)
 
         # Wrap left in a QWidget so it has a concrete sizeHint that the
@@ -129,6 +140,7 @@ class Toolbar(QWidget):
         self.btn_edit.clicked.connect(self.channel_editor_requested)
         self.btn_export.clicked.connect(self.export_requested)
         self.btn_batch.clicked.connect(self.batch_requested)
+        self.btn_acquisition_cockpit.clicked.connect(self.acquisition_cockpit_requested)
         self.btn_inspector.clicked.connect(self._on_inspector_clicked)
         for key, b in [('time', self.btn_mode_time),
                        ('fft', self.btn_mode_fft),

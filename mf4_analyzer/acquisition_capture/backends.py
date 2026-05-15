@@ -31,6 +31,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
@@ -43,6 +44,16 @@ class BackendStatus:
     bus_error_count: int
     queue_overflow_count: int
     last_error: str | None = None
+
+
+@dataclass(frozen=True)
+class ReplaySource:
+    """MF4-derived replay payload for :class:`ReplayRecorderBackend`."""
+
+    path: Path
+    selected: tuple[SelectedMeasurement, ...]
+    source_samples: list[tuple[str, float, float]]
+    duration_s: float
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +229,10 @@ class ReplayRecorderBackend(RecorderBackend):
     deterministic stream for the selected measurements (1 Hz sine /
     1 sps each, similar to ``FakeRecorderBackend`` but capped). This
     keeps the backend usable in tests without checking in an MF4
-    fixture; Stage 5 may add an explicit MF4-replay path later.
+    fixture.
+
+    ``speed_multiplier`` scales replay time: ``2.0`` emits twice as
+    fast as the source timestamps; ``0.5`` emits at half speed.
     """
 
     def __init__(
@@ -227,13 +241,17 @@ class ReplayRecorderBackend(RecorderBackend):
         source_samples: Iterable[tuple[str, float, float]] | None = None,
         synth_duration_s: float = 2.0,
         synth_rate_hz: float = 50.0,
+        speed_multiplier: float = 1.0,
     ) -> None:
         self._source = None if source_samples is None else list(source_samples)
         self._synth_duration = float(synth_duration_s)
         self._synth_rate = float(synth_rate_hz)
+        self._speed_multiplier = 1.0
+        self.speed_multiplier = speed_multiplier
         self._cursor = 0
         self._started = False
         self._t_start: float | None = None
+        self._paused_at: float | None = None
         self._rx_count = 0
         self._bus_error_count = 0
         self._queue_overflow_count = 0
@@ -249,17 +267,20 @@ class ReplayRecorderBackend(RecorderBackend):
         self._cursor = 0
         self._started = True
         self._t_start = time.monotonic()
+        self._paused_at = None
         self._rx_count = 0
         self._last_frame_monotonic = None
 
     def stop(self) -> BackendStatus:
         self._started = False
+        self._paused_at = None
         return self.status()
 
     def poll(self) -> list[tuple[str, float, float]]:
         if not self._started or self._t_start is None or self._source is None:
             return []
-        now_rel = time.monotonic() - self._t_start
+        now = self._paused_at if self._paused_at is not None else time.monotonic()
+        now_rel = (now - self._t_start) * self._speed_multiplier
         out: list[tuple[str, float, float]] = []
         while self._cursor < len(self._source):
             ch, ts, val = self._source[self._cursor]
@@ -283,6 +304,83 @@ class ReplayRecorderBackend(RecorderBackend):
 
     def last_frame_monotonic(self) -> float | None:
         return self._last_frame_monotonic
+
+    @property
+    def speed_multiplier(self) -> float:
+        return self._speed_multiplier
+
+    @speed_multiplier.setter
+    def speed_multiplier(self, value: float) -> None:
+        value = float(value)
+        if value <= 0:
+            raise ValueError("speed_multiplier must be positive")
+        self._speed_multiplier = value
+
+    @property
+    def finished(self) -> bool:
+        return self._source is not None and self._cursor >= len(self._source)
+
+    def pause(self) -> None:
+        if self._started and self._paused_at is None:
+            self._paused_at = time.monotonic()
+
+    def resume(self) -> None:
+        if self._started and self._paused_at is not None and self._t_start is not None:
+            paused_for = time.monotonic() - self._paused_at
+            self._t_start += paused_for
+            self._paused_at = None
+
+    # -- MF4 source -----------------------------------------------------
+
+    @classmethod
+    def source_from_mf4(cls, path: str | Path) -> ReplaySource:
+        """Load an existing MF4 into sorted replay samples.
+
+        This intentionally reuses :meth:`DataLoader.load_mf4` so replay
+        follows the same asammdf-backed path as Analyzer file loading.
+        Master time columns are excluded from emitted signal samples.
+        """
+        from mf4_analyzer.io.loader import DataLoader
+
+        source_path = Path(path)
+        df, channels, units = DataLoader.load_mf4(str(source_path))
+        if "Time" in df.columns:
+            time_values = [float(v) for v in df["Time"].tolist()]
+        else:
+            first_column = df.columns[0]
+            time_values = [float(v) for v in df[first_column].tolist()]
+        channel_names = [
+            ch
+            for ch in channels
+            if ch not in {"Time", "time"} and ch in df.columns
+        ]
+        if not channel_names:
+            raise ValueError(f"no replayable numeric channels in {source_path}")
+
+        channel_order = {name: idx for idx, name in enumerate(channel_names)}
+        source_samples: list[tuple[str, float, float]] = []
+        for row_idx, ts in enumerate(time_values):
+            if not math.isfinite(ts):
+                continue
+            for ch in channel_names:
+                value = float(df[ch].iloc[row_idx])
+                if math.isfinite(value):
+                    source_samples.append((ch, ts, value))
+        source_samples.sort(key=lambda item: (item[1], channel_order[item[0]]))
+        if not source_samples:
+            raise ValueError(f"no finite replay samples in {source_path}")
+
+        selected = tuple(
+            SelectedMeasurement(name=ch, unit=str(units.get(ch, "") or ""))
+            for ch in channel_names
+        )
+        duration_s = max(ts for _ch, ts, _value in source_samples)
+        return ReplaySource(
+            path=source_path,
+            selected=selected,
+            source_samples=source_samples,
+            duration_s=float(duration_s),
+        )
 
     # -- synthetic source ----------------------------------------------
 

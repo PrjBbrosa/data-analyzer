@@ -60,8 +60,9 @@ class CaptureController:
         self._t_start: float | None = None
         self._t_stop: float | None = None
         self._warnings: list[str] = []
-        self._segments: list[dict[str, float]] = []
+        self._segments: list[dict[str, object]] = []
         self._current_segment_start: float | None = None
+        self._current_segment_label: str | None = None
 
     # ------------------------------------------------------------------
     # Properties.
@@ -109,6 +110,7 @@ class CaptureController:
         self._warnings.clear()
         self._segments.clear()
         self._current_segment_start = 0.0
+        self._current_segment_label = None
 
     def poll_step(self) -> int:
         """One iteration of the capture loop.
@@ -142,12 +144,20 @@ class CaptureController:
         if self._config.segment_seconds is not None and self._current_segment_start is not None:
             since_seg = self.elapsed_s - self._current_segment_start
             if since_seg >= self._config.segment_seconds:
-                self._segments.append({
-                    "start_ts": float(self._current_segment_start),
-                    "end_ts": float(self.elapsed_s),
-                })
+                self._close_current_segment(self.elapsed_s)
                 self._current_segment_start = self.elapsed_s
+                self._current_segment_label = None
         return len(buffered)
+
+    def mark_segment(self, label: str | None = None) -> None:
+        """Close the current segment and start a new labeled segment."""
+        if not self._running or self._current_segment_start is None:
+            return
+        now_s = self.elapsed_s
+        self._close_current_segment(now_s)
+        self._current_segment_start = now_s
+        clean_label = label.strip() if label is not None else ""
+        self._current_segment_label = clean_label or None
 
     def stop(self) -> SessionSummary:
         """Stop the backend, drain the ring, finalize the writer.
@@ -203,13 +213,22 @@ class CaptureController:
                 raise
         # Close any open segment.
         if self._current_segment_start is not None:
-            self._segments.append({
-                "start_ts": float(self._current_segment_start),
-                "end_ts": float(self.elapsed_s),
-            })
+            self._close_current_segment(self.elapsed_s)
             self._current_segment_start = None
+            self._current_segment_label = None
         # Pass backend bus/overflow counters through.
         self._backend_final_status = backend_status
+
+    def _close_current_segment(self, end_ts: float) -> None:
+        if self._current_segment_start is None:
+            return
+        segment: dict[str, object] = {
+            "start_ts": float(self._current_segment_start),
+            "end_ts": float(end_ts),
+        }
+        if self._current_segment_label is not None:
+            segment["label"] = self._current_segment_label
+        self._segments.append(segment)
 
     def _build_summary(self) -> SessionSummary:
         status = getattr(self, "_backend_final_status", None) or self._backend.status()

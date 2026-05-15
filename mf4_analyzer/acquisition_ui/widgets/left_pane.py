@@ -20,11 +20,13 @@ pane stays Qt-only and consumes pre-computed measurement summaries.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QFrame,
     QHBoxLayout,
@@ -32,6 +34,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +42,10 @@ from PyQt5.QtWidgets import (
 from can_logger.p0.a2l_probe import MeasurementSummary
 from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.a2l_events import build_event_intersection
+from mf4_analyzer.acquisition_capture.config_store import (
+    load_or_default,
+    toggle_favorite,
+)
 from mf4_analyzer.acquisition_capture.preflight_estimates import (
     estimate_can_bus_load,
 )
@@ -77,6 +84,8 @@ class LeftPane(QFrame):
         self.setFixedWidth(280)
         self._pool: tuple[MeasurementSummary, ...] = ()
         self._selected_names: set[str] = set()
+        self._favorite_names: set[str] = set()
+        self._config_path: Path | None = None
         self._a2l_has_daq_events: bool = False
         self._frozen: bool = False
         self._build_ui()
@@ -120,6 +129,10 @@ class LeftPane(QFrame):
         self._list.setObjectName("measurementList")
         self._list.setSelectionMode(QAbstractItemView.NoSelection)
         self._list.setUniformItemSizes(True)
+        self._list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(
+            self._on_context_menu_requested
+        )
         self._list.itemChanged.connect(self._on_item_changed)
         outer.addWidget(self._list, stretch=1)
 
@@ -150,6 +163,21 @@ class LeftPane(QFrame):
         self._refresh_list()
         self._refresh_footer()
         self.selection_changed.emit()
+
+    def set_config_path(self, path: Path | str | None) -> None:
+        """Set the ``acquisition_config.yaml`` path used by favorites."""
+        self._config_path = Path(path) if path is not None else None
+        self._favorite_names.clear()
+        if self._config_path is not None and self._config_path.exists():
+            store = load_or_default(
+                project_root=self._config_path.parent,
+                cli_config_path=self._config_path,
+            )
+            self._favorite_names = {
+                str(item.get("name"))
+                for item in store.favorites
+                if item.get("name")
+            }
 
     def set_a2l_has_daq_events(self, has_events: bool) -> None:
         """Spec §Left Pane fallback: ``有 DAQ`` chip flips off + disabled
@@ -196,6 +224,51 @@ class LeftPane(QFrame):
         chosen = [by_name[n] for n in self._selected_names if n in by_name]
         return build_event_intersection(chosen)
 
+    def _build_context_menu(
+        self,
+        measurements: Sequence[MeasurementSummary],
+    ) -> QMenu:
+        """Build the spec right-click menu for tests and the live widget."""
+        menu = QMenu(self)
+        if not measurements:
+            return menu
+        if len(measurements) == 1:
+            m = measurements[0]
+            fav_text = "取消收藏" if m.name in self._favorite_names else "⭐ 收藏"
+            fav_action = menu.addAction(fav_text)
+            fav_action.triggered.connect(
+                lambda _checked=False, measurement=m: self._toggle_favorite(
+                    measurement
+                )
+            )
+            copy_name = menu.addAction("复制名字")
+            copy_name.triggered.connect(
+                lambda _checked=False, name=m.name: QApplication.clipboard().setText(
+                    name
+                )
+            )
+            copy_address = menu.addAction("复制地址")
+            copy_address.triggered.connect(
+                lambda _checked=False, address=m.address: QApplication.clipboard().setText(
+                    f"0x{int(address):08X}"
+                )
+            )
+            jump = menu.addAction("跳到 A2L 源行")
+            jump.setEnabled(False)
+            return menu
+
+        raster_action = menu.addAction("批量设 raster ...")
+        raster_action.setEnabled(bool(build_event_intersection(measurements)))
+        copy_list = menu.addAction("复制为列表")
+        copy_list.triggered.connect(
+            lambda _checked=False, rows=tuple(measurements): self._copy_measurement_list(
+                rows
+            )
+        )
+        clear = menu.addAction("取消选择")
+        clear.triggered.connect(self._clear_context_selection)
+        return menu
+
     # ------------------------------------------------------------------
     # Refresh / filter pipeline
     # ------------------------------------------------------------------
@@ -209,6 +282,19 @@ class LeftPane(QFrame):
                 continue
             out.append(m)
         return out
+
+    def _measurement_by_name(self, name: str) -> MeasurementSummary | None:
+        for measurement in self._pool:
+            if measurement.name == name:
+                return measurement
+        return None
+
+    def _measurements_by_names(
+        self,
+        names: Iterable[str],
+    ) -> list[MeasurementSummary]:
+        by_name = {m.name: m for m in self._pool}
+        return [by_name[name] for name in names if name in by_name]
 
     def _hits_for_query(
         self, pool: Sequence[MeasurementSummary]
@@ -291,6 +377,58 @@ class LeftPane(QFrame):
 
     def _on_search_text_changed(self, _text: str) -> None:
         self._refresh_list()
+
+    def _on_context_menu_requested(self, pos) -> None:
+        item = self._list.itemAt(pos)
+        if item is None:
+            return
+        clicked_name = item.data(Qt.UserRole)
+        measurements: list[MeasurementSummary]
+        if clicked_name in self._selected_names and len(self._selected_names) > 1:
+            measurements = self._measurements_by_names(sorted(self._selected_names))
+        else:
+            measurement = self._measurement_by_name(clicked_name)
+            measurements = [measurement] if measurement is not None else []
+        if not measurements:
+            return
+        menu = self._build_context_menu(measurements)
+        menu.exec_(self._list.mapToGlobal(pos))
+
+    def _toggle_favorite(self, measurement: MeasurementSummary) -> None:
+        address_hex = f"0x{int(measurement.address):08X}"
+        if self._config_path is not None:
+            store = toggle_favorite(
+                measurement.name,
+                config_path=self._config_path,
+                address_hex=address_hex,
+            )
+        else:
+            store = toggle_favorite(
+                measurement.name,
+                address_hex=address_hex,
+            )
+        self._favorite_names = {
+            str(item.get("name"))
+            for item in store.favorites
+            if item.get("name")
+        }
+
+    @staticmethod
+    def _copy_measurement_list(
+        measurements: Sequence[MeasurementSummary],
+    ) -> None:
+        lines = [
+            f"{m.name}\t{m.unit}\t0x{int(m.address):08X}"
+            for m in measurements
+        ]
+        QApplication.clipboard().setText("\n".join(lines))
+
+    def _clear_context_selection(self) -> None:
+        if not self._selected_names:
+            return
+        self._selected_names.clear()
+        self._refresh_list()
+        self.selection_changed.emit()
 
     def _on_item_changed(self, item: QListWidgetItem) -> None:
         if self._frozen:

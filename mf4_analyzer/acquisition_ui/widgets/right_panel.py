@@ -32,10 +32,15 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.health import HealthSnapshot
 from mf4_analyzer.acquisition_capture.preflight_estimates import (
+    band_can_load,
+    band_daq_slot,
     band_disk_remaining,
+    band_dropped_frames,
+    band_rec_last_rx_age_s,
+    band_record_duration_s,
+    band_ring_buffer,
     band_sample_events_per_s,
     daq_slot_usage,
     estimate_can_bus_load,
@@ -44,6 +49,7 @@ from mf4_analyzer.acquisition_capture.preflight_estimates import (
     estimate_throughput_bps,
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.acquisition_capture.thresholds import DEFAULT_CAN_BITRATE_BPS
 
 
 # Display tokens. Color tokens stay in this file because they are
@@ -60,38 +66,6 @@ _LEVEL_COLOR = {
 def _format_band_value(level: str, text: str) -> str:
     color = _LEVEL_COLOR.get(level, _LEVEL_COLOR["off"])
     return f'<span style="color:{color}; font-weight:600;">{text}</span>'
-
-
-def _can_load_level(pct: float) -> str:
-    if pct >= thresholds.CAN_LOAD_YELLOW_MAX_PCT:
-        return "red"
-    if pct >= thresholds.CAN_LOAD_GREEN_MAX_PCT:
-        return "yellow"
-    return "green"
-
-
-def _disk_free_level(bytes_free: int) -> str:
-    if bytes_free < thresholds.DISK_FREE_YELLOW_MIN_BYTES:
-        return "red"
-    if bytes_free < thresholds.DISK_FREE_GREEN_MIN_BYTES:
-        return "yellow"
-    return "green"
-
-
-def _duration_level(seconds: float) -> str:
-    if seconds < thresholds.RECORD_DURATION_YELLOW_MIN_S:
-        return "red"
-    if seconds < thresholds.RECORD_DURATION_GREEN_MIN_S:
-        return "yellow"
-    return "green"
-
-
-def _ring_buffer_level(pct: float) -> str:
-    if pct >= thresholds.RING_BUFFER_RED_MAX_PCT:
-        return "red"
-    if pct >= thresholds.RING_BUFFER_YELLOW_LOW_MAX_PCT:
-        return "yellow"
-    return "green"
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +200,7 @@ class IdlePreflightPage(_BasePanelPage):
         selection: Sequence[SelectedMeasurement],
         event_capacity: Mapping[str, int],
         disk_free_bytes: int,
-        bitrate_bps: int = thresholds.DEFAULT_CAN_BITRATE_BPS,
+        bitrate_bps: int = DEFAULT_CAN_BITRATE_BPS,
     ) -> None:
         if not selection:
             for r in (
@@ -242,7 +216,7 @@ class IdlePreflightPage(_BasePanelPage):
 
         can_pct = estimate_can_bus_load(selection, bitrate_bps)
         self._row_can.setText(
-            _format_band_value(_can_load_level(can_pct), f"{can_pct:.1f}%")
+            _format_band_value(band_can_load(can_pct), f"{can_pct:.1f}%")
         )
 
         # DAQ slot uses each event's own capacity. We surface the
@@ -264,13 +238,9 @@ class IdlePreflightPage(_BasePanelPage):
         if not events_seen:
             self._row_daq.setText(_format_band_value("off", "—"))
         else:
-            if worst_pct >= thresholds.DAQ_SLOT_YELLOW_MAX_PCT:
-                lvl = "red"
-            elif worst_pct >= thresholds.DAQ_SLOT_GREEN_MAX_PCT:
-                lvl = "yellow"
-            else:
-                lvl = "green"
-            self._row_daq.setText(_format_band_value(lvl, f"{worst_pct:.1f}%"))
+            self._row_daq.setText(
+                _format_band_value(band_daq_slot(worst_pct), f"{worst_pct:.1f}%")
+            )
 
         # Disk-remaining row delegates band selection to the pure helper.
         self._row_disk.setText(
@@ -287,7 +257,7 @@ class IdlePreflightPage(_BasePanelPage):
         else:
             self._row_duration.setText(
                 _format_band_value(
-                    _duration_level(duration_s),
+                    band_record_duration_s(duration_s),
                     f"{duration_s / 60:.1f} min",
                 )
             )
@@ -351,22 +321,18 @@ class RecordingQualityPage(_BasePanelPage):
         rec = snapshot.rec
         self._row_ring.setText(
             _format_band_value(
-                _ring_buffer_level(rec.ring_buffer_fill_pct),
+                band_ring_buffer(rec.ring_buffer_fill_pct),
                 f"{rec.ring_buffer_fill_pct:.1f}%",
             )
         )
         self._row_write.setText(
             _format_band_value("green", f"{rec.write_rate_bps / 1024:.1f} kB/s")
         )
-        # Dropped frames band sourced from thresholds constants.
-        if rec.dropped_frames >= thresholds.DROPPED_FRAMES_PROMPT_TOTAL:
-            dropped_lvl = "red"
-        elif rec.dropped_frames > thresholds.DROPPED_FRAMES_YELLOW_MAX_PER_WINDOW:
-            dropped_lvl = "yellow"
-        else:
-            dropped_lvl = "green"
         self._row_dropped.setText(
-            _format_band_value(dropped_lvl, str(rec.dropped_frames))
+            _format_band_value(
+                band_dropped_frames(rec.dropped_frames),
+                str(rec.dropped_frames),
+            )
         )
         can = snapshot.can
         if can.bus_load_pct is None:
@@ -374,21 +340,19 @@ class RecordingQualityPage(_BasePanelPage):
         else:
             self._row_can.setText(
                 _format_band_value(
-                    _can_load_level(can.bus_load_pct), f"{can.bus_load_pct:.1f}%"
+                    band_can_load(can.bus_load_pct),
+                    f"{can.bus_load_pct:.1f}%",
                 )
             )
-        if rec.last_rx_age_s >= thresholds.REC_LAST_RX_RED_MIN_S:
-            age_lvl = "red"
-        elif rec.last_rx_age_s >= thresholds.REC_LAST_RX_YELLOW_MIN_S:
-            age_lvl = "yellow"
-        else:
-            age_lvl = "green"
         self._row_rx_age.setText(
-            _format_band_value(age_lvl, f"{rec.last_rx_age_s:.2f} s")
+            _format_band_value(
+                band_rec_last_rx_age_s(rec.last_rx_age_s),
+                f"{rec.last_rx_age_s:.2f} s",
+            )
         )
         self._row_disk.setText(
             _format_band_value(
-                _disk_free_level(disk_free_bytes),
+                band_disk_remaining(disk_free_bytes),
                 f"{disk_free_bytes / (1024 ** 3):.2f} GB",
             )
         )

@@ -12,15 +12,18 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
+import mf4_analyzer.acquisition_capture.backends as backends_module
 from mf4_analyzer.acquisition_capture.backends import (
     FakeRecorderBackend,
     ReplayRecorderBackend,
     VectorXcpRecorderBackend,
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.acquisition_capture.writer import Mf4Writer
 
 
 THREE = (
@@ -162,6 +165,50 @@ def test_replay_backend_explicit_source():
     assert len(samples) == 4
     channels = [s[0] for s in samples]
     assert channels == ["A", "B", "C", "A"]
+
+
+def test_replay_backend_speed_multiplier_changes_release_rate(monkeypatch):
+    now = {"t": 100.0}
+    monkeypatch.setattr(backends_module.time, "monotonic", lambda: now["t"])
+    source = [
+        ("A", 0.0, 1.0),
+        ("A", 0.05, 2.0),
+        ("A", 0.10, 3.0),
+    ]
+    backend = ReplayRecorderBackend(source_samples=source, speed_multiplier=2.0)
+    backend.start((SelectedMeasurement(name="A", unit="rpm"),))
+
+    now["t"] += 0.03
+    samples = backend.poll()
+
+    assert [(ch, ts, val) for ch, ts, val in samples] == [
+        ("A", 0.0, 1.0),
+        ("A", 0.05, 2.0),
+    ]
+
+
+def test_replay_backend_loads_mf4_source_samples(tmp_path: Path):
+    selected = (
+        SelectedMeasurement(name="A", unit="rpm"),
+        SelectedMeasurement(name="B", unit="Nm"),
+    )
+    mf4_path = tmp_path / "source.mf4"
+    writer = Mf4Writer(mf4_path, selected)
+    writer.append("A", 0.0, 1.0)
+    writer.append("B", 0.0, 2.0)
+    writer.append("A", 0.1, 1.5)
+    writer.append("B", 0.1, 2.5)
+    writer.finalize()
+
+    replay_source = ReplayRecorderBackend.source_from_mf4(mf4_path)
+
+    assert [m.name for m in replay_source.selected] == ["A", "B"]
+    assert [m.unit for m in replay_source.selected] == ["rpm", "Nm"]
+    assert replay_source.duration_s == pytest.approx(0.1)
+    assert [sample[1] for sample in replay_source.source_samples] == sorted(
+        sample[1] for sample in replay_source.source_samples
+    )
+    assert {sample[0] for sample in replay_source.source_samples} == {"A", "B"}
 
 
 def test_replay_backend_status_and_stop():
