@@ -286,6 +286,63 @@ def test_toolbar_overflow_at_narrow_width(qapp):
         window.close()
 
 
+def test_toolbar_mode_overflow_uses_submenu(qapp):
+    """Code-review follow-up: when the mode segment is demoted into
+    the overflow menu, the user must be able to choose a specific
+    mode tab. Previously the menu held a single ``模式`` QAction that
+    cycled through tabs via ``(currentIndex + 1) % 3`` — round-robin
+    advancement with no visible current state. The action must now
+    own a submenu with one entry per :data:`MODE_SEGMENTS` label.
+    """
+    window = CockpitMainWindow()
+    try:
+        window.resize(800, 600)
+        window.show()
+        qapp.processEvents()
+        toolbar = window.findChild(QWidget, "cockpitToolbarBand")
+        assert toolbar is not None
+        toolbar.resize(800, toolbar.height() or 50)
+        window._recompute_toolbar_overflow()
+        qapp.processEvents()
+
+        overflow_btn = window.findChild(QToolButton, "cockpitToolbarOverflow")
+        assert overflow_btn is not None
+        menu = overflow_btn.menu()
+        assert isinstance(menu, QMenu)
+        mode_action = next(
+            (a for a in menu.actions() if a.text() == "模式"),
+            None,
+        )
+        if mode_action is None:
+            # Mode segment fit at this width on this platform — not a
+            # failure of the submenu contract, just no demotion to
+            # exercise. The companion overflow test guards the actual
+            # demotion path.
+            return
+        sub_menu = mode_action.menu()
+        assert sub_menu is not None, (
+            "mode action in overflow must own a submenu of the three "
+            "MODE_SEGMENTS labels — not a single cycling QAction"
+        )
+        sub_labels = [a.text() for a in sub_menu.actions()]
+        assert sub_labels == ["采集", "回放", "历史"], (
+            "expected submenu entries to match MODE_SEGMENTS labels in "
+            f"order, got {sub_labels!r}"
+        )
+
+        # Click each sub-action and confirm the tab index moves to the
+        # chosen value rather than advancing by one.
+        for idx, sub_action in enumerate(sub_menu.actions()):
+            sub_action.trigger()
+            qapp.processEvents()
+            assert window._mode_tabs.currentIndex() == idx, (
+                f"selecting submenu entry {idx} should set mode tab "
+                f"to {idx}, got {window._mode_tabs.currentIndex()}"
+            )
+    finally:
+        window.close()
+
+
 def test_toolbar_selectors_not_fixed_width(qapp):
     """Selector widgets (A2L / DBC / Output) must use a min+max width
     range, not setFixedWidth. Qt's setFixedWidth(N) collapses

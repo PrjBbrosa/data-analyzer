@@ -17,7 +17,12 @@ from pathlib import Path
 
 import pytest
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QListWidget, QScrollArea
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QListWidget,
+    QScrollArea,
+)
 
 from can_logger.p0.a2l_probe import MeasurementSummary
 from mf4_analyzer.acquisition.manifest import (
@@ -749,6 +754,36 @@ def test_review_modal_scrolls_with_many_missing_channels(qapp, tmp_path):
         min_size = modal.minimumSize()
         assert min_size.width() >= 420
         assert min_size.height() >= 320
+    finally:
+        if modal.isVisible():
+            modal.done(0)
+
+
+def test_review_modal_missing_channels_copy_to_clipboard(qapp, tmp_path):
+    """Code-review follow-up: the QListWidget that replaced the
+    comma-joined QLabel must actually let users copy channel names.
+
+    NoSelection + NoFocus (the previous defaults) silently defeat
+    Ctrl+C because QListWidget needs at least a selected row before
+    its copy path produces clipboard content. Verify the list now
+    allows selection and that the modal exposes a working copy helper
+    so the implied "see/copy channel names" UX is honest.
+    """
+    ctx = _make_review_context_with_missing(tmp_path, missing_count=3)
+    modal = ReviewModal(ctx)
+    try:
+        modal.show()
+        qapp.processEvents()
+        widget = modal._missing_channels_list
+        assert widget is not None, "modal must build a missing channels list"
+        assert widget.selectionMode() != QAbstractItemView.NoSelection, (
+            "missing channels list must allow row selection so users can "
+            "copy names; NoSelection silently defeats Ctrl+C"
+        )
+        widget.selectAll()
+        QApplication.clipboard().clear()
+        modal._copy_missing_channels_to_clipboard()
+        assert QApplication.clipboard().text() == "chan_0\nchan_1\nchan_2"
     finally:
         if modal.isVisible():
             modal.done(0)

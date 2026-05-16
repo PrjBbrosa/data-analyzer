@@ -33,8 +33,10 @@ from pathlib import Path
 from typing import Callable
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QFrame,
@@ -44,6 +46,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QShortcut,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -300,19 +303,46 @@ class ReviewModal(QDialog):
 
         Replaces the previous ``", ".join(...)`` rendering inside a
         single ``QLabel`` so a 100-entry list does not push the modal
-        width past the screen. Selection / focus are disabled because
-        the list is informational only.
+        width past the screen. Selection is ``ExtendedSelection`` and
+        a ``Ctrl+C`` shortcut bound to
+        :meth:`_copy_missing_channels_to_clipboard` lets the user
+        paste channel names into ticketing / A2L editors — a
+        ``QListWidget`` has no native clipboard handler so the
+        shortcut is mandatory for copy to work.
         """
         widget = QListWidget(parent)
         widget.setObjectName("reviewMissingChannelsList")
         widget.setMaximumHeight(180)
-        widget.setSelectionMode(QAbstractItemView.NoSelection)
-        widget.setFocusPolicy(Qt.NoFocus)
+        widget.setSelectionMode(QAbstractItemView.ExtendedSelection)
         widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         widget.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         for name in missing_channels:
             widget.addItem(name)
+        copy_shortcut = QShortcut(QKeySequence.Copy, widget)
+        copy_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        copy_shortcut.activated.connect(self._copy_missing_channels_to_clipboard)
         return widget
+
+    def _copy_missing_channels_to_clipboard(self) -> None:
+        """Copy the selected rows of the missing-channels list to the
+        system clipboard as a newline-joined string.
+
+        When no rows are selected (e.g. the shortcut fires before the
+        user clicks anything), the entire list is copied — matching
+        what most users want when they press ``Ctrl+C`` on a short
+        diagnostic readout.
+        """
+        widget = getattr(self, "_missing_channels_list", None)
+        if widget is None:
+            return
+        selected = widget.selectedItems()
+        if selected:
+            names = [item.text() for item in selected]
+        else:
+            names = [widget.item(i).text() for i in range(widget.count())]
+        if not names:
+            return
+        QApplication.clipboard().setText("\n".join(names))
 
     # ------------------------------------------------------------------
     # Action handlers — also callable directly from tests.

@@ -436,13 +436,27 @@ class CockpitMainWindow(QMainWindow):
         # they need it.
         self._mode_segment_action = QAction("模式", self)
         self._mode_segment_action.setObjectName("cockpitModeSegmentAction")
-        self._mode_segment_action.triggered.connect(
-            lambda: self._on_mode_segment_clicked(
-                (self._mode_tabs.currentIndex() + 1) % 3
-                if hasattr(self, "_mode_tabs")
-                else 0
+        # When the mode segment is demoted into the overflow menu, the
+        # user must be able to pick a specific tab. A bare cycling
+        # `_on_mode_segment_clicked((idx+1) % 3)` lambda forces
+        # round-robin advancement with no visible current state.
+        # Attach a submenu with one QAction per ``MODE_SEGMENTS``
+        # entry so the overflow path renders as ``模式 ▶ 采集 / 回放
+        # / 历史`` and each sub-action sets the tab to its specific
+        # index.
+        self._mode_overflow_submenu = QMenu("模式", self)
+        self._mode_overflow_submenu.setObjectName("cockpitModeOverflowSubmenu")
+        self._mode_overflow_actions: list[QAction] = []
+        for _mode, label, idx in MODE_SEGMENTS:
+            sub_action = QAction(label, self)
+            sub_action.triggered.connect(
+                lambda _checked=False, target_idx=idx: self._on_mode_segment_clicked(
+                    target_idx
+                )
             )
-        )
+            self._mode_overflow_submenu.addAction(sub_action)
+            self._mode_overflow_actions.append(sub_action)
+        self._mode_segment_action.setMenu(self._mode_overflow_submenu)
         # Map each eligible toolbar child widget to its menu QAction.
         # Order matters: this is left-to-right toolbar order, so
         # recompute hides right-to-left (reversed iteration).
@@ -458,8 +472,12 @@ class CockpitMainWindow(QMainWindow):
         # `pyqt-ui/2026-04-26-conditional-visibility-init-sync-and-paired-field-children.md`:
         # the recompute must seed once at the end of __init__ so the
         # overflow chevron's initial visibility is honest before
-        # show().
-        self._recompute_toolbar_overflow()
+        # show(). Defer one event-loop tick via ``QTimer.singleShot``
+        # so the toolbar's child widgets have settled width() values
+        # — calling synchronously here observes width()=0 and would
+        # otherwise have to fall back to a hard-coded default that
+        # mis-seeds the state on narrower screens.
+        QTimer.singleShot(0, self._recompute_toolbar_overflow)
 
         return toolbar
 
@@ -586,12 +604,14 @@ class CockpitMainWindow(QMainWindow):
         outer_w = toolbar.width()
         if outer_w <= 0:
             # Layout not yet computed (pre-show). Use the parent
-            # window's width as a best-effort proxy so the seed call
-            # at the end of ``_build_toolbar`` produces a sensible
-            # state.
+            # window's width as a best-effort proxy.
             outer_w = self.width()
         if outer_w <= 0:
-            outer_w = 1280  # last-resort default == initial resize()
+            # Still not laid out — give up rather than seed against a
+            # hard-coded fallback (which would mis-seed on screens
+            # narrower than the default). The first ``resizeEvent``
+            # after show() will recompute against real widths.
+            return
 
         # Determine each eligible widget's "design visibility" — True
         # if the state machine wants it visible. We treat
