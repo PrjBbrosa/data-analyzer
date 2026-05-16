@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -338,9 +339,31 @@ class LiveCardGrid(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._layout = QVBoxLayout(self)
+        # Outer shell: thin zero-margin QVBoxLayout whose sole child is
+        # the scroll area. The cards/placeholder layout lives on an
+        # inner host widget inside the scroll viewport so vertical
+        # overflow is solved at the container, not by shrinking cards
+        # (Spec §S1.2, lessons: responsive-pane-containers +
+        # inspector-content-max-width-and-tinted-card-bleed).
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._scroll_area = QScrollArea(self)
+        self._scroll_area.setObjectName("liveCardGridScroll")
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll_area.setFrameShape(QFrame.NoFrame)
+
+        self._scroll_body = QWidget(self._scroll_area)
+        self._scroll_body.setObjectName("liveCardGridBody")
+        self._layout = QVBoxLayout(self._scroll_body)
         self._layout.setContentsMargins(12, 12, 12, 12)
         self._layout.setSpacing(8)
+        self._scroll_area.setWidget(self._scroll_body)
+        outer.addWidget(self._scroll_area)
+
         self._disconnected_canvas = self._build_disconnected_canvas()
         self._layout.addWidget(self._disconnected_canvas)
         self._layout.addStretch(1)

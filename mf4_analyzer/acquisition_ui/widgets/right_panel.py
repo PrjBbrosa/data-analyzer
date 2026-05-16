@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -167,16 +168,78 @@ def _add_verdict_banner(
 
 
 class _BasePanelPage(QFrame):
+    """Base page frame: wraps its body in a scroll area with cap+left-anchor.
+
+    Layout topology (per the cap-and-left-anchor pattern from
+    ``pyqt-ui/2026-04-26-inspector-content-max-width-and-tinted-card-bleed.md``):
+
+    ``self``  (QFrame, page frame)
+      └── ``_page_layout`` (QVBoxLayout, zero margins)
+            └── ``_scroll`` (QScrollArea, widgetResizable=True,
+                             vScroll=AsNeeded, hScroll=AlwaysOff)
+                  └── ``_scroll_body`` (QWidget, setMaximumWidth(340))
+                        └── ``_body_host`` (QVBoxLayout, hosts content
+                                             + trailing ``addStretch(1)``)
+                              └── ``_outer`` (QVBoxLayout, the layout
+                                              subclasses populate;
+                                              kept as ``self._outer``
+                                              so existing subclass code
+                                              is byte-identical)
+
+    Subclasses continue to call ``self._outer.addWidget(...)`` /
+    ``self._outer.addStretch(...)`` exactly as before.
+    """
+
+    _SCROLL_BODY_MAX_WIDTH = 340
+    _SCROLL_OBJECT_NAME = "rightPanelScroll"
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("rightPanelPage")
-        self._outer = QVBoxLayout(self)
-        self._outer.setContentsMargins(12, 12, 12, 12)
+
+        # Outer page-frame layout: zero-margin host for the scroll area.
+        self._page_layout = QVBoxLayout(self)
+        self._page_layout.setContentsMargins(0, 0, 0, 0)
+        self._page_layout.setSpacing(0)
+
+        # Scroll area — never grows horizontally; vertical AsNeeded.
+        self._scroll = QScrollArea(self)
+        self._scroll.setObjectName(self._SCROLL_OBJECT_NAME)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._page_layout.addWidget(self._scroll)
+
+        # Capped scroll body — keeps Expanding children from re-stretching
+        # the pane when the splitter is dragged wide.
+        self._scroll_body = QWidget()
+        self._scroll_body.setObjectName("rightPanelScrollBody")
+        self._scroll_body.setMaximumWidth(self._SCROLL_BODY_MAX_WIDTH)
+
+        # Host layout inside the scroll body left-anchors the body
+        # widget with a trailing ``addStretch(1)``. The body widget
+        # itself owns ``self._outer`` so subclasses keep using
+        # ``self._outer.addWidget(...)``.
+        self._body_host = QVBoxLayout(self._scroll_body)
+        self._body_host.setContentsMargins(12, 12, 12, 12)
+        self._body_host.setSpacing(0)
+
+        self._body = QWidget(self._scroll_body)
+        self._outer = QVBoxLayout(self._body)
+        self._outer.setContentsMargins(0, 0, 0, 0)
         self._outer.setSpacing(8)
+
+        self._body_host.addWidget(self._body)
+        self._body_host.addStretch(1)
+
+        self._scroll.setWidget(self._scroll_body)
 
 
 class DisconnectedPage(_BasePanelPage):
     """Connection checklist + first-failure surface."""
+
+    _SCROLL_OBJECT_NAME = "rightPanelScrollDisconnected"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -243,6 +306,8 @@ class DisconnectedPage(_BasePanelPage):
 
 class IdlePreflightPage(_BasePanelPage):
     """Five preflight numbers (Threshold Contract table)."""
+
+    _SCROLL_OBJECT_NAME = "rightPanelScrollIdle"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -376,6 +441,8 @@ class IdlePreflightPage(_BasePanelPage):
 class RecordingQualityPage(_BasePanelPage):
     """Live quality monitor sourced from RecHealth + CanHealth + disk."""
 
+    _SCROLL_OBJECT_NAME = "rightPanelScrollRecording"
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         _add_header_row(self._outer, self, "实时质量监控")
@@ -455,7 +522,13 @@ class RightPanel(QStackedWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("rightPanel")
-        self.setFixedWidth(300)
+        # Replace ``setFixedWidth(300)`` with a min/max band so the
+        # splitter can hand the pane some slack for longer translated
+        # labels and wider numeric values. The cap-and-left-anchor in
+        # ``_BasePanelPage`` keeps the form column visually anchored at
+        # 340 px even when the splitter slot grows past it.
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(360)
         self._disconnected = DisconnectedPage(self)
         self._idle = IdlePreflightPage(self)
         self._recording = RecordingQualityPage(self)

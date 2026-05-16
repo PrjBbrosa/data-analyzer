@@ -15,7 +15,7 @@ pure helper.
 
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QLabel, QFrame
+from PyQt5.QtWidgets import QLabel, QFrame, QScrollArea, QVBoxLayout, QWidget
 
 from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.health import (
@@ -393,4 +393,75 @@ def test_idle_page_zero_capacity_event_renders_red_100(qapp):
     assert "100.0%" in rendered
     # Red color token per ``_LEVEL_COLOR``.
     assert rp_module._LEVEL_COLOR["red"] in rendered
+    panel.close()
+
+
+# ---------------------------------------------------------------------------
+# P1-1 RightPanel scroll + min/max width regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_right_panel_width_is_min_max_not_fixed(qapp):
+    """RightPanel must expose min/max width (not a single fixed width)."""
+    panel = RightPanel()
+    assert panel.minimumWidth() == 280
+    assert panel.maximumWidth() == 360
+    # Negative guard against accidental ``setFixedWidth`` regression.
+    assert panel.minimumWidth() != panel.maximumWidth()
+    panel.close()
+
+
+def test_right_panel_width_stable_across_outer_widths(qapp):
+    """Wide-pane axis: panel width clamps to [280, 360] regardless of host."""
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    layout.setContentsMargins(0, 0, 0, 0)
+    panel = RightPanel(host)
+    layout.addWidget(panel)
+    try:
+        for outer_w in (200, 600, 1500):
+            host.resize(outer_w, 600)
+            host.show()
+            qapp.processEvents()
+            w = panel.width()
+            assert 280 <= w <= 360, (
+                f"panel.width()={w} outside [280, 360] at host width {outer_w}"
+            )
+    finally:
+        host.close()
+
+
+def test_idle_preflight_page_scrolls_when_viewport_small(qapp):
+    """IdlePreflight content exceeds short viewport height → vScroll visible."""
+    panel = RightPanel()
+    selection = _make_selection(["event_10ms", "event_10ms", "event_100ms"])
+    event_capacity = {"event_10ms": 8, "event_100ms": 4}
+    panel.show_idle(
+        selection=selection,
+        event_capacity=event_capacity,
+        disk_free_bytes=10 * 1024 ** 3,
+    )
+
+    page = panel.idle_page
+    scroll = page.findChild(QScrollArea)
+    assert scroll is not None
+
+    # Force a viewport shorter than the natural IdlePreflight content
+    # (5 metric sections + header + verdict banner ≈ 380+ px tall).
+    panel.resize(300, 400)
+    page.resize(300, 400)
+    panel.show()
+    panel.activateWindow()
+    qapp.processEvents()
+    page.adjustSize()
+    qapp.processEvents()
+
+    # Scroll body's natural height must exceed the viewport height for
+    # the vertical scrollbar to be needed.
+    body = scroll.widget()
+    assert body is not None
+    # AsNeeded policy renders the bar when content height > viewport
+    # height. We assert the content overflow drives the bar visible.
+    assert body.sizeHint().height() > scroll.viewport().height()
+    assert scroll.verticalScrollBar().isVisible() is True
     panel.close()

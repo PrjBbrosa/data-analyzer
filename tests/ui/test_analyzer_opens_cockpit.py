@@ -134,6 +134,53 @@ def test_analyzer_toolbar_raises_existing_cockpit(qapp, qtbot, monkeypatch):
     assert existing.activated
 
 
+def test_analyzer_toolbar_reopens_cockpit_after_close(qapp, qtbot, monkeypatch):
+    """Regression: closing the Cockpit then clicking the button again
+    must re-show the window. Qt's default close hides — it does not
+    destroy — so ``topLevelWidgets()`` still surfaces the hidden
+    instance. ``raise_()`` / ``activateWindow()`` are no-ops on hidden
+    widgets, so without ``show()`` the second click silently does
+    nothing."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    class FakeCockpit(QMainWindow):
+        instances: list["FakeCockpit"] = []
+
+        def __init__(self):
+            super().__init__()
+            self.show_calls = 0
+            FakeCockpit.instances.append(self)
+
+        def show(self):
+            self.show_calls += 1
+            super().show()
+
+    _patch_cockpit_import(monkeypatch, FakeCockpit)
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    qtbot.mouseClick(window.toolbar.btn_acquisition_cockpit, Qt.LeftButton)
+    qapp.processEvents()
+    assert len(FakeCockpit.instances) == 1
+    first = FakeCockpit.instances[0]
+    assert first.show_calls == 1
+    assert first.isVisible()
+
+    first.close()
+    qapp.processEvents()
+    assert not first.isVisible()
+
+    qtbot.mouseClick(window.toolbar.btn_acquisition_cockpit, Qt.LeftButton)
+    qapp.processEvents()
+
+    visible = [c for c in FakeCockpit.instances if c.isVisible()]
+    assert visible, "after close + re-click, cockpit must be visible again"
+
+    for c in FakeCockpit.instances:
+        c.close()
+
+
 def test_cockpit_creation_does_not_load_a2l_eagerly(qapp, qtbot, monkeypatch):
     from PyQt5.QtWidgets import QFileDialog
 

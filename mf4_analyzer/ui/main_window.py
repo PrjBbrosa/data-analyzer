@@ -622,6 +622,8 @@ class MainWindow(QMainWindow):
 
         for window in QApplication.topLevelWidgets():
             if isinstance(window, CockpitMainWindow):
+                if not window.isVisible():
+                    window.show()
                 window.raise_()
                 window.activateWindow()
                 return

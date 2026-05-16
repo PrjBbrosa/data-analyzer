@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication, QListWidget, QScrollArea
 
 from can_logger.p0.a2l_probe import MeasurementSummary
 from mf4_analyzer.acquisition.manifest import (
@@ -24,7 +25,7 @@ from mf4_analyzer.acquisition.manifest import (
     load_manifest,
     sha256_file,
 )
-from mf4_analyzer.acquisition.preflight import analyze_mf4
+from mf4_analyzer.acquisition.preflight import PreflightResult, analyze_mf4
 from mf4_analyzer.acquisition_capture.backends import FakeRecorderBackend
 from mf4_analyzer.acquisition_capture.controller import CaptureController
 from mf4_analyzer.acquisition_capture.session import (
@@ -662,3 +663,116 @@ def test_analyzer_load_file_delegates_to_load_one(qapp, monkeypatch):
         assert captured[-1] == "/tmp/another.mf4"
     finally:
         win.close()
+
+
+# ---------------------------------------------------------------------------
+# P0-2 ReviewModal scroll + resize fix
+#
+# Cited lessons:
+#   docs/lessons-learned/pyqt-ui/2026-05-15-save-action-must-not-close-gating-modal.md
+#   docs/lessons-learned/pyqt-ui/2026-04-27-modal-from-qthread-finished-segfaults-offscreen.md
+# ---------------------------------------------------------------------------
+
+
+def _make_review_context_with_missing(
+    tmp_path: Path,
+    *,
+    missing_count: int,
+) -> ReviewContext:
+    """Build a ReviewContext with a fake preflight whose missing_channels
+    holds ``missing_count`` entries.
+
+    The MF4 path is a real on-disk file so ``_can_open_in_analyzer``'s
+    ``exists() and stat().st_size > 0`` predicate flips True after the
+    save action — that is what the reachability test depends on. The
+    preflight is a stand-alone ``PreflightResult`` so we can control the
+    list length exactly without running ``analyze_mf4``.
+    """
+    mf4_path = tmp_path / "p0_2_rec.mf4"
+    mf4_path.write_bytes(b"\x00" * 16)  # non-empty placeholder
+    sidecar_path = tmp_path / "p0_2_rec.session_summary.json"
+    sidecar_path.write_text("{}", encoding="utf-8")
+    preflight_sidecar = tmp_path / "p0_2_rec.preflight.json"
+    preflight_sidecar.write_text("{}", encoding="utf-8")
+    missing = tuple(f"chan_{i}" for i in range(missing_count))
+    pf = PreflightResult(
+        path=str(mf4_path),
+        ok=True,
+        rows=10,
+        channels=("Time",),
+        units={},
+        duration_s=1.0,
+        estimated_fs_hz=20.0,
+        missing_channels=missing,
+        problems=(),
+        sha256="",
+    )
+    summary = SessionSummary(
+        duration_s=1.0,
+        rx_count=10,
+        output_mf4=str(mf4_path),
+    )
+    return ReviewContext(
+        mf4_path=mf4_path,
+        sidecar_path=sidecar_path,
+        summary=summary,
+        preflight=pf,
+        preflight_sidecar_path=preflight_sidecar,
+        expected_channels=missing,
+    )
+
+
+def test_review_modal_scrolls_with_many_missing_channels(qapp, tmp_path):
+    """With a 100-entry missing_channels list, the modal must:
+
+    - clamp its height to the available screen rather than balloon
+      off-screen,
+    - host an inner QScrollArea whose vertical scrollbar becomes visible,
+    - enable the bottom-right size grip,
+    - declare a usable minimum size (≥420×320).
+    """
+    ctx = _make_review_context_with_missing(tmp_path, missing_count=100)
+    modal = ReviewModal(ctx)
+    try:
+        modal.show()
+        qapp.processEvents()
+        screen_h = QApplication.primaryScreen().availableGeometry().height()
+        assert modal.size().height() <= screen_h, (
+            f"modal height {modal.size().height()} exceeded screen {screen_h}"
+        )
+        scroll = modal.findChild(QScrollArea)
+        assert scroll is not None, "modal must wrap its body in a QScrollArea"
+        assert scroll.verticalScrollBar().isVisible() is True, (
+            "vertical scrollbar must surface when content overflows"
+        )
+        assert modal.isSizeGripEnabled() is True
+        min_size = modal.minimumSize()
+        assert min_size.width() >= 420
+        assert min_size.height() >= 320
+    finally:
+        if modal.isVisible():
+            modal.done(0)
+
+
+def test_review_modal_gated_open_in_analyzer_still_reachable(qapp, tmp_path):
+    """Reachability guard for the
+    save-action-must-not-close-gating-modal lesson: calling
+    ``do_save_only()`` must NOT auto-close the modal, and the
+    Analyzer-open button must be enabled afterwards so the user can
+    actually click it.
+    """
+    ctx = _make_review_context_with_missing(tmp_path, missing_count=0)
+    modal = ReviewModal(ctx)
+    try:
+        modal.show()
+        qapp.processEvents()
+        modal.do_save_only()
+        qapp.processEvents()
+        assert modal.isVisible() is True, (
+            "save-only must not close the gating modal (CR3 contract)"
+        )
+        assert modal._btn_open_analyzer.isEnabled() is True
+        assert modal.is_open_in_analyzer_enabled() is True
+    finally:
+        if modal.isVisible():
+            modal.done(0)

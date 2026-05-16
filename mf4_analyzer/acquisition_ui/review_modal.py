@@ -34,13 +34,16 @@ from typing import Callable
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -143,11 +146,34 @@ class ReviewModal(QDialog):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        # P0-2 fix: the modal must remain bounded on small screens and
+        # never balloon off-screen when the preflight reports a long
+        # ``missing_channels`` list. We give the dialog a size grip + a
+        # usable minimum size, wrap the variable-height body in a
+        # ``QScrollArea`` so it can scroll instead of pushing the
+        # action buttons off the bottom, and render
+        # ``missing_channels`` in a capped ``QListWidget`` rather than
+        # joining the names into one ever-widening label.
+        #
+        # The save action MUST NOT call ``accept()`` (see
+        # ``docs/lessons-learned/pyqt-ui/2026-05-15-save-action-must-not-close-gating-modal.md``):
+        # the scroll wrapper does not introduce any new closure path.
+        self.setSizeGripEnabled(True)
+        self.setMinimumSize(420, 320)
+        # Open at a compact default so the body's natural overflow path
+        # (banner + header + preflight + capped missing-channels list)
+        # surfaces the QScrollArea's vertical scrollbar when the
+        # missing-channels list is long. The user can drag the size
+        # grip to enlarge the modal.
+        self.resize(560, 320)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
 
         # Auto-stop banner — only shown when summary.auto_stop is True.
+        # Lives OUTSIDE the scroll area so the warning stays pinned at
+        # the top regardless of body scroll position.
         if self._ctx.summary.auto_stop:
             banner = QLabel(AUTO_STOP_BANNER_TEXT, self)
             banner.setObjectName("reviewAutoStopBanner")
@@ -160,18 +186,37 @@ class ReviewModal(QDialog):
         else:
             self._auto_stop_banner = None
 
+        # Scrollable body host. ``widgetResizable=True`` so the inner
+        # body widget tracks the viewport width and we never get an
+        # unwanted horizontal scrollbar.
+        scroll = QScrollArea(self)
+        scroll.setObjectName("reviewBodyScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget(scroll)
+        body.setObjectName("reviewBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(10)
+
         # Header: file name + duration / channel summary.
         header = QLabel(
             f"录制完成: {self._ctx.mf4_path.name}\n"
             f"时长 {self._ctx.summary.duration_s:.2f} s · "
             f"接收 {self._ctx.summary.rx_count} 帧 · "
             f"丢帧 {self._ctx.summary.dropped_frames}",
-            self,
+            body,
         )
         header.setObjectName("reviewHeader")
-        root.addWidget(header)
+        header.setWordWrap(True)
+        body_layout.addWidget(header)
 
-        # Preflight summary block.
+        # Preflight summary block. ``missing_channels`` is rendered as a
+        # capped ``QListWidget`` so a 100-entry list does not blow up the
+        # label width; the label retains the count for at-a-glance
+        # context.
         pf = self._ctx.preflight
         pf_text_parts = [
             f"诊断: rows={pf.rows} channels={len(pf.channels)} "
@@ -179,32 +224,47 @@ class ReviewModal(QDialog):
         ]
         if pf.missing_channels:
             pf_text_parts.append(
-                "缺失通道: " + ", ".join(pf.missing_channels)
+                f"缺失通道 ({len(pf.missing_channels)})"
             )
         if pf.problems:
             pf_text_parts.append(
                 "警告: " + " | ".join(pf.problems)
             )
-        pf_label = QLabel("\n".join(pf_text_parts), self)
+        pf_label = QLabel("\n".join(pf_text_parts), body)
         pf_label.setObjectName("reviewPreflight")
         pf_label.setWordWrap(True)
-        root.addWidget(pf_label)
+        body_layout.addWidget(pf_label)
+
+        if pf.missing_channels:
+            missing_list = self._build_missing_channels_list(
+                pf.missing_channels, parent=body
+            )
+            body_layout.addWidget(missing_list)
+            self._missing_channels_list: QListWidget | None = missing_list
+        else:
+            self._missing_channels_list = None
 
         # Inline status label — shows non-blocking confirmations like
         # "已保存" / "已归档" after the save/archive action completes.
         # The modal stays open after save/archive so the now-enabled
         # ``在 Analyzer 打开`` button is reachable; this label tells the
         # user the save half succeeded.
-        self._status_label = QLabel("", self)
+        self._status_label = QLabel("", body)
         self._status_label.setObjectName("reviewStatusLabel")
         self._status_label.setWordWrap(True)
         self._status_label.setVisible(False)
-        root.addWidget(self._status_label)
+        body_layout.addWidget(self._status_label)
 
-        # Spacer.
-        root.addStretch(1)
+        # Spacer inside the scroll body so the visible content stays
+        # top-aligned when the body is taller than its content.
+        body_layout.addStretch(1)
 
-        # Action buttons row.
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+        self._body_scroll = scroll
+
+        # Action buttons row — pinned OUTSIDE the scroll area so the
+        # primary actions remain visible regardless of body scroll.
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
@@ -229,6 +289,30 @@ class ReviewModal(QDialog):
         btn_row.addWidget(self._btn_open_analyzer)
 
         root.addLayout(btn_row)
+
+    def _build_missing_channels_list(
+        self,
+        missing_channels: tuple[str, ...],
+        *,
+        parent: QWidget,
+    ) -> QListWidget:
+        """Render ``missing_channels`` as a capped, scrollable list.
+
+        Replaces the previous ``", ".join(...)`` rendering inside a
+        single ``QLabel`` so a 100-entry list does not push the modal
+        width past the screen. Selection / focus are disabled because
+        the list is informational only.
+        """
+        widget = QListWidget(parent)
+        widget.setObjectName("reviewMissingChannelsList")
+        widget.setMaximumHeight(180)
+        widget.setSelectionMode(QAbstractItemView.NoSelection)
+        widget.setFocusPolicy(Qt.NoFocus)
+        widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        widget.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        for name in missing_channels:
+            widget.addItem(name)
+        return widget
 
     # ------------------------------------------------------------------
     # Action handlers — also callable directly from tests.

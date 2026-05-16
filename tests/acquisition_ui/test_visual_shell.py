@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QLabel, QPushButton, QWidget
+from PyQt5.QtWidgets import QAction, QLabel, QMenu, QPushButton, QToolButton, QWidget
 
 from mf4_analyzer.acquisition_ui.main_window import (
     DBC_DISABLED_TOOLTIP,
@@ -115,5 +115,197 @@ def test_main_button_visual_action_properties_follow_state(qapp):
         window.state_machine.request_start_recording()
         assert window.main_button.property("cockpitAction") == "stop"
         assert rec.property("recState") == "recording"
+    finally:
+        window.close()
+
+
+# ---------------------------------------------------------------------------
+# P1-2 toolbar overflow + min-size — spec §S4
+# ---------------------------------------------------------------------------
+
+
+def test_main_window_minimum_size(qapp):
+    """CockpitMainWindow must declare a minimum size of at least 960x600
+    so the toolbar's primary action and REC indicator never clip off-screen
+    when the user drags the window narrower than 1100px (spec §S4.2).
+    """
+    window = CockpitMainWindow()
+    try:
+        size = window.minimumSize()
+        assert size.width() >= 960, (
+            f"minimumSize().width() must be >= 960, got {size.width()}"
+        )
+        assert size.height() >= 600, (
+            f"minimumSize().height() must be >= 600, got {size.height()}"
+        )
+    finally:
+        window.close()
+
+
+def _toolbar_overflow_eligible_children(window: CockpitMainWindow) -> list[QWidget]:
+    """Return the toolbar's overflow-eligible direct children (spec §S4.2
+    rule: every child except the REC indicator and primary main button).
+    """
+    toolbar = window.findChild(QWidget, "cockpitToolbarBand")
+    assert toolbar is not None
+    rec = window.findChild(QWidget, "cockpitRecIndicator")
+    main_btn = window.main_button
+    children: list[QWidget] = []
+    layout = toolbar.layout()
+    if layout is None:
+        return children
+    for i in range(layout.count()):
+        item = layout.itemAt(i)
+        widget = item.widget() if item is not None else None
+        if widget is None:
+            continue
+        if widget is rec or widget is main_btn:
+            continue
+        # Skip the overflow chevron itself.
+        if widget.objectName() == "cockpitToolbarOverflow":
+            continue
+        # Skip pure stretch spacers — they don't carry any user
+        # affordance and so are not "hidden children" candidates.
+        if widget.objectName() == "cockpitToolbarSpacer":
+            continue
+        children.append(widget)
+    return children
+
+
+def test_toolbar_overflow_at_narrow_width(qapp):
+    """At 800px window width the toolbar children must not clip the right
+    edge: either the overflow chevron is visible with hidden children
+    mirrored into its menu, OR every child fits within the toolbar bounds
+    (no child's right edge exceeds outer toolbar width). The first branch
+    is the expected outcome for the 800-px forcing-function width."""
+    window = CockpitMainWindow()
+    try:
+        window.resize(800, 600)
+        window.show()
+        qapp.processEvents()
+        toolbar = window.findChild(QWidget, "cockpitToolbarBand")
+        assert toolbar is not None
+        # Window setMinimumSize(960, 600) clamps the OUTER window above
+        # 800px, but the spec §S4.3 matrix explicitly lists 800 as a
+        # "forcing-function test value" for the toolbar widget itself.
+        # Resize the toolbar directly and re-run the overflow recompute
+        # so we exercise the narrow-width branch even when the host
+        # window is wider.
+        toolbar.resize(800, toolbar.height() or 50)
+        window._recompute_toolbar_overflow()
+        qapp.processEvents()
+
+        # Compute combined natural width of every overflow-eligible child
+        # at construction time (sizeHint width is independent of
+        # current visibility).
+        eligible = _toolbar_overflow_eligible_children(window)
+        combined = sum(max(c.sizeHint().width(), c.minimumWidth()) for c in eligible)
+        # Include the always-visible REC indicator + primary button.
+        rec = window.findChild(QWidget, "cockpitRecIndicator")
+        main_btn = window.main_button
+        always_on_w = (
+            max(rec.sizeHint().width(), rec.minimumWidth())
+            + max(main_btn.sizeHint().width(), main_btn.minimumWidth())
+        )
+        total = combined + always_on_w
+
+        if total > 800:
+            # Expected branch: overflow chevron must be visible and its
+            # menu must mirror every currently-hidden eligible child by
+            # text().
+            overflow_btn = window.findChild(QToolButton, "cockpitToolbarOverflow")
+            assert overflow_btn is not None, (
+                "toolbar must expose a cockpitToolbarOverflow chevron"
+            )
+            assert overflow_btn.isVisible() is True, (
+                "overflow chevron must be visible when toolbar content overflows"
+            )
+            menu = overflow_btn.menu()
+            assert isinstance(menu, QMenu), (
+                "overflow chevron must own a QMenu"
+            )
+            menu_texts = {action.text() for action in menu.actions()}
+            hidden_texts: set[str] = set()
+            # Composite affordances (the mode segment) have no .text()
+            # of their own; map their objectName to the action label
+            # the implementation assigns so the parity check is honest.
+            composite_text = {
+                "cockpitModeSegment": "模式",
+            }
+            for child in eligible:
+                # Only count widgets demoted *by overflow*, not widgets
+                # hidden by state (e.g. the segment marker is invisible
+                # during DISCONNECTED by design). The recompute marks
+                # overflow-demoted widgets with the dynamic property
+                # ``cockpitOverflowHidden = True``.
+                if not bool(child.property("cockpitOverflowHidden")):
+                    continue
+                # Recover the text label of the affordance for
+                # comparison. Selectors expose a cockpitSelectorKey
+                # QLabel whose text matches the affordance.
+                key_label = child.findChild(QLabel, "cockpitSelectorKey")
+                if key_label is not None:
+                    hidden_texts.add(key_label.text())
+                    continue
+                # QToolButton / action-backed: use defaultAction text
+                # when present, else the widget's own text.
+                if isinstance(child, QToolButton):
+                    action = child.defaultAction()
+                    if isinstance(action, QAction):
+                        hidden_texts.add(action.text())
+                        continue
+                    hidden_texts.add(child.text())
+                    continue
+                # Composite widget (e.g. mode segment) — fall back to
+                # an objectName-keyed mapping.
+                obj_name = child.objectName()
+                if obj_name in composite_text:
+                    hidden_texts.add(composite_text[obj_name])
+                    continue
+                hidden_texts.add(getattr(child, "text", lambda: "")())
+            # Every hidden child must have a corresponding menu entry by
+            # text. The menu may also include other entries for
+            # always-eligible widgets, so subset rather than equality.
+            assert hidden_texts.issubset(menu_texts), (
+                f"hidden children {hidden_texts!r} must be mirrored into "
+                f"the overflow menu {menu_texts!r}"
+            )
+        else:
+            # Fallback branch (only valid when chrome is small enough to
+            # fit): nothing clips beyond the toolbar's outer width.
+            outer_right = toolbar.width()
+            for child in eligible:
+                if not child.isVisible():
+                    continue
+                right = child.geometry().right()
+                assert right <= outer_right, (
+                    f"toolbar child {child.objectName()!r} right={right} "
+                    f"exceeds toolbar width {outer_right}"
+                )
+    finally:
+        window.close()
+
+
+def test_toolbar_selectors_not_fixed_width(qapp):
+    """Selector widgets (A2L / DBC / Output) must use a min+max width
+    range, not setFixedWidth. Qt's setFixedWidth(N) collapses
+    minimumWidth() and maximumWidth() to the same value N, so asserting
+    `minimumWidth() < maximumWidth()` is the precise inverse of
+    setFixedWidth.
+    """
+    window = CockpitMainWindow()
+    try:
+        for object_name in (
+            "cockpitSelectorA2l",
+            "cockpitSelectorDbc",
+            "cockpitSelectorOutput",
+        ):
+            btn = window.findChild(QWidget, object_name)
+            assert btn is not None, f"missing selector {object_name!r}"
+            assert btn.minimumWidth() < btn.maximumWidth(), (
+                f"selector {object_name!r} must use min+max width range "
+                f"(min={btn.minimumWidth()}, max={btn.maximumWidth()}); "
+                f"setFixedWidth collapses both to one value"
+            )
     finally:
         window.close()
