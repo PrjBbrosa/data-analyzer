@@ -103,8 +103,8 @@ class CursorPill(QFrame):
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 import qtawesome as qta
 
+from ..ui_kit.icons import Icons
 from .canvases import PlotCanvas, SpectrogramCanvas, TimeDomainCanvas
-from .icons import Icons
 from .widgets import StatsStrip
 
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}

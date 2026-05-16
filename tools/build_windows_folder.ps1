@@ -34,7 +34,7 @@ if ($env:OS -ne "Windows_NT") {
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
-$StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui\style.qss"
+$StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -72,7 +72,35 @@ if (-not $KeepPrevious) {
 New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir | Out-Null
 
 Write-Step "Building folder-style exe with PyInstaller"
-$AddDataStyle = "$StyleQss;mf4_analyzer\ui"
+$AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
+$HiddenImports = @(
+    "mf4_analyzer.ui_kit",
+    "mf4_analyzer.ui_kit.fonts",
+    "mf4_analyzer.ui_kit.icons",
+    "mf4_analyzer.ui_kit.stylesheet",
+    "mf4_analyzer.ui_kit.widgets.searchable_combo",
+    "mf4_analyzer.ui",
+    "mf4_analyzer.ui.main_window",
+    "mf4_analyzer.acquisition_capture",
+    "mf4_analyzer.acquisition_capture.thresholds",
+    "mf4_analyzer.acquisition_capture.health",
+    "mf4_analyzer.acquisition_capture.ring_buffer",
+    "mf4_analyzer.acquisition_capture.backends",
+    "mf4_analyzer.acquisition_capture.controller",
+    "mf4_analyzer.acquisition_capture.writer",
+    "mf4_analyzer.acquisition_capture.session",
+    "mf4_analyzer.acquisition_capture.search",
+    "mf4_analyzer.acquisition_capture.a2l_events",
+    "mf4_analyzer.acquisition_capture.config_store",
+    "mf4_analyzer.acquisition_capture.preflight_estimates",
+    "mf4_analyzer.acquisition_ui",
+    "mf4_analyzer.acquisition_ui.main_window",
+    "mf4_analyzer.acquisition_ui.state",
+    "mf4_analyzer.acquisition_ui.review_modal",
+    "mf4_analyzer.acquisition_ui.settings_dialog",
+    "mf4_analyzer.acquisition_ui.history_tab",
+    "mf4_analyzer.acquisition_ui.replay_tab"
+)
 $PyInstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
@@ -89,15 +117,15 @@ $PyInstallerArgs += @(
     "--distpath", $DistDir,
     "--workpath", $WorkDir,
     "--specpath", $SpecDir,
-    "--hidden-import", "mf4_analyzer._fonts",
-    "--hidden-import", "mf4_analyzer.ui",
-    "--hidden-import", "mf4_analyzer.ui.main_window",
-    "--hidden-import", "mf4_analyzer.ui.icons",
     "--add-data", $AddDataStyle,
+    "--collect-submodules", "mf4_analyzer.acquisition_ui.widgets",
     "--collect-all", "qtawesome",
-    "--collect-all", "asammdf",
-    $EntryScript
+    "--collect-all", "asammdf"
 )
+foreach ($HiddenImport in $HiddenImports) {
+    $PyInstallerArgs += @("--hidden-import", $HiddenImport)
+}
+$PyInstallerArgs += $EntryScript
 
 & $VenvPython @PyInstallerArgs
 

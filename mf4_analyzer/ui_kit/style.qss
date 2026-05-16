@@ -317,6 +317,409 @@ QWidget#modeSegment {
     background-color: transparent;
 }
 
+/* Acquisition Cockpit v3 shell. These selectors are object-name/property
+ * scoped so Analyzer's Toolbar and global QPushButton rules keep their
+ * existing cascade. */
+QFrame#cockpitToolbarBand {
+    min-height: 50px;
+    max-height: 50px;
+    padding: 0;
+    border-bottom: 1px solid #eef2f7;
+    background-color: #ffffff;
+}
+QFrame#cockpitToolbarBand QPushButton,
+QFrame#cockpitToolbarBand QToolButton {
+    min-height: 28px;
+    max-height: 36px;
+    padding: 0 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QFrame#cockpitToolbarBand QPushButton[cockpitAction="connect"] {
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0 20px;
+    background-color: #1769e0;
+    border-color: #1769e0;
+    color: #ffffff;
+    font-size: 13px;
+}
+QFrame#cockpitToolbarBand QPushButton[cockpitAction="record"],
+QFrame#cockpitToolbarBand QPushButton[cockpitAction="stop"] {
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0 18px;
+    background-color: #dc2626;
+    border-color: #dc2626;
+    color: #ffffff;
+    font-size: 13px;
+}
+QFrame#cockpitToolbarBand QPushButton[cockpitAction="disabled"] {
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0 18px;
+    color: #94a3b8;
+    background-color: #f5f7fb;
+    border-color: #eef2f7;
+}
+QWidget#cockpitToolbarSpacer {
+    background-color: transparent;
+    border: none;
+}
+QFrame#cockpitToolbarSeparator {
+    min-width: 1px;
+    max-width: 1px;
+    min-height: 22px;
+    max-height: 22px;
+    background-color: #dfe5ee;
+    border: none;
+}
+QToolButton#cockpitSettingsButton {
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0;
+    border-radius: 6px;
+}
+
+QFrame#cockpitSelector,
+QFrame#cockpitSelectorA2l,
+QFrame#cockpitSelectorDbc,
+QFrame#cockpitSelectorOutput,
+QPushButton#cockpitSelectorA2l,
+QPushButton#cockpitSelectorDbc,
+QPushButton#cockpitSelectorOutput {
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+    border: 1px solid #dfe5ee;
+    border-radius: 6px;
+    background-color: #ffffff;
+    text-align: left;
+}
+QFrame#cockpitSelector:hover,
+QFrame#cockpitSelectorA2l:hover,
+QFrame#cockpitSelectorOutput:hover,
+QPushButton#cockpitSelectorA2l:hover,
+QPushButton#cockpitSelectorOutput:hover {
+    border-color: #b7c4d3;
+    background-color: #fbfdff;
+}
+QFrame#cockpitSelector:disabled,
+QFrame#cockpitSelectorDbc:disabled,
+QPushButton#cockpitSelectorDbc:disabled {
+    color: #94a3b8;
+    background-color: #f8fafc;
+    border-color: #eef2f7;
+}
+QFrame#cockpitSelector QLabel#cockpitSelectorKey,
+QFrame#cockpitSelectorA2l QLabel#cockpitSelectorKey,
+QFrame#cockpitSelectorDbc QLabel#cockpitSelectorKey,
+QFrame#cockpitSelectorOutput QLabel#cockpitSelectorKey,
+QPushButton#cockpitSelectorA2l QLabel#cockpitSelectorKey,
+QPushButton#cockpitSelectorDbc QLabel#cockpitSelectorKey,
+QPushButton#cockpitSelectorOutput QLabel#cockpitSelectorKey {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+}
+QFrame#cockpitSelector QLabel#cockpitSelectorValue,
+QFrame#cockpitSelectorA2l QLabel#cockpitSelectorValue,
+QFrame#cockpitSelectorDbc QLabel#cockpitSelectorValue,
+QFrame#cockpitSelectorOutput QLabel#cockpitSelectorValue,
+QPushButton#cockpitSelectorA2l QLabel#cockpitSelectorValue,
+QPushButton#cockpitSelectorDbc QLabel#cockpitSelectorValue,
+QPushButton#cockpitSelectorOutput QLabel#cockpitSelectorValue {
+    color: #111827;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#cockpitSelectorA2l QLabel#cockpitSelectorCaret,
+QPushButton#cockpitSelectorDbc QLabel#cockpitSelectorCaret,
+QPushButton#cockpitSelectorOutput QLabel#cockpitSelectorCaret {
+    color: #64748b;
+    font-size: 10px;
+}
+
+QWidget#cockpitModeSegment {
+    min-height: 32px;
+    max-height: 32px;
+    padding: 2px;
+    border: 1px solid #dfe5ee;
+    border-radius: 7px;
+    background-color: #f8fafc;
+}
+QWidget#cockpitModeSegment QPushButton[cockpitMode] {
+    min-width: 56px;
+    min-height: 26px;
+    max-height: 26px;
+    margin: 0 1px;
+    padding: 0 14px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background-color: transparent;
+    color: #64748b;
+}
+QWidget#cockpitModeSegment QPushButton[cockpitMode]:hover {
+    color: #334155;
+    background-color: #eef2f7;
+}
+QWidget#cockpitModeSegment QPushButton[cockpitMode]:checked {
+    color: #0f3f8f;
+    background-color: #ffffff;
+    border-color: #dfe5ee;
+}
+
+QLabel#cockpitRecIndicator {
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0 14px;
+    border: 1px solid #dfe5ee;
+    border-radius: 8px;
+    background-color: #f8fafc;
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 700;
+}
+QLabel#cockpitRecIndicator[recState="off"] {
+    background-color: #f8fafc;
+    border-color: #dfe5ee;
+    color: #64748b;
+}
+QLabel#cockpitRecIndicator[recState="recording"] {
+    background-color: #fef2f2;
+    border-color: #fecaca;
+    color: #b91c1c;
+}
+QLabel#cockpitRecIndicator[recState="warn"] {
+    background-color: #fffbeb;
+    border-color: #fde68a;
+    color: #92400e;
+}
+QLabel#cockpitRecIndicator[recState="error"] {
+    background-color: #fee2e2;
+    border-color: #fca5a5;
+    color: #991b1b;
+}
+
+QFrame#healthStrip {
+    border: none;
+    border-bottom: 1px solid #eef2f7;
+    background-color: #f5f7fb;
+}
+QFrame#healthChip {
+    min-height: 26px;
+    max-height: 26px;
+    padding: 0;
+    border: 1px solid #dfe5ee;
+    border-radius: 13px;
+    background-color: #ffffff;
+}
+QFrame#healthChip[level="green"] {
+    border-color: #bbf7d0;
+    background-color: #f0fdf4;
+}
+QFrame#healthChip[level="yellow"] {
+    border-color: #fde68a;
+    background-color: #fffbeb;
+}
+QFrame#healthChip[level="red"] {
+    border-color: #fecaca;
+    background-color: #fef2f2;
+}
+QFrame#healthChip[level="off"] {
+    border-color: #e2e8f0;
+    background-color: #f8fafc;
+}
+QLabel#healthChipLed {
+    min-width: 8px;
+    max-width: 8px;
+    min-height: 8px;
+    max-height: 8px;
+    border-radius: 4px;
+    background-color: #94a3b8;
+}
+QLabel#healthChipLabel {
+    color: #334155;
+    font-size: 11px;
+    font-weight: 800;
+}
+QLabel#healthChipValue {
+    color: #475569;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#healthSummary {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+}
+QPushButton#healthDisconnectButton {
+    min-height: 24px;
+    padding: 2px 8px;
+}
+
+QFrame#leftPane {
+    border: none;
+    border-right: 1px solid #eef2f7;
+    background-color: #ffffff;
+}
+QPushButton#filterChip,
+QToolButton#filterChip,
+QCheckBox#filterChip {
+    min-height: 22px;
+    max-height: 22px;
+    padding: 0 9px;
+    border: 1px solid #dfe5ee;
+    border-radius: 11px;
+    background-color: #f8fafc;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 600;
+}
+QPushButton#filterChip:hover,
+QToolButton#filterChip:hover,
+QCheckBox#filterChip:hover {
+    background-color: #eef2f7;
+    border-color: #b7c4d3;
+}
+QPushButton#filterChip:checked,
+QToolButton#filterChip:checked,
+QCheckBox#filterChip:checked {
+    color: #0f3f8f;
+    background-color: #e8efff;
+    border-color: #93b4ef;
+}
+QPushButton#filterChip:disabled,
+QToolButton#filterChip:disabled,
+QCheckBox#filterChip:disabled {
+    color: #94a3b8;
+    background-color: #f8fafc;
+    border-color: #eef2f7;
+}
+QCheckBox#filterChip::indicator {
+    width: 0;
+    height: 0;
+}
+QFrame#leftBatchBar {
+    min-height: 32px;
+    padding: 5px 8px;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    background-color: #eff6ff;
+    color: #0f3f8f;
+}
+
+QWidget#cockpitDisconnectedCanvas {
+    border: 1px dashed #cbd5e1;
+    border-radius: 10px;
+    background-color: #f8fafc;
+}
+QWidget#cockpitDisconnectedCanvas QLabel#cockpitDisconnectedTitle {
+    color: #111827;
+    font-size: 16px;
+    font-weight: 800;
+}
+QWidget#cockpitDisconnectedCanvas QLabel#cockpitDisconnectedCopy {
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 500;
+}
+QWidget#cockpitDisconnectedCanvas QPushButton[cockpitAction="connect"] {
+    min-height: 32px;
+    padding: 4px 14px;
+    background-color: #1769e0;
+    border-color: #1769e0;
+    color: #ffffff;
+}
+
+QFrame#liveSignalCard {
+    border: 1px solid #dfe5ee;
+    border-radius: 8px;
+    background-color: #ffffff;
+}
+QLabel#liveCardSwatch {
+    min-width: 10px;
+    max-width: 10px;
+    min-height: 10px;
+    max-height: 10px;
+    border-radius: 5px;
+    background-color: #2563eb;
+}
+QLabel#liveCardName {
+    color: #111827;
+    font-size: 12px;
+    font-weight: 800;
+}
+QLabel#liveCardUnit,
+QLabel#liveCardRaster,
+QLabel#liveCardStats {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#liveCardValue {
+    color: #111827;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+QFrame#rightPanelPage {
+    border: none;
+    border-left: 1px solid #eef2f7;
+    background-color: #ffffff;
+}
+QFrame#rightMetricSection {
+    border: none;
+    border-bottom: 1px solid #eef2f7;
+    border-radius: 0;
+    background-color: #ffffff;
+}
+QFrame#rightMetricSection QLabel#rightMetricTitle {
+    color: #111827;
+    font-size: 12px;
+    font-weight: 800;
+}
+QFrame#rightMetricSection QLabel#rightMetricValue,
+QFrame#rightMetricSection QLabel#rightMetricDetail {
+    color: #475569;
+    font-size: 11px;
+    font-weight: 600;
+}
+QFrame#rightVerdictBanner {
+    min-height: 34px;
+    border: 1px solid #dfe5ee;
+    border-radius: 8px;
+    background-color: #f8fafc;
+}
+QFrame#rightVerdictBanner QLabel {
+    color: #475569;
+    font-weight: 800;
+}
+QFrame#rightVerdictBanner[verdict="ready"] {
+    background-color: #f0fdf4;
+    border-color: #bbf7d0;
+}
+QFrame#rightVerdictBanner[verdict="ready"] QLabel {
+    color: #166534;
+}
+QFrame#rightVerdictBanner[verdict="warn"] {
+    background-color: #fffbeb;
+    border-color: #fde68a;
+}
+QFrame#rightVerdictBanner[verdict="warn"] QLabel {
+    color: #92400e;
+}
+QFrame#rightVerdictBanner[verdict="error"] {
+    background-color: #fef2f2;
+    border-color: #fecaca;
+}
+QFrame#rightVerdictBanner[verdict="error"] QLabel {
+    color: #991b1b;
+}
+
 /* ============ Left navigator ============ */
 FileNavigator {
     background-color: #f5f7fb;

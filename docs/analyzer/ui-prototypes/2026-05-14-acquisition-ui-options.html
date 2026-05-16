@@ -1,0 +1,1478 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Acquisition Qt5 UI — 方案比稿 2026-05-14</title>
+<style>
+  * { box-sizing: border-box; }
+  :root {
+    --surface-base: #f5f7fb;
+    --surface-card: #ffffff;
+    --surface-hover: #eef2f7;
+    --surface-accent: #e8efff;
+    --surface-mute: #f1f5f9;
+    --hairline: #eef2f7;
+    --hairline-strong: #dfe5ee;
+    --ink: #111827;
+    --ink-soft: #475569;
+    --ink-muted: #64748b;
+    --ink-disabled: #94a3b8;
+    --blue: #2563eb;
+    --blue-soft: #3b82f6;
+    --green: #059669;
+    --orange: #ea580c;
+    --red: #dc2626;
+    --yellow: #ca8a04;
+  }
+  body {
+    margin: 0; padding: 32px 40px 80px;
+    background: var(--surface-base); color: var(--ink);
+    font-family: "Microsoft YaHei", -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+    font-size: 13px; line-height: 1.55;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 700; }
+  h2 {
+    font-size: 18px; margin: 0;
+    font-weight: 700; letter-spacing: 0.2px;
+  }
+  h3 { font-size: 13px; margin: 0 0 6px; font-weight: 700; }
+  .page-sub { color: var(--ink-muted); font-size: 13px; margin-bottom: 4px; }
+  .page-meta { color: var(--ink-muted); font-size: 11px; margin-bottom: 36px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; }
+
+  .approach {
+    margin-bottom: 64px;
+  }
+  .approach-head {
+    display: flex; align-items: baseline; gap: 14px;
+    margin-bottom: 6px;
+  }
+  .approach-letter {
+    font-size: 12px; font-weight: 700;
+    background: var(--blue); color: white;
+    padding: 2px 10px; border-radius: 4px;
+    letter-spacing: 1.2px;
+  }
+  .approach-letter.green { background: var(--green); }
+  .approach-letter.orange { background: var(--orange); }
+  .approach-letter.purple { background: #7c3aed; }
+  .approach-tag {
+    margin-left: auto;
+    font-size: 11px; color: var(--ink-muted);
+    font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase;
+  }
+  .approach-tagline {
+    color: var(--ink-soft); font-size: 14px;
+    margin-bottom: 18px;
+  }
+
+  /* ==== Mockup frame ===================================================== */
+  .mockup {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04), 0 8px 24px rgba(15,23,42,0.04);
+    margin-bottom: 20px;
+  }
+  .mockup-chrome {
+    height: 28px;
+    background: linear-gradient(#f8fafc, #eef2f7);
+    border-bottom: 1px solid var(--hairline);
+    display: flex; align-items: center; padding: 0 12px; gap: 6px;
+    color: var(--ink-muted); font-size: 11px;
+  }
+  .mockup-chrome .dot {
+    width: 11px; height: 11px; border-radius: 50%; background: #cbd5e1;
+  }
+  .mockup-chrome .dot.r { background: #f87171; }
+  .mockup-chrome .dot.y { background: #fbbf24; }
+  .mockup-chrome .dot.g { background: #4ade80; }
+  .mockup-chrome .title { margin-left: 12px; font-weight: 600; color: var(--ink-soft); }
+
+  /* ---- App toolbar (mirrors analyzer Toolbar pattern) ------------------- */
+  .toolbar {
+    display: flex; align-items: center;
+    padding: 6px 10px; gap: 10px;
+    background: var(--surface-card);
+    border-bottom: 1px solid var(--hairline);
+    height: 44px;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 12px;
+    background: var(--surface-card);
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    color: var(--ink);
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; user-select: none;
+  }
+  .btn:hover { background: var(--surface-hover); }
+  .btn.primary {
+    background: var(--blue); border-color: var(--blue); color: white;
+  }
+  .btn.primary:hover { background: #1d4ed8; }
+  .btn.ghost { border-color: transparent; background: transparent; }
+  .btn.ghost:hover { background: var(--surface-hover); }
+  .btn.danger { color: var(--red); }
+  .btn .ico {
+    display: inline-flex; width: 14px; height: 14px;
+    align-items: center; justify-content: center;
+    font-size: 12px;
+  }
+
+  /* ---- Segmented mode picker (mirrors analyzer modeSegment) ------------- */
+  .segment {
+    display: inline-flex;
+    background: var(--surface-mute);
+    border-radius: 7px;
+    padding: 2px;
+    border: 1px solid var(--hairline);
+  }
+  .segment .seg {
+    height: 24px; padding: 0 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+    border-radius: 5px;
+    color: var(--ink-soft); font-size: 12px; font-weight: 600;
+    cursor: pointer; user-select: none;
+  }
+  .segment .seg:hover { color: var(--ink); }
+  .segment .seg.active {
+    background: var(--surface-card);
+    color: var(--blue);
+    box-shadow: 0 1px 2px rgba(15,23,42,0.08);
+  }
+  .segment .seg.disabled {
+    color: var(--ink-disabled); cursor: not-allowed;
+  }
+
+  .toolbar-spacer { flex: 1; }
+  .toolbar-divider {
+    width: 1px; height: 20px; background: var(--hairline-strong);
+    margin: 0 4px;
+  }
+  .selector {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 10px; height: 26px;
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    background: var(--surface-card);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .selector .label-key { color: var(--ink-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .selector .label-val { color: var(--ink); font-weight: 600; }
+  .selector .caret { color: var(--ink-muted); margin-left: 2px; }
+
+  /* ---- 3-pane content layout (mirrors analyzer 3-pane) ----------------- */
+  .panes {
+    display: grid;
+    grid-template-columns: 240px 1fr 280px;
+    height: 520px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .pane-left, .pane-right {
+    background: var(--surface-card);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .pane-left { border-right: 1px solid var(--hairline); }
+  .pane-right { border-left: 1px solid var(--hairline); }
+  .pane-center {
+    background: var(--surface-base);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .pane-head {
+    display: flex; align-items: center;
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface-card);
+    min-height: 36px;
+  }
+  .pane-head .ttl { font-size: 13px; font-weight: 700; }
+  .pane-head .sub { font-size: 11px; color: var(--ink-muted); font-weight: 600; margin-left: auto; }
+  .pane-body { flex: 1; overflow: auto; padding: 6px 0; }
+  .pane-body.padded { padding: 12px 14px; }
+
+  /* ---- Tree (mirrors FileNavigator) ------------------------------------ */
+  .tree { font-size: 12px; padding: 2px 4px; }
+  .tree .row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .tree .row:hover { background: var(--surface-hover); }
+  .tree .row.selected { background: var(--surface-accent); color: var(--blue); }
+  .tree .row .caret { width: 12px; color: var(--ink-muted); font-size: 10px; }
+  .tree .row .badge {
+    margin-left: auto; font-size: 10px; font-weight: 700;
+    padding: 1px 6px; border-radius: 8px;
+    color: var(--ink-muted);
+  }
+  .tree .row .badge.ok { color: var(--green); background: rgba(5,150,105,0.10); }
+  .tree .row .badge.warn { color: var(--orange); background: rgba(234,88,12,0.10); }
+  .tree .row .badge.err { color: var(--red); background: rgba(220,38,38,0.10); }
+  .tree .row .badge.mute { color: var(--ink-muted); background: rgba(100,116,139,0.10); }
+  .tree .l1 { padding-left: 4px; font-weight: 700; }
+  .tree .l2 { padding-left: 22px; }
+  .tree .l3 { padding-left: 40px; color: var(--ink-soft); }
+  .tree .l4 { padding-left: 58px; }
+
+  /* ---- Inspector sections ---------------------------------------------- */
+  .inspect-section {
+    border-bottom: 1px solid var(--hairline);
+    padding: 12px 14px;
+  }
+  .inspect-section .sec-ttl {
+    font-size: 11px; font-weight: 700; color: var(--ink-soft);
+    text-transform: uppercase; letter-spacing: 0.6px;
+    margin-bottom: 8px;
+    display: flex; align-items: center;
+  }
+  .inspect-section .sec-ttl .caret { margin-left: auto; color: var(--ink-muted); }
+  .kv { display: grid; grid-template-columns: 96px 1fr; row-gap: 5px; column-gap: 8px; font-size: 12px; }
+  .kv .k { color: var(--ink-muted); }
+  .kv .v { color: var(--ink); font-variant-numeric: tabular-nums; word-break: break-all; }
+  .kv .v.ok { color: var(--green); }
+  .kv .v.warn { color: var(--orange); }
+  .kv .v.err { color: var(--red); }
+  .kv .v.mono { font-family: "SFMono-Regular", "Menlo", "Consolas", monospace; font-size: 11px; }
+
+  /* ---- Status bar ------------------------------------------------------ */
+  .statusbar {
+    height: 26px;
+    background: var(--surface-card);
+    color: var(--ink-muted);
+    font-size: 11px;
+    display: flex; align-items: center; padding: 0 14px; gap: 14px;
+  }
+  .statusbar .grp { display: inline-flex; align-items: center; gap: 6px; }
+  .statusbar .grp .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .statusbar .grp .dot.g { background: var(--green); }
+  .statusbar .grp .dot.y { background: var(--yellow); }
+  .statusbar .grp .dot.r { background: var(--red); }
+  .statusbar .spacer { flex: 1; }
+  .statusbar .progress {
+    width: 140px; height: 5px; border-radius: 3px; background: var(--surface-mute); overflow: hidden;
+  }
+  .statusbar .progress > i {
+    display: block; height: 100%; background: var(--blue); border-radius: 3px;
+  }
+
+  /* ---- Center content blocks ------------------------------------------ */
+  .center-tools {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface-card);
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 9px; height: 22px;
+    background: var(--surface-mute);
+    border-radius: 11px;
+    font-size: 11px; font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer; user-select: none;
+  }
+  .chip:hover { background: var(--surface-hover); }
+  .chip.on { background: var(--surface-accent); color: var(--blue); }
+  .search {
+    flex: 1; max-width: 240px;
+    height: 26px; padding: 0 10px;
+    background: var(--surface-mute);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    color: var(--ink);
+    font-size: 12px;
+  }
+
+  /* ---- Asset table ----------------------------------------------------- */
+  table.assets { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.assets th, table.assets td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--hairline);
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+  }
+  table.assets thead th {
+    font-size: 11px; font-weight: 700; color: var(--ink-soft);
+    text-transform: uppercase; letter-spacing: 0.4px;
+    background: var(--surface-card);
+    position: sticky; top: 0;
+  }
+  table.assets tbody tr { background: var(--surface-card); cursor: pointer; }
+  table.assets tbody tr:hover { background: var(--surface-hover); }
+  table.assets tbody tr.selected { background: var(--surface-accent); }
+  table.assets tbody tr.selected td { color: var(--blue); }
+  table.assets td .name { font-weight: 600; }
+  table.assets td .filename { font-family: "SFMono-Regular", "Menlo", "Consolas", monospace; font-size: 11px; color: var(--ink-soft); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 7px; border-radius: 9px;
+    font-size: 10px; font-weight: 700;
+    background: rgba(100,116,139,0.10); color: var(--ink-soft);
+  }
+  .pill.ok { background: rgba(5,150,105,0.12); color: var(--green); }
+  .pill.warn { background: rgba(234,88,12,0.13); color: var(--orange); }
+  .pill.err { background: rgba(220,38,38,0.12); color: var(--red); }
+  .pill.info { background: rgba(37,99,235,0.12); color: var(--blue); }
+
+  /* ==== B mockup: analyzer's MainWindow with new mode ==================== */
+  .analyzer-toolbar { /* same shape as .toolbar but center is the mode segment */ }
+  .file-tree-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 12px; font-size: 12px;
+    cursor: pointer;
+  }
+  .file-tree-row:hover { background: var(--surface-hover); }
+  .file-tree-row .swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--blue); }
+  .file-tree-row .ico { color: var(--ink-muted); }
+
+  /* canvas placeholder ---------------------------------------------------- */
+  .canvas-stage {
+    flex: 1;
+    background: var(--surface-card);
+    border-radius: 10px;
+    margin: 12px;
+    border: 1px solid var(--hairline);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .canvas-stage .stage-head {
+    height: 30px;
+    padding: 0 12px;
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--hairline);
+    font-size: 11px; color: var(--ink-soft);
+  }
+  .canvas-stage .stage-head .ttl { font-weight: 700; color: var(--ink); font-size: 12px; }
+  .canvas-stage .stage-body { flex: 1; position: relative; }
+
+  /* ---- Subtabs (Approach B inner) ------------------------------------- */
+  .subtabs {
+    display: flex; gap: 2px;
+    border-bottom: 1px solid var(--hairline);
+    padding: 0 14px;
+    background: var(--surface-card);
+  }
+  .subtabs .tab {
+    padding: 8px 14px;
+    font-size: 12px; font-weight: 600;
+    color: var(--ink-soft);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .subtabs .tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+  .subtabs .tab:hover:not(.active) { color: var(--ink); }
+
+  .preflight-zone {
+    border: 1.5px dashed var(--hairline-strong);
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin: 14px;
+    background: var(--surface-card);
+    display: flex; align-items: center; gap: 18px;
+  }
+  .preflight-zone .glyph {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: var(--surface-accent);
+    color: var(--blue);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 700;
+  }
+  .preflight-zone .copy { flex: 1; }
+  .preflight-zone .copy h4 { margin: 0 0 2px; font-size: 13px; font-weight: 700; }
+  .preflight-zone .copy p { margin: 0; font-size: 12px; color: var(--ink-muted); }
+
+  /* ==== Wizard (Approach C) ============================================ */
+  .wizard {
+    background: var(--surface-card);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--hairline);
+    height: 560px;
+    display: flex; flex-direction: column;
+  }
+  .wizard-head {
+    padding: 18px 24px 14px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .wizard-title { font-size: 15px; font-weight: 700; }
+  .wizard-sub { font-size: 12px; color: var(--ink-muted); margin-top: 2px; }
+  .wizard-stepper {
+    display: flex; align-items: center; gap: 4px;
+    padding: 14px 24px;
+    background: var(--surface-base);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .step {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--ink-muted);
+    flex: 1; min-width: 0;
+  }
+  .step .bullet {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--surface-mute);
+    color: var(--ink-soft);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .step.done .bullet { background: rgba(5,150,105,0.15); color: var(--green); }
+  .step.active { color: var(--ink); font-weight: 700; }
+  .step.active .bullet { background: var(--blue); color: white; }
+  .step .name { white-space: nowrap; }
+  .step .bar {
+    flex: 1; height: 2px;
+    background: var(--hairline);
+    margin: 0 6px;
+  }
+  .step.done .bar { background: rgba(5,150,105,0.4); }
+  .step:last-child .bar { display: none; }
+
+  .wizard-body {
+    flex: 1;
+    display: grid; grid-template-columns: 1fr 1fr;
+    overflow: hidden;
+  }
+  .wizard-form, .wizard-preview {
+    overflow: auto; padding: 18px 22px;
+  }
+  .wizard-form { border-right: 1px solid var(--hairline); }
+  .form-row {
+    display: grid; grid-template-columns: 96px 1fr;
+    align-items: center;
+    gap: 12px; margin-bottom: 10px;
+  }
+  .form-row label { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
+  .form-row .input {
+    height: 28px; padding: 0 10px;
+    border: 1px solid var(--hairline-strong);
+    border-radius: 6px;
+    background: var(--surface-card);
+    font-size: 12px;
+    display: flex; align-items: center;
+  }
+  .form-row .input.placeholder { color: var(--ink-muted); }
+  .tag-row { display: flex; flex-wrap: wrap; gap: 4px; }
+  .yaml {
+    background: #0f172a;
+    color: #cbd5e1;
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+    font-size: 11.5px;
+    line-height: 1.65;
+    white-space: pre;
+    overflow: auto;
+  }
+  .yaml .k { color: #93c5fd; }
+  .yaml .s { color: #fde68a; }
+  .yaml .n { color: #fca5a5; }
+  .yaml .c { color: #64748b; font-style: italic; }
+  .yaml .h { color: #6ee7b7; }
+
+  .wizard-foot {
+    padding: 14px 22px;
+    display: flex; align-items: center; gap: 10px;
+    border-top: 1px solid var(--hairline);
+    background: var(--surface-card);
+  }
+  .wizard-foot .spacer { flex: 1; }
+
+  /* ==== Bench Console (Approach D) ===================================== */
+  .bench {
+    background: #0f172a;
+    color: #e2e8f0;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #1e293b;
+  }
+  .bench-head {
+    padding: 12px 18px;
+    border-bottom: 1px solid #1e293b;
+    display: flex; align-items: center; gap: 12px;
+    background: #0b1220;
+  }
+  .bench-head .ttl { font-size: 14px; font-weight: 700; color: #f1f5f9; }
+  .bench-head .badge {
+    background: rgba(34,197,94,0.18); color: #6ee7b7;
+    padding: 2px 8px; border-radius: 5px;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.6px;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .bench-head .badge .pulse {
+    width: 7px; height: 7px; border-radius: 50%; background: #22c55e;
+    box-shadow: 0 0 0 0 rgba(34,197,94,0.6);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.6); }
+    70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+    100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+  }
+  .bench-head .right { margin-left: auto; font-size: 11px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+  .tiles {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+    padding: 14px 14px 8px;
+  }
+  .tile {
+    background: #111b30;
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: flex; flex-direction: column; min-height: 86px;
+  }
+  .tile .lbl {
+    font-size: 10px;
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+  }
+  .tile .val {
+    font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+    font-size: 28px; font-weight: 700;
+    color: #f8fafc;
+    line-height: 1.1;
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tile .val .unit {
+    font-size: 12px; color: #64748b; margin-left: 4px; font-weight: 500;
+  }
+  .tile .delta {
+    margin-top: auto; font-size: 11px;
+    color: #94a3b8; display: flex; align-items: center; gap: 6px;
+  }
+  .tile.warn { border-color: #b45309; }
+  .tile.warn .val { color: #fbbf24; }
+  .tile.err { border-color: #7f1d1d; }
+  .tile.err .val { color: #f87171; }
+  .strip {
+    margin: 8px 14px;
+    background: #111b30;
+    border-radius: 10px;
+    border: 1px solid #1e293b;
+    height: 150px;
+    padding: 10px 14px;
+    position: relative;
+  }
+  .strip .head { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #94a3b8; margin-bottom: 4px; }
+  .strip .head .ttl { color: #e2e8f0; font-weight: 700; font-size: 12px; }
+  .strip .head .ch {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; color: #cbd5e1;
+  }
+  .strip .head .ch .swatch { width: 8px; height: 8px; border-radius: 2px; }
+  .bench-foot {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 18px;
+    border-top: 1px solid #1e293b;
+    background: #0b1220;
+  }
+  .big-btn {
+    height: 40px; padding: 0 22px;
+    border-radius: 8px;
+    font-size: 14px; font-weight: 700;
+    cursor: pointer; user-select: none;
+    display: inline-flex; align-items: center; gap: 8px;
+    color: #e2e8f0;
+    background: #1e293b;
+    border: 1px solid #334155;
+  }
+  .big-btn:hover { background: #243144; }
+  .big-btn.arm { background: rgba(202,138,4,0.16); color: #fcd34d; border-color: #b45309; }
+  .big-btn.cap { background: rgba(220,38,38,0.18); color: #fca5a5; border-color: #b91c1c; }
+  .big-btn.go { background: rgba(34,197,94,0.18); color: #86efac; border-color: #15803d; }
+  .bench-foot .spacer { flex: 1; }
+  .bench-meta { display: flex; gap: 18px; font-size: 11px; color: #94a3b8; font-variant-numeric: tabular-nums; }
+  .bench-meta b { color: #e2e8f0; font-weight: 700; }
+
+  /* ==== Pros / Cons / When right ======================================== */
+  .analysis {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    margin-top: 6px;
+  }
+  .analysis .col {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 14px 18px;
+  }
+  .analysis h4 {
+    margin: 0 0 10px;
+    font-size: 11px; letter-spacing: 0.6px;
+    text-transform: uppercase; font-weight: 700;
+  }
+  .analysis h4.good { color: var(--green); }
+  .analysis h4.bad { color: var(--red); }
+  .analysis ol {
+    margin: 0; padding-left: 18px; font-size: 12.5px;
+  }
+  .analysis li {
+    margin-bottom: 9px;
+    line-height: 1.55;
+  }
+  .analysis li b { color: var(--ink); }
+  .analysis li code, .meta code {
+    background: var(--surface-mute);
+    border-radius: 3px; padding: 1px 4px;
+    font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+    font-size: 11.5px; color: var(--ink-soft);
+  }
+  .verdict {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+  }
+  .verdict .v {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline);
+    border-radius: 10px;
+    padding: 12px 16px;
+  }
+  .verdict .v h5 {
+    margin: 0 0 4px;
+    font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    font-weight: 700;
+    color: var(--ink-muted);
+  }
+  .verdict .v p { margin: 0; font-size: 12.5px; line-height: 1.5; }
+  .verdict .v.right h5 { color: var(--green); }
+  .verdict .v.wrong h5 { color: var(--red); }
+  .verdict .v.cost h5 { color: var(--blue); }
+
+  /* ==== Final recommendation ============================================ */
+  .rec-card {
+    margin-top: 28px;
+    background: linear-gradient(180deg, #ffffff 0%, #f1f5ff 100%);
+    border: 1px solid #c7d2fe;
+    border-radius: 14px;
+    padding: 24px 28px;
+  }
+  .rec-card h2 { color: var(--blue); margin-bottom: 6px; }
+  .rec-card .sub { color: var(--ink-soft); margin-bottom: 14px; }
+  .rec-card .grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+    margin-bottom: 18px;
+  }
+  .rec-card .grid .cell {
+    background: var(--surface-card);
+    border: 1px solid var(--hairline-strong);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .rec-card .grid .cell h6 {
+    margin: 0 0 4px;
+    font-size: 10.5px; font-weight: 700;
+    color: var(--ink-muted);
+    letter-spacing: 0.6px; text-transform: uppercase;
+  }
+  .rec-card .grid .cell p { margin: 0; font-size: 12.5px; line-height: 1.5; }
+  .rec-card ol { font-size: 13px; line-height: 1.7; margin: 0 0 0 22px; padding: 0; }
+  .rec-card ol li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Acquisition Qt5 UI — 方案比稿</h1>
+<div class="page-sub">为 <code style="background:var(--surface-mute);padding:1px 5px;border-radius:3px;">mf4_analyzer/acquisition/</code> 与 <code style="background:var(--surface-mute);padding:1px 5px;border-radius:3px;">can_logger/p0/</code> 找一个和现有 Analyzer "Precision Light" 风格一致的 PyQt5 UI 形态</div>
+<div class="page-meta">2026-05-14 · branch <code style="background:var(--surface-mute);padding:1px 5px;border-radius:3px;">fix/acquisition-p0-truth-up</code> · 视觉沿用 <code style="background:var(--surface-mute);padding:1px 5px;border-radius:3px;">mf4_analyzer/ui/style.qss</code></div>
+
+<!-- ===================================================================== -->
+<!-- APPROACH A: Acquisition Cockpit (standalone twin window)               -->
+<!-- ===================================================================== -->
+<section class="approach">
+  <div class="approach-head">
+    <span class="approach-letter">方案 A</span>
+    <h2>Acquisition Cockpit — 独立同风格"伙伴窗"</h2>
+    <span class="approach-tag">推荐 · 验证程序为中心 · 中期投入</span>
+  </div>
+  <p class="approach-tagline">和 Analyzer 共用一套 QSS / icon / drawer / inspector，做一个镜像三分栏的姐妹窗口。Cockpit 负责"采、查、验、管"，Analyzer 负责"分析"。两个窗可同时打开。</p>
+
+  <div class="mockup">
+    <div class="mockup-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">MF4 Acquisition Cockpit — X04C_PPV_01 · 2026-05-12</span>
+    </div>
+
+    <!-- Toolbar: source · mode segment · actions -->
+    <div class="toolbar">
+      <button class="btn primary"><span class="ico">⊕</span>添加文件</button>
+      <div class="selector"><span class="label-key">DBC</span><span class="label-val">vehicle_v23.dbc</span><span class="caret">▾</span></div>
+      <div class="selector"><span class="label-key">A2L</span><span class="label-val">ecu_2.1.a2l</span><span class="caret">▾</span></div>
+      <div class="selector"><span class="label-key">Alias</span><span class="label-val">standard_signals.yaml</span><span class="caret">▾</span></div>
+      <div class="toolbar-spacer"></div>
+      <div class="segment">
+        <div class="seg active">资产</div>
+        <div class="seg">Preflight</div>
+        <div class="seg">Manifest</div>
+        <div class="seg">Replay</div>
+        <div class="seg disabled" title="Windows + Vector only">Capture</div>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button class="btn"><span class="ico">⬇</span>导入索引</button>
+      <button class="btn"><span class="ico">⇪</span>导出 Manifest</button>
+      <div class="toolbar-divider"></div>
+      <button class="btn ghost">Inspector</button>
+    </div>
+
+    <!-- 3 panes -->
+    <div class="panes">
+      <!-- LEFT: session navigator -->
+      <aside class="pane-left">
+        <div class="pane-head">
+          <span class="ttl">会话浏览</span>
+          <span class="sub">38 / 142</span>
+        </div>
+        <div class="pane-body">
+          <div class="tree">
+            <div class="row l1"><span class="caret">▼</span><span>X04C</span><span class="badge mute">87</span></div>
+            <div class="row l2"><span class="caret">▼</span><span>X04C_PPV_01</span><span class="badge ok">3 good</span></div>
+            <div class="row l3"><span class="caret">▼</span><span>2026-05-12 · low_temp_ripple</span></div>
+            <div class="row l4 selected"><span>◉ run01_steering.MF4</span><span class="badge ok">✓ sha</span></div>
+            <div class="row l4"><span>○ run02_steering.MF4</span><span class="badge warn">⚠ Fs</span></div>
+            <div class="row l4"><span>○ run03_idle.MF4</span><span class="badge ok">✓</span></div>
+            <div class="row l3"><span class="caret">▶</span><span>2026-05-08 · road_noise</span></div>
+            <div class="row l2"><span class="caret">▶</span><span>X04C_PPV_02</span><span class="badge mute">42</span></div>
+            <div class="row l1"><span class="caret">▶</span><span>X06A</span><span class="badge mute">28</span></div>
+            <div class="row l1"><span class="caret">▶</span><span>X12J</span><span class="badge err">2 err</span></div>
+            <div class="row l1" style="margin-top:8px;"><span class="caret">▼</span><span>📌 数据集</span></div>
+            <div class="row l2"><span>smoke</span><span class="badge info">6</span></div>
+            <div class="row l2"><span>golden</span><span class="badge info">14</span></div>
+            <div class="row l2"><span>issue</span><span class="badge info">22</span></div>
+            <div class="row l2"><span>extended (NAS)</span><span class="badge mute">100+</span></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- CENTER: asset library view -->
+      <main class="pane-center">
+        <div class="center-tools">
+          <input class="search" placeholder="按 vehicle / scenario / issue_tag 搜索…">
+          <span class="chip on">platform: X04C</span>
+          <span class="chip">scenario: *</span>
+          <span class="chip">issue: ripple</span>
+          <span class="chip">quality: good</span>
+          <span style="flex:1"></span>
+          <button class="btn ghost"><span class="ico">⏷</span>分组</button>
+          <button class="btn ghost"><span class="ico">↕</span>排序</button>
+        </div>
+        <div style="overflow:auto; background: var(--surface-base); flex:1;">
+          <table class="assets">
+            <thead>
+              <tr>
+                <th>文件 / 工况</th>
+                <th>车型 · ECU SW</th>
+                <th>Fs / Duration</th>
+                <th>SHA-256</th>
+                <th>状态</th>
+                <th>Tags</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected">
+                <td>
+                  <div class="name">run01 · low-speed steering</div>
+                  <div class="filename">20260512_x04c_low_temp_ripple_run01.MF4</div>
+                </td>
+                <td>X04C_PPV_01 · sw 2.1.0</td>
+                <td>1.0 kHz · 28.4 s</td>
+                <td><span class="pill ok">✓ matched</span></td>
+                <td><span class="pill info">golden</span></td>
+                <td>ripple · ttr · gearbox</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="name">run02 · low-speed steering</div>
+                  <div class="filename">20260512_x04c_low_temp_ripple_run02.MF4</div>
+                </td>
+                <td>X04C_PPV_01 · sw 2.1.0</td>
+                <td>800 Hz · 31.0 s</td>
+                <td><span class="pill ok">✓ matched</span></td>
+                <td><span class="pill warn">Fs drift</span></td>
+                <td>ripple · gearbox</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="name">run03 · idle</div>
+                  <div class="filename">20260512_x04c_low_temp_ripple_run03.MF4</div>
+                </td>
+                <td>X04C_PPV_01 · sw 2.1.0</td>
+                <td>1.0 kHz · 12.7 s</td>
+                <td><span class="pill ok">✓ matched</span></td>
+                <td><span class="pill info">golden</span></td>
+                <td>idle · baseline</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="name">run01 · cold start</div>
+                  <div class="filename">20260508_x04c_road_noise_run01.MF4</div>
+                </td>
+                <td>X04C_PPV_01 · sw 2.0.4</td>
+                <td>1.0 kHz · 45.2 s</td>
+                <td><span class="pill warn">drift</span></td>
+                <td><span class="pill warn">channel: EngTrq</span></td>
+                <td>cold_start · road</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="name">stationary noise</div>
+                  <div class="filename">20260430_x04c_stationary_baseline.MF4</div>
+                </td>
+                <td>X04C_PPV_02 · sw 2.0.3</td>
+                <td>2.0 kHz · 60.0 s</td>
+                <td><span class="pill ok">✓ matched</span></td>
+                <td><span class="pill ok">ok</span></td>
+                <td>baseline · stationary</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="name">low pressure</div>
+                  <div class="filename">20260420_x04c_low_tire_pressure.MF4</div>
+                </td>
+                <td>X04C_PPV_02 · sw 2.0.3</td>
+                <td>1.0 kHz · 38.5 s</td>
+                <td><span class="pill err">missing</span></td>
+                <td><span class="pill err">file not found</span></td>
+                <td>low_pressure</td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="name">ripple confirmation</div>
+                  <div class="filename">20260418_x04c_ripple_after_doffset.MF4</div>
+                </td>
+                <td>X04C_PPV_01 · sw 2.0.4</td>
+                <td>1.0 kHz · 22.0 s</td>
+                <td><span class="pill ok">✓ matched</span></td>
+                <td><span class="pill info">issue</span></td>
+                <td>ripple · doffset</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </main>
+
+      <!-- RIGHT: Inspector -->
+      <aside class="pane-right">
+        <div class="pane-head">
+          <span class="ttl">Inspector</span>
+          <span class="sub">资产详情</span>
+        </div>
+        <div class="pane-body">
+          <div class="inspect-section">
+            <div class="sec-ttl">FILE · METADATA <span class="caret">▾</span></div>
+            <div class="kv">
+              <div class="k">file</div><div class="v">20260512_<wbr>x04c_<wbr>low_<wbr>temp_<wbr>ripple_<wbr>run01.MF4</div>
+              <div class="k">vehicle</div><div class="v">X04C_PPV_01</div>
+              <div class="k">platform</div><div class="v">X04C</div>
+              <div class="k">ecu_sw</div><div class="v">2.1.0</div>
+              <div class="k">dbc</div><div class="v mono">vehicle_v23.dbc</div>
+              <div class="k">a2l</div><div class="v mono">ecu_2.1.a2l</div>
+              <div class="k">test_date</div><div class="v">2026-05-12 14:30</div>
+              <div class="k">scenario</div><div class="v">low_temp_low_tire_pressure</div>
+              <div class="k">maneuver</div><div class="v">low_speed_steering</div>
+              <div class="k">tags</div><div class="v">ripple · ttr · gearbox</div>
+              <div class="k">sets</div><div class="v">golden, issue</div>
+            </div>
+          </div>
+          <div class="inspect-section">
+            <div class="sec-ttl">INTEGRITY <span class="caret">▾</span></div>
+            <div class="kv">
+              <div class="k">sha256</div><div class="v mono ok">5a3f…b8c9 ✓</div>
+              <div class="k">rows</div><div class="v">28 421</div>
+              <div class="k">fs</div><div class="v">1000.0 Hz</div>
+              <div class="k">duration</div><div class="v">28.42 s</div>
+              <div class="k">missing</div><div class="v ok">(none)</div>
+              <div class="k">problems</div><div class="v ok">0</div>
+            </div>
+          </div>
+          <div class="inspect-section">
+            <div class="sec-ttl">RESOLVED SIGNALS <span class="caret">▾</span></div>
+            <div class="kv">
+              <div class="k">EngineSpeed</div><div class="v mono">EngSpdAvg</div>
+              <div class="k">VehicleSpeed</div><div class="v mono">VehSpd_FL</div>
+              <div class="k">SteeringAng</div><div class="v mono">StgWhlAng</div>
+            </div>
+          </div>
+          <div class="inspect-section" style="border-bottom:none;">
+            <div class="sec-ttl">ACTIONS</div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button class="btn"><span class="ico">▷</span>在 Analyzer 打开</button>
+              <button class="btn">复制 SHA</button>
+              <button class="btn">归档…</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Status bar -->
+    <div class="statusbar">
+      <div class="grp"><span class="dot g"></span>preflight idle</div>
+      <div class="grp"><span class="dot g"></span>NAS sync · 2 min ago</div>
+      <div class="grp">SHA queue · 12 / 30 <div class="progress" style="margin-left:6px;"><i style="width:40%"></i></div></div>
+      <div class="spacer"></div>
+      <div class="grp">7 selected · 412 MB</div>
+      <div class="grp">v0.4.0-acq</div>
+    </div>
+  </div>
+
+  <div class="analysis">
+    <div class="col">
+      <h4 class="good">真正的优势（不只是"风格一致"）</h4>
+      <ol>
+        <li><b>Mode 段 = Validation Ladder L 层入口。</b> 顶栏 <code>资产/Preflight/Manifest/Replay/Capture</code> 和 roadmap §2 的 L1–L4 一一对应；操作员看 <code>docs/analyzer/acquisition/...validation-roadmap.md</code> 时心里有什么名词，Cockpit 里就能找到对应的 tab。这是其它三个方案做不到的"语义同构"。</li>
+        <li><b>左栏的会话浏览解锁了 roadmap §3 数据资产库。</b> "按车型/平台/ECU 软件版本/场景/issue_tag 检索 MF4"这件事，需要持久树 + chip 过滤 + 表格的组合；wizard 或 tab 都装不下。这块是当前 acquisition 最缺、价值最大的能力。</li>
+        <li><b>StatusBar 给长任务一个家。</b> 对 30 个 MF4 跑一次 <code>preflight.sha256_file()</code> + <code>analyze_mf4()</code> 是分钟级的事；Analyzer 的 StatusBar 已经被 FFT-vs-Time 进度占着，再塞 acquisition 会撞车。独立窗等于多了一条进度通道。</li>
+        <li><b>"在 Analyzer 打开"是真二端口工作流。</b> Cockpit 选中可疑文件 → 点按钮 → Analyzer 同桌面接收并加载。两个窗各做各的，不抢主线程；这是单窗口方案给不了的体验。</li>
+        <li><b>Capture 槽位预留，Windows + Vector 上线零重构。</b> 顶栏 <code>Capture</code> 现在 disabled，等 <code>can_logger/p0/vector_probe.py</code> 在 Windows 上落地时只需注册一个新的 stack page，不动其它 mode。</li>
+        <li><b>对长 <code>inspector_sections.py</code>（3033 行）友好。</b> Cockpit 的 Inspector 只装资产/SHA/preflight 字段，跟分析侧完全解耦——不会让那个本来就大的文件再大。</li>
+      </ol>
+    </div>
+    <div class="col">
+      <h4 class="bad">真正的代价（不是"重复造轮子"那种空话）</h4>
+      <ol>
+        <li><b>必须先做一次"UI 公共件抽取"重构。</b> <code>ui/icons.py</code>、<code>_palette.py</code>、<code>_fonts.py</code>、<code>drawers/</code>、<code>widgets/searchable_combo.py</code> 这一批要从 <code>mf4_analyzer/ui/</code> 提到 <code>mf4_analyzer/ui_kit/</code>，否则 Cockpit 反向依赖 Analyzer UI 模块会破坏层级。这是 1–2 天的纯重构，对 analyzer 用户来说"看不到差别但合并时容易冲突"。</li>
+        <li><b>需要两个 setStyleSheet 入口点。</b> <code>app.py</code> 的 <code>_load_stylesheet</code> 现在只跑一次；Cockpit 需要复用同一段加载逻辑（外提为 <code>ui_kit.stylesheet.load(app)</code>）。每次改 QSS，要在两个进程都验过。轻微但持续的维护税。</li>
+        <li><b>"两个窗"对用户认知有成本。</b> "我要去哪个窗？"在初期会问 5 遍。需要在 Analyzer 的 File 菜单里加一个 <code>打开 Acquisition Cockpit…</code>，并在 Cockpit 状态栏写清楚"分析请在 Analyzer 里做"。这是产品层面要写清楚的小事。</li>
+        <li><b>数据资产库的 in-repo / NAS 双源要写得很小心。</b> Left tree 上的 <code>extended (NAS)</code> 节点必须在离线/未挂载时表现得体面：明确灰显、点击不阻塞 UI、给"为什么不可见"的提示。这是 happy path 之外要真正测的边界。</li>
+        <li><b>窗口名 / 安装包 / 桌面图标 / 命令行入口（<code>python -m mf4_analyzer.acquisition</code>）都要定一遍。</b> 别小看：PyInstaller 打包脚本 <code>.build-tools/</code> 要新增一条 spec，CI smoke 要多跑一个目标。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="v right">
+      <h5>选 A 当：</h5>
+      <p>验证程序是未来一个季度的中心；asset library 文件数 &gt; 30；至少 2 人会同时用；目标是"上车调试 → 上车确认"这条线真正立起来。</p>
+    </div>
+    <div class="v wrong">
+      <h5>别选 A 当：</h5>
+      <p>验证只是顺手做做、文件量小于 20、且只有 1 人在用——大杀器的维护成本会反过来咬人。</p>
+    </div>
+    <div class="v cost">
+      <h5>实际工作量：</h5>
+      <p><b>2–3 周</b>。Week 1: ui_kit 抽取 + Cockpit 骨架 + 资产 mode 表格。Week 2: Preflight / Manifest mode。Week 3: Replay + 测试 + 打包。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- APPROACH B: Analyzer + new 采集 mode in toolbar                        -->
+<!-- ===================================================================== -->
+<section class="approach">
+  <div class="approach-head">
+    <span class="approach-letter green">方案 B</span>
+    <h2>Analyzer 顶栏多一个"采集"模式</h2>
+    <span class="approach-tag">最省工 · 一周内上线 · 中长期会拥挤</span>
+  </div>
+  <p class="approach-tagline">在现有 Toolbar 的中段，时域 / FFT / FFT vs Time / 阶次 后面再加一个"采集"段。点中以后 ChartStack 切到 acquisition 子页，FileNavigator 与 Inspector 跟着 pivot。零新窗口、零新入口。</p>
+
+  <div class="mockup">
+    <div class="mockup-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">MF4 Data Analyzer — 采集模式</span>
+    </div>
+
+    <!-- Analyzer-style toolbar with extra mode -->
+    <div class="toolbar">
+      <button class="btn primary"><span class="ico">⊕</span>添加文件</button>
+      <button class="btn"><span class="ico">⚙</span>编辑通道</button>
+      <button class="btn"><span class="ico">⇪</span>导出</button>
+      <button class="btn"><span class="ico">▤</span>批处理</button>
+      <div class="toolbar-spacer"></div>
+      <div class="segment">
+        <div class="seg">时域</div>
+        <div class="seg">FFT</div>
+        <div class="seg">FFT vs Time</div>
+        <div class="seg">阶次</div>
+        <div class="seg active" style="position:relative;">
+          采集
+          <span style="position:absolute; top:-4px; right:-6px; background:var(--orange); color:white; font-size:8px; padding:1px 4px; border-radius:6px; font-weight:700;">NEW</span>
+        </div>
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button class="btn ghost">Inspector</button>
+    </div>
+
+    <!-- Subtabs of 采集 mode -->
+    <div class="subtabs">
+      <div class="tab">资产</div>
+      <div class="tab active">Preflight</div>
+      <div class="tab">Manifest</div>
+      <div class="tab">Replay</div>
+    </div>
+
+    <div class="panes" style="height: 460px;">
+      <!-- LEFT pane: FileNavigator pivots to Session view -->
+      <aside class="pane-left">
+        <div class="pane-head">
+          <span class="ttl">文件 / 会话</span>
+          <span class="sub" style="color:var(--orange)">已切换</span>
+        </div>
+        <div class="pane-body">
+          <div class="file-tree-row" style="padding-top:10px;"><span class="ico">📁</span><span style="font-weight:700;">待 Preflight 队列</span></div>
+          <div class="file-tree-row" style="padding-left:20px;"><span class="swatch"></span><span>run01_steering.MF4</span></div>
+          <div class="file-tree-row" style="padding-left:20px;"><span class="swatch" style="background:var(--green);"></span><span>run02_steering.MF4</span></div>
+          <div class="file-tree-row" style="padding-left:20px;"><span class="swatch" style="background:var(--orange);"></span><span>run03_idle.MF4</span></div>
+          <div class="file-tree-row" style="padding-top:10px;"><span class="ico">📁</span><span style="font-weight:700;">已加载</span></div>
+          <div class="file-tree-row" style="padding-left:20px;"><span class="swatch" style="background:var(--red);"></span><span>x04c_baseline.MF4</span></div>
+          <div class="file-tree-row" style="padding-left:20px; color: var(--ink-muted); font-style:italic; font-size:11px; padding-top:8px;">
+            <span>（提示：分析模式下这里是文件 + 通道树）</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- CENTER: Preflight pane -->
+      <main class="pane-center">
+        <div class="preflight-zone">
+          <div class="glyph">⇩</div>
+          <div class="copy">
+            <h4>拖入 MF4 或点击选择</h4>
+            <p>会按 <code>standard_signals.yaml</code> 解析期望通道，计算 SHA-256，校验 manifest 一致性</p>
+          </div>
+          <button class="btn primary">运行 Preflight</button>
+        </div>
+        <div style="padding: 0 14px 12px;">
+          <table class="assets" style="border:1px solid var(--hairline); border-radius:8px; overflow:hidden;">
+            <thead>
+              <tr>
+                <th>文件</th><th>Fs</th><th>Duration</th><th>缺失通道</th><th>SHA</th><th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="filename">run01_steering.MF4</div></td>
+                <td>1000 Hz</td>
+                <td>28.4 s</td>
+                <td><span class="pill ok">0</span></td>
+                <td><span class="pill ok">✓</span></td>
+                <td><span class="pill ok">pass</span></td>
+              </tr>
+              <tr>
+                <td><div class="filename">run02_steering.MF4</div></td>
+                <td>800 Hz</td>
+                <td>31.0 s</td>
+                <td><span class="pill ok">0</span></td>
+                <td><span class="pill ok">✓</span></td>
+                <td><span class="pill warn">Fs drift</span></td>
+              </tr>
+              <tr>
+                <td><div class="filename">run03_idle.MF4</div></td>
+                <td>1000 Hz</td>
+                <td>12.7 s</td>
+                <td><span class="pill warn">1 (EngTrq)</span></td>
+                <td><span class="pill ok">✓</span></td>
+                <td><span class="pill warn">missing chan</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </main>
+
+      <!-- RIGHT: Inspector pivoted to acquisition fields -->
+      <aside class="pane-right">
+        <div class="pane-head">
+          <span class="ttl">Inspector</span>
+          <span class="sub" style="color:var(--orange);">acquisition</span>
+        </div>
+        <div class="pane-body">
+          <div class="inspect-section">
+            <div class="sec-ttl">期望通道 (signal aliases) <span class="caret">▾</span></div>
+            <div class="kv">
+              <div class="k">alias file</div><div class="v mono">standard_signals.yaml</div>
+              <div class="k">vehicle</div><div class="v">X04C_PPV_01</div>
+              <div class="k">EngineSpeed</div><div class="v mono ok">EngSpdAvg ✓</div>
+              <div class="k">VehicleSpeed</div><div class="v mono ok">VehSpd_FL ✓</div>
+              <div class="k">SteeringAng</div><div class="v mono warn">StgWhlAng ?</div>
+            </div>
+          </div>
+          <div class="inspect-section">
+            <div class="sec-ttl">PREFLIGHT POLICY <span class="caret">▾</span></div>
+            <div class="kv">
+              <div class="k">sha 校验</div><div class="v">on · expected_sha required</div>
+              <div class="k">Fs 容差</div><div class="v">± 5%</div>
+              <div class="k">允许缺失</div><div class="v">0</div>
+            </div>
+          </div>
+          <div class="inspect-section" style="background: rgba(234,88,12,0.06); border-top: 1px solid rgba(234,88,12,0.2);">
+            <div class="sec-ttl" style="color: var(--orange);">⚠ 模式切换提示</div>
+            <p style="margin:0; font-size:12px; color:var(--ink-soft);">切回时域 / FFT 模式时，FileNavigator、Inspector 都会切换语义。当前所选的 MF4 在分析模式下仍可访问。</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="statusbar">
+      <div class="grp"><span class="dot g"></span>已加载 1 文件</div>
+      <div class="grp" style="color: var(--orange);">📌 acquisition mode</div>
+      <div class="spacer"></div>
+      <div class="grp">v0.3.7</div>
+    </div>
+  </div>
+
+  <div class="analysis">
+    <div class="col">
+      <h4 class="good">真正的优势</h4>
+      <ol>
+        <li><b>顶栏 <code>mode_changed</code> 信号现成。</b> <code>ui/toolbar.py</code> 已经有 <code>'time' | 'fft' | 'fft_time' | 'order'</code> 的 ButtonGroup；加一个 <code>'acquisition'</code> key + 一个 stack page，<code>set_enabled_for_mode</code> 加一行——这是从设计上就允许的扩展点。</li>
+        <li><b>"分析中发现可疑文件 → 切去采集做 Preflight → 切回继续"是一键的。</b> 文件、Inspector 状态都不丢，操作员的工作流是连续的。这是 A 方案的两个窗做不到的（A 是把它换成"在 Analyzer 打开"按钮，多走一步）。</li>
+        <li><b>不需要重构 ui_kit。</b> 直接 <code>from .icons import Icons</code>、<code>from .drawers import ...</code> 复用就行；最小动作面。一周可见上线。</li>
+        <li><b>对小团队 / 验证程序刚起步时正合适。</b> 你不知道 acquisition UI 最终长什么样的时候，先塞进 Analyzer 用一段时间，等需求长清楚再决定要不要切成 A。这是"廉价试错"。</li>
+        <li><b>QSS 改一次两边都生效。</b> Precision Light 调色微调，acquisition 同步获益，零额外维护。</li>
+      </ol>
+    </div>
+    <div class="col">
+      <h4 class="bad">真正的代价</h4>
+      <ol>
+        <li><b>"mode" 这个抽象本来是"同一文件的不同呈现"，被强行扩成了"完全不同的动词"。</b> 时域/FFT/阶次都是 <i>view</i>；采集是 <i>configure-and-run</i>。共用 mode segment 会让"切换到采集就把图表清空"这件事看起来像 bug。</li>
+        <li><b>FileNavigator 必须双语义。</b> 分析模式下它是"文件 + 通道树"；采集模式下它是"Session 浏览"。两个语义共用一个 widget 会导致 <code>file_navigator.py</code>（现在 255 行）变成带 <i>mode-aware</i> 状态的复杂控件——非常容易出"切换后 selection 串台"的回归。这是这条路最大的暗坑。</li>
+        <li><b>Inspector 矩阵爆炸。</b> <code>inspector_sections.py</code> 现在 3033 行，已经被同事 flagged 太大。每个 section 都要加 <code>enabled_for_modes={'time','fft','acquisition'}</code> 这种过滤，组合数随 mode 数线性涨。</li>
+        <li><b>单窗口竞争主线程。</b> 分析侧已经有 <code>FFTTimeWorker</code> 在 worker QThread 跑长任务；acquisition 的 SHA-256 / preflight sweep 也是长任务。它们要么共享 Worker 队列（要写调度），要么各自起 thread（StatusBar 进度信息冲突）。两条路都不省事。</li>
+        <li><b>"采集"塞进去之后，去掉就很难。</b> 一旦操作员习惯了"在 Analyzer 里也能跑 preflight"，再想切到 A 方案就要做产品迁移说明、文档更新、对外培训——这是认知锁定。</li>
+        <li><b>未来的 Capture（Vector live）几乎一定塞不进去。</b> live 采集需要常驻、长时间运行、不能被分析操作打断。把它和分析共一个 MainWindow 是反直觉的；这一步实质上把 Capture 排除在外了。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="v right">
+      <h5>选 B 当：</h5>
+      <p>需要 1 周内出可用版本；acquisition 短期就只做 Preflight + Manifest 两件事；团队就 2 人；做完一阵子再决定要不要走 A。</p>
+    </div>
+    <div class="v wrong">
+      <h5>别选 B 当：</h5>
+      <p>明知道未来要做 live Capture / 资产库浏览 / 多人共用——把 acquisition 提前耦合进 Analyzer，等到要拆的时候每一行都要回滚。</p>
+    </div>
+    <div class="v cost">
+      <h5>实际工作量：</h5>
+      <p><b>4–6 天</b>。Toolbar 加 mode + ChartStack 加 page + FileNavigator 加双语义 + Inspector 加 sections + smoke 测试。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- APPROACH C: QWizard mapping the L1-L5 ladder                           -->
+<!-- ===================================================================== -->
+<section class="approach">
+  <div class="approach-head">
+    <span class="approach-letter orange">方案 C</span>
+    <h2>Acquisition Wizard — 对接 L1–L5 验证阶梯</h2>
+    <span class="approach-tag">流程驱动 · SOP 场景 · 非常规化操作弱</span>
+  </div>
+  <p class="approach-tagline">完全不动 Analyzer。在 <code style="background:var(--surface-mute);padding:1px 4px;border-radius:3px;">tools/</code> 下新增 <code style="background:var(--surface-mute);padding:1px 4px;border-radius:3px;">acquisition_wizard.py</code>，从主菜单或 CLI 启动。把 validation roadmap §2 六层阶梯做成 6 步 QWizard，每步必须通过才能进下一步。</p>
+
+  <div class="wizard">
+    <div class="wizard-head">
+      <div class="wizard-title">Acquisition Wizard — 写入 Manifest（4 / 6）</div>
+      <div class="wizard-sub">为本次采集生成或更新 manifest 条目。SHA-256 实时计算，提交前预览。</div>
+    </div>
+    <div class="wizard-stepper">
+      <div class="step done"><div class="bullet">✓</div><div class="name">1 配置</div><div class="bar"></div></div>
+      <div class="step done"><div class="bullet">✓</div><div class="name">2 数据源</div><div class="bar"></div></div>
+      <div class="step done"><div class="bullet">✓</div><div class="name">3 Preflight</div><div class="bar"></div></div>
+      <div class="step active"><div class="bullet">4</div><div class="name">4 Manifest</div><div class="bar"></div></div>
+      <div class="step"><div class="bullet">5</div><div class="name">5 回归</div><div class="bar"></div></div>
+      <div class="step"><div class="bullet">6</div><div class="name">6 完成</div></div>
+    </div>
+    <div class="wizard-body">
+      <!-- LEFT: form -->
+      <div class="wizard-form">
+        <h3 style="margin-bottom: 12px;">条目字段</h3>
+        <div class="form-row"><label>file</label><div class="input" style="background: var(--surface-mute); color:var(--ink-muted);"><code style="background:transparent;">run01_steering.MF4</code></div></div>
+        <div class="form-row"><label>vehicle</label><div class="input">X04C_PPV_01</div></div>
+        <div class="form-row"><label>platform</label><div class="input">X04C</div></div>
+        <div class="form-row"><label>ecu_sw</label><div class="input">2.1.0</div></div>
+        <div class="form-row"><label>dbc_version</label><div class="input">vehicle_v23.dbc</div></div>
+        <div class="form-row"><label>a2l_version</label><div class="input">ecu_2.1.a2l</div></div>
+        <div class="form-row"><label>test_date</label><div class="input">2026-05-12</div></div>
+        <div class="form-row"><label>scenario</label><div class="input">low_temp_low_tire_pressure</div></div>
+        <div class="form-row"><label>maneuver</label><div class="input">low_speed_steering</div></div>
+        <div class="form-row"><label>temperature</label><div class="input placeholder">e.g. -10 ℃ (optional)</div></div>
+        <div class="form-row"><label>quality</label><div class="input">good</div></div>
+        <div class="form-row"><label>issue_tags</label><div class="input">
+          <div class="tag-row">
+            <span class="pill info">ripple</span>
+            <span class="pill info">ttr</span>
+            <span class="pill info">gearbox</span>
+            <span class="pill" style="background: var(--surface-mute); border:1px dashed var(--hairline-strong); color: var(--ink-muted);">+ 添加</span>
+          </div>
+        </div></div>
+        <div class="form-row"><label>sets</label><div class="input">
+          <div class="tag-row">
+            <span class="pill ok">golden</span>
+            <span class="pill warn">issue</span>
+          </div>
+        </div></div>
+        <div class="form-row"><label>sha256</label><div class="input" style="background: rgba(5,150,105,0.06); color: var(--green);"><code style="background:transparent; color:var(--green);">5a3f…b8c9 (computed)</code></div></div>
+      </div>
+      <!-- RIGHT: YAML preview -->
+      <div class="wizard-preview">
+        <h3 style="margin-bottom: 12px;">YAML 预览 → <code style="background:var(--surface-mute); padding:1px 4px; border-radius:3px; font-size:11px;">data/golden/manifest.yaml</code></h3>
+        <div class="yaml"><span class="c"># entry 14 (new)</span>
+- <span class="k">file</span>: <span class="s">20260512_x04c_low_temp_ripple_run01.MF4</span>
+  <span class="k">vehicle</span>: <span class="s">X04C_PPV_01</span>
+  <span class="k">platform</span>: <span class="s">X04C</span>
+  <span class="k">ecu_sw</span>: <span class="s">"2.1.0"</span>
+  <span class="k">dbc_version</span>: <span class="s">vehicle_v23.dbc</span>
+  <span class="k">a2l_version</span>: <span class="s">ecu_2.1.a2l</span>
+  <span class="k">test_date</span>: <span class="s">2026-05-12</span>
+  <span class="k">scenario</span>: <span class="s">low_temp_low_tire_pressure</span>
+  <span class="k">maneuver</span>: <span class="s">low_speed_steering</span>
+  <span class="k">temperature</span>: <span class="n">null</span>   <span class="c"># optional</span>
+  <span class="k">tire_pressure</span>: <span class="s">low</span>
+  <span class="k">issue_tags</span>:
+    - <span class="s">ripple</span>
+    - <span class="s">ttr</span>
+    - <span class="s">gearbox</span>
+  <span class="k">quality</span>: <span class="s">good</span>
+  <span class="k">sets</span>: [<span class="s">golden</span>, <span class="s">issue</span>]
+  <span class="k">sha256</span>: <span class="h">5a3fcafe…b8c9</span></div>
+        <p style="font-size: 11.5px; color: var(--ink-muted); margin-top: 12px;">提交后会通过 <code>mf4_analyzer.acquisition.manifest.write_entry()</code> 追加到 <code>data/golden/manifest.yaml</code>，并触发 <code>regression.snapshot()</code> 重新生成 <code>*.golden.json</code>。</p>
+      </div>
+    </div>
+    <div class="wizard-foot">
+      <button class="btn ghost">取消</button>
+      <div class="spacer"></div>
+      <button class="btn">← 上一步</button>
+      <button class="btn primary">下一步 (跑回归) →</button>
+    </div>
+  </div>
+
+  <div class="analysis">
+    <div class="col">
+      <h4 class="good">真正的优势</h4>
+      <ol>
+        <li><b>1:1 对应 roadmap §2 验证阶梯。</b> 第 1 步配置 / 第 2 步选源 / 第 3 步 Preflight / 第 4 步 Manifest / 第 5 步回归——操作员看 roadmap 文档时记的步骤，在 Wizard 里就是这个顺序。教学成本几乎为零。</li>
+        <li><b>步骤是强制 gate。</b> Preflight 没过不让进 Manifest，回归没过不让进完成。这正是 roadmap 说"把上车调试降级为上车确认"想要的纪律。同样的纪律放在 A/B 的自由编辑面板里就靠不住。</li>
+        <li><b>每页是独立 QWidget，单测最容易。</b> 不需要起 QMainWindow，pytest-qt 直接 instantiate 每一页，<code>validatePage()</code> 是纯函数式的"输入 → 是否能继续"。CI 友好度最高的方案。</li>
+        <li><b>对 Analyzer 0 耦合。</b> Wizard 是 modal 工具，跟 <code>mf4_analyzer/ui/</code> 没有任何 import 关系——Analyzer 升级 / 重构都不会牵连它，反之亦然。</li>
+        <li><b>Wizard 页面的状态机可以无 GUI 复用为脚本。</b> 把每页的 <code>validatePage</code> 提到 <code>acquisition/runners/</code>，CLI 模式可以跑同一套逻辑——例如 CI 上自动批处理整个 <code>data/golden/</code>。这是 A/B 拿不到的副产品。</li>
+      </ol>
+    </div>
+    <div class="col">
+      <h4 class="bad">真正的代价</h4>
+      <ol>
+        <li><b>"浏览资产库"是 Wizard 的反模式。</b> roadmap §3 的核心能力是"按车型 / 平台 / ECU 软件版本 / 场景 / issue_tag 检索 MF4"——这是 needs-driven，不是 task-driven。Wizard 本质上只能"开一个新任务"，回头看以前的 manifest 必须额外做一个"manifest 浏览器"页面，那其实又退化成了 A。</li>
+        <li><b>状态不持久。</b> 操作员关了 Wizard，下次再开还要重选 DBC / A2L / alias 文件。可以做 last-used 默认值，但仍然是健忘的——不像 A/B 那样有一个常驻的"工作空间"。</li>
+        <li><b>Modal 阻断分析交叉验证。</b> 在 Manifest 步骤想"先回 Analyzer 看一眼这个 MF4 的某个信号长啥样再决定打不打 issue tag" —— 要么关 Wizard 丢状态，要么 Analyzer 没有上下文。Cross-reference 工作流被破坏。</li>
+        <li><b>批量场景困难。</b> 对 <code>data/golden/</code> 的 30 个文件做一次性 preflight + manifest 更新，用 Wizard 是 30 × 5 步 = 150 次点击。最后一定会被偷偷加一个"高级模式"或"批处理"按钮，那其实就是 A 方案的简陋版。</li>
+        <li><b>"manifest 一旦写了又改"是常态。</b> issue_tags 不是一次写定的——三天后看到新现象，要回去补 tag。Wizard 是"创建"型而非"维护"型 UI，长期会成为障碍。</li>
+        <li><b>Vector live capture 几乎不能塞进 Wizard。</b> live 需要常驻 + 长时间 + 中途可暂停；Wizard 强制线性走步骤，模型对不上。最终 Capture 会另起一个面板/窗，那就是 A + C 两套并存。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="v right">
+      <h5>选 C 当：</h5>
+      <p>验证流程是 SOP 化的；每次只处理 1–2 个新文件；操作员是测试工程师而不是研发；想立刻有"教学价值高、不会出错"的工具。</p>
+    </div>
+    <div class="v wrong">
+      <h5>别选 C 当：</h5>
+      <p>需要 manifest 浏览 / 资产库 / live capture 中任何一个——Wizard 装不下，最后会和其它方案并存。</p>
+    </div>
+    <div class="v cost">
+      <h5>实际工作量：</h5>
+      <p><b>3–5 天</b>。6 个 QWizardPage + state machine + YAML 渲染 + pytest-qt 单测。最便宜也最局促。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- APPROACH D: Bench Console — single-page operator panel                 -->
+<!-- ===================================================================== -->
+<section class="approach">
+  <div class="approach-head">
+    <span class="approach-letter purple">方案 D</span>
+    <h2>Bench Console — 台架前的单页操作面板</h2>
+    <span class="approach-tag">为 L4 台架而生 · 当下用不上 · 解决不了离线问题</span>
+  </div>
+  <p class="approach-tagline">不是 Analyzer 风格——单页、深色、大字号，给台架旁站着的工程师看。LCD 风格数值瓦片 + rolling time strip + 大按钮 [Arm / Capture / Stop]。Inspector 折到右边抽屉。需要 Windows + Vector 才有用。</p>
+
+  <div class="mockup">
+    <div class="mockup-chrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">Bench Console — X04C_PPV_01 Bench Rig #2</span>
+    </div>
+    <div class="bench">
+      <div class="bench-head">
+        <span class="ttl">Bench Console</span>
+        <span class="badge"><span class="pulse"></span>LIVE · CH2 @ 1.0 kHz</span>
+        <span style="font-size:11px; color:#94a3b8;">Vector VN1610 · CAN1 500 kbps · CAN2 1 Mbps</span>
+        <div class="right">
+          <span>2026-05-14 11:42:38</span>
+          <span style="margin-left:14px;">elapsed <b style="color:#f8fafc;">00:08:23</b></span>
+        </div>
+      </div>
+      <div class="tiles">
+        <div class="tile">
+          <span class="lbl">Engine Speed</span>
+          <span class="val">1842<span class="unit">rpm</span></span>
+          <span class="delta">↑ 12 over last 5s</span>
+        </div>
+        <div class="tile">
+          <span class="lbl">Vehicle Speed</span>
+          <span class="val">42.3<span class="unit">km/h</span></span>
+          <span class="delta">stable ± 0.2</span>
+        </div>
+        <div class="tile">
+          <span class="lbl">Coolant T</span>
+          <span class="val">86.4<span class="unit">℃</span></span>
+          <span class="delta">↑ 0.4 / min</span>
+        </div>
+        <div class="tile warn">
+          <span class="lbl">Battery V</span>
+          <span class="val">12.0<span class="unit">V</span></span>
+          <span class="delta">⚠ low for last 14s</span>
+        </div>
+        <div class="tile">
+          <span class="lbl">Steering Ang</span>
+          <span class="val">−4.2<span class="unit">°</span></span>
+          <span class="delta">range −22 / +24</span>
+        </div>
+        <div class="tile">
+          <span class="lbl">Throttle</span>
+          <span class="val">18<span class="unit">%</span></span>
+          <span class="delta">↓ 2 / s</span>
+        </div>
+        <div class="tile">
+          <span class="lbl">Brake</span>
+          <span class="val">0<span class="unit">%</span></span>
+          <span class="delta">no events</span>
+        </div>
+        <div class="tile err">
+          <span class="lbl">CAN2 Bus Load</span>
+          <span class="val">81<span class="unit">%</span></span>
+          <span class="delta">⚠ saturating</span>
+        </div>
+      </div>
+      <div class="strip">
+        <div class="head">
+          <span class="ttl">Live strip · last 10 s</span>
+          <span class="ch"><span class="swatch" style="background:#60a5fa;"></span>EngSpd</span>
+          <span class="ch"><span class="swatch" style="background:#34d399;"></span>VehSpd</span>
+          <span class="ch"><span class="swatch" style="background:#fbbf24;"></span>StgWhlAng</span>
+          <span style="margin-left:auto; font-family:monospace;">y-auto</span>
+        </div>
+        <!-- fake plot -->
+        <svg viewBox="0 0 800 100" preserveAspectRatio="none" style="width:100%; height:100px;">
+          <defs>
+            <linearGradient id="grad1" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.4"/>
+              <stop offset="100%" stop-color="#60a5fa" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path d="M0 60 L40 58 L80 52 L120 48 L160 50 L200 44 L240 38 L280 40 L320 36 L360 30 L400 28 L440 32 L480 26 L520 22 L560 28 L600 30 L640 24 L680 20 L720 18 L760 22 L800 18" stroke="#60a5fa" stroke-width="1.8" fill="none"/>
+          <path d="M0 76 L40 75 L80 74 L120 73 L160 72 L200 70 L240 68 L280 67 L320 65 L360 64 L400 63 L440 62 L480 60 L520 59 L560 58 L600 56 L640 55 L680 54 L720 52 L760 51 L800 50" stroke="#34d399" stroke-width="1.8" fill="none"/>
+          <path d="M0 80 L40 78 L80 82 L120 76 L160 84 L200 70 L240 72 L280 68 L320 80 L360 66 L400 78 L440 74 L480 70 L520 84 L560 72 L600 68 L640 76 L680 64 L720 80 L760 74 L800 70" stroke="#fbbf24" stroke-width="1.4" fill="none"/>
+          <line x1="0" y1="50" x2="800" y2="50" stroke="#334155" stroke-dasharray="2 4"/>
+          <line x1="400" y1="0" x2="400" y2="100" stroke="#475569" stroke-dasharray="2 4"/>
+        </svg>
+      </div>
+      <div class="bench-foot">
+        <button class="big-btn arm">⚡ Arm</button>
+        <button class="big-btn cap">● Capture</button>
+        <button class="big-btn">■ Stop</button>
+        <button class="big-btn">▷ Replay</button>
+        <div class="spacer"></div>
+        <div class="bench-meta">
+          <div>Write: <b>2.4 MB/s</b></div>
+          <div>Disk: <b>18.2 GB free</b></div>
+          <div>Dropped: <b style="color:#fca5a5;">3 frames</b></div>
+          <div>Trigger: <b>RPM > 3000</b></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="analysis">
+    <div class="col">
+      <h4 class="good">真正的优势</h4>
+      <ol>
+        <li><b>为台架而生，不假装做别的事。</b> Operator 站在 2 米外读得清楚 — 28 px 大字号、深色背景、心电监护器风格。Analyzer 的 12 px Precision Light 在台架现场是看不清的。</li>
+        <li><b>注意力路径最短。</b> Arm → Capture → Stop 三个红 / 黄 / 绿大按钮，配合 bus load / dropped frames 警示，决策点压缩到 2 秒内。</li>
+        <li><b>硬件作用域窄到极致。</b> 只对接 <code>can_logger/p0/vector_probe.py</code> + 一个 live MF4 writer。不碰 manifest、不碰 preflight、不碰资产库 — 边界清晰、bug 面积小。</li>
+        <li><b>"第二屏"型副工具。</b> Engineer 主屏跑 Analyzer 或终端，副屏挂 Bench Console。这是 A/B/C 都不擅长的角色。</li>
+        <li><b>对 PyQtGraph / blit 优化友好。</b> 单页 + 单 strip 的架构很容易把渲染抠到 60 fps。Analyzer 那种多 chart + 多 canvas 的情况想做 live 反而麻烦。</li>
+      </ol>
+    </div>
+    <div class="col">
+      <h4 class="bad">真正的代价</h4>
+      <ol>
+        <li><b>它解决不了当前最痛的离线验证瓶颈。</b> 现在 acquisition 的工作面在 L1–L3（preflight / manifest / sha / regression），全是离线、文件型、表格型的。Bench Console 是 L4 才生效的工具——而 L4 在 Vector 硬件 + Windows 就绪前是没法用的。</li>
+        <li><b>它和 Analyzer 视觉是分裂的。</b> 深色 + 大字 + LCD 风格不可能套 <code>style.qss</code>。第二套视觉系统 = 第二套设计维护工作（icon 集、字号阶、配色）。</li>
+        <li><b>硬件相关的代码会进来。</b> <code>python-can[vector]</code> / <code>pyxcp</code> 这些 Windows-only 包目前是 platform-gated。Bench Console 让它们成为运行时强依赖；CI / 测试 / 打包都要为这个新角色单独配 Windows runner。</li>
+        <li><b>"manifest / 资产库 / regression"在这里仍然没有 UI。</b> 大概率最后变成 D + (A 或 B) 并存——D 单独存在意义不大。</li>
+        <li><b>一年 80% 时间没人用。</b> 台架测试不是天天做。这个面板的"每次启动"成本 vs "每月使用"次数比例最差。</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <div class="v right">
+      <h5>选 D 当：</h5>
+      <p>台架测试 ≥ 每周一次；有专门的台架操作员；Vector 硬件已就位；想要"第二屏专用看板"——而且你已经有 A 或 B 在做离线验证。</p>
+    </div>
+    <div class="v wrong">
+      <h5>别选 D 当：</h5>
+      <p>现在做。Vector 还没就绪、L4 还没排上日程、离线 L1–L3 才是当下瓶颈——D 上线就是死代码。</p>
+    </div>
+    <div class="v cost">
+      <h5>实际工作量：</h5>
+      <p><b>1.5–2 周</b>（Windows + Vector 就绪后才能真正写完）：live MF4 writer、PyQtGraph live strip、trigger 引擎、深色 QSS、台架硬件烟测。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== -->
+<!-- FINAL RECOMMENDATION                                                    -->
+<!-- ===================================================================== -->
+<section class="rec-card">
+  <h2>我的建议路径（结合当前 branch 状态）</h2>
+  <p class="sub">基于今天的现实：preflight / manifest / sha256 / a2l_probe 已就绪；vector / xcp 仍是 stub；roadmap 的中心是 L1–L3 离线验证。</p>
+
+  <div class="grid">
+    <div class="cell">
+      <h6>第 1 步 · 这一周</h6>
+      <p>做<b>方案 B 的最小子集</b>——只加 <code>采集</code> mode 的 <b>Preflight</b> 子页。资产 / Manifest / Replay 暂不做。目标：1 周内有一个能在 Analyzer 里跑 preflight 的入口，先把交互验证一遍。</p>
+    </div>
+    <div class="cell">
+      <h6>第 2 步 · 第 2-4 周</h6>
+      <p>评估：如果 acquisition 用户 ≥ 3 人 / 资产数 ≥ 30 / 经常要查看历史 manifest——切到 <b>方案 A</b>，做 ui_kit 抽取 + Cockpit 骨架 + 资产/Preflight/Manifest 三个 mode。</p>
+    </div>
+    <div class="cell">
+      <h6>第 3 步 · Q3</h6>
+      <p>视情况补 <b>方案 C 的 Wizard</b> 作为"新人上手通道"——但只是 A 的子流程入口，不是替代品。</p>
+    </div>
+    <div class="cell">
+      <h6>第 4 步 · Vector 就绪后</h6>
+      <p>加 <b>方案 D 的 Bench Console</b>，作为 Cockpit 的 Capture mode 的"全屏模式"——同代码两套呈现。L4 上线日 = D 上线日。</p>
+    </div>
+  </div>
+
+  <p style="font-size:13px; line-height:1.7; margin-bottom:6px;"><b>核心判断：</b>不要一上来直接做 A。先用 B 跑一个月，把"acquisition UI 到底要解决什么"的答案凝聚出来，再决定要不要拆窗。这条路：</p>
+  <ol>
+    <li>每一步都有可交付物，不是先做 3 周才看到东西。</li>
+    <li>不会因为提前承诺 A 而被锁死——Preflight 子页的代码 80% 可以无缝迁移到 Cockpit。</li>
+    <li>避免 C 的"我也做了 wizard 但是没人用"陷阱——等用户的具体需求长出来再决定要不要 wizard。</li>
+    <li>D 留给硬件就绪那天，不在它之前消耗工时。</li>
+  </ol>
+</section>
+
+</body>
+</html>

@@ -502,7 +502,7 @@ def test_inspector_groupbox_title_has_underline_and_compact_padding():
     and the tightened 12px / 600 weight typography (R3 #3-B).
     """
     from pathlib import Path
-    qss_path = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui" / "style.qss"
+    qss_path = Path(__file__).resolve().parents[2] / "mf4_analyzer" / "ui_kit" / "style.qss"
     qss = qss_path.read_text(encoding="utf-8")
     # Find the Inspector QGroupBox::title block.
     import re
@@ -692,7 +692,7 @@ def test_preset_bar_uses_custom_hover_card_instead_of_qtooltip(qapp, qtbot):
 def test_tooltip_qss_does_not_draw_square_outer_frame():
     from pathlib import Path
 
-    qss = Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
     tooltip_block = qss[qss.index("QToolTip {"): qss.index("}", qss.index("QToolTip {"))]
 
     assert "border: none" in tooltip_block
@@ -1105,7 +1105,7 @@ def test_inspector_body_fills_360_width_under_qss(qapp, qtbot):
     try:
         qapp.setStyle("Fusion")
         qapp.setStyleSheet(
-            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
         )
         insp = Inspector()
         qtbot.addWidget(insp)
@@ -1132,7 +1132,7 @@ def test_fft_contextual_fields_fill_column_under_qss(qapp, qtbot):
     try:
         qapp.setStyle("Fusion")
         qapp.setStyleSheet(
-            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
         )
         insp = Inspector()
         qtbot.addWidget(insp)
@@ -1185,7 +1185,7 @@ def test_signal_card_qframes_have_no_white_bleed(qapp):
     """
     import pathlib
     qss_path = pathlib.Path(__file__).resolve().parents[2] / (
-        "mf4_analyzer/ui/style.qss"
+        "mf4_analyzer/ui_kit/style.qss"
     )
     qss = qss_path.read_text(encoding="utf-8")
     for object_name in (
@@ -1207,7 +1207,7 @@ def test_order_contextual_old_tinted_background_removed():
     """Order Inspector should no longer carry the old orange/gray tint."""
     import pathlib
     qss_path = pathlib.Path(__file__).resolve().parents[2] / (
-        "mf4_analyzer/ui/style.qss"
+        "mf4_analyzer/ui_kit/style.qss"
     )
     qss = qss_path.read_text(encoding="utf-8")
     assert "#fff5e8" not in qss
@@ -1218,7 +1218,7 @@ def test_fft_time_and_order_contextual_backgrounds_are_unified():
     background so the upper/lower Inspector areas read as one surface."""
     import pathlib
     qss_path = pathlib.Path(__file__).resolve().parents[2] / (
-        "mf4_analyzer/ui/style.qss"
+        "mf4_analyzer/ui_kit/style.qss"
     )
     qss = qss_path.read_text(encoding="utf-8")
     assert "QWidget#fftTimeContextual" in qss
@@ -1232,7 +1232,7 @@ def test_checkbox_text_background_is_transparent():
     import pathlib
     import re
     qss_path = pathlib.Path(__file__).resolve().parents[2] / (
-        "mf4_analyzer/ui/style.qss"
+        "mf4_analyzer/ui_kit/style.qss"
     )
     qss = qss_path.read_text(encoding="utf-8")
     m = re.search(r"QCheckBox,\s*QRadioButton\s*\{([^}]*)\}", qss, re.DOTALL)
@@ -1246,7 +1246,7 @@ def test_checkbox_indicator_has_visible_checked_state():
     import pathlib
     import re
     qss_path = pathlib.Path(__file__).resolve().parents[2] / (
-        "mf4_analyzer/ui/style.qss"
+        "mf4_analyzer/ui_kit/style.qss"
     )
     qss = qss_path.read_text(encoding="utf-8")
     base = re.search(r"QCheckBox::indicator\s*\{([^}]*)\}", qss, re.DOTALL)
@@ -2207,7 +2207,7 @@ def test_axis_auto_rows_use_manual_height_on_first_display(qapp, qtbot):
     try:
         qapp.setStyle("Fusion")
         qapp.setStyleSheet(
-            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
         )
 
         for mode, ctx_name in (
@@ -2331,7 +2331,7 @@ def test_axis_rows_fit_inspector_and_align_with_panel_right_edge(qapp, qtbot):
     try:
         qapp.setStyle("Fusion")
         qapp.setStyleSheet(
-            Path("mf4_analyzer/ui/style.qss").read_text(encoding="utf-8")
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
         )
 
         for mode, ctx_name in (

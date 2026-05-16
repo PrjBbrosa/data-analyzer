@@ -1,0 +1,596 @@
+"""State-machine tests (Stage 4).
+
+Plan tasks:
+
+- Disconnected → ConnectedIdle (gated by ``healthy`` predicate:
+  ``HwHealth.ok ∧ XcpHealth.connected ∧ first DAQ frame ≤ 3 s``).
+- Connection timeout: 3 s without a frame returns to Disconnected and
+  surfaces the FIRST failing predicate name in the right panel.
+- ConnectedIdle → Recording.
+- Recording → ReviewModal (gated by ``finalized``).
+- ReviewModal close → ConnectedIdle.
+- Red health disables record.
+- Yellow health warns but does not disable record.
+- Dropped-frames > 100 opens the in-state ``继续/停止`` prompt.
+- 回放 tab is enabled and hosts the read-only ReplayTab.
+- DBC selector setEnabled(False) with tooltip from spec Product
+  Decisions; clicking emits nothing.
+
+These tests cover both the pure-Python state machine (no Qt) and
+the Qt ``MainWindow`` button-state behavior.
+"""
+
+from __future__ import annotations
+
+import time
+
+import pytest
+
+from mf4_analyzer.acquisition_capture import thresholds
+from mf4_analyzer.acquisition_capture.backends import FakeRecorderBackend
+from mf4_analyzer.acquisition_capture.health import (
+    CanHealth,
+    DaqHealth,
+    HealthAggregator,
+    HwHealth,
+    RecHealth,
+    XcpHealth,
+)
+from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.acquisition_ui.main_window import (
+    DBC_DISABLED_TOOLTIP,
+    REPLAY_TAB_TITLE,
+    CockpitMainWindow,
+)
+from mf4_analyzer.acquisition_ui.replay_tab import ReplayTab
+from mf4_analyzer.acquisition_ui.state import (
+    HEALTHY_PREDICATE_FIRST_FRAME,
+    HEALTHY_PREDICATE_HW,
+    HEALTHY_PREDICATE_XCP,
+    CockpitState,
+    CockpitStateMachine,
+    HealthyPredicateResult,
+)
+
+
+# ---------------------------------------------------------------------------
+# Pure-Python state machine
+# ---------------------------------------------------------------------------
+
+
+def test_disconnected_to_connected_idle_when_healthy():
+    sm = CockpitStateMachine()
+    assert sm.state == CockpitState.DISCONNECTED
+    verdict = HealthyPredicateResult.from_components(
+        hw_ok=True, xcp_connected=True, first_frame_received=True
+    )
+    sm.request_connect(verdict)
+    assert sm.state == CockpitState.CONNECTED_IDLE
+
+
+def test_unhealthy_stays_disconnected_and_surfaces_first_failure():
+    # HW first.
+    sm = CockpitStateMachine()
+    sm.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=False, xcp_connected=True, first_frame_received=True
+        )
+    )
+    assert sm.state == CockpitState.DISCONNECTED
+    assert sm.last_healthy_result is not None
+    assert sm.last_healthy_result.first_failure == HEALTHY_PREDICATE_HW
+
+    # XCP next.
+    sm = CockpitStateMachine()
+    sm.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=False, first_frame_received=True
+        )
+    )
+    assert sm.last_healthy_result.first_failure == HEALTHY_PREDICATE_XCP
+
+    # Frame last.
+    sm = CockpitStateMachine()
+    sm.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=False
+        )
+    )
+    assert sm.last_healthy_result.first_failure == HEALTHY_PREDICATE_FIRST_FRAME
+
+
+def test_connected_idle_to_recording():
+    sm = CockpitStateMachine()
+    sm.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    sm.request_start_recording()
+    assert sm.state == CockpitState.RECORDING
+
+
+def test_recording_to_review_when_finalized():
+    sm = CockpitStateMachine()
+    sm.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    sm.request_start_recording()
+    # Not finalized → stay in Recording.
+    sm.request_stop_recording(finalized=False)
+    assert sm.state == CockpitState.RECORDING
+    # Finalized → ReviewModal.
+    sm.request_stop_recording(finalized=True)
+    assert sm.state == CockpitState.REVIEW_MODAL
+
+
+def test_review_close_returns_to_idle():
+    sm = CockpitStateMachine()
+    sm.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    sm.request_start_recording()
+    sm.request_stop_recording(finalized=True)
+    sm.request_review_close()
+    assert sm.state == CockpitState.CONNECTED_IDLE
+
+
+def test_illegal_transition_raises():
+    sm = CockpitStateMachine()
+    # Cannot stop recording from disconnected.
+    with pytest.raises(ValueError):
+        sm.request_stop_recording(finalized=True)
+    # Cannot review-close from disconnected.
+    with pytest.raises(ValueError):
+        sm.request_review_close()
+
+
+def test_subscribe_fires_on_change():
+    sm = CockpitStateMachine()
+    events: list[tuple[CockpitState, CockpitState]] = []
+    sm.subscribe(lambda old, new: events.append((old, new)))
+    sm.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    assert events == [(CockpitState.DISCONNECTED, CockpitState.CONNECTED_IDLE)]
+
+
+# ---------------------------------------------------------------------------
+# Qt main window — button enabled-state and immutables
+# ---------------------------------------------------------------------------
+
+
+def _force_window_with_levels(qapp, levels: dict[str, str]) -> CockpitMainWindow:
+    """Build a window whose health probes return the requested levels.
+
+    ``levels`` maps chip name → desired level. We synthesize health
+    objects that, when fed to the standard level helpers, produce the
+    requested level. The fixture uses these synthesized snapshots
+    directly rather than racing the timer.
+    """
+    window = CockpitMainWindow()
+    # Skip the timer and apply a hand-crafted snapshot.
+    snap = window._health_aggregator.poll_once()  # populates ``last``.
+    return window
+
+
+def _snap_with_levels(*, hw_ok=True, xcp_connected=True,
+                     can_load=10.0, rec_ring=10.0,
+                     rec_last_age=0.0, rec_state="recording") -> any:
+    """Build a HealthSnapshot tuned to a desired level mix."""
+    from mf4_analyzer.acquisition_capture.health import HealthSnapshot
+
+    return HealthSnapshot(
+        hw=HwHealth(
+            ok=hw_ok,
+            driver_version="test",
+            channel_count=1,
+            last_probe_ts=time.monotonic(),
+            error=None if hw_ok else "test failure",
+        ),
+        can=CanHealth(bus_load_pct=can_load, channels=(), bus_error_count=0),
+        xcp=XcpHealth(
+            connected=xcp_connected,
+            slave_id=0x55 if xcp_connected else None,
+            last_response_age_s=0.0,
+            consecutive_timeouts=0,
+        ),
+        daq=DaqHealth(),
+        rec=RecHealth(
+            state=rec_state,
+            ring_buffer_fill_pct=rec_ring,
+            dropped_frames=0,
+            write_rate_bps=0.0,
+            last_rx_age_s=rec_last_age,
+            writer_thread_alive=True,
+        ),
+        captured_at=time.monotonic(),
+    )
+
+
+def test_red_health_disables_record_button(qapp):
+    window = CockpitMainWindow()
+    # Walk to ConnectedIdle via a healthy verdict.
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    # Apply a snapshot with a red CAN load.
+    snap = _snap_with_levels(can_load=95.0)  # >= 80 ⇒ red.
+    window.health_strip.apply_snapshot(snap)
+    window._update_record_button_enabled()
+    assert window.main_button.isEnabled() is False
+    window.close()
+
+
+def test_yellow_health_does_not_disable_record(qapp):
+    window = CockpitMainWindow()
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    # Yellow CAN load (60..80).
+    snap = _snap_with_levels(can_load=70.0)
+    window.health_strip.apply_snapshot(snap)
+    window._update_record_button_enabled()
+    assert window.main_button.isEnabled() is True
+    window.close()
+
+
+def test_rec_chip_red_on_last_rx_age_even_with_empty_ring(qapp):
+    """Spec wiring: REC chip turns red when last_rx_age_s ≥ 2.0 s.
+
+    Tests the assertion the brief calls out: simulate
+    ``last_rx_age_s = 2.5`` and assert REC chip turns red even when
+    ring buffer fill is 0.
+    """
+    window = CockpitMainWindow()
+    snap = _snap_with_levels(rec_last_age=2.5, rec_ring=0.0)
+    window.health_strip.apply_snapshot(snap)
+    levels = window.health_strip.current_levels()
+    assert levels["REC"] == "red"
+    window.close()
+
+
+def test_dbc_selector_disabled_and_tooltip(qapp):
+    """Spec Product Decisions: DBC selector setEnabled(False), tooltip
+    verbatim, clicking emits nothing."""
+    window = CockpitMainWindow()
+    btn = window.dbc_button
+    assert btn.isEnabled() is False
+    assert btn.toolTip() == DBC_DISABLED_TOOLTIP
+
+    # Track whether ``clicked`` ever fires.
+    fired = []
+    btn.clicked.connect(lambda: fired.append(True))
+    btn.click()  # Qt suppresses click() emission while disabled.
+    assert fired == []
+    window.close()
+
+
+def test_replay_tab_enabled_with_replay_widget(qapp):
+    """Polish wave: 回放 tab is a usable read-only ReplayTab."""
+    window = CockpitMainWindow()
+    tabs = window.mode_tabs
+    replay_idx = None
+    for i in range(tabs.count()):
+        if tabs.tabText(i) == REPLAY_TAB_TITLE:
+            replay_idx = i
+            break
+    assert replay_idx is not None
+    assert tabs.isTabEnabled(replay_idx) is True
+    page = tabs.widget(replay_idx)
+    assert isinstance(page, ReplayTab)
+    window.close()
+
+
+def test_dropped_frames_prompt_shown_over_threshold(qapp):
+    """Spec: dropped_frames > 100 opens the in-state ``继续/停止`` prompt.
+
+    Stage 4 verifies the prompt shows. Full Stop wiring is Stage 5.
+    """
+    from PyQt5.QtCore import QTimer
+
+    window = CockpitMainWindow()
+    # Walk to Recording state.
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    window.state_machine.request_start_recording()
+    # Force the ring buffer's dropped count above the prompt threshold.
+    window._ring._dropped_frames = thresholds.DROPPED_FRAMES_PROMPT_TOTAL + 1
+    # Schedule the prompt to be auto-closed so the test doesn't block.
+    closed = []
+
+    def _close_prompt():
+        if getattr(window, "_dropped_prompt", None) is not None:
+            window._dropped_prompt.done(0)
+            closed.append(True)
+
+    QTimer.singleShot(50, _close_prompt)
+    window._poll_live()
+    qapp.processEvents()
+    assert window._dropped_prompt_shown is True
+    # Prompt object exists.
+    assert getattr(window, "_dropped_prompt", None) is not None
+    window.close()
+
+
+def test_a2l_raster_freeze_during_recording(qapp):
+    """A2L/raster controls FREEZE (setEnabled(False)) while recording."""
+    window = CockpitMainWindow()
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    window.state_machine.request_start_recording()
+    # left_pane should be frozen via _apply_state_to_ui.
+    assert window.left_pane._frozen is True
+    window.close()
+
+
+def test_state_machine_subscriber_fires_on_qt_main_window(qapp):
+    """The main window subscribes to state changes during __init__."""
+    window = CockpitMainWindow()
+    # Initial subscribe should fire when we transition.
+    assert window.state_machine.state == CockpitState.DISCONNECTED
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    # Button text flips to 采集.
+    assert "采集" in window.main_button.text()
+    window.close()
+
+
+# ---------------------------------------------------------------------------
+# Connection-timeout path (spec §State Machine — 3 s timeout returns to
+# Disconnected and surfaces the FIRST failing predicate). This pins the
+# Stage 4 CR2-required test that the timeout branch is executable, not
+# just documented in the module header.
+# ---------------------------------------------------------------------------
+
+
+def test_connection_timeout_returns_to_disconnected_and_tears_down_backend(qapp):
+    """Drive ``_evaluate_connection_attempt`` past ``CONNECTION_TIMEOUT_S``
+    without a healthy verdict; assert:
+
+    1. The state stays in ``DISCONNECTED``.
+    2. ``backend.stop()`` is invoked (spy).
+    3. The right-panel disconnected page surfaces the first failing
+       predicate name (``XCP`` here, since XCP is the first ``False``).
+    """
+    # Spy backend whose ``stop()`` flips a flag we can assert on.
+    class _SpyBackend(FakeRecorderBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stop_called = 0
+
+        def stop(self):  # type: ignore[override]
+            self.stop_called += 1
+            return super().stop()
+
+    backend = _SpyBackend()
+    window = CockpitMainWindow(backend=backend)
+    # Simulate the user clicking 连接 ECU — but we backdate the start
+    # time so the predicate sees ``elapsed >= CONNECTION_TIMEOUT_S``
+    # without sleeping. We bypass ``_begin_connection_attempt`` because
+    # it requires a non-empty selection / pool; the timeout logic only
+    # depends on ``_connection_attempt_started`` being set.
+    window._connection_attempt_started = (
+        time.monotonic() - thresholds.CONNECTION_TIMEOUT_S - 1.0
+    )
+    window._first_frame_ts = None
+    window._fake_xcp_connected = False
+    # Also start the backend so the spy's ``stop()`` has something to
+    # tear down.
+    backend.start([SelectedMeasurement(name="DemoSignal")])
+
+    # Build an unhealthy snapshot — HW ok but XCP not connected; the
+    # first failing predicate must be ``XCP``.
+    snap = _snap_with_levels(hw_ok=True, xcp_connected=False)
+    # Apply the snapshot through the same path the live timer would.
+    window._evaluate_connection_attempt(snap)
+
+    # 1. State stays in Disconnected.
+    assert window.state_machine.state == CockpitState.DISCONNECTED
+    # 2. Backend ``stop()`` was invoked exactly once.
+    assert backend.stop_called == 1
+    # 3. Right-panel disconnected page quotes the first failing
+    #    predicate (XCP).
+    assert window.state_machine.last_healthy_result is not None
+    assert (
+        window.state_machine.last_healthy_result.first_failure
+        == HEALTHY_PREDICATE_XCP
+    )
+    # 4. Side effect: ``_connection_attempt_started`` is cleared so a
+    #    subsequent poll doesn't double-fire the teardown.
+    assert window._connection_attempt_started is None
+    window.close()
+
+
+def test_connection_timeout_surfaces_hw_when_hw_fails_first(qapp):
+    """HW failing first wins over XCP in the surface order."""
+    backend = FakeRecorderBackend()
+    window = CockpitMainWindow(backend=backend)
+    window._connection_attempt_started = (
+        time.monotonic() - thresholds.CONNECTION_TIMEOUT_S - 0.5
+    )
+    window._first_frame_ts = None
+    snap = _snap_with_levels(hw_ok=False, xcp_connected=False)
+    window._evaluate_connection_attempt(snap)
+    assert window.state_machine.state == CockpitState.DISCONNECTED
+    assert (
+        window.state_machine.last_healthy_result.first_failure
+        == HEALTHY_PREDICATE_HW
+    )
+    window.close()
+
+
+def test_connection_timeout_surfaces_first_frame_when_only_frame_missing(qapp):
+    """HW + XCP ok but no frame received within 3 s → ``no frame received``."""
+    backend = FakeRecorderBackend()
+    window = CockpitMainWindow(backend=backend)
+    window._connection_attempt_started = (
+        time.monotonic() - thresholds.CONNECTION_TIMEOUT_S - 0.5
+    )
+    window._first_frame_ts = None  # explicit: no frame
+    snap = _snap_with_levels(hw_ok=True, xcp_connected=True)
+    window._evaluate_connection_attempt(snap)
+    assert window.state_machine.state == CockpitState.DISCONNECTED
+    assert (
+        window.state_machine.last_healthy_result.first_failure
+        == HEALTHY_PREDICATE_FIRST_FRAME
+    )
+    window.close()
+
+
+def test_connection_timeout_before_deadline_does_not_tear_down(qapp):
+    """Within ``CONNECTION_TIMEOUT_S`` an unhealthy snapshot does NOT
+    tear the backend down — the predicate waits for either healthy or
+    timeout."""
+
+    class _SpyBackend(FakeRecorderBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stop_called = 0
+
+        def stop(self):  # type: ignore[override]
+            self.stop_called += 1
+            return super().stop()
+
+    backend = _SpyBackend()
+    window = CockpitMainWindow(backend=backend)
+    # Half a second elapsed — well under 3 s timeout.
+    window._connection_attempt_started = time.monotonic() - 0.5
+    window._first_frame_ts = None
+    snap = _snap_with_levels(hw_ok=True, xcp_connected=False)
+    window._evaluate_connection_attempt(snap)
+    assert window.state_machine.state == CockpitState.DISCONNECTED
+    assert backend.stop_called == 0
+    # Attempt is still in flight.
+    assert window._connection_attempt_started is not None
+    window.close()
+
+
+# ---------------------------------------------------------------------------
+# Auto-stop wiring (CR2 fix #6). Watermark ``red_drop_sustained`` must:
+# 1) call ``CaptureController.stop()`` synchronously,
+# 2) set ``SessionSummary.auto_stop = True`` for the review modal,
+# 3) open the placeholder review modal (Stage 5 owns the real modal).
+# ---------------------------------------------------------------------------
+
+
+def _make_spy_controller_with_summary():
+    """Return a spy that mimics the ``CaptureController.stop()`` contract.
+
+    We avoid building a real controller (which would require an Mf4Writer
+    + writable temp path) because the unit under test cares only about
+    the protocol: ``stop()`` is called and its return value carries the
+    ``auto_stop`` flag.
+    """
+    from mf4_analyzer.acquisition_capture.session import SessionSummary
+
+    class _SpyController:
+        def __init__(self) -> None:
+            self.stop_called = 0
+            self.summary = SessionSummary(duration_s=42.0, rx_count=1234)
+
+        def stop(self):
+            self.stop_called += 1
+            return self.summary
+
+    return _SpyController()
+
+
+def test_auto_stop_calls_controller_stop_and_arms_flag(qapp):
+    """``red_drop_sustained`` → controller.stop() + auto_stop=True."""
+    window = CockpitMainWindow()
+    spy = _make_spy_controller_with_summary()
+    window.set_capture_controller(spy)
+    # Walk to Recording so the auto-stop path is on the legal-transition
+    # arm (Recording → ReviewModal).
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    window.state_machine.request_start_recording()
+    assert window.state_machine.state == CockpitState.RECORDING
+
+    # Emit the sustained-red watermark; the bridge routes it to
+    # ``_on_auto_stop_request``.
+    window._ring.watermark_changed.emit("red_drop_sustained")
+
+    # 1. Controller.stop() invoked exactly once.
+    assert spy.stop_called == 1
+    # 2. Auto-stop flag is armed on the surfaced summary.
+    assert window.last_session_summary is not None
+    assert window.last_session_summary.auto_stop is True
+    # 3. Placeholder review modal is open and visible.
+    assert window.state_machine.state == CockpitState.REVIEW_MODAL
+    assert window.review_modal is not None
+    assert window.review_modal.isVisible() is True
+
+    # Cleanup — close the modal explicitly to avoid leaking into the
+    # next test's GC sweep.
+    window.review_modal.done(0)
+    qapp.processEvents()
+    window.close()
+
+
+def test_auto_stop_without_controller_still_arms_flag_and_opens_modal(qapp):
+    """When Stage 5 hasn't injected a controller yet, auto-stop still
+    arms the flag and opens the placeholder modal so the four-state
+    cycle terminates."""
+    window = CockpitMainWindow()
+    # Walk to Recording.
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    window.state_machine.request_start_recording()
+
+    window._ring.watermark_changed.emit("red_drop_sustained")
+
+    assert window.last_session_summary is not None
+    assert window.last_session_summary.auto_stop is True
+    assert window.state_machine.state == CockpitState.REVIEW_MODAL
+    assert window.review_modal is not None
+    assert window.review_modal.isVisible() is True
+
+    window.review_modal.done(0)
+    qapp.processEvents()
+    window.close()
+
+
+def test_auto_stop_emits_signal_with_reason(qapp):
+    """``auto_stop_requested`` Qt signal still fires (Stage 5 hook)."""
+    window = CockpitMainWindow()
+    fired: list[str] = []
+    window.auto_stop_requested.connect(lambda reason: fired.append(reason))
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    window.state_machine.request_start_recording()
+    window._ring.watermark_changed.emit("red_drop_sustained")
+    assert fired == ["ring_buffer"]
+    if window.review_modal is not None:
+        window.review_modal.done(0)
+    qapp.processEvents()
+    window.close()

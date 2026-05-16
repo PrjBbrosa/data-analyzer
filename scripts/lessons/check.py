@@ -207,10 +207,15 @@ def doctor(root: Path, verbose: bool = False) -> int:
     config = root / ".codex" / "config.toml"
     if not config.exists():
         report("FAIL", "missing .codex/config.toml; Codex hooks may not be enabled")
-    elif "codex_hooks = true" in config.read_text(encoding="utf-8"):
-        report("OK", ".codex/config.toml enables codex_hooks")
     else:
-        report("FAIL", ".codex/config.toml does not enable codex_hooks")
+        config_text = config.read_text(encoding="utf-8")
+        config_lines = {line.strip() for line in config_text.splitlines()}
+        if "hooks = true" in config_lines:
+            report("OK", ".codex/config.toml enables hooks")
+        elif "codex_hooks = true" in config_lines:
+            report("WARN", ".codex/config.toml enables deprecated codex_hooks; use hooks")
+        else:
+            report("FAIL", ".codex/config.toml does not enable hooks")
 
     hooks, hook_error = active_hook_names(root)
     if hook_error:

@@ -28,8 +28,8 @@ from PyQt5.QtGui import QColor
 from matplotlib import colors as mcolors
 
 from ..signal import ChannelMath
+from ..ui_kit.widgets.searchable_combo import SearchableComboBox
 from .widgets.compact_spinbox import CompactDoubleSpinBox
-from .widgets.searchable_combo import SearchableComboBox
 
 
 class ChannelEditorDialog(QDialog):

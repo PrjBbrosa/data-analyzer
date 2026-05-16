@@ -3,12 +3,15 @@
 # (Toolbar + FileNavigator + ChartStack + Inspector) is the only owner
 # of state; MainWindow is a router between them.
 
+import importlib
+
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from collections import OrderedDict
 
 from PyQt5.QtWidgets import (
+    QAction,
     QApplication,
     QDialog,
     QFileDialog,
@@ -106,6 +109,7 @@ class MainWindow(QMainWindow):
         self._fft_time_thread = None
         self._fft_time_worker = None
         self._last_batch_preset = None
+        self._acquisition_cockpit_window = None
         self._init_ui();
         self._connect()
 
@@ -126,6 +130,7 @@ class MainWindow(QMainWindow):
 
         self.toolbar = Toolbar(self)
         root.addWidget(self.toolbar)
+        self._init_menus()
 
         splitter = QSplitter(Qt.Horizontal, self)
         self.splitter = splitter
@@ -176,6 +181,17 @@ class MainWindow(QMainWindow):
         # be the main window so the toast floats above the central canvas).
         from .widgets import Toast
         self._toast = Toast(self)
+
+    def _init_menus(self):
+        from ..ui_kit.icons import Icons
+
+        tools_menu = self.menuBar().addMenu("工具")
+        self.action_open_acquisition_cockpit = QAction(
+            Icons.plot(),
+            "打开 Acquisition Cockpit",
+            self,
+        )
+        tools_menu.addAction(self.action_open_acquisition_cockpit)
 
     # ---- public toast helper ----
     def toast(self, msg, level='info'):
@@ -233,6 +249,10 @@ class MainWindow(QMainWindow):
         self.toolbar.channel_editor_requested.connect(self.open_editor)
         self.toolbar.export_requested.connect(self.export_excel)
         self.toolbar.batch_requested.connect(self.open_batch)
+        self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
+        self.action_open_acquisition_cockpit.triggered.connect(
+            lambda _checked=False: self.open_acquisition_cockpit()
+        )
         self.toolbar.inspector_visibility_changed.connect(self.set_inspector_visible)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.chart_stack.image_copied.connect(
@@ -576,6 +596,41 @@ class MainWindow(QMainWindow):
     def load_files(self):
         fps, _ = QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.csv *.xlsx *.xls)")
         for fp in fps: self._load_one(fp)
+
+    def load_file(self, path) -> None:
+        """Public Analyzer handoff for single-file loads.
+
+        Stage 5 of the Acquisition Cockpit plan
+        (``docs/analyzer/acquisition/plans/2026-05-15-acquisition-cockpit-ui-implementation.md``)
+        wires Cockpit's review modal to this method. Spec §Architecture
+        Contract / Analyzer Handoff pins the contract:
+
+        - Public method, accepts ``str | Path``.
+        - Thin wrapper around the existing private ``_load_one(fp)`` flow.
+        - Cockpit MUST NOT call ``_load_one`` directly.
+
+        This is the only Analyzer-side modification authorized by the
+        plan; ``_load_one``'s body stays unchanged.
+        """
+        self._load_one(str(path))
+
+    def open_acquisition_cockpit(self) -> None:
+        cockpit_module = importlib.import_module(
+            "mf4_analyzer.acquisition_ui.main_window"
+        )
+        CockpitMainWindow = cockpit_module.CockpitMainWindow
+
+        for window in QApplication.topLevelWidgets():
+            if isinstance(window, CockpitMainWindow):
+                if not window.isVisible():
+                    window.show()
+                window.raise_()
+                window.activateWindow()
+                return
+
+        cockpit = CockpitMainWindow()
+        self._acquisition_cockpit_window = cockpit
+        cockpit.show()
 
     def _load_one(self, fp):
         try:

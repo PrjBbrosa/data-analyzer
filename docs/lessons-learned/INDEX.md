@@ -20,6 +20,10 @@ lesson by default.
 | [Chart Toolbar Label Order](pyqt-ui/2026-05-12-chart-toolbar-label-order.md) | Chart toolbar layout, Matplotlib locLabel, in-toolbar hint text, or per-card controls. | `tests/ui/test_chart_stack.py` |
 | [Matplotlib Resize And Modal Nav State](pyqt-ui/2026-05-13-matplotlib-resize-and-modal-nav-state.md) | Touching Matplotlib-backed PyQt canvases, splitter/inspector resize behavior, chart-options double-click flows, or chart toolbar navigation actions. | See lesson |
 | [Codex Analyzer Doc Routing](codex-analyzer-doc-routing.md) | Creating, moving, or referencing analyzer-facing documentation and review artifacts. | See lesson |
+| [Acquisition Validation Evidence Gates](codex-acquisition-validation-evidence-gates.md) | Acquisition validation docs, preflight/regression tooling, smoke runners, or P0 probe evidence. | See lesson |
+| [Acquisition Threshold Defaults Use Current Values](codex-acquisition-threshold-defaults-use-current-values.md) | Acquisition Cockpit editable thresholds, settings auto-load, `SessionConfig` defaults, health helper defaults, or preflight UI defaults. | See lesson |
+| [Visual Parity Requires Rendered Screenshot](codex-visual-parity-rendered-screenshot.md) | Touching PyQt visual parity, QSS, toolbar controls, compact chips, or a UI implementation that is supposed to match an HTML prototype or screenshot. | See lesson |
+| [Codex MF4 Source Path Alias Dedupe](codex-mf4-source-path-alias-dedupe.md) | Touching MF4 channel enumeration, analyzer channel lists, batch MF4 | See lesson |
 
 ## Selection Rules
 

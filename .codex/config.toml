@@ -1,4 +1,4 @@
 # BEGIN CODEX LESSONS SYSTEM
 [features]
-codex_hooks = true
+hooks = true
 # END CODEX LESSONS SYSTEM

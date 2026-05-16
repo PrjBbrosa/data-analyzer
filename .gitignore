@@ -47,3 +47,12 @@ testdoc/
 
 # Backup of pre-restore orphan repo (kept locally for safety)
 .git.local-orphan/
+
+# Local acquisition datasets and private manifests
+data/local/
+data/manifest.local.json
+data/snapshots/*.golden.json
+
+# Local-only signal mappings; example files are tracked.
+configs/signals/vehicles/*.json
+!configs/signals/vehicles/*.example.json

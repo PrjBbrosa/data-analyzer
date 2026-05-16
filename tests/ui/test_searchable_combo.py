@@ -1,6 +1,6 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QStyleOptionViewItem
-from mf4_analyzer.ui.widgets.searchable_combo import (
+from mf4_analyzer.ui_kit.widgets.searchable_combo import (
     SearchableComboBox,
     _highlight_char_indexes,
 )
@@ -114,7 +114,7 @@ def test_fuzzy_completer_popup_uses_two_line_delegate_ten_rows_and_tooltips(qapp
 from mf4_analyzer.ui.inspector_sections import (
     TimeContextual, FFTContextual, OrderContextual, FFTTimeContextual,
 )
-from mf4_analyzer.ui.widgets.searchable_combo import SearchableComboBox
+from mf4_analyzer.ui_kit.widgets.searchable_combo import SearchableComboBox
 
 
 def test_inspector_channel_combos_are_searchable(qapp):

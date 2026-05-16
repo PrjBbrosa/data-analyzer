@@ -1,0 +1,6 @@
+# Files in data/golden/ are checked in via Git LFS.
+# Before adding any MF4 here for the first time, run on the repo root:
+#     git lfs install
+#     git lfs track "data/golden/*.MF4" "data/golden/*.mf4"
+#     git add .gitattributes
+# Otherwise large MF4 binaries will land in plain git history.
