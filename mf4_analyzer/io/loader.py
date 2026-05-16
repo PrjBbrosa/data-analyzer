@@ -1,4 +1,6 @@
 """DataLoader: reads MF4 / Excel / CSV inputs."""
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
 
@@ -17,6 +19,76 @@ except ImportError:
     HAS_OPENPYXL = False
 
 
+def _valid_mdf_channel_name(name):
+    name = str(name)
+    return bool(name.strip()) and not name.startswith('$')
+
+
+def _channel_name_at(mdf, loc, fallback):
+    group_idx, ch_idx = loc
+    try:
+        name = mdf.groups[group_idx].channels[ch_idx].name
+    except Exception:
+        name = fallback
+    name = str(name or fallback)
+    return name if _valid_mdf_channel_name(name) else str(fallback)
+
+
+def _source_qualified_name_at(mdf, loc, base_name):
+    group_idx, ch_idx = loc
+    try:
+        source = mdf.groups[group_idx].channels[ch_idx].source
+        source_path = str(getattr(source, "path", "") or "")
+    except Exception:
+        source_path = ""
+    return f"{source_path}.{base_name}" if source_path else ""
+
+
+def unique_mdf_channel_locations(mdf):
+    """Return display names mapped to unique MDF physical channel locations.
+
+    asammdf exposes a source-path display name (``A_side.sig``) and the raw
+    channel name (``sig``) for the same ``(group, index)`` occurrence. Collapse
+    those aliases, but keep source-qualified names when the raw name is truly
+    ambiguous across multiple physical channels.
+    """
+    loc_keys = {}
+    loc_order = []
+    for name, occurrences in mdf.channels_db.items():
+        name = str(name)
+        if not _valid_mdf_channel_name(name):
+            continue
+        for loc in occurrences:
+            loc = tuple(loc)
+            if loc not in loc_keys:
+                loc_keys[loc] = []
+                loc_order.append(loc)
+            loc_keys[loc].append(name)
+
+    base_locations = defaultdict(list)
+    for loc in loc_order:
+        base_name = _channel_name_at(mdf, loc, loc_keys[loc][0])
+        base_locations[base_name].append(loc)
+
+    channel_locations = {}
+    for loc in loc_order:
+        base_name = _channel_name_at(mdf, loc, loc_keys[loc][0])
+        if len(base_locations[base_name]) == 1:
+            display_name = base_name
+        else:
+            display_name = (
+                _source_qualified_name_at(mdf, loc, base_name)
+                or next(
+                    (name for name in loc_keys[loc] if name != base_name),
+                    base_name,
+                )
+            )
+        if display_name in channel_locations:
+            display_name = f"{display_name} [{loc[0]}:{loc[1]}]"
+        channel_locations[display_name] = loc
+    return channel_locations
+
+
 class DataLoader:
     @staticmethod
     def load_mf4(fp):
@@ -24,10 +96,7 @@ class DataLoader:
         mdf = MDF(fp)
 
         # 收集所有通道及其位置信息
-        channel_locations = {}  # {channel_name: [(group, index), ...]}
-        for name, occurrences in mdf.channels_db.items():
-            if not name.startswith('$') and name.strip():
-                channel_locations[name] = list(occurrences)
+        channel_locations = unique_mdf_channel_locations(mdf)
 
         if not channel_locations:
             mdf.close()
@@ -35,11 +104,9 @@ class DataLoader:
 
         max_len, ref_ts, sigs, units = 0, None, {}, {}
 
-        for ch_name, locations in channel_locations.items():
-            # 取第一个occurrence
-            group_idx, ch_idx = locations[0]
+        for ch_name, (group_idx, ch_idx) in channel_locations.items():
             try:
-                sig = mdf.get(ch_name, group=group_idx, index=ch_idx)
+                sig = mdf.get(group=group_idx, index=ch_idx)
                 if sig.samples is not None and len(sig.samples) > 0 and np.issubdtype(sig.samples.dtype, np.number):
                     s = sig.samples.flatten() if len(sig.samples.shape) > 1 else sig.samples
                     sigs[ch_name] = {'s': np.array(s, float), 't': np.array(sig.timestamps, float)}
