@@ -19,6 +19,7 @@ exclusively.
 from __future__ import annotations
 
 import math
+import re
 from collections import deque
 
 from PyQt5.QtCore import QPointF, QRectF, Qt
@@ -68,9 +69,34 @@ _CARD_TRACE_COLORS = (
     "#64748b",
 )
 
+# Spec §A: recording state collapses into the swatch — solid red fill.
+_RECORDING_SWATCH_COLOR = "#dc2626"
+
+# Spec §F: drop bus time-channels (``t [n:m]``) from the auto-cards seed.
+# The capture core still accepts them; this is purely a UI-layer
+# suppression that lives at the grid boundary.
+_TIME_CHANNEL_RE = re.compile(r"^t\s*\[\d+:\d+\]$")
+
 
 def _trace_color_for_index(index: int) -> QColor:
     return QColor(_CARD_TRACE_COLORS[index % len(_CARD_TRACE_COLORS)])
+
+
+def _format_raster_display(raster: str | None) -> str:
+    """Spec §C: strip ``event_`` prefix for display (``event_10ms`` → ``10 ms``).
+
+    The full raster name remains available via the pill's tooltip so the
+    abbreviated form never hides the truth.
+    """
+    if not raster:
+        return "--"
+    if raster.startswith("event_"):
+        body = raster[len("event_") :]
+        match = re.fullmatch(r"(\d+)([a-zA-Z]+)", body)
+        if match:
+            return f"{match.group(1)} {match.group(2)}"
+        return body
+    return raster
 
 
 class Sparkline(QWidget):
@@ -87,8 +113,10 @@ class Sparkline(QWidget):
         self.setObjectName("liveCardSparkline")
         self.setProperty("traceColor", self._color.name())
         self._buffer: deque[tuple[float, float]] = deque(maxlen=_SPARK_MAX_POINTS)
-        self.setMinimumHeight(36)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # Spec §B: floor the sparkline at 72px and let it absorb free
+        # vertical space so cards grow the curve when N decreases.
+        self.setMinimumHeight(72)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def set_trace_color(self, color: QColor) -> None:
         self._color = QColor(color)
@@ -200,10 +228,19 @@ class LiveSignalCard(QFrame):
         self._build_ui()
 
     def _build_ui(self) -> None:
+        # Spec §B: cards absorb free vertical space so the sparkline can
+        # grow with the viewport. Without Expanding policy the trailing
+        # stretch eats the slack instead.
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(10, 8, 10, 8)
+        # Spec §E: tighter card vertical margins (8 → 6). Horizontal
+        # margins unchanged.
+        outer.setContentsMargins(10, 6, 10, 6)
         outer.setSpacing(4)
 
+        # Spec §C: a single tidy header row —
+        #   [swatch] Name  ——  stats(μ σ max)  raster·unit  value
         header = QHBoxLayout()
         header.setSpacing(8)
         self._swatch_label = QLabel(self)
@@ -213,25 +250,28 @@ class LiveSignalCard(QFrame):
 
         self._name_label = QLabel(self._name, self)
         self._name_label.setObjectName("liveCardName")
-        font = self._name_label.font()
-        font.setBold(True)
-        self._name_label.setFont(font)
+        # QSS owns the typography weight (Spec §D: weight 700); avoid
+        # forcing bold from Python so QSS wins on polish.
         header.addWidget(self._name_label)
+
+        self._stats_label = QLabel("μ — · σ — · max —", self)
+        self._stats_label.setObjectName("liveCardStats")
+        header.addWidget(self._stats_label)
+
+        header.addStretch(1)
+
+        # Spec §C: raster pill + unit sit immediately left of the value
+        # on the right side of the header.
+        self._raster_pill = QLabel(_format_raster_display(self._raster), self)
+        self._raster_pill.setObjectName("liveCardRaster")
+        self._raster_pill.setToolTip(self._raster if self._raster else "")
+        header.addWidget(self._raster_pill)
 
         unit_text = self._unit if self._unit else ""
         self._unit_label = QLabel(unit_text, self)
         self._unit_label.setObjectName("liveCardUnit")
         header.addWidget(self._unit_label)
 
-        self._raster_pill = QLabel(self._raster if self._raster else "--", self)
-        self._raster_pill.setObjectName("liveCardRaster")
-        header.addWidget(self._raster_pill)
-
-        self._stats_label = QLabel("μ — · σ — · max — · since 60s", self)
-        self._stats_label.setObjectName("liveCardStats")
-        header.addWidget(self._stats_label)
-
-        header.addStretch(1)
         self._value_label = QLabel("—", self)
         self._value_label.setObjectName("liveCardValue")
         self._value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -239,17 +279,21 @@ class LiveSignalCard(QFrame):
         header.addWidget(self._value_label)
         outer.addLayout(header)
 
-        status = QHBoxLayout()
-        status.setSpacing(8)
-        self._rec_indicator = QLabel("REC OFF", self)
-        self._rec_indicator.setObjectName("liveCardRecIndicator")
-        status.addWidget(self._rec_indicator)
-        status.addStretch(1)
-        outer.addLayout(status)
+        # Spec §A: per-card REC row is removed entirely. State is
+        # conveyed by the swatch fill + a 1px red left border driven by
+        # the ``recording`` dynamic property on the card itself.
 
         self._spark = Sparkline(self._trace_color, self)
-        outer.addWidget(self._spark)
+        # Stretch=1 so the sparkline absorbs any vertical slack inside
+        # the card's QVBoxLayout (header takes its sizeHint, the rest
+        # belongs to the curve).
+        outer.addWidget(self._spark, 1)
         self._apply_trace_color()
+        # Seed the recording-state dynamic property so QSS selectors
+        # keyed on ``[recording="true"]`` resolve at first polish.
+        self.setProperty("recording", False)
+        # Seed the stats tooltip so the visible label stays terse.
+        self._stats_label.setToolTip(f"Stats window: {STATS_WINDOW_LABEL_IDLE}")
 
     def set_visual_index(self, card_index: int) -> None:
         self._trace_color = _trace_color_for_index(card_index)
@@ -261,13 +305,26 @@ class LiveSignalCard(QFrame):
         self._unit = unit
         self._raster = raster
         self._unit_label.setText(unit if unit else "")
-        self._raster_pill.setText(raster if raster else "--")
+        self._raster_pill.setText(_format_raster_display(raster))
+        self._raster_pill.setToolTip(raster if raster else "")
 
     def _apply_trace_color(self) -> None:
-        color_name = self._trace_color.name()
-        self._swatch_label.setProperty("traceColor", color_name)
+        """Paint the swatch.
+
+        Spec §A: when recording, the swatch turns solid red regardless
+        of the card's trace color. When not recording, the swatch shows
+        the trace color.
+        """
+        if self._recording:
+            fill = _RECORDING_SWATCH_COLOR
+        else:
+            fill = self._trace_color.name()
+        # ``traceColor`` is read by tests + QSS attribute selectors; we
+        # surface the *currently rendered* swatch color here so callers
+        # do not need to peek into stylesheet text.
+        self._swatch_label.setProperty("traceColor", fill)
         self._swatch_label.setStyleSheet(
-            f"background-color: {color_name}; border-radius: 5px;"
+            f"background-color: {fill}; border-radius: 5px;"
         )
 
     # ------------------------------------------------------------------
@@ -282,14 +339,23 @@ class LiveSignalCard(QFrame):
         self._spark.reset()
 
     def set_recording(self, recording: bool, rec_start_ts: float | None = None) -> None:
+        """Flip recording state.
+
+        Spec §A: the per-card REC row is gone; state is encoded in the
+        swatch fill plus a 1 px red left border driven by the dynamic
+        property ``recording`` on the card itself. We re-polish the
+        widget so QSS attribute selectors keyed on ``[recording="true"]``
+        pick up the new value WITHOUT rebuilding the stylesheet.
+        """
         self._recording = bool(recording)
         self._rec_start_ts = rec_start_ts if recording else None
-        if recording:
-            self._rec_indicator.setText("● REC")
-            self._rec_indicator.setStyleSheet("color: #dc2626; font-weight: 700;")
-        else:
-            self._rec_indicator.setText("REC OFF")
-            self._rec_indicator.setStyleSheet("color: #64748b; font-weight: 600;")
+        self.setProperty("recording", self._recording)
+        # Force a stylesheet re-evaluation so the [recording="true"]
+        # selector toggles the red left border immediately.
+        style = self.style()
+        style.unpolish(self)
+        style.polish(self)
+        self._apply_trace_color()
         self.refresh(now_ts=None)
 
     # ------------------------------------------------------------------
@@ -297,7 +363,12 @@ class LiveSignalCard(QFrame):
     # ------------------------------------------------------------------
 
     def refresh(self, *, now_ts: float | None = None) -> None:
-        """Recompute stats label and trim the idle rolling window."""
+        """Recompute stats label and trim the idle rolling window.
+
+        Spec §C: the ``· since <window>`` suffix is removed from the
+        visible stats text and migrates to the stats label's tooltip.
+        The visible label stays terse — ``μ … · σ … · max …``.
+        """
         if self._recording:
             label = STATS_WINDOW_LABEL_RECORDING
             t_min = self._rec_start_ts
@@ -309,10 +380,11 @@ class LiveSignalCard(QFrame):
                 t_min = now_ts - _IDLE_WINDOW_S
         self._spark.trim_to_window(t_min)
         self._spark.request_repaint()
+        self._stats_label.setToolTip(f"Stats window: {label}")
 
         values = [v for _, v in list(self._spark._buffer)]  # noqa: SLF001 - sibling widget.
         if not values:
-            self._stats_label.setText(f"μ — · σ — · max — · {label}")
+            self._stats_label.setText("μ — · σ — · max —")
             return
         n = len(values)
         mean = sum(values) / n
@@ -320,7 +392,7 @@ class LiveSignalCard(QFrame):
         std = math.sqrt(var)
         peak = max(values)
         self._stats_label.setText(
-            f"μ {mean:.2f} · σ {std:.2f} · max {peak:.2f} · {label}"
+            f"μ {mean:.2f} · σ {std:.2f} · max {peak:.2f}"
         )
 
     @property
@@ -360,7 +432,9 @@ class LiveCardGrid(QWidget):
         self._scroll_body.setObjectName("liveCardGridBody")
         self._layout = QVBoxLayout(self._scroll_body)
         self._layout.setContentsMargins(12, 12, 12, 12)
-        self._layout.setSpacing(8)
+        # Spec §E: tighter inter-card spacing so the sparkline gets more
+        # room when N cards stack.
+        self._layout.setSpacing(4)
         self._scroll_area.setWidget(self._scroll_body)
         outer.addWidget(self._scroll_area)
 
@@ -407,7 +481,19 @@ class LiveCardGrid(QWidget):
         Cards retain their buffer if the name still exists in the new
         list — this lets the live stream survive a transient filter
         edit without dropping the last 60 s.
+
+        Spec §F: raw bus time-channels (``t [n:m]``) are silently
+        dropped from the auto-cards seed. The filter lives here at the
+        grid boundary; capture-core still accepts these names if a user
+        re-adds them through the signal selector.
         """
+        # Spec §F: filter at the grid boundary, not per-card.
+        signals = [
+            (name, unit, raster)
+            for (name, unit, raster) in signals
+            if not _TIME_CHANNEL_RE.match(name)
+        ]
+
         existing = self._cards
         self._cards = {}
         # Clear layout (placeholder + previous cards + final stretch).
@@ -418,6 +504,9 @@ class LiveCardGrid(QWidget):
                 w.setParent(None)
 
         if not signals:
+            # Zero-card path: KEEP the trailing stretch so the
+            # disconnected-canvas placeholder does not stretch vertically
+            # (Spec §B + responsive-pane-containers lesson).
             self._layout.addWidget(self._disconnected_canvas)
             self._layout.addStretch(1)
             return
@@ -431,7 +520,10 @@ class LiveCardGrid(QWidget):
                 card.set_visual_index(idx)
             self._cards[name] = card
             self._layout.addWidget(card)
-        self._layout.addStretch(1)
+        # Spec §B: at least one card present — drop the trailing
+        # stretch so vertical viewport space flows into the cards
+        # themselves (Expanding/Expanding) rather than into dead slack
+        # at the bottom of the scroll body.
 
     def push_sample(self, channel: str, timestamp_s: float, value: float) -> None:
         card = self._cards.get(channel)

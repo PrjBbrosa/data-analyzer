@@ -640,6 +640,9 @@ QFrame#liveSignalCard {
     border-radius: 8px;
     background-color: #ffffff;
 }
+QFrame#liveSignalCard[recording="true"] {
+    border-left: 1px solid #dc2626;
+}
 QLabel#liveCardSwatch {
     min-width: 10px;
     max-width: 10px;
@@ -651,7 +654,7 @@ QLabel#liveCardSwatch {
 QLabel#liveCardName {
     color: #111827;
     font-size: 12px;
-    font-weight: 800;
+    font-weight: 700;
 }
 QLabel#liveCardUnit,
 QLabel#liveCardRaster,
@@ -662,7 +665,7 @@ QLabel#liveCardStats {
 }
 QLabel#liveCardValue {
     color: #111827;
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 800;
 }
 

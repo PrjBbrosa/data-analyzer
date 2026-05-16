@@ -31,17 +31,31 @@ def test_live_card_visual_parts_exist(qapp):
     grid.set_signals([("EngSpdAvg", "rpm", "event_10ms")])
 
     card = grid.cards["EngSpdAvg"]
-    assert _label(card, "liveCardSwatch").property("traceColor") == "#2563eb"
+    swatch = _label(card, "liveCardSwatch")
+    assert swatch.property("traceColor") == "#2563eb"
     assert _label(card, "liveCardName").text() == "EngSpdAvg"
     assert _label(card, "liveCardUnit").text() == "rpm"
-    assert _label(card, "liveCardRaster").text() == "event_10ms"
-    assert "since 60s" in _label(card, "liveCardStats").text()
+    # Spec §C: raster pill strips the ``event_`` prefix for display and
+    # exposes the full raster name via the pill's tooltip.
+    raster_pill = _label(card, "liveCardRaster")
+    assert raster_pill.text() == "10 ms"
+    assert raster_pill.toolTip() == "event_10ms"
+
+    stats = _label(card, "liveCardStats")
+    # Spec §C: the "since <window>" suffix moves from the visible text
+    # to the stats label's tooltip. The visible text must NOT carry it.
+    assert "since 60s" not in stats.text()
+    assert "since 60s" in stats.toolTip()
 
     value = _label(card, "liveCardValue")
     assert value.alignment() & Qt.AlignRight
 
     card.set_recording(True, rec_start_ts=0.0)
-    assert "since rec start" in _label(card, "liveCardStats").text()
+    # After flipping into recording state, the same tooltip relocation
+    # applies and the swatch tints solid red per Spec §A.
+    assert "since rec start" not in stats.text()
+    assert "since rec start" in stats.toolTip()
+    assert "#dc2626" in swatch.styleSheet().lower()
 
 
 def test_live_card_grid_scrolls_when_many_channels(qapp):
@@ -64,6 +78,62 @@ def test_live_card_grid_scrolls_when_many_channels(qapp):
     assert scroll is not None, "LiveCardGrid must wrap its cards in a QScrollArea"
     assert scroll.verticalScrollBar().isVisible() is True
     assert grid.sizeHint().height() <= 500
+
+
+def test_time_channels_are_filtered_from_auto_cards(qapp):
+    """Spec §F: raw bus time-channels (``t [n:m]``) never seed a card.
+
+    Normal channel names — including ``engine_speed`` here — must still
+    produce cards. The filter lives at the grid boundary so the same
+    call site is the only decision point. Capture-core is not involved.
+    """
+    grid = LiveCardGrid()
+    grid.set_signals(
+        [
+            ("engine_speed", "rpm", "event_10ms"),
+            ("t [0:100]", "s", None),
+            ("t[1:50]", "s", None),
+            ("t [3:0]", "s", None),
+        ]
+    )
+
+    assert "engine_speed" in grid.cards
+    assert "t [0:100]" not in grid.cards
+    assert "t[1:50]" not in grid.cards
+    assert "t [3:0]" not in grid.cards
+    # No surprise side-effects: only the normal channel survived.
+    assert list(grid.cards.keys()) == ["engine_speed"]
+
+
+def test_sparkline_height_grows_with_card(qapp):
+    """Spec §B: a single card on a tall grid renders a sparkline ≥ 72 px.
+
+    With Expanding/Expanding size policy on both the card and the
+    sparkline AND the trailing ``addStretch(1)`` removed for the
+    one-card path, the curve must claim at least its minimum height
+    after one layout pass.
+    """
+    grid = LiveCardGrid()
+    grid.set_signals([("EngSpdAvg", "rpm", "event_10ms")])
+    # Give the grid enough vertical room that the sparkline floor is
+    # not under-budget from a clipped viewport.
+    grid.resize(400, 400)
+    grid.show()
+    qapp.processEvents()
+    # A second pass after activation lets the layout settle to its
+    # final geometry under offscreen Qt.
+    grid.layout().activate()
+    qapp.processEvents()
+
+    card = grid.cards["EngSpdAvg"]
+    sparkline = card.findChild(QWidget, "liveCardSparkline")
+    assert sparkline is not None
+    # Floor is 72 px per Spec §B; with Expanding on a 400 px grid the
+    # actual height should be considerably larger, but we assert the
+    # contract floor only so the test stays robust across layouts.
+    assert sparkline.height() >= 72, (
+        f"sparkline height={sparkline.height()} below 72px floor"
+    )
 
 
 def test_live_card_colors_are_deterministic(qapp):
