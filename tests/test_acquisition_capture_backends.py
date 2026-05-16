@@ -24,6 +24,7 @@ from mf4_analyzer.acquisition_capture.backends import (
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_capture.writer import Mf4Writer
+from tests._helpers.mf4_factory import write_source_path_mf4
 
 
 THREE = (
@@ -209,6 +210,30 @@ def test_replay_backend_loads_mf4_source_samples(tmp_path: Path):
         sample[1] for sample in replay_source.source_samples
     )
     assert {sample[0] for sample in replay_source.source_samples} == {"A", "B"}
+
+
+def test_replay_backend_deduplicates_source_path_aliases(tmp_path: Path):
+    mf4_path = write_source_path_mf4(
+        tmp_path / "source_alias.mf4",
+        channels=(
+            (
+                "Rte_ActRet_mActiveReturnMotorTorq4Check_xds16",
+                "Nm",
+                "A_side",
+                (1.0, 2.0, 3.0, 4.0),
+            ),
+        ),
+    )
+
+    replay_source = ReplayRecorderBackend.source_from_mf4(mf4_path)
+
+    assert [m.name for m in replay_source.selected] == [
+        "Rte_ActRet_mActiveReturnMotorTorq4Check_xds16"
+    ]
+    assert [m.unit for m in replay_source.selected] == ["Nm"]
+    assert {sample[0] for sample in replay_source.source_samples} == {
+        "Rte_ActRet_mActiveReturnMotorTorq4Check_xds16"
+    }
 
 
 def test_replay_backend_status_and_stop():

@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....io.file_data import _TIME_NAMES
+from ....io.loader import unique_mdf_channel_locations
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
 from .signal_picker import SignalPickerPopup
 
@@ -110,7 +111,7 @@ def _default_probe_signals_for(path: str) -> frozenset:
     mdf = MDF(path)
     try:
         keys = frozenset(
-            name for name in mdf.channels_db.keys()
+            name for name in unique_mdf_channel_locations(mdf).keys()
             if str(name).lower() not in _TIME_NAMES
         )
     finally:

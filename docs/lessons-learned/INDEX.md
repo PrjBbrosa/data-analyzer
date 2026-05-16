@@ -23,6 +23,7 @@ lesson by default.
 | [Acquisition Validation Evidence Gates](codex-acquisition-validation-evidence-gates.md) | Acquisition validation docs, preflight/regression tooling, smoke runners, or P0 probe evidence. | See lesson |
 | [Acquisition Threshold Defaults Use Current Values](codex-acquisition-threshold-defaults-use-current-values.md) | Acquisition Cockpit editable thresholds, settings auto-load, `SessionConfig` defaults, health helper defaults, or preflight UI defaults. | See lesson |
 | [Visual Parity Requires Rendered Screenshot](codex-visual-parity-rendered-screenshot.md) | Touching PyQt visual parity, QSS, toolbar controls, compact chips, or a UI implementation that is supposed to match an HTML prototype or screenshot. | See lesson |
+| [Codex MF4 Source Path Alias Dedupe](codex-mf4-source-path-alias-dedupe.md) | Touching MF4 channel enumeration, analyzer channel lists, batch MF4 | See lesson |
 
 ## Selection Rules
 
