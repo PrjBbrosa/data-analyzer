@@ -1,0 +1,51 @@
+/begin IF_DATA XCP
+  /begin PROTOCOL_LAYER
+    0x0100  /* XCP_PROTOCOL_VERSION */
+    100     /* T1 timeout */
+    100     /* T2 */
+    100     /* T3 */
+    100     /* T4 */
+    100     /* T5 */
+    100     /* T6 */
+    100     /* T7 */
+    8       /* MAX_CTO */
+    8       /* MAX_DTO */
+    BYTE_ORDER_MSB_LAST
+    ADDRESS_GRANULARITY_BYTE
+  /end PROTOCOL_LAYER
+  /begin DAQ
+    DYNAMIC                 /* DAQ_CONFIG_TYPE */
+    0                       /* MAX_DAQ */
+    1                       /* MAX_EVENT_CHANNEL */
+    0                       /* MIN_DAQ */
+    OPTIMISATION_TYPE_DEFAULT
+    ADDRESS_EXTENSION_FREE
+    IDENTIFICATION_FIELD_TYPE_ABSOLUTE
+    GRANULARITY_ODT_ENTRY_SIZE_DAQ_BYTE
+    8                       /* MAX_ODT_ENTRY_SIZE_DAQ */
+    OVERLOAD_INDICATION_EVENT
+    /begin TIMESTAMP_SUPPORTED
+      0x0002                /* TIMESTAMP_TICKS */
+      SIZE_WORD
+      UNIT_1US
+      TIMESTAMP_FIXED
+    /end TIMESTAMP_SUPPORTED
+    /begin EVENT
+      "10ms"                /* long name */
+      "10ms"                /* short name */
+      0                     /* channel number */
+      DAQ
+      8                     /* max ODT entries */
+      10                    /* time cycle */
+      6                     /* time unit: 6 = 1ms exponent */
+      0                     /* priority */
+    /end EVENT
+  /end DAQ
+  /begin XCP_ON_CAN
+    0x0100
+    CAN_ID_BROADCAST 0x500
+    CAN_ID_MASTER 0x500
+    CAN_ID_SLAVE 0x501
+    BAUDRATE 500000
+  /end XCP_ON_CAN
+/end IF_DATA

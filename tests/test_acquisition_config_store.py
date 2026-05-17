@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from mf4_analyzer.acquisition_capture.config_store import (
+    CONFIG_VERSION,
     ConfigStore,
     ConfigSchemaError,
     load_or_default,
@@ -112,7 +113,7 @@ def test_step4_in_memory_default_when_nothing_found(tmp_path):
     )
     assert store.pinned is False
     assert store.source_path is None
-    assert store.version == 1
+    assert store.version == CONFIG_VERSION
     # in-memory default is empty selection/favorites
     assert store.selected == []
     assert store.favorites == []
@@ -159,10 +160,10 @@ threshold_overrides: {}
 # ---------------------------------------------------------------------------
 
 
-def test_version_must_be_1(tmp_path):
+def test_future_version_rejected(tmp_path):
     cfg = tmp_path / "acquisition_config.yaml"
     cfg.write_text(
-        """version: 2
+        """version: 3
 a2l_path: "x"
 favorites: []
 selected: []

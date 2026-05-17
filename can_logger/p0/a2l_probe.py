@@ -15,12 +15,14 @@ construction call-sites in tests continue to work.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from pya2l import DB
 import pya2l.model as model
+
+from can_logger.p0.ifdata_xcp import parse_ifdata_xcp, parse_measurement_events
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,31 @@ def _address_of(measurement) -> int:
     return int(address)
 
 
+def _fill_ifdata_events(
+    raw_text: str,
+    measurements: Sequence[MeasurementSummary],
+) -> tuple[
+    list[MeasurementSummary],
+    dict[str, int],
+    dict[str, tuple[str, ...]],
+    bool,
+]:
+    """Fill DAQ event fields from raw ``IF_DATA XCP`` text."""
+
+    ifdata_blocks = parse_ifdata_xcp(raw_text)
+    event_capacity: dict[str, int] = {}
+    for block in ifdata_blocks:
+        for event in block.available_events:
+            event_capacity.setdefault(event.name, event.max_odt_entries)
+
+    measurement_events = dict(parse_measurement_events(raw_text))
+    updated = [
+        replace(m, available_events=measurement_events.get(m.name, ()))
+        for m in measurements
+    ]
+    return updated, event_capacity, measurement_events, bool(event_capacity)
+
+
 def load_measurement_summary(a2l_path: str, *, limit: int = 20) -> A2LSummary:
     path = Path(a2l_path)
     if not path.exists():
@@ -89,20 +116,26 @@ def load_measurement_summary(a2l_path: str, *, limit: int = 20) -> A2LSummary:
             )
             for m in rows
         ]
-        # DAQ event extraction lives in a separate helper so this module
-        # can be unit-tested without a real A2L. When no DAQ events are
-        # found (CAL-only A2L), ``a2l_has_daq_events`` stays False and
-        # the spec §Left Pane fallback is triggered.
-        return A2LSummary(
-            path=str(path),
-            total_measurements=total,
-            measurements=measurements,
-            event_capacity={},
-            measurement_events={},
-            a2l_has_daq_events=False,
-        )
     finally:
         db.close()
+
+    try:
+        raw_text = path.read_text(encoding="latin-1", errors="replace")
+    except OSError:
+        raw_text = ""
+    measurements, event_capacity, measurement_events, has_daq = _fill_ifdata_events(
+        raw_text,
+        measurements,
+    )
+
+    return A2LSummary(
+        path=str(path),
+        total_measurements=total,
+        measurements=measurements,
+        event_capacity=event_capacity,
+        measurement_events=measurement_events,
+        a2l_has_daq_events=has_daq,
+    )
 
 
 def main() -> int:

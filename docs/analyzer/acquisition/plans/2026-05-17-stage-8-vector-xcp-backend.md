@@ -104,12 +104,12 @@ pyxcp>=0.22.0; sys_platform == "win32"
 
 - [ ] **Step 2: Verify macOS install still works**
 
-Run: `pip install -r requirements.txt --dry-run 2>&1 | tail -20`
+Run: `.venv/bin/python -m pip install -r requirements.txt --dry-run 2>&1 | tail -20`
 Expected: no errors; the two windows-only lines are skipped on macOS per PEP 508 marker.
 
 - [ ] **Step 3: Verify Windows-side import is reachable (smoke, not full install)**
 
-Run: `python -c "import sys; sys.platform='win32'; print('marker syntax OK')"`
+Run: `.venv/bin/python -c "import sys; sys.platform='win32'; print('marker syntax OK')"`
 (This only verifies the requirements.txt parses; full install validated in PR-4 prep.)
 
 - [ ] **Step 4: Commit**
@@ -187,7 +187,7 @@ def test_if_data_xcp_carries_all_required_fields():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest tests/test_ifdata_xcp_parser.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_ifdata_xcp_parser.py -v`
 Expected: FAIL with "No module named 'can_logger.p0.ifdata_xcp'".
 
 - [ ] **Step 3: Create the dataclass module**
@@ -242,7 +242,7 @@ class IfDataXcp:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest tests/test_ifdata_xcp_parser.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_ifdata_xcp_parser.py -v`
 Expected: 2 passed.
 
 - [ ] **Step 5: Commit**
@@ -359,7 +359,7 @@ def test_parse_classic_can_single_event():
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `pytest tests/test_ifdata_xcp_parser.py::test_parse_classic_can_single_event -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_ifdata_xcp_parser.py::test_parse_classic_can_single_event -v`
 Expected: FAIL with "cannot import name 'parse_ifdata_xcp'".
 
 - [ ] **Step 4: Implement the parser**
@@ -591,7 +591,7 @@ def parse_ifdata_xcp(a2l_text: str) -> list[IfDataXcp]:
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `pytest tests/test_ifdata_xcp_parser.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_ifdata_xcp_parser.py -v`
 Expected: 3 passed.
 
 - [ ] **Step 6: Commit**
@@ -757,7 +757,7 @@ def test_parse_no_timestamp_big_endian():
 
 - [ ] **Step 5: Run tests; expect mixed results**
 
-Run: `pytest tests/test_ifdata_xcp_parser.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_ifdata_xcp_parser.py -v`
 Expected: most pass, but watch for any FAIL — if a token alias is missing in the parser, add it to the appropriate `_*_TOKENS` dict in `ifdata_xcp.py` and re-run. **Do NOT modify the test to make it pass; modify the parser.**
 
 - [ ] **Step 6: Once all green, commit**
@@ -902,11 +902,10 @@ In `can_logger/p0/a2l_probe.py`, replace the `return A2LSummary(...)` block at t
 
     event_capacity: dict[str, int] = {}
     has_daq = False
-    if ifdata_blocks:
-        primary = ifdata_blocks[0]
-        for ev in primary.available_events:
+    for block in ifdata_blocks:
+        for ev in block.available_events:
             event_capacity[ev.name] = ev.max_odt_entries
-        has_daq = bool(primary.available_events)
+            has_daq = True
 
     # Stage 8 v2 (E-1 fix): per-MEASUREMENT IF_DATA walk so that
     # MeasurementSummary.available_events and
@@ -961,7 +960,7 @@ load_measurement_summary integration test above.
 
 - [ ] **Step 5: Run all acquisition tests**
 
-Run: `pytest tests/test_acquisition_a2l_events.py tests/test_ifdata_xcp_parser.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_acquisition_a2l_events.py tests/test_ifdata_xcp_parser.py -v`
 Expected: all pass (the `with_daq.a2l` test is skipped until O-1).
 
 - [ ] **Step 6: Commit**
@@ -1033,7 +1032,7 @@ def test_from_dict_round_trip():
 
 - [ ] **Step 2: Run; expect import failure**
 
-Run: `pytest tests/test_transport_config.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_transport_config.py -v`
 Expected: FAIL with "No module named 'mf4_analyzer.acquisition_capture.transport_config'".
 
 - [ ] **Step 3: Implement**
@@ -1075,7 +1074,7 @@ class TransportConfig:
 
 - [ ] **Step 4: Run tests**
 
-Run: `pytest tests/test_transport_config.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_transport_config.py -v`
 Expected: 3 passed.
 
 - [ ] **Step 5: Commit**
@@ -1118,9 +1117,16 @@ Create `tests/test_config_store_migration.py`:
 from pathlib import Path
 
 from mf4_analyzer.acquisition_capture.config_store import (
+    load_or_default,
+    _write_config_file,
     ConfigStore,
     CONFIG_VERSION,
 )
+from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+
+
+def _load(path: Path) -> ConfigStore:
+    return load_or_default(project_root=path.parent, cli_config_path=path)
 
 
 def test_v1_config_loads_with_default_transport(tmp_path):
@@ -1131,9 +1137,11 @@ def test_v1_config_loads_with_default_transport(tmp_path):
         "version: 1\n"
         'a2l_path: "fake.a2l"\n'
         "favorites: []\n"
-        "selection: []\n"
+        "selected: []\n"
+        "filter_state: {}\n"
+        "threshold_overrides: {}\n"
     )
-    store = ConfigStore.load(cfg)
+    store = _load(cfg)
     assert store.transport.app_name == "Python"
     assert store.transport.bitrate == 500_000
     assert store.version == CONFIG_VERSION  # now 2
@@ -1145,31 +1153,33 @@ def test_v2_config_round_trip(tmp_path):
         "version: 2\n"
         'a2l_path: "fake.a2l"\n'
         "favorites: []\n"
-        "selection: []\n"
+        "selected: []\n"
+        "filter_state: {}\n"
+        "threshold_overrides: {}\n"
         "transport:\n"
         '  app_name: "CANalyzer"\n'
         "  channel: 1\n"
         "  can_fd: true\n"
         "  bitrate: 1000000\n"
     )
-    store = ConfigStore.load(cfg)
+    store = _load(cfg)
     assert store.transport.app_name == "CANalyzer"
     assert store.transport.can_fd is True
     assert store.transport.bitrate == 1_000_000
 
 
 def test_save_then_load_preserves_transport(tmp_path):
-    from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
     cfg = tmp_path / "acquisition_config.yaml"
     store = ConfigStore(
-        path=cfg,
+        pinned=True,
+        source_path=cfg.resolve(),
         a2l_path="x.a2l",
         favorites=[],
-        selection=[],
+        selected=[],
         transport=TransportConfig(app_name="CANoe", channel=2, can_fd=True),
     )
-    store.save()
-    reloaded = ConfigStore.load(cfg)
+    _write_config_file(cfg, store)
+    reloaded = _load(cfg)
     assert reloaded.transport.app_name == "CANoe"
     assert reloaded.transport.channel == 2
     assert reloaded.transport.can_fd is True
@@ -1177,7 +1187,7 @@ def test_save_then_load_preserves_transport(tmp_path):
 
 - [ ] **Step 3: Run; expect failures**
 
-Run: `pytest tests/test_config_store_migration.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_config_store_migration.py -v`
 Expected: 3 failures (transport field doesn't exist, migration not present).
 
 - [ ] **Step 4: Implement migration in config_store.py**
@@ -1207,7 +1217,7 @@ In `mf4_analyzer/acquisition_capture/config_store.py`:
 
 - [ ] **Step 5: Run all config tests**
 
-Run: `pytest tests/test_acquisition_config_store.py tests/test_config_store_migration.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_acquisition_config_store.py tests/test_config_store_migration.py -v`
 Expected: all pass, including existing v1 tests (migration is non-destructive).
 
 - [ ] **Step 6: Commit**
@@ -1223,13 +1233,13 @@ git commit -m "feat(acquisition): config_store v1→v2 migration adds transport 
 
 - [ ] **Step 1: Run the full acquisition test suite**
 
-Run: `pytest tests/test_acquisition* tests/test_ifdata_xcp_parser.py tests/test_transport_config.py tests/test_config_store_migration.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_acquisition* tests/test_ifdata_xcp_parser.py tests/test_transport_config.py tests/test_config_store_migration.py -v`
 Expected: all green, no skips except `with_daq.a2l` fixture-dependent test (O-1).
 
 - [ ] **Step 2: Verify no regressions in cockpit smoke**
 
-Run: `python -m mf4_analyzer.acquisition_ui --demo --backend fake --headless`
-(Exit cleanly after 2 s with the existing smoke script.)
+Run: `QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m mf4_analyzer.acquisition_ui --demo --self-test`
+(Run the existing deterministic smoke path and exit cleanly.)
 Expected: no crashes; transport field is auto-defaulted.
 
 - [ ] **Step 3: Open PR**
@@ -1248,9 +1258,9 @@ gh pr create --title "Stage 8a: foundation — IF_DATA XCP parser + transport co
 - Subsequent PRs (8b/c/d) are unblocked
 
 ## Test plan
-- [x] pytest tests/test_ifdata_xcp_parser.py
-- [x] pytest tests/test_transport_config.py
-- [x] pytest tests/test_config_store_migration.py
+- [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_ifdata_xcp_parser.py -v`
+- [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_transport_config.py -v`
+- [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_config_store_migration.py -v`
 - [x] no regression in tests/test_acquisition_*
 EOF
 )"
@@ -1350,8 +1360,9 @@ def test_single_event_three_measurements_pack_one_odt():
         _sel("c", 0x1004, "10ms"),
     )
     meas = _measurements(("a", 0x1000), ("b", 0x1002), ("c", 0x1004))
-    m = build_daq_map(selected, _ifdata(), meas)
-    # 1 daq list, 1 odt, 3 entries; offsets: 1(pid)+2(ts)=3, 5, 7
+    m = build_daq_map(selected, _ifdata(max_dto=9), meas)
+    # MAX_DTO=9 leaves 6 payload bytes after pid(1)+ts(2), so all
+    # three UWORD measurements fit in one ODT at offsets 3, 5, 7.
     assert set(m.pid_to_odt.keys()) == {0}
     daq_list_count = len({d for d, _ in m.entries.keys()})
     assert daq_list_count == 1
@@ -1409,7 +1420,7 @@ def test_build_daq_map_raises_when_measurement_lookup_missing():
 
 - [ ] **Step 2: Run; expect import failure**
 
-Run: `pytest tests/test_daq_map_builder.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_daq_map_builder.py -v`
 Expected: FAIL with "No module named '...daq_map'".
 
 - [ ] **Step 3: Implement the builder**
@@ -1575,8 +1586,8 @@ def build_daq_map(
 
 - [ ] **Step 4: Verify tests pass**
 
-Run: `pytest tests/test_daq_map_builder.py -v`
-Expected: 3 passed.
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_daq_map_builder.py -v`
+Expected: 5 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1611,8 +1622,8 @@ def _map_single():
         pid_to_odt={0: (0, 0)},
         entries={
             (0, 0): (
-                OdtEntry("a", offset=3, size=2, datatype="u16"),
-                OdtEntry("b", offset=5, size=2, datatype="s16"),
+                OdtEntry("a", offset=3, size=2, datatype="UWORD", address=0x1000),
+                OdtEntry("b", offset=5, size=2, datatype="s16", address=0x1002),
             ),
         },
         event_for_daq={0: 0},
@@ -1657,8 +1668,8 @@ def test_decode_no_timestamp_uses_base():
         pid_to_odt={0: (0, 0)},
         entries={
             (0, 0): (
-                OdtEntry("a", offset=1, size=2, datatype="u16"),
-                OdtEntry("b", offset=3, size=2, datatype="s16"),
+                OdtEntry("a", offset=1, size=2, datatype="u16", address=0x1000),
+                OdtEntry("b", offset=3, size=2, datatype="s16", address=0x1002),
             ),
         },
         event_for_daq={0: 0},
@@ -1681,7 +1692,7 @@ def test_decode_big_endian_signed_32():
         pid_to_odt={0: (0, 0)},
         entries={
             (0, 0): (
-                OdtEntry("x", offset=1, size=4, datatype="s32"),
+                OdtEntry("x", offset=1, size=4, datatype="SLONG", address=0x1000),
             ),
         },
         event_for_daq={0: 0},
@@ -1710,7 +1721,7 @@ def test_unknown_pid_yields_nothing():
 
 - [ ] **Step 2: Run; expect failure**
 
-Run: `pytest tests/test_dto_decode.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_dto_decode.py -v`
 Expected: FAIL with "No module named '...dto_decode'".
 
 - [ ] **Step 3: Implement**
@@ -1731,6 +1742,11 @@ from mf4_analyzer.acquisition_capture.daq_map import DaqMap
 
 
 _FMT_BY_DATATYPE = {
+    "ubyte": "B", "sbyte": "b",
+    "uword": "H", "sword": "h",
+    "ulong": "I", "slong": "i",
+    "a_uint64": "Q", "a_int64": "q",
+    "float32_ieee": "f", "float64_ieee": "d",
     "u8": "B", "s8": "b",
     "u16": "H", "s16": "h",
     "u32": "I", "s32": "i",
@@ -1780,7 +1796,7 @@ def decode_dto(
 
 - [ ] **Step 4: Verify tests pass**
 
-Run: `pytest tests/test_dto_decode.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_dto_decode.py -v`
 Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
@@ -1907,7 +1923,7 @@ def test_start_raises_on_master_connect_failure():
 
 - [ ] **Step 2: Run; expect import failure**
 
-Run: `pytest tests/test_xcp_daq_session.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_xcp_daq_session.py -v`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement**
@@ -1921,8 +1937,10 @@ Spec: docs/analyzer/acquisition/specs/2026-05-17-stage-8-vector-xcp-backend-spec
 """
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
+from can_logger.p0.a2l_probe import MeasurementSummary
 from can_logger.p0.ifdata_xcp import IfDataXcp
 from mf4_analyzer.acquisition_capture.daq_map import DaqMap, build_daq_map
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
@@ -2039,7 +2057,7 @@ of the initial dataclass definition.
 
 - [ ] **Step 5: Run tests**
 
-Run: `pytest tests/test_daq_map_builder.py tests/test_dto_decode.py tests/test_xcp_daq_session.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_daq_map_builder.py tests/test_dto_decode.py tests/test_xcp_daq_session.py -v`
 Expected: all pass. (If daq_map tests fail due to the new field, add `address=...` to expected OdtEntry constructions in those tests.)
 
 - [ ] **Step 6: Commit**
@@ -2213,7 +2231,7 @@ def test_locked_daq_ecu_rejects_unlock_raises():
 
 - [ ] **Step 2: Run; expect import failure**
 
-Run: `pytest tests/test_xcp_auth.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_xcp_auth.py -v`
 Expected: FAIL with "No module named '...xcp_auth'".
 
 - [ ] **Step 3: Implement the helper module**
@@ -2331,7 +2349,7 @@ def unlock_resources_if_needed(
 
 - [ ] **Step 4: Run tests**
 
-Run: `pytest tests/test_xcp_auth.py tests/test_xcp_daq_session.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_xcp_auth.py tests/test_xcp_daq_session.py -v`
 Expected: all pass. (The Task 11 session tests already use
 `resource=0x00` to skip the auth path; the new auth tests cover the
 locked path independently.)
@@ -2427,9 +2445,7 @@ def test_lifecycle_on_mock_transport():
          patch("mf4_analyzer.acquisition_capture.backends._import_xcp_master") as ix:
         # Build the mock bus + master
         mock_bus = MagicMock()
-        ic.return_value = MagicMock(
-            interfaces=MagicMock(vector=MagicMock(VectorBus=lambda **kw: mock_bus))
-        )
+        ic.return_value = MagicMock(Bus=lambda **kw: mock_bus)
         mock_master = MagicMock()
         # E-5: RESOURCE=0x00 → DAQ unlocked → seed&key skipped.
         mock_master.connect.return_value = MagicMock(resource=0x00)
@@ -2533,7 +2549,7 @@ def test_non_windows_raises_unavailable():
 
 - [ ] **Step 2: Run; expect failure**
 
-Run: `pytest tests/test_vector_xcp_backend.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_vector_xcp_backend.py -v`
 Expected: FAIL (`RecorderBackendUnavailableError` not defined; `_import_can` not present; backend still raises `NotImplementedError`).
 
 - [ ] **Step 3: Implement the new backend**
@@ -2682,8 +2698,8 @@ Note: the actual DTO capture loop (`master.fetch()` driving `dto_decode` driving
 
 - [ ] **Step 4: Run tests**
 
-Run: `pytest tests/test_vector_xcp_backend.py -v`
-Expected: 2 passed.
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_vector_xcp_backend.py -v`
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2754,7 +2770,7 @@ def test_poll_returns_decoded_samples_from_dto_frames():
 
 - [ ] **Step 2: Run; expect failure**
 
-Run: `pytest tests/test_vector_xcp_backend.py::test_poll_returns_decoded_samples_from_dto_frames -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_vector_xcp_backend.py::test_poll_returns_decoded_samples_from_dto_frames -v`
 Expected: FAIL (capture thread doesn't exist yet).
 
 - [ ] **Step 3: Add the capture thread**
@@ -2817,8 +2833,8 @@ In `stop()`, before disconnecting, signal the thread to stop:
 
 - [ ] **Step 4: Run tests**
 
-Run: `pytest tests/test_vector_xcp_backend.py -v`
-Expected: 3 passed.
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_vector_xcp_backend.py -v`
+Expected: 5 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2833,13 +2849,13 @@ git commit -m "feat(acquisition): capture thread feeds dto_decode into poll() qu
 
 - [ ] **Step 1: Run full acquisition suite**
 
-Run: `pytest tests/test_acquisition* tests/test_ifdata_xcp_parser.py tests/test_transport_config.py tests/test_config_store_migration.py tests/test_daq_map_builder.py tests/test_dto_decode.py tests/test_xcp_daq_session.py tests/test_xcp_auth.py tests/test_vector_xcp_backend.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_acquisition* tests/test_ifdata_xcp_parser.py tests/test_transport_config.py tests/test_config_store_migration.py tests/test_daq_map_builder.py tests/test_dto_decode.py tests/test_xcp_daq_session.py tests/test_xcp_auth.py tests/test_vector_xcp_backend.py -v`
 Expected: all green. (`tests/test_xcp_auth.py` was added by Task 11a
 for the Seed&Key flow — E-5 fix.)
 
 - [ ] **Step 2: Verify CLI smoke still works with fake backend**
 
-Run: `python -m mf4_analyzer.acquisition_capture --backend fake --duration 2 --output /tmp/cap.mf4 --signals EngSpdAvg,EngTrqAct,VehSpeedRaw`
+Run: `PYTHONPATH=. .venv/bin/python -m mf4_analyzer.acquisition_capture --backend fake --duration 2 --output /tmp/cap.mf4 --signals EngSpdAvg,EngTrqAct,VehSpeedRaw`
 Expected: exits 0, creates `/tmp/cap.mf4`.
 
 - [ ] **Step 3: Open PR**
@@ -2859,11 +2875,11 @@ gh pr create --title "Stage 8b: backend core — XcpDaqSession + VectorXcpRecord
 - O-2 / O-3 / O-4 / O-5: gated to PR-3 / PR-4
 
 ## Test plan
-- [x] pytest tests/test_daq_map_builder.py
-- [x] pytest tests/test_dto_decode.py
-- [x] pytest tests/test_xcp_daq_session.py
-- [x] pytest tests/test_xcp_auth.py
-- [x] pytest tests/test_vector_xcp_backend.py (incl. CaptureController round-trip)
+- [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_daq_map_builder.py -v`
+- [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_dto_decode.py -v`
+- [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_xcp_daq_session.py -v`
+- [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_xcp_auth.py -v`
+- [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_vector_xcp_backend.py -v` (incl. CaptureController round-trip)
 - [x] CLI smoke with fake backend exits 0 and writes MF4
 EOF
 )"
@@ -3073,7 +3089,7 @@ def test_test_xcp_connection_bus_open_failure_reports_red():
 
 - [ ] **Step 2: Run; expect failure**
 
-Run: `pytest tests/test_vector_hw_probe.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_vector_hw_probe.py -v`
 Expected: FAIL with "No module named '...vector_hw_probe'".
 
 - [ ] **Step 3: Implement vector_hw_probe**
@@ -3290,7 +3306,7 @@ calls anywhere else in this module) — that's the E-6 guarantee that
 
 - [ ] **Step 5: Run tests**
 
-Run: `pytest tests/test_vector_hw_probe.py tests/test_acquisition_capture_health.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_vector_hw_probe.py tests/test_acquisition_capture_health.py -v`
 Expected: all pass.
 
 - [ ] **Step 6: Wire vector_hw_probe into HealthAggregator**
@@ -3318,7 +3334,7 @@ In whatever code constructs `HealthAggregator(_hw_probe=...)`, ensure the probe 
 
 - [ ] **Step 7: Run all health tests**
 
-Run: `pytest tests/test_acquisition_capture_health.py tests/test_vector_hw_probe.py -v`
+Run: `PYTHONPATH=. .venv/bin/python -m pytest tests/test_acquisition_capture_health.py tests/test_vector_hw_probe.py -v`
 Expected: pass.
 
 - [ ] **Step 8: Commit**
@@ -3334,13 +3350,13 @@ git commit -m "feat(acquisition): vector_hw_probe replaces hardcoded HW chip stu
 
 **Files:**
 - Modify: `mf4_analyzer/acquisition_ui/settings_dialog.py`
-- Create: `tests/ui/test_settings_transport_tab.py`
+- Create: `tests/acquisition_ui/test_settings_transport_tab.py`
 
 **Operator deps:** none; O-2 helpful for visual verification.
 
 - [ ] **Step 1: Write the failing widget test**
 
-Create `tests/ui/test_settings_transport_tab.py`:
+Create `tests/acquisition_ui/test_settings_transport_tab.py`:
 
 ```python
 """SettingsDialog Transport tab — field round-trip and Test Connection button.
@@ -3494,7 +3510,7 @@ def test_test_connection_hw_failure_skips_xcp_probe(qtbot):
 
 - [ ] **Step 2: Run; expect failure**
 
-Run: `pytest tests/ui/test_settings_transport_tab.py -v`
+Run: `QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/acquisition_ui/test_settings_transport_tab.py -v`
 Expected: FAIL (Transport tab doesn't exist).
 
 - [ ] **Step 3: Implement the Transport tab widget**
@@ -3592,13 +3608,13 @@ matching the cockpit's existing language style.)
 
 - [ ] **Step 4: Run UI tests**
 
-Run: `pytest tests/ui/test_settings_transport_tab.py -v`
+Run: `QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/acquisition_ui/test_settings_transport_tab.py -v`
 Expected: 2 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add mf4_analyzer/acquisition_ui/settings_dialog.py tests/ui/test_settings_transport_tab.py
+git add mf4_analyzer/acquisition_ui/settings_dialog.py tests/acquisition_ui/test_settings_transport_tab.py
 git commit -m "feat(cockpit): Settings dialog adds Transport tab with Test Connection"
 ```
 
@@ -3608,44 +3624,41 @@ git commit -m "feat(cockpit): Settings dialog adds Transport tab with Test Conne
 
 **Files:**
 - Modify: `mf4_analyzer/acquisition_ui/main_window.py`
-- Create: `tests/ui/test_main_window_transport_chip.py`
+- Create: `tests/acquisition_ui/test_main_window_transport_chip.py`
 
 **Operator deps:** none.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/ui/test_main_window_transport_chip.py`:
+Create `tests/acquisition_ui/test_main_window_transport_chip.py`:
 
 ```python
-import pytest
-
-
-pytestmark = pytest.mark.usefixtures("qtbot")
+from PyQt5.QtWidgets import QLabel
 
 
 def test_transport_chip_shows_disconnected_when_no_config(qtbot):
-    from mf4_analyzer.acquisition_ui.main_window import MainWindow
-    win = MainWindow(demo=True)
+    from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
+    win = CockpitMainWindow()
     qtbot.addWidget(win)
-    chip = win.findChild(object, "transport_status_chip")
+    chip = win.findChild(QLabel, "cockpitTransportStatusChip")
     assert chip is not None
     assert "未配置" in chip.text() or "传输" in chip.text()
 
 
 def test_transport_chip_updates_when_transport_changes(qtbot):
-    from mf4_analyzer.acquisition_ui.main_window import MainWindow
+    from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
     from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
-    win = MainWindow(demo=True)
+    win = CockpitMainWindow()
     qtbot.addWidget(win)
     win.set_transport(TransportConfig(app_name="CANalyzer", channel=1))
-    chip = win.findChild(object, "transport_status_chip")
+    chip = win.findChild(QLabel, "cockpitTransportStatusChip")
     assert "CANalyzer" in chip.text()
     assert "Ch=1" in chip.text() or "1" in chip.text()
 ```
 
 - [ ] **Step 2: Run; expect failure**
 
-Run: `pytest tests/ui/test_main_window_transport_chip.py -v`
+Run: `QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/acquisition_ui/test_main_window_transport_chip.py -v`
 Expected: FAIL.
 
 - [ ] **Step 3: Add the chip to MainWindow**
@@ -3655,7 +3668,7 @@ In `mf4_analyzer/acquisition_ui/main_window.py`:
 1. Add a `QLabel` near the existing toolbar widgets:
    ```python
    self._transport_chip = QLabel("传输未配置", self)
-   self._transport_chip.setObjectName("transport_status_chip")
+   self._transport_chip.setObjectName("cockpitTransportStatusChip")
    self._transport_chip.setStyleSheet(
        "QLabel { padding: 2px 8px; border-radius: 8px; "
        "background: #f0c040; color: #333; }"
@@ -3686,19 +3699,19 @@ In `mf4_analyzer/acquisition_ui/main_window.py`:
    ```
 3. Wire the chip click to open Settings → Transport tab:
    ```python
-   self._transport_chip.mousePressEvent = lambda _ev: self._open_settings(tab="transport")
+   self._transport_chip.mousePressEvent = lambda _ev: self._open_settings_dialog(initial_tab="transport")
    ```
    (Adapt to existing `_open_settings` signature.)
 
 - [ ] **Step 4: Run tests**
 
-Run: `pytest tests/ui/test_main_window_transport_chip.py -v`
+Run: `QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/acquisition_ui/test_main_window_transport_chip.py -v`
 Expected: 2 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add mf4_analyzer/acquisition_ui/main_window.py tests/ui/test_main_window_transport_chip.py
+git add mf4_analyzer/acquisition_ui/main_window.py tests/acquisition_ui/test_main_window_transport_chip.py
 git commit -m "feat(cockpit): toolbar transport status chip"
 ```
 
@@ -3708,12 +3721,12 @@ git commit -m "feat(cockpit): toolbar transport status chip"
 
 - [ ] **Step 1: Run full suite + UI**
 
-Run: `pytest tests/ -v --ignore=tests/integration`
+Run: `QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/ -v --ignore=tests/integration`
 Expected: green; allow `qtbot` skip on headless CI if not configured.
 
 - [ ] **Step 2: Cockpit smoke (manual visual)**
 
-Run: `python -m mf4_analyzer.acquisition_ui --demo --backend fake`
+Run: `PYTHONPATH=. .venv/bin/python -m mf4_analyzer.acquisition_ui --demo`
 Visual checks:
 - Toolbar shows "传输未配置" yellow chip on first launch (no config).
 - Open Settings → Transport tab present with all fields.
@@ -3735,9 +3748,9 @@ gh pr create --title "Stage 8c: cockpit UI — Transport settings + HW probe + s
 - O-1, O-3, O-4, O-5: all needed for PR-4
 
 ## Test plan
-- [x] pytest tests/test_vector_hw_probe.py
-- [x] pytest tests/ui/test_settings_transport_tab.py
-- [x] pytest tests/ui/test_main_window_transport_chip.py
+- [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_vector_hw_probe.py -v`
+- [x] `QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/acquisition_ui/test_settings_transport_tab.py -v`
+- [x] `QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest tests/acquisition_ui/test_main_window_transport_chip.py -v`
 - [x] cockpit --demo on macOS shows yellow chip and Settings tab
 EOF
 )"
@@ -3778,12 +3791,12 @@ hardware + powered ECU.
   in run position (if applicable).
 - [ ] **O-5**: Decided whether first session is classic CAN or CAN-FD.
   Recommended: classic CAN 500k first.
-- [ ] `pip install python-can[vector] pyxcp` succeeded on this PC.
+- [ ] `.\.venv\Scripts\python.exe -m pip install "python-can[vector]" pyxcp` succeeded on this PC.
 
 ## Test sequence
 
 ### Step 1 — Cold connection
-1. Launch cockpit: `python -m mf4_analyzer.acquisition_ui`.
+1. Launch cockpit: `.\.venv\Scripts\python.exe -m mf4_analyzer.acquisition_ui`.
 2. Open Settings → Transport. Enter app_name, channel, bitrate from O-2.
 3. Click **Test Connection**.
 4. **Expected**: green toast "OK · driver vX.Y.Z".
@@ -3842,7 +3855,7 @@ O-5 = CAN-FD) green at least once. File the captured MF4s under
 ## After acceptance
 
 - [ ] Tag the merge commit `stage-8-bench-validated`
-- [ ] Update `MEMORY.md` with a note linking to this runbook
+- [ ] Record a bench evidence note under `docs/analyzer/acquisition/evidence/stage-8/<YYYY-MM-DD>/` (memory updates require an explicit user request)
 - [ ] Close all open O-* items in the parent spec
 ```
 
@@ -3903,9 +3916,9 @@ git tag stage-8-bench-validated
 git push --tags
 ```
 
-- [ ] **Step 7: Update MEMORY.md**
+- [ ] **Step 7: Record bench evidence**
 
-Add an entry pointing to the runbook and the merged PRs.
+Add a short evidence note pointing to the runbook, captured MF4s, and merged PRs.
 
 - [ ] **Step 8: Open final PR**
 

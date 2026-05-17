@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+
 # ---------------------------------------------------------------------------
 # Per-project config schema.
 # ---------------------------------------------------------------------------
@@ -53,10 +55,11 @@ ALLOWED_TOP_LEVEL = frozenset({
     "selected",
     "filter_state",
     "threshold_overrides",
+    "transport",
 })
 
 CONFIG_FILENAME = "acquisition_config.yaml"
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 
 class ConfigSchemaError(ValueError):
@@ -84,6 +87,7 @@ class ConfigStore:
     selected: list[dict[str, Any]] = field(default_factory=list)
     filter_state: dict[str, Any] = field(default_factory=dict)
     threshold_overrides: dict[str, Any] = field(default_factory=dict)
+    transport: TransportConfig = field(default_factory=TransportConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +128,7 @@ def load_or_default(
             "datatype": None,
         },
         threshold_overrides={},
+        transport=TransportConfig(),
     )
 
 
@@ -140,11 +145,19 @@ def _load_config_file(path: Path) -> ConfigStore:
             f"allowed keys are {sorted(ALLOWED_TOP_LEVEL)!r}"
         )
 
+    parsed = _migrate_v1_to_v2(parsed)
     version = parsed.get("version")
     if version != CONFIG_VERSION:
         raise ConfigSchemaError(
             f"{path}: version must be {CONFIG_VERSION}, got {version!r}"
         )
+    transport_payload = parsed.get("transport") or {}
+    if not isinstance(transport_payload, Mapping):
+        raise ConfigSchemaError(f"{path}: transport must be a mapping")
+    try:
+        transport = TransportConfig.from_dict(transport_payload)
+    except ValueError as exc:
+        raise ConfigSchemaError(f"{path}: transport {exc}") from exc
 
     return ConfigStore(
         pinned=True,
@@ -155,6 +168,7 @@ def _load_config_file(path: Path) -> ConfigStore:
         selected=list(parsed.get("selected") or []),
         filter_state=dict(parsed.get("filter_state") or {}),
         threshold_overrides=dict(parsed.get("threshold_overrides") or {}),
+        transport=transport,
     )
 
 
@@ -195,6 +209,7 @@ def toggle_favorite(
         selected=[dict(item) for item in store.selected],
         filter_state=dict(store.filter_state),
         threshold_overrides=dict(store.threshold_overrides),
+        transport=store.transport,
     )
     _write_config_file(path, updated)
     return _load_config_file(path)
@@ -215,6 +230,7 @@ def _empty_config_for_path(path: Path) -> ConfigStore:
             "datatype": None,
         },
         threshold_overrides={},
+        transport=TransportConfig(),
     )
 
 
@@ -227,8 +243,27 @@ def _write_config_file(path: Path, store: ConfigStore) -> None:
     _append_list_of_mappings(lines, "selected", store.selected)
     _append_mapping(lines, "filter_state", store.filter_state)
     _append_mapping(lines, "threshold_overrides", store.threshold_overrides)
+    _append_mapping(lines, "transport", store.transport.to_dict())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _migrate_v1_to_v2(parsed: dict[str, Any]) -> dict[str, Any]:
+    parsed = dict(parsed)
+    try:
+        parsed_version = int(parsed.get("version", 1))
+    except (TypeError, ValueError) as exc:
+        raise ConfigSchemaError(
+            f"version must be an integer, got {parsed.get('version')!r}"
+        ) from exc
+    if parsed_version > CONFIG_VERSION:
+        raise ConfigSchemaError(
+            f"version must be {CONFIG_VERSION} or older, got {parsed_version!r}"
+        )
+    if parsed_version < 2:
+        parsed["version"] = 2
+        parsed.setdefault("transport", TransportConfig().to_dict())
+    return parsed
 
 
 def _append_list_of_mappings(
