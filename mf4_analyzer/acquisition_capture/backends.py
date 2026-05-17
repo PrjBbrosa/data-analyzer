@@ -27,14 +27,20 @@ from __future__ import annotations
 
 import math
 import sys
+import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+
+if TYPE_CHECKING:
+    from can_logger.p0.a2l_probe import MeasurementSummary
+    from can_logger.p0.ifdata_xcp import IfDataXcp
 
 
 @dataclass
@@ -399,58 +405,192 @@ class ReplayRecorderBackend(RecorderBackend):
 
 
 # ---------------------------------------------------------------------------
-# Vector/XCP stub — lazy-imports python-can/pyxcp only inside __init__.
+# Vector/XCP backend — lazy-imports python-can/pyxcp only inside __init__.
 # ---------------------------------------------------------------------------
 
 
+class RecorderBackendUnavailableError(RuntimeError):
+    """Raised when a backend cannot run on the current host."""
+
+
+class RecorderStartError(RuntimeError):
+    """Raised when backend start-up fails after construction."""
+
+
+def _import_can():
+    import can  # type: ignore[import-not-found]
+
+    return can
+
+
+def _import_xcp_master():
+    from pyxcp.master import Master  # type: ignore[import-not-found]
+
+    return Master
+
+
 class VectorXcpRecorderBackend(RecorderBackend):
-    """Lazy / Windows-only Vector + XCP recorder.
+    """Production Vector + XCP/DAQ recorder backend (Windows-only)."""
 
-    Stage 2 ships only the stub: importing this module on macOS or Linux
-    does NOT import ``python-can`` or ``pyxcp`` — the actual import
-    happens inside ``__init__``, and on non-Windows hosts ``__init__``
-    raises a clear ``RuntimeError`` so the CLI surfaces it cleanly.
-
-    Stage 8 replaces the body with real DAQ wiring after the Windows +
-    Vector + powered ECU evidence is appended to ``P0_Runbook.md``.
-    """
-
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        transport: TransportConfig | None = None,
+        ifdata: IfDataXcp | None = None,
+        measurements: Mapping[str, MeasurementSummary] | None = None,
+        **_legacy_kwargs: Any,
+    ) -> None:
         if not sys.platform.startswith("win"):
-            raise RuntimeError(
+            raise RecorderBackendUnavailableError(
                 "Vector/XCP backend is Windows-only and requires Vector hardware. "
                 "Use --backend fake or --backend replay on macOS / Linux."
             )
-        # Lazy imports: only happen on Windows.
+        if ifdata is None:
+            raise ValueError("VectorXcpRecorderBackend requires ifdata")
+        if measurements is None:
+            raise ValueError("VectorXcpRecorderBackend requires measurements")
+
+        self._can = _import_can()
+        self._MasterCls = _import_xcp_master()
+        self._transport = transport or TransportConfig()
+        self._ifdata = ifdata
+        self._measurements = measurements
+        self._bus: Any | None = None
+        self._master: Any | None = None
+        self._session: Any | None = None
+        self._poll_queue: list[tuple[str, float, float]] = []
+        self._rx_count = 0
+        self._bus_error_count = 0
+        self._queue_overflow_count = 0
+        self._last_error: str | None = None
+        self._last_frame_monotonic: float | None = None
+        self._base_monotonic_s = 0.0
+        self._stop_event: threading.Event | None = None
+        self._capture_thread: threading.Thread | None = None
+
+    def start(self, selected: Sequence[SelectedMeasurement]) -> None:
+        from mf4_analyzer.acquisition_capture.xcp_daq_session import XcpDaqSession
+
+        bus_kwargs: dict[str, Any] = {
+            "interface": "vector",
+            "app_name": self._transport.app_name,
+            "channel": self._transport.channel,
+            "bitrate": self._transport.bitrate,
+            "fd": self._transport.can_fd,
+        }
+        if self._transport.can_fd:
+            bus_kwargs["data_bitrate"] = self._transport.data_bitrate
         try:
-            import can  # noqa: F401  - python-can
-        except ImportError as exc:  # pragma: no cover - Windows-only
-            raise RuntimeError(
-                "python-can is required for the Vector/XCP backend; install python-can"
-            ) from exc
+            self._bus = self._can.Bus(**bus_kwargs)
+        except Exception as exc:
+            raise RecorderStartError(f"Vector bus open failed: {exc}") from exc
+
         try:
-            import pyxcp  # noqa: F401
-        except ImportError as exc:  # pragma: no cover - Windows-only
-            raise RuntimeError(
-                "pyxcp is required for the Vector/XCP backend; install pyxcp"
-            ) from exc
-        # Stage 8 will wire the actual session here.
-        raise NotImplementedError(
-            "VectorXcpRecorderBackend body is gated on P0 hardware evidence "
-            "(Stage 8). See docs/analyzer/acquisition/P0_Runbook.md."
+            self._master = self._MasterCls("can", config={"bus": self._bus})
+        except Exception as exc:
+            self._shutdown_bus()
+            raise RecorderStartError(f"pyxcp Master init failed: {exc}") from exc
+
+        self._session = XcpDaqSession(
+            master=self._master,
+            ifdata=self._ifdata,
+            measurements=self._measurements,
+            seed_and_key_dll=self._transport.seed_and_key_dll,
+        )
+        self._base_monotonic_s = time.monotonic()
+        self._session.start(selected)
+        self._start_capture_thread()
+
+    def poll(self) -> list[tuple[str, float, float]]:
+        out = list(self._poll_queue)
+        self._poll_queue.clear()
+        return out
+
+    def stop(self) -> BackendStatus:
+        if self._stop_event is not None:
+            self._stop_event.set()
+        if self._capture_thread is not None:
+            self._capture_thread.join(timeout=1.0)
+        try:
+            if self._session is not None:
+                self._session.stop()
+        finally:
+            self._shutdown_bus()
+        return self.status()
+
+    def status(self) -> BackendStatus:
+        return BackendStatus(
+            started=self._session is not None and self._session.is_running(),
+            rx_count=self._rx_count,
+            bus_error_count=self._bus_error_count,
+            queue_overflow_count=self._queue_overflow_count,
+            last_error=self._last_error,
         )
 
-    def start(self, selected: Sequence[SelectedMeasurement]) -> None:  # pragma: no cover
-        raise NotImplementedError
+    def last_frame_monotonic(self) -> float | None:
+        return self._last_frame_monotonic
 
-    def stop(self) -> BackendStatus:  # pragma: no cover
-        raise NotImplementedError
+    def _start_capture_thread(self) -> None:
+        from mf4_analyzer.acquisition_capture.dto_decode import decode_dto
 
-    def poll(self) -> list[tuple[str, float, float]]:  # pragma: no cover
-        raise NotImplementedError
+        if self._session is None or self._master is None:
+            return
+        self._stop_event = threading.Event()
 
-    def status(self) -> BackendStatus:  # pragma: no cover
-        raise NotImplementedError
+        def capture_loop() -> None:
+            daq_map = self._session.daq_map
+            if daq_map is None:
+                return
+            while self._stop_event is not None and not self._stop_event.is_set():
+                try:
+                    frame = self._read_dto_frame()
+                except Exception as exc:
+                    self._queue_overflow_count += 1
+                    self._last_error = str(exc)
+                    time.sleep(0.001)
+                    continue
+                if frame is None or not frame:
+                    time.sleep(0.001)
+                    continue
+                self._last_frame_monotonic = time.monotonic()
+                for sample in decode_dto(
+                    frame=bytes(frame),
+                    daq_map=daq_map,
+                    timestamp_size=self._ifdata.daq_timestamp_size,
+                    timestamp_unit_ns=self._session.timestamp_unit_ns,
+                    byte_order=self._ifdata.byte_order,
+                    base_monotonic_s=self._base_monotonic_s,
+                ):
+                    self._poll_queue.append(sample)
+                    self._rx_count += 1
 
-    def last_frame_monotonic(self) -> float | None:  # pragma: no cover
-        raise NotImplementedError
+        self._capture_thread = threading.Thread(
+            target=capture_loop,
+            name="xcp-capture",
+            daemon=True,
+        )
+        self._capture_thread.start()
+
+    def _read_dto_frame(self) -> bytes | None:
+        # PR-4 integration point. pyxcp's Master DTO-reception API varies
+        # by version (``master.fetch`` on some forks, ``transport.fetch``
+        # or callback-driven on others). We try the documented seam, fall
+        # back to None so the capture loop keeps running. The bench-
+        # validation runbook (Task 19) records the exact pyxcp version
+        # observed on the target Windows host and tightens this method.
+        fetch = getattr(self._master, "fetch", None)
+        if callable(fetch):
+            return fetch(timeout=0.05)
+        transport = getattr(self._master, "transport", None)
+        transport_fetch = getattr(transport, "fetch", None)
+        if callable(transport_fetch):
+            return transport_fetch(timeout=0.05)
+        return None
+
+    def _shutdown_bus(self) -> None:
+        if self._bus is None:
+            return
+        try:
+            self._bus.shutdown()
+        except Exception:
+            pass
