@@ -7,3 +7,7 @@ asammdf
 openpyxl
 pytest>=7.0
 pytest-qt>=4.2
+
+# Stage 8 - Vector/XCP backend (Windows-only)
+python-can[vector]>=4.3.0; sys_platform == "win32"
+pyxcp>=0.22.0; sys_platform == "win32"

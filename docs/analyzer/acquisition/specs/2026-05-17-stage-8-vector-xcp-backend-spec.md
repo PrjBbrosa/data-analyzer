@@ -20,8 +20,9 @@
 
 ## 0. OPEN ITEMS — REQUIRES OPERATOR INPUT BEFORE WORK CAN PROCEED
 
-These items block forward motion. They are tracked here and re-surfaced at
-the start of every plan stage so they don't get forgotten in PRs.
+These items block the stages that declare them as dependencies. They are
+tracked here and re-surfaced at the start of every plan stage so they don't
+get forgotten in PRs.
 
 | # | Open item | Why it blocks | Status |
 |---|---|---|---|
@@ -279,7 +280,7 @@ Per `OdtEntry`:
 | `measurement_name` | `sel.name` |
 | `datatype` | `measurements[sel.name].datatype` (already populated by Stage 3) |
 | `size` | derived from `datatype` via `_size_from_datatype()` (canonical: u8/s8=1, u16/s16=2, u32/s32/f32=4, u64/s64/f64=8); unknown → fall back to `sel.payload_bytes` and emit a warning. |
-| `address` | `int(sel.address_hex, 16)` (already on `SelectedMeasurement`) |
+| `address` | `int(sel.address_hex, 16)` when present, otherwise `measurements[sel.name].address` from the A2L summary (`address_hex` is optional on the live `SelectedMeasurement`) |
 | `scale_a`, `scale_b` | linear `COMPU_METHOD` if present; default `(1.0, 0.0)` |
 | `offset` | computed by the packer, after PID + optional timestamp |
 
@@ -417,14 +418,15 @@ Timestamps:
   scaled by `ifdata.daq_timestamp_unit`, rebased to capture session t=0.
 - Else: synthesize from `time.monotonic()` at DTO RX time.
 
-### 5.4 `stop() -> None`
+### 5.4 `stop() -> BackendStatus`
 
 1. `master.startStopSynch(0x00)` — STOP_SELECTED.
 2. Join capture thread (1 s timeout, then mark daemon and abandon).
 3. `master.disconnect()`.
 4. `bus.shutdown()`.
-5. Returns even on partial failure; final exception (if any) is logged
-   to capture session log and surfaced via `status()`.
+5. Returns the same 5-field `BackendStatus` shape as `status()`. Partial
+   stop failures are logged to the capture session log and surfaced via
+   `last_error`.
 
 ### 5.5 `status() -> BackendStatus` and `stop() -> BackendStatus`
 
@@ -680,7 +682,7 @@ A taxonomy spec'd here to keep error paths consistent:
 | `XcpAuthError` | `start()` step 4 | Modal dialog "Seed&Key 失败：<reason>" — likely needs O-3 |
 | `DaqAllocError` | `start()` step 7 | Modal "ECU 拒绝 DAQ 配置 (code 0x..)", show suggested fix |
 | `RecorderStartError` | wraps any of above | Cockpit stays in ConnectedIdle, button label resets |
-| `DtoDecodeError` | DTO parsing | Logged to session log; sample dropped; `dropped_count++` |
+| `DtoDecodeError` | DTO parsing | Logged to session log; sample dropped; `queue_overflow_count++` (Stage 8 maps dropped DTOs to the live status field) |
 
 All raise paths increment the appropriate `RecHealth` counter so the
 operator sees status degrade visibly rather than getting silent zeros.
