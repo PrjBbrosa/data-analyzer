@@ -19,9 +19,10 @@ import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Callable, Literal
+from typing import Callable, Literal, cast
 
 from mf4_analyzer.acquisition_capture import thresholds
+from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
 
 HealthLevel = Literal["green", "yellow", "red", "off"]
 
@@ -199,17 +200,20 @@ def probe_hw_macos_stub() -> HwHealth:
     )
 
 
-def _default_hw_probe() -> HwHealth:
+def _default_hw_probe(transport: TransportConfig | None = None) -> HwHealth:
+    if transport is not None:
+        from mf4_analyzer.acquisition_capture.vector_hw_probe import (
+            vector_hw_probe,
+        )
+
+        return vector_hw_probe(transport)
     if sys.platform.startswith("win"):
-        # Stage 8 wires this through ``can_logger.p0.vector_probe`` once
-        # the Windows hardware gate is open. Today we still return the
-        # macOS stub shape for safety; Stage 8 swaps this implementation.
         return HwHealth(
             ok=False,
             driver_version=None,
             channel_count=0,
             last_probe_ts=time.monotonic(),
-            error="vector probe not wired (Stage 8)",
+            error="transport not configured",
         )
     return probe_hw_macos_stub()
 
@@ -219,7 +223,7 @@ def _default_hw_probe() -> HwHealth:
 # ---------------------------------------------------------------------------
 
 
-HwProbe = Callable[[], HwHealth]
+HwProbe = Callable[[], HwHealth] | Callable[[TransportConfig], HwHealth]
 RecProbe = Callable[[], RecHealth]
 CanProbe = Callable[[], CanHealth]
 XcpProbe = Callable[[], XcpHealth]
@@ -243,13 +247,20 @@ class HealthAggregator:
     def __init__(
         self,
         *,
+        transport: TransportConfig | None = None,
         hw_probe: HwProbe | None = None,
         can_probe: CanProbe | None = None,
         xcp_probe: XcpProbe | None = None,
         daq_probe: DaqProbe | None = None,
         rec_probe: RecProbe | None = None,
     ) -> None:
-        self._hw_probe = hw_probe or _default_hw_probe
+        if hw_probe is None:
+            self._hw_probe = lambda: _default_hw_probe(transport)
+        elif transport is None:
+            self._hw_probe = cast(Callable[[], HwHealth], hw_probe)
+        else:
+            transport_probe = cast(Callable[[TransportConfig], HwHealth], hw_probe)
+            self._hw_probe = lambda: transport_probe(transport)
         self._can_probe = can_probe or (lambda: CanHealth(bus_load_pct=None))
         self._xcp_probe = xcp_probe or (lambda: XcpHealth(connected=False))
         self._daq_probe = daq_probe or (lambda: DaqHealth())

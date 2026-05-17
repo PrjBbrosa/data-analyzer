@@ -68,6 +68,7 @@ from mf4_analyzer.acquisition_capture.backends import (
 from mf4_analyzer.acquisition_capture.config_store import ConfigSchemaError
 from mf4_analyzer.acquisition_capture.controller import CaptureController
 from mf4_analyzer.acquisition_capture.session import SessionSummary
+from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
 from mf4_analyzer.acquisition_capture.health import (
     CanHealth,
     DaqHealth,
@@ -202,6 +203,8 @@ class CockpitMainWindow(QMainWindow):
         self._fake_last_rx_monotonic: float | None = None
         self._fake_xcp_connected: bool = False
         self._fake_can_load_pct: float | None = None
+        self._transport_config: TransportConfig | None = None
+        self._ifdata_xcp = None
         # User-supplied A2L pool for the left pane (None in pure demo).
         self._initial_pool = tuple(initial_pool or ())
         # Stage 5 hand-off — Stage 5 owns the real CaptureController.
@@ -336,6 +339,20 @@ class CockpitMainWindow(QMainWindow):
         self._output_btn.clicked.connect(self._on_pick_output_dir)
         layout.addWidget(self._output_btn)
 
+        self._transport_chip = QLabel("传输未配置", self)
+        self._transport_chip.setObjectName("cockpitTransportStatusChip")
+        self._transport_chip.setProperty("transportState", "unconfigured")
+        self._transport_chip.setFixedHeight(30)
+        self._transport_chip.setMinimumWidth(96)
+        self._transport_chip.setMaximumWidth(260)
+        self._transport_chip.setAlignment(Qt.AlignCenter)
+        self._transport_chip.setToolTip("打开传输设置")
+        self._transport_chip.setCursor(Qt.PointingHandCursor)
+        self._transport_chip.mousePressEvent = (
+            lambda _event: self._open_settings_dialog(initial_tab="transport")
+        )
+        layout.addWidget(self._transport_chip)
+
         self._settings_action = QAction("设置", self)
         self._settings_action.setObjectName("cockpitSettingsAction")
         self._settings_action.triggered.connect(self._open_settings_dialog)
@@ -424,6 +441,11 @@ class CockpitMainWindow(QMainWindow):
         self._output_action = QAction("输出", self)
         self._output_action.setObjectName("cockpitSelectorOutputAction")
         self._output_action.triggered.connect(self._on_pick_output_dir)
+        self._transport_action = QAction("传输", self)
+        self._transport_action.setObjectName("cockpitTransportAction")
+        self._transport_action.triggered.connect(
+            lambda _checked=False: self._open_settings_dialog(initial_tab="transport")
+        )
         # The mode segment is a composite of three buttons — when the
         # whole segment overflows, expose a single "模式" submenu-ish
         # action that opens the segment as a popup; for now we route to
@@ -464,6 +486,7 @@ class CockpitMainWindow(QMainWindow):
             (self._a2l_btn, self._a2l_action),
             (self._dbc_btn, self._dbc_action),
             (self._output_btn, self._output_action),
+            (self._transport_chip, self._transport_action),
             (self._settings_btn, self._settings_action),
             (self._segment_btn, self._segment_action),
             (self._mode_segment_widget, self._mode_segment_action),
@@ -1395,12 +1418,49 @@ class CockpitMainWindow(QMainWindow):
     # Settings dialog
     # ------------------------------------------------------------------
 
-    def _open_settings_dialog(self) -> None:
+    def set_transport(
+        self,
+        transport: TransportConfig | None,
+        *,
+        device_model: str | None = None,
+    ) -> None:
+        self._transport_config = transport
+        if transport is None:
+            self._transport_chip.setText("传输未配置")
+            self._transport_chip.setToolTip("打开传输设置")
+            self._set_visual_property(
+                self._transport_chip,
+                "transportState",
+                "unconfigured",
+            )
+            return
+
+        fd_label = "CAN-FD" if transport.can_fd else "CAN"
+        rate = transport.bitrate // 1000
+        prefix = f"{device_model} · " if device_model else "传输 · "
+        text = (
+            f"{prefix}App={transport.app_name} · Ch={transport.channel} · "
+            f"{fd_label} {rate}k"
+        )
+        self._transport_chip.setText(text)
+        self._transport_chip.setToolTip(text)
+        self._set_visual_property(self._transport_chip, "transportState", "configured")
+        self._recompute_toolbar_overflow()
+
+    def _open_settings_dialog(self, *, initial_tab: str | None = None) -> None:
         if self._settings_dialog is not None:
+            if initial_tab is not None:
+                self._settings_dialog.open_tab(initial_tab)
             self._settings_dialog.raise_()
             self._settings_dialog.activateWindow()
             return
-        dialog = SettingsDialog(self)
+        dialog = SettingsDialog(
+            self,
+            transport=self._transport_config or TransportConfig(),
+            ifdata=self._ifdata_xcp,
+        )
+        if initial_tab is not None:
+            dialog.open_tab(initial_tab)
         dialog.settings_saved.connect(self._on_settings_changed)
         dialog.settings_reset.connect(self._on_settings_reset)
         dialog.finished.connect(lambda _result: setattr(self, "_settings_dialog", None))
@@ -1408,6 +1468,8 @@ class CockpitMainWindow(QMainWindow):
         dialog.open()
 
     def _on_settings_changed(self, _values: dict[str, float | int]) -> None:
+        if self._settings_dialog is not None:
+            self.set_transport(self._settings_dialog.current_transport())
         self._apply_threshold_runtime_refresh()
         self._status.showMessage("设置已保存")
 
@@ -1508,9 +1570,21 @@ class CockpitMainWindow(QMainWindow):
             self, "选择 A2L 文件", "", "A2L (*.a2l);;All (*)"
         )
         if path:
-            self._a2l_name = Path(path).name
+            a2l_path = Path(path)
+            self._a2l_name = a2l_path.name
+            self._ifdata_xcp = self._load_first_ifdata_xcp(a2l_path)
             self._set_selector_value(self._a2l_btn, "A2L", self._a2l_name)
             self._update_status_bar()
+
+    def _load_first_ifdata_xcp(self, path: Path):
+        try:
+            from can_logger.p0.ifdata_xcp import parse_ifdata_xcp_file
+
+            blocks = parse_ifdata_xcp_file(path)
+        except Exception as exc:  # noqa: BLE001 - file picker must stay responsive
+            self._status.showMessage(f"A2L IF_DATA 解析失败: {exc}")
+            return None
+        return blocks[0] if blocks else None
 
     def _on_pick_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择输出目录", "")
