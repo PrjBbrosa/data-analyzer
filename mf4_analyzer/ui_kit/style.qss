@@ -384,6 +384,28 @@ QToolButton#cockpitSettingsButton {
     border-radius: 6px;
 }
 
+QLabel#cockpitTransportStatusChip {
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0 10px;
+    border: 1px solid #dfe5ee;
+    border-radius: 7px;
+    background-color: #f8fafc;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+}
+QLabel#cockpitTransportStatusChip[transportState="unconfigured"] {
+    background-color: #fffbeb;
+    border-color: #fde68a;
+    color: #92400e;
+}
+QLabel#cockpitTransportStatusChip[transportState="configured"] {
+    background-color: #ecfdf5;
+    border-color: #a7f3d0;
+    color: #065f46;
+}
+
 QFrame#cockpitSelector,
 QFrame#cockpitSelectorA2l,
 QFrame#cockpitSelectorDbc,

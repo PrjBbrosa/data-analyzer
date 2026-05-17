@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
+    QCheckBox,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -21,6 +29,18 @@ from PyQt5.QtWidgets import (
 )
 
 from mf4_analyzer.acquisition_capture import thresholds
+from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+from mf4_analyzer.acquisition_capture.vector_hw_probe import (
+    test_xcp_connection,
+    vector_hw_probe,
+)
+
+
+@dataclass(frozen=True)
+class _TestConnectionResult:
+    ok: bool
+    level: Literal["green", "red"]
+    message: str
 
 
 @dataclass(frozen=True)
@@ -243,6 +263,161 @@ _FIELD_SPECS = (
 _SPECS_BY_KEY = {spec.key: spec for spec in _FIELD_SPECS}
 
 
+class TransportTabWidget(QWidget):
+    """Vector transport controls for the Stage 8 cockpit path."""
+
+    _BITRATES = (125_000, 250_000, 500_000, 1_000_000)
+    _DATA_BITRATES = (2_000_000, 4_000_000, 5_000_000, 8_000_000)
+
+    def __init__(
+        self,
+        transport: TransportConfig,
+        *,
+        ifdata: object | None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._ifdata = ifdata
+        layout = QFormLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setHorizontalSpacing(16)
+        layout.setVerticalSpacing(8)
+
+        self.app_combo = QComboBox(self)
+        self.app_combo.setEditable(True)
+        self.app_combo.addItems(["Python", "CANalyzer", "CANoe"])
+        self._set_combo_text(self.app_combo, transport.app_name)
+        layout.addRow("Vector Application", self.app_combo)
+
+        self.channel_spin = QSpinBox(self)
+        self.channel_spin.setRange(0, 15)
+        self.channel_spin.setValue(transport.channel)
+        layout.addRow("Channel", self.channel_spin)
+
+        self.can_fd_check = QCheckBox("CAN-FD", self)
+        self.can_fd_check.setChecked(transport.can_fd)
+        layout.addRow("", self.can_fd_check)
+
+        self.bitrate_combo = QComboBox(self)
+        self._populate_rate_combo(self.bitrate_combo, self._BITRATES, transport.bitrate)
+        layout.addRow("Bitrate", self.bitrate_combo)
+
+        self.data_bitrate_combo = QComboBox(self)
+        self._populate_rate_combo(
+            self.data_bitrate_combo,
+            self._DATA_BITRATES,
+            transport.data_bitrate,
+        )
+        self.data_bitrate_combo.setEnabled(transport.can_fd)
+        layout.addRow("Data bitrate", self.data_bitrate_combo)
+
+        self.sample_point_spin = QDoubleSpinBox(self)
+        self.sample_point_spin.setRange(50.0, 90.0)
+        self.sample_point_spin.setDecimals(1)
+        self.sample_point_spin.setSuffix(" %")
+        self.sample_point_spin.setValue(transport.sample_point)
+        layout.addRow("Sample point", self.sample_point_spin)
+
+        self.fd_sample_point_spin = QDoubleSpinBox(self)
+        self.fd_sample_point_spin.setRange(50.0, 90.0)
+        self.fd_sample_point_spin.setDecimals(1)
+        self.fd_sample_point_spin.setSuffix(" %")
+        self.fd_sample_point_spin.setValue(transport.fd_sample_point)
+        self.fd_sample_point_spin.setEnabled(transport.can_fd)
+        layout.addRow("FD sample point", self.fd_sample_point_spin)
+
+        self.timeout_spin = QSpinBox(self)
+        self.timeout_spin.setRange(100, 10_000)
+        self.timeout_spin.setSuffix(" ms")
+        self.timeout_spin.setValue(int(transport.timeout_s * 1000))
+        layout.addRow("Timeout", self.timeout_spin)
+
+        seed_row = QWidget(self)
+        seed_layout = QHBoxLayout(seed_row)
+        seed_layout.setContentsMargins(0, 0, 0, 0)
+        seed_layout.setSpacing(6)
+        self.seed_key_line = QLineEdit(self)
+        self.seed_key_line.setText(transport.seed_and_key_dll or "")
+        self.seed_key_browse = QPushButton("Browse", self)
+        seed_layout.addWidget(self.seed_key_line, 1)
+        seed_layout.addWidget(self.seed_key_browse)
+        layout.addRow("Seed&Key DLL", seed_row)
+
+        self.test_btn = QPushButton("Test Connection", self)
+        self.test_btn.setObjectName("transportTestConnectionButton")
+        layout.addRow("", self.test_btn)
+        layout.addRow(
+            "",
+            QLabel(
+                "Test Connection 会先检查 Vector driver/app/channel，再做 XCP CONNECT。",
+                self,
+            ),
+        )
+
+        self.can_fd_check.toggled.connect(self.data_bitrate_combo.setEnabled)
+        self.can_fd_check.toggled.connect(self.fd_sample_point_spin.setEnabled)
+        self.seed_key_browse.clicked.connect(self._browse_seed_key)
+        self._sync_test_button_enabled()
+
+    def current_transport(self) -> TransportConfig:
+        seed_key = self.seed_key_line.text().strip() or None
+        return TransportConfig(
+            app_name=self.app_combo.currentText().strip() or "Python",
+            channel=self.channel_spin.value(),
+            can_fd=self.can_fd_check.isChecked(),
+            bitrate=int(self.bitrate_combo.currentData()),
+            data_bitrate=int(self.data_bitrate_combo.currentData()),
+            sample_point=float(self.sample_point_spin.value()),
+            fd_sample_point=float(self.fd_sample_point_spin.value()),
+            timeout_s=self.timeout_spin.value() / 1000.0,
+            seed_and_key_dll=seed_key,
+        )
+
+    def _sync_test_button_enabled(self) -> None:
+        if not sys.platform.startswith("win"):
+            self.test_btn.setEnabled(False)
+            self.test_btn.setToolTip("Vector 仅在 Windows 可用")
+            return
+        if self._ifdata is None:
+            self.test_btn.setEnabled(False)
+            self.test_btn.setToolTip("请先选择 A2L 文件 -- XCP 连接测试需要 CAN ID / MAX_DTO 信息")
+            return
+        self.test_btn.setEnabled(True)
+        self.test_btn.setToolTip("执行 Vector 硬件检查和 XCP CONNECT/DISCONNECT")
+
+    def _browse_seed_key(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 Seed&Key DLL",
+            "",
+            "DLL (*.dll);;All (*)",
+        )
+        if path:
+            self.seed_key_line.setText(path)
+
+    @classmethod
+    def _populate_rate_combo(
+        cls,
+        combo: QComboBox,
+        values: tuple[int, ...],
+        current: int,
+    ) -> None:
+        candidates = values if current in values else (*values, current)
+        for value in candidates:
+            combo.addItem(f"{value // 1000} k", value)
+        idx = combo.findData(current)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    @staticmethod
+    def _set_combo_text(combo: QComboBox, text: str) -> None:
+        idx = combo.findText(text)
+        if idx < 0:
+            combo.addItem(text)
+            idx = combo.findText(text)
+        combo.setCurrentIndex(idx)
+
+
 class SettingsDialog(QDialog):
     """Modal v1 settings dialog for threshold overrides.
 
@@ -258,12 +433,16 @@ class SettingsDialog(QDialog):
         parent: QWidget | None = None,
         *,
         settings_path: Path | None = None,
+        transport: TransportConfig | None = None,
+        ifdata: object | None = None,
     ) -> None:
         super().__init__(parent)
         self._settings_path = (
             Path(settings_path) if settings_path is not None else None
         )
         self._editors: dict[str, QAbstractSpinBox] = {}
+        self._transport = transport or TransportConfig()
+        self._ifdata = ifdata
 
         self.setModal(True)
         self.setWindowTitle("Cockpit Settings")
@@ -274,10 +453,17 @@ class SettingsDialog(QDialog):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
 
-        tabs = QTabWidget(self)
-        tabs.setObjectName("settingsTabs")
-        tabs.addTab(self._build_threshold_tab(), "预检阈值")
-        root.addWidget(tabs, 1)
+        self._tabs = QTabWidget(self)
+        self._tabs.setObjectName("settingsTabs")
+        self._tabs.addTab(self._build_threshold_tab(), "预检阈值")
+        self.transport_widget = TransportTabWidget(
+            self._transport,
+            ifdata=self._ifdata,
+            parent=self,
+        )
+        self.transport_widget.test_btn.clicked.connect(self._on_test_connection)
+        self._tabs.addTab(self.transport_widget, "传输 / Transport")
+        root.addWidget(self._tabs, 1)
 
         footer = QHBoxLayout()
         footer.setSpacing(8)
@@ -310,6 +496,56 @@ class SettingsDialog(QDialog):
         for key, editor in self._editors.items():
             result[key] = _SPECS_BY_KEY[key].from_display(editor.value())
         return result
+
+    def current_transport(self) -> TransportConfig:
+        return self.transport_widget.current_transport()
+
+    def open_tab(self, name: str) -> None:
+        lowered = name.lower()
+        for idx in range(self._tabs.count()):
+            if lowered in self._tabs.tabText(idx).lower():
+                self._tabs.setCurrentIndex(idx)
+                return
+
+    def _on_test_connection(self) -> None:
+        result = self._run_test_connection_for_test()
+        box = QMessageBox.information if result.ok else QMessageBox.warning
+        box(self, "Test Connection", result.message)
+
+    def _run_test_connection_for_test(self) -> _TestConnectionResult:
+        if self._ifdata is None:
+            return _TestConnectionResult(
+                ok=False,
+                level="red",
+                message="请先选择 A2L 文件 -- XCP 连接测试需要 CAN ID / MAX_DTO 信息",
+            )
+
+        transport = self.current_transport()
+        hw = vector_hw_probe(transport)
+        if not hw.ok:
+            return _TestConnectionResult(
+                ok=False,
+                level="red",
+                message=f"硬件检查失败：{hw.error}",
+            )
+
+        xcp = test_xcp_connection(transport, self._ifdata)
+        if not xcp.ok:
+            return _TestConnectionResult(
+                ok=False,
+                level="red",
+                message=f"XCP 连接失败：{xcp.error}",
+            )
+
+        resource = 0 if xcp.resource_byte is None else xcp.resource_byte
+        return _TestConnectionResult(
+            ok=True,
+            level="green",
+            message=(
+                f"OK · driver {hw.driver_version} · "
+                f"RESOURCE=0x{resource:02X} · {xcp.latency_ms} ms"
+            ),
+        )
 
     def save(self) -> None:
         values = self.values()
