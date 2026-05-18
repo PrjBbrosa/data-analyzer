@@ -176,3 +176,44 @@ def test_parse_measurement_events_returns_empty_without_per_measurement_ifdata()
     text = (FIXTURES / "classic_can.a2l_snippet").read_text()
 
     assert parse_measurement_events(text) == {}
+
+
+def test_parses_real_canape14_xcp_block():
+    text = (FIXTURES / "canape14_real_aside.a2l_snippet").read_text(encoding="latin-1")
+    blocks = parse_ifdata_xcp_text(text)
+
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block.cmd_id == 0x6C7
+    assert block.resp_id == 0x6C6
+    assert block.cmd_id_extended is False
+    assert block.resp_id_extended is False
+    assert block.can_fd is False
+    assert (block.max_cto, block.max_dto) == (8, 8)
+    assert block.byte_order == "MSB_LAST"
+    assert block.address_granularity == "BYTE"
+    assert block.daq_timestamp_size == 0
+    assert {event.name for event in block.available_events} == {
+        "Rte_Appl_OS_Task_100ms",
+        "Rte_OsTask_BSW_10ms",
+        "Rte_OsTask_BSW_1ms",
+        "Rte_OsTask_BSW_5ms",
+        "BSW_2ms",
+    }
+
+
+def test_parser_filters_segment_only_canape_companion_block():
+    transport = (FIXTURES / "canape14_real_aside.a2l_snippet").read_text(encoding="latin-1")
+    segment_only = (
+        FIXTURES / "canape14_real_aside_segment_only.a2l_snippet"
+    ).read_text(encoding="latin-1")
+
+    blocks_in_natural_order = parse_ifdata_xcp_text(transport + "\n" + segment_only)
+    blocks_in_inverted_order = parse_ifdata_xcp_text(segment_only + "\n" + transport)
+
+    # the SEGMENT-only fragment has no CAN IDs / no events and must be dropped
+    # regardless of source order, so neither position survives as ``blocks[0]``.
+    assert len(blocks_in_natural_order) == 1
+    assert len(blocks_in_inverted_order) == 1
+    assert blocks_in_natural_order[0].cmd_id == 0x6C7
+    assert blocks_in_inverted_order[0].cmd_id == 0x6C7

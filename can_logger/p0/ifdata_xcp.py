@@ -323,10 +323,24 @@ def parse_measurement_events(a2l_text: str) -> Mapping[str, tuple[str, ...]]:
 
 
 def parse_ifdata_xcp_text(a2l_text: str) -> list[IfDataXcp]:
-    """Parse every ``/begin IF_DATA XCP`` block in A2L text."""
+    """Parse every transport-carrying ``/begin IF_DATA XCP`` block.
 
-    return [
+    CANape and similar tools emit additional ``IF_DATA XCP`` fragments
+    next to the real transport block — typically SEGMENT/CHECKSUM-only
+    blocks that describe calibration pages. They share the
+    ``/begin IF_DATA XCP`` opener but contain no ``XCP_ON_CAN`` /
+    ``XCP_ON_CAN_FD`` transport block and no DAQ events. We filter them
+    out so callers like ``A2LSummary`` and ``MainWindow._cached_ifdata``
+    receive only the active transport block(s).
+    """
+
+    parsed = [
         _parse_one_block(match.group(1)) for match in _IFDATA_RE.finditer(a2l_text)
+    ]
+    return [
+        block
+        for block in parsed
+        if block.cmd_id or block.resp_id or block.available_events
     ]
 
 

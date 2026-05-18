@@ -88,8 +88,24 @@ def _fill_ifdata_events(
             event_capacity.setdefault(event.name, event.max_odt_entries)
 
     measurement_events = dict(parse_measurement_events(raw_text))
+
+    # AUTOSAR-style A2Ls (e.g. CANape 14 ECU output) enumerate DAQ
+    # events only at the IF_DATA XCP top level — no per-MEASUREMENT
+    # DAQ_EVENT/FIXED_EVENT_LIST bindings. ``parse_measurement_events``
+    # is empty for those, which previously left
+    # ``MeasurementSummary.available_events`` blank and disabled the
+    # cockpit event picker for every signal. When the A2L has global
+    # events but no per-measurement refs, fall back to the global list
+    # so operators can still pick an event manually.
+    global_events_fallback: tuple[str, ...] = ()
+    if event_capacity and not measurement_events:
+        global_events_fallback = tuple(event_capacity.keys())
+
     updated = [
-        replace(m, available_events=measurement_events.get(m.name, ()))
+        replace(
+            m,
+            available_events=measurement_events.get(m.name, global_events_fallback),
+        )
         for m in measurements
     ]
     return updated, event_capacity, measurement_events, bool(event_capacity)
