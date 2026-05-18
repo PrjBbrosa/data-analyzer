@@ -30,15 +30,23 @@
 
 | # | Open item | Blocks PR | Status |
 |---|---|---|---|
-| **O-1** | Real A2L file with `IF_DATA XCP` block | PR-1 nice-to-have, PR-4 mandatory | ⏳ |
+| **O-1** | Real A2L file with `IF_DATA XCP` block | PR-1 nice-to-have, PR-4 mandatory | ✅ closed 2026-05-19 ([PR #15](https://github.com/PrjBbrosa/data-analyzer/pull/15)). Reference profile: `C0202_T04/A/ERD6_01_01_A0_C_02_02_T04_CANape_Aside.a2l` (CANape 14, ASAP2 1.7, 1.5 MB, 323 measurements). Fixture snippet committed at `tests/fixtures/ifdata_xcp/canape14_real_aside.a2l_snippet`. |
 | **O-2** | Vector `app_name` on test PC | PR-3 smoke, PR-4 mandatory | ⏳ |
 | **O-3** | ECU XCP auth state (and DLL if needed) | PR-4 mandatory | ⏳ |
 | **O-4** | HIL/vehicle bench access | PR-3 optional smoke, PR-4 mandatory | ⏳ |
-| **O-5** | Classic CAN vs CAN-FD decision | PR-4 mandatory | ⏳ |
+| **O-5** | Classic CAN vs CAN-FD decision | PR-4 mandatory | ⏳ (ERD6 profile is classic CAN, 8/8 CTO/DTO, 11-bit IDs `0x6C7`/`0x6C6` — defaults known) |
 
 **PR-1 can fully proceed with only synthetic IF_DATA fixtures. PR-2 same. PR-3 only needs O-2 if we want to push the "Test Connection" all the way through on the bench. PR-4 is the gating PR.**
 
 At the top of every task below, the operator-supplied items it requires are listed under "Operator deps:". If empty, the task is fully runnable from a macOS dev machine.
+
+### Newly observed (post-real-A2L review, 2026-05-19)
+
+These are *not* Stage 8 PR blockers but were surfaced by the real-A2L validation in PR #15 and tighten PR-4 acceptance.
+
+- **N-1 ERD6 has `daq_timestamp_size = 0`** — DAQ DTO frames carry no ECU timestamp. MF4 timestamps fall back to `time.monotonic()` frame-arrival on the host. PR-4 Acceptance Gate (Task 19, below) now includes a per-event timestamp-drift check so we catch host-side jitter masquerading as sample timing.
+- **N-2 `IF_DATA XCPplus` not parsed** — the regex `XCP\b` deliberately skips CANape's vendor `XCPplus` opener (ASAM XCPplus carries an extra leading version byte before `PROTOCOL_LAYER`). The ERD6 A2L ships both XCP and XCPplus blocks; we pick up the XCP one and ignore the XCPplus one. An ECU that *only* ships XCPplus would silently disable the backend. **Out of scope for Stage 8**; tracked in §Backlog at the bottom of this plan.
+- **N-3 AUTOSAR-style A2Ls bind events globally only** — ERD6 has 323 MEASUREMENTs and *zero* per-MEASUREMENT `DAQ_EVENT FIXED_EVENT_LIST` entries. PR #15's `_fill_ifdata_events` global-event fallback fills `MeasurementSummary.available_events` from the IF_DATA top level so the cockpit event picker stays usable. PR-4 must confirm operators can still pick an event per measurement on the bench (no UX regression).
 
 ---
 
@@ -1254,7 +1262,7 @@ gh pr create --title "Stage 8a: foundation — IF_DATA XCP parser + transport co
 - Fills a2l_probe DAQ event capacity from real IF_DATA
 
 ## Open items (operator)
-- O-1 real A2L fixture: PR-1 ships without; future PRs benefit
+- ~~O-1 real A2L fixture~~: ✅ closed by [PR #15](https://github.com/PrjBbrosa/data-analyzer/pull/15) (2026-05-19); fixture committed at `tests/fixtures/ifdata_xcp/canape14_real_aside.a2l_snippet`.
 - Subsequent PRs (8b/c/d) are unblocked
 
 ## Test plan
@@ -2871,7 +2879,7 @@ gh pr create --title "Stage 8b: backend core — XcpDaqSession + VectorXcpRecord
 - Seed&Key auth flow (E-5) gates locked DAQ resources before allocation
 
 ## Open items (operator)
-- O-1 real A2L for cross-checking IF_DATA dialect: nice-to-have, mocks cover correctness
+- ~~O-1 real A2L for cross-checking IF_DATA dialect~~: ✅ closed by [PR #15](https://github.com/PrjBbrosa/data-analyzer/pull/15) — CANape 14 ERD6 dialect verified against the live parser; SEGMENT-only companion blocks now filtered.
 - O-2 / O-3 / O-4 / O-5: gated to PR-3 / PR-4
 
 ## Test plan
@@ -3745,7 +3753,8 @@ gh pr create --title "Stage 8c: cockpit UI — Transport settings + HW probe + s
 
 ## Open items (operator)
 - O-2 Vector app_name on real Windows test PC: blocks PR-4 (bench validation)
-- O-1, O-3, O-4, O-5: all needed for PR-4
+- ~~O-1~~: ✅ closed by [PR #15](https://github.com/PrjBbrosa/data-analyzer/pull/15) — ERD6 ECU profile is the reference dialect.
+- O-3, O-4, O-5: all needed for PR-4
 
 ## Test plan
 - [x] `PYTHONPATH=. .venv/bin/python -m pytest tests/test_vector_hw_probe.py -v`
@@ -3851,6 +3860,19 @@ Hardware Configurator between runs.
 All of Step 3, Step 4, Step 5 (at least one HW model), and Step 6 (if
 O-5 = CAN-FD) green at least once. File the captured MF4s under
 `docs/analyzer/acquisition/evidence/stage-8/<YYYY-MM-DD>/`.
+
+**Additional check when the A2L declares `daq_timestamp_size = 0`**
+(ERD6 case, and any other ECU whose DAQ frames carry no ECU clock):
+the MF4 sample timestamps come from `time.monotonic()` arrival time on
+the host, not the ECU. Open one MF4 from Step 3 in Analyzer, pick a
+single channel, compute the diff of consecutive sample timestamps for
+the same event, and confirm the median is within **±10 %** of the
+event's `cycle_time_ms` from the A2L. Worst-case sample-to-sample
+deviation should stay within **±25 ms**; anything larger is host /
+driver buffering masquerading as sample timing and must be filed
+against backend Task 13's capture thread, not accepted as ECU clock.
+Skip this check when `daq_timestamp_size > 0` (the ECU clock is
+authoritative).
 
 ## After acceptance
 
@@ -3964,6 +3986,16 @@ EOF
 - §13 Acceptance criteria → Task 20 ✅
 
 **Placeholder scan:** no "TODO" / "TBD" inside task steps. (Two references to "Stage 8b TODO" inside Task 12's code comment are intentional — they get resolved within the same PR by Task 13.)
+
+---
+
+## Backlog (post-Stage 8)
+
+Items surfaced during the real-A2L review ([PR #15](https://github.com/PrjBbrosa/data-analyzer/pull/15)) that are deliberately *not* in Stage 8 scope. Flagged here so they are not lost.
+
+- **B-1 `IF_DATA XCPplus` parser support** — `parse_ifdata_xcp_text` skips XCPplus (`/begin IF_DATA XCPplus ...`) via the `XCP\b` regex. XCPplus carries an extra leading version byte before `PROTOCOL_LAYER`; the remaining structure overlaps with XCP. ECUs that only ship XCPplus (no plain XCP companion block) will currently see `available_ifdata = []` and the cockpit will silently disable the backend. Reproduction: drop a CANape XCPplus-only A2L into the cockpit. Owner: parser extension PR, target Stage 9.
+- **B-2 Optional elf / .map cross-check in PR-4** — the ERD6 fixture directory ships `.elf`, `.hex`, `.map` alongside the A2L. PR-4 could be tightened by looking up a couple of MEASUREMENT addresses in the `.map`, computing expected value sequences (e.g. by scripting the ECU to write a known ramp), and asserting that decoded DAQ samples match. This requires bench scripting and is therefore deferred; not gating Stage 8.
+- **B-3 Cockpit fallback UX when global events are empty** — if an A2L has *neither* per-MEASUREMENT events *nor* global events (rare but possible — pure calibration A2L with no DAQ), `available_events` stays `()` for every signal and the cockpit event picker is empty. Today the Transport tab disables Test Connection in that case; the LeftPane raster menu correctly greys out. No code change planned, but PR-4 must confirm operators see a clear empty-state tooltip (not silent blanks).
 
 **Type consistency:**
 - `IfDataXcp` field names: identical across Task 2, 3, 4, 9, 11, 12 ✅
