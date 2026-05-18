@@ -115,3 +115,104 @@ def test_fill_ifdata_events_mounts_per_measurement_events_from_raw_text():
     assert event_capacity == {"event_10ms": 8}
     assert measurement_events == {"EngineSpeed": ("event_10ms",)}
     assert updated[0].available_events == ("event_10ms",)
+
+
+def test_fill_ifdata_events_falls_back_to_global_events_when_no_per_measurement_refs():
+    # CANape-14 / AUTOSAR style A2L: top-level IF_DATA XCP enumerates
+    # events globally, but no MEASUREMENT carries a DAQ_EVENT/
+    # FIXED_EVENT_LIST binding. ``available_events`` must fall back to
+    # the global list so the cockpit event picker is not empty for
+    # every signal.
+    raw_text = """
+    /begin PROJECT P ""
+      /begin MODULE M ""
+        /begin MEASUREMENT EngineSpeed ""
+          UWORD NO_COMPU_METHOD 0 0 0 65535
+          ECU_ADDRESS 0x1000
+        /end MEASUREMENT
+        /begin MEASUREMENT VehicleSpeed ""
+          UWORD NO_COMPU_METHOD 0 0 0 65535
+          ECU_ADDRESS 0x1004
+        /end MEASUREMENT
+        /begin IF_DATA XCP
+          /begin PROTOCOL_LAYER
+            0x0100 0x0100 0 0 0 0 0 0 8 8 BYTE_ORDER_MSB_LAST ADDRESS_GRANULARITY_BYTE
+          /end PROTOCOL_LAYER
+          /begin XCP_ON_CAN
+            CAN_ID_MASTER 0x500
+            CAN_ID_SLAVE 0x501
+          /end XCP_ON_CAN
+          /begin DAQ
+            /begin EVENT "Rte_OsTask_BSW_1ms" "" 0 DAQ 8 1 6 0
+            /end EVENT
+            /begin EVENT "Rte_OsTask_BSW_10ms" "" 1 DAQ 8 10 6 0
+            /end EVENT
+          /end DAQ
+        /end IF_DATA
+      /end MODULE
+    /end PROJECT
+    """
+    measurements = [_make_measurement("EngineSpeed"), _make_measurement("VehicleSpeed")]
+
+    updated, event_capacity, measurement_events, has_daq = _fill_ifdata_events(
+        raw_text,
+        measurements,
+    )
+
+    assert has_daq is True
+    assert measurement_events == {}
+    assert set(event_capacity) == {"Rte_OsTask_BSW_1ms", "Rte_OsTask_BSW_10ms"}
+    assert updated[0].available_events == ("Rte_OsTask_BSW_1ms", "Rte_OsTask_BSW_10ms")
+    assert updated[1].available_events == ("Rte_OsTask_BSW_1ms", "Rte_OsTask_BSW_10ms")
+
+
+def test_fill_ifdata_events_per_measurement_refs_win_over_global_fallback():
+    # When SOME measurements declare per-IF_DATA event refs, the global
+    # fallback must NOT silently relax the binding for the OTHER
+    # measurements — explicit refs are the operator's intent.
+    raw_text = """
+    /begin PROJECT P ""
+      /begin MODULE M ""
+        /begin MEASUREMENT BoundSignal ""
+          UWORD NO_COMPU_METHOD 0 0 0 65535
+          ECU_ADDRESS 0x1000
+          /begin IF_DATA XCP
+            /begin DAQ_EVENT FIXED_EVENT_LIST
+              EVENT 0
+            /end DAQ_EVENT
+          /end IF_DATA
+        /end MEASUREMENT
+        /begin MEASUREMENT UnboundSignal ""
+          UWORD NO_COMPU_METHOD 0 0 0 65535
+          ECU_ADDRESS 0x1004
+        /end MEASUREMENT
+        /begin IF_DATA XCP
+          /begin PROTOCOL_LAYER
+            0x0100 0x0100 0 0 0 0 0 0 8 8 BYTE_ORDER_MSB_LAST ADDRESS_GRANULARITY_BYTE
+          /end PROTOCOL_LAYER
+          /begin XCP_ON_CAN
+            CAN_ID_MASTER 0x500
+            CAN_ID_SLAVE 0x501
+          /end XCP_ON_CAN
+          /begin DAQ
+            /begin EVENT "fast_1ms" "" 0 DAQ 8 1 6 0
+            /end EVENT
+            /begin EVENT "slow_10ms" "" 1 DAQ 8 10 6 0
+            /end EVENT
+          /end DAQ
+        /end IF_DATA
+      /end MODULE
+    /end PROJECT
+    """
+    measurements = [_make_measurement("BoundSignal"), _make_measurement("UnboundSignal")]
+
+    updated, _capacity, measurement_events, _has = _fill_ifdata_events(
+        raw_text,
+        measurements,
+    )
+
+    # measurement_events is non-empty (BoundSignal is in it), so the
+    # global fallback stays inactive. UnboundSignal keeps an empty tuple.
+    assert measurement_events == {"BoundSignal": ("fast_1ms",)}
+    assert updated[0].available_events == ("fast_1ms",)
+    assert updated[1].available_events == ()

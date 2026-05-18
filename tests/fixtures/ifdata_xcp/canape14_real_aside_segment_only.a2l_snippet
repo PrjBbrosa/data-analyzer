@@ -1,0 +1,25 @@
+/begin IF_DATA XCP
+          /begin SEGMENT
+            0x00
+            0x02
+            0x00
+            0x00
+            0x00
+            /begin CHECKSUM
+              XCP_ADD_14
+              MAX_BLOCK_SIZE 0xFF
+            /end CHECKSUM
+            /begin PAGE
+              0x00
+              ECU_ACCESS_WITH_XCP_ONLY
+              XCP_READ_ACCESS_WITH_ECU_ONLY
+              XCP_WRITE_ACCESS_WITH_ECU_ONLY
+            /end PAGE
+            /begin PAGE
+              0x01
+              ECU_ACCESS_WITH_XCP_ONLY
+              XCP_READ_ACCESS_WITH_ECU_ONLY
+              XCP_WRITE_ACCESS_NOT_ALLOWED
+            /end PAGE
+          /end SEGMENT
+        /end IF_DATA
