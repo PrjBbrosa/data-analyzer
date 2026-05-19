@@ -40,8 +40,29 @@ def decode_dto(
     timestamp_unit_ns: int,
     byte_order: str,
     base_monotonic_s: float,
+    frame_arrival_monotonic_s: float | None = None,
 ) -> Iterator[tuple[str, float, float]]:
-    """Yield ``(measurement_name, timestamp_s, value)`` from one DTO frame."""
+    """Yield ``(measurement_name, timestamp_s, value)`` from one DTO frame.
+
+    Timestamp resolution order:
+
+    1. ``timestamp_size > 0`` — parse the ECU clock from bytes 1..N
+       and use ``base_monotonic_s + ts_raw * timestamp_unit_ns / 1e9``.
+       This is the canonical XCP path.
+
+    2. ``timestamp_size == 0`` and ``frame_arrival_monotonic_s`` is
+       given — use the host arrival time relative to ``base_monotonic_s``.
+       **This is the only thing that lets ERD6-class ECUs (no DAQ
+       timestamps) produce a usable MF4 time axis.** Without this, every
+       sample shares the capture-start monotonic value and the MF4 is
+       unsortable.
+
+    3. ``timestamp_size == 0`` and arrival omitted — fall back to
+       ``base_monotonic_s``. Kept for backwards compat with the
+       existing ``tests/test_dto_decode.py`` suite that pre-dates the
+       arrival-time wiring; production capture loops MUST pass an
+       arrival.
+    """
 
     if not frame:
         return
@@ -50,7 +71,6 @@ def decode_dto(
         return
 
     endian = "<" if byte_order == "MSB_LAST" else ">"
-    timestamp_s = base_monotonic_s
     if timestamp_size > 0:
         ts_fmt = {1: "B", 2: "H", 4: "I"}.get(timestamp_size)
         if ts_fmt is None:
@@ -60,6 +80,10 @@ def decode_dto(
             return
         ts_raw = struct.unpack(endian + ts_fmt, ts_bytes)[0]
         timestamp_s = base_monotonic_s + (ts_raw * timestamp_unit_ns) / 1e9
+    elif frame_arrival_monotonic_s is not None:
+        timestamp_s = max(0.0, frame_arrival_monotonic_s - base_monotonic_s)
+    else:
+        timestamp_s = base_monotonic_s
 
     for entry in daq_map.entries[odt_key]:
         fmt = _FMT_BY_DATATYPE.get(entry.datatype.lower())

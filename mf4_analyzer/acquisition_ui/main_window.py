@@ -64,6 +64,7 @@ from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.backends import (
     FakeRecorderBackend,
     RecorderBackend,
+    RecorderBackendUnavailableError,
 )
 from mf4_analyzer.acquisition_capture.config_store import ConfigSchemaError
 from mf4_analyzer.acquisition_capture.controller import CaptureController
@@ -157,6 +158,11 @@ class CockpitMainWindow(QMainWindow):
     ``initial_pool``
         Optional list of ``MeasurementSummary`` to seed the left
         pane in demo mode.
+    ``allow_fake_backend``
+        Explicit opt-in for the Stage 4 demo path. Production/vehicle
+        windows should leave this false so a failed Vector swap blocks
+        the connection attempt instead of silently starting synthetic
+        data.
     """
 
     # Public Qt signals — Stage 5 wires the auto-stop handler here.
@@ -168,6 +174,8 @@ class CockpitMainWindow(QMainWindow):
         backend: RecorderBackend | None = None,
         health_aggregator: HealthAggregator | None = None,
         initial_pool: Iterable[MeasurementSummary] | None = None,
+        config_path: Path | None = None,
+        allow_fake_backend: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -205,6 +213,14 @@ class CockpitMainWindow(QMainWindow):
         self._fake_can_load_pct: float | None = None
         self._transport_config: TransportConfig | None = None
         self._ifdata_xcp = None
+        self._allow_fake_backend = bool(allow_fake_backend)
+        # T1-6: optional persistent config path. When set, the cockpit
+        # rehydrates Transport on startup and writes it back on every
+        # Settings save. ``None`` keeps the legacy in-memory-only
+        # behavior used by the bulk of the test fixtures.
+        self._config_path: Path | None = (
+            Path(config_path) if config_path is not None else None
+        )
         # User-supplied A2L pool for the left pane (None in pure demo).
         self._initial_pool = tuple(initial_pool or ())
         # Stage 5 hand-off — Stage 5 owns the real CaptureController.
@@ -261,6 +277,11 @@ class CockpitMainWindow(QMainWindow):
         self._apply_state_to_ui(CockpitState.DISCONNECTED, CockpitState.DISCONNECTED)
         if self._initial_pool:
             self._left_pane.set_pool(self._initial_pool)
+
+        # T1-6: hydrate from acquisition_config.yaml AFTER _build_ui so
+        # the toolbar chip / left-pane favorites both exist when we
+        # push values into them.
+        self._hydrate_from_config_path()
 
     # ------------------------------------------------------------------
     # UI scaffolding
@@ -950,7 +971,23 @@ class CockpitMainWindow(QMainWindow):
         self._fake_xcp_connected = True
         self._fake_rec_state = "off"
         self._fake_can_load_pct = 12.5
-        self._backend.start(selection)
+        # T1-3: if transport + IF_DATA + a real pool are all present,
+        # try to swap the default Fake backend for a real Vector one.
+        # The swap is a no-op when any precondition is missing OR when
+        # the caller injected a non-Fake backend at construction time
+        # (preserving the existing test-injection pattern).
+        if not self._maybe_swap_to_vector_backend():
+            self._fake_xcp_connected = False
+            self._fake_rec_state = "off"
+            return
+        try:
+            self._backend.start(selection)
+        except Exception as exc:  # noqa: BLE001 - keep cockpit responsive
+            logger.exception("backend start failed: %s", exc)
+            self._fake_xcp_connected = False
+            self._fake_rec_state = "off"
+            self._status.showMessage(f"连接失败: {exc}")
+            return
         # Start timers if not yet running.
         if not self._health_timer.isActive():
             self._health_timer.start()
@@ -960,6 +997,92 @@ class CockpitMainWindow(QMainWindow):
         self._center.set_signals(
             [(m.name, m.unit, m.event) for m in selection]
         )
+
+    def _maybe_swap_to_vector_backend(self) -> bool:
+        """Replace the default FakeRecorderBackend with a real Vector
+        backend when all preconditions are satisfied.
+
+        Preconditions (all must hold):
+
+        - Current ``self._backend`` is a :class:`FakeRecorderBackend`
+          instance. If the caller injected another backend at
+          construction time (tests, replay, etc.) we never swap — we
+          would break the injection contract.
+        - ``self._transport_config`` is set (operator visited Settings).
+        - ``self._ifdata_xcp`` is set (operator picked a real A2L).
+        - ``self._left_pane._pool`` has at least one MeasurementSummary.
+
+        On a missing precondition: no swap, status bar shows a hard
+        ``[FAKE]`` warning so operators don't ship vehicle tests in
+        fake mode by accident.
+
+        On a precondition satisfied but Vector construction fails
+        (non-Windows, missing python-can, etc.): same hard
+        ``[FAKE]`` warning with the underlying reason inline.
+        """
+
+        if not isinstance(self._backend, FakeRecorderBackend):
+            return True  # respect caller-injected backend
+
+        # Preconditions that operators control.
+        missing: list[str] = []
+        if self._transport_config is None:
+            missing.append("Transport 未配置")
+        if self._ifdata_xcp is None:
+            missing.append("A2L IF_DATA 未加载")
+        if not hasattr(self, "_left_pane") or not self._left_pane._pool:
+            missing.append("measurement pool 为空")
+
+        if missing:
+            if self._allow_fake_backend:
+                self._status.showMessage("Demo backend 已启用 · 不录真实 ECU")
+                return True
+            self._status.showMessage(
+                "[FAKE backend] 不录真实 ECU: " + "; ".join(missing)
+            )
+            return False
+
+        try:
+            from mf4_analyzer.acquisition_capture.backends import (
+                VectorXcpRecorderBackend,
+            )
+
+            measurements = {
+                m.name: m for m in self._left_pane._pool
+            }
+            new_backend = VectorXcpRecorderBackend(
+                transport=self._transport_config,
+                ifdata=self._ifdata_xcp,
+                measurements=measurements,
+            )
+        except RecorderBackendUnavailableError as exc:
+            if self._allow_fake_backend:
+                self._status.showMessage(
+                    f"Demo backend 已启用 · Vector 不可用：{exc}"
+                )
+                return True
+            self._status.showMessage(
+                f"[FAKE backend] Vector 不可用：{exc}"
+            )
+            return False
+        except Exception as exc:  # noqa: BLE001 — UI must stay responsive
+            if self._allow_fake_backend:
+                self._status.showMessage(
+                    f"Demo backend 已启用 · Vector 构造失败：{exc}"
+                )
+                return True
+            self._status.showMessage(
+                f"[FAKE backend] Vector 构造失败：{exc}"
+            )
+            return False
+
+        self._backend = new_backend
+        self._status.showMessage(
+            f"Vector backend 已就绪 · "
+            f"App={self._transport_config.app_name} · "
+            f"Ch={self._transport_config.channel}"
+        )
+        return True
 
     def _start_recording(self) -> None:
         # Spec: red health disables record. The button enabled state
@@ -1469,9 +1592,77 @@ class CockpitMainWindow(QMainWindow):
 
     def _on_settings_changed(self, _values: dict[str, float | int]) -> None:
         if self._settings_dialog is not None:
-            self.set_transport(self._settings_dialog.current_transport())
+            transport = self._settings_dialog.current_transport()
+            self.set_transport(transport)
+            self._persist_transport(transport)
         self._apply_threshold_runtime_refresh()
         self._status.showMessage("设置已保存")
+
+    def _hydrate_from_config_path(self) -> None:
+        """T1-6: pull Transport + favorites from ``acquisition_config.yaml``.
+
+        ``self._config_path`` is the yaml file (typically
+        ``<project_root>/acquisition_config.yaml``). When the file does
+        not exist yet we still wire :meth:`LeftPane.set_config_path` so
+        future favorite toggles write to it, but we leave
+        ``self._transport_config`` at ``None`` so the toolbar chip
+        keeps showing "传输未配置".
+        """
+
+        if self._config_path is None:
+            return
+
+        try:
+            from mf4_analyzer.acquisition_capture.config_store import (
+                load_or_default,
+            )
+
+            store = load_or_default(
+                project_root=self._config_path.parent,
+                cli_config_path=self._config_path,
+            )
+        except ConfigSchemaError as exc:
+            self._status.showMessage(f"配置文件加载失败: {exc}")
+            return
+        except Exception as exc:  # noqa: BLE001 - keep UI responsive
+            self._status.showMessage(f"配置文件读取失败: {exc}")
+            return
+
+        # Favorites wiring is independent of "pinned" — set_config_path
+        # also seeds the left pane with the favorite set, even on a
+        # fresh project.
+        if hasattr(self, "_left_pane"):
+            self._left_pane.set_config_path(self._config_path)
+
+        # Only hydrate transport when an on-disk config actually existed.
+        # ``pinned=False`` means we got the in-memory default — pushing
+        # that would falsely flip the chip to "configured".
+        if store.pinned:
+            self.set_transport(store.transport)
+            self._status.showMessage(
+                f"已加载配置：{self._config_path.name}"
+            )
+
+    def _persist_transport(self, transport: TransportConfig) -> None:
+        """Write the new transport block back to ``self._config_path``.
+
+        No-op when ``self._config_path`` is ``None`` (tests, ephemeral
+        instances). Errors hit the status bar so the operator notices —
+        a silent failure here would let them think Vector flags were
+        saved when they weren't.
+        """
+
+        if self._config_path is None:
+            return
+
+        try:
+            from mf4_analyzer.acquisition_capture.config_store import (
+                save_transport,
+            )
+
+            save_transport(transport, config_path=self._config_path)
+        except Exception as exc:  # noqa: BLE001 - keep UI responsive
+            self._status.showMessage(f"配置保存失败: {exc}")
 
     def _on_settings_reset(self) -> None:
         self._apply_threshold_runtime_refresh()
@@ -1570,21 +1761,129 @@ class CockpitMainWindow(QMainWindow):
             self, "选择 A2L 文件", "", "A2L (*.a2l);;All (*)"
         )
         if path:
-            a2l_path = Path(path)
-            self._a2l_name = a2l_path.name
-            self._ifdata_xcp = self._load_first_ifdata_xcp(a2l_path)
-            self._set_selector_value(self._a2l_btn, "A2L", self._a2l_name)
-            self._update_status_bar()
+            self.apply_a2l_path(Path(path))
 
-    def _load_first_ifdata_xcp(self, path: Path):
+    def apply_a2l_path(self, a2l_path: Path) -> None:
+        """Load A2L summary + IF_DATA, refresh the left pane.
+
+        Extracted from :meth:`_on_pick_a2l` so tests can drive A2L
+        selection without faking ``QFileDialog`` and so non-dialog
+        callers (e.g. a future "recall last A2L" path) reuse the same
+        plumbing.
+
+        T1-1 / T1-2: this is the spot that was missing the
+        ``set_pool`` call. Without it, picking an A2L only updated the
+        title chip and IF_DATA cache — the measurement list stayed
+        empty.
+
+        T2-2 / T2-3: on parse failure we now (a) pop a
+        ``QMessageBox.warning`` so the operator can't miss it at the
+        vehicle, and (b) treat the A2L load as an atomic transaction.
+        IF_DATA and the measurement pool are committed only when both
+        parse steps succeed. Any partial failure clears both so Settings
+        Test Connection cannot mix a new transport block with stale
+        measurements.
+        """
+
+        self._a2l_name = a2l_path.name
+        self._set_selector_value(self._a2l_btn, "A2L", self._a2l_name)
+
+        previous_ifdata = self._ifdata_xcp
+
+        ifdata_error: str | None = None
+        next_ifdata = None
         try:
             from can_logger.p0.ifdata_xcp import parse_ifdata_xcp_file
 
-            blocks = parse_ifdata_xcp_file(path)
+            blocks = parse_ifdata_xcp_file(a2l_path)
         except Exception as exc:  # noqa: BLE001 - file picker must stay responsive
-            self._status.showMessage(f"A2L IF_DATA 解析失败: {exc}")
-            return None
-        return blocks[0] if blocks else None
+            ifdata_error = str(exc)
+            blocks = ()
+
+        if blocks:
+            next_ifdata = blocks[0]
+        elif ifdata_error is None:
+            ifdata_error = (
+                "A2L 不含可用 IF_DATA XCP block（XCPplus-only ECU 或 "
+                "transport 段缺失）"
+            )
+
+        summary, measurement_error = self._load_measurement_summary(a2l_path)
+
+        # T2-2: surface failures via a modal so vehicle-side operators
+        # don't miss them. Combine ifdata + measurement issues into one
+        # dialog when both went bad (common: wrong filetype picked).
+        problems: list[str] = []
+        if ifdata_error is not None:
+            problems.append(f"IF_DATA XCP：{ifdata_error}")
+        if measurement_error is not None:
+            problems.append(measurement_error)
+        if problems and previous_ifdata is not None:
+            problems.append(
+                "上一次 A2L 的 IF_DATA 和 measurement pool 已被清空——"
+                "重新选择 A2L 后再 Test Connection。"
+            )
+        if problems:
+            self._ifdata_xcp = None
+            self._left_pane.set_pool((), a2l_has_daq_events=False)
+            self._status.showMessage(
+                f"A2L 加载失败：{'; '.join(problems)}"
+            )
+            self._warn_a2l_load_problems(a2l_path, problems)
+            return
+
+        self._ifdata_xcp = next_ifdata
+        self._left_pane.set_pool(
+            summary.measurements,
+            a2l_has_daq_events=summary.a2l_has_daq_events,
+        )
+        shown = len(summary.measurements)
+        if shown == summary.total_measurements:
+            self._status.showMessage(f"A2L 已加载：{shown} measurement")
+        else:
+            self._status.showMessage(
+                f"A2L 已加载：{shown}/{summary.total_measurements} measurement"
+            )
+
+    def _warn_a2l_load_problems(self, a2l_path: Path, problems: list[str]) -> None:
+        """T2-2 toast: an operator-visible warning is the only thing
+        that survives a noisy garage.
+
+        We use a window-modal :class:`QMessageBox.open()` (non-blocking
+        from the caller's perspective, but the operator can't dismiss
+        the cockpit until they acknowledge). The static
+        ``QMessageBox.warning(...)`` call is blocking and hangs
+        offscreen test runs, so we drive a managed instance instead.
+        Tests stub this method via attribute assignment.
+        """
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("A2L 加载警告")
+        box.setText(
+            f"{a2l_path.name}\n\n" + "\n".join(f"• {p}" for p in problems)
+        )
+        box.setWindowModality(Qt.WindowModal)
+        # Keep a reference so the dialog isn't GC'd before the user
+        # dismisses it. Replaces any prior dialog (operator only acts
+        # on the most recent A2L pick anyway).
+        self._a2l_warning_box = box
+        box.open()
+
+    def _load_measurement_summary(self, path: Path):
+        """Load the measurement pool for the left pane.
+
+        Returns ``(summary, error)``. The caller owns committing or
+        clearing UI state so IF_DATA and the measurement pool cannot
+        diverge.
+        """
+
+        try:
+            from can_logger.p0.a2l_probe import load_measurement_summary
+
+            return load_measurement_summary(str(path), limit=None), None
+        except Exception as exc:  # noqa: BLE001 - same rationale as above
+            return None, f"A2L measurement 解析失败：{exc}"
 
     def _on_pick_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择输出目录", "")

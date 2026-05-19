@@ -215,6 +215,42 @@ def toggle_favorite(
     return _load_config_file(path)
 
 
+def save_transport(
+    transport: TransportConfig,
+    *,
+    config_path: Path,
+) -> ConfigStore:
+    """Persist ``transport`` to ``config_path`` without touching the
+    other top-level keys.
+
+    T1-6: the Cockpit calls this after the operator confirms Settings
+    so a subsequent restart hydrates the same Vector ``app_name`` /
+    channel / bitrate. Favorites, selected measurements, filter state
+    and threshold overrides are preserved verbatim — only the
+    ``transport`` block is replaced.
+    """
+
+    path = Path(config_path)
+    if path.exists():
+        store = _load_config_file(path)
+    else:
+        store = _empty_config_for_path(path)
+
+    updated = ConfigStore(
+        pinned=True,
+        source_path=path.resolve(),
+        version=CONFIG_VERSION,
+        a2l_path=store.a2l_path,
+        favorites=[dict(item) for item in store.favorites],
+        selected=[dict(item) for item in store.selected],
+        filter_state=dict(store.filter_state),
+        threshold_overrides=dict(store.threshold_overrides),
+        transport=transport,
+    )
+    _write_config_file(path, updated)
+    return _load_config_file(path)
+
+
 def _empty_config_for_path(path: Path) -> ConfigStore:
     return ConfigStore(
         pinned=True,

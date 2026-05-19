@@ -130,7 +130,7 @@ def _run_demo() -> int:
         ),
     )
 
-    window = CockpitMainWindow(initial_pool=pool)
+    window = CockpitMainWindow(initial_pool=pool, allow_fake_backend=True)
     window.show()
     return app.exec_()
 
