@@ -552,7 +552,13 @@ class VectorXcpRecorderBackend(RecorderBackend):
                 if frame is None or not frame:
                     time.sleep(0.001)
                     continue
-                self._last_frame_monotonic = time.monotonic()
+                arrival_monotonic = time.monotonic()
+                self._last_frame_monotonic = arrival_monotonic
+                # T1-5: when the ECU has no DAQ timestamps (ERD6 case,
+                # ``daq_timestamp_size=0``) we must pass the host
+                # arrival time so ``decode_dto`` can synthesize a
+                # relative per-frame timestamp. Otherwise every sample shares
+                # ``_base_monotonic_s`` and the MF4 time axis collapses.
                 for sample in decode_dto(
                     frame=bytes(frame),
                     daq_map=daq_map,
@@ -560,6 +566,7 @@ class VectorXcpRecorderBackend(RecorderBackend):
                     timestamp_unit_ns=self._session.timestamp_unit_ns,
                     byte_order=self._ifdata.byte_order,
                     base_monotonic_s=self._base_monotonic_s,
+                    frame_arrival_monotonic_s=arrival_monotonic,
                 ):
                     self._poll_queue.append(sample)
                     self._rx_count += 1

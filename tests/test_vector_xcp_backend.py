@@ -173,20 +173,33 @@ def test_poll_returns_decoded_samples_from_dto_frames() -> None:
         import_can.return_value = MagicMock(Bus=lambda **_kwargs: MagicMock())
         mock_master = MagicMock()
         mock_master.connect.return_value = MagicMock(resource=0x00)
-        mock_master.fetch.side_effect = [dto_frame, None]
+        frames = [dto_frame]
+
+        def fetch_once_then_idle(*_args, **_kwargs):
+            return frames.pop(0) if frames else None
+
+        mock_master.fetch.side_effect = fetch_once_then_idle
         import_master.return_value = lambda *_args, **_kwargs: mock_master
         backend = VectorXcpRecorderBackend(
             transport=TransportConfig(),
             ifdata=_ifdata(),
             measurements=_measurements(),
         )
-        backend.start(_selected())
-        time.sleep(0.05)
-
-        samples = backend.poll()
-        backend.stop()
+        with patch(
+            "mf4_analyzer.acquisition_capture.backends.time.monotonic",
+            side_effect=[100.0, 100.010],
+        ):
+            backend.start(_selected())
+            for _ in range(50):
+                samples = backend.poll()
+                if samples:
+                    break
+                time.sleep(0.001)
+            backend.stop()
 
     assert [sample[0] for sample in samples] == ["a"]
+    assert samples[0][1] == pytest.approx(0.010)
+    assert samples[0][1] < 1.0
     assert samples[0][2] == float(0x1234)
 
 

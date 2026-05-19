@@ -111,17 +111,41 @@ def _fill_ifdata_events(
     return updated, event_capacity, measurement_events, bool(event_capacity)
 
 
-def load_measurement_summary(a2l_path: str, *, limit: int = 20) -> A2LSummary:
+def _dispose_db(db) -> None:
+    for method_name in ("close", "dispose"):
+        method = getattr(db, method_name, None)
+        if callable(method):
+            method()
+            return
+
+
+def load_measurement_summary(
+    a2l_path: str, *, limit: int | None = None
+) -> A2LSummary:
+    """Summarize an A2L file's measurements.
+
+    ``limit=None`` (default) returns every measurement — that is what
+    the Cockpit Left Pane needs (real ECU A2Ls hold 300+ measurements;
+    truncating silently was the cause of "I picked an A2L and only see
+    20 rows"). CLI probes that just want a sanity check pass an explicit
+    small ``limit`` to keep the run cheap.
+    """
+
     path = Path(a2l_path)
     if not path.exists():
         raise FileNotFoundError(path)
 
     db = DB()
-    session = db.import_a2l(str(path), progress_bar=False, loglevel="ERROR")
+    session = db.import_a2l(
+        str(path),
+        progress_bar=False,
+        loglevel="ERROR",
+        remove_existing=True,
+    )
     try:
         query = session.query(model.Measurement).order_by(model.Measurement.name)
         total = query.count()
-        rows = query.limit(limit).all()
+        rows = query.all() if limit is None else query.limit(limit).all()
         measurements = [
             MeasurementSummary(
                 name=str(m.name),
@@ -133,7 +157,7 @@ def load_measurement_summary(a2l_path: str, *, limit: int = 20) -> A2LSummary:
             for m in rows
         ]
     finally:
-        db.close()
+        _dispose_db(db)
 
     try:
         raw_text = path.read_text(encoding="latin-1", errors="replace")

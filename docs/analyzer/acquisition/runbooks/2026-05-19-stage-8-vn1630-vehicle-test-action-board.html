@@ -1,0 +1,890 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stage 8 VN1630 上车测试行动板</title>
+  <style>
+    :root {
+      --ink: #1d2428;
+      --muted: #5b676e;
+      --paper: #f5f1e8;
+      --surface: #fffaf0;
+      --line: #d8d0c2;
+      --black: #171a1d;
+      --amber: #d97706;
+      --red: #b42318;
+      --green: #13795b;
+      --blue: #175cd3;
+      --cyan: #0e7490;
+      --shadow: rgba(23, 26, 29, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(23, 26, 29, 0.04) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(23, 26, 29, 0.035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 28px 28px;
+      font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      letter-spacing: 0;
+    }
+
+    header {
+      background: var(--black);
+      color: #fff8e7;
+      padding: 30px clamp(18px, 4vw, 54px);
+      border-bottom: 6px solid var(--amber);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: clamp(30px, 5vw, 58px);
+      line-height: 1.05;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+
+    header p {
+      max-width: 1120px;
+      margin: 16px 0 0;
+      color: #e9ddc8;
+      font-size: 17px;
+      line-height: 1.7;
+    }
+
+    main {
+      width: min(1240px, calc(100vw - 28px));
+      margin: 26px auto 64px;
+    }
+
+    section {
+      margin: 18px 0;
+      padding: 22px;
+      background: rgba(255, 250, 240, 0.94);
+      border: 1px solid var(--line);
+      box-shadow: 0 12px 28px var(--shadow);
+    }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: clamp(21px, 2.2vw, 30px);
+      line-height: 1.15;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    p {
+      margin: 0 0 10px;
+      line-height: 1.65;
+    }
+
+    code {
+      padding: 2px 5px;
+      background: #efe6d6;
+      border: 1px solid #ddcfb8;
+      border-radius: 4px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.93em;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration-thickness: 2px;
+      text-underline-offset: 3px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .verdict {
+      border-left: 10px solid var(--red);
+      background: #fff4ed;
+    }
+
+    .verdict strong {
+      color: var(--red);
+      font-size: 1.1em;
+    }
+
+    .status-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .metric {
+      min-height: 96px;
+      padding: 14px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-top: 5px solid var(--muted);
+    }
+
+    .metric.done {
+      border-top-color: var(--green);
+    }
+
+    .metric.wait {
+      border-top-color: var(--amber);
+    }
+
+    .metric.block {
+      border-top-color: var(--red);
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 18px;
+      font-weight: 850;
+      line-height: 1.25;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .lane {
+      border-top: 6px solid var(--cyan);
+    }
+
+    .lane.user {
+      border-top-color: var(--amber);
+    }
+
+    .lane.codex {
+      border-top-color: var(--blue);
+    }
+
+    .step-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 46px 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 14px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .num {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--black);
+      color: #fff8e7;
+      font-weight: 850;
+    }
+
+    .step small {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .owner {
+      display: inline-block;
+      margin: 0 6px 6px 0;
+      padding: 3px 8px;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 850;
+    }
+
+    .owner.codex {
+      background: var(--blue);
+    }
+
+    .owner.user {
+      background: var(--amber);
+    }
+
+    .owner.joint {
+      background: var(--green);
+    }
+
+    .owner.stop {
+      background: var(--red);
+    }
+
+    .gate-table,
+    .failure-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      overflow-wrap: anywhere;
+    }
+
+    .gate-table th,
+    .gate-table td,
+    .failure-table th,
+    .failure-table td {
+      padding: 12px 10px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      line-height: 1.5;
+    }
+
+    .gate-table th,
+    .failure-table th {
+      background: #efe6d6;
+      color: var(--black);
+      font-size: 13px;
+    }
+
+    .phase {
+      border-left: 8px solid var(--black);
+    }
+
+    .phase.codex {
+      border-left-color: var(--blue);
+    }
+
+    .phase.user {
+      border-left-color: var(--amber);
+    }
+
+    .phase.joint {
+      border-left-color: var(--green);
+    }
+
+    .phase.stop {
+      border-left-color: var(--red);
+    }
+
+    .command {
+      margin-top: 8px;
+      padding: 12px;
+      background: #161a1e;
+      color: #e7f6ee;
+      border-left: 5px solid var(--green);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-x: auto;
+    }
+
+    .callout {
+      padding: 14px 16px;
+      border-left: 6px solid var(--amber);
+      background: #fff7e6;
+      margin: 12px 0;
+      line-height: 1.6;
+    }
+
+    .danger {
+      border-left-color: var(--red);
+      background: #fff1f0;
+    }
+
+    .ok {
+      border-left-color: var(--green);
+      background: #ecfdf3;
+    }
+
+    .evidence {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .evidence div {
+      padding: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .checkline {
+      display: flex;
+      gap: 9px;
+      align-items: flex-start;
+      margin: 7px 0;
+      line-height: 1.45;
+    }
+
+    .checkline input {
+      margin-top: 3px;
+      width: 17px;
+      height: 17px;
+      accent-color: var(--green);
+    }
+
+    .badge {
+      display: inline-block;
+      margin-right: 8px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: #fff;
+      vertical-align: middle;
+    }
+
+    .badge.pending {
+      background: var(--muted);
+    }
+
+    .badge.progress {
+      background: var(--amber);
+    }
+
+    .badge.done {
+      background: var(--green);
+    }
+
+    .badge.blocked {
+      background: var(--red);
+    }
+
+    .badge.car {
+      background: var(--cyan);
+    }
+
+    .step.done {
+      background: #f3fbf6;
+      border-color: #b9e4cb;
+    }
+
+    .step.done .num {
+      background: var(--green);
+    }
+
+    .step.blocked {
+      background: #fef2f2;
+      border-color: #f1c0c0;
+    }
+
+    .step.blocked .num {
+      background: var(--red);
+    }
+
+    .progress-bar {
+      margin-top: 14px;
+      height: 12px;
+      background: #efe6d6;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .progress-bar > span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, var(--green) 0%, #2eb88a 100%);
+    }
+
+    .progress-text {
+      margin-top: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    footer {
+      width: min(1240px, calc(100vw - 28px));
+      margin: 0 auto 40px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 880px) {
+      .hero-grid,
+      .two-col,
+      .evidence {
+        grid-template-columns: 1fr;
+      }
+
+      .status-strip {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      section {
+        padding: 16px;
+      }
+    }
+
+    @media print {
+      body {
+        background: #fff;
+      }
+
+      header,
+      section {
+        box-shadow: none;
+      }
+
+      .command {
+        color: #111;
+        background: #f2f2f2;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Stage 8 VN1630 上车测试行动板</h1>
+    <p>目标不是“带着盒子去碰运气”，而是把失败压缩到可定位的层级：软件入口、Vector 驱动、app_name/channel、ECU/XCP 响应、Seed&amp;Key、DAQ/DTO、MF4/Analyzer。按这张表走，车边每一步都有停点。</p>
+  </header>
+
+  <main>
+    <section class="hero-grid">
+      <div class="verdict">
+        <h2>硬结论：软件侧已补齐，仍不要跳过离车预检</h2>
+        <p><strong>Phase A 的代码侧阻塞已经清掉：</strong>真实 Bside A2L 可重复加载 323/323；Cockpit 车辆路径不会静默走 fake；CLI vector 会绑定 A2L event；<code>daq_timestamp_size = 0</code> 输出 session-relative timestamp；<code>vector_probe</code> 分层更准。</p>
+        <p>下一道门槛是 Phase B：Windows + VN1630 离车 <code>vector_probe --open</code> 全绿。Phase B 过了，才带到车上先点 Test Connection，再做 3 信号 30 秒 smoke。</p>
+      </div>
+      <div>
+        <h2>当前证据 + 链路扫描结论</h2>
+        <div class="status-strip">
+          <div class="metric done">
+            <div class="label">O-1</div>
+            <div class="value">Bside A2L 323/323 已验证</div>
+          </div>
+          <div class="metric wait">
+            <div class="label">O-2</div>
+            <div class="value">等待 Vector app_name / channel</div>
+          </div>
+          <div class="metric wait">
+            <div class="label">O-3</div>
+            <div class="value">等待 ECU auth / Seed&amp;Key</div>
+          </div>
+          <div class="metric block">
+            <div class="label">PR-4</div>
+            <div class="value">仍未做 bench / 车上验收</div>
+          </div>
+        </div>
+        <div class="callout">
+          ERD6 Bside A2L：classic CAN，<code>cmd=0x6C8</code>，<code>resp=0x6C9</code>，MAX_CTO/MAX_DTO 8/8，323 个测量量，5 个全局 DAQ event。首轮建议 classic CAN 500k。
+        </div>
+        <div class="callout danger">
+          <strong>2026-05-20 软件侧补齐：</strong>
+          A2L 导入处理已有 <code>.a2ldb</code>；A2L 加载原子化；Cockpit 默认硬阻断 fake fallback；CLI vector 绑定 event/address/payload；<code>ts_size=0</code> 时间戳改为相对录制开始；<code>vector_probe</code> stage1 真实检查 driver。
+          剩余未知只属于 Windows/VN1630/ECU 真实环境。
+        </div>
+        <div class="progress-bar"><span id="phaseA-progress" style="width: 0%"></span></div>
+        <div class="progress-text">Phase A 进度：<span id="phaseA-count">0 / 8</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>上车前总门槛</h2>
+      <table class="gate-table">
+        <thead>
+          <tr>
+            <th>门槛</th>
+            <th>谁负责</th>
+            <th>必须看到什么</th>
+            <th>没看到就怎样</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>软件走 Vector backend，不是 fake/replay</td>
+            <td><span class="owner codex">我</span></td>
+            <td>Cockpit/CLI 启动真实 <code>VectorXcpRecorderBackend</code>，并携带 A2L IF_DATA、measurement summary、transport config。</td>
+            <td>不上车；否则 Record 按钮可能还是演示路径。</td>
+          </tr>
+          <tr>
+            <td>无 ECU 时间戳路径修好</td>
+            <td><span class="owner codex">我</span></td>
+            <td>连续 DTO 帧在 <code>daq_timestamp_size=0</code> 时用每帧到达时间生成 session-relative MF4 timestamp，有回归测试。</td>
+            <td>不上车；否则录到 MF4 也可能时间轴不可用。</td>
+          </tr>
+          <tr>
+            <td>VN1630 离车可打开</td>
+            <td><span class="owner user">你</span></td>
+            <td>Windows 设备管理器 / Vector Hardware Configurator 识别 VN1630，python-can 可打开 app/channel。</td>
+            <td>不接车；先修 Vector 驱动或 app/channel。</td>
+          </tr>
+          <tr>
+            <td>XCP 连接参数明确</td>
+            <td><span class="owner user">你</span><span class="owner codex">我</span></td>
+            <td>A2L 确认 cmd/resp/bitrate；你确认 ECU 上电状态、CAN 通道、Seed&amp;Key 是否开启。</td>
+            <td>只做诊断，不录制。</td>
+          </tr>
+          <tr>
+            <td>证据回收路径准备好</td>
+            <td><span class="owner codex">我</span></td>
+            <td>车边每一步都有日志、截图、MF4、session summary、config 的保存位置。</td>
+            <td>不上车；否则失败后无法复盘。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="two-col">
+      <div class="lane codex">
+        <h2>我先做：把软件变成可上车诊断版（8 项，全 Mac 可测）</h2>
+        <p style="color: var(--muted); font-size: 13px; margin-bottom: 10px;">每项前面的徽章是状态。完成后徽章变 ✅ DONE 并把卡片着绿，未完成的保持灰色或橘色。</p>
+        <div class="step-list" id="phaseA-steps">
+          <div class="step done" data-step="1">
+            <div class="num">1</div>
+            <div>
+              <h3><span class="badge done">✅ 已完成</span>T1-1 + T1-2：打开 A2L 必须填满左栏</h3>
+              <p>当前 <code>_on_pick_a2l</code>（<code>main_window.py:1568</code>）只解析 <code>IF_DATA XCP</code>，<strong>从不调 <code>load_measurement_summary</code> 也不调 <code>_left_pane.set_pool</code></strong>，所以你看到的 measurement 列表永远是空的。叠加 <code>load_measurement_summary</code>（<code>a2l_probe.py:114</code>）默认 <code>limit=20</code>，就算修了刷新也只显示前 20/323。</p>
+              <small>交付：<code>limit: int | None = None</code> 表示"全要"；<code>_on_pick_a2l</code> 拉 summary 后 <code>set_pool(measurements, a2l_has_daq_events=…)</code>；新增 <code>tests/acquisition_ui/test_pick_a2l_populates_left_pane.py</code>。</small>
+              <small><strong>实际落地</strong>：抽出 <code>apply_a2l_path()</code>（main_window.py:1574）让测试直接驱动；signature 默 <code>limit=None</code>；新增 4 个测试（323 满池 / DAQ flag / 失败保留旧 pool / signature 防回归），<code>tests/acquisition_ui/ 159 passed, 1 skipped</code>。</small>
+            </div>
+          </div>
+          <div class="step done" data-step="2">
+            <div class="num">2</div>
+            <div>
+              <h3><span class="badge done">✅ 已完成</span>T1-5：修 <code>daq_timestamp_size=0</code> 的时间戳</h3>
+              <p><code>decode_dto</code>（<code>dto_decode.py:53</code>）在 <code>timestamp_size==0</code> 时返回 <code>base_monotonic_s</code>——整段录制所有样本共享一个时刻。<code>VectorXcpRecorderBackend</code> 已经在 <code>backends.py:555</code> 记 <code>_last_frame_monotonic</code> 但只喂 watchdog，不传给 decoder。ERD6（ts_size=0）的 MF4 时间轴会废。</p>
+              <small>交付：<code>decode_dto</code> 加 <code>frame_arrival_monotonic_s</code>，<code>capture_loop</code> 传 <code>time.monotonic()</code>；新增连续两帧 session-relative timestamp 测试。</small>
+              <small><strong>实际落地</strong>：<code>decode_dto</code> 加可选 <code>frame_arrival_monotonic_s</code>（默认 None，向后兼容），三段解析优先级 ECU clock &gt; arrival-base &gt; base；<code>capture_loop</code> 同时把 arrival 喂给 decoder 和 watchdog。新增测试覆盖 0.0/0.010、arrival 早于 base 夹到 0、ECU clock 不被覆盖，<code>tests/test_dto_decode.py + test_vector_xcp_backend.py</code> 通过。</small>
+            </div>
+          </div>
+          <div class="step done" data-step="3">
+            <div class="num">3</div>
+            <div>
+              <h3><span class="badge done">✅ 已完成</span>T1-3 + T1-4：Cockpit + CLI 接通 Vector backend</h3>
+              <p><code>VectorXcpRecorderBackend</code> 类写好了（<code>backends.py:432</code>），但全仓库只在测试里被构造。<code>main_window.py:187</code> 的 <code>self._backend = backend or FakeRecorderBackend()</code> 让 Cockpit 永远走 fake；<code>set_transport</code> 存了 <code>_transport_config</code> 不读。CLI <code>__main__.py:57</code> <code>choices=("fake","replay")</code>，没有 vector。</p>
+              <small>交付：CLI 加 <code>--backend vector --a2l ... --app-name ... --channel ... --bitrate ...</code>；Cockpit 在 Record 之前判断（transport 已配 + ifdata 已解 + Windows）→ 构造真实 backend，否则状态栏显示 "[FAKE backend]" 并阻断连接。</small>
+              <small><strong>实际落地</strong>：
+                <ul style="margin: 4px 0 0 18px; padding: 0;">
+                  <li>CLI：<code>--backend vector</code> 加完整 7 个 flag（a2l/app/channel/bitrate/can-fd/data-bitrate/seed-key-dll），<code>_make_vector_backend</code> 加载 A2L + IF_DATA + measurements 后先把 <code>--signals</code> 绑定到 event/address/payload/rate；unknown signal / no event / event mismatch 在开 bus 前 exit 6。</li>
+                  <li>Cockpit：新增 <code>_maybe_swap_to_vector_backend()</code> 在 <code>_begin_connection_attempt</code> 前自动调；preconditions（Fake 当前 / transport 已配 / ifdata 已解 / pool 非空）任一缺失都硬阻断 connection attempt，并显示 "[FAKE backend] 不录真实 ECU: &lt;原因&gt;"。只有 <code>--demo</code> 显式 <code>allow_fake_backend=True</code> 才允许 synthetic stream。</li>
+                  <li>测试：<code>tests/test_cli_vector_backend.py</code> 覆盖 event binding / bad signal，<code>tests/acquisition_ui/test_record_backend_swap.py</code> 覆盖 fake hard-block / demo opt-in。</li>
+                </ul>
+              </small>
+            </div>
+          </div>
+          <div class="step done" data-step="4">
+            <div class="num">4</div>
+            <div>
+              <h3><span class="badge done">✅ 已完成</span>T1-6：启动时读 <code>acquisition_config.yaml</code></h3>
+              <p><code>config_store.load_or_default()</code> 写好了能产 TransportConfig + favorites，但 <code>main_window.py.__init__</code> 没调它。每次重启软件，Settings 里的 <code>app_name / channel / bitrate</code> 又得重填，离车预检的可重复性等于零。</p>
+              <small>交付：cockpit 启动 hydrate transport + favorites；Settings Save 把 transport 写回同一个 yaml。</small>
+              <small><strong>实际落地</strong>：<code>config_store</code> 加 <code>save_transport()</code> 公开接口，只换 transport 块不动 favorites/selected；<code>CockpitMainWindow.__init__</code> 加可选 <code>config_path</code> 参数（默认 None 不破已有 fixture）；<code>_hydrate_from_config_path()</code> 在 build_ui 之后挂，pinned 为真才推 transport；<code>_on_settings_changed</code> 调 <code>_persist_transport()</code> 写回；坏 yaml 不崩，状态栏暴露原因。6 个测试 22 passed。</small>
+            </div>
+          </div>
+          <div class="step done" data-step="5">
+            <div class="num">5</div>
+            <div>
+              <h3><span class="badge done">✅ 已完成</span>T2-2 + T2-3：A2L 选错文件要硬提示</h3>
+              <p>当前 <code>_load_first_ifdata_xcp</code>（<code>main_window.py:1583</code>）解析失败只甩状态栏一句"A2L IF_DATA 解析失败"。操作员选错 A2L 在车边根本不会注意到，Settings → Test Connection 会拿上一次的 <code>cmd_id</code> 去测新 A2L。</p>
+              <small>交付：失败弹 QMessageBox.warning；同时清空 <code>self._ifdata_xcp</code>，避免脏配置撞 Test Connection。</small>
+              <small><strong>实际落地</strong>：把 IF_DATA 解析和 measurement 解析合并到 <code>apply_a2l_path</code> 里，按原子事务提交；任一失败都会清空 <code>_ifdata_xcp</code> 和 left-pane measurement pool；新增 <code>_warn_a2l_load_problems</code> 用窗口 modal 的 <code>QMessageBox.open()</code>（非阻塞，但操作员必须确认）；明确提示"上一次 A2L 的 IF_DATA 和 measurement pool 已被清空"；删冗余的 <code>_load_first_ifdata_xcp</code> 函数。</small>
+            </div>
+          </div>
+          <div class="step done" data-step="6">
+            <div class="num">6</div>
+            <div>
+              <h3><span class="badge done">✅ 已完成</span>T3-1 + T3-2：PR-4 runbook + 证据目录落盘</h3>
+              <p>PR-4 章节还在长 plan（<code>plans/2026-05-17-stage-8-vector-xcp-backend.md</code>）里，证据目录 <code>docs/analyzer/acquisition/evidence/stage-8/</code> 不存在。上车后操作员没现成回收路径。</p>
+              <small>交付：抽 <code>docs/analyzer/acquisition/runbooks/stage-8-pr4-bench.md</code>；建 evidence 目录 + README 说明命名（<code>&lt;YYYY-MM-DD&gt;-&lt;round&gt;/</code>）。</small>
+              <small><strong>实际落地</strong>：<code>runbooks/stage-8-pr4-bench.md</code> 落盘，开头加 "Mac 侧 5 项已改"摘要让操作员知道软件差什么；<code>[FAKE backend]</code> 警告 / A2L 加载 toast / ts_size=0 cross-check 三条都纳入 Common errors。<code>evidence/stage-8/README.md</code> 写明 round 子目录命名 + 文件清单 + 不该放的东西。</small>
+            </div>
+          </div>
+          <div class="step done" data-step="7">
+            <div class="num">7</div>
+            <div>
+              <h3><span class="badge done">✅ 已完成</span>T3-3：<code>vector_probe</code> 分层退出码</h3>
+              <p>当前 <code>can_logger/p0/vector_probe.py</code> 单一 <code>print</code> + <code>SystemExit</code>，driver / app / channel / bus 四种失败全归一类，车边判断不出来卡哪。</p>
+              <small>交付：四段输出 + 四个退出码（1=driver，2=app_name，3=channel，4=bus_open）；Mac mock 测试，真机验证在你那边。</small>
+              <small><strong>实际落地</strong>：重写为 <code>StageResult</code> + <code>ProbeReport</code> dataclass 模型；四个分层探针函数（<code>_stage_driver/_app/_channel/_bus</code>）每个失败专属退出码（1/2/3/4），追加 <code>9</code>=未分类、<code>10</code>=非 Windows；<code>--open</code> 才跑 stage 4，dry-run 不抢 bus；stage1 现在通过 <code>xlOpenDriver()</code>/<code>xlCloseDriver()</code> 真实检查 driver，channel list 失败仍归 stage3。</small>
+            </div>
+          </div>
+          <div class="step done" data-step="8">
+            <div class="num">8</div>
+            <div>
+              <h3><span class="badge done">✅ 已完成</span>跑完 Mac 全套测试</h3>
+              <p>每项落地后跑 <code>pytest tests/ -x --ignore=tests/legacy</code>，把 pass/fail 计数贴进 report。Windows-only 的 Vector 真实硬件层不在这里假装通过。</p>
+              <small>交付：阶段 A 全绿才把控制权交给你做 Phase B。</small>
+              <small><strong>实际落地</strong>：本轮 targeted tests：<strong>71 passed, 1 skipped</strong>，真实 Bside A2L：<strong>323/323</strong>。全量 <code>pytest tests/ --ignore=tests/legacy</code>：<strong>997 passed, 2 skipped</strong>。Vector 真机层（XCP CONNECT / Seed&amp;Key / 实际 DAQ 数据流）在 Mac 上无法验证——这部分见阶段 B+C。</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="lane user">
+        <h2>你先做：准备 VN1630 / Windows / ECU 条件</h2>
+        <div class="step-list">
+          <div class="step">
+            <div class="num">1</div>
+            <div>
+              <h3>确认 Windows 测试机</h3>
+              <p>Windows 能运行项目 venv，能拉到我给你的测试分支，能安装 <code>python-can[vector]</code> 和 <code>pyxcp</code>。</p>
+              <small>你要截图或复制输出：Python 版本、pip install 结果、repo branch。</small>
+            </div>
+          </div>
+          <div class="step">
+            <div class="num">2</div>
+            <div>
+              <h3>确认 VN1630 被 Vector 识别</h3>
+              <p>打开 Vector Hardware Configurator，插 VN1630，确认硬件型号、driver version、channel 数。</p>
+              <small>你要记录：VN1630 serial、driver version、channel index。注意 python-can 常用 0-based channel。</small>
+            </div>
+          </div>
+          <div class="step">
+            <div class="num">3</div>
+            <div>
+              <h3>确认 <code>app_name</code></h3>
+              <p>Vector backend 不是靠“VN1630”这个型号开设备，而是靠 <code>app_name + channel</code>。你需要确认或创建一个应用槽，比如 <code>Python</code>。</p>
+              <small>没有这个，最常见失败就是 <code>Vector application 'Python' not configured</code>。</small>
+            </div>
+          </div>
+          <div class="step">
+            <div class="num">4</div>
+            <div>
+              <h3>确认 ECU / 线束 / 上电状态</h3>
+              <p>车上或 HIL 必须有：CAN_H/CAN_L/GND，终端电阻，ECU 上电，钥匙或电源状态在 RUN。</p>
+              <small>如果可以，旁边开 CANalyzer/CANoe 看 bus 是否有正常帧，先排除“线没通”。</small>
+            </div>
+          </div>
+          <div class="step">
+            <div class="num">5</div>
+            <div>
+              <h3>确认 Seed&amp;Key</h3>
+              <p>问 ECU/标定同事：XCP DAQ 是否锁。若锁，需要 64-bit Seed&amp;Key DLL，且路径能在 Settings → Transport 里填入。</p>
+              <small>如果不知道，就先上车点 Test Connection，看 RESOURCE / negative response，再决定找谁。</small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="phase codex">
+      <h2>阶段 A 出口闸：软件项已补齐，控制权转入 Phase B</h2>
+      <p>这一阶段的结束标志不是"我觉得差不多"，而是下面每一项都被代码或测试印证过。当前关键路径 targeted tests 和全量 pytest 都已通过；下一步由你执行 Windows/VN1630 离车预检。</p>
+      <label class="checkline" id="gate-1"><input type="checkbox"> <strong>T1-1+T1-2</strong>：打开 A2L 后左栏立刻填满 measurement（含 fixture 测试）。</label>
+      <label class="checkline" id="gate-2"><input type="checkbox"> <strong>T1-5</strong>：<code>ts_size=0</code> 时两帧 DTO 时间戳严格递增（含单测）。</label>
+      <label class="checkline" id="gate-3"><input type="checkbox"> <strong>T1-3+T1-4</strong>：CLI <code>--backend vector</code> 绑定 A2L event；Cockpit 在车辆路径硬阻断 fake。</label>
+      <label class="checkline" id="gate-4"><input type="checkbox"> <strong>T1-6</strong>：重启 Cockpit 后 Transport 配置仍在，不需要重填。</label>
+      <label class="checkline" id="gate-5"><input type="checkbox"> <strong>T2-2+T2-3</strong>：选错 A2L 弹 dialog，IF_DATA 和 measurement pool 同步清空。</label>
+      <label class="checkline" id="gate-6"><input type="checkbox"> <strong>T3-1+T3-2</strong>：<code>runbooks/stage-8-pr4-bench.md</code> 落盘；<code>evidence/stage-8/</code> 目录就绪。</label>
+      <label class="checkline" id="gate-7"><input type="checkbox"> <strong>T3-3</strong>：<code>vector_probe</code> 四段失败用不同 exit code 暴露。</label>
+      <label class="checkline" id="gate-8"><input type="checkbox"> <strong>Mac 测试套件</strong>全绿（pytest count 贴进 report）。</label>
+      <div class="callout danger">如果这 8 项没完成，你上车就是在替软件做探索测试，不是做车辆验证。</div>
+    </section>
+
+    <section class="phase user">
+      <h2>阶段 B：你在桌面完成离车预检</h2>
+      <p>这个阶段不接 ECU，只确认“Windows + VN1630 + Vector app/channel”本身是通的。</p>
+      <div class="command">.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m can_logger.p0.vector_probe --open --app-name Python --channel 0 --bitrate 500000</div>
+      <label class="checkline"><input type="checkbox"> Vector Hardware Configurator 能看到 VN1630。</label>
+      <label class="checkline"><input type="checkbox"> <code>app_name</code> 已确认，优先用 <code>Python</code>；如果你用 <code>CANalyzer</code>/<code>CANoe</code>，记录实际名字。</label>
+      <label class="checkline"><input type="checkbox"> channel 已确认，先从 <code>0</code> 开始；失败再按硬件配置调整。</label>
+      <label class="checkline"><input type="checkbox"> python-can 能 open bus，不报 <code>vxlapi</code>、app、channel 错误。</label>
+      <div class="callout ok">阶段 B 通过，才值得把 VN1630 带到车上。阶段 B 不通过，上车也不会神奇变好。</div>
+    </section>
+
+    <section class="phase joint">
+      <h2>阶段 C：上车当天按这个顺序测</h2>
+      <div class="step-list">
+        <div class="step">
+          <div class="num">1</div>
+          <div>
+            <h3>只接硬件，不点 Record</h3>
+            <p>接 VN1630、CAN 线、ECU 上电。确认 Vector Config 仍能看到 VN1630。旁边如果能开 CANalyzer，先确认 bus 上有帧且没有 bus-off。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div>
+            <h3>打开 Cockpit，填 Transport</h3>
+            <p>选择 classic CAN，bitrate 先按 500k，填 app_name、channel、Seed&amp;Key DLL（如果有）。不要先选 CAN-FD。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <div>
+            <h3>加载 A2L，只点 Test Connection</h3>
+            <p>看到绿色再继续。红色就停在这里，把 toast / console / 截图发回来，不要反复乱改参数。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <div>
+            <h3>3 信号 30 秒 smoke</h3>
+            <p>选同一个事件下 3 个信号，录 30 秒。Analyzer 必须显示 3 个 channel，样本数接近事件频率预期。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">5</div>
+          <div>
+            <h3>12 信号 60 秒扩展</h3>
+            <p>8 个 10ms + 4 个 100ms。如果 3 信号没过，不做这一步。</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">6</div>
+          <div>
+            <h3>收证据，不现场硬修</h3>
+            <p>保存 MF4、session summary、配置、console、截图。现场只做明确分流，不做盲目改代码。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="phase stop">
+      <h2>失败分流表：车边看到什么就做什么</h2>
+      <table class="failure-table">
+        <thead>
+          <tr>
+            <th>现象</th>
+            <th>优先判断</th>
+            <th>你现场做什么</th>
+            <th>下一责任人</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>vxlapi DLL not loadable</code></td>
+            <td>Vector driver 没装好或位数/路径问题。</td>
+            <td>停止上车测试；修 Vector Hardware Configurator / driver。</td>
+            <td><span class="owner user">你 / IT / Vector 环境</span></td>
+          </tr>
+          <tr>
+            <td><code>Vector application 'Python' not configured</code></td>
+            <td><code>app_name</code> 不存在或没绑定硬件。</td>
+            <td>打开 Vector Hardware Configurator，创建/绑定 <code>Python</code> app，或把实际 app_name 改进 Settings。</td>
+            <td><span class="owner user">你</span></td>
+          </tr>
+          <tr>
+            <td><code>channel N not present</code></td>
+            <td>channel index 错或 VN1630 当前只暴露部分通道。</td>
+            <td>从 <code>0</code>、<code>1</code> 逐个试；记录 Vector Config 显示的通道编号。</td>
+            <td><span class="owner user">你</span></td>
+          </tr>
+          <tr>
+            <td><code>XCP CONNECT failed: no response</code> 或“ECU 未响应”</td>
+            <td>不是写 MF4 问题；是 ECU 没回 XCP。</td>
+            <td>查 ECU 上电、CAN_H/CAN_L/GND、终端、电源状态、bitrate、cmd/resp ID。用 CANalyzer 看是否发出 0x6C7、是否收到 0x6C6。</td>
+            <td><span class="owner user">你 / ECU / 标定支持</span></td>
+          </tr>
+          <tr>
+            <td>CONNECT 有响应，但 Seed&amp;Key 失败</td>
+            <td>DAQ 资源被锁，DLL 缺失或 DLL 位数不匹配。</td>
+            <td>确认 64-bit DLL；如果没有 DLL，找 ECU/标定同事临时开 DAQ 或提供 DLL。</td>
+            <td><span class="owner user">你 / 标定支持</span></td>
+          </tr>
+          <tr>
+            <td>Test Connection 绿，但 Record 后 0 样本</td>
+            <td>进入我的代码层：DAQ allocation、pyxcp DTO 接收 API、ODT packing。</td>
+            <td>立刻保存日志和配置，不扩大测试。</td>
+            <td><span class="owner codex">我</span></td>
+          </tr>
+          <tr>
+            <td>有样本，但 timestamp 不递增或样本率明显错</td>
+            <td>ERD6 无 ECU timestamp；若仍异常，优先查驱动缓存、事件周期、DTO 接收节奏，而不是基础 timestamp contract。</td>
+            <td>保存 MF4 和 session summary；记录 30 秒/60 秒测试是哪一步。</td>
+            <td><span class="owner codex">我</span></td>
+          </tr>
+          <tr>
+            <td>Analyzer 打不开 MF4 或少 channel</td>
+            <td>写入/manifest/selected channel contract 问题。</td>
+            <td>保存 MF4、sidecar、expected signal list。</td>
+            <td><span class="owner codex">我</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>你回传给我的证据包</h2>
+      <p>只要上车失败，不需要现场讲故事，直接按这个目录收东西。我根据证据判断该修代码、修配置、还是找 ECU/Vector 支持。</p>
+      <div class="evidence">
+        <div>
+          <h3>必传</h3>
+          <label class="checkline"><input type="checkbox"> Cockpit Test Connection 截图或 toast 文本。</label>
+          <label class="checkline"><input type="checkbox"> console 完整输出。</label>
+          <label class="checkline"><input type="checkbox"> <code>acquisition_config.yaml</code> 或 Settings 里 app/channel/bitrate 截图。</label>
+          <label class="checkline"><input type="checkbox"> Vector Hardware Configurator 截图。</label>
+        </div>
+        <div>
+          <h3>录制后必传</h3>
+          <label class="checkline"><input type="checkbox"> 生成的 <code>.mf4</code>。</label>
+          <label class="checkline"><input type="checkbox"> <code>.session_summary.json</code>。</label>
+          <label class="checkline"><input type="checkbox"> 选中的信号名、事件名、录制时长。</label>
+          <label class="checkline"><input type="checkbox"> Analyzer 打开后的 channel 树截图。</label>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>最短可执行路线</h2>
+      <p><span class="owner codex">我</span> 已补齐“诊断版软件 + runbook”。<span class="owner user">你</span> 在桌面把 Windows + VN1630 + app_name/channel 预检跑通。<span class="owner joint">一起</span> 上车只先点 Test Connection，绿了再做 3 信号 30 秒，最后才做 12 信号 60 秒。</p>
+      <div class="callout danger">不要跳过离车预检，不要一上车就 Record，不要看到红色后连续乱改多个参数。每次只改一个变量，保留原始失败信息。</div>
+    </section>
+  </main>
+
+  <footer>
+    <p><strong>Evidence anchors:</strong> Stage 8 plan open items and PR-4 runbook draft; Stage 8 real-A2L follow-up report; current backend / CLI / cockpit source state in this checkout. Created for local execution planning, not as final bench evidence.</p>
+    <p><strong>2026-05-19 变更日志：</strong></p>
+    <ul>
+      <li><strong>第一版（codex 初稿）</strong>：Phase A 5 项——timestamp、Vector 入口、Windows 离车预检、PR-4 runbook、Mac 测试。</li>
+      <li><strong>第二版（链路扫描后）</strong>：扩到 8 项。补：T1-1+T1-2（A2L→左栏）、T1-6（配置持久化）、T2-2+T2-3（A2L 选错硬提示）；细化每项的代码定位（文件:行号）；阶段 A 出口闸做成自动同步进度条。</li>
+      <li><strong>第三版（2026-05-20 修复后）</strong>：补齐 A2L sidecar 幂等导入、A2L 原子状态、fake hard-block、CLI event 绑定、session-relative timestamp、vector_probe driver stage；状态改为 Phase B 离车预检待执行。</li>
+      <li><strong>执行规则</strong>：每项做完把对应卡片的徽章翻成 ✅，进度条自动走；任何需要 Windows + VN1630 / 上车操作的步骤遇到立刻停，等用户回报。</li>
+    </ul>
+  </footer>
+
+  <script>
+    (function() {
+      const total = 8;
+      function refresh() {
+        const steps = document.querySelectorAll('#phaseA-steps .step');
+        let done = 0;
+        steps.forEach(function(step) {
+          if (step.classList.contains('done')) {
+            done += 1;
+            const id = step.getAttribute('data-step');
+            const gate = document.querySelector('#gate-' + id + ' input');
+            if (gate) { gate.checked = true; }
+          }
+        });
+        const pct = Math.round((done / total) * 100);
+        const bar = document.getElementById('phaseA-progress');
+        const txt = document.getElementById('phaseA-count');
+        if (bar) { bar.style.width = pct + '%'; }
+        if (txt) { txt.textContent = done + ' / ' + total; }
+      }
+      refresh();
+      // expose for re-eval after we tweak DOM
+      window.refreshPhaseA = refresh;
+    })();
+  </script>
+</body>
+</html>
