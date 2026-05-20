@@ -35,6 +35,8 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
 $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
+$IconsDir = Join-Path $RepoRoot "assets\icons"
+$AppIcon = Join-Path $IconsDir "tracelab.ico"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
@@ -73,6 +75,7 @@ New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir | Out-Nul
 
 Write-Step "Building folder-style exe with PyInstaller"
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
+$AddDataIcons = "$IconsDir;assets\icons"
 $HiddenImports = @(
     "mf4_analyzer.ui_kit",
     "mf4_analyzer.ui_kit.fonts",
@@ -114,10 +117,12 @@ if ($Console) {
 }
 $PyInstallerArgs += @(
     "--name", $AppName,
+    "--icon", $AppIcon,
     "--distpath", $DistDir,
     "--workpath", $WorkDir,
     "--specpath", $SpecDir,
     "--add-data", $AddDataStyle,
+    "--add-data", $AddDataIcons,
     "--collect-submodules", "mf4_analyzer.acquisition_ui.widgets",
     "--collect-all", "qtawesome",
     "--collect-all", "asammdf"
