@@ -366,7 +366,98 @@ class MainWindow(QMainWindow):
         self.canvas_time.set_dual_cursor_mode(mode == 'dual')
 
     def _on_plot_mode_changed(self, mode):
-        self.plot_time()
+        """Toggle 分↔叠 without losing the user's current x-zoom.
+
+        User-request 2026-05-20: re-plotting on mode toggle rebuilds the
+        axes (``plot_channels`` calls ``canvas.clear()`` → ``fig.clear()``
+        → new ``add_subplot``), which lets matplotlib autoscale x back to
+        the full data extent. We snapshot the *visible* x window on the
+        outgoing primary axis, run the replot, then re-apply that window
+        on the freshly built primary axis. Y autoscale is left alone —
+        each layout has its own per-series Y extents.
+
+        Notes per the lessons-learned corpus:
+        - `pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle.md`:
+          ``plot_channels`` re-connects the xlim_changed listener against
+          the new primary axis at the tail of its body, so the
+          ``set_xlim`` below fires the listener on the correct (new) axis.
+        - `pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before.md`:
+          the envelope-cache refresh debounce must be drained AFTER the
+          ``set_xlim`` mutation that re-schedules it, not before. We use
+          a try/finally so any early-return path inside ``plot_time``
+          (no files, no checked channels, overlay-cap user-rejected) is
+          still safe — the finally just flushes whatever pending refresh
+          the no-op state left behind (almost always none).
+        - `pyqt-ui/2026-04-25-cache-invalidation-event-conditional.md`:
+          ``plot_time`` already diff-gates the envelope-cache invalidation
+          on ``_last_plot_mode != mode`` so the wipe fires exactly once
+          per mode change. With the cache cleared, the first refresh
+          tick AFTER ``set_xlim`` re-primes against the preserved xlim.
+        """
+        cur_xlim = self._safe_capture_primary_xlim()
+        try:
+            self.plot_time()
+        finally:
+            if cur_xlim is not None:
+                self._safe_restore_primary_xlim(cur_xlim)
+
+    def _safe_capture_primary_xlim(self):
+        """Return ``(lo, hi)`` for the current primary x-axis, or None.
+
+        None is returned when no primary axis is live (e.g. the canvas
+        was just cleared, no files loaded, no checked channels) — in
+        that case there is nothing to preserve. Defensive ``try/except``
+        because matplotlib raises on a destroyed axes.
+        """
+        ax = getattr(self.canvas_time, '_primary_xaxis_ax', None)
+        if ax is None:
+            return None
+        try:
+            lo, hi = ax.get_xlim()
+        except Exception:
+            return None
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+        return (float(lo), float(hi))
+
+    def _safe_restore_primary_xlim(self, xlim):
+        """Re-apply ``xlim`` to the new primary x-axis after a replot.
+
+        Skips when the replot produced no axes (idle state) or when the
+        underlying time-domain extent is incompatible with the captured
+        window (e.g. closed file changed the extent dramatically). The
+        compatibility check is intentionally loose: as long as the
+        captured window overlaps the new axis' autoscaled extent, we
+        keep it; otherwise we let autoscale stand.
+        """
+        ax = getattr(self.canvas_time, '_primary_xaxis_ax', None)
+        if ax is None:
+            return
+        try:
+            cur_lo, cur_hi = ax.get_xlim()
+        except Exception:
+            return
+        new_lo, new_hi = xlim
+        # Skip restoration if the captured window has zero overlap with
+        # the new axis' autoscale window — that means the underlying
+        # data extent is no longer compatible (channel set changed,
+        # file closed, etc.).
+        if new_hi < cur_lo or new_lo > cur_hi:
+            return
+        try:
+            ax.set_xlim(new_lo, new_hi)
+        except Exception:
+            return
+        # The set_xlim above fires the xlim_changed listener and schedules
+        # a 40 ms debounced envelope refresh. Drain it synchronously so
+        # the post-toggle frame is the full-detail envelope, not a stale
+        # one rendered from the previous mode's last refresh.
+        flush = getattr(self.canvas_time, '_flush_pending_refresh', None)
+        if callable(flush):
+            try:
+                flush()
+            except Exception:
+                pass
 
     def _on_annotation_enabled_changed(self, mode, enabled):
         if mode == 'fft':
@@ -665,8 +756,11 @@ class MainWindow(QMainWindow):
                 self.inspector.top.set_range_limits(0, new_hi)
                 if len(self.files) == 1:
                     self.inspector.top.spin_end.setValue(fd.time_array[-1])
-            self.channel_list.check_first_channel(fid)
-            QTimer.singleShot(100, self.plot_time)
+            # User-request 2026-05-20: do NOT auto-select channel[0] on file
+            # load. The canvas opens empty; the user picks the channel(s)
+            # they want explicitly. Any previously-checked channels on
+            # *other* loaded files remain checked and visible — their fids
+            # are unaffected by the freshly minted ``fid`` above.
             self._update_info()
             self.statusBar.showMessage(f"✅ 已加载: {p.name} ({len(data)} 行) | 共 {len(self.files)} 文件")
             self.toast(f"已加载 {p.name} · {len(data)} 行", "success")

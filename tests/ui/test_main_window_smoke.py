@@ -155,6 +155,13 @@ def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv, str(p2)], "")):
         w.load_files()
+    # User-request 2026-05-20: file load no longer auto-checks channel[0].
+    # The validation path under test reads "every file whose channels are
+    # currently checked"; explicitly check file 1's first channel so the
+    # mismatch-vs-file-2 assertion has something to compare against.
+    fid_first = next(iter(w.files))
+    w.channel_list.check_first_channel(fid_first)
+    qapp.processEvents()
     # Pick custom X from file 2's channel while file 1 checked
     w.inspector.top.set_xaxis_mode('channel')
     w._on_xaxis_mode_changed('channel')
@@ -201,6 +208,152 @@ def test_close_file_resets_inspector(qapp, qtbot, loaded_csv):
     w._close(next(iter(w.files)))
     # No crash; stats strip shows placeholder
     assert '—' in w.chart_stack.stats_strip._lbl_summary.text()
+
+
+def test_file_load_does_not_autoplot_first_channel(qapp, qtbot, loaded_csv):
+    """User-request 2026-05-20 (fix 1): loading a file must NOT
+    auto-check channel[0] or call plot_time. The canvas opens empty
+    and the channel list shows all channels unchecked until the user
+    explicitly picks one.
+    """
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    qapp.processEvents()
+
+    # File loaded.
+    assert len(w.files) == 1
+    # No channels checked.
+    assert w.channel_list.get_checked_channels() == []
+    # Canvas has nothing to draw — no axes (plot_time was not called,
+    # or was called with no checks and cleared).
+    assert w.canvas_time.axes_list == []
+    assert w.canvas_time._channel_lines == {}
+
+
+def test_file_load_reload_with_prior_checks_still_opens_empty(qapp, qtbot, loaded_csv):
+    """fix 1 edge (a): re-loading the same file (a fresh fid) does not
+    inherit any auto-check, even if a previous load had a channel
+    selected by the user."""
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    fid_first = next(iter(w.files))
+    # Simulate user checking a channel manually.
+    w.channel_list.check_first_channel(fid_first)
+    qapp.processEvents()
+    assert len(w.channel_list.get_checked_channels()) == 1
+
+    # Close that file and reload — the fresh fid must come up unchecked.
+    w._close(fid_first)
+    qapp.processEvents()
+    assert w.channel_list.get_checked_channels() == []
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    qapp.processEvents()
+    assert w.channel_list.get_checked_channels() == []
+
+
+def test_file_load_multi_file_no_autocheck_per_file(qapp, qtbot, loaded_csv, tmp_path):
+    """fix 1 edge (b): drag-drop / multi-file load: NONE of the loaded
+    files auto-checks channel[0]."""
+    import pandas as pd
+    import numpy as np
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    df2 = pd.DataFrame({
+        "time": np.linspace(0, 1, 256),
+        "extra": np.cos(np.linspace(0, 6.28, 256)),
+    })
+    p2 = tmp_path / "second.csv"
+    df2.to_csv(p2, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv, str(p2)], "")):
+        w.load_files()
+    qapp.processEvents()
+    assert len(w.files) == 2
+    assert w.channel_list.get_checked_channels() == []
+
+
+def test_plot_mode_toggle_preserves_xlim_overlay_to_subplot(qapp, qtbot, loaded_csv):
+    """User-request 2026-05-20 (fix 2): toggling 分↔叠 must keep the
+    user's current x-zoom window. Toolbar Back/Forward history need
+    not be preserved; only the visible x-axis range."""
+    import pytest
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1500, 800)
+    w.show()
+    qtbot.waitExposed(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    qapp.processEvents()
+
+    # Check two channels so the overlay/subplot distinction is meaningful.
+    fid = next(iter(w.files))
+    w.channel_list._updating = True
+    fi = w.channel_list._file_items[fid]
+    for i in range(min(2, fi.childCount())):
+        from PyQt5.QtCore import Qt
+        fi.child(i).setCheckState(0, Qt.Checked)
+    w.channel_list._updating = False
+    w.channel_list.channels_changed.emit()
+    qapp.processEvents()
+
+    # Start in subplot mode, render once.
+    w.chart_stack.set_plot_mode('subplot')
+    qapp.processEvents()
+    w.plot_time()
+    qapp.processEvents()
+    assert w.canvas_time.axes_list
+
+    # Zoom in to a sub-range.
+    t0, t1 = 0.2, 0.6
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(t0, t1)
+    qapp.processEvents()
+    captured = primary.get_xlim()
+    assert captured[0] == pytest.approx(t0, abs=1e-6)
+    assert captured[1] == pytest.approx(t1, abs=1e-6)
+
+    # Toggle 分→叠. Listener fires → _on_plot_mode_changed → plot_time
+    # → axes rebuilt. The new primary axis must keep the captured window.
+    w.chart_stack.set_plot_mode('overlay')
+    qapp.processEvents()
+    new_primary = w.canvas_time._primary_xaxis_ax
+    assert new_primary is not None
+    nlo, nhi = new_primary.get_xlim()
+    assert nlo == pytest.approx(t0, abs=1e-6)
+    assert nhi == pytest.approx(t1, abs=1e-6)
+
+    # Toggle 叠→分. Window is again preserved.
+    w.chart_stack.set_plot_mode('subplot')
+    qapp.processEvents()
+    final_primary = w.canvas_time._primary_xaxis_ax
+    assert final_primary is not None
+    flo, fhi = final_primary.get_xlim()
+    assert flo == pytest.approx(t0, abs=1e-6)
+    assert fhi == pytest.approx(t1, abs=1e-6)
 
 
 def test_main_window_promotes_fft_time_canvas(qtbot):
