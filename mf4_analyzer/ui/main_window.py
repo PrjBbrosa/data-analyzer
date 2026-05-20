@@ -11,7 +11,6 @@ from pathlib import Path
 from collections import OrderedDict
 
 from PyQt5.QtWidgets import (
-    QAction,
     QApplication,
     QDialog,
     QFileDialog,
@@ -84,7 +83,7 @@ class FFTTimeWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MF4/CSV/Excel 数据分析工具 v5.0 - 多文件支持")
+        self.setWindowTitle("TraceLab v5.0")
         self.setGeometry(100, 100, 1450, 850);
         # Spec §9 minimum window size: 1100 × 640.
         self.setMinimumSize(1100, 640)
@@ -130,7 +129,6 @@ class MainWindow(QMainWindow):
 
         self.toolbar = Toolbar(self)
         root.addWidget(self.toolbar)
-        self._init_menus()
 
         splitter = QSplitter(Qt.Horizontal, self)
         self.splitter = splitter
@@ -181,17 +179,6 @@ class MainWindow(QMainWindow):
         # be the main window so the toast floats above the central canvas).
         from .widgets import Toast
         self._toast = Toast(self)
-
-    def _init_menus(self):
-        from ..ui_kit.icons import Icons
-
-        tools_menu = self.menuBar().addMenu("工具")
-        self.action_open_acquisition_cockpit = QAction(
-            Icons.plot(),
-            "打开 Acquisition Cockpit",
-            self,
-        )
-        tools_menu.addAction(self.action_open_acquisition_cockpit)
 
     # ---- public toast helper ----
     def toast(self, msg, level='info'):
@@ -250,9 +237,6 @@ class MainWindow(QMainWindow):
         self.toolbar.export_requested.connect(self.export_excel)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
-        self.action_open_acquisition_cockpit.triggered.connect(
-            lambda _checked=False: self.open_acquisition_cockpit()
-        )
         self.toolbar.inspector_visibility_changed.connect(self.set_inspector_visible)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.chart_stack.image_copied.connect(
