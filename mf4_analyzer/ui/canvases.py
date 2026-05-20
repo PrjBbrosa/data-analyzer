@@ -532,6 +532,16 @@ class TimeDomainCanvas(FigureCanvas):
         self._selected_overlay_channel = None
         self._overlay_pick_radius_px = 12.0
         self._overlay_y_drag_start = None
+        # User-request 2026-05-20: clicking a blank region of the canvas
+        # in overlay mode must clear the current selection so the user
+        # can leave per-series Y mode after a vertical drag. We track the
+        # press pixel and the "blank-hit" verdict at press time so the
+        # release handler can decide whether the gesture was a click
+        # (release within _CLICK_PIXEL_TOLERANCE px of press) or a drag
+        # (pan/rubber-band/y-shift). Only a click clears the selection.
+        self._overlay_deselect_press_xy = None
+        self._overlay_deselect_armed = False
+        self._overlay_click_pixel_tol = 3.0
         self._layout_refresh_timer = QTimer(self)
         self._layout_refresh_timer.setSingleShot(True)
         self._layout_refresh_timer.setInterval(40)
@@ -619,6 +629,8 @@ class TimeDomainCanvas(FigureCanvas):
         self._chart_options_ax = None
         self._selected_overlay_channel = None
         self._overlay_y_drag_start = None
+        self._overlay_deselect_press_xy = None
+        self._overlay_deselect_armed = False
         self._primary_xaxis_ax = None
         self._cursor_artists = [];
         self._a_artists = [];
@@ -807,8 +819,16 @@ class TimeDomainCanvas(FigureCanvas):
         return self._selected_overlay_channel
 
     def select_overlay_channel(self, name):
-        """Select one overlay series as the target for per-series Y controls."""
+        """Select one overlay series as the target for per-series Y controls.
+
+        Passing ``name=None`` clears the selection (no series highlighted,
+        all overlay curves return to their default alpha/linewidth). This
+        is the user-facing clear path — invoked by the blank-canvas click
+        deselect in overlay mode.
+        """
         if name is not None and name not in self._channel_lines:
+            return
+        if self._selected_overlay_channel == name:
             return
         self._selected_overlay_channel = name
         self._apply_overlay_selection_style()
@@ -1336,6 +1356,10 @@ class TimeDomainCanvas(FigureCanvas):
         self._mouse_button_pressed = False
 
     def _on_click(self, e):
+        # Reset overlay deselect arming on every press; release will
+        # re-check the conditions.
+        self._overlay_deselect_press_xy = None
+        self._overlay_deselect_armed = False
         # Double-click on the plot face or axis gutter opens the full chart
         # options dialog for the targeted axes.
         if e.button == 1 and e.dblclick:
@@ -1343,6 +1367,28 @@ class TimeDomainCanvas(FigureCanvas):
             return
         if self._select_overlay_channel_from_event(e):
             return
+        # User-request 2026-05-20: in overlay mode, a click on a blank
+        # region (no curve within pick radius) must clear the current
+        # selection so the user can leave per-series Y-drag mode.
+        # Conditions: overlay mode is live, a selection currently exists,
+        # this is the left button, the toolbar's pan/zoom tool is NOT
+        # active (otherwise we'd be starting a navigation drag), no
+        # axis-lock rubber band is being started, and no dual-cursor
+        # placement is in flight. Arm the deselect; the release handler
+        # confirms it was a click (no pan/drag motion).
+        if (
+            self._overlay_mode
+            and self._selected_overlay_channel is not None
+            and e.button == 1
+            and not getattr(e, 'dblclick', False)
+            and self._axis_lock is None
+            and not self._cursor_visible
+            and not self._toolbar_navigating()
+            and e.x is not None
+            and e.y is not None
+        ):
+            self._overlay_deselect_press_xy = (float(e.x), float(e.y))
+            self._overlay_deselect_armed = True
         # Axis-lock mode short-circuits dual-cursor and initiates rubber-band
         if self._axis_lock is not None and e.button == 1 and e.inaxes is not None \
                 and e.xdata is not None and e.ydata is not None:
@@ -1511,6 +1557,66 @@ class TimeDomainCanvas(FigureCanvas):
         self._rb_ax = None
         self.draw_idle()
 
+    def _toolbar_navigating(self):
+        """Return True when the parent's nav toolbar is in pan or zoom mode.
+
+        The blank-canvas deselect MUST NOT fire while pan/zoom is the
+        active tool, otherwise the start of a navigation drag would
+        flip the selection mid-gesture. Resilient to a missing parent
+        toolbar (canvas used standalone in a test fixture)."""
+        parent = self.parent() if callable(getattr(self, 'parent', None)) else None
+        toolbar = getattr(parent, 'toolbar', None) if parent is not None else None
+        if toolbar is None:
+            return False
+        return _toolbar_mode_key(toolbar) in ('pan', 'zoom')
+
+    def _maybe_deselect_overlay_on_click(self, e):
+        """Release-side complement of the press-side deselect arming.
+
+        Fires the deselect only when (a) the gesture started on a blank
+        region with a selection live, (b) overlay mode is still on,
+        (c) the toolbar is NOT in pan/zoom (a user could activate pan
+        between press and release; we refuse to deselect in that case
+        to mirror the press-side gate), (d) no Y-drag advanced the
+        overlay state in the meantime, and (e) the release pixel is
+        within ``_overlay_click_pixel_tol`` of the press pixel (true
+        click, not a drag). All of these must be true simultaneously.
+        """
+        if not self._overlay_deselect_armed:
+            return
+        press = self._overlay_deselect_press_xy
+        if press is None:
+            return
+        if not self._overlay_mode:
+            return
+        if self._selected_overlay_channel is None:
+            return
+        if self._toolbar_navigating():
+            return
+        # If a Y-drag actually advanced (start_y captured, motion fired,
+        # ylim changed), the press was the start of a drag — not a click.
+        # _overlay_y_drag_start is only set inside the press-side hit
+        # path; if the press hit a curve it would have returned True
+        # from _select_overlay_channel_from_event and we'd never have
+        # armed the deselect. So a non-None drag start here means a
+        # post-arm drag began — refuse.
+        if self._overlay_y_drag_start is not None:
+            return
+        ex = getattr(e, 'x', None)
+        ey = getattr(e, 'y', None)
+        if ex is None or ey is None:
+            return
+        dx = float(ex) - press[0]
+        dy = float(ey) - press[1]
+        if (dx * dx + dy * dy) > (self._overlay_click_pixel_tol ** 2):
+            return
+        # All gates passed — clear the selection. Per the lesson
+        # `pyqt-ui/2026-05-13-matplotlib-resize-and-modal-nav-state.md`,
+        # also scrub stale motion bookkeeping so the post-deselect
+        # cursor/drag state doesn't inherit anything from the press.
+        self._overlay_y_drag_start = None
+        self.select_overlay_channel(None)
+
     def _on_release(self, e):
         # End-of-pan/zoom flush (Phase 1 item 2). Must run AFTER any
         # rubber-band ``set_xlim``/``set_ylim`` so that the freshly
@@ -1520,6 +1626,10 @@ class TimeDomainCanvas(FigureCanvas):
         # branch and every early-return path (no axis lock, missing
         # press anchor, off-axis release) end with no pending QTimer.
         try:
+            # User-request 2026-05-20: complete the blank-canvas click
+            # deselect BEFORE the axis-lock early-return so the gate
+            # runs on every release, not only on rubber-band releases.
+            self._maybe_deselect_overlay_on_click(e)
             if self._axis_lock is None or self._rb_start is None or self._rb_ax is None:
                 return
             if e.inaxes is not self._rb_ax or e.xdata is None or e.ydata is None:
@@ -1535,6 +1645,8 @@ class TimeDomainCanvas(FigureCanvas):
             self._cancel_rb()
         finally:
             self._overlay_y_drag_start = None
+            self._overlay_deselect_press_xy = None
+            self._overlay_deselect_armed = False
             self._flush_pending_refresh()
 
     def _on_key(self, e):

@@ -419,3 +419,112 @@ def test_timedomain_overlay_selection_does_not_retarget_axis_lock_drag(qtbot):
     assert canvas._rb_ax is speed_ax
     assert canvas._rb_patch is not None
     assert canvas._rb_patch.get_width() > 0.0
+
+
+def test_timedomain_overlay_blank_click_clears_selection(qtbot):
+    """User-request 2026-05-20 (fix 3): in overlay mode, clicking on a
+    blank region of the canvas (no curve under the cursor, no pan/zoom
+    tool active, true click = release within pixel tolerance of press)
+    must clear the current overlay selection and emit
+    ``overlay_channel_selected(None)``.
+
+    Scenario: select a curve via a pick-hit press, simulate a vertical
+    drag (motion + release advances ylim but does not deselect — drag,
+    not click), then press + release on a blank pixel — selection
+    clears, signal fires with None.
+    """
+    from matplotlib.backend_bases import MouseEvent
+
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    t = np.linspace(0.0, 1.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    canvas.draw()
+
+    # (a) Pick-hit press selects torque.
+    torque_ax, torque_line = canvas._channel_lines["torque"]
+    xd = float(torque_line.get_xdata()[30])
+    yd = float(torque_line.get_ydata()[30])
+    xp, yp = torque_ax.transData.transform((xd, yd))
+    press = MouseEvent("button_press_event", canvas, xp, yp, button=1)
+    canvas.callbacks.process("button_press_event", press)
+    assert canvas.selected_overlay_channel() == "torque"
+
+    # (b) Vertical drag: motion shifts ylim but must not deselect.
+    canvas._mouse_button_pressed = True
+    before_ylim = torque_ax.get_ylim()
+    move = SimpleNamespace(
+        inaxes=torque_ax, x=xp, y=yp + 40,
+        xdata=xd, ydata=yd, button=1,
+    )
+    canvas._on_move(move)
+    after_ylim = torque_ax.get_ylim()
+    assert after_ylim != pytest.approx(before_ylim)
+    release_drag = MouseEvent(
+        "button_release_event", canvas, xp, yp + 40, button=1
+    )
+    canvas.callbacks.process("button_release_event", release_drag)
+    canvas._mouse_button_pressed = False
+    # Selection survives the drag.
+    assert canvas.selected_overlay_channel() == "torque"
+
+    # (c) Press + release on a blank pixel near the axes corner —
+    # far from every curve so the pick-radius search misses.
+    blank_x = float(canvas.fig.bbox.width) - 8.0
+    blank_y = float(canvas.fig.bbox.height) - 8.0
+    deselect_events = []
+    canvas.overlay_channel_selected.connect(deselect_events.append)
+    press_blank = MouseEvent(
+        "button_press_event", canvas, blank_x, blank_y, button=1
+    )
+    canvas.callbacks.process("button_press_event", press_blank)
+    # Selection still live after press alone.
+    assert canvas.selected_overlay_channel() == "torque"
+    # Release at the same pixel (true click, not drag).
+    release_blank = MouseEvent(
+        "button_release_event", canvas, blank_x, blank_y, button=1
+    )
+    canvas.callbacks.process("button_release_event", release_blank)
+
+    # (d) Selection cleared and signal fired with None.
+    assert canvas.selected_overlay_channel() is None
+    assert deselect_events and deselect_events[-1] is None
+
+
+def test_timedomain_overlay_blank_drag_does_not_deselect(qtbot):
+    """fix 3 negative: a press-on-blank followed by a release at a
+    pixel farther than ``_overlay_click_pixel_tol`` away is a drag,
+    not a click — selection must survive."""
+    from matplotlib.backend_bases import MouseEvent
+
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    t = np.linspace(0.0, 1.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    canvas.select_overlay_channel("torque")
+    assert canvas.selected_overlay_channel() == "torque"
+
+    blank_x = float(canvas.fig.bbox.width) - 8.0
+    blank_y = float(canvas.fig.bbox.height) - 8.0
+    press = MouseEvent("button_press_event", canvas, blank_x, blank_y, button=1)
+    canvas.callbacks.process("button_press_event", press)
+    # Release 20 px away — drag, not click.
+    release = MouseEvent(
+        "button_release_event", canvas, blank_x - 20.0, blank_y - 20.0, button=1
+    )
+    canvas.callbacks.process("button_release_event", release)
+    assert canvas.selected_overlay_channel() == "torque"
