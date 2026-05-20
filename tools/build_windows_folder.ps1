@@ -35,16 +35,20 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
 $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
+$IconsDir = Join-Path $RepoRoot "assets\icons"
+$AppIcon = Join-Path $IconsDir "tracelab.ico"
+$RuntimeHookPyxcp = Join-Path $PSScriptRoot "pyinstaller_rthook_pyxcp_vendor.py"
 $VenvDir = Join-Path $RepoRoot ".venv-build-win"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $DistDir = Join-Path $RepoRoot "dist"
 $WorkDir = Join-Path $RepoRoot "build\pyinstaller"
 $SpecDir = Join-Path $RepoRoot "build\spec"
+$VendorPyxcpDir = Join-Path $WorkDir "_vendor_pyxcp"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
 # Default output: dist\MF4DataAnalyzer\MF4DataAnalyzer.exe
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeHookPyxcp)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -71,8 +75,30 @@ if (-not $KeepPrevious) {
 
 New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir | Out-Null
 
+# pyxcp triggers a 0xC0000005 inside a PyQt-loaded process if PyInstaller's
+# analysis phase imports it (native DLL loaded twice). Vendor the package
+# into _vendor_pyxcp at build time and exclude pyxcp from analysis; the
+# runtime hook puts _vendor_pyxcp on sys.path before any acquisition code
+# runs. See docs/lessons-learned/codex-windows-native-import-guard.md.
+Write-Step "Vendoring pyxcp to _vendor_pyxcp (avoid analysis-time native import)"
+if (Test-Path $VendorPyxcpDir) {
+    Remove-Item -Recurse -Force $VendorPyxcpDir
+}
+New-Item -ItemType Directory -Force -Path $VendorPyxcpDir | Out-Null
+$PyxcpLocateScript = @"
+import pathlib, pyxcp
+print(pathlib.Path(pyxcp.__file__).parent)
+"@
+$PyxcpSrc = (& $VenvPython -c $PyxcpLocateScript).Trim()
+if (-not $PyxcpSrc -or -not (Test-Path $PyxcpSrc)) {
+    throw "pyxcp not found in venv: ensure it is listed in requirements.txt"
+}
+Copy-Item -Recurse -Force -Path $PyxcpSrc -Destination (Join-Path $VendorPyxcpDir "pyxcp")
+
 Write-Step "Building folder-style exe with PyInstaller"
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
+$AddDataIcons = "$IconsDir;assets\icons"
+$AddDataVendorPyxcp = "$VendorPyxcpDir;_vendor_pyxcp"
 $HiddenImports = @(
     "mf4_analyzer.ui_kit",
     "mf4_analyzer.ui_kit.fonts",
@@ -114,10 +140,15 @@ if ($Console) {
 }
 $PyInstallerArgs += @(
     "--name", $AppName,
+    "--icon", $AppIcon,
     "--distpath", $DistDir,
     "--workpath", $WorkDir,
     "--specpath", $SpecDir,
     "--add-data", $AddDataStyle,
+    "--add-data", $AddDataIcons,
+    "--add-data", $AddDataVendorPyxcp,
+    "--runtime-hook", $RuntimeHookPyxcp,
+    "--exclude-module", "pyxcp",
     "--collect-submodules", "mf4_analyzer.acquisition_ui.widgets",
     "--collect-all", "qtawesome",
     "--collect-all", "asammdf"
