@@ -25,6 +25,21 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         assert token in text
 
 
+def test_windows_folder_build_script_vendors_pyxcp_without_analysis_import():
+    script = ROOT / "tools" / "build_windows_folder.ps1"
+    runtime_hook = ROOT / "tools" / "pyinstaller_rthook_pyxcp_vendor.py"
+
+    assert script.exists()
+    assert runtime_hook.exists()
+    text = script.read_text(encoding="utf-8")
+
+    assert "_vendor_pyxcp" in text
+    assert "--runtime-hook" in text
+    assert "pyinstaller_rthook_pyxcp_vendor.py" in text
+    assert "--exclude-module" in text
+    assert "pyxcp" in text
+
+
 def test_windows_folder_build_script_can_make_console_diagnostic_build():
     script = ROOT / "tools" / "build_windows_folder.ps1"
 

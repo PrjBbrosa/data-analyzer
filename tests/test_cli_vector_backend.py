@@ -34,7 +34,7 @@ def test_parser_accepts_vector_choice_and_flags():
     )
 
     assert args.backend == "vector"
-    assert str(args.a2l) == "/tmp/dummy.a2l"
+    assert args.a2l == Path("/tmp/dummy.a2l")
     assert args.app_name == "Python"
     assert args.channel == 0
     assert args.bitrate == 500000

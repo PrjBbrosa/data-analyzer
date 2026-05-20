@@ -122,8 +122,9 @@ def _open_vector_bus(transport: TransportConfig):
 
 
 def _make_pyxcp_master(bus, transport: TransportConfig):
-    from pyxcp.master import Master  # type: ignore[import-not-found]
+    from mf4_analyzer.acquisition_capture.backends import _import_xcp_master
 
+    Master = _import_xcp_master()
     return Master("can", config={"bus": bus, "timeout": transport.timeout_s})
 
 
@@ -143,7 +144,15 @@ def test_xcp_connection(
                 error=f"CAN 总线打开失败：{exc}",
             )
 
-        master = _make_pyxcp_master(bus, transport)
+        try:
+            master = _make_pyxcp_master(bus, transport)
+        except Exception as exc:  # noqa: BLE001 - surface pyxcp import/init failure
+            return TestXcpConnectionResult(
+                ok=False,
+                resource_byte=None,
+                latency_ms=None,
+                error=f"pyxcp Master init failed: {exc}",
+            )
         started = time.monotonic()
         try:
             response = master.connect()

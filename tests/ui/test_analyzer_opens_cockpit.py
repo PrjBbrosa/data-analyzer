@@ -42,6 +42,37 @@ def test_importing_analyzer_main_window_does_not_import_cockpit_main_window():
     )
 
 
+def test_importing_cockpit_main_window_does_not_import_pya2l():
+    env = dict(os.environ)
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    code = (
+        "import builtins\n"
+        "real_import = builtins.__import__\n"
+        "def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):\n"
+        "    if name == 'pya2l' or name.startswith('pya2l.'):\n"
+        "        raise AssertionError(f'eager pya2l import: {name}')\n"
+        "    return real_import(name, globals, locals, fromlist, level)\n"
+        "builtins.__import__ = guarded_import\n"
+        "import mf4_analyzer.acquisition_ui.main_window\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        "Cockpit startup imported pya2l before an A2L file was selected\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+
 def _patch_cockpit_import(monkeypatch, cockpit_cls):
     import mf4_analyzer.ui.main_window as main_window_module
 

@@ -19,10 +19,36 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from pya2l import DB
-import pya2l.model as model
-
 from can_logger.p0.ifdata_xcp import parse_ifdata_xcp, parse_measurement_events
+
+
+DB = None
+model = None
+
+
+class _MeasurementShim:
+    name = "name"
+
+
+class _ModelShim:
+    Measurement = _MeasurementShim
+
+
+def _load_pya2l():
+    """Load pya2l only when an A2L file is actually parsed."""
+
+    global DB, model
+    if DB is None:
+        from pya2l import DB as loaded_db
+        import pya2l.model as loaded_model
+
+        DB = loaded_db
+        model = loaded_model
+    elif model is None:
+        # Tests monkeypatch DB with a fake whose query() ignores the model
+        # argument. Keep that path independent from the optional pya2l wheel.
+        model = _ModelShim
+    return DB, model
 
 
 @dataclass(frozen=True)
@@ -135,7 +161,8 @@ def load_measurement_summary(
     if not path.exists():
         raise FileNotFoundError(path)
 
-    db = DB()
+    db_cls, a2l_model = _load_pya2l()
+    db = db_cls()
     session = db.import_a2l(
         str(path),
         progress_bar=False,
@@ -143,7 +170,9 @@ def load_measurement_summary(
         remove_existing=True,
     )
     try:
-        query = session.query(model.Measurement).order_by(model.Measurement.name)
+        query = session.query(a2l_model.Measurement).order_by(
+            a2l_model.Measurement.name
+        )
         total = query.count()
         rows = query.all() if limit is None else query.limit(limit).all()
         measurements = [
