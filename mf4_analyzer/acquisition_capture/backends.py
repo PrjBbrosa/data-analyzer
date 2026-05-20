@@ -26,6 +26,8 @@ the lazy imports below preserve macOS-host import safety.
 from __future__ import annotations
 
 import math
+import importlib
+import subprocess
 import sys
 import threading
 import time
@@ -417,6 +419,61 @@ class RecorderStartError(RuntimeError):
     """Raised when backend start-up fails after construction."""
 
 
+_PYXCP_IMPORT_PROBE_RESULT: tuple[int, str, str] | None = None
+
+
+def _format_exit_code(returncode: int) -> str:
+    unsigned = returncode & 0xFFFFFFFF
+    if returncode < 0 or unsigned > 0x7FFFFFFF:
+        return f"{returncode} (0x{unsigned:08X})"
+    return str(returncode)
+
+
+def _compact_probe_output(stdout: str, stderr: str) -> str:
+    text = (stderr or stdout or "").strip()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    detail = lines[0] if lines else "no output"
+    if len(detail) > 300:
+        return detail[:297] + "..."
+    return detail
+
+
+def _run_pyxcp_import_probe() -> tuple[int, str, str]:
+    qt_widgets_module = "Py" + "Qt5.QtWidgets"
+    xcp_master_module = "py" + "xcp.master"
+    probe_code = (
+        "try:\n"
+        f"    __import__({qt_widgets_module!r}, fromlist=['QApplication'])\n"
+        "except Exception:\n"
+        "    pass\n"
+        f"__import__({xcp_master_module!r}, fromlist=['Master'])\n"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", probe_code],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return 124, "", f"pyxcp import probe timed out after {exc.timeout}s"
+    return result.returncode, result.stdout, result.stderr
+
+
+def _ensure_pyxcp_import_safe() -> None:
+    global _PYXCP_IMPORT_PROBE_RESULT
+    if _PYXCP_IMPORT_PROBE_RESULT is None:
+        _PYXCP_IMPORT_PROBE_RESULT = _run_pyxcp_import_probe()
+    returncode, stdout, stderr = _PYXCP_IMPORT_PROBE_RESULT
+    if returncode == 0:
+        return
+    raise RecorderBackendUnavailableError(
+        "pyxcp import failed in an isolated probe "
+        f"(exit={_format_exit_code(returncode)}): "
+        f"{_compact_probe_output(stdout, stderr)}"
+    )
+
+
 def _import_can():
     import can  # type: ignore[import-not-found]
 
@@ -424,9 +481,9 @@ def _import_can():
 
 
 def _import_xcp_master():
-    from pyxcp.master import Master  # type: ignore[import-not-found]
-
-    return Master
+    _ensure_pyxcp_import_safe()
+    module = importlib.import_module("py" + "xcp.master")
+    return module.Master
 
 
 class VectorXcpRecorderBackend(RecorderBackend):

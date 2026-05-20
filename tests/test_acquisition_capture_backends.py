@@ -275,3 +275,21 @@ def test_vector_backend_module_has_no_top_level_can_import():
             pytest.fail(f"top-level python-can import found: {line!r}")
         if line.startswith("import pyxcp"):
             pytest.fail(f"top-level pyxcp import found: {line!r}")
+
+
+def test_vector_runtime_uses_dynamic_pyxcp_imports_for_pyinstaller():
+    """PyInstaller follows static pyxcp imports even inside functions.
+
+    On Windows that crashes while importing pyxcp's native extension during
+    build analysis, so Vector runtime paths must keep pyxcp behind dynamic
+    import strings.
+    """
+
+    root = Path(__file__).resolve().parents[1]
+    for relative in (
+        "mf4_analyzer/acquisition_capture/backends.py",
+        "mf4_analyzer/acquisition_capture/vector_hw_probe.py",
+    ):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "from pyxcp" not in text
+        assert "import pyxcp" not in text

@@ -80,6 +80,21 @@ def _patch_stack():
     )
 
 
+def test_pyxcp_import_probe_blocks_native_access_violation(monkeypatch) -> None:
+    from mf4_analyzer.acquisition_capture import backends
+    from mf4_analyzer.acquisition_capture.backends import RecorderBackendUnavailableError
+
+    monkeypatch.setattr(
+        backends,
+        "_run_pyxcp_import_probe",
+        lambda: (-1073741819, "", "Windows fatal exception: access violation"),
+    )
+    monkeypatch.setattr(backends, "_PYXCP_IMPORT_PROBE_RESULT", None)
+
+    with pytest.raises(RecorderBackendUnavailableError, match="0xC0000005"):
+        backends._ensure_pyxcp_import_safe()
+
+
 def test_lifecycle_on_mock_transport() -> None:
     from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
 

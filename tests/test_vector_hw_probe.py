@@ -131,6 +131,24 @@ def test_test_xcp_connection_reports_no_response_on_timeout():
     mock_bus.shutdown.assert_called_once()
 
 
+def test_test_xcp_connection_reports_master_creation_failure():
+    from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
+
+    mock_bus = MagicMock()
+    with patch.object(sys, "platform", "win32"), patch(
+        "mf4_analyzer.acquisition_capture.vector_hw_probe._open_vector_bus",
+        return_value=mock_bus,
+    ), patch(
+        "mf4_analyzer.acquisition_capture.vector_hw_probe._make_pyxcp_master",
+        side_effect=RuntimeError("pyxcp import failed"),
+    ):
+        result = test_xcp_connection(TransportConfig(), _ifdata())
+
+    assert result.ok is False
+    assert "pyxcp" in (result.error or "").lower()
+    mock_bus.shutdown.assert_called_once()
+
+
 def test_test_xcp_connection_bus_open_failure_reports_red():
     from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
 
