@@ -1,8 +1,66 @@
 import sys
 import time
+import types
 from unittest.mock import MagicMock, patch
 
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+
+
+class _FakeVectorInitializationError(Exception):
+    """Cross-platform stand-in. python-can is Windows-only per
+    requirements.txt, so non-Windows CI can't import the real class."""
+
+
+def _fake_vector_pkg(
+    *,
+    channel_count: int = 0,
+    dll_version_packed: int = 0,
+    get_application_config=None,
+    channel_configs_exc: Exception | None = None,
+):
+    """Build a fake ``can.interfaces.vector`` package + register it on
+    ``sys.modules`` so the ``from can.interfaces.vector import VectorBus``
+    inside ``vector_hw_probe`` resolves to the fake.
+
+    Returns ``(vector_pkg, sys_modules_patch_dict)``.
+    """
+
+    impl = get_application_config or (lambda app, ch: (57, 0, 0))
+
+    can_module = types.ModuleType("can")
+    interfaces_module = types.ModuleType("can.interfaces")
+    vector_module = types.ModuleType("can.interfaces.vector")
+    exceptions_module = types.ModuleType("can.interfaces.vector.exceptions")
+
+    class FakeVectorBus:
+        get_application_config = staticmethod(impl)
+
+    exceptions_module.VectorInitializationError = _FakeVectorInitializationError
+
+    def get_channel_configs():
+        if channel_configs_exc is not None:
+            raise channel_configs_exc
+        return [object()] * channel_count
+
+    def _get_xl_driver_config():
+        return types.SimpleNamespace(dllVersion=dll_version_packed)
+
+    vector_module.VectorBus = FakeVectorBus
+    vector_module.get_channel_configs = get_channel_configs
+    vector_module.canlib = types.SimpleNamespace(
+        _get_xl_driver_config=_get_xl_driver_config
+    )
+    vector_module.exceptions = exceptions_module
+    interfaces_module.vector = vector_module
+    can_module.interfaces = interfaces_module
+
+    sys_modules = {
+        "can": can_module,
+        "can.interfaces": interfaces_module,
+        "can.interfaces.vector": vector_module,
+        "can.interfaces.vector.exceptions": exceptions_module,
+    }
+    return vector_module, sys_modules
 
 
 def _ifdata():
@@ -48,44 +106,106 @@ def test_probe_returns_red_on_non_windows():
 def test_probe_returns_green_on_windows_when_app_known():
     from mf4_analyzer.acquisition_capture.vector_hw_probe import vector_hw_probe
 
-    fake_canlib = MagicMock()
-    fake_canlib.get_application_config.return_value = MagicMock(
-        hw_type="VN1640",
-        channel=0,
-        driver_version="22.0",
+    calls = []
+
+    def fake_get_app_cfg(app, ch):
+        calls.append((app, ch))
+        return (57, 0, 0)  # (hw_type=VN1630, hw_index=0, hw_channel=0)
+
+    vector_pkg, sys_modules = _fake_vector_pkg(
+        channel_count=4,
+        dll_version_packed=(22 << 24),  # 22.0.0
+        get_application_config=fake_get_app_cfg,
     )
-    fake_canlib.get_channel_count.return_value = 4
 
     with patch.object(sys, "platform", "win32"), patch(
         "mf4_analyzer.acquisition_capture.vector_hw_probe._load_vector_canlib",
-        return_value=fake_canlib,
-    ):
+        return_value=vector_pkg,
+    ), patch.dict(sys.modules, sys_modules):
         result = vector_hw_probe(TransportConfig(app_name="Python", channel=0))
 
+    assert calls == [("Python", 0)], (
+        "vector_hw_probe must call VectorBus.get_application_config with both "
+        "(app_name, channel) — the phantom canlib.get_application_config(app_name) "
+        "one-arg call is the bug we're guarding against"
+    )
     assert result.ok is True
     assert result.error is None
     assert result.channel_count == 4
-    assert result.driver_version == "22.0"
+    assert result.driver_version == "22.0.0"
 
 
 def test_probe_reports_missing_app():
     from mf4_analyzer.acquisition_capture.vector_hw_probe import vector_hw_probe
 
-    fake_canlib = MagicMock()
-    fake_canlib.get_application_config.side_effect = LookupError(
-        "application 'Python' not found"
+    def fake_get_app_cfg(app, ch):
+        raise _FakeVectorInitializationError(
+            f"Vector HW Config: Channel '{ch}' of application '{app}' is not "
+            "assigned to any interface"
+        )
+
+    vector_pkg, sys_modules = _fake_vector_pkg(
+        channel_count=4,
+        dll_version_packed=(22 << 24),
+        get_application_config=fake_get_app_cfg,
     )
 
     with patch.object(sys, "platform", "win32"), patch(
         "mf4_analyzer.acquisition_capture.vector_hw_probe._load_vector_canlib",
-        return_value=fake_canlib,
-    ):
+        return_value=vector_pkg,
+    ), patch.dict(sys.modules, sys_modules):
         result = vector_hw_probe(TransportConfig(app_name="Python", channel=0))
 
     assert result.ok is False
     assert "Python" in (result.error or "")
-    assert isinstance(result.channel_count, int)
+    assert "not mapped" in (result.error or "")
+    # Channel count and driver version should still report — they're
+    # gathered before the app-config check.
+    assert result.channel_count == 4
+    assert result.driver_version == "22.0.0"
     assert isinstance(result.last_probe_ts, float)
+
+
+def test_probe_reports_channel_enumeration_failure():
+    """If get_channel_configs throws, that's a different class of failure
+    than 'app not mapped' — surface it distinctly."""
+
+    from mf4_analyzer.acquisition_capture.vector_hw_probe import vector_hw_probe
+
+    vector_pkg, sys_modules = _fake_vector_pkg(
+        channel_configs_exc=RuntimeError("driver in transient state"),
+    )
+
+    with patch.object(sys, "platform", "win32"), patch(
+        "mf4_analyzer.acquisition_capture.vector_hw_probe._load_vector_canlib",
+        return_value=vector_pkg,
+    ), patch.dict(sys.modules, sys_modules):
+        result = vector_hw_probe(TransportConfig(app_name="Python", channel=0))
+
+    assert result.ok is False
+    assert "get_channel_configs failed" in (result.error or "")
+    assert result.channel_count == 0
+    assert result.driver_version is None
+
+
+def test_probe_reports_channel_out_of_range():
+    from mf4_analyzer.acquisition_capture.vector_hw_probe import vector_hw_probe
+
+    vector_pkg, sys_modules = _fake_vector_pkg(
+        channel_count=2,
+        dll_version_packed=(22 << 24),
+        get_application_config=lambda app, ch: (57, 0, 0),
+    )
+
+    with patch.object(sys, "platform", "win32"), patch(
+        "mf4_analyzer.acquisition_capture.vector_hw_probe._load_vector_canlib",
+        return_value=vector_pkg,
+    ), patch.dict(sys.modules, sys_modules):
+        result = vector_hw_probe(TransportConfig(app_name="Python", channel=5))
+
+    assert result.ok is False
+    assert "channel 5 not present" in (result.error or "")
+    assert "count=2" in (result.error or "")
 
 
 def test_test_xcp_connection_returns_resource_byte_on_success():

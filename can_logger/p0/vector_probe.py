@@ -136,43 +136,58 @@ def _stage_driver() -> StageResult:
     )
 
 
-def _stage_app(app_name: str) -> StageResult:
-    """Stage 2: confirm the Vector application name is configured."""
+def _stage_app(app_name: str, app_channel: int) -> StageResult:
+    """Stage 2: confirm the Vector application slot is mapped to hardware.
+
+    Calls ``VectorBus.get_application_config(app_name, app_channel)`` —
+    the same lookup ``can.Bus(interface="vector", app_name=..., channel=...)``
+    runs internally during ``__init__``. If the slot is missing or unmapped
+    python-can raises ``VectorInitializationError``; we surface that as
+    stage 2 red so the operator knows to fix the config DB before the
+    bus-open in stage 4 fails with the same root cause.
+    """
 
     try:
-        from can.interfaces import vector  # type: ignore[import-not-found]
-
-        canlib = vector.canlib  # type: ignore[attr-defined]
-        cfg = canlib.get_application_config(app_name)
-    except LookupError as exc:
-        return StageResult(
-            label="[stage2/app]",
-            ok=False,
-            detail=f'name="{app_name}"  configured=false',
-            error=f"application {app_name!r} not configured: {exc}",
+        from can.interfaces.vector import (  # type: ignore[import-not-found]
+            VectorBus,
         )
-    except AttributeError as exc:
-        # Older python-can versions expose canlib differently.
+        from can.interfaces.vector.exceptions import (  # type: ignore[import-not-found]
+            VectorInitializationError,
+        )
+    except Exception as exc:  # noqa: BLE001 - python-can absent / API moved
         return StageResult(
             label="[stage2/app]",
             ok=False,
             detail=f'name="{app_name}"  configured=unknown',
-            error=f"python-can vector.canlib surface unavailable: {exc}",
+            error=f"python-can vector backend unavailable: {exc}",
+        )
+
+    try:
+        hw_type, hw_index, hw_channel = VectorBus.get_application_config(
+            app_name, app_channel
+        )
+    except VectorInitializationError as exc:
+        return StageResult(
+            label="[stage2/app]",
+            ok=False,
+            detail=f'name="{app_name}"  channel={app_channel}  configured=false',
+            error=str(exc),
         )
     except Exception as exc:  # noqa: BLE001 - driver surface
         return StageResult(
             label="[stage2/app]",
             ok=False,
-            detail=f'name="{app_name}"  configured=false',
-            error=f"get_application_config failed: {exc}",
+            detail=f'name="{app_name}"  configured=unknown',
+            error=f"VectorBus.get_application_config failed: {exc}",
         )
 
-    hw = getattr(cfg, "hw_type", "?")
-    driver = getattr(cfg, "driver_version", "?")
     return StageResult(
         label="[stage2/app]",
         ok=True,
-        detail=f'name="{app_name}"  configured=true  hw={hw}  driver={driver}',
+        detail=(
+            f'name="{app_name}"  channel={app_channel}  configured=true  '
+            f"hw_type={hw_type}  hw_index={hw_index}  hw_channel={hw_channel}"
+        ),
     )
 
 
@@ -247,7 +262,7 @@ def probe_stages(
 
     stages: list[StageResult] = []
     stages.append(_stage_driver())
-    stages.append(_stage_app(app_name))
+    stages.append(_stage_app(app_name, channel))
     stages.append(_stage_channel(channel))
     if open_bus:
         stages.append(

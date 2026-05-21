@@ -24,9 +24,20 @@ class TestXcpConnectionResult:
 
 
 def _load_vector_canlib():
-    from can.interfaces.vector import canlib  # type: ignore[import-not-found]
+    """Return the python-can ``vector`` package object.
 
-    return canlib
+    Historically this returned the ``canlib`` submodule and callers
+    reached for ``canlib.get_application_config`` / ``canlib.get_channel_count``
+    — neither attribute has ever existed at module level in python-can.
+    The real surface is ``VectorBus.get_application_config(app, channel)``
+    (a ``@staticmethod``) and ``vector.get_channel_configs()``. We now
+    return the package so the caller can access both via the documented
+    public API.
+    """
+
+    from can.interfaces import vector  # type: ignore[import-not-found]
+
+    return vector
 
 
 def _hw(
@@ -45,6 +56,30 @@ def _hw(
     )
 
 
+def _decode_dll_version(packed: int) -> str | None:
+    """Decode ``XLdriverConfig.dllVersion`` into ``"major.minor.build"``.
+
+    The Vector XL API packs the version as
+    ``major << 24 | minor << 16 | build`` (16 low bits). See
+    ``XL Driver Library Description`` §xlGetDriverConfig.
+    """
+
+    if not isinstance(packed, int) or packed <= 0:
+        return None
+    major = (packed >> 24) & 0xFF
+    minor = (packed >> 16) & 0xFF
+    build = packed & 0xFFFF
+    return f"{major}.{minor}.{build}"
+
+
+def _read_driver_version(vector_pkg) -> str | None:
+    try:
+        cfg = vector_pkg.canlib._get_xl_driver_config()
+    except Exception:  # noqa: BLE001 - best-effort; version is informational
+        return None
+    return _decode_dll_version(int(getattr(cfg, "dllVersion", 0)))
+
+
 def vector_hw_probe(transport: TransportConfig) -> HwHealth:
     if not sys.platform.startswith("win"):
         return _hw(
@@ -55,7 +90,7 @@ def vector_hw_probe(transport: TransportConfig) -> HwHealth:
         )
 
     try:
-        canlib = _load_vector_canlib()
+        vector_pkg = _load_vector_canlib()
     except Exception as exc:  # noqa: BLE001 - driver load surface
         return _hw(
             ok=False,
@@ -64,32 +99,59 @@ def vector_hw_probe(transport: TransportConfig) -> HwHealth:
             channel_count=0,
         )
 
+    # Enumerate hardware channels first — this also exercises the driver,
+    # so a totally broken DLL surface fails fast here rather than later.
     try:
-        cfg = canlib.get_application_config(transport.app_name)
-    except LookupError as exc:
+        channel_configs = vector_pkg.get_channel_configs()
+    except Exception as exc:  # noqa: BLE001 - driver API surface
+        return _hw(
+            ok=False,
+            error=f"get_channel_configs failed: {exc}",
+            driver_version=None,
+            channel_count=0,
+        )
+    channel_count = len(channel_configs)
+    driver_version = _read_driver_version(vector_pkg)
+
+    # Confirm the requested app slot + channel is mapped to hardware. This
+    # is the same lookup ``can.Bus(interface="vector", app_name=..., channel=...)``
+    # runs internally; failing here gives a clearer error than waiting for
+    # bus open to fall over.
+    try:
+        from can.interfaces.vector import (  # type: ignore[import-not-found]
+            VectorBus,
+        )
+        from can.interfaces.vector.exceptions import (  # type: ignore[import-not-found]
+            VectorInitializationError,
+        )
+    except Exception as exc:  # noqa: BLE001 - python-can absent / API moved
+        return _hw(
+            ok=False,
+            error=f"python-can vector backend unavailable: {exc}",
+            driver_version=driver_version,
+            channel_count=channel_count,
+        )
+
+    try:
+        VectorBus.get_application_config(transport.app_name, transport.channel)
+    except VectorInitializationError as exc:
         return _hw(
             ok=False,
             error=(
-                f"Vector application {transport.app_name!r} not configured "
-                f"({exc})"
+                f"Vector application {transport.app_name!r} channel "
+                f"{transport.channel} not mapped to hardware: {exc}"
             ),
-            driver_version=None,
-            channel_count=0,
+            driver_version=driver_version,
+            channel_count=channel_count,
         )
     except Exception as exc:  # noqa: BLE001 - driver API surface
         return _hw(
             ok=False,
-            error=f"get_application_config failed: {exc}",
-            driver_version=None,
-            channel_count=0,
+            error=f"VectorBus.get_application_config failed: {exc}",
+            driver_version=driver_version,
+            channel_count=channel_count,
         )
 
-    try:
-        channel_count = int(canlib.get_channel_count())
-    except Exception:  # noqa: BLE001 - keep app probe result visible
-        channel_count = 0
-
-    driver_version = getattr(cfg, "driver_version", None)
     if transport.channel >= channel_count:
         return _hw(
             ok=False,

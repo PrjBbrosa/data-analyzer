@@ -520,10 +520,18 @@ class HwHealth:
 | Subcheck | Source | Effect on HwHealth |
 |---|---|---|
 | Vector driver DLL loadable | `ctypes.WinDLL("vxlapi64.dll")` returns object | `ok` requires this; `error` if missing |
-| Application slot exists | `can.interfaces.vector.canlib.get_application_config(app_name)` | `error` if `LookupError` |
-| Channel index in range | iterate `get_channel_count()` results | populates `channel_count`; `error` if `transport.channel >= channel_count` |
-| Driver version | parse from DLL info struct | populates `driver_version` |
+| Application slot mapped to hardware | `can.interfaces.vector.VectorBus.get_application_config(app_name, channel)` (a `@staticmethod`) | `error` if `VectorInitializationError` (slot missing or channel unmapped) |
+| Channel index in range | `len(can.interfaces.vector.get_channel_configs())` | populates `channel_count`; `error` if `transport.channel >= channel_count` |
+| Driver version | decode `XLdriverConfig.dllVersion` from `_get_xl_driver_config()` (packed `major<<24 \| minor<<16 \| build`) | populates `driver_version` |
 | Probe timestamp | `time.monotonic()` at the start of the probe | populates `last_probe_ts` |
+
+> ⚠️ python-can does **not** expose `canlib.get_application_config` or
+> `canlib.get_channel_count` at module level — those phantom APIs caused
+> the Stage 8 follow-up regression (probe red on every Windows install
+> regardless of hardware). The real surface lives on the `VectorBus`
+> class as `@staticmethod`s (see `canlib.py:1031` and `1076`). Tests must
+> use stand-ins that match this shape, not `MagicMock()` which fabricates
+> any attribute on access.
 
 The probe runs once at cockpit launch and on every "Reconnect" action.
 

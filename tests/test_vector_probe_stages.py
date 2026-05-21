@@ -32,6 +32,43 @@ def _fake_vector_module(*, xldriver):
     }
 
 
+class _FakeVectorInitializationError(Exception):
+    """Stand-in for ``can.interfaces.vector.exceptions.VectorInitializationError``.
+
+    Cross-platform: python-can is a Windows-only dependency in
+    requirements.txt, so non-Windows CI cannot import the real class.
+    """
+
+
+def _fake_vector_with_bus(get_application_config):
+    """Inject a fake ``can.interfaces.vector`` package exposing
+    ``VectorBus.get_application_config`` — the real API surface
+    ``_stage_app`` depends on.
+    """
+
+    impl = get_application_config  # capture before class body shadows the name
+
+    can_module = types.ModuleType("can")
+    interfaces_module = types.ModuleType("can.interfaces")
+    vector_module = types.ModuleType("can.interfaces.vector")
+    exceptions_module = types.ModuleType("can.interfaces.vector.exceptions")
+
+    class FakeVectorBus:
+        get_application_config = staticmethod(impl)
+
+    exceptions_module.VectorInitializationError = _FakeVectorInitializationError
+    vector_module.VectorBus = FakeVectorBus
+    vector_module.exceptions = exceptions_module
+    interfaces_module.vector = vector_module
+    can_module.interfaces = interfaces_module
+    return {
+        "can": can_module,
+        "can.interfaces": interfaces_module,
+        "can.interfaces.vector": vector_module,
+        "can.interfaces.vector.exceptions": exceptions_module,
+    }
+
+
 def test_non_windows_returns_exit_10(capsys):
     with patch.object(sys, "platform", "darwin"):
         rc = vector_probe.main(["--channel", "0", "--app-name", "Python"])
@@ -130,7 +167,7 @@ def test_app_failure_returns_exit_2(monkeypatch, capsys):
         ),
     )
 
-    def bad_app(app_name: str) -> vector_probe.StageResult:
+    def bad_app(app_name: str, app_channel: int) -> vector_probe.StageResult:
         return vector_probe.StageResult(
             label="[stage2/app]",
             ok=False,
@@ -299,7 +336,7 @@ def test_probe_stages_records_first_failure_only(monkeypatch):
     monkeypatch.setattr(
         vector_probe,
         "_stage_app",
-        lambda app: vector_probe.StageResult(
+        lambda app, ch: vector_probe.StageResult(
             label="[stage2/app]",
             ok=False,
             detail="configured=false",
@@ -324,6 +361,101 @@ def test_probe_stages_records_first_failure_only(monkeypatch):
     assert report.stages[0].ok is False
     assert report.stages[1].ok is False
     assert report.stages[2].ok is True
+
+
+def test_stage_app_green_when_get_application_config_succeeds():
+    """Real-body test: _stage_app must reach for VectorBus.get_application_config
+    with both (app_name, app_channel) arguments and surface the returned
+    (hw_type, hw_index, hw_channel) tuple in the detail string.
+    """
+
+    calls = []
+
+    def fake_get(app, ch):
+        calls.append((app, ch))
+        return (57, 0, 0)  # VN1630 hw_type=57, first device, channel 1
+
+    with patch.dict(sys.modules, _fake_vector_with_bus(fake_get)):
+        result = vector_probe._stage_app("Python", 0)
+
+    assert calls == [("Python", 0)], (
+        "_stage_app must call VectorBus.get_application_config(app, channel) "
+        "with both arguments — passing only app_name regresses to the "
+        "phantom canlib API"
+    )
+    assert result.ok is True
+    assert result.label == "[stage2/app]"
+    assert "configured=true" in result.detail
+    assert "hw_type=57" in result.detail
+    assert "hw_index=0" in result.detail
+    assert "hw_channel=0" in result.detail
+    assert "channel=0" in result.detail
+
+
+def test_stage_app_red_when_application_not_mapped():
+    def fake_get(app, ch):
+        raise _FakeVectorInitializationError(
+            f"Vector HW Config: Channel '{ch}' of application '{app}' is not "
+            "assigned to any interface"
+        )
+
+    with patch.dict(sys.modules, _fake_vector_with_bus(fake_get)):
+        result = vector_probe._stage_app("Python", 0)
+
+    assert result.ok is False
+    assert "configured=false" in result.detail
+    assert "channel=0" in result.detail
+    assert "not assigned" in (result.error or "")
+
+
+def test_stage_app_red_on_unexpected_exception():
+    def fake_get(app, ch):
+        raise RuntimeError("driver surface in flux")
+
+    with patch.dict(sys.modules, _fake_vector_with_bus(fake_get)):
+        result = vector_probe._stage_app("Python", 0)
+
+    assert result.ok is False
+    assert "configured=unknown" in result.detail
+    assert "VectorBus.get_application_config failed" in (result.error or "")
+    assert "driver surface in flux" in (result.error or "")
+
+
+def test_probe_stages_passes_channel_through_to_stage_app(monkeypatch):
+    """probe_stages must forward ``channel`` into _stage_app so stage 2
+    checks the same app+channel mapping stage 4 will use.
+    """
+
+    captured = {}
+
+    def spy_app(app_name, app_channel):
+        captured["app"] = app_name
+        captured["channel"] = app_channel
+        return vector_probe.StageResult(
+            label="[stage2/app]", ok=True, detail="ok"
+        )
+
+    monkeypatch.setattr(
+        vector_probe,
+        "_stage_driver",
+        lambda: vector_probe.StageResult(
+            label="[stage1/driver]", ok=True, detail="ok"
+        ),
+    )
+    monkeypatch.setattr(vector_probe, "_stage_app", spy_app)
+    monkeypatch.setattr(
+        vector_probe,
+        "_stage_channel",
+        lambda *a, **k: vector_probe.StageResult(
+            label="[stage3/channel]", ok=True, detail="ok"
+        ),
+    )
+
+    vector_probe.probe_stages(
+        channel=3, bitrate=500000, app_name="MyApp", open_bus=False
+    )
+
+    assert captured == {"app": "MyApp", "channel": 3}
 
 
 def test_uncategorized_exception_returns_exit_9(monkeypatch, capsys):
