@@ -56,6 +56,37 @@ def test_test_connection_button_disabled_without_ifdata_on_windows(qtbot):
     assert "A2L" in dialog.transport_widget.test_btn.toolTip()
 
 
+def test_test_connection_result_uses_managed_nonblocking_box(qtbot, monkeypatch):
+    from PyQt5.QtWidgets import QMessageBox
+
+    from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+    from mf4_analyzer.acquisition_ui.settings_dialog import (
+        SettingsDialog,
+        _TestConnectionResult,
+    )
+
+    def fail_static(*_args, **_kwargs):
+        raise AssertionError("static QMessageBox helpers must not be used")
+
+    opened: list[QMessageBox] = []
+    monkeypatch.setattr(QMessageBox, "information", fail_static)
+    monkeypatch.setattr(QMessageBox, "warning", fail_static)
+    monkeypatch.setattr(QMessageBox, "open", lambda self: opened.append(self))
+
+    dialog = SettingsDialog(transport=TransportConfig(), ifdata=MagicMock())
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    dialog._show_test_connection_result(
+        _TestConnectionResult(ok=False, level="red", message="no response")
+    )
+
+    assert opened == [dialog._test_connection_box]
+    assert dialog._test_connection_box is not None
+    assert dialog._test_connection_box.icon() == QMessageBox.Warning
+    assert dialog._test_connection_box.text() == "no response"
+
+
 def test_test_connection_runs_hw_then_xcp_probe_and_reports_resource(qtbot):
     from mf4_analyzer.acquisition_capture.health import HwHealth
     from mf4_analyzer.acquisition_capture.transport_config import TransportConfig

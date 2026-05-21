@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -443,6 +443,7 @@ class SettingsDialog(QDialog):
         self._editors: dict[str, QAbstractSpinBox] = {}
         self._transport = transport or TransportConfig()
         self._ifdata = ifdata
+        self._test_connection_box: QMessageBox | None = None
 
         self.setModal(True)
         self.setWindowTitle("Cockpit Settings")
@@ -509,8 +510,17 @@ class SettingsDialog(QDialog):
 
     def _on_test_connection(self) -> None:
         result = self._run_test_connection_for_test()
-        box = QMessageBox.information if result.ok else QMessageBox.warning
-        box(self, "Test Connection", result.message)
+        self._show_test_connection_result(result)
+
+    def _show_test_connection_result(self, result: _TestConnectionResult) -> None:
+        box = QMessageBox(self)
+        box.setWindowModality(Qt.WindowModal)
+        box.setWindowTitle("Test Connection")
+        box.setText(result.message)
+        box.setIcon(QMessageBox.Information if result.ok else QMessageBox.Warning)
+        self._test_connection_box = box
+        if self.isVisible():
+            box.open()
 
     def _run_test_connection_for_test(self) -> _TestConnectionResult:
         if self._ifdata is None:

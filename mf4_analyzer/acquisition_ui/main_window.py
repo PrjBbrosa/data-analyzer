@@ -193,6 +193,10 @@ class CockpitMainWindow(QMainWindow):
         self._state_machine = CockpitStateMachine()
         self._state_machine.subscribe(self._on_state_changed)
         self._backend: RecorderBackend = backend or FakeRecorderBackend()
+        self._external_backend = backend is not None and not isinstance(
+            backend, FakeRecorderBackend
+        )
+        self._owns_vector_backend = False
         self._ring = RingBuffer(capacity=thresholds.DEFAULT_RING_CAPACITY)
         # Bridge the non-Qt observer to a Qt slot. The shim's connect
         # API matches pyqtSignal.connect — synchronous, single-arg.
@@ -233,6 +237,7 @@ class CockpitMainWindow(QMainWindow):
         self._last_session_summary: SessionSummary | None = None
         self._review_modal: QDialog | None = None
         self._settings_dialog: SettingsDialog | None = None
+        self._connection_warning_box: QMessageBox | None = None
         # Stage 5 hand-off: the most recent stop/flush/finalize run, used
         # by tests (and the eventual history tab) to introspect ordering.
         self._last_stop_result: StopFlushFinalizeResult | None = None
@@ -282,6 +287,9 @@ class CockpitMainWindow(QMainWindow):
         # the toolbar chip / left-pane favorites both exist when we
         # push values into them.
         self._hydrate_from_config_path()
+        if not self._health_timer.isActive():
+            self._health_timer.start()
+        self._poll_health()
 
     # ------------------------------------------------------------------
     # UI scaffolding
@@ -953,8 +961,29 @@ class CockpitMainWindow(QMainWindow):
         # when ``result is not None`` and falls back to the Stage 4
         # placeholder otherwise.
 
+    def _reset_connection_attempt_state(self) -> None:
+        self._connection_attempt_started = None
+        self._stream_start_ts = None
+        self._first_frame_ts = None
+        self._fake_xcp_connected = False
+        self._fake_rec_state = "off"
+        self._fake_can_load_pct = None
+
+    def _stop_backend_best_effort(self, backend: RecorderBackend) -> None:
+        try:
+            backend.stop()
+        except Exception as exc:  # noqa: BLE001 - cleanup must not mask UI flow
+            logger.warning("backend cleanup failed: %s", exc)
+
+    def _invalidate_owned_vector_backend(self) -> None:
+        if not self._owns_vector_backend:
+            return
+        self._stop_backend_best_effort(self._backend)
+        self._backend = FakeRecorderBackend()
+        self._owns_vector_backend = False
+
     def _begin_connection_attempt(self) -> None:
-        """Start connection attempt. Triggers fake backend + timer."""
+        """Start connection attempt. Triggers backend start + live timer."""
         selection = self._left_pane.current_selection() if hasattr(self, "_left_pane") else []
         if not selection and self._initial_pool:
             # Auto-select first measurement so the demo can start the
@@ -962,32 +991,35 @@ class CockpitMainWindow(QMainWindow):
             self._left_pane._selected_names.add(self._initial_pool[0].name)
             self._left_pane._refresh_list()
             selection = self._left_pane.current_selection()
+        # T1-3: if transport + IF_DATA + a real pool are all present,
+        # try to swap the default Fake backend for a real Vector one.
+        # The swap is a no-op when any precondition is missing OR when
+        # the caller injected a non-Fake backend at construction time
+        # (preserving the existing test-injection pattern).
+        if not self._maybe_swap_to_vector_backend(selection=selection):
+            self._reset_connection_attempt_state()
+            return
         if not selection:
-            # Demo seed: one synthetic measurement.
+            # Demo seed: only allowed after preconditions resolve to a
+            # non-vehicle path (demo fake or caller-injected backend).
             selection = [SelectedMeasurement(name="DemoSignal")]
+        try:
+            self._backend.start(selection)
+        except Exception as exc:  # noqa: BLE001 - keep cockpit responsive
+            logger.exception("backend start failed: %s", exc)
+            self._reset_connection_attempt_state()
+            if self._owns_vector_backend:
+                self._invalidate_owned_vector_backend()
+            else:
+                self._stop_backend_best_effort(self._backend)
+            self._status.showMessage(f"连接失败: {exc}")
+            return
         self._connection_attempt_started = time.monotonic()
         self._stream_start_ts = self._connection_attempt_started
         self._first_frame_ts = None
         self._fake_xcp_connected = True
         self._fake_rec_state = "off"
         self._fake_can_load_pct = 12.5
-        # T1-3: if transport + IF_DATA + a real pool are all present,
-        # try to swap the default Fake backend for a real Vector one.
-        # The swap is a no-op when any precondition is missing OR when
-        # the caller injected a non-Fake backend at construction time
-        # (preserving the existing test-injection pattern).
-        if not self._maybe_swap_to_vector_backend():
-            self._fake_xcp_connected = False
-            self._fake_rec_state = "off"
-            return
-        try:
-            self._backend.start(selection)
-        except Exception as exc:  # noqa: BLE001 - keep cockpit responsive
-            logger.exception("backend start failed: %s", exc)
-            self._fake_xcp_connected = False
-            self._fake_rec_state = "off"
-            self._status.showMessage(f"连接失败: {exc}")
-            return
         # Start timers if not yet running.
         if not self._health_timer.isActive():
             self._health_timer.start()
@@ -998,7 +1030,11 @@ class CockpitMainWindow(QMainWindow):
             [(m.name, m.unit, m.event) for m in selection]
         )
 
-    def _maybe_swap_to_vector_backend(self) -> bool:
+    def _maybe_swap_to_vector_backend(
+        self,
+        *,
+        selection: Sequence[SelectedMeasurement] | None = None,
+    ) -> bool:
         """Replace the default FakeRecorderBackend with a real Vector
         backend when all preconditions are satisfied.
 
@@ -1021,8 +1057,15 @@ class CockpitMainWindow(QMainWindow):
         ``[FAKE]`` warning with the underlying reason inline.
         """
 
-        if not isinstance(self._backend, FakeRecorderBackend):
+        if self._external_backend and not isinstance(self._backend, FakeRecorderBackend):
             return True  # respect caller-injected backend
+
+        if selection is None:
+            selection = (
+                self._left_pane.current_selection()
+                if hasattr(self, "_left_pane")
+                else ()
+            )
 
         # Preconditions that operators control.
         missing: list[str] = []
@@ -1030,18 +1073,23 @@ class CockpitMainWindow(QMainWindow):
             missing.append("Transport 未配置")
         if self._ifdata_xcp is None:
             missing.append("A2L IF_DATA 未加载")
+        if not selection:
+            missing.append("measurement selection ä¸ºç©º")
         if not hasattr(self, "_left_pane") or not self._left_pane._pool:
             missing.append("measurement pool 为空")
 
         if missing:
+            self._invalidate_owned_vector_backend()
             if self._allow_fake_backend:
                 self._status.showMessage("Demo backend 已启用 · 不录真实 ECU")
                 return True
             self._status.showMessage(
                 "[FAKE backend] 不录真实 ECU: " + "; ".join(missing)
             )
+            self._warn_connection_preconditions(missing)
             return False
 
+        self._invalidate_owned_vector_backend()
         try:
             from mf4_analyzer.acquisition_capture.backends import (
                 VectorXcpRecorderBackend,
@@ -1064,6 +1112,7 @@ class CockpitMainWindow(QMainWindow):
             self._status.showMessage(
                 f"[FAKE backend] Vector 不可用：{exc}"
             )
+            self._warn_connection_preconditions([self._status.currentMessage()])
             return False
         except Exception as exc:  # noqa: BLE001 — UI must stay responsive
             if self._allow_fake_backend:
@@ -1074,15 +1123,29 @@ class CockpitMainWindow(QMainWindow):
             self._status.showMessage(
                 f"[FAKE backend] Vector 构造失败：{exc}"
             )
+            self._warn_connection_preconditions([self._status.currentMessage()])
             return False
 
         self._backend = new_backend
+        self._owns_vector_backend = True
         self._status.showMessage(
             f"Vector backend 已就绪 · "
             f"App={self._transport_config.app_name} · "
             f"Ch={self._transport_config.channel}"
         )
         return True
+
+    def _warn_connection_preconditions(self, problems: list[str]) -> None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("连接 ECU 前置条件")
+        box.setText(
+            "无法开始真实 ECU 连接：\n\n" + "\n".join(f"• {p}" for p in problems)
+        )
+        box.setWindowModality(Qt.WindowModal)
+        self._connection_warning_box = box
+        if self.isVisible():
+            box.open()
 
     def _start_recording(self) -> None:
         # Spec: red health disables record. The button enabled state
@@ -1547,6 +1610,7 @@ class CockpitMainWindow(QMainWindow):
         *,
         device_model: str | None = None,
     ) -> None:
+        self._invalidate_owned_vector_backend()
         self._transport_config = transport
         if transport is None:
             self._transport_chip.setText("传输未配置")
@@ -1776,8 +1840,8 @@ class CockpitMainWindow(QMainWindow):
         title chip and IF_DATA cache — the measurement list stayed
         empty.
 
-        T2-2 / T2-3: on parse failure we now (a) pop a
-        ``QMessageBox.warning`` so the operator can't miss it at the
+        T2-2 / T2-3: on parse failure we now (a) show a
+        managed window-modal warning so the operator can't miss it at the
         vehicle, and (b) treat the A2L load as an atomic transaction.
         IF_DATA and the measurement pool are committed only when both
         parse steps succeed. Any partial failure clears both so Settings
@@ -1785,6 +1849,7 @@ class CockpitMainWindow(QMainWindow):
         measurements.
         """
 
+        self._invalidate_owned_vector_backend()
         self._a2l_name = a2l_path.name
         self._set_selector_value(self._a2l_btn, "A2L", self._a2l_name)
 
@@ -1851,9 +1916,9 @@ class CockpitMainWindow(QMainWindow):
 
         We use a window-modal :class:`QMessageBox.open()` (non-blocking
         from the caller's perspective, but the operator can't dismiss
-        the cockpit until they acknowledge). The static
-        ``QMessageBox.warning(...)`` call is blocking and hangs
-        offscreen test runs, so we drive a managed instance instead.
+        the cockpit until they acknowledge). Static QMessageBox helpers
+        are blocking and hang offscreen test runs, so we drive a managed
+        instance instead.
         Tests stub this method via attribute assignment.
         """
 
@@ -1868,7 +1933,8 @@ class CockpitMainWindow(QMainWindow):
         # dismisses it. Replaces any prior dialog (operator only acts
         # on the most recent A2L pick anyway).
         self._a2l_warning_box = box
-        box.open()
+        if self.isVisible():
+            box.open()
 
     def _load_measurement_summary(self, path: Path):
         """Load the measurement pool for the left pane.
@@ -1907,8 +1973,11 @@ class CockpitMainWindow(QMainWindow):
         stop_btn = box.addButton("停止并复盘", QMessageBox.DestructiveRole)
         # Use ``open`` to keep the prompt non-modal w.r.t. the
         # recording loop per spec ("stays inside the Recording state;
-        # never auto-dismisses").
-        box.open()
+        # never auto-dismisses"). Under Windows offscreen Qt, opening a
+        # QMessageBox for a hidden test window can access-violate; keep
+        # the object inspectable but only paint it for a visible cockpit.
+        if self.isVisible():
+            box.open()
         # Wire Stage 5 stop branch. ``继续录制`` is dismiss-only; we
         # just close the box (Qt's default ``buttonClicked`` slot).
         # ``停止并复盘`` runs the same stop/flush/finalize flow as the
@@ -1952,7 +2021,9 @@ class CockpitMainWindow(QMainWindow):
 
     def _probe_hw(self) -> HwHealth:
         # Demo path: simulate a working HW once the user clicks connect.
-        if self._connection_attempt_started is not None or self._fake_xcp_connected:
+        if self._allow_fake_backend and (
+            self._connection_attempt_started is not None or self._fake_xcp_connected
+        ):
             return HwHealth(
                 ok=True,
                 driver_version="demo-fake",
@@ -1960,13 +2031,17 @@ class CockpitMainWindow(QMainWindow):
                 last_probe_ts=time.monotonic(),
                 error=None,
             )
-        return HwHealth(
-            ok=False,
-            driver_version=None,
-            channel_count=0,
-            last_probe_ts=time.monotonic(),
-            error="non-windows host",
-        )
+        if self._transport_config is None:
+            return HwHealth(
+                ok=False,
+                driver_version=None,
+                channel_count=0,
+                last_probe_ts=time.monotonic(),
+                error="transport not configured",
+            )
+        from mf4_analyzer.acquisition_capture.vector_hw_probe import vector_hw_probe
+
+        return vector_hw_probe(self._transport_config)
 
     def _probe_can(self) -> CanHealth:
         return CanHealth(

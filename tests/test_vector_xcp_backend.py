@@ -126,6 +126,34 @@ def test_lifecycle_on_mock_transport() -> None:
     assert final_status.started is False
 
 
+def test_start_failure_shuts_down_master_and_bus() -> None:
+    from mf4_analyzer.acquisition_capture.backends import (
+        RecorderStartError,
+        VectorXcpRecorderBackend,
+    )
+
+    platform_patch, can_patch, master_patch = _patch_stack()
+    with platform_patch, can_patch as import_can, master_patch as import_master:
+        mock_bus = MagicMock()
+        import_can.return_value = MagicMock(Bus=lambda **_kwargs: mock_bus)
+        mock_master = MagicMock()
+        import_master.return_value = lambda *_args, **_kwargs: mock_master
+        backend = VectorXcpRecorderBackend(
+            transport=TransportConfig(),
+            ifdata=_ifdata(),
+            measurements=_measurements(),
+        )
+        with patch(
+            "mf4_analyzer.acquisition_capture.xcp_daq_session.XcpDaqSession.start",
+            side_effect=RuntimeError("DAQ map failed"),
+        ):
+            with pytest.raises(RecorderStartError, match="DAQ map failed"):
+                backend.start(_selected())
+
+    mock_master.disconnect.assert_called()
+    mock_bus.shutdown.assert_called()
+
+
 def test_status_shape_matches_capture_controller_summary_contract() -> None:
     from mf4_analyzer.acquisition_capture.backends import (
         BackendStatus,

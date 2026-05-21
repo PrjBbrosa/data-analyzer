@@ -91,6 +91,27 @@ def test_prompt_text_matches_spec(qapp):
         window.close()
 
 
+def test_prompt_hidden_window_does_not_open_message_box(qapp, monkeypatch):
+    """Hidden/offscreen tests can inspect the prompt without painting it."""
+
+    opened: list[object] = []
+
+    def _fake_open(box) -> None:
+        opened.append(box)
+
+    monkeypatch.setattr("mf4_analyzer.acquisition_ui.main_window.QMessageBox.open", _fake_open)
+    window = CockpitMainWindow()
+    try:
+        assert window.isVisible() is False
+        _walk_to_recording(window)
+        _arm_dropped_prompt(window)
+
+        assert window._dropped_prompt is not None
+        assert opened == []
+    finally:
+        window.close()
+
+
 # ---------------------------------------------------------------------------
 # Branch 1: 继续录制 — dismiss, stay in Recording
 # ---------------------------------------------------------------------------

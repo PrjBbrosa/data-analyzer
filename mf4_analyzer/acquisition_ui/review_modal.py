@@ -140,6 +140,7 @@ class ReviewModal(QDialog):
         # instance so tests can swap a stub). Returns the appended entry
         # dict on success or raises on failure.
         self._archive_writer: Callable[[ReviewContext], dict] | None = None
+        self._archive_failure_box: QMessageBox | None = None
 
         self._build_ui()
         self._refresh_action_enabled()
@@ -554,7 +555,9 @@ class ReviewModal(QDialog):
             f"MF4 已保存，但归档写入失败: {exc}\n"
             f"已保存路径: {self._ctx.mf4_path}"
         )
-        box.exec_()
+        box.setWindowModality(Qt.WindowModal)
+        self._archive_failure_box = box
+        box.open()
 
     # ------------------------------------------------------------------
     # accept/reject overrides — idempotency guard

@@ -16,8 +16,6 @@ Also pins ``dropped_frames`` increment behavior and the
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from mf4_analyzer.acquisition_capture.ring_buffer import RingBuffer
@@ -127,9 +125,9 @@ def test_red_drop_since_tracks_entry_and_exit():
         ring.put(("ch", float(i), 0.0))
     assert ring.red_drop_since is not None
     entered = ring.red_drop_since
-    # Stay in band for a moment, sustained time grows.
-    time.sleep(0.01)
-    sustained = ring.red_drop_sustained_for()
+    # Stay in band for a moment, sustained time grows. Use the injected
+    # ``now`` seam so the test is independent of OS timer granularity.
+    sustained = ring.red_drop_sustained_for(now=entered + 0.01)
     assert sustained > 0.0
     # Drop back to green via drain.
     ring.drain()

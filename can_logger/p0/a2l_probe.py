@@ -18,12 +18,16 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+import pickle
+import subprocess
+import sys
 
 from can_logger.p0.ifdata_xcp import parse_ifdata_xcp, parse_measurement_events
 
 
 DB = None
 model = None
+DEFAULT_A2L_PARSE_TIMEOUT_S = 30
 
 
 class _MeasurementShim:
@@ -32,23 +36,6 @@ class _MeasurementShim:
 
 class _ModelShim:
     Measurement = _MeasurementShim
-
-
-def _load_pya2l():
-    """Load pya2l only when an A2L file is actually parsed."""
-
-    global DB, model
-    if DB is None:
-        from pya2l import DB as loaded_db
-        import pya2l.model as loaded_model
-
-        DB = loaded_db
-        model = loaded_model
-    elif model is None:
-        # Tests monkeypatch DB with a fake whose query() ignores the model
-        # argument. Keep that path independent from the optional pya2l wheel.
-        model = _ModelShim
-    return DB, model
 
 
 @dataclass(frozen=True)
@@ -145,7 +132,22 @@ def _dispose_db(db) -> None:
             return
 
 
-def load_measurement_summary(
+def _format_exit_code(returncode: int) -> str:
+    unsigned = returncode & 0xFFFFFFFF
+    if returncode < 0 or unsigned > 0x7FFFFFFF:
+        return f"{returncode} (0x{unsigned:08X})"
+    return str(returncode)
+
+
+def _compact_process_output(stdout: bytes, stderr: bytes) -> str:
+    raw = stderr or stdout or b""
+    text = raw.decode("utf-8", errors="replace").strip()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    detail = lines[0] if lines else "no output"
+    return detail[:297] + "..." if len(detail) > 300 else detail
+
+
+def _load_measurement_summary_inprocess(
     a2l_path: str, *, limit: int | None = None
 ) -> A2LSummary:
     """Summarize an A2L file's measurements.
@@ -161,7 +163,19 @@ def load_measurement_summary(
     if not path.exists():
         raise FileNotFoundError(path)
 
-    db_cls, a2l_model = _load_pya2l()
+    global DB, model
+    if DB is None:
+        from pya2l import DB as loaded_db
+        import pya2l.model as loaded_model
+
+        DB = loaded_db
+        model = loaded_model
+    elif model is None:
+        # Tests monkeypatch DB with a fake whose query() ignores the model
+        # argument. Keep that path independent from the optional pya2l wheel.
+        model = _ModelShim
+
+    db_cls, a2l_model = DB, model
     db = db_cls()
     session = db.import_a2l(
         str(path),
@@ -205,6 +219,61 @@ def load_measurement_summary(
         measurement_events=measurement_events,
         a2l_has_daq_events=has_daq,
     )
+
+
+def load_measurement_summary(
+    a2l_path: str, *, limit: int | None = None
+) -> A2LSummary:
+    """Summarize an A2L file's measurements in a crash-isolated subprocess.
+
+    ``limit=None`` (default) returns every measurement; callers that only want
+    a cheap probe pass an explicit small ``limit``.
+    """
+
+    path = Path(a2l_path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "can_logger.p0._a2l_subprocess",
+        str(path),
+    ]
+    if limit is not None:
+        cmd.extend(["--limit", str(limit)])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=DEFAULT_A2L_PARSE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"A2L parse subprocess timed out after {exc.timeout:g}s: {path}"
+        ) from exc
+
+    if result.returncode != 0:
+        detail = _compact_process_output(result.stdout, result.stderr)
+        raise RuntimeError(
+            "A2L parse subprocess failed "
+            f"(exit={_format_exit_code(result.returncode)}): {detail}"
+        )
+
+    try:
+        summary = pickle.loads(result.stdout)
+    except Exception as exc:  # noqa: BLE001
+        detail = _compact_process_output(result.stdout, result.stderr)
+        raise RuntimeError(
+            f"A2L parse subprocess returned invalid data: {detail}"
+        ) from exc
+    if not isinstance(summary, A2LSummary):
+        raise RuntimeError(
+            "A2L parse subprocess returned unexpected result type: "
+            f"{type(summary).__name__}"
+        )
+    return summary
 
 
 def main() -> int:

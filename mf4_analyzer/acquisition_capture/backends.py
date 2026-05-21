@@ -555,8 +555,12 @@ class VectorXcpRecorderBackend(RecorderBackend):
             seed_and_key_dll=self._transport.seed_and_key_dll,
         )
         self._base_monotonic_s = time.monotonic()
-        self._session.start(selected)
-        self._start_capture_thread()
+        try:
+            self._session.start(selected)
+            self._start_capture_thread()
+        except Exception as exc:
+            self._cleanup_failed_start()
+            raise RecorderStartError(f"Vector/XCP session start failed: {exc}") from exc
 
     def poll(self) -> list[tuple[str, float, float]]:
         out = list(self._poll_queue)
@@ -652,9 +656,26 @@ class VectorXcpRecorderBackend(RecorderBackend):
         return None
 
     def _shutdown_bus(self) -> None:
-        if self._bus is None:
+        bus = self._bus
+        self._bus = None
+        if bus is None:
             return
         try:
-            self._bus.shutdown()
+            bus.shutdown()
         except Exception:
             pass
+
+    def _cleanup_failed_start(self) -> None:
+        try:
+            if self._session is not None:
+                self._session.stop()
+        except Exception:
+            pass
+        try:
+            if self._master is not None:
+                self._master.disconnect()
+        except Exception:
+            pass
+        self._session = None
+        self._master = None
+        self._shutdown_bus()

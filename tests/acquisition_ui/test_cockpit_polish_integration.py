@@ -74,9 +74,8 @@ def test_history_tab_open_uses_cockpit_analyzer_handoff(qapp, tmp_path: Path):
 
 
 def test_settings_action_opens_dialog_and_applies_thresholds(
-    qapp, monkeypatch, tmp_path: Path
+    qapp, tmp_path: Path
 ):
-    monkeypatch.setenv("HOME", str(tmp_path))
     thresholds.reset_defaults()
     window = CockpitMainWindow()
     try:
@@ -99,9 +98,8 @@ def test_settings_action_opens_dialog_and_applies_thresholds(
 
 
 def test_cockpit_startup_loads_user_threshold_overrides(
-    qapp, monkeypatch, tmp_path: Path
+    qapp, tmp_path: Path
 ):
-    monkeypatch.setenv("HOME", str(tmp_path))
     thresholds.reset_defaults()
     thresholds.save_user_settings(
         {
@@ -120,9 +118,8 @@ def test_cockpit_startup_loads_user_threshold_overrides(
 
 
 def test_cockpit_startup_survives_unreadable_settings_file(
-    qapp, monkeypatch, tmp_path: Path
+    qapp, tmp_path: Path
 ):
-    monkeypatch.setenv("HOME", str(tmp_path))
     settings_dir = tmp_path / ".acquisition-cockpit"
     settings_dir.mkdir()
     # Replace the settings file with a directory so Path.read_text raises

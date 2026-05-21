@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from PyQt5.QtWidgets import QDialog, QPushButton
@@ -14,7 +15,7 @@ from mf4_analyzer.acquisition_ui.settings_dialog import SettingsDialog
 @pytest.fixture(autouse=True)
 def _isolated_threshold_state(monkeypatch, tmp_path):
     """Keep dialog tests away from the real per-user settings directory."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     thresholds.reset_defaults()
     yield
     thresholds.reset_defaults()

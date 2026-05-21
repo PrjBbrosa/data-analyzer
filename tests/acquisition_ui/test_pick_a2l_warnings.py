@@ -100,6 +100,30 @@ def test_successful_load_no_warning(qapp, monkeypatch, tmp_path):
         window.deleteLater()
 
 
+def test_a2l_warning_hidden_window_does_not_open_message_box(
+    qapp, monkeypatch, tmp_path
+):
+    opened: list[object] = []
+
+    def _fake_open(box) -> None:
+        opened.append(box)
+
+    monkeypatch.setattr(
+        "mf4_analyzer.acquisition_ui.main_window.QMessageBox.open",
+        _fake_open,
+    )
+    window = CockpitMainWindow()
+    try:
+        assert window.isVisible() is False
+        a2l = tmp_path / "bad.a2l"
+        window._warn_a2l_load_problems(a2l, ["parse failed"])
+
+        assert window._a2l_warning_box is not None
+        assert opened == []
+    finally:
+        window.deleteLater()
+
+
 def test_ifdata_parse_failure_warns_and_clears_cache(qapp, monkeypatch, tmp_path):
     """Pre-load a good A2L; then load a broken one. Warning fires and
     ``self._ifdata_xcp`` is None so Test Connection can't reuse it."""
