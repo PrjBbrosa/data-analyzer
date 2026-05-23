@@ -140,6 +140,10 @@ def test_mode_change_routes_to_chart_stack(qapp, qtbot):
     assert w.inspector.contextual_widget_name() == 'fft'
 
 
+def _combo_texts(combo):
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
 def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
     """If user selects a custom X channel whose length != data, surface a
     non-blocking warning toast and abort."""
@@ -177,6 +181,107 @@ def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
     levels = [call.args[1] if len(call.args) > 1 else call.kwargs.get('level')
               for call in toast.call_args_list]
     assert 'warning' in levels
+
+
+def test_channel_edit_refreshes_custom_xaxis_candidates(qapp, qtbot, loaded_csv):
+    """A channel created by the editor must be immediately selectable as X."""
+    import numpy as np
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+    combo = w.inspector.top._combo_xaxis_ch
+    before_data = combo.currentData()
+
+    arr = np.arange(len(w.files[fid].data), dtype=float)
+    w._apply_channel_edits(fid, {'d_dt_speed': (arr, 'unit/s')}, set())
+    qapp.processEvents()
+
+    texts = _combo_texts(combo)
+    assert any(text.endswith('d_dt_speed') for text in texts)
+    assert combo.currentData() == before_data
+
+
+def test_file_load_refreshes_custom_xaxis_candidates_when_channel_mode(
+    qapp, qtbot, loaded_csv, tmp_path
+):
+    """Loading another file while X source is channel mode must add it."""
+    import numpy as np
+    import pandas as pd
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    second = tmp_path / 'second.csv'
+    pd.DataFrame({
+        'time': np.linspace(0, 1, 128),
+        'pressure': np.linspace(10, 20, 128),
+    }).to_csv(second, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([str(second)], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    texts = _combo_texts(w.inspector.top._combo_xaxis_ch)
+    assert any(text.endswith('pressure') for text in texts)
+
+
+def test_channel_edit_removing_custom_xaxis_source_resets_to_time(
+    qapp, qtbot, loaded_csv
+):
+    """Removing the applied X source must not leave stale custom-X state."""
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+    combo = w.inspector.top._combo_xaxis_ch
+    idx = next(i for i in range(combo.count()) if combo.itemData(i) == (fid, 'speed'))
+    combo.setCurrentIndex(idx)
+    w._apply_xaxis()
+    assert w._custom_xaxis_ch == 'speed'
+
+    w._apply_channel_edits(fid, {}, {'speed'})
+    qapp.processEvents()
+
+    assert w._custom_xaxis_fid is None
+    assert w._custom_xaxis_ch is None
+    assert w.inspector.top.xaxis_mode() == 'time'
 
 
 def test_file_activation_updates_inspector_fs_and_range(qapp, qtbot, loaded_csv):

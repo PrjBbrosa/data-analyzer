@@ -27,6 +27,7 @@ lesson by default.
 | [Windows Native Imports Need Isolated Probe](codex-windows-native-import-guard.md) | Touching Windows acquisition backends, Cockpit startup/import paths, or optional native dependencies such as `pya2l`, `pyxcp`, or Vector `python-can`. | See lesson |
 | [Phantom API Surface Guards](codex-phantom-api-surface-guards.md) | Mocking external library surfaces for acquisition probes or optional native dependencies. | Structured fakes/autospec; focused Vector probe tests |
 | [Owned Backend Invalidation](codex-owned-backend-invalidation.md) | Touching Acquisition Cockpit backend swapping, transport/A2L settings, | See lesson |
+| [PyQt Channel Universe Refresh](pyqt-channel-universe-refresh.md) | Touching file load/close, channel editor application, or live channel selectors. | See lesson |
 
 ## Selection Rules
 

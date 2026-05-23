@@ -1520,9 +1520,17 @@ class PersistentTop(QWidget):
 
     def set_xaxis_candidates(self, candidates):
         """candidates: list of (display_text, (fid, ch)) tuples."""
+        prev = self._combo_xaxis_ch.currentData()
+        self._combo_xaxis_ch.blockSignals(True)
         self._combo_xaxis_ch.clear()
-        for text, data in candidates:
+        keep_idx = -1
+        for i, (text, data) in enumerate(candidates):
             self._combo_xaxis_ch.addItem(text, data)
+            if prev is not None and data == prev:
+                keep_idx = i
+        if keep_idx >= 0:
+            self._combo_xaxis_ch.setCurrentIndex(keep_idx)
+        self._combo_xaxis_ch.blockSignals(False)
 
     def range_enabled(self):
         return self.chk_range.isChecked()

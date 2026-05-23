@@ -603,12 +603,35 @@ class MainWindow(QMainWindow):
         elif mode == 0:
             mode = 'time'
         if mode == 'channel':
-            cands = []
-            for fid, fd in self.files.items():
-                px = f"[{fd.short_name}] "
-                for ch in fd.channels:
-                    cands.append((px + ch, (fid, ch)))
-            self.inspector.top.set_xaxis_candidates(cands)
+            self._refresh_xaxis_candidates()
+
+    def _build_xaxis_candidates(self):
+        cands = []
+        for fid, fd in self.files.items():
+            px = f"[{fd.short_name}] "
+            for ch in fd.channels:
+                cands.append((px + ch, (fid, ch)))
+        return cands
+
+    def _refresh_xaxis_candidates(self):
+        self.inspector.top.set_xaxis_candidates(self._build_xaxis_candidates())
+
+    def _validate_custom_xaxis_source(self):
+        if self._custom_xaxis_fid is None or self._custom_xaxis_ch is None:
+            return
+        fd = self.files.get(self._custom_xaxis_fid)
+        if fd is not None and self._custom_xaxis_ch in fd.data.columns:
+            return
+        self._custom_xaxis_fid = None
+        self._custom_xaxis_ch = None
+        self._custom_xlabel = None
+        self.inspector.top.set_xaxis_mode('time')
+
+    def _refresh_channel_dependent_controls(self):
+        self._validate_custom_xaxis_source()
+        self._update_combos()
+        if self.inspector.top.xaxis_mode() == 'channel':
+            self._refresh_xaxis_candidates()
 
     def _apply_xaxis(self):
         """应用横坐标设置"""
@@ -733,7 +756,7 @@ class MainWindow(QMainWindow):
             # freshly minted fid (defensive; fid is monotonic per-session
             # but the helper is cheap and keeps the invariant tight).
             self._fft_time_cache_clear_for_fid(fid)
-            self._update_combos()
+            self._refresh_channel_dependent_controls()
             if fd.time_array is not None and len(fd.time_array):
                 current_hi = self.inspector.top.spin_end.maximum()
                 new_hi = max(current_hi, fd.time_array[-1])
@@ -816,16 +839,7 @@ class MainWindow(QMainWindow):
         self.chart_stack.stats_strip.update_stats({})
         # Chart-card cursor mode → back to 'off' default (spec §8)
         self.chart_stack.set_cursor_mode('off')
-        # Invalidate custom X axis pointer if source gone
-        if self._custom_xaxis_fid is not None and self._custom_xaxis_fid not in self.files:
-            self._custom_xaxis_fid = None
-            self._custom_xaxis_ch = None
-            self._custom_xlabel = None
-            self.inspector.top.set_xaxis_mode('time')
-        # Refill candidates if still in channel mode
-        if self.inspector.top.xaxis_mode() == 'channel':
-            self._on_xaxis_mode_changed('channel')
-        self._update_combos()
+        self._refresh_channel_dependent_controls()
         if not self.files:
             self.inspector.top.set_range_limits(0, 0)
             self.inspector.top.spin_start.setValue(0)
@@ -1006,7 +1020,7 @@ class MainWindow(QMainWindow):
             fd.channel_units.pop(name, None)
         self.navigator.remove_file(fid)
         self.navigator.add_file(fid, fd)
-        self._update_combos()
+        self._refresh_channel_dependent_controls()
         self.statusBar.showMessage(
             f"编辑: +{len(new_channels)} -{len(removed_channels)}"
         )
