@@ -343,7 +343,7 @@ class MainWindow(QMainWindow):
         # discarded when the layout pass fires (observed regression: plot
         # blanks after fft → time toggle).
         if mode == 'time' and self.files and self.navigator.get_checked_channels():
-            QTimer.singleShot(0, self.plot_time)
+            QTimer.singleShot(0, self._plot_time_preserving_xlim)
 
     def _on_cursor_mode_changed(self, mode):
         self.canvas_time.set_cursor_visible(mode != 'off')
@@ -378,6 +378,9 @@ class MainWindow(QMainWindow):
           per mode change. With the cache cleared, the first refresh
           tick AFTER ``set_xlim`` re-primes against the preserved xlim.
         """
+        self._plot_time_preserving_xlim()
+
+    def _plot_time_preserving_xlim(self):
         cur_xlim = self._safe_capture_primary_xlim()
         try:
             self.plot_time()
@@ -671,10 +674,9 @@ class MainWindow(QMainWindow):
         # wipe it to be safe.
         self.canvas_time.invalidate_envelope_cache("custom-x changed")
         self.canvas_time.invalidate_monotonicity_cache()
-        # FFT vs Time cache: custom-x semantics shift the time_range
-        # interpretation for every fid that the user might subsequently
-        # compute against; wholesale clear is safe at capacity 12 and
-        # matches T5's recommendation in the cache-invalidation handoff.
+        # FFT vs Time cache: keep the existing conservative invalidation
+        # when the shared top controls change plot semantics. Time range
+        # itself remains tied to FileData.time_array.
         self._fft_time_cache.clear()
         # 重新绘图
         self.plot_time()
@@ -882,7 +884,25 @@ class MainWindow(QMainWindow):
         # plot_time() will re-prime as needed.
         self.canvas_time.invalidate_envelope_cache("selection changed")
         if self.files and self.chart_stack.current_mode() == 'time':
-            self.plot_time()
+            self._plot_time_preserving_xlim()
+
+    def _restore_checked_channels(self, checked):
+        widget = self.channel_list
+        widget._updating = True
+        try:
+            for fid, fi in widget._file_items.items():
+                all_children_checked = fi.childCount() > 0
+                for i in range(fi.childCount()):
+                    item = fi.child(i)
+                    data = item.data(0, Qt.UserRole)
+                    is_checked = bool(
+                        data and data[0] == 'channel' and (data[1], data[2]) in checked
+                    )
+                    item.setCheckState(0, Qt.Checked if is_checked else Qt.Unchecked)
+                    all_children_checked = all_children_checked and is_checked
+                fi.setCheckState(0, Qt.Checked if all_children_checked else Qt.Unchecked)
+        finally:
+            widget._updating = False
 
     def _on_span(self, xmin, xmax):
         self.inspector.top.set_range_from_span(xmin, xmax)
@@ -947,25 +967,27 @@ class MainWindow(QMainWindow):
             fd = self.channel_list.get_file_data(fid)
             if fd is None or ch not in fd.data.columns: continue
 
+            time_axis = fd.time_array
             # 使用自定义横坐标或默认时间轴 — by reference; the canvas
             # treats these arrays as read-only.
             if custom_x is not None and len(custom_x) == len(fd.data):
-                t = custom_x
+                x_axis = custom_x
             else:
-                t = fd.time_array
+                x_axis = time_axis
 
             sig = fd.data[ch].to_numpy(copy=False)
             unit = fd.channel_units.get(ch, '');
             name = fd.get_prefixed_channel(ch)
             # Only allocate filtered arrays when the user actually asked
-            # for range filtering — otherwise pass the originals through.
+            # for range filtering. The range controls are always in
+            # acquisition time, even when the visible X axis is a channel.
             if range_enabled:
-                m = (t >= range_lo) & (t <= range_hi)
-                t, sig = t[m], sig[m]
+                m = (time_axis >= range_lo) & (time_axis <= range_hi)
+                x_axis, sig = x_axis[m], sig[m]
             if len(sig) == 0: continue
             # Statistics are computed from the (post-range-filter)
             # original samples — never from envelope output.
-            data.append((name, True, t, sig, color, unit, fid))
+            data.append((name, True, x_axis, sig, color, unit, fid))
             st[name] = {'min': np.min(sig), 'max': np.max(sig), 'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
                         'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit}
         if not data: self.canvas_time.clear(); self.canvas_time.draw(); self.chart_stack.stats_strip.update_stats({}); return
@@ -991,6 +1013,10 @@ class MainWindow(QMainWindow):
 
     def _apply_channel_edits(self, fid, new_channels, removed_channels):
         fd = self.files[fid]
+        checked_before = {
+            (cfid, ch)
+            for cfid, ch, _color in self.channel_list.get_checked_channels()
+        }
         # Cache invalidation site 3: each touched channel's underlying
         # ndarray identity may have changed (added) or vanished (removed).
         # `fd.get_prefixed_channel(...)` is what plot_channels stashes
@@ -1018,8 +1044,15 @@ class MainWindow(QMainWindow):
             if name in fd.channels:
                 fd.channels.remove(name)
             fd.channel_units.pop(name, None)
-        self.navigator.remove_file(fid)
-        self.navigator.add_file(fid, fd)
+        nav_blocked = self.navigator.blockSignals(True)
+        list_blocked = self.channel_list.blockSignals(True)
+        try:
+            self.navigator.remove_file(fid)
+            self.navigator.add_file(fid, fd)
+        finally:
+            self.channel_list.blockSignals(list_blocked)
+            self.navigator.blockSignals(nav_blocked)
+        self._restore_checked_channels(checked_before)
         self._refresh_channel_dependent_controls()
         self.statusBar.showMessage(
             f"编辑: +{len(new_channels)} -{len(removed_channels)}"
@@ -1028,7 +1061,7 @@ class MainWindow(QMainWindow):
             f"通道已更新: 新增 {len(new_channels)} · 删除 {len(removed_channels)}",
             "success",
         )
-        self.plot_time()
+        self._plot_time_preserving_xlim()
 
     def export_excel(self):
         if not self.files or not self._active:

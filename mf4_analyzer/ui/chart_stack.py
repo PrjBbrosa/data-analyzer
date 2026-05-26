@@ -568,10 +568,15 @@ class TimeChartCard(_ChartCard):
             b.clicked.connect(lambda _=False, k=key: self.set_axis_lock(k))
         self._axis_lock = 'none'
         self._lock_buttons['none'].setChecked(True)
+        self._overlay_nav_restore_mode = None
         self._sync_lock_enabled()
         if hasattr(self.canvas, 'overlay_channel_selected'):
             self.canvas.overlay_channel_selected.connect(
                 self._on_overlay_channel_selected
+            )
+        if hasattr(self.canvas, 'overlay_interaction_finished'):
+            self.canvas.overlay_interaction_finished.connect(
+                self._on_overlay_interaction_finished
             )
         self._time_button_labels = [
             (self.btn_subplot, '分屏', '分'),
@@ -679,16 +684,39 @@ class TimeChartCard(_ChartCard):
         super()._on_nav_mode_toggled()
         self._sync_lock_enabled()
 
-    def _on_overlay_channel_selected(self, name):
-        if not name:
+    def _set_toolbar_nav_mode(self, mode):
+        if mode not in ('pan', 'zoom'):
             return
-        mode = str(getattr(self.toolbar, 'mode', '')).lower()
-        if 'pan' in mode:
+        current = self._current_mode_key()
+        if current == mode:
+            return
+        if current == 'pan':
             self.toolbar.pan()
-        elif 'zoom' in mode:
+        elif current == 'zoom':
+            self.toolbar.zoom()
+        if mode == 'pan':
+            self.toolbar.pan()
+        else:
             self.toolbar.zoom()
         self._sync_lock_enabled()
         self._refresh_hint()
+
+    def _on_overlay_channel_selected(self, name):
+        if not name:
+            return
+        mode = self._current_mode_key()
+        self._overlay_nav_restore_mode = mode if mode in ('pan', 'zoom') else 'pan'
+        if mode == 'pan':
+            self.toolbar.pan()
+        elif mode == 'zoom':
+            self.toolbar.zoom()
+        self._sync_lock_enabled()
+        self._refresh_hint()
+
+    def _on_overlay_interaction_finished(self):
+        mode = self._overlay_nav_restore_mode or 'pan'
+        self._overlay_nav_restore_mode = None
+        self._set_toolbar_nav_mode(mode if mode == 'zoom' else 'pan')
 
 
 class SpectrogramChartCard(_ChartCard):

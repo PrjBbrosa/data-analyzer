@@ -728,6 +728,7 @@ class ChartOptionsDialog(QDialog):
         color = self.edit_curve_color.text().strip()
         if line is not None and color and mcolors.is_color_like(color):
             line.set_color(color)
+            self._sync_curve_axis_color(line, color)
 
         mappable = self._current_mappable()
         if mappable is None:
@@ -745,6 +746,51 @@ class ChartOptionsDialog(QDialog):
                 float(self.spin_color_min.value()),
                 float(self.spin_color_max.value()),
             )
+
+    def _sync_curve_axis_color(self, line, color):
+        ax = getattr(line, "axes", None) or self.ax
+        side = self._axis_side_for_line(ax)
+        ax.yaxis.label.set_color(color)
+        ax.tick_params(axis='y', colors=color)
+        if side in ax.spines:
+            ax.spines[side].set_color(color)
+
+        canvas = getattr(ax.figure, "canvas", None)
+        channel_name = self._channel_name_for_line(canvas, line)
+        if channel_name is None:
+            return
+
+        channel_data = getattr(canvas, "channel_data", None)
+        if isinstance(channel_data, dict) and channel_name in channel_data:
+            t, sig, _old_color, unit = channel_data[channel_name]
+            channel_data[channel_name] = (t, sig, color, unit)
+
+        for artist in getattr(canvas, "_inside_channel_label_artists", []):
+            if artist.get_gid() != channel_name:
+                continue
+            artist.set_color(color)
+            patch = artist.get_bbox_patch()
+            if patch is not None:
+                patch.set_edgecolor(color)
+
+    def _axis_side_for_line(self, ax):
+        canvas = getattr(ax.figure, "canvas", None)
+        axes_list = getattr(canvas, "axes_list", [])
+        if getattr(canvas, "_overlay_mode", False) and axes_list and ax is not axes_list[0]:
+            return 'right'
+        label_pos = getattr(ax.yaxis, "get_label_position", lambda: "left")()
+        tick_pos = getattr(ax.yaxis, "get_ticks_position", lambda: "left")()
+        if label_pos == 'right' or tick_pos == 'right':
+            return 'right'
+        return 'left'
+
+    def _channel_name_for_line(self, canvas, line):
+        if canvas is None:
+            return None
+        for name, (_ax, channel_line) in getattr(canvas, "_channel_lines", {}).items():
+            if channel_line is line:
+                return name
+        return None
 
     def _accept_with_apply(self):
         self.apply_changes()

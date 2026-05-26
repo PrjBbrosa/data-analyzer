@@ -220,7 +220,7 @@ def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
     assert cs.cursor_pill_text() == ""
 
 
-def test_overlay_curve_drag_exits_default_pan_before_y_move(qapp, qtbot):
+def test_overlay_curve_drag_returns_to_pan_after_y_move(qapp, qtbot):
     from matplotlib.backend_bases import MouseEvent
 
     cs = ChartStack()
@@ -250,7 +250,6 @@ def test_overlay_curve_drag_exits_default_pan_before_y_move(qapp, qtbot):
     )
     cs.canvas_time.callbacks.process("button_press_event", press)
     assert cs.canvas_time.selected_overlay_channel() == "torque"
-    assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
 
     move = MouseEvent(
         "motion_notify_event", cs.canvas_time, x_pix, y_pix + 30, button=1
@@ -263,6 +262,7 @@ def test_overlay_curve_drag_exits_default_pan_before_y_move(qapp, qtbot):
 
     assert cs.canvas_time.axes_list[0].get_xlim() == pytest.approx(before_xlim)
     assert torque_ax.get_ylim() != pytest.approx(before_torque_ylim)
+    assert 'pan' in str(cs._time_card.toolbar.mode).lower()
 
 
 def test_dblclick_chart_options_does_not_leave_pan_drag_active(qapp, qtbot, monkeypatch):

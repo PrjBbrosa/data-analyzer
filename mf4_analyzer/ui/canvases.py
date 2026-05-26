@@ -503,6 +503,7 @@ class TimeDomainCanvas(FigureCanvas):
     dual_cursor_info = pyqtSignal(str)
     span_selected = pyqtSignal(float, float)
     overlay_channel_selected = pyqtSignal(object)
+    overlay_interaction_finished = pyqtSignal()
 
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(10, 6), dpi=100, facecolor=CHART_FACE)
@@ -765,6 +766,7 @@ class TimeDomainCanvas(FigureCanvas):
             label = _compact_axis_label(name, unit, max_chars=24)
             _set_series_ylabel(ax, label, color, labelpad=12, unit=unit, side='left')
             ax.tick_params(axis='y', colors=color, labelsize=7)
+            ax.spines['left'].set_color(color); ax.spines['left'].set_linewidth(2)
             ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
             self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
         for ax in self.axes_list:
@@ -987,7 +989,8 @@ class TimeDomainCanvas(FigureCanvas):
         self._last_channel_label_mode = 'inside'
         for ax, name, color in subplot_specs:
             ax.set_ylabel("")
-            label = _middle_ellipsis(name, max_chars=48)
+            prefix, rest = _split_prefixed_label(name)
+            label = f"{prefix}\n{rest}" if prefix is not None else str(name)
             artist = ax.text(
                 0.012, 0.985, f"\u25cf {label}",
                 transform=ax.transAxes,
@@ -1625,6 +1628,7 @@ class TimeDomainCanvas(FigureCanvas):
         # timer (B-1). The try/finally guarantees both the rubber-band
         # branch and every early-return path (no axis lock, missing
         # press anchor, off-axis release) end with no pending QTimer.
+        had_overlay_interaction = self._overlay_y_drag_start is not None
         try:
             # User-request 2026-05-20: complete the blank-canvas click
             # deselect BEFORE the axis-lock early-return so the gate
@@ -1644,6 +1648,8 @@ class TimeDomainCanvas(FigureCanvas):
             self._refresh = True
             self._cancel_rb()
         finally:
+            if had_overlay_interaction:
+                self.overlay_interaction_finished.emit()
             self._overlay_y_drag_start = None
             self._overlay_deselect_press_xy = None
             self._overlay_deselect_armed = False

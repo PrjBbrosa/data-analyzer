@@ -144,6 +144,62 @@ def _combo_texts(combo):
     return [combo.itemText(i) for i in range(combo.count())]
 
 
+def test_custom_xaxis_time_range_filters_by_file_time_axis(qapp, qtbot, tmp_path):
+    """The persistent range controls are always a time-domain filter.
+
+    When X is a custom channel, the displayed x values come from that
+    channel, but the selected range must still slice by FileData.time_array.
+    """
+    import numpy as np
+    import pandas as pd
+    from PyQt5.QtCore import Qt
+    from unittest.mock import patch
+
+    p = tmp_path / "custom_x_range.csv"
+    pd.DataFrame({
+        "time": np.arange(10, dtype=float),
+        "angle": np.arange(100, 110, dtype=float),
+        "force": np.arange(10, 20, dtype=float),
+    }).to_csv(p, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([str(p)], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    fi = w.channel_list._file_items[fid]
+    force_idx = next(
+        i for i in range(fi.childCount())
+        if fi.child(i).data(0, Qt.UserRole) == ('channel', fid, 'force')
+    )
+    w.channel_list._updating = True
+    fi.child(force_idx).setCheckState(0, Qt.Checked)
+    w.channel_list._updating = False
+    w.channel_list.channels_changed.emit()
+    qapp.processEvents()
+
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+    combo = w.inspector.top._combo_xaxis_ch
+    angle_idx = next(
+        i for i in range(combo.count())
+        if combo.itemData(i) == (fid, 'angle')
+    )
+    combo.setCurrentIndex(angle_idx)
+    w.inspector.top.set_range_from_span(2.0, 4.0)
+    w._apply_xaxis()
+
+    assert w.canvas_time.channel_data
+    xdata, ydata, _color, _unit = next(iter(w.canvas_time.channel_data.values()))
+    np.testing.assert_allclose(xdata, [102.0, 103.0, 104.0])
+    np.testing.assert_allclose(ydata, [12.0, 13.0, 14.0])
+
+
 def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
     """If user selects a custom X channel whose length != data, surface a
     non-blocking warning toast and abort."""
@@ -396,6 +452,36 @@ def test_file_load_multi_file_no_autocheck_per_file(qapp, qtbot, loaded_csv, tmp
     assert w.channel_list.get_checked_channels() == []
 
 
+def _load_time_window_with_checked(qapp, qtbot, loaded_csv, checked_names=("speed",)):
+    from PyQt5.QtCore import Qt
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1500, 800)
+    w.show()
+    qtbot.waitExposed(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    fi = w.channel_list._file_items[fid]
+    checked = set(checked_names)
+    w.channel_list._updating = True
+    for i in range(fi.childCount()):
+        item = fi.child(i)
+        _, _fid, ch = item.data(0, Qt.UserRole)
+        item.setCheckState(0, Qt.Checked if ch in checked else Qt.Unchecked)
+    w.channel_list._updating = False
+    w.channel_list.channels_changed.emit()
+    qapp.processEvents()
+    assert w.canvas_time._primary_xaxis_ax is not None
+    return w, fid
+
+
 def test_plot_mode_toggle_preserves_xlim_overlay_to_subplot(qapp, qtbot, loaded_csv):
     """User-request 2026-05-20 (fix 2): toggling 分↔叠 must keep the
     user's current x-zoom window. Toolbar Back/Forward history need
@@ -459,6 +545,75 @@ def test_plot_mode_toggle_preserves_xlim_overlay_to_subplot(qapp, qtbot, loaded_
     flo, fhi = final_primary.get_xlim()
     assert flo == pytest.approx(t0, abs=1e-6)
     assert fhi == pytest.approx(t1, abs=1e-6)
+
+
+def test_channel_selection_change_preserves_xlim(qapp, qtbot, loaded_csv):
+    import pytest
+    from PyQt5.QtCore import Qt
+
+    w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    t0, t1 = 0.2, 0.6
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(t0, t1)
+    qapp.processEvents()
+
+    fi = w.channel_list._file_items[fid]
+    torque_item = next(
+        fi.child(i) for i in range(fi.childCount())
+        if fi.child(i).data(0, Qt.UserRole) == ('channel', fid, 'torque')
+    )
+    torque_item.setCheckState(0, Qt.Checked)
+    qapp.processEvents()
+
+    new_primary = w.canvas_time._primary_xaxis_ax
+    assert new_primary is not None
+    nlo, nhi = new_primary.get_xlim()
+    assert nlo == pytest.approx(t0, abs=1e-6)
+    assert nhi == pytest.approx(t1, abs=1e-6)
+
+
+def test_channel_editor_apply_preserves_checked_xlim(qapp, qtbot, loaded_csv):
+    import numpy as np
+    import pytest
+
+    w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    t0, t1 = 0.2, 0.6
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(t0, t1)
+    qapp.processEvents()
+
+    arr = np.arange(len(w.files[fid].data), dtype=float)
+    w._apply_channel_edits(fid, {'d_dt_speed': (arr, 'unit/s')}, set())
+    qapp.processEvents()
+
+    checked_names = {ch for _fid, ch, _color in w.channel_list.get_checked_channels()}
+    assert "speed" in checked_names
+    new_primary = w.canvas_time._primary_xaxis_ax
+    assert new_primary is not None
+    nlo, nhi = new_primary.get_xlim()
+    assert nlo == pytest.approx(t0, abs=1e-6)
+    assert nhi == pytest.approx(t1, abs=1e-6)
+
+
+def test_returning_to_time_mode_preserves_xlim(qapp, qtbot, loaded_csv):
+    import pytest
+
+    w, _fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    t0, t1 = 0.2, 0.6
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(t0, t1)
+    qapp.processEvents()
+
+    w._on_mode_changed('fft')
+    qapp.processEvents()
+    w._on_mode_changed('time')
+    qapp.processEvents()
+
+    new_primary = w.canvas_time._primary_xaxis_ax
+    assert new_primary is not None
+    nlo, nhi = new_primary.get_xlim()
+    assert nlo == pytest.approx(t0, abs=1e-6)
+    assert nhi == pytest.approx(t1, abs=1e-6)
 
 
 def test_main_window_promotes_fft_time_canvas(qtbot):

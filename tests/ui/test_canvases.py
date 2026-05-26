@@ -196,7 +196,10 @@ def test_timedomain_subplot_long_ylabel_switches_to_inside_labels(qtbot):
         assert x <= 0.03
         assert y >= 0.96
         assert artist.get_gid() == full_name
-        assert "..." in artist.get_text() or "…" in artist.get_text()
+        displayed = artist.get_text().replace("\u25cf ", "").replace("\n", " ")
+        assert full_name in displayed
+        assert "..." not in artist.get_text()
+        assert "\u2026" not in artist.get_text()
 
 
 def test_timedomain_subplot_relayouts_after_resize_keep_ticks_visible(qtbot):
