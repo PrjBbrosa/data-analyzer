@@ -1,9 +1,14 @@
 param(
-    [string]$AppName = "MF4DataAnalyzer",
+    [string]$Version = "3.0",
+    [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
     [switch]$KeepPrevious
 )
+
+if (-not $AppName) {
+    $AppName = "TraceLab$Version"
+}
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -46,7 +51,7 @@ $SpecDir = Join-Path $RepoRoot "build\spec"
 $VendorPyxcpDir = Join-Path $WorkDir "_vendor_pyxcp"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
-# Default output: dist\MF4DataAnalyzer\MF4DataAnalyzer.exe
+# Default output: dist\TraceLab3.0\TraceLab3.0.exe (override with -Version or -AppName)
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeHookPyxcp)) {
     if (-not (Test-Path $RequiredPath)) {
