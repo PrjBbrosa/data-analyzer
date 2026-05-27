@@ -380,48 +380,6 @@ def test_timedomain_overlay_selection_clears_on_replot(qtbot):
     assert canvas.selected_overlay_channel() is None
 
 
-def test_timedomain_overlay_selection_does_not_retarget_axis_lock_drag(qtbot):
-    from matplotlib.backend_bases import MouseEvent
-
-    canvas = TimeDomainCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(900, 500)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-
-    t = np.linspace(0.0, 1.0, 80)
-    canvas.plot_channels([
-        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
-        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
-    ], mode="overlay")
-    canvas.select_overlay_channel("torque")
-    canvas.set_axis_lock("x")
-
-    speed_ax, speed_line = canvas._channel_lines["speed"]
-    x_data = float(speed_line.get_xdata()[20])
-    y_data = float(speed_line.get_ydata()[20])
-    x_pix, y_pix = speed_ax.transData.transform((x_data, y_data))
-    press = MouseEvent(
-        "button_press_event", canvas, x_pix, y_pix, button=1
-    )
-    press.inaxes = speed_ax
-    press.xdata = x_data
-    press.ydata = y_data
-    canvas.callbacks.process("button_press_event", press)
-
-    move = SimpleNamespace(
-        inaxes=speed_ax,
-        x=x_pix + 40,
-        y=y_pix,
-        xdata=x_data + 0.2,
-        ydata=y_data,
-        button=1,
-    )
-    canvas._on_move(move)
-
-    assert canvas._rb_ax is speed_ax
-    assert canvas._rb_patch is not None
-    assert canvas._rb_patch.get_width() > 0.0
 
 
 def test_timedomain_overlay_blank_click_clears_selection(qtbot):

@@ -155,12 +155,22 @@ _MDI_NAV_ICONS = {
 }
 
 _NAV_SHORTCUTS = {
-    'home': 'H',
-    'back': 'Alt+Left',
-    'forward': 'Alt+Right',
-    'pan': 'P',
-    'zoom': 'Z',
+    'home': 'Ctrl+R',
+    'back': 'Ctrl+Z',
+    'forward': 'Ctrl+Shift+Z',
+    'pan': 'Ctrl+G',
+    'zoom': 'Ctrl+B',
 }
+
+# Time-card segmented controls — Ctrl+digit shortcuts (left-hand reachable).
+# Keys mirror the attribute names so the install helper can locate the button.
+_TIME_CARD_SHORTCUTS = (
+    ('btn_subplot',           '分屏',   'Ctrl+1'),
+    ('btn_overlay',           '叠加',   'Ctrl+2'),
+    ('cursor_off',            '游标关', 'Ctrl+3'),
+    ('cursor_single',         '单游标', 'Ctrl+4'),
+    ('cursor_dual',           '双游标', 'Ctrl+5'),
+)
 
 
 def _strip_subplots_action(toolbar):
@@ -205,6 +215,24 @@ def _install_nav_shortcuts(card, toolbar):
         if native and native not in tip:
             act.setToolTip(f"{tip} ({native})")
         card.addAction(act)
+
+
+def _install_button_shortcut(card, button, label, shortcut):
+    """Attach a card-wide QShortcut to a QPushButton and annotate its tooltip.
+
+    Buttons created from QPushButton don't have a setShortcutContext like
+    QAction; the QShortcut wired here fires when the focus is anywhere
+    inside the card subtree (Qt.WidgetWithChildrenShortcut).
+    """
+    from PyQt5.QtWidgets import QShortcut
+
+    seq = QKeySequence(shortcut)
+    sc = QShortcut(seq, card)
+    sc.setContext(Qt.WidgetWithChildrenShortcut)
+    sc.activated.connect(button.click)
+    native = seq.toString(QKeySequence.NativeText)
+    button.setToolTip(f"{label} ({native})" if native else label)
+    return sc
 
 
 def _vline():
@@ -551,46 +579,43 @@ class TimeChartCard(_ChartCard):
         self._cursor_mode = 'off'
         self._cursor_buttons['off'].setChecked(True)
 
-        # Axis-lock chips on the right edge — only effective during zoom mode.
-        # Selection is remembered across mode switches; chips merely grey out
-        # when zoom is inactive.
-        sep = _vline()
-        self._time_separators.append(sep)
-        self._insert_right_toolbar_widget(loc_action, sep)
-        self._lock_buttons = {}
-        for label, key in [('不锁', 'none'), ('锁X', 'x'), ('锁Y', 'y')]:
-            b = QPushButton(label, self.toolbar)
-            b.setCheckable(True)
-            b.setProperty("role", "chart-choice")
-            b.setFlat(True)
-            self._insert_right_toolbar_widget(loc_action, b)
-            self._lock_buttons[key] = b
-            b.clicked.connect(lambda _=False, k=key: self.set_axis_lock(k))
-        self._axis_lock = 'none'
-        self._lock_buttons['none'].setChecked(True)
-        self._overlay_nav_restore_mode = None
-        self._sync_lock_enabled()
+        # Overlay-selection hook: when a single curve is selected in overlay
+        # mode, force the matplotlib nav toolbar OUT of pan/zoom so a blank-
+        # area click can clear the selection without being eaten by a pan
+        # press. Deselect intentionally does NOT restore the previous mode —
+        # the user re-engages pan via Ctrl+G if they want it back.
         if hasattr(self.canvas, 'overlay_channel_selected'):
             self.canvas.overlay_channel_selected.connect(
                 self._on_overlay_channel_selected
             )
-        if hasattr(self.canvas, 'overlay_interaction_finished'):
-            self.canvas.overlay_interaction_finished.connect(
-                self._on_overlay_interaction_finished
-            )
+
         self._time_button_labels = [
             (self.btn_subplot, '分屏', '分'),
             (self.btn_overlay, '叠加', '叠'),
             (self._cursor_buttons['off'], '游标关', '关'),
             (self._cursor_buttons['single'], '单游标', '单'),
             (self._cursor_buttons['dual'], '双游标', '双'),
-            (self._lock_buttons['none'], '不锁', '不'),
-            (self._lock_buttons['x'], '锁X', 'X'),
-            (self._lock_buttons['y'], '锁Y', 'Y'),
         ]
-        for button, full, _compact in self._time_button_labels:
-            button.setToolTip(full)
+        # Tooltips are populated by _install_button_shortcut below so they
+        # carry the "(Ctrl+N)" suffix; no plain-text setToolTip needed here.
         self._time_toolbar_compact = None
+
+        # Card-wide Ctrl+1..5 shortcuts for the segmented controls.
+        self._time_button_shortcuts = []
+        button_by_key = {
+            'btn_subplot':   self.btn_subplot,
+            'btn_overlay':   self.btn_overlay,
+            'cursor_off':    self._cursor_buttons['off'],
+            'cursor_single': self._cursor_buttons['single'],
+            'cursor_dual':   self._cursor_buttons['dual'],
+        }
+        for key, label, shortcut in _TIME_CARD_SHORTCUTS:
+            btn = button_by_key.get(key)
+            if btn is None:
+                continue
+            self._time_button_shortcuts.append(
+                _install_button_shortcut(self, btn, label, shortcut)
+            )
 
     def _sync_responsive_toolbar(self):
         super()._sync_responsive_toolbar()
@@ -653,70 +678,23 @@ class TimeChartCard(_ChartCard):
             return 'cursor_dual'
         return super()._context_hint_key()
 
-    # ----- axis lock (chip group) -----
-    def axis_lock(self):
-        return self._axis_lock
-
-    def set_axis_lock(self, key):
-        if key not in ('none', 'x', 'y'):
-            return
-        self._axis_lock = key
-        for k, b in self._lock_buttons.items():
-            b.setChecked(k == key)
-        # Push to canvas only when zoom is the active nav tool — outside zoom
-        # the rubber-band lock has no effect anyway, but keeping the canvas
-        # state aligned avoids a stale lock if user re-enters zoom.
-        if self._is_zoom_active():
-            self.canvas.set_axis_lock(key)
-
-    def _is_zoom_active(self):
-        return 'zoom' in str(getattr(self.toolbar, 'mode', '')).lower()
-
-    def _sync_lock_enabled(self):
-        zoom = self._is_zoom_active()
-        for b in self._lock_buttons.values():
-            b.setEnabled(zoom)
-        # Apply or detach the lock when the user enters/leaves zoom mode.
-        self.canvas.set_axis_lock(self._axis_lock if zoom else 'none')
-
-    def _on_nav_mode_toggled(self, *_):
-        # Extend base behavior: refresh hint AND chip enabled state.
-        super()._on_nav_mode_toggled()
-        self._sync_lock_enabled()
-
-    def _set_toolbar_nav_mode(self, mode):
-        if mode not in ('pan', 'zoom'):
-            return
-        current = self._current_mode_key()
-        if current == mode:
-            return
-        if current == 'pan':
-            self.toolbar.pan()
-        elif current == 'zoom':
-            self.toolbar.zoom()
-        if mode == 'pan':
-            self.toolbar.pan()
-        else:
-            self.toolbar.zoom()
-        self._sync_lock_enabled()
-        self._refresh_hint()
-
+    # ----- overlay-selection nav handoff -----
     def _on_overlay_channel_selected(self, name):
+        """Switch the matplotlib nav toolbar to idle while a curve is selected.
+
+        Pan / zoom would otherwise eat the next blank-area click and prevent
+        deselect. We do NOT restore the previous mode on deselect — the user
+        can re-engage pan (Ctrl+G) or zoom (Ctrl+B) explicitly. Called with
+        ``name=None`` on deselect; that path is a no-op.
+        """
         if not name:
             return
         mode = self._current_mode_key()
-        self._overlay_nav_restore_mode = mode if mode in ('pan', 'zoom') else 'pan'
         if mode == 'pan':
             self.toolbar.pan()
         elif mode == 'zoom':
             self.toolbar.zoom()
-        self._sync_lock_enabled()
         self._refresh_hint()
-
-    def _on_overlay_interaction_finished(self):
-        mode = self._overlay_nav_restore_mode or 'pan'
-        self._overlay_nav_restore_mode = None
-        self._set_toolbar_nav_mode(mode if mode == 'zoom' else 'pan')
 
 
 class SpectrogramChartCard(_ChartCard):

@@ -323,7 +323,6 @@ class MainWindow(QMainWindow):
         self._custom_xlabel = None
         self._custom_xaxis_fid = None
         self._custom_xaxis_ch = None
-        self._axis_lock_widget = None
         # Phase 1 item 4: track range-filter and plot-mode state across
         # plot_time() calls so we can fire the appropriate envelope-cache
         # invalidation when either changes (the cache is keyed on raw
@@ -465,13 +464,6 @@ class MainWindow(QMainWindow):
             ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
         self.canvas_order.draw_idle()
-
-    def _show_axis_lock_popover(self, anchor):
-        from .drawers.axis_lock_popover import AxisLockPopover
-        current = self.canvas_time._axis_lock or 'none'
-        pop = AxisLockPopover(self, current=current)
-        pop.lock_changed.connect(self.canvas_time.set_axis_lock)
-        pop.show_at(anchor)
 
     def _show_rebuild_popover(self, anchor, mode='fft'):
         """Open the 重建时间轴 modal popover for the active selection.
@@ -996,7 +988,10 @@ class MainWindow(QMainWindow):
         self.canvas_time.plot_channels(data, mode, xlabel=xlabel)
         xt, yt = self.inspector.top.tick_density()
         self.canvas_time.set_tick_density(xt, yt)
-        self.canvas_time.enable_span_selector(self._on_span);
+        # SpanSelector intentionally not enabled — drag-to-select on the
+        # chart face was retired (2026-05-27) to prevent accidental triggers.
+        # If you need a per-range export tool, re-enable explicitly behind a
+        # toolbar button rather than always-on.
         self.chart_stack.stats_strip.update_stats(st);
         self.statusBar.showMessage(f"绘制: {len(checked)} 通道, {len(set(fid for fid, _, _ in checked))} 文件")
 

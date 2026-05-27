@@ -106,12 +106,12 @@ def test_time_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
         i for i, act in enumerate(actions)
         if card.toolbar.widgetForAction(act) is card.btn_subplot
     )
-    lock_y_index = next(
+    cursor_dual_index = next(
         i for i, act in enumerate(actions)
-        if card.toolbar.widgetForAction(act) is card._lock_buttons['y']
+        if card.toolbar.widgetForAction(act) is card._cursor_buttons['dual']
     )
 
-    assert loc_index < spacer_index < subplot_index < lock_y_index
+    assert loc_index < spacer_index < subplot_index < cursor_dual_index
     assert loc_label.minimumWidth() == loc_label.maximumWidth()
     assert (
         card._time_controls_spacer.sizePolicy().horizontalPolicy()
@@ -125,11 +125,11 @@ def test_chart_nav_actions_have_chart_area_shortcuts(qapp, qtbot):
     qtbot.addWidget(cs)
 
     expected = {
-        "home": "H",
-        "back": "Alt+Left",
-        "forward": "Alt+Right",
-        "pan": "P",
-        "zoom": "Z",
+        "home": "Ctrl+R",
+        "back": "Ctrl+Z",
+        "forward": "Ctrl+Shift+Z",
+        "pan": "Ctrl+G",
+        "zoom": "Ctrl+B",
     }
     for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
         card_action_keys = {act.data() for act in card.actions()}
@@ -138,6 +138,39 @@ def test_chart_nav_actions_have_chart_area_shortcuts(qapp, qtbot):
             assert action.shortcut().toString(QKeySequence.PortableText) == shortcut
             assert action.shortcutContext() == Qt.WidgetWithChildrenShortcut
             assert key in card_action_keys
+            # Tooltip must include the shortcut in NativeText form so users
+            # can discover it without consulting docs.
+            assert action.toolTip()
+            assert action.shortcut().toString(QKeySequence.NativeText) in action.toolTip()
+
+
+def test_time_card_segmented_buttons_have_ctrl_digit_shortcuts(qapp, qtbot):
+    """Ctrl+1..5 are wired to 分屏/叠加/游标关/单游标/双游标 buttons and the
+    tooltip carries the shortcut in native form."""
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.show()
+    qtbot.waitExposed(cs)
+    card = cs._time_card
+    expected_pairs = [
+        (card.btn_subplot,                'Ctrl+1', '分屏'),
+        (card.btn_overlay,                'Ctrl+2', '叠加'),
+        (card._cursor_buttons['off'],     'Ctrl+3', '游标关'),
+        (card._cursor_buttons['single'],  'Ctrl+4', '单游标'),
+        (card._cursor_buttons['dual'],    'Ctrl+5', '双游标'),
+    ]
+    registered = {
+        s.key().toString(): s for s in card._time_button_shortcuts
+    }
+    for _btn, shortcut, _label in expected_pairs:
+        assert shortcut in registered, f"Missing shortcut {shortcut}"
+        sc = registered[shortcut]
+        assert sc.context() == Qt.WidgetWithChildrenShortcut
+    for btn, shortcut, label in expected_pairs:
+        native = QKeySequence(shortcut).toString(QKeySequence.NativeText)
+        tip = btn.toolTip()
+        assert label in tip
+        assert native in tip
 
 
 def test_time_toolbar_loc_label_text_does_not_jostle_right_controls(qapp, qtbot):
@@ -149,11 +182,11 @@ def test_time_toolbar_loc_label_text_does_not_jostle_right_controls(qapp, qtbot)
 
     card = cs._time_card
     loc_label = getattr(card.toolbar, 'locLabel', None)
-    before = card._lock_buttons['y'].geometry().topLeft()
+    before = card._cursor_buttons['dual'].geometry().topLeft()
 
     loc_label.setText("(x, y) = (-19.0, 1.153)")
     qapp.processEvents()
-    after = card._lock_buttons['y'].geometry().topLeft()
+    after = card._cursor_buttons['dual'].geometry().topLeft()
 
     assert after == before
 
@@ -191,9 +224,6 @@ def test_time_toolbar_controls_fit_when_inspector_narrows_chart(qapp, qtbot):
         card._cursor_buttons['off'],
         card._cursor_buttons['single'],
         card._cursor_buttons['dual'],
-        card._lock_buttons['none'],
-        card._lock_buttons['x'],
-        card._lock_buttons['y'],
     ]
     right_edge = card.toolbar.rect().right()
     for button in controls:
@@ -220,7 +250,10 @@ def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
     assert cs.cursor_pill_text() == ""
 
 
-def test_overlay_curve_drag_returns_to_pan_after_y_move(qapp, qtbot):
+def test_overlay_curve_drag_leaves_toolbar_idle_during_selection(qapp, qtbot):
+    """Selecting a curve in overlay mode must drop pan so blank clicks can
+    later deselect; deselect does not auto-restore pan — user re-engages
+    via Ctrl+G if wanted."""
     from matplotlib.backend_bases import MouseEvent
 
     cs = ChartStack()
@@ -250,6 +283,9 @@ def test_overlay_curve_drag_returns_to_pan_after_y_move(qapp, qtbot):
     )
     cs.canvas_time.callbacks.process("button_press_event", press)
     assert cs.canvas_time.selected_overlay_channel() == "torque"
+    # Selection must have dropped pan so a subsequent blank click can
+    # reach the deselect gate without being eaten by a pan press.
+    assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
 
     move = MouseEvent(
         "motion_notify_event", cs.canvas_time, x_pix, y_pix + 30, button=1
@@ -262,7 +298,67 @@ def test_overlay_curve_drag_returns_to_pan_after_y_move(qapp, qtbot):
 
     assert cs.canvas_time.axes_list[0].get_xlim() == pytest.approx(before_xlim)
     assert torque_ax.get_ylim() != pytest.approx(before_torque_ylim)
+    # Release does not auto-restore pan.
+    assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
+
+
+def test_overlay_blank_click_clears_selection_after_curve_drag(qapp, qtbot):
+    """Blank click after a curve selection clears the selection without
+    needing the user to manually drop pan first (toolbar already idle)."""
+    from matplotlib.backend_bases import MouseEvent
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+
+    t = np.linspace(0.0, 1.0, 80)
+    cs.canvas_time.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    cs.canvas_time.draw()
     assert 'pan' in str(cs._time_card.toolbar.mode).lower()
+
+    torque_ax, torque_line = cs.canvas_time._channel_lines["torque"]
+    x_data = float(torque_line.get_xdata()[30])
+    y_data = float(torque_line.get_ydata()[30])
+    x_pix, y_pix = torque_ax.transData.transform((x_data, y_data))
+
+    press = MouseEvent(
+        "button_press_event", cs.canvas_time, x_pix, y_pix, button=1
+    )
+    cs.canvas_time.callbacks.process("button_press_event", press)
+    release = MouseEvent(
+        "button_release_event", cs.canvas_time, x_pix, y_pix, button=1
+    )
+    cs.canvas_time.callbacks.process("button_release_event", release)
+    assert cs.canvas_time.selected_overlay_channel() == "torque"
+    assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
+
+    ax = cs.canvas_time.axes_list[0]
+    blank_x = float(cs.canvas_time.fig.bbox.width) - 8.0
+    blank_y = float(cs.canvas_time.fig.bbox.height) - 8.0
+    before_xlim = ax.get_xlim()
+    deselect_events = []
+    cs.canvas_time.overlay_channel_selected.connect(deselect_events.append)
+
+    press_blank = MouseEvent(
+        "button_press_event", cs.canvas_time, blank_x, blank_y, button=1
+    )
+    cs.canvas_time.callbacks.process("button_press_event", press_blank)
+    release_blank = MouseEvent(
+        "button_release_event", cs.canvas_time, blank_x, blank_y, button=1
+    )
+    cs.canvas_time.callbacks.process("button_release_event", release_blank)
+
+    assert cs.canvas_time.selected_overlay_channel() is None
+    assert deselect_events and deselect_events[-1] is None
+    assert ax.get_xlim() == pytest.approx(before_xlim)
+    # Deselect does not re-engage pan.
+    assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
 
 
 def test_dblclick_chart_options_does_not_leave_pan_drag_active(qapp, qtbot, monkeypatch):
@@ -695,9 +791,6 @@ def test_time_card_segmented_buttons_chinese(qtbot):
     assert card._cursor_buttons['off'].text() == '游标关'
     assert card._cursor_buttons['single'].text() == '单游标'
     assert card._cursor_buttons['dual'].text() == '双游标'
-    assert card._lock_buttons['none'].text() == '不锁'
-    assert card._lock_buttons['x'].text() == '锁X'
-    assert card._lock_buttons['y'].text() == '锁Y'
 
 
 def test_tool_hints_idle_mentions_dblclick():

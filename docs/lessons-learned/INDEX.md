@@ -30,6 +30,7 @@ lesson by default.
 | [PyQt Channel Universe Refresh](pyqt-channel-universe-refresh.md) | Touching file load/close, channel editor application, or live channel selectors. | See lesson |
 | [Custom X Axis Keeps Time Range Filtering](pyqt-ui/2026-05-26-custom-x-time-range-filter.md) | Touching `plot_time`, Inspector range controls, custom X-axis channel | See lesson |
 | [TimeDomain State Preservation](pyqt-ui/2026-05-26-timedomain-state-preservation.md) | Touching TimeDomain replots, channel selection/editing, plot mode | See lesson |
+| [Overlay Selection Drops Pan](pyqt-ui/2026-05-27-overlay-selection-drops-pan.md) | Click-to-enter / click-to-exit gestures on a matplotlib canvas while the nav toolbar is in pan/zoom. | `tests/ui/test_chart_stack.py` |
 
 ## Selection Rules
 
