@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set "APPNAME=MF4DataAnalyzer"
+set "APPNAME=TraceLab3.0"
 if not "%~1"=="" set "APPNAME=%~1"
 
 set "REPO_ROOT=%~dp0.."

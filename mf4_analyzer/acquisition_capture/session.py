@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from mf4_analyzer.acquisition_capture import thresholds
+from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
 
 SESSION_SUMMARY_VERSION = 1
 
@@ -68,6 +69,7 @@ class SessionConfig:
     connection_timeout_s: float = field(
         default_factory=lambda: thresholds.CONNECTION_TIMEOUT_S
     )
+    transport: TransportConfig = field(default_factory=TransportConfig)
 
     def __post_init__(self) -> None:
         # Hard validation: output path must point at a writable directory

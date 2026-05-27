@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QListWidget,
+    QMessageBox,
     QScrollArea,
 )
 
@@ -462,6 +463,31 @@ def test_archive_failure_does_not_corrupt_mf4(qapp, tmp_path):
     assert modal.save_ok is True
 
 
+def test_archive_failure_visible_modal_uses_nonblocking_message_box(
+    qapp, tmp_path, monkeypatch
+):
+    ctx = _finalize_and_make_context(tmp_path)
+    opened: list[QMessageBox] = []
+
+    def fail_exec(_box):
+        raise AssertionError("archive failure warning must not exec_()")
+
+    monkeypatch.setattr(QMessageBox, "exec_", fail_exec)
+    monkeypatch.setattr(QMessageBox, "open", lambda self: opened.append(self))
+
+    modal = ReviewModal(ctx)
+    try:
+        modal.show()
+        modal._show_archive_failure(RuntimeError("manifest locked"))
+
+        assert opened == [modal._archive_failure_box]
+        assert modal._archive_failure_box is not None
+        assert modal._archive_failure_box.icon() == QMessageBox.Warning
+        assert "manifest locked" in modal._archive_failure_box.text()
+    finally:
+        modal.done(0)
+
+
 # ---------------------------------------------------------------------------
 # 在 Analyzer 打开 — Cockpit handoff calls MainWindow.load_file only
 # after finalized save/archive
@@ -665,7 +691,7 @@ def test_analyzer_load_file_delegates_to_load_one(qapp, monkeypatch):
         assert captured == ["/tmp/some.mf4"]
         # Also accepts a Path.
         win.load_file(Path("/tmp/another.mf4"))
-        assert captured[-1] == "/tmp/another.mf4"
+        assert captured[-1] == str(Path("/tmp/another.mf4"))
     finally:
         win.close()
 

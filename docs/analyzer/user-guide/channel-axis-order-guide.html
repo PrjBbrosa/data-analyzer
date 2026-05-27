@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MF4 Data Analyzer · 通道编辑 / 横坐标 / 阶次计算 · 新手说明书</title>
+<style>
+  :root {
+    --ink: #111827;
+    --muted: #64748b;
+    --muted-2: #94a3b8;
+    --line: #e2e8f0;
+    --line-strong: #cbd5e1;
+    --bg: #eef2f7;
+    --surface: #ffffff;
+    --surface-2: #f8fafc;
+    --surface-3: #f1f5f9;
+    --accent: #1769e0;
+    --accent-soft: #e7f0ff;
+    --accent-deep: #0f4cb5;
+    --teal: #0f9f8f;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --ok: #059669;
+    --radius: 12px;
+    --shadow-card: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(15,23,42,.06);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(circle at 8% 0%,  rgba(23,105,224,.10), transparent 32%),
+      radial-gradient(circle at 96% 8%, rgba(15,159,143,.10), transparent 36%),
+      var(--bg);
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .shell {
+    width: min(960px, calc(100vw - 32px));
+    margin: 0 auto;
+    padding: 28px 0 80px;
+  }
+
+  header.hero { margin-bottom: 22px; }
+  .eyebrow {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    margin: 0 0 6px;
+  }
+  h1 {
+    font-size: clamp(24px, 3.2vw, 34px);
+    margin: 0;
+    letter-spacing: -.01em;
+  }
+  .lede {
+    color: var(--muted);
+    max-width: 760px;
+    margin: 10px 0 0;
+    font-size: 15px;
+  }
+
+  nav.toc {
+    margin: 18px 0 24px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    font-size: 13.5px;
+    color: var(--muted);
+    box-shadow: var(--shadow-card);
+  }
+  nav.toc a { color: var(--ink); font-weight: 600; }
+  nav.toc .sep { color: var(--muted-2); margin: 0 8px; }
+
+  section.card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px 26px;
+    margin-bottom: 18px;
+    box-shadow: var(--shadow-card);
+  }
+  h2 {
+    margin: 0 0 4px;
+    font-size: 20px;
+    letter-spacing: -.005em;
+  }
+  h3 {
+    margin: 22px 0 8px;
+    font-size: 15.5px;
+    color: var(--accent-deep);
+  }
+  .h2-sub {
+    color: var(--muted);
+    font-size: 13.5px;
+    margin-bottom: 16px;
+  }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+
+  code, .kbd {
+    font-family: "JetBrains Mono", Menlo, Consolas, "Source Code Pro", monospace;
+    font-size: 12.5px;
+    background: var(--surface-3);
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--ink);
+  }
+  .kbd {
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 1px 0 var(--line-strong);
+    padding: 1px 6px;
+  }
+
+  /* numbered step layout */
+  .steps { counter-reset: step; padding-left: 0; list-style: none; margin: 12px 0; }
+  .steps > li {
+    counter-increment: step;
+    position: relative;
+    padding: 10px 12px 10px 44px;
+    margin-bottom: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 12px; top: 10px;
+    width: 22px; height: 22px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 700;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+  }
+
+  /* tables */
+  table.params {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 6px;
+    font-size: 13px;
+  }
+  table.params th, table.params td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.params th {
+    background: var(--surface-3);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  table.params td.k { font-family: "JetBrains Mono", Menlo, Consolas, monospace; color: var(--accent-deep); white-space: nowrap; }
+  table.params td.r { color: var(--muted); white-space: nowrap; }
+
+  /* callouts */
+  .callout {
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    padding: 10px 14px;
+    border-radius: 8px;
+    color: var(--ink);
+    font-size: 13px;
+    margin: 12px 0;
+  }
+  .callout.warn { background: #fffbeb; border-color: var(--warn); }
+  .callout.tip  { background: #ecfdf5; border-color: var(--ok); }
+  .callout.danger { background: #fef2f2; border-color: var(--danger); }
+  .callout strong { font-weight: 700; }
+
+  /* pill row */
+  .pill {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    margin: 0 4px 4px 0;
+  }
+  .pill.muted { background: var(--surface-3); color: var(--muted); }
+  .pill.warn  { background: #fff7ed; color: var(--warn); }
+  .pill.ok    { background: #ecfdf5; color: var(--ok); }
+
+  /* formula block */
+  .formula {
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 12px 0;
+    overflow-x: auto;
+  }
+  .formula .cmt { color: #94a3b8; }
+
+  /* mock ui screenshots (CSS) */
+  .ui-mock {
+    background: var(--surface-2);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 10px 0;
+    font-size: 12.5px;
+  }
+  .ui-mock .title {
+    font-weight: 700;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .ui-mock .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  .ui-mock .row:last-child { border-bottom: none; }
+  .ui-mock .lbl { width: 88px; color: var(--muted); }
+  .ui-mock .val {
+    background: #fff;
+    border: 1px solid var(--line-strong);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    flex: 1;
+  }
+  .ui-mock .btn {
+    background: var(--accent);
+    color: #fff;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .ui-mock .btn.muted {
+    background: var(--surface-3);
+    color: var(--muted);
+  }
+
+  footer.bot {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 40px;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header class="hero">
+    <p class="eyebrow">MF4 Data Analyzer · 进阶说明书</p>
+    <h1>通道编辑 · 横坐标转换 · 阶次计算</h1>
+    <p class="lede">面向第一次用这个工具的工程师：三个最常被问到的功能，每个都从"在哪打开"讲到"参数填什么"，再到"出错时怎么办"。先看导览，再按顺序读完即可。</p>
+  </header>
+
+  <nav class="toc">
+    <a href="#channel-edit">① 通道编辑</a><span class="sep">·</span>
+    <a href="#xaxis">② 横坐标转换</a><span class="sep">·</span>
+    <a href="#order">③ 阶次（Order）计算</a><span class="sep">·</span>
+    <a href="#faq">常见问题</a>
+  </nav>
+
+  <!-- ─────────────────────────────────────────────────────── -->
+  <!-- ① 通道编辑                                              -->
+  <!-- ─────────────────────────────────────────────────────── -->
+  <section class="card" id="channel-edit">
+    <h2>① 通道编辑</h2>
+    <div class="h2-sub">从已有通道派生新通道、合并两路信号、删除用不到的通道。所有结果都属于当前文件，不会写回原始 MF4。</div>
+
+    <h3>1. 在哪打开</h3>
+    <ol>
+      <li>左侧 <code>FileNavigator</code> 里先选中一个文件（蓝色高亮）。</li>
+      <li>右键文件 → <strong>通道编辑</strong>；或者用顶部工具栏的"通道编辑"按钮。</li>
+      <li>右侧滑出抽屉，标题写着 <code>通道编辑 — &lt;文件名&gt;</code>。</li>
+    </ol>
+
+    <div class="callout">
+      抽屉是<strong>独占的</strong>：一次只编辑一个文件。要给另一个文件加通道，先关掉再选下一个。
+    </div>
+
+    <h3>2. 单通道运算</h3>
+    <p>用一个源通道生成一条新曲线。源通道可以选已有通道，也可以选你刚刚在本次编辑中创建的新通道。</p>
+
+    <table class="params">
+      <thead>
+        <tr><th style="width:140px">运算</th><th>含义</th><th style="width:130px">参数</th><th style="width:140px">新通道名前缀</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="k">d/dt</td><td>对时间求一阶导数</td><td class="r">无（参数留空）</td><td class="k">d_dt_</td></tr>
+        <tr><td class="k">∫dt</td><td>对时间积分（梯形法）</td><td class="r">无</td><td class="k">int_</td></tr>
+        <tr><td class="k">× 系数</td><td>整体乘一个常数，比如换单位</td><td class="r">系数（任意数）</td><td class="k">scaled_</td></tr>
+        <tr><td class="k">+ 偏移</td><td>加一个常数，做零点对齐</td><td class="r">偏移量</td><td class="k">offset_</td></tr>
+        <tr><td class="k">滑动平均</td><td>等长低通平滑</td><td class="r">窗长（≥ 3，取整）</td><td class="k">mavg_</td></tr>
+        <tr><td class="k">|x| 绝对值</td><td>取每个样点的绝对值</td><td class="r">无</td><td class="k">abs_</td></tr>
+      </tbody>
+    </table>
+
+    <p>点 <span class="pill">✚ 创建</span> 后，右下角 <em>新增: N</em> 会 +1，且新通道立刻出现在三个下拉框里（源、A、B），可继续拿它派生。</p>
+
+    <div class="ui-mock">
+      <div class="title">单通道运算 · 示意</div>
+      <div class="row"><span class="lbl">源</span><span class="val">EngineSpeed</span></div>
+      <div class="row"><span class="lbl">运算</span><span class="val">d/dt</span></div>
+      <div class="row"><span class="lbl">参数</span><span class="val">—</span></div>
+      <div class="row"><span class="btn">✚ 创建</span><span style="color: var(--ok); font-weight: 600;">→ 新增通道 d_dt_EngineSpeed</span></div>
+    </div>
+
+    <h3>3. 双通道运算（A ⊕ B）</h3>
+    <p>把两条通道做对应位运算，长度必须完全一致——这是<strong>最常见的报错来源</strong>。</p>
+
+    <table class="params">
+      <thead><tr><th style="width:140px">运算</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="k">A + B</td><td>逐点相加</td></tr>
+        <tr><td class="k">A − B</td><td>逐点相减</td></tr>
+        <tr><td class="k">A × B</td><td>逐点相乘（如功率 = 扭矩 × 角速度）</td></tr>
+        <tr><td class="k">A ÷ B</td><td>逐点相除，B = 0 处自动取 0（不报除零错）</td></tr>
+        <tr><td class="k">max(A, B)</td><td>逐点取较大值</td></tr>
+        <tr><td class="k">min(A, B)</td><td>逐点取较小值</td></tr>
+      </tbody>
+    </table>
+
+    <p>新名称留空时按 <code>&lt;op&gt;_&lt;A&gt;_&lt;B&gt;</code> 自动生成（例：<code>add_torque_speed</code>）。重名时尾部自动接 <code>_1</code>、<code>_1_1</code>……</p>
+
+    <p><strong>单位合并规则</strong>：</p>
+    <ul>
+      <li>A 和 B 单位相同 → 新通道沿用同一单位（如 <code>Nm + Nm = Nm</code>）。</li>
+      <li>A ÷ B 且单位不同 → 新单位写成 <code>unitA/unitB</code>。</li>
+      <li>其他组合 → 新单位为空，需要你后续手填。</li>
+    </ul>
+
+    <div class="callout warn">
+      <strong>长度不匹配</strong>会弹红框 <code>通道长度不匹配: 8000 vs 7999</code>。原因通常是这两条通道来自不同采样率的源——先用 <a href="#xaxis">横坐标转换 / 重建时间轴</a> 对齐采样率。
+    </div>
+
+    <h3>4. 删除通道</h3>
+    <ol>
+      <li>在底部列表里多选要删的通道（按住 <span class="kbd">Ctrl</span> 或 <span class="kbd">Shift</span>）。</li>
+      <li>点 <span class="pill warn">🗑 删除</span>，确认后从列表移除。</li>
+      <li>删除是<strong>会话内</strong>的：点对话框右下 <strong>确定</strong> 才真正生效；点 <strong>取消</strong>，全部新建/删除回滚。</li>
+    </ol>
+
+    <div class="callout tip">
+      <strong>建议工作流</strong>：先创建好所有派生通道、确认右下角"新增"数对了，再统一删除冗余通道，最后点 <strong>确定</strong>。这样误操作可以一键 <strong>取消</strong> 全部撤销。
+    </div>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────────── -->
+  <!-- ② 横坐标转换                                            -->
+  <!-- ─────────────────────────────────────────────────────── -->
+  <section class="card" id="xaxis">
+    <h2>② 横坐标转换</h2>
+    <div class="h2-sub">默认横坐标是时间（秒）。你可以换成"任意一条通道"作横坐标，或者在采样率信息缺失时重新指定 Fs 来重建时间轴。两件事，分两个入口。</div>
+
+    <h3>A. 用其它通道做横坐标（X 轴 ↔ 通道）</h3>
+
+    <p>常见场景：</p>
+    <ul>
+      <li>把 <em>扭矩 vs 转速</em> 画成 MAP 曲线，而不是按时间走。</li>
+      <li>分析某个温度对压力的依赖关系。</li>
+    </ul>
+
+    <ol class="steps">
+      <li>在右侧 <strong>Inspector 顶部</strong>，把"横坐标模式"切到 <code>通道</code>。</li>
+      <li>展开候选列表，挑一个通道——条目前面带方括号文件名前缀，例如 <code>[run1.mf4] EngineSpeed</code>。</li>
+      <li>（可选）在标签输入框里写 X 轴显示名，例如 <code>转速 (rpm)</code>。留空则用通道名本身。</li>
+      <li>按下方"应用"按钮（或回车），所有曲线立即重画。</li>
+    </ol>
+
+    <div class="callout warn">
+      <strong>长度必须一致</strong>：候选通道的长度必须等于所有当前被勾选绘图的通道。否则会弹出 toast <code>横坐标通道长度与当前绘图通道不一致</code>，X 轴不会被切换。
+    </div>
+
+    <h3>B. 如何切回时间轴</h3>
+    <p>把模式切回 <code>时间</code> → 应用。X 轴恢复为秒，所有自定义 X 通道引用会被清空。</p>
+
+    <h3>C. 重建时间轴（修改 Fs）</h3>
+
+    <p>有时 MF4 里没有可信的时间列（导出工具丢了时间戳，或时间不单调）。这时候要给文件指定一个采样率，由分析器按 <code>t = i / Fs</code> 生成均匀时间数组。</p>
+
+    <ol class="steps">
+      <li>右侧阶次面板 <strong>信号源</strong> 卡片右上角有个小图标按钮 ⟲，鼠标悬停显示"重建时间轴"。</li>
+      <li>点开后弹出一个浮窗：<br>
+        <div class="ui-mock" style="margin-top:8px;">
+          <div class="title">重建时间轴 · 浮窗</div>
+          <div class="row" style="border:none;">目标：<code>[run1.mf4]</code></div>
+          <div class="row"><span class="lbl">Fs</span><span class="val">1000.00 Hz</span></div>
+          <div class="row" style="justify-content:flex-end; gap:6px;">
+            <span class="btn muted">取消</span>
+            <span class="btn">确定</span>
+          </div>
+        </div>
+      </li>
+      <li>填入正确的采样率（如 1000 Hz），按 <strong>确定</strong>，分析器会把这个文件的 <code>time_array</code> 重新生成为 <code>0, 1/Fs, 2/Fs, ...</code>。</li>
+    </ol>
+
+    <div class="callout">
+      <strong>Fs 范围</strong>：浮窗里允许 1 Hz ~ 1,000,000 Hz；通常车辆 CAN 数据在 100–1000 Hz，振动加速度可达 10 kHz~50 kHz。
+    </div>
+
+    <div class="callout tip">
+      <strong>什么时候要重建？</strong> 阶次分析 / FFT 都依赖<strong>均匀采样</strong>。如果你的 MF4 是非均匀时间戳，先重建一次再算阶次，结果才有意义。
+    </div>
+
+    <h3>D. 模式切换的连锁反应</h3>
+    <p>切换 X 轴模式或重建时间轴时，分析器会自动：</p>
+    <ul>
+      <li>清空时域曲线的 <em>envelope cache</em>（视觉抽稀缓存）。</li>
+      <li>清空单调性缓存——X 轴可能不再单调递增。</li>
+      <li>清空 <em>FFT vs Time</em> 缓存——时基变了，旧热图作废。</li>
+      <li>立即重画时域图。</li>
+    </ul>
+    <p>所以"切换后第一次画图会略慢"是正常的，不是卡死。</p>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────────── -->
+  <!-- ③ 阶次计算                                              -->
+  <!-- ─────────────────────────────────────────────────────── -->
+  <section class="card" id="order">
+    <h2>③ 阶次（Order）计算</h2>
+    <div class="h2-sub">分析与转速同步的周期成分——发动机点火阶次、齿轮啮合阶次、变速比下的轴承故障特征。算法是 <strong>COT（Computed Order Tracking，计算阶次跟踪）</strong>，结果是一张"时间 × 阶次"热图。</div>
+
+    <h3>1. 直觉理解：什么是"阶次"？</h3>
+    <p>阶次（Order）是<strong>每转出现的次数</strong>。例如 4 缸 4 冲程发动机的点火阶次是 2 阶（每转点火 2 次）。同一条振动信号，频率会随转速变，但阶次不变——所以阶次图比 FFT 图更适合<strong>变工况</strong>。</p>
+
+    <div class="formula">
+      频率 (Hz) = 阶次 × RPM / 60<br>
+      <span class="cmt"># 例：转速 3000 rpm，2 阶 → 频率 = 2 × 3000/60 = 100 Hz</span>
+    </div>
+
+    <h3>2. 切到阶次模式</h3>
+    <ol>
+      <li>顶部工具栏切到 <strong>阶次</strong> 模式（或叫"时间-阶次"）。</li>
+      <li>右侧 Inspector 出现 <strong>OrderContextual</strong> 面板：信号源、谱参数、坐标轴设置、预设栏、"时间-阶次"主按钮。</li>
+    </ol>
+
+    <h3>3. 信号源配置</h3>
+
+    <table class="params">
+      <thead><tr><th style="width:130px">字段</th><th>填什么</th><th>注意</th></tr></thead>
+      <tbody>
+        <tr><td class="k">信号</td><td>要分析的振动 / 噪声通道（加速度、力等）</td><td>支持搜索，可选派生通道</td></tr>
+        <tr><td class="k">转速</td><td>转速参考通道，单位 rpm</td><td>没有 rpm 就先做个换算通道（× 60、× 系数等）</td></tr>
+        <tr><td class="k">Fs</td><td>该文件的采样率 (Hz)</td><td>会跟"重建时间轴"联动</td></tr>
+        <tr><td class="k">RPM 系数</td><td>转速通道的标定系数</td><td>实际 rpm = 通道值 × 系数；默认 1</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout warn">
+      <strong>转速可以为负</strong>（反转）但<strong>不能全是 0</strong>。COT 用累积角度来重采样，全程 0 转速会直接抛出 <code>RPM is zero throughout the signal — COT cannot resolve orders</code>。
+    </div>
+
+    <h3>4. 谱参数详解</h3>
+
+    <table class="params">
+      <thead>
+        <tr><th style="width:130px">字段</th><th>取值范围</th><th>默认</th><th>选大 / 选小的影响</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="k">最大阶次</td>
+          <td class="r">1 – 100</td>
+          <td class="r">20</td>
+          <td>越大算得越远，但<strong>受 Nyquist 限制</strong>——超过 <code>fs/2 ÷ (rpm_max/60)</code> 的阶次会被自动屏蔽</td>
+        </tr>
+        <tr>
+          <td class="k">阶次分辨率</td>
+          <td class="r">0.01 – 1.0</td>
+          <td class="r">0.1</td>
+          <td>越小越精细（行越多），但内存占用线性上升；常用 0.05–0.25</td>
+        </tr>
+        <tr>
+          <td class="k">时间分辨率</td>
+          <td class="r">0.01 – 1.0 s</td>
+          <td class="r">0.05 s</td>
+          <td>越小时间方向越平滑但帧数翻倍；建议 0.02–0.1 s</td>
+        </tr>
+        <tr>
+          <td class="k">FFT 点数 (nfft)</td>
+          <td class="r">512 / 1024 / 2048 / 4096 / 8192</td>
+          <td class="r">2048</td>
+          <td>越大频率/阶次分辨率越高，但慢；信号必须覆盖足够圈数</td>
+        </tr>
+        <tr>
+          <td class="k">每转样本数</td>
+          <td class="r">64 – 2048</td>
+          <td class="r">256</td>
+          <td>角度域重采样的密度；越大对高阶次更准，但内存线性增长</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <strong>经验配方（家用车 1–6000 rpm，振动信号 Fs=10 kHz）</strong>：最大阶次 20、阶次分辨率 0.05、时间分辨率 0.05 s、nfft 2048、每转样本数 256。先按这个跑，再按需要微调。
+    </div>
+
+    <h3>5. 坐标轴设置（Y = 阶次，Z = 幅值色阶）</h3>
+    <ul>
+      <li><strong>X 范围（时间）</strong>：默认 <em>全时段</em>，勾掉 auto 就能锁定显示窗口。</li>
+      <li><strong>Y 范围（阶次）</strong>：默认 <em>0 → 最大阶次</em>，上限自动跟"最大阶次"联动——你改谱参数它会跟着改。</li>
+      <li><strong>Z 范围（色阶）</strong>：默认 dB 范围 −50 → −10，关掉 auto 后可手动指定 floor / ceiling。dB 模式更适合查看微弱阶次成分。</li>
+      <li><strong>幅值单位</strong>：可切 <code>Amplitude dB</code> / <code>Amplitude</code>，前者是 20·log10。</li>
+    </ul>
+
+    <h3>6. 跑一次完整阶次分析</h3>
+    <ol class="steps">
+      <li>左侧勾选要分析的振动通道（决定可在"信号"下拉里选谁）。</li>
+      <li>切到 <strong>阶次</strong> 模式。</li>
+      <li>填完信号、转速、Fs、RPM 系数，确认它们都来自<strong>同一个文件</strong>。</li>
+      <li>谱参数先用默认；如果转速变化范围很大，把"时间分辨率"调到 0.02 s 以捕捉瞬态。</li>
+      <li>点 <span class="pill">时间-阶次</span> 主按钮。状态栏出现 <code>计算时间-阶次谱 (COT)...</code></li>
+      <li>完成后中部画布显示热图，状态栏给出 <em>N 时间点 × M 阶次</em>。</li>
+    </ol>
+
+    <h3>7. COT 内部到底做了什么</h3>
+    <p>了解流程能帮你判断哪些参数该调：</p>
+
+    <div class="formula">
+      <span class="cmt"># 1. 把瞬时角速度积分成累积角度</span><br>
+      ω(t) = |RPM(t)| · 2π / 60<br>
+      θ(t) = ∫ ω(t) dt<br><br>
+      <span class="cmt"># 2. 把信号按等角度间隔 dθ = 2π / samples_per_rev 重采样</span><br>
+      s(θ) = interp(θ_uniform, θ, signal)<br><br>
+      <span class="cmt"># 3. 角度域加窗 FFT，bin k 直接对应阶次 k·(samples_per_rev / nfft)</span><br>
+      X[k] = FFT(s · window)[k]<br><br>
+      <span class="cmt"># 4. 插值到用户指定的阶次网格 (max_order, order_res)</span>
+    </div>
+
+    <p>因为是<strong>角度域</strong>取频谱，"阶次"是 FFT 的天然刻度——转速怎么变，阶次峰都在同一行上，不需要 RPM 后处理。</p>
+
+    <h3>8. 性能与边界</h3>
+    <ul>
+      <li>低于 <code>min_rpm_floor = 10 rpm</code> 的帧会被置零，避免 0 转速段噪声爆掉色阶。</li>
+      <li>计算是<strong>同步</strong>跑在 UI 线程上的，长信号 / 高 nfft 会短暂卡顿——暂时无法中途取消（"取消计算"按钮是占位，未来异步化时会启用）。</li>
+      <li>每批最多 256 帧并行 FFT，控制峰值内存在 ~32 MB 以内。</li>
+      <li>正反转会被 <code>|RPM|</code> 绝对值化，正负方向落到同一阶次。</li>
+    </ul>
+
+    <h3>9. 出错排查</h3>
+
+    <table class="params">
+      <thead><tr><th style="width:42%">错误 / 现象</th><th>原因</th><th>怎么修</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="k">RPM is zero throughout the signal</td>
+          <td>全段 RPM = 0</td>
+          <td>检查 RPM 通道值；如果它实际单位是 Hz，把 RPM 系数填 60</td>
+        </tr>
+        <tr>
+          <td class="k">signal covers only N revolutions</td>
+          <td>信号长度不够 nfft 个等角度样本</td>
+          <td>减小 nfft 或每转样本数；或截取转速较高的时段重跑</td>
+        </tr>
+        <tr>
+          <td class="k">length mismatch: sig=… rpm=… t=…</td>
+          <td>三个通道长度不一致</td>
+          <td>用 <a href="#xaxis">重建时间轴</a> 或 <a href="#channel-edit">通道编辑</a> 对齐</td>
+        </tr>
+        <tr>
+          <td class="k">time vector must be strictly monotonically increasing</td>
+          <td>时间戳有抖动 / 倒退</td>
+          <td>对该文件做"重建时间轴"，用均匀 Fs 网格替代原 MF4 时间</td>
+        </tr>
+        <tr>
+          <td class="k">热图低阶次区域全是噪声横纹</td>
+          <td>低阶次频率落进 FFT bin 宽度以下</td>
+          <td>正常现象——分析器已经按 <code>df = fs / nfft</code> 自动屏蔽不可分辨阶次，但 COT 路径不做这层屏蔽。可以把"最大阶次"调低、视觉范围放在 0.5 阶以上</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ─────────────────────────────────────────────────────── -->
+  <!-- 常见问题                                                -->
+  <!-- ─────────────────────────────────────────────────────── -->
+  <section class="card" id="faq">
+    <h2>常见问题（FAQ）</h2>
+
+    <h3>Q1. 通道编辑里创建的新通道，关闭文件后还在吗？</h3>
+    <p>不在。所有派生通道存在内存里的 <code>FileData</code> 上，关闭文件即丢失。如果要保留，导出为 Excel/CSV，或在批处理里把这套派生写进预设。</p>
+
+    <h3>Q2. 切到"通道做横坐标"后，FFT / 阶次能用吗？</h3>
+    <p>FFT 与阶次分析始终基于<strong>时间</strong>采样的信号，<u>不</u>用当前 X 轴。所以你可以一边用扭矩做横轴看 MAP，一边在阶次面板里照常分析振动通道——两者互不干扰。</p>
+
+    <h3>Q3. "重建时间轴"后原始时间戳会被覆盖吗？</h3>
+    <p>会。<code>FileData.time_array</code> 被替换成均匀网格；这是会话内的修改，不会写回 MF4 文件。重新打开文件即恢复原始时间。</p>
+
+    <h3>Q4. 阶次面板里改完最大阶次，Y 轴上限没动？</h3>
+    <p>谱参数里的"最大阶次"会自动联动 Y 轴 spin_y_max 的上限，但你之前手动设过的具体值不会被改写。把 <em>Y auto</em> 重新勾上即可让它跟随最大阶次。</p>
+
+    <h3>Q5. 双通道运算的结果单位为什么是空？</h3>
+    <p>除了 A÷B 和 A、B 单位相同的情况，工具不去猜单位（避免把 Nm × rpm 错写成 Nm·rpm）。运算完手动到导出对话框里改一下名字与单位就行。</p>
+  </section>
+
+  <footer class="bot">
+    MF4 Data Analyzer · 通道编辑 / 横坐标 / 阶次 说明书 · 适合新手通读，遇到具体场景再翻对应章节。
+  </footer>
+</div>
+</body>
+</html>

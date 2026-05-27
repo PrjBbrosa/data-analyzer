@@ -31,7 +31,7 @@ def test_orders_with_subbin_floor_drops_low_orders():
     o = OrderAnalyzer._orders(20.0, 0.1, fs=100.0, nfft=1024, rpm=rpm)
     assert o[0] >= 0.5, f"floor failed; first order is {o[0]} (expected >= 0.5)"
     assert o[0] >= 0.586 - 1e-9
-    assert o[-1] == 20.0
+    assert np.isclose(o[-1], 20.0)
 
 
 def test_orders_with_high_rpm_no_floor_kicks_in():

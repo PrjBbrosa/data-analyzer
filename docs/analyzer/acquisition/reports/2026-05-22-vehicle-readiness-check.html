@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MF4 采集 Cockpit 上车前链路检查报告</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --ink: #152033;
+      --muted: #66748a;
+      --line: #dbe3ef;
+      --pass: #0b8f54;
+      --warn: #b46a00;
+      --fail: #c62828;
+      --info: #0b63ce;
+      --chip: #edf3fb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+      line-height: 1.55;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 22px 48px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 18px;
+      margin-bottom: 22px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 26px 0 12px;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 18px 0 8px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+    .meta, .muted { color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .verdict {
+      border-left: 6px solid var(--fail);
+      background: #fff6f6;
+    }
+    .pass { color: var(--pass); font-weight: 700; }
+    .warn { color: var(--warn); font-weight: 700; }
+    .fail { color: var(--fail); font-weight: 700; }
+    .info { color: var(--info); font-weight: 700; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--chip);
+      font-size: 12px;
+      font-weight: 700;
+      margin-right: 6px;
+      white-space: nowrap;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eef4fb; }
+    tr:last-child td { border-bottom: 0; }
+    code {
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 13px;
+      background: #f1f4f8;
+      border: 1px solid #dde5ef;
+      border-radius: 4px;
+      padding: 1px 4px;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #111827;
+      color: #e5edf8;
+      border-radius: 8px;
+      padding: 12px 14px;
+      overflow: auto;
+      font-size: 13px;
+    }
+    ul { margin: 8px 0 0 22px; padding: 0; }
+    li { margin: 5px 0; }
+    .note {
+      border-left: 4px solid var(--info);
+      padding: 10px 12px;
+      background: #f2f7ff;
+      margin: 12px 0;
+    }
+    .top-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 12px;
+      margin: 18px 0 20px;
+    }
+    .action-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--info);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .action-card h2 {
+      margin-top: 0;
+    }
+    .action-card.urgent {
+      border-top-color: var(--fail);
+    }
+    .action-card.plan {
+      border-top-color: var(--warn);
+    }
+    .checklist {
+      margin-left: 18px;
+    }
+    .checklist li strong {
+      color: var(--ink);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>MF4 采集 Cockpit 上车前链路检查报告</h1>
+    <div class="meta">检查时间：2026-05-22 13:24:07 +08:00｜仓库：D:\Coding project\data analyzer-real-a2l-followup</div>
+  </header>
+
+  <section class="top-actions">
+    <div class="action-card urgent">
+      <h2>你下一步具体要做什么</h2>
+      <ol class="checklist">
+        <li><strong>先不要点正式采集。</strong>当前截图仍是 <code>未连接 ECU</code>，只能做连接验证。</li>
+        <li><strong>上车/上台架前确认物理条件：</strong>ECU 上电，Vector 接线正确，CAN-H/CAN-L/GND 正常，终端电阻正常，Vector Hardware Config 里 <code>Python</code> app 的 channel 0 仍映射到目标硬件。</li>
+        <li><strong>确认 A2L 是当前 ERD6 ECU 对应版本。</strong>左栏选中的 2 个 measurement 必须是允许读取的量，并且 DAQ event 继续显示为预期的 <code>BSW_2ms</code> 或同等目标 raster。</li>
+        <li><strong>点击 UI 顶部 <code>连接 ECU</code>，只观察 3 秒。</strong>通过条件是 UI 从 Disconnected 进入 ConnectedIdle，主按钮变成 <code>● 采集</code>，健康条里 <code>HW/CAN/XCP/DAQ/REC</code> 不出现红项或 <code>--</code>。</li>
+        <li><strong>如果没有进入 ConnectedIdle，立刻停止继续操作。</strong>记录状态栏/右侧面板第一个失败项：<code>HW</code>、<code>XCP</code> 或 <code>no frame received</code>。</li>
+        <li><strong>只有连接验证通过后，先录 10-30 秒短样本。</strong>检查生成的 <code>.mf4</code>、<code>.session_summary.json</code>、<code>.preflight.json</code>，确认 <code>rx_count &gt; 0</code>、<code>dropped_frames = 0</code>、预期 channel 不缺失，再考虑正式道路采集。</li>
+      </ol>
+    </div>
+
+    <div class="action-card">
+      <h2>需要你留存/回传的证据</h2>
+      <ul class="checklist">
+        <li>连接 ECU 后的 UI 截图：健康条和主按钮必须可见。</li>
+        <li>如果失败：状态栏文字、右侧失败谓词、Vector/ECU 当前接线状态。</li>
+        <li>如果短录成功：本次 <code>.mf4</code> 路径、<code>.session_summary.json</code>、<code>.preflight.json</code>。</li>
+        <li>如要跑 raw XCP：A2L 里的 <code>cmd-id</code>、<code>resp-id</code>、一个安全只读 measurement 的 address、size、datatype、endian。</li>
+      </ul>
+    </div>
+
+    <div class="action-card plan">
+      <h2>我需要优化的 Plan</h2>
+      <ol class="checklist">
+        <li><strong>连接诊断一键化：</strong>在 Cockpit 加一个“连接诊断/导出证据”动作，自动记录 Vector stage、XCP CONNECT、DAQ 首帧、失败谓词。</li>
+        <li><strong>配置落盘明确化：</strong>让 UI 明确显示当前 <code>acquisition_config.yaml</code> 路径，并在 transport/A2L 成功加载后可一键保存，避免只停留在内存态。</li>
+        <li><strong>A2L 到 XCP probe 自动填参：</strong>从 IF_DATA 和 measurement summary 里生成 <code>xcp_short_upload_probe</code> 命令，减少手填 CAN ID/address 的风险。</li>
+        <li><strong>短录后自动验收：</strong>录制停止后自动汇总 <code>rx_count</code>、drop、缺失 channel、preflight 结果，并给出 PASS/BLOCKED。</li>
+        <li><strong>Windows 测试环境固定化：</strong>把本机 pytest 的 <code>TEMP/TMP</code>、<code>QT_QPA_PLATFORM=offscreen</code>、<code>-p no:cacheprovider</code> 固化到项目脚本，消除 <code>pytest-of-hang</code> 权限噪音。</li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="card verdict">
+    <h2>总判定</h2>
+    <p><span class="fail">不建议直接开始实车采集 / 不建议带着当前截图状态去跑车。</span></p>
+    <p>可以上车做受控连接验证：Vector 驱动、应用映射、通道枚举和 500k CAN bus open 都已实证通过。但当前截图仍显示 <code>HW offline</code>、<code>CAN --</code>、<code>XCP --</code>、<code>DAQ --</code>、主面板 <code>未连接 ECU</code>，这说明 ECU/XCP/DAQ 链路还没有被打通。</p>
+    <p><span class="warn">真正允许录制的门槛</span>是：点 <code>连接 ECU</code> 后 3 秒内同时满足 HW ok、XCP connected、收到第一帧 DAQ 数据；UI 应切到 ConnectedIdle，按钮从 <code>连接 ECU</code> 变为 <code>● 采集</code>，健康条不能有红项。</p>
+  </section>
+
+  <h2>分层结论</h2>
+  <div class="grid">
+    <div class="card">
+      <h3><span class="badge pass">PASS</span>软件离线链路</h3>
+      <p>manifest / preflight / regression / signal alias / synthetic 算法测试通过。说明离线采集验证基础可用。</p>
+    </div>
+    <div class="card">
+      <h3><span class="badge pass">PASS</span>A2L/UI 内部链路</h3>
+      <p>截图显示 A2L 已加载出 323 个 measurement，当前选中 2 个，并能显示 DAQ event <code>BSW_2ms</code>。相关 A2L 左栏、transport chip、状态机测试通过。</p>
+    </div>
+    <div class="card">
+      <h3><span class="badge pass">PASS</span>Vector/CAN 硬件层</h3>
+      <p>按截图配置 <code>App=Python</code>、<code>Ch=0</code>、<code>CAN 500k</code> 跑分层探针，driver/app/channel/bus open 全绿。</p>
+    </div>
+    <div class="card">
+      <h3><span class="badge fail">NO EVIDENCE</span>ECU/XCP</h3>
+      <p>没有 XCP <code>CONNECT</code> 成功输出，也没有 <code>SHORT_UPLOAD</code> 或 pyxcp session start 成功证据。截图里的 <code>XCP --</code> 仍是未连接。</p>
+    </div>
+    <div class="card">
+      <h3><span class="badge fail">NO EVIDENCE</span>DAQ/首帧</h3>
+      <p>没有 DAQ allocation、<code>startStopSynch(0x01)</code> 后收到首帧、event rate、MF4 sidecar 的证据。截图里的 <code>DAQ --</code> 仍未通过。</p>
+    </div>
+    <div class="card">
+      <h3><span class="badge warn">WARN</span>本机测试环境</h3>
+      <p>默认系统临时目录和仓库 <code>.pytest_cache</code> 有权限问题。使用仓库内 <code>.state\tmp</code> 后测试通过；后续建议固定测试命令里的 <code>TEMP/TMP</code> 与 <code>-p no:cacheprovider</code>。</p>
+    </div>
+  </div>
+
+  <h2>截图状态解读</h2>
+  <table>
+    <thead><tr><th>截图字段</th><th>当前含义</th><th>是否满足上车采集门槛</th></tr></thead>
+    <tbody>
+      <tr><td><code>A2L ERD6</code></td><td>A2L 已在 UI 中被选择，measurement 列表可见。</td><td><span class="pass">部分满足</span>：只证明 UI 已加载，不证明 XCP 已连。</td></tr>
+      <tr><td><code>传输 · App=Python · Ch=0 · CAN 500k</code></td><td>transport 配置看起来完整。</td><td><span class="pass">满足硬件探针前置</span>，且 CLI open 已通过。</td></tr>
+      <tr><td><code>HW offline</code></td><td>UI 当前健康快照没有确认硬件在线。</td><td><span class="fail">不满足</span>。</td></tr>
+      <tr><td><code>CAN --</code></td><td>UI 当前没有 CAN bus load / channel health 数值。</td><td><span class="fail">不满足</span>。</td></tr>
+      <tr><td><code>XCP --</code></td><td>UI 当前没有 XCP connected。</td><td><span class="fail">不满足</span>。</td></tr>
+      <tr><td><code>DAQ --</code></td><td>UI 当前没有 DAQ allocation/streaming 状态。</td><td><span class="fail">不满足</span>。</td></tr>
+      <tr><td><code>REC ready</code></td><td>录制模块未报错，处于可待命状态。</td><td><span class="warn">不是 ECU connected 证据</span>。</td></tr>
+      <tr><td><code>未连接 ECU</code></td><td>主状态仍是 Disconnected。</td><td><span class="fail">不满足</span>。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>实证命令</h2>
+  <table>
+    <thead><tr><th>检查项</th><th>命令</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>离线 smoke runner</td>
+        <td><code>.venv\Scripts\python.exe scripts\acquisition_smoke.py --skip-regression</code></td>
+        <td><span class="pass">45 passed</span>，另有 <code>.pytest_cache</code> 权限 warning。</td>
+      </tr>
+      <tr>
+        <td>离线基础套件，使用仓库临时目录</td>
+        <td><code>TEMP/TMP=.state\tmp\acq_check_smoke; pytest tests/test_acquisition_* tests/synthetic -v -p no:cacheprovider</code></td>
+        <td><span class="pass">45 passed</span>。</td>
+      </tr>
+      <tr>
+        <td>Vector/XCP/backend/UI swap</td>
+        <td><code>pytest tests/test_native_import_boundaries.py tests/test_vector_xcp_backend.py tests/test_vector_hw_probe.py tests/acquisition_ui/test_record_backend_swap.py -q -p no:cacheprovider</code></td>
+        <td><span class="pass">33 passed</span>，<span class="warn">1 skipped</span>。</td>
+      </tr>
+      <tr>
+        <td>A2L 左栏、transport chip、状态机</td>
+        <td><code>pytest tests/test_acquisition_a2l_events.py tests/acquisition_ui/test_pick_a2l_populates_left_pane.py tests/acquisition_ui/test_main_window_transport_chip.py tests/acquisition_ui/test_state_machine.py -q -p no:cacheprovider</code></td>
+        <td><span class="pass">39 passed</span>。</td>
+      </tr>
+      <tr>
+        <td>P0 probe 单元测试</td>
+        <td><code>pytest tests/test_p0_vector_probe.py tests/test_p0_xcp_probe.py tests/test_p0_a2l_probe.py tests/test_p0_mf4_probe.py -q -p no:cacheprovider</code></td>
+        <td><span class="pass">12 passed</span>，<span class="warn">2 skipped</span>（真实 A2L / 实车参数门槛）。</td>
+      </tr>
+      <tr>
+        <td>Vector dry-run</td>
+        <td><code>.venv\Scripts\python.exe -m can_logger.p0.vector_probe --channel 0 --bitrate 500000 --app-name Python</code></td>
+        <td><span class="pass">all_green</span>：driver loadable、app configured、channel present count=7。</td>
+      </tr>
+      <tr>
+        <td>Vector bus open</td>
+        <td><code>.venv\Scripts\python.exe -m can_logger.p0.vector_probe --channel 0 --bitrate 500000 --app-name Python --open</code></td>
+        <td><span class="pass">all_green</span>：<code>[stage4/bus] open=true bitrate=500000</code>。</td>
+      </tr>
+      <tr>
+        <td>本地配置/产物</td>
+        <td><code>Test-Path acquisition_config.yaml</code>、<code>Test-Path data\manifest.local.json</code>、检查 <code>data\runs</code></td>
+        <td><span class="warn">未找到</span>项目级采集配置、local manifest、最近 MF4 采集产物。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>代码路径核对</h2>
+  <table>
+    <thead><tr><th>路径</th><th>核对点</th></tr></thead>
+    <tbody>
+      <tr><td><code>mf4_analyzer/acquisition_ui/main_window.py:985</code></td><td><code>连接 ECU</code> 会先检查 transport、IF_DATA、measurement selection、measurement pool，缺任何一项都会阻断真实 ECU 连接。</td></tr>
+      <tr><td><code>mf4_analyzer/acquisition_ui/main_window.py:1092</code></td><td>前置条件满足后才构造 <code>VectorXcpRecorderBackend</code>，否则不会静默用 fake backend 做真实采集。</td></tr>
+      <tr><td><code>mf4_analyzer/acquisition_capture/backends.py:528</code></td><td>真实 backend start 会 open Vector bus，初始化 pyxcp Master，然后启动 XCP DAQ session。</td></tr>
+      <tr><td><code>mf4_analyzer/acquisition_capture/xcp_daq_session.py:61</code></td><td>DAQ session 的第一步是 <code>master.connect()</code>；之后才会 unlock、检查 DAQ processor、allocDaq/allocOdt、<code>startStopSynch(0x01)</code>。</td></tr>
+      <tr><td><code>mf4_analyzer/acquisition_ui/state.py:12</code></td><td>Disconnected 到 ConnectedIdle 的判据是 <code>HwHealth.ok AND XcpHealth.connected AND first DAQ frame <= 3s</code>。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>还需要做什么</h2>
+  <ol>
+    <li>保持车辆/台架静止，确认 ECU 上电、CAN-H/CAN-L/地线、终端电阻、Vector Hardware Config 中 <code>Python</code> app channel 0 映射正确。</li>
+    <li>在 UI 中确认 A2L 是真实 ERD6 ECU 对应版本，左栏选中的两个量都有可用 DAQ event；当前截图看起来是 <code>BSW_2ms</code>。</li>
+    <li>点击 <code>连接 ECU</code>，等待 3 秒内状态变化。必须看到 <code>HW</code>、<code>XCP</code>、<code>DAQ</code> 不再为红/--，并且主按钮变为 <code>● 采集</code>。</li>
+    <li>如果 UI 没有连上，先记录右侧/状态栏的第一个失败谓词：<code>HW</code>、<code>XCP</code> 或 <code>no frame received</code>。这比反复点按钮更有诊断价值。</li>
+    <li>拿到 A2L 中的 XCP CAN IDs 和一个安全只读 measurement 地址后，补跑 raw XCP 证据：</li>
+  </ol>
+  <pre>.venv\Scripts\python.exe -m can_logger.p0.xcp_short_upload_probe ^
+  --interface vector ^
+  --channel 0 ^
+  --bitrate 500000 ^
+  --app-name Python ^
+  --cmd-id 0x... ^
+  --resp-id 0x... ^
+  --address 0x... ^
+  --address-extension 0x0 ^
+  --size 4 ^
+  --dtype f32 ^
+  --endian little</pre>
+
+  <div class="note">
+    <strong>当前可做：</strong>上车/上台架做连接验证。<br>
+    <strong>当前不应做：</strong>直接开始道路采集或把当前截图状态视为“内部链路全通”。XCP CONNECT、DAQ start、首帧、MF4 sidecar 还没有证据。
+  </div>
+
+  <h2>遗留风险</h2>
+  <ul>
+    <li>真实 ERD6 A2L 文件不在仓库内，无法从本次命令行核对 cmd/resp ID、measurement address、datatype/endian。</li>
+    <li>项目级 <code>acquisition_config.yaml</code> 不存在；当前 transport 可能只是 UI 内存态，没有落盘。</li>
+    <li>默认 pytest 临时目录和 <code>.pytest_cache</code> 权限异常会影响复跑体验；本报告的通过结果使用了仓库内临时目录规避。</li>
+    <li>没有看到最近的 <code>data/runs</code> MF4、<code>session_summary.json</code>、<code>preflight.json</code>，所以没有采集完成证据。</li>
+  </ul>
+</main>
+</body>
+</html>

@@ -196,7 +196,10 @@ def test_timedomain_subplot_long_ylabel_switches_to_inside_labels(qtbot):
         assert x <= 0.03
         assert y >= 0.96
         assert artist.get_gid() == full_name
-        assert "..." in artist.get_text() or "…" in artist.get_text()
+        displayed = artist.get_text().replace("\u25cf ", "").replace("\n", " ")
+        assert full_name in displayed
+        assert "..." not in artist.get_text()
+        assert "\u2026" not in artist.get_text()
 
 
 def test_timedomain_subplot_relayouts_after_resize_keep_ticks_visible(qtbot):
@@ -377,7 +380,89 @@ def test_timedomain_overlay_selection_clears_on_replot(qtbot):
     assert canvas.selected_overlay_channel() is None
 
 
-def test_timedomain_overlay_selection_does_not_retarget_axis_lock_drag(qtbot):
+
+
+def test_timedomain_overlay_blank_click_clears_selection(qtbot):
+    """User-request 2026-05-20 (fix 3): in overlay mode, clicking on a
+    blank region of the canvas (no curve under the cursor, no pan/zoom
+    tool active, true click = release within pixel tolerance of press)
+    must clear the current overlay selection and emit
+    ``overlay_channel_selected(None)``.
+
+    Scenario: select a curve via a pick-hit press, simulate a vertical
+    drag (motion + release advances ylim but does not deselect — drag,
+    not click), then press + release on a blank pixel — selection
+    clears, signal fires with None.
+    """
+    from matplotlib.backend_bases import MouseEvent
+
+    canvas = TimeDomainCanvas()
+    qtbot.addWidget(canvas)
+    canvas.resize(900, 500)
+    canvas.show()
+    qtbot.waitExposed(canvas)
+
+    t = np.linspace(0.0, 1.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="overlay")
+    canvas.draw()
+
+    # (a) Pick-hit press selects torque.
+    torque_ax, torque_line = canvas._channel_lines["torque"]
+    xd = float(torque_line.get_xdata()[30])
+    yd = float(torque_line.get_ydata()[30])
+    xp, yp = torque_ax.transData.transform((xd, yd))
+    press = MouseEvent("button_press_event", canvas, xp, yp, button=1)
+    canvas.callbacks.process("button_press_event", press)
+    assert canvas.selected_overlay_channel() == "torque"
+
+    # (b) Vertical drag: motion shifts ylim but must not deselect.
+    canvas._mouse_button_pressed = True
+    before_ylim = torque_ax.get_ylim()
+    move = SimpleNamespace(
+        inaxes=torque_ax, x=xp, y=yp + 40,
+        xdata=xd, ydata=yd, button=1,
+    )
+    canvas._on_move(move)
+    after_ylim = torque_ax.get_ylim()
+    assert after_ylim != pytest.approx(before_ylim)
+    release_drag = MouseEvent(
+        "button_release_event", canvas, xp, yp + 40, button=1
+    )
+    canvas.callbacks.process("button_release_event", release_drag)
+    canvas._mouse_button_pressed = False
+    # Selection survives the drag.
+    assert canvas.selected_overlay_channel() == "torque"
+
+    # (c) Press + release on a blank pixel near the axes corner —
+    # far from every curve so the pick-radius search misses.
+    blank_x = float(canvas.fig.bbox.width) - 8.0
+    blank_y = float(canvas.fig.bbox.height) - 8.0
+    deselect_events = []
+    canvas.overlay_channel_selected.connect(deselect_events.append)
+    press_blank = MouseEvent(
+        "button_press_event", canvas, blank_x, blank_y, button=1
+    )
+    canvas.callbacks.process("button_press_event", press_blank)
+    # Selection still live after press alone.
+    assert canvas.selected_overlay_channel() == "torque"
+    # Release at the same pixel (true click, not drag).
+    release_blank = MouseEvent(
+        "button_release_event", canvas, blank_x, blank_y, button=1
+    )
+    canvas.callbacks.process("button_release_event", release_blank)
+
+    # (d) Selection cleared and signal fired with None.
+    assert canvas.selected_overlay_channel() is None
+    assert deselect_events and deselect_events[-1] is None
+
+
+def test_timedomain_overlay_blank_drag_does_not_deselect(qtbot):
+    """fix 3 negative: a press-on-blank followed by a release at a
+    pixel farther than ``_overlay_click_pixel_tol`` away is a drag,
+    not a click — selection must survive."""
     from matplotlib.backend_bases import MouseEvent
 
     canvas = TimeDomainCanvas()
@@ -392,30 +477,63 @@ def test_timedomain_overlay_selection_does_not_retarget_axis_lock_drag(qtbot):
         ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
     ], mode="overlay")
     canvas.select_overlay_channel("torque")
-    canvas.set_axis_lock("x")
+    assert canvas.selected_overlay_channel() == "torque"
 
-    speed_ax, speed_line = canvas._channel_lines["speed"]
-    x_data = float(speed_line.get_xdata()[20])
-    y_data = float(speed_line.get_ydata()[20])
-    x_pix, y_pix = speed_ax.transData.transform((x_data, y_data))
-    press = MouseEvent(
-        "button_press_event", canvas, x_pix, y_pix, button=1
-    )
-    press.inaxes = speed_ax
-    press.xdata = x_data
-    press.ydata = y_data
+    blank_x = float(canvas.fig.bbox.width) - 8.0
+    blank_y = float(canvas.fig.bbox.height) - 8.0
+    press = MouseEvent("button_press_event", canvas, blank_x, blank_y, button=1)
     canvas.callbacks.process("button_press_event", press)
-
-    move = SimpleNamespace(
-        inaxes=speed_ax,
-        x=x_pix + 40,
-        y=y_pix,
-        xdata=x_data + 0.2,
-        ydata=y_data,
-        button=1,
+    # Release 20 px away — drag, not click.
+    release = MouseEvent(
+        "button_release_event", canvas, blank_x - 20.0, blank_y - 20.0, button=1
     )
-    canvas._on_move(move)
+    canvas.callbacks.process("button_release_event", release)
+    assert canvas.selected_overlay_channel() == "torque"
 
-    assert canvas._rb_ax is speed_ax
-    assert canvas._rb_patch is not None
-    assert canvas._rb_patch.get_width() > 0.0
+
+def test_plot_canvas_scroll_on_colorbar_does_not_modify_colorbar_axis(qapp):
+    """B3: wheel events landing in the heatmap colorbar must be ignored
+    (otherwise the legend's color mapping silently shifts when the user
+    is trying to pan/zoom the data axes)."""
+    canvas = PlotCanvas()
+    m = np.array([[1.0, 0.5], [0.1, 0.9]])
+    canvas.plot_or_update_heatmap(
+        matrix=m, x_extent=(0, 1), y_extent=(0, 1),
+        x_label='x', y_label='y', title='t',
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    cbar_ax = canvas._heatmap_cbar.ax
+    xlim_before = cbar_ax.get_xlim()
+    ylim_before = cbar_ax.get_ylim()
+    event = SimpleNamespace(
+        inaxes=cbar_ax,
+        step=1.0,
+        key='',
+        xdata=0.5,
+        ydata=0.5,
+    )
+    canvas._on_scroll(event)
+    assert cbar_ax.get_xlim() == xlim_before
+    assert cbar_ax.get_ylim() == ylim_before
+
+
+def test_plot_canvas_click_on_colorbar_does_not_place_remark(qapp):
+    """B3: single click on the colorbar must not snap a remark to its
+    (non-existent) data — without the guard, _on_click would fall into
+    the remark-add branch using the cbar_ax as target."""
+    canvas = PlotCanvas()
+    m = np.array([[1.0, 0.5], [0.1, 0.9]])
+    canvas.plot_or_update_heatmap(
+        matrix=m, x_extent=(0, 1), y_extent=(0, 1),
+        x_label='x', y_label='y', title='t',
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.set_remark_enabled(True)
+    cbar_ax = canvas._heatmap_cbar.ax
+    event = SimpleNamespace(
+        button=1, dblclick=False,
+        inaxes=cbar_ax,
+        xdata=0.5, ydata=0.5,
+    )
+    canvas._on_click(event)
+    assert canvas.remark_count() == 0

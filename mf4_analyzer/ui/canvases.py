@@ -11,7 +11,6 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.widgets import SpanSelector
 from matplotlib.ticker import MaxNLocator
-from matplotlib.patches import Rectangle
 
 # ----------------------------------------------------------------------
 # Phase 1 item 5: free Matplotlib rcParams wins.
@@ -100,8 +99,6 @@ def _toolbar_mode_key(toolbar):
 
 
 def _sync_toolbar_parent_state(parent):
-    if hasattr(parent, '_sync_lock_enabled'):
-        parent._sync_lock_enabled()
     if hasattr(parent, '_refresh_hint'):
         parent._refresh_hint()
 
@@ -532,6 +529,16 @@ class TimeDomainCanvas(FigureCanvas):
         self._selected_overlay_channel = None
         self._overlay_pick_radius_px = 12.0
         self._overlay_y_drag_start = None
+        # User-request 2026-05-20: clicking a blank region of the canvas
+        # in overlay mode must clear the current selection so the user
+        # can leave per-series Y mode after a vertical drag. We track the
+        # press pixel and the "blank-hit" verdict at press time so the
+        # release handler can decide whether the gesture was a click
+        # (release within _CLICK_PIXEL_TOLERANCE px of press) or a drag
+        # (pan/rubber-band/y-shift). Only a click clears the selection.
+        self._overlay_deselect_press_xy = None
+        self._overlay_deselect_armed = False
+        self._overlay_click_pixel_tol = 3.0
         self._layout_refresh_timer = QTimer(self)
         self._layout_refresh_timer.setSingleShot(True)
         self._layout_refresh_timer.setInterval(40)
@@ -567,12 +574,7 @@ class TimeDomainCanvas(FigureCanvas):
         self.mpl_connect('draw_event', lambda e: setattr(self, '_refresh', True))
         self.mpl_connect('button_press_event', self._on_click)
         self.setFocusPolicy(Qt.StrongFocus)
-        self._axis_lock = None     # None | 'x' | 'y'
-        self._rb_start = None      # (x, y) at press
-        self._rb_ax = None
-        self._rb_patch = None
         self.mpl_connect('button_release_event', self._on_release)
-        self.mpl_connect('key_press_event', self._on_key)
         # --- viewport-aware envelope caches (Phase 1 items 4 + 6) ----
         # LRU cache keyed by (data_id, channel_name, quantized_xlim, pixel_width).
         self._envelope_cache_capacity = 64
@@ -594,10 +596,6 @@ class TimeDomainCanvas(FigureCanvas):
         )
 
     def clear(self):
-        # Drop any in-flight rubber-band refs before fig.clear discards the axes.
-        self._rb_patch = None
-        self._rb_start = None
-        self._rb_ax = None
         # Disconnect the xlim_changed callback before the axis it was
         # attached to is destroyed by fig.clear() — otherwise stale
         # callbacks accumulate on rebuild and fire against dangling axes.
@@ -619,6 +617,8 @@ class TimeDomainCanvas(FigureCanvas):
         self._chart_options_ax = None
         self._selected_overlay_channel = None
         self._overlay_y_drag_start = None
+        self._overlay_deselect_press_xy = None
+        self._overlay_deselect_armed = False
         self._primary_xaxis_ax = None
         self._cursor_artists = [];
         self._a_artists = [];
@@ -629,15 +629,8 @@ class TimeDomainCanvas(FigureCanvas):
         self._bx = None
 
     def full_reset(self):
-        """Clear figure AND all cursor/dual-cursor/background/axis-lock state.
+        """Clear figure AND all cursor/dual-cursor/background state.
         Use this on file close; use clear() for redraws within a session."""
-        if self._rb_patch is not None:
-            try: self._rb_patch.remove()
-            except Exception: pass
-        self._rb_patch = None
-        self._rb_start = None
-        self._rb_ax = None
-        self._axis_lock = None
         self.clear()
         self._bg = None
         self._cursor_artists = []
@@ -753,6 +746,7 @@ class TimeDomainCanvas(FigureCanvas):
             label = _compact_axis_label(name, unit, max_chars=24)
             _set_series_ylabel(ax, label, color, labelpad=12, unit=unit, side='left')
             ax.tick_params(axis='y', colors=color, labelsize=7)
+            ax.spines['left'].set_color(color); ax.spines['left'].set_linewidth(2)
             ax.set_xlabel(xlabel, fontsize=9, color=AXIS_TEXT)
             self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
         for ax in self.axes_list:
@@ -807,8 +801,16 @@ class TimeDomainCanvas(FigureCanvas):
         return self._selected_overlay_channel
 
     def select_overlay_channel(self, name):
-        """Select one overlay series as the target for per-series Y controls."""
+        """Select one overlay series as the target for per-series Y controls.
+
+        Passing ``name=None`` clears the selection (no series highlighted,
+        all overlay curves return to their default alpha/linewidth). This
+        is the user-facing clear path — invoked by the blank-canvas click
+        deselect in overlay mode.
+        """
         if name is not None and name not in self._channel_lines:
+            return
+        if self._selected_overlay_channel == name:
             return
         self._selected_overlay_channel = name
         self._apply_overlay_selection_style()
@@ -848,7 +850,7 @@ class TimeDomainCanvas(FigureCanvas):
     def _select_overlay_channel_from_event(self, event):
         if not self._overlay_mode or event.button != 1:
             return False
-        if self._cursor_visible or self._axis_lock is not None:
+        if self._cursor_visible:
             return False
         from ._axis_interaction import find_axis_for_dblclick
         hit_ax, axis = find_axis_for_dblclick(
@@ -967,7 +969,8 @@ class TimeDomainCanvas(FigureCanvas):
         self._last_channel_label_mode = 'inside'
         for ax, name, color in subplot_specs:
             ax.set_ylabel("")
-            label = _middle_ellipsis(name, max_chars=48)
+            prefix, rest = _split_prefixed_label(name)
+            label = f"{prefix}\n{rest}" if prefix is not None else str(name)
             artist = ax.text(
                 0.012, 0.985, f"\u25cf {label}",
                 transform=ax.transAxes,
@@ -1336,6 +1339,10 @@ class TimeDomainCanvas(FigureCanvas):
         self._mouse_button_pressed = False
 
     def _on_click(self, e):
+        # Reset overlay deselect arming on every press; release will
+        # re-check the conditions.
+        self._overlay_deselect_press_xy = None
+        self._overlay_deselect_armed = False
         # Double-click on the plot face or axis gutter opens the full chart
         # options dialog for the targeted axes.
         if e.button == 1 and e.dblclick:
@@ -1343,22 +1350,24 @@ class TimeDomainCanvas(FigureCanvas):
             return
         if self._select_overlay_channel_from_event(e):
             return
-        # Axis-lock mode short-circuits dual-cursor and initiates rubber-band
-        if self._axis_lock is not None and e.button == 1 and e.inaxes is not None \
-                and e.xdata is not None and e.ydata is not None:
-            self._rb_start = (e.xdata, e.ydata)
-            self._rb_ax = e.inaxes
-            xlo, xhi = e.inaxes.get_xlim()
-            ylo, yhi = e.inaxes.get_ylim()
-            if self._axis_lock == 'x':
-                self._rb_patch = Rectangle((e.xdata, ylo), 0, yhi - ylo,
-                                           facecolor=PRIMARY, alpha=0.16, edgecolor=PRIMARY, lw=0.8)
-            else:
-                self._rb_patch = Rectangle((xlo, e.ydata), xhi - xlo, 0,
-                                           facecolor=PRIMARY, alpha=0.16, edgecolor=PRIMARY, lw=0.8)
-            e.inaxes.add_patch(self._rb_patch)
-            self.draw_idle()
-            return
+        # User-request 2026-05-20: in overlay mode, a click on a blank
+        # region (no curve within pick radius) must clear the current
+        # selection so the user can leave per-series Y-drag mode. Arm
+        # the deselect; the release handler confirms it was a true
+        # click, not a pan/zoom drag (TimeChartCard switches the nav
+        # toolbar out of pan/zoom on overlay selection so blank clicks
+        # land here uninterrupted).
+        if (
+            self._overlay_mode
+            and self._selected_overlay_channel is not None
+            and e.button == 1
+            and not getattr(e, 'dblclick', False)
+            and not self._cursor_visible
+            and e.x is not None
+            and e.y is not None
+        ):
+            self._overlay_deselect_press_xy = (float(e.x), float(e.y))
+            self._overlay_deselect_armed = True
         if not self._dual or not self._cursor_visible or e.inaxes is None or e.xdata is None or e.button != 1:
             return
         if self._placing == 'A':
@@ -1382,18 +1391,6 @@ class TimeDomainCanvas(FigureCanvas):
             else:
                 self.unsetCursor()
                 self.setToolTip("")
-        # Rubber-band update has priority
-        if self._rb_start is not None and self._rb_patch is not None and e.inaxes is self._rb_ax \
-                and e.xdata is not None and e.ydata is not None:
-            x0, y0 = self._rb_start
-            if self._axis_lock == 'x':
-                self._rb_patch.set_x(min(x0, e.xdata))
-                self._rb_patch.set_width(abs(e.xdata - x0))
-            else:
-                self._rb_patch.set_y(min(y0, e.ydata))
-                self._rb_patch.set_height(abs(e.ydata - y0))
-            self.draw_idle()
-            return
         self._retarget_event_to_selected_overlay_axes(e)
         if self._update_overlay_y_drag(e):
             return
@@ -1495,51 +1492,63 @@ class TimeDomainCanvas(FigureCanvas):
         self._refresh = True;
         self.draw_idle()
 
-    def set_axis_lock(self, mode):
-        """mode in {'x', 'y', 'none'}."""
-        self._axis_lock = None if mode == 'none' else mode
-        if self.span_selector is not None:
-            self.span_selector.set_active(self._axis_lock is None)
-        self._cancel_rb()
+    def _maybe_deselect_overlay_on_click(self, e):
+        """Release-side complement of the press-side deselect arming.
 
-    def _cancel_rb(self):
-        if self._rb_patch is not None:
-            try: self._rb_patch.remove()
-            except Exception: pass
-        self._rb_patch = None
-        self._rb_start = None
-        self._rb_ax = None
-        self.draw_idle()
+        Fires the deselect only when (a) the gesture started on a blank
+        region with a selection live, (b) overlay mode is still on,
+        (c) no Y-drag advanced the overlay state in the meantime, and
+        (d) the release pixel is within ``_overlay_click_pixel_tol`` of
+        the press pixel (true click, not a drag). All of these must be
+        true simultaneously. TimeChartCard switches the nav toolbar out
+        of pan/zoom on overlay selection so a blank click reaches here
+        without being consumed by a navigation press; the pixel
+        tolerance still gates accidental drags.
+        """
+        if not self._overlay_deselect_armed:
+            return
+        press = self._overlay_deselect_press_xy
+        if press is None:
+            return
+        if not self._overlay_mode:
+            return
+        if self._selected_overlay_channel is None:
+            return
+        # If a Y-drag actually advanced (start_y captured, motion fired,
+        # ylim changed), the press was the start of a drag — not a click.
+        # _overlay_y_drag_start is only set inside the press-side hit
+        # path; if the press hit a curve it would have returned True
+        # from _select_overlay_channel_from_event and we'd never have
+        # armed the deselect. So a non-None drag start here means a
+        # post-arm drag began — refuse.
+        if self._overlay_y_drag_start is not None:
+            return
+        ex = getattr(e, 'x', None)
+        ey = getattr(e, 'y', None)
+        if ex is None or ey is None:
+            return
+        dx = float(ex) - press[0]
+        dy = float(ey) - press[1]
+        if (dx * dx + dy * dy) > (self._overlay_click_pixel_tol ** 2):
+            return
+        # All gates passed — clear the selection. Per the lesson
+        # `pyqt-ui/2026-05-13-matplotlib-resize-and-modal-nav-state.md`,
+        # also scrub stale motion bookkeeping so the post-deselect
+        # cursor/drag state doesn't inherit anything from the press.
+        self._overlay_y_drag_start = None
+        self.select_overlay_channel(None)
 
     def _on_release(self, e):
-        # End-of-pan/zoom flush (Phase 1 item 2). Must run AFTER any
-        # rubber-band ``set_xlim``/``set_ylim`` so that the freshly
-        # scheduled xlim_changed debounce is also drained — otherwise
-        # the post-zoom envelope frame is held back behind the 40 ms
-        # timer (B-1). The try/finally guarantees both the rubber-band
-        # branch and every early-return path (no axis lock, missing
-        # press anchor, off-axis release) end with no pending QTimer.
+        # End-of-pan/zoom flush (Phase 1 item 2). The try/finally
+        # guarantees every path (deselect-fires, no-deselect, off-axis
+        # release) ends with no pending QTimer.
         try:
-            if self._axis_lock is None or self._rb_start is None or self._rb_ax is None:
-                return
-            if e.inaxes is not self._rb_ax or e.xdata is None or e.ydata is None:
-                self._cancel_rb(); return
-            x0, y0 = self._rb_start
-            x1, y1 = e.xdata, e.ydata
-            ax = self._rb_ax
-            if self._axis_lock == 'x' and abs(x1 - x0) > 1e-9:
-                ax.set_xlim(min(x0, x1), max(x0, x1))
-            elif self._axis_lock == 'y' and abs(y1 - y0) > 1e-9:
-                ax.set_ylim(min(y0, y1), max(y0, y1))
-            self._refresh = True
-            self._cancel_rb()
+            self._maybe_deselect_overlay_on_click(e)
         finally:
             self._overlay_y_drag_start = None
+            self._overlay_deselect_press_xy = None
+            self._overlay_deselect_armed = False
             self._flush_pending_refresh()
-
-    def _on_key(self, e):
-        if e.key == 'escape':
-            self._cancel_rb()
 
     def get_statistics(self, time_range=None):
         stats = {}
@@ -2388,6 +2397,11 @@ class PlotCanvas(FigureCanvas):
 
         if e.inaxes is None or e.xdata is None:
             return
+        # Skip clicks landing in the heatmap colorbar — single/right
+        # clicks there would otherwise place a remark on the cax or
+        # try to snap to its (non-existent) data.
+        if self._heatmap_cbar is not None and e.inaxes is self._heatmap_cbar.ax:
+            return
         # 找到点击的是哪个axes
         ax_index = -1
         for i, ax in enumerate(self.fig.axes):
@@ -2423,6 +2437,11 @@ class PlotCanvas(FigureCanvas):
 
     def _on_scroll(self, e):
         if e.inaxes is None: return
+        # Ignore wheel events on the heatmap colorbar — scrolling on the
+        # colorbar would otherwise rewrite its color mapping range and
+        # distort the legend (the user's intent is panning the data axes).
+        if self._heatmap_cbar is not None and e.inaxes is self._heatmap_cbar.ax:
+            return
         ax = e.inaxes;
         step = e.step;
         key = e.key or '';

@@ -320,7 +320,12 @@ def test_dropped_frames_prompt_shown_over_threshold(qapp):
     QTimer.singleShot(50, _close_prompt)
     window._poll_live()
     qapp.processEvents()
-    assert window._dropped_prompt_shown is True
+    # B5 follow-up: the single-shot ``_dropped_prompt_shown`` latch was
+    # replaced with a (timestamp, count) pair so the prompt re-arms
+    # after both a cool-down and a delta of new drops. After firing
+    # once, ``_dropped_prompt_last_ts`` is set; the prompt object is
+    # also live for inspection.
+    assert window._dropped_prompt_last_ts is not None
     # Prompt object exists.
     assert getattr(window, "_dropped_prompt", None) is not None
     window.close()

@@ -140,6 +140,66 @@ def test_mode_change_routes_to_chart_stack(qapp, qtbot):
     assert w.inspector.contextual_widget_name() == 'fft'
 
 
+def _combo_texts(combo):
+    return [combo.itemText(i) for i in range(combo.count())]
+
+
+def test_custom_xaxis_time_range_filters_by_file_time_axis(qapp, qtbot, tmp_path):
+    """The persistent range controls are always a time-domain filter.
+
+    When X is a custom channel, the displayed x values come from that
+    channel, but the selected range must still slice by FileData.time_array.
+    """
+    import numpy as np
+    import pandas as pd
+    from PyQt5.QtCore import Qt
+    from unittest.mock import patch
+
+    p = tmp_path / "custom_x_range.csv"
+    pd.DataFrame({
+        "time": np.arange(10, dtype=float),
+        "angle": np.arange(100, 110, dtype=float),
+        "force": np.arange(10, 20, dtype=float),
+    }).to_csv(p, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([str(p)], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    fi = w.channel_list._file_items[fid]
+    force_idx = next(
+        i for i in range(fi.childCount())
+        if fi.child(i).data(0, Qt.UserRole) == ('channel', fid, 'force')
+    )
+    w.channel_list._updating = True
+    fi.child(force_idx).setCheckState(0, Qt.Checked)
+    w.channel_list._updating = False
+    w.channel_list.channels_changed.emit()
+    qapp.processEvents()
+
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+    combo = w.inspector.top._combo_xaxis_ch
+    angle_idx = next(
+        i for i in range(combo.count())
+        if combo.itemData(i) == (fid, 'angle')
+    )
+    combo.setCurrentIndex(angle_idx)
+    w.inspector.top.set_range_from_span(2.0, 4.0)
+    w._apply_xaxis()
+
+    assert w.canvas_time.channel_data
+    xdata, ydata, _color, _unit = next(iter(w.canvas_time.channel_data.values()))
+    np.testing.assert_allclose(xdata, [102.0, 103.0, 104.0])
+    np.testing.assert_allclose(ydata, [12.0, 13.0, 14.0])
+
+
 def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
     """If user selects a custom X channel whose length != data, surface a
     non-blocking warning toast and abort."""
@@ -155,6 +215,13 @@ def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
     with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
                return_value=([loaded_csv, str(p2)], "")):
         w.load_files()
+    # User-request 2026-05-20: file load no longer auto-checks channel[0].
+    # The validation path under test reads "every file whose channels are
+    # currently checked"; explicitly check file 1's first channel so the
+    # mismatch-vs-file-2 assertion has something to compare against.
+    fid_first = next(iter(w.files))
+    w.channel_list.check_first_channel(fid_first)
+    qapp.processEvents()
     # Pick custom X from file 2's channel while file 1 checked
     w.inspector.top.set_xaxis_mode('channel')
     w._on_xaxis_mode_changed('channel')
@@ -170,6 +237,107 @@ def test_custom_xaxis_length_mismatch_warns(qapp, qtbot, loaded_csv, tmp_path):
     levels = [call.args[1] if len(call.args) > 1 else call.kwargs.get('level')
               for call in toast.call_args_list]
     assert 'warning' in levels
+
+
+def test_channel_edit_refreshes_custom_xaxis_candidates(qapp, qtbot, loaded_csv):
+    """A channel created by the editor must be immediately selectable as X."""
+    import numpy as np
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+    combo = w.inspector.top._combo_xaxis_ch
+    before_data = combo.currentData()
+
+    arr = np.arange(len(w.files[fid].data), dtype=float)
+    w._apply_channel_edits(fid, {'d_dt_speed': (arr, 'unit/s')}, set())
+    qapp.processEvents()
+
+    texts = _combo_texts(combo)
+    assert any(text.endswith('d_dt_speed') for text in texts)
+    assert combo.currentData() == before_data
+
+
+def test_file_load_refreshes_custom_xaxis_candidates_when_channel_mode(
+    qapp, qtbot, loaded_csv, tmp_path
+):
+    """Loading another file while X source is channel mode must add it."""
+    import numpy as np
+    import pandas as pd
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    second = tmp_path / 'second.csv'
+    pd.DataFrame({
+        'time': np.linspace(0, 1, 128),
+        'pressure': np.linspace(10, 20, 128),
+    }).to_csv(second, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([str(second)], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    texts = _combo_texts(w.inspector.top._combo_xaxis_ch)
+    assert any(text.endswith('pressure') for text in texts)
+
+
+def test_channel_edit_removing_custom_xaxis_source_resets_to_time(
+    qapp, qtbot, loaded_csv
+):
+    """Removing the applied X source must not leave stale custom-X state."""
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    w.inspector.top.set_xaxis_mode('channel')
+    w._on_xaxis_mode_changed('channel')
+    combo = w.inspector.top._combo_xaxis_ch
+    idx = next(i for i in range(combo.count()) if combo.itemData(i) == (fid, 'speed'))
+    combo.setCurrentIndex(idx)
+    w._apply_xaxis()
+    assert w._custom_xaxis_ch == 'speed'
+
+    w._apply_channel_edits(fid, {}, {'speed'})
+    qapp.processEvents()
+
+    assert w._custom_xaxis_fid is None
+    assert w._custom_xaxis_ch is None
+    assert w.inspector.top.xaxis_mode() == 'time'
 
 
 def test_file_activation_updates_inspector_fs_and_range(qapp, qtbot, loaded_csv):
@@ -201,6 +369,251 @@ def test_close_file_resets_inspector(qapp, qtbot, loaded_csv):
     w._close(next(iter(w.files)))
     # No crash; stats strip shows placeholder
     assert '—' in w.chart_stack.stats_strip._lbl_summary.text()
+
+
+def test_file_load_does_not_autoplot_first_channel(qapp, qtbot, loaded_csv):
+    """User-request 2026-05-20 (fix 1): loading a file must NOT
+    auto-check channel[0] or call plot_time. The canvas opens empty
+    and the channel list shows all channels unchecked until the user
+    explicitly picks one.
+    """
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    qapp.processEvents()
+
+    # File loaded.
+    assert len(w.files) == 1
+    # No channels checked.
+    assert w.channel_list.get_checked_channels() == []
+    # Canvas has nothing to draw — no axes (plot_time was not called,
+    # or was called with no checks and cleared).
+    assert w.canvas_time.axes_list == []
+    assert w.canvas_time._channel_lines == {}
+
+
+def test_file_load_reload_with_prior_checks_still_opens_empty(qapp, qtbot, loaded_csv):
+    """fix 1 edge (a): re-loading the same file (a fresh fid) does not
+    inherit any auto-check, even if a previous load had a channel
+    selected by the user."""
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    fid_first = next(iter(w.files))
+    # Simulate user checking a channel manually.
+    w.channel_list.check_first_channel(fid_first)
+    qapp.processEvents()
+    assert len(w.channel_list.get_checked_channels()) == 1
+
+    # Close that file and reload — the fresh fid must come up unchecked.
+    w._close(fid_first)
+    qapp.processEvents()
+    assert w.channel_list.get_checked_channels() == []
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    qapp.processEvents()
+    assert w.channel_list.get_checked_channels() == []
+
+
+def test_file_load_multi_file_no_autocheck_per_file(qapp, qtbot, loaded_csv, tmp_path):
+    """fix 1 edge (b): drag-drop / multi-file load: NONE of the loaded
+    files auto-checks channel[0]."""
+    import pandas as pd
+    import numpy as np
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    df2 = pd.DataFrame({
+        "time": np.linspace(0, 1, 256),
+        "extra": np.cos(np.linspace(0, 6.28, 256)),
+    })
+    p2 = tmp_path / "second.csv"
+    df2.to_csv(p2, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv, str(p2)], "")):
+        w.load_files()
+    qapp.processEvents()
+    assert len(w.files) == 2
+    assert w.channel_list.get_checked_channels() == []
+
+
+def _load_time_window_with_checked(qapp, qtbot, loaded_csv, checked_names=("speed",)):
+    from PyQt5.QtCore import Qt
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1500, 800)
+    w.show()
+    qtbot.waitExposed(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    fi = w.channel_list._file_items[fid]
+    checked = set(checked_names)
+    w.channel_list._updating = True
+    for i in range(fi.childCount()):
+        item = fi.child(i)
+        _, _fid, ch = item.data(0, Qt.UserRole)
+        item.setCheckState(0, Qt.Checked if ch in checked else Qt.Unchecked)
+    w.channel_list._updating = False
+    w.channel_list.channels_changed.emit()
+    qapp.processEvents()
+    assert w.canvas_time._primary_xaxis_ax is not None
+    return w, fid
+
+
+def test_plot_mode_toggle_preserves_xlim_overlay_to_subplot(qapp, qtbot, loaded_csv):
+    """User-request 2026-05-20 (fix 2): toggling 分↔叠 must keep the
+    user's current x-zoom window. Toolbar Back/Forward history need
+    not be preserved; only the visible x-axis range."""
+    import pytest
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1500, 800)
+    w.show()
+    qtbot.waitExposed(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    qapp.processEvents()
+
+    # Check two channels so the overlay/subplot distinction is meaningful.
+    fid = next(iter(w.files))
+    w.channel_list._updating = True
+    fi = w.channel_list._file_items[fid]
+    for i in range(min(2, fi.childCount())):
+        from PyQt5.QtCore import Qt
+        fi.child(i).setCheckState(0, Qt.Checked)
+    w.channel_list._updating = False
+    w.channel_list.channels_changed.emit()
+    qapp.processEvents()
+
+    # Start in subplot mode, render once.
+    w.chart_stack.set_plot_mode('subplot')
+    qapp.processEvents()
+    w.plot_time()
+    qapp.processEvents()
+    assert w.canvas_time.axes_list
+
+    # Zoom in to a sub-range.
+    t0, t1 = 0.2, 0.6
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(t0, t1)
+    qapp.processEvents()
+    captured = primary.get_xlim()
+    assert captured[0] == pytest.approx(t0, abs=1e-6)
+    assert captured[1] == pytest.approx(t1, abs=1e-6)
+
+    # Toggle 分→叠. Listener fires → _on_plot_mode_changed → plot_time
+    # → axes rebuilt. The new primary axis must keep the captured window.
+    w.chart_stack.set_plot_mode('overlay')
+    qapp.processEvents()
+    new_primary = w.canvas_time._primary_xaxis_ax
+    assert new_primary is not None
+    nlo, nhi = new_primary.get_xlim()
+    assert nlo == pytest.approx(t0, abs=1e-6)
+    assert nhi == pytest.approx(t1, abs=1e-6)
+
+    # Toggle 叠→分. Window is again preserved.
+    w.chart_stack.set_plot_mode('subplot')
+    qapp.processEvents()
+    final_primary = w.canvas_time._primary_xaxis_ax
+    assert final_primary is not None
+    flo, fhi = final_primary.get_xlim()
+    assert flo == pytest.approx(t0, abs=1e-6)
+    assert fhi == pytest.approx(t1, abs=1e-6)
+
+
+def test_channel_selection_change_preserves_xlim(qapp, qtbot, loaded_csv):
+    import pytest
+    from PyQt5.QtCore import Qt
+
+    w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    t0, t1 = 0.2, 0.6
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(t0, t1)
+    qapp.processEvents()
+
+    fi = w.channel_list._file_items[fid]
+    torque_item = next(
+        fi.child(i) for i in range(fi.childCount())
+        if fi.child(i).data(0, Qt.UserRole) == ('channel', fid, 'torque')
+    )
+    torque_item.setCheckState(0, Qt.Checked)
+    qapp.processEvents()
+
+    new_primary = w.canvas_time._primary_xaxis_ax
+    assert new_primary is not None
+    nlo, nhi = new_primary.get_xlim()
+    assert nlo == pytest.approx(t0, abs=1e-6)
+    assert nhi == pytest.approx(t1, abs=1e-6)
+
+
+def test_channel_editor_apply_preserves_checked_xlim(qapp, qtbot, loaded_csv):
+    import numpy as np
+    import pytest
+
+    w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    t0, t1 = 0.2, 0.6
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(t0, t1)
+    qapp.processEvents()
+
+    arr = np.arange(len(w.files[fid].data), dtype=float)
+    w._apply_channel_edits(fid, {'d_dt_speed': (arr, 'unit/s')}, set())
+    qapp.processEvents()
+
+    checked_names = {ch for _fid, ch, _color in w.channel_list.get_checked_channels()}
+    assert "speed" in checked_names
+    new_primary = w.canvas_time._primary_xaxis_ax
+    assert new_primary is not None
+    nlo, nhi = new_primary.get_xlim()
+    assert nlo == pytest.approx(t0, abs=1e-6)
+    assert nhi == pytest.approx(t1, abs=1e-6)
+
+
+def test_returning_to_time_mode_preserves_xlim(qapp, qtbot, loaded_csv):
+    import pytest
+
+    w, _fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    t0, t1 = 0.2, 0.6
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(t0, t1)
+    qapp.processEvents()
+
+    w._on_mode_changed('fft')
+    qapp.processEvents()
+    w._on_mode_changed('time')
+    qapp.processEvents()
+
+    new_primary = w.canvas_time._primary_xaxis_ax
+    assert new_primary is not None
+    nlo, nhi = new_primary.get_xlim()
+    assert nlo == pytest.approx(t0, abs=1e-6)
+    assert nhi == pytest.approx(t1, abs=1e-6)
 
 
 def test_main_window_promotes_fft_time_canvas(qtbot):
@@ -1046,3 +1459,105 @@ def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch
     assert fake_fd.rebuilt_with == 250.0
     assert seen['fs'] == 250.0
     assert abs(seen['dt'] - (1.0 / 250.0)) < 1e-12
+
+
+def test_fft_panel_keeps_signal_selection_across_channel_edit(
+    qapp, qtbot, loaded_csv, tmp_path
+):
+    """B1: editing channels on one file must NOT reset the FFT panel's
+    currently-selected signal back to index 0 (regression from
+    commit 0132253 which patched xaxis + fft_time but missed FFT/Order)."""
+    import numpy as np
+    import pandas as pd
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    t2 = np.linspace(0, 1, 128)
+    second = tmp_path / 'second.csv'
+    pd.DataFrame({
+        'time': t2,
+        'pressure': 12.0 + 3.0 * np.sin(2 * np.pi * 4 * t2),
+    }).to_csv(second, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([str(second)], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    # Resolve targets from the actual combo content — different builds
+    # may apply different "signal vs metadata" filters; what matters is
+    # that whatever the user picked from file B is preserved when an
+    # unrelated file A is edited.
+    fid_first = next(iter(w.files))
+    fid_second = list(w.files.keys())[1]
+    fft_combo = w.inspector.fft_ctx.combo_sig
+    order_combo = w.inspector.order_ctx.combo_sig
+
+    def _first_data_for_fid(combo, fid):
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            if data is not None and data[0] == fid:
+                return i, data
+        return -1, None
+
+    idx_fft, target_fft = _first_data_for_fid(fft_combo, fid_second)
+    idx_order, target_order = _first_data_for_fid(order_combo, fid_second)
+    assert idx_fft >= 0, "file B has no FFT signal candidate"
+    assert idx_order >= 0, "file B has no Order signal candidate"
+    fft_combo.setCurrentIndex(idx_fft)
+    order_combo.setCurrentIndex(idx_order)
+
+    # Edit channels on file 1 — would have reset the dropdowns prior to fix.
+    arr = np.arange(len(w.files[fid_first].data), dtype=float)
+    w._apply_channel_edits(fid_first, {'derived': (arr, 'unit')}, set())
+    qapp.processEvents()
+
+    assert fft_combo.currentData() == target_fft, (
+        "FFT panel signal selection was reset after editing an unrelated file"
+    )
+    assert order_combo.currentData() == target_order, (
+        "Order panel signal selection was reset after editing an unrelated file"
+    )
+
+
+def test_safe_restore_primary_xlim_skips_when_only_tangent_overlap(qapp, qtbot):
+    """B2: a captured window that only touches the new ax extent at a
+    single point must fall back to autoscale, not lock onto a one-pixel
+    slice. Strict ``<`` would let (5, 10) restore against an ax with
+    autoscale extent (0, 5); ``<=`` correctly drops it."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    class _FakeAx:
+        def __init__(self, lo, hi):
+            self._lo, self._hi = lo, hi
+            self.applied = None
+
+        def get_xlim(self):
+            return (self._lo, self._hi)
+
+        def set_xlim(self, lo, hi):
+            self.applied = (lo, hi)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    ax = _FakeAx(0.0, 5.0)
+    w.canvas_time._primary_xaxis_ax = ax  # type: ignore[attr-defined]
+    # Captured window touches ax extent only at (5.0, 5.0) — zero
+    # measure intersection; must skip restoration.
+    w._safe_restore_primary_xlim((5.0, 10.0))
+    assert ax.applied is None
+    # Sanity: a real overlap still restores.
+    ax.applied = None
+    w._safe_restore_primary_xlim((1.0, 3.0))
+    assert ax.applied == (1.0, 3.0)

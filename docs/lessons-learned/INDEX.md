@@ -24,6 +24,13 @@ lesson by default.
 | [Acquisition Threshold Defaults Use Current Values](codex-acquisition-threshold-defaults-use-current-values.md) | Acquisition Cockpit editable thresholds, settings auto-load, `SessionConfig` defaults, health helper defaults, or preflight UI defaults. | See lesson |
 | [Visual Parity Requires Rendered Screenshot](codex-visual-parity-rendered-screenshot.md) | Touching PyQt visual parity, QSS, toolbar controls, compact chips, or a UI implementation that is supposed to match an HTML prototype or screenshot. | See lesson |
 | [Codex MF4 Source Path Alias Dedupe](codex-mf4-source-path-alias-dedupe.md) | Touching MF4 channel enumeration, analyzer channel lists, batch MF4 | See lesson |
+| [Windows Native Imports Need Isolated Probe](codex-windows-native-import-guard.md) | Touching Windows acquisition backends, Cockpit startup/import paths, or optional native dependencies such as `pya2l`, `pyxcp`, or Vector `python-can`. | See lesson |
+| [Phantom API Surface Guards](codex-phantom-api-surface-guards.md) | Mocking external library surfaces for acquisition probes or optional native dependencies. | Structured fakes/autospec; focused Vector probe tests |
+| [Owned Backend Invalidation](codex-owned-backend-invalidation.md) | Touching Acquisition Cockpit backend swapping, transport/A2L settings, | See lesson |
+| [PyQt Channel Universe Refresh](pyqt-channel-universe-refresh.md) | Touching file load/close, channel editor application, or live channel selectors. | See lesson |
+| [Custom X Axis Keeps Time Range Filtering](pyqt-ui/2026-05-26-custom-x-time-range-filter.md) | Touching `plot_time`, Inspector range controls, custom X-axis channel | See lesson |
+| [TimeDomain State Preservation](pyqt-ui/2026-05-26-timedomain-state-preservation.md) | Touching TimeDomain replots, channel selection/editing, plot mode | See lesson |
+| [Overlay Selection Drops Pan](pyqt-ui/2026-05-27-overlay-selection-drops-pan.md) | Click-to-enter / click-to-exit gestures on a matplotlib canvas while the nav toolbar is in pan/zoom. | `tests/ui/test_chart_stack.py` |
 
 ## Selection Rules
 

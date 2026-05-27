@@ -1520,9 +1520,17 @@ class PersistentTop(QWidget):
 
     def set_xaxis_candidates(self, candidates):
         """candidates: list of (display_text, (fid, ch)) tuples."""
+        prev = self._combo_xaxis_ch.currentData()
+        self._combo_xaxis_ch.blockSignals(True)
         self._combo_xaxis_ch.clear()
-        for text, data in candidates:
+        keep_idx = -1
+        for i, (text, data) in enumerate(candidates):
             self._combo_xaxis_ch.addItem(text, data)
+            if prev is not None and data == prev:
+                keep_idx = i
+        if keep_idx >= 0:
+            self._combo_xaxis_ch.setCurrentIndex(keep_idx)
+        self._combo_xaxis_ch.blockSignals(False)
 
     def range_enabled(self):
         return self.chk_range.isChecked()
@@ -1841,17 +1849,30 @@ class FFTContextual(QWidget):
         self.signal_changed.emit(self.combo_sig.currentData())
 
     def set_signal_candidates(self, candidates):
+        # Preserve the user's current selection across repopulation —
+        # editing channels / loading a new file refreshes candidates,
+        # and dropping back to index 0 was a regression (commit
+        # 0132253 fixed xaxis + fft_time but missed FFT/Order).
+        prev = self.combo_sig.currentData()
         self.combo_sig.blockSignals(True)
         self.combo_sig.clear()
-        for text, data in candidates:
+        keep_idx = -1
+        for i, (text, data) in enumerate(candidates):
             self.combo_sig.addItem(text, data)
+            if prev is not None and data == prev:
+                keep_idx = i
+        if keep_idx >= 0:
+            self.combo_sig.setCurrentIndex(keep_idx)
         self.combo_sig.blockSignals(False)
         try:
             self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
         except TypeError:
             pass
         self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
-        self._on_sig_index_changed()  # emit for newly-populated default
+        # Only emit for newly-populated default (no prev preserved); a
+        # preserved selection has not changed, so no signal needed.
+        if keep_idx < 0:
+            self._on_sig_index_changed()
 
     def current_signal(self):
         return self.combo_sig.currentData()
@@ -2244,23 +2265,43 @@ class OrderContextual(QWidget):
         self.signal_changed.emit(self.combo_sig.currentData())
 
     def set_signal_candidates(self, candidates):
+        # Preserve the user's current selection across repopulation —
+        # see FFTContextual.set_signal_candidates for the same fix
+        # (commit 0132253 missed FFT/Order panels).
+        prev = self.combo_sig.currentData()
         self.combo_sig.blockSignals(True)
         self.combo_sig.clear()
-        for text, data in candidates:
+        keep_idx = -1
+        for i, (text, data) in enumerate(candidates):
             self.combo_sig.addItem(text, data)
+            if prev is not None and data == prev:
+                keep_idx = i
+        if keep_idx >= 0:
+            self.combo_sig.setCurrentIndex(keep_idx)
         self.combo_sig.blockSignals(False)
         try:
             self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
         except TypeError:
             pass
         self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
-        self._on_sig_index_changed()
+        if keep_idx < 0:
+            self._on_sig_index_changed()
 
     def set_rpm_candidates(self, candidates):
+        # Preserve current rpm selection — same regression class as
+        # set_signal_candidates above.
+        prev = self.combo_rpm.currentData()
+        self.combo_rpm.blockSignals(True)
         self.combo_rpm.clear()
         self.combo_rpm.addItem("None", None)
-        for text, data in candidates:
+        keep_idx = 0
+        for i, (text, data) in enumerate(candidates, start=1):
             self.combo_rpm.addItem(text, data)
+            if prev is not None and data == prev:
+                keep_idx = i
+        if keep_idx > 0:
+            self.combo_rpm.setCurrentIndex(keep_idx)
+        self.combo_rpm.blockSignals(False)
 
     def current_signal(self):
         return self.combo_sig.currentData()

@@ -1,0 +1,158 @@
+/begin IF_DATA XCP
+      /begin PROTOCOL_LAYER
+        0x0101
+        0x07D0
+        0x2710
+        0x07D0
+        0x07D0
+        0x07D0
+        0x07D0
+        0x00
+        0x08
+        0x08
+        BYTE_ORDER_MSB_LAST
+        ADDRESS_GRANULARITY_BYTE
+        OPTIONAL_CMD GET_COMM_MODE_INFO
+        OPTIONAL_CMD SET_MTA
+        OPTIONAL_CMD UPLOAD
+        OPTIONAL_CMD SHORT_UPLOAD
+        OPTIONAL_CMD BUILD_CHECKSUM
+        OPTIONAL_CMD TRANSPORT_LAYER_CMD
+        OPTIONAL_CMD DOWNLOAD
+        OPTIONAL_CMD DOWNLOAD_MAX
+        OPTIONAL_CMD SET_CAL_PAGE
+        OPTIONAL_CMD GET_CAL_PAGE
+        OPTIONAL_CMD COPY_CAL_PAGE
+        OPTIONAL_CMD SET_DAQ_PTR
+        OPTIONAL_CMD WRITE_DAQ
+        OPTIONAL_CMD SET_DAQ_LIST_MODE
+        OPTIONAL_CMD GET_DAQ_LIST_MODE
+        OPTIONAL_CMD START_STOP_DAQ_LIST
+        OPTIONAL_CMD START_STOP_SYNCH
+        OPTIONAL_CMD GET_DAQ_PROCESSOR_INFO
+        OPTIONAL_CMD GET_DAQ_RESOLUTION_INFO
+        OPTIONAL_CMD GET_DAQ_EVENT_INFO
+        OPTIONAL_CMD FREE_DAQ
+        OPTIONAL_CMD ALLOC_DAQ
+        OPTIONAL_CMD ALLOC_ODT
+        OPTIONAL_CMD ALLOC_ODT_ENTRY
+        COMMUNICATION_MODE_SUPPORTED BLOCK
+          SLAVE
+      /end PROTOCOL_LAYER
+      /begin PAG
+        0x01
+      /end PAG
+      /begin DAQ
+        DYNAMIC
+        0x00
+        0x09
+        0x00
+        OPTIMISATION_TYPE_DEFAULT
+        ADDRESS_EXTENSION_FREE
+        IDENTIFICATION_FIELD_TYPE_ABSOLUTE
+        GRANULARITY_ODT_ENTRY_SIZE_DAQ_BYTE
+        0x07
+        OVERLOAD_INDICATION_PID
+        PRESCALER_SUPPORTED
+        /begin EVENT
+          "Rte_Appl_OS_Task_100ms"
+          "Rte_Appl"
+          0x02
+          DAQ
+          0x01
+          0x64
+          0x06
+          0x00
+        /end EVENT
+        /begin EVENT
+          "Rte_OsTask_BSW_10ms"
+          "Rte_OsTa"
+          0x06
+          DAQ
+          0x01
+          0x0A
+          0x06
+          0x00
+        /end EVENT
+        /begin EVENT
+          "Rte_OsTask_BSW_1ms"
+          "Rte_OsTa"
+          0x07
+          DAQ
+          0x01
+          0x01
+          0x06
+          0x00
+        /end EVENT
+        /begin EVENT
+          "Rte_OsTask_BSW_5ms"
+          "Rte_OsTa"
+          0x09
+          DAQ
+          0x01
+          0x05
+          0x06
+          0x00
+        /end EVENT
+        /begin EVENT
+          "BSW_2ms"
+          "Rte_Appl"
+          0x08
+          DAQ
+          0x01
+          0x02
+          0x06
+          0x00
+        /end EVENT
+      /end DAQ
+      /begin XCP_ON_CAN
+        0x0102
+        CAN_ID_MASTER 0x06C7
+        CAN_ID_SLAVE 0x06C6
+        BAUDRATE 0x07A120
+        SAMPLE_POINT 0x50
+        SAMPLE_RATE SINGLE
+        BTL_CYCLES 0x0A
+        SJW 0x01
+        MAX_DLC_REQUIRED
+        /begin PROTOCOL_LAYER
+          0x0101
+          0x07D0
+          0x2710
+          0x07D0
+          0x07D0
+          0x07D0
+          0x07D0
+          0x00
+          0x08
+          0x08
+          BYTE_ORDER_MSB_LAST
+          ADDRESS_GRANULARITY_BYTE
+          OPTIONAL_CMD GET_COMM_MODE_INFO
+          OPTIONAL_CMD SET_MTA
+          OPTIONAL_CMD UPLOAD
+          OPTIONAL_CMD SHORT_UPLOAD
+          OPTIONAL_CMD BUILD_CHECKSUM
+          OPTIONAL_CMD DOWNLOAD
+          OPTIONAL_CMD DOWNLOAD_MAX
+          OPTIONAL_CMD SET_CAL_PAGE
+          OPTIONAL_CMD GET_CAL_PAGE
+          OPTIONAL_CMD COPY_CAL_PAGE
+          OPTIONAL_CMD SET_DAQ_PTR
+          OPTIONAL_CMD WRITE_DAQ
+          OPTIONAL_CMD SET_DAQ_LIST_MODE
+          OPTIONAL_CMD GET_DAQ_LIST_MODE
+          OPTIONAL_CMD START_STOP_DAQ_LIST
+          OPTIONAL_CMD START_STOP_SYNCH
+          OPTIONAL_CMD GET_DAQ_PROCESSOR_INFO
+          OPTIONAL_CMD GET_DAQ_RESOLUTION_INFO
+          OPTIONAL_CMD GET_DAQ_EVENT_INFO
+          OPTIONAL_CMD FREE_DAQ
+          OPTIONAL_CMD ALLOC_DAQ
+          OPTIONAL_CMD ALLOC_ODT
+          OPTIONAL_CMD ALLOC_ODT_ENTRY
+          COMMUNICATION_MODE_SUPPORTED BLOCK
+            SLAVE
+        /end PROTOCOL_LAYER
+      /end XCP_ON_CAN
+    /end IF_DATA

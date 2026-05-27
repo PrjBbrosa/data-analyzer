@@ -92,100 +92,18 @@ def test_button_release_flushes_pending_timer(qapp):
     assert cv._refresh_pending is True
     assert cv._refresh_timer.isActive() is True
 
-    # Synthesize a button_release_event with no axis-lock context. The
-    # canvas's _on_release first runs _flush_pending_refresh(), then
-    # short-circuits because self._axis_lock is None.
+    # Synthesize a button_release_event. ``_on_release`` runs the deselect
+    # gate (no-op without a selection) then drains the pending refresh
+    # synchronously.
     fake_event = SimpleNamespace(
-        inaxes=cv._primary_xaxis_ax, xdata=None, ydata=None, button=1
+        inaxes=cv._primary_xaxis_ax, xdata=None, ydata=None, button=1,
+        x=None, y=None,
     )
     cv._on_release(fake_event)
 
     # Pending state cleared, timer stopped, refresh executed.
     assert cv._refresh_pending is False
     assert cv._refresh_timer.isActive() is False
-
-
-def test_rubber_band_release_flushes_post_zoom_refresh(qapp):
-    """An axis-lock rubber-band release must end with no pending QTimer.
-
-    Regression for B-1: ``_on_release`` historically called
-    ``_flush_pending_refresh`` BEFORE invoking ``ax.set_xlim(...)`` on the
-    rubber-band branch. The set_xlim then fired ``xlim_changed`` and
-    scheduled a fresh 40 ms debounce, leaving a pending timer behind and
-    deferring the post-zoom envelope frame. The fix must ensure that
-    after ``_on_release`` returns, both ``_refresh_pending`` is False and
-    ``_refresh_timer.isActive()`` is False, AND the line data reflects
-    the NEW xlim's envelope (i.e. ``_refresh_visible_data`` ran AFTER
-    ``set_xlim``, not before).
-    """
-    cv = _make_canvas(qapp)
-    _plot_two_channels(cv)
-    primary = cv._primary_xaxis_ax
-
-    # Start at the full range so the rubber-band zoom is genuinely a
-    # different xlim and the envelope output is forced to change.
-    primary.set_xlim(0.0, 10.0)
-    cv._refresh_visible_data()
-    # Drain anything that scheduling might have produced.
-    cv._refresh_pending = False
-    if cv._refresh_timer.isActive():
-        cv._refresh_timer.stop()
-
-    # Snapshot one line's xdata at the full xlim — this must change
-    # after the rubber-band zoom commits the new xlim AND the refresh
-    # is flushed. If the bug is present, the refresh runs BEFORE
-    # set_xlim, so xdata still reflects the full range.
-    line_name, (_ax, line) = next(iter(cv._channel_lines.items()))
-    xdata_full_range = line.get_xdata().copy()
-
-    # Configure the canvas as if the user had:
-    #   1) set_axis_lock('x')
-    #   2) pressed the left button at x=2.0 inside the primary axis
-    cv._axis_lock = 'x'
-    cv._rb_start = (2.0, 0.0)
-    cv._rb_ax = primary
-    # No need to materialize a Rectangle patch — _cancel_rb tolerates None.
-    cv._rb_patch = None
-
-    # Simulate the release at x=4.0: this reaches the rubber-band
-    # branch, runs ax.set_xlim(2.0, 4.0), and (with the bug) leaves
-    # a freshly scheduled 40 ms timer pending.
-    fake_release = SimpleNamespace(
-        inaxes=primary, xdata=4.0, ydata=0.0, button=1
-    )
-    cv._on_release(fake_release)
-
-    # Acceptance: the new xlim took effect.
-    new_lo, new_hi = primary.get_xlim()
-    assert (new_lo, new_hi) == (2.0, 4.0), (
-        f"rubber-band did not commit the new xlim: got ({new_lo}, {new_hi})"
-    )
-
-    # Acceptance: no pending QTimer survives the release. Both must hold.
-    assert cv._refresh_pending is False, (
-        "_on_release left _refresh_pending=True; the post-zoom xlim_changed "
-        "scheduled a debounce that was never flushed"
-    )
-    assert cv._refresh_timer.isActive() is False, (
-        "_on_release left a pending QTimer active; the post-zoom envelope "
-        "frame is being held back behind the 40 ms debounce window"
-    )
-
-    # Acceptance: the line data reflects the new xlim's envelope, i.e.
-    # _refresh_visible_data ran AFTER set_xlim. With the bug the envelope
-    # call ran BEFORE set_xlim and xdata still spans the full range.
-    xdata_after = line.get_xdata()
-    assert not np.array_equal(xdata_full_range, xdata_after), (
-        "line xdata is unchanged after the rubber-band zoom — refresh ran "
-        "BEFORE set_xlim so the post-zoom envelope was never applied"
-    )
-    if len(xdata_after) > 0:
-        assert xdata_after.min() >= 2.0 - 1e-9, (
-            f"xdata leaks below the new xlim lower edge: min={xdata_after.min()}"
-        )
-        assert xdata_after.max() <= 4.0 + 1e-9, (
-            f"xdata leaks above the new xlim upper edge: max={xdata_after.max()}"
-        )
 
 
 def test_refresh_visible_data_uses_set_data_not_rebuild(qapp):

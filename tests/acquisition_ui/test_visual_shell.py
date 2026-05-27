@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+import time
+
 from PyQt5.QtWidgets import QAction, QLabel, QMenu, QPushButton, QToolButton, QWidget
 
+from mf4_analyzer.acquisition_capture.health import (
+    CanHealth,
+    DaqHealth,
+    HealthSnapshot,
+    HwHealth,
+    RecHealth,
+    XcpHealth,
+)
 from mf4_analyzer.acquisition_ui.main_window import (
     DBC_DISABLED_TOOLTIP,
     CockpitMainWindow,
@@ -21,6 +31,28 @@ def _mode_buttons(window: CockpitMainWindow) -> dict[str, QPushButton]:
 
 
 def _connect(window: CockpitMainWindow) -> None:
+    window._health_strip.apply_snapshot(
+        HealthSnapshot(
+            hw=HwHealth(
+                ok=True,
+                driver_version="test",
+                channel_count=1,
+                last_probe_ts=time.monotonic(),
+            ),
+            can=CanHealth(bus_load_pct=10.0),
+            xcp=XcpHealth(connected=True),
+            daq=DaqHealth(),
+            rec=RecHealth(
+                state="off",
+                ring_buffer_fill_pct=0.0,
+                dropped_frames=0,
+                write_rate_bps=0.0,
+                last_rx_age_s=0.0,
+                writer_thread_alive=False,
+            ),
+            captured_at=time.monotonic(),
+        )
+    )
     window.state_machine.request_connect(
         HealthyPredicateResult.from_components(
             hw_ok=True, xcp_connected=True, first_frame_received=True

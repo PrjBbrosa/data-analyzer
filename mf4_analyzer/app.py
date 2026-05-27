@@ -18,6 +18,30 @@ def _import_symbol(module_name: str, symbol_name: str):
     return getattr(module, symbol_name)
 
 
+def _load_app_icon():
+    """Build a multi-resolution QIcon from assets/icons/tracelab_*.png.
+
+    Uses pre-rendered PNGs (not .ico/.icns) so the icon shows correctly on every
+    platform regardless of which Qt image-format plugins are installed.
+    """
+    from PyQt5.QtCore import QSize
+    from PyQt5.QtGui import QIcon
+
+    # PyInstaller --onedir/--onefile expose the bundle root via sys._MEIPASS.
+    # In dev, fall back to the repo root (parent of the mf4_analyzer package).
+    base = getattr(sys, "_MEIPASS", None)
+    if base is not None:
+        icon_dir = Path(base) / "assets" / "icons"
+    else:
+        icon_dir = Path(__file__).resolve().parent.parent / "assets" / "icons"
+    icon = QIcon()
+    for size in (16, 32, 48, 64, 128, 256, 512):
+        png = icon_dir / f"tracelab_{size}.png"
+        if png.exists():
+            icon.addFile(str(png), QSize(size, size))
+    return icon if not icon.isNull() else None
+
+
 def _configure_high_dpi():
     """Enable Qt's per-monitor DPI scaling before QApplication is created."""
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
@@ -53,6 +77,9 @@ def main():
     setup_chinese_font()
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+    icon = _load_app_icon()
+    if icon is not None:
+        app.setWindowIcon(icon)
     load_stylesheet(app)
     window = MainWindow()
     window.show()

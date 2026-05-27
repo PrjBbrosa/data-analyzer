@@ -42,6 +42,37 @@ def test_importing_analyzer_main_window_does_not_import_cockpit_main_window():
     )
 
 
+def test_importing_cockpit_main_window_does_not_import_pya2l():
+    env = dict(os.environ)
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    code = (
+        "import builtins\n"
+        "real_import = builtins.__import__\n"
+        "def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):\n"
+        "    if name == 'pya2l' or name.startswith('pya2l.'):\n"
+        "        raise AssertionError(f'eager pya2l import: {name}')\n"
+        "    return real_import(name, globals, locals, fromlist, level)\n"
+        "builtins.__import__ = guarded_import\n"
+        "import mf4_analyzer.acquisition_ui.main_window\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        "Cockpit startup imported pya2l before an A2L file was selected\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+
 def _patch_cockpit_import(monkeypatch, cockpit_cls):
     import mf4_analyzer.ui.main_window as main_window_module
 
@@ -53,20 +84,6 @@ def _patch_cockpit_import(monkeypatch, cockpit_cls):
         return real_import(name, package)
 
     monkeypatch.setattr(main_window_module.importlib, "import_module", fake_import_module)
-
-
-def _cockpit_menu_action(window):
-    tools_actions = [
-        action for action in window.menuBar().actions()
-        if action.text().replace("&", "") == "工具"
-    ]
-    assert tools_actions, "Analyzer must expose a 工具 menu"
-    tools_menu = tools_actions[0].menu()
-    assert tools_menu is not None
-    for action in tools_menu.actions():
-        if action.text().replace("&", "") == "打开 Acquisition Cockpit":
-            return action
-    raise AssertionError("工具 menu missing 打开 Acquisition Cockpit action")
 
 
 def test_analyzer_toolbar_opens_cockpit_when_none_open(qapp, qtbot, monkeypatch):
@@ -88,7 +105,7 @@ def test_analyzer_toolbar_opens_cockpit_when_none_open(qapp, qtbot, monkeypatch)
 
     window = MainWindow()
     qtbot.addWidget(window)
-    assert _cockpit_menu_action(window).text().replace("&", "") == "打开 Acquisition Cockpit"
+    assert window.toolbar.btn_acquisition_cockpit.toolTip() == "打开 Acquisition Cockpit"
 
     qtbot.mouseClick(window.toolbar.btn_acquisition_cockpit, Qt.LeftButton)
     qapp.processEvents()
