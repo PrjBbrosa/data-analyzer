@@ -18,9 +18,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+import os
 import pickle
 import subprocess
 import sys
+import tempfile
 
 from can_logger.p0.ifdata_xcp import parse_ifdata_xcp, parse_measurement_events
 
@@ -142,9 +144,31 @@ def _format_exit_code(returncode: int) -> str:
 def _compact_process_output(stdout: bytes, stderr: bytes) -> str:
     raw = stderr or stdout or b""
     text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return "no output"
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    detail = lines[0] if lines else "no output"
-    return detail[:297] + "..." if len(detail) > 300 else detail
+    # Take the LAST line — for a Python traceback the first line is
+    # `Traceback (most recent call last):`, the actual exception text
+    # is the last line. Using lines[0] hides the root cause.
+    detail = lines[-1] if lines else "no output"
+    # Long tracebacks (> 800 chars) get dumped verbatim to a temp log so
+    # the operator can pull the full stack out of %TEMP% / /tmp.
+    suffix = ""
+    if len(text) > 800:
+        try:
+            fd, path = tempfile.mkstemp(prefix="a2l_probe_", suffix=".log")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            suffix = f"  (full log: {path})"
+        except OSError:
+            pass
+    # Truncate the detail body first, then append the log-path suffix —
+    # otherwise the 300-char cap would slice the suffix off (which is
+    # the operator's pointer to the full traceback).
+    body_cap = max(60, 300 - len(suffix))
+    if len(detail) > body_cap:
+        detail = detail[: body_cap - 3] + "..."
+    return detail + suffix
 
 
 def _load_measurement_summary_inprocess(

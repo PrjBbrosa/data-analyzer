@@ -177,6 +177,48 @@ def test_stop_button_runs_stop_flush_finalize_flow(qapp, tmp_path):
         window.close()
 
 
+def test_dropped_prompt_re_arms_after_time_and_delta(qapp, monkeypatch):
+    """B5: previously, after the user dismissed the first prompt the
+    cockpit set a process-wide latch and stayed silent the rest of the
+    session. The fix re-arms after both a wall-clock cool-down AND a
+    minimum delta of new drops."""
+    import time
+
+    window = CockpitMainWindow()
+    try:
+        _walk_to_recording(window)
+        _arm_dropped_prompt(window)
+        first_prompt = window._dropped_prompt
+        assert first_prompt is not None
+        first_prompt.done(0)
+
+        # Immediately try to re-arm by adding a few more drops — must NOT
+        # fire (neither time nor delta gate cleared).
+        window._dropped_prompt = None
+        window._ring._dropped_frames = thresholds.DROPPED_FRAMES_PROMPT_TOTAL + 5
+        window._poll_live()
+        assert window._dropped_prompt is None, (
+            "prompt re-fired before cooldown; latch gate too loose"
+        )
+
+        # Skip ahead past REARM_S AND push delta past REARM_DELTA.
+        fake_ts = time.monotonic() + CockpitMainWindow._DROPPED_PROMPT_REARM_S + 1.0
+        monkeypatch.setattr(time, "monotonic", lambda: fake_ts)
+        window._ring._dropped_frames = (
+            window._dropped_prompt_last_count
+            + CockpitMainWindow._DROPPED_PROMPT_REARM_DELTA
+            + 1
+        )
+        window._poll_live()
+        assert window._dropped_prompt is not None, (
+            "prompt did not re-fire after both time and delta gates cleared"
+        )
+        window._dropped_prompt.done(0)
+        qapp.processEvents()
+    finally:
+        window.close()
+
+
 def test_stop_button_without_controller_uses_placeholder(qapp):
     """Stage 4 demo path: no controller attached — placeholder modal."""
     from mf4_analyzer.acquisition_ui.main_window import _PlaceholderReviewModal

@@ -489,3 +489,51 @@ def test_timedomain_overlay_blank_drag_does_not_deselect(qtbot):
     )
     canvas.callbacks.process("button_release_event", release)
     assert canvas.selected_overlay_channel() == "torque"
+
+
+def test_plot_canvas_scroll_on_colorbar_does_not_modify_colorbar_axis(qapp):
+    """B3: wheel events landing in the heatmap colorbar must be ignored
+    (otherwise the legend's color mapping silently shifts when the user
+    is trying to pan/zoom the data axes)."""
+    canvas = PlotCanvas()
+    m = np.array([[1.0, 0.5], [0.1, 0.9]])
+    canvas.plot_or_update_heatmap(
+        matrix=m, x_extent=(0, 1), y_extent=(0, 1),
+        x_label='x', y_label='y', title='t',
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    cbar_ax = canvas._heatmap_cbar.ax
+    xlim_before = cbar_ax.get_xlim()
+    ylim_before = cbar_ax.get_ylim()
+    event = SimpleNamespace(
+        inaxes=cbar_ax,
+        step=1.0,
+        key='',
+        xdata=0.5,
+        ydata=0.5,
+    )
+    canvas._on_scroll(event)
+    assert cbar_ax.get_xlim() == xlim_before
+    assert cbar_ax.get_ylim() == ylim_before
+
+
+def test_plot_canvas_click_on_colorbar_does_not_place_remark(qapp):
+    """B3: single click on the colorbar must not snap a remark to its
+    (non-existent) data — without the guard, _on_click would fall into
+    the remark-add branch using the cbar_ax as target."""
+    canvas = PlotCanvas()
+    m = np.array([[1.0, 0.5], [0.1, 0.9]])
+    canvas.plot_or_update_heatmap(
+        matrix=m, x_extent=(0, 1), y_extent=(0, 1),
+        x_label='x', y_label='y', title='t',
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.set_remark_enabled(True)
+    cbar_ax = canvas._heatmap_cbar.ax
+    event = SimpleNamespace(
+        button=1, dblclick=False,
+        inaxes=cbar_ax,
+        xdata=0.5, ydata=0.5,
+    )
+    canvas._on_click(event)
+    assert canvas.remark_count() == 0

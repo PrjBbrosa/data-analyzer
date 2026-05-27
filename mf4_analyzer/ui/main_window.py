@@ -424,11 +424,13 @@ class MainWindow(QMainWindow):
         except Exception:
             return
         new_lo, new_hi = xlim
-        # Skip restoration if the captured window has zero overlap with
-        # the new axis' autoscale window — that means the underlying
-        # data extent is no longer compatible (channel set changed,
-        # file closed, etc.).
-        if new_hi < cur_lo or new_lo > cur_hi:
+        # Skip restoration if the captured window has zero or
+        # degenerate overlap with the new axis' autoscale window — that
+        # means the underlying data extent is no longer compatible
+        # (channel set changed, file closed, etc.). Use <= / >= so a
+        # single tangent point (zero-length intersection) also falls
+        # back to autoscale instead of locking onto a one-pixel slice.
+        if new_hi <= cur_lo or new_lo >= cur_hi:
             return
         try:
             ax.set_xlim(new_lo, new_hi)

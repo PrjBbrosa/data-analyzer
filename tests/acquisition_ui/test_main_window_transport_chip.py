@@ -33,6 +33,37 @@ def test_transport_chip_updates_when_transport_changes(qapp):
         window.close()
 
 
+def test_set_transport_schedules_immediate_health_poll(qapp):
+    """B6: changing transport must trigger a fresh poll on the next
+    event-loop tick so the HW probe verdict reflects the new transport
+    instead of waiting up to HEALTH_POLL_INTERVAL_S (~200 ms) and
+    showing the previous probe's stale chip color."""
+    from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+    from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
+
+    window = CockpitMainWindow()
+    try:
+        poll_calls = []
+        original = window._poll_health
+
+        def _wrapped():
+            poll_calls.append(1)
+            return original()
+
+        window._poll_health = _wrapped  # type: ignore[assignment]
+        before = len(poll_calls)
+        window.set_transport(TransportConfig(app_name="CANalyzer", channel=2))
+        # The poll is scheduled via QTimer.singleShot(0, ...); process
+        # events drains the deferred slot.
+        qapp.processEvents()
+        assert len(poll_calls) > before, (
+            "set_transport did not force a fresh poll; the chip would "
+            "stay stale until the timer ticks"
+        )
+    finally:
+        window.close()
+
+
 def test_transport_chip_opens_settings_transport_tab(qapp):
     from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
 

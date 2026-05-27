@@ -210,7 +210,12 @@ class CockpitMainWindow(QMainWindow):
         self._output_dir_label = "data/runs"
         self._cumulative_rx_count = 0
         self._cumulative_dropped = 0
-        self._dropped_prompt_shown = False
+        # Dropped-frame prompt re-arming: replaced the single-shot
+        # ``_dropped_prompt_shown`` latch with a (timestamp, count)
+        # pair so the user is re-notified when frames keep dropping
+        # after the first prompt is dismissed (B5).
+        self._dropped_prompt_last_ts: float | None = None
+        self._dropped_prompt_last_count: int = 0
         self._fake_rec_state: str = "off"
         self._fake_last_rx_monotonic: float | None = None
         self._fake_xcp_connected: bool = False
@@ -975,6 +980,32 @@ class CockpitMainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 - cleanup must not mask UI flow
             logger.warning("backend cleanup failed: %s", exc)
 
+    def closeEvent(self, event):  # noqa: N802 - Qt API name
+        """Drain timers and the backend before destruction (B4).
+
+        Without this, closing the cockpit window while a Vector backend
+        is running leaks the hardware handle: the next connection
+        attempt fails with 'channel busy'. Timers fire against a
+        destroyed parent and Qt logs warnings. Best-effort everywhere
+        because closeEvent must not raise.
+        """
+        try:
+            if getattr(self, "_live_timer", None) is not None and self._live_timer.isActive():
+                self._live_timer.stop()
+        except Exception:  # noqa: BLE001 - cleanup best-effort
+            pass
+        try:
+            if getattr(self, "_health_timer", None) is not None and self._health_timer.isActive():
+                self._health_timer.stop()
+        except Exception:  # noqa: BLE001 - cleanup best-effort
+            pass
+        try:
+            if getattr(self, "_backend", None) is not None:
+                self._stop_backend_best_effort(self._backend)
+        except Exception:  # noqa: BLE001 - cleanup best-effort
+            pass
+        super().closeEvent(event)
+
     def _invalidate_owned_vector_backend(self) -> None:
         if not self._owns_vector_backend:
             return
@@ -1159,7 +1190,9 @@ class CockpitMainWindow(QMainWindow):
         self._fake_rec_state = "recording"
         self._cumulative_rx_count = 0
         self._cumulative_dropped = 0
-        self._dropped_prompt_shown = False
+        # Re-arm the dropped-frame prompt for the new session (B5).
+        self._dropped_prompt_last_ts = None
+        self._dropped_prompt_last_count = 0
         self._state_machine.request_start_recording()
 
     def _open_review_modal(self) -> None:
@@ -1342,7 +1375,7 @@ class CockpitMainWindow(QMainWindow):
         if (
             self._state_machine.state == CockpitState.RECORDING
             and self._cumulative_dropped > thresholds.DROPPED_FRAMES_PROMPT_TOTAL
-            and not self._dropped_prompt_shown
+            and self._dropped_prompt_can_fire()
         ):
             self._show_dropped_frames_prompt()
 
@@ -1633,6 +1666,12 @@ class CockpitMainWindow(QMainWindow):
         self._transport_chip.setToolTip(text)
         self._set_visual_property(self._transport_chip, "transportState", "configured")
         self._recompute_toolbar_overflow()
+        # Force a fresh health poll on the next event-loop tick so the
+        # HW chip / probe results reflect the new transport without
+        # waiting up to HEALTH_POLL_INTERVAL_S (otherwise the user sees
+        # the previous transport's stale verdict for ~200 ms).
+        if getattr(self, "_health_timer", None) is not None:
+            QTimer.singleShot(0, self._poll_health)
 
     def _open_settings_dialog(self, *, initial_tab: str | None = None) -> None:
         if self._settings_dialog is not None:
@@ -1962,8 +2001,28 @@ class CockpitMainWindow(QMainWindow):
     # Dropped-frames prompt
     # ------------------------------------------------------------------
 
+    # Re-arm gating constants for the dropped-frame prompt (B5).
+    # ``REARM_S`` is the minimum wall-clock interval between two prompts;
+    # ``REARM_DELTA`` is the minimum new drops the user must accumulate
+    # before re-prompting. Both gates must clear so a one-off click on
+    # the close button can't drown the user during a single bad burst,
+    # but persistent drops still surface a second time.
+    _DROPPED_PROMPT_REARM_S = 5.0
+    _DROPPED_PROMPT_REARM_DELTA = 200
+
+    def _dropped_prompt_can_fire(self) -> bool:
+        if self._dropped_prompt_last_ts is None:
+            return True
+        elapsed = time.monotonic() - self._dropped_prompt_last_ts
+        delta = self._cumulative_dropped - self._dropped_prompt_last_count
+        return (
+            elapsed >= self._DROPPED_PROMPT_REARM_S
+            and delta >= self._DROPPED_PROMPT_REARM_DELTA
+        )
+
     def _show_dropped_frames_prompt(self) -> None:
-        self._dropped_prompt_shown = True
+        self._dropped_prompt_last_ts = time.monotonic()
+        self._dropped_prompt_last_count = self._cumulative_dropped
         box = QMessageBox(self)
         box.setObjectName("droppedFramesPrompt")
         box.setIcon(QMessageBox.Warning)

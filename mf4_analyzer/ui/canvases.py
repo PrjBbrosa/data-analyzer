@@ -2397,6 +2397,11 @@ class PlotCanvas(FigureCanvas):
 
         if e.inaxes is None or e.xdata is None:
             return
+        # Skip clicks landing in the heatmap colorbar — single/right
+        # clicks there would otherwise place a remark on the cax or
+        # try to snap to its (non-existent) data.
+        if self._heatmap_cbar is not None and e.inaxes is self._heatmap_cbar.ax:
+            return
         # 找到点击的是哪个axes
         ax_index = -1
         for i, ax in enumerate(self.fig.axes):
@@ -2432,6 +2437,11 @@ class PlotCanvas(FigureCanvas):
 
     def _on_scroll(self, e):
         if e.inaxes is None: return
+        # Ignore wheel events on the heatmap colorbar — scrolling on the
+        # colorbar would otherwise rewrite its color mapping range and
+        # distort the legend (the user's intent is panning the data axes).
+        if self._heatmap_cbar is not None and e.inaxes is self._heatmap_cbar.ax:
+            return
         ax = e.inaxes;
         step = e.step;
         key = e.key or '';

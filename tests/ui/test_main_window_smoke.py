@@ -1459,3 +1459,105 @@ def test_fft_time_non_uniform_auto_rebuilds_with_suggested_fs(qtbot, monkeypatch
     assert fake_fd.rebuilt_with == 250.0
     assert seen['fs'] == 250.0
     assert abs(seen['dt'] - (1.0 / 250.0)) < 1e-12
+
+
+def test_fft_panel_keeps_signal_selection_across_channel_edit(
+    qapp, qtbot, loaded_csv, tmp_path
+):
+    """B1: editing channels on one file must NOT reset the FFT panel's
+    currently-selected signal back to index 0 (regression from
+    commit 0132253 which patched xaxis + fft_time but missed FFT/Order)."""
+    import numpy as np
+    import pandas as pd
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    t2 = np.linspace(0, 1, 128)
+    second = tmp_path / 'second.csv'
+    pd.DataFrame({
+        'time': t2,
+        'pressure': 12.0 + 3.0 * np.sin(2 * np.pi * 4 * t2),
+    }).to_csv(second, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+    with patch(
+        'mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+        return_value=([str(second)], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+
+    # Resolve targets from the actual combo content — different builds
+    # may apply different "signal vs metadata" filters; what matters is
+    # that whatever the user picked from file B is preserved when an
+    # unrelated file A is edited.
+    fid_first = next(iter(w.files))
+    fid_second = list(w.files.keys())[1]
+    fft_combo = w.inspector.fft_ctx.combo_sig
+    order_combo = w.inspector.order_ctx.combo_sig
+
+    def _first_data_for_fid(combo, fid):
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            if data is not None and data[0] == fid:
+                return i, data
+        return -1, None
+
+    idx_fft, target_fft = _first_data_for_fid(fft_combo, fid_second)
+    idx_order, target_order = _first_data_for_fid(order_combo, fid_second)
+    assert idx_fft >= 0, "file B has no FFT signal candidate"
+    assert idx_order >= 0, "file B has no Order signal candidate"
+    fft_combo.setCurrentIndex(idx_fft)
+    order_combo.setCurrentIndex(idx_order)
+
+    # Edit channels on file 1 — would have reset the dropdowns prior to fix.
+    arr = np.arange(len(w.files[fid_first].data), dtype=float)
+    w._apply_channel_edits(fid_first, {'derived': (arr, 'unit')}, set())
+    qapp.processEvents()
+
+    assert fft_combo.currentData() == target_fft, (
+        "FFT panel signal selection was reset after editing an unrelated file"
+    )
+    assert order_combo.currentData() == target_order, (
+        "Order panel signal selection was reset after editing an unrelated file"
+    )
+
+
+def test_safe_restore_primary_xlim_skips_when_only_tangent_overlap(qapp, qtbot):
+    """B2: a captured window that only touches the new ax extent at a
+    single point must fall back to autoscale, not lock onto a one-pixel
+    slice. Strict ``<`` would let (5, 10) restore against an ax with
+    autoscale extent (0, 5); ``<=`` correctly drops it."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    class _FakeAx:
+        def __init__(self, lo, hi):
+            self._lo, self._hi = lo, hi
+            self.applied = None
+
+        def get_xlim(self):
+            return (self._lo, self._hi)
+
+        def set_xlim(self, lo, hi):
+            self.applied = (lo, hi)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    ax = _FakeAx(0.0, 5.0)
+    w.canvas_time._primary_xaxis_ax = ax  # type: ignore[attr-defined]
+    # Captured window touches ax extent only at (5.0, 5.0) — zero
+    # measure intersection; must skip restoration.
+    w._safe_restore_primary_xlim((5.0, 10.0))
+    assert ax.applied is None
+    # Sanity: a real overlap still restores.
+    ax.applied = None
+    w._safe_restore_primary_xlim((1.0, 3.0))
+    assert ax.applied == (1.0, 3.0)

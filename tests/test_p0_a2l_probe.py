@@ -208,3 +208,28 @@ def test_load_measurement_summary_reimports_same_path_without_db_close(
     assert [item.name for item in first.measurements] == ["RepeatedSignal"]
     assert [item.name for item in second.measurements] == ["RepeatedSignal"]
     assert [kwargs["remove_existing"] for _file_name, kwargs in calls] == [True, True]
+
+
+def test_compact_process_output_keeps_last_line_of_traceback():
+    """B7: previously the helper kept lines[0] (= 'Traceback ...'), which
+    hid the actual exception. The fix surfaces lines[-1] (the real error)."""
+    traceback_text = (
+        "Traceback (most recent call last):\n"
+        "  File \"<string>\", line 1, in <module>\n"
+        "  File \"pya2l/db.py\", line 42, in import_a2l\n"
+        "ValueError: A2L grammar violation at line 17"
+    ).encode("utf-8")
+    detail = a2l_probe_module._compact_process_output(b"", traceback_text)
+    assert "ValueError: A2L grammar violation at line 17" in detail
+    # The 'Traceback' header should NOT be the leading text any more.
+    assert not detail.startswith("Traceback")
+
+
+def test_compact_process_output_dumps_long_log_to_temp_file(tmp_path, monkeypatch):
+    """B7: when stderr > 800 chars, full text is written to %TEMP% and
+    the returned detail string carries the log path."""
+    long_text = ("err line abcdef " * 80).encode("utf-8")  # > 800 chars
+    detail = a2l_probe_module._compact_process_output(b"", long_text)
+    # Detail should mention a full-log path so the operator can pull
+    # the full traceback out of disk.
+    assert "full log:" in detail
