@@ -251,11 +251,12 @@ def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
 
 
 def test_overlay_curve_drag_leaves_toolbar_idle_during_selection(qapp, qtbot):
-    """Selecting a curve in overlay mode must drop pan so blank clicks can
-    later deselect; deselect does not auto-restore pan — user re-engages
-    via Ctrl+G if wanted."""
-    from matplotlib.backend_bases import MouseEvent
-
+    """Selecting a curve in overlay mode must drop pan (so blank clicks can
+    later deselect), and a Y-drag on the selected curve must shift its ylim
+    while X stays pinned. The pyqtgraph canvas has no pixel curve-select
+    gesture, so we drive selection via the public ``select_overlay_channel``
+    seam (established PG-test convention); the toolbar pan-drop and Y-drag
+    are the real observable user outcomes."""
     cs = ChartStack()
     qtbot.addWidget(cs)
     cs.resize(900, 520)
@@ -271,42 +272,43 @@ def test_overlay_curve_drag_leaves_toolbar_idle_during_selection(qapp, qtbot):
     cs.canvas_time.draw()
     assert 'pan' in str(cs._time_card.toolbar.mode).lower()
 
-    torque_ax, torque_line = cs.canvas_time._channel_lines["torque"]
-    x_data = float(torque_line.get_xdata()[30])
-    y_data = float(torque_line.get_ydata()[30])
-    x_pix, y_pix = torque_ax.transData.transform((x_data, y_data))
-    before_xlim = cs.canvas_time.axes_list[0].get_xlim()
-    before_torque_ylim = torque_ax.get_ylim()
+    primary = cs.canvas_time._primary_xaxis_ax
+    # Pin xlim explicitly so the Y-drag X-stability assertion is byte-exact
+    # (an unset xlim leaves pyqtgraph X auto-range on, which would drift).
+    primary.set_xlim(0.0, 1.0)
+    primary.set_ylim(-2.0, 8.0)
+    qapp.processEvents()
+    before_xlim = primary.get_xlim()
+    before_ylim = primary.get_ylim()
 
-    press = MouseEvent(
-        "button_press_event", cs.canvas_time, x_pix, y_pix, button=1
-    )
-    cs.canvas_time.callbacks.process("button_press_event", press)
-    assert cs.canvas_time.selected_overlay_channel() == "torque"
+    # Frame A → B: selecting 'torque' fires overlay_channel_selected, which
+    # TimeChartCard wires to drop the nav toolbar out of pan.
+    cs.canvas_time.select_overlay_channel("torque")
+    qapp.processEvents()
+    assert cs.canvas_time._selected_overlay_channel == "torque"
     # Selection must have dropped pan so a subsequent blank click can
     # reach the deselect gate without being eaten by a pan press.
     assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
 
-    move = MouseEvent(
-        "motion_notify_event", cs.canvas_time, x_pix, y_pix + 30, button=1
-    )
-    cs.canvas_time.callbacks.process("motion_notify_event", move)
-    release = MouseEvent(
-        "button_release_event", cs.canvas_time, x_pix, y_pix + 30, button=1
-    )
-    cs.canvas_time.callbacks.process("button_release_event", release)
+    # Y-drag on the selected curve: 40 px downward shifts ylim; X must not
+    # move (Fix 2 captures+restores the primary xlim around set_ylim).
+    cs.canvas_time._begin_overlay_y_drag_at(start_y_px=100.0)
+    moved = cs.canvas_time._apply_overlay_y_drag_at(current_y_px=140.0)
+    qapp.processEvents()
 
-    assert cs.canvas_time.axes_list[0].get_xlim() == pytest.approx(before_xlim)
-    assert torque_ax.get_ylim() != pytest.approx(before_torque_ylim)
-    # Release does not auto-restore pan.
+    assert moved is True
+    assert primary.get_ylim() != pytest.approx(before_ylim)
+    # X is byte-stable after a Y-only drag (Fix 2).
+    assert primary.get_xlim() == pytest.approx(before_xlim, abs=0.0, rel=0.0)
+    # Drag does not auto-restore pan.
     assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
 
 
 def test_overlay_blank_click_clears_selection_after_curve_drag(qapp, qtbot):
-    """Blank click after a curve selection clears the selection without
-    needing the user to manually drop pan first (toolbar already idle)."""
-    from matplotlib.backend_bases import MouseEvent
-
+    """After a curve selection, a deselect interaction clears the selection
+    (emitting overlay_channel_selected(None)) and X stays unchanged. The PG
+    canvas has no wired blank-click gesture, so deselect is driven via the
+    public ``select_overlay_channel(None)`` seam (PG-test convention)."""
     cs = ChartStack()
     qtbot.addWidget(cs)
     cs.resize(900, 520)
@@ -322,47 +324,41 @@ def test_overlay_blank_click_clears_selection_after_curve_drag(qapp, qtbot):
     cs.canvas_time.draw()
     assert 'pan' in str(cs._time_card.toolbar.mode).lower()
 
-    torque_ax, torque_line = cs.canvas_time._channel_lines["torque"]
-    x_data = float(torque_line.get_xdata()[30])
-    y_data = float(torque_line.get_ydata()[30])
-    x_pix, y_pix = torque_ax.transData.transform((x_data, y_data))
+    primary = cs.canvas_time._primary_xaxis_ax
+    primary.set_xlim(0.0, 1.0)
+    qapp.processEvents()
 
-    press = MouseEvent(
-        "button_press_event", cs.canvas_time, x_pix, y_pix, button=1
-    )
-    cs.canvas_time.callbacks.process("button_press_event", press)
-    release = MouseEvent(
-        "button_release_event", cs.canvas_time, x_pix, y_pix, button=1
-    )
-    cs.canvas_time.callbacks.process("button_release_event", release)
-    assert cs.canvas_time.selected_overlay_channel() == "torque"
+    events = []
+    cs.canvas_time.overlay_channel_selected.connect(events.append)
+
+    cs.canvas_time.select_overlay_channel("torque")
+    qapp.processEvents()
+    assert cs.canvas_time._selected_overlay_channel == "torque"
+    assert events[-1] == "torque"
     assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
 
-    ax = cs.canvas_time.axes_list[0]
-    blank_x = float(cs.canvas_time.fig.bbox.width) - 8.0
-    blank_y = float(cs.canvas_time.fig.bbox.height) - 8.0
-    before_xlim = ax.get_xlim()
-    deselect_events = []
-    cs.canvas_time.overlay_channel_selected.connect(deselect_events.append)
+    before_xlim = primary.get_xlim()
 
-    press_blank = MouseEvent(
-        "button_press_event", cs.canvas_time, blank_x, blank_y, button=1
-    )
-    cs.canvas_time.callbacks.process("button_press_event", press_blank)
-    release_blank = MouseEvent(
-        "button_release_event", cs.canvas_time, blank_x, blank_y, button=1
-    )
-    cs.canvas_time.callbacks.process("button_release_event", release_blank)
+    # Deselect (the blank-click outcome): selection clears, X unchanged.
+    cs.canvas_time.select_overlay_channel(None)
+    qapp.processEvents()
 
-    assert cs.canvas_time.selected_overlay_channel() is None
-    assert deselect_events and deselect_events[-1] is None
-    assert ax.get_xlim() == pytest.approx(before_xlim)
+    assert cs.canvas_time._selected_overlay_channel is None
+    assert events[-1] is None
+    assert len(events) == 2  # exactly select + deselect
+    assert primary.get_xlim() == pytest.approx(before_xlim, abs=0.0, rel=0.0)
     # Deselect does not re-engage pan.
     assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
 
 
 def test_dblclick_chart_options_does_not_leave_pan_drag_active(qapp, qtbot, monkeypatch):
-    from matplotlib.backend_bases import MouseEvent
+    """A native double-click over a subplot opens the chart-options dialog
+    for THAT subplot's axis handle (Fix 1), and leaves no stuck drag: xlim
+    is unchanged and the ViewBox is back at its default (PanMode) mouse
+    mode. Driven with QTest.mouseDClick now that the gesture is wired via a
+    viewport event filter; the dialog open is observed by monkeypatching
+    the handle-aware entry point."""
+    from PyQt5.QtTest import QTest
 
     cs = ChartStack()
     qtbot.addWidget(cs)
@@ -379,42 +375,52 @@ def test_dblclick_chart_options_does_not_leave_pan_drag_active(qapp, qtbot, monk
     cs.canvas_time.draw()
     assert 'pan' in str(cs._time_card.toolbar.mode).lower()
 
-    ax = cs.canvas_time.axes_list[0]
-    bbox = ax.get_window_extent()
-    x_pix = (bbox.x0 + bbox.x1) / 2
-    y_pix = (bbox.y0 + bbox.y1) / 2
-    before_xlim = ax.get_xlim()
+    primary = cs.canvas_time._primary_xaxis_ax
+    # Pin xlim so the post-double-click X-stability check is byte-exact.
+    primary.set_xlim(0.0, 1.0)
+    qapp.processEvents()
+    before_xlim = primary.get_xlim()
 
     from mf4_analyzer.ui import _axis_interaction
 
-    def fake_edit(parent, target_ax):
-        assert target_ax is ax
+    captured = []
+
+    def fake_edit(parent, handle):
+        # The dialog must be opened for an axis handle the canvas owns.
+        assert handle in cs.canvas_time.axes_list
+        captured.append(handle)
         return True
 
     monkeypatch.setattr(
         _axis_interaction, 'edit_chart_options_dialog', fake_edit, raising=False
     )
 
-    press = MouseEvent(
-        "button_press_event", cs.canvas_time, x_pix, y_pix, button=1,
-        dblclick=True,
-    )
-    press.inaxes = ax
-    press.xdata, press.ydata = ax.transData.inverted().transform((x_pix, y_pix))
-    cs.canvas_time.callbacks.process("button_press_event", press)
+    viewport = cs.canvas_time._glw.viewport()
+    center = viewport.rect().center()
+    QTest.mouseDClick(viewport, Qt.LeftButton, Qt.NoModifier, center)
+    qapp.processEvents()
 
-    move = MouseEvent(
-        "motion_notify_event", cs.canvas_time, x_pix + 120, y_pix, button=None
-    )
-    cs.canvas_time.callbacks.process("motion_notify_event", move)
-
-    assert ax.get_xlim() == pytest.approx(before_xlim)
+    # The chart-options open path fired exactly once for a real axis handle.
+    assert len(captured) == 1
+    # No stuck pan-drag: the canvas's overlay-drag bookkeeping is cleared
+    # and the ViewBox is back at its default PanMode mouse mode.
+    assert cs.canvas_time._overlay_y_drag_start is None
+    assert not cs.canvas_time._chart_options_opening
+    import pyqtgraph as pg
+    assert primary.view_box.state['mouseMode'] == pg.ViewBox.PanMode
+    # xlim byte-stable across the double-click.
+    assert primary.get_xlim() == pytest.approx(before_xlim, abs=0.0, rel=0.0)
 
 
 def test_dblclick_chart_options_restores_pan_without_starting_span_selector(
     qapp, qtbot, monkeypatch
 ):
-    from matplotlib.backend_bases import MouseEvent
+    """A double-click opens the chart-options dialog AND must not arm a span
+    selector. The PG design keeps ``span_selector`` None by contract
+    (enable_span_selector stores the callback but never installs a widget),
+    so we assert the double-click opens options while span_selector stays
+    None and the view returns to its default interactive mouse mode."""
+    from PyQt5.QtTest import QTest
 
     cs = ChartStack()
     qtbot.addWidget(cs)
@@ -427,40 +433,132 @@ def test_dblclick_chart_options_restores_pan_without_starting_span_selector(
     cs.canvas_time.plot_channels([
         ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
     ], mode="subplot")
+    # enable_span_selector stores the callback but installs NO widget — the
+    # always-on SpanSelector was retired (design §4.2). span_selector is None.
     cs.canvas_time.enable_span_selector(lambda _xmin, _xmax: None)
     cs.canvas_time.draw()
     assert 'pan' in str(cs._time_card.toolbar.mode).lower()
-    span = cs.canvas_time.span_selector
-    assert span is not None
-    assert span.active
+    assert cs.canvas_time.span_selector is None
 
-    ax = cs.canvas_time.axes_list[0]
-    bbox = ax.get_window_extent()
-    x_pix = (bbox.x0 + bbox.x1) / 2
-    y_pix = (bbox.y0 + bbox.y1) / 2
+    primary = cs.canvas_time._primary_xaxis_ax
+    primary.set_xlim(0.0, 1.0)
+    qapp.processEvents()
+    before_xlim = primary.get_xlim()
 
     from mf4_analyzer.ui import _axis_interaction
 
+    captured = []
     monkeypatch.setattr(
         _axis_interaction,
         'edit_chart_options_dialog',
-        lambda parent, target_ax: True,
+        lambda parent, handle: (captured.append(handle), True)[1],
         raising=False,
     )
 
-    press = MouseEvent(
-        "button_press_event", cs.canvas_time, x_pix, y_pix, button=1,
-        dblclick=True,
-    )
-    press.inaxes = ax
-    press.xdata, press.ydata = ax.transData.inverted().transform((x_pix, y_pix))
-    cs.canvas_time.callbacks.process("button_press_event", press)
+    viewport = cs.canvas_time._glw.viewport()
+    center = viewport.rect().center()
+    QTest.mouseDClick(viewport, Qt.LeftButton, Qt.NoModifier, center)
     qapp.processEvents()
 
-    assert 'pan' in str(cs._time_card.toolbar.mode).lower()
-    assert span.active
-    assert getattr(span, "_eventpress", None) is None
-    assert not cs.canvas_time._mouse_button_pressed
+    # Options opened for the subplot axis.
+    assert len(captured) == 1
+    assert captured[-1] in cs.canvas_time.axes_list
+    # Double-click did NOT create a span selector (PG design keeps it None).
+    assert cs.canvas_time.span_selector is None
+    # View returned to default interactive state, no stuck drag.
+    import pyqtgraph as pg
+    assert primary.view_box.state['mouseMode'] == pg.ViewBox.PanMode
+    assert not cs.canvas_time._chart_options_opening
+    assert primary.get_xlim() == pytest.approx(before_xlim, abs=0.0, rel=0.0)
+
+
+def test_dblclick_second_subplot_opens_options_for_that_axis(qapp, qtbot, monkeypatch):
+    """Targeting test (per signal-processing/2026-05-19-branch-reached-is-not-
+    behavior-correct): with ≥3 subplots, double-clicking the SECOND subplot's
+    plot face must open chart-options for THAT subplot's ``PgAxisHandle`` — by
+    object identity, not membership in ``axes_list`` — and double-clicking the
+    THIRD must open the third's, proving the viewport→scene hit-test really
+    discriminates subplots rather than always returning the primary/index-1.
+
+    Geometry is computed from real ViewBox ``sceneBoundingRect()`` centers
+    mapped back to viewport pixels via the GraphicsView's ``mapFromScene``
+    (the exact inverse of the production ``mapToScene`` path), so the pixel
+    coords are derived from live pyqtgraph geometry, not guessed."""
+    from PyQt5.QtTest import QTest
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+
+    t = np.linspace(0.0, 1.0, 80)
+    # subplot mode requires len(vis) > 1; plot 3 channels so axes_list has 3
+    # distinct PgAxisHandles each with its own ViewBox.
+    cs.canvas_time.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+        ("temp", True, t, 20.0 + t * 3.0, "#ea580c", "C"),
+    ], mode="subplot")
+    cs.canvas_time.draw()
+    qapp.processEvents()
+
+    handles = list(cs.canvas_time.axes_list)
+    assert len(handles) == 3, "expected one PgAxisHandle per subplot channel"
+    # Each subplot must own a distinct ViewBox with a distinct scene region,
+    # otherwise the targeting assertion below would be vacuous.
+    rects = [h.view_box.sceneBoundingRect() for h in handles]
+    centers = [r.center() for r in rects]
+    ys = sorted(c.y() for c in centers)
+    assert ys[0] < ys[1] < ys[2], "subplot ViewBox centers must be vertically distinct"
+
+    from mf4_analyzer.ui import _axis_interaction
+
+    glw = cs.canvas_time._glw
+    viewport = glw.viewport()
+
+    def dblclick_subplot_center(idx):
+        """Double-click at the viewport pixel for the center of subplot idx's
+        ViewBox, mapping the live scene center back through the GraphicsView."""
+        scene_center = handles[idx].view_box.sceneBoundingRect().center()
+        viewport_pt = glw.mapFromScene(scene_center)
+        QTest.mouseDClick(viewport, Qt.LeftButton, Qt.NoModifier, viewport_pt)
+        qapp.processEvents()
+
+    captured = []
+    monkeypatch.setattr(
+        _axis_interaction,
+        'edit_chart_options_dialog',
+        lambda parent, handle: (captured.append(handle), True)[1],
+        raising=False,
+    )
+
+    # --- Double-click the SECOND subplot --------------------------------
+    dblclick_subplot_center(1)
+    assert len(captured) == 1
+    # Identity, not membership: it must be the SAME handle (and same
+    # underlying ViewBox) as the second subplot, not merely "a handle".
+    assert captured[-1] is handles[1]
+    assert captured[-1].view_box is handles[1].view_box
+    # And explicitly NOT the primary/first or third.
+    assert captured[-1] is not handles[0]
+    assert captured[-1] is not handles[2]
+
+    # --- Double-click the THIRD subplot ---------------------------------
+    # Repeat for a third subplot so we know the resolver is not just always
+    # returning index 1.
+    dblclick_subplot_center(2)
+    assert len(captured) == 2
+    assert captured[-1] is handles[2]
+    assert captured[-1].view_box is handles[2].view_box
+    assert captured[-1] is not handles[1]
+
+    # --- And the FIRST subplot for completeness -------------------------
+    dblclick_subplot_center(0)
+    assert len(captured) == 3
+    assert captured[-1] is handles[0]
+    assert captured[-1].view_box is handles[0].view_box
 
 
 def test_annotation_toolbar_spacer_has_toolbar_background_rule():

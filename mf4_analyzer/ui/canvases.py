@@ -1310,6 +1310,28 @@ class TimeDomainCanvas(FigureCanvas):
             self._refresh = True;
             self.draw_idle()
 
+    def reset_cursor_state(self):
+        """Drop dual-cursor placement and request a redraw.
+
+        Compatibility seam for ``MainWindow._reset_cursors`` (Phase 1 of
+        the pyqtgraph TimeDomain migration — see
+        ``docs/superpowers/specs/2026-05-28-pyqtgraph-timedomain-migration-design.md``
+        §5.5). MainWindow previously mutated ``_ax`` / ``_bx`` /
+        ``_placing`` / ``_refresh`` directly; the new pyqtgraph canvas
+        will provide the same method so the call site stays
+        renderer-agnostic.
+
+        Ordering follows
+        ``docs/lessons-learned/pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before.md``:
+        mutate fields first, request the redraw last. ``draw_idle()``
+        does not synchronously re-schedule a debounced viewport refresh
+        because no ``set_xlim`` is invoked here.
+        """
+        self._ax = self._bx = None
+        self._placing = 'A'
+        self._refresh = True
+        self.draw_idle()
+
     def _ensure_artists(self):
         if self._cursor_artists: return
         for ax in self.axes_list:

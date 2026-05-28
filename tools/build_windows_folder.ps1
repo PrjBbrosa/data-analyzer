@@ -112,6 +112,7 @@ $HiddenImports = @(
     "mf4_analyzer.ui_kit.widgets.searchable_combo",
     "mf4_analyzer.ui",
     "mf4_analyzer.ui.main_window",
+    "mf4_analyzer.ui.pg_canvases",
     "mf4_analyzer.acquisition_capture",
     "mf4_analyzer.acquisition_capture.thresholds",
     "mf4_analyzer.acquisition_capture.health",
@@ -155,6 +156,7 @@ $PyInstallerArgs += @(
     "--runtime-hook", $RuntimeHookPyxcp,
     "--exclude-module", "pyxcp",
     "--collect-submodules", "mf4_analyzer.acquisition_ui.widgets",
+    "--collect-submodules", "pyqtgraph",
     "--collect-all", "qtawesome",
     "--collect-all", "asammdf"
 )

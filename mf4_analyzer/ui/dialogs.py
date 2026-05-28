@@ -29,6 +29,7 @@ from matplotlib import colors as mcolors
 
 from ..signal import ChannelMath
 from ..ui_kit.widgets.searchable_combo import SearchableComboBox
+from ._axis_handle import MplAxisHandle, make_handle
 from .widgets.compact_spinbox import CompactDoubleSpinBox
 
 
@@ -292,9 +293,22 @@ class ChartOptionsDialog(QDialog):
     }
     TEXT_TO_SCALE = {v: k for k, v in SCALE_TO_TEXT.items()}
 
-    def __init__(self, parent, ax):
+    def __init__(self, parent, axis_or_handle):
         super().__init__(parent)
-        self.ax = ax
+        # Constructor accepts either a raw matplotlib ``Axes`` or an
+        # already-wrapped ``AxisHandle`` (design §5.3 / Plan Task 3
+        # Step 3). Existing call-sites in ``_axis_interaction`` and the
+        # whole ``tests/ui/test_dialogs.py`` suite pass raw Axes, so the
+        # wrap-on-demand branch keeps them working without an edit.
+        self.handle = make_handle(axis_or_handle)
+        # Backward-compat alias: code paths that still need the raw
+        # matplotlib ``Axes`` during the migration window (legend
+        # handles, gridline visibility introspection, line-axes/spines/
+        # tick color sync at lines 750-793) read it through ``self.ax``.
+        # ``MplAxisHandle`` exposes the underlying Axes via ``.axes``;
+        # for ``PgAxisHandle`` this will be ``None`` once T5 lands and
+        # the legacy code paths will already be gone by then.
+        self.ax = getattr(self.handle, "axes", None)
         self._lines = self._editable_lines()
         self._mappables = self._editable_mappables()
         self.setObjectName("ChartOptionsDialog")
@@ -352,7 +366,14 @@ class ChartOptionsDialog(QDialog):
         self.reset_fields()
 
     def _target_summary(self):
-        title = self.ax.get_title() or self.ax.get_label() or "当前图"
+        # ``get_label`` is a matplotlib-only Artist accessor (not in the
+        # ``AxisHandle`` protocol, design §5.3). Read it via the
+        # migration-temporary escape hatch when present, so pyqtgraph
+        # handles eventually fall through cleanly to the "当前图" default.
+        title = self.handle.get_title()
+        if not title and self.ax is not None:
+            title = self.ax.get_label()
+        title = title or "当前图"
         return f"目标：{title}"
 
     def _axes_tab(self):
@@ -534,10 +555,22 @@ class ChartOptionsDialog(QDialog):
         return spin
 
     def _read_axes(self):
-        xlo, xhi = self.ax.get_xlim()
-        ylo, yhi = self.ax.get_ylim()
-        grid_lines = list(self.ax.xaxis.get_gridlines()) + list(self.ax.yaxis.get_gridlines())
-        grid_visible = any(line.get_visible() for line in grid_lines)
+        xlo, xhi = self.handle.get_xlim()
+        ylo, yhi = self.handle.get_ylim()
+        # Gridline visibility introspection + ``get_xscale``/``get_yscale``
+        # are matplotlib-specific and not in ``AxisHandle`` (design §5.3
+        # only declares the setters). Read them through the migration-
+        # temporary escape hatch; PgAxisHandle will provide its own
+        # initial-state path in T5.
+        if self.ax is not None:
+            grid_lines = list(self.ax.xaxis.get_gridlines()) + list(self.ax.yaxis.get_gridlines())
+            grid_visible = any(line.get_visible() for line in grid_lines)
+            x_scale_raw = self.ax.get_xscale()
+            y_scale_raw = self.ax.get_yscale()
+        else:
+            grid_visible = False
+            x_scale_raw = "linear"
+            y_scale_raw = "linear"
         line = self._current_line()
         line_color = self._line_color_text(line) if line is not None else ""
         mappable = self._current_mappable()
@@ -548,16 +581,16 @@ class ChartOptionsDialog(QDialog):
             cmap = "turbo"
             cmin, cmax = 0.0, 1.0
         return {
-            "title": self.ax.get_title(),
+            "title": self.handle.get_title(),
             "x_min": float(xlo),
             "x_max": float(xhi),
-            "x_label": self.ax.get_xlabel(),
-            "x_scale": self.SCALE_TO_TEXT.get(self.ax.get_xscale(), self.ax.get_xscale()),
+            "x_label": self.handle.get_xlabel(),
+            "x_scale": self.SCALE_TO_TEXT.get(x_scale_raw, x_scale_raw),
             "x_auto": False,
             "y_min": float(ylo),
             "y_max": float(yhi),
-            "y_label": self.ax.get_ylabel(),
-            "y_scale": self.SCALE_TO_TEXT.get(self.ax.get_yscale(), self.ax.get_yscale()),
+            "y_label": self.handle.get_ylabel(),
+            "y_scale": self.SCALE_TO_TEXT.get(y_scale_raw, y_scale_raw),
             "y_auto": False,
             "grid": grid_visible,
             "legend": False,
@@ -596,8 +629,7 @@ class ChartOptionsDialog(QDialog):
         # Reset per-apply error collector; repeated clicks must not carry
         # invalid-axis state from a previous attempt.
         self._invalid_axes = []
-        ax = self.ax
-        ax.set_title(self.edit_title.text())
+        self.handle.set_title(self.edit_title.text())
         self._apply_axis(
             axis="x",
             auto=self.chk_x_auto.isChecked(),
@@ -614,16 +646,19 @@ class ChartOptionsDialog(QDialog):
             label=self.edit_y_label.text(),
             scale_text=self.combo_y_scale.currentText(),
         )
-        ax.grid(self.chk_grid.isChecked())
-        if self.chk_legend.isChecked():
-            handles, labels = ax.get_legend_handles_labels()
+        self.handle.grid(self.chk_grid.isChecked())
+        # ``legend`` / ``get_legend_handles_labels`` are matplotlib-only
+        # and intentionally not part of the ``AxisHandle`` protocol
+        # (design §5.3); route through the migration-temporary escape
+        # hatch. T5/T6 will revisit this for pyqtgraph.
+        if self.chk_legend.isChecked() and self.ax is not None:
+            handles, labels = self.ax.get_legend_handles_labels()
             pairs = [(h, l) for h, l in zip(handles, labels) if l and not l.startswith("_")]
             if pairs:
                 handles, labels = zip(*pairs)
-                ax.legend(handles, labels)
+                self.ax.legend(handles, labels)
         self._apply_appearance()
-        if ax.figure.canvas is not None:
-            ax.figure.canvas.draw_idle()
+        self.handle.request_redraw()
         if self._invalid_axes:
             # Log scale + non-positive range: scale switch and label/legend
             # changes still landed (user may want them), but the manual range
@@ -644,13 +679,18 @@ class ChartOptionsDialog(QDialog):
 
     def _apply_axis(self, *, axis, auto, vmin, vmax, label, scale_text):
         scale = self.TEXT_TO_SCALE.get(scale_text, "linear")
-        setter_scale = self.ax.set_xscale if axis == "x" else self.ax.set_yscale
-        setter_lim = self.ax.set_xlim if axis == "x" else self.ax.set_ylim
-        setter_label = self.ax.set_xlabel if axis == "x" else self.ax.set_ylabel
+        if axis == "x":
+            setter_scale = self.handle.set_xscale
+            setter_lim = self.handle.set_xlim
+            setter_label = self.handle.set_xlabel
+        else:
+            setter_scale = self.handle.set_yscale
+            setter_lim = self.handle.set_ylim
+            setter_label = self.handle.set_ylabel
 
         setter_scale(scale)
         if auto:
-            self.ax.autoscale(axis=axis)
+            self.handle.autoscale(axis=axis)
         else:
             if scale == "log" and (float(vmin) <= 0 or float(vmax) <= 0):
                 # Defer hard error to the apply() aggregator: collect axis,
@@ -658,20 +698,24 @@ class ChartOptionsDialog(QDialog):
                 # rather than silently keeping a stale (or matplotlib-clamped)
                 # range.
                 self._invalid_axes.append(axis)
-                self.ax.autoscale(axis=axis)
+                self.handle.autoscale(axis=axis)
             else:
                 setter_lim(float(vmin), float(vmax))
         setter_label(label)
 
     def _editable_lines(self):
-        return [line for line in self.ax.get_lines() if line.get_visible()]
+        # ``handle.get_lines()`` already filters out invisible lines and
+        # returns ``LineHandle`` wrappers. Renderer-agnostic by design
+        # §5.3 — works for both ``MplAxisHandle`` and the future
+        # ``PgAxisHandle``.
+        return list(self.handle.get_lines())
 
     def _editable_mappables(self):
-        found = []
-        for obj in list(self.ax.images) + list(self.ax.collections):
-            if hasattr(obj, "set_cmap") and hasattr(obj, "set_clim"):
-                found.append(obj)
-        return found
+        # ``handle.get_mappables()`` returns the same set the legacy
+        # ``ax.images + ax.collections`` walk produced. For TimeDomain
+        # this is empty (design §5.3), which correctly disables the
+        # ColorMap/ColorScale group below.
+        return list(self.handle.get_mappables())
 
     def _current_line(self):
         if not self._lines:
@@ -748,7 +792,14 @@ class ChartOptionsDialog(QDialog):
             )
 
     def _sync_curve_axis_color(self, line, color):
-        ax = getattr(line, "axes", None) or self.ax
+        # ``line`` is a ``LineHandle`` wrapper now (design §5.3); unwrap
+        # back to the matplotlib ``Line2D`` for the spine/tick/canvas
+        # sync paths that still need the raw artist during the
+        # migration window.
+        raw_line = getattr(line, "line", line)
+        ax = getattr(raw_line, "axes", None) or self.ax
+        if ax is None:
+            return
         side = self._axis_side_for_line(ax)
         ax.yaxis.label.set_color(color)
         ax.tick_params(axis='y', colors=color)
@@ -756,7 +807,7 @@ class ChartOptionsDialog(QDialog):
             ax.spines[side].set_color(color)
 
         canvas = getattr(ax.figure, "canvas", None)
-        channel_name = self._channel_name_for_line(canvas, line)
+        channel_name = self._channel_name_for_line(canvas, raw_line)
         if channel_name is None:
             return
 

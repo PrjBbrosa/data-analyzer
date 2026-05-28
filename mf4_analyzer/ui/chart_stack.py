@@ -1,9 +1,11 @@
 """Center pane: QStackedWidget holding the three canvases + stats strip."""
+from collections import deque
+
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
-    QFrame, QLabel, QPushButton, QSizePolicy, QStackedWidget,
-    QToolButton, QVBoxLayout, QWidget,
+    QAction, QFileDialog, QFrame, QLabel, QPushButton, QSizePolicy,
+    QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 
@@ -105,6 +107,7 @@ import qtawesome as qta
 
 from ..ui_kit.icons import Icons
 from .canvases import PlotCanvas, SpectrogramCanvas, TimeDomainCanvas
+from .pg_canvases import TimeDomainCanvasPG
 from .widgets import StatsStrip
 
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
@@ -244,6 +247,234 @@ def _vline():
     return f
 
 
+class PgNavigationToolbar(QToolBar):
+    """Drop-in stand-in for ``matplotlib.backends.backend_qt5agg.NavigationToolbar2QT``
+    when the underlying canvas is a ``TimeDomainCanvasPG`` (pyqtgraph), not a
+    matplotlib ``FigureCanvas``.
+
+    Goals (Task 7 production switch):
+
+    1. Same six action keys (``home``/``back``/``forward``/``pan``/``zoom``/``save``)
+       in the same left-to-right order so ``_find_action`` /
+       ``_install_nav_shortcuts`` / ``_apply_mdi_icons`` /
+       ``apply_chinese_toolbar_labels`` keep working unchanged.
+    2. English action text on construction so ``apply_chinese_toolbar_labels``
+       still matches by lowercased text (it calls ``act.setData(key)`` on each
+       match, after which all downstream lookups use ``act.data()``).
+    3. ``mode`` string attribute that mirrors matplotlib's ``toolbar.mode``
+       semantics: empty string when idle, ``'pan'`` or ``'zoom'`` when the
+       respective tool is active. Mutually exclusive — selecting one drops
+       the other. Tests that read ``str(toolbar.mode).lower()`` keep passing.
+    4. ``pan()`` / ``zoom()`` methods that toggle the tool just like
+       matplotlib's NavigationToolbar2QT does (no-op repeat call deactivates).
+    5. ``locLabel`` (QLabel) populated at the END of the action sequence so
+       the existing ``_ChartCard`` code that finds and relocates it next to
+       the hint label keeps working unchanged.
+    6. ``home()`` triggers an autoRange on the primary view box; ``back()`` /
+       ``forward()`` pop/push view history (xlim+ylim tuples per axis);
+       ``save()`` opens a file dialog and writes a grabbed pixmap.
+
+    Not goals:
+
+    - Re-implementing matplotlib's full view-stack semantics (history of all
+      axes, blit ghosts, etc). The minimum that keeps the contract tests AND
+      the renderer-swap path functional is enough.
+    """
+
+    # Match matplotlib's _Mode enum string semantics: '' when idle.
+    _MODE_NONE = ''
+    _MODE_PAN = 'pan'
+    _MODE_ZOOM = 'zoom'
+
+    def __init__(self, canvas, parent=None):
+        super().__init__(parent)
+        self._canvas = canvas
+        # NavigationToolbar2QT exposes `.mode` as `_Mode.NONE` (str-coercible
+        # to ''). We mirror with a plain string; tests do
+        # `str(toolbar.mode).lower()` so a bare str works without surprises.
+        self.mode = self._MODE_NONE
+        # Tiny view history. Each entry is a list of (axis_handle, xlim, ylim)
+        # snapshots. We keep at most 32 frames so memory doesn't grow on
+        # long pan sessions.
+        self._view_history: deque = deque(maxlen=32)
+        self._view_forward: deque = deque(maxlen=32)
+        # locLabel must exist because _ChartCard.__init__ does
+        # `getattr(self.toolbar, 'locLabel', None)` and inserts it next to
+        # the hint label. We populate it but don't wire mouse-move updates
+        # in this revision; pyqtgraph emits hover via its own SignalProxy
+        # path and that wiring is out of scope for the production switch.
+        self.locLabel = QLabel("", self)
+
+        # Build the six actions in matplotlib's order so _action_keys()
+        # and the ordering-pinning contract test
+        # (test_time_chart_card_toolbar_action_keys_ordering_pan_before_zoom)
+        # see the same sequence as the matplotlib toolbar produced.
+        self._actions_by_key = {}
+        for key, label in (
+            ('home', 'Home'),
+            ('back', 'Back'),
+            ('forward', 'Forward'),
+            ('pan', 'Pan'),
+            ('zoom', 'Zoom'),
+            ('save', 'Save'),
+        ):
+            act = QAction(label, self)
+            # The Chinese i18n pass matches by lowercased text BEFORE setting
+            # data, so leaving english text here is the right move.
+            self.addAction(act)
+            self._actions_by_key[key] = act
+        # Wire each action to its handler. We connect by closure so
+        # apply_chinese_toolbar_labels can re-tooltip the QAction without
+        # disturbing the slot.
+        self._actions_by_key['home'].triggered.connect(self.home)
+        self._actions_by_key['back'].triggered.connect(self.back)
+        self._actions_by_key['forward'].triggered.connect(self.forward)
+        self._actions_by_key['pan'].triggered.connect(self.pan)
+        self._actions_by_key['zoom'].triggered.connect(self.zoom)
+        self._actions_by_key['save'].triggered.connect(self.save_figure)
+        # Append locLabel as the final widget — matplotlib does the same and
+        # _ChartCard relocates it via toolbar.removeAction + insertAction so
+        # it sits to the right of the hint label. Must be the last action.
+        self.addWidget(self.locLabel)
+
+    # ----- internal helpers ------------------------------------------------
+    def _primary_view_box(self):
+        """Return the pyqtgraph ``ViewBox`` driving the primary axis (the one
+        whose xlim drives the viewport-aware refresh). Falls back to the
+        first ViewBox in ``axes_list`` if ``_primary_xaxis_ax`` is unset.
+        """
+        canvas = self._canvas
+        primary = getattr(canvas, '_primary_xaxis_ax', None)
+        if primary is None:
+            axes_list = getattr(canvas, 'axes_list', None) or []
+            if not axes_list:
+                return None
+            primary = axes_list[0]
+        return getattr(primary, 'view_box', None)
+
+    def _snapshot_view(self):
+        """Snapshot per-axis (xlim, ylim) so back/forward can restore."""
+        canvas = self._canvas
+        snap = []
+        for ax in getattr(canvas, 'axes_list', None) or []:
+            try:
+                snap.append((ax, ax.get_xlim(), ax.get_ylim()))
+            except Exception:
+                continue
+        return snap
+
+    def _restore_view(self, snap):
+        if not snap:
+            return
+        for ax, xlim, ylim in snap:
+            try:
+                ax.set_xlim(*xlim)
+                ax.set_ylim(*ylim)
+            except Exception:
+                continue
+
+    # ----- public surface (matplotlib NavigationToolbar2QT parity) --------
+    def home(self, *_args):
+        """Autoscale the primary view back to the data extents.
+
+        Calls ``ViewBox.autoRange`` directly because ``PgAxisHandle.autoscale``
+        goes through ``enableAutoRange`` which only takes effect on the next
+        paint cycle — ``autoRange`` is synchronous and matches matplotlib's
+        ``Home`` button semantics (reset to data extents NOW).
+        """
+        self._view_history.append(self._snapshot_view())
+        self._view_forward.clear()
+        canvas = self._canvas
+        for ax in getattr(canvas, 'axes_list', None) or []:
+            vb = getattr(ax, 'view_box', None)
+            if vb is None or not hasattr(vb, 'autoRange'):
+                continue
+            try:
+                vb.autoRange()
+            except Exception:
+                continue
+
+    def back(self, *_args):
+        if not self._view_history:
+            return
+        # Push current state onto forward stack so a subsequent forward()
+        # returns there.
+        self._view_forward.append(self._snapshot_view())
+        snap = self._view_history.pop()
+        self._restore_view(snap)
+
+    def forward(self, *_args):
+        if not self._view_forward:
+            return
+        self._view_history.append(self._snapshot_view())
+        snap = self._view_forward.pop()
+        self._restore_view(snap)
+
+    def pan(self, *_args):
+        """Toggle pan mode. Idempotent within mode; mutually exclusive with
+        zoom — switching to pan from zoom drops zoom first.
+        """
+        vb = self._primary_view_box()
+        if self.mode == self._MODE_PAN:
+            # Second call toggles OFF (matplotlib parity).
+            self.mode = self._MODE_NONE
+            if vb is not None:
+                # pyqtgraph default ViewBox.PanMode is 3; we set it here
+                # explicitly so toggling off leaves a sane mouseMode.
+                try:
+                    import pyqtgraph as pg
+                    vb.setMouseMode(pg.ViewBox.PanMode)
+                except Exception:
+                    pass
+            return
+        # Switching INTO pan from idle or zoom.
+        self.mode = self._MODE_PAN
+        if vb is not None:
+            try:
+                import pyqtgraph as pg
+                vb.setMouseMode(pg.ViewBox.PanMode)
+            except Exception:
+                pass
+
+    def zoom(self, *_args):
+        """Toggle zoom (rectangle-drag) mode. Mirror semantics of pan()."""
+        vb = self._primary_view_box()
+        if self.mode == self._MODE_ZOOM:
+            self.mode = self._MODE_NONE
+            if vb is not None:
+                try:
+                    import pyqtgraph as pg
+                    vb.setMouseMode(pg.ViewBox.PanMode)
+                except Exception:
+                    pass
+            return
+        self.mode = self._MODE_ZOOM
+        if vb is not None:
+            try:
+                import pyqtgraph as pg
+                vb.setMouseMode(pg.ViewBox.RectMode)
+            except Exception:
+                pass
+
+    def save_figure(self, *_args):
+        """Open a Save-As dialog and write the canvas grab to disk."""
+        canvas = self._canvas
+        if not hasattr(canvas, 'grab_pixmap'):
+            return
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "保存图片", "", "PNG (*.png);;JPEG (*.jpg *.jpeg)"
+        )
+        if not path:
+            return
+        pix = canvas.grab_pixmap()
+        if pix is None or pix.isNull():
+            return
+        try:
+            pix.save(path)
+        except Exception:
+            return
+
+
 class _ChartCard(QWidget):
     """Canvas + its NavigationToolbar in a vertical layout."""
 
@@ -257,7 +488,15 @@ class _ChartCard(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         self.canvas = canvas
         self._annotation_enabled = False
-        self.toolbar = NavigationToolbar(canvas, self)
+        # Pick the matplotlib NavigationToolbar2QT for matplotlib canvases
+        # and the pyqtgraph-aware shim for TimeDomainCanvasPG. The shim
+        # exposes the exact same six action keys + locLabel + mode/pan/zoom
+        # surface so all downstream helpers (i18n, MDI icons, shortcuts,
+        # _find_action) keep working unchanged.
+        if isinstance(canvas, TimeDomainCanvasPG):
+            self.toolbar = PgNavigationToolbar(canvas, self)
+        else:
+            self.toolbar = NavigationToolbar(canvas, self)
         self.toolbar.setObjectName("chartToolbar")
         self.toolbar.setIconSize(QSize(18, 18))
         for act in self.toolbar.actions():
@@ -725,7 +964,7 @@ class ChartStack(QWidget):
         lay.setContentsMargins(0, 4, 0, 0)
         lay.setSpacing(4)
         self.stack = QStackedWidget(self)
-        self.canvas_time = TimeDomainCanvas(self)
+        self.canvas_time = TimeDomainCanvasPG(self)
         self.canvas_fft = PlotCanvas(self)
         self.canvas_fft_time = SpectrogramCanvas(self)
         self.canvas_order = PlotCanvas(self)

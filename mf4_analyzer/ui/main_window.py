@@ -678,11 +678,23 @@ class MainWindow(QMainWindow):
         self.toast("横坐标已更新", "success")
 
     def _reset_cursors(self):
-        """Reset both single and dual cursor state on the time-domain canvas."""
-        self.canvas_time._ax = self.canvas_time._bx = None
-        self.canvas_time._placing = 'A'
-        self.canvas_time._refresh = True
-        self.canvas_time.draw_idle()
+        """Reset both single and dual cursor state on the time-domain canvas.
+
+        Uses the canvas-provided ``reset_cursor_state()`` seam so the
+        upcoming pyqtgraph TimeDomain canvas (Phase 1 of the migration —
+        see ``docs/superpowers/specs/2026-05-28-pyqtgraph-timedomain-migration-design.md``
+        §5.5) can swap in without changing this call site. ``getattr``
+        fallback retains the legacy direct-mutation path for older
+        canvases that have not yet adopted the seam.
+        """
+        reset = getattr(self.canvas_time, "reset_cursor_state", None)
+        if callable(reset):
+            reset()
+        else:
+            self.canvas_time._ax = self.canvas_time._bx = None
+            self.canvas_time._placing = 'A'
+            self.canvas_time._refresh = True
+            self.canvas_time.draw_idle()
         self.chart_stack.clear_cursor_pill()
         self.statusBar.showMessage("游标已重置")
         self.toast("游标已重置", "info")
