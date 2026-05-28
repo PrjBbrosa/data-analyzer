@@ -2483,3 +2483,38 @@ class TestPerfRegressionFix:
         assert counts[0] == 5, counts
         assert counts[-1] == counts[0], f"ghost badges accumulated: {counts}"
         canvas.deleteLater()
+
+    def test_pan_does_not_reposition_inside_labels(self, qapp, monkeypatch):
+        """Regression: inside labels are pinned to each subplot's top-left
+        corner. That corner is fixed during pan/zoom (only viewRange moves,
+        not the ViewBox geometry), so labels must NOT be repositioned on
+        sigRangeChanged -- doing so cost a Python callback every pan frame."""
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        t = np.linspace(0.0, 10.0, 2000)
+        rows = [
+            (f"long_channel_name_{i}", True, t, np.sin(t) + i, "#1f77b4", "u", "fid")
+            for i in range(5)
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        assert canvas._inside_label_items  # sanity: inside labels are active
+
+        calls = {"n": 0}
+        orig = canvas._position_inside_label_item
+
+        def spy(*args, **kwargs):
+            calls["n"] += 1
+            return orig(*args, **kwargs)
+
+        monkeypatch.setattr(canvas, "_position_inside_label_item", spy)
+
+        # Pan/zoom the X range -- this fires sigXRangeChanged/sigRangeChanged.
+        canvas.set_xlim(2.0, 8.0)
+        canvas._flush_pending_refresh()
+
+        assert calls["n"] == 0, (
+            "inside labels were repositioned during pan; they should be "
+            "pinned and only reflow on resize"
+        )
+        canvas.deleteLater()

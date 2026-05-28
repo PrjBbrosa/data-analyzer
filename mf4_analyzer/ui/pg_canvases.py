@@ -2111,12 +2111,6 @@ class TimeDomainCanvasPG(QWidget):
                         self._position_inside_label_item(handle, text_item)
                         self._inside_label_items.append(text_item)
                         self._inside_label_handles.append(handle)
-                        if hasattr(vb, "sigRangeChanged"):
-                            def _handler(*_args, _handle=handle, _item=text_item):
-                                self._position_inside_label_item(_handle, _item)
-
-                            vb.sigRangeChanged.connect(_handler)
-                            self._inside_label_conns.append((vb.sigRangeChanged, _handler))
                         if hasattr(vb, "sigResized"):
                             def _resize_handler(*_args, _handle=handle, _item=text_item):
                                 self._position_inside_label_item(_handle, _item)
