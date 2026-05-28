@@ -728,7 +728,7 @@ class TimeDomainCanvasPG(QWidget):
         # Drop xrange listener before we wipe the axes it points at.
         self._disconnect_xrange_listener()
         self._disconnect_overlay_view_sync()
-        self._disconnect_inside_label_listeners()
+        self._teardown_inside_labels()
         if self._refresh_timer.isActive():
             self._refresh_timer.stop()
         self._refresh_pending = False
@@ -750,16 +750,13 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_mode = False
         self._refresh = True
         # T6 — drop overlay selection + subplot label scaffolding so the
-        # next plot_channels build starts from a clean slate. The
-        # _inside_label_items list owns scene items that pg.GLW.clear()
-        # already removed, but we still need to drop our Python-side
-        # references.
+        # next plot_channels build starts from a clean slate. Inside-label
+        # scene items were already removed by _teardown_inside_labels()
+        # above (pg.GLW.clear() does NOT remove scene().addItem() items).
         self._selected_overlay_channel = None
         self._overlay_y_drag_start = None
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
-        self._inside_label_items = []
-        self._inside_label_handles = []
         self._subplot_label_specs = []
         self._cursor_line_items = []
         self._cursor_a_items = []
@@ -1998,6 +1995,26 @@ class TimeDomainCanvasPG(QWidget):
             return False
         return widget_w < 320
 
+    def _teardown_inside_labels(self):
+        """Remove every inside-label scene item and drop its listeners.
+
+        Single owner of inside-label teardown. pyqtgraph's
+        GraphicsLayout.clear() only removes items registered via
+        addItem() (the PlotItems); our TextItem badges are attached with
+        scene().addItem(), so they MUST be removed explicitly here or
+        they leak into the scene on every rebuild (ghost badges).
+        """
+        self._disconnect_inside_label_listeners()
+        for item in self._inside_label_items:
+            try:
+                scene = item.scene()
+                if scene is not None:
+                    scene.removeItem(item)
+            except Exception:
+                pass
+        self._inside_label_items = []
+        self._inside_label_handles = []
+
     def _disconnect_inside_label_listeners(self):
         for signal, handler in self._inside_label_conns:
             try:
@@ -2054,16 +2071,7 @@ class TimeDomainCanvasPG(QWidget):
         gate for this task.
         """
         # Drop any previously-installed inside-label items.
-        self._disconnect_inside_label_listeners()
-        for handle, item in zip(self._inside_label_handles, self._inside_label_items):
-            try:
-                scene = item.scene()
-                if scene is not None:
-                    scene.removeItem(item)
-            except Exception:
-                pass
-        self._inside_label_items = []
-        self._inside_label_handles = []
+        self._teardown_inside_labels()
 
         need_inside = self._subplot_ylabels_need_inside_labels()
         for handle, name, color in self._subplot_label_specs:

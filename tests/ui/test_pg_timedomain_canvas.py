@@ -2453,3 +2453,33 @@ class TestPerfRegressionFix:
                 f"{_name} curve is anti-aliased; this regresses pan perf"
             )
         canvas.deleteLater()
+
+    def test_rebuild_does_not_accumulate_inside_label_items(self, qapp):
+        """Regression: clear() must remove inside-label scene items, not just
+        null the Python refs. pyqtgraph's GraphicsLayout.clear() does NOT
+        remove items added via scene().addItem(), so without an explicit
+        removeItem the old badges pile up in the scene on every rebuild."""
+        import pyqtgraph as pg
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        t = np.linspace(0.0, 10.0, 2000)
+        # >=4 channels with long names -> dense subplot -> inside labels on.
+        rows = [
+            (f"long_channel_name_{i}", True, t, np.sin(t) + i, "#1f77b4", "u", "fid")
+            for i in range(5)
+        ]
+
+        counts = []
+        for _ in range(4):
+            canvas.plot_channels(rows, mode="subplot")
+            text_items = [
+                it for it in canvas._glw.scene().items()
+                if isinstance(it, pg.TextItem)
+            ]
+            counts.append(len(text_items))
+
+        # One badge per subplot, and NO growth across rebuilds.
+        assert counts[0] == 5, counts
+        assert counts[-1] == counts[0], f"ghost badges accumulated: {counts}"
+        canvas.deleteLater()
