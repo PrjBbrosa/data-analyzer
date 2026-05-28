@@ -543,6 +543,19 @@ def _pg_canvas(qapp):
     return canvas
 
 
+def _viewport_point_for_data(canvas, handle, x, y=None):
+    """Map a data-space point in ``handle`` to a viewport QPoint."""
+    from PyQt5.QtCore import QPointF
+
+    vb = handle.view_box
+    assert vb is not None
+    if y is None:
+        _x_range, y_range = vb.viewRange()
+        y = (float(y_range[0]) + float(y_range[1])) / 2.0
+    scene_pos = vb.mapViewToScene(QPointF(float(x), float(y)))
+    return canvas._glw.mapFromScene(scene_pos)
+
+
 def _pg_signal_signature(bound) -> str:
     """Strip the leading SIGNAL-marker digits from a pyqtBoundSignal
     name string so callers can assert ``name(payload)`` exactly. Mirrors
@@ -785,12 +798,10 @@ class TestTimeDomainCanvasPGCurveCache:
         )
         assert len(canvas._curve_path_cache) == 0
 
-    def test_curve_path_cache_populates_after_set_xlim(self, qapp):
-        """Range change must trigger envelope -> QPainterPath -> cached
-        pixmap creation. State assertion: at least one entry in
-        ``_curve_path_cache`` keyed by ``(channel_name, bucketed_lo,
-        bucketed_hi, bucketed_pixel_width)`` after the range mutation
-        flushes."""
+    def test_last_range_key_populates_after_set_xlim(self, qapp):
+        """Range change must trigger the visible envelope refresh and record
+        the last range key used to gate redundant setData work.
+        """
         canvas = _pg_canvas(qapp)
         n = 50_000
         t = np.linspace(0.0, 10.0, n, dtype=np.float64)
@@ -804,24 +815,13 @@ class TestTimeDomainCanvasPGCurveCache:
         canvas.set_xlim(2.0, 5.0)
         canvas._flush_pending_refresh()
 
-        assert len(canvas._curve_path_cache) >= 1, (
-            "_curve_path_cache must contain at least one entry after a "
-            "real set_xlim+_flush_pending_refresh round-trip"
-        )
-        # At least one key references our channel name.
-        any_for_channel = any(
-            k[0] == "a" for k in canvas._curve_path_cache.keys()
-        )
-        assert any_for_channel, (
-            f"_curve_path_cache has no entry for channel 'a'; keys are "
-            f"{list(canvas._curve_path_cache.keys())}"
-        )
+        assert canvas._last_range_key.get("a") is not None
+        assert canvas._last_range_key["a"][0] == "a"
 
-    def test_two_different_xlims_produce_two_different_cache_keys(self, qapp):
+    def test_two_different_xlims_produce_two_different_range_keys(self, qapp):
         """Per the 2026-05-19-branch-reached-is-not-behavior-correct lesson:
-        two different xlims must produce two different cached
-        ``QPainterPath`` entries — proving the range_key differs between
-        frames, not just that "the cache method was hit"."""
+        two different xlims must produce two different range keys — proving
+        the refresh gate sees distinct frames."""
         canvas = _pg_canvas(qapp)
         n = 50_000
         t = np.linspace(0.0, 10.0, n, dtype=np.float64)
@@ -830,30 +830,21 @@ class TestTimeDomainCanvasPGCurveCache:
 
         canvas.set_xlim(1.0, 4.0)
         canvas._flush_pending_refresh()
-        keys_after_first = set(canvas._curve_path_cache.keys())
-        assert len(keys_after_first) >= 1
+        key_after_first = canvas._last_range_key.get("a")
+        assert key_after_first is not None
 
         canvas.set_xlim(6.0, 9.0)
         canvas._flush_pending_refresh()
-        keys_after_second = set(canvas._curve_path_cache.keys())
+        key_after_second = canvas._last_range_key.get("a")
 
-        new_keys = keys_after_second - keys_after_first
-        assert len(new_keys) >= 1, (
-            "second xlim must produce a fresh cache key; keys after first "
-            f"= {keys_after_first}, after second = {keys_after_second}"
-        )
-        # And the union must have >= 2 distinct keys for channel 'a'.
-        channel_keys = [k for k in keys_after_second if k[0] == "a"]
-        assert len(channel_keys) >= 2, (
-            f"expected >= 2 distinct cache keys for channel 'a' across "
-            f"two xlims; got {channel_keys}"
-        )
+        assert key_after_second is not None
+        assert key_after_second != key_after_first
 
-    def test_same_xlim_replay_does_not_create_new_cache_entry(self, qapp):
+    def test_same_xlim_replay_keeps_same_range_key(self, qapp):
         """Per pyqt-ui/2026-04-25-cache-invalidation-event-conditional:
         invalidation/repopulation must be gated on a state diff, not on
-        every event tick. Two consecutive flushes with identical xlim
-        must NOT inflate the cache."""
+        every event tick. Two consecutive flushes with identical xlim keep
+        the same gate key."""
         canvas = _pg_canvas(qapp)
         n = 20_000
         t = np.linspace(0.0, 10.0, n, dtype=np.float64)
@@ -862,15 +853,12 @@ class TestTimeDomainCanvasPGCurveCache:
 
         canvas.set_xlim(2.0, 5.0)
         canvas._flush_pending_refresh()
-        n_after_first = len(canvas._curve_path_cache)
+        key_after_first = canvas._last_range_key.get("a")
 
         # No range mutation between flushes — cache size must not grow.
         canvas._flush_pending_refresh()
-        n_after_second = len(canvas._curve_path_cache)
-        assert n_after_second == n_after_first, (
-            f"identical-xlim replay inflated cache from {n_after_first} "
-            f"to {n_after_second}"
-        )
+        key_after_second = canvas._last_range_key.get("a")
+        assert key_after_second == key_after_first
 
     def test_positions_envelope_is_consumed_by_canvas_hot_path(
         self, qapp, monkeypatch,
@@ -910,6 +898,66 @@ class TestTimeDomainCanvasPGCurveCache:
             "set_xlim; otherwise the curve-layer cache plumbing is dead "
             "code (see cache-consumer-must-be-grepped-not-just-surface)."
         )
+
+    def test_visible_curve_data_updates_to_viewport_envelope_after_xlim(self, qapp):
+        """Regression for the UI gap report: computing the viewport envelope
+        is not enough; the visible PlotDataItem must display that envelope.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        n = 50_000
+        t = np.linspace(0.0, 10.0, n, dtype=np.float64)
+        sig = (
+            np.sin(2 * np.pi * 1.3 * t)
+            + 0.5 * np.cos(2 * np.pi * 6.1 * t)
+        ).astype(np.float64)
+        canvas.plot_channels([("a", True, t, sig, "#1769e0", "u", "fid-1")])
+        QCoreApplication.processEvents()
+
+        _axis_handle, line_handle = canvas._channel_lines["a"]
+        pdi = line_handle.plot_data_item
+        bind_x, bind_y = pdi.getData()
+        assert float(np.nanmin(bind_x)) == pytest.approx(0.0, abs=1e-9)
+        assert float(np.nanmax(bind_x)) == pytest.approx(10.0, abs=1e-9)
+
+        canvas.set_xlim(2.0, 5.0)
+        canvas._flush_pending_refresh()
+        QCoreApplication.processEvents()
+
+        view_x, view_y = pdi.getData()
+        assert view_x is not None and view_y is not None
+        assert float(np.nanmin(view_x)) >= 2.0 - 1e-9
+        assert float(np.nanmax(view_x)) <= 5.0 + 1e-9
+        assert not (
+            len(bind_x) == len(view_x)
+            and np.array_equal(np.asarray(bind_x), np.asarray(view_x))
+            and np.array_equal(np.asarray(bind_y), np.asarray(view_y))
+        ), "visible curve data stayed on the full-range bind envelope"
+
+    def test_refresh_visible_data_does_not_build_unused_path_or_pixmap(
+        self, qapp, monkeypatch,
+    ):
+        """Followup regression: once PlotDataItem.setData is the visible
+        render truth, the old QPainterPath/QPixmap seam must not stay on the
+        pan hot path as unread work.
+        """
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1])
+
+        monkeypatch.setattr(
+            canvas,
+            "_build_painter_path",
+            lambda *args, **kwargs: pytest.fail("unused painter path was built"),
+        )
+        monkeypatch.setattr(
+            canvas,
+            "_render_path_to_pixmap",
+            lambda *args, **kwargs: pytest.fail("unused pixmap was built"),
+        )
+
+        canvas.set_xlim(0.1, 0.8)
+        canvas._flush_pending_refresh()
 
 
 class TestTimeDomainCanvasPGScreenshotGrab:
@@ -1198,39 +1246,132 @@ class TestTimeDomainCanvasPGSubplotMode:
                 f"axis {i} did not move between non-primary-origin frames"
             )
 
-    def test_subplot_inside_label_decision_uses_bbox_overlap(self, qapp):
-        """Inside-label placement is decision-driven by rendered bbox
-        overlap, not a fixed 5-10% offset (design §0 correction).
-        Two-frame assertion: at a wide width the decision is False
-        (labels fit outside); at a very narrow width the decision is
-        True (labels would overlap). Same rule the matplotlib path uses
-        at canvases.py:_subplot_ylabels_need_inside_labels."""
+    def test_subplot_long_labels_use_inside_badges_at_normal_width(self, qapp):
+        """Long channel names in a normal-width subplot stack must use
+        inside badges instead of rotated left-axis labels.
+        """
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
         canvas.resize(1200, 800)
         QCoreApplication.processEvents()
-        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        t = np.linspace(0.0, 1.0, 1000, dtype=np.float64)
+        rows = [
+            (
+                "[whole ±5deg_Fricom] Rte_ActRetPlausi_mActiveReturnMotorTorq4C",
+                True,
+                t,
+                np.sin(2 * np.pi * 2 * t),
+                "#1769e0",
+                "Nm",
+                "fid-1",
+            ),
+            (
+                "[whole ±5deg_Fricom] Rte_ESChkPlausi_mESMotorTorque_xds16",
+                True,
+                t,
+                np.cos(2 * np.pi * 3 * t),
+                "#ef4444",
+                "Nm",
+                "fid-1",
+            ),
+        ]
+        canvas.plot_channels(rows, mode="subplot")
         QCoreApplication.processEvents()
 
-        # Frame A: wide canvas — labels should be outside (no overlap).
-        wide_decision = canvas._subplot_ylabels_need_inside_labels()
+        assert canvas._subplot_ylabels_need_inside_labels() is True
+        assert len(canvas._inside_label_items) == len(rows)
+        for handle in canvas.axes_list:
+            left = handle.plot_item.getAxis("left")
+            assert getattr(left, "labelText", "") == ""
 
-        # Frame B: shrink to a narrow width — labels MUST need to flip
-        # inside because the y-axis label box now overlaps tick labels.
-        canvas.resize(220, 800)
+    def test_dense_subplot_stack_uses_inside_badges_for_short_names(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 800)
+        canvas.show()
         QCoreApplication.processEvents()
-        narrow_decision = canvas._subplot_ylabels_need_inside_labels()
 
-        # Two-frame strict difference: narrow case wants inside, wide
-        # case wants outside. A single-frame "decision is bool" assert
-        # would not be evidence of the rule.
-        assert wide_decision is False, (
-            f"wide canvas should NOT need inside labels; got {wide_decision!r}"
-        )
-        assert narrow_decision is True, (
-            f"narrow canvas MUST need inside labels; got {narrow_decision!r}"
-        )
+        rows = _five_channel_rows()
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+
+        assert canvas._subplot_ylabels_need_inside_labels() is True
+        assert len(canvas._inside_label_items) == len(rows)
+        for handle in canvas.axes_list:
+            left = handle.plot_item.getAxis("left")
+            assert getattr(left, "labelText", "") == ""
+
+    def test_subplot_inside_label_stays_viewport_anchored_after_pan_zoom(self, qapp):
+        """Inside channel labels must act like matplotlib transAxes labels:
+        pan/zoom changes data ranges, but the badge stays pinned to the
+        ViewBox corner in scene pixels.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 800)
+        QCoreApplication.processEvents()
+        rows = [
+            (
+                f"[diya luntai] {name} VeryLongChannelNameForInsideBadge",
+                visible,
+                t,
+                sig,
+                color,
+                unit,
+                data_id,
+            )
+            for name, visible, t, sig, color, unit, data_id in _five_channel_rows()[:3]
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+
+        item = canvas._inside_label_items[0]
+        vb = canvas.axes_list[0].view_box
+        before = item.sceneBoundingRect().topLeft() - vb.sceneBoundingRect().topLeft()
+
+        canvas.axes_list[0].set_xlim(0.25, 0.75)
+        canvas.axes_list[0].set_ylim(-0.25, 0.25)
+        canvas._flush_pending_refresh()
+        QCoreApplication.processEvents()
+
+        after = item.sceneBoundingRect().topLeft() - vb.sceneBoundingRect().topLeft()
+        assert abs(float(after.x()) - float(before.x())) <= 2.0
+        assert abs(float(after.y()) - float(before.y())) <= 2.0
+
+    def test_inside_label_hides_when_custom_title_is_set(self, qapp):
+        """A subplot should not show both a top PlotItem title and an inside
+        channel badge. The custom title wins in inside-label mode.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 800)
+        QCoreApplication.processEvents()
+        rows = [
+            (
+                f"[diya luntai] {name} VeryLongChannelNameForInsideBadge",
+                visible,
+                t,
+                sig,
+                color,
+                unit,
+                data_id,
+            )
+            for name, visible, t, sig, color, unit, data_id in _five_channel_rows()[:3]
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        assert canvas._inside_label_items
+
+        handle = canvas.axes_list[0]
+        handle.set_title("Custom subplot title")
+        QCoreApplication.processEvents()
+
+        assert "Custom subplot title" in handle.get_title()
+        assert not canvas._inside_label_items[0].isVisible()
 
 
 class TestTimeDomainCanvasPGOverlayMode:
@@ -1238,6 +1379,28 @@ class TestTimeDomainCanvasPGOverlayMode:
     on the LEFT side. Selected channel highlighted via line-width /
     alpha (1.8/1.0 vs 1.0/0.42 — matches canvases.py:_apply_overlay_
     selection_style)."""
+
+    def test_overlay_initial_xrange_uses_raw_data_extent(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 800)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        t = np.linspace(0.0, 80.0, 2_000, dtype=np.float64)
+        rows = [
+            ("speed", True, t, np.sin(t), "#1769e0", "rpm", "fid-1"),
+            ("torque", True, t, np.cos(t), "#ef4444", "Nm", "fid-1"),
+            ("pressure", True, t, np.sin(t * 0.5), "#00b894", "bar", "fid-1"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        for handle in canvas.axes_list:
+            lo, hi = handle.get_xlim()
+            assert lo == pytest.approx(0.0)
+            assert hi == pytest.approx(80.0)
 
     def test_overlay_emphasis_two_frame_line_width_difference(self, qapp):
         """Two-frame branch-reached-is-not-behavior-correct compliance.
@@ -1278,6 +1441,52 @@ class TestTimeDomainCanvasPGOverlayMode:
             f"de-emphasised channel alpha must drop; got A={a_other_alpha!r}, "
             f"B={b_other_alpha!r}"
         )
+
+    def test_overlay_builds_independent_y_viewboxes_and_axes_per_channel(self, qapp):
+        """Overlay mode must restore the original one-Y-axis-per-channel
+        contract instead of sharing one ViewBox across all curves.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        rows = _five_channel_rows()[:4]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        assert len(canvas.axes_list) == len(rows)
+        view_boxes = [handle.view_box for handle in canvas.axes_list]
+        assert len({id(vb) for vb in view_boxes}) == len(rows)
+        for handle, row in zip(canvas.axes_list, rows):
+            name, _visible, _t, _sig, _color, _unit, _data_id = row
+            axis_handle, _line = canvas._channel_lines[name]
+            assert axis_handle is handle
+            y_axis = handle.y_axis_item()
+            assert y_axis is not None
+            assert getattr(y_axis, "labelText", "")
+
+    def test_overlay_selected_y_drag_changes_only_selected_channel_axis(self, qapp):
+        """Dragging the selected overlay channel's Y axis must not pan every
+        overlaid channel. Each channel owns an independent Y range.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        rows = _five_channel_rows()[:3]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        canvas.select_overlay_channel(rows[1][0])
+        QCoreApplication.processEvents()
+
+        ranges_before = [handle.get_ylim() for handle in canvas.axes_list]
+        canvas._begin_overlay_y_drag_at(start_y_px=100.0)
+        moved = canvas._apply_overlay_y_drag_at(current_y_px=140.0)
+        QCoreApplication.processEvents()
+        ranges_after = [handle.get_ylim() for handle in canvas.axes_list]
+
+        assert moved is True
+        assert ranges_after[1] != pytest.approx(ranges_before[1])
+        assert ranges_after[0] == pytest.approx(ranges_before[0])
+        assert ranges_after[2] == pytest.approx(ranges_before[2])
 
     def test_overlay_blank_click_deselect_emits_signal(self, qapp):
         """Blank-click deselect must emit overlay_channel_selected(None).
@@ -1457,6 +1666,85 @@ class TestTimeDomainCanvasPGCursorParity:
         )
 
 
+class TestTimeDomainCanvasPGCursorInteraction:
+    """Cursor helpers must be wired to real mouse interaction and visible
+    pyqtgraph line items, not only callable from tests.
+    """
+
+    def test_single_cursor_mouse_move_emits_and_shows_lines(self, qapp):
+        from PyQt5.QtCore import QCoreApplication, QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+        canvas.set_cursor_visible(True)
+
+        seen = []
+        canvas.cursor_info.connect(seen.append)
+        point = _viewport_point_for_data(canvas, canvas.axes_list[1], 0.42)
+        event = QMouseEvent(
+            QEvent.MouseMove, point, Qt.NoButton, Qt.NoButton, Qt.NoModifier
+        )
+        qapp.sendEvent(canvas._glw.viewport(), event)
+        QCoreApplication.processEvents()
+
+        assert seen, "mouse move in single-cursor mode must emit cursor_info"
+        assert "t=" in seen[-1]
+        line_items = getattr(canvas, "_cursor_line_items", [])
+        assert len(line_items) == len(canvas.axes_list)
+        assert all(item.isVisible() for item in line_items)
+
+    def test_dual_cursor_mouse_clicks_place_a_b_and_emit_stats(self, qapp):
+        from PyQt5.QtCore import QCoreApplication, Qt
+        from PyQt5.QtTest import QTest
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+
+        primary_seen = []
+        dual_seen = []
+        canvas.cursor_info.connect(primary_seen.append)
+        canvas.dual_cursor_info.connect(dual_seen.append)
+
+        viewport = canvas._glw.viewport()
+        point_a = _viewport_point_for_data(canvas, canvas.axes_list[0], 0.25)
+        point_b = _viewport_point_for_data(canvas, canvas.axes_list[2], 0.75)
+        QTest.mouseClick(viewport, Qt.LeftButton, Qt.NoModifier, point_a)
+        QCoreApplication.processEvents()
+        QTest.mouseClick(viewport, Qt.LeftButton, Qt.NoModifier, point_b)
+        QCoreApplication.processEvents()
+
+        assert canvas._ax == pytest.approx(0.25, abs=0.03)
+        assert canvas._bx == pytest.approx(0.75, abs=0.03)
+        assert primary_seen and "ΔT=" in primary_seen[-1]
+        assert dual_seen and dual_seen[-1]
+        a_items = getattr(canvas, "_cursor_a_items", [])
+        b_items = getattr(canvas, "_cursor_b_items", [])
+        assert len(a_items) == len(canvas.axes_list)
+        assert len(b_items) == len(canvas.axes_list)
+        assert all(item.isVisible() for item in a_items + b_items)
+
+    def test_cursor_mousemove_with_left_button_does_not_consume_pan_drag(self, qapp):
+        from PyQt5.QtCore import QCoreApplication, QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:2], mode="subplot")
+        QCoreApplication.processEvents()
+        canvas.set_cursor_visible(True)
+
+        point = _viewport_point_for_data(canvas, canvas.axes_list[0], 0.5)
+        event = QMouseEvent(
+            QEvent.MouseMove, point, Qt.NoButton, Qt.LeftButton, Qt.NoModifier
+        )
+        consumed = canvas.eventFilter(canvas._glw.viewport(), event)
+        assert consumed is False
+
+
 class TestTimeDomainCanvasPGScroll:
     """Scroll behavior parity: Ctrl+wheel zooms X, Shift+wheel zooms Y,
     plain wheel pans Y. Tests use two-frame strict-difference assertions
@@ -1563,6 +1851,66 @@ class TestTimeDomainCanvasPGScroll:
             f"after={x_after!r}"
         )
 
+    def test_shift_wheel_targets_source_subplot_y_not_primary(self, qapp):
+        from PyQt5.QtCore import QCoreApplication, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        QCoreApplication.processEvents()
+        primary = canvas.axes_list[0]
+        target = canvas.axes_list[2]
+        primary.set_ylim(-10.0, 10.0)
+        target.set_ylim(-20.0, 20.0)
+        QCoreApplication.processEvents()
+
+        primary_before = primary.get_ylim()
+        target_before = target.get_ylim()
+        canvas._handle_wheel_dispatch(
+            delta=120,
+            modifiers=Qt.ShiftModifier,
+            x_pos=0.5,
+            y_pos=0.0,
+            view_box=target.view_box,
+        )
+        QCoreApplication.processEvents()
+
+        assert target.get_ylim() != pytest.approx(target_before), (
+            "Shift+wheel over a non-primary subplot must zoom that subplot's Y range"
+        )
+        assert primary.get_ylim() == pytest.approx(primary_before), (
+            "Shift+wheel over a non-primary subplot must not zoom primary Y"
+        )
+
+    def test_plain_wheel_targets_source_subplot_y_not_primary(self, qapp):
+        from PyQt5.QtCore import QCoreApplication, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        QCoreApplication.processEvents()
+        primary = canvas.axes_list[0]
+        target = canvas.axes_list[3]
+        primary.set_ylim(-10.0, 10.0)
+        target.set_ylim(-20.0, 20.0)
+        QCoreApplication.processEvents()
+
+        primary_before = primary.get_ylim()
+        target_before = target.get_ylim()
+        canvas._handle_wheel_dispatch(
+            delta=120,
+            modifiers=Qt.NoModifier,
+            x_pos=0.5,
+            y_pos=0.0,
+            view_box=target.view_box,
+        )
+        QCoreApplication.processEvents()
+
+        assert target.get_ylim() != pytest.approx(target_before), (
+            "plain wheel over a non-primary subplot must pan that subplot's Y range"
+        )
+        assert primary.get_ylim() == pytest.approx(primary_before), (
+            "plain wheel over a non-primary subplot must not pan primary Y"
+        )
+
 
 class TestTimeDomainCanvasPGModeSwitchXlim:
     """Subplot ↔ overlay rebuild must capture xlim BEFORE teardown and
@@ -1667,7 +2015,8 @@ class TestTimeDomainCanvasPGVisualParityScreenshots:
         assert pix.save(out), f"failed to save {out!r}"
 
     def test_dual_cursor_screenshot_geometry_and_pill_containment(self, qapp):
-        from PyQt5.QtCore import QCoreApplication, QRect
+        from PyQt5.QtCore import QCoreApplication, QRect, Qt
+        from PyQt5.QtTest import QTest
 
         canvas = _pg_canvas(qapp)
         canvas.resize(1200, 800)
@@ -1675,10 +2024,15 @@ class TestTimeDomainCanvasPGVisualParityScreenshots:
         QCoreApplication.processEvents()
         canvas.set_cursor_visible(True)
         canvas.set_dual_cursor_mode(True)
-        canvas._ax = 0.25
-        canvas._bx = 0.75
-        canvas._emit_dual_cursor_html()
+        viewport = canvas._glw.viewport()
+        point_a = _viewport_point_for_data(canvas, canvas.axes_list[0], 0.25)
+        point_b = _viewport_point_for_data(canvas, canvas.axes_list[0], 0.75)
+        QTest.mouseClick(viewport, Qt.LeftButton, Qt.NoModifier, point_a)
         QCoreApplication.processEvents()
+        QTest.mouseClick(viewport, Qt.LeftButton, Qt.NoModifier, point_b)
+        QCoreApplication.processEvents()
+        assert canvas._cursor_a_items and canvas._cursor_b_items
+        assert all(item.isVisible() for item in canvas._cursor_a_items + canvas._cursor_b_items)
 
         pix = canvas.grab_pixmap()
         assert pix is not None
@@ -1702,28 +2056,19 @@ class TestTimeDomainCanvasPGVisualParityScreenshots:
 
 
 class TestTimeDomainCanvasPGSetDataHotPathContract:
-    """Lock the module contract documented at the top of
-    ``mf4_analyzer/ui/pg_canvases.py``: ``PlotDataItem.setData`` is the
-    fallback/bind-only path; production pan/refresh goes through the
-    QPainterPath+QPixmap cache. The codex W2 review flagged a regression
-    where ``_refresh_visible_data`` was calling ``pdi.setData`` on every
-    range change, which silently inflated per-frame work.
+    """Lock the repaired visible-rendering contract: the viewport envelope
+    computed during pan/zoom must reach the real ``PlotDataItem``.
 
-    Per the codex-phantom-api-surface-guards lesson the spy uses
-    ``patch.object`` on the actual PlotDataItem instance — we do NOT
-    mock pyqtgraph itself or fabricate a fake setData surface.
+    The previous cache-only contract made `_curve_path_cache` grow while
+    leaving the on-screen curve stuck on its full-range bind envelope. These
+    tests intentionally prove that range changes now update the visible item.
     """
 
-    def test_pdi_setdata_called_at_most_once_during_bind_then_zero_on_pan(
+    def test_pdi_setdata_called_once_per_distinct_pan_window(
         self, qapp,
     ):
-        """Bind ONCE, pan FIVE times: setData must be called at most
-        once (during the initial bind in ``_bind_channel``) and zero
-        times during the five subsequent ``set_xlim`` iterations.
-
-        This is the W2 rework regression: prior to the fix at
-        ``pg_canvases.py:866-875`` (now removed), each pan iteration
-        invoked ``pdi.setData(env_t, env_s)`` after the cache populate.
+        """Bind once, pan five times: each distinct visible window must update
+        the real PlotDataItem with that window's envelope.
         """
         from PyQt5.QtCore import QCoreApplication
         from unittest.mock import patch
@@ -1750,8 +2095,8 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
 
         # Spy on the instance method via patch.object so the call count
         # observes the real bound call. We use side_effect=None to make
-        # the call a no-op — we are testing the contract that the hot
-        # path does NOT touch this method, not the result of the call.
+        # the call a no-op here; the adjacent visible-data test checks the
+        # actual data mutation.
         with patch.object(pdi, "setData") as spy:
             # Five panning iterations (different windows each time).
             windows = [
@@ -1767,23 +2112,15 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
                 QCoreApplication.processEvents()
             n_calls = spy.call_count
 
-        # ZERO is the contract: pan must not touch PlotDataItem.setData.
-        # (The bind already happened before the spy was installed.)
-        assert n_calls == 0, (
+        assert n_calls == len(windows), (
             f"PlotDataItem.setData was called {n_calls} time(s) during "
-            f"5 pan iterations; the module contract at the top of "
-            f"pg_canvases.py says setData is bind-only and the pan/refresh "
-            f"path is QPainterPath+QPixmap (cache-populated). This is the "
-            f"W2 NEEDS-REWORK item from "
-            f"docs/analyzer/reviews/2026-05-28-pyqtgraph-wave2.md:21."
+            f"{len(windows)} distinct pan iterations; every viewport envelope "
+            f"must reach the visible curve."
         )
 
-    def test_pdi_setdata_called_exactly_once_during_initial_bind(self, qapp):
-        """Companion to the pan-path assertion: setData MAY be called
-        once during the initial bind (the documented fallback path).
-        Asserting "exactly once on bind" instead of "zero on bind" makes
-        the contract concrete: bind is the bind-only path, and a future
-        regression that adds a second bind-time call is also wrong.
+    def test_pdi_setdata_bind_then_one_visible_refresh_call(self, qapp):
+        """Bind calls remain small, and one additional range-refresh call is
+        expected when the user changes xlim.
         """
         from PyQt5.QtCore import QCoreApplication
         from unittest.mock import patch
@@ -1814,8 +2151,8 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
             QCoreApplication.processEvents()
             bind_calls = call_count["n"]
 
-            # Now drive the pan path with the spy STILL active. Any
-            # call here means the hot path is still touching setData.
+            # Now drive the pan path with the spy STILL active. The repaired
+            # contract expects one additional visible-data update.
             canvas.set_xlim(0.2, 0.5)
             canvas._flush_pending_refresh()
             QCoreApplication.processEvents()
@@ -1823,78 +2160,135 @@ class TestTimeDomainCanvasPGSetDataHotPathContract:
 
         # bind_calls must be small (at most a couple — pyqtgraph may
         # internally call setData once in the constructor and once for
-        # the supplied data). The pan path must NOT add to it.
-        assert after_pan_calls == bind_calls, (
-            f"PlotDataItem.setData was invoked {after_pan_calls - bind_calls} "
-            f"additional time(s) during pan after {bind_calls} bind-time "
-            f"call(s); pan path must not mutate PlotDataItem (W2 review)."
+        # the supplied data). The first pan refresh must add exactly one
+        # visible update.
+        assert after_pan_calls == bind_calls + 1, (
+            f"PlotDataItem.setData added {after_pan_calls - bind_calls} "
+            f"call(s) during one pan after {bind_calls} bind-time call(s); "
+            "expected exactly one visible envelope update."
         )
 
 
-class TestTimeDomainCanvasPGInsideLabelThresholdParametrized:
-    """Cover the inside-vs-outside subplot label decision across the
-    critical threshold (320 px) and a larger-than-standard width (1600
-    px). Codex W2 review noted that the original tests covered only
-    220 px and 1200 px, leaving the boundary behavior unproven.
-
-    Per branch-reached-is-not-behavior-correct: each parametrize case
-    is a real state-change assertion (the decision flips at the
-    threshold), not merely "branch executed".
+class TestTimeDomainCanvasPGVisualStyleDefaults:
+    """Default visual contracts that keep the pyqtgraph canvas aligned with
+    the original matplotlib TimeDomainCanvas.
     """
 
-    @pytest.mark.parametrize(
-        "width_px,expected_inside",
-        [
-            (319, True),    # just below the 320 cutoff → inside
-            (320, False),   # AT the cutoff: `widget_w < 320` is False → outside
-            (321, True),    # just below in the original test... wait, 321 > 320 → outside
-            (1600, False),  # well wide → outside
-        ],
-        ids=["px-319-inside", "px-320-outside", "px-321-outside", "px-1600-outside"],
-    )
-    def test_inside_label_threshold_near_boundary_and_large(
-        self, qapp, width_px, expected_inside,
-    ):
-        """Parametrized over canvas widths spanning the threshold and
-        a large width. The implementation rule is ``widget_w < 320``;
-        we test the contract a future change cannot drift without an
-        explicit test update."""
+    def test_plot_channels_enables_grid_by_default(self, qapp, monkeypatch):
+        import pyqtgraph as pg
+
+        calls = []
+        original = pg.PlotItem.showGrid
+
+        def _spy(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(pg.PlotItem, "showGrid", _spy)
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:2], mode="subplot")
+
+        assert calls, "plot construction must enable the default time-grid"
+        assert any(
+            kwargs.get("x") is True and kwargs.get("y") is True
+            for _args, kwargs in calls
+        )
+
+    def test_subplot_only_bottom_axis_shows_x_tick_values(self, qapp):
         from PyQt5.QtCore import QCoreApplication
 
-        # Fix the parametrize IDs above: 321 > 320 so widget_w < 320 is
-        # FALSE → outside (expected_inside should be False).
-        # The 319 case (True) and 320 case (False) lock the boundary;
-        # the 321 case is a regression guard against an off-by-one
-        # flip of the comparator (<= vs <); 1600 covers a large width.
-        if width_px == 321:
-            expected_inside = False
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:4], mode="subplot")
+        QCoreApplication.processEvents()
+
+        for handle in canvas.axes_list[:-1]:
+            bottom = handle.plot_item.getAxis("bottom")
+            assert bottom.style.get("showValues") is False
+            assert getattr(bottom, "labelText", "") == ""
+        last_bottom = canvas.axes_list[-1].plot_item.getAxis("bottom")
+        assert last_bottom.style.get("showValues") is not False
+        assert "Time" in getattr(last_bottom, "labelText", "")
+
+    def test_line_width_and_left_axis_use_channel_color(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
-        canvas.resize(width_px, 800)
+        color = "#1769e0"
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         QCoreApplication.processEvents()
-        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        handle, line = canvas._channel_lines["speed"]
+        pdi = line.plot_data_item
+        pen = pdi.opts.get("pen")
+        assert pen.widthF() >= 1.6
+
+        left = handle.plot_item.getAxis("left")
+        assert left.pen().color().name().lower() == color
+        assert left.textPen().color().name().lower() == color
+
+    def test_initial_bind_uses_viewport_width_not_max_points(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QCoreApplication
+        import mf4_analyzer.ui.pg_canvases as pg_canvases
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 800)
+        canvas.show()
         QCoreApplication.processEvents()
 
-        # The decision is driven by self._glw.viewport().width(); resize
-        # alone does not always propagate down to the inner viewport in
-        # offscreen Qt. Pump events and (defensively) call the canvas's
-        # own helper.
+        calls = []
+        original = pg_canvases.build_envelope
+
+        def _spy(*args, **kwargs):
+            calls.append(kwargs.get("pixel_width"))
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(pg_canvases, "build_envelope", _spy)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+
+        assert calls
+        assert calls[0] < canvas.MAX_PTS
+        assert calls[0] <= 1200
+
+    def test_set_tick_density_updates_pg_axis_items(self, qapp, monkeypatch):
+        import pyqtgraph as pg
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        calls = []
+        original = pg.AxisItem.setTickDensity
+
+        def _spy(axis, *args, **kwargs):
+            calls.append((axis, args, kwargs))
+            return original(axis, *args, **kwargs)
+
+        monkeypatch.setattr(pg.AxisItem, "setTickDensity", _spy)
+        canvas.set_tick_density(12, 7)
+
+        assert len(calls) >= len(canvas.axes_list) * 2
+        assert canvas._tick_density == (12, 7)
+
+    def test_set_tick_density_keeps_pg_ticks_adaptive(self, qapp):
+        """Tick density must not install fixed major/minor spacing.
+
+        Fixed ``setTickSpacing(major, minor)`` made pyqtgraph label the minor
+        level too, producing dense tick-label piles and slow repaint after
+        channel rebuilds. ``setTickDensity`` keeps AxisItem's adaptive spacing.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 800)
+        canvas.show()
         QCoreApplication.processEvents()
 
-        # The pyqtgraph viewport tracks the GraphicsLayoutWidget's
-        # viewport size; for offscreen we mirror what the matplotlib
-        # rule reads at the same point. The current rule reads the
-        # GLW viewport width, NOT canvas.width(), so we sanity-check
-        # the inner viewport size before asserting the decision so a
-        # parametrized failure points at the right surface.
-        decision = canvas._subplot_ylabels_need_inside_labels()
-        assert decision is expected_inside, (
-            f"width={width_px}px: expected inside_labels={expected_inside}, "
-            f"got {decision!r}. The threshold rule at "
-            f"pg_canvases.py:_subplot_ylabels_need_inside_labels is "
-            f"`widget_w < 320`; viewport width = "
-            f"{canvas._glw.viewport().width()}"
-        )
+        canvas.plot_channels(_five_channel_rows()[:5], mode="subplot")
+        canvas.set_tick_density(10, 6)
+        QCoreApplication.processEvents()
+
+        for handle in canvas.axes_list:
+            for axis in (handle.x_axis_item(), handle.y_axis_item()):
+                assert axis is not None
+                assert getattr(axis, "_tickSpacing", None) is None
+                assert axis.style.get("maxTickLevel") == 0
 
 
 def _path_elements(path):
@@ -2029,3 +2423,33 @@ class TestBuildPainterPathParity:
         ys = np.array([e[2] for e in elems])
         assert np.allclose(xs, t, rtol=0, atol=1e-9)
         assert np.allclose(ys, s, rtol=0, atol=1e-6)
+
+
+class TestPerfRegressionFix:
+    """2026-05-29 perf-regression fixes: restore the smooth (~14x) pan that
+    existed at commit 55d8a93e while keeping grid + inside labels.
+
+    See docs/superpowers/plans/2026-05-29-pyqtgraph-timedomain-perf-regression-fix.md
+    """
+
+    def test_curves_are_not_antialiased_for_pan_perf(self, qapp):
+        """Regression: the smooth (~14x) HEAD never anti-aliased curves.
+        Re-enabling it was the #1 cause of the post-UI-alignment lag."""
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        t = np.linspace(0.0, 10.0, 5000)
+        rows = [
+            (f"ch{i}", True, t, np.sin(t) + i, "#d62728", "u", "fid")
+            for i in range(3)
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+
+        assert canvas._channel_lines  # sanity: curves were built
+        for _name, (_axis, line) in canvas._channel_lines.items():
+            pdi = line.plot_data_item
+            # opts['antialias'] must be falsy on every curve.
+            assert not pdi.opts.get("antialias", False), (
+                f"{_name} curve is anti-aliased; this regresses pan perf"
+            )
+        canvas.deleteLater()

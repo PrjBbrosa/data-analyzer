@@ -13,15 +13,14 @@ Architecture
 The canvas is a ``QWidget`` (not a direct ``pg.GraphicsLayoutWidget``
 subclass) so it can carry pyqtSignals AND expose ``grab_pixmap()`` /
 ``grab()`` without battling Qt's metaclass rules. Internally it owns a
-single ``pg.GraphicsLayoutWidget`` and one ``pg.PlotItem`` per axis. The
-production performance path follows the design §5.2 cache pipeline:
+single ``pg.GraphicsLayoutWidget`` and one ``pg.PlotItem`` per subplot. The
+production performance path follows the current visible-render pipeline:
 
-    set_xlim → positions_envelope → QPainterPath → cached pixmap → blit
+    set_xlim → positions_envelope → visible PlotDataItem.setData
 
-Plain ``PlotDataItem.setData`` is the **fallback path only** (no cache
-key available, e.g. on initial bind). The pan/refresh hot path goes
-through the QPainterPath cache so we hit the same strategy asammdf uses
-in ``.venv/lib/python3.12/site-packages/asammdf/gui/widgets/plot.py``.
+The older custom ``QPainterPath``/``QPixmap`` helpers remain only for
+standalone geometry parity tests. They are not run from the pan refresh
+hot path because no visible painter consumes their output.
 
 Lessons honored
 ---------------
@@ -72,6 +71,7 @@ from mf4_analyzer.ui.canvases import (
     _format_dual_html,
     _interp_cursor_value,
     _is_monotonic_array,
+    _compact_axis_label,
     _split_prefixed_label,
     build_envelope,
 )
@@ -197,6 +197,8 @@ class TimeDomainCanvasPG(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._glw)
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setMouseTracking(True)
+        self._glw.setMouseTracking(True)
 
         # --- public state (design §5.5 compat seams) --------------------
         # axes_list is a list of PgAxisHandle (one per visible channel
@@ -287,6 +289,7 @@ class TimeDomainCanvasPG(QWidget):
         try:
             viewport = self._glw.viewport()
             if viewport is not None:
+                viewport.setMouseTracking(True)
                 viewport.installEventFilter(self)
         except Exception:
             pass
@@ -300,25 +303,40 @@ class TimeDomainCanvasPG(QWidget):
         # state mirrors matplotlib's "no selection" line: lw=1.05,
         # alpha=None (treated as 1.0). De-emphasised state is
         # (1.0, 0.42); selected is (1.8, 1.0).
-        self._overlay_default_lw = 1.05
+        self._overlay_default_lw = 1.7
         self._overlay_default_alpha = 1.0
-        self._overlay_selected_lw = 1.8
+        self._overlay_selected_lw = 2.6
         self._overlay_selected_alpha = 1.0
-        self._overlay_de_emphasised_lw = 1.0
+        self._overlay_de_emphasised_lw = 1.35
         self._overlay_de_emphasised_alpha = 0.42
 
         # Selected-channel Y-drag bookkeeping: (start_y_px, (lo, hi)).
         # _begin_overlay_y_drag_at captures, _apply_overlay_y_drag_at
         # consumes. ChartStack/MainWindow wire mouse events to these.
         self._overlay_y_drag_start = None
+        self._overlay_aux_viewboxes = []
+        self._overlay_aux_axes = []
+        self._overlay_view_sync_conns = []
 
         # T6 requirement 1: subplot inside-label bookkeeping. Mirrors
         # canvases.py:_apply_inside_channel_labels — when bbox overlap
         # would clip outer ylabels, flip them to an inside-axes TextItem.
         self._inside_label_items = []
+        self._inside_label_handles = []
+        self._inside_label_conns = []
         # Cache the last subplot label specs so a resize-driven recheck
         # can re-place labels without re-walking the plot.
         self._subplot_label_specs = []
+
+        # Inspector tick-density defaults mirror PersistentTop defaults.
+        self._tick_density = (10, 6)
+
+        # Cursor line scene items. In single mode _cursor_line_items is the
+        # live hover line on each subplot. In dual mode _cursor_a_items and
+        # _cursor_b_items hold the placed A/B cursors.
+        self._cursor_line_items = []
+        self._cursor_a_items = []
+        self._cursor_b_items = []
 
     # ------------------------------------------------------------------
     # Public surface (signal/method names frozen by W0 contract tests).
@@ -364,6 +382,7 @@ class TimeDomainCanvasPG(QWidget):
                     handle, name, t, sig, color, unit, data_id,
                     xlabel=xlabel if i == len(vis) - 1 else None,
                 )
+                self._configure_subplot_bottom_axis(handle, is_bottom=(i == len(vis) - 1))
             # NOTE: we intentionally do NOT call ``setXLink`` here.
             # Pyqtgraph's linked-view propagation uses screen-geometry
             # interpolation (ViewBox.linkedViewChanged) which produces a
@@ -381,12 +400,16 @@ class TimeDomainCanvasPG(QWidget):
             # Apply once now; resize re-checks via resizeEvent.
             self._recheck_subplot_label_placement()
         elif overlay_mode:
-            # Overlay: one PlotItem, one ViewBox, multiple PlotDataItems.
+            # Overlay: one PlotItem, multiple linked Y ViewBoxes/axes.
+            # Mirrors the original matplotlib twinx stack: every visible
+            # channel owns an independent Y axis while all share X.
             pi = self._add_plot_item(row=0, col=0)
-            handle = PgAxisHandle(plot_item=pi)
-            self.axes_list.append(handle)
-            for (name, t, sig, color, unit, data_id) in vis:
-                # In overlay mode every channel shares the same axis_facade.
+            primary_handle = PgAxisHandle(plot_item=pi)
+            self.axes_list.append(primary_handle)
+            self._bind_channel(primary_handle, *vis[0], xlabel=xlabel)
+            for idx, (name, t, sig, color, unit, data_id) in enumerate(vis[1:], start=1):
+                handle = self._add_overlay_axis_handle(pi, idx)
+                self.axes_list.append(handle)
                 self._bind_channel(handle, name, t, sig, color, unit, data_id, xlabel=xlabel)
             # Apply default emphasis state (no selection).
             self._apply_overlay_emphasis()
@@ -398,6 +421,9 @@ class TimeDomainCanvasPG(QWidget):
             name, t, sig, color, unit, data_id = vis[0]
             self._bind_channel(handle, name, t, sig, color, unit, data_id, xlabel=xlabel)
 
+        for handle in self.axes_list:
+            self._attach_axis_handle_callbacks(handle)
+
         # Primary axis is the first one in the list. Subplot mode: we
         # listen on EVERY axis ViewBox (origin-aware propagation; see
         # _on_xrange_changed). Overlay/single: only one axis.
@@ -405,8 +431,13 @@ class TimeDomainCanvasPG(QWidget):
             self._primary_xaxis_ax = self.axes_list[0]
             for handle in self.axes_list:
                 self._connect_xrange_listener(handle)
+            self._set_xrange_to_data_union()
+            if self._overlay_mode:
+                self._sync_overlay_aux_viewboxes()
+                self._connect_overlay_view_sync()
 
         self._refresh = True
+        self._apply_tick_density_to_all_axes()
 
     def _add_plot_item(self, *, row, col):
         """Add a PlotItem hosted by our ``_ModifierWheelViewBox``.
@@ -418,7 +449,50 @@ class TimeDomainCanvasPG(QWidget):
         """
         vb = _ModifierWheelViewBox(owner_canvas=self)
         pi = self._glw.addPlot(row=row, col=col, viewBox=vb)
+        try:
+            pi.showGrid(x=True, y=True, alpha=0.28)
+        except Exception:
+            pass
         return pi
+
+    def _add_overlay_axis_handle(self, primary_plot, index):
+        """Create one auxiliary right-side Y axis/ViewBox for overlay mode.
+
+        Follows pyqtgraph's MultiplePlotAxes example: channel 2 reuses the
+        built-in right axis; channel 3+ append extra right axes to the
+        PlotItem layout. All auxiliary ViewBoxes share the primary plot's
+        scene geometry and X range.
+        """
+        primary_vb = primary_plot.getViewBox()
+        aux_vb = _ModifierWheelViewBox(owner_canvas=self)
+        if index == 1:
+            try:
+                primary_plot.showAxis("right")
+            except Exception:
+                pass
+            axis_item = primary_plot.getAxis("right")
+        else:
+            axis_item = pg.AxisItem("right")
+            try:
+                primary_plot.layout.addItem(axis_item, 2, 2 + index)
+            except Exception:
+                pass
+            try:
+                axis_item.setZValue(-10000)
+            except Exception:
+                pass
+        try:
+            primary_plot.scene().addItem(aux_vb)
+        except Exception:
+            pass
+        try:
+            axis_item.linkToView(aux_vb)
+        except Exception:
+            pass
+        self._overlay_aux_viewboxes.append(aux_vb)
+        self._overlay_aux_axes.append(axis_item)
+        handle = PgAxisHandle(plot_item=primary_plot, view_box=aux_vb, axis_item=axis_item)
+        return handle
 
     def plot_channels_preserving_xlim(self, ch_list, mode="overlay", xlabel="Time (s)"):
         """Rebuild the chart with ``ch_list``/``mode`` while preserving
@@ -469,10 +543,9 @@ class TimeDomainCanvasPG(QWidget):
     def _bind_channel(self, axis_handle, name, t, sig, color, unit, data_id, *, xlabel=None):
         """Attach one channel to ``axis_handle``.
 
-        Initial bind uses ``PlotItem.plot(...)`` to install a
-        ``PlotDataItem`` — this is the **only** path where we feed raw
-        arrays to pyqtgraph's PlotDataItem.setData. Subsequent pan/zoom
-        refreshes go through the QPainterPath cache (design §5.2).
+        Initial bind installs a ``PlotDataItem`` on either the PlotItem's
+        primary ViewBox or an overlay auxiliary ViewBox. Subsequent pan/
+        zoom refreshes feed the visible item with the current envelope.
         """
         pi = axis_handle.plot_item
         if pi is None:
@@ -489,10 +562,23 @@ class TimeDomainCanvasPG(QWidget):
             np.asarray(t),
             np.asarray(sig),
             xlim=None,
-            pixel_width=self.MAX_PTS,
+            pixel_width=self._initial_bind_pixel_width(axis_handle),
             is_monotonic=None,
         )
-        pdi = pi.plot(bind_t, bind_s, pen=pg.mkPen(color=color, width=1.0), name=name)
+        pen = pg.mkPen(color=color, width=self._overlay_default_lw)
+        primary_vb = pi.getViewBox() if hasattr(pi, "getViewBox") else None
+        target_vb = axis_handle.view_box
+        if target_vb is not None and target_vb is not primary_vb:
+            pdi = pg.PlotDataItem(bind_t, bind_s, pen=pen, name=name)
+            try:
+                target_vb.addItem(pdi)
+            except Exception:
+                pass
+            add_line_item = getattr(axis_handle, "add_line_item", None)
+            if callable(add_line_item):
+                add_line_item(pdi)
+        else:
+            pdi = pi.plot(bind_t, bind_s, pen=pen, name=name)
         # Store the raw arrays + parallel dicts; channel_data stays RAW
         # so get_statistics is unaffected by envelope output.
         t_arr = np.asarray(t)
@@ -507,13 +593,76 @@ class TimeDomainCanvasPG(QWidget):
         # Y-axis label uses the channel's color so the overlay/subplot
         # visual cue matches the matplotlib renderer.
         try:
-            label = f"{name}" + (f" ({unit})" if unit else "")
+            compact = _compact_axis_label(name, unit, max_chars=20)
+            label = f"{compact}" + (f" ({unit})" if unit else "")
             axis_handle.set_ylabel(label)
         except Exception:
             pass
+        self._apply_pg_axis_style(axis_handle, color)
         if xlabel is not None:
             try:
                 axis_handle.set_xlabel(xlabel)
+            except Exception:
+                pass
+
+    def _apply_pg_axis_style(self, axis_handle, color):
+        """Match the original TimeDomain y-axis color cue."""
+        try:
+            axis = axis_handle.y_axis_item()
+        except Exception:
+            axis = None
+        if axis is None:
+            return
+        try:
+            axis.setPen(pg.mkPen(color=color, width=2.0))
+        except Exception:
+            pass
+        try:
+            axis.setTextPen(pg.mkPen(color=color))
+        except Exception:
+            pass
+
+    def _initial_bind_pixel_width(self, axis_handle=None) -> int:
+        """Return a first-frame envelope width close to the visible plot width."""
+        widths = []
+        if axis_handle is not None:
+            vb = getattr(axis_handle, "view_box", None)
+            if vb is not None:
+                try:
+                    w = int(vb.sceneBoundingRect().width())
+                    if w > 1:
+                        widths.append(w)
+                except Exception:
+                    pass
+        try:
+            viewport = self._glw.viewport()
+            if viewport is not None:
+                w = int(viewport.width())
+                if w > 1:
+                    widths.append(w)
+        except Exception:
+            pass
+        if not widths:
+            return self.MAX_PTS
+        return max(1, min(self.MAX_PTS, max(widths)))
+
+    def _configure_subplot_bottom_axis(self, axis_handle, *, is_bottom):
+        pi = axis_handle.plot_item
+        if pi is None:
+            return
+        try:
+            bottom = pi.getAxis("bottom")
+        except Exception:
+            bottom = None
+        if bottom is None:
+            return
+        try:
+            bottom.setStyle(showValues=bool(is_bottom))
+        except Exception:
+            pass
+        if not is_bottom:
+            try:
+                bottom.setLabel(text="")
             except Exception:
                 pass
 
@@ -526,10 +675,60 @@ class TimeDomainCanvasPG(QWidget):
             return
         primary.set_xlim(float(lo), float(hi))
 
+    def reset_view_to_data_extents(self):
+        """Toolbar Home helper: autoscale Y per axis and share union raw X."""
+        for handle in self.axes_list:
+            vb = handle.view_box
+            if vb is None:
+                continue
+            try:
+                vb.autoRange()
+            except Exception:
+                pass
+        self._set_xrange_to_data_union()
+        self._refresh = True
+        self.draw_idle()
+
+    def _data_x_union(self):
+        bounds = []
+        for t, _sig, _color, _unit in self.channel_data.values():
+            try:
+                arr = np.asarray(t, dtype=float)
+                finite = arr[np.isfinite(arr)]
+            except Exception:
+                finite = np.asarray([])
+            if finite.size:
+                bounds.append((float(finite.min()), float(finite.max())))
+        if not bounds:
+            return None
+        return (min(lo for lo, _hi in bounds), max(hi for _lo, hi in bounds))
+
+    def _set_xrange_to_data_union(self):
+        x_union = self._data_x_union()
+        if x_union is None:
+            return
+        lo, hi = x_union
+        for handle in self.axes_list:
+            vb = handle.view_box
+            try:
+                if vb is not None:
+                    vb.blockSignals(True)
+                handle.set_xlim(lo, hi)
+            except Exception:
+                pass
+            finally:
+                try:
+                    if vb is not None:
+                        vb.blockSignals(False)
+                except Exception:
+                    pass
+
     def clear(self):
         """Tear down the chart. Mirrors TimeDomainCanvas.clear."""
         # Drop xrange listener before we wipe the axes it points at.
         self._disconnect_xrange_listener()
+        self._disconnect_overlay_view_sync()
+        self._disconnect_inside_label_listeners()
         if self._refresh_timer.isActive():
             self._refresh_timer.stop()
         self._refresh_pending = False
@@ -546,6 +745,8 @@ class TimeDomainCanvasPG(QWidget):
         self._channel_data_id = {}
         self._channel_is_monotonic = {}
         self._primary_xaxis_ax = None
+        self._curve_path_cache.clear()
+        self._last_range_key.clear()
         self._overlay_mode = False
         self._refresh = True
         # T6 — drop overlay selection + subplot label scaffolding so the
@@ -555,8 +756,14 @@ class TimeDomainCanvasPG(QWidget):
         # references.
         self._selected_overlay_channel = None
         self._overlay_y_drag_start = None
+        self._overlay_aux_viewboxes = []
+        self._overlay_aux_axes = []
         self._inside_label_items = []
+        self._inside_label_handles = []
         self._subplot_label_specs = []
+        self._cursor_line_items = []
+        self._cursor_a_items = []
+        self._cursor_b_items = []
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
         # do that. Mirror TimeDomainCanvas.clear's behavior.
 
@@ -576,9 +783,11 @@ class TimeDomainCanvasPG(QWidget):
     def set_cursor_visible(self, v):
         """Toggle single-cursor visibility."""
         self._cursor_visible = bool(v)
-        # Cursor overlay drawing is a Task 6 concern — here we just store
-        # the state so the contract test passes. T6 will paint the
-        # vertical-line overlay AFTER the cached pixmap blit.
+        if not self._cursor_visible:
+            self._hide_cursor_items(self._cursor_line_items)
+            self._hide_cursor_items(self._cursor_a_items)
+            self._hide_cursor_items(self._cursor_b_items)
+            self.draw_idle()
 
     def set_dual_cursor_mode(self, en):
         """Toggle dual-cursor mode."""
@@ -588,6 +797,10 @@ class TimeDomainCanvasPG(QWidget):
             self._bx = None
             self._placing = "A"
             self._refresh = True
+            self._hide_cursor_items(self._cursor_a_items)
+            self._hide_cursor_items(self._cursor_b_items)
+            self.dual_cursor_info.emit("")
+            self.draw_idle()
 
     def reset_cursor_state(self):
         """Drop dual-cursor placement and request a redraw.
@@ -600,6 +813,10 @@ class TimeDomainCanvasPG(QWidget):
         self._bx = None
         self._placing = "A"
         self._refresh = True
+        self._hide_cursor_items(self._cursor_line_items)
+        self._hide_cursor_items(self._cursor_a_items)
+        self._hide_cursor_items(self._cursor_b_items)
+        self.dual_cursor_info.emit("")
         self.draw_idle()
 
     def draw_idle(self):
@@ -628,6 +845,127 @@ class TimeDomainCanvasPG(QWidget):
         mutator).
         """
         self.draw_idle()
+
+    # ------------------------------------------------------------------
+    # Cursor item helpers.
+    # ------------------------------------------------------------------
+
+    def _hide_cursor_items(self, items):
+        for item in items or []:
+            try:
+                item.setVisible(False)
+            except Exception:
+                pass
+
+    def _ensure_cursor_items(self, attr_name, *, color, width=1.0, style=Qt.SolidLine):
+        items = getattr(self, attr_name, [])
+        if len(items) == len(self.axes_list):
+            return items
+        self._remove_cursor_items(items)
+        pen = pg.mkPen(color=color, width=width, style=style)
+        new_items = []
+        for handle in self.axes_list:
+            vb = handle.view_box
+            if vb is None:
+                continue
+            line = pg.InfiniteLine(pos=0.0, angle=90, movable=False, pen=pen)
+            line.setZValue(1000)
+            line.setVisible(False)
+            try:
+                vb.addItem(line, ignoreBounds=True)
+                new_items.append(line)
+            except Exception:
+                pass
+        setattr(self, attr_name, new_items)
+        return new_items
+
+    def _remove_cursor_items(self, items):
+        for item in items or []:
+            try:
+                parent = item.parentItem()
+                if parent is not None and hasattr(parent, "removeItem"):
+                    parent.removeItem(item)
+            except Exception:
+                pass
+
+    def _set_cursor_items_pos(self, items, x):
+        for item in items or []:
+            try:
+                item.setValue(float(x))
+                item.setVisible(True)
+            except Exception:
+                pass
+
+    def _cursor_data_x_from_viewport_pos(self, viewport_pos):
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        handle = self._axis_handle_at_scene_pos(scene_pos)
+        if handle is None or handle.view_box is None:
+            return None
+        try:
+            data_pos = handle.view_box.mapSceneToView(scene_pos)
+            x = float(data_pos.x())
+        except Exception:
+            return None
+        if not np.isfinite(x):
+            return None
+        return x
+
+    def _handle_cursor_mouse_move(self, event_or_pos):
+        if not self._cursor_visible:
+            return False
+        try:
+            if event_or_pos.buttons() & Qt.LeftButton:
+                return False
+            viewport_pos = event_or_pos.pos()
+        except Exception:
+            viewport_pos = event_or_pos
+        x = self._cursor_data_x_from_viewport_pos(viewport_pos)
+        if x is None:
+            return False
+        self._last_t = 0
+        if self._dual:
+            hover_items = self._ensure_cursor_items(
+                "_cursor_line_items", color="#64748b", width=1.0, style=Qt.DotLine
+            )
+            self._set_cursor_items_pos(hover_items, x)
+            self._emit_dual_cursor_html()
+        else:
+            items = self._ensure_cursor_items(
+                "_cursor_line_items", color="#111827", width=1.0
+            )
+            self._set_cursor_items_pos(items, x)
+            self._emit_single_cursor_html(x)
+        self.draw_idle()
+        return True
+
+    def _handle_cursor_mouse_press(self, event):
+        if not (self._cursor_visible and self._dual):
+            return False
+        try:
+            if event.button() != Qt.LeftButton:
+                return False
+        except Exception:
+            return False
+        x = self._cursor_data_x_from_viewport_pos(event.pos())
+        if x is None:
+            return False
+        if self._placing == "A":
+            self._ax = x
+            self._placing = "B"
+            a_items = self._ensure_cursor_items(
+                "_cursor_a_items", color="#2563eb", width=1.1
+            )
+            self._set_cursor_items_pos(a_items, x)
+        else:
+            self._bx = x
+            self._placing = "A"
+            b_items = self._ensure_cursor_items(
+                "_cursor_b_items", color="#dc2626", width=1.1
+            )
+            self._set_cursor_items_pos(b_items, x)
+        self._emit_dual_cursor_html()
+        self.draw_idle()
+        return True
 
     def get_statistics(self, time_range=None):
         """Read RAW arrays from ``channel_data`` (design §4.2 invariant).
@@ -668,11 +1006,54 @@ class TimeDomainCanvasPG(QWidget):
         # Intentionally no widget installed. self.span_selector stays None.
 
     def set_tick_density(self, x, y):
-        """Compatibility seam; pyqtgraph's AxisItem handles tick density
-        automatically. Recorded as a no-op so MainWindow doesn't crash."""
-        # T6 will route this through AxisItem.setTickSpacing if we end up
-        # needing user-controlled density.
-        return None
+        """Apply inspector-controlled tick density to PG axes.
+
+        Use pyqtgraph's adaptive density knob instead of explicit
+        ``setTickSpacing``. Fixed major/minor spacing is range-stale after
+        auto-range and makes the minor level labelable, which can produce dense
+        tick-label piles and very slow repaint on channel rebuilds.
+        """
+        try:
+            x_n = max(3, int(x))
+            y_n = max(3, int(y))
+        except Exception:
+            x_n, y_n = self._tick_density
+        self._tick_density = (x_n, y_n)
+        self._apply_tick_density_to_all_axes()
+        self._refresh = True
+        self.draw_idle()
+
+    def _apply_tick_density_to_all_axes(self):
+        x_n, y_n = self._tick_density
+        x_density = max(0.35, min(3.0, float(x_n) / 10.0))
+        y_density = max(0.35, min(3.0, float(y_n) / 6.0))
+        for handle in self.axes_list:
+            x_axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
+            y_axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
+            self._apply_axis_tick_density(x_axis, x_density)
+            self._apply_axis_tick_density(y_axis, y_density)
+
+    def _apply_axis_tick_density(self, axis, density):
+        if axis is None:
+            return
+        set_style = getattr(axis, "setStyle", None)
+        if callable(set_style):
+            try:
+                set_style(maxTickLevel=0)
+            except Exception:
+                pass
+        reset_spacing = getattr(axis, "setTickSpacing", None)
+        if callable(reset_spacing):
+            try:
+                reset_spacing()
+            except Exception:
+                pass
+        set_density = getattr(axis, "setTickDensity", None)
+        if callable(set_density):
+            try:
+                set_density(float(density))
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Chart-options dialog (Fix 1: parity with the matplotlib path's
@@ -762,6 +1143,12 @@ class TimeDomainCanvasPG(QWidget):
                     self._handle_viewport_double_click(event.pos())
                     # Return False so the GraphicsView still processes the
                     # event for its own bookkeeping; we do not consume it.
+            elif event.type() == QEvent.MouseButtonPress:
+                if self._handle_cursor_mouse_press(event):
+                    return True
+            elif event.type() == QEvent.MouseMove:
+                if self._handle_cursor_mouse_move(event):
+                    return True
         except Exception:
             pass
         return super().eventFilter(obj, event)
@@ -810,6 +1197,60 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 continue
         return None
+
+    def _axis_handle_for_view_box(self, view_box):
+        if view_box is None:
+            return None
+        for handle in self.axes_list:
+            if handle.view_box is view_box:
+                return handle
+        return None
+
+    def _sync_overlay_aux_viewboxes(self):
+        if not self._overlay_aux_viewboxes or self._primary_xaxis_ax is None:
+            return
+        primary_vb = self._primary_xaxis_ax.view_box
+        if primary_vb is None:
+            return
+        try:
+            rect = primary_vb.sceneBoundingRect()
+        except Exception:
+            return
+        for aux_vb in list(self._overlay_aux_viewboxes):
+            try:
+                aux_vb.setGeometry(rect)
+            except Exception:
+                continue
+            try:
+                xlo, xhi = self._primary_xaxis_ax.get_xlim()
+                aux_vb.setXRange(float(xlo), float(xhi), padding=0)
+            except Exception:
+                pass
+
+    def _connect_overlay_view_sync(self):
+        self._disconnect_overlay_view_sync()
+        if self._primary_xaxis_ax is None or not self._overlay_aux_viewboxes:
+            return
+        primary_vb = self._primary_xaxis_ax.view_box
+        if primary_vb is None or not hasattr(primary_vb, "sigResized"):
+            return
+
+        def _handler(*_args):
+            self._sync_overlay_aux_viewboxes()
+
+        try:
+            primary_vb.sigResized.connect(_handler)
+            self._overlay_view_sync_conns.append((primary_vb, _handler))
+        except Exception:
+            pass
+
+    def _disconnect_overlay_view_sync(self):
+        for vb, handler in self._overlay_view_sync_conns:
+            try:
+                vb.sigResized.disconnect(handler)
+            except Exception:
+                pass
+        self._overlay_view_sync_conns = []
 
     def invalidate_envelope_cache(self, reason: str, *, data_id=None, channel=None):
         """Drop curve-layer cache entries.
@@ -1011,11 +1452,7 @@ class TimeDomainCanvasPG(QWidget):
             return self.MAX_PTS
 
     def _refresh_visible_data(self):
-        """Recompute the envelope+cached path for every channel at the
-        current xlim. Calls ``positions_envelope`` on the hot path so the
-        cache-consumer audit (signal-processing/2026-04-25-cache-consumer-
-        must-be-grepped-not-just-surface) finds the wired call.
-        """
+        """Recompute and display the viewport envelope for every channel."""
         self._refresh_pending = False
         if not self._channel_lines or self._primary_xaxis_ax is None:
             return
@@ -1031,10 +1468,9 @@ class TimeDomainCanvasPG(QWidget):
                 continue
             t, sig, color, _unit = entry
 
-            # Range-key gate (pyqt-ui/2026-04-25-cache-invalidation-event-conditional):
-            # if the key didn't change since the last flush, skip the
-            # envelope+pixmap work entirely. This is what lets repeated
-            # _flush_pending_refresh() calls with the same xlim be a no-op.
+            # Range-key gate: if the key didn't change since the last flush,
+            # skip the envelope+setData work entirely. This keeps repeated
+            # _flush_pending_refresh() calls with the same xlim a no-op.
             range_key = _quantize_range_key(name, xlim, pixel_width)
             if self._last_range_key.get(name) == range_key:
                 continue
@@ -1054,30 +1490,12 @@ class TimeDomainCanvasPG(QWidget):
                 )
                 continue
 
-            # Build the QPainterPath in pixel space. We DO NOT use
-            # PlotDataItem.setData as the production pan path (design §5.2
-            # is explicit on this). The cached path + pixmap survive
-            # across frames; PlotDataItem.setData is the fallback for the
-            # initial bind only.
-            path = self._build_painter_path(env_t, env_s)
-            pixmap = self._render_path_to_pixmap(path, color, pixel_width)
-
-            # Insert into the LRU cache.
-            self._curve_path_cache[range_key] = ("painter_path", path, pixmap)
             self._last_range_key[name] = range_key
-            # Evict oldest if over capacity.
-            while len(self._curve_path_cache) > self._curve_path_cache_capacity:
-                self._curve_path_cache.popitem(last=False)
 
-            # NOTE: do NOT call ``pdi.setData(env_t, env_s)`` here.
-            # PlotDataItem.setData is the *bind-only* path (initial
-            # construction in ``_bind_channel``); the production
-            # pan/refresh hot path is QPainterPath+QPixmap as cached
-            # above. Mutating PlotDataItem on every range tick
-            # contradicts the module contract documented at the top of
-            # this file ("Plain PlotDataItem.setData is the fallback path
-            # only") and inflates per-frame work. The regression test
-            # ``test_pdi_setdata_not_called_during_pan`` locks this.
+            try:
+                line_facade.plot_data_item.setData(env_t, env_s)
+            except Exception as exc:
+                _log.warning("PlotDataItem.setData failed for %r: %s", name, exc)
 
         self._refresh = True
 
@@ -1377,19 +1795,17 @@ class TimeDomainCanvasPG(QWidget):
     def _selected_overlay_axes(self):
         """Return the axis facade associated with the selected channel.
 
-        In overlay mode every channel shares the primary axis, so we
-        return that one when the selection is live. The matplotlib path
-        used twinx siblings; the pyqtgraph path uses one ViewBox with
-        per-channel pens, so 'the selected channel's axis' really is the
-        single overlay axis.
+        Overlay mode now mirrors matplotlib twinx: every channel has its
+        own Y-axis handle, so a selected-channel Y drag only moves that
+        channel's ViewBox.
         """
         if self._selected_overlay_channel is None:
             return None
-        if self._primary_xaxis_ax is None:
+        pair = self._channel_lines.get(self._selected_overlay_channel)
+        if pair is None:
             return None
-        if self._selected_overlay_channel not in self._channel_lines:
-            return None
-        return self._primary_xaxis_ax
+        axis_handle, _line_handle = pair
+        return axis_handle
 
     # ------------------------------------------------------------------
     # T6 — Modifier-aware wheel dispatch.
@@ -1409,8 +1825,8 @@ class TimeDomainCanvasPG(QWidget):
         Returns ``True`` if consumed, ``False`` otherwise (caller falls
         back to default ViewBox behavior).
         """
-        primary = self._primary_xaxis_ax
-        if primary is None:
+        target = self._axis_handle_for_view_box(view_box) or self._primary_xaxis_ax
+        if target is None:
             return False
         # Matplotlib uses step = +/-1; here Qt uses delta in units of 120.
         step = 1 if delta > 0 else -1 if delta < 0 else 0
@@ -1424,21 +1840,21 @@ class TimeDomainCanvasPG(QWidget):
 
         try:
             if ctrl:
-                lo, hi = primary.get_xlim()
+                lo, hi = target.get_xlim()
                 c = float(x_pos) if np.isfinite(x_pos) else (lo + hi) / 2.0
                 new_lo = c - (c - lo) * factor
                 new_hi = c + (hi - c) * factor
-                primary.set_xlim(new_lo, new_hi)
+                target.set_xlim(new_lo, new_hi)
             elif shift:
-                lo, hi = primary.get_ylim()
+                lo, hi = target.get_ylim()
                 c = float(y_pos) if np.isfinite(y_pos) else (lo + hi) / 2.0
                 new_lo = c - (c - lo) * factor
                 new_hi = c + (hi - c) * factor
-                primary.set_ylim(new_lo, new_hi)
+                target.set_ylim(new_lo, new_hi)
             else:
-                lo, hi = primary.get_ylim()
+                lo, hi = target.get_ylim()
                 d = (hi - lo) * 0.1 * step
-                primary.set_ylim(lo + d, hi + d)
+                target.set_ylim(lo + d, hi + d)
         except Exception:
             return False
 
@@ -1560,36 +1976,74 @@ class TimeDomainCanvasPG(QWidget):
         fixed pixel/percent offset. Design §0 explicitly corrects the
         earlier draft that proposed a 5-10% offset.
 
-        Pyqtgraph implementation: we approximate ``label.get_window_extent``
-        with ``AxisItem.boundingRect()`` mapped through the scene
-        transform. When the rendered bounding rects of adjacent axes'
-        left axis items would overlap (within a tolerance based on
-        their item widths), we return True.
+        Pyqtgraph implementation: normal-width stacks with long or
+        file-prefixed channel names use inside labels because rotated
+        AxisItem labels are taller than the subplot row. Narrow stacks also
+        flip inside on the historical 320 px threshold.
         """
         if len(self.axes_list) <= 1:
             return False
+        if len(self.axes_list) >= 4:
+            return True
+        for _handle, name, _color in self._subplot_label_specs:
+            text = str(name)
+            if len(text) > 32 or (text.startswith("[") and "]" in text):
+                return True
         try:
             scene_widget = self._glw.viewport()
             widget_w = max(int(scene_widget.width()), 1)
         except Exception:
             widget_w = 0
-        # Heuristic: when the host widget is narrower than 320 px AND
-        # we have >1 subplot row, the left AxisItem labels can no longer
-        # fit alongside their tick labels — flip inside.
-        #
-        # This heuristic is the pyqtgraph analogue of the matplotlib
-        # rule which uses ``label.get_window_extent`` overlap; under
-        # pyqtgraph 0.14 the AxisItem does NOT expose a public
-        # post-layout bbox the way matplotlib does, so we drive the
-        # decision from container width (the only thing that determines
-        # whether the labels CAN fit). The threshold 320 px is chosen
-        # empirically to match the matplotlib decision boundary for
-        # 5-channel 8 pt labels at 100 dpi.
         if widget_w == 0:
             return False
-        # 320 px is the crossover empirically: wider → labels fit
-        # outside; narrower → bbox overlap forces inside placement.
         return widget_w < 320
+
+    def _disconnect_inside_label_listeners(self):
+        for signal, handler in self._inside_label_conns:
+            try:
+                signal.disconnect(handler)
+            except Exception:
+                pass
+        self._inside_label_conns = []
+
+    def _position_inside_label_item(self, handle, item):
+        vb = handle.view_box
+        if vb is None:
+            return
+        try:
+            rect = vb.sceneBoundingRect()
+            item.setPos(rect.left() + 4.0, rect.top() + 4.0)
+        except Exception:
+            pass
+
+    def _position_inside_label_items(self):
+        for handle, item in zip(self._inside_label_handles, self._inside_label_items):
+            self._position_inside_label_item(handle, item)
+
+    def _attach_axis_handle_callbacks(self, handle):
+        add_callback = getattr(handle, "add_title_changed_callback", None)
+        if callable(add_callback):
+            add_callback(self._on_axis_title_changed)
+
+    def _on_axis_title_changed(self, handle, title):
+        self._update_inside_label_visibility_for_handle(handle, title)
+
+    def _update_inside_label_visibility_for_handle(self, handle, title=None):
+        if title is None:
+            try:
+                title = handle.get_title()
+            except Exception:
+                title = ""
+        title_visible = bool(str(title).strip())
+        for label_handle, item in zip(self._inside_label_handles, self._inside_label_items):
+            if label_handle is not handle:
+                continue
+            try:
+                item.setVisible(not title_visible)
+                if not title_visible:
+                    self._position_inside_label_item(label_handle, item)
+            except Exception:
+                pass
 
     def _recheck_subplot_label_placement(self):
         """Place subplot Y labels either OUTSIDE (default AxisItem
@@ -1600,14 +2054,16 @@ class TimeDomainCanvasPG(QWidget):
         gate for this task.
         """
         # Drop any previously-installed inside-label items.
-        for item in self._inside_label_items:
+        self._disconnect_inside_label_listeners()
+        for handle, item in zip(self._inside_label_handles, self._inside_label_items):
             try:
-                vb = item.parentItem()
-                if vb is not None and hasattr(vb, "removeItem"):
-                    vb.removeItem(item)
+                scene = item.scene()
+                if scene is not None:
+                    scene.removeItem(item)
             except Exception:
                 pass
         self._inside_label_items = []
+        self._inside_label_handles = []
 
         need_inside = self._subplot_ylabels_need_inside_labels()
         for handle, name, color in self._subplot_label_specs:
@@ -1626,18 +2082,39 @@ class TimeDomainCanvasPG(QWidget):
                     text=f"● {label_text}",
                     color=pg.mkColor(color),
                     anchor=(0, 0),
+                    fill=pg.mkBrush(255, 255, 255, 220),
+                    border=pg.mkPen(color=color, width=0.8),
                 )
                 vb = handle.view_box
                 if vb is not None:
                     try:
-                        vb.addItem(text_item, ignoreBounds=True)
-                        # Anchor at top-left of view in data coordinates.
+                        scene = vb.scene()
+                        if scene is not None:
+                            scene.addItem(text_item)
+                        else:
+                            vb.addItem(text_item, ignoreBounds=True)
+                        text_item.setZValue(1000)
+                        title_text = ""
                         try:
-                            x_range, y_range = vb.viewRange()
-                            text_item.setPos(x_range[0], y_range[1])
+                            title_text = handle.get_title()
                         except Exception:
-                            pass
+                            title_text = ""
+                        text_item.setVisible(not bool(title_text))
+                        self._position_inside_label_item(handle, text_item)
                         self._inside_label_items.append(text_item)
+                        self._inside_label_handles.append(handle)
+                        if hasattr(vb, "sigRangeChanged"):
+                            def _handler(*_args, _handle=handle, _item=text_item):
+                                self._position_inside_label_item(_handle, _item)
+
+                            vb.sigRangeChanged.connect(_handler)
+                            self._inside_label_conns.append((vb.sigRangeChanged, _handler))
+                        if hasattr(vb, "sigResized"):
+                            def _resize_handler(*_args, _handle=handle, _item=text_item):
+                                self._position_inside_label_item(_handle, _item)
+
+                            vb.sigResized.connect(_resize_handler)
+                            self._inside_label_conns.append((vb.sigResized, _resize_handler))
                     except Exception:
                         pass
             else:
