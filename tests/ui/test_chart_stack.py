@@ -324,6 +324,120 @@ def test_pg_zoom_mode_reaches_overlay_x_master_viewbox(qapp, qtbot):
     assert master_vb.state["mouseMode"] == pg.ViewBox.PanMode
 
 
+def _flush_history_debounce(toolbar, qapp):
+    """Fire the toolbar's coalesce timer immediately so a simulated gesture
+    is committed to the history stack without waiting wall-clock ms."""
+    timer = getattr(toolbar, "_history_timer", None)
+    if timer is not None and timer.isActive():
+        timer.stop()
+        toolbar._commit_pending_view()
+    qapp.processEvents()
+
+
+def _simulate_pan(canvas, toolbar, qapp, lo, hi):
+    """Drive a user pan: set the primary range then emit the ViewBox's
+    manual-range signal (what a real drag emits) and flush the debounce."""
+    primary = canvas._primary_xaxis_ax
+    primary.set_xlim(lo, hi)
+    vb = primary.view_box
+    vb.sigRangeChangedManually.emit(vb.state["mouseEnabled"])
+    _flush_history_debounce(toolbar, qapp)
+
+
+def test_pg_toolbar_back_forward_tracks_pan_history(qapp, qtbot):
+    """Task 1: a completed pan/zoom gesture appends the resulting view; back()
+    steps to the previous view, forward() returns, and a new gesture after
+    back() truncates the forward history. matplotlib-toolbar parity."""
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode("time")
+
+    t = np.linspace(0.0, 10.0, 200)
+    cs.canvas_time.plot_channels([
+        ("speed", True, t, np.sin(t), "#1769e0", "rpm"),
+        ("torque", True, t, np.cos(t), "#ef4444", "Nm"),
+    ], mode="subplot")
+    qapp.processEvents()
+    toolbar = cs._time_card.toolbar
+    canvas = cs.canvas_time
+    primary = canvas._primary_xaxis_ax
+
+    baseline = primary.get_xlim()
+
+    # Gesture 1: pan to a sub-window.
+    _simulate_pan(canvas, toolbar, qapp, 2.0, 4.0)
+    assert primary.get_xlim() == pytest.approx((2.0, 4.0))
+
+    # Gesture 2: pan to another window.
+    _simulate_pan(canvas, toolbar, qapp, 6.0, 8.0)
+    assert primary.get_xlim() == pytest.approx((6.0, 8.0))
+
+    # back() → previous view (2,4); back() again → baseline.
+    toolbar.back()
+    qapp.processEvents()
+    assert primary.get_xlim() == pytest.approx((2.0, 4.0))
+    toolbar.back()
+    qapp.processEvents()
+    assert primary.get_xlim() == pytest.approx(baseline)
+
+    # forward() walks back to (2,4) then (6,8).
+    toolbar.forward()
+    qapp.processEvents()
+    assert primary.get_xlim() == pytest.approx((2.0, 4.0))
+    toolbar.forward()
+    qapp.processEvents()
+    assert primary.get_xlim() == pytest.approx((6.0, 8.0))
+
+    # back() once, then a NEW gesture must truncate the forward history.
+    toolbar.back()
+    qapp.processEvents()
+    assert primary.get_xlim() == pytest.approx((2.0, 4.0))
+    _simulate_pan(canvas, toolbar, qapp, 1.0, 3.0)
+    toolbar.forward()  # no-op: forward truncated by the new gesture
+    qapp.processEvents()
+    assert primary.get_xlim() == pytest.approx((1.0, 3.0))
+
+
+def test_pg_toolbar_back_survives_plot_channels_rebuild(qapp, qtbot):
+    """Task 1: history is keyed by channel name + range, not by a live axis
+    handle, so a back() target still restores after a plot_channels rebuild
+    swaps the underlying ViewBoxes for fresh objects."""
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode("time")
+
+    t = np.linspace(0.0, 10.0, 200)
+    rows = [
+        ("speed", True, t, np.sin(t), "#1769e0", "rpm"),
+        ("torque", True, t, np.cos(t), "#ef4444", "Nm"),
+    ]
+    cs.canvas_time.plot_channels(rows, mode="subplot")
+    qapp.processEvents()
+    toolbar = cs._time_card.toolbar
+    canvas = cs.canvas_time
+
+    baseline = canvas._primary_xaxis_ax.get_xlim()
+    _simulate_pan(canvas, toolbar, qapp, 3.0, 5.0)
+
+    # Rebuild — fresh ViewBoxes; the stale-handle snapshot would no-op here.
+    cs.canvas_time.plot_channels(rows, mode="subplot")
+    qapp.processEvents()
+    # The rebuilt primary handle is a NEW object.
+    new_primary = canvas._primary_xaxis_ax
+
+    toolbar.back()
+    qapp.processEvents()
+    assert new_primary.get_xlim() == pytest.approx(baseline), (
+        "back() after rebuild must restore the pre-pan range on the fresh handle"
+    )
+
+
 def test_pg_toolbar_home_keeps_subplot_x_ranges_identical_after_auto_range(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)

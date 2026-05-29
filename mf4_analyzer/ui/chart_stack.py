@@ -1,7 +1,5 @@
 """Center pane: QStackedWidget holding the three canvases + stats strip."""
-from collections import deque
-
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QAction, QFileDialog, QFrame, QLabel, QPushButton, QSizePolicy,
@@ -293,11 +291,30 @@ class PgNavigationToolbar(QToolBar):
         # to ''). We mirror with a plain string; tests do
         # `str(toolbar.mode).lower()` so a bare str works without surprises.
         self.mode = self._MODE_NONE
-        # Tiny view history. Each entry is a list of (axis_handle, xlim, ylim)
-        # snapshots. We keep at most 32 frames so memory doesn't grow on
-        # long pan sessions.
-        self._view_history: deque = deque(maxlen=32)
-        self._view_forward: deque = deque(maxlen=32)
+        # View history (matplotlib NavigationToolbar2 model): a single stack
+        # of view snapshots plus a pointer into it. ``back()`` decrements the
+        # pointer, ``forward()`` increments it, and a brand-new gesture
+        # truncates everything past the pointer before appending. Each entry
+        # is keyed by CHANNEL NAME (not the live axis handle) so a snapshot
+        # survives a plot_channels rebuild that swaps the ViewBox objects.
+        # Entry shape: {channel_name: (xlim, ylim)}.
+        self._view_stack: list = []
+        self._view_pointer: int = -1
+        self._view_stack_max = 32
+        # Guard set True while restoring (back/forward/home) so the range-
+        # change signal those restores fire does NOT re-push a history entry.
+        self._restoring = False
+        # Debounce so one continuous drag coalesces to a single history push.
+        # sigRangeChangedManually fires many times during a drag; we (re)start
+        # this timer on each and commit once it settles.
+        self._history_timer = QTimer(self)
+        self._history_timer.setSingleShot(True)
+        self._history_timer.setInterval(180)
+        self._history_timer.timeout.connect(self._commit_pending_view)
+        # Live (ViewBox, handler) connections to sigRangeChangedManually, so
+        # we can disconnect before re-binding to fresh ViewBoxes on rebuild
+        # (pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle).
+        self._range_conns: list = []
         # locLabel must exist because _ChartCard.__init__ does
         # `getattr(self.toolbar, 'locLabel', None)` and inserts it next to
         # the hint label. We populate it but don't wire mouse-move updates
@@ -395,25 +412,114 @@ class PgNavigationToolbar(QToolBar):
         self._set_all_mouse_modes(target)
 
     def _snapshot_view(self):
-        """Snapshot per-axis (xlim, ylim) so back/forward can restore."""
+        """Snapshot the current view keyed by CHANNEL NAME, not by the live
+        axis handle, so the entry survives a ``plot_channels`` rebuild that
+        swaps the ViewBox objects for fresh ones.
+
+        Returns ``{channel_name: (xlim, ylim)}``. On restore we resolve the
+        channel back to its (possibly rebuilt) axis handle via the canvas's
+        ``_channel_lines`` map.
+        """
         canvas = self._canvas
-        snap = []
-        for ax in getattr(canvas, 'axes_list', None) or []:
+        snap = {}
+        channel_lines = getattr(canvas, '_channel_lines', None) or {}
+        for name, pair in channel_lines.items():
             try:
-                snap.append((ax, ax.get_xlim(), ax.get_ylim()))
+                axis_handle = pair[0]
+            except Exception:
+                continue
+            if axis_handle is None:
+                continue
+            try:
+                snap[name] = (axis_handle.get_xlim(), axis_handle.get_ylim())
             except Exception:
                 continue
         return snap
 
     def _restore_view(self, snap):
+        """Apply a name-keyed snapshot, resolving each channel to its CURRENT
+        axis handle via ``_channel_lines`` (the handle may be a fresh object
+        after a rebuild). Wrapped in the ``_restoring`` guard by the caller so
+        the resulting range-change signals do not re-push history."""
         if not snap:
             return
-        for ax, xlim, ylim in snap:
+        canvas = self._canvas
+        channel_lines = getattr(canvas, '_channel_lines', None) or {}
+        for name, (xlim, ylim) in snap.items():
+            pair = channel_lines.get(name)
+            if not pair:
+                continue
+            axis_handle = pair[0]
+            if axis_handle is None:
+                continue
             try:
-                ax.set_xlim(*xlim)
-                ax.set_ylim(*ylim)
+                axis_handle.set_xlim(*xlim)
+                axis_handle.set_ylim(*ylim)
             except Exception:
                 continue
+
+    # ----- view history (matplotlib NavigationToolbar2 parity) -------------
+    def rebind_history_capture(self):
+        """Re-bind the manual-range capture hook to the live ViewBoxes.
+
+        ``plot_channels`` builds NEW ViewBoxes each rebuild; the old
+        ``sigRangeChangedManually`` connections point at destroyed objects.
+        Disconnect them first, then reconnect to the current view boxes
+        (cite pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle). Also
+        seeds a baseline history entry the first time a chart is built so
+        ``back()`` has a return target before any gesture.
+        """
+        self._disconnect_range_listeners()
+        for vb in self._view_boxes():
+            sig = getattr(vb, 'sigRangeChangedManually', None)
+            if sig is None:
+                continue
+            try:
+                sig.connect(self._on_manual_range_changed)
+                self._range_conns.append((vb, self._on_manual_range_changed))
+            except Exception:
+                continue
+        # Seed a baseline once, after the very first build, so back() works
+        # even before the user performs any gesture.
+        if not self._view_stack:
+            snap = self._snapshot_view()
+            if snap:
+                self._view_stack = [snap]
+                self._view_pointer = 0
+
+    def _disconnect_range_listeners(self):
+        for vb, handler in self._range_conns:
+            try:
+                vb.sigRangeChangedManually.disconnect(handler)
+            except Exception:
+                pass
+        self._range_conns = []
+
+    def _on_manual_range_changed(self, *_args):
+        """A user-driven range change (pan/zoom drag, wheel) fired. Restart
+        the debounce so a continuous gesture coalesces to one history push.
+        Ignored while restoring a history entry."""
+        if self._restoring:
+            return
+        self._history_timer.start()
+
+    def _commit_pending_view(self):
+        """Append the current view as a new history entry. A new gesture
+        truncates any forward history past the pointer (matplotlib model)."""
+        if self._restoring:
+            return
+        snap = self._snapshot_view()
+        if not snap:
+            return
+        # Truncate forward history, then append.
+        if self._view_pointer < len(self._view_stack) - 1:
+            del self._view_stack[self._view_pointer + 1:]
+        self._view_stack.append(snap)
+        # Cap memory: drop the oldest frame, shifting the pointer.
+        if len(self._view_stack) > self._view_stack_max:
+            overflow = len(self._view_stack) - self._view_stack_max
+            del self._view_stack[:overflow]
+        self._view_pointer = len(self._view_stack) - 1
 
     def _channel_data_x_union(self):
         canvas = self._canvas
@@ -444,46 +550,56 @@ class PgNavigationToolbar(QToolBar):
         not expose that helper, so the fallback keeps per-axis Y autoscale but
         pins every axis X range to the union of live raw channel time ranges.
         """
-        self._view_history.append(self._snapshot_view())
-        self._view_forward.clear()
         canvas = self._canvas
-        sync = getattr(canvas, "reset_view_to_data_extents", None)
-        if callable(sync):
-            sync()
-            return
-
-        x_union = self._channel_data_x_union()
-        for ax in getattr(canvas, 'axes_list', None) or []:
-            vb = getattr(ax, 'view_box', None)
-            if vb is None or not hasattr(vb, 'autoRange'):
-                continue
-            try:
-                vb.autoRange()
-            except Exception:
-                continue
-        if x_union is None:
-            return
-        for ax in getattr(canvas, 'axes_list', None) or []:
-            try:
-                ax.set_xlim(*x_union)
-            except Exception:
-                continue
+        # Home is a deliberate view change → record the resulting view as a
+        # new history entry (matplotlib pushes after the home reset). Guard
+        # the reset itself so the range signals it fires don't double-push.
+        self._restoring = True
+        try:
+            sync = getattr(canvas, "reset_view_to_data_extents", None)
+            if callable(sync):
+                sync()
+            else:
+                x_union = self._channel_data_x_union()
+                for ax in getattr(canvas, 'axes_list', None) or []:
+                    vb = getattr(ax, 'view_box', None)
+                    if vb is None or not hasattr(vb, 'autoRange'):
+                        continue
+                    try:
+                        vb.autoRange()
+                    except Exception:
+                        continue
+                if x_union is not None:
+                    for ax in getattr(canvas, 'axes_list', None) or []:
+                        try:
+                            ax.set_xlim(*x_union)
+                        except Exception:
+                            continue
+        finally:
+            self._restoring = False
+        self._commit_pending_view()
 
     def back(self, *_args):
-        if not self._view_history:
+        """Step to the previous view in the history stack."""
+        if self._view_pointer <= 0:
             return
-        # Push current state onto forward stack so a subsequent forward()
-        # returns there.
-        self._view_forward.append(self._snapshot_view())
-        snap = self._view_history.pop()
-        self._restore_view(snap)
+        self._view_pointer -= 1
+        self._restoring = True
+        try:
+            self._restore_view(self._view_stack[self._view_pointer])
+        finally:
+            self._restoring = False
 
     def forward(self, *_args):
-        if not self._view_forward:
+        """Step to the next view in the history stack."""
+        if self._view_pointer >= len(self._view_stack) - 1:
             return
-        self._view_history.append(self._snapshot_view())
-        snap = self._view_forward.pop()
-        self._restore_view(snap)
+        self._view_pointer += 1
+        self._restoring = True
+        try:
+            self._restore_view(self._view_stack[self._view_pointer])
+        finally:
+            self._restoring = False
 
     def pan(self, *_args):
         """Toggle pan mode. Idempotent within mode; mutually exclusive with
@@ -558,6 +674,11 @@ class _ChartCard(QWidget):
             register = getattr(canvas, 'register_replot_callback', None)
             if callable(register):
                 register(self.toolbar.apply_current_mouse_mode)
+                # Task 1: re-bind the view-history capture hook to the fresh
+                # ViewBoxes each rebuild creates, and seed a baseline view so
+                # back() has somewhere to return to. Registered AFTER the mode
+                # re-apply so the capture sees the fully-built axes_list.
+                register(self.toolbar.rebind_history_capture)
         else:
             self.toolbar = NavigationToolbar(canvas, self)
         self.toolbar.setObjectName("chartToolbar")
