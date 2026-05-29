@@ -744,18 +744,66 @@ class TimeDomainCanvasPG(QWidget):
         primary.set_xlim(float(lo), float(hi))
 
     def reset_view_to_data_extents(self):
-        """Toolbar Home helper: autoscale Y per axis and share union raw X."""
-        for handle in self.axes_list:
-            vb = handle.view_box
-            if vb is None:
-                continue
+        """Toolbar Home helper: restore global X (raw union) AND global Y
+        (per-channel raw full min/max) in one click.
+
+        Bug 4: the hot-path ``PlotDataItem`` holds ONLY the viewport-clipped
+        envelope (``_refresh_visible_data`` ships the xlim-clipped envelope),
+        so an ``autoRange()``-based Home computed Y from the clipped window
+        and left Y stuck at the previous zoom. We instead read Y from the
+        RAW ``channel_data`` arrays.
+
+        Ordering honors pyqt-ui/2026-04-25-flush-after-axis-mutation-not-
+        before: set the X union FIRST, flush the debounced refresh so the
+        envelope repopulates for the global window, THEN set Y from raw.
+        A try/finally tail flush covers every return path so no stale
+        debounce frame lands after Home.
+        """
+        try:
+            # (1) Set X to the raw union on every handle (seeds the X-master
+            # too in overlay mode).
+            self._set_xrange_to_data_union()
+            # (2) Drain the debounced refresh scheduled by the X mutation so
+            # the visible curve holds the global-window envelope.
             try:
-                vb.autoRange()
+                self._flush_pending_refresh()
             except Exception:
                 pass
-        self._set_xrange_to_data_union()
-        self._refresh = True
-        self.draw_idle()
+            # (3) Set Y per handle from the RAW channel data (full, finite),
+            # not from the clipped PlotDataItem. Each handle hosts exactly
+            # one channel (subplot/single: one per row; overlay: one per aux
+            # ViewBox), so map handle -> channel via _channel_lines.
+            for name, (handle, _line) in self._channel_lines.items():
+                row = self.channel_data.get(name)
+                if row is None:
+                    continue
+                try:
+                    sig = np.asarray(row[1], dtype=float)
+                    finite = sig[np.isfinite(sig)]
+                except Exception:
+                    continue
+                if finite.size == 0:
+                    continue
+                lo = float(finite.min())
+                hi = float(finite.max())
+                if not (np.isfinite(lo) and np.isfinite(hi)):
+                    continue
+                if hi <= lo:
+                    # Flat signal: give it a small symmetric pad so the line
+                    # is visible rather than a zero-height range.
+                    pad = abs(lo) * 0.05 or 1.0
+                    lo, hi = lo - pad, hi + pad
+                try:
+                    handle.set_ylim(lo, hi)
+                except Exception:
+                    pass
+            self._refresh = True
+            self.draw_idle()
+        finally:
+            try:
+                self._flush_pending_refresh()
+            except Exception:
+                pass
 
     def _data_x_union(self):
         bounds = []

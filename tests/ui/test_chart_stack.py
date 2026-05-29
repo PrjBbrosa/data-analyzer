@@ -270,6 +270,62 @@ def test_pg_toolbar_home_keeps_subplot_x_ranges_identical_after_auto_range(qapp,
     assert ranges[1] == pytest.approx(ranges[0])
 
 
+def test_pg_toolbar_home_restores_global_x_and_y_from_raw_data(qapp, qtbot):
+    """Bug 4: Home must restore BOTH X (raw union) and Y (raw full min/max
+    per channel) in one click. The hot-path PlotDataItem holds only the
+    viewport-clipped envelope, so an autoRange()-based home read Y from the
+    clipped window and left Y stuck near the previous zoom."""
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode("time")
+
+    t = np.linspace(0.0, 10.0, 4000)
+    rows = [
+        ("a", True, t, 100.0 * np.sin(t), "#1769e0", "u", "fid"),
+        ("b", True, t, 5.0 + 2.0 * np.cos(t), "#ef4444", "u", "fid"),
+    ]
+    cs.canvas_time.plot_channels(rows, mode="subplot")
+    qapp.processEvents()
+
+    # Zoom into a narrow X window and drive a real envelope refresh so each
+    # PlotDataItem holds ONLY the clipped envelope for [4.0, 4.5].
+    for h in cs.canvas_time.axes_list:
+        h.set_xlim(4.0, 4.5)
+    cs.canvas_time._flush_pending_refresh()
+    qapp.processEvents()
+    # Also pin a tiny Y window far from the data extents.
+    for h in cs.canvas_time.axes_list:
+        h.set_ylim(0.0, 0.01)
+    qapp.processEvents()
+
+    cs._time_card.toolbar.home()
+    qapp.processEvents()
+
+    # X must be the raw union for every axis.
+    for h in cs.canvas_time.axes_list:
+        xlo, xhi = h.get_xlim()
+        assert xlo <= 0.05, f"X low not restored to ~0.0; got {xlo}"
+        assert xhi >= 9.95, f"X high not restored to ~10.0; got {xhi}"
+
+    # Y must span each channel's RAW full min/max (pyqtgraph adds a little
+    # padding, so the restored range must CONTAIN the raw extents).
+    handle0 = cs.canvas_time.axes_list[0]
+    raw_a = cs.canvas_time.channel_data["a"][1]
+    ylo0, yhi0 = handle0.get_ylim()
+    assert ylo0 <= float(raw_a.min()) and yhi0 >= float(raw_a.max()), (
+        f"Home left channel 'a' Y at ({ylo0}, {yhi0}); raw extents are "
+        f"({raw_a.min()}, {raw_a.max()}) — Y was read from the clipped envelope"
+    )
+
+    handle1 = cs.canvas_time.axes_list[1]
+    raw_b = cs.canvas_time.channel_data["b"][1]
+    ylo1, yhi1 = handle1.get_ylim()
+    assert ylo1 <= float(raw_b.min()) and yhi1 >= float(raw_b.max())
+
+
 def test_chart_choice_checked_qss_uses_visible_blue_selection_tokens():
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
     match = re.search(
