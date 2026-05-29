@@ -310,13 +310,30 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_de_emphasised_lw = 1.35
         self._overlay_de_emphasised_alpha = 0.42
 
+        # Pixel pick radius for overlay nearest-curve hit-test. Mirrors
+        # canvases.py:_overlay_pick_radius_px = 12.0 (the matplotlib
+        # reference). Used by _select_overlay_channel_from_scene_pos.
+        self._overlay_pick_radius_px = 12.0
+
         # Selected-channel Y-drag bookkeeping: (start_y_px, (lo, hi)).
         # _begin_overlay_y_drag_at captures, _apply_overlay_y_drag_at
         # consumes. ChartStack/MainWindow wire mouse events to these.
         self._overlay_y_drag_start = None
+        # True for the duration of a live mouse-driven Y-drag so the
+        # eventFilter knows MouseMove is a drag (Problem 2). Cleared on
+        # release. While True the X-master ViewBox's mouse pan is disabled
+        # so the curve Y-drag does not fight the default ViewBox pan.
+        self._overlay_dragging = False
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
         self._overlay_view_sync_conns = []
+        # The X-master axis handle in overlay mode. Its ViewBox owns the
+        # shared X range, the default mouse-pan, and the scene geometry
+        # anchor; NO curves are attached to it (every channel — including
+        # the first/left one — lives on its own aux ViewBox). In
+        # subplot/single mode this stays None and _primary_xaxis_ax is
+        # axes_list[0] as before.
+        self._x_master_handle = None
 
         # T6 requirement 1: subplot inside-label bookkeeping. Mirrors
         # canvases.py:_apply_inside_channel_labels — when bbox overlap
@@ -399,14 +416,34 @@ class TimeDomainCanvasPG(QWidget):
             ]
             # Apply once now; resize re-checks via resizeEvent.
             self._recheck_subplot_label_placement()
+            # Each subplot's left AxisItem auto-sizes to its OWN tick-label
+            # text width, so rows with wider numeric labels push their
+            # plot-area left edge further right than narrower rows — the
+            # shared time grid then looks skewed between rows. Range is
+            # already exact via _propagate_xlim_to_siblings; here we only fix
+            # geometry by unifying every left axis to the widest one so all
+            # plot-area left edges land at the same screen x.
+            self._unify_subplot_left_axis_widths()
         elif overlay_mode:
-            # Overlay: one PlotItem, multiple linked Y ViewBoxes/axes.
-            # Mirrors the original matplotlib twinx stack: every visible
-            # channel owns an independent Y axis while all share X.
+            # Overlay: one PlotItem whose MAIN ViewBox is demoted to an
+            # X-master / mouse-capture-only surface (NO curves attached),
+            # plus one dedicated aux ViewBox + Y axis PER channel. This is
+            # the symmetric layout — the first/left channel is no longer
+            # special-cased onto the shared main ViewBox, so its Y drag no
+            # longer fights X-padding the way it did when it owned the
+            # geometry/X/mouse anchor simultaneously. Channel 1 binds the
+            # LEFT axis; channels 2..N bind successive right axes. Mirrors
+            # the original matplotlib twinx stack: every channel owns an
+            # independent Y axis while all share X.
             pi = self._add_plot_item(row=0, col=0)
-            primary_handle = PgAxisHandle(plot_item=pi)
-            self.axes_list.append(primary_handle)
-            self._bind_channel(primary_handle, *vis[0], xlabel=xlabel)
+            # X-master handle wraps the main ViewBox; never enters
+            # axes_list and never carries a curve.
+            self._x_master_handle = PgAxisHandle(plot_item=pi)
+            # Channel 1 → dedicated aux ViewBox bound to the LEFT axis.
+            first_handle = self._add_overlay_axis_handle(pi, 0)
+            self.axes_list.append(first_handle)
+            self._bind_channel(first_handle, *vis[0], xlabel=xlabel)
+            # Channels 2..N → dedicated aux ViewBoxes bound to right axes.
             for idx, (name, t, sig, color, unit, data_id) in enumerate(vis[1:], start=1):
                 handle = self._add_overlay_axis_handle(pi, idx)
                 self.axes_list.append(handle)
@@ -424,11 +461,19 @@ class TimeDomainCanvasPG(QWidget):
         for handle in self.axes_list:
             self._attach_axis_handle_callbacks(handle)
 
-        # Primary axis is the first one in the list. Subplot mode: we
-        # listen on EVERY axis ViewBox (origin-aware propagation; see
-        # _on_xrange_changed). Overlay/single: only one axis.
+        # Primary X-axis owner. Subplot/single mode: it is axes_list[0]
+        # and we listen on EVERY axis ViewBox (origin-aware propagation;
+        # see _on_xrange_changed). Overlay mode: it is the dedicated
+        # X-master ViewBox (which is NOT in axes_list because no channel
+        # curve lives on it); we listen on the X-master AND every aux
+        # channel ViewBox so a pan from any of them propagates the exact
+        # range to all the others.
         if self.axes_list:
-            self._primary_xaxis_ax = self.axes_list[0]
+            if self._overlay_mode and self._x_master_handle is not None:
+                self._primary_xaxis_ax = self._x_master_handle
+                self._connect_xrange_listener(self._x_master_handle)
+            else:
+                self._primary_xaxis_ax = self.axes_list[0]
             for handle in self.axes_list:
                 self._connect_xrange_listener(handle)
             self._set_xrange_to_data_union()
@@ -456,16 +501,31 @@ class TimeDomainCanvasPG(QWidget):
         return pi
 
     def _add_overlay_axis_handle(self, primary_plot, index):
-        """Create one auxiliary right-side Y axis/ViewBox for overlay mode.
+        """Create one dedicated Y axis/ViewBox for an overlay channel.
 
-        Follows pyqtgraph's MultiplePlotAxes example: channel 2 reuses the
-        built-in right axis; channel 3+ append extra right axes to the
-        PlotItem layout. All auxiliary ViewBoxes share the primary plot's
-        scene geometry and X range.
+        Symmetric layout (Problem 3): EVERY channel — including the
+        first — gets its own aux ViewBox so its Y drag never fights the
+        X-master's padding.
+
+        - ``index == 0`` → channel 1 binds the built-in LEFT axis.
+        - ``index == 1`` → channel 2 reuses the built-in right axis.
+        - ``index >= 2`` → channels 3+ append extra right axes to the
+          PlotItem layout (pyqtgraph's MultiplePlotAxes example).
+
+        All aux ViewBoxes share the X-master plot's scene geometry and X
+        range and have their OWN mouse pan disabled so the main (X-master)
+        ViewBox stays the sole mouse-capture surface.
         """
-        primary_vb = primary_plot.getViewBox()
         aux_vb = _ModifierWheelViewBox(owner_canvas=self)
-        if index == 1:
+        if index == 0:
+            # Channel 1: bind the existing LEFT axis to the aux ViewBox so
+            # the left axis tracks this channel's independent Y range.
+            try:
+                primary_plot.showAxis("left")
+            except Exception:
+                pass
+            axis_item = primary_plot.getAxis("left")
+        elif index == 1:
             try:
                 primary_plot.showAxis("right")
             except Exception:
@@ -487,6 +547,14 @@ class TimeDomainCanvasPG(QWidget):
             pass
         try:
             axis_item.linkToView(aux_vb)
+        except Exception:
+            pass
+        # Aux ViewBoxes are display-only overlays: the X-master ViewBox is
+        # the mouse-pan surface. Disabling mouse here keeps the overlapping
+        # aux ViewBoxes from stealing the pan drag (Problem 3 "mouse-
+        # capture only" demotion of the main ViewBox).
+        try:
+            aux_vb.setMouseEnabled(x=False, y=False)
         except Exception:
             pass
         self._overlay_aux_viewboxes.append(aux_vb)
@@ -708,7 +776,17 @@ class TimeDomainCanvasPG(QWidget):
         if x_union is None:
             return
         lo, hi = x_union
-        for handle in self.axes_list:
+        # In overlay mode the X-master ViewBox owns the shared X range but
+        # is not in axes_list (no curve lives on it); seed its X too so
+        # cursor mapping and _current_pixel_width read a real range.
+        handles = list(self.axes_list)
+        if (
+            self._overlay_mode
+            and self._x_master_handle is not None
+            and self._x_master_handle not in handles
+        ):
+            handles.append(self._x_master_handle)
+        for handle in handles:
             vb = handle.view_box
             try:
                 if vb is not None:
@@ -755,6 +833,8 @@ class TimeDomainCanvasPG(QWidget):
         # above (pg.GLW.clear() does NOT remove scene().addItem() items).
         self._selected_overlay_channel = None
         self._overlay_y_drag_start = None
+        self._overlay_dragging = False
+        self._x_master_handle = None
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
         self._subplot_label_specs = []
@@ -964,6 +1044,219 @@ class TimeDomainCanvasPG(QWidget):
         self.draw_idle()
         return True
 
+    # ------------------------------------------------------------------
+    # Overlay selection + Y-drag mouse wiring (Problem 2). Ports
+    # canvases.py:_select_overlay_channel_from_event (850-895) and
+    # _update_overlay_y_drag (916) onto the pyqtgraph eventFilter, driven
+    # by real Qt events rather than the matplotlib callback dispatcher.
+    # ------------------------------------------------------------------
+
+    def _scene_y_from_viewport_pos(self, viewport_pos):
+        """Map a viewport-pixel ``QPoint`` to a scene Y coordinate.
+
+        The Y-drag helpers work in a single monotonic pixel axis; scene Y
+        (top-origin, increasing downward) is used consistently for both
+        the begin-capture and apply steps so the delta is well-defined.
+        Returns ``None`` on failure.
+        """
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        if scene_pos is None:
+            return None
+        try:
+            return float(scene_pos.y())
+        except Exception:
+            return None
+
+    def _select_overlay_channel_from_scene_pos(self, scene_pos):
+        """Resolve which overlay channel a press at ``scene_pos`` selects.
+
+        Port of canvases.py:_select_overlay_channel_from_event: first try a
+        direct Y-axis hit (the click landed on a channel's axis gutter via
+        its ViewBox), then fall back to the nearest curve point within
+        ``_overlay_pick_radius_px``. Returns the channel name or ``None``.
+        """
+        if scene_pos is None:
+            return None
+        # Axis/ViewBox hit: a press inside an aux ViewBox's bounding rect
+        # selects that channel directly (parity with the axis='y' branch).
+        axis_handle = self._axis_handle_at_scene_pos(scene_pos)
+        if axis_handle is not None:
+            name = self._channel_name_for_handle(axis_handle)
+            if name is not None:
+                # Only accept an axis hit when it is NOT ambiguous with a
+                # closer curve; the curve scan below refines it. We keep
+                # the axis hit as a baseline candidate.
+                axis_name = name
+            else:
+                axis_name = None
+        else:
+            axis_name = None
+
+        best_name = None
+        best_dist = float("inf")
+        try:
+            px = float(scene_pos.x())
+            py = float(scene_pos.y())
+        except Exception:
+            return axis_name
+        for name, (handle, line) in self._channel_lines.items():
+            vb = handle.view_box
+            if vb is None:
+                continue
+            pdi = line.plot_data_item
+            try:
+                xdata, ydata = pdi.getData()
+            except Exception:
+                xdata = ydata = None
+            if xdata is None or ydata is None:
+                continue
+            xdata = np.asarray(xdata, dtype=float)
+            ydata = np.asarray(ydata, dtype=float)
+            n = min(xdata.size, ydata.size)
+            if n == 0:
+                continue
+            xdata = xdata[:n]
+            ydata = ydata[:n]
+            # Drop NaN-gap samples so the pixel mapping below stays finite
+            # (arraytoqpath-not-byte-identical lesson: NaN gaps + single
+            # points need explicit handling).
+            finite = np.isfinite(xdata) & np.isfinite(ydata)
+            if not finite.any():
+                continue
+            xdata = xdata[finite]
+            ydata = ydata[finite]
+            if n > 3000:
+                step = max(1, xdata.size // 3000)
+                xdata = xdata[::step]
+                ydata = ydata[::step]
+            # Map each data point to scene pixels via this channel's VB.
+            try:
+                scene_pts = self._map_view_points_to_scene(vb, xdata, ydata)
+            except Exception:
+                continue
+            if scene_pts is None or scene_pts.size == 0:
+                continue
+            dist = float(
+                np.min(
+                    np.hypot(scene_pts[:, 0] - px, scene_pts[:, 1] - py)
+                )
+            )
+            if dist < best_dist:
+                best_dist = dist
+                best_name = name
+        if best_name is not None and best_dist <= self._overlay_pick_radius_px:
+            return best_name
+        # No curve within the pick radius — fall back to the axis hit
+        # (clicking the axis gutter still selects its channel).
+        return axis_name
+
+    def _map_view_points_to_scene(self, view_box, xdata, ydata):
+        """Map arrays of (x, y) view coordinates to scene pixel coords.
+
+        Returns an ``(n, 2)`` float array of scene (x, y) or ``None``. Uses
+        the ViewBox's view→scene transform via ``mapViewToScene`` per
+        point. A single point is handled correctly (n>=1).
+        """
+        try:
+            from PyQt5.QtCore import QPointF
+        except Exception:
+            return None
+        pts = np.empty((xdata.size, 2), dtype=float)
+        ok = 0
+        for i in range(xdata.size):
+            try:
+                sp = view_box.mapViewToScene(QPointF(float(xdata[i]), float(ydata[i])))
+                pts[ok, 0] = float(sp.x())
+                pts[ok, 1] = float(sp.y())
+                ok += 1
+            except Exception:
+                continue
+        if ok == 0:
+            return None
+        return pts[:ok]
+
+    def _channel_name_for_handle(self, handle):
+        for name, (axis_handle, _line) in self._channel_lines.items():
+            if axis_handle is handle:
+                return name
+        return None
+
+    def _set_x_master_mouse_enabled(self, enabled):
+        """Toggle the X-master ViewBox's mouse pan.
+
+        Disabled for the duration of an overlay Y-drag so the curve drag
+        does not also pan the shared X via the default ViewBox handler.
+        """
+        master = self._x_master_handle
+        if master is None:
+            return
+        vb = master.view_box
+        if vb is None:
+            return
+        try:
+            vb.setMouseEnabled(x=bool(enabled), y=bool(enabled))
+        except Exception:
+            pass
+
+    def _handle_overlay_mouse_press(self, event):
+        """Overlay-mode left-press: select nearest channel + begin Y-drag,
+        or deselect on a blank-area click. No-op outside overlay mode or
+        in cursor mode (cursor takes precedence, matching canvases.py:853).
+        Returns ``True`` when the gesture was consumed.
+        """
+        if not self._overlay_mode or self._cursor_visible:
+            return False
+        try:
+            if event.button() != Qt.LeftButton:
+                return False
+            viewport_pos = event.pos()
+        except Exception:
+            return False
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        name = self._select_overlay_channel_from_scene_pos(scene_pos)
+        if name is None:
+            # Blank-area click → deselect (emits overlay_channel_selected(None)
+            # only when something was selected, via select_overlay_channel).
+            if self._selected_overlay_channel is not None:
+                self.select_overlay_channel(None)
+                return True
+            return False
+        self.select_overlay_channel(name)
+        # Begin the Y-drag from this scene Y; disable the X-master pan so
+        # the drag is Y-only.
+        start_y = self._scene_y_from_viewport_pos(viewport_pos)
+        if start_y is not None:
+            self._begin_overlay_y_drag_at(start_y_px=start_y)
+            self._overlay_dragging = True
+            self._set_x_master_mouse_enabled(False)
+        return True
+
+    def _handle_overlay_mouse_move(self, event):
+        """Apply a Y-drag while the left button is held during an overlay
+        drag. Returns ``True`` when the drag consumed the move."""
+        if not self._overlay_dragging:
+            return False
+        try:
+            if not (event.buttons() & Qt.LeftButton):
+                return False
+            viewport_pos = event.pos()
+        except Exception:
+            return False
+        cur_y = self._scene_y_from_viewport_pos(viewport_pos)
+        if cur_y is None:
+            return False
+        self._apply_overlay_y_drag_at(current_y_px=cur_y)
+        return True
+
+    def _handle_overlay_mouse_release(self, event):
+        """End a live overlay Y-drag and re-enable the X-master pan."""
+        if not self._overlay_dragging:
+            return False
+        self._overlay_dragging = False
+        self._overlay_y_drag_start = None
+        self._set_x_master_mouse_enabled(True)
+        return True
+
     def get_statistics(self, time_range=None):
         """Read RAW arrays from ``channel_data`` (design §4.2 invariant).
 
@@ -1017,6 +1310,9 @@ class TimeDomainCanvasPG(QWidget):
             x_n, y_n = self._tick_density
         self._tick_density = (x_n, y_n)
         self._apply_tick_density_to_all_axes()
+        # Tick density changes tick-label text → left-axis auto-width, which
+        # re-skews subplot left edges; re-unify after applying density.
+        self._unify_subplot_left_axis_widths()
         self._refresh = True
         self.draw_idle()
 
@@ -1141,10 +1437,21 @@ class TimeDomainCanvasPG(QWidget):
                     # Return False so the GraphicsView still processes the
                     # event for its own bookkeeping; we do not consume it.
             elif event.type() == QEvent.MouseButtonPress:
+                # Overlay selection / Y-drag begin takes precedence over
+                # cursor placement, but only outside cursor mode (cursor
+                # mode wins, matching canvases.py:853). _handle_overlay_
+                # mouse_press is a no-op outside overlay mode.
+                if self._handle_overlay_mouse_press(event):
+                    return True
                 if self._handle_cursor_mouse_press(event):
                     return True
             elif event.type() == QEvent.MouseMove:
+                if self._handle_overlay_mouse_move(event):
+                    return True
                 if self._handle_cursor_mouse_move(event):
+                    return True
+            elif event.type() == QEvent.MouseButtonRelease:
+                if self._handle_overlay_mouse_release(event):
                     return True
         except Exception:
             pass
@@ -1764,27 +2071,16 @@ class TimeDomainCanvasPG(QWidget):
                 height = 1.0
         dy_px = float(current_y_px) - float(start_y)
         shift = -dy_px * (hi - lo) / height
-        # Fix 2 (X-pin): pyqtgraph re-runs X auto-range padding when
-        # ``set_ylim`` mutates the ViewBox while X auto-range is still
-        # enabled, drifting xlim by ~2e-4. matplotlib's ``set_ylim`` never
-        # touches X, so we capture the primary xlim BEFORE the Y mutation
-        # and restore it immediately AFTER. Ordering follows
-        # ``pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before``:
-        # mutate Y first, then restore X (no pre-mutation flush). The
-        # explicit ``set_xlim`` restore also disables X auto-range so a
-        # subsequent Y drag stays byte-stable on X.
-        x_pinned = self._capture_primary_xlim()
+        # Symmetric overlay layout (Problem 3): the selected channel now
+        # lives on its OWN aux ViewBox, NOT on the X-master ViewBox, so a
+        # ``set_ylim`` here cannot perturb the shared X range — the prior
+        # X-pin capture/restore around this mutation is dead and removed.
+        # (Verified byte-exact by the X-stability assertions in
+        # tests/ui/test_chart_stack.py and tests/ui/test_pg_timedomain_canvas.py.)
         try:
             ax.set_ylim(lo + shift, hi + shift)
         except Exception:
             return False
-        if x_pinned is not None:
-            primary = self._primary_xaxis_ax
-            if primary is not None:
-                try:
-                    primary.set_xlim(x_pinned[0], x_pinned[1])
-                except Exception:
-                    pass
         self._refresh = True
         self.draw_idle()
         return True
@@ -2127,6 +2423,54 @@ class TimeDomainCanvasPG(QWidget):
                     except Exception:
                         pass
 
+    def _unify_subplot_left_axis_widths(self):
+        """Align every subplot's plot-area left edge to a common x.
+
+        pyqtgraph sizes each PlotItem's left ``AxisItem`` to its own
+        tick-label text width. In subplot mode that makes rows with wider
+        numeric labels start further right, skewing the shared time grid.
+        We measure each left axis's current width and pin all of them to
+        the max so the left edges align. Cheap and idempotent: re-running
+        with the same widths leaves the max unchanged.
+
+        Only meaningful in subplot mode (``_subplot_label_specs`` is the
+        subplot marker); short-circuits otherwise so overlay/single paths
+        are untouched.
+        """
+        if not self._subplot_label_specs:
+            return
+        left_axes = []
+        for handle in self.axes_list:
+            ax_item = handle._ax("left") if hasattr(handle, "_ax") else None
+            if ax_item is not None:
+                left_axes.append(ax_item)
+        if len(left_axes) < 2:
+            return
+        # Release any prior pin so width() reflects the CURRENT tick-label
+        # text width before we re-measure. Without this, a previous pin
+        # (e.g. from an earlier density level) would make every axis report
+        # the same stale width and the unification would never re-tighten.
+        for ax_item in left_axes:
+            try:
+                ax_item.setWidth(None)
+            except Exception:
+                pass
+        max_w = 0.0
+        for ax_item in left_axes:
+            try:
+                w = float(ax_item.width())
+            except Exception:
+                continue
+            if w > max_w:
+                max_w = w
+        if max_w <= 0.0:
+            return
+        for ax_item in left_axes:
+            try:
+                ax_item.setWidth(max_w)
+            except Exception:
+                pass
+
     def resizeEvent(self, event):
         """Re-check subplot inside-label placement on resize.
 
@@ -2142,6 +2486,9 @@ class TimeDomainCanvasPG(QWidget):
             try:
                 if self._subplot_label_specs:
                     self._recheck_subplot_label_placement()
+                    # Resize changes label widths; re-pin so left edges
+                    # stay aligned across rows.
+                    self._unify_subplot_left_axis_widths()
             except Exception:
                 pass
 

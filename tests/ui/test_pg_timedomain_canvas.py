@@ -1519,7 +1519,15 @@ class TestTimeDomainCanvasPGOverlayMode:
     def test_overlay_selected_y_drag_emits_ylim_change(self, qapp):
         """Selected-channel Y drag must apply a ylim shift. Two-frame:
         record ylim before drag, simulate a drag with a non-zero dy_px,
-        record ylim after — strict inequality."""
+        record ylim after — strict inequality.
+
+        Symmetric overlay layout (Problem 3): the FIRST channel ('speed',
+        vis[0]) is no longer special-cased onto the X-master ViewBox — it
+        owns its own aux ViewBox like every other channel. The drag
+        therefore moves the SELECTED channel's own handle, not
+        ``_primary_xaxis_ax`` (which is now the curveless X-master), and
+        the X-master's ranges must stay put.
+        """
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
@@ -1528,17 +1536,18 @@ class TestTimeDomainCanvasPGOverlayMode:
         canvas.select_overlay_channel("speed")
         QCoreApplication.processEvents()
 
-        primary = canvas._primary_xaxis_ax
-        primary.set_ylim(-500.0, 500.0)
+        selected_axis = canvas._channel_lines["speed"][0]
+        selected_axis.set_ylim(-500.0, 500.0)
         QCoreApplication.processEvents()
-        lo_before, hi_before = primary.get_ylim()
+        lo_before, hi_before = selected_axis.get_ylim()
+        x_master_before = canvas._primary_xaxis_ax.get_xlim()
 
         # Simulate a 40-pixel downward drag on the selected channel.
         canvas._begin_overlay_y_drag_at(start_y_px=100.0)
         moved = canvas._apply_overlay_y_drag_at(current_y_px=140.0)
         QCoreApplication.processEvents()
 
-        lo_after, hi_after = primary.get_ylim()
+        lo_after, hi_after = selected_axis.get_ylim()
         # The drag method returned True (gesture consumed).
         assert moved is True, (
             f"_apply_overlay_y_drag_at must return True after a drag; "
@@ -1548,6 +1557,231 @@ class TestTimeDomainCanvasPGOverlayMode:
         assert (lo_before, hi_before) != (lo_after, hi_after), (
             f"y-drag must change ylim; before={lo_before, hi_before}, "
             f"after={lo_after, hi_after}"
+        )
+        # The first channel is now symmetric: dragging it must NOT move
+        # the shared X range (the X-pin hack is dead under this layout).
+        assert canvas._primary_xaxis_ax.get_xlim() == pytest.approx(
+            x_master_before, abs=0.0, rel=0.0
+        ), "first-channel Y drag must not perturb the shared X range"
+
+
+class TestTimeDomainCanvasPGOverlayMouseInteraction:
+    """Problem 2 + 3: overlay curve selection / Y-drag must be wired to
+    REAL Qt mouse events through the canvas eventFilter (NOT matplotlib
+    callbacks — see pyqt-ui/2026-05-28-mpl-event-coupled-tests-survive-
+    renderer-swap). Every test drives QMouseEvent / QTest through the
+    GraphicsLayoutWidget viewport, the same path the live UI uses.
+    """
+
+    def _overlay_canvas(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="overlay")
+        QCoreApplication.processEvents()
+        # Pin a known X range so the geometry mapping is stable offscreen.
+        canvas._primary_xaxis_ax.set_xlim(0.0, 1.0)
+        QCoreApplication.processEvents()
+        return canvas
+
+    def _press(self, canvas, qapp, point):
+        from PyQt5.QtCore import QCoreApplication, QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        event = QMouseEvent(
+            QEvent.MouseButtonPress, point, Qt.LeftButton, Qt.LeftButton,
+            Qt.NoModifier,
+        )
+        consumed = canvas.eventFilter(canvas._glw.viewport(), event)
+        QCoreApplication.processEvents()
+        return consumed
+
+    def _move(self, canvas, qapp, point):
+        from PyQt5.QtCore import QCoreApplication, QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        event = QMouseEvent(
+            QEvent.MouseMove, point, Qt.NoButton, Qt.LeftButton, Qt.NoModifier
+        )
+        consumed = canvas.eventFilter(canvas._glw.viewport(), event)
+        QCoreApplication.processEvents()
+        return consumed
+
+    def _release(self, canvas, qapp, point):
+        from PyQt5.QtCore import QCoreApplication, QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        event = QMouseEvent(
+            QEvent.MouseButtonRelease, point, Qt.LeftButton, Qt.NoButton,
+            Qt.NoModifier,
+        )
+        consumed = canvas.eventFilter(canvas._glw.viewport(), event)
+        QCoreApplication.processEvents()
+        return consumed
+
+    def test_press_on_nearest_curve_selects_that_channel(self, qapp):
+        """A press within the 12px pick radius of a curve selects it."""
+        canvas = self._overlay_canvas(qapp)
+        emitted = []
+        canvas.overlay_channel_selected.connect(emitted.append)
+
+        # Target a point ON the 'torque' (channel 3) curve at x=0.5.
+        handle = canvas._channel_lines["torque"][0]
+        xdata, ydata = handle.get_lines()[0].plot_data_item.getData()
+        idx = int(np.argmin(np.abs(np.asarray(xdata) - 0.5)))
+        point = _viewport_point_for_data(
+            canvas, handle, float(xdata[idx]), float(ydata[idx])
+        )
+        consumed = self._press(canvas, qapp, point)
+
+        assert consumed is True
+        assert canvas._selected_overlay_channel == "torque", (
+            f"press on torque curve must select it; got "
+            f"{canvas._selected_overlay_channel!r}"
+        )
+        assert emitted and emitted[-1] == "torque"
+
+    def test_press_on_first_channel_curve_selects_it_symmetrically(self, qapp):
+        """Problem 3: the FIRST/left channel must be hit-test selectable
+        just like the right-axis channels (symmetric layout)."""
+        canvas = self._overlay_canvas(qapp)
+
+        handle = canvas._channel_lines["speed"][0]
+        # speed is vis[0] — confirm it is NOT on the X-master ViewBox.
+        assert handle.view_box is not canvas._primary_xaxis_ax.view_box, (
+            "first channel must own a dedicated aux ViewBox, not the X-master"
+        )
+        xdata, ydata = handle.get_lines()[0].plot_data_item.getData()
+        idx = int(np.argmin(np.abs(np.asarray(xdata) - 0.5)))
+        point = _viewport_point_for_data(
+            canvas, handle, float(xdata[idx]), float(ydata[idx])
+        )
+        consumed = self._press(canvas, qapp, point)
+
+        assert consumed is True
+        assert canvas._selected_overlay_channel == "speed"
+
+    def test_press_on_first_channel_then_drag_moves_only_its_axis(self, qapp):
+        """Problem 3: the first channel is now draggable symmetrically —
+        a press+drag moves ITS Y range and nothing else (and never the
+        shared X)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = self._overlay_canvas(qapp)
+        speed_handle = canvas._channel_lines["speed"][0]
+        torque_handle = canvas._channel_lines["torque"][0]
+
+        xdata, ydata = speed_handle.get_lines()[0].plot_data_item.getData()
+        idx = int(np.argmin(np.abs(np.asarray(xdata) - 0.5)))
+        start = _viewport_point_for_data(
+            canvas, speed_handle, float(xdata[idx]), float(ydata[idx])
+        )
+
+        # Pin every channel's Y range so auto-range re-detail on the
+        # post-drag refresh does not add measurement noise; the assertion
+        # then isolates the drag's effect (each channel Y is independent).
+        speed_handle.set_ylim(-1500.0, 1500.0)
+        torque_handle.set_ylim(40.0, 60.0)
+        QCoreApplication.processEvents()
+        speed_before = speed_handle.get_ylim()
+        torque_before = torque_handle.get_ylim()
+        x_before = canvas._primary_xaxis_ax.get_xlim()
+
+        self._press(canvas, qapp, start)
+        assert canvas._overlay_dragging is True
+        from PyQt5.QtCore import QPoint
+        moved_point = QPoint(start.x(), start.y() + 60)
+        self._move(canvas, qapp, moved_point)
+        self._release(canvas, qapp, moved_point)
+
+        assert canvas._overlay_dragging is False
+        assert speed_handle.get_ylim() != pytest.approx(speed_before), (
+            "first-channel drag must shift its own Y range"
+        )
+        assert torque_handle.get_ylim() == pytest.approx(torque_before), (
+            "first-channel drag must not move other channels' Y"
+        )
+        assert canvas._primary_xaxis_ax.get_xlim() == pytest.approx(
+            x_before, abs=0.0, rel=0.0
+        ), "first-channel drag must not perturb the shared X"
+
+    def test_blank_click_deselects_and_emits_none(self, qapp):
+        """A press far from every curve (blank area) deselects, emitting
+        overlay_channel_selected(None)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = self._overlay_canvas(qapp)
+        canvas.select_overlay_channel("torque")
+        QCoreApplication.processEvents()
+        emitted = []
+        canvas.overlay_channel_selected.connect(emitted.append)
+
+        # A point far above every curve's data (well outside 12px of any
+        # sample): map a data y far from the visible torque range.
+        handle = canvas._channel_lines["torque"][0]
+        lo, hi = handle.get_ylim()
+        far_y = hi + (hi - lo) * 50.0
+        point = _viewport_point_for_data(canvas, handle, 0.5, far_y)
+        consumed = self._press(canvas, qapp, point)
+
+        assert consumed is True
+        assert canvas._selected_overlay_channel is None
+        assert emitted and emitted[-1] is None
+
+    def test_x_master_pan_disabled_during_drag(self, qapp):
+        """While a Y-drag is in progress the X-master ViewBox's mouse pan
+        must be disabled, then restored on release (Problem 2)."""
+        canvas = self._overlay_canvas(qapp)
+        master_vb = canvas._primary_xaxis_ax.view_box
+
+        handle = canvas._channel_lines["speed"][0]
+        xdata, ydata = handle.get_lines()[0].plot_data_item.getData()
+        idx = int(np.argmin(np.abs(np.asarray(xdata) - 0.5)))
+        start = _viewport_point_for_data(
+            canvas, handle, float(xdata[idx]), float(ydata[idx])
+        )
+
+        # Before: X-master pan enabled.
+        assert master_vb.state["mouseEnabled"][0] is True
+
+        self._press(canvas, qapp, start)
+        assert canvas._overlay_dragging is True
+        assert master_vb.state["mouseEnabled"][0] is False, (
+            "X-master pan must be disabled during a Y-drag"
+        )
+
+        from PyQt5.QtCore import QPoint
+        self._release(canvas, qapp, QPoint(start.x(), start.y() + 30))
+        assert master_vb.state["mouseEnabled"][0] is True, (
+            "X-master pan must be restored after the drag ends"
+        )
+
+    def test_overlay_press_ignored_in_cursor_mode(self, qapp):
+        """Cursor mode takes precedence over overlay selection
+        (canvases.py:853): no channel gets selected by an overlay press."""
+        canvas = self._overlay_canvas(qapp)
+        canvas.set_cursor_visible(True)
+
+        handle = canvas._channel_lines["torque"][0]
+        xdata, ydata = handle.get_lines()[0].plot_data_item.getData()
+        idx = int(np.argmin(np.abs(np.asarray(xdata) - 0.5)))
+        point = _viewport_point_for_data(
+            canvas, handle, float(xdata[idx]), float(ydata[idx])
+        )
+        # Overlay press handler must no-op in cursor mode.
+        consumed = canvas._handle_overlay_mouse_press(
+            self._make_press_event(point)
+        )
+        assert consumed is False
+        assert canvas._selected_overlay_channel is None
+
+    def _make_press_event(self, point):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        return QMouseEvent(
+            QEvent.MouseButtonPress, point, Qt.LeftButton, Qt.LeftButton,
+            Qt.NoModifier,
         )
 
 
