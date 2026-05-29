@@ -251,6 +251,9 @@ class MainWindow(QMainWindow):
         self.navigator.file_activated.connect(self._on_file_activated)
         self.navigator.file_close_requested.connect(self._on_file_close_requested)
         self.navigator.close_all_requested.connect(self._on_close_all_requested)
+        self.navigator.primary_channel_requested.connect(
+            self._on_primary_channel_requested
+        )
 
         # Canvas cursor signals are owned by ChartStack; MainWindow doesn't
         # need to subscribe (ChartStack updates the pill itself).
@@ -331,6 +334,11 @@ class MainWindow(QMainWindow):
         # active when the entry was inserted).
         self._last_range_state = None   # (enabled, lo, hi) or None
         self._last_plot_mode = None     # 'overlay' / 'subplot' / None
+        # Overlay primary-axis pick: (fid, ch) chosen via the channel
+        # right-click 设为左轴 menu. When set AND still checked AND in overlay
+        # mode, plot_time reorders the checked list so this channel is index 0
+        # (bound to the left axis). Cleared/ignored otherwise.
+        self._overlay_primary = None
 
     def _on_mode_changed(self, mode):
         self.chart_stack.set_mode(mode)
@@ -386,6 +394,18 @@ class MainWindow(QMainWindow):
         finally:
             if cur_xlim is not None:
                 self._safe_restore_primary_xlim(cur_xlim)
+
+    def _on_primary_channel_requested(self, fid, ch):
+        """User picked 设为左轴 on a channel. Make it the overlay primary
+        (left-axis) channel and replot preserving the current x-window.
+
+        Only meaningful in overlay mode; in subplot/single each channel has
+        its own axis so there is no single "left" to assign. We still store
+        the pick so it applies if the user later switches to overlay, but the
+        replot only reorders when overlay is active (plot_time guards that).
+        """
+        self._overlay_primary = (fid, ch)
+        self._plot_time_preserving_xlim()
 
     def _safe_capture_primary_xlim(self):
         """Return ``(lo, hi)`` for the current primary x-axis, or None.
@@ -921,6 +941,23 @@ class MainWindow(QMainWindow):
         if not checked: self.canvas_time.clear(); self.canvas_time.draw(); self.chart_stack.stats_strip.update_stats({}); return
 
         mode = self.chart_stack.plot_mode()
+        # Overlay primary-axis pick (设为左轴): when the chosen (fid, ch) is
+        # still checked AND we're in overlay mode, move it to index 0 so the
+        # canvas binds it to the LEFT axis (vis[0] → left). If it is no longer
+        # checked, drop the stale pick so a hidden channel is never forced
+        # onto the left axis. Outside overlay mode the pick is inert (each
+        # channel owns its own axis), but we keep it stored for a later toggle.
+        if self._overlay_primary is not None:
+            pfid, pch = self._overlay_primary
+            primary_idx = next(
+                (i for i, (cfid, cch, _color) in enumerate(checked)
+                 if cfid == pfid and cch == pch),
+                None,
+            )
+            if primary_idx is None:
+                self._overlay_primary = None
+            elif mode == 'overlay' and primary_idx != 0:
+                checked.insert(0, checked.pop(primary_idx))
         # Cache invalidation site 7: structural plot-mode change (overlay
         # ↔ subplot) reuses the same (data_id, channel) keys but the line
         # ownership switches between an axes-stack and a single ax with

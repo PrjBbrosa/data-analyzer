@@ -113,6 +113,8 @@ class FileNavigator(QWidget):
     file_close_requested = pyqtSignal(str)
     close_all_requested = pyqtSignal()
     channels_changed = pyqtSignal()
+    # Bubbled from the channel tree's 设为左轴 menu: (fid, channel).
+    primary_channel_requested = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -175,6 +177,9 @@ class FileNavigator(QWidget):
         # Channel tree
         self.channel_list = MultiFileChannelWidget(self)
         self.channel_list.channels_changed.connect(self.channels_changed)
+        self.channel_list.primary_channel_requested.connect(
+            self.primary_channel_requested
+        )
         self.channel_list.setMinimumHeight(260)
         splitter.addWidget(self.channel_list)
         splitter.setChildrenCollapsible(False)

@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTreeWidget,
@@ -56,6 +57,9 @@ class StatisticsPanel(QFrame):
 
 class MultiFileChannelWidget(QWidget):
     channels_changed = pyqtSignal()
+    # Emitted when the user picks 设为左轴 in a channel's right-click menu.
+    # (fid, channel) — MainWindow makes that channel the overlay left axis.
+    primary_channel_requested = pyqtSignal(str, str)
     MAX_CHANNELS_WARNING = 8  # 超过此数量时警告
 
     def __init__(self, parent=None):
@@ -91,6 +95,9 @@ class MultiFileChannelWidget(QWidget):
         self.tree.headerItem().setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
         self.tree.setAlternatingRowColors(True)
         self.tree.itemChanged.connect(self._on_item_changed)
+        # Right-click a channel row → 设为左轴 (overlay primary axis).
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self.tree)
         self._file_items = {};
         self._colors = {};
@@ -167,6 +174,23 @@ class MultiFileChannelWidget(QWidget):
                     item.child(i).setCheckState(0, Qt.Unchecked)
                 self._updating = False
         self.channels_changed.emit()
+
+    def _on_context_menu(self, pos):
+        """Show a per-channel right-click menu with 设为左轴 (set as the
+        overlay primary/left-axis channel). The menu only appears on a
+        channel row; file rows and empty space are ignored."""
+        item = self.tree.itemAt(pos)
+        if item is None:
+            return
+        data = item.data(0, Qt.UserRole)
+        if not data or data[0] != 'channel':
+            return
+        _kind, fid, ch = data
+        menu = QMenu(self.tree)
+        act_primary = menu.addAction("设为左轴")
+        chosen = menu.exec_(self.tree.viewport().mapToGlobal(pos))
+        if chosen is act_primary:
+            self.primary_channel_requested.emit(fid, ch)
 
     def remove_file(self, fid):
         if fid in self._file_items:
