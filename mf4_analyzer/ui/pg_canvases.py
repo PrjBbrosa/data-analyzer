@@ -72,6 +72,7 @@ from mf4_analyzer.ui.canvases import (
     _interp_cursor_value,
     _is_monotonic_array,
     _compact_axis_label,
+    _middle_ellipsis,
     _split_prefixed_label,
     build_envelope,
 )
@@ -314,6 +315,11 @@ class TimeDomainCanvasPG(QWidget):
         # canvases.py:_overlay_pick_radius_px = 12.0 (the matplotlib
         # reference). Used by _select_overlay_channel_from_scene_pos.
         self._overlay_pick_radius_px = 12.0
+
+        # Bug 1: minimum reserved width (px) for each overlay y-axis so the
+        # rotated channel label + tick numbers do not collide with the
+        # adjacent axis. pyqtgraph auto-grows past this for wider ticks.
+        self._overlay_axis_min_width = 44.0
 
         # Selected-channel Y-drag bookkeeping: (start_y_px, (lo, hi)).
         # _begin_overlay_y_drag_at captures, _apply_overlay_y_drag_at
@@ -691,11 +697,24 @@ class TimeDomainCanvasPG(QWidget):
         # Y-axis label uses the channel's color so the overlay/subplot
         # visual cue matches the matplotlib renderer.
         try:
-            compact = _compact_axis_label(name, unit, max_chars=20)
-            label = f"{compact}" + (f" ({unit})" if unit else "")
+            if self._overlay_mode:
+                # Bug 1: pyqtgraph's AxisItem.setLabel renders text as HTML
+                # and IGNORES "\n", so the _compact_axis_label newline (for
+                # "[prefix] longname") produced one long unbroken rotated
+                # label that ran over the tick numbers and the next axis.
+                # Use a single-line middle-ellipsized name that fits the
+                # axis height instead of inserting a (dropped) newline.
+                base = str(name).replace("\n", " ")
+                compact = _middle_ellipsis(base, max_chars=22)
+                label = f"{compact}" + (f" ({unit})" if unit else "")
+            else:
+                compact = _compact_axis_label(name, unit, max_chars=20)
+                label = f"{compact}" + (f" ({unit})" if unit else "")
             axis_handle.set_ylabel(label)
         except Exception:
             pass
+        if self._overlay_mode:
+            self._configure_overlay_axis_geometry(axis_handle)
         self._apply_pg_axis_style(axis_handle, color)
         if xlabel is not None:
             try:
@@ -717,6 +736,44 @@ class TimeDomainCanvasPG(QWidget):
             pass
         try:
             axis.setTextPen(pg.mkPen(color=color))
+        except Exception:
+            pass
+
+    def _configure_overlay_axis_geometry(self, axis_handle):
+        """Overlay-only axis geometry so the rotated label clears the ticks.
+
+        Bug 1 measures:
+        - ``enableAutoSIPrefix(False)`` so pyqtgraph does not append a
+          ``(x0.001)`` scale chip that overlaps the channel label.
+        - A small label text offset so the rotated label sits clear of the
+          tick numbers.
+        - A pinned minimum width so each overlay AxisItem reserves room for
+          its label + ticks and does not collapse onto the adjacent axis
+          (analogue of ``_unify_subplot_left_axis_widths`` for the overlay
+          right-axis stack).
+        """
+        try:
+            axis = axis_handle.y_axis_item()
+        except Exception:
+            axis = None
+        if axis is None:
+            return
+        try:
+            axis.enableAutoSIPrefix(False)
+        except Exception:
+            pass
+        # Nudge the label away from the tick numbers. setStyle is the
+        # pyqtgraph-native knob for tick text offset + label gap.
+        try:
+            axis.setStyle(tickTextOffset=4)
+        except Exception:
+            pass
+        # Reserve a non-zero minimum width so the label/ticks have room and
+        # adjacent overlay axes do not overlap. pyqtgraph auto-grows beyond
+        # this when tick text is wider, so this is a floor, not a clamp.
+        try:
+            if float(axis.width()) < self._overlay_axis_min_width:
+                axis.setWidth(self._overlay_axis_min_width)
         except Exception:
             pass
 

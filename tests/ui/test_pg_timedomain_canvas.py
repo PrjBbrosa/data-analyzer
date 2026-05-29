@@ -2824,6 +2824,71 @@ class TestPerfRegressionFix:
         canvas.deleteLater()
 
 
+class TestOverlayAxisLabelGeometry:
+    """Bug 1: overlay y-axis labels collided with their tick numbers — the
+    compact label carried a raw ``\\n`` (pyqtgraph renders HTML and ignores
+    ``\\n`` → one long unbroken rotated label) and ``autoSIPrefix`` added a
+    ``(x0.001)`` scale chip. Labels must contain no raw ``\\n`` and each
+    overlay AxisItem must reserve a non-zero width.
+    """
+
+    def test_overlay_label_has_no_raw_newline(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(800, 400)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        t = np.linspace(0.0, 1.0, 500)
+        rows = [
+            ("[ECU] very_long_channel_identifier_name", True, t,
+             1000.0 * np.sin(t), "#1769e0", "rpm", "f"),
+            ("[ECU] another_long_channel_name_here", True, t,
+             5.0 + np.cos(t), "#ef4444", "Nm", "f"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        for name, (handle, _line) in canvas._channel_lines.items():
+            label = handle.get_ylabel()
+            assert "\n" not in label, (
+                f"overlay label for {name!r} contains a raw newline "
+                f"(pyqtgraph ignores \\n → label collides): {label!r}"
+            )
+        canvas.deleteLater()
+
+    def test_overlay_axes_disable_autosiprefix(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(800, 400)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        t = np.linspace(0.0, 1.0, 500)
+        rows = [
+            ("speed", True, t, 1000.0 * np.sin(t), "#1769e0", "rpm", "f"),
+            ("torque", True, t, 5.0 + np.cos(t), "#ef4444", "Nm", "f"),
+            ("pressure", True, t, 0.2 + 0.1 * np.sin(t), "#00b894", "bar", "f"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        for name, (handle, _line) in canvas._channel_lines.items():
+            ax = handle.y_axis_item()
+            assert ax.autoSIPrefix is False, (
+                f"overlay axis for {name!r} must disable autoSIPrefix so the "
+                f"(x0.001) scale chip does not collide with the label"
+            )
+            assert float(ax.width()) > 0.0, (
+                f"overlay axis for {name!r} must reserve a non-zero width"
+            )
+        canvas.deleteLater()
+
+
 class TestOverlayAuxViewBoxTeardown:
     """Bug 2: overlay aux ViewBoxes (+ their child curves and ch3+ appended
     right AxisItems) are added to the scene via ``scene().addItem`` /
