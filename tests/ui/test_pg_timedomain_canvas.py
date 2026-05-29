@@ -2937,3 +2937,103 @@ class TestOverlayAuxViewBoxTeardown:
                 "ghost appended AxisItem leaked into the scene after switch"
             )
         canvas.deleteLater()
+
+
+class TestOverlayGridSingleAxis:
+    """Issue (2026-05-29): overlay Y grid was a tangle of non-coincident,
+    differently-colored horizontal lines because ``_add_plot_item`` enabled
+    ``showGrid(y=True)`` while the overlay's built-in left + right axes are
+    linked to DIFFERENT per-channel ViewBoxes (different Y ranges) and each
+    drew its own Y grid in its own channel pen color. In overlay there is no
+    canonical Y range, so only the single shared X grid (bottom axis) may be
+    drawn; the Y grid must be OFF. subplot/single keep both grids.
+    """
+
+    def _overlay_plot_item(self, canvas):
+        # The overlay X-master handle wraps the single overlay PlotItem.
+        assert canvas._x_master_handle is not None
+        return canvas._x_master_handle.plot_item
+
+    def test_overlay_disables_y_grid_keeps_x_grid(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(900, 480)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        canvas.plot_channels(_five_channel_rows(), mode="overlay")
+        QCoreApplication.processEvents()
+
+        pi = self._overlay_plot_item(canvas)
+        bottom = pi.getAxis("bottom")
+        left = pi.getAxis("left")
+        right = pi.getAxis("right")
+
+        # X grid (single shared bottom axis) stays ON.
+        assert bool(bottom.grid), (
+            f"overlay X grid must stay ON; bottom.grid={bottom.grid!r}"
+        )
+        # Both built-in Y axes (channel 1 = left, channel 2 = right) must
+        # have their Y grid OFF so we don't get multiple non-coincident,
+        # colored horizontal grid families.
+        assert not left.grid, (
+            f"overlay left-axis Y grid must be OFF; left.grid={left.grid!r}"
+        )
+        assert not right.grid, (
+            f"overlay right-axis Y grid must be OFF; right.grid={right.grid!r}"
+        )
+        # ch3+ appended aux right axes must also carry no Y grid.
+        for ax_item in canvas._overlay_aux_axes:
+            assert not ax_item.grid, (
+                f"overlay aux axis Y grid must be OFF; grid={ax_item.grid!r}"
+            )
+        canvas.deleteLater()
+
+    def test_overlay_y_grid_off_is_idempotent_across_rebuild(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(900, 480)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        canvas.plot_channels(_five_channel_rows(), mode="overlay")
+        QCoreApplication.processEvents()
+        # Rebuild overlay a second time (mode-switch round trip) and re-assert.
+        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        QCoreApplication.processEvents()
+        canvas.plot_channels(_five_channel_rows(), mode="overlay")
+        QCoreApplication.processEvents()
+
+        pi = self._overlay_plot_item(canvas)
+        assert bool(pi.getAxis("bottom").grid)
+        assert not pi.getAxis("left").grid
+        assert not pi.getAxis("right").grid
+        canvas.deleteLater()
+
+    def test_subplot_keeps_both_x_and_y_grid(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(900, 480)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        QCoreApplication.processEvents()
+
+        # subplot mode has one Y range per PlotItem, so the Y grid is clean
+        # and must stay ON (guard against over-reach of the overlay fix).
+        for handle in canvas.axes_list:
+            pi = handle.plot_item
+            assert bool(pi.getAxis("left").grid), (
+                "subplot left-axis Y grid must stay ON"
+            )
+            assert bool(pi.getAxis("bottom").grid), (
+                "subplot X grid must stay ON"
+            )
+        canvas.deleteLater()

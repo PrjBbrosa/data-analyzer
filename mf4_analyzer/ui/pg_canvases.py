@@ -463,6 +463,18 @@ class TimeDomainCanvasPG(QWidget):
                 self._bind_channel(handle, name, t, sig, color, unit, data_id, xlabel=xlabel)
             # Apply default emphasis state (no selection).
             self._apply_overlay_emphasis()
+            # Grid: in overlay the built-in left + right axes are linked to
+            # DIFFERENT per-channel ViewBoxes (independent Y ranges) and each
+            # drew its own horizontal grid at its OWN ticks in its OWN channel
+            # pen color (see _apply_pg_axis_style) → multiple non-coincident,
+            # multi-colored Y grids. There is no canonical Y range to grid, so
+            # show ONLY the single shared X grid (the bottom axis) and disable
+            # the Y grid. subplot/single keep both grids (one Y range each).
+            # Idempotent: re-running on rebuild just re-asserts x-only.
+            try:
+                pi.showGrid(x=True, y=False, alpha=0.28)
+            except Exception:
+                pass
         else:
             # Single channel.
             pi = self._add_plot_item(row=0, col=0)
