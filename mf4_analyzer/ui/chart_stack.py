@@ -358,6 +358,15 @@ class PgNavigationToolbar(QToolBar):
             vb = getattr(ax, 'view_box', None)
             if vb is not None and vb not in boxes:
                 boxes.append(vb)
+        # Bug 3 (overlay): the aux ViewBoxes in axes_list are all
+        # setMouseEnabled(False); the ACTUAL mouse-capture surface in
+        # overlay mode is the X-master ViewBox, which is not in axes_list.
+        # Include it so Rect/Pan mode reaches the surface the user drags on.
+        if getattr(self._canvas, '_overlay_mode', False):
+            master = getattr(self._canvas, '_x_master_handle', None)
+            master_vb = getattr(master, 'view_box', None) if master else None
+            if master_vb is not None and master_vb not in boxes:
+                boxes.append(master_vb)
         if not boxes:
             primary = self._primary_view_box()
             if primary is not None:
@@ -370,6 +379,20 @@ class PgNavigationToolbar(QToolBar):
                 vb.setMouseMode(mode)
             except Exception:
                 continue
+
+    def apply_current_mouse_mode(self):
+        """Re-apply the toolbar's current mouse mode to the live ViewBoxes.
+
+        Bug 3: ``plot_channels`` builds NEW ViewBoxes (default PanMode), so
+        after any replot/mode-switch the toolbar still reads ``zoom`` while
+        the fresh ViewBoxes are PanMode → box-zoom silently dead. The canvas
+        invokes this (registered via ``register_replot_callback``) at the end
+        of every rebuild. Idempotent and guarded.
+        """
+        import pyqtgraph as pg
+
+        target = pg.ViewBox.RectMode if self.mode == self._MODE_ZOOM else pg.ViewBox.PanMode
+        self._set_all_mouse_modes(target)
 
     def _snapshot_view(self):
         """Snapshot per-axis (xlim, ylim) so back/forward can restore."""
@@ -529,6 +552,12 @@ class _ChartCard(QWidget):
         # _find_action) keep working unchanged.
         if isinstance(canvas, TimeDomainCanvasPG):
             self.toolbar = PgNavigationToolbar(canvas, self)
+            # Bug 3: re-apply the toolbar's current pan/zoom mode to the
+            # ViewBoxes that plot_channels rebuilds, so box-zoom survives a
+            # replot/mode-switch (fresh ViewBoxes default to PanMode).
+            register = getattr(canvas, 'register_replot_callback', None)
+            if callable(register):
+                register(self.toolbar.apply_current_mouse_mode)
         else:
             self.toolbar = NavigationToolbar(canvas, self)
         self.toolbar.setObjectName("chartToolbar")

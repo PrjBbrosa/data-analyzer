@@ -355,6 +355,13 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor_a_items = []
         self._cursor_b_items = []
 
+        # Bug 3: post-rebuild callbacks. plot_channels builds NEW ViewBoxes
+        # (default PanMode), so any owner that pins a mouse mode (the
+        # toolbar's pan/zoom state) must re-apply it to the fresh ViewBoxes.
+        # Private (not a W0 signal) so the contract surface is unchanged;
+        # _ChartCard registers toolbar.apply_current_mouse_mode here.
+        self._replot_callbacks: list = []
+
     # ------------------------------------------------------------------
     # Public surface (signal/method names frozen by W0 contract tests).
     # ------------------------------------------------------------------
@@ -483,6 +490,29 @@ class TimeDomainCanvasPG(QWidget):
 
         self._refresh = True
         self._apply_tick_density_to_all_axes()
+
+        # Bug 3: notify owners that fresh ViewBoxes exist so they can
+        # re-apply pinned interaction state (toolbar pan/zoom mode). Runs
+        # last so callbacks see the fully-built axes_list / x_master.
+        self._run_replot_callbacks()
+
+    def register_replot_callback(self, callback):
+        """Register a zero-arg ``callback`` invoked after every
+        ``plot_channels`` rebuild. Idempotent; ignores duplicates.
+
+        Used by ``_ChartCard`` to re-apply the toolbar's current mouse mode
+        to the freshly-built ViewBoxes (Bug 3). Private hook — not part of
+        the W0 signal contract.
+        """
+        if callable(callback) and callback not in self._replot_callbacks:
+            self._replot_callbacks.append(callback)
+
+    def _run_replot_callbacks(self):
+        for callback in list(self._replot_callbacks):
+            try:
+                callback()
+            except Exception:
+                pass
 
     def _add_plot_item(self, *, row, col):
         """Add a PlotItem hosted by our ``_ModifierWheelViewBox``.

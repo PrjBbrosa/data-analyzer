@@ -250,6 +250,80 @@ def test_pg_navigation_toolbar_pan_zoom_sets_all_subplot_viewboxes(qapp, qtbot):
     ]
 
 
+def test_pg_zoom_mode_reapplied_to_subplot_viewboxes_after_replot(qapp, qtbot):
+    """Bug 3: after activating zoom then re-plotting (e.g. toggling a
+    channel rebuilds the ViewBoxes), every subplot ViewBox must STILL be
+    RectMode. The toolbar mode stays 'zoom' but plot_channels builds fresh
+    PanMode ViewBoxes, so the mode must be re-applied on rebuild."""
+    import pyqtgraph as pg
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode("time")
+
+    t = np.linspace(0.0, 1.0, 80)
+    rows = [
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+        ("temp", True, t, 20.0 + t * 3.0, "#ea580c", "C"),
+    ]
+    cs.canvas_time.plot_channels(rows, mode="subplot")
+    qapp.processEvents()
+
+    cs._time_card.toolbar.zoom()
+    assert str(cs._time_card.toolbar.mode).lower() == "zoom"
+
+    # REPLOT — rebuilds every ViewBox at PanMode default.
+    cs.canvas_time.plot_channels(rows, mode="subplot")
+    qapp.processEvents()
+
+    assert str(cs._time_card.toolbar.mode).lower() == "zoom", (
+        "replot must not change the toolbar mode"
+    )
+    modes = [h.view_box.state["mouseMode"] for h in cs.canvas_time.axes_list]
+    assert modes == [pg.ViewBox.RectMode] * len(modes), (
+        f"zoom mode not re-applied to rebuilt subplot ViewBoxes; got {modes}"
+    )
+
+
+def test_pg_zoom_mode_reaches_overlay_x_master_viewbox(qapp, qtbot):
+    """Bug 3: in overlay mode the aux ViewBoxes are mouse-disabled; the
+    real mouse-capture surface is the X-master ViewBox. Activating zoom must
+    set the X-master ViewBox to RectMode."""
+    import pyqtgraph as pg
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode("time")
+
+    t = np.linspace(0.0, 1.0, 80)
+    rows = [
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ]
+    cs.canvas_time.plot_channels(rows, mode="overlay")
+    qapp.processEvents()
+
+    cs._time_card.toolbar.zoom()
+    qapp.processEvents()
+
+    master_vb = cs.canvas_time._x_master_handle.view_box
+    assert master_vb.state["mouseMode"] == pg.ViewBox.RectMode, (
+        "zoom mode did not reach the overlay X-master ViewBox"
+    )
+
+    # Toggling back to pan must reach it too.
+    cs._time_card.toolbar.pan()
+    qapp.processEvents()
+    assert master_vb.state["mouseMode"] == pg.ViewBox.PanMode
+
+
 def test_pg_toolbar_home_keeps_subplot_x_ranges_identical_after_auto_range(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
