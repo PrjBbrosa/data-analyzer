@@ -2752,3 +2752,53 @@ class TestPerfRegressionFix:
             "pinned and only reflow on resize"
         )
         canvas.deleteLater()
+
+
+class TestOverlayAuxViewBoxTeardown:
+    """Bug 2: overlay aux ViewBoxes (+ their child curves and ch3+ appended
+    right AxisItems) are added to the scene via ``scene().addItem`` /
+    ``layout.addItem``; ``GraphicsLayoutWidget.clear()`` does NOT remove
+    them, so a mode switch leaks ghost curves. ``clear()`` must explicitly
+    tear them down (mirror ``_teardown_inside_labels``).
+    """
+
+    def test_overlay_aux_viewboxes_removed_on_mode_switch(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(640, 360)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        t = np.linspace(0.0, 10.0, 2000)
+        # >=3 channels so ch3 appends a right AxisItem via layout.addItem.
+        rows = [
+            (f"ch{i}", True, t, np.sin(t) + i, "#1f77b4", "u", "fid")
+            for i in range(3)
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        old_aux = list(canvas._overlay_aux_viewboxes)
+        old_axes = list(canvas._overlay_aux_axes)
+        assert old_aux, "overlay build must create aux ViewBoxes"
+
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+
+        scene_items = set(canvas._glw.scene().items())
+        for vb in old_aux:
+            assert vb not in scene_items, (
+                "ghost aux ViewBox leaked into the scene after mode switch"
+            )
+            for child in vb.allChildItems():
+                assert child not in scene_items, (
+                    "ghost overlay curve leaked into the scene after switch"
+                )
+        # ch3+ appended right AxisItems must also be gone.
+        for ax_item in old_axes:
+            assert ax_item not in scene_items, (
+                "ghost appended AxisItem leaked into the scene after switch"
+            )
+        canvas.deleteLater()

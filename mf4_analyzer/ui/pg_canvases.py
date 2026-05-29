@@ -801,11 +801,58 @@ class TimeDomainCanvasPG(QWidget):
                 except Exception:
                     pass
 
+    def _teardown_overlay_aux_viewboxes(self):
+        """Remove every overlay aux ViewBox, its child curves, and the
+        ch3+ appended right ``AxisItem``s from the scene.
+
+        pyqtgraph's ``GraphicsLayout.clear()`` only removes items that were
+        registered via ``addItem`` (the PlotItems). Overlay aux ViewBoxes
+        are attached top-level via ``primary_plot.scene().addItem(aux_vb)``
+        (``_add_overlay_axis_handle``) and ch3+ right axes via
+        ``primary_plot.layout.addItem(axis_item, ...)``, so both leak as
+        ghost curves/axes on every rebuild unless removed explicitly here.
+        Mirrors ``_teardown_inside_labels`` (the same scene-leak class).
+
+        ch1/ch2 reuse the PlotItem's built-in left/right axes (removed with
+        the PlotItem by ``_glw.clear()``); only ch3+ appended axes need
+        explicit removal, but iterating all of ``_overlay_aux_axes`` and
+        guarding each ``removeItem`` is safe and idempotent.
+        """
+        for aux_vb in list(self._overlay_aux_viewboxes):
+            try:
+                scene = aux_vb.scene()
+                if scene is not None:
+                    scene.removeItem(aux_vb)
+            except Exception:
+                pass
+        for ax_item in list(self._overlay_aux_axes):
+            # Drop the appended right axes from the PlotItem layout first,
+            # then from the scene. Built-in left/right axes (ch1/ch2) are
+            # owned by the PlotItem and ignore both removals harmlessly.
+            primary = self._primary_xaxis_ax
+            try:
+                if primary is not None and primary.plot_item is not None:
+                    primary.plot_item.layout.removeItem(ax_item)
+            except Exception:
+                pass
+            try:
+                scene = ax_item.scene()
+                if scene is not None:
+                    scene.removeItem(ax_item)
+            except Exception:
+                pass
+
     def clear(self):
         """Tear down the chart. Mirrors TimeDomainCanvas.clear."""
         # Drop xrange listener before we wipe the axes it points at.
         self._disconnect_xrange_listener()
         self._disconnect_overlay_view_sync()
+        # Remove overlay aux ViewBoxes + ch3+ appended axes from the scene
+        # BEFORE _glw.clear() (which only drops layout PlotItems) and BEFORE
+        # we zero _overlay_aux_viewboxes/_overlay_aux_axes below — otherwise
+        # the ghost curves leak (Bug 2). Uses _primary_xaxis_ax for the
+        # PlotItem layout, so it must run before that is nulled.
+        self._teardown_overlay_aux_viewboxes()
         self._teardown_inside_labels()
         if self._refresh_timer.isActive():
             self._refresh_timer.stop()
