@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import numpy as np
 import pytest
@@ -209,6 +210,82 @@ def test_chart_toolbar_keeps_back_forward_actions_visible(qapp, qtbot):
         assert not widget.icon().isNull()
 
 
+def test_pg_navigation_toolbar_pan_zoom_sets_all_subplot_viewboxes(qapp, qtbot):
+    import pyqtgraph as pg
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+
+    t = np.linspace(0.0, 1.0, 80)
+    cs.canvas_time.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+        ("temp", True, t, 20.0 + t * 3.0, "#ea580c", "C"),
+    ], mode="subplot")
+    cs.canvas_time.draw()
+    qapp.processEvents()
+
+    handles = list(cs.canvas_time.axes_list)
+    assert len(handles) == 3
+    view_boxes = [handle.view_box for handle in handles]
+
+    cs._time_card.toolbar.zoom()
+    assert str(cs._time_card.toolbar.mode).lower() == 'zoom'
+    assert [vb.state['mouseMode'] for vb in view_boxes] == [
+        pg.ViewBox.RectMode,
+        pg.ViewBox.RectMode,
+        pg.ViewBox.RectMode,
+    ]
+
+    cs._time_card.toolbar.pan()
+    assert str(cs._time_card.toolbar.mode).lower() == 'pan'
+    assert [vb.state['mouseMode'] for vb in view_boxes] == [
+        pg.ViewBox.PanMode,
+        pg.ViewBox.PanMode,
+        pg.ViewBox.PanMode,
+    ]
+
+
+def test_pg_toolbar_home_keeps_subplot_x_ranges_identical_after_auto_range(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_mode("time")
+    t1 = np.linspace(0.0, 1.0, 50)
+    t2 = np.linspace(2.0, 4.0, 50)
+    cs.canvas_time.plot_channels([
+        ("a", True, t1, np.sin(t1), "#1769e0", "u"),
+        ("b", True, t2, np.cos(t2), "#ef4444", "u"),
+    ], mode="subplot")
+    for handle in cs.canvas_time.axes_list:
+        handle.set_xlim(0.25, 0.75)
+
+    cs._time_card.toolbar.home()
+
+    ranges = [handle.get_xlim() for handle in cs.canvas_time.axes_list]
+    assert ranges[0] == pytest.approx((0.0, 4.0))
+    assert ranges[1] == pytest.approx(ranges[0])
+
+
+def test_chart_choice_checked_qss_uses_visible_blue_selection_tokens():
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    match = re.search(
+        r'QWidget#chartToolbar QPushButton\[role="chart-choice"\]:checked\s*\{(?P<body>[^}]*)\}',
+        qss,
+        flags=re.S,
+    )
+    assert match is not None
+    body = match.group('body')
+
+    assert 'background-color: #ffffff;' not in body
+    assert 'background-color: #e8efff;' in body
+    assert 'border-color: #2563eb;' in body
+    assert 'color: #2563eb;' in body
+
+
 def test_time_toolbar_controls_fit_when_inspector_narrows_chart(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
@@ -279,13 +356,15 @@ def test_overlay_curve_drag_leaves_toolbar_idle_during_selection(qapp, qtbot):
     primary.set_ylim(-2.0, 8.0)
     qapp.processEvents()
     before_xlim = primary.get_xlim()
-    before_ylim = primary.get_ylim()
+    before_primary_ylim = primary.get_ylim()
 
     # Frame A → B: selecting 'torque' fires overlay_channel_selected, which
     # TimeChartCard wires to drop the nav toolbar out of pan.
     cs.canvas_time.select_overlay_channel("torque")
     qapp.processEvents()
     assert cs.canvas_time._selected_overlay_channel == "torque"
+    selected_axis = cs.canvas_time._channel_lines["torque"][0]
+    before_selected_ylim = selected_axis.get_ylim()
     # Selection must have dropped pan so a subsequent blank click can
     # reach the deselect gate without being eaten by a pan press.
     assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
@@ -297,7 +376,8 @@ def test_overlay_curve_drag_leaves_toolbar_idle_during_selection(qapp, qtbot):
     qapp.processEvents()
 
     assert moved is True
-    assert primary.get_ylim() != pytest.approx(before_ylim)
+    assert selected_axis.get_ylim() != pytest.approx(before_selected_ylim)
+    assert primary.get_ylim() == pytest.approx(before_primary_ylim)
     # X is byte-stable after a Y-only drag (Fix 2).
     assert primary.get_xlim() == pytest.approx(before_xlim, abs=0.0, rel=0.0)
     # Drag does not auto-restore pan.

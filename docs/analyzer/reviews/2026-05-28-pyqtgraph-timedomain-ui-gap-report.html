@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pyqtgraph TimeDomain 迁移 — UI/交互缺陷分析报告 (2026-05-28)</title>
+<style>
+  :root{
+    --bg:#f5f7fb; --card:#ffffff; --ink:#111827; --muted:#64748b;
+    --line:#e5eaf2; --accent:#2563eb; --accentbg:#e8efff;
+    --p0:#dc2626; --p1:#d97706; --p2:#0f766e; --code:#0f3f8f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 80px;}
+  h1{font-size:24px;margin:0 0 4px;}
+  h2{font-size:18px;margin:34px 0 12px;padding-top:14px;border-top:2px solid var(--line);}
+  h3{font-size:15px;margin:18px 0 6px;}
+  .sub{color:var(--muted);margin:0 0 18px;}
+  code,kbd{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;}
+  code{color:var(--code);background:#f1f5ff;border:1px solid #e0e8ff;border-radius:4px;padding:1px 5px;}
+  kbd{background:#1f2937;color:#fff;border-radius:4px;padding:1px 6px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:18px 20px;margin:14px 0;box-shadow:0 1px 2px rgba(15,23,42,.04);}
+  table{border-collapse:collapse;width:100%;font-size:13px;}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{color:var(--muted);font-weight:600;background:#fafbfe;}
+  .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;
+    padding:2px 9px;color:#fff;white-space:nowrap;}
+  .P0{background:var(--p0);} .P1{background:var(--p1);} .P2{background:var(--p2);}
+  .pill{display:inline-block;background:var(--accentbg);color:var(--accent);
+    border-radius:6px;padding:1px 8px;font-weight:600;font-size:12px;}
+  .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:10px 0;}
+  .grid2 > div{padding:12px 14px;}
+  .grid2 .h{background:#fafbfe;color:var(--muted);font-weight:600;font-size:12px;border-bottom:1px solid var(--line);}
+  .grid2 > div:nth-child(odd){border-right:1px solid var(--line);}
+  .now .h{color:var(--p0);} .ref .h{color:var(--p2);}
+  ul{margin:6px 0 6px 0;padding-left:20px;} li{margin:3px 0;}
+  .fix{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;margin:8px 0;}
+  .fix b{color:#15803d;}
+  .ref-files{color:var(--muted);font-size:12px;margin-top:6px;}
+  .anchor{color:var(--muted);font-weight:400;font-size:13px;}
+  .legend span{margin-right:16px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>pyqtgraph TimeDomain — UI / 交互缺陷分析报告</h1>
+<p class="sub">
+  分支 <code>plan/pyqtgraph-timedomain-migration</code> · 日期 2026-05-28 ·
+  对比基准：matplotlib 原始渲染器 <code>canvases.py::TimeDomainCanvas</code> + 参考截图（图二）<br>
+  方法：静态代码审查 + 两张运行截图比对（未启动实时 GUI）。每条缺陷均给出 <code>文件:行号</code> 根因。
+</p>
+
+<div class="card">
+<b>结论速览：</b>当前 pyqtgraph 画布完成了「能跑」的骨架，但与原始 matplotlib 设计相比存在
+<b>3 个功能性硬伤（P0）</b> 和 <b>5 个外观 / 交互一致性缺口（P1）</b>。
+其中最关键的是：<u>整条 envelope→QPainterPath→QPixmap「重绘缓存」管线没有任何渲染消费方</u>——
+缓存被计算却从不上屏，缩放时曲线不会重采样变清晰；同时<u>单/双游标在实时 UI 中完全未接线</u>。
+所谓「~14x faster pan」有一部分来自「平移时其实没有重绘」。
+</div>
+
+<h2>缺陷清单（按严重度）</h2>
+<p class="legend">
+  <span class="tag P0">P0</span> 功能 / 正确性硬伤
+  <span class="tag P1">P1</span> 与原始设计 / 参考图的一致性缺口
+  <span class="tag P2">P2</span> 次要打磨
+</p>
+<table>
+<thead><tr><th style="width:42px">#</th><th style="width:62px">级别</th><th>症状</th><th>根因（文件:行）</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><span class="tag P0">P0</span></td>
+  <td>缩放放大后曲线仍是「全程粗采样」，不会变清晰；平移其实没有重绘</td>
+  <td>重绘缓存无消费方：<code>pg_canvases.py:1066</code> 写 <code>_curve_path_cache</code>，但无 <code>paintEvent</code>/<code>drawPixmap</code>，<code>setData</code> 在平移路径被刻意禁用（<code>:1072</code>）；可见曲线始终是 <code>_bind_channel</code> 的全程 8000 点包络（<code>:495</code>）</td></tr>
+<tr><td>2</td><td><span class="tag P0">P0</span></td>
+  <td>单游标 / 双游标按钮点了没反应，画面上无游标竖线</td>
+  <td><code>_emit_single_cursor_html</code>/<code>_emit_dual_cursor_html</code>（<code>pg_canvases.py:1454/1477</code>）从未被调用；<code>main_window.py:348-349</code> 只翻转状态位；无 <code>InfiniteLine</code>、无点击接线</td></tr>
+<tr><td>3</td><td><span class="tag P0">P0</span></td>
+  <td>缩放只能缩放最上方的图；各子图 X 轴范围不同步（图一第 2 图 2.5–8.5，其余 0–80）</td>
+  <td>滚轮缩放写死 <code>_primary_xaxis_ax</code>（<code>pg_canvases.py:1412</code>），忽略光标下的 ViewBox；工具栏 pan/zoom 只对主 ViewBox 设鼠标模式（<code>chart_stack.py:417,441</code>）；未用共享 X，靠手动 <code>_propagate_xlim_to_siblings</code> 易脱节（原始用 <code>sharex</code>，<code>canvases.py:675</code>）</td></tr>
+<tr><td>4</td><td><span class="tag P1">P1</span></td>
+  <td>标题堆叠：左侧竖排长通道名互相重叠成一团</td>
+  <td>通道名被设为旋转 90° 的左轴标签（<code>_axis_handle.py:438</code>，调用点 <code>pg_canvases.py:511</code>）；内嵌标签兜底仅在 <code>widget_w&lt;320</code> 触发（<code>pg_canvases.py:1592</code>），正常宽度永不生效。原始用 bbox 重叠检测翻成左上角圆角●标签（<code>canvases.py:937 / 967</code>）——正是参考图样式</td></tr>
+<tr><td>5</td><td><span class="tag P1">P1</span></td>
+  <td>选中「分屏 / 叠加 / 游标」按钮后没有底色</td>
+  <td><code>:checked</code> 背景是白底白字（<code>#ffffff</code>，<code>style.qss:1196</code>），按钮又 <code>setFlat(True)</code>（<code>chart_stack.py:798,814</code>），选中态在白色工具栏上不可见</td></tr>
+<tr><td>6</td><td><span class="tag P1">P1</span></td>
+  <td>没有网格线（参考图有虚线网格）</td>
+  <td><code>plot_channels</code> 从不调用 <code>showGrid</code>；网格只在图表选项对话框可达（<code>_axis_handle.py:474</code>）。原始默认画 <code>#d7dee8</code> alpha .78 虚线（<code>canvases.py:193</code>）</td></tr>
+<tr><td>7</td><td><span class="tag P1">P1</span></td>
+  <td>每个子图底部都重复画了一套 0–80 X 轴刻度</td>
+  <td>PG 每个子图各自显示底轴；原始仅最底子图显示 X 刻度（<code>canvases.py:692-695</code> <code>labelbottom=False</code>）</td></tr>
+<tr><td>8</td><td><span class="tag P1">P1</span></td>
+  <td>坐标轴 / 曲线配色与原始不一致（无彩色刻度、无彩色左脊、无单位 chip、线宽 1.0 vs 1.05）</td>
+  <td>PG 只设标签文字，不染 y 刻度 / 左脊（对比原始 <code>canvases.py:689-691</code>）；线宽 <code>pg_canvases.py:495</code>=1.0；叠加 emphasis 会改写 pen（<code>:1248</code>）</td></tr>
+</tbody>
+</table>
+
+<!-- ============ DETAIL ============ -->
+<h2>详细分析</h2>
+
+<div class="card">
+<h3>#1 <span class="tag P0">P0</span> 重绘缓存「算了不画」——缩放不重采样 <span class="anchor">pg_canvases.py</span></h3>
+<p>模块文档自称的流水线是
+<code>set_xlim → positions_envelope → QPainterPath → cached pixmap → blit</code>（<code>:19</code>），
+但最后一步 <b>blit 从未实现</b>。<code>grep</code> 显示 <code>_curve_path_cache</code> 只在
+<code>_refresh_visible_data</code>（<code>:1066</code>）被写入、在失效函数里被清；
+没有任何 <code>paintEvent</code> / <code>drawPixmap</code> 读取它，且 <code>:1072</code> 明确注释
+「平移路径不要调 <code>setData</code>」。</p>
+<p>因此实际上屏的曲线，永远是 <code>_bind_channel</code> 里那条
+<b>对全程 0–80s 做一次性 8000 点包络</b>的 <code>PlotDataItem</code>（<code>:495</code>）。
+放大到 2.5–8.5s 时只是把这段粗采样拉伸显示，<b>细节不会变清晰</b>；
+而且 <code>PlotDataItem</code> 没有开 <code>setDownsampling</code>/<code>clipToView</code>。</p>
+<div class="fix"><b>修复方向：</b>二选一并坚持一种渲染真相——
+(a) 放弃自建 pixmap 缓存，改为在 <code>_refresh_visible_data</code> 里对每条
+<code>PlotDataItem.setData(env_t, env_s)</code>（pyqtgraph 自身已是 C 级 QPolygonF 快路径，
+配合 <code>clipToView=True</code>）；或
+(b) 真正实现一个读取 <code>_curve_path_cache</code> 的 paint 层并把 <code>PlotDataItem</code> 隐藏。
+推荐 (a)：更简单、零死代码，且天然支持缩放重采样。</div>
+<p class="ref-files">关联测试 <code>tests/perf/test_timedomain_pan_perf.py</code> 的「14x」需重测——
+当前快是因为平移没产生可见重绘。</p>
+</div>
+
+<div class="card">
+<h3>#2 <span class="tag P0">P0</span> 单 / 双游标实时未接线 <span class="anchor">pg_canvases.py / main_window.py</span></h3>
+<p>游标 HTML 计算函数 <code>_emit_single_cursor_html</code>（<code>:1454</code>）、
+<code>_emit_dual_cursor_html</code>（<code>:1477</code>）已写好且有单测，但
+<b>实时 UI 中没有任何调用方</b>。<code>main_window.py:348-349</code> 只做
+<code>set_cursor_visible</code> / <code>set_dual_cursor_mode</code> 翻转状态位，
+而这两个 setter（<code>:576 / :583</code>）注释自承「只存状态，画线是 T6 的事」。</p>
+<p>结果：开启「单游标 / 双游标」后，<b>点击图面不放置游标、画不出竖线、悬浮 pill 不更新</b>。</p>
+<div class="fix"><b>修复方向：</b>在画布上为每个 ViewBox 加 <code>pg.InfiniteLine</code>（A/B 两条），
+通过 scene 的 <code>sigMouseClicked</code> / <code>SignalProxy(sigMouseMoved)</code> 把光标 x 映射到数据坐标，
+调 <code>_emit_*_cursor_html</code> 并 <code>setPos</code> 竖线；竖线需跨所有子图（与 X 同步联动）。</div>
+</div>
+
+<div class="card">
+<h3>#3 <span class="tag P0">P0</span> 缩放只作用最上图 + 子图 X 不同步 <span class="anchor">pg_canvases.py / chart_stack.py</span></h3>
+<ul>
+<li><b>滚轮缩放写死主轴：</b><code>_handle_wheel_dispatch</code>（<code>pg_canvases.py:1412</code>）全程用
+<code>self._primary_xaxis_ax</code>，不管滚轮落在哪个子图——所以
+<kbd>Ctrl</kbd>+滚轮 / <kbd>Shift</kbd>+滚轮 / 纯滚轮 永远改第 1 图。
+而 <code>_ModifierWheelViewBox</code>（<code>:94</code>）本就持有事件源 ViewBox（<code>self</code>），只是没传下去。</li>
+<li><b>工具栏 pan/zoom 只设主 ViewBox：</b><code>PgNavigationToolbar.pan()/zoom()</code>
+（<code>chart_stack.py:413-457</code>）只对 <code>_primary_view_box()</code> 调 <code>setMouseMode</code>，
+其它子图从不进入 Rect/Pan 模式，框选缩放对它们无效。</li>
+<li><b>X 轴不同步：</b>设计刻意不用 <code>setXLink</code>，改靠 <code>sigXRangeChanged</code> 手动
+<code>_propagate_xlim_to_siblings</code>（<code>:923</code>）。图一第 2 图停在 2.5–8.5 而其余 0–80，
+说明传播在初始构建 / 某些帧上脱节。原始 matplotlib 用 <code>sharex=first</code>（<code>canvases.py:675</code>）天然一致。</li>
+</ul>
+<div class="fix"><b>修复方向：</b>(1) 把 <code>_handle_wheel_dispatch</code> 的目标从 <code>_primary_xaxis_ax</code>
+改为「事件源 ViewBox 对应的 handle」（X 缩放仍同步到全体，Y 缩放只作用当前子图）；
+(2) pan/zoom 对 <code>axes_list</code> 中<b>所有</b> ViewBox 设鼠标模式；
+(3) 评估直接采用 <code>setXLink</code>（其屏幕几何插值误差对本应用可接受，或在 padding=0 下校正），
+或保证初始 <code>plot_channels</code> 后立刻做一次 X 对齐。</div>
+</div>
+
+<div class="card">
+<h3>#4 <span class="tag P1">P1</span> 标题堆叠 → 应改回左上角圆角●标签 <span class="anchor">pg_canvases.py / _axis_handle.py</span></h3>
+<div class="grid2">
+  <div class="h now">当前（图一）</div><div class="h ref">原始 / 参考（图二）</div>
+  <div class="now"><code>set_ylabel(长通道名)</code> → 左轴旋转 90° 竖排；
+  多个子图的长名（如 <code>Rte_ActRetPlausi_mActiveReturnMotorTorq4C</code>）竖排后高于行高，互相重叠堆叠。</div>
+  <div class="ref">每个子图左上角一个圆角白底框 + 通道色 ● 圆点 + 横排名称（<code>[whole ±5deg_Fricom] R...</code>），不占轴、不重叠。</div>
+</div>
+<p>内嵌标签逻辑其实已移植（<code>_recheck_subplot_label_placement</code>，<code>:1594</code>），
+但触发条件被换成了 <code>widget_w &lt; 320</code> 的粗略宽度阈值（<code>:1592</code>），
+正常宽窗口永远走「外置竖排」分支。原始是真实 bbox 重叠检测
+（<code>canvases.py:937</code>）+ 圆角框样式（<code>_apply_inside_channel_labels</code>，<code>:967</code>，
+<code>boxstyle round,pad=0.24</code>、白底 0.86、通道色边框）。</p>
+<div class="fix"><b>修复方向：</b>子图模式下<b>默认且始终</b>使用左上角内嵌 <code>TextItem</code>（带通道色圆角边框、
+<code>● 名称</code>、<code>ignoreBounds=True</code>、随视图左上角定位），并清空旋转左轴标签；
+去掉 320px 阈值。参考图样式即 <code>_apply_inside_channel_labels</code> 的复刻。</div>
+</div>
+
+<div class="card">
+<h3>#5 <span class="tag P1">P1</span> 选中按钮无底色 <span class="anchor">style.qss / chart_stack.py</span></h3>
+<p><code>:checked</code> 规则存在（<code>style.qss:1195</code>），但填充是
+<code>background-color:#ffffff</code>（白）叠在白色工具栏上 → 几乎看不见；
+按钮又 <code>setFlat(True)</code>（<code>chart_stack.py:798/813</code>）进一步抑制边框感。
+本仓库已有蓝色强调色：激活图标 <code>_ICON_ACTIVE = '#2563eb'</code>、菜单选中 <code>#e8efff</code>。</p>
+<div class="fix"><b>修复方向：</b>把 <code>:checked</code> 改成可见的强调填充——浅蓝底
+<code>#e8efff</code> + 蓝字/蓝边 <code>#2563eb</code>（与工具栏激活态统一）；
+确认 <code>setFlat</code> 下样式背景仍绘制（必要时去掉 <code>setFlat</code> 或加
+<code>WA_StyledBackground</code>）。</div>
+</div>
+
+<div class="card">
+<h3>#6 <span class="tag P1">P1</span> 缺网格线 <span class="anchor">pg_canvases.py</span></h3>
+<p><code>plot_channels</code> 的三个分支（subplot / overlay / single）都没有调用
+<code>showGrid</code>；网格仅经图表选项对话框 → <code>PgAxisHandle.grid</code>（<code>_axis_handle.py:470</code>）可达，默认关。
+原始每个轴默认 <code>ax.grid(True, color='#d7dee8', alpha=.78, ls='--', lw=.7)</code>
+（<code>canvases.py:193-194</code>），参考图也有虚线网格。</p>
+<div class="fix"><b>修复方向：</b>在 <code>_bind_channel</code> / 每个 PlotItem 建立后调
+<code>pi.showGrid(x=True, y=True, alpha=0.28)</code>，并把网格笔触调成接近
+<code>#d7dee8</code> 的虚线观感（pyqtgraph 通过 <code>AxisItem.setGrid</code> / 自定义 pen）。</div>
+</div>
+
+<div class="card">
+<h3>#7 <span class="tag P1">P1</span> 每个子图都重复画 X 轴 <span class="anchor">pg_canvases.py</span></h3>
+<p>图一中 5 个子图底部各有一套 0–80 的 X 刻度，视觉冗余。
+原始仅最底部子图显示 X 刻度与 <code>Time (s)</code> 标签，其余
+<code>tick_params(labelbottom=False)</code>（<code>canvases.py:692-695</code>）。</p>
+<div class="fix"><b>修复方向：</b>子图模式下，对非最底子图
+<code>pi.getAxis('bottom').setStyle(showValues=False)</code> 并隐藏其 x label，
+仅最底子图保留刻度 + <code>Time (s)</code>。</div>
+</div>
+
+<div class="card">
+<h3>#8 <span class="tag P1">P1</span> 轴 / 曲线样式细节缺口 <span class="anchor">pg_canvases.py</span></h3>
+<ul>
+<li><b>无彩色刻度 / 左脊：</b>原始把 y 刻度、左脊都染成通道色、左脊 <code>linewidth=2</code>
+（<code>canvases.py:689-691</code>）；PG 仅设标签文字。</li>
+<li><b>线宽：</b>PG bind 用 <code>width=1.0</code>（<code>:495</code>），原始 <code>lw=1.05</code>。</li>
+<li><b>单位 chip：</b>原始在轴顶横排画单位（<code>_set_series_ylabel</code>，<code>canvases.py:255-264</code>），PG 未复刻。</li>
+<li><b>叠加 emphasis 改写 pen：</b><code>_apply_overlay_emphasis</code>（<code>:1248</code>）会重设 pen 宽/透明度，
+需确保不丢失原始通道色与线宽基线。</li>
+</ul>
+<div class="fix"><b>修复方向：</b>新增一个 <code>_apply_pg_axis_style(handle, color)</code>，统一设置
+左轴 <code>setTextPen/setPen(color)</code>、刻度色、线宽 2、单位顶标，并把 bind 线宽对齐 1.05；
+作为子图 / 叠加 / 单通道三分支共用的样式入口（对应原始的 <code>_apply_axes_style</code> + <code>_set_series_ylabel</code>）。</div>
+</div>
+
+<!-- ============ PARITY CHECKLIST ============ -->
+<h2>「设置保持与原始一致」核对清单</h2>
+<p class="sub">以下是原始 matplotlib 渲染器中、需要在 pyqtgraph 端逐项对齐的视觉 / 行为契约（来源 <code>canvases.py</code>）。</p>
+<table>
+<thead><tr><th>项</th><th>原始值 / 行为</th><th>来源</th><th>PG 现状</th></tr></thead>
+<tbody>
+<tr><td>画布底色</td><td><code>CHART_FACE = #ffffff</code></td><td>canvases.py:29</td><td><span class="pill">已对齐</span></td></tr>
+<tr><td>网格</td><td>虚线 <code>#d7dee8</code> alpha .78 ls '--' lw .7</td><td>canvases.py:194</td><td>缺失（见 #6）</td></tr>
+<tr><td>子图轴共享</td><td><code>sharex=first</code></td><td>canvases.py:675</td><td>手动传播，易脱节（见 #3）</td></tr>
+<tr><td>X 刻度</td><td>仅最底子图显示</td><td>canvases.py:692-695</td><td>每图都画（见 #7）</td></tr>
+<tr><td>通道标签</td><td>溢出时左上角圆角●框</td><td>canvases.py:967</td><td>竖排堆叠（见 #4）</td></tr>
+<tr><td>左脊 / y 刻度配色</td><td>染通道色，左脊 lw 2</td><td>canvases.py:689-691</td><td>未染色（见 #8）</td></tr>
+<tr><td>线宽</td><td><code>lw=1.05</code></td><td>canvases.py:681,716,740</td><td>1.0（见 #8）</td></tr>
+<tr><td>叠加去重点强调</td><td>选中 lw1.8/α1.0，其余 lw1.0/α0.42</td><td>canvases.py 选择样式</td><td><span class="pill">已移植</span> pg_canvases.py:1248</td></tr>
+<tr><td>滚轮语义</td><td>Ctrl→缩 X，Shift→缩 Y，纯滚→平移 Y，factor .85</td><td>canvases.py:_on_scroll</td><td>语义对，但目标轴写死（见 #3）</td></tr>
+<tr><td>图表选项对话框</td><td>双击图面打开，含 X/Y 范围·刻度·标题·网格·配色</td><td>_axis_interaction.py</td><td><span class="pill">已接线</span> pg_canvases.py:682</td></tr>
+<tr><td>统计 / 复制图片 / 保存</td><td>get_statistics / grab / save</td><td>—</td><td><span class="pill">已对齐</span></td></tr>
+</tbody>
+</table>
+
+<h2>建议修复顺序</h2>
+<div class="card">
+<ol>
+<li><b>P0-#1 渲染真相</b>（envelope 上屏 + 缩放重采样）——这是「画对」的地基，其它视觉项都依赖它先稳定。</li>
+<li><b>P0-#3 缩放 / 同步</b>（滚轮目标轴 + 全 ViewBox 鼠标模式 + X 联动）。</li>
+<li><b>P0-#2 游标接线</b>（InfiniteLine + 点击/悬浮 → emit）。</li>
+<li><b>P1-#4 标题</b> + <b>#6 网格</b> + <b>#7 X 轴</b> + <b>#8 轴样式</b>：合并为一个「样式对齐」批次，统一在 <code>plot_channels</code> 的样式入口处理。</li>
+<li><b>P1-#5 按钮底色</b>：纯 QSS 改动，可随时并入。</li>
+</ol>
+<p class="sub" style="margin-top:10px">说明：本报告为静态分析 + 截图比对结论，未启动实时 GUI。落地修复后需用同一组通道实跑对照
+（缩放/平移/游标/分屏↔叠加切换/窗口缩放触发内嵌标签翻转）并截图复核。</p>
+</div>
+
+</div>
+</body>
+</html>

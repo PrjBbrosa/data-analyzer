@@ -557,20 +557,27 @@ class ChartOptionsDialog(QDialog):
     def _read_axes(self):
         xlo, xhi = self.handle.get_xlim()
         ylo, yhi = self.handle.get_ylim()
-        # Gridline visibility introspection + ``get_xscale``/``get_yscale``
-        # are matplotlib-specific and not in ``AxisHandle`` (design §5.3
-        # only declares the setters). Read them through the migration-
-        # temporary escape hatch; PgAxisHandle will provide its own
-        # initial-state path in T5.
-        if self.ax is not None:
+        try:
+            grid_visible = bool(self.handle.is_grid_enabled())
+        except AttributeError:
+            grid_visible = False
+        try:
+            x_scale_raw = self.handle.get_xscale()
+        except AttributeError:
+            x_scale_raw = "linear"
+        try:
+            y_scale_raw = self.handle.get_yscale()
+        except AttributeError:
+            y_scale_raw = "linear"
+        # Matplotlib fallback for older/custom handles that do not yet
+        # expose the full state surface.
+        if self.ax is not None and not hasattr(self.handle, "is_grid_enabled"):
             grid_lines = list(self.ax.xaxis.get_gridlines()) + list(self.ax.yaxis.get_gridlines())
             grid_visible = any(line.get_visible() for line in grid_lines)
+        if self.ax is not None and not hasattr(self.handle, "get_xscale"):
             x_scale_raw = self.ax.get_xscale()
+        if self.ax is not None and not hasattr(self.handle, "get_yscale"):
             y_scale_raw = self.ax.get_yscale()
-        else:
-            grid_visible = False
-            x_scale_raw = "linear"
-            y_scale_raw = "linear"
         line = self._current_line()
         line_color = self._line_color_text(line) if line is not None else ""
         mappable = self._current_mappable()
@@ -647,11 +654,9 @@ class ChartOptionsDialog(QDialog):
             scale_text=self.combo_y_scale.currentText(),
         )
         self.handle.grid(self.chk_grid.isChecked())
-        # ``legend`` / ``get_legend_handles_labels`` are matplotlib-only
-        # and intentionally not part of the ``AxisHandle`` protocol
-        # (design §5.3); route through the migration-temporary escape
-        # hatch. T5/T6 will revisit this for pyqtgraph.
-        if self.chk_legend.isChecked() and self.ax is not None:
+        if self.chk_legend.isChecked() and hasattr(self.handle, "rebuild_legend"):
+            self.handle.rebuild_legend()
+        elif self.chk_legend.isChecked() and self.ax is not None:
             handles, labels = self.ax.get_legend_handles_labels()
             pairs = [(h, l) for h, l in zip(handles, labels) if l and not l.startswith("_")]
             if pairs:
@@ -792,19 +797,17 @@ class ChartOptionsDialog(QDialog):
             )
 
     def _sync_curve_axis_color(self, line, color):
-        # ``line`` is a ``LineHandle`` wrapper now (design §5.3); unwrap
-        # back to the matplotlib ``Line2D`` for the spine/tick/canvas
-        # sync paths that still need the raw artist during the
-        # migration window.
+        sync = getattr(self.handle, "sync_line_axis_color", None)
+        if callable(sync):
+            sync(line, color)
+
+        # ``line`` is a ``LineHandle`` wrapper now; unwrap back to the
+        # matplotlib ``Line2D`` for the canvas/inside-label sync paths
+        # that still need the raw artist during the migration window.
         raw_line = getattr(line, "line", line)
         ax = getattr(raw_line, "axes", None) or self.ax
         if ax is None:
             return
-        side = self._axis_side_for_line(ax)
-        ax.yaxis.label.set_color(color)
-        ax.tick_params(axis='y', colors=color)
-        if side in ax.spines:
-            ax.spines[side].set_color(color)
 
         canvas = getattr(ax.figure, "canvas", None)
         channel_name = self._channel_name_for_line(canvas, raw_line)

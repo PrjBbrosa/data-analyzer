@@ -195,7 +195,7 @@ def test_timedomain_pan_refresh_pg_canvas():
     production (W3): the pyqtgraph ``TimeDomainCanvasPG`` whose
     ``set_xlim`` fires ``sigXRangeChanged`` → 40 ms QTimer-debounced
     ``_refresh_visible_data`` → ``positions_envelope`` (asammdf C path)
-    → ``QPainterPath`` → cached ``QPixmap``. We drive the SAME workload,
+    → visible ``PlotDataItem.setData``. We drive the SAME workload,
     warmup, and pan loop as ``test_timedomain_pan_refresh_baseline`` so
     the report can compare matplotlib-vs-pyqtgraph apples-to-apples.
 
@@ -203,8 +203,8 @@ def test_timedomain_pan_refresh_pg_canvas():
                                    # the debounced refresh QTimer
         cv._flush_pending_refresh()  # drains synchronously →
                                      # _refresh_visible_data →
-                                     # positions_envelope + QPainterPath
-                                     # + QPixmap, gated on the per-channel
+                                     # positions_envelope + setData,
+                                     # gated on the per-channel
                                      # range key so same-xlim is a no-op
 
     Per ``codex-phantom-api-surface-guards``: a REAL ``TimeDomainCanvasPG``
@@ -336,8 +336,8 @@ def test_timedomain_pan_refresh_pg_canvas():
         # Smoke assertions only — never gate on absolute timing.
         assert n > 0
         assert all(v >= 0.0 for v in samples_ms)
-        # The cache populated, proving the hot path ran (not a no-op).
-        assert len(cv._curve_path_cache) >= 1
+        # The range gate populated, proving the hot path ran (not a no-op).
+        assert len(cv._last_range_key) >= 1
         # After the last flush, no pending refresh should remain.
         assert cv._refresh_pending is False
         assert cv._refresh_timer.isActive() is False

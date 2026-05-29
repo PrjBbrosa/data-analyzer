@@ -139,10 +139,12 @@ def test_mpl_axis_handle_grid_toggle():
     h = MplAxisHandle(ax)
 
     h.grid(True)
+    assert h.is_grid_enabled() is True
     gridlines = list(ax.xaxis.get_gridlines()) + list(ax.yaxis.get_gridlines())
     assert any(gl.get_visible() for gl in gridlines)
 
     h.grid(False)
+    assert h.is_grid_enabled() is False
     gridlines = list(ax.xaxis.get_gridlines()) + list(ax.yaxis.get_gridlines())
     assert not any(gl.get_visible() for gl in gridlines)
 
@@ -178,6 +180,36 @@ def test_mpl_axis_handle_line_handle_set_color_round_trips():
     line = h.get_lines()[0]
     line.set_color("#ef4444")
     assert ax.get_lines()[0].get_color() == "#ef4444"
+
+
+def test_mpl_axis_handle_get_scale_and_rebuild_legend():
+    from mf4_analyzer.ui._axis_handle import MplAxisHandle
+    _fig, ax = _axes_with_data()
+    h = MplAxisHandle(ax)
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    assert h.get_xscale() == "log"
+    assert h.get_yscale() == "log"
+
+    h.rebuild_legend()
+    legend = ax.get_legend()
+    assert legend is not None
+    labels = [text.get_text() for text in legend.get_texts()]
+    assert labels == ["curve"]
+
+
+def test_mpl_axis_handle_sync_line_axis_color():
+    from matplotlib import colors as mcolors
+    from mf4_analyzer.ui._axis_handle import MplAxisHandle
+    _fig, ax = _axes_with_data()
+    h = MplAxisHandle(ax)
+    line = h.get_lines()[0]
+
+    h.sync_line_axis_color(line, "#123456")
+
+    assert ax.yaxis.label.get_color() == "#123456"
+    assert mcolors.to_hex(ax.spines["left"].get_edgecolor()) == "#123456"
 
 
 def test_mpl_axis_handle_get_mappables_empty_for_line_only_axes():
@@ -266,3 +298,67 @@ def test_pg_axis_handle_is_filled_in_after_t5(qapp):
     lo, hi = h.get_xlim()
     assert lo == pytest.approx(0.0)
     assert hi == pytest.approx(1.0)
+
+
+def test_pg_axis_handle_state_accessors_and_legend(qapp):
+    import os
+    os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
+    import pyqtgraph as pg
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+
+    glw = pg.GraphicsLayoutWidget()
+    plot_item = glw.addPlot(row=0, col=0)
+    plot_item.showGrid(x=True, y=True)
+    plot_item.plot([0.0, 1.0], [1.0, 2.0], pen=pg.mkPen("#1769e0"), name="speed")
+    h = PgAxisHandle(plot_item=plot_item)
+
+    assert h.is_grid_enabled() is True
+    h.set_xscale("log")
+    h.set_yscale("log")
+    assert h.get_xscale() == "log"
+    assert h.get_yscale() == "log"
+
+    h.rebuild_legend()
+    legend = plot_item.legend
+    assert legend is not None
+    assert len(legend.items) == 1
+    h.rebuild_legend()
+    assert plot_item.legend is legend
+    assert len(legend.items) == 1
+
+
+def test_pg_axis_handle_sync_line_axis_color(qapp):
+    import os
+    os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
+    import pyqtgraph as pg
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+
+    glw = pg.GraphicsLayoutWidget()
+    plot_item = glw.addPlot(row=0, col=0)
+    plot_item.plot([0.0, 1.0], [1.0, 2.0], pen=pg.mkPen("#1769e0"), name="speed")
+    h = PgAxisHandle(plot_item=plot_item)
+    line = h.get_lines()[0]
+    axis = plot_item.getAxis("left")
+
+    h.sync_line_axis_color(line, "#123456")
+
+    assert axis.pen().color().name().lower() == "#123456"
+    assert axis.textPen().color().name().lower() == "#123456"
+
+
+def test_pg_axis_handle_axis_item_accessors_prefer_owned_axis(qapp):
+    import os
+    os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
+    import pyqtgraph as pg
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+
+    glw = pg.GraphicsLayoutWidget()
+    plot_item = glw.addPlot(row=0, col=0)
+    right_axis = pg.AxisItem("right")
+
+    primary = PgAxisHandle(plot_item=plot_item)
+    aux = PgAxisHandle(plot_item=plot_item, axis_item=right_axis)
+
+    assert primary.x_axis_item() is plot_item.getAxis("bottom")
+    assert primary.y_axis_item() is plot_item.getAxis("left")
+    assert aux.y_axis_item() is right_axis

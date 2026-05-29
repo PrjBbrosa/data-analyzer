@@ -1193,9 +1193,9 @@ QWidget#chartToolbar QPushButton[role="chart-choice"]:hover {
     color: #334155;
 }
 QWidget#chartToolbar QPushButton[role="chart-choice"]:checked {
-    background-color: #ffffff;
-    border-color: #dfe5ee;
-    color: #0f3f8f;
+    background-color: #e8efff;
+    border-color: #2563eb;
+    color: #2563eb;
 }
 
 QWidget#chartToolbar QLabel#chartAnnotationLabel {

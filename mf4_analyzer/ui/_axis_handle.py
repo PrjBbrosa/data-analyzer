@@ -94,6 +94,8 @@ class AxisHandle(Protocol):
     def autoscale(self, axis: str = "both") -> None: ...
     def set_xscale(self, scale: str) -> None: ...
     def set_yscale(self, scale: str) -> None: ...
+    def get_xscale(self) -> str: ...
+    def get_yscale(self) -> str: ...
     def get_xlabel(self) -> str: ...
     def set_xlabel(self, label: str) -> None: ...
     def get_ylabel(self) -> str: ...
@@ -101,8 +103,11 @@ class AxisHandle(Protocol):
     def get_title(self) -> str: ...
     def set_title(self, title: str) -> None: ...
     def grid(self, enabled: bool) -> None: ...
+    def is_grid_enabled(self) -> bool: ...
     def get_lines(self) -> list[LineHandle]: ...
     def get_mappables(self) -> list[object]: ...
+    def rebuild_legend(self) -> None: ...
+    def sync_line_axis_color(self, line: LineHandle, color: str) -> None: ...
     def request_redraw(self) -> None: ...
 
 
@@ -152,6 +157,12 @@ class MplAxisHandle:
     def set_yscale(self, scale: str) -> None:
         self._ax.set_yscale(scale)
 
+    def get_xscale(self) -> str:
+        return str(self._ax.get_xscale())
+
+    def get_yscale(self) -> str:
+        return str(self._ax.get_yscale())
+
     # Labels ----------------------------------------------------------------
     def get_xlabel(self) -> str:
         return self._ax.get_xlabel()
@@ -175,6 +186,10 @@ class MplAxisHandle:
     def grid(self, enabled: bool) -> None:
         self._ax.grid(enabled)
 
+    def is_grid_enabled(self) -> bool:
+        gridlines = list(self._ax.xaxis.get_gridlines()) + list(self._ax.yaxis.get_gridlines())
+        return any(line.get_visible() for line in gridlines)
+
     # Lines + mappables -----------------------------------------------------
     def get_lines(self) -> list[LineHandle]:
         return [
@@ -193,6 +208,27 @@ class MplAxisHandle:
             if hasattr(obj, "set_cmap") and hasattr(obj, "set_clim"):
                 found.append(obj)
         return found
+
+    def rebuild_legend(self) -> None:
+        handles, labels = self._ax.get_legend_handles_labels()
+        pairs = [(h, l) for h, l in zip(handles, labels) if l and not l.startswith("_")]
+        if not pairs:
+            return
+        handles, labels = zip(*pairs)
+        self._ax.legend(handles, labels)
+
+    def sync_line_axis_color(self, line: LineHandle, color: str) -> None:
+        raw_line = getattr(line, "line", line)
+        ax = getattr(raw_line, "axes", None) or self._ax
+        if ax is None:
+            return
+        label_pos = getattr(ax.yaxis, "get_label_position", lambda: "left")()
+        tick_pos = getattr(ax.yaxis, "get_ticks_position", lambda: "left")()
+        side = "right" if label_pos == "right" or tick_pos == "right" else "left"
+        ax.yaxis.label.set_color(color)
+        ax.tick_params(axis="y", colors=color)
+        if side in ax.spines:
+            ax.spines[side].set_color(color)
 
     # Redraw ----------------------------------------------------------------
     def request_redraw(self) -> None:
@@ -326,11 +362,18 @@ class PgAxisHandle:
         self._plot_item = plot_item
         # Cache the ViewBox; if no PlotItem was given fall back to the
         # explicit view_box kw arg.
-        if plot_item is not None and hasattr(plot_item, "getViewBox"):
+        if view_box is not None:
+            self._view_box = view_box
+        elif plot_item is not None and hasattr(plot_item, "getViewBox"):
             self._view_box = plot_item.getViewBox()
         else:
-            self._view_box = view_box
+            self._view_box = None
         self._axis_item = axis_item  # historical compat; not strictly used
+        self._grid_enabled = self._read_grid_enabled()
+        self._xscale = self._read_log_scale("x")
+        self._yscale = self._read_log_scale("y")
+        self._line_items = []
+        self._title_changed_callbacks = []
 
     # Internal helpers -----------------------------------------------------
     def _ax(self, side: str):
@@ -342,6 +385,29 @@ class PgAxisHandle:
             return pi.getAxis(side)
         except Exception:
             return None
+
+    def _read_grid_enabled(self) -> bool:
+        pi = self._plot_item
+        ctrl = getattr(pi, "ctrl", None)
+        checks = [
+            getattr(ctrl, "xGridCheck", None),
+            getattr(ctrl, "yGridCheck", None),
+        ]
+        for check in checks:
+            is_checked = getattr(check, "isChecked", None)
+            if callable(is_checked) and is_checked():
+                return True
+        return False
+
+    def _read_log_scale(self, axis: str) -> str:
+        pi = self._plot_item
+        ctrl = getattr(pi, "ctrl", None)
+        name = "logXCheck" if axis == "x" else "logYCheck"
+        check = getattr(ctrl, name, None)
+        is_checked = getattr(check, "isChecked", None)
+        if callable(is_checked) and is_checked():
+            return "log"
+        return "linear"
 
     # Limits ----------------------------------------------------------------
     def get_xlim(self) -> tuple[float, float]:
@@ -389,17 +455,78 @@ class PgAxisHandle:
             vb.enableAutoRange()
 
     # Scales ----------------------------------------------------------------
-    def set_xscale(self, scale: str) -> None:
+    def _is_primary_plot_view(self) -> bool:
         pi = self._plot_item
-        if pi is None or not hasattr(pi, "setLogMode"):
-            return
-        pi.setLogMode(x=(scale == "log"))
+        if pi is None or not hasattr(pi, "getViewBox"):
+            return False
+        try:
+            return self._view_box is pi.getViewBox()
+        except Exception:
+            return False
+
+    def _plot_data_items(self):
+        items = []
+        if self._line_items:
+            items.extend(self._line_items)
+        pi = self._plot_item
+        if pi is not None and self._is_primary_plot_view() and hasattr(pi, "listDataItems"):
+            try:
+                items.extend(list(pi.listDataItems()))
+            except Exception:
+                pass
+        unique = []
+        for item in items:
+            if item not in unique:
+                unique.append(item)
+        return unique
+
+    def _apply_data_log_mode(self):
+        x_log = self._xscale == "log"
+        y_log = self._yscale == "log"
+        for item in self._plot_data_items():
+            setter = getattr(item, "setLogMode", None)
+            if callable(setter):
+                try:
+                    setter(x_log, y_log)
+                except Exception:
+                    pass
+
+    def set_xscale(self, scale: str) -> None:
+        normalized = "log" if scale == "log" else "linear"
+        self._xscale = normalized
+        pi = self._plot_item
+        if pi is not None and hasattr(pi, "setLogMode") and self._is_primary_plot_view():
+            pi.setLogMode(x=(normalized == "log"))
+        axis = self.x_axis_item()
+        if axis is not None and hasattr(axis, "setLogMode"):
+            try:
+                axis.setLogMode(normalized == "log")
+            except Exception:
+                pass
+        self._apply_data_log_mode()
 
     def set_yscale(self, scale: str) -> None:
+        normalized = "log" if scale == "log" else "linear"
+        self._yscale = normalized
         pi = self._plot_item
-        if pi is None or not hasattr(pi, "setLogMode"):
-            return
-        pi.setLogMode(y=(scale == "log"))
+        if pi is not None and hasattr(pi, "setLogMode") and self._is_primary_plot_view():
+            pi.setLogMode(y=(normalized == "log"))
+        axis = self.y_axis_item()
+        if axis is not None and hasattr(axis, "setLogMode"):
+            try:
+                axis.setLogMode(normalized == "log")
+            except Exception:
+                pass
+        self._apply_data_log_mode()
+
+    def get_xscale(self) -> str:
+        # Prefer the cached write-through state. If a caller toggled the
+        # PlotItem controls directly before constructing the handle, the
+        # constructor seeded this value from those checkboxes.
+        return self._xscale
+
+    def get_yscale(self) -> str:
+        return self._yscale
 
     # Labels ----------------------------------------------------------------
     def get_xlabel(self) -> str:
@@ -424,7 +551,7 @@ class PgAxisHandle:
         ax.setLabel(text=label)
 
     def get_ylabel(self) -> str:
-        ax = self._ax("left")
+        ax = self.y_axis_item()
         if ax is None:
             return ""
         text = getattr(ax, "labelText", None)
@@ -436,7 +563,7 @@ class PgAxisHandle:
         return ""
 
     def set_ylabel(self, label: str) -> None:
-        ax = self._ax("left")
+        ax = self.y_axis_item()
         if ax is None:
             return
         ax.setLabel(text=label)
@@ -465,16 +592,35 @@ class PgAxisHandle:
         if pi is None or not hasattr(pi, "setTitle"):
             return
         pi.setTitle(title)
+        for callback in list(self._title_changed_callbacks):
+            try:
+                callback(self, str(title))
+            except Exception:
+                pass
+
+    def add_title_changed_callback(self, callback) -> None:
+        if callback not in self._title_changed_callbacks:
+            self._title_changed_callbacks.append(callback)
 
     # Grid ------------------------------------------------------------------
     def grid(self, enabled: bool) -> None:
         pi = self._plot_item
         if pi is None or not hasattr(pi, "showGrid"):
             return
-        pi.showGrid(x=bool(enabled), y=bool(enabled))
+        self._grid_enabled = bool(enabled)
+        pi.showGrid(x=self._grid_enabled, y=self._grid_enabled)
+
+    def is_grid_enabled(self) -> bool:
+        return bool(self._grid_enabled)
 
     # Lines + mappables -----------------------------------------------------
     def get_lines(self) -> list[LineHandle]:
+        if hasattr(self, "_line_items") and self._line_items:
+            return [
+                _PgLineHandle(pdi)
+                for pdi in list(self._line_items)
+                if not hasattr(pdi, "isVisible") or pdi.isVisible()
+            ]
         pi = self._plot_item
         if pi is None:
             return []
@@ -497,6 +643,62 @@ class PgAxisHandle:
         # mappable list returns empty so the ColorMap/ColorScale group
         # of ChartOptionsDialog disables (not hides) itself.
         return []
+
+    def rebuild_legend(self) -> None:
+        pi = self._plot_item
+        if pi is None:
+            return
+        legend = getattr(pi, "legend", None)
+        if legend is None:
+            add_legend = getattr(pi, "addLegend", None)
+            if not callable(add_legend):
+                return
+            legend = add_legend()
+        clear = getattr(legend, "clear", None)
+        if callable(clear):
+            clear()
+        seen: set[str] = set()
+        for line in self.get_lines():
+            label = line.get_label()
+            if not label or label.startswith("_") or label in seen:
+                continue
+            item = getattr(line, "plot_data_item", line)
+            try:
+                legend.addItem(item, label)
+                seen.add(label)
+            except Exception:
+                continue
+
+    def sync_line_axis_color(self, line: LineHandle, color: str) -> None:
+        try:
+            import pyqtgraph as pg
+        except Exception:
+            return
+        axis = self.y_axis_item()
+        if axis is None:
+            return
+        try:
+            axis.setPen(pg.mkPen(color=color, width=2.0))
+        except Exception:
+            pass
+        try:
+            axis.setTextPen(pg.mkPen(color=color))
+        except Exception:
+            pass
+
+    def x_axis_item(self):
+        return self._ax("bottom")
+
+    def y_axis_item(self):
+        if self._axis_item is not None:
+            return self._axis_item
+        return self._ax("left")
+
+    def add_line_item(self, plot_data_item) -> None:
+        if not hasattr(self, "_line_items"):
+            self._line_items = []
+        if plot_data_item not in self._line_items:
+            self._line_items.append(plot_data_item)
 
     # Redraw ----------------------------------------------------------------
     def request_redraw(self) -> None:

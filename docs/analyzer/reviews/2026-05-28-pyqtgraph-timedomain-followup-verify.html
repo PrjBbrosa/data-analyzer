@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pyqtgraph TimeDomain — codex 修复验证 + 遗留 Bug 复审 (2026-05-28)</title>
+<style>
+  :root{--bg:#f5f7fb;--card:#fff;--ink:#111827;--muted:#64748b;--line:#e5eaf2;
+    --accent:#2563eb;--accentbg:#e8efff;--ok:#15803d;--okbg:#f0fdf4;
+    --p0:#dc2626;--p1:#d97706;--p2:#0f766e;--code:#0f3f8f;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 80px;}
+  h1{font-size:23px;margin:0 0 4px;}
+  h2{font-size:18px;margin:34px 0 12px;padding-top:14px;border-top:2px solid var(--line);}
+  h3{font-size:15px;margin:16px 0 6px;}
+  .sub{color:var(--muted);margin:0 0 18px;}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;
+    color:var(--code);background:#f1f5ff;border:1px solid #e0e8ff;border-radius:4px;padding:1px 5px;}
+  kbd{font-family:ui-monospace,monospace;background:#1f2937;color:#fff;border-radius:4px;padding:1px 6px;font-size:12px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:14px 0;}
+  table{border-collapse:collapse;width:100%;font-size:13px;}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{color:var(--muted);font-weight:600;background:#fafbfe;}
+  .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;color:#fff;white-space:nowrap;}
+  .P0{background:var(--p0)} .P1{background:var(--p1)} .P2{background:var(--p2)}
+  .done{background:var(--ok)} .part{background:#ca8a04}
+  .st{display:inline-block;font-weight:700;font-size:12px;border-radius:6px;padding:1px 8px;}
+  .st.ok{background:var(--okbg);color:var(--ok);border:1px solid #bbf7d0}
+  .st.pt{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+  .st.no{background:#fef2f2;color:var(--p0);border:1px solid #fecaca}
+  .fix{background:var(--okbg);border:1px solid #bbf7d0;border-radius:8px;padding:9px 13px;margin:8px 0;}
+  .fix b{color:var(--ok)}
+  ul{margin:6px 0;padding-left:20px} li{margin:3px 0}
+  .legend span{margin-right:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>codex 修复验证 + 遗留 Bug 复审</h1>
+<p class="sub">
+分支 <code>plan/pyqtgraph-timedomain-migration</code>（codex 改动未提交，在工作区）· 2026-05-28<br>
+焦点测试 <code>tests/ui/test_pg_timedomain_canvas.py</code> + <code>tests/ui/test_chart_stack.py</code>：
+<b>123 passed</b>。方法：代码审查 + 测试 + 截图（图四）比对，未启动实时 GUI。
+</p>
+
+<div class="card">
+<b>一句话：</b>codex 把上轮报告的 5 个 P0/P1 基本补齐了（可见重采样、游标接线、子图缩放定向、网格/底轴/线色、按钮底色），
+测试全绿。但你列的 4 个新问题<b>全部成立且大多未被本轮覆盖</b>，另外我又找到
+<b>4 个新 bug</b>（最关键：图表选项对话框对 PG 画布有一批控件是死的，因为 <code>self.ax=None</code>）。
+</div>
+
+<!-- ===== PART 1: VERIFY ===== -->
+<h2>一、codex 已完成项验证（对照 plan）</h2>
+<table>
+<thead><tr><th>任务</th><th>状态</th><th>证据（文件:行）</th><th>备注 / 残留</th></tr></thead>
+<tbody>
+<tr><td>T1 可见视口重采样</td><td><span class="st ok">已完成</span></td>
+  <td><code>_refresh_visible_data</code> 调 <code>PlotDataItem.setData(env_t,env_s)</code> <code>pg_canvases.py:1271</code></td>
+  <td>缩放现在会重采样变清晰 ✔。但 pixmap 路径（<code>:1260-1261</code>）每帧仍在算、无人读 → 见新 Bug B</td></tr>
+<tr><td>T2 实时游标</td><td><span class="st ok">已完成</span></td>
+  <td><code>InfiniteLine</code> + eventFilter 接 <code>MouseButtonPress/MouseMove</code> <code>:952-957 / 715-817</code></td>
+  <td>单/双游标可画线 ✔。但 MouseMove 被吞 → 见新 Bug C</td></tr>
+<tr><td>T3 子图缩放定向</td><td><span class="st ok">已完成</span></td>
+  <td>滚轮按源 ViewBox 定向 <code>:1605</code>；工具栏 <code>_set_all_mouse_modes</code> 遍历全部 VB <code>chart_stack.py:366-377</code></td>
+  <td>Ctrl 滚轮缩 X 仍全局同步，Shift/纯滚只动当前子图 Y ✔</td></tr>
+<tr><td>T4 视觉默认</td><td><span class="st pt">大部分完成</span></td>
+  <td>网格 <code>showGrid(...,alpha=.28)</code> <code>:433</code>；非底轴隐刻度 <code>:557-575</code>；线宽 1.05 <code>:510</code>；左轴染色 <code>_apply_pg_axis_style :537</code>；内嵌标签按名长触发 <code>:1765</code>；QSS 选中 <code>#e8efff</code></td>
+  <td>网格是<b>实线</b> alpha .28（原始为虚线）；内嵌标签位置有漂移 bug（你的 #3）</td></tr>
+<tr><td>T5 验证门</td><td><span class="st ok">通过</span></td><td>123 passed</td><td>—</td></tr>
+</tbody>
+</table>
+
+<!-- ===== PART 2: YOUR 4 ===== -->
+<h2>二、你列的 4 个新问题（均成立）</h2>
+<p class="legend">
+  <span class="tag P0">P0</span>功能/正确性 <span class="tag P1">P1</span>一致性 <span class="tag P2">P2</span>打磨</p>
+
+<div class="card">
+<h3>① <span class="tag P1">P1</span> 默认线条太细 <span class="st no">真</span></h3>
+<p>bind 用 <code>pg.mkPen(color=color, width=1.05)</code>（<code>pg_canvases.py:510</code>）。
+问题在于 matplotlib 的 <code>lw=1.05</code> 是<b>点(pt)</b>，pyqtgraph 的 <code>width=1.05</code> 是<b>像素(px)</b>——
+在高分屏上 1px 线又细又锯齿。叠加默认线宽 <code>_overlay_default_lw=1.05</code> 同源（<code>:303</code> 一带）。</p>
+<div class="fix"><b>建议：</b>默认线宽提到 <code>~1.6–2.0</code>，并开抗锯齿
+（<code>pg.setConfigOptions(antialias=True)</code> 或建 PlotDataItem 时 <code>antialias=True</code>）；
+同步调高 overlay 默认/选中线宽基线。</div>
+</div>
+
+<div class="card">
+<h3>② <span class="tag P1">P1</span> 坐标轴密度调整无效 <span class="st no">真</span></h3>
+<p><code>set_tick_density(x,y)</code> 是空实现 <code>return None</code>（<code>pg_canvases.py:857</code>）。
+检视器的密度控件经 <code>main_window.py:459 / 1004</code> → <code>canvas_time.set_tick_density()</code> → 什么都不做。</p>
+<div class="fix"><b>建议：</b>用 <code>AxisItem.setStyle(tickSpacing=...)</code> 或
+<code>AxisItem.setTicks()</code> 把密度落到左/底轴；子图模式对每个 PlotItem 都设。</div>
+<p style="margin:8px 0 0"><b>「类似功能再检查」→ 确实还有一批死/半死控件</b>（详见第三节 Bug A）。</p>
+</div>
+
+<div class="card">
+<h3>③ <span class="tag P0">P0</span> 取消标题/通道标签「还会跑」 <span class="st no">真</span>（对应图四）</h3>
+<p>内嵌通道标签是 <code>pg.TextItem</code>，建立时 <code>setPos(x_range[0], y_range[1])</code>——
+<b>数据坐标</b>（<code>pg_canvases.py:1821</code>），只在 <code>plot_channels</code> / <code>resizeEvent</code> 时重定位，
+<b>不随 pan/zoom 更新</b>。所以平移缩放后标签停在旧的数据坐标上，飘到图中间（图四里两个
+<code>[diya luntai] ...</code> 方框正是如此）。这就是「还会跑」。</p>
+<div class="fix"><b>建议：</b>把标签锚到<b>视口角落</b>而非数据点——
+<code>text_item.setParentItem(vb)</code> 后用像素锚点（ViewBox 局部坐标左上角恒为 0,0），
+或连 <code>vb.sigRangeChanged</code> 每次回调把 <code>setPos</code> 更新到当前 <code>viewRange</code> 左上角。
+原始 matplotlib 用 <code>transform=ax.transAxes</code>（轴比例坐标）天然不漂。</div>
+</div>
+
+<div class="card">
+<h3>④ <span class="tag P1">P1</span> 叠加状态坐标轴「消失」 <span class="st no">真</span></h3>
+<p>叠加分支只建<b>一个</b> PlotItem + 一个 ViewBox，把所有通道塞进同一条共享 Y 轴
+（<code>pg_canvases.py:394-403</code>）。而原始 matplotlib 叠加是
+<b>每通道一条 twinx 轴</b>（左轴 + 多条向外偏移的右轴，各自独立 Y 缩放、各自染色，
+<code>canvases.py:702-733</code>）。后果：</p>
+<ul>
+<li>多条彩色 Y 轴变成只剩一条 → 你看到的「坐标轴消失」。</li>
+<li>所有通道被压到同一 Y 尺度 → 量级小的通道被压成贴边平线（看不清）。</li>
+<li>那条仅存的左轴被 <code>_apply_pg_axis_style</code> 在循环里反复改色，最终停在<b>最后一个</b>通道的颜色与标签，语义错乱。</li>
+</ul>
+<div class="fix"><b>建议：</b>叠加模式恢复「每通道独立 Y 轴」——pyqtgraph 惯例是为每条曲线建独立
+<code>ViewBox</code> + <code>AxisItem</code>，用 <code>updateViews()</code> 把它们和主 ViewBox 的几何/ X 绑定
+（pyqtgraph 官方 <code>MultiplePlotAxes</code> 示例）。这是本轮最大的结构性缺口，工作量也最大。</div>
+</div>
+
+<!-- ===== PART 3: NEW ===== -->
+<h2>三、我新发现的 Bug</h2>
+
+<div class="card">
+<h3>A <span class="tag P1">P1</span> 图表选项对话框对 PG 画布有一批控件是死的</h3>
+<p>根因：<code>ChartOptionsDialog.self.ax = getattr(self.handle,"axes",None)</code>（<code>dialogs.py:311</code>），
+而 <code>PgAxisHandle</code> <b>没有</b> <code>.axes</code> 属性 → <code>self.ax = None</code>。
+凡是经 <code>self.ax</code> 的逻辑在 PG 画布上全失效：</p>
+<table>
+<thead><tr><th>控件 / 行为</th><th>代码</th><th>PG 现状</th></tr></thead>
+<tbody>
+<tr><td>「重新生成自动图例」</td><td>dialogs.py:654-659（<code>self.ax.get_legend_handles_labels()</code>）</td><td>死控件，点了无效</td></tr>
+<tr><td>网格复选框<b>初始态</b></td><td>dialogs.py:565-566（读 <code>self.ax...get_gridlines()</code>）</td><td>读不到，永远显未勾（即使网格已开）</td></tr>
+<tr><td>X/Y 比例下拉<b>初始态</b></td><td>dialogs.py:568-569（读 <code>get_xscale/yscale</code>）</td><td>读不到实际值；不过<b>应用</b> log 经 <code>set_xscale→setLogMode</code> 仍生效</td></tr>
+<tr><td>曲线改色时<b>同步轴脊/刻度色</b></td><td>dialogs.py:800（<code>raw_line.axes or self.ax</code>）</td><td>只改曲线色，<b>轴脊/刻度不跟着变色</b></td></tr>
+</tbody>
+</table>
+<div class="fix"><b>建议：</b>给 <code>PgAxisHandle</code> 把这些能力补进协议（读网格态 / 读 scale / 轴脊染色 / 图例），
+让对话框走 handle 而非 <code>self.ax</code>；或在对话框里对 <code>handle</code> 类型分支。
+这正是你说的「类似功能再检查」的那一批。</div>
+</div>
+
+<div class="card">
+<h3>B <span class="tag P2">P2</span> pixmap 路径变成纯浪费</h3>
+<p>T1 让 <code>setData</code> 成为真正的渲染真相后，<code>_refresh_visible_data</code> 里每帧仍调
+<code>_build_painter_path</code> + <code>_render_path_to_pixmap</code> 写进 <code>_curve_path_cache</code>（<code>:1260-1264</code>），
+但<b>没有任何读取方</b>。这是平移热路径上的无效计算，部分抵消了性能收益。</p>
+<div class="fix"><b>建议：</b>从 <code>_refresh_visible_data</code> 删掉 pixmap/path 构建（连同缓存字段），
+或明确标注为关闭的实验路径。</div>
+</div>
+
+<div class="card">
+<h3>C <span class="tag P1">P1</span> 游标开启时拖动平移可能失效</h3>
+<p>eventFilter 在 <code>_cursor_visible</code> 为真时<b>吞掉 MouseMove</b>并 <code>return True</code>（<code>:955-957</code>），
+事件不再下发给 ViewBox 的拖拽-平移逻辑。即「单游标/双游标」开着时，左键拖动平移会被游标 hover 抢走。</p>
+<div class="fix"><b>建议：</b>仅在「未按下左键拖拽」或「非 pan/zoom 模式」时消费 MouseMove；
+按下拖拽时放行给 ViewBox。</div>
+</div>
+
+<div class="card">
+<h3>D <span class="tag P2">P2</span> 设标题会出现「双标题」 &nbsp;·&nbsp; E <span class="tag P2">P2</span> Home 后子图 X 可能脱节</h3>
+<ul>
+<li><b>D：</b>对话框设标题 → <code>PgAxisHandle.set_title→pi.setTitle</code> 在子图顶部居中显示一个标题，
+而左上角内嵌通道名标签仍在 → 同一子图出现两处标题文字。</li>
+<li><b>E：</b><code>PgNavigationToolbar.home()</code> 对每个 ViewBox 各自 <code>autoRange()</code>（<code>chart_stack.py</code>），
+各子图按<b>自身</b>数据 X 范围复位；若通道时间范围不同，Home 后子图 X 不再对齐
+（原始 <code>sharex</code> 不会）。建议 Home 后强制做一次 X 对齐传播。</li>
+</ul>
+</div>
+
+<!-- ===== ORDER ===== -->
+<h2>四、建议处理顺序</h2>
+<div class="card">
+<ol>
+<li><b>③ 标签漂移</b>（视口锚定）—— 你截图里最显眼，改动小、收益大。</li>
+<li><b>④ 叠加多轴</b>（每通道独立 ViewBox/Axis）—— 结构性最大项，建议单独一波。</li>
+<li><b>A 对话框死控件</b> + <b>② 刻度密度</b> —— 一起补到 <code>PgAxisHandle</code> 协议里。</li>
+<li><b>① 线宽</b> + <b>网格虚线</b> + <b>B pixmap 清理</b> —— 视觉/清理小批次。</li>
+<li><b>C 游标吞事件</b> + <b>D 双标题</b> + <b>E Home 脱节</b> —— 交互打磨。</li>
+</ol>
+<p class="sub" style="margin-top:8px">注：本复审为代码+测试+截图分析，未跑实时 GUI。每项落地后需用同组通道实跑回归
+（缩放重采样 / 分屏↔叠加切换 / 游标+平移并用 / pan 后看标签是否还漂 / Home 后子图 X 是否对齐）。</p>
+</div>
+
+</div>
+</body>
+</html>

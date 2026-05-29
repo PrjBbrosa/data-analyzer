@@ -352,6 +352,25 @@ class PgNavigationToolbar(QToolBar):
             primary = axes_list[0]
         return getattr(primary, 'view_box', None)
 
+    def _view_boxes(self):
+        boxes = []
+        for ax in getattr(self._canvas, 'axes_list', None) or []:
+            vb = getattr(ax, 'view_box', None)
+            if vb is not None and vb not in boxes:
+                boxes.append(vb)
+        if not boxes:
+            primary = self._primary_view_box()
+            if primary is not None:
+                boxes.append(primary)
+        return boxes
+
+    def _set_all_mouse_modes(self, mode):
+        for vb in self._view_boxes():
+            try:
+                vb.setMouseMode(mode)
+            except Exception:
+                continue
+
     def _snapshot_view(self):
         """Snapshot per-axis (xlim, ylim) so back/forward can restore."""
         canvas = self._canvas
@@ -373,24 +392,57 @@ class PgNavigationToolbar(QToolBar):
             except Exception:
                 continue
 
+    def _channel_data_x_union(self):
+        canvas = self._canvas
+        bounds = []
+        for row in getattr(canvas, 'channel_data', {}).values():
+            try:
+                t_values = row[0]
+            except Exception:
+                continue
+            try:
+                import numpy as np
+
+                arr = np.asarray(t_values, dtype=float)
+                finite = arr[np.isfinite(arr)]
+                if finite.size:
+                    bounds.append((float(finite.min()), float(finite.max())))
+            except Exception:
+                continue
+        if not bounds:
+            return None
+        return min(lo for lo, _hi in bounds), max(hi for _lo, hi in bounds)
+
     # ----- public surface (matplotlib NavigationToolbar2QT parity) --------
     def home(self, *_args):
-        """Autoscale the primary view back to the data extents.
+        """Autoscale back to data extents using a deterministic shared-X policy.
 
-        Calls ``ViewBox.autoRange`` directly because ``PgAxisHandle.autoscale``
-        goes through ``enableAutoRange`` which only takes effect on the next
-        paint cycle — ``autoRange`` is synchronous and matches matplotlib's
-        ``Home`` button semantics (reset to data extents NOW).
+        Prefer the canvas-level reset helper when present. Older canvases do
+        not expose that helper, so the fallback keeps per-axis Y autoscale but
+        pins every axis X range to the union of live raw channel time ranges.
         """
         self._view_history.append(self._snapshot_view())
         self._view_forward.clear()
         canvas = self._canvas
+        sync = getattr(canvas, "reset_view_to_data_extents", None)
+        if callable(sync):
+            sync()
+            return
+
+        x_union = self._channel_data_x_union()
         for ax in getattr(canvas, 'axes_list', None) or []:
             vb = getattr(ax, 'view_box', None)
             if vb is None or not hasattr(vb, 'autoRange'):
                 continue
             try:
                 vb.autoRange()
+            except Exception:
+                continue
+        if x_union is None:
+            return
+        for ax in getattr(canvas, 'axes_list', None) or []:
+            try:
+                ax.set_xlim(*x_union)
             except Exception:
                 continue
 
@@ -414,47 +466,29 @@ class PgNavigationToolbar(QToolBar):
         """Toggle pan mode. Idempotent within mode; mutually exclusive with
         zoom — switching to pan from zoom drops zoom first.
         """
-        vb = self._primary_view_box()
+        import pyqtgraph as pg
+
         if self.mode == self._MODE_PAN:
             # Second call toggles OFF (matplotlib parity).
             self.mode = self._MODE_NONE
-            if vb is not None:
-                # pyqtgraph default ViewBox.PanMode is 3; we set it here
-                # explicitly so toggling off leaves a sane mouseMode.
-                try:
-                    import pyqtgraph as pg
-                    vb.setMouseMode(pg.ViewBox.PanMode)
-                except Exception:
-                    pass
+            # pyqtgraph default ViewBox.PanMode is 3; set it explicitly so
+            # toggling off leaves every subplot in a sane mouse mode.
+            self._set_all_mouse_modes(pg.ViewBox.PanMode)
             return
         # Switching INTO pan from idle or zoom.
         self.mode = self._MODE_PAN
-        if vb is not None:
-            try:
-                import pyqtgraph as pg
-                vb.setMouseMode(pg.ViewBox.PanMode)
-            except Exception:
-                pass
+        self._set_all_mouse_modes(pg.ViewBox.PanMode)
 
     def zoom(self, *_args):
         """Toggle zoom (rectangle-drag) mode. Mirror semantics of pan()."""
-        vb = self._primary_view_box()
+        import pyqtgraph as pg
+
         if self.mode == self._MODE_ZOOM:
             self.mode = self._MODE_NONE
-            if vb is not None:
-                try:
-                    import pyqtgraph as pg
-                    vb.setMouseMode(pg.ViewBox.PanMode)
-                except Exception:
-                    pass
+            self._set_all_mouse_modes(pg.ViewBox.PanMode)
             return
         self.mode = self._MODE_ZOOM
-        if vb is not None:
-            try:
-                import pyqtgraph as pg
-                vb.setMouseMode(pg.ViewBox.RectMode)
-            except Exception:
-                pass
+        self._set_all_mouse_modes(pg.ViewBox.RectMode)
 
     def save_figure(self, *_args):
         """Open a Save-As dialog and write the canvas grab to disk."""
