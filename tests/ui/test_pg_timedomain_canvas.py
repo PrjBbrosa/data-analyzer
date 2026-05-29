@@ -1729,9 +1729,15 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
                 best = min(best, d)
             return best
 
+        # Use a fine grid over a wide interior band. A coarse 9x9 grid was
+        # too sparse: a few-px shift in the plot rect (e.g. the overlay
+        # right-axis stack moving to contiguous columns) can drop the best
+        # sampled gap below the pick radius even though a genuinely-blank
+        # point still exists. The deselect BEHAVIOR is unchanged; the helper
+        # just needs enough resolution to land on the blank region.
         best = None
-        for fx in np.linspace(0.1, 0.9, 9):
-            for fy in np.linspace(0.1, 0.9, 9):
+        for fx in np.linspace(0.04, 0.96, 25):
+            for fy in np.linspace(0.04, 0.96, 25):
                 sx = rect.left() + fx * (rect.right() - rect.left())
                 sy = rect.top() + fy * (rect.bottom() - rect.top())
                 sp = QPointF(sx, sy)
@@ -2885,6 +2891,72 @@ class TestOverlayAxisLabelGeometry:
             )
             assert float(ax.width()) > 0.0, (
                 f"overlay axis for {name!r} must reserve a non-zero width"
+            )
+        canvas.deleteLater()
+
+    def test_overlay_right_axes_do_not_overlap_with_wide_numbers(self, qapp):
+        """Issue (2026-05-29): right-side channel names were crammed against
+        the adjacent axis's tick numbers. Root cause: ``setWidth(44)`` was a
+        HARD clamp (not a floor), jamming wide-number axes, and the stacked
+        right axes had no inter-column spacing. This replaces the old weak
+        ``"\\n" not in label`` check with REAL clearance: adjacent overlay
+        y-AxisItem sceneBoundingRects must not overlap, and no axis may be
+        narrower than its own natural (auto-sized) tick-text width.
+        """
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(1000, 500)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        t = np.linspace(0.0, 1.0, 2000)
+        # 5 channels with WIDE numeric ranges and long names — the case that
+        # exposed both the hard-clamp jam and the missing inter-axis spacing.
+        rows = [
+            ("engine_speed_rpm", True, t, 2600.0 * np.sin(t) - 1200.0,
+             "#1769e0", "rpm", "f"),
+            ("manifold_pressure_kpa", True, t, 1400.0 * np.cos(t),
+             "#ef4444", "kPa", "f"),
+            ("coolant_temperature_c", True, t, 95.0 + 5.0 * np.sin(t),
+             "#00b894", "C", "f"),
+            ("fuel_flow_rate_lph", True, t, 12.5 + np.cos(t),
+             "#fbbf24", "L/h", "f"),
+            ("exhaust_gas_temperature_c", True, t, 780.0 + 50.0 * np.sin(t),
+             "#a855f7", "C", "f"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        # Force a layout pass so geometry settles.
+        canvas.resize(1001, 500)
+        QCoreApplication.processEvents()
+
+        axes = [h.y_axis_item() for h in canvas.axes_list]
+        # No axis may be hard-clamped below its natural tick-text width.
+        for name, (handle, _line) in canvas._channel_lines.items():
+            ax = handle.y_axis_item()
+            w = float(ax.width())
+            ax.setWidth(None)
+            QCoreApplication.processEvents()
+            natural = float(ax.width())
+            ax.setWidth(w)  # restore
+            assert w + 0.5 >= natural, (
+                f"overlay axis {name!r} is clamped to {w} below its natural "
+                f"tick-text width {natural} → numbers get jammed"
+            )
+
+        # Adjacent right axes (left-to-right scene order) must not overlap.
+        right_axes = [a for a in axes if getattr(a, "orientation", None) == "right"]
+        right_sorted = sorted(
+            right_axes, key=lambda a: a.sceneBoundingRect().left()
+        )
+        assert len(right_sorted) >= 3, "expected >=3 right axes in this build"
+        for a, b in zip(right_sorted, right_sorted[1:]):
+            gap = b.sceneBoundingRect().left() - a.sceneBoundingRect().right()
+            assert gap >= 0.0, (
+                f"adjacent overlay right axes overlap (gap={gap:.1f}px); the "
+                f"rotated name butts against the neighbor's tick numbers"
             )
         canvas.deleteLater()
 

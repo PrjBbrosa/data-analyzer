@@ -316,10 +316,14 @@ class TimeDomainCanvasPG(QWidget):
         # reference). Used by _select_overlay_channel_from_scene_pos.
         self._overlay_pick_radius_px = 12.0
 
-        # Bug 1: minimum reserved width (px) for each overlay y-axis so the
-        # rotated channel label + tick numbers do not collide with the
-        # adjacent axis. pyqtgraph auto-grows past this for wider ticks.
-        self._overlay_axis_min_width = 44.0
+        # Horizontal spacing (px) inserted between the stacked overlay right
+        # axes via PlotItem.layout.setHorizontalSpacing so each rotated
+        # channel name clears the next axis's tick numbers. Each AxisItem's
+        # rotated label overhangs ~5px past its declared width(), so this
+        # must exceed that overhang to leave a visible gap. Replaces the old
+        # ``setWidth(44)`` HARD CLAMP (it jammed wide-number axes instead of
+        # acting as a floor); overlay axes now auto-size to their tick text.
+        self._overlay_axis_column_spacing = 12
 
         # Selected-channel Y-drag bookkeeping: (start_y_px, (lo, hi)).
         # _begin_overlay_y_drag_at captures, _apply_overlay_y_drag_at
@@ -556,9 +560,17 @@ class TimeDomainCanvasPG(QWidget):
         X-master's padding.
 
         - ``index == 0`` → channel 1 binds the built-in LEFT axis.
-        - ``index == 1`` → channel 2 reuses the built-in right axis.
-        - ``index >= 2`` → channels 3+ append extra right axes to the
-          PlotItem layout (pyqtgraph's MultiplePlotAxes example).
+        - ``index >= 1`` → every right channel appends a FRESH right
+          ``AxisItem`` into contiguous layout columns starting at col 3,
+          leaving the PlotItem's built-in right-axis column (col 2) EMPTY.
+          We deliberately do NOT reuse the built-in right axis for channel
+          2: the standard right-axis column abuts the ViewBox and pyqtgraph
+          suppresses ``setHorizontalSpacing`` across that col 2→col 3
+          boundary, so a built-in-right + appended-right mix leaves the
+          first pair overlapping while the rest are spaced. Routing every
+          right channel through contiguous appended columns makes the
+          inter-axis spacing uniform so no rotated name butts against the
+          neighbour's tick numbers.
 
         All aux ViewBoxes share the X-master plot's scene geometry and X
         range and have their OWN mouse pan disabled so the main (X-master)
@@ -573,13 +585,10 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 pass
             axis_item = primary_plot.getAxis("left")
-        elif index == 1:
-            try:
-                primary_plot.showAxis("right")
-            except Exception:
-                pass
-            axis_item = primary_plot.getAxis("right")
         else:
+            # Channels 2..N: fresh appended right axes at contiguous columns
+            # (index 1 → col 3, index 2 → col 4, ...). Col 2 (built-in right)
+            # stays unused so layout spacing applies uniformly to every pair.
             axis_item = pg.AxisItem("right")
             try:
                 primary_plot.layout.addItem(axis_item, 2, 2 + index)
@@ -587,6 +596,14 @@ class TimeDomainCanvasPG(QWidget):
                 pass
             try:
                 axis_item.setZValue(-10000)
+            except Exception:
+                pass
+            # Reserve horizontal spacing between every stacked right axis so
+            # each rotated channel name clears the next axis's tick numbers.
+            try:
+                primary_plot.layout.setHorizontalSpacing(
+                    self._overlay_axis_column_spacing
+                )
             except Exception:
                 pass
         try:
@@ -754,15 +771,16 @@ class TimeDomainCanvasPG(QWidget):
     def _configure_overlay_axis_geometry(self, axis_handle):
         """Overlay-only axis geometry so the rotated label clears the ticks.
 
-        Bug 1 measures:
+        Measures:
         - ``enableAutoSIPrefix(False)`` so pyqtgraph does not append a
           ``(x0.001)`` scale chip that overlaps the channel label.
-        - A small label text offset so the rotated label sits clear of the
-          tick numbers.
-        - A pinned minimum width so each overlay AxisItem reserves room for
-          its label + ticks and does not collapse onto the adjacent axis
-          (analogue of ``_unify_subplot_left_axis_widths`` for the overlay
-          right-axis stack).
+        - ``setWidth(None)`` so the AxisItem AUTO-SIZES to fit its own tick
+          text. The previous ``setWidth(44)`` was documented as a "floor"
+          but ``AxisItem.setWidth(w)`` is a HARD CLAMP — wide-number axes
+          (e.g. -2600 / 1400) were jammed to 44px and their numbers crammed
+          against the label. Real inter-axis clearance is provided by
+          ``setHorizontalSpacing`` between the stacked right axes
+          (``_add_overlay_axis_handle``), not by a per-axis width pin.
         """
         try:
             axis = axis_handle.y_axis_item()
@@ -774,18 +792,10 @@ class TimeDomainCanvasPG(QWidget):
             axis.enableAutoSIPrefix(False)
         except Exception:
             pass
-        # Nudge the label away from the tick numbers. setStyle is the
-        # pyqtgraph-native knob for tick text offset + label gap.
+        # Release any inherited width pin so the axis auto-sizes to its own
+        # tick-text width; the rotated name then never crams against ticks.
         try:
-            axis.setStyle(tickTextOffset=4)
-        except Exception:
-            pass
-        # Reserve a non-zero minimum width so the label/ticks have room and
-        # adjacent overlay axes do not overlap. pyqtgraph auto-grows beyond
-        # this when tick text is wider, so this is a floor, not a clamp.
-        try:
-            if float(axis.width()) < self._overlay_axis_min_width:
-                axis.setWidth(self._overlay_axis_min_width)
+            axis.setWidth(None)
         except Exception:
             pass
 
@@ -955,15 +965,16 @@ class TimeDomainCanvasPG(QWidget):
         pyqtgraph's ``GraphicsLayout.clear()`` only removes items that were
         registered via ``addItem`` (the PlotItems). Overlay aux ViewBoxes
         are attached top-level via ``primary_plot.scene().addItem(aux_vb)``
-        (``_add_overlay_axis_handle``) and ch3+ right axes via
+        (``_add_overlay_axis_handle``) and every right axis (ch2+) via
         ``primary_plot.layout.addItem(axis_item, ...)``, so both leak as
         ghost curves/axes on every rebuild unless removed explicitly here.
         Mirrors ``_teardown_inside_labels`` (the same scene-leak class).
 
-        ch1/ch2 reuse the PlotItem's built-in left/right axes (removed with
-        the PlotItem by ``_glw.clear()``); only ch3+ appended axes need
-        explicit removal, but iterating all of ``_overlay_aux_axes`` and
-        guarding each ``removeItem`` is safe and idempotent.
+        ch1 reuses the PlotItem's built-in LEFT axis (removed with the
+        PlotItem by ``_glw.clear()``); every right channel (ch2+) is a fresh
+        appended ``AxisItem`` and needs explicit removal. Iterating all of
+        ``_overlay_aux_axes`` and guarding each ``removeItem`` is safe and
+        idempotent (the built-in left axis ignores both removals harmlessly).
         """
         for aux_vb in list(self._overlay_aux_viewboxes):
             try:
