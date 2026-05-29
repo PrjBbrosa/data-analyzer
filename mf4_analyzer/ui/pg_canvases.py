@@ -1117,27 +1117,20 @@ class TimeDomainCanvasPG(QWidget):
     def _select_overlay_channel_from_scene_pos(self, scene_pos):
         """Resolve which overlay channel a press at ``scene_pos`` selects.
 
-        Port of canvases.py:_select_overlay_channel_from_event: first try a
-        direct Y-axis hit (the click landed on a channel's axis gutter via
-        its ViewBox), then fall back to the nearest curve point within
-        ``_overlay_pick_radius_px``. Returns the channel name or ``None``.
+        Returns the nearest curve's channel name when a sample is within
+        ``_overlay_pick_radius_px`` of the press, else ``None`` so a blank
+        in-plot click deselects.
+
+        Bug 5: the old ViewBox-rect axis-hit fallback is removed. In overlay
+        mode every aux ViewBox's ``sceneBoundingRect`` spans the FULL plot
+        rect (``_sync_overlay_aux_viewboxes`` sets them all to the X-master's
+        geometry), so ``_axis_handle_at_scene_pos`` returned channel 1 for
+        ANY in-plot point — making a genuine blank click impossible to
+        deselect. The real axis gutter sits OUTSIDE the plot rect anyway, so
+        the rect test never identified a true gutter hit.
         """
         if scene_pos is None:
             return None
-        # Axis/ViewBox hit: a press inside an aux ViewBox's bounding rect
-        # selects that channel directly (parity with the axis='y' branch).
-        axis_handle = self._axis_handle_at_scene_pos(scene_pos)
-        if axis_handle is not None:
-            name = self._channel_name_for_handle(axis_handle)
-            if name is not None:
-                # Only accept an axis hit when it is NOT ambiguous with a
-                # closer curve; the curve scan below refines it. We keep
-                # the axis hit as a baseline candidate.
-                axis_name = name
-            else:
-                axis_name = None
-        else:
-            axis_name = None
 
         best_name = None
         best_dist = float("inf")
@@ -1145,7 +1138,7 @@ class TimeDomainCanvasPG(QWidget):
             px = float(scene_pos.x())
             py = float(scene_pos.y())
         except Exception:
-            return axis_name
+            return None
         for name, (handle, line) in self._channel_lines.items():
             vb = handle.view_box
             if vb is None:
@@ -1193,9 +1186,8 @@ class TimeDomainCanvasPG(QWidget):
                 best_name = name
         if best_name is not None and best_dist <= self._overlay_pick_radius_px:
             return best_name
-        # No curve within the pick radius — fall back to the axis hit
-        # (clicking the axis gutter still selects its channel).
-        return axis_name
+        # No curve within the pick radius → blank in-plot click → deselect.
+        return None
 
     def _map_view_points_to_scene(self, view_box, xdata, ydata):
         """Map arrays of (x, y) view coordinates to scene pixel coords.

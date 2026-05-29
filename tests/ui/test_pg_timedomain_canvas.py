@@ -1705,9 +1705,46 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
             x_before, abs=0.0, rel=0.0
         ), "first-channel drag must not perturb the shared X"
 
-    def test_blank_click_deselects_and_emits_none(self, qapp):
-        """A press far from every curve (blank area) deselects, emitting
-        overlay_channel_selected(None)."""
+    def _blankest_inplot_scene_point(self, canvas):
+        """Return the in-plot scene point that is FARTHEST (in pixels) from
+        every overlay curve, plus its min-distance. Used to construct a
+        genuinely blank in-plot click (inside the X-master plot rect, beyond
+        ``_overlay_pick_radius_px`` from all curves)."""
+        from PyQt5.QtCore import QPointF
+
+        master = canvas._primary_xaxis_ax.view_box
+        rect = master.sceneBoundingRect()
+
+        def min_dist(sp):
+            best = float("inf")
+            for _name, (handle, line) in canvas._channel_lines.items():
+                vb = handle.view_box
+                xd, yd = line.plot_data_item.getData()
+                xd = np.asarray(xd, dtype=float)
+                yd = np.asarray(yd, dtype=float)
+                m = np.isfinite(xd) & np.isfinite(yd)
+                xd, yd = xd[m], yd[m]
+                pts = canvas._map_view_points_to_scene(vb, xd, yd)
+                d = float(np.min(np.hypot(pts[:, 0] - sp.x(), pts[:, 1] - sp.y())))
+                best = min(best, d)
+            return best
+
+        best = None
+        for fx in np.linspace(0.1, 0.9, 9):
+            for fy in np.linspace(0.1, 0.9, 9):
+                sx = rect.left() + fx * (rect.right() - rect.left())
+                sy = rect.top() + fy * (rect.bottom() - rect.top())
+                sp = QPointF(sx, sy)
+                d = min_dist(sp)
+                if best is None or d > best[1]:
+                    best = (sp, d)
+        return best
+
+    def test_blank_inplot_click_deselects_and_emits_none(self, qapp):
+        """Bug 5: a press on genuinely blank space INSIDE the plot rect (no
+        curve within ``_overlay_pick_radius_px``) must deselect. Previously
+        the ViewBox-rect axis-hit fallback returned channel 1 for any in-plot
+        point because every aux ViewBox rect spans the full plot."""
         from PyQt5.QtCore import QCoreApplication
 
         canvas = self._overlay_canvas(qapp)
@@ -1716,12 +1753,45 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         emitted = []
         canvas.overlay_channel_selected.connect(emitted.append)
 
-        # A point far above every curve's data (well outside 12px of any
-        # sample): map a data y far from the visible torque range.
-        handle = canvas._channel_lines["torque"][0]
-        lo, hi = handle.get_ylim()
-        far_y = hi + (hi - lo) * 50.0
-        point = _viewport_point_for_data(canvas, handle, 0.5, far_y)
+        scene_pt, dist = self._blankest_inplot_scene_point(canvas)
+        # Sanity: the point is genuinely blank (no curve within pick radius)
+        # AND genuinely inside the plot rect (not the above-rect escape that
+        # made the old test pass for the wrong reason).
+        assert dist > canvas._overlay_pick_radius_px, (
+            f"could not find a blank in-plot point; nearest curve {dist:.1f}px"
+        )
+        master_rect = canvas._primary_xaxis_ax.view_box.sceneBoundingRect()
+        assert master_rect.contains(scene_pt), (
+            "test point must be inside the plot rect for this to exercise "
+            "the in-plot deselect path"
+        )
+
+        viewport_pt = canvas._glw.mapFromScene(scene_pt)
+        consumed = self._press(canvas, qapp, viewport_pt)
+
+        assert consumed is True
+        assert canvas._selected_overlay_channel is None
+        assert emitted and emitted[-1] is None
+
+    def test_blank_click_deselects_and_emits_none(self, qapp):
+        """A press far from every curve (blank area) deselects, emitting
+        overlay_channel_selected(None). Tightened (Bug 5) to click an
+        in-plot blank point rather than a point above the plot rect."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = self._overlay_canvas(qapp)
+        canvas.select_overlay_channel("torque")
+        QCoreApplication.processEvents()
+        emitted = []
+        canvas.overlay_channel_selected.connect(emitted.append)
+
+        scene_pt, dist = self._blankest_inplot_scene_point(canvas)
+        assert dist > canvas._overlay_pick_radius_px
+        # Must be inside the plot rect — the old version clicked ABOVE it,
+        # which passed only because no ViewBox contained the point.
+        master_rect = canvas._primary_xaxis_ax.view_box.sceneBoundingRect()
+        assert master_rect.contains(scene_pt)
+        point = canvas._glw.mapFromScene(scene_pt)
         consumed = self._press(canvas, qapp, point)
 
         assert consumed is True
