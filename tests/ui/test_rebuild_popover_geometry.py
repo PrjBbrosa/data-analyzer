@@ -71,6 +71,36 @@ def test_popover_clamped_inside_right_edge(qapp, qtbot):
     )
 
 
+def test_popover_rounded_corners_have_no_square_frame(qapp, qtbot):
+    """The rounded surface must not leave a square frame. Recipe: a
+    translucent + no-drop-shadow shell *dialog* (transparent corners, no
+    native rectangular shadow) whose rounded white fill rides on an inner
+    QFrame#PopoverSurface — because a top-level QDialog does not reliably
+    paint its own stylesheet background once translucent. Parity with
+    inspector_sections._PresetHoverCard / SignalPickerPopup."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QFrame
+
+    win, _btn = _build_window_with_anchor(qtbot, (10, 10))
+    pop = RebuildTimePopover(parent=win, target_filename="x.mf4", current_fs=1000.0)
+    qtbot.addWidget(pop)
+    # Shell window: transparent corners + no native square shadow.
+    assert pop.testAttribute(Qt.WA_TranslucentBackground), (
+        "shell 需 WA_TranslucentBackground,否则圆角外留方框"
+    )
+    assert bool(pop.windowFlags() & Qt.NoDropShadowWindowHint), (
+        "frameless popover 需 NoDropShadowWindowHint 去掉原生方形阴影"
+    )
+    # Rounded fill lives on an inner styled QFrame so the translucent dialog
+    # is not an empty/invisible surface.
+    surface = pop._surface
+    assert isinstance(surface, QFrame)
+    assert surface.objectName() == "PopoverSurface"
+    assert surface.testAttribute(Qt.WA_StyledBackground), (
+        "内层 QFrame 需 WA_StyledBackground 才能画出 QSS 圆角白底"
+    )
+
+
 def test_popover_clamped_inside_bottom_edge_flips_above(qapp, qtbot):
     """Anchor at the bottom edge: popover should flip above the anchor."""
     avail = _avail()

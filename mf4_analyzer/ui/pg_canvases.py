@@ -57,13 +57,25 @@ _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 import logging
 from collections import OrderedDict
+from contextlib import contextmanager
 from typing import Tuple
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QPainter, QPainterPath, QPen, QPixmap
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtGui import QImage, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtWidgets import (
+    QAction,
+    QActionGroup,
+    QCheckBox,
+    QComboBox,
+    QGroupBox,
+    QLabel,
+    QMenu,
+    QRadioButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.ui._axis_handle import PgAxisHandle, _PgLineHandle
@@ -79,6 +91,421 @@ from mf4_analyzer.ui.canvases import (
 
 
 _log = logging.getLogger(__name__)
+
+
+_PG_CONTEXT_ACTIONS = {
+    "ViewBox options": ("视图选项", "配置当前图表的视图范围、坐标轴和鼠标交互。"),
+    "View All": ("查看全部", "回到完整数据范围，等同于顶部工具栏的重置视图。"),
+    "X axis": ("X 轴范围", "设置横轴范围、自动缩放、鼠标交互。"),
+    "Y axis": ("Y 轴范围", "设置纵轴范围、自动缩放、鼠标交互。"),
+    "Mouse Mode": ("鼠标模式", "切换图面左键拖动时的默认行为。"),
+    "3 button": ("三键模式", "左键平移；右键或组合鼠标手势用于缩放。"),
+    "1 button": ("单键模式", "左键框选缩放；适合临时放大一个局部区域。"),
+    "Plot Options": ("绘图选项", "pyqtgraph 原生高级绘图开关；日常看曲线通常不用改。"),
+    "Transforms": ("变换", "对曲线做对数、导数、FFT、去均值等显示变换。"),
+    "Downsample": ("降采样", "大数据曲线的显示抽稀选项，影响绘制速度和视觉细节。"),
+    "Average": ("平均", "显示多条曲线时的平均相关选项。"),
+    "Alpha": ("透明度", "调整曲线透明度。"),
+    "Grid": ("网格", "显示或隐藏 X/Y 网格线，并调整不透明度。"),
+    "Points": ("点显示", "控制是否显示采样点标记。"),
+    "Export...": ("导出...", "打开 pyqtgraph 导出窗口，可导出图片、SVG、CSV 等。"),
+}
+
+_PG_CONTEXT_WIDGETS = {
+    "Mouse Enabled": ("鼠标交互", "允许这个坐标轴响应鼠标拖动和缩放。"),
+    "Auto": ("自动", "根据当前数据自动调整范围。"),
+    "Manual": ("手动", "手动输入当前坐标轴的最小值和最大值。"),
+    "Link Axis:": ("关联坐标轴:", "让当前坐标轴跟随另一个视图同步。"),
+    "Auto Pan Only": ("仅自动平移", "自动跟随数据中心，但不自动改变缩放比例。"),
+    "Visible Data Only": ("仅可见数据", "自动缩放时只参考另一个方向可见范围内的数据。"),
+    "Invert Axis": ("反转坐标轴", "反转这个坐标轴的显示方向。"),
+    "Log X": ("X 对数", "把 X 轴按对数方式显示。"),
+    "Log Y": ("Y 对数", "把 Y 轴按对数方式显示。"),
+    "dy/dx": ("导数 dy/dx", "显示曲线的一阶导数。"),
+    "Y vs. Y'": ("Y 对 Y'", "用另一条曲线作为横轴显示关系图。"),
+    "Power Spectrum (FFT)": ("功率谱 (FFT)", "把曲线转换为频域功率谱显示。"),
+    "Subtract Mean": ("去均值", "显示前先减去曲线平均值。"),
+    "Clip to View": ("仅绘制可见范围", "只绘制当前视图里的数据，可提高大数据交互速度。"),
+    "Max Traces:": ("最大曲线数:", "限制同时显示的曲线数量。"),
+    "Downsample": ("降采样", "按指定倍率抽稀后再绘制。"),
+    "Peak": ("峰值", "保留每段数据的最小/最大值，视觉细节较好但较慢。"),
+    "Mean": ("均值", "每段数据取平均值后绘制。"),
+    "Subsample": ("抽样", "每段只取一个样本，最快但细节最少。"),
+    "Forget hidden traces": ("忘记隐藏曲线", "超过最大曲线数后释放隐藏曲线数据以节省内存。"),
+    "Show X Grid": ("显示 X 网格", "显示横向时间网格线。"),
+    "Show Y Grid": ("显示 Y 网格", "显示纵向数值网格线。"),
+    "Opacity": ("不透明度", "调整网格或图元的不透明度。"),
+}
+
+
+# ---------------------------------------------------------------------------
+# Right-click context-menu redesign (design §A–§D,
+# docs/superpowers/specs/2026-05-30-timedomain-context-menu-redesign-design.md,
+# 方案 A · 常用优先).
+#
+# We KEEP pyqtgraph's native QMenu and reshape it after it is assembled:
+#   - localize the surviving items (reuse the i18n dicts above),
+#   - TRIM every advanced/duplicate/export entry,
+#   - PROMOTE a top-level 网格 ▸ submenu (X/Y grid toggles),
+#   - RENAME 鼠标模式 to toolbar vocabulary (平移 / 框选) and route it
+#     through the SAME mouse-mode controller the top toolbar uses,
+#   - turn tooltips OFF so floating help no longer covers the 二级表单.
+#
+# Final top-level menu (in order):
+#   查看全部 · X 轴范围 ▸ · Y 轴范围 ▸ · 鼠标操作 ▸ · 网格 ▸
+# ---------------------------------------------------------------------------
+
+# Native pyqtgraph action texts (post-i18n) that must be REMOVED entirely from
+# the assembled menu. Matched on the cleaned, possibly-translated label.
+_PG_MENU_REMOVE_TEXTS = frozenset({
+    "Plot Options", "绘图选项",
+    "Export...", "导出...", "导出…",
+})
+
+# Native axis-form child object names to HIDE. Link Axis / Invert and the
+# low-frequency auto-pan / visible-only toggles are out of scope per design A;
+# the whole 自动 row (auto radio + 100% percentage spin) is dropped per user
+# request — it duplicated 查看全部 / Home and only ate menu space.
+_PG_AXIS_FORM_HIDE_OBJECTS = frozenset({
+    "label",            # "Link Axis:" caption
+    "linkCombo",
+    "invertCheck",
+    "autoPanCheck",
+    "visibleOnlyCheck",
+    "autoRadio",        # "自动" radio
+    "autoPercentSpin",  # the "100%" auto-range percentage box
+})
+
+# Mouse-mode submenu vocabulary (toolbar words, NOT 三键/单键 黑话). The two
+# entries map to the toolbar's pan / zoom (box-select) modes.
+_PG_MOUSE_MODE_PAN = "pan"
+_PG_MOUSE_MODE_ZOOM = "zoom"
+_PG_MOUSE_MODE_LABELS = {
+    _PG_MOUSE_MODE_PAN: ("平移", "左键拖动平移视图（与顶部工具栏的平移一致）。"),
+    _PG_MOUSE_MODE_ZOOM: ("框选", "左键拖出矩形框选放大（与顶部工具栏的框选缩放一致）。"),
+}
+
+# ---------------------------------------------------------------------------
+# Hi-DPI copy/save render (spec §E).
+#
+# The toolbar 复制为图片 / 保存图片 buttons render the scene at a HIGHER
+# scale so the bitmap is DPI-independent and crisp (matplotlib was sharp
+# because it rendered at figure DPI, not screen pixels). To keep export
+# fast and not slow normal use, the magnification is CAPPED:
+#
+#   effective_scale = clamp(requested, 1.0, _HIDPI_MAX_WIDTH / base_width)
+#
+# i.e. we never downscale (floor 1×) and we never let the output width
+# exceed _HIDPI_MAX_WIDTH px. For a typical ~1200px workspace a 2× request
+# yields ~2400px; a very wide canvas is throttled so width tops out near
+# 2560px. One consistent rule, applied in both copy and save paths.
+# ---------------------------------------------------------------------------
+_HIDPI_COPY_SCALE = 2.0
+_HIDPI_MAX_WIDTH = 2560
+
+
+def _capped_hidpi_scale(base_width, requested=_HIDPI_COPY_SCALE):
+    """Return the effective magnification for a hi-DPI render.
+
+    Clamps ``requested`` to ``[1.0, _HIDPI_MAX_WIDTH / base_width]`` so the
+    result never downscales below 1× and the rendered width never exceeds
+    ``_HIDPI_MAX_WIDTH``. A non-positive ``base_width`` (degenerate widget)
+    falls back to 1× rather than dividing by zero.
+    """
+    try:
+        bw = float(base_width)
+    except (TypeError, ValueError):
+        return 1.0
+    if bw <= 0:
+        return 1.0
+    eff = max(1.0, float(requested))
+    cap = _HIDPI_MAX_WIDTH / bw
+    if cap < 1.0:
+        # Canvas is already wider than the ceiling — do not magnify (1×),
+        # but never downscale the source.
+        return 1.0
+    return min(eff, cap)
+
+
+def _clean_menu_text(text):
+    return (text or "").replace("&", "").strip()
+
+
+def _apply_context_widget_i18n(widget):
+    """Localize the X/Y axis form AND hide the out-of-scope rows.
+
+    Reuses the surviving translations (鼠标交互 / 自动 / 手动) and drops the
+    Link Axis / Invert / Auto Pan / Visible Only widgets per design A. The
+    widgets are hidden (not deleted) so pyqtgraph's own updateState bindings
+    that still reference them never AttributeError.
+    """
+    if widget is None:
+        return
+    for child in widget.findChildren(QWidget):
+        obj_name = child.objectName()
+        if obj_name in _PG_AXIS_FORM_HIDE_OBJECTS or isinstance(child, QComboBox):
+            try:
+                child.setVisible(False)
+            except Exception:
+                pass
+            continue
+        if isinstance(child, QGroupBox):
+            title = _clean_menu_text(child.title())
+            translated = _PG_CONTEXT_ACTIONS.get(title) or _PG_CONTEXT_WIDGETS.get(title)
+            if translated is not None:
+                child.setTitle(translated[0])
+                child.setToolTip("")
+            continue
+        if not isinstance(child, (QCheckBox, QRadioButton, QLabel)):
+            continue
+        text = _clean_menu_text(child.text())
+        translated = _PG_CONTEXT_WIDGETS.get(text)
+        if translated is None:
+            continue
+        child.setText(translated[0])
+        # Design B: no floating tooltips on the surviving form controls.
+        child.setToolTip("")
+
+
+def _style_pg_context_menu(menu):
+    if menu is None:
+        return
+    try:
+        menu.setObjectName("pgContextMenu")
+        # Design B: tooltips OFF so the floating help no longer covers the
+        # second-level axis form. This is also the occlusion bug fix.
+        menu.setToolTipsVisible(False)
+        menu.setAttribute(Qt.WA_TranslucentBackground, True)
+    except Exception:
+        pass
+
+
+def _localize_pg_context_actions(actions):
+    """Localize a flat action list. Used for the scene contextMenu (before
+    trimming) and recursively for surviving submenus."""
+    for action in list(actions or []):
+        if action is None or action.isSeparator():
+            continue
+        text = _clean_menu_text(action.text())
+        translated = _PG_CONTEXT_ACTIONS.get(text)
+        if translated is not None:
+            action.setText(translated[0])
+        action.setToolTip("")
+        sub = action.menu()
+        if sub is not None:
+            if translated is not None:
+                sub.setTitle(translated[0])
+            _localize_pg_context_menu(sub)
+        try:
+            _apply_context_widget_i18n(action.defaultWidget())
+        except Exception:
+            pass
+
+
+def _localize_pg_context_menu(menu):
+    """Localize a menu in place WITHOUT trimming. Kept for the X/Y axis
+    submenus (whose forms still need translating) and the initial pass over
+    freshly-built ViewBox menus before the assembled menu is reshaped."""
+    if menu is None:
+        return
+    _style_pg_context_menu(menu)
+    title = _clean_menu_text(menu.title())
+    translated = _PG_CONTEXT_ACTIONS.get(title)
+    if translated is not None:
+        menu.setTitle(translated[0])
+        try:
+            menu.menuAction().setText(translated[0])
+        except Exception:
+            pass
+    try:
+        menu.menuAction().setToolTip("")
+    except Exception:
+        pass
+    _localize_pg_context_actions(menu.actions())
+
+
+def _find_top_level_action(menu, *texts):
+    """Return the first top-level QAction in ``menu`` whose cleaned text
+    matches any of ``texts`` (translated or english), else None."""
+    wanted = set(texts)
+    for action in menu.actions():
+        if _clean_menu_text(action.text()) in wanted:
+            return action
+    return None
+
+
+def _build_grid_submenu(menu, plot_item):
+    """Build (or rebuild) a top-level 网格 ▸ submenu with X/Y grid toggles.
+
+    The native Grid control is buried inside Plot Options (which design A
+    removes), so we promote it to its own first-class submenu. The two
+    checkable actions drive ``plot_item.showGrid`` so they coordinate with
+    the force-enabled grid (``showGrid(x=True, y=True, alpha=0.28)`` in
+    ``_add_plot_item``) instead of fighting it — they default CHECKED and
+    toggling re-asserts the current X/Y pair through pyqtgraph's own API.
+    """
+    grid_menu = QMenu(menu)
+    # Route through the shared styler so this hand-built submenu gets the
+    # SAME objectName + toolTips-off + WA_TranslucentBackground as the
+    # top-level menu — without translucency its rounded corners would leave
+    # an opaque square frame.
+    _style_pg_context_menu(grid_menu)
+    grid_menu.setTitle("网格")
+
+    state = {"x": True, "y": True}
+
+    act_x = QAction("显示 X 网格", grid_menu)
+    act_y = QAction("显示 Y 网格", grid_menu)
+    for act in (act_x, act_y):
+        act.setCheckable(True)
+        act.setChecked(True)
+        act.setToolTip("")
+
+    def _apply_grid():
+        try:
+            plot_item.showGrid(x=state["x"], y=state["y"], alpha=0.28)
+        except Exception:
+            pass
+
+    def _on_x(checked):
+        state["x"] = bool(checked)
+        _apply_grid()
+
+    def _on_y(checked):
+        state["y"] = bool(checked)
+        _apply_grid()
+
+    act_x.toggled.connect(_on_x)
+    act_y.toggled.connect(_on_y)
+    grid_menu.addAction(act_x)
+    grid_menu.addAction(act_y)
+    return grid_menu
+
+
+def _reshape_mouse_mode_submenu(menu, controller):
+    """Rename the native 鼠标模式 submenu to toolbar vocabulary and route it
+    through the shared mouse-mode ``controller`` (design D, single source of
+    truth). Returns the reshaped submenu action, or None if absent.
+
+    The native submenu holds the pyqtgraph "3 button"/"1 button" actions in a
+    QActionGroup bound to ``ViewBox.setMouseMode``. We REPLACE its contents
+    with 平移 / 框选 actions whose checkmarks reflect ``controller.current``
+    and whose triggers call ``controller.set_pan``/``set_zoom`` — the same
+    entry the top toolbar uses, so menu and toolbar never disagree.
+    """
+    mouse_action = _find_top_level_action(menu, "鼠标模式", "Mouse Mode", "鼠标操作")
+    if mouse_action is None:
+        return None
+    sub = mouse_action.menu()
+    if sub is None:
+        return None
+    mouse_action.setText("鼠标操作")
+    mouse_action.setToolTip("")
+    sub.setTitle("鼠标操作")
+    # Same shared styler as the grid submenu: objectName + toolTips-off +
+    # WA_TranslucentBackground so the rounded corners don't leave a box.
+    _style_pg_context_menu(sub)
+    # Wipe the native 三键/单键 actions; rebuild with toolbar words.
+    for old in list(sub.actions()):
+        sub.removeAction(old)
+    group = QActionGroup(sub)
+    group.setExclusive(True)
+    pan_label, pan_tip = _PG_MOUSE_MODE_LABELS[_PG_MOUSE_MODE_PAN]
+    zoom_label, zoom_tip = _PG_MOUSE_MODE_LABELS[_PG_MOUSE_MODE_ZOOM]
+    act_pan = QAction(pan_label, group)
+    act_zoom = QAction(zoom_label, group)
+    for act in (act_pan, act_zoom):
+        act.setCheckable(True)
+        act.setToolTip("")
+    current = None
+    if controller is not None:
+        try:
+            current = controller.current_mouse_mode()
+        except Exception:
+            current = None
+    # Default the checkmark to pan when idle so the menu always shows a state.
+    act_pan.setChecked(current != _PG_MOUSE_MODE_ZOOM)
+    act_zoom.setChecked(current == _PG_MOUSE_MODE_ZOOM)
+
+    def _select_pan(_checked=False):
+        if controller is not None:
+            try:
+                controller.set_pan_mode()
+            except Exception:
+                pass
+
+    def _select_zoom(_checked=False):
+        if controller is not None:
+            try:
+                controller.set_zoom_mode()
+            except Exception:
+                pass
+
+    act_pan.triggered.connect(_select_pan)
+    act_zoom.triggered.connect(_select_zoom)
+    sub.addAction(act_pan)
+    sub.addAction(act_zoom)
+    return mouse_action
+
+
+def redesign_pg_context_menu(menu, plot_item, controller):
+    """Reshape the ASSEMBLED pyqtgraph context ``menu`` per design §A–§D.
+
+    Called from ``_ModifierWheelViewBox.raiseContextMenu`` AFTER
+    ``scene().addParentContextMenus`` has appended Plot Options + Export, so
+    every removable entry is present and the trim happens once on the final
+    surface (not a parallel rebuild).
+
+    Order of operations:
+      1. localize + tooltip-off the whole tree,
+      2. remove Plot Options / Export,
+      3. reshape 鼠标模式 → 鼠标操作 (toolbar-synced),
+      4. promote a 网格 ▸ submenu,
+      5. drop any orphaned trailing/leading separators.
+    """
+    if menu is None:
+        return
+    _localize_pg_context_menu(menu)
+
+    # (2) Remove advanced / export entries entirely.
+    for action in list(menu.actions()):
+        if action.isSeparator():
+            continue
+        if _clean_menu_text(action.text()) in _PG_MENU_REMOVE_TEXTS:
+            menu.removeAction(action)
+
+    # (3) Mouse-mode submenu → toolbar vocabulary + shared controller.
+    _reshape_mouse_mode_submenu(menu, controller)
+
+    # (4) Promote a top-level 网格 ▸ submenu (only once per menu instance).
+    if plot_item is not None and _find_top_level_action(menu, "网格") is None:
+        grid_menu = _build_grid_submenu(menu, plot_item)
+        menu.addMenu(grid_menu)
+
+    # (5) Collapse separators that the removals left dangling.
+    _strip_redundant_separators(menu)
+
+
+def _strip_redundant_separators(menu):
+    """Remove leading/trailing/double separators left by action removal."""
+    actions = list(menu.actions())
+    # Drop leading separators.
+    while actions and actions[0].isSeparator():
+        menu.removeAction(actions[0])
+        actions = list(menu.actions())
+    # Drop trailing separators.
+    while actions and actions[-1].isSeparator():
+        menu.removeAction(actions[-1])
+        actions = list(menu.actions())
+    # Collapse consecutive separators.
+    prev_sep = False
+    for action in list(menu.actions()):
+        if action.isSeparator():
+            if prev_sep:
+                menu.removeAction(action)
+            prev_sep = True
+        else:
+            prev_sep = False
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +534,32 @@ class _ModifierWheelViewBox(pg.ViewBox):
         # Weak-ref-style backref to the canvas; the canvas does NOT store
         # the ViewBox so this stays well-defined.
         self._owner_canvas = owner_canvas
+        _localize_pg_context_menu(getattr(self, "menu", None))
+
+    def raiseContextMenu(self, ev):
+        menu = self.getMenu(ev)
+        if menu is None:
+            return
+        try:
+            self.scene().addParentContextMenus(self, menu, ev)
+        except Exception:
+            pass
+        # Reshape the ASSEMBLED menu (after Plot Options + Export were
+        # appended) per design A–D. The owner canvas resolves the PlotItem +
+        # shared mouse-mode controller; falls back to a bare localize if the
+        # canvas backref is gone.
+        owner = self._owner_canvas
+        if owner is not None and hasattr(owner, "_redesign_context_menu_for_viewbox"):
+            try:
+                owner._redesign_context_menu_for_viewbox(self, menu)
+            except Exception:
+                _localize_pg_context_menu(menu)
+        else:
+            _localize_pg_context_menu(menu)
+        try:
+            menu.popup(ev.screenPos().toPoint())
+        except Exception:
+            pass
 
     def wheelEvent(self, ev, axis=None):
         # Route through the canvas's central dispatch so the test surface
@@ -194,6 +647,13 @@ class TimeDomainCanvasPG(QWidget):
         # Quiet background to match the matplotlib CHART_FACE; the actual
         # chart surface stays white.
         self._glw.setBackground("#ffffff")
+        # Enlarge the drawing area: pyqtgraph's central layout defaults to a
+        # 9px outer gutter + 8px inter-row spacing, which is wasted chrome.
+        # Axis tick text lives in each PlotItem's own reserved band (not this
+        # outer margin), so tightening it grows the plot without clipping
+        # labels. Set once here — it survives plot_channels rebuilds.
+        self._glw.ci.setContentsMargins(2, 2, 2, 2)
+        self._glw.ci.setSpacing(2)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._glw)
@@ -372,6 +832,13 @@ class TimeDomainCanvasPG(QWidget):
         # _ChartCard registers toolbar.apply_current_mouse_mode here.
         self._replot_callbacks: list = []
 
+        # Design D: shared mouse-mode controller (single source of truth). The
+        # right-click 鼠标操作 submenu and the top toolbar BOTH drive the same
+        # object so their pan/box-select state can never disagree. The toolbar
+        # registers itself via register_mouse_mode_controller; until then this
+        # stays None and the menu items are inert (no parallel mode path).
+        self._mouse_mode_controller = None
+
     # ------------------------------------------------------------------
     # Public surface (signal/method names frozen by W0 contract tests).
     # ------------------------------------------------------------------
@@ -536,6 +1003,48 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 pass
 
+    def register_mouse_mode_controller(self, controller):
+        """Register the shared mouse-mode ``controller`` (design D).
+
+        ``controller`` must expose ``current_mouse_mode()`` returning
+        ``'pan'`` / ``'zoom'`` / ``''`` plus ``set_pan_mode()`` and
+        ``set_zoom_mode()``. ``_ChartCard`` registers the
+        ``PgNavigationToolbar`` here so the right-click 鼠标操作 submenu and the
+        toolbar share ONE state machine — selecting a menu item updates the
+        toolbar (and its ViewBoxes/icons), and opening the menu reflects the
+        toolbar's current mode in the checkmark.
+        """
+        self._mouse_mode_controller = controller
+
+    def _plot_item_for_view_box(self, view_box):
+        """Return the PlotItem that owns ``view_box`` (or None).
+
+        In single/subplot mode each ViewBox is the PlotItem's own view; in
+        overlay mode the right-axis aux ViewBoxes share the X-master
+        PlotItem, so we map any aux ViewBox back to that PlotItem.
+        """
+        for handle in list(self.axes_list):
+            if getattr(handle, "view_box", None) is view_box:
+                return getattr(handle, "plot_item", None)
+        master = self._x_master_handle
+        if master is not None and getattr(master, "view_box", None) is view_box:
+            return getattr(master, "plot_item", None)
+        # Overlay aux ViewBoxes all render onto the X-master PlotItem.
+        if view_box in self._overlay_aux_viewboxes and master is not None:
+            return getattr(master, "plot_item", None)
+        if master is not None:
+            return getattr(master, "plot_item", None)
+        if self.axes_list:
+            return getattr(self.axes_list[0], "plot_item", None)
+        return None
+
+    def _redesign_context_menu_for_viewbox(self, view_box, menu):
+        """Reshape the assembled right-click ``menu`` of ``view_box`` per the
+        design (delegated from ``_ModifierWheelViewBox.raiseContextMenu`` so
+        the canvas can supply the PlotItem + shared mouse-mode controller)."""
+        plot_item = self._plot_item_for_view_box(view_box)
+        redesign_pg_context_menu(menu, plot_item, self._mouse_mode_controller)
+
     def _add_plot_item(self, *, row, col):
         """Add a PlotItem hosted by our ``_ModifierWheelViewBox``.
 
@@ -546,6 +1055,9 @@ class TimeDomainCanvasPG(QWidget):
         """
         vb = _ModifierWheelViewBox(owner_canvas=self)
         pi = self._glw.addPlot(row=row, col=col, viewBox=vb)
+        _localize_pg_context_menu(getattr(vb, "menu", None))
+        _localize_pg_context_menu(getattr(pi, "ctrlMenu", None))
+        _localize_pg_context_actions(getattr(pi.scene(), "contextMenu", []))
         try:
             pi.showGrid(x=True, y=True, alpha=0.28)
         except Exception:
@@ -577,6 +1089,7 @@ class TimeDomainCanvasPG(QWidget):
         ViewBox stays the sole mouse-capture surface.
         """
         aux_vb = _ModifierWheelViewBox(owner_canvas=self)
+        _localize_pg_context_menu(getattr(aux_vb, "menu", None))
         if index == 0:
             # Channel 1: bind the existing LEFT axis to the aux ViewBox so
             # the left axis tracks this channel's independent Y range.
@@ -2693,38 +3206,150 @@ class TimeDomainCanvasPG(QWidget):
     # Screenshot grab (compat with chart_stack._copy_card_image).
     # ------------------------------------------------------------------
 
-    def grab_pixmap(self) -> QPixmap:
+    def _collect_curve_items(self):
+        """Every ``PlotCurveItem`` on the scene — the painted line of each
+        PlotDataItem. Returns ``[]`` if the scene cannot be reached."""
+        try:
+            scene = self._glw.scene()
+        except Exception:
+            scene = None
+        if scene is None:
+            return []
+        return [it for it in scene.items() if isinstance(it, pg.PlotCurveItem)]
+
+    @contextmanager
+    def _curves_antialiased(self):
+        """Temporarily enable antialiasing on every curve so an export grab
+        renders crisp edges, then restore the prior (interactive, AA-off)
+        state on exit.
+
+        Interactive panning keeps curve AA OFF for speed (commit 4734d7f4);
+        the soft/jagged export users compared unfavourably to matplotlib is a
+        direct consequence. This flips ``PlotCurveItem.opts['antialias']``
+        directly (NOT ``setData``), so the viewport-clipped envelope data is
+        left untouched, and reverts it the moment the grab is done — no
+        permanent perf regression on the pan hot path.
+        """
+        # Toggle the painter-hint opt ONLY — no setData / update / repaint.
+        # The grab forces a fresh paint that reads opts['antialias'] at paint
+        # time, so AA takes effect without invalidating geometry. Crucially we
+        # must NOT trigger a repaint here: that would run the viewport-aware
+        # envelope refresh, whose setData re-pushes data and clobbers the flag.
+        saved = []
+        for it in self._collect_curve_items():
+            try:
+                saved.append((it, it.opts.get("antialias", False)))
+                it.opts["antialias"] = True
+            except Exception:
+                pass
+        try:
+            yield
+        finally:
+            for it, prev in saved:
+                try:
+                    it.opts["antialias"] = bool(prev)
+                except Exception:
+                    pass
+
+    def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
         """Return a ``QPixmap`` snapshot of the canvas.
+
+        ``scale`` (spec §E) renders the scene at a HIGHER resolution for
+        crisp, DPI-independent copy/save output. The effective factor is
+        capped by ``_capped_hidpi_scale`` (floor 1×, width ceiling
+        ``_HIDPI_MAX_WIDTH``) so export stays fast.
 
         Order of attempts:
         1. ``QWidget.grab()`` on the outer widget (covers GraphicsLayoutWidget
-           + any sibling overlays MainWindow may add later).
+           + any sibling overlays MainWindow may add later). For ``scale`` > 1
+           the grabbed region is re-rendered into a larger ``QImage`` by
+           painting the widget at the magnified device size, so the bitmap
+           is sharp rather than a blurry upscale.
         2. Direct ``self._glw.grab()`` if the outer grab returned null.
         3. A 1×1 transparent fallback pixmap if both fail.
 
         Step 3 is the degenerate-rect fallback the
         ``2026-04-25-tightbbox-survives-offscreen-qt`` lesson prescribes:
         callers MUST check ``pix.isNull()`` rather than assuming a
-        well-formed image.
+        well-formed image. The degenerate fallback (and the isNull guard
+        on every primary attempt) is preserved at ``scale`` > 1 too — we
+        never default to a full-canvas-sized guess on a failed grab.
         """
-        try:
-            pix = self.grab()
-            if pix is not None and not pix.isNull() and pix.width() > 0 and pix.height() > 0:
-                return pix
-        except Exception:
-            pass
-        try:
-            pix = self._glw.grab()
-            if pix is not None and not pix.isNull() and pix.width() > 0 and pix.height() > 0:
-                return pix
-        except Exception:
-            pass
+        # Resolve the effective (capped) factor from the OUTER widget's
+        # current width — the same surface step 1 grabs.
+        base_w = max(1, int(self.width()))
+        eff_scale = _capped_hidpi_scale(base_w, scale)
+
+        # Primary: render the outer widget at the magnified device size so
+        # the vector scene is rasterized crisply (matplotlib-figure-DPI
+        # parity), not bilinearly upscaled from a screen grab. Curves are
+        # anti-aliased for the duration of the grab (restored on exit) so the
+        # exported lines/text are smooth, not the AA-off pan-hot-path frame.
+        with self._curves_antialiased():
+            for target in (self, getattr(self, "_glw", None)):
+                if target is None:
+                    continue
+                try:
+                    pix = self._grab_widget_scaled(target, eff_scale)
+                except Exception:
+                    pix = None
+                if pix is not None and not pix.isNull() and pix.width() > 0 and pix.height() > 0:
+                    return pix
         # Final fallback: a 1×1 transparent pixmap. Tests gate on
         # geometry, not pixels, so this is acceptable when offscreen Qt
-        # cannot realize the widget at all.
+        # cannot realize the widget at all. We do NOT scale this up — a
+        # 1×1 degenerate marker stays 1×1 so callers' isNull/size guards
+        # behave identically regardless of the requested scale.
         fallback = QPixmap(1, 1)
         fallback.fill(Qt.transparent)
         return fallback
 
+    @staticmethod
+    def _grab_widget_scaled(widget, eff_scale: float) -> QPixmap:
+        """Grab ``widget`` at ``eff_scale``×.
 
-__all__ = ["TimeDomainCanvasPG", "_quantize_range_key"]
+        At 1× this is exactly ``widget.grab()`` (unchanged legacy path).
+        Above 1× the widget is rendered into a ``QImage`` sized
+        ``round(w*scale) × round(h*scale)`` with the painter pre-scaled,
+        so the scene is re-rasterized at higher resolution. Returns a null
+        pixmap when the widget has no realizable geometry (caller guards
+        on ``isNull()``).
+        """
+        # Always grab once first. This is the legacy capture primitive and
+        # the realizability probe: if the widget cannot be grabbed (null /
+        # zero-size — e.g. offscreen Qt could not realize it), we return
+        # that null result so grab_pixmap cascades to its 1×1 degenerate
+        # fallback instead of synthesizing a blank full-canvas QImage.
+        base = widget.grab()
+        if eff_scale <= 1.0:
+            return base
+        if base is None or base.isNull() or base.width() <= 0 or base.height() <= 0:
+            return base
+        w = int(widget.width())
+        h = int(widget.height())
+        if w <= 0 or h <= 0:
+            # No geometry to magnify — return the plain grab so the
+            # caller's null/size guard runs against the real result.
+            return base
+        tw = max(1, int(round(w * eff_scale)))
+        th = max(1, int(round(h * eff_scale)))
+        img = QImage(tw, th, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        painter = QPainter(img)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.scale(eff_scale, eff_scale)
+            widget.render(painter)
+        finally:
+            painter.end()
+        return QPixmap.fromImage(img)
+
+
+__all__ = [
+    "TimeDomainCanvasPG",
+    "_quantize_range_key",
+    "_capped_hidpi_scale",
+    "_HIDPI_MAX_WIDTH",
+    "_HIDPI_COPY_SCALE",
+]

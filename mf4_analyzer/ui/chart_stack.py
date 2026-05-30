@@ -6,6 +6,64 @@ from PyQt5.QtWidgets import (
     QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
+# Hi-DPI copy/save scale (spec §E). The TimeDomainCanvasPG caps the
+# effective magnification internally (floor 1×, width ceiling 2560px) so
+# both the toolbar 保存图片 and 复制为图片 paths request the same factor and
+# export stays fast.
+_HIDPI_EXPORT_SCALE = 2.0
+
+
+def _effective_export_scale(canvas, requested=_HIDPI_EXPORT_SCALE):
+    """Return the magnification the canvas will actually apply for a
+    ``grab_pixmap(scale=requested)`` call, mirroring the canvas's own cap.
+
+    The copy path needs this so it can scale the composited cursor pill by
+    the SAME factor the bitmap was rendered at. Returns 1.0 when the canvas
+    (e.g. a matplotlib fft/order canvas) does not expose the pyqtgraph
+    hi-DPI render — those grab at 1× and must not have a scaled pill.
+    """
+    if not hasattr(canvas, "grab_pixmap"):
+        return 1.0
+    try:
+        from mf4_analyzer.ui.pg_canvases import _capped_hidpi_scale
+        base_w = max(1, int(canvas.width()))
+        return _capped_hidpi_scale(base_w, requested)
+    except Exception:
+        return 1.0
+
+
+def _grab_pixmap_hidpi(canvas, requested=_HIDPI_EXPORT_SCALE):
+    """Grab a hi-DPI pixmap from ``canvas``.
+
+    Preference order, each step guarded by ``isNull()``:
+    1. ``grab_pixmap(scale=requested)`` — the pyqtgraph time canvas's
+       capped hi-DPI render.
+    2. ``grab_pixmap()`` — a ``grab_pixmap`` without the scale kwarg.
+    3. ``canvas.grab()`` — every ``QWidget`` (matplotlib fft/order
+       canvases lack ``grab_pixmap`` entirely; this preserves their
+       pre-existing 1× copy behavior).
+    Returns ``None`` only when no path yields a non-null pixmap.
+    """
+    grab_px = getattr(canvas, "grab_pixmap", None)
+    if grab_px is not None:
+        try:
+            pix = grab_px(scale=requested)
+        except TypeError:
+            pix = grab_px()
+        except Exception:
+            pix = None
+        if pix is not None and not pix.isNull():
+            return pix
+    # Fallback for canvases without grab_pixmap (matplotlib) or a null
+    # grab_pixmap result: plain QWidget grab.
+    try:
+        pix = canvas.grab()
+        if pix is not None and not pix.isNull():
+            return pix
+    except Exception:
+        pass
+    return None
+
 
 class CursorPill(QFrame):
     """Draggable floating pill with a primary line (time / A·B / ΔT) and an
@@ -53,7 +111,7 @@ class CursorPill(QFrame):
         self.adjustSize()
 
     def has_detail(self):
-        return self._detail.isVisible() and bool(self._detail.text())
+        return not self._detail.isHidden() and bool(self._detail.text())
 
     def clear(self):
         self._primary.clear()
@@ -104,7 +162,7 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as Navigatio
 import qtawesome as qta
 
 from ..ui_kit.icons import Icons
-from .canvases import PlotCanvas, SpectrogramCanvas, TimeDomainCanvas
+from .canvases import PlotCanvas, SpectrogramCanvas
 from .pg_canvases import TimeDomainCanvasPG
 from .widgets import StatsStrip
 
@@ -144,6 +202,7 @@ _ICON_COLOR  = '#374151'
 _ICON_ACTIVE = '#2563eb'
 _TOOLBAR_COMPACT_WIDTH = 1500
 _QT_WIDGETSIZE_MAX = 16777215
+_CURSOR_HTML_SEP = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
 
 # MDI action-key → qtawesome icon name mapping
 _MDI_NAV_ICONS = {
@@ -286,6 +345,12 @@ class PgNavigationToolbar(QToolBar):
     _MODE_NONE = ''
     _MODE_PAN = 'pan'
     _MODE_ZOOM = 'zoom'
+
+    # Design D: emitted whenever the pan/box-select mouse mode changes via
+    # ANY entry (toolbar button or the right-click 鼠标操作 submenu). _ChartCard
+    # listens so the hint label + MDI icon active-state refresh, and the
+    # right-click menu reads current_mouse_mode() so its checkmark matches.
+    mouse_mode_changed = pyqtSignal(str)
 
     def __init__(self, canvas, parent=None):
         super().__init__(parent)
@@ -616,10 +681,12 @@ class PgNavigationToolbar(QToolBar):
             # pyqtgraph default ViewBox.PanMode is 3; set it explicitly so
             # toggling off leaves every subplot in a sane mouse mode.
             self._set_all_mouse_modes(pg.ViewBox.PanMode)
+            self.mouse_mode_changed.emit(self.mode)
             return
         # Switching INTO pan from idle or zoom.
         self.mode = self._MODE_PAN
         self._set_all_mouse_modes(pg.ViewBox.PanMode)
+        self.mouse_mode_changed.emit(self.mode)
 
     def zoom(self, *_args):
         """Toggle zoom (rectangle-drag) mode. Mirror semantics of pan()."""
@@ -628,12 +695,49 @@ class PgNavigationToolbar(QToolBar):
         if self.mode == self._MODE_ZOOM:
             self.mode = self._MODE_NONE
             self._set_all_mouse_modes(pg.ViewBox.PanMode)
+            self.mouse_mode_changed.emit(self.mode)
             return
         self.mode = self._MODE_ZOOM
         self._set_all_mouse_modes(pg.ViewBox.RectMode)
+        self.mouse_mode_changed.emit(self.mode)
+
+    # ----- shared mouse-mode controller surface (design D) -----------------
+    # The right-click 鼠标操作 submenu drives these DETERMINISTIC setters (not
+    # the pan()/zoom() toggles) so a menu click always lands on the requested
+    # mode rather than flipping it off. Both paths mutate the SAME ``self.mode``
+    # + ViewBoxes and emit ``mouse_mode_changed`` → single source of truth.
+
+    def current_mouse_mode(self):
+        """Return the current mouse mode string: ``'pan'`` / ``'zoom'`` /
+        ``''`` (idle). Read by the right-click menu to set its checkmark."""
+        return self.mode
+
+    def set_pan_mode(self):
+        """Set pan mode unconditionally (idempotent). Used by the menu."""
+        import pyqtgraph as pg
+
+        changed = self.mode != self._MODE_PAN
+        self.mode = self._MODE_PAN
+        self._set_all_mouse_modes(pg.ViewBox.PanMode)
+        if changed:
+            self.mouse_mode_changed.emit(self.mode)
+
+    def set_zoom_mode(self):
+        """Set box-select zoom mode unconditionally (idempotent)."""
+        import pyqtgraph as pg
+
+        changed = self.mode != self._MODE_ZOOM
+        self.mode = self._MODE_ZOOM
+        self._set_all_mouse_modes(pg.ViewBox.RectMode)
+        if changed:
+            self.mouse_mode_changed.emit(self.mode)
 
     def save_figure(self, *_args):
-        """Open a Save-As dialog and write the canvas grab to disk."""
+        """Open a Save-As dialog and write the canvas grab to disk.
+
+        Renders at a hi-DPI scale (spec §E) so the saved image is crisp;
+        the canvas caps the magnification internally for speed.
+        """
         canvas = self._canvas
         if not hasattr(canvas, 'grab_pixmap'):
             return
@@ -642,7 +746,7 @@ class PgNavigationToolbar(QToolBar):
         )
         if not path:
             return
-        pix = canvas.grab_pixmap()
+        pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():
             return
         try:
@@ -682,6 +786,17 @@ class _ChartCard(QWidget):
                 # back() has somewhere to return to. Registered AFTER the mode
                 # re-apply so the capture sees the fully-built axes_list.
                 register(self.toolbar.rebind_history_capture)
+            # Design D: make the toolbar the canvas's single mouse-mode
+            # controller so the right-click 鼠标操作 submenu and the toolbar
+            # share one state machine. The menu reads current_mouse_mode() for
+            # its checkmark and calls set_pan_mode()/set_zoom_mode() on click.
+            reg_mode = getattr(canvas, 'register_mouse_mode_controller', None)
+            if callable(reg_mode):
+                reg_mode(self.toolbar)
+            # When the menu (or any path) changes the mode, refresh the
+            # toolbar's icon active-state + hint, and let TimeChartCard flip
+            # its axis-lock chips, exactly as a toolbar-button click would.
+            self.toolbar.mouse_mode_changed.connect(self._on_mouse_mode_changed)
         else:
             self.toolbar = NavigationToolbar(canvas, self)
         self.toolbar.setObjectName("chartToolbar")
@@ -914,6 +1029,16 @@ class _ChartCard(QWidget):
         if opener is not None:
             return opener()
         return False
+
+    def _on_mouse_mode_changed(self, *_):
+        """Design D: a mouse-mode change driven by the right-click 鼠标操作
+        submenu (or any non-button path) routes through the SAME refresh as a
+        toolbar-button toggle, so the icon active-state, hint text, and (in
+        TimeChartCard) the axis-lock chips all reflect the new state. The
+        toolbar buttons already fire ``_on_nav_mode_toggled`` via their action
+        ``triggered``; this keeps the menu path symmetric without a parallel
+        UI-sync codepath."""
+        self._on_nav_mode_toggled()
 
     def _on_nav_mode_toggled(self, *_):
         """Hook subclasses can extend; base only refreshes the hint text."""
@@ -1254,11 +1379,22 @@ class ChartStack(QWidget):
         """Copy the card's canvas to the clipboard. For the time-domain card,
         the floating cursor pill (if visible and overlapping the canvas) is
         composited onto the captured pixmap so the screenshot matches what
-        the user sees on screen."""
+        the user sees on screen.
+
+        The canvas is grabbed at a hi-DPI scale (spec §E) for a crisp,
+        DPI-independent bitmap; the canvas caps the magnification for
+        speed. The cursor pill's position AND size are scaled by the SAME
+        effective factor so it still lines up on the magnified bitmap."""
+        from PyQt5.QtCore import QRect
         from PyQt5.QtGui import QPainter
         from PyQt5.QtWidgets import QApplication
         canvas = card.canvas
-        pix = canvas.grab()
+        # Effective factor the canvas will actually apply (mirrors its cap)
+        # so the pill compositing uses the SAME scale as the rendered bitmap.
+        scale = _effective_export_scale(canvas)
+        pix = _grab_pixmap_hidpi(canvas)
+        if pix is None or pix.isNull():
+            return
         if (card is self.stack.currentWidget()
                 and card is self._time_card
                 and self._pill.isVisible()):
@@ -1266,19 +1402,66 @@ class ChartStack(QWidget):
             pill_geo = self._pill.geometry()
             rel_x = pill_geo.x() - canvas_origin.x()
             rel_y = pill_geo.y() - canvas_origin.y()
-            # Draw only when the pill actually overlaps the canvas rect.
-            if (rel_x + pill_geo.width() > 0 and rel_x < pix.width()
-                    and rel_y + pill_geo.height() > 0 and rel_y < pix.height()):
+            # Draw only when the pill actually overlaps the canvas rect
+            # (compare in unscaled canvas-pixel space).
+            if (rel_x + pill_geo.width() > 0 and rel_x < canvas.width()
+                    and rel_y + pill_geo.height() > 0 and rel_y < canvas.height()):
                 painter = QPainter(pix)
-                painter.drawPixmap(rel_x, rel_y, self._pill.grab())
+                # Scale BOTH the pill's top-left and its drawn size by the
+                # same factor so the readout lands at the right spot on the
+                # magnified bitmap. Grab the pill itself at hi-DPI so its
+                # text stays crisp, then draw into the scaled target rect.
+                target = QRect(
+                    int(round(rel_x * scale)),
+                    int(round(rel_y * scale)),
+                    int(round(pill_geo.width() * scale)),
+                    int(round(pill_geo.height() * scale)),
+                )
+                painter.drawPixmap(target, self._grab_pill_scaled(scale))
                 painter.end()
         QApplication.clipboard().setPixmap(pix)
         self.image_copied.emit("已复制图为图片")
 
+    def _grab_pill_scaled(self, scale):
+        """Grab the cursor pill at ``scale``× for crisp compositing.
+
+        At 1× this is a plain ``QPixmap`` grab; above 1× the pill widget is
+        re-rendered into a magnified QImage (sharp text, not an upscale)."""
+        from PyQt5.QtGui import QImage, QPainter, QPixmap
+        pill = self._pill
+        if scale <= 1.0:
+            return pill.grab()
+        w = max(1, int(pill.width()))
+        h = max(1, int(pill.height()))
+        tw = max(1, int(round(w * scale)))
+        th = max(1, int(round(h * scale)))
+        img = QImage(tw, th, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        painter = QPainter(img)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            painter.scale(scale, scale)
+            pill.render(painter)
+        finally:
+            painter.end()
+        return QPixmap.fromImage(img)
+
     def _on_cursor_info(self, text):
-        self._pill.set_primary(text)
+        primary, detail = self._format_cursor_info_for_pill(text)
+        self._pill.set_primary(primary)
+        if self.cursor_mode() == 'single':
+            self._pill.set_detail_html(detail)
         self._pill.setVisible(self.current_mode() == 'time')
         self._reposition_pill()
+
+    def _format_cursor_info_for_pill(self, text):
+        if self.cursor_mode() != 'single' or _CURSOR_HTML_SEP not in (text or ''):
+            return text, ''
+        parts = [part for part in text.split(_CURSOR_HTML_SEP) if part]
+        if len(parts) <= 1:
+            return text, ''
+        return parts[0], '<br/>'.join(parts[1:])
 
     def _on_dual_cursor_info(self, text):
         self._pill.set_detail_html(text)

@@ -36,6 +36,32 @@ def test_cursor_pill_updates_on_time_signal(qapp, qtbot):
     assert "t=1.0s" in cs.cursor_pill_text()
 
 
+def test_single_cursor_pill_uses_vertical_channel_readout(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_mode('time')
+    cs.set_cursor_mode('single')
+
+    sep = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
+    cs.canvas_time.cursor_info.emit(
+        sep.join([
+            '<span style="color:#111827;">t=89.1278s</span>',
+            '<span style="color:#ef4444;">[tiadodamping] Rte_=<b>424.2</b></span>',
+            '<span style="color:#7c3aed;">[tiadodamping] Rte_=<b>-1.486</b></span>',
+        ])
+    )
+
+    assert cs._pill.primary_text() == '<span style="color:#111827;">t=89.1278s</span>'
+    assert cs._pill.has_detail()
+    detail = cs._pill._detail.text()
+    assert '<br' in detail
+    assert '424.2' in detail
+    assert '-1.486' in detail
+    assert '│' not in detail
+
+
 def test_cursor_pill_hidden_in_fft_mode(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
@@ -324,6 +350,92 @@ def test_pg_zoom_mode_reaches_overlay_x_master_viewbox(qapp, qtbot):
     assert master_vb.state["mouseMode"] == pg.ViewBox.PanMode
 
 
+class _FakeMenuEvent:
+    """Minimal pyqtgraph mouse-event stand-in for ``raiseContextMenu``."""
+
+    def __init__(self, accepted_item):
+        self.acceptedItem = accepted_item
+
+    def screenPos(self):
+        from PyQt5.QtCore import QPointF
+
+        return QPointF(0.0, 0.0)
+
+
+def _open_redesigned_menu(canvas, view_box, monkeypatch):
+    """Drive the real ``raiseContextMenu`` path (assemble + reshape per design
+    A–D) without showing a window; return the reshaped QMenu."""
+    from PyQt5.QtWidgets import QMenu
+
+    captured = {}
+
+    def _fake_popup(self, *_a, **_k):
+        captured["menu"] = self
+
+    monkeypatch.setattr(QMenu, "popup", _fake_popup, raising=True)
+    view_box.raiseContextMenu(_FakeMenuEvent(view_box))
+    return captured.get("menu")
+
+
+def _mouse_mode_actions(menu):
+    """Return (pan_action, zoom_action) from the reshaped 鼠标操作 submenu."""
+    mouse_menu = next(
+        a.menu() for a in menu.actions()
+        if a.text().replace("&", "").strip() == "鼠标操作"
+    )
+    acts = mouse_menu.actions()
+    return acts[0], acts[1]
+
+
+def test_pg_context_menu_mouse_mode_syncs_toolbar_both_directions(
+    qapp, qtbot, monkeypatch
+):
+    """Design D single source of truth: selecting a 鼠标操作 menu item drives
+    the SAME toolbar mode state machine (and its ViewBoxes), and re-opening
+    the menu reflects whatever the toolbar currently is — both directions."""
+    import pyqtgraph as pg
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode("time")
+
+    t = np.linspace(0.0, 1.0, 80)
+    cs.canvas_time.plot_channels([
+        ("speed", True, t, np.sin(t * 4.0), "#7c3aed", "rpm"),
+        ("torque", True, t, 5.0 + np.cos(t * 4.0), "#16a34a", "Nm"),
+    ], mode="subplot")
+    qapp.processEvents()
+
+    toolbar = cs._time_card.toolbar
+    vb = cs.canvas_time.axes_list[0].view_box
+    view_boxes = [h.view_box for h in cs.canvas_time.axes_list]
+
+    # Default card start is pan.
+    assert str(toolbar.mode).lower() == "pan"
+
+    # ---- Direction 1: menu → toolbar ----
+    menu = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
+    pan_act, zoom_act = _mouse_mode_actions(menu)
+    # Checkmark reflects current toolbar state (pan).
+    assert pan_act.isChecked() and not zoom_act.isChecked()
+    # Selecting 框选 must flip the SHARED toolbar state + the ViewBoxes.
+    zoom_act.trigger()
+    qapp.processEvents()
+    assert str(toolbar.mode).lower() == "zoom"
+    assert [b.state["mouseMode"] for b in view_boxes] == [pg.ViewBox.RectMode] * len(view_boxes)
+
+    # ---- Direction 2: toolbar → menu ----
+    toolbar.pan()
+    qapp.processEvents()
+    assert str(toolbar.mode).lower() == "pan"
+    menu2 = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
+    pan_act2, zoom_act2 = _mouse_mode_actions(menu2)
+    assert pan_act2.isChecked() and not zoom_act2.isChecked()
+
+
 def _flush_history_debounce(toolbar, qapp):
     """Fire the toolbar's coalesce timer immediately so a simulated gesture
     is committed to the history stack without waiting wall-clock ms."""
@@ -569,6 +681,125 @@ def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
 
     assert not cs.cursor_pill_visible()
     assert cs.cursor_pill_text() == ""
+
+
+def test_copy_card_image_renders_at_hidpi_scale(qapp, qtbot):
+    """Spec §E: the toolbar copy path must request a hi-DPI render (scale
+    > 1) of the canvas so the clipboard bitmap is crisp. Geometry gate:
+    the copied pixmap is magnified vs a 1× grab of the same canvas."""
+    from PyQt5.QtWidgets import QApplication
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+    t = np.linspace(0, 1, 200)
+    cs.canvas_time.plot_channels(
+        [("speed", True, t, np.sin(t * 20), "#1769e0", "rpm", "f")]
+    )
+    QApplication.processEvents()
+
+    base = cs.canvas_time.grab_pixmap(scale=1.0)
+    assert not base.isNull()
+
+    cs._copy_card_image(cs._time_card)
+    QApplication.processEvents()
+    pix = QApplication.clipboard().pixmap()
+    assert pix is not None and not pix.isNull(), "clipboard pixmap is null"
+    # Hi-DPI: clipboard bitmap is wider than a 1× grab of the same canvas.
+    assert pix.width() > base.width(), (
+        f"copy pixmap width {pix.width()} not magnified vs 1x base {base.width()}"
+    )
+
+
+def test_copy_card_image_composites_scaled_cursor_pill(qapp, qtbot, monkeypatch):
+    """Spec §E: the copy path must still composite the cursor pill, and
+    BOTH its position and size must scale by the same factor so it lines
+    up on the magnified bitmap. We intercept the QPainter.drawPixmap call
+    to capture the scaled pill rect actually drawn."""
+    from PyQt5.QtGui import QPainter
+    from PyQt5.QtWidgets import QApplication
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+    t = np.linspace(0, 1, 200)
+    cs.canvas_time.plot_channels(
+        [("speed", True, t, np.sin(t * 20), "#1769e0", "rpm", "f")]
+    )
+    QApplication.processEvents()
+
+    # Make the pill visible and place it well inside the canvas so the
+    # overlap branch fires.
+    cs._pill.set_primary('<span style="color:#111827;">t=0.5s</span>')
+    cs._pill.setVisible(True)
+    cs._pill.mark_user_placed(True)
+    cs._pill.move(40, 40)
+    QApplication.processEvents()
+
+    drawn = []
+    real_draw = QPainter.drawPixmap
+
+    def _spy_draw(self, *args):
+        # signature used by the copy path: drawPixmap(QRect, QPixmap)
+        drawn.append(args)
+        return real_draw(self, *args)
+
+    monkeypatch.setattr(QPainter, "drawPixmap", _spy_draw)
+
+    cs._copy_card_image(cs._time_card)
+    QApplication.processEvents()
+
+    assert drawn, "copy path did not composite the cursor pill"
+    rect = drawn[-1][0]
+    pill = cs._pill
+    # The composited pill rect must be scaled (> 1×) relative to the
+    # unscaled pill geometry so it lines up on the magnified bitmap.
+    assert rect.width() > pill.width(), (
+        f"composited pill width {rect.width()} not scaled vs {pill.width()}"
+    )
+    assert rect.height() > pill.height(), (
+        f"composited pill height {rect.height()} not scaled vs {pill.height()}"
+    )
+
+
+def test_save_figure_uses_hidpi_scale(qapp, qtbot, monkeypatch, tmp_path):
+    """Spec §E: save_figure must request a hi-DPI render (scale > 1)."""
+    from PyQt5.QtWidgets import QFileDialog
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+    cs.canvas_time.plot_channels(
+        [("speed", True, np.linspace(0, 1, 100), np.zeros(100), "#1769e0", "rpm", "f")]
+    )
+
+    out = str(tmp_path / "out.png")
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (out, "PNG (*.png)"))
+    )
+    captured = {}
+    real_grab = cs._time_card.canvas.grab_pixmap
+
+    def _spy_grab(scale=1.0):
+        captured["scale"] = scale
+        return real_grab(scale=scale)
+
+    monkeypatch.setattr(cs._time_card.canvas, "grab_pixmap", _spy_grab)
+    cs._time_card.toolbar.save_figure()
+
+    assert captured.get("scale", 1.0) > 1.0, (
+        f"save_figure used scale={captured.get('scale')}, expected hi-DPI > 1"
+    )
+    assert Path(out).exists(), "save_figure did not write the file"
 
 
 def test_overlay_curve_drag_leaves_toolbar_idle_during_selection(qapp, qtbot):

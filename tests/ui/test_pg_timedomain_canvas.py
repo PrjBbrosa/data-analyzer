@@ -27,8 +27,11 @@ fallback branch was reached".
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
+from PyQt5.QtWidgets import QCheckBox, QRadioButton, QWidget
 
 from mf4_analyzer.signal import _envelope_cutils as ec
 from mf4_analyzer.ui.canvases import build_envelope
@@ -991,6 +994,50 @@ class TestTimeDomainCanvasPGScreenshotGrab:
         ok = pix.save(out_path)
         assert ok, f"failed to write screenshot to {out_path!r}"
 
+    def test_curves_antialiased_context_enables_then_restores(self, qapp):
+        """Export must render crisp (anti-aliased) curves even though
+        interactive panning keeps AA off for speed (commit 4734d7f4). The
+        context manager flips every curve to antialias=True for its body and
+        restores the prior (off) state on exit — no permanent perf hit."""
+        from PyQt5.QtCore import QCoreApplication
+        import pyqtgraph as pg
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        QCoreApplication.processEvents()
+
+        curves = [it for it in canvas._glw.scene().items()
+                  if isinstance(it, pg.PlotCurveItem)]
+        assert curves, "expected PlotCurveItem(s) on the scene"
+        before = [bool(c.opts.get("antialias")) for c in curves]
+
+        with canvas._curves_antialiased():
+            inside = [bool(c.opts.get("antialias")) for c in curves]
+        after = [bool(c.opts.get("antialias")) for c in curves]
+
+        assert all(inside), "all curves must be anti-aliased inside the context"
+        assert after == before, "antialias state must be restored on exit"
+
+    def test_grab_pixmap_restores_curve_antialias(self, qapp):
+        """grab_pixmap renders the export through the AA context, then leaves
+        the curves exactly as it found them (interactive AA-off)."""
+        from PyQt5.QtCore import QCoreApplication
+        import pyqtgraph as pg
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        QCoreApplication.processEvents()
+
+        curves = [it for it in canvas._glw.scene().items()
+                  if isinstance(it, pg.PlotCurveItem)]
+        before = [bool(c.opts.get("antialias")) for c in curves]
+
+        pix = canvas.grab_pixmap(scale=1.0)
+        assert not pix.isNull()
+
+        after = [bool(c.opts.get("antialias")) for c in curves]
+        assert after == before, "grab_pixmap must restore the AA-off state"
+
 
 # T5 — fill PgAxisHandle: verify it now delegates to a real pyqtgraph
 # ViewBox/AxisItem pair instead of raising NotImplementedError. This
@@ -1136,6 +1183,26 @@ class TestTimeDomainCanvasPGSubplotMode:
     placement follows the SAME bbox-overlap rule as
     canvases.py:_subplot_ylabels_need_inside_labels (no fixed 5-10%
     offset, design §0 correction)."""
+
+    def test_canvas_chrome_margins_are_tight(self, qapp):
+        """The plot area must use most of the widget. pyqtgraph defaults to a
+        9px outer gutter + 8px inter-row spacing — wasted chrome. We tighten
+        the central layout so subplots get more drawing area (axis tick text
+        lives in each PlotItem's own band, not this outer margin)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        QCoreApplication.processEvents()
+
+        layout = canvas._glw.ci.layout
+        left, top, right, bottom = layout.getContentsMargins()
+        assert max(left, top, right, bottom) <= 3, (
+            f"outer chrome margin too large: {(left, top, right, bottom)}"
+        )
+        assert layout.verticalSpacing() <= 3, (
+            f"inter-subplot spacing too large: {layout.verticalSpacing()}"
+        )
 
     def test_subplot_builds_five_plot_items_sharing_x_axis(self, qapp):
         """Two-frame state change (branch-reached lesson): assert that
@@ -1671,23 +1738,32 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         speed_handle = canvas._channel_lines["speed"][0]
         torque_handle = canvas._channel_lines["torque"][0]
 
+        # Pin every channel's Y range FIRST so the press point is computed
+        # against the exact geometry it is pressed in, and auto-range
+        # re-detail on the post-drag refresh does not add measurement noise.
+        speed_handle.set_ylim(-1500.0, 1500.0)
+        torque_handle.set_ylim(40.0, 60.0)
+        QCoreApplication.processEvents()
+
+        # Target speed at its PEAK (top of its pinned range) where it is
+        # unambiguously the nearest curve. x=0.5 sat at speed≈0 — mid-plot,
+        # where overlapping channels make the 12px pick geometry-sensitive
+        # (it flipped to 'pressure' once the canvas chrome was tightened).
         xdata, ydata = speed_handle.get_lines()[0].plot_data_item.getData()
-        idx = int(np.argmin(np.abs(np.asarray(xdata) - 0.5)))
+        idx = int(np.argmax(np.asarray(ydata)))
         start = _viewport_point_for_data(
             canvas, speed_handle, float(xdata[idx]), float(ydata[idx])
         )
 
-        # Pin every channel's Y range so auto-range re-detail on the
-        # post-drag refresh does not add measurement noise; the assertion
-        # then isolates the drag's effect (each channel Y is independent).
-        speed_handle.set_ylim(-1500.0, 1500.0)
-        torque_handle.set_ylim(40.0, 60.0)
-        QCoreApplication.processEvents()
         speed_before = speed_handle.get_ylim()
         torque_before = torque_handle.get_ylim()
         x_before = canvas._primary_xaxis_ax.get_xlim()
 
         self._press(canvas, qapp, start)
+        assert canvas._selected_overlay_channel == "speed", (
+            f"press on speed's peak must select speed; got "
+            f"{canvas._selected_overlay_channel!r}"
+        )
         assert canvas._overlay_dragging is True
         from PyQt5.QtCore import QPoint
         moved_point = QPoint(start.x(), start.y() + 60)
@@ -2055,6 +2131,254 @@ class TestTimeDomainCanvasPGCursorInteraction:
         assert consumed is False
 
 
+class _FakeMenuEvent:
+    """Minimal stand-in for the pyqtgraph mouse event a ViewBox passes to
+    ``raiseContextMenu``. It needs ``acceptedItem`` (read by the scene's
+    ``getContextMenus``) and ``screenPos()`` (read before ``popup``)."""
+
+    def __init__(self, accepted_item):
+        self.acceptedItem = accepted_item
+
+    def screenPos(self):
+        from PyQt5.QtCore import QPointF
+
+        return QPointF(0.0, 0.0)
+
+
+def _assemble_and_redesign_menu(qapp, canvas, view_box, monkeypatch):
+    """Drive the REAL ``raiseContextMenu`` path (assemble Plot Options +
+    Export, then reshape per design A–D) without actually popping a window.
+
+    Returns the assembled+reshaped QMenu. ``QMenu.popup`` is patched to a
+    no-op so nothing is shown under offscreen Qt.
+    """
+    from PyQt5.QtWidgets import QMenu
+
+    captured = {}
+
+    def _fake_popup(self, *_args, **_kwargs):
+        captured["menu"] = self
+
+    monkeypatch.setattr(QMenu, "popup", _fake_popup, raising=True)
+    ev = _FakeMenuEvent(view_box)
+    view_box.raiseContextMenu(ev)
+    return captured.get("menu")
+
+
+def _top_level_texts(menu):
+    return [
+        a.text().replace("&", "").strip()
+        for a in menu.actions()
+        if not a.isSeparator()
+    ]
+
+
+class TestTimeDomainCanvasPGContextMenuRedesign:
+    """Design 2026-05-30 §A–§D: the right-click menu is the reshaped native
+    pyqtgraph QMenu — only the agreed top-level items survive, tooltips are
+    off, and 鼠标操作 is wired to the toolbar's mouse-mode state machine."""
+
+    # ---- §A structure: only the agreed items, removed ones absent ----
+    def test_top_level_menu_contains_only_agreed_items(self, qapp, monkeypatch):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        assert menu is not None
+        top = _top_level_texts(menu)
+
+        assert top == ["查看全部", "X 轴范围", "Y 轴范围", "鼠标操作", "网格"]
+
+    def test_removed_entries_are_absent_from_assembled_menu(
+        self, qapp, monkeypatch
+    ):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        top = _top_level_texts(menu)
+
+        for banned in ("绘图选项", "Plot Options", "导出...", "Export...", "变换", "降采样"):
+            assert banned not in top
+
+    def test_grid_submenu_promoted_with_x_and_y_toggles(self, qapp, monkeypatch):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        grid_action = next(
+            a for a in menu.actions()
+            if a.text().replace("&", "").strip() == "网格"
+        )
+        grid_menu = grid_action.menu()
+        assert grid_menu is not None
+        grid_items = [a.text() for a in grid_menu.actions()]
+        assert grid_items == ["显示 X 网格", "显示 Y 网格"]
+        # Both default checked (grid is force-enabled on the plot item).
+        assert all(a.isChecked() for a in grid_menu.actions())
+
+    # ---- box-leak fix: a rounded submenu whose host window is opaque leaves
+    # a square frame outside the radius. The top-level menu already sets
+    # WA_TranslucentBackground (parity anchor); the promoted 网格 / 鼠标操作
+    # submenus are built by hand and must set it too. ----
+    def test_promoted_submenus_have_translucent_background(
+        self, qapp, monkeypatch
+    ):
+        from PyQt5.QtCore import Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        # Parity anchor: the top-level menu is already translucent.
+        assert menu.testAttribute(Qt.WA_TranslucentBackground)
+        for title in ("网格", "鼠标操作"):
+            action = next(
+                a for a in menu.actions()
+                if a.text().replace("&", "").strip() == title
+            )
+            sub = action.menu()
+            assert sub is not None, f"{title} submenu missing"
+            assert sub.testAttribute(Qt.WA_TranslucentBackground), (
+                f"{title} 子菜单需设 WA_TranslucentBackground,否则圆角外留方框"
+            )
+
+    def test_axis_form_hides_link_invert_and_auto_rows(self, qapp, monkeypatch):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        x_action = next(
+            a for a in menu.actions()
+            if a.text().replace("&", "").strip() == "X 轴范围"
+        )
+        axis_widget = x_action.menu().actions()[0].defaultWidget()
+        # Link Axis combo + caption, Invert, and the whole 自动 row (auto radio
+        # + 100% spin) are explicitly hidden. isHidden() reflects the explicit
+        # hide flag independent of whether the never-popped parent menu has
+        # been shown (isVisible would be False for ALL children of an unshown
+        # widget).
+        for name in ("linkCombo", "label", "invertCheck",
+                     "autoPanCheck", "visibleOnlyCheck",
+                     "autoRadio", "autoPercentSpin"):
+            child = axis_widget.findChild(QWidget, name)
+            assert child is not None
+            assert child.isHidden(), f"{name} should be hidden"
+        # Manual min/max + mouse-interaction survive; the 自动 row is removed
+        # per request, so only 手动 remains among the radios.
+        check_texts = {c.text() for c in axis_widget.findChildren(QCheckBox)
+                       if not c.isHidden()}
+        radio_texts = {c.text() for c in axis_widget.findChildren(QRadioButton)
+                       if not c.isHidden()}
+        assert "鼠标交互" in check_texts
+        assert "手动" in radio_texts
+        assert "自动" not in radio_texts, "自动 row removed per request"
+
+    # ---- §B tooltip fix ----
+    def test_tooltips_visible_is_false_and_actions_have_no_tooltip(
+        self, qapp, monkeypatch
+    ):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        # toolTipsVisible(False) is the bug fix: even if Qt falls back to
+        # toolTip()==text(), nothing floats over the second-level form.
+        assert menu.toolTipsVisible() is False
+
+        # The occluding help is the long descriptive tooltip we used to set
+        # (e.g. "回到完整数据范围…"). After the redesign no surviving action
+        # carries a descriptive tooltip — Qt's harmless text fallback aside,
+        # the tooltip must never be longer than the label itself.
+        def _assert_no_descriptive_tooltip(action):
+            tip = action.toolTip()
+            label = action.text().replace("&", "").strip()
+            assert tip in ("", label), (
+                f"action {label!r} kept a descriptive tooltip: {tip!r}"
+            )
+
+        for action in menu.actions():
+            if action.isSeparator():
+                continue
+            _assert_no_descriptive_tooltip(action)
+            sub = action.menu()
+            if sub is not None:
+                assert sub.toolTipsVisible() is False
+                for sub_action in sub.actions():
+                    if not sub_action.isSeparator():
+                        _assert_no_descriptive_tooltip(sub_action)
+
+    # ---- §D mouse-mode submenu vocabulary + controller routing ----
+    def test_mouse_mode_submenu_uses_toolbar_vocabulary(self, qapp, monkeypatch):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        mouse_action = next(
+            a for a in menu.actions()
+            if a.text().replace("&", "").strip() == "鼠标操作"
+        )
+        mouse_menu = mouse_action.menu()
+        labels = [a.text() for a in mouse_menu.actions()]
+        assert labels == ["平移", "框选"]
+        # No 三键/单键 黑话 survives.
+        assert "三键模式" not in labels and "单键模式" not in labels
+
+    def test_menu_mouse_mode_selection_updates_registered_controller(
+        self, qapp, monkeypatch
+    ):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        # Fake controller standing in for the toolbar (single source of truth).
+        class _Ctl:
+            def __init__(self):
+                self.mode = ""
+            def current_mouse_mode(self):
+                return self.mode
+            def set_pan_mode(self):
+                self.mode = "pan"
+            def set_zoom_mode(self):
+                self.mode = "zoom"
+
+        ctl = _Ctl()
+        canvas.register_mouse_mode_controller(ctl)
+        ctl.mode = "zoom"  # controller currently in zoom
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        mouse_menu = next(
+            a.menu() for a in menu.actions()
+            if a.text().replace("&", "").strip() == "鼠标操作"
+        )
+        pan_act, zoom_act = mouse_menu.actions()[0], mouse_menu.actions()[1]
+        # Checkmark reflects the controller's CURRENT mode (zoom).
+        assert zoom_act.isChecked() and not pan_act.isChecked()
+        # Selecting 平移 routes through the controller's set_pan_mode.
+        pan_act.trigger()
+        assert ctl.mode == "pan"
+
+    def test_context_menu_qss_uses_pgcontextmenu_light_surface(self):
+        qss = (
+            Path(__file__).resolve().parents[2]
+            / "mf4_analyzer" / "ui_kit" / "style.qss"
+        ).read_text(encoding="utf-8")
+
+        assert "QMenu#pgContextMenu" in qss
+        assert "background-color: #ffffff" in qss
+        assert "QMenu#pgContextMenu::item" in qss
+        assert "QMenu#pgContextMenu::item:selected" in qss
+        # light-blue selected state token
+        assert "#e8efff" in qss
+
+
 class TestTimeDomainCanvasPGScroll:
     """Scroll behavior parity: Ctrl+wheel zooms X, Shift+wheel zooms Y,
     plain wheel pans Y. Tests use two-frame strict-difference assertions
@@ -2363,6 +2687,126 @@ class TestTimeDomainCanvasPGVisualParityScreenshots:
 
         out = "/tmp/pg_parity_dual_cursor.png"
         assert pix.save(out), f"failed to save {out!r}"
+
+
+class TestTimeDomainCanvasPGHiDpiGrab:
+    """Spec §E: copy/save must render the scene at a HIGHER scale so the
+    bitmap is DPI-independent and crisp (matplotlib-figure-DPI parity),
+    while a CAP keeps export fast.
+
+    Capping rule under test (single, documented in ``grab_pixmap``):
+    effective scale = clamp(requested, 1.0, MAX_WIDTH / base_width),
+    where MAX_WIDTH = ``_HIDPI_MAX_WIDTH`` (2560). The result width
+    never exceeds the ceiling and never downscales below 1×.
+
+    Gates are GEOMETRY only (pixmap dimensions), never pixel-byte
+    comparison.
+    """
+
+    def test_default_grab_pixmap_is_1x_unchanged(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(640, 360)
+        canvas.plot_channels(
+            [("speed", True, np.linspace(0, 1, 100), np.zeros(100), "#1769e0", "rpm", "f")]
+        )
+        QCoreApplication.processEvents()
+        base = canvas.grab_pixmap()
+        scaled = canvas.grab_pixmap(scale=1.0)
+        assert not base.isNull() and not scaled.isNull()
+        # 1× path is unchanged: same width as the no-arg default.
+        assert scaled.width() == base.width()
+        assert scaled.height() == base.height()
+
+    def test_grab_pixmap_2x_doubles_geometry(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(800, 400)
+        canvas.plot_channels(
+            [("speed", True, np.linspace(0, 1, 500), np.sin(np.linspace(0, 30, 500)),
+              "#1769e0", "rpm", "f")]
+        )
+        QCoreApplication.processEvents()
+        base = canvas.grab_pixmap(scale=1.0)
+        assert not base.isNull()
+        hi = canvas.grab_pixmap(scale=2.0)
+        assert not hi.isNull(), "hi-DPI grab returned a null pixmap"
+        # Geometry assertion: magnified by ~2× in each dimension.
+        # Allow ±2px slack for integer rounding of the scaled QImage.
+        assert abs(hi.width() - 2 * base.width()) <= 2, (
+            f"hi.width()={hi.width()} not ~2x base.width()={base.width()}"
+        )
+        assert abs(hi.height() - 2 * base.height()) <= 2, (
+            f"hi.height()={hi.height()} not ~2x base.height()={base.height()}"
+        )
+
+    def test_grab_pixmap_caps_width_for_large_canvas(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import _HIDPI_MAX_WIDTH
+
+        canvas = _pg_canvas(qapp)
+        # A large canvas: 2× would blow past the 2560px ceiling.
+        canvas.resize(1800, 1000)
+        canvas.plot_channels(
+            [("speed", True, np.linspace(0, 1, 500), np.zeros(500), "#1769e0", "rpm", "f")]
+        )
+        QCoreApplication.processEvents()
+        base = canvas.grab_pixmap(scale=1.0)
+        assert not base.isNull()
+        hi = canvas.grab_pixmap(scale=2.0)
+        assert not hi.isNull()
+        # Cap enforced: even with a 2× request the width does not exceed
+        # the ceiling (small slack for rounding).
+        assert hi.width() <= _HIDPI_MAX_WIDTH + 2, (
+            f"hi.width()={hi.width()} exceeds cap {_HIDPI_MAX_WIDTH}"
+        )
+        # But the cap must still magnify beyond 1× when there is headroom.
+        assert hi.width() > base.width(), (
+            "capped scale should still magnify a 1800px canvas toward 2560px"
+        )
+
+    def test_capped_hidpi_scale_helper_rules(self):
+        from mf4_analyzer.ui.pg_canvases import (
+            _capped_hidpi_scale, _HIDPI_MAX_WIDTH,
+        )
+        # Small canvas, 2× requested → exactly 2× (under cap).
+        assert _capped_hidpi_scale(640, 2.0) == pytest.approx(2.0)
+        # Never downscale below 1× even if requested < 1.
+        assert _capped_hidpi_scale(640, 0.5) == pytest.approx(1.0)
+        # Large canvas → capped so width ~ ceiling, never above.
+        s = _capped_hidpi_scale(1800, 2.0)
+        assert 1800 * s <= _HIDPI_MAX_WIDTH + 1e-6
+        assert s == pytest.approx(_HIDPI_MAX_WIDTH / 1800)
+        # Degenerate base width is treated as 1× (no division blowup).
+        assert _capped_hidpi_scale(0, 2.0) == pytest.approx(1.0)
+
+    def test_hidpi_grab_preserves_offscreen_fallback(self, qapp, monkeypatch):
+        """Lesson 2026-04-25-tightbbox-survives-offscreen-qt: the 1×1
+        degenerate fallback + isNull guard must survive the hi-DPI path.
+        Force both grab attempts to fail and assert the 1×1 fallback is
+        returned (NOT a full-canvas guess), even with scale>1."""
+        from PyQt5.QtCore import QCoreApplication
+        from PyQt5.QtGui import QPixmap
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(
+            [("speed", True, np.linspace(0, 1, 50), np.zeros(50), "#1769e0", "rpm", "f")]
+        )
+        QCoreApplication.processEvents()
+
+        null_pix = QPixmap()  # null pixmap
+        monkeypatch.setattr(canvas, "grab", lambda *a, **k: null_pix)
+        monkeypatch.setattr(canvas._glw, "grab", lambda *a, **k: null_pix)
+
+        pix = canvas.grab_pixmap(scale=2.0)
+        assert pix is not None
+        assert not pix.isNull(), "fallback pixmap must not be null"
+        # The 1×1 degenerate fallback — NOT a full-canvas-sized guess.
+        assert pix.width() == 1 and pix.height() == 1, (
+            f"expected 1x1 fallback, got {pix.width()}x{pix.height()}"
+        )
 
 
 class TestTimeDomainCanvasPGSetDataHotPathContract:
