@@ -134,16 +134,27 @@ class PeekOverlay(QFrame):
         self.hide()
 
     def set_panel(self, panel):
-        """Reparent ``panel`` into this overlay (filling it)."""
+        """Reparent ``panel`` into this overlay (filling it).
+
+        Evicts any previously hosted panel first so the overlay never stacks
+        more than one child, regardless of caller discipline.
+        """
         if self._panel is panel:
             return
+        if self._panel is not None:
+            self._lay.removeWidget(self._panel)
         self._panel = panel
         panel.setParent(self)
         self._lay.addWidget(panel)
         panel.show()
 
     def take_panel(self):
-        """Detach the current panel and return it (caller reparents it)."""
+        """Detach the current panel from the layout and return it.
+
+        The returned panel still has this overlay as its Qt parent; the caller
+        MUST reparent it synchronously (before yielding to the event loop) so it
+        is not destroyed if the overlay is torn down mid-transition.
+        """
         panel = self._panel
         if panel is not None:
             self._lay.removeWidget(panel)

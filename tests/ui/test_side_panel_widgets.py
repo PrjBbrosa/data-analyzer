@@ -59,3 +59,24 @@ def test_overlay_hosts_a_panel(qtbot):
     panel = QWidget()
     overlay.set_panel(panel)
     assert panel.parent() is overlay
+
+
+def test_overlay_take_panel_round_trip(qtbot):
+    host = QWidget(); qtbot.addWidget(host)
+    overlay = PeekOverlay(host)
+    panel = QWidget()
+    overlay.set_panel(panel)
+    returned = overlay.take_panel()
+    assert returned is panel
+    assert overlay._panel is None
+    assert overlay._lay.count() == 0
+
+
+def test_overlay_set_panel_evicts_previous(qtbot):
+    host = QWidget(); qtbot.addWidget(host)
+    overlay = PeekOverlay(host)
+    a, b = QWidget(), QWidget()
+    overlay.set_panel(a)
+    overlay.set_panel(b)
+    assert overlay._panel is b
+    assert overlay._lay.count() == 1
