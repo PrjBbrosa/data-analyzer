@@ -34,3 +34,28 @@ def test_strip_hover_out_before_debounce_cancels(qtbot):
     strip.leaveEvent(None)   # leaves before 300ms debounce elapses
     qtbot.wait(120)
     assert fired == []
+
+
+from mf4_analyzer.ui.side_panels import PeekOverlay
+
+
+def test_overlay_emits_enter_and_leave(qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    overlay = PeekOverlay(host)
+    entered, left = [], []
+    overlay.mouse_entered.connect(lambda: entered.append(1))
+    overlay.mouse_left.connect(lambda: left.append(1))
+    overlay.enterEvent(None)
+    overlay.leaveEvent(None)
+    assert entered == [1]
+    assert left == [1]
+
+
+def test_overlay_hosts_a_panel(qtbot):
+    host = QWidget()
+    qtbot.addWidget(host)
+    overlay = PeekOverlay(host)
+    panel = QWidget()
+    overlay.set_panel(panel)
+    assert panel.parent() is overlay

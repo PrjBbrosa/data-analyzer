@@ -109,3 +109,51 @@ class SidePanelStrip(QFrame):
         p.setPen(QColor("#9aa3ad"))
         p.drawText(self.rect(), Qt.AlignCenter, self._chevron)
         p.end()
+
+
+from PyQt5.QtWidgets import QVBoxLayout
+
+
+class PeekOverlay(QFrame):
+    """Floating container for the peeked panel.
+
+    MUST be a child widget (parent = central widget), never a top-level
+    frameless window, so macOS does not paint a native square shadow
+    (see commit 44786538). Raised above the canvas via ``raise_()``.
+    """
+    mouse_entered = pyqtSignal()
+    mouse_left = pyqtSignal()
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("peekOverlay")
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(0)
+        self._panel = None
+        self.hide()
+
+    def set_panel(self, panel):
+        """Reparent ``panel`` into this overlay (filling it)."""
+        if self._panel is panel:
+            return
+        self._panel = panel
+        panel.setParent(self)
+        self._lay.addWidget(panel)
+        panel.show()
+
+    def take_panel(self):
+        """Detach the current panel and return it (caller reparents it)."""
+        panel = self._panel
+        if panel is not None:
+            self._lay.removeWidget(panel)
+            self._panel = None
+        return panel
+
+    def enterEvent(self, event):
+        self.mouse_entered.emit()
+        super().enterEvent(event) if event is not None else None
+
+    def leaveEvent(self, event):
+        self.mouse_left.emit()
+        super().leaveEvent(event) if event is not None else None
