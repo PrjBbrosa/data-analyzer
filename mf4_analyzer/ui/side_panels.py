@@ -168,3 +168,126 @@ class PeekOverlay(QFrame):
     def leaveEvent(self, event):
         self.mouse_left.emit()
         super().leaveEvent(event) if event is not None else None
+
+
+from PyQt5.QtWidgets import QApplication
+
+
+class SidePanelController(QObject):
+    """Drives one side's HIDDEN/PEEK/PINNED lifecycle against real widgets."""
+
+    PEEK_EXTRA_PX = 24      # overlay is "a bit wider" than the docked width
+    COLLAPSE_THRESHOLD = 24  # drag width <= this => collapsed
+
+    def __init__(self, side, splitter, panel, panel_index, strip, overlay,
+                 host, collapse_delay_ms=600, default_width=250, parent=None):
+        super().__init__(parent)
+        self._side = side
+        self._splitter = splitter
+        self._panel = panel
+        self._index = panel_index
+        self._strip = strip
+        self._overlay = overlay
+        self._host = host
+        self._remembered_width = default_width
+        self.state = PanelState.PINNED
+
+        self._collapse_timer = QTimer(self)
+        self._collapse_timer.setSingleShot(True)
+        self._collapse_timer.setInterval(collapse_delay_ms)
+        self._collapse_timer.timeout.connect(self._on_collapse_timeout)
+
+        strip.peek_requested.connect(lambda _s: self._dispatch(Ev.HOVER))
+        strip.pin_requested.connect(lambda _s: self._dispatch(Ev.CLICK))
+        overlay.mouse_left.connect(lambda: self._dispatch(Ev.OVERLAY_LEFT))
+        overlay.mouse_entered.connect(lambda: self._dispatch(Ev.OVERLAY_ENTERED))
+
+        self._apply_strip_visibility()
+
+    # ---- event entry points ----
+    def on_splitter_moved(self):
+        """Call from QSplitter.splitterMoved. Collapse if dragged to the edge."""
+        if self.state == PanelState.PINNED:
+            w = self._splitter.sizes()[self._index]
+            if w <= self.COLLAPSE_THRESHOLD:
+                self._dispatch(Ev.DRAG_COLLAPSED)
+
+    def _on_collapse_timeout(self):
+        # Popup guard: a context menu opened from inside the peeked panel makes
+        # the mouse "leave" the overlay; don't auto-collapse while it's open.
+        if QApplication.activePopupWidget() is not None:
+            self._collapse_timer.start()  # re-arm; re-check shortly
+            return
+        self._dispatch(Ev.COLLAPSE_TIMEOUT)
+
+    # ---- core dispatch ----
+    def _dispatch(self, event):
+        new_state, effects = reduce_panel(self.state, event)
+        self.state = new_state
+        for eff in effects:
+            self._run_effect(eff)
+        self._apply_strip_visibility()
+
+    def _run_effect(self, eff):
+        if eff == Effect.ENTER_PEEK:
+            self._remember_width_if_docked()
+            self._overlay.set_panel(self._panel)
+            self._position_overlay()
+            self._overlay.show()
+            self._overlay.raise_()
+        elif eff == Effect.EXIT_PEEK:
+            self._overlay.take_panel()
+            self._overlay.hide()
+            self._dock_panel_into_splitter(width=0, visible=False)
+        elif eff == Effect.DOCK:
+            if self._overlay.isVisible():
+                self._overlay.take_panel()
+                self._overlay.hide()
+            self._dock_panel_into_splitter(width=self._remembered_width, visible=True)
+        elif eff == Effect.COLLAPSE_PINNED:
+            self._remember_width_if_docked()
+            self._panel.setVisible(False)
+            self._set_slot_width(0)
+        elif eff == Effect.START_TIMER:
+            self._collapse_timer.start()
+        elif eff == Effect.STOP_TIMER:
+            self._collapse_timer.stop()
+
+    # ---- helpers ----
+    def _apply_strip_visibility(self):
+        self._strip.setVisible(strip_visible_for(self.state))
+
+    def _remember_width_if_docked(self):
+        w = self._splitter.sizes()[self._index]
+        if w > self.COLLAPSE_THRESHOLD:
+            self._remembered_width = w
+
+    def _dock_panel_into_splitter(self, width, visible):
+        # Re-insert if the panel was reparented out (peek), else just resize.
+        if self._panel.parent() is not self._splitter:
+            self._splitter.insertWidget(self._index, self._panel)
+        self._panel.setVisible(visible)
+        self._set_slot_width(width if visible else 0)
+
+    def _set_slot_width(self, width):
+        sizes = self._splitter.sizes()
+        if len(sizes) <= self._index:
+            return
+        total = sum(sizes)
+        delta = width - sizes[self._index]
+        sizes[self._index] = width
+        # absorb the delta from the widest middle pane (the canvas)
+        mid = max(range(len(sizes)), key=lambda i: sizes[i] if i != self._index else -1)
+        sizes[mid] = max(0, sizes[mid] - delta)
+        self._splitter.setSizes(sizes)
+
+    def _position_overlay(self):
+        w = self._remembered_width + self.PEEK_EXTRA_PX
+        h = self._host.height()
+        x = 0 if self._side == Side.LEFT else max(0, self._host.width() - w)
+        self._overlay.setGeometry(x, 0, w, h)
+
+    def reposition(self):
+        """Call from MainWindow.resizeEvent / moveEvent while peeking."""
+        if self.state == PanelState.PEEK:
+            self._position_overlay()

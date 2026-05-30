@@ -80,3 +80,79 @@ def test_overlay_set_panel_evicts_previous(qtbot):
     overlay.set_panel(b)
     assert overlay._panel is b
     assert overlay._lay.count() == 1
+
+
+from mf4_analyzer.ui.side_panels import (
+    PanelState, SidePanelController,
+)
+
+
+def _make_controller(qtbot):
+    host = QWidget()
+    host.resize(900, 600)
+    host.show()                              # must be shown for child isVisible() to work
+    qtbot.addWidget(host)
+    splitter = QSplitter(Qt.Horizontal, host)
+    panel = QWidget()
+    panel.setMinimumWidth(50)
+    middle = QWidget()
+    middle.setMinimumWidth(100)
+    splitter.addWidget(panel)
+    splitter.addWidget(middle)
+    splitter.resize(900, 600)               # must have non-zero size for setSizes to be honoured
+    splitter.setSizes([250, 650])
+    strip = SidePanelStrip(Side.LEFT, hover_delay_ms=10)
+    overlay = PeekOverlay(host)
+    ctrl = SidePanelController(
+        side=Side.LEFT, splitter=splitter, panel=panel, panel_index=0,
+        strip=strip, overlay=overlay, host=host,
+        collapse_delay_ms=20, default_width=250,
+    )
+    return ctrl, splitter, panel, strip, overlay
+
+
+def test_controller_starts_pinned_strip_hidden(qtbot):
+    ctrl, splitter, panel, strip, overlay = _make_controller(qtbot)
+    assert ctrl.state == PanelState.PINNED
+    assert strip.isVisible() is False
+
+
+def test_drag_collapse_hides_panel_and_shows_strip(qtbot):
+    ctrl, splitter, panel, strip, overlay = _make_controller(qtbot)
+    splitter.setSizes([0, 900])          # user dragged handle to the edge
+    ctrl.on_splitter_moved()
+    assert ctrl.state == PanelState.HIDDEN
+    assert strip.isVisible() is True
+    assert panel.isVisible() is False
+
+
+def test_click_strip_redocks_with_remembered_width(qtbot):
+    ctrl, splitter, panel, strip, overlay = _make_controller(qtbot)
+    splitter.setSizes([0, 900]); ctrl.on_splitter_moved()   # -> HIDDEN
+    strip.pin_requested.emit(Side.LEFT)                      # click
+    assert ctrl.state == PanelState.PINNED
+    assert splitter.sizes()[0] == 250                        # remembered
+    assert strip.isVisible() is False
+
+
+def test_hover_peeks_into_overlay_then_autohides(qtbot):
+    ctrl, splitter, panel, strip, overlay = _make_controller(qtbot)
+    splitter.setSizes([0, 900]); ctrl.on_splitter_moved()   # -> HIDDEN
+    strip.peek_requested.emit(Side.LEFT)                     # hover
+    assert ctrl.state == PanelState.PEEK
+    assert panel.parent() is overlay
+    assert overlay.isVisible() is True
+    overlay.mouse_left.emit()                                # mouse leaves
+    qtbot.waitUntil(lambda: ctrl.state == PanelState.HIDDEN, timeout=500)
+    assert overlay.isVisible() is False
+    assert panel.isVisible() is False
+
+
+def test_reentry_cancels_autohide(qtbot):
+    ctrl, splitter, panel, strip, overlay = _make_controller(qtbot)
+    splitter.setSizes([0, 900]); ctrl.on_splitter_moved()
+    strip.peek_requested.emit(Side.LEFT)
+    overlay.mouse_left.emit()                                # start timer
+    overlay.mouse_entered.emit()                             # cancel within window
+    qtbot.wait(60)
+    assert ctrl.state == PanelState.PEEK                     # still peeking
