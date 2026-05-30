@@ -1338,3 +1338,22 @@ QFrame#chartHintBar QLabel#chartHintContext {
     min-height: 18px;
 }
 #SignalChipRemove:hover { color: #ef4444; }
+
+/* Collapsible side panels: faint edge rail + peek overlay */
+QFrame#sidePanelStrip {
+    background-color: #f3f5f8;
+    border: none;
+    border-right: 1px solid #e2e6eb;
+}
+QFrame#sidePanelStrip[side="right"] {
+    border-right: none;
+    border-left: 1px solid #e2e6eb;
+}
+QFrame#sidePanelStrip:hover {
+    background-color: #e7ecf2;
+}
+QFrame#peekOverlay {
+    background-color: #ffffff;
+    border: 1px solid #d3d8df;
+    border-radius: 10px;
+}
