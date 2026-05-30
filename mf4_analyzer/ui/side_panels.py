@@ -298,7 +298,13 @@ class SidePanelController(QObject):
     def _position_overlay(self):
         w = self._remembered_width + self.PEEK_EXTRA_PX
         h = self._host.height()
-        x = 0 if self._side == Side.LEFT else max(0, self._host.width() - w)
+        # Keep the edge strip exposed (and clickable -> pin) beside the overlay,
+        # so the overlay starts just inside the strip rather than covering it.
+        strip_w = self._strip.WIDTH_PX
+        if self._side == Side.LEFT:
+            x = strip_w
+        else:
+            x = max(0, self._host.width() - strip_w - w)
         self._overlay.setGeometry(x, 0, w, h)
 
     def reposition(self):

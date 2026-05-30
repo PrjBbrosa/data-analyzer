@@ -130,6 +130,9 @@ class MainWindow(QMainWindow):
         self.toolbar = Toolbar(self)
         root.addWidget(self.toolbar)
 
+        from PyQt5.QtWidgets import QHBoxLayout
+        from .side_panels import Side, SidePanelStrip, PeekOverlay, SidePanelController
+
         splitter = QSplitter(Qt.Horizontal, self)
         self.splitter = splitter
         self.navigator = FileNavigator(self)
@@ -138,29 +141,56 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.navigator)
         splitter.addWidget(self.chart_stack)
         splitter.addWidget(self.inspector)
-        # 2026-04-26 R3 紧凑化 fix-5: align the inspector splitter slot with
-        # the fixed visible Inspector width (360). The 60px bump from 300→360
-        # prevents a visible gap on first launch where the splitter would
-        # otherwise hand the inspector less width than its content needs.
         splitter.setSizes([250, 900, 360])
-        # 2026-04-26 inspector 右侧空白二次修复:
-        # Without explicit stretch factors, QSplitter distributes window-resize
-        # growth proportionally across panes by current size. That gives the
-        # inspector pane more "slot" width than its setMaximumWidth(376), and
-        # the surplus inside the slot reads as a visible empty column. Pin the
-        # chart stack as the only stretchy pane; navigator and inspector keep
-        # their initial sizes regardless of window width.
         splitter.setStretchFactor(0, 0)  # navigator: no stretch
         splitter.setStretchFactor(1, 1)  # chart_stack: absorbs all extra width
         splitter.setStretchFactor(2, 0)  # inspector: no stretch
-        splitter.setCollapsible(0, False)
+        # Collapsible left/right so a handle-drag to the edge hides the panel
+        # (SidePanelController.on_splitter_moved picks that up). Canvas never collapses.
+        splitter.setCollapsible(0, True)
         splitter.setCollapsible(1, False)
-        splitter.setCollapsible(2, False)
+        splitter.setCollapsible(2, True)
         splitter.setHandleWidth(3)
         self.navigator.setMinimumWidth(220)
         self.chart_stack.setMinimumWidth(400)
         self.inspector.setMinimumWidth(self.inspector.maximumWidth())
-        root.addWidget(splitter, stretch=1)
+
+        # Edge strips flank the splitter; each is visible only while its side is
+        # hidden. Wrapping the splitter in an HBox keeps the strips out of the
+        # toolbar's vertical band.
+        self._strip_left = SidePanelStrip(Side.LEFT, parent=self)
+        self._strip_right = SidePanelStrip(Side.RIGHT, parent=self)
+        strip_row = QWidget(self)
+        self._strip_row = strip_row
+        row = QHBoxLayout(strip_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self._strip_left)
+        row.addWidget(splitter, stretch=1)
+        row.addWidget(self._strip_right)
+        root.addWidget(strip_row, stretch=1)
+
+        # Peek overlays are parented to the splitter row (NOT cw) so they float
+        # over the canvas region only and never cover the toolbar; they are child
+        # widgets (never top-level frameless windows) to avoid macOS native shadow.
+        self._overlay_left = PeekOverlay(strip_row)
+        self._overlay_right = PeekOverlay(strip_row)
+        # absorb_index=1 -> width changes are taken from the canvas pane, never
+        # leaked into the opposite side panel (3-pane correctness).
+        self._panel_ctrl_left = SidePanelController(
+            side=Side.LEFT, splitter=splitter, panel=self.navigator, panel_index=0,
+            strip=self._strip_left, overlay=self._overlay_left, host=strip_row,
+            default_width=250, absorb_index=1, parent=self,
+        )
+        self._panel_ctrl_right = SidePanelController(
+            side=Side.RIGHT, splitter=splitter, panel=self.inspector, panel_index=2,
+            strip=self._strip_right, overlay=self._overlay_right, host=strip_row,
+            default_width=360, absorb_index=1, parent=self,
+        )
+        splitter.splitterMoved.connect(
+            lambda *_: (self._panel_ctrl_left.on_splitter_moved(),
+                        self._panel_ctrl_right.on_splitter_moved())
+        )
 
         # Convenience aliases pointing to children of ChartStack / Navigator —
         # these are real widgets reachable via the new topology, not shims.
@@ -191,6 +221,15 @@ class MainWindow(QMainWindow):
         super().resizeEvent(e)
         if hasattr(self, '_toast') and self._toast.isVisible():
             self._toast._reposition()
+        if hasattr(self, '_panel_ctrl_left'):
+            self._panel_ctrl_left.reposition()
+            self._panel_ctrl_right.reposition()
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        if hasattr(self, '_panel_ctrl_left'):
+            self._panel_ctrl_left.reposition()
+            self._panel_ctrl_right.reposition()
 
     def set_inspector_visible(self, visible):
         visible = bool(visible)

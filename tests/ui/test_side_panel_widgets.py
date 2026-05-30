@@ -190,3 +190,12 @@ def test_redock_takes_width_from_canvas_not_other_panel(qtbot):
     assert sizes[0] == 250                          # nav restored to remembered width
     assert sizes[2] == insp_before                  # inspector UNTOUCHED (the bug would shrink this)
     assert sizes[1] == canvas_before - 250          # canvas absorbed the full 250 delta
+
+
+def test_peek_overlay_offset_keeps_strip_exposed(qtbot):
+    ctrl, splitter, panel, strip, overlay = _make_controller(qtbot)
+    splitter.setSizes([0, 900]); ctrl.on_splitter_moved()   # -> HIDDEN
+    strip.peek_requested.emit(Side.LEFT)                     # -> PEEK
+    assert ctrl.state == PanelState.PEEK
+    # Overlay starts at the strip's inner edge, leaving the strip clickable.
+    assert overlay.geometry().x() == strip.WIDTH_PX
