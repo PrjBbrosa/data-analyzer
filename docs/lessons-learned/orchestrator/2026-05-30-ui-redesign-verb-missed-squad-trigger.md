@@ -1,8 +1,9 @@
-# UI-redesign verbs miss the squad trigger keyword set
+# UI-redesign / optimize verbs miss the squad trigger keyword set
 
-**Date:** 2026-05-30
+**Date:** 2026-05-30 (updated 2026-05-31)
 **Tag:** cause: routing · roster-gap · trigger-keywords
-**Run:** 2026-05-30 TimeDomain right-click menu redesign + hi-DPI copy/save
+**Run:** 2026-05-30 TimeDomain right-click menu redesign + hi-DPI copy/save;
+2026-05-31 overlay AA / interaction bug-fix (spec→实现)
 **Specialist:** pyqt-ui-engineer (S1, S2)
 **Overlapping files:** n/a (routing lesson, not a rework lesson)
 
@@ -34,6 +35,18 @@ real UI work arrives as a *task verb* — 重设计/redesign, 改造/rework,
 of those are in the set, so a large class of legitimately squad-worthy UI
 tasks rely entirely on the "Missed triggers" safety net rather than the
 keyword fast-path.
+
+**2026-05-31 reinforcement (bug-fix / spec→实现 phrasing):** the overlay
+AA / interaction run arrived as two triggerless messages — (1) a bug
+report ("当前叠加模式还有挺多问题和 bug … 让我整体评估") and (2) the
+actionable go-ahead "你写好 spec 开始优化吧". The operative verbs were
+评估 (evaluate) and 优化 (optimize); again **zero** keyword hits, and the
+*actionable* second message ("start optimizing") is even more keyword-bare
+than the first. Two new task-verb classes confirmed missing from the set:
+**bug-fix reports** and **优化/optimize**, plus the **spec→实现 hand-off**
+pattern where the implementation-trigger message carries no work-type noun.
+Routed correctly via the Missed-triggers clause; one bundled
+pyqt-ui-engineer task (4 fixes, single file).
 
 ## Preventative guidance
 

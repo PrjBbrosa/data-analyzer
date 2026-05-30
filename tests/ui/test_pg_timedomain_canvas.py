@@ -2018,6 +2018,232 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         )
 
 
+class TestOverlayPressModeSplit:
+    """Fix A (2026-05-31 overlay-aa-interaction-fixes): the overlay
+    left-press selection/Y-drag handler must yield to the ViewBox rubber
+    band in RectMode (box-zoom), and only keep nearest-curve-select +
+    Y-drag in PanMode. The ViewBox mouseMode is read directly off the
+    state dict (no mouse-mode controller dependency).
+    """
+
+    def _overlay_canvas(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="overlay")
+        QCoreApplication.processEvents()
+        canvas._primary_xaxis_ax.set_xlim(0.0, 1.0)
+        QCoreApplication.processEvents()
+        return canvas
+
+    def _press_event(self, point):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        return QMouseEvent(
+            QEvent.MouseButtonPress, point, Qt.LeftButton, Qt.LeftButton,
+            Qt.NoModifier,
+        )
+
+    def _on_curve_point(self, canvas, channel="torque"):
+        handle = canvas._channel_lines[channel][0]
+        xdata, ydata = handle.get_lines()[0].plot_data_item.getData()
+        idx = int(np.argmin(np.abs(np.asarray(xdata) - 0.5)))
+        return _viewport_point_for_data(
+            canvas, handle, float(xdata[idx]), float(ydata[idx])
+        )
+
+    def _set_all_viewboxes_mode(self, canvas, mode):
+        import pyqtgraph as pg
+
+        seen = set()
+        for handle in canvas.axes_list + [canvas._x_master_handle]:
+            if handle is None:
+                continue
+            vb = handle.view_box
+            if vb is None or id(vb) in seen:
+                continue
+            seen.add(id(vb))
+            vb.setMouseMode(mode)
+        for vb in list(getattr(canvas, "_overlay_aux_viewboxes", []) or []):
+            if id(vb) not in seen:
+                vb.setMouseMode(mode)
+                seen.add(id(vb))
+
+    def test_rectmode_press_yields_to_rubber_band(self, qapp):
+        """In RectMode a press tight on a curve must NOT select / Y-drag;
+        the handler returns False so pyqtgraph starts the rubber band."""
+        import pyqtgraph as pg
+
+        canvas = self._overlay_canvas(qapp)
+        self._set_all_viewboxes_mode(canvas, pg.ViewBox.RectMode)
+
+        point = self._on_curve_point(canvas)
+        consumed = canvas._handle_overlay_mouse_press(self._press_event(point))
+
+        assert consumed is False, "RectMode press must let the rubber band start"
+        assert canvas._selected_overlay_channel is None
+        assert canvas._overlay_dragging is False
+
+    def test_panmode_press_still_selects_and_drags(self, qapp):
+        """PanMode press preserves the existing select + Y-drag behavior."""
+        import pyqtgraph as pg
+
+        canvas = self._overlay_canvas(qapp)
+        self._set_all_viewboxes_mode(canvas, pg.ViewBox.PanMode)
+
+        point = self._on_curve_point(canvas)
+        consumed = canvas._handle_overlay_mouse_press(self._press_event(point))
+
+        assert consumed is True
+        assert canvas._selected_overlay_channel == "torque"
+        assert canvas._overlay_dragging is True
+
+
+class _FakeDragEvent:
+    """Duck-typed stand-in for a pyqtgraph MouseDragEvent.
+
+    Only the members ``_ModifierWheelViewBox.mouseDragEvent`` reads in its
+    own (pre-``super()``) branch matter: ``button()`` and ``isStart()``.
+    """
+
+    def __init__(self, button, *, start):
+        self._button = button
+        self._start = start
+
+    def button(self):
+        return self._button
+
+    def isStart(self):
+        return self._start
+
+
+class TestViewBoxDragAaHook:
+    """Fix B (2026-05-31 overlay-aa-interaction-fixes): the box-zoom
+    rubber band must drop AA at drag start, because the base ViewBox
+    only changes range on ev.isFinish() — the whole rubber-band drag
+    otherwise stays AA-on and re-rasterizes every frame. The subclass
+    hooks ONLY RectMode + LeftButton + axis is None at isStart, and must
+    ALWAYS delegate to super().
+    """
+
+    def _vb_with_owner(self, qapp):
+        import pyqtgraph as pg
+        from mf4_analyzer.ui.pg_canvases import _ModifierWheelViewBox
+
+        class _OwnerSpy:
+            def __init__(self):
+                self.disabled = 0
+
+            def disable_interactive_quality(self):
+                self.disabled += 1
+
+        owner = _OwnerSpy()
+        vb = _ModifierWheelViewBox(owner_canvas=owner)
+        return vb, owner
+
+    def test_rectmode_left_isstart_drops_aa_and_calls_super(self, qapp, monkeypatch):
+        import pyqtgraph as pg
+        from PyQt5.QtCore import Qt
+
+        vb, owner = self._vb_with_owner(qapp)
+        vb.setMouseMode(pg.ViewBox.RectMode)
+
+        super_calls = {"n": 0}
+        monkeypatch.setattr(
+            pg.ViewBox, "mouseDragEvent",
+            lambda self, ev, axis=None: super_calls.__setitem__("n", super_calls["n"] + 1),
+        )
+
+        ev = _FakeDragEvent(Qt.LeftButton, start=True)
+        vb.mouseDragEvent(ev, axis=None)
+
+        assert owner.disabled == 1, "RectMode left isStart must drop AA"
+        assert super_calls["n"] == 1, "super().mouseDragEvent must always run"
+
+    def test_rectmode_left_non_start_does_not_redrop_but_calls_super(
+        self, qapp, monkeypatch,
+    ):
+        import pyqtgraph as pg
+        from PyQt5.QtCore import Qt
+
+        vb, owner = self._vb_with_owner(qapp)
+        vb.setMouseMode(pg.ViewBox.RectMode)
+
+        super_calls = {"n": 0}
+        monkeypatch.setattr(
+            pg.ViewBox, "mouseDragEvent",
+            lambda self, ev, axis=None: super_calls.__setitem__("n", super_calls["n"] + 1),
+        )
+
+        ev = _FakeDragEvent(Qt.LeftButton, start=False)
+        vb.mouseDragEvent(ev, axis=None)
+
+        assert owner.disabled == 0, "only isStart drops AA (idle gate covers held drag)"
+        assert super_calls["n"] == 1
+
+    def test_panmode_left_does_not_drop_aa_but_calls_super(self, qapp, monkeypatch):
+        import pyqtgraph as pg
+        from PyQt5.QtCore import Qt
+
+        vb, owner = self._vb_with_owner(qapp)
+        vb.setMouseMode(pg.ViewBox.PanMode)
+
+        super_calls = {"n": 0}
+        monkeypatch.setattr(
+            pg.ViewBox, "mouseDragEvent",
+            lambda self, ev, axis=None: super_calls.__setitem__("n", super_calls["n"] + 1),
+        )
+
+        ev = _FakeDragEvent(Qt.LeftButton, start=True)
+        vb.mouseDragEvent(ev, axis=None)
+
+        assert owner.disabled == 0, "PanMode must not use the RectMode hook"
+        assert super_calls["n"] == 1
+
+    def test_rectmode_single_axis_drag_does_not_drop_aa_but_calls_super(
+        self, qapp, monkeypatch,
+    ):
+        import pyqtgraph as pg
+        from PyQt5.QtCore import Qt
+
+        vb, owner = self._vb_with_owner(qapp)
+        vb.setMouseMode(pg.ViewBox.RectMode)
+
+        super_calls = {"n": 0}
+        monkeypatch.setattr(
+            pg.ViewBox, "mouseDragEvent",
+            lambda self, ev, axis=None: super_calls.__setitem__("n", super_calls["n"] + 1),
+        )
+
+        ev = _FakeDragEvent(Qt.LeftButton, start=True)
+        vb.mouseDragEvent(ev, axis=0)
+
+        assert owner.disabled == 0, "axis is None gate: single-axis drag is untouched"
+        assert super_calls["n"] == 1
+
+    def test_rectmode_right_button_does_not_drop_aa_but_calls_super(
+        self, qapp, monkeypatch,
+    ):
+        import pyqtgraph as pg
+        from PyQt5.QtCore import Qt
+
+        vb, owner = self._vb_with_owner(qapp)
+        vb.setMouseMode(pg.ViewBox.RectMode)
+
+        super_calls = {"n": 0}
+        monkeypatch.setattr(
+            pg.ViewBox, "mouseDragEvent",
+            lambda self, ev, axis=None: super_calls.__setitem__("n", super_calls["n"] + 1),
+        )
+
+        ev = _FakeDragEvent(Qt.RightButton, start=True)
+        vb.mouseDragEvent(ev, axis=None)
+
+        assert owner.disabled == 0, "right-button (zoom-out) drag is untouched"
+        assert super_calls["n"] == 1
+
+
 class TestTimeDomainCanvasPGCursorParity:
     """Single-cursor + dual-cursor HTML payloads must match
     canvases.py:_update_single (`cursor_info`) and
@@ -3801,18 +4027,36 @@ class _FakeMove:
         return self._b
 
 
-class _FakeCurveData:
-    """Minimal curve-like object exposing getData() for density tests."""
+class _FakeViewBox:
+    """Distinct, hashable stand-in so density grouping can bucket curves
+    by ViewBox identity without a real pyqtgraph ViewBox."""
 
-    def __init__(self, n):
+
+class _FakeCurveData:
+    """Minimal curve-like object exposing getData() for density tests.
+
+    ``view_box`` lets a test place several fake curves on the SAME
+    ViewBox (overlay) or on distinct ones (subplot) so the sum-per-VB
+    density metric can be exercised. Defaults to a fresh ViewBox so each
+    instance is its own group unless one is shared in explicitly.
+    """
+
+    def __init__(self, n, view_box=None):
         self._x = np.arange(n, dtype=np.float64)
+        self._vb = view_box if view_box is not None else _FakeViewBox()
 
     def getData(self):
         return self._x, self._x
 
+    def getViewBox(self):
+        return self._vb
+
 
 class _BrokenCurveData:
     """Curve-like object whose data cannot be inspected."""
+
+    def getViewBox(self):
+        return _FakeViewBox()
 
     def getData(self):
         raise RuntimeError("boom")
@@ -4076,6 +4320,19 @@ class TestAutoIdleAA:
         assert canvas._idle_aa_on is True
         assert all(c.opts.get("antialias") for c in self._curves(canvas))
 
+    @staticmethod
+    def _set_budgets(canvas, on, off):
+        """Pin BOTH budget pairs (overlay + subplot) to the same window so a
+        density test is independent of which mode branch the gate takes; an
+        individual test then flips ``canvas._overlay_mode`` to exercise the
+        sum-vs-max metric split deliberately."""
+        canvas._AA_OVERLAY_SEGMENT_ON = on
+        canvas._AA_OVERLAY_SEGMENT_OFF = off
+        canvas._AA_SUBPLOT_SEGMENT_ON = on
+        canvas._AA_SUBPLOT_SEGMENT_OFF = off
+        canvas._AA_SEGMENT_ON = on
+        canvas._AA_SEGMENT_OFF = off
+
     def test_density_gate_blocks_dense_curves(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
         from PyQt5.QtWidgets import QApplication
@@ -4084,19 +4341,20 @@ class TestAutoIdleAA:
         monkeypatch.setattr(
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
-        canvas._AA_DENSITY_ON = 1
-        canvas._AA_DENSITY_OFF = 2
+        self._set_budgets(canvas, 1, 2)
         canvas.try_enable_idle_quality()
         assert canvas._idle_aa_on is False
 
     def test_density_gate_uses_hysteresis_window(self, qapp, monkeypatch):
         canvas = self._plot(qapp)
-        canvas._AA_DENSITY_ON = 4
-        canvas._AA_DENSITY_OFF = 6
+        self._set_budgets(canvas, 4, 6)
         monkeypatch.setattr(
             canvas, "_collect_curve_items", lambda: [_FakeCurveData(5)]
         )
 
+        # Seed past the cold-start: a value strictly inside the (ON, OFF]
+        # dead band holds whatever the previous decision was.
+        canvas._idle_aa_density_seeded = True
         canvas._idle_aa_density_allowed = False
         assert canvas._idle_aa_density_ok() is False
 
@@ -4109,10 +4367,134 @@ class TestAutoIdleAA:
         assert canvas._idle_aa_density_ok() is False
         assert canvas._idle_aa_density_allowed is False
 
+    def test_overlay_metric_is_sum_across_all_curves(self, qapp, monkeypatch):
+        """Correction 1 (2026-05-31): in OVERLAY mode the metric is the SUM
+        of drawn points across ALL curves — the aux ViewBoxes fully overlap
+        at one full-plot rect, so a single repaint re-rasterizes them as one
+        region. Three 5-pt curves (even on DISTINCT fake VBs, mirroring the
+        real distinct-but-overlapping aux ViewBoxes) → metric 15, not 5."""
+        canvas = self._plot(qapp, mode="overlay")
+        canvas._overlay_mode = True
+        self._set_budgets(canvas, 8, 10)
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items",
+            lambda: [_FakeCurveData(5) for _ in range(3)],
+        )
+        # Sum = 15 > OFF(10) on the cold-start seed → rejected, proving the
+        # metric is the sum (a per-VB MAX would have been 5 → allowed).
+        canvas._idle_aa_density_seeded = False
+        assert canvas._idle_aa_density_ok() is False
+
+    def test_subplot_metric_is_max_over_rows(self, qapp, monkeypatch):
+        """Correction 1: in SUBPLOT mode the metric is the MAX over rows of
+        that row's drawn points (disjoint dirty rects). 5 separate 5-pt
+        curves → 5, well under budget — single curves at any width still get
+        AA. Same fake-curve set that overlay would score as a 25-pt sum."""
+        canvas = self._plot(qapp)
+        canvas._overlay_mode = False
+        self._set_budgets(canvas, 8, 10)
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items",
+            lambda: [_FakeCurveData(5) for _ in range(5)],
+        )
+        canvas._idle_aa_density_seeded = False
+        assert canvas._idle_aa_density_ok() is True
+
+    def test_single_subplot_curve_6000_passes_on_first_decision(
+        self, qapp, monkeypatch,
+    ):
+        """Correction 3: a single ~6000-pt subplot curve (maximized / 4K
+        window) is under the GENEROUS subplot OFF budget, so the FIRST
+        decision seeds True instead of sticking False in the dead band. Uses
+        the production defaults — does NOT override the constants."""
+        canvas = self._plot(qapp)
+        canvas._overlay_mode = False
+        # Subplot budget must clear a 4K single curve (~7700-pt envelope).
+        assert canvas._AA_SUBPLOT_SEGMENT_OFF >= 7700, (
+            "subplot OFF must cover a 4K maximized single curve (~7700 pts)"
+        )
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items", lambda: [_FakeCurveData(6000)]
+        )
+        canvas._idle_aa_density_seeded = False
+        canvas._idle_aa_density_allowed = False
+        assert canvas._idle_aa_density_ok() is True, (
+            "first decision must seed via the OFF threshold, not stick False"
+        )
+
+    def test_dense_overlay_gates_off_on_production_budget(self, qapp, monkeypatch):
+        """Correction 3: a dense overlay (5 curves × ~3000 envelope pts =
+        sum 15000, measured ≈ +69 ms AA-on) must resolve to AA-off under the
+        PRODUCTION overlay budget — the original 12000/16000 single budget
+        would have ALLOWED it. Uses the real overlay constants."""
+        canvas = self._plot(qapp, mode="overlay")
+        canvas._overlay_mode = True
+        # sum 15000 must exceed the production overlay OFF budget.
+        assert 5 * 3000 > canvas._AA_OVERLAY_SEGMENT_OFF, (
+            "overlay OFF budget too high — the reported-slow dense overlay "
+            "(5×3000 ≈ +69 ms) would still be allowed"
+        )
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items",
+            lambda: [_FakeCurveData(3000) for _ in range(5)],
+        )
+        canvas._idle_aa_density_seeded = False
+        canvas._idle_aa_density_allowed = False
+        assert canvas._idle_aa_density_ok() is False, (
+            "dense overlay (sum 15000) must gate AA off on the production "
+            "overlay budget"
+        )
+
+    def test_light_overlay_within_budget_enables(self, qapp, monkeypatch):
+        """Correction 3: a light 2-curve overlay (sum 6000 ≈ +16 ms AA-on)
+        stays affordable and gets AA under the production overlay budget."""
+        canvas = self._plot(qapp, mode="overlay")
+        canvas._overlay_mode = True
+        # A 2-curve overlay at the ON budget point is the affordable case.
+        n_each = canvas._AA_OVERLAY_SEGMENT_ON // 2  # sum == ON → allowed
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items",
+            lambda: [_FakeCurveData(n_each) for _ in range(2)],
+        )
+        canvas._idle_aa_density_seeded = False
+        canvas._idle_aa_density_allowed = False
+        assert canvas._idle_aa_density_ok() is True
+
+    def test_overlay_on_off_hysteresis_do_not_flap(self, qapp, monkeypatch):
+        """Correction 3: overlay ON != OFF, so a sum parked between them
+        holds the previous decision (no per-frame flapping)."""
+        canvas = self._plot(qapp, mode="overlay")
+        canvas._overlay_mode = True
+        assert canvas._AA_OVERLAY_SEGMENT_ON < canvas._AA_OVERLAY_SEGMENT_OFF
+        mid = (
+            canvas._AA_OVERLAY_SEGMENT_ON + canvas._AA_OVERLAY_SEGMENT_OFF
+        ) // 2
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items", lambda: [_FakeCurveData(mid)]
+        )
+        canvas._idle_aa_density_seeded = True
+
+        canvas._idle_aa_density_allowed = True
+        assert canvas._idle_aa_density_ok() is True
+        assert canvas._idle_aa_density_ok() is True  # stable, no flap
+
+        canvas._idle_aa_density_allowed = False
+        assert canvas._idle_aa_density_ok() is False
+        assert canvas._idle_aa_density_ok() is False
+
+    def test_subplot_budget_more_generous_than_overlay(self, qapp):
+        """Correction 3: the subplot budget (cached, cheap) must be strictly
+        more generous than the tight overlay (uncached) budget, or subplot
+        single-row data would be starved by the overlay gate."""
+        canvas = self._plot(qapp)
+        assert canvas._AA_SUBPLOT_SEGMENT_ON > canvas._AA_OVERLAY_SEGMENT_ON
+        assert canvas._AA_SUBPLOT_SEGMENT_OFF > canvas._AA_OVERLAY_SEGMENT_OFF
+
     def test_density_gate_fails_closed_when_curve_data_unreadable(
         self, qapp, monkeypatch,
     ):
         canvas = self._plot(qapp)
+        canvas._idle_aa_density_seeded = True
         canvas._idle_aa_density_allowed = True
         monkeypatch.setattr(
             canvas, "_collect_curve_items", lambda: [_BrokenCurveData()]
@@ -4120,6 +4502,43 @@ class TestAutoIdleAA:
 
         assert canvas._idle_aa_density_ok() is False
         assert canvas._idle_aa_density_allowed is False
+
+    def test_resize_event_rearms_idle_timer(self, qapp):
+        """Fix C: a resize debounces a settle pass; once the settle timer
+        fires it recomputes the envelope and re-arms the idle-AA timer so
+        AA recovers at the new width. The 40 ms debounce is driven
+        directly (QTimer-slot-called-directly harness convention)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = self._plot(qapp)
+        canvas._idle_aa_timer.stop()
+        assert not canvas._idle_aa_timer.isActive()
+
+        canvas.resize(900, 500)
+        QCoreApplication.processEvents()
+        # resizeEvent arms the debounce, not the idle timer directly.
+        assert canvas._resize_settle_timer.isActive(), (
+            "resize must arm the settle debounce"
+        )
+
+        # Fire the debounce slot as the live timer eventually would.
+        canvas._on_resize_settled()
+        assert canvas._idle_aa_timer.isActive(), (
+            "settle pass must re-arm the idle-AA timer for the new width"
+        )
+
+    def test_resize_event_reseeds_density_cold_start(self, qapp):
+        """Fix C: after a resize the density decision is re-seeded so a
+        new (wider) envelope re-enters the OFF-threshold seeding path."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = self._plot(qapp)
+        canvas._idle_aa_density_seeded = True
+
+        canvas.resize(900, 500)
+        QCoreApplication.processEvents()
+
+        assert canvas._idle_aa_density_seeded is False
 
     def test_default_line_width_is_1_5(self, qapp):
         """Co-tuned with idle AA to soften the AA-off/on visual jump."""
@@ -4142,3 +4561,122 @@ class TestAutoIdleAA:
         assert not pix.isNull()
         assert all(c.opts.get("antialias") for c in curves)
         assert canvas._idle_aa_on is True
+
+    def test_idle_aa_subplot_sets_device_coordinate_cache(self, qapp, monkeypatch):
+        """Fix D (Correction 2, 2026-05-31): in SUBPLOT mode (disjoint rows)
+        idle AA also enables DeviceCoordinateCache so hover / draw_idle blits
+        the cached bitmap instead of re-rasterizing — measured 5×6000 subplot
+        AA-on 25.3 ms → 0.86 ms cached. Subplot rows do not overlap, so the
+        cache pays off (unlike overlay)."""
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication, QGraphicsItem
+
+        canvas = self._plot(qapp, mode="subplot")
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        curves = self._curves(canvas)
+        assert curves
+        # Pre-condition: AA-off interaction state caches nothing.
+        assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
+
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+        assert all(
+            c.cacheMode() == QGraphicsItem.DeviceCoordinateCache for c in curves
+        ), "subplot idle AA must enable DeviceCoordinateCache on every curve"
+
+    def test_idle_aa_overlay_does_not_set_device_cache(self, qapp, monkeypatch):
+        """Fix D (Correction 2): in OVERLAY mode DeviceCoordinateCache gives
+        no win (the aux ViewBoxes fully overlap at one full-plot rect, so N
+        full-size cache layers must alpha-composite every frame — measured
+        slightly WORSE). So overlay idle AA must NOT set the device cache; it
+        relies on the tight density budget instead. Curves stay NoCache even
+        though AA is on."""
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication, QGraphicsItem
+
+        canvas = self._plot(qapp, mode="overlay")
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        curves = self._curves(canvas)
+        assert curves
+        assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
+
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+        assert all(c.opts.get("antialias") for c in curves), (
+            "overlay idle AA must still flip antialias on"
+        )
+        assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves), (
+            "overlay idle AA must NOT set DeviceCoordinateCache (no win on "
+            "fully-overlapping aux ViewBoxes)"
+        )
+
+    def test_disable_interactive_quality_clears_device_cache_subplot(
+        self, qapp, monkeypatch,
+    ):
+        """Fix D: any range/geometry change funnels through
+        disable_interactive_quality, which MUST invalidate the subplot cache
+        (NoCache) or pan/zoom would smear the stale bitmap."""
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication, QGraphicsItem
+
+        canvas = self._plot(qapp, mode="subplot")
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        curves = self._curves(canvas)
+        assert all(
+            c.cacheMode() == QGraphicsItem.DeviceCoordinateCache for c in curves
+        )
+
+        canvas.disable_interactive_quality()
+        assert canvas._idle_aa_on is False
+        assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves), (
+            "disable_interactive_quality must clear the device cache"
+        )
+
+    def test_disable_interactive_quality_noop_cache_in_overlay(
+        self, qapp, monkeypatch,
+    ):
+        """Fix D (Correction 2): disable sets NoCache UNCONDITIONALLY in both
+        modes. Overlay never set the cache, so this is a cheap no-op that
+        still guarantees no stale cache survives a mode swap."""
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication, QGraphicsItem
+
+        canvas = self._plot(qapp, mode="overlay")
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        curves = self._curves(canvas)
+        assert canvas._idle_aa_on is True
+
+        canvas.disable_interactive_quality()
+        assert canvas._idle_aa_on is False
+        assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
+
+    def test_xrange_change_clears_device_cache_subplot(self, qapp, monkeypatch):
+        """Fix D end-to-end wiring: a real range mutation drops both AA
+        and the subplot device cache via the existing _on_xrange_changed →
+        disable_interactive_quality chokepoint."""
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication, QGraphicsItem
+
+        canvas = self._plot(qapp, mode="subplot")
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        curves = self._curves(canvas)
+        assert all(
+            c.cacheMode() == QGraphicsItem.DeviceCoordinateCache for c in curves
+        )
+
+        canvas.set_xlim(0.2, 0.8)
+        assert canvas._idle_aa_on is False
+        assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)

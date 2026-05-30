@@ -71,6 +71,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QGraphicsItem,
     QGroupBox,
     QLabel,
     QMenu,
@@ -99,6 +100,52 @@ from mf4_analyzer.ui.canvases import (
 
 
 _log = logging.getLogger(__name__)
+
+
+# Idle-AA density budget (Fix C, 2026-05-31 overlay-aa-interaction-fixes;
+# RECALIBRATED 2026-05-31 against the end-to-end grab()-repaint-frame
+# harness — superseding the original 12000/16000, which never gated the
+# measured-slow overlay).
+#
+# TWO BUDGETS, because subplot and overlay have fundamentally different
+# per-frame economics (measured offscreen-raster grab() of the real
+# GraphicsLayoutWidget; the AA-on minus AA-off DELTA isolates the actual
+# antialiasing cost from the offscreen layout overhead, and is linear in
+# the per-frame drawn-point SUM):
+#
+#   overlay sum  4000 → AA delta +10.2 ms   (≈ the ~10 ms target)
+#   overlay sum  6000 → AA delta +16.6 ms   (2 curves, still affordable)
+#   overlay sum  9000 → AA delta +31.3 ms   (3 curves, too slow → gate OFF)
+#   overlay sum 12000 → AA delta +48.2 ms
+#   overlay sum 15000 → AA delta +69.0 ms   (5 curves, the reported-slow case)
+#
+# OVERLAY metric = SUM of drawn points across ALL curves: overlay's aux
+# ViewBoxes fully overlap at one full-plot rect, so a single draw_idle /
+# _glw.update re-rasterizes every overlaid curve as ONE region. (Per-VB
+# grouping under-counted overlay because each overlay curve lives on its
+# OWN aux ViewBox — distinct objects, overlapping geometry — so the MAX
+# saw only one curve. See the DeviceCoordinateCache lesson.) The overlay
+# budget is tight so dense overlays (≥3 curves ≈ sum ≥ 9000, > ~30 ms)
+# fall to AA-off; a light 2-curve overlay (sum ≤ 6000) still gets AA.
+_AA_OVERLAY_SEGMENT_ON = 5000
+_AA_OVERLAY_SEGMENT_OFF = 7000
+#
+# SUBPLOT/SINGLE metric = MAX over rows of that row's drawn points: the
+# rows are disjoint device rectangles, AND subplot curves carry a
+# DeviceCoordinateCache (Fix D, subplot-only) so an AA-on cached frame is
+# ~0.3–0.9 ms at ANY width — measured 5×6000 subplot AA-on+cache = 0.86 ms
+# vs 25.3 ms uncached. The subplot budget is therefore GENEROUS so a single
+# maximized / 4K curve always qualifies: a 4K-wide single curve emits a
+# ~7700-pt envelope (positions_envelope ≈ 2× plot-area pixel width), so OFF
+# must sit well above that or issue 1 (AA off after maximize) regresses.
+_AA_SUBPLOT_SEGMENT_ON = 10000
+_AA_SUBPLOT_SEGMENT_OFF = 12000
+#
+# Back-compat aliases (legacy single-budget names; the instance still
+# exposes _AA_SEGMENT_ON/_OFF, defaulted to the subplot pair, so existing
+# tests/tools that poke the old attribute names keep working).
+_AA_SEGMENT_ON = _AA_SUBPLOT_SEGMENT_ON
+_AA_SEGMENT_OFF = _AA_SUBPLOT_SEGMENT_OFF
 
 
 _PG_CONTEXT_ACTIONS = {
@@ -658,6 +705,44 @@ class _ModifierWheelViewBox(pg.ViewBox):
         else:
             super().wheelEvent(ev, axis=axis)
 
+    def mouseDragEvent(self, ev, axis=None):
+        """Drop AA the instant a box-zoom rubber band begins.
+
+        Fix B (2026-05-31 overlay-aa-interaction-fixes): the base
+        ``ViewBox.mouseDragEvent`` only changes the view range on
+        ``ev.isFinish()`` in RectMode — the whole rubber-band drag never
+        passes through ``_on_xrange_changed`` (the AA-off chokepoint), so
+        if AA was on when the drag started every frame re-rasterizes all
+        curves and the box-zoom stutters/freezes. We hook ONLY the
+        RectMode + LeftButton + full-2D (``axis is None``) start to flip
+        AA off and stop the idle timer; the held-down drag is then kept
+        AA-off by the idle gate's ``mouseButtons() != NoButton`` check, so
+        a single drop at ``isStart`` suffices. ``isFinish`` re-arms via the
+        base class's ``showAxRect → setRange → sigXRangeChanged →
+        _on_xrange_changed`` chain, so we do NOT re-schedule here.
+
+        Every branch MUST delegate to ``super()`` or box-zoom / pan / the
+        right-button zoom and single-axis drags themselves break (Risk R1
+        in the design).
+        """
+        owner = self._owner_canvas
+        try:
+            is_rect_left_2d = (
+                owner is not None
+                and ev.button() == Qt.LeftButton
+                and self.state.get("mouseMode") == pg.ViewBox.RectMode
+                and axis is None
+            )
+        except Exception:
+            is_rect_left_2d = False
+        if is_rect_left_2d:
+            try:
+                if ev.isStart():
+                    owner.disable_interactive_quality()
+            except Exception:
+                pass
+        super().mouseDragEvent(ev, axis=axis)
+
 
 # ---------------------------------------------------------------------------
 # Curve-layer cache key quantization (signal-processing/
@@ -777,9 +862,42 @@ class TimeDomainCanvasPG(QWidget):
         self._idle_aa_timer.setSingleShot(True)
         self._idle_aa_timer.setInterval(150)
         self._idle_aa_timer.timeout.connect(self.try_enable_idle_quality)
-        self._AA_DENSITY_ON = 4000
-        self._AA_DENSITY_OFF = 6000
+        # Density budget for idle AA (Fix C, 2026-05-31; RECALIBRATED against
+        # the end-to-end grab() repaint-frame harness). Two budgets, branched
+        # on _overlay_mode in _idle_aa_density_ok:
+        #   * OVERLAY: metric = SUM of drawn points across ALL curves (they
+        #     overlap at one full-plot rect → repaint as one region). Tight
+        #     budget so a dense ≥3-curve overlay (sum ≥ 9000, measured > ~30 ms
+        #     AA-on) gates OFF while a light 2-curve overlay (sum ≤ 6000) keeps
+        #     AA. This is the UNCACHED path the gate must govern.
+        #   * SUBPLOT/SINGLE: metric = MAX over rows of that row's drawn points
+        #     (disjoint rects). Subplot curves carry a DeviceCoordinateCache
+        #     (Fix D, subplot-only) so an AA-on cached frame is ~0.3–0.9 ms at
+        #     ANY width; the budget is generous so a single maximized / 4K
+        #     curve (~7700-pt envelope) always gets AA (fixes issue 1).
+        # ON/OFF are real-hardware tunables; module defaults above carry the
+        # measured frame-ms justification. Legacy _AA_SEGMENT_ON/_OFF are kept
+        # as aliases of the subplot pair so existing tools/tests still work.
+        self._AA_OVERLAY_SEGMENT_ON = _AA_OVERLAY_SEGMENT_ON
+        self._AA_OVERLAY_SEGMENT_OFF = _AA_OVERLAY_SEGMENT_OFF
+        self._AA_SUBPLOT_SEGMENT_ON = _AA_SUBPLOT_SEGMENT_ON
+        self._AA_SUBPLOT_SEGMENT_OFF = _AA_SUBPLOT_SEGMENT_OFF
+        self._AA_SEGMENT_ON = _AA_SEGMENT_ON
+        self._AA_SEGMENT_OFF = _AA_SEGMENT_OFF
         self._idle_aa_density_allowed = False
+        # Cold-start dead-band fix: until the first decision (and after a
+        # resize / rebuild reset) the density gate seeds via the OFF
+        # threshold instead of inheriting the pessimistic initial False, so
+        # a single wide curve no longer sticks AA-off forever.
+        self._idle_aa_density_seeded = False
+        # --- resize re-arm debounce (Fix C) -----------------------------
+        # A 40 ms single-shot (mirrors _refresh_timer's coalesce window)
+        # so dragging the window border does not recompute the envelope on
+        # every intermediate size; it fires once the resize settles.
+        self._resize_settle_timer = QTimer(self)
+        self._resize_settle_timer.setSingleShot(True)
+        self._resize_settle_timer.setInterval(40)
+        self._resize_settle_timer.timeout.connect(self._on_resize_settled)
         # The sigXRangeChanged connections so we can drop them on
         # rebuild (pyqtgraph analogue of the matplotlib callbacks
         # lifecycle lesson). We connect on EVERY subplot ViewBox (not
@@ -1673,9 +1791,17 @@ class TimeDomainCanvasPG(QWidget):
             self._idle_aa_timer.stop()
         except Exception:
             pass
+        try:
+            self._resize_settle_timer.stop()
+        except Exception:
+            pass
         self._refresh_pending = False
         self._idle_aa_on = False
         self._idle_aa_density_allowed = False
+        # Rebuild changes the curve set / point counts → re-seed the
+        # cold-start dead-band fix so the next decision uses the OFF
+        # threshold rather than inheriting a stale allowance (Fix C).
+        self._idle_aa_density_seeded = False
 
         # Strip everything from the GraphicsLayoutWidget.
         try:
@@ -2059,11 +2185,39 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             pass
 
+    def _press_view_box_in_rect_mode(self, scene_pos):
+        """Return True when the ViewBox under ``scene_pos`` (or, on a miss,
+        the primary/X-master ViewBox) is in box-zoom (RectMode).
+
+        Fix A (2026-05-31 overlay-aa-interaction-fixes): the overlay press
+        handler must yield to pyqtgraph's rubber band in box-zoom mode so a
+        press tight on a curve still draws a zoom rectangle instead of
+        being swallowed as a curve-select + Y-drag. We read
+        ``vb.state['mouseMode']`` directly — no mouse-mode controller
+        dependency — and compare against ``pg.ViewBox.RectMode`` (==1).
+        """
+        vb = None
+        handle = self._axis_handle_at_scene_pos(scene_pos)
+        if handle is not None:
+            vb = handle.view_box
+        if vb is None and self._primary_xaxis_ax is not None:
+            vb = self._primary_xaxis_ax.view_box
+        if vb is None:
+            return False
+        try:
+            return vb.state.get("mouseMode") == pg.ViewBox.RectMode
+        except Exception:
+            return False
+
     def _handle_overlay_mouse_press(self, event):
         """Overlay-mode left-press: select nearest channel + begin Y-drag,
         or deselect on a blank-area click. No-op outside overlay mode or
         in cursor mode (cursor takes precedence, matching canvases.py:853).
         Returns ``True`` when the gesture was consumed.
+
+        In box-zoom (RectMode) the handler returns ``False`` so the press
+        falls through to pyqtgraph and the rubber band starts (Fix A); the
+        nearest-curve select + Y-drag is kept ONLY in pan (PanMode).
         """
         if not self._overlay_mode or self._cursor_visible:
             return False
@@ -2074,6 +2228,9 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             return False
         scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        # Fix A: in box-zoom mode let the rubber band own the left press.
+        if self._press_view_box_in_rect_mode(scene_pos):
+            return False
         name = self._select_overlay_channel_from_scene_pos(scene_pos)
         if name is None:
             # Blank-area click → deselect (emits overlay_channel_selected(None)
@@ -3362,6 +3519,40 @@ class TimeDomainCanvasPG(QWidget):
                     self._unify_subplot_left_axis_widths()
             except Exception:
                 pass
+            # Fix C (2026-05-31): the plot-area width just changed, so the
+            # idle-AA density budget and envelope point count are stale.
+            # Debounce a single settle pass (40 ms, _refresh_timer style)
+            # so dragging the window border does not recompute on every
+            # intermediate size, then recompute the envelope at the new
+            # width and re-arm idle AA so crisp curves recover.
+            try:
+                self._idle_aa_density_seeded = False
+                self._resize_settle_timer.start()
+            except Exception:
+                pass
+
+    def _on_resize_settled(self):
+        """Resize-debounce slot (Fix C): recompute the viewport envelope at
+        the new width and re-arm the idle-AA timer so AA recovers.
+
+        Reuses the existing debounced envelope-refresh path (set
+        ``_refresh_pending`` + start ``_refresh_timer``) rather than adding
+        a new rendering primitive; the resize → data-settle → idle-AA
+        sequencing is the two-stage settle the design accepts (R4).
+        """
+        try:
+            self.disable_interactive_quality()
+        except Exception:
+            pass
+        # Recompute the envelope for the new plot-area width, matching the
+        # _on_xrange_changed scheduling pattern (no new rendering path).
+        try:
+            if not self._refresh_pending:
+                self._refresh_pending = True
+                self._refresh_timer.start()
+        except Exception:
+            pass
+        self.schedule_idle_quality()
 
     # ------------------------------------------------------------------
     # Screenshot grab (compat with chart_stack._copy_card_image).
@@ -3389,6 +3580,24 @@ class TimeDomainCanvasPG(QWidget):
                 pass
         return n
 
+    def _set_curves_cache_mode(self, mode) -> None:
+        """Set the QGraphicsItem cache mode on every curve item.
+
+        Fix D (2026-05-31): ``DeviceCoordinateCache`` lets hover /
+        ``draw_idle`` blit the cached device-coordinate bitmap of the
+        overlaid AA curves instead of re-rasterizing them every frame.
+        The cache MUST be cleared (``NoCache``) on any range / geometry /
+        resize / replot change, all of which converge on
+        ``disable_interactive_quality`` (verified callers: _on_xrange_changed,
+        reset_view_to_data_extents, the overlay Y-drag, the box-zoom hook,
+        wheel zoom, and rebuild's AA reset).
+        """
+        for it in self._collect_curve_items():
+            try:
+                it.setCacheMode(mode)
+            except Exception:
+                pass
+
     def disable_interactive_quality(self):
         """Force the interactive path back to AA-off and cancel idle upgrade."""
         try:
@@ -3398,6 +3607,13 @@ class TimeDomainCanvasPG(QWidget):
         if not getattr(self, "_idle_aa_on", False):
             return
         self._set_curves_antialias(False)
+        # Fix D: a stale device-coordinate cache would smear during the
+        # pan/zoom that this call precedes — drop it in lockstep with AA.
+        # ALWAYS NoCache, in BOTH modes: even though only subplot ever sets
+        # DeviceCoordinateCache, clearing unconditionally guarantees no stale
+        # cache survives a subplot→overlay mode switch (cheap no-op when none
+        # was set).
+        self._set_curves_cache_mode(QGraphicsItem.NoCache)
         self._idle_aa_on = False
         try:
             self._glw.update()
@@ -3418,6 +3634,18 @@ class TimeDomainCanvasPG(QWidget):
         if not self._idle_quality_allowed():
             return
         if self._set_curves_antialias(True) > 0:
+            # Fix D (RECALIBRATED, subplot-only): DeviceCoordinateCache blits
+            # the cached device-coordinate bitmap on subsequent hover /
+            # draw_idle repaints instead of re-rasterizing. Measured 15–30×
+            # win for SUBPLOT (disjoint rows: 5×6000 AA-on 25.3 ms → 0.86 ms)
+            # but ZERO win for OVERLAY (its aux ViewBoxes fully overlap at one
+            # full-plot rect, so N full-size cache layers must alpha-composite
+            # every frame — the compositing cancels the rasterization saving,
+            # measured slightly WORSE). So cache subplot only; overlay relies
+            # entirely on the tight density budget above. NoCache is still set
+            # unconditionally on disable so no stale cache survives a mode swap.
+            if not getattr(self, "_overlay_mode", False):
+                self._set_curves_cache_mode(QGraphicsItem.DeviceCoordinateCache)
             self._idle_aa_on = True
             try:
                 self._glw.update()
@@ -3436,8 +3664,48 @@ class TimeDomainCanvasPG(QWidget):
         return self._idle_aa_density_ok()
 
     def _idle_aa_density_ok(self) -> bool:
-        """Hysteresis density gate based on drawn points per curve."""
-        max_points = 0
+        """Hysteresis density gate, branched on overlay vs subplot economics.
+
+        Fix C (2026-05-31, RECALIBRATED): the per-frame rasterization cost
+        differs structurally between the two modes, so the metric AND the
+        budget differ:
+
+        * OVERLAY (``self._overlay_mode``): metric = SUM of drawn points
+          across ALL curves. Every overlay curve lives on its own aux
+          ViewBox, but those aux ViewBoxes fully OVERLAP at the X-master's
+          full plot rect, so a single ``draw_idle`` / ``_glw.update``
+          re-rasterizes every overlaid curve as one region — the real cost
+          is their sum, not the single densest. (Per-VB MAX undercounted
+          overlay precisely because the distinct-but-overlapping aux
+          ViewBoxes made the MAX see only one curve.) This is the UNCACHED
+          path (Fix D's DeviceCoordinateCache gives no win on overlapping
+          full-rect layers), so the tight overlay budget is what gates the
+          measured-slow dense overlay (sum ≥ 9000 ≈ > 30 ms AA-on) to off.
+
+        * SUBPLOT / SINGLE: metric = MAX over rows of that row's drawn-point
+          sum. The rows are disjoint device rectangles and each subplot
+          curve carries a DeviceCoordinateCache (Fix D, subplot-only), so an
+          AA-on cached frame is ~0.3–0.9 ms at ANY width. The generous
+          subplot budget therefore lets a single maximized / 4K curve
+          (~7700-pt envelope) always get AA — fixing issue 1.
+
+        Any unreadable ``getData()`` fails closed (AA stays off). The
+        cold-start dead band is fixed by seeding the FIRST decision (and
+        the first after a resize / rebuild reset) via the OFF threshold
+        instead of inheriting the pessimistic initial ``False``; only
+        thereafter does the ON/OFF hysteresis hold a value parked inside
+        the band.
+        """
+        overlay = bool(getattr(self, "_overlay_mode", False))
+        if overlay:
+            on_budget = self._AA_OVERLAY_SEGMENT_ON
+            off_budget = self._AA_OVERLAY_SEGMENT_OFF
+        else:
+            on_budget = self._AA_SUBPLOT_SEGMENT_ON
+            off_budget = self._AA_SUBPLOT_SEGMENT_OFF
+
+        sums: dict = {}
+        total = 0
         for it in self._collect_curve_items():
             try:
                 xd, _ = it.getData()
@@ -3445,12 +3713,33 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 self._idle_aa_density_allowed = False
                 return False
-            max_points = max(max_points, n)
+            total += n
+            try:
+                vb = it.getViewBox()
+            except Exception:
+                vb = None
+            key = id(vb) if vb is not None else None
+            sums[key] = sums.get(key, 0) + n
 
-        if max_points <= self._AA_DENSITY_ON:
+        if overlay:
+            # Overlapping aux ViewBoxes → one repaint region → SUM.
+            metric = total
+        else:
+            # Disjoint rows → independent dirty rects → MAX over rows.
+            metric = max(sums.values()) if sums else 0
+
+        if not self._idle_aa_density_seeded:
+            # Cold start: a value at or below OFF is allowed; only a true
+            # over-budget metric seeds False. This breaks the old dead-band
+            # trap where a first metric in (ON, OFF] stuck at the initial
+            # pessimistic False forever.
+            self._idle_aa_density_allowed = metric <= off_budget
+            self._idle_aa_density_seeded = True
+        elif metric <= on_budget:
             self._idle_aa_density_allowed = True
-        elif max_points > self._AA_DENSITY_OFF:
+        elif metric > off_budget:
             self._idle_aa_density_allowed = False
+        # else: metric in the (ON, OFF] band → hold the previous value.
         return bool(self._idle_aa_density_allowed)
 
     @contextmanager
