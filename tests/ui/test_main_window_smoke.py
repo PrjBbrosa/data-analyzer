@@ -86,7 +86,6 @@ def test_main_window_inspector_slot_fixed_at_360_under_qss(qapp, qtbot):
 
 
 def test_main_window_collapsing_inspector_expands_chart_then_repin_restores(qtbot):
-    from PyQt5.QtWidgets import QSplitter  # noqa: F401  (kept for parity w/ module style)
     from mf4_analyzer.ui.side_panels import Side, PanelState
 
     w = MainWindow()

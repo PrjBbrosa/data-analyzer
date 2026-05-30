@@ -14,9 +14,10 @@ class Toolbar(QWidget):
     channel_editor_requested = pyqtSignal()
     export_requested = pyqtSignal()
     batch_requested = pyqtSignal()
-    acquisition_cockpit_requested = pyqtSignal()
     # Center segment
     mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
+    # Right segment
+    acquisition_cockpit_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
