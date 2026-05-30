@@ -1461,7 +1461,16 @@ class ChartStack(QWidget):
         parts = [part for part in text.split(_CURSOR_HTML_SEP) if part]
         if len(parts) <= 1:
             return text, ''
-        return parts[0], '<br/>'.join(parts[1:])
+        rows = ['<table cellspacing="0" cellpadding="0">']
+        for i, part in enumerate(parts[1:]):
+            top_pad = '6px' if i > 0 else '0'
+            rows.append(
+                '<tr><td style="padding-top:'
+                f'{top_pad}; padding-bottom:2px; line-height:1.35;">'
+                f'{part}</td></tr>'
+            )
+        rows.append('</table>')
+        return parts[0], ''.join(rows)
 
     def _on_dual_cursor_info(self, text):
         self._pill.set_detail_html(text)

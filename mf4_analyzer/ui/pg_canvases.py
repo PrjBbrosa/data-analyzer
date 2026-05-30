@@ -68,6 +68,7 @@ from PyQt5.QtGui import QImage, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
+    QApplication,
     QCheckBox,
     QComboBox,
     QGroupBox,
@@ -79,7 +80,12 @@ from PyQt5.QtWidgets import (
 )
 
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
-from mf4_analyzer.ui._axis_handle import PgAxisHandle, _PgLineHandle
+from mf4_analyzer.ui._axis_handle import (
+    PG_AXIS_NEUTRAL_COLOR,
+    PG_AXIS_NEUTRAL_WIDTH,
+    PgAxisHandle,
+    _PgLineHandle,
+)
 from mf4_analyzer.ui.canvases import (
     _format_dual_html,
     _format_single_cursor_channel_html,
@@ -762,6 +768,18 @@ class TimeDomainCanvasPG(QWidget):
         self._refresh_timer.setInterval(40)
         self._refresh_timer.timeout.connect(self._refresh_visible_data)
         self._refresh_pending = False
+        # --- Auto Idle AA wiring ----------------------------------------
+        # Curves stay AA-off while the user is interacting. After the
+        # viewport settles, a short single-shot timer restores crisp static
+        # curves by flipping PlotCurveItem.opts['antialias'] only.
+        self._idle_aa_on = False
+        self._idle_aa_timer = QTimer(self)
+        self._idle_aa_timer.setSingleShot(True)
+        self._idle_aa_timer.setInterval(150)
+        self._idle_aa_timer.timeout.connect(self.try_enable_idle_quality)
+        self._AA_DENSITY_ON = 4000
+        self._AA_DENSITY_OFF = 6000
+        self._idle_aa_density_allowed = False
         # The sigXRangeChanged connections so we can drop them on
         # rebuild (pyqtgraph analogue of the matplotlib callbacks
         # lifecycle lesson). We connect on EVERY subplot ViewBox (not
@@ -829,7 +847,7 @@ class TimeDomainCanvasPG(QWidget):
         # state mirrors matplotlib's "no selection" line: lw=1.05,
         # alpha=None (treated as 1.0). De-emphasised state is
         # (1.0, 0.42); selected is (1.8, 1.0).
-        self._overlay_default_lw = 1.7
+        self._overlay_default_lw = 1.5
         self._overlay_default_alpha = 1.0
         self._overlay_selected_lw = 2.6
         self._overlay_selected_alpha = 1.0
@@ -919,6 +937,7 @@ class TimeDomainCanvasPG(QWidget):
         ``data_id`` is required for the curve-layer cache to key entries
         per-source-file; rows without it route through the slow path.
         """
+        self.disable_interactive_quality()
         self.clear()
 
         vis = []
@@ -1057,6 +1076,8 @@ class TimeDomainCanvasPG(QWidget):
         # re-apply pinned interaction state (toolbar pan/zoom mode). Runs
         # last so callbacks see the fully-built axes_list / x_master.
         self._run_replot_callbacks()
+        self.disable_interactive_quality()
+        self.schedule_idle_quality()
 
     def register_replot_callback(self, callback):
         """Register a zero-arg ``callback`` invoked after every
@@ -1141,6 +1162,17 @@ class TimeDomainCanvasPG(QWidget):
             pi.showGrid(x=True, y=True, alpha=0.28)
         except Exception:
             pass
+        for axis_name in ("left", "right", "bottom"):
+            try:
+                axis = pi.getAxis(axis_name)
+                axis.setPen(
+                    pg.mkPen(
+                        color=PG_AXIS_NEUTRAL_COLOR,
+                        width=PG_AXIS_NEUTRAL_WIDTH,
+                    )
+                )
+            except Exception:
+                pass
         return pi
 
     def _add_overlay_axis_handle(self, primary_plot, index):
@@ -1350,7 +1382,7 @@ class TimeDomainCanvasPG(QWidget):
                 pass
 
     def _apply_pg_axis_style(self, axis_handle, color):
-        """Match the original TimeDomain y-axis color cue."""
+        """Keep grid/axis lines neutral while tick text follows the channel."""
         try:
             axis = axis_handle.y_axis_item()
         except Exception:
@@ -1358,7 +1390,9 @@ class TimeDomainCanvasPG(QWidget):
         if axis is None:
             return
         try:
-            axis.setPen(pg.mkPen(color=color, width=2.0))
+            axis.setPen(
+                pg.mkPen(color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH)
+            )
         except Exception:
             pass
         try:
@@ -1487,6 +1521,7 @@ class TimeDomainCanvasPG(QWidget):
         A try/finally tail flush covers every return path so no stale
         debounce frame lands after Home.
         """
+        self.disable_interactive_quality()
         try:
             # (1) Set X to the raw union on every handle (seeds the X-master
             # too in overlay mode).
@@ -1532,6 +1567,7 @@ class TimeDomainCanvasPG(QWidget):
                 self._flush_pending_refresh()
             except Exception:
                 pass
+            self.schedule_idle_quality()
 
     def _data_x_union(self):
         bounds = []
@@ -1633,7 +1669,13 @@ class TimeDomainCanvasPG(QWidget):
         self._teardown_inside_labels()
         if self._refresh_timer.isActive():
             self._refresh_timer.stop()
+        try:
+            self._idle_aa_timer.stop()
+        except Exception:
+            pass
         self._refresh_pending = False
+        self._idle_aa_on = False
+        self._idle_aa_density_allowed = False
 
         # Strip everything from the GraphicsLayoutWidget.
         try:
@@ -2047,6 +2089,7 @@ class TimeDomainCanvasPG(QWidget):
         if start_y is not None:
             self._begin_overlay_y_drag_at(start_y_px=start_y)
             self._overlay_dragging = True
+            self.disable_interactive_quality()
             self._set_x_master_mouse_enabled(False)
         return True
 
@@ -2074,6 +2117,7 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_dragging = False
         self._overlay_y_drag_start = None
         self._set_x_master_mouse_enabled(True)
+        self.schedule_idle_quality()
         return True
 
     def get_statistics(self, time_range=None):
@@ -2272,6 +2316,7 @@ class TimeDomainCanvasPG(QWidget):
             elif event.type() == QEvent.MouseButtonRelease:
                 if self._handle_overlay_mouse_release(event):
                     return True
+                self.schedule_idle_quality()
         except Exception:
             pass
         return super().eventFilter(obj, event)
@@ -2476,6 +2521,7 @@ class TimeDomainCanvasPG(QWidget):
         change. Propagation skips ``source_handle`` so it does not
         receive its own range back as a redundant write.
         """
+        self.disable_interactive_quality()
         # Propagate first so the sibling axes are in sync BEFORE the
         # debounced refresh runs.
         self._propagate_xlim_to_siblings(source=source_handle)
@@ -2499,13 +2545,16 @@ class TimeDomainCanvasPG(QWidget):
         """
         if source is None:
             source = self._primary_xaxis_ax
-        if source is None or len(self.axes_list) <= 1:
+        targets = list(self.axes_list)
+        if self._overlay_mode and self._x_master_handle is not None:
+            targets = [self._x_master_handle] + targets
+        if source is None or len(targets) <= 1:
             return
         try:
             lo, hi = source.get_xlim()
         except Exception:
             return
-        for handle in self.axes_list:
+        for handle in targets:
             if handle is source:
                 continue
             vb = handle.view_box
@@ -2621,6 +2670,7 @@ class TimeDomainCanvasPG(QWidget):
                 _log.warning("PlotDataItem.setData failed for %r: %s", name, exc)
 
         self._refresh = True
+        self.schedule_idle_quality()
 
     def _build_painter_path(self, t, s) -> QPainterPath:
         """Build a ``QPainterPath`` from envelope output. We work in data
@@ -2949,6 +2999,7 @@ class TimeDomainCanvasPG(QWidget):
 
         ctrl = bool(modifiers & Qt.ControlModifier)
         shift = bool(modifiers & Qt.ShiftModifier)
+        self.disable_interactive_quality()
 
         try:
             if ctrl:
@@ -2972,6 +3023,7 @@ class TimeDomainCanvasPG(QWidget):
 
         self._refresh = True
         self.draw_idle()
+        self.schedule_idle_quality()
         return True
 
     # ------------------------------------------------------------------
@@ -3325,6 +3377,81 @@ class TimeDomainCanvasPG(QWidget):
         if scene is None:
             return []
         return [it for it in scene.items() if isinstance(it, pg.PlotCurveItem)]
+
+    def _set_curves_antialias(self, on: bool) -> int:
+        """Persistently set curve AA without repainting or changing data."""
+        n = 0
+        for it in self._collect_curve_items():
+            try:
+                it.opts["antialias"] = bool(on)
+                n += 1
+            except Exception:
+                pass
+        return n
+
+    def disable_interactive_quality(self):
+        """Force the interactive path back to AA-off and cancel idle upgrade."""
+        try:
+            self._idle_aa_timer.stop()
+        except Exception:
+            pass
+        if not getattr(self, "_idle_aa_on", False):
+            return
+        self._set_curves_antialias(False)
+        self._idle_aa_on = False
+        try:
+            self._glw.update()
+        except Exception:
+            pass
+
+    def schedule_idle_quality(self):
+        """Re-arm the single-shot idle-AA timer after a settled interaction."""
+        try:
+            self._idle_aa_timer.start()
+        except Exception:
+            pass
+
+    def try_enable_idle_quality(self):
+        """Idle timer slot: enable curve AA once every hands-off gate passes."""
+        if self._idle_aa_on:
+            return
+        if not self._idle_quality_allowed():
+            return
+        if self._set_curves_antialias(True) > 0:
+            self._idle_aa_on = True
+            try:
+                self._glw.update()
+            except Exception:
+                pass
+
+    def _idle_quality_allowed(self) -> bool:
+        """Return True only while the user is hands-off and density is safe."""
+        try:
+            if QApplication.mouseButtons() != Qt.NoButton:
+                return False
+        except Exception:
+            return False
+        if self._overlay_dragging:
+            return False
+        return self._idle_aa_density_ok()
+
+    def _idle_aa_density_ok(self) -> bool:
+        """Hysteresis density gate based on drawn points per curve."""
+        max_points = 0
+        for it in self._collect_curve_items():
+            try:
+                xd, _ = it.getData()
+                n = 0 if xd is None else len(xd)
+            except Exception:
+                self._idle_aa_density_allowed = False
+                return False
+            max_points = max(max_points, n)
+
+        if max_points <= self._AA_DENSITY_ON:
+            self._idle_aa_density_allowed = True
+        elif max_points > self._AA_DENSITY_OFF:
+            self._idle_aa_density_allowed = False
+        return bool(self._idle_aa_density_allowed)
 
     @contextmanager
     def _curves_antialiased(self):

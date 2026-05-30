@@ -200,6 +200,7 @@ def test_pg_chart_options_rebuilds_legend_idempotently(qapp):
 
 def test_pg_chart_options_curve_color_syncs_owning_axis_color(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui._axis_handle import PG_AXIS_NEUTRAL_COLOR
 
     canvas = _pg_canvas_with_one_curve(qapp)
     handle = canvas.axes_list[0]
@@ -211,7 +212,7 @@ def test_pg_chart_options_curve_color_syncs_owning_axis_color(qapp):
     dlg.apply_changes()
 
     assert line.get_color().lower() == "#123456"
-    assert axis.pen().color().name().lower() == "#123456"
+    assert axis.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
     assert axis.textPen().color().name().lower() == "#123456"
 
     seen = []

@@ -23,6 +23,10 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 
+PG_AXIS_NEUTRAL_COLOR = "#9ca3af"
+PG_AXIS_NEUTRAL_WIDTH = 1.0
+
+
 # ---------------------------------------------------------------------------
 # Line protocol + matplotlib wrapper
 # ---------------------------------------------------------------------------
@@ -706,7 +710,9 @@ class PgAxisHandle:
         if axis is None:
             return
         try:
-            axis.setPen(pg.mkPen(color=color, width=2.0))
+            axis.setPen(
+                pg.mkPen(color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH)
+            )
         except Exception:
             pass
         try:

@@ -8,7 +8,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QSizePolicy
 
-from mf4_analyzer.ui.chart_stack import ChartStack
+from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
 
 
 def test_chart_stack_has_three_canvases(qapp):
@@ -56,7 +56,8 @@ def test_single_cursor_pill_uses_vertical_channel_readout(qapp, qtbot):
     assert cs._pill.primary_text() == '<span style="color:#111827;">t=89.1278s</span>'
     assert cs._pill.has_detail()
     detail = cs._pill._detail.text()
-    assert '<br' in detail
+    assert '<table' in detail
+    assert 'padding-top:6px' in detail
     assert '424.2' in detail
     assert '-1.486' in detail
     assert '│' not in detail
@@ -681,6 +682,26 @@ def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
 
     assert not cs.cursor_pill_visible()
     assert cs.cursor_pill_text() == ""
+
+
+def test_single_cursor_pill_detail_uses_row_spacing(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_mode('time')
+    cs.set_cursor_mode('single')
+
+    text = _CURSOR_HTML_SEP.join([
+        '<span>t=1.0000s</span>',
+        '<span style="color:#1769e0;">speed=<b>1 rpm</b></span>',
+        '<span style="color:#ef4444;">torque=<b>2 Nm</b></span>',
+    ])
+
+    primary, detail = cs._format_cursor_info_for_pill(text)
+
+    assert primary == '<span>t=1.0000s</span>'
+    assert '<table' in detail
+    assert 'padding-top:6px' in detail
+    assert 'speed=' in detail and 'torque=' in detail
 
 
 def test_copy_card_image_renders_at_hidpi_scale(qapp, qtbot):

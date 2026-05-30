@@ -347,7 +347,7 @@ def test_pg_axis_handle_sync_line_axis_color(qapp):
     import os
     os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
     import pyqtgraph as pg
-    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    from mf4_analyzer.ui._axis_handle import PG_AXIS_NEUTRAL_COLOR, PgAxisHandle
 
     glw = pg.GraphicsLayoutWidget()
     plot_item = glw.addPlot(row=0, col=0)
@@ -358,7 +358,7 @@ def test_pg_axis_handle_sync_line_axis_color(qapp):
 
     h.sync_line_axis_color(line, "#123456")
 
-    assert axis.pen().color().name().lower() == "#123456"
+    assert axis.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
     assert axis.textPen().color().name().lower() == "#123456"
 
 

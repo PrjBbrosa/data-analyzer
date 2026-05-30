@@ -1508,6 +1508,48 @@ class TestTimeDomainCanvasPGOverlayMode:
             assert lo == pytest.approx(0.0)
             assert hi == pytest.approx(80.0)
 
+    def test_overlay_aux_origin_xlim_updates_x_master_bottom_axis(self, qapp):
+        """Changing an overlay channel ViewBox through the native axis controls
+        must also update the X-master ViewBox that owns the bottom time axis.
+        """
+        from PyQt5.QtCore import QCoreApplication, QPointF
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 800)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        t = np.linspace(0.0, 10.0, 1_000, dtype=np.float64)
+        rows = [
+            (f"ch{i}", True, t, np.sin(t) + i, "#1769e0", "u", f"fid-{i}")
+            for i in range(3)
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        source = canvas.axes_list[1]
+        source.view_box.setRange(xRange=(2.0, 6.0), padding=0)
+        QCoreApplication.processEvents()
+
+        assert canvas._x_master_handle.get_xlim() == pytest.approx((2.0, 6.0))
+        for handle in canvas.axes_list:
+            assert handle.get_xlim() == pytest.approx((2.0, 6.0))
+
+        handles = [canvas._x_master_handle] + list(canvas.axes_list)
+        mapped_x = [
+            [
+                float(handle.view_box.mapViewToScene(QPointF(x, 0.0)).x())
+                for x in (2.0, 4.0, 6.0)
+            ]
+            for handle in handles
+        ]
+        ref = mapped_x[0]
+        for row, xs in enumerate(mapped_x[1:], start=1):
+            assert xs == pytest.approx(ref, abs=0.75), (
+                f"overlay row {row} maps bottom-axis X ticks differently: "
+                f"{xs!r} vs {ref!r}"
+            )
+
     def test_overlay_emphasis_two_frame_line_width_difference(self, qapp):
         """Two-frame branch-reached-is-not-behavior-correct compliance.
         Frame A: no selection — every channel has the default linewidth.
@@ -3146,8 +3188,9 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         assert last_bottom.style.get("showValues") is not False
         assert "Time" in getattr(last_bottom, "labelText", "")
 
-    def test_line_width_and_left_axis_use_channel_color(self, qapp):
+    def test_line_width_and_left_axis_keeps_neutral_axis_pen(self, qapp):
         from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui._axis_handle import PG_AXIS_NEUTRAL_COLOR
 
         canvas = _pg_canvas(qapp)
         color = "#1769e0"
@@ -3156,10 +3199,10 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         handle, line = canvas._channel_lines["speed"]
         pdi = line.plot_data_item
         pen = pdi.opts.get("pen")
-        assert pen.widthF() >= 1.6
+        assert pen.widthF() == pytest.approx(1.5)
 
         left = handle.plot_item.getAxis("left")
-        assert left.pen().color().name().lower() == color
+        assert left.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
         assert left.textPen().color().name().lower() == color
 
     def test_initial_bind_uses_viewport_width_not_max_points(self, qapp, monkeypatch):
@@ -3655,6 +3698,7 @@ class TestOverlayGridSingleAxis:
 
     def test_overlay_disables_y_grid_keeps_x_grid(self, qapp):
         from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui._axis_handle import PG_AXIS_NEUTRAL_COLOR
         from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
         canvas = TimeDomainCanvasPG()
@@ -3688,6 +3732,10 @@ class TestOverlayGridSingleAxis:
             assert not ax_item.grid, (
                 f"overlay aux axis Y grid must be OFF; grid={ax_item.grid!r}"
             )
+        assert left.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
+        assert right.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
+        for ax_item in canvas._overlay_aux_axes:
+            assert ax_item.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
         canvas.deleteLater()
 
     def test_overlay_y_grid_off_is_idempotent_across_rebuild(self, qapp):
@@ -3736,3 +3784,361 @@ class TestOverlayGridSingleAxis:
                 "subplot X grid must stay ON"
             )
         canvas.deleteLater()
+
+
+class _FakeMove:
+    """Minimal stand-in for a Qt mouse-move event for hover tests."""
+
+    def __init__(self, x, y):
+        from PyQt5.QtCore import QPoint, Qt
+        self._p = QPoint(x, y)
+        self._b = Qt.NoButton
+
+    def pos(self):
+        return self._p
+
+    def buttons(self):
+        return self._b
+
+
+class _FakeCurveData:
+    """Minimal curve-like object exposing getData() for density tests."""
+
+    def __init__(self, n):
+        self._x = np.arange(n, dtype=np.float64)
+
+    def getData(self):
+        return self._x, self._x
+
+
+class _BrokenCurveData:
+    """Curve-like object whose data cannot be inspected."""
+
+    def getData(self):
+        raise RuntimeError("boom")
+
+
+class TestAutoIdleAA:
+    """2026-05-30 Auto Idle AA: enable curve antialiasing after the
+    last interaction settles, while preserving AA-off interaction paths.
+
+    See docs/superpowers/plans/2026-05-30-pyqtgraph-timedomain-auto-idle-aa.md
+    """
+
+    def _plot(self, qapp, *, mode="subplot"):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode=mode)
+        QCoreApplication.processEvents()
+        return canvas
+
+    def _curves(self, canvas):
+        import pyqtgraph as pg
+
+        return [
+            it for it in canvas._glw.scene().items()
+            if isinstance(it, pg.PlotCurveItem)
+        ]
+
+    def test_set_curves_antialias_flips_every_curve(self, qapp):
+        canvas = self._plot(qapp)
+        curves = self._curves(canvas)
+        assert curves
+
+        n_on = canvas._set_curves_antialias(True)
+        assert n_on == len(curves)
+        assert all(c.opts.get("antialias") for c in curves)
+
+        n_off = canvas._set_curves_antialias(False)
+        assert n_off == len(curves)
+        assert not any(c.opts.get("antialias") for c in curves)
+
+    def test_set_curves_antialias_does_not_call_setdata(self, qapp, monkeypatch):
+        canvas = self._plot(qapp)
+        _axis, line = next(iter(canvas._channel_lines.values()))
+
+        def fail_setdata(*_args, **_kwargs):
+            raise AssertionError("_set_curves_antialias must not call setData")
+
+        monkeypatch.setattr(line.plot_data_item, "setData", fail_setdata)
+        canvas._set_curves_antialias(True)
+
+    def test_idle_timer_is_single_shot_150ms(self, qapp):
+        canvas = _pg_canvas(qapp)
+        assert canvas._idle_aa_timer.isSingleShot()
+        assert canvas._idle_aa_timer.interval() == 150
+        assert canvas._idle_aa_on is False
+
+    def test_idle_slot_enables_aa_when_mouse_up(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp)
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+        assert all(c.opts.get("antialias") for c in self._curves(canvas))
+
+    def test_disable_interactive_quality_forces_aa_off(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp)
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+
+        canvas.disable_interactive_quality()
+        assert canvas._idle_aa_on is False
+        assert not canvas._idle_aa_timer.isActive()
+        assert not any(c.opts.get("antialias") for c in self._curves(canvas))
+
+    def test_idle_slot_blocked_while_mouse_down(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp)
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.LeftButton)
+        )
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is False
+
+    def test_idle_slot_blocked_while_overlay_dragging(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp, mode="overlay")
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas._overlay_dragging = True
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is False
+
+    def test_schedule_idle_quality_starts_timer(self, qapp):
+        canvas = self._plot(qapp)
+        canvas.schedule_idle_quality()
+        assert canvas._idle_aa_timer.isActive()
+
+    def test_initial_overlay_build_rearms_idle_timer(self, qapp):
+        canvas = self._plot(qapp, mode="overlay")
+
+        assert canvas._idle_aa_on is False
+        assert not any(c.opts.get("antialias") for c in self._curves(canvas))
+        assert canvas._idle_aa_timer.isActive()
+
+    def test_view_all_forces_aa_off_and_rearms_idle_timer(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp, mode="overlay")
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+
+        canvas.reset_view_to_data_extents()
+
+        assert canvas._idle_aa_on is False
+        assert not any(c.opts.get("antialias") for c in self._curves(canvas))
+        assert canvas._idle_aa_timer.isActive()
+
+    def test_xrange_change_forces_aa_off(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp)
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+
+        canvas.set_xlim(0.2, 0.8)
+        assert canvas._idle_aa_on is False
+        assert not any(c.opts.get("antialias") for c in self._curves(canvas))
+
+    def test_refresh_rearms_idle_timer(self, qapp):
+        canvas = self._plot(qapp)
+        canvas.set_xlim(0.1, 0.9)
+        canvas._flush_pending_refresh()
+        assert canvas._idle_aa_timer.isActive()
+
+    def test_y_only_wheel_forces_aa_off_and_rearms_idle(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp, mode="overlay")
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+
+        assert canvas._handle_wheel_dispatch(
+            delta=120, modifiers=Qt.ShiftModifier, x_pos=0.5, y_pos=0.0,
+        ) is True
+        assert canvas._idle_aa_on is False
+        assert canvas._idle_aa_timer.isActive()
+
+        canvas._idle_aa_timer.stop()
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+
+        assert canvas._handle_wheel_dispatch(
+            delta=120, modifiers=Qt.NoModifier, x_pos=0.5, y_pos=0.0,
+        ) is True
+        assert canvas._idle_aa_on is False
+        assert canvas._idle_aa_timer.isActive()
+
+    def test_mouse_release_rearms_after_blocked_idle_timeout(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QEvent, QPoint, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp)
+        canvas.set_xlim(0.1, 0.9)
+        canvas._flush_pending_refresh()
+        assert canvas._idle_aa_timer.isActive()
+
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.LeftButton)
+        )
+        canvas._idle_aa_timer.stop()
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is False
+        assert not canvas._idle_aa_timer.isActive()
+
+        release = QMouseEvent(
+            QEvent.MouseButtonRelease,
+            QPoint(40, 40),
+            Qt.LeftButton,
+            Qt.NoButton,
+            Qt.NoModifier,
+        )
+        canvas.eventFilter(canvas._glw.viewport(), release)
+        assert canvas._idle_aa_timer.isActive()
+
+    def test_overlay_drag_drops_aa_and_release_rearms(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp, mode="overlay")
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+
+        canvas._overlay_dragging = True
+        canvas.disable_interactive_quality()
+        assert canvas._idle_aa_on is False
+
+        canvas._overlay_dragging = False
+        canvas.schedule_idle_quality()
+        assert canvas._idle_aa_timer.isActive()
+
+    def test_replot_leaves_curves_aa_off(self, qapp):
+        canvas = self._plot(qapp)
+        assert canvas._idle_aa_on is False
+        curves = self._curves(canvas)
+        assert curves and not any(c.opts.get("antialias") for c in curves)
+
+    def test_cursor_move_does_not_flip_aa(self, qapp, monkeypatch):
+        """Strategy A: hovering the cursor never flips curve AA."""
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp)
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is True
+
+        canvas.set_cursor_visible(True)
+        handle = canvas.axes_list[0]
+        for i in range(10):
+            canvas._last_t = 0
+            point = _viewport_point_for_data(canvas, handle, 0.1 + 0.05 * i)
+            assert canvas._handle_cursor_mouse_move(
+                _FakeMove(point.x(), point.y())
+            ) is True
+
+        assert canvas._idle_aa_on is True
+        assert all(c.opts.get("antialias") for c in self._curves(canvas))
+
+    def test_density_gate_blocks_dense_curves(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp)
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas._AA_DENSITY_ON = 1
+        canvas._AA_DENSITY_OFF = 2
+        canvas.try_enable_idle_quality()
+        assert canvas._idle_aa_on is False
+
+    def test_density_gate_uses_hysteresis_window(self, qapp, monkeypatch):
+        canvas = self._plot(qapp)
+        canvas._AA_DENSITY_ON = 4
+        canvas._AA_DENSITY_OFF = 6
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items", lambda: [_FakeCurveData(5)]
+        )
+
+        canvas._idle_aa_density_allowed = False
+        assert canvas._idle_aa_density_ok() is False
+
+        canvas._idle_aa_density_allowed = True
+        assert canvas._idle_aa_density_ok() is True
+
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items", lambda: [_FakeCurveData(7)]
+        )
+        assert canvas._idle_aa_density_ok() is False
+        assert canvas._idle_aa_density_allowed is False
+
+    def test_density_gate_fails_closed_when_curve_data_unreadable(
+        self, qapp, monkeypatch,
+    ):
+        canvas = self._plot(qapp)
+        canvas._idle_aa_density_allowed = True
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items", lambda: [_BrokenCurveData()]
+        )
+
+        assert canvas._idle_aa_density_ok() is False
+        assert canvas._idle_aa_density_allowed is False
+
+    def test_default_line_width_is_1_5(self, qapp):
+        """Co-tuned with idle AA to soften the AA-off/on visual jump."""
+        canvas = _pg_canvas(qapp)
+        assert canvas._overlay_default_lw == 1.5
+
+    def test_grab_preserves_idle_aa_on_state(self, qapp, monkeypatch):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QApplication
+
+        canvas = self._plot(qapp)
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
+        )
+        canvas.try_enable_idle_quality()
+        curves = self._curves(canvas)
+        assert all(c.opts.get("antialias") for c in curves)
+
+        pix = canvas.grab_pixmap(scale=1.0)
+        assert not pix.isNull()
+        assert all(c.opts.get("antialias") for c in curves)
+        assert canvas._idle_aa_on is True
