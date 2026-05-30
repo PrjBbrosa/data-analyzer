@@ -1,7 +1,5 @@
 # tests/ui/test_side_panel_reducer.py
 """Pure (no-Qt) tests for the side-panel HIDDEN/PEEK/PINNED reducer."""
-import pytest
-
 from mf4_analyzer.ui.side_panels import (
     PanelState, Ev, Effect, reduce_panel, strip_visible_for,
 )
