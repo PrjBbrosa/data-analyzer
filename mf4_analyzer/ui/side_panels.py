@@ -57,3 +57,55 @@ def reduce_panel(state, event):
 def strip_visible_for(state):
     """Edge strip is shown only while the panel is HIDDEN or PEEK."""
     return state in (PanelState.HIDDEN, PanelState.PEEK)
+
+
+from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal
+from PyQt5.QtWidgets import QFrame
+
+
+class SidePanelStrip(QFrame):
+    """A thin, faint, clickable edge rail shown when its side is collapsed.
+
+    Hover (after a short debounce) requests a peek; left-click requests a pin.
+    """
+    peek_requested = pyqtSignal(object)  # Side
+    pin_requested = pyqtSignal(object)   # Side
+
+    WIDTH_PX = 12
+
+    def __init__(self, side, hover_delay_ms=150, parent=None):
+        super().__init__(parent)
+        self._side = side
+        self.setObjectName("sidePanelStrip")
+        self.setProperty("side", "left" if side == Side.LEFT else "right")
+        self.setFixedWidth(self.WIDTH_PX)
+        self.setCursor(Qt.PointingHandCursor)
+        chevron = "‹" if side == Side.LEFT else "›"  # ‹ / ›  (points inward)
+        self.setToolTip("文件 / 通道" if side == Side.LEFT else "Inspector")
+        self._chevron = chevron
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(hover_delay_ms)
+        self._hover_timer.timeout.connect(lambda: self.peek_requested.emit(self._side))
+
+    def enterEvent(self, event):
+        self._hover_timer.start()
+        super().enterEvent(event) if event is not None else None
+
+    def leaveEvent(self, event):
+        self._hover_timer.stop()
+        super().leaveEvent(event) if event is not None else None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._hover_timer.stop()
+            self.pin_requested.emit(self._side)
+        super().mousePressEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        from PyQt5.QtGui import QPainter, QColor
+        p = QPainter(self)
+        p.setPen(QColor("#9aa3ad"))
+        p.drawText(self.rect(), Qt.AlignCenter, self._chevron)
+        p.end()
