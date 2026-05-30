@@ -174,7 +174,7 @@ def test_redock_takes_width_from_canvas_not_other_panel(qtbot):
     ctrl = SidePanelController(
         side=Side.LEFT, splitter=splitter, panel=nav, panel_index=0,
         strip=strip, overlay=overlay, host=host,
-        collapse_delay_ms=20, default_width=250, absorb_index=1,
+        collapse_delay_ms=20, default_width=250, canvas=canvas,
     )
     splitter.setSizes([0, 350, 550]); ctrl.on_splitter_moved()   # -> HIDDEN
     assert ctrl.state == PanelState.HIDDEN
@@ -199,6 +199,47 @@ def test_peek_overlay_offset_keeps_strip_exposed(qtbot):
     assert ctrl.state == PanelState.PEEK
     # Overlay starts at the strip's inner edge, leaving the strip clickable.
     assert overlay.geometry().x() == strip.WIDTH_PX
+
+
+def test_peek_one_side_then_other_side_events_do_not_crash(qtbot):
+    # Reproduces the cross-side IndexError: when LEFT peeks, nav leaves the
+    # splitter and it renumbers (3->2 panes). The still-PINNED RIGHT controller
+    # (fixed panel_index=2) must not crash on splitterMoved or on its own hover.
+    host = QWidget(); host.resize(1000, 600); qtbot.addWidget(host); host.show()
+    splitter = QSplitter(Qt.Horizontal, host)
+    nav, canvas, insp = QWidget(), QWidget(), QWidget()
+    for wdg in (nav, canvas, insp):
+        wdg.setMinimumWidth(10)
+    splitter.addWidget(nav); splitter.addWidget(canvas); splitter.addWidget(insp)
+    splitter.resize(1000, 600)
+    splitter.setSizes([250, 500, 250])
+    strip_l = SidePanelStrip(Side.LEFT, hover_delay_ms=10)
+    strip_r = SidePanelStrip(Side.RIGHT, hover_delay_ms=10)
+    ov_l, ov_r = PeekOverlay(host), PeekOverlay(host)
+    ctrl_l = SidePanelController(
+        side=Side.LEFT, splitter=splitter, panel=nav, panel_index=0,
+        strip=strip_l, overlay=ov_l, host=host,
+        collapse_delay_ms=20, default_width=250, canvas=canvas)
+    ctrl_r = SidePanelController(
+        side=Side.RIGHT, splitter=splitter, panel=insp, panel_index=2,
+        strip=strip_r, overlay=ov_r, host=host,
+        collapse_delay_ms=20, default_width=250, canvas=canvas)
+
+    # Collapse BOTH sides so each is HIDDEN before peeking.
+    splitter.setSizes([0, 750, 0])
+    ctrl_l.on_splitter_moved()   # LEFT -> HIDDEN
+    ctrl_r.on_splitter_moved()   # RIGHT -> HIDDEN
+
+    # Peek the LEFT: nav is reparented OUT, splitter renumbers (3->2 panes).
+    strip_l.peek_requested.emit(Side.LEFT)                          # LEFT -> PEEK
+    assert ctrl_l.state == PanelState.PEEK
+    assert splitter.indexOf(nav) == -1                             # nav left splitter
+
+    # These would raise IndexError before the fix:
+    ctrl_l.on_splitter_moved()
+    ctrl_r.on_splitter_moved()
+    strip_r.peek_requested.emit(Side.RIGHT)                        # RIGHT also peeks
+    assert ctrl_r.state == PanelState.PEEK
 
 
 def test_toolbar_has_no_inspector_button_and_cockpit_on_right(qtbot):

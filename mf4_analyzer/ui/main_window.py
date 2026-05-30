@@ -158,8 +158,8 @@ class MainWindow(QMainWindow):
         # Edge strips flank the splitter; each is visible only while its side is
         # hidden. Wrapping the splitter in an HBox keeps the strips out of the
         # toolbar's vertical band.
-        self._strip_left = SidePanelStrip(Side.LEFT, parent=self)
-        self._strip_right = SidePanelStrip(Side.RIGHT, parent=self)
+        self._strip_left = SidePanelStrip(Side.LEFT)
+        self._strip_right = SidePanelStrip(Side.RIGHT)
         strip_row = QWidget(self)
         self._strip_row = strip_row
         row = QHBoxLayout(strip_row)
@@ -175,17 +175,17 @@ class MainWindow(QMainWindow):
         # widgets (never top-level frameless windows) to avoid macOS native shadow.
         self._overlay_left = PeekOverlay(strip_row)
         self._overlay_right = PeekOverlay(strip_row)
-        # absorb_index=1 -> width changes are taken from the canvas pane, never
-        # leaked into the opposite side panel (3-pane correctness).
+        # canvas=self.chart_stack -> width changes are taken from the canvas pane,
+        # looked up by live index so cross-side peek doesn't drift the index.
         self._panel_ctrl_left = SidePanelController(
             side=Side.LEFT, splitter=splitter, panel=self.navigator, panel_index=0,
             strip=self._strip_left, overlay=self._overlay_left, host=strip_row,
-            default_width=250, absorb_index=1, parent=self,
+            default_width=250, canvas=self.chart_stack, parent=self,
         )
         self._panel_ctrl_right = SidePanelController(
             side=Side.RIGHT, splitter=splitter, panel=self.inspector, panel_index=2,
             strip=self._strip_right, overlay=self._overlay_right, host=strip_row,
-            default_width=360, absorb_index=1, parent=self,
+            default_width=360, canvas=self.chart_stack, parent=self,
         )
         splitter.splitterMoved.connect(
             lambda *_: (self._panel_ctrl_left.on_splitter_moved(),

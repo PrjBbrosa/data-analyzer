@@ -180,17 +180,21 @@ class SidePanelController(QObject):
 
     def __init__(self, side, splitter, panel, panel_index, strip, overlay,
                  host, collapse_delay_ms=600, default_width=250,
-                 absorb_index=None, parent=None):
+                 canvas=None, parent=None):
         super().__init__(parent)
         self._side = side
         self._splitter = splitter
         self._panel = panel
-        self._index = panel_index
+        self._index = panel_index   # insertion position when re-docking
         self._strip = strip
         self._overlay = overlay
         self._host = host
         self._remembered_width = default_width
-        self._absorb_index = absorb_index
+        # The pane that should absorb this panel's width changes (the canvas).
+        # Kept as a live widget ref, not a fixed index: when the OTHER side
+        # peeks out it reparents its panel and the splitter is renumbered, so
+        # fixed indices drift. Look it up via indexOf at use time instead.
+        self._canvas = canvas
         self.state = PanelState.PINNED
 
         self._collapse_timer = QTimer(self)
@@ -206,12 +210,21 @@ class SidePanelController(QObject):
         self._apply_strip_visibility()
 
     # ---- event entry points ----
+    def _live_index(self):
+        """Current index of this panel in the splitter, or -1 if it has been
+        reparented out (e.g. the panel is mid-peek in the overlay, or the
+        OTHER side's peek renumbered the splitter)."""
+        return self._splitter.indexOf(self._panel)
+
     def on_splitter_moved(self):
         """Call from QSplitter.splitterMoved. Collapse if dragged to the edge."""
-        if self.state == PanelState.PINNED:
-            w = self._splitter.sizes()[self._index]
-            if w <= self.COLLAPSE_THRESHOLD:
-                self._dispatch(Ev.DRAG_COLLAPSED)
+        if self.state != PanelState.PINNED:
+            return
+        idx = self._live_index()
+        if idx < 0:
+            return  # panel not in the splitter right now
+        if self._splitter.sizes()[idx] <= self.COLLAPSE_THRESHOLD:
+            self._dispatch(Ev.DRAG_COLLAPSED)
 
     def _on_collapse_timeout(self):
         # Popup guard: a context menu opened from inside the peeked panel makes
@@ -260,7 +273,10 @@ class SidePanelController(QObject):
         self._strip.setVisible(strip_visible_for(self.state))
 
     def _remember_width_if_docked(self):
-        w = self._splitter.sizes()[self._index]
+        idx = self._live_index()
+        if idx < 0:
+            return  # panel not in the splitter; nothing to remember
+        w = self._splitter.sizes()[idx]
         if w > self.COLLAPSE_THRESHOLD:
             self._remembered_width = w
 
@@ -276,23 +292,21 @@ class SidePanelController(QObject):
 
     def _set_slot_width(self, width):
         sizes = self._splitter.sizes()
-        if len(sizes) <= self._index:
-            return
-        delta = width - sizes[self._index]
-        sizes[self._index] = width
-        # Absorb the width change from the canvas pane (the stretchy middle).
-        # Prefer the explicitly-wired ``absorb_index`` so the delta never leaks
-        # into the OTHER side panel when it happens to be wider than the canvas;
-        # fall back to the widest non-self pane only when no index was wired
-        # (e.g. the 2-pane controller tests).
-        if (self._absorb_index is not None
-                and self._absorb_index != self._index
-                and self._absorb_index < len(sizes)):
-            mid = self._absorb_index
-        else:
-            mid = max(range(len(sizes)),
-                      key=lambda i: sizes[i] if i != self._index else -1)
-        sizes[mid] = max(0, sizes[mid] - delta)
+        idx = self._live_index()
+        if idx < 0 or idx >= len(sizes):
+            return  # panel not in the splitter
+        delta = width - sizes[idx]
+        sizes[idx] = width
+        # Absorb the delta from the canvas pane, looked up by LIVE index so it
+        # stays correct even when the other side panel has been reparented out
+        # and the splitter renumbered. Fall back to the widest non-self pane
+        # when the canvas isn't a current child (e.g. the 2-pane tests where
+        # canvas is None and the middle widget is the only non-self pane).
+        absorb = self._splitter.indexOf(self._canvas) if self._canvas is not None else -1
+        if absorb < 0 or absorb == idx or absorb >= len(sizes):
+            absorb = max(range(len(sizes)),
+                         key=lambda i: sizes[i] if i != idx else -1)
+        sizes[absorb] = max(0, sizes[absorb] - delta)
         self._splitter.setSizes(sizes)
 
     def _position_overlay(self):
