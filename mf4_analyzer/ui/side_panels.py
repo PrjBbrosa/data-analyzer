@@ -1,11 +1,15 @@
 # mf4_analyzer/ui/side_panels.py
 """Collapsible side panels: HIDDEN/PEEK/PINNED state machine + widgets.
 
-The reducer (``reduce_panel``) is intentionally Qt-free so the transition
-logic is unit-testable without an event loop. ``SidePanelController`` (added
-in a later task) executes the emitted effects against real Qt widgets.
+The reducer (``reduce_panel``) is intentionally Qt-free (it makes no Qt calls),
+so the transition logic is unit-testable without an event loop.
+``SidePanelController`` executes the emitted effects against real Qt widgets.
 """
 from enum import Enum, auto
+
+from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter
+from PyQt5.QtWidgets import QApplication, QFrame, QVBoxLayout
 
 
 class PanelState(Enum):
@@ -59,10 +63,6 @@ def strip_visible_for(state):
     return state in (PanelState.HIDDEN, PanelState.PEEK)
 
 
-from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal
-from PyQt5.QtWidgets import QFrame
-
-
 class SidePanelStrip(QFrame):
     """A thin, faint, clickable edge rail shown when its side is collapsed.
 
@@ -104,14 +104,10 @@ class SidePanelStrip(QFrame):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        from PyQt5.QtGui import QPainter, QColor
         p = QPainter(self)
         p.setPen(QColor("#9aa3ad"))
         p.drawText(self.rect(), Qt.AlignCenter, self._chevron)
         p.end()
-
-
-from PyQt5.QtWidgets import QVBoxLayout
 
 
 class PeekOverlay(QFrame):
@@ -168,9 +164,6 @@ class PeekOverlay(QFrame):
     def leaveEvent(self, event):
         self.mouse_left.emit()
         super().leaveEvent(event) if event is not None else None
-
-
-from PyQt5.QtWidgets import QApplication
 
 
 class SidePanelController(QObject):
