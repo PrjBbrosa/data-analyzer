@@ -327,6 +327,22 @@ def test_pg_axis_handle_state_accessors_and_legend(qapp):
     assert len(legend.items) == 1
 
 
+def test_pg_axis_handle_grid_can_disallow_y_grid(qapp):
+    import os
+    os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
+    import pyqtgraph as pg
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+
+    glw = pg.GraphicsLayoutWidget()
+    plot_item = glw.addPlot(row=0, col=0)
+    h = PgAxisHandle(plot_item=plot_item, allow_y_grid=False)
+
+    h.grid(True)
+
+    assert bool(plot_item.getAxis("bottom").grid)
+    assert not plot_item.getAxis("left").grid
+
+
 def test_pg_axis_handle_sync_line_axis_color(qapp):
     import os
     os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")

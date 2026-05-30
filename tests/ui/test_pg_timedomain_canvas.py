@@ -1260,6 +1260,45 @@ class TestTimeDomainCanvasPGSubplotMode:
                 f"(windows_a[{i}]={windows_a[i]!r}, windows_b[{i}]={windows_b[i]!r})"
             )
 
+    def test_subplot_x_grid_geometry_is_aligned_before_first_frame(self, qapp):
+        """The first rendered subplot frame must have one shared X grid.
+
+        Waiting for the next Qt event pass can hide a layout-order bug: a row
+        whose Y tick labels auto-size after the initial pin gets a different
+        ViewBox width, so the same data X maps to a different scene X.
+        """
+        from PyQt5.QtCore import QCoreApplication, QPointF
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 800)
+        QCoreApplication.processEvents()
+
+        t = np.linspace(0.0, 1.0, 2_000, dtype=np.float64)
+        rows = [
+            ("tiny", True, t, 1e-6 * np.sin(t), "#1769e0", "u", "fid-1"),
+            ("huge", True, t, 1e9 * np.sin(t), "#ef4444", "u", "fid-1"),
+            ("mid", True, t, 100.0 * np.sin(t), "#00b894", "u", "fid-1"),
+            ("offset", True, t, -1e6 + 10.0 * np.sin(t), "#fbbf24", "u", "fid-1"),
+        ]
+
+        canvas.plot_channels(rows, mode="subplot")
+
+        mapped_x = []
+        for handle in canvas.axes_list:
+            vb = handle.view_box
+            assert vb is not None
+            mapped_x.append([
+                float(vb.mapViewToScene(QPointF(x, 0.0)).x())
+                for x in (0.0, 0.5, 1.0)
+            ])
+
+        ref = mapped_x[0]
+        for row, xs in enumerate(mapped_x[1:], start=1):
+            assert xs == pytest.approx(ref, abs=0.75), (
+                f"subplot row {row} maps shared X ticks to different scene "
+                f"positions: {xs!r} vs {ref!r}"
+            )
+
     def test_subplot_non_primary_origin_xlim_propagates_to_all_axes(self, qapp):
         """When the user pans a NON-primary subplot (e.g. axes_list[2]),
         the new range must propagate to the primary AND every other
@@ -2001,6 +2040,34 @@ class TestTimeDomainCanvasPGCursorParity:
             f"  pyqtgraph:  {pg_emissions[-1]!r}"
         )
 
+    def test_single_cursor_html_preserves_full_channel_name_like_dual_cursor(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        full_name = "[tiaodamping] Rte_ESChkPlausi_mESMotorTorque_xds16"
+        rest = "Rte_ESChkPlausi_mESMotorTorque_xds16"
+        t = np.linspace(0.0, 1.0, 100, dtype=np.float64)
+        rows = [
+            (full_name, True, t, (t * 100.0).astype(np.float64), "#1769e0", "Nm", "fid-1"),
+        ]
+
+        pg = _pg_canvas(qapp)
+        pg.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+
+        single_emissions = []
+        dual_emissions = []
+        pg.cursor_info.connect(single_emissions.append)
+        pg.dual_cursor_info.connect(dual_emissions.append)
+
+        pg._emit_single_cursor_html(0.5)
+        single_html = single_emissions[-1]
+        pg._ax = 0.2
+        pg._bx = 0.8
+        pg._emit_dual_cursor_html()
+
+        assert dual_emissions and rest in dual_emissions[-1]
+        assert rest in single_html
+
     def test_dual_cursor_html_matches_format_dual_html_letter_for_letter(self, qapp):
         """Same letter-for-letter gate as single cursor, applied to the
         dual_cursor_info payload + the delta column."""
@@ -2130,6 +2197,27 @@ class TestTimeDomainCanvasPGCursorInteraction:
         consumed = canvas.eventFilter(canvas._glw.viewport(), event)
         assert consumed is False
 
+    def test_single_cursor_mousemove_is_throttled_to_one_emit_per_33ms(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        QCoreApplication.processEvents()
+        canvas.set_cursor_visible(True)
+
+        seen = []
+        canvas.cursor_info.connect(seen.append)
+        point = _viewport_point_for_data(canvas, canvas.axes_list[0], 0.5)
+
+        for _ in range(5):
+            assert canvas._handle_cursor_mouse_move(point) is True
+
+        assert len(seen) == 1
+
+        canvas._last_t -= 40
+        assert canvas._handle_cursor_mouse_move(point) is True
+        assert len(seen) == 2
+
 
 class _FakeMenuEvent:
     """Minimal stand-in for the pyqtgraph mouse event a ViewBox passes to
@@ -2220,6 +2308,78 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         # Both default checked (grid is force-enabled on the plot item).
         assert all(a.isChecked() for a in grid_menu.actions())
 
+    def test_overlay_grid_menu_x_toggle_does_not_enable_y_grid(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="overlay")
+        QCoreApplication.processEvents()
+
+        pi = canvas._x_master_handle.plot_item
+        vb = canvas._x_master_handle.view_box
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        grid_menu = next(
+            a.menu() for a in menu.actions()
+            if a.text().replace("&", "").strip() == "网格"
+        )
+        act_x, act_y = grid_menu.actions()
+
+        assert act_x.isChecked()
+        assert not act_y.isChecked()
+        assert not act_y.isEnabled()
+
+        act_x.trigger()
+        QCoreApplication.processEvents()
+
+        assert not pi.getAxis("bottom").grid
+        assert not pi.getAxis("left").grid
+        assert not pi.getAxis("right").grid
+        for ax_item in canvas._overlay_aux_axes:
+            assert not ax_item.grid
+
+    def test_context_menu_view_all_resets_overlay_raw_x_and_per_channel_y(
+        self, qapp, monkeypatch
+    ):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        rows = _five_channel_rows()[:2]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        left = canvas.axes_list[0]
+        right = canvas.axes_list[1]
+        left.set_xlim(0.2, 0.4)
+        left.set_ylim(-1.0, 1.0)
+        right.set_ylim(45.0, 55.0)
+        QCoreApplication.processEvents()
+
+        menu = _assemble_and_redesign_menu(
+            qapp, canvas, canvas._x_master_handle.view_box, monkeypatch
+        )
+        view_all = next(
+            a for a in menu.actions()
+            if a.text().replace("&", "").strip() == "查看全部"
+        )
+        view_all.trigger()
+        QCoreApplication.processEvents()
+
+        t0 = rows[0][2]
+        sig0 = rows[0][3]
+        sig1 = rows[1][3]
+        assert left.get_xlim() == pytest.approx(
+            (float(t0.min()), float(t0.max())),
+            abs=1e-6,
+        )
+        assert left.get_ylim() == pytest.approx(
+            (float(sig0.min()), float(sig0.max())),
+            rel=0.08,
+        )
+        assert right.get_ylim() == pytest.approx(
+            (float(sig1.min()), float(sig1.max())),
+            rel=0.08,
+        )
+
     # ---- box-leak fix: a rounded submenu whose host window is opaque leaves
     # a square frame outside the radius. The top-level menu already sets
     # WA_TranslucentBackground (parity anchor); the promoted 网格 / 鼠标操作
@@ -2245,6 +2405,29 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
             assert sub is not None, f"{title} submenu missing"
             assert sub.testAttribute(Qt.WA_TranslucentBackground), (
                 f"{title} 子菜单需设 WA_TranslucentBackground,否则圆角外留方框"
+            )
+
+    def test_context_menus_disable_native_drop_shadow(self, qapp, monkeypatch):
+        """The rounded QSS corners render transparent, but macOS still paints a
+        square native drop-shadow around the popup's bounding rect — the
+        residual right angles the user reported. NoDropShadowWindowHint (and
+        FramelessWindowHint) on the menu AND every submenu kills it."""
+        from PyQt5.QtCore import Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        menus = [menu] + [a.menu() for a in menu.actions()
+                          if a.menu() is not None]
+        for m in menus:
+            flags = m.windowFlags()
+            assert bool(flags & Qt.NoDropShadowWindowHint), (
+                f"{m.title()!r} menu must set NoDropShadowWindowHint"
+            )
+            assert bool(flags & Qt.FramelessWindowHint), (
+                f"{m.title()!r} menu must set FramelessWindowHint"
             )
 
     def test_axis_form_hides_link_invert_and_auto_rows(self, qapp, monkeypatch):

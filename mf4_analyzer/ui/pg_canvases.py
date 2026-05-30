@@ -56,6 +56,7 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 import logging
+import time as _time
 from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Tuple
@@ -81,6 +82,7 @@ from mf4_analyzer.signal._envelope_cutils import positions_envelope
 from mf4_analyzer.ui._axis_handle import PgAxisHandle, _PgLineHandle
 from mf4_analyzer.ui.canvases import (
     _format_dual_html,
+    _format_single_cursor_channel_html,
     _interp_cursor_value,
     _is_monotonic_array,
     _compact_axis_label,
@@ -275,6 +277,18 @@ def _style_pg_context_menu(menu):
         # Design B: tooltips OFF so the floating help no longer covers the
         # second-level axis form. This is also the occlusion bug fix.
         menu.setToolTipsVisible(False)
+        # The QSS border-radius renders the menu BODY with transparent corners,
+        # but macOS still paints a square native drop-shadow around the popup's
+        # bounding rect — the residual right angles. Disable the native shadow
+        # + frame so only the rounded surface shows. Keep the existing flags
+        # (incl. Qt.Popup, so dismiss/positioning behaviour is unchanged) and
+        # re-assert translucency AFTER, since changing window flags can recreate
+        # the platform window and drop the attribute.
+        menu.setWindowFlags(
+            menu.windowFlags()
+            | Qt.FramelessWindowHint
+            | Qt.NoDropShadowWindowHint
+        )
         menu.setAttribute(Qt.WA_TranslucentBackground, True)
     except Exception:
         pass
@@ -334,15 +348,32 @@ def _find_top_level_action(menu, *texts):
     return None
 
 
-def _build_grid_submenu(menu, plot_item):
+def _route_view_all_action(menu, handler):
+    """Route the native View All action through the canvas Home reset."""
+    action = _find_top_level_action(menu, "查看全部", "View All")
+    if action is None or handler is None:
+        return
+    try:
+        action.triggered.disconnect()
+    except (TypeError, RuntimeError):
+        pass
+
+    def _trigger(_checked=False):
+        try:
+            handler()
+        except Exception:
+            pass
+
+    action.triggered.connect(_trigger)
+
+
+def _build_grid_submenu(menu, plot_item, *, allow_y_grid=True):
     """Build (or rebuild) a top-level 网格 ▸ submenu with X/Y grid toggles.
 
     The native Grid control is buried inside Plot Options (which design A
-    removes), so we promote it to its own first-class submenu. The two
-    checkable actions drive ``plot_item.showGrid`` so they coordinate with
-    the force-enabled grid (``showGrid(x=True, y=True, alpha=0.28)`` in
-    ``_add_plot_item``) instead of fighting it — they default CHECKED and
-    toggling re-asserts the current X/Y pair through pyqtgraph's own API.
+    removes), so we promote it to its own first-class submenu. In overlay
+    mode there is no canonical Y grid, so callers pass ``allow_y_grid=False``
+    and the Y action is shown disabled while all toggles preserve y=False.
     """
     grid_menu = QMenu(menu)
     # Route through the shared styler so this hand-built submenu gets the
@@ -352,18 +383,37 @@ def _build_grid_submenu(menu, plot_item):
     _style_pg_context_menu(grid_menu)
     grid_menu.setTitle("网格")
 
-    state = {"x": True, "y": True}
+    def _axis_grid_enabled(side):
+        try:
+            axis = plot_item.getAxis(side)
+            return bool(getattr(axis, "grid", False))
+        except Exception:
+            return False
+
+    state = {
+        "x": _axis_grid_enabled("bottom"),
+        "y": _axis_grid_enabled("left") or _axis_grid_enabled("right"),
+    }
+    if not allow_y_grid:
+        state["y"] = False
 
     act_x = QAction("显示 X 网格", grid_menu)
     act_y = QAction("显示 Y 网格", grid_menu)
+    act_x.setCheckable(True)
+    act_y.setCheckable(True)
+    act_x.setChecked(state["x"])
+    act_y.setChecked(state["y"])
+    act_y.setEnabled(bool(allow_y_grid))
     for act in (act_x, act_y):
-        act.setCheckable(True)
-        act.setChecked(True)
         act.setToolTip("")
 
     def _apply_grid():
         try:
-            plot_item.showGrid(x=state["x"], y=state["y"], alpha=0.28)
+            plot_item.showGrid(
+                x=state["x"],
+                y=state["y"] if allow_y_grid else False,
+                alpha=0.28,
+            )
         except Exception:
             pass
 
@@ -372,6 +422,9 @@ def _build_grid_submenu(menu, plot_item):
         _apply_grid()
 
     def _on_y(checked):
+        if not allow_y_grid:
+            state["y"] = False
+            return
         state["y"] = bool(checked)
         _apply_grid()
 
@@ -448,7 +501,14 @@ def _reshape_mouse_mode_submenu(menu, controller):
     return mouse_action
 
 
-def redesign_pg_context_menu(menu, plot_item, controller):
+def redesign_pg_context_menu(
+    menu,
+    plot_item,
+    controller,
+    *,
+    view_all_handler=None,
+    allow_y_grid=True,
+):
     """Reshape the ASSEMBLED pyqtgraph context ``menu`` per design §A–§D.
 
     Called from ``_ModifierWheelViewBox.raiseContextMenu`` AFTER
@@ -466,6 +526,7 @@ def redesign_pg_context_menu(menu, plot_item, controller):
     if menu is None:
         return
     _localize_pg_context_menu(menu)
+    _route_view_all_action(menu, view_all_handler)
 
     # (2) Remove advanced / export entries entirely.
     for action in list(menu.actions()):
@@ -479,7 +540,11 @@ def redesign_pg_context_menu(menu, plot_item, controller):
 
     # (4) Promote a top-level 网格 ▸ submenu (only once per menu instance).
     if plot_item is not None and _find_top_level_action(menu, "网格") is None:
-        grid_menu = _build_grid_submenu(menu, plot_item)
+        grid_menu = _build_grid_submenu(
+            menu,
+            plot_item,
+            allow_y_grid=allow_y_grid,
+        )
         menu.addMenu(grid_menu)
 
     # (5) Collapse separators that the removals left dangling.
@@ -877,7 +942,7 @@ class TimeDomainCanvasPG(QWidget):
         if subplot_mode:
             for i, (name, t, sig, color, unit, data_id) in enumerate(vis):
                 pi = self._add_plot_item(row=i, col=0)
-                handle = PgAxisHandle(plot_item=pi)
+                handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
                 self.axes_list.append(handle)
                 self._bind_channel(
                     handle, name, t, sig, color, unit, data_id,
@@ -922,7 +987,11 @@ class TimeDomainCanvasPG(QWidget):
             pi = self._add_plot_item(row=0, col=0)
             # X-master handle wraps the main ViewBox; never enters
             # axes_list and never carries a curve.
-            self._x_master_handle = PgAxisHandle(plot_item=pi)
+            self._x_master_handle = PgAxisHandle(
+                plot_item=pi,
+                owner_canvas=self,
+                allow_y_grid=False,
+            )
             # Channel 1 → dedicated aux ViewBox bound to the LEFT axis.
             first_handle = self._add_overlay_axis_handle(pi, 0)
             self.axes_list.append(first_handle)
@@ -949,7 +1018,7 @@ class TimeDomainCanvasPG(QWidget):
         else:
             # Single channel.
             pi = self._add_plot_item(row=0, col=0)
-            handle = PgAxisHandle(plot_item=pi)
+            handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
             self.axes_list.append(handle)
             name, t, sig, color, unit, data_id = vis[0]
             self._bind_channel(handle, name, t, sig, color, unit, data_id, xlabel=xlabel)
@@ -979,6 +1048,10 @@ class TimeDomainCanvasPG(QWidget):
 
         self._refresh = True
         self._apply_tick_density_to_all_axes()
+        # Tick density and data-union X seeding can change AxisItem geometry
+        # after the early subplot label pass. Re-pin once at the end of build
+        # so the first rendered frame already has one shared X grid.
+        self._unify_subplot_left_axis_widths()
 
         # Bug 3: notify owners that fresh ViewBoxes exist so they can
         # re-apply pinned interaction state (toolbar pan/zoom mode). Runs
@@ -1043,7 +1116,13 @@ class TimeDomainCanvasPG(QWidget):
         design (delegated from ``_ModifierWheelViewBox.raiseContextMenu`` so
         the canvas can supply the PlotItem + shared mouse-mode controller)."""
         plot_item = self._plot_item_for_view_box(view_box)
-        redesign_pg_context_menu(menu, plot_item, self._mouse_mode_controller)
+        redesign_pg_context_menu(
+            menu,
+            plot_item,
+            self._mouse_mode_controller,
+            view_all_handler=self.reset_view_to_data_extents,
+            allow_y_grid=not self._overlay_mode,
+        )
 
     def _add_plot_item(self, *, row, col):
         """Add a PlotItem hosted by our ``_ModifierWheelViewBox``.
@@ -1137,7 +1216,13 @@ class TimeDomainCanvasPG(QWidget):
             pass
         self._overlay_aux_viewboxes.append(aux_vb)
         self._overlay_aux_axes.append(axis_item)
-        handle = PgAxisHandle(plot_item=primary_plot, view_box=aux_vb, axis_item=axis_item)
+        handle = PgAxisHandle(
+            plot_item=primary_plot,
+            view_box=aux_vb,
+            axis_item=axis_item,
+            owner_canvas=self,
+            allow_y_grid=False,
+        )
         return handle
 
     def plot_channels_preserving_xlim(self, ch_list, mode="overlay", xlabel="Time (s)"):
@@ -1280,6 +1365,27 @@ class TimeDomainCanvasPG(QWidget):
             axis.setTextPen(pg.mkPen(color=color))
         except Exception:
             pass
+
+    def _channel_name_for_handle(self, handle):
+        for name, (candidate, _line) in self._channel_lines.items():
+            if candidate is handle:
+                return name
+        return None
+
+    def _sync_pg_channel_color(self, channel_name, color):
+        row = self.channel_data.get(channel_name)
+        if row is not None:
+            self.channel_data[channel_name] = (row[0], row[1], color, row[3])
+        for handle, item in zip(self._inside_label_handles, self._inside_label_items):
+            if self._channel_name_for_handle(handle) != channel_name:
+                continue
+            try:
+                item.setColor(pg.mkColor(color))
+                item.border = pg.mkPen(color=color, width=0.8)
+                item.update()
+            except Exception:
+                pass
+        self.draw_idle()
 
     def _configure_overlay_axis_geometry(self, axis_handle):
         """Overlay-only axis geometry so the rotated label clears the ticks.
@@ -1717,7 +1823,10 @@ class TimeDomainCanvasPG(QWidget):
         x = self._cursor_data_x_from_viewport_pos(viewport_pos)
         if x is None:
             return False
-        self._last_t = 0
+        now = _time.monotonic() * 1000
+        if now - self._last_t < 33:
+            return True
+        self._last_t = now
         if self._dual:
             hover_items = self._ensure_cursor_items(
                 "_cursor_line_items", color="#64748b", width=1.0, style=Qt.DotLine
@@ -2878,19 +2987,13 @@ class TimeDomainCanvasPG(QWidget):
         DATA-ONLY emit path the tests use to compare strings. The live
         UI's hover handler will call this plus an overlay-line update.
         """
-        from html import escape
         sep = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>')
         parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
         for ch, (tf, sf, color, u) in self.channel_data.items():
             if len(tf):
                 idx = min(np.searchsorted(tf, x), len(sf) - 1)
                 unit_s = f" {u}" if u else ""
-                name = ch[:18]
-                parts.append(
-                    f'<span style="color:{color};">'
-                    f'{escape(name)}=<b>{sf[idx]:.4g}{escape(unit_s)}</b>'
-                    f'</span>'
-                )
+                parts.append(_format_single_cursor_channel_html(ch, sf[idx], unit_s, color))
         self.cursor_info.emit(sep.join(parts))
 
     def _emit_dual_cursor_html(self):
@@ -3180,6 +3283,12 @@ class TimeDomainCanvasPG(QWidget):
                 ax_item.setWidth(max_w)
             except Exception:
                 pass
+        try:
+            layout = self._glw.ci.layout
+            layout.invalidate()
+            layout.activate()
+        except Exception:
+            pass
 
     def resizeEvent(self, event):
         """Re-check subplot inside-label placement on resize.

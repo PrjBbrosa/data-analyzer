@@ -347,7 +347,15 @@ class PgAxisHandle:
     disabled when there are no mappables, NOT removed).
     """
 
-    def __init__(self, plot_item=None, *, view_box=None, axis_item=None):
+    def __init__(
+        self,
+        plot_item=None,
+        *,
+        view_box=None,
+        axis_item=None,
+        owner_canvas=None,
+        allow_y_grid=True,
+    ):
         # Resolve the PlotItem first: it owns the ViewBox + AxisItems and
         # is the only object we need to delegate to. Tolerate the legacy
         # (view_box=, axis_item=) call form by reconstructing the
@@ -369,6 +377,8 @@ class PgAxisHandle:
         else:
             self._view_box = None
         self._axis_item = axis_item  # historical compat; not strictly used
+        self._owner_canvas = owner_canvas
+        self._allow_y_grid = bool(allow_y_grid)
         self._grid_enabled = self._read_grid_enabled()
         self._xscale = self._read_log_scale("x")
         self._yscale = self._read_log_scale("y")
@@ -387,12 +397,21 @@ class PgAxisHandle:
             return None
 
     def _read_grid_enabled(self) -> bool:
+        try:
+            bottom = self._ax("bottom")
+            if bottom is not None and bool(getattr(bottom, "grid", False)):
+                return True
+            if self._allow_y_grid:
+                y_axis = self.y_axis_item()
+                if y_axis is not None and bool(getattr(y_axis, "grid", False)):
+                    return True
+        except Exception:
+            pass
         pi = self._plot_item
         ctrl = getattr(pi, "ctrl", None)
-        checks = [
-            getattr(ctrl, "xGridCheck", None),
-            getattr(ctrl, "yGridCheck", None),
-        ]
+        checks = [getattr(ctrl, "xGridCheck", None)]
+        if self._allow_y_grid:
+            checks.append(getattr(ctrl, "yGridCheck", None))
         for check in checks:
             is_checked = getattr(check, "isChecked", None)
             if callable(is_checked) and is_checked():
@@ -608,9 +627,18 @@ class PgAxisHandle:
         if pi is None or not hasattr(pi, "showGrid"):
             return
         self._grid_enabled = bool(enabled)
-        pi.showGrid(x=self._grid_enabled, y=self._grid_enabled)
+        pi.showGrid(
+            x=self._grid_enabled,
+            y=self._grid_enabled if self._allow_y_grid else False,
+        )
 
     def is_grid_enabled(self) -> bool:
+        try:
+            bottom = self._ax("bottom")
+            if bottom is not None:
+                return bool(getattr(bottom, "grid", False))
+        except Exception:
+            pass
         return bool(self._grid_enabled)
 
     # Lines + mappables -----------------------------------------------------
@@ -685,6 +713,15 @@ class PgAxisHandle:
             axis.setTextPen(pg.mkPen(color=color))
         except Exception:
             pass
+        owner = getattr(self, "_owner_canvas", None)
+        sync = getattr(owner, "_sync_pg_channel_color", None)
+        label = ""
+        try:
+            label = line.get_label()
+        except Exception:
+            label = ""
+        if label and callable(sync):
+            sync(label, color)
 
     def x_axis_item(self):
         return self._ax("bottom")
