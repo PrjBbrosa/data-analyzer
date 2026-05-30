@@ -85,8 +85,9 @@ def test_main_window_inspector_slot_fixed_at_360_under_qss(qapp, qtbot):
         qapp.setStyleSheet(old_sheet)
 
 
-def test_main_window_inspector_toolbar_toggle_expands_chart_area(qapp, qtbot):
-    from PyQt5.QtWidgets import QSplitter
+def test_main_window_collapsing_inspector_expands_chart_then_repin_restores(qtbot):
+    from PyQt5.QtWidgets import QSplitter  # noqa: F401  (kept for parity w/ module style)
+    from mf4_analyzer.ui.side_panels import Side, PanelState
 
     w = MainWindow()
     qtbot.addWidget(w)
@@ -95,26 +96,32 @@ def test_main_window_inspector_toolbar_toggle_expands_chart_area(qapp, qtbot):
     qtbot.waitExposed(w)
     qtbot.wait(50)
 
-    splitter = w.findChild(QSplitter)
+    splitter = w.splitter
     before = splitter.sizes()
     assert w.inspector.isVisible()
-    assert w.toolbar.btn_inspector.isChecked()
+    assert w._strip_right.isVisible() is False
+    assert w._panel_ctrl_right.state == PanelState.PINNED
 
-    w.toolbar.btn_inspector.click()
+    # Simulate dragging the inspector handle to the right edge (collapse).
+    splitter.setSizes([before[0], before[1] + before[2], 0])
+    w._panel_ctrl_right.on_splitter_moved()
     qtbot.wait(20)
 
     hidden = splitter.sizes()
     assert not w.inspector.isVisible()
-    assert not w.toolbar.btn_inspector.isChecked()
+    assert w._strip_right.isVisible() is True
+    assert w._panel_ctrl_right.state == PanelState.HIDDEN
     assert hidden[2] == 0
     assert hidden[1] > before[1]
 
-    w.toolbar.btn_inspector.click()
+    # Click the strip to re-pin: inspector re-docks, chart shrinks back.
+    w._strip_right.pin_requested.emit(Side.RIGHT)
     qtbot.wait(20)
 
     restored = splitter.sizes()
     assert w.inspector.isVisible()
-    assert w.toolbar.btn_inspector.isChecked()
+    assert w._strip_right.isVisible() is False
+    assert w._panel_ctrl_right.state == PanelState.PINNED
     assert 340 <= restored[2] <= 420
     assert restored[1] < hidden[1]
 

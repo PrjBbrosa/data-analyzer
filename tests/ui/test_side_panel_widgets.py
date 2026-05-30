@@ -199,3 +199,13 @@ def test_peek_overlay_offset_keeps_strip_exposed(qtbot):
     assert ctrl.state == PanelState.PEEK
     # Overlay starts at the strip's inner edge, leaving the strip clickable.
     assert overlay.geometry().x() == strip.WIDTH_PX
+
+
+def test_toolbar_has_no_inspector_button_and_cockpit_on_right(qtbot):
+    from mf4_analyzer.ui.toolbar import Toolbar
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    assert not hasattr(tb, "btn_inspector")
+    assert not hasattr(tb, "inspector_visibility_changed")
+    # Cockpit button now lives in the right-segment host widget.
+    assert tb.btn_acquisition_cockpit.parent() is tb._right_widget

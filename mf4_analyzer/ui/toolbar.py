@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QPushButton, QSizePolicy, QWidget,
 )
 
-from ..ui_kit.icons import BLUE, GRAY, Icons
+from ..ui_kit.icons import Icons
 
 
 class Toolbar(QWidget):
@@ -15,7 +15,6 @@ class Toolbar(QWidget):
     export_requested = pyqtSignal()
     batch_requested = pyqtSignal()
     acquisition_cockpit_requested = pyqtSignal()
-    inspector_visibility_changed = pyqtSignal(bool)
     # Center segment
     mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
 
@@ -38,11 +37,6 @@ class Toolbar(QWidget):
         self.btn_acquisition_cockpit = QPushButton("Cockpit", self)
         self.btn_acquisition_cockpit.setIcon(Icons.plot())
         self.btn_acquisition_cockpit.setToolTip("打开 Acquisition Cockpit")
-        self.btn_inspector = QPushButton("Inspector", self)
-        self.btn_inspector.setIcon(Icons.inspector(BLUE))
-        self.btn_inspector.setCheckable(True)
-        self.btn_inspector.setChecked(True)
-        self.btn_inspector.setToolTip("显示或隐藏右侧 Inspector 面板")
 
         # ── center mode segment ─────────────────────────────────────────────
         self.btn_mode_time = QPushButton("时域", self)
@@ -57,7 +51,7 @@ class Toolbar(QWidget):
         for b in (self.btn_add, self.btn_edit, self.btn_export, self.btn_batch,
                   self.btn_acquisition_cockpit,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
-                  self.btn_mode_order, self.btn_inspector):
+                  self.btn_mode_order):
             b.setIconSize(QSize(16, 16))
 
         # left layout
@@ -68,7 +62,6 @@ class Toolbar(QWidget):
             self.btn_edit,
             self.btn_export,
             self.btn_batch,
-            self.btn_acquisition_cockpit,
         ):
             left.addWidget(b)
 
@@ -100,7 +93,7 @@ class Toolbar(QWidget):
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(10)
         right.addStretch(1)
-        right.addWidget(self.btn_inspector)
+        right.addWidget(self.btn_acquisition_cockpit)
 
         # A right widget of the same fixed width as left_widget keeps the
         # segment_frame exactly centered while hosting right-aligned controls.
@@ -141,7 +134,6 @@ class Toolbar(QWidget):
         self.btn_export.clicked.connect(self.export_requested)
         self.btn_batch.clicked.connect(self.batch_requested)
         self.btn_acquisition_cockpit.clicked.connect(self.acquisition_cockpit_requested)
-        self.btn_inspector.clicked.connect(self._on_inspector_clicked)
         for key, b in [('time', self.btn_mode_time),
                        ('fft', self.btn_mode_fft),
                        ('fft_time', self.btn_mode_fft_time),
@@ -172,15 +164,3 @@ class Toolbar(QWidget):
     def current_mode(self):
         return self._current_mode
 
-    def _on_inspector_clicked(self, checked):
-        self.set_inspector_visible(checked, notify=False)
-        self.inspector_visibility_changed.emit(bool(checked))
-
-    def set_inspector_visible(self, visible, notify=False):
-        visible = bool(visible)
-        self.btn_inspector.blockSignals(True)
-        self.btn_inspector.setChecked(visible)
-        self.btn_inspector.setIcon(Icons.inspector(BLUE if visible else GRAY))
-        self.btn_inspector.blockSignals(False)
-        if notify:
-            self.inspector_visibility_changed.emit(visible)
