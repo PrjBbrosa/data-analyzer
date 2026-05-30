@@ -152,7 +152,41 @@ def test_reentry_cancels_autohide(qtbot):
     ctrl, splitter, panel, strip, overlay = _make_controller(qtbot)
     splitter.setSizes([0, 900]); ctrl.on_splitter_moved()
     strip.peek_requested.emit(Side.LEFT)
-    overlay.mouse_left.emit()                                # start timer
+    overlay.mouse_left.emit()                                # start collapse timer
     overlay.mouse_entered.emit()                             # cancel within window
-    qtbot.wait(60)
+    # Deterministic: re-entry must have STOPPED the timer, so it can never fire.
+    assert ctrl._collapse_timer.isActive() is False
     assert ctrl.state == PanelState.PEEK                     # still peeking
+
+
+def test_redock_takes_width_from_canvas_not_other_panel(qtbot):
+    # 3-pane [nav(0), canvas(1), inspector(2)] with inspector WIDER than canvas.
+    # Re-docking the nav must pull its width from the canvas, never the inspector.
+    host = QWidget(); host.resize(900, 600); qtbot.addWidget(host); host.show()
+    splitter = QSplitter(Qt.Horizontal, host)
+    nav, canvas, insp = QWidget(), QWidget(), QWidget()
+    for w in (nav, canvas, insp):
+        w.setMinimumWidth(10)
+    splitter.addWidget(nav); splitter.addWidget(canvas); splitter.addWidget(insp)
+    splitter.resize(900, 600)
+    strip = SidePanelStrip(Side.LEFT, hover_delay_ms=10)
+    overlay = PeekOverlay(host)
+    ctrl = SidePanelController(
+        side=Side.LEFT, splitter=splitter, panel=nav, panel_index=0,
+        strip=strip, overlay=overlay, host=host,
+        collapse_delay_ms=20, default_width=250, absorb_index=1,
+    )
+    splitter.setSizes([0, 350, 550]); ctrl.on_splitter_moved()   # -> HIDDEN
+    assert ctrl.state == PanelState.HIDDEN
+    # Snapshot the inspector width AFTER Qt normalises the setSizes call
+    # (QSplitter subtracts handle pixels, so the stored value may differ from
+    # the requested 550).  The invariant under test is that this value is
+    # PRESERVED after re-docking the nav — the delta must come only from canvas.
+    insp_before = splitter.sizes()[2]
+    canvas_before = splitter.sizes()[1]
+    strip.pin_requested.emit(Side.LEFT)                          # re-dock at 250
+    sizes = splitter.sizes()
+    assert ctrl.state == PanelState.PINNED
+    assert sizes[0] == 250                          # nav restored to remembered width
+    assert sizes[2] == insp_before                  # inspector UNTOUCHED (the bug would shrink this)
+    assert sizes[1] == canvas_before - 250          # canvas absorbed the full 250 delta

@@ -174,13 +174,20 @@ from PyQt5.QtWidgets import QApplication
 
 
 class SidePanelController(QObject):
-    """Drives one side's HIDDEN/PEEK/PINNED lifecycle against real widgets."""
+    """Drives one side's HIDDEN/PEEK/PINNED lifecycle against real widgets.
+
+    Pass ``parent`` = the owning window/host so the controller shares its
+    lifetime. The strip/overlay signals are connected with lambdas that hold a
+    strong reference to this controller, so it must not be GC'd before the
+    widgets it drives are torn down.
+    """
 
     PEEK_EXTRA_PX = 24      # overlay is "a bit wider" than the docked width
     COLLAPSE_THRESHOLD = 24  # drag width <= this => collapsed
 
     def __init__(self, side, splitter, panel, panel_index, strip, overlay,
-                 host, collapse_delay_ms=600, default_width=250, parent=None):
+                 host, collapse_delay_ms=600, default_width=250,
+                 absorb_index=None, parent=None):
         super().__init__(parent)
         self._side = side
         self._splitter = splitter
@@ -190,6 +197,7 @@ class SidePanelController(QObject):
         self._overlay = overlay
         self._host = host
         self._remembered_width = default_width
+        self._absorb_index = absorb_index
         self.state = PanelState.PINNED
 
         self._collapse_timer = QTimer(self)
@@ -246,6 +254,7 @@ class SidePanelController(QObject):
             self._dock_panel_into_splitter(width=self._remembered_width, visible=True)
         elif eff == Effect.COLLAPSE_PINNED:
             self._remember_width_if_docked()
+            # Hide before zeroing the slot so minimumWidth doesn't clamp it open.
             self._panel.setVisible(False)
             self._set_slot_width(0)
         elif eff == Effect.START_TIMER:
@@ -266,6 +275,9 @@ class SidePanelController(QObject):
         # Re-insert if the panel was reparented out (peek), else just resize.
         if self._panel.parent() is not self._splitter:
             self._splitter.insertWidget(self._index, self._panel)
+        # setVisible BEFORE _set_slot_width: a hidden widget reports
+        # minimumWidth 0, so a width-0 slot is honoured; a visible widget's
+        # minimumWidth would otherwise clamp the slot open.
         self._panel.setVisible(visible)
         self._set_slot_width(width if visible else 0)
 
@@ -273,11 +285,20 @@ class SidePanelController(QObject):
         sizes = self._splitter.sizes()
         if len(sizes) <= self._index:
             return
-        total = sum(sizes)
         delta = width - sizes[self._index]
         sizes[self._index] = width
-        # absorb the delta from the widest middle pane (the canvas)
-        mid = max(range(len(sizes)), key=lambda i: sizes[i] if i != self._index else -1)
+        # Absorb the width change from the canvas pane (the stretchy middle).
+        # Prefer the explicitly-wired ``absorb_index`` so the delta never leaks
+        # into the OTHER side panel when it happens to be wider than the canvas;
+        # fall back to the widest non-self pane only when no index was wired
+        # (e.g. the 2-pane controller tests).
+        if (self._absorb_index is not None
+                and self._absorb_index != self._index
+                and self._absorb_index < len(sizes)):
+            mid = self._absorb_index
+        else:
+            mid = max(range(len(sizes)),
+                      key=lambda i: sizes[i] if i != self._index else -1)
         sizes[mid] = max(0, sizes[mid] - delta)
         self._splitter.setSizes(sizes)
 
