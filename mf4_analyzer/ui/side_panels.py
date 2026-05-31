@@ -309,8 +309,19 @@ class SidePanelController(QObject):
         sizes[absorb] = max(0, sizes[absorb] - delta)
         self._splitter.setSizes(sizes)
 
+    # Qt's "no maximum" sentinel (QWIDGETSIZE_MAX); a panel reporting this has
+    # no real width cap. PyQt5 doesn't export the constant cleanly, so inline it.
+    _NO_MAX_WIDTH = (1 << 24) - 1  # 16777215
+
     def _position_overlay(self):
         w = self._remembered_width + self.PEEK_EXTRA_PX
+        # Don't let the overlay exceed the panel's own max width: width-capped
+        # panels (e.g. the inspector is pinned to a fixed width) can't stretch
+        # to fill the surplus, so it would otherwise show as a blank band of
+        # overlay background. Uncapped panels (navigator) still get the +EXTRA.
+        max_w = self._panel.maximumWidth()
+        if 0 < max_w < self._NO_MAX_WIDTH:
+            w = min(w, max_w)
         h = self._host.height()
         # Keep the edge strip exposed (and clickable -> pin) beside the overlay,
         # so the overlay starts just inside the strip rather than covering it.
