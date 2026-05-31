@@ -177,10 +177,13 @@ class MainWindow(QMainWindow):
         self._overlay_right = PeekOverlay(strip_row)
         # canvas=self.chart_stack -> width changes are taken from the canvas pane,
         # looked up by live index so cross-side peek doesn't drift the index.
+        # peek_width = inspector's docked width so the narrow navigator peeks out
+        # to the same width as the right pane (L/R peek symmetry).
         self._panel_ctrl_left = SidePanelController(
             side=Side.LEFT, splitter=splitter, panel=self.navigator, panel_index=0,
             strip=self._strip_left, overlay=self._overlay_left, host=strip_row,
-            default_width=250, canvas=self.chart_stack, parent=self,
+            default_width=250, canvas=self.chart_stack,
+            peek_width=self.inspector.maximumWidth(), parent=self,
         )
         self._panel_ctrl_right = SidePanelController(
             side=Side.RIGHT, splitter=splitter, panel=self.inspector, panel_index=2,

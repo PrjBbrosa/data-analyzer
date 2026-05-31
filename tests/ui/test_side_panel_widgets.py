@@ -282,3 +282,25 @@ def test_peek_overlay_uncapped_panel_keeps_extra_width(qtbot):
     strip.peek_requested.emit(Side.LEFT)                     # -> PEEK
     assert ctrl.state == PanelState.PEEK
     assert overlay.geometry().width() == ctrl._remembered_width + ctrl.PEEK_EXTRA_PX
+
+
+def test_peek_width_floor_widens_narrow_panel_for_symmetry(qtbot):
+    # A narrow uncapped panel with a peek_width floor peeks out to that floor
+    # (L/R symmetry: the 250-wide navigator peeks to the inspector's 360).
+    host = QWidget(); host.resize(900, 600); qtbot.addWidget(host); host.show()
+    splitter = QSplitter(Qt.Horizontal, host)
+    panel = QWidget(); panel.setMinimumWidth(50)        # uncapped
+    middle = QWidget(); middle.setMinimumWidth(100)
+    splitter.addWidget(panel); splitter.addWidget(middle)
+    splitter.resize(900, 600); splitter.setSizes([250, 650])
+    strip = SidePanelStrip(Side.LEFT, hover_delay_ms=10)
+    overlay = PeekOverlay(host)
+    ctrl = SidePanelController(
+        side=Side.LEFT, splitter=splitter, panel=panel, panel_index=0,
+        strip=strip, overlay=overlay, host=host,
+        collapse_delay_ms=20, default_width=250, canvas=middle, peek_width=360)
+    splitter.setSizes([0, 900]); ctrl.on_splitter_moved()   # -> HIDDEN
+    strip.peek_requested.emit(Side.LEFT)                     # -> PEEK
+    assert ctrl.state == PanelState.PEEK
+    # remembered(250)+EXTRA(24)=274 < floor 360 -> floored to 360.
+    assert overlay.geometry().width() == 360
