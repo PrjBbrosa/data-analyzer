@@ -2000,7 +2000,8 @@ class TimeDomainCanvasPG(QWidget):
                 "_cursor_line_items", color="#64748b", width=1.0, style=Qt.DotLine
             )
             self._set_cursor_items_pos(hover_items, x)
-            self._emit_dual_cursor_html()
+            # Dual cursor stats depend only on the fixed A/B positions; A/B
+            # placement already emits them, so hover only moves the guide line.
         else:
             items = self._ensure_cursor_items(
                 "_cursor_line_items", color="#111827", width=1.0
@@ -3742,6 +3743,36 @@ class TimeDomainCanvasPG(QWidget):
         # else: metric in the (ON, OFF] band → hold the previous value.
         return bool(self._idle_aa_density_allowed)
 
+    def _export_aa_affordable(self) -> bool:
+        """Return whether copy/export can afford forced curve antialiasing.
+
+        This mirrors the idle-AA metric (overlay = sum of all curve points;
+        subplot/single = max row point sum) but does not touch the idle-AA
+        hysteresis state. Dense multi-channel exports fail closed to the cheap
+        screen-state grab path.
+        """
+        overlay = bool(getattr(self, "_overlay_mode", False))
+        off_budget = (
+            self._AA_OVERLAY_SEGMENT_OFF if overlay else self._AA_SUBPLOT_SEGMENT_OFF
+        )
+        sums: dict = {}
+        total = 0
+        for it in self._collect_curve_items():
+            try:
+                xd, _ = it.getData()
+                n = 0 if xd is None else len(xd)
+            except Exception:
+                return False
+            total += n
+            try:
+                vb = it.getViewBox()
+            except Exception:
+                vb = None
+            key = id(vb) if vb is not None else None
+            sums[key] = sums.get(key, 0) + n
+        metric = total if overlay else (max(sums.values()) if sums else 0)
+        return metric <= off_budget
+
     @contextmanager
     def _curves_antialiased(self):
         """Temporarily enable antialiasing on every curve so an export grab
@@ -3787,9 +3818,9 @@ class TimeDomainCanvasPG(QWidget):
         Order of attempts:
         1. ``QWidget.grab()`` on the outer widget (covers GraphicsLayoutWidget
            + any sibling overlays MainWindow may add later). For ``scale`` > 1
-           the grabbed region is re-rendered into a larger ``QImage`` by
-           painting the widget at the magnified device size, so the bitmap
-           is sharp rather than a blurry upscale.
+           the grabbed bitmap is smoothly magnified to the capped target size.
+           This keeps interactive copy to one widget paint instead of a
+           screen-size grab plus a second high-DPI render in the click handler.
         2. Direct ``self._glw.grab()`` if the outer grab returned null.
         3. A 1×1 transparent fallback pixmap if both fail.
 
@@ -3801,16 +3832,13 @@ class TimeDomainCanvasPG(QWidget):
         never default to a full-canvas-sized guess on a failed grab.
         """
         # Resolve the effective (capped) factor from the OUTER widget's
-        # current width — the same surface step 1 grabs.
+        # current width — the same surface step 1 grabs. Dense exports keep
+        # the current screen rendering state and skip 2× magnification.
         base_w = max(1, int(self.width()))
-        eff_scale = _capped_hidpi_scale(base_w, scale)
+        affordable = self._export_aa_affordable()
+        eff_scale = _capped_hidpi_scale(base_w, scale) if affordable else 1.0
 
-        # Primary: render the outer widget at the magnified device size so
-        # the vector scene is rasterized crisply (matplotlib-figure-DPI
-        # parity), not bilinearly upscaled from a screen grab. Curves are
-        # anti-aliased for the duration of the grab (restored on exit) so the
-        # exported lines/text are smooth, not the AA-off pan-hot-path frame.
-        with self._curves_antialiased():
+        def _grab_first_good():
             for target in (self, getattr(self, "_glw", None)):
                 if target is None:
                     continue
@@ -3820,6 +3848,17 @@ class TimeDomainCanvasPG(QWidget):
                     pix = None
                 if pix is not None and not pix.isNull() and pix.width() > 0 and pix.height() > 0:
                     return pix
+            return None
+
+        # Few-channel exports keep the crisp forced-AA path. Dense exports are
+        # what-you-see-is-what-you-get and avoid re-enabling AA for all curves.
+        if affordable:
+            with self._curves_antialiased():
+                pix = _grab_first_good()
+        else:
+            pix = _grab_first_good()
+        if pix is not None:
+            return pix
         # Final fallback: a 1×1 transparent pixmap. Tests gate on
         # geometry, not pixels, so this is acceptable when offscreen Qt
         # cannot realize the widget at all. We do NOT scale this up — a
@@ -3834,11 +3873,10 @@ class TimeDomainCanvasPG(QWidget):
         """Grab ``widget`` at ``eff_scale``×.
 
         At 1× this is exactly ``widget.grab()`` (unchanged legacy path).
-        Above 1× the widget is rendered into a ``QImage`` sized
-        ``round(w*scale) × round(h*scale)`` with the painter pre-scaled,
-        so the scene is re-rasterized at higher resolution. Returns a null
-        pixmap when the widget has no realizable geometry (caller guards
-        on ``isNull()``).
+        Above 1× the same grabbed bitmap is smoothly scaled to
+        ``round(w*scale) × round(h*scale)`` so the copy path avoids a second
+        synchronous widget render. Returns a null pixmap when the widget has
+        no realizable geometry (caller guards on ``isNull()``).
         """
         # Always grab once first. This is the legacy capture primitive and
         # the realizability probe: if the widget cannot be grabbed (null /
@@ -3858,17 +3896,7 @@ class TimeDomainCanvasPG(QWidget):
             return base
         tw = max(1, int(round(w * eff_scale)))
         th = max(1, int(round(h * eff_scale)))
-        img = QImage(tw, th, QImage.Format_ARGB32_Premultiplied)
-        img.fill(Qt.transparent)
-        painter = QPainter(img)
-        try:
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-            painter.scale(eff_scale, eff_scale)
-            widget.render(painter)
-        finally:
-            painter.end()
-        return QPixmap.fromImage(img)
+        return base.scaled(tw, th, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 
 
 __all__ = [

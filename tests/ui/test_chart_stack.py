@@ -11,6 +11,31 @@ from PyQt5.QtWidgets import QSizePolicy
 from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
 
 
+def test_apply_mdi_icons_sets_navactive_property_on_active_button(qtbot):
+    from PyQt5.QtWidgets import QToolBar, QToolButton
+    from mf4_analyzer.ui.chart_stack import _apply_mdi_icons, _MDI_NAV_ICONS
+
+    assert "pan" in _MDI_NAV_ICONS and "zoom" in _MDI_NAV_ICONS
+    toolbar = QToolBar()
+    qtbot.addWidget(toolbar)
+    pan = toolbar.addAction("Pan")
+    pan.setData("pan")
+    zoom = toolbar.addAction("Zoom")
+    zoom.setData("zoom")
+
+    _apply_mdi_icons(toolbar, active_key="pan")
+    pan_btn = toolbar.widgetForAction(pan)
+    zoom_btn = toolbar.widgetForAction(zoom)
+
+    assert isinstance(pan_btn, QToolButton)
+    assert pan_btn.property("navActive") is True
+    assert zoom_btn.property("navActive") is False
+
+    _apply_mdi_icons(toolbar, active_key="zoom")
+    assert pan_btn.property("navActive") is False
+    assert zoom_btn.property("navActive") is True
+
+
 def test_chart_stack_has_three_canvases(qapp):
     cs = ChartStack()
     # Four canvases after Task 3 (time / fft / fft_time / order); test name kept for git history.
@@ -725,9 +750,13 @@ def test_copy_card_image_renders_at_hidpi_scale(qapp, qtbot):
     base = cs.canvas_time.grab_pixmap(scale=1.0)
     assert not base.isNull()
 
+    captured = []
+    cs.image_captured.connect(captured.append)
+
     cs._copy_card_image(cs._time_card)
     QApplication.processEvents()
-    pix = QApplication.clipboard().pixmap()
+    assert captured, "copy path did not emit captured pixmap"
+    pix = captured[-1]
     assert pix is not None and not pix.isNull(), "clipboard pixmap is null"
     # Hi-DPI: clipboard bitmap is wider than a 1× grab of the same canvas.
     assert pix.width() > base.width(), (
@@ -773,9 +802,13 @@ def test_copy_card_image_composites_scaled_cursor_pill(qapp, qtbot, monkeypatch)
 
     monkeypatch.setattr(QPainter, "drawPixmap", _spy_draw)
 
+    captured = []
+    cs.image_captured.connect(captured.append)
+
     cs._copy_card_image(cs._time_card)
     QApplication.processEvents()
 
+    assert captured, "copy path did not emit captured pixmap"
     assert drawn, "copy path did not composite the cursor pill"
     rect = drawn[-1][0]
     pill = cs._pill

@@ -2449,6 +2449,42 @@ class TestTimeDomainCanvasPGCursorInteraction:
         assert len(b_items) == len(canvas.axes_list)
         assert all(item.isVisible() for item in a_items + b_items)
 
+    def test_dual_cursor_hover_move_does_not_recompute_stats(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QCoreApplication, Qt
+        from PyQt5.QtTest import QTest
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+
+        viewport = canvas._glw.viewport()
+        QTest.mouseClick(
+            viewport, Qt.LeftButton, Qt.NoModifier,
+            _viewport_point_for_data(canvas, canvas.axes_list[0], 0.25),
+        )
+        QCoreApplication.processEvents()
+        QTest.mouseClick(
+            viewport, Qt.LeftButton, Qt.NoModifier,
+            _viewport_point_for_data(canvas, canvas.axes_list[2], 0.75),
+        )
+        QCoreApplication.processEvents()
+
+        calls = []
+        monkeypatch.setattr(
+            canvas, "_emit_dual_cursor_html", lambda *a, **k: calls.append(1)
+        )
+        canvas._last_t = 0
+
+        point = _viewport_point_for_data(canvas, canvas.axes_list[1], 0.5)
+        assert canvas._handle_cursor_mouse_move(_FakeMove(point.x(), point.y())) is True
+
+        assert calls == []
+        line_items = getattr(canvas, "_cursor_line_items", [])
+        assert line_items
+        assert all(item.isVisible() for item in line_items)
+
     def test_cursor_mousemove_with_left_button_does_not_consume_pan_drag(self, qapp):
         from PyQt5.QtCore import QCoreApplication, QEvent, Qt
         from PyQt5.QtGui import QMouseEvent
@@ -3192,6 +3228,95 @@ class TestTimeDomainCanvasPGHiDpiGrab:
         assert abs(hi.height() - 2 * base.height()) <= 2, (
             f"hi.height()={hi.height()} not ~2x base.height()={base.height()}"
         )
+
+    def test_export_aa_affordable_true_when_density_small(self, qapp, monkeypatch):
+        canvas = _pg_canvas(qapp)
+        canvas._overlay_mode = True
+
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items", lambda: [_FakeCurveData(10)]
+        )
+
+        assert canvas._export_aa_affordable() is True
+
+    def test_export_aa_affordable_false_when_overlay_over_budget(
+        self, qapp, monkeypatch,
+    ):
+        canvas = _pg_canvas(qapp)
+        canvas._overlay_mode = True
+        over = int(canvas._AA_OVERLAY_SEGMENT_OFF) + 100
+        monkeypatch.setattr(
+            canvas, "_collect_curve_items", lambda: [_FakeCurveData(over)]
+        )
+
+        assert canvas._export_aa_affordable() is False
+
+    def test_export_aa_affordable_does_not_mutate_idle_hysteresis(
+        self, qapp, monkeypatch,
+    ):
+        canvas = _pg_canvas(qapp)
+        canvas._idle_aa_density_allowed = "SENTINEL_A"
+        canvas._idle_aa_density_seeded = "SENTINEL_S"
+        monkeypatch.setattr(canvas, "_collect_curve_items", lambda: [])
+
+        canvas._export_aa_affordable()
+
+        assert canvas._idle_aa_density_allowed == "SENTINEL_A"
+        assert canvas._idle_aa_density_seeded == "SENTINEL_S"
+
+    def test_grab_pixmap_skips_forced_aa_when_not_affordable(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QCoreApplication
+        from contextlib import contextmanager
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows(), mode="overlay")
+        QCoreApplication.processEvents()
+        monkeypatch.setattr(canvas, "_export_aa_affordable", lambda: False)
+
+        entered = []
+        orig = canvas._curves_antialiased
+
+        @contextmanager
+        def _spy():
+            entered.append(1)
+            with orig():
+                yield
+
+        monkeypatch.setattr(canvas, "_curves_antialiased", _spy)
+        pix = canvas.grab_pixmap(scale=2.0)
+
+        assert not pix.isNull()
+        assert entered == []
+
+    def test_hidpi_scaled_grab_uses_single_widget_grab(self, qapp):
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        class SpyWidget(QWidget):
+            def __init__(self):
+                super().__init__()
+                self.grab_calls = 0
+                self.render_calls = 0
+
+            def grab(self, *args, **kwargs):  # noqa: N802 - Qt API
+                self.grab_calls += 1
+                return super().grab(*args, **kwargs)
+
+            def render(self, *args, **kwargs):  # noqa: N802 - Qt API
+                self.render_calls += 1
+                return super().render(*args, **kwargs)
+
+        widget = SpyWidget()
+        widget.resize(120, 80)
+        widget.show()
+        qapp.processEvents()
+
+        pix = TimeDomainCanvasPG._grab_widget_scaled(widget, 2.0)
+
+        assert not pix.isNull()
+        assert widget.grab_calls == 1
+        assert widget.render_calls == 0
+        assert pix.width() == 240
+        assert pix.height() == 160
 
     def test_grab_pixmap_caps_width_for_large_canvas(self, qapp):
         from PyQt5.QtCore import QCoreApplication

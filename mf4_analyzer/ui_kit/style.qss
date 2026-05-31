@@ -246,6 +246,10 @@ QToolButton:disabled {
     background-color: #f5f7fb;
     border-color: #eef2f7;
 }
+#chartToolbar QToolButton[navActive="true"] {
+    background-color: #e8efff;
+    border: 1px solid #1769e0;
+}
 
 QPushButton[role="primary"],
 QToolButton[role="primary"] {

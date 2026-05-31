@@ -1,0 +1,890 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>复制后标注编辑器目标 UI</title>
+  <style>
+    :root {
+      --surface-base: #f5f7fb;
+      --surface-card: #ffffff;
+      --surface-hover: #eef2f7;
+      --surface-accent: #e8efff;
+      --hairline: #eef2f7;
+      --hairline-strong: #dfe5ee;
+      --text: #111827;
+      --icon: #374151;
+      --muted: #64748b;
+      --blue: #1769e0;
+      --active: #2563eb;
+      --red: #dc2626;
+      --amber: #d97706;
+      --green: #059669;
+      --shadow: 0 26px 72px rgba(15, 23, 42, .18), 0 7px 20px rgba(15, 23, 42, .10);
+      font-family: "Microsoft YaHei", "Segoe UI", "PingFang SC", "SF Pro Text", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      color: var(--text);
+      background:
+        linear-gradient(90deg, rgba(100,116,139,.08) 1px, transparent 1px) 0 0 / 84px 84px,
+        linear-gradient(rgba(100,116,139,.07) 1px, transparent 1px) 0 0 / 84px 84px,
+        var(--surface-base);
+    }
+
+    svg { display: block; }
+
+    button {
+      font: inherit;
+      cursor: default;
+    }
+
+    .desktop {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      padding: 34px;
+    }
+
+    .source-app {
+      position: absolute;
+      inset: 34px;
+      overflow: hidden;
+      border: 1px solid var(--hairline-strong);
+      border-radius: 14px;
+      background: rgba(255,255,255,.82);
+      box-shadow: 0 24px 70px rgba(15, 23, 42, .12);
+    }
+
+    .source-top {
+      height: 46px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--hairline);
+      background: #fff;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 999px;
+      background: #cbd5e1;
+    }
+    .dot.red { background: #ff5f57; }
+    .dot.amber { background: #ffbd2e; }
+    .dot.green { background: #28c840; }
+
+    .source-title {
+      margin-left: 8px;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .source-layout {
+      display: grid;
+      grid-template-columns: 236px 1fr 286px;
+      height: calc(100% - 46px);
+    }
+
+    .source-side,
+    .source-inspector {
+      padding: 16px;
+      background: #f8fafc;
+    }
+    .source-side { border-right: 1px solid var(--hairline); }
+    .source-inspector { border-left: 1px solid var(--hairline); }
+
+    .ghost-line {
+      height: 32px;
+      margin-bottom: 10px;
+      border: 1px solid var(--hairline-strong);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .chart-host {
+      position: relative;
+      padding: 16px 18px;
+      background: #fbfdff;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .tab {
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border: 1px solid var(--hairline-strong);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tab.active {
+      color: #0f3f8f;
+      background: var(--surface-accent);
+      border-color: rgba(37, 99, 235, .35);
+    }
+
+    .mini-copy {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: #fff;
+      color: var(--icon);
+      box-shadow: inset 0 0 0 1px var(--hairline-strong);
+    }
+
+    .tab.active .mini-copy {
+      color: var(--active);
+      box-shadow: inset 0 0 0 1px rgba(37,99,235,.42);
+    }
+
+    .chart-card {
+      position: relative;
+      height: calc(100% - 44px);
+      min-height: 480px;
+      overflow: hidden;
+      border: 1px solid var(--hairline);
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .chart-toolbar {
+      height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--hairline);
+      background: #fff;
+    }
+
+    .chart-tool {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--hairline-strong);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--icon);
+    }
+
+    .chart-tool.hot {
+      color: var(--active);
+      background: var(--surface-accent);
+      border-color: var(--active);
+    }
+
+    .chart-grid {
+      position: absolute;
+      left: 48px;
+      right: 24px;
+      top: 78px;
+      bottom: 42px;
+      border-left: 1px solid rgba(71,85,105,.46);
+      border-bottom: 1px solid rgba(71,85,105,.46);
+      background:
+        linear-gradient(90deg, rgba(100,116,139,.18) 1px, transparent 1px) 0 0 / 92px 82px,
+        linear-gradient(rgba(100,116,139,.16) 1px, transparent 1px) 0 0 / 92px 82px,
+        #fff;
+    }
+
+    .trace {
+      position: absolute;
+      left: 34px;
+      right: 26px;
+      height: 4px;
+      border-radius: 999px;
+      opacity: .86;
+    }
+    .trace.red {
+      top: 34%;
+      background: linear-gradient(90deg, transparent, #dc2626 14%, #dc2626 82%, transparent);
+      transform: rotate(-4deg);
+    }
+    .trace.blue {
+      top: 58%;
+      background: linear-gradient(90deg, transparent, #1769e0 15%, #1769e0 84%, transparent);
+      transform: rotate(6deg);
+    }
+
+    .editor-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 8;
+      background: rgba(245,247,251,.62);
+      backdrop-filter: blur(18px) saturate(1.08);
+    }
+
+    .editor-toolbar {
+      position: absolute;
+      left: 50%;
+      top: 22px;
+      z-index: 20;
+      width: min(1180px, calc(100vw - 56px));
+      height: 58px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 14px;
+      padding: 0 12px;
+      transform: translateX(-50%);
+      border: 1px solid var(--hairline-strong);
+      border-radius: 12px;
+      background: rgba(255,255,255,.92);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(20px) saturate(1.18);
+    }
+
+    .toolbar-group,
+    .toolbar-left,
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .toolbar-left,
+    .toolbar-right { flex-shrink: 0; }
+
+    .toolbar-center {
+      min-width: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tool-btn {
+      position: relative;
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--icon);
+      padding: 0;
+    }
+
+    .tool-btn svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      stroke-width: 1.85;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+
+    .tool-btn:hover {
+      background: var(--surface-hover);
+      border-color: #b7c4d3;
+    }
+
+    .tool-btn.active,
+    .tool-btn.checked {
+      color: var(--active);
+      background: var(--surface-accent);
+      border-color: var(--active);
+    }
+
+    .tool-btn.danger { color: var(--red); }
+
+    .tool-btn.primary {
+      width: auto;
+      min-width: 86px;
+      padding: 0 12px;
+      grid-auto-flow: column;
+      column-gap: 7px;
+      color: #fff;
+      background: var(--blue);
+      border-color: var(--blue);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tool-btn.primary svg {
+      width: 17px;
+      height: 17px;
+    }
+
+    .window-close {
+      color: var(--muted);
+      border-color: var(--hairline-strong);
+      background: #fff;
+    }
+
+    .separator {
+      width: 1px;
+      height: 28px;
+      margin: 0 5px;
+      background: #cbd5e1;
+    }
+
+    .style-chip {
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 9px;
+      border: 1px solid var(--hairline-strong);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .color-dot {
+      width: 16px;
+      height: 16px;
+      border: 2px solid #fff;
+      border-radius: 999px;
+      background: var(--red);
+      box-shadow: 0 0 0 1px rgba(15,23,42,.24);
+    }
+
+    .stroke-sample {
+      width: 24px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--icon);
+    }
+
+    .canvas-wrap {
+      position: absolute;
+      left: 50%;
+      top: 52%;
+      width: min(1080px, calc(100vw - 160px));
+      height: min(620px, calc(100vh - 180px));
+      transform: translate(-50%, -47%);
+      overflow: hidden;
+      border: 1px solid rgba(71,85,105,.30);
+      border-radius: 2px;
+      background: #fff;
+      box-shadow: 0 24px 68px rgba(15,23,42,.18);
+    }
+
+    .capture {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(100,116,139,.18) 1px, transparent 1px) 0 0 / 104px 96px,
+        linear-gradient(rgba(100,116,139,.16) 1px, transparent 1px) 0 0 / 104px 96px,
+        #fbfdff;
+    }
+
+    .capture::before,
+    .capture::after {
+      content: "";
+      position: absolute;
+      left: 8%;
+      right: 7%;
+      height: 5px;
+      border-radius: 999px;
+      opacity: .88;
+    }
+
+    .capture::before {
+      top: 36%;
+      background: linear-gradient(90deg, transparent, #dc2626 17%, #dc2626 76%, transparent);
+      transform: rotate(-5deg);
+    }
+
+    .capture::after {
+      top: 59%;
+      background: linear-gradient(90deg, transparent, #1769e0 14%, #1769e0 82%, transparent);
+      transform: rotate(6deg);
+    }
+
+    .crop-dim {
+      position: absolute;
+      inset: 0;
+      background: rgba(17,24,39,.42);
+      clip-path: polygon(
+        0 0, 100% 0, 100% 100%, 0 100%,
+        0 0, 17% 0, 17% 18%, 79% 18%, 79% 78%, 17% 78%, 17% 18%, 0 18%
+      );
+    }
+
+    .crop-box {
+      position: absolute;
+      left: 17%;
+      top: 18%;
+      width: 62%;
+      height: 60%;
+      border: 1px solid rgba(255,255,255,.96);
+      outline: 2px solid var(--active);
+      box-shadow: 0 0 0 1px rgba(15,23,42,.22);
+    }
+
+    .handle {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      border: 1px solid var(--active);
+      border-radius: 2px;
+      background: #fff;
+    }
+
+    .handle.tl { left: -6px; top: -6px; }
+    .handle.tm { left: 50%; top: -6px; transform: translateX(-50%); }
+    .handle.tr { right: -6px; top: -6px; }
+    .handle.ml { left: -6px; top: 50%; transform: translateY(-50%); }
+    .handle.mr { right: -6px; top: 50%; transform: translateY(-50%); }
+    .handle.bl { left: -6px; bottom: -6px; }
+    .handle.bm { left: 50%; bottom: -6px; transform: translateX(-50%); }
+    .handle.br { right: -6px; bottom: -6px; }
+
+    .anno-arrow {
+      position: absolute;
+      left: 47%;
+      top: 28%;
+      width: 172px;
+      border-top: 5px solid var(--red);
+      transform: rotate(19deg);
+      filter: drop-shadow(0 1px 1px rgba(15,23,42,.14));
+    }
+
+    .anno-arrow::after {
+      content: "";
+      position: absolute;
+      right: -2px;
+      top: -12px;
+      width: 18px;
+      height: 18px;
+      border-top: 5px solid var(--red);
+      border-right: 5px solid var(--red);
+      transform: rotate(45deg);
+    }
+
+    .anno-rect {
+      position: absolute;
+      left: 26%;
+      top: 52%;
+      width: 184px;
+      height: 78px;
+      border: 5px solid var(--amber);
+      border-radius: 2px;
+      filter: drop-shadow(0 1px 1px rgba(15,23,42,.14));
+    }
+
+    .anno-num {
+      position: absolute;
+      left: 38%;
+      top: 25%;
+      width: 31px;
+      height: 31px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--icon);
+      font-size: 15px;
+      font-weight: 800;
+      box-shadow: 0 1px 2px rgba(15,23,42,.24);
+    }
+
+    .anno-text {
+      position: absolute;
+      left: 57%;
+      top: 61%;
+      padding: 5px 9px;
+      border-radius: 7px;
+      color: #0f3f8f;
+      background: rgba(255,255,255,.92);
+      box-shadow: inset 0 0 0 2px rgba(37,99,235,.58);
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .crop-actions {
+      position: absolute;
+      left: 17%;
+      top: calc(78% + 12px);
+      display: flex;
+      gap: 8px;
+    }
+
+    .crop-action {
+      height: 32px;
+      padding: 0 12px;
+      border: 1px solid var(--hairline-strong);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--icon);
+      box-shadow: 0 12px 26px rgba(15,23,42,.14);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .crop-action.primary {
+      color: #fff;
+      background: var(--blue);
+      border-color: var(--blue);
+    }
+
+    .hint-bar {
+      position: absolute;
+      left: 50%;
+      bottom: 18px;
+      z-index: 18;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 0 13px;
+      transform: translateX(-50%);
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: rgba(248,250,252,.92);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      box-shadow: 0 12px 32px rgba(15,23,42,.10);
+      backdrop-filter: blur(14px);
+    }
+
+    .hint-bar strong {
+      color: var(--active);
+      font-weight: 700;
+    }
+
+    .thumb {
+      position: absolute;
+      right: 36px;
+      bottom: 62px;
+      z-index: 22;
+      width: 226px;
+      overflow: hidden;
+      border: 1px solid var(--hairline-strong);
+      border-radius: 12px;
+      background: rgba(255,255,255,.94);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px) saturate(1.12);
+    }
+
+    .thumb-head {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px 0 12px;
+      border-bottom: 1px solid var(--hairline);
+      color: #475569;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .thumb-close {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      color: var(--muted);
+      background: transparent;
+      padding: 0;
+    }
+
+    .thumb-close svg {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      stroke-width: 2;
+    }
+
+    .thumb-img {
+      position: relative;
+      height: 122px;
+      margin: 10px;
+      overflow: hidden;
+      border: 1px solid var(--hairline-strong);
+      border-radius: 9px;
+      background:
+        linear-gradient(90deg, rgba(100,116,139,.18) 1px, transparent 1px) 0 0 / 34px 34px,
+        linear-gradient(rgba(100,116,139,.16) 1px, transparent 1px) 0 0 / 34px 34px,
+        #fff;
+    }
+
+    .thumb-img::before,
+    .thumb-img::after {
+      content: "";
+      position: absolute;
+      left: 12px;
+      right: 9px;
+      height: 3px;
+      border-radius: 999px;
+    }
+    .thumb-img::before {
+      top: 40%;
+      background: linear-gradient(90deg, transparent, #dc2626, transparent);
+      transform: rotate(-6deg);
+    }
+    .thumb-img::after {
+      top: 64%;
+      background: linear-gradient(90deg, transparent, #1769e0, transparent);
+      transform: rotate(8deg);
+    }
+
+    .thumb-foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 11px 9px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .thumb-foot strong {
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .thumb-progress {
+      height: 3px;
+      background: #e2e8f0;
+    }
+
+    .thumb-progress span {
+      display: block;
+      width: 72%;
+      height: 100%;
+      background: var(--blue);
+    }
+
+    .toast {
+      position: absolute;
+      left: 50%;
+      bottom: 56px;
+      z-index: 21;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 13px;
+      transform: translateX(-50%);
+      border: 1px solid rgba(5,150,105,.24);
+      border-radius: 10px;
+      background: rgba(236,253,245,.94);
+      color: #047857;
+      box-shadow: 0 14px 34px rgba(5,150,105,.14);
+      backdrop-filter: blur(14px);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .toast svg {
+      width: 17px;
+      height: 17px;
+      stroke: currentColor;
+      stroke-width: 2.2;
+      fill: none;
+    }
+
+    @media (max-width: 1180px) {
+      .source-layout { grid-template-columns: 190px 1fr; }
+      .source-inspector { display: none; }
+      .editor-toolbar {
+        width: calc(100vw - 40px);
+        gap: 8px;
+      }
+      .toolbar-center {
+        gap: 5px;
+      }
+      .toolbar-group {
+        gap: 3px;
+      }
+      .tool-btn {
+        width: 32px;
+        height: 32px;
+      }
+      .style-chip {
+        padding: 0 7px;
+      }
+      .canvas-wrap {
+        width: calc(100vw - 88px);
+        height: calc(100vh - 210px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="i-select" viewBox="0 0 24 24"><path d="M5 3l11 11-5 1.2L8.8 20 5 3z"/></symbol>
+      <symbol id="i-crop" viewBox="0 0 24 24"><path d="M7 3v14h14M3 7h14v14M7 7h10v10"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 19L19 5M10 5h9v9"/></symbol>
+      <symbol id="i-line" viewBox="0 0 24 24"><path d="M5 19L19 5"/></symbol>
+      <symbol id="i-rect" viewBox="0 0 24 24"><rect x="5" y="6" width="14" height="12" rx="1.8"/></symbol>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="M5 19l4.2-1L18 9.2 14.8 6 6 14.8 5 19zM13.5 7.3l3.2 3.2"/></symbol>
+      <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 6h14M12 6v12M9 18h6"/></symbol>
+      <symbol id="i-number" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M11 9.5l2-1v7"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7H4v5M5 12a7 7 0 1 0 2-4.9"/></symbol>
+      <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 7h5v5M19 12a7 7 0 1 1-2-4.9"/></symbol>
+      <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 5h12l2 2v12H5zM8 5v6h8V5M8 19v-5h8v5"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.3 4.2L19 7"/></symbol>
+      <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7M6 10v9h12v-9"/></symbol>
+      <symbol id="i-pan" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M7 7l-4 5 4 5M17 7l4 5-4 5M7 7l5-4 5 4M7 17l5 4 5-4"/></symbol>
+      <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="5.5"/><path d="M15 15l5 5M10.5 8v5M8 10.5h5"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M6.5 16l4-4 3 3 2-2 2 3M16.5 8.5h.1"/></symbol>
+    </defs>
+  </svg>
+
+  <main class="desktop">
+    <section class="source-app" aria-label="当前仓库风格的背景应用">
+      <div class="source-top">
+        <span class="dot red"></span>
+        <span class="dot amber"></span>
+        <span class="dot green"></span>
+        <span class="source-title">MF4 Data Analyzer</span>
+      </div>
+      <div class="source-layout">
+        <aside class="source-side">
+          <div class="ghost-line"></div>
+          <div class="ghost-line"></div>
+          <div class="ghost-line"></div>
+          <div class="ghost-line"></div>
+          <div class="ghost-line"></div>
+        </aside>
+        <div class="chart-host">
+          <div class="tabs">
+            <div class="tab active">时域 <span class="mini-copy"><svg width="15" height="15"><use href="#i-copy"/></svg></span></div>
+            <div class="tab">FFT <span class="mini-copy"><svg width="15" height="15"><use href="#i-copy"/></svg></span></div>
+            <div class="tab">FFT-vs-Time <span class="mini-copy"><svg width="15" height="15"><use href="#i-copy"/></svg></span></div>
+            <div class="tab">阶次 <span class="mini-copy"><svg width="15" height="15"><use href="#i-copy"/></svg></span></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-toolbar">
+              <span class="chart-tool"><svg width="18" height="18"><use href="#i-home"/></svg></span>
+              <span class="chart-tool"><svg width="18" height="18"><use href="#i-pan"/></svg></span>
+              <span class="chart-tool"><svg width="18" height="18"><use href="#i-zoom"/></svg></span>
+              <span class="chart-tool hot"><svg width="18" height="18"><use href="#i-copy"/></svg></span>
+              <span class="chart-tool"><svg width="18" height="18"><use href="#i-save"/></svg></span>
+            </div>
+            <div class="chart-grid">
+              <span class="trace red"></span>
+              <span class="trace blue"></span>
+            </div>
+          </div>
+        </div>
+        <aside class="source-inspector">
+          <div class="ghost-line"></div>
+          <div class="ghost-line"></div>
+          <div class="ghost-line"></div>
+          <div class="ghost-line"></div>
+          <div class="ghost-line"></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="editor-layer" aria-label="复制后标注编辑器">
+      <div class="editor-toolbar">
+        <div class="toolbar-left">
+          <button class="tool-btn window-close" type="button" aria-label="关闭"><svg><use href="#i-close"/></svg></button>
+          <span class="separator"></span>
+          <span class="style-chip"><span class="color-dot"></span>红色</span>
+          <span class="style-chip"><span class="stroke-sample"></span>4 px</span>
+        </div>
+
+        <div class="toolbar-center">
+          <div class="toolbar-group" aria-label="编辑工具">
+            <button class="tool-btn" type="button" aria-label="选择"><svg><use href="#i-select"/></svg></button>
+            <button class="tool-btn active" type="button" aria-label="裁剪"><svg><use href="#i-crop"/></svg></button>
+            <button class="tool-btn" type="button" aria-label="箭头"><svg><use href="#i-arrow"/></svg></button>
+            <button class="tool-btn" type="button" aria-label="直线"><svg><use href="#i-line"/></svg></button>
+            <button class="tool-btn" type="button" aria-label="矩形"><svg><use href="#i-rect"/></svg></button>
+            <button class="tool-btn" type="button" aria-label="画笔"><svg><use href="#i-pen"/></svg></button>
+            <button class="tool-btn" type="button" aria-label="文字"><svg><use href="#i-text"/></svg></button>
+            <button class="tool-btn" type="button" aria-label="序号"><svg><use href="#i-number"/></svg></button>
+          </div>
+          <span class="separator"></span>
+          <div class="toolbar-group" aria-label="编辑历史">
+            <button class="tool-btn" type="button" aria-label="撤销"><svg><use href="#i-undo"/></svg></button>
+            <button class="tool-btn" type="button" aria-label="重做"><svg><use href="#i-redo"/></svg></button>
+          </div>
+        </div>
+
+        <div class="toolbar-right">
+          <button class="tool-btn" type="button" aria-label="保存"><svg><use href="#i-save"/></svg></button>
+          <button class="tool-btn primary" type="button" aria-label="完成并复制"><svg><use href="#i-check"/></svg><span>完成复制</span></button>
+        </div>
+      </div>
+
+      <div class="canvas-wrap">
+        <div class="capture"></div>
+        <div class="anno-num">1</div>
+        <div class="anno-arrow"></div>
+        <div class="anno-rect"></div>
+        <div class="anno-text">峰值区间</div>
+        <div class="crop-dim"></div>
+        <div class="crop-box">
+          <span class="handle tl"></span>
+          <span class="handle tm"></span>
+          <span class="handle tr"></span>
+          <span class="handle ml"></span>
+          <span class="handle mr"></span>
+          <span class="handle bl"></span>
+          <span class="handle bm"></span>
+          <span class="handle br"></span>
+        </div>
+        <div class="crop-actions">
+          <button class="crop-action primary" type="button">应用裁剪</button>
+          <button class="crop-action" type="button">退出裁剪</button>
+        </div>
+      </div>
+
+      <div class="hint-bar">
+        <span>单工具栏：工具 / 样式 / 历史 / 输出合并</span>
+        <strong>Enter 完成复制</strong>
+        <span>Esc 关闭 · Ctrl+Z 撤销</span>
+      </div>
+
+      <aside class="thumb" aria-label="右下角复制缩略图">
+        <div class="thumb-head">
+          <span>刚复制的图片</span>
+          <button class="thumb-close" type="button" aria-label="关闭缩略图"><svg><use href="#i-close"/></svg></button>
+        </div>
+        <div class="thumb-img"></div>
+        <div class="thumb-foot">
+          <strong>点击标注/裁剪</strong>
+          <span>3s</span>
+        </div>
+        <div class="thumb-progress"><span></span></div>
+      </aside>
+
+      <div class="toast">
+        <svg><use href="#i-check"/></svg>
+        已复制到剪贴板 · 可直接粘贴
+      </div>
+    </section>
+  </main>
+</body>
+</html>

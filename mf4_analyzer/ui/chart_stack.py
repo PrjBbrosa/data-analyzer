@@ -1,6 +1,6 @@
 """Center pane: QStackedWidget holding the three canvases + stats strip."""
 from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtGui import QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QAction, QFileDialog, QFrame, QLabel, QPushButton, QSizePolicy,
     QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
@@ -255,14 +255,20 @@ def _find_action(toolbar, key_lower):
 
 
 def _apply_mdi_icons(toolbar, active_key=''):
-    """Replace each retained action's icon with its MDI equivalent."""
+    """Replace nav icons and flag the active button for QSS highlighting."""
     for act in toolbar.actions():
         key = act.data() if act.data() else (act.text() or '').strip().lower()
         icon_name = _MDI_NAV_ICONS.get(key)
         if icon_name is None:
             continue
-        color = _ICON_ACTIVE if key == active_key else _ICON_COLOR
+        is_active = key == active_key
+        color = _ICON_ACTIVE if is_active else _ICON_COLOR
         act.setIcon(qta.icon(icon_name, color=color))
+        btn = toolbar.widgetForAction(act)
+        if isinstance(btn, QToolButton):
+            btn.setProperty("navActive", bool(is_active))
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
 
 def _install_nav_shortcuts(card, toolbar):
@@ -1268,7 +1274,8 @@ class ChartStack(QWidget):
     plot_mode_changed = pyqtSignal(str)
     cursor_mode_changed = pyqtSignal(str)
     annotation_enabled_changed = pyqtSignal(str, bool)
-    image_copied = pyqtSignal(str)  # status text for the main window
+    image_copied = pyqtSignal(str)  # legacy status text signal
+    image_captured = pyqtSignal(QPixmap)  # final pixmap for MainWindow publishing
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1376,10 +1383,10 @@ class ChartStack(QWidget):
         self.canvas_order.full_reset()
 
     def _copy_card_image(self, card):
-        """Copy the card's canvas to the clipboard. For the time-domain card,
-        the floating cursor pill (if visible and overlapping the canvas) is
-        composited onto the captured pixmap so the screenshot matches what
-        the user sees on screen.
+        """Capture the card's canvas for MainWindow to publish. For the
+        time-domain card, the floating cursor pill (if visible and overlapping
+        the canvas) is composited onto the captured pixmap so the screenshot
+        matches what the user sees on screen.
 
         The canvas is grabbed at a hi-DPI scale (spec §E) for a crisp,
         DPI-independent bitmap; the canvas caps the magnification for
@@ -1387,7 +1394,6 @@ class ChartStack(QWidget):
         effective factor so it still lines up on the magnified bitmap."""
         from PyQt5.QtCore import QRect
         from PyQt5.QtGui import QPainter
-        from PyQt5.QtWidgets import QApplication
         canvas = card.canvas
         # Effective factor the canvas will actually apply (mirrors its cap)
         # so the pill compositing uses the SAME scale as the rendered bitmap.
@@ -1419,8 +1425,7 @@ class ChartStack(QWidget):
                 )
                 painter.drawPixmap(target, self._grab_pill_scaled(scale))
                 painter.end()
-        QApplication.clipboard().setPixmap(pix)
-        self.image_copied.emit("已复制图为图片")
+        self.image_captured.emit(pix)
 
     def _grab_pill_scaled(self, scale):
         """Grab the cursor pill at ``scale``× for crisp compositing.

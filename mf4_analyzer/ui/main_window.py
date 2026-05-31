@@ -212,6 +212,10 @@ class MainWindow(QMainWindow):
         # be the main window so the toast floats above the central canvas).
         from .widgets import Toast
         self._toast = Toast(self)
+        from .markup import CopyThumbnail
+        self._copy_thumbnail = CopyThumbnail(self)
+        self._copy_thumbnail.clicked.connect(self._open_markup_editor)
+        self._markup_editor = None
 
     # ---- public toast helper ----
     def toast(self, msg, level='info'):
@@ -219,6 +223,42 @@ class MainWindow(QMainWindow):
         if not msg:
             return
         self._toast.show_message(msg, level=level)
+
+    def _publish_copied_pixmap(self, pix):
+        """Publish a freshly captured chart-card pixmap.
+
+        Clipboard + toast are the primary acknowledgement; the thumbnail is an
+        optional second-step editor entry point.
+        """
+        if pix is None or pix.isNull():
+            return
+        QApplication.clipboard().setPixmap(pix)
+        msg = "已复制到剪贴板 · 可直接粘贴"
+        self.statusBar.showMessage(msg, 2000)
+        self.toast(msg, 'success')
+        self._copy_thumbnail.present(pix)
+
+    def _publish_annotated_pixmap(self, pix):
+        """Publish the edited image without re-opening the thumbnail loop."""
+        if pix is None or pix.isNull():
+            return
+        QApplication.clipboard().setPixmap(pix)
+        msg = "已复制(含标注)"
+        self.statusBar.showMessage(msg, 2000)
+        self.toast(msg, 'success')
+
+    def _create_markup_editor(self, pix, on_done):
+        from .markup import MarkupEditor
+        return MarkupEditor(pix, on_done=on_done, parent=self)
+
+    def _open_markup_editor(self, pix):
+        if pix is None or pix.isNull():
+            return
+        editor = self._create_markup_editor(pix, self._publish_annotated_pixmap)
+        self._markup_editor = editor
+        editor.show()
+        editor.raise_()
+        editor.activateWindow()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -242,9 +282,8 @@ class MainWindow(QMainWindow):
         self.toolbar.batch_requested.connect(self.open_batch)
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
-        self.chart_stack.image_copied.connect(
-            lambda msg: (self.statusBar.showMessage(msg, 2000),
-                         self.toast(msg, 'success'))
+        self.chart_stack.image_captured.connect(
+            lambda pix: self._publish_copied_pixmap(pix)
         )
         self.inspector.preset_acknowledged.connect(
             lambda level, msg: self.toast(msg, level)
