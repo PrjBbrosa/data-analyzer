@@ -123,6 +123,206 @@ def test_chart_options_dialog_applies_curve_color(qapp):
     assert ax.lines[0].get_color().lower() == "#123456"
 
 
+def _pg_canvas_with_one_curve(qapp):
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    t = np.linspace(0.0, 1.0, 50)
+    canvas.plot_channels([("speed", True, t, np.sin(t), "#1769e0", "rpm")])
+    return canvas
+
+
+def test_pg_chart_options_reads_grid_initial_state(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas = _pg_canvas_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, canvas.axes_list[0])
+
+    assert dlg.chk_grid.isChecked() is True
+
+
+def test_pg_chart_options_overlay_apply_preserves_x_only_grid(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(900, 480)
+    canvas.show()
+    t = np.linspace(0.0, 1.0, 200)
+    canvas.plot_channels([
+        ("speed", True, t, np.sin(t), "#1769e0", "rpm"),
+        ("torque", True, t, 50.0 + np.cos(t), "#ef4444", "Nm"),
+    ], mode="overlay")
+    QCoreApplication.processEvents()
+
+    pi = canvas._x_master_handle.plot_item
+    dlg = ChartOptionsDialog(None, canvas.axes_list[0])
+    assert dlg.chk_grid.isChecked()
+    dlg.apply_changes()
+    QCoreApplication.processEvents()
+
+    assert bool(pi.getAxis("bottom").grid)
+    assert not pi.getAxis("left").grid
+    assert not pi.getAxis("right").grid
+
+
+def test_pg_chart_options_reads_yscale_initial_state(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas = _pg_canvas_with_one_curve(qapp)
+    handle = canvas.axes_list[0]
+    handle.set_yscale("log")
+
+    dlg = ChartOptionsDialog(None, handle)
+
+    assert dlg.combo_y_scale.currentText() == "对数"
+
+
+def test_pg_chart_options_rebuilds_legend_idempotently(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    canvas = _pg_canvas_with_one_curve(qapp)
+    handle = canvas.axes_list[0]
+    plot_item = handle.plot_item
+    dlg = ChartOptionsDialog(None, handle)
+
+    dlg.chk_legend.setChecked(True)
+    dlg.apply_changes()
+    legend = plot_item.legend
+    assert legend is not None
+    assert len(legend.items) == 1
+
+    dlg.apply_changes()
+    assert plot_item.legend is legend
+    assert len(legend.items) == 1
+
+
+def test_pg_chart_options_curve_color_syncs_owning_axis_color(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui._axis_handle import PG_AXIS_NEUTRAL_COLOR
+
+    canvas = _pg_canvas_with_one_curve(qapp)
+    handle = canvas.axes_list[0]
+    line = handle.get_lines()[0]
+    axis = handle.plot_item.getAxis("left")
+    dlg = ChartOptionsDialog(None, handle)
+
+    dlg.edit_curve_color.setText("#123456")
+    dlg.apply_changes()
+
+    assert line.get_color().lower() == "#123456"
+    assert axis.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
+    assert axis.textPen().color().name().lower() == "#123456"
+
+    seen = []
+    canvas.cursor_info.connect(seen.append)
+    canvas._emit_single_cursor_html(0.5)
+
+    assert canvas.channel_data["speed"][2].lower() == "#123456"
+    assert "#123456" in seen[-1]
+    assert "#1769e0" not in seen[-1]
+
+
+def test_pg_chart_options_curve_color_updates_inside_label_badge(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1200, 800)
+    canvas.show()
+    t = np.linspace(0.0, 1.0, 200)
+    name = "[diya luntai] Rte_ActRetPlausi_mActiveReturnMotorTorq4C VeryLongChannelName"
+    canvas.plot_channels([
+        (name, True, t, np.sin(t * 12.0), "#1769e0", "Nm"),
+        (
+            "[diya luntai] Rte_ESChkPlausi_mESMotorTorque_xds16 VeryLongChannelName",
+            True,
+            t,
+            np.cos(t * 10.0),
+            "#ef4444",
+            "Nm",
+        ),
+    ], mode="subplot")
+    QCoreApplication.processEvents()
+
+    assert canvas._inside_label_items
+    dlg = ChartOptionsDialog(None, canvas.axes_list[0])
+    dlg.edit_curve_color.setText("#123456")
+    dlg.apply_changes()
+    QCoreApplication.processEvents()
+
+    assert canvas.channel_data[name][2].lower() == "#123456"
+    assert canvas._inside_label_items[0].color.name().lower() == "#123456"
+    assert canvas._inside_label_items[0].border.color().name().lower() == "#123456"
+
+
+def test_pg_chart_options_title_hides_inside_label_via_apply(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1200, 800)
+    t = np.linspace(0.0, 1.0, 200)
+    rows = [
+        (
+            "[diya luntai] Rte_ActRetPlausi_mActiveReturnMotorTorq4C VeryLongChannelName",
+            True,
+            t,
+            np.sin(t * 12.0),
+            "#1769e0",
+            "Nm",
+        ),
+        (
+            "[diya luntai] Rte_ESChkPlausi_mESMotorTorque_xds16 VeryLongChannelName",
+            True,
+            t,
+            np.cos(t * 10.0),
+            "#ef4444",
+            "Nm",
+        ),
+    ]
+    canvas.plot_channels(rows, mode="subplot")
+    QCoreApplication.processEvents()
+    assert canvas._inside_label_items
+    assert canvas._inside_label_items[0].isVisible()
+
+    dlg = ChartOptionsDialog(None, canvas.axes_list[0])
+    dlg.edit_title.setText("Custom subplot title")
+    dlg.apply_changes()
+    QCoreApplication.processEvents()
+
+    assert "Custom subplot title" in canvas.axes_list[0].get_title()
+    assert not canvas._inside_label_items[0].isVisible()
+
+
+def test_pg_chart_options_overlay_aux_axis_yscale_updates_own_curve(qapp):
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    t = np.linspace(1.0, 10.0, 200)
+    rows = [
+        ("speed", True, t, 1.0 + np.sin(t), "#1769e0", "rpm"),
+        ("torque", True, t, 50.0 + np.cos(t), "#ef4444", "Nm"),
+    ]
+    canvas.plot_channels(rows, mode="overlay")
+    aux_handle = canvas.axes_list[1]
+    aux_line = canvas._channel_lines["torque"][1].plot_data_item
+    assert aux_line.opts["logMode"][1] is False
+
+    dlg = ChartOptionsDialog(None, aux_handle)
+    dlg.combo_y_scale.setCurrentText("对数")
+    dlg.spin_y_min.setValue(1.0)
+    dlg.spin_y_max.setValue(100.0)
+    dlg.apply_changes()
+
+    assert aux_handle.get_yscale() == "log"
+    assert aux_line.opts["logMode"][1] is True
+
+
 def test_chart_options_dialog_curve_color_updates_owned_axis_and_inside_label(qtbot):
     from mf4_analyzer.ui.canvases import TimeDomainCanvas
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog

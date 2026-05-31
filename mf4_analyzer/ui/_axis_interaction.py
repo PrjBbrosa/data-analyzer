@@ -11,8 +11,18 @@ this helper -- there is nothing to disconnect or re-wire here. See
 ``docs/lessons-learned/pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle.md``
 for the matching guidance on Axes.callbacks (which IS stateful and must
 be managed at the canvas level).
+
+After Task 3 of the pyqtgraph TimeDomain migration, the construction
+site for ``AxisHandle`` lives in ``_make_handle`` below. Today it is a
+thin wrapper around :func:`mf4_analyzer.ui._axis_handle.make_handle`;
+when Task 5 lands ``TimeDomainCanvasPG``, this is the single seam that
+picks ``PgAxisHandle`` for a pyqtgraph ``ViewBox`` and ``MplAxisHandle``
+for a matplotlib ``Axes``. No call-site outside this module needs to
+care which path runs.
 """
 from PyQt5.QtWidgets import QDialog
+
+from ._axis_handle import make_handle as _mpl_make_handle
 
 
 def find_axis_for_dblclick(fig, x_px, y_px, margin):
@@ -98,14 +108,38 @@ def edit_axis_dialog(parent_widget, ax, axis):
     return True
 
 
+def _make_handle(ax_or_view):
+    """Single dispatch point that lifts a raw axis/view into an
+    ``AxisHandle`` (design §5.3).
+
+    Today only the matplotlib branch is live: ``make_handle`` from
+    ``_axis_handle`` either returns the input unchanged (already a
+    handle) or wraps a matplotlib ``Axes`` with ``MplAxisHandle``. T5
+    will extend this to recognize a pyqtgraph ``ViewBox`` / ``PlotItem``
+    pair and produce a ``PgAxisHandle``. Keeping the dispatch in ONE
+    function lets the rest of ``_axis_interaction`` stay branch-free
+    when pyqtgraph lands.
+    """
+    # ``PgAxisHandle`` will be added here when Task 5 lands. Until then
+    # the matplotlib path is the only live branch; the discrimination
+    # rule (handle vs. raw Axes) lives inside ``make_handle``.
+    return _mpl_make_handle(ax_or_view)
+
+
 def edit_chart_options_dialog(parent_widget, ax):
     """Open the lightweight chart options dialog for ``ax``.
 
     Returns True when the dialog accepted or when the user clicked Apply before
     closing it, so callers can redraw for both paths.
+
+    The axis can be either a raw matplotlib ``Axes`` (current
+    behaviour) or an already-wrapped ``AxisHandle`` (forward path).
+    ``_make_handle`` normalises both and ``ChartOptionsDialog`` accepts
+    either form transparently — no caller change required.
     """
     from .dialogs import ChartOptionsDialog
 
-    dlg = ChartOptionsDialog(parent_widget, ax)
+    handle = _make_handle(ax)
+    dlg = ChartOptionsDialog(parent_widget, handle)
     accepted = dlg.exec_() == QDialog.Accepted
     return accepted or dlg.was_applied()

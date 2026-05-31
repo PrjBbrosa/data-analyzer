@@ -85,8 +85,8 @@ def test_main_window_inspector_slot_fixed_at_360_under_qss(qapp, qtbot):
         qapp.setStyleSheet(old_sheet)
 
 
-def test_main_window_inspector_toolbar_toggle_expands_chart_area(qapp, qtbot):
-    from PyQt5.QtWidgets import QSplitter
+def test_main_window_collapsing_inspector_expands_chart_then_repin_restores(qtbot):
+    from mf4_analyzer.ui.side_panels import Side, PanelState
 
     w = MainWindow()
     qtbot.addWidget(w)
@@ -95,26 +95,32 @@ def test_main_window_inspector_toolbar_toggle_expands_chart_area(qapp, qtbot):
     qtbot.waitExposed(w)
     qtbot.wait(50)
 
-    splitter = w.findChild(QSplitter)
+    splitter = w.splitter
     before = splitter.sizes()
     assert w.inspector.isVisible()
-    assert w.toolbar.btn_inspector.isChecked()
+    assert w._strip_right.isVisible() is False
+    assert w._panel_ctrl_right.state == PanelState.PINNED
 
-    w.toolbar.btn_inspector.click()
+    # Simulate dragging the inspector handle to the right edge (collapse).
+    splitter.setSizes([before[0], before[1] + before[2], 0])
+    w._panel_ctrl_right.on_splitter_moved()
     qtbot.wait(20)
 
     hidden = splitter.sizes()
     assert not w.inspector.isVisible()
-    assert not w.toolbar.btn_inspector.isChecked()
+    assert w._strip_right.isVisible() is True
+    assert w._panel_ctrl_right.state == PanelState.HIDDEN
     assert hidden[2] == 0
     assert hidden[1] > before[1]
 
-    w.toolbar.btn_inspector.click()
+    # Click the strip to re-pin: inspector re-docks, chart shrinks back.
+    w._strip_right.pin_requested.emit(Side.RIGHT)
     qtbot.wait(20)
 
     restored = splitter.sizes()
     assert w.inspector.isVisible()
-    assert w.toolbar.btn_inspector.isChecked()
+    assert w._strip_right.isVisible() is False
+    assert w._panel_ctrl_right.state == PanelState.PINNED
     assert 340 <= restored[2] <= 420
     assert restored[1] < hidden[1]
 
@@ -1561,3 +1567,148 @@ def test_safe_restore_primary_xlim_skips_when_only_tangent_overlap(qapp, qtbot):
     ax.applied = None
     w._safe_restore_primary_xlim((1.0, 3.0))
     assert ax.applied == (1.0, 3.0)
+
+
+def _left_axis_channel_name(canvas):
+    """Return the channel NAME currently bound to the overlay left axis,
+    i.e. the channel whose axis handle is axes_list[0]."""
+    if not canvas.axes_list:
+        return None
+    left_handle = canvas.axes_list[0]
+    for name, (handle, _line) in canvas._channel_lines.items():
+        if handle is left_handle:
+            return name
+    return None
+
+
+def test_overlay_set_primary_left_axis_reorders_and_preserves_xlim(
+    qapp, qtbot, tmp_path
+):
+    """Task 3: right-click 设为左轴 on a channel makes it the overlay LEFT-axis
+    channel. The chosen channel must end up bound to axes_list[0] and the
+    current x-zoom window must be preserved across the rebuild."""
+    import pytest
+    import numpy as np
+    import pandas as pd
+    from PyQt5.QtCore import Qt
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    t = np.linspace(0.0, 1.0, 500)
+    p = tmp_path / "three_ch.csv"
+    pd.DataFrame({
+        "time": t,
+        "speed": 1000.0 * np.sin(2 * np.pi * 5 * t),
+        "torque": 50.0 + 5.0 * np.cos(2 * np.pi * 3 * t),
+        "pressure": 0.2 + 0.1 * np.sin(2 * np.pi * 7 * t),
+    }).to_csv(p, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1500, 800)
+    w.show()
+    qtbot.waitExposed(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([str(p)], "")):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    fi = w.channel_list._file_items[fid]
+    w.channel_list._updating = True
+    for i in range(fi.childCount()):
+        fi.child(i).setCheckState(0, Qt.Checked)
+    w.channel_list._updating = False
+    w.channel_list.channels_changed.emit()
+    qapp.processEvents()
+
+    w.chart_stack.set_plot_mode('overlay')
+    qapp.processEvents()
+    w.plot_time()
+    qapp.processEvents()
+    assert w.canvas_time._overlay_mode is True
+
+    # Default: the FIRST checked channel (speed) holds the left axis.
+    assert _left_axis_channel_name(w.canvas_time).endswith("speed")
+
+    # Zoom to a sub-window so we can assert it survives the reorder rebuild.
+    t0, t1 = 0.2, 0.6
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(t0, t1)
+    qapp.processEvents()
+
+    # User right-clicks 'pressure' and picks 设为左轴. The navigator emits
+    # primary_channel_requested(fid, 'pressure'); main_window reorders and
+    # replots preserving xlim.
+    w.navigator.primary_channel_requested.emit(fid, 'pressure')
+    qapp.processEvents()
+
+    # pressure now owns the left axis.
+    left_name = _left_axis_channel_name(w.canvas_time)
+    assert left_name is not None and left_name.endswith("pressure"), (
+        f"expected pressure on the left axis, got {left_name!r}"
+    )
+    # X window preserved across the reorder rebuild.
+    new_primary = w.canvas_time._primary_xaxis_ax
+    nlo, nhi = new_primary.get_xlim()
+    assert nlo == pytest.approx(t0, abs=1e-6)
+    assert nhi == pytest.approx(t1, abs=1e-6)
+
+
+def test_overlay_primary_cleared_when_channel_unchecked(qapp, qtbot, tmp_path):
+    """Task 3: an _overlay_primary that is no longer checked must be ignored
+    so it does not force a hidden channel onto the left axis."""
+    import numpy as np
+    import pandas as pd
+    from PyQt5.QtCore import Qt
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    t = np.linspace(0.0, 1.0, 400)
+    p = tmp_path / "three_ch2.csv"
+    pd.DataFrame({
+        "time": t,
+        "speed": np.sin(2 * np.pi * 5 * t),
+        "torque": np.cos(2 * np.pi * 3 * t),
+        "pressure": 0.5 * t,
+    }).to_csv(p, index=False)
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1500, 800)
+    w.show()
+    qtbot.waitExposed(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([str(p)], "")):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    fi = w.channel_list._file_items[fid]
+
+    def _set_checked(names):
+        w.channel_list._updating = True
+        for i in range(fi.childCount()):
+            _, _fid, ch = fi.child(i).data(0, Qt.UserRole)
+            fi.child(i).setCheckState(0, Qt.Checked if ch in names else Qt.Unchecked)
+        w.channel_list._updating = False
+        w.channel_list.channels_changed.emit()
+        qapp.processEvents()
+
+    _set_checked({"speed", "torque", "pressure"})
+    w.chart_stack.set_plot_mode('overlay')
+    qapp.processEvents()
+    w.plot_time()
+    qapp.processEvents()
+
+    w.navigator.primary_channel_requested.emit(fid, 'pressure')
+    qapp.processEvents()
+    assert _left_axis_channel_name(w.canvas_time).endswith("pressure")
+
+    # Uncheck pressure → it must not be forced onto the left axis. The
+    # left axis falls back to the first remaining checked channel.
+    _set_checked({"speed", "torque"})
+    left_name = _left_axis_channel_name(w.canvas_time)
+    assert left_name is not None and not left_name.endswith("pressure"), (
+        f"unchecked primary must be ignored; got {left_name!r}"
+    )

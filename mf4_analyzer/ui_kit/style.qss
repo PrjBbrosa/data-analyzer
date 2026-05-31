@@ -1098,13 +1098,19 @@ StatsStrip QTreeWidget {
 
 /* Drawers / popovers */
 QDialog#DrawerSurface,
-QDialog#SheetSurface,
-QDialog#PopoverSurface {
+QDialog#SheetSurface {
     border: 1px solid #dfe5ee;
     border-radius: 12px;
     background-color: #ffffff;
 }
-QDialog#PopoverSurface QLabel { color: #334155; }
+/* RebuildTimePopover: the rounded fill rides on an inner QFrame so the
+ * translucent shell dialog shows transparent (not boxed) corners. */
+QFrame#PopoverSurface {
+    border: 1px solid #dfe5ee;
+    border-radius: 12px;
+    background-color: #ffffff;
+}
+QFrame#PopoverSurface QLabel { color: #334155; }
 
 QDialog#ChartOptionsDialog {
     border: 1px solid #dfe5ee;
@@ -1163,13 +1169,68 @@ QDialog#ChartOptionsDialog QLabel#chartOptionsGroupTitle {
 
 /* Menus and status */
 QMenu {
-    padding: 5px;
-    border: 1px solid #dfe5ee;
+    padding: 7px;
+    border: 1px solid rgba(190, 205, 225, 210);
+    border-radius: 12px;
+    background-color: rgba(255, 255, 255, 238);
+}
+QMenu::item {
+    min-height: 24px;
+    padding: 7px 28px 7px 12px;
     border-radius: 8px;
+}
+QMenu::item:selected {
+    background-color: rgba(232, 239, 255, 230);
+    color: #111827;
+}
+QMenu::separator {
+    height: 1px;
+    margin: 7px 10px;
+    background-color: rgba(148, 163, 184, 155);
+}
+
+/* ---- TimeDomain right-click context menu (方案 A · Precision Light) ----
+ * Native pyqtgraph QMenu reshaped in pg_canvases.redesign_pg_context_menu.
+ * objectName 'pgContextMenu' is set on the assembled menu AND each promoted
+ * submenu (网格 / 鼠标操作). White surface, hairline light border, comfortable
+ * row height, light-blue selected state — kept distinct from data-series
+ * colors. Rounded corners ride on WA_TranslucentBackground + this radius
+ * (native shell rounding may be imperfect on some platforms — accepted, per
+ * the design's native-path decision).
+ * Long-form per-side padding (not the shorthand) so a later global QMenu
+ * padding tweak cannot silently clobber one side
+ * (lesson 2026-04-27-qss-padding-overrides-setcontentsmargins). */
+QMenu#pgContextMenu {
+    padding-top: 8px;
+    padding-right: 8px;
+    padding-bottom: 8px;
+    padding-left: 8px;
+    border: 1px solid rgba(177, 195, 217, 200);
+    border-radius: 14px;
     background-color: #ffffff;
 }
-QMenu::item { padding: 6px 24px 6px 10px; border-radius: 6px; }
-QMenu::item:selected { background-color: #e8efff; color: #111827; }
+QMenu#pgContextMenu::item {
+    min-height: 30px;
+    padding-top: 6px;
+    padding-right: 30px;
+    padding-bottom: 6px;
+    padding-left: 14px;
+    border-radius: 9px;
+    color: #172033;
+}
+QMenu#pgContextMenu::item:selected {
+    background-color: #e8efff;
+    color: #0f3f8f;
+}
+QMenu#pgContextMenu::item:checked {
+    color: #0f3f8f;
+    font-weight: 600;
+}
+QMenu#pgContextMenu::separator {
+    height: 1px;
+    margin: 6px 12px;
+    background-color: rgba(148, 163, 184, 90);
+}
 
 QStatusBar {
     background-color: #f5f7fb;
@@ -1193,9 +1254,9 @@ QWidget#chartToolbar QPushButton[role="chart-choice"]:hover {
     color: #334155;
 }
 QWidget#chartToolbar QPushButton[role="chart-choice"]:checked {
-    background-color: #ffffff;
-    border-color: #dfe5ee;
-    color: #0f3f8f;
+    background-color: #e8efff;
+    border-color: #2563eb;
+    color: #2563eb;
 }
 
 QWidget#chartToolbar QLabel#chartAnnotationLabel {
@@ -1277,3 +1338,22 @@ QFrame#chartHintBar QLabel#chartHintContext {
     min-height: 18px;
 }
 #SignalChipRemove:hover { color: #ef4444; }
+
+/* Collapsible side panels: faint edge rail + peek overlay */
+QFrame#sidePanelStrip {
+    background-color: #f3f5f8;
+    border: none;
+    border-right: 1px solid #e2e6eb;
+}
+QFrame#sidePanelStrip[side="right"] {
+    border-right: none;
+    border-left: 1px solid #e2e6eb;
+}
+QFrame#sidePanelStrip:hover {
+    background-color: #e7ecf2;
+}
+QFrame#peekOverlay {
+    background-color: #ffffff;
+    border: 1px solid #d3d8df;
+    border-radius: 10px;
+}

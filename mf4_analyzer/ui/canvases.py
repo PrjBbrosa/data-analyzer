@@ -264,6 +264,30 @@ def _set_series_ylabel(ax, label, color, labelpad=10, unit='', side='left'):
         )
 
 
+def _format_single_cursor_channel_html(channel_name, value, unit_suffix, color):
+    """Render one single-cursor channel row without truncating the name.
+
+    Mirrors the dual-cursor name treatment: a source prefix such as
+    ``[file]`` is shown separately, while the actual signal name keeps the
+    channel color and stays complete.
+    """
+    from html import escape
+
+    prefix, rest = _split_prefixed_label(channel_name)
+    if prefix is not None:
+        return (
+            f'<span style="color:#64748b;">{escape(prefix)}</span> '
+            f'<span style="color:{color};">'
+            f'{escape(rest)}=<b>{value:.4g}{escape(unit_suffix)}</b>'
+            f'</span>'
+        )
+    return (
+        f'<span style="color:{color};">'
+        f'{escape(channel_name)}=<b>{value:.4g}{escape(unit_suffix)}</b>'
+        f'</span>'
+    )
+
+
 def _format_dual_html(rows):
     """rows: list of (channel_name, mn, mx, avg, delta, unit_suffix, color).
     Channel name is rendered on its own line (file prefix + name split when
@@ -1310,6 +1334,28 @@ class TimeDomainCanvas(FigureCanvas):
             self._refresh = True;
             self.draw_idle()
 
+    def reset_cursor_state(self):
+        """Drop dual-cursor placement and request a redraw.
+
+        Compatibility seam for ``MainWindow._reset_cursors`` (Phase 1 of
+        the pyqtgraph TimeDomain migration — see
+        ``docs/superpowers/specs/2026-05-28-pyqtgraph-timedomain-migration-design.md``
+        §5.5). MainWindow previously mutated ``_ax`` / ``_bx`` /
+        ``_placing`` / ``_refresh`` directly; the new pyqtgraph canvas
+        will provide the same method so the call site stays
+        renderer-agnostic.
+
+        Ordering follows
+        ``docs/lessons-learned/pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before.md``:
+        mutate fields first, request the redraw last. ``draw_idle()``
+        does not synchronously re-schedule a debounced viewport refresh
+        because no ``set_xlim`` is invoked here.
+        """
+        self._ax = self._bx = None
+        self._placing = 'A'
+        self._refresh = True
+        self.draw_idle()
+
     def _ensure_artists(self):
         if self._cursor_artists: return
         for ax in self.axes_list:
@@ -1409,19 +1455,13 @@ class TimeDomainCanvas(FigureCanvas):
         self.fig.canvas.restore_region(self._bg)
         for i, vl in enumerate(self._cursor_artists):
             if i < len(self.axes_list): vl.set_xdata([x, x]); vl.set_visible(True); self.axes_list[i].draw_artist(vl)
-        from html import escape
         sep = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>')
         parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
         for ch, (tf, sf, color, u) in self.channel_data.items():
             if len(tf):
                 idx = min(np.searchsorted(tf, x), len(sf) - 1)
                 unit_s = f" {u}" if u else ""
-                name = ch[:18]
-                parts.append(
-                    f'<span style="color:{color};">'
-                    f'{escape(name)}=<b>{sf[idx]:.4g}{escape(unit_s)}</b>'
-                    f'</span>'
-                )
+                parts.append(_format_single_cursor_channel_html(ch, sf[idx], unit_s, color))
         self.fig.canvas.blit(self.fig.bbox)
         self.cursor_info.emit(sep.join(parts))
 

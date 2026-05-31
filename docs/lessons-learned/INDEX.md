@@ -31,6 +31,7 @@ lesson by default.
 | [Custom X Axis Keeps Time Range Filtering](pyqt-ui/2026-05-26-custom-x-time-range-filter.md) | Touching `plot_time`, Inspector range controls, custom X-axis channel | See lesson |
 | [TimeDomain State Preservation](pyqt-ui/2026-05-26-timedomain-state-preservation.md) | Touching TimeDomain replots, channel selection/editing, plot mode | See lesson |
 | [Overlay Selection Drops Pan](pyqt-ui/2026-05-27-overlay-selection-drops-pan.md) | Click-to-enter / click-to-exit gestures on a matplotlib canvas while the nav toolbar is in pan/zoom. | `tests/ui/test_chart_stack.py` |
+| [Pyqtgraph Subplot Layout Settle](codex-pg-subplot-layout-settle.md) | Load when changing pyqtgraph TimeDomain subplot axes, grid, tick | See lesson |
 
 ## Selection Rules
 

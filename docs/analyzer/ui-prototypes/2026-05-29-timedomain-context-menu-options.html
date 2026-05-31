@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TimeDomain 右键菜单重设计方案</title>
+  <style>
+    :root {
+      --bg: #eef3f8;
+      --panel: rgba(255,255,255,.78);
+      --panel-solid: #ffffff;
+      --line: rgba(183,198,216,.64);
+      --line-strong: #bdcada;
+      --text: #111827;
+      --muted: #64748b;
+      --blue: #1769e0;
+      --blue-soft: rgba(232,239,255,.92);
+      --blue-line: #9ebcf7;
+      --red: #ef4444;
+      --violet: #7c3aed;
+      --shadow: 0 24px 70px rgba(22, 35, 55, .16), 0 2px 8px rgba(22, 35, 55, .08);
+      --radius: 18px;
+      font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(23,105,224,.06) 1px, transparent 1px) 0 0 / 96px 96px,
+        linear-gradient(rgba(23,105,224,.04) 1px, transparent 1px) 0 0 / 96px 96px,
+        radial-gradient(circle at 20% 8%, rgba(23,105,224,.08), transparent 34%),
+        var(--bg);
+      color: var(--text);
+    }
+
+    main {
+      width: min(1320px, calc(100vw - 48px));
+      margin: 0 auto;
+      padding: 30px 0 48px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 24px;
+      align-items: end;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+      letter-spacing: 0;
+      line-height: 1.2;
+    }
+
+    .lead {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .decision-card {
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.72);
+      box-shadow: 0 18px 50px rgba(15,23,42,.10);
+      backdrop-filter: blur(18px);
+    }
+
+    .decision-card b {
+      color: #0f3f8f;
+      font-size: 14px;
+    }
+
+    .decision-card p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .section-title {
+      margin: 28px 0 12px;
+      font-size: 18px;
+      line-height: 1.3;
+    }
+
+    .principles {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .principle {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,.68);
+      padding: 14px 16px;
+      backdrop-filter: blur(14px);
+    }
+
+    .principle strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .principle span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .option-grid {
+      display: grid;
+      gap: 24px;
+    }
+
+    .option {
+      display: grid;
+      grid-template-columns: 430px 1fr;
+      gap: 22px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(255,255,255,.58);
+      box-shadow: 0 22px 70px rgba(15,23,42,.10);
+      backdrop-filter: blur(22px);
+    }
+
+    .option h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.3;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 9px;
+      margin-left: 8px;
+      border-radius: 999px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      border: 1px solid var(--blue-line);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .option p {
+      margin: 9px 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .stage {
+      position: relative;
+      min-height: 430px;
+      overflow: hidden;
+      border: 1px solid #dde6f0;
+      border-radius: 18px;
+      background: #fbfdff;
+    }
+
+    .plot {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, transparent 0 23%, rgba(148,163,184,.22) 23% 23.2%, transparent 23.2% 50%, rgba(148,163,184,.22) 50% 50.2%, transparent 50.2% 75%, rgba(148,163,184,.22) 75% 75.2%, transparent 75.2%),
+        linear-gradient(transparent 0 24%, rgba(239,68,68,.24) 24% 24.3%, transparent 24.3% 49%, rgba(239,68,68,.16) 49% 49.3%, transparent 49.3% 73%, rgba(124,58,237,.16) 73% 73.3%, transparent 73.3%);
+    }
+
+    .curve-red,
+    .curve-violet {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 3px;
+      transform: skewY(-8deg);
+      opacity: .8;
+    }
+
+    .curve-red { top: 58%; background: linear-gradient(90deg, transparent, var(--red), transparent); }
+    .curve-violet { top: 32%; background: linear-gradient(90deg, transparent, var(--violet), transparent); transform: skewY(12deg); }
+
+    .menu-row {
+      display: grid;
+      gap: 8px;
+    }
+
+    .menu-stack {
+      position: absolute;
+      left: 28px;
+      top: 34px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .menu {
+      width: 190px;
+      padding: 8px;
+      border: 1px solid rgba(177,195,217,.78);
+      border-radius: 18px;
+      background: rgba(255,255,255,.82);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(24px);
+    }
+
+    .menu.compact { width: 172px; }
+    .menu.wide { width: 276px; }
+    .menu.deep { width: 316px; }
+
+    .item {
+      display: grid;
+      grid-template-columns: 24px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      min-height: 38px;
+      padding: 6px 9px;
+      border-radius: 11px;
+      color: #172033;
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .item .ico {
+      width: 22px;
+      height: 22px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 7px;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 800;
+      background: transparent;
+    }
+
+    .item.active {
+      background: linear-gradient(180deg, rgba(232,239,255,.96), rgba(218,231,255,.86));
+      color: #0f3f8f;
+    }
+
+    .item.active .ico {
+      color: #ffffff;
+      background: var(--blue);
+    }
+
+    .item.muted { color: #94a3b8; }
+
+    .chev {
+      color: #64748b;
+      font-size: 13px;
+    }
+
+    .sep {
+      height: 1px;
+      margin: 8px 12px;
+      background: rgba(148,163,184,.32);
+    }
+
+    .inline-help {
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(248,250,252,.88);
+      border: 1px solid rgba(226,232,240,.9);
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .axis-panel {
+      width: 300px;
+      padding: 12px;
+      border: 1px solid rgba(177,195,217,.78);
+      border-radius: 18px;
+      background: rgba(255,255,255,.86);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(24px);
+    }
+
+    .axis-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      font-size: 13px;
+      font-weight: 800;
+      color: #0f2749;
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: 82px 1fr 1fr;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .label {
+      color: #475569;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .input {
+      min-height: 34px;
+      border: 1px solid #dce6f2;
+      border-radius: 10px;
+      background: #ffffff;
+      padding: 7px 10px;
+      font-size: 13px;
+      color: #111827;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 36px;
+      padding: 7px 8px;
+      border-radius: 10px;
+      color: #334155;
+      font-size: 13px;
+    }
+
+    .toggle-row:hover { background: #f5f8fc; }
+
+    .switch {
+      width: 34px;
+      height: 20px;
+      border-radius: 999px;
+      background: #cbd5e1;
+      padding: 2px;
+    }
+
+    .switch:after {
+      content: "";
+      display: block;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(15,23,42,.18);
+    }
+
+    .switch.on { background: var(--blue); }
+    .switch.on:after { transform: translateX(14px); }
+
+    .drawer {
+      position: absolute;
+      right: 24px;
+      top: 28px;
+      width: 328px;
+      border: 1px solid rgba(177,195,217,.78);
+      border-radius: 20px;
+      background: rgba(255,255,255,.9);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(24px);
+      overflow: hidden;
+    }
+
+    .drawer-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(226,232,240,.9);
+      background: rgba(248,250,252,.84);
+    }
+
+    .drawer-head strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .drawer-head span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .drawer-body { padding: 12px; }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 8px;
+    }
+
+    .chip {
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 10px;
+      border: 1px solid #dce6f2;
+      border-radius: 999px;
+      background: #ffffff;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .chip.on {
+      border-color: var(--blue-line);
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .notes {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .note {
+      padding: 12px;
+      border-radius: 14px;
+      background: rgba(248,250,252,.82);
+      border: 1px solid rgba(226,232,240,.92);
+    }
+
+    .note b {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+
+    .note span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .matrix {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,.72);
+    }
+
+    .matrix th,
+    .matrix td {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(226,232,240,.88);
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .matrix th {
+      background: rgba(248,250,252,.88);
+      color: #334155;
+      font-size: 12px;
+    }
+
+    .matrix tr:last-child td { border-bottom: none; }
+
+    .keep { color: #15803d; font-weight: 800; }
+    .hide { color: #a16207; font-weight: 800; }
+    .drop { color: #b91c1c; font-weight: 800; }
+
+    .impl {
+      margin-top: 24px;
+      padding: 18px 20px;
+      border: 1px solid rgba(177,195,217,.72);
+      border-radius: 18px;
+      background: rgba(255,255,255,.72);
+      color: #334155;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: #eef4fb;
+      color: #0f3f8f;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>TimeDomain 右键菜单重设计方案</h1>
+        <p class="lead">目标不是把 pyqtgraph 的原生菜单翻译完就交给用户，而是把“看图时真正会用”的动作放在前面，把高级/危险/少用的原生项收纳起来，并彻底避免说明气泡挡住二级菜单。</p>
+      </div>
+      <div class="decision-card">
+        <b>推荐方向：方案 A · 常用优先</b>
+        <p>最适合 TraceLab 日常看曲线：一级菜单少、二级菜单清楚、说明固定在菜单底部，不再浮在最前面。高级 pyqtgraph 功能保留但降级到三级“高级显示”。</p>
+      </div>
+    </header>
+
+    <h3 class="section-title">设计原则</h3>
+    <section class="principles">
+      <div class="principle"><strong>说明不遮挡</strong><span>禁用菜单动作 tooltip，改成底部 inline help 或右侧详情栏。</span></div>
+      <div class="principle"><strong>原生高级项降级</strong><span>Transform、Average、Alpha、Points 不是主流程，统一收进高级层。</span></div>
+      <div class="principle"><strong>圆角真的圆</strong><span>PyQt 里必须让 popup 外层透明，或改成自绘 popup，否则 QMenu 窗口外壳仍会是方的。</span></div>
+      <div class="principle"><strong>层级不超过三层</strong><span>一级做导航，二级做设置，三级只放专业/低频功能。</span></div>
+    </section>
+
+    <section class="option-grid">
+      <article class="option">
+        <div>
+          <h2>方案 A · 常用优先<span class="tag">推荐</span></h2>
+          <p>一级菜单只放用户能理解的动作。X/Y 轴进入二级设置面板，绘图高级项放三级 drawer。解释文案固定在底部，不使用悬浮 tooltip。</p>
+          <div class="notes">
+            <div class="note"><b>优点</b><span>最接近现有浅色系统，学习成本低。</span></div>
+            <div class="note"><b>代价</b><span>需要用自定义菜单结构替代部分 pyqtgraph 原生菜单。</span></div>
+            <div class="note"><b>适用</b><span>日常分析、调图、导图。</span></div>
+          </div>
+        </div>
+        <div class="stage">
+          <div class="plot"></div><div class="curve-red"></div><div class="curve-violet"></div>
+          <div class="menu-stack">
+            <div class="menu">
+              <div class="item"><span class="ico">R</span><span>查看全部</span><span></span></div>
+              <div class="sep"></div>
+              <div class="item active"><span class="ico">X</span><span>X 轴范围</span><span class="chev">></span></div>
+              <div class="item"><span class="ico">Y</span><span>Y 轴范围</span><span class="chev">></span></div>
+              <div class="item"><span class="ico">M</span><span>鼠标操作</span><span class="chev">></span></div>
+              <div class="sep"></div>
+              <div class="item"><span class="ico">G</span><span>网格与显示</span><span class="chev">></span></div>
+              <div class="item"><span class="ico">E</span><span>导出图像...</span><span></span></div>
+              <div class="inline-help">X 轴范围：设置横轴显示区间、自动缩放、鼠标交互和轴关联。</div>
+            </div>
+            <div class="axis-panel">
+              <div class="axis-title"><span>X 轴范围</span><span>二级</span></div>
+              <div class="field-grid">
+                <div class="label">范围</div>
+                <div class="input">-3.629</div>
+                <div class="input">26.301</div>
+              </div>
+              <div class="field-grid">
+                <div class="label">自动</div>
+                <div class="input" style="grid-column:span 2">100%</div>
+              </div>
+              <div class="toggle-row"><span>鼠标交互</span><span class="switch on"></span></div>
+              <div class="toggle-row"><span>仅自动平移</span><span class="switch"></span></div>
+              <div class="toggle-row"><span>仅可见数据</span><span class="switch"></span></div>
+              <div class="field-grid" style="grid-template-columns:82px 1fr">
+                <div class="label">关联轴</div>
+                <div class="input">无</div>
+              </div>
+              <div class="inline-help">推荐默认只展示这些；反转轴等低频项放入“更多”。</div>
+            </div>
+            <div class="drawer" style="top: 198px;">
+              <div class="drawer-head"><strong>高级显示</strong><span>三级：给专业用户，默认折叠</span></div>
+              <div class="drawer-body">
+                <div class="chips">
+                  <span class="chip on">X 网格</span>
+                  <span class="chip">Y 网格</span>
+                  <span class="chip">降采样</span>
+                  <span class="chip">点显示</span>
+                  <span class="chip">透明度</span>
+                  <span class="chip">去均值</span>
+                </div>
+                <div class="inline-help">Transform / Average / Alpha / Points 不应出现在一级菜单。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="option">
+        <div>
+          <h2>方案 B · 分组菜单</h2>
+          <p>保留传统右键菜单形态，但把项目分组为“视图 / 坐标轴 / 显示 / 导出”。二级子菜单仍是菜单，不展开复杂表单。</p>
+          <div class="notes">
+            <div class="note"><b>优点</b><span>实现成本最低，可以从现有 QMenu 继续演进。</span></div>
+            <div class="note"><b>代价</b><span>坐标轴数值输入仍然拥挤，不适合复杂设置。</span></div>
+            <div class="note"><b>适用</b><span>短期止血、替换原生菜单。</span></div>
+          </div>
+        </div>
+        <div class="stage">
+          <div class="plot"></div><div class="curve-red"></div><div class="curve-violet"></div>
+          <div class="menu-stack">
+            <div class="menu compact">
+              <div class="item active"><span class="ico">V</span><span>视图</span><span class="chev">></span></div>
+              <div class="item"><span class="ico">A</span><span>坐标轴</span><span class="chev">></span></div>
+              <div class="item"><span class="ico">S</span><span>显示</span><span class="chev">></span></div>
+              <div class="item"><span class="ico">E</span><span>导出</span><span class="chev">></span></div>
+              <div class="inline-help">只在底部显示解释，不再弹悬浮提示。</div>
+            </div>
+            <div class="menu wide">
+              <div class="item"><span class="ico">R</span><span>查看全部</span><span></span></div>
+              <div class="item active"><span class="ico">P</span><span>平移模式</span><span></span></div>
+              <div class="item"><span class="ico">Z</span><span>框选缩放模式</span><span></span></div>
+              <div class="sep"></div>
+              <div class="item"><span class="ico">B</span><span>回到上一视图</span><span></span></div>
+              <div class="item"><span class="ico">F</span><span>前进到下一视图</span><span></span></div>
+            </div>
+            <div class="menu deep">
+              <div class="item"><span class="ico">X</span><span>X 轴：自动范围</span><span></span></div>
+              <div class="item"><span class="ico">Y</span><span>Y 轴：自动范围</span><span></span></div>
+              <div class="item muted"><span class="ico">L</span><span>关联坐标轴</span><span>低频</span></div>
+              <div class="inline-help">三级只保留低频项；不要把 pyqtgraph 原生表单直接塞进来。</div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="option">
+        <div>
+          <h2>方案 C · 命令面板式</h2>
+          <p>右键后不是多级菜单，而是一个小型命令面板：顶部搜索/过滤，下面是常用动作和高级折叠组。适合后续功能变多，但和传统菜单差异更大。</p>
+          <div class="notes">
+            <div class="note"><b>优点</b><span>解释空间充足，不会出现层级遮挡。</span></div>
+            <div class="note"><b>代价</b><span>不是标准 QMenu，交互习惯需要适应。</span></div>
+            <div class="note"><b>适用</b><span>长期可扩展版本。</span></div>
+          </div>
+        </div>
+        <div class="stage">
+          <div class="plot"></div><div class="curve-red"></div><div class="curve-violet"></div>
+          <div class="drawer" style="left: 32px; right: auto; top: 36px; width: 390px;">
+            <div class="drawer-head"><strong>图表操作</strong><span>右键打开 · 输入关键词过滤命令</span></div>
+            <div class="drawer-body">
+              <div class="input" style="margin-bottom:10px;color:#64748b">搜索：范围 / 网格 / 导出 / 鼠标</div>
+              <div class="item active"><span class="ico">R</span><span>查看全部</span><span>常用</span></div>
+              <div class="item"><span class="ico">X</span><span>设置 X 轴范围</span><span class="chev">></span></div>
+              <div class="item"><span class="ico">Y</span><span>设置 Y 轴范围</span><span class="chev">></span></div>
+              <div class="item"><span class="ico">G</span><span>切换网格</span><span></span></div>
+              <div class="item"><span class="ico">E</span><span>导出当前视图</span><span></span></div>
+              <div class="sep"></div>
+              <div class="item muted"><span class="ico">A</span><span>高级显示...</span><span>折叠</span></div>
+              <div class="inline-help">当前高亮：查看全部。把 X/Y 范围恢复到数据全集，适合迷路或缩放过深时使用。</div>
+            </div>
+          </div>
+          <div class="axis-panel" style="position:absolute; left:438px; top:126px;">
+            <div class="axis-title"><span>三级：X 轴详情</span><span>面板</span></div>
+            <div class="field-grid">
+              <div class="label">最小</div>
+              <div class="input" style="grid-column:span 2">-3.629</div>
+            </div>
+            <div class="field-grid">
+              <div class="label">最大</div>
+              <div class="input" style="grid-column:span 2">26.301</div>
+            </div>
+            <div class="toggle-row"><span>自动范围</span><span class="switch on"></span></div>
+            <div class="toggle-row"><span>鼠标交互</span><span class="switch on"></span></div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <h3 class="section-title">功能取舍建议</h3>
+    <table class="matrix">
+      <thead>
+        <tr><th>功能</th><th>建议</th><th>原因</th><th>放置层级</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>查看全部</td><td class="keep">保留</td><td>用户缩放迷路时最高频，和 toolbar Home 一致。</td><td>一级</td></tr>
+        <tr><td>X/Y 轴范围、自动缩放、鼠标交互</td><td class="keep">保留</td><td>调图核心功能，但原生表单太拥挤，应重排为二级面板。</td><td>二级</td></tr>
+        <tr><td>鼠标模式</td><td class="keep">保留但改名</td><td>“3 button / 1 button”看不懂；改成“平移模式 / 框选缩放模式”。</td><td>一级或二级</td></tr>
+        <tr><td>网格、导出</td><td class="keep">保留</td><td>可理解、可见效果明确；导出也可直接走现有 toolbar 保存。</td><td>一级</td></tr>
+        <tr><td>Transform / FFT / 去均值 / dy/dx</td><td class="hide">收起</td><td>会改变用户对原始时域数据的理解，放一级容易误触。</td><td>三级高级</td></tr>
+        <tr><td>Average / Alpha / Points</td><td class="hide">收起</td><td>低频显示调试功能，不应挤占主菜单空间。</td><td>三级高级</td></tr>
+        <tr><td>pyqtgraph 原生 Export Dialog</td><td class="hide">可保留但降级</td><td>功能多但界面不是本应用风格；主路径建议用 toolbar 保存/复制。</td><td>高级或导出二级</td></tr>
+        <tr><td>悬浮 tooltip</td><td class="drop">不要</td><td>会挡住子菜单和设置面板；改成 inline help。</td><td>删除</td></tr>
+      </tbody>
+    </table>
+
+    <section class="impl">
+      <b>实现备注：</b>
+      PyQt 如果继续用原生 <code>QMenu</code>，仅靠 <code>border-radius</code> 往往会留下方形窗口外壳。短期可尝试 <code>WA_TranslucentBackground</code> + 透明外层背景 + 禁用菜单 tooltip；更稳的方向是把 TimeDomain 右键菜单改成自绘 <code>QFrame</code>/<code>QWidget</code> popup，这样二级/三级层、圆角、阴影和 inline help 都可控。最终落地前需要真实 Qt 截图验证圆角外框、间距、字体和层级遮挡。
+    </section>
+  </main>
+</body>
+</html>

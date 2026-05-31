@@ -2,7 +2,7 @@
 from PyQt5.QtCore import Qt, QEvent, QPoint
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtWidgets import (
-    QAbstractSpinBox, QApplication, QDialog, QHBoxLayout, QLabel,
+    QAbstractSpinBox, QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
     QPushButton, QVBoxLayout,
 )
 
@@ -18,11 +18,21 @@ GAP = 4
 class RebuildTimePopover(QDialog):
     def __init__(self, parent, target_filename, current_fs):
         super().__init__(parent)
-        self.setObjectName("PopoverSurface")
+        self.setObjectName("PopoverShell")
         # §8.1: frameless QDialog with manual focus-out close. NOT Qt.Popup
         # because Qt.Popup + child QSpinBox can close when the spin buttons
         # take focus; the dialog must stay open while user edits Fs.
-        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setWindowFlags(
+            Qt.Dialog | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+        )
+        # Rounded corners with no leftover square frame: the dialog *window*
+        # is translucent (so the area outside the 12px radius is transparent,
+        # not an opaque box / native rectangular shadow), and an inner QFrame
+        # (#PopoverSurface) paints the rounded white surface. A top-level
+        # QDialog does NOT reliably paint its own stylesheet background once
+        # translucent, so the fill must live on a child QFrame — parity with
+        # inspector_sections._PresetHoverCard and SignalPickerPopup.
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
         self.setModal(False)
         # §8.2 (2026-04-26): Guard against the accept/WindowDeactivate
@@ -39,7 +49,16 @@ class RebuildTimePopover(QDialog):
         # already in flight, while still letting genuine focus-out
         # deactivates (no explicit close pending) reject as before.
         self._is_closing = False
-        root = QVBoxLayout(self)
+        # Transparent shell holds a single rounded surface frame. Zero margins
+        # so frameGeometry()/sizeHint() (used by show_at clamping) stay tied
+        # to the content size, not an inflated shadow gutter.
+        shell = QVBoxLayout(self)
+        shell.setContentsMargins(0, 0, 0, 0)
+        self._surface = QFrame(self)
+        self._surface.setObjectName("PopoverSurface")
+        self._surface.setAttribute(Qt.WA_StyledBackground, True)
+        shell.addWidget(self._surface)
+        root = QVBoxLayout(self._surface)
         root.setContentsMargins(12, 10, 12, 10)
         root.addWidget(QLabel("重建时间轴"))
         root.addWidget(QLabel(f"目标：[{target_filename}]"))

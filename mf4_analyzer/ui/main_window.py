@@ -130,6 +130,9 @@ class MainWindow(QMainWindow):
         self.toolbar = Toolbar(self)
         root.addWidget(self.toolbar)
 
+        from PyQt5.QtWidgets import QHBoxLayout
+        from .side_panels import Side, SidePanelStrip, PeekOverlay, SidePanelController
+
         splitter = QSplitter(Qt.Horizontal, self)
         self.splitter = splitter
         self.navigator = FileNavigator(self)
@@ -138,29 +141,56 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.navigator)
         splitter.addWidget(self.chart_stack)
         splitter.addWidget(self.inspector)
-        # 2026-04-26 R3 紧凑化 fix-5: align the inspector splitter slot with
-        # the fixed visible Inspector width (360). The 60px bump from 300→360
-        # prevents a visible gap on first launch where the splitter would
-        # otherwise hand the inspector less width than its content needs.
         splitter.setSizes([250, 900, 360])
-        # 2026-04-26 inspector 右侧空白二次修复:
-        # Without explicit stretch factors, QSplitter distributes window-resize
-        # growth proportionally across panes by current size. That gives the
-        # inspector pane more "slot" width than its setMaximumWidth(376), and
-        # the surplus inside the slot reads as a visible empty column. Pin the
-        # chart stack as the only stretchy pane; navigator and inspector keep
-        # their initial sizes regardless of window width.
         splitter.setStretchFactor(0, 0)  # navigator: no stretch
         splitter.setStretchFactor(1, 1)  # chart_stack: absorbs all extra width
         splitter.setStretchFactor(2, 0)  # inspector: no stretch
-        splitter.setCollapsible(0, False)
+        # Collapsible left/right so a handle-drag to the edge hides the panel
+        # (SidePanelController.on_splitter_moved picks that up). Canvas never collapses.
+        splitter.setCollapsible(0, True)
         splitter.setCollapsible(1, False)
-        splitter.setCollapsible(2, False)
+        splitter.setCollapsible(2, True)
         splitter.setHandleWidth(3)
         self.navigator.setMinimumWidth(220)
         self.chart_stack.setMinimumWidth(400)
         self.inspector.setMinimumWidth(self.inspector.maximumWidth())
-        root.addWidget(splitter, stretch=1)
+
+        # Edge strips flank the splitter; each is visible only while its side is
+        # hidden. Wrapping the splitter in an HBox keeps the strips out of the
+        # toolbar's vertical band.
+        self._strip_left = SidePanelStrip(Side.LEFT)
+        self._strip_right = SidePanelStrip(Side.RIGHT)
+        strip_row = QWidget(self)
+        self._strip_row = strip_row
+        row = QHBoxLayout(strip_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self._strip_left)
+        row.addWidget(splitter, stretch=1)
+        row.addWidget(self._strip_right)
+        root.addWidget(strip_row, stretch=1)
+
+        # Peek overlays are parented to the splitter row (NOT cw) so they float
+        # over the canvas region only and never cover the toolbar; they are child
+        # widgets (never top-level frameless windows) to avoid macOS native shadow.
+        self._overlay_left = PeekOverlay(strip_row)
+        self._overlay_right = PeekOverlay(strip_row)
+        # canvas=self.chart_stack -> width changes are taken from the canvas pane,
+        # looked up by live index so cross-side peek doesn't drift the index.
+        self._panel_ctrl_left = SidePanelController(
+            side=Side.LEFT, splitter=splitter, panel=self.navigator, panel_index=0,
+            strip=self._strip_left, overlay=self._overlay_left, host=strip_row,
+            default_width=250, canvas=self.chart_stack, parent=self,
+        )
+        self._panel_ctrl_right = SidePanelController(
+            side=Side.RIGHT, splitter=splitter, panel=self.inspector, panel_index=2,
+            strip=self._strip_right, overlay=self._overlay_right, host=strip_row,
+            default_width=360, canvas=self.chart_stack, parent=self,
+        )
+        splitter.splitterMoved.connect(
+            lambda *_: (self._panel_ctrl_left.on_splitter_moved(),
+                        self._panel_ctrl_right.on_splitter_moved())
+        )
 
         # Convenience aliases pointing to children of ChartStack / Navigator —
         # these are real widgets reachable via the new topology, not shims.
@@ -191,44 +221,15 @@ class MainWindow(QMainWindow):
         super().resizeEvent(e)
         if hasattr(self, '_toast') and self._toast.isVisible():
             self._toast._reposition()
+        if hasattr(self, '_panel_ctrl_left'):
+            self._panel_ctrl_left.reposition()
+            self._panel_ctrl_right.reposition()
 
-    def set_inspector_visible(self, visible):
-        visible = bool(visible)
-        splitter = self.splitter
-        sizes = splitter.sizes()
-        if len(sizes) != 3:
-            self.inspector.setVisible(visible)
-            self.toolbar.set_inspector_visible(visible)
-            return
-
-        nav_width = sizes[0] if sizes[0] > 0 else self.navigator.width()
-        total_width = sum(sizes) if sum(sizes) > 0 else splitter.width()
-        restore_width = getattr(
-            self, '_inspector_restore_width', self.inspector.maximumWidth()
-        )
-        restore_width = max(
-            self.inspector.minimumWidth(),
-            min(int(restore_width), self.inspector.maximumWidth()),
-        )
-
-        if visible:
-            self.inspector.setVisible(True)
-            chart_width = max(
-                self.chart_stack.minimumWidth(),
-                total_width - nav_width - restore_width,
-            )
-            splitter.setSizes([nav_width, chart_width, restore_width])
-        else:
-            if sizes[2] > 0:
-                self._inspector_restore_width = sizes[2]
-            self.inspector.setVisible(False)
-            chart_width = max(
-                self.chart_stack.minimumWidth(),
-                total_width - nav_width,
-            )
-            splitter.setSizes([nav_width, chart_width, 0])
-
-        self.toolbar.set_inspector_visible(visible)
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        if hasattr(self, '_panel_ctrl_left'):
+            self._panel_ctrl_left.reposition()
+            self._panel_ctrl_right.reposition()
 
     def _connect(self):
         # --- New-module wiring ---
@@ -237,7 +238,6 @@ class MainWindow(QMainWindow):
         self.toolbar.export_requested.connect(self.export_excel)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
-        self.toolbar.inspector_visibility_changed.connect(self.set_inspector_visible)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
         self.chart_stack.image_copied.connect(
             lambda msg: (self.statusBar.showMessage(msg, 2000),
@@ -251,6 +251,9 @@ class MainWindow(QMainWindow):
         self.navigator.file_activated.connect(self._on_file_activated)
         self.navigator.file_close_requested.connect(self._on_file_close_requested)
         self.navigator.close_all_requested.connect(self._on_close_all_requested)
+        self.navigator.primary_channel_requested.connect(
+            self._on_primary_channel_requested
+        )
 
         # Canvas cursor signals are owned by ChartStack; MainWindow doesn't
         # need to subscribe (ChartStack updates the pill itself).
@@ -331,6 +334,11 @@ class MainWindow(QMainWindow):
         # active when the entry was inserted).
         self._last_range_state = None   # (enabled, lo, hi) or None
         self._last_plot_mode = None     # 'overlay' / 'subplot' / None
+        # Overlay primary-axis pick: (fid, ch) chosen via the channel
+        # right-click 设为左轴 menu. When set AND still checked AND in overlay
+        # mode, plot_time reorders the checked list so this channel is index 0
+        # (bound to the left axis). Cleared/ignored otherwise.
+        self._overlay_primary = None
 
     def _on_mode_changed(self, mode):
         self.chart_stack.set_mode(mode)
@@ -386,6 +394,18 @@ class MainWindow(QMainWindow):
         finally:
             if cur_xlim is not None:
                 self._safe_restore_primary_xlim(cur_xlim)
+
+    def _on_primary_channel_requested(self, fid, ch):
+        """User picked 设为左轴 on a channel. Make it the overlay primary
+        (left-axis) channel and replot preserving the current x-window.
+
+        Only meaningful in overlay mode; in subplot/single each channel has
+        its own axis so there is no single "left" to assign. We still store
+        the pick so it applies if the user later switches to overlay, but the
+        replot only reorders when overlay is active (plot_time guards that).
+        """
+        self._overlay_primary = (fid, ch)
+        self._plot_time_preserving_xlim()
 
     def _safe_capture_primary_xlim(self):
         """Return ``(lo, hi)`` for the current primary x-axis, or None.
@@ -678,11 +698,23 @@ class MainWindow(QMainWindow):
         self.toast("横坐标已更新", "success")
 
     def _reset_cursors(self):
-        """Reset both single and dual cursor state on the time-domain canvas."""
-        self.canvas_time._ax = self.canvas_time._bx = None
-        self.canvas_time._placing = 'A'
-        self.canvas_time._refresh = True
-        self.canvas_time.draw_idle()
+        """Reset both single and dual cursor state on the time-domain canvas.
+
+        Uses the canvas-provided ``reset_cursor_state()`` seam so the
+        upcoming pyqtgraph TimeDomain canvas (Phase 1 of the migration —
+        see ``docs/superpowers/specs/2026-05-28-pyqtgraph-timedomain-migration-design.md``
+        §5.5) can swap in without changing this call site. ``getattr``
+        fallback retains the legacy direct-mutation path for older
+        canvases that have not yet adopted the seam.
+        """
+        reset = getattr(self.canvas_time, "reset_cursor_state", None)
+        if callable(reset):
+            reset()
+        else:
+            self.canvas_time._ax = self.canvas_time._bx = None
+            self.canvas_time._placing = 'A'
+            self.canvas_time._refresh = True
+            self.canvas_time.draw_idle()
         self.chart_stack.clear_cursor_pill()
         self.statusBar.showMessage("游标已重置")
         self.toast("游标已重置", "info")
@@ -909,6 +941,23 @@ class MainWindow(QMainWindow):
         if not checked: self.canvas_time.clear(); self.canvas_time.draw(); self.chart_stack.stats_strip.update_stats({}); return
 
         mode = self.chart_stack.plot_mode()
+        # Overlay primary-axis pick (设为左轴): when the chosen (fid, ch) is
+        # still checked AND we're in overlay mode, move it to index 0 so the
+        # canvas binds it to the LEFT axis (vis[0] → left). If it is no longer
+        # checked, drop the stale pick so a hidden channel is never forced
+        # onto the left axis. Outside overlay mode the pick is inert (each
+        # channel owns its own axis), but we keep it stored for a later toggle.
+        if self._overlay_primary is not None:
+            pfid, pch = self._overlay_primary
+            primary_idx = next(
+                (i for i, (cfid, cch, _color) in enumerate(checked)
+                 if cfid == pfid and cch == pch),
+                None,
+            )
+            if primary_idx is None:
+                self._overlay_primary = None
+            elif mode == 'overlay' and primary_idx != 0:
+                checked.insert(0, checked.pop(primary_idx))
         # Cache invalidation site 7: structural plot-mode change (overlay
         # ↔ subplot) reuses the same (data_id, channel) keys but the line
         # ownership switches between an axes-stack and a single ax with

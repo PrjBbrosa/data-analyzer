@@ -3,6 +3,31 @@
 源: `docs/analyzer/reviews/2026-05-27-recent-changes-review.md` (B1-B7)
 目标: 不引入新依赖, 不改公共 API, 每个 bug 配最小回归测试。
 
+**Status (2026-05-28 review): completed / historical baseline.**
+This file documents the B1-B7 review-followup fixes that are already present in
+the current branch. It is **not** part of the pyqtgraph TimeDomainCanvas
+performance migration scope, and future performance work must not reopen these
+items unless a new regression is found.
+
+Current evidence from the live tree:
+
+- B1 is implemented in `FFTContextual.set_signal_candidates` and
+  `OrderContextual.set_signal_candidates` by preserving `prev =
+  self.combo_sig.currentData()` and restoring `keep_idx`
+  (`mf4_analyzer/ui/inspector_sections.py:1856-1874`,
+  `mf4_analyzer/ui/inspector_sections.py:2271-2287`).
+- B2 is implemented with tangent-overlap guards
+  `new_hi <= cur_lo or new_lo >= cur_hi`
+  (`mf4_analyzer/ui/main_window.py:430-434`).
+- B3 is implemented by filtering heatmap colorbar scroll/click events
+  (`mf4_analyzer/ui/canvases.py:2403`, `mf4_analyzer/ui/canvases.py:2443`).
+- B4-B6 are implemented in `CockpitMainWindow`, including `closeEvent`,
+  dropped-frame rearm state, and immediate transport health polling
+  (`mf4_analyzer/acquisition_ui/main_window.py:214-218`, `:983`,
+  `:1640-1674`, `:2010-2025`).
+- B7 is implemented and covered by tests that assert traceback last-line
+  preservation and long-log dump behavior (`tests/test_p0_a2l_probe.py:213-236`).
+
 ---
 
 ## B1. FFTContextual / OrderContextual 信号下拉重置

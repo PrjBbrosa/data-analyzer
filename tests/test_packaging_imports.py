@@ -17,6 +17,7 @@ REQUIRED_HIDDEN_IMPORTS = [
     "mf4_analyzer.ui_kit.fonts",
     "mf4_analyzer.ui_kit.stylesheet",
     "mf4_analyzer.ui_kit.widgets.searchable_combo",
+    "mf4_analyzer.ui.pg_canvases",
     "mf4_analyzer.acquisition_capture",
     "mf4_analyzer.acquisition_capture.thresholds",
     "mf4_analyzer.acquisition_capture.health",
@@ -82,6 +83,8 @@ def test_windows_build_script_lists_new_modules_and_widget_collection():
     assert "widgets.*" not in text
     assert "--collect-submodules" in text
     assert "mf4_analyzer.acquisition_ui.widgets" in text
+    assert "pyqtgraph" in text
+    assert '"--collect-submodules", "pyqtgraph"' in text
 
 
 def test_packaging_hidden_import_modules_import_on_this_checkout():

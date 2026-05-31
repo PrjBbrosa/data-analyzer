@@ -184,6 +184,10 @@ class SignalPickerPopup(QWidget):
         # ----- popup -----
         self._popup = QFrame(self, Qt.Popup)
         self._popup.setObjectName("SignalPickerPopup")
+        # Rounded 8px surface on a Qt.Popup window: a translucent background
+        # keeps the corners outside the radius from painting an opaque square
+        # frame. The inline #SignalPickerPopup QSS still paints the white fill.
+        self._popup.setAttribute(Qt.WA_TranslucentBackground, True)
         self._popup.setFrameShape(QFrame.StyledPanel)
         self._popup.setStyleSheet(
             "#SignalPickerPopup {background:#fff; border:1px solid #cbd5e1;"

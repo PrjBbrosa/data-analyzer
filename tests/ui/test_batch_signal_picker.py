@@ -198,3 +198,17 @@ def test_picker_single_select_checking_unchecks_others(qtbot):
     boxes["b"].setChecked(True)
     assert p.selected() == ("b",)
     assert boxes["a"].isChecked() is False  # auto-unchecked
+
+
+def test_picker_popup_rounded_corners_have_no_square_frame(qtbot):
+    """The dropdown is a Qt.Popup QFrame with an 8px-rounded surface. A
+    top-level popup whose background is opaque shows a square frame outside
+    the radius — assert the translucent-background box-leak fix."""
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.batch.signal_picker import SignalPickerPopup
+
+    p = SignalPickerPopup(available_signals=["a", "b"])
+    qtbot.addWidget(p)
+    assert p._popup.testAttribute(Qt.WA_TranslucentBackground), (
+        "SignalPickerPopup 圆角需配 WA_TranslucentBackground,否则留方框"
+    )
