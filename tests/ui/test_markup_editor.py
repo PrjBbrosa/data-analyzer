@@ -225,6 +225,18 @@ def test_editor_refits_image_when_window_grows_in_fit_mode(qtbot):
     assert editor._view.transform().m11() > before * 1.5
 
 
+def test_editor_scene_rect_matches_hidpi_pixmap_display_bounds(qtbot):
+    pixmap = _pixmap(1000, 600)
+    pixmap.setDevicePixelRatio(2.0)
+
+    editor = MarkupEditor(pixmap)
+    qtbot.addWidget(editor)
+
+    assert editor._current_pixmap.devicePixelRatioF() == 1.0
+    assert editor._background_item.boundingRect() == QRectF(0, 0, 1000, 600)
+    assert editor._scene.sceneRect() == editor._background_item.boundingRect()
+
+
 def test_style_controls_apply_to_new_and_selected_items(qtbot):
     editor = MarkupEditor(_pixmap())
     qtbot.addWidget(editor)
@@ -275,6 +287,19 @@ def test_color_and_width_collapsed_into_style_menu(qtbot):
     assert style_btn.menu() is not None
     panel = _style_panel(editor)
     assert panel.findChild(QToolButton, "markupColor_059669") is not None
+
+
+def test_style_menu_rounding_uses_translucent_background(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+
+    menu = editor.findChild(QToolButton, "markupStyleButton").menu()
+
+    assert menu.objectName() == "markupStyleMenu"
+    assert menu.testAttribute(Qt.WA_TranslucentBackground), (
+        "rounded QMenu popups need WA_TranslucentBackground, "
+        "otherwise the native rectangular backing shows outside the radius"
+    )
 
 
 def test_style_menu_still_drives_set_color(qtbot):

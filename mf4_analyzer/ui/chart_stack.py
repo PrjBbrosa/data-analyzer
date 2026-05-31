@@ -13,23 +13,15 @@ from PyQt5.QtWidgets import (
 _HIDPI_EXPORT_SCALE = 2.0
 
 
-def _effective_export_scale(canvas, requested=_HIDPI_EXPORT_SCALE):
-    """Return the magnification the canvas will actually apply for a
-    ``grab_pixmap(scale=requested)`` call, mirroring the canvas's own cap.
-
-    The copy path needs this so it can scale the composited cursor pill by
-    the SAME factor the bitmap was rendered at. Returns 1.0 when the canvas
-    (e.g. a matplotlib fft/order canvas) does not expose the pyqtgraph
-    hi-DPI render — those grab at 1× and must not have a scaled pill.
-    """
-    if not hasattr(canvas, "grab_pixmap"):
-        return 1.0
-    try:
-        from mf4_analyzer.ui.pg_canvases import _capped_hidpi_scale
-        base_w = max(1, int(canvas.width()))
-        return _capped_hidpi_scale(base_w, requested)
-    except Exception:
-        return 1.0
+def _pixmap_as_device_pixels(pixmap):
+    if pixmap is None or pixmap.isNull():
+        return pixmap
+    copy = QPixmap(pixmap)
+    if abs(copy.devicePixelRatioF() - 1.0) < 1e-9:
+        return copy
+    normalized = QPixmap.fromImage(copy.toImage())
+    normalized.setDevicePixelRatio(1.0)
+    return normalized
 
 
 def _grab_pixmap_hidpi(canvas, requested=_HIDPI_EXPORT_SCALE):
@@ -53,13 +45,13 @@ def _grab_pixmap_hidpi(canvas, requested=_HIDPI_EXPORT_SCALE):
         except Exception:
             pix = None
         if pix is not None and not pix.isNull():
-            return pix
+            return _pixmap_as_device_pixels(pix)
     # Fallback for canvases without grab_pixmap (matplotlib) or a null
     # grab_pixmap result: plain QWidget grab.
     try:
         pix = canvas.grab()
         if pix is not None and not pix.isNull():
-            return pix
+            return _pixmap_as_device_pixels(pix)
     except Exception:
         pass
     return None
@@ -1395,12 +1387,13 @@ class ChartStack(QWidget):
         from PyQt5.QtCore import QRect
         from PyQt5.QtGui import QPainter
         canvas = card.canvas
-        # Effective factor the canvas will actually apply (mirrors its cap)
-        # so the pill compositing uses the SAME scale as the rendered bitmap.
-        scale = _effective_export_scale(canvas)
         pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():
             return
+        canvas_w = max(1, int(canvas.width()))
+        canvas_h = max(1, int(canvas.height()))
+        scale_x = max(1.0, float(pix.width()) / float(canvas_w))
+        scale_y = max(1.0, float(pix.height()) / float(canvas_h))
         if (card is self.stack.currentWidget()
                 and card is self._time_card
                 and self._pill.isVisible()):
@@ -1413,17 +1406,20 @@ class ChartStack(QWidget):
             if (rel_x + pill_geo.width() > 0 and rel_x < canvas.width()
                     and rel_y + pill_geo.height() > 0 and rel_y < canvas.height()):
                 painter = QPainter(pix)
-                # Scale BOTH the pill's top-left and its drawn size by the
-                # same factor so the readout lands at the right spot on the
-                # magnified bitmap. Grab the pill itself at hi-DPI so its
-                # text stays crisp, then draw into the scaled target rect.
+                # Scale the pill using the actual normalized bitmap size. On
+                # Retina, QPixmap painters use logical DPR coordinates unless
+                # the pixmap is normalized first; using the returned bitmap's
+                # pixel dimensions keeps the pill inside the exported image.
                 target = QRect(
-                    int(round(rel_x * scale)),
-                    int(round(rel_y * scale)),
-                    int(round(pill_geo.width() * scale)),
-                    int(round(pill_geo.height() * scale)),
+                    int(round(rel_x * scale_x)),
+                    int(round(rel_y * scale_y)),
+                    int(round(pill_geo.width() * scale_x)),
+                    int(round(pill_geo.height() * scale_y)),
                 )
-                painter.drawPixmap(target, self._grab_pill_scaled(scale))
+                painter.drawPixmap(
+                    target,
+                    self._grab_pill_scaled(max(scale_x, scale_y)),
+                )
                 painter.end()
         self.image_captured.emit(pix)
 

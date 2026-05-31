@@ -1184,6 +1184,32 @@ class TestTimeDomainCanvasPGSubplotMode:
     canvases.py:_subplot_ylabels_need_inside_labels (no fixed 5-10%
     offset, design §0 correction)."""
 
+    def test_all_time_domain_axes_disable_auto_si_prefix(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 100, dtype=np.float64)
+        rows = [
+            ("speed", True, t, np.linspace(0.0, 10000.0, t.size), "#1769e0", "rpm", "fid-1"),
+            ("torque", True, t, np.linspace(-5000.0, 5000.0, t.size), "#ef4444", "Nm", "fid-1"),
+        ]
+
+        for mode in ("subplot", "single", "overlay"):
+            canvas.plot_channels(rows[:1] if mode == "single" else rows, mode=mode)
+            QCoreApplication.processEvents()
+
+            plot_items = []
+            if canvas._x_master_handle is not None:
+                plot_items.append(canvas._x_master_handle.plot_item)
+            plot_items.extend(handle.plot_item for handle in canvas.axes_list)
+            axis_items = []
+            for plot_item in dict.fromkeys(item for item in plot_items if item is not None):
+                axis_items.extend(plot_item.getAxis(name) for name in ("left", "right", "bottom"))
+            axis_items.extend(handle.y_axis_item() for handle in canvas.axes_list)
+
+            assert axis_items
+            assert all(getattr(axis, "autoSIPrefix", None) is False for axis in axis_items)
+
     def test_canvas_chrome_margins_are_tight(self, qapp):
         """The plot area must use most of the widget. pyqtgraph defaults to a
         9px outer gutter + 8px inter-row spacing — wasted chrome. We tighten
@@ -1259,6 +1285,23 @@ class TestTimeDomainCanvasPGSubplotMode:
                 f"axis {i} did not change between state A and B "
                 f"(windows_a[{i}]={windows_a[i]!r}, windows_b[{i}]={windows_b[i]!r})"
             )
+
+    def test_subplot_primary_xlim_updates_visible_bottom_axis_numbers(self, qapp):
+        """Range propagation must update the bottom AxisItem too. Otherwise
+        curves move to the requested window while the visible X numbers stay
+        stuck at their old range."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+
+        bottom_axis = canvas.axes_list[-1].plot_item.getAxis("bottom")
+        canvas._primary_xaxis_ax.set_xlim(0.20, 0.40)
+        QCoreApplication.processEvents()
+
+        assert canvas.axes_list[-1].get_xlim() == pytest.approx((0.20, 0.40))
+        assert tuple(bottom_axis.range) == pytest.approx((0.20, 0.40))
 
     def test_subplot_x_grid_geometry_is_aligned_before_first_frame(self, qapp):
         """The first rendered subplot frame must have one shared X grid.
@@ -1534,6 +1577,8 @@ class TestTimeDomainCanvasPGOverlayMode:
         assert canvas._x_master_handle.get_xlim() == pytest.approx((2.0, 6.0))
         for handle in canvas.axes_list:
             assert handle.get_xlim() == pytest.approx((2.0, 6.0))
+        bottom_axis = canvas._x_master_handle.plot_item.getAxis("bottom")
+        assert tuple(bottom_axis.range) == pytest.approx((2.0, 6.0))
 
         handles = [canvas._x_master_handle] + list(canvas.axes_list)
         mapped_x = [
@@ -2449,6 +2494,39 @@ class TestTimeDomainCanvasPGCursorInteraction:
         assert len(b_items) == len(canvas.axes_list)
         assert all(item.isVisible() for item in a_items + b_items)
 
+    def test_dual_cursor_marks_region_min_and_max_points(self, qapp):
+        from PyQt5.QtCore import QCoreApplication, Qt
+        from PyQt5.QtTest import QTest
+
+        canvas = _pg_canvas(qapp)
+        t = np.array([0.0, 0.25, 0.50, 0.75, 1.0], dtype=np.float64)
+        sig = np.array([1.0, -3.0, 2.0, 5.0, 0.0], dtype=np.float64)
+        canvas.plot_channels([
+            ("speed", True, t, sig, "#1769e0", "rpm", "fid-1"),
+        ], mode="single")
+        QCoreApplication.processEvents()
+        canvas.set_cursor_visible(True)
+        canvas.set_dual_cursor_mode(True)
+
+        viewport = canvas._glw.viewport()
+        QTest.mouseClick(
+            viewport, Qt.LeftButton, Qt.NoModifier,
+            _viewport_point_for_data(canvas, canvas.axes_list[0], 0.20),
+        )
+        QCoreApplication.processEvents()
+        QTest.mouseClick(
+            viewport, Qt.LeftButton, Qt.NoModifier,
+            _viewport_point_for_data(canvas, canvas.axes_list[0], 0.80),
+        )
+        QCoreApplication.processEvents()
+
+        markers = getattr(canvas, "_dual_cursor_extreme_markers", [])
+        assert len(markers) == 1
+        xs, ys = markers[0].getData()
+        assert list(xs) == pytest.approx([0.25, 0.75])
+        assert list(ys) == pytest.approx([-3.0, 5.0])
+        assert markers[0].isVisible()
+
     def test_dual_cursor_hover_move_does_not_recompute_stats(self, qapp, monkeypatch):
         from PyQt5.QtCore import QCoreApplication, Qt
         from PyQt5.QtTest import QTest
@@ -3065,6 +3143,26 @@ class TestTimeDomainCanvasPGModeSwitchXlim:
         assert xlim_after[1] == pytest.approx(xlim_before[1], abs=1e-6), (
             f"mode-switch dropped hi: before={xlim_before!r}, after={xlim_after!r}"
         )
+
+    def test_overlay_to_subplot_preserves_xlim_and_updates_bottom_axis_numbers(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="overlay")
+        QCoreApplication.processEvents()
+
+        canvas._x_master_handle.set_xlim(0.25, 0.50)
+        QCoreApplication.processEvents()
+        xlim_before = canvas._x_master_handle.get_xlim()
+
+        canvas.plot_channels_preserving_xlim(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+
+        assert canvas._primary_xaxis_ax.get_xlim() == pytest.approx(xlim_before)
+        for handle in canvas.axes_list:
+            assert handle.get_xlim() == pytest.approx(xlim_before)
+        bottom_axis = canvas.axes_list[-1].plot_item.getAxis("bottom")
+        assert tuple(bottom_axis.range) == pytest.approx(xlim_before)
 
     def test_plot_time_does_not_enable_span_selector(self, qapp):
         """T5 invariant reaffirmation: ``enable_span_selector(cb)`` is

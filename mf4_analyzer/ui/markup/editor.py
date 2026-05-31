@@ -50,6 +50,15 @@ _HIT_SCREEN_PX = 8.0
 _HANDLE_HIT_SCREEN_PX = 14.0
 
 
+def _pixmap_as_device_pixels(pixmap: QPixmap) -> QPixmap:
+    copy = QPixmap(pixmap)
+    if copy.isNull() or abs(copy.devicePixelRatioF() - 1.0) < 1e-9:
+        return copy
+    normalized = QPixmap.fromImage(copy.toImage())
+    normalized.setDevicePixelRatio(1.0)
+    return normalized
+
+
 class _AddItemCommand(QUndoCommand):
     def __init__(self, scene: QGraphicsScene, item: QGraphicsItem):
         super().__init__("添加标注")
@@ -506,7 +515,7 @@ class MarkupEditor(QWidget):
         self.setWindowTitle("图片标注")
 
         self._on_done = on_done
-        self._current_pixmap = QPixmap(pixmap)
+        self._current_pixmap = _pixmap_as_device_pixels(pixmap)
         self._tool = "select"
         self._color = QColor("#e53935")
         self._stroke_width = 4
@@ -744,6 +753,8 @@ class MarkupEditor(QWidget):
         self._style_button.setPopupMode(QToolButton.InstantPopup)
         self._style_button.setStyleSheet(self._compact_tool_button_qss())
         style_menu = QMenu(self._style_button)
+        style_menu.setObjectName("markupStyleMenu")
+        style_menu.setAttribute(Qt.WA_TranslucentBackground, True)
         style_action = QWidgetAction(style_menu)
         style_action.setDefaultWidget(self._build_style_panel(style_menu))
         style_menu.addAction(style_action)
@@ -897,9 +908,7 @@ class MarkupEditor(QWidget):
             self.cancel_active_crop()
 
     def _set_scene_to_pixmap_size(self) -> None:
-        self._scene.setSceneRect(
-            QRectF(0, 0, self._current_pixmap.width(), self._current_pixmap.height())
-        )
+        self._scene.setSceneRect(self._background_item.boundingRect())
 
     def _pen(self) -> QPen:
         pen = QPen(self._color, self._stroke_width)
@@ -1391,7 +1400,7 @@ class MarkupEditor(QWidget):
         return {item: QPointF(item.pos()) for item in self._markup_items()}
 
     def _apply_crop_state(self, pixmap: QPixmap, positions):
-        self._current_pixmap = QPixmap(pixmap)
+        self._current_pixmap = _pixmap_as_device_pixels(pixmap)
         self._background_item.setPixmap(self._current_pixmap)
         for item, pos in positions.items():
             if item.scene() is self._scene:

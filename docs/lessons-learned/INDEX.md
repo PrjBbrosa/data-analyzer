@@ -33,6 +33,8 @@ lesson by default.
 | [Overlay Selection Drops Pan](pyqt-ui/2026-05-27-overlay-selection-drops-pan.md) | Click-to-enter / click-to-exit gestures on a matplotlib canvas while the nav toolbar is in pan/zoom. | `tests/ui/test_chart_stack.py` |
 | [Pyqtgraph Subplot Layout Settle](codex-pg-subplot-layout-settle.md) | Load when changing pyqtgraph TimeDomain subplot axes, grid, tick | See lesson |
 | [Markup Group Child Normalization](codex-markup-group-child-normalization.md) | Markup editor scene traversal, selection, copy/paste, crop, or undo with grouped annotations | `tests/ui/test_markup_editor.py` |
+| [Rounded Qt Popups Need Translucent Shell](codex-rounded-qt-popups-need-translucent-shell.md) | Rounded Qt popup/menu/popover shells or QSS `border-radius` surfaces. | See lesson |
+| [HiDPI Pixmaps And Blocked Axis Sync](codex-hidpi-pixmap-and-axisitem-sync.md) | Copy/edit chart pixmaps or signal-blocked pyqtgraph X range sync. | See lesson |
 
 ## Selection Rules
 

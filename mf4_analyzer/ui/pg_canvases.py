@@ -1025,6 +1025,7 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor_line_items = []
         self._cursor_a_items = []
         self._cursor_b_items = []
+        self._dual_cursor_extreme_markers = []
 
         # Bug 3: post-rebuild callbacks. plot_channels builds NEW ViewBoxes
         # (default PanMode), so any owner that pins a mouse mode (the
@@ -1283,6 +1284,7 @@ class TimeDomainCanvasPG(QWidget):
         for axis_name in ("left", "right", "bottom"):
             try:
                 axis = pi.getAxis(axis_name)
+                axis.enableAutoSIPrefix(False)
                 axis.setPen(
                     pg.mkPen(
                         color=PG_AXIS_NEUTRAL_COLOR,
@@ -1332,6 +1334,10 @@ class TimeDomainCanvasPG(QWidget):
             # (index 1 → col 3, index 2 → col 4, ...). Col 2 (built-in right)
             # stays unused so layout spacing applies uniformly to every pair.
             axis_item = pg.AxisItem("right")
+            try:
+                axis_item.enableAutoSIPrefix(False)
+            except Exception:
+                pass
             try:
                 primary_plot.layout.addItem(axis_item, 2, 2 + index)
             except Exception:
@@ -1412,12 +1418,30 @@ class TimeDomainCanvasPG(QWidget):
             ax.set_xlim(float(new_lo), float(new_hi))
         except Exception:
             return
+        self._sync_x_axis_item_range(ax, new_lo, new_hi)
+        self._propagate_xlim_to_siblings(source=ax)
         # Order per pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before:
         # mutate, then flush. set_xlim above fired sigXRangeChanged and
         # scheduled the 40 ms debounced QTimer; drain it synchronously
         # so the post-switch frame is the high-detail envelope.
         try:
             self._flush_pending_refresh()
+        except Exception:
+            pass
+
+    def _sync_x_axis_item_range(self, handle, lo, hi):
+        try:
+            axis = handle.x_axis_item()
+        except Exception:
+            axis = None
+        if axis is None:
+            return
+        try:
+            axis.setRange(float(lo), float(hi))
+        except Exception:
+            return
+        try:
+            axis.update()
         except Exception:
             pass
 
@@ -1718,10 +1742,12 @@ class TimeDomainCanvasPG(QWidget):
             handles.append(self._x_master_handle)
         for handle in handles:
             vb = handle.view_box
+            did_set = False
             try:
                 if vb is not None:
                     vb.blockSignals(True)
                 handle.set_xlim(lo, hi)
+                did_set = True
             except Exception:
                 pass
             finally:
@@ -1730,6 +1756,8 @@ class TimeDomainCanvasPG(QWidget):
                         vb.blockSignals(False)
                 except Exception:
                     pass
+            if did_set:
+                self._sync_x_axis_item_range(handle, lo, hi)
 
     def _teardown_overlay_aux_viewboxes(self):
         """Remove every overlay aux ViewBox, its child curves, and the
@@ -1833,6 +1861,7 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor_line_items = []
         self._cursor_a_items = []
         self._cursor_b_items = []
+        self._dual_cursor_extreme_markers = []
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
         # do that. Mirror TimeDomainCanvas.clear's behavior.
 
@@ -1856,6 +1885,7 @@ class TimeDomainCanvasPG(QWidget):
             self._hide_cursor_items(self._cursor_line_items)
             self._hide_cursor_items(self._cursor_a_items)
             self._hide_cursor_items(self._cursor_b_items)
+            self._hide_dual_cursor_extreme_markers()
             self.draw_idle()
 
     def set_dual_cursor_mode(self, en):
@@ -1868,6 +1898,7 @@ class TimeDomainCanvasPG(QWidget):
             self._refresh = True
             self._hide_cursor_items(self._cursor_a_items)
             self._hide_cursor_items(self._cursor_b_items)
+            self._hide_dual_cursor_extreme_markers()
             self.dual_cursor_info.emit("")
             self.draw_idle()
 
@@ -1885,6 +1916,7 @@ class TimeDomainCanvasPG(QWidget):
         self._hide_cursor_items(self._cursor_line_items)
         self._hide_cursor_items(self._cursor_a_items)
         self._hide_cursor_items(self._cursor_b_items)
+        self._hide_dual_cursor_extreme_markers()
         self.dual_cursor_info.emit("")
         self.draw_idle()
 
@@ -1962,6 +1994,72 @@ class TimeDomainCanvasPG(QWidget):
             try:
                 item.setValue(float(x))
                 item.setVisible(True)
+            except Exception:
+                pass
+
+    def _ensure_dual_cursor_extreme_markers(self):
+        markers = getattr(self, "_dual_cursor_extreme_markers", [])
+        if len(markers) == len(self.axes_list):
+            return markers
+        for marker in markers or []:
+            try:
+                marker.setVisible(False)
+            except Exception:
+                pass
+        new_markers = []
+        for handle in self.axes_list:
+            vb = handle.view_box
+            if vb is None:
+                continue
+            marker = pg.ScatterPlotItem(size=10)
+            marker.setZValue(1100)
+            marker.setVisible(False)
+            try:
+                vb.addItem(marker, ignoreBounds=True)
+                new_markers.append(marker)
+            except Exception:
+                pass
+        self._dual_cursor_extreme_markers = new_markers
+        return new_markers
+
+    def _hide_dual_cursor_extreme_markers(self):
+        for marker in getattr(self, "_dual_cursor_extreme_markers", []) or []:
+            try:
+                marker.setData([], [])
+                marker.setVisible(False)
+            except Exception:
+                pass
+
+    def _update_dual_cursor_extreme_markers(self, points_by_channel):
+        markers = self._ensure_dual_cursor_extreme_markers()
+        point_map = {
+            name: (min_x, min_y, max_x, max_y)
+            for name, min_x, min_y, max_x, max_y in points_by_channel
+        }
+        for marker, handle in zip(markers, self.axes_list):
+            name = self._channel_name_for_handle(handle)
+            points = point_map.get(name)
+            try:
+                if points is None:
+                    marker.setData([], [])
+                    marker.setVisible(False)
+                    continue
+                min_x, min_y, max_x, max_y = points
+                marker.setData(
+                    [min_x, max_x],
+                    [min_y, max_y],
+                    symbol="o",
+                    size=10,
+                    pen=[
+                        pg.mkPen("#ffffff", width=1.2),
+                        pg.mkPen("#ffffff", width=1.2),
+                    ],
+                    brush=[
+                        pg.mkBrush("#16a34a"),
+                        pg.mkBrush("#dc2626"),
+                    ],
+                )
+                marker.setVisible(True)
             except Exception:
                 pass
 
@@ -2727,11 +2825,14 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 cur_lo, cur_hi = (None, None)
             if cur_lo == float(lo) and cur_hi == float(hi):
+                self._sync_x_axis_item_range(handle, lo, hi)
                 continue
+            did_set = False
             try:
                 # blockSignals avoids ping-pong with sibling listeners.
                 vb.blockSignals(True)
                 vb.setXRange(float(lo), float(hi), padding=0)
+                did_set = True
             except Exception:
                 pass
             finally:
@@ -2739,6 +2840,8 @@ class TimeDomainCanvasPG(QWidget):
                     vb.blockSignals(False)
                 except Exception:
                     pass
+            if did_set:
+                self._sync_x_axis_item_range(handle, lo, hi)
 
     def _flush_pending_refresh(self):
         """Drain any pending refresh immediately (end-of-pan/zoom).
@@ -3216,6 +3319,7 @@ class TimeDomainCanvasPG(QWidget):
         not by reimplementation.
         """
         info, dual = [], []
+        extreme_points = []
         if self._ax is not None:
             info.append(f"A={self._ax:.4f}s")
         if self._bx is not None:
@@ -3233,6 +3337,20 @@ class TimeDomainCanvasPG(QWidget):
                 seg = sf[m]
                 if not len(seg):
                     continue
+                segment_indices = np.flatnonzero(m)
+                finite = np.isfinite(seg)
+                if np.any(finite):
+                    finite_segment = seg[finite]
+                    finite_indices = segment_indices[finite]
+                    min_idx = int(finite_indices[int(np.argmin(finite_segment))])
+                    max_idx = int(finite_indices[int(np.argmax(finite_segment))])
+                    extreme_points.append((
+                        ch,
+                        float(tf[min_idx]),
+                        float(sf[min_idx]),
+                        float(tf[max_idx]),
+                        float(sf[max_idx]),
+                    ))
                 u_suffix = f" {u}" if u else ""
                 delta = _interp_cursor_value(tf, sf, self._bx) - _interp_cursor_value(
                     tf, sf, self._ax
@@ -3253,6 +3371,10 @@ class TimeDomainCanvasPG(QWidget):
             primary_html = "Click A"
         self.cursor_info.emit(primary_html)
         self.dual_cursor_info.emit(_format_dual_html(dual) if dual else "")
+        if self._ax is not None and self._bx is not None:
+            self._update_dual_cursor_extreme_markers(extreme_points)
+        else:
+            self._hide_dual_cursor_extreme_markers()
 
     def _cursor_x_to_pixmap_x(self, data_x, pixmap_width):
         """Map a data-space cursor X to pixel-x in the grabbed pixmap.

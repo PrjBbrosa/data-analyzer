@@ -822,6 +822,59 @@ def test_copy_card_image_composites_scaled_cursor_pill(qapp, qtbot, monkeypatch)
     )
 
 
+def test_copy_card_image_composites_cursor_pill_inside_hidpi_pixmap(
+    qapp, qtbot, monkeypatch
+):
+    """On macOS Retina, QPixmap painting uses logical DPR coordinates. The
+    copied image is normalized before pill compositing so the pill is painted
+    inside the final pixel buffer rather than off the right edge."""
+    from PyQt5.QtGui import QColor, QPixmap
+    from PyQt5.QtWidgets import QApplication
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+    QApplication.processEvents()
+
+    source = QPixmap(1000, 600)
+    source.fill(QColor("#ffffff"))
+    source.setDevicePixelRatio(2.0)
+
+    def _fake_grab(scale=1.0):
+        return QPixmap(source)
+
+    red_pill = QPixmap(120, 60)
+    red_pill.fill(QColor("#ff0000"))
+
+    monkeypatch.setattr(cs.canvas_time, "grab_pixmap", _fake_grab)
+    monkeypatch.setattr(cs, "_grab_pill_scaled", lambda _scale: red_pill)
+
+    cs._pill.resize(80, 40)
+    cs._pill.setVisible(True)
+    cs._pill.mark_user_placed(True)
+    canvas_origin = cs.canvas_time.mapTo(cs.stack, cs.canvas_time.rect().topLeft())
+    cs._pill.move(canvas_origin.x() + 400, canvas_origin.y() + 20)
+
+    captured = []
+    cs.image_captured.connect(captured.append)
+    cs._copy_card_image(cs._time_card)
+
+    assert captured
+    pix = captured[-1]
+    assert pix.devicePixelRatioF() == 1.0
+    img = pix.toImage()
+    red_samples = 0
+    for x in range(0, img.width(), 10):
+        for y in range(0, img.height(), 10):
+            color = img.pixelColor(x, y)
+            if color.red() > 200 and color.green() < 80 and color.blue() < 80:
+                red_samples += 1
+    assert red_samples > 0
+
+
 def test_save_figure_uses_hidpi_scale(qapp, qtbot, monkeypatch, tmp_path):
     """Spec §E: save_figure must request a hi-DPI render (scale > 1)."""
     from PyQt5.QtWidgets import QFileDialog
