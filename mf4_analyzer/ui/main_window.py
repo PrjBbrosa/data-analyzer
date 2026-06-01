@@ -83,7 +83,7 @@ class FFTTimeWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("TraceLab v5.0")
+        self.setWindowTitle("TraceLab v6.0")
         self.setGeometry(100, 100, 1450, 850);
         # Spec §9 minimum window size: 1100 × 640.
         self.setMinimumSize(1100, 640)
@@ -296,6 +296,9 @@ class MainWindow(QMainWindow):
         self.navigator.primary_channel_requested.connect(
             self._on_primary_channel_requested
         )
+        self.navigator.channel_context_menu_requested.connect(
+            lambda: self.chart_stack.mark_discovered("channel.right_click")
+        )
 
         # Canvas cursor signals are owned by ChartStack; MainWindow doesn't
         # need to subscribe (ChartStack updates the pill itself).
@@ -381,6 +384,12 @@ class MainWindow(QMainWindow):
         # mode, plot_time reorders the checked list so this channel is index 0
         # (bound to the left axis). Cleared/ignored otherwise.
         self._overlay_primary = None
+        self.inspector.top.chk_range.toggled.connect(
+            self._on_time_range_enabled_changed
+        )
+        xrange_changed = getattr(self.canvas_time, 'xrange_changed', None)
+        if xrange_changed is not None:
+            xrange_changed.connect(self._on_time_canvas_xrange_changed)
 
     def _on_mode_changed(self, mode):
         self.chart_stack.set_mode(mode)
@@ -508,6 +517,31 @@ class MainWindow(QMainWindow):
                 flush()
             except Exception:
                 pass
+
+    def _on_time_canvas_xrange_changed(self, lo, hi):
+        self._sync_time_range_inputs_from_visible_xlim((lo, hi))
+
+    def _sync_time_range_inputs_from_visible_xlim(self, xlim=None):
+        # Inspector range values are in acquisition time. If a custom channel
+        # is the visible X axis, that viewport is in channel units and must not
+        # overwrite the time-range controls.
+        if self._custom_xaxis_fid is not None and self._custom_xaxis_ch is not None:
+            return False
+        if xlim is None:
+            xlim = self._safe_capture_primary_xlim()
+        if xlim is None:
+            return False
+        lo, hi = xlim
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return False
+        self.inspector.top.set_range_values(lo, hi)
+        return True
+
+    def _on_time_range_enabled_changed(self, enabled):
+        if enabled:
+            self._sync_time_range_inputs_from_visible_xlim()
+        if self.files and self.navigator.get_checked_channels():
+            self._plot_time_preserving_xlim()
 
     def _on_annotation_enabled_changed(self, mode, enabled):
         if mode == 'fft':
@@ -1079,6 +1113,7 @@ class MainWindow(QMainWindow):
 
         xlabel = self._custom_xlabel or self.inspector.top.xaxis_label() or 'Time (s)'
         self.canvas_time.plot_channels(data, mode, xlabel=xlabel)
+        self._sync_time_range_inputs_from_visible_xlim()
         xt, yt = self.inspector.top.tick_density()
         self.canvas_time.set_tick_density(xt, yt)
         # SpanSelector intentionally not enabled — drag-to-select on the

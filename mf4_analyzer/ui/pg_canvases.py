@@ -64,7 +64,16 @@ from typing import Tuple
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QImage, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtGui import (
+    QFont,
+    QFontDatabase,
+    QFontInfo,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
@@ -216,6 +225,81 @@ _PG_MENU_REMOVE_TEXTS = frozenset({
     "Plot Options", "绘图选项",
     "Export...", "导出...", "导出…",
 })
+
+_PG_CHART_FONT_FAMILIES = (
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "微软雅黑",
+    "Segoe UI",
+    "PingFang SC",
+    "Noto Sans CJK SC",
+)
+_PG_CHART_FONT_CACHE = {}
+
+
+def _pg_chart_font(point_size=9):
+    """Return the explicit font used by pyqtgraph axis/scene text.
+
+    pyqtgraph text lives in QGraphicsItems, so it does not reliably inherit
+    QWidget QSS font-family rules. Prefer common UI Chinese fonts, then fall
+    back to the QApplication font.
+    """
+    cache_key = int(point_size)
+    cached = _PG_CHART_FONT_CACHE.get(cache_key)
+    if cached is not None:
+        return QFont(cached)
+    try:
+        families = set(QFontDatabase().families())
+    except Exception:
+        families = set()
+    for family in _PG_CHART_FONT_FAMILIES:
+        font = QFont(family, point_size)
+        if family in families:
+            _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
+            return font
+        if families:
+            continue
+        try:
+            info = QFontInfo(font)
+            resolved = info.family()
+            if info.exactMatch() or resolved in _PG_CHART_FONT_FAMILIES:
+                _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
+                return font
+        except Exception:
+            _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
+            return font
+    app = QApplication.instance()
+    font = QFont(app.font() if app is not None else QFont())
+    font.setPointSize(point_size)
+    _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
+    return font
+
+
+def _apply_pg_axis_font(axis, point_size=9):
+    if axis is None:
+        return
+    font = _pg_chart_font(point_size)
+    try:
+        axis.setStyle(tickFont=font)
+    except Exception:
+        pass
+    label = getattr(axis, "label", None)
+    if label is not None:
+        try:
+            label.setFont(font)
+        except Exception:
+            pass
+
+
+def _apply_pg_text_item_font(item, point_size=9):
+    if item is None:
+        return
+    font = _pg_chart_font(point_size)
+    target = getattr(item, "textItem", item)
+    try:
+        target.setFont(font)
+    except Exception:
+        pass
 
 # Native axis-form child object names to HIDE. Link Axis / Invert and the
 # low-frequency auto-pan / visible-only toggles are out of scope per design A;
@@ -667,6 +751,8 @@ class _ModifierWheelViewBox(pg.ViewBox):
         # shared mouse-mode controller; falls back to a bare localize if the
         # canvas backref is gone.
         owner = self._owner_canvas
+        if owner is not None and hasattr(owner, "context_menu_requested"):
+            owner.context_menu_requested.emit()
         if owner is not None and hasattr(owner, "_redesign_context_menu_for_viewbox"):
             try:
                 owner._redesign_context_menu_for_viewbox(self, menu)
@@ -788,6 +874,8 @@ class TimeDomainCanvasPG(QWidget):
     dual_cursor_info = pyqtSignal(str)
     span_selected = pyqtSignal(float, float)
     overlay_channel_selected = pyqtSignal(object)
+    context_menu_requested = pyqtSignal()
+    xrange_changed = pyqtSignal(float, float)
 
     # Mirror TimeDomainCanvas constants so callers see the same surface.
     MAX_PTS = 8000
@@ -1180,12 +1268,14 @@ class TimeDomainCanvasPG(QWidget):
             for handle in self.axes_list:
                 self._connect_xrange_listener(handle)
             self._set_xrange_to_data_union()
+            self._emit_xrange_changed()
             if self._overlay_mode:
                 self._sync_overlay_aux_viewboxes()
                 self._connect_overlay_view_sync()
 
         self._refresh = True
         self._apply_tick_density_to_all_axes()
+        self._unify_subplot_bottom_axis_heights()
         # Tick density and data-union X seeding can change AxisItem geometry
         # after the early subplot label pass. Re-pin once at the end of build
         # so the first rendered frame already has one shared X grid.
@@ -1285,6 +1375,7 @@ class TimeDomainCanvasPG(QWidget):
             try:
                 axis = pi.getAxis(axis_name)
                 axis.enableAutoSIPrefix(False)
+                _apply_pg_axis_font(axis)
                 axis.setPen(
                     pg.mkPen(
                         color=PG_AXIS_NEUTRAL_COLOR,
@@ -1338,6 +1429,7 @@ class TimeDomainCanvasPG(QWidget):
                 axis_item.enableAutoSIPrefix(False)
             except Exception:
                 pass
+            _apply_pg_axis_font(axis_item)
             try:
                 primary_plot.layout.addItem(axis_item, 2, 2 + index)
             except Exception:
@@ -1512,6 +1604,7 @@ class TimeDomainCanvasPG(QWidget):
                 compact = _compact_axis_label(name, unit, max_chars=20)
                 label = f"{compact}" + (f" ({unit})" if unit else "")
             axis_handle.set_ylabel(label)
+            _apply_pg_axis_font(axis_handle.y_axis_item())
         except Exception:
             pass
         if self._overlay_mode:
@@ -1520,6 +1613,7 @@ class TimeDomainCanvasPG(QWidget):
         if xlabel is not None:
             try:
                 axis_handle.set_xlabel(xlabel)
+                _apply_pg_axis_font(axis_handle.x_axis_item())
             except Exception:
                 pass
 
@@ -1531,6 +1625,7 @@ class TimeDomainCanvasPG(QWidget):
             axis = None
         if axis is None:
             return
+        _apply_pg_axis_font(axis)
         try:
             axis.setPen(
                 pg.mkPen(color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH)
@@ -1630,11 +1725,13 @@ class TimeDomainCanvasPG(QWidget):
             return
         try:
             bottom.setStyle(showValues=bool(is_bottom))
+            _apply_pg_axis_font(bottom)
         except Exception:
             pass
         if not is_bottom:
             try:
                 bottom.setLabel(text="")
+                _apply_pg_axis_font(bottom)
             except Exception:
                 pass
 
@@ -2432,6 +2529,7 @@ class TimeDomainCanvasPG(QWidget):
         # Tick density changes tick-label text → left-axis auto-width, which
         # re-skews subplot left edges; re-unify after applying density.
         self._unify_subplot_left_axis_widths()
+        self._unify_subplot_bottom_axis_heights()
         self._refresh = True
         self.draw_idle()
 
@@ -2781,10 +2879,24 @@ class TimeDomainCanvasPG(QWidget):
         # Propagate first so the sibling axes are in sync BEFORE the
         # debounced refresh runs.
         self._propagate_xlim_to_siblings(source=source_handle)
+        self._emit_xrange_changed(source_handle)
         if self._refresh_pending:
             return
         self._refresh_pending = True
         self._refresh_timer.start()
+
+    def _emit_xrange_changed(self, source_handle=None):
+        if source_handle is None:
+            source_handle = self._primary_xaxis_ax
+        if source_handle is None:
+            return
+        try:
+            lo, hi = source_handle.get_xlim()
+        except Exception:
+            return
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return
+        self.xrange_changed.emit(float(lo), float(hi))
 
     def _propagate_xlim_to_siblings(self, source=None):
         """Mirror ``source``'s xlim onto every other axis facade.
@@ -3534,6 +3646,7 @@ class TimeDomainCanvasPG(QWidget):
                     fill=pg.mkBrush(255, 255, 255, 220),
                     border=pg.mkPen(color=color, width=0.8),
                 )
+                _apply_pg_text_item_font(text_item)
                 vb = handle.view_box
                 if vb is not None:
                     try:
@@ -3565,6 +3678,7 @@ class TimeDomainCanvasPG(QWidget):
                 if ax_item is not None:
                     try:
                         ax_item.setLabel(text=str(name))
+                        _apply_pg_axis_font(ax_item)
                     except Exception:
                         pass
 
@@ -3613,6 +3727,62 @@ class TimeDomainCanvasPG(QWidget):
         for ax_item in left_axes:
             try:
                 ax_item.setWidth(max_w)
+            except Exception:
+                pass
+        try:
+            layout = self._glw.ci.layout
+            layout.invalidate()
+            layout.activate()
+        except Exception:
+            pass
+
+    def _unify_subplot_bottom_axis_heights(self):
+        """Give every subplot row the same bottom-axis reserve.
+
+        Only the bottom subplot shows X tick values and the X label, but its
+        bottom AxisItem still consumes layout height. If upper rows reserve
+        zero bottom-axis height, GraphicsLayout gives their ViewBoxes extra
+        plot height and two-row subplot mode looks visibly unbalanced.
+        """
+        if not self._subplot_label_specs:
+            return
+        bottom_axes = []
+        for handle in self.axes_list:
+            pi = getattr(handle, "plot_item", None)
+            if pi is None:
+                continue
+            try:
+                axis = pi.getAxis("bottom")
+            except Exception:
+                axis = None
+            if axis is not None:
+                bottom_axes.append(axis)
+        if len(bottom_axes) < 2:
+            return
+        for axis in bottom_axes:
+            try:
+                axis.setHeight(None)
+            except Exception:
+                pass
+        try:
+            layout = self._glw.ci.layout
+            layout.invalidate()
+            layout.activate()
+        except Exception:
+            pass
+        max_h = 0.0
+        for axis in bottom_axes:
+            try:
+                height = float(axis.height())
+            except Exception:
+                continue
+            if height > max_h:
+                max_h = height
+        if max_h <= 0.0:
+            return
+        for axis in bottom_axes:
+            try:
+                axis.setHeight(max_h)
             except Exception:
                 pass
         try:

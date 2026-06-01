@@ -411,24 +411,24 @@ def test_persistent_top_xaxis_channel_row_hidden_when_auto(qapp):
         pt.hide()
 
 
-def test_persistent_top_range_rows_hidden_when_unchecked(qapp):
-    """When chk_range is unchecked, both 开始 and 结束 rows hide."""
+def test_persistent_top_range_rows_stay_visible_when_unchecked(qapp):
+    """The time-range fields stay visible; the checkbox only gates filtering."""
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     pt = PersistentTop()
     pt.show()
     try:
-        # Default state: chk_range unchecked → range row hidden.
+        # Default state: unchecked means "do not filter", not "hide fields".
         assert not pt.chk_range.isChecked()
-        assert pt.spin_start.isHidden()
-        assert pt.spin_end.isHidden()
+        assert not pt.spin_start.isHidden()
+        assert not pt.spin_end.isHidden()
         # Toggle on → row visible.
         pt.chk_range.setChecked(True)
         assert not pt.spin_start.isHidden()
         assert not pt.spin_end.isHidden()
-        # Toggle off → hidden again.
+        # Toggle off keeps the current values visible for reference.
         pt.chk_range.setChecked(False)
-        assert pt.spin_start.isHidden()
-        assert pt.spin_end.isHidden()
+        assert not pt.spin_start.isHidden()
+        assert not pt.spin_end.isHidden()
     finally:
         pt.hide()
 

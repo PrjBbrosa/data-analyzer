@@ -578,6 +578,54 @@ def test_channel_selection_change_preserves_xlim(qapp, qtbot, loaded_csv):
     assert nhi == pytest.approx(t1, abs=1e-6)
 
 
+def test_time_range_fields_track_current_visible_xlim_when_unchecked(
+    qapp, qtbot, loaded_csv
+):
+    import pytest
+
+    w, _fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    w.inspector.top.chk_range.setChecked(False)
+
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(0.2, 0.6)
+    qapp.processEvents()
+
+    lo, hi = w.inspector.top.range_values()
+    assert lo == pytest.approx(0.2, abs=1e-6)
+    assert hi == pytest.approx(0.6, abs=1e-6)
+
+
+def test_checking_time_range_uses_current_visible_xlim_without_manual_entry(
+    qapp, qtbot, loaded_csv
+):
+    import pytest
+
+    w, _fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    w.inspector.top.chk_range.setChecked(False)
+
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(0.2, 0.6)
+    qapp.processEvents()
+
+    w.inspector.top.chk_range.setChecked(True)
+    qapp.processEvents()
+
+    name = next(name for name in w.canvas_time.channel_data if name.endswith("speed"))
+    t, _sig, _color, _unit = w.canvas_time.channel_data[name]
+    assert float(t.min()) >= 0.2 - 1e-6
+    assert float(t.max()) <= 0.6 + 1e-6
+
+    nlo, nhi = w.canvas_time._primary_xaxis_ax.get_xlim()
+    assert nlo == pytest.approx(0.2, abs=1e-6)
+    assert nhi == pytest.approx(0.6, abs=1e-6)
+
+    w.inspector.top.chk_range.setChecked(False)
+    qapp.processEvents()
+
+    t, _sig, _color, _unit = w.canvas_time.channel_data[name]
+    assert len(t) == len(w.files[next(iter(w.files))].time_array)
+
+
 def test_channel_editor_apply_preserves_checked_xlim(qapp, qtbot, loaded_csv):
     import numpy as np
     import pytest

@@ -1317,6 +1317,7 @@ def test_stats_strip_toggle(qapp, qtbot):
     qtbot.addWidget(cs)
     cs.show()
     qtbot.waitExposed(cs)
+    cs.stats_strip.setVisible(True)
     assert not cs.stats_strip._panel.isVisible()
     cs.stats_strip.toggle()
     qapp.processEvents()
@@ -1565,52 +1566,152 @@ def test_tool_hints_idle_mentions_dblclick():
 
 def test_bottom_hint_bar_persistent_always_present(qapp):
     from mf4_analyzer.ui.chart_stack import ChartStack
+    from mf4_analyzer.ui.hints import persistent_hints
     cs = ChartStack()
-    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+    cs.show()
+    qapp.processEvents()
+    expected = "    ·    ".join(persistent_hints())
+    for mode, card in (
+        ("time", cs._time_card),
+        ("fft", cs._fft_card),
+        ("fft_time", cs._fft_time_card),
+        ("order", cs._order_card),
+    ):
+        cs.set_mode(mode)
+        qapp.processEvents()
         # Bar exists, is visible, and the persistent label spells the three
         # always-on shortcuts.
         assert card._hint_bar is not None
+        assert card._hint_bar.isVisible() is True
         assert card._hint_persistent is not None
         text = card._hint_persistent.text()
-        assert "Ctrl" in text
-        assert "Shift" in text
-        assert "双击图面" in text
-        assert "图表选项" in text
+        assert text == expected
 
 
-def test_bottom_hint_bar_context_pan_default(qapp):
-    """Default after construction is pan mode → context label = pan hint."""
+def test_bottom_hint_bar_context_subplot_default_comes_from_registry(qapp):
+    """Default TimeDomain state is subplot, so the registry's subplot hint wins."""
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     card = cs._time_card
-    assert "平移模式" in card._hint_context.text()
+    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+
+
+def test_bottom_hint_bar_context_uses_registry(qapp, monkeypatch):
+    from mf4_analyzer.ui import hints
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    from mf4_analyzer.ui.hints import Hint
+
+    cs = ChartStack()
+    card = cs._time_card
+
+    def fake_context_hints(state):
+        assert state.mode == "time"
+        assert state.plot_mode == "subplot"
+        return (Hint(id="test.registry", text="registry controlled", surface="context"),)
+
+    monkeypatch.setattr(hints, "context_hints", fake_context_hints)
+    card._refresh_bottom_hint()
+
+    assert card._hint_context.text() == "registry controlled"
+
+
+def test_bottom_hint_bar_discovery_slot_advances_when_marked(qapp):
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    settings = QSettings(".pytmp/test_hints/chart-stack.ini", QSettings.IniFormat)
+    settings.clear()
+    cs = ChartStack()
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        card.set_hint_settings(settings)
+
+    card = cs._time_card
+    assert card._hint_discovery.text() == "顶部按钮支持快捷键，悬停按钮即可查看"
+
+    card.mark_discovered("toolbar.shortcuts_exist")
+    assert card._hint_discovery.text() == "复制按钮可导出带游标读数的图片，并打开标注编辑器"
+
+
+def test_copy_button_marks_copy_image_discovered(qapp):
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui import hints
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    settings = QSettings(".pytmp/test_hints/chart-copy.ini", QSettings.IniFormat)
+    settings.clear()
+    cs = ChartStack()
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        card.set_hint_settings(settings)
+
+    cs._time_card.copy_image_requested.emit()
+
+    assert "chart.copy_image" in hints.load_discovered(settings)
+
+
+def test_shortcut_action_marks_shortcuts_discovered(qapp):
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui import hints
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    settings = QSettings(".pytmp/test_hints/chart-shortcut.ini", QSettings.IniFormat)
+    settings.clear()
+    cs = ChartStack()
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        card.set_hint_settings(settings)
+
+    pan_action = next(act for act in cs._time_card.toolbar.actions() if act.data() == "pan")
+    pan_action.trigger()
+
+    assert "toolbar.shortcuts_exist" in hints.load_discovered(settings)
+
+
+def test_context_hint_rotation_advances_and_pause_holds(qapp):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    cs = ChartStack()
+    card = cs._time_card
+
+    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+    card._advance_context_hint()
+    assert card._hint_context.text() == "Shift + 滚轮 缩放当前子图 Y"
+
+    card.set_hint_rotation_paused(True)
+    card._advance_context_hint()
+    assert card._hint_context.text() == "Shift + 滚轮 缩放当前子图 Y"
+
+
+def test_mark_context_hint_used_suppresses_it_for_session(qapp):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    cs = ChartStack()
+    card = cs._time_card
+
+    card.mark_context_hint_used("subplot.wheel_target")
+
+    assert card._hint_context.text() == "Shift + 滚轮 缩放当前子图 Y"
 
 
 def test_bottom_hint_bar_context_switches_with_cursor_mode(qapp):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     card = cs._time_card
-    # cursor=single → 单游标 hint
+    # cursor=single currently has no curated bar hint.
     card.set_cursor_mode('single')
-    assert "单游标" in card._hint_context.text()
-    # cursor=dual → 双游标 hint
+    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+    # cursor=dual → dual cursor hint
     card.set_cursor_mode('dual')
-    assert "双游标" in card._hint_context.text()
-    # cursor=off → fall back to current toolbar mode hint (pan by default)
+    assert card._hint_context.text() == "点 A 点 B → 显示 ΔT 与区间统计"
+    # cursor=off → back to current subplot hint
     card.set_cursor_mode('off')
-    assert "平移模式" in card._hint_context.text()
+    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
 
 
 def test_bottom_hint_bar_spectrogram_hint(qapp):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     fft_time = cs._fft_time_card
-    # Spectrogram card defaults to pan mode (toolbar.pan() in base init), so
-    # the toolbar-mode hint wins. Force toolbar mode off to surface the
-    # spectrogram-specific hint and confirm the override path.
-    fft_time.toolbar.mode = ''  # type: ignore[attr-defined]
     fft_time._refresh_bottom_hint()
-    assert "谱图" in fft_time._hint_context.text()
+    assert fft_time._hint_context.text() == "点击谱图某一时刻 → 查看该帧频率切片"
 
 
 def test_bottom_hint_bar_idle_for_base_card_with_no_mode(qapp):
@@ -1624,18 +1725,11 @@ def test_bottom_hint_bar_idle_for_base_card_with_no_mode(qapp):
 
 
 def test_bottom_hint_bar_constants_exposed():
-    """Module-level dict MUST expose the documented context keys verbatim."""
-    from mf4_analyzer.ui.chart_stack import (
-        _BOTTOM_HINT_CONTEXT, _BOTTOM_HINT_PERSISTENT,
-    )
-    assert "Ctrl" in _BOTTOM_HINT_PERSISTENT
-    assert "Shift" in _BOTTOM_HINT_PERSISTENT
-    assert "双击图面" in _BOTTOM_HINT_PERSISTENT
-    assert "图表选项" in _BOTTOM_HINT_PERSISTENT
-    for key in ('pan', 'zoom', 'cursor_single', 'cursor_dual',
-                'spectrogram', 'idle'):
-        assert key in _BOTTOM_HINT_CONTEXT
-    assert _BOTTOM_HINT_CONTEXT['idle'] == ''
+    """Legacy module constants are now registry-derived compatibility values."""
+    from mf4_analyzer.ui.chart_stack import _BOTTOM_HINT_PERSISTENT
+    from mf4_analyzer.ui.hints import persistent_hints
+
+    assert _BOTTOM_HINT_PERSISTENT == "    ·    ".join(persistent_hints())
 
 
 def test_bottom_hint_bar_does_not_break_existing_top_hint(qapp):

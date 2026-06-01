@@ -3637,6 +3637,20 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         assert last_bottom.style.get("showValues") is not False
         assert "Time" in getattr(last_bottom, "labelText", "")
 
+    def test_two_subplots_have_equal_viewbox_heights(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:2], mode="subplot")
+        QCoreApplication.processEvents()
+
+        heights = [
+            handle.view_box.sceneBoundingRect().height()
+            for handle in canvas.axes_list
+        ]
+        assert len(heights) == 2
+        assert heights[0] == pytest.approx(heights[1], abs=1.0)
+
     def test_line_width_and_left_axis_keeps_neutral_axis_pen(self, qapp):
         from PyQt5.QtCore import QCoreApplication
         from mf4_analyzer.ui._axis_handle import PG_AXIS_NEUTRAL_COLOR
@@ -3653,6 +3667,40 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         left = handle.plot_item.getAxis("left")
         assert left.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
         assert left.textPen().color().name().lower() == color
+
+    def test_pg_axes_use_explicit_chart_font(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import _pg_chart_font
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+
+        expected_family = _pg_chart_font().family()
+        for handle in canvas.axes_list:
+            for axis in (handle.x_axis_item(), handle.y_axis_item()):
+                assert axis is not None
+                tick_font = axis.style.get("tickFont")
+                assert tick_font is not None
+                assert tick_font.family() == expected_family
+                assert axis.label.font().family() == expected_family
+
+    def test_inside_subplot_labels_use_explicit_chart_font(self, qapp):
+        from mf4_analyzer.ui.pg_canvases import _pg_chart_font
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 2000)
+        rows = [
+            (f"long_channel_name_{i}", True, t, np.sin(t) + i, "#1f77b4", "u", "fid")
+            for i in range(5)
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+
+        assert canvas._inside_label_items
+        expected_family = _pg_chart_font().family()
+        for item in canvas._inside_label_items:
+            text_item = getattr(item, "textItem", item)
+            assert text_item.font().family() == expected_family
 
     def test_initial_bind_uses_viewport_width_not_max_points(self, qapp, monkeypatch):
         from PyQt5.QtCore import QCoreApplication

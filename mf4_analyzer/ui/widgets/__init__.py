@@ -60,6 +60,7 @@ class MultiFileChannelWidget(QWidget):
     # Emitted when the user picks 设为左轴 in a channel's right-click menu.
     # (fid, channel) — MainWindow makes that channel the overlay left axis.
     primary_channel_requested = pyqtSignal(str, str)
+    channel_context_menu_requested = pyqtSignal()
     MAX_CHANNELS_WARNING = 8  # 超过此数量时警告
 
     def __init__(self, parent=None):
@@ -186,6 +187,7 @@ class MultiFileChannelWidget(QWidget):
         if not data or data[0] != 'channel':
             return
         _kind, fid, ch = data
+        self.channel_context_menu_requested.emit()
         menu = QMenu(self.tree)
         act_primary = menu.addAction("设为左轴")
         chosen = menu.exec_(self.tree.viewport().mapToGlobal(pos))
