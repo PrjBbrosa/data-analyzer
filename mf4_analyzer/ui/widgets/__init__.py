@@ -189,6 +189,13 @@ class MultiFileChannelWidget(QWidget):
         _kind, fid, ch = data
         self.channel_context_menu_requested.emit()
         menu = QMenu(self.tree)
+        menu.setObjectName("channelContextMenu")
+        menu.setWindowFlags(
+            menu.windowFlags()
+            | Qt.FramelessWindowHint
+            | Qt.NoDropShadowWindowHint
+        )
+        menu.setAttribute(Qt.WA_TranslucentBackground, True)
         act_primary = menu.addAction("设为左轴")
         chosen = menu.exec_(self.tree.viewport().mapToGlobal(pos))
         if chosen is act_primary:
