@@ -1363,6 +1363,12 @@ class TimeDomainCanvasPG(QWidget):
         the scene for blank-click deselect in overlay mode.
         """
         vb = _ModifierWheelViewBox(owner_canvas=self)
+        vb.setBorder(
+            pg.mkPen(
+                color=PG_AXIS_NEUTRAL_COLOR,
+                width=PG_AXIS_NEUTRAL_WIDTH,
+            )
+        )
         pi = self._glw.addPlot(row=row, col=col, viewBox=vb)
         _localize_pg_context_menu(getattr(vb, "menu", None))
         _localize_pg_context_menu(getattr(pi, "ctrlMenu", None))
@@ -3758,6 +3764,23 @@ class TimeDomainCanvasPG(QWidget):
             if axis is not None:
                 bottom_axes.append(axis)
         if len(bottom_axes) < 2:
+            return
+        if len(bottom_axes) > 2:
+            for axis in bottom_axes[:-1]:
+                try:
+                    axis.setHeight(1.0)
+                except Exception:
+                    pass
+            try:
+                bottom_axes[-1].setHeight(None)
+            except Exception:
+                pass
+            try:
+                layout = self._glw.ci.layout
+                layout.invalidate()
+                layout.activate()
+            except Exception:
+                pass
             return
         for axis in bottom_axes:
             try:

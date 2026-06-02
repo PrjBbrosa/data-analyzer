@@ -3651,6 +3651,27 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         assert len(heights) == 2
         assert heights[0] == pytest.approx(heights[1], abs=1.0)
 
+    def test_dense_subplots_do_not_reserve_hidden_xaxis_label_height(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(760, 560)
+        canvas.plot_channels(_five_channel_rows(), mode="subplot")
+        QCoreApplication.processEvents()
+
+        hidden_heights = [
+            handle.plot_item.getAxis("bottom").height()
+            for handle in canvas.axes_list[:-1]
+        ]
+        visible_height = canvas.axes_list[-1].plot_item.getAxis("bottom").height()
+
+        assert hidden_heights
+        assert visible_height > 20.0
+        for height in hidden_heights:
+            assert height <= 4.0, (
+                "hidden subplot X axes must not reserve full tick-label height"
+            )
+
     def test_line_width_and_left_axis_keeps_neutral_axis_pen(self, qapp):
         from PyQt5.QtCore import QCoreApplication
         from mf4_analyzer.ui._axis_handle import PG_AXIS_NEUTRAL_COLOR
@@ -3667,6 +3688,23 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         left = handle.plot_item.getAxis("left")
         assert left.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
         assert left.textPen().color().name().lower() == color
+
+    def test_plot_items_draw_full_neutral_viewbox_frame(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui._axis_handle import (
+            PG_AXIS_NEUTRAL_COLOR,
+            PG_AXIS_NEUTRAL_WIDTH,
+        )
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+
+        for handle in canvas.axes_list:
+            border = getattr(handle.plot_item.getViewBox(), "border", None)
+            assert border is not None, "each subplot needs a full plot frame"
+            assert border.color().name().lower() == PG_AXIS_NEUTRAL_COLOR
+            assert border.widthF() == pytest.approx(PG_AXIS_NEUTRAL_WIDTH)
 
     def test_pg_axes_use_explicit_chart_font(self, qapp):
         from PyQt5.QtCore import QCoreApplication
