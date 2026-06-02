@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QGraphicsLineItem,
     QGraphicsRectItem,
+    QGraphicsSimpleTextItem,
     QGraphicsTextItem,
     QToolButton,
     QWidget,
@@ -859,6 +860,150 @@ def test_selected_text_has_resize_handle_that_scales_text(qtbot):
     editor.drag_handle(handle, text_item.mapToScene(QPointF(120, 80)))
 
     assert text_item.scale() > 1.0
+
+
+def test_default_text_font_scales_with_image_and_beats_qt_default(qtbot):
+    editor = MarkupEditor(_pixmap(1600, 900))
+    qtbot.addWidget(editor)
+
+    text_item = editor.add_text_item(QPointF(20, 20), "peak")
+
+    # ~3.5% of image height, far larger than Qt's ~12px default for a copy
+    # grabbed at hi-DPI.
+    assert text_item.font().pixelSize() >= 30
+
+
+def test_empty_text_box_is_discarded_on_focus_out(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.set_tool("text")
+
+    _click_scene(qtbot, editor, (20, 20))
+    text_item = _first_item(editor, QGraphicsTextItem)
+    text_item.clearFocus()
+    QApplication.processEvents()
+
+    text_items = [
+        item for item in _markup_items(editor)
+        if isinstance(item, QGraphicsTextItem)
+    ]
+    assert text_items == []
+
+
+def test_selected_text_box_can_be_deleted(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    text_item = editor.add_text_item(QPointF(20, 20), "peak")
+    text_item.clearFocus()
+    QApplication.processEvents()
+
+    editor.set_tool("select")
+    text_item.setSelected(True)
+    editor.delete_selected_annotations()
+
+    assert text_item.scene() is None
+    assert text_item not in _markup_items(editor)
+    # ...and the deletion is undoable.
+    editor._undo_stack.undo()
+    assert text_item.scene() is editor._scene
+
+
+def test_text_focus_out_clears_selection_and_leaves_edit_mode(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.show()  # focus events are only delivered to a shown window
+    QApplication.processEvents()  # let the window expose before focusing
+    text_item = editor.add_text_item(QPointF(20, 20), "peak")
+    cursor = text_item.textCursor()
+    cursor.select(cursor.Document)
+    text_item.setTextCursor(cursor)
+    assert text_item.textCursor().hasSelection()
+
+    text_item.clearFocus()
+    QApplication.processEvents()
+
+    # The grey highlight band must not persist once the box loses focus...
+    assert not text_item.textCursor().hasSelection()
+    # ...and the box stops swallowing keys so Delete can remove it.
+    assert text_item.textInteractionFlags() == Qt.NoTextInteraction
+
+
+def test_number_badge_default_font_scales_with_image(qtbot):
+    editor = MarkupEditor(_pixmap(1600, 900))
+    qtbot.addWidget(editor)
+
+    group = editor.add_number_item(QRectF(40, 30, 0, 0))
+
+    label = next(
+        child for child in group.childItems()
+        if isinstance(child, QGraphicsSimpleTextItem)
+    )
+    assert label.font().pixelSize() >= 24
+
+
+def test_number_counter_survives_undo_without_duplicating(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.add_number_item(QRectF(10, 10, 0, 0))  # 1
+    editor.add_number_item(QRectF(30, 10, 0, 0))  # 2
+    editor._undo_stack.undo()  # remove the "2" badge
+    editor.add_number_item(QRectF(50, 10, 0, 0))  # must be 2 again, not 3
+
+    labels = sorted(
+        int(child.text())
+        for item in editor._markup_items()
+        for child in item.childItems()
+        if isinstance(child, QGraphicsSimpleTextItem)
+    )
+    assert labels == [1, 2]
+
+
+def test_stroke_width_change_on_text_adds_no_undo_step(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    text_item = editor.add_text_item(QPointF(20, 20), "peak")
+    text_item.clearFocus()
+    QApplication.processEvents()
+    editor.set_tool("select")
+    text_item.setSelected(True)
+    before = editor._undo_stack.index()
+
+    editor.set_stroke_width(8)
+
+    assert editor._undo_stack.index() == before
+
+
+def test_enter_does_not_finish_copy(qtbot):
+    calls = []
+    editor = MarkupEditor(_pixmap(), on_done=lambda pix: calls.append(pix))
+    qtbot.addWidget(editor)
+    editor.show()
+    QApplication.processEvents()
+
+    qtbot.keyClick(editor, Qt.Key_Return)
+
+    assert calls == []
+    assert editor.isVisible()
+
+
+def test_style_panel_marks_active_color_and_width(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+
+    # Default state: red (#e53935) and width 4 are pre-selected.
+    assert editor._color_buttons["#e53935"].isChecked()
+    assert editor._width_buttons[4].isChecked()
+
+    editor.set_color(QColor("#2563eb"))
+    editor.set_stroke_width(8)
+
+    assert editor._color_buttons["#2563eb"].isChecked()
+    assert not editor._color_buttons["#e53935"].isChecked()
+    assert editor._width_buttons[8].isChecked()
+    assert not editor._width_buttons[4].isChecked()
+    # exactly one of each row is highlighted
+    assert sum(b.isChecked() for b in editor._color_buttons.values()) == 1
+    assert sum(b.isChecked() for b in editor._width_buttons.values()) == 1
 
 
 def test_delete_arrow_keys_and_copy_paste_operate_on_selection(qtbot):

@@ -7,6 +7,7 @@ from PyQt5.QtCore import QLineF, QPointF, QRect, QRectF, QSize, Qt, QTimer
 from PyQt5.QtGui import (
     QBrush,
     QColor,
+    QFont,
     QIcon,
     QImage,
     QPainter,
@@ -223,6 +224,47 @@ class _ArrowAnnotationItem(QGraphicsItem):
             self.end.y() - length * math.sin(angle + spread),
         )
         return QPolygonF([self.end, p1, p2])
+
+
+class _TextAnnotationItem(QGraphicsTextItem):
+    """Text annotation that leaves edit mode cleanly.
+
+    A plain ``QGraphicsTextItem`` keeps ``TextEditorInteraction`` on forever,
+    so once you click away it still swallows ``Delete`` (you can never remove
+    the box) and its text-selection highlight stays painted (the grey band
+    that "won't go away"). This subclass, on focus-out:
+
+    * drops the text-cursor selection so the highlight band disappears,
+    * switches to ``NoTextInteraction`` so ``Delete`` removes the whole box
+      while it is graphics-selected, and
+    * asks the editor to discard the box if it was left empty.
+
+    ``Delete``/``Backspace`` on an already-empty box exits edit mode, which
+    triggers the same empty-box discard.
+    """
+
+    def __init__(self, text: str, editor: "MarkupEditor"):
+        super().__init__(text)
+        self._editor = editor
+        self._committed = False
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            cursor.clearSelection()
+            self.setTextCursor(cursor)
+        self.setTextInteractionFlags(Qt.NoTextInteraction)
+        self._editor._on_text_focus_out(self)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and not self.toPlainText():
+            # Empty box: leave edit mode; the editor discards empty boxes on
+            # focus-out, which also pulls it out of the scene.
+            self.clearFocus()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class _MarkupGraphicsView(QGraphicsView):
@@ -493,6 +535,18 @@ class MarkupEditor(QWidget):
     """Lightweight image markup editor backed by a QGraphicsScene."""
 
     TOOLS = ("select", "crop", "arrow", "line", "rect", "pen", "text", "number")
+    _TOOL_ICONS = {
+        "select": "ph.cursor",
+        "crop": "ph.crop",
+        "arrow": "ph.arrow-up-right",
+        "line": "ph.line-segment",
+        "rect": "ph.rectangle",
+        "pen": "ph.pencil-simple",
+        "text": "ph.text-t",
+        "number": "ph.number-circle-one",
+    }
+    _TOOL_ICON_COLOR = "#1769e0"          # blue tool glyphs
+    _TOOL_ICON_COLOR_ACTIVE = "#ffffff"   # contrast glyph on the selected chip
     _HANDLE_CURSORS = {
         "tl": Qt.SizeFDiagCursor,
         "br": Qt.SizeFDiagCursor,
@@ -519,7 +573,8 @@ class MarkupEditor(QWidget):
         self._tool = "select"
         self._color = QColor("#e53935")
         self._stroke_width = 4
-        self._next_index = 1
+        self._text_px = self._default_text_px(self._current_pixmap)
+        self._number_radius = self._default_number_radius(self._current_pixmap)
         self._undo_stack = QUndoStack(self)
         self._zoom = 1.0
         self._handles = []
@@ -593,48 +648,123 @@ class MarkupEditor(QWidget):
         self._add_markup_item(item)
         return item
 
-    def add_text_item(self, point: QPointF, text: str = "") -> QGraphicsTextItem:
-        item = QGraphicsTextItem(text)
-        item.setDefaultTextColor(self._color)
+    @staticmethod
+    def _default_text_px(pixmap: QPixmap) -> int:
+        # Text lives in image-pixel space and is viewed fit-to-window, so a
+        # fixed point size renders tiny on a chart copy (the source is grabbed
+        # at 2x hi-DPI). Scale the default to ~3.5% of the copied image height,
+        # clamped to a legible band; users can still fine-tune via the corner
+        # scale handle.
+        height = max(1, pixmap.height())
+        return int(min(64, max(24, round(height * 0.035))))
+
+    def _make_text_item(self, point: QPointF, text: str, color, font_px) -> _TextAnnotationItem:
+        item = _TextAnnotationItem(text, self)
+        item.setDefaultTextColor(QColor(color))
+        font = item.font()
+        font.setPixelSize(max(1, int(font_px)))
+        item.setFont(font)
         item.setPos(point)
+        item.setFlag(QGraphicsItem.ItemIsFocusable, True)
+        return item
+
+    def add_text_item(self, point: QPointF, text: str = "") -> QGraphicsTextItem:
+        item = self._make_text_item(point, text, self._color, self._text_px)
+        item.setZValue(1)
+        item.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        item.setFlag(QGraphicsItem.ItemIsMovable, True)
+        item._committed = False
+        # Add to the scene immediately but defer the undo entry until the box
+        # has content, so an empty box that is abandoned leaves no add/delete
+        # noise in the undo history.
+        self._scene.addItem(item)
+        self._begin_text_edit(item)
+        self.refresh_handles()
+        return item
+
+    def _begin_text_edit(self, item) -> None:
         item.setTextInteractionFlags(Qt.TextEditorInteraction)
         item.setFlag(QGraphicsItem.ItemIsFocusable, True)
-        self._add_markup_item(item)
         self._view.setFocus(Qt.MouseFocusReason)
         item.setFocus(Qt.MouseFocusReason)
         self._scene.setFocusItem(item, Qt.MouseFocusReason)
-        return item
+
+    def _on_text_focus_out(self, item) -> None:
+        # Defer so we never mutate the scene from inside the item's own event.
+        QTimer.singleShot(0, lambda: self._finalize_text_item(item))
+
+    def _finalize_text_item(self, item) -> None:
+        if item.scene() is not self._scene:
+            return
+        has_text = bool(item.toPlainText().strip())
+        committed = getattr(item, "_committed", False)
+        if not has_text:
+            if committed:
+                self._undo_stack.push(_DeleteCommand(self._scene, [item]))
+            else:
+                self._scene.removeItem(item)
+            self.refresh_handles()
+            return
+        if not committed:
+            item._committed = True
+            self._undo_stack.push(_AddItemCommand(self._scene, item))
+        self.refresh_handles()
 
     def focus_text_item(self, item: QGraphicsTextItem):
         self.clear_selection()
         item.setSelected(True)
-        item.setTextInteractionFlags(Qt.TextEditorInteraction)
-        item.setFlag(QGraphicsItem.ItemIsFocusable, True)
-        self._view.setFocus(Qt.MouseFocusReason)
-        item.setFocus(Qt.MouseFocusReason)
-        self._scene.setFocusItem(item, Qt.MouseFocusReason)
+        self._begin_text_edit(item)
         self.refresh_handles()
 
+    @staticmethod
+    def _default_number_radius(pixmap: QPixmap) -> int:
+        # Badges share the text scaling rationale: a fixed radius is tiny on a
+        # hi-DPI chart copy. Track ~3% of image height, clamped to a legible
+        # band.
+        height = max(1, pixmap.height())
+        return int(min(48, max(16, round(height * 0.03))))
+
+    def _next_number(self) -> int:
+        # Derive the next badge value from the badges already in the scene so
+        # undo/redo and deletion never produce a duplicate number.
+        used = []
+        for item in self._markup_items():
+            if isinstance(item, QGraphicsItemGroup):
+                for child in item.childItems():
+                    if isinstance(child, QGraphicsSimpleTextItem):
+                        try:
+                            used.append(int(child.text()))
+                        except ValueError:
+                            pass
+        return (max(used) + 1) if used else 1
+
     def add_number_item(self, rect: QRectF) -> QGraphicsItemGroup:
-        number = self._next_index
-        self._next_index += 1
-        radius = max(10, self._stroke_width * 3)
+        number = self._next_number()
         x = rect.left()
         y = rect.top()
 
-        circle = QGraphicsEllipseItem(
-            QRectF(-radius, -radius, radius * 2, radius * 2)
+        label = QGraphicsSimpleTextItem(str(number))
+        label.setBrush(QBrush(Qt.white))
+        font = label.font()
+        font.setBold(True)
+        font.setPixelSize(max(1, round(self._number_radius * 1.25)))
+        label.setFont(font)
+        text_rect = label.boundingRect()
+        radius = max(
+            self._stroke_width * 3,
+            self._number_radius,
+            text_rect.width() / 2 + 6,
+            text_rect.height() / 2 + 4,
         )
+
+        circle = QGraphicsEllipseItem(QRectF(-radius, -radius, radius * 2, radius * 2))
         circle.setPen(self._pen())
         circle.setBrush(QBrush(self._color))
-        text = QGraphicsSimpleTextItem(str(number))
-        text.setBrush(QBrush(Qt.white))
-        text_rect = text.boundingRect()
-        text.setPos(-text_rect.width() / 2, -text_rect.height() / 2)
+        label.setPos(-text_rect.width() / 2, -text_rect.height() / 2)
 
         group = QGraphicsItemGroup()
         group.addToGroup(circle)
-        group.addToGroup(text)
+        group.addToGroup(label)
         group.setPos(QPointF(x, y))
         group.setTransformOriginPoint(group.boundingRect().center())
         self._add_markup_item(group)
@@ -726,15 +856,15 @@ class MarkupEditor(QWidget):
         close_btn = QToolButton(left_group)
         close_btn.setObjectName("markupCloseButton")
         close_btn.setText("")
-        close_btn.setIcon(qta.icon("mdi.close", color="#dc2626"))
+        close_btn.setIcon(qta.icon("ph.x", color="#dc2626"))
         close_btn.setIconSize(QSize(24, 24))
         close_btn.setToolTip("关闭")
         close_btn.setAutoRaise(True)
-        close_btn.setFixedSize(QSize(48, 40))
+        close_btn.setFixedSize(QSize(44, 44))
         close_btn.setStyleSheet(
             "QToolButton#markupCloseButton {"
             "padding: 0px;"
-            "border: 1px solid #f2b8b8; border-radius: 4px;"
+            "border: 1px solid #f2b8b8; border-radius: 6px;"
             "background: #fffafa;"
             "}"
             "QToolButton#markupCloseButton:hover {"
@@ -749,12 +879,18 @@ class MarkupEditor(QWidget):
         self._style_button.setToolTip("样式（颜色 / 线宽）")
         self._style_button.setAutoRaise(True)
         self._style_button.setIconSize(QSize(54, 24))
-        self._style_button.setFixedSize(QSize(76, 40))
+        self._style_button.setFixedSize(QSize(76, 44))
         self._style_button.setPopupMode(QToolButton.InstantPopup)
         self._style_button.setStyleSheet(self._compact_tool_button_qss())
         style_menu = QMenu(self._style_button)
         style_menu.setObjectName("markupStyleMenu")
         style_menu.setAttribute(Qt.WA_TranslucentBackground, True)
+        # Make the menu a transparent shell: the rounded surface lives on the
+        # inner panel below. Otherwise the global QMenu rule paints a square
+        # white rect (radius 12 > padding) that pokes past the rounded corners.
+        style_menu.setStyleSheet(
+            "QMenu#markupStyleMenu { background: transparent; border: none; padding: 0px; }"
+        )
         style_action = QWidgetAction(style_menu)
         style_action.setDefaultWidget(self._build_style_panel(style_menu))
         style_menu.addAction(style_action)
@@ -774,43 +910,36 @@ class MarkupEditor(QWidget):
             "text": "文字",
             "number": "序号",
         }
-        icons = {
-            "select": "mdi.cursor-default-outline",
-            "crop": "mdi.crop",
-            "arrow": "mdi.arrow-top-right",
-            "line": "mdi.vector-line",
-            "rect": "mdi.rectangle-outline",
-            "pen": "mdi.pencil-outline",
-            "text": "mdi.format-text",
-            "number": "mdi.numeric-1-circle-outline",
-        }
+        self._tool_buttons = {}
         for tool in self.TOOLS:
+            active = tool == self._tool
             button = QToolButton(center_group)
             button.setText("")
-            button.setIcon(qta.icon(icons[tool], color="#374151"))
+            button.setIcon(self._tool_icon(tool, active))
             button.setIconSize(QSize(24, 24))
             button.setToolTip(f"{labels[tool]} ({tool[0].upper()})")
             button.setObjectName(f"markupTool_{tool}")
             button.setCheckable(True)
             button.setAutoRaise(True)
-            button.setFixedSize(QSize(48, 40))
+            button.setFixedSize(QSize(44, 44))
             button.setStyleSheet(self._compact_tool_button_qss())
             button.clicked.connect(
                 lambda checked=False, name=tool: self.set_tool(name)
             )
-            if tool == self._tool:
+            if active:
                 button.setChecked(True)
             tool_group.addButton(button)
             center_layout.addWidget(button)
+            self._tool_buttons[tool] = button
 
         undo_btn = QToolButton(center_group)
         undo_btn.setObjectName("markupUndoButton")
         undo_btn.setText("")
-        undo_btn.setIcon(qta.icon("mdi.undo", color="#374151"))
+        undo_btn.setIcon(qta.icon("ph.arrow-counter-clockwise", color="#374151"))
         undo_btn.setIconSize(QSize(24, 24))
         undo_btn.setToolTip("撤销")
         undo_btn.setAutoRaise(True)
-        undo_btn.setFixedSize(QSize(48, 40))
+        undo_btn.setFixedSize(QSize(44, 44))
         undo_btn.setStyleSheet(self._compact_tool_button_qss())
         undo_btn.clicked.connect(self._undo_stack.undo)
         center_layout.addWidget(undo_btn)
@@ -818,11 +947,11 @@ class MarkupEditor(QWidget):
         redo_btn = QToolButton(center_group)
         redo_btn.setObjectName("markupRedoButton")
         redo_btn.setText("")
-        redo_btn.setIcon(qta.icon("mdi.redo", color="#374151"))
+        redo_btn.setIcon(qta.icon("ph.arrow-clockwise", color="#374151"))
         redo_btn.setIconSize(QSize(24, 24))
         redo_btn.setToolTip("重做")
         redo_btn.setAutoRaise(True)
-        redo_btn.setFixedSize(QSize(48, 40))
+        redo_btn.setFixedSize(QSize(44, 44))
         redo_btn.setStyleSheet(self._compact_tool_button_qss())
         redo_btn.clicked.connect(self._undo_stack.redo)
         center_layout.addWidget(redo_btn)
@@ -884,17 +1013,23 @@ class MarkupEditor(QWidget):
         if entries:
             self._undo_stack.push(_StyleCommand(self, entries))
         self._refresh_style_button_icon()
+        self._sync_style_panel()
         self.refresh_handles()
 
     def set_stroke_width(self, width: int) -> None:
         entries = []
         for item in self.selected_markup_items():
+            if isinstance(item, QGraphicsTextItem):
+                # Stroke width is meaningless for text; recording a style
+                # change here would just litter the undo stack with no-ops.
+                continue
             before = self._item_style(item)
             entries.append((item, before, (before[0], int(width))))
         self._stroke_width = int(width)
         if entries:
             self._undo_stack.push(_StyleCommand(self, entries))
         self._refresh_style_button_icon()
+        self._sync_style_panel()
         self.refresh_handles()
 
     def set_tool(self, tool: str) -> None:
@@ -906,6 +1041,7 @@ class MarkupEditor(QWidget):
         )
         if tool != "crop":
             self.cancel_active_crop()
+        self._sync_tool_buttons()
 
     def _set_scene_to_pixmap_size(self) -> None:
         self._scene.setSceneRect(self._background_item.boundingRect())
@@ -920,12 +1056,48 @@ class MarkupEditor(QWidget):
         return (
             "QToolButton {"
             "padding: 0px;"
-            "border: 1px solid #d9e2ef; border-radius: 4px;"
+            "border: 1px solid #c9d6ea; border-radius: 6px;"
             "background: #ffffff;"
             "}"
-            "QToolButton:hover { background: #f4f8ff; border-color: #b8c7dc; }"
-            "QToolButton:checked { background: #eaf2ff; border-color: #1769e0; }"
+            "QToolButton:hover { background: #eef4ff; border-color: #1769e0; }"
+            # Selected tool: solid accent fill behind the white (contrast) glyph.
+            "QToolButton:checked { background: #1769e0; border-color: #1769e0; }"
         )
+
+    def _color_button_qss(self) -> str:
+        # Same rounded chip as the tools; selected swatch gets a blue ring
+        # (not a fill) so the colour stays readable.
+        return (
+            "QToolButton {"
+            "padding: 0px;"
+            "border: 1px solid #c9d6ea; border-radius: 6px;"
+            "background: #ffffff;"
+            "}"
+            "QToolButton:hover { background: #eef4ff; border-color: #1769e0; }"
+            "QToolButton:checked { border: 2px solid #1769e0; background: #eaf2ff; }"
+        )
+
+    def _tool_icon(self, tool: str, active: bool) -> QIcon:
+        color = self._TOOL_ICON_COLOR_ACTIVE if active else self._TOOL_ICON_COLOR
+        return qta.icon(self._TOOL_ICONS[tool], color=color)
+
+    def _sync_tool_buttons(self) -> None:
+        for tool, button in getattr(self, "_tool_buttons", {}).items():
+            active = tool == self._tool
+            if button.isChecked() != active:
+                button.setChecked(active)
+            button.setIcon(self._tool_icon(tool, active))
+
+    def _sync_style_panel(self) -> None:
+        # Reflect the current colour/width in the popup so the active choice is
+        # visible (rounded chip + selected highlight, like the tool buttons).
+        target = QColor(self._color).name().lower()
+        for hexname, button in getattr(self, "_color_buttons", {}).items():
+            button.setChecked(hexname == target)
+        for width, button in getattr(self, "_width_buttons", {}).items():
+            active = width == self._stroke_width
+            button.setChecked(active)
+            button.setIcon(self._width_icon(width, "#ffffff" if active else "#374151"))
 
     def _add_markup_item(self, item):
         item.setZValue(1)
@@ -966,10 +1138,21 @@ class MarkupEditor(QWidget):
     def _build_style_panel(self, menu):
         panel = QWidget()
         panel.setObjectName("markupStylePanel")
+        # The panel is the only visible surface inside the transparent menu
+        # shell, so it carries the rounded background/border itself.
+        panel.setAttribute(Qt.WA_StyledBackground, True)
+        panel.setStyleSheet(
+            "QWidget#markupStylePanel {"
+            "background: #ffffff;"
+            "border: 1px solid #c9d6ea;"
+            "border-radius: 10px;"
+            "}"
+        )
         outer = QVBoxLayout(panel)
         outer.setContentsMargins(12, 10, 12, 12)
         outer.setSpacing(8)
 
+        self._color_buttons = {}
         color_row = QHBoxLayout()
         color_row.setSpacing(8)
         for name, color in (
@@ -986,8 +1169,9 @@ class MarkupEditor(QWidget):
             button.setIconSize(QSize(18, 18))
             button.setToolTip(name)
             button.setAutoRaise(True)
+            button.setCheckable(True)
             button.setFixedSize(QSize(30, 30))
-            button.setStyleSheet(self._compact_tool_button_qss())
+            button.setStyleSheet(self._color_button_qss())
             button.clicked.connect(
                 lambda checked=False, c=color, m=menu: (
                     self.set_color(QColor(c)),
@@ -995,8 +1179,10 @@ class MarkupEditor(QWidget):
                 )
             )
             color_row.addWidget(button)
+            self._color_buttons[color.lower()] = button
         outer.addLayout(color_row)
 
+        self._width_buttons = {}
         width_row = QHBoxLayout()
         width_row.setSpacing(8)
         for width in (2, 4, 6, 8):
@@ -1006,6 +1192,7 @@ class MarkupEditor(QWidget):
             button.setIconSize(QSize(24, 18))
             button.setToolTip(f"{width}px")
             button.setAutoRaise(True)
+            button.setCheckable(True)
             button.setFixedSize(QSize(34, 30))
             button.setStyleSheet(self._compact_tool_button_qss())
             button.clicked.connect(
@@ -1015,7 +1202,9 @@ class MarkupEditor(QWidget):
                 )
             )
             width_row.addWidget(button)
+            self._width_buttons[width] = button
         outer.addLayout(width_row)
+        self._sync_style_panel()
         return panel
 
     def selected_markup_items(self):
@@ -1419,7 +1608,10 @@ class MarkupEditor(QWidget):
         if isinstance(item, QGraphicsPathItem):
             return ("path", QPainterPath(item.path()), QPointF(item.pos()), QColor(color), width)
         if isinstance(item, QGraphicsTextItem):
-            return ("text", item.toPlainText(), QPointF(item.pos()), QColor(item.defaultTextColor()), width)
+            font_px = item.font().pixelSize()
+            if font_px <= 0:
+                font_px = self._text_px
+            return ("text", item.toPlainText(), QPointF(item.pos()), QColor(item.defaultTextColor()), font_px)
         if isinstance(item, _ArrowAnnotationItem):
             return (
                 "arrow",
@@ -1438,6 +1630,9 @@ class MarkupEditor(QWidget):
                 elif isinstance(child, QGraphicsSimpleTextItem):
                     label = child
             if circle is not None and label is not None:
+                label_px = label.font().pixelSize()
+                if label_px <= 0:
+                    label_px = round(self._number_radius * 1.25)
                 return (
                     "number",
                     QRectF(circle.rect()),
@@ -1447,6 +1642,7 @@ class MarkupEditor(QWidget):
                     QColor(color),
                     width,
                     float(item.scale()),
+                    label_px,
                 )
         return None
 
@@ -1472,22 +1668,28 @@ class MarkupEditor(QWidget):
             item = self.add_path_item(path)
             item.setPos(pos)
         elif kind == "text":
-            _kind, text, pos, color, _width = payload
-            self._color = QColor(color)
-            item = self.add_text_item(pos, text)
+            _kind, text, pos, color, font_px = payload
+            item = self._make_text_item(pos, text, QColor(color), font_px)
+            item._committed = True
+            self._add_markup_item(item)
+            item.setPos(pos)
         elif kind == "arrow":
             _kind, start, end, pos, color, width = payload
             self._color, self._stroke_width = QColor(color), width
             item = self.add_arrow_item(QRectF(start, end))
             item.setPos(pos)
         elif kind == "number":
-            _kind, circle_rect, label_text, label_pos, pos, color, width, scale = payload
+            _kind, circle_rect, label_text, label_pos, pos, color, width, scale, label_px = payload
             self._color, self._stroke_width = QColor(color), width
             circle = QGraphicsEllipseItem(circle_rect)
             circle.setPen(self._pen())
             circle.setBrush(QBrush(self._color))
             label = QGraphicsSimpleTextItem(label_text)
             label.setBrush(QBrush(Qt.white))
+            label_font = label.font()
+            label_font.setBold(True)
+            label_font.setPixelSize(max(1, int(label_px)))
+            label.setFont(label_font)
             label.setPos(label_pos)
             item = QGraphicsItemGroup()
             item.addToGroup(circle)
@@ -1524,12 +1726,12 @@ class MarkupEditor(QWidget):
         painter.end()
         return QIcon(pix)
 
-    def _width_icon(self, width: int):
+    def _width_icon(self, width: int, color: str = "#374151"):
         pix = QPixmap(24, 18)
         pix.fill(Qt.transparent)
         painter = QPainter(pix)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(QPen(QColor("#374151"), width, Qt.SolidLine, Qt.RoundCap))
+        painter.setPen(QPen(QColor(color), width, Qt.SolidLine, Qt.RoundCap))
         painter.drawLine(QPointF(4, 9), QPointF(20, 9))
         painter.end()
         return QIcon(pix)
@@ -1565,11 +1767,14 @@ class MarkupEditor(QWidget):
             event.accept()
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
+            # Enter never finishes the copy (too easy to fire by accident); it
+            # only confirms an in-progress crop. While editing text the text
+            # item consumes Enter as a newline before we ever reach here.
             if self.active_crop_rect().isValid():
                 self.apply_active_crop()
-            else:
-                self.finish_and_copy()
-            event.accept()
+                event.accept()
+                return
+            super().keyPressEvent(event)
             return
         if command and key == Qt.Key_Z:
             self._undo_stack.undo()
