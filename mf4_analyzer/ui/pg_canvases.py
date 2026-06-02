@@ -2194,17 +2194,8 @@ class TimeDomainCanvasPG(QWidget):
         self._x_master_handle = None
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
-        _grid_vb = (
-            getattr(self._x_master_handle, "view_box", None)
-            if self._x_master_handle is not None
-            else None
-        )
-        for _line in list(self._overlay_grid_lines):
-            try:
-                if _grid_vb is not None:
-                    _grid_vb.removeItem(_line)
-            except Exception:
-                pass
+        # InfiniteLines were added via vb.addItem() on the X-master ViewBox,
+        # which is part of the PlotItem already destroyed by _glw.clear() above.
         self._overlay_grid_lines = []
         self._subplot_label_specs = []
         self._cursor_line_items = []
