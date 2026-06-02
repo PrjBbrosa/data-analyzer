@@ -56,6 +56,7 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 import logging
+import math
 import time as _time
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -68,6 +69,7 @@ from PyQt5.QtGui import (
     QFont,
     QFontDatabase,
     QFontInfo,
+    QFontMetrics,
     QImage,
     QPainter,
     QPainterPath,
@@ -111,6 +113,12 @@ from mf4_analyzer.ui.canvases import (
 _log = logging.getLogger(__name__)
 
 
+_TARGET_X_TICK_NICE_FACTORS = (1.0, 2.0, 2.5, 5.0, 10.0)
+_TARGET_X_TICK_MIN_GAP_PX = 10.0
+_TARGET_X_TICK_EDGE_PAD_PX = 2.0
+_TARGET_X_TICK_MIN_COUNT = 3
+
+
 # Idle-AA density budget (Fix C, 2026-05-31 overlay-aa-interaction-fixes;
 # RECALIBRATED 2026-05-31 against the end-to-end grab()-repaint-frame
 # harness — superseding the original 12000/16000, which never gated the
@@ -138,6 +146,9 @@ _log = logging.getLogger(__name__)
 # fall to AA-off; a light 2-curve overlay (sum ≤ 6000) still gets AA.
 _AA_OVERLAY_SEGMENT_ON = 5000
 _AA_OVERLAY_SEGMENT_OFF = 7000
+# Task 1: overlay Y graticule constants.
+_N_OVERLAY_DIVISIONS = 8          # 等间距格线数（8 格 = 7 条内部分割线）
+_OVERLAY_GRID_ALPHA = 0.28        # 与 X 轴格线保持一致的透明度
 #
 # SUBPLOT/SINGLE metric = MAX over rows of that row's drawn points: the
 # rows are disjoint device rectangles, AND subplot curves carry a
@@ -235,6 +246,9 @@ _PG_CHART_FONT_FAMILIES = (
     "Noto Sans CJK SC",
 )
 _PG_CHART_FONT_CACHE = {}
+_OVERLAY_AXIS_LABEL_MIN_CHARS = 12
+_OVERLAY_AXIS_LABEL_FALLBACK_CHARS = 22
+_OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0
 
 
 def _pg_chart_font(point_size=9):
@@ -831,6 +845,19 @@ class _ModifierWheelViewBox(pg.ViewBox):
 
 
 # ---------------------------------------------------------------------------
+# Overlay Y-snap helper.
+# ---------------------------------------------------------------------------
+
+
+def _snap_y_to_divisions(y: float, n: int) -> float:
+    """Round ``y`` to the nearest k/n grid boundary.
+
+    Pure function — stateless and safe to call from tests.
+    """
+    return round(y * n) / n
+
+
+# ---------------------------------------------------------------------------
 # Curve-layer cache key quantization (signal-processing/
 # 2026-04-25-envelope-cache-bucket-width-quantization).
 # ---------------------------------------------------------------------------
@@ -1086,6 +1113,8 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
         self._overlay_view_sync_conns = []
+        # Task 1: overlay Y grid infrastructure
+        self._overlay_grid_lines: list = []
         # The X-master axis handle in overlay mode. Its ViewBox owns the
         # shared X range, the default mouse-pan, and the scene geometry
         # anchor; NO curves are attached to it (every channel — including
@@ -1241,6 +1270,7 @@ class TimeDomainCanvasPG(QWidget):
                 pi.showGrid(x=True, y=False, alpha=0.28)
             except Exception:
                 pass
+            self._build_overlay_y_grid()
         else:
             # Single channel.
             pi = self._add_plot_item(row=0, col=0)
@@ -1601,11 +1631,11 @@ class TimeDomainCanvasPG(QWidget):
                 # and IGNORES "\n", so the _compact_axis_label newline (for
                 # "[prefix] longname") produced one long unbroken rotated
                 # label that ran over the tick numbers and the next axis.
-                # Use a single-line middle-ellipsized name that fits the
-                # axis height instead of inserting a (dropped) newline.
-                base = str(name).replace("\n", " ")
-                compact = _middle_ellipsis(base, max_chars=22)
-                label = f"{compact}" + (f" ({unit})" if unit else "")
+                # Use a single-line label, but size the ellipsis budget from
+                # the current axis height instead of hard-capping every overlay
+                # channel at 22 chars. Tall charts can show the full name while
+                # short charts still fall back to a bounded middle ellipsis.
+                label = self._overlay_axis_label(axis_handle, name, unit)
             else:
                 compact = _compact_axis_label(name, unit, max_chars=20)
                 label = f"{compact}" + (f" ({unit})" if unit else "")
@@ -1620,6 +1650,102 @@ class TimeDomainCanvasPG(QWidget):
             try:
                 axis_handle.set_xlabel(xlabel)
                 _apply_pg_axis_font(axis_handle.x_axis_item())
+            except Exception:
+                pass
+
+    def _overlay_axis_label(self, axis_handle, name, unit):
+        base = str(name).replace("\n", " ")
+        suffix = f" ({unit})" if unit else ""
+        max_chars = self._overlay_axis_label_max_chars(axis_handle, base, suffix)
+        compact = _middle_ellipsis(base, max_chars=max_chars)
+        return f"{compact}{suffix}"
+
+    def _overlay_axis_label_max_chars(self, axis_handle, base, suffix):
+        """Return the largest label budget that fits the rotated Y axis."""
+        text = str(base)
+        if not text:
+            return _OVERLAY_AXIS_LABEL_FALLBACK_CHARS
+
+        available = self._overlay_axis_label_available_height(axis_handle)
+        if available <= 0:
+            return min(len(text), _OVERLAY_AXIS_LABEL_FALLBACK_CHARS)
+
+        metrics = QFontMetrics(_pg_chart_font(9))
+
+        def text_width(value):
+            try:
+                return float(metrics.horizontalAdvance(value))
+            except AttributeError:  # pragma: no cover - older Qt fallback
+                return float(metrics.width(value))
+
+        full_label = f"{text}{suffix}"
+        if text_width(full_label) <= available:
+            return len(text)
+
+        low = min(_OVERLAY_AXIS_LABEL_MIN_CHARS, len(text))
+        high = len(text)
+        best = low
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = f"{_middle_ellipsis(text, max_chars=mid)}{suffix}"
+            if text_width(candidate) <= available:
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        return max(_OVERLAY_AXIS_LABEL_MIN_CHARS, min(best, len(text)))
+
+    def _overlay_axis_label_available_height(self, axis_handle):
+        heights = []
+        try:
+            axis = axis_handle.y_axis_item()
+        except Exception:
+            axis = None
+        if axis is not None:
+            try:
+                h = float(axis.size().height())
+                if h > 0:
+                    heights.append(h)
+            except Exception:
+                pass
+            try:
+                h = float(axis.sceneBoundingRect().height())
+                if h > 0:
+                    heights.append(h)
+            except Exception:
+                pass
+        vb = getattr(axis_handle, "view_box", None)
+        if vb is not None:
+            try:
+                h = float(vb.sceneBoundingRect().height())
+                if h > 0:
+                    heights.append(h)
+            except Exception:
+                pass
+        try:
+            viewport = self._glw.viewport()
+            if viewport is not None:
+                h = float(viewport.height())
+                if h > 0:
+                    heights.append(h)
+        except Exception:
+            pass
+        if not heights:
+            return 0.0
+        return max(0.0, max(heights) - _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX)
+
+    def _refresh_overlay_axis_labels(self):
+        if not self._overlay_mode or not self._channel_lines:
+            return
+        for name, (handle, _line) in self._channel_lines.items():
+            row = self.channel_data.get(name)
+            unit = row[3] if row is not None else ""
+            color = row[2] if row is not None else PG_AXIS_NEUTRAL_COLOR
+            try:
+                handle.set_ylabel(self._overlay_axis_label(handle, name, unit))
+                _apply_pg_axis_font(handle.y_axis_item())
+                self._configure_overlay_axis_geometry(handle)
+                self._apply_pg_axis_style(handle, color)
             except Exception:
                 pass
 
@@ -1861,6 +1987,114 @@ class TimeDomainCanvasPG(QWidget):
                     pass
             if did_set:
                 self._sync_x_axis_item_range(handle, lo, hi)
+        self._apply_target_x_ticks_to_all_axes()
+
+    def _build_overlay_y_grid(self):
+        """Lock X-master ViewBox to Y=[0,1] and populate uniform horizontal
+        InfiniteLines that serve as the shared graticule for overlay mode.
+
+        The X-master ViewBox carries no channel data; its Y range is fixed so
+        lines placed at k/_N_OVERLAY_DIVISIONS stay at even screen fractions
+        regardless of channel data changes.  The InfiniteLines are added to
+        the X-master ViewBox via vb.addItem(), so they are removed automatically
+        when _glw.clear() tears down the PlotItem.
+        """
+        if self._x_master_handle is None:
+            return
+        vb = getattr(self._x_master_handle, "view_box", None)
+        if vb is None:
+            return
+
+        # Lock Y to [0, 1]: disable autorange, then set the fixed range.
+        try:
+            vb.enableAutoRange(axis="y", enable=False)
+            vb.setYRange(0.0, 1.0, padding=0)
+        except Exception:
+            pass
+
+        n = _N_OVERLAY_DIVISIONS
+        alpha_int = max(1, min(255, int(round(_OVERLAY_GRID_ALPHA * 255))))
+        pen = pg.mkPen(color=(180, 180, 180, alpha_int), width=1)
+        lines = []
+        for i in range(1, n):
+            y_pos = i / n
+            line = pg.InfiniteLine(
+                pos=y_pos,
+                angle=0,          # horizontal
+                movable=False,
+                pen=pen,
+            )
+            try:
+                vb.addItem(line)
+                lines.append(line)
+            except Exception:
+                pass
+        self._overlay_grid_lines = lines
+
+    def _snap_overlay_channel_to_grid(self, ax):
+        """Snap the selected channel's ViewBox Y center to the nearest
+        1/_N_OVERLAY_DIVISIONS boundary in X-master normalized space.
+
+        The span (hi - lo) is preserved; only the center moves.  If the
+        scene geometry is degenerate (offscreen / zero-size ViewBox), the
+        method is a silent no-op — no crash, no change.
+
+        Coordinate path:
+            channel data center
+                → aux_vb.mapViewToScene()        [data coords → scene px]
+                → x_master_vb.mapSceneToView()   [X-master Y ∈ [0, 1]]
+                → _snap_y_to_divisions()
+                → x_master_vb.mapViewToScene()   [data coords → scene px]
+                → aux_vb.mapSceneToView()
+            → new channel data center
+        """
+        if ax is None:
+            return
+        try:
+            lo, hi = ax.get_ylim()
+        except Exception:
+            return
+        span = hi - lo
+        if span <= 0:
+            return
+
+        aux_vb = getattr(ax, "view_box", None)
+        x_master = self._x_master_handle
+        x_master_vb = getattr(x_master, "view_box", None) if x_master else None
+        if aux_vb is None or x_master_vb is None:
+            return
+
+        # Guard: degenerate scene geometry → silent no-op.
+        try:
+            aux_rect = aux_vb.sceneBoundingRect()
+            if aux_rect.height() < 1.0:
+                return
+        except Exception:
+            return
+
+        center_data = (lo + hi) / 2.0
+        try:
+            from PyQt5.QtCore import QPointF
+            scene_pt = aux_vb.mapViewToScene(QPointF(0.0, center_data))
+            xm_pt = x_master_vb.mapSceneToView(scene_pt)
+            xm_y = float(xm_pt.y())
+        except Exception:
+            return
+
+        snapped_xm_y = _snap_y_to_divisions(xm_y, _N_OVERLAY_DIVISIONS)
+
+        try:
+            from PyQt5.QtCore import QPointF
+            snapped_scene_pt = x_master_vb.mapViewToScene(QPointF(0.0, snapped_xm_y))
+            snapped_ch_pt = aux_vb.mapSceneToView(snapped_scene_pt)
+            new_center = float(snapped_ch_pt.y())
+        except Exception:
+            return
+
+        try:
+            ax.set_ylim(new_center - span / 2.0, new_center + span / 2.0)
+        except Exception:
+            pass
 
     def _teardown_overlay_aux_viewboxes(self):
         """Remove every overlay aux ViewBox, its child curves, and the
@@ -1960,6 +2194,9 @@ class TimeDomainCanvasPG(QWidget):
         self._x_master_handle = None
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
+        # InfiniteLines were added via vb.addItem() on the X-master ViewBox,
+        # which is part of the PlotItem already destroyed by _glw.clear() above.
+        self._overlay_grid_lines = []
         self._subplot_label_specs = []
         self._cursor_line_items = []
         self._cursor_a_items = []
@@ -2476,6 +2713,9 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_dragging = False
         self._overlay_y_drag_start = None
         self._set_x_master_mouse_enabled(True)
+        # Snap the selected channel center to the nearest grid division.
+        selected_ax = self._selected_overlay_axes()
+        self._snap_overlay_channel_to_grid(selected_ax)
         self.schedule_idle_quality()
         return True
 
@@ -2540,14 +2780,148 @@ class TimeDomainCanvasPG(QWidget):
         self.draw_idle()
 
     def _apply_tick_density_to_all_axes(self):
-        x_n, y_n = self._tick_density
-        x_density = max(0.35, min(3.0, float(x_n) / 10.0))
+        _x_n, y_n = self._tick_density
         y_density = max(0.35, min(3.0, float(y_n) / 6.0))
+        self._apply_target_x_ticks_to_all_axes()
         for handle in self.axes_list:
-            x_axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
             y_axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
-            self._apply_axis_tick_density(x_axis, x_density)
             self._apply_axis_tick_density(y_axis, y_density)
+
+    def _apply_target_x_ticks_to_all_axes(self):
+        seen = set()
+        for handle in self._x_tick_axis_handles():
+            axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
+            if axis is None:
+                continue
+            key = id(axis)
+            if key in seen:
+                continue
+            seen.add(key)
+            self._apply_target_x_ticks(axis, handle)
+
+    def _x_tick_axis_handles(self):
+        handles = list(self.axes_list)
+        if self._overlay_mode and self._x_master_handle is not None:
+            handles.insert(0, self._x_master_handle)
+        return handles
+
+    def _apply_target_x_ticks(self, axis, handle):
+        try:
+            lo, hi = handle.get_xlim()
+            axis_width = float(axis.size().width())
+        except Exception:
+            self._reset_x_ticks_to_adaptive(axis)
+            return
+        ticks = self._compute_target_x_ticks(axis, float(lo), float(hi), axis_width)
+        if not ticks:
+            self._reset_x_ticks_to_adaptive(axis)
+            return
+        try:
+            axis.setStyle(maxTickLevel=0)
+            axis.setTicks([ticks, []])
+        except Exception:
+            self._reset_x_ticks_to_adaptive(axis)
+
+    def _reset_x_ticks_to_adaptive(self, axis):
+        try:
+            axis.setTicks(None)
+        except Exception:
+            pass
+        self._apply_axis_tick_density(
+            axis,
+            max(0.35, min(3.0, float(self._tick_density[0]) / 10.0)),
+        )
+
+    def _compute_target_x_ticks(self, axis, lo, hi, axis_width):
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            return []
+        if axis_width <= 1.0:
+            return []
+
+        target = max(_TARGET_X_TICK_MIN_COUNT, int(self._tick_density[0]))
+        raw_step = (hi - lo) / max(1, target - 1)
+        candidates = []
+        for step in self._nice_x_tick_steps(raw_step):
+            values = self._x_tick_values_for_step(lo, hi, step)
+            if len(values) < _TARGET_X_TICK_MIN_COUNT:
+                continue
+            labels = self._format_x_tick_labels(axis, values, step)
+            fit = self._fit_x_tick_labels(values, labels, lo, hi, axis_width)
+            if not fit:
+                continue
+            fit_values, fit_labels = fit
+            candidates.append((
+                abs(len(fit_values) - target),
+                -len(fit_values),
+                abs(math.log(step / raw_step)) if raw_step > 0 else 0.0,
+                step,
+                fit_values,
+                fit_labels,
+            ))
+
+        if not candidates:
+            return []
+        _distance, _neg_count, _nice_distance, _step, values, labels = min(candidates)
+        return [(float(value), str(label)) for value, label in zip(values, labels)]
+
+    def _nice_x_tick_steps(self, raw_step):
+        if not np.isfinite(raw_step) or raw_step <= 0:
+            return []
+        exponent = math.floor(math.log10(raw_step))
+        bases = []
+        for exp in range(exponent - 2, exponent + 4):
+            scale = 10.0 ** exp
+            for factor in _TARGET_X_TICK_NICE_FACTORS:
+                step = factor * scale
+                if step > 0:
+                    bases.append(step)
+        return sorted(set(bases), key=lambda step: abs(math.log(step / raw_step)))
+
+    def _x_tick_values_for_step(self, lo, hi, step):
+        start = math.ceil(lo / step) * step
+        values = []
+        value = start
+        guard = 0
+        while value <= hi + step * 1e-9 and guard < 500:
+            if value >= lo - step * 1e-9:
+                values.append(0.0 if abs(value) < step * 1e-10 else float(value))
+            value += step
+            guard += 1
+        return values
+
+    def _format_x_tick_labels(self, axis, values, spacing):
+        try:
+            return axis.tickStrings(values, getattr(axis, "scale", 1.0), spacing)
+        except Exception:
+            return [f"{value:g}" for value in values]
+
+    def _fit_x_tick_labels(self, values, labels, lo, hi, axis_width):
+        metrics = QFontMetrics(_pg_chart_font(9))
+        span = hi - lo
+        fit_values = []
+        fit_labels = []
+        previous_right = None
+        for value, label in zip(values, labels):
+            x = (float(value) - lo) / span * axis_width
+            text = str(label)
+            try:
+                width = float(metrics.horizontalAdvance(text))
+            except AttributeError:  # pragma: no cover - older Qt fallback
+                width = float(metrics.width(text))
+            left = x - width / 2.0
+            right = x + width / 2.0
+            if left < _TARGET_X_TICK_EDGE_PAD_PX:
+                continue
+            if right > axis_width - _TARGET_X_TICK_EDGE_PAD_PX:
+                continue
+            if previous_right is not None and left - previous_right < _TARGET_X_TICK_MIN_GAP_PX:
+                return None
+            fit_values.append(float(value))
+            fit_labels.append(text)
+            previous_right = right
+        if len(fit_values) < _TARGET_X_TICK_MIN_COUNT:
+            return None
+        return fit_values, fit_labels
 
     def _apply_axis_tick_density(self, axis, density):
         if axis is None:
@@ -2885,6 +3259,7 @@ class TimeDomainCanvasPG(QWidget):
         # Propagate first so the sibling axes are in sync BEFORE the
         # debounced refresh runs.
         self._propagate_xlim_to_siblings(source=source_handle)
+        self._apply_target_x_ticks_to_all_axes()
         self._emit_xrange_changed(source_handle)
         if self._refresh_pending:
             return
@@ -3839,6 +4214,16 @@ class TimeDomainCanvasPG(QWidget):
         """
         try:
             self.disable_interactive_quality()
+        except Exception:
+            pass
+        try:
+            self._refresh_overlay_axis_labels()
+        except Exception:
+            pass
+        try:
+            self._apply_target_x_ticks_to_all_axes()
+            self._unify_subplot_left_axis_widths()
+            self._unify_subplot_bottom_axis_heights()
         except Exception:
             pass
         # Recompute the envelope for the new plot-area width, matching the

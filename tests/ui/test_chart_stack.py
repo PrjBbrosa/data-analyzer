@@ -61,6 +61,45 @@ def test_cursor_pill_updates_on_time_signal(qapp, qtbot):
     assert "t=1.0s" in cs.cursor_pill_text()
 
 
+def test_cursor_pill_renders_transparent_rounded_corners(qapp, qtbot):
+    from PyQt5.QtCore import QCoreApplication
+    from PyQt5.QtGui import QColor, QImage, QPainter
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    old_sheet = qapp.styleSheet()
+    qapp.setStyleSheet(
+        Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    )
+    try:
+        pill = CursorPill()
+        qtbot.addWidget(pill)
+        pill.set_primary('<span style="color:#111827;">A</span>')
+        pill.resize(max(32, pill.width()), max(32, pill.height()))
+        pill.show()
+        QCoreApplication.processEvents()
+
+        img = QImage(pill.width(), pill.height(), QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        painter = QPainter(img)
+        pill.render(painter)
+        painter.end()
+
+        corners = [
+            QColor(img.pixelColor(0, 0)).alpha(),
+            QColor(img.pixelColor(img.width() - 1, 0)).alpha(),
+            QColor(img.pixelColor(0, img.height() - 1)).alpha(),
+            QColor(img.pixelColor(img.width() - 1, img.height() - 1)).alpha(),
+        ]
+        assert max(corners) <= 8, (
+            "cursor pill rounded corners must stay transparent; opaque corners "
+            f"make the exported/live pill look like a square popup: {corners!r}"
+        )
+        center = QColor(img.pixelColor(img.width() // 2, img.height() // 2)).alpha()
+        assert center >= 220
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_single_cursor_pill_uses_vertical_channel_readout(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
 

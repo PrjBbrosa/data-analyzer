@@ -1,6 +1,6 @@
 """Center pane: QStackedWidget holding the three canvases + stats strip."""
-from PyQt5.QtCore import QEvent, QSettings, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QKeySequence, QPixmap
+from PyQt5.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QAction, QFileDialog, QFrame, QLabel, QPushButton, QSizePolicy,
     QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
@@ -11,6 +11,9 @@ from PyQt5.QtWidgets import (
 # both the toolbar 保存图片 and 复制为图片 paths request the same factor and
 # export stays fast.
 _HIDPI_EXPORT_SCALE = 2.0
+_CURSOR_PILL_RADIUS = 9.0
+_CURSOR_PILL_BG = QColor(255, 255, 255, 235)
+_CURSOR_PILL_BORDER = QColor("#d8e0eb")
 
 
 def _pixmap_as_device_pixels(pixmap):
@@ -66,7 +69,8 @@ class CursorPill(QFrame):
         super().__init__(parent)
         self.setObjectName("cursorPill")
         self.setCursor(Qt.OpenHandCursor)
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 7, 10, 8)
         lay.setSpacing(4)
@@ -85,6 +89,17 @@ class CursorPill(QFrame):
         # User-positioned flag — true after first manual drag, so resize events
         # respect the chosen spot instead of snapping back to default corner.
         self._user_placed = False
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+            painter.setBrush(_CURSOR_PILL_BG)
+            painter.setPen(QPen(_CURSOR_PILL_BORDER, 1.0))
+            painter.drawRoundedRect(rect, _CURSOR_PILL_RADIUS, _CURSOR_PILL_RADIUS)
+        finally:
+            painter.end()
 
     def primary_text(self):
         return self._primary.text()

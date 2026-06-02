@@ -884,6 +884,14 @@ class MarkupEditor(QWidget):
         self._style_button.setStyleSheet(self._compact_tool_button_qss())
         style_menu = QMenu(self._style_button)
         style_menu.setObjectName("markupStyleMenu")
+        # Match the rounded-popup shell contract: QSS radius needs a transparent
+        # menu window, and macOS needs native frame/shadow disabled so no square
+        # backing remains behind the rounded style panel.
+        style_menu.setWindowFlags(
+            style_menu.windowFlags()
+            | Qt.FramelessWindowHint
+            | Qt.NoDropShadowWindowHint
+        )
         style_menu.setAttribute(Qt.WA_TranslucentBackground, True)
         # Make the menu a transparent shell: the rounded surface lives on the
         # inner panel below. Otherwise the global QMenu rule paints a square

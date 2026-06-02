@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>全局 UI/UX 审计与改进方案 - 2026-06-02</title>
+  <style type="text/css">
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --hover: #eef2f7;
+      --accent-bg: #e8efff;
+      --ink: #111827;
+      --muted: #64748b;
+      --line: #dfe5ee;
+      --line-soft: #eef2f7;
+      --blue: #1769e0;
+      --blue-dark: #0f3f8f;
+      --red: #dc2626;
+      --red-bg: #fef2f2;
+      --amber: #d97706;
+      --amber-bg: #fffbeb;
+      --green: #059669;
+      --green-bg: #ecfdf5;
+      --violet: #7c3aed;
+      --code-bg: #f1f5ff;
+      --shadow: 0 18px 54px rgba(15, 23, 42, .12);
+      font-family: "Microsoft YaHei", "Segoe UI", "PingFang SC", "SF Pro Text", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(90deg, rgba(100, 116, 139, .05) 1px, transparent 1px) 0 0 / 72px 72px,
+        linear-gradient(rgba(100, 116, 139, .05) 1px, transparent 1px) 0 0 / 72px 72px,
+        var(--bg);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.66;
+    }
+
+    .wrap {
+      width: min(1180px, calc(100vw - 36px));
+      margin: 0 auto;
+      padding: 30px 0 72px;
+    }
+
+    .top-grid {
+      display: grid;
+      grid-template-columns: 1.15fr .85fr;
+      gap: 18px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
+
+    .hero, .panel, .issue, .phase, .rule, .callout {
+      background: rgba(255, 255, 255, .92);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+    }
+
+    .hero {
+      padding: 24px 26px;
+      min-height: 248px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .eyebrow {
+      color: var(--blue-dark);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 8px 0 10px;
+      font-size: 28px;
+      line-height: 1.24;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 28px 0 12px;
+      padding-top: 18px;
+      border-top: 2px solid var(--line-soft);
+      font-size: 19px;
+      line-height: 1.32;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      line-height: 1.42;
+    }
+
+    p { margin: 0 0 10px; }
+
+    ul, ol {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    li { margin: 4px 0; }
+
+    code {
+      padding: 1px 5px;
+      border: 1px solid #dfe8ff;
+      border-radius: 5px;
+      background: var(--code-bg);
+      color: var(--blue-dark);
+      font-family: "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .muted { color: var(--muted); }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .chip, .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .tag.p0 { background: var(--red); border-color: var(--red); color: #fff; }
+    .tag.p1 { background: var(--amber); border-color: var(--amber); color: #fff; }
+    .tag.p2 { background: var(--green); border-color: var(--green); color: #fff; }
+    .tag.rule { background: var(--accent-bg); border-color: #c8d9ff; color: var(--blue-dark); }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .metric {
+      padding: 13px;
+      border: 1px solid var(--line-soft);
+      border-radius: 8px;
+      background: #fbfdff;
+    }
+
+    .metric b {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .menu-demo {
+      position: relative;
+      min-height: 248px;
+      padding: 22px;
+      overflow: hidden;
+    }
+
+    .demo-title {
+      margin-bottom: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .demo-board {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .demo-case {
+      position: relative;
+      height: 160px;
+      border: 1px solid var(--line-soft);
+      border-radius: 9px;
+      background: #f8fafc;
+      overflow: hidden;
+    }
+
+    .shadow-box {
+      position: absolute;
+      left: 37px;
+      top: 31px;
+      width: 128px;
+      height: 92px;
+      border-radius: 2px;
+      background: rgba(15, 23, 42, .22);
+      box-shadow: 0 12px 28px rgba(15, 23, 42, .25);
+    }
+
+    .popup-card {
+      position: absolute;
+      left: 28px;
+      top: 22px;
+      width: 128px;
+      padding: 10px;
+      border: 1px solid #c9d6ea;
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: 0 10px 26px rgba(15, 23, 42, .08);
+    }
+
+    .popup-card.clean { box-shadow: 0 12px 30px rgba(23, 105, 224, .12); }
+
+    .swatches {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+      margin-bottom: 10px;
+    }
+
+    .swatches span {
+      display: block;
+      aspect-ratio: 1;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+    }
+
+    .line-sizes {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 7px;
+    }
+
+    .line-sizes b {
+      display: grid;
+      place-items: center;
+      height: 22px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      color: #374151;
+      font-size: 11px;
+    }
+
+    .case-label {
+      position: absolute;
+      left: 10px;
+      bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .case-label.bad { color: var(--red); }
+    .case-label.good { color: var(--green); }
+
+    .callout {
+      margin: 18px 0;
+      padding: 15px 17px;
+      border-left: 4px solid var(--red);
+      background: #fff;
+    }
+
+    .callout strong { color: var(--red); }
+
+    .issue-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .issue {
+      padding: 16px;
+    }
+
+    .issue-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .evidence {
+      margin-top: 12px;
+      padding: 11px 12px;
+      border-radius: 8px;
+      border: 1px solid #dce6f5;
+      background: #fbfdff;
+    }
+
+    .evidence-title {
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      overflow: hidden;
+      background: #fff;
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .phase-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .phase {
+      padding: 16px;
+      min-height: 218px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .phase::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 4px;
+      background: var(--blue);
+    }
+
+    .phase.a::before { background: var(--red); }
+    .phase.b::before { background: var(--amber); }
+    .phase.c::before { background: var(--green); }
+
+    .rule-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .rule {
+      padding: 13px 14px;
+      display: grid;
+      grid-template-columns: 58px 1fr;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .rule-id {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 30px;
+      border-radius: 7px;
+      background: var(--accent-bg);
+      color: var(--blue-dark);
+      font-weight: 800;
+    }
+
+    .panel { padding: 16px; }
+
+    .code-flow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .flow-step {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfdff;
+      min-height: 92px;
+    }
+
+    .flow-step b {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--blue-dark);
+    }
+
+    .foot {
+      margin-top: 30px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 900px) {
+      header, .issue-grid, .phase-grid, .rule-grid, .code-flow {
+        grid-template-columns: 1fr;
+      }
+      .summary-grid, .demo-board {
+        grid-template-columns: 1fr;
+      }
+      .demo-case { height: 150px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-grid">
+      <div class="hero">
+        <div>
+          <div class="eyebrow">TraceLab / MF4 Analyzer UI Audit</div>
+          <h1>全局 UI/UX 审计与改进方案</h1>
+          <p class="muted">日期 2026-06-02。目标是把现有 <code>Precision Light</code> 规则真正落到全局，尤其解决弹出框圆角背后的矩形阴影问题。</p>
+        </div>
+        <div>
+          <div class="hero-meta">
+            <span class="chip">只读审计</span>
+            <span class="chip">ui-ux-pro-max</span>
+            <span class="chip">project lessons</span>
+            <span class="chip">PyQt / QSS</span>
+          </div>
+          <div class="summary-grid">
+            <div class="metric"><b>2</b><span>P0 问题</span></div>
+            <div class="metric"><b>4</b><span>P1 问题</span></div>
+            <div class="metric"><b>6</b><span>新规则草案</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel menu-demo">
+        <div class="demo-title">P0 焦点：线宽/颜色弹出菜单的圆角阴影</div>
+        <div class="demo-board">
+          <div class="demo-case">
+            <div class="shadow-box"></div>
+            <div class="popup-card">
+              <div class="swatches">
+                <span style="background:#e53935">&nbsp;</span><span style="background:#f97316">&nbsp;</span><span style="background:#eab308">&nbsp;</span>
+                <span style="background:#059669">&nbsp;</span><span style="background:#2563eb">&nbsp;</span><span style="background:#111827">&nbsp;</span>
+              </div>
+              <div class="line-sizes"><b>2</b><b>4</b><b>6</b><b>8</b></div>
+            </div>
+            <div class="case-label bad">当前风险：圆角后仍有原生方形阴影</div>
+          </div>
+          <div class="demo-case">
+            <div class="popup-card clean">
+              <div class="swatches">
+                <span style="background:#e53935">&nbsp;</span><span style="background:#f97316">&nbsp;</span><span style="background:#eab308">&nbsp;</span>
+                <span style="background:#059669">&nbsp;</span><span style="background:#2563eb">&nbsp;</span><span style="background:#111827">&nbsp;</span>
+              </div>
+              <div class="line-sizes"><b>2</b><b>4</b><b>6</b><b>8</b></div>
+            </div>
+            <div class="case-label good">目标：透明 shell + 无原生矩形阴影</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>直接结论：</strong>
+      当前不是缺少 UI 风格，而是风格规则没有被所有弹层、菜单、内联 QSS 和旧入口一致执行。审计时图片标注编辑器的颜色/线宽菜单只有 <code>WA_TranslucentBackground</code>，缺少 <code>FramelessWindowHint | NoDropShadowWindowHint</code>；Phase A 已补齐代码与测试，最小 MarkupEditor 实例的真实 macOS 截图未见明显方形阴影，完整 TraceLab 业务流仍待验。
+    </div>
+
+    <h2>P0 问题</h2>
+    <div class="issue-grid">
+      <div class="issue">
+        <div class="issue-head">
+          <h3>P0-1 圆角弹层规则仍不完整</h3>
+          <span class="tag p0">P0</span>
+        </div>
+        <p>全局 <code>QMenu</code> 有圆角 QSS；图片标注样式菜单审计时已有透明背景和内部 panel，但缺少 macOS 原生方形阴影抑制。Phase A 已补齐 native-shadow flags。</p>
+        <div class="evidence">
+          <div class="evidence-title">关键证据</div>
+          <ul>
+            <li><code>style.qss:1175-1179</code> 定义全局 QMenu 圆角和半透明白底。</li>
+            <li><code>markup/editor.py:885-905</code> 创建 <code>QMenu#markupStyleMenu</code>；审计时只设置透明背景，当前已追加 native-shadow flags。</li>
+            <li><code>pg_canvases.py:409-429</code> 已有更完整做法：frameless、no-shadow、透明背景。</li>
+            <li><code>test_markup_editor.py:293-312</code> 审计时只断言透明背景，当前已追加 native-shadow flags 断言。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="issue">
+        <div class="issue-head">
+          <h3>P0-2 全局 QMenu 构造点没有统一 helper</h3>
+          <span class="tag p0">P0</span>
+        </div>
+        <p>多个模块直接 <code>QMenu(self)</code>，靠全局 QSS 绘制圆角，但没有统一 shell 策略；后续会不断复发同类问题。</p>
+        <div class="evidence">
+          <div class="evidence-title">高风险入口</div>
+          <ul>
+            <li><code>acquisition_ui/main_window.py:456-458</code>、<code>503-515</code></li>
+            <li><code>acquisition_ui/widgets/left_pane.py:293-319</code></li>
+            <li><code>acquisition_ui/history_tab.py:664-683</code></li>
+            <li><code>ui/widgets/__init__.py:191-193</code></li>
+            <li><code>ui/file_navigator.py:250-254</code></li>
+            <li><code>ui/inspector_sections.py:773-795</code></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <h2>P1 问题</h2>
+    <table summary="全局 UI/UX P1 问题、证据和建议">
+      <thead>
+        <tr>
+          <th style="width:84px">优先级</th>
+          <th>问题</th>
+          <th>证据</th>
+          <th>建议</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="tag p1">P1</span></td>
+          <td>内联 QSS 和 raw color 过多，影响全局一致性。</td>
+          <td><code>markup/editor.py:864-884</code>、<code>1055-1078</code>、<code>1138-1150</code>；<code>markup/thumbnail.py:72-107</code>；<code>signal_picker.py:114-195</code></td>
+          <td>通用按钮、popup surface、swatch、thumbnail 样式迁回 <code>style.qss</code> 或 UI kit。</td>
+        </tr>
+        <tr>
+          <td><span class="tag p1">P1</span></td>
+          <td>弹层验证门槛不统一。</td>
+          <td><code>test_rebuild_popover_geometry.py:84-100</code> 已覆盖 shell/surface；<code>test_batch_signal_picker.py:203-214</code> 和 <code>test_markup_editor.py:293-303</code> 只覆盖透明背景。</td>
+          <td>测试分三档：结构、shell flags、截图/像素/实机视觉验证。</td>
+        </tr>
+        <tr>
+          <td><span class="tag p1">P1</span></td>
+          <td>控件密度规则需要分层。</td>
+          <td>标注编辑器工具按钮 44x44；图表 toolbar 32x32；缩略图关闭按钮 22x22；侧栏 rail 12px。</td>
+          <td>工具按钮默认 44x44；桌面 chart toolbar 可 32x32；关闭/危险按钮至少 30x30 hit area；侧栏 rail 必须有 hover/click 反馈。</td>
+        </tr>
+        <tr>
+          <td><span class="tag p1">P1</span></td>
+          <td>旧入口仍混有 emoji/文本图标。</td>
+          <td><code>dialogs.py:64-102</code> 有 <code>✚</code> / <code>🗑</code>；<code>replay_tab.py:110-123</code> 有播放符号文本；主 toolbar 已经使用 <code>ui_kit/icons.py</code>。</td>
+          <td>保留中文文本，装饰性符号换成统一 Icons / qtawesome，避免跨平台字体差异。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>推荐执行路线</h2>
+    <div class="phase-grid">
+      <div class="phase a">
+        <h3>Phase A：先修线宽菜单</h3>
+        <ol>
+          <li>给 <code>markupStyleMenu</code> 增加 native-shadow flags。</li>
+          <li>保留透明 menu shell + 内部 <code>markupStylePanel</code>。</li>
+          <li>更新 <code>test_markup_editor.py</code>，断言 <code>FramelessWindowHint</code> / <code>NoDropShadowWindowHint</code>。</li>
+          <li>做真实 GUI 检查：打开图片标注编辑器，点样式/线宽菜单。</li>
+        </ol>
+      </div>
+
+      <div class="phase b">
+        <h3>Phase B：统一 popup/menu helper</h3>
+        <ol>
+          <li>新增 <code>mf4_analyzer/ui_kit/popup.py</code>。</li>
+          <li>提供 <code>style_popup_shell(...)</code>。</li>
+          <li>迁移普通 <code>QMenu</code>、<code>SignalPickerPopup</code>、标注样式菜单。</li>
+          <li>新增结构测试，避免新圆角菜单缺 shell flags。</li>
+        </ol>
+      </div>
+
+      <div class="phase c">
+        <h3>Phase C：全局视觉收敛</h3>
+        <ol>
+          <li>内联 QSS 中的通用形态迁回 <code>style.qss</code>。</li>
+          <li>旧 emoji 按钮换统一图标。</li>
+          <li>给 MarkupEditor、Chart toolbar、Side panels、Acquisition toolbar 做截图/实机 pass。</li>
+        </ol>
+      </div>
+    </div>
+
+    <h2>建议的 popup helper 形态</h2>
+    <div class="panel">
+      <p>目标不是到处复制几行 flags，而是把圆角弹层的外壳规则收进一个入口。</p>
+      <div class="code-flow">
+        <div class="flow-step">
+          <b>1. 保留原行为</b>
+          不破坏已有 <code>Qt.Popup</code>、dismiss、定位和父子关系。
+        </div>
+        <div class="flow-step">
+          <b>2. 抑制原生阴影</b>
+          追加 <code>FramelessWindowHint</code> 与 <code>NoDropShadowWindowHint</code>。
+        </div>
+        <div class="flow-step">
+          <b>3. 透明外壳</b>
+          最后设置 <code>WA_TranslucentBackground</code>，避免 flags 变更重建窗口后属性丢失。
+        </div>
+        <div class="flow-step">
+          <b>4. 内部 surface</b>
+          可见白底和圆角放到内部 <code>QFrame</code> / panel，避免透明 <code>QDialog</code> 中心不绘制。
+        </div>
+      </div>
+    </div>
+
+    <h2>新规则草案</h2>
+    <div class="rule-grid">
+      <div class="rule"><span class="rule-id">UI-R1</span><div>任何圆角 popup/menu/popover 都必须是透明外壳；可见白底放内部 surface。</div></div>
+      <div class="rule"><span class="rule-id">UI-R2</span><div>macOS 顶层 <code>QMenu</code> / <code>Qt.Popup</code> 若有圆角，必须处理 <code>FramelessWindowHint | NoDropShadowWindowHint</code>。</div></div>
+      <div class="rule"><span class="rule-id">UI-R3</span><div>弹层视觉问题不能只靠 attribute 测试结案；至少需要结构测试 + 实机截图/像素/现场检查之一。</div></div>
+      <div class="rule"><span class="rule-id">UI-R4</span><div>业务模块不要新增大段内联 QSS；通用按钮、菜单、浮层、swatch、thumbnail 样式沉到 UI kit。</div></div>
+      <div class="rule"><span class="rule-id">UI-R5</span><div>icon-only 工具默认 44x44；桌面图表 toolbar 可 32x32，但必须有 tooltip、active state 和键盘/菜单替代路径。</div></div>
+      <div class="rule"><span class="rule-id">UI-R6</span><div>TraceLab 是工具型桌面应用，后续 UI prototype/方案必须贴近现有产品界面，不做 demo page 或营销页风格。</div></div>
+    </div>
+
+    <h2>当前未验证</h2>
+    <div class="panel">
+      <ul>
+        <li>本轮没有打开真实 TraceLab GUI，也没有截图验证线宽菜单；结论基于代码路径、已有 tests 和 lessons。</li>
+        <li>普通 <code>QMenu</code> 构造点是否全部肉眼可见方形阴影，需要 Phase B 后用真实 macOS 菜单逐个抽查。</li>
+      </ul>
+    </div>
+
+    <div class="foot">
+      HTML 报告由 <code>docs/analyzer/reviews/2026-06-02-global-uiux-audit.md</code> 整理而来；源码修复建议以 Phase A 为第一步。
+    </div>
+  </div>
+</body>
+</html>

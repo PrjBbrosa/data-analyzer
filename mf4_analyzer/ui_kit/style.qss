@@ -1071,9 +1071,8 @@ QWidget#chartToolbar QToolButton:disabled {
 }
 
 QFrame#cursorPill {
-    border: 1px solid #d8e0eb;
-    border-radius: 9px;
-    background-color: rgba(255, 255, 255, 235);
+    border: none;
+    background: transparent;
     color: #111827;
 }
 QFrame#cursorPill QLabel#cursorPillPrimary {

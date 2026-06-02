@@ -1177,6 +1177,262 @@ def _five_channel_rows():
     ]
 
 
+def _major_tick_labels(axis):
+    levels = getattr(axis, "_tickLevels", None)
+    assert levels is not None, "expected explicit X tick levels"
+    assert len(levels) >= 1
+    return list(levels[0])
+
+
+def _label_rects_for_axis(axis, values_and_labels, lo, hi):
+    from PyQt5.QtGui import QFontMetrics
+    from mf4_analyzer.ui.pg_canvases import _pg_chart_font
+
+    width = float(axis.size().width())
+    metrics = QFontMetrics(_pg_chart_font(9))
+    rects = []
+    span = float(hi - lo)
+    assert span > 0
+    for value, label in values_and_labels:
+        x = (float(value) - float(lo)) / span * width
+        try:
+            w = float(metrics.horizontalAdvance(str(label)))
+        except AttributeError:
+            w = float(metrics.width(str(label)))
+        rects.append((x - w / 2.0, x + w / 2.0, str(label)))
+    return rects
+
+
+def test_x_tick_target_count_used_when_width_allows(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1200, 700)
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    t = np.linspace(0.0, 100.0, 5000)
+    rows = [("speed", True, t, np.sin(t), "#1769e0", "", "f")]
+    canvas.plot_channels(rows, mode="subplot")
+    QCoreApplication.processEvents()
+
+    axis = canvas.axes_list[0].x_axis_item()
+
+    canvas.set_tick_density(10, 6)
+    QCoreApplication.processEvents()
+    labels_10 = _major_tick_labels(axis)
+    assert 9 <= len(labels_10) <= 11
+
+    canvas.set_tick_density(20, 6)
+    QCoreApplication.processEvents()
+    labels_20 = _major_tick_labels(axis)
+    assert 18 <= len(labels_20) <= 21
+
+    canvas.deleteLater()
+
+
+def test_x_tick_target_count_backs_off_before_label_overlap(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(360, 360)
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    t = np.linspace(0.0, 1_000_000.0, 5000)
+    rows = [("speed", True, t, np.sin(t / 100000.0), "#1769e0", "", "f")]
+    canvas.plot_channels(rows, mode="subplot")
+    canvas.set_tick_density(30, 6)
+    QCoreApplication.processEvents()
+
+    handle = canvas.axes_list[0]
+    axis = handle.x_axis_item()
+    lo, hi = handle.get_xlim()
+    labels = _major_tick_labels(axis)
+    rects = _label_rects_for_axis(axis, labels, lo, hi)
+
+    assert len(labels) < 30
+    previous_right = None
+    for left, right, label in rects:
+        assert left >= -0.5, f"label {label!r} overflows left edge"
+        assert right <= float(axis.size().width()) + 0.5, (
+            f"label {label!r} overflows right edge"
+        )
+        if previous_right is not None:
+            assert left - previous_right >= 8.0, (
+                f"adjacent X tick labels overlap: previous_right={previous_right}, "
+                f"left={left}, label={label!r}"
+            )
+        previous_right = right
+
+    canvas.deleteLater()
+
+
+def test_target_x_ticks_refresh_after_xlim_change(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1000, 500)
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    t = np.linspace(0.0, 100.0, 5000)
+    rows = [("speed", True, t, np.sin(t), "#1769e0", "", "f")]
+    canvas.plot_channels(rows, mode="subplot")
+    canvas.set_tick_density(20, 6)
+    QCoreApplication.processEvents()
+
+    handle = canvas.axes_list[0]
+    before = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
+    handle.set_xlim(20.0, 40.0)
+    QCoreApplication.processEvents()
+    after = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
+
+    assert before != after
+    assert min(after) >= 20.0 - 1e-9
+    assert max(after) <= 40.0 + 1e-9
+    assert 18 <= len(after) <= 21
+
+    canvas.deleteLater()
+
+
+def test_target_x_ticks_refresh_after_reset_to_data_extents(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1200, 700)
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    t = np.linspace(0.0, 100.0, 5000)
+    rows = [("speed", True, t, np.sin(t), "#1769e0", "", "f")]
+    canvas.plot_channels(rows, mode="subplot")
+    canvas.set_tick_density(20, 6)
+    QCoreApplication.processEvents()
+
+    handle = canvas.axes_list[0]
+    handle.set_xlim(20.0, 40.0)
+    QCoreApplication.processEvents()
+    zoomed = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
+    assert min(zoomed) >= 20.0 - 1e-9
+    assert max(zoomed) <= 40.0 + 1e-9
+
+    canvas.reset_view_to_data_extents()
+    QCoreApplication.processEvents()
+    reset = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
+
+    assert 18 <= len(reset) <= 21
+    assert min(reset) <= 10.0
+    assert max(reset) >= 90.0
+
+    canvas.deleteLater()
+
+
+def test_target_x_ticks_refresh_after_resize_settle(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(420, 420)
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    t = np.linspace(0.0, 100.0, 5000)
+    rows = [("speed", True, t, np.sin(t), "#1769e0", "", "f")]
+    canvas.plot_channels(rows, mode="subplot")
+    canvas.set_tick_density(20, 6)
+    QCoreApplication.processEvents()
+
+    handle = canvas.axes_list[0]
+    axis = handle.x_axis_item()
+    narrow_labels = _major_tick_labels(axis)
+    assert len(narrow_labels) < 18
+
+    canvas.resize(1200, 420)
+    QCoreApplication.processEvents()
+    canvas._on_resize_settled()
+    QCoreApplication.processEvents()
+
+    lo, hi = handle.get_xlim()
+    wide_labels = _major_tick_labels(axis)
+    rects = _label_rects_for_axis(axis, wide_labels, lo, hi)
+
+    assert len(wide_labels) > len(narrow_labels)
+    assert 18 <= len(wide_labels) <= 21
+
+    previous_right = None
+    for left, right, label in rects:
+        assert left >= -0.5, f"label {label!r} overflows left edge"
+        assert right <= float(axis.size().width()) + 0.5, (
+            f"label {label!r} overflows right edge"
+        )
+        if previous_right is not None:
+            assert left - previous_right >= 8.0, (
+                f"adjacent X tick labels overlap: previous_right={previous_right}, "
+                f"left={left}, label={label!r}"
+            )
+        previous_right = right
+
+    canvas.deleteLater()
+
+
+def test_subplot_rows_share_target_x_ticks(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1200, 800)
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    t = np.linspace(0.0, 100.0, 5000)
+    rows = [
+        (f"ch{i}", True, t, np.sin(t + i), "#1769e0", "", "f")
+        for i in range(3)
+    ]
+    canvas.plot_channels(rows, mode="subplot")
+    canvas.set_tick_density(20, 6)
+    QCoreApplication.processEvents()
+
+    tick_sets = [
+        tuple(value for value, _label in _major_tick_labels(handle.x_axis_item()))
+        for handle in canvas.axes_list
+    ]
+    assert len(set(tick_sets)) == 1
+    assert 18 <= len(tick_sets[0]) <= 21
+
+    canvas.deleteLater()
+
+
+def test_overlay_target_x_ticks_apply_to_x_master_axis(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(1200, 700)
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    t = np.linspace(0.0, 100.0, 5000)
+    rows = [
+        (f"ch{i}", True, t, np.sin(t + i), "#1769e0", "", "f")
+        for i in range(3)
+    ]
+    canvas.plot_channels(rows, mode="overlay")
+    canvas.set_tick_density(20, 6)
+    QCoreApplication.processEvents()
+
+    axis = canvas._x_master_handle.x_axis_item()
+    labels = _major_tick_labels(axis)
+    assert 18 <= len(labels) <= 21
+
+    canvas.deleteLater()
+
+
 class TestTimeDomainCanvasPGSubplotMode:
     """5 channels in subplot mode → 5 stacked PlotItems sharing the X
     axis. Sync xlim via the primary axis. Inside-vs-outside label
@@ -3793,15 +4049,16 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         monkeypatch.setattr(pg.AxisItem, "setTickDensity", _spy)
         canvas.set_tick_density(12, 7)
 
-        assert len(calls) >= len(canvas.axes_list) * 2
+        assert len(calls) >= len(canvas.axes_list)
         assert canvas._tick_density == (12, 7)
 
-    def test_set_tick_density_keeps_pg_ticks_adaptive(self, qapp):
-        """Tick density must not install fixed major/minor spacing.
+    def test_set_tick_density_keeps_y_ticks_adaptive_and_x_ticks_major_only(self, qapp):
+        """X uses explicit major ticks; Y keeps pyqtgraph adaptive density.
 
         Fixed ``setTickSpacing(major, minor)`` made pyqtgraph label the minor
-        level too, producing dense tick-label piles and slow repaint after
-        channel rebuilds. ``setTickDensity`` keeps AxisItem's adaptive spacing.
+        level too, producing dense tick-label piles and slow repaint after a
+        channel rebuild. X now uses explicit major ticks only; Y remains on
+        ``setTickDensity``.
         """
         from PyQt5.QtCore import QCoreApplication
 
@@ -3811,14 +4068,21 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         QCoreApplication.processEvents()
 
         canvas.plot_channels(_five_channel_rows()[:5], mode="subplot")
-        canvas.set_tick_density(10, 6)
+        canvas.set_tick_density(20, 6)
         QCoreApplication.processEvents()
 
         for handle in canvas.axes_list:
-            for axis in (handle.x_axis_item(), handle.y_axis_item()):
-                assert axis is not None
-                assert getattr(axis, "_tickSpacing", None) is None
-                assert axis.style.get("maxTickLevel") == 0
+            x_axis = handle.x_axis_item()
+            y_axis = handle.y_axis_item()
+            assert x_axis is not None
+            assert y_axis is not None
+            assert getattr(x_axis, "_tickSpacing", None) is None
+            assert getattr(y_axis, "_tickSpacing", None) is None
+            assert x_axis.style.get("maxTickLevel") == 0
+            assert y_axis.style.get("maxTickLevel") == 0
+            assert getattr(x_axis, "_tickLevels", None) is not None
+            assert getattr(y_axis, "_tickLevels", None) is None
+            assert len(getattr(x_axis, "_tickLevels")[1]) == 0
 
 
 def _path_elements(path):
@@ -4085,6 +4349,72 @@ class TestOverlayAxisLabelGeometry:
             )
         canvas.deleteLater()
 
+    def test_overlay_label_uses_available_axis_height_before_ellipsis(self, qapp):
+        """A tall overlay chart should not truncate channel names to a fixed
+        character count when the rotated Y-axis label has room to fit.
+        """
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(1000, 620)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        t = np.linspace(0.0, 1.0, 500)
+        first_name = "SteeringAngleSpeed_xds16_filtered"
+        second_name = "SteeringWheelTorqueNm_filtered"
+        rows = [
+            (first_name, True, t, 1000.0 * np.sin(t), "#1769e0", "rpm", "f"),
+            (second_name, True, t, 5.0 + np.cos(t), "#ef4444", "Nm", "f"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        canvas.resize(1001, 620)
+        QCoreApplication.processEvents()
+
+        for name, (handle, _line) in canvas._channel_lines.items():
+            label = handle.get_ylabel()
+            assert "..." not in label, (
+                f"overlay label for {name!r} was ellipsized despite available "
+                f"axis height: {label!r}"
+            )
+            assert name in label
+
+        canvas.deleteLater()
+
+    def test_overlay_label_reexpands_after_taller_resize(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(1000, 220)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        t = np.linspace(0.0, 1.0, 500)
+        name = "SteeringAngleSpeed_xds16_filtered"
+        rows = [
+            (name, True, t, 1000.0 * np.sin(t), "#1769e0", "rpm", "f"),
+            ("torque", True, t, 5.0 + np.cos(t), "#ef4444", "Nm", "f"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        initial = canvas._channel_lines[name][0].get_ylabel()
+        assert "..." in initial
+
+        canvas.resize(1000, 620)
+        QCoreApplication.processEvents()
+        canvas._refresh_overlay_axis_labels()
+        QCoreApplication.processEvents()
+
+        expanded = canvas._channel_lines[name][0].get_ylabel()
+        assert "..." not in expanded
+        assert name in expanded
+
+        canvas.deleteLater()
+
     def test_overlay_axes_disable_autosiprefix(self, qapp):
         from PyQt5.QtCore import QCoreApplication
         from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
@@ -4309,6 +4639,46 @@ class TestOverlayGridSingleAxis:
         assert bool(pi.getAxis("bottom").grid)
         assert not pi.getAxis("left").grid
         assert not pi.getAxis("right").grid
+        canvas.deleteLater()
+
+    def test_overlay_grid_lines_created_on_plot(self, qapp):
+        """plot_channels overlay 后，应有 _N_OVERLAY_DIVISIONS - 1 条格线。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG, _N_OVERLAY_DIVISIONS
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(900, 480)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        canvas.plot_channels(_five_channel_rows()[:3], mode="overlay")
+        QCoreApplication.processEvents()
+
+        assert len(canvas._overlay_grid_lines) == _N_OVERLAY_DIVISIONS - 1, (
+            f"expected {_N_OVERLAY_DIVISIONS - 1} grid lines, "
+            f"got {len(canvas._overlay_grid_lines)}"
+        )
+        canvas.deleteLater()
+
+    def test_overlay_grid_lines_cleared_on_rebuild(self, qapp):
+        """重建后格线数量不应翻倍（清理后重建）。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG, _N_OVERLAY_DIVISIONS
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(900, 480)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        canvas.plot_channels(_five_channel_rows()[:3], mode="overlay")
+        QCoreApplication.processEvents()
+        canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
+        QCoreApplication.processEvents()
+
+        assert len(canvas._overlay_grid_lines) == _N_OVERLAY_DIVISIONS - 1, (
+            f"after rebuild, expected {_N_OVERLAY_DIVISIONS - 1}, "
+            f"got {len(canvas._overlay_grid_lines)}"
+        )
         canvas.deleteLater()
 
     def test_subplot_keeps_both_x_and_y_grid(self, qapp):
@@ -5004,3 +5374,174 @@ class TestAutoIdleAA:
         canvas.set_xlim(0.2, 0.8)
         assert canvas._idle_aa_on is False
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
+
+
+class TestOverlayYSnapToGrid:
+    """Snap-to-grid helper and integration tests."""
+
+    def test_snap_y_to_divisions_round_to_nearest(self):
+        """_snap_y_to_divisions 将任意 y 值四舍五入到最近的 k/N。"""
+        from mf4_analyzer.ui.pg_canvases import _snap_y_to_divisions
+
+        assert _snap_y_to_divisions(0.0, 8) == pytest.approx(0.0)
+        # 0.124 is closer to 0.125 than to 0.0 (midpoint = 0.0625).
+        assert _snap_y_to_divisions(0.124, 8) == pytest.approx(0.125)
+        assert _snap_y_to_divisions(0.126, 8) == pytest.approx(0.125)
+        assert _snap_y_to_divisions(0.5, 8) == pytest.approx(0.5)
+        assert _snap_y_to_divisions(0.999, 8) == pytest.approx(1.0)
+        assert _snap_y_to_divisions(1.0, 8) == pytest.approx(1.0)
+
+    def test_snap_channel_preserves_span_on_degenerate_geometry(self, qapp):
+        """ViewBox 尺寸为零时（offscreen），span 应保持不变，不崩溃。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
+        QCoreApplication.processEvents()
+
+        ax = canvas.axes_list[0]
+        ax.set_ylim(-300.0, 300.0)   # span = 600
+        lo_before, hi_before = ax.get_ylim()
+        span_before = hi_before - lo_before
+
+        # Should not raise even with degenerate (0-size) offscreen ViewBoxes.
+        canvas._snap_overlay_channel_to_grid(ax)
+        QCoreApplication.processEvents()
+
+        lo_after, hi_after = ax.get_ylim()
+        span_after = hi_after - lo_after
+        assert abs(span_after - span_before) < 1e-4, (
+            f"span changed: {span_before} → {span_after}"
+        )
+        canvas.deleteLater()
+
+    def test_snap_none_ax_is_noop(self, qapp):
+        """ax=None のとき何も起きない（クラッシュしない）。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
+        QCoreApplication.processEvents()
+
+        # Must not raise.
+        canvas._snap_overlay_channel_to_grid(None)
+        canvas.deleteLater()
+
+    def test_release_calls_snap_when_overlay_dragging(self, qapp, monkeypatch):
+        """_handle_overlay_mouse_release は snap を呼び出す。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+        from unittest.mock import MagicMock
+
+        canvas = TimeDomainCanvasPG()
+        QCoreApplication.processEvents()
+        rows = _five_channel_rows()[:2]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        canvas.select_overlay_channel(rows[0][0])
+        QCoreApplication.processEvents()
+        canvas._begin_overlay_y_drag_at(start_y_px=100.0)
+        canvas._overlay_dragging = True
+
+        snap_calls = []
+        monkeypatch.setattr(
+            canvas, "_snap_overlay_channel_to_grid",
+            lambda ax: snap_calls.append(ax),
+        )
+
+        event = MagicMock()
+        canvas._handle_overlay_mouse_release(event)
+
+        assert len(snap_calls) == 1, (
+            f"expected 1 snap call on release, got {snap_calls}"
+        )
+        canvas.deleteLater()
+
+    def test_release_does_not_snap_when_not_dragging(self, qapp, monkeypatch):
+        """drag 中でない場合は snap を呼ばない。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+        from unittest.mock import MagicMock
+
+        canvas = TimeDomainCanvasPG()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
+        QCoreApplication.processEvents()
+
+        snap_calls = []
+        monkeypatch.setattr(
+            canvas, "_snap_overlay_channel_to_grid",
+            lambda ax: snap_calls.append(ax),
+        )
+
+        event = MagicMock()
+        canvas._handle_overlay_mouse_release(event)   # _overlay_dragging is False
+
+        assert snap_calls == [], (
+            f"snap should not be called when not dragging; got {snap_calls}"
+        )
+        canvas.deleteLater()
+
+    def test_snap_aligns_center_to_grid_in_real_geometry(self, qapp):
+        """有效几何下，snap 后 center 应对齐到 1/8 格（X-master 归一化空间）。
+
+        如果 ViewBox 在此环境下仍为 degenerate（height < 1），自动 skip。
+        """
+        from PyQt5.QtCore import QCoreApplication, QPointF
+        import pytest
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(900, 480)
+        canvas.show()
+        QCoreApplication.processEvents()
+        QCoreApplication.processEvents()  # double-flush for layout settle
+
+        rows = _five_channel_rows()[:2]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        ax = canvas.axes_list[0]
+        ax.set_ylim(-300.0, 300.0)   # span = 600, center = 0
+        QCoreApplication.processEvents()
+
+        # Check geometry is valid; skip if still degenerate.
+        aux_vb = getattr(ax, "view_box", None)
+        if aux_vb is None:
+            pytest.skip("no aux ViewBox")
+        rect = aux_vb.sceneBoundingRect()
+        if rect.height() < 1.0:
+            pytest.skip(f"degenerate geometry (height={rect.height():.1f}), skip snap test")
+
+        lo_before, hi_before = ax.get_ylim()
+        span_before = hi_before - lo_before
+
+        canvas._snap_overlay_channel_to_grid(ax)
+        QCoreApplication.processEvents()
+
+        lo_after, hi_after = ax.get_ylim()
+        span_after = hi_after - lo_after
+
+        # Span must be preserved.
+        assert abs(span_after - span_before) < 1e-4, (
+            f"span changed: {span_before} → {span_after}"
+        )
+
+        # Center must align to k/8 in X-master normalized Y space.
+        center_after = (lo_after + hi_after) / 2.0
+        x_master_vb = getattr(canvas._x_master_handle, "view_box", None)
+        assert x_master_vb is not None, "X-master ViewBox missing"
+        scene_pt = aux_vb.mapViewToScene(QPointF(0.0, center_after))
+        xm_pt = x_master_vb.mapSceneToView(scene_pt)
+        xm_y = float(xm_pt.y())
+        remainder = abs(xm_y * 8 - round(xm_y * 8))
+        assert remainder < 0.01, (
+            f"center not aligned to 1/8 grid: xm_y={xm_y:.4f}, "
+            f"remainder={remainder:.4f}"
+        )
+        canvas.deleteLater()
