@@ -19,9 +19,13 @@ env/
 # Test / coverage
 .pytest_cache/
 .pytest-tmp/
+.pytmp/
 .coverage
 htmlcov/
 .tox/
+
+# Stray npm lockfile (this is a Python project; no Node deps)
+package-lock.json
 
 # IDE
 .idea/
