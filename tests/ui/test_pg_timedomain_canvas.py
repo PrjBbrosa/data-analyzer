@@ -5374,3 +5374,115 @@ class TestAutoIdleAA:
         canvas.set_xlim(0.2, 0.8)
         assert canvas._idle_aa_on is False
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
+
+
+class TestOverlayYSnapToGrid:
+    """Snap-to-grid helper and integration tests."""
+
+    def test_snap_y_to_divisions_round_to_nearest(self):
+        """_snap_y_to_divisions 将任意 y 值四舍五入到最近的 k/N。"""
+        from mf4_analyzer.ui.pg_canvases import _snap_y_to_divisions
+
+        assert _snap_y_to_divisions(0.0, 8) == pytest.approx(0.0)
+        # 0.124 is closer to 0.125 than to 0.0 (midpoint = 0.0625).
+        assert _snap_y_to_divisions(0.124, 8) == pytest.approx(0.125)
+        assert _snap_y_to_divisions(0.126, 8) == pytest.approx(0.125)
+        assert _snap_y_to_divisions(0.5, 8) == pytest.approx(0.5)
+        assert _snap_y_to_divisions(0.999, 8) == pytest.approx(1.0)
+        assert _snap_y_to_divisions(1.0, 8) == pytest.approx(1.0)
+
+    def test_snap_channel_preserves_span_on_degenerate_geometry(self, qapp):
+        """ViewBox 尺寸为零时（offscreen），span 应保持不变，不崩溃。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
+        QCoreApplication.processEvents()
+
+        ax = canvas.axes_list[0]
+        ax.set_ylim(-300.0, 300.0)   # span = 600
+        lo_before, hi_before = ax.get_ylim()
+        span_before = hi_before - lo_before
+
+        # Should not raise even with degenerate (0-size) offscreen ViewBoxes.
+        canvas._snap_overlay_channel_to_grid(ax)
+        QCoreApplication.processEvents()
+
+        lo_after, hi_after = ax.get_ylim()
+        span_after = hi_after - lo_after
+        assert abs(span_after - span_before) < 1e-4, (
+            f"span changed: {span_before} → {span_after}"
+        )
+        canvas.deleteLater()
+
+    def test_snap_none_ax_is_noop(self, qapp):
+        """ax=None のとき何も起きない（クラッシュしない）。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
+        QCoreApplication.processEvents()
+
+        # Must not raise.
+        canvas._snap_overlay_channel_to_grid(None)
+        canvas.deleteLater()
+
+    def test_release_calls_snap_when_overlay_dragging(self, qapp, monkeypatch):
+        """_handle_overlay_mouse_release は snap を呼び出す。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+        from unittest.mock import MagicMock
+
+        canvas = TimeDomainCanvasPG()
+        QCoreApplication.processEvents()
+        rows = _five_channel_rows()[:2]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        canvas.select_overlay_channel(rows[0][0])
+        QCoreApplication.processEvents()
+        canvas._begin_overlay_y_drag_at(start_y_px=100.0)
+        canvas._overlay_dragging = True
+
+        snap_calls = []
+        monkeypatch.setattr(
+            canvas, "_snap_overlay_channel_to_grid",
+            lambda ax: snap_calls.append(ax),
+        )
+
+        event = MagicMock()
+        canvas._handle_overlay_mouse_release(event)
+
+        assert len(snap_calls) == 1, (
+            f"expected 1 snap call on release, got {snap_calls}"
+        )
+        canvas.deleteLater()
+
+    def test_release_does_not_snap_when_not_dragging(self, qapp, monkeypatch):
+        """drag 中でない場合は snap を呼ばない。"""
+        from PyQt5.QtCore import QCoreApplication
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+        from unittest.mock import MagicMock
+
+        canvas = TimeDomainCanvasPG()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
+        QCoreApplication.processEvents()
+
+        snap_calls = []
+        monkeypatch.setattr(
+            canvas, "_snap_overlay_channel_to_grid",
+            lambda ax: snap_calls.append(ax),
+        )
+
+        event = MagicMock()
+        canvas._handle_overlay_mouse_release(event)   # _overlay_dragging is False
+
+        assert snap_calls == [], (
+            f"snap should not be called when not dragging; got {snap_calls}"
+        )
+        canvas.deleteLater()

@@ -845,6 +845,19 @@ class _ModifierWheelViewBox(pg.ViewBox):
 
 
 # ---------------------------------------------------------------------------
+# Overlay Y-snap helper.
+# ---------------------------------------------------------------------------
+
+
+def _snap_y_to_divisions(y: float, n: int) -> float:
+    """Round ``y`` to the nearest k/n grid boundary.
+
+    Pure function — stateless and safe to call from tests.
+    """
+    return round(y * n) / n
+
+
+# ---------------------------------------------------------------------------
 # Curve-layer cache key quantization (signal-processing/
 # 2026-04-25-envelope-cache-bucket-width-quantization).
 # ---------------------------------------------------------------------------
@@ -2018,6 +2031,70 @@ class TimeDomainCanvasPG(QWidget):
                 pass
         self._overlay_grid_lines = lines
 
+    def _snap_overlay_channel_to_grid(self, ax):
+        """Snap the selected channel's ViewBox Y center to the nearest
+        1/_N_OVERLAY_DIVISIONS boundary in X-master normalized space.
+
+        The span (hi - lo) is preserved; only the center moves.  If the
+        scene geometry is degenerate (offscreen / zero-size ViewBox), the
+        method is a silent no-op — no crash, no change.
+
+        Coordinate path:
+            channel data center
+                → aux_vb.mapToScene()
+                → x_master_vb.mapSceneToView()   [X-master Y ∈ [0, 1]]
+                → _snap_y_to_divisions()
+                → x_master_vb.mapToScene()
+                → aux_vb.mapSceneToView()
+            → new channel data center
+        """
+        if ax is None:
+            return
+        try:
+            lo, hi = ax.get_ylim()
+        except Exception:
+            return
+        span = hi - lo
+        if span <= 0:
+            return
+
+        aux_vb = getattr(ax, "view_box", None)
+        x_master = self._x_master_handle
+        x_master_vb = getattr(x_master, "view_box", None) if x_master else None
+        if aux_vb is None or x_master_vb is None:
+            return
+
+        # Guard: degenerate scene geometry → silent no-op.
+        try:
+            aux_rect = aux_vb.sceneBoundingRect()
+            if aux_rect.height() < 1.0:
+                return
+        except Exception:
+            return
+
+        center_data = (lo + hi) / 2.0
+        try:
+            from PyQt5.QtCore import QPointF
+            scene_pt = aux_vb.mapToScene(QPointF(0.0, center_data))
+            xm_pt = x_master_vb.mapSceneToView(scene_pt)
+            xm_y = float(xm_pt.y())
+        except Exception:
+            return
+
+        snapped_xm_y = _snap_y_to_divisions(xm_y, _N_OVERLAY_DIVISIONS)
+
+        try:
+            snapped_scene_pt = x_master_vb.mapToScene(QPointF(0.0, snapped_xm_y))
+            snapped_ch_pt = aux_vb.mapSceneToView(snapped_scene_pt)
+            new_center = float(snapped_ch_pt.y())
+        except Exception:
+            return
+
+        try:
+            ax.set_ylim(new_center - span / 2.0, new_center + span / 2.0)
+        except Exception:
+            pass
+
     def _teardown_overlay_aux_viewboxes(self):
         """Remove every overlay aux ViewBox, its child curves, and the
         ch3+ appended right ``AxisItem``s from the scene.
@@ -2644,6 +2721,9 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_dragging = False
         self._overlay_y_drag_start = None
         self._set_x_master_mouse_enabled(True)
+        # Snap the selected channel center to the nearest grid division.
+        selected_ax = self._selected_overlay_axes()
+        self._snap_overlay_channel_to_grid(selected_ax)
         self.schedule_idle_quality()
         return True
 
