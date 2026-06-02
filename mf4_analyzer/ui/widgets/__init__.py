@@ -9,12 +9,14 @@ from PyQt5.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QStyle,
+    QStyleOptionViewItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import Qt, QPropertyAnimation, QSize, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QIcon, QPainter, QPen, QPixmap
 
 from ...ui_kit.icons import Icons
@@ -57,6 +59,81 @@ class StatisticsPanel(QFrame):
                  f"{s['std']:.3g}", f"{s['p2p']:.3g}"]))
 
 
+class _CheckTolerantTree(QTreeWidget):
+    """QTreeWidget that widens the *clickable* hit area of the column-0
+    checkbox (the indicator stays the same visual size).
+
+    Users kept missing the small indicator box. We grow only the hit band:
+    the indicator rect padded by ``HIT_PAD`` px on each side, stretched to
+    the full row height. A left-click that lands inside that band toggles
+    the row's check state and is consumed, so Qt does not double-toggle it.
+    A click on the channel-name / swatch area falls through to the base
+    class (selection + the right-click 设为左轴 path are untouched).
+    """
+
+    HIT_PAD = 6  # px tolerance added to each side of the indicator rect
+
+    def _check_hit_rect(self, item, index):
+        """Return the enlarged clickable rect for ``item``'s checkbox, or
+        None if the row has no user-checkable column-0 box."""
+        if not (item.flags() & Qt.ItemIsUserCheckable):
+            return None
+        opt = QStyleOptionViewItem()
+        opt.initFrom(self)
+        opt.rect = self.visualRect(index)
+        # The check-indicator subelement rect is only computed when the
+        # option advertises a check indicator; without these the style
+        # returns a null rect.
+        opt.features |= QStyleOptionViewItem.HasCheckIndicator
+        opt.checkState = item.checkState(0)
+        indicator = self.style().subElementRect(
+            QStyle.SE_ItemViewItemCheckIndicator, opt, self
+        )
+        if indicator.isNull() or indicator.width() <= 0:
+            # Fallback: some styles still report a degenerate rect under the
+            # offscreen platform. Derive the indicator band from the row's
+            # left edge + the style's checkbox metric so the tolerance band
+            # is still usable.
+            metric = self.style().pixelMetric(
+                QStyle.PM_IndicatorWidth, opt, self
+            )
+            if metric <= 0:
+                return None
+            row = self.visualRect(index)
+            left = row.left() + 2
+            indicator = QRect(left, row.top(), metric, row.height())
+        # Widen left/right by the tolerance; cover the full row height so a
+        # click anywhere on the left band (vertically) still counts.
+        row = self.visualItemRect(item)
+        hit = indicator.adjusted(-self.HIT_PAD, 0, self.HIT_PAD, 0)
+        hit.setTop(row.top())
+        hit.setBottom(row.bottom())
+        return hit
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            pos = event.pos()
+            item = self.itemAt(pos)
+            if item is not None:
+                index = self.indexFromItem(item, 0)
+                hit = self._check_hit_rect(item, index)
+                if hit is not None and hit.contains(pos):
+                    new_state = (
+                        Qt.Unchecked
+                        if item.checkState(0) == Qt.Checked
+                        else Qt.Checked
+                    )
+                    # Route through setCheckState so the existing
+                    # itemChanged → _on_item_changed cascade (file→child
+                    # propagation, MAX_CHANNELS_WARNING, channels_changed)
+                    # runs exactly once. Consume the event: returning here
+                    # without super() prevents Qt's own indicator handling
+                    # from toggling a second time.
+                    item.setCheckState(0, new_state)
+                    return
+        super().mousePressEvent(event)
+
+
 class MultiFileChannelWidget(QWidget):
     channels_changed = pyqtSignal()
     # Emitted when the user picks 设为左轴 in a channel's right-click menu.
@@ -95,7 +172,7 @@ class MultiFileChannelWidget(QWidget):
         self.btn_edit.clicked.connect(self.channel_editor_requested)
         bl.addWidget(self.btn_edit)
         layout.addLayout(bl)
-        self.tree = QTreeWidget();
+        self.tree = _CheckTolerantTree();
         self.tree.setObjectName("channelTree")
         self.tree.setHeaderLabels(['Channel', 'Pts']);
         header = self.tree.header()

@@ -19,6 +19,8 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -34,81 +36,231 @@ from .widgets.compact_spinbox import CompactDoubleSpinBox
 
 
 class ChannelEditorDialog(QDialog):
-    def __init__(self, parent, fd):
+    # Sizing for the narrow "方案 A" single-column layout. The panel target is
+    # ~336px overall. ``INPUT_WIDTH`` is now a MINIMUM (floor) for input
+    # controls, not a cap: inputs fill the row's available width so long
+    # channel names stay visible and no blank gutter is left on the right (see
+    # ``_narrow``). Tokens mirror style.qss (input radius 7 / button radius 8 /
+    # primary #1769e0).
+    INPUT_WIDTH = 178
+    PANEL_WIDTH = 336
+
+    def __init__(self, parent, files, active_fid):
         super().__init__(parent)
-        self.setWindowTitle(f"通道编辑 - {fd.filename}")
-        self.setMinimumSize(500, 420)
-        self.fd = fd
-        self.new_channels = {};
+        self.setObjectName("ChannelEditorDialog")
+        # ``files`` is a dict[fid -> fd] of all loaded files; one file is
+        # edited at a time. Switching the top file combo resets the in-flight
+        # edit (new/removed) and repopulates every channel combo.
+        self._files = dict(files)
+        self.current_fid = active_fid if active_fid in self._files else (
+            next(iter(self._files)) if self._files else None
+        )
+        self.fd = self._files.get(self.current_fid)
+        self.new_channels = {}
         self.removed_channels = set()
-        layout = QVBoxLayout(self)
-        chs = fd.get_signal_channels()
+        self.setMinimumWidth(self.PANEL_WIDTH)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # --- top file selector (stays put, does not scroll) ---
+        file_bar = QWidget(self)
+        file_bar.setObjectName("channelEditorFileBar")
+        fb = QHBoxLayout(file_bar)
+        fb.setContentsMargins(12, 10, 12, 8)
+        fb.setSpacing(8)
+        lbl_file = QLabel("文件")
+        lbl_file.setMinimumWidth(34)
+        fb.addWidget(lbl_file)
+        self.combo_file = QComboBox()
+        # Fill the file row: a Fixed-width label on the left, the combo
+        # expanding to the right edge (no trailing stretch gutter).
+        self.combo_file.setMinimumWidth(self.INPUT_WIDTH)
+        self.combo_file.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        for fid, fd in self._files.items():
+            self.combo_file.addItem(self._file_label(fd), fid)
+        if self.current_fid is not None:
+            idx = self.combo_file.findData(self.current_fid)
+            if idx >= 0:
+                self.combo_file.setCurrentIndex(idx)
+        self.combo_file.currentIndexChanged.connect(self._on_file_changed)
+        fb.addWidget(self.combo_file, 1)
+        root.addWidget(file_bar)
+
+        # --- scrollable body (operations + delete) ---
+        self._scroll = QScrollArea(self)
+        self._scroll.setObjectName("channelEditorScroll")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()
+        body.setObjectName("channelEditorBody")
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(12, 6, 12, 10)
+        bl.setSpacing(14)
 
         # 单通道运算
-        g = QGroupBox("单通道运算");
+        g = QGroupBox("单通道运算")
         gl = QGridLayout(g)
-        gl.addWidget(QLabel("源:"), 0, 0)
-        self.combo_src = SearchableComboBox();
-        self.combo_src.addItems(chs);
+        gl.setVerticalSpacing(8)
+        gl.setHorizontalSpacing(8)
+        gl.addWidget(QLabel("源"), 0, 0)
+        self.combo_src = SearchableComboBox()
+        self._narrow(self.combo_src)
+        self.combo_src.currentTextChanged.connect(self.combo_src.setToolTip)
         gl.addWidget(self.combo_src, 0, 1)
-        gl.addWidget(QLabel("运算:"), 1, 0)
-        self.combo_op = QComboBox();
-        self.combo_op.addItems(["d/dt", "∫dt", "× 系数", "+ 偏移", "滑动平均", "|x| 绝对值"]);
+        gl.addWidget(QLabel("运算"), 1, 0)
+        self.combo_op = QComboBox()
+        self.combo_op.addItems(["d/dt", "∫dt", "× 系数", "+ 偏移", "滑动平均", "|x| 绝对值"])
+        self._narrow(self.combo_op)
         gl.addWidget(self.combo_op, 1, 1)
-        gl.addWidget(QLabel("参数:"), 2, 0)
-        self.spin_p = CompactDoubleSpinBox();
-        self.spin_p.setButtonSymbols(QAbstractSpinBox.NoButtons);
-        self.spin_p.setRange(-1e12, 1e12);
-        self.spin_p.setValue(1);
+        gl.addWidget(QLabel("参数"), 2, 0)
+        self.spin_p = CompactDoubleSpinBox()
+        self.spin_p.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin_p.setRange(-1e12, 1e12)
+        self.spin_p.setValue(1)
+        self._narrow(self.spin_p)
         gl.addWidget(self.spin_p, 2, 1)
-        btn = QPushButton("✚ 创建");
-        btn.clicked.connect(self._create_single);
-        gl.addWidget(btn, 3, 0, 1, 2)
-        layout.addWidget(g)
+        btn = QPushButton("✚ 创建单通道")
+        btn.setObjectName("channelCreateBtn")
+        btn.setProperty("role", "create")
+        btn.clicked.connect(self._create_single)
+        gl.addWidget(btn, 3, 1, Qt.AlignLeft)
+        # Stretch the INPUT column (col 1) so controls fill to the right edge;
+        # no ghost spacer column. The create button keeps Qt.AlignLeft so it
+        # stays compact and left-anchored inside the now-stretched column.
+        gl.setColumnStretch(1, 1)
+        bl.addWidget(g)
 
         # 双通道运算
-        g2 = QGroupBox("双通道运算 (A ⊕ B)");
+        g2 = QGroupBox("双通道运算 (A ⊕ B)")
         gl2 = QGridLayout(g2)
-        gl2.addWidget(QLabel("通道A:"), 0, 0)
-        self.combo_a = SearchableComboBox();
-        self.combo_a.addItems(chs);
+        gl2.setVerticalSpacing(8)
+        gl2.setHorizontalSpacing(8)
+        gl2.addWidget(QLabel("通道A"), 0, 0)
+        self.combo_a = SearchableComboBox()
+        self._narrow(self.combo_a)
+        self.combo_a.currentTextChanged.connect(self.combo_a.setToolTip)
         gl2.addWidget(self.combo_a, 0, 1)
-        gl2.addWidget(QLabel("运算:"), 1, 0)
-        self.combo_op2 = QComboBox();
-        self.combo_op2.addItems(["A + B", "A - B", "A × B", "A ÷ B", "max(A,B)", "min(A,B)"]);
+        gl2.addWidget(QLabel("运算"), 1, 0)
+        self.combo_op2 = QComboBox()
+        self.combo_op2.addItems(["A + B", "A - B", "A × B", "A ÷ B", "max(A,B)", "min(A,B)"])
+        self._narrow(self.combo_op2)
         gl2.addWidget(self.combo_op2, 1, 1)
-        gl2.addWidget(QLabel("通道B:"), 2, 0)
-        self.combo_b = SearchableComboBox();
-        self.combo_b.addItems(chs);
+        gl2.addWidget(QLabel("通道B"), 2, 0)
+        self.combo_b = SearchableComboBox()
+        self._narrow(self.combo_b)
+        self.combo_b.currentTextChanged.connect(self.combo_b.setToolTip)
         gl2.addWidget(self.combo_b, 2, 1)
-        gl2.addWidget(QLabel("新名称:"), 3, 0)
-        self.edit_name2 = QLineEdit();
-        self.edit_name2.setPlaceholderText("留空自动生成");
+        gl2.addWidget(QLabel("名称"), 3, 0)
+        self.edit_name2 = QLineEdit()
+        self.edit_name2.setPlaceholderText("留空自动生成")
+        self._narrow(self.edit_name2)
         gl2.addWidget(self.edit_name2, 3, 1)
-        btn2 = QPushButton("✚ 创建");
-        btn2.clicked.connect(self._create_dual);
-        gl2.addWidget(btn2, 4, 0, 1, 2)
-        layout.addWidget(g2)
+        btn2 = QPushButton("✚ 创建双通道")
+        btn2.setObjectName("channelCreateBtn")
+        btn2.setProperty("role", "create")
+        btn2.clicked.connect(self._create_dual)
+        gl2.addWidget(btn2, 4, 1, Qt.AlignLeft)
+        # Stretch the INPUT column (col 1) so controls fill to the right edge;
+        # no ghost spacer column. The create button keeps Qt.AlignLeft.
+        gl2.setColumnStretch(1, 1)
+        bl.addWidget(g2)
 
         # 删除通道
-        g3 = QGroupBox("删除");
+        g3 = QGroupBox("删除")
         g3l = QVBoxLayout(g3)
-        self.list_rm = QListWidget();
-        self.list_rm.setSelectionMode(QListWidget.ExtendedSelection);
-        self.list_rm.setMaximumHeight(70)
-        for ch in chs: self.list_rm.addItem(ch)
+        g3l.setSpacing(8)
+        self.list_rm = QListWidget()
+        self.list_rm.setObjectName("channelDeleteList")
+        self.list_rm.setSelectionMode(QListWidget.ExtendedSelection)
+        self.list_rm.setMinimumHeight(108)
+        self.list_rm.setMaximumHeight(120)
         g3l.addWidget(self.list_rm)
-        btn_rm = QPushButton("🗑 删除");
-        btn_rm.clicked.connect(self._remove);
-        g3l.addWidget(btn_rm)
-        layout.addWidget(g3)
+        btn_rm = QPushButton("🗑 删除选中通道")
+        btn_rm.setObjectName("channelDeleteBtn")
+        btn_rm.setProperty("role", "danger")
+        btn_rm.clicked.connect(self._remove)
+        g3l.addWidget(btn_rm, 0, Qt.AlignLeft)
+        bl.addWidget(g3)
+        bl.addStretch(1)
 
-        self.lbl = QLabel(f"新增: 0");
-        layout.addWidget(self.lbl)
-        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        bb.accepted.connect(self.accept);
-        bb.rejected.connect(self.reject);
-        layout.addWidget(bb)
+        self._scroll.setWidget(body)
+        root.addWidget(self._scroll, 1)
+
+        # --- footer (stays put): count + 取消/确定 ---
+        footer = QWidget(self)
+        footer.setObjectName("channelEditorFooter")
+        ft = QHBoxLayout(footer)
+        ft.setContentsMargins(12, 8, 12, 10)
+        ft.setSpacing(10)
+        self.lbl = QLabel("新增: 0")
+        self.lbl.setObjectName("channelEditorCount")
+        ft.addWidget(self.lbl)
+        ft.addStretch(1)
+        self.btn_cancel = QPushButton("取消")
+        self.btn_cancel.clicked.connect(self.reject)
+        ft.addWidget(self.btn_cancel)
+        self.btn_ok = QPushButton("确定")
+        self.btn_ok.setProperty("role", "primary")
+        self.btn_ok.clicked.connect(self.accept)
+        ft.addWidget(self.btn_ok)
+        root.addWidget(footer)
+
+        self._populate_channels()
+
+    def _file_label(self, fd):
+        """File display name: filepath.stem, falling back to filename."""
+        fp = getattr(fd, "filepath", None)
+        if fp is not None:
+            return fp.stem
+        name = getattr(fd, "filename", "") or getattr(fd, "short_name", "")
+        return name.rsplit(".", 1)[0] if "." in name else name
+
+    def _narrow(self, widget):
+        """Let an input control FILL its row's available width.
+
+        Previously this capped controls at ``INPUT_WIDTH`` (178px), which
+        left a wide blank gutter on the right and truncated long channel
+        names. The semantics are now "fill, with a sane floor": horizontal
+        ``Expanding`` so the control grows into the row's slack, plus a
+        ``setMinimumWidth`` floor so the control does not collapse when the
+        panel is dragged narrow. Vertical policy stays ``Fixed``."""
+        widget.setMinimumWidth(self.INPUT_WIDTH)
+        widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def _on_file_changed(self, _index):
+        fid = self.combo_file.currentData()
+        if fid is None or fid == self.current_fid:
+            return
+        # Switching files discards the in-flight edit (one file at a time).
+        self.current_fid = fid
+        self.fd = self._files.get(fid)
+        self.new_channels = {}
+        self.removed_channels = set()
+        self._populate_channels()
+
+    def _populate_channels(self):
+        """Refill source/A/B combos + delete list from the current fd, and
+        reset the title and 新增 count. Called at construction and on every
+        file switch."""
+        chs = self.fd.get_signal_channels() if self.fd is not None else []
+        title = self._file_label(self.fd) if self.fd is not None else ""
+        self.setWindowTitle(f"通道编辑 - {title}" if title else "通道编辑")
+        for combo in (self.combo_src, self.combo_a, self.combo_b):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(chs)
+            combo.blockSignals(False)
+            # Signals were blocked during refill, so the currentTextChanged →
+            # setToolTip wiring did not fire; seed the hover tooltip for the
+            # current selection so the full (possibly elided) channel name is
+            # visible on hover even when the box width crops it.
+            combo.setToolTip(combo.currentText())
+        self.list_rm.clear()
+        for ch in chs:
+            self.list_rm.addItem(ch)
+        self.lbl.setText("新增: 0")
 
     def _create_single(self):
         src = self.combo_src.currentText()

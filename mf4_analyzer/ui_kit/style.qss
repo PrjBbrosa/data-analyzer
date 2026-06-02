@@ -1170,6 +1170,90 @@ QDialog#ChartOptionsDialog QLabel#chartOptionsGroupTitle {
     background-color: transparent;
 }
 
+/* ============ Channel editor (narrow 方案 A drawer body) ============
+ * Scoped to #ChannelEditorDialog so the create/danger button accents and
+ * the three-band (file bar / scroll body / footer) chrome never leak into
+ * the global QPushButton cascade. Tokens mirror the prototype:
+ * create  = #0f3f8f text / #cdddf6 border / #f3f8ff fill
+ * danger  = #b42318 text / #f1c9c4 border / #fdf4f3 fill
+ * primary 确定 reuses the global [role="primary"] blue (#1769e0). */
+QDialog#ChannelEditorDialog,
+QDialog#DrawerSurface #ChannelEditorDialog {
+    background-color: #ffffff;
+}
+#ChannelEditorDialog QWidget#channelEditorFileBar {
+    border-bottom: 1px solid #eef2f7;
+    background-color: #fbfcfe;
+}
+#ChannelEditorDialog QWidget#channelEditorFooter {
+    border-top: 1px solid #eef2f7;
+    background-color: #fbfcfe;
+}
+#ChannelEditorDialog QScrollArea#channelEditorScroll {
+    border: none;
+    background-color: #ffffff;
+}
+#ChannelEditorDialog QWidget#channelEditorBody {
+    background-color: #ffffff;
+}
+/* Group titles: 12/600 with a 1px hairline underline (matches Inspector). */
+#ChannelEditorDialog QGroupBox {
+    margin-top: 6px;
+    padding: 18px 0 4px;
+    border: none;
+    background-color: transparent;
+    font-weight: 600;
+}
+#ChannelEditorDialog QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 0;
+    right: 0;
+    padding: 2px 0 6px 0;
+    color: #111827;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: transparent;
+    border-bottom: 1px solid #dfe5ee;
+}
+#ChannelEditorDialog QLabel#channelEditorCount {
+    color: #64748b;
+    font-size: 12px;
+    background-color: transparent;
+}
+#ChannelEditorDialog QListWidget#channelDeleteList {
+    border: 1px solid #eef2f7;
+    border-radius: 7px;
+    background-color: #ffffff;
+    outline: none;
+}
+#ChannelEditorDialog QListWidget#channelDeleteList::item {
+    padding: 3px 6px;
+    border-radius: 5px;
+}
+#ChannelEditorDialog QListWidget#channelDeleteList::item:selected {
+    background-color: #e8efff;
+    color: #111827;
+}
+#ChannelEditorDialog QPushButton[role="create"] {
+    color: #0f3f8f;
+    border: 1px solid #cdddf6;
+    background-color: #f3f8ff;
+}
+#ChannelEditorDialog QPushButton[role="create"]:hover {
+    border-color: #93b4ef;
+    background-color: #e8efff;
+}
+#ChannelEditorDialog QPushButton[role="danger"] {
+    color: #b42318;
+    border: 1px solid #f1c9c4;
+    background-color: #fdf4f3;
+}
+#ChannelEditorDialog QPushButton[role="danger"]:hover {
+    border-color: #e3a8a1;
+    background-color: #fbe9e7;
+}
+
 /* Menus and status */
 QMenu {
     padding: 7px;

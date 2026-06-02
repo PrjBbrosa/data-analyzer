@@ -1,4 +1,5 @@
-from PyQt5.QtCore import QCoreApplication, Qt
+from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
+from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import QPushButton
 
 from mf4_analyzer.ui.widgets import MultiFileChannelWidget
@@ -63,6 +64,60 @@ def test_channel_action_buttons_use_two_char_chinese(qapp, qtbot):
     assert {"全选", "全不", "反选"} <= labels
     # 编辑通道 moved down from the top toolbar onto the channel-action row.
     assert "编辑通道" in labels
+
+
+def _left_click(tree, pos):
+    """Synthesize a left-button press at viewport ``pos`` and dispatch it to
+    the tree so the custom mousePressEvent tolerance logic runs."""
+    ev = QMouseEvent(
+        QEvent.MouseButtonPress, pos, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier
+    )
+    tree.mousePressEvent(ev)
+
+
+def test_checkbox_hit_tolerance_band_toggles_but_name_does_not(qapp, qtbot):
+    """Clicking just LEFT of the checkbox (inside the ~6px tolerance band)
+    must toggle the channel's check state; clicking on the channel-name
+    text must NOT toggle it (selection / 设为左轴 territory)."""
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _FakeFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    tree = widget.tree
+    channel_item = widget._file_items["file-a"].child(0)
+    tree.scrollToItem(channel_item)
+    QCoreApplication.processEvents()
+
+    index = tree.indexFromItem(channel_item, 0)
+    hit = tree._check_hit_rect(channel_item, index)
+    assert hit is not None
+
+    assert channel_item.checkState(0) == Qt.Unchecked
+
+    # A point just inside the LEFT edge of the tolerance band (left of the
+    # actual indicator box) must still toggle.
+    band_pos = QPoint(hit.left() + 1, hit.center().y())
+    _left_click(tree, band_pos)
+    QCoreApplication.processEvents()
+    assert channel_item.checkState(0) == Qt.Checked, (
+        "click inside the widened tolerance band should toggle the checkbox"
+    )
+
+    # A point on the channel-name text (well right of the band) must NOT
+    # toggle — that area is for selection / right-click 设为左轴.
+    row = tree.visualItemRect(channel_item)
+    name_pos = QPoint(row.right() - 8, row.center().y())
+    assert not hit.contains(name_pos)
+    _left_click(tree, name_pos)
+    QCoreApplication.processEvents()
+    assert channel_item.checkState(0) == Qt.Checked, (
+        "clicking the channel name must leave the check state unchanged"
+    )
 
 
 def test_edit_channels_button_enables_with_file_and_emits(qapp, qtbot):

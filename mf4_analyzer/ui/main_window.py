@@ -1127,10 +1127,12 @@ class MainWindow(QMainWindow):
         if not self.files or not self._active or self._active not in self.files:
             self.toast("请先加载文件", "warning")
             return
-        fd = self.files[self._active]
         from .drawers.channel_editor_drawer import ChannelEditorDrawer
-        drawer = ChannelEditorDrawer(self, fd)
-        drawer.applied.connect(lambda nc, rm: self._apply_channel_edits(self._active, nc, rm))
+        # Pass ALL loaded files so the user can switch the edit target inside
+        # the drawer. The applied(fid, ...) signal reports whichever file the
+        # user actually had selected, so we no longer assume self._active.
+        drawer = ChannelEditorDrawer(self, self.files, self._active)
+        drawer.applied.connect(self._apply_channel_edits)
         drawer.exec_()
 
 
