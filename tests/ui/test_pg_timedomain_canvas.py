@@ -3637,19 +3637,34 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         assert last_bottom.style.get("showValues") is not False
         assert "Time" in getattr(last_bottom, "labelText", "")
 
-    def test_two_subplots_have_equal_viewbox_heights(self, qapp):
+    def test_two_subplots_do_not_reserve_hidden_top_axis_height(self, qapp):
+        """Two-channel subplot mode must not open a large blank band between
+        the rows: the hidden top row collapses its bottom-axis reserve and only
+        the bottom row keeps the X tick/label height. The two plots sit flush
+        and stay close in height (the bottom row is shorter only by its X-axis
+        band). See
+        docs/superpowers/specs/2026-06-02-subplot-vertical-spacing-design.md."""
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
+        canvas.resize(760, 560)
         canvas.plot_channels(_five_channel_rows()[:2], mode="subplot")
         QCoreApplication.processEvents()
 
-        heights = [
-            handle.view_box.sceneBoundingRect().height()
-            for handle in canvas.axes_list
-        ]
-        assert len(heights) == 2
-        assert heights[0] == pytest.approx(heights[1], abs=1.0)
+        top_bottom = canvas.axes_list[0].plot_item.getAxis("bottom").height()
+        visible_bottom = canvas.axes_list[-1].plot_item.getAxis("bottom").height()
+        assert visible_bottom > 20.0
+        assert top_bottom <= 4.0, (
+            "hidden top subplot X axis must not reserve full tick-label height"
+        )
+
+        top_vb = canvas.axes_list[0].view_box.sceneBoundingRect()
+        bottom_vb = canvas.axes_list[1].view_box.sceneBoundingRect()
+        gap = bottom_vb.top() - top_vb.bottom()
+        assert gap < 12.0, "subplots must sit flush, not split by a blank band"
+        # The bottom plot is shorter only by ~its reserved X-axis band, not by
+        # the layout handing the collapsed top row extra cell height.
+        assert top_vb.height() - bottom_vb.height() <= visible_bottom + 8.0
 
     def test_dense_subplots_do_not_reserve_hidden_xaxis_label_height(self, qapp):
         from PyQt5.QtCore import QCoreApplication

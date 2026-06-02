@@ -3743,12 +3743,24 @@ class TimeDomainCanvasPG(QWidget):
             pass
 
     def _unify_subplot_bottom_axis_heights(self):
-        """Give every subplot row the same bottom-axis reserve.
+        """Collapse hidden upper subplot bottom-axis reserves and balance rows.
 
-        Only the bottom subplot shows X tick values and the X label, but its
-        bottom AxisItem still consumes layout height. If upper rows reserve
-        zero bottom-axis height, GraphicsLayout gives their ViewBoxes extra
-        plot height and two-row subplot mode looks visibly unbalanced.
+        Only the bottom subplot shows X tick values and the X label, yet every
+        subplot's bottom AxisItem still consumes layout height. Letting the
+        hidden upper rows reserve a full tick/label height opens a large blank
+        band between rows — most visible in two-row mode. Reserve the X
+        tick/label height only on the final row and collapse the hidden upper
+        rows to ~1 px, so subplots sit flush regardless of row count.
+
+        After collapsing, give every grid row equal preferred height + stretch
+        so QGraphicsGridLayout keeps the ViewBoxes the same size instead of
+        handing the collapsed rows extra cell height (which leaves the bottom
+        plot cramped). The bottom ViewBox stays ~one-axis-height shorter than
+        the rows above it — the intended stacked-shared-X look, favouring flush
+        adjacency over pixel-equal heights. The preferred height is a constant:
+        equal values distribute proportionally, so rows stay balanced at any
+        canvas size without reading live geometry. See
+        docs/superpowers/specs/2026-06-02-subplot-vertical-spacing-design.md.
         """
         if not self._subplot_label_specs:
             return
@@ -3765,51 +3777,20 @@ class TimeDomainCanvasPG(QWidget):
                 bottom_axes.append(axis)
         if len(bottom_axes) < 2:
             return
-        if len(bottom_axes) > 2:
-            for axis in bottom_axes[:-1]:
-                try:
-                    axis.setHeight(1.0)
-                except Exception:
-                    pass
+        for axis in bottom_axes[:-1]:
             try:
-                bottom_axes[-1].setHeight(None)
-            except Exception:
-                pass
-            try:
-                layout = self._glw.ci.layout
-                layout.invalidate()
-                layout.activate()
-            except Exception:
-                pass
-            return
-        for axis in bottom_axes:
-            try:
-                axis.setHeight(None)
+                axis.setHeight(1.0)
             except Exception:
                 pass
         try:
-            layout = self._glw.ci.layout
-            layout.invalidate()
-            layout.activate()
+            bottom_axes[-1].setHeight(None)
         except Exception:
             pass
-        max_h = 0.0
-        for axis in bottom_axes:
-            try:
-                height = float(axis.height())
-            except Exception:
-                continue
-            if height > max_h:
-                max_h = height
-        if max_h <= 0.0:
-            return
-        for axis in bottom_axes:
-            try:
-                axis.setHeight(max_h)
-            except Exception:
-                pass
         try:
             layout = self._glw.ci.layout
+            for row in range(layout.rowCount()):
+                layout.setRowStretchFactor(row, 1)
+                layout.setRowPreferredHeight(row, 100.0)
             layout.invalidate()
             layout.activate()
         except Exception:
