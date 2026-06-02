@@ -35,6 +35,8 @@ lesson by default.
 | [Markup Group Child Normalization](codex-markup-group-child-normalization.md) | Markup editor scene traversal, selection, copy/paste, crop, or undo with grouped annotations | `tests/ui/test_markup_editor.py` |
 | [Rounded Qt Popups Need Translucent Shell](codex-rounded-qt-popups-need-translucent-shell.md) | Rounded Qt popup/menu/popover shells or QSS `border-radius` surfaces. | See lesson |
 | [HiDPI Pixmaps And Blocked Axis Sync](codex-hidpi-pixmap-and-axisitem-sync.md) | Copy/edit chart pixmaps or signal-blocked pyqtgraph X range sync. | See lesson |
+| [Codex Hooks Use Windows Python Entrypoint](codex-hooks-use-windows-python-entrypoint.md) | Editing Codex hook configuration or diagnosing repeated hook failures | See lesson |
+| [Pyqtgraph TimeDomain Frame And Dense Spacing](codex-pg-timedomain-frame-and-spacing.md) | Touching pyqtgraph TimeDomain PlotItem/ViewBox frame styling, | See lesson |
 
 ## Selection Rules
 
