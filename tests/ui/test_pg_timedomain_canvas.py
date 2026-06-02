@@ -5486,3 +5486,62 @@ class TestOverlayYSnapToGrid:
             f"snap should not be called when not dragging; got {snap_calls}"
         )
         canvas.deleteLater()
+
+    def test_snap_aligns_center_to_grid_in_real_geometry(self, qapp):
+        """有效几何下，snap 后 center 应对齐到 1/8 格（X-master 归一化空间）。
+
+        如果 ViewBox 在此环境下仍为 degenerate（height < 1），自动 skip。
+        """
+        from PyQt5.QtCore import QCoreApplication, QPointF
+        import pytest
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.resize(900, 480)
+        canvas.show()
+        QCoreApplication.processEvents()
+        QCoreApplication.processEvents()  # double-flush for layout settle
+
+        rows = _five_channel_rows()[:2]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        ax = canvas.axes_list[0]
+        ax.set_ylim(-300.0, 300.0)   # span = 600, center = 0
+        QCoreApplication.processEvents()
+
+        # Check geometry is valid; skip if still degenerate.
+        aux_vb = getattr(ax, "view_box", None)
+        if aux_vb is None:
+            pytest.skip("no aux ViewBox")
+        rect = aux_vb.sceneBoundingRect()
+        if rect.height() < 1.0:
+            pytest.skip(f"degenerate geometry (height={rect.height():.1f}), skip snap test")
+
+        lo_before, hi_before = ax.get_ylim()
+        span_before = hi_before - lo_before
+
+        canvas._snap_overlay_channel_to_grid(ax)
+        QCoreApplication.processEvents()
+
+        lo_after, hi_after = ax.get_ylim()
+        span_after = hi_after - lo_after
+
+        # Span must be preserved.
+        assert abs(span_after - span_before) < 1e-4, (
+            f"span changed: {span_before} → {span_after}"
+        )
+
+        # Center must align to k/8 in X-master normalized Y space.
+        center_after = (lo_after + hi_after) / 2.0
+        x_master_vb = getattr(canvas._x_master_handle, "view_box", None)
+        assert x_master_vb is not None, "X-master ViewBox missing"
+        scene_pt = aux_vb.mapViewToScene(QPointF(0.0, center_after))
+        xm_pt = x_master_vb.mapSceneToView(scene_pt)
+        xm_y = float(xm_pt.y())
+        remainder = abs(xm_y * 8 - round(xm_y * 8))
+        assert remainder < 0.01, (
+            f"center not aligned to 1/8 grid: xm_y={xm_y:.4f}, "
+            f"remainder={remainder:.4f}"
+        )
+        canvas.deleteLater()

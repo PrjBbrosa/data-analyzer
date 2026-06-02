@@ -2041,10 +2041,10 @@ class TimeDomainCanvasPG(QWidget):
 
         Coordinate path:
             channel data center
-                → aux_vb.mapToScene()
+                → aux_vb.mapViewToScene()        [data coords → scene px]
                 → x_master_vb.mapSceneToView()   [X-master Y ∈ [0, 1]]
                 → _snap_y_to_divisions()
-                → x_master_vb.mapToScene()
+                → x_master_vb.mapViewToScene()   [data coords → scene px]
                 → aux_vb.mapSceneToView()
             → new channel data center
         """
@@ -2075,7 +2075,7 @@ class TimeDomainCanvasPG(QWidget):
         center_data = (lo + hi) / 2.0
         try:
             from PyQt5.QtCore import QPointF
-            scene_pt = aux_vb.mapToScene(QPointF(0.0, center_data))
+            scene_pt = aux_vb.mapViewToScene(QPointF(0.0, center_data))
             xm_pt = x_master_vb.mapSceneToView(scene_pt)
             xm_y = float(xm_pt.y())
         except Exception:
@@ -2084,7 +2084,8 @@ class TimeDomainCanvasPG(QWidget):
         snapped_xm_y = _snap_y_to_divisions(xm_y, _N_OVERLAY_DIVISIONS)
 
         try:
-            snapped_scene_pt = x_master_vb.mapToScene(QPointF(0.0, snapped_xm_y))
+            from PyQt5.QtCore import QPointF
+            snapped_scene_pt = x_master_vb.mapViewToScene(QPointF(0.0, snapped_xm_y))
             snapped_ch_pt = aux_vb.mapSceneToView(snapped_scene_pt)
             new_center = float(snapped_ch_pt.y())
         except Exception:
