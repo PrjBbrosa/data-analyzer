@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/scripts/lessons/select.py\" --hook",
+            "command": ".\\.venv\\Scripts\\python.exe scripts\\lessons\\select.py --hook",
             "timeout": 10,
             "statusMessage": "Selecting relevant lessons"
           }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/scripts/lessons/check.py\" --hook",
+            "command": ".\\.venv\\Scripts\\python.exe scripts\\lessons\\check.py --hook",
             "timeout": 30,
             "statusMessage": "Checking lessons gate"
           }
