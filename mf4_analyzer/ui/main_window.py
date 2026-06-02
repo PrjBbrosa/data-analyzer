@@ -277,7 +277,6 @@ class MainWindow(QMainWindow):
     def _connect(self):
         # --- New-module wiring ---
         self.toolbar.file_add_requested.connect(self.load_files)
-        self.toolbar.channel_editor_requested.connect(self.open_editor)
         self.toolbar.export_requested.connect(self.export_excel)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
@@ -290,6 +289,7 @@ class MainWindow(QMainWindow):
         )
 
         self.navigator.channels_changed.connect(self._ch_changed)
+        self.navigator.channel_editor_requested.connect(self.open_editor)
         self.navigator.file_activated.connect(self._on_file_activated)
         self.navigator.file_close_requested.connect(self._on_file_close_requested)
         self.navigator.close_all_requested.connect(self._on_close_all_requested)

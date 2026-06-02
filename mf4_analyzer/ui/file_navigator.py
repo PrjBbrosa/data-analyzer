@@ -116,6 +116,8 @@ class FileNavigator(QWidget):
     # Bubbled from the channel tree's 设为左轴 menu: (fid, channel).
     primary_channel_requested = pyqtSignal(str, str)
     channel_context_menu_requested = pyqtSignal()
+    # Bubbled from the channel pane's 编辑通道 button.
+    channel_editor_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -183,6 +185,9 @@ class FileNavigator(QWidget):
         )
         self.channel_list.channel_context_menu_requested.connect(
             self.channel_context_menu_requested
+        )
+        self.channel_list.channel_editor_requested.connect(
+            self.channel_editor_requested
         )
         self.channel_list.setMinimumHeight(260)
         splitter.addWidget(self.channel_list)

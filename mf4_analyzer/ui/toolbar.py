@@ -11,7 +11,6 @@ from ..ui_kit.icons import Icons
 class Toolbar(QWidget):
     # Left segment
     file_add_requested = pyqtSignal()
-    channel_editor_requested = pyqtSignal()
     export_requested = pyqtSignal()
     batch_requested = pyqtSignal()
     # Center segment
@@ -29,8 +28,6 @@ class Toolbar(QWidget):
         self.btn_add = QPushButton("添加文件", self)
         self.btn_add.setIcon(Icons.add_file(QColor("#ffffff")))
         self.btn_add.setProperty("role", "primary")
-        self.btn_edit = QPushButton("编辑通道", self)
-        self.btn_edit.setIcon(Icons.edit_channels())
         self.btn_export = QPushButton("导出", self)
         self.btn_export.setIcon(Icons.export())
         self.btn_batch = QPushButton("批处理", self)
@@ -49,7 +46,7 @@ class Toolbar(QWidget):
         self.btn_mode_order = QPushButton("阶次", self)
         self.btn_mode_order.setIcon(Icons.mode_order())
 
-        for b in (self.btn_add, self.btn_edit, self.btn_export, self.btn_batch,
+        for b in (self.btn_add, self.btn_export, self.btn_batch,
                   self.btn_acquisition_cockpit,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
                   self.btn_mode_order):
@@ -60,7 +57,6 @@ class Toolbar(QWidget):
         left.setSpacing(10)
         for b in (
             self.btn_add,
-            self.btn_edit,
             self.btn_export,
             self.btn_batch,
         ):
@@ -131,7 +127,6 @@ class Toolbar(QWidget):
 
     def _wire(self):
         self.btn_add.clicked.connect(self.file_add_requested)
-        self.btn_edit.clicked.connect(self.channel_editor_requested)
         self.btn_export.clicked.connect(self.export_requested)
         self.btn_batch.clicked.connect(self.batch_requested)
         self.btn_acquisition_cockpit.clicked.connect(self.acquisition_cockpit_requested)
@@ -158,7 +153,6 @@ class Toolbar(QWidget):
 
     def set_enabled_for_mode(self, mode, has_file):
         """Implements the §7.1 enabled-state matrix."""
-        self.btn_edit.setEnabled(has_file)
         self.btn_export.setEnabled(has_file)
         self.btn_batch.setEnabled(True)
 
