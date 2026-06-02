@@ -173,14 +173,8 @@ _TOOL_HINTS = {
 
 # Bottom hint bar — persistent (always-on) shortcuts.
 # Rendered left-aligned in muted gray inside QFrame#chartHintBar.
+# Context-layer copy is selected at runtime by hints.context_hints().
 _BOTTOM_HINT_PERSISTENT = "    ·    ".join(hints.persistent_hints())
-
-# Bottom hint bar — context layer.
-# Runtime context text comes from hints.context_hints(); this compatibility
-# dict remains only for older imports that expect the module symbol to exist.
-_BOTTOM_HINT_CONTEXT = {
-    'idle': '',
-}
 
 # Icon colour tokens (match Precision Light palette)
 _ICON_COLOR  = '#374151'
@@ -1078,14 +1072,6 @@ class _ChartCard(QWidget):
         if 'zoom' in mode:
             return 'zoom'
         return ''
-
-    def _context_hint_key(self):
-        """Compatibility surface for older tests/helpers.
-
-        Runtime context copy is now selected by ``hints.context_hints`` from a
-        ``HintState`` snapshot, not this key.
-        """
-        return 'idle'
 
     def _hint_state(self):
         return hints.HintState(
