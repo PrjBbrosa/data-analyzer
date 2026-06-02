@@ -301,6 +301,15 @@ def test_style_menu_rounding_uses_translucent_background(qtbot):
         "rounded QMenu popups need WA_TranslucentBackground, "
         "otherwise the native rectangular backing shows outside the radius"
     )
+    flags = menu.windowFlags()
+    assert bool(flags & Qt.NoDropShadowWindowHint), (
+        "rounded QMenu popups on macOS need NoDropShadowWindowHint, "
+        "otherwise the native rectangular shadow can remain behind the radius"
+    )
+    assert bool(flags & Qt.FramelessWindowHint), (
+        "rounded QMenu popups need FramelessWindowHint so the platform frame "
+        "does not draw square corners around the transparent shell"
+    )
 
 
 def test_style_menu_still_drives_set_color(qtbot):
