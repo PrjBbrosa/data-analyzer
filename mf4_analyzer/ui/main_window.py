@@ -83,7 +83,7 @@ class FFTTimeWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("TraceLab v5.0")
+        self.setWindowTitle("TraceLab v6.1")
         self.setGeometry(100, 100, 1450, 850);
         # Spec §9 minimum window size: 1100 × 640.
         self.setMinimumSize(1100, 640)
@@ -177,10 +177,13 @@ class MainWindow(QMainWindow):
         self._overlay_right = PeekOverlay(strip_row)
         # canvas=self.chart_stack -> width changes are taken from the canvas pane,
         # looked up by live index so cross-side peek doesn't drift the index.
+        # peek_width = inspector's docked width so the narrow navigator peeks out
+        # to the same width as the right pane (L/R peek symmetry).
         self._panel_ctrl_left = SidePanelController(
             side=Side.LEFT, splitter=splitter, panel=self.navigator, panel_index=0,
             strip=self._strip_left, overlay=self._overlay_left, host=strip_row,
-            default_width=250, canvas=self.chart_stack, parent=self,
+            default_width=250, canvas=self.chart_stack,
+            peek_width=self.inspector.maximumWidth(), parent=self,
         )
         self._panel_ctrl_right = SidePanelController(
             side=Side.RIGHT, splitter=splitter, panel=self.inspector, panel_index=2,
@@ -209,6 +212,10 @@ class MainWindow(QMainWindow):
         # be the main window so the toast floats above the central canvas).
         from .widgets import Toast
         self._toast = Toast(self)
+        from .markup import CopyThumbnail
+        self._copy_thumbnail = CopyThumbnail(self)
+        self._copy_thumbnail.clicked.connect(self._open_markup_editor)
+        self._markup_editor = None
 
     # ---- public toast helper ----
     def toast(self, msg, level='info'):
@@ -216,6 +223,42 @@ class MainWindow(QMainWindow):
         if not msg:
             return
         self._toast.show_message(msg, level=level)
+
+    def _publish_copied_pixmap(self, pix):
+        """Publish a freshly captured chart-card pixmap.
+
+        Clipboard + toast are the primary acknowledgement; the thumbnail is an
+        optional second-step editor entry point.
+        """
+        if pix is None or pix.isNull():
+            return
+        QApplication.clipboard().setPixmap(pix)
+        msg = "已复制到剪贴板 · 可直接粘贴"
+        self.statusBar.showMessage(msg, 2000)
+        self.toast(msg, 'success')
+        self._copy_thumbnail.present(pix)
+
+    def _publish_annotated_pixmap(self, pix):
+        """Publish the edited image without re-opening the thumbnail loop."""
+        if pix is None or pix.isNull():
+            return
+        QApplication.clipboard().setPixmap(pix)
+        msg = "已复制(含标注)"
+        self.statusBar.showMessage(msg, 2000)
+        self.toast(msg, 'success')
+
+    def _create_markup_editor(self, pix, on_done):
+        from .markup import MarkupEditor
+        return MarkupEditor(pix, on_done=on_done, parent=self)
+
+    def _open_markup_editor(self, pix):
+        if pix is None or pix.isNull():
+            return
+        editor = self._create_markup_editor(pix, self._publish_annotated_pixmap)
+        self._markup_editor = editor
+        editor.show()
+        editor.raise_()
+        editor.activateWindow()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -234,25 +277,27 @@ class MainWindow(QMainWindow):
     def _connect(self):
         # --- New-module wiring ---
         self.toolbar.file_add_requested.connect(self.load_files)
-        self.toolbar.channel_editor_requested.connect(self.open_editor)
         self.toolbar.export_requested.connect(self.export_excel)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
-        self.chart_stack.image_copied.connect(
-            lambda msg: (self.statusBar.showMessage(msg, 2000),
-                         self.toast(msg, 'success'))
+        self.chart_stack.image_captured.connect(
+            lambda pix: self._publish_copied_pixmap(pix)
         )
         self.inspector.preset_acknowledged.connect(
             lambda level, msg: self.toast(msg, level)
         )
 
         self.navigator.channels_changed.connect(self._ch_changed)
+        self.navigator.channel_editor_requested.connect(self.open_editor)
         self.navigator.file_activated.connect(self._on_file_activated)
         self.navigator.file_close_requested.connect(self._on_file_close_requested)
         self.navigator.close_all_requested.connect(self._on_close_all_requested)
         self.navigator.primary_channel_requested.connect(
             self._on_primary_channel_requested
+        )
+        self.navigator.channel_context_menu_requested.connect(
+            lambda: self.chart_stack.mark_discovered("channel.right_click")
         )
 
         # Canvas cursor signals are owned by ChartStack; MainWindow doesn't
@@ -339,6 +384,12 @@ class MainWindow(QMainWindow):
         # mode, plot_time reorders the checked list so this channel is index 0
         # (bound to the left axis). Cleared/ignored otherwise.
         self._overlay_primary = None
+        self.inspector.top.chk_range.toggled.connect(
+            self._on_time_range_enabled_changed
+        )
+        xrange_changed = getattr(self.canvas_time, 'xrange_changed', None)
+        if xrange_changed is not None:
+            xrange_changed.connect(self._on_time_canvas_xrange_changed)
 
     def _on_mode_changed(self, mode):
         self.chart_stack.set_mode(mode)
@@ -466,6 +517,31 @@ class MainWindow(QMainWindow):
                 flush()
             except Exception:
                 pass
+
+    def _on_time_canvas_xrange_changed(self, lo, hi):
+        self._sync_time_range_inputs_from_visible_xlim((lo, hi))
+
+    def _sync_time_range_inputs_from_visible_xlim(self, xlim=None):
+        # Inspector range values are in acquisition time. If a custom channel
+        # is the visible X axis, that viewport is in channel units and must not
+        # overwrite the time-range controls.
+        if self._custom_xaxis_fid is not None and self._custom_xaxis_ch is not None:
+            return False
+        if xlim is None:
+            xlim = self._safe_capture_primary_xlim()
+        if xlim is None:
+            return False
+        lo, hi = xlim
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return False
+        self.inspector.top.set_range_values(lo, hi)
+        return True
+
+    def _on_time_range_enabled_changed(self, enabled):
+        if enabled:
+            self._sync_time_range_inputs_from_visible_xlim()
+        if self.files and self.navigator.get_checked_channels():
+            self._plot_time_preserving_xlim()
 
     def _on_annotation_enabled_changed(self, mode, enabled):
         if mode == 'fft':
@@ -1037,6 +1113,7 @@ class MainWindow(QMainWindow):
 
         xlabel = self._custom_xlabel or self.inspector.top.xaxis_label() or 'Time (s)'
         self.canvas_time.plot_channels(data, mode, xlabel=xlabel)
+        self._sync_time_range_inputs_from_visible_xlim()
         xt, yt = self.inspector.top.tick_density()
         self.canvas_time.set_tick_density(xt, yt)
         # SpanSelector intentionally not enabled — drag-to-select on the
@@ -1050,10 +1127,12 @@ class MainWindow(QMainWindow):
         if not self.files or not self._active or self._active not in self.files:
             self.toast("请先加载文件", "warning")
             return
-        fd = self.files[self._active]
         from .drawers.channel_editor_drawer import ChannelEditorDrawer
-        drawer = ChannelEditorDrawer(self, fd)
-        drawer.applied.connect(lambda nc, rm: self._apply_channel_edits(self._active, nc, rm))
+        # Pass ALL loaded files so the user can switch the edit target inside
+        # the drawer. The applied(fid, ...) signal reports whichever file the
+        # user actually had selected, so we no longer assume self._active.
+        drawer = ChannelEditorDrawer(self, self.files, self._active)
+        drawer.applied.connect(self._apply_channel_edits)
         drawer.exec_()
 
 

@@ -578,6 +578,54 @@ def test_channel_selection_change_preserves_xlim(qapp, qtbot, loaded_csv):
     assert nhi == pytest.approx(t1, abs=1e-6)
 
 
+def test_time_range_fields_track_current_visible_xlim_when_unchecked(
+    qapp, qtbot, loaded_csv
+):
+    import pytest
+
+    w, _fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    w.inspector.top.chk_range.setChecked(False)
+
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(0.2, 0.6)
+    qapp.processEvents()
+
+    lo, hi = w.inspector.top.range_values()
+    assert lo == pytest.approx(0.2, abs=1e-6)
+    assert hi == pytest.approx(0.6, abs=1e-6)
+
+
+def test_checking_time_range_uses_current_visible_xlim_without_manual_entry(
+    qapp, qtbot, loaded_csv
+):
+    import pytest
+
+    w, _fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    w.inspector.top.chk_range.setChecked(False)
+
+    primary = w.canvas_time._primary_xaxis_ax
+    primary.set_xlim(0.2, 0.6)
+    qapp.processEvents()
+
+    w.inspector.top.chk_range.setChecked(True)
+    qapp.processEvents()
+
+    name = next(name for name in w.canvas_time.channel_data if name.endswith("speed"))
+    t, _sig, _color, _unit = w.canvas_time.channel_data[name]
+    assert float(t.min()) >= 0.2 - 1e-6
+    assert float(t.max()) <= 0.6 + 1e-6
+
+    nlo, nhi = w.canvas_time._primary_xaxis_ax.get_xlim()
+    assert nlo == pytest.approx(0.2, abs=1e-6)
+    assert nhi == pytest.approx(0.6, abs=1e-6)
+
+    w.inspector.top.chk_range.setChecked(False)
+    qapp.processEvents()
+
+    t, _sig, _color, _unit = w.canvas_time.channel_data[name]
+    assert len(t) == len(w.files[next(iter(w.files))].time_array)
+
+
 def test_channel_editor_apply_preserves_checked_xlim(qapp, qtbot, loaded_csv):
     import numpy as np
     import pytest
@@ -1132,6 +1180,161 @@ def test_fft_time_worker_cancels(qtbot):
 # ---------------------------------------------------------------------------
 # FFT vs Time export to clipboard (Plan Task 9)
 # ---------------------------------------------------------------------------
+
+
+def test_publish_copied_pixmap_sets_clipboard_toast_and_thumbnail(qtbot, monkeypatch):
+    """Chart-card publish path writes the plain pixmap immediately, shows the
+    mandatory success toast, and presents the optional thumbnail."""
+    from PyQt5.QtGui import QPixmap
+    from PyQt5.QtWidgets import QApplication
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    pix = QPixmap(40, 24)
+    pix.fill()
+
+    pushed = []
+    monkeypatch.setattr(QApplication.clipboard(), 'setPixmap', lambda p: pushed.append(p))
+    toasts = []
+    monkeypatch.setattr(win, 'toast', lambda msg, level='info': toasts.append((msg, level)))
+
+    class ThumbSpy:
+        def __init__(self):
+            self.presented = []
+
+        def present(self, pixmap):
+            self.presented.append(pixmap)
+
+    thumb = ThumbSpy()
+    win._copy_thumbnail = thumb
+
+    win._publish_copied_pixmap(pix)
+
+    assert pushed == [pix]
+    assert toasts == [("已复制到剪贴板 · 可直接粘贴", "success")]
+    assert thumb.presented == [pix]
+    assert "已复制到剪贴板" in win.statusBar.currentMessage()
+
+
+def test_publish_copied_pixmap_ignores_null_pixmap(qtbot, monkeypatch):
+    """Null captures should not mutate clipboard, toast, or thumbnail."""
+    from PyQt5.QtGui import QPixmap
+    from PyQt5.QtWidgets import QApplication
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    pushed = []
+    monkeypatch.setattr(QApplication.clipboard(), 'setPixmap', lambda p: pushed.append(p))
+    toasts = []
+    monkeypatch.setattr(win, 'toast', lambda msg, level='info': toasts.append((msg, level)))
+
+    class ThumbSpy:
+        def __init__(self):
+            self.presented = []
+
+        def present(self, pixmap):
+            self.presented.append(pixmap)
+
+    thumb = ThumbSpy()
+    win._copy_thumbnail = thumb
+
+    win._publish_copied_pixmap(QPixmap())
+
+    assert pushed == []
+    assert toasts == []
+    assert thumb.presented == []
+
+
+def test_chart_stack_image_captured_routes_to_publish_pipeline(qtbot, monkeypatch):
+    """MainWindow wiring routes the four chart-card copy captures into the
+    publish pipeline, not the legacy status-string signal."""
+    from PyQt5.QtGui import QPixmap
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    routed = []
+    monkeypatch.setattr(win, '_publish_copied_pixmap', lambda pix: routed.append(pix))
+    pix = QPixmap(12, 12)
+    pix.fill()
+
+    win.chart_stack.image_captured.emit(pix)
+
+    assert len(routed) == 1
+    assert routed[0].size() == pix.size()
+    assert routed[0].cacheKey() == pix.cacheKey()
+
+
+def test_thumbnail_click_opens_markup_editor_with_full_pixmap(qtbot, monkeypatch):
+    """Thumbnail click opens a non-modal editor with the full-resolution pixmap."""
+    from PyQt5.QtGui import QPixmap
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    pix = QPixmap(80, 40)
+    pix.fill()
+    created = []
+
+    class FakeEditor:
+        def __init__(self, source, on_done=None, parent=None):
+            self.source = source
+            self.on_done = on_done
+            self.parent = parent
+            self.shown = False
+
+        def show(self):
+            self.shown = True
+
+        def raise_(self):
+            pass
+
+        def activateWindow(self):
+            pass
+
+    monkeypatch.setattr(win, '_create_markup_editor', lambda source, on_done: created.append(FakeEditor(source, on_done, win)) or created[-1])
+
+    win._open_markup_editor(pix)
+
+    assert created and created[0].source is pix
+    assert created[0].shown
+    assert win._markup_editor is created[0]
+
+
+def test_editor_done_republishes_annotated_pixmap_without_thumbnail_loop(qtbot, monkeypatch):
+    """Completing the editor overwrites the clipboard and toast but does not
+    re-present the optional thumbnail."""
+    from PyQt5.QtGui import QPixmap
+    from PyQt5.QtWidgets import QApplication
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    pix = QPixmap(32, 20)
+    pix.fill()
+    pushed = []
+    monkeypatch.setattr(QApplication.clipboard(), 'setPixmap', lambda p: pushed.append(p))
+    toasts = []
+    monkeypatch.setattr(win, 'toast', lambda msg, level='info': toasts.append((msg, level)))
+
+    class ThumbSpy:
+        def __init__(self):
+            self.presented = []
+
+        def present(self, pixmap):
+            self.presented.append(pixmap)
+
+    thumb = ThumbSpy()
+    win._copy_thumbnail = thumb
+
+    win._publish_annotated_pixmap(pix)
+
+    assert pushed == [pix]
+    assert toasts == [("已复制(含标注)", "success")]
+    assert thumb.presented == []
+    assert "已复制(含标注)" in win.statusBar.currentMessage()
 
 
 def test_copy_fft_time_image_warns_when_no_result(qtbot, monkeypatch):

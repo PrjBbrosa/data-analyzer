@@ -56,6 +56,7 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 import logging
+import math
 import time as _time
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -64,7 +65,17 @@ from typing import Tuple
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QImage, QPainter, QPainterPath, QPen, QPixmap
+from PyQt5.QtGui import (
+    QFont,
+    QFontDatabase,
+    QFontInfo,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
@@ -102,6 +113,12 @@ from mf4_analyzer.ui.canvases import (
 _log = logging.getLogger(__name__)
 
 
+_TARGET_X_TICK_NICE_FACTORS = (1.0, 2.0, 2.5, 5.0, 10.0)
+_TARGET_X_TICK_MIN_GAP_PX = 10.0
+_TARGET_X_TICK_EDGE_PAD_PX = 2.0
+_TARGET_X_TICK_MIN_COUNT = 3
+
+
 # Idle-AA density budget (Fix C, 2026-05-31 overlay-aa-interaction-fixes;
 # RECALIBRATED 2026-05-31 against the end-to-end grab()-repaint-frame
 # harness — superseding the original 12000/16000, which never gated the
@@ -129,6 +146,9 @@ _log = logging.getLogger(__name__)
 # fall to AA-off; a light 2-curve overlay (sum ≤ 6000) still gets AA.
 _AA_OVERLAY_SEGMENT_ON = 5000
 _AA_OVERLAY_SEGMENT_OFF = 7000
+# Task 1: overlay Y graticule constants.
+_N_OVERLAY_DIVISIONS = 8          # 等间距格线数（8 格 = 7 条内部分割线）
+_OVERLAY_GRID_ALPHA = 0.28        # 与 X 轴格线保持一致的透明度
 #
 # SUBPLOT/SINGLE metric = MAX over rows of that row's drawn points: the
 # rows are disjoint device rectangles, AND subplot curves carry a
@@ -216,6 +236,84 @@ _PG_MENU_REMOVE_TEXTS = frozenset({
     "Plot Options", "绘图选项",
     "Export...", "导出...", "导出…",
 })
+
+_PG_CHART_FONT_FAMILIES = (
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "微软雅黑",
+    "Segoe UI",
+    "PingFang SC",
+    "Noto Sans CJK SC",
+)
+_PG_CHART_FONT_CACHE = {}
+_OVERLAY_AXIS_LABEL_MIN_CHARS = 12
+_OVERLAY_AXIS_LABEL_FALLBACK_CHARS = 22
+_OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0
+
+
+def _pg_chart_font(point_size=9):
+    """Return the explicit font used by pyqtgraph axis/scene text.
+
+    pyqtgraph text lives in QGraphicsItems, so it does not reliably inherit
+    QWidget QSS font-family rules. Prefer common UI Chinese fonts, then fall
+    back to the QApplication font.
+    """
+    cache_key = int(point_size)
+    cached = _PG_CHART_FONT_CACHE.get(cache_key)
+    if cached is not None:
+        return QFont(cached)
+    try:
+        families = set(QFontDatabase().families())
+    except Exception:
+        families = set()
+    for family in _PG_CHART_FONT_FAMILIES:
+        font = QFont(family, point_size)
+        if family in families:
+            _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
+            return font
+        if families:
+            continue
+        try:
+            info = QFontInfo(font)
+            resolved = info.family()
+            if info.exactMatch() or resolved in _PG_CHART_FONT_FAMILIES:
+                _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
+                return font
+        except Exception:
+            _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
+            return font
+    app = QApplication.instance()
+    font = QFont(app.font() if app is not None else QFont())
+    font.setPointSize(point_size)
+    _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
+    return font
+
+
+def _apply_pg_axis_font(axis, point_size=9):
+    if axis is None:
+        return
+    font = _pg_chart_font(point_size)
+    try:
+        axis.setStyle(tickFont=font)
+    except Exception:
+        pass
+    label = getattr(axis, "label", None)
+    if label is not None:
+        try:
+            label.setFont(font)
+        except Exception:
+            pass
+
+
+def _apply_pg_text_item_font(item, point_size=9):
+    if item is None:
+        return
+    font = _pg_chart_font(point_size)
+    target = getattr(item, "textItem", item)
+    try:
+        target.setFont(font)
+    except Exception:
+        pass
 
 # Native axis-form child object names to HIDE. Link Axis / Invert and the
 # low-frequency auto-pan / visible-only toggles are out of scope per design A;
@@ -667,6 +765,8 @@ class _ModifierWheelViewBox(pg.ViewBox):
         # shared mouse-mode controller; falls back to a bare localize if the
         # canvas backref is gone.
         owner = self._owner_canvas
+        if owner is not None and hasattr(owner, "context_menu_requested"):
+            owner.context_menu_requested.emit()
         if owner is not None and hasattr(owner, "_redesign_context_menu_for_viewbox"):
             try:
                 owner._redesign_context_menu_for_viewbox(self, menu)
@@ -745,6 +845,19 @@ class _ModifierWheelViewBox(pg.ViewBox):
 
 
 # ---------------------------------------------------------------------------
+# Overlay Y-snap helper.
+# ---------------------------------------------------------------------------
+
+
+def _snap_y_to_divisions(y: float, n: int) -> float:
+    """Round ``y`` to the nearest k/n grid boundary.
+
+    Pure function — stateless and safe to call from tests.
+    """
+    return round(y * n) / n
+
+
+# ---------------------------------------------------------------------------
 # Curve-layer cache key quantization (signal-processing/
 # 2026-04-25-envelope-cache-bucket-width-quantization).
 # ---------------------------------------------------------------------------
@@ -788,6 +901,8 @@ class TimeDomainCanvasPG(QWidget):
     dual_cursor_info = pyqtSignal(str)
     span_selected = pyqtSignal(float, float)
     overlay_channel_selected = pyqtSignal(object)
+    context_menu_requested = pyqtSignal()
+    xrange_changed = pyqtSignal(float, float)
 
     # Mirror TimeDomainCanvas constants so callers see the same surface.
     MAX_PTS = 8000
@@ -998,6 +1113,8 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
         self._overlay_view_sync_conns = []
+        # Task 1: overlay Y grid infrastructure
+        self._overlay_grid_lines: list = []
         # The X-master axis handle in overlay mode. Its ViewBox owns the
         # shared X range, the default mouse-pan, and the scene geometry
         # anchor; NO curves are attached to it (every channel — including
@@ -1025,6 +1142,7 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor_line_items = []
         self._cursor_a_items = []
         self._cursor_b_items = []
+        self._dual_cursor_extreme_markers = []
 
         # Bug 3: post-rebuild callbacks. plot_channels builds NEW ViewBoxes
         # (default PanMode), so any owner that pins a mouse mode (the
@@ -1152,6 +1270,7 @@ class TimeDomainCanvasPG(QWidget):
                 pi.showGrid(x=True, y=False, alpha=0.28)
             except Exception:
                 pass
+            self._build_overlay_y_grid()
         else:
             # Single channel.
             pi = self._add_plot_item(row=0, col=0)
@@ -1179,12 +1298,14 @@ class TimeDomainCanvasPG(QWidget):
             for handle in self.axes_list:
                 self._connect_xrange_listener(handle)
             self._set_xrange_to_data_union()
+            self._emit_xrange_changed()
             if self._overlay_mode:
                 self._sync_overlay_aux_viewboxes()
                 self._connect_overlay_view_sync()
 
         self._refresh = True
         self._apply_tick_density_to_all_axes()
+        self._unify_subplot_bottom_axis_heights()
         # Tick density and data-union X seeding can change AxisItem geometry
         # after the early subplot label pass. Re-pin once at the end of build
         # so the first rendered frame already has one shared X grid.
@@ -1272,6 +1393,12 @@ class TimeDomainCanvasPG(QWidget):
         the scene for blank-click deselect in overlay mode.
         """
         vb = _ModifierWheelViewBox(owner_canvas=self)
+        vb.setBorder(
+            pg.mkPen(
+                color=PG_AXIS_NEUTRAL_COLOR,
+                width=PG_AXIS_NEUTRAL_WIDTH,
+            )
+        )
         pi = self._glw.addPlot(row=row, col=col, viewBox=vb)
         _localize_pg_context_menu(getattr(vb, "menu", None))
         _localize_pg_context_menu(getattr(pi, "ctrlMenu", None))
@@ -1283,6 +1410,8 @@ class TimeDomainCanvasPG(QWidget):
         for axis_name in ("left", "right", "bottom"):
             try:
                 axis = pi.getAxis(axis_name)
+                axis.enableAutoSIPrefix(False)
+                _apply_pg_axis_font(axis)
                 axis.setPen(
                     pg.mkPen(
                         color=PG_AXIS_NEUTRAL_COLOR,
@@ -1332,6 +1461,11 @@ class TimeDomainCanvasPG(QWidget):
             # (index 1 → col 3, index 2 → col 4, ...). Col 2 (built-in right)
             # stays unused so layout spacing applies uniformly to every pair.
             axis_item = pg.AxisItem("right")
+            try:
+                axis_item.enableAutoSIPrefix(False)
+            except Exception:
+                pass
+            _apply_pg_axis_font(axis_item)
             try:
                 primary_plot.layout.addItem(axis_item, 2, 2 + index)
             except Exception:
@@ -1412,12 +1546,30 @@ class TimeDomainCanvasPG(QWidget):
             ax.set_xlim(float(new_lo), float(new_hi))
         except Exception:
             return
+        self._sync_x_axis_item_range(ax, new_lo, new_hi)
+        self._propagate_xlim_to_siblings(source=ax)
         # Order per pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before:
         # mutate, then flush. set_xlim above fired sigXRangeChanged and
         # scheduled the 40 ms debounced QTimer; drain it synchronously
         # so the post-switch frame is the high-detail envelope.
         try:
             self._flush_pending_refresh()
+        except Exception:
+            pass
+
+    def _sync_x_axis_item_range(self, handle, lo, hi):
+        try:
+            axis = handle.x_axis_item()
+        except Exception:
+            axis = None
+        if axis is None:
+            return
+        try:
+            axis.setRange(float(lo), float(hi))
+        except Exception:
+            return
+        try:
+            axis.update()
         except Exception:
             pass
 
@@ -1479,15 +1631,16 @@ class TimeDomainCanvasPG(QWidget):
                 # and IGNORES "\n", so the _compact_axis_label newline (for
                 # "[prefix] longname") produced one long unbroken rotated
                 # label that ran over the tick numbers and the next axis.
-                # Use a single-line middle-ellipsized name that fits the
-                # axis height instead of inserting a (dropped) newline.
-                base = str(name).replace("\n", " ")
-                compact = _middle_ellipsis(base, max_chars=22)
-                label = f"{compact}" + (f" ({unit})" if unit else "")
+                # Use a single-line label, but size the ellipsis budget from
+                # the current axis height instead of hard-capping every overlay
+                # channel at 22 chars. Tall charts can show the full name while
+                # short charts still fall back to a bounded middle ellipsis.
+                label = self._overlay_axis_label(axis_handle, name, unit)
             else:
                 compact = _compact_axis_label(name, unit, max_chars=20)
                 label = f"{compact}" + (f" ({unit})" if unit else "")
             axis_handle.set_ylabel(label)
+            _apply_pg_axis_font(axis_handle.y_axis_item())
         except Exception:
             pass
         if self._overlay_mode:
@@ -1496,6 +1649,103 @@ class TimeDomainCanvasPG(QWidget):
         if xlabel is not None:
             try:
                 axis_handle.set_xlabel(xlabel)
+                _apply_pg_axis_font(axis_handle.x_axis_item())
+            except Exception:
+                pass
+
+    def _overlay_axis_label(self, axis_handle, name, unit):
+        base = str(name).replace("\n", " ")
+        suffix = f" ({unit})" if unit else ""
+        max_chars = self._overlay_axis_label_max_chars(axis_handle, base, suffix)
+        compact = _middle_ellipsis(base, max_chars=max_chars)
+        return f"{compact}{suffix}"
+
+    def _overlay_axis_label_max_chars(self, axis_handle, base, suffix):
+        """Return the largest label budget that fits the rotated Y axis."""
+        text = str(base)
+        if not text:
+            return _OVERLAY_AXIS_LABEL_FALLBACK_CHARS
+
+        available = self._overlay_axis_label_available_height(axis_handle)
+        if available <= 0:
+            return min(len(text), _OVERLAY_AXIS_LABEL_FALLBACK_CHARS)
+
+        metrics = QFontMetrics(_pg_chart_font(9))
+
+        def text_width(value):
+            try:
+                return float(metrics.horizontalAdvance(value))
+            except AttributeError:  # pragma: no cover - older Qt fallback
+                return float(metrics.width(value))
+
+        full_label = f"{text}{suffix}"
+        if text_width(full_label) <= available:
+            return len(text)
+
+        low = min(_OVERLAY_AXIS_LABEL_MIN_CHARS, len(text))
+        high = len(text)
+        best = low
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = f"{_middle_ellipsis(text, max_chars=mid)}{suffix}"
+            if text_width(candidate) <= available:
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        return max(_OVERLAY_AXIS_LABEL_MIN_CHARS, min(best, len(text)))
+
+    def _overlay_axis_label_available_height(self, axis_handle):
+        heights = []
+        try:
+            axis = axis_handle.y_axis_item()
+        except Exception:
+            axis = None
+        if axis is not None:
+            try:
+                h = float(axis.size().height())
+                if h > 0:
+                    heights.append(h)
+            except Exception:
+                pass
+            try:
+                h = float(axis.sceneBoundingRect().height())
+                if h > 0:
+                    heights.append(h)
+            except Exception:
+                pass
+        vb = getattr(axis_handle, "view_box", None)
+        if vb is not None:
+            try:
+                h = float(vb.sceneBoundingRect().height())
+                if h > 0:
+                    heights.append(h)
+            except Exception:
+                pass
+        try:
+            viewport = self._glw.viewport()
+            if viewport is not None:
+                h = float(viewport.height())
+                if h > 0:
+                    heights.append(h)
+        except Exception:
+            pass
+        if not heights:
+            return 0.0
+        return max(0.0, max(heights) - _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX)
+
+    def _refresh_overlay_axis_labels(self):
+        if not self._overlay_mode or not self._channel_lines:
+            return
+        for name, (handle, _line) in self._channel_lines.items():
+            row = self.channel_data.get(name)
+            unit = row[3] if row is not None else ""
+            color = row[2] if row is not None else PG_AXIS_NEUTRAL_COLOR
+            try:
+                handle.set_ylabel(self._overlay_axis_label(handle, name, unit))
+                _apply_pg_axis_font(handle.y_axis_item())
+                self._configure_overlay_axis_geometry(handle)
+                self._apply_pg_axis_style(handle, color)
             except Exception:
                 pass
 
@@ -1507,6 +1757,7 @@ class TimeDomainCanvasPG(QWidget):
             axis = None
         if axis is None:
             return
+        _apply_pg_axis_font(axis)
         try:
             axis.setPen(
                 pg.mkPen(color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH)
@@ -1606,11 +1857,13 @@ class TimeDomainCanvasPG(QWidget):
             return
         try:
             bottom.setStyle(showValues=bool(is_bottom))
+            _apply_pg_axis_font(bottom)
         except Exception:
             pass
         if not is_bottom:
             try:
                 bottom.setLabel(text="")
+                _apply_pg_axis_font(bottom)
             except Exception:
                 pass
 
@@ -1718,10 +1971,12 @@ class TimeDomainCanvasPG(QWidget):
             handles.append(self._x_master_handle)
         for handle in handles:
             vb = handle.view_box
+            did_set = False
             try:
                 if vb is not None:
                     vb.blockSignals(True)
                 handle.set_xlim(lo, hi)
+                did_set = True
             except Exception:
                 pass
             finally:
@@ -1730,6 +1985,116 @@ class TimeDomainCanvasPG(QWidget):
                         vb.blockSignals(False)
                 except Exception:
                     pass
+            if did_set:
+                self._sync_x_axis_item_range(handle, lo, hi)
+        self._apply_target_x_ticks_to_all_axes()
+
+    def _build_overlay_y_grid(self):
+        """Lock X-master ViewBox to Y=[0,1] and populate uniform horizontal
+        InfiniteLines that serve as the shared graticule for overlay mode.
+
+        The X-master ViewBox carries no channel data; its Y range is fixed so
+        lines placed at k/_N_OVERLAY_DIVISIONS stay at even screen fractions
+        regardless of channel data changes.  The InfiniteLines are added to
+        the X-master ViewBox via vb.addItem(), so they are removed automatically
+        when _glw.clear() tears down the PlotItem.
+        """
+        if self._x_master_handle is None:
+            return
+        vb = getattr(self._x_master_handle, "view_box", None)
+        if vb is None:
+            return
+
+        # Lock Y to [0, 1]: disable autorange, then set the fixed range.
+        try:
+            vb.enableAutoRange(axis="y", enable=False)
+            vb.setYRange(0.0, 1.0, padding=0)
+        except Exception:
+            pass
+
+        n = _N_OVERLAY_DIVISIONS
+        alpha_int = max(1, min(255, int(round(_OVERLAY_GRID_ALPHA * 255))))
+        pen = pg.mkPen(color=(180, 180, 180, alpha_int), width=1)
+        lines = []
+        for i in range(1, n):
+            y_pos = i / n
+            line = pg.InfiniteLine(
+                pos=y_pos,
+                angle=0,          # horizontal
+                movable=False,
+                pen=pen,
+            )
+            try:
+                vb.addItem(line)
+                lines.append(line)
+            except Exception:
+                pass
+        self._overlay_grid_lines = lines
+
+    def _snap_overlay_channel_to_grid(self, ax):
+        """Snap the selected channel's ViewBox Y center to the nearest
+        1/_N_OVERLAY_DIVISIONS boundary in X-master normalized space.
+
+        The span (hi - lo) is preserved; only the center moves.  If the
+        scene geometry is degenerate (offscreen / zero-size ViewBox), the
+        method is a silent no-op — no crash, no change.
+
+        Coordinate path:
+            channel data center
+                → aux_vb.mapViewToScene()        [data coords → scene px]
+                → x_master_vb.mapSceneToView()   [X-master Y ∈ [0, 1]]
+                → _snap_y_to_divisions()
+                → x_master_vb.mapViewToScene()   [data coords → scene px]
+                → aux_vb.mapSceneToView()
+            → new channel data center
+        """
+        if ax is None:
+            return
+        try:
+            lo, hi = ax.get_ylim()
+        except Exception:
+            return
+        span = hi - lo
+        if span <= 0:
+            return
+
+        aux_vb = getattr(ax, "view_box", None)
+        x_master = self._x_master_handle
+        x_master_vb = getattr(x_master, "view_box", None) if x_master else None
+        if aux_vb is None or x_master_vb is None:
+            return
+
+        # Guard: degenerate scene geometry → silent no-op.
+        try:
+            aux_rect = aux_vb.sceneBoundingRect()
+            if aux_rect.height() < 1.0:
+                return
+        except Exception:
+            return
+
+        center_data = (lo + hi) / 2.0
+        try:
+            from PyQt5.QtCore import QPointF
+            scene_pt = aux_vb.mapViewToScene(QPointF(0.0, center_data))
+            xm_pt = x_master_vb.mapSceneToView(scene_pt)
+            xm_y = float(xm_pt.y())
+        except Exception:
+            return
+
+        snapped_xm_y = _snap_y_to_divisions(xm_y, _N_OVERLAY_DIVISIONS)
+
+        try:
+            from PyQt5.QtCore import QPointF
+            snapped_scene_pt = x_master_vb.mapViewToScene(QPointF(0.0, snapped_xm_y))
+            snapped_ch_pt = aux_vb.mapSceneToView(snapped_scene_pt)
+            new_center = float(snapped_ch_pt.y())
+        except Exception:
+            return
+
+        try:
+            ax.set_ylim(new_center - span / 2.0, new_center + span / 2.0)
+        except Exception:
+            pass
 
     def _teardown_overlay_aux_viewboxes(self):
         """Remove every overlay aux ViewBox, its child curves, and the
@@ -1829,10 +2194,14 @@ class TimeDomainCanvasPG(QWidget):
         self._x_master_handle = None
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
+        # InfiniteLines were added via vb.addItem() on the X-master ViewBox,
+        # which is part of the PlotItem already destroyed by _glw.clear() above.
+        self._overlay_grid_lines = []
         self._subplot_label_specs = []
         self._cursor_line_items = []
         self._cursor_a_items = []
         self._cursor_b_items = []
+        self._dual_cursor_extreme_markers = []
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
         # do that. Mirror TimeDomainCanvas.clear's behavior.
 
@@ -1856,6 +2225,7 @@ class TimeDomainCanvasPG(QWidget):
             self._hide_cursor_items(self._cursor_line_items)
             self._hide_cursor_items(self._cursor_a_items)
             self._hide_cursor_items(self._cursor_b_items)
+            self._hide_dual_cursor_extreme_markers()
             self.draw_idle()
 
     def set_dual_cursor_mode(self, en):
@@ -1868,6 +2238,7 @@ class TimeDomainCanvasPG(QWidget):
             self._refresh = True
             self._hide_cursor_items(self._cursor_a_items)
             self._hide_cursor_items(self._cursor_b_items)
+            self._hide_dual_cursor_extreme_markers()
             self.dual_cursor_info.emit("")
             self.draw_idle()
 
@@ -1885,6 +2256,7 @@ class TimeDomainCanvasPG(QWidget):
         self._hide_cursor_items(self._cursor_line_items)
         self._hide_cursor_items(self._cursor_a_items)
         self._hide_cursor_items(self._cursor_b_items)
+        self._hide_dual_cursor_extreme_markers()
         self.dual_cursor_info.emit("")
         self.draw_idle()
 
@@ -1965,6 +2337,72 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 pass
 
+    def _ensure_dual_cursor_extreme_markers(self):
+        markers = getattr(self, "_dual_cursor_extreme_markers", [])
+        if len(markers) == len(self.axes_list):
+            return markers
+        for marker in markers or []:
+            try:
+                marker.setVisible(False)
+            except Exception:
+                pass
+        new_markers = []
+        for handle in self.axes_list:
+            vb = handle.view_box
+            if vb is None:
+                continue
+            marker = pg.ScatterPlotItem(size=10)
+            marker.setZValue(1100)
+            marker.setVisible(False)
+            try:
+                vb.addItem(marker, ignoreBounds=True)
+                new_markers.append(marker)
+            except Exception:
+                pass
+        self._dual_cursor_extreme_markers = new_markers
+        return new_markers
+
+    def _hide_dual_cursor_extreme_markers(self):
+        for marker in getattr(self, "_dual_cursor_extreme_markers", []) or []:
+            try:
+                marker.setData([], [])
+                marker.setVisible(False)
+            except Exception:
+                pass
+
+    def _update_dual_cursor_extreme_markers(self, points_by_channel):
+        markers = self._ensure_dual_cursor_extreme_markers()
+        point_map = {
+            name: (min_x, min_y, max_x, max_y)
+            for name, min_x, min_y, max_x, max_y in points_by_channel
+        }
+        for marker, handle in zip(markers, self.axes_list):
+            name = self._channel_name_for_handle(handle)
+            points = point_map.get(name)
+            try:
+                if points is None:
+                    marker.setData([], [])
+                    marker.setVisible(False)
+                    continue
+                min_x, min_y, max_x, max_y = points
+                marker.setData(
+                    [min_x, max_x],
+                    [min_y, max_y],
+                    symbol="o",
+                    size=10,
+                    pen=[
+                        pg.mkPen("#ffffff", width=1.2),
+                        pg.mkPen("#ffffff", width=1.2),
+                    ],
+                    brush=[
+                        pg.mkBrush("#16a34a"),
+                        pg.mkBrush("#dc2626"),
+                    ],
+                )
+                marker.setVisible(True)
+            except Exception:
+                pass
+
     def _cursor_data_x_from_viewport_pos(self, viewport_pos):
         scene_pos = self._viewport_pos_to_scene(viewport_pos)
         handle = self._axis_handle_at_scene_pos(scene_pos)
@@ -2000,7 +2438,8 @@ class TimeDomainCanvasPG(QWidget):
                 "_cursor_line_items", color="#64748b", width=1.0, style=Qt.DotLine
             )
             self._set_cursor_items_pos(hover_items, x)
-            self._emit_dual_cursor_html()
+            # Dual cursor stats depend only on the fixed A/B positions; A/B
+            # placement already emits them, so hover only moves the guide line.
         else:
             items = self._ensure_cursor_items(
                 "_cursor_line_items", color="#111827", width=1.0
@@ -2274,6 +2713,9 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_dragging = False
         self._overlay_y_drag_start = None
         self._set_x_master_mouse_enabled(True)
+        # Snap the selected channel center to the nearest grid division.
+        selected_ax = self._selected_overlay_axes()
+        self._snap_overlay_channel_to_grid(selected_ax)
         self.schedule_idle_quality()
         return True
 
@@ -2333,18 +2775,153 @@ class TimeDomainCanvasPG(QWidget):
         # Tick density changes tick-label text → left-axis auto-width, which
         # re-skews subplot left edges; re-unify after applying density.
         self._unify_subplot_left_axis_widths()
+        self._unify_subplot_bottom_axis_heights()
         self._refresh = True
         self.draw_idle()
 
     def _apply_tick_density_to_all_axes(self):
-        x_n, y_n = self._tick_density
-        x_density = max(0.35, min(3.0, float(x_n) / 10.0))
+        _x_n, y_n = self._tick_density
         y_density = max(0.35, min(3.0, float(y_n) / 6.0))
+        self._apply_target_x_ticks_to_all_axes()
         for handle in self.axes_list:
-            x_axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
             y_axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
-            self._apply_axis_tick_density(x_axis, x_density)
             self._apply_axis_tick_density(y_axis, y_density)
+
+    def _apply_target_x_ticks_to_all_axes(self):
+        seen = set()
+        for handle in self._x_tick_axis_handles():
+            axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
+            if axis is None:
+                continue
+            key = id(axis)
+            if key in seen:
+                continue
+            seen.add(key)
+            self._apply_target_x_ticks(axis, handle)
+
+    def _x_tick_axis_handles(self):
+        handles = list(self.axes_list)
+        if self._overlay_mode and self._x_master_handle is not None:
+            handles.insert(0, self._x_master_handle)
+        return handles
+
+    def _apply_target_x_ticks(self, axis, handle):
+        try:
+            lo, hi = handle.get_xlim()
+            axis_width = float(axis.size().width())
+        except Exception:
+            self._reset_x_ticks_to_adaptive(axis)
+            return
+        ticks = self._compute_target_x_ticks(axis, float(lo), float(hi), axis_width)
+        if not ticks:
+            self._reset_x_ticks_to_adaptive(axis)
+            return
+        try:
+            axis.setStyle(maxTickLevel=0)
+            axis.setTicks([ticks, []])
+        except Exception:
+            self._reset_x_ticks_to_adaptive(axis)
+
+    def _reset_x_ticks_to_adaptive(self, axis):
+        try:
+            axis.setTicks(None)
+        except Exception:
+            pass
+        self._apply_axis_tick_density(
+            axis,
+            max(0.35, min(3.0, float(self._tick_density[0]) / 10.0)),
+        )
+
+    def _compute_target_x_ticks(self, axis, lo, hi, axis_width):
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            return []
+        if axis_width <= 1.0:
+            return []
+
+        target = max(_TARGET_X_TICK_MIN_COUNT, int(self._tick_density[0]))
+        raw_step = (hi - lo) / max(1, target - 1)
+        candidates = []
+        for step in self._nice_x_tick_steps(raw_step):
+            values = self._x_tick_values_for_step(lo, hi, step)
+            if len(values) < _TARGET_X_TICK_MIN_COUNT:
+                continue
+            labels = self._format_x_tick_labels(axis, values, step)
+            fit = self._fit_x_tick_labels(values, labels, lo, hi, axis_width)
+            if not fit:
+                continue
+            fit_values, fit_labels = fit
+            candidates.append((
+                abs(len(fit_values) - target),
+                -len(fit_values),
+                abs(math.log(step / raw_step)) if raw_step > 0 else 0.0,
+                step,
+                fit_values,
+                fit_labels,
+            ))
+
+        if not candidates:
+            return []
+        _distance, _neg_count, _nice_distance, _step, values, labels = min(candidates)
+        return [(float(value), str(label)) for value, label in zip(values, labels)]
+
+    def _nice_x_tick_steps(self, raw_step):
+        if not np.isfinite(raw_step) or raw_step <= 0:
+            return []
+        exponent = math.floor(math.log10(raw_step))
+        bases = []
+        for exp in range(exponent - 2, exponent + 4):
+            scale = 10.0 ** exp
+            for factor in _TARGET_X_TICK_NICE_FACTORS:
+                step = factor * scale
+                if step > 0:
+                    bases.append(step)
+        return sorted(set(bases), key=lambda step: abs(math.log(step / raw_step)))
+
+    def _x_tick_values_for_step(self, lo, hi, step):
+        start = math.ceil(lo / step) * step
+        values = []
+        value = start
+        guard = 0
+        while value <= hi + step * 1e-9 and guard < 500:
+            if value >= lo - step * 1e-9:
+                values.append(0.0 if abs(value) < step * 1e-10 else float(value))
+            value += step
+            guard += 1
+        return values
+
+    def _format_x_tick_labels(self, axis, values, spacing):
+        try:
+            return axis.tickStrings(values, getattr(axis, "scale", 1.0), spacing)
+        except Exception:
+            return [f"{value:g}" for value in values]
+
+    def _fit_x_tick_labels(self, values, labels, lo, hi, axis_width):
+        metrics = QFontMetrics(_pg_chart_font(9))
+        span = hi - lo
+        fit_values = []
+        fit_labels = []
+        previous_right = None
+        for value, label in zip(values, labels):
+            x = (float(value) - lo) / span * axis_width
+            text = str(label)
+            try:
+                width = float(metrics.horizontalAdvance(text))
+            except AttributeError:  # pragma: no cover - older Qt fallback
+                width = float(metrics.width(text))
+            left = x - width / 2.0
+            right = x + width / 2.0
+            if left < _TARGET_X_TICK_EDGE_PAD_PX:
+                continue
+            if right > axis_width - _TARGET_X_TICK_EDGE_PAD_PX:
+                continue
+            if previous_right is not None and left - previous_right < _TARGET_X_TICK_MIN_GAP_PX:
+                return None
+            fit_values.append(float(value))
+            fit_labels.append(text)
+            previous_right = right
+        if len(fit_values) < _TARGET_X_TICK_MIN_COUNT:
+            return None
+        return fit_values, fit_labels
 
     def _apply_axis_tick_density(self, axis, density):
         if axis is None:
@@ -2682,10 +3259,25 @@ class TimeDomainCanvasPG(QWidget):
         # Propagate first so the sibling axes are in sync BEFORE the
         # debounced refresh runs.
         self._propagate_xlim_to_siblings(source=source_handle)
+        self._apply_target_x_ticks_to_all_axes()
+        self._emit_xrange_changed(source_handle)
         if self._refresh_pending:
             return
         self._refresh_pending = True
         self._refresh_timer.start()
+
+    def _emit_xrange_changed(self, source_handle=None):
+        if source_handle is None:
+            source_handle = self._primary_xaxis_ax
+        if source_handle is None:
+            return
+        try:
+            lo, hi = source_handle.get_xlim()
+        except Exception:
+            return
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return
+        self.xrange_changed.emit(float(lo), float(hi))
 
     def _propagate_xlim_to_siblings(self, source=None):
         """Mirror ``source``'s xlim onto every other axis facade.
@@ -2726,11 +3318,14 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 cur_lo, cur_hi = (None, None)
             if cur_lo == float(lo) and cur_hi == float(hi):
+                self._sync_x_axis_item_range(handle, lo, hi)
                 continue
+            did_set = False
             try:
                 # blockSignals avoids ping-pong with sibling listeners.
                 vb.blockSignals(True)
                 vb.setXRange(float(lo), float(hi), padding=0)
+                did_set = True
             except Exception:
                 pass
             finally:
@@ -2738,6 +3333,8 @@ class TimeDomainCanvasPG(QWidget):
                     vb.blockSignals(False)
                 except Exception:
                     pass
+            if did_set:
+                self._sync_x_axis_item_range(handle, lo, hi)
 
     def _flush_pending_refresh(self):
         """Drain any pending refresh immediately (end-of-pan/zoom).
@@ -3215,6 +3812,7 @@ class TimeDomainCanvasPG(QWidget):
         not by reimplementation.
         """
         info, dual = [], []
+        extreme_points = []
         if self._ax is not None:
             info.append(f"A={self._ax:.4f}s")
         if self._bx is not None:
@@ -3232,6 +3830,20 @@ class TimeDomainCanvasPG(QWidget):
                 seg = sf[m]
                 if not len(seg):
                     continue
+                segment_indices = np.flatnonzero(m)
+                finite = np.isfinite(seg)
+                if np.any(finite):
+                    finite_segment = seg[finite]
+                    finite_indices = segment_indices[finite]
+                    min_idx = int(finite_indices[int(np.argmin(finite_segment))])
+                    max_idx = int(finite_indices[int(np.argmax(finite_segment))])
+                    extreme_points.append((
+                        ch,
+                        float(tf[min_idx]),
+                        float(sf[min_idx]),
+                        float(tf[max_idx]),
+                        float(sf[max_idx]),
+                    ))
                 u_suffix = f" {u}" if u else ""
                 delta = _interp_cursor_value(tf, sf, self._bx) - _interp_cursor_value(
                     tf, sf, self._ax
@@ -3252,6 +3864,10 @@ class TimeDomainCanvasPG(QWidget):
             primary_html = "Click A"
         self.cursor_info.emit(primary_html)
         self.dual_cursor_info.emit(_format_dual_html(dual) if dual else "")
+        if self._ax is not None and self._bx is not None:
+            self._update_dual_cursor_extreme_markers(extreme_points)
+        else:
+            self._hide_dual_cursor_extreme_markers()
 
     def _cursor_x_to_pixmap_x(self, data_x, pixmap_width):
         """Map a data-space cursor X to pixel-x in the grabbed pixmap.
@@ -3411,6 +4027,7 @@ class TimeDomainCanvasPG(QWidget):
                     fill=pg.mkBrush(255, 255, 255, 220),
                     border=pg.mkPen(color=color, width=0.8),
                 )
+                _apply_pg_text_item_font(text_item)
                 vb = handle.view_box
                 if vb is not None:
                     try:
@@ -3442,6 +4059,7 @@ class TimeDomainCanvasPG(QWidget):
                 if ax_item is not None:
                     try:
                         ax_item.setLabel(text=str(name))
+                        _apply_pg_axis_font(ax_item)
                     except Exception:
                         pass
 
@@ -3499,6 +4117,60 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             pass
 
+    def _unify_subplot_bottom_axis_heights(self):
+        """Collapse hidden upper subplot bottom-axis reserves and balance rows.
+
+        Only the bottom subplot shows X tick values and the X label, yet every
+        subplot's bottom AxisItem still consumes layout height. Letting the
+        hidden upper rows reserve a full tick/label height opens a large blank
+        band between rows — most visible in two-row mode. Reserve the X
+        tick/label height only on the final row and collapse the hidden upper
+        rows to ~1 px, so subplots sit flush regardless of row count.
+
+        After collapsing, give every grid row equal preferred height + stretch
+        so QGraphicsGridLayout keeps the ViewBoxes the same size instead of
+        handing the collapsed rows extra cell height (which leaves the bottom
+        plot cramped). The bottom ViewBox stays ~one-axis-height shorter than
+        the rows above it — the intended stacked-shared-X look, favouring flush
+        adjacency over pixel-equal heights. The preferred height is a constant:
+        equal values distribute proportionally, so rows stay balanced at any
+        canvas size without reading live geometry. See
+        docs/superpowers/specs/2026-06-02-subplot-vertical-spacing-design.md.
+        """
+        if not self._subplot_label_specs:
+            return
+        bottom_axes = []
+        for handle in self.axes_list:
+            pi = getattr(handle, "plot_item", None)
+            if pi is None:
+                continue
+            try:
+                axis = pi.getAxis("bottom")
+            except Exception:
+                axis = None
+            if axis is not None:
+                bottom_axes.append(axis)
+        if len(bottom_axes) < 2:
+            return
+        for axis in bottom_axes[:-1]:
+            try:
+                axis.setHeight(1.0)
+            except Exception:
+                pass
+        try:
+            bottom_axes[-1].setHeight(None)
+        except Exception:
+            pass
+        try:
+            layout = self._glw.ci.layout
+            for row in range(layout.rowCount()):
+                layout.setRowStretchFactor(row, 1)
+                layout.setRowPreferredHeight(row, 100.0)
+            layout.invalidate()
+            layout.activate()
+        except Exception:
+            pass
+
     def resizeEvent(self, event):
         """Re-check subplot inside-label placement on resize.
 
@@ -3542,6 +4214,16 @@ class TimeDomainCanvasPG(QWidget):
         """
         try:
             self.disable_interactive_quality()
+        except Exception:
+            pass
+        try:
+            self._refresh_overlay_axis_labels()
+        except Exception:
+            pass
+        try:
+            self._apply_target_x_ticks_to_all_axes()
+            self._unify_subplot_left_axis_widths()
+            self._unify_subplot_bottom_axis_heights()
         except Exception:
             pass
         # Recompute the envelope for the new plot-area width, matching the
@@ -3742,6 +4424,36 @@ class TimeDomainCanvasPG(QWidget):
         # else: metric in the (ON, OFF] band → hold the previous value.
         return bool(self._idle_aa_density_allowed)
 
+    def _export_aa_affordable(self) -> bool:
+        """Return whether copy/export can afford forced curve antialiasing.
+
+        This mirrors the idle-AA metric (overlay = sum of all curve points;
+        subplot/single = max row point sum) but does not touch the idle-AA
+        hysteresis state. Dense multi-channel exports fail closed to the cheap
+        screen-state grab path.
+        """
+        overlay = bool(getattr(self, "_overlay_mode", False))
+        off_budget = (
+            self._AA_OVERLAY_SEGMENT_OFF if overlay else self._AA_SUBPLOT_SEGMENT_OFF
+        )
+        sums: dict = {}
+        total = 0
+        for it in self._collect_curve_items():
+            try:
+                xd, _ = it.getData()
+                n = 0 if xd is None else len(xd)
+            except Exception:
+                return False
+            total += n
+            try:
+                vb = it.getViewBox()
+            except Exception:
+                vb = None
+            key = id(vb) if vb is not None else None
+            sums[key] = sums.get(key, 0) + n
+        metric = total if overlay else (max(sums.values()) if sums else 0)
+        return metric <= off_budget
+
     @contextmanager
     def _curves_antialiased(self):
         """Temporarily enable antialiasing on every curve so an export grab
@@ -3787,9 +4499,9 @@ class TimeDomainCanvasPG(QWidget):
         Order of attempts:
         1. ``QWidget.grab()`` on the outer widget (covers GraphicsLayoutWidget
            + any sibling overlays MainWindow may add later). For ``scale`` > 1
-           the grabbed region is re-rendered into a larger ``QImage`` by
-           painting the widget at the magnified device size, so the bitmap
-           is sharp rather than a blurry upscale.
+           the grabbed bitmap is smoothly magnified to the capped target size.
+           This keeps interactive copy to one widget paint instead of a
+           screen-size grab plus a second high-DPI render in the click handler.
         2. Direct ``self._glw.grab()`` if the outer grab returned null.
         3. A 1×1 transparent fallback pixmap if both fail.
 
@@ -3801,16 +4513,13 @@ class TimeDomainCanvasPG(QWidget):
         never default to a full-canvas-sized guess on a failed grab.
         """
         # Resolve the effective (capped) factor from the OUTER widget's
-        # current width — the same surface step 1 grabs.
+        # current width — the same surface step 1 grabs. Dense exports keep
+        # the current screen rendering state and skip 2× magnification.
         base_w = max(1, int(self.width()))
-        eff_scale = _capped_hidpi_scale(base_w, scale)
+        affordable = self._export_aa_affordable()
+        eff_scale = _capped_hidpi_scale(base_w, scale) if affordable else 1.0
 
-        # Primary: render the outer widget at the magnified device size so
-        # the vector scene is rasterized crisply (matplotlib-figure-DPI
-        # parity), not bilinearly upscaled from a screen grab. Curves are
-        # anti-aliased for the duration of the grab (restored on exit) so the
-        # exported lines/text are smooth, not the AA-off pan-hot-path frame.
-        with self._curves_antialiased():
+        def _grab_first_good():
             for target in (self, getattr(self, "_glw", None)):
                 if target is None:
                     continue
@@ -3820,6 +4529,17 @@ class TimeDomainCanvasPG(QWidget):
                     pix = None
                 if pix is not None and not pix.isNull() and pix.width() > 0 and pix.height() > 0:
                     return pix
+            return None
+
+        # Few-channel exports keep the crisp forced-AA path. Dense exports are
+        # what-you-see-is-what-you-get and avoid re-enabling AA for all curves.
+        if affordable:
+            with self._curves_antialiased():
+                pix = _grab_first_good()
+        else:
+            pix = _grab_first_good()
+        if pix is not None:
+            return pix
         # Final fallback: a 1×1 transparent pixmap. Tests gate on
         # geometry, not pixels, so this is acceptable when offscreen Qt
         # cannot realize the widget at all. We do NOT scale this up — a
@@ -3834,11 +4554,10 @@ class TimeDomainCanvasPG(QWidget):
         """Grab ``widget`` at ``eff_scale``×.
 
         At 1× this is exactly ``widget.grab()`` (unchanged legacy path).
-        Above 1× the widget is rendered into a ``QImage`` sized
-        ``round(w*scale) × round(h*scale)`` with the painter pre-scaled,
-        so the scene is re-rasterized at higher resolution. Returns a null
-        pixmap when the widget has no realizable geometry (caller guards
-        on ``isNull()``).
+        Above 1× the same grabbed bitmap is smoothly scaled to
+        ``round(w*scale) × round(h*scale)`` so the copy path avoids a second
+        synchronous widget render. Returns a null pixmap when the widget has
+        no realizable geometry (caller guards on ``isNull()``).
         """
         # Always grab once first. This is the legacy capture primitive and
         # the realizability probe: if the widget cannot be grabbed (null /
@@ -3858,17 +4577,7 @@ class TimeDomainCanvasPG(QWidget):
             return base
         tw = max(1, int(round(w * eff_scale)))
         th = max(1, int(round(h * eff_scale)))
-        img = QImage(tw, th, QImage.Format_ARGB32_Premultiplied)
-        img.fill(Qt.transparent)
-        painter = QPainter(img)
-        try:
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-            painter.scale(eff_scale, eff_scale)
-            widget.render(painter)
-        finally:
-            painter.end()
-        return QPixmap.fromImage(img)
+        return base.scaled(tw, th, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 
 
 __all__ = [

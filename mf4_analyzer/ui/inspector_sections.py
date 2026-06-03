@@ -1497,7 +1497,7 @@ class PersistentTop(QWidget):
         _set_form_row_visible(self._xaxis_form, self._combo_xaxis_ch, index == 1)
 
     def _update_range_rows_visible(self, checked):
-        _set_form_row_visible(self._range_form, self._range_row_host, bool(checked))
+        _set_form_row_visible(self._range_form, self._range_row_host, True)
 
     def _emit_ticks(self):
         self.tick_density_changed.emit(self.spin_xt.value(), self.spin_yt.value())
@@ -1538,10 +1538,24 @@ class PersistentTop(QWidget):
     def range_values(self):
         return (self.spin_start.value(), self.spin_end.value())
 
+    def set_range_values(self, xmin, xmax):
+        old_start = self.spin_start.blockSignals(True)
+        old_end = self.spin_end.blockSignals(True)
+        try:
+            self.spin_start.setValue(float(xmin))
+            self.spin_end.setValue(float(xmax))
+        finally:
+            self.spin_start.blockSignals(old_start)
+            self.spin_end.blockSignals(old_end)
+
     def set_range_from_span(self, xmin, xmax):
-        self.spin_start.setValue(xmin)
-        self.spin_end.setValue(xmax)
-        self.chk_range.setChecked(True)
+        self.set_range_values(xmin, xmax)
+        old = self.chk_range.blockSignals(True)
+        try:
+            self.chk_range.setChecked(True)
+        finally:
+            self.chk_range.blockSignals(old)
+        self._update_range_rows_visible(True)
 
     def set_range_limits(self, lo, hi):
         for sp in (self.spin_start, self.spin_end):

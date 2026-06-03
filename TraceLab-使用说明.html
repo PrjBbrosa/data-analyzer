@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TraceLab v6.0 · 使用说明</title>
+
+<!-- ===== FONTS ===== -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet">
+
+<style>
+/* =====================================================================
+   主题 "Coral Lab" —— 想换色只改这一段
+   ===================================================================== */
+:root{
+  --paper:#f6efe5;
+  --paper-grad:radial-gradient(120% 130% at 72% 0%,#fbf6f0 0%,#f5efe6 58%,#efe7da 100%);
+  --grid:rgba(40,30,25,.06);
+  --coral:#ff5a36; --coral-soft:rgba(255,90,54,.12); --coral-line:rgba(255,90,54,.34);
+  --teal:#1f7f96; --ink:#2c2520; --ink2:#6a5f56; --mut:#a89a8e;
+  --panel:rgba(255,255,255,.66); --panel-bd:rgba(40,30,25,.12);
+  --font-disp:'Chakra Petch','Noto Sans SC',sans-serif;
+  --font-body:'Noto Sans SC',sans-serif;
+  --font-mono:'JetBrains Mono',monospace;
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+
+/* ===== FIXED 16:9 STAGE BASE（viewport-base.css 完整内联） ===== */
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#cfc8bc;}
+.deck-viewport{position:fixed;inset:0;overflow:hidden;background:#cfc8bc;}
+.deck-stage{position:absolute;left:0;top:0;width:1920px;height:1080px;overflow:hidden;transform-origin:0 0;background:var(--paper);}
+.slide{position:absolute;inset:0;width:1920px;height:1080px;overflow:hidden;display:block;visibility:hidden;opacity:0;pointer-events:none;background:var(--paper-grad);color:var(--ink);font-family:var(--font-body);}
+.slide.active,.slide.visible{visibility:visible;opacity:1;pointer-events:auto;z-index:1;}
+img,video,canvas,svg{max-width:100%;max-height:100%;}
+.deck-controls{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:1000;}
+@media print{
+  html,body{width:1920px;height:auto;overflow:visible;background:#fff;}
+  .deck-viewport{position:static;overflow:visible;background:#fff;}
+  .deck-stage{position:static;width:auto;height:auto;transform:none!important;background:none;}
+  .slide{position:relative;display:block!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;width:1920px;height:1080px;break-after:page;page-break-after:always;}
+  .slide:last-child{break-after:auto;page-break-after:auto;}
+  .deck-controls{display:none!important;}
+}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.2s!important;}}
+
+/* ===== 通用 chrome ===== */
+.grat{position:absolute;inset:0;background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:80px 80px;pointer-events:none;}
+.toprule{position:absolute;left:0;top:0;height:7px;width:100%;background:var(--coral);}
+.chrome{position:absolute;left:120px;right:120px;top:64px;display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:21px;letter-spacing:.04em;color:var(--mut);}
+.chrome .sec{color:var(--coral);}
+.chrome .sec b{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--coral);margin-right:11px;vertical-align:middle;}
+.foot{position:absolute;left:120px;right:120px;bottom:50px;display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:18px;color:var(--mut);letter-spacing:.04em;}
+.foot .pg b{color:var(--ink);}
+.body{position:absolute;left:120px;right:120px;top:150px;bottom:110px;}
+
+/* 标题块 */
+.h-kick{font-family:var(--font-mono);font-size:22px;letter-spacing:.28em;text-transform:uppercase;color:var(--teal);margin-bottom:14px;}
+.h2{font-family:var(--font-disp);font-weight:700;font-size:74px;line-height:1.04;color:var(--ink);letter-spacing:.005em;}
+.h2 .c{color:var(--coral);}
+.lead{font-size:30px;line-height:1.5;color:var(--ink2);max-width:1420px;}
+.blk{margin-top:30px;}            /* 顶层内容块之间的间距（自动） */
+
+/* 内容内强调：<b>=珊瑚 <i>=青蓝 */
+.lead b,.when p b,.card p b,.card h3 b,.step .t b,.kv .v b,.tip p b,.flow li b{color:var(--coral);font-weight:700;}
+.lead i,.when p i,.card p i,.step .t i,.kv .v i,.tip p i{color:var(--teal);font-style:normal;font-weight:700;}
+
+/* 装饰波形 */
+.wavemark{height:34px;margin-top:24px;}
+.wavemark path{fill:none;stroke:var(--coral-line);stroke-width:3;}
+
+/* 卡片 */
+.card{background:var(--panel);border:1.5px solid var(--panel-bd);border-radius:4px;padding:30px 32px;position:relative;overflow:hidden;}
+.card::before{content:"";position:absolute;left:0;top:0;width:5px;height:100%;background:var(--coral);}
+.card .no{font-family:var(--font-mono);font-size:20px;color:var(--coral);letter-spacing:.06em;margin-bottom:12px;}
+.card h3{font-family:var(--font-disp);font-weight:600;font-size:32px;color:var(--ink);margin-bottom:12px;}
+.card p{font-size:24px;line-height:1.5;color:var(--ink2);}
+.card h3 + p{margin-top:8px;}
+.card p + p{margin-top:10px;}
+.card .pills{margin-top:6px;}
+.card.teal::before{background:var(--teal);}
+.card.teal .no{color:var(--teal);}
+
+/* 网格 */
+.grid{display:grid;gap:24px;}
+.g3{grid-template-columns:repeat(3,1fr);}
+.g2{grid-template-columns:repeat(2,1fr);}
+
+/* 步骤 */
+.steps{display:flex;flex-direction:column;gap:22px;}
+.step{display:flex;gap:24px;align-items:flex-start;}
+.step .n{flex:0 0 auto;width:58px;height:58px;border-radius:50%;background:var(--coral);color:#fff;font-family:var(--font-mono);font-weight:700;font-size:28px;display:flex;align-items:center;justify-content:center;}
+.step .t{font-size:28px;line-height:1.45;color:var(--ink);padding-top:8px;}
+.step .t .mono{font-family:var(--font-mono);background:var(--coral-soft);color:var(--coral);padding:2px 12px;border-radius:4px;font-size:24px;}
+
+/* 键值 / 速查 */
+.kv{display:flex;flex-direction:column;}
+.kv .row{display:flex;align-items:baseline;gap:24px;padding:18px 0;border-top:1px solid var(--panel-bd);}
+.kv .row:last-child{border-bottom:1px solid var(--panel-bd);}
+.kv .k{flex:0 0 360px;font-family:var(--font-mono);font-size:24px;color:var(--teal);letter-spacing:.02em;}
+.kv .v{font-size:26px;color:var(--ink);line-height:1.4;}
+
+/* 提示 */
+.tip{display:flex;gap:18px;align-items:flex-start;background:var(--coral-soft);border-left:5px solid var(--coral);border-radius:4px;padding:22px 28px;}
+.tip .ic{font-family:var(--font-mono);color:var(--coral);font-weight:700;font-size:24px;flex:0 0 auto;}
+.tip p{font-size:25px;line-height:1.45;color:var(--ink);}
+
+/* 标签 */
+.pill{display:inline-block;font-family:var(--font-mono);font-size:22px;color:var(--teal);border:1.5px solid var(--teal);border-radius:30px;padding:7px 20px;margin:0 10px 12px 0;letter-spacing:.02em;}
+.pill.coral{color:var(--coral);border-color:var(--coral-line);}
+
+/* 什么时候用 */
+.when{display:flex;gap:18px;align-items:flex-start;}
+.when .lbl{font-family:var(--font-mono);font-size:22px;color:#fff;background:var(--teal);padding:7px 18px;border-radius:4px;flex:0 0 auto;letter-spacing:.04em;}
+.when p{font-size:28px;line-height:1.45;color:var(--ink);}
+
+/* 工作流 */
+.flow{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;}
+.flow .fcol{background:var(--panel);border:1.5px solid var(--panel-bd);border-radius:6px;padding:28px 26px;display:flex;flex-direction:column;}
+.flow .fcol .ft{font-family:var(--font-disp);font-weight:700;font-size:30px;color:var(--coral);margin-bottom:6px;}
+.flow .fcol .fk{font-family:var(--font-mono);font-size:18px;color:var(--mut);margin-bottom:18px;letter-spacing:.04em;}
+.flow .fcol ol{list-style:none;counter-reset:s;display:flex;flex-direction:column;gap:14px;}
+.flow .fcol li{counter-increment:s;position:relative;padding-left:46px;font-size:23px;line-height:1.4;color:var(--ink);}
+.flow .fcol li::before{content:counter(s);position:absolute;left:0;top:0;width:32px;height:32px;border-radius:50%;background:var(--coral-soft);color:var(--coral);font-family:var(--font-mono);font-weight:700;font-size:18px;display:flex;align-items:center;justify-content:center;}
+.flow .fcol.teal .ft{color:var(--teal);}
+.flow .fcol.teal li::before{background:rgba(31,127,150,.12);color:var(--teal);}
+
+/* 更新日志 */
+.cl{display:flex;flex-direction:column;max-width:1500px;}
+.cl .e{display:flex;gap:36px;align-items:flex-start;padding:24px 0;border-top:1px solid var(--panel-bd);}
+.cl .e:last-child{border-bottom:1px solid var(--panel-bd);}
+.cl .e .ver{font-family:var(--font-mono);font-size:30px;color:var(--coral);flex:0 0 230px;}
+.cl .e .ver small{display:block;font-size:18px;color:var(--mut);margin-top:6px;}
+.cl .e ul{list-style:none;display:flex;flex-direction:column;gap:9px;}
+.cl .e li{font-size:25px;color:var(--ink);line-height:1.45;padding-left:26px;position:relative;}
+.cl .e li::before{content:"›";position:absolute;left:4px;color:var(--coral);font-weight:700;}
+
+/* 界面示意 */
+.apptb{position:absolute;left:0;right:0;top:300px;height:66px;display:flex;gap:10px;align-items:center;background:var(--ink);border-radius:8px;padding:0 16px;}
+.apptb .btn{font-family:var(--font-mono);font-size:18px;color:#f6efe5;background:rgba(255,255,255,.10);padding:8px 15px;border-radius:5px;}
+.apptb .btn.on{background:var(--coral);color:#fff;}
+.apptb .btn.teal{background:var(--teal);color:#fff;}
+.apptb .sp{flex:1;}
+.mock{display:flex;border:2px solid var(--ink);border-radius:8px;overflow:hidden;background:#fff;box-shadow:0 18px 40px rgba(40,30,25,.10);}
+.mock .col{padding:22px 20px;position:relative;}
+.mock .nav{flex:0 0 300px;background:#f3ece1;border-right:2px solid var(--panel-bd);}
+.mock .center{flex:1 1 auto;background:#fffdf9;border-right:2px solid var(--panel-bd);}
+.mock .insp{flex:0 0 330px;background:#f3ece1;}
+.mock .label{font-family:var(--font-mono);font-size:19px;color:var(--coral);letter-spacing:.05em;margin-bottom:6px;}
+.mock .desc{font-size:21px;color:var(--ink2);line-height:1.4;margin-bottom:18px;}
+.mock .ch{height:34px;background:#fff;border:1px solid var(--panel-bd);border-radius:4px;margin-bottom:9px;display:flex;align-items:center;padding:0 12px;gap:10px;font-family:var(--font-mono);font-size:16px;color:var(--ink2);}
+.mock .ch .dot{width:12px;height:12px;border-radius:50%;}
+.mock .mini{height:170px;border:1px solid var(--panel-bd);border-radius:6px;background:#fff;margin-bottom:14px;position:relative;overflow:hidden;}
+.mock .mini svg{position:absolute;inset:0;width:100%;height:100%;}
+.mock .pbar{height:30px;background:#fff;border:1px solid var(--panel-bd);border-radius:4px;margin-bottom:10px;}
+
+/* 入场动画 */
+.reveal{opacity:0;transform:translateY(28px);transition:opacity .6s var(--ease),transform .6s var(--ease);}
+.slide.visible .reveal{opacity:1;transform:translateY(0);}
+.slide.visible .reveal:nth-child(1){transition-delay:.06s;}
+.slide.visible .reveal:nth-child(2){transition-delay:.14s;}
+.slide.visible .reveal:nth-child(3){transition-delay:.22s;}
+.slide.visible .reveal:nth-child(4){transition-delay:.30s;}
+.slide.visible .reveal:nth-child(5){transition-delay:.38s;}
+.slide.visible .reveal:nth-child(6){transition-delay:.46s;}
+
+/* 封面 */
+.cover .scan-grat{position:absolute;inset:0;background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:80px 80px;-webkit-mask-image:radial-gradient(130% 110% at 60% 40%,#000 60%,transparent 100%);mask-image:radial-gradient(130% 110% at 60% 40%,#000 60%,transparent 100%);}
+.cover .osd{position:absolute;left:80px;right:80px;top:70px;display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:21px;letter-spacing:.05em;color:var(--coral);}
+.cover .osd .l span{color:var(--mut);}
+.cover .osd .rec b{display:inline-block;width:13px;height:13px;border-radius:50%;background:var(--coral);margin-right:10px;vertical-align:middle;box-shadow:0 0 14px var(--coral);animation:blink 1.1s infinite;}
+.cover .scopewrap{position:absolute;left:80px;right:80px;top:138px;height:300px;}
+.cover .scopewrap svg{width:100%;height:100%;overflow:visible;}
+.cover .trace{fill:none;stroke:var(--coral);stroke-width:3.5;stroke-dasharray:4000;stroke-dashoffset:4000;animation:draw 2.4s .3s forwards;}
+.cover .trace2{fill:none;stroke:var(--coral-line);stroke-width:2;}
+.cover .cursor{stroke:var(--teal);stroke-width:2;stroke-dasharray:6 7;opacity:0;animation:cfade .5s 2.4s forwards;}
+.cover .cdot{fill:var(--teal);opacity:0;animation:cfade .5s 2.5s forwards;}
+.cover .fft{position:absolute;left:80px;right:80px;top:452px;height:104px;display:flex;align-items:flex-end;gap:5px;}
+.cover .fft i{flex:1;background:linear-gradient(180deg,var(--coral),transparent);border-radius:2px 2px 0 0;transform-origin:bottom;transform:scaleY(.05);animation:bar 2.6s ease-in-out infinite;}
+.cover .hero{position:absolute;left:80px;bottom:96px;}
+.cover .kick{font-family:var(--font-mono);font-size:24px;letter-spacing:.34em;text-transform:uppercase;color:var(--coral);margin:0 0 18px;opacity:0;animation:cfade .7s 1s forwards;}
+.cover .title{font-family:var(--font-disp);font-weight:700;font-size:172px;line-height:.9;margin:0;letter-spacing:.01em;color:var(--ink);opacity:0;animation:cfade .9s 1.15s forwards;}
+.cover .title b{color:var(--coral);}
+.cover .title .v{font-family:var(--font-mono);font-size:54px;color:var(--teal);vertical-align:super;margin-left:24px;}
+.cover .sub{font-size:40px;color:var(--ink2);margin:30px 0 0;max-width:1180px;opacity:0;animation:cfade .9s 1.4s forwards;}
+.cover .docstamp{font-family:var(--font-mono);font-size:20px;color:var(--mut);margin-top:20px;opacity:0;animation:cfade .9s 1.6s forwards;}
+.cover .readout{position:absolute;right:80px;bottom:96px;width:470px;border:1.5px solid var(--coral-line);background:var(--panel);padding:26px 30px;font-family:var(--font-mono);opacity:0;animation:cfade .8s 1.55s forwards;}
+.cover .readout h4{margin:0 0 18px;font-size:19px;letter-spacing:.2em;color:var(--mut);font-weight:500;text-transform:uppercase;}
+.cover .readout .r{display:flex;justify-content:space-between;font-size:25px;padding:9px 0;color:var(--ink);}
+.cover .readout .r span{color:var(--mut);}
+.cover .readout .r b{color:var(--coral);font-weight:700;}
+.cover .readout .r.teal b{color:var(--teal);}
+
+@keyframes draw{to{stroke-dashoffset:0;}}
+@keyframes cfade{from{opacity:0;transform:translateY(18px);}to{opacity:1;transform:translateY(0);}}
+@keyframes blink{0%,49%{opacity:1;}50%,100%{opacity:.25;}}
+@keyframes bar{0%,100%{transform:scaleY(.12);}50%{transform:scaleY(1);}}
+
+/* 演示控件 */
+.deck-controls{display:flex;align-items:center;gap:14px;font-family:var(--font-mono);background:rgba(44,37,32,.78);color:#f6efe5;padding:8px 16px;border-radius:30px;backdrop-filter:blur(6px);}
+.deck-controls button{background:none;border:none;color:#f6efe5;font-size:20px;cursor:pointer;padding:2px 8px;}
+.deck-controls .pgind{font-size:17px;letter-spacing:.06em;min-width:64px;text-align:center;}
+.deck-controls .bar{width:160px;height:4px;background:rgba(255,255,255,.2);border-radius:2px;overflow:hidden;}
+.deck-controls .bar i{display:block;height:100%;background:var(--coral);width:0;transition:width .3s var(--ease);}
+
+/* 编辑模式 */
+.edit-hotzone{position:fixed;top:0;left:0;width:80px;height:80px;z-index:10000;cursor:pointer;}
+.edit-toggle{position:fixed;top:18px;left:18px;width:48px;height:48px;border-radius:50%;border:none;background:var(--coral);color:#fff;font-size:22px;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .3s ease;z-index:10001;box-shadow:0 6px 18px rgba(255,90,54,.4);}
+.edit-toggle.show,.edit-toggle.active{opacity:1;pointer-events:auto;}
+.edit-toggle.active{background:var(--teal);}
+.export-btn{position:fixed;top:20px;left:80px;font-family:var(--font-mono);font-size:16px;color:#fff;background:var(--teal);border:none;border-radius:8px;padding:11px 18px;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .3s;z-index:10001;box-shadow:0 6px 18px rgba(31,127,150,.35);}
+.export-btn.show{opacity:1;pointer-events:auto;}
+.edit-hint{position:fixed;top:74px;left:18px;font-family:var(--font-mono);font-size:14px;color:var(--ink);background:#fff;border:1px solid var(--panel-bd);padding:8px 14px;border-radius:6px;z-index:10001;opacity:0;pointer-events:none;transition:opacity .3s;max-width:300px;line-height:1.5;}
+.edit-hint.show{opacity:1;}
+body.editing [data-path]{outline:2px dashed var(--coral-line);outline-offset:4px;border-radius:3px;cursor:text;}
+body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(255,255,255,.5);}
+.toast{position:fixed;left:50%;bottom:70px;transform:translateX(-50%);background:var(--ink);color:#fff;font-family:var(--font-mono);font-size:16px;padding:12px 22px;border-radius:8px;z-index:10002;opacity:0;transition:opacity .3s;}
+.toast.show{opacity:1;}
+</style>
+</head>
+<body>
+
+<!-- =====================================================================
+     内容数据（唯一需要维护的地方）。改文案 = 改这里；增删页面也在这里。
+     页码、总页数、导航由脚本自动生成，无需手改。
+     约定：内容里的 HTML 属性一律用单引号；<b>=珊瑚强调、<i>=青蓝强调；
+     标题用 <c>…</c> 高亮。
+     ===================================================================== -->
+<script type="application/json" id="deckData">
+{
+  "meta": {
+    "title": "TraceLab",
+    "version": "v6.0",
+    "versionLabel": "使用说明 · V6.0",
+    "subtitle": "打开数据、看图分析、导出结果 —— 一份照着做就会的使用说明",
+    "docVersion": "1.0",
+    "updated": "2026-06-03"
+  },
+  "slides": [
+    { "type": "cover" },
+
+    { "id": "overview", "sec": "开始之前", "kicker": "OVERVIEW", "title": "它能帮你做<c>什么</c>", "foot": "TraceLab",
+      "blocks": [
+        { "type": "lead", "html": "TraceLab 把「打开测量数据 → 看图分析 → 导出结果」连成一条龙；还能直接连设备，边录边看。下面六件事，是你最常用到的。" },
+        { "type": "cards", "cols": 3, "items": [
+          { "no": "01", "h": "打开各种数据", "p": "直接打开 MF4 测量文件，也支持 CSV、Excel 表格，拖进来就能用。" },
+          { "no": "02", "h": "看波形随时间变化", "p": "多条通道的时域曲线一起看，随手拖动、放大查看细节。" },
+          { "no": "03", "h": "看信号里的频率", "p": "一键 FFT，找出振动或噪声里主要是哪些频率。" },
+          { "no": "04", "h": "看转速相关的振动", "p": "阶次分析，专为发动机、电机这类会转的设备准备。", "accent": "teal" },
+          { "no": "05", "h": "一批文件批量处理", "p": "一次给很多文件做同样的分析，自动出图、出表。", "accent": "teal" },
+          { "no": "06", "h": "实时采集数据", "p": "连接设备边录边看，录完直接就能分析。", "accent": "teal" }
+        ] }
+      ] },
+
+    { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件，中间切视图，右边开采集",
+      "blocks": [ { "type": "raw", "html": "<div class='apptb reveal'><span class='btn'>添加文件</span><span class='btn'>编辑通道</span><span class='btn'>导出</span><span class='btn'>批处理</span><span class='sp'></span><span class='btn on'>时域</span><span class='btn'>FFT</span><span class='btn'>FFT vs Time</span><span class='btn'>阶次</span><span class='sp'></span><span class='btn teal'>Cockpit 采集</span></div><div class='mock reveal' style='position:absolute;left:0;right:0;top:392px;bottom:0;'><div class='col nav'><div class='label'>① 左侧 · 文件与通道</div><div class='desc'>在这里加文件、勾选要看的通道。</div><div class='ch'><span class='dot' style='background:#ff5a36'></span>Engine_Speed</div><div class='ch'><span class='dot' style='background:#1f7f96'></span>Vibration_X</div><div class='ch'><span class='dot' style='background:#e0a92e'></span>Oil_Temp</div><div class='ch'><span class='dot' style='background:#7a9e3a'></span>Torque</div></div><div class='col center'><div class='label'>② 中间 · 图表区</div><div class='desc'>你的波形和分析结果都显示在这里。</div><div class='mini'><svg viewBox='0 0 600 170' preserveAspectRatio='none'><path d='M0,120 C60,40 120,40 180,110 S300,160 360,90 480,30 540,100 600,120 600,120' fill='none' stroke='#ff5a36' stroke-width='3'/><path d='M0,140 C80,120 120,60 200,95 280,130 320,70 400,110 480,150 520,90 600,130' fill='none' stroke='#1f7f96' stroke-width='2.5'/></svg></div><div class='pbar'></div></div><div class='col insp'><div class='label'>③ 右侧 · 参数面板</div><div class='desc'>切到 FFT / 阶次时，在这里调参数；顶部还能裁时间范围。</div><div class='pbar'></div><div class='ch' style='justify-content:space-between'>窗函数<span style='color:#ff5a36'>Hanning</span></div><div class='ch' style='justify-content:space-between'>分辨率<span style='color:#ff5a36'>中</span></div></div></div>" } ] },
+
+    { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab",
+      "blocks": [
+        { "type": "cols", "ratio": "1.25fr 1fr", "align": "start",
+          "left": [ { "type": "steps", "items": [
+            "点工具栏左边的 <span class='mono'>添加文件</span>。",
+            "选一个或<b>多个</b>文件（按住可多选）。",
+            "软件自动读出里面的<b>所有通道</b>，列在左侧；同时显示文件的行数、采样率、时长。"
+          ] } ],
+          "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "能打开哪些格式",
+            "pills": [".mf4", ".csv", ".xlsx", ".xls"],
+            "paras": [ "MF4 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。" ] } ] },
+        { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
+      ] },
+
+    { "id": "channels", "sec": "第二步", "kicker": "STEP 2 · CHANNELS", "title": "第二步 · 选择要查看的<c>通道</c>", "foot": "勾选 → 立即出图",
+      "blocks": [
+        { "type": "cols", "align": "start",
+          "left": [ { "type": "kv", "items": [
+            { "k": "勾选通道", "v": "在左侧列表里勾上，它就画到图上；取消勾选就移除。" },
+            { "k": "搜索框", "v": "输入关键字，快速找到想要的通道。" },
+            { "k": "全选 / 全不选 / 反选", "v": "一键批量勾选，省得一个个点。" },
+            { "k": "颜色小圆点", "v": "通道前的小圆点就是它在图上的线条颜色。" },
+            { "k": "多文件一起看", "v": "分别勾选不同文件下的通道，即可同图对比。" }
+          ] } ],
+          "right": [ { "type": "card", "no": "小心通道太多", "h": "一次别勾太多",
+            "paras": [ "勾选超过 <b>8 个</b>通道时软件会提示你。曲线太多会互相挡住、看不清，建议分批查看，或用「分开显示」让每条各占一行。" ],
+            "wavemark": true } ] }
+      ] },
+
+    { "id": "time", "sec": "看波形", "kicker": "TIME DOMAIN", "title": "看波形 · <c>时域</c>视图", "foot": "拖动平移 · 滚轮缩放 · 光标读数",
+      "blocks": [
+        { "type": "when", "html": "想看信号随时间怎么变化时用它——这是打开数据后的默认视图。" },
+        { "type": "cards", "cols": 3, "items": [
+          { "no": "平移", "h": "左右拖动", "p": "在图上按住拖动，前后移动时间。" },
+          { "no": "缩放", "h": "滚轮放大", "p": "用鼠标滚轮放大、缩小，看清细节。" },
+          { "no": "读数", "h": "光标取值", "p": "把光标移到某个时刻，直接读出每个通道的数值。" },
+          { "no": "量差值", "h": "双光标", "p": "开两条光标，自动算出两点之间的差。", "accent": "teal" },
+          { "no": "布局", "h": "分开 / 叠加", "p": "每个通道单独一行，或全部叠在一起对比。", "accent": "teal" },
+          { "no": "大数据", "h": "依然顺滑", "p": "数据量很大时自动简化显示，拖动不卡。", "accent": "teal" }
+        ] }
+      ] },
+
+    { "id": "fft", "sec": "看频率", "kicker": "FREQUENCY · FFT", "title": "看频率成分 · <c>FFT</c> 分析", "foot": "峰值 = 主要频率",
+      "blocks": [
+        { "type": "when", "html": "想知道「信号里主要有哪些频率」——找振动、噪声、共振的来源时用它。" },
+        { "type": "cols", "align": "start",
+          "left": [ { "type": "steps", "items": [
+            "顶部切到 <span class='mono'>FFT</span> 视图。",
+            "右侧面板选好通道，设置几个参数（见右）。",
+            "看图上的<b>峰值</b>：峰值对应的横轴位置，就是主要频率。"
+          ] } ],
+          "right": [ { "type": "card", "no": "参数怎么调", "h": "不用记原理，照着选", "paras": [
+            "<b>窗函数</b> — 让频谱更干净，一般保持默认即可。",
+            "<b>频率分辨率</b> — 调得越细，频率分得越清楚，算得稍慢。",
+            "<b>平均 / 峰值保持</b> — 信号有波动时，用「平均」让谱更稳，或用「峰值」抓住最大值。"
+          ] } ] }
+      ] },
+
+    { "id": "order", "sec": "看阶次", "kicker": "ORDER ANALYSIS", "title": "看转速相关的振动 · <c>阶次</c>分析", "foot": "先选转速通道，再做阶次",
+      "blocks": [
+        { "type": "when", "html": "设备会转（发动机、电机、变速箱…），振动随转速变化时用它——普通频率分析会「糊掉」，阶次分析能跟着转速对齐。" },
+        { "type": "cols", "align": "start",
+          "left": [ { "type": "steps", "items": [
+            "顶部切到 <span class='mono'>阶次</span> 视图。",
+            "选一个<b>转速（RPM）通道</b> —— 这是阶次分析的关键，必须有。",
+            "设最大阶次、分辨率等参数。",
+            "读图：哪一阶最突出，往往就是问题所在的那一阶。"
+          ] } ],
+          "right": [ { "type": "card", "accent": "teal", "no": "「几阶」是什么意思", "h": "阶次 = 转速的倍数", "paras": [
+            "「第 N 阶」指的是振动频率正好是转速的 N 倍。比如某结构每转一圈撞击一次，就体现在第 1 阶；旋转部件不平衡也常落在固定阶次上。",
+            "所以即使转速一直在变，问题阶次也会稳稳地待在同一条线上。"
+          ] } ] }
+      ] },
+
+    { "id": "spectro", "sec": "看变化", "kicker": "SPECTROGRAM · FFT vs TIME", "title": "看频率随时间变化 · <c>时频图</c>", "foot": "亮 = 能量强",
+      "blocks": [
+        { "type": "when", "html": "信号的频率本身在变（升速、降速、工况切换），想同时看「什么时候、出现了什么频率」。" },
+        { "type": "cols", "align": "start",
+          "left": [ { "type": "steps", "items": [
+            "顶部切到 <span class='mono'>FFT vs Time</span>。",
+            "横轴是<b>时间</b>、纵轴是<b>频率</b>；颜色越亮 = 那个时刻该频率能量越强。",
+            "右侧可调<b>显示范围</b>，让偏弱或偏强的信号都看得清。"
+          ] } ],
+          "right": [ { "type": "card", "no": "怎么读这张图", "h": "一眼看出「频率在爬」",
+            "paras": [ "一条从左下斜着往右上的亮带，通常就是设备在升速——频率随时间不断升高。横着的一条亮线，则是某个固定不变的频率。" ],
+            "tip": { "label": "注意", "html": "这张图计算量较大，软件会在后台算，期间你可以随时<b>取消</b>。" } } ] }
+      ] },
+
+    { "id": "batch", "sec": "批量", "kicker": "BATCH", "title": "一批文件批量分析 · <c>批处理</c>", "foot": "存预设 → 选文件 → 自动出图出表",
+      "blocks": [
+        { "type": "when", "html": "有很多文件要做同样的分析，不想一个个手点的时候。" },
+        { "type": "cards", "cols": 2, "items": [
+          { "no": "方式一", "h": "把当前分析存成预设", "p": "先手动把一个文件分析好，点 <b>批处理 → 存为预设</b>，再把这个预设套用到其它文件。适合「就照这个设置来」。" },
+          { "no": "方式二", "h": "按规则自动匹配", "p": "设定「通道名规则 + 转速通道」，对一批文件<i>自动找到对应通道</i>再分析。适合文件很多、通道名有规律。", "accent": "teal" }
+        ] },
+        { "type": "tip", "label": "输出", "html": "跑完自动导出：<b>数据</b>（CSV / Excel）+ <b>图片</b>（PNG）。预设还能导出、分享给同事，下次直接导入复用。" }
+      ] },
+
+    { "id": "cockpit", "sec": "采集", "kicker": "ACQUISITION · COCKPIT", "title": "实时采集数据 · <c>Cockpit</c>", "foot": "开始 → 看卡片 → 停止存档 → 回放",
+      "blocks": [
+        { "type": "lead", "html": "点工具栏最右的 <i>Cockpit</i>，打开独立的采集窗口。它有三个标签页：" },
+        { "type": "cards", "cols": 3, "items": [
+          { "no": "Live Cards", "h": "实时卡片", "p": "每个信号一张卡，实时显示当前数值和小趋势图。" },
+          { "no": "History", "h": "历史", "p": "查看过去采集过的记录。" },
+          { "no": "Replay", "h": "回放", "p": "打开录好的文件，回看并继续分析。" }
+        ] },
+        { "type": "steps", "items": [
+          "配置好要采集的信号，点 <b>开始</b>。",
+          "看实时卡片确认数据正常 → 点 <b>停止</b>，数据自动存成文件 → 用 <b>Replay</b> 或回主窗口打开它继续分析。"
+        ] }
+      ] },
+
+    { "id": "export", "sec": "导出", "kicker": "EXPORT", "title": "导出<c>结果</c>", "foot": "导出 → 选通道 → 选范围 → 保存",
+      "blocks": [
+        { "type": "cols", "align": "start",
+          "left": [
+            { "type": "card", "no": "导出表格", "h": "导出 Excel 数据", "paras": [ "点工具栏 <b>导出</b> → 勾选要导出的通道 → 选好两个选项 → 保存为 Excel。" ] },
+            { "type": "card", "accent": "teal", "no": "导出图片", "h": "保存图表为图片", "mt": 24, "paras": [ "当前图表可直接存成图片（PNG）；批处理时也能自动出图。" ] }
+          ],
+          "right": [ { "type": "kv", "items": [
+            { "k": "是否带时间列", "v": "勾上就在表里多一列时间，方便对照。" },
+            { "k": "仅导出范围", "v": "只导出你在右侧选定的那段时间，文件更小、更聚焦。" },
+            { "k": "通道多选", "v": "想导哪几条就勾哪几条，不必全导。" }
+          ] } ] },
+        { "type": "tip", "label": "技巧", "html": "想只导出某一段？先在<b>右侧设好时间范围</b>，再勾「仅导出范围」即可。" }
+      ] },
+
+    { "id": "cheat", "sec": "速查", "kicker": "CHEAT SHEET", "title": "常用操作<c>速查</c>", "foot": "记不住没关系，回来翻这页",
+      "blocks": [
+        { "type": "cols", "align": "start",
+          "left": [ { "type": "kv", "items": [
+            { "k": "按住拖动", "v": "左右平移时间" },
+            { "k": "鼠标滚轮", "v": "放大 / 缩小" },
+            { "k": "移动光标", "v": "读当前时刻各通道的值" },
+            { "k": "右键通道", "v": "设为左轴（叠加显示时，把某通道固定到左侧刻度）" },
+            { "k": "双击图上文字", "v": "添加 / 编辑标注" },
+            { "k": "搜索框", "v": "快速过滤通道" }
+          ] } ],
+          "right": [ { "type": "card", "accent": "teal", "no": "三个省事小技巧", "h": "看得更清、更快", "paras": [
+            "· 通道太多看不清 → 分批勾选，或切「分开显示」。",
+            "· 想对比两个文件 → 同时勾不同文件里的同名通道。",
+            "· 分析前先用时间范围裁一段 → 算得更快、结论更准。"
+          ] } ] }
+      ] },
+
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v6.0 · 使用说明",
+      "blocks": [
+        { "type": "flow", "height": 640, "cols": [
+          { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
+          { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
+          { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
+        ] },
+        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v6.0" }
+      ] },
+
+    { "id": "changelog", "sec": "更新", "kicker": "CHANGELOG", "title": "更新<c>日志</c>", "foot": "本说明会随软件持续更新",
+      "blocks": [ { "type": "changelog" } ] }
+  ],
+
+  "changelog": [
+    { "v": "v1.0", "date": "2026-06-03", "items": [
+      "首版上线：14 页面向使用者的操作指南（加载数据 / 通道 / 时域 / FFT / 阶次 / 时频 / 批处理 / 采集 / 导出 / 速查 / 场景）。",
+      "改为数据驱动结构：所有文案集中在文件顶部的数据块，页码自动生成。",
+      "新增编辑模式可「导出已编辑 HTML」，编辑改动可保存回文件。"
+    ] }
+  ]
+}
+</script>
+
+<div class="deck-viewport"><main class="deck-stage" id="deckStage"></main></div>
+
+<!-- 编辑入口 -->
+<div class="edit-hotzone" id="editHotzone"></div>
+<button class="edit-toggle" id="editToggle" title="编辑模式 (E)">✏️</button>
+<button class="export-btn" id="exportBtn" title="把当前编辑导出成新的 HTML 源文件">⬇ 导出已编辑 HTML</button>
+<div class="edit-hint" id="editHint">编辑模式：点任意文字直接改 · 自动暂存 · 改完点「导出」保存成文件 · 再按 E 退出</div>
+<div class="toast" id="toast"></div>
+
+<!-- 演示控件 -->
+<div class="deck-controls">
+  <button id="prevBtn" title="上一页 (←)">‹</button>
+  <span class="pgind" id="pageInd">01 / 01</span>
+  <div class="bar"><i id="progFill"></i></div>
+  <button id="nextBtn" title="下一页 (→)">›</button>
+</div>
+
+<script>
+/* =====================================================================
+   0) 读取内容数据 + 应用本地暂存的编辑
+   ===================================================================== */
+const DECK = JSON.parse(document.getElementById('deckData').textContent);
+const OV_KEY = 'tracelab_doc_overrides';
+function getPath(o,p){return p.reduce((a,k)=>(a==null?a:a[k]),o);}
+function setPath(o,p,v){let a=o;for(let i=0;i<p.length-1;i++)a=a[p[i]];a[p[p.length-1]]=v;}
+// 把暂存编辑套回 DECK（按文档版本隔离，发新版自动作废旧编辑）
+(function applyOverrides(){
+  try{
+    const raw=localStorage.getItem(OV_KEY);if(!raw)return;
+    const o=JSON.parse(raw);
+    if(o.__docVersion!==DECK.meta.docVersion)return;
+    Object.keys(o.edits||{}).forEach(k=>{try{setPath(DECK,JSON.parse(k),o.edits[k]);}catch(e){}});
+  }catch(e){}
+})();
+
+/* =====================================================================
+   1) 渲染：把数据 → 幻灯片 DOM。页码、总数自动算。
+   可编辑文字都带 data-path（指向数据位置），编辑/导出据此回写。
+   ===================================================================== */
+const cmark = s => String(s).replace(/<c>/g,'<span class="c">').replace(/<\/c>/g,'</span>');
+function ed(path, html, tag, cls, style){
+  return `<${tag} data-path='${JSON.stringify(path)}'${cls?` class="${cls}"`:''}${style?` style="${style}"`:''}>${html}</${tag}>`;
+}
+function renderInline(items, p){ return items.map((b,i)=>renderBlock(b, p.concat(i), true)).join(''); }
+
+function renderBlock(b, p, nested){
+  const blk = nested ? '' : ' blk';
+  switch(b.type){
+    case 'lead':
+      return ed(p.concat('html'), b.html, 'p', 'lead reveal'+blk, b.center?'text-align:center;color:var(--coral);font-weight:700;max-width:none;':'');
+    case 'when':
+      return `<div class="when reveal${blk}"><span class="lbl">什么时候用</span>${ed(p.concat('html'),b.html,'p')}</div>`;
+    case 'tip':
+      return `<div class="tip reveal${blk}"><span class="ic">${b.label}</span>${ed(p.concat('html'),b.html,'p')}</div>`;
+    case 'cards': {
+      const items=b.items.map((it,j)=>{
+        const pp=p.concat('items',j);
+        return `<div class="card${it.accent==='teal'?' teal':''}"><div class="no">${it.no}</div>${ed(pp.concat('h'),it.h,'h3')}${ed(pp.concat('p'),it.p,'p')}</div>`;
+      }).join('');
+      return `<div class="grid g${b.cols||3} reveal${blk}">${items}</div>`;
+    }
+    case 'steps': {
+      const items=b.items.map((t,j)=>`<div class="step"><div class="n">${j+1}</div>${ed(p.concat('items',j),t,'div','t')}</div>`).join('');
+      return `<div class="steps reveal${blk}">${items}</div>`;
+    }
+    case 'kv': {
+      const rows=b.items.map((it,j)=>{const pp=p.concat('items',j);return `<div class="row">${ed(pp.concat('k'),it.k,'div','k')}${ed(pp.concat('v'),it.v,'div','v')}</div>`;}).join('');
+      return `<div class="kv reveal${blk}">${rows}</div>`;
+    }
+    case 'card': {
+      const pills=b.pills?`<p class="pills">${b.pills.map(x=>`<span class="pill coral">${x}</span>`).join('')}</p>`:'';
+      const paras=(b.paras||[]).map((x,n)=>ed(p.concat('paras',n),x,'p')).join('');
+      const wave=b.wavemark?`<div class="wavemark"><svg viewBox="0 0 520 34" preserveAspectRatio="none"><path d="M0,17 C40,2 70,32 110,17 S180,2 220,17 290,32 330,17 400,2 440,17 480,26 520,17"/></svg></div>`:'';
+      const tip=b.tip?`<div class="tip" style="margin-top:24px"><span class="ic">${b.tip.label}</span>${ed(p.concat('tip','html'),b.tip.html,'p')}</div>`:'';
+      const st='height:100%'+(b.mt?`;margin-top:${b.mt}px`:'');
+      return `<div class="card${b.accent==='teal'?' teal':''}${nested?'':' reveal blk'}" style="${st}"><div class="no">${b.no}</div>${ed(p.concat('h'),b.h,'h3')}${pills}${paras}${wave}${tip}</div>`;
+    }
+    case 'cols': {
+      const style=`${b.ratio?`grid-template-columns:${b.ratio};`:''}${b.align?`align-items:${b.align};`:''}`;
+      return `<div class="grid g2 reveal${blk}" style="${style}"><div>${renderInline(b.left,p.concat('left'))}</div><div>${renderInline(b.right,p.concat('right'))}</div></div>`;
+    }
+    case 'flow': {
+      const cols=b.cols.map((c,k)=>{
+        const pp=p.concat('cols',k);
+        const lis=c.items.map((it,n)=>ed(pp.concat('items',n),it,'li')).join('');
+        return `<div class="fcol${c.accent==='teal'?' teal':''}">${ed(pp.concat('title'),c.title,'div','ft')}<div class="fk">${c.key}</div><ol>${lis}</ol></div>`;
+      }).join('');
+      return `<div class="flow reveal${blk}" style="${b.height?`height:${b.height}px;`:''}">${cols}</div>`;
+    }
+    case 'changelog': {
+      const es=DECK.changelog.map(e=>`<div class="e"><div class="ver">${e.v}<small>${e.date}</small></div><ul>${e.items.map(x=>`<li>${x}</li>`).join('')}</ul></div>`).join('');
+      return `<div class="cl reveal${blk}">${es}</div>`;
+    }
+    case 'raw': return b.html;
+    default: return '';
+  }
+}
+
+function renderCover(m){
+  return `<section class="slide cover active">
+    <div class="scan-grat"></div>
+    <div class="osd"><div class="l">TraceLab <span>·</span> 测量数据 查看 / 分析 / 采集</div>
+      <div class="rec"><b></b>${ed(['meta','versionLabel'],m.versionLabel,'span')}</div></div>
+    <div class="scopewrap"><svg viewBox="0 0 1760 420" preserveAspectRatio="none">
+      <path class="trace2" d="M0,210 C110,60 220,360 330,210 S550,60 660,210 880,360 990,210 1210,60 1320,210 1540,360 1650,210 L1760,210"/>
+      <path class="trace" d="M0,210 C80,120 130,40 210,90 C300,150 320,330 410,300 C500,275 520,120 610,150 C720,190 740,360 850,330 C950,305 980,90 1080,120 C1180,150 1210,340 1320,300 C1430,265 1460,110 1560,150 C1650,185 1700,260 1760,210"/>
+      <line class="cursor" x1="1080" y1="0" x2="1080" y2="420"/><circle class="cdot" cx="1080" cy="120" r="9"/></svg></div>
+    <div class="fft" id="coverFft"></div>
+    <div class="hero"><p class="kick">MF4 测量数据 · 操作指南</p>
+      <h1 class="title">${m.title.replace('Trace','Trace<b>').replace('Lab','Lab</b>')||m.title}<span class="v">${m.version}</span></h1>
+      ${ed(['meta','subtitle'],m.subtitle,'p','sub')}
+      <p class="docstamp">文档版本 ${m.docVersion} · 更新于 ${m.updated}</p></div>
+    <div class="readout"><h4>你能用它做什么</h4>
+      <div class="r"><span>看波形</span><b>时域</b></div>
+      <div class="r"><span>看频率成分</span><b>FFT</b></div>
+      <div class="r"><span>看转速相关振动</span><b>阶次</b></div>
+      <div class="r teal"><span>实时录数据</span><b>采集</b></div></div>
+  </section>`;
+}
+
+function renderContentSlide(s, idx, total, m){
+  const verLabel = `${m.title} ${m.version} 使用说明`;
+  const blocks = (s.blocks||[]).map((b,bi)=>renderBlock(b,['slides',idx,'blocks',bi],false)).join('');
+  return `<section class="slide">
+    <div class="grat"></div><div class="toprule"></div>
+    <div class="chrome"><span class="sec"><b></b>${s.sec||''}</span><span>${verLabel}</span></div>
+    <div class="body">
+      <div class="h-kick reveal">${s.kicker||''}</div>
+      ${ed(['slides',idx,'title'],cmark(s.title),'h2','h2 reveal')}
+      ${blocks}
+    </div>
+    <div class="foot"><span>${s.foot||''}</span><span class="pg">第 <b>${String(idx+1).padStart(2,'0')}</b> / ${total} 页</span></div>
+  </section>`;
+}
+
+function render(){
+  const m=DECK.meta, total=DECK.slides.length;
+  const html=DECK.slides.map((s,i)=>s.type==='cover'?renderCover(m):renderContentSlide(s,i,total,m)).join('');
+  document.getElementById('deckStage').innerHTML=html;
+  // 封面 FFT 频谱条（确定性，不用随机数）
+  const fft=document.getElementById('coverFft');
+  if(fft){for(let i=0;i<64;i++){const b=document.createElement('i');
+    const env=Math.exp(-Math.pow((i-12)/9,2))*0.9+Math.exp(-Math.pow((i-30)/6,2))*0.55+Math.exp(-Math.pow((i-48)/10,2))*0.4+0.06;
+    b.style.height=(env*100)+'%';b.style.animationDelay=(-(i%11)*0.18)+'s';b.style.animationDuration=(2.0+(i%5)*0.25)+'s';fft.appendChild(b);}}
+}
+render();
+
+/* =====================================================================
+   2) 控制器：缩放 / 键盘·滚轮·触摸导航 / 自动页码
+   ===================================================================== */
+class Deck{
+  constructor(){
+    this.slides=[...document.querySelectorAll('.slide')];this.i=0;
+    this.stage=document.getElementById('deckStage');
+    this.ind=document.getElementById('pageInd');this.prog=document.getElementById('progFill');
+    this.scale=this.scale.bind(this);this.scale();window.addEventListener('resize',this.scale);
+    this.bindKeys();this.bindWheel();this.bindTouch();
+    document.getElementById('prevBtn').onclick=()=>this.prev();
+    document.getElementById('nextBtn').onclick=()=>this.next();
+    const h=parseInt((location.hash||'').replace('#',''),10);
+    this.show(Number.isFinite(h)&&h>0?h-1:0);
+    window.addEventListener('hashchange',()=>{const n=parseInt(location.hash.replace('#',''),10);if(Number.isFinite(n))this.show(n-1);});
+  }
+  scale(){const f=Math.min(innerWidth/1920,innerHeight/1080);this.stage.style.transform=`translate(${(innerWidth-1920*f)/2}px,${(innerHeight-1080*f)/2}px) scale(${f})`;}
+  show(n){this.i=Math.max(0,Math.min(n,this.slides.length-1));
+    this.slides.forEach((s,k)=>{const on=k===this.i;s.classList.toggle('active',on);s.classList.toggle('visible',on);});
+    this.ind.textContent=`${String(this.i+1).padStart(2,'0')} / ${this.slides.length}`;
+    this.prog.style.width=(this.i/(this.slides.length-1)*100)+'%';}
+  next(){this.show(this.i+1);} prev(){this.show(this.i-1);}
+  bindKeys(){document.addEventListener('keydown',e=>{if(e.target.isContentEditable)return;
+    if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();this.next();}
+    else if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();this.prev();}
+    else if(e.key==='Home')this.show(0);else if(e.key==='End')this.show(this.slides.length-1);});}
+  bindWheel(){let lock=false;window.addEventListener('wheel',e=>{if(document.body.classList.contains('editing'))return;
+    if(lock||Math.abs(e.deltaY)<24)return;lock=true;setTimeout(()=>lock=false,650);e.deltaY>0?this.next():this.prev();},{passive:true});}
+  bindTouch(){let x0=null,y0=null;window.addEventListener('touchstart',e=>{x0=e.touches[0].clientX;y0=e.touches[0].clientY;},{passive:true});
+    window.addEventListener('touchend',e=>{if(x0===null)return;const dx=e.changedTouches[0].clientX-x0,dy=e.changedTouches[0].clientY-y0;
+      if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy))dx<0?this.next():this.prev();x0=y0=null;},{passive:true});}
+}
+const deck=new Deck();
+
+/* =====================================================================
+   3) 编辑闭环：E / 左上热区切换；改动写回 DECK + 暂存；可导出新文件
+   ===================================================================== */
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
+class Editor{
+  constructor(){
+    this.active=false;
+    this.toggle=document.getElementById('editToggle');this.hint=document.getElementById('editHint');
+    this.exportBtn=document.getElementById('exportBtn');
+    this.bind();
+  }
+  get targets(){return [...document.querySelectorAll('[data-path]')];}
+  bind(){
+    const hot=document.getElementById('editHotzone');let timer=null;
+    hot.addEventListener('mouseenter',()=>{clearTimeout(timer);this.toggle.classList.add('show');});
+    hot.addEventListener('mouseleave',()=>{timer=setTimeout(()=>{if(!this.active)this.toggle.classList.remove('show');},400);});
+    this.toggle.addEventListener('mouseenter',()=>clearTimeout(timer));
+    this.toggle.addEventListener('mouseleave',()=>{timer=setTimeout(()=>{if(!this.active)this.toggle.classList.remove('show');},400);});
+    hot.addEventListener('click',()=>this.set(!this.active));
+    this.toggle.addEventListener('click',()=>this.set(!this.active));
+    this.exportBtn.addEventListener('click',()=>this.exportFile());
+    document.addEventListener('keydown',e=>{if((e.key==='e'||e.key==='E')&&!e.target.isContentEditable)this.set(!this.active);});
+    // 事件委托：任何可编辑元素输入时回写
+    document.getElementById('deckStage').addEventListener('input',e=>{
+      const t=e.target.closest('[data-path]');if(!t)return;
+      const path=JSON.parse(t.dataset.path);setPath(DECK,path,t.innerHTML);this.save(t.dataset.path,t.innerHTML);
+    });
+  }
+  set(on){this.active=on;document.body.classList.toggle('editing',on);
+    this.toggle.classList.toggle('active',on);this.toggle.classList.toggle('show',on);
+    this.hint.classList.toggle('show',on);this.exportBtn.classList.toggle('show',on);
+    this.targets.forEach(t=>t.contentEditable=on);
+    if(on)toast('编辑模式已开启');}
+  save(key,html){
+    let o={__docVersion:DECK.meta.docVersion,edits:{}};
+    try{const raw=localStorage.getItem(OV_KEY);if(raw){const p=JSON.parse(raw);if(p.__docVersion===DECK.meta.docVersion)o=p;}}catch(e){}
+    o.edits[key]=html;try{localStorage.setItem(OV_KEY,JSON.stringify(o));}catch(e){}
+  }
+  exportFile(){
+    // 把当前 DECK（含编辑）写回 JSON 数据块，清空运行时生成的舞台，导出干净的源文件
+    const clone=document.documentElement.cloneNode(true);
+    clone.querySelector('#deckData').textContent='\n'+JSON.stringify(DECK,null,2)+'\n';
+    clone.querySelector('#deckStage').innerHTML='';
+    clone.querySelector('body').classList.remove('editing');
+    const out='<!DOCTYPE html>\n'+clone.outerHTML;
+    const blob=new Blob([out],{type:'text/html;charset=utf-8'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download='TraceLab-使用说明.html';document.body.appendChild(a);a.click();
+    setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
+    toast('已导出：把下载的文件替换原文件即可');
+  }
+}
+new Editor();
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 """Center pane: QStackedWidget holding the three canvases + stats strip."""
-from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QAction, QFileDialog, QFrame, QLabel, QPushButton, QSizePolicy,
     QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
@@ -11,25 +11,20 @@ from PyQt5.QtWidgets import (
 # both the toolbar 保存图片 and 复制为图片 paths request the same factor and
 # export stays fast.
 _HIDPI_EXPORT_SCALE = 2.0
+_CURSOR_PILL_RADIUS = 9.0
+_CURSOR_PILL_BG = QColor(255, 255, 255, 235)
+_CURSOR_PILL_BORDER = QColor("#d8e0eb")
 
 
-def _effective_export_scale(canvas, requested=_HIDPI_EXPORT_SCALE):
-    """Return the magnification the canvas will actually apply for a
-    ``grab_pixmap(scale=requested)`` call, mirroring the canvas's own cap.
-
-    The copy path needs this so it can scale the composited cursor pill by
-    the SAME factor the bitmap was rendered at. Returns 1.0 when the canvas
-    (e.g. a matplotlib fft/order canvas) does not expose the pyqtgraph
-    hi-DPI render — those grab at 1× and must not have a scaled pill.
-    """
-    if not hasattr(canvas, "grab_pixmap"):
-        return 1.0
-    try:
-        from mf4_analyzer.ui.pg_canvases import _capped_hidpi_scale
-        base_w = max(1, int(canvas.width()))
-        return _capped_hidpi_scale(base_w, requested)
-    except Exception:
-        return 1.0
+def _pixmap_as_device_pixels(pixmap):
+    if pixmap is None or pixmap.isNull():
+        return pixmap
+    copy = QPixmap(pixmap)
+    if abs(copy.devicePixelRatioF() - 1.0) < 1e-9:
+        return copy
+    normalized = QPixmap.fromImage(copy.toImage())
+    normalized.setDevicePixelRatio(1.0)
+    return normalized
 
 
 def _grab_pixmap_hidpi(canvas, requested=_HIDPI_EXPORT_SCALE):
@@ -53,13 +48,13 @@ def _grab_pixmap_hidpi(canvas, requested=_HIDPI_EXPORT_SCALE):
         except Exception:
             pix = None
         if pix is not None and not pix.isNull():
-            return pix
+            return _pixmap_as_device_pixels(pix)
     # Fallback for canvases without grab_pixmap (matplotlib) or a null
     # grab_pixmap result: plain QWidget grab.
     try:
         pix = canvas.grab()
         if pix is not None and not pix.isNull():
-            return pix
+            return _pixmap_as_device_pixels(pix)
     except Exception:
         pass
     return None
@@ -74,7 +69,8 @@ class CursorPill(QFrame):
         super().__init__(parent)
         self.setObjectName("cursorPill")
         self.setCursor(Qt.OpenHandCursor)
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 7, 10, 8)
         lay.setSpacing(4)
@@ -93,6 +89,17 @@ class CursorPill(QFrame):
         # User-positioned flag — true after first manual drag, so resize events
         # respect the chosen spot instead of snapping back to default corner.
         self._user_placed = False
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+            painter.setBrush(_CURSOR_PILL_BG)
+            painter.setPen(QPen(_CURSOR_PILL_BORDER, 1.0))
+            painter.drawRoundedRect(rect, _CURSOR_PILL_RADIUS, _CURSOR_PILL_RADIUS)
+        finally:
+            painter.end()
 
     def primary_text(self):
         return self._primary.text()
@@ -163,6 +170,7 @@ import qtawesome as qta
 
 from ..ui_kit.icons import Icons
 from .canvases import PlotCanvas, SpectrogramCanvas
+from . import hints
 from .pg_canvases import TimeDomainCanvasPG
 from .widgets import StatsStrip
 
@@ -180,28 +188,15 @@ _TOOL_HINTS = {
 
 # Bottom hint bar — persistent (always-on) shortcuts.
 # Rendered left-aligned in muted gray inside QFrame#chartHintBar.
-_BOTTOM_HINT_PERSISTENT = (
-    "Ctrl + 滚轮 缩放 X    ·    "
-    "Shift + 滚轮 缩放 Y    ·    "
-    "双击图面 图表选项"
-)
-
-# Bottom hint bar — context layer.
-# Key = _ChartCard._context_hint_key(); empty string means show nothing.
-_BOTTOM_HINT_CONTEXT = {
-    'pan':           '平移模式：左键拖动平移 · 右键拖动缩放',
-    'zoom':          '框选模式：拖出矩形放大 · Esc 取消 · Home 复位',
-    'cursor_single': '单游标：点击放置游标线 · 拖动数据卡到合适位置',
-    'cursor_dual':   '双游标：第 1 次点击放置 A · 第 2 次放置 B · 显示 ΔT 与统计',
-    'spectrogram':   '点击谱图任一时刻可在下方查看该帧频率切片',
-    'idle':          '',
-}
+# Context-layer copy is selected at runtime by hints.context_hints().
+_BOTTOM_HINT_PERSISTENT = "    ·    ".join(hints.persistent_hints())
 
 # Icon colour tokens (match Precision Light palette)
 _ICON_COLOR  = '#374151'
 _ICON_ACTIVE = '#2563eb'
 _TOOLBAR_COMPACT_WIDTH = 1500
 _QT_WIDGETSIZE_MAX = 16777215
+_STATS_STRIP_ENABLED = False
 _CURSOR_HTML_SEP = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
 
 # MDI action-key → qtawesome icon name mapping
@@ -217,23 +212,11 @@ _MDI_NAV_ICONS = {
 # Chart nav shortcuts use Alt (not Ctrl): the app has NO QMenuBar so Alt
 # never collides with a menu mnemonic, and Alt+Z frees Ctrl+Z for app undo.
 # The wheel modifiers (Ctrl+wheel / Shift+wheel) intentionally STAY Ctrl/Shift.
-_NAV_SHORTCUTS = {
-    'home': 'Alt+R',
-    'back': 'Alt+Z',
-    'forward': 'Alt+Shift+Z',
-    'pan': 'Alt+G',
-    'zoom': 'Alt+B',
-}
+_NAV_SHORTCUTS = hints.NAV_SHORTCUTS
 
 # Time-card segmented controls — Alt+digit shortcuts (left-hand reachable).
 # Keys mirror the attribute names so the install helper can locate the button.
-_TIME_CARD_SHORTCUTS = (
-    ('btn_subplot',           '分屏',   'Alt+1'),
-    ('btn_overlay',           '叠加',   'Alt+2'),
-    ('cursor_off',            '游标关', 'Alt+3'),
-    ('cursor_single',         '单游标', 'Alt+4'),
-    ('cursor_dual',           '双游标', 'Alt+5'),
-)
+_TIME_CARD_SHORTCUTS = hints.TIME_CARD_SHORTCUTS
 
 
 def _strip_subplots_action(toolbar):
@@ -255,14 +238,20 @@ def _find_action(toolbar, key_lower):
 
 
 def _apply_mdi_icons(toolbar, active_key=''):
-    """Replace each retained action's icon with its MDI equivalent."""
+    """Replace nav icons and flag the active button for QSS highlighting."""
     for act in toolbar.actions():
         key = act.data() if act.data() else (act.text() or '').strip().lower()
         icon_name = _MDI_NAV_ICONS.get(key)
         if icon_name is None:
             continue
-        color = _ICON_ACTIVE if key == active_key else _ICON_COLOR
+        is_active = key == active_key
+        color = _ICON_ACTIVE if is_active else _ICON_COLOR
         act.setIcon(qta.icon(icon_name, color=color))
+        btn = toolbar.widgetForAction(act)
+        if isinstance(btn, QToolButton):
+            btn.setProperty("navActive", bool(is_active))
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
 
 
 def _install_nav_shortcuts(card, toolbar):
@@ -270,6 +259,7 @@ def _install_nav_shortcuts(card, toolbar):
         act = _find_action(toolbar, key)
         if act is None:
             continue
+        shortcut = hints.shortcut_tooltip(key) or shortcut
         seq = QKeySequence(shortcut)
         act.setShortcut(seq)
         act.setShortcutContext(Qt.WidgetWithChildrenShortcut)
@@ -277,10 +267,13 @@ def _install_nav_shortcuts(card, toolbar):
         native = seq.toString(QKeySequence.NativeText)
         if native and native not in tip:
             act.setToolTip(f"{tip} ({native})")
+        act.triggered.connect(
+            lambda _checked=False, c=card: c.mark_discovered("toolbar.shortcuts_exist")
+        )
         card.addAction(act)
 
 
-def _install_button_shortcut(card, button, label, shortcut):
+def _install_button_shortcut(card, button, label, shortcut, action_key=None):
     """Attach a card-wide QShortcut to a QPushButton and annotate its tooltip.
 
     Buttons created from QPushButton don't have a setShortcutContext like
@@ -289,9 +282,13 @@ def _install_button_shortcut(card, button, label, shortcut):
     """
     from PyQt5.QtWidgets import QShortcut
 
+    shortcut = hints.shortcut_tooltip(action_key) or shortcut
     seq = QKeySequence(shortcut)
     sc = QShortcut(seq, card)
     sc.setContext(Qt.WidgetWithChildrenShortcut)
+    sc.activated.connect(
+        lambda c=card: c.mark_discovered("toolbar.shortcuts_exist")
+    )
     sc.activated.connect(button.click)
     native = seq.toString(QKeySequence.NativeText)
     button.setToolTip(f"{label} ({native})" if native else label)
@@ -761,13 +758,29 @@ class _ChartCard(QWidget):
     copy_image_requested = pyqtSignal()  # emitted when the toolbar copy btn is clicked
     annotation_enabled_changed = pyqtSignal(bool)
 
-    def __init__(self, canvas, parent=None, annotations=False):
+    def __init__(self, canvas, parent=None, annotations=False, chart_mode=''):
         super().__init__(parent)
         self.setObjectName("chartCard")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         self.canvas = canvas
+        self.canvas.installEventFilter(self)
+        try:
+            viewport = canvas._glw.viewport()
+        except Exception:
+            viewport = None
+        if viewport is not None:
+            viewport.installEventFilter(self)
+        self._chart_mode = chart_mode
         self._annotation_enabled = False
+        self._hint_settings = QSettings()
+        self._recent_context_hint_ids = set()
+        self._context_hint_index = 0
+        self._context_hint_signature = ()
+        self._hint_rotation_paused = False
+        self._hint_rotation_timer = QTimer(self)
+        self._hint_rotation_timer.setInterval(10000)
+        self._hint_rotation_timer.timeout.connect(self._advance_context_hint)
         # Pick the matplotlib NavigationToolbar2QT for matplotlib canvases
         # and the pyqtgraph-aware shim for TimeDomainCanvasPG. The shim
         # exposes the exact same six action keys + locLabel + mode/pan/zoom
@@ -799,6 +812,11 @@ class _ChartCard(QWidget):
             self.toolbar.mouse_mode_changed.connect(self._on_mouse_mode_changed)
         else:
             self.toolbar = NavigationToolbar(canvas, self)
+        context_menu_requested = getattr(canvas, 'context_menu_requested', None)
+        if context_menu_requested is not None:
+            context_menu_requested.connect(
+                lambda: self.mark_discovered("chart.right_click_menu")
+            )
         self.toolbar.setObjectName("chartToolbar")
         self.toolbar.setIconSize(QSize(18, 18))
         for act in self.toolbar.actions():
@@ -840,6 +858,9 @@ class _ChartCard(QWidget):
         self._copy_btn.setToolTip("复制为图片（含游标线和读数）")
         self._copy_btn.setAutoRaise(True)
         self._copy_btn.clicked.connect(self.copy_image_requested)
+        self.copy_image_requested.connect(
+            lambda: self.mark_discovered("chart.copy_image")
+        )
         if save_act is not None:
             self.toolbar.insertWidget(save_act, self._options_btn)
             self.toolbar.insertWidget(save_act, self._copy_btn)
@@ -910,8 +931,12 @@ class _ChartCard(QWidget):
         self._hint_context = QLabel("", self._hint_bar)
         self._hint_context.setObjectName("chartHintContext")
         self._hint_context.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._hint_discovery = QLabel("", self._hint_bar)
+        self._hint_discovery.setObjectName("chartHintDiscovery")
+        self._hint_discovery.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         bar_lay.addWidget(self._hint_persistent)
         bar_lay.addStretch(1)
+        bar_lay.addWidget(self._hint_discovery)
         bar_lay.addWidget(self._hint_context)
 
         # Default: activate the pan tool.
@@ -919,6 +944,7 @@ class _ChartCard(QWidget):
         if 'pan' not in mode:
             self.toolbar.pan()
         self._refresh_hint()
+        self._hint_rotation_timer.start()
 
         lay.addWidget(self.toolbar)
         lay.addWidget(canvas, stretch=1)
@@ -931,6 +957,14 @@ class _ChartCard(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_responsive_toolbar()
+
+    def eventFilter(self, obj, event):
+        etype = event.type()
+        if etype == QEvent.MouseButtonPress:
+            self.set_hint_rotation_paused(True)
+        elif etype in (QEvent.MouseButtonRelease, QEvent.Leave):
+            self.set_hint_rotation_paused(False)
+        return super().eventFilter(obj, event)
 
     def _sync_responsive_toolbar(self):
         if not self.toolbar.isVisible():
@@ -1019,6 +1053,7 @@ class _ChartCard(QWidget):
             btn.blockSignals(False)
         if notify:
             self.annotation_enabled_changed.emit(self._annotation_enabled)
+        self._refresh_bottom_hint()
 
     def clear_annotations(self):
         if hasattr(self.canvas, 'clear_remarks'):
@@ -1053,18 +1088,58 @@ class _ChartCard(QWidget):
             return 'zoom'
         return ''
 
-    def _context_hint_key(self):
-        """Return the key into ``_BOTTOM_HINT_CONTEXT`` for the bottom-bar
-        right label. Base mapping: pan/zoom → those keys, otherwise 'idle'.
-        Subclasses override to inject 'cursor_single' / 'cursor_dual' /
-        'spectrogram' when the toolbar is not actively in pan/zoom."""
-        mode = self._current_mode_key()
-        return mode if mode in ('pan', 'zoom') else 'idle'
+    def _hint_state(self):
+        return hints.HintState(
+            mode=self._chart_mode,
+            mouse_mode=self._current_mode_key(),
+            chart_kind=self._chart_mode,
+            annotation_on=self.annotation_enabled(),
+            discovered=hints.load_discovered(self._hint_settings),
+            recently_used=frozenset(self._recent_context_hint_ids),
+        )
 
     def _refresh_bottom_hint(self, *_):
-        key = self._context_hint_key()
-        text = _BOTTOM_HINT_CONTEXT.get(key, '')
-        self._hint_context.setText(text)
+        discovery = hints.discovery_hint(self._hint_state())
+        self._hint_discovery.setText(discovery.text if discovery else '')
+        self._set_context_hint(reset=True)
+
+    def _set_context_hint(self, reset=False):
+        candidates = hints.context_hints(self._hint_state())
+        signature = tuple(hint.id for hint in candidates)
+        if reset or signature != self._context_hint_signature:
+            self._context_hint_index = 0
+            self._context_hint_signature = signature
+        if not candidates:
+            self._hint_context.setText('')
+            return
+        index = self._context_hint_index % len(candidates)
+        self._hint_context.setText(candidates[index].text)
+
+    def _advance_context_hint(self):
+        if self._hint_rotation_paused:
+            return
+        candidates = hints.context_hints(self._hint_state())
+        if len(candidates) <= 1:
+            self._set_context_hint()
+            return
+        self._context_hint_index = (self._context_hint_index + 1) % len(candidates)
+        self._context_hint_signature = tuple(hint.id for hint in candidates)
+        self._set_context_hint()
+
+    def set_hint_rotation_paused(self, paused):
+        self._hint_rotation_paused = bool(paused)
+
+    def mark_context_hint_used(self, hint_id):
+        self._recent_context_hint_ids.add(hint_id)
+        self._refresh_bottom_hint()
+
+    def set_hint_settings(self, settings):
+        self._hint_settings = settings
+        self._refresh_bottom_hint()
+
+    def mark_discovered(self, hint_id):
+        hints.mark_discovered(self._hint_settings, hint_id)
+        self._refresh_bottom_hint()
 
     def _refresh_hint(self, *_):
         key = self._current_mode_key()
@@ -1085,7 +1160,7 @@ class TimeChartCard(_ChartCard):
     cursor_mode_changed = pyqtSignal(str)  # 'off' | 'single' | 'dual'
 
     def __init__(self, canvas, parent=None):
-        super().__init__(canvas, parent)
+        super().__init__(canvas, parent, chart_mode='time')
         # Right-align time-only controls with the same locLabel insertion
         # point used by annotation controls on analysis cards.
         loc_action = getattr(self, '_loc_action', None)
@@ -1165,7 +1240,7 @@ class TimeChartCard(_ChartCard):
             if btn is None:
                 continue
             self._time_button_shortcuts.append(
-                _install_button_shortcut(self, btn, label, shortcut)
+                _install_button_shortcut(self, btn, label, shortcut, key)
             )
 
     def _sync_responsive_toolbar(self):
@@ -1199,6 +1274,7 @@ class TimeChartCard(_ChartCard):
         self._plot_mode = mode
         self.btn_subplot.setChecked(mode == 'subplot')
         self.btn_overlay.setChecked(mode == 'overlay')
+        self._refresh_bottom_hint()
         self.plot_mode_changed.emit(mode)
 
     # ----- cursor mode -----
@@ -1211,23 +1287,22 @@ class TimeChartCard(_ChartCard):
         self._cursor_mode = mode
         for k, b in self._cursor_buttons.items():
             b.setChecked(k == mode)
-        # Cursor mode is one of the keys consulted by _context_hint_key,
-        # so refresh the bottom-hint context label whenever it flips.
+        # Cursor mode is part of HintState, so refresh the bottom context
+        # label whenever it flips.
         self._refresh_bottom_hint()
         self.cursor_mode_changed.emit(mode)
 
-    def _context_hint_key(self):
-        # Explicit cursor placement takes precedence over the always-on pan
-        # default — when the user enables single / dual cursor, the bottom
-        # context label should reflect THAT, not the resident pan mode.
-        # NB: base __init__ calls _refresh_hint() before TimeChartCard's own
-        # init sets _cursor_mode; getattr fallback keeps that path safe.
-        cm = getattr(self, '_cursor_mode', 'off')
-        if cm == 'single':
-            return 'cursor_single'
-        if cm == 'dual':
-            return 'cursor_dual'
-        return super()._context_hint_key()
+    def _hint_state(self):
+        return hints.HintState(
+            mode='time',
+            plot_mode=getattr(self, '_plot_mode', 'subplot'),
+            cursor_mode=getattr(self, '_cursor_mode', 'off'),
+            mouse_mode=self._current_mode_key(),
+            chart_kind='time',
+            annotation_on=self.annotation_enabled(),
+            discovered=hints.load_discovered(self._hint_settings),
+            recently_used=frozenset(self._recent_context_hint_ids),
+        )
 
     # ----- overlay-selection nav handoff -----
     def _on_overlay_channel_selected(self, name):
@@ -1254,13 +1329,12 @@ class SpectrogramChartCard(_ChartCard):
     click on the spectrogram to surface the per-frame frequency slice."""
 
     def __init__(self, canvas, parent=None, annotations=False):
-        super().__init__(canvas, parent, annotations=annotations)
-
-    def _context_hint_key(self):
-        toolbar_key = self._current_mode_key()
-        if toolbar_key in ('pan', 'zoom'):
-            return toolbar_key
-        return 'spectrogram'
+        super().__init__(
+            canvas,
+            parent,
+            annotations=annotations,
+            chart_mode='fft_time',
+        )
 
 
 class ChartStack(QWidget):
@@ -1268,7 +1342,8 @@ class ChartStack(QWidget):
     plot_mode_changed = pyqtSignal(str)
     cursor_mode_changed = pyqtSignal(str)
     annotation_enabled_changed = pyqtSignal(str, bool)
-    image_copied = pyqtSignal(str)  # status text for the main window
+    image_copied = pyqtSignal(str)  # legacy status text signal
+    image_captured = pyqtSignal(QPixmap)  # final pixmap for MainWindow publishing
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1281,11 +1356,19 @@ class ChartStack(QWidget):
         self.canvas_fft_time = SpectrogramCanvas(self)
         self.canvas_order = PlotCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
-        self._fft_card = _ChartCard(self.canvas_fft, annotations=True)
+        self._fft_card = _ChartCard(
+            self.canvas_fft,
+            annotations=True,
+            chart_mode='fft',
+        )
         self._fft_time_card = SpectrogramChartCard(
             self.canvas_fft_time, annotations=True,
         )
-        self._order_card = _ChartCard(self.canvas_order, annotations=True)
+        self._order_card = _ChartCard(
+            self.canvas_order,
+            annotations=True,
+            chart_mode='order',
+        )
         self.stack.addWidget(self._time_card)
         self.stack.addWidget(self._fft_card)
         self.stack.addWidget(self._fft_time_card)
@@ -1296,9 +1379,10 @@ class ChartStack(QWidget):
             )
         lay.addWidget(self.stack, stretch=1)
 
-        # Stats strip mounted at the bottom (Task 2.10)
+        # Stats strip retained for later re-enable, but hidden from the UI for now.
         self.stats_strip = StatsStrip(self)
         lay.addWidget(self.stats_strip)
+        self.stats_strip.setVisible(_STATS_STRIP_ENABLED)
 
         # Single draggable cursor pill (owned by ChartStack; floats over the
         # active canvas card). Default position is the top-right corner so it
@@ -1324,8 +1408,10 @@ class ChartStack(QWidget):
                 lambda enabled, m=mode: self.annotation_enabled_changed.emit(m, enabled)
             )
 
-        # Initial sync: stats_strip shows iff default mode is 'time'.
-        self.stats_strip.setVisible(self.current_mode() == 'time')
+        # Initial sync: stats_strip is currently disabled at the product level.
+        self.stats_strip.setVisible(
+            _STATS_STRIP_ENABLED and self.current_mode() == 'time'
+        )
 
     def count(self):
         return self.stack.count()
@@ -1335,7 +1421,7 @@ class ChartStack(QWidget):
         if self.stack.currentIndex() == idx:
             return
         self.stack.setCurrentIndex(idx)
-        self.stats_strip.setVisible(mode == 'time')
+        self.stats_strip.setVisible(_STATS_STRIP_ENABLED and mode == 'time')
         self.mode_changed.emit(mode)
 
     def current_mode(self):
@@ -1359,6 +1445,15 @@ class ChartStack(QWidget):
             self.clear_cursor_pill()
         self.cursor_mode_changed.emit(mode)
 
+    def mark_discovered(self, hint_id):
+        for card in (
+            self._time_card,
+            self._fft_card,
+            self._fft_time_card,
+            self._order_card,
+        ):
+            card.mark_discovered(hint_id)
+
     def set_annotation_enabled(self, mode, enabled, notify=False):
         cards = {
             'fft': self._fft_card,
@@ -1376,10 +1471,10 @@ class ChartStack(QWidget):
         self.canvas_order.full_reset()
 
     def _copy_card_image(self, card):
-        """Copy the card's canvas to the clipboard. For the time-domain card,
-        the floating cursor pill (if visible and overlapping the canvas) is
-        composited onto the captured pixmap so the screenshot matches what
-        the user sees on screen.
+        """Capture the card's canvas for MainWindow to publish. For the
+        time-domain card, the floating cursor pill (if visible and overlapping
+        the canvas) is composited onto the captured pixmap so the screenshot
+        matches what the user sees on screen.
 
         The canvas is grabbed at a hi-DPI scale (spec §E) for a crisp,
         DPI-independent bitmap; the canvas caps the magnification for
@@ -1387,14 +1482,14 @@ class ChartStack(QWidget):
         effective factor so it still lines up on the magnified bitmap."""
         from PyQt5.QtCore import QRect
         from PyQt5.QtGui import QPainter
-        from PyQt5.QtWidgets import QApplication
         canvas = card.canvas
-        # Effective factor the canvas will actually apply (mirrors its cap)
-        # so the pill compositing uses the SAME scale as the rendered bitmap.
-        scale = _effective_export_scale(canvas)
         pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():
             return
+        canvas_w = max(1, int(canvas.width()))
+        canvas_h = max(1, int(canvas.height()))
+        scale_x = max(1.0, float(pix.width()) / float(canvas_w))
+        scale_y = max(1.0, float(pix.height()) / float(canvas_h))
         if (card is self.stack.currentWidget()
                 and card is self._time_card
                 and self._pill.isVisible()):
@@ -1407,20 +1502,22 @@ class ChartStack(QWidget):
             if (rel_x + pill_geo.width() > 0 and rel_x < canvas.width()
                     and rel_y + pill_geo.height() > 0 and rel_y < canvas.height()):
                 painter = QPainter(pix)
-                # Scale BOTH the pill's top-left and its drawn size by the
-                # same factor so the readout lands at the right spot on the
-                # magnified bitmap. Grab the pill itself at hi-DPI so its
-                # text stays crisp, then draw into the scaled target rect.
+                # Scale the pill using the actual normalized bitmap size. On
+                # Retina, QPixmap painters use logical DPR coordinates unless
+                # the pixmap is normalized first; using the returned bitmap's
+                # pixel dimensions keeps the pill inside the exported image.
                 target = QRect(
-                    int(round(rel_x * scale)),
-                    int(round(rel_y * scale)),
-                    int(round(pill_geo.width() * scale)),
-                    int(round(pill_geo.height() * scale)),
+                    int(round(rel_x * scale_x)),
+                    int(round(rel_y * scale_y)),
+                    int(round(pill_geo.width() * scale_x)),
+                    int(round(pill_geo.height() * scale_y)),
                 )
-                painter.drawPixmap(target, self._grab_pill_scaled(scale))
+                painter.drawPixmap(
+                    target,
+                    self._grab_pill_scaled(max(scale_x, scale_y)),
+                )
                 painter.end()
-        QApplication.clipboard().setPixmap(pix)
-        self.image_copied.emit("已复制图为图片")
+        self.image_captured.emit(pix)
 
     def _grab_pill_scaled(self, scale):
         """Grab the cursor pill at ``scale``× for crisp compositing.

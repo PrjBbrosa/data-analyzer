@@ -11,6 +11,31 @@ from PyQt5.QtWidgets import QSizePolicy
 from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
 
 
+def test_apply_mdi_icons_sets_navactive_property_on_active_button(qtbot):
+    from PyQt5.QtWidgets import QToolBar, QToolButton
+    from mf4_analyzer.ui.chart_stack import _apply_mdi_icons, _MDI_NAV_ICONS
+
+    assert "pan" in _MDI_NAV_ICONS and "zoom" in _MDI_NAV_ICONS
+    toolbar = QToolBar()
+    qtbot.addWidget(toolbar)
+    pan = toolbar.addAction("Pan")
+    pan.setData("pan")
+    zoom = toolbar.addAction("Zoom")
+    zoom.setData("zoom")
+
+    _apply_mdi_icons(toolbar, active_key="pan")
+    pan_btn = toolbar.widgetForAction(pan)
+    zoom_btn = toolbar.widgetForAction(zoom)
+
+    assert isinstance(pan_btn, QToolButton)
+    assert pan_btn.property("navActive") is True
+    assert zoom_btn.property("navActive") is False
+
+    _apply_mdi_icons(toolbar, active_key="zoom")
+    assert pan_btn.property("navActive") is False
+    assert zoom_btn.property("navActive") is True
+
+
 def test_chart_stack_has_three_canvases(qapp):
     cs = ChartStack()
     # Four canvases after Task 3 (time / fft / fft_time / order); test name kept for git history.
@@ -34,6 +59,45 @@ def test_cursor_pill_updates_on_time_signal(qapp, qtbot):
     cs.set_mode('time')
     cs.canvas_time.cursor_info.emit("t=1.0s | Speed=100")
     assert "t=1.0s" in cs.cursor_pill_text()
+
+
+def test_cursor_pill_renders_transparent_rounded_corners(qapp, qtbot):
+    from PyQt5.QtCore import QCoreApplication
+    from PyQt5.QtGui import QColor, QImage, QPainter
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    old_sheet = qapp.styleSheet()
+    qapp.setStyleSheet(
+        Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    )
+    try:
+        pill = CursorPill()
+        qtbot.addWidget(pill)
+        pill.set_primary('<span style="color:#111827;">A</span>')
+        pill.resize(max(32, pill.width()), max(32, pill.height()))
+        pill.show()
+        QCoreApplication.processEvents()
+
+        img = QImage(pill.width(), pill.height(), QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        painter = QPainter(img)
+        pill.render(painter)
+        painter.end()
+
+        corners = [
+            QColor(img.pixelColor(0, 0)).alpha(),
+            QColor(img.pixelColor(img.width() - 1, 0)).alpha(),
+            QColor(img.pixelColor(0, img.height() - 1)).alpha(),
+            QColor(img.pixelColor(img.width() - 1, img.height() - 1)).alpha(),
+        ]
+        assert max(corners) <= 8, (
+            "cursor pill rounded corners must stay transparent; opaque corners "
+            f"make the exported/live pill look like a square popup: {corners!r}"
+        )
+        center = QColor(img.pixelColor(img.width() // 2, img.height() // 2)).alpha()
+        assert center >= 220
+    finally:
+        qapp.setStyleSheet(old_sheet)
 
 
 def test_single_cursor_pill_uses_vertical_channel_readout(qapp, qtbot):
@@ -725,9 +789,13 @@ def test_copy_card_image_renders_at_hidpi_scale(qapp, qtbot):
     base = cs.canvas_time.grab_pixmap(scale=1.0)
     assert not base.isNull()
 
+    captured = []
+    cs.image_captured.connect(captured.append)
+
     cs._copy_card_image(cs._time_card)
     QApplication.processEvents()
-    pix = QApplication.clipboard().pixmap()
+    assert captured, "copy path did not emit captured pixmap"
+    pix = captured[-1]
     assert pix is not None and not pix.isNull(), "clipboard pixmap is null"
     # Hi-DPI: clipboard bitmap is wider than a 1× grab of the same canvas.
     assert pix.width() > base.width(), (
@@ -773,9 +841,13 @@ def test_copy_card_image_composites_scaled_cursor_pill(qapp, qtbot, monkeypatch)
 
     monkeypatch.setattr(QPainter, "drawPixmap", _spy_draw)
 
+    captured = []
+    cs.image_captured.connect(captured.append)
+
     cs._copy_card_image(cs._time_card)
     QApplication.processEvents()
 
+    assert captured, "copy path did not emit captured pixmap"
     assert drawn, "copy path did not composite the cursor pill"
     rect = drawn[-1][0]
     pill = cs._pill
@@ -787,6 +859,59 @@ def test_copy_card_image_composites_scaled_cursor_pill(qapp, qtbot, monkeypatch)
     assert rect.height() > pill.height(), (
         f"composited pill height {rect.height()} not scaled vs {pill.height()}"
     )
+
+
+def test_copy_card_image_composites_cursor_pill_inside_hidpi_pixmap(
+    qapp, qtbot, monkeypatch
+):
+    """On macOS Retina, QPixmap painting uses logical DPR coordinates. The
+    copied image is normalized before pill compositing so the pill is painted
+    inside the final pixel buffer rather than off the right edge."""
+    from PyQt5.QtGui import QColor, QPixmap
+    from PyQt5.QtWidgets import QApplication
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode('time')
+    QApplication.processEvents()
+
+    source = QPixmap(1000, 600)
+    source.fill(QColor("#ffffff"))
+    source.setDevicePixelRatio(2.0)
+
+    def _fake_grab(scale=1.0):
+        return QPixmap(source)
+
+    red_pill = QPixmap(120, 60)
+    red_pill.fill(QColor("#ff0000"))
+
+    monkeypatch.setattr(cs.canvas_time, "grab_pixmap", _fake_grab)
+    monkeypatch.setattr(cs, "_grab_pill_scaled", lambda _scale: red_pill)
+
+    cs._pill.resize(80, 40)
+    cs._pill.setVisible(True)
+    cs._pill.mark_user_placed(True)
+    canvas_origin = cs.canvas_time.mapTo(cs.stack, cs.canvas_time.rect().topLeft())
+    cs._pill.move(canvas_origin.x() + 400, canvas_origin.y() + 20)
+
+    captured = []
+    cs.image_captured.connect(captured.append)
+    cs._copy_card_image(cs._time_card)
+
+    assert captured
+    pix = captured[-1]
+    assert pix.devicePixelRatioF() == 1.0
+    img = pix.toImage()
+    red_samples = 0
+    for x in range(0, img.width(), 10):
+        for y in range(0, img.height(), 10):
+            color = img.pixelColor(x, y)
+            if color.red() > 200 and color.green() < 80 and color.blue() < 80:
+                red_samples += 1
+    assert red_samples > 0
 
 
 def test_save_figure_uses_hidpi_scale(qapp, qtbot, monkeypatch, tmp_path):
@@ -1231,6 +1356,7 @@ def test_stats_strip_toggle(qapp, qtbot):
     qtbot.addWidget(cs)
     cs.show()
     qtbot.waitExposed(cs)
+    cs.stats_strip.setVisible(True)
     assert not cs.stats_strip._panel.isVisible()
     cs.stats_strip.toggle()
     qapp.processEvents()
@@ -1479,52 +1605,152 @@ def test_tool_hints_idle_mentions_dblclick():
 
 def test_bottom_hint_bar_persistent_always_present(qapp):
     from mf4_analyzer.ui.chart_stack import ChartStack
+    from mf4_analyzer.ui.hints import persistent_hints
     cs = ChartStack()
-    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+    cs.show()
+    qapp.processEvents()
+    expected = "    ·    ".join(persistent_hints())
+    for mode, card in (
+        ("time", cs._time_card),
+        ("fft", cs._fft_card),
+        ("fft_time", cs._fft_time_card),
+        ("order", cs._order_card),
+    ):
+        cs.set_mode(mode)
+        qapp.processEvents()
         # Bar exists, is visible, and the persistent label spells the three
         # always-on shortcuts.
         assert card._hint_bar is not None
+        assert card._hint_bar.isVisible() is True
         assert card._hint_persistent is not None
         text = card._hint_persistent.text()
-        assert "Ctrl" in text
-        assert "Shift" in text
-        assert "双击图面" in text
-        assert "图表选项" in text
+        assert text == expected
 
 
-def test_bottom_hint_bar_context_pan_default(qapp):
-    """Default after construction is pan mode → context label = pan hint."""
+def test_bottom_hint_bar_context_subplot_default_comes_from_registry(qapp):
+    """Default TimeDomain state is subplot, so the registry's subplot hint wins."""
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     card = cs._time_card
-    assert "平移模式" in card._hint_context.text()
+    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+
+
+def test_bottom_hint_bar_context_uses_registry(qapp, monkeypatch):
+    from mf4_analyzer.ui import hints
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    from mf4_analyzer.ui.hints import Hint
+
+    cs = ChartStack()
+    card = cs._time_card
+
+    def fake_context_hints(state):
+        assert state.mode == "time"
+        assert state.plot_mode == "subplot"
+        return (Hint(id="test.registry", text="registry controlled", surface="context"),)
+
+    monkeypatch.setattr(hints, "context_hints", fake_context_hints)
+    card._refresh_bottom_hint()
+
+    assert card._hint_context.text() == "registry controlled"
+
+
+def test_bottom_hint_bar_discovery_slot_advances_when_marked(qapp):
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    settings = QSettings(".pytmp/test_hints/chart-stack.ini", QSettings.IniFormat)
+    settings.clear()
+    cs = ChartStack()
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        card.set_hint_settings(settings)
+
+    card = cs._time_card
+    assert card._hint_discovery.text() == "顶部按钮支持快捷键，悬停按钮即可查看"
+
+    card.mark_discovered("toolbar.shortcuts_exist")
+    assert card._hint_discovery.text() == "复制按钮可导出带游标读数的图片，并打开标注编辑器"
+
+
+def test_copy_button_marks_copy_image_discovered(qapp):
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui import hints
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    settings = QSettings(".pytmp/test_hints/chart-copy.ini", QSettings.IniFormat)
+    settings.clear()
+    cs = ChartStack()
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        card.set_hint_settings(settings)
+
+    cs._time_card.copy_image_requested.emit()
+
+    assert "chart.copy_image" in hints.load_discovered(settings)
+
+
+def test_shortcut_action_marks_shortcuts_discovered(qapp):
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui import hints
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    settings = QSettings(".pytmp/test_hints/chart-shortcut.ini", QSettings.IniFormat)
+    settings.clear()
+    cs = ChartStack()
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        card.set_hint_settings(settings)
+
+    pan_action = next(act for act in cs._time_card.toolbar.actions() if act.data() == "pan")
+    pan_action.trigger()
+
+    assert "toolbar.shortcuts_exist" in hints.load_discovered(settings)
+
+
+def test_context_hint_rotation_advances_and_pause_holds(qapp):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    cs = ChartStack()
+    card = cs._time_card
+
+    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+    card._advance_context_hint()
+    assert card._hint_context.text() == "Shift + 滚轮 缩放当前子图 Y"
+
+    card.set_hint_rotation_paused(True)
+    card._advance_context_hint()
+    assert card._hint_context.text() == "Shift + 滚轮 缩放当前子图 Y"
+
+
+def test_mark_context_hint_used_suppresses_it_for_session(qapp):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    cs = ChartStack()
+    card = cs._time_card
+
+    card.mark_context_hint_used("subplot.wheel_target")
+
+    assert card._hint_context.text() == "Shift + 滚轮 缩放当前子图 Y"
 
 
 def test_bottom_hint_bar_context_switches_with_cursor_mode(qapp):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     card = cs._time_card
-    # cursor=single → 单游标 hint
+    # cursor=single currently has no curated bar hint.
     card.set_cursor_mode('single')
-    assert "单游标" in card._hint_context.text()
-    # cursor=dual → 双游标 hint
+    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+    # cursor=dual → dual cursor hint
     card.set_cursor_mode('dual')
-    assert "双游标" in card._hint_context.text()
-    # cursor=off → fall back to current toolbar mode hint (pan by default)
+    assert card._hint_context.text() == "点 A 点 B → 显示 ΔT 与区间统计"
+    # cursor=off → back to current subplot hint
     card.set_cursor_mode('off')
-    assert "平移模式" in card._hint_context.text()
+    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
 
 
 def test_bottom_hint_bar_spectrogram_hint(qapp):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     fft_time = cs._fft_time_card
-    # Spectrogram card defaults to pan mode (toolbar.pan() in base init), so
-    # the toolbar-mode hint wins. Force toolbar mode off to surface the
-    # spectrogram-specific hint and confirm the override path.
-    fft_time.toolbar.mode = ''  # type: ignore[attr-defined]
     fft_time._refresh_bottom_hint()
-    assert "谱图" in fft_time._hint_context.text()
+    assert fft_time._hint_context.text() == "点击谱图某一时刻 → 查看该帧频率切片"
 
 
 def test_bottom_hint_bar_idle_for_base_card_with_no_mode(qapp):
@@ -1538,18 +1764,11 @@ def test_bottom_hint_bar_idle_for_base_card_with_no_mode(qapp):
 
 
 def test_bottom_hint_bar_constants_exposed():
-    """Module-level dict MUST expose the documented context keys verbatim."""
-    from mf4_analyzer.ui.chart_stack import (
-        _BOTTOM_HINT_CONTEXT, _BOTTOM_HINT_PERSISTENT,
-    )
-    assert "Ctrl" in _BOTTOM_HINT_PERSISTENT
-    assert "Shift" in _BOTTOM_HINT_PERSISTENT
-    assert "双击图面" in _BOTTOM_HINT_PERSISTENT
-    assert "图表选项" in _BOTTOM_HINT_PERSISTENT
-    for key in ('pan', 'zoom', 'cursor_single', 'cursor_dual',
-                'spectrogram', 'idle'):
-        assert key in _BOTTOM_HINT_CONTEXT
-    assert _BOTTOM_HINT_CONTEXT['idle'] == ''
+    """Legacy module constants are now registry-derived compatibility values."""
+    from mf4_analyzer.ui.chart_stack import _BOTTOM_HINT_PERSISTENT
+    from mf4_analyzer.ui.hints import persistent_hints
+
+    assert _BOTTOM_HINT_PERSISTENT == "    ·    ".join(persistent_hints())
 
 
 def test_bottom_hint_bar_does_not_break_existing_top_hint(qapp):

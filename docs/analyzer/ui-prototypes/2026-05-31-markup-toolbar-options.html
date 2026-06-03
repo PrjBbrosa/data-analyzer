@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>标注编辑器工具栏重做 · 方案对比</title>
+<style>
+  :root{
+    --surface-base:#f5f7fb; --surface-card:#ffffff; --surface-hover:#f4f8ff;
+    --hairline:#eef2f7; --hairline-strong:#d9e2ef; --text:#111827; --icon:#374151;
+    --muted:#64748b; --blue:#1769e0; --blue-deep:#0f5ec8; --accent:#eaf2ff;
+    --shadow-pop:0 18px 48px rgba(15,23,42,.16),0 4px 12px rgba(15,23,42,.10);
+    --shadow-win:0 28px 80px rgba(15,23,42,.20),0 8px 22px rgba(15,23,42,.10);
+    font-family:"Microsoft YaHei","Segoe UI","PingFang SC","SF Pro Text",sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;color:var(--text);background:
+      linear-gradient(90deg,rgba(100,116,139,.06) 1px,transparent 1px) 0 0/72px 72px,
+      linear-gradient(rgba(100,116,139,.05) 1px,transparent 1px) 0 0/72px 72px,
+      var(--surface-base);
+    padding:30px 30px 60px;min-height:100vh;}
+  h1{font-size:19px;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 20px;}
+
+  /* segmented switcher */
+  .seg{display:inline-flex;background:#eef2f7;border:1px solid var(--hairline-strong);
+    border-radius:11px;padding:4px;gap:4px;margin-bottom:22px;}
+  .seg button{border:none;background:transparent;font-size:13px;font-weight:700;color:var(--muted);
+    padding:7px 16px;border-radius:8px;cursor:pointer;transition:.15s;}
+  .seg button:hover{color:var(--text);}
+  .seg button.on{background:#fff;color:var(--blue);box-shadow:0 1px 3px rgba(15,23,42,.12);}
+
+  .stage{display:grid;grid-template-columns:minmax(0,1fr) 318px;gap:24px;align-items:start;}
+  @media(max-width:1080px){.stage{grid-template-columns:1fr;}}
+
+  /* editor window mock */
+  .win{background:var(--surface-card);border:1px solid var(--hairline-strong);
+    border-radius:14px;box-shadow:var(--shadow-win);overflow:hidden;}
+  .titlebar{height:40px;display:flex;align-items:center;gap:8px;padding:0 14px;
+    border-bottom:1px solid var(--hairline);background:#fff;}
+  .tdot{width:11px;height:11px;border-radius:999px;}
+  .tdot.r{background:#ff5f57;} .tdot.y{background:#ffbd2e;} .tdot.g{background:#28c840;}
+  .title{margin-left:6px;font-size:12.5px;font-weight:700;color:#475569;}
+
+  /* toolbar */
+  .toolbar{display:flex;align-items:center;gap:6px;padding:9px 12px;
+    border-bottom:1px solid var(--hairline);background:#fff;position:relative;flex-wrap:wrap;}
+  .sep{width:1px;height:24px;background:var(--hairline-strong);margin:0 4px;}
+  .grp{display:flex;align-items:center;gap:4px;}
+
+  .tbtn{width:34px;height:34px;display:grid;place-items:center;border:1px solid var(--hairline-strong);
+    border-radius:8px;background:#fff;color:var(--icon);cursor:pointer;transition:.13s;}
+  .tbtn:hover{background:var(--surface-hover);border-color:#b8c7dc;}
+  .tbtn.on{background:var(--accent);border-color:var(--blue);color:var(--blue);}
+  .tbtn svg{width:18px;height:18px;stroke:currentColor;stroke-width:1.7;fill:none;
+    stroke-linecap:round;stroke-linejoin:round;}
+  .tbtn .num{font-size:11px;font-weight:800;}
+
+  .txtbtn{height:34px;padding:0 12px;border:1px solid var(--hairline-strong);border-radius:8px;
+    background:#fff;color:#334155;font-size:13px;font-weight:600;cursor:pointer;display:flex;
+    align-items:center;gap:6px;transition:.13s;}
+  .txtbtn:hover{background:var(--surface-hover);border-color:#b8c7dc;}
+  .txtbtn svg{width:15px;height:15px;stroke:currentColor;stroke-width:1.8;fill:none;
+    stroke-linecap:round;stroke-linejoin:round;}
+  .primary{height:34px;padding:0 16px;border:none;border-radius:8px;background:var(--blue);
+    color:#fff;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:7px;
+    box-shadow:0 2px 8px rgba(23,105,224,.30);}
+  .primary:hover{background:var(--blue-deep);}
+  .primary svg{width:15px;height:15px;stroke:#fff;stroke-width:2.1;fill:none;stroke-linecap:round;stroke-linejoin:round;}
+  .spacer{flex:1;}
+
+  /* style trigger (A / B) */
+  .style-trig{height:34px;padding:0 10px;border:1px solid var(--hairline-strong);border-radius:8px;
+    background:#fff;cursor:pointer;display:flex;align-items:center;gap:8px;transition:.13s;}
+  .style-trig:hover{background:var(--surface-hover);border-color:#b8c7dc;}
+  .style-trig .lbl{font-size:12.5px;font-weight:600;color:#334155;}
+  .swatch-dot{width:16px;height:16px;border-radius:999px;border:1.5px solid rgba(0,0,0,.12);}
+  .width-pip{width:22px;height:16px;display:grid;place-items:center;}
+  .width-pip i{display:block;width:18px;border-radius:3px;background:#334155;}
+  .caret{width:9px;height:9px;border-right:1.6px solid #94a3b8;border-bottom:1.6px solid #94a3b8;
+    transform:rotate(45deg);margin-left:1px;}
+  .color-trig{width:34px;height:34px;border:1px solid var(--hairline-strong);border-radius:8px;background:#fff;
+    cursor:pointer;display:grid;place-items:center;transition:.13s;}
+  .color-trig:hover{background:var(--surface-hover);border-color:#b8c7dc;}
+  .color-trig .swatch-dot{width:18px;height:18px;}
+
+  /* popover */
+  .pop{position:absolute;top:52px;background:#fff;border:1px solid var(--hairline-strong);
+    border-radius:12px;box-shadow:var(--shadow-pop);padding:13px;z-index:9;min-width:208px;}
+  .pop::before{content:"";position:absolute;top:-7px;width:12px;height:12px;background:#fff;
+    border-left:1px solid var(--hairline-strong);border-top:1px solid var(--hairline-strong);
+    transform:rotate(45deg);}
+  .pop h4{margin:0 0 9px;font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--muted);text-transform:uppercase;}
+  .pop h4+.row{margin-bottom:14px;}
+  .swatches{display:flex;gap:9px;}
+  .sw{width:26px;height:26px;border-radius:999px;cursor:pointer;border:2px solid transparent;
+    box-shadow:0 0 0 1px rgba(0,0,0,.08) inset;transition:.12s;}
+  .sw:hover{transform:scale(1.08);}
+  .sw.on{border-color:#fff;box-shadow:0 0 0 2px var(--blue);}
+  .widths{display:flex;gap:8px;}
+  .wchip{width:42px;height:30px;border:1px solid var(--hairline-strong);border-radius:8px;cursor:pointer;
+    display:grid;place-items:center;background:#fff;transition:.12s;}
+  .wchip:hover{background:var(--surface-hover);}
+  .wchip.on{border-color:var(--blue);background:var(--accent);}
+  .wchip i{display:block;width:24px;border-radius:4px;background:#334155;}
+
+  /* contextual strip (C) */
+  .ctxstrip{display:flex;align-items:center;gap:14px;padding:7px 14px;background:#fbfdff;
+    border-bottom:1px solid var(--hairline);}
+  .ctxstrip .grouplabel{font-size:11px;font-weight:800;color:var(--muted);letter-spacing:.04em;}
+  .ctxstrip .swatches .sw{width:20px;height:20px;}
+  .ctxstrip .wchip{width:34px;height:24px;}
+  .ctxstrip .wchip i{width:18px;}
+  .ctx-hint{font-size:11.5px;color:var(--muted);margin-left:auto;}
+
+  /* canvas */
+  .canvas{height:300px;background:
+      linear-gradient(90deg,rgba(100,116,139,.05) 1px,transparent 1px) 0 0/40px 40px,
+      linear-gradient(rgba(100,116,139,.05) 1px,transparent 1px) 0 0/40px 40px,#fcfdff;
+    position:relative;overflow:hidden;}
+  .canvas svg{position:absolute;inset:0;width:100%;height:100%;}
+
+  /* notes */
+  .notes{background:#fff;border:1px solid var(--hairline-strong);border-radius:14px;padding:18px 18px 20px;
+    box-shadow:0 10px 30px rgba(15,23,42,.07);}
+  .notes h3{margin:0 0 2px;font-size:15px;display:flex;align-items:center;gap:8px;}
+  .badge{font-size:10.5px;font-weight:800;color:#fff;background:#16a34a;border-radius:999px;padding:2px 8px;letter-spacing:.03em;}
+  .notes .tag{font-size:12px;color:var(--muted);margin:0 0 14px;}
+  .kv{font-size:13px;line-height:1.55;color:#334155;}
+  .kv b{color:var(--text);}
+  .pluses,.minuses{list-style:none;padding:0;margin:10px 0 0;font-size:12.5px;line-height:1.6;}
+  .pluses li::before{content:"＋";color:#16a34a;font-weight:800;margin-right:6px;}
+  .minuses li::before{content:"－";color:#dc2626;font-weight:800;margin-right:6px;}
+  .hide{display:none;}
+  .legend{font-size:12px;color:var(--muted);margin-top:14px;}
+  .legend code{background:#eef2f7;border-radius:4px;padding:1px 5px;font-size:11.5px;}
+</style>
+</head>
+<body>
+  <h1>标注编辑器 · 工具栏重做方案</h1>
+  <p class="sub">目标：把「颜色 ×6 + 线宽 ×4」共 10 个常驻按钮收进二级菜单，腾出顶栏空间；同时把图标统一为更利落的描边风、分组加分隔线、主按钮高亮。下面切换查看现状与三个方案。</p>
+
+  <div class="seg" id="seg">
+    <button data-v="now">现状（今）</button>
+    <button data-v="a" class="on">方案 A · 单一样式气泡</button>
+    <button data-v="b">方案 B · 颜色 + 线宽双气泡</button>
+    <button data-v="c">方案 C · 上下文样式条</button>
+  </div>
+
+  <div class="stage">
+    <div class="win">
+      <div class="titlebar">
+        <span class="tdot r"></span><span class="tdot y"></span><span class="tdot g"></span>
+        <span class="title">图片标注</span>
+      </div>
+
+      <!-- toolbar slot -->
+      <div id="bar"></div>
+      <!-- contextual strip slot (C only) -->
+      <div id="ctx"></div>
+
+      <div class="canvas">
+        <svg viewBox="0 0 900 300" preserveAspectRatio="xMidYMid meet">
+          <!-- fake chart -->
+          <polyline points="40,230 140,180 240,205 340,120 440,150 540,70 640,110 740,60 840,95"
+            fill="none" stroke="#1769e0" stroke-width="2.4"/>
+          <polyline points="40,250 140,235 240,240 340,210 440,225 540,200 640,215 740,205 840,215"
+            fill="none" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="5 5"/>
+          <!-- a red arrow annotation, selected (handles) -->
+          <line x1="470" y1="40" x2="545" y2="74" stroke="#e53935" stroke-width="4" stroke-linecap="round"/>
+          <polygon points="545,74 525,66 532,84" fill="#e53935"/>
+          <rect x="466" y="36" width="8" height="8" fill="#fff" stroke="#1769e0"/>
+          <rect x="541" y="70" width="8" height="8" fill="#fff" stroke="#1769e0"/>
+          <!-- a number badge -->
+          <circle cx="345" cy="120" r="13" fill="#e53935"/>
+          <text x="345" y="125" text-anchor="middle" font-size="14" font-weight="800" fill="#fff">1</text>
+          <!-- a rect annotation -->
+          <rect x="600" y="40" width="120" height="70" fill="none" stroke="#059669" stroke-width="3" rx="3"/>
+          <text x="60" y="285" font-size="12" fill="#94a3b8">示意画布：选中红箭头显示端点手柄（任意工具下都能选中并二次修改）</text>
+        </svg>
+      </div>
+    </div>
+
+    <div class="notes" id="notes"></div>
+  </div>
+
+<script>
+  const ICON = {
+    select:'<path d="M5 3l5.5 13 2-5.5L18 8.5z"/>',
+    crop:'<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/>',
+    arrow:'<path d="M7 17L17 7"/><path d="M8 7h9v9"/>',
+    line:'<path d="M5 19L19 5"/>',
+    rect:'<rect x="4" y="6" width="16" height="12" rx="1.5"/>',
+    pen:'<path d="M15 4l5 5L9 20l-5 1 1-5z"/>',
+    text:'<path d="M5 6V4h14v2"/><path d="M12 4v16"/><path d="M9 20h6"/>',
+    number:'<circle cx="12" cy="12" r="9"/><text x="12" y="16" text-anchor="middle" font-size="11" font-weight="800" fill="currentColor" stroke="none">1</text>',
+    undo:'<path d="M3 8h11a5 5 0 0 1 0 10H8"/><path d="M6 5L3 8l3 3"/>',
+    redo:'<path d="M21 8H10a5 5 0 0 0 0 10h6"/><path d="M18 5l3 3-3 3"/>',
+    save:'<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+    close:'<path d="M18 6L6 18M6 6l12 12"/>',
+    check:'<path d="M20 6L9 17l-5-5"/>'
+  };
+  const TOOLS=[['select','选择'],['crop','裁剪'],['arrow','箭头'],['line','直线'],
+               ['rect','矩形'],['pen','画笔'],['text','文字'],['number','序号']];
+  const COLORS=['#e53935','#f97316','#eab308','#059669','#2563eb','#111827'];
+  const WIDTHS=[2,4,6,8];
+
+  const sv=(p)=>`<svg viewBox="0 0 24 24">${p}</svg>`;
+  function toolButtons(active='arrow'){
+    return `<div class="grp">`+TOOLS.map(([k,t])=>
+      `<button class="tbtn${k===active?' on':''}" title="${t}">${sv(ICON[k])}</button>`).join('')+`</div>`;
+  }
+  function outputGrp(){
+    return `<div class="grp"><button class="tbtn" title="撤销">${sv(ICON.undo)}</button>`+
+      `<button class="tbtn" title="重做">${sv(ICON.redo)}</button></div>`+
+      `<div class="sep"></div>`+
+      `<button class="txtbtn" title="另存为 PNG">${sv(ICON.save)}保存</button>`+
+      `<button class="primary">${sv(ICON.check)}完成复制</button>`;
+  }
+  function closeBtn(){return `<button class="tbtn" title="关闭">${sv(ICON.close)}</button><div class="sep"></div>`;}
+  function swatches(sel='#e53935',sz=''){return `<div class="swatches">`+COLORS.map(c=>
+      `<span class="sw${c===sel?' on':''}" style="background:${c}"></span>`).join('')+`</div>`;}
+  function widths(sel=4){return `<div class="widths">`+WIDTHS.map(w=>
+      `<span class="wchip${w===sel?' on':''}"><i style="height:${w}px"></i></span>`).join('')+`</div>`;}
+
+  const NOW = ()=>`<div class="toolbar">${closeBtn()}
+    <div class="grp">${COLORS.map(c=>`<span class="color-trig"><span class="swatch-dot" style="background:${c}"></span></span>`).join('')}</div>
+    <div class="grp">${WIDTHS.map(w=>`<span class="wchip"><i style="height:${w}px"></i></span>`).join('')}</div>
+    <div class="sep"></div>${toolButtons()}<div class="sep"></div>${outputGrp()}<div class="spacer"></div></div>`;
+
+  const A = ()=>`<div class="toolbar">${closeBtn()}${toolButtons()}<div class="sep"></div>
+    <div class="style-trig" id="trigA">
+      <span class="swatch-dot" style="background:#e53935"></span>
+      <span class="width-pip"><i style="height:4px"></i></span>
+      <span class="lbl">样式</span><span class="caret"></span>
+    </div>
+    <div class="sep"></div>${outputGrp()}<div class="spacer"></div>
+    <div class="pop" style="left:340px"><h4>颜色</h4><div class="row">${swatches('#e53935')}</div>
+      <h4>线宽</h4><div class="row">${widths(4)}</div></div>
+  </div>`;
+
+  const B = ()=>`<div class="toolbar">${closeBtn()}${toolButtons()}<div class="sep"></div>
+    <div class="grp">
+      <span class="color-trig" title="颜色"><span class="swatch-dot" style="background:#e53935"></span></span>
+      <span class="style-trig" title="线宽"><span class="width-pip"><i style="height:4px"></i></span><span class="caret"></span></span>
+    </div>
+    <div class="sep"></div>${outputGrp()}<div class="spacer"></div>
+    <div class="pop" style="left:340px"><h4>颜色</h4><div class="row">${swatches('#e53935')}</div></div>
+  </div>`;
+
+  const C_BAR = ()=>`<div class="toolbar">${closeBtn()}${toolButtons()}<div class="sep"></div>${outputGrp()}<div class="spacer"></div></div>`;
+  const C_CTX = ()=>`<div class="ctxstrip">
+    <span class="grouplabel">颜色</span>${swatches('#e53935')}
+    <span class="sep"></span>
+    <span class="grouplabel">线宽</span>${widths(4)}
+    <span class="ctx-hint">选中箭头工具时自动出现 · 切到「选择」工具则收起</span>
+  </div>`;
+
+  const NOTES = {
+    now:{t:'现状（今）',badge:'',tag:'editor.py:564-677 一行平铺',
+      kv:'<b>10 个常驻按钮</b>（6 色 + 4 线宽）+ 8 工具 + 4 动作，全挤在一行。窗口窄或图标多语言下容易换行/拥挤，也是你说的「占位、low」的来源。',
+      plus:[],minus:['颜色/线宽常驻吃掉约一半横向空间','当前色/当前线宽没有清晰的「回显」，看不出选了哪个','按钮多、无分组分隔，视觉杂']},
+    a:{t:'方案 A · 单一样式气泡',badge:'推荐',tag:'10 按钮 → 1 个「样式」入口',
+      kv:'顶栏只留一个 <b>样式 ▾</b> 按钮，按钮脸上直接<b>回显当前色 + 当前线宽</b>；点开是一个含「颜色 + 线宽」的气泡。腾出空间最多，状态一眼可见。',
+      plus:['顶栏最干净，10→1','按钮即状态：当前色点 + 当前线宽条','颜色线宽同一气泡，改样式一步到位','改动量最小（一个 QToolButton + 一个 QMenu/弹层）'],
+      minus:['改样式多一次点击（点开气泡）','颜色和线宽挤在一个气泡里，气泡略高']},
+    b:{t:'方案 B · 颜色 + 线宽双气泡',badge:'',tag:'10 按钮 → 2 个入口',
+      kv:'拆成两个入口：一个<b>颜色键</b>（圆点显示当前色）、一个<b>线宽键</b>（线条显示当前粗细），各自弹小气泡。贴近 PPT/Word 的习惯。',
+      plus:['符合大众习惯（颜色键 / 线宽键分开）','两个键各自回显状态','单项气泡更小更轻'],
+      minus:['顶栏仍占 2 个键（比 A 多一个）','改一次「红 + 8px」要点两个气泡']},
+    c:{t:'方案 C · 上下文样式条',badge:'最省顶栏',tag:'顶栏 0 样式键 + 滑出第二行',
+      kv:'顶栏完全不放颜色/线宽，只有工具与动作；当选中绘图工具或选中已有标注时，<b>下方滑出一条 contextual 样式条</b>（Snipaste 风）。不画/不选时收起。',
+      plus:['顶栏最极简，纯工具 + 动作','样式始终在「正要用」的时候出现','颜色线宽都是一键直选，无需点开气泡'],
+      minus:['多一条会显隐的第二行，布局需处理高度跳动','改动量最大（显隐联动 tool/selection 状态）','静止时想改样式得先选工具/元素']}
+  };
+
+  function renderNotes(v){
+    const n=NOTES[v];
+    document.getElementById('notes').innerHTML=
+      `<h3>${n.t}${n.badge?`<span class="badge">${n.badge}</span>`:''}</h3>
+       <p class="tag">${n.tag}</p>
+       <div class="kv">${n.kv}</div>
+       ${n.plus.length?`<ul class="pluses">${n.plus.map(x=>`<li>${x}</li>`).join('')}</ul>`:''}
+       ${n.minus.length?`<ul class="minuses">${n.minus.map(x=>`<li>${x}</li>`).join('')}</ul>`:''}
+       <p class="legend">说明：画布里红箭头带白色端点手柄＝「任意工具下选中即可二次修改」的目标态（属另一份交互 spec）。本页只比工具栏布局。</p>`;
+  }
+  function render(v){
+    const bar=document.getElementById('bar'), ctx=document.getElementById('ctx');
+    ctx.innerHTML='';
+    if(v==='now') bar.innerHTML=NOW();
+    else if(v==='a') bar.innerHTML=A();
+    else if(v==='b') bar.innerHTML=B();
+    else { bar.innerHTML=C_BAR(); ctx.innerHTML=C_CTX(); }
+    renderNotes(v);
+  }
+  document.querySelectorAll('#seg button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('#seg button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); render(b.dataset.v);
+  });
+  render('a');
+</script>
+</body>
+</html>

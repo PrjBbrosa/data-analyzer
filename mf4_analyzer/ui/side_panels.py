@@ -180,7 +180,7 @@ class SidePanelController(QObject):
 
     def __init__(self, side, splitter, panel, panel_index, strip, overlay,
                  host, collapse_delay_ms=600, default_width=250,
-                 canvas=None, parent=None):
+                 canvas=None, peek_width=None, parent=None):
         super().__init__(parent)
         self._side = side
         self._splitter = splitter
@@ -190,6 +190,10 @@ class SidePanelController(QObject):
         self._overlay = overlay
         self._host = host
         self._remembered_width = default_width
+        # Optional floor for the peek overlay width, used to make the two side
+        # overlays symmetric (e.g. the narrow navigator peeks out to the same
+        # width as the docked inspector). None = no floor.
+        self._peek_width = peek_width
         # The pane that should absorb this panel's width changes (the canvas).
         # Kept as a live widget ref, not a fixed index: when the OTHER side
         # peeks out it reparents its panel and the splitter is renumbered, so
@@ -309,8 +313,23 @@ class SidePanelController(QObject):
         sizes[absorb] = max(0, sizes[absorb] - delta)
         self._splitter.setSizes(sizes)
 
+    # Qt's "no maximum" sentinel (QWIDGETSIZE_MAX); a panel reporting this has
+    # no real width cap. PyQt5 doesn't export the constant cleanly, so inline it.
+    _NO_MAX_WIDTH = (1 << 24) - 1  # 16777215
+
     def _position_overlay(self):
         w = self._remembered_width + self.PEEK_EXTRA_PX
+        # Floor the width for L/R symmetry (a narrow panel peeks out to at least
+        # peek_width); a wider-docked panel still peeks at its own larger width.
+        if self._peek_width is not None:
+            w = max(w, self._peek_width)
+        # Don't let the overlay exceed the panel's own max width: width-capped
+        # panels (e.g. the inspector is pinned to a fixed width) can't stretch
+        # to fill the surplus, so it would otherwise show as a blank band of
+        # overlay background. Uncapped panels (navigator) still get the +EXTRA.
+        max_w = self._panel.maximumWidth()
+        if 0 < max_w < self._NO_MAX_WIDTH:
+            w = min(w, max_w)
         h = self._host.height()
         # Keep the edge strip exposed (and clickable -> pin) beside the overlay,
         # so the overlay starts just inside the strip rather than covering it.

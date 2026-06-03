@@ -453,11 +453,12 @@ def test_chart_stack_copy_card_image_composites_cursor_pill(qapp):
     """
     cs = ChartStack()
 
-    # The image-copied signal carries a status string for MainWindow's
-    # status bar. Pin its signature so the bus stays compatible.
-    bound = cs.image_copied
+    # The image-captured signal carries the final QPixmap upward so
+    # MainWindow owns clipboard publishing, toast, thumbnail, and editor
+    # lifecycle.
+    bound = cs.image_captured
     raw = bound.signal.lstrip("0123456789")
-    assert raw == "image_copied(QString)"
+    assert raw == "image_captured(QPixmap)"
 
     # The method exists and is callable.
     assert callable(getattr(cs, "_copy_card_image", None))
