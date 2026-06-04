@@ -133,6 +133,24 @@ class _CheckTolerantTree(QTreeWidget):
                     return
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            pos = event.pos()
+            item = self.itemAt(pos)
+            if item is not None:
+                index = self.indexFromItem(item, 0)
+                hit = self._check_hit_rect(item, index)
+                if hit is not None and hit.contains(pos):
+                    new_state = (
+                        Qt.Unchecked
+                        if item.checkState(0) == Qt.Checked
+                        else Qt.Checked
+                    )
+                    item.setCheckState(0, new_state)
+                    event.accept()
+                    return
+        super().mouseDoubleClickEvent(event)
+
 
 class MultiFileChannelWidget(QWidget):
     channels_changed = pyqtSignal()

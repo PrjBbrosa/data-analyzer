@@ -3,17 +3,18 @@ from mf4_analyzer.ui.view_state import ViewManager
 from mf4_analyzer.ui.view_tabbar import ViewTabBar
 
 
-def test_chartstack_mounts_tabbar_in_time_card(qtbot):
+def test_chartstack_mounts_tabbar_in_shared_bottom_dock(qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
 
     bar = cs.attach_view_tabbar(ViewManager())
 
     assert isinstance(bar, ViewTabBar)
-    card = cs._time_card
-    lay = card.layout()
-    assert card.view_tabbar is bar
-    assert lay.indexOf(bar) == lay.indexOf(card._hint_bar) - 1
+    assert bar.parentWidget() is cs._time_bottom_dock
+    assert cs._time_bottom_dock.objectName() == "timeViewBottomDock"
+    assert cs._time_card.view_tabbar is None
+    lay = cs._time_bottom_dock.layout()
+    assert lay.indexOf(bar) < lay.indexOf(cs._time_hint_bar)
 
 
 def test_chartstack_exposes_cursor_mode(qtbot):
@@ -59,5 +60,5 @@ def test_attach_view_tabbar_is_idempotent(qtbot):
     second = cs.attach_view_tabbar(ViewManager())
 
     assert second is first
-    bars = cs._time_card.findChildren(ViewTabBar)
+    bars = cs._time_bottom_dock.findChildren(ViewTabBar)
     assert bars == [first]

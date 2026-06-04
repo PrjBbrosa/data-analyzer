@@ -9,6 +9,20 @@ def test_main_window_constructs(qapp):
     assert w.inspector is not None
 
 
+def test_main_window_moves_time_hints_to_status_line(qapp, qtbot):
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    hint_bar = w.chart_stack._time_hint_bar
+    dock_layout = w.chart_stack._time_bottom_dock.layout()
+
+    assert getattr(w, "_status_hint_bar") is hint_bar
+    assert hint_bar.parentWidget() is w.statusBar
+    assert dock_layout.indexOf(hint_bar) == -1
+    assert dock_layout.indexOf(w.view_tabbar) >= 0
+    assert dock_layout.count() == 1
+
+
 def test_main_window_has_splitter_with_three_panes(qapp):
     w = MainWindow()
     # The central widget contains a QSplitter with 3 widgets

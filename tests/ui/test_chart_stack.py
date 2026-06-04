@@ -1392,13 +1392,15 @@ def test_time_chart_card_has_segmented_controls(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack, TimeChartCard
     cs = ChartStack()
     qtbot.addWidget(cs)
-    # The time-domain card now lives inside a QSplitter at stack index 0;
-    # reach the real card directly (== cs.stack.widget(0).widget(0)).
+    # The time-domain card keeps the control objects, but its toolbar is now
+    # shared above the splitter instead of inside the left pane.
     card = cs._time_card
     assert isinstance(card, TimeChartCard)
-    # Five segmented buttons on the card toolbar (post-i18n labels):
+    assert card.toolbar is cs._time_toolbar
+    assert card.toolbar.parentWidget() is cs._time_page
+    # Five segmented buttons on the shared toolbar (post-i18n labels):
     # 分屏 / 叠加 / 游标关 / 单游标 / 双游标
-    texts = {b.text() for b in card.findChildren(type(card.btn_subplot))}
+    texts = {b.text() for b in cs._time_toolbar.findChildren(type(card.btn_subplot))}
     assert {'分屏', '叠加', '游标关', '单游标', '双游标'} <= texts
 
 

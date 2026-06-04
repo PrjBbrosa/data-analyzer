@@ -8,6 +8,7 @@ pyqtgraph>=0.13.3
 openpyxl
 pytest>=7.0
 pytest-qt>=4.2
+qtawesome
 
 # Stage 8 - Vector/XCP backend (Windows-only)
 python-can[vector]>=4.3.0; sys_platform == "win32"

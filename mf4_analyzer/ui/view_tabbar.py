@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QTabBar,
     QWidget,
 )
@@ -38,10 +39,12 @@ class ViewTabBar(QWidget):
         self._rename_editor = None
         self._rename_index = -1
         self._suppress_switch_after_reorder = False
+        self.setFixedHeight(28)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 0, 6, 0)
-        layout.setSpacing(4)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(6)
 
         self._tabs = QTabBar(self)
         self._tabs.setObjectName("viewTabs")
@@ -50,6 +53,8 @@ class ViewTabBar(QWidget):
         self._tabs.setUsesScrollButtons(True)
         self._tabs.setDrawBase(False)
         self._tabs.setShape(QTabBar.RoundedSouth)
+        self._tabs.setFixedHeight(26)
+        self._tabs.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         self._tabs.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tabs.currentChanged.connect(self._on_current_changed)
         self._tabs.tabBarDoubleClicked.connect(self._on_double_clicked)
@@ -60,7 +65,7 @@ class ViewTabBar(QWidget):
         self._plus = QPushButton("+", self)
         self._plus.setObjectName("viewTabPlus")
         self._plus.setToolTip("新建 View")
-        self._plus.setFixedSize(28, 24)
+        self._plus.setFixedSize(24, 22)
         self._plus.clicked.connect(self._on_plus_clicked)
         layout.addWidget(self._plus, 0)
         layout.addStretch(1)

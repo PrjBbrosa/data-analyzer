@@ -92,12 +92,13 @@ def test_main_window_mounts_view_tabbar(qtbot):
     assert w.view_manager is not None
     assert isinstance(w.view_tabbar, ViewTabBar)
     assert w.view_tabbar is w.chart_stack._view_tabbar
-    assert w.chart_stack._time_card.view_tabbar is w.view_tabbar
+    assert w.chart_stack._time_card.view_tabbar is None
+    assert w.view_tabbar.parentWidget() is w.chart_stack._time_bottom_dock
 
-    layout = w.chart_stack._time_card.layout()
-    assert layout.indexOf(w.view_tabbar) == layout.indexOf(
-        w.chart_stack._time_card._hint_bar
-    ) - 1
+    layout = w.chart_stack._time_bottom_dock.layout()
+    assert layout.indexOf(w.view_tabbar) >= 0
+    assert layout.indexOf(w.chart_stack._time_hint_bar) == -1
+    assert w.chart_stack._time_hint_bar.parentWidget() is w.statusBar
 
 
 def test_switch_view_preserves_per_view_channels(qtbot, qapp, loaded_csv):

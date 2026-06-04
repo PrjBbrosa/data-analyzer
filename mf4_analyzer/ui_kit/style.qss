@@ -1042,6 +1042,15 @@ Inspector QPushButton[role="primary"] { min-height: 30px; }
 /* ============ Chart stack ============ */
 ChartStack { background-color: #ffffff; }
 
+QWidget#timeDomainPage {
+    background-color: #ffffff;
+}
+
+QFrame#timeViewBottomDock {
+    background-color: #fbfcff;
+    border-top: 1px solid #dbe3ee;
+}
+
 QWidget#chartCard {
     border: 1px solid #eef2f7;
     border-radius: 12px;
@@ -1404,6 +1413,61 @@ QLabel#chartHint {
     background-color: transparent;
 }
 
+QFrame#timeViewBottomDock QWidget#viewTabBar {
+    background-color: #fbfcff;
+    border: none;
+}
+
+QFrame#timeViewBottomDock QTabBar#viewTabs {
+    background-color: transparent;
+}
+
+QFrame#timeViewBottomDock QTabBar#viewTabs::tab {
+    min-width: 58px;
+    height: 20px;
+    margin: 3px 2px 1px 0;
+    padding: 0 12px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background-color: transparent;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QFrame#timeViewBottomDock QTabBar#viewTabs::tab:hover {
+    background-color: #eef4ff;
+    border-color: #c7d7f2;
+    color: #1f3b68;
+}
+
+QFrame#timeViewBottomDock QTabBar#viewTabs::tab:selected {
+    background-color: #e8f0ff;
+    border-color: #a7bfea;
+    border-bottom: 2px solid #2563eb;
+    color: #173262;
+}
+
+QFrame#timeViewBottomDock QPushButton#viewTabPlus {
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 22px;
+    max-height: 22px;
+    margin: 3px 0 1px 2px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background-color: #ffffff;
+    color: #1e293b;
+    font-weight: 700;
+}
+
+QFrame#timeViewBottomDock QPushButton#viewTabPlus:hover {
+    background-color: #e8f0ff;
+    border-color: #a7bfea;
+    color: #173262;
+}
+
 /* Bottom hint bar — sits beneath the canvas inside each chart card.
  * Two layers:
  *   #chartHintPersistent (left, gray) always-on shortcut reminders
@@ -1426,6 +1490,35 @@ QFrame#chartHintBar QLabel#chartHintContext {
     font-weight: 500;
     padding: 2px 8px;
     background-color: transparent;
+}
+QFrame#chartHintBar QLabel#chartHintDiscovery {
+    color: #2563eb;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    background-color: transparent;
+}
+
+QFrame#timeViewBottomDock QFrame#chartHintBar {
+    background-color: #fbfcff;
+    border-top: 1px solid #e5ebf3;
+}
+
+QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintPersistent,
+QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintContext,
+QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintDiscovery {
+    padding: 1px 6px;
+}
+
+QStatusBar QFrame#chartHintBar {
+    background-color: transparent;
+    border-top: none;
+}
+
+QStatusBar QFrame#chartHintBar QLabel#chartHintPersistent,
+QStatusBar QFrame#chartHintBar QLabel#chartHintContext,
+QStatusBar QFrame#chartHintBar QLabel#chartHintDiscovery {
+    padding: 0 6px;
 }
 
 /* Batch signal picker chips */

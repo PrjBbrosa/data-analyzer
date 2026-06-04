@@ -2,7 +2,7 @@
 from PyQt5.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
-    QAction, QFileDialog, QFrame, QLabel, QPushButton, QSizePolicy,
+    QAction, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QSplitter, QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -356,6 +356,13 @@ class PgNavigationToolbar(QToolBar):
         # to ''). We mirror with a plain string; tests do
         # `str(toolbar.mode).lower()` so a bare str works without surprises.
         self.mode = self._MODE_NONE
+        # Split-mode action routing: when set to a callable, a user toolbar-
+        # button CLICK is forwarded to the toolbar it returns (the focused
+        # pane's own canvas-bound toolbar) instead of running on this one.
+        # Internal method calls (_ChartCard defaulting to pan, overlay-select
+        # handoff) invoke the methods directly and bypass this, so only the
+        # six nav buttons' user clicks forward. None ⇒ no forwarding.
+        self._action_delegate_provider = None
         # View history (matplotlib NavigationToolbar2 model): a single stack
         # of view snapshots plus a pointer into it. ``back()`` decrements the
         # pointer, ``forward()`` increments it, and a brand-new gesture
@@ -408,12 +415,15 @@ class PgNavigationToolbar(QToolBar):
         # Wire each action to its handler. We connect by closure so
         # apply_chinese_toolbar_labels can re-tooltip the QAction without
         # disturbing the slot.
-        self._actions_by_key['home'].triggered.connect(self.home)
-        self._actions_by_key['back'].triggered.connect(self.back)
-        self._actions_by_key['forward'].triggered.connect(self.forward)
-        self._actions_by_key['pan'].triggered.connect(self.pan)
-        self._actions_by_key['zoom'].triggered.connect(self.zoom)
-        self._actions_by_key['save'].triggered.connect(self.save_figure)
+        # Route through _click_* wrappers (not the methods directly) so a
+        # USER click can be forwarded to the focused pane's toolbar in split
+        # mode, while internal method calls stay on this toolbar.
+        self._actions_by_key['home'].triggered.connect(self._click_home)
+        self._actions_by_key['back'].triggered.connect(self._click_back)
+        self._actions_by_key['forward'].triggered.connect(self._click_forward)
+        self._actions_by_key['pan'].triggered.connect(self._click_pan)
+        self._actions_by_key['zoom'].triggered.connect(self._click_zoom)
+        self._actions_by_key['save'].triggered.connect(self._click_save)
         # Append locLabel as the final widget — matplotlib does the same and
         # _ChartCard relocates it via toolbar.removeAction + insertAction so
         # it sits to the right of the hint label. Must be the last action.
@@ -751,6 +761,42 @@ class PgNavigationToolbar(QToolBar):
         except Exception:
             return
 
+    # ----- split-mode action routing (forward clicks to focused pane) ------
+    def _delegate(self):
+        """Toolbar a user click should run on, or None to run on self.
+
+        Returns the provider's toolbar only when it is a *different* toolbar,
+        so a missing/identity provider degrades to normal (self) behaviour.
+        """
+        provider = self._action_delegate_provider
+        if provider is None:
+            return None
+        try:
+            target = provider()
+        except Exception:
+            return None
+        if target is None or target is self:
+            return None
+        return target
+
+    def _click_home(self, *_a):
+        (self._delegate() or self).home()
+
+    def _click_back(self, *_a):
+        (self._delegate() or self).back()
+
+    def _click_forward(self, *_a):
+        (self._delegate() or self).forward()
+
+    def _click_pan(self, *_a):
+        (self._delegate() or self).pan()
+
+    def _click_zoom(self, *_a):
+        (self._delegate() or self).zoom()
+
+    def _click_save(self, *_a):
+        (self._delegate() or self).save_figure()
+
 
 class _ChartCard(QWidget):
     """Canvas + its NavigationToolbar in a vertical layout."""
@@ -921,7 +967,6 @@ class _ChartCard(QWidget):
         self._hint_bar.setObjectName("chartHintBar")
         self._hint_bar.setAttribute(Qt.WA_StyledBackground, True)
         self._hint_bar.setFixedHeight(22)
-        from PyQt5.QtWidgets import QHBoxLayout
         bar_lay = QHBoxLayout(self._hint_bar)
         bar_lay.setContentsMargins(4, 2, 4, 2)
         bar_lay.setSpacing(0)
@@ -965,6 +1010,18 @@ class _ChartCard(QWidget):
         elif etype in (QEvent.MouseButtonRelease, QEvent.Leave):
             self.set_hint_rotation_paused(False)
         return super().eventFilter(obj, event)
+
+    def detach_toolbar(self, parent):
+        """Remove the card toolbar from this card layout and reparent it."""
+        self.layout().removeWidget(self.toolbar)
+        self.toolbar.setParent(parent)
+        return self.toolbar
+
+    def detach_bottom_hint_bar(self, parent):
+        """Remove the bottom hint bar from this card layout and reparent it."""
+        self.layout().removeWidget(self._hint_bar)
+        self._hint_bar.setParent(parent)
+        return self._hint_bar
 
     def _sync_responsive_toolbar(self):
         if not self.toolbar.isVisible():
@@ -1060,7 +1117,13 @@ class _ChartCard(QWidget):
             self.canvas.clear_remarks()
 
     def open_chart_options(self):
-        opener = getattr(self.canvas, 'open_chart_options_dialog', None)
+        # In split mode the primary card's options button is the shared
+        # toolbar's; ChartStack points _options_canvas_provider at the focused
+        # canvas so 图表选项 opens for whichever pane is focused. Default: own
+        # canvas (every analysis card and the non-split time card).
+        provider = getattr(self, '_options_canvas_provider', None)
+        canvas = provider() if callable(provider) else self.canvas
+        opener = getattr(canvas, 'open_chart_options_dialog', None)
         if opener is not None:
             return opener()
         return False
@@ -1369,10 +1432,32 @@ class ChartStack(QWidget):
         self.canvas_fft_time = SpectrogramCanvas(self)
         self.canvas_order = PlotCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
-        self._time_split = QSplitter(Qt.Horizontal, self.stack)
+        self._primary_plot_mode = self._time_card.plot_mode()
+        self._primary_cursor_mode = self._time_card.cursor_mode()
+        self._time_page = QWidget(self.stack)
+        self._time_page.setObjectName("timeDomainPage")
+        time_lay = QVBoxLayout(self._time_page)
+        time_lay.setContentsMargins(0, 0, 0, 0)
+        time_lay.setSpacing(0)
+        self._time_toolbar = self._time_card.detach_toolbar(self._time_page)
+        time_lay.addWidget(self._time_toolbar)
+        self._time_split = QSplitter(Qt.Horizontal, self._time_page)
         self._time_split.setObjectName("timeDomainSplit")
         self._time_split.setChildrenCollapsible(False)
         self._time_split.addWidget(self._time_card)
+        time_lay.addWidget(self._time_split, stretch=1)
+        self._time_bottom_dock = QFrame(self._time_page)
+        self._time_bottom_dock.setObjectName("timeViewBottomDock")
+        self._time_bottom_dock.setAttribute(Qt.WA_StyledBackground, True)
+        dock_lay = QVBoxLayout(self._time_bottom_dock)
+        dock_lay.setContentsMargins(0, 0, 0, 0)
+        dock_lay.setSpacing(0)
+        self._time_hint_bar = self._time_card.detach_bottom_hint_bar(
+            self._time_bottom_dock
+        )
+        self._configure_time_hint_bar()
+        dock_lay.addWidget(self._time_hint_bar)
+        time_lay.addWidget(self._time_bottom_dock)
         self._secondary_card = None
         # Focus routing (P2 Task 9 Step 5): the focused time card receives
         # channel-check replots while side-by-side is active. Defaults to the
@@ -1394,14 +1479,24 @@ class ChartStack(QWidget):
             annotations=True,
             chart_mode='order',
         )
-        self.stack.addWidget(self._time_split)
+        self.stack.addWidget(self._time_page)
         self.stack.addWidget(self._fft_card)
         self.stack.addWidget(self._fft_time_card)
         self.stack.addWidget(self._order_card)
-        for card in (self._time_card, self._fft_card, self._fft_time_card, self._order_card):
+        for card in (self._fft_card, self._fft_time_card, self._order_card):
             card.copy_image_requested.connect(
                 lambda c=card: self._copy_card_image(c)
             )
+        # The time card's copy button lives on the shared toolbar; route it to
+        # the focused pane so 复制为图片 captures whichever pane is focused.
+        self._time_card.copy_image_requested.connect(
+            lambda: self._copy_card_image(self.focused_card())
+        )
+        # Shared-toolbar nav clicks (home/pan/zoom/back/forward/save) forward
+        # to the focused pane's own toolbar while side-by-side is active.
+        self._time_toolbar._action_delegate_provider = self._focused_nav_delegate
+        # 图表选项 on the shared toolbar opens for the focused pane's canvas.
+        self._time_card._options_canvas_provider = self.focused_canvas
         lay.addWidget(self.stack, stretch=1)
 
         # Stats strip retained for later re-enable, but hidden from the UI for now.
@@ -1415,14 +1510,23 @@ class ChartStack(QWidget):
         # the user can drag it elsewhere — see CursorPill.mark_user_placed.
         self._pill = CursorPill(self.stack)
         self._pill.setVisible(False)
-        self.canvas_time.cursor_info.connect(self._on_cursor_info)
-        self.canvas_time.dual_cursor_info.connect(self._on_dual_cursor_info)
+        # The single pill follows whichever pane last drove a cursor readout.
+        # Default to the primary card; updated per emit via _card_for_canvas.
+        self._active_cursor_card = self._time_card
+        # Pass the SOURCE canvas so the pill picks the right per-pane cursor
+        # mode (single/dual formatting) and anchors over the emitting pane.
+        self.canvas_time.cursor_info.connect(
+            lambda text: self._on_cursor_info(text, self.canvas_time)
+        )
+        self.canvas_time.dual_cursor_info.connect(
+            lambda text: self._on_dual_cursor_info(text, self.canvas_time)
+        )
         self.stack.currentChanged.connect(lambda _i: self._reposition_pill())
 
         # Relay time-card control signals up to MainWindow consumers.
-        self._time_card.plot_mode_changed.connect(self.plot_mode_changed)
+        self._time_card.plot_mode_changed.connect(self._on_shared_plot_mode_changed)
         self._time_card.cursor_mode_changed.connect(
-            self._on_time_cursor_mode_changed
+            self._on_shared_cursor_mode_changed
         )
         for mode, card in (
             ('fft', self._fft_card),
@@ -1437,6 +1541,25 @@ class ChartStack(QWidget):
         self.stats_strip.setVisible(
             _STATS_STRIP_ENABLED and self.current_mode() == 'time'
         )
+
+    def _configure_time_hint_bar(self):
+        self._time_hint_bar.setFixedHeight(20)
+        lay = self._time_hint_bar.layout()
+        while lay.count():
+            lay.takeAt(0)
+        lay.setContentsMargins(8, 1, 8, 1)
+        lay.setSpacing(0)
+        for label in (
+            self._time_card._hint_persistent,
+            self._time_card._hint_discovery,
+            self._time_card._hint_context,
+        ):
+            label.setAlignment(Qt.AlignCenter)
+        lay.addStretch(1)
+        lay.addWidget(self._time_card._hint_persistent, 0)
+        lay.addWidget(self._time_card._hint_discovery, 0)
+        lay.addWidget(self._time_card._hint_context, 0)
+        lay.addStretch(1)
 
     def count(self):
         return self.stack.count()
@@ -1472,6 +1595,94 @@ class ChartStack(QWidget):
         ``self.canvas_time`` keep the same target outside compare mode."""
         return self.focused_card().canvas
 
+    def _focused_nav_delegate(self):
+        """Toolbar a shared-toolbar nav click should act on, or None.
+
+        While side-by-side is active and the secondary pane is focused, return
+        the secondary card's own canvas-bound toolbar so home/pan/zoom/back/
+        forward/save operate on the secondary canvas with ITS view history and
+        mouse mode. Otherwise None ⇒ the shared (primary) toolbar handles it,
+        keeping non-split / primary-focused behaviour byte-identical."""
+        if (self.split_active()
+                and self._secondary_card is not None
+                and self._focused_card is self._secondary_card):
+            return self._secondary_card.toolbar
+        return None
+
+    def _sync_shared_nav_highlight(self):
+        """Repaint the shared toolbar's pan/zoom highlight to match the focused
+        pane's current mouse mode.
+
+        Cosmetic only: the shared toolbar object stays bound to the primary
+        canvas (its ``mode`` must keep driving the primary's replot mouse-mode
+        re-apply), so we only repaint its icon active-state. A later primary
+        replot can transiently re-assert the primary's icon; the next focus or
+        pan/zoom change corrects it."""
+        toolbar = getattr(self, '_time_toolbar', None)
+        if toolbar is None:
+            return
+        target = self.focused_card().toolbar
+        mode = str(getattr(target, 'mode', '')).lower()
+        key = 'pan' if 'pan' in mode else ('zoom' if 'zoom' in mode else '')
+        _apply_mdi_icons(toolbar, active_key=key)
+
+    def _on_secondary_nav_mode_changed(self, _mode):
+        """Secondary toolbar's pan/zoom toggled (via a forwarded shared-toolbar
+        click): mirror it onto the shared toolbar icons while it is focused."""
+        if self.split_active() and self._focused_card is self._secondary_card:
+            self._sync_shared_nav_highlight()
+
+    def _card_for_canvas(self, canvas):
+        """Owning time card for a cursor-emitting ``canvas`` (primary fallback)."""
+        if (canvas is not None
+                and self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            return self._secondary_card
+        return self._time_card
+
+    def _cursor_mode_for_canvas(self, canvas):
+        """Per-pane cursor mode ('off'/'single'/'dual') for the pill formatter.
+
+        Mirrors :meth:`plot_mode_for_canvas`: the readout layout depends on the
+        mode of the pane that emitted it, not always the primary's."""
+        if (canvas is not None
+                and self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            return self._secondary_card.cursor_mode()
+        return self._primary_cursor_mode
+
+    def _shared_time_controls_follow_secondary(self):
+        return (
+            self.split_active()
+            and self._secondary_card is not None
+            and self._focused_card is self._secondary_card
+        )
+
+    def _set_shared_plot_mode_silent(self, mode):
+        old = self._time_card.blockSignals(True)
+        try:
+            self._time_card.set_plot_mode(mode)
+        finally:
+            self._time_card.blockSignals(old)
+
+    def _set_shared_cursor_mode_silent(self, mode):
+        old = self._time_card.blockSignals(True)
+        try:
+            self._time_card.set_cursor_mode(mode)
+        finally:
+            self._time_card.blockSignals(old)
+
+    def _sync_shared_time_controls_to_focus(self):
+        """Reflect the focused pane's state on the shared time toolbar."""
+        if self._shared_time_controls_follow_secondary():
+            plot_mode = self._secondary_card.plot_mode()
+            cursor_mode = self._secondary_card.cursor_mode()
+        else:
+            plot_mode = self._primary_plot_mode
+            cursor_mode = self._primary_cursor_mode
+        self._set_shared_plot_mode_silent(plot_mode)
+        self._set_shared_cursor_mode_silent(cursor_mode)
+
     def set_focused_card(self, card):
         """Make ``card`` the focused time card and repaint the focus border.
 
@@ -1488,10 +1699,13 @@ class ChartStack(QWidget):
             # Still ensure the border reflects current state (e.g. just after
             # enter_split seeded the primary as focused).
             self._refresh_focus_borders()
+            self._sync_shared_time_controls_to_focus()
+            self._sync_shared_nav_highlight()
             return
         self._focused_card = card
         self._refresh_focus_borders()
         self._sync_secondary_controls_to_focus()
+        self._sync_shared_nav_highlight()
         self.focus_changed.emit(card is self._secondary_card)
 
     def _refresh_focus_borders(self):
@@ -1575,6 +1789,8 @@ class ChartStack(QWidget):
         if self._secondary_card is None:
             canvas = TimeDomainCanvasPG(self)
             self._secondary_card = TimeChartCard(canvas)
+            self._secondary_card.detach_toolbar(self._secondary_card).hide()
+            self._secondary_card.detach_bottom_hint_bar(self._secondary_card).hide()
             self._set_secondary_time_controls_enabled(False)
             self._secondary_card.copy_image_requested.connect(
                 lambda: self._copy_card_image(self._secondary_card)
@@ -1591,6 +1807,23 @@ class ChartStack(QWidget):
             self._secondary_card.cursor_mode_changed.connect(
                 self._on_secondary_cursor_mode_changed
             )
+            # The single floating pill follows focus: feed the secondary
+            # canvas's readouts into the SAME pill handlers as the primary so
+            # hovering the compare pane shows its data (was hard-wired to the
+            # primary only). Source canvas lets the handler pick the per-pane
+            # cursor mode + anchor the pill over the emitting pane.
+            canvas.cursor_info.connect(
+                lambda text, c=canvas: self._on_cursor_info(text, c)
+            )
+            canvas.dual_cursor_info.connect(
+                lambda text, c=canvas: self._on_dual_cursor_info(text, c)
+            )
+            # Mirror the secondary's pan/zoom state onto the shared toolbar
+            # icons when a forwarded click flips it while the secondary is
+            # focused.
+            self._secondary_card.toolbar.mouse_mode_changed.connect(
+                self._on_secondary_nav_mode_changed
+            )
             self._time_split.addWidget(self._secondary_card)
             self._install_focus_filter(self._secondary_card)
         self._secondary_card.setVisible(True)
@@ -1602,6 +1835,7 @@ class ChartStack(QWidget):
         self._focused_card = self._time_card
         self._refresh_focus_borders()
         self._sync_secondary_controls_to_focus()
+        self._sync_shared_nav_highlight()
 
     def _on_secondary_plot_mode_changed(self, mode):
         """Replot the secondary canvas in the new layout (subplot↔overlay).
@@ -1638,6 +1872,7 @@ class ChartStack(QWidget):
         # Restore the primary card's controls (single live group again) and
         # disable the now-hidden secondary's.
         self._sync_secondary_controls_to_focus()
+        self._sync_shared_nav_highlight()
 
     def attach_view_tabbar(self, manager):
         from .view_tabbar import ViewTabBar
@@ -1647,11 +1882,19 @@ class ChartStack(QWidget):
             existing.setVisible(self.current_mode() == 'time')
             return existing
 
-        bar = ViewTabBar(manager, self._time_card)
-        self._time_card.mount_view_tabbar(bar)
+        bar = ViewTabBar(manager, self._time_bottom_dock)
+        self._time_bottom_dock.layout().insertWidget(0, bar)
         self._view_tabbar = bar
         bar.setVisible(self.current_mode() == 'time')
         return bar
+
+    def take_time_hint_bar(self, parent):
+        """Move the shared time-domain hint bar to another container."""
+        layout = self._time_bottom_dock.layout()
+        if layout is not None and layout.indexOf(self._time_hint_bar) >= 0:
+            layout.removeWidget(self._time_hint_bar)
+        self._time_hint_bar.setParent(parent)
+        return self._time_hint_bar
 
     def set_mode(self, mode):
         idx = _MODE_TO_INDEX[mode]
@@ -1662,6 +1905,7 @@ class ChartStack(QWidget):
         bar = getattr(self, '_view_tabbar', None)
         if bar is not None:
             bar.setVisible(mode == 'time')
+        self._time_bottom_dock.setVisible(mode == 'time')
         self.mode_changed.emit(mode)
 
     def current_mode(self):
@@ -1669,10 +1913,20 @@ class ChartStack(QWidget):
 
     # ----- plot-mode / cursor-mode passthroughs -----
     def plot_mode(self):
-        return self._time_card.plot_mode()
+        return self._primary_plot_mode
 
     def set_plot_mode(self, mode):
-        self._time_card.set_plot_mode(mode)
+        if mode not in ('subplot', 'overlay'):
+            return
+        old_primary = self._primary_plot_mode
+        if old_primary == mode:
+            if not self._shared_time_controls_follow_secondary():
+                self._set_shared_plot_mode_silent(mode)
+            return
+        self._primary_plot_mode = mode
+        if not self._shared_time_controls_follow_secondary():
+            self._set_shared_plot_mode_silent(mode)
+        self.plot_mode_changed.emit(mode)
 
     def plot_mode_for_canvas(self, canvas):
         """Return the plot mode ('subplot'/'overlay') of the time card that
@@ -1685,13 +1939,63 @@ class ChartStack(QWidget):
         if (self._secondary_card is not None
                 and canvas is self._secondary_card.canvas):
             return self._secondary_card.plot_mode()
-        return self._time_card.plot_mode()
+        return self._primary_plot_mode
 
     def cursor_mode(self):
-        return self._time_card.cursor_mode()
+        return self._primary_cursor_mode
 
     def set_cursor_mode(self, mode):
-        self._time_card.set_cursor_mode(mode)
+        if mode not in ('off', 'single', 'dual'):
+            return
+        old_primary = self._primary_cursor_mode
+        if old_primary == mode:
+            if not self._shared_time_controls_follow_secondary():
+                self._set_shared_cursor_mode_silent(mode)
+            return
+        self._primary_cursor_mode = mode
+        if not self._shared_time_controls_follow_secondary():
+            self._set_shared_cursor_mode_silent(mode)
+        self._on_time_cursor_mode_changed(mode)
+
+    def _set_secondary_plot_mode_silent(self, mode):
+        if self._secondary_card is None:
+            return
+        old = self._secondary_card.blockSignals(True)
+        try:
+            self._secondary_card.set_plot_mode(mode)
+        finally:
+            self._secondary_card.blockSignals(old)
+
+    def _set_secondary_cursor_mode_silent(self, mode):
+        if self._secondary_card is None:
+            return
+        old = self._secondary_card.blockSignals(True)
+        try:
+            self._secondary_card.set_cursor_mode(mode)
+        finally:
+            self._secondary_card.blockSignals(old)
+
+    def _on_shared_plot_mode_changed(self, mode):
+        if (
+            self.split_active()
+            and self._secondary_card is not None
+            and self._focused_card is self._secondary_card
+        ):
+            self._set_secondary_plot_mode_silent(mode)
+        else:
+            self._primary_plot_mode = mode
+        self.plot_mode_changed.emit(mode)
+
+    def _on_shared_cursor_mode_changed(self, mode):
+        if (
+            self.split_active()
+            and self._secondary_card is not None
+            and self._focused_card is self._secondary_card
+        ):
+            self._set_secondary_cursor_mode_silent(mode)
+        else:
+            self._primary_cursor_mode = mode
+        self._on_time_cursor_mode_changed(mode)
 
     def _on_time_cursor_mode_changed(self, mode):
         if mode == 'off':
@@ -1744,22 +2048,18 @@ class ChartStack(QWidget):
             button.setEnabled(enabled)
 
     def _sync_secondary_controls_to_focus(self):
-        """Enable the secondary card's controls only while it is focused.
+        """Keep the visible shared time controls live.
 
-        Also keeps the primary card's controls enabled whenever split is
-        inactive or the primary is focused — exactly one pane's segmented
-        control group is live at a time so the active target is unambiguous."""
-        secondary_focused = (
-            self.split_active()
-            and self._secondary_card is not None
-            and self._focused_card is self._secondary_card
-        )
-        self._set_secondary_time_controls_enabled(secondary_focused)
-        # Primary controls are live whenever the secondary's are not.
+        The secondary card keeps its own state object, but its toolbar is not
+        part of the split UI. The primary card's detached toolbar is the shared
+        toolbar and routes actions to the focused pane via MainWindow.
+        """
+        self._set_secondary_time_controls_enabled(False)
         for button in (self._time_card.btn_subplot, self._time_card.btn_overlay):
-            button.setEnabled(not secondary_focused)
+            button.setEnabled(True)
         for button in self._time_card._cursor_buttons.values():
-            button.setEnabled(not secondary_focused)
+            button.setEnabled(True)
+        self._sync_shared_time_controls_to_focus()
 
     def _copy_card_image(self, card):
         """Capture the card's canvas for MainWindow to publish. For the
@@ -1781,8 +2081,10 @@ class ChartStack(QWidget):
         canvas_h = max(1, int(canvas.height()))
         scale_x = max(1.0, float(pix.width()) / float(canvas_w))
         scale_y = max(1.0, float(pix.height()) / float(canvas_h))
-        if (card is self._time_card
-                and self.current_mode() == 'time'
+        # Composite the floating pill onto whichever time pane is being copied
+        # (primary or the focused secondary); the overlap check below gates it
+        # to the case where the pill actually sits over THIS canvas.
+        if (self.current_mode() == 'time'
                 and self._pill.isVisible()):
             canvas_origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
             pill_geo = self._pill.geometry()
@@ -1835,16 +2137,21 @@ class ChartStack(QWidget):
             painter.end()
         return QPixmap.fromImage(img)
 
-    def _on_cursor_info(self, text):
-        primary, detail = self._format_cursor_info_for_pill(text)
+    def _on_cursor_info(self, text, source=None):
+        mode = self._cursor_mode_for_canvas(source)
+        if source is not None:
+            self._active_cursor_card = self._card_for_canvas(source)
+        primary, detail = self._format_cursor_info_for_pill(text, mode)
         self._pill.set_primary(primary)
-        if self.cursor_mode() == 'single':
+        if mode == 'single':
             self._pill.set_detail_html(detail)
         self._pill.setVisible(self.current_mode() == 'time')
         self._reposition_pill()
 
-    def _format_cursor_info_for_pill(self, text):
-        if self.cursor_mode() != 'single' or _CURSOR_HTML_SEP not in (text or ''):
+    def _format_cursor_info_for_pill(self, text, mode=None):
+        if mode is None:
+            mode = self.cursor_mode()
+        if mode != 'single' or _CURSOR_HTML_SEP not in (text or ''):
             return text, ''
         parts = [part for part in text.split(_CURSOR_HTML_SEP) if part]
         if len(parts) <= 1:
@@ -1860,7 +2167,9 @@ class ChartStack(QWidget):
         rows.append('</table>')
         return parts[0], ''.join(rows)
 
-    def _on_dual_cursor_info(self, text):
+    def _on_dual_cursor_info(self, text, source=None):
+        if source is not None:
+            self._active_cursor_card = self._card_for_canvas(source)
         self._pill.set_detail_html(text)
         if self.current_mode() == 'time' and (text or self._pill.primary_text()):
             self._pill.setVisible(True)
@@ -1878,14 +2187,21 @@ class ChartStack(QWidget):
             self._pill.move(x, y)
         else:
             # Default anchor: top-right of the canvas area (under the toolbar)
-            # with an 8 px inset so the pill never covers toolbar buttons.
-            card = self._time_card
-            w = card.width() if card is not None else self.stack.width()
-            y_top = 8
-            if card is not None and hasattr(card, 'canvas'):
-                origin = card.canvas.mapTo(self.stack, card.canvas.rect().topLeft())
-                y_top = origin.y() + 8
-            self._pill.move(max(w - self._pill.width() - 8, 0), y_top)
+            # with an 8 px inset so the pill never covers toolbar buttons. In
+            # split mode anchor over the pane that last drove the readout
+            # (_active_cursor_card) so the secondary pane's pill sits over the
+            # right canvas, not floated above the primary.
+            card = getattr(self, '_active_cursor_card', None) or self._time_card
+            canvas = getattr(card, 'canvas', None)
+            if canvas is not None:
+                origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
+                x_right = origin.x() + canvas.width()
+                x = min(x_right - self._pill.width() - 8,
+                        self.stack.width() - self._pill.width())
+                self._pill.move(max(x, 0), origin.y() + 8)
+            else:
+                w = self.stack.width()
+                self._pill.move(max(w - self._pill.width() - 8, 0), 8)
         self._pill.raise_()
 
     def resizeEvent(self, event):

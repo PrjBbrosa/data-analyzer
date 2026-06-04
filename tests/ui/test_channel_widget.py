@@ -1,5 +1,6 @@
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QPushButton
 
 from mf4_analyzer.ui.widgets import MultiFileChannelWidget
@@ -118,6 +119,44 @@ def test_checkbox_hit_tolerance_band_toggles_but_name_does_not(qapp, qtbot):
     assert channel_item.checkState(0) == Qt.Checked, (
         "clicking the channel name must leave the check state unchanged"
     )
+
+
+def test_checkbox_double_click_event_is_consumed_after_row_selection(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _FakeFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    tree = widget.tree
+    channel_item = widget._file_items["file-a"].child(0)
+    tree.scrollToItem(channel_item)
+    QCoreApplication.processEvents()
+
+    row = tree.visualItemRect(channel_item)
+    name_pos = row.center()
+    QTest.mouseClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, name_pos)
+    QCoreApplication.processEvents()
+    assert tree.currentItem() is channel_item
+
+    index = tree.indexFromItem(channel_item, 0)
+    hit = tree._check_hit_rect(channel_item, index)
+    assert hit is not None
+    assert channel_item.checkState(0) == Qt.Unchecked
+
+    double_clicked = []
+    tree.itemDoubleClicked.connect(
+        lambda item, column: double_clicked.append((item, column))
+    )
+
+    QTest.mouseDClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, hit.center())
+    QCoreApplication.processEvents()
+
+    assert channel_item.checkState(0) == Qt.Checked
+    assert double_clicked == []
 
 
 def test_edit_channels_button_enables_with_file_and_emits(qapp, qtbot):

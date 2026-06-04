@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Time View 底部区域方案</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #6b7280;
+      --line: #cfd7e6;
+      --panel: #ffffff;
+      --bg: #eef3f8;
+      --plot: #fbfcfe;
+      --blue: #2563eb;
+      --green: #2da44e;
+      --orange: #e8590c;
+      --shadow: 0 18px 44px rgba(27, 39, 63, 0.14);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      background:
+        linear-gradient(180deg, #f7f9fc 0, #eef3f8 54%, #e9eef5 100%);
+      color: var(--ink);
+    }
+
+    main {
+      width: min(1500px, calc(100vw - 40px));
+      margin: 28px auto 40px;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 22px;
+    }
+
+    h1, h2, h3, p { margin: 0; }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .badge {
+      flex: 0 0 auto;
+      padding: 7px 11px;
+      border: 1px solid #b9c5d7;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.72);
+      color: #334155;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .section {
+      margin-top: 22px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .section-title h2 {
+      font-size: 16px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .section-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .grid.tabs {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .option-card {
+      border: 1px solid #d8e0ec;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.82);
+      box-shadow: 0 1px 0 rgba(255,255,255,0.9) inset;
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .option-card:hover {
+      transform: translateY(-2px);
+      border-color: #96afd6;
+      box-shadow: var(--shadow);
+    }
+
+    .option-card.selected {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.16), var(--shadow);
+    }
+
+    .card-body {
+      padding: 12px 13px 14px;
+      border-top: 1px solid #e3e9f3;
+      background: #fff;
+    }
+
+    .card-body h3 {
+      font-size: 14px;
+      font-weight: 740;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .card-body h3 small {
+      color: var(--blue);
+      font-size: 11px;
+      font-weight: 760;
+    }
+
+    .card-body p {
+      margin-top: 6px;
+      color: #647084;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .app {
+      height: 300px;
+      margin: 12px;
+      border: 1px solid #b9c5d7;
+      border-radius: 7px;
+      overflow: hidden;
+      background: var(--panel);
+      display: grid;
+      grid-template-rows: 31px 1fr 22px 19px;
+      box-shadow: 0 8px 18px rgba(30, 41, 59, 0.09);
+    }
+
+    .app.alt-overlay {
+      grid-template-rows: 31px 1fr 26px;
+    }
+
+    .app.single-row {
+      grid-template-rows: 31px 1fr 28px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 8px;
+      border-bottom: 1px solid #cfd7e6;
+      background: #f8fafc;
+    }
+
+    .tool {
+      width: 22px;
+      height: 19px;
+      border: 1px solid #c7d0df;
+      border-radius: 4px;
+      background: linear-gradient(#fff, #edf2f8);
+    }
+
+    .tool.wide { width: 58px; }
+    .tool.blue { background: #e8f0ff; border-color: #9bb7e9; }
+    .toolbar-label { margin-left: auto; color: #64748b; font-size: 10px; }
+
+    .canvas-zone {
+      min-height: 0;
+      background: #f4f7fb;
+      display: grid;
+      gap: 0;
+      position: relative;
+    }
+
+    .canvas-zone.split {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .pane {
+      min-width: 0;
+      border-right: 1px solid #c7d2e3;
+      display: grid;
+      grid-template-rows: 1fr;
+      background: var(--plot);
+      position: relative;
+    }
+
+    .pane:last-child { border-right: 0; }
+
+    .pane.with-toolbar {
+      grid-template-rows: 27px 1fr;
+    }
+
+    .mini-toolbar {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      padding: 0 6px;
+      border-bottom: 1px solid #d7dfeb;
+      background: #f8fafc;
+    }
+
+    .mini-toolbar .tool {
+      width: 18px;
+      height: 16px;
+      border-radius: 3px;
+    }
+
+    .plot {
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(148,163,184,0.16) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(148,163,184,0.16) 1px, transparent 1px),
+        #fbfcfe;
+      background-size: 48px 38px;
+    }
+
+    .plot::before,
+    .plot::after {
+      content: "";
+      position: absolute;
+      left: 28px;
+      right: 16px;
+      height: 2px;
+      border-radius: 999px;
+      transform-origin: left center;
+    }
+
+    .plot::before {
+      top: 42%;
+      background: var(--blue);
+      transform: rotate(-3deg);
+      box-shadow:
+        44px -22px 0 var(--blue),
+        96px 16px 0 var(--blue),
+        148px -12px 0 var(--blue);
+      opacity: 0.82;
+    }
+
+    .plot::after {
+      top: 62%;
+      background: var(--orange);
+      transform: rotate(2deg);
+      box-shadow:
+        38px 18px 0 var(--orange),
+        110px -14px 0 var(--orange),
+        176px 8px 0 var(--orange);
+      opacity: 0.82;
+    }
+
+    .axis {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      right: 0;
+      height: 19px;
+      border-top: 1px solid #ccd6e5;
+      background: rgba(255,255,255,0.72);
+      color: #8490a3;
+      font-size: 10px;
+      text-align: center;
+      line-height: 18px;
+    }
+
+    .focus-ring {
+      position: absolute;
+      inset: 4px;
+      border: 3px solid #2563eb;
+      pointer-events: none;
+      opacity: 0.9;
+    }
+
+    .tab-rail {
+      display: flex;
+      align-items: end;
+      gap: 5px;
+      padding: 0 8px;
+      border-top: 1px solid #cfd7e6;
+      background: #f8fafc;
+      overflow: hidden;
+    }
+
+    .hint-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+      border-top: 1px solid #e1e7f0;
+      color: #5b6679;
+      background: #fbfcff;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .hint-row b {
+      color: #2563eb;
+      font-weight: 760;
+      margin: 0 7px;
+    }
+
+    .floating-hint {
+      position: absolute;
+      left: 50%;
+      bottom: 8px;
+      transform: translateX(-50%);
+      z-index: 2;
+      padding: 4px 10px;
+      border: 1px solid rgba(148,163,184,0.5);
+      border-radius: 5px;
+      background: rgba(255,255,255,0.9);
+      color: #5b6679;
+      font-size: 10px;
+      box-shadow: 0 8px 24px rgba(30,41,59,0.12);
+      white-space: nowrap;
+    }
+
+    .sheet-tab {
+      height: 21px;
+      min-width: 58px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #c7d2e3;
+      border-bottom-color: #aebbd0;
+      background: linear-gradient(#fff, #ecf1f7);
+      color: #233044;
+      font-size: 10px;
+      font-weight: 650;
+      border-radius: 5px 5px 0 0;
+    }
+
+    .sheet-tab.active {
+      height: 24px;
+      background: #fff;
+      border-color: #91a8ca;
+      border-bottom-color: #fff;
+      color: #0f172a;
+    }
+
+    .dot {
+      width: 8px;
+      height: 5px;
+      border-radius: 99px;
+      background: var(--blue);
+    }
+
+    .dot.orange { background: var(--orange); }
+    .dot.green { background: var(--green); }
+
+    .plus {
+      width: 23px;
+      height: 21px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid #cbd5e1;
+      border-radius: 5px 5px 0 0;
+      background: #fff;
+      color: #1e293b;
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .tab-demo {
+      height: 98px;
+      margin: 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      overflow: hidden;
+      background: #f5f8fc;
+      display: grid;
+      grid-template-rows: 1fr 27px;
+    }
+
+    .tab-demo .plot {
+      background-size: 42px 30px;
+    }
+
+    .style-quiet .sheet-tab {
+      height: 24px;
+      border-radius: 3px 3px 0 0;
+      background: #f1f5f9;
+      border-color: #d5dde9;
+      border-bottom-color: #c0cad9;
+      color: #475569;
+    }
+
+    .style-quiet .sheet-tab.active {
+      background: #fff;
+      border-top: 3px solid var(--blue);
+      color: #0f172a;
+    }
+
+    .style-workbench .tab-rail {
+      align-items: center;
+      gap: 4px;
+      padding: 0 9px;
+    }
+
+    .style-workbench .sheet-tab {
+      height: 20px;
+      border-radius: 4px;
+      border-color: transparent;
+      background: transparent;
+      color: #475569;
+    }
+
+    .style-workbench .sheet-tab.active {
+      height: 22px;
+      background: #e8f0ff;
+      border-color: #a7bfea;
+      box-shadow: inset 0 -2px 0 var(--blue);
+      color: #173262;
+    }
+
+    .style-track .tab-rail {
+      align-items: center;
+      gap: 1px;
+      padding: 0 8px;
+      background: #edf2f7;
+    }
+
+    .style-track .sheet-tab {
+      height: 22px;
+      border-radius: 0;
+      border-color: #c4cfdd;
+      background: #fff;
+      color: #334155;
+      margin-right: -1px;
+    }
+
+    .style-track .sheet-tab.active {
+      height: 24px;
+      background: #1f2937;
+      border-color: #1f2937;
+      color: #fff;
+    }
+
+    .style-chip .tab-rail {
+      align-items: center;
+      gap: 7px;
+      padding: 0 10px;
+      background: #fbfcff;
+    }
+
+    .style-chip .sheet-tab {
+      height: 21px;
+      border: 0;
+      border-radius: 99px;
+      background: #eef2f7;
+      color: #334155;
+    }
+
+    .style-chip .sheet-tab.active {
+      height: 23px;
+      background: #2563eb;
+      color: #fff;
+      box-shadow: 0 5px 13px rgba(37,99,235,0.24);
+    }
+
+    .note {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid #d4dcea;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.74);
+      color: #4b5563;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    @media (max-width: 1100px) {
+      .grid, .grid.tabs { grid-template-columns: 1fr; }
+      header { display: block; }
+      .badge { display: inline-block; margin-top: 12px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>时域 View 底部区域优化方案</h1>
+      <p class="subtitle">目标：顶部工具栏不随 view 分隔；并排时每个 view 只保留画图区域；View 标签横贯整条底部并下移到原提示区；提示文字居中靠底。</p>
+    </div>
+    <div class="badge">点击卡片可标记偏好</div>
+  </header>
+
+  <section class="section">
+    <div class="section-title">
+      <h2>整体布局</h2>
+      <span>先选结构，再选标签样式</span>
+    </div>
+    <div class="grid">
+      <article class="option-card selected" onclick="selectCard(this)">
+        <div class="app">
+          <div class="toolbar">
+            <div class="tool wide blue"></div><div class="tool"></div><div class="tool"></div><div class="tool"></div>
+            <div class="toolbar-label">共享工具栏</div>
+          </div>
+          <div class="canvas-zone split">
+            <div class="pane"><div class="plot"><div class="axis">Time (s)</div><div class="focus-ring"></div></div></div>
+            <div class="pane"><div class="plot"><div class="axis">Time (s)</div></div></div>
+          </div>
+          <div class="tab-rail">
+            <div class="sheet-tab active"><span class="dot"></span>View 1</div>
+            <div class="sheet-tab"><span class="dot orange"></span>View 2</div>
+            <div class="sheet-tab"><span class="dot green"></span>View 3</div>
+            <div class="plus">+</div>
+          </div>
+          <div class="hint-row">Ctrl + 滚轮 缩放 X <b>·</b> Shift + 滚轮 缩放 Y <b>·</b> 悬停按钮查看说明</div>
+        </div>
+        <div class="card-body">
+          <h3>A. 底部双层 Dock <small>推荐</small></h3>
+          <p>标签占原提示栏位置，提示文字下沉为居中微状态栏。左右画布从同一高度开始和结束，顶部工具栏整条共享。</p>
+        </div>
+      </article>
+
+      <article class="option-card" onclick="selectCard(this)">
+        <div class="app alt-overlay">
+          <div class="toolbar">
+            <div class="tool wide blue"></div><div class="tool"></div><div class="tool"></div><div class="tool"></div>
+            <div class="toolbar-label">共享工具栏</div>
+          </div>
+          <div class="canvas-zone split">
+            <div class="pane"><div class="plot"><div class="axis">Time (s)</div><div class="focus-ring"></div></div></div>
+            <div class="pane"><div class="plot"><div class="axis">Time (s)</div></div></div>
+            <div class="floating-hint">Ctrl + 滚轮缩放 X · Shift + 滚轮缩放 Y</div>
+          </div>
+          <div class="tab-rail">
+            <div class="sheet-tab active"><span class="dot"></span>View 1</div>
+            <div class="sheet-tab"><span class="dot orange"></span>View 2</div>
+            <div class="sheet-tab"><span class="dot green"></span>View 3</div>
+            <div class="plus">+</div>
+          </div>
+        </div>
+        <div class="card-body">
+          <h3>B. 画布内悬浮提示</h3>
+          <p>省高度，标签仍在最底部；提示居中浮在画布底部。缺点是低矮窗口或曲线贴底时可能遮挡图面。</p>
+        </div>
+      </article>
+
+      <article class="option-card" onclick="selectCard(this)">
+        <div class="app single-row">
+          <div class="toolbar">
+            <div class="tool wide blue"></div><div class="tool"></div><div class="tool"></div><div class="tool"></div>
+            <div class="toolbar-label">共享工具栏</div>
+          </div>
+          <div class="canvas-zone split">
+            <div class="pane"><div class="plot"><div class="axis">Time (s)</div><div class="focus-ring"></div></div></div>
+            <div class="pane"><div class="plot"><div class="axis">Time (s)</div></div></div>
+          </div>
+          <div class="tab-rail">
+            <div class="sheet-tab active"><span class="dot"></span>View 1</div>
+            <div class="sheet-tab"><span class="dot orange"></span>View 2</div>
+            <div class="sheet-tab"><span class="dot green"></span>View 3</div>
+            <div class="plus">+</div>
+            <div style="margin-left:auto;color:#5b6679;font-size:10px;white-space:nowrap;">Ctrl + 滚轮 X · Shift + 滚轮 Y</div>
+          </div>
+        </div>
+        <div class="card-body">
+          <h3>C. 单行混合底栏</h3>
+          <p>标签和提示在同一行。高度最低，但标签多时右侧提示会被压缩，和“提示字居中”不完全一致。</p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-title">
+      <h2>View 标签样式</h2>
+      <span>都可以套到方案 A 的底部标签轨道上</span>
+    </div>
+    <div class="grid tabs">
+      <article class="option-card" onclick="selectCard(this)">
+        <div class="tab-demo style-quiet">
+          <div class="plot"><div class="axis">Time (s)</div></div>
+          <div class="tab-rail">
+            <div class="sheet-tab active"><span class="dot"></span>View 1</div>
+            <div class="sheet-tab"><span class="dot orange"></span>View 2</div>
+            <div class="sheet-tab"><span class="dot green"></span>View 3</div>
+            <div class="plus">+</div>
+          </div>
+        </div>
+        <div class="card-body">
+          <h3>1. Quiet Sheet</h3>
+          <p>接近 Excel，但减少圆角和阴影；激活项用顶部色条，适合工具型软件。</p>
+        </div>
+      </article>
+
+      <article class="option-card selected" onclick="selectCard(this)">
+        <div class="tab-demo style-workbench">
+          <div class="plot"><div class="axis">Time (s)</div></div>
+          <div class="tab-rail">
+            <div class="sheet-tab active"><span class="dot"></span>View 1</div>
+            <div class="sheet-tab"><span class="dot orange"></span>View 2</div>
+            <div class="sheet-tab"><span class="dot green"></span>View 3</div>
+            <div class="plus">+</div>
+          </div>
+        </div>
+        <div class="card-body">
+          <h3>2. Workbench Rail <small>推荐</small></h3>
+          <p>更像专业软件底部工作区。未激活项弱化，激活项用浅蓝底和下划线，视觉负担小。</p>
+        </div>
+      </article>
+
+      <article class="option-card" onclick="selectCard(this)">
+        <div class="tab-demo style-track">
+          <div class="plot"><div class="axis">Time (s)</div></div>
+          <div class="tab-rail">
+            <div class="sheet-tab active"><span class="dot"></span>View 1</div>
+            <div class="sheet-tab"><span class="dot orange"></span>View 2</div>
+            <div class="sheet-tab"><span class="dot green"></span>View 3</div>
+            <div class="plus">+</div>
+          </div>
+        </div>
+        <div class="card-body">
+          <h3>3. Dark Active Track</h3>
+          <p>当前 view 最醒目，适合强调聚焦；但黑色激活块更重，和现有浅色 UI 对比偏强。</p>
+        </div>
+      </article>
+
+      <article class="option-card" onclick="selectCard(this)">
+        <div class="tab-demo style-chip">
+          <div class="plot"><div class="axis">Time (s)</div></div>
+          <div class="tab-rail">
+            <div class="sheet-tab active"><span class="dot"></span>View 1</div>
+            <div class="sheet-tab"><span class="dot orange"></span>View 2</div>
+            <div class="sheet-tab"><span class="dot green"></span>View 3</div>
+            <div class="plus">+</div>
+          </div>
+        </div>
+        <div class="card-body">
+          <h3>4. Compact Chips</h3>
+          <p>最轻、现代感强；但不太像“工作表标签”，拖动排序和右键菜单的可发现性弱一点。</p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <div class="note">
+    我的建议是结构选 A，样式选 2。实现上把 toolbar、ViewTabBar、hint bar 都提升到 ChartStack 的时域页面级别，splitter 内只放两个 canvas pane；这样并排时左右图面高度一致，标签也不会因为挂在左侧 card 里导致右侧短一截。
+  </div>
+</main>
+
+<script>
+  function selectCard(card) {
+    const section = card.closest('.section');
+    for (const item of section.querySelectorAll('.option-card')) {
+      item.classList.remove('selected');
+    }
+    card.classList.add('selected');
+  }
+</script>
+</body>
+</html>

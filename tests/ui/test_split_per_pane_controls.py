@@ -1,10 +1,11 @@
-"""P2 Task 9 1a + 1b: per-pane cursor / plot-mode routing and control enabling.
+"""P2 Task 9 1a + 1b: focused cursor / plot-mode routing and shared controls.
 
 Covers:
 - _on_cursor_mode_changed routes the cursor toggle to ChartStack.focused_canvas()
   (primary outside split; secondary when the secondary card is focused).
-- The secondary (compare) card's own 分屏/叠加/游标 controls are enabled only while
-  it is focused and act on the SECONDARY canvas, leaving the primary untouched.
+- The visible shared 分屏/叠加/游标 controls stay enabled while either pane is
+  focused; the secondary card's internal controls remain disabled because its
+  toolbar is not part of the split UI.
 - Per-pane plot mode: plot_mode_for_canvas() resolves the layout from the card
   owning the target canvas.
 
@@ -97,7 +98,7 @@ def test_secondary_controls_disabled_when_primary_focused(qtbot, qapp, loaded_cs
         assert b.isEnabled() is True
 
 
-def test_focusing_secondary_enables_its_controls_and_disables_primary(
+def test_focusing_secondary_keeps_shared_controls_enabled_and_secondary_disabled(
     qtbot, qapp, loaded_csv
 ):
     w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
@@ -106,11 +107,12 @@ def test_focusing_secondary_enables_its_controls_and_disables_primary(
     _click_card(qapp, cs._secondary_card)
 
     for b in _control_buttons(cs._secondary_card):
-        assert b.isEnabled() is True
-    for b in _control_buttons(cs._time_card):
         assert b.isEnabled() is False
+    for b in _control_buttons(cs._time_card):
+        assert b.isEnabled() is True
 
-    # Click back to primary: enable flips back.
+    # Click back to primary: shared controls remain live and secondary stays
+    # disabled because the secondary toolbar is not visible UI.
     _click_card(qapp, cs._time_card)
     for b in _control_buttons(cs._secondary_card):
         assert b.isEnabled() is False
@@ -123,7 +125,8 @@ def test_exit_split_restores_primary_controls(qtbot, qapp, loaded_csv):
     cs = w.chart_stack
     _enter_split(w, qapp)
     _click_card(qapp, cs._secondary_card)
-    assert cs._secondary_card.btn_subplot.isEnabled() is True
+    assert cs._time_card.btn_subplot.isEnabled() is True
+    assert cs._secondary_card.btn_subplot.isEnabled() is False
 
     w.view_manager.set_split(None)
     qapp.processEvents()
@@ -179,3 +182,194 @@ def test_secondary_plot_mode_toggle_relayouts_secondary_only(
     qapp.processEvents()
     assert cs.secondary_canvas()._overlay_mode is False
     assert cs.canvas_time._overlay_mode == primary_overlay_before
+
+
+def test_shared_plot_mode_control_targets_focused_secondary(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+
+    _set_checked(w, "speed", "torque")
+    w._ch_changed()
+    qapp.processEvents()
+    assert _has_channel(cs.secondary_canvas(), "speed")
+    assert _has_channel(cs.secondary_canvas(), "torque")
+
+    primary_overlay_before = cs.canvas_time._overlay_mode
+
+    cs._time_card.set_plot_mode("overlay")
+    qapp.processEvents()
+
+    assert cs._secondary_card.plot_mode() == "overlay"
+    assert cs.secondary_canvas()._overlay_mode is True
+    assert cs.canvas_time._overlay_mode == primary_overlay_before
+
+
+def test_programmatic_primary_plot_mode_does_not_rewrite_focused_secondary(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+
+    cs._secondary_card.set_plot_mode("overlay")
+    qapp.processEvents()
+    _click_card(qapp, cs._time_card)
+    _click_card(qapp, cs._secondary_card)
+    assert cs._time_card.plot_mode() == "overlay"
+    assert cs._secondary_card.plot_mode() == "overlay"
+
+    old = cs.blockSignals(True)
+    try:
+        cs.set_plot_mode("subplot")
+    finally:
+        cs.blockSignals(old)
+    qapp.processEvents()
+
+    assert cs.plot_mode() == "subplot"
+    assert cs._secondary_card.plot_mode() == "overlay"
+    assert cs._time_card.plot_mode() == "overlay"
+
+
+def test_programmatic_primary_cursor_mode_does_not_rewrite_focused_secondary(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+    cs._secondary_card.set_cursor_mode("dual")
+    qapp.processEvents()
+    _click_card(qapp, cs._time_card)
+    _click_card(qapp, cs._secondary_card)
+    assert cs._time_card.cursor_mode() == "dual"
+    assert cs._secondary_card.cursor_mode() == "dual"
+
+    old = cs.blockSignals(True)
+    try:
+        cs.set_cursor_mode("off")
+    finally:
+        cs.blockSignals(old)
+    qapp.processEvents()
+
+    assert cs.cursor_mode() == "off"
+    assert cs._secondary_card.cursor_mode() == "dual"
+    assert cs._time_card.cursor_mode() == "dual"
+    assert cs.secondary_canvas()._cursor_visible is True
+    assert cs.secondary_canvas()._dual is True
+
+
+# ---------------------------------------------------------------------------
+# Follow-focus cursor pill: the secondary pane's readout reaches the shared
+# pill (previously wired to the primary canvas only).
+# ---------------------------------------------------------------------------
+
+def test_secondary_canvas_cursor_readout_reaches_shared_pill(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+
+    # A readout emitted by the SECONDARY canvas now drives the single pill and
+    # anchors it over the secondary pane.
+    cs.secondary_canvas().cursor_info.emit("A=2.0s | speed=5")
+    qapp.processEvents()
+    assert "A=2.0s" in cs.cursor_pill_text()
+    assert cs._active_cursor_card is cs._secondary_card
+
+    # A later primary readout takes the pill back (follows whichever pane the
+    # cursor is on).
+    cs.canvas_time.cursor_info.emit("t=9.0s | speed=1")
+    qapp.processEvents()
+    assert "t=9.0s" in cs.cursor_pill_text()
+    assert cs._active_cursor_card is cs._time_card
+
+
+def test_pill_formats_detail_using_emitting_pane_cursor_mode(
+    qtbot, qapp, loaded_csv
+):
+    from mf4_analyzer.ui.chart_stack import _CURSOR_HTML_SEP
+
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+    cs._secondary_card.set_cursor_mode("single")
+    qapp.processEvents()
+
+    text = _CURSOR_HTML_SEP.join([
+        "<span>t=1.0000s</span>",
+        "<span>speed=<b>1 rpm</b></span>",
+    ])
+    # Single-mode readout from the secondary canvas → detail table rendered
+    # (formatter reads the SECONDARY pane's cursor mode, not the primary's).
+    cs.secondary_canvas().cursor_info.emit(text)
+    qapp.processEvents()
+    assert cs._pill.has_detail() is True
+
+
+# ---------------------------------------------------------------------------
+# Shared toolbar nav clicks (home/pan/zoom/back/forward/save) route to the
+# focused pane's own canvas-bound toolbar while side-by-side is active.
+# ---------------------------------------------------------------------------
+
+def test_shared_nav_click_forwards_to_focused_secondary(qtbot, qapp, loaded_csv):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+    assert cs.focused_canvas() is cs.secondary_canvas()
+
+    shared = cs._time_toolbar  # the (detached) primary card toolbar
+    secondary_tb = cs._secondary_card.toolbar
+    primary_mode_before = shared.mode
+
+    shared._actions_by_key["zoom"].trigger()
+    qapp.processEvents()
+
+    # The click landed on the SECONDARY toolbar; the shared/primary toolbar's
+    # own mode is untouched (it stays bound to the primary canvas).
+    assert secondary_tb.mode == "zoom"
+    assert shared.mode == primary_mode_before
+
+
+def test_shared_nav_click_targets_primary_when_primary_focused(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    # Primary focused by default after enter_split.
+    shared = cs._time_toolbar
+    secondary_before = cs._secondary_card.toolbar.mode
+
+    shared._actions_by_key["zoom"].trigger()
+    qapp.processEvents()
+
+    assert shared.mode == "zoom"
+    assert cs._secondary_card.toolbar.mode == secondary_before
+
+
+def test_shared_options_button_opens_focused_pane(qtbot, qapp, loaded_csv):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+
+    opened = []
+    cs.secondary_canvas().open_chart_options_dialog = lambda: opened.append("sec")
+    cs.canvas_time.open_chart_options_dialog = lambda: opened.append("pri")
+
+    cs._time_card._options_btn.click()
+    qapp.processEvents()
+    assert opened == ["sec"]
+
+    _click_card(qapp, cs._time_card)
+    cs._time_card._options_btn.click()
+    qapp.processEvents()
+    assert opened == ["sec", "pri"]

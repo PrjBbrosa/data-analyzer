@@ -22,36 +22,41 @@ def test_split_shows_two_panes(qtbot):
 
     assert cs.split_active() is True
     assert cs.secondary_canvas() is not None
+    assert cs.stack.widget(0) is cs._time_page
+    assert cs._time_toolbar.parentWidget() is cs._time_page
     assert cs._time_split.count() == 2
     left, right = cs._time_split.sizes()
     assert left > 0
     assert right > 0
+    assert not cs._secondary_card.toolbar.isVisibleTo(cs._time_split)
 
     cs.exit_split()
 
     assert cs.split_active() is False
 
 
-def test_attach_view_tabbar_stays_on_primary_time_card_inside_splitter(qtbot):
+def test_attach_view_tabbar_stays_in_shared_bottom_dock_outside_splitter(qtbot):
     cs = _shown_chart_stack(qtbot)
 
     bar = cs.attach_view_tabbar(ViewManager())
     cs.enter_split()
 
-    assert cs.stack.widget(0) is cs._time_split
+    assert cs.stack.widget(0) is cs._time_page
     assert cs._time_split.widget(0) is cs._time_card
-    assert cs._time_card.view_tabbar is bar
-    assert bar.parentWidget() is cs._time_card
+    assert cs._time_split.widget(1) is cs._secondary_card
+    assert cs._time_card.view_tabbar is None
     assert cs._secondary_card.view_tabbar is None
-    lay = cs._time_card.layout()
-    assert lay.indexOf(bar) == lay.indexOf(cs._time_card._hint_bar) - 1
+    assert bar.parentWidget() is cs._time_bottom_dock
+    assert cs._time_bottom_dock.isVisibleTo(cs)
+    lay = cs._time_bottom_dock.layout()
+    assert lay.indexOf(bar) < lay.indexOf(cs._time_hint_bar)
 
 
 def test_mode_switching_uses_wrapped_time_page(qtbot):
     cs = _shown_chart_stack(qtbot)
 
     assert cs.current_mode() == "time"
-    assert cs.stack.currentWidget() is cs._time_split
+    assert cs.stack.currentWidget() is cs._time_page
 
     cs.set_mode("fft")
     assert cs.current_mode() == "fft"
@@ -59,7 +64,7 @@ def test_mode_switching_uses_wrapped_time_page(qtbot):
 
     cs.set_mode("time")
     assert cs.current_mode() == "time"
-    assert cs.stack.currentWidget() is cs._time_split
+    assert cs.stack.currentWidget() is cs._time_page
 
     cs.set_plot_mode("overlay")
     assert cs.plot_mode() == "overlay"

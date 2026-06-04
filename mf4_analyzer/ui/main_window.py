@@ -212,6 +212,8 @@ class MainWindow(QMainWindow):
         from PyQt5.QtWidgets import QStatusBar
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
+        self._status_hint_bar = self.chart_stack.take_time_hint_bar(self.statusBar)
+        self.statusBar.addPermanentWidget(self._status_hint_bar, 1)
         self.statusBar.showMessage("Ready")
 
         # Floating toast (constructed lazily on first use; the parent must
