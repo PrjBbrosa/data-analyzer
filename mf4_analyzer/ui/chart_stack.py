@@ -1497,6 +1497,18 @@ class ChartStack(QWidget):
         self._time_toolbar._action_delegate_provider = self._focused_nav_delegate
         # 图表选项 on the shared toolbar opens for the focused pane's canvas.
         self._time_card._options_canvas_provider = self.focused_canvas
+        # Mirror the focused pane's pan/zoom state onto the shared toolbar
+        # icons. Connected AFTER the primary card's own _on_nav_mode_toggled
+        # (bound during _ChartCard.__init__) so this runs LAST in the action's
+        # triggered emission and wins — otherwise the card handler would
+        # re-assert the primary's icon after a click that forwarded to the
+        # secondary. Idempotent; no-op outside split.
+        for _key in ('pan', 'zoom'):
+            _act = self._time_toolbar._actions_by_key.get(_key)
+            if _act is not None:
+                _act.triggered.connect(
+                    lambda _checked=False: self._sync_shared_nav_highlight()
+                )
         lay.addWidget(self.stack, stretch=1)
 
         # Stats strip retained for later re-enable, but hidden from the UI for now.
@@ -1625,12 +1637,6 @@ class ChartStack(QWidget):
         mode = str(getattr(target, 'mode', '')).lower()
         key = 'pan' if 'pan' in mode else ('zoom' if 'zoom' in mode else '')
         _apply_mdi_icons(toolbar, active_key=key)
-
-    def _on_secondary_nav_mode_changed(self, _mode):
-        """Secondary toolbar's pan/zoom toggled (via a forwarded shared-toolbar
-        click): mirror it onto the shared toolbar icons while it is focused."""
-        if self.split_active() and self._focused_card is self._secondary_card:
-            self._sync_shared_nav_highlight()
 
     def _card_for_canvas(self, canvas):
         """Owning time card for a cursor-emitting ``canvas`` (primary fallback)."""
@@ -1817,12 +1823,6 @@ class ChartStack(QWidget):
             )
             canvas.dual_cursor_info.connect(
                 lambda text, c=canvas: self._on_dual_cursor_info(text, c)
-            )
-            # Mirror the secondary's pan/zoom state onto the shared toolbar
-            # icons when a forwarded click flips it while the secondary is
-            # focused.
-            self._secondary_card.toolbar.mouse_mode_changed.connect(
-                self._on_secondary_nav_mode_changed
             )
             self._time_split.addWidget(self._secondary_card)
             self._install_focus_filter(self._secondary_card)

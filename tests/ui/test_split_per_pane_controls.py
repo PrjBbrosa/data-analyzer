@@ -355,6 +355,25 @@ def test_shared_nav_click_targets_primary_when_primary_focused(
     assert cs._secondary_card.toolbar.mode == secondary_before
 
 
+def test_shared_nav_highlight_mirrors_focused_secondary(qtbot, qapp, loaded_csv):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+
+    shared = cs._time_toolbar
+    shared._actions_by_key["zoom"].trigger()
+    qapp.processEvents()
+
+    # The shared toolbar's zoom icon is flagged active to reflect the focused
+    # SECONDARY pane, even though the shared toolbar object's own mode stays
+    # 'pan' (it remains bound to the primary canvas).
+    zoom_btn = shared.widgetForAction(shared._actions_by_key["zoom"])
+    pan_btn = shared.widgetForAction(shared._actions_by_key["pan"])
+    assert bool(zoom_btn.property("navActive")) is True
+    assert bool(pan_btn.property("navActive")) is False
+
+
 def test_shared_options_button_opens_focused_pane(qtbot, qapp, loaded_csv):
     w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
     cs = w.chart_stack
