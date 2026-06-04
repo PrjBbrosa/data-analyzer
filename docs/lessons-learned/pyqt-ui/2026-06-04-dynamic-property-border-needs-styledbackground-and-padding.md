@@ -1,6 +1,6 @@
 ---
 role: pyqt-ui
-tags: [qss, dynamic-property, border, focus, wa-styledbackground, padding, contentsmargins, unpolish, verify-pixels, splitter]
+tags: [qss, dynamic-property, border, focus, wa-styledbackground, padding, contentsmargins, unpolish, verify-pixels, splitter, grab-lag, tint, composite-grab]
 created: 2026-06-04
 updated: 2026-06-04
 cause: insight
@@ -43,3 +43,24 @@ a real-window ``grab()`` and sample pixels just inside the edge at vertical
 center — do not trust ``property(...)`` read-back or an offscreen unit test;
 those mask the no-render case entirely. Sample away from ``x=0`` (rounded
 corners + HiDPI scaling leave the extreme edge transparent/white).
+
+## Followup (2026-06-04, P2 Task 9 1b/2): stronger accent + grab pitfalls
+
+When the 2px accent proved too subtle at full-window scale, bumping to
+``border: 3px solid #2563eb; padding: 4px;`` PLUS a light-blue
+``background-color: #eaf1fe`` is far more legible — the tint fills the padding
+ring with a visible halo (the white canvas child still covers the interior, so
+only the ring shows the tint). Two grab pitfalls surfaced while verifying the
+move between panes: (1) an INDIVIDUAL ``card.grab()`` can lag the focus state by
+one event cycle (it read the *previous* focused card even after the property +
+unpolish/polish flip), whereas grabbing the COMPOSITE parent
+(``chart_stack.grab()``) after re-polishing BOTH cards and pumping
+``processEvents()`` twice rendered the current state correctly; (2) a numeric
+"scan for the bluest pixel near the edge" probe is unreliable for a thin 3px
+ring — adjacent dark toolbar text and blue channel LINES swamp it, so the probe
+printed identical values across states even when the frame visibly moved. The
+SAVED PNG (read/inspected visually) is the authoritative evidence; treat an
+inline blueness sampler as a flaky convenience, not proof. Next time: grab the
+composite container (not the leaf widget), re-polish all property-bearing
+siblings + double-pump events before the grab, and confirm by eye on the saved
+image.

@@ -335,6 +335,11 @@ class MainWindow(QMainWindow):
         self.chart_stack.cursor_mode_changed.connect(self._on_cursor_mode_changed)
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.chart_stack.focus_changed.connect(self._on_chart_focus_changed)
+        # P2 Task 9 1b: the secondary (compare) pane's own 分屏/叠加 control
+        # asks for a layout replot of just that canvas, X-window preserved.
+        self.chart_stack.set_secondary_replot_callback(
+            self._replot_secondary_preserving_xlim
+        )
         self.inspector.signal_changed.connect(self._on_inspector_signal_changed)
         self.view_tabbar.switch_requested.connect(self._switch_view)
         self.view_tabbar.new_requested.connect(self._on_view_new)
@@ -607,8 +612,16 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._plot_time_preserving_xlim)
 
     def _on_cursor_mode_changed(self, mode):
-        self.canvas_time.set_cursor_visible(mode != 'off')
-        self.canvas_time.set_dual_cursor_mode(mode == 'dual')
+        # Route to the focused time card's canvas (P2 Task 9 1a). Outside
+        # side-by-side compare focused_canvas() IS self.canvas_time, so the
+        # behaviour is byte-identical; while split is active the cursor
+        # toggle lands on whichever pane the user last clicked. The relay
+        # carrying ``mode`` here is the primary card's cursor segmented
+        # control; the secondary card has its own per-pane relay that drives
+        # _on_secondary_cursor_mode_changed below.
+        canvas = self.chart_stack.focused_canvas()
+        canvas.set_cursor_visible(mode != 'off')
+        canvas.set_dual_cursor_mode(mode == 'dual')
 
     def _on_plot_mode_changed(self, mode):
         """Toggle 分↔叠 without losing the user's current x-zoom.
@@ -649,6 +662,27 @@ class MainWindow(QMainWindow):
             if cur_xlim is not None:
                 self._safe_restore_primary_xlim(cur_xlim)
 
+    def _replot_secondary_preserving_xlim(self):
+        """Replot the secondary (compare) canvas after its own plot-mode flip
+        (P2 Task 9 1b), preserving that pane's visible X window.
+
+        The secondary holds a compare-view snapshot; its 分屏/叠加 control only
+        changes the LAYOUT of that pane, so we redraw the secondary canvas
+        in-place (with ``update_primary_ui=False`` so the primary stats strip /
+        bookkeeping stay untouched) and re-apply the secondary's X window. No
+        secondary canvas (split inactive) → no-op. X preservation follows the
+        TimeDomain state-preservation lesson: keep the visible window when the
+        new layout's extent still overlaps it."""
+        canvas = self.chart_stack.secondary_canvas()
+        if canvas is None:
+            return
+        cur_xlim = self._safe_capture_xlim_for(canvas)
+        try:
+            self._plot_time_on_canvas(canvas, update_primary_ui=False)
+        finally:
+            if cur_xlim is not None:
+                self._safe_restore_xlim_for(canvas, cur_xlim)
+
     def _on_primary_channel_requested(self, fid, ch):
         """User picked 设为左轴 on a channel. Make it the overlay primary
         (left-axis) channel and replot preserving the current x-window.
@@ -672,7 +706,15 @@ class MainWindow(QMainWindow):
         channels) — in that case there is nothing to preserve. Defensive
         ``try/except`` because matplotlib raises on a destroyed axes.
         """
-        ax = getattr(self.chart_stack.focused_canvas(), '_primary_xaxis_ax', None)
+        return self._safe_capture_xlim_for(self.chart_stack.focused_canvas())
+
+    def _safe_capture_xlim_for(self, canvas):
+        """Canvas-generic ``(lo, hi)`` snapshot, or None (P2 Task 9 1b).
+
+        Used by both the focused-canvas path and the secondary (compare) pane
+        replot so each pane preserves its OWN visible X window across a
+        layout flip. None when no live primary axis (idle / cleared)."""
+        ax = getattr(canvas, '_primary_xaxis_ax', None)
         if ax is None:
             return None
         try:
@@ -696,7 +738,14 @@ class MainWindow(QMainWindow):
         Targets ``chart_stack.focused_canvas()`` to match the capture side
         above; outside split that is ``self.canvas_time``.
         """
-        canvas = self.chart_stack.focused_canvas()
+        self._safe_restore_xlim_for(self.chart_stack.focused_canvas(), xlim)
+
+    def _safe_restore_xlim_for(self, canvas, xlim):
+        """Canvas-generic counterpart of :meth:`_safe_restore_primary_xlim`
+        (P2 Task 9 1b). Re-applies ``xlim`` to ``canvas`` only when the new
+        layout's autoscale window still overlaps the captured window, then
+        drains the debounced envelope refresh (see flush-after-axis-mutation
+        lesson)."""
         ax = getattr(canvas, '_primary_xaxis_ax', None)
         if ax is None:
             return
@@ -1252,7 +1301,11 @@ class MainWindow(QMainWindow):
                 self.chart_stack.stats_strip.update_stats({})
             return
 
-        mode = self.chart_stack.plot_mode()
+        # Per-pane plot mode (P2 Task 9 1b): read the layout (subplot/overlay)
+        # from the card that owns the TARGET canvas, not always the primary.
+        # Outside split this resolves to the primary card's mode, so the
+        # non-split path is byte-identical.
+        mode = self.chart_stack.plot_mode_for_canvas(canvas)
         if not update_primary_ui:
             invalidate = getattr(canvas, 'invalidate_envelope_cache', None)
             if callable(invalidate):

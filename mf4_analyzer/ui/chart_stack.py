@@ -1491,6 +1491,7 @@ class ChartStack(QWidget):
             return
         self._focused_card = card
         self._refresh_focus_borders()
+        self._sync_secondary_controls_to_focus()
         self.focus_changed.emit(card is self._secondary_card)
 
     def _refresh_focus_borders(self):
@@ -1578,6 +1579,18 @@ class ChartStack(QWidget):
             self._secondary_card.copy_image_requested.connect(
                 lambda: self._copy_card_image(self._secondary_card)
             )
+            # Per-pane control routing (P2 Task 9 1b): the secondary card's
+            # own 分屏/叠加/游标 segmented controls act on the SECONDARY canvas,
+            # not the primary. Plot-mode flips need a replot of the secondary
+            # (re-laid out subplot↔overlay), cursor flips toggle the secondary
+            # canvas's cursor directly. We keep these inside ChartStack so the
+            # secondary stays self-contained and never disturbs the primary.
+            self._secondary_card.plot_mode_changed.connect(
+                self._on_secondary_plot_mode_changed
+            )
+            self._secondary_card.cursor_mode_changed.connect(
+                self._on_secondary_cursor_mode_changed
+            )
             self._time_split.addWidget(self._secondary_card)
             self._install_focus_filter(self._secondary_card)
         self._secondary_card.setVisible(True)
@@ -1588,6 +1601,33 @@ class ChartStack(QWidget):
         # accent border; the secondary stays unfocused until clicked.
         self._focused_card = self._time_card
         self._refresh_focus_borders()
+        self._sync_secondary_controls_to_focus()
+
+    def _on_secondary_plot_mode_changed(self, mode):
+        """Replot the secondary canvas in the new layout (subplot↔overlay).
+
+        Asks MainWindow to redraw the secondary pane while preserving its
+        visible X window (see TimeDomain state-preservation lesson). The
+        secondary card is the focused card whenever its controls are live, so
+        we route through ``replot_secondary`` rather than disturbing the
+        primary. No replot hook → silently no-op (secondary not yet wired)."""
+        replot = getattr(self, '_replot_secondary_cb', None)
+        if callable(replot):
+            replot()
+
+    def _on_secondary_cursor_mode_changed(self, mode):
+        """Toggle the secondary canvas's cursor (off/single/dual) in place."""
+        if mode == 'off':
+            self.clear_cursor_pill()
+        canvas = self._secondary_card.canvas
+        canvas.set_cursor_visible(mode != 'off')
+        canvas.set_dual_cursor_mode(mode == 'dual')
+
+    def set_secondary_replot_callback(self, cb):
+        """MainWindow registers a callable that replots the secondary canvas
+        preserving its X window. Used when the secondary card's own plot-mode
+        control flips (subplot↔overlay needs a fresh layout)."""
+        self._replot_secondary_cb = cb
 
     def exit_split(self):
         if self._secondary_card is not None:
@@ -1595,6 +1635,9 @@ class ChartStack(QWidget):
         # Back to single pane: drop focus highlighting and reset to primary.
         self._focused_card = self._time_card
         self._refresh_focus_borders()
+        # Restore the primary card's controls (single live group again) and
+        # disable the now-hidden secondary's.
+        self._sync_secondary_controls_to_focus()
 
     def attach_view_tabbar(self, manager):
         from .view_tabbar import ViewTabBar
@@ -1630,6 +1673,19 @@ class ChartStack(QWidget):
 
     def set_plot_mode(self, mode):
         self._time_card.set_plot_mode(mode)
+
+    def plot_mode_for_canvas(self, canvas):
+        """Return the plot mode ('subplot'/'overlay') of the time card that
+        owns ``canvas`` (P2 Task 9 1b).
+
+        Each time pane now carries its OWN 分屏/叠加 state, so a replot must
+        read the mode from the card owning the target canvas, not always the
+        primary card. Falls back to the primary card's mode for any canvas we
+        don't recognise (keeps non-split behaviour byte-identical)."""
+        if (self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            return self._secondary_card.plot_mode()
+        return self._time_card.plot_mode()
 
     def cursor_mode(self):
         return self._time_card.cursor_mode()
@@ -1670,6 +1726,15 @@ class ChartStack(QWidget):
         self.canvas_order.full_reset()
 
     def _set_secondary_time_controls_enabled(self, enabled):
+        """Enable/disable the secondary card's own split/overlay/cursor
+        segmented controls (P2 Task 9 1b).
+
+        Semantics changed from "always disabled" to "enabled while this pane
+        is focused": when the compare (secondary) pane is the focused card its
+        分屏/叠加/游标 controls drive its OWN canvas, mirroring how the primary
+        card's identical controls drive the primary canvas. Outside split, or
+        while the primary pane is focused, the secondary's controls are
+        disabled so a single active control group is unambiguous."""
         card = self._secondary_card
         if card is None:
             return
@@ -1677,6 +1742,24 @@ class ChartStack(QWidget):
             button.setEnabled(enabled)
         for button in card._cursor_buttons.values():
             button.setEnabled(enabled)
+
+    def _sync_secondary_controls_to_focus(self):
+        """Enable the secondary card's controls only while it is focused.
+
+        Also keeps the primary card's controls enabled whenever split is
+        inactive or the primary is focused — exactly one pane's segmented
+        control group is live at a time so the active target is unambiguous."""
+        secondary_focused = (
+            self.split_active()
+            and self._secondary_card is not None
+            and self._focused_card is self._secondary_card
+        )
+        self._set_secondary_time_controls_enabled(secondary_focused)
+        # Primary controls are live whenever the secondary's are not.
+        for button in (self._time_card.btn_subplot, self._time_card.btn_overlay):
+            button.setEnabled(not secondary_focused)
+        for button in self._time_card._cursor_buttons.values():
+            button.setEnabled(not secondary_focused)
 
     def _copy_card_image(self, card):
         """Capture the card's canvas for MainWindow to publish. For the
