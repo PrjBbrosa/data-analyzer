@@ -316,6 +316,67 @@ class MultiFileChannelWidget(QWidget):
                     if d and d[0] == 'channel': r.append((d[1], d[2], self._colors.get((d[1], d[2]), '#1f77b4')))
         return r
 
+    def set_checked_channels(self, checked):
+        """Batch-restore checked channels without emitting channels_changed."""
+        wanted = set()
+        for entry in checked or []:
+            try:
+                fid, ch = entry[:2]
+            except (TypeError, ValueError):
+                continue
+            wanted.add((fid, ch))
+
+        self._updating = True
+        try:
+            for fid, fi in self._file_items.items():
+                all_checked = fi.childCount() > 0
+                for i in range(fi.childCount()):
+                    ci = fi.child(i)
+                    data = ci.data(0, Qt.UserRole)
+                    is_checked = bool(
+                        data
+                        and data[0] == 'channel'
+                        and (data[1], data[2]) in wanted
+                    )
+                    ci.setCheckState(0, Qt.Checked if is_checked else Qt.Unchecked)
+                    all_checked = all_checked and is_checked
+                fi.setCheckState(0, Qt.Checked if all_checked else Qt.Unchecked)
+        finally:
+            self._updating = False
+
+    def get_channel_colors(self):
+        return dict(self._colors)
+
+    def set_channel_colors(self, colors):
+        valid_keys = set()
+        for fi in self._file_items.values():
+            for i in range(fi.childCount()):
+                data = fi.child(i).data(0, Qt.UserRole)
+                if data and data[0] == 'channel':
+                    valid_keys.add((data[1], data[2]))
+        self._colors = {
+            key: color for key, color in self._colors.items() if key in valid_keys
+        }
+
+        for key, hex_color in (colors or {}).items():
+            try:
+                fid, ch = key
+            except (TypeError, ValueError):
+                continue
+            if (fid, ch) not in valid_keys:
+                continue
+            self._colors[(fid, ch)] = hex_color
+
+        for fi in self._file_items.values():
+            for i in range(fi.childCount()):
+                ci = fi.child(i)
+                data = ci.data(0, Qt.UserRole)
+                if not data or data[0] != 'channel':
+                    continue
+                key = (data[1], data[2])
+                if key in self._colors:
+                    ci.setIcon(0, _swatch_icon(self._colors[key]))
+
     def get_file_data(self, fid):
         return self._files.get(fid)
 

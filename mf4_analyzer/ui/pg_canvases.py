@@ -56,6 +56,7 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 import logging
+import json
 import math
 import time as _time
 from collections import OrderedDict
@@ -111,6 +112,15 @@ from mf4_analyzer.ui.canvases import (
 
 
 _log = logging.getLogger(__name__)
+
+
+def _view_state_channel_key(data_id, name):
+    stable_data_id = None if data_id is None else str(data_id)
+    return json.dumps(
+        [stable_data_id, str(name)],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 _TARGET_X_TICK_NICE_FACTORS = (1.0, 2.0, 2.5, 5.0, 10.0)
@@ -939,6 +949,10 @@ class TimeDomainCanvasPG(QWidget):
         # _channel_lines is {name: (axis_facade, line_facade)} parity
         # with TimeDomainCanvas — used by ChartOptionsDialog and color sync.
         self._channel_lines = {}
+        # View-state range restore needs a non-colliding key when two files
+        # expose the same display channel name. Keep this separate so legacy
+        # hover/selection/options paths can continue using _channel_lines.
+        self._channel_view_state_lines = {}
         # channel_data is the raw post-range-filter dict — STAYS RAW.
         # get_statistics reads this; the envelope cache never feeds it.
         self.channel_data = {}
@@ -1557,6 +1571,40 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             pass
 
+    def get_visible_xlim(self):
+        """Return the current visible X range, or None before any plot."""
+        return self._capture_primary_xlim()
+
+    def restore_visible_xlim(self, xlim):
+        """Restore visible X through the existing synchronized restore path."""
+        if xlim is not None:
+            self._restore_primary_xlim(xlim)
+
+    def get_visible_ylims(self):
+        """Return per-channel visible Y ranges keyed for ViewState storage."""
+        out = {}
+        for key, pair in (
+            getattr(self, "_channel_view_state_lines", None) or {}
+        ).items():
+            try:
+                out[key] = pair[0].get_ylim()
+            except Exception:
+                continue
+        return out
+
+    def restore_visible_ylims(self, ylims):
+        """Restore per-channel Y ranges; silently skip missing channels."""
+        view_state_lines = getattr(self, "_channel_view_state_lines", None) or {}
+        legacy_lines = getattr(self, "_channel_lines", None) or {}
+        for name, ylim in (ylims or {}).items():
+            pair = view_state_lines.get(name) or legacy_lines.get(name)
+            if pair is None:
+                continue
+            try:
+                pair[0].set_ylim(*ylim)
+            except Exception:
+                continue
+
     def _sync_x_axis_item_range(self, handle, lo, hi):
         try:
             axis = handle.x_axis_item()
@@ -1620,6 +1668,9 @@ class TimeDomainCanvasPG(QWidget):
         self._channel_data_id[name] = data_id
         line_handle = _PgLineHandle(pdi, label_fallback=name)
         self._channel_lines[name] = (axis_handle, line_handle)
+        self._channel_view_state_lines[
+            _view_state_channel_key(data_id, name)
+        ] = (axis_handle, line_handle)
         # Cache monotonicity once per build (parity with F-1 follow-up).
         self._channel_is_monotonic[name] = _is_monotonic_array(t_arr)
 
@@ -2176,6 +2227,7 @@ class TimeDomainCanvasPG(QWidget):
 
         self.axes_list = []
         self._channel_lines = {}
+        self._channel_view_state_lines = {}
         self.channel_data = {}
         self._channel_data_id = {}
         self._channel_is_monotonic = {}

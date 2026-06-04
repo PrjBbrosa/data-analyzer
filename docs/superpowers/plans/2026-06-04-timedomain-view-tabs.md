@@ -4,7 +4,7 @@
 
 **Goal:** 在时域图表底部加 Excel 风格的 View 标签栏,把整套时域显示状态存成可来回切换的 view(上限 6),并支持两个 view 并排对比。
 
-**Architecture:** 方案 A —— `ViewState` 纯数据快照 + 重绘。新增 3 个模块(`view_state.py` 数据+逻辑、`view_bridge.py` 抓取/写回、`view_tabbar.py` UI),在 `TimeChartCard` 底部插标签栏,`MainWindow` 编排"切换前抓取→写回→复用现有重绘→恢复坐标轴"。状态仅存内存,`ViewState` 可 JSON 序列化为未来 project 落盘预留。
+**Architecture:** 方案 A —— `ViewState` 纯数据快照 + 重绘。新增 3 个模块(`view_state.py` 数据+逻辑、`view_bridge.py` 抓取/写回、`view_tabbar.py` UI),在 `TimeChartCard` 底部插标签栏,`MainWindow` 编排"切换前抓取→写回→复用现有重绘→恢复 X/Y 可见范围与坐标显示设置"。状态仅存内存,`ViewState` 可 JSON 序列化为未来 project 落盘预留。View 是**可交互的屏幕状态快照**,不是图片快照。
 
 **Tech Stack:** Python 3.12 · PyQt5 · pyqtgraph · pytest + pytest-qt。
 
@@ -44,10 +44,15 @@ def test_viewstate_roundtrips_through_dict():
         checked=[("f1", "rpm"), ("f1", "speed")],
         colors={("f1", "rpm"): "#2d7ff9", ("f1", "speed"): "#e8590c"},
         plot_mode="overlay",
-        cursor={"mode": "dual", "positions": [1.0, 2.0]},
+        cursor_mode="dual",
         xlim=(0.0, 12.4),
-        ylims={"0": (-1.0, 1.0)},
-        axis_opts={"xscale": "linear"},
+        ylims={"[f] rpm": (-1.0, 1.0)},
+        overlay_primary=("f1", "rpm"),
+        axis_opts={
+            "range_filter": {"enabled": True, "start": 0.0, "end": 12.4},
+            "x_axis": {"mode": "time", "fid": None, "channel": None, "label": "Time (s)"},
+            "tick_density": {"x": 10, "y": 6},
+        },
     )
     again = ViewState.from_dict(st.to_dict())
     assert again == st
@@ -61,8 +66,11 @@ def test_viewstate_defaults_are_empty():
     assert st.checked == []
     assert st.colors == {}
     assert st.plot_mode == "subplot"
-    assert st.cursor == {"mode": "off", "positions": []}
+    assert st.cursor_mode == "off"
     assert st.xlim is None
+    assert st.ylims == {}
+    assert st.overlay_primary is None
+    assert st.axis_opts == {}
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -88,10 +96,6 @@ MAX_VIEWS = 6
 _SEP = "\t"  # (fid, ch) tuple ↔ JSON string key 分隔符
 
 
-def _default_cursor():
-    return {"mode": "off", "positions": []}
-
-
 @dataclass
 class ViewState:
     name: str
@@ -99,10 +103,11 @@ class ViewState:
     checked: list = field(default_factory=list)          # list[tuple[str, str]]
     colors: dict = field(default_factory=dict)           # {(fid,ch): hex}
     plot_mode: str = "subplot"                           # 'subplot' | 'overlay'
-    cursor: dict = field(default_factory=_default_cursor)
+    cursor_mode: str = "off"                             # 'off' | 'single' | 'dual'
     xlim: tuple | None = None                            # (lo, hi) | None
-    ylims: dict = field(default_factory=dict)            # {axis_key: (lo, hi)}
-    axis_opts: dict = field(default_factory=dict)        # 图表设置面板内容
+    ylims: dict = field(default_factory=dict)            # {channel_label: (lo, hi)}
+    overlay_primary: tuple | None = None                 # (fid, ch) | None
+    axis_opts: dict = field(default_factory=dict)        # range_filter/x_axis/tick_density
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -110,6 +115,7 @@ class ViewState:
         d["colors"] = {f"{f}{_SEP}{c}": v for (f, c), v in self.colors.items()}
         d["ylims"] = {k: list(v) for k, v in self.ylims.items()}
         d["xlim"] = list(self.xlim) if self.xlim is not None else None
+        d["overlay_primary"] = list(self.overlay_primary) if self.overlay_primary else None
         return d
 
     @classmethod
@@ -121,12 +127,15 @@ class ViewState:
             colors[(f, c)] = v
         ylims = {k: tuple(v) for k, v in d.get("ylims", {}).items()}
         xlim = tuple(d["xlim"]) if d.get("xlim") is not None else None
-        cursor = d.get("cursor") or _default_cursor()
+        overlay_primary = (
+            tuple(d["overlay_primary"]) if d.get("overlay_primary") is not None else None
+        )
         return cls(
             name=d["name"], tab_color=d["tab_color"],
             checked=checked, colors=colors,
             plot_mode=d.get("plot_mode", "subplot"),
-            cursor=cursor, xlim=xlim, ylims=ylims,
+            cursor_mode=d.get("cursor_mode", "off"),
+            xlim=xlim, ylims=ylims, overlay_primary=overlay_primary,
             axis_opts=d.get("axis_opts", {}),
         )
 ```
@@ -337,7 +346,7 @@ git commit -m "feat(view): add ViewManager list logic with 6-view cap"
 
 ---
 
-## Task 3: 通道 widget 的写回接口 + canvas 读 xlim
+## Task 3: 通道 widget 的写回接口 + canvas 屏幕范围读写
 
 **Files:**
 - Modify: `mf4_analyzer/ui/widgets/__init__.py`(`MultiFileChannelWidget`,在 `get_checked_channels` 后,约 :317)
@@ -442,15 +451,40 @@ Expected: FAIL — `AttributeError: 'MultiFileChannelWidget' object has no attri
         self.channel_list.set_channel_colors(colors)
 ```
 
-`TimeDomainCanvasPG`(pg_canvases.py,`set_xlim` 即 :1870 附近)新增读接口:
+`TimeDomainCanvasPG`(pg_canvases.py,`set_xlim` 即 :1870 附近)新增屏幕状态范围接口。注意:不要直接 `ax.get_xlim()` / `ax.set_xlim()` 绕开已有同步保护;读 X 走 `_capture_primary_xlim()`,恢复 X 走 `_restore_primary_xlim()`。
 
 ```python
     def get_visible_xlim(self):
         """当前可见 X 范围 (lo, hi);无绘图时返回 None。"""
-        ax = self._primary_xaxis_ax
-        if ax is None:
-            return None
-        return ax.get_xlim()
+        return self._capture_primary_xlim()
+
+    def restore_visible_xlim(self, xlim):
+        """恢复当前可见 X 范围,并同步 bottom AxisItem / sibling ViewBox。"""
+        if xlim is not None:
+            self._restore_primary_xlim(xlim)
+
+    def get_visible_ylims(self):
+        """返回 {channel_label: (lo, hi)};key 与 _channel_lines 的通道名一致。"""
+        out = {}
+        for name, pair in (getattr(self, "_channel_lines", None) or {}).items():
+            try:
+                handle = pair[0]
+                out[str(name)] = handle.get_ylim()
+            except Exception:
+                continue
+        return out
+
+    def restore_visible_ylims(self, ylims):
+        """按 channel_label 恢复 Y 范围;缺失通道静默跳过。"""
+        channel_lines = getattr(self, "_channel_lines", None) or {}
+        for name, ylim in (ylims or {}).items():
+            pair = channel_lines.get(name)
+            if not pair:
+                continue
+            try:
+                pair[0].set_ylim(*ylim)
+            except Exception:
+                continue
 ```
 
 - [ ] **Step 4: 跑测试确认通过**
@@ -476,7 +510,7 @@ Expected: PASS(无新增失败)
 
 ```bash
 git add mf4_analyzer/ui/widgets/__init__.py mf4_analyzer/ui/file_navigator.py mf4_analyzer/ui/pg_canvases.py mf4_analyzer/ui/main_window.py tests/ui/test_channel_widget_setters.py
-git commit -m "feat(view): channel-widget setters + canvas get_visible_xlim"
+git commit -m "feat(view): channel-widget setters + canvas screen-state ranges"
 ```
 
 ---
@@ -487,7 +521,7 @@ git commit -m "feat(view): channel-widget setters + canvas get_visible_xlim"
 - Create: `mf4_analyzer/ui/view_bridge.py`
 - Test: `tests/ui/test_view_bridge.py`
 
-> 约定:`chart_stack` 需有 `plot_mode()`(已存在 :1019 调用)、`cursor_mode()`(Task 6 补)、`set_plot_mode()`/`set_cursor_mode()`(已存在),`canvas_time` 暴露 `get_visible_xlim()`/`set_xlim()`。bridge 只读写状态,不负责重绘(重绘由 MainWindow 触发)。
+> 约定:`chart_stack` 需有 `plot_mode()` / `cursor_mode()` / `set_plot_mode()` / `set_cursor_mode()`(当前仓库已存在,不要重复定义),`canvas_time` 暴露 `get_visible_xlim()` / `restore_visible_xlim()` / `get_visible_ylims()` / `restore_visible_ylims()`。bridge 是唯一读写跨 widget 屏幕状态的地方;因为 `axis_opts` 与 `overlay_primary` 分散在 `navigator` / `chart_stack` / `inspector` / `MainWindow` 私有状态里,本 Task 使用 `capture_view(window)` / `apply_view(state, window)` / `restore_axes(state, window)` 形态。
 
 - [ ] **Step 1: 写失败测试(用轻量假对象)**
 
@@ -510,9 +544,15 @@ class _Nav:
 
 
 class _Canvas:
-    def __init__(self): self._xlim = (0.0, 9.0); self.applied = None
+    def __init__(self):
+        self._xlim = (0.0, 9.0)
+        self._ylims = {"f::rpm": (-1.0, 1.0)}
+        self.applied_x = None
+        self.applied_y = None
     def get_visible_xlim(self): return self._xlim
-    def set_xlim(self, lo, hi): self.applied = (lo, hi)
+    def restore_visible_xlim(self, xlim): self.applied_x = xlim
+    def get_visible_ylims(self): return dict(self._ylims)
+    def restore_visible_ylims(self, ylims): self.applied_y = dict(ylims)
 
 
 class _Stack:
@@ -524,32 +564,64 @@ class _Stack:
     def set_cursor_mode(self, m): self._cm = m
 
 
+class _InspectorTop:
+    def range_enabled(self): return True
+    def range_values(self): return (0.0, 9.0)
+    def xaxis_label(self): return "Time (s)"
+    def tick_density(self): return (10, 6)
+
+
+class _Inspector:
+    def __init__(self): self.top = _InspectorTop()
+
+
+class _Window:
+    def __init__(self):
+        self.navigator = _Nav()
+        self.chart_stack = _Stack()
+        self.inspector = _Inspector()
+        self._custom_xaxis_fid = None
+        self._custom_xaxis_ch = None
+        self._overlay_primary = ("f1", "rpm")
+
+
 def test_capture_reads_full_state():
-    st = view_bridge.capture_view(_Nav(), _Stack())
+    st = view_bridge.capture_view(_Window())
     assert st.checked == [("f1", "rpm")]
     assert st.colors == {("f1", "rpm"): "#111"}
     assert st.plot_mode == "overlay"
-    assert st.cursor["mode"] == "single"
+    assert st.cursor_mode == "single"
     assert st.xlim == (0.0, 9.0)
+    assert st.ylims == {"f::rpm": (-1.0, 1.0)}
+    assert st.overlay_primary == ("f1", "rpm")
+    assert st.axis_opts["range_filter"] == {"enabled": True, "start": 0.0, "end": 9.0}
+    assert st.axis_opts["x_axis"] == {
+        "mode": "time", "fid": None, "channel": None, "label": "Time (s)"}
+    assert st.axis_opts["tick_density"] == {"x": 10, "y": 6}
 
 
 def test_apply_writes_widget_state():
-    nav, stack = _Nav(), _Stack()
+    win = _Window()
     st = ViewState(name="v", tab_color="#000",
                    checked=[("f1", "rpm")], colors={("f1", "rpm"): "#abc"},
-                   plot_mode="subplot", cursor={"mode": "off", "positions": []})
-    view_bridge.apply_view(st, nav, stack)
-    assert nav.set_colors == {("f1", "rpm"): "#abc"}
-    assert nav.set_checked == [("f1", "rpm")]
-    assert stack._pm == "subplot"
-    assert stack._cm == "off"
+                   plot_mode="subplot", cursor_mode="off",
+                   overlay_primary=None,
+                   axis_opts={"tick_density": {"x": 12, "y": 7}})
+    view_bridge.apply_view(st, win)
+    assert win.navigator.set_colors == {("f1", "rpm"): "#abc"}
+    assert win.navigator.set_checked == [("f1", "rpm")]
+    assert win.chart_stack._pm == "subplot"
+    assert win.chart_stack._cm == "off"
+    assert win._overlay_primary is None
 
 
 def test_restore_axes_sets_xlim():
-    stack = _Stack()
-    st = ViewState(name="v", tab_color="#000", xlim=(2.0, 5.0))
-    view_bridge.restore_axes(st, stack)
-    assert stack.canvas_time.applied == (2.0, 5.0)
+    win = _Window()
+    st = ViewState(name="v", tab_color="#000", xlim=(2.0, 5.0),
+                   ylims={"f::rpm": (-2.0, 2.0)})
+    view_bridge.restore_axes(st, win)
+    assert win.chart_stack.canvas_time.applied_x == (2.0, 5.0)
+    assert win.chart_stack.canvas_time.applied_y == {"f::rpm": (-2.0, 2.0)}
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -563,15 +635,40 @@ Expected: FAIL — `ModuleNotFoundError: mf4_analyzer.ui.view_bridge`
 # mf4_analyzer/ui/view_bridge.py
 """View 状态的抓取/写回桥。唯一懂各 widget 内部读写的地方。
 
-- capture_view: 从 navigator + chart_stack 读出一份 ViewState。
-- apply_view:   把 ViewState 写回 widget(勾选/颜色/模式/游标),不重绘。
-- restore_axes: 重绘后恢复坐标轴范围。
+- capture_view: 从 MainWindow 聚合读出一份 ViewState。
+- apply_view:   把 ViewState 写回 widget(勾选/颜色/模式/游标模式/坐标设置),不重绘。
+- restore_axes: 重绘后恢复 X/Y 可见范围。
 重绘本身由 MainWindow 在 apply_view 与 restore_axes 之间用现有路径触发。
 """
 from .view_state import ViewState
 
 
-def capture_view(navigator, chart_stack) -> ViewState:
+def capture_axis_opts(window) -> dict:
+    top = window.inspector.top
+    range_enabled = bool(top.range_enabled())
+    range_start, range_end = top.range_values()
+    tick_x, tick_y = top.tick_density()
+    custom_fid = getattr(window, "_custom_xaxis_fid", None)
+    custom_ch = getattr(window, "_custom_xaxis_ch", None)
+    return {
+        "range_filter": {
+            "enabled": range_enabled,
+            "start": float(range_start),
+            "end": float(range_end),
+        },
+        "x_axis": {
+            "mode": "channel" if custom_fid and custom_ch else "time",
+            "fid": custom_fid,
+            "channel": custom_ch,
+            "label": top.xaxis_label() or "Time (s)",
+        },
+        "tick_density": {"x": int(tick_x), "y": int(tick_y)},
+    }
+
+
+def capture_view(window) -> ViewState:
+    navigator = window.navigator
+    chart_stack = window.chart_stack
     checked_color = navigator.get_checked_channels()      # [(fid, ch, color)]
     checked = [(f, c) for f, c, _ in checked_color]
     colors = {(f, c): col for f, c, col in checked_color}
@@ -580,33 +677,45 @@ def capture_view(navigator, chart_stack) -> ViewState:
         name="", tab_color="",
         checked=checked, colors=colors,
         plot_mode=chart_stack.plot_mode(),
-        cursor={"mode": chart_stack.cursor_mode(), "positions": []},
+        cursor_mode=chart_stack.cursor_mode(),
         xlim=canvas.get_visible_xlim(),
+        ylims=canvas.get_visible_ylims(),
+        overlay_primary=getattr(window, "_overlay_primary", None),
+        axis_opts=capture_axis_opts(window),
     )
 
 
-def capture_into(state: ViewState, navigator, chart_stack) -> None:
+def capture_into(state: ViewState, window) -> None:
     """抓取当前界面写进已存在的 state,保留其 name/tab_color。"""
-    fresh = capture_view(navigator, chart_stack)
+    fresh = capture_view(window)
     state.checked = fresh.checked
     state.colors = fresh.colors
     state.plot_mode = fresh.plot_mode
-    state.cursor = fresh.cursor
+    state.cursor_mode = fresh.cursor_mode
     state.xlim = fresh.xlim
     state.ylims = fresh.ylims
+    state.overlay_primary = fresh.overlay_primary
     state.axis_opts = fresh.axis_opts
 
 
-def apply_view(state: ViewState, navigator, chart_stack) -> None:
+def apply_view(state: ViewState, window) -> None:
+    navigator = window.navigator
+    chart_stack = window.chart_stack
     navigator.set_channel_colors(state.colors)
     navigator.set_checked_channels(state.checked)
     chart_stack.set_plot_mode(state.plot_mode)
-    chart_stack.set_cursor_mode(state.cursor.get("mode", "off"))
+    chart_stack.set_cursor_mode(state.cursor_mode)
+    window._overlay_primary = state.overlay_primary
+    restore_axis_opts = getattr(window, "_restore_view_axis_opts", None)
+    if callable(restore_axis_opts):
+        restore_axis_opts(state.axis_opts)
 
 
-def restore_axes(state: ViewState, chart_stack) -> None:
+def restore_axes(state: ViewState, window) -> None:
+    canvas = window.chart_stack.canvas_time
     if state.xlim is not None:
-        chart_stack.canvas_time.set_xlim(*state.xlim)
+        canvas.restore_visible_xlim(state.xlim)
+    canvas.restore_visible_ylims(state.ylims)
 ```
 
 - [ ] **Step 4: 跑测试确认通过**
@@ -842,7 +951,7 @@ git commit -m "feat(view): Excel-style ViewTabBar widget"
 - Modify: `mf4_analyzer/ui/chart_stack.py`(`TimeChartCard.__init__` 末尾 ~:1244;`ChartStack` ~:1340)
 - Test: `tests/ui/test_view_tabbar_mount.py`
 
-> **先去重**:`grep -n "def cursor_mode\b\|def set_view_manager\|def set_time_tabbar_visible" mf4_analyzer/ui/chart_stack.py` 应为空。
+> **先核对现有入口**:`ChartStack.plot_mode()` / `ChartStack.cursor_mode()` / `set_plot_mode()` / `set_cursor_mode()` 当前仓库已存在,不要重复定义;本 Task 只新增 `mount_view_tabbar()` / `attach_view_tabbar()` / 标签栏显隐。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -900,14 +1009,11 @@ Expected: FAIL — `AttributeError: 'ChartStack' object has no attribute 'attach
         lay.insertWidget(lay.indexOf(self._hint_bar), bar)
 ```
 
-- [ ] **Step 3b: `ChartStack` 加 `cursor_mode()` getter + 挂载 + 随模式显隐**
+- [ ] **Step 3b: `ChartStack` 加挂载 + 随模式显隐**
 
-`cursor_mode()`:先 `grep -n "def cursor_mode" chart_stack.py` 确认无重复;若 `set_cursor_mode` 已委托给 `_time_card`,getter 同样委托:
+`cursor_mode()` 已存在,不要重复加。新增:
 
 ```python
-    def cursor_mode(self):
-        return self._time_card.cursor_mode()
-
     def attach_view_tabbar(self, manager):
         from .view_tabbar import ViewTabBar
         bar = ViewTabBar(manager, self._time_card)
@@ -934,7 +1040,7 @@ Expected: PASS(3 passed)
 
 ```bash
 git add mf4_analyzer/ui/chart_stack.py tests/ui/test_view_tabbar_mount.py
-git commit -m "feat(view): mount ViewTabBar in TimeChartCard + cursor_mode getter"
+git commit -m "feat(view): mount ViewTabBar in TimeChartCard"
 ```
 
 ---
@@ -990,6 +1096,8 @@ def test_switch_view_preserves_per_view_channels(qtbot, win):
     assert got == {("f1", "spd")}
 ```
 
+同一测试文件继续加一条屏幕状态快照回归:构造两个 view,分别设置不同 `plot_mode` / `cursor_mode` / `xlim` / `ylims` / `overlay_primary` / `axis_opts`(时间范围、自定义 X 轴、刻度密度),来回 `_switch_view()` 后断言这些状态全部恢复。注意:本期**不**断言 cursor 具体位置恢复。
+
 > 注:`_add_loaded_file` 的真实加载入口名以仓库为准(执行时 `grep -n "def .*add.*file\|def open_file\|def _load" main_window.py` 确认),测试 fixture 按真实入口改写。
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -1023,7 +1131,7 @@ Expected: FAIL — `AttributeError: 'MainWindow' object has no attribute 'view_m
 ```python
     def _capture_current_view(self):
         cur = self.view_manager.get(self.view_manager.active)
-        self._view_bridge.capture_into(cur, self.navigator, self.chart_stack)
+        self._view_bridge.capture_into(cur, self)
 
     def _switch_view(self, idx):
         if idx == self.view_manager.active:
@@ -1033,10 +1141,39 @@ Expected: FAIL — `AttributeError: 'MainWindow' object has no attribute 'view_m
 
     def _apply_active_view(self, idx):
         st = self.view_manager.get(idx)
-        self._view_bridge.apply_view(st, self.navigator, self.chart_stack)
+        blocked = [
+            self.navigator.blockSignals(True),
+            self.channel_list.blockSignals(True),
+            self.chart_stack.blockSignals(True),
+            self.inspector.blockSignals(True),
+        ]
+        self._applying_view_state = True
+        try:
+            self._view_bridge.apply_view(st, self)
+        finally:
+            self.inspector.blockSignals(blocked.pop())
+            self.chart_stack.blockSignals(blocked.pop())
+            self.channel_list.blockSignals(blocked.pop())
+            self.navigator.blockSignals(blocked.pop())
+            self._applying_view_state = False
         if self.files and self.chart_stack.current_mode() == 'time':
             self.plot_time()                   # 全量重绘出活画布
-            self._view_bridge.restore_axes(st, self.chart_stack)
+            self._view_bridge.restore_axes(st, self)
+
+    def _restore_view_axis_opts(self, axis_opts):
+        """恢复 view 级坐标/显示设置:时间范围、自定义 X 轴、X 标签、刻度密度。"""
+        opts = axis_opts or {}
+        range_filter = opts.get("range_filter") or {}
+        x_axis = opts.get("x_axis") or {}
+        tick_density = opts.get("tick_density") or {}
+        # 具体控件 API 以当前 inspector.top 为准:
+        # - range_filter: 勾选时间范围开关 + set_range_values(start, end)
+        # - x_axis: 写回 _custom_xaxis_fid/_custom_xaxis_ch/_custom_xlabel,
+        #           并同步 inspector.top 的 X 轴模式/标签控件
+        # - tick_density: 同步 inspector spinbox,然后让 plot_time 后 set_tick_density 生效
+        self._custom_xaxis_fid = x_axis.get("fid")
+        self._custom_xaxis_ch = x_axis.get("channel")
+        self._custom_xlabel = x_axis.get("label") or None
 
     def _on_view_new(self):
         self._capture_current_view()
@@ -1212,7 +1349,8 @@ Expected: FAIL — split 未接线,`split_active()` 仍 False
         data = self._build_plot_data(state.checked, state.colors)
         canvas.plot_channels(data, state.plot_mode, xlabel='Time (s)')
         if state.xlim is not None:
-            canvas.set_xlim(*state.xlim)
+            canvas.restore_visible_xlim(state.xlim)
+        canvas.restore_visible_ylims(state.ylims)
 ```
 
 把 `plot_time`(:1014)里"构建 data 列表"那段(:1083-1111)抽成可复用的 `_build_plot_data(checked, colors)` 并让 `plot_time` 调用它(DRY 重构,行为不变);`_render_view_into` 也调它。
@@ -1248,7 +1386,7 @@ git commit -m "feat(view): side-by-side compare rendering + focus routing (P2 co
 
 # 自检(spec 覆盖核对)
 
-- spec §3.1 ViewState 字段 → Task 1 ✓(ylims/axis_opts 字段已建;P1 捕获 channels/colors/mode/cursor/xlim,ylims/axis_opts 的**实际捕获**留待 Task 9 后的微调或 P3,字段与序列化已就位,不阻塞)。
+- spec §3.1 ViewState 字段 → Task 1/3/4/7 ✓(`checked`/`colors`/`plot_mode`/`cursor_mode`/`xlim`/`ylims`/`overlay_primary`/`axis_opts` 都必须实际捕获与恢复;这是本期屏幕状态快照的验收范围)。
 - spec §3.2 ViewManager → Task 2 ✓
 - spec §4 组件边界 → Task 1/4/5/6/7 ✓
 - spec §5 切换数据流 → Task 7 ✓
@@ -1257,4 +1395,4 @@ git commit -m "feat(view): side-by-side compare rendering + focus routing (P2 co
 - spec §8 测试 → 每 Task 含纯/UI 测 + P1/P2 末视觉验真 ✓
 - spec §10 风险 → 每个改 chart_stack/main_window 的 Task 顶部"先去重"提示 ✓
 
-> **已知留白(非占位符,是范围决定)**:`ylims` / `axis_opts` 的实际抓取与恢复在 P1 不实现(字段与序列化已建好),按 spec §11 分期归入后续;若执行中发现 Y 缩放保真是刚需,在 Task 9 后追加一个对称的 `capture/restore_ylims` 小 Task(用 `canvas.axes_list` 各 handle 的 `get_ylim/set_ylim`,按绘制顺序索引对齐)。
+> **本期不保存**:游标具体位置、toolbar back/forward 历史、跨会话 project 落盘、图片快照。除这些明确非目标外,坐标/曲线设置与放大缩小后的可见范围都必须作为可交互屏幕状态快照恢复。

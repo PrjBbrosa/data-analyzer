@@ -27,6 +27,7 @@ fallback branch was reached".
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -1177,6 +1178,10 @@ def _five_channel_rows():
     ]
 
 
+def _view_state_key(data_id, name):
+    return json.dumps([data_id, name], ensure_ascii=False, separators=(",", ":"))
+
+
 def _major_tick_labels(axis):
     levels = getattr(axis, "_tickLevels", None)
     assert levels is not None, "expected explicit X tick levels"
@@ -1558,6 +1563,89 @@ class TestTimeDomainCanvasPGSubplotMode:
 
         assert canvas.axes_list[-1].get_xlim() == pytest.approx((0.20, 0.40))
         assert tuple(bottom_axis.range) == pytest.approx((0.20, 0.40))
+
+    def test_visible_xlim_restore_updates_visible_bottom_axis_numbers(self, qapp):
+        """The public view-state API must reuse the protected X restore path
+        so bottom AxisItem tick numbers stay synchronized."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        assert canvas.get_visible_xlim() is None
+
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+
+        bottom_axis = canvas.axes_list[-1].plot_item.getAxis("bottom")
+        canvas.restore_visible_xlim((0.25, 0.50))
+        QCoreApplication.processEvents()
+
+        assert canvas.get_visible_xlim() == pytest.approx((0.25, 0.50))
+        assert canvas.axes_list[-1].get_xlim() == pytest.approx((0.25, 0.50))
+        assert tuple(bottom_axis.range) == pytest.approx((0.25, 0.50))
+
+    def test_visible_ylims_roundtrip_and_missing_channels_are_skipped(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:2], mode="subplot")
+        QCoreApplication.processEvents()
+
+        speed = canvas._channel_lines["speed"][0]
+        torque = canvas._channel_lines["torque"][0]
+        speed.set_ylim(-1200.0, 1200.0)
+        torque.set_ylim(40.0, 60.0)
+        expected = canvas.get_visible_ylims()
+        assert expected == {
+            _view_state_key("fid-1", "speed"): pytest.approx((-1200.0, 1200.0)),
+            _view_state_key("fid-1", "torque"): pytest.approx((40.0, 60.0)),
+        }
+
+        speed.set_ylim(-1.0, 1.0)
+        torque.set_ylim(-2.0, 2.0)
+        canvas.restore_visible_ylims({"missing": (0.0, 1.0)})
+        assert speed.get_ylim() == pytest.approx((-1.0, 1.0))
+        assert torque.get_ylim() == pytest.approx((-2.0, 2.0))
+
+        canvas.restore_visible_ylims({**expected, "missing": (0.0, 1.0)})
+        assert speed.get_ylim() == pytest.approx((-1200.0, 1200.0))
+        assert torque.get_ylim() == pytest.approx((40.0, 60.0))
+
+    def test_visible_ylims_distinguish_duplicate_display_names(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("speed", True, t, np.sin(t), "#1769e0", "rpm", "file-a"),
+            ("speed", True, t, np.cos(t), "#ef4444", "rpm", "file-b"),
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+
+        first = canvas.axes_list[0]
+        second = canvas.axes_list[1]
+        first.set_ylim(-10.0, 10.0)
+        second.set_ylim(40.0, 60.0)
+        captured = canvas.get_visible_ylims()
+
+        assert set(captured) == {
+            _view_state_key("file-a", "speed"),
+            _view_state_key("file-b", "speed"),
+        }
+        assert captured[_view_state_key("file-a", "speed")] == pytest.approx(
+            (-10.0, 10.0)
+        )
+        assert captured[_view_state_key("file-b", "speed")] == pytest.approx(
+            (40.0, 60.0)
+        )
+
+        first.set_ylim(-1.0, 1.0)
+        second.set_ylim(-2.0, 2.0)
+        canvas.restore_visible_ylims(captured)
+
+        assert first.get_ylim() == pytest.approx((-10.0, 10.0))
+        assert second.get_ylim() == pytest.approx((40.0, 60.0))
+        assert "speed" in canvas._channel_lines
 
     def test_subplot_x_grid_geometry_is_aligned_before_first_frame(self, qapp):
         """The first rendered subplot frame must have one shared X grid.

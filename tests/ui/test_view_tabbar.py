@@ -1,0 +1,198 @@
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton
+
+from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager
+from mf4_analyzer.ui.view_tabbar import ViewTabBar
+
+
+def _manager_with_views(count=2, active=0):
+    manager = ViewManager()
+    for _ in range(count - 1):
+        manager.new_view()
+    if manager.active != active:
+        manager.set_active(active)
+    return manager
+
+
+def _bar(qtbot, count=2, active=0):
+    manager = _manager_with_views(count=count, active=active)
+    bar = ViewTabBar(manager)
+    qtbot.addWidget(bar)
+    return manager, bar
+
+
+def _tab_point(bar, idx=0):
+    rect = bar.tabBar().tabRect(idx)
+    return rect.center()
+
+
+def test_renders_one_tab_per_view(qtbot):
+    manager, bar = _bar(qtbot, count=2)
+
+    assert bar.count() == len(manager.views)
+    assert bar.tabBar().tabText(0) == "View 1"
+    assert bar.tabBar().tabText(1) == "View 2"
+
+
+def test_switching_other_tab_emits_switch_requested(qtbot):
+    _manager, bar = _bar(qtbot, count=2, active=0)
+
+    with qtbot.waitSignal(bar.switch_requested, timeout=100) as blocker:
+        bar.tabBar().setCurrentIndex(1)
+
+    assert blocker.args == [1]
+
+
+def test_plus_button_emits_new_requested(qtbot):
+    _manager, bar = _bar(qtbot, count=2)
+
+    with qtbot.waitSignal(bar.new_requested, timeout=100):
+        bar._on_plus_clicked()
+
+
+def test_views_changed_rerenders_after_manager_adds_view(qtbot):
+    manager, bar = _bar(qtbot, count=2)
+
+    manager.new_view()
+
+    assert bar.count() == 3
+    assert bar.tabBar().tabText(2) == "View 3"
+
+
+def test_tab_moved_emits_reorder_requested(qtbot):
+    _manager, bar = _bar(qtbot, count=2)
+
+    with qtbot.waitSignal(bar.reorder_requested, timeout=100) as blocker:
+        bar.tabBar().moveTab(0, 1)
+
+    assert blocker.args == [0, 1]
+
+
+def test_tab_moved_does_not_emit_switch_requested(qtbot):
+    _manager, bar = _bar(qtbot, count=3, active=0)
+    switches = []
+    bar.switch_requested.connect(switches.append)
+
+    with qtbot.waitSignal(bar.reorder_requested, timeout=100):
+        bar.tabBar().moveTab(0, 2)
+    QApplication.processEvents()
+
+    assert switches == []
+
+
+def test_active_changed_syncs_current_tab_without_switch_intent(qtbot):
+    manager, bar = _bar(qtbot, count=2, active=0)
+    switches = []
+    bar.switch_requested.connect(switches.append)
+
+    manager.set_active(1)
+
+    assert bar.tabBar().currentIndex() == 1
+    assert switches == []
+
+
+def test_plus_button_disabled_at_view_cap(qtbot):
+    _manager, bar = _bar(qtbot, count=MAX_VIEWS, active=0)
+    plus = bar.findChild(QPushButton, "viewTabPlus")
+
+    assert plus is not None
+    assert not plus.isEnabled()
+
+
+def test_double_click_tab_starts_inline_rename_and_return_emits(qtbot):
+    _manager, bar = _bar(qtbot, count=2)
+
+    bar._on_double_clicked(0)
+    editor = bar.findChild(QLineEdit, "viewTabRenameEditor")
+    assert editor is not None
+    assert not editor.isHidden()
+    editor.setText("Road load")
+
+    with qtbot.waitSignal(bar.rename_requested, timeout=100) as blocker:
+        qtbot.keyClick(editor, Qt.Key_Return)
+
+    assert blocker.args == [0, "Road load"]
+    assert not editor.isVisible()
+
+
+def test_inline_rename_escape_cancels(qtbot):
+    _manager, bar = _bar(qtbot, count=2)
+    renamed = []
+    bar.rename_requested.connect(lambda idx, text: renamed.append((idx, text)))
+
+    bar._on_double_clicked(0)
+    editor = bar.findChild(QLineEdit, "viewTabRenameEditor")
+    qtbot.keyClick(editor, Qt.Key_Escape)
+
+    assert renamed == []
+
+
+def test_context_menu_duplicate_emits_intent(qtbot, monkeypatch):
+    _manager, bar = _bar(qtbot, count=2)
+    received = []
+    bar.duplicate_requested.connect(received.append)
+
+    def fake_exec(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "复制此 View")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+
+    bar._on_context_menu(_tab_point(bar, 0))
+
+    assert received == [0]
+
+
+def test_context_menu_color_split_and_delete_emit_once(qtbot, monkeypatch):
+    actions_to_signals = [
+        ("改标签颜色...", "color_requested"),
+        ("与此 View 并排", "split_requested"),
+        ("删除", "delete_requested"),
+    ]
+
+    for action_text, signal_name in actions_to_signals:
+        _manager, bar = _bar(qtbot, count=2)
+        received = []
+        getattr(bar, signal_name).connect(received.append)
+
+        def fake_exec(menu, *_args, text=action_text):
+            return next(action for action in menu.actions() if action.text() == text)
+
+        monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+
+        bar._on_context_menu(_tab_point(bar, 0))
+
+        assert received == [0]
+
+
+def test_context_menu_rename_starts_inline_editor_and_emits_once(qtbot, monkeypatch):
+    _manager, bar = _bar(qtbot, count=2)
+    received = []
+    bar.rename_requested.connect(lambda idx, text: received.append((idx, text)))
+
+    def fake_exec(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "重命名")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+
+    bar._on_context_menu(_tab_point(bar, 0))
+    editor = bar.findChild(QLineEdit, "viewTabRenameEditor")
+    assert editor is not None
+    editor.setText("Context name")
+    qtbot.keyClick(editor, Qt.Key_Return)
+
+    assert received == [(0, "Context name")]
+
+
+def test_context_menu_delete_disabled_for_single_view(qtbot, monkeypatch):
+    _manager, bar = _bar(qtbot, count=1)
+    deleted = []
+    bar.delete_requested.connect(deleted.append)
+
+    def fake_exec(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "删除")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+
+    bar._on_context_menu(_tab_point(bar, 0))
+
+    assert deleted == []

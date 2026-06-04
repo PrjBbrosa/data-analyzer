@@ -3,7 +3,7 @@ from PyQt5.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, pyqtSigna
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QAction, QFileDialog, QFrame, QLabel, QPushButton, QSizePolicy,
-    QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QSplitter, QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 # Hi-DPI copy/save scale (spec §E). The TimeDomainCanvasPG caps the
@@ -1242,6 +1242,14 @@ class TimeChartCard(_ChartCard):
             self._time_button_shortcuts.append(
                 _install_button_shortcut(self, btn, label, shortcut, key)
             )
+        self.view_tabbar = None
+
+    def mount_view_tabbar(self, bar):
+        """Mount the ViewTabBar between the canvas and bottom hint bar."""
+        bar.setParent(self)
+        lay = self.layout()
+        lay.insertWidget(lay.indexOf(self._hint_bar), bar)
+        self.view_tabbar = bar
 
     def _sync_responsive_toolbar(self):
         super()._sync_responsive_toolbar()
@@ -1356,6 +1364,11 @@ class ChartStack(QWidget):
         self.canvas_fft_time = SpectrogramCanvas(self)
         self.canvas_order = PlotCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
+        self._time_split = QSplitter(Qt.Horizontal, self.stack)
+        self._time_split.setObjectName("timeDomainSplit")
+        self._time_split.setChildrenCollapsible(False)
+        self._time_split.addWidget(self._time_card)
+        self._secondary_card = None
         self._fft_card = _ChartCard(
             self.canvas_fft,
             annotations=True,
@@ -1369,7 +1382,7 @@ class ChartStack(QWidget):
             annotations=True,
             chart_mode='order',
         )
-        self.stack.addWidget(self._time_card)
+        self.stack.addWidget(self._time_split)
         self.stack.addWidget(self._fft_card)
         self.stack.addWidget(self._fft_time_card)
         self.stack.addWidget(self._order_card)
@@ -1416,12 +1429,59 @@ class ChartStack(QWidget):
     def count(self):
         return self.stack.count()
 
+    def split_active(self):
+        return (
+            self._secondary_card is not None
+            and self.current_mode() == 'time'
+            and self._secondary_card.isVisibleTo(self._time_split)
+        )
+
+    def secondary_canvas(self):
+        if self._secondary_card is None:
+            return None
+        return self._secondary_card.canvas
+
+    def enter_split(self):
+        if self._secondary_card is None:
+            canvas = TimeDomainCanvasPG(self)
+            self._secondary_card = TimeChartCard(canvas)
+            self._set_secondary_time_controls_enabled(False)
+            self._secondary_card.copy_image_requested.connect(
+                lambda: self._copy_card_image(self._secondary_card)
+            )
+            self._time_split.addWidget(self._secondary_card)
+        self._secondary_card.setVisible(True)
+        total = max(2, self._time_split.width())
+        left = max(1, total // 2)
+        self._time_split.setSizes([left, max(1, total - left)])
+
+    def exit_split(self):
+        if self._secondary_card is not None:
+            self._secondary_card.setVisible(False)
+
+    def attach_view_tabbar(self, manager):
+        from .view_tabbar import ViewTabBar
+
+        existing = getattr(self, '_view_tabbar', None)
+        if existing is not None:
+            existing.setVisible(self.current_mode() == 'time')
+            return existing
+
+        bar = ViewTabBar(manager, self._time_card)
+        self._time_card.mount_view_tabbar(bar)
+        self._view_tabbar = bar
+        bar.setVisible(self.current_mode() == 'time')
+        return bar
+
     def set_mode(self, mode):
         idx = _MODE_TO_INDEX[mode]
         if self.stack.currentIndex() == idx:
             return
         self.stack.setCurrentIndex(idx)
         self.stats_strip.setVisible(_STATS_STRIP_ENABLED and mode == 'time')
+        bar = getattr(self, '_view_tabbar', None)
+        if bar is not None:
+            bar.setVisible(mode == 'time')
         self.mode_changed.emit(mode)
 
     def current_mode(self):
@@ -1466,9 +1526,20 @@ class ChartStack(QWidget):
 
     def full_reset_all(self):
         self.canvas_time.full_reset()
+        if self._secondary_card is not None:
+            self._secondary_card.canvas.full_reset()
         self.canvas_fft.full_reset()
         self.canvas_fft_time.full_reset()
         self.canvas_order.full_reset()
+
+    def _set_secondary_time_controls_enabled(self, enabled):
+        card = self._secondary_card
+        if card is None:
+            return
+        for button in (card.btn_subplot, card.btn_overlay):
+            button.setEnabled(enabled)
+        for button in card._cursor_buttons.values():
+            button.setEnabled(enabled)
 
     def _copy_card_image(self, card):
         """Capture the card's canvas for MainWindow to publish. For the
@@ -1490,8 +1561,8 @@ class ChartStack(QWidget):
         canvas_h = max(1, int(canvas.height()))
         scale_x = max(1.0, float(pix.width()) / float(canvas_w))
         scale_y = max(1.0, float(pix.height()) / float(canvas_h))
-        if (card is self.stack.currentWidget()
-                and card is self._time_card
+        if (card is self._time_card
+                and self.current_mode() == 'time'
                 and self._pill.isVisible()):
             canvas_origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
             pill_geo = self._pill.geometry()
@@ -1588,7 +1659,7 @@ class ChartStack(QWidget):
         else:
             # Default anchor: top-right of the canvas area (under the toolbar)
             # with an 8 px inset so the pill never covers toolbar buttons.
-            card = self.stack.currentWidget()
+            card = self._time_card
             w = card.width() if card is not None else self.stack.width()
             y_top = 8
             if card is not None and hasattr(card, 'canvas'):
@@ -1605,6 +1676,40 @@ class ChartStack(QWidget):
         """Clear pill content and hide it; preserves the user-placed flag so a
         subsequent cursor activation reappears at the spot the user chose."""
         self._pill.clear()
+
+    def cursor_pill_snapshot(self):
+        """Return the current floating cursor pill UI state.
+
+        The pill content is not part of ViewState; it reflects the last cursor
+        hover/readout on the active canvas. Split rendering temporarily applies
+        another view through the primary controls, so callers can use this to
+        preserve the active readout across that off-screen render.
+        """
+        return {
+            'visible': self._pill.isVisible(),
+            'primary': self._pill.primary_text(),
+            'detail': self._pill._detail.text(),
+            'detail_visible': self._pill.has_detail(),
+            'user_placed': self._pill.is_user_placed(),
+            'pos': (self._pill.x(), self._pill.y()),
+        }
+
+    def restore_cursor_pill_snapshot(self, snapshot):
+        if not snapshot:
+            return
+        self._pill.set_primary(snapshot.get('primary') or '')
+        detail = snapshot.get('detail') if snapshot.get('detail_visible') else ''
+        self._pill.set_detail_html(detail or '')
+        self._pill.mark_user_placed(snapshot.get('user_placed', False))
+        pos = snapshot.get('pos')
+        if pos is not None:
+            self._pill.move(pos[0], pos[1])
+        self._pill.setVisible(bool(snapshot.get('visible')) and self.current_mode() == 'time')
+        if self._pill.isVisible():
+            if not self._pill.is_user_placed():
+                self._reposition_pill()
+            else:
+                self._pill.raise_()
 
     def cursor_pill_text(self):
         return self._pill.primary_text()

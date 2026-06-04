@@ -1,0 +1,223 @@
+import pytest
+
+from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager
+
+
+def make():
+    return ViewManager()
+
+
+def test_starts_with_one_view():
+    m = make()
+
+    assert len(m.views) == 1
+    assert m.active == 0
+    assert m.split_with is None
+
+
+def test_new_view_respects_cap(qtbot):
+    m = make()
+    for expected_idx in range(1, MAX_VIEWS):
+        with qtbot.waitSignals(
+            [m.views_changed, m.active_changed],
+            timeout=100,
+            check_params_cbs=[None, lambda idx, expected=expected_idx: idx == expected],
+        ):
+            assert m.new_view() == expected_idx
+        assert m.active == expected_idx
+
+    assert len(m.views) == MAX_VIEWS
+    active_events = []
+    m.active_changed.connect(active_events.append)
+    assert m.new_view() == -1
+    assert len(m.views) == MAX_VIEWS
+    assert active_events == []
+
+
+def test_delete_cannot_empty(qtbot):
+    m = make()
+    m.new_view()
+
+    with qtbot.waitSignal(m.views_changed, timeout=100):
+        m.delete_view(0)
+
+    assert len(m.views) == 1
+    m.delete_view(0)
+    assert len(m.views) == 1
+
+
+def test_duplicate_inserts_after_with_suffix(qtbot):
+    m = make()
+    m.views[0].name = "A"
+
+    with qtbot.waitSignals(
+        [m.views_changed, m.active_changed],
+        timeout=100,
+        check_params_cbs=[None, lambda idx: idx == 1],
+    ):
+        idx = m.duplicate(0)
+
+    assert idx == 1
+    assert m.views[1].name == "A 副本"
+    assert m.active == 1
+
+
+def test_duplicate_before_active_reindexes_old_active_and_emits(qtbot):
+    m = make()
+    m.new_view()
+    m.new_view()
+    m.views[0].name, m.views[1].name, m.views[2].name = "A", "B", "C"
+    m.set_active(2)
+
+    with qtbot.waitSignals(
+        [m.views_changed, m.active_changed],
+        timeout=100,
+        check_params_cbs=[None, lambda idx: idx == 1],
+    ):
+        idx = m.duplicate(0)
+
+    assert idx == 1
+    assert [v.name for v in m.views] == ["A", "A 副本", "B", "C"]
+    assert m.active == 1
+
+
+def test_rename_blank_falls_back(qtbot):
+    m = make()
+
+    with qtbot.waitSignal(m.views_changed, timeout=100):
+        m.rename(0, "   ")
+
+    assert m.views[0].name == "未命名"
+
+
+def test_set_color_updates_tab_color_and_emits(qtbot):
+    m = make()
+
+    with qtbot.waitSignal(m.views_changed, timeout=100):
+        m.set_color(0, "#e8590c")
+
+    assert m.views[0].tab_color == "#e8590c"
+
+
+def test_reorder_moves_item_and_preserves_active_view(qtbot):
+    m = make()
+    m.new_view()
+    m.new_view()
+    m.views[0].name, m.views[1].name, m.views[2].name = "A", "B", "C"
+    m.set_active(1)
+
+    with qtbot.waitSignal(m.views_changed, timeout=100):
+        m.reorder(0, 2)
+
+    assert [v.name for v in m.views] == ["B", "C", "A"]
+    assert m.active == 0
+
+
+def test_set_active_clears_split(qtbot):
+    m = make()
+    m.new_view()
+    m.set_active(0)
+    m.set_split(1)
+    assert m.split_with == 1
+
+    with qtbot.waitSignals(
+        [m.split_changed, m.active_changed],
+        timeout=100,
+        check_params_cbs=[lambda idx: idx is None, lambda idx: idx == 1],
+    ):
+        m.set_active(1)
+
+    assert m.split_with is None
+
+
+def test_set_active_current_view_is_noop():
+    m = make()
+    m.new_view()
+    m.set_active(0)
+    m.set_split(1)
+    active_events = []
+    split_events = []
+    m.active_changed.connect(active_events.append)
+    m.split_changed.connect(split_events.append)
+
+    m.set_active(0)
+
+    assert m.active == 0
+    assert m.split_with == 1
+    assert active_events == []
+    assert split_events == []
+
+
+def test_set_split_rejects_self():
+    m = make()
+    m.new_view()
+    m.set_active(0)
+
+    m.set_split(0)
+
+    assert m.split_with is None
+
+
+def test_set_split_none_when_already_none_is_noop():
+    m = make()
+    split_events = []
+    m.split_changed.connect(split_events.append)
+
+    m.set_split(None)
+
+    assert m.split_with is None
+    assert split_events == []
+
+
+def test_set_split_accepts_other_view_and_none(qtbot):
+    m = make()
+    m.new_view()
+    m.set_active(0)
+
+    with qtbot.waitSignal(m.split_changed, timeout=100) as blocker:
+        m.set_split(1)
+
+    assert blocker.args == [1]
+    assert m.split_with == 1
+
+    with qtbot.waitSignal(m.split_changed, timeout=100) as blocker:
+        m.set_split(None)
+
+    assert blocker.args == [None]
+    assert m.split_with is None
+
+
+def test_set_split_same_other_view_is_noop(qtbot):
+    m = make()
+    m.new_view()
+    m.set_active(0)
+
+    with qtbot.waitSignal(m.split_changed, timeout=100) as blocker:
+        m.set_split(1)
+
+    assert blocker.args == [1]
+    split_events = []
+    m.split_changed.connect(split_events.append)
+
+    m.set_split(1)
+
+    assert m.split_with == 1
+    assert split_events == []
+
+
+def test_get_returns_view_state():
+    m = make()
+
+    assert m.get(0) is m.views[0]
+
+
+def test_get_rejects_negative_and_out_of_range_indexes():
+    m = make()
+
+    with pytest.raises(IndexError) as negative:
+        m.get(-1)
+    assert negative.value.args == (-1,)
+
+    with pytest.raises(IndexError) as out_of_range:
+        m.get(1)
+    assert out_of_range.value.args == (1,)

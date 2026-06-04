@@ -231,6 +231,15 @@ class FileNavigator(QWidget):
     def get_checked_channels(self):
         return self.channel_list.get_checked_channels()
 
+    def set_checked_channels(self, checked):
+        self.channel_list.set_checked_channels(checked)
+
+    def get_channel_colors(self):
+        return self.channel_list.get_channel_colors()
+
+    def set_channel_colors(self, colors):
+        self.channel_list.set_channel_colors(colors)
+
     def get_file_data(self, fid):
         return self.channel_list.get_file_data(fid)
 
