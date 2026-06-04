@@ -1048,6 +1048,16 @@ QWidget#chartCard {
     background-color: #ffffff;
 }
 
+/* Side-by-side compare: the focused time card gets a primary-blue accent
+ * border so it's obvious which pane channel-checks / replots target. The
+ * property selector is more specific than the base #chartCard rule above, so
+ * it wins; the dynamic `focused` property is driven from ChartStack and needs
+ * a paired unpolish/polish to re-evaluate (see set_focused_card). */
+QWidget#chartCard[focused="true"] {
+    border: 2px solid #2563eb;
+    padding: 2px;
+}
+
 /* Chart toolbar — compact spacing & padding (post-i18n). Three selectors
  * to cover Qt style resolution variations: QToolBar (matplotlib subclass),
  * QWidget (object-name match), and the matplotlib subclass name. */

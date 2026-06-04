@@ -1392,8 +1392,9 @@ def test_time_chart_card_has_segmented_controls(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack, TimeChartCard
     cs = ChartStack()
     qtbot.addWidget(cs)
-    # First card in the stack is the time-domain card.
-    card = cs.stack.widget(0)
+    # The time-domain card now lives inside a QSplitter at stack index 0;
+    # reach the real card directly (== cs.stack.widget(0).widget(0)).
+    card = cs._time_card
     assert isinstance(card, TimeChartCard)
     # Five segmented buttons on the card toolbar (post-i18n labels):
     # 分屏 / 叠加 / 游标关 / 单游标 / 双游标
@@ -1405,7 +1406,9 @@ def test_time_chart_card_removes_subplots_config_button(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     qtbot.addWidget(cs)
-    card = cs.stack.widget(0)
+    # The time-domain card now lives inside a QSplitter at stack index 0;
+    # reach the real card directly (== cs.stack.widget(0).widget(0)).
+    card = cs._time_card
     # No QAction on the native nav toolbar should map to 'configure_subplots'.
     native_tb = card.toolbar
     for act in native_tb.actions():

@@ -334,6 +334,7 @@ class MainWindow(QMainWindow):
         )
         self.chart_stack.cursor_mode_changed.connect(self._on_cursor_mode_changed)
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
+        self.chart_stack.focus_changed.connect(self._on_chart_focus_changed)
         self.inspector.signal_changed.connect(self._on_inspector_signal_changed)
         self.view_tabbar.switch_requested.connect(self._switch_view)
         self.view_tabbar.new_requested.connect(self._on_view_new)
@@ -661,14 +662,17 @@ class MainWindow(QMainWindow):
         self._plot_time_preserving_xlim()
 
     def _safe_capture_primary_xlim(self):
-        """Return ``(lo, hi)`` for the current primary x-axis, or None.
+        """Return ``(lo, hi)`` for the focused card's x-axis, or None.
 
-        None is returned when no primary axis is live (e.g. the canvas
-        was just cleared, no files loaded, no checked channels) — in
-        that case there is nothing to preserve. Defensive ``try/except``
-        because matplotlib raises on a destroyed axes.
+        Targets ``chart_stack.focused_canvas()`` so the xlim-preserving replot
+        path (``_plot_time_preserving_xlim`` → ``plot_time``) reads from the
+        same pane it is about to redraw. Outside split this is the primary
+        ``self.canvas_time``. None is returned when no primary axis is live
+        (e.g. the canvas was just cleared, no files loaded, no checked
+        channels) — in that case there is nothing to preserve. Defensive
+        ``try/except`` because matplotlib raises on a destroyed axes.
         """
-        ax = getattr(self.canvas_time, '_primary_xaxis_ax', None)
+        ax = getattr(self.chart_stack.focused_canvas(), '_primary_xaxis_ax', None)
         if ax is None:
             return None
         try:
@@ -688,8 +692,12 @@ class MainWindow(QMainWindow):
         compatibility check is intentionally loose: as long as the
         captured window overlaps the new axis' autoscaled extent, we
         keep it; otherwise we let autoscale stand.
+
+        Targets ``chart_stack.focused_canvas()`` to match the capture side
+        above; outside split that is ``self.canvas_time``.
         """
-        ax = getattr(self.canvas_time, '_primary_xaxis_ax', None)
+        canvas = self.chart_stack.focused_canvas()
+        ax = getattr(canvas, '_primary_xaxis_ax', None)
         if ax is None:
             return
         try:
@@ -713,7 +721,7 @@ class MainWindow(QMainWindow):
         # a 40 ms debounced envelope refresh. Drain it synchronously so
         # the post-toggle frame is the full-detail envelope, not a stale
         # one rendered from the previous mode's last refresh.
-        flush = getattr(self.canvas_time, '_flush_pending_refresh', None)
+        flush = getattr(canvas, '_flush_pending_refresh', None)
         if callable(flush):
             try:
                 flush()
@@ -1183,12 +1191,28 @@ class MainWindow(QMainWindow):
         self.inspector.order_ctx.set_signal_candidates(sig_cands)
         self.inspector.order_ctx.set_rpm_candidates(rpm_cands)
 
+    def _on_chart_focus_changed(self, secondary_focused):
+        """Side-by-side focus switched (P2 Task 9 Step 5). The focus border is
+        owned by ChartStack; here we only surface which pane now receives
+        channel-check replots. We deliberately do NOT replot on focus change:
+        the secondary holds a compare view's snapshot and must keep it until
+        the user actually toggles a channel, at which point _ch_changed routes
+        the replot to focused_canvas()."""
+        if not self.chart_stack.split_active():
+            return
+        which = "对比" if secondary_focused else "主"
+        self.statusBar.showMessage(f"聚焦{which}视图：通道勾选将作用于此栏", 2000)
+
     def _ch_changed(self):
         # Cache invalidation site 4: the visible channel set changed, so
         # the Line2D map plot_channels rebuilds will not match the cache
-        # entries from the prior selection. Drop everything; the next
-        # plot_time() will re-prime as needed.
-        self.canvas_time.invalidate_envelope_cache("selection changed")
+        # entries from the prior selection. Drop the focused canvas's cache;
+        # the next plot_time() will re-prime as needed. (Outside split the
+        # focused canvas IS self.canvas_time, so this is unchanged.)
+        focused = self.chart_stack.focused_canvas()
+        invalidate = getattr(focused, 'invalidate_envelope_cache', None)
+        if callable(invalidate):
+            invalidate("selection changed")
         if self.files and self.chart_stack.current_mode() == 'time':
             self._plot_time_preserving_xlim()
 
@@ -1201,7 +1225,17 @@ class MainWindow(QMainWindow):
         self.chart_stack.stats_strip.update_stats(st or {})
 
     def plot_time(self):
-        self._plot_time_on_canvas(self.canvas_time, update_primary_ui=True)
+        # Route channel-check replots to the focused time card. Outside
+        # side-by-side compare, focused_canvas() is the primary self.canvas_time
+        # so this is byte-identical to the old behaviour; while split is active
+        # and the secondary card is focused, the replot lands on the secondary
+        # canvas instead. update_primary_ui stays gated on whether the focused
+        # canvas IS the primary, so the stats strip / status bar / cache
+        # bookkeeping only fire for the primary pane.
+        focused = self.chart_stack.focused_canvas()
+        self._plot_time_on_canvas(
+            focused, update_primary_ui=(focused is self.canvas_time)
+        )
 
     def _plot_time_on_canvas(self, canvas, update_primary_ui=True):
         if not self.files:

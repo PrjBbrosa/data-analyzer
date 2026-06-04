@@ -1352,6 +1352,11 @@ class ChartStack(QWidget):
     annotation_enabled_changed = pyqtSignal(str, bool)
     image_copied = pyqtSignal(str)  # legacy status text signal
     image_captured = pyqtSignal(QPixmap)  # final pixmap for MainWindow publishing
+    # Emitted when the focused time card changes while side-by-side (split) is
+    # active. Carries True when the secondary card is focused, False for the
+    # primary. MainWindow uses it to route channel-check replots to the right
+    # canvas; it is inert (never emitted) outside split mode.
+    focus_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1369,6 +1374,13 @@ class ChartStack(QWidget):
         self._time_split.setChildrenCollapsible(False)
         self._time_split.addWidget(self._time_card)
         self._secondary_card = None
+        # Focus routing (P2 Task 9 Step 5): the focused time card receives
+        # channel-check replots while side-by-side is active. Defaults to the
+        # primary card; a click on either card switches focus (see
+        # _install_focus_filter / eventFilter). Outside split mode the
+        # focused card is always the primary and the property is unset.
+        self._focused_card = self._time_card
+        self._install_focus_filter(self._time_card)
         self._fft_card = _ChartCard(
             self.canvas_fft,
             annotations=True,
@@ -1441,6 +1453,123 @@ class ChartStack(QWidget):
             return None
         return self._secondary_card.canvas
 
+    def focused_card(self):
+        """Return the time card that channel-check replots target.
+
+        Outside split mode (or when the secondary card has been hidden), the
+        focused card is always the primary ``_time_card``; this keeps the
+        non-split behaviour byte-identical. While split is active, the focused
+        card follows the last card the user clicked."""
+        if not self.split_active():
+            return self._time_card
+        if self._focused_card is self._secondary_card and self._secondary_card is not None:
+            return self._secondary_card
+        return self._time_card
+
+    def focused_canvas(self):
+        """Canvas of :meth:`focused_card`. Returns the primary time canvas
+        whenever split is inactive, so callers that previously wrote to
+        ``self.canvas_time`` keep the same target outside compare mode."""
+        return self.focused_card().canvas
+
+    def set_focused_card(self, card):
+        """Make ``card`` the focused time card and repaint the focus border.
+
+        No-op outside split mode and when the target is already focused. The
+        ``focused`` dynamic property drives the QSS accent border; after every
+        change both cards are unpolished/re-polished so the property selector
+        re-evaluates (Qt does not re-apply property-keyed rules automatically).
+        Emits :attr:`focus_changed` with True when the secondary is focused."""
+        if not self.split_active():
+            return
+        if card not in (self._time_card, self._secondary_card):
+            return
+        if card is self._focused_card:
+            # Still ensure the border reflects current state (e.g. just after
+            # enter_split seeded the primary as focused).
+            self._refresh_focus_borders()
+            return
+        self._focused_card = card
+        self._refresh_focus_borders()
+        self.focus_changed.emit(card is self._secondary_card)
+
+    def _refresh_focus_borders(self):
+        """Sync the ``focused`` dynamic property + repaint for both cards.
+
+        Only highlights while split is active; in single-pane mode neither card
+        carries the property so the default ``#chartCard`` border applies."""
+        active = self.split_active()
+        focused = self._focused_card if active else None
+        cards = [self._time_card]
+        if self._secondary_card is not None:
+            cards.append(self._secondary_card)
+        for card in cards:
+            want = active and card is focused
+            if card.property("focused") != want:
+                card.setProperty("focused", want)
+            # Dynamic-property QSS selectors need an explicit unpolish/polish
+            # to re-evaluate (see lesson: action-button-on-group-title).
+            card.style().unpolish(card)
+            card.style().polish(card)
+            card.update()
+
+    def _install_focus_filter(self, card):
+        """Watch mouse presses on a time card (and its canvas/viewport) so a
+        click anywhere on the card focuses it. Installed once per card; the
+        base card already filters its canvas for hint pausing, so stacking a
+        second filter here is safe and order-independent.
+
+        Also enables WA_StyledBackground so the #chartCard QSS border (and the
+        focused-accent override) paints reliably on the plain QWidget card —
+        without it Qt only paints the corners and the straight edges stay
+        un-bordered, which would make the focus accent invisible behind the
+        margin-0 toolbar/canvas children. The card already declares an explicit
+        background-color in QSS, so the flag has no white-bleed side effect."""
+        card.setAttribute(Qt.WA_StyledBackground, True)
+        card.installEventFilter(self)
+        canvas = getattr(card, 'canvas', None)
+        if canvas is not None:
+            canvas.installEventFilter(self)
+            glw = getattr(canvas, '_glw', None)
+            viewport = None
+            if glw is not None:
+                try:
+                    viewport = glw.viewport()
+                except Exception:
+                    viewport = None
+            if viewport is not None:
+                viewport.installEventFilter(self)
+
+    def _card_for_object(self, obj):
+        """Map a filtered object (card, canvas, or canvas viewport) back to its
+        owning time card, or None if it belongs to neither time card."""
+        for card in (self._time_card, self._secondary_card):
+            if card is None:
+                continue
+            if obj is card:
+                return card
+            canvas = getattr(card, 'canvas', None)
+            if canvas is None:
+                continue
+            if obj is canvas:
+                return card
+            glw = getattr(canvas, '_glw', None)
+            if glw is not None:
+                try:
+                    viewport = glw.viewport()
+                except Exception:
+                    viewport = None
+                if viewport is not None and obj is viewport:
+                    return card
+        return None
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress and self.split_active():
+            card = self._card_for_object(obj)
+            if card is not None and card is not self._focused_card:
+                self.set_focused_card(card)
+        return super().eventFilter(obj, event)
+
     def enter_split(self):
         if self._secondary_card is None:
             canvas = TimeDomainCanvasPG(self)
@@ -1450,14 +1579,22 @@ class ChartStack(QWidget):
                 lambda: self._copy_card_image(self._secondary_card)
             )
             self._time_split.addWidget(self._secondary_card)
+            self._install_focus_filter(self._secondary_card)
         self._secondary_card.setVisible(True)
         total = max(2, self._time_split.width())
         left = max(1, total // 2)
         self._time_split.setSizes([left, max(1, total - left)])
+        # Entering split (re)seeds focus on the primary card and lights its
+        # accent border; the secondary stays unfocused until clicked.
+        self._focused_card = self._time_card
+        self._refresh_focus_borders()
 
     def exit_split(self):
         if self._secondary_card is not None:
             self._secondary_card.setVisible(False)
+        # Back to single pane: drop focus highlighting and reset to primary.
+        self._focused_card = self._time_card
+        self._refresh_focus_borders()
 
     def attach_view_tabbar(self, manager):
         from .view_tabbar import ViewTabBar
