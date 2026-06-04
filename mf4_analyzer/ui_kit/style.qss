@@ -175,11 +175,27 @@ QSpinBox[compact="true"]::down-arrow, QDoubleSpinBox[compact="true"]::down-arrow
 
 QComboBox QAbstractItemView {
     padding: 4px;
-    border: 1px solid #dfe5ee;
+    border: none;
     border-radius: 8px;
-    background: #ffffff;
-    selection-background-color: #e8efff;
+    background-color: transparent;
+    outline: none;
+    selection-background-color: transparent;
     selection-color: #111827;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 4px 8px;
+    border: none;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #111827;
+}
+QComboBox QAbstractItemView::item:hover,
+QComboBox QAbstractItemView::item:selected {
+    border: none;
+    border-radius: 6px;
+    background-color: #1769e0;
+    color: #ffffff;
 }
 
 /* Checks */
@@ -786,7 +802,10 @@ QLabel#paneCount {
     background-color: #ffffff;
 }
 #fileRow[active="true"] {
-    border-color: #1769e0;
+    /* Selection is shown by the light-blue tint + the 3px #fileAccent stripe
+     * on the left. Keep the card outline a NEUTRAL gray here (not blue) so the
+     * left edge reads as a single blue stripe, not a border-line + a stripe. */
+    border-color: #b7c4d3;
     background-color: #f5f8ff;
 }
 QFrame#fileAccent {

@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..ui_kit.menus import apply_rounded_menu_chrome
 from .view_state import MAX_VIEWS
 
 
@@ -39,12 +40,16 @@ class ViewTabBar(QWidget):
         self._rename_editor = None
         self._rename_index = -1
         self._suppress_switch_after_reorder = False
+        # True only while a drag-reorder's tabMoved is being handled, so the
+        # views_changed → refresh() it triggers skips the destructive rebuild
+        # (which crashes mid-drag). See _on_tab_moved / refresh.
+        self._reordering = False
         self.setFixedHeight(28)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 0, 8, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(2)
 
         self._tabs = QTabBar(self)
         self._tabs.setObjectName("viewTabs")
@@ -81,6 +86,15 @@ class ViewTabBar(QWidget):
         return self._tabs
 
     def refresh(self) -> None:
+        if self._reordering:
+            # A live drag-reorder is on the stack. Qt has ALREADY moved the
+            # dragged tab — with its icon/text/tabData — to its new slot, and
+            # ViewManager.reorder updated the views list to match, so the bar
+            # is already correct. Rebuilding it here (removeTab/addTab +
+            # setFixedWidth) from inside the QTabBar's own tabMoved emission is
+            # a use-after-free on the tab still held by the live drag → hard
+            # crash (闪退). Skip the rebuild; nothing visible needs it.
+            return
         self._suppress = True
         try:
             while self._tabs.count():
@@ -92,7 +106,29 @@ class ViewTabBar(QWidget):
             self._set_current_index(self._manager.active)
         finally:
             self._suppress = False
+        self._sync_tabbar_width()
         self._update_plus_state()
+
+    def _sync_tabbar_width(self) -> None:
+        if self._tabs.count() <= 0:
+            self._tabs.setFixedWidth(0)
+            return
+        # Pin to the NATURAL total tab width so the + button hugs the tabs
+        # without clipping any label. sizeHint() sums the per-tab style hints
+        # (incl. the QSS min-width/padding) and is independent of the current
+        # width clamp. tabRect() must NOT be used here: once the bar is
+        # fixed-width, tabRect reports the *compressed* layout, so re-measuring
+        # would lock the squeeze in. (The bug: an early, pre-style measurement
+        # pinned 263px while the styled tabs need 294px → "View 1" clipped to
+        # "1" with scroll arrows.)
+        self._tabs.ensurePolished()
+        self._tabs.setFixedWidth(max(1, self._tabs.sizeHint().width()))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Re-measure once shown/polished so the initial pre-style width (taken
+        # during __init__'s refresh) is corrected to the natural styled width.
+        self._sync_tabbar_width()
 
     def _sync_active(self, idx: int) -> None:
         self._suppress = True
@@ -173,7 +209,7 @@ class ViewTabBar(QWidget):
         if not self._is_valid_tab(idx):
             return
 
-        menu = QMenu(self)
+        menu = apply_rounded_menu_chrome(QMenu(self))
         rename_action = menu.addAction("重命名")
         duplicate_action = menu.addAction("复制此 View")
         color_action = menu.addAction("改标签颜色...")
@@ -201,7 +237,15 @@ class ViewTabBar(QWidget):
         if not self._suppress:
             self._suppress_switch_after_reorder = True
             QTimer.singleShot(0, self._clear_reorder_switch_suppression)
-            self._emit_reorder(from_idx, to_idx)
+            # Mark the reorder so the manager's views_changed → refresh() does
+            # NOT rebuild the tab bar while this drag's tabMoved is live (that
+            # rebuild crashes — see refresh()). The QTabBar already moved the
+            # tab; the manager just needs its list synced.
+            self._reordering = True
+            try:
+                self._emit_reorder(from_idx, to_idx)
+            finally:
+                self._reordering = False
 
     def _emit_reorder(self, from_idx: int, to_idx: int) -> None:
         if from_idx == to_idx:

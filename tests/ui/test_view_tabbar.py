@@ -50,6 +50,19 @@ def test_plus_button_emits_new_requested(qtbot):
         bar._on_plus_clicked()
 
 
+def test_initial_plus_button_hugs_first_tab(qtbot):
+    _manager, bar = _bar(qtbot, count=1)
+    bar.resize(260, 28)
+    bar.show()
+    QApplication.processEvents()
+
+    first_tab = bar.tabBar().tabRect(0)
+    tab_right = bar.tabBar().mapTo(bar, first_tab.topRight()).x()
+    gap = bar._plus.geometry().left() - tab_right - 1
+
+    assert gap <= 3
+
+
 def test_views_changed_rerenders_after_manager_adds_view(qtbot):
     manager, bar = _bar(qtbot, count=2)
 
@@ -78,6 +91,36 @@ def test_tab_moved_does_not_emit_switch_requested(qtbot):
     QApplication.processEvents()
 
     assert switches == []
+
+
+def test_reorder_does_not_rebuild_tabbar_midflight(qtbot):
+    """Regression: dragging a tab crashed because the real-app chain
+    (reorder_requested -> ViewManager.reorder -> views_changed -> refresh)
+    rebuilt the QTabBar (removeTab/addTab) from inside the live tabMoved,
+    freeing the tab the drag still held. refresh() must skip that rebuild while
+    a reorder is in flight; the bar already reflects Qt's move."""
+    manager, bar = _bar(qtbot, count=3, active=0)
+    # Wire the manager exactly as MainWindow does — this is what made refresh
+    # run mid-drag.
+    bar.reorder_requested.connect(manager.reorder)
+
+    removed = []
+    real_remove = bar.tabBar().removeTab
+    bar.tabBar().removeTab = lambda i: (removed.append(i), real_remove(i))[1]
+
+    bar.tabBar().moveTab(0, 2)
+    QApplication.processEvents()
+
+    # The destructive rebuild was skipped while reordering...
+    assert removed == []
+    assert bar._reordering is False
+    # ...yet the reorder still took effect and bar matches the manager.
+    assert [v.name for v in manager.views] == ["View 2", "View 3", "View 1"]
+    assert [bar.tabBar().tabText(i) for i in range(bar.count())] == [
+        "View 2",
+        "View 3",
+        "View 1",
+    ]
 
 
 def test_active_changed_syncs_current_tab_without_switch_intent(qtbot):
@@ -140,6 +183,26 @@ def test_context_menu_duplicate_emits_intent(qtbot, monkeypatch):
     bar._on_context_menu(_tab_point(bar, 0))
 
     assert received == [0]
+
+
+def test_context_menu_uses_translucent_rounded_shell(qtbot, monkeypatch):
+    _manager, bar = _bar(qtbot, count=2)
+    captured = []
+
+    def fake_exec(menu, *_args):
+        captured.append(menu)
+        return None
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+
+    bar._on_context_menu(_tab_point(bar, 0))
+
+    assert captured
+    menu = captured[0]
+    flags = int(menu.windowFlags())
+    assert menu.testAttribute(Qt.WA_TranslucentBackground)
+    assert flags & int(Qt.FramelessWindowHint)
+    assert flags & int(Qt.NoDropShadowWindowHint)
 
 
 def test_context_menu_color_split_and_delete_emit_once(qtbot, monkeypatch):
