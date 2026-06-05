@@ -1082,14 +1082,15 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     # right-aligned beneath the editors.
     container = QWidget()
     container.setObjectName("axisRow")
-    container.setAttribute(Qt.WA_StyledBackground, False)
+    container.setAttribute(Qt.WA_StyledBackground, True)
     container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     outer = QVBoxLayout(container)
     outer.setContentsMargins(0, 0, 0, 0)
     outer.setSpacing(2)
 
     line1 = QWidget(container)
-    line1.setAttribute(Qt.WA_StyledBackground, False)
+    line1.setObjectName("axisRowLine")
+    line1.setAttribute(Qt.WA_StyledBackground, True)
     lay = QHBoxLayout(line1)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(row_gap)
@@ -1099,7 +1100,8 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     lay.addWidget(lbl)
     # Bare checkbox centred in the 自动 column (the header labels it once).
     chk_cell = QWidget(line1)
-    chk_cell.setAttribute(Qt.WA_StyledBackground, False)
+    chk_cell.setObjectName("axisAutoCell")
+    chk_cell.setAttribute(Qt.WA_StyledBackground, True)
     chk_cell.setFixedWidth(_AXIS_CHK_W)
     chk_lay = QHBoxLayout(chk_cell)
     chk_lay.setContentsMargins(0, 0, 0, 0)
@@ -1111,7 +1113,7 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
 
     range_host = _AxisRangeHost(range_floor, line1)
     range_host.setObjectName("axisRangeHost")
-    range_host.setAttribute(Qt.WA_StyledBackground, False)
+    range_host.setAttribute(Qt.WA_StyledBackground, True)
     range_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     stack = QStackedLayout(range_host)
     stack.setContentsMargins(0, 0, 0, 0)
@@ -1159,7 +1161,7 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     if unit_widget is not None:
         unit_line = QWidget(container)
         unit_line.setObjectName("axisUnitLine")
-        unit_line.setAttribute(Qt.WA_StyledBackground, False)
+        unit_line.setAttribute(Qt.WA_StyledBackground, True)
         unit_lay = QHBoxLayout(unit_line)
         unit_lay.setContentsMargins(0, 0, 0, 0)
         unit_lay.setSpacing(0)
@@ -1192,16 +1194,13 @@ def _build_axis_header():
     """
     row = QWidget()
     row.setObjectName("axisHeaderRow")
-    row.setAttribute(Qt.WA_StyledBackground, False)
+    row.setAttribute(Qt.WA_StyledBackground, True)
     row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     lay = QHBoxLayout(row)
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(_AXIS_ROW_GAP)
 
-    spacer = QWidget(row)
-    spacer.setAttribute(Qt.WA_StyledBackground, False)
-    spacer.setFixedWidth(_AXIS_LABEL_W)
-    lay.addWidget(spacer)
+    lay.addSpacing(_AXIS_LABEL_W)
 
     auto_hdr = QLabel("自动")
     auto_hdr.setProperty("axisHeader", True)
@@ -1210,7 +1209,8 @@ def _build_axis_header():
     lay.addWidget(auto_hdr)
 
     rng = QWidget(row)
-    rng.setAttribute(Qt.WA_StyledBackground, False)
+    rng.setObjectName("axisHeaderRange")
+    rng.setAttribute(Qt.WA_StyledBackground, True)
     rng.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     rl = QHBoxLayout(rng)
     rl.setContentsMargins(0, 0, 0, 0)
@@ -1219,10 +1219,7 @@ def _build_axis_header():
     min_hdr.setProperty("axisHeader", True)
     min_hdr.setAlignment(Qt.AlignCenter)
     rl.addWidget(min_hdr, 1)
-    gap = QWidget(rng)
-    gap.setAttribute(Qt.WA_StyledBackground, False)
-    gap.setFixedWidth(_AXIS_ARROW_W)
-    rl.addWidget(gap)
+    rl.addSpacing(_AXIS_ARROW_W)
     max_hdr = QLabel("最大")
     max_hdr.setProperty("axisHeader", True)
     max_hdr.setAlignment(Qt.AlignCenter)
@@ -1454,7 +1451,10 @@ class PersistentTop(QWidget):
         # ------- Collapser body (the three groups live here) -------
         self._collapser_body = QFrame(self)
         body_lay = QVBoxLayout(self._collapser_body)
-        body_lay.setContentsMargins(0, 0, 0, 0)
+        # Match the contextual cards below: the header remains full-width as
+        # the click target, while the expanded content keeps 10px breathing
+        # room on both sides.
+        body_lay.setContentsMargins(10, 0, 10, 0)
         body_lay.setSpacing(6)
         root.addWidget(self._collapser_body)
 
@@ -2059,18 +2059,11 @@ class FFTContextual(QWidget):
 
 
 class OrderContextual(QWidget):
-    """Order-analysis contextual: source/params/3 compute btns + tracking sub-group."""
+    """Order-analysis contextual: source/params/presets + compute action."""
 
     order_time_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
-    # Placeholder cancel intent — the W4 cleanup (2026-05-01) removed the
-    # ``OrderWorker`` async path along with its dispatch / completion
-    # slots, so this signal currently has no producer and the host slot
-    # is a no-op. ``btn_cancel`` and the wiring are kept as scaffolding
-    # for a future async COT (compute-on-thread) worker; until then the
-    # button stays disabled and the signal is dormant.
-    cancel_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2197,11 +2190,6 @@ class OrderContextual(QWidget):
         # constructor default until the user actually toggles a checkbox).
         self._sync_axis_enabled()
 
-        self.btn_ot = QPushButton("时间-阶次")
-        self.btn_ot.setProperty("role", "primary")
-        self.btn_ot.setMinimumHeight(32)
-        root.addWidget(self.btn_ot)
-
         g = QGroupBox("预设配置")
         gl = QVBoxLayout(g)
         gl.setSpacing(4)
@@ -2211,18 +2199,13 @@ class OrderContextual(QWidget):
         gl.addWidget(self.preset_bar)
         root.addWidget(g)
 
+        self.btn_ot = QPushButton("时间-阶次")
+        self.btn_ot.setProperty("role", "primary")
+        self.btn_ot.setMinimumHeight(32)
+        root.addWidget(self.btn_ot)
+
         self.lbl_progress = QLabel("")
         root.addWidget(self.lbl_progress)
-
-        # T6: cancel-compute button. Sits at the END of the layout so it
-        # never crowds the primary "时间-阶次" button.
-        # ``clicked.connect(cancel_requested)`` re-emits without arguments;
-        # MainWindow listens to ``cancel_requested``, not the button.
-        self.btn_cancel = QPushButton("取消计算", self)
-        self.btn_cancel.setObjectName("orderCancelBtn")
-        self.btn_cancel.setEnabled(False)
-        self.btn_cancel.clicked.connect(self.cancel_requested)
-        root.addWidget(self.btn_cancel)
 
         root.addStretch()
 
@@ -2560,9 +2543,6 @@ class FFTTimeContextual(QWidget):
     Signals
     -------
     - ``fft_time_requested`` — primary "compute" button click.
-    - ``force_recompute_requested`` — force-recompute (cache bypass) button.
-    - ``export_full_requested`` — export full view (spectrogram + slice).
-    - ``export_main_requested`` — export main spectrogram only.
 
     Widgets (referenced by name from MainWindow / tests)
     ---------------------------------------------------
@@ -2584,8 +2564,6 @@ class FFTTimeContextual(QWidget):
       ``spin_freq_min`` IS ``spin_y_min``; ``spin_freq_max`` IS
       ``spin_y_max``. ``spin_freq_max == 0.0`` still means "use Nyquist".
     - ``btn_compute`` — primary action; disabled iff no candidate.
-    - ``btn_force`` / ``btn_export_full`` / ``btn_export_main`` — secondary
-      actions.
 
     ``get_params()`` returns a dict whose keys match exactly what
     ``MainWindow._fft_time_cache_key`` expects: ``signal``, ``fs``,
@@ -2600,9 +2578,6 @@ class FFTTimeContextual(QWidget):
     """
 
     fft_time_requested = pyqtSignal()
-    force_recompute_requested = pyqtSignal()
-    export_full_requested = pyqtSignal()
-    export_main_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
 
@@ -2765,23 +2740,6 @@ class FFTTimeContextual(QWidget):
         self.btn_compute.setEnabled(False)
         root.addWidget(self.btn_compute)
 
-        action_row = QHBoxLayout()
-        action_row.setSpacing(6)
-        self.btn_force = QPushButton("强制重算")
-        self.btn_force.setProperty("role", "tool")
-        self.btn_force.setToolTip("绕过缓存并重新计算")
-        action_row.addWidget(self.btn_force)
-        self.btn_export_full = QPushButton("导出完整视图")
-        self.btn_export_full.setIcon(Icons.export())
-        self.btn_export_full.setIconSize(QSize(14, 14))
-        self.btn_export_full.setProperty("role", "tool")
-        action_row.addWidget(self.btn_export_full)
-        self.btn_export_main = QPushButton("导出主图")
-        self.btn_export_main.setIcon(Icons.export())
-        self.btn_export_main.setIconSize(QSize(14, 14))
-        self.btn_export_main.setProperty("role", "tool")
-        action_row.addWidget(self.btn_export_main)
-        root.addLayout(action_row)
         root.addStretch()
 
         # 2026-04-27 fix-4: unify label-column width across the sig_card
@@ -2791,9 +2749,6 @@ class FFTTimeContextual(QWidget):
 
         # ---- wiring ----
         self.btn_compute.clicked.connect(self.fft_time_requested)
-        self.btn_force.clicked.connect(self.force_recompute_requested)
-        self.btn_export_full.clicked.connect(self.export_full_requested)
-        self.btn_export_main.clicked.connect(self.export_main_requested)
         # Wave 4/B polish: chk_freq_auto / spin_freq_min/max alias the
         # Y-frequency row of the 坐标轴设置 group; their enabled state is
         # driven by _sync_axis_enabled, which the helper wired to

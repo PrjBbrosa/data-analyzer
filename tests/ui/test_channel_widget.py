@@ -16,6 +16,16 @@ class _FakeFileData:
         return ["#1769e0"]
 
 
+class _MultiChannelFileData:
+    data = [1, 2, 3]
+
+    def get_signal_channels(self):
+        return ["speed", "Rte_TAS_mTorsionBarTorque_xds16", "torque"]
+
+    def get_color_palette(self):
+        return ["#1769e0", "#8b5cf6", "#f43f5e"]
+
+
 def test_channel_context_menu_uses_translucent_rounded_shell(qapp, qtbot, monkeypatch):
     captured = []
 
@@ -61,10 +71,73 @@ def test_channel_action_buttons_use_two_char_chinese(qapp, qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     labels = {b.text() for b in widget.findChildren(QPushButton)}
-    # All / None / Inv were localised to two-character Chinese labels.
-    assert {"全选", "全不", "反选"} <= labels
+    # The compact channel actions use two-character Chinese labels.
+    assert {"全选", "全不", "已选"} <= labels
+    assert "反选" not in labels
     # 编辑通道 moved down from the top toolbar onto the channel-action row.
     assert "编辑通道" in labels
+
+
+def test_channel_search_expands_parent_to_show_matches(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _MultiChannelFileData())
+    QCoreApplication.processEvents()
+
+    file_item = widget._file_items["file-a"]
+    file_item.setExpanded(False)
+    widget.search.setText("tas")
+    QCoreApplication.processEvents()
+
+    assert not file_item.isHidden()
+    assert file_item.isExpanded()
+    visible = [
+        (file_item.child(i).text(0), not file_item.child(i).isHidden())
+        for i in range(file_item.childCount())
+    ]
+    assert visible == [
+        ("speed", False),
+        ("Rte_TAS_mTorsionBarTorque_xds16", True),
+        ("torque", False),
+    ]
+
+
+def test_selected_filter_button_only_shows_checked_channels(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _MultiChannelFileData())
+    QCoreApplication.processEvents()
+
+    file_item = widget._file_items["file-a"]
+    file_item.setExpanded(False)
+    file_item.child(1).setCheckState(0, Qt.Checked)
+    QCoreApplication.processEvents()
+
+    selected_button = next(
+        button for button in widget.findChildren(QPushButton)
+        if button.text() == "已选"
+    )
+    selected_button.click()
+    QCoreApplication.processEvents()
+
+    assert selected_button.isChecked()
+    assert not file_item.isHidden()
+    assert file_item.isExpanded()
+    visible = [
+        (file_item.child(i).text(0), not file_item.child(i).isHidden())
+        for i in range(file_item.childCount())
+    ]
+    assert visible == [
+        ("speed", False),
+        ("Rte_TAS_mTorsionBarTorque_xds16", True),
+        ("torque", False),
+    ]
 
 
 def _left_click(tree, pos):

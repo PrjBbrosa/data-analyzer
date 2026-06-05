@@ -951,12 +951,26 @@ QWidget#orderContextual {
 }
 
 Inspector QWidget#axisRow,
+Inspector QWidget#axisRowLine,
+Inspector QWidget#axisAutoCell,
 Inspector QWidget#axisRangeHost,
 Inspector QWidget#axisRangeSummaryPage,
 Inspector QWidget#axisManualRangePage,
 Inspector QWidget#axisUnitLine,
-Inspector QWidget#axisHeaderRow {
-    background-color: transparent;
+Inspector QWidget#axisHeaderRow,
+Inspector QWidget#axisHeaderRange {
+    background-color: #ffffff;
+}
+Inspector QWidget#fftContextual QWidget#axisRow,
+Inspector QWidget#fftContextual QWidget#axisRowLine,
+Inspector QWidget#fftContextual QWidget#axisAutoCell,
+Inspector QWidget#fftContextual QWidget#axisRangeHost,
+Inspector QWidget#fftContextual QWidget#axisRangeSummaryPage,
+Inspector QWidget#fftContextual QWidget#axisManualRangePage,
+Inspector QWidget#fftContextual QWidget#axisUnitLine,
+Inspector QWidget#fftContextual QWidget#axisHeaderRow,
+Inspector QWidget#fftContextual QWidget#axisHeaderRange {
+    background-color: #eef4ff;
 }
 /* 自动 / 最小 / 最大 column headers above the axis grid — muted + small. */
 Inspector QLabel[axisHeader="true"] {

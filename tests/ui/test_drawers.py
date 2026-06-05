@@ -75,43 +75,70 @@ def test_channel_editor_inputs_fill_row_no_right_gutter(qapp, qtbot):
     from PyQt5.QtCore import QCoreApplication
     from PyQt5.QtWidgets import QSizePolicy
     from mf4_analyzer.ui.drawers.channel_editor_drawer import ChannelEditorDrawer
+    from mf4_analyzer.ui_kit import load_stylesheet
 
-    drawer = ChannelEditorDrawer(
-        parent=None, files={"f1": _LongNameFD()}, active_fid="f1"
-    )
-    qtbot.addWidget(drawer)
-    drawer.resize(drawer.PANEL_WIDTH, 560)
-    drawer.show()
-    qtbot.waitExposed(drawer)
-    QCoreApplication.processEvents()
-
-    inner = drawer._inner
-    for combo in (inner.combo_src, inner.combo_a, inner.combo_b, inner.combo_file):
-        # Horizontal policy is Expanding (fill), not Fixed (cap).
-        assert combo.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding, (
-            f"{combo.objectName() or type(combo).__name__} should Expand to fill "
-            f"the row, got {combo.sizePolicy().horizontalPolicy()}"
+    old_sheet = qapp.styleSheet()
+    load_stylesheet(qapp)
+    try:
+        drawer = ChannelEditorDrawer(
+            parent=None, files={"f1": _LongNameFD()}, active_fid="f1"
         )
-        # No leftover 178px maximum-width cap (Qt's default 'no cap' sentinel).
-        assert combo.maximumWidth() >= 16777215, (
-            f"input still capped at maximumWidth={combo.maximumWidth()} — the old "
-            f"178px cap must be removed so long names are not cropped"
+        qtbot.addWidget(drawer)
+        drawer.resize(drawer.PANEL_WIDTH, 560)
+        drawer.show()
+        qtbot.waitExposed(drawer)
+        QCoreApplication.processEvents()
+
+        inner = drawer._inner
+        for combo in (inner.combo_src, inner.combo_a, inner.combo_b, inner.combo_file):
+            # Horizontal policy is Expanding (fill), not Fixed (cap).
+            assert combo.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding, (
+                f"{combo.objectName() or type(combo).__name__} should Expand to fill "
+                f"the row, got {combo.sizePolicy().horizontalPolicy()}"
+            )
+            # No leftover 178px maximum-width cap (Qt's default 'no cap' sentinel).
+            assert combo.maximumWidth() >= 16777215, (
+                f"input still capped at maximumWidth={combo.maximumWidth()} — the old "
+                f"178px cap must be removed so long names are not cropped"
+            )
+
+        # Resolved width: the source combo fills the row — clearly past the
+        # retired 178px cap, and a large fraction of the panel inner width
+        # (panel 336 minus 2×12px content margins ≈ 312), with no big right
+        # gutter. The label column ("源") takes only a small slice.
+        inner_w = drawer.PANEL_WIDTH - 24
+        assert inner.combo_src.width() > 178, (
+            f"combo_src.width()={inner.combo_src.width()} — must exceed the retired "
+            f"178px cap so long names are not cropped"
+        )
+        assert inner.combo_src.width() >= 0.6 * inner_w, (
+            f"combo_src.width()={inner.combo_src.width()} should fill most of the "
+            f"~{inner_w}px inner width (>= {0.6 * inner_w:.0f}px); a smaller value "
+            f"means a right-side gutter is still eating the row"
         )
 
-    # Resolved width: the source combo fills the row — clearly past the
-    # retired 178px cap, and a large fraction of the panel inner width
-    # (panel 336 minus 2×12px content margins ≈ 312), with no big right
-    # gutter. The label column ("源") takes only a small slice.
-    inner_w = drawer.PANEL_WIDTH - 24
-    assert inner.combo_src.width() > 178, (
-        f"combo_src.width()={inner.combo_src.width()} — must exceed the retired "
-        f"178px cap so long names are not cropped"
-    )
-    assert inner.combo_src.width() >= 0.6 * inner_w, (
-        f"combo_src.width()={inner.combo_src.width()} should fill most of the "
-        f"~{inner_w}px inner width (>= {0.6 * inner_w:.0f}px); a smaller value "
-        f"means a right-side gutter is still eating the row"
-    )
+        def right_in_drawer(widget):
+            top_left = widget.mapTo(drawer, widget.rect().topLeft())
+            return top_left.x() + widget.width()
+
+        expected_right = right_in_drawer(inner.combo_src)
+        for widget in (
+            inner.combo_file,
+            inner.combo_op,
+            inner.spin_p,
+            inner.combo_a,
+            inner.combo_op2,
+            inner.combo_b,
+            inner.edit_name2,
+            inner.list_rm,
+        ):
+            assert abs(right_in_drawer(widget) - expected_right) <= 1, (
+                f"{widget.objectName() or type(widget).__name__} right edge "
+                f"{right_in_drawer(widget)} should align with input column "
+                f"right edge {expected_right}"
+            )
+    finally:
+        qapp.setStyleSheet(old_sheet)
 
 
 def test_channel_editor_combos_have_full_name_tooltip(qapp, qtbot):

@@ -41,9 +41,6 @@ class Inspector(QWidget):
     plot_time_requested = pyqtSignal()
     fft_requested = pyqtSignal()
     fft_time_requested = pyqtSignal()
-    fft_time_force_requested = pyqtSignal()
-    fft_time_export_full_requested = pyqtSignal()
-    fft_time_export_main_requested = pyqtSignal()
     order_time_requested = pyqtSignal()
     xaxis_apply_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order')
@@ -140,12 +137,8 @@ class Inspector(QWidget):
         self.order_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
         # R3 C: FFTTimeContextual now also owns a (builtin-aware) PresetBar.
         self.fft_time_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
-        # FFT vs Time relays — Task 4 fills in the real controls; the
-        # signals are declared on the skeleton so this wiring stays valid.
+        # FFT vs Time primary compute relay.
         self.fft_time_ctx.fft_time_requested.connect(self.fft_time_requested)
-        self.fft_time_ctx.force_recompute_requested.connect(self.fft_time_force_requested)
-        self.fft_time_ctx.export_full_requested.connect(self.fft_time_export_full_requested)
-        self.fft_time_ctx.export_main_requested.connect(self.fft_time_export_main_requested)
         # T6 reviewer Important #2: relay rebuild_time_requested and
         # signal_changed from the fft_time contextual. Mirrors the
         # fft_ctx / order_ctx wiring above; the rebuild relay tags the

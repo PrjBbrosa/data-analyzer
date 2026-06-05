@@ -333,14 +333,6 @@ class MainWindow(QMainWindow):
         self.inspector.plot_time_requested.connect(self.plot_time)
         self.inspector.fft_requested.connect(self.do_fft)
         self.inspector.order_time_requested.connect(self.do_order_time)
-        # Inspector publishes a cancel intent on btn_cancel; the slot is
-        # a forward-looking placeholder kept so the signal has a
-        # connection if/when an async COT worker is introduced. The
-        # current synchronous ``do_order_time`` cannot be cancelled, so
-        # the slot is a no-op (see ``_cancel_order_compute``).
-        self.inspector.order_ctx.cancel_requested.connect(
-            self._cancel_order_compute
-        )
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
@@ -370,20 +362,9 @@ class MainWindow(QMainWindow):
         self.view_manager.active_changed.connect(self._apply_active_view)
         self.view_manager.split_changed.connect(self._on_view_split)
 
-        # FFT vs Time wiring (Plan Task 6 + Task 9 export).
-        # The Inspector relays compute / force / export buttons.
+        # FFT vs Time primary compute.
         self.inspector.fft_time_requested.connect(
             lambda: self.do_fft_time(force=False)
-        )
-        self.inspector.fft_time_force_requested.connect(
-            lambda: self.do_fft_time(force=True)
-        )
-        # Export buttons → clipboard pixmap (Plan Task 9).
-        self.inspector.fft_time_export_full_requested.connect(
-            lambda: self._copy_fft_time_image(mode='full')
-        )
-        self.inspector.fft_time_export_main_requested.connect(
-            lambda: self._copy_fft_time_image(mode='main')
         )
         # Fs auto-sync for fft_time_ctx — mirrors what
         # _on_inspector_signal_changed does for fft / order via the
@@ -1997,16 +1978,6 @@ class MainWindow(QMainWindow):
         self.inspector.order_ctx.set_progress("")
         self._render_order_time(result)
         return
-
-    def _cancel_order_compute(self):
-        """Forward-looking placeholder for a future async COT worker.
-
-        Kept so ``OrderContextual.cancel_requested`` has a slot to
-        connect to. The current ``do_order_time`` runs synchronously on
-        the GUI thread and cannot be cancelled mid-compute, so this is
-        a no-op until an async COT worker is introduced.
-        """
-        pass
 
     def _render_order_time(self, result):
         title = (

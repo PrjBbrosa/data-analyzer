@@ -139,6 +139,46 @@ def test_order_contextual_emits(qapp, qtbot):
         oc.btn_ot.click()
 
 
+def test_order_contextual_presets_precede_compute_and_no_cancel(qapp):
+    from PyQt5.QtWidgets import QGroupBox
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    oc = OrderContextual()
+    preset_group = next(
+        gb for gb in oc.findChildren(QGroupBox)
+        if gb.title() == "预设配置"
+    )
+
+    assert oc.layout().indexOf(preset_group) < oc.layout().indexOf(oc.btn_ot)
+    assert not hasattr(oc, "btn_cancel")
+    assert not hasattr(oc, "cancel_requested")
+
+
+def test_fft_time_contextual_keeps_only_compute_action(qapp):
+    from mf4_analyzer.ui.inspector import Inspector
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    assert ctx.btn_compute.text() == "计算时频图"
+    for name in (
+        "btn_force",
+        "btn_export_full",
+        "btn_export_main",
+        "force_recompute_requested",
+        "export_full_requested",
+        "export_main_requested",
+    ):
+        assert not hasattr(ctx, name)
+
+    insp = Inspector()
+    for name in (
+        "fft_time_force_requested",
+        "fft_time_export_full_requested",
+        "fft_time_export_main_requested",
+    ):
+        assert not hasattr(insp, name)
+
+
 def test_inspector_no_longer_exposes_mode_signals(qapp):
     """Spec §9: after 2026-04-24 cleanup, Inspector no longer relays
     plot_mode_changed / cursor_mode_changed — those are on ChartStack now."""
@@ -1208,6 +1248,58 @@ def test_fft_contextual_fields_fill_column_under_qss(qapp, qtbot):
             f"Field column should remain materially wider than compact 110px; "
             f"got {widths}"
         )
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
+def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbot):
+    """Expanded chart settings should use the same 10px content inset as
+    the contextual cards below it, while keeping the collapsible header full
+    width as the click target."""
+    from pathlib import Path
+    from PyQt5.QtWidgets import QGroupBox
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        insp = Inspector()
+        qtbot.addWidget(insp)
+        insp.resize(288, 850)
+        insp.set_mode('fft')
+        insp.top.btn_collapser.setChecked(True)
+        insp.show()
+        qtbot.waitExposed(insp)
+        qtbot.wait(50)
+
+        root = insp._scroll_body
+
+        def bounds(widget):
+            point = widget.mapTo(root, widget.rect().topLeft())
+            return point.x(), point.x() + widget.width()
+
+        header_left, header_right = bounds(insp.top.btn_collapser)
+        assert (header_left, header_right) == (0, root.width())
+
+        fft_section = next(
+            group for group in insp.fft_ctx.findChildren(QGroupBox)
+            if group.title() == "谱参数"
+        )
+        expected_left, expected_right = bounds(fft_section)
+        top_sections = {
+            group.title(): bounds(group)
+            for group in insp.top.findChildren(QGroupBox)
+        }
+        assert top_sections == {
+            "横坐标": (expected_left, expected_right),
+            "时间范围": (expected_left, expected_right),
+            "坐标刻度密度": (expected_left, expected_right),
+        }
+        assert expected_left == 10
+        assert root.width() - expected_right == 10
     finally:
         qapp.setStyleSheet(old_sheet)
 
@@ -2419,6 +2511,107 @@ def test_axis_rows_fit_inspector_and_align_with_panel_right_edge(qapp, qtbot):
                 f"{mode} axis rows should align to {group_right}, got {right_edges}"
             )
             inspector.hide()
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
+def test_axis_settings_grid_background_matches_white_panel(qapp, qtbot):
+    """The shared axis-settings grid should not paint the grey page surface.
+
+    FFT-vs-Time and Order both use the same helper. The blank cells behind
+    自动 / 最小 / 最大 and the auto-summary rows should read as part of the
+    white contextual panel rather than a separate grey table.
+    """
+    from pathlib import Path
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+
+        for mode, ctx_name in (
+            ("fft_time", "fft_time_ctx"),
+            ("order", "order_ctx"),
+        ):
+            inspector = Inspector()
+            qtbot.addWidget(inspector)
+            inspector.resize(288, 900)
+            inspector.set_mode(mode)
+            inspector.show()
+            qtbot.waitExposed(inspector)
+            bar = inspector._scroll.verticalScrollBar()
+            bar.setValue(bar.maximum())
+            qapp.processEvents()
+
+            ctx = getattr(inspector, ctx_name)
+            header = ctx.findChild(QWidget, "axisHeaderRow")
+            assert header is not None
+            samples = [header.mapTo(inspector, QPoint(8, header.height() // 2))]
+            for key in ("x", "y"):
+                host = ctx._axis_row_parts[key]["range_host"]
+                samples.append(host.mapTo(inspector, QPoint(host.width() - 8, host.height() // 2)))
+
+            image = inspector.grab().toImage()
+            for point in samples:
+                color = image.pixelColor(point)
+                assert color.red() >= 250 and color.green() >= 250, (
+                    f"{mode} axis grid background should match the white "
+                    f"panel, got {color.name()} at {point.x()},{point.y()}"
+                )
+            inspector.hide()
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
+def test_fft_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
+    """FFT keeps a subtle blue contextual surface; its axis grid should not
+    introduce white table rows inside that tinted panel."""
+    from pathlib import Path
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+
+        inspector = Inspector()
+        qtbot.addWidget(inspector)
+        inspector.resize(288, 900)
+        inspector.set_mode("fft")
+        inspector.show()
+        qtbot.waitExposed(inspector)
+        bar = inspector._scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        qapp.processEvents()
+
+        ctx = inspector.fft_ctx
+        header = ctx.findChild(QWidget, "axisHeaderRow")
+        assert header is not None
+        samples = [header.mapTo(inspector, QPoint(8, header.height() // 2))]
+        for key in ("x", "y"):
+            host = ctx._axis_row_parts[key]["range_host"]
+            samples.append(host.mapTo(inspector, QPoint(host.width() - 8, host.height() // 2)))
+
+        image = inspector.grab().toImage()
+        for point in samples:
+            color = image.pixelColor(point)
+            assert (
+                234 <= color.red() <= 242
+                and 240 <= color.green() <= 248
+                and color.blue() >= 250
+            ), (
+                "FFT axis grid background should match the tinted panel "
+                f"#eef4ff, got {color.name()} at {point.x()},{point.y()}"
+            )
     finally:
         qapp.setStyleSheet(old_sheet)
 

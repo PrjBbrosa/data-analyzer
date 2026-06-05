@@ -186,12 +186,18 @@ class MultiFileChannelWidget(QWidget):
         self.search.textChanged.connect(self._filter);
         layout.addWidget(self.search)
         bl = QHBoxLayout()
-        for lbl, fn in [("全选", self._all), ("全不", self._none), ("反选", self._inv)]:
+        for lbl, fn in [("全选", self._all), ("全不", self._none)]:
             b = QPushButton(lbl);
             b.setMaximumWidth(48);
             b.setProperty("role", "tool")
             b.clicked.connect(fn);
             bl.addWidget(b)
+        self.btn_selected_only = QPushButton("已选")
+        self.btn_selected_only.setMaximumWidth(48)
+        self.btn_selected_only.setProperty("role", "tool")
+        self.btn_selected_only.setCheckable(True)
+        self.btn_selected_only.toggled.connect(self._apply_filters)
+        bl.addWidget(self.btn_selected_only)
         bl.addStretch();
         # 编辑通道 lives on this row (right-aligned) instead of the top toolbar,
         # so the channel actions sit next to the channel tree they affect.
@@ -262,6 +268,7 @@ class MultiFileChannelWidget(QWidget):
             fi.addChild(ci)
         self.tree.addTopLevelItem(fi);
         self._file_items[fid] = fi
+        self._apply_filters()
         self._update_edit_enabled()
 
     def _update_edit_enabled(self):
@@ -300,6 +307,7 @@ class MultiFileChannelWidget(QWidget):
                 for i in range(item.childCount()):
                     item.child(i).setCheckState(0, Qt.Unchecked)
                 self._updating = False
+        self._apply_filters()
         self.channels_changed.emit()
 
     def _on_context_menu(self, pos):
@@ -374,6 +382,7 @@ class MultiFileChannelWidget(QWidget):
                 fi.setCheckState(0, Qt.Checked if all_checked else Qt.Unchecked)
         finally:
             self._updating = False
+        self._apply_filters()
 
     def get_channel_colors(self):
         return dict(self._colors)
@@ -414,19 +423,35 @@ class MultiFileChannelWidget(QWidget):
     def check_first_channel(self, fid):
         if fid in self._file_items:
             fi = self._file_items[fid]
-            if fi.childCount() > 0: self._updating = True; fi.child(0).setCheckState(0,
-                                                                                     Qt.Checked); self._updating = False; self.channels_changed.emit()
+            if fi.childCount() > 0:
+                self._updating = True
+                fi.child(0).setCheckState(0, Qt.Checked)
+                self._updating = False
+                self._apply_filters()
+                self.channels_changed.emit()
 
     def _filter(self, txt):
-        t = txt.lower()
+        self._apply_filters()
+
+    def _apply_filters(self, _checked=None):
+        t = self.search.text().strip().lower()
+        show_checked_only = self.btn_selected_only.isChecked()
+        filtering = bool(t) or show_checked_only
         for fid, fi in self._file_items.items():
             v = 0
             for i in range(fi.childCount()):
                 ci = fi.child(i);
-                m = t in ci.text(0).lower();
+                matches_text = not t or t in ci.text(0).lower()
+                matches_checked = (
+                    not show_checked_only
+                    or ci.checkState(0) == Qt.Checked
+                )
+                m = matches_text and matches_checked
                 ci.setHidden(not m);
                 v += m
-            fi.setHidden(v == 0 and len(t) > 0)
+            fi.setHidden(v == 0 and filtering)
+            if filtering and v > 0:
+                fi.setExpanded(True)
 
     def _all(self):
         # 统计总共要勾选多少通道
@@ -444,6 +469,7 @@ class MultiFileChannelWidget(QWidget):
             for i in range(fi.childCount()):
                 if not fi.child(i).isHidden(): fi.child(i).setCheckState(0, Qt.Checked)
         self._updating = False;
+        self._apply_filters()
         self.channels_changed.emit()
 
     def _none(self):
@@ -452,16 +478,7 @@ class MultiFileChannelWidget(QWidget):
             fi.setCheckState(0, Qt.Unchecked)
             for i in range(fi.childCount()): fi.child(i).setCheckState(0, Qt.Unchecked)
         self._updating = False;
-        self.channels_changed.emit()
-
-    def _inv(self):
-        self._updating = True
-        for fi in self._file_items.values():
-            for i in range(fi.childCount()):
-                ci = fi.child(i)
-                if not ci.isHidden(): ci.setCheckState(0,
-                                                       Qt.Unchecked if ci.checkState(0) == Qt.Checked else Qt.Checked)
-        self._updating = False;
+        self._apply_filters()
         self.channels_changed.emit()
 
 
