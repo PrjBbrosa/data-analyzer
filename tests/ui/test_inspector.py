@@ -519,28 +519,67 @@ def test_inspector_groupbox_title_has_underline_and_compact_padding():
         "title font-weight must drop from 700 to 600 (R3 #3-B)"
 
 
+def test_combo_popup_style_removes_native_outer_focus_frame():
+    """Combo popups draw their rounded selection in QSS; Qt's native
+    item-view border/focus rectangle must be suppressed so it cannot stack
+    as a second square frame around the popup or selected item.
+    """
+    from pathlib import Path
+    import re
+
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    popup = re.search(
+        r"QComboBox\s+QAbstractItemView\s*\{([^}]*)\}",
+        qss,
+        flags=re.DOTALL,
+    )
+    assert popup, "QComboBox popup item-view rule not found"
+    popup_block = popup.group(1)
+    assert "outline: none" in popup_block or "outline: 0" in popup_block
+    assert "border: none" in popup_block
+    assert (
+        "background-color: transparent" in popup_block
+        or "background: transparent" in popup_block
+    )
+
+    selected = re.search(
+        r"QComboBox\s+QAbstractItemView::item:selected[^{]*\{([^}]*)\}",
+        qss,
+        flags=re.DOTALL,
+    )
+    assert selected, "QComboBox selected-item popup rule not found"
+    selected_block = selected.group(1)
+    assert "border: none" in selected_block
+    assert "border-radius" in selected_block
+
+
 # ---- R3 #6: PersistentTop collapser ----
 
 def test_persistent_top_has_collapser(qapp):
     """PersistentTop must wrap its three groups in a single collapsible
-    container that defaults to collapsed (R3 #6).
+    container that defaults to expanded.
     """
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     # The collapser persists its state in QSettings; clear it so this test
     # does not depend on whatever a previous run / fixture left behind.
-    QSettings("MF4Analyzer", "DataAnalyzer").remove(
-        "inspector/persistent_top/expanded",
-    )
+    settings = QSettings("MF4Analyzer", "DataAnalyzer")
+    settings.remove("inspector/persistent_top/expanded")
+    settings.remove("inspector/persistent_top/expanded_v2")
     pt = PersistentTop()
     assert hasattr(pt, "btn_collapser"), \
         "PersistentTop must expose btn_collapser (the toggle handle)"
     assert hasattr(pt, "_collapser_body"), \
         "PersistentTop must expose _collapser_body (the inner container)"
-    # Default: collapsed.
-    assert pt.btn_collapser.isChecked() is False
-    assert pt._collapser_body.isVisibleTo(pt) is False or \
-        pt._collapser_body.isHidden()
+    # Default: expanded, so the time-domain settings are immediately visible.
+    assert pt.btn_collapser.isChecked() is True
+    assert pt._collapser_body.isHidden() is False
+    pt.show()
+    try:
+        qapp.processEvents()
+        assert pt._collapser_body.isVisible() is True
+    finally:
+        pt.hide()
 
 
 def test_persistent_top_collapser_toggle_reveals_groups(qapp):
@@ -550,9 +589,9 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
     """
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import PersistentTop
-    QSettings("MF4Analyzer", "DataAnalyzer").remove(
-        "inspector/persistent_top/expanded",
-    )
+    settings = QSettings("MF4Analyzer", "DataAnalyzer")
+    settings.remove("inspector/persistent_top/expanded")
+    settings.remove("inspector/persistent_top/expanded_v2")
     pt = PersistentTop()
     # Programmatic access works regardless of visibility — preserves contract.
     for attr in (
@@ -560,17 +599,19 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
         "combo_xaxis", "_combo_xaxis_ch", "edit_xlabel", "btn_apply_xaxis",
     ):
         assert getattr(pt, attr) is not None, f"missing attr: {attr}"
-    # Toggle expand.
-    pt.btn_collapser.setChecked(True)
     pt.show()
     try:
+        qapp.processEvents()
+        assert pt._collapser_body.isVisible() is True
+        # Toggle collapse.
+        pt.btn_collapser.setChecked(False)
+        assert pt._collapser_body.isHidden() is True
+        # Toggle expand.
+        pt.btn_collapser.setChecked(True)
         assert pt._collapser_body.isVisible() is True
         # Group-level controls now visible.
         assert pt.combo_xaxis.isVisible() is True
         assert pt.spin_xt.isVisible() is True
-        # Toggle collapse.
-        pt.btn_collapser.setChecked(False)
-        assert pt._collapser_body.isHidden() is True
     finally:
         pt.hide()
 
@@ -1006,8 +1047,8 @@ def test_order_preset_collects_explicit_xyz_axes(qtbot):
 def test_inspector_scroll_body_caps_max_width(qapp):
     """fix-1 — Inspector content must cap its maxWidth so Expanding
     children stop growing past a sane threshold when the splitter pane
-    is dragged wider than ~360px. Without the cap, every Expanding
-    QSpinBox / QComboBox stretches to fill the entire pane width.
+    is dragged wider than the docked width. Without the cap, every
+    Expanding QSpinBox / QComboBox stretches to fill the entire pane width.
     """
     from mf4_analyzer.ui.inspector import Inspector
     insp = Inspector()
@@ -1017,9 +1058,9 @@ def test_inspector_scroll_body_caps_max_width(qapp):
         "Inspector._scroll_body has no maximumWidth cap — Expanding "
         "children will grow unbounded when the splitter widens."
     )
-    assert cap <= 400, (
+    assert cap <= 320, (
         f"Inspector._scroll_body.maximumWidth()={cap}px is too generous; "
-        "should be ~360 to keep the form column tight."
+        "should be ~272 to keep the form column tight (288px pane)."
     )
 
 
@@ -1096,8 +1137,8 @@ def test_fft_time_contextual_short_fields_capped(qapp):
         )
 
 
-def test_inspector_body_fills_360_width_under_qss(qapp, qtbot):
-    """Styled Inspector body should fill the 360px right pane."""
+def test_inspector_body_fills_288_width_under_qss(qapp, qtbot):
+    """Styled Inspector body should fill the 288px right pane."""
     from pathlib import Path
     from mf4_analyzer.ui.inspector import Inspector
 
@@ -1109,14 +1150,14 @@ def test_inspector_body_fills_360_width_under_qss(qapp, qtbot):
         )
         insp = Inspector()
         qtbot.addWidget(insp)
-        insp.resize(360, 850)
+        insp.resize(288, 850)
         insp.show()
         qtbot.waitExposed(insp)
         qtbot.wait(50)
 
-        assert insp.width() == 360
-        assert insp._scroll_body.width() >= 340, (
-            f"Inspector body should fill a 360px pane; body="
+        assert insp.width() == 288
+        assert insp._scroll_body.width() >= 268, (
+            f"Inspector body should fill a 288px pane; body="
             f"{insp._scroll_body.width()}, viewport={insp._scroll.viewport().width()}"
         )
     finally:

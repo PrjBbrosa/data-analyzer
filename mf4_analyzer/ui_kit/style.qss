@@ -882,6 +882,11 @@ Inspector QGroupBox {
     background-color: transparent;
     font-weight: 600;
 }
+/* 坐标轴设置: drop the 2px right padding so the fluid range editors line up
+ * with the card's form fields (色图 / 信号) on the right edge. */
+Inspector QGroupBox#axisSettingsGroup {
+    padding-right: 0;
+}
 Inspector QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
@@ -948,7 +953,16 @@ QWidget#orderContextual {
 Inspector QWidget#axisRow,
 Inspector QWidget#axisRangeHost,
 Inspector QWidget#axisRangeSummaryPage,
-Inspector QWidget#axisManualRangePage {
+Inspector QWidget#axisManualRangePage,
+Inspector QWidget#axisUnitLine,
+Inspector QWidget#axisHeaderRow {
+    background-color: transparent;
+}
+/* 自动 / 最小 / 最大 column headers above the axis grid — muted + small. */
+Inspector QLabel[axisHeader="true"] {
+    color: #97a1b2;
+    font-size: 11px;
+    font-weight: 500;
     background-color: transparent;
 }
 

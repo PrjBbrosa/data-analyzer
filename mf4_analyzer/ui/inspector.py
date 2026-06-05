@@ -27,9 +27,14 @@ from .inspector_sections import (
 # Expanding children (QSpinBox / QComboBox / QLineEdit) stop growing
 # unboundedly when the right splitter pane is dragged wider. The cap
 # should be just wide enough to host the longest legitimate content.
-# The visible right pane is 360px wide; the content body is 344px so the
-# scroll area has room for its scrollbar and 2px pane margins.
-_INSPECTOR_CONTENT_MAX_WIDTH = 344
+# 2026-06-05 narrow-pane: the inspector was retuned from 360px → 288px so
+# its initial width matches the left file column (~250–288). The visible
+# right pane is 288px wide; the content body is 272px so the scroll area
+# has room for its scrollbar and 2px pane margins. The 坐标轴设置 group
+# was made fluid (range editors fill the remaining width, dB/Linear unit
+# wraps to its own right-aligned line) so it shrinks with the pane instead
+# of forcing a horizontal scrollbar — see _build_axis_row.
+_INSPECTOR_CONTENT_MAX_WIDTH = 272
 
 
 class Inspector(QWidget):

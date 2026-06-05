@@ -40,6 +40,7 @@ lesson by default.
 | [Rounded Child Widgets Need Pixel Corner Check](codex-rounded-child-widgets-need-pixel-corner-check.md) | Load when changing child-widget floating pills, hover cards, chart | See lesson |
 | [Lazy Parser Import Boundaries](codex-lazy-parser-import-boundaries.md) | Touching A2L parsing, acquisition measurement summaries, or modules | See lesson |
 | [Qt Checkbox Doubleclick Hit Region](codex-qt-checkbox-doubleclick-hit-region.md) | Load when custom PyQt item-view checkbox hit handling is changed, | See lesson |
+| [Codex Qt Rounded Popup Chrome](codex-qt-rounded-popup-chrome.md) | Changing rounded popup/dropdown/menu styling or adding a new `QMenu`, | See lesson |
 
 ## Selection Rules
 

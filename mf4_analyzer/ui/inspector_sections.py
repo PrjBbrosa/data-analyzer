@@ -35,6 +35,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..ui_kit.icons import Icons
+from ..ui_kit.menus import apply_rounded_menu_chrome
 from ..ui_kit.widgets.searchable_combo import SearchableComboBox
 from ._axis_defaults import z_range_for
 from .widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
@@ -772,7 +773,7 @@ class PresetBar(QWidget):
 
     def _show_menu(self, slot, pos):
         btn = self._load_btns[slot]
-        menu = QMenu(self)
+        menu = apply_rounded_menu_chrome(QMenu(self))
         act_save = menu.addAction("保存当前到本槽位")
         act_rename = menu.addAction("重命名…")
         if self._builtins is not None:
@@ -1040,52 +1041,78 @@ class _AxisRangeHost(QWidget):
         )
 
 
+# 2026-06-05 narrow-pane: shared column geometry so the 自动 / 最小 / 最大
+# header row (built by _build_axis_header) lines up pixel-for-pixel with the
+# per-axis rows. The 自动 column is now a bare checkbox (the header labels it
+# once) instead of three repeated "自动" texts — that frees ~24px which the
+# fluid min→max editors absorb.
+_AXIS_LABEL_W = 56
+_AXIS_CHK_W = 30
+_AXIS_ROW_GAP = 4
+_AXIS_ARROW_W = 12
+_AXIS_MANUAL_GAP = 3
+
+
 def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     """Build one inline axis row.
 
-    Visual states:
-    - auto checked: [label][chk][summary][unit]
-    - manual:       [label][chk][spin_min][→][spin_max][unit]
+    Visual states (columns line up under the 自动/最小/最大 header):
+    - auto checked: [label][✓][summary][unit]
+    - manual:       [label][✓][spin_min][→][spin_max][unit]
 
     Returns ``(row, parts)``; caller stores ``parts`` so _sync_axis_enabled
     can toggle summary vs. editable bounds.
     """
-    row = QWidget()
-    row.setObjectName("axisRow")
-    row.setAttribute(Qt.WA_StyledBackground, False)
-    row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-    lay = QHBoxLayout(row)
+    row_gap = _AXIS_ROW_GAP
+    arrow_width = _AXIS_ARROW_W
+    manual_gap = _AXIS_MANUAL_GAP
+    unit_width = 64
+    # 2026-06-05 narrow-pane: the range editors are now fluid (Expanding) so
+    # the whole group shrinks with the 288px pane instead of forcing a
+    # horizontal scrollbar. ``range_floor`` is the smallest the min→max area
+    # ever collapses to; the pane is wide enough that it normally renders
+    # ~120px, giving ~52px per spin. The dB/Linear unit (色阶 row only) no
+    # longer steals inline width — it wraps to its own right-aligned line so
+    # X / Y / Z editors all settle at the same width.
+    range_floor = 104
+    spin_floor = 42
+
+    # ``container`` is the widget added to the group: line 1 holds
+    # [label][auto][min → max]; an optional line 2 carries the unit combo
+    # right-aligned beneath the editors.
+    container = QWidget()
+    container.setObjectName("axisRow")
+    container.setAttribute(Qt.WA_StyledBackground, False)
+    container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    outer = QVBoxLayout(container)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.setSpacing(2)
+
+    line1 = QWidget(container)
+    line1.setAttribute(Qt.WA_StyledBackground, False)
+    lay = QHBoxLayout(line1)
     lay.setContentsMargins(0, 0, 0, 0)
-    row_gap = 4
     lay.setSpacing(row_gap)
     lbl = QLabel(label)
-    lbl.setMinimumWidth(56)
-    lbl.setMaximumWidth(56)
+    lbl.setMinimumWidth(_AXIS_LABEL_W)
+    lbl.setMaximumWidth(_AXIS_LABEL_W)
     lay.addWidget(lbl)
-    chk.setMinimumWidth(54)
-    chk.setMaximumWidth(54)
-    lay.addWidget(chk)
+    # Bare checkbox centred in the 自动 column (the header labels it once).
+    chk_cell = QWidget(line1)
+    chk_cell.setAttribute(Qt.WA_StyledBackground, False)
+    chk_cell.setFixedWidth(_AXIS_CHK_W)
+    chk_lay = QHBoxLayout(chk_cell)
+    chk_lay.setContentsMargins(0, 0, 0, 0)
+    chk_lay.setSpacing(0)
+    chk_lay.addStretch(1)
+    chk_lay.addWidget(chk)
+    chk_lay.addStretch(1)
+    lay.addWidget(chk_cell)
 
-    unit_width = 66
-    arrow_width = 12
-    manual_gap = 3
-    # All rows reserve the same trailing range area. Rows without a unit use
-    # the unit slot for wider min/max editors so their right edge lines up
-    # with the color row's dB/Linear combo box.
-    range_width_without_unit = 196
-    range_width_with_unit = range_width_without_unit - row_gap - unit_width
-    row.setMinimumWidth(56 + row_gap + 54 + row_gap + range_width_without_unit)
-
-    range_width = (
-        range_width_with_unit if unit_widget is not None
-        else range_width_without_unit
-    )
-    spin_width = int((range_width - arrow_width - (manual_gap * 2)) / 2)
-    range_host = _AxisRangeHost(range_width, row)
+    range_host = _AxisRangeHost(range_floor, line1)
     range_host.setObjectName("axisRangeHost")
     range_host.setAttribute(Qt.WA_StyledBackground, False)
-    range_host.setFixedWidth(range_width)
-    range_host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+    range_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     stack = QStackedLayout(range_host)
     stack.setContentsMargins(0, 0, 0, 0)
     stack.setSpacing(0)
@@ -1093,7 +1120,6 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     summary_page = QWidget(range_host)
     summary_page.setObjectName("axisRangeSummaryPage")
     summary_page.setAttribute(Qt.WA_StyledBackground, False)
-    summary_page.setMinimumWidth(range_width)
     summary_lay = QHBoxLayout(summary_page)
     summary_lay.setContentsMargins(0, 0, 0, 0)
     summary_lay.setSpacing(0)
@@ -1105,16 +1131,14 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     manual_page = QWidget(range_host)
     manual_page.setObjectName("axisManualRangePage")
     manual_page.setAttribute(Qt.WA_StyledBackground, False)
-    manual_page.setMinimumWidth(range_width)
     manual_lay = QHBoxLayout(manual_page)
     manual_lay.setContentsMargins(0, 0, 0, 0)
     manual_lay.setSpacing(manual_gap)
-    spin_min.setButtonSymbols(QAbstractSpinBox.NoButtons)
-    spin_max.setButtonSymbols(QAbstractSpinBox.NoButtons)
-    spin_min.setMinimumWidth(spin_width)
-    spin_min.setMaximumWidth(spin_width)
-    spin_max.setMinimumWidth(spin_width)
-    spin_max.setMaximumWidth(spin_width)
+    for sp in (spin_min, spin_max):
+        sp.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        sp.setMinimumWidth(spin_floor)
+        sp.setMaximumWidth(120)
+        sp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     manual_lay.addWidget(spin_min, 1)
     arrow = QLabel('→')
     arrow.setAlignment(Qt.AlignCenter)
@@ -1129,13 +1153,23 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     manual_page.setMinimumHeight(reserved_height)
     stack.addWidget(summary_page)
     stack.addWidget(manual_page)
-    lay.addWidget(range_host)
+    lay.addWidget(range_host, 1)
+    outer.addWidget(line1)
+
     if unit_widget is not None:
+        unit_line = QWidget(container)
+        unit_line.setObjectName("axisUnitLine")
+        unit_line.setAttribute(Qt.WA_StyledBackground, False)
+        unit_lay = QHBoxLayout(unit_line)
+        unit_lay.setContentsMargins(0, 0, 0, 0)
+        unit_lay.setSpacing(0)
+        unit_lay.addStretch(1)
         unit_widget.setMinimumWidth(unit_width)
         unit_widget.setMaximumWidth(unit_width)
-        lay.addWidget(unit_widget)
-    lay.addStretch(1)
-    return row, dict(
+        unit_lay.addWidget(unit_widget)
+        outer.addWidget(unit_line)
+
+    return container, dict(
         label=lbl,
         checkbox=chk,
         range_host=range_host,
@@ -1148,6 +1182,53 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
         spin_max=spin_max,
         unit=unit_widget,
     )
+
+
+def _build_axis_header():
+    """Column header row for the 坐标轴设置 grid: 自动 / 最小 / 最大.
+
+    Mirrors the per-axis row column widths (_AXIS_* constants) so the
+    headers sit exactly above the checkbox and the two range editors.
+    """
+    row = QWidget()
+    row.setObjectName("axisHeaderRow")
+    row.setAttribute(Qt.WA_StyledBackground, False)
+    row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(_AXIS_ROW_GAP)
+
+    spacer = QWidget(row)
+    spacer.setAttribute(Qt.WA_StyledBackground, False)
+    spacer.setFixedWidth(_AXIS_LABEL_W)
+    lay.addWidget(spacer)
+
+    auto_hdr = QLabel("自动")
+    auto_hdr.setProperty("axisHeader", True)
+    auto_hdr.setAlignment(Qt.AlignCenter)
+    auto_hdr.setFixedWidth(_AXIS_CHK_W)
+    lay.addWidget(auto_hdr)
+
+    rng = QWidget(row)
+    rng.setAttribute(Qt.WA_StyledBackground, False)
+    rng.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    rl = QHBoxLayout(rng)
+    rl.setContentsMargins(0, 0, 0, 0)
+    rl.setSpacing(_AXIS_MANUAL_GAP)
+    min_hdr = QLabel("最小")
+    min_hdr.setProperty("axisHeader", True)
+    min_hdr.setAlignment(Qt.AlignCenter)
+    rl.addWidget(min_hdr, 1)
+    gap = QWidget(rng)
+    gap.setAttribute(Qt.WA_StyledBackground, False)
+    gap.setFixedWidth(_AXIS_ARROW_W)
+    rl.addWidget(gap)
+    max_hdr = QLabel("最大")
+    max_hdr.setProperty("axisHeader", True)
+    max_hdr.setAlignment(Qt.AlignCenter)
+    rl.addWidget(max_hdr, 1)
+    lay.addWidget(rng, 1)
+    return row
 
 
 def _make_axis_settings_group(
@@ -1198,13 +1279,22 @@ def _make_axis_settings_group(
     surface assumed by the Wave 3 OrderContextual tests.
     """
     g = QGroupBox("坐标轴设置")
+    # 2026-06-05 narrow-pane: zero the group's right padding (base Inspector
+    # QGroupBox carries 2px) so the now-fluid range editors reach the same
+    # right edge as the card's form fields (色图 etc.) instead of stopping
+    # 2px short. Scoped by objectName so other groups keep their padding.
+    g.setObjectName("axisSettingsGroup")
     lay = QVBoxLayout(g)
     lay.setContentsMargins(8, 8, 0, 8)
     lay.setSpacing(4)
     owner._axis_row_parts = {}
 
+    # ---- column header: 自动 / 最小 / 最大 (labels the checkbox + editors
+    # once instead of repeating "自动" on all three rows) ----
+    lay.addWidget(_build_axis_header())
+
     # ---- X row ----
-    owner.chk_x_auto = QCheckBox("自动")
+    owner.chk_x_auto = QCheckBox()
     owner.spin_x_min = _no_buttons(CompactDoubleSpinBox())
     owner.spin_x_min.setRange(0.0, 1e9)
     owner.spin_x_min.setDecimals(2)
@@ -1237,7 +1327,7 @@ def _make_axis_settings_group(
     lay.addWidget(x_row)
 
     # ---- Y row ----
-    owner.chk_y_auto = QCheckBox("自动")
+    owner.chk_y_auto = QCheckBox()
     owner.spin_y_min = _no_buttons(CompactDoubleSpinBox())
     owner.spin_y_min.setRange(0.0, 1e9)
     owner.spin_y_min.setDecimals(2)
@@ -1266,7 +1356,7 @@ def _make_axis_settings_group(
 
     # ---- Z (color scale) row ----
     if include_z:
-        owner.chk_z_auto = QCheckBox("自动")
+        owner.chk_z_auto = QCheckBox()
         owner.spin_z_floor = _no_buttons(CompactDoubleSpinBox())
         owner.spin_z_floor.setRange(-200.0, 200.0)
         owner.spin_z_floor.setDecimals(2)
@@ -1320,7 +1410,7 @@ class PersistentTop(QWidget):
     work even while the body widget is hidden.
     """
 
-    _SETTINGS_KEY = "inspector/persistent_top/expanded"
+    _SETTINGS_KEY = "inspector/persistent_top/expanded_v2"
 
     xaxis_apply_requested = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
@@ -1436,15 +1526,15 @@ class PersistentTop(QWidget):
         body_lay.addWidget(g)
 
         self._wire()
-        # Restore persisted collapser state (defaults to collapsed).
+        # Restore persisted collapser state (defaults to expanded).
         try:
-            persisted = _preset_settings().value(self._SETTINGS_KEY, False)
+            persisted = _preset_settings().value(self._SETTINGS_KEY, True)
             # QSettings can return strings on some platforms.
             if isinstance(persisted, str):
                 persisted = persisted.lower() in ("true", "1", "yes")
             initial_expanded = bool(persisted)
         except Exception:  # pragma: no cover
-            initial_expanded = False
+            initial_expanded = True
         self.btn_collapser.setChecked(initial_expanded)
         self._sync_collapser(initial_expanded)
         # 紧凑化【2】: apply initial conditional visibility once everything
@@ -1702,8 +1792,12 @@ class FFTContextual(QWidget):
         self.combo_amp_y = QComboBox()
         self.combo_amp_y.addItems(['Linear', 'dB'])
         self.combo_amp_y.setCurrentText('Linear')
+        # 2026-06-05 narrow-pane: was "Amplitude 轴:" (144px) — the lone
+        # outlier that inflated the unified label column and forced the
+        # signal field to wrap at the 288px pane. The Chinese form matches
+        # the 幅值 (Y) axis label below and keeps the column tight.
         fl.addRow(
-            "Amplitude 轴:",
+            "幅值轴:",
             _fit_field(self.combo_amp_y, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         self.combo_psd_y = QComboBox()

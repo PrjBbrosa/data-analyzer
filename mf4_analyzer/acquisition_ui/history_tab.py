@@ -45,6 +45,7 @@ from mf4_analyzer.acquisition.manifest import (
     load_manifest,
     resolve_entry_path,
 )
+from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 
 logger = logging.getLogger(__name__)
 
@@ -661,7 +662,7 @@ class HistoryTab(QWidget):
         if not index.isValid():
             return
         self._table.setCurrentIndex(index)
-        menu = QMenu(self)
+        menu = apply_rounded_menu_chrome(QMenu(self))
         open_action = QAction("在 Analyzer 打开", menu)
         open_action.setEnabled(self._is_openable_index(index))
         open_action.triggered.connect(

@@ -84,7 +84,7 @@ class FFTTimeWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("TraceLab v6.1")
+        self.setWindowTitle("TraceLab v6.2")
         self.setGeometry(100, 100, 1450, 850);
         # Spec §9 minimum window size: 1100 × 640.
         self.setMinimumSize(1100, 640)
@@ -144,7 +144,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.navigator)
         splitter.addWidget(self.chart_stack)
         splitter.addWidget(self.inspector)
-        splitter.setSizes([250, 900, 360])
+        splitter.setSizes([250, 900, 288])
         splitter.setStretchFactor(0, 0)  # navigator: no stretch
         splitter.setStretchFactor(1, 1)  # chart_stack: absorbs all extra width
         splitter.setStretchFactor(2, 0)  # inspector: no stretch
@@ -191,7 +191,7 @@ class MainWindow(QMainWindow):
         self._panel_ctrl_right = SidePanelController(
             side=Side.RIGHT, splitter=splitter, panel=self.inspector, panel_index=2,
             strip=self._strip_right, overlay=self._overlay_right, host=strip_row,
-            default_width=360, canvas=self.chart_stack, parent=self,
+            default_width=288, canvas=self.chart_stack, parent=self,
         )
         splitter.splitterMoved.connect(
             lambda *_: (self._panel_ctrl_left.on_splitter_moved(),
@@ -209,11 +209,11 @@ class MainWindow(QMainWindow):
         self._view_bridge = view_bridge
         self.view_tabbar = self.chart_stack.attach_view_tabbar(self.view_manager)
 
-        from PyQt5.QtWidgets import QStatusBar
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
-        self._status_hint_bar = self.chart_stack.take_time_hint_bar(self.statusBar)
-        self.statusBar.addPermanentWidget(self._status_hint_bar, 1)
+        self._status_hint_bar = None
+        self._install_status_hint_bar(self.chart_stack.current_mode())
+        self.chart_stack.mode_changed.connect(self._install_status_hint_bar)
         self.statusBar.showMessage("Ready")
 
         # Floating toast (constructed lazily on first use; the parent must
@@ -224,6 +224,22 @@ class MainWindow(QMainWindow):
         self._copy_thumbnail = CopyThumbnail(self)
         self._copy_thumbnail.clicked.connect(self._open_markup_editor)
         self._markup_editor = None
+
+    def _install_status_hint_bar(self, mode=None):
+        """Keep exactly one mode hint bar in the global status line."""
+        mode = mode or self.chart_stack.current_mode()
+        target = self.chart_stack.hint_bar_for_mode(mode)
+        current = getattr(self, "_status_hint_bar", None)
+        if current is target and target.parentWidget() is self.statusBar:
+            target.show()
+            return
+        if current is not None:
+            self.statusBar.removeWidget(current)
+            current.hide()
+            current.setParent(None)
+        self._status_hint_bar = self.chart_stack.take_hint_bar(mode, self.statusBar)
+        self.statusBar.addPermanentWidget(self._status_hint_bar, 1)
+        self._status_hint_bar.show()
 
     # ---- public toast helper ----
     def toast(self, msg, level='info'):

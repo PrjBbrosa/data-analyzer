@@ -1890,11 +1890,30 @@ class ChartStack(QWidget):
 
     def take_time_hint_bar(self, parent):
         """Move the shared time-domain hint bar to another container."""
-        layout = self._time_bottom_dock.layout()
-        if layout is not None and layout.indexOf(self._time_hint_bar) >= 0:
-            layout.removeWidget(self._time_hint_bar)
-        self._time_hint_bar.setParent(parent)
-        return self._time_hint_bar
+        return self.take_hint_bar('time', parent)
+
+    def hint_bar_for_mode(self, mode):
+        if mode == 'time':
+            return self._time_card._hint_bar
+        if mode == 'fft':
+            return self._fft_card._hint_bar
+        if mode == 'fft_time':
+            return self._fft_time_card._hint_bar
+        if mode == 'order':
+            return self._order_card._hint_bar
+        raise KeyError(mode)
+
+    def take_hint_bar(self, mode, parent):
+        """Move the mode's hint bar to a shared external container."""
+        bar = self.hint_bar_for_mode(mode)
+        old_parent = bar.parentWidget()
+        if old_parent is not None:
+            layout = old_parent.layout()
+            if layout is not None and layout.indexOf(bar) >= 0:
+                layout.removeWidget(bar)
+        bar.setParent(parent)
+        bar.setVisible(True)
+        return bar
 
     def set_mode(self, mode):
         idx = _MODE_TO_INDEX[mode]

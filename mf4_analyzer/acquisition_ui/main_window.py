@@ -81,6 +81,7 @@ from mf4_analyzer.acquisition_capture.health import (
 )
 from mf4_analyzer.acquisition_capture.ring_buffer import RingBuffer, WatermarkLevel
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.acquisition_ui.history_tab import HistoryTab
 from mf4_analyzer.acquisition_ui.replay_tab import ReplayTab
 from mf4_analyzer.acquisition_ui.review_modal import (
@@ -453,7 +454,7 @@ class CockpitMainWindow(QMainWindow):
         self._overflow_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self._overflow_btn.setFixedSize(30, 30)
         self._overflow_btn.setPopupMode(QToolButton.InstantPopup)
-        self._overflow_menu = QMenu(self._overflow_btn)
+        self._overflow_menu = apply_rounded_menu_chrome(QMenu(self._overflow_btn))
         self._overflow_menu.setObjectName("cockpitToolbarOverflowMenu")
         self._overflow_btn.setMenu(self._overflow_menu)
         self._overflow_btn.setVisible(False)
@@ -500,7 +501,7 @@ class CockpitMainWindow(QMainWindow):
         # entry so the overflow path renders as ``模式 ▶ 采集 / 回放
         # / 历史`` and each sub-action sets the tab to its specific
         # index.
-        self._mode_overflow_submenu = QMenu("模式", self)
+        self._mode_overflow_submenu = apply_rounded_menu_chrome(QMenu("模式", self))
         self._mode_overflow_submenu.setObjectName("cockpitModeOverflowSubmenu")
         self._mode_overflow_actions: list[QAction] = []
         for _mode, label, idx in MODE_SEGMENTS:
@@ -748,6 +749,8 @@ class CockpitMainWindow(QMainWindow):
         ordered_demoted: list[QAction] = []
         for widget, action, _ in eligible:
             if widget in demoted_set:
+                if widget is self._transport_chip:
+                    action.setText(self._transport_chip.text())
                 ordered_demoted.append(action)
         for action in ordered_demoted:
             self._overflow_menu.addAction(action)
