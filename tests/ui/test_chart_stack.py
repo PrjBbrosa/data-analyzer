@@ -1640,6 +1640,36 @@ def test_bottom_hint_bar_context_subplot_default_comes_from_registry(qapp):
     assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
 
 
+def test_flash_hint_shows_transient_context_text(qapp):
+    from mf4_analyzer.ui.chart_stack import _ChartCard
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    card = _ChartCard(canvas)
+    card.resize(640, 360)
+    card.show()
+    qapp.processEvents()
+
+    card.flash_hint("先选中一个通道，再用 Shift+滚轮缩放纵向")
+
+    assert "先选中一个通道" in card._hint_context.text()
+
+
+def test_overlay_needs_selection_signal_flashes_hint(qapp):
+    from mf4_analyzer.ui.chart_stack import _ChartCard
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    card = _ChartCard(canvas)
+    card.show()
+    qapp.processEvents()
+
+    canvas.overlay_y_needs_selection.emit()
+    qapp.processEvents()
+
+    assert "先选中一个通道" in card._hint_context.text()
+
+
 def test_bottom_hint_bar_context_uses_registry(qapp, monkeypatch):
     from mf4_analyzer.ui import hints
     from mf4_analyzer.ui.chart_stack import ChartStack

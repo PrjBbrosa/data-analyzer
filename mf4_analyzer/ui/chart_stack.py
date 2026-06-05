@@ -976,6 +976,16 @@ class _ChartCard(QWidget):
         self._hint_context = QLabel("", self._hint_bar)
         self._hint_context.setObjectName("chartHintContext")
         self._hint_context.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._flash_hint_timer = QTimer(self)
+        self._flash_hint_timer.setSingleShot(True)
+        self._flash_hint_timer.setInterval(2500)
+        self._flash_hint_timer.timeout.connect(
+            lambda: self._set_context_hint(reset=True)
+        )
+        if hasattr(self.canvas, 'overlay_y_needs_selection'):
+            self.canvas.overlay_y_needs_selection.connect(
+                lambda: self.flash_hint("先选中一个通道，再用 Shift+滚轮缩放纵向")
+            )
         self._hint_discovery = QLabel("", self._hint_bar)
         self._hint_discovery.setObjectName("chartHintDiscovery")
         self._hint_discovery.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -1177,6 +1187,11 @@ class _ChartCard(QWidget):
             return
         index = self._context_hint_index % len(candidates)
         self._hint_context.setText(candidates[index].text)
+
+    def flash_hint(self, text):
+        """Show a transient context hint, then restore the rotating hint."""
+        self._hint_context.setText(str(text))
+        self._flash_hint_timer.start()
 
     def _advance_context_hint(self):
         if self._hint_rotation_paused:

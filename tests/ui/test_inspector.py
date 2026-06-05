@@ -199,7 +199,7 @@ def test_persistent_top_tick_group_not_checkable(qapp):
     assert parent_gb is not None, "spin_xt has no QGroupBox ancestor"
     assert not parent_gb.isCheckable()
     # Key contract: tick density reflects current spin values (not zero).
-    assert pt.tick_density() == (10, 6)
+    assert pt.tick_density() == (10, 8)
 
 
 def test_inspector_exposes_fft_time_context(qtbot):

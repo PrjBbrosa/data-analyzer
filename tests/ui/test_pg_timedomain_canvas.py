@@ -3336,16 +3336,19 @@ class TestTimeDomainCanvasPGScroll:
         primary = canvas._primary_xaxis_ax
         primary.set_xlim(0.0, 1.0)
         primary.set_ylim(-2000.0, 2000.0)
+        canvas.select_overlay_channel("speed")
+        selected = canvas._channel_lines["speed"][0]
         QCoreApplication.processEvents()
 
         x_before = primary.get_xlim()
-        y_before = primary.get_ylim()
+        primary_y_before = primary.get_ylim()
+        y_before = selected.get_ylim()
 
         canvas._handle_wheel_dispatch(delta=120, modifiers=Qt.ShiftModifier, x_pos=0.5, y_pos=0.0)
         QCoreApplication.processEvents()
 
         x_after = primary.get_xlim()
-        y_after = primary.get_ylim()
+        y_after = selected.get_ylim()
 
         assert y_after != y_before, (
             f"Shift+wheel must change ylim; got {y_after!r} == {y_before!r}"
@@ -3357,6 +3360,7 @@ class TestTimeDomainCanvasPGScroll:
             f"Shift+wheel must NOT change xlim; before={x_before!r}, "
             f"after={x_after!r}"
         )
+        assert primary.get_ylim() == pytest.approx(primary_y_before)
 
     def test_plain_wheel_pans_y(self, qapp):
         from PyQt5.QtCore import QCoreApplication, Qt
@@ -3367,17 +3371,20 @@ class TestTimeDomainCanvasPGScroll:
         primary = canvas._primary_xaxis_ax
         primary.set_xlim(0.0, 1.0)
         primary.set_ylim(-2000.0, 2000.0)
+        canvas.select_overlay_channel("speed")
+        selected = canvas._channel_lines["speed"][0]
         QCoreApplication.processEvents()
 
         x_before = primary.get_xlim()
-        y_before = primary.get_ylim()
+        primary_y_before = primary.get_ylim()
+        y_before = selected.get_ylim()
         y_span_before = y_before[1] - y_before[0]
 
         canvas._handle_wheel_dispatch(delta=120, modifiers=Qt.NoModifier, x_pos=0.5, y_pos=0.0)
         QCoreApplication.processEvents()
 
         x_after = primary.get_xlim()
-        y_after = primary.get_ylim()
+        y_after = selected.get_ylim()
         y_span_after = y_after[1] - y_after[0]
 
         assert y_after != y_before, (
@@ -3393,6 +3400,7 @@ class TestTimeDomainCanvasPGScroll:
             f"plain wheel must NOT change xlim; before={x_before!r}, "
             f"after={x_after!r}"
         )
+        assert primary.get_ylim() == pytest.approx(primary_y_before)
 
     def test_shift_wheel_targets_source_subplot_y_not_primary(self, qapp):
         from PyQt5.QtCore import QCoreApplication, Qt
@@ -4730,9 +4738,9 @@ class TestOverlayGridSingleAxis:
         canvas.deleteLater()
 
     def test_overlay_grid_lines_created_on_plot(self, qapp):
-        """plot_channels overlay 后，应有 _N_OVERLAY_DIVISIONS - 1 条格线。"""
+        """plot_channels overlay 后，应有 _overlay_divisions - 1 条格线。"""
         from PyQt5.QtCore import QCoreApplication
-        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG, _N_OVERLAY_DIVISIONS
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
         canvas = TimeDomainCanvasPG()
         canvas.resize(900, 480)
@@ -4742,8 +4750,9 @@ class TestOverlayGridSingleAxis:
         canvas.plot_channels(_five_channel_rows()[:3], mode="overlay")
         QCoreApplication.processEvents()
 
-        assert len(canvas._overlay_grid_lines) == _N_OVERLAY_DIVISIONS - 1, (
-            f"expected {_N_OVERLAY_DIVISIONS - 1} grid lines, "
+        expected = canvas._overlay_divisions - 1
+        assert len(canvas._overlay_grid_lines) == expected, (
+            f"expected {expected} grid lines, "
             f"got {len(canvas._overlay_grid_lines)}"
         )
         canvas.deleteLater()
@@ -4751,7 +4760,7 @@ class TestOverlayGridSingleAxis:
     def test_overlay_grid_lines_cleared_on_rebuild(self, qapp):
         """重建后格线数量不应翻倍（清理后重建）。"""
         from PyQt5.QtCore import QCoreApplication
-        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG, _N_OVERLAY_DIVISIONS
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
         canvas = TimeDomainCanvasPG()
         canvas.resize(900, 480)
@@ -4763,8 +4772,9 @@ class TestOverlayGridSingleAxis:
         canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
         QCoreApplication.processEvents()
 
-        assert len(canvas._overlay_grid_lines) == _N_OVERLAY_DIVISIONS - 1, (
-            f"after rebuild, expected {_N_OVERLAY_DIVISIONS - 1}, "
+        expected = canvas._overlay_divisions - 1
+        assert len(canvas._overlay_grid_lines) == expected, (
+            f"after rebuild, expected {expected}, "
             f"got {len(canvas._overlay_grid_lines)}"
         )
         canvas.deleteLater()
@@ -5479,8 +5489,8 @@ class TestOverlayYSnapToGrid:
         assert _snap_y_to_divisions(0.999, 8) == pytest.approx(1.0)
         assert _snap_y_to_divisions(1.0, 8) == pytest.approx(1.0)
 
-    def test_snap_channel_preserves_span_on_degenerate_geometry(self, qapp):
-        """ViewBox 尺寸为零时（offscreen），span 应保持不变，不崩溃。"""
+    def test_snap_channel_reframes_to_nice_without_geometry(self, qapp):
+        """Offscreen/零尺寸路径也应重框到 nice graticule，不崩溃。"""
         from PyQt5.QtCore import QCoreApplication
         from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
@@ -5491,18 +5501,17 @@ class TestOverlayYSnapToGrid:
 
         ax = canvas.axes_list[0]
         ax.set_ylim(-300.0, 300.0)   # span = 600
-        lo_before, hi_before = ax.get_ylim()
-        span_before = hi_before - lo_before
 
-        # Should not raise even with degenerate (0-size) offscreen ViewBoxes.
         canvas._snap_overlay_channel_to_grid(ax)
         QCoreApplication.processEvents()
 
         lo_after, hi_after = ax.get_ylim()
-        span_after = hi_after - lo_after
-        assert abs(span_after - span_before) < 1e-4, (
-            f"span changed: {span_before} → {span_after}"
-        )
+        n = canvas._overlay_divisions
+        per_div = (hi_after - lo_after) / n
+        assert abs(lo_after / per_div - round(lo_after / per_div)) < 1e-6
+        assert abs(hi_after / per_div - round(hi_after / per_div)) < 1e-6
+        major = ax.y_axis_item()._tickLevels[0]
+        assert len(major) == n + 1
         canvas.deleteLater()
 
     def test_snap_none_ax_is_noop(self, qapp):
@@ -5575,13 +5584,9 @@ class TestOverlayYSnapToGrid:
         )
         canvas.deleteLater()
 
-    def test_snap_aligns_center_to_grid_in_real_geometry(self, qapp):
-        """有效几何下，snap 后 center 应对齐到 1/8 格（X-master 归一化空间）。
-
-        如果 ViewBox 在此环境下仍为 degenerate（height < 1），自动 skip。
-        """
-        from PyQt5.QtCore import QCoreApplication, QPointF
-        import pytest
+    def test_snap_reframes_ticks_in_real_geometry(self, qapp):
+        """有效几何下，snap 后边界与显式 ticks 应回到 nice graticule。"""
+        from PyQt5.QtCore import QCoreApplication
         from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
         canvas = TimeDomainCanvasPG()
@@ -5595,41 +5600,19 @@ class TestOverlayYSnapToGrid:
         QCoreApplication.processEvents()
 
         ax = canvas.axes_list[0]
-        ax.set_ylim(-300.0, 300.0)   # span = 600, center = 0
+        ax.set_ylim(-273.0, 319.0)
         QCoreApplication.processEvents()
-
-        # Check geometry is valid; skip if still degenerate.
-        aux_vb = getattr(ax, "view_box", None)
-        if aux_vb is None:
-            pytest.skip("no aux ViewBox")
-        rect = aux_vb.sceneBoundingRect()
-        if rect.height() < 1.0:
-            pytest.skip(f"degenerate geometry (height={rect.height():.1f}), skip snap test")
-
-        lo_before, hi_before = ax.get_ylim()
-        span_before = hi_before - lo_before
 
         canvas._snap_overlay_channel_to_grid(ax)
         QCoreApplication.processEvents()
 
         lo_after, hi_after = ax.get_ylim()
-        span_after = hi_after - lo_after
-
-        # Span must be preserved.
-        assert abs(span_after - span_before) < 1e-4, (
-            f"span changed: {span_before} → {span_after}"
-        )
-
-        # Center must align to k/8 in X-master normalized Y space.
-        center_after = (lo_after + hi_after) / 2.0
-        x_master_vb = getattr(canvas._x_master_handle, "view_box", None)
-        assert x_master_vb is not None, "X-master ViewBox missing"
-        scene_pt = aux_vb.mapViewToScene(QPointF(0.0, center_after))
-        xm_pt = x_master_vb.mapSceneToView(scene_pt)
-        xm_y = float(xm_pt.y())
-        remainder = abs(xm_y * 8 - round(xm_y * 8))
-        assert remainder < 0.01, (
-            f"center not aligned to 1/8 grid: xm_y={xm_y:.4f}, "
-            f"remainder={remainder:.4f}"
-        )
+        n = canvas._overlay_divisions
+        per_div = (hi_after - lo_after) / n
+        assert abs(lo_after / per_div - round(lo_after / per_div)) < 1e-6
+        assert abs(hi_after / per_div - round(hi_after / per_div)) < 1e-6
+        major = ax.y_axis_item()._tickLevels[0]
+        assert [value for value, _label in major] == pytest.approx([
+            lo_after + k * per_div for k in range(n + 1)
+        ])
         canvas.deleteLater()

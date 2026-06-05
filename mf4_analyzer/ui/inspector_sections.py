@@ -1517,7 +1517,7 @@ class PersistentTop(QWidget):
         self.spin_xt.setToolTip("X 轴主刻度的大致数量，范围 3–30。")
         self.spin_yt = _no_buttons(QSpinBox())
         self.spin_yt.setRange(3, 20)
-        self.spin_yt.setValue(6)
+        self.spin_yt.setValue(8)
         self.spin_yt.setToolTip("Y 轴主刻度的大致数量，范围 3–20。")
         self._tick_row_host = _pair_field(
             self.spin_xt, "Y轴:", self.spin_yt,

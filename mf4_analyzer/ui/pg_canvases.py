@@ -156,8 +156,6 @@ _TARGET_X_TICK_MIN_COUNT = 3
 # fall to AA-off; a light 2-curve overlay (sum ≤ 6000) still gets AA.
 _AA_OVERLAY_SEGMENT_ON = 5000
 _AA_OVERLAY_SEGMENT_OFF = 7000
-# Task 1: overlay Y graticule constants.
-_N_OVERLAY_DIVISIONS = 8          # 等间距格线数（8 格 = 7 条内部分割线）
 _OVERLAY_GRID_ALPHA = 0.28        # 与 X 轴格线保持一致的透明度
 #
 # SUBPLOT/SINGLE metric = MAX over rows of that row's drawn points: the
@@ -867,6 +865,101 @@ def _snap_y_to_divisions(y: float, n: int) -> float:
     return round(y * n) / n
 
 
+_NICE_STEP_MANTISSAS = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8]
+
+
+def _nice_per_div(raw):
+    """Return the smallest nice step that is >= ``raw``.
+
+    Nice steps use _NICE_STEP_MANTISSAS x 10^k. Invalid, non-finite, and
+    non-positive inputs return None so callers can choose a local fallback.
+    """
+    try:
+        value = float(raw)
+    except Exception:
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    exp = math.floor(math.log10(value))
+    base = 10.0 ** exp
+    mantissa = value / base
+    for step in _NICE_STEP_MANTISSAS:
+        if step >= mantissa - 1e-9:
+            return step * base
+    return 10.0 * base
+
+
+def _adjacent_nice_step(step, direction):
+    """Return the neighboring nice step below/above ``step``."""
+    current = _nice_per_div(step)
+    if current is None:
+        return None
+    exponent = math.floor(math.log10(current))
+    candidates = []
+    for exp in range(exponent - 2, exponent + 3):
+        base = 10.0 ** exp
+        for mantissa in _NICE_STEP_MANTISSAS:
+            candidates.append(mantissa * base)
+    candidates = sorted(set(candidates))
+    tol = max(abs(current) * 1e-9, 1e-12)
+    if direction < 0:
+        lower = [value for value in candidates if value < current - tol]
+        return lower[-1] if lower else current / 10.0
+    higher = [value for value in candidates if value > current + tol]
+    return higher[0] if higher else current * 10.0
+
+
+def _fmt_tick(value):
+    """Format a graticule tick compactly enough for narrow overlay axes."""
+    try:
+        value = float(value)
+    except Exception:
+        return ""
+    if not math.isfinite(value):
+        return ""
+    if value != 0.0 and (abs(value) >= 1e6 or abs(value) < 1e-4):
+        return f"{value:.2e}"
+    rounded = round(value)
+    if abs(value - rounded) < 1e-9:
+        return f"{int(rounded)}"
+    return f"{value:g}"
+
+
+def _frame_to_nice(lo, hi, n):
+    """Expand ``[lo, hi]`` into ``n`` nice, equal graticule divisions.
+
+    Returns ``(bottom, top, ticks)`` where ``ticks`` has ``n + 1`` entries and
+    the returned frame contains the requested window.
+    """
+    try:
+        lo = float(lo)
+        hi = float(hi)
+    except Exception:
+        lo, hi = 0.0, 0.0
+    if hi < lo:
+        lo, hi = hi, lo
+    n = max(1, int(n))
+    span = hi - lo
+    if not math.isfinite(span) or span <= 0:
+        center = (lo + hi) / 2.0
+        if not math.isfinite(center):
+            center = 0.0
+        span = max(abs(center), 1.0)
+        lo = center - span / 2.0
+        hi = center + span / 2.0
+    per_div = _nice_per_div(span / n) or (span / n)
+    bottom = math.floor(lo / per_div) * per_div
+    top = bottom + n * per_div
+    guard = 0
+    while top < hi - max(abs(per_div) * 1e-9, 1e-12) and guard < 64:
+        per_div = _nice_per_div(per_div * 1.000001) or (per_div * 2.0)
+        bottom = math.floor(lo / per_div) * per_div
+        top = bottom + n * per_div
+        guard += 1
+    ticks = [bottom + k * per_div for k in range(n + 1)]
+    return bottom, top, ticks
+
+
 # ---------------------------------------------------------------------------
 # Curve-layer cache key quantization (signal-processing/
 # 2026-04-25-envelope-cache-bucket-width-quantization).
@@ -911,6 +1004,7 @@ class TimeDomainCanvasPG(QWidget):
     dual_cursor_info = pyqtSignal(str)
     span_selected = pyqtSignal(float, float)
     overlay_channel_selected = pyqtSignal(object)
+    overlay_y_needs_selection = pyqtSignal()
     context_menu_requested = pyqtSignal()
     xrange_changed = pyqtSignal(float, float)
 
@@ -1127,7 +1221,9 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
         self._overlay_view_sync_conns = []
-        # Task 1: overlay Y grid infrastructure
+        # Overlay Y grid/tick graticule. The inspector Y density spin drives
+        # this value directly in overlay mode.
+        self._overlay_divisions = 8
         self._overlay_grid_lines: list = []
         # The X-master axis handle in overlay mode. Its ViewBox owns the
         # shared X range, the default mouse-pan, and the scene geometry
@@ -1148,7 +1244,7 @@ class TimeDomainCanvasPG(QWidget):
         self._subplot_label_specs = []
 
         # Inspector tick-density defaults mirror PersistentTop defaults.
-        self._tick_density = (10, 6)
+        self._tick_density = (10, 8)
 
         # Cursor line scene items. In single mode _cursor_line_items is the
         # live hover line on each subplot. In dual mode _cursor_a_items and
@@ -1319,6 +1415,8 @@ class TimeDomainCanvasPG(QWidget):
 
         self._refresh = True
         self._apply_tick_density_to_all_axes()
+        if self._overlay_mode:
+            self._repin_overlay_channel_ticks()
         self._unify_subplot_bottom_axis_heights()
         # Tick density and data-union X seeding can change AxisItem geometry
         # after the early subplot label pass. Re-pin once at the end of build
@@ -2045,7 +2143,7 @@ class TimeDomainCanvasPG(QWidget):
         InfiniteLines that serve as the shared graticule for overlay mode.
 
         The X-master ViewBox carries no channel data; its Y range is fixed so
-        lines placed at k/_N_OVERLAY_DIVISIONS stay at even screen fractions
+        lines placed at k/self._overlay_divisions stay at even screen fractions
         regardless of channel data changes.  The InfiniteLines are added to
         the X-master ViewBox via vb.addItem(), so they are removed automatically
         when _glw.clear() tears down the PlotItem.
@@ -2063,7 +2161,14 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             pass
 
-        n = _N_OVERLAY_DIVISIONS
+        for line in list(self._overlay_grid_lines):
+            try:
+                vb.removeItem(line)
+            except Exception:
+                pass
+        self._overlay_grid_lines = []
+
+        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
         alpha_int = max(1, min(255, int(round(_OVERLAY_GRID_ALPHA * 255))))
         pen = pg.mkPen(color=(180, 180, 180, alpha_int), width=1)
         lines = []
@@ -2082,68 +2187,51 @@ class TimeDomainCanvasPG(QWidget):
                 pass
         self._overlay_grid_lines = lines
 
+    def _repin_overlay_channel_ticks(self):
+        """Frame overlay channels and pin their ticks to the shared graticule."""
+        if not getattr(self, "_overlay_mode", False):
+            return
+        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        for handle in list(self.axes_list):
+            try:
+                lo, hi = handle.get_ylim()
+            except Exception:
+                continue
+            bottom, top, ticks = _frame_to_nice(lo, hi, n)
+            try:
+                handle.set_ylim(bottom, top)
+            except Exception:
+                continue
+            axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
+            if axis is None:
+                continue
+            try:
+                axis.setStyle(maxTickLevel=0)
+            except Exception:
+                pass
+            try:
+                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+            except Exception:
+                pass
+
     def _snap_overlay_channel_to_grid(self, ax):
-        """Snap the selected channel's ViewBox Y center to the nearest
-        1/_N_OVERLAY_DIVISIONS boundary in X-master normalized space.
-
-        The span (hi - lo) is preserved; only the center moves.  If the
-        scene geometry is degenerate (offscreen / zero-size ViewBox), the
-        method is a silent no-op — no crash, no change.
-
-        Coordinate path:
-            channel data center
-                → aux_vb.mapViewToScene()        [data coords → scene px]
-                → x_master_vb.mapSceneToView()   [X-master Y ∈ [0, 1]]
-                → _snap_y_to_divisions()
-                → x_master_vb.mapViewToScene()   [data coords → scene px]
-                → aux_vb.mapSceneToView()
-            → new channel data center
-        """
+        """Re-frame a dragged overlay channel to the nice graticule."""
         if ax is None:
             return
         try:
             lo, hi = ax.get_ylim()
         except Exception:
             return
-        span = hi - lo
-        if span <= 0:
+        if not (hi - lo > 0):
             return
-
-        aux_vb = getattr(ax, "view_box", None)
-        x_master = self._x_master_handle
-        x_master_vb = getattr(x_master, "view_box", None) if x_master else None
-        if aux_vb is None or x_master_vb is None:
-            return
-
-        # Guard: degenerate scene geometry → silent no-op.
+        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        bottom, top, ticks = _frame_to_nice(lo, hi, n)
         try:
-            aux_rect = aux_vb.sceneBoundingRect()
-            if aux_rect.height() < 1.0:
-                return
-        except Exception:
-            return
-
-        center_data = (lo + hi) / 2.0
-        try:
-            from PyQt5.QtCore import QPointF
-            scene_pt = aux_vb.mapViewToScene(QPointF(0.0, center_data))
-            xm_pt = x_master_vb.mapSceneToView(scene_pt)
-            xm_y = float(xm_pt.y())
-        except Exception:
-            return
-
-        snapped_xm_y = _snap_y_to_divisions(xm_y, _N_OVERLAY_DIVISIONS)
-
-        try:
-            from PyQt5.QtCore import QPointF
-            snapped_scene_pt = x_master_vb.mapViewToScene(QPointF(0.0, snapped_xm_y))
-            snapped_ch_pt = aux_vb.mapSceneToView(snapped_scene_pt)
-            new_center = float(snapped_ch_pt.y())
-        except Exception:
-            return
-
-        try:
-            ax.set_ylim(new_center - span / 2.0, new_center + span / 2.0)
+            ax.set_ylim(bottom, top)
+            axis = ax.y_axis_item() if hasattr(ax, "y_axis_item") else None
+            if axis is not None:
+                axis.setStyle(maxTickLevel=0)
+                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
         except Exception:
             pass
 
@@ -2823,6 +2911,14 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             x_n, y_n = self._tick_density
         self._tick_density = (x_n, y_n)
+        if self._overlay_mode:
+            self._overlay_divisions = max(3, min(20, int(y_n)))
+            self._build_overlay_y_grid()
+            self._repin_overlay_channel_ticks()
+            self._apply_target_x_ticks_to_all_axes()
+            self._refresh = True
+            self.draw_idle()
+            return
         self._apply_tick_density_to_all_axes()
         # Tick density changes tick-label text → left-axis auto-width, which
         # re-skews subplot left edges; re-unify after applying density.
@@ -3793,9 +3889,6 @@ class TimeDomainCanvasPG(QWidget):
         Returns ``True`` if consumed, ``False`` otherwise (caller falls
         back to default ViewBox behavior).
         """
-        target = self._axis_handle_for_view_box(view_box) or self._primary_xaxis_ax
-        if target is None:
-            return False
         # Matplotlib uses step = +/-1; here Qt uses delta in units of 120.
         step = 1 if delta > 0 else -1 if delta < 0 else 0
         if step == 0:
@@ -3806,6 +3899,71 @@ class TimeDomainCanvasPG(QWidget):
         ctrl = bool(modifiers & Qt.ControlModifier)
         shift = bool(modifiers & Qt.ShiftModifier)
         self.disable_interactive_quality()
+
+        if getattr(self, "_overlay_mode", False) and not ctrl:
+            target = self._selected_overlay_axes()
+            if target is None:
+                self.overlay_y_needs_selection.emit()
+                self.schedule_idle_quality()
+                return True
+            try:
+                lo, hi = target.get_ylim()
+            except Exception:
+                return True
+            n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+            span = hi - lo
+            if not math.isfinite(span) or span <= 0:
+                bottom, top, ticks = _frame_to_nice(lo, hi, n)
+            elif shift:
+                try:
+                    anchor = float(y_pos)
+                except Exception:
+                    anchor = (lo + hi) / 2.0
+                if not math.isfinite(anchor):
+                    anchor = (lo + hi) / 2.0
+                x_master_vb = (
+                    getattr(self._x_master_handle, "view_box", None)
+                    if self._x_master_handle is not None
+                    else None
+                )
+                if (
+                    0.0 <= anchor <= 1.0
+                    and (view_box is None or view_box is x_master_vb)
+                ):
+                    anchor = lo + anchor * span
+                current_per_div = span / n
+                next_per_div = _adjacent_nice_step(
+                    current_per_div,
+                    -1 if step > 0 else 1,
+                )
+                if next_per_div is None:
+                    next_per_div = current_per_div * factor
+                ratio = max(0.0, min(1.0, (anchor - lo) / span))
+                framed_span = max(next_per_div, (n - 1) * next_per_div)
+                new_lo = anchor - ratio * framed_span
+                new_hi = anchor + (1.0 - ratio) * framed_span
+                bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
+            else:
+                per_div = span / n
+                bottom = lo + step * per_div
+                top = hi + step * per_div
+                ticks = [bottom + k * per_div for k in range(n + 1)]
+            try:
+                target.set_ylim(bottom, top)
+                axis = target.y_axis_item() if hasattr(target, "y_axis_item") else None
+                if axis is not None:
+                    axis.setStyle(maxTickLevel=0)
+                    axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+            except Exception:
+                return True
+            self._refresh = True
+            self.draw_idle()
+            self.schedule_idle_quality()
+            return True
+
+        target = self._axis_handle_for_view_box(view_box) or self._primary_xaxis_ax
+        if target is None:
+            return False
 
         try:
             if ctrl:
