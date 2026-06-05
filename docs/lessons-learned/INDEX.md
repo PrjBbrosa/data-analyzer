@@ -41,6 +41,7 @@ lesson by default.
 | [Lazy Parser Import Boundaries](codex-lazy-parser-import-boundaries.md) | Touching A2L parsing, acquisition measurement summaries, or modules | See lesson |
 | [Qt Checkbox Doubleclick Hit Region](codex-qt-checkbox-doubleclick-hit-region.md) | Load when custom PyQt item-view checkbox hit handling is changed, | See lesson |
 | [Codex Qt Rounded Popup Chrome](codex-qt-rounded-popup-chrome.md) | Changing rounded popup/dropdown/menu styling or adding a new `QMenu`, | See lesson |
+| [Qt Checkbox Press Release Toggle](codex-qt-checkbox-press-release-toggle.md) | Changing custom PyQt item-view checkbox hit handling, especially | See lesson |
 
 ## Selection Rules
 

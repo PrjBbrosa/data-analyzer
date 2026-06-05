@@ -73,6 +73,10 @@ class _CheckTolerantTree(QTreeWidget):
 
     HIT_PAD = 6  # px tolerance added to each side of the indicator rect
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._consume_check_release = False
+
     def _check_hit_rect(self, item, index):
         """Return the enlarged clickable rect for ``item``'s checkbox, or
         None if the row has no user-checkable column-0 box."""
@@ -126,12 +130,21 @@ class _CheckTolerantTree(QTreeWidget):
                     # Route through setCheckState so the existing
                     # itemChanged → _on_item_changed cascade (file→child
                     # propagation, MAX_CHANNELS_WARNING, channels_changed)
-                    # runs exactly once. Consume the event: returning here
-                    # without super() prevents Qt's own indicator handling
-                    # from toggling a second time.
+                    # runs exactly once. Consume the event pair: returning
+                    # here handles the press, and mouseReleaseEvent suppresses
+                    # Qt's native indicator release toggle.
+                    self._consume_check_release = True
                     item.setCheckState(0, new_state)
+                    event.accept()
                     return
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._consume_check_release:
+            self._consume_check_release = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:

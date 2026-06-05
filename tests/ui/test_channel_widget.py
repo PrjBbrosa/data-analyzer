@@ -159,6 +159,36 @@ def test_checkbox_double_click_event_is_consumed_after_row_selection(qapp, qtbot
     assert double_clicked == []
 
 
+def test_selected_channel_checkbox_center_click_toggles_once(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _FakeFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    tree = widget.tree
+    channel_item = widget._file_items["file-a"].child(0)
+    tree.scrollToItem(channel_item)
+    QCoreApplication.processEvents()
+
+    row = tree.visualItemRect(channel_item)
+    QTest.mouseClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, row.center())
+    QCoreApplication.processEvents()
+    assert tree.currentItem() is channel_item
+
+    hit = tree._check_hit_rect(channel_item, tree.indexFromItem(channel_item, 0))
+    assert hit is not None
+    assert channel_item.checkState(0) == Qt.Unchecked
+
+    QTest.mouseClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, hit.center())
+    QCoreApplication.processEvents()
+
+    assert channel_item.checkState(0) == Qt.Checked
+
+
 def test_edit_channels_button_enables_with_file_and_emits(qapp, qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
