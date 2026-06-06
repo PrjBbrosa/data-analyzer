@@ -1565,6 +1565,9 @@ class PersistentTop(QWidget):
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
         self.spin_xt.valueChanged.connect(self._emit_ticks)
         self.spin_yt.valueChanged.connect(self._emit_ticks)
+        # Sync label field when user changes channel selection interactively.
+        # blockSignals during restore/repopulate suppresses this correctly.
+        self._combo_xaxis_ch.currentIndexChanged.connect(self._sync_xlabel_from_channel)
         # R3 #6: collapser toggle reveals/hides the inner three groups
         # and persists the choice via QSettings.
         self.btn_collapser.toggled.connect(self._sync_collapser)
@@ -1582,6 +1585,14 @@ class PersistentTop(QWidget):
             _preset_settings().setValue(self._SETTINGS_KEY, expanded)
         except Exception:  # pragma: no cover
             pass
+
+    def _sync_xlabel_from_channel(self, idx):
+        if idx < 0:
+            return
+        data = self._combo_xaxis_ch.itemData(idx)
+        if data is not None:
+            _, ch = data
+            self.edit_xlabel.setText(ch)
 
     def _update_xaxis_channel_row_visible(self, index):
         _set_form_row_visible(self._xaxis_form, self._combo_xaxis_ch, index == 1)
@@ -1621,6 +1632,9 @@ class PersistentTop(QWidget):
         if keep_idx >= 0:
             self._combo_xaxis_ch.setCurrentIndex(keep_idx)
         self._combo_xaxis_ch.blockSignals(False)
+        # Fresh population (no previous match): auto-fill label if empty.
+        if keep_idx < 0 and self._combo_xaxis_ch.count() > 0 and not self.edit_xlabel.text():
+            self._sync_xlabel_from_channel(0)
 
     def range_enabled(self):
         return self.chk_range.isChecked()
