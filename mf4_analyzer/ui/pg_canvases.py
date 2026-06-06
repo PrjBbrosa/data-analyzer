@@ -3359,7 +3359,7 @@ class TimeDomainCanvasPG(QWidget):
         found = self._nearest_data_point(viewport_pos)
         if found is None:
             return
-        ch, dx, dy, color = found
+        _ch, dx, dy, color = found
         # Resolve which viewbox to add the annotation to.
         try:
             ax = self._primary_xaxis_ax or (
@@ -3393,7 +3393,7 @@ class TimeDomainCanvasPG(QWidget):
         )
         vb.addItem(leader)
         # Text label.
-        label_text = f"{ch}: {dy:.4g}"
+        label_text = self._format_remark_label(dx, dy)
         text = pg.TextItem(
             text=label_text,
             color=color,
@@ -3423,6 +3423,60 @@ class TimeDomainCanvasPG(QWidget):
                     self._update_remark_leader(_r)
                 return result
             text.itemChange = patched_item_change
+
+    def _format_remark_label(self, x_value, y_value):
+        """Return the compact coordinate label shown by point remarks."""
+        return f"X={x_value:.4g}\nY={y_value:.4g}"
+
+    def _remark_item_at_viewport_pos(self, viewport_pos):
+        """Return the remark under a viewport click, or None.
+
+        Annotation mode uses this to let existing labels receive their own
+        drag events instead of treating every left press as "add remark".
+        """
+        from PyQt5.QtCore import QPointF as _QPointF
+        if not self._remarks:
+            return None
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        if scene_pos is None:
+            return None
+        try:
+            scene_items = self._glw.scene().items(scene_pos)
+        except Exception:
+            scene_items = []
+        for item in scene_items:
+            for remark in self._remarks:
+                text = remark.get('text')
+                candidates = (
+                    text,
+                    getattr(text, 'textItem', None),
+                    remark.get('dot'),
+                    remark.get('leader'),
+                )
+                if any(
+                    item is candidate
+                    for candidate in candidates
+                    if candidate is not None
+                ):
+                    return remark
+        try:
+            sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
+            for remark in self._remarks:
+                vb = remark.get('vb')
+                text = remark.get('text')
+                if vb is None or text is None:
+                    continue
+                lpos = text.pos()
+                label_scene_pos = vb.mapViewToScene(_QPointF(lpos.x(), lpos.y()))
+                dist_sq = (
+                    (label_scene_pos.x() - sp.x()) ** 2
+                    + (label_scene_pos.y() - sp.y()) ** 2
+                )
+                if dist_sq <= 12 ** 2:
+                    return remark
+        except Exception:
+            return None
+        return None
 
     def _update_remark_leader(self, remark):
         """Redraw leader line from data point to text label current position."""
@@ -3896,11 +3950,19 @@ class TimeDomainCanvasPG(QWidget):
                     # Return False so the GraphicsView still processes the
                     # event for its own bookkeeping; we do not consume it.
             elif event.type() == QEvent.MouseButtonPress:
-                # Annotation mode: left-click adds a remark at the nearest
-                # data point and consumes the event so pan/cursor don't fire.
-                if self._annotation_enabled and event.button() == Qt.LeftButton:
-                    self._add_remark(event.pos())
-                    return True
+                # Annotation mode: left-click blank/data space adds a remark;
+                # left-click on an existing label is left to Qt so it can drag.
+                if self._annotation_enabled:
+                    if event.button() == Qt.RightButton:
+                        scene_pos = self._viewport_pos_to_scene(event.pos())
+                        self._last_rclick_scene_pos = scene_pos
+                        self._remove_remark_at(scene_pos)
+                        return True
+                    if event.button() == Qt.LeftButton:
+                        if self._remark_item_at_viewport_pos(event.pos()) is not None:
+                            return False
+                        self._add_remark(event.pos())
+                        return True
                 # Overlay selection / Y-drag begin takes precedence over
                 # cursor placement, but only outside cursor mode (cursor
                 # mode wins, matching canvases.py:853). _handle_overlay_

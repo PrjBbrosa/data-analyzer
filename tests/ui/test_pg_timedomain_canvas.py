@@ -568,6 +568,116 @@ def _pg_signal_signature(bound) -> str:
     return raw.lstrip("0123456789")
 
 
+class TestTimeDomainCanvasPGAnnotations:
+    """Pin the remark tool behavior users exercise from the time toolbar."""
+
+    def test_remark_label_shows_coordinates_not_channel_name(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QPoint
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        monkeypatch.setattr(
+            canvas,
+            "_nearest_data_point",
+            lambda _pos: ("speed", 1.25, 42.5, "#1769e0"),
+        )
+
+        canvas._add_remark(QPoint(120, 100))
+
+        label = canvas._remarks[-1]["text"].textItem.toPlainText()
+        assert "X=1.25" in label
+        assert "Y=42.5" in label
+        assert "speed" not in label
+
+    def test_annotation_mode_left_press_on_existing_remark_allows_drag(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+        point = QPoint(80, 90)
+        added = []
+        monkeypatch.setattr(
+            canvas,
+            "_remark_item_at_viewport_pos",
+            lambda _pos: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(canvas, "_add_remark", lambda pos: added.append(pos))
+
+        consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_press(point, Qt.LeftButton),
+        )
+
+        assert consumed is False
+        assert added == []
+
+    def test_annotation_mode_left_press_on_real_label_does_not_add_remark(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint, QPointF, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        monkeypatch.setattr(
+            canvas,
+            "_nearest_data_point",
+            lambda _pos: ("speed", 1.25, 42.5, "#1769e0"),
+        )
+        canvas._add_remark(QPoint(120, 100))
+        remark = canvas._remarks[-1]
+        label_pos = remark["text"].pos()
+        scene_pos = remark["vb"].mapViewToScene(
+            QPointF(label_pos.x(), label_pos.y())
+        )
+        label_viewport_pos = canvas._glw.mapFromScene(scene_pos)
+
+        canvas.set_remark_enabled(True)
+        consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_press(label_viewport_pos, Qt.LeftButton),
+        )
+
+        assert consumed is False
+        assert len(canvas._remarks) == 1
+        assert canvas._remarks[-1] is remark
+
+    def test_annotation_mode_right_press_deletes_nearest_remark(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+        point = QPoint(80, 90)
+        scene_pos = object()
+        removed = []
+        monkeypatch.setattr(canvas, "_viewport_pos_to_scene", lambda _pos: scene_pos)
+        monkeypatch.setattr(
+            canvas,
+            "_remove_remark_at",
+            lambda sp: removed.append(sp),
+        )
+
+        consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_press(point, Qt.RightButton),
+        )
+
+        assert consumed is True
+        assert removed == [scene_pos]
+
+    def _mouse_press(self, point, button):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        return QMouseEvent(
+            QEvent.MouseButtonPress, point, button, button, Qt.NoModifier,
+        )
+
+
 class TestTimeDomainCanvasPGContract:
     """Pin the compatibility surface design §3.1 + §5.5 require so the
     new pyqtgraph canvas is a drop-in for the matplotlib TimeDomainCanvas.

@@ -152,7 +152,6 @@ class ViewTabBar(QWidget):
                 )
                 idx = self._tabs.addTab(icon, view.name)
                 self._tabs.setTabData(idx, view.tab_color)
-                self._tabs.setTabToolTip(idx, view.name)
             self._set_current_index(self._manager.active)
         finally:
             self._suppress = False

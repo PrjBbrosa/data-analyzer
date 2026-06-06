@@ -1214,6 +1214,30 @@ class _ChartCard(QWidget):
         # after the fixed loc/hint labels; TimeDomain uses the same path.
         self._insert_toolbar_widget(loc_action, widget)
 
+    def _insert_toolbar_widget_after(self, after_action, widget):
+        actions = self.toolbar.actions()
+        if after_action in actions:
+            index = actions.index(after_action)
+            if index + 1 < len(actions):
+                self.toolbar.insertWidget(actions[index + 1], widget)
+                return
+        self.toolbar.addWidget(widget)
+
+    def _install_compact_annotation_control_after(self, after_action):
+        self._annotation_btn = QToolButton(self.toolbar)
+        self._annotation_btn.setObjectName("chartAnnotationButton")
+        self._annotation_btn.setIcon(Icons.annotate(QColor(_ICON_COLOR)))
+        self._annotation_btn.setIconSize(QSize(18, 18))
+        self._annotation_btn.setFixedSize(QSize(32, 32))
+        self._annotation_btn.setCheckable(True)
+        self._annotation_btn.setAutoRaise(True)
+        self._annotation_btn.setToolTip("标注：开启后左键添加标注；右键删除最近标注")
+        self._annotation_btn.setProperty("compactAnnotation", True)
+        self._annotation_btn.clicked.connect(
+            lambda checked=False: self.set_annotation_enabled(checked)
+        )
+        self._insert_toolbar_widget_after(after_action, self._annotation_btn)
+
     def _install_annotation_controls(self, loc_action):
         self._annotation_spacer = QWidget(self.toolbar)
         self._annotation_spacer.setObjectName("chartAnnotationSpacer")
@@ -1263,9 +1287,12 @@ class _ChartCard(QWidget):
         if btn is not None:
             btn.blockSignals(True)
             btn.setChecked(self._annotation_enabled)
-            btn.setText("关闭" if self._annotation_enabled else "开启")
             icon_color = _ICON_ACTIVE if self._annotation_enabled else _ICON_COLOR
-            btn.setIcon(qta.icon('mdi.map-marker-plus-outline', color=icon_color))
+            if btn.property("compactAnnotation"):
+                btn.setIcon(Icons.annotate(QColor(icon_color)))
+            else:
+                btn.setText("关闭" if self._annotation_enabled else "开启")
+                btn.setIcon(qta.icon('mdi.map-marker-plus-outline', color=icon_color))
             btn.blockSignals(False)
         if notify:
             self.annotation_enabled_changed.emit(self._annotation_enabled)
@@ -1388,6 +1415,8 @@ class TimeChartCard(_ChartCard):
 
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent, chart_mode='time')
+        zoom_act = _find_action(self.toolbar, 'zoom')
+        self._install_compact_annotation_control_after(zoom_act)
         # Right-align time-only controls with the same locLabel insertion
         # point used by annotation controls on analysis cards.
         loc_action = getattr(self, '_loc_action', None)
@@ -1469,6 +1498,15 @@ class TimeChartCard(_ChartCard):
             self._time_button_shortcuts.append(
                 _install_button_shortcut(self, btn, label, shortcut, key)
             )
+        self._time_button_shortcuts.append(
+            _install_button_shortcut(
+                self,
+                self._annotation_btn,
+                "标注：左键添加，右键删除最近一处",
+                "Alt+M",
+                "annotation",
+            )
+        )
         self.view_tabbar = None
 
     def mount_view_tabbar(self, bar):
@@ -1717,6 +1755,7 @@ class ChartStack(QWidget):
             self._on_shared_cursor_mode_changed
         )
         for mode, card in (
+            ('time', self._time_card),
             ('fft', self._fft_card),
             ('fft_time', self._fft_time_card),
             ('order', self._order_card),
@@ -2278,6 +2317,7 @@ class ChartStack(QWidget):
 
     def set_annotation_enabled(self, mode, enabled, notify=False):
         cards = {
+            'time': self._time_card,
             'fft': self._fft_card,
             'fft_time': self._fft_time_card,
             'order': self._order_card,

@@ -139,12 +139,33 @@ def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
 
-    assert not hasattr(cs._time_card, '_annotation_btn')
+    assert hasattr(cs._time_card, '_annotation_btn')
+    assert not hasattr(cs._time_card, '_clear_annotation_btn')
+    assert cs._time_card._annotation_btn.toolTip()
     for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
         assert hasattr(card, '_annotation_btn')
         assert hasattr(card, '_clear_annotation_btn')
         assert card._annotation_btn.text() == '开启'
         assert card._annotation_btn.toolTip()
+
+
+def test_time_annotation_control_follows_zoom_button(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    card = cs._time_card
+    actions = card.toolbar.actions()
+    zoom_index = next(i for i, act in enumerate(actions) if act.data() == 'zoom')
+    annotation_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card._annotation_btn
+    )
+    options_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card._options_btn
+    )
+
+    assert zoom_index < annotation_index < options_index
 
 
 def test_annotation_toolbar_controls_are_pushed_right_after_hint_label(qapp, qtbot):
@@ -250,6 +271,7 @@ def test_time_card_segmented_buttons_have_alt_digit_shortcuts(qapp, qtbot):
         (card._cursor_buttons['off'],     'Alt+3', '游标关'),
         (card._cursor_buttons['single'],  'Alt+4', '单游标'),
         (card._cursor_buttons['dual'],    'Alt+5', '双游标'),
+        (card._annotation_btn,            'Alt+M', '标注'),
     ]
     registered = {
         s.key().toString(): s for s in card._time_button_shortcuts
@@ -1321,6 +1343,10 @@ def test_annotation_toolbar_toggles_canvas_modes(qapp, qtbot):
     seen = []
     cs.annotation_enabled_changed.connect(lambda mode, enabled: seen.append((mode, enabled)))
 
+    cs._time_card._annotation_btn.click()
+    assert cs.canvas_time._annotation_enabled is True
+    assert cs._time_card._annotation_btn.isChecked()
+
     cs._fft_card._annotation_btn.click()
     assert cs.canvas_fft._remark_enabled is True
     assert cs._fft_card._annotation_btn.text() == '关闭'
@@ -1333,6 +1359,7 @@ def test_annotation_toolbar_toggles_canvas_modes(qapp, qtbot):
     assert cs.canvas_order._remark_enabled is True
     assert cs._order_card._annotation_btn.text() == '关闭'
 
+    assert ('time', True) in seen
     assert ('fft', True) in seen
     assert ('fft_time', True) in seen
     assert ('order', True) in seen

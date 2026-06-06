@@ -34,6 +34,14 @@ def test_renders_one_tab_per_view(qtbot):
     assert bar.tabBar().tabText(1) == "View 2"
 
 
+def test_view_tabs_do_not_show_redundant_name_tooltips(qtbot):
+    _manager, bar = _bar(qtbot, count=3)
+
+    assert bar.tabBar().tabToolTip(0) == ""
+    assert bar.tabBar().tabToolTip(1) == ""
+    assert bar.tabBar().tabToolTip(2) == ""
+
+
 def test_switching_other_tab_emits_switch_requested(qtbot):
     _manager, bar = _bar(qtbot, count=2, active=0)
 
