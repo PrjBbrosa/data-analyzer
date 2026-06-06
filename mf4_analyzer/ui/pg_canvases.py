@@ -4991,6 +4991,21 @@ class TimeDomainCanvasPG(QWidget):
                 except Exception:
                     pass
 
+    @contextmanager
+    def _cpu_raster_for_grab(self):
+        """Temporarily switch GPU rendering off so QWidget.grab sees content."""
+        restore_requested = bool(getattr(self, "_gpu_render_requested", False))
+        restore_applied = bool(getattr(self, "_gpu_render_on", False))
+        if restore_applied:
+            self._gpu_render_requested = False
+            self._apply_gpu_viewport()
+        try:
+            yield
+        finally:
+            self._gpu_render_requested = restore_requested
+            if restore_applied or restore_requested:
+                self._apply_gpu_viewport()
+
     def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
         """Return a ``QPixmap`` snapshot of the canvas.
 
@@ -5036,11 +5051,12 @@ class TimeDomainCanvasPG(QWidget):
 
         # Few-channel exports keep the crisp forced-AA path. Dense exports are
         # what-you-see-is-what-you-get and avoid re-enabling AA for all curves.
-        if affordable:
-            with self._curves_antialiased():
+        with self._cpu_raster_for_grab():
+            if affordable:
+                with self._curves_antialiased():
+                    pix = _grab_first_good()
+            else:
                 pix = _grab_first_good()
-        else:
-            pix = _grab_first_good()
         if pix is not None:
             return pix
         # Final fallback: a 1×1 transparent pixmap. Tests gate on

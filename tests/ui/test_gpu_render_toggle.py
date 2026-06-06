@@ -108,3 +108,98 @@ def test_set_gpu_render_failure_keeps_applied_false_and_can_retry(qapp):
     c._apply_gpu_viewport()
     assert c._gpu_render_on is True
     assert glw.calls == [True, True]
+
+
+def test_grab_pixmap_roundtrips_gl_off_then_on_when_gpu(qapp):
+    c = _gpu_canvas(qapp)
+    calls = []
+    real_glw = c._glw
+
+    class Spy:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def useOpenGL(self, on):
+            calls.append(bool(on))
+
+        def __getattr__(self, k):
+            return getattr(self._inner, k)
+
+    c._glw = Spy(real_glw)
+    c._gpu_render_requested = True
+    c._gpu_render_on = True
+    pix = c.grab_pixmap()
+    assert pix is not None and not pix.isNull()
+    assert calls == [False, True]
+    assert c._gpu_render_requested is True
+    assert c._gpu_render_on is True
+
+
+def test_grab_pixmap_no_gl_toggle_when_cpu(qapp):
+    c = _gpu_canvas(qapp)
+    calls = []
+    real_glw = c._glw
+
+    class Spy:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def useOpenGL(self, on):
+            calls.append(bool(on))
+
+        def __getattr__(self, k):
+            return getattr(self._inner, k)
+
+    c._glw = Spy(real_glw)
+    c._gpu_render_requested = False
+    c._gpu_render_on = False
+    c.grab_pixmap()
+    assert calls == []
+
+
+def _pixmap_has_nonblank_content(pix):
+    from PyQt5.QtGui import QColor, QImage
+
+    img = pix.toImage().convertToFormat(QImage.Format_ARGB32)
+    if img.width() <= 1 or img.height() <= 1:
+        return False
+    step_x = max(1, img.width() // 80)
+    step_y = max(1, img.height() // 50)
+    for y in range(0, img.height(), step_y):
+        for x in range(0, img.width(), step_x):
+            c = QColor(img.pixel(x, y))
+            if c.alpha() > 0 and (c.red() < 245 or c.green() < 245 or c.blue() < 245):
+                return True
+    return False
+
+
+def test_gpu_grab_pixmap_cpu_roundtrip_returns_nonblank_content(qapp):
+    c = _gpu_canvas(qapp)
+    t = np.linspace(0, 1, 200)
+    c.plot_channels([
+        ("speed", True, t, np.sin(t * 20), "#1769e0", "rpm", "f")
+    ])
+    QCoreApplication.processEvents()
+    real_glw = c._glw
+
+    class Spy:
+        def __init__(self, inner):
+            self._inner = inner
+            self.calls = []
+
+        def useOpenGL(self, on):
+            self.calls.append(bool(on))
+
+        def __getattr__(self, k):
+            return getattr(self._inner, k)
+
+    c._glw = Spy(real_glw)
+    c._gpu_render_requested = True
+    c._gpu_render_on = True
+
+    pix = c.grab_pixmap(scale=1.0)
+
+    assert pix is not None and not pix.isNull()
+    assert pix.width() > 1 and pix.height() > 1, "must not return 1x1 fallback"
+    assert c._glw.calls == [False, True]
+    assert _pixmap_has_nonblank_content(pix), "GPU export fallback must contain chart pixels"
