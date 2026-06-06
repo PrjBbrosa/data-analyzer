@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 from PyQt5.QtCore import QCoreApplication, QPoint, Qt
 from PyQt5.QtTest import QTest
@@ -203,3 +205,20 @@ def test_gpu_grab_pixmap_cpu_roundtrip_returns_nonblank_content(qapp):
     assert pix.width() > 1 and pix.height() > 1, "must not return 1x1 fallback"
     assert c._glw.calls == [False, True]
     assert _pixmap_has_nonblank_content(pix), "GPU export fallback must contain chart pixels"
+
+
+def test_configure_gl_surface_format_sets_msaa(qapp):
+    from PyQt5.QtGui import QSurfaceFormat
+
+    from mf4_analyzer.app import _configure_gl_surface_format
+
+    _configure_gl_surface_format()
+    assert QSurfaceFormat.defaultFormat().samples() == 4
+
+
+def test_main_configures_gl_surface_format_before_qapplication():
+    import mf4_analyzer.app as appmod
+
+    src = inspect.getsource(appmod.main)
+    assert src.index("_configure_high_dpi()") < src.index("_configure_gl_surface_format()")
+    assert src.index("_configure_gl_surface_format()") < src.index("QApplication(")

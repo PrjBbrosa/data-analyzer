@@ -61,8 +61,18 @@ def _configure_high_dpi():
         QGuiApplication.setHighDpiScaleFactorRoundingPolicy(policy_enum.PassThrough)
 
 
+def _configure_gl_surface_format():
+    """Request 4x MSAA for GPU-rendered Qt surfaces."""
+    from PyQt5.QtGui import QSurfaceFormat
+
+    fmt = QSurfaceFormat.defaultFormat()
+    fmt.setSamples(4)
+    QSurfaceFormat.setDefaultFormat(fmt)
+
+
 def main():
     _configure_high_dpi()
+    _configure_gl_surface_format()
 
     import matplotlib
 
