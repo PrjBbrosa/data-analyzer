@@ -421,6 +421,47 @@ def test_shared_nav_highlight_reflects_broadcast_mode(qtbot, qapp, loaded_csv):
     assert bool(pan_btn.property("navActive")) is False
 
 
+def test_split_save_image_combines_both_panes(
+    qtbot, qapp, loaded_csv, monkeypatch, tmp_path
+):
+    from PyQt5.QtGui import QImage
+    from mf4_analyzer.ui.chart_stack import _grab_pixmap_hidpi
+
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    out = tmp_path / "split.png"
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.chart_stack.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(out), "PNG (*.png)"),
+    )
+
+    cs._time_toolbar._click_save()
+    qapp.processEvents()
+
+    assert out.exists()
+    img = QImage(str(out))
+    single = _grab_pixmap_hidpi(cs.canvas_time)
+    assert img.width() >= single.width() * 1.8
+
+
+def test_split_copy_image_combines_both_panes(qtbot, qapp, loaded_csv):
+    from mf4_analyzer.ui.chart_stack import _grab_pixmap_hidpi
+
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    captured = []
+    cs.image_captured.connect(captured.append)
+
+    cs._time_card.copy_image_requested.emit()
+    qapp.processEvents()
+
+    assert captured
+    single = _grab_pixmap_hidpi(cs.canvas_time)
+    assert captured[-1].width() >= single.width() * 1.8
+
+
 def test_shared_options_button_opens_focused_pane(qtbot, qapp, loaded_csv):
     w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
     cs = w.chart_stack

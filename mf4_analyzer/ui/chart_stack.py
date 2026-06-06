@@ -366,6 +366,7 @@ class PgNavigationToolbar(QToolBar):
         # Split-mode peer routing: pan/zoom/back/forward should apply to this
         # toolbar and any visible peer pane toolbar without changing focus.
         self._peer_toolbars_provider = None
+        self._save_pixmap_provider = None
         # View history (matplotlib NavigationToolbar2 model): a single stack
         # of view snapshots plus a pointer into it. ``back()`` decrements the
         # pointer, ``forward()`` increments it, and a brand-new gesture
@@ -777,7 +778,15 @@ class PgNavigationToolbar(QToolBar):
         )
         if not path:
             return
-        pix = _grab_pixmap_hidpi(canvas)
+        pix = None
+        provider = self._save_pixmap_provider
+        if callable(provider):
+            try:
+                pix = provider()
+            except Exception:
+                pix = None
+        if pix is None or pix.isNull():
+            pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():
             return
         try:
@@ -827,7 +836,7 @@ class PgNavigationToolbar(QToolBar):
             toolbar.set_mouse_mode(self.mode)
 
     def _click_save(self, *_a):
-        (self._delegate() or self).save_figure()
+        self.save_figure()
 
 
 class _ChartCard(QWidget):
@@ -1547,6 +1556,7 @@ class ChartStack(QWidget):
             if (self.split_active() and self._secondary_card is not None)
             else []
         )
+        self._time_toolbar._save_pixmap_provider = self._combined_split_pixmap
         # 图表选项 on the shared toolbar opens for the focused pane's canvas.
         self._time_card._options_canvas_provider = self.focused_canvas
         # Mirror the focused pane's pan/zoom state onto the shared toolbar
@@ -1697,6 +1707,26 @@ class ChartStack(QWidget):
                 and canvas is self._secondary_card.canvas):
             return self._secondary_card
         return self._time_card
+
+    def _combined_split_pixmap(self):
+        """Return primary+secondary canvas pixels side-by-side while split."""
+        if not self.split_active() or self._secondary_card is None:
+            return None
+        left = _grab_pixmap_hidpi(self.canvas_time)
+        right = _grab_pixmap_hidpi(self._secondary_card.canvas)
+        if left is None or right is None or left.isNull() or right.isNull():
+            return None
+        gap = 8
+        out = QPixmap(
+            left.width() + gap + right.width(),
+            max(left.height(), right.height()),
+        )
+        out.fill(Qt.white)
+        painter = QPainter(out)
+        painter.drawPixmap(0, 0, left)
+        painter.drawPixmap(left.width() + gap, 0, right)
+        painter.end()
+        return out
 
     def _cursor_mode_for_canvas(self, canvas):
         """Per-pane cursor mode ('off'/'single'/'dual') for the pill formatter.
@@ -2181,6 +2211,13 @@ class ChartStack(QWidget):
         effective factor so it still lines up on the magnified bitmap."""
         from PyQt5.QtCore import QRect
         from PyQt5.QtGui import QPainter
+        if (self.current_mode() == 'time'
+                and self.split_active()
+                and card in (self._time_card, self._secondary_card)):
+            pix = self._combined_split_pixmap()
+            if pix is not None and not pix.isNull():
+                self.image_captured.emit(pix)
+            return
         canvas = card.canvas
         pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():
