@@ -432,6 +432,9 @@ class MainWindow(QMainWindow):
         if canvas is None or getattr(canvas, '_view_range_connected', False):
             return
         self._connect_canvas_range_signals(canvas)
+        xrange_changed = getattr(canvas, 'xrange_changed', None)
+        if xrange_changed is not None:
+            xrange_changed.connect(self._on_secondary_canvas_xrange_changed)
         canvas._view_range_connected = True
 
     def _capture_current_view(self):
@@ -921,7 +924,16 @@ class MainWindow(QMainWindow):
                 pass
 
     def _on_time_canvas_xrange_changed(self, lo, hi):
+        # In split mode: skip update when focus is on the secondary canvas so
+        # the inspector shows the focused pane's range, not the primary's.
+        if (self.chart_stack.split_active()
+                and self.chart_stack.focused_canvas() is not self.canvas_time):
+            return
         self._sync_time_range_inputs_from_visible_xlim((lo, hi))
+
+    def _on_secondary_canvas_xrange_changed(self, lo, hi):
+        if self.chart_stack.focused_canvas() is self.chart_stack.secondary_canvas():
+            self._sync_time_range_inputs_from_visible_xlim((lo, hi))
 
     def _sync_time_range_inputs_from_visible_xlim(self, xlim=None):
         if getattr(self, '_applying_view', False):
