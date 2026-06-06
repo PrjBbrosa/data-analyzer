@@ -245,6 +245,18 @@ class ViewTabBar(QWidget):
                 return False
         return super().eventFilter(watched, event)
 
+    def _split_context_partner(self, idx: int) -> int | None:
+        partner_for = getattr(self._manager, "partner_for", None)
+        if not callable(partner_for):
+            return None
+        partner = partner_for(idx)
+        if partner is not None:
+            return partner
+        for host in range(len(self._manager.views)):
+            if host != idx and partner_for(host) == idx:
+                return host
+        return None
+
     def _on_context_menu(self, pos) -> None:
         idx = self._tabs.tabAt(pos)
         if not self._is_valid_tab(idx):
@@ -256,7 +268,7 @@ class ViewTabBar(QWidget):
         color_action = menu.addAction("改标签颜色...")
         menu.addSeparator()
         partner_for = getattr(self._manager, "partner_for", None)
-        partner = partner_for(idx) if callable(partner_for) else None
+        partner = self._split_context_partner(idx)
         active_partner = (
             partner_for(self._manager.active) if callable(partner_for) else None
         )
