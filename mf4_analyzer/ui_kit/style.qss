@@ -1487,6 +1487,25 @@ QFrame#timeViewBottomDock QTabBar#viewTabs::tab:selected {
     color: #173262;
 }
 
+/* Inline rename editor — floats over the tab on double-click. It MUST look
+ * like the user is typing directly on the selected tab, NOT a separate white
+ * popover box. Mirror the ::tab:selected chrome (tinted blue fill, soft blue
+ * border, rounded corners) and match the tab's text metrics so the caret sits
+ * where the label text is. The geometry is set in view_tabbar.py to cover the
+ * tab's text region; padding here keeps the text horizontally aligned with the
+ * label it replaces. */
+QFrame#timeViewBottomDock QLineEdit#viewTabRenameEditor {
+    background-color: #e8f0ff;
+    border: 1px solid #a7bfea;
+    border-radius: 4px;
+    padding: 0 9px;
+    color: #173262;
+    font-size: 12px;
+    font-weight: 600;
+    selection-background-color: #2563eb;
+    selection-color: #ffffff;
+}
+
 QFrame#timeViewBottomDock QPushButton#viewTabPlus {
     min-width: 24px;
     max-width: 24px;
@@ -1505,6 +1524,15 @@ QFrame#timeViewBottomDock QPushButton#viewTabPlus:hover {
     background-color: #e8f0ff;
     border-color: #a7bfea;
     color: #173262;
+}
+
+/* Disabled = View count hit MAX_VIEWS (6). _update_plus_state already calls
+ * setEnabled(False); this rule makes that visually obvious (greyed fill, edge
+ * and glyph) so the user sees the cap rather than a still-bright button. */
+QFrame#timeViewBottomDock QPushButton#viewTabPlus:disabled {
+    background-color: #f1f5f9;
+    border-color: #e2e8f0;
+    color: #b8c2d0;
 }
 
 /* Merge status chip + cancel-merge button (right side of the View tab bar).

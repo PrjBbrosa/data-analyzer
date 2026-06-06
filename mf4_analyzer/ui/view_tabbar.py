@@ -246,7 +246,13 @@ class ViewTabBar(QWidget):
         editor.setObjectName("viewTabRenameEditor")
         editor.setText(self._tabs.tabText(idx))
         editor.selectAll()
-        editor.setGeometry(self._tabs.tabRect(idx).adjusted(3, 2, -3, -2))
+        # Overlay the editor on (almost) the whole tab so its QSS chrome
+        # (tinted fill + soft blue border, see ui_kit/style.qss
+        # QLineEdit#viewTabRenameEditor) reads as editing the tab in place,
+        # not a separate white popover. A 1px inset keeps the editor's rounded
+        # border just inside the tab's own border; the QSS padding (0 9px)
+        # aligns the text with where the tab label sat.
+        editor.setGeometry(self._tabs.tabRect(idx).adjusted(1, 1, -1, -1))
         editor.returnPressed.connect(
             lambda: self._finish_inline_rename(accepted=True)
         )

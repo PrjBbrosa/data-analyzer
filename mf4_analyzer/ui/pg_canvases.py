@@ -65,9 +65,11 @@ from typing import Tuple
 
 import numpy as np
 import pyqtgraph as pg
+import qtawesome as qta
 from PyQt5.QtCore import (
     QEasingCurve,
     QEvent,
+    QSize,
     QTimer,
     QVariantAnimation,
     Qt,
@@ -86,17 +88,20 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import (
     QAction,
-    QActionGroup,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QGraphicsItem,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QMenu,
     QRadioButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
@@ -241,15 +246,23 @@ _PG_CONTEXT_WIDGETS = {
 #     through the SAME mouse-mode controller the top toolbar uses,
 #   - turn tooltips OFF so floating help no longer covers the 二级表单.
 #
-# Final top-level menu (in order):
-#   查看全部 · X 轴范围 ▸ · Y 轴范围 ▸ · 鼠标操作 ▸ · 网格 ▸
+# Final top-level menu (in order, 2026-06-07 view-ui-tweaks §④b):
+#   [框选 | 平移 toggle row] · Y 轴自适应 · 查看全部 · X 轴范围 ▸ ·
+#   Y 轴范围 ▸ · 网格 ▸
+# The mouse-mode toggle row is a QWidgetAction (no text) pinned FIRST; the
+# old 鼠标操作 二级子菜单 is gone.
 # ---------------------------------------------------------------------------
 
 # Native pyqtgraph action texts (post-i18n) that must be REMOVED entirely from
 # the assembled menu. Matched on the cleaned, possibly-translated label.
+#
+# 2026-06-07 view-ui-tweaks §④b: the native 鼠标模式 / Mouse Mode submenu is
+# dropped entirely — the mouse mode now lives in an inline icon-toggle ROW
+# at the top of the menu (see ``_add_mouse_mode_toggle_row``), not a submenu.
 _PG_MENU_REMOVE_TEXTS = frozenset({
     "Plot Options", "绘图选项",
     "Export...", "导出...", "导出…",
+    "Mouse Mode", "鼠标模式", "鼠标操作",
 })
 
 _PG_CHART_FONT_FAMILIES = (
@@ -344,14 +357,25 @@ _PG_AXIS_FORM_HIDE_OBJECTS = frozenset({
     "autoPercentSpin",  # the "100%" auto-range percentage box
 })
 
-# Mouse-mode submenu vocabulary (toolbar words, NOT 三键/单键 黑话). The two
-# entries map to the toolbar's pan / zoom (box-select) modes.
+# Mouse-mode vocabulary (toolbar words, NOT 三键/单键 黑话). The two entries
+# map to the toolbar's pan / zoom (box-select) modes. As of 2026-06-07 the
+# right-click menu surfaces these as an inline icon-toggle ROW (icon-only,
+# exclusive QToolButtons), no longer a 二级子菜单.
 _PG_MOUSE_MODE_PAN = "pan"
 _PG_MOUSE_MODE_ZOOM = "zoom"
 _PG_MOUSE_MODE_LABELS = {
     _PG_MOUSE_MODE_PAN: ("平移", "左键拖动平移视图（与顶部工具栏的平移一致）。"),
     _PG_MOUSE_MODE_ZOOM: ("框选", "左键拖出矩形框选放大（与顶部工具栏的框选缩放一致）。"),
 }
+
+# Icon names + Precision-Light colors shared with the top toolbar
+# (chart_stack.py:195-208) so the right-click toggle row reads identically.
+_PG_MOUSE_MODE_ICONS = {
+    _PG_MOUSE_MODE_PAN: "mdi.cursor-move",
+    _PG_MOUSE_MODE_ZOOM: "mdi.magnify-plus-outline",
+}
+_PG_ICON_COLOR = "#374151"          # idle / unchecked
+_PG_ICON_ACTIVE = "#2563eb"         # checked / active
 
 # ---------------------------------------------------------------------------
 # Hi-DPI copy/save render (spec §E).
@@ -601,70 +625,189 @@ def _build_grid_submenu(menu, plot_item, *, allow_y_grid=True):
     return grid_menu
 
 
-def _reshape_mouse_mode_submenu(menu, controller):
-    """Rename the native 鼠标模式 submenu to toolbar vocabulary and route it
-    through the shared mouse-mode ``controller`` (design D, single source of
-    truth). Returns the reshaped submenu action, or None if absent.
+# QSS for the inline mouse-mode toggle row. qtawesome's ``color_on`` swaps the
+# glyph color on the :checked state, but a tinted background + accent border is
+# what makes the active state legible at a glance (the icon alone is a thin line
+# and reads weakly on a white menu). WA_StyledBackground is implicit for
+# QToolButton, but we keep the rule simple: idle = transparent, checked = light
+# blue fill + blue border, hover = faint gray. See lesson
+# pyqt-ui/2026-06-04-dynamic-property-border (a margin-0 border alone is too
+# subtle; pair it with a tint).
+_MOUSE_MODE_TOGGLE_QSS = (
+    "QToolButton {"
+    " border: 1px solid transparent;"
+    " border-radius: 5px;"
+    " background: transparent;"
+    " padding: 2px;"
+    " margin: 0px;"
+    "}"
+    "QToolButton:hover {"
+    " background: #f1f5f9;"
+    "}"
+    "QToolButton:checked {"
+    " background: #e8f0ff;"
+    " border: 1px solid #2563eb;"
+    "}"
+)
 
-    The native submenu holds the pyqtgraph "3 button"/"1 button" actions in a
-    QActionGroup bound to ``ViewBox.setMouseMode``. We REPLACE its contents
-    with 平移 / 框选 actions whose checkmarks reflect ``controller.current``
-    and whose triggers call ``controller.set_pan``/``set_zoom`` — the same
-    entry the top toolbar uses, so menu and toolbar never disagree.
-    """
-    mouse_action = _find_top_level_action(menu, "鼠标模式", "Mouse Mode", "鼠标操作")
-    if mouse_action is None:
+
+def _add_mouse_mode_toggle_row(menu, controller):
+    """Insert an inline icon-only 框选 / 平移 toggle ROW as a QWidgetAction.
+
+    Replaces the old 鼠标操作 二级子菜单 (2026-06-07 §④b). The row hosts two
+    exclusive, checkable, icon-only ``QToolButton``s. Their checked state mirrors
+    ``controller.current_mouse_mode()`` (zoom→框选, else→平移 default), and
+    clicking routes through the SAME deterministic ``set_zoom_mode`` /
+    ``set_pan_mode`` setters the top toolbar uses — emitting
+    ``mouse_mode_changed`` so the toolbar buttons auto-sync (verified signal
+    chain). Returns the QWidgetAction (for top-pinned reorder), or None when
+    there is no controller (defensive — without it the row is inert)."""
+    if controller is None:
         return None
-    sub = mouse_action.menu()
-    if sub is None:
-        return None
-    mouse_action.setText("鼠标操作")
-    mouse_action.setToolTip("")
-    sub.setTitle("鼠标操作")
-    # Same shared styler as the grid submenu: objectName + toolTips-off +
-    # WA_TranslucentBackground so the rounded corners don't leave a box.
-    _style_pg_context_menu(sub)
-    # Wipe the native 三键/单键 actions; rebuild with toolbar words.
-    for old in list(sub.actions()):
-        sub.removeAction(old)
-    group = QActionGroup(sub)
-    group.setExclusive(True)
-    pan_label, pan_tip = _PG_MOUSE_MODE_LABELS[_PG_MOUSE_MODE_PAN]
-    zoom_label, zoom_tip = _PG_MOUSE_MODE_LABELS[_PG_MOUSE_MODE_ZOOM]
-    act_pan = QAction(pan_label, group)
-    act_zoom = QAction(zoom_label, group)
-    for act in (act_pan, act_zoom):
-        act.setCheckable(True)
-        act.setToolTip("")
+
     current = None
-    if controller is not None:
-        try:
-            current = controller.current_mouse_mode()
-        except Exception:
-            current = None
-    # Default the checkmark to pan when idle so the menu always shows a state.
-    act_pan.setChecked(current != _PG_MOUSE_MODE_ZOOM)
-    act_zoom.setChecked(current == _PG_MOUSE_MODE_ZOOM)
+    try:
+        current = controller.current_mouse_mode()
+    except Exception:
+        current = None
+    is_zoom = current == _PG_MOUSE_MODE_ZOOM
 
-    def _select_pan(_checked=False):
-        if controller is not None:
-            try:
-                controller.set_pan_mode()
-            except Exception:
-                pass
+    row = QWidget(menu)
+    row.setObjectName("pgMouseModeToggleRow")
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(10, 4, 10, 4)
+    layout.setSpacing(6)
+
+    def _make_button(mode):
+        label, _tip = _PG_MOUSE_MODE_LABELS[mode]
+        icon = qta.icon(
+            _PG_MOUSE_MODE_ICONS[mode],
+            color=_PG_ICON_COLOR,
+            color_on=_PG_ICON_ACTIVE,
+        )
+        btn = QToolButton(row)
+        btn.setIcon(icon)
+        btn.setIconSize(QSize(18, 18))
+        btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        btn.setCheckable(True)
+        btn.setAutoRaise(True)
+        btn.setFixedSize(30, 26)
+        btn.setToolTip(label)
+        btn.setCursor(Qt.PointingHandCursor)
+        return btn
+
+    btn_zoom = _make_button(_PG_MOUSE_MODE_ZOOM)
+    btn_pan = _make_button(_PG_MOUSE_MODE_PAN)
+
+    group = QButtonGroup(row)
+    group.setExclusive(True)
+    group.addButton(btn_zoom)
+    group.addButton(btn_pan)
+
+    # Default to 平移 highlighted when idle so the row always shows a state.
+    btn_zoom.setChecked(is_zoom)
+    btn_pan.setChecked(not is_zoom)
+
+    row.setStyleSheet(_MOUSE_MODE_TOGGLE_QSS)
 
     def _select_zoom(_checked=False):
-        if controller is not None:
-            try:
-                controller.set_zoom_mode()
-            except Exception:
-                pass
+        try:
+            controller.set_zoom_mode()
+        except Exception:
+            pass
+        try:
+            menu.close()
+        except Exception:
+            pass
 
-    act_pan.triggered.connect(_select_pan)
-    act_zoom.triggered.connect(_select_zoom)
-    sub.addAction(act_pan)
-    sub.addAction(act_zoom)
-    return mouse_action
+    def _select_pan(_checked=False):
+        try:
+            controller.set_pan_mode()
+        except Exception:
+            pass
+        try:
+            menu.close()
+        except Exception:
+            pass
+
+    btn_zoom.clicked.connect(_select_zoom)
+    btn_pan.clicked.connect(_select_pan)
+
+    layout.addWidget(btn_zoom)
+    layout.addWidget(btn_pan)
+    layout.addStretch(1)
+
+    widget_action = QWidgetAction(menu)
+    widget_action.setDefaultWidget(row)
+    menu.addAction(widget_action)
+    return widget_action
+
+
+def _add_y_autofit_action(menu, handler):
+    """Add a top-level 「Y 轴自适应」 action (once per menu) wired to ``handler``.
+
+    Distinct from 查看全部 (X+Y full union): this keeps X fixed and fits Y to the
+    waveform inside the current X window. Returns the action (existing or new),
+    or None when no handler / no menu so the caller skips reordering it."""
+    if handler is None:
+        return None
+    existing = _find_top_level_action(menu, "Y 轴自适应")
+    if existing is not None:
+        return existing
+    action = QAction("Y 轴自适应", menu)
+    action.setToolTip("")
+
+    def _trigger(_checked=False):
+        try:
+            handler()
+        except Exception:
+            pass
+
+    action.triggered.connect(_trigger)
+    menu.addAction(action)
+    return action
+
+
+def _reorder_top_level_actions(menu, desired_texts, *, pinned_first=None):
+    """Reorder the menu's top-level actions so the cleaned-text matches in
+    ``desired_texts`` come first, in that order, followed by everything else
+    (separators dropped). Non-listed actions keep their relative order.
+
+    QMenu has no move primitive, so we snapshot the wanted actions, remove all
+    actions, then re-add wanted-first. Submenu actions keep their submenus
+    because we re-add the SAME QAction objects (Qt preserves action.menu()).
+
+    ``pinned_first`` is an explicit action object placed at the very top before
+    any text-matched entry. It exists because a QWidgetAction (the inline
+    mouse-mode toggle row) has NO text, so the text-keyed match below can never
+    locate it; we pin it by identity instead."""
+    all_actions = list(menu.actions())
+    by_text = {}
+    for act in all_actions:
+        if act.isSeparator():
+            continue
+        by_text.setdefault(_clean_menu_text(act.text()), act)
+    ordered = []
+    seen = set()
+    if pinned_first is not None and pinned_first in all_actions:
+        ordered.append(pinned_first)
+        seen.add(id(pinned_first))
+    for text in desired_texts:
+        act = by_text.get(text)
+        if act is not None and id(act) not in seen:
+            ordered.append(act)
+            seen.add(id(act))
+    # Append any remaining non-separator actions not named in desired_texts,
+    # preserving their original order (defensive: nothing should be left).
+    for act in all_actions:
+        if act.isSeparator() or id(act) in seen:
+            continue
+        ordered.append(act)
+        seen.add(id(act))
+    for act in all_actions:
+        menu.removeAction(act)
+    for act in ordered:
+        menu.addAction(act)
 
 
 def redesign_pg_context_menu(
@@ -673,6 +816,7 @@ def redesign_pg_context_menu(
     controller,
     *,
     view_all_handler=None,
+    y_autofit_handler=None,
     allow_y_grid=True,
 ):
     """Reshape the ASSEMBLED pyqtgraph context ``menu`` per design §A–§D.
@@ -684,27 +828,36 @@ def redesign_pg_context_menu(
 
     Order of operations:
       1. localize + tooltip-off the whole tree,
-      2. remove Plot Options / Export,
-      3. reshape 鼠标模式 → 鼠标操作 (toolbar-synced),
-      4. promote a 网格 ▸ submenu,
-      5. drop any orphaned trailing/leading separators.
+      2. remove Plot Options / Export AND the native 鼠标模式 submenu,
+      3. insert the inline 框选 / 平移 icon-toggle ROW (QWidgetAction,
+         toolbar-synced via set_zoom_mode / set_pan_mode),
+      4. add a top-level 「Y 轴自适应」 action (X fixed, Y fit to window),
+      5. promote a 网格 ▸ submenu,
+      6. reorder top level to [框选|平移 toggle row] · Y 轴自适应 · 查看全部 ·
+         X 轴范围 · Y 轴范围 · 网格 (the toggle row pinned first by identity),
+      7. drop any orphaned trailing/leading separators.
     """
     if menu is None:
         return
     _localize_pg_context_menu(menu)
     _route_view_all_action(menu, view_all_handler)
 
-    # (2) Remove advanced / export entries entirely.
+    # (2) Remove advanced / export entries AND the native 鼠标模式 submenu
+    # (its text is in _PG_MENU_REMOVE_TEXTS) — the mouse mode is now an inline
+    # toggle row, not a 二级子菜单.
     for action in list(menu.actions()):
         if action.isSeparator():
             continue
         if _clean_menu_text(action.text()) in _PG_MENU_REMOVE_TEXTS:
             menu.removeAction(action)
 
-    # (3) Mouse-mode submenu → toolbar vocabulary + shared controller.
-    _reshape_mouse_mode_submenu(menu, controller)
+    # (3) Inline 框选 / 平移 icon-toggle row (shared mouse-mode controller).
+    toggle_row = _add_mouse_mode_toggle_row(menu, controller)
 
-    # (4) Promote a top-level 网格 ▸ submenu (only once per menu instance).
+    # (4) Y-axis-fit-to-visible-window action (top level, once per menu).
+    _add_y_autofit_action(menu, y_autofit_handler)
+
+    # (5) Promote a top-level 网格 ▸ submenu (only once per menu instance).
     if plot_item is not None and _find_top_level_action(menu, "网格") is None:
         grid_menu = _build_grid_submenu(
             menu,
@@ -713,7 +866,15 @@ def redesign_pg_context_menu(
         )
         menu.addMenu(grid_menu)
 
-    # (5) Collapse separators that the removals left dangling.
+    # (6) Reorder top level: the toggle row first (pinned by identity — it has
+    # no text), then the Y-fit, 查看全部 and the axis-range forms, 网格 last.
+    _reorder_top_level_actions(
+        menu,
+        ("Y 轴自适应", "查看全部", "X 轴范围", "Y 轴范围", "网格"),
+        pinned_first=toggle_row,
+    )
+
+    # (7) Collapse separators that the removals left dangling.
     _strip_redundant_separators(menu)
 
 
@@ -1522,6 +1683,7 @@ class TimeDomainCanvasPG(QWidget):
             plot_item,
             self._mouse_mode_controller,
             view_all_handler=self.reset_view_to_data_extents,
+            y_autofit_handler=self.fit_y_to_visible_x,
             allow_y_grid=not self._overlay_mode,
         )
 
@@ -2111,6 +2273,77 @@ class TimeDomainCanvasPG(QWidget):
                     lo, hi = lo - pad, hi + pad
                 try:
                     handle.set_ylim(lo, hi)
+                except Exception:
+                    pass
+            self._refresh = True
+            self.draw_idle()
+        finally:
+            try:
+                self._flush_pending_refresh()
+            except Exception:
+                pass
+            self.schedule_idle_quality()
+
+    def fit_y_to_visible_x(self):
+        """Right-click 「Y 轴自适应」: keep the CURRENT X (time) window fixed and
+        autoscale Y to just the waveform inside that window.
+
+        Distinct from ``reset_view_to_data_extents`` (查看全部), which restores
+        BOTH X and Y to the full data union. Here X is untouched; for every
+        channel we read its handle's current X range, slice the RAW
+        ``channel_data`` signal to that window, and ``set_ylim`` to the slice's
+        finite min/max with a small symmetric pad.
+
+        We compute Y manually rather than rely on
+        ``setAutoVisible(y=True) + enableAutoRange(YAxis)`` because the hot-path
+        ``PlotDataItem`` only holds the viewport-clipped *envelope*
+        (decimated), so pyqtgraph's auto-visible Y would fit the envelope, not
+        the true samples — and the manual path is a one-shot fit that does NOT
+        leave Y in a persistent auto mode that would then fight the user's next
+        pan. Works for subplot/single (one channel per handle) and overlay
+        (one channel per aux ViewBox); the X-master handle carries no channel
+        and is skipped naturally (it is absent from ``_channel_lines``).
+        """
+        self.disable_interactive_quality()
+        try:
+            for name, (handle, _line) in self._channel_lines.items():
+                row = self.channel_data.get(name)
+                if row is None:
+                    continue
+                try:
+                    x0, x1 = handle.get_xlim()
+                except Exception:
+                    continue
+                if x1 < x0:
+                    x0, x1 = x1, x0
+                try:
+                    t = np.asarray(row[0], dtype=float)
+                    sig = np.asarray(row[1], dtype=float)
+                except Exception:
+                    continue
+                if t.size == 0 or sig.size == 0:
+                    continue
+                # Samples inside the visible X window AND finite in Y.
+                mask = np.isfinite(t) & np.isfinite(sig) & (t >= x0) & (t <= x1)
+                window = sig[mask] if mask.any() else sig[np.array([], dtype=int)]
+                if window.size == 0:
+                    # No sample strictly inside (very narrow window between two
+                    # points): fall back to the whole channel so Y is never
+                    # collapsed to a degenerate range.
+                    finite = sig[np.isfinite(sig)]
+                    if finite.size == 0:
+                        continue
+                    window = finite
+                lo = float(window.min())
+                hi = float(window.max())
+                if not (np.isfinite(lo) and np.isfinite(hi)):
+                    continue
+                if hi <= lo:
+                    pad = abs(lo) * 0.05 or 1.0
+                else:
+                    pad = (hi - lo) * 0.05
+                try:
+                    handle.set_ylim(lo - pad, hi + pad)
                 except Exception:
                     pass
             self._refresh = True
