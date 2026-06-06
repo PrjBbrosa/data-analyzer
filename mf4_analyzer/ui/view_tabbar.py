@@ -6,7 +6,7 @@ the integration layer.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QHBoxLayout,
@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..ui_kit.icons import icon_device_pixel_ratio
 from ..ui_kit.menus import apply_rounded_menu_chrome
 from .view_state import MAX_VIEWS
 
@@ -344,17 +345,29 @@ class ViewTabBar(QWidget):
         return 0 <= idx < self._tabs.count()
 
 
-def _tab_color_icon(hex_color: str) -> QIcon:
+def _tab_color_pixmap(hex_color: str, ratio=None) -> QPixmap:
+    """Render the View-tab color dot at ``ratio x`` physical resolution and tag
+    it with that devicePixelRatio so Retina screens paint it crisp instead of
+    upscaling a 1x bitmap (the source of the jagged tab dots)."""
     color = QColor(hex_color)
     if not color.isValid():
         color = QColor("#2d7ff9")
 
-    pixmap = QPixmap(QSize(12, 12))
+    if ratio is None:
+        ratio = icon_device_pixel_ratio()
+    side = round(12 * ratio)
+    pixmap = QPixmap(side, side)
+    pixmap.setDevicePixelRatio(ratio)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing, True)
     painter.setPen(QPen(color.darker(115), 1))
     painter.setBrush(color)
+    # Logical coordinates; the painter is scaled by devicePixelRatio.
     painter.drawRoundedRect(1, 3, 10, 6, 2, 2)
     painter.end()
-    return QIcon(pixmap)
+    return pixmap
+
+
+def _tab_color_icon(hex_color: str) -> QIcon:
+    return QIcon(_tab_color_pixmap(hex_color))

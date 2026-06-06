@@ -19,19 +19,35 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QIcon, QPainter, QPen, QPixmap
 
-from ...ui_kit.icons import Icons
+from ...ui_kit.icons import Icons, icon_device_pixel_ratio
 
 
-def _swatch_icon(color, size=14):
-    pix = QPixmap(size, size)
+def _swatch_pixmap(color, size=11, ratio=None):
+    """Render the channel color swatch at ``ratio x`` physical resolution and
+    tag it with that devicePixelRatio so HiDPI (Retina) screens paint it crisp
+    rather than upscaling a 1x bitmap (which produced the jagged edges).
+
+    ``size`` is the logical icon box; the dot fills ``size - 4`` so it reads as
+    a compact colour chip aligned with the row text rather than a heavy block.
+    """
+    if ratio is None:
+        ratio = icon_device_pixel_ratio()
+    pix = QPixmap(round(size * ratio), round(size * ratio))
+    pix.setDevicePixelRatio(ratio)
     pix.fill(Qt.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.Antialiasing, True)
     p.setPen(QPen(QColor(color), 1))
     p.setBrush(QBrush(QColor(color)))
+    # Coordinates stay in LOGICAL units; the painter is scaled by the pixmap's
+    # devicePixelRatio automatically.
     p.drawRoundedRect(2, 2, size - 4, size - 4, 3, 3)
     p.end()
-    return QIcon(pix)
+    return pix
+
+
+def _swatch_icon(color, size=11):
+    return QIcon(_swatch_pixmap(color, size))
 
 
 class StatisticsPanel(QFrame):

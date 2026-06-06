@@ -46,6 +46,8 @@ from PyQt5.QtWidgets import (
 
 import qtawesome as qta
 
+from ...ui_kit.icons import icon_device_pixel_ratio
+
 _HIT_TOLERANCE = 12.0
 _HIT_SCREEN_PX = 8.0
 _HANDLE_HIT_SCREEN_PX = 14.0
@@ -1723,9 +1725,19 @@ class MarkupEditor(QWidget):
                     return child.pen()
         return None
 
-    def _color_icon(self, color: QColor):
-        pix = QPixmap(18, 18)
+    @staticmethod
+    def _icon_canvas(w: int, h: int):
+        """Allocate a transparent icon buffer at the screen's device pixel
+        ratio so the painted shape stays crisp on Retina instead of being a 1x
+        bitmap that Qt upscales. Draw with LOGICAL ``w``/``h`` coordinates."""
+        ratio = icon_device_pixel_ratio()
+        pix = QPixmap(round(w * ratio), round(h * ratio))
+        pix.setDevicePixelRatio(ratio)
         pix.fill(Qt.transparent)
+        return pix
+
+    def _color_icon(self, color: QColor):
+        pix = self._icon_canvas(18, 18)
         painter = QPainter(pix)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setPen(QPen(QColor("#d0d7e2"), 1))
@@ -1735,8 +1747,7 @@ class MarkupEditor(QWidget):
         return QIcon(pix)
 
     def _width_icon(self, width: int, color: str = "#374151"):
-        pix = QPixmap(24, 18)
-        pix.fill(Qt.transparent)
+        pix = self._icon_canvas(24, 18)
         painter = QPainter(pix)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setPen(QPen(QColor(color), width, Qt.SolidLine, Qt.RoundCap))
@@ -1745,8 +1756,7 @@ class MarkupEditor(QWidget):
         return QIcon(pix)
 
     def _style_button_icon(self, color: QColor, width: int):
-        pix = QPixmap(44, 18)
-        pix.fill(Qt.transparent)
+        pix = self._icon_canvas(44, 18)
         painter = QPainter(pix)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setPen(QPen(QColor("#d0d7e2"), 1))

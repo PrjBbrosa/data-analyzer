@@ -6,6 +6,23 @@ the PyQt app independent from web/icon-font packages.
 from contextlib import contextmanager
 from PyQt5.QtCore import Qt, QRectF, QPointF
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QBrush, QFont, QPainterPath
+from PyQt5.QtWidgets import QApplication
+
+
+def icon_device_pixel_ratio() -> float:
+    """Device pixel ratio to render programmatically-drawn icons at.
+
+    Returns the running QApplication's ratio (2.0 on a Retina screen), or 1.0
+    when there is no application yet / on a standard-DPI screen. A pixmap built
+    at ``round(size * ratio)`` physical pixels and tagged via
+    ``setDevicePixelRatio(ratio)`` paints crisp on HiDPI, instead of letting Qt
+    upscale a 1x bitmap at paint time (which smears the antialiased edge into
+    the jagged dots seen on Retina).
+    """
+    app = QApplication.instance()
+    ratio = app.devicePixelRatio() if app is not None else 1.0
+    return ratio if ratio and ratio >= 1.0 else 1.0
+
 
 BLUE = QColor('#1769E0')
 GRAY = QColor('#475569')
