@@ -2272,24 +2272,6 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             pass
 
-    def _pin_channel_ticks_at(self, ax, lo, hi):
-        """Set ``ax`` to [lo, hi] and pin its k/N ticks at the current span.
-
-        Used per animation frame so the labels glide on the graticule lines
-        with the curve instead of snapping at the very end.
-        """
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
-        per_div = (hi - lo) / n
-        ticks = [lo + k * per_div for k in range(n + 1)]
-        try:
-            ax.set_ylim(lo, hi)
-            axis = ax.y_axis_item() if hasattr(ax, "y_axis_item") else None
-            if axis is not None:
-                axis.setStyle(maxTickLevel=0)
-                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
-        except Exception:
-            pass
-
     def _stop_snap_anim(self):
         """Stop any in-flight drag-release snap animation."""
         anim = getattr(self, "_snap_anim", None)
@@ -2333,6 +2315,19 @@ class TimeDomainCanvasPG(QWidget):
             self._snap_overlay_channel_to_grid(ax)
             return
 
+        # Pin the FINAL graticule ticks once, up front. The labels are the
+        # correct snapped integers from the very first frame and never
+        # recompute during the glide — only the curve's ylim animates into
+        # place, so the numbers do not flicker (2026-06-06 no-tick-flicker).
+        ticks = [bottom + k * per_div for k in range(n + 1)]
+        try:
+            axis = ax.y_axis_item() if hasattr(ax, "y_axis_item") else None
+            if axis is not None:
+                axis.setStyle(maxTickLevel=0)
+                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+        except Exception:
+            pass
+
         start_lo, start_hi = lo, hi
         anim = QVariantAnimation(self)
         anim.setStartValue(0.0)
@@ -2347,7 +2342,10 @@ class TimeDomainCanvasPG(QWidget):
                 return
             cur_lo = start_lo + (bottom - start_lo) * f
             cur_hi = start_hi + (top - start_hi) * f
-            self._pin_channel_ticks_at(ax, cur_lo, cur_hi)
+            try:
+                ax.set_ylim(cur_lo, cur_hi)  # glide only; ticks already pinned
+            except Exception:
+                return
             self._refresh = True
             self.draw_idle()
 

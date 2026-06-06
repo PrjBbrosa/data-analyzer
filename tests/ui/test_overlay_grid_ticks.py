@@ -460,3 +460,37 @@ class TestAnimatedSnap:
         # The curve is still where the user dropped it; the snap glides in.
         assert ax0.get_ylim() == pytest.approx((-1.731, 2.169), abs=0.06)
         assert canvas._snap_anim is not None
+
+    def test_release_anim_pins_final_labels_without_flicker(self, qapp):
+        """During the glide the axis labels must already be the final
+        snapped values and stay constant — no per-frame recompute that
+        flickers ugly intermediate numbers (2026-06-06 no-tick-flicker)."""
+        from unittest.mock import MagicMock
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = self._sel(qapp)
+        ax0 = canvas._channel_lines["ch0"][0]
+        ax0.set_ylim(-0.474, 5.526)  # off-grid dragged window, span 6.0
+        canvas._snap_anim_ms = 150
+        canvas._overlay_dragging = True
+        canvas._begin_overlay_y_drag_at(start_y_px=100.0)
+        canvas._handle_overlay_mouse_release(MagicMock())
+
+        n = canvas._overlay_divisions
+        per_div = 6.0 / n
+        bottom = round(-0.474 / per_div) * per_div
+        expected = [bottom + k * per_div for k in range(n + 1)]
+
+        def tick_values():
+            return [v for v, _label in ax0.y_axis_item()._tickLevels[0]]
+
+        # Immediately after release: labels are already the final integers.
+        assert tick_values() == pytest.approx(expected)
+        # The curve, however, has NOT snapped yet — it glides in.
+        assert ax0.get_ylim() == pytest.approx((-0.474, 5.526), abs=1e-6)
+
+        # Mid-glide: labels stay constant (no flicker), curve has moved.
+        canvas._snap_anim.setCurrentTime(75)
+        QCoreApplication.processEvents()
+        assert tick_values() == pytest.approx(expected)
+        assert ax0.get_ylim() != pytest.approx((-0.474, 5.526), abs=1e-6)
