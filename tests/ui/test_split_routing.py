@@ -68,7 +68,7 @@ def _make_speed_vs_torque_views(qtbot, qapp, loaded_csv):
     return w, fid, view1_xlim, view1_ylims, view2_xlim, view2_ylims
 
 
-def test_split_pair_persists_when_switching_between_paired_views(
+def test_directional_merge_only_host_splits(
     qtbot, qapp, loaded_csv
 ):
     w, _fid_value, view1_xlim, view1_ylims, view2_xlim, view2_ylims = (
@@ -87,15 +87,13 @@ def test_split_pair_persists_when_switching_between_paired_views(
     w._switch_view(1)
     qapp.processEvents()
 
-    assert w.chart_stack.split_active() is True
+    assert w.chart_stack.split_active() is False
     assert w.view_manager.active == 1
-    assert w.view_manager.split_with == 0
+    assert w.view_manager.split_with is None
     assert _has_channel(w.canvas_time, "torque")
-    assert _has_channel(w.chart_stack.secondary_canvas(), "speed")
+    assert not _has_channel(w.canvas_time, "speed")
     _assert_pair(w.canvas_time.get_visible_xlim(), view2_xlim)
     _assert_canvas_ylims(w.canvas_time, view2_ylims)
-    _assert_pair(w.chart_stack.secondary_canvas().get_visible_xlim(), view1_xlim)
-    _assert_canvas_ylims(w.chart_stack.secondary_canvas(), view1_ylims)
 
     w._switch_view(0)
     qapp.processEvents()
@@ -173,15 +171,16 @@ def test_secondary_pane_keeps_its_own_plot_mode_across_switches(
     assert cs.plot_mode_for_canvas(cs.canvas_time) == "overlay"
     assert cs.plot_mode_for_canvas(cs.secondary_canvas()) == "subplot"
 
-    # Switch to View 1: panes swap, each keeps its own layout.
+    # Switch to View 1 (source): source opens as single pane with its layout.
     w._switch_view(1)
     qapp.processEvents()
+    assert cs.split_active() is False
     assert cs.plot_mode_for_canvas(cs.canvas_time) == "subplot"
-    assert cs.plot_mode_for_canvas(cs.secondary_canvas()) == "overlay"
 
-    # Switch back: still each its own.
+    # Switch back to View 0 (host): split returns and each pane keeps its layout.
     w._switch_view(0)
     qapp.processEvents()
+    assert cs.split_active() is True
     assert cs.plot_mode_for_canvas(cs.canvas_time) == "overlay"
     assert cs.plot_mode_for_canvas(cs.secondary_canvas()) == "subplot"
 
