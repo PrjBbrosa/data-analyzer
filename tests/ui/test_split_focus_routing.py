@@ -240,6 +240,39 @@ def test_tick_density_change_routes_to_focused_secondary_view(
     assert w.view_manager.get(1).axis_opts["tick_density"] == {"x": 17, "y": 4}
 
 
+def test_split_cursor_mode_applies_to_both_panes_and_states(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+    msgs = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": msgs.append(msg))
+
+    w._on_cursor_mode_changed("dual")
+    qapp.processEvents()
+
+    assert cs.canvas_time._cursor_visible is True
+    assert cs.canvas_time._dual is True
+    assert cs.secondary_canvas()._cursor_visible is True
+    assert cs.secondary_canvas()._dual is True
+    assert w.view_manager.get(w._primary_view_idx).cursor_mode == "dual"
+    assert w.view_manager.get(w._secondary_view_idx).cursor_mode == "dual"
+    assert msgs == []
+
+    w._on_cursor_mode_changed("off")
+    qapp.processEvents()
+
+    assert cs.canvas_time._cursor_visible is False
+    assert cs.canvas_time._dual is False
+    assert cs.secondary_canvas()._cursor_visible is False
+    assert cs.secondary_canvas()._dual is False
+    assert w.view_manager.get(w._primary_view_idx).cursor_mode == "off"
+    assert w.view_manager.get(w._secondary_view_idx).cursor_mode == "off"
+    assert msgs == []
+
+
 def test_focus_switch_captures_previous_focused_inspector_state(
     qtbot, qapp, loaded_csv
 ):

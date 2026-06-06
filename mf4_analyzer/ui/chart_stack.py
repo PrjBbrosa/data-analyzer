@@ -2144,12 +2144,9 @@ class ChartStack(QWidget):
         self.plot_mode_changed.emit(mode)
 
     def _on_shared_cursor_mode_changed(self, mode):
-        if (
-            self.split_active()
-            and self._secondary_card is not None
-            and self._focused_card is self._secondary_card
-        ):
-            self._set_secondary_cursor_mode_silent(mode)
+        if self.split_active() and self._secondary_card is not None:
+            self.set_cursor_mode_for_canvas(self.canvas_time, mode)
+            self.set_cursor_mode_for_canvas(self._secondary_card.canvas, mode)
         else:
             self._primary_cursor_mode = mode
         self._on_time_cursor_mode_changed(mode)

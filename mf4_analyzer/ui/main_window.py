@@ -724,14 +724,27 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._plot_time_preserving_xlim)
 
     def _on_cursor_mode_changed(self, mode):
-        canvas = self.chart_stack.focused_canvas()
+        if self.chart_stack.split_active():
+            self._apply_cursor_mode_to_canvas(self.canvas_time, mode)
+            self._apply_cursor_mode_to_canvas(
+                self.chart_stack.secondary_canvas(), mode
+            )
+            return
+
+        self._apply_cursor_mode_to_canvas(self.chart_stack.focused_canvas(), mode)
+
+    def _apply_cursor_mode_to_canvas(self, canvas, mode):
+        if canvas is None:
+            return
         idx = self._view_index_for_canvas(canvas)
         if idx is not None and 0 <= idx < len(self.view_manager.views):
-            state = self.view_manager.get(idx)
-            self._view_bridge.capture_controls_into(state, self, canvas)
-            state.cursor_mode = mode
-        canvas.set_cursor_visible(mode != 'off')
-        canvas.set_dual_cursor_mode(mode == 'dual')
+            self.view_manager.get(idx).cursor_mode = mode
+        setter = getattr(self.chart_stack, "set_cursor_mode_for_canvas", None)
+        if callable(setter):
+            setter(canvas, mode)
+        else:
+            canvas.set_cursor_visible(mode != 'off')
+            canvas.set_dual_cursor_mode(mode == 'dual')
 
     def _on_plot_mode_changed(self, mode):
         """Toggle 分↔叠 without losing the user's current x-zoom.

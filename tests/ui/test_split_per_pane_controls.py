@@ -1,8 +1,8 @@
-"""P2 Task 9 1a + 1b: focused cursor / plot-mode routing and shared controls.
+"""P2 Task 9 1a + 1b: cursor / plot-mode routing and shared controls.
 
 Covers:
-- _on_cursor_mode_changed routes the cursor toggle to ChartStack.focused_canvas()
-  (primary outside split; secondary when the secondary card is focused).
+- _on_cursor_mode_changed routes the cursor toggle to the primary outside split
+  and synchronizes both panes while split is active.
 - The visible shared 分屏/叠加/游标 controls stay enabled while either pane is
   focused; the secondary card's internal controls remain disabled because its
   toolbar is not part of the split UI.
@@ -38,7 +38,7 @@ def test_cursor_mode_targets_primary_when_not_split(qtbot, qapp, loaded_csv):
     assert cs.canvas_time._dual is False
 
 
-def test_cursor_mode_targets_secondary_when_secondary_focused(
+def test_split_cursor_mode_targets_both_panes_when_secondary_focused(
     qtbot, qapp, loaded_csv
 ):
     w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
@@ -47,16 +47,21 @@ def test_cursor_mode_targets_secondary_when_secondary_focused(
     _click_card(qapp, cs._secondary_card)
     assert cs.focused_canvas() is cs.secondary_canvas()
 
-    primary_before = (cs.canvas_time._cursor_visible, cs.canvas_time._dual)
+    # The shared cursor control now applies to both split panes; it no longer
+    # depends on the currently focused pane.
+    cs._time_card.set_cursor_mode("single")
+    qapp.processEvents()
+    assert cs.canvas_time._cursor_visible is True
+    assert cs.canvas_time._dual is False
+    assert cs.secondary_canvas()._cursor_visible is True
+    assert cs.secondary_canvas()._dual is False
 
-    # The primary card's cursor relay (which carries the active segmented
-    # control) now lands on the FOCUSED (secondary) canvas via 1a routing.
     cs._time_card.set_cursor_mode("dual")
     qapp.processEvents()
+    assert cs.canvas_time._cursor_visible is True
+    assert cs.canvas_time._dual is True
     assert cs.secondary_canvas()._cursor_visible is True
     assert cs.secondary_canvas()._dual is True
-    # Primary canvas is untouched.
-    assert (cs.canvas_time._cursor_visible, cs.canvas_time._dual) == primary_before
 
 
 def test_secondary_own_cursor_control_acts_on_secondary(qtbot, qapp, loaded_csv):
