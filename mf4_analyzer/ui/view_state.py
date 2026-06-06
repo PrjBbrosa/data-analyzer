@@ -207,14 +207,12 @@ class ViewManager(QObject):
             return
         if idx == self.active or not self._is_valid_index(idx):
             return
-        if idx == self.split_with:
+        if self._split_pairs.get(self.active) == idx:
             return
 
         old_split = self.split_with
-        self.clear_split_for(self.active, emit=False)
-        self.clear_split_for(idx, emit=False)
+        self._split_pairs.pop(self.active, None)
         self._split_pairs[self.active] = idx
-        self._split_pairs[idx] = self.active
         self._set_active_split_from_pairs()
         if self.split_with != old_split:
             self.split_changed.emit(self.split_with)
@@ -225,9 +223,10 @@ class ViewManager(QObject):
             return
 
         old_split = self.split_with
-        partner = self._split_pairs.pop(target, None)
-        if partner is not None:
-            self._split_pairs.pop(partner, None)
+        self._split_pairs.pop(target, None)
+        for host, source in list(self._split_pairs.items()):
+            if source == target:
+                self._split_pairs.pop(host, None)
         self._set_active_split_from_pairs()
         if emit and self.split_with != old_split:
             self.split_changed.emit(self.split_with)
@@ -248,26 +247,20 @@ class ViewManager(QObject):
 
     def _snapshot_pairs_by_object(self) -> list[tuple[ViewState, ViewState]]:
         out: list[tuple[ViewState, ViewState]] = []
-        seen: set[int] = set()
-        for a, b in self._split_pairs.items():
-            if a in seen or b in seen:
-                continue
-            if self._is_valid_index(a) and self._is_valid_index(b):
-                out.append((self.views[a], self.views[b]))
-                seen.add(a)
-                seen.add(b)
+        for host, source in self._split_pairs.items():
+            if self._is_valid_index(host) and self._is_valid_index(source):
+                out.append((self.views[host], self.views[source]))
         return out
 
     def _restore_pairs_by_object(
         self, pairs: list[tuple[ViewState, ViewState]]
     ) -> None:
         self._split_pairs = {}
-        for a_state, b_state in pairs:
-            a = self._index_of_state(a_state)
-            b = self._index_of_state(b_state)
-            if a >= 0 and b >= 0:
-                self._split_pairs[a] = b
-                self._split_pairs[b] = a
+        for host_state, source_state in pairs:
+            host = self._index_of_state(host_state)
+            source = self._index_of_state(source_state)
+            if host >= 0 and source >= 0:
+                self._split_pairs[host] = source
         self._set_active_split_from_pairs()
 
     def _index_of_state(self, state: ViewState) -> int:
