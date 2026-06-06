@@ -82,10 +82,11 @@ def test_click_secondary_focuses_it_and_lights_border(qtbot, qapp, loaded_csv):
     assert cs.focused_card() is cs._secondary_card
     assert _focused_prop(cs._secondary_card) is True
     assert _focused_prop(cs._time_card) is False
-    assert "border-top: 3px solid #11aa77" in cs._secondary_card.styleSheet()
-    assert "background-color: #eaf1fe" not in cs._secondary_card.styleSheet()
-    assert "padding: 4px" not in cs._secondary_card.styleSheet()
-    assert "#11aa77" not in cs._time_card.styleSheet()
+    # Focus cue is the overlay accent strip in the focused view's tab color
+    # (a QSS card border is painted over by the full-bleed canvas).
+    assert cs._secondary_card._focus_bar.isHidden() is False
+    assert "#11aa77" in cs._secondary_card._focus_bar.styleSheet()
+    assert cs._time_card._focus_bar.isHidden() is True
     assert captured == [True]
 
 

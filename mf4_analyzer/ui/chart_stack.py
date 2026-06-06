@@ -1048,13 +1048,54 @@ class _ChartCard(QWidget):
         lay.addWidget(canvas, stretch=1)
         lay.addWidget(self._hint_bar)
 
+        # Split-focus marker: a thin accent strip overlaid on the TOP of the
+        # card, raised above the canvas. A QSS border on the card is unreliable
+        # here — the full-bleed pyqtgraph canvas paints over it (observed: top
+        # stays white) — so we use a real overlay widget instead. It is card
+        # chrome, so image export (which grabs canvas pixels) never includes it.
+        self._focus_bar = QWidget(self)
+        self._focus_bar.setObjectName("chartFocusBar")
+        self._focus_bar.setFixedHeight(3)
+        self._focus_bar.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._focus_bar.hide()
+
+    def _position_focus_bar(self):
+        bar = getattr(self, "_focus_bar", None)
+        if bar is not None:
+            bar.setGeometry(0, 0, self.width(), bar.height())
+
+    def set_focus_marker(self, color):
+        """Show a top accent strip in ``color`` (the focused split pane), or
+        hide it when ``color`` is falsy. The strip overlays the canvas top."""
+        bar = getattr(self, "_focus_bar", None)
+        if bar is None:
+            return
+        if color:
+            bar.setStyleSheet(
+                f"background-color:{color};"
+                "border-top-left-radius:11px;border-top-right-radius:11px;"
+            )
+            self._position_focus_bar()
+            bar.raise_()
+            bar.show()
+        else:
+            bar.hide()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_responsive_toolbar()
+        self._position_focus_bar()
+        bar = getattr(self, "_focus_bar", None)
+        if bar is not None and bar.isVisible():
+            bar.raise_()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_responsive_toolbar()
+        bar = getattr(self, "_focus_bar", None)
+        if bar is not None and bar.isVisible():
+            self._position_focus_bar()
+            bar.raise_()
 
     def eventFilter(self, obj, event):
         etype = event.type()
@@ -1824,23 +1865,12 @@ class ChartStack(QWidget):
             want = active and card is focused
             if card.property("focused") != want:
                 card.setProperty("focused", want)
-            if want:
-                # MUST scope to #chartCard — a selector-less stylesheet string
-                # cascades to every child widget (toolbar buttons / canvas /
-                # hint bar would all get the 1px border + white fill). The
-                # global QSS uses the same #chartCard scope for this reason.
-                card.setStyleSheet(
-                    "QWidget#chartCard {"
-                    "border: 1px solid #e4e8ef;"
-                    f"border-top: 3px solid {self._focus_accent};"
-                    "border-radius: 12px;"
-                    "background-color: #ffffff;"
-                    "}"
-                )
-            else:
-                card.setStyleSheet("")
-            # Dynamic-property QSS selectors need an explicit unpolish/polish
-            # to re-evaluate (see lesson: action-button-on-group-title).
+            # Visual focus cue is the overlay accent strip (a QSS card border is
+            # painted over by the full-bleed canvas). Color = focused view tab.
+            marker = getattr(card, "set_focus_marker", None)
+            if callable(marker):
+                card.set_focus_marker(self._focus_accent if want else None)
+            # Keep the dynamic-property polish cycle for any QSS keyed on it.
             card.style().unpolish(card)
             card.style().polish(card)
             card.update()

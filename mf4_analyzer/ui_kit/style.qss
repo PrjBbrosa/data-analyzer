@@ -1104,13 +1104,12 @@ QWidget#chartCard {
     background-color: #ffffff;
 }
 
-/* Side-by-side compare: focus is a lightweight top line only. No full frame,
- * padding, background tint, or data-area dimming; ChartStack may override the
- * top-line color inline with the focused view's tab color.
- */
+/* Side-by-side compare: the focus cue is a 3px overlay accent strip painted
+ * by _ChartCard.set_focus_marker (raised above the canvas), NOT a QSS card
+ * border — a card border is hidden behind the full-bleed pyqtgraph canvas. So
+ * the focused card keeps the plain #chartCard look here; no frame, no tint,
+ * no data-area dimming. */
 QWidget#chartCard[focused="true"] {
-    border: 1px solid #e4e8ef;
-    border-top: 3px solid #2d7ff9;
     border-radius: 12px;
     background-color: #ffffff;
 }
