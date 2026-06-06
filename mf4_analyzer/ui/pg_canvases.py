@@ -671,6 +671,22 @@ def _add_mouse_mode_toggle_row(menu, controller):
     if controller is None:
         return None
 
+    # Guard: the ViewBox caches its menu; check before adding a second row.
+    for _act in menu.actions():
+        if isinstance(_act, QWidgetAction):
+            _w = _act.defaultWidget()
+            if _w is not None and _w.objectName() == "pgMouseModeToggleRow":
+                try:
+                    _cur = controller.current_mouse_mode()
+                    _zoom = _cur == _PG_MOUSE_MODE_ZOOM
+                    _btns = _w.findChildren(QToolButton)
+                    if len(_btns) >= 2:
+                        _btns[0].setChecked(_zoom)
+                        _btns[1].setChecked(not _zoom)
+                except Exception:
+                    pass
+                return _act
+
     current = None
     try:
         current = controller.current_mouse_mode()
