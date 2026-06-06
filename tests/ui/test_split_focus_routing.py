@@ -262,3 +262,73 @@ def test_focus_switch_captures_previous_focused_inspector_state(
 
     assert w.view_manager.get(1).axis_opts["tick_density"] == {"x": 21, "y": 9}
     assert w.inspector.top.tick_density() == (8, 5)
+
+
+def test_split_layout_change_shows_focused_pane_hint(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    _enter_split(w, qapp)
+    msgs = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": msgs.append(msg))
+
+    w._on_plot_mode_changed("overlay")
+    qapp.processEvents()
+
+    assert len(msgs) == 1
+    assert "分叠" in msgs[-1]
+    assert "主栏" in msgs[-1]
+
+
+def test_split_home_shows_focused_pane_hint(qtbot, qapp, loaded_csv, monkeypatch):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    _enter_split(w, qapp)
+    msgs = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": msgs.append(msg))
+
+    w.chart_stack._time_toolbar._actions_by_key["home"].trigger()
+    qapp.processEvents()
+
+    assert len(msgs) == 1
+    assert "复位" in msgs[-1]
+    assert "主栏" in msgs[-1]
+
+
+def test_split_xaxis_apply_shows_focused_pane_hint(
+    qtbot, qapp, loaded_csv, monkeypatch
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    _enter_split(w, qapp)
+    w.inspector.top.set_xaxis_mode("time")
+    msgs = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": msgs.append(msg))
+
+    w._apply_xaxis()
+    qapp.processEvents()
+
+    assert len(msgs) == 1
+    assert "坐标设置" in msgs[-1]
+    assert "主栏" in msgs[-1]
+
+
+def test_split_pan_does_not_toast(qtbot, qapp, loaded_csv, monkeypatch):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    _enter_split(w, qapp)
+    msgs = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": msgs.append(msg))
+
+    w.chart_stack._time_toolbar._actions_by_key["pan"].trigger()
+    qapp.processEvents()
+
+    assert msgs == []
+
+
+def test_layout_change_single_view_no_toast(qtbot, qapp, loaded_csv, monkeypatch):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    msgs = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": msgs.append(msg))
+
+    w._on_plot_mode_changed("overlay")
+    qapp.processEvents()
+
+    assert msgs == []

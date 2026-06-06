@@ -348,6 +348,9 @@ class MainWindow(QMainWindow):
         self.chart_stack.cursor_mode_changed.connect(self._on_cursor_mode_changed)
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.chart_stack.focus_changed.connect(self._on_chart_focus_changed)
+        self.chart_stack.home_triggered.connect(
+            lambda: self._hint_focused_pane("复位")
+        )
         # P2 Task 9 1b: the secondary (compare) pane's own 分屏/叠加 control
         # asks for a layout replot of just that canvas, X-window preserved.
         self.chart_stack.set_secondary_replot_callback(
@@ -497,6 +500,17 @@ class MainWindow(QMainWindow):
         setter = getattr(self.chart_stack, 'set_focus_accent', None)
         if callable(setter):
             setter(color)
+
+    def _hint_focused_pane(self, action_label):
+        if not self.chart_stack.split_active():
+            return False
+        idx = self._focused_view_idx
+        if idx is None or not (0 <= idx < len(self.view_manager.views)):
+            return False
+        role = "主栏" if idx == self._primary_view_idx else "副栏"
+        name = self.view_manager.get(idx).name
+        self.toast(f"{action_label} 作用于 {role} · {name} · 点另一栏可改", "info")
+        return True
 
     def _switch_view(self, idx):
         if idx == self.view_manager.active:
@@ -754,6 +768,7 @@ class MainWindow(QMainWindow):
             state = self.view_manager.get(idx)
             self._view_bridge.capture_controls_into(state, self, canvas)
             state.plot_mode = mode
+        self._hint_focused_pane("分叠")
         self._replot_canvas_for_view(idx, canvas)
 
     def _plot_time_preserving_xlim(self):
@@ -1176,7 +1191,8 @@ class MainWindow(QMainWindow):
         else:
             self.plot_time()
         self.statusBar.showMessage(f"横坐标已更新")
-        self.toast("横坐标已更新", "success")
+        if not self._hint_focused_pane("坐标设置"):
+            self.toast("横坐标已更新", "success")
 
     def _reset_cursors(self):
         """Reset both single and dual cursor state on the time-domain canvas.

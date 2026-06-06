@@ -348,6 +348,7 @@ class PgNavigationToolbar(QToolBar):
     # listens so the hint label + MDI icon active-state refresh, and the
     # right-click menu reads current_mouse_mode() so its checkmark matches.
     mouse_mode_changed = pyqtSignal(str)
+    home_triggered = pyqtSignal()
 
     def __init__(self, canvas, parent=None):
         super().__init__(parent)
@@ -814,6 +815,7 @@ class PgNavigationToolbar(QToolBar):
 
     def _click_home(self, *_a):
         (self._delegate() or self).home()
+        self.home_triggered.emit()
 
     def _click_back(self, *_a):
         self.back()
@@ -1476,6 +1478,7 @@ class ChartStack(QWidget):
     # primary. MainWindow uses it to route channel-check replots to the right
     # canvas; it is inert (never emitted) outside split mode.
     focus_changed = pyqtSignal(bool)
+    home_triggered = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1558,6 +1561,7 @@ class ChartStack(QWidget):
             else []
         )
         self._time_toolbar._save_pixmap_provider = self._combined_split_pixmap
+        self._time_toolbar.home_triggered.connect(self.home_triggered.emit)
         # 图表选项 on the shared toolbar opens for the focused pane's canvas.
         self._time_card._options_canvas_provider = self.focused_canvas
         # Mirror the focused pane's pan/zoom state onto the shared toolbar
