@@ -1030,6 +1030,7 @@ class TimeDomainCanvasPG(QWidget):
     overlay_y_needs_selection = pyqtSignal()
     context_menu_requested = pyqtSignal()
     xrange_changed = pyqtSignal(float, float)
+    visible_range_changed = pyqtSignal()
 
     # Mirror TimeDomainCanvas constants so callers see the same surface.
     MAX_PTS = 8000
@@ -1722,14 +1723,18 @@ class TimeDomainCanvasPG(QWidget):
         """Restore per-channel Y ranges; silently skip missing channels."""
         view_state_lines = getattr(self, "_channel_view_state_lines", None) or {}
         legacy_lines = getattr(self, "_channel_lines", None) or {}
+        changed = False
         for name, ylim in (ylims or {}).items():
             pair = view_state_lines.get(name) or legacy_lines.get(name)
             if pair is None:
                 continue
             try:
                 pair[0].set_ylim(*ylim)
+                changed = True
             except Exception:
                 continue
+        if changed:
+            self.visible_range_changed.emit()
 
     def _sync_x_axis_item_range(self, handle, lo, hi):
         try:
@@ -3653,6 +3658,7 @@ class TimeDomainCanvasPG(QWidget):
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
             return
         self.xrange_changed.emit(float(lo), float(hi))
+        self.visible_range_changed.emit()
 
     def _propagate_xlim_to_siblings(self, source=None):
         """Mirror ``source``'s xlim onto every other axis facade.
@@ -4079,6 +4085,7 @@ class TimeDomainCanvasPG(QWidget):
             ax.set_ylim(lo + shift, hi + shift)
         except Exception:
             return False
+        self.visible_range_changed.emit()
         self._refresh = True
         self.draw_idle()
         return True
@@ -4183,6 +4190,7 @@ class TimeDomainCanvasPG(QWidget):
                     axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
             except Exception:
                 return True
+            self.visible_range_changed.emit()
             self._refresh = True
             self.draw_idle()
             self.schedule_idle_quality()
@@ -4212,6 +4220,7 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             return False
 
+        self.visible_range_changed.emit()
         self._refresh = True
         self.draw_idle()
         self.schedule_idle_quality()

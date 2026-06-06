@@ -5,6 +5,8 @@ MainWindow channel-check routing to the focused canvas. Run offscreen:
 
     QT_QPA_PLATFORM=offscreen pytest tests/ui/test_split_focus_routing.py -q
 """
+import pytest
+
 from PyQt5.QtCore import QEvent, QPoint, Qt
 from PyQt5.QtGui import QMouseEvent
 
@@ -184,3 +186,74 @@ def test_channel_check_routes_to_primary_when_primary_focused(
     # Secondary keeps its compare-view snapshot (torque only).
     assert _has_channel(cs.secondary_canvas(), "torque")
     assert not _has_channel(cs.secondary_canvas(), "speed")
+
+
+def test_secondary_range_changes_write_back_to_original_view_state(
+    qtbot, qapp, loaded_csv
+):
+    w, _fid_value, _v1_xlim, _v1_ylims, _v2_xlim, _v2_ylims = (
+        _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    )
+    cs = w.chart_stack
+
+    w._switch_view(1)
+    qapp.processEvents()
+    w.view_manager.set_split(0)
+    qapp.processEvents()
+
+    secondary = cs.secondary_canvas()
+    assert secondary is not None
+    assert w.view_manager.split_with == 0
+
+    target_xlim = (0.23, 0.47)
+    secondary.restore_visible_xlim(target_xlim)
+    w._capture_canvas_ranges_for_bound_view(secondary)
+
+    assert w.view_manager.get(0).xlim == pytest.approx(target_xlim)
+
+    # Open View 0 as primary; it should keep the secondary pane's last range.
+    w._switch_view(0)
+    qapp.processEvents()
+    assert w.canvas_time.get_visible_xlim() == pytest.approx(target_xlim)
+
+
+def test_tick_density_change_routes_to_focused_secondary_view(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+
+    primary_before = cs.canvas_time._tick_density
+
+    w._update_all_tick_density_pair(17, 4)
+    qapp.processEvents()
+
+    assert cs.secondary_canvas()._tick_density == (17, 4)
+    assert cs.canvas_time._tick_density == primary_before
+    assert w.view_manager.get(1).axis_opts["tick_density"] == {"x": 17, "y": 4}
+
+
+def test_focus_switch_captures_previous_focused_inspector_state(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+
+    top = w.inspector.top
+    old_xt = top.spin_xt.blockSignals(True)
+    old_yt = top.spin_yt.blockSignals(True)
+    try:
+        top.spin_xt.setValue(21)
+        top.spin_yt.setValue(9)
+    finally:
+        top.spin_yt.blockSignals(old_yt)
+        top.spin_xt.blockSignals(old_xt)
+
+    _click_card(qapp, cs._time_card)
+
+    assert w.view_manager.get(1).axis_opts["tick_density"] == {"x": 21, "y": 9}
+    assert w.inspector.top.tick_density() == (8, 5)

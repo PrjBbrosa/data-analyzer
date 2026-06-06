@@ -1672,6 +1672,10 @@ class ChartStack(QWidget):
             return self._secondary_card.cursor_mode()
         return self._primary_cursor_mode
 
+    def cursor_mode_for_canvas(self, canvas):
+        """Public per-pane cursor-mode accessor, matching plot_mode_for_canvas."""
+        return self._cursor_mode_for_canvas(canvas)
+
     def _shared_time_controls_follow_secondary(self):
         return (
             self.split_active()
@@ -1975,6 +1979,23 @@ class ChartStack(QWidget):
             return self._secondary_card.plot_mode()
         return self._primary_plot_mode
 
+    def set_plot_mode_for_canvas(self, canvas, mode):
+        """Set plot mode on the card that owns ``canvas`` without re-emitting.
+
+        Used by ViewState apply/render paths where the target pane may be the
+        secondary compare card. The interactive controls still emit through the
+        existing set_plot_mode/_on_shared_plot_mode_changed paths.
+        """
+        if mode not in ('subplot', 'overlay'):
+            return
+        if (self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            self._set_secondary_plot_mode_silent(mode)
+            return
+        self._primary_plot_mode = mode
+        if not self._shared_time_controls_follow_secondary():
+            self._set_shared_plot_mode_silent(mode)
+
     def cursor_mode(self):
         return self._primary_cursor_mode
 
@@ -1990,6 +2011,22 @@ class ChartStack(QWidget):
         if not self._shared_time_controls_follow_secondary():
             self._set_shared_cursor_mode_silent(mode)
         self._on_time_cursor_mode_changed(mode)
+
+    def set_cursor_mode_for_canvas(self, canvas, mode):
+        """Set cursor mode on the card/canvas owning ``canvas`` without signals."""
+        if mode not in ('off', 'single', 'dual'):
+            return
+        if (self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            self._set_secondary_cursor_mode_silent(mode)
+            target = self._secondary_card.canvas
+        else:
+            self._primary_cursor_mode = mode
+            if not self._shared_time_controls_follow_secondary():
+                self._set_shared_cursor_mode_silent(mode)
+            target = self.canvas_time
+        target.set_cursor_visible(mode != 'off')
+        target.set_dual_cursor_mode(mode == 'dual')
 
     def _set_secondary_plot_mode_silent(self, mode):
         if self._secondary_card is None:

@@ -64,35 +64,75 @@ def capture_view(window) -> ViewState:
     )
 
 
-def capture_into(state: ViewState, window) -> None:
-    """Update an existing state from the UI while preserving tab metadata."""
+def capture_controls_into(state: ViewState, window, canvas=None) -> None:
+    """Capture widget/control state into ``state`` for the given time pane."""
     fresh = capture_view(window)
     state.checked = fresh.checked
     state.colors = fresh.colors
-    state.plot_mode = fresh.plot_mode
-    state.cursor_mode = fresh.cursor_mode
-    state.xlim = fresh.xlim
-    state.ylims = fresh.ylims
     state.overlay_primary = fresh.overlay_primary
     state.axis_opts = fresh.axis_opts
 
+    chart_stack = window.chart_stack
+    target = canvas if canvas is not None else chart_stack.canvas_time
+    plot_for_canvas = getattr(chart_stack, "plot_mode_for_canvas", None)
+    if callable(plot_for_canvas):
+        state.plot_mode = plot_for_canvas(target)
+    else:
+        state.plot_mode = chart_stack.plot_mode()
+    cursor_for_canvas = getattr(chart_stack, "cursor_mode_for_canvas", None)
+    if callable(cursor_for_canvas):
+        state.cursor_mode = cursor_for_canvas(target)
+    else:
+        state.cursor_mode = chart_stack.cursor_mode()
 
-def apply_view(state: ViewState, window) -> None:
-    """Write view state back to widgets without triggering a replot."""
+
+def capture_canvas_ranges_into(state: ViewState, canvas) -> None:
+    """Capture visible X/Y ranges from a specific canvas into ``state``."""
+    get_xlim = getattr(canvas, "get_visible_xlim", None)
+    get_ylims = getattr(canvas, "get_visible_ylims", None)
+    if callable(get_xlim):
+        state.xlim = get_xlim()
+    if callable(get_ylims):
+        state.ylims = get_ylims()
+
+
+def capture_into(state: ViewState, window) -> None:
+    """Update an existing state from the UI while preserving tab metadata."""
+    canvas = window.chart_stack.canvas_time
+    capture_controls_into(state, window, canvas)
+    capture_canvas_ranges_into(state, canvas)
+
+
+def apply_controls_from_state(state: ViewState, window, canvas=None) -> None:
+    """Write control state to widgets/card owning ``canvas`` without replotting."""
     navigator = window.navigator
     chart_stack = window.chart_stack
+    target = canvas if canvas is not None else chart_stack.canvas_time
 
     with _signals_blocked(navigator), _signals_blocked(chart_stack):
         navigator.set_channel_colors(state.colors)
         navigator.set_checked_channels(state.checked)
-        chart_stack.set_plot_mode(state.plot_mode)
-        chart_stack.set_cursor_mode(state.cursor_mode)
+        plot_setter = getattr(chart_stack, "set_plot_mode_for_canvas", None)
+        cursor_setter = getattr(chart_stack, "set_cursor_mode_for_canvas", None)
+        if callable(plot_setter):
+            plot_setter(target, state.plot_mode)
+        else:
+            chart_stack.set_plot_mode(state.plot_mode)
+        if callable(cursor_setter):
+            cursor_setter(target, state.cursor_mode)
+        else:
+            chart_stack.set_cursor_mode(state.cursor_mode)
+            _apply_cursor_to_canvas(target, state.cursor_mode)
 
-    _sync_canvas_cursor_mode(window, state.cursor_mode)
     window._overlay_primary = state.overlay_primary
     restore_axis_opts = getattr(window, "_restore_view_axis_opts", None)
     if callable(restore_axis_opts):
         restore_axis_opts(state.axis_opts)
+
+
+def apply_view(state: ViewState, window) -> None:
+    """Write view state back to primary widgets without triggering a replot."""
+    apply_controls_from_state(state, window, window.chart_stack.canvas_time)
 
 
 def restore_axes(state: ViewState, window) -> None:
@@ -124,19 +164,13 @@ def _channel_key(value: Any) -> ChannelKey:
     return (str(fid), str(channel))
 
 
-def _sync_canvas_cursor_mode(window, mode: str) -> None:
-    handler = getattr(window, "_on_cursor_mode_changed", None)
-    if callable(handler):
-        handler(mode)
-        return
-
-    canvas = getattr(window.chart_stack, "canvas_time", None)
-    set_visible = getattr(canvas, "set_cursor_visible", None)
-    if callable(set_visible):
-        set_visible(mode != "off")
-    set_dual = getattr(canvas, "set_dual_cursor_mode", None)
-    if callable(set_dual):
-        set_dual(mode == "dual")
+def _apply_cursor_to_canvas(canvas, mode: str) -> None:
+    visible_setter = getattr(canvas, "set_cursor_visible", None)
+    dual_setter = getattr(canvas, "set_dual_cursor_mode", None)
+    if callable(visible_setter):
+        visible_setter(mode != "off")
+    if callable(dual_setter):
+        dual_setter(mode == "dual")
 
 
 @contextmanager

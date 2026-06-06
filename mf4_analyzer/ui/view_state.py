@@ -103,6 +103,7 @@ class ViewManager(QObject):
         self.views: list[ViewState] = [self._make(0)]
         self.active = 0
         self.split_with: int | None = None
+        self._split_pairs: dict[int, int] = {}
 
     def _make(self, idx: int) -> ViewState:
         return ViewState(
@@ -128,7 +129,9 @@ class ViewManager(QObject):
         if len(self.views) <= 1 or not self._is_valid_index(idx):
             return
 
+        old_split = self.split_with
         old_active = self.active
+        pairs = self._snapshot_pairs_by_object()
         del self.views[idx]
 
         if self.active >= len(self.views):
@@ -136,12 +139,11 @@ class ViewManager(QObject):
         elif self.active > idx:
             self.active -= 1
 
-        split_cleared = self.split_with is not None
-        self.split_with = None
+        self._restore_pairs_by_object(pairs)
 
         self.views_changed.emit()
-        if split_cleared:
-            self.split_changed.emit(None)
+        if self.split_with != old_split:
+            self.split_changed.emit(self.split_with)
         if idx <= old_active:
             self.active_changed.emit(self.active)
 
@@ -149,12 +151,14 @@ class ViewManager(QObject):
         if len(self.views) >= MAX_VIEWS or not self._is_valid_index(idx):
             return -1
 
+        pairs = self._snapshot_pairs_by_object()
         active_state = self.views[self.active]
         source = self.views[idx]
         copied = ViewState.from_dict(source.to_dict())
         copied.name = f"{source.name} 副本"
         self.views.insert(idx + 1, copied)
-        self.active = self.views.index(active_state)
+        self.active = self._index_of_state(active_state)
+        self._restore_pairs_by_object(pairs)
         self.views_changed.emit()
         self.set_active(idx + 1)
         return idx + 1
@@ -179,32 +183,98 @@ class ViewManager(QObject):
         ):
             return
 
+        old_split = self.split_with
         active_state = self.views[self.active]
-        split_state = (
-            self.views[self.split_with] if self.split_with is not None else None
-        )
+        pairs = self._snapshot_pairs_by_object()
         item = self.views.pop(from_idx)
         self.views.insert(to_idx, item)
-        self.active = self.views.index(active_state)
-        self.split_with = self.views.index(split_state) if split_state is not None else None
+        self.active = self._index_of_state(active_state)
+        self._restore_pairs_by_object(pairs)
         self.views_changed.emit()
+        if self.split_with != old_split:
+            self.split_changed.emit(self.split_with)
 
     def set_active(self, idx: int) -> None:
         if not self._is_valid_index(idx) or idx == self.active:
             return
         self.active = idx
-        if self.split_with is not None:
-            self.split_with = None
-            self.split_changed.emit(None)
+        self._set_active_split_from_pairs()
         self.active_changed.emit(idx)
 
     def set_split(self, idx: int | None) -> None:
+        if idx is None:
+            self.clear_split_for(self.active)
+            return
+        if idx == self.active or not self._is_valid_index(idx):
+            return
         if idx == self.split_with:
             return
-        if idx is not None and (idx == self.active or not self._is_valid_index(idx)):
+
+        old_split = self.split_with
+        self.clear_split_for(self.active, emit=False)
+        self.clear_split_for(idx, emit=False)
+        self._split_pairs[self.active] = idx
+        self._split_pairs[idx] = self.active
+        self._set_active_split_from_pairs()
+        if self.split_with != old_split:
+            self.split_changed.emit(self.split_with)
+
+    def clear_split_for(self, idx: int | None = None, *, emit: bool = True) -> None:
+        target = self.active if idx is None else idx
+        if not self._is_valid_index(target):
             return
-        self.split_with = idx
-        self.split_changed.emit(idx)
+
+        old_split = self.split_with
+        partner = self._split_pairs.pop(target, None)
+        if partner is not None:
+            self._split_pairs.pop(partner, None)
+        self._set_active_split_from_pairs()
+        if emit and self.split_with != old_split:
+            self.split_changed.emit(self.split_with)
+
+    def partner_for(self, idx: int) -> int | None:
+        if not self._is_valid_index(idx):
+            return None
+        partner = self._split_pairs.get(idx)
+        if partner is None or not self._is_valid_index(partner):
+            return None
+        return partner
+
+    def has_split_pair(self, idx: int) -> bool:
+        return self.partner_for(idx) is not None
+
+    def _set_active_split_from_pairs(self) -> None:
+        self.split_with = self.partner_for(self.active)
+
+    def _snapshot_pairs_by_object(self) -> list[tuple[ViewState, ViewState]]:
+        out: list[tuple[ViewState, ViewState]] = []
+        seen: set[int] = set()
+        for a, b in self._split_pairs.items():
+            if a in seen or b in seen:
+                continue
+            if self._is_valid_index(a) and self._is_valid_index(b):
+                out.append((self.views[a], self.views[b]))
+                seen.add(a)
+                seen.add(b)
+        return out
+
+    def _restore_pairs_by_object(
+        self, pairs: list[tuple[ViewState, ViewState]]
+    ) -> None:
+        self._split_pairs = {}
+        for a_state, b_state in pairs:
+            a = self._index_of_state(a_state)
+            b = self._index_of_state(b_state)
+            if a >= 0 and b >= 0:
+                self._split_pairs[a] = b
+                self._split_pairs[b] = a
+        self._set_active_split_from_pairs()
+
+    def _index_of_state(self, state: ViewState) -> int:
+        for idx, candidate in enumerate(self.views):
+            if candidate is state:
+                return idx
+        return -1
 
     def _is_valid_index(self, idx: int) -> bool:
         return 0 <= idx < len(self.views)

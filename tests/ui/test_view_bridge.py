@@ -257,7 +257,7 @@ def test_apply_view_writes_widgets_and_restore_axis_hook_without_replot():
     assert win.chart_stack._cursor_mode == "off"
     assert win._overlay_primary is None
     assert win.restored_axis_opts == {"tick_density": {"x": 12, "y": 7}}
-    assert win.cursor_mode_syncs == ["off"]
+    assert win.cursor_mode_syncs == []
     assert win.chart_stack.canvas_time.cursor_visible is False
     assert win.chart_stack.canvas_time.dual_cursor is False
     assert win.navigator.blocked == [True, False]
@@ -274,7 +274,7 @@ def test_apply_view_syncs_canvas_cursor_state_when_signals_are_blocked():
 
     view_bridge.apply_view(state, win)
 
-    assert win.cursor_mode_syncs == ["dual"]
+    assert win.cursor_mode_syncs == []
     assert win.chart_stack.canvas_time.cursor_visible is True
     assert win.chart_stack.canvas_time.dual_cursor is True
 

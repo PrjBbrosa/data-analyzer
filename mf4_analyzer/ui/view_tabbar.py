@@ -10,8 +10,10 @@ from PyQt5.QtCore import QEvent, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QTabBar,
@@ -31,6 +33,7 @@ class ViewTabBar(QWidget):
     color_requested = pyqtSignal(int)
     reorder_requested = pyqtSignal(int, int)
     split_requested = pyqtSignal(int)
+    clear_split_requested = pyqtSignal(int)
 
     def __init__(self, manager, parent=None):
         super().__init__(parent)
@@ -39,6 +42,7 @@ class ViewTabBar(QWidget):
         self._suppress = False
         self._rename_editor = None
         self._rename_index = -1
+        self._secondary_focused = False
         self._suppress_switch_after_reorder = False
         # True only while a drag-reorder's tabMoved is being handled, so the
         # views_changed → refresh() it triggers skips the destructive rebuild
@@ -75,8 +79,19 @@ class ViewTabBar(QWidget):
         layout.addWidget(self._plus, 0)
         layout.addStretch(1)
 
+        self._split_chip = QLabel(self)
+        self._split_chip.setObjectName("viewSplitChip")
+        self._split_clear = QPushButton("×", self)
+        self._split_clear.setObjectName("viewSplitClear")
+        self._split_clear.setToolTip("取消合并")
+        self._split_clear.setFixedSize(22, 22)
+        self._split_clear.clicked.connect(self._on_split_clear_clicked)
+        layout.addWidget(self._split_chip, 0)
+        layout.addWidget(self._split_clear, 0)
+
         manager.views_changed.connect(self.refresh)
         manager.active_changed.connect(self._sync_active)
+        manager.split_changed.connect(lambda _idx: self._update_split_chip())
         self.refresh()
 
     def count(self) -> int:
@@ -108,6 +123,7 @@ class ViewTabBar(QWidget):
             self._suppress = False
         self._sync_tabbar_width()
         self._update_plus_state()
+        self._update_split_chip()
 
     def _sync_tabbar_width(self) -> None:
         if self._tabs.count() <= 0:
@@ -131,11 +147,17 @@ class ViewTabBar(QWidget):
         self._sync_tabbar_width()
 
     def _sync_active(self, idx: int) -> None:
+        self._secondary_focused = False
         self._suppress = True
         try:
             self._set_current_index(idx)
         finally:
             self._suppress = False
+        self._update_split_chip()
+
+    def set_split_focus(self, secondary_focused: bool) -> None:
+        self._secondary_focused = bool(secondary_focused)
+        self._update_split_chip()
 
     def _set_current_index(self, idx: int) -> None:
         if 0 <= idx < self._tabs.count():
@@ -145,6 +167,25 @@ class ViewTabBar(QWidget):
         can_add = len(self._manager.views) < MAX_VIEWS
         self._plus.setEnabled(can_add)
         self._plus.setToolTip("新建 View" if can_add else "View 数量已达上限")
+
+    def _on_split_clear_clicked(self) -> None:
+        self.clear_split_requested.emit(self._manager.active)
+
+    def _update_split_chip(self) -> None:
+        partner_for = getattr(self._manager, "partner_for", None)
+        partner = partner_for(self._manager.active) if callable(partner_for) else None
+        visible = partner is not None
+        self._split_chip.setVisible(visible)
+        self._split_clear.setVisible(visible)
+        if not visible:
+            self._split_chip.setText("")
+            return
+        active_name = self._manager.get(self._manager.active).name
+        partner_name = self._manager.get(partner).name
+        editing = partner_name if self._secondary_focused else active_name
+        self._split_chip.setText(
+            f"合并: {active_name} + {partner_name} · 编辑: {editing}"
+        )
 
     def _on_current_changed(self, idx: int) -> None:
         if self._suppress or idx < 0:
@@ -214,7 +255,24 @@ class ViewTabBar(QWidget):
         duplicate_action = menu.addAction("复制此 View")
         color_action = menu.addAction("改标签颜色...")
         menu.addSeparator()
-        split_action = menu.addAction("与此 View 并排")
+        partner_for = getattr(self._manager, "partner_for", None)
+        partner = partner_for(idx) if callable(partner_for) else None
+        active_partner = (
+            partner_for(self._manager.active) if callable(partner_for) else None
+        )
+        will_replace = (
+            partner is None
+            and idx != self._manager.active
+            and active_partner is not None
+            and active_partner != idx
+        )
+        if partner is not None:
+            split_action = menu.addAction("取消合并")
+        elif will_replace:
+            split_action = menu.addAction("与此 View 并排（替换当前合并）")
+        else:
+            split_action = menu.addAction("与此 View 并排")
+            split_action.setEnabled(idx != self._manager.active)
         menu.addSeparator()
         delete_action = menu.addAction("删除")
         delete_action.setEnabled(len(self._manager.views) > 1)
@@ -229,7 +287,22 @@ class ViewTabBar(QWidget):
         elif chosen is color_action:
             self.color_requested.emit(idx)
         elif chosen is split_action:
-            self.split_requested.emit(idx)
+            if partner is not None:
+                self.clear_split_requested.emit(idx)
+            else:
+                if will_replace:
+                    ans = QMessageBox.question(
+                        self,
+                        "替换合并",
+                        f"“{self._manager.get(self._manager.active).name}” 当前已与 "
+                        f"“{self._manager.get(active_partner).name}” 合并；改为与 "
+                        f"“{self._manager.get(idx).name}” 合并会解除原合并。继续？",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
+                    )
+                    if ans != QMessageBox.Yes:
+                        return
+                self.split_requested.emit(idx)
         elif chosen is delete_action:
             self.delete_requested.emit(idx)
 

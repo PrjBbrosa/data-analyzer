@@ -68,26 +68,47 @@ def _make_speed_vs_torque_views(qtbot, qapp, loaded_csv):
     return w, fid, view1_xlim, view1_ylims, view2_xlim, view2_ylims
 
 
-def test_split_renders_compare_view_and_switch_exits(qtbot, qapp, loaded_csv):
-    w, _fid_value, _v1_xlim, _v1_ylims, view2_xlim, view2_ylims = (
+def test_split_pair_persists_when_switching_between_paired_views(
+    qtbot, qapp, loaded_csv
+):
+    w, _fid_value, view1_xlim, view1_ylims, view2_xlim, view2_ylims = (
         _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
     )
 
+    assert w.view_manager.active == 0
     w.view_manager.set_split(1)
     qapp.processEvents()
 
     assert w.chart_stack.split_active() is True
-    secondary = w.chart_stack.secondary_canvas()
-    assert secondary is not None
-    assert _has_channel(secondary, "torque")
-    assert not _has_channel(secondary, "speed")
-    _assert_pair(secondary.get_visible_xlim(), view2_xlim)
-    _assert_canvas_ylims(secondary, view2_ylims)
+    assert w.view_manager.split_with == 1
+    assert _has_channel(w.canvas_time, "speed")
+    assert _has_channel(w.chart_stack.secondary_canvas(), "torque")
 
     w._switch_view(1)
     qapp.processEvents()
 
-    assert w.chart_stack.split_active() is False
+    assert w.chart_stack.split_active() is True
+    assert w.view_manager.active == 1
+    assert w.view_manager.split_with == 0
+    assert _has_channel(w.canvas_time, "torque")
+    assert _has_channel(w.chart_stack.secondary_canvas(), "speed")
+    _assert_pair(w.canvas_time.get_visible_xlim(), view2_xlim)
+    _assert_canvas_ylims(w.canvas_time, view2_ylims)
+    _assert_pair(w.chart_stack.secondary_canvas().get_visible_xlim(), view1_xlim)
+    _assert_canvas_ylims(w.chart_stack.secondary_canvas(), view1_ylims)
+
+    w._switch_view(0)
+    qapp.processEvents()
+
+    assert w.chart_stack.split_active() is True
+    assert w.view_manager.active == 0
+    assert w.view_manager.split_with == 1
+    assert _has_channel(w.canvas_time, "speed")
+    assert _has_channel(w.chart_stack.secondary_canvas(), "torque")
+    _assert_pair(w.canvas_time.get_visible_xlim(), view1_xlim)
+    _assert_canvas_ylims(w.canvas_time, view1_ylims)
+    _assert_pair(w.chart_stack.secondary_canvas().get_visible_xlim(), view2_xlim)
+    _assert_canvas_ylims(w.chart_stack.secondary_canvas(), view2_ylims)
 
 
 def test_split_render_does_not_pollute_active_view_ui(qtbot, qapp, loaded_csv):
@@ -132,6 +153,37 @@ def test_split_render_preserves_active_cursor_pill(qtbot, qapp, loaded_csv):
     assert w.chart_stack.cursor_mode() == "single"
     assert w.chart_stack.cursor_pill_visible() is True
     assert w.chart_stack.cursor_pill_text() == "A=1.0s"
+
+
+def test_secondary_pane_keeps_its_own_plot_mode_across_switches(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+
+    # View 0 = speed/overlay, View 1 = torque/subplot.
+    w.view_manager.get(0).plot_mode = "overlay"
+    w.view_manager.get(1).plot_mode = "subplot"
+
+    assert w.view_manager.active == 0
+    w.view_manager.set_split(1)
+    qapp.processEvents()
+
+    # primary = View 0 (overlay), secondary = View 1 (subplot).
+    assert cs.plot_mode_for_canvas(cs.canvas_time) == "overlay"
+    assert cs.plot_mode_for_canvas(cs.secondary_canvas()) == "subplot"
+
+    # Switch to View 1: panes swap, each keeps its own layout.
+    w._switch_view(1)
+    qapp.processEvents()
+    assert cs.plot_mode_for_canvas(cs.canvas_time) == "subplot"
+    assert cs.plot_mode_for_canvas(cs.secondary_canvas()) == "overlay"
+
+    # Switch back: still each its own.
+    w._switch_view(0)
+    qapp.processEvents()
+    assert cs.plot_mode_for_canvas(cs.canvas_time) == "overlay"
+    assert cs.plot_mode_for_canvas(cs.secondary_canvas()) == "subplot"
 
 
 def test_split_none_exits(qtbot, qapp, loaded_csv):

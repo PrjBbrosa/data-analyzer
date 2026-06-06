@@ -1,5 +1,5 @@
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QLineEdit, QPushButton
+from PyQt5.QtWidgets import QApplication, QLineEdit, QMessageBox, QPushButton
 
 from mf4_analyzer.ui.view_state import MAX_VIEWS, ViewManager
 from mf4_analyzer.ui.view_tabbar import ViewTabBar
@@ -134,6 +134,48 @@ def test_active_changed_syncs_current_tab_without_switch_intent(qtbot):
     assert switches == []
 
 
+def test_split_status_chip_visible_for_active_pair(qtbot):
+    manager, bar = _bar(qtbot, count=2, active=0)
+    manager.set_split(1)
+    bar.show()
+    QApplication.processEvents()
+
+    assert bar._split_chip.isVisible()
+    assert "View 1" in bar._split_chip.text()
+    assert "View 2" in bar._split_chip.text()
+    assert "编辑: View 1" in bar._split_chip.text()
+
+    bar.set_split_focus(True)
+    assert "编辑: View 2" in bar._split_chip.text()
+
+
+def test_clear_split_chip_emits_active_index(qtbot):
+    manager, bar = _bar(qtbot, count=2, active=0)
+    manager.set_split(1)
+
+    seen = []
+    bar.clear_split_requested.connect(seen.append)
+    qtbot.mouseClick(bar._split_clear, Qt.LeftButton)
+
+    assert seen == [0]
+
+
+def test_split_changed_refreshes_status_chip(qtbot):
+    manager, bar = _bar(qtbot, count=2, active=0)
+    bar.show()
+    QApplication.processEvents()
+
+    assert not bar._split_chip.isVisible()
+
+    manager.set_split(1)
+    QApplication.processEvents()
+    assert bar._split_chip.isVisible()
+
+    manager.clear_split_for(0)
+    QApplication.processEvents()
+    assert not bar._split_chip.isVisible()
+
+
 def test_plus_button_disabled_at_view_cap(qtbot):
     _manager, bar = _bar(qtbot, count=MAX_VIEWS, active=0)
     plus = bar.findChild(QPushButton, "viewTabPlus")
@@ -208,7 +250,6 @@ def test_context_menu_uses_translucent_rounded_shell(qtbot, monkeypatch):
 def test_context_menu_color_split_and_delete_emit_once(qtbot, monkeypatch):
     actions_to_signals = [
         ("改标签颜色...", "color_requested"),
-        ("与此 View 并排", "split_requested"),
         ("删除", "delete_requested"),
     ]
 
@@ -225,6 +266,91 @@ def test_context_menu_color_split_and_delete_emit_once(qtbot, monkeypatch):
         bar._on_context_menu(_tab_point(bar, 0))
 
         assert received == [0]
+
+    _manager, bar = _bar(qtbot, count=2)
+    received = []
+    bar.split_requested.connect(received.append)
+
+    def fake_split_exec(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "与此 View 并排")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_split_exec)
+
+    bar._on_context_menu(_tab_point(bar, 1))
+
+    assert received == [1]
+
+
+def test_context_menu_cancel_split_emits_clear_intent(qtbot, monkeypatch):
+    manager, bar = _bar(qtbot, count=2, active=0)
+    manager.set_split(1)
+    received = []
+    bar.clear_split_requested.connect(received.append)
+
+    def fake_exec(menu, *_args):
+        return next(action for action in menu.actions() if action.text() == "取消合并")
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+
+    bar._on_context_menu(_tab_point(bar, 1))
+
+    assert received == [1]
+
+
+def test_context_menu_replacing_active_split_requires_confirmation(
+    qtbot, monkeypatch
+):
+    manager, bar = _bar(qtbot, count=3, active=0)
+    manager.set_split(1)
+    received = []
+    bar.split_requested.connect(received.append)
+    questions = []
+
+    def fake_exec(menu, *_args):
+        return next(
+            action
+            for action in menu.actions()
+            if action.text() == "与此 View 并排（替换当前合并）"
+        )
+
+    def fake_question(*args):
+        questions.append(args)
+        return QMessageBox.Yes
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMessageBox.question", fake_question)
+
+    bar._on_context_menu(_tab_point(bar, 2))
+
+    assert questions
+    assert received == [2]
+
+
+def test_context_menu_replacing_active_split_cancel_keeps_current_pair(
+    qtbot, monkeypatch
+):
+    manager, bar = _bar(qtbot, count=3, active=0)
+    manager.set_split(1)
+    received = []
+    bar.split_requested.connect(received.append)
+
+    def fake_exec(menu, *_args):
+        return next(
+            action
+            for action in menu.actions()
+            if action.text() == "与此 View 并排（替换当前合并）"
+        )
+
+    monkeypatch.setattr("mf4_analyzer.ui.view_tabbar.QMenu.exec_", fake_exec)
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.view_tabbar.QMessageBox.question",
+        lambda *_args: QMessageBox.No,
+    )
+
+    bar._on_context_menu(_tab_point(bar, 2))
+
+    assert received == []
+    assert manager.partner_for(0) == 1
 
 
 def test_context_menu_rename_starts_inline_editor_and_emits_once(qtbot, monkeypatch):

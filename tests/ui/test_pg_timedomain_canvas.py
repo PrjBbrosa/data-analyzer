@@ -1182,6 +1182,24 @@ def _view_state_key(data_id, name):
     return json.dumps([data_id, name], ensure_ascii=False, separators=(",", ":"))
 
 
+def test_visible_range_changed_emits_on_restore_xlim(qtbot, qapp):
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    qtbot.addWidget(canvas)
+    canvas.resize(600, 360)
+    canvas.show()
+    canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+    qapp.processEvents()
+
+    seen = []
+    canvas.visible_range_changed.connect(lambda: seen.append(True))
+    canvas.restore_visible_xlim((0.2, 0.6))
+    qapp.processEvents()
+
+    assert len(seen) == 1
+
+
 def _major_tick_labels(axis):
     levels = getattr(axis, "_tickLevels", None)
     assert levels is not None, "expected explicit X tick levels"

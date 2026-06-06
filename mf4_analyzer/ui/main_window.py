@@ -208,6 +208,9 @@ class MainWindow(QMainWindow):
         self.view_manager = ViewManager(self)
         self._view_bridge = view_bridge
         self.view_tabbar = self.chart_stack.attach_view_tabbar(self.view_manager)
+        self._primary_view_idx = self.view_manager.active
+        self._secondary_view_idx = None
+        self._focused_view_idx = self.view_manager.active
 
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
@@ -359,6 +362,7 @@ class MainWindow(QMainWindow):
         self.view_tabbar.color_requested.connect(self._on_view_color)
         self.view_tabbar.reorder_requested.connect(self.view_manager.reorder)
         self.view_tabbar.split_requested.connect(self.view_manager.set_split)
+        self.view_tabbar.clear_split_requested.connect(self._on_view_clear_split)
         self.view_manager.active_changed.connect(self._apply_active_view)
         self.view_manager.split_changed.connect(self._on_view_split)
 
@@ -411,81 +415,161 @@ class MainWindow(QMainWindow):
         xrange_changed = getattr(self.canvas_time, 'xrange_changed', None)
         if xrange_changed is not None:
             xrange_changed.connect(self._on_time_canvas_xrange_changed)
+        self._connect_canvas_range_signals(self.canvas_time)
+
+    def _connect_canvas_range_signals(self, canvas):
+        visible_range_changed = getattr(canvas, 'visible_range_changed', None)
+        if visible_range_changed is not None:
+            visible_range_changed.connect(
+                lambda c=canvas: self._capture_canvas_ranges_for_bound_view(c)
+            )
+
+    def _ensure_secondary_range_signal_connected(self):
+        canvas = self.chart_stack.secondary_canvas()
+        if canvas is None or getattr(canvas, '_view_range_connected', False):
+            return
+        self._connect_canvas_range_signals(canvas)
+        canvas._view_range_connected = True
 
     def _capture_current_view(self):
-        manager = getattr(self, 'view_manager', None)
-        bridge = getattr(self, '_view_bridge', None)
-        if manager is None or bridge is None:
+        self._capture_focused_view()
+
+    def _sync_pane_bindings_from_manager(self):
+        active = self.view_manager.active
+        partner = self.view_manager.split_with
+        self._primary_view_idx = active
+        self._secondary_view_idx = partner
+        if partner is None:
+            self._focused_view_idx = active
+        elif self._focused_view_idx not in (active, partner):
+            self._focused_view_idx = active
+
+    def _view_index_for_canvas(self, canvas):
+        if canvas is self.canvas_time:
+            return self._primary_view_idx
+        secondary = self.chart_stack.secondary_canvas()
+        if secondary is not None and canvas is secondary:
+            return self._secondary_view_idx
+        return None
+
+    def _canvas_for_view_index(self, idx):
+        if idx == self._primary_view_idx:
+            return self.canvas_time
+        if idx == self._secondary_view_idx:
+            return self.chart_stack.secondary_canvas()
+        return None
+
+    def _capture_canvas_ranges_for_bound_view(self, canvas):
+        if getattr(self, '_applying_view', False):
             return
-        active = getattr(manager, 'active', -1)
-        if not (0 <= active < len(manager.views)):
+        idx = self._view_index_for_canvas(canvas)
+        if idx is None or not (0 <= idx < len(self.view_manager.views)):
             return
-        bridge.capture_into(manager.get(active), self)
+        self._view_bridge.capture_canvas_ranges_into(self.view_manager.get(idx), canvas)
+
+    def _capture_focused_view(self):
+        idx = self._focused_view_idx
+        if idx is None or not (0 <= idx < len(self.view_manager.views)):
+            return
+        canvas = self._canvas_for_view_index(idx) or self.canvas_time
+        state = self.view_manager.get(idx)
+        self._view_bridge.capture_controls_into(state, self, canvas)
+        self._view_bridge.capture_canvas_ranges_into(state, canvas)
+
+    def _project_view_controls(self, idx):
+        if idx is None or not (0 <= idx < len(self.view_manager.views)):
+            return
+        canvas = self._canvas_for_view_index(idx) or self.canvas_time
+        old_applying_view = getattr(self, '_applying_view', False)
+        self._applying_view = True
+        try:
+            self._view_bridge.apply_controls_from_state(
+                self.view_manager.get(idx), self, canvas
+            )
+        finally:
+            self._applying_view = old_applying_view
 
     def _switch_view(self, idx):
         if idx == self.view_manager.active:
             return
         if not (0 <= idx < len(self.view_manager.views)):
             return
-        self._capture_current_view()
-        if self.view_manager.split_with is not None:
-            self.view_manager.set_split(None)
+        self._capture_focused_view()
         self.view_manager.set_active(idx)
 
     def _apply_active_view(self, idx):
         if not (0 <= idx < len(self.view_manager.views)):
             return
-        state = self.view_manager.get(idx)
-        old_applying_view = getattr(self, '_applying_view', False)
-        self._applying_view = True
-        blocked = []
-        for widget in (
-            self.navigator,
-            self.channel_list,
-            self.chart_stack,
-            self.inspector,
-        ):
-            blocker = getattr(widget, 'blockSignals', None)
-            if callable(blocker):
-                blocked.append((blocker, blocker(True)))
-        try:
-            self._view_bridge.apply_view(state, self)
-            if self.files and self.chart_stack.current_mode() == 'time':
-                self.plot_time()
-                self._view_bridge.restore_axes(state, self)
-        finally:
-            self._applying_view = old_applying_view
-            for blocker, old in reversed(blocked):
-                blocker(old)
+        self._sync_pane_bindings_from_manager()
+        partner = self.view_manager.split_with
+        if partner is None:
+            self.chart_stack.exit_split()
+        else:
+            self.chart_stack.enter_split()
+            self._ensure_secondary_range_signal_connected()
+        self._focused_view_idx = idx
+        if self.files and self.chart_stack.current_mode() == 'time':
+            self._render_view_to_canvas(idx, self.canvas_time, update_primary_ui=True)
+            if partner is not None:
+                self._render_view_to_canvas(
+                    partner,
+                    self.chart_stack.secondary_canvas(),
+                    update_primary_ui=False,
+                )
+        else:
+            self._project_view_controls(idx)
 
     def _on_view_split(self, other_idx):
+        self._capture_focused_view()
+        self._sync_pane_bindings_from_manager()
         if other_idx is None:
             self.chart_stack.exit_split()
+            self._secondary_view_idx = None
+            self._focused_view_idx = self.view_manager.active
+            if self.files and self.chart_stack.current_mode() == 'time':
+                self._render_view_to_canvas(
+                    self.view_manager.active,
+                    self.canvas_time,
+                    update_primary_ui=True,
+                )
+            else:
+                self._project_view_controls(self.view_manager.active)
             return
         if not (0 <= other_idx < len(self.view_manager.views)):
             self.chart_stack.exit_split()
             return
 
-        self._capture_current_view()
         self.chart_stack.enter_split()
-        self._render_view_into(
-            self.view_manager.get(other_idx),
-            self.chart_stack.secondary_canvas(),
-        )
+        self._ensure_secondary_range_signal_connected()
+        self._focused_view_idx = self.view_manager.active
+        if self.files and self.chart_stack.current_mode() == 'time':
+            self._render_view_to_canvas(
+                self.view_manager.active, self.canvas_time, update_primary_ui=True
+            )
+            self._render_view_to_canvas(
+                other_idx, self.chart_stack.secondary_canvas(), update_primary_ui=False
+            )
+        else:
+            self._project_view_controls(self.view_manager.active)
 
-    def _render_view_into(self, state, canvas):
+    def _on_view_clear_split(self, idx):
+        self._capture_focused_view()
+        self.view_manager.clear_split_for(idx)
+
+    def _render_view_to_canvas(self, idx, canvas, *, update_primary_ui):
         if canvas is None:
             return
-        active_idx = self.view_manager.active
-        if not (0 <= active_idx < len(self.view_manager.views)):
+        if not (0 <= idx < len(self.view_manager.views)):
             return
+        state = self.view_manager.get(idx)
 
         cursor_pill_snapshot = self.chart_stack.cursor_pill_snapshot()
+        restore_idx = self._focused_view_idx
         old_applying_view = getattr(self, '_applying_view', False)
         self._applying_view = True
         try:
-            self._view_bridge.apply_view(state, self)
-            self._plot_time_on_canvas(canvas, update_primary_ui=False)
+            self._view_bridge.apply_controls_from_state(state, self, canvas)
+            self._plot_time_on_canvas(canvas, update_primary_ui=update_primary_ui)
             canvas.restore_visible_xlim(state.xlim)
             canvas.restore_visible_ylims(state.ylims)
             tick_opts = (state.axis_opts or {}).get('tick_density') or {}
@@ -495,7 +579,8 @@ class MainWindow(QMainWindow):
             )
         finally:
             self._applying_view = old_applying_view
-            self._apply_active_view(active_idx)
+            if restore_idx is not None:
+                self._project_view_controls(restore_idx)
             self.chart_stack.restore_cursor_pill_snapshot(cursor_pill_snapshot)
 
     def _on_view_new(self):
@@ -611,14 +696,12 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._plot_time_preserving_xlim)
 
     def _on_cursor_mode_changed(self, mode):
-        # Route to the focused time card's canvas (P2 Task 9 1a). Outside
-        # side-by-side compare focused_canvas() IS self.canvas_time, so the
-        # behaviour is byte-identical; while split is active the cursor
-        # toggle lands on whichever pane the user last clicked. The relay
-        # carrying ``mode`` here is the primary card's cursor segmented
-        # control; the secondary card has its own per-pane relay that drives
-        # _on_secondary_cursor_mode_changed below.
         canvas = self.chart_stack.focused_canvas()
+        idx = self._view_index_for_canvas(canvas)
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            state = self.view_manager.get(idx)
+            self._view_bridge.capture_controls_into(state, self, canvas)
+            state.cursor_mode = mode
         canvas.set_cursor_visible(mode != 'off')
         canvas.set_dual_cursor_mode(mode == 'dual')
 
@@ -651,7 +734,13 @@ class MainWindow(QMainWindow):
           per mode change. With the cache cleared, the first refresh
           tick AFTER ``set_xlim`` re-primes against the preserved xlim.
         """
-        self._plot_time_preserving_xlim()
+        canvas = self.chart_stack.focused_canvas()
+        idx = self._view_index_for_canvas(canvas)
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            state = self.view_manager.get(idx)
+            self._view_bridge.capture_controls_into(state, self, canvas)
+            state.plot_mode = mode
+        self._replot_canvas_for_view(idx, canvas)
 
     def _plot_time_preserving_xlim(self):
         cur_xlim = self._safe_capture_primary_xlim()
@@ -673,14 +762,26 @@ class MainWindow(QMainWindow):
         TimeDomain state-preservation lesson: keep the visible window when the
         new layout's extent still overlaps it."""
         canvas = self.chart_stack.secondary_canvas()
-        if canvas is None:
+        idx = self._view_index_for_canvas(canvas)
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            state = self.view_manager.get(idx)
+            self._view_bridge.capture_controls_into(state, self, canvas)
+        self._replot_canvas_for_view(idx, canvas)
+
+    def _replot_canvas_for_view(self, idx, canvas):
+        if idx is None or canvas is None:
             return
         cur_xlim = self._safe_capture_xlim_for(canvas)
         try:
-            self._plot_time_on_canvas(canvas, update_primary_ui=False)
+            self._render_view_to_canvas(
+                idx,
+                canvas,
+                update_primary_ui=(canvas is self.canvas_time),
+            )
         finally:
             if cur_xlim is not None:
                 self._safe_restore_xlim_for(canvas, cur_xlim)
+            self._capture_canvas_ranges_for_bound_view(canvas)
 
     def _on_primary_channel_requested(self, fid, ch):
         """User picked 设为左轴 on a channel. Make it the overlay primary
@@ -798,10 +899,20 @@ class MainWindow(QMainWindow):
         return True
 
     def _on_time_range_enabled_changed(self, enabled):
+        canvas = self.chart_stack.focused_canvas()
         if enabled:
-            self._sync_time_range_inputs_from_visible_xlim()
+            xlim = None
+            get_xlim = getattr(canvas, 'get_visible_xlim', None)
+            if callable(get_xlim):
+                xlim = get_xlim()
+            self._sync_time_range_inputs_from_visible_xlim(xlim)
+        idx = self._view_index_for_canvas(canvas)
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            self._view_bridge.capture_controls_into(
+                self.view_manager.get(idx), self, canvas
+            )
         if self.files and self.navigator.get_checked_channels():
-            self._plot_time_preserving_xlim()
+            self._replot_canvas_for_view(idx, canvas)
 
     def _on_annotation_enabled_changed(self, mode, enabled):
         if mode == 'fft':
@@ -812,7 +923,15 @@ class MainWindow(QMainWindow):
                 chk.blockSignals(False)
 
     def _update_all_tick_density_pair(self, xt, yt):
-        self.canvas_time.set_tick_density(xt, yt)
+        canvas = self.chart_stack.focused_canvas()
+        canvas.set_tick_density(xt, yt)
+        idx = self._view_index_for_canvas(canvas)
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            state = self.view_manager.get(idx)
+            self._view_bridge.capture_controls_into(state, self, canvas)
+            axis_opts = dict(state.axis_opts or {})
+            axis_opts['tick_density'] = {'x': int(xt), 'y': int(yt)}
+            state.axis_opts = axis_opts
         from matplotlib.ticker import MaxNLocator
         for ax in self.canvas_fft.fig.axes:
             ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
@@ -988,6 +1107,8 @@ class MainWindow(QMainWindow):
 
     def _apply_xaxis(self):
         """应用横坐标设置"""
+        canvas = self.chart_stack.focused_canvas()
+        idx = self._view_index_for_canvas(canvas)
         mode = self.inspector.top.xaxis_mode()
         if mode == 'time':
             self._custom_xlabel = self.inspector.top.xaxis_label() or None
@@ -1022,14 +1143,24 @@ class MainWindow(QMainWindow):
         # every (data_id, channel, xlim, pixel_width) entry is now stale.
         # Monotonicity cache is also re-keyed by the new fid/ch pair, so
         # wipe it to be safe.
-        self.canvas_time.invalidate_envelope_cache("custom-x changed")
-        self.canvas_time.invalidate_monotonicity_cache()
+        invalidate_envelope = getattr(canvas, 'invalidate_envelope_cache', None)
+        if callable(invalidate_envelope):
+            invalidate_envelope("custom-x changed")
+        invalidate_mono = getattr(canvas, 'invalidate_monotonicity_cache', None)
+        if callable(invalidate_mono):
+            invalidate_mono()
         # FFT vs Time cache: keep the existing conservative invalidation
         # when the shared top controls change plot semantics. Time range
         # itself remains tied to FileData.time_array.
         self._fft_time_cache.clear()
-        # 重新绘图
-        self.plot_time()
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            self._view_bridge.capture_controls_into(
+                self.view_manager.get(idx), self, canvas
+            )
+        if self.files and self.chart_stack.current_mode() == 'time':
+            self._replot_canvas_for_view(idx, canvas)
+        else:
+            self.plot_time()
         self.statusBar.showMessage(f"横坐标已更新")
         self.toast("横坐标已更新", "success")
 
@@ -1240,15 +1371,18 @@ class MainWindow(QMainWindow):
         self.inspector.order_ctx.set_rpm_candidates(rpm_cands)
 
     def _on_chart_focus_changed(self, secondary_focused):
-        """Side-by-side focus switched (P2 Task 9 Step 5). The focus border is
-        owned by ChartStack; here we only surface which pane now receives
-        channel-check replots. We deliberately do NOT replot on focus change:
-        the secondary holds a compare view's snapshot and must keep it until
-        the user actually toggles a channel, at which point _ch_changed routes
-        the replot to focused_canvas()."""
         if not self.chart_stack.split_active():
             return
-        which = "对比" if secondary_focused else "主"
+        self._capture_focused_view()
+        self.view_tabbar.set_split_focus(secondary_focused)
+        if secondary_focused:
+            self._focused_view_idx = self._secondary_view_idx
+            which = "对比"
+        else:
+            self._focused_view_idx = self._primary_view_idx
+            which = "主"
+        if self._focused_view_idx is not None:
+            self._project_view_controls(self._focused_view_idx)
         self.statusBar.showMessage(f"聚焦{which}视图：通道勾选将作用于此栏", 2000)
 
     def _ch_changed(self):
@@ -1258,11 +1392,16 @@ class MainWindow(QMainWindow):
         # the next plot_time() will re-prime as needed. (Outside split the
         # focused canvas IS self.canvas_time, so this is unchanged.)
         focused = self.chart_stack.focused_canvas()
+        idx = self._view_index_for_canvas(focused)
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            self._view_bridge.capture_controls_into(
+                self.view_manager.get(idx), self, focused
+            )
         invalidate = getattr(focused, 'invalidate_envelope_cache', None)
         if callable(invalidate):
             invalidate("selection changed")
         if self.files and self.chart_stack.current_mode() == 'time':
-            self._plot_time_preserving_xlim()
+            self._replot_canvas_for_view(idx, focused)
 
     def _restore_checked_channels(self, checked):
         self.channel_list.set_checked_channels(checked)

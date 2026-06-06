@@ -196,6 +196,27 @@ def test_switch_view_restores_screen_snapshot_state(qtbot, qapp, loaded_csv):
     _assert_ylims(w, view2_ylims)
 
 
+def test_bridge_can_capture_canvas_ranges_without_replacing_controls(
+    qtbot, qapp, loaded_csv
+):
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    fid = _fid(w)
+    _set_checked(w, "speed")
+    w.plot_time()
+    qapp.processEvents()
+
+    state = w.view_manager.get(0)
+    state.checked = [(fid, "speed")]
+    target = _narrow_xlim(w, 0.25, 0.50)
+    ylims = _set_distinct_ylims(w, 0.15)
+
+    w._view_bridge.capture_canvas_ranges_into(state, w.canvas_time)
+
+    assert state.checked == [(fid, "speed")]
+    assert state.xlim == pytest.approx(target)
+    assert set(state.ylims) == set(ylims)
+
+
 def test_duplicate_current_view_captures_latest_state(qtbot, qapp, loaded_csv):
     w = _make_loaded_window(qtbot, qapp, loaded_csv)
     fid = _fid(w)

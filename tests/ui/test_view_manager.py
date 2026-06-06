@@ -113,20 +113,67 @@ def test_reorder_moves_item_and_preserves_active_view(qtbot):
     assert m.active == 0
 
 
-def test_set_active_clears_split(qtbot):
+def test_set_split_creates_symmetric_pair_and_active_partner(qtbot):
+    m = make()
+    m.new_view()
+    m.set_active(0)
+
+    with qtbot.waitSignal(m.split_changed, timeout=100) as blocker:
+        m.set_split(1)
+
+    assert blocker.args == [1]
+    assert m.partner_for(0) == 1
+    assert m.partner_for(1) == 0
+    assert m.split_with == 1
+
+    # set_active must move active WITHOUT re-emitting split_changed; otherwise
+    # switching between paired views double-fires _on_view_split + _apply_active_view.
+    split_events = []
+    m.split_changed.connect(split_events.append)
+    with qtbot.waitSignal(m.active_changed, timeout=100) as blocker:
+        m.set_active(1)
+
+    assert blocker.args == [1]
+    assert split_events == []
+    assert m.split_with == 0
+    assert m.partner_for(0) == 1
+    assert m.partner_for(1) == 0
+
+
+def test_set_active_to_unpaired_view_hides_split_without_deleting_pair(qtbot):
+    m = make()
+    m.new_view()
+    m.new_view()
+    m.set_active(0)
+    m.set_split(1)
+
+    with qtbot.waitSignal(m.active_changed, timeout=100):
+        m.set_active(2)
+
+    assert m.split_with is None
+    assert m.partner_for(0) == 1
+    assert m.partner_for(1) == 0
+
+    with qtbot.waitSignal(m.active_changed, timeout=100):
+        m.set_active(0)
+
+    assert m.split_with == 1
+    assert m.partner_for(0) == 1
+    assert m.partner_for(1) == 0
+
+
+def test_clear_split_for_removes_pair_from_both_sides(qtbot):
     m = make()
     m.new_view()
     m.set_active(0)
     m.set_split(1)
-    assert m.split_with == 1
 
-    with qtbot.waitSignals(
-        [m.split_changed, m.active_changed],
-        timeout=100,
-        check_params_cbs=[lambda idx: idx is None, lambda idx: idx == 1],
-    ):
-        m.set_active(1)
+    with qtbot.waitSignal(m.split_changed, timeout=100) as blocker:
+        m.clear_split_for(1)
 
+    assert blocker.args == [None]
+    assert m.partner_for(0) is None
+    assert m.partner_for(1) is None
     assert m.split_with is None
 
 
@@ -146,6 +193,85 @@ def test_set_active_current_view_is_noop():
     assert m.split_with == 1
     assert active_events == []
     assert split_events == []
+
+
+def test_reorder_keeps_pair_with_view_objects(qtbot):
+    m = make()
+    m.new_view()
+    m.new_view()
+    m.views[0].name = "A"
+    m.views[1].name = "B"
+    m.views[2].name = "C"
+    m.set_active(0)
+    m.set_split(1)
+
+    with qtbot.waitSignal(m.views_changed, timeout=100):
+        m.reorder(0, 2)
+
+    names = [v.name for v in m.views]
+    a_idx = names.index("A")
+    b_idx = names.index("B")
+    assert m.partner_for(a_idx) == b_idx
+    assert m.partner_for(b_idx) == a_idx
+
+
+def test_delete_clears_pair_for_deleted_view_and_remaps_others(qtbot):
+    m = make()
+    m.new_view()
+    m.new_view()
+    m.set_active(0)
+    m.set_split(2)
+
+    with qtbot.waitSignal(m.views_changed, timeout=100):
+        m.delete_view(1)
+
+    assert len(m.views) == 2
+    assert m.partner_for(0) == 1
+    assert m.partner_for(1) == 0
+
+    with qtbot.waitSignals([m.views_changed, m.split_changed], timeout=100):
+        m.delete_view(1)
+
+    assert m.partner_for(0) is None
+    assert m.split_with is None
+
+
+def test_delete_unrelated_view_preserves_pair_without_split_signal(qtbot):
+    m = make()
+    m.new_view()
+    m.new_view()
+    m.set_active(0)
+    m.set_split(1)
+    split_events = []
+    m.split_changed.connect(split_events.append)
+
+    with qtbot.waitSignal(m.views_changed, timeout=100):
+        m.delete_view(2)
+
+    assert m.partner_for(0) == 1
+    assert m.partner_for(1) == 0
+    assert m.split_with == 1
+    assert split_events == []
+
+
+def test_duplicate_remaps_unrelated_pair_after_insert(qtbot):
+    m = make()
+    m.new_view()
+    m.new_view()
+    m.set_active(0)
+    m.set_split(2)
+
+    with qtbot.waitSignals(
+        [m.views_changed, m.active_changed],
+        timeout=100,
+        check_params_cbs=[None, lambda idx: idx == 1],
+    ):
+        m.duplicate(0)
+
+    assert len(m.views) == 4
+    assert m.partner_for(0) == 3
+    assert m.partner_for(3) == 0
+    assert m.partner_for(1) is None
 
 
 def test_set_split_rejects_self():

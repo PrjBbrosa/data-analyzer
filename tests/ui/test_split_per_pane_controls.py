@@ -208,6 +208,37 @@ def test_shared_plot_mode_control_targets_focused_secondary(
     assert cs.canvas_time._overlay_mode == primary_overlay_before
 
 
+def test_secondary_plot_mode_toggle_uses_secondary_view_state_not_active(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+
+    # Move to View 1 (torque), then merge View 0 (speed) into it.
+    w._switch_view(1)
+    qapp.processEvents()
+    w.view_manager.set_split(0)
+    qapp.processEvents()
+
+    assert _has_channel(cs.canvas_time, "torque")
+    assert not _has_channel(cs.canvas_time, "speed")
+    assert _has_channel(cs.secondary_canvas(), "speed")
+    assert not _has_channel(cs.secondary_canvas(), "torque")
+
+    _click_card(qapp, cs._secondary_card)
+    assert cs.focused_canvas() is cs.secondary_canvas()
+
+    # Toggle the focused secondary pane layout through the shared control.
+    cs._time_card.set_plot_mode("overlay")
+    qapp.processEvents()
+
+    assert cs._secondary_card.plot_mode() == "overlay"
+    assert _has_channel(cs.secondary_canvas(), "speed")
+    assert not _has_channel(cs.secondary_canvas(), "torque")
+    assert _has_channel(cs.canvas_time, "torque")
+    assert not _has_channel(cs.canvas_time, "speed")
+
+
 def test_programmatic_primary_plot_mode_does_not_rewrite_focused_secondary(
     qtbot, qapp, loaded_csv
 ):
