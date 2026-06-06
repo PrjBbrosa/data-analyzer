@@ -283,3 +283,180 @@ class TestDragSnap:
         assert [value for value, _label in major] == pytest.approx([
             lo + k * per_div for k in range(n + 1)
         ])
+
+
+class _FakeBox:
+    """Minimal MouseDragEvent stand-in for the box-zoom override.
+
+    Only ``button()``, ``isStart()``, and ``isFinish()`` are read by
+    ``_ModifierWheelViewBox.mouseDragEvent`` once super() is stubbed out.
+    """
+
+    def __init__(self, button, *, start=False, finish=False):
+        self._button = button
+        self._start = start
+        self._finish = finish
+
+    def button(self):
+        return self._button
+
+    def isStart(self):
+        return self._start
+
+    def isFinish(self):
+        return self._finish
+
+
+class TestOverlayBoxZoom:
+    """Box-zoom (RectMode rubber band) in overlay must zoom shared X +
+    the selected channel's Y, keep the X-master Y locked to [0, 1] so the
+    graticule never collapses (2026-06-06 grid-redraw-after-zoom fix)."""
+
+    def _overlay(self, qapp, select="ch0"):
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 256)
+        rows = [
+            ("ch0", True, t, 2.0 * np.sin(2 * np.pi * t), "#1769e0", "V", "fid-0"),
+            ("ch1", True, t, 0.5 * np.cos(2 * np.pi * 3 * t), "#e07b17", "A", "fid-1"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        if select is not None:
+            canvas.select_overlay_channel(select)
+        return canvas
+
+    def test_box_zoom_locks_xmaster_y_and_zooms_selected_channel(self, qapp):
+        from PyQt5.QtCore import QCoreApplication, QPointF, QRectF
+
+        canvas = self._overlay(qapp, select="ch0")
+        ax0 = canvas._channel_lines["ch0"][0]
+        ax1 = canvas._channel_lines["ch1"][0]
+        ax0.set_ylim(0.0, 100.0)
+        QCoreApplication.processEvents()
+        ch1_before = ax1.get_ylim()
+        n_lines_before = len(canvas._overlay_grid_lines)
+
+        xm = canvas._x_master_handle.view_box
+        # Simulate the rubber-band finish exactly like pyqtgraph does: a
+        # rect spanning a sub-region of both X and the [0, 1] graticule Y.
+        xm.showAxRect(QRectF(QPointF(0.2, 0.3), QPointF(0.6, 0.7)))
+        QCoreApplication.processEvents()
+        # Sanity: showAxRect did pull the X-master Y off [0, 1] (the bug).
+        assert xm.viewRange()[1] != pytest.approx((0.0, 1.0))
+
+        canvas._apply_overlay_box_zoom_y()
+        QCoreApplication.processEvents()
+
+        # X-master Y is re-locked → graticule lines all back in view.
+        assert xm.viewRange()[1] == pytest.approx((0.0, 1.0), abs=1e-6)
+        assert len(canvas._overlay_grid_lines) == n_lines_before
+        # X stayed zoomed (handler must not touch shared X).
+        assert xm.viewRange()[0] != pytest.approx((0.0, 1.0))
+        # Selected channel zoomed into the box sub-range (~[30, 70]).
+        lo0, hi0 = ax0.get_ylim()
+        assert lo0 >= 0.0 - 1e-6 and hi0 <= 100.0 + 1e-6
+        assert (hi0 - lo0) < 100.0 * 0.9
+        assert lo0 < 35.0 and hi0 > 65.0
+        # Unselected channel untouched.
+        assert ax1.get_ylim() == pytest.approx(ch1_before)
+
+    def test_box_zoom_no_selection_is_x_only(self, qapp):
+        from PyQt5.QtCore import QCoreApplication, QPointF, QRectF
+
+        canvas = self._overlay(qapp, select=None)
+        canvas.select_overlay_channel(None)
+        ax0 = canvas._channel_lines["ch0"][0]
+        ax1 = canvas._channel_lines["ch1"][0]
+        ax0.set_ylim(0.0, 100.0)
+        QCoreApplication.processEvents()
+        c0_before, c1_before = ax0.get_ylim(), ax1.get_ylim()
+
+        xm = canvas._x_master_handle.view_box
+        xm.showAxRect(QRectF(QPointF(0.2, 0.3), QPointF(0.6, 0.7)))
+        canvas._apply_overlay_box_zoom_y()
+        QCoreApplication.processEvents()
+
+        assert xm.viewRange()[1] == pytest.approx((0.0, 1.0), abs=1e-6)
+        assert ax0.get_ylim() == pytest.approx(c0_before)
+        assert ax1.get_ylim() == pytest.approx(c1_before)
+
+    def test_box_zoom_override_calls_y_handler_only_on_xmaster_finish(
+        self, qapp, monkeypatch,
+    ):
+        import pyqtgraph as pg
+
+        canvas = self._overlay(qapp, select="ch0")
+        xm_vb = canvas._x_master_handle.view_box
+        xm_vb.setMouseMode(pg.ViewBox.RectMode)
+        monkeypatch.setattr(
+            pg.ViewBox, "mouseDragEvent",
+            lambda self, ev, axis=None: None,
+        )
+        calls = []
+        monkeypatch.setattr(
+            canvas, "_apply_overlay_box_zoom_y", lambda: calls.append(1),
+        )
+
+        xm_vb.mouseDragEvent(_FakeBox(Qt.LeftButton, finish=True), axis=None)
+        assert calls == [1], "RectMode finish on X-master must apply box-zoom Y"
+
+        calls.clear()
+        xm_vb.mouseDragEvent(_FakeBox(Qt.LeftButton, start=True), axis=None)
+        assert calls == [], "drag start (non-finish) must not apply box-zoom Y"
+
+        calls.clear()
+        aux_vb = canvas._overlay_aux_viewboxes[0]
+        aux_vb.setMouseMode(pg.ViewBox.RectMode)
+        aux_vb.mouseDragEvent(_FakeBox(Qt.LeftButton, finish=True), axis=None)
+        assert calls == [], "box-zoom Y handler must fire only for the X-master"
+
+
+class TestAnimatedSnap:
+    """Drag-release snap should glide to the nice graticule (animated),
+    not jump instantly (2026-06-06 release-snap smoothing)."""
+
+    def _sel(self, qapp):
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 256)
+        rows = [
+            ("ch0", True, t, 2.0 * np.sin(2 * np.pi * t), "#1769e0", "V", "fid-0"),
+            ("ch1", True, t, 0.4 * np.cos(2 * np.pi * 3 * t), "#e07b17", "A", "fid-1"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        canvas.select_overlay_channel("ch0")
+        return canvas
+
+    def test_release_with_anim_disabled_snaps_immediately(self, qapp):
+        from unittest.mock import MagicMock
+
+        canvas = self._sel(qapp)
+        ax0 = canvas._channel_lines["ch0"][0]
+        ax0.set_ylim(-1.731, 2.169)
+        canvas._snap_anim_ms = 0
+        canvas._overlay_dragging = True
+        canvas._begin_overlay_y_drag_at(start_y_px=100.0)
+        canvas._handle_overlay_mouse_release(MagicMock())
+
+        lo, hi = ax0.get_ylim()
+        n = canvas._overlay_divisions
+        per_div = (hi - lo) / n
+        assert abs(lo / per_div - round(lo / per_div)) < 1e-6
+        assert abs(hi / per_div - round(hi / per_div)) < 1e-6
+
+    def test_release_with_anim_does_not_jump_instantly(self, qapp):
+        from unittest.mock import MagicMock
+
+        canvas = self._sel(qapp)
+        ax0 = canvas._channel_lines["ch0"][0]
+        ax0.set_ylim(-1.731, 2.169)
+        canvas._snap_anim_ms = 150
+        canvas._overlay_dragging = True
+        canvas._begin_overlay_y_drag_at(start_y_px=100.0)
+        canvas._handle_overlay_mouse_release(MagicMock())
+
+        # The curve is still where the user dropped it; the snap glides in.
+        assert ax0.get_ylim() == pytest.approx((-1.731, 2.169), abs=0.06)
+        assert canvas._snap_anim is not None

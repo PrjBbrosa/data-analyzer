@@ -2156,6 +2156,11 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         QCoreApplication.processEvents()
         return consumed
 
+    def _axis_center_point(self, canvas, channel):
+        axis = canvas._channel_lines[channel][0].y_axis_item()
+        rect = axis.sceneBoundingRect()
+        return canvas._glw.mapFromScene(rect.center())
+
     def test_press_on_nearest_curve_selects_that_channel(self, qapp):
         """A press within the 12px pick radius of a curve selects it."""
         canvas = self._overlay_canvas(qapp)
@@ -2363,20 +2368,50 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
             canvas, handle, float(xdata[idx]), float(ydata[idx])
         )
 
-        # Before: X-master pan enabled.
-        assert master_vb.state["mouseEnabled"][0] is True
+        # Before: X-master allows shared-X panning only; its [0, 1] Y
+        # graticule must never be mouse-draggable.
+        assert master_vb.state["mouseEnabled"] == [True, False]
 
         self._press(canvas, qapp, start)
         assert canvas._overlay_dragging is True
-        assert master_vb.state["mouseEnabled"][0] is False, (
-            "X-master pan must be disabled during a Y-drag"
+        assert master_vb.state["mouseEnabled"] == [False, False], (
+            "X-master mouse must be disabled during a selected-channel Y-drag"
         )
 
         from PyQt5.QtCore import QPoint
         self._release(canvas, qapp, QPoint(start.x(), start.y() + 30))
-        assert master_vb.state["mouseEnabled"][0] is True, (
-            "X-master pan must be restored after the drag ends"
+        assert master_vb.state["mouseEnabled"] == [True, False], (
+            "X-master X pan must be restored without enabling graticule Y-drag"
         )
+
+    def test_overlay_y_axis_gutter_drag_moves_that_channel_only(self, qapp):
+        """Dragging a channel's own Y-axis/tick gutter should move that
+        channel even when the press is not on the curve body."""
+        from PyQt5.QtCore import QPoint
+
+        canvas = self._overlay_canvas(qapp)
+        speed = canvas._channel_lines["speed"][0]
+        torque = canvas._channel_lines["torque"][0]
+        speed.set_ylim(-1500.0, 1500.0)
+        torque.set_ylim(40.0, 60.0)
+
+        start = self._axis_center_point(canvas, "torque")
+        speed_before = speed.get_ylim()
+        torque_before = torque.get_ylim()
+        master_y_before = canvas._primary_xaxis_ax.get_ylim()
+
+        consumed = self._press(canvas, qapp, start)
+        assert consumed is True
+        assert canvas._selected_overlay_channel == "torque"
+        assert canvas._overlay_dragging is True
+
+        moved = QPoint(start.x(), start.y() + 60)
+        assert self._move(canvas, qapp, moved) is True
+        self._release(canvas, qapp, moved)
+
+        assert torque.get_ylim() != pytest.approx(torque_before)
+        assert speed.get_ylim() == pytest.approx(speed_before)
+        assert canvas._primary_xaxis_ax.get_ylim() == pytest.approx(master_y_before)
 
     def test_overlay_press_ignored_in_cursor_mode(self, qapp):
         """Cursor mode takes precedence over overlay selection
@@ -5544,6 +5579,9 @@ class TestOverlayYSnapToGrid:
         QCoreApplication.processEvents()
         canvas._begin_overlay_y_drag_at(start_y_px=100.0)
         canvas._overlay_dragging = True
+        # Synchronous snap path (no animation) keeps this a single-call
+        # contract; the animated path is covered in test_overlay_grid_ticks.
+        canvas._snap_anim_ms = 0
 
         snap_calls = []
         monkeypatch.setattr(

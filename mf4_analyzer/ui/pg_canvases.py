@@ -65,7 +65,14 @@ from typing import Tuple
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
+from PyQt5.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QTimer,
+    QVariantAnimation,
+    Qt,
+    pyqtSignal,
+)
 from PyQt5.QtGui import (
     QFont,
     QFontDatabase,
@@ -850,6 +857,22 @@ class _ModifierWheelViewBox(pg.ViewBox):
             except Exception:
                 pass
         super().mouseDragEvent(ev, axis=axis)
+        # Overlay box-zoom (2026-06-06 grid-redraw-after-zoom): the base
+        # RectMode finish ignores ``mouseEnabled`` and pulls the X-master Y
+        # off [0, 1], collapsing the fixed k/N graticule to 2-3 lines. After
+        # the rubber band lands on the X-master, re-lock its Y to [0, 1] and
+        # redirect the box's Y span onto the selected channel.
+        if is_rect_left_2d:
+            try:
+                is_xmaster = (
+                    getattr(owner, "_overlay_mode", False)
+                    and getattr(owner, "_x_master_handle", None) is not None
+                    and owner._x_master_handle.view_box is self
+                )
+                if is_xmaster and ev.isFinish():
+                    owner._apply_overlay_box_zoom_y()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -1218,6 +1241,11 @@ class TimeDomainCanvasPG(QWidget):
         # release. While True the X-master ViewBox's mouse pan is disabled
         # so the curve Y-drag does not fight the default ViewBox pan.
         self._overlay_dragging = False
+        # Drag-release snap animation: glide the channel to the nice
+        # graticule over ``_snap_anim_ms`` instead of jumping instantly
+        # (2026-06-06 release-snap smoothing). ms<=0 → synchronous snap.
+        self._snap_anim = None
+        self._snap_anim_ms = 150
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
         self._overlay_view_sync_conns = []
@@ -2158,6 +2186,7 @@ class TimeDomainCanvasPG(QWidget):
         try:
             vb.enableAutoRange(axis="y", enable=False)
             vb.setYRange(0.0, 1.0, padding=0)
+            vb.setMouseEnabled(x=True, y=False)
         except Exception:
             pass
 
@@ -2215,17 +2244,25 @@ class TimeDomainCanvasPG(QWidget):
                 pass
 
     def _snap_overlay_channel_to_grid(self, ax):
-        """Re-frame a dragged overlay channel to the nice graticule."""
+        """Snap a dragged overlay channel to its current graticule span."""
         if ax is None:
             return
         try:
             lo, hi = ax.get_ylim()
         except Exception:
             return
-        if not (hi - lo > 0):
+        span = hi - lo
+        if not (math.isfinite(span) and span > 0):
             return
         n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
-        bottom, top, ticks = _frame_to_nice(lo, hi, n)
+        per_div = span / n
+        if not (math.isfinite(per_div) and per_div > 0):
+            return
+        bottom = round(lo / per_div) * per_div
+        if abs(bottom) < per_div * 1e-10:
+            bottom = 0.0
+        top = bottom + span
+        ticks = [bottom + k * per_div for k in range(n + 1)]
         try:
             ax.set_ylim(bottom, top)
             axis = ax.y_axis_item() if hasattr(ax, "y_axis_item") else None
@@ -2234,6 +2271,160 @@ class TimeDomainCanvasPG(QWidget):
                 axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
         except Exception:
             pass
+
+    def _pin_channel_ticks_at(self, ax, lo, hi):
+        """Set ``ax`` to [lo, hi] and pin its k/N ticks at the current span.
+
+        Used per animation frame so the labels glide on the graticule lines
+        with the curve instead of snapping at the very end.
+        """
+        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        per_div = (hi - lo) / n
+        ticks = [lo + k * per_div for k in range(n + 1)]
+        try:
+            ax.set_ylim(lo, hi)
+            axis = ax.y_axis_item() if hasattr(ax, "y_axis_item") else None
+            if axis is not None:
+                axis.setStyle(maxTickLevel=0)
+                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+        except Exception:
+            pass
+
+    def _stop_snap_anim(self):
+        """Stop any in-flight drag-release snap animation."""
+        anim = getattr(self, "_snap_anim", None)
+        if anim is not None:
+            try:
+                anim.stop()
+            except Exception:
+                pass
+            self._snap_anim = None
+
+    def _animate_overlay_snap(self, ax):
+        """Glide ``ax`` from its dragged position to the nice graticule.
+
+        Keeps the dragged span and snaps ``bottom`` to the nearest grid
+        multiple (same target as ``_snap_overlay_channel_to_grid``), but
+        eases there over ``_snap_anim_ms`` so the release is not a jump.
+        ``_snap_anim_ms <= 0`` (or an already-aligned channel) snaps
+        synchronously.
+        """
+        if ax is None:
+            return
+        self._stop_snap_anim()
+        try:
+            lo, hi = ax.get_ylim()
+        except Exception:
+            return
+        span = hi - lo
+        if not (math.isfinite(span) and span > 0):
+            return
+        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        per_div = span / n
+        if not (math.isfinite(per_div) and per_div > 0):
+            return
+        bottom = round(lo / per_div) * per_div
+        if abs(bottom) < per_div * 1e-10:
+            bottom = 0.0
+        top = bottom + span
+        duration = int(getattr(self, "_snap_anim_ms", 150))
+        # No visible move, or animation disabled → snap synchronously.
+        if duration <= 0 or abs(bottom - lo) < per_div * 1e-6:
+            self._snap_overlay_channel_to_grid(ax)
+            return
+
+        start_lo, start_hi = lo, hi
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(duration)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def _on_value(frac):
+            try:
+                f = float(frac)
+            except Exception:
+                return
+            cur_lo = start_lo + (bottom - start_lo) * f
+            cur_hi = start_hi + (top - start_hi) * f
+            self._pin_channel_ticks_at(ax, cur_lo, cur_hi)
+            self._refresh = True
+            self.draw_idle()
+
+        def _on_finished():
+            self._snap_overlay_channel_to_grid(ax)
+            self._snap_anim = None
+            self._refresh = True
+            self.draw_idle()
+
+        anim.valueChanged.connect(_on_value)
+        anim.finished.connect(_on_finished)
+        self._snap_anim = anim
+        anim.start()
+
+    def _apply_overlay_box_zoom_y(self):
+        """Re-lock the X-master Y to [0, 1] after a RectMode box-zoom and
+        redirect the box's Y span onto the selected channel.
+
+        pyqtgraph's RectMode ``setRange`` ignores ``mouseEnabled`` and pulls
+        the X-master Y to the box sub-range, collapsing the fixed k/N
+        graticule. The shared X stays as the base class zoomed it; here we
+        read the box's Y fraction (in [0, 1] graticule space), restore the
+        grid, and frame the selected channel into that fraction.
+        """
+        if not getattr(self, "_overlay_mode", False):
+            return
+        master = self._x_master_handle
+        if master is None:
+            return
+        vb = getattr(master, "view_box", None)
+        if vb is None:
+            return
+        try:
+            y0, y1 = vb.viewRange()[1]
+        except Exception:
+            return
+        already_locked = abs(y0 - 0.0) < 1e-9 and abs(y1 - 1.0) < 1e-9
+        if not already_locked:
+            try:
+                vb.enableAutoRange(axis="y", enable=False)
+                vb.setYRange(0.0, 1.0, padding=0)
+            except Exception:
+                pass
+        sel = self._selected_overlay_axes()
+        if sel is None or already_locked:
+            # No channel to receive the Y zoom (or the box had no Y span):
+            # X-only zoom, graticule already restored above.
+            self._refresh = True
+            self.draw_idle()
+            return
+        f0 = max(0.0, min(1.0, min(y0, y1)))
+        f1 = max(0.0, min(1.0, max(y0, y1)))
+        if f1 - f0 < 1e-6:
+            self._refresh = True
+            self.draw_idle()
+            return
+        try:
+            clo, chi = sel.get_ylim()
+        except Exception:
+            return
+        cspan = chi - clo
+        if not (math.isfinite(cspan) and cspan > 0):
+            return
+        new_lo = clo + f0 * cspan
+        new_hi = clo + f1 * cspan
+        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
+        try:
+            sel.set_ylim(bottom, top)
+            axis = sel.y_axis_item() if hasattr(sel, "y_axis_item") else None
+            if axis is not None:
+                axis.setStyle(maxTickLevel=0)
+                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+        except Exception:
+            pass
+        self._refresh = True
+        self.draw_idle()
 
     def _teardown_overlay_aux_viewboxes(self):
         """Remove every overlay aux ViewBox, its child curves, and the
@@ -2747,11 +2938,32 @@ class TimeDomainCanvasPG(QWidget):
                 return name
         return None
 
-    def _set_x_master_mouse_enabled(self, enabled):
-        """Toggle the X-master ViewBox's mouse pan.
+    def _overlay_axis_handle_at_scene_pos(self, scene_pos):
+        """Return the overlay channel whose Y-axis gutter contains scene_pos."""
+        if scene_pos is None:
+            return None
+        handles = list(self.axes_list)
+        selected = self._selected_overlay_axes()
+        if selected is not None:
+            handles = [selected] + [h for h in handles if h is not selected]
+        for handle in handles:
+            axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
+            if axis is None:
+                continue
+            try:
+                rect = axis.sceneBoundingRect()
+                if rect.contains(scene_pos):
+                    return handle
+            except Exception:
+                continue
+        return None
 
-        Disabled for the duration of an overlay Y-drag so the curve drag
-        does not also pan the shared X via the default ViewBox handler.
+    def _set_x_master_mouse_enabled(self, enabled):
+        """Toggle the X-master ViewBox's mouse interaction.
+
+        X is enabled in normal overlay interaction so users can pan time.
+        Y stays disabled permanently because the X-master owns the fixed
+        [0, 1] graticule, not channel data.
         """
         master = self._x_master_handle
         if master is None:
@@ -2760,7 +2972,7 @@ class TimeDomainCanvasPG(QWidget):
         if vb is None:
             return
         try:
-            vb.setMouseEnabled(x=bool(enabled), y=bool(enabled))
+            vb.setMouseEnabled(x=bool(enabled), y=False)
         except Exception:
             pass
 
@@ -2806,10 +3018,25 @@ class TimeDomainCanvasPG(QWidget):
             viewport_pos = event.pos()
         except Exception:
             return False
+        # A new interaction interrupts any in-flight drag-release glide.
+        self._stop_snap_anim()
         scene_pos = self._viewport_pos_to_scene(viewport_pos)
         # Fix A: in box-zoom mode let the rubber band own the left press.
         if self._press_view_box_in_rect_mode(scene_pos):
             return False
+        axis_handle = self._overlay_axis_handle_at_scene_pos(scene_pos)
+        if axis_handle is not None:
+            name = self._channel_name_for_handle(axis_handle)
+            if name is None:
+                return False
+            self.select_overlay_channel(name)
+            start_y = self._scene_y_from_viewport_pos(viewport_pos)
+            if start_y is not None:
+                self._begin_overlay_y_drag_at(start_y_px=start_y)
+                self._overlay_dragging = True
+                self.disable_interactive_quality()
+                self._set_x_master_mouse_enabled(False)
+            return True
         name = self._select_overlay_channel_from_scene_pos(scene_pos)
         if name is None:
             # Blank-area click → deselect (emits overlay_channel_selected(None)
@@ -2853,9 +3080,11 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_dragging = False
         self._overlay_y_drag_start = None
         self._set_x_master_mouse_enabled(True)
-        # Snap the selected channel center to the nearest grid division.
+        # Glide the selected channel to the nearest grid division (animated
+        # so the release is not a jump; falls back to a synchronous snap
+        # when _snap_anim_ms <= 0 or the channel is already aligned).
         selected_ax = self._selected_overlay_axes()
-        self._snap_overlay_channel_to_grid(selected_ax)
+        self._animate_overlay_snap(selected_ax)
         self.schedule_idle_quality()
         return True
 
