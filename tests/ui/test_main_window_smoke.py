@@ -636,6 +636,7 @@ def test_time_range_fields_track_current_visible_xlim_when_unchecked(
 
     primary = w.canvas_time._primary_xaxis_ax
     primary.set_xlim(0.2, 0.6)
+    w.canvas_time._flush_pending_refresh()
     qapp.processEvents()
 
     lo, hi = w.inspector.top.range_values()
@@ -653,6 +654,7 @@ def test_checking_time_range_uses_current_visible_xlim_without_manual_entry(
 
     primary = w.canvas_time._primary_xaxis_ax
     primary.set_xlim(0.2, 0.6)
+    w.canvas_time._flush_pending_refresh()
     qapp.processEvents()
 
     w.inspector.top.chk_range.setChecked(True)
