@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>合并标签色块预览</title>
+<style>
+  :root{ --view1:#2d7ff9; --view2:#e8590c; --line:#e4e8ef; --ink:#1f2733; --muted:#8a94a6; }
+  *{box-sizing:border-box;}
+  body{margin:0;background:#f4f6f9;color:var(--ink);padding:24px;
+       font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
+  h1{font-size:18px;margin:0 0 4px;}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:13px;}
+  .sub b{color:var(--ink);}
+  .variant{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px;
+           box-shadow:0 4px 16px rgba(20,30,50,.05);}
+  .vh{font-size:14px;font-weight:600;margin:0 0 2px;}
+  .vd{color:var(--muted);font-size:12.5px;margin:0 0 12px;}
+  .row{display:flex;align-items:center;gap:28px;}
+
+  /* tab bar mock */
+  .tabs{display:flex;gap:6px;align-items:flex-end;}
+  .tab{display:inline-flex;align-items:center;gap:7px;padding:6px 13px;border-radius:8px 8px 0 0;
+       border:1px solid var(--line);border-bottom:none;background:#fff;font-size:13px;}
+  .tab.active{background:#eef4ff;box-shadow:inset 0 -2px 0 #2d7ff9;}
+  .dot{width:14px;height:9px;border-radius:3px;border:1px solid rgba(0,0,0,.18);}
+
+  /* zoom */
+  .zoom{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:12px;}
+  .dotbig{width:70px;height:46px;border-radius:10px;border:1px solid rgba(0,0,0,.18);}
+
+  /* fills */
+  .solid1{background:var(--view1);}
+  .solid2{background:var(--view2);}
+  .lr{background:linear-gradient(90deg, var(--view2) 0 50%, var(--view1) 50% 100%);}
+  .diag{background:linear-gradient(125deg, var(--view2) 0 50%, var(--view1) 50% 100%);}
+  .badge{background:var(--view2);position:relative;overflow:hidden;}
+  .badge::after{content:"";position:absolute;right:0;top:0;bottom:0;width:38%;background:var(--view1);}
+  .badgebig{background:var(--view2);position:relative;overflow:hidden;}
+  .badgebig::after{content:"";position:absolute;right:0;top:0;bottom:0;width:38%;background:var(--view1);}
+
+  .note{color:var(--muted);font-size:12.5px;margin-top:4px;}
+  code{background:#eef1f6;border:1px solid var(--line);border-radius:5px;padding:1px 6px;}
+</style>
+</head>
+<body>
+  <h1>合并标签色块 —— host 含 source 的显示</h1>
+  <p class="sub">场景：在 <b>View 2</b> 上合并了 <b>View 1</b>（View 2 = host，含 2+1；View 1 = source，仍单色）。下面是 host 色块 <b>View 2</b> 的三种分色法，每个都配大图放大看。</p>
+
+  <!-- A 左右对半 -->
+  <div class="variant">
+    <p class="vh">A · 左右对半（你描述的「一半橙一半蓝」）</p>
+    <p class="vd">host 自己色在左、合并进来的色在右，50/50。最直白。</p>
+    <div class="row">
+      <div class="tabs">
+        <span class="tab"><span class="dot solid1"></span>View 1</span>
+        <span class="tab active"><span class="dot lr"></span>View 2</span>
+      </div>
+      <div class="zoom">放大 → <span class="dotbig lr"></span></div>
+    </div>
+  </div>
+
+  <!-- B 斜分 -->
+  <div class="variant">
+    <p class="vh">B · 斜分</p>
+    <p class="vd">斜线分割，视觉上更「融合」一点；小尺寸下两色面积更接近。</p>
+    <div class="row">
+      <div class="tabs">
+        <span class="tab"><span class="dot solid1"></span>View 1</span>
+        <span class="tab active"><span class="dot diag"></span>View 2</span>
+      </div>
+      <div class="zoom">放大 → <span class="dotbig diag"></span></div>
+    </div>
+  </div>
+
+  <!-- C 主色+角条 -->
+  <div class="variant">
+    <p class="vh">C · 主色为主 + 右侧细条</p>
+    <p class="vd">host 自己色仍占主导，只在右侧露一条 source 色。更含蓄，强调「这还是 View 2，只是带了个伴」。</p>
+    <div class="row">
+      <div class="tabs">
+        <span class="tab"><span class="dot badge"></span>View 1</span>
+        <span class="tab active"><span class="dot badgebig" style="width:14px;height:9px;border-radius:3px;"></span>View 2</span>
+      </div>
+      <div class="zoom">放大 → <span class="dotbig badgebig"></span></div>
+    </div>
+  </div>
+
+  <p class="note">说明：只有 host（含合并的那个）色块分色；source（View 1）保持纯色。取消合并后 host 恢复纯色。
+  实现点：<code>_tab_color_pixmap(host_color, partner_color=...)</code> + <code>refresh()</code> 里按 <code>partner_for(idx)</code> 传 partner 色。</p>
+</body>
+</html>

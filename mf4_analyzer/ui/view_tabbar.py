@@ -6,8 +6,8 @@ the integration layer.
 """
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PyQt5.QtCore import QEvent, QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -92,8 +92,38 @@ class ViewTabBar(QWidget):
 
         manager.views_changed.connect(self.refresh)
         manager.active_changed.connect(self._sync_active)
-        manager.split_changed.connect(lambda _idx: self._update_split_chip())
+        manager.split_changed.connect(self._on_manager_split_changed)
         self.refresh()
+
+    def _on_manager_split_changed(self, _idx) -> None:
+        # Merge created/cancelled: update the status chip AND re-tint tab dots
+        # (host gains a half partner-color swatch; cancel restores solid).
+        self._update_split_chip()
+        self._refresh_tab_swatches()
+
+    def _partner_color_for(self, idx: int):
+        """Return the partner View's tab color when ``idx`` is a merge host,
+        else None. Only hosts get a split dot; source Views stay solid."""
+        partner_for = getattr(self._manager, "partner_for", None)
+        if not callable(partner_for):
+            return None
+        partner = partner_for(idx)
+        if partner is None:
+            return None
+        try:
+            return self._manager.get(partner).tab_color
+        except Exception:
+            return None
+
+    def _refresh_tab_swatches(self) -> None:
+        if self._reordering:
+            return
+        count = min(self._tabs.count(), len(self._manager.views))
+        for idx in range(count):
+            view = self._manager.views[idx]
+            self._tabs.setTabIcon(
+                idx, _tab_color_icon(view.tab_color, self._partner_color_for(idx))
+            )
 
     def count(self) -> int:
         return self._tabs.count()
@@ -115,8 +145,11 @@ class ViewTabBar(QWidget):
         try:
             while self._tabs.count():
                 self._tabs.removeTab(0)
-            for view in self._manager.views:
-                idx = self._tabs.addTab(_tab_color_icon(view.tab_color), view.name)
+            for view_idx, view in enumerate(self._manager.views):
+                icon = _tab_color_icon(
+                    view.tab_color, self._partner_color_for(view_idx)
+                )
+                idx = self._tabs.addTab(icon, view.name)
                 self._tabs.setTabData(idx, view.tab_color)
                 self._tabs.setTabToolTip(idx, view.name)
             self._set_current_index(self._manager.active)
@@ -345,10 +378,14 @@ class ViewTabBar(QWidget):
         return 0 <= idx < self._tabs.count()
 
 
-def _tab_color_pixmap(hex_color: str, ratio=None) -> QPixmap:
+def _tab_color_pixmap(hex_color: str, ratio=None, partner_color=None) -> QPixmap:
     """Render the View-tab color dot at ``ratio x`` physical resolution and tag
     it with that devicePixelRatio so Retina screens paint it crisp instead of
-    upscaling a 1x bitmap (the source of the jagged tab dots)."""
+    upscaling a 1x bitmap (the source of the jagged tab dots).
+
+    When ``partner_color`` is given the dot is split left (own color) / right
+    (partner color) with a thin white gap, marking a merge HOST that contains
+    the partner View. The partner (source) View keeps a solid dot."""
     color = QColor(hex_color)
     if not color.isValid():
         color = QColor("#2d7ff9")
@@ -361,13 +398,37 @@ def _tab_color_pixmap(hex_color: str, ratio=None) -> QPixmap:
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing, True)
-    painter.setPen(QPen(color.darker(115), 1))
-    painter.setBrush(color)
+
     # Logical coordinates; the painter is scaled by devicePixelRatio.
-    painter.drawRoundedRect(1, 3, 10, 6, 2, 2)
+    partner = QColor(partner_color) if partner_color else None
+    if partner is not None and partner.isValid():
+        rect = QRectF(1, 3, 10, 6)
+        clip = QPainterPath()
+        clip.addRoundedRect(rect, 2, 2)
+        painter.save()
+        painter.setClipPath(clip)
+        mid = rect.center().x()
+        painter.fillRect(
+            QRectF(rect.left(), rect.top(), mid - rect.left(), rect.height()), color
+        )
+        painter.fillRect(
+            QRectF(mid, rect.top(), rect.right() - mid, rect.height()), partner
+        )
+        # Thin white gap so the two halves read as distinct (not fully joined).
+        painter.fillRect(
+            QRectF(mid - 0.5, rect.top(), 1.0, rect.height()), QColor("#ffffff")
+        )
+        painter.restore()
+        painter.setPen(QPen(QColor(0, 0, 0, 60), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(rect, 2, 2)
+    else:
+        painter.setPen(QPen(color.darker(115), 1))
+        painter.setBrush(color)
+        painter.drawRoundedRect(1, 3, 10, 6, 2, 2)
     painter.end()
     return pixmap
 
 
-def _tab_color_icon(hex_color: str) -> QIcon:
-    return QIcon(_tab_color_pixmap(hex_color))
+def _tab_color_icon(hex_color: str, partner_color=None) -> QIcon:
+    return QIcon(_tab_color_pixmap(hex_color, partner_color=partner_color))

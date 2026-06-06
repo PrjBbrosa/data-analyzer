@@ -176,6 +176,43 @@ def test_split_changed_refreshes_status_chip(qtbot):
     assert not bar._split_chip.isVisible()
 
 
+def test_merge_host_tab_swatch_uses_partner_color(qtbot):
+    manager, bar = _bar(qtbot, count=2, active=0)
+    assert bar._partner_color_for(0) is None
+    assert bar._partner_color_for(1) is None
+
+    manager.set_split(1)  # active 0 becomes host containing source View 1
+    QApplication.processEvents()
+    assert bar._partner_color_for(0) == manager.get(1).tab_color  # host: split dot
+    assert bar._partner_color_for(1) is None  # source stays solid
+
+    manager.clear_split_for(0)
+    QApplication.processEvents()
+    assert bar._partner_color_for(0) is None
+
+
+def test_tab_color_pixmap_split_has_both_colors_and_white_gap(qtbot):
+    from mf4_analyzer.ui.view_tabbar import _tab_color_pixmap
+
+    pix = _tab_color_pixmap("#2d7ff9", ratio=2.0, partner_color="#e8590c")
+    img = pix.toImage()
+    ymid = img.height() // 2
+    blue = orange = white = 0
+    for x in range(img.width()):
+        c = img.pixelColor(x, ymid)
+        if c.alpha() < 10:
+            continue
+        if c.blue() > 150 and c.red() < 120:
+            blue += 1
+        elif c.red() > 180 and c.blue() < 120:
+            orange += 1
+        elif c.red() > 220 and c.green() > 220 and c.blue() > 220:
+            white += 1
+    assert blue > 0  # own color, left
+    assert orange > 0  # partner color, right
+    assert white > 0  # thin white separator
+
+
 def test_plus_button_disabled_at_view_cap(qtbot):
     _manager, bar = _bar(qtbot, count=MAX_VIEWS, active=0)
     plus = bar.findChild(QPushButton, "viewTabPlus")
