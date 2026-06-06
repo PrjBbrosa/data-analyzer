@@ -3636,11 +3636,10 @@ class TimeDomainCanvasPG(QWidget):
         receive its own range back as a redundant write.
         """
         self.disable_interactive_quality()
-        # Propagate first so the sibling axes are in sync BEFORE the
-        # debounced refresh runs.
+        # Drag ticks keep only the cheap visual work synchronous: quality drop
+        # plus sibling-x propagation so subplot rows move together. Tick
+        # recompute and range signals are flushed from _refresh_visible_data.
         self._propagate_xlim_to_siblings(source=source_handle)
-        self._apply_target_x_ticks_to_all_axes()
-        self._emit_xrange_changed(source_handle)
         if self._refresh_pending:
             return
         self._refresh_pending = True
@@ -3804,6 +3803,10 @@ class TimeDomainCanvasPG(QWidget):
             except Exception as exc:
                 _log.warning("PlotDataItem.setData failed for %r: %s", name, exc)
 
+        # Debounced tail work: retick axes and notify listeners only once after
+        # rapid drag ticks settle, instead of blocking every mouse-move event.
+        self._apply_target_x_ticks_to_all_axes()
+        self._emit_xrange_changed()
         self._refresh = True
         self.schedule_idle_quality()
 

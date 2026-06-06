@@ -1311,6 +1311,7 @@ def test_target_x_ticks_refresh_after_xlim_change(qapp):
     handle = canvas.axes_list[0]
     before = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
     handle.set_xlim(20.0, 40.0)
+    canvas._flush_pending_refresh()
     QCoreApplication.processEvents()
     after = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
 
@@ -1339,6 +1340,7 @@ def test_target_x_ticks_refresh_after_reset_to_data_extents(qapp):
 
     handle = canvas.axes_list[0]
     handle.set_xlim(20.0, 40.0)
+    canvas._flush_pending_refresh()
     QCoreApplication.processEvents()
     zoomed = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
     assert min(zoomed) >= 20.0 - 1e-9
