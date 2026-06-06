@@ -143,10 +143,10 @@ def test_split_status_chip_visible_for_active_pair(qtbot):
     assert bar._split_chip.isVisible()
     assert "View 1" in bar._split_chip.text()
     assert "View 2" in bar._split_chip.text()
-    assert "编辑: View 1" in bar._split_chip.text()
+    assert "当前操作 View 1" in bar._split_chip.text()
 
     bar.set_split_focus(True)
-    assert "编辑: View 2" in bar._split_chip.text()
+    assert "当前操作 View 2" in bar._split_chip.text()
 
 
 def test_clear_split_chip_emits_active_index(qtbot):

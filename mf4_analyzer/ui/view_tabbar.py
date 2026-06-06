@@ -82,10 +82,10 @@ class ViewTabBar(QWidget):
 
         self._split_chip = QLabel(self)
         self._split_chip.setObjectName("viewSplitChip")
-        self._split_clear = QPushButton("×", self)
+        self._split_clear = QPushButton("✕ 取消合并", self)
         self._split_clear.setObjectName("viewSplitClear")
-        self._split_clear.setToolTip("取消合并")
-        self._split_clear.setFixedSize(22, 22)
+        self._split_clear.setToolTip("解除当前合并，两个 View 各自独立")
+        self._split_clear.setCursor(Qt.PointingHandCursor)
         self._split_clear.clicked.connect(self._on_split_clear_clicked)
         layout.addWidget(self._split_chip, 0)
         layout.addWidget(self._split_clear, 0)
@@ -185,7 +185,7 @@ class ViewTabBar(QWidget):
         partner_name = self._manager.get(partner).name
         editing = partner_name if self._secondary_focused else active_name
         self._split_chip.setText(
-            f"合并: {active_name} + {partner_name} · 编辑: {editing}"
+            f"合并 {active_name} + {partner_name}  ·  当前操作 {editing}"
         )
 
     def _on_current_changed(self, idx: int) -> None:

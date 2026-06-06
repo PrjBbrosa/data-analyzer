@@ -1825,11 +1825,17 @@ class ChartStack(QWidget):
             if card.property("focused") != want:
                 card.setProperty("focused", want)
             if want:
+                # MUST scope to #chartCard — a selector-less stylesheet string
+                # cascades to every child widget (toolbar buttons / canvas /
+                # hint bar would all get the 1px border + white fill). The
+                # global QSS uses the same #chartCard scope for this reason.
                 card.setStyleSheet(
+                    "QWidget#chartCard {"
                     "border: 1px solid #e4e8ef;"
                     f"border-top: 3px solid {self._focus_accent};"
                     "border-radius: 12px;"
                     "background-color: #ffffff;"
+                    "}"
                 )
             else:
                 card.setStyleSheet("")
@@ -2144,10 +2150,11 @@ class ChartStack(QWidget):
         self.plot_mode_changed.emit(mode)
 
     def _on_shared_cursor_mode_changed(self, mode):
-        if self.split_active() and self._secondary_card is not None:
-            self.set_cursor_mode_for_canvas(self.canvas_time, mode)
-            self.set_cursor_mode_for_canvas(self._secondary_card.canvas, mode)
-        else:
+        # Canvas toggling + per-pane cursor_mode write-back is owned by
+        # MainWindow._on_cursor_mode_changed (driven by the cursor_mode_changed
+        # signal emitted below); applying to both canvases here too would just
+        # double-toggle. Keep only the non-split primary bookkeeping.
+        if not (self.split_active() and self._secondary_card is not None):
             self._primary_cursor_mode = mode
         self._on_time_cursor_mode_changed(mode)
 
