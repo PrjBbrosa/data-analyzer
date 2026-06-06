@@ -22,11 +22,30 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QObject, QThread, QSettings, pyqtSignal
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer
 from .canvases import CHART_TIGHT_LAYOUT_KW
+
+
+GPU_RENDER_SETTINGS_ORG = "MF4Analyzer"
+GPU_RENDER_SETTINGS_APP = "DataAnalyzer"
+GPU_RENDER_SETTINGS_KEY = "render/use_opengl"
+
+
+def gpu_render_settings():
+    return QSettings(GPU_RENDER_SETTINGS_ORG, GPU_RENDER_SETTINGS_APP)
+
+
+def read_gpu_render_pref(settings=None) -> bool:
+    settings = settings or gpu_render_settings()
+    return bool(settings.value(GPU_RENDER_SETTINGS_KEY, False, type=bool))
+
+
+def write_gpu_render_pref(settings=None, *, on: bool) -> None:
+    settings = settings or gpu_render_settings()
+    settings.setValue(GPU_RENDER_SETTINGS_KEY, bool(on))
 
 
 class FFTTimeWorker(QObject):

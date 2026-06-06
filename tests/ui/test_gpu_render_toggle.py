@@ -222,3 +222,27 @@ def test_main_configures_gl_surface_format_before_qapplication():
     src = inspect.getsource(appmod.main)
     assert src.index("_configure_high_dpi()") < src.index("_configure_gl_surface_format()")
     assert src.index("_configure_gl_surface_format()") < src.index("QApplication(")
+
+
+def test_gpu_render_pref_roundtrip(tmp_path, qapp):
+    from PyQt5.QtCore import QSettings
+
+    from mf4_analyzer.ui.main_window import (
+        gpu_render_settings,
+        read_gpu_render_pref,
+        write_gpu_render_pref,
+    )
+
+    path = str(tmp_path / "gpu.ini")
+    settings = QSettings(path, QSettings.IniFormat)
+    assert read_gpu_render_pref(settings) is False
+
+    write_gpu_render_pref(settings, on=True)
+    settings.sync()
+
+    settings2 = QSettings(path, QSettings.IniFormat)
+    assert read_gpu_render_pref(settings2) is True
+
+    default_settings = gpu_render_settings()
+    assert default_settings.organizationName() == "MF4Analyzer"
+    assert default_settings.applicationName() == "DataAnalyzer"
