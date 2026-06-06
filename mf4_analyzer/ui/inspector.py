@@ -76,7 +76,7 @@ class Inspector(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        lay.addWidget(self._scroll)
+        lay.addWidget(self._scroll, 1)
 
         # 2026-04-26 R3 紧凑化 fix-1:
         # The scroll uses a *host* widget that fills the viewport horizontally,
@@ -109,11 +109,6 @@ class Inspector(QWidget):
         self.contextual_stack.addWidget(self.fft_time_ctx)
         self.contextual_stack.addWidget(self.order_ctx)
         body_lay.addWidget(self.contextual_stack)
-        self.gpu_toggle = QCheckBox("GPU 加速（时域图）", self._scroll_body)
-        self.gpu_toggle.setObjectName("gpuRenderToggle")
-        self.gpu_toggle.setToolTip("开启时域图 OpenGL 渲染；导出会临时切回 CPU")
-        self.gpu_toggle.toggled.connect(self.gpu_render_toggled)
-        body_lay.addWidget(self.gpu_toggle)
         body_lay.addStretch(1)
 
         # Anchor the capped body to the leading edge; the trailing stretch
@@ -122,6 +117,11 @@ class Inspector(QWidget):
         host_lay.addStretch(1)
 
         self._scroll.setWidget(host)
+        self.gpu_toggle = QCheckBox("GPU 加速（时域图）", self)
+        self.gpu_toggle.setObjectName("gpuRenderToggle")
+        self.gpu_toggle.setToolTip("开启时域图 OpenGL 渲染；导出会临时切回 CPU")
+        self.gpu_toggle.toggled.connect(self.gpu_render_toggled)
+        lay.addWidget(self.gpu_toggle)
         self._wire()
 
     def _wire(self):

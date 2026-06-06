@@ -317,3 +317,27 @@ def test_main_window_gpu_toggle_wired(qapp, monkeypatch):
         assert applied[-1] is False
     finally:
         window.close()
+
+
+def test_gpu_toggle_visible_at_min_window_height(qapp, monkeypatch):
+    import mf4_analyzer.ui.main_window as main_window
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    monkeypatch.setattr(main_window, "read_gpu_render_pref", lambda settings=None: False)
+    monkeypatch.setattr(main_window, "write_gpu_render_pref", lambda settings=None, *, on: None)
+    monkeypatch.setattr(TimeDomainCanvasPG, "set_gpu_render", lambda self, on: None)
+
+    window = main_window.MainWindow()
+    try:
+        window.resize(1100, 640)
+        window.show()
+        qapp.processEvents()
+
+        button = window.inspector.gpu_toggle
+        top_left = button.mapTo(window.inspector, button.rect().topLeft())
+
+        assert button.isVisible()
+        assert top_left.y() >= 0
+        assert top_left.y() + button.height() <= window.inspector.height()
+    finally:
+        window.close()
