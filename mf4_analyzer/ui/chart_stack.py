@@ -1521,6 +1521,7 @@ class ChartStack(QWidget):
         # _install_focus_filter / eventFilter). Outside split mode the
         # focused card is always the primary and the property is unset.
         self._focused_card = self._time_card
+        self._focus_accent = "#2d7ff9"
         self._install_focus_filter(self._time_card)
         self._fft_card = _ChartCard(
             self.canvas_fft,
@@ -1800,6 +1801,11 @@ class ChartStack(QWidget):
         self._sync_shared_nav_highlight()
         self.focus_changed.emit(card is self._secondary_card)
 
+    def set_focus_accent(self, color):
+        """Set the top-line accent color for the currently focused time card."""
+        self._focus_accent = color or "#2d7ff9"
+        self._refresh_focus_borders()
+
     def _refresh_focus_borders(self):
         """Sync the ``focused`` dynamic property + repaint for both cards.
 
@@ -1814,6 +1820,15 @@ class ChartStack(QWidget):
             want = active and card is focused
             if card.property("focused") != want:
                 card.setProperty("focused", want)
+            if want:
+                card.setStyleSheet(
+                    "border: 1px solid #e4e8ef;"
+                    f"border-top: 3px solid {self._focus_accent};"
+                    "border-radius: 12px;"
+                    "background-color: #ffffff;"
+                )
+            else:
+                card.setStyleSheet("")
             # Dynamic-property QSS selectors need an explicit unpolish/polish
             # to re-evaluate (see lesson: action-button-on-group-title).
             card.style().unpolish(card)

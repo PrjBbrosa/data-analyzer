@@ -70,6 +70,7 @@ def test_enter_split_seeds_primary_focus(qtbot, qapp, loaded_csv):
 def test_click_secondary_focuses_it_and_lights_border(qtbot, qapp, loaded_csv):
     w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
     cs = w.chart_stack
+    w.view_manager.get(1).tab_color = "#11aa77"
     _enter_split(w, qapp)
 
     captured = []
@@ -81,6 +82,10 @@ def test_click_secondary_focuses_it_and_lights_border(qtbot, qapp, loaded_csv):
     assert cs.focused_card() is cs._secondary_card
     assert _focused_prop(cs._secondary_card) is True
     assert _focused_prop(cs._time_card) is False
+    assert "border-top: 3px solid #11aa77" in cs._secondary_card.styleSheet()
+    assert "background-color: #eaf1fe" not in cs._secondary_card.styleSheet()
+    assert "padding: 4px" not in cs._secondary_card.styleSheet()
+    assert "#11aa77" not in cs._time_card.styleSheet()
     assert captured == [True]
 
 

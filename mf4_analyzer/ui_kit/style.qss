@@ -1104,22 +1104,15 @@ QWidget#chartCard {
     background-color: #ffffff;
 }
 
-/* Side-by-side compare: the focused time card gets a bold primary-blue accent
- * frame so it's obvious at full-window scale which pane channel-checks /
- * replots target. The property selector is more specific than the base
- * #chartCard rule above, so it wins; the dynamic `focused` property is driven
- * from ChartStack and needs a paired unpolish/polish to re-evaluate (see
- * set_focused_card). The 3px border + 4px padding insets the layout content
- * rect so the margin-0 toolbar/canvas children stop overpainting the frame,
- * and the light-blue background tint fills that padding ring with a visible
- * halo (see dynamic-property-border-needs-styledbackground-and-padding
- * lesson — without WA_StyledBackground + padding the frame would not render).
+/* Side-by-side compare: focus is a lightweight top line only. No full frame,
+ * padding, background tint, or data-area dimming; ChartStack may override the
+ * top-line color inline with the focused view's tab color.
  */
 QWidget#chartCard[focused="true"] {
-    border: 3px solid #2563eb;
+    border: 1px solid #e4e8ef;
+    border-top: 3px solid #2d7ff9;
     border-radius: 12px;
-    padding: 4px;
-    background-color: #eaf1fe;
+    background-color: #ffffff;
 }
 
 /* Chart toolbar — compact spacing & padding (post-i18n). Three selectors

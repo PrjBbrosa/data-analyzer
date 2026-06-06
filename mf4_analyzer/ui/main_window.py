@@ -489,6 +489,15 @@ class MainWindow(QMainWindow):
         finally:
             self._applying_view = old_applying_view
 
+    def _sync_focus_accent(self):
+        idx = self._focused_view_idx
+        color = None
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            color = self.view_manager.get(idx).tab_color
+        setter = getattr(self.chart_stack, 'set_focus_accent', None)
+        if callable(setter):
+            setter(color)
+
     def _switch_view(self, idx):
         if idx == self.view_manager.active:
             return
@@ -508,6 +517,7 @@ class MainWindow(QMainWindow):
             self.chart_stack.enter_split()
             self._ensure_secondary_range_signal_connected()
         self._focused_view_idx = idx
+        self._sync_focus_accent()
         if self.files and self.chart_stack.current_mode() == 'time':
             self._render_view_to_canvas(idx, self.canvas_time, update_primary_ui=True)
             if partner is not None:
@@ -526,6 +536,7 @@ class MainWindow(QMainWindow):
             self.chart_stack.exit_split()
             self._secondary_view_idx = None
             self._focused_view_idx = self.view_manager.active
+            self._sync_focus_accent()
             if self.files and self.chart_stack.current_mode() == 'time':
                 self._render_view_to_canvas(
                     self.view_manager.active,
@@ -542,6 +553,7 @@ class MainWindow(QMainWindow):
         self.chart_stack.enter_split()
         self._ensure_secondary_range_signal_connected()
         self._focused_view_idx = self.view_manager.active
+        self._sync_focus_accent()
         if self.files and self.chart_stack.current_mode() == 'time':
             self._render_view_to_canvas(
                 self.view_manager.active, self.canvas_time, update_primary_ui=True
@@ -604,6 +616,8 @@ class MainWindow(QMainWindow):
         color = QColorDialog.getColor(current, self, "选择标签颜色")
         if color.isValid():
             self.view_manager.set_color(idx, color.name())
+            if idx == self._focused_view_idx:
+                self._sync_focus_accent()
 
     def _restore_view_axis_opts(self, axis_opts):
         axis_opts = axis_opts or {}
@@ -1382,6 +1396,7 @@ class MainWindow(QMainWindow):
             self._focused_view_idx = self._primary_view_idx
             which = "主"
         if self._focused_view_idx is not None:
+            self._sync_focus_accent()
             self._project_view_controls(self._focused_view_idx)
         self.statusBar.showMessage(f"聚焦{which}视图：通道勾选将作用于此栏", 2000)
 
