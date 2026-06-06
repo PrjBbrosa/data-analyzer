@@ -84,6 +84,7 @@ class ViewTabBar(QWidget):
         self._split_chip.setObjectName("viewSplitChip")
         self._split_clear = QPushButton("✕ 取消合并", self)
         self._split_clear.setObjectName("viewSplitClear")
+        self._split_clear.setProperty("variant", "softDanger")
         self._split_clear.setToolTip("解除当前合并，两个 View 各自独立")
         self._split_clear.setCursor(Qt.PointingHandCursor)
         self._split_clear.clicked.connect(self._on_split_clear_clicked)
@@ -209,17 +210,19 @@ class ViewTabBar(QWidget):
         partner_for = getattr(self._manager, "partner_for", None)
         partner = partner_for(self._manager.active) if callable(partner_for) else None
         visible = partner is not None
-        self._split_chip.setVisible(visible)
+        self._split_chip.setVisible(False)
+        self._split_chip.setText("")
         self._split_clear.setVisible(visible)
         if not visible:
-            self._split_chip.setText("")
+            self._split_clear.setToolTip("解除当前合并，两个 View 各自独立")
+            self._split_clear.setAccessibleName("")
             return
         active_name = self._manager.get(self._manager.active).name
         partner_name = self._manager.get(partner).name
         editing = partner_name if self._secondary_focused else active_name
-        self._split_chip.setText(
-            f"合并 {active_name} + {partner_name}  ·  当前操作 {editing}"
-        )
+        tip = f"取消 {active_name} + {partner_name} 合并；当前操作 {editing}"
+        self._split_clear.setToolTip(tip)
+        self._split_clear.setAccessibleName(tip)
 
     def _on_current_changed(self, idx: int) -> None:
         if self._suppress or idx < 0:

@@ -134,19 +134,24 @@ def test_active_changed_syncs_current_tab_without_switch_intent(qtbot):
     assert switches == []
 
 
-def test_split_status_chip_visible_for_active_pair(qtbot):
+def test_split_cancel_button_replaces_status_text_with_context_tooltip(qtbot):
     manager, bar = _bar(qtbot, count=2, active=0)
     manager.set_split(1)
     bar.show()
     QApplication.processEvents()
 
-    assert bar._split_chip.isVisible()
-    assert "View 1" in bar._split_chip.text()
-    assert "View 2" in bar._split_chip.text()
-    assert "当前操作 View 1" in bar._split_chip.text()
+    assert not bar._split_chip.isVisible()
+    assert bar._split_chip.text() == ""
+    assert bar._split_clear.isVisible()
+    assert bar._split_clear.text() == "✕ 取消合并"
+    assert bar._split_clear.property("variant") == "softDanger"
+    assert "取消 View 1 + View 2 合并" in bar._split_clear.toolTip()
+    assert "当前操作 View 1" in bar._split_clear.toolTip()
+    assert bar._split_clear.accessibleName() == bar._split_clear.toolTip()
 
     bar.set_split_focus(True)
-    assert "当前操作 View 2" in bar._split_chip.text()
+    assert "当前操作 View 2" in bar._split_clear.toolTip()
+    assert bar._split_clear.accessibleName() == bar._split_clear.toolTip()
 
 
 def test_clear_split_chip_emits_active_index(qtbot):
@@ -160,20 +165,23 @@ def test_clear_split_chip_emits_active_index(qtbot):
     assert seen == [0]
 
 
-def test_split_changed_refreshes_status_chip(qtbot):
+def test_split_changed_refreshes_cancel_button(qtbot):
     manager, bar = _bar(qtbot, count=2, active=0)
     bar.show()
     QApplication.processEvents()
 
     assert not bar._split_chip.isVisible()
+    assert not bar._split_clear.isVisible()
 
     manager.set_split(1)
     QApplication.processEvents()
-    assert bar._split_chip.isVisible()
+    assert not bar._split_chip.isVisible()
+    assert bar._split_clear.isVisible()
 
     manager.clear_split_for(0)
     QApplication.processEvents()
     assert not bar._split_chip.isVisible()
+    assert not bar._split_clear.isVisible()
 
 
 def test_merge_host_tab_swatch_uses_partner_color(qtbot):

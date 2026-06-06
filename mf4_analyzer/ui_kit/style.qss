@@ -1554,10 +1554,11 @@ QFrame#timeViewBottomDock QPushButton#viewTabPlus:disabled {
     color: #b8c2d0;
 }
 
-/* Merge status chip + cancel-merge button (right side of the View tab bar).
- * The cancel button MUST carry an explicit QSS background/border, otherwise
- * the macOS native push-button bezel renders an empty rounded box and the
- * label disappears. Flat styled button with a clear text label instead. */
+/* Cancel-merge button (right side of the View tab bar).
+ * The merge relation lives in the button tooltip/accessibility text, not as a
+ * persistent status sentence. The button still needs an explicit QSS
+ * background/border, otherwise the macOS native push-button bezel can render an
+ * empty rounded box and the label disappears. */
 QFrame#timeViewBottomDock QLabel#viewSplitChip {
     color: #5a6478;
     padding: 0 6px;
@@ -1568,16 +1569,23 @@ QFrame#timeViewBottomDock QPushButton#viewSplitClear {
     min-height: 22px;
     margin: 3px 2px 1px 0;
     padding: 0 10px;
-    border: 1px solid #cbd5e1;
-    border-radius: 4px;
-    background-color: #ffffff;
-    color: #475569;
+    border: 1px solid #fb7185;
+    border-radius: 5px;
+    background-color: #fff1f2;
+    color: #be123c;
+    font-weight: 600;
 }
 
 QFrame#timeViewBottomDock QPushButton#viewSplitClear:hover {
-    background-color: #fdeeee;
-    border-color: #f1aeae;
-    color: #d64545;
+    background-color: #ffe4e6;
+    border-color: #f43f5e;
+    color: #9f1239;
+}
+
+QFrame#timeViewBottomDock QPushButton#viewSplitClear:pressed {
+    background-color: #fecdd3;
+    border-color: #e11d48;
+    color: #881337;
 }
 
 /* Bottom hint bar — sits beneath the canvas inside each chart card.
