@@ -1059,6 +1059,9 @@ class TimeDomainCanvasPG(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self._glw.setMouseTracking(True)
+        self._gpu_render_requested = False
+        self._gpu_render_on = False
+        self._gpu_viewport_filter_target = None
 
         # --- public state (design §5.5 compat seams) --------------------
         # axes_list is a list of PgAxisHandle (one per visible channel
@@ -1195,13 +1198,7 @@ class TimeDomainCanvasPG(QWidget):
         # whereas plain QWidget ``QEvent.MouseButtonDblClick`` delivery
         # does. The filter maps the viewport pixel to a scene position so
         # the subplot hit-test stays accurate.
-        try:
-            viewport = self._glw.viewport()
-            if viewport is not None:
-                viewport.setMouseTracking(True)
-                viewport.installEventFilter(self)
-        except Exception:
-            pass
+        self._install_viewport_event_filter()
 
         # --- T6: overlay-mode selection + per-channel emphasis ----------
         # Mirrors canvases.py:_apply_overlay_selection_style (lw 1.0 / 1.8;
@@ -1456,6 +1453,8 @@ class TimeDomainCanvasPG(QWidget):
         # re-apply pinned interaction state (toolbar pan/zoom mode). Runs
         # last so callbacks see the fully-built axes_list / x_master.
         self._run_replot_callbacks()
+        if bool(getattr(self, "_gpu_render_requested", False)) != bool(getattr(self, "_gpu_render_on", False)):
+            self._apply_gpu_viewport()
         self.disable_interactive_quality()
         self.schedule_idle_quality()
 
@@ -4725,6 +4724,64 @@ class TimeDomainCanvasPG(QWidget):
                 it.setCacheMode(mode)
             except Exception:
                 pass
+
+    def _install_viewport_event_filter(self) -> None:
+        """Install this canvas' event filter on the current GLW viewport.
+
+        ``GraphicsView.useOpenGL`` replaces the viewport widget. The filter is
+        where double-click chart options, overlay selection/Y-drag, and cursor
+        press/move/release enter the canvas, so every viewport swap must rebind
+        it.
+        """
+        previous = getattr(self, "_gpu_viewport_filter_target", None)
+        if previous is not None:
+            try:
+                previous.removeEventFilter(self)
+            except Exception:
+                pass
+        viewport = None
+        try:
+            viewport = self._glw.viewport()
+        except Exception:
+            viewport = None
+        if viewport is not None:
+            try:
+                viewport.setMouseTracking(True)
+                viewport.installEventFilter(self)
+            except Exception:
+                viewport = None
+        self._gpu_viewport_filter_target = viewport
+
+    def set_gpu_render(self, on: bool) -> None:
+        """Switch the time-domain canvas between CPU raster and GL viewport."""
+        self._gpu_render_requested = bool(on)
+        self._apply_gpu_viewport()
+
+    def _apply_gpu_viewport(self) -> None:
+        """Apply the requested GPU state to the actual GraphicsView viewport."""
+        desired = bool(getattr(self, "_gpu_render_requested", False))
+        if desired == bool(getattr(self, "_gpu_render_on", False)):
+            self._install_viewport_event_filter()
+            return
+        glw = getattr(self, "_glw", None)
+        if glw is None:
+            self._gpu_render_on = False
+            return
+        try:
+            glw.useOpenGL(desired)
+        except Exception as exc:  # noqa: BLE001 - driver/context failures must not crash
+            _log.warning("useOpenGL(%s) failed; will retry after next plot: %s", desired, exc)
+            return
+        self._gpu_render_on = desired
+        self._install_viewport_event_filter()
+        try:
+            self._flush_pending_refresh()
+        except Exception:
+            pass
+        try:
+            glw.update()
+        except Exception:
+            pass
 
     def disable_interactive_quality(self):
         """Force the interactive path back to AA-off and cancel idle upgrade."""
