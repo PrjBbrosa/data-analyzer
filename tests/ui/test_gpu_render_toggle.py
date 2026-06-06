@@ -246,3 +246,29 @@ def test_gpu_render_pref_roundtrip(tmp_path, qapp):
     default_settings = gpu_render_settings()
     assert default_settings.organizationName() == "MF4Analyzer"
     assert default_settings.applicationName() == "DataAnalyzer"
+
+
+def test_inspector_has_gpu_toggle_emitting_signal(qapp):
+    from mf4_analyzer.ui.inspector import Inspector
+
+    inspector = Inspector()
+    received = []
+    inspector.gpu_render_toggled.connect(lambda on: received.append(on))
+
+    assert hasattr(inspector, "gpu_toggle")
+    inspector.gpu_toggle.setChecked(True)
+
+    assert received == [True]
+
+
+def test_inspector_set_gpu_toggle_checked_is_silent(qapp):
+    from mf4_analyzer.ui.inspector import Inspector
+
+    inspector = Inspector()
+    received = []
+    inspector.gpu_render_toggled.connect(lambda on: received.append(on))
+
+    inspector.set_gpu_toggle_checked(True)
+
+    assert inspector.gpu_toggle.isChecked() is True
+    assert received == []

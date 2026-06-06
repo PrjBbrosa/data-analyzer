@@ -6,6 +6,7 @@ switching modes preserves context.
 """
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QScrollArea,
@@ -56,6 +57,7 @@ class Inspector(QWidget):
     fft_time_signal_changed = pyqtSignal(object)  # (fid, ch) | None
     # Preset save/load acknowledgement (level, message) — surfaced as toasts
     preset_acknowledged = pyqtSignal(str, str)
+    gpu_render_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -107,6 +109,11 @@ class Inspector(QWidget):
         self.contextual_stack.addWidget(self.fft_time_ctx)
         self.contextual_stack.addWidget(self.order_ctx)
         body_lay.addWidget(self.contextual_stack)
+        self.gpu_toggle = QCheckBox("GPU 加速（时域图）", self._scroll_body)
+        self.gpu_toggle.setObjectName("gpuRenderToggle")
+        self.gpu_toggle.setToolTip("开启时域图 OpenGL 渲染；导出会临时切回 CPU")
+        self.gpu_toggle.toggled.connect(self.gpu_render_toggled)
+        body_lay.addWidget(self.gpu_toggle)
         body_lay.addStretch(1)
 
         # Anchor the capped body to the leading edge; the trailing stretch
@@ -156,3 +163,10 @@ class Inspector(QWidget):
 
     def contextual_widget_name(self):
         return {0: 'time', 1: 'fft', 2: 'fft_time', 3: 'order'}[self.contextual_stack.currentIndex()]
+
+    def set_gpu_toggle_checked(self, on: bool):
+        was_blocked = self.gpu_toggle.blockSignals(True)
+        try:
+            self.gpu_toggle.setChecked(bool(on))
+        finally:
+            self.gpu_toggle.blockSignals(was_blocked)
