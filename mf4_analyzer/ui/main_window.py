@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
         self._acquisition_cockpit_window = None
         self._init_ui();
         self._connect()
+        self._sync_gpu_render_pref()
 
     def _init_ui(self):
         from PyQt5.QtWidgets import QSplitter, QVBoxLayout, QWidget
@@ -333,6 +334,7 @@ class MainWindow(QMainWindow):
         self.inspector.preset_acknowledged.connect(
             lambda level, msg: self.toast(msg, level)
         )
+        self.inspector.gpu_render_toggled.connect(self.set_gpu_render)
 
         self.navigator.channels_changed.connect(self._ch_changed)
         self.navigator.channel_editor_requested.connect(self.open_editor)
@@ -729,6 +731,16 @@ class MainWindow(QMainWindow):
         finally:
             top.spin_yt.blockSignals(old_yt)
             top.spin_xt.blockSignals(old_xt)
+
+    def _sync_gpu_render_pref(self):
+        on = read_gpu_render_pref()
+        self.inspector.set_gpu_toggle_checked(on)
+        self.canvas_time.set_gpu_render(on)
+
+    def set_gpu_render(self, on: bool):
+        on = bool(on)
+        write_gpu_render_pref(on=on)
+        self.canvas_time.set_gpu_render(on)
 
     def _on_mode_changed(self, mode):
         self.chart_stack.set_mode(mode)

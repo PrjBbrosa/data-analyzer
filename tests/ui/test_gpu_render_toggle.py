@@ -272,3 +272,48 @@ def test_inspector_set_gpu_toggle_checked_is_silent(qapp):
 
     assert inspector.gpu_toggle.isChecked() is True
     assert received == []
+
+
+def test_main_window_gpu_toggle_wired(qapp, monkeypatch):
+    import mf4_analyzer.ui.main_window as main_window
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    state = {"value": False}
+    applied = []
+
+    monkeypatch.setattr(
+        main_window,
+        "read_gpu_render_pref",
+        lambda settings=None: state["value"],
+    )
+
+    def write_pref(settings=None, *, on):
+        state["value"] = bool(on)
+
+    monkeypatch.setattr(main_window, "write_gpu_render_pref", write_pref)
+
+    def fake_set_gpu_render(self, on):
+        self._gpu_render_requested = bool(on)
+        self._gpu_render_on = bool(on)
+        applied.append(bool(on))
+
+    monkeypatch.setattr(TimeDomainCanvasPG, "set_gpu_render", fake_set_gpu_render)
+
+    window = main_window.MainWindow()
+    try:
+        assert window.inspector.gpu_toggle.isChecked() is False
+        assert applied == [False]
+
+        window.inspector.gpu_toggle.setChecked(True)
+        qapp.processEvents()
+        assert state["value"] is True
+        assert window.canvas_time._gpu_render_on is True
+        assert applied[-1] is True
+
+        window.inspector.gpu_toggle.setChecked(False)
+        qapp.processEvents()
+        assert state["value"] is False
+        assert window.canvas_time._gpu_render_on is False
+        assert applied[-1] is False
+    finally:
+        window.close()
