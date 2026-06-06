@@ -22,30 +22,11 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import Qt, QTimer, QObject, QThread, QSettings, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer
 from .canvases import CHART_TIGHT_LAYOUT_KW
-
-
-GPU_RENDER_SETTINGS_ORG = "MF4Analyzer"
-GPU_RENDER_SETTINGS_APP = "DataAnalyzer"
-GPU_RENDER_SETTINGS_KEY = "render/use_opengl"
-
-
-def gpu_render_settings():
-    return QSettings(GPU_RENDER_SETTINGS_ORG, GPU_RENDER_SETTINGS_APP)
-
-
-def read_gpu_render_pref(settings=None) -> bool:
-    settings = settings or gpu_render_settings()
-    return bool(settings.value(GPU_RENDER_SETTINGS_KEY, False, type=bool))
-
-
-def write_gpu_render_pref(settings=None, *, on: bool) -> None:
-    settings = settings or gpu_render_settings()
-    settings.setValue(GPU_RENDER_SETTINGS_KEY, bool(on))
 
 
 class FFTTimeWorker(QObject):
@@ -131,7 +112,6 @@ class MainWindow(QMainWindow):
         self._acquisition_cockpit_window = None
         self._init_ui();
         self._connect()
-        self._sync_gpu_render_pref()
 
     def _init_ui(self):
         from PyQt5.QtWidgets import QSplitter, QVBoxLayout, QWidget
@@ -334,7 +314,6 @@ class MainWindow(QMainWindow):
         self.inspector.preset_acknowledged.connect(
             lambda level, msg: self.toast(msg, level)
         )
-        self.inspector.gpu_render_toggled.connect(self.set_gpu_render)
 
         self.navigator.channels_changed.connect(self._ch_changed)
         self.navigator.channel_editor_requested.connect(self.open_editor)
@@ -731,16 +710,6 @@ class MainWindow(QMainWindow):
         finally:
             top.spin_yt.blockSignals(old_yt)
             top.spin_xt.blockSignals(old_xt)
-
-    def _sync_gpu_render_pref(self):
-        on = read_gpu_render_pref()
-        self.inspector.set_gpu_toggle_checked(on)
-        self.canvas_time.set_gpu_render(on)
-
-    def set_gpu_render(self, on: bool):
-        on = bool(on)
-        write_gpu_render_pref(on=on)
-        self.canvas_time.set_gpu_render(on)
 
     def _on_mode_changed(self, mode):
         self.chart_stack.set_mode(mode)
