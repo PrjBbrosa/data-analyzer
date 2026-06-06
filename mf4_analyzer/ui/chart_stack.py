@@ -60,6 +60,32 @@ def _grab_pixmap_hidpi(canvas, requested=_HIDPI_EXPORT_SCALE):
     return None
 
 
+def _format_mini_html(rows):
+    """Mini dual-cursor: one row per channel — colored dot + name + △ only."""
+    from html import escape
+    parts = ['<table cellspacing="0" cellpadding="0" style="font-size:11px;">']
+    for i, row in enumerate(rows):
+        if len(row) >= 7:
+            ch, _mn, _mx, _avg, delta, u, color = row[:7]
+        else:
+            ch, _mn, _mx, _avg, delta, u = row[:6]
+            color = '#111827'
+        if ']' in ch and ch.startswith('['):
+            ch = ch.split(']', 1)[-1].strip()
+        top_pad = '5px' if i > 0 else '0'
+        mono = "font-family:'SF Mono',Menlo,Consolas,monospace;"
+        parts.append(
+            f'<tr><td style="padding-top:{top_pad};">'
+            f'<span style="color:{color};">●</span></td>'
+            f'<td style="padding-left:4px; color:{color}; font-weight:600; padding-top:{top_pad};">'
+            f'{escape(ch)}</td>'
+            f'<td style="padding-left:8px; color:{color}; {mono} padding-top:{top_pad};">'
+            f'△&nbsp;{delta:.4g}{escape(u)}</td></tr>'
+        )
+    parts.append('</table>')
+    return ''.join(parts)
+
+
 class CursorPill(QFrame):
     """Draggable floating pill with a primary line (time / A·B / ΔT) and an
     optional detail block (per-channel Min/Max/Avg/△ as RichText). The
@@ -72,7 +98,7 @@ class CursorPill(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 7, 10, 8)
+        lay.setContentsMargins(10, 7, 22, 8)
         lay.setSpacing(4)
         self._primary = QLabel("", self)
         self._primary.setObjectName("cursorPillPrimary")
@@ -89,6 +115,14 @@ class CursorPill(QFrame):
         # User-positioned flag — true after first manual drag, so resize events
         # respect the chosen spot instead of snapping back to default corner.
         self._user_placed = False
+        self._mode = "full"
+        self._dual_rows = []
+        self._toggle_btn = QPushButton("−", self)
+        self._toggle_btn.setObjectName("cursorPillToggle")
+        self._toggle_btn.setFixedSize(16, 16)
+        self._toggle_btn.setCursor(Qt.ArrowCursor)
+        self._toggle_btn.clicked.connect(self._toggle_mode)
+        self._toggle_btn.raise_()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -124,6 +158,7 @@ class CursorPill(QFrame):
         self._primary.clear()
         self._detail.clear()
         self._detail.setVisible(False)
+        self._dual_rows = []
         self.setVisible(False)
 
     def mark_user_placed(self, value=True):
@@ -164,6 +199,36 @@ class CursorPill(QFrame):
             e.accept()
             return
         super().mouseReleaseEvent(e)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        btn_w = self._toggle_btn.width()
+        self._toggle_btn.move(self.width() - btn_w - 4, 4)
+
+    def _toggle_mode(self):
+        self._mode = "mini" if self._mode == "full" else "full"
+        self._toggle_btn.setText("+" if self._mode == "mini" else "−")
+        self._refresh_detail()
+        self.adjustSize()
+
+    def set_dual_rows(self, rows):
+        self._dual_rows = rows or []
+        self._refresh_detail()
+        if self._dual_rows:
+            self._detail.setVisible(True)
+        self.adjustSize()
+
+    def _refresh_detail(self):
+        if not self._dual_rows:
+            return
+        from .canvases import _format_dual_html
+        html = _format_dual_html(self._dual_rows) if self._mode == "full" else _format_mini_html(self._dual_rows)
+        if html:
+            self._detail.setText(html)
+            self._detail.setVisible(True)
+        else:
+            self._detail.clear()
+            self._detail.setVisible(False)
 
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 import qtawesome as qta
@@ -1630,6 +1695,7 @@ class ChartStack(QWidget):
         # the user can drag it elsewhere — see CursorPill.mark_user_placed.
         self._pill = CursorPill(self.stack)
         self._pill.setVisible(False)
+        self._pill_secondary = None  # created/destroyed with enter/exit_split
         # The single pill follows whichever pane last drove a cursor readout.
         # Default to the primary card; updated per emit via _card_for_canvas.
         self._active_cursor_card = self._time_card
@@ -1641,6 +1707,8 @@ class ChartStack(QWidget):
         self.canvas_time.dual_cursor_info.connect(
             lambda text: self._on_dual_cursor_info(text, self.canvas_time)
         )
+        if hasattr(self.canvas_time, 'dual_cursor_rows'):
+            self.canvas_time.dual_cursor_rows.connect(self._pill.set_dual_rows)
         self.stack.currentChanged.connect(lambda _i: self._reposition_pill())
 
         # Relay time-card control signals up to MainWindow consumers.
@@ -1954,17 +2022,20 @@ class ChartStack(QWidget):
             self._secondary_card.cursor_mode_changed.connect(
                 self._on_secondary_cursor_mode_changed
             )
-            # The single floating pill follows focus: feed the secondary
-            # canvas's readouts into the SAME pill handlers as the primary so
-            # hovering the compare pane shows its data (was hard-wired to the
-            # primary only). Source canvas lets the handler pick the per-pane
-            # cursor mode + anchor the pill over the emitting pane.
+            # Create a dedicated pill for the secondary pane.
+            if self._pill_secondary is None:
+                self._pill_secondary = CursorPill(self.stack)
+                self._pill_secondary.setVisible(False)
+            # Each pane now has its own pill; route secondary canvas readouts
+            # through the shared handlers which dispatch via _pill_for_canvas.
             canvas.cursor_info.connect(
                 lambda text, c=canvas: self._on_cursor_info(text, c)
             )
             canvas.dual_cursor_info.connect(
                 lambda text, c=canvas: self._on_dual_cursor_info(text, c)
             )
+            if hasattr(canvas, 'dual_cursor_rows') and self._pill_secondary is not None:
+                canvas.dual_cursor_rows.connect(self._pill_secondary.set_dual_rows)
             self._time_split.addWidget(self._secondary_card)
             self._install_focus_filter(self._secondary_card)
         self._secondary_card.setVisible(True)
@@ -2007,6 +2078,9 @@ class ChartStack(QWidget):
     def exit_split(self):
         if self._secondary_card is not None:
             self._secondary_card.setVisible(False)
+        if self._pill_secondary is not None:
+            self._pill_secondary.setVisible(False)
+            self._pill_secondary.clear()
         # Back to single pane: drop focus highlighting and reset to primary.
         self._focused_card = self._time_card
         self._refresh_focus_borders()
@@ -2335,15 +2409,24 @@ class ChartStack(QWidget):
             painter.end()
         return QPixmap.fromImage(img)
 
+    def _pill_for_canvas(self, canvas):
+        """Return the CursorPill that should show readouts for ``canvas``."""
+        if (self._pill_secondary is not None
+                and self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            return self._pill_secondary
+        return self._pill
+
     def _on_cursor_info(self, text, source=None):
         mode = self._cursor_mode_for_canvas(source)
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
         primary, detail = self._format_cursor_info_for_pill(text, mode)
-        self._pill.set_primary(primary)
+        pill = self._pill_for_canvas(source)
+        pill.set_primary(primary)
         if mode == 'single':
-            self._pill.set_detail_html(detail)
-        self._pill.setVisible(self.current_mode() == 'time')
+            pill.set_detail_html(detail)
+        pill.setVisible(self.current_mode() == 'time')
         self._reposition_pill()
 
     def _format_cursor_info_for_pill(self, text, mode=None):
@@ -2368,39 +2451,44 @@ class ChartStack(QWidget):
     def _on_dual_cursor_info(self, text, source=None):
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
-        self._pill.set_detail_html(text)
-        if self.current_mode() == 'time' and (text or self._pill.primary_text()):
-            self._pill.setVisible(True)
+        pill = self._pill_for_canvas(source)
+        pill.set_detail_html(text)
+        if self.current_mode() == 'time' and (text or pill.primary_text()):
+            pill.setVisible(True)
         self._reposition_pill()
 
     def _reposition_pill(self):
         if self.current_mode() != 'time':
             self._pill.setVisible(False)
+            if self._pill_secondary is not None:
+                self._pill_secondary.setVisible(False)
             return
-        if self._pill.is_user_placed():
-            # Re-clamp into the visible area in case the window shrank.
+        self._reposition_one_pill(self._pill, self._time_card)
+        if self._pill_secondary is not None and self._secondary_card is not None:
+            self._reposition_one_pill(self._pill_secondary, self._secondary_card)
+
+    def _reposition_one_pill(self, pill, card):
+        """Anchor ``pill`` to ``card``'s canvas top-right corner (or honour
+        its user-placed position)."""
+        if not pill.isVisible():
+            return
+        if pill.is_user_placed():
             pw, ph = self.stack.width(), self.stack.height()
-            x = max(0, min(self._pill.x(), pw - self._pill.width()))
-            y = max(0, min(self._pill.y(), ph - self._pill.height()))
-            self._pill.move(x, y)
+            x = max(0, min(pill.x(), pw - pill.width()))
+            y = max(0, min(pill.y(), ph - pill.height()))
+            pill.move(x, y)
         else:
-            # Default anchor: top-right of the canvas area (under the toolbar)
-            # with an 8 px inset so the pill never covers toolbar buttons. In
-            # split mode anchor over the pane that last drove the readout
-            # (_active_cursor_card) so the secondary pane's pill sits over the
-            # right canvas, not floated above the primary.
-            card = getattr(self, '_active_cursor_card', None) or self._time_card
             canvas = getattr(card, 'canvas', None)
             if canvas is not None:
                 origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
                 x_right = origin.x() + canvas.width()
-                x = min(x_right - self._pill.width() - 8,
-                        self.stack.width() - self._pill.width())
-                self._pill.move(max(x, 0), origin.y() + 8)
+                x = min(x_right - pill.width() - 8,
+                        self.stack.width() - pill.width())
+                pill.move(max(x, 0), origin.y() + 8)
             else:
                 w = self.stack.width()
-                self._pill.move(max(w - self._pill.width() - 8, 0), 8)
-        self._pill.raise_()
+                pill.move(max(w - pill.width() - 8, 0), 8)
+        pill.raise_()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2410,6 +2498,8 @@ class ChartStack(QWidget):
         """Clear pill content and hide it; preserves the user-placed flag so a
         subsequent cursor activation reappears at the spot the user chose."""
         self._pill.clear()
+        if self._pill_secondary is not None:
+            self._pill_secondary.clear()
 
     def cursor_pill_snapshot(self):
         """Return the current floating cursor pill UI state.

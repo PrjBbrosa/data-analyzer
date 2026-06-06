@@ -690,7 +690,8 @@ class MainWindow(QMainWindow):
                 self._custom_xlabel = label or None
                 top.set_xaxis_mode('time')
                 top._combo_xaxis_ch.setEnabled(False)
-                top.edit_xlabel.setText(label if requested_mode == 'time' else '')
+                _safe_label = label if (label and label != 'Time (s)') else ''
+                top.edit_xlabel.setText(_safe_label if requested_mode == 'time' else '')
         finally:
             top.edit_xlabel.blockSignals(old_label)
             top._combo_xaxis_ch.blockSignals(old_combo)
@@ -1178,7 +1179,8 @@ class MainWindow(QMainWindow):
                     return
             self._custom_xaxis_fid = fid
             self._custom_xaxis_ch = ch
-            self._custom_xlabel = self.inspector.top.xaxis_label() or ch
+            _raw = self.inspector.top.xaxis_label()
+            self._custom_xlabel = (_raw if _raw and _raw != 'Time (s)' else None) or ch
 
         # Cache invalidation site 5: the t-array bound to every plotted
         # channel just changed (time-axis ↔ custom-channel x-axis), so

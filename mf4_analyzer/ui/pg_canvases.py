@@ -634,6 +634,12 @@ def _build_grid_submenu(menu, plot_item, *, allow_y_grid=True):
 # pyqt-ui/2026-06-04-dynamic-property-border (a margin-0 border alone is too
 # subtle; pair it with a tint).
 _MOUSE_MODE_TOGGLE_QSS = (
+    # Container MUST be transparent so the row blends into the white menu —
+    # otherwise the embedded QWidget paints the default gray window color as an
+    # ugly band behind the buttons. Paired with WA_TranslucentBackground below.
+    "QWidget#pgMouseModeToggleRow {"
+    " background: transparent;"
+    "}"
     "QToolButton {"
     " border: 1px solid transparent;"
     " border-radius: 5px;"
@@ -674,6 +680,9 @@ def _add_mouse_mode_toggle_row(menu, controller):
 
     row = QWidget(menu)
     row.setObjectName("pgMouseModeToggleRow")
+    # No gray default-window background: show the menu's white through instead.
+    row.setAttribute(Qt.WA_TranslucentBackground, True)
+    row.setAutoFillBackground(False)
     layout = QHBoxLayout(row)
     layout.setContentsMargins(10, 4, 10, 4)
     layout.setSpacing(6)
@@ -945,6 +954,10 @@ class _ModifierWheelViewBox(pg.ViewBox):
             owner.context_menu_requested.emit()
         if owner is not None and hasattr(owner, "_redesign_context_menu_for_viewbox"):
             try:
+                try:
+                    owner._last_rclick_scene_pos = ev.scenePos()
+                except Exception:
+                    pass
                 owner._redesign_context_menu_for_viewbox(self, menu)
             except Exception:
                 _localize_pg_context_menu(menu)
@@ -1186,6 +1199,7 @@ class TimeDomainCanvasPG(QWidget):
     # Signal contract (design §3.1 — frozen by W0 contract test).
     cursor_info = pyqtSignal(str)
     dual_cursor_info = pyqtSignal(str)
+    dual_cursor_rows = pyqtSignal(object)  # emits raw dual list for mini pill
     span_selected = pyqtSignal(float, float)
     overlay_channel_selected = pyqtSignal(object)
     overlay_y_needs_selection = pyqtSignal()
@@ -1369,6 +1383,9 @@ class TimeDomainCanvasPG(QWidget):
         # alpha 0.42 / 1.0). Stored per channel so test/UI can probe.
         self._overlay_mode = False
         self._selected_overlay_channel = None
+        # Annotation state
+        self._annotation_enabled = False
+        self._remarks = []  # list of annotation dicts
         # Per-channel default emphasis: (line_width, alpha). Default
         # state mirrors matplotlib's "no selection" line: lw=1.05,
         # alpha=None (treated as 1.0). De-emphasised state is
@@ -1619,6 +1636,18 @@ class TimeDomainCanvasPG(QWidget):
         self._run_replot_callbacks()
         self.disable_interactive_quality()
         self.schedule_idle_quality()
+        # Restore cursor visual items when A/B positions survived clear().
+        if self._cursor_visible and self._dual:
+            if self._ax is not None:
+                a_items = self._ensure_cursor_items(
+                    "_cursor_a_items", color="#2563eb", width=1.1
+                )
+                self._set_cursor_items_pos(a_items, self._ax)
+            if self._bx is not None:
+                b_items = self._ensure_cursor_items(
+                    "_cursor_b_items", color="#dc2626", width=1.1
+                )
+                self._set_cursor_items_pos(b_items, self._bx)
 
     def register_replot_callback(self, callback):
         """Register a zero-arg ``callback`` invoked after every
@@ -1686,6 +1715,18 @@ class TimeDomainCanvasPG(QWidget):
             y_autofit_handler=self.fit_y_to_visible_x,
             allow_y_grid=not self._overlay_mode,
         )
+        # Annotation delete actions (only when remarks exist).
+        if self._remarks:
+            menu.addSeparator()
+            del_act = QAction("删除最近标注", menu)
+            sp = getattr(self, '_last_rclick_scene_pos', None)
+            del_act.triggered.connect(
+                lambda checked=False, _sp=sp: self._remove_remark_at(_sp)
+            )
+            menu.addAction(del_act)
+            clear_act = QAction("删除全部标注", menu)
+            clear_act.triggered.connect(self.clear_remarks)
+            menu.addAction(clear_act)
 
     def _add_plot_item(self, *, row, col):
         """Add a PlotItem hosted by our ``_ModifierWheelViewBox``.
@@ -3236,6 +3277,198 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             return False
 
+    # ------------------------------------------------------------------
+    # Annotation (remark) methods
+    # ------------------------------------------------------------------
+
+    def set_remark_enabled(self, enabled):
+        """Enable or disable annotation mode; changes cursor shape."""
+        self._annotation_enabled = bool(enabled)
+        try:
+            vp = self._glw.viewport()
+            if vp:
+                if self._annotation_enabled:
+                    vp.setCursor(Qt.CrossCursor)
+                else:
+                    vp.setCursor(Qt.ArrowCursor)
+        except Exception:
+            pass
+
+    def _nearest_data_point(self, viewport_pos):
+        """Return (ch_name, x, y, color) of the data point nearest to viewport_pos.
+
+        Converts pos to primary-x data value, then for each channel finds the
+        nearest sample by screen distance. Returns None if no channels.
+        """
+        from PyQt5.QtCore import QPointF as _QPointF
+        x_data = self._cursor_data_x_from_viewport_pos(viewport_pos)
+        if x_data is None or not self.channel_data:
+            return None
+        try:
+            scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        except Exception:
+            scene_pos = None
+        best = None
+        best_dist = float('inf')
+        for ch, (tf, sf, color, unit) in self.channel_data.items():
+            if not len(tf):
+                continue
+            idx = int(np.argmin(np.abs(tf - x_data)))
+            sx, sy = float(tf[idx]), float(sf[idx])
+            if scene_pos is not None:
+                try:
+                    ax = self._primary_xaxis_ax or (
+                        self.axes_list[0] if self.axes_list else None
+                    )
+                    vb = ax.view_box if ax else None
+                    if vb:
+                        pt = vb.mapViewToScene(_QPointF(sx, sy))
+                        dist = (pt.x() - scene_pos.x()) ** 2 + (
+                            pt.y() - scene_pos.y()
+                        ) ** 2
+                        if dist < best_dist:
+                            best_dist = dist
+                            best = (ch, sx, sy, color)
+                except Exception:
+                    if best is None:
+                        best = (ch, sx, sy, color)
+            else:
+                if best is None:
+                    best = (ch, sx, sy, color)
+        return best
+
+    def _add_remark(self, viewport_pos):
+        """Add a draggable annotation at the data point nearest to viewport_pos."""
+        from PyQt5.QtCore import QPointF as _QPointF
+        found = self._nearest_data_point(viewport_pos)
+        if found is None:
+            return
+        ch, dx, dy, color = found
+        # Resolve which viewbox to add the annotation to.
+        try:
+            ax = self._primary_xaxis_ax or (
+                self.axes_list[0] if self.axes_list else None
+            )
+            pi = ax.plot_item if ax else None
+            vb = pi.getViewBox() if pi else None
+        except Exception:
+            vb = None
+        if vb is None:
+            return
+        # Red dot at data point.
+        dot = pg.ScatterPlotItem(
+            x=[dx], y=[dy], size=8,
+            pen=pg.mkPen('#dc2626', width=1.5),
+            brush=pg.mkBrush('#dc2626'),
+            pxMode=True,
+        )
+        vb.addItem(dot)
+        # Initial label offset in data units: shift up-right by ~6%/8% of visible range.
+        try:
+            vrange = vb.viewRange()
+            ox = (vrange[0][1] - vrange[0][0]) * 0.06
+            oy = (vrange[1][1] - vrange[1][0]) * 0.08
+        except Exception:
+            ox, oy = 0, 0
+        lx, ly = dx + ox, dy + oy
+        leader = pg.PlotDataItem(
+            x=[dx, lx], y=[dy, ly],
+            pen=pg.mkPen(color, width=1.0, style=Qt.DashLine),
+        )
+        vb.addItem(leader)
+        # Text label.
+        label_text = f"{ch}: {dy:.4g}"
+        text = pg.TextItem(
+            text=label_text,
+            color=color,
+            fill=pg.mkBrush(255, 255, 255, 210),
+            border=pg.mkPen(color, width=0.8),
+        )
+        text.setPos(lx, ly)
+        text.setFlag(text.ItemIsMovable, True)
+        vb.addItem(text)
+        remark = {
+            'vb': vb, 'dot': dot, 'text': text, 'leader': leader,
+            'data_x': dx, 'data_y': dy,
+        }
+        self._remarks.append(remark)
+        # Connect text position change to leader update.
+        try:
+            text.sigPositionChanged.connect(
+                lambda item, r=remark: self._update_remark_leader(r)
+            )
+        except Exception:
+            # pg.TextItem may not have sigPositionChanged in all versions;
+            # fall back to itemChange override.
+            orig_item_change = text.itemChange
+            def patched_item_change(change, value, _r=remark, _orig=orig_item_change):
+                result = _orig(change, value)
+                if change == text.ItemPositionHasChanged:
+                    self._update_remark_leader(_r)
+                return result
+            text.itemChange = patched_item_change
+
+    def _update_remark_leader(self, remark):
+        """Redraw leader line from data point to text label current position."""
+        try:
+            text = remark['text']
+            dx, dy = remark['data_x'], remark['data_y']
+            lpos = text.pos()
+            lx, ly = float(lpos.x()), float(lpos.y())
+            remark['leader'].setData(x=[dx, lx], y=[dy, ly])
+        except Exception:
+            pass
+
+    def _remove_remark_at(self, scene_pos):
+        """Remove annotation nearest to scene_pos (right-click delete)."""
+        from PyQt5.QtCore import QPointF as _QPointF
+        if not self._remarks or scene_pos is None:
+            return
+        best_idx, best_dist = 0, float('inf')
+        try:
+            sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
+            for i, r in enumerate(self._remarks):
+                vb = r.get('vb')
+                if vb is None:
+                    continue
+                lpos = r['text'].pos()
+                s = vb.mapViewToScene(_QPointF(lpos.x(), lpos.y()))
+                d = (s.x() - sp.x()) ** 2 + (s.y() - sp.y()) ** 2
+                if d < best_dist:
+                    best_dist, best_idx = d, i
+        except Exception:
+            return
+        self._remove_remark_by_index(best_idx)
+
+    def _remove_remark_by_index(self, idx):
+        try:
+            r = self._remarks.pop(idx)
+            vb = r.get('vb')
+            if vb:
+                for item_key in ('dot', 'text', 'leader'):
+                    item = r.get(item_key)
+                    if item is not None:
+                        try:
+                            vb.removeItem(item)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    def clear_remarks(self):
+        """Remove all annotations."""
+        for r in list(self._remarks):
+            vb = r.get('vb')
+            if vb:
+                for item_key in ('dot', 'text', 'leader'):
+                    item = r.get(item_key)
+                    if item is not None:
+                        try:
+                            vb.removeItem(item)
+                        except Exception:
+                            pass
+        self._remarks.clear()
+
     def _handle_overlay_mouse_press(self, event):
         """Overlay-mode left-press: select nearest channel + begin Y-drag,
         or deselect on a blank-area click. No-op outside overlay mode or
@@ -3647,6 +3880,11 @@ class TimeDomainCanvasPG(QWidget):
                     # Return False so the GraphicsView still processes the
                     # event for its own bookkeeping; we do not consume it.
             elif event.type() == QEvent.MouseButtonPress:
+                # Annotation mode: left-click adds a remark at the nearest
+                # data point and consumes the event so pan/cursor don't fire.
+                if self._annotation_enabled and event.button() == Qt.LeftButton:
+                    self._add_remark(event.pos())
+                    return True
                 # Overlay selection / Y-drag begin takes precedence over
                 # cursor placement, but only outside cursor mode (cursor
                 # mode wins, matching canvases.py:853). _handle_overlay_
@@ -4546,6 +4784,7 @@ class TimeDomainCanvasPG(QWidget):
             primary_html = "Click A"
         self.cursor_info.emit(primary_html)
         self.dual_cursor_info.emit(_format_dual_html(dual) if dual else "")
+        self.dual_cursor_rows.emit(dual if dual else [])
         if self._ax is not None and self._bx is not None:
             self._update_dual_cursor_extreme_markers(extreme_points)
         else:

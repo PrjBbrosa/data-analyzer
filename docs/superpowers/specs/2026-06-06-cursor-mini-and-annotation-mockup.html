@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双游标 Mini 版 + 标注图标 — 设计稿</title>
+<style>
+  :root{
+    --pill-border:#d8e0eb;
+    --ink:#111827;
+    --muted:#94a3b8;
+    --a:#2563eb;   /* A 线蓝 */
+    --b:#dc2626;   /* B 线红 */
+    --c1:#1769E0;  /* 通道色：转速 */
+    --c2:#059669;  /* 通道色：车速 */
+    --c3:#D97706;  /* 通道色：水温 */
+    --mono:'SF Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:#f1f5f9;color:#0f172a;
+    font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+    padding:28px 32px 80px;
+  }
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:#64748b;font-size:13px;margin:0 0 24px}
+  h2{font-size:15px;margin:36px 0 6px;padding-top:18px;border-top:1px solid #e2e8f0}
+  h2 .tag{font-size:11px;font-weight:600;color:#fff;background:#1769E0;border-radius:5px;padding:2px 7px;margin-right:8px;vertical-align:middle}
+  .note{font-size:12px;color:#64748b;margin:0 0 16px;line-height:1.6}
+  .grid{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start}
+
+  /* 模拟时域图表背景，pill 浮在上面 */
+  .chart{
+    position:relative;width:430px;height:240px;border-radius:10px;overflow:hidden;
+    background:
+      linear-gradient(#fff,#fff),
+      repeating-linear-gradient(0deg,#eef2f7 0 1px,transparent 1px 30px),
+      repeating-linear-gradient(90deg,#eef2f7 0 1px,transparent 1px 43px);
+    background-blend-mode:normal;border:1px solid #e2e8f0;
+    box-shadow:0 1px 2px rgba(15,23,42,.04);
+  }
+  .chart svg{position:absolute;inset:0}
+  .caption{font-size:12px;color:#475569;margin-top:8px;text-align:center;font-weight:600}
+  .caption small{display:block;font-weight:400;color:#94a3b8;margin-top:2px}
+
+  /* ===== Cursor Pill ===== */
+  .pill{
+    position:absolute;top:12px;right:12px;
+    background:rgba(255,255,255,.94);border:1px solid var(--pill-border);
+    border-radius:9px;padding:7px 10px 8px;
+    box-shadow:0 4px 14px rgba(15,23,42,.10);min-width:150px;
+  }
+  .pill .primary{font-size:12px;font-weight:600;color:var(--ink);white-space:nowrap;line-height:1.5}
+  .pill .primary .sep{color:#cbd5e1;margin:0 5px}
+  .pill .primary .lbl{color:#64748b;font-weight:600}
+  .corner-btn{
+    position:absolute;top:5px;right:6px;width:16px;height:16px;border-radius:4px;
+    border:1px solid #e2e8f0;background:#f8fafc;color:#475569;
+    font-size:13px;line-height:13px;text-align:center;cursor:pointer;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .corner-btn:hover{background:#eef2f7}
+
+  /* full detail table */
+  .detail{margin-top:6px;font-family:var(--mono);font-size:11px;border-collapse:collapse}
+  .detail .chname{font-weight:700;padding-top:5px}
+  .detail td{padding:1px 0}
+  .detail .k{color:var(--muted);padding-right:5px}
+  .detail .bar{color:#cbd5e1;padding:0 6px}
+  .detail .v{color:var(--ink)}
+
+  /* mini rows */
+  .mini-row{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;margin-top:3px;white-space:nowrap}
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .mini-row .nm{color:#334155;min-width:78px}
+  .mini-row .dv{font-weight:700;margin-left:auto}
+  .up{color:#dc2626}.down{color:#059669}
+
+  /* mini variant B big delta */
+  .bigdt{display:flex;align-items:baseline;gap:8px;margin-top:1px}
+  .bigdt .num{font-size:17px;font-weight:700;color:var(--ink);font-family:var(--mono)}
+  .bigdt .hz{font-size:11px;color:#64748b;font-family:var(--mono)}
+  .ab-line{font-size:10.5px;color:#94a3b8;font-family:var(--mono);margin-top:1px}
+  .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+  .chip{display:flex;align-items:center;gap:4px;background:#f8fafc;border:1px solid #eef2f7;border-radius:6px;padding:2px 6px;font-family:var(--mono);font-size:10.5px}
+
+  /* ===== Icon candidates ===== */
+  .icons{display:flex;flex-wrap:wrap;gap:18px}
+  .icard{width:188px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;padding:14px;text-align:center}
+  .icard .row{display:flex;justify-content:center;gap:14px;align-items:center;margin-bottom:10px}
+  .tbtn{width:34px;height:30px;border-radius:7px;border:1px solid #dbe3ee;background:#fff;display:flex;align-items:center;justify-content:center}
+  .tbtn.on{background:#e8f0ff;border-color:#1769E0}
+  .iname{font-size:13px;font-weight:700;margin:2px 0}
+  .idesc{font-size:11px;color:#64748b;line-height:1.5}
+  .pick{display:inline-block;font-size:10px;font-weight:700;color:#fff;background:#059669;border-radius:4px;padding:1px 6px;margin-top:6px}
+</style>
+</head>
+<body>
+  <h1>双游标 Mini 版 &amp; 标注按钮图标 — 设计稿</h1>
+  <p class="sub">仅为视觉预览（HTML 还原 Qt 渲染），未改动任何 .py 代码。配色 / 圆角 / 字号均对齐现有 <code>CursorPill</code> 与 <code>icons.py</code>。</p>
+
+  <h2><span class="tag">③</span>双游标面板：Full（现状 + 收起按钮）vs Mini</h2>
+  <p class="note">
+    样例数据：A=1.2340s，B=2.4560s，ΔT=1.2220s，1/ΔT=0.82Hz。3 个通道：<b style="color:var(--c1)">转速</b> / <b style="color:var(--c2)">车速</b> / <b style="color:var(--c3)">水温</b>。<br>
+    右上角按钮：Full 版加 <code>[−]</code> 收起到 Mini；Mini 版 <code>[+]</code> 展开回 Full。
+  </p>
+  <div class="grid">
+
+    <!-- FULL -->
+    <div>
+      <div class="chart">
+        <svg viewBox="0 0 430 240" preserveAspectRatio="none">
+          <path d="M0,170 C60,150 90,90 150,110 S260,180 320,120 400,70 430,95" fill="none" stroke="#1769E0" stroke-width="1.6"/>
+          <path d="M0,200 C80,195 120,150 190,165 S300,210 360,170 420,150 430,158" fill="none" stroke="#059669" stroke-width="1.6"/>
+          <path d="M0,120 C70,118 130,128 200,122 S330,108 430,118" fill="none" stroke="#D97706" stroke-width="1.6"/>
+          <line x1="120" y1="0" x2="120" y2="240" stroke="#2563eb" stroke-width="1.1"/>
+          <line x1="300" y1="0" x2="300" y2="240" stroke="#dc2626" stroke-width="1.1"/>
+          <text x="124" y="14" fill="#2563eb" font-size="11" font-weight="700">A</text>
+          <text x="304" y="14" fill="#dc2626" font-size="11" font-weight="700">B</text>
+        </svg>
+        <div class="pill" style="min-width:212px">
+          <div class="corner-btn" title="收起为 Mini">−</div>
+          <div class="primary">
+            <span class="lbl">A</span>=1.2340s<span class="sep">│</span><span class="lbl">B</span>=2.4560s<br>
+            <span class="lbl">ΔT</span>=1.2220s<span class="sep">│</span><span class="lbl">1/ΔT</span>=0.82Hz
+          </div>
+          <table class="detail">
+            <tr><td colspan="4" class="chname" style="color:var(--c1)">转速 EngineSpeed</td></tr>
+            <tr><td class="k">Min</td><td class="v">820.5</td><td class="k" style="padding-left:10px">Max</td><td class="v">3450.2</td></tr>
+            <tr><td class="k">Avg</td><td class="v">2100.3</td><td class="k" style="padding-left:10px">△</td><td class="v up">+1240.7</td></tr>
+            <tr><td colspan="4" class="chname" style="color:var(--c2)">车速 VehicleSpeed</td></tr>
+            <tr><td class="k">Min</td><td class="v">12.0</td><td class="k" style="padding-left:10px">Max</td><td class="v">88.5</td></tr>
+            <tr><td class="k">Avg</td><td class="v">50.2</td><td class="k" style="padding-left:10px">△</td><td class="v up">+45.3</td></tr>
+            <tr><td colspan="4" class="chname" style="color:var(--c3)">水温 CoolantTemp</td></tr>
+            <tr><td class="k">Min</td><td class="v">78.2</td><td class="k" style="padding-left:10px">Max</td><td class="v">96.1</td></tr>
+            <tr><td class="k">Avg</td><td class="v">88.4</td><td class="k" style="padding-left:10px">△</td><td class="v up">+9.8</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="caption">Full（完整版）<small>现状 + 右上角新增 [−] 收起按钮</small></div>
+    </div>
+
+    <!-- MINI A -->
+    <div>
+      <div class="chart">
+        <svg viewBox="0 0 430 240" preserveAspectRatio="none">
+          <path d="M0,170 C60,150 90,90 150,110 S260,180 320,120 400,70 430,95" fill="none" stroke="#1769E0" stroke-width="1.6"/>
+          <path d="M0,200 C80,195 120,150 190,165 S300,210 360,170 420,150 430,158" fill="none" stroke="#059669" stroke-width="1.6"/>
+          <path d="M0,120 C70,118 130,128 200,122 S330,108 430,118" fill="none" stroke="#D97706" stroke-width="1.6"/>
+          <line x1="120" y1="0" x2="120" y2="240" stroke="#2563eb" stroke-width="1.1"/>
+          <line x1="300" y1="0" x2="300" y2="240" stroke="#dc2626" stroke-width="1.1"/>
+          <text x="124" y="14" fill="#2563eb" font-size="11" font-weight="700">A</text>
+          <text x="304" y="14" fill="#dc2626" font-size="11" font-weight="700">B</text>
+        </svg>
+        <div class="pill" style="min-width:186px">
+          <div class="corner-btn" title="展开为 Full">+</div>
+          <div class="primary" style="padding-right:14px">
+            <span class="lbl">A</span>=1.234<span class="sep">│</span><span class="lbl">B</span>=2.456<br>
+            <span class="lbl">ΔT</span>=1.2220s<span class="sep">│</span>0.82Hz
+          </div>
+          <div class="mini-row"><span class="dot" style="background:var(--c1)"></span><span class="nm">转速</span><span class="dv up">△ +1240.7</span></div>
+          <div class="mini-row"><span class="dot" style="background:var(--c2)"></span><span class="nm">车速</span><span class="dv up">△ +45.3</span></div>
+          <div class="mini-row"><span class="dot" style="background:var(--c3)"></span><span class="nm">水温</span><span class="dv up">△ +9.8</span></div>
+        </div>
+      </div>
+      <div class="caption">Mini A · 堆叠式 <small>第一行 + 每通道一行只显示 △ 差值（推荐）</small></div>
+    </div>
+
+    <!-- MINI B -->
+    <div>
+      <div class="chart">
+        <svg viewBox="0 0 430 240" preserveAspectRatio="none">
+          <path d="M0,170 C60,150 90,90 150,110 S260,180 320,120 400,70 430,95" fill="none" stroke="#1769E0" stroke-width="1.6"/>
+          <path d="M0,200 C80,195 120,150 190,165 S300,210 360,170 420,150 430,158" fill="none" stroke="#059669" stroke-width="1.6"/>
+          <path d="M0,120 C70,118 130,128 200,122 S330,108 430,118" fill="none" stroke="#D97706" stroke-width="1.6"/>
+          <line x1="120" y1="0" x2="120" y2="240" stroke="#2563eb" stroke-width="1.1"/>
+          <line x1="300" y1="0" x2="300" y2="240" stroke="#dc2626" stroke-width="1.1"/>
+          <text x="124" y="14" fill="#2563eb" font-size="11" font-weight="700">A</text>
+          <text x="304" y="14" fill="#dc2626" font-size="11" font-weight="700">B</text>
+        </svg>
+        <div class="pill" style="min-width:176px">
+          <div class="corner-btn" title="展开为 Full">+</div>
+          <div class="bigdt" style="padding-right:14px"><span class="num">ΔT 1.2220<small style="font-size:11px;color:#64748b">s</small></span><span class="hz">0.82 Hz</span></div>
+          <div class="ab-line">A 1.2340s · B 2.4560s</div>
+          <div class="chips">
+            <span class="chip"><span class="dot" style="background:var(--c1)"></span>转速 <b class="up">+1240.7</b></span>
+            <span class="chip"><span class="dot" style="background:var(--c2)"></span>车速 <b class="up">+45.3</b></span>
+            <span class="chip"><span class="dot" style="background:var(--c3)"></span>水温 <b class="up">+9.8</b></span>
+          </div>
+        </div>
+      </div>
+      <div class="caption">Mini B · 突出 ΔT <small>ΔT/频率放大，A·B 收小；差值用 chips</small></div>
+    </div>
+
+    <!-- MINI C -->
+    <div>
+      <div class="chart">
+        <svg viewBox="0 0 430 240" preserveAspectRatio="none">
+          <path d="M0,170 C60,150 90,90 150,110 S260,180 320,120 400,70 430,95" fill="none" stroke="#1769E0" stroke-width="1.6"/>
+          <path d="M0,200 C80,195 120,150 190,165 S300,210 360,170 420,150 430,158" fill="none" stroke="#059669" stroke-width="1.6"/>
+          <path d="M0,120 C70,118 130,128 200,122 S330,108 430,118" fill="none" stroke="#D97706" stroke-width="1.6"/>
+          <line x1="120" y1="0" x2="120" y2="240" stroke="#2563eb" stroke-width="1.1"/>
+          <line x1="300" y1="0" x2="300" y2="240" stroke="#dc2626" stroke-width="1.1"/>
+        </svg>
+        <div class="pill" style="min-width:150px">
+          <div class="corner-btn" title="展开为 Full">+</div>
+          <div class="primary" style="padding-right:14px;font-size:11.5px">
+            <span class="lbl">ΔT</span> 1.2220s &nbsp;·&nbsp; 0.82Hz
+          </div>
+          <div class="mini-row"><span class="dot" style="background:var(--c1)"></span><span class="dv up" style="margin-left:0">+1240.7</span></div>
+          <div class="mini-row"><span class="dot" style="background:var(--c2)"></span><span class="dv up" style="margin-left:0">+45.3</span></div>
+          <div class="mini-row"><span class="dot" style="background:var(--c3)"></span><span class="dv up" style="margin-left:0">+9.8</span></div>
+        </div>
+      </div>
+      <div class="caption">Mini C · 极简 <small>不显示 A/B 绝对值，只留 ΔT/频率 + 色点差值</small></div>
+    </div>
+
+  </div>
+
+  <h2><span class="tag">④</span>标注按钮 — 图标候选（线性矢量，对齐 icons.py 风格）</h2>
+  <p class="note">
+    每个图标展示在工具栏按钮里：左=常态、右=激活（浅蓝底）。线宽/配色照 <code>icons.py</code>（蓝 <code>#1769E0</code> / 灰 <code>#475569</code>），20px 网格、2x DPI 手绘。
+  </p>
+  <div class="icons">
+
+    <!-- 1 气泡+定位点 -->
+    <div class="icard">
+      <div class="row">
+        <div class="tbtn">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#475569" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 4 H16 a1.5 1.5 0 0 1 1.5 1.5 V11 a1.5 1.5 0 0 1 -1.5 1.5 H9 l-2.5 3 v-3 H4 a1.5 1.5 0 0 1 -1.5 -1.5 V5.5 A1.5 1.5 0 0 1 4 4 Z"/>
+            <circle cx="10" cy="8.2" r="1.4" fill="#475569" stroke="none"/>
+          </svg>
+        </div>
+        <div class="tbtn on">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#1769E0" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 4 H16 a1.5 1.5 0 0 1 1.5 1.5 V11 a1.5 1.5 0 0 1 -1.5 1.5 H9 l-2.5 3 v-3 H4 a1.5 1.5 0 0 1 -1.5 -1.5 V5.5 A1.5 1.5 0 0 1 4 4 Z"/>
+            <circle cx="10" cy="8.2" r="1.4" fill="#1769E0" stroke="none"/>
+          </svg>
+        </div>
+      </div>
+      <div class="iname">① 标注气泡</div>
+      <div class="idesc">对话气泡内一个点。直观表达「在这点加批注」。</div>
+      <span class="pick">推荐</span>
+    </div>
+
+    <!-- 2 定位针 pin -->
+    <div class="icard">
+      <div class="row">
+        <div class="tbtn">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#475569" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 2.5 C6.8 2.5 4.5 4.8 4.5 7.7 C4.5 11.2 10 17.5 10 17.5 C10 17.5 15.5 11.2 15.5 7.7 C15.5 4.8 13.2 2.5 10 2.5 Z"/>
+            <circle cx="10" cy="7.6" r="1.9"/>
+          </svg>
+        </div>
+        <div class="tbtn on">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#1769E0" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 2.5 C6.8 2.5 4.5 4.8 4.5 7.7 C4.5 11.2 10 17.5 10 17.5 C10 17.5 15.5 11.2 15.5 7.7 C15.5 4.8 13.2 2.5 10 2.5 Z"/>
+            <circle cx="10" cy="7.6" r="1.9"/>
+          </svg>
+        </div>
+      </div>
+      <div class="iname">② 定位针 Pin</div>
+      <div class="idesc">地图针。强调「钉在某个点位」，但更像导航不像批注。</div>
+    </div>
+
+    <!-- 3 标签+引线 -->
+    <div class="icard">
+      <div class="row">
+        <div class="tbtn">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#475569" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="5" cy="14.5" r="1.6" fill="#475569" stroke="none"/>
+            <line x1="6.1" y1="13.4" x2="9.5" y2="9.5"/>
+            <rect x="9.5" y="4" width="8" height="6" rx="1.4"/>
+            <line x1="11.4" y1="6" x2="15.6" y2="6"/>
+            <line x1="11.4" y1="8" x2="14.2" y2="8"/>
+          </svg>
+        </div>
+        <div class="tbtn on">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#1769E0" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="5" cy="14.5" r="1.6" fill="#1769E0" stroke="none"/>
+            <line x1="6.1" y1="13.4" x2="9.5" y2="9.5"/>
+            <rect x="9.5" y="4" width="8" height="6" rx="1.4"/>
+            <line x1="11.4" y1="6" x2="15.6" y2="6"/>
+            <line x1="11.4" y1="8" x2="14.2" y2="8"/>
+          </svg>
+        </div>
+      </div>
+      <div class="iname">③ 标签 + 引线</div>
+      <div class="idesc">点 → 引线 → 文本框。最贴近本功能实际效果（带引线的标签）。</div>
+      <span class="pick">推荐</span>
+    </div>
+
+    <!-- 4 波形高亮点 -->
+    <div class="icard">
+      <div class="row">
+        <div class="tbtn">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#475569" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 13 C5 13 6 7 8.5 7 C11 7 12 11 14.5 11"/>
+            <circle cx="8.5" cy="7" r="2.1" fill="#fff"/>
+            <line x1="15.5" y1="4" x2="17.8" y2="4"/>
+            <line x1="16.6" y1="2.9" x2="16.6" y2="5.1"/>
+          </svg>
+        </div>
+        <div class="tbtn on">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#1769E0" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 13 C5 13 6 7 8.5 7 C11 7 12 11 14.5 11"/>
+            <circle cx="8.5" cy="7" r="2.1" fill="#fff"/>
+            <line x1="15.5" y1="4" x2="17.8" y2="4"/>
+            <line x1="16.6" y1="2.9" x2="16.6" y2="5.1"/>
+          </svg>
+        </div>
+      </div>
+      <div class="iname">④ 曲线打点</div>
+      <div class="idesc">波形上一个高亮点 + 加号。强调「在曲线上取点」。</div>
+    </div>
+
+    <!-- 5 文本编辑 A -->
+    <div class="icard">
+      <div class="row">
+        <div class="tbtn">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#475569" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="5.5" cy="14.5" r="1.6" fill="#475569" stroke="none"/>
+            <path d="M6.7 13.3 L10 9.8"/>
+            <path d="M9.5 9 L13.5 5 a1.4 1.4 0 0 1 2 2 L11.5 11 L9 11.5 L9.5 9 Z"/>
+          </svg>
+        </div>
+        <div class="tbtn on">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="#1769E0" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="5.5" cy="14.5" r="1.6" fill="#1769E0" stroke="none"/>
+            <path d="M6.7 13.3 L10 9.8"/>
+            <path d="M9.5 9 L13.5 5 a1.4 1.4 0 0 1 2 2 L11.5 11 L9 11.5 L9.5 9 Z"/>
+          </svg>
+        </div>
+      </div>
+      <div class="iname">⑤ 取点批注（笔）</div>
+      <div class="idesc">点 + 引线 + 铅笔。强调「在点位上书写」。</div>
+    </div>
+
+  </div>
+
+</body>
+</html>

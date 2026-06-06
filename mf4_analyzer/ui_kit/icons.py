@@ -318,6 +318,31 @@ class Icons:
             p.drawLine(QPointF(10, 10), QPointF(13, 10))
         return QIcon(pix)
 
+    @classmethod
+    def annotate(cls, color=None):
+        """Label + leader-line annotation icon.
+
+        Geometry in 0..20 viewport:
+          data-point circle at (3, 15) r=1.8
+          leader line from (4.5, 13.5) to (10, 7.5)
+          label rect (10, 3) × 8×8
+          two text-lines inside the label rect
+        """
+        c = color or GRAY
+        def draw(p):
+            p.setPen(_pen(c, 1.45))
+            p.setBrush(Qt.NoBrush)
+            # data-point circle
+            p.drawEllipse(QPointF(3, 15), 1.8, 1.8)
+            # leader line
+            p.drawLine(QPointF(4.5, 13.5), QPointF(10, 7.5))
+            # label rectangle
+            p.drawRoundedRect(QRectF(10, 3, 8, 8), 1.2, 1.2)
+            # two short text lines inside
+            p.drawLine(QPointF(12, 6), QPointF(16, 6))
+            p.drawLine(QPointF(12, 8.5), QPointF(15, 8.5))
+        return _line_icon(draw, c)
+
 
 # =============================================================================
 # QSS subcontrol-arrow icon cache (scheme B: qtawesome -> PNG -> QSS image:url)

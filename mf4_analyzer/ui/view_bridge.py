@@ -22,7 +22,7 @@ def capture_axis_opts(window) -> dict[str, Any]:
     custom_active = custom_fid is not None and custom_ch is not None
     label = getattr(window, "_custom_xlabel", None) or top.xaxis_label()
     if not label:
-        label = str(custom_ch) if custom_active else "Time (s)"
+        label = str(custom_ch) if custom_active else ""
 
     return {
         "range_filter": {
