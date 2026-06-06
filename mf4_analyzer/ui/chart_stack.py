@@ -363,6 +363,9 @@ class PgNavigationToolbar(QToolBar):
         # handoff) invoke the methods directly and bypass this, so only the
         # six nav buttons' user clicks forward. None ⇒ no forwarding.
         self._action_delegate_provider = None
+        # Split-mode peer routing: pan/zoom/back/forward should apply to this
+        # toolbar and any visible peer pane toolbar without changing focus.
+        self._peer_toolbars_provider = None
         # View history (matplotlib NavigationToolbar2 model): a single stack
         # of view snapshots plus a pointer into it. ``back()`` decrements the
         # pointer, ``forward()`` increments it, and a brand-new gesture
@@ -739,6 +742,27 @@ class PgNavigationToolbar(QToolBar):
         if changed:
             self.mouse_mode_changed.emit(self.mode)
 
+    def _peers(self):
+        provider = self._peer_toolbars_provider
+        if provider is None:
+            return []
+        try:
+            peers = provider() or []
+        except Exception:
+            return []
+        return [toolbar for toolbar in peers if toolbar is not None and toolbar is not self]
+
+    def set_mouse_mode(self, mode):
+        """Set mouse mode on this toolbar only; callers handle peer broadcast."""
+        if mode == self._MODE_ZOOM:
+            self.set_zoom_mode()
+        elif mode == self._MODE_PAN:
+            self.set_pan_mode()
+        else:
+            self.mode = self._MODE_NONE
+            self.apply_current_mouse_mode()
+            self.mouse_mode_changed.emit(self.mode)
+
     def save_figure(self, *_args):
         """Open a Save-As dialog and write the canvas grab to disk.
 
@@ -783,16 +807,24 @@ class PgNavigationToolbar(QToolBar):
         (self._delegate() or self).home()
 
     def _click_back(self, *_a):
-        (self._delegate() or self).back()
+        self.back()
+        for toolbar in self._peers():
+            toolbar.back()
 
     def _click_forward(self, *_a):
-        (self._delegate() or self).forward()
+        self.forward()
+        for toolbar in self._peers():
+            toolbar.forward()
 
     def _click_pan(self, *_a):
-        (self._delegate() or self).pan()
+        self.pan()
+        for toolbar in self._peers():
+            toolbar.set_mouse_mode(self.mode)
 
     def _click_zoom(self, *_a):
-        (self._delegate() or self).zoom()
+        self.zoom()
+        for toolbar in self._peers():
+            toolbar.set_mouse_mode(self.mode)
 
     def _click_save(self, *_a):
         (self._delegate() or self).save_figure()
@@ -1507,9 +1539,14 @@ class ChartStack(QWidget):
         self._time_card.copy_image_requested.connect(
             lambda: self._copy_card_image(self.focused_card())
         )
-        # Shared-toolbar nav clicks (home/pan/zoom/back/forward/save) forward
-        # to the focused pane's own toolbar while side-by-side is active.
+        # Shared-toolbar home/save still target the focused pane; pan/zoom and
+        # history buttons broadcast to the visible peer toolbar below.
         self._time_toolbar._action_delegate_provider = self._focused_nav_delegate
+        self._time_toolbar._peer_toolbars_provider = (
+            lambda: [self._secondary_card.toolbar]
+            if (self.split_active() and self._secondary_card is not None)
+            else []
+        )
         # 图表选项 on the shared toolbar opens for the focused pane's canvas.
         self._time_card._options_canvas_provider = self.focused_canvas
         # Mirror the focused pane's pan/zoom state onto the shared toolbar

@@ -345,60 +345,76 @@ def test_pill_formats_detail_using_emitting_pane_cursor_mode(
 
 
 # ---------------------------------------------------------------------------
-# Shared toolbar nav clicks (home/pan/zoom/back/forward/save) route to the
-# focused pane's own canvas-bound toolbar while side-by-side is active.
+# Shared toolbar pan/zoom/back/forward clicks broadcast to both panes while
+# side-by-side is active. Home/options remain focused-pane operations.
 # ---------------------------------------------------------------------------
 
-def test_shared_nav_click_forwards_to_focused_secondary(qtbot, qapp, loaded_csv):
+def _viewbox_mouse_modes(canvas):
+    return [
+        ax.view_box.state["mouseMode"]
+        for ax in canvas.axes_list
+        if getattr(ax, "view_box", None) is not None
+    ]
+
+
+def test_shared_nav_pan_zoom_arm_both_split_panes(qtbot, qapp, loaded_csv):
+    import pyqtgraph as pg
+
     w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
     cs = w.chart_stack
     _enter_split(w, qapp)
-    _click_card(qapp, cs._secondary_card)
-    assert cs.focused_canvas() is cs.secondary_canvas()
-
     shared = cs._time_toolbar  # the (detached) primary card toolbar
     secondary_tb = cs._secondary_card.toolbar
-    primary_mode_before = shared.mode
-
-    shared._actions_by_key["zoom"].trigger()
-    qapp.processEvents()
-
-    # The click landed on the SECONDARY toolbar; the shared/primary toolbar's
-    # own mode is untouched (it stays bound to the primary canvas).
-    assert secondary_tb.mode == "zoom"
-    assert shared.mode == primary_mode_before
-
-
-def test_shared_nav_click_targets_primary_when_primary_focused(
-    qtbot, qapp, loaded_csv
-):
-    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
-    cs = w.chart_stack
-    _enter_split(w, qapp)
-    # Primary focused by default after enter_split.
-    shared = cs._time_toolbar
-    secondary_before = cs._secondary_card.toolbar.mode
 
     shared._actions_by_key["zoom"].trigger()
     qapp.processEvents()
 
     assert shared.mode == "zoom"
-    assert cs._secondary_card.toolbar.mode == secondary_before
+    assert secondary_tb.mode == "zoom"
+    assert _viewbox_mouse_modes(cs.canvas_time) == [pg.ViewBox.RectMode]
+    assert _viewbox_mouse_modes(cs.secondary_canvas()) == [pg.ViewBox.RectMode]
+
+    shared._actions_by_key["pan"].trigger()
+    qapp.processEvents()
+
+    assert shared.mode == "pan"
+    assert secondary_tb.mode == "pan"
+    assert _viewbox_mouse_modes(cs.canvas_time) == [pg.ViewBox.PanMode]
+    assert _viewbox_mouse_modes(cs.secondary_canvas()) == [pg.ViewBox.PanMode]
 
 
-def test_shared_nav_highlight_mirrors_focused_secondary(qtbot, qapp, loaded_csv):
+def test_shared_nav_back_forward_runs_each_pane_toolbar(qtbot, qapp, loaded_csv):
     w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
     cs = w.chart_stack
     _enter_split(w, qapp)
-    _click_card(qapp, cs._secondary_card)
-
     shared = cs._time_toolbar
-    shared._actions_by_key["zoom"].trigger()
-    qapp.processEvents()
+    secondary_tb = cs._secondary_card.toolbar
+    calls = []
 
-    # The shared toolbar's zoom icon is flagged active to reflect the focused
-    # SECONDARY pane, even though the shared toolbar object's own mode stays
-    # 'pan' (it remains bound to the primary canvas).
+    shared.back = lambda: calls.append("primary-back")
+    secondary_tb.back = lambda: calls.append("secondary-back")
+    shared.forward = lambda: calls.append("primary-forward")
+    secondary_tb.forward = lambda: calls.append("secondary-forward")
+
+    shared._actions_by_key["back"].trigger()
+    shared._actions_by_key["forward"].trigger()
+
+    assert calls == [
+        "primary-back",
+        "secondary-back",
+        "primary-forward",
+        "secondary-forward",
+    ]
+
+
+def test_shared_nav_highlight_reflects_broadcast_mode(qtbot, qapp, loaded_csv):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    shared = cs._time_toolbar
+
+    shared._actions_by_key["zoom"].trigger()
+
     zoom_btn = shared.widgetForAction(shared._actions_by_key["zoom"])
     pan_btn = shared.widgetForAction(shared._actions_by_key["pan"])
     assert bool(zoom_btn.property("navActive")) is True
