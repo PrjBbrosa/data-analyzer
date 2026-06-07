@@ -43,6 +43,7 @@ lesson by default.
 | [Codex Qt Rounded Popup Chrome](codex-qt-rounded-popup-chrome.md) | Changing rounded popup/dropdown/menu styling or adding a new `QMenu`, | See lesson |
 | [Qt Checkbox Press Release Toggle](codex-qt-checkbox-press-release-toggle.md) | Changing custom PyQt item-view checkbox hit handling, especially | See lesson |
 | [Overlay Graticule And Wheel Contract](codex-overlay-graticule-wheel-contract.md) | Work touching TimeDomain pyqtgraph overlay-mode grid lines, per-channel | See lesson |
+| [Cursor Pill View Apply](codex-cursor-pill-view-apply.md) | Touching view-tab apply/render paths, cursor mode restoration, or split-pane cursor pill routing. | See lesson |
 
 ## Selection Rules
 

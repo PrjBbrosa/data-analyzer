@@ -592,12 +592,21 @@ class MainWindow(QMainWindow):
             return
         state = self.view_manager.get(idx)
 
-        cursor_pill_snapshot = self.chart_stack.cursor_pill_snapshot()
+        # Snapshot/restore is only for off-screen secondary renders in split
+        # mode. Primary view switches must show the target view's cursor state,
+        # not the previous view's last readout.
+        cursor_pill_snapshot = (
+            self.chart_stack.cursor_pill_snapshot()
+            if not update_primary_ui
+            else None
+        )
         restore_idx = self._focused_view_idx
         old_applying_view = getattr(self, '_applying_view', False)
         self._applying_view = True
         try:
             self._view_bridge.apply_controls_from_state(state, self, canvas)
+            if update_primary_ui and state.cursor_mode == 'off':
+                self.chart_stack.clear_cursor_pill()
             self._plot_time_on_canvas(canvas, update_primary_ui=update_primary_ui)
             canvas.restore_visible_xlim(state.xlim)
             canvas.restore_visible_ylims(state.ylims)
@@ -610,7 +619,8 @@ class MainWindow(QMainWindow):
             self._applying_view = old_applying_view
             if restore_idx is not None:
                 self._project_view_controls(restore_idx)
-            self.chart_stack.restore_cursor_pill_snapshot(cursor_pill_snapshot)
+            if cursor_pill_snapshot is not None:
+                self.chart_stack.restore_cursor_pill_snapshot(cursor_pill_snapshot)
 
     def _on_view_new(self):
         self._capture_current_view()

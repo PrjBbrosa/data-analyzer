@@ -2061,20 +2061,19 @@ class ChartStack(QWidget):
             self._secondary_card.cursor_mode_changed.connect(
                 self._on_secondary_cursor_mode_changed
             )
-            # Create a dedicated pill for the secondary pane.
+            # Keep the existing shared cursor pill; readouts from either pane
+            # move it to the emitting pane via _active_cursor_card.
             if self._pill_secondary is None:
                 self._pill_secondary = CursorPill(self.stack)
                 self._pill_secondary.setVisible(False)
-            # Each pane now has its own pill; route secondary canvas readouts
-            # through the shared handlers which dispatch via _pill_for_canvas.
             canvas.cursor_info.connect(
                 lambda text, c=canvas: self._on_cursor_info(text, c)
             )
             canvas.dual_cursor_info.connect(
                 lambda text, c=canvas: self._on_dual_cursor_info(text, c)
             )
-            if hasattr(canvas, 'dual_cursor_rows') and self._pill_secondary is not None:
-                canvas.dual_cursor_rows.connect(self._pill_secondary.set_dual_rows)
+            if hasattr(canvas, 'dual_cursor_rows'):
+                canvas.dual_cursor_rows.connect(self._pill.set_dual_rows)
             self._time_split.addWidget(self._secondary_card)
             self._install_focus_filter(self._secondary_card)
         self._secondary_card.setVisible(True)
@@ -2451,10 +2450,6 @@ class ChartStack(QWidget):
 
     def _pill_for_canvas(self, canvas):
         """Return the CursorPill that should show readouts for ``canvas``."""
-        if (self._pill_secondary is not None
-                and self._secondary_card is not None
-                and canvas is self._secondary_card.canvas):
-            return self._pill_secondary
         return self._pill
 
     def _on_cursor_info(self, text, source=None):
