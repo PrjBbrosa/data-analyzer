@@ -1727,15 +1727,11 @@ class ChartStack(QWidget):
         lay.addWidget(self.stats_strip)
         self.stats_strip.setVisible(_STATS_STRIP_ENABLED)
 
-        # Single draggable cursor pill (owned by ChartStack; floats over the
-        # active canvas card). Default position is the top-right corner so it
-        # stays clear of Y-axis labels and the typical data-of-interest area;
-        # the user can drag it elsewhere — see CursorPill.mark_user_placed.
+        # Per-pane draggable cursor pills. The primary pill is always present;
+        # the secondary pill is created when split view is first opened.
         self._pill = CursorPill(self.stack)
         self._pill.setVisible(False)
         self._pill_secondary = None  # created/destroyed with enter/exit_split
-        # The single pill follows whichever pane last drove a cursor readout.
-        # Default to the primary card; updated per emit via _card_for_canvas.
         self._active_cursor_card = self._time_card
         # Pass the SOURCE canvas so the pill picks the right per-pane cursor
         # mode (single/dual formatting) and anchors over the emitting pane.
@@ -2061,8 +2057,8 @@ class ChartStack(QWidget):
             self._secondary_card.cursor_mode_changed.connect(
                 self._on_secondary_cursor_mode_changed
             )
-            # Keep the existing shared cursor pill; readouts from either pane
-            # move it to the emitting pane via _active_cursor_card.
+            # The secondary pane has its own pill so both split panes can show
+            # independent single/dual cursor readouts at the same time.
             if self._pill_secondary is None:
                 self._pill_secondary = CursorPill(self.stack)
                 self._pill_secondary.setVisible(False)
@@ -2073,7 +2069,7 @@ class ChartStack(QWidget):
                 lambda text, c=canvas: self._on_dual_cursor_info(text, c)
             )
             if hasattr(canvas, 'dual_cursor_rows'):
-                canvas.dual_cursor_rows.connect(self._pill.set_dual_rows)
+                canvas.dual_cursor_rows.connect(self._pill_secondary.set_dual_rows)
             self._time_split.addWidget(self._secondary_card)
             self._install_focus_filter(self._secondary_card)
         self._secondary_card.setVisible(True)
@@ -2101,8 +2097,8 @@ class ChartStack(QWidget):
 
     def _on_secondary_cursor_mode_changed(self, mode):
         """Toggle the secondary canvas's cursor (off/single/dual) in place."""
-        if mode == 'off':
-            self.clear_cursor_pill()
+        if mode == 'off' and self._pill_secondary is not None:
+            self._pill_secondary.clear()
         canvas = self._secondary_card.canvas
         canvas.set_cursor_visible(mode != 'off')
         canvas.set_dual_cursor_mode(mode == 'dual')
@@ -2450,6 +2446,10 @@ class ChartStack(QWidget):
 
     def _pill_for_canvas(self, canvas):
         """Return the CursorPill that should show readouts for ``canvas``."""
+        if (self._pill_secondary is not None
+                and self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            return self._pill_secondary
         return self._pill
 
     def _on_cursor_info(self, text, source=None):

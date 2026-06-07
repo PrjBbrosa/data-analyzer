@@ -300,30 +300,48 @@ def test_programmatic_primary_cursor_mode_does_not_rewrite_focused_secondary(
 
 
 # ---------------------------------------------------------------------------
-# Follow-focus cursor pill: the secondary pane's readout reaches the shared
-# pill (previously wired to the primary canvas only).
+# Per-pane cursor pills: each split pane keeps its own readout.
 # ---------------------------------------------------------------------------
 
-def test_secondary_canvas_cursor_readout_reaches_shared_pill(
+def test_secondary_canvas_cursor_readout_reaches_secondary_pill(
     qtbot, qapp, loaded_csv
 ):
     w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
     cs = w.chart_stack
     _enter_split(w, qapp)
 
-    # A readout emitted by the SECONDARY canvas now drives the single pill and
-    # anchors it over the secondary pane.
-    cs.secondary_canvas().cursor_info.emit("A=2.0s | speed=5")
-    qapp.processEvents()
-    assert "A=2.0s" in cs.cursor_pill_text()
-    assert cs._active_cursor_card is cs._secondary_card
-
-    # A later primary readout takes the pill back (follows whichever pane the
-    # cursor is on).
     cs.canvas_time.cursor_info.emit("t=9.0s | speed=1")
     qapp.processEvents()
     assert "t=9.0s" in cs.cursor_pill_text()
-    assert cs._active_cursor_card is cs._time_card
+
+    # A readout emitted by the SECONDARY canvas drives the secondary pill,
+    # without overwriting the primary view's readout.
+    cs.secondary_canvas().cursor_info.emit("A=2.0s | speed=5")
+    qapp.processEvents()
+    assert "t=9.0s" in cs.cursor_pill_text()
+    assert cs._pill_secondary is not None
+    assert "A=2.0s" in cs._pill_secondary.primary_text()
+    assert cs._active_cursor_card is cs._secondary_card
+
+
+def test_split_dual_cursor_results_show_on_both_pane_pills(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+
+    cs.canvas_time.cursor_info.emit("A=1.0s")
+    cs.canvas_time.dual_cursor_info.emit("<b>primary stats</b>")
+    cs.secondary_canvas().cursor_info.emit("A=2.0s")
+    cs.secondary_canvas().dual_cursor_info.emit("<b>secondary stats</b>")
+    qapp.processEvents()
+
+    assert "A=1.0s" in cs.cursor_pill_text()
+    assert "primary stats" in cs._pill._detail.text()
+    assert cs._pill_secondary is not None
+    assert "A=2.0s" in cs._pill_secondary.primary_text()
+    assert "secondary stats" in cs._pill_secondary._detail.text()
 
 
 def test_pill_formats_detail_using_emitting_pane_cursor_mode(
@@ -346,7 +364,8 @@ def test_pill_formats_detail_using_emitting_pane_cursor_mode(
     # (formatter reads the SECONDARY pane's cursor mode, not the primary's).
     cs.secondary_canvas().cursor_info.emit(text)
     qapp.processEvents()
-    assert cs._pill.has_detail() is True
+    assert cs._pill_secondary is not None
+    assert cs._pill_secondary.has_detail() is True
 
 
 # ---------------------------------------------------------------------------
