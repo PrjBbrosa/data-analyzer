@@ -159,3 +159,30 @@ class TestCollaboratorStateOwnership:
 
         assert controller.density == (10, 8)
         assert "_tick_density" not in pg_canvas.__dict__
+
+    def test_cursor_state_lives_on_cursor_controller(self, pg_canvas):
+        cursor = pg_canvas._cursor
+
+        assert cursor.visible is False
+        assert cursor.dual is False
+        assert cursor.ax is None
+        assert cursor.bx is None
+        assert cursor.placing == "A"
+        assert cursor.last_t == 0
+        assert cursor.line_items == []
+        assert cursor.a_items == []
+        assert cursor.b_items == []
+        assert cursor.extreme_markers == []
+        for name in (
+            "_cursor_visible",
+            "_dual",
+            "_ax",
+            "_bx",
+            "_placing",
+            "_last_t",
+            "_cursor_line_items",
+            "_cursor_a_items",
+            "_cursor_b_items",
+            "_dual_cursor_extreme_markers",
+        ):
+            assert name not in pg_canvas.__dict__

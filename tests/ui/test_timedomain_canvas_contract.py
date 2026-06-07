@@ -325,8 +325,8 @@ def test_reset_cursor_state_clears_dual_fields_and_marks_refresh(qapp):
 
 def test_main_window_reset_cursors_uses_canvas_helper(qapp, qtbot):
     """Task 2 Step 3: ``MainWindow._reset_cursors`` should call the
-    canvas's ``reset_cursor_state()`` (with a ``getattr`` fallback for
-    the legacy direct-mutation path)."""
+    canvas's ``reset_cursor_state()`` instead of mutating cursor state
+    directly."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     w = MainWindow()
@@ -334,16 +334,16 @@ def test_main_window_reset_cursors_uses_canvas_helper(qapp, qtbot):
 
     # Seed dual cursor state on the time canvas, then reset via
     # MainWindow's helper.
-    w.canvas_time._ax = 0.2
-    w.canvas_time._bx = 0.8
-    w.canvas_time._placing = "B"
+    w.canvas_time._cursor.ax = 0.2
+    w.canvas_time._cursor.bx = 0.8
+    w.canvas_time._cursor.placing = "B"
     w.canvas_time._refresh = False
 
     w._reset_cursors()
 
-    assert w.canvas_time._ax is None
-    assert w.canvas_time._bx is None
-    assert w.canvas_time._placing == "A"
+    assert w.canvas_time._cursor.ax is None
+    assert w.canvas_time._cursor.bx is None
+    assert w.canvas_time._cursor.placing == "A"
     assert w.canvas_time._refresh is True
 
 

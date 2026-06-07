@@ -279,14 +279,8 @@ class TimeDomainCanvasPG(QWidget):
         # viewport-aware envelope refresh. Set after plot_channels.
         self._primary_xaxis_ax = None
 
-        # --- cursor / dual-cursor state (matches TimeDomainCanvas) -----
-        self._cursor_visible = False
-        self._dual = False
-        self._ax = None  # cursor A x-position
-        self._bx = None  # cursor B x-position
-        self._placing = "A"
+        # --- viewport refresh state ------------------------------------
         self._refresh = True
-        self._last_t = 0
 
         # --- viewport refresh wiring ------------------------------------
         # 40 ms ≈ 25 FPS coalesce window, matching TimeDomainCanvas.
@@ -455,14 +449,6 @@ class TimeDomainCanvasPG(QWidget):
         # Cache the last subplot label specs so a resize-driven recheck
         # can re-place labels without re-walking the plot.
         self._subplot_label_specs = []
-
-        # Cursor line scene items. In single mode _cursor_line_items is the
-        # live hover line on each subplot. In dual mode _cursor_a_items and
-        # _cursor_b_items hold the placed A/B cursors.
-        self._cursor_line_items = []
-        self._cursor_a_items = []
-        self._cursor_b_items = []
-        self._dual_cursor_extreme_markers = []
 
         # Bug 3: post-rebuild callbacks. plot_channels builds NEW ViewBoxes
         # (default PanMode), so any owner that pins a mouse mode (the
@@ -652,17 +638,17 @@ class TimeDomainCanvasPG(QWidget):
         self.disable_interactive_quality()
         self.schedule_idle_quality()
         # Restore cursor visual items when A/B positions survived clear().
-        if self._cursor_visible and self._dual:
-            if self._ax is not None:
+        if self._cursor.visible and self._cursor.dual:
+            if self._cursor.ax is not None:
                 a_items = self._ensure_cursor_items(
                     "_cursor_a_items", color="#2563eb", width=1.1
                 )
-                self._set_cursor_items_pos(a_items, self._ax)
-            if self._bx is not None:
+                self._set_cursor_items_pos(a_items, self._cursor.ax)
+            if self._cursor.bx is not None:
                 b_items = self._ensure_cursor_items(
                     "_cursor_b_items", color="#dc2626", width=1.1
                 )
-                self._set_cursor_items_pos(b_items, self._bx)
+                self._set_cursor_items_pos(b_items, self._cursor.bx)
 
     def register_replot_callback(self, callback):
         """Register a zero-arg ``callback`` invoked after every
@@ -1238,24 +1224,16 @@ class TimeDomainCanvasPG(QWidget):
         # which is part of the PlotItem already destroyed by _glw.clear() above.
         self._overlay_grid_lines = []
         self._subplot_label_specs = []
-        self._cursor_line_items = []
-        self._cursor_a_items = []
-        self._cursor_b_items = []
-        self._dual_cursor_extreme_markers = []
+        self._cursor.clear_items()
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
         # do that. Mirror TimeDomainCanvas.clear's behavior.
 
     def full_reset(self):
         """Clear chart AND cursor state. Use on file close."""
         self.clear()
-        self._ax = None
-        self._bx = None
-        self._placing = "A"
-        self._cursor_visible = False
-        self._dual = False
+        self._cursor.reset_all_state()
         self._curve_path_cache.clear()
         self._last_range_key.clear()
-        self._last_t = 0
         self.draw_idle()
 
     def set_cursor_visible(self, v):

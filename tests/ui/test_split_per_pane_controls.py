@@ -29,13 +29,13 @@ def test_cursor_mode_targets_primary_when_not_split(qtbot, qapp, loaded_csv):
     # Drive the primary card's cursor control -> primary canvas reacts.
     cs._time_card.set_cursor_mode("dual")
     qapp.processEvents()
-    assert cs.canvas_time._cursor_visible is True
-    assert cs.canvas_time._dual is True
+    assert cs.canvas_time._cursor.visible is True
+    assert cs.canvas_time._cursor.dual is True
 
     cs._time_card.set_cursor_mode("off")
     qapp.processEvents()
-    assert cs.canvas_time._cursor_visible is False
-    assert cs.canvas_time._dual is False
+    assert cs.canvas_time._cursor.visible is False
+    assert cs.canvas_time._cursor.dual is False
 
 
 def test_split_cursor_mode_targets_both_panes_when_secondary_focused(
@@ -51,17 +51,17 @@ def test_split_cursor_mode_targets_both_panes_when_secondary_focused(
     # depends on the currently focused pane.
     cs._time_card.set_cursor_mode("single")
     qapp.processEvents()
-    assert cs.canvas_time._cursor_visible is True
-    assert cs.canvas_time._dual is False
-    assert cs.secondary_canvas()._cursor_visible is True
-    assert cs.secondary_canvas()._dual is False
+    assert cs.canvas_time._cursor.visible is True
+    assert cs.canvas_time._cursor.dual is False
+    assert cs.secondary_canvas()._cursor.visible is True
+    assert cs.secondary_canvas()._cursor.dual is False
 
     cs._time_card.set_cursor_mode("dual")
     qapp.processEvents()
-    assert cs.canvas_time._cursor_visible is True
-    assert cs.canvas_time._dual is True
-    assert cs.secondary_canvas()._cursor_visible is True
-    assert cs.secondary_canvas()._dual is True
+    assert cs.canvas_time._cursor.visible is True
+    assert cs.canvas_time._cursor.dual is True
+    assert cs.secondary_canvas()._cursor.visible is True
+    assert cs.secondary_canvas()._cursor.dual is True
 
 
 def test_secondary_own_cursor_control_acts_on_secondary(qtbot, qapp, loaded_csv):
@@ -70,17 +70,17 @@ def test_secondary_own_cursor_control_acts_on_secondary(qtbot, qapp, loaded_csv)
     _enter_split(w, qapp)
     _click_card(qapp, cs._secondary_card)
 
-    primary_before = (cs.canvas_time._cursor_visible, cs.canvas_time._dual)
+    primary_before = (cs.canvas_time._cursor.visible, cs.canvas_time._cursor.dual)
 
     cs._secondary_card.set_cursor_mode("single")
     qapp.processEvents()
-    assert cs.secondary_canvas()._cursor_visible is True
-    assert cs.secondary_canvas()._dual is False
-    assert (cs.canvas_time._cursor_visible, cs.canvas_time._dual) == primary_before
+    assert cs.secondary_canvas()._cursor.visible is True
+    assert cs.secondary_canvas()._cursor.dual is False
+    assert (cs.canvas_time._cursor.visible, cs.canvas_time._cursor.dual) == primary_before
 
     cs._secondary_card.set_cursor_mode("off")
     qapp.processEvents()
-    assert cs.secondary_canvas()._cursor_visible is False
+    assert cs.secondary_canvas()._cursor.visible is False
 
 
 # ---------------------------------------------------------------------------
@@ -295,8 +295,8 @@ def test_programmatic_primary_cursor_mode_does_not_rewrite_focused_secondary(
     assert cs.cursor_mode() == "off"
     assert cs._secondary_card.cursor_mode() == "dual"
     assert cs._time_card.cursor_mode() == "dual"
-    assert cs.secondary_canvas()._cursor_visible is True
-    assert cs.secondary_canvas()._dual is True
+    assert cs.secondary_canvas()._cursor.visible is True
+    assert cs.secondary_canvas()._cursor.dual is True
 
 
 # ---------------------------------------------------------------------------

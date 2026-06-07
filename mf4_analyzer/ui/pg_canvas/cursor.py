@@ -23,6 +23,7 @@ _MISSING = object()
 
 class _CanvasBackref:
     _delegate_names = frozenset()
+    _owned_names = frozenset()
 
     def __init__(self, canvas):
         object.__setattr__(self, "_c", canvas)
@@ -31,6 +32,7 @@ class _CanvasBackref:
         if name not in {
             "_c",
             "_delegate_names",
+            "_owned_names",
             "__dict__",
             "__class__",
             "__getattr__",
@@ -52,15 +54,39 @@ class _CanvasBackref:
         if name == "_c":
             object.__setattr__(self, name, value)
             return
+        owned_names = object.__getattribute__(self, "_owned_names")
+        delegate_names = object.__getattribute__(self, "_delegate_names")
+        if name in owned_names or name in delegate_names:
+            object.__setattr__(self, name, value)
+            return
         setattr(self._c, name, value)
 
 
 class CursorController(_CanvasBackref):
     """Single/dual cursor and cursor HTML emission.
 
-    Phase 1 keeps all state on the owning canvas; this controller only holds a
-    back-reference and preserves canvas monkeypatch seams for moved methods.
+    Phase 4.2 moves cohesive cursor state here while still preserving canvas
+    monkeypatch seams for moved methods.
     """
+
+    _owned_names = frozenset({
+        "_cursor_visible",
+        "_dual",
+        "_ax",
+        "_bx",
+        "_placing",
+        "_last_t",
+        "_cursor_line_items",
+        "_cursor_a_items",
+        "_cursor_b_items",
+        "_dual_cursor_extreme_markers",
+        "visible",
+        "dual",
+        "ax",
+        "bx",
+        "placing",
+        "last_t",
+    })
 
     _delegate_names = frozenset({
         "set_cursor_visible",
@@ -85,6 +111,97 @@ class CursorController(_CanvasBackref):
         "_emit_dual_cursor_html",
         "_cursor_x_to_pixmap_x",
     })
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self._cursor_visible = False
+        self._dual = False
+        self._ax = None
+        self._bx = None
+        self._placing = "A"
+        self._last_t = 0
+        self._cursor_line_items = []
+        self._cursor_a_items = []
+        self._cursor_b_items = []
+        self._dual_cursor_extreme_markers = []
+
+    @property
+    def visible(self):
+        return self._cursor_visible
+
+    @visible.setter
+    def visible(self, value):
+        self._cursor_visible = bool(value)
+
+    @property
+    def dual(self):
+        return self._dual
+
+    @dual.setter
+    def dual(self, value):
+        self._dual = bool(value)
+
+    @property
+    def ax(self):
+        return self._ax
+
+    @ax.setter
+    def ax(self, value):
+        self._ax = value
+
+    @property
+    def bx(self):
+        return self._bx
+
+    @bx.setter
+    def bx(self, value):
+        self._bx = value
+
+    @property
+    def placing(self):
+        return self._placing
+
+    @placing.setter
+    def placing(self, value):
+        self._placing = value
+
+    @property
+    def last_t(self):
+        return self._last_t
+
+    @last_t.setter
+    def last_t(self, value):
+        self._last_t = value
+
+    @property
+    def line_items(self):
+        return self._cursor_line_items
+
+    @property
+    def a_items(self):
+        return self._cursor_a_items
+
+    @property
+    def b_items(self):
+        return self._cursor_b_items
+
+    @property
+    def extreme_markers(self):
+        return self._dual_cursor_extreme_markers
+
+    def clear_items(self):
+        self._cursor_line_items = []
+        self._cursor_a_items = []
+        self._cursor_b_items = []
+        self._dual_cursor_extreme_markers = []
+
+    def reset_all_state(self):
+        self._ax = None
+        self._bx = None
+        self._placing = "A"
+        self._cursor_visible = False
+        self._dual = False
+        self._last_t = 0
 
     def set_cursor_visible(self, v):
         """Toggle single-cursor visibility."""

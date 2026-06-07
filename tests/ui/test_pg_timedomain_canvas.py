@@ -947,14 +947,14 @@ class TestTimeDomainCanvasPGContract:
         canvas.set_dual_cursor_mode(False)
         # After putting the dual cursor in some state, reset_cursor_state
         # must restore the placing='A' / _ax=None / _bx=None invariant.
-        canvas._ax = 0.25
-        canvas._bx = 0.75
-        canvas._placing = "B"
+        canvas._cursor.ax = 0.25
+        canvas._cursor.bx = 0.75
+        canvas._cursor.placing = "B"
         canvas._refresh = False
         canvas.reset_cursor_state()
-        assert canvas._ax is None
-        assert canvas._bx is None
-        assert canvas._placing == "A"
+        assert canvas._cursor.ax is None
+        assert canvas._cursor.bx is None
+        assert canvas._cursor.placing == "A"
         assert canvas._refresh is True
 
     def test_get_statistics_reads_raw_channel_data_not_envelope_output(self, qapp):
@@ -3027,8 +3027,8 @@ class TestTimeDomainCanvasPGCursorParity:
 
         pg._emit_single_cursor_html(0.5)
         single_html = single_emissions[-1]
-        pg._ax = 0.2
-        pg._bx = 0.8
+        pg._cursor.ax = 0.2
+        pg._cursor.bx = 0.8
         pg._emit_dual_cursor_html()
 
         assert dual_emissions and rest in dual_emissions[-1]
@@ -3065,8 +3065,8 @@ class TestTimeDomainCanvasPGCursorParity:
         pg.plot_channels(rows, mode="subplot")
         pg.set_cursor_visible(True)
         pg.set_dual_cursor_mode(True)
-        pg._ax = 0.20
-        pg._bx = 0.80
+        pg._cursor.ax = 0.20
+        pg._cursor.bx = 0.80
         QCoreApplication.processEvents()
 
         pg_dual = []
@@ -3110,7 +3110,7 @@ class TestTimeDomainCanvasPGCursorInteraction:
 
         assert seen, "mouse move in single-cursor mode must emit cursor_info"
         assert "t=" in seen[-1]
-        line_items = getattr(canvas, "_cursor_line_items", [])
+        line_items = canvas._cursor.line_items
         assert len(line_items) == len(canvas.axes_list)
         assert all(item.isVisible() for item in line_items)
 
@@ -3137,12 +3137,12 @@ class TestTimeDomainCanvasPGCursorInteraction:
         QTest.mouseClick(viewport, Qt.LeftButton, Qt.NoModifier, point_b)
         QCoreApplication.processEvents()
 
-        assert canvas._ax == pytest.approx(0.25, abs=0.03)
-        assert canvas._bx == pytest.approx(0.75, abs=0.03)
+        assert canvas._cursor.ax == pytest.approx(0.25, abs=0.03)
+        assert canvas._cursor.bx == pytest.approx(0.75, abs=0.03)
         assert primary_seen and "ΔT=" in primary_seen[-1]
         assert dual_seen and dual_seen[-1]
-        a_items = getattr(canvas, "_cursor_a_items", [])
-        b_items = getattr(canvas, "_cursor_b_items", [])
+        a_items = canvas._cursor.a_items
+        b_items = canvas._cursor.b_items
         assert len(a_items) == len(canvas.axes_list)
         assert len(b_items) == len(canvas.axes_list)
         assert all(item.isVisible() for item in a_items + b_items)
@@ -3173,7 +3173,7 @@ class TestTimeDomainCanvasPGCursorInteraction:
         )
         QCoreApplication.processEvents()
 
-        markers = getattr(canvas, "_dual_cursor_extreme_markers", [])
+        markers = canvas._cursor.extreme_markers
         assert len(markers) == 1
         xs, ys = markers[0].getData()
         assert list(xs) == pytest.approx([0.25, 0.75])
@@ -3206,13 +3206,13 @@ class TestTimeDomainCanvasPGCursorInteraction:
         monkeypatch.setattr(
             canvas, "_emit_dual_cursor_html", lambda *a, **k: calls.append(1)
         )
-        canvas._last_t = 0
+        canvas._cursor.last_t = 0
 
         point = _viewport_point_for_data(canvas, canvas.axes_list[1], 0.5)
         assert canvas._handle_cursor_mouse_move(_FakeMove(point.x(), point.y())) is True
 
         assert calls == []
-        line_items = getattr(canvas, "_cursor_line_items", [])
+        line_items = canvas._cursor.line_items
         assert line_items
         assert all(item.isVisible() for item in line_items)
 
@@ -3249,7 +3249,7 @@ class TestTimeDomainCanvasPGCursorInteraction:
 
         assert len(seen) == 1
 
-        canvas._last_t -= 40
+        canvas._cursor.last_t -= 40
         assert canvas._handle_cursor_mouse_move(point) is True
         assert len(seen) == 2
 
@@ -4087,8 +4087,8 @@ class TestTimeDomainCanvasPGVisualParityScreenshots:
         QCoreApplication.processEvents()
         QTest.mouseClick(viewport, Qt.LeftButton, Qt.NoModifier, point_b)
         QCoreApplication.processEvents()
-        assert canvas._cursor_a_items and canvas._cursor_b_items
-        assert all(item.isVisible() for item in canvas._cursor_a_items + canvas._cursor_b_items)
+        assert canvas._cursor.a_items and canvas._cursor.b_items
+        assert all(item.isVisible() for item in canvas._cursor.a_items + canvas._cursor.b_items)
 
         pix = canvas.grab_pixmap()
         assert pix is not None
@@ -4098,8 +4098,8 @@ class TestTimeDomainCanvasPGVisualParityScreenshots:
 
         # Cursor lines must lie inside the view bbox (geometry assertion).
         bbox = QRect(0, 0, pix.width(), pix.height())
-        ax_pix = canvas._cursor_x_to_pixmap_x(canvas._ax, pix.width())
-        bx_pix = canvas._cursor_x_to_pixmap_x(canvas._bx, pix.width())
+        ax_pix = canvas._cursor_x_to_pixmap_x(canvas._cursor.ax, pix.width())
+        bx_pix = canvas._cursor_x_to_pixmap_x(canvas._cursor.bx, pix.width())
         assert bbox.contains(int(ax_pix), pix.height() // 2), (
             f"cursor A at pixel x={ax_pix} not contained in bbox {bbox!r}"
         )
@@ -5588,7 +5588,7 @@ class TestAutoIdleAA:
         canvas.set_cursor_visible(True)
         handle = canvas.axes_list[0]
         for i in range(10):
-            canvas._last_t = 0
+            canvas._cursor.last_t = 0
             point = _viewport_point_for_data(canvas, handle, 0.1 + 0.05 * i)
             assert canvas._handle_cursor_mouse_move(
                 _FakeMove(point.x(), point.y())

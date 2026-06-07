@@ -735,7 +735,7 @@ class OverlayAxisManager(_CanvasBackref):
 
     def _handle_overlay_mouse_press(self, event):
         """Overlay-mode left-press: select nearest channel + begin Y-drag."""
-        if not self._overlay_mode or self._cursor_visible:
+        if not self._overlay_mode or self._cursor.visible:
             return False
         try:
             if event.button() != Qt.LeftButton:
