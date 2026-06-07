@@ -403,11 +403,6 @@ class TimeDomainCanvasPG(QWidget):
         # alpha 0.42 / 1.0). Stored per channel so test/UI can probe.
         self._overlay_mode = False
         self._selected_overlay_channel = None
-        # Annotation state
-        self._annotation_enabled = False
-        self._remarks = []  # list of annotation dicts
-        self._annotation_press_pos = None
-        self._annotation_press_dragged = False
         # Per-channel default emphasis: (line_width, alpha). Default
         # state mirrors matplotlib's "no selection" line: lw=1.05,
         # alpha=None (treated as 1.0). De-emphasised state is
@@ -497,8 +492,8 @@ class TimeDomainCanvasPG(QWidget):
         # stays None and the menu items are inert (no parallel mode path).
         self._mouse_mode_controller = None
 
-        # Phase 1 decomposition collaborators. They keep only a canvas
-        # back-reference; all public/private state remains on this widget.
+        # Decomposition collaborators. Most keep only a canvas back-reference;
+        # Phase 4.2 starts moving cohesive state into the owning collaborator.
         self._cursor = CursorController(self)
         self._annotations = AnnotationManager(self)
         self._tick_density_controller = TickDensityController(self)
@@ -1383,66 +1378,10 @@ class TimeDomainCanvasPG(QWidget):
     # ------------------------------------------------------------------
 
     def set_remark_enabled(self, enabled):
-        return AnnotationManager.set_remark_enabled(self._annotations, enabled)
-
-    def _clear_annotation_press_state(self):
-        return AnnotationManager._clear_annotation_press_state(self._annotations)
-
-    def _remark_target_axis_handle(self, viewport_pos):
-        return AnnotationManager._remark_target_axis_handle(
-            self._annotations,
-            viewport_pos,
-        )
-
-    def _nearest_data_point(self, viewport_pos):
-        return AnnotationManager._nearest_data_point(self._annotations, viewport_pos)
-
-    def _add_remark(self, viewport_pos):
-        return AnnotationManager._add_remark(self._annotations, viewport_pos)
-
-    def _format_remark_label(self, x_value, y_value, color=None):
-        return AnnotationManager._format_remark_label(
-            self._annotations,
-            x_value,
-            y_value,
-            color,
-        )
-
-    def _remark_item_at_viewport_pos(self, viewport_pos):
-        return AnnotationManager._remark_item_at_viewport_pos(
-            self._annotations,
-            viewport_pos,
-        )
-
-    def _annotation_drag_threshold(self):
-        return AnnotationManager._annotation_drag_threshold(self._annotations)
-
-    def _handle_annotation_mouse_press(self, event):
-        return AnnotationManager._handle_annotation_mouse_press(
-            self._annotations,
-            event,
-        )
-
-    def _handle_annotation_mouse_move(self, event):
-        return AnnotationManager._handle_annotation_mouse_move(self._annotations, event)
-
-    def _handle_annotation_mouse_release(self, event):
-        return AnnotationManager._handle_annotation_mouse_release(
-            self._annotations,
-            event,
-        )
-
-    def _update_remark_leader(self, remark):
-        return AnnotationManager._update_remark_leader(self._annotations, remark)
-
-    def _remove_remark_at(self, scene_pos):
-        return AnnotationManager._remove_remark_at(self._annotations, scene_pos)
-
-    def _remove_remark_by_index(self, idx):
-        return AnnotationManager._remove_remark_by_index(self._annotations, idx)
+        return self._annotations.set_remark_enabled(enabled)
 
     def clear_remarks(self):
-        return AnnotationManager.clear_remarks(self._annotations)
+        return self._annotations.clear_remarks()
 
     def _handle_overlay_mouse_press(self, event):
         return OverlayAxisManager._handle_overlay_mouse_press(
@@ -1670,7 +1609,7 @@ class TimeDomainCanvasPG(QWidget):
                     # Return False so the GraphicsView still processes the
                     # event for its own bookkeeping; we do not consume it.
             elif event.type() == QEvent.MouseButtonPress:
-                annotation_result = self._handle_annotation_mouse_press(event)
+                annotation_result = self._annotations._handle_annotation_mouse_press(event)
                 if annotation_result is not None:
                     return annotation_result
                 # Overlay selection / Y-drag begin takes precedence over
@@ -1682,7 +1621,7 @@ class TimeDomainCanvasPG(QWidget):
                 if self._handle_cursor_mouse_press(event):
                     return True
             elif event.type() == QEvent.MouseMove:
-                annotation_result = self._handle_annotation_mouse_move(event)
+                annotation_result = self._annotations._handle_annotation_mouse_move(event)
                 if annotation_result is not None:
                     return annotation_result
                 if self._handle_overlay_mouse_move(event):
@@ -1690,7 +1629,7 @@ class TimeDomainCanvasPG(QWidget):
                 if self._handle_cursor_mouse_move(event):
                     return True
             elif event.type() == QEvent.MouseButtonRelease:
-                annotation_result = self._handle_annotation_mouse_release(event)
+                annotation_result = self._annotations._handle_annotation_mouse_release(event)
                 if annotation_result is not None:
                     if annotation_result:
                         self.schedule_idle_quality()

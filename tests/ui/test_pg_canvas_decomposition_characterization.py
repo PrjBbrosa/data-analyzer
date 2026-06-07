@@ -120,3 +120,20 @@ class TestExportPixelCharacterization:
         pix = pg_canvas.grab_pixmap()
 
         assert _nonwhite_count(pix) > 100, "export blank after xlim refresh"
+
+
+class TestCollaboratorStateOwnership:
+    def test_annotation_state_lives_on_annotation_manager(self, pg_canvas):
+        annotations = pg_canvas._annotations
+
+        assert annotations.remarks == []
+        assert annotations.enabled is False
+        assert annotations.press_pos is None
+        assert annotations.press_dragged is False
+        for name in (
+            "_remarks",
+            "_annotation_enabled",
+            "_annotation_press_pos",
+            "_annotation_press_dragged",
+        ):
+            assert name not in pg_canvas.__dict__

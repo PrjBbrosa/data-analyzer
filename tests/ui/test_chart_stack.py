@@ -1352,7 +1352,7 @@ def test_annotation_toolbar_toggles_canvas_modes(qapp, qtbot):
     cs.annotation_enabled_changed.connect(lambda mode, enabled: seen.append((mode, enabled)))
 
     cs._time_card._annotation_btn.click()
-    assert cs.canvas_time._annotation_enabled is True
+    assert cs.canvas_time._annotations.enabled is True
     assert cs._time_card._annotation_btn.isChecked()
 
     cs._fft_card._annotation_btn.click()

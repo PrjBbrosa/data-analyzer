@@ -49,14 +49,15 @@ class _ModifierWheelViewBox(pg.ViewBox):
 
     def _delete_remark_from_context_event(self, ev):
         owner = self._owner_canvas
-        if owner is None or not getattr(owner, "_annotation_enabled", False):
+        annotations = getattr(owner, "_annotations", None) if owner is not None else None
+        if annotations is None or not getattr(annotations, "enabled", False):
             return False
         try:
             scene_pos = ev.scenePos()
         except Exception:
             scene_pos = None
         owner._last_rclick_scene_pos = scene_pos
-        owner._remove_remark_at(scene_pos)
+        annotations._remove_remark_at(scene_pos)
         return True
 
     def wheelEvent(self, ev, axis=None):

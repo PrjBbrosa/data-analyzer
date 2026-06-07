@@ -18,6 +18,7 @@ _ANNOTATION_CURSOR = None
 
 class _CanvasBackref:
     _delegate_names = frozenset()
+    _owned_names = frozenset()
 
     def __init__(self, canvas):
         object.__setattr__(self, "_c", canvas)
@@ -26,6 +27,7 @@ class _CanvasBackref:
         if name not in {
             "_c",
             "_delegate_names",
+            "_owned_names",
             "__dict__",
             "__class__",
             "__getattr__",
@@ -45,6 +47,11 @@ class _CanvasBackref:
 
     def __setattr__(self, name, value):
         if name == "_c":
+            object.__setattr__(self, name, value)
+            return
+        owned_names = object.__getattribute__(self, "_owned_names")
+        delegate_names = object.__getattribute__(self, "_delegate_names")
+        if name in owned_names or name in delegate_names:
             object.__setattr__(self, name, value)
             return
         setattr(self._c, name, value)
@@ -78,6 +85,13 @@ def _annotation_pen_cursor():
 class AnnotationManager(_CanvasBackref):
     """Point remarks and annotation-mode mouse routing."""
 
+    _owned_names = frozenset({
+        "enabled",
+        "remarks",
+        "press_pos",
+        "press_dragged",
+    })
+
     _delegate_names = frozenset({
         "set_remark_enabled",
         "_clear_annotation_press_state",
@@ -96,14 +110,21 @@ class AnnotationManager(_CanvasBackref):
         "clear_remarks",
     })
 
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self.enabled = False
+        self.remarks = []
+        self.press_pos = None
+        self.press_dragged = False
+
     def set_remark_enabled(self, enabled):
         """Enable or disable annotation mode; changes cursor shape."""
-        self._annotation_enabled = bool(enabled)
+        self.enabled = bool(enabled)
         self._clear_annotation_press_state()
         try:
             vp = self._glw.viewport()
             if vp:
-                if self._annotation_enabled:
+                if self.enabled:
                     vp.setCursor(_annotation_pen_cursor())
                 else:
                     vp.setCursor(Qt.ArrowCursor)
@@ -111,8 +132,8 @@ class AnnotationManager(_CanvasBackref):
             pass
 
     def _clear_annotation_press_state(self):
-        self._annotation_press_pos = None
-        self._annotation_press_dragged = False
+        self.press_pos = None
+        self.press_dragged = False
 
     def _remark_target_axis_handle(self, viewport_pos):
         scene_pos = self._viewport_pos_to_scene(viewport_pos)
@@ -268,7 +289,7 @@ class AnnotationManager(_CanvasBackref):
             'vb': vb, 'dot': dot, 'text': text, 'leader': leader,
             'data_x': dx, 'data_y': dy,
         }
-        self._remarks.append(remark)
+        self.remarks.append(remark)
         try:
             text.sigPositionChanged.connect(
                 lambda item, r=remark: self._update_remark_leader(r)
@@ -295,7 +316,7 @@ class AnnotationManager(_CanvasBackref):
     def _remark_item_at_viewport_pos(self, viewport_pos):
         """Return the remark under a viewport click, or None."""
         from PyQt5.QtCore import QPointF as _QPointF
-        if not self._remarks:
+        if not self.remarks:
             return None
         scene_pos = self._viewport_pos_to_scene(viewport_pos)
         if scene_pos is None:
@@ -305,7 +326,7 @@ class AnnotationManager(_CanvasBackref):
         except Exception:
             scene_items = []
         for item in scene_items:
-            for remark in self._remarks:
+            for remark in self.remarks:
                 text = remark.get('text')
                 candidates = (
                     text,
@@ -321,7 +342,7 @@ class AnnotationManager(_CanvasBackref):
                     return remark
         try:
             sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
-            for remark in self._remarks:
+            for remark in self.remarks:
                 vb = remark.get('vb')
                 text = remark.get('text')
                 if vb is None or text is None:
@@ -345,7 +366,7 @@ class AnnotationManager(_CanvasBackref):
             return 10
 
     def _handle_annotation_mouse_press(self, event):
-        if not self._annotation_enabled:
+        if not self.enabled:
             return None
         if event.button() == Qt.RightButton:
             scene_pos = self._viewport_pos_to_scene(event.pos())
@@ -358,35 +379,35 @@ class AnnotationManager(_CanvasBackref):
         if self._remark_item_at_viewport_pos(event.pos()) is not None:
             self._clear_annotation_press_state()
             return False
-        self._annotation_press_pos = event.pos()
-        self._annotation_press_dragged = False
+        self.press_pos = event.pos()
+        self.press_dragged = False
         return False
 
     def _handle_annotation_mouse_move(self, event):
-        if not self._annotation_enabled or self._annotation_press_pos is None:
+        if not self.enabled or self.press_pos is None:
             return None
         try:
             if event.buttons() & Qt.LeftButton:
-                delta = event.pos() - self._annotation_press_pos
+                delta = event.pos() - self.press_pos
                 if delta.manhattanLength() >= self._annotation_drag_threshold():
-                    self._annotation_press_dragged = True
+                    self.press_dragged = True
         except Exception:
             pass
         return False
 
     def _handle_annotation_mouse_release(self, event):
-        if not self._annotation_enabled or self._annotation_press_pos is None:
+        if not self.enabled or self.press_pos is None:
             return None
         if event.button() != Qt.LeftButton:
             self._clear_annotation_press_state()
             return None
-        start_pos = self._annotation_press_pos
+        start_pos = self.press_pos
         try:
             delta = event.pos() - start_pos
             moved = delta.manhattanLength() >= self._annotation_drag_threshold()
         except Exception:
-            moved = self._annotation_press_dragged
-        dragged = self._annotation_press_dragged or moved
+            moved = self.press_dragged
+        dragged = self.press_dragged or moved
         self._clear_annotation_press_state()
         if dragged:
             return False
@@ -407,12 +428,12 @@ class AnnotationManager(_CanvasBackref):
     def _remove_remark_at(self, scene_pos):
         """Remove annotation nearest to scene_pos (right-click delete)."""
         from PyQt5.QtCore import QPointF as _QPointF
-        if not self._remarks or scene_pos is None:
+        if not self.remarks or scene_pos is None:
             return
         best_idx, best_dist = 0, float('inf')
         try:
             sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
-            for i, r in enumerate(self._remarks):
+            for i, r in enumerate(self.remarks):
                 vb = r.get('vb')
                 if vb is None:
                     continue
@@ -427,7 +448,7 @@ class AnnotationManager(_CanvasBackref):
 
     def _remove_remark_by_index(self, idx):
         try:
-            r = self._remarks.pop(idx)
+            r = self.remarks.pop(idx)
             vb = r.get('vb')
             if vb:
                 for item_key in ('dot', 'text', 'leader'):
@@ -442,7 +463,7 @@ class AnnotationManager(_CanvasBackref):
 
     def clear_remarks(self):
         """Remove all annotations."""
-        for r in list(self._remarks):
+        for r in list(self.remarks):
             vb = r.get('vb')
             if vb:
                 for item_key in ('dot', 'text', 'leader'):
@@ -452,7 +473,7 @@ class AnnotationManager(_CanvasBackref):
                             vb.removeItem(item)
                         except Exception:
                             pass
-        self._remarks.clear()
+        self.remarks.clear()
 
 
 __all__ = ["AnnotationManager", "_annotation_pen_cursor"]

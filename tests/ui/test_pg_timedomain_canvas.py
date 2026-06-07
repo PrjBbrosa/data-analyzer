@@ -577,14 +577,14 @@ class TestTimeDomainCanvasPGAnnotations:
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         monkeypatch.setattr(
-            canvas,
+            canvas._annotations,
             "_nearest_data_point",
             lambda _pos: ("speed", 1.25, 42.5, "#1769e0"),
         )
 
-        canvas._add_remark(QPoint(120, 100))
+        canvas._annotations._add_remark(QPoint(120, 100))
 
-        label = canvas._remarks[-1]["text"].textItem.toPlainText()
+        label = canvas._annotations.remarks[-1]["text"].textItem.toPlainText()
         assert "X=1.25" in label
         assert "Y=42.5" in label
         assert "speed" not in label
@@ -597,14 +597,14 @@ class TestTimeDomainCanvasPGAnnotations:
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         monkeypatch.setattr(
-            canvas,
+            canvas._annotations,
             "_nearest_data_point",
             lambda _pos: ("speed", 1.25, 42.5, "#00b894"),
         )
 
-        canvas._add_remark(QPoint(120, 100))
+        canvas._annotations._add_remark(QPoint(120, 100))
 
-        html = canvas._remarks[-1]["text"].textItem.toHtml().lower()
+        html = canvas._annotations.remarks[-1]["text"].textItem.toHtml().lower()
         assert "#00b894" in html
 
     def test_nearest_data_point_uses_curve_screen_distance_not_x_only(
@@ -625,7 +625,7 @@ class TestTimeDomainCanvasPGAnnotations:
         monkeypatch.setattr(canvas, "_cursor_data_x_from_viewport_pos", lambda _p: 0.0)
         monkeypatch.setattr(canvas, "_viewport_pos_to_scene", lambda _p: scene_pos)
 
-        found = canvas._nearest_data_point(point)
+        found = canvas._annotations._nearest_data_point(point)
 
         assert found is not None
         assert found[1] == pytest.approx(0.01)
@@ -647,9 +647,9 @@ class TestTimeDomainCanvasPGAnnotations:
             float(second_row[1][idx]),
         )
 
-        canvas._add_remark(point)
+        canvas._annotations._add_remark(point)
 
-        assert canvas._remarks[-1]["vb"] is second_handle.view_box
+        assert canvas._annotations.remarks[-1]["vb"] is second_handle.view_box
 
     def test_annotation_left_click_adds_on_release_not_press(self, qapp, monkeypatch):
         from PyQt5.QtCore import QPoint, Qt
@@ -658,7 +658,11 @@ class TestTimeDomainCanvasPGAnnotations:
         canvas.set_remark_enabled(True)
         point = QPoint(80, 90)
         added = []
-        monkeypatch.setattr(canvas, "_add_remark", lambda pos: added.append(pos))
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_add_remark",
+            lambda pos: added.append(pos),
+        )
 
         press_consumed = canvas.eventFilter(
             canvas._glw.viewport(),
@@ -681,7 +685,11 @@ class TestTimeDomainCanvasPGAnnotations:
         start = QPoint(80, 90)
         end = QPoint(140, 120)
         added = []
-        monkeypatch.setattr(canvas, "_add_remark", lambda pos: added.append(pos))
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_add_remark",
+            lambda pos: added.append(pos),
+        )
 
         canvas.eventFilter(canvas._glw.viewport(), self._mouse_press(start, Qt.LeftButton))
         move_consumed = canvas.eventFilter(
@@ -715,12 +723,16 @@ class TestTimeDomainCanvasPGAnnotations:
         point = QPoint(80, 90)
         added = []
         monkeypatch.setattr(
-            canvas,
+            canvas._annotations,
             "_remark_item_at_viewport_pos",
             lambda _pos: object(),
             raising=False,
         )
-        monkeypatch.setattr(canvas, "_add_remark", lambda pos: added.append(pos))
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_add_remark",
+            lambda pos: added.append(pos),
+        )
 
         consumed = canvas.eventFilter(
             canvas._glw.viewport(),
@@ -738,12 +750,12 @@ class TestTimeDomainCanvasPGAnnotations:
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         monkeypatch.setattr(
-            canvas,
+            canvas._annotations,
             "_nearest_data_point",
             lambda _pos: ("speed", 1.25, 42.5, "#1769e0"),
         )
-        canvas._add_remark(QPoint(120, 100))
-        remark = canvas._remarks[-1]
+        canvas._annotations._add_remark(QPoint(120, 100))
+        remark = canvas._annotations.remarks[-1]
         label_pos = remark["text"].pos()
         scene_pos = remark["vb"].mapViewToScene(
             QPointF(label_pos.x(), label_pos.y())
@@ -757,8 +769,8 @@ class TestTimeDomainCanvasPGAnnotations:
         )
 
         assert consumed is False
-        assert len(canvas._remarks) == 1
-        assert canvas._remarks[-1] is remark
+        assert len(canvas._annotations.remarks) == 1
+        assert canvas._annotations.remarks[-1] is remark
 
     def test_annotation_mode_right_press_deletes_nearest_remark(
         self, qapp, monkeypatch,
@@ -772,7 +784,7 @@ class TestTimeDomainCanvasPGAnnotations:
         removed = []
         monkeypatch.setattr(canvas, "_viewport_pos_to_scene", lambda _pos: scene_pos)
         monkeypatch.setattr(
-            canvas,
+            canvas._annotations,
             "_remove_remark_at",
             lambda sp: removed.append(sp),
         )
@@ -3358,7 +3370,7 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
-        canvas._remarks.append({"vb": vb})
+        canvas._annotations.remarks.append({"vb": vb})
 
         _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
@@ -3380,7 +3392,11 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         scene_pos = QPointF(12.0, 34.0)
         removed = []
         popped = []
-        monkeypatch.setattr(canvas, "_remove_remark_at", lambda sp: removed.append(sp))
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_remove_remark_at",
+            lambda sp: removed.append(sp),
+        )
         monkeypatch.setattr(QMenu, "popup", lambda *args, **kwargs: popped.append(args))
 
         vb.raiseContextMenu(_FakeMenuEvent(vb, scene_pos))
