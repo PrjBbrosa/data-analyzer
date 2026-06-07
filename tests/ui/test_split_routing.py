@@ -198,3 +198,40 @@ def test_split_none_exits(qtbot, qapp, loaded_csv):
     qapp.processEvents()
 
     assert w.chart_stack.split_active() is False
+
+
+def test_new_view_does_not_carry_cursor_pill_from_previous_view(
+    qtbot, qapp, loaded_csv
+):
+    """Creating a new view must not inherit the previous view's pill content."""
+    w = _make_loaded_window(qtbot, qapp, loaded_csv)
+    _set_checked(w, "speed")
+    w.plot_time()
+
+    w.chart_stack.set_cursor_mode("single")
+    w.chart_stack._pill.set_primary("A=5.0s")
+    w.chart_stack._pill.setVisible(True)
+    qapp.processEvents()
+
+    w._on_view_new()
+    qapp.processEvents()
+
+    assert w.chart_stack.cursor_pill_text() == ""
+    assert w.chart_stack.cursor_pill_visible() is False
+
+
+def test_switch_to_cursor_off_view_clears_pill(qtbot, qapp, loaded_csv):
+    """Switching to an existing cursor-off view must clear the pill."""
+    w, _fid_value, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    w.chart_stack.set_cursor_mode("single")
+    w.chart_stack._pill.set_primary("A=3.0s")
+    w.chart_stack._pill.setVisible(True)
+    qapp.processEvents()
+
+    w.view_manager.get(1).cursor_mode = "off"
+
+    w._switch_view(1)
+    qapp.processEvents()
+
+    assert w.chart_stack.cursor_pill_text() == ""
+    assert w.chart_stack.cursor_pill_visible() is False
