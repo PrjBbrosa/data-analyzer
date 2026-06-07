@@ -678,6 +678,8 @@ class MainWindow(QMainWindow):
         old_mode = top.combo_xaxis.blockSignals(True)
         old_combo = top._combo_xaxis_ch.blockSignals(True)
         old_label = top.edit_xlabel.blockSignals(True)
+        _le = top._combo_xaxis_ch.lineEdit()
+        _old_le = _le.blockSignals(True) if _le is not None else False
         try:
             if use_channel:
                 self._custom_xaxis_fid = target_fid
@@ -699,6 +701,8 @@ class MainWindow(QMainWindow):
             top.edit_xlabel.blockSignals(old_label)
             top._combo_xaxis_ch.blockSignals(old_combo)
             top.combo_xaxis.blockSignals(old_mode)
+            if _le is not None:
+                _le.blockSignals(_old_le)
         update_xaxis_row = getattr(top, '_update_xaxis_channel_row_visible', None)
         if callable(update_xaxis_row):
             update_xaxis_row(top.combo_xaxis.currentIndex())

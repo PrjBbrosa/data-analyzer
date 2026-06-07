@@ -1623,15 +1623,21 @@ class PersistentTop(QWidget):
         """candidates: list of (display_text, (fid, ch)) tuples."""
         prev = self._combo_xaxis_ch.currentData()
         self._combo_xaxis_ch.blockSignals(True)
-        self._combo_xaxis_ch.clear()
-        keep_idx = -1
-        for i, (text, data) in enumerate(candidates):
-            self._combo_xaxis_ch.addItem(text, data)
-            if prev is not None and data == prev:
-                keep_idx = i
-        if keep_idx >= 0:
-            self._combo_xaxis_ch.setCurrentIndex(keep_idx)
-        self._combo_xaxis_ch.blockSignals(False)
+        _le = self._combo_xaxis_ch.lineEdit()
+        _old_le = _le.blockSignals(True) if _le is not None else False
+        try:
+            self._combo_xaxis_ch.clear()
+            keep_idx = -1
+            for i, (text, data) in enumerate(candidates):
+                self._combo_xaxis_ch.addItem(text, data)
+                if prev is not None and data == prev:
+                    keep_idx = i
+            if keep_idx >= 0:
+                self._combo_xaxis_ch.setCurrentIndex(keep_idx)
+        finally:
+            self._combo_xaxis_ch.blockSignals(False)
+            if _le is not None:
+                _le.blockSignals(_old_le)
         # Fresh population (no previous match): auto-fill label if empty.
         if keep_idx < 0 and self._combo_xaxis_ch.count() > 0 and not self.edit_xlabel.text():
             self._sync_xlabel_from_channel(0)
