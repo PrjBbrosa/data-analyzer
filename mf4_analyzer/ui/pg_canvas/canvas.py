@@ -467,11 +467,14 @@ class TimeDomainCanvasPG(QWidget):
                 pi = self._add_plot_item(row=i, col=0)
                 handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
                 self.axes_list.append(handle)
-                self._bind_channel(
+                self._overlay_axes._bind_channel(
                     handle, name, t, sig, color, unit, data_id,
                     xlabel=xlabel if i == len(vis) - 1 else None,
                 )
-                self._configure_subplot_bottom_axis(handle, is_bottom=(i == len(vis) - 1))
+                self._overlay_axes._configure_subplot_bottom_axis(
+                    handle,
+                    is_bottom=(i == len(vis) - 1),
+                )
             # NOTE: we intentionally do NOT call ``setXLink`` here.
             # Pyqtgraph's linked-view propagation uses screen-geometry
             # interpolation (ViewBox.linkedViewChanged) which produces a
@@ -516,16 +519,25 @@ class TimeDomainCanvasPG(QWidget):
                 allow_y_grid=False,
             )
             # Channel 1 → dedicated aux ViewBox bound to the LEFT axis.
-            first_handle = self._add_overlay_axis_handle(pi, 0)
+            first_handle = self._overlay_axes._add_overlay_axis_handle(pi, 0)
             self.axes_list.append(first_handle)
-            self._bind_channel(first_handle, *vis[0], xlabel=xlabel)
+            self._overlay_axes._bind_channel(first_handle, *vis[0], xlabel=xlabel)
             # Channels 2..N → dedicated aux ViewBoxes bound to right axes.
             for idx, (name, t, sig, color, unit, data_id) in enumerate(vis[1:], start=1):
-                handle = self._add_overlay_axis_handle(pi, idx)
+                handle = self._overlay_axes._add_overlay_axis_handle(pi, idx)
                 self.axes_list.append(handle)
-                self._bind_channel(handle, name, t, sig, color, unit, data_id, xlabel=xlabel)
+                self._overlay_axes._bind_channel(
+                    handle,
+                    name,
+                    t,
+                    sig,
+                    color,
+                    unit,
+                    data_id,
+                    xlabel=xlabel,
+                )
             # Apply default emphasis state (no selection).
-            self._apply_overlay_emphasis()
+            self._overlay_axes._apply_overlay_emphasis()
             # Grid: in overlay the built-in left + right axes are linked to
             # DIFFERENT per-channel ViewBoxes (independent Y ranges) and each
             # drew its own horizontal grid at its OWN ticks in its OWN channel
@@ -538,14 +550,23 @@ class TimeDomainCanvasPG(QWidget):
                 pi.showGrid(x=True, y=False, alpha=0.28)
             except Exception:
                 pass
-            self._build_overlay_y_grid()
+            self._overlay_axes._build_overlay_y_grid()
         else:
             # Single channel.
             pi = self._add_plot_item(row=0, col=0)
             handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
             self.axes_list.append(handle)
             name, t, sig, color, unit, data_id = vis[0]
-            self._bind_channel(handle, name, t, sig, color, unit, data_id, xlabel=xlabel)
+            self._overlay_axes._bind_channel(
+                handle,
+                name,
+                t,
+                sig,
+                color,
+                unit,
+                data_id,
+                xlabel=xlabel,
+            )
 
         for handle in self.axes_list:
             self._attach_axis_handle_callbacks(handle)
@@ -568,7 +589,7 @@ class TimeDomainCanvasPG(QWidget):
             self._set_xrange_to_data_union()
             self._emit_xrange_changed()
             if self._overlay_mode:
-                self._connect_overlay_view_sync()
+                self._overlay_axes._connect_overlay_view_sync()
 
         self._refresh = True
         self._tick_density_controller._apply_tick_density_to_all_axes()
@@ -720,13 +741,6 @@ class TimeDomainCanvasPG(QWidget):
                 pass
         return pi
 
-    def _add_overlay_axis_handle(self, primary_plot, index):
-        return OverlayAxisManager._add_overlay_axis_handle(
-            self._overlay_axes,
-            primary_plot,
-            index,
-        )
-
     def plot_channels_preserving_xlim(self, ch_list, mode="overlay", xlabel="Time (s)"):
         """Rebuild the chart with ``ch_list``/``mode`` while preserving
         the current primary xlim across the teardown→build cycle.
@@ -829,50 +843,8 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             pass
 
-    def _bind_channel(self, axis_handle, name, t, sig, color, unit, data_id, *, xlabel=None):
-        return OverlayAxisManager._bind_channel(
-            self._overlay_axes,
-            axis_handle,
-            name,
-            t,
-            sig,
-            color,
-            unit,
-            data_id,
-            xlabel=xlabel,
-        )
-
-    def _overlay_axis_label(self, axis_handle, name, unit):
-        return OverlayAxisManager._overlay_axis_label(
-            self._overlay_axes,
-            axis_handle,
-            name,
-            unit,
-        )
-
-    def _overlay_axis_label_max_chars(self, axis_handle, base, suffix):
-        return OverlayAxisManager._overlay_axis_label_max_chars(
-            self._overlay_axes,
-            axis_handle,
-            base,
-            suffix,
-        )
-
-    def _overlay_axis_label_available_height(self, axis_handle):
-        return OverlayAxisManager._overlay_axis_label_available_height(
-            self._overlay_axes,
-            axis_handle,
-        )
-
     def _refresh_overlay_axis_labels(self):
         return OverlayAxisManager._refresh_overlay_axis_labels(self._overlay_axes)
-
-    def _apply_pg_axis_style(self, axis_handle, color):
-        return OverlayAxisManager._apply_pg_axis_style(
-            self._overlay_axes,
-            axis_handle,
-            color,
-        )
 
     def _channel_name_for_handle(self, handle):
         for name, (candidate, _line) in self._channel_lines.items():
@@ -885,25 +857,6 @@ class TimeDomainCanvasPG(QWidget):
             self._overlay_axes,
             channel_name,
             color,
-        )
-
-    def _configure_overlay_axis_geometry(self, axis_handle):
-        return OverlayAxisManager._configure_overlay_axis_geometry(
-            self._overlay_axes,
-            axis_handle,
-        )
-
-    def _initial_bind_pixel_width(self, axis_handle=None) -> int:
-        return OverlayAxisManager._initial_bind_pixel_width(
-            self._overlay_axes,
-            axis_handle,
-        )
-
-    def _configure_subplot_bottom_axis(self, axis_handle, *, is_bottom):
-        return OverlayAxisManager._configure_subplot_bottom_axis(
-            self._overlay_axes,
-            axis_handle,
-            is_bottom=is_bottom,
         )
 
     def set_xlim(self, lo, hi):
@@ -1101,9 +1054,6 @@ class TimeDomainCanvasPG(QWidget):
                 self._sync_x_axis_item_range(handle, lo, hi)
         self._tick_density_controller._apply_target_x_ticks_to_all_axes()
 
-    def _build_overlay_y_grid(self):
-        return OverlayAxisManager._build_overlay_y_grid(self._overlay_axes)
-
     def _repin_overlay_channel_ticks(self):
         return OverlayAxisManager._repin_overlay_channel_ticks(self._overlay_axes)
 
@@ -1113,17 +1063,8 @@ class TimeDomainCanvasPG(QWidget):
             ax,
         )
 
-    def _stop_snap_anim(self):
-        return OverlayAxisManager._stop_snap_anim(self._overlay_axes)
-
-    def _animate_overlay_snap(self, ax):
-        return OverlayAxisManager._animate_overlay_snap(self._overlay_axes, ax)
-
     def _apply_overlay_box_zoom_y(self):
         return OverlayAxisManager._apply_overlay_box_zoom_y(self._overlay_axes)
-
-    def _teardown_overlay_aux_viewboxes(self):
-        return OverlayAxisManager._teardown_overlay_aux_viewboxes(self._overlay_axes)
 
     def clear(self):
         """Tear down the chart. Mirrors TimeDomainCanvas.clear."""
@@ -1135,7 +1076,7 @@ class TimeDomainCanvasPG(QWidget):
         # we zero _overlay_aux_viewboxes/_overlay_aux_axes below — otherwise
         # the ghost curves leak (Bug 2). Uses _primary_xaxis_ax for the
         # PlotItem layout, so it must run before that is nulled.
-        self._teardown_overlay_aux_viewboxes()
+        self._overlay_axes._teardown_overlay_aux_viewboxes()
         self._teardown_inside_labels()
         if self._refresh_timer.isActive():
             self._refresh_timer.stop()
@@ -1260,24 +1201,6 @@ class TimeDomainCanvasPG(QWidget):
             ydata,
         )
 
-    def _overlay_axis_handle_at_scene_pos(self, scene_pos):
-        return OverlayAxisManager._overlay_axis_handle_at_scene_pos(
-            self._overlay_axes,
-            scene_pos,
-        )
-
-    def _set_x_master_mouse_enabled(self, enabled):
-        return OverlayAxisManager._set_x_master_mouse_enabled(
-            self._overlay_axes,
-            enabled,
-        )
-
-    def _press_view_box_in_rect_mode(self, scene_pos):
-        return OverlayAxisManager._press_view_box_in_rect_mode(
-            self._overlay_axes,
-            scene_pos,
-        )
-
     # ------------------------------------------------------------------
     # Annotation (remark) methods
     # ------------------------------------------------------------------
@@ -1290,12 +1213,6 @@ class TimeDomainCanvasPG(QWidget):
 
     def _handle_overlay_mouse_press(self, event):
         return OverlayAxisManager._handle_overlay_mouse_press(
-            self._overlay_axes,
-            event,
-        )
-
-    def _handle_overlay_mouse_move(self, event):
-        return OverlayAxisManager._handle_overlay_mouse_move(
             self._overlay_axes,
             event,
         )
@@ -1451,7 +1368,7 @@ class TimeDomainCanvasPG(QWidget):
                 annotation_result = self._annotations._handle_annotation_mouse_move(event)
                 if annotation_result is not None:
                     return annotation_result
-                if self._handle_overlay_mouse_move(event):
+                if self._overlay_axes._handle_overlay_mouse_move(event):
                     return True
                 if self._handle_cursor_mouse_move(event):
                     return True
@@ -1532,9 +1449,6 @@ class TimeDomainCanvasPG(QWidget):
 
     def _sync_overlay_aux_viewboxes(self):
         return OverlayAxisManager._sync_overlay_aux_viewboxes(self._overlay_axes)
-
-    def _connect_overlay_view_sync(self):
-        return OverlayAxisManager._connect_overlay_view_sync(self._overlay_axes)
 
     def _disconnect_overlay_view_sync(self):
         return OverlayAxisManager._disconnect_overlay_view_sync(self._overlay_axes)
@@ -1773,17 +1687,6 @@ class TimeDomainCanvasPG(QWidget):
         return OverlayAxisManager._overlay_emphasis_for_channel(
             self._overlay_axes,
             name,
-        )
-
-    def _apply_overlay_emphasis(self):
-        return OverlayAxisManager._apply_overlay_emphasis(self._overlay_axes)
-
-    def _apply_pdi_emphasis(self, pdi, *, width, alpha):
-        return OverlayAxisManager._apply_pdi_emphasis(
-            self._overlay_axes,
-            pdi,
-            width=width,
-            alpha=alpha,
         )
 
     # ------------------------------------------------------------------
