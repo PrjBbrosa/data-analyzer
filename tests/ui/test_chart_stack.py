@@ -271,7 +271,6 @@ def test_time_card_segmented_buttons_have_alt_digit_shortcuts(qapp, qtbot):
         (card._cursor_buttons['off'],     'Alt+3', '游标关'),
         (card._cursor_buttons['single'],  'Alt+4', '单游标'),
         (card._cursor_buttons['dual'],    'Alt+5', '双游标'),
-        (card._annotation_btn,            'Alt+M', '标注'),
     ]
     registered = {
         s.key().toString(): s for s in card._time_button_shortcuts
@@ -285,6 +284,13 @@ def test_time_card_segmented_buttons_have_alt_digit_shortcuts(qapp, qtbot):
         tip = btn.toolTip()
         assert label in tip
         assert native in tip
+
+    annotation_shortcut = card._time_annotation_shortcut
+    assert annotation_shortcut.key().toString() == 'Alt+M'
+    assert annotation_shortcut.context() == Qt.WidgetWithChildrenShortcut
+    native = QKeySequence('Alt+M').toString(QKeySequence.NativeText)
+    assert '标注' in card._annotation_btn.toolTip()
+    assert native in card._annotation_btn.toolTip()
 
 
 def test_time_toolbar_loc_label_text_does_not_jostle_right_controls(qapp, qtbot):

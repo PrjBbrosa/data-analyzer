@@ -1498,14 +1498,12 @@ class TimeChartCard(_ChartCard):
             self._time_button_shortcuts.append(
                 _install_button_shortcut(self, btn, label, shortcut, key)
             )
-        self._time_button_shortcuts.append(
-            _install_button_shortcut(
-                self,
-                self._annotation_btn,
-                "标注：左键添加，右键删除最近一处",
-                "Alt+M",
-                "annotation",
-            )
+        self._time_annotation_shortcut = _install_button_shortcut(
+            self,
+            self._annotation_btn,
+            "标注：左键添加，右键删除最近一处",
+            "Alt+M",
+            "annotation",
         )
         self.view_tabbar = None
 
