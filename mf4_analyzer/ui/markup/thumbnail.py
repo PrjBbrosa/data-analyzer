@@ -111,7 +111,7 @@ class CopyThumbnail(QWidget):
         self._hide_timer.timeout.connect(self.dismiss)
 
         self._progress_timer = QTimer(self)
-        self._progress_timer.setInterval(50)
+        self._progress_timer.setInterval(16)
         self._progress_timer.timeout.connect(self._update_progress)
 
         if parent is not None:
