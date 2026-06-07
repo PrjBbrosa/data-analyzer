@@ -295,15 +295,6 @@ class TimeDomainCanvasPG(QWidget):
         self._refresh_timer.setInterval(40)
         self._refresh_timer.timeout.connect(self._refresh_visible_data)
         self._refresh_pending = False
-        # --- Auto Idle AA wiring ----------------------------------------
-        # Curves stay AA-off while the user is interacting. After the
-        # viewport settles, a short single-shot timer restores crisp static
-        # curves by flipping PlotCurveItem.opts['antialias'] only.
-        self._idle_aa_on = False
-        self._idle_aa_timer = QTimer(self)
-        self._idle_aa_timer.setSingleShot(True)
-        self._idle_aa_timer.setInterval(150)
-        self._idle_aa_timer.timeout.connect(self.try_enable_idle_quality)
         # Density budget for idle AA (Fix C, 2026-05-31; RECALIBRATED against
         # the end-to-end grab() repaint-frame harness). Two budgets, branched
         # on _overlay_mode in _idle_aa_density_ok:
@@ -326,12 +317,10 @@ class TimeDomainCanvasPG(QWidget):
         self._AA_SUBPLOT_SEGMENT_OFF = _AA_SUBPLOT_SEGMENT_OFF
         self._AA_SEGMENT_ON = _AA_SEGMENT_ON
         self._AA_SEGMENT_OFF = _AA_SEGMENT_OFF
-        self._idle_aa_density_allowed = False
         # Cold-start dead-band fix: until the first decision (and after a
         # resize / rebuild reset) the density gate seeds via the OFF
         # threshold instead of inheriting the pessimistic initial False, so
         # a single wide curve no longer sticks AA-off forever.
-        self._idle_aa_density_seeded = False
         # --- resize re-arm debounce (Fix C) -----------------------------
         # A 40 ms single-shot (mirrors _refresh_timer's coalesce window)
         # so dragging the window border does not recompute the envelope on
@@ -1215,20 +1204,11 @@ class TimeDomainCanvasPG(QWidget):
         if self._refresh_timer.isActive():
             self._refresh_timer.stop()
         try:
-            self._idle_aa_timer.stop()
-        except Exception:
-            pass
-        try:
             self._resize_settle_timer.stop()
         except Exception:
             pass
         self._refresh_pending = False
-        self._idle_aa_on = False
-        self._idle_aa_density_allowed = False
-        # Rebuild changes the curve set / point counts → re-seed the
-        # cold-start dead-band fix so the next decision uses the OFF
-        # threshold rather than inheriting a stale allowance (Fix C).
-        self._idle_aa_density_seeded = False
+        self._quality.reset_for_rebuild()
 
         # Strip everything from the GraphicsLayoutWidget.
         try:
@@ -2320,7 +2300,7 @@ class TimeDomainCanvasPG(QWidget):
             # intermediate size, then recompute the envelope at the new
             # width and re-arm idle AA so crisp curves recover.
             try:
-                self._idle_aa_density_seeded = False
+                self._quality.density_seeded = False
                 self._resize_settle_timer.start()
             except Exception:
                 pass
@@ -2368,15 +2348,6 @@ class TimeDomainCanvasPG(QWidget):
     # Screenshot grab (compat with chart_stack._copy_card_image).
     # ------------------------------------------------------------------
 
-    def _collect_curve_items(self):
-        return self._quality._collect_curve_items()
-
-    def _set_curves_antialias(self, on: bool) -> int:
-        return self._quality._set_curves_antialias(on)
-
-    def _set_curves_cache_mode(self, mode) -> None:
-        return self._quality._set_curves_cache_mode(mode)
-
     def disable_interactive_quality(self):
         return self._quality.disable_interactive_quality()
 
@@ -2385,18 +2356,6 @@ class TimeDomainCanvasPG(QWidget):
 
     def try_enable_idle_quality(self):
         return self._quality.try_enable_idle_quality()
-
-    def _idle_quality_allowed(self) -> bool:
-        return self._quality._idle_quality_allowed()
-
-    def _idle_aa_density_ok(self) -> bool:
-        return self._quality._idle_aa_density_ok()
-
-    def _export_aa_affordable(self) -> bool:
-        return self._quality._export_aa_affordable()
-
-    def _curves_antialiased(self):
-        return self._quality._curves_antialiased()
 
     def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
         return self._renderer.grab_pixmap(scale=scale)

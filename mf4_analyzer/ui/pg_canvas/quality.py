@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtWidgets import QApplication, QGraphicsItem
 
 from . import _binding  # noqa: F401
@@ -17,6 +17,7 @@ _MISSING = object()
 
 class _CanvasBackref:
     _delegate_names = frozenset()
+    _owned_names = frozenset()
 
     def __init__(self, canvas):
         object.__setattr__(self, "_c", canvas)
@@ -25,6 +26,7 @@ class _CanvasBackref:
         if name not in {
             "_c",
             "_delegate_names",
+            "_owned_names",
             "__dict__",
             "__class__",
             "__getattr__",
@@ -46,14 +48,27 @@ class _CanvasBackref:
         if name == "_c":
             object.__setattr__(self, name, value)
             return
+        owned_names = object.__getattribute__(self, "_owned_names")
+        delegate_names = object.__getattribute__(self, "_delegate_names")
+        if name in owned_names or name in delegate_names:
+            object.__setattr__(self, name, value)
+            return
         setattr(self._c, name, value)
 
 
 class QualityManager(_CanvasBackref):
     """Curve antialiasing and idle-quality policy.
 
-    All state remains on the owning canvas; the manager only owns behavior.
+    Owns the idle-AA timer and hysteresis state. Threshold constants remain on
+    the canvas so existing tuning/tests can keep reading and overriding them.
     """
+
+    _owned_names = frozenset({
+        "aa_on",
+        "density_allowed",
+        "density_seeded",
+        "timer",
+    })
 
     _delegate_names = frozenset({
         "_collect_curve_items",
@@ -67,6 +82,28 @@ class QualityManager(_CanvasBackref):
         "_export_aa_affordable",
         "_curves_antialiased",
     })
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self.aa_on = False
+        self.timer = QTimer(canvas)
+        self.timer.setSingleShot(True)
+        self.timer.setInterval(150)
+        self.timer.timeout.connect(self.try_enable_idle_quality)
+        self.density_allowed = False
+        self.density_seeded = False
+
+    def reset_for_rebuild(self):
+        """Reset idle-AA runtime state after the curve set is rebuilt."""
+        try:
+            self.timer.stop()
+        except Exception:
+            pass
+        self.aa_on = False
+        self.density_allowed = False
+        # Rebuild changes the curve set / point counts, so the next decision
+        # must re-seed via the OFF threshold rather than inherit stale state.
+        self.density_seeded = False
 
     def _collect_curve_items(self):
         """Every ``PlotCurveItem`` on the scene; ``[]`` if unreachable."""
@@ -110,17 +147,17 @@ class QualityManager(_CanvasBackref):
     def disable_interactive_quality(self):
         """Force the interactive path back to AA-off and cancel idle upgrade."""
         try:
-            self._idle_aa_timer.stop()
+            self.timer.stop()
         except Exception:
             pass
-        if not getattr(self, "_idle_aa_on", False):
+        if not self.aa_on:
             return
         self._set_curves_antialias(False)
         # Fix D: a stale device-coordinate cache would smear during the
         # pan/zoom that this call precedes. Clear unconditionally so no stale
         # cache survives mode switches.
         self._set_curves_cache_mode(QGraphicsItem.NoCache)
-        self._idle_aa_on = False
+        self.aa_on = False
         try:
             self._glw.update()
         except Exception:
@@ -129,13 +166,13 @@ class QualityManager(_CanvasBackref):
     def schedule_idle_quality(self):
         """Re-arm the single-shot idle-AA timer after a settled interaction."""
         try:
-            self._idle_aa_timer.start()
+            self.timer.start()
         except Exception:
             pass
 
     def try_enable_idle_quality(self):
         """Idle timer slot: enable curve AA once every hands-off gate passes."""
-        if self._idle_aa_on:
+        if self.aa_on:
             return
         if not self._idle_quality_allowed():
             return
@@ -147,7 +184,7 @@ class QualityManager(_CanvasBackref):
             # overlap at one full-plot rect.
             if not getattr(self, "_overlay_mode", False):
                 self._set_curves_cache_mode(QGraphicsItem.DeviceCoordinateCache)
-            self._idle_aa_on = True
+            self.aa_on = True
             try:
                 self._glw.update()
             except Exception:
@@ -181,7 +218,7 @@ class QualityManager(_CanvasBackref):
                 xd, _ = it.getData()
                 n = 0 if xd is None else len(xd)
             except Exception:
-                self._idle_aa_density_allowed = False
+                self.density_allowed = False
                 return False
             total += n
             try:
@@ -196,14 +233,14 @@ class QualityManager(_CanvasBackref):
         else:
             metric = max(sums.values()) if sums else 0
 
-        if not self._idle_aa_density_seeded:
-            self._idle_aa_density_allowed = metric <= off_budget
-            self._idle_aa_density_seeded = True
+        if not self.density_seeded:
+            self.density_allowed = metric <= off_budget
+            self.density_seeded = True
         elif metric <= on_budget:
-            self._idle_aa_density_allowed = True
+            self.density_allowed = True
         elif metric > off_budget:
-            self._idle_aa_density_allowed = False
-        return bool(self._idle_aa_density_allowed)
+            self.density_allowed = False
+        return bool(self.density_allowed)
 
     def _export_aa_affordable(self) -> bool:
         """Return whether copy/export can afford forced curve antialiasing."""

@@ -338,7 +338,7 @@ class Renderer(_CanvasBackref):
         # current width — the same surface step 1 grabs. Dense exports keep
         # the current screen rendering state and skip 2× magnification.
         base_w = max(1, int(self.width()))
-        affordable = self._export_aa_affordable()
+        affordable = self._quality._export_aa_affordable()
         eff_scale = _capped_hidpi_scale(base_w, scale) if affordable else 1.0
 
         def _grab_first_good():
@@ -356,7 +356,7 @@ class Renderer(_CanvasBackref):
         # Few-channel exports keep the crisp forced-AA path. Dense exports are
         # what-you-see-is-what-you-get and avoid re-enabling AA for all curves.
         if affordable:
-            with self._curves_antialiased():
+            with self._quality._curves_antialiased():
                 pix = _grab_first_good()
         else:
             pix = _grab_first_good()

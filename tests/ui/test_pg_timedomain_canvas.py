@@ -1266,7 +1266,7 @@ class TestTimeDomainCanvasPGScreenshotGrab:
         assert curves, "expected PlotCurveItem(s) on the scene"
         before = [bool(c.opts.get("antialias")) for c in curves]
 
-        with canvas._curves_antialiased():
+        with canvas._quality._curves_antialiased():
             inside = [bool(c.opts.get("antialias")) for c in curves]
         after = [bool(c.opts.get("antialias")) for c in curves]
 
@@ -4169,10 +4169,10 @@ class TestTimeDomainCanvasPGHiDpiGrab:
         canvas._overlay_mode = True
 
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(10)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(10)]
         )
 
-        assert canvas._export_aa_affordable() is True
+        assert canvas._quality._export_aa_affordable() is True
 
     def test_export_aa_affordable_false_when_overlay_over_budget(
         self, qapp, monkeypatch,
@@ -4181,23 +4181,23 @@ class TestTimeDomainCanvasPGHiDpiGrab:
         canvas._overlay_mode = True
         over = int(canvas._AA_OVERLAY_SEGMENT_OFF) + 100
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(over)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(over)]
         )
 
-        assert canvas._export_aa_affordable() is False
+        assert canvas._quality._export_aa_affordable() is False
 
     def test_export_aa_affordable_does_not_mutate_idle_hysteresis(
         self, qapp, monkeypatch,
     ):
         canvas = _pg_canvas(qapp)
-        canvas._idle_aa_density_allowed = "SENTINEL_A"
-        canvas._idle_aa_density_seeded = "SENTINEL_S"
-        monkeypatch.setattr(canvas, "_collect_curve_items", lambda: [])
+        canvas._quality.density_allowed = "SENTINEL_A"
+        canvas._quality.density_seeded = "SENTINEL_S"
+        monkeypatch.setattr(canvas._quality, "_collect_curve_items", lambda: [])
 
-        canvas._export_aa_affordable()
+        canvas._quality._export_aa_affordable()
 
-        assert canvas._idle_aa_density_allowed == "SENTINEL_A"
-        assert canvas._idle_aa_density_seeded == "SENTINEL_S"
+        assert canvas._quality.density_allowed == "SENTINEL_A"
+        assert canvas._quality.density_seeded == "SENTINEL_S"
 
     def test_grab_pixmap_skips_forced_aa_when_not_affordable(self, qapp, monkeypatch):
         from PyQt5.QtCore import QCoreApplication
@@ -4206,10 +4206,10 @@ class TestTimeDomainCanvasPGHiDpiGrab:
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows(), mode="overlay")
         QCoreApplication.processEvents()
-        monkeypatch.setattr(canvas, "_export_aa_affordable", lambda: False)
+        monkeypatch.setattr(canvas._quality, "_export_aa_affordable", lambda: False)
 
         entered = []
-        orig = canvas._curves_antialiased
+        orig = canvas._quality._curves_antialiased
 
         @contextmanager
         def _spy():
@@ -4217,7 +4217,7 @@ class TestTimeDomainCanvasPGHiDpiGrab:
             with orig():
                 yield
 
-        monkeypatch.setattr(canvas, "_curves_antialiased", _spy)
+        monkeypatch.setattr(canvas._quality, "_curves_antialiased", _spy)
         pix = canvas.grab_pixmap(scale=2.0)
 
         assert not pix.isNull()
@@ -5367,11 +5367,11 @@ class TestAutoIdleAA:
         curves = self._curves(canvas)
         assert curves
 
-        n_on = canvas._set_curves_antialias(True)
+        n_on = canvas._quality._set_curves_antialias(True)
         assert n_on == len(curves)
         assert all(c.opts.get("antialias") for c in curves)
 
-        n_off = canvas._set_curves_antialias(False)
+        n_off = canvas._quality._set_curves_antialias(False)
         assert n_off == len(curves)
         assert not any(c.opts.get("antialias") for c in curves)
 
@@ -5383,13 +5383,13 @@ class TestAutoIdleAA:
             raise AssertionError("_set_curves_antialias must not call setData")
 
         monkeypatch.setattr(line.plot_data_item, "setData", fail_setdata)
-        canvas._set_curves_antialias(True)
+        canvas._quality._set_curves_antialias(True)
 
     def test_idle_timer_is_single_shot_150ms(self, qapp):
         canvas = _pg_canvas(qapp)
-        assert canvas._idle_aa_timer.isSingleShot()
-        assert canvas._idle_aa_timer.interval() == 150
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.timer.isSingleShot()
+        assert canvas._quality.timer.interval() == 150
+        assert canvas._quality.aa_on is False
 
     def test_idle_slot_enables_aa_when_mouse_up(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -5401,7 +5401,7 @@ class TestAutoIdleAA:
         )
 
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
         assert all(c.opts.get("antialias") for c in self._curves(canvas))
 
     def test_disable_interactive_quality_forces_aa_off(self, qapp, monkeypatch):
@@ -5413,11 +5413,11 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.disable_interactive_quality()
-        assert canvas._idle_aa_on is False
-        assert not canvas._idle_aa_timer.isActive()
+        assert canvas._quality.aa_on is False
+        assert not canvas._quality.timer.isActive()
         assert not any(c.opts.get("antialias") for c in self._curves(canvas))
 
     def test_idle_slot_blocked_while_mouse_down(self, qapp, monkeypatch):
@@ -5429,7 +5429,7 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.LeftButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
 
     def test_idle_slot_blocked_while_overlay_dragging(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -5441,19 +5441,19 @@ class TestAutoIdleAA:
         )
         canvas._overlay_dragging = True
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
 
     def test_schedule_idle_quality_starts_timer(self, qapp):
         canvas = self._plot(qapp)
         canvas.schedule_idle_quality()
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_initial_overlay_build_rearms_idle_timer(self, qapp):
         canvas = self._plot(qapp, mode="overlay")
 
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert not any(c.opts.get("antialias") for c in self._curves(canvas))
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_view_all_forces_aa_off_and_rearms_idle_timer(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -5464,13 +5464,13 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.reset_view_to_data_extents()
 
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert not any(c.opts.get("antialias") for c in self._curves(canvas))
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_xrange_change_forces_aa_off(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -5481,17 +5481,17 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.set_xlim(0.2, 0.8)
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert not any(c.opts.get("antialias") for c in self._curves(canvas))
 
     def test_refresh_rearms_idle_timer(self, qapp):
         canvas = self._plot(qapp)
         canvas.set_xlim(0.1, 0.9)
         canvas._flush_pending_refresh()
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_y_only_wheel_forces_aa_off_and_rearms_idle(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -5502,23 +5502,23 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         assert canvas._handle_wheel_dispatch(
             delta=120, modifiers=Qt.ShiftModifier, x_pos=0.5, y_pos=0.0,
         ) is True
-        assert canvas._idle_aa_on is False
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.aa_on is False
+        assert canvas._quality.timer.isActive()
 
-        canvas._idle_aa_timer.stop()
+        canvas._quality.timer.stop()
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         assert canvas._handle_wheel_dispatch(
             delta=120, modifiers=Qt.NoModifier, x_pos=0.5, y_pos=0.0,
         ) is True
-        assert canvas._idle_aa_on is False
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.aa_on is False
+        assert canvas._quality.timer.isActive()
 
     def test_mouse_release_rearms_after_blocked_idle_timeout(self, qapp, monkeypatch):
         from PyQt5.QtCore import QEvent, QPoint, Qt
@@ -5528,15 +5528,15 @@ class TestAutoIdleAA:
         canvas = self._plot(qapp)
         canvas.set_xlim(0.1, 0.9)
         canvas._flush_pending_refresh()
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
         monkeypatch.setattr(
             QApplication, "mouseButtons", staticmethod(lambda: Qt.LeftButton)
         )
-        canvas._idle_aa_timer.stop()
+        canvas._quality.timer.stop()
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is False
-        assert not canvas._idle_aa_timer.isActive()
+        assert canvas._quality.aa_on is False
+        assert not canvas._quality.timer.isActive()
 
         release = QMouseEvent(
             QEvent.MouseButtonRelease,
@@ -5546,7 +5546,7 @@ class TestAutoIdleAA:
             Qt.NoModifier,
         )
         canvas.eventFilter(canvas._glw.viewport(), release)
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_overlay_drag_drops_aa_and_release_rearms(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -5557,19 +5557,19 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas._overlay_dragging = True
         canvas.disable_interactive_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
 
         canvas._overlay_dragging = False
         canvas.schedule_idle_quality()
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_replot_leaves_curves_aa_off(self, qapp):
         canvas = self._plot(qapp)
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         curves = self._curves(canvas)
         assert curves and not any(c.opts.get("antialias") for c in curves)
 
@@ -5583,7 +5583,7 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.set_cursor_visible(True)
         handle = canvas.axes_list[0]
@@ -5594,7 +5594,7 @@ class TestAutoIdleAA:
                 _FakeMove(point.x(), point.y())
             ) is True
 
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
         assert all(c.opts.get("antialias") for c in self._curves(canvas))
 
     @staticmethod
@@ -5620,29 +5620,29 @@ class TestAutoIdleAA:
         )
         self._set_budgets(canvas, 1, 2)
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
 
     def test_density_gate_uses_hysteresis_window(self, qapp, monkeypatch):
         canvas = self._plot(qapp)
         self._set_budgets(canvas, 4, 6)
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(5)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(5)]
         )
 
         # Seed past the cold-start: a value strictly inside the (ON, OFF]
         # dead band holds whatever the previous decision was.
-        canvas._idle_aa_density_seeded = True
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is False
+        canvas._quality.density_seeded = True
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is False
 
-        canvas._idle_aa_density_allowed = True
-        assert canvas._idle_aa_density_ok() is True
+        canvas._quality.density_allowed = True
+        assert canvas._quality._idle_aa_density_ok() is True
 
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(7)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(7)]
         )
-        assert canvas._idle_aa_density_ok() is False
-        assert canvas._idle_aa_density_allowed is False
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality.density_allowed is False
 
     def test_overlay_metric_is_sum_across_all_curves(self, qapp, monkeypatch):
         """Correction 1 (2026-05-31): in OVERLAY mode the metric is the SUM
@@ -5654,13 +5654,13 @@ class TestAutoIdleAA:
         canvas._overlay_mode = True
         self._set_budgets(canvas, 8, 10)
         monkeypatch.setattr(
-            canvas, "_collect_curve_items",
+            canvas._quality, "_collect_curve_items",
             lambda: [_FakeCurveData(5) for _ in range(3)],
         )
         # Sum = 15 > OFF(10) on the cold-start seed → rejected, proving the
         # metric is the sum (a per-VB MAX would have been 5 → allowed).
-        canvas._idle_aa_density_seeded = False
-        assert canvas._idle_aa_density_ok() is False
+        canvas._quality.density_seeded = False
+        assert canvas._quality._idle_aa_density_ok() is False
 
     def test_subplot_metric_is_max_over_rows(self, qapp, monkeypatch):
         """Correction 1: in SUBPLOT mode the metric is the MAX over rows of
@@ -5671,11 +5671,11 @@ class TestAutoIdleAA:
         canvas._overlay_mode = False
         self._set_budgets(canvas, 8, 10)
         monkeypatch.setattr(
-            canvas, "_collect_curve_items",
+            canvas._quality, "_collect_curve_items",
             lambda: [_FakeCurveData(5) for _ in range(5)],
         )
-        canvas._idle_aa_density_seeded = False
-        assert canvas._idle_aa_density_ok() is True
+        canvas._quality.density_seeded = False
+        assert canvas._quality._idle_aa_density_ok() is True
 
     def test_single_subplot_curve_6000_passes_on_first_decision(
         self, qapp, monkeypatch,
@@ -5691,11 +5691,11 @@ class TestAutoIdleAA:
             "subplot OFF must cover a 4K maximized single curve (~7700 pts)"
         )
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(6000)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(6000)]
         )
-        canvas._idle_aa_density_seeded = False
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is True, (
+        canvas._quality.density_seeded = False
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is True, (
             "first decision must seed via the OFF threshold, not stick False"
         )
 
@@ -5712,12 +5712,12 @@ class TestAutoIdleAA:
             "(5×3000 ≈ +69 ms) would still be allowed"
         )
         monkeypatch.setattr(
-            canvas, "_collect_curve_items",
+            canvas._quality, "_collect_curve_items",
             lambda: [_FakeCurveData(3000) for _ in range(5)],
         )
-        canvas._idle_aa_density_seeded = False
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is False, (
+        canvas._quality.density_seeded = False
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is False, (
             "dense overlay (sum 15000) must gate AA off on the production "
             "overlay budget"
         )
@@ -5730,12 +5730,12 @@ class TestAutoIdleAA:
         # A 2-curve overlay at the ON budget point is the affordable case.
         n_each = canvas._AA_OVERLAY_SEGMENT_ON // 2  # sum == ON → allowed
         monkeypatch.setattr(
-            canvas, "_collect_curve_items",
+            canvas._quality, "_collect_curve_items",
             lambda: [_FakeCurveData(n_each) for _ in range(2)],
         )
-        canvas._idle_aa_density_seeded = False
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is True
+        canvas._quality.density_seeded = False
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is True
 
     def test_overlay_on_off_hysteresis_do_not_flap(self, qapp, monkeypatch):
         """Correction 3: overlay ON != OFF, so a sum parked between them
@@ -5747,17 +5747,17 @@ class TestAutoIdleAA:
             canvas._AA_OVERLAY_SEGMENT_ON + canvas._AA_OVERLAY_SEGMENT_OFF
         ) // 2
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(mid)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(mid)]
         )
-        canvas._idle_aa_density_seeded = True
+        canvas._quality.density_seeded = True
 
-        canvas._idle_aa_density_allowed = True
-        assert canvas._idle_aa_density_ok() is True
-        assert canvas._idle_aa_density_ok() is True  # stable, no flap
+        canvas._quality.density_allowed = True
+        assert canvas._quality._idle_aa_density_ok() is True
+        assert canvas._quality._idle_aa_density_ok() is True  # stable, no flap
 
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is False
-        assert canvas._idle_aa_density_ok() is False
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality._idle_aa_density_ok() is False
 
     def test_subplot_budget_more_generous_than_overlay(self, qapp):
         """Correction 3: the subplot budget (cached, cheap) must be strictly
@@ -5771,14 +5771,14 @@ class TestAutoIdleAA:
         self, qapp, monkeypatch,
     ):
         canvas = self._plot(qapp)
-        canvas._idle_aa_density_seeded = True
-        canvas._idle_aa_density_allowed = True
+        canvas._quality.density_seeded = True
+        canvas._quality.density_allowed = True
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_BrokenCurveData()]
+            canvas._quality, "_collect_curve_items", lambda: [_BrokenCurveData()]
         )
 
-        assert canvas._idle_aa_density_ok() is False
-        assert canvas._idle_aa_density_allowed is False
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality.density_allowed is False
 
     def test_resize_event_rearms_idle_timer(self, qapp):
         """Fix C: a resize debounces a settle pass; once the settle timer
@@ -5788,8 +5788,8 @@ class TestAutoIdleAA:
         from PyQt5.QtCore import QCoreApplication
 
         canvas = self._plot(qapp)
-        canvas._idle_aa_timer.stop()
-        assert not canvas._idle_aa_timer.isActive()
+        canvas._quality.timer.stop()
+        assert not canvas._quality.timer.isActive()
 
         canvas.resize(900, 500)
         QCoreApplication.processEvents()
@@ -5800,7 +5800,7 @@ class TestAutoIdleAA:
 
         # Fire the debounce slot as the live timer eventually would.
         canvas._on_resize_settled()
-        assert canvas._idle_aa_timer.isActive(), (
+        assert canvas._quality.timer.isActive(), (
             "settle pass must re-arm the idle-AA timer for the new width"
         )
 
@@ -5810,12 +5810,12 @@ class TestAutoIdleAA:
         from PyQt5.QtCore import QCoreApplication
 
         canvas = self._plot(qapp)
-        canvas._idle_aa_density_seeded = True
+        canvas._quality.density_seeded = True
 
         canvas.resize(900, 500)
         QCoreApplication.processEvents()
 
-        assert canvas._idle_aa_density_seeded is False
+        assert canvas._quality.density_seeded is False
 
     def test_default_line_width_is_1_5(self, qapp):
         """Co-tuned with idle AA to soften the AA-off/on visual jump."""
@@ -5837,7 +5837,7 @@ class TestAutoIdleAA:
         pix = canvas.grab_pixmap(scale=1.0)
         assert not pix.isNull()
         assert all(c.opts.get("antialias") for c in curves)
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
     def test_idle_aa_subplot_sets_device_coordinate_cache(self, qapp, monkeypatch):
         """Fix D (Correction 2, 2026-05-31): in SUBPLOT mode (disjoint rows)
@@ -5858,7 +5858,7 @@ class TestAutoIdleAA:
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
 
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
         assert all(
             c.cacheMode() == QGraphicsItem.DeviceCoordinateCache for c in curves
         ), "subplot idle AA must enable DeviceCoordinateCache on every curve"
@@ -5882,7 +5882,7 @@ class TestAutoIdleAA:
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
 
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
         assert all(c.opts.get("antialias") for c in curves), (
             "overlay idle AA must still flip antialias on"
         )
@@ -5911,7 +5911,7 @@ class TestAutoIdleAA:
         )
 
         canvas.disable_interactive_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves), (
             "disable_interactive_quality must clear the device cache"
         )
@@ -5931,10 +5931,10 @@ class TestAutoIdleAA:
         )
         canvas.try_enable_idle_quality()
         curves = self._curves(canvas)
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.disable_interactive_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
 
     def test_xrange_change_clears_device_cache_subplot(self, qapp, monkeypatch):
@@ -5955,7 +5955,7 @@ class TestAutoIdleAA:
         )
 
         canvas.set_xlim(0.2, 0.8)
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
 
 

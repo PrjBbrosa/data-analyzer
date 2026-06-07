@@ -137,3 +137,19 @@ class TestCollaboratorStateOwnership:
             "_annotation_press_dragged",
         ):
             assert name not in pg_canvas.__dict__
+
+    def test_idle_quality_state_lives_on_quality_manager(self, pg_canvas):
+        quality = pg_canvas._quality
+
+        assert quality.timer.isSingleShot()
+        assert quality.timer.interval() == 150
+        assert quality.aa_on is False
+        assert quality.density_allowed is False
+        assert quality.density_seeded is False
+        for name in (
+            "_idle_aa_timer",
+            "_idle_aa_on",
+            "_idle_aa_density_allowed",
+            "_idle_aa_density_seeded",
+        ):
+            assert name not in pg_canvas.__dict__
