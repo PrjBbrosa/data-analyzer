@@ -954,6 +954,8 @@ class _ModifierWheelViewBox(pg.ViewBox):
         _localize_pg_context_menu(getattr(self, "menu", None))
 
     def raiseContextMenu(self, ev):
+        if self._delete_remark_from_context_event(ev):
+            return
         menu = self.getMenu(ev)
         if menu is None:
             return
@@ -983,6 +985,18 @@ class _ModifierWheelViewBox(pg.ViewBox):
             menu.popup(ev.screenPos().toPoint())
         except Exception:
             pass
+
+    def _delete_remark_from_context_event(self, ev):
+        owner = self._owner_canvas
+        if owner is None or not getattr(owner, "_annotation_enabled", False):
+            return False
+        try:
+            scene_pos = ev.scenePos()
+        except Exception:
+            scene_pos = None
+        owner._last_rclick_scene_pos = scene_pos
+        owner._remove_remark_at(scene_pos)
+        return True
 
     def wheelEvent(self, ev, axis=None):
         # Route through the canvas's central dispatch so the test surface
@@ -1731,18 +1745,33 @@ class TimeDomainCanvasPG(QWidget):
             y_autofit_handler=self.fit_y_to_visible_x,
             allow_y_grid=not self._overlay_mode,
         )
+        self._remove_annotation_context_menu_actions(menu)
         # Annotation delete actions (only when remarks exist).
         if self._remarks:
-            menu.addSeparator()
+            sep = menu.addSeparator()
+            sep.setObjectName("tracelabAnnotationRemarkActionSeparator")
             del_act = QAction("删除最近标注", menu)
+            del_act.setObjectName("tracelabAnnotationRemarkActionDeleteNearest")
             sp = getattr(self, '_last_rclick_scene_pos', None)
             del_act.triggered.connect(
                 lambda checked=False, _sp=sp: self._remove_remark_at(_sp)
             )
             menu.addAction(del_act)
             clear_act = QAction("删除全部标注", menu)
+            clear_act.setObjectName("tracelabAnnotationRemarkActionClearAll")
             clear_act.triggered.connect(self.clear_remarks)
             menu.addAction(clear_act)
+
+    def _remove_annotation_context_menu_actions(self, menu):
+        if menu is None:
+            return
+        for action in list(menu.actions()):
+            try:
+                object_name = action.objectName()
+            except Exception:
+                object_name = ""
+            if object_name.startswith("tracelabAnnotationRemarkAction"):
+                menu.removeAction(action)
 
     def _add_plot_item(self, *, row, col):
         """Add a PlotItem hosted by our ``_ModifierWheelViewBox``.
@@ -3310,32 +3339,52 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             pass
 
+    def _remark_target_axis_handle(self, viewport_pos):
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        if self._overlay_mode:
+            return None
+        return self._axis_handle_at_scene_pos(scene_pos)
+
     def _nearest_data_point(self, viewport_pos):
         """Return (ch_name, x, y, color) of the data point nearest to viewport_pos.
 
-        Converts pos to primary-x data value, then for each channel finds the
+        Converts pos to the clicked subplot's data value, then finds the
         nearest sample by screen distance. Returns None if no channels.
         """
         from PyQt5.QtCore import QPointF as _QPointF
         x_data = self._cursor_data_x_from_viewport_pos(viewport_pos)
         if x_data is None or not self.channel_data:
             return None
+        target_handle = self._remark_target_axis_handle(viewport_pos)
+        candidate_items = self.channel_data.items()
+        if target_handle is not None:
+            target_names = {
+                name for name, (axis_handle, _line) in self._channel_lines.items()
+                if axis_handle is target_handle
+            }
+            candidate_items = [
+                (name, row)
+                for name, row in self.channel_data.items()
+                if name in target_names
+            ]
         try:
             scene_pos = self._viewport_pos_to_scene(viewport_pos)
         except Exception:
             scene_pos = None
         best = None
         best_dist = float('inf')
-        for ch, (tf, sf, color, unit) in self.channel_data.items():
+        for ch, (tf, sf, color, unit) in candidate_items:
             if not len(tf):
                 continue
             idx = int(np.argmin(np.abs(tf - x_data)))
             sx, sy = float(tf[idx]), float(sf[idx])
             if scene_pos is not None:
                 try:
-                    ax = self._primary_xaxis_ax or (
-                        self.axes_list[0] if self.axes_list else None
-                    )
+                    ax = self._channel_lines.get(ch, (None, None))[0]
+                    if ax is None:
+                        ax = target_handle or self._primary_xaxis_ax or (
+                            self.axes_list[0] if self.axes_list else None
+                        )
                     vb = ax.view_box if ax else None
                     if vb:
                         pt = vb.mapViewToScene(_QPointF(sx, sy))
@@ -3359,14 +3408,17 @@ class TimeDomainCanvasPG(QWidget):
         found = self._nearest_data_point(viewport_pos)
         if found is None:
             return
-        _ch, dx, dy, color = found
+        ch, dx, dy, color = found
         # Resolve which viewbox to add the annotation to.
         try:
-            ax = self._primary_xaxis_ax or (
-                self.axes_list[0] if self.axes_list else None
-            )
-            pi = ax.plot_item if ax else None
-            vb = pi.getViewBox() if pi else None
+            ax = self._channel_lines.get(ch, (None, None))[0]
+            if ax is None:
+                ax = self._remark_target_axis_handle(viewport_pos)
+            if ax is None:
+                ax = self._primary_xaxis_ax or (
+                    self.axes_list[0] if self.axes_list else None
+                )
+            vb = ax.view_box if ax else None
         except Exception:
             vb = None
         if vb is None:

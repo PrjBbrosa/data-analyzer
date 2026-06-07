@@ -589,6 +589,26 @@ class TestTimeDomainCanvasPGAnnotations:
         assert "Y=42.5" in label
         assert "speed" not in label
 
+    def test_remark_on_second_subplot_attaches_to_second_viewbox(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:2], mode="subplot")
+        QCoreApplication.processEvents()
+        second_handle = canvas.axes_list[1]
+        second_row = canvas.channel_data["torque"]
+        idx = len(second_row[0]) // 2
+        point = _viewport_point_for_data(
+            canvas,
+            second_handle,
+            float(second_row[0][idx]),
+            float(second_row[1][idx]),
+        )
+
+        canvas._add_remark(point)
+
+        assert canvas._remarks[-1]["vb"] is second_handle.view_box
+
     def test_annotation_mode_left_press_on_existing_remark_allows_drag(
         self, qapp, monkeypatch,
     ):
@@ -3115,13 +3135,19 @@ class _FakeMenuEvent:
     ``raiseContextMenu``. It needs ``acceptedItem`` (read by the scene's
     ``getContextMenus``) and ``screenPos()`` (read before ``popup``)."""
 
-    def __init__(self, accepted_item):
+    def __init__(self, accepted_item, scene_pos=None):
         self.acceptedItem = accepted_item
+        self._scene_pos = scene_pos
 
     def screenPos(self):
         from PyQt5.QtCore import QPointF
 
         return QPointF(0.0, 0.0)
+
+    def scenePos(self):
+        from PyQt5.QtCore import QPointF
+
+        return self._scene_pos or QPointF(0.0, 0.0)
 
 
 def _assemble_and_redesign_menu(qapp, canvas, view_box, monkeypatch):
@@ -3213,6 +3239,40 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
 
         for banned in ("绘图选项", "Plot Options", "导出...", "Export...", "变换", "降采样"):
             assert banned not in top
+
+    def test_annotation_delete_entries_do_not_duplicate(self, qapp, monkeypatch):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+        canvas._remarks.append({"vb": vb})
+
+        _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        named = _top_level_texts(menu)
+
+        assert named.count("删除最近标注") == 1
+        assert named.count("删除全部标注") == 1
+
+    def test_annotation_mode_right_click_deletes_without_context_menu(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPointF
+        from PyQt5.QtWidgets import QMenu
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+        canvas.set_remark_enabled(True)
+        scene_pos = QPointF(12.0, 34.0)
+        removed = []
+        popped = []
+        monkeypatch.setattr(canvas, "_remove_remark_at", lambda sp: removed.append(sp))
+        monkeypatch.setattr(QMenu, "popup", lambda *args, **kwargs: popped.append(args))
+
+        vb.raiseContextMenu(_FakeMenuEvent(vb, scene_pos))
+
+        assert removed == [scene_pos]
+        assert popped == []
 
     def test_grid_submenu_promoted_with_x_and_y_toggles(self, qapp, monkeypatch):
         canvas = _pg_canvas(qapp)
