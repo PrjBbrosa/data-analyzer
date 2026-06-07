@@ -63,10 +63,14 @@ def _capped_hidpi_scale(base_width, requested=_HIDPI_COPY_SCALE):
 
 def _legacy_positions_envelope():
     """Return the current legacy-module seam for tests that monkeypatch it."""
-    module = sys.modules.get("mf4_analyzer.ui.pg_canvases")
-    func = getattr(module, "positions_envelope", None) if module is not None else None
-    if func is not None:
-        return func
+    for module_name in (
+        "mf4_analyzer.ui.pg_canvases",
+        "mf4_analyzer.ui.pg_canvas.canvas",
+    ):
+        module = sys.modules.get(module_name)
+        func = getattr(module, "positions_envelope", None) if module is not None else None
+        if func is not None:
+            return func
     from mf4_analyzer.signal._envelope_cutils import positions_envelope
 
     return positions_envelope
