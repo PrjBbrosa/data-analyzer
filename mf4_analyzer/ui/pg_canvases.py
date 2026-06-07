@@ -55,55 +55,28 @@ from __future__ import annotations
 import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
-import logging
 import json
 import math
 import time as _time
 from collections import OrderedDict
-from contextlib import contextmanager
 from typing import Tuple
 
 import numpy as np
 import pyqtgraph as pg
-import qtawesome as qta
 from PyQt5.QtCore import (
-    QEasingCurve,
     QEvent,
-    QSize,
     QTimer,
-    QVariantAnimation,
     Qt,
     pyqtSignal,
 )
 from PyQt5.QtGui import (
-    QFont,
-    QFontDatabase,
-    QFontInfo,
-    QFontMetrics,
-    QColor,
     QCursor,
-    QImage,
-    QPainter,
     QPainterPath,
-    QPen,
     QPixmap,
 )
 from PyQt5.QtWidgets import (
-    QAction,
-    QApplication,
-    QButtonGroup,
-    QCheckBox,
-    QComboBox,
-    QGraphicsItem,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QMenu,
-    QRadioButton,
-    QToolButton,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 
 from mf4_analyzer.signal._envelope_cutils import positions_envelope
@@ -111,7 +84,6 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
     PgAxisHandle,
-    _PgLineHandle,
 )
 from mf4_analyzer.ui.canvases import (
     _format_dual_html,
@@ -123,38 +95,56 @@ from mf4_analyzer.ui.canvases import (
     _split_prefixed_label,
     build_envelope,
 )
-
-
-_log = logging.getLogger(__name__)
-
-
-_ANNOTATION_CURSOR = None
-
-
-def _annotation_pen_cursor():
-    global _ANNOTATION_CURSOR
-    if _ANNOTATION_CURSOR is not None:
-        return _ANNOTATION_CURSOR
-    pix = QPixmap(24, 24)
-    pix.fill(Qt.transparent)
-    painter = QPainter(pix)
-    try:
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(
-            QPen(QColor("#1769e0"), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-        )
-        painter.drawLine(6, 18, 17, 7)
-        painter.drawLine(14, 6, 18, 10)
-        painter.drawLine(5, 19, 9, 19)
-        painter.setPen(
-            QPen(QColor("#1e293b"), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-        )
-        painter.drawEllipse(3, 17, 4, 4)
-    finally:
-        painter.end()
-    _ANNOTATION_CURSOR = QCursor(pix, 5, 19)
-    return _ANNOTATION_CURSOR
-
+from mf4_analyzer.ui.pg_canvas.context_menu import (  # noqa: F401
+    _clean_menu_text,
+    _apply_context_widget_i18n,
+    _style_pg_context_menu,
+    _localize_pg_context_actions,
+    _localize_pg_context_menu,
+    _find_top_level_action,
+    _route_view_all_action,
+    _build_grid_submenu,
+    _add_mouse_mode_toggle_row,
+    _add_y_autofit_action,
+    _reorder_top_level_actions,
+    redesign_pg_context_menu,
+    _strip_redundant_separators,
+)
+from mf4_analyzer.ui.pg_canvas.fonts import (  # noqa: F401
+    _pg_chart_font,
+    _apply_pg_axis_font,
+    _apply_pg_text_item_font,
+)
+from mf4_analyzer.ui.pg_canvas.annotations import (  # noqa: F401
+    AnnotationManager,
+    _annotation_pen_cursor,
+)
+from mf4_analyzer.ui.pg_canvas.cursor import CursorController
+from mf4_analyzer.ui.pg_canvas.ticks_math import (  # noqa: F401
+    _NICE_STEP_MANTISSAS,
+    _snap_y_to_divisions,
+    _nice_per_div,
+    _adjacent_nice_step,
+    _fmt_tick,
+    _frame_to_nice,
+    _quantize_range_key,
+)
+from mf4_analyzer.ui.pg_canvas.tick_density import (  # noqa: F401
+    TickDensityController,
+    _TARGET_X_TICK_NICE_FACTORS,
+    _TARGET_X_TICK_MIN_GAP_PX,
+    _TARGET_X_TICK_EDGE_PAD_PX,
+    _TARGET_X_TICK_MIN_COUNT,
+)
+from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox  # noqa: F401
+from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
+from mf4_analyzer.ui.pg_canvas.quality import QualityManager
+from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
+    Renderer,
+    _HIDPI_COPY_SCALE,
+    _HIDPI_MAX_WIDTH,
+    _capped_hidpi_scale,
+)
 
 def _subplot_ylabel_text(name, unit):
     """Subplot left-axis label: compact channel name plus unit suffix."""
@@ -169,12 +159,6 @@ def _view_state_channel_key(data_id, name):
         ensure_ascii=False,
         separators=(",", ":"),
     )
-
-
-_TARGET_X_TICK_NICE_FACTORS = (1.0, 2.0, 2.5, 5.0, 10.0)
-_TARGET_X_TICK_MIN_GAP_PX = 10.0
-_TARGET_X_TICK_EDGE_PAD_PX = 2.0
-_TARGET_X_TICK_MIN_COUNT = 3
 
 
 # Idle-AA density budget (Fix C, 2026-05-31 overlay-aa-interaction-fixes;
@@ -224,1039 +208,9 @@ _AA_SEGMENT_ON = _AA_SUBPLOT_SEGMENT_ON
 _AA_SEGMENT_OFF = _AA_SUBPLOT_SEGMENT_OFF
 
 
-_PG_CONTEXT_ACTIONS = {
-    "ViewBox options": ("视图选项", "配置当前图表的视图范围、坐标轴和鼠标交互。"),
-    "View All": ("查看全部", "回到完整数据范围，等同于顶部工具栏的重置视图。"),
-    "X axis": ("X 轴范围", "设置横轴范围、自动缩放、鼠标交互。"),
-    "Y axis": ("Y 轴范围", "设置纵轴范围、自动缩放、鼠标交互。"),
-    "Mouse Mode": ("鼠标模式", "切换图面左键拖动时的默认行为。"),
-    "3 button": ("三键模式", "左键平移；右键或组合鼠标手势用于缩放。"),
-    "1 button": ("单键模式", "左键框选缩放；适合临时放大一个局部区域。"),
-    "Plot Options": ("绘图选项", "pyqtgraph 原生高级绘图开关；日常看曲线通常不用改。"),
-    "Transforms": ("变换", "对曲线做对数、导数、FFT、去均值等显示变换。"),
-    "Downsample": ("降采样", "大数据曲线的显示抽稀选项，影响绘制速度和视觉细节。"),
-    "Average": ("平均", "显示多条曲线时的平均相关选项。"),
-    "Alpha": ("透明度", "调整曲线透明度。"),
-    "Grid": ("网格", "显示或隐藏 X/Y 网格线，并调整不透明度。"),
-    "Points": ("点显示", "控制是否显示采样点标记。"),
-    "Export...": ("导出...", "打开 pyqtgraph 导出窗口，可导出图片、SVG、CSV 等。"),
-}
-
-_PG_CONTEXT_WIDGETS = {
-    "Mouse Enabled": ("鼠标交互", "允许这个坐标轴响应鼠标拖动和缩放。"),
-    "Auto": ("自动", "根据当前数据自动调整范围。"),
-    "Manual": ("手动", "手动输入当前坐标轴的最小值和最大值。"),
-    "Link Axis:": ("关联坐标轴:", "让当前坐标轴跟随另一个视图同步。"),
-    "Auto Pan Only": ("仅自动平移", "自动跟随数据中心，但不自动改变缩放比例。"),
-    "Visible Data Only": ("仅可见数据", "自动缩放时只参考另一个方向可见范围内的数据。"),
-    "Invert Axis": ("反转坐标轴", "反转这个坐标轴的显示方向。"),
-    "Log X": ("X 对数", "把 X 轴按对数方式显示。"),
-    "Log Y": ("Y 对数", "把 Y 轴按对数方式显示。"),
-    "dy/dx": ("导数 dy/dx", "显示曲线的一阶导数。"),
-    "Y vs. Y'": ("Y 对 Y'", "用另一条曲线作为横轴显示关系图。"),
-    "Power Spectrum (FFT)": ("功率谱 (FFT)", "把曲线转换为频域功率谱显示。"),
-    "Subtract Mean": ("去均值", "显示前先减去曲线平均值。"),
-    "Clip to View": ("仅绘制可见范围", "只绘制当前视图里的数据，可提高大数据交互速度。"),
-    "Max Traces:": ("最大曲线数:", "限制同时显示的曲线数量。"),
-    "Downsample": ("降采样", "按指定倍率抽稀后再绘制。"),
-    "Peak": ("峰值", "保留每段数据的最小/最大值，视觉细节较好但较慢。"),
-    "Mean": ("均值", "每段数据取平均值后绘制。"),
-    "Subsample": ("抽样", "每段只取一个样本，最快但细节最少。"),
-    "Forget hidden traces": ("忘记隐藏曲线", "超过最大曲线数后释放隐藏曲线数据以节省内存。"),
-    "Show X Grid": ("显示 X 网格", "显示横向时间网格线。"),
-    "Show Y Grid": ("显示 Y 网格", "显示纵向数值网格线。"),
-    "Opacity": ("不透明度", "调整网格或图元的不透明度。"),
-}
-
-
-# ---------------------------------------------------------------------------
-# Right-click context-menu redesign (design §A–§D,
-# docs/superpowers/specs/2026-05-30-timedomain-context-menu-redesign-design.md,
-# 方案 A · 常用优先).
-#
-# We KEEP pyqtgraph's native QMenu and reshape it after it is assembled:
-#   - localize the surviving items (reuse the i18n dicts above),
-#   - TRIM every advanced/duplicate/export entry,
-#   - PROMOTE a top-level 网格 ▸ submenu (X/Y grid toggles),
-#   - RENAME 鼠标模式 to toolbar vocabulary (平移 / 框选) and route it
-#     through the SAME mouse-mode controller the top toolbar uses,
-#   - turn tooltips OFF so floating help no longer covers the 二级表单.
-#
-# Final top-level menu (in order, 2026-06-07 view-ui-tweaks §④b):
-#   [框选 | 平移 toggle row] · Y 轴自适应 · 查看全部 · X 轴范围 ▸ ·
-#   Y 轴范围 ▸ · 网格 ▸
-# The mouse-mode toggle row is a QWidgetAction (no text) pinned FIRST; the
-# old 鼠标操作 二级子菜单 is gone.
-# ---------------------------------------------------------------------------
-
-# Native pyqtgraph action texts (post-i18n) that must be REMOVED entirely from
-# the assembled menu. Matched on the cleaned, possibly-translated label.
-#
-# 2026-06-07 view-ui-tweaks §④b: the native 鼠标模式 / Mouse Mode submenu is
-# dropped entirely — the mouse mode now lives in an inline icon-toggle ROW
-# at the top of the menu (see ``_add_mouse_mode_toggle_row``), not a submenu.
-_PG_MENU_REMOVE_TEXTS = frozenset({
-    "Plot Options", "绘图选项",
-    "Export...", "导出...", "导出…",
-    "Mouse Mode", "鼠标模式", "鼠标操作",
-})
-
-_PG_CHART_FONT_FAMILIES = (
-    "Microsoft YaHei UI",
-    "Microsoft YaHei",
-    "微软雅黑",
-    "Segoe UI",
-    "PingFang SC",
-    "Noto Sans CJK SC",
-)
-_PG_CHART_FONT_CACHE = {}
 _OVERLAY_AXIS_LABEL_MIN_CHARS = 12
 _OVERLAY_AXIS_LABEL_FALLBACK_CHARS = 22
 _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0
-
-
-def _pg_chart_font(point_size=9):
-    """Return the explicit font used by pyqtgraph axis/scene text.
-
-    pyqtgraph text lives in QGraphicsItems, so it does not reliably inherit
-    QWidget QSS font-family rules. Prefer common UI Chinese fonts, then fall
-    back to the QApplication font.
-    """
-    cache_key = int(point_size)
-    cached = _PG_CHART_FONT_CACHE.get(cache_key)
-    if cached is not None:
-        return QFont(cached)
-    try:
-        families = set(QFontDatabase().families())
-    except Exception:
-        families = set()
-    for family in _PG_CHART_FONT_FAMILIES:
-        font = QFont(family, point_size)
-        if family in families:
-            _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
-            return font
-        if families:
-            continue
-        try:
-            info = QFontInfo(font)
-            resolved = info.family()
-            if info.exactMatch() or resolved in _PG_CHART_FONT_FAMILIES:
-                _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
-                return font
-        except Exception:
-            _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
-            return font
-    app = QApplication.instance()
-    font = QFont(app.font() if app is not None else QFont())
-    font.setPointSize(point_size)
-    _PG_CHART_FONT_CACHE[cache_key] = QFont(font)
-    return font
-
-
-def _apply_pg_axis_font(axis, point_size=9):
-    if axis is None:
-        return
-    font = _pg_chart_font(point_size)
-    try:
-        axis.setStyle(tickFont=font)
-    except Exception:
-        pass
-    label = getattr(axis, "label", None)
-    if label is not None:
-        try:
-            label.setFont(font)
-        except Exception:
-            pass
-
-
-def _apply_pg_text_item_font(item, point_size=9):
-    if item is None:
-        return
-    font = _pg_chart_font(point_size)
-    target = getattr(item, "textItem", item)
-    try:
-        target.setFont(font)
-    except Exception:
-        pass
-
-# Native axis-form child object names to HIDE. Link Axis / Invert and the
-# low-frequency auto-pan / visible-only toggles are out of scope per design A;
-# the whole 自动 row (auto radio + 100% percentage spin) is dropped per user
-# request — it duplicated 查看全部 / Home and only ate menu space.
-_PG_AXIS_FORM_HIDE_OBJECTS = frozenset({
-    "label",            # "Link Axis:" caption
-    "linkCombo",
-    "invertCheck",
-    "autoPanCheck",
-    "visibleOnlyCheck",
-    "autoRadio",        # "自动" radio
-    "autoPercentSpin",  # the "100%" auto-range percentage box
-})
-
-# Mouse-mode vocabulary (toolbar words, NOT 三键/单键 黑话). The two entries
-# map to the toolbar's pan / zoom (box-select) modes. As of 2026-06-07 the
-# right-click menu surfaces these as an inline icon-toggle ROW (icon-only,
-# exclusive QToolButtons), no longer a 二级子菜单.
-_PG_MOUSE_MODE_PAN = "pan"
-_PG_MOUSE_MODE_ZOOM = "zoom"
-_PG_MOUSE_MODE_LABELS = {
-    _PG_MOUSE_MODE_PAN: ("平移", "左键拖动平移视图（与顶部工具栏的平移一致）。"),
-    _PG_MOUSE_MODE_ZOOM: ("框选", "左键拖出矩形框选放大（与顶部工具栏的框选缩放一致）。"),
-}
-
-# Icon names + Precision-Light colors shared with the top toolbar
-# (chart_stack.py:195-208) so the right-click toggle row reads identically.
-_PG_MOUSE_MODE_ICONS = {
-    _PG_MOUSE_MODE_PAN: "mdi.cursor-move",
-    _PG_MOUSE_MODE_ZOOM: "mdi.magnify-plus-outline",
-}
-_PG_ICON_COLOR = "#374151"          # idle / unchecked
-_PG_ICON_ACTIVE = "#2563eb"         # checked / active
-
-# ---------------------------------------------------------------------------
-# Hi-DPI copy/save render (spec §E).
-#
-# The toolbar 复制为图片 / 保存图片 buttons render the scene at a HIGHER
-# scale so the bitmap is DPI-independent and crisp (matplotlib was sharp
-# because it rendered at figure DPI, not screen pixels). To keep export
-# fast and not slow normal use, the magnification is CAPPED:
-#
-#   effective_scale = clamp(requested, 1.0, _HIDPI_MAX_WIDTH / base_width)
-#
-# i.e. we never downscale (floor 1×) and we never let the output width
-# exceed _HIDPI_MAX_WIDTH px. For a typical ~1200px workspace a 2× request
-# yields ~2400px; a very wide canvas is throttled so width tops out near
-# 2560px. One consistent rule, applied in both copy and save paths.
-# ---------------------------------------------------------------------------
-_HIDPI_COPY_SCALE = 2.0
-_HIDPI_MAX_WIDTH = 2560
-
-
-def _capped_hidpi_scale(base_width, requested=_HIDPI_COPY_SCALE):
-    """Return the effective magnification for a hi-DPI render.
-
-    Clamps ``requested`` to ``[1.0, _HIDPI_MAX_WIDTH / base_width]`` so the
-    result never downscales below 1× and the rendered width never exceeds
-    ``_HIDPI_MAX_WIDTH``. A non-positive ``base_width`` (degenerate widget)
-    falls back to 1× rather than dividing by zero.
-    """
-    try:
-        bw = float(base_width)
-    except (TypeError, ValueError):
-        return 1.0
-    if bw <= 0:
-        return 1.0
-    eff = max(1.0, float(requested))
-    cap = _HIDPI_MAX_WIDTH / bw
-    if cap < 1.0:
-        # Canvas is already wider than the ceiling — do not magnify (1×),
-        # but never downscale the source.
-        return 1.0
-    return min(eff, cap)
-
-
-def _clean_menu_text(text):
-    return (text or "").replace("&", "").strip()
-
-
-def _apply_context_widget_i18n(widget):
-    """Localize the X/Y axis form AND hide the out-of-scope rows.
-
-    Reuses the surviving translations (鼠标交互 / 自动 / 手动) and drops the
-    Link Axis / Invert / Auto Pan / Visible Only widgets per design A. The
-    widgets are hidden (not deleted) so pyqtgraph's own updateState bindings
-    that still reference them never AttributeError.
-    """
-    if widget is None:
-        return
-    for child in widget.findChildren(QWidget):
-        obj_name = child.objectName()
-        if obj_name in _PG_AXIS_FORM_HIDE_OBJECTS or isinstance(child, QComboBox):
-            try:
-                child.setVisible(False)
-            except Exception:
-                pass
-            continue
-        if isinstance(child, QGroupBox):
-            title = _clean_menu_text(child.title())
-            translated = _PG_CONTEXT_ACTIONS.get(title) or _PG_CONTEXT_WIDGETS.get(title)
-            if translated is not None:
-                child.setTitle(translated[0])
-                child.setToolTip("")
-            continue
-        if not isinstance(child, (QCheckBox, QRadioButton, QLabel)):
-            continue
-        text = _clean_menu_text(child.text())
-        translated = _PG_CONTEXT_WIDGETS.get(text)
-        if translated is None:
-            continue
-        child.setText(translated[0])
-        # Design B: no floating tooltips on the surviving form controls.
-        child.setToolTip("")
-
-
-def _style_pg_context_menu(menu):
-    if menu is None:
-        return
-    try:
-        menu.setObjectName("pgContextMenu")
-        # Design B: tooltips OFF so the floating help no longer covers the
-        # second-level axis form. This is also the occlusion bug fix.
-        menu.setToolTipsVisible(False)
-        # The QSS border-radius renders the menu BODY with transparent corners,
-        # but macOS still paints a square native drop-shadow around the popup's
-        # bounding rect — the residual right angles. Disable the native shadow
-        # + frame so only the rounded surface shows. Keep the existing flags
-        # (incl. Qt.Popup, so dismiss/positioning behaviour is unchanged) and
-        # re-assert translucency AFTER, since changing window flags can recreate
-        # the platform window and drop the attribute.
-        menu.setWindowFlags(
-            menu.windowFlags()
-            | Qt.FramelessWindowHint
-            | Qt.NoDropShadowWindowHint
-        )
-        menu.setAttribute(Qt.WA_TranslucentBackground, True)
-    except Exception:
-        pass
-
-
-def _localize_pg_context_actions(actions):
-    """Localize a flat action list. Used for the scene contextMenu (before
-    trimming) and recursively for surviving submenus."""
-    for action in list(actions or []):
-        if action is None or action.isSeparator():
-            continue
-        text = _clean_menu_text(action.text())
-        translated = _PG_CONTEXT_ACTIONS.get(text)
-        if translated is not None:
-            action.setText(translated[0])
-        action.setToolTip("")
-        sub = action.menu()
-        if sub is not None:
-            if translated is not None:
-                sub.setTitle(translated[0])
-            _localize_pg_context_menu(sub)
-        try:
-            _apply_context_widget_i18n(action.defaultWidget())
-        except Exception:
-            pass
-
-
-def _localize_pg_context_menu(menu):
-    """Localize a menu in place WITHOUT trimming. Kept for the X/Y axis
-    submenus (whose forms still need translating) and the initial pass over
-    freshly-built ViewBox menus before the assembled menu is reshaped."""
-    if menu is None:
-        return
-    _style_pg_context_menu(menu)
-    title = _clean_menu_text(menu.title())
-    translated = _PG_CONTEXT_ACTIONS.get(title)
-    if translated is not None:
-        menu.setTitle(translated[0])
-        try:
-            menu.menuAction().setText(translated[0])
-        except Exception:
-            pass
-    try:
-        menu.menuAction().setToolTip("")
-    except Exception:
-        pass
-    _localize_pg_context_actions(menu.actions())
-
-
-def _find_top_level_action(menu, *texts):
-    """Return the first top-level QAction in ``menu`` whose cleaned text
-    matches any of ``texts`` (translated or english), else None."""
-    wanted = set(texts)
-    for action in menu.actions():
-        if _clean_menu_text(action.text()) in wanted:
-            return action
-    return None
-
-
-def _route_view_all_action(menu, handler):
-    """Route the native View All action through the canvas Home reset."""
-    action = _find_top_level_action(menu, "查看全部", "View All")
-    if action is None or handler is None:
-        return
-    try:
-        action.triggered.disconnect()
-    except (TypeError, RuntimeError):
-        pass
-
-    def _trigger(_checked=False):
-        try:
-            handler()
-        except Exception:
-            pass
-
-    action.triggered.connect(_trigger)
-
-
-def _build_grid_submenu(menu, plot_item, *, allow_y_grid=True):
-    """Build (or rebuild) a top-level 网格 ▸ submenu with X/Y grid toggles.
-
-    The native Grid control is buried inside Plot Options (which design A
-    removes), so we promote it to its own first-class submenu. In overlay
-    mode there is no canonical Y grid, so callers pass ``allow_y_grid=False``
-    and the Y action is shown disabled while all toggles preserve y=False.
-    """
-    grid_menu = QMenu(menu)
-    # Route through the shared styler so this hand-built submenu gets the
-    # SAME objectName + toolTips-off + WA_TranslucentBackground as the
-    # top-level menu — without translucency its rounded corners would leave
-    # an opaque square frame.
-    _style_pg_context_menu(grid_menu)
-    grid_menu.setTitle("网格")
-
-    def _axis_grid_enabled(side):
-        try:
-            axis = plot_item.getAxis(side)
-            return bool(getattr(axis, "grid", False))
-        except Exception:
-            return False
-
-    state = {
-        "x": _axis_grid_enabled("bottom"),
-        "y": _axis_grid_enabled("left") or _axis_grid_enabled("right"),
-    }
-    if not allow_y_grid:
-        state["y"] = False
-
-    act_x = QAction("显示 X 网格", grid_menu)
-    act_y = QAction("显示 Y 网格", grid_menu)
-    act_x.setCheckable(True)
-    act_y.setCheckable(True)
-    act_x.setChecked(state["x"])
-    act_y.setChecked(state["y"])
-    act_y.setEnabled(bool(allow_y_grid))
-    for act in (act_x, act_y):
-        act.setToolTip("")
-
-    def _apply_grid():
-        try:
-            plot_item.showGrid(
-                x=state["x"],
-                y=state["y"] if allow_y_grid else False,
-                alpha=0.28,
-            )
-        except Exception:
-            pass
-
-    def _on_x(checked):
-        state["x"] = bool(checked)
-        _apply_grid()
-
-    def _on_y(checked):
-        if not allow_y_grid:
-            state["y"] = False
-            return
-        state["y"] = bool(checked)
-        _apply_grid()
-
-    act_x.toggled.connect(_on_x)
-    act_y.toggled.connect(_on_y)
-    grid_menu.addAction(act_x)
-    grid_menu.addAction(act_y)
-    return grid_menu
-
-
-# QSS for the inline mouse-mode toggle row. qtawesome's ``color_on`` swaps the
-# glyph color on the :checked state, but a tinted background + accent border is
-# what makes the active state legible at a glance (the icon alone is a thin line
-# and reads weakly on a white menu). WA_StyledBackground is implicit for
-# QToolButton, but we keep the rule simple: idle = transparent, checked = light
-# blue fill + blue border, hover = faint gray. See lesson
-# pyqt-ui/2026-06-04-dynamic-property-border (a margin-0 border alone is too
-# subtle; pair it with a tint).
-_MOUSE_MODE_TOGGLE_QSS = (
-    # Container MUST be transparent so the row blends into the white menu —
-    # otherwise the embedded QWidget paints the default gray window color as an
-    # ugly band behind the buttons. Paired with WA_TranslucentBackground below.
-    "QWidget#pgMouseModeToggleRow {"
-    " background: transparent;"
-    "}"
-    "QToolButton {"
-    " border: 1px solid transparent;"
-    " border-radius: 5px;"
-    " background: transparent;"
-    " padding: 2px;"
-    " margin: 0px;"
-    "}"
-    "QToolButton:hover {"
-    " background: #f1f5f9;"
-    "}"
-    "QToolButton:checked {"
-    " background: #e8f0ff;"
-    " border: 1px solid #2563eb;"
-    "}"
-)
-
-
-def _add_mouse_mode_toggle_row(menu, controller):
-    """Insert an inline icon-only 框选 / 平移 toggle ROW as a QWidgetAction.
-
-    Replaces the old 鼠标操作 二级子菜单 (2026-06-07 §④b). The row hosts two
-    exclusive, checkable, icon-only ``QToolButton``s. Their checked state mirrors
-    ``controller.current_mouse_mode()`` (zoom→框选, else→平移 default), and
-    clicking routes through the SAME deterministic ``set_zoom_mode`` /
-    ``set_pan_mode`` setters the top toolbar uses — emitting
-    ``mouse_mode_changed`` so the toolbar buttons auto-sync (verified signal
-    chain). Returns the QWidgetAction (for top-pinned reorder), or None when
-    there is no controller (defensive — without it the row is inert)."""
-    if controller is None:
-        return None
-
-    # Guard: the ViewBox caches its menu; check before adding a second row.
-    for _act in menu.actions():
-        if isinstance(_act, QWidgetAction):
-            _w = _act.defaultWidget()
-            if _w is not None and _w.objectName() == "pgMouseModeToggleRow":
-                try:
-                    _cur = controller.current_mouse_mode()
-                    _zoom = _cur == _PG_MOUSE_MODE_ZOOM
-                    _btns = _w.findChildren(QToolButton)
-                    if len(_btns) >= 2:
-                        _btns[0].setChecked(_zoom)
-                        _btns[1].setChecked(not _zoom)
-                except Exception:
-                    pass
-                return _act
-
-    current = None
-    try:
-        current = controller.current_mouse_mode()
-    except Exception:
-        current = None
-    is_zoom = current == _PG_MOUSE_MODE_ZOOM
-
-    row = QWidget(menu)
-    row.setObjectName("pgMouseModeToggleRow")
-    # No gray default-window background: show the menu's white through instead.
-    row.setAttribute(Qt.WA_TranslucentBackground, True)
-    row.setAutoFillBackground(False)
-    layout = QHBoxLayout(row)
-    layout.setContentsMargins(10, 4, 10, 4)
-    layout.setSpacing(6)
-
-    def _make_button(mode):
-        label, _tip = _PG_MOUSE_MODE_LABELS[mode]
-        icon = qta.icon(
-            _PG_MOUSE_MODE_ICONS[mode],
-            color=_PG_ICON_COLOR,
-            color_on=_PG_ICON_ACTIVE,
-        )
-        btn = QToolButton(row)
-        btn.setIcon(icon)
-        btn.setIconSize(QSize(18, 18))
-        btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
-        btn.setCheckable(True)
-        btn.setAutoRaise(True)
-        btn.setFixedSize(30, 26)
-        btn.setToolTip(label)
-        btn.setCursor(Qt.PointingHandCursor)
-        return btn
-
-    btn_zoom = _make_button(_PG_MOUSE_MODE_ZOOM)
-    btn_pan = _make_button(_PG_MOUSE_MODE_PAN)
-
-    group = QButtonGroup(row)
-    group.setExclusive(True)
-    group.addButton(btn_zoom)
-    group.addButton(btn_pan)
-
-    # Default to 平移 highlighted when idle so the row always shows a state.
-    btn_zoom.setChecked(is_zoom)
-    btn_pan.setChecked(not is_zoom)
-
-    row.setStyleSheet(_MOUSE_MODE_TOGGLE_QSS)
-
-    def _select_zoom(_checked=False):
-        try:
-            controller.set_zoom_mode()
-        except Exception:
-            pass
-        try:
-            menu.close()
-        except Exception:
-            pass
-
-    def _select_pan(_checked=False):
-        try:
-            controller.set_pan_mode()
-        except Exception:
-            pass
-        try:
-            menu.close()
-        except Exception:
-            pass
-
-    btn_zoom.clicked.connect(_select_zoom)
-    btn_pan.clicked.connect(_select_pan)
-
-    layout.addWidget(btn_zoom)
-    layout.addWidget(btn_pan)
-    layout.addStretch(1)
-
-    widget_action = QWidgetAction(menu)
-    widget_action.setDefaultWidget(row)
-    menu.addAction(widget_action)
-    return widget_action
-
-
-def _add_y_autofit_action(menu, handler):
-    """Add a top-level 「Y 轴自适应」 action (once per menu) wired to ``handler``.
-
-    Distinct from 查看全部 (X+Y full union): this keeps X fixed and fits Y to the
-    waveform inside the current X window. Returns the action (existing or new),
-    or None when no handler / no menu so the caller skips reordering it."""
-    if handler is None:
-        return None
-    existing = _find_top_level_action(menu, "Y 轴自适应")
-    if existing is not None:
-        return existing
-    action = QAction("Y 轴自适应", menu)
-    action.setToolTip("")
-
-    def _trigger(_checked=False):
-        try:
-            handler()
-        except Exception:
-            pass
-
-    action.triggered.connect(_trigger)
-    menu.addAction(action)
-    return action
-
-
-def _reorder_top_level_actions(menu, desired_texts, *, pinned_first=None):
-    """Reorder the menu's top-level actions so the cleaned-text matches in
-    ``desired_texts`` come first, in that order, followed by everything else
-    (separators dropped). Non-listed actions keep their relative order.
-
-    QMenu has no move primitive, so we snapshot the wanted actions, remove all
-    actions, then re-add wanted-first. Submenu actions keep their submenus
-    because we re-add the SAME QAction objects (Qt preserves action.menu()).
-
-    ``pinned_first`` is an explicit action object placed at the very top before
-    any text-matched entry. It exists because a QWidgetAction (the inline
-    mouse-mode toggle row) has NO text, so the text-keyed match below can never
-    locate it; we pin it by identity instead."""
-    all_actions = list(menu.actions())
-    by_text = {}
-    for act in all_actions:
-        if act.isSeparator():
-            continue
-        by_text.setdefault(_clean_menu_text(act.text()), act)
-    ordered = []
-    seen = set()
-    if pinned_first is not None and pinned_first in all_actions:
-        ordered.append(pinned_first)
-        seen.add(id(pinned_first))
-    for text in desired_texts:
-        act = by_text.get(text)
-        if act is not None and id(act) not in seen:
-            ordered.append(act)
-            seen.add(id(act))
-    # Append any remaining non-separator actions not named in desired_texts,
-    # preserving their original order (defensive: nothing should be left).
-    for act in all_actions:
-        if act.isSeparator() or id(act) in seen:
-            continue
-        ordered.append(act)
-        seen.add(id(act))
-    for act in all_actions:
-        menu.removeAction(act)
-    for act in ordered:
-        menu.addAction(act)
-
-
-def redesign_pg_context_menu(
-    menu,
-    plot_item,
-    controller,
-    *,
-    view_all_handler=None,
-    y_autofit_handler=None,
-    allow_y_grid=True,
-):
-    """Reshape the ASSEMBLED pyqtgraph context ``menu`` per design §A–§D.
-
-    Called from ``_ModifierWheelViewBox.raiseContextMenu`` AFTER
-    ``scene().addParentContextMenus`` has appended Plot Options + Export, so
-    every removable entry is present and the trim happens once on the final
-    surface (not a parallel rebuild).
-
-    Order of operations:
-      1. localize + tooltip-off the whole tree,
-      2. remove Plot Options / Export AND the native 鼠标模式 submenu,
-      3. insert the inline 框选 / 平移 icon-toggle ROW (QWidgetAction,
-         toolbar-synced via set_zoom_mode / set_pan_mode),
-      4. add a top-level 「Y 轴自适应」 action (X fixed, Y fit to window),
-      5. promote a 网格 ▸ submenu,
-      6. reorder top level to [框选|平移 toggle row] · Y 轴自适应 · 查看全部 ·
-         X 轴范围 · Y 轴范围 · 网格 (the toggle row pinned first by identity),
-      7. drop any orphaned trailing/leading separators.
-    """
-    if menu is None:
-        return
-    _localize_pg_context_menu(menu)
-    _route_view_all_action(menu, view_all_handler)
-
-    # (2) Remove advanced / export entries AND the native 鼠标模式 submenu
-    # (its text is in _PG_MENU_REMOVE_TEXTS) — the mouse mode is now an inline
-    # toggle row, not a 二级子菜单.
-    for action in list(menu.actions()):
-        if action.isSeparator():
-            continue
-        if _clean_menu_text(action.text()) in _PG_MENU_REMOVE_TEXTS:
-            menu.removeAction(action)
-
-    # (3) Inline 框选 / 平移 icon-toggle row (shared mouse-mode controller).
-    toggle_row = _add_mouse_mode_toggle_row(menu, controller)
-
-    # (4) Y-axis-fit-to-visible-window action (top level, once per menu).
-    _add_y_autofit_action(menu, y_autofit_handler)
-
-    # (5) Promote a top-level 网格 ▸ submenu (only once per menu instance).
-    if plot_item is not None and _find_top_level_action(menu, "网格") is None:
-        grid_menu = _build_grid_submenu(
-            menu,
-            plot_item,
-            allow_y_grid=allow_y_grid,
-        )
-        menu.addMenu(grid_menu)
-
-    # (6) Reorder top level: the toggle row first (pinned by identity — it has
-    # no text), then the Y-fit, 查看全部 and the axis-range forms, 网格 last.
-    _reorder_top_level_actions(
-        menu,
-        ("Y 轴自适应", "查看全部", "X 轴范围", "Y 轴范围", "网格"),
-        pinned_first=toggle_row,
-    )
-
-    # (7) Collapse separators that the removals left dangling.
-    _strip_redundant_separators(menu)
-
-
-def _strip_redundant_separators(menu):
-    """Remove leading/trailing/double separators left by action removal."""
-    actions = list(menu.actions())
-    # Drop leading separators.
-    while actions and actions[0].isSeparator():
-        menu.removeAction(actions[0])
-        actions = list(menu.actions())
-    # Drop trailing separators.
-    while actions and actions[-1].isSeparator():
-        menu.removeAction(actions[-1])
-        actions = list(menu.actions())
-    # Collapse consecutive separators.
-    prev_sep = False
-    for action in list(menu.actions()):
-        if action.isSeparator():
-            if prev_sep:
-                menu.removeAction(action)
-            prev_sep = True
-        else:
-            prev_sep = False
-
-
-# ---------------------------------------------------------------------------
-# ViewBox subclass with modifier-aware wheel dispatch (T6 requirement 4).
-#
-# Pyqtgraph 0.14 ViewBox.wheelEvent ignores keyboard modifiers (verified by
-# grepping .venv/lib/python3.12/site-packages/pyqtgraph/graphicsItems/
-# ViewBox/ViewBox.py:1297-1316 — no `modifiers()` reference). We subclass
-# so we can dispatch on Ctrl/Shift/no-modifier without monkey-patching the
-# base class.
-# ---------------------------------------------------------------------------
-
-
-class _ModifierWheelViewBox(pg.ViewBox):
-    """ViewBox that consults Qt keyboard modifiers on wheel events.
-
-    Behavior matches canvases.py:_on_scroll exactly:
-
-    - Ctrl + wheel  → zoom X (preserve Y)
-    - Shift + wheel → zoom Y (preserve X)
-    - plain wheel   → pan Y  (preserve X span)
-    """
-
-    def __init__(self, *args, owner_canvas=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Weak-ref-style backref to the canvas; the canvas does NOT store
-        # the ViewBox so this stays well-defined.
-        self._owner_canvas = owner_canvas
-        _localize_pg_context_menu(getattr(self, "menu", None))
-
-    def raiseContextMenu(self, ev):
-        if self._delete_remark_from_context_event(ev):
-            return
-        menu = self.getMenu(ev)
-        if menu is None:
-            return
-        try:
-            self.scene().addParentContextMenus(self, menu, ev)
-        except Exception:
-            pass
-        # Reshape the ASSEMBLED menu (after Plot Options + Export were
-        # appended) per design A–D. The owner canvas resolves the PlotItem +
-        # shared mouse-mode controller; falls back to a bare localize if the
-        # canvas backref is gone.
-        owner = self._owner_canvas
-        if owner is not None and hasattr(owner, "context_menu_requested"):
-            owner.context_menu_requested.emit()
-        if owner is not None and hasattr(owner, "_redesign_context_menu_for_viewbox"):
-            try:
-                try:
-                    owner._last_rclick_scene_pos = ev.scenePos()
-                except Exception:
-                    pass
-                owner._redesign_context_menu_for_viewbox(self, menu)
-            except Exception:
-                _localize_pg_context_menu(menu)
-        else:
-            _localize_pg_context_menu(menu)
-        try:
-            menu.popup(ev.screenPos().toPoint())
-        except Exception:
-            pass
-
-    def _delete_remark_from_context_event(self, ev):
-        owner = self._owner_canvas
-        if owner is None or not getattr(owner, "_annotation_enabled", False):
-            return False
-        try:
-            scene_pos = ev.scenePos()
-        except Exception:
-            scene_pos = None
-        owner._last_rclick_scene_pos = scene_pos
-        owner._remove_remark_at(scene_pos)
-        return True
-
-    def wheelEvent(self, ev, axis=None):
-        # Route through the canvas's central dispatch so the test surface
-        # (_handle_wheel_dispatch) and the live UI share one code path.
-        owner = self._owner_canvas
-        if owner is None:
-            super().wheelEvent(ev, axis=axis)
-            return
-        try:
-            delta = float(ev.delta())
-            modifiers = ev.modifiers()
-            scene_pos = ev.scenePos()
-            data_pos = self.mapSceneToView(scene_pos)
-            x_pos = float(data_pos.x())
-            y_pos = float(data_pos.y())
-        except Exception:
-            super().wheelEvent(ev, axis=axis)
-            return
-        consumed = owner._handle_wheel_dispatch(
-            delta=delta, modifiers=modifiers, x_pos=x_pos, y_pos=y_pos,
-            view_box=self,
-        )
-        if consumed:
-            ev.accept()
-        else:
-            super().wheelEvent(ev, axis=axis)
-
-    def mouseDragEvent(self, ev, axis=None):
-        """Drop AA the instant a box-zoom rubber band begins.
-
-        Fix B (2026-05-31 overlay-aa-interaction-fixes): the base
-        ``ViewBox.mouseDragEvent`` only changes the view range on
-        ``ev.isFinish()`` in RectMode — the whole rubber-band drag never
-        passes through ``_on_xrange_changed`` (the AA-off chokepoint), so
-        if AA was on when the drag started every frame re-rasterizes all
-        curves and the box-zoom stutters/freezes. We hook ONLY the
-        RectMode + LeftButton + full-2D (``axis is None``) start to flip
-        AA off and stop the idle timer; the held-down drag is then kept
-        AA-off by the idle gate's ``mouseButtons() != NoButton`` check, so
-        a single drop at ``isStart`` suffices. ``isFinish`` re-arms via the
-        base class's ``showAxRect → setRange → sigXRangeChanged →
-        _on_xrange_changed`` chain, so we do NOT re-schedule here.
-
-        Every branch MUST delegate to ``super()`` or box-zoom / pan / the
-        right-button zoom and single-axis drags themselves break (Risk R1
-        in the design).
-        """
-        owner = self._owner_canvas
-        try:
-            is_rect_left_2d = (
-                owner is not None
-                and ev.button() == Qt.LeftButton
-                and self.state.get("mouseMode") == pg.ViewBox.RectMode
-                and axis is None
-            )
-        except Exception:
-            is_rect_left_2d = False
-        if is_rect_left_2d:
-            try:
-                if ev.isStart():
-                    owner.disable_interactive_quality()
-            except Exception:
-                pass
-        super().mouseDragEvent(ev, axis=axis)
-        # Overlay box-zoom (2026-06-06 grid-redraw-after-zoom): the base
-        # RectMode finish ignores ``mouseEnabled`` and pulls the X-master Y
-        # off [0, 1], collapsing the fixed k/N graticule to 2-3 lines. After
-        # the rubber band lands on the X-master, re-lock its Y to [0, 1] and
-        # redirect the box's Y span onto the selected channel.
-        if is_rect_left_2d:
-            try:
-                is_xmaster = (
-                    getattr(owner, "_overlay_mode", False)
-                    and getattr(owner, "_x_master_handle", None) is not None
-                    and owner._x_master_handle.view_box is self
-                )
-                if is_xmaster and ev.isFinish():
-                    owner._apply_overlay_box_zoom_y()
-            except Exception:
-                pass
-
-
-# ---------------------------------------------------------------------------
-# Overlay Y-snap helper.
-# ---------------------------------------------------------------------------
-
-
-def _snap_y_to_divisions(y: float, n: int) -> float:
-    """Round ``y`` to the nearest k/n grid boundary.
-
-    Pure function — stateless and safe to call from tests.
-    """
-    return round(y * n) / n
-
-
-_NICE_STEP_MANTISSAS = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8]
-
-
-def _nice_per_div(raw):
-    """Return the smallest nice step that is >= ``raw``.
-
-    Nice steps use _NICE_STEP_MANTISSAS x 10^k. Invalid, non-finite, and
-    non-positive inputs return None so callers can choose a local fallback.
-    """
-    try:
-        value = float(raw)
-    except Exception:
-        return None
-    if not math.isfinite(value) or value <= 0:
-        return None
-    exp = math.floor(math.log10(value))
-    base = 10.0 ** exp
-    mantissa = value / base
-    for step in _NICE_STEP_MANTISSAS:
-        if step >= mantissa - 1e-9:
-            return step * base
-    return 10.0 * base
-
-
-def _adjacent_nice_step(step, direction):
-    """Return the neighboring nice step below/above ``step``."""
-    current = _nice_per_div(step)
-    if current is None:
-        return None
-    exponent = math.floor(math.log10(current))
-    candidates = []
-    for exp in range(exponent - 2, exponent + 3):
-        base = 10.0 ** exp
-        for mantissa in _NICE_STEP_MANTISSAS:
-            candidates.append(mantissa * base)
-    candidates = sorted(set(candidates))
-    tol = max(abs(current) * 1e-9, 1e-12)
-    if direction < 0:
-        lower = [value for value in candidates if value < current - tol]
-        return lower[-1] if lower else current / 10.0
-    higher = [value for value in candidates if value > current + tol]
-    return higher[0] if higher else current * 10.0
-
-
-def _fmt_tick(value):
-    """Format a graticule tick compactly enough for narrow overlay axes."""
-    try:
-        value = float(value)
-    except Exception:
-        return ""
-    if not math.isfinite(value):
-        return ""
-    if value != 0.0 and (abs(value) >= 1e6 or abs(value) < 1e-4):
-        return f"{value:.2e}"
-    rounded = round(value)
-    if abs(value - rounded) < 1e-9:
-        return f"{int(rounded)}"
-    return f"{value:g}"
-
-
-def _frame_to_nice(lo, hi, n):
-    """Expand ``[lo, hi]`` into ``n`` nice, equal graticule divisions.
-
-    Returns ``(bottom, top, ticks)`` where ``ticks`` has ``n + 1`` entries and
-    the returned frame contains the requested window.
-    """
-    try:
-        lo = float(lo)
-        hi = float(hi)
-    except Exception:
-        lo, hi = 0.0, 0.0
-    if hi < lo:
-        lo, hi = hi, lo
-    n = max(1, int(n))
-    span = hi - lo
-    if not math.isfinite(span) or span <= 0:
-        center = (lo + hi) / 2.0
-        if not math.isfinite(center):
-            center = 0.0
-        span = max(abs(center), 1.0)
-        lo = center - span / 2.0
-        hi = center + span / 2.0
-    per_div = _nice_per_div(span / n) or (span / n)
-    bottom = math.floor(lo / per_div) * per_div
-    top = bottom + n * per_div
-    guard = 0
-    while top < hi - max(abs(per_div) * 1e-9, 1e-12) and guard < 64:
-        per_div = _nice_per_div(per_div * 1.000001) or (per_div * 2.0)
-        bottom = math.floor(lo / per_div) * per_div
-        top = bottom + n * per_div
-        guard += 1
-    ticks = [bottom + k * per_div for k in range(n + 1)]
-    return bottom, top, ticks
-
-
-# ---------------------------------------------------------------------------
-# Curve-layer cache key quantization (signal-processing/
-# 2026-04-25-envelope-cache-bucket-width-quantization).
-# ---------------------------------------------------------------------------
-
-
-def _quantize_range_key(
-    channel: str,
-    xlim: Tuple[float, float],
-    pixel_width: int,
-) -> Tuple[str, int, int, int]:
-    """Return the bucket-quantized cache key for one curve frame.
-
-    The quantum is ``span / pixel_width`` so two xlims that differ by
-    less than one pixel collapse to the same key — the envelope output
-    is literally identical for those frames.
-    """
-    if pixel_width is None or pixel_width < 1:
-        pixel_width = 1
-    x0, x1 = float(xlim[0]), float(xlim[1])
-    if x1 < x0:
-        x0, x1 = x1, x0
-    span = x1 - x0
-    quantum = (span / pixel_width) if span > 0 else 1.0
-    if quantum <= 0:
-        quantum = 1.0
-    qx0 = int(round(x0 / quantum))
-    qx1 = int(round(x1 / quantum))
-    return (channel, qx0, qx1, int(pixel_width))
-
-
-# ---------------------------------------------------------------------------
-# TimeDomainCanvasPG
-# ---------------------------------------------------------------------------
 
 
 class TimeDomainCanvasPG(QWidget):
@@ -1542,6 +496,15 @@ class TimeDomainCanvasPG(QWidget):
         # registers itself via register_mouse_mode_controller; until then this
         # stays None and the menu items are inert (no parallel mode path).
         self._mouse_mode_controller = None
+
+        # Phase 1 decomposition collaborators. They keep only a canvas
+        # back-reference; all public/private state remains on this widget.
+        self._cursor = CursorController(self)
+        self._annotations = AnnotationManager(self)
+        self._tick_density_controller = TickDensityController(self)
+        self._overlay_axes = OverlayAxisManager(self)
+        self._quality = QualityManager(self)
+        self._renderer = Renderer(self)
 
     # ------------------------------------------------------------------
     # Public surface (signal/method names frozen by W0 contract tests).
@@ -1838,91 +801,11 @@ class TimeDomainCanvasPG(QWidget):
         return pi
 
     def _add_overlay_axis_handle(self, primary_plot, index):
-        """Create one dedicated Y axis/ViewBox for an overlay channel.
-
-        Symmetric layout (Problem 3): EVERY channel — including the
-        first — gets its own aux ViewBox so its Y drag never fights the
-        X-master's padding.
-
-        - ``index == 0`` → channel 1 binds the built-in LEFT axis.
-        - ``index >= 1`` → every right channel appends a FRESH right
-          ``AxisItem`` into contiguous layout columns starting at col 3,
-          leaving the PlotItem's built-in right-axis column (col 2) EMPTY.
-          We deliberately do NOT reuse the built-in right axis for channel
-          2: the standard right-axis column abuts the ViewBox and pyqtgraph
-          suppresses ``setHorizontalSpacing`` across that col 2→col 3
-          boundary, so a built-in-right + appended-right mix leaves the
-          first pair overlapping while the rest are spaced. Routing every
-          right channel through contiguous appended columns makes the
-          inter-axis spacing uniform so no rotated name butts against the
-          neighbour's tick numbers.
-
-        All aux ViewBoxes share the X-master plot's scene geometry and X
-        range and have their OWN mouse pan disabled so the main (X-master)
-        ViewBox stays the sole mouse-capture surface.
-        """
-        aux_vb = _ModifierWheelViewBox(owner_canvas=self)
-        _localize_pg_context_menu(getattr(aux_vb, "menu", None))
-        if index == 0:
-            # Channel 1: bind the existing LEFT axis to the aux ViewBox so
-            # the left axis tracks this channel's independent Y range.
-            try:
-                primary_plot.showAxis("left")
-            except Exception:
-                pass
-            axis_item = primary_plot.getAxis("left")
-        else:
-            # Channels 2..N: fresh appended right axes at contiguous columns
-            # (index 1 → col 3, index 2 → col 4, ...). Col 2 (built-in right)
-            # stays unused so layout spacing applies uniformly to every pair.
-            axis_item = pg.AxisItem("right")
-            try:
-                axis_item.enableAutoSIPrefix(False)
-            except Exception:
-                pass
-            _apply_pg_axis_font(axis_item)
-            try:
-                primary_plot.layout.addItem(axis_item, 2, 2 + index)
-            except Exception:
-                pass
-            try:
-                axis_item.setZValue(-10000)
-            except Exception:
-                pass
-            # Reserve horizontal spacing between every stacked right axis so
-            # each rotated channel name clears the next axis's tick numbers.
-            try:
-                primary_plot.layout.setHorizontalSpacing(
-                    self._overlay_axis_column_spacing
-                )
-            except Exception:
-                pass
-        try:
-            primary_plot.scene().addItem(aux_vb)
-        except Exception:
-            pass
-        try:
-            axis_item.linkToView(aux_vb)
-        except Exception:
-            pass
-        # Aux ViewBoxes are display-only overlays: the X-master ViewBox is
-        # the mouse-pan surface. Disabling mouse here keeps the overlapping
-        # aux ViewBoxes from stealing the pan drag (Problem 3 "mouse-
-        # capture only" demotion of the main ViewBox).
-        try:
-            aux_vb.setMouseEnabled(x=False, y=False)
-        except Exception:
-            pass
-        self._overlay_aux_viewboxes.append(aux_vb)
-        self._overlay_aux_axes.append(axis_item)
-        handle = PgAxisHandle(
-            plot_item=primary_plot,
-            view_box=aux_vb,
-            axis_item=axis_item,
-            owner_canvas=self,
-            allow_y_grid=False,
+        return OverlayAxisManager._add_overlay_axis_handle(
+            self._overlay_axes,
+            primary_plot,
+            index,
         )
-        return handle
 
     def plot_channels_preserving_xlim(self, ch_list, mode="overlay", xlabel="Time (s)"):
         """Rebuild the chart with ``ch_list``/``mode`` while preserving
@@ -2027,202 +910,49 @@ class TimeDomainCanvasPG(QWidget):
             pass
 
     def _bind_channel(self, axis_handle, name, t, sig, color, unit, data_id, *, xlabel=None):
-        """Attach one channel to ``axis_handle``.
-
-        Initial bind installs a ``PlotDataItem`` on either the PlotItem's
-        primary ViewBox or an overlay auxiliary ViewBox. Subsequent pan/
-        zoom refreshes feed the visible item with the current envelope.
-        """
-        pi = axis_handle.plot_item
-        if pi is None:
-            return
-        # Downsample once for the static bind so we don't ship 100k
-        # points into Qt's painter on construction. The fallback uses
-        # build_envelope's xlim=None full-range contract — purely a
-        # smoke-render path; the cache populates on first set_xlim.
-        try:
-            xlim = axis_handle.get_xlim()
-        except Exception:
-            xlim = None
-        bind_t, bind_s = build_envelope(
-            np.asarray(t),
-            np.asarray(sig),
-            xlim=None,
-            pixel_width=self._initial_bind_pixel_width(axis_handle),
-            is_monotonic=None,
+        return OverlayAxisManager._bind_channel(
+            self._overlay_axes,
+            axis_handle,
+            name,
+            t,
+            sig,
+            color,
+            unit,
+            data_id,
+            xlabel=xlabel,
         )
-        pen = pg.mkPen(color=color, width=self._overlay_default_lw)
-        primary_vb = pi.getViewBox() if hasattr(pi, "getViewBox") else None
-        target_vb = axis_handle.view_box
-        if target_vb is not None and target_vb is not primary_vb:
-            pdi = pg.PlotDataItem(bind_t, bind_s, pen=pen, name=name)
-            try:
-                target_vb.addItem(pdi)
-            except Exception:
-                pass
-            add_line_item = getattr(axis_handle, "add_line_item", None)
-            if callable(add_line_item):
-                add_line_item(pdi)
-        else:
-            pdi = pi.plot(bind_t, bind_s, pen=pen, name=name)
-        # Store the raw arrays + parallel dicts; channel_data stays RAW
-        # so get_statistics is unaffected by envelope output.
-        t_arr = np.asarray(t)
-        sig_arr = np.asarray(sig)
-        self.channel_data[name] = (t_arr, sig_arr, color, unit)
-        self._channel_data_id[name] = data_id
-        line_handle = _PgLineHandle(pdi, label_fallback=name)
-        self._channel_lines[name] = (axis_handle, line_handle)
-        self._channel_view_state_lines[
-            _view_state_channel_key(data_id, name)
-        ] = (axis_handle, line_handle)
-        # Cache monotonicity once per build (parity with F-1 follow-up).
-        self._channel_is_monotonic[name] = _is_monotonic_array(t_arr)
-
-        # Y-axis label uses the channel's color so the overlay/subplot
-        # visual cue matches the matplotlib renderer.
-        try:
-            if self._overlay_mode:
-                # Bug 1: pyqtgraph's AxisItem.setLabel renders text as HTML
-                # and IGNORES "\n", so the _compact_axis_label newline (for
-                # "[prefix] longname") produced one long unbroken rotated
-                # label that ran over the tick numbers and the next axis.
-                # Use a single-line label, but size the ellipsis budget from
-                # the current axis height instead of hard-capping every overlay
-                # channel at 22 chars. Tall charts can show the full name while
-                # short charts still fall back to a bounded middle ellipsis.
-                label = self._overlay_axis_label(axis_handle, name, unit)
-            else:
-                label = _subplot_ylabel_text(name, unit)
-            axis_handle.set_ylabel(label)
-            _apply_pg_axis_font(axis_handle.y_axis_item())
-        except Exception:
-            pass
-        if self._overlay_mode:
-            self._configure_overlay_axis_geometry(axis_handle)
-        self._apply_pg_axis_style(axis_handle, color)
-        if xlabel is not None:
-            try:
-                axis_handle.set_xlabel(xlabel)
-                _apply_pg_axis_font(axis_handle.x_axis_item())
-            except Exception:
-                pass
 
     def _overlay_axis_label(self, axis_handle, name, unit):
-        base = str(name).replace("\n", " ")
-        suffix = f" ({unit})" if unit else ""
-        max_chars = self._overlay_axis_label_max_chars(axis_handle, base, suffix)
-        compact = _middle_ellipsis(base, max_chars=max_chars)
-        return f"{compact}{suffix}"
+        return OverlayAxisManager._overlay_axis_label(
+            self._overlay_axes,
+            axis_handle,
+            name,
+            unit,
+        )
 
     def _overlay_axis_label_max_chars(self, axis_handle, base, suffix):
-        """Return the largest label budget that fits the rotated Y axis."""
-        text = str(base)
-        if not text:
-            return _OVERLAY_AXIS_LABEL_FALLBACK_CHARS
-
-        available = self._overlay_axis_label_available_height(axis_handle)
-        if available <= 0:
-            return min(len(text), _OVERLAY_AXIS_LABEL_FALLBACK_CHARS)
-
-        metrics = QFontMetrics(_pg_chart_font(9))
-
-        def text_width(value):
-            try:
-                return float(metrics.horizontalAdvance(value))
-            except AttributeError:  # pragma: no cover - older Qt fallback
-                return float(metrics.width(value))
-
-        full_label = f"{text}{suffix}"
-        if text_width(full_label) <= available:
-            return len(text)
-
-        low = min(_OVERLAY_AXIS_LABEL_MIN_CHARS, len(text))
-        high = len(text)
-        best = low
-        while low <= high:
-            mid = (low + high) // 2
-            candidate = f"{_middle_ellipsis(text, max_chars=mid)}{suffix}"
-            if text_width(candidate) <= available:
-                best = mid
-                low = mid + 1
-            else:
-                high = mid - 1
-        return max(_OVERLAY_AXIS_LABEL_MIN_CHARS, min(best, len(text)))
+        return OverlayAxisManager._overlay_axis_label_max_chars(
+            self._overlay_axes,
+            axis_handle,
+            base,
+            suffix,
+        )
 
     def _overlay_axis_label_available_height(self, axis_handle):
-        heights = []
-        try:
-            axis = axis_handle.y_axis_item()
-        except Exception:
-            axis = None
-        if axis is not None:
-            try:
-                h = float(axis.size().height())
-                if h > 0:
-                    heights.append(h)
-            except Exception:
-                pass
-            try:
-                h = float(axis.sceneBoundingRect().height())
-                if h > 0:
-                    heights.append(h)
-            except Exception:
-                pass
-        vb = getattr(axis_handle, "view_box", None)
-        if vb is not None:
-            try:
-                h = float(vb.sceneBoundingRect().height())
-                if h > 0:
-                    heights.append(h)
-            except Exception:
-                pass
-        try:
-            viewport = self._glw.viewport()
-            if viewport is not None:
-                h = float(viewport.height())
-                if h > 0:
-                    heights.append(h)
-        except Exception:
-            pass
-        if not heights:
-            return 0.0
-        return max(0.0, max(heights) - _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX)
+        return OverlayAxisManager._overlay_axis_label_available_height(
+            self._overlay_axes,
+            axis_handle,
+        )
 
     def _refresh_overlay_axis_labels(self):
-        if not self._overlay_mode or not self._channel_lines:
-            return
-        for name, (handle, _line) in self._channel_lines.items():
-            row = self.channel_data.get(name)
-            unit = row[3] if row is not None else ""
-            color = row[2] if row is not None else PG_AXIS_NEUTRAL_COLOR
-            try:
-                handle.set_ylabel(self._overlay_axis_label(handle, name, unit))
-                _apply_pg_axis_font(handle.y_axis_item())
-                self._configure_overlay_axis_geometry(handle)
-                self._apply_pg_axis_style(handle, color)
-            except Exception:
-                pass
+        return OverlayAxisManager._refresh_overlay_axis_labels(self._overlay_axes)
 
     def _apply_pg_axis_style(self, axis_handle, color):
-        """Keep grid/axis lines neutral while tick text follows the channel."""
-        try:
-            axis = axis_handle.y_axis_item()
-        except Exception:
-            axis = None
-        if axis is None:
-            return
-        _apply_pg_axis_font(axis)
-        try:
-            axis.setPen(
-                pg.mkPen(color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH)
-            )
-        except Exception:
-            pass
-        try:
-            axis.setTextPen(pg.mkPen(color=color))
-        except Exception:
-            pass
+        return OverlayAxisManager._apply_pg_axis_style(
+            self._overlay_axes,
+            axis_handle,
+            color,
+        )
 
     def _channel_name_for_handle(self, handle):
         for name, (candidate, _line) in self._channel_lines.items():
@@ -2231,96 +961,30 @@ class TimeDomainCanvasPG(QWidget):
         return None
 
     def _sync_pg_channel_color(self, channel_name, color):
-        row = self.channel_data.get(channel_name)
-        if row is not None:
-            self.channel_data[channel_name] = (row[0], row[1], color, row[3])
-        for handle, item in zip(self._inside_label_handles, self._inside_label_items):
-            if self._channel_name_for_handle(handle) != channel_name:
-                continue
-            try:
-                item.setColor(pg.mkColor(color))
-                item.border = pg.mkPen(color=color, width=0.8)
-                item.update()
-            except Exception:
-                pass
-        self.draw_idle()
+        return OverlayAxisManager._sync_pg_channel_color(
+            self._overlay_axes,
+            channel_name,
+            color,
+        )
 
     def _configure_overlay_axis_geometry(self, axis_handle):
-        """Overlay-only axis geometry so the rotated label clears the ticks.
-
-        Measures:
-        - ``enableAutoSIPrefix(False)`` so pyqtgraph does not append a
-          ``(x0.001)`` scale chip that overlaps the channel label.
-        - ``setWidth(None)`` so the AxisItem AUTO-SIZES to fit its own tick
-          text. The previous ``setWidth(44)`` was documented as a "floor"
-          but ``AxisItem.setWidth(w)`` is a HARD CLAMP — wide-number axes
-          (e.g. -2600 / 1400) were jammed to 44px and their numbers crammed
-          against the label. Real inter-axis clearance is provided by
-          ``setHorizontalSpacing`` between the stacked right axes
-          (``_add_overlay_axis_handle``), not by a per-axis width pin.
-        """
-        try:
-            axis = axis_handle.y_axis_item()
-        except Exception:
-            axis = None
-        if axis is None:
-            return
-        try:
-            axis.enableAutoSIPrefix(False)
-        except Exception:
-            pass
-        # Release any inherited width pin so the axis auto-sizes to its own
-        # tick-text width; the rotated name then never crams against ticks.
-        try:
-            axis.setWidth(None)
-        except Exception:
-            pass
+        return OverlayAxisManager._configure_overlay_axis_geometry(
+            self._overlay_axes,
+            axis_handle,
+        )
 
     def _initial_bind_pixel_width(self, axis_handle=None) -> int:
-        """Return a first-frame envelope width close to the visible plot width."""
-        widths = []
-        if axis_handle is not None:
-            vb = getattr(axis_handle, "view_box", None)
-            if vb is not None:
-                try:
-                    w = int(vb.sceneBoundingRect().width())
-                    if w > 1:
-                        widths.append(w)
-                except Exception:
-                    pass
-        try:
-            viewport = self._glw.viewport()
-            if viewport is not None:
-                w = int(viewport.width())
-                if w > 1:
-                    widths.append(w)
-        except Exception:
-            pass
-        if not widths:
-            return self.MAX_PTS
-        return max(1, min(self.MAX_PTS, max(widths)))
+        return OverlayAxisManager._initial_bind_pixel_width(
+            self._overlay_axes,
+            axis_handle,
+        )
 
     def _configure_subplot_bottom_axis(self, axis_handle, *, is_bottom):
-        pi = axis_handle.plot_item
-        if pi is None:
-            return
-        try:
-            bottom = pi.getAxis("bottom")
-        except Exception:
-            bottom = None
-        if bottom is None:
-            return
-        try:
-            bottom.setStyle(showValues=bool(is_bottom))
-            _apply_pg_axis_font(bottom)
-        except Exception:
-            pass
-        if not is_bottom:
-            try:
-                bottom.setLabel(text="")
-                _apply_pg_axis_font(bottom)
-            except Exception:
-                pass
+        return OverlayAxisManager._configure_subplot_bottom_axis(
+            self._overlay_axes,
+            axis_handle,
+            is_bottom=is_bottom,
+        )
 
     def set_xlim(self, lo, hi):
         """Apply a new xlim to the primary axis. Compatibility-only:
@@ -2518,304 +1182,28 @@ class TimeDomainCanvasPG(QWidget):
         self._apply_target_x_ticks_to_all_axes()
 
     def _build_overlay_y_grid(self):
-        """Lock X-master ViewBox to Y=[0,1] and populate uniform horizontal
-        InfiniteLines that serve as the shared graticule for overlay mode.
-
-        The X-master ViewBox carries no channel data; its Y range is fixed so
-        lines placed at k/self._overlay_divisions stay at even screen fractions
-        regardless of channel data changes.  The InfiniteLines are added to
-        the X-master ViewBox via vb.addItem(), so they are removed automatically
-        when _glw.clear() tears down the PlotItem.
-        """
-        if self._x_master_handle is None:
-            return
-        vb = getattr(self._x_master_handle, "view_box", None)
-        if vb is None:
-            return
-
-        # Lock Y to [0, 1]: disable autorange, then set the fixed range.
-        try:
-            vb.enableAutoRange(axis="y", enable=False)
-            vb.setYRange(0.0, 1.0, padding=0)
-            vb.setMouseEnabled(x=True, y=False)
-        except Exception:
-            pass
-
-        for line in list(self._overlay_grid_lines):
-            try:
-                vb.removeItem(line)
-            except Exception:
-                pass
-        self._overlay_grid_lines = []
-
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
-        alpha_int = max(1, min(255, int(round(_OVERLAY_GRID_ALPHA * 255))))
-        pen = pg.mkPen(color=(180, 180, 180, alpha_int), width=1)
-        lines = []
-        for i in range(1, n):
-            y_pos = i / n
-            line = pg.InfiniteLine(
-                pos=y_pos,
-                angle=0,          # horizontal
-                movable=False,
-                pen=pen,
-            )
-            try:
-                vb.addItem(line)
-                lines.append(line)
-            except Exception:
-                pass
-        self._overlay_grid_lines = lines
+        return OverlayAxisManager._build_overlay_y_grid(self._overlay_axes)
 
     def _repin_overlay_channel_ticks(self):
-        """Frame overlay channels and pin their ticks to the shared graticule."""
-        if not getattr(self, "_overlay_mode", False):
-            return
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
-        for handle in list(self.axes_list):
-            try:
-                lo, hi = handle.get_ylim()
-            except Exception:
-                continue
-            bottom, top, ticks = _frame_to_nice(lo, hi, n)
-            try:
-                handle.set_ylim(bottom, top)
-            except Exception:
-                continue
-            axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
-            if axis is None:
-                continue
-            try:
-                axis.setStyle(maxTickLevel=0)
-            except Exception:
-                pass
-            try:
-                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
-            except Exception:
-                pass
+        return OverlayAxisManager._repin_overlay_channel_ticks(self._overlay_axes)
 
     def _snap_overlay_channel_to_grid(self, ax):
-        """Snap a dragged overlay channel to its current graticule span."""
-        if ax is None:
-            return
-        try:
-            lo, hi = ax.get_ylim()
-        except Exception:
-            return
-        span = hi - lo
-        if not (math.isfinite(span) and span > 0):
-            return
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
-        per_div = span / n
-        if not (math.isfinite(per_div) and per_div > 0):
-            return
-        bottom = round(lo / per_div) * per_div
-        if abs(bottom) < per_div * 1e-10:
-            bottom = 0.0
-        top = bottom + span
-        ticks = [bottom + k * per_div for k in range(n + 1)]
-        try:
-            ax.set_ylim(bottom, top)
-            axis = ax.y_axis_item() if hasattr(ax, "y_axis_item") else None
-            if axis is not None:
-                axis.setStyle(maxTickLevel=0)
-                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
-        except Exception:
-            pass
+        return OverlayAxisManager._snap_overlay_channel_to_grid(
+            self._overlay_axes,
+            ax,
+        )
 
     def _stop_snap_anim(self):
-        """Stop any in-flight drag-release snap animation."""
-        anim = getattr(self, "_snap_anim", None)
-        if anim is not None:
-            try:
-                anim.stop()
-            except Exception:
-                pass
-            self._snap_anim = None
+        return OverlayAxisManager._stop_snap_anim(self._overlay_axes)
 
     def _animate_overlay_snap(self, ax):
-        """Glide ``ax`` from its dragged position to the nice graticule.
-
-        Keeps the dragged span and snaps ``bottom`` to the nearest grid
-        multiple (same target as ``_snap_overlay_channel_to_grid``), but
-        eases there over ``_snap_anim_ms`` so the release is not a jump.
-        ``_snap_anim_ms <= 0`` (or an already-aligned channel) snaps
-        synchronously.
-        """
-        if ax is None:
-            return
-        self._stop_snap_anim()
-        try:
-            lo, hi = ax.get_ylim()
-        except Exception:
-            return
-        span = hi - lo
-        if not (math.isfinite(span) and span > 0):
-            return
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
-        per_div = span / n
-        if not (math.isfinite(per_div) and per_div > 0):
-            return
-        bottom = round(lo / per_div) * per_div
-        if abs(bottom) < per_div * 1e-10:
-            bottom = 0.0
-        top = bottom + span
-        duration = int(getattr(self, "_snap_anim_ms", 150))
-        # No visible move, or animation disabled → snap synchronously.
-        if duration <= 0 or abs(bottom - lo) < per_div * 1e-6:
-            self._snap_overlay_channel_to_grid(ax)
-            return
-
-        # Pin the FINAL graticule ticks once, up front. The labels are the
-        # correct snapped integers from the very first frame and never
-        # recompute during the glide — only the curve's ylim animates into
-        # place, so the numbers do not flicker (2026-06-06 no-tick-flicker).
-        ticks = [bottom + k * per_div for k in range(n + 1)]
-        try:
-            axis = ax.y_axis_item() if hasattr(ax, "y_axis_item") else None
-            if axis is not None:
-                axis.setStyle(maxTickLevel=0)
-                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
-        except Exception:
-            pass
-
-        start_lo, start_hi = lo, hi
-        anim = QVariantAnimation(self)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setDuration(duration)
-        anim.setEasingCurve(QEasingCurve.OutCubic)
-
-        def _on_value(frac):
-            try:
-                f = float(frac)
-            except Exception:
-                return
-            cur_lo = start_lo + (bottom - start_lo) * f
-            cur_hi = start_hi + (top - start_hi) * f
-            try:
-                ax.set_ylim(cur_lo, cur_hi)  # glide only; ticks already pinned
-            except Exception:
-                return
-            self._refresh = True
-            self.draw_idle()
-
-        def _on_finished():
-            self._snap_overlay_channel_to_grid(ax)
-            self._snap_anim = None
-            self._refresh = True
-            self.draw_idle()
-
-        anim.valueChanged.connect(_on_value)
-        anim.finished.connect(_on_finished)
-        self._snap_anim = anim
-        anim.start()
+        return OverlayAxisManager._animate_overlay_snap(self._overlay_axes, ax)
 
     def _apply_overlay_box_zoom_y(self):
-        """Re-lock the X-master Y to [0, 1] after a RectMode box-zoom and
-        redirect the box's Y span onto the selected channel.
-
-        pyqtgraph's RectMode ``setRange`` ignores ``mouseEnabled`` and pulls
-        the X-master Y to the box sub-range, collapsing the fixed k/N
-        graticule. The shared X stays as the base class zoomed it; here we
-        read the box's Y fraction (in [0, 1] graticule space), restore the
-        grid, and frame the selected channel into that fraction.
-        """
-        if not getattr(self, "_overlay_mode", False):
-            return
-        master = self._x_master_handle
-        if master is None:
-            return
-        vb = getattr(master, "view_box", None)
-        if vb is None:
-            return
-        try:
-            y0, y1 = vb.viewRange()[1]
-        except Exception:
-            return
-        already_locked = abs(y0 - 0.0) < 1e-9 and abs(y1 - 1.0) < 1e-9
-        if not already_locked:
-            try:
-                vb.enableAutoRange(axis="y", enable=False)
-                vb.setYRange(0.0, 1.0, padding=0)
-            except Exception:
-                pass
-        sel = self._selected_overlay_axes()
-        if sel is None or already_locked:
-            # No channel to receive the Y zoom (or the box had no Y span):
-            # X-only zoom, graticule already restored above.
-            self._refresh = True
-            self.draw_idle()
-            return
-        f0 = max(0.0, min(1.0, min(y0, y1)))
-        f1 = max(0.0, min(1.0, max(y0, y1)))
-        if f1 - f0 < 1e-6:
-            self._refresh = True
-            self.draw_idle()
-            return
-        try:
-            clo, chi = sel.get_ylim()
-        except Exception:
-            return
-        cspan = chi - clo
-        if not (math.isfinite(cspan) and cspan > 0):
-            return
-        new_lo = clo + f0 * cspan
-        new_hi = clo + f1 * cspan
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
-        bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
-        try:
-            sel.set_ylim(bottom, top)
-            axis = sel.y_axis_item() if hasattr(sel, "y_axis_item") else None
-            if axis is not None:
-                axis.setStyle(maxTickLevel=0)
-                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
-        except Exception:
-            pass
-        self._refresh = True
-        self.draw_idle()
+        return OverlayAxisManager._apply_overlay_box_zoom_y(self._overlay_axes)
 
     def _teardown_overlay_aux_viewboxes(self):
-        """Remove every overlay aux ViewBox, its child curves, and the
-        ch3+ appended right ``AxisItem``s from the scene.
-
-        pyqtgraph's ``GraphicsLayout.clear()`` only removes items that were
-        registered via ``addItem`` (the PlotItems). Overlay aux ViewBoxes
-        are attached top-level via ``primary_plot.scene().addItem(aux_vb)``
-        (``_add_overlay_axis_handle``) and every right axis (ch2+) via
-        ``primary_plot.layout.addItem(axis_item, ...)``, so both leak as
-        ghost curves/axes on every rebuild unless removed explicitly here.
-        Mirrors ``_teardown_inside_labels`` (the same scene-leak class).
-
-        ch1 reuses the PlotItem's built-in LEFT axis (removed with the
-        PlotItem by ``_glw.clear()``); every right channel (ch2+) is a fresh
-        appended ``AxisItem`` and needs explicit removal. Iterating all of
-        ``_overlay_aux_axes`` and guarding each ``removeItem`` is safe and
-        idempotent (the built-in left axis ignores both removals harmlessly).
-        """
-        for aux_vb in list(self._overlay_aux_viewboxes):
-            try:
-                scene = aux_vb.scene()
-                if scene is not None:
-                    scene.removeItem(aux_vb)
-            except Exception:
-                pass
-        for ax_item in list(self._overlay_aux_axes):
-            # Drop the appended right axes from the PlotItem layout first,
-            # then from the scene. Built-in left/right axes (ch1/ch2) are
-            # owned by the PlotItem and ignore both removals harmlessly.
-            primary = self._primary_xaxis_ax
-            try:
-                if primary is not None and primary.plot_item is not None:
-                    primary.plot_item.layout.removeItem(ax_item)
-            except Exception:
-                pass
-            try:
-                scene = ax_item.scene()
-                if scene is not None:
-                    scene.removeItem(ax_item)
-            except Exception:
-                pass
+        return OverlayAxisManager._teardown_overlay_aux_viewboxes(self._overlay_axes)
 
     def clear(self):
         """Tear down the chart. Mirrors TimeDomainCanvas.clear."""
@@ -2899,919 +1287,180 @@ class TimeDomainCanvasPG(QWidget):
         self.draw_idle()
 
     def set_cursor_visible(self, v):
-        """Toggle single-cursor visibility."""
-        self._cursor_visible = bool(v)
-        if not self._cursor_visible:
-            self._hide_cursor_items(self._cursor_line_items)
-            self._hide_cursor_items(self._cursor_a_items)
-            self._hide_cursor_items(self._cursor_b_items)
-            self._hide_dual_cursor_extreme_markers()
-            self.draw_idle()
+        return CursorController.set_cursor_visible(self._cursor, v)
 
     def set_dual_cursor_mode(self, en):
-        """Toggle dual-cursor mode."""
-        self._dual = bool(en)
-        if not en:
-            self._ax = None
-            self._bx = None
-            self._placing = "A"
-            self._refresh = True
-            self._hide_cursor_items(self._cursor_a_items)
-            self._hide_cursor_items(self._cursor_b_items)
-            self._hide_dual_cursor_extreme_markers()
-            self.dual_cursor_info.emit("")
-            self.draw_idle()
+        return CursorController.set_dual_cursor_mode(self._cursor, en)
 
     def reset_cursor_state(self):
-        """Drop dual-cursor placement and request a redraw.
-
-        Compatibility seam called by ``MainWindow._reset_cursors``. The
-        ordering (mutate fields, then redraw) follows
-        ``pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before``.
-        """
-        self._ax = None
-        self._bx = None
-        self._placing = "A"
-        self._refresh = True
-        self._hide_cursor_items(self._cursor_line_items)
-        self._hide_cursor_items(self._cursor_a_items)
-        self._hide_cursor_items(self._cursor_b_items)
-        self._hide_dual_cursor_extreme_markers()
-        self.dual_cursor_info.emit("")
-        self.draw_idle()
+        return CursorController.reset_cursor_state(self._cursor)
 
     def draw_idle(self):
-        """No-op equivalent of matplotlib FigureCanvas.draw_idle.
-
-        Pyqtgraph re-renders automatically on data/range changes; we
-        only need to nudge the scene so post-Apply paint passes flush.
-        """
-        # Avoid an explicit repaint here — pyqtgraph's scene already
-        # invalidates lazily. The cursor/span overlays will need an
-        # update() pass once T6 wires them.
-        try:
-            self._glw.update()
-        except Exception:
-            pass
+        return CursorController.draw_idle(self._cursor)
 
     def draw(self):
-        """Synchronous redraw alias (matplotlib FigureCanvas parity).
-
-        MainWindow.plot_time() calls ``self.canvas_time.draw()`` on the
-        no-files / no-checked-channels / no-plottable-data early-return
-        paths. Pyqtgraph's scene already invalidates lazily, so this is
-        a thin alias over ``draw_idle()`` — no flush bookkeeping needed
-        per ``pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before``
-        (draw_idle handles scheduling; this is a parity seam, not a
-        mutator).
-        """
-        self.draw_idle()
-
-    # ------------------------------------------------------------------
-    # Cursor item helpers.
-    # ------------------------------------------------------------------
+        return CursorController.draw(self._cursor)
 
     def _hide_cursor_items(self, items):
-        for item in items or []:
-            try:
-                item.setVisible(False)
-            except Exception:
-                pass
+        return CursorController._hide_cursor_items(self._cursor, items)
 
     def _ensure_cursor_items(self, attr_name, *, color, width=1.0, style=Qt.SolidLine):
-        items = getattr(self, attr_name, [])
-        if len(items) == len(self.axes_list):
-            return items
-        self._remove_cursor_items(items)
-        pen = pg.mkPen(color=color, width=width, style=style)
-        new_items = []
-        for handle in self.axes_list:
-            vb = handle.view_box
-            if vb is None:
-                continue
-            line = pg.InfiniteLine(pos=0.0, angle=90, movable=False, pen=pen)
-            line.setZValue(1000)
-            line.setVisible(False)
-            try:
-                vb.addItem(line, ignoreBounds=True)
-                new_items.append(line)
-            except Exception:
-                pass
-        setattr(self, attr_name, new_items)
-        return new_items
+        return CursorController._ensure_cursor_items(
+            self._cursor,
+            attr_name,
+            color=color,
+            width=width,
+            style=style,
+        )
 
     def _remove_cursor_items(self, items):
-        for item in items or []:
-            try:
-                parent = item.parentItem()
-                if parent is not None and hasattr(parent, "removeItem"):
-                    parent.removeItem(item)
-            except Exception:
-                pass
+        return CursorController._remove_cursor_items(self._cursor, items)
 
     def _set_cursor_items_pos(self, items, x):
-        for item in items or []:
-            try:
-                item.setValue(float(x))
-                item.setVisible(True)
-            except Exception:
-                pass
+        return CursorController._set_cursor_items_pos(self._cursor, items, x)
 
     def _ensure_dual_cursor_extreme_markers(self):
-        markers = getattr(self, "_dual_cursor_extreme_markers", [])
-        if len(markers) == len(self.axes_list):
-            return markers
-        for marker in markers or []:
-            try:
-                marker.setVisible(False)
-            except Exception:
-                pass
-        new_markers = []
-        for handle in self.axes_list:
-            vb = handle.view_box
-            if vb is None:
-                continue
-            marker = pg.ScatterPlotItem(size=10)
-            marker.setZValue(1100)
-            marker.setVisible(False)
-            try:
-                vb.addItem(marker, ignoreBounds=True)
-                new_markers.append(marker)
-            except Exception:
-                pass
-        self._dual_cursor_extreme_markers = new_markers
-        return new_markers
+        return CursorController._ensure_dual_cursor_extreme_markers(self._cursor)
 
     def _hide_dual_cursor_extreme_markers(self):
-        for marker in getattr(self, "_dual_cursor_extreme_markers", []) or []:
-            try:
-                marker.setData([], [])
-                marker.setVisible(False)
-            except Exception:
-                pass
+        return CursorController._hide_dual_cursor_extreme_markers(self._cursor)
 
     def _update_dual_cursor_extreme_markers(self, points_by_channel):
-        markers = self._ensure_dual_cursor_extreme_markers()
-        point_map = {
-            name: (min_x, min_y, max_x, max_y)
-            for name, min_x, min_y, max_x, max_y in points_by_channel
-        }
-        for marker, handle in zip(markers, self.axes_list):
-            name = self._channel_name_for_handle(handle)
-            points = point_map.get(name)
-            try:
-                if points is None:
-                    marker.setData([], [])
-                    marker.setVisible(False)
-                    continue
-                min_x, min_y, max_x, max_y = points
-                marker.setData(
-                    [min_x, max_x],
-                    [min_y, max_y],
-                    symbol="o",
-                    size=10,
-                    pen=[
-                        pg.mkPen("#ffffff", width=1.2),
-                        pg.mkPen("#ffffff", width=1.2),
-                    ],
-                    brush=[
-                        pg.mkBrush("#16a34a"),
-                        pg.mkBrush("#dc2626"),
-                    ],
-                )
-                marker.setVisible(True)
-            except Exception:
-                pass
+        return CursorController._update_dual_cursor_extreme_markers(
+            self._cursor,
+            points_by_channel,
+        )
 
     def _cursor_data_x_from_viewport_pos(self, viewport_pos):
-        scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        handle = self._axis_handle_at_scene_pos(scene_pos)
-        if handle is None or handle.view_box is None:
-            return None
-        try:
-            data_pos = handle.view_box.mapSceneToView(scene_pos)
-            x = float(data_pos.x())
-        except Exception:
-            return None
-        if not np.isfinite(x):
-            return None
-        return x
+        return CursorController._cursor_data_x_from_viewport_pos(
+            self._cursor,
+            viewport_pos,
+        )
 
     def _handle_cursor_mouse_move(self, event_or_pos):
-        if not self._cursor_visible:
-            return False
-        try:
-            if event_or_pos.buttons() & Qt.LeftButton:
-                return False
-            viewport_pos = event_or_pos.pos()
-        except Exception:
-            viewport_pos = event_or_pos
-        x = self._cursor_data_x_from_viewport_pos(viewport_pos)
-        if x is None:
-            return False
-        now = _time.monotonic() * 1000
-        if now - self._last_t < 33:
-            return True
-        self._last_t = now
-        if self._dual:
-            hover_items = self._ensure_cursor_items(
-                "_cursor_line_items", color="#64748b", width=1.0, style=Qt.DotLine
-            )
-            self._set_cursor_items_pos(hover_items, x)
-            # Dual cursor stats depend only on the fixed A/B positions; A/B
-            # placement already emits them, so hover only moves the guide line.
-        else:
-            items = self._ensure_cursor_items(
-                "_cursor_line_items", color="#111827", width=1.0
-            )
-            self._set_cursor_items_pos(items, x)
-            self._emit_single_cursor_html(x)
-        self.draw_idle()
-        return True
+        return CursorController._handle_cursor_mouse_move(self._cursor, event_or_pos)
 
     def _handle_cursor_mouse_press(self, event):
-        if not (self._cursor_visible and self._dual):
-            return False
-        try:
-            if event.button() != Qt.LeftButton:
-                return False
-        except Exception:
-            return False
-        x = self._cursor_data_x_from_viewport_pos(event.pos())
-        if x is None:
-            return False
-        if self._placing == "A":
-            self._ax = x
-            self._placing = "B"
-            a_items = self._ensure_cursor_items(
-                "_cursor_a_items", color="#2563eb", width=1.1
-            )
-            self._set_cursor_items_pos(a_items, x)
-        else:
-            self._bx = x
-            self._placing = "A"
-            b_items = self._ensure_cursor_items(
-                "_cursor_b_items", color="#dc2626", width=1.1
-            )
-            self._set_cursor_items_pos(b_items, x)
-        self._emit_dual_cursor_html()
-        self.draw_idle()
-        return True
-
-    # ------------------------------------------------------------------
-    # Overlay selection + Y-drag mouse wiring (Problem 2). Ports
-    # canvases.py:_select_overlay_channel_from_event (850-895) and
-    # _update_overlay_y_drag (916) onto the pyqtgraph eventFilter, driven
-    # by real Qt events rather than the matplotlib callback dispatcher.
-    # ------------------------------------------------------------------
+        return CursorController._handle_cursor_mouse_press(self._cursor, event)
 
     def _scene_y_from_viewport_pos(self, viewport_pos):
-        """Map a viewport-pixel ``QPoint`` to a scene Y coordinate.
-
-        The Y-drag helpers work in a single monotonic pixel axis; scene Y
-        (top-origin, increasing downward) is used consistently for both
-        the begin-capture and apply steps so the delta is well-defined.
-        Returns ``None`` on failure.
-        """
-        scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        if scene_pos is None:
-            return None
-        try:
-            return float(scene_pos.y())
-        except Exception:
-            return None
+        return CursorController._scene_y_from_viewport_pos(self._cursor, viewport_pos)
 
     def _select_overlay_channel_from_scene_pos(self, scene_pos):
-        """Resolve which overlay channel a press at ``scene_pos`` selects.
-
-        Returns the nearest curve's channel name when a sample is within
-        ``_overlay_pick_radius_px`` of the press, else ``None`` so a blank
-        in-plot click deselects.
-
-        Bug 5: the old ViewBox-rect axis-hit fallback is removed. In overlay
-        mode every aux ViewBox's ``sceneBoundingRect`` spans the FULL plot
-        rect (``_sync_overlay_aux_viewboxes`` sets them all to the X-master's
-        geometry), so ``_axis_handle_at_scene_pos`` returned channel 1 for
-        ANY in-plot point — making a genuine blank click impossible to
-        deselect. The real axis gutter sits OUTSIDE the plot rect anyway, so
-        the rect test never identified a true gutter hit.
-        """
-        if scene_pos is None:
-            return None
-
-        best_name = None
-        best_dist = float("inf")
-        try:
-            px = float(scene_pos.x())
-            py = float(scene_pos.y())
-        except Exception:
-            return None
-        for name, (handle, line) in self._channel_lines.items():
-            vb = handle.view_box
-            if vb is None:
-                continue
-            pdi = line.plot_data_item
-            try:
-                xdata, ydata = pdi.getData()
-            except Exception:
-                xdata = ydata = None
-            if xdata is None or ydata is None:
-                continue
-            xdata = np.asarray(xdata, dtype=float)
-            ydata = np.asarray(ydata, dtype=float)
-            n = min(xdata.size, ydata.size)
-            if n == 0:
-                continue
-            xdata = xdata[:n]
-            ydata = ydata[:n]
-            # Drop NaN-gap samples so the pixel mapping below stays finite
-            # (arraytoqpath-not-byte-identical lesson: NaN gaps + single
-            # points need explicit handling).
-            finite = np.isfinite(xdata) & np.isfinite(ydata)
-            if not finite.any():
-                continue
-            xdata = xdata[finite]
-            ydata = ydata[finite]
-            if n > 3000:
-                step = max(1, xdata.size // 3000)
-                xdata = xdata[::step]
-                ydata = ydata[::step]
-            # Map each data point to scene pixels via this channel's VB.
-            try:
-                scene_pts = self._map_view_points_to_scene(vb, xdata, ydata)
-            except Exception:
-                continue
-            if scene_pts is None or scene_pts.size == 0:
-                continue
-            dist = float(
-                np.min(
-                    np.hypot(scene_pts[:, 0] - px, scene_pts[:, 1] - py)
-                )
-            )
-            if dist < best_dist:
-                best_dist = dist
-                best_name = name
-        if best_name is not None and best_dist <= self._overlay_pick_radius_px:
-            return best_name
-        # No curve within the pick radius → blank in-plot click → deselect.
-        return None
+        return CursorController._select_overlay_channel_from_scene_pos(
+            self._cursor,
+            scene_pos,
+        )
 
     def _map_view_points_to_scene(self, view_box, xdata, ydata):
-        """Map arrays of (x, y) view coordinates to scene pixel coords.
-
-        Returns an ``(n, 2)`` float array of scene (x, y) or ``None``. Uses
-        the ViewBox's view→scene transform via ``mapViewToScene`` per
-        point. A single point is handled correctly (n>=1).
-        """
-        try:
-            from PyQt5.QtCore import QPointF
-        except Exception:
-            return None
-        pts = np.empty((xdata.size, 2), dtype=float)
-        ok = 0
-        for i in range(xdata.size):
-            try:
-                sp = view_box.mapViewToScene(QPointF(float(xdata[i]), float(ydata[i])))
-                pts[ok, 0] = float(sp.x())
-                pts[ok, 1] = float(sp.y())
-                ok += 1
-            except Exception:
-                continue
-        if ok == 0:
-            return None
-        return pts[:ok]
-
-    def _channel_name_for_handle(self, handle):
-        for name, (axis_handle, _line) in self._channel_lines.items():
-            if axis_handle is handle:
-                return name
-        return None
+        return CursorController._map_view_points_to_scene(
+            self._cursor,
+            view_box,
+            xdata,
+            ydata,
+        )
 
     def _overlay_axis_handle_at_scene_pos(self, scene_pos):
-        """Return the overlay channel whose Y-axis gutter contains scene_pos."""
-        if scene_pos is None:
-            return None
-        handles = list(self.axes_list)
-        selected = self._selected_overlay_axes()
-        if selected is not None:
-            handles = [selected] + [h for h in handles if h is not selected]
-        for handle in handles:
-            axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
-            if axis is None:
-                continue
-            try:
-                rect = axis.sceneBoundingRect()
-                if rect.contains(scene_pos):
-                    return handle
-            except Exception:
-                continue
-        return None
+        return OverlayAxisManager._overlay_axis_handle_at_scene_pos(
+            self._overlay_axes,
+            scene_pos,
+        )
 
     def _set_x_master_mouse_enabled(self, enabled):
-        """Toggle the X-master ViewBox's mouse interaction.
-
-        X is enabled in normal overlay interaction so users can pan time.
-        Y stays disabled permanently because the X-master owns the fixed
-        [0, 1] graticule, not channel data.
-        """
-        master = self._x_master_handle
-        if master is None:
-            return
-        vb = master.view_box
-        if vb is None:
-            return
-        try:
-            vb.setMouseEnabled(x=bool(enabled), y=False)
-        except Exception:
-            pass
+        return OverlayAxisManager._set_x_master_mouse_enabled(
+            self._overlay_axes,
+            enabled,
+        )
 
     def _press_view_box_in_rect_mode(self, scene_pos):
-        """Return True when the ViewBox under ``scene_pos`` (or, on a miss,
-        the primary/X-master ViewBox) is in box-zoom (RectMode).
-
-        Fix A (2026-05-31 overlay-aa-interaction-fixes): the overlay press
-        handler must yield to pyqtgraph's rubber band in box-zoom mode so a
-        press tight on a curve still draws a zoom rectangle instead of
-        being swallowed as a curve-select + Y-drag. We read
-        ``vb.state['mouseMode']`` directly — no mouse-mode controller
-        dependency — and compare against ``pg.ViewBox.RectMode`` (==1).
-        """
-        vb = None
-        handle = self._axis_handle_at_scene_pos(scene_pos)
-        if handle is not None:
-            vb = handle.view_box
-        if vb is None and self._primary_xaxis_ax is not None:
-            vb = self._primary_xaxis_ax.view_box
-        if vb is None:
-            return False
-        try:
-            return vb.state.get("mouseMode") == pg.ViewBox.RectMode
-        except Exception:
-            return False
+        return OverlayAxisManager._press_view_box_in_rect_mode(
+            self._overlay_axes,
+            scene_pos,
+        )
 
     # ------------------------------------------------------------------
     # Annotation (remark) methods
     # ------------------------------------------------------------------
 
     def set_remark_enabled(self, enabled):
-        """Enable or disable annotation mode; changes cursor shape."""
-        self._annotation_enabled = bool(enabled)
-        self._clear_annotation_press_state()
-        try:
-            vp = self._glw.viewport()
-            if vp:
-                if self._annotation_enabled:
-                    vp.setCursor(_annotation_pen_cursor())
-                else:
-                    vp.setCursor(Qt.ArrowCursor)
-        except Exception:
-            pass
+        return AnnotationManager.set_remark_enabled(self._annotations, enabled)
 
     def _clear_annotation_press_state(self):
-        self._annotation_press_pos = None
-        self._annotation_press_dragged = False
+        return AnnotationManager._clear_annotation_press_state(self._annotations)
 
     def _remark_target_axis_handle(self, viewport_pos):
-        scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        if self._overlay_mode:
-            return None
-        return self._axis_handle_at_scene_pos(scene_pos)
+        return AnnotationManager._remark_target_axis_handle(
+            self._annotations,
+            viewport_pos,
+        )
 
     def _nearest_data_point(self, viewport_pos):
-        """Return (ch_name, x, y, color) of the data point nearest to viewport_pos.
-
-        Converts pos to the clicked subplot's data value, then finds the
-        nearest sample by screen distance. Returns None if no channels.
-        """
-        x_data = self._cursor_data_x_from_viewport_pos(viewport_pos)
-        if x_data is None or not self.channel_data:
-            return None
-        target_handle = self._remark_target_axis_handle(viewport_pos)
-        candidate_items = self.channel_data.items()
-        if target_handle is not None:
-            target_names = {
-                name for name, (axis_handle, _line) in self._channel_lines.items()
-                if axis_handle is target_handle
-            }
-            candidate_items = [
-                (name, row)
-                for name, row in self.channel_data.items()
-                if name in target_names
-            ]
-        try:
-            scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        except Exception:
-            scene_pos = None
-        best = None
-        best_dist = float('inf')
-        for ch, (tf, sf, color, _unit) in candidate_items:
-            if not len(tf):
-                continue
-            ax = self._channel_lines.get(ch, (None, None))[0]
-            if ax is None:
-                ax = target_handle or self._primary_xaxis_ax or (
-                    self.axes_list[0] if self.axes_list else None
-                )
-            vb = ax.view_box if ax else None
-            if scene_pos is not None:
-                try:
-                    if vb is None:
-                        continue
-                    tf_arr = np.asarray(tf, dtype=float)
-                    sf_arr = np.asarray(sf, dtype=float)
-                    n = min(tf_arr.size, sf_arr.size)
-                    if n == 0:
-                        continue
-                    tf_arr = tf_arr[:n]
-                    sf_arr = sf_arr[:n]
-                    finite = np.isfinite(tf_arr) & np.isfinite(sf_arr)
-                    if not finite.any():
-                        continue
-                    tf_arr = tf_arr[finite]
-                    sf_arr = sf_arr[finite]
-                    try:
-                        x_range, _y_range = vb.viewRange()
-                        rect = vb.sceneBoundingRect()
-                        span = abs(float(x_range[1]) - float(x_range[0]))
-                        width = max(float(rect.width()), 1.0)
-                        half_window = max((span / width) * 48.0, 1e-12)
-                    except Exception:
-                        half_window = 0.0
-                    if half_window > 0.0:
-                        idxs = np.flatnonzero(np.abs(tf_arr - x_data) <= half_window)
-                    else:
-                        idxs = np.asarray([], dtype=int)
-                    if idxs.size == 0:
-                        nearest_idx = int(np.argmin(np.abs(tf_arr - x_data)))
-                        start = max(0, nearest_idx - 32)
-                        stop = min(tf_arr.size, nearest_idx + 33)
-                        idxs = np.arange(start, stop, dtype=int)
-                    scene_pts = self._map_view_points_to_scene(
-                        vb, tf_arr[idxs], sf_arr[idxs]
-                    )
-                    if scene_pts is None or scene_pts.size == 0:
-                        continue
-                    dist_sq = (
-                        (scene_pts[:, 0] - float(scene_pos.x())) ** 2
-                        + (scene_pts[:, 1] - float(scene_pos.y())) ** 2
-                    )
-                    local_i = int(np.argmin(dist_sq))
-                    dist = float(dist_sq[local_i])
-                    if dist < best_dist:
-                        src_idx = int(idxs[local_i])
-                        best_dist = dist
-                        best = (
-                            ch,
-                            float(tf_arr[src_idx]),
-                            float(sf_arr[src_idx]),
-                            color,
-                        )
-                except Exception:
-                    if best is None:
-                        idx = int(np.argmin(np.abs(tf - x_data)))
-                        best = (ch, float(tf[idx]), float(sf[idx]), color)
-            else:
-                if best is None:
-                    idx = int(np.argmin(np.abs(tf - x_data)))
-                    sx, sy = float(tf[idx]), float(sf[idx])
-                    best = (ch, sx, sy, color)
-        return best
+        return AnnotationManager._nearest_data_point(self._annotations, viewport_pos)
 
     def _add_remark(self, viewport_pos):
-        """Add a draggable annotation at the data point nearest to viewport_pos."""
-        from PyQt5.QtCore import QPointF as _QPointF
-        found = self._nearest_data_point(viewport_pos)
-        if found is None:
-            return
-        ch, dx, dy, color = found
-        # Resolve which viewbox to add the annotation to.
-        try:
-            ax = self._channel_lines.get(ch, (None, None))[0]
-            if ax is None:
-                ax = self._remark_target_axis_handle(viewport_pos)
-            if ax is None:
-                ax = self._primary_xaxis_ax or (
-                    self.axes_list[0] if self.axes_list else None
-                )
-            vb = ax.view_box if ax else None
-        except Exception:
-            vb = None
-        if vb is None:
-            return
-        # Red dot at data point.
-        dot = pg.ScatterPlotItem(
-            x=[dx], y=[dy], size=8,
-            pen=pg.mkPen('#dc2626', width=1.5),
-            brush=pg.mkBrush('#dc2626'),
-            pxMode=True,
-        )
-        vb.addItem(dot)
-        # Initial label offset in data units: shift up-right by ~6%/8% of visible range.
-        try:
-            vrange = vb.viewRange()
-            ox = (vrange[0][1] - vrange[0][0]) * 0.06
-            oy = (vrange[1][1] - vrange[1][0]) * 0.08
-        except Exception:
-            ox, oy = 0, 0
-        lx, ly = dx + ox, dy + oy
-        leader = pg.PlotDataItem(
-            x=[dx, lx], y=[dy, ly],
-            pen=pg.mkPen(color, width=1.0, style=Qt.DashLine),
-        )
-        vb.addItem(leader)
-        # Text label.
-        label_text = self._format_remark_label(dx, dy, color)
-        text = pg.TextItem(
-            html=label_text,
-            color=color,
-            fill=pg.mkBrush(255, 255, 255, 210),
-            border=pg.mkPen(color, width=0.8),
-        )
-        text.setPos(lx, ly)
-        text.setFlag(text.ItemIsMovable, True)
-        vb.addItem(text)
-        remark = {
-            'vb': vb, 'dot': dot, 'text': text, 'leader': leader,
-            'data_x': dx, 'data_y': dy,
-        }
-        self._remarks.append(remark)
-        # Connect text position change to leader update.
-        try:
-            text.sigPositionChanged.connect(
-                lambda item, r=remark: self._update_remark_leader(r)
-            )
-        except Exception:
-            # pg.TextItem may not have sigPositionChanged in all versions;
-            # fall back to itemChange override.
-            orig_item_change = text.itemChange
-            def patched_item_change(change, value, _r=remark, _orig=orig_item_change):
-                result = _orig(change, value)
-                if change == text.ItemPositionHasChanged:
-                    self._update_remark_leader(_r)
-                return result
-            text.itemChange = patched_item_change
+        return AnnotationManager._add_remark(self._annotations, viewport_pos)
 
     def _format_remark_label(self, x_value, y_value, color=None):
-        """Return the compact coordinate label shown by point remarks."""
-        y_color = str(color or "#1769e0")
-        return (
-            f"<div>X={x_value:.4g}</div>"
-            f"<div style='color:{y_color}; font-weight:600;'>Y={y_value:.4g}</div>"
+        return AnnotationManager._format_remark_label(
+            self._annotations,
+            x_value,
+            y_value,
+            color,
         )
 
     def _remark_item_at_viewport_pos(self, viewport_pos):
-        """Return the remark under a viewport click, or None.
-
-        Annotation mode uses this to let existing labels receive their own
-        drag events instead of treating every left press as "add remark".
-        """
-        from PyQt5.QtCore import QPointF as _QPointF
-        if not self._remarks:
-            return None
-        scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        if scene_pos is None:
-            return None
-        try:
-            scene_items = self._glw.scene().items(scene_pos)
-        except Exception:
-            scene_items = []
-        for item in scene_items:
-            for remark in self._remarks:
-                text = remark.get('text')
-                candidates = (
-                    text,
-                    getattr(text, 'textItem', None),
-                    remark.get('dot'),
-                    remark.get('leader'),
-                )
-                if any(
-                    item is candidate
-                    for candidate in candidates
-                    if candidate is not None
-                ):
-                    return remark
-        try:
-            sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
-            for remark in self._remarks:
-                vb = remark.get('vb')
-                text = remark.get('text')
-                if vb is None or text is None:
-                    continue
-                lpos = text.pos()
-                label_scene_pos = vb.mapViewToScene(_QPointF(lpos.x(), lpos.y()))
-                dist_sq = (
-                    (label_scene_pos.x() - sp.x()) ** 2
-                    + (label_scene_pos.y() - sp.y()) ** 2
-                )
-                if dist_sq <= 12 ** 2:
-                    return remark
-        except Exception:
-            return None
-        return None
+        return AnnotationManager._remark_item_at_viewport_pos(
+            self._annotations,
+            viewport_pos,
+        )
 
     def _annotation_drag_threshold(self):
-        try:
-            return max(1, int(QApplication.startDragDistance()))
-        except Exception:
-            return 10
+        return AnnotationManager._annotation_drag_threshold(self._annotations)
 
     def _handle_annotation_mouse_press(self, event):
-        if not self._annotation_enabled:
-            return None
-        if event.button() == Qt.RightButton:
-            scene_pos = self._viewport_pos_to_scene(event.pos())
-            self._last_rclick_scene_pos = scene_pos
-            self._remove_remark_at(scene_pos)
-            self._clear_annotation_press_state()
-            return True
-        if event.button() != Qt.LeftButton:
-            return None
-        if self._remark_item_at_viewport_pos(event.pos()) is not None:
-            self._clear_annotation_press_state()
-            return False
-        self._annotation_press_pos = event.pos()
-        self._annotation_press_dragged = False
-        return False
+        return AnnotationManager._handle_annotation_mouse_press(
+            self._annotations,
+            event,
+        )
 
     def _handle_annotation_mouse_move(self, event):
-        if not self._annotation_enabled or self._annotation_press_pos is None:
-            return None
-        try:
-            if event.buttons() & Qt.LeftButton:
-                delta = event.pos() - self._annotation_press_pos
-                if delta.manhattanLength() >= self._annotation_drag_threshold():
-                    self._annotation_press_dragged = True
-        except Exception:
-            pass
-        return False
+        return AnnotationManager._handle_annotation_mouse_move(self._annotations, event)
 
     def _handle_annotation_mouse_release(self, event):
-        if not self._annotation_enabled or self._annotation_press_pos is None:
-            return None
-        if event.button() != Qt.LeftButton:
-            self._clear_annotation_press_state()
-            return None
-        start_pos = self._annotation_press_pos
-        try:
-            delta = event.pos() - start_pos
-            moved = delta.manhattanLength() >= self._annotation_drag_threshold()
-        except Exception:
-            moved = self._annotation_press_dragged
-        dragged = self._annotation_press_dragged or moved
-        self._clear_annotation_press_state()
-        if dragged:
-            return False
-        self._add_remark(event.pos())
-        return True
+        return AnnotationManager._handle_annotation_mouse_release(
+            self._annotations,
+            event,
+        )
 
     def _update_remark_leader(self, remark):
-        """Redraw leader line from data point to text label current position."""
-        try:
-            text = remark['text']
-            dx, dy = remark['data_x'], remark['data_y']
-            lpos = text.pos()
-            lx, ly = float(lpos.x()), float(lpos.y())
-            remark['leader'].setData(x=[dx, lx], y=[dy, ly])
-        except Exception:
-            pass
+        return AnnotationManager._update_remark_leader(self._annotations, remark)
 
     def _remove_remark_at(self, scene_pos):
-        """Remove annotation nearest to scene_pos (right-click delete)."""
-        from PyQt5.QtCore import QPointF as _QPointF
-        if not self._remarks or scene_pos is None:
-            return
-        best_idx, best_dist = 0, float('inf')
-        try:
-            sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
-            for i, r in enumerate(self._remarks):
-                vb = r.get('vb')
-                if vb is None:
-                    continue
-                lpos = r['text'].pos()
-                s = vb.mapViewToScene(_QPointF(lpos.x(), lpos.y()))
-                d = (s.x() - sp.x()) ** 2 + (s.y() - sp.y()) ** 2
-                if d < best_dist:
-                    best_dist, best_idx = d, i
-        except Exception:
-            return
-        self._remove_remark_by_index(best_idx)
+        return AnnotationManager._remove_remark_at(self._annotations, scene_pos)
 
     def _remove_remark_by_index(self, idx):
-        try:
-            r = self._remarks.pop(idx)
-            vb = r.get('vb')
-            if vb:
-                for item_key in ('dot', 'text', 'leader'):
-                    item = r.get(item_key)
-                    if item is not None:
-                        try:
-                            vb.removeItem(item)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
+        return AnnotationManager._remove_remark_by_index(self._annotations, idx)
 
     def clear_remarks(self):
-        """Remove all annotations."""
-        for r in list(self._remarks):
-            vb = r.get('vb')
-            if vb:
-                for item_key in ('dot', 'text', 'leader'):
-                    item = r.get(item_key)
-                    if item is not None:
-                        try:
-                            vb.removeItem(item)
-                        except Exception:
-                            pass
-        self._remarks.clear()
+        return AnnotationManager.clear_remarks(self._annotations)
 
     def _handle_overlay_mouse_press(self, event):
-        """Overlay-mode left-press: select nearest channel + begin Y-drag,
-        or deselect on a blank-area click. No-op outside overlay mode or
-        in cursor mode (cursor takes precedence, matching canvases.py:853).
-        Returns ``True`` when the gesture was consumed.
-
-        In box-zoom (RectMode) the handler returns ``False`` so the press
-        falls through to pyqtgraph and the rubber band starts (Fix A); the
-        nearest-curve select + Y-drag is kept ONLY in pan (PanMode).
-        """
-        if not self._overlay_mode or self._cursor_visible:
-            return False
-        try:
-            if event.button() != Qt.LeftButton:
-                return False
-            viewport_pos = event.pos()
-        except Exception:
-            return False
-        # A new interaction interrupts any in-flight drag-release glide.
-        self._stop_snap_anim()
-        scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        # Fix A: in box-zoom mode let the rubber band own the left press.
-        if self._press_view_box_in_rect_mode(scene_pos):
-            return False
-        axis_handle = self._overlay_axis_handle_at_scene_pos(scene_pos)
-        if axis_handle is not None:
-            name = self._channel_name_for_handle(axis_handle)
-            if name is None:
-                return False
-            self.select_overlay_channel(name)
-            start_y = self._scene_y_from_viewport_pos(viewport_pos)
-            if start_y is not None:
-                self._begin_overlay_y_drag_at(start_y_px=start_y)
-                self._overlay_dragging = True
-                self.disable_interactive_quality()
-                self._set_x_master_mouse_enabled(False)
-            return True
-        name = self._select_overlay_channel_from_scene_pos(scene_pos)
-        if name is None:
-            # Blank-area click → deselect (emits overlay_channel_selected(None)
-            # only when something was selected, via select_overlay_channel).
-            if self._selected_overlay_channel is not None:
-                self.select_overlay_channel(None)
-                return True
-            return False
-        self.select_overlay_channel(name)
-        # Begin the Y-drag from this scene Y; disable the X-master pan so
-        # the drag is Y-only.
-        start_y = self._scene_y_from_viewport_pos(viewport_pos)
-        if start_y is not None:
-            self._begin_overlay_y_drag_at(start_y_px=start_y)
-            self._overlay_dragging = True
-            self.disable_interactive_quality()
-            self._set_x_master_mouse_enabled(False)
-        return True
+        return OverlayAxisManager._handle_overlay_mouse_press(
+            self._overlay_axes,
+            event,
+        )
 
     def _handle_overlay_mouse_move(self, event):
-        """Apply a Y-drag while the left button is held during an overlay
-        drag. Returns ``True`` when the drag consumed the move."""
-        if not self._overlay_dragging:
-            return False
-        try:
-            if not (event.buttons() & Qt.LeftButton):
-                return False
-            viewport_pos = event.pos()
-        except Exception:
-            return False
-        cur_y = self._scene_y_from_viewport_pos(viewport_pos)
-        if cur_y is None:
-            return False
-        self._apply_overlay_y_drag_at(current_y_px=cur_y)
-        return True
+        return OverlayAxisManager._handle_overlay_mouse_move(
+            self._overlay_axes,
+            event,
+        )
 
     def _handle_overlay_mouse_release(self, event):
-        """End a live overlay Y-drag and re-enable the X-master pan."""
-        if not self._overlay_dragging:
-            return False
-        self._overlay_dragging = False
-        self._overlay_y_drag_start = None
-        self._set_x_master_mouse_enabled(True)
-        # Glide the selected channel to the nearest grid division (animated
-        # so the release is not a jump; falls back to a synchronous snap
-        # when _snap_anim_ms <= 0 or the channel is already aligned).
-        selected_ax = self._selected_overlay_axes()
-        self._animate_overlay_snap(selected_ax)
-        self.schedule_idle_quality()
-        return True
+        return OverlayAxisManager._handle_overlay_mouse_release(
+            self._overlay_axes,
+            event,
+        )
 
     def get_statistics(self, time_range=None):
         """Read RAW arrays from ``channel_data`` (design §4.2 invariant).
@@ -3852,200 +1501,85 @@ class TimeDomainCanvasPG(QWidget):
         # Intentionally no widget installed. self.span_selector stays None.
 
     def set_tick_density(self, x, y):
-        """Apply inspector-controlled tick density to PG axes.
-
-        Use pyqtgraph's adaptive density knob instead of explicit
-        ``setTickSpacing``. Fixed major/minor spacing is range-stale after
-        auto-range and makes the minor level labelable, which can produce dense
-        tick-label piles and very slow repaint on channel rebuilds.
-        """
-        try:
-            x_n = max(3, int(x))
-            y_n = max(3, int(y))
-        except Exception:
-            x_n, y_n = self._tick_density
-        self._tick_density = (x_n, y_n)
-        if self._overlay_mode:
-            self._overlay_divisions = max(3, min(20, int(y_n)))
-            self._build_overlay_y_grid()
-            self._repin_overlay_channel_ticks()
-            self._apply_target_x_ticks_to_all_axes()
-            self._refresh = True
-            self.draw_idle()
-            return
-        self._apply_tick_density_to_all_axes()
-        # Tick density changes tick-label text → left-axis auto-width, which
-        # re-skews subplot left edges; re-unify after applying density.
-        self._unify_subplot_left_axis_widths()
-        self._unify_subplot_bottom_axis_heights()
-        self._refresh = True
-        self.draw_idle()
+        return TickDensityController.set_tick_density(
+            self._tick_density_controller,
+            x,
+            y,
+        )
 
     def _apply_tick_density_to_all_axes(self):
-        _x_n, y_n = self._tick_density
-        y_density = max(0.35, min(3.0, float(y_n) / 6.0))
-        self._apply_target_x_ticks_to_all_axes()
-        for handle in self.axes_list:
-            y_axis = handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
-            self._apply_axis_tick_density(y_axis, y_density)
+        return TickDensityController._apply_tick_density_to_all_axes(
+            self._tick_density_controller
+        )
 
     def _apply_target_x_ticks_to_all_axes(self):
-        seen = set()
-        for handle in self._x_tick_axis_handles():
-            axis = handle.x_axis_item() if hasattr(handle, "x_axis_item") else None
-            if axis is None:
-                continue
-            key = id(axis)
-            if key in seen:
-                continue
-            seen.add(key)
-            self._apply_target_x_ticks(axis, handle)
+        return TickDensityController._apply_target_x_ticks_to_all_axes(
+            self._tick_density_controller
+        )
 
     def _x_tick_axis_handles(self):
-        handles = list(self.axes_list)
-        if self._overlay_mode and self._x_master_handle is not None:
-            handles.insert(0, self._x_master_handle)
-        return handles
+        return TickDensityController._x_tick_axis_handles(self._tick_density_controller)
 
     def _apply_target_x_ticks(self, axis, handle):
-        try:
-            lo, hi = handle.get_xlim()
-            axis_width = float(axis.size().width())
-        except Exception:
-            self._reset_x_ticks_to_adaptive(axis)
-            return
-        ticks = self._compute_target_x_ticks(axis, float(lo), float(hi), axis_width)
-        if not ticks:
-            self._reset_x_ticks_to_adaptive(axis)
-            return
-        try:
-            axis.setStyle(maxTickLevel=0)
-            axis.setTicks([ticks, []])
-        except Exception:
-            self._reset_x_ticks_to_adaptive(axis)
+        return TickDensityController._apply_target_x_ticks(
+            self._tick_density_controller,
+            axis,
+            handle,
+        )
 
     def _reset_x_ticks_to_adaptive(self, axis):
-        try:
-            axis.setTicks(None)
-        except Exception:
-            pass
-        self._apply_axis_tick_density(
+        return TickDensityController._reset_x_ticks_to_adaptive(
+            self._tick_density_controller,
             axis,
-            max(0.35, min(3.0, float(self._tick_density[0]) / 10.0)),
         )
 
     def _compute_target_x_ticks(self, axis, lo, hi, axis_width):
-        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-            return []
-        if axis_width <= 1.0:
-            return []
-
-        target = max(_TARGET_X_TICK_MIN_COUNT, int(self._tick_density[0]))
-        raw_step = (hi - lo) / max(1, target - 1)
-        candidates = []
-        for step in self._nice_x_tick_steps(raw_step):
-            values = self._x_tick_values_for_step(lo, hi, step)
-            if len(values) < _TARGET_X_TICK_MIN_COUNT:
-                continue
-            labels = self._format_x_tick_labels(axis, values, step)
-            fit = self._fit_x_tick_labels(values, labels, lo, hi, axis_width)
-            if not fit:
-                continue
-            fit_values, fit_labels = fit
-            candidates.append((
-                abs(len(fit_values) - target),
-                -len(fit_values),
-                abs(math.log(step / raw_step)) if raw_step > 0 else 0.0,
-                step,
-                fit_values,
-                fit_labels,
-            ))
-
-        if not candidates:
-            return []
-        _distance, _neg_count, _nice_distance, _step, values, labels = min(candidates)
-        return [(float(value), str(label)) for value, label in zip(values, labels)]
+        return TickDensityController._compute_target_x_ticks(
+            self._tick_density_controller,
+            axis,
+            lo,
+            hi,
+            axis_width,
+        )
 
     def _nice_x_tick_steps(self, raw_step):
-        if not np.isfinite(raw_step) or raw_step <= 0:
-            return []
-        exponent = math.floor(math.log10(raw_step))
-        bases = []
-        for exp in range(exponent - 2, exponent + 4):
-            scale = 10.0 ** exp
-            for factor in _TARGET_X_TICK_NICE_FACTORS:
-                step = factor * scale
-                if step > 0:
-                    bases.append(step)
-        return sorted(set(bases), key=lambda step: abs(math.log(step / raw_step)))
+        return TickDensityController._nice_x_tick_steps(
+            self._tick_density_controller,
+            raw_step,
+        )
 
     def _x_tick_values_for_step(self, lo, hi, step):
-        start = math.ceil(lo / step) * step
-        values = []
-        value = start
-        guard = 0
-        while value <= hi + step * 1e-9 and guard < 500:
-            if value >= lo - step * 1e-9:
-                values.append(0.0 if abs(value) < step * 1e-10 else float(value))
-            value += step
-            guard += 1
-        return values
+        return TickDensityController._x_tick_values_for_step(
+            self._tick_density_controller,
+            lo,
+            hi,
+            step,
+        )
 
     def _format_x_tick_labels(self, axis, values, spacing):
-        try:
-            return axis.tickStrings(values, getattr(axis, "scale", 1.0), spacing)
-        except Exception:
-            return [f"{value:g}" for value in values]
+        return TickDensityController._format_x_tick_labels(
+            self._tick_density_controller,
+            axis,
+            values,
+            spacing,
+        )
 
     def _fit_x_tick_labels(self, values, labels, lo, hi, axis_width):
-        metrics = QFontMetrics(_pg_chart_font(9))
-        span = hi - lo
-        fit_values = []
-        fit_labels = []
-        previous_right = None
-        for value, label in zip(values, labels):
-            x = (float(value) - lo) / span * axis_width
-            text = str(label)
-            try:
-                width = float(metrics.horizontalAdvance(text))
-            except AttributeError:  # pragma: no cover - older Qt fallback
-                width = float(metrics.width(text))
-            left = x - width / 2.0
-            right = x + width / 2.0
-            if left < _TARGET_X_TICK_EDGE_PAD_PX:
-                continue
-            if right > axis_width - _TARGET_X_TICK_EDGE_PAD_PX:
-                continue
-            if previous_right is not None and left - previous_right < _TARGET_X_TICK_MIN_GAP_PX:
-                return None
-            fit_values.append(float(value))
-            fit_labels.append(text)
-            previous_right = right
-        if len(fit_values) < _TARGET_X_TICK_MIN_COUNT:
-            return None
-        return fit_values, fit_labels
+        return TickDensityController._fit_x_tick_labels(
+            self._tick_density_controller,
+            values,
+            labels,
+            lo,
+            hi,
+            axis_width,
+        )
 
     def _apply_axis_tick_density(self, axis, density):
-        if axis is None:
-            return
-        set_style = getattr(axis, "setStyle", None)
-        if callable(set_style):
-            try:
-                set_style(maxTickLevel=0)
-            except Exception:
-                pass
-        reset_spacing = getattr(axis, "setTickSpacing", None)
-        if callable(reset_spacing):
-            try:
-                reset_spacing()
-            except Exception:
-                pass
-        set_density = getattr(axis, "setTickDensity", None)
-        if callable(set_density):
-            try:
-                set_density(float(density))
-            except Exception:
-                pass
+        return TickDensityController._apply_axis_tick_density(
+            self._tick_density_controller,
+            axis,
+            density,
+        )
 
     # ------------------------------------------------------------------
     # Chart-options dialog (Fix 1: parity with the matplotlib path's
@@ -4231,50 +1765,13 @@ class TimeDomainCanvasPG(QWidget):
             pass
 
     def _sync_overlay_aux_viewboxes(self):
-        if not self._overlay_aux_viewboxes or self._primary_xaxis_ax is None:
-            return
-        primary_vb = self._primary_xaxis_ax.view_box
-        if primary_vb is None:
-            return
-        try:
-            rect = primary_vb.sceneBoundingRect()
-        except Exception:
-            return
-        for aux_vb in list(self._overlay_aux_viewboxes):
-            try:
-                aux_vb.setGeometry(rect)
-            except Exception:
-                continue
-            try:
-                xlo, xhi = self._primary_xaxis_ax.get_xlim()
-                aux_vb.setXRange(float(xlo), float(xhi), padding=0)
-            except Exception:
-                pass
+        return OverlayAxisManager._sync_overlay_aux_viewboxes(self._overlay_axes)
 
     def _connect_overlay_view_sync(self):
-        self._disconnect_overlay_view_sync()
-        if self._primary_xaxis_ax is None or not self._overlay_aux_viewboxes:
-            return
-        primary_vb = self._primary_xaxis_ax.view_box
-        if primary_vb is None or not hasattr(primary_vb, "sigResized"):
-            return
-
-        def _handler(*_args):
-            self._sync_overlay_aux_viewboxes()
-
-        try:
-            primary_vb.sigResized.connect(_handler)
-            self._overlay_view_sync_conns.append((primary_vb, _handler))
-        except Exception:
-            pass
+        return OverlayAxisManager._connect_overlay_view_sync(self._overlay_axes)
 
     def _disconnect_overlay_view_sync(self):
-        for vb, handler in self._overlay_view_sync_conns:
-            try:
-                vb.sigResized.disconnect(handler)
-            except Exception:
-                pass
-        self._overlay_view_sync_conns = []
+        return OverlayAxisManager._disconnect_overlay_view_sync(self._overlay_axes)
 
     def invalidate_envelope_cache(self, reason: str, *, data_id=None, channel=None):
         """Drop curve-layer cache entries.
@@ -4484,184 +1981,19 @@ class TimeDomainCanvasPG(QWidget):
             self._refresh_pending = False
 
     def _current_pixel_width(self) -> int:
-        """Pixel width of the primary chart area (used as the envelope
-        bucket count)."""
-        primary = self._primary_xaxis_ax
-        if primary is None:
-            return self.MAX_PTS
-        vb = primary.view_box
-        if vb is None:
-            return self.MAX_PTS
-        try:
-            rect = vb.sceneBoundingRect()
-            w = int(max(1, rect.width()))
-            return w
-        except Exception:
-            return self.MAX_PTS
+        return self._renderer._current_pixel_width()
 
     def _refresh_visible_data(self):
-        """Recompute and display the viewport envelope for every channel."""
-        self._refresh_pending = False
-        if not self._channel_lines or self._primary_xaxis_ax is None:
-            return
-        try:
-            xlim = self._primary_xaxis_ax.get_xlim()
-        except Exception:
-            return
-        pixel_width = self._current_pixel_width()
-
-        for name, (axis_facade, line_facade) in list(self._channel_lines.items()):
-            entry = self.channel_data.get(name)
-            if entry is None:
-                continue
-            t, sig, color, _unit = entry
-
-            # Range-key gate: if the key didn't change since the last flush,
-            # skip the envelope+setData work entirely. This keeps repeated
-            # _flush_pending_refresh() calls with the same xlim a no-op.
-            range_key = _quantize_range_key(name, xlim, pixel_width)
-            if self._last_range_key.get(name) == range_key:
-                continue
-
-            is_monotonic = self._channel_is_monotonic.get(name)
-            try:
-                env_t, env_s = positions_envelope(
-                    t, sig,
-                    xlim=xlim,
-                    pixel_width=pixel_width,
-                    is_monotonic=is_monotonic,
-                )
-            except Exception as exc:
-                _log.warning(
-                    "positions_envelope failed for %r at xlim=%r: %s",
-                    name, xlim, exc,
-                )
-                continue
-
-            self._last_range_key[name] = range_key
-
-            try:
-                line_facade.plot_data_item.setData(env_t, env_s)
-            except Exception as exc:
-                _log.warning("PlotDataItem.setData failed for %r: %s", name, exc)
-
-        # Debounced tail work: retick axes and notify listeners only once after
-        # rapid drag ticks settle, instead of blocking every mouse-move event.
-        self._apply_target_x_ticks_to_all_axes()
-        self._emit_xrange_changed()
-        self._refresh = True
-        self.schedule_idle_quality()
+        return self._renderer._refresh_visible_data()
 
     def _build_painter_path(self, t, s) -> QPainterPath:
-        """Build a ``QPainterPath`` from envelope output. We work in data
-        space here; the eventual blit translates to pixel space via the
-        ViewBox's transform. Building the path once per cache key means
-        repeated paint events (e.g. cursor overlay) do NOT re-walk the
-        envelope arrays.
-
-        Perf (T9): the all-finite case — which is the production hot path,
-        since :func:`positions_envelope` bails to the numpy reference on any
-        NaN in the visible window — is vectorized through
-        ``pyqtgraph.functions.arrayToQPath(x, y, connect='all')``. That
-        builds the ``QPainterPath`` from the numpy ``x``/``y`` arrays in C
-        (the same QPolygonF→addPolygon fast path ``PlotCurveItem`` uses
-        internally), replacing the pure-Python per-point
-        ``moveTo``/``lineTo`` loop that dominated the ~10.7 ms pan frame
-        (see signal-processing/2026-05-28-component-speedup-does-not-imply-
-        end-to-end-target). For all-finite input the resulting path is
-        byte-identical to the old loop (1 MoveTo + N-1 LineTo, same
-        coordinates, same order).
-
-        The NaN-gap path still goes through :meth:`_build_painter_path_loop`
-        unchanged, because ``arrayToQPath``'s ``connect='all'`` would bridge
-        the gap with a spurious line and its ``connect='finite'`` backfills
-        non-finite samples with their neighbour (extra duplicate elements)
-        and drops single-point chunks — neither reproduces the old loop's
-        break-the-subpath discontinuity geometry.
-        """
-        n = min(len(t), len(s))
-        if n == 0:
-            return QPainterPath()
-        t = np.asarray(t)
-        s = np.asarray(s)
-        # Fast path: >= 2 samples, all finite → vectorized C build.
-        # asammdf's min/max envelope over a finite window is finite, so
-        # this is the branch the production pan loop takes every frame.
-        # We require n >= 2 because arrayToQPath drops a lone point
-        # (elementCount 0), whereas the old loop emitted a bare moveTo
-        # (elementCount 1) — routing n < 2 through the loop keeps that
-        # degenerate single-point geometry byte-identical.
-        if n >= 2 and np.isfinite(t[:n]).all() and np.isfinite(s[:n]).all():
-            # arrayToQPath needs same-length contiguous float arrays; the
-            # envelope output is float64 but slice to n and enforce
-            # contiguity defensively (a view of a larger buffer would not
-            # be C-contiguous). finiteCheck=False because we just proved
-            # finiteness — this skips arrayToQPath's internal isfinite scan.
-            x = np.ascontiguousarray(t[:n], dtype=np.float64)
-            y = np.ascontiguousarray(s[:n], dtype=np.float64)
-            return pg.functions.arrayToQPath(x, y, connect="all",
-                                             finiteCheck=False)
-        # Slow path: NaN segments present — break the sub-path on each
-        # discontinuity, matches asammdf's handling. Byte-identical to the
-        # historical loop (T9 preserved this verbatim for gap parity).
-        return self._build_painter_path_loop(t, s, n)
+        return self._renderer._build_painter_path(t, s)
 
     def _build_painter_path_loop(self, t, s, n) -> QPainterPath:
-        """Pure-Python per-point builder used only when NaN gaps are
-        present. Kept byte-identical to the pre-T9 ``_build_painter_path``
-        loop so the discontinuity geometry (bare ``moveTo`` after a gap, no
-        element for NaN samples) is preserved exactly.
-        """
-        path = QPainterPath()
-        # Skip NaN segments by breaking the sub-path; matches asammdf's
-        # discontinuity handling.
-        started = False
-        for i in range(n):
-            ti = float(t[i])
-            si = float(s[i])
-            if not (np.isfinite(ti) and np.isfinite(si)):
-                started = False
-                continue
-            if not started:
-                path.moveTo(ti, si)
-                started = True
-            else:
-                path.lineTo(ti, si)
-        return path
+        return self._renderer._build_painter_path_loop(t, s, n)
 
     def _render_path_to_pixmap(self, path: QPainterPath, color: str, pixel_width: int) -> QPixmap:
-        """Render the QPainterPath into a QPixmap once per cache entry.
-
-        Antialiasing is OFF (matches asammdf strategy from design §5.2
-        evidence). The pixmap is sized to ``pixel_width × 200`` as a
-        proxy chart-area; T6 will plumb the actual ViewBox geometry once
-        the overlay/cursor layer lands.
-        """
-        height = 200
-        pix = QPixmap(max(1, pixel_width), height)
-        pix.fill(Qt.transparent)
-        # Painter on a 1×1 pixmap is a no-op; guard the degenerate case.
-        if pix.isNull() or pix.width() < 2 or pix.height() < 2:
-            return pix
-        try:
-            painter = QPainter(pix)
-            painter.setRenderHint(QPainter.Antialiasing, False)
-            pen = QPen()
-            try:
-                pen.setColor(pg.mkColor(color))
-            except Exception:
-                from PyQt5.QtGui import QColor
-                pen.setColor(QColor(color))
-            pen.setWidthF(1.0)
-            painter.setPen(pen)
-            painter.drawPath(path)
-            painter.end()
-        except Exception:
-            # Degenerate-rect fallback (pyqt-ui/2026-04-25-tightbbox-
-            # survives-offscreen-qt): a 1×1 transparent pixmap is still
-            # a valid QPixmap; callers test pix.isNull(), not contents.
-            pass
-        return pix
+        return self._renderer._render_path_to_pixmap(path, color, pixel_width)
 
     # ------------------------------------------------------------------
     # T6 — Overlay selection / emphasis (mirrors
@@ -4669,307 +2001,57 @@ class TimeDomainCanvasPG(QWidget):
     # ------------------------------------------------------------------
 
     def select_overlay_channel(self, name):
-        """Select an overlay channel as the per-series Y-drag target.
-
-        ``name=None`` clears the selection. Emits
-        ``overlay_channel_selected(name)`` once and ONLY when the
-        selection actually changes (matches matplotlib path's idempotent
-        gate at canvases.py:813-814 so the test asserting exactly two
-        emissions — select then deselect — holds).
-        """
-        if name is not None and name not in self._channel_lines:
-            return
-        if self._selected_overlay_channel == name:
-            return
-        self._selected_overlay_channel = name
-        self._apply_overlay_emphasis()
-        self.overlay_channel_selected.emit(name)
-        self.draw_idle()
+        return OverlayAxisManager.select_overlay_channel(self._overlay_axes, name)
 
     def _overlay_emphasis_for_channel(self, name):
-        """Return ``(line_width, alpha)`` currently displayed for ``name``.
-
-        Used by tests to make a two-frame state-change assertion on the
-        per-channel emphasis without coupling to pyqtgraph internals.
-        """
-        pair = self._channel_lines.get(name)
-        if pair is None:
-            return (None, None)
-        _axis_facade, line_facade = pair
-        pdi = line_facade.plot_data_item
-        # Pull pen width + alpha from the PlotDataItem.
-        opts = getattr(pdi, "opts", {}) or {}
-        pen = opts.get("pen")
-        width = 1.0
-        alpha = 1.0
-        try:
-            from PyQt5.QtGui import QPen
-            if isinstance(pen, QPen):
-                width = float(pen.widthF() or 1.0)
-        except Exception:
-            pass
-        try:
-            opacity = pdi.opacity()
-            if opacity is not None:
-                alpha = float(opacity)
-        except Exception:
-            pass
-        return (width, alpha)
+        return OverlayAxisManager._overlay_emphasis_for_channel(
+            self._overlay_axes,
+            name,
+        )
 
     def _apply_overlay_emphasis(self):
-        """Walk every channel and set line width + alpha to match the
-        current selection state. Matches
-        canvases.py:_apply_overlay_selection_style.
-        """
-        selected = self._selected_overlay_channel
-        for name, (_axis_facade, line_facade) in self._channel_lines.items():
-            pdi = line_facade.plot_data_item
-            if not self._overlay_mode or selected is None:
-                self._apply_pdi_emphasis(
-                    pdi, width=self._overlay_default_lw,
-                    alpha=self._overlay_default_alpha,
-                )
-                continue
-            is_selected = (name == selected)
-            if is_selected:
-                self._apply_pdi_emphasis(
-                    pdi, width=self._overlay_selected_lw,
-                    alpha=self._overlay_selected_alpha,
-                )
-            else:
-                self._apply_pdi_emphasis(
-                    pdi, width=self._overlay_de_emphasised_lw,
-                    alpha=self._overlay_de_emphasised_alpha,
-                )
+        return OverlayAxisManager._apply_overlay_emphasis(self._overlay_axes)
 
     def _apply_pdi_emphasis(self, pdi, *, width, alpha):
-        """Set line width (via pen) + alpha on a single PlotDataItem.
-
-        Antialiasing stays OFF so the asammdf-style cached pixmap
-        strategy (design §5.2) is preserved.
-        """
-        try:
-            opts = getattr(pdi, "opts", {}) or {}
-            pen = opts.get("pen")
-            color = None
-            try:
-                from PyQt5.QtGui import QPen
-                if isinstance(pen, QPen):
-                    color = pen.color()
-            except Exception:
-                color = None
-            if color is None:
-                # Fall back to mkColor on the stored color name.
-                try:
-                    color = pg.mkColor(pen)
-                except Exception:
-                    color = None
-            if color is None:
-                pdi.setPen(pg.mkPen(width=float(width)))
-            else:
-                pdi.setPen(pg.mkPen(color=color, width=float(width)))
-        except Exception:
-            pass
-        try:
-            pdi.setOpacity(float(alpha))
-        except Exception:
-            pass
+        return OverlayAxisManager._apply_pdi_emphasis(
+            self._overlay_axes,
+            pdi,
+            width=width,
+            alpha=alpha,
+        )
 
     # ------------------------------------------------------------------
     # T6 — Selected-channel Y drag.
     # ------------------------------------------------------------------
 
     def _begin_overlay_y_drag_at(self, *, start_y_px):
-        """Capture the (pixel, ylim) pair so the next drag-apply can
-        compute the shift. Mirrors canvases.py:_begin_overlay_y_drag.
-        """
-        ax = self._selected_overlay_axes()
-        if ax is None:
-            self._overlay_y_drag_start = None
-            return
-        try:
-            lo, hi = ax.get_ylim()
-        except Exception:
-            self._overlay_y_drag_start = None
-            return
-        self._overlay_y_drag_start = (float(start_y_px), (float(lo), float(hi)))
+        return OverlayAxisManager._begin_overlay_y_drag_at(
+            self._overlay_axes,
+            start_y_px=start_y_px,
+        )
 
     def _apply_overlay_y_drag_at(self, *, current_y_px):
-        """Apply the pan implied by a Y drag from start to ``current_y_px``.
-
-        Returns ``True`` when a ylim shift was applied, ``False``
-        otherwise. Mirrors canvases.py:_update_overlay_y_drag, except we
-        derive the pixel height from the ViewBox's sceneBoundingRect
-        rather than ``ax.bbox.height``.
-        """
-        if self._overlay_y_drag_start is None:
-            return False
-        ax = self._selected_overlay_axes()
-        if ax is None:
-            self._overlay_y_drag_start = None
-            return False
-        start_y, (lo, hi) = self._overlay_y_drag_start
-        # Pixel height of the selected ViewBox.
-        vb = ax.view_box
-        height = 1.0
-        if vb is not None:
-            try:
-                rect = vb.sceneBoundingRect()
-                height = max(float(rect.height()), 1.0)
-            except Exception:
-                height = 1.0
-        dy_px = float(current_y_px) - float(start_y)
-        shift = -dy_px * (hi - lo) / height
-        # Symmetric overlay layout (Problem 3): the selected channel now
-        # lives on its OWN aux ViewBox, NOT on the X-master ViewBox, so a
-        # ``set_ylim`` here cannot perturb the shared X range — the prior
-        # X-pin capture/restore around this mutation is dead and removed.
-        # (Verified byte-exact by the X-stability assertions in
-        # tests/ui/test_chart_stack.py and tests/ui/test_pg_timedomain_canvas.py.)
-        try:
-            ax.set_ylim(lo + shift, hi + shift)
-        except Exception:
-            return False
-        self.visible_range_changed.emit()
-        self._refresh = True
-        self.draw_idle()
-        return True
+        return OverlayAxisManager._apply_overlay_y_drag_at(
+            self._overlay_axes,
+            current_y_px=current_y_px,
+        )
 
     def _selected_overlay_axes(self):
-        """Return the axis facade associated with the selected channel.
-
-        Overlay mode now mirrors matplotlib twinx: every channel has its
-        own Y-axis handle, so a selected-channel Y drag only moves that
-        channel's ViewBox.
-        """
-        if self._selected_overlay_channel is None:
-            return None
-        pair = self._channel_lines.get(self._selected_overlay_channel)
-        if pair is None:
-            return None
-        axis_handle, _line_handle = pair
-        return axis_handle
+        return OverlayAxisManager._selected_overlay_axes(self._overlay_axes)
 
     # ------------------------------------------------------------------
     # T6 — Modifier-aware wheel dispatch.
     # ------------------------------------------------------------------
 
     def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos, view_box=None):
-        """Central wheel dispatch routed from ``_ModifierWheelViewBox``.
-
-        Behavior matches canvases.py:_on_scroll (lines 1501-1515):
-
-        - delta > 0 → factor 0.85 (zoom in / pan up)
-        - delta < 0 → factor 1/0.85 (zoom out / pan down)
-        - Ctrl + wheel  → zoom X about ``x_pos``
-        - Shift + wheel → zoom Y about ``y_pos``
-        - plain wheel   → pan Y by 10 % of span per step
-
-        Returns ``True`` if consumed, ``False`` otherwise (caller falls
-        back to default ViewBox behavior).
-        """
-        # Matplotlib uses step = +/-1; here Qt uses delta in units of 120.
-        step = 1 if delta > 0 else -1 if delta < 0 else 0
-        if step == 0:
-            return False
-        # Match matplotlib factor (canvases.py:1507).
-        factor = 0.85 if step > 0 else 1.0 / 0.85
-
-        ctrl = bool(modifiers & Qt.ControlModifier)
-        shift = bool(modifiers & Qt.ShiftModifier)
-        self.disable_interactive_quality()
-
-        if getattr(self, "_overlay_mode", False) and not ctrl:
-            target = self._selected_overlay_axes()
-            if target is None:
-                self.overlay_y_needs_selection.emit()
-                self.schedule_idle_quality()
-                return True
-            try:
-                lo, hi = target.get_ylim()
-            except Exception:
-                return True
-            n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
-            span = hi - lo
-            if not math.isfinite(span) or span <= 0:
-                bottom, top, ticks = _frame_to_nice(lo, hi, n)
-            elif shift:
-                try:
-                    anchor = float(y_pos)
-                except Exception:
-                    anchor = (lo + hi) / 2.0
-                if not math.isfinite(anchor):
-                    anchor = (lo + hi) / 2.0
-                x_master_vb = (
-                    getattr(self._x_master_handle, "view_box", None)
-                    if self._x_master_handle is not None
-                    else None
-                )
-                if (
-                    0.0 <= anchor <= 1.0
-                    and (view_box is None or view_box is x_master_vb)
-                ):
-                    anchor = lo + anchor * span
-                current_per_div = span / n
-                next_per_div = _adjacent_nice_step(
-                    current_per_div,
-                    -1 if step > 0 else 1,
-                )
-                if next_per_div is None:
-                    next_per_div = current_per_div * factor
-                ratio = max(0.0, min(1.0, (anchor - lo) / span))
-                framed_span = max(next_per_div, (n - 1) * next_per_div)
-                new_lo = anchor - ratio * framed_span
-                new_hi = anchor + (1.0 - ratio) * framed_span
-                bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
-            else:
-                per_div = span / n
-                bottom = lo + step * per_div
-                top = hi + step * per_div
-                ticks = [bottom + k * per_div for k in range(n + 1)]
-            try:
-                target.set_ylim(bottom, top)
-                axis = target.y_axis_item() if hasattr(target, "y_axis_item") else None
-                if axis is not None:
-                    axis.setStyle(maxTickLevel=0)
-                    axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
-            except Exception:
-                return True
-            self.visible_range_changed.emit()
-            self._refresh = True
-            self.draw_idle()
-            self.schedule_idle_quality()
-            return True
-
-        target = self._axis_handle_for_view_box(view_box) or self._primary_xaxis_ax
-        if target is None:
-            return False
-
-        try:
-            if ctrl:
-                lo, hi = target.get_xlim()
-                c = float(x_pos) if np.isfinite(x_pos) else (lo + hi) / 2.0
-                new_lo = c - (c - lo) * factor
-                new_hi = c + (hi - c) * factor
-                target.set_xlim(new_lo, new_hi)
-            elif shift:
-                lo, hi = target.get_ylim()
-                c = float(y_pos) if np.isfinite(y_pos) else (lo + hi) / 2.0
-                new_lo = c - (c - lo) * factor
-                new_hi = c + (hi - c) * factor
-                target.set_ylim(new_lo, new_hi)
-            else:
-                lo, hi = target.get_ylim()
-                d = (hi - lo) * 0.1 * step
-                target.set_ylim(lo + d, hi + d)
-        except Exception:
-            return False
-
-        self.visible_range_changed.emit()
-        self._refresh = True
-        self.draw_idle()
-        self.schedule_idle_quality()
-        return True
+        return OverlayAxisManager._handle_wheel_dispatch(
+            self._overlay_axes,
+            delta=delta,
+            modifiers=modifiers,
+            x_pos=x_pos,
+            y_pos=y_pos,
+            view_box=view_box,
+        )
 
     # ------------------------------------------------------------------
     # T6 — Cursor HTML emission (byte-for-byte parity with
@@ -4977,112 +2059,17 @@ class TimeDomainCanvasPG(QWidget):
     # ------------------------------------------------------------------
 
     def _emit_single_cursor_html(self, x):
-        """Build and emit the single-cursor HTML payload exactly the
-        same way canvases.py:_update_single does (lines 1434-1448).
-
-        We do NOT call any pyqtgraph paint helpers here — this is the
-        DATA-ONLY emit path the tests use to compare strings. The live
-        UI's hover handler will call this plus an overlay-line update.
-        """
-        sep = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>')
-        parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
-        for ch, (tf, sf, color, u) in self.channel_data.items():
-            if len(tf):
-                idx = min(np.searchsorted(tf, x), len(sf) - 1)
-                unit_s = f" {u}" if u else ""
-                parts.append(_format_single_cursor_channel_html(ch, sf[idx], unit_s, color))
-        self.cursor_info.emit(sep.join(parts))
+        return CursorController._emit_single_cursor_html(self._cursor, x)
 
     def _emit_dual_cursor_html(self):
-        """Build and emit cursor_info + dual_cursor_info exactly the same
-        way canvases.py:_update_dual does (lines 1450-1499).
-
-        Reuses the module-level ``_format_dual_html`` helper imported
-        from ``canvases.py`` so the bytes cannot drift —
-        ``codex-plan-spec-literal-evidence`` is satisfied by import,
-        not by reimplementation.
-        """
-        info, dual = [], []
-        extreme_points = []
-        if self._ax is not None:
-            info.append(f"A={self._ax:.4f}s")
-        if self._bx is not None:
-            info.append(f"B={self._bx:.4f}s")
-        if self._ax is not None and self._bx is not None:
-            dx = self._bx - self._ax
-            info.append(f"ΔT={dx:.4f}s")
-            if abs(dx) > 1e-12:
-                info.append(f"1/ΔT={1 / abs(dx):.2f}Hz")
-            xlo, xhi = min(self._ax, self._bx), max(self._ax, self._bx)
-            for ch, (tf, sf, color, u) in self.channel_data.items():
-                if not len(tf):
-                    continue
-                m = (tf >= xlo) & (tf <= xhi)
-                seg = sf[m]
-                if not len(seg):
-                    continue
-                segment_indices = np.flatnonzero(m)
-                finite = np.isfinite(seg)
-                if np.any(finite):
-                    finite_segment = seg[finite]
-                    finite_indices = segment_indices[finite]
-                    min_idx = int(finite_indices[int(np.argmin(finite_segment))])
-                    max_idx = int(finite_indices[int(np.argmax(finite_segment))])
-                    extreme_points.append((
-                        ch,
-                        float(tf[min_idx]),
-                        float(sf[min_idx]),
-                        float(tf[max_idx]),
-                        float(sf[max_idx]),
-                    ))
-                u_suffix = f" {u}" if u else ""
-                delta = _interp_cursor_value(tf, sf, self._bx) - _interp_cursor_value(
-                    tf, sf, self._ax
-                )
-                dual.append((
-                    ch,
-                    float(np.min(seg)),
-                    float(np.max(seg)),
-                    float(np.mean(seg)),
-                    float(delta),
-                    u_suffix,
-                    color,
-                ))
-        if info:
-            primary_html = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
-                            .join(f'<span style="color:#111827;">{p}</span>' for p in info))
-        else:
-            primary_html = "Click A"
-        self.cursor_info.emit(primary_html)
-        self.dual_cursor_info.emit(_format_dual_html(dual) if dual else "")
-        self.dual_cursor_rows.emit(dual if dual else [])
-        if self._ax is not None and self._bx is not None:
-            self._update_dual_cursor_extreme_markers(extreme_points)
-        else:
-            self._hide_dual_cursor_extreme_markers()
+        return CursorController._emit_dual_cursor_html(self._cursor)
 
     def _cursor_x_to_pixmap_x(self, data_x, pixmap_width):
-        """Map a data-space cursor X to pixel-x in the grabbed pixmap.
-
-        Used by the screenshot geometry test to assert the cursor pill
-        position is contained in the pixmap bbox. The mapping uses the
-        primary axis's current xlim → simple linear interpolation across
-        the full pixmap width. (The actual chart area is narrower than
-        the pixmap because of left/right axis gutters, but that is
-        irrelevant to the bbox-contains gate.)
-        """
-        primary = self._primary_xaxis_ax
-        if primary is None:
-            return 0.0
-        try:
-            lo, hi = primary.get_xlim()
-        except Exception:
-            return 0.0
-        if hi <= lo:
-            return 0.0
-        frac = (float(data_x) - lo) / (hi - lo)
-        frac = max(0.0, min(1.0, frac))
-        return frac * float(pixmap_width)
+        return CursorController._cursor_x_to_pixmap_x(
+            self._cursor,
+            data_x,
+            pixmap_width,
+        )
 
     # ------------------------------------------------------------------
     # T6 — Subplot inside-label placement
@@ -5443,343 +2430,41 @@ class TimeDomainCanvasPG(QWidget):
     # ------------------------------------------------------------------
 
     def _collect_curve_items(self):
-        """Every ``PlotCurveItem`` on the scene — the painted line of each
-        PlotDataItem. Returns ``[]`` if the scene cannot be reached."""
-        try:
-            scene = self._glw.scene()
-        except Exception:
-            scene = None
-        if scene is None:
-            return []
-        return [it for it in scene.items() if isinstance(it, pg.PlotCurveItem)]
+        return self._quality._collect_curve_items()
 
     def _set_curves_antialias(self, on: bool) -> int:
-        """Persistently set curve AA without repainting or changing data."""
-        n = 0
-        for it in self._collect_curve_items():
-            try:
-                it.opts["antialias"] = bool(on)
-                n += 1
-            except Exception:
-                pass
-        return n
+        return self._quality._set_curves_antialias(on)
 
     def _set_curves_cache_mode(self, mode) -> None:
-        """Set the QGraphicsItem cache mode on every curve item.
-
-        Fix D (2026-05-31): ``DeviceCoordinateCache`` lets hover /
-        ``draw_idle`` blit the cached device-coordinate bitmap of the
-        overlaid AA curves instead of re-rasterizing them every frame.
-        The cache MUST be cleared (``NoCache``) on any range / geometry /
-        resize / replot change, all of which converge on
-        ``disable_interactive_quality`` (verified callers: _on_xrange_changed,
-        reset_view_to_data_extents, the overlay Y-drag, the box-zoom hook,
-        wheel zoom, and rebuild's AA reset).
-        """
-        for it in self._collect_curve_items():
-            try:
-                it.setCacheMode(mode)
-            except Exception:
-                pass
+        return self._quality._set_curves_cache_mode(mode)
 
     def disable_interactive_quality(self):
-        """Force the interactive path back to AA-off and cancel idle upgrade."""
-        try:
-            self._idle_aa_timer.stop()
-        except Exception:
-            pass
-        if not getattr(self, "_idle_aa_on", False):
-            return
-        self._set_curves_antialias(False)
-        # Fix D: a stale device-coordinate cache would smear during the
-        # pan/zoom that this call precedes — drop it in lockstep with AA.
-        # ALWAYS NoCache, in BOTH modes: even though only subplot ever sets
-        # DeviceCoordinateCache, clearing unconditionally guarantees no stale
-        # cache survives a subplot→overlay mode switch (cheap no-op when none
-        # was set).
-        self._set_curves_cache_mode(QGraphicsItem.NoCache)
-        self._idle_aa_on = False
-        try:
-            self._glw.update()
-        except Exception:
-            pass
+        return self._quality.disable_interactive_quality()
 
     def schedule_idle_quality(self):
-        """Re-arm the single-shot idle-AA timer after a settled interaction."""
-        try:
-            self._idle_aa_timer.start()
-        except Exception:
-            pass
+        return self._quality.schedule_idle_quality()
 
     def try_enable_idle_quality(self):
-        """Idle timer slot: enable curve AA once every hands-off gate passes."""
-        if self._idle_aa_on:
-            return
-        if not self._idle_quality_allowed():
-            return
-        if self._set_curves_antialias(True) > 0:
-            # Fix D (RECALIBRATED, subplot-only): DeviceCoordinateCache blits
-            # the cached device-coordinate bitmap on subsequent hover /
-            # draw_idle repaints instead of re-rasterizing. Measured 15–30×
-            # win for SUBPLOT (disjoint rows: 5×6000 AA-on 25.3 ms → 0.86 ms)
-            # but ZERO win for OVERLAY (its aux ViewBoxes fully overlap at one
-            # full-plot rect, so N full-size cache layers must alpha-composite
-            # every frame — the compositing cancels the rasterization saving,
-            # measured slightly WORSE). So cache subplot only; overlay relies
-            # entirely on the tight density budget above. NoCache is still set
-            # unconditionally on disable so no stale cache survives a mode swap.
-            if not getattr(self, "_overlay_mode", False):
-                self._set_curves_cache_mode(QGraphicsItem.DeviceCoordinateCache)
-            self._idle_aa_on = True
-            try:
-                self._glw.update()
-            except Exception:
-                pass
+        return self._quality.try_enable_idle_quality()
 
     def _idle_quality_allowed(self) -> bool:
-        """Return True only while the user is hands-off and density is safe."""
-        try:
-            if QApplication.mouseButtons() != Qt.NoButton:
-                return False
-        except Exception:
-            return False
-        if self._overlay_dragging:
-            return False
-        return self._idle_aa_density_ok()
+        return self._quality._idle_quality_allowed()
 
     def _idle_aa_density_ok(self) -> bool:
-        """Hysteresis density gate, branched on overlay vs subplot economics.
-
-        Fix C (2026-05-31, RECALIBRATED): the per-frame rasterization cost
-        differs structurally between the two modes, so the metric AND the
-        budget differ:
-
-        * OVERLAY (``self._overlay_mode``): metric = SUM of drawn points
-          across ALL curves. Every overlay curve lives on its own aux
-          ViewBox, but those aux ViewBoxes fully OVERLAP at the X-master's
-          full plot rect, so a single ``draw_idle`` / ``_glw.update``
-          re-rasterizes every overlaid curve as one region — the real cost
-          is their sum, not the single densest. (Per-VB MAX undercounted
-          overlay precisely because the distinct-but-overlapping aux
-          ViewBoxes made the MAX see only one curve.) This is the UNCACHED
-          path (Fix D's DeviceCoordinateCache gives no win on overlapping
-          full-rect layers), so the tight overlay budget is what gates the
-          measured-slow dense overlay (sum ≥ 9000 ≈ > 30 ms AA-on) to off.
-
-        * SUBPLOT / SINGLE: metric = MAX over rows of that row's drawn-point
-          sum. The rows are disjoint device rectangles and each subplot
-          curve carries a DeviceCoordinateCache (Fix D, subplot-only), so an
-          AA-on cached frame is ~0.3–0.9 ms at ANY width. The generous
-          subplot budget therefore lets a single maximized / 4K curve
-          (~7700-pt envelope) always get AA — fixing issue 1.
-
-        Any unreadable ``getData()`` fails closed (AA stays off). The
-        cold-start dead band is fixed by seeding the FIRST decision (and
-        the first after a resize / rebuild reset) via the OFF threshold
-        instead of inheriting the pessimistic initial ``False``; only
-        thereafter does the ON/OFF hysteresis hold a value parked inside
-        the band.
-        """
-        overlay = bool(getattr(self, "_overlay_mode", False))
-        if overlay:
-            on_budget = self._AA_OVERLAY_SEGMENT_ON
-            off_budget = self._AA_OVERLAY_SEGMENT_OFF
-        else:
-            on_budget = self._AA_SUBPLOT_SEGMENT_ON
-            off_budget = self._AA_SUBPLOT_SEGMENT_OFF
-
-        sums: dict = {}
-        total = 0
-        for it in self._collect_curve_items():
-            try:
-                xd, _ = it.getData()
-                n = 0 if xd is None else len(xd)
-            except Exception:
-                self._idle_aa_density_allowed = False
-                return False
-            total += n
-            try:
-                vb = it.getViewBox()
-            except Exception:
-                vb = None
-            key = id(vb) if vb is not None else None
-            sums[key] = sums.get(key, 0) + n
-
-        if overlay:
-            # Overlapping aux ViewBoxes → one repaint region → SUM.
-            metric = total
-        else:
-            # Disjoint rows → independent dirty rects → MAX over rows.
-            metric = max(sums.values()) if sums else 0
-
-        if not self._idle_aa_density_seeded:
-            # Cold start: a value at or below OFF is allowed; only a true
-            # over-budget metric seeds False. This breaks the old dead-band
-            # trap where a first metric in (ON, OFF] stuck at the initial
-            # pessimistic False forever.
-            self._idle_aa_density_allowed = metric <= off_budget
-            self._idle_aa_density_seeded = True
-        elif metric <= on_budget:
-            self._idle_aa_density_allowed = True
-        elif metric > off_budget:
-            self._idle_aa_density_allowed = False
-        # else: metric in the (ON, OFF] band → hold the previous value.
-        return bool(self._idle_aa_density_allowed)
+        return self._quality._idle_aa_density_ok()
 
     def _export_aa_affordable(self) -> bool:
-        """Return whether copy/export can afford forced curve antialiasing.
+        return self._quality._export_aa_affordable()
 
-        This mirrors the idle-AA metric (overlay = sum of all curve points;
-        subplot/single = max row point sum) but does not touch the idle-AA
-        hysteresis state. Dense multi-channel exports fail closed to the cheap
-        screen-state grab path.
-        """
-        overlay = bool(getattr(self, "_overlay_mode", False))
-        off_budget = (
-            self._AA_OVERLAY_SEGMENT_OFF if overlay else self._AA_SUBPLOT_SEGMENT_OFF
-        )
-        sums: dict = {}
-        total = 0
-        for it in self._collect_curve_items():
-            try:
-                xd, _ = it.getData()
-                n = 0 if xd is None else len(xd)
-            except Exception:
-                return False
-            total += n
-            try:
-                vb = it.getViewBox()
-            except Exception:
-                vb = None
-            key = id(vb) if vb is not None else None
-            sums[key] = sums.get(key, 0) + n
-        metric = total if overlay else (max(sums.values()) if sums else 0)
-        return metric <= off_budget
-
-    @contextmanager
     def _curves_antialiased(self):
-        """Temporarily enable antialiasing on every curve so an export grab
-        renders crisp edges, then restore the prior (interactive, AA-off)
-        state on exit.
-
-        Interactive panning keeps curve AA OFF for speed (commit 4734d7f4);
-        the soft/jagged export users compared unfavourably to matplotlib is a
-        direct consequence. This flips ``PlotCurveItem.opts['antialias']``
-        directly (NOT ``setData``), so the viewport-clipped envelope data is
-        left untouched, and reverts it the moment the grab is done — no
-        permanent perf regression on the pan hot path.
-        """
-        # Toggle the painter-hint opt ONLY — no setData / update / repaint.
-        # The grab forces a fresh paint that reads opts['antialias'] at paint
-        # time, so AA takes effect without invalidating geometry. Crucially we
-        # must NOT trigger a repaint here: that would run the viewport-aware
-        # envelope refresh, whose setData re-pushes data and clobbers the flag.
-        saved = []
-        for it in self._collect_curve_items():
-            try:
-                saved.append((it, it.opts.get("antialias", False)))
-                it.opts["antialias"] = True
-            except Exception:
-                pass
-        try:
-            yield
-        finally:
-            for it, prev in saved:
-                try:
-                    it.opts["antialias"] = bool(prev)
-                except Exception:
-                    pass
+        return self._quality._curves_antialiased()
 
     def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
-        """Return a ``QPixmap`` snapshot of the canvas.
-
-        ``scale`` (spec §E) renders the scene at a HIGHER resolution for
-        crisp, DPI-independent copy/save output. The effective factor is
-        capped by ``_capped_hidpi_scale`` (floor 1×, width ceiling
-        ``_HIDPI_MAX_WIDTH``) so export stays fast.
-
-        Order of attempts:
-        1. ``QWidget.grab()`` on the outer widget (covers GraphicsLayoutWidget
-           + any sibling overlays MainWindow may add later). For ``scale`` > 1
-           the grabbed bitmap is smoothly magnified to the capped target size.
-           This keeps interactive copy to one widget paint instead of a
-           screen-size grab plus a second high-DPI render in the click handler.
-        2. Direct ``self._glw.grab()`` if the outer grab returned null.
-        3. A 1×1 transparent fallback pixmap if both fail.
-
-        Step 3 is the degenerate-rect fallback the
-        ``2026-04-25-tightbbox-survives-offscreen-qt`` lesson prescribes:
-        callers MUST check ``pix.isNull()`` rather than assuming a
-        well-formed image. The degenerate fallback (and the isNull guard
-        on every primary attempt) is preserved at ``scale`` > 1 too — we
-        never default to a full-canvas-sized guess on a failed grab.
-        """
-        # Resolve the effective (capped) factor from the OUTER widget's
-        # current width — the same surface step 1 grabs. Dense exports keep
-        # the current screen rendering state and skip 2× magnification.
-        base_w = max(1, int(self.width()))
-        affordable = self._export_aa_affordable()
-        eff_scale = _capped_hidpi_scale(base_w, scale) if affordable else 1.0
-
-        def _grab_first_good():
-            for target in (self, getattr(self, "_glw", None)):
-                if target is None:
-                    continue
-                try:
-                    pix = self._grab_widget_scaled(target, eff_scale)
-                except Exception:
-                    pix = None
-                if pix is not None and not pix.isNull() and pix.width() > 0 and pix.height() > 0:
-                    return pix
-            return None
-
-        # Few-channel exports keep the crisp forced-AA path. Dense exports are
-        # what-you-see-is-what-you-get and avoid re-enabling AA for all curves.
-        if affordable:
-            with self._curves_antialiased():
-                pix = _grab_first_good()
-        else:
-            pix = _grab_first_good()
-        if pix is not None:
-            return pix
-        # Final fallback: a 1×1 transparent pixmap. Tests gate on
-        # geometry, not pixels, so this is acceptable when offscreen Qt
-        # cannot realize the widget at all. We do NOT scale this up — a
-        # 1×1 degenerate marker stays 1×1 so callers' isNull/size guards
-        # behave identically regardless of the requested scale.
-        fallback = QPixmap(1, 1)
-        fallback.fill(Qt.transparent)
-        return fallback
+        return self._renderer.grab_pixmap(scale=scale)
 
     @staticmethod
     def _grab_widget_scaled(widget, eff_scale: float) -> QPixmap:
-        """Grab ``widget`` at ``eff_scale``×.
-
-        At 1× this is exactly ``widget.grab()`` (unchanged legacy path).
-        Above 1× the same grabbed bitmap is smoothly scaled to
-        ``round(w*scale) × round(h*scale)`` so the copy path avoids a second
-        synchronous widget render. Returns a null pixmap when the widget has
-        no realizable geometry (caller guards on ``isNull()``).
-        """
-        # Always grab once first. This is the legacy capture primitive and
-        # the realizability probe: if the widget cannot be grabbed (null /
-        # zero-size — e.g. offscreen Qt could not realize it), we return
-        # that null result so grab_pixmap cascades to its 1×1 degenerate
-        # fallback instead of synthesizing a blank full-canvas QImage.
-        base = widget.grab()
-        if eff_scale <= 1.0:
-            return base
-        if base is None or base.isNull() or base.width() <= 0 or base.height() <= 0:
-            return base
-        w = int(widget.width())
-        h = int(widget.height())
-        if w <= 0 or h <= 0:
-            # No geometry to magnify — return the plain grab so the
-            # caller's null/size guard runs against the real result.
-            return base
-        tw = max(1, int(round(w * eff_scale)))
-        th = max(1, int(round(h * eff_scale)))
-        return base.scaled(tw, th, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        return Renderer._grab_widget_scaled(widget, eff_scale)
 
 
 __all__ = [

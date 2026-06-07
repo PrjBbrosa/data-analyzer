@@ -464,20 +464,22 @@ def _open_redesigned_menu(canvas, view_box, monkeypatch):
     return captured.get("menu")
 
 
-def _mouse_mode_actions(menu):
-    """Return (pan_action, zoom_action) from the reshaped 鼠标操作 submenu."""
-    mouse_menu = next(
-        a.menu() for a in menu.actions()
-        if a.text().replace("&", "").strip() == "鼠标操作"
-    )
-    acts = mouse_menu.actions()
-    return acts[0], acts[1]
+def _mouse_mode_buttons(menu):
+    """Return (pan_button, zoom_button) from the inline mouse-mode row."""
+    from PyQt5.QtWidgets import QToolButton, QWidgetAction
+
+    first = next(a for a in menu.actions() if not a.isSeparator())
+    assert isinstance(first, QWidgetAction)
+    widget = first.defaultWidget()
+    buttons = widget.findChildren(QToolButton)
+    by_tip = {button.toolTip(): button for button in buttons}
+    return by_tip["平移"], by_tip["框选"]
 
 
 def test_pg_context_menu_mouse_mode_syncs_toolbar_both_directions(
     qapp, qtbot, monkeypatch
 ):
-    """Design D single source of truth: selecting a 鼠标操作 menu item drives
+    """Design D single source of truth: selecting a mouse-mode menu row drives
     the SAME toolbar mode state machine (and its ViewBoxes), and re-opening
     the menu reflects whatever the toolbar currently is — both directions."""
     import pyqtgraph as pg
@@ -505,11 +507,11 @@ def test_pg_context_menu_mouse_mode_syncs_toolbar_both_directions(
 
     # ---- Direction 1: menu → toolbar ----
     menu = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
-    pan_act, zoom_act = _mouse_mode_actions(menu)
+    pan_btn, zoom_btn = _mouse_mode_buttons(menu)
     # Checkmark reflects current toolbar state (pan).
-    assert pan_act.isChecked() and not zoom_act.isChecked()
+    assert pan_btn.isChecked() and not zoom_btn.isChecked()
     # Selecting 框选 must flip the SHARED toolbar state + the ViewBoxes.
-    zoom_act.trigger()
+    zoom_btn.click()
     qapp.processEvents()
     assert str(toolbar.mode).lower() == "zoom"
     assert [b.state["mouseMode"] for b in view_boxes] == [pg.ViewBox.RectMode] * len(view_boxes)
@@ -519,8 +521,8 @@ def test_pg_context_menu_mouse_mode_syncs_toolbar_both_directions(
     qapp.processEvents()
     assert str(toolbar.mode).lower() == "pan"
     menu2 = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
-    pan_act2, zoom_act2 = _mouse_mode_actions(menu2)
-    assert pan_act2.isChecked() and not zoom_act2.isChecked()
+    pan_btn2, zoom_btn2 = _mouse_mode_buttons(menu2)
+    assert pan_btn2.isChecked() and not zoom_btn2.isChecked()
 
 
 def _flush_history_debounce(toolbar, qapp):

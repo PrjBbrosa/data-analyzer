@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pg_canvases 解耦重构 · 优化前后架构</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --ink:#1d2430; --muted:#5b6573; --line:#e2e6ec; --card:#ffffff;
+    --mono:'SF Mono',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+    --red:#d1495b; --red-bg:#fbeef0; --red-line:#eccfd4;
+    --green:#2f8f6b; --green-bg:#ecf6f1; --green-line:#cfe8dd;
+    --amber:#c98a14; --amber-bg:#fbf3e2;
+    --accent:#4759c4; --accent-bg:#eef0fb;
+    --core:#34406b; --core-bg:#e9ecf6;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',Roboto,'Helvetica Neue',sans-serif;
+    line-height:1.55;padding:40px 28px 80px}
+  .wrap{max-width:1180px;margin:0 auto}
+  header.top{margin-bottom:8px}
+  .kick{font:600 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:12px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 10px;letter-spacing:-.01em}
+  .verdict{font-size:16px;color:var(--muted);max-width:780px}
+  .verdict b{color:var(--ink)}
+  .meta{margin-top:14px;font:500 12.5px/1.6 var(--mono);color:var(--muted)}
+
+  .metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:30px 0 36px}
+  .metric{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 16px 14px}
+  .metric .n{font:700 26px/1 var(--mono);letter-spacing:-.02em}
+  .metric .l{font-size:12.5px;color:var(--muted);margin-top:7px}
+  .metric.alarm .n{color:var(--red)}
+
+  h2.sec{font-size:13px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);
+    margin:42px 0 16px;padding-bottom:9px;border-bottom:1px solid var(--line);font-weight:700}
+
+  .ba{display:grid;grid-template-columns:1fr 56px 1fr;gap:0;align-items:stretch}
+  .arrowcol{display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--accent)}
+  .arrowcol .a{font-size:26px;font-weight:700}
+  .arrowcol .t{writing-mode:vertical-rl;font:600 10px/1 var(--mono);letter-spacing:.12em;color:var(--muted);margin-top:8px;text-transform:uppercase}
+
+  .panel{border-radius:14px;padding:20px;border:1px solid}
+  .panel.before{background:var(--red-bg);border-color:var(--red-line)}
+  .panel.after{background:var(--green-bg);border-color:var(--green-line)}
+  .ptag{display:inline-flex;align-items:center;gap:7px;font:700 11px/1 var(--mono);letter-spacing:.1em;
+    text-transform:uppercase;padding:5px 9px;border-radius:6px;margin-bottom:14px}
+  .ptag.b{background:#fff;color:var(--red);border:1px solid var(--red-line)}
+  .ptag.a{background:#fff;color:var(--green);border:1px solid var(--green-line)}
+
+  .mono-h{font:700 14px/1.3 var(--mono)}
+  .sub{font-size:12px;color:var(--muted);margin:3px 0 14px}
+
+  /* BEFORE: god blob */
+  .blob{background:#fff;border:1.5px dashed var(--red);border-radius:11px;padding:14px}
+  .blob .lab{font:700 12px/1 var(--mono);color:var(--red);margin-bottom:11px;display:flex;justify-content:space-between}
+  .clusters{display:flex;flex-wrap:wrap;gap:5px}
+  .chip{font:600 11px/1 var(--mono);background:#fdf2f4;border:1px solid var(--red-line);color:#9a3647;
+    padding:4px 7px;border-radius:5px;white-space:nowrap}
+  .tangle{margin-top:13px;padding:10px 12px;background:#fdf2f4;border:1px solid var(--red-line);border-radius:8px;
+    font-size:12px;color:#8d3343}
+  .tangle b{font-family:var(--mono);font-size:11.5px}
+
+  /* AFTER: package */
+  .coord{background:var(--core-bg);border:1.5px solid var(--core);border-radius:11px;padding:13px 15px;margin-bottom:13px}
+  .coord .h{font:700 13px/1 var(--mono);color:var(--core);display:flex;justify-content:space-between;align-items:center}
+  .coord .d{font-size:11.5px;color:#4a5573;margin-top:7px}
+  .coord .fields{margin-top:9px;display:flex;flex-wrap:wrap;gap:4px}
+  .coord .fields .f{font:600 10.5px/1 var(--mono);background:#fff;border:1px solid #cfd6ea;color:var(--core);padding:3px 6px;border-radius:4px}
+  .collab{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .cc{background:#fff;border:1px solid var(--green-line);border-radius:8px;padding:10px 11px}
+  .cc .n{font:700 12px/1 var(--mono);color:var(--green)}
+  .cc .from{font:600 9.5px/1 var(--mono);color:var(--muted);float:right}
+  .cc .own{font-size:11px;color:var(--muted);margin-top:6px}
+  .pure{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
+  .pure .pm{font:600 11px/1 var(--mono);background:#eef0fb;border:1px solid #d3d9f3;color:var(--accent);padding:4px 8px;border-radius:5px}
+  .pure .cap{font:600 10px/1 var(--mono);color:var(--muted);align-self:center;letter-spacing:.08em;text-transform:uppercase;margin-right:2px}
+
+  /* coupling bar */
+  .couple{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:22px 24px}
+  .bar{display:flex;height:46px;border-radius:9px;overflow:hidden;border:1px solid var(--line)}
+  .seg{display:flex;flex-direction:column;justify-content:center;padding-left:14px;color:#fff}
+  .seg.s1{background:#5aa17f;flex:6}
+  .seg.s2{background:#e0a64b;flex:39;color:#3d2c08}
+  .seg.s3{background:#b05566;flex:21}
+  .seg .sn{font:700 14px/1 var(--mono)}
+  .seg .sl{font-size:10.5px;opacity:.92;margin-top:3px}
+  .couple .legend{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:18px}
+  .lg .lt{font:700 12.5px/1 var(--mono);margin-bottom:5px}
+  .lg .ld{font-size:12.5px;color:var(--muted)}
+  .lg.l1 .lt{color:var(--green)} .lg.l2 .lt{color:var(--amber)} .lg.l3 .lt{color:var(--red)}
+  .couple .punch{margin-top:18px;padding:13px 15px;background:var(--core-bg);border:1px solid #cfd6ea;border-radius:9px;font-size:13.5px;color:#36405e}
+  .couple .punch b{color:var(--core)}
+
+  /* phases */
+  .phases{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .ph{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 14px;position:relative;overflow:hidden}
+  .ph::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px}
+  .ph.r0::before{background:#5aa17f} .ph.r1::before{background:#86b15b}
+  .ph.r2::before{background:#e0a64b} .ph.r3::before{background:var(--red)} .ph.r4::before{background:#7d86b8}
+  .ph .pid{font:700 11px/1 var(--mono);letter-spacing:.1em;color:var(--muted)}
+  .ph .pt{font-weight:700;font-size:14px;margin:7px 0 4px}
+  .ph .risk{font:600 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;padding:3px 7px;border-radius:5px;display:inline-block;margin-bottom:9px}
+  .ph.r0 .risk{background:var(--green-bg);color:var(--green)} .ph.r1 .risk{background:#eef6e4;color:#5f8a33}
+  .ph.r2 .risk{background:var(--amber-bg);color:var(--amber)} .ph.r3 .risk{background:var(--red-bg);color:var(--red)}
+  .ph.r4 .risk{background:#eef0fb;color:#5a64a8}
+  .ph .pd{font-size:12px;color:var(--muted)}
+  .redline-note{margin-top:13px;padding:11px 14px;border:1px dashed var(--red);background:var(--red-bg);border-radius:9px;font-size:13px;color:#8d3343}
+
+  .callouts{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px}
+  .call{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .call .ct{font-weight:700;font-size:14px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+  .call .cd{font-size:13px;color:var(--muted)}
+  .call .cd code{font-family:var(--mono);font-size:12px;background:#f0f2f5;padding:1px 5px;border-radius:4px;color:var(--ink)}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .dot.r{background:var(--red)} .dot.a{background:var(--amber)}
+
+  footer{margin-top:46px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+  footer code{font-family:var(--mono)}
+  @media(max-width:880px){
+    .metrics{grid-template-columns:repeat(2,1fr)} .ba{grid-template-columns:1fr}
+    .arrowcol{flex-direction:row;padding:12px 0}.arrowcol .t{writing-mode:horizontal-tb;margin:0 0 0 8px}
+    .phases{grid-template-columns:1fr 1fr}.callouts{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="kick">Refactor Review · Architecture</div>
+    <h1>pg_canvases 解耦重构 · 优化前后架构</h1>
+    <p class="verdict"><b>结论：值得做，但有诚实的天花板。</b>这个 God 类只能"瘦身 ~60%"而非彻底溶解——21 个核心枢纽字段是"单一渲染目标 + overlay 同帧同步"的结构必然，必须留在协调器。目标是把它降级为协调器 + 6–8 个内聚协作对象。</p>
+    <div class="meta">mf4_analyzer/ui/pg_canvases.py · 2026-06-07 · 全量 Phase 0–4，渲染/导出红线独立成期</div>
+  </header>
+
+  <section class="metrics">
+    <div class="metric alarm"><div class="n">5771</div><div class="l">文件总行数（全仓库最大，2× 于第二名）</div></div>
+    <div class="metric alarm"><div class="n">~150</div><div class="l">TimeDomainCanvasPG 方法数（单类 ~4500 行）</div></div>
+    <div class="metric alarm"><div class="n">70</div><div class="l">self.* 实例字段（66 个在 __init__，270 行）</div></div>
+    <div class="metric"><div class="n">24</div><div class="l">可切分的内聚职责簇（接缝清晰）</div></div>
+    <div class="metric"><div class="n">1</div><div class="l">外部 import 处（chart_stack）→ 安全边界极好</div></div>
+  </section>
+
+  <h2 class="sec">优化前 → 优化后</h2>
+  <div class="ba">
+    <!-- BEFORE -->
+    <div class="panel before">
+      <span class="ptag b">● Before · 单体 God Object</span>
+      <div class="blob">
+        <div class="lab"><span>class TimeDomainCanvasPG</span><span>4492 行 / ~150 方法</span></div>
+        <div class="clusters">
+          <span class="chip">构造/绘图 A</span><span class="chip">范围视图 B</span><span class="chip">通道绑定 C</span>
+          <span class="chip">overlay 网格 D</span><span class="chip">生命周期 E</span><span class="chip">光标系统 F</span>
+          <span class="chip">命中测试 G</span><span class="chip">批注 H</span><span class="chip">overlay 拖拽 I</span>
+          <span class="chip">统计 J</span><span class="chip">刻度密度 K</span><span class="chip">选项对话框 L</span>
+          <span class="chip">事件过滤 M</span><span class="chip">视图同步 N</span><span class="chip">缓存失效 O</span>
+          <span class="chip">xrange 传播 P</span><span class="chip">渲染 Q</span><span class="chip">强调 R</span>
+          <span class="chip">滚轮 S</span><span class="chip">光标HTML T</span><span class="chip">内嵌标签 U</span>
+          <span class="chip">resize V</span><span class="chip">质量 W</span><span class="chip">导出 X</span>
+        </div>
+        <div class="tangle">24 个职责被 <b>70 个共享 self.* 字段</b> 隐式缠绕——改任一处都难定波及面。<br>＋ 25 个模块级 helper ＋ _ModifierWheelViewBox 也挤在同一文件。</div>
+      </div>
+    </div>
+
+    <div class="arrowcol"><div class="a">→</div><div class="t">Decompose</div></div>
+
+    <!-- AFTER -->
+    <div class="panel after">
+      <span class="ptag a">● After · pg_canvas/ 包（协调器 + 协作对象）</span>
+      <div class="coord">
+        <div class="h"><span>canvas.py · 协调器</span><span style="font-size:11px;color:#4a5573">~40–50 方法</span></div>
+        <div class="d">持有 21 个核心枢纽字段 + 公共 API + __init__ 装配 + 委托薄壳</div>
+        <div class="fields">
+          <span class="f">axes_list</span><span class="f">_primary_xaxis_ax</span><span class="f">_glw</span>
+          <span class="f">_overlay_mode</span><span class="f">_channel_lines</span><span class="f">_refresh_timer</span>
+          <span class="f">channel_data</span><span class="f">…+14</span>
+        </div>
+      </div>
+      <div class="collab">
+        <div class="cc"><span class="from">F+T</span><div class="n">CursorController</div><div class="own">自持 _cursor_*_items · _dual · _placing</div></div>
+        <div class="cc"><span class="from">H</span><div class="n">AnnotationManager</div><div class="own">自持 _remarks · 按压状态</div></div>
+        <div class="cc"><span class="from">K</span><div class="n">TickDensityController</div><div class="own">x-tick 密度配置（近纯）</div></div>
+        <div class="cc"><span class="from">C/D/R/N</span><div class="n">OverlayAxisManager</div><div class="own">overlay 轴·网格·吸附·同步</div></div>
+        <div class="cc"><span class="from">W</span><div class="n">QualityManager</div><div class="own">自持 _idle_aa_* · 质量预算</div></div>
+        <div class="cc" style="border-color:var(--red-line);background:#fdf6f7"><span class="from" style="color:var(--red)">Q/X · 红线</span><div class="n" style="color:var(--red)">Renderer/Exporter</div><div class="own">painter-path · grab_pixmap（最后做）</div></div>
+      </div>
+      <div class="pure">
+        <span class="cap">纯模块</span>
+        <span class="pm">context_menu.py</span><span class="pm">fonts.py</span><span class="pm">ticks_math.py</span><span class="pm">viewbox.py</span>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">为什么只能瘦身 ~60% · 状态耦合分层（66 个 __init__ 字段）</h2>
+  <div class="couple">
+    <div class="bar">
+      <div class="seg s1"><span class="sn">~6</span><span class="sl">单簇私有</span></div>
+      <div class="seg s2"><span class="sn">~39</span><span class="sl">2–3 簇共享</span></div>
+      <div class="seg s3"><span class="sn">~21</span><span class="sl">4–11 簇核心</span></div>
+    </div>
+    <div class="legend">
+      <div class="lg l1"><div class="lt">~6 · 单簇私有</div><div class="ld">只被一个簇触及，可直接随协作对象搬走。零风险。</div></div>
+      <div class="lg l2"><div class="lt">~39 · 2–3 簇共享</div><div class="ld">抽成 manager/facade <b>自持</b>状态，canvas 委托读写。</div></div>
+      <div class="lg l3"><div class="lt">~21 · 4–11 簇核心</div><div class="ld"><code style="font-family:var(--mono);font-size:12px">axes_list</code>(11)、<code style="font-family:var(--mono);font-size:12px">_primary_xaxis_ax</code>(11)、<code style="font-family:var(--mono);font-size:12px">_glw</code>(9) …必须留在协调器。</div></div>
+    </div>
+    <div class="punch">这 21 个核心字段的"广播式"耦合是 <b>结构必然</b>，不是设计缺陷：图表是单一统一渲染目标，overlay 光标/批注/网格必须与数据 <b>同帧同步</b>。强行外部化只会用掉帧换"解耦"。</div>
+  </div>
+
+  <h2 class="sec">迁移分期 · strangler-fig + 测试守门（每期收尾全测 + perf 必须绿）</h2>
+  <div class="phases">
+    <div class="ph r0"><div class="pid">PHASE 0</div><div class="pt">安全网 + 白捡分</div><span class="risk">极低险</span><div class="pd">补 5 个导出像素特征化测试 · 删重复方法 · 抽 4 个纯模块（~1350 行出门）· 转包</div></div>
+    <div class="ph r1"><div class="pid">PHASE 1</div><div class="pt">独立协作对象</div><span class="risk">低–中险</span><div class="pd">Cursor → Annotation → TickDensity，逐个抽出，canvas 留委托薄壳</div></div>
+    <div class="ph r2"><div class="pid">PHASE 2</div><div class="pt">overlay 子系统</div><span class="risk">中险</span><div class="pd">OverlayAxisManager；注意 Qt 父子关系与视图同步时序</div></div>
+    <div class="ph r3"><div class="pid">PHASE 3</div><div class="pt">质量 + 渲染/导出</div><span class="risk">最高险 · 红线</span><div class="pd">门控：Phase 0 特征化测试就位后才动。Quality → Renderer/Exporter</div></div>
+    <div class="ph r4"><div class="pid">PHASE 4</div><div class="pt">收尾</div><span class="risk">可选</span><div class="pd">协调器定型；可选迁测试、撤薄壳</div></div>
+  </div>
+  <div class="redline-note">🚦 <b>红线纪律</b>：全程不改行为、不上 OpenGL、不动已调优的 AA/cache 预算语义。历史上把渲染改 OpenGL 曾导致 <code style="font-family:var(--mono)">grab_pixmap</code> 导出全白——故渲染/导出独立成 Phase 3、最后做、且必须先有像素内容级测试兜底。</div>
+
+  <h2 class="sec">Review 顺手发现</h2>
+  <div class="callouts">
+    <div class="call">
+      <div class="ct"><span class="dot r"></span>真·结构腐化：重复方法定义</div>
+      <div class="cd"><code>_channel_name_for_handle</code> 在行 <b>2224</b> 与 <b>3279</b> 各定义一次，两份逻辑相同、第二个静默覆盖第一个。当前无害，但属"同名方法重复定义"腐化模式，Phase 0 顺手清除。</div>
+    </div>
+    <div class="call">
+      <div class="ct"><span class="dot a"></span>对外契约极小 → 安全边界好</div>
+      <div class="cd">chart_stack 只用 3 个信号（<code>cursor_info</code>/<code>dual_cursor_info</code>/<code>dual_cursor_rows</code>）+ <code>full_reset()</code>。但 7 个测试文件戳了 <b>50+ 私有成员</b>——靠委托薄壳让旧测试零改动通过。</div>
+    </div>
+  </div>
+
+  <footer>
+    设计文档：<code>docs/superpowers/specs/2026-06-07-pg-canvas-decomposition-design.md</code> · 详细实施 plan 待 writing-plans 产出 · 本可视化为 review 配图，非最终实现
+  </footer>
+
+</div>
+</body>
+</html>
