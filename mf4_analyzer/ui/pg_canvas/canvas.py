@@ -192,6 +192,7 @@ class TimeDomainCanvasPG(QWidget):
     context_menu_requested = pyqtSignal()
     xrange_changed = pyqtSignal(float, float)
     visible_range_changed = pyqtSignal()
+    quality_status_changed = pyqtSignal(object)
 
     # Mirror TimeDomainCanvas constants so callers see the same surface.
     MAX_PTS = 8000
@@ -2072,6 +2073,9 @@ class TimeDomainCanvasPG(QWidget):
 
     def try_enable_idle_quality(self):
         return self._quality.try_enable_idle_quality()
+
+    def quality_status(self):
+        return self._quality.quality_status()
 
     def grab_pixmap(self, scale: float = 1.0) -> QPixmap:
         return self._renderer.grab_pixmap(scale=scale)

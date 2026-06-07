@@ -230,6 +230,48 @@ class CursorPill(QFrame):
             self._detail.clear()
             self._detail.setVisible(False)
 
+
+class _QualityStatusIndicator(QFrame):
+    """Small hoverable AA status dot overlaid on the chart card chrome."""
+
+    _COLORS = {
+        "green": QColor("#22c55e"),
+        "yellow": QColor("#f59e0b"),
+        "red": QColor("#ef4444"),
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("chartQualityIndicator")
+        self.setFixedSize(20, 20)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._state = "red"
+        self.set_quality_status({
+            "state": "red",
+            "tooltip": "抗锯齿未激活：无曲线",
+        })
+
+    def set_quality_status(self, status):
+        state = str((status or {}).get("state") or "red")
+        if state not in self._COLORS:
+            state = "red"
+        self._state = state
+        self.setProperty("qualityState", state)
+        self.setToolTip(str((status or {}).get("tooltip") or "抗锯齿状态未知"))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            rect = QRectF(self.rect()).adjusted(5.0, 5.0, -5.0, -5.0)
+            painter.setBrush(self._COLORS.get(self._state, self._COLORS["red"]))
+            painter.setPen(QPen(QColor(255, 255, 255, 230), 1.0))
+            painter.drawEllipse(rect)
+        finally:
+            painter.end()
+
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 import qtawesome as qta
 
@@ -241,15 +283,6 @@ from .widgets import StatsStrip
 
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
-
-# Hint strings shown in the chart toolbar.
-# Key = current toolbar.mode ('pan' | 'zoom' | '' for idle).
-# Each value is a (title, detail) tuple: title shown inline, detail in tooltip.
-_TOOL_HINTS = {
-    'pan':  ('移动曲线', '左键拖动平移 · 右键拖动缩放坐标轴'),
-    'zoom': ('框选缩放', '拖动鼠标框选矩形区域放大 · Home 键可复位'),
-    '':     ('浏览模式', '双击图面打开图表选项 · 工具栏可启用 平移 / 缩放 / 保存'),
-}
 
 # Bottom hint bar — persistent (always-on) shortcuts.
 # Rendered left-aligned in muted gray inside QFrame#chartHintBar.
@@ -389,9 +422,8 @@ class PgNavigationToolbar(QToolBar):
        the other. Tests that read ``str(toolbar.mode).lower()`` keep passing.
     4. ``pan()`` / ``zoom()`` methods that toggle the tool just like
        matplotlib's NavigationToolbar2QT does (no-op repeat call deactivates).
-    5. ``locLabel`` (QLabel) populated at the END of the action sequence so
-       the existing ``_ChartCard`` code that finds and relocates it next to
-       the hint label keeps working unchanged.
+    5. ``locLabel`` exists only as a compatibility attribute; _ChartCard
+       removes toolbar coordinate readouts from the visible action row.
     6. ``home()`` triggers an autoRange on the primary view box; ``back()`` /
        ``forward()`` pop/push view history (xlim+ylim tuples per axis);
        ``save()`` opens a file dialog and writes a grabbed pixmap.
@@ -457,11 +489,8 @@ class PgNavigationToolbar(QToolBar):
         # we can disconnect before re-binding to fresh ViewBoxes on rebuild
         # (pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle).
         self._range_conns: list = []
-        # locLabel must exist because _ChartCard.__init__ does
-        # `getattr(self.toolbar, 'locLabel', None)` and inserts it next to
-        # the hint label. We populate it but don't wire mouse-move updates
-        # in this revision; pyqtgraph emits hover via its own SignalProxy
-        # path and that wiring is out of scope for the production switch.
+        # Compatibility only. _ChartCard hides/removes toolbar coordinates;
+        # pyqtgraph hover details are surfaced elsewhere.
         self.locLabel = QLabel("", self)
 
         # Build the six actions in matplotlib's order so _action_keys()
@@ -494,10 +523,9 @@ class PgNavigationToolbar(QToolBar):
         self._actions_by_key['pan'].triggered.connect(self._click_pan)
         self._actions_by_key['zoom'].triggered.connect(self._click_zoom)
         self._actions_by_key['save'].triggered.connect(self._click_save)
-        # Append locLabel as the final widget — matplotlib does the same and
-        # _ChartCard relocates it via toolbar.removeAction + insertAction so
-        # it sits to the right of the hint label. Must be the last action.
-        self.addWidget(self.locLabel)
+        # Do not add locLabel to the toolbar. The attribute is retained for
+        # compatibility with old callers, but coordinates are no longer
+        # rendered in the top action row.
 
     # ----- internal helpers ------------------------------------------------
     def _primary_view_box(self):
@@ -937,9 +965,9 @@ class _ChartCard(QWidget):
         self._hint_rotation_timer.timeout.connect(self._advance_context_hint)
         # Pick the matplotlib NavigationToolbar2QT for matplotlib canvases
         # and the pyqtgraph-aware shim for TimeDomainCanvasPG. The shim
-        # exposes the exact same six action keys + locLabel + mode/pan/zoom
-        # surface so all downstream helpers (i18n, MDI icons, shortcuts,
-        # _find_action) keep working unchanged.
+        # exposes the exact same six action keys + mode/pan/zoom surface so
+        # downstream helpers (i18n, MDI icons, shortcuts, _find_action) keep
+        # working unchanged.
         if isinstance(canvas, TimeDomainCanvasPG):
             self.toolbar = PgNavigationToolbar(canvas, self)
             # Bug 3: re-apply the toolbar's current pan/zoom mode to the
@@ -961,8 +989,8 @@ class _ChartCard(QWidget):
             if callable(reg_mode):
                 reg_mode(self.toolbar)
             # When the menu (or any path) changes the mode, refresh the
-            # toolbar's icon active-state + hint, and let TimeChartCard flip
-            # its axis-lock chips, exactly as a toolbar-button click would.
+            # toolbar icon active-state + bottom hint, and let TimeChartCard
+            # flip its axis-lock chips, exactly as a toolbar-button click would.
             self.toolbar.mouse_mode_changed.connect(self._on_mouse_mode_changed)
         else:
             self.toolbar = NavigationToolbar(canvas, self)
@@ -981,6 +1009,7 @@ class _ChartCard(QWidget):
             self.toolbar.layout().setSpacing(8)
         self._toolbar_compact = None
         _strip_subplots_action(self.toolbar)
+        self._remove_toolbar_loc_label()
 
         # Find Save BEFORE i18n changes labels (text is still 'Save' here);
         # the reference stays valid after relabel because we keep the QAction.
@@ -1022,35 +1051,6 @@ class _ChartCard(QWidget):
             self.toolbar.addWidget(self._options_btn)
             self.toolbar.addWidget(self._copy_btn)
 
-        # Two-line hint label sits at the LEFT of the toolbar. Matplotlib's
-        # native locLabel is moved next to it with a fixed width so (x, y)
-        # updates cannot push the right-side chart controls around.
-        self._hint_label = QLabel(self.toolbar)
-        self._hint_label.setObjectName("chartHint")
-        self._hint_label.setTextFormat(Qt.RichText)
-        self._hint_label.setWordWrap(True)
-        self._hint_label.setMinimumWidth(180)
-        self._hint_label.setFixedHeight(28)
-        self._hint_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self._hint_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        loc_label = getattr(self.toolbar, 'locLabel', None)
-        loc_action = None
-        if loc_label is not None:
-            loc_label.setObjectName("chartLocLabel")
-            loc_label.setMinimumWidth(190)
-            loc_label.setMaximumWidth(190)
-            loc_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            loc_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            for act in self.toolbar.actions():
-                if self.toolbar.widgetForAction(act) is loc_label:
-                    loc_action = act
-                    break
-        if loc_action is not None:
-            hint_action = self.toolbar.insertWidget(loc_action, self._hint_label)
-            self.toolbar.removeAction(loc_action)
-            self.toolbar.insertAction(hint_action, loc_action)
-        else:
-            self.toolbar.addWidget(self._hint_label)
         self._loc_action = None
 
         if annotations:
@@ -1124,10 +1124,36 @@ class _ChartCard(QWidget):
         self._focus_bar.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._focus_bar.hide()
 
+        self._quality_indicator = None
+        quality_signal = getattr(self.canvas, "quality_status_changed", None)
+        quality_status = getattr(self.canvas, "quality_status", None)
+        if quality_signal is not None and callable(quality_status):
+            self._quality_indicator = _QualityStatusIndicator(self)
+            quality_signal.connect(self._set_quality_status)
+            self._set_quality_status(quality_status())
+
     def _position_focus_bar(self):
         bar = getattr(self, "_focus_bar", None)
         if bar is not None:
             bar.setGeometry(0, 0, self.width(), bar.height())
+
+    def _position_quality_indicator(self):
+        indicator = getattr(self, "_quality_indicator", None)
+        if indicator is None:
+            return
+        canvas_rect = self.canvas.geometry()
+        margin = 6
+        x = canvas_rect.left() + margin
+        y = canvas_rect.bottom() - indicator.height() - margin + 1
+        indicator.move(max(0, x), max(0, y))
+        indicator.raise_()
+
+    def _set_quality_status(self, status):
+        indicator = getattr(self, "_quality_indicator", None)
+        if indicator is None:
+            return
+        indicator.set_quality_status(status)
+        self._position_quality_indicator()
 
     def set_focus_marker(self, color):
         """Show a top accent strip in ``color`` (the focused split pane), or
@@ -1150,6 +1176,7 @@ class _ChartCard(QWidget):
         super().resizeEvent(event)
         self._sync_responsive_toolbar()
         self._position_focus_bar()
+        self._position_quality_indicator()
         bar = getattr(self, "_focus_bar", None)
         if bar is not None and bar.isVisible():
             bar.raise_()
@@ -1157,6 +1184,7 @@ class _ChartCard(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_responsive_toolbar()
+        self._position_quality_indicator()
         bar = getattr(self, "_focus_bar", None)
         if bar is not None and bar.isVisible():
             self._position_focus_bar()
@@ -1176,6 +1204,17 @@ class _ChartCard(QWidget):
         self.toolbar.setParent(parent)
         return self.toolbar
 
+    def _remove_toolbar_loc_label(self):
+        loc_label = getattr(self.toolbar, "locLabel", None)
+        if loc_label is None:
+            return
+        loc_label.setObjectName("chartLocLabel")
+        for act in list(self.toolbar.actions()):
+            if self.toolbar.widgetForAction(act) is loc_label:
+                self.toolbar.removeAction(act)
+                break
+        loc_label.hide()
+
     def detach_bottom_hint_bar(self, parent):
         """Remove the bottom hint bar from this card layout and reparent it."""
         self.layout().removeWidget(self._hint_bar)
@@ -1192,15 +1231,6 @@ class _ChartCard(QWidget):
         if compact == self._toolbar_compact:
             return
         self._toolbar_compact = compact
-        self._hint_label.setMinimumWidth(0 if compact else 180)
-        self._hint_label.setMaximumWidth(0 if compact else _QT_WIDGETSIZE_MAX)
-        self._hint_label.setVisible(not compact)
-        loc_label = getattr(self.toolbar, 'locLabel', None)
-        if loc_label is not None:
-            loc_width = 0 if compact else 190
-            loc_label.setMinimumWidth(loc_width)
-            loc_label.setMaximumWidth(loc_width)
-            loc_label.setVisible(not compact)
         self.toolbar.updateGeometry()
 
     def _insert_toolbar_widget(self, loc_action, widget):
@@ -1211,7 +1241,7 @@ class _ChartCard(QWidget):
 
     def _insert_right_toolbar_widget(self, loc_action, widget):
         # Insert at the card's right-control zone. Passing ``None`` appends
-        # after the fixed loc/hint labels; TimeDomain uses the same path.
+        # to the toolbar after the navigation/copy/save actions.
         self._insert_toolbar_widget(loc_action, widget)
 
     def _insert_toolbar_widget_after(self, after_action, widget):
@@ -1397,10 +1427,6 @@ class _ChartCard(QWidget):
 
     def _refresh_hint(self, *_):
         key = self._current_mode_key()
-        title, detail = _TOOL_HINTS.get(key, _TOOL_HINTS[''])
-        color = _ICON_ACTIVE if key else _ICON_COLOR
-        self._hint_label.setText(f'<b style="color:{color}">{title}</b>')
-        self._hint_label.setToolTip(f'{title}\n{detail}')
         _apply_mdi_icons(self.toolbar, active_key=key)
         self._refresh_bottom_hint()
 
@@ -1417,8 +1443,8 @@ class TimeChartCard(_ChartCard):
         super().__init__(canvas, parent, chart_mode='time')
         zoom_act = _find_action(self.toolbar, 'zoom')
         self._install_compact_annotation_control_after(zoom_act)
-        # Right-align time-only controls with the same locLabel insertion
-        # point used by annotation controls on analysis cards.
+        # Right-align time-only controls with the same spacer pattern used by
+        # annotation controls on analysis cards.
         loc_action = getattr(self, '_loc_action', None)
         self._time_separators = []
         self._time_controls_spacer = QWidget(self.toolbar)

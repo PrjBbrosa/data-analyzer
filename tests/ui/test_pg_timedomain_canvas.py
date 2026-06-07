@@ -5391,6 +5391,22 @@ class TestAutoIdleAA:
         assert canvas._quality.timer.interval() == 150
         assert canvas._quality.aa_on is False
 
+    def test_quality_status_reports_dense_overlay_gate(self, qapp, monkeypatch):
+        canvas = self._plot(qapp, mode="overlay")
+        canvas._overlay_mode = True
+        monkeypatch.setattr(
+            canvas._quality, "_collect_curve_items",
+            lambda: [_FakeCurveData(3000) for _ in range(5)],
+        )
+
+        status = canvas.quality_status()
+
+        assert status["state"] == "red"
+        assert status["metric"] == 15000
+        assert status["budget"] == canvas._AA_OVERLAY_SEGMENT_OFF
+        assert "叠加密度" in status["tooltip"]
+        assert "15000" in status["tooltip"]
+
     def test_idle_slot_enables_aa_when_mouse_up(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
         from PyQt5.QtWidgets import QApplication

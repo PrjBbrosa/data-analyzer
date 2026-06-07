@@ -104,6 +104,7 @@ class QualityManager(_CanvasBackref):
         # Rebuild changes the curve set / point counts, so the next decision
         # must re-seed via the OFF threshold rather than inherit stale state.
         self.density_seeded = False
+        self._emit_quality_status_changed()
 
     def _collect_curve_items(self):
         """Every ``PlotCurveItem`` on the scene; ``[]`` if unreachable."""
@@ -151,6 +152,7 @@ class QualityManager(_CanvasBackref):
         except Exception:
             pass
         if not self.aa_on:
+            self._emit_quality_status_changed()
             return
         self._set_curves_antialias(False)
         # Fix D: a stale device-coordinate cache would smear during the
@@ -162,6 +164,7 @@ class QualityManager(_CanvasBackref):
             self._glw.update()
         except Exception:
             pass
+        self._emit_quality_status_changed()
 
     def schedule_idle_quality(self):
         """Re-arm the single-shot idle-AA timer after a settled interaction."""
@@ -169,12 +172,15 @@ class QualityManager(_CanvasBackref):
             self.timer.start()
         except Exception:
             pass
+        self._emit_quality_status_changed()
 
     def try_enable_idle_quality(self):
         """Idle timer slot: enable curve AA once every hands-off gate passes."""
         if self.aa_on:
+            self._emit_quality_status_changed()
             return
         if not self._idle_quality_allowed():
+            self._emit_quality_status_changed()
             return
         if self._set_curves_antialias(True) > 0:
             # Fix D (RECALIBRATED, subplot-only): DeviceCoordinateCache blits
@@ -189,6 +195,7 @@ class QualityManager(_CanvasBackref):
                 self._glw.update()
             except Exception:
                 pass
+        self._emit_quality_status_changed()
 
     def _idle_quality_allowed(self) -> bool:
         """Return True only while the user is hands-off and density is safe."""
@@ -203,35 +210,13 @@ class QualityManager(_CanvasBackref):
 
     def _idle_aa_density_ok(self) -> bool:
         """Hysteresis density gate, branched on overlay vs subplot economics."""
-        overlay = bool(getattr(self, "_overlay_mode", False))
-        if overlay:
-            on_budget = self._AA_OVERLAY_SEGMENT_ON
-            off_budget = self._AA_OVERLAY_SEGMENT_OFF
-        else:
-            on_budget = self._AA_SUBPLOT_SEGMENT_ON
-            off_budget = self._AA_SUBPLOT_SEGMENT_OFF
-
-        sums: dict = {}
-        total = 0
-        for it in self._collect_curve_items():
-            try:
-                xd, _ = it.getData()
-                n = 0 if xd is None else len(xd)
-            except Exception:
-                self.density_allowed = False
-                return False
-            total += n
-            try:
-                vb = it.getViewBox()
-            except Exception:
-                vb = None
-            key = id(vb) if vb is not None else None
-            sums[key] = sums.get(key, 0) + n
-
-        if overlay:
-            metric = total
-        else:
-            metric = max(sums.values()) if sums else 0
+        status = self._density_status()
+        if status["error"]:
+            self.density_allowed = False
+            return False
+        metric = status["metric"]
+        on_budget = status["on_budget"]
+        off_budget = status["off_budget"]
 
         if not self.density_seeded:
             self.density_allowed = metric <= off_budget
@@ -244,18 +229,35 @@ class QualityManager(_CanvasBackref):
 
     def _export_aa_affordable(self) -> bool:
         """Return whether copy/export can afford forced curve antialiasing."""
+        status = self._density_status()
+        if status["error"]:
+            return False
+        return status["metric"] <= status["off_budget"]
+
+    def _density_status(self):
         overlay = bool(getattr(self, "_overlay_mode", False))
-        off_budget = (
-            self._AA_OVERLAY_SEGMENT_OFF if overlay else self._AA_SUBPLOT_SEGMENT_OFF
-        )
+        if overlay:
+            on_budget = int(self._AA_OVERLAY_SEGMENT_ON)
+            off_budget = int(self._AA_OVERLAY_SEGMENT_OFF)
+        else:
+            on_budget = int(self._AA_SUBPLOT_SEGMENT_ON)
+            off_budget = int(self._AA_SUBPLOT_SEGMENT_OFF)
         sums: dict = {}
         total = 0
-        for it in self._collect_curve_items():
+        items = self._collect_curve_items()
+        for it in items:
             try:
                 xd, _ = it.getData()
                 n = 0 if xd is None else len(xd)
             except Exception:
-                return False
+                return {
+                    "overlay": overlay,
+                    "metric": 0,
+                    "on_budget": on_budget,
+                    "off_budget": off_budget,
+                    "curve_count": len(items),
+                    "error": True,
+                }
             total += n
             try:
                 vb = it.getViewBox()
@@ -264,7 +266,80 @@ class QualityManager(_CanvasBackref):
             key = id(vb) if vb is not None else None
             sums[key] = sums.get(key, 0) + n
         metric = total if overlay else (max(sums.values()) if sums else 0)
-        return metric <= off_budget
+        return {
+            "overlay": overlay,
+            "metric": int(metric),
+            "on_budget": on_budget,
+            "off_budget": off_budget,
+            "curve_count": len(items),
+            "error": False,
+        }
+
+    def quality_status(self):
+        """Return the reader-facing AA status for the chart quality dot."""
+        items = self._collect_curve_items()
+        density = self._density_status()
+        base = {
+            "metric": density["metric"],
+            "budget": density["off_budget"],
+            "curve_count": density["curve_count"],
+            "overlay": density["overlay"],
+        }
+        if not items:
+            return {
+                **base,
+                "state": "red",
+                "tooltip": "抗锯齿未激活：无曲线",
+            }
+        if density["error"]:
+            return {
+                **base,
+                "state": "red",
+                "tooltip": "抗锯齿未激活：曲线密度不可读取",
+            }
+        label = "叠加密度" if density["overlay"] else "曲线密度"
+        if density["metric"] > density["off_budget"]:
+            return {
+                **base,
+                "state": "red",
+                "tooltip": (
+                    f"抗锯齿未激活：{label} "
+                    f"{density['metric']} > {density['off_budget']}"
+                ),
+            }
+        actual_on = True
+        for it in items:
+            try:
+                actual_on = actual_on and bool(it.opts.get("antialias", False))
+            except Exception:
+                actual_on = False
+        if self.aa_on and actual_on:
+            return {
+                **base,
+                "state": "green",
+                "tooltip": "抗锯齿已完成",
+            }
+        try:
+            timer_active = self.timer.isActive()
+        except Exception:
+            timer_active = False
+        if timer_active or bool(getattr(self, "_refresh_pending", False)):
+            return {
+                **base,
+                "state": "yellow",
+                "tooltip": "抗锯齿等待空闲刷新",
+            }
+        return {
+            **base,
+            "state": "red",
+            "tooltip": "抗锯齿未激活",
+        }
+
+    def _emit_quality_status_changed(self):
+        try:
+            self.quality_status_changed.emit(self.quality_status())
+        except Exception:
+            pass
 
     @contextmanager
     def _curves_antialiased(self):
