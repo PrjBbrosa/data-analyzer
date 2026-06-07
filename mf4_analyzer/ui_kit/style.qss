@@ -175,11 +175,27 @@ QSpinBox[compact="true"]::down-arrow, QDoubleSpinBox[compact="true"]::down-arrow
 
 QComboBox QAbstractItemView {
     padding: 4px;
-    border: 1px solid #dfe5ee;
+    border: none;
     border-radius: 8px;
-    background: #ffffff;
-    selection-background-color: #e8efff;
+    background-color: transparent;
+    outline: none;
+    selection-background-color: transparent;
     selection-color: #111827;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 4px 8px;
+    border: none;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #111827;
+}
+QComboBox QAbstractItemView::item:hover,
+QComboBox QAbstractItemView::item:selected {
+    border: none;
+    border-radius: 6px;
+    background-color: #1769e0;
+    color: #ffffff;
 }
 
 /* Checks */
@@ -786,7 +802,10 @@ QLabel#paneCount {
     background-color: #ffffff;
 }
 #fileRow[active="true"] {
-    border-color: #1769e0;
+    /* Selection is shown by the light-blue tint + the 3px #fileAccent stripe
+     * on the left. Keep the card outline a NEUTRAL gray here (not blue) so the
+     * left edge reads as a single blue stripe, not a border-line + a stripe. */
+    border-color: #b7c4d3;
     background-color: #f5f8ff;
 }
 QFrame#fileAccent {
@@ -863,6 +882,11 @@ Inspector QGroupBox {
     background-color: transparent;
     font-weight: 600;
 }
+/* 坐标轴设置: drop the 2px right padding so the fluid range editors line up
+ * with the card's form fields (色图 / 信号) on the right edge. */
+Inspector QGroupBox#axisSettingsGroup {
+    padding-right: 0;
+}
 Inspector QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
@@ -927,9 +951,32 @@ QWidget#orderContextual {
 }
 
 Inspector QWidget#axisRow,
+Inspector QWidget#axisRowLine,
+Inspector QWidget#axisAutoCell,
 Inspector QWidget#axisRangeHost,
 Inspector QWidget#axisRangeSummaryPage,
-Inspector QWidget#axisManualRangePage {
+Inspector QWidget#axisManualRangePage,
+Inspector QWidget#axisUnitLine,
+Inspector QWidget#axisHeaderRow,
+Inspector QWidget#axisHeaderRange {
+    background-color: #ffffff;
+}
+Inspector QWidget#fftContextual QWidget#axisRow,
+Inspector QWidget#fftContextual QWidget#axisRowLine,
+Inspector QWidget#fftContextual QWidget#axisAutoCell,
+Inspector QWidget#fftContextual QWidget#axisRangeHost,
+Inspector QWidget#fftContextual QWidget#axisRangeSummaryPage,
+Inspector QWidget#fftContextual QWidget#axisManualRangePage,
+Inspector QWidget#fftContextual QWidget#axisUnitLine,
+Inspector QWidget#fftContextual QWidget#axisHeaderRow,
+Inspector QWidget#fftContextual QWidget#axisHeaderRange {
+    background-color: #eef4ff;
+}
+/* 自动 / 最小 / 最大 column headers above the axis grid — muted + small. */
+Inspector QLabel[axisHeader="true"] {
+    color: #97a1b2;
+    font-size: 11px;
+    font-weight: 500;
     background-color: transparent;
 }
 
@@ -1042,8 +1089,27 @@ Inspector QPushButton[role="primary"] { min-height: 30px; }
 /* ============ Chart stack ============ */
 ChartStack { background-color: #ffffff; }
 
+QWidget#timeDomainPage {
+    background-color: #ffffff;
+}
+
+QFrame#timeViewBottomDock {
+    background-color: #fbfcff;
+    border-top: 1px solid #dbe3ee;
+}
+
 QWidget#chartCard {
     border: 1px solid #eef2f7;
+    border-radius: 12px;
+    background-color: #ffffff;
+}
+
+/* Side-by-side compare: the focus cue is a 3px overlay accent strip painted
+ * by _ChartCard.set_focus_marker (raised above the canvas), NOT a QSS card
+ * border — a card border is hidden behind the full-bleed pyqtgraph canvas. So
+ * the focused card keeps the plain #chartCard look here; no frame, no tint,
+ * no data-area dimming. */
+QWidget#chartCard[focused="true"] {
     border-radius: 12px;
     background-color: #ffffff;
 }
@@ -1083,6 +1149,25 @@ QFrame#cursorPill QLabel#cursorPillPrimary {
 }
 QFrame#cursorPill QLabel#cursorPillDetail {
     background: transparent;
+}
+QPushButton#cursorPillToggle {
+    background: rgba(100, 116, 139, 0.15);
+    border: 1px solid rgba(100, 116, 139, 0.3);
+    border-radius: 3px;
+    color: #475569;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 0px;
+    min-width: 16px;
+    min-height: 16px;
+    max-width: 16px;
+    max-height: 16px;
+}
+QPushButton#cursorPillToggle:hover {
+    background: rgba(100, 116, 139, 0.25);
+}
+QPushButton#cursorPillToggle:pressed {
+    background: rgba(100, 116, 139, 0.40);
 }
 
 StatsStrip {
@@ -1386,6 +1471,123 @@ QLabel#chartHint {
     background-color: transparent;
 }
 
+QFrame#timeViewBottomDock QWidget#viewTabBar {
+    background-color: #fbfcff;
+    border: none;
+}
+
+QFrame#timeViewBottomDock QTabBar#viewTabs {
+    background-color: transparent;
+}
+
+QFrame#timeViewBottomDock QTabBar#viewTabs::tab {
+    min-width: 58px;
+    height: 20px;
+    margin: 3px 2px 1px 0;
+    padding: 0 12px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background-color: transparent;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QFrame#timeViewBottomDock QTabBar#viewTabs::tab:hover {
+    background-color: #eef4ff;
+    border-color: #c7d7f2;
+    color: #1f3b68;
+}
+
+QFrame#timeViewBottomDock QTabBar#viewTabs::tab:selected {
+    background-color: #e8f0ff;
+    border-color: #a7bfea;
+    border-bottom: 2px solid #2563eb;
+    color: #173262;
+}
+
+/* Inline rename editor — floats over the tab on double-click. It MUST look
+ * like the user is typing directly on the selected tab, NOT a separate white
+ * popover box. Mirror the ::tab:selected chrome (tinted blue fill, soft blue
+ * border, rounded corners) and match the tab's text metrics so the caret sits
+ * where the label text is. The geometry is set in view_tabbar.py to cover the
+ * tab's text region; padding here keeps the text horizontally aligned with the
+ * label it replaces. */
+QFrame#timeViewBottomDock QLineEdit#viewTabRenameEditor {
+    background-color: #e8f0ff;
+    border: 1px solid #a7bfea;
+    border-radius: 4px;
+    padding: 0 9px;
+    color: #173262;
+    font-size: 12px;
+    font-weight: 600;
+    selection-background-color: #2563eb;
+    selection-color: #ffffff;
+}
+
+QFrame#timeViewBottomDock QPushButton#viewTabPlus {
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 22px;
+    max-height: 22px;
+    margin: 3px 0 1px 2px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background-color: #ffffff;
+    color: #1e293b;
+    font-weight: 700;
+}
+
+QFrame#timeViewBottomDock QPushButton#viewTabPlus:hover {
+    background-color: #e8f0ff;
+    border-color: #a7bfea;
+    color: #173262;
+}
+
+/* Disabled = View count hit MAX_VIEWS (6). _update_plus_state already calls
+ * setEnabled(False); this rule makes that visually obvious (greyed fill, edge
+ * and glyph) so the user sees the cap rather than a still-bright button. */
+QFrame#timeViewBottomDock QPushButton#viewTabPlus:disabled {
+    background-color: #f1f5f9;
+    border-color: #e2e8f0;
+    color: #b8c2d0;
+}
+
+/* Cancel-merge button (right side of the View tab bar).
+ * The merge relation lives in the button tooltip/accessibility text, not as a
+ * persistent status sentence. The button still needs an explicit QSS
+ * background/border, otherwise the macOS native push-button bezel can render an
+ * empty rounded box and the label disappears. */
+QFrame#timeViewBottomDock QLabel#viewSplitChip {
+    color: #5a6478;
+    padding: 0 6px;
+    margin: 3px 0 1px 0;
+}
+
+QFrame#timeViewBottomDock QPushButton#viewSplitClear {
+    min-height: 22px;
+    margin: 3px 2px 1px 0;
+    padding: 0 10px;
+    border: 1px solid #fb7185;
+    border-radius: 5px;
+    background-color: #fff1f2;
+    color: #be123c;
+    font-weight: 600;
+}
+
+QFrame#timeViewBottomDock QPushButton#viewSplitClear:hover {
+    background-color: #ffe4e6;
+    border-color: #f43f5e;
+    color: #9f1239;
+}
+
+QFrame#timeViewBottomDock QPushButton#viewSplitClear:pressed {
+    background-color: #fecdd3;
+    border-color: #e11d48;
+    color: #881337;
+}
+
 /* Bottom hint bar — sits beneath the canvas inside each chart card.
  * Two layers:
  *   #chartHintPersistent (left, gray) always-on shortcut reminders
@@ -1408,6 +1610,35 @@ QFrame#chartHintBar QLabel#chartHintContext {
     font-weight: 500;
     padding: 2px 8px;
     background-color: transparent;
+}
+QFrame#chartHintBar QLabel#chartHintDiscovery {
+    color: #2563eb;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    background-color: transparent;
+}
+
+QFrame#timeViewBottomDock QFrame#chartHintBar {
+    background-color: #fbfcff;
+    border-top: 1px solid #e5ebf3;
+}
+
+QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintPersistent,
+QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintContext,
+QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintDiscovery {
+    padding: 1px 6px;
+}
+
+QStatusBar QFrame#chartHintBar {
+    background-color: transparent;
+    border-top: none;
+}
+
+QStatusBar QFrame#chartHintBar QLabel#chartHintPersistent,
+QStatusBar QFrame#chartHintBar QLabel#chartHintContext,
+QStatusBar QFrame#chartHintBar QLabel#chartHintDiscovery {
+    padding: 0 6px;
 }
 
 /* Batch signal picker chips */

@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 from matplotlib import colors as mcolors
 
@@ -70,6 +70,7 @@ class ChannelEditorDialog(QDialog):
         fb = QHBoxLayout(file_bar)
         fb.setContentsMargins(12, 10, 12, 8)
         fb.setSpacing(8)
+        self._file_bar_layout = fb
         lbl_file = QLabel("文件")
         lbl_file.setMinimumWidth(34)
         fb.addWidget(lbl_file)
@@ -208,6 +209,34 @@ class ChannelEditorDialog(QDialog):
         root.addWidget(footer)
 
         self._populate_channels()
+        QTimer.singleShot(0, self._sync_file_bar_right_edge)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._sync_file_bar_right_edge)
+
+    def _sync_file_bar_right_edge(self):
+        if not hasattr(self, "_file_bar_layout"):
+            return
+        if not hasattr(self, "combo_src") or self.combo_src.width() <= 0:
+            return
+        target = self.combo_src.mapTo(self, self.combo_src.rect().topLeft()).x()
+        target += self.combo_src.width()
+        current = self.combo_file.mapTo(self, self.combo_file.rect().topLeft()).x()
+        current += self.combo_file.width()
+        delta = current - target
+        if abs(delta) <= 1:
+            return
+        left, top, right, bottom = self._file_bar_layout.getContentsMargins()
+        self._file_bar_layout.setContentsMargins(
+            left,
+            top,
+            max(0, right + delta),
+            bottom,
+        )
+        self._file_bar_layout.activate()
+        if self.layout() is not None:
+            self.layout().activate()
 
     def _file_label(self, fd):
         """File display name: filepath.stem, falling back to filename."""

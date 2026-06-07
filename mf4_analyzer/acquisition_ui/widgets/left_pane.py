@@ -55,6 +55,7 @@ from mf4_analyzer.acquisition_capture.search import (
     search_measurements,
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 
 
 # Blue match-highlight color — used to inline-decorate spans in the list
@@ -290,7 +291,7 @@ class LeftPane(QFrame):
         measurements: Sequence[MeasurementSummary],
     ) -> QMenu:
         """Build the spec right-click menu for tests and the live widget."""
-        menu = QMenu(self)
+        menu = apply_rounded_menu_chrome(QMenu(self))
         if not measurements:
             return menu
         if len(measurements) == 1:

@@ -9,6 +9,54 @@ def test_main_window_constructs(qapp):
     assert w.inspector is not None
 
 
+def test_main_window_moves_time_hints_to_status_line(qapp, qtbot):
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    hint_bar = w.chart_stack._time_hint_bar
+    dock_layout = w.chart_stack._time_bottom_dock.layout()
+
+    assert getattr(w, "_status_hint_bar") is hint_bar
+    assert hint_bar.parentWidget() is w.statusBar
+    assert dock_layout.indexOf(hint_bar) == -1
+    assert dock_layout.indexOf(w.view_tabbar) >= 0
+    assert dock_layout.count() == 1
+
+
+def test_main_window_keeps_single_active_hint_bar_in_status_line(qapp, qtbot):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QFrame
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.show()
+    qapp.processEvents()
+
+    cards = {
+        "time": w.chart_stack._time_card,
+        "fft": w.chart_stack._fft_card,
+        "fft_time": w.chart_stack._fft_time_card,
+        "order": w.chart_stack._order_card,
+    }
+    for mode, card in cards.items():
+        w.chart_stack.set_mode(mode)
+        qapp.processEvents()
+
+        active_bar = card._hint_bar
+        assert getattr(w, "_status_hint_bar") is active_bar
+        assert active_bar.parentWidget() is w.statusBar
+        assert card.layout().indexOf(active_bar) == -1
+
+        status_bars = [
+            child
+            for child in w.statusBar.findChildren(
+                QFrame, "chartHintBar", Qt.FindDirectChildrenOnly
+            )
+            if not child.isHidden()
+        ]
+        assert status_bars == [active_bar]
+
+
 def test_main_window_has_splitter_with_three_panes(qapp):
     w = MainWindow()
     # The central widget contains a QSplitter with 3 widgets
@@ -20,7 +68,7 @@ def test_main_window_has_splitter_with_three_panes(qapp):
 
 def test_main_window_splitter_default_sizes_align_with_inspector_cap(qapp, qtbot):
     """fix-5 — the inspector's default splitter slot must match the
-    Inspector's content max-width (~360) so the user does not see a
+    Inspector's content max-width (~288) so the user does not see a
     visible empty band the moment the app opens.
 
     We resize the window before reading splitter sizes because QSplitter
@@ -35,11 +83,11 @@ def test_main_window_splitter_default_sizes_align_with_inspector_cap(qapp, qtbot
     splitter = w.findChild(QSplitter)
     sizes = splitter.sizes()
     assert len(sizes) == 3
-    # Inspector pane is the third slot. >= 340 keeps content within cap;
-    # > 400 would mean the splitter assigned the inspector more space
-    # than its content can ever fill, leaving a hard empty gap.
-    assert 340 <= sizes[2] <= 420, (
-        f"inspector default splitter size {sizes[2]} should be ~360 to "
+    # Inspector pane is the third slot (narrowed 360 → 288 to match the left
+    # file column). >= 270 keeps content within cap; > 320 would mean the
+    # splitter assigned more space than the content can ever fill.
+    assert 270 <= sizes[2] <= 320, (
+        f"inspector default splitter size {sizes[2]} should be ~288 to "
         "match Inspector._scroll_body.maximumWidth (R3 紧凑化 fix-5)."
     )
     # Inspector minimumWidth must remain <= the default sized slot.
@@ -49,8 +97,8 @@ def test_main_window_splitter_default_sizes_align_with_inspector_cap(qapp, qtbot
     )
 
 
-def test_main_window_inspector_slot_fixed_at_360_under_qss(qapp, qtbot):
-    """Default app styling keeps the right Inspector slot at 360px.
+def test_main_window_inspector_slot_fixed_at_288_under_qss(qapp, qtbot):
+    """Default app styling keeps the right Inspector slot at 288px.
 
     This covers the real startup path more closely than the smoke test
     above because it applies ``style.qss``. The bug report screenshots came
@@ -75,12 +123,12 @@ def test_main_window_inspector_slot_fixed_at_360_under_qss(qapp, qtbot):
 
         splitter = w.findChild(QSplitter)
         sizes = splitter.sizes()
-        assert sizes[2] == 360, (
-            f"Inspector splitter slot should stay fixed at 360px; got {sizes}"
+        assert sizes[2] == 288, (
+            f"Inspector splitter slot should stay fixed at 288px; got {sizes}"
         )
-        assert w.inspector.width() == 360
-        assert w.inspector.minimumWidth() == 360
-        assert w.inspector.maximumWidth() == 360
+        assert w.inspector.width() == 288
+        assert w.inspector.minimumWidth() == 288
+        assert w.inspector.maximumWidth() == 288
     finally:
         qapp.setStyleSheet(old_sheet)
 
@@ -121,7 +169,7 @@ def test_main_window_collapsing_inspector_expands_chart_then_repin_restores(qtbo
     assert w.inspector.isVisible()
     assert w._strip_right.isVisible() is False
     assert w._panel_ctrl_right.state == PanelState.PINNED
-    assert 340 <= restored[2] <= 420
+    assert 270 <= restored[2] <= 320
     assert restored[1] < hidden[1]
 
 
@@ -588,6 +636,7 @@ def test_time_range_fields_track_current_visible_xlim_when_unchecked(
 
     primary = w.canvas_time._primary_xaxis_ax
     primary.set_xlim(0.2, 0.6)
+    w.canvas_time._flush_pending_refresh()
     qapp.processEvents()
 
     lo, hi = w.inspector.top.range_values()
@@ -605,6 +654,7 @@ def test_checking_time_range_uses_current_visible_xlim_without_manual_entry(
 
     primary = w.canvas_time._primary_xaxis_ax
     primary.set_xlim(0.2, 0.6)
+    w.canvas_time._flush_pending_refresh()
     qapp.processEvents()
 
     w.inspector.top.chk_range.setChecked(True)

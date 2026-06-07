@@ -2,8 +2,8 @@
 from PyQt5.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
-    QAction, QFileDialog, QFrame, QLabel, QPushButton, QSizePolicy,
-    QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QAction, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QSplitter, QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 # Hi-DPI copy/save scale (spec §E). The TimeDomainCanvasPG caps the
@@ -60,6 +60,32 @@ def _grab_pixmap_hidpi(canvas, requested=_HIDPI_EXPORT_SCALE):
     return None
 
 
+def _format_mini_html(rows):
+    """Mini dual-cursor: one row per channel — colored dot + name + △ only."""
+    from html import escape
+    parts = ['<table cellspacing="0" cellpadding="0" style="font-size:11px;">']
+    for i, row in enumerate(rows):
+        if len(row) >= 7:
+            ch, _mn, _mx, _avg, delta, u, color = row[:7]
+        else:
+            ch, _mn, _mx, _avg, delta, u = row[:6]
+            color = '#111827'
+        if ']' in ch and ch.startswith('['):
+            ch = ch.split(']', 1)[-1].strip()
+        top_pad = '5px' if i > 0 else '0'
+        mono = "font-family:'SF Mono',Menlo,Consolas,monospace;"
+        parts.append(
+            f'<tr><td style="padding-top:{top_pad};">'
+            f'<span style="color:{color};">●</span></td>'
+            f'<td style="padding-left:4px; color:{color}; font-weight:600; padding-top:{top_pad};">'
+            f'{escape(ch)}</td>'
+            f'<td style="padding-left:8px; color:{color}; {mono} padding-top:{top_pad};">'
+            f'△&nbsp;{delta:.4g}{escape(u)}</td></tr>'
+        )
+    parts.append('</table>')
+    return ''.join(parts)
+
+
 class CursorPill(QFrame):
     """Draggable floating pill with a primary line (time / A·B / ΔT) and an
     optional detail block (per-channel Min/Max/Avg/△ as RichText). The
@@ -72,7 +98,7 @@ class CursorPill(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 7, 10, 8)
+        lay.setContentsMargins(10, 7, 22, 8)
         lay.setSpacing(4)
         self._primary = QLabel("", self)
         self._primary.setObjectName("cursorPillPrimary")
@@ -89,6 +115,14 @@ class CursorPill(QFrame):
         # User-positioned flag — true after first manual drag, so resize events
         # respect the chosen spot instead of snapping back to default corner.
         self._user_placed = False
+        self._mode = "full"
+        self._dual_rows = []
+        self._toggle_btn = QPushButton("−", self)
+        self._toggle_btn.setObjectName("cursorPillToggle")
+        self._toggle_btn.setFixedSize(16, 16)
+        self._toggle_btn.setCursor(Qt.ArrowCursor)
+        self._toggle_btn.clicked.connect(self._toggle_mode)
+        self._toggle_btn.raise_()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -124,6 +158,7 @@ class CursorPill(QFrame):
         self._primary.clear()
         self._detail.clear()
         self._detail.setVisible(False)
+        self._dual_rows = []
         self.setVisible(False)
 
     def mark_user_placed(self, value=True):
@@ -165,6 +200,78 @@ class CursorPill(QFrame):
             return
         super().mouseReleaseEvent(e)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        btn_w = self._toggle_btn.width()
+        self._toggle_btn.move(self.width() - btn_w - 4, 4)
+
+    def _toggle_mode(self):
+        self._mode = "mini" if self._mode == "full" else "full"
+        self._toggle_btn.setText("+" if self._mode == "mini" else "−")
+        self._refresh_detail()
+        self.adjustSize()
+
+    def set_dual_rows(self, rows):
+        self._dual_rows = rows or []
+        self._refresh_detail()
+        if self._dual_rows:
+            self._detail.setVisible(True)
+        self.adjustSize()
+
+    def _refresh_detail(self):
+        if not self._dual_rows:
+            return
+        from .canvases import _format_dual_html
+        html = _format_dual_html(self._dual_rows) if self._mode == "full" else _format_mini_html(self._dual_rows)
+        if html:
+            self._detail.setText(html)
+            self._detail.setVisible(True)
+        else:
+            self._detail.clear()
+            self._detail.setVisible(False)
+
+
+class _QualityStatusIndicator(QFrame):
+    """Small hoverable AA status dot overlaid on the chart card chrome."""
+
+    _COLORS = {
+        "green": QColor("#22c55e"),
+        "yellow": QColor("#f59e0b"),
+        "red": QColor("#ef4444"),
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("chartQualityIndicator")
+        self.setFixedSize(20, 20)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._state = "red"
+        self.set_quality_status({
+            "state": "red",
+            "tooltip": "抗锯齿未激活：无曲线",
+        })
+
+    def set_quality_status(self, status):
+        state = str((status or {}).get("state") or "red")
+        if state not in self._COLORS:
+            state = "red"
+        self._state = state
+        self.setProperty("qualityState", state)
+        self.setToolTip(str((status or {}).get("tooltip") or "抗锯齿状态未知"))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            rect = QRectF(self.rect()).adjusted(5.0, 5.0, -5.0, -5.0)
+            painter.setBrush(self._COLORS.get(self._state, self._COLORS["red"]))
+            painter.setPen(QPen(QColor(255, 255, 255, 230), 1.0))
+            painter.drawEllipse(rect)
+        finally:
+            painter.end()
+
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 import qtawesome as qta
 
@@ -176,15 +283,6 @@ from .widgets import StatsStrip
 
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
-
-# Hint strings shown in the chart toolbar.
-# Key = current toolbar.mode ('pan' | 'zoom' | '' for idle).
-# Each value is a (title, detail) tuple: title shown inline, detail in tooltip.
-_TOOL_HINTS = {
-    'pan':  ('移动曲线', '左键拖动平移 · 右键拖动缩放坐标轴'),
-    'zoom': ('框选缩放', '拖动鼠标框选矩形区域放大 · Home 键可复位'),
-    '':     ('浏览模式', '双击图面打开图表选项 · 工具栏可启用 平移 / 缩放 / 保存'),
-}
 
 # Bottom hint bar — persistent (always-on) shortcuts.
 # Rendered left-aligned in muted gray inside QFrame#chartHintBar.
@@ -324,9 +422,8 @@ class PgNavigationToolbar(QToolBar):
        the other. Tests that read ``str(toolbar.mode).lower()`` keep passing.
     4. ``pan()`` / ``zoom()`` methods that toggle the tool just like
        matplotlib's NavigationToolbar2QT does (no-op repeat call deactivates).
-    5. ``locLabel`` (QLabel) populated at the END of the action sequence so
-       the existing ``_ChartCard`` code that finds and relocates it next to
-       the hint label keeps working unchanged.
+    5. ``locLabel`` exists only as a compatibility attribute; _ChartCard
+       removes toolbar coordinate readouts from the visible action row.
     6. ``home()`` triggers an autoRange on the primary view box; ``back()`` /
        ``forward()`` pop/push view history (xlim+ylim tuples per axis);
        ``save()`` opens a file dialog and writes a grabbed pixmap.
@@ -348,6 +445,7 @@ class PgNavigationToolbar(QToolBar):
     # listens so the hint label + MDI icon active-state refresh, and the
     # right-click menu reads current_mouse_mode() so its checkmark matches.
     mouse_mode_changed = pyqtSignal(str)
+    home_triggered = pyqtSignal()
 
     def __init__(self, canvas, parent=None):
         super().__init__(parent)
@@ -356,6 +454,17 @@ class PgNavigationToolbar(QToolBar):
         # to ''). We mirror with a plain string; tests do
         # `str(toolbar.mode).lower()` so a bare str works without surprises.
         self.mode = self._MODE_NONE
+        # Split-mode action routing: when set to a callable, a user toolbar-
+        # button CLICK is forwarded to the toolbar it returns (the focused
+        # pane's own canvas-bound toolbar) instead of running on this one.
+        # Internal method calls (_ChartCard defaulting to pan, overlay-select
+        # handoff) invoke the methods directly and bypass this, so only the
+        # six nav buttons' user clicks forward. None ⇒ no forwarding.
+        self._action_delegate_provider = None
+        # Split-mode peer routing: pan/zoom/back/forward should apply to this
+        # toolbar and any visible peer pane toolbar without changing focus.
+        self._peer_toolbars_provider = None
+        self._save_pixmap_provider = None
         # View history (matplotlib NavigationToolbar2 model): a single stack
         # of view snapshots plus a pointer into it. ``back()`` decrements the
         # pointer, ``forward()`` increments it, and a brand-new gesture
@@ -380,11 +489,8 @@ class PgNavigationToolbar(QToolBar):
         # we can disconnect before re-binding to fresh ViewBoxes on rebuild
         # (pyqt-ui/2026-04-25-matplotlib-axes-callbacks-lifecycle).
         self._range_conns: list = []
-        # locLabel must exist because _ChartCard.__init__ does
-        # `getattr(self.toolbar, 'locLabel', None)` and inserts it next to
-        # the hint label. We populate it but don't wire mouse-move updates
-        # in this revision; pyqtgraph emits hover via its own SignalProxy
-        # path and that wiring is out of scope for the production switch.
+        # Compatibility only. _ChartCard hides/removes toolbar coordinates;
+        # pyqtgraph hover details are surfaced elsewhere.
         self.locLabel = QLabel("", self)
 
         # Build the six actions in matplotlib's order so _action_keys()
@@ -408,16 +514,18 @@ class PgNavigationToolbar(QToolBar):
         # Wire each action to its handler. We connect by closure so
         # apply_chinese_toolbar_labels can re-tooltip the QAction without
         # disturbing the slot.
-        self._actions_by_key['home'].triggered.connect(self.home)
-        self._actions_by_key['back'].triggered.connect(self.back)
-        self._actions_by_key['forward'].triggered.connect(self.forward)
-        self._actions_by_key['pan'].triggered.connect(self.pan)
-        self._actions_by_key['zoom'].triggered.connect(self.zoom)
-        self._actions_by_key['save'].triggered.connect(self.save_figure)
-        # Append locLabel as the final widget — matplotlib does the same and
-        # _ChartCard relocates it via toolbar.removeAction + insertAction so
-        # it sits to the right of the hint label. Must be the last action.
-        self.addWidget(self.locLabel)
+        # Route through _click_* wrappers (not the methods directly) so a
+        # USER click can be forwarded to the focused pane's toolbar in split
+        # mode, while internal method calls stay on this toolbar.
+        self._actions_by_key['home'].triggered.connect(self._click_home)
+        self._actions_by_key['back'].triggered.connect(self._click_back)
+        self._actions_by_key['forward'].triggered.connect(self._click_forward)
+        self._actions_by_key['pan'].triggered.connect(self._click_pan)
+        self._actions_by_key['zoom'].triggered.connect(self._click_zoom)
+        self._actions_by_key['save'].triggered.connect(self._click_save)
+        # Do not add locLabel to the toolbar. The attribute is retained for
+        # compatibility with old callers, but coordinates are no longer
+        # rendered in the top action row.
 
     # ----- internal helpers ------------------------------------------------
     def _primary_view_box(self):
@@ -729,6 +837,27 @@ class PgNavigationToolbar(QToolBar):
         if changed:
             self.mouse_mode_changed.emit(self.mode)
 
+    def _peers(self):
+        provider = self._peer_toolbars_provider
+        if provider is None:
+            return []
+        try:
+            peers = provider() or []
+        except Exception:
+            return []
+        return [toolbar for toolbar in peers if toolbar is not None and toolbar is not self]
+
+    def set_mouse_mode(self, mode):
+        """Set mouse mode on this toolbar only; callers handle peer broadcast."""
+        if mode == self._MODE_ZOOM:
+            self.set_zoom_mode()
+        elif mode == self._MODE_PAN:
+            self.set_pan_mode()
+        else:
+            self.mode = self._MODE_NONE
+            self.apply_current_mouse_mode()
+            self.mouse_mode_changed.emit(self.mode)
+
     def save_figure(self, *_args):
         """Open a Save-As dialog and write the canvas grab to disk.
 
@@ -743,13 +872,66 @@ class PgNavigationToolbar(QToolBar):
         )
         if not path:
             return
-        pix = _grab_pixmap_hidpi(canvas)
+        pix = None
+        provider = self._save_pixmap_provider
+        if callable(provider):
+            try:
+                pix = provider()
+            except Exception:
+                pix = None
+        if pix is None or pix.isNull():
+            pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():
             return
         try:
             pix.save(path)
         except Exception:
             return
+
+    # ----- split-mode action routing (forward clicks to focused pane) ------
+    def _delegate(self):
+        """Toolbar a user click should run on, or None to run on self.
+
+        Returns the provider's toolbar only when it is a *different* toolbar,
+        so a missing/identity provider degrades to normal (self) behaviour.
+        """
+        provider = self._action_delegate_provider
+        if provider is None:
+            return None
+        try:
+            target = provider()
+        except Exception:
+            return None
+        if target is None or target is self:
+            return None
+        return target
+
+    def _click_home(self, *_a):
+        (self._delegate() or self).home()
+        self.home_triggered.emit()
+
+    def _click_back(self, *_a):
+        self.back()
+        for toolbar in self._peers():
+            toolbar.back()
+
+    def _click_forward(self, *_a):
+        self.forward()
+        for toolbar in self._peers():
+            toolbar.forward()
+
+    def _click_pan(self, *_a):
+        self.pan()
+        for toolbar in self._peers():
+            toolbar.set_mouse_mode(self.mode)
+
+    def _click_zoom(self, *_a):
+        self.zoom()
+        for toolbar in self._peers():
+            toolbar.set_mouse_mode(self.mode)
+
+    def _click_save(self, *_a):
+        self.save_figure()
 
 
 class _ChartCard(QWidget):
@@ -783,9 +965,9 @@ class _ChartCard(QWidget):
         self._hint_rotation_timer.timeout.connect(self._advance_context_hint)
         # Pick the matplotlib NavigationToolbar2QT for matplotlib canvases
         # and the pyqtgraph-aware shim for TimeDomainCanvasPG. The shim
-        # exposes the exact same six action keys + locLabel + mode/pan/zoom
-        # surface so all downstream helpers (i18n, MDI icons, shortcuts,
-        # _find_action) keep working unchanged.
+        # exposes the exact same six action keys + mode/pan/zoom surface so
+        # downstream helpers (i18n, MDI icons, shortcuts, _find_action) keep
+        # working unchanged.
         if isinstance(canvas, TimeDomainCanvasPG):
             self.toolbar = PgNavigationToolbar(canvas, self)
             # Bug 3: re-apply the toolbar's current pan/zoom mode to the
@@ -807,8 +989,8 @@ class _ChartCard(QWidget):
             if callable(reg_mode):
                 reg_mode(self.toolbar)
             # When the menu (or any path) changes the mode, refresh the
-            # toolbar's icon active-state + hint, and let TimeChartCard flip
-            # its axis-lock chips, exactly as a toolbar-button click would.
+            # toolbar icon active-state + bottom hint, and let TimeChartCard
+            # flip its axis-lock chips, exactly as a toolbar-button click would.
             self.toolbar.mouse_mode_changed.connect(self._on_mouse_mode_changed)
         else:
             self.toolbar = NavigationToolbar(canvas, self)
@@ -827,6 +1009,7 @@ class _ChartCard(QWidget):
             self.toolbar.layout().setSpacing(8)
         self._toolbar_compact = None
         _strip_subplots_action(self.toolbar)
+        self._remove_toolbar_loc_label()
 
         # Find Save BEFORE i18n changes labels (text is still 'Save' here);
         # the reference stays valid after relabel because we keep the QAction.
@@ -868,35 +1051,6 @@ class _ChartCard(QWidget):
             self.toolbar.addWidget(self._options_btn)
             self.toolbar.addWidget(self._copy_btn)
 
-        # Two-line hint label sits at the LEFT of the toolbar. Matplotlib's
-        # native locLabel is moved next to it with a fixed width so (x, y)
-        # updates cannot push the right-side chart controls around.
-        self._hint_label = QLabel(self.toolbar)
-        self._hint_label.setObjectName("chartHint")
-        self._hint_label.setTextFormat(Qt.RichText)
-        self._hint_label.setWordWrap(True)
-        self._hint_label.setMinimumWidth(180)
-        self._hint_label.setFixedHeight(28)
-        self._hint_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self._hint_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        loc_label = getattr(self.toolbar, 'locLabel', None)
-        loc_action = None
-        if loc_label is not None:
-            loc_label.setObjectName("chartLocLabel")
-            loc_label.setMinimumWidth(190)
-            loc_label.setMaximumWidth(190)
-            loc_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            loc_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            for act in self.toolbar.actions():
-                if self.toolbar.widgetForAction(act) is loc_label:
-                    loc_action = act
-                    break
-        if loc_action is not None:
-            hint_action = self.toolbar.insertWidget(loc_action, self._hint_label)
-            self.toolbar.removeAction(loc_action)
-            self.toolbar.insertAction(hint_action, loc_action)
-        else:
-            self.toolbar.addWidget(self._hint_label)
         self._loc_action = None
 
         if annotations:
@@ -921,7 +1075,6 @@ class _ChartCard(QWidget):
         self._hint_bar.setObjectName("chartHintBar")
         self._hint_bar.setAttribute(Qt.WA_StyledBackground, True)
         self._hint_bar.setFixedHeight(22)
-        from PyQt5.QtWidgets import QHBoxLayout
         bar_lay = QHBoxLayout(self._hint_bar)
         bar_lay.setContentsMargins(4, 2, 4, 2)
         bar_lay.setSpacing(0)
@@ -931,6 +1084,16 @@ class _ChartCard(QWidget):
         self._hint_context = QLabel("", self._hint_bar)
         self._hint_context.setObjectName("chartHintContext")
         self._hint_context.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._flash_hint_timer = QTimer(self)
+        self._flash_hint_timer.setSingleShot(True)
+        self._flash_hint_timer.setInterval(2500)
+        self._flash_hint_timer.timeout.connect(
+            lambda: self._set_context_hint(reset=True)
+        )
+        if hasattr(self.canvas, 'overlay_y_needs_selection'):
+            self.canvas.overlay_y_needs_selection.connect(
+                lambda: self.flash_hint("先选中一个通道，再用 Shift+滚轮缩放纵向")
+            )
         self._hint_discovery = QLabel("", self._hint_bar)
         self._hint_discovery.setObjectName("chartHintDiscovery")
         self._hint_discovery.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -950,13 +1113,82 @@ class _ChartCard(QWidget):
         lay.addWidget(canvas, stretch=1)
         lay.addWidget(self._hint_bar)
 
+        # Split-focus marker: a thin accent strip overlaid on the TOP of the
+        # card, raised above the canvas. A QSS border on the card is unreliable
+        # here — the full-bleed pyqtgraph canvas paints over it (observed: top
+        # stays white) — so we use a real overlay widget instead. It is card
+        # chrome, so image export (which grabs canvas pixels) never includes it.
+        self._focus_bar = QWidget(self)
+        self._focus_bar.setObjectName("chartFocusBar")
+        self._focus_bar.setFixedHeight(3)
+        self._focus_bar.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._focus_bar.hide()
+
+        self._quality_indicator = None
+        quality_signal = getattr(self.canvas, "quality_status_changed", None)
+        quality_status = getattr(self.canvas, "quality_status", None)
+        if quality_signal is not None and callable(quality_status):
+            self._quality_indicator = _QualityStatusIndicator(self)
+            quality_signal.connect(self._set_quality_status)
+            self._set_quality_status(quality_status())
+
+    def _position_focus_bar(self):
+        bar = getattr(self, "_focus_bar", None)
+        if bar is not None:
+            bar.setGeometry(0, 0, self.width(), bar.height())
+
+    def _position_quality_indicator(self):
+        indicator = getattr(self, "_quality_indicator", None)
+        if indicator is None:
+            return
+        canvas_rect = self.canvas.geometry()
+        margin = 6
+        x = canvas_rect.left() + margin
+        y = canvas_rect.bottom() - indicator.height() - margin + 1
+        indicator.move(max(0, x), max(0, y))
+        indicator.raise_()
+
+    def _set_quality_status(self, status):
+        indicator = getattr(self, "_quality_indicator", None)
+        if indicator is None:
+            return
+        indicator.set_quality_status(status)
+        self._position_quality_indicator()
+
+    def set_focus_marker(self, color):
+        """Show a top accent strip in ``color`` (the focused split pane), or
+        hide it when ``color`` is falsy. The strip overlays the canvas top."""
+        bar = getattr(self, "_focus_bar", None)
+        if bar is None:
+            return
+        if color:
+            bar.setStyleSheet(
+                f"background-color:{color};"
+                "border-top-left-radius:11px;border-top-right-radius:11px;"
+            )
+            self._position_focus_bar()
+            bar.raise_()
+            bar.show()
+        else:
+            bar.hide()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_responsive_toolbar()
+        self._position_focus_bar()
+        self._position_quality_indicator()
+        bar = getattr(self, "_focus_bar", None)
+        if bar is not None and bar.isVisible():
+            bar.raise_()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._sync_responsive_toolbar()
+        self._position_quality_indicator()
+        bar = getattr(self, "_focus_bar", None)
+        if bar is not None and bar.isVisible():
+            self._position_focus_bar()
+            bar.raise_()
 
     def eventFilter(self, obj, event):
         etype = event.type()
@@ -965,6 +1197,29 @@ class _ChartCard(QWidget):
         elif etype in (QEvent.MouseButtonRelease, QEvent.Leave):
             self.set_hint_rotation_paused(False)
         return super().eventFilter(obj, event)
+
+    def detach_toolbar(self, parent):
+        """Remove the card toolbar from this card layout and reparent it."""
+        self.layout().removeWidget(self.toolbar)
+        self.toolbar.setParent(parent)
+        return self.toolbar
+
+    def _remove_toolbar_loc_label(self):
+        loc_label = getattr(self.toolbar, "locLabel", None)
+        if loc_label is None:
+            return
+        loc_label.setObjectName("chartLocLabel")
+        for act in list(self.toolbar.actions()):
+            if self.toolbar.widgetForAction(act) is loc_label:
+                self.toolbar.removeAction(act)
+                break
+        loc_label.hide()
+
+    def detach_bottom_hint_bar(self, parent):
+        """Remove the bottom hint bar from this card layout and reparent it."""
+        self.layout().removeWidget(self._hint_bar)
+        self._hint_bar.setParent(parent)
+        return self._hint_bar
 
     def _sync_responsive_toolbar(self):
         if not self.toolbar.isVisible():
@@ -976,15 +1231,6 @@ class _ChartCard(QWidget):
         if compact == self._toolbar_compact:
             return
         self._toolbar_compact = compact
-        self._hint_label.setMinimumWidth(0 if compact else 180)
-        self._hint_label.setMaximumWidth(0 if compact else _QT_WIDGETSIZE_MAX)
-        self._hint_label.setVisible(not compact)
-        loc_label = getattr(self.toolbar, 'locLabel', None)
-        if loc_label is not None:
-            loc_width = 0 if compact else 190
-            loc_label.setMinimumWidth(loc_width)
-            loc_label.setMaximumWidth(loc_width)
-            loc_label.setVisible(not compact)
         self.toolbar.updateGeometry()
 
     def _insert_toolbar_widget(self, loc_action, widget):
@@ -995,8 +1241,32 @@ class _ChartCard(QWidget):
 
     def _insert_right_toolbar_widget(self, loc_action, widget):
         # Insert at the card's right-control zone. Passing ``None`` appends
-        # after the fixed loc/hint labels; TimeDomain uses the same path.
+        # to the toolbar after the navigation/copy/save actions.
         self._insert_toolbar_widget(loc_action, widget)
+
+    def _insert_toolbar_widget_after(self, after_action, widget):
+        actions = self.toolbar.actions()
+        if after_action in actions:
+            index = actions.index(after_action)
+            if index + 1 < len(actions):
+                self.toolbar.insertWidget(actions[index + 1], widget)
+                return
+        self.toolbar.addWidget(widget)
+
+    def _install_compact_annotation_control_after(self, after_action):
+        self._annotation_btn = QToolButton(self.toolbar)
+        self._annotation_btn.setObjectName("chartAnnotationButton")
+        self._annotation_btn.setIcon(Icons.annotate(QColor(_ICON_COLOR)))
+        self._annotation_btn.setIconSize(QSize(18, 18))
+        self._annotation_btn.setFixedSize(QSize(32, 32))
+        self._annotation_btn.setCheckable(True)
+        self._annotation_btn.setAutoRaise(True)
+        self._annotation_btn.setToolTip("标注：开启后左键添加标注；右键删除最近标注")
+        self._annotation_btn.setProperty("compactAnnotation", True)
+        self._annotation_btn.clicked.connect(
+            lambda checked=False: self.set_annotation_enabled(checked)
+        )
+        self._insert_toolbar_widget_after(after_action, self._annotation_btn)
 
     def _install_annotation_controls(self, loc_action):
         self._annotation_spacer = QWidget(self.toolbar)
@@ -1047,9 +1317,12 @@ class _ChartCard(QWidget):
         if btn is not None:
             btn.blockSignals(True)
             btn.setChecked(self._annotation_enabled)
-            btn.setText("关闭" if self._annotation_enabled else "开启")
             icon_color = _ICON_ACTIVE if self._annotation_enabled else _ICON_COLOR
-            btn.setIcon(qta.icon('mdi.map-marker-plus-outline', color=icon_color))
+            if btn.property("compactAnnotation"):
+                btn.setIcon(Icons.annotate(QColor(icon_color)))
+            else:
+                btn.setText("关闭" if self._annotation_enabled else "开启")
+                btn.setIcon(qta.icon('mdi.map-marker-plus-outline', color=icon_color))
             btn.blockSignals(False)
         if notify:
             self.annotation_enabled_changed.emit(self._annotation_enabled)
@@ -1060,7 +1333,13 @@ class _ChartCard(QWidget):
             self.canvas.clear_remarks()
 
     def open_chart_options(self):
-        opener = getattr(self.canvas, 'open_chart_options_dialog', None)
+        # In split mode the primary card's options button is the shared
+        # toolbar's; ChartStack points _options_canvas_provider at the focused
+        # canvas so 图表选项 opens for whichever pane is focused. Default: own
+        # canvas (every analysis card and the non-split time card).
+        provider = getattr(self, '_options_canvas_provider', None)
+        canvas = provider() if callable(provider) else self.canvas
+        opener = getattr(canvas, 'open_chart_options_dialog', None)
         if opener is not None:
             return opener()
         return False
@@ -1115,6 +1394,11 @@ class _ChartCard(QWidget):
         index = self._context_hint_index % len(candidates)
         self._hint_context.setText(candidates[index].text)
 
+    def flash_hint(self, text):
+        """Show a transient context hint, then restore the rotating hint."""
+        self._hint_context.setText(str(text))
+        self._flash_hint_timer.start()
+
     def _advance_context_hint(self):
         if self._hint_rotation_paused:
             return
@@ -1143,10 +1427,6 @@ class _ChartCard(QWidget):
 
     def _refresh_hint(self, *_):
         key = self._current_mode_key()
-        title, detail = _TOOL_HINTS.get(key, _TOOL_HINTS[''])
-        color = _ICON_ACTIVE if key else _ICON_COLOR
-        self._hint_label.setText(f'<b style="color:{color}">{title}</b>')
-        self._hint_label.setToolTip(f'{title}\n{detail}')
         _apply_mdi_icons(self.toolbar, active_key=key)
         self._refresh_bottom_hint()
 
@@ -1161,8 +1441,10 @@ class TimeChartCard(_ChartCard):
 
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent, chart_mode='time')
-        # Right-align time-only controls with the same locLabel insertion
-        # point used by annotation controls on analysis cards.
+        zoom_act = _find_action(self.toolbar, 'zoom')
+        self._install_compact_annotation_control_after(zoom_act)
+        # Right-align time-only controls with the same spacer pattern used by
+        # annotation controls on analysis cards.
         loc_action = getattr(self, '_loc_action', None)
         self._time_separators = []
         self._time_controls_spacer = QWidget(self.toolbar)
@@ -1242,6 +1524,21 @@ class TimeChartCard(_ChartCard):
             self._time_button_shortcuts.append(
                 _install_button_shortcut(self, btn, label, shortcut, key)
             )
+        self._time_annotation_shortcut = _install_button_shortcut(
+            self,
+            self._annotation_btn,
+            "标注：左键添加，右键删除最近一处",
+            "Alt+M",
+            "annotation",
+        )
+        self.view_tabbar = None
+
+    def mount_view_tabbar(self, bar):
+        """Mount the ViewTabBar between the canvas and bottom hint bar."""
+        bar.setParent(self)
+        lay = self.layout()
+        lay.insertWidget(lay.indexOf(self._hint_bar), bar)
+        self.view_tabbar = bar
 
     def _sync_responsive_toolbar(self):
         super()._sync_responsive_toolbar()
@@ -1344,6 +1641,12 @@ class ChartStack(QWidget):
     annotation_enabled_changed = pyqtSignal(str, bool)
     image_copied = pyqtSignal(str)  # legacy status text signal
     image_captured = pyqtSignal(QPixmap)  # final pixmap for MainWindow publishing
+    # Emitted when the focused time card changes while side-by-side (split) is
+    # active. Carries True when the secondary card is focused, False for the
+    # primary. MainWindow uses it to route channel-check replots to the right
+    # canvas; it is inert (never emitted) outside split mode.
+    focus_changed = pyqtSignal(bool)
+    home_triggered = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1356,6 +1659,41 @@ class ChartStack(QWidget):
         self.canvas_fft_time = SpectrogramCanvas(self)
         self.canvas_order = PlotCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
+        self._primary_plot_mode = self._time_card.plot_mode()
+        self._primary_cursor_mode = self._time_card.cursor_mode()
+        self._time_page = QWidget(self.stack)
+        self._time_page.setObjectName("timeDomainPage")
+        time_lay = QVBoxLayout(self._time_page)
+        time_lay.setContentsMargins(0, 0, 0, 0)
+        time_lay.setSpacing(0)
+        self._time_toolbar = self._time_card.detach_toolbar(self._time_page)
+        time_lay.addWidget(self._time_toolbar)
+        self._time_split = QSplitter(Qt.Horizontal, self._time_page)
+        self._time_split.setObjectName("timeDomainSplit")
+        self._time_split.setChildrenCollapsible(False)
+        self._time_split.addWidget(self._time_card)
+        time_lay.addWidget(self._time_split, stretch=1)
+        self._time_bottom_dock = QFrame(self._time_page)
+        self._time_bottom_dock.setObjectName("timeViewBottomDock")
+        self._time_bottom_dock.setAttribute(Qt.WA_StyledBackground, True)
+        dock_lay = QVBoxLayout(self._time_bottom_dock)
+        dock_lay.setContentsMargins(0, 0, 0, 0)
+        dock_lay.setSpacing(0)
+        self._time_hint_bar = self._time_card.detach_bottom_hint_bar(
+            self._time_bottom_dock
+        )
+        self._configure_time_hint_bar()
+        dock_lay.addWidget(self._time_hint_bar)
+        time_lay.addWidget(self._time_bottom_dock)
+        self._secondary_card = None
+        # Focus routing (P2 Task 9 Step 5): the focused time card receives
+        # channel-check replots while side-by-side is active. Defaults to the
+        # primary card; a click on either card switches focus (see
+        # _install_focus_filter / eventFilter). Outside split mode the
+        # focused card is always the primary and the property is unset.
+        self._focused_card = self._time_card
+        self._focus_accent = "#2d7ff9"
+        self._install_focus_filter(self._time_card)
         self._fft_card = _ChartCard(
             self.canvas_fft,
             annotations=True,
@@ -1369,14 +1707,43 @@ class ChartStack(QWidget):
             annotations=True,
             chart_mode='order',
         )
-        self.stack.addWidget(self._time_card)
+        self.stack.addWidget(self._time_page)
         self.stack.addWidget(self._fft_card)
         self.stack.addWidget(self._fft_time_card)
         self.stack.addWidget(self._order_card)
-        for card in (self._time_card, self._fft_card, self._fft_time_card, self._order_card):
+        for card in (self._fft_card, self._fft_time_card, self._order_card):
             card.copy_image_requested.connect(
                 lambda c=card: self._copy_card_image(c)
             )
+        # The time card's copy button lives on the shared toolbar; route it to
+        # the focused pane so 复制为图片 captures whichever pane is focused.
+        self._time_card.copy_image_requested.connect(
+            lambda: self._copy_card_image(self.focused_card())
+        )
+        # Shared-toolbar home/save still target the focused pane; pan/zoom and
+        # history buttons broadcast to the visible peer toolbar below.
+        self._time_toolbar._action_delegate_provider = self._focused_nav_delegate
+        self._time_toolbar._peer_toolbars_provider = (
+            lambda: [self._secondary_card.toolbar]
+            if (self.split_active() and self._secondary_card is not None)
+            else []
+        )
+        self._time_toolbar._save_pixmap_provider = self._combined_split_pixmap
+        self._time_toolbar.home_triggered.connect(self.home_triggered.emit)
+        # 图表选项 on the shared toolbar opens for the focused pane's canvas.
+        self._time_card._options_canvas_provider = self.focused_canvas
+        # Mirror the focused pane's pan/zoom state onto the shared toolbar
+        # icons. Connected AFTER the primary card's own _on_nav_mode_toggled
+        # (bound during _ChartCard.__init__) so this runs LAST in the action's
+        # triggered emission and wins — otherwise the card handler would
+        # re-assert the primary's icon after a click that forwarded to the
+        # secondary. Idempotent; no-op outside split.
+        for _key in ('pan', 'zoom'):
+            _act = self._time_toolbar._actions_by_key.get(_key)
+            if _act is not None:
+                _act.triggered.connect(
+                    lambda _checked=False: self._sync_shared_nav_highlight()
+                )
         lay.addWidget(self.stack, stretch=1)
 
         # Stats strip retained for later re-enable, but hidden from the UI for now.
@@ -1384,22 +1751,31 @@ class ChartStack(QWidget):
         lay.addWidget(self.stats_strip)
         self.stats_strip.setVisible(_STATS_STRIP_ENABLED)
 
-        # Single draggable cursor pill (owned by ChartStack; floats over the
-        # active canvas card). Default position is the top-right corner so it
-        # stays clear of Y-axis labels and the typical data-of-interest area;
-        # the user can drag it elsewhere — see CursorPill.mark_user_placed.
+        # Per-pane draggable cursor pills. The primary pill is always present;
+        # the secondary pill is created when split view is first opened.
         self._pill = CursorPill(self.stack)
         self._pill.setVisible(False)
-        self.canvas_time.cursor_info.connect(self._on_cursor_info)
-        self.canvas_time.dual_cursor_info.connect(self._on_dual_cursor_info)
+        self._pill_secondary = None  # created/destroyed with enter/exit_split
+        self._active_cursor_card = self._time_card
+        # Pass the SOURCE canvas so the pill picks the right per-pane cursor
+        # mode (single/dual formatting) and anchors over the emitting pane.
+        self.canvas_time.cursor_info.connect(
+            lambda text: self._on_cursor_info(text, self.canvas_time)
+        )
+        self.canvas_time.dual_cursor_info.connect(
+            lambda text: self._on_dual_cursor_info(text, self.canvas_time)
+        )
+        if hasattr(self.canvas_time, 'dual_cursor_rows'):
+            self.canvas_time.dual_cursor_rows.connect(self._pill.set_dual_rows)
         self.stack.currentChanged.connect(lambda _i: self._reposition_pill())
 
         # Relay time-card control signals up to MainWindow consumers.
-        self._time_card.plot_mode_changed.connect(self.plot_mode_changed)
+        self._time_card.plot_mode_changed.connect(self._on_shared_plot_mode_changed)
         self._time_card.cursor_mode_changed.connect(
-            self._on_time_cursor_mode_changed
+            self._on_shared_cursor_mode_changed
         )
         for mode, card in (
+            ('time', self._time_card),
             ('fft', self._fft_card),
             ('fft_time', self._fft_time_card),
             ('order', self._order_card),
@@ -1413,8 +1789,404 @@ class ChartStack(QWidget):
             _STATS_STRIP_ENABLED and self.current_mode() == 'time'
         )
 
+    def _configure_time_hint_bar(self):
+        self._time_hint_bar.setFixedHeight(20)
+        lay = self._time_hint_bar.layout()
+        while lay.count():
+            lay.takeAt(0)
+        lay.setContentsMargins(8, 1, 8, 1)
+        lay.setSpacing(0)
+        for label in (
+            self._time_card._hint_persistent,
+            self._time_card._hint_discovery,
+            self._time_card._hint_context,
+        ):
+            label.setAlignment(Qt.AlignCenter)
+        lay.addStretch(1)
+        lay.addWidget(self._time_card._hint_persistent, 0)
+        lay.addWidget(self._time_card._hint_discovery, 0)
+        lay.addWidget(self._time_card._hint_context, 0)
+        lay.addStretch(1)
+
     def count(self):
         return self.stack.count()
+
+    def split_active(self):
+        return (
+            self._secondary_card is not None
+            and self.current_mode() == 'time'
+            and self._secondary_card.isVisibleTo(self._time_split)
+        )
+
+    def secondary_canvas(self):
+        if self._secondary_card is None:
+            return None
+        return self._secondary_card.canvas
+
+    def focused_card(self):
+        """Return the time card that channel-check replots target.
+
+        Outside split mode (or when the secondary card has been hidden), the
+        focused card is always the primary ``_time_card``; this keeps the
+        non-split behaviour byte-identical. While split is active, the focused
+        card follows the last card the user clicked."""
+        if not self.split_active():
+            return self._time_card
+        if self._focused_card is self._secondary_card and self._secondary_card is not None:
+            return self._secondary_card
+        return self._time_card
+
+    def focused_canvas(self):
+        """Canvas of :meth:`focused_card`. Returns the primary time canvas
+        whenever split is inactive, so callers that previously wrote to
+        ``self.canvas_time`` keep the same target outside compare mode."""
+        return self.focused_card().canvas
+
+    def _focused_nav_delegate(self):
+        """Toolbar a shared-toolbar nav click should act on, or None.
+
+        While side-by-side is active and the secondary pane is focused, return
+        the secondary card's own canvas-bound toolbar so home/pan/zoom/back/
+        forward/save operate on the secondary canvas with ITS view history and
+        mouse mode. Otherwise None ⇒ the shared (primary) toolbar handles it,
+        keeping non-split / primary-focused behaviour byte-identical."""
+        if (self.split_active()
+                and self._secondary_card is not None
+                and self._focused_card is self._secondary_card):
+            return self._secondary_card.toolbar
+        return None
+
+    def _sync_shared_nav_highlight(self):
+        """Repaint the shared toolbar's pan/zoom highlight to match the focused
+        pane's current mouse mode.
+
+        Cosmetic only: the shared toolbar object stays bound to the primary
+        canvas (its ``mode`` must keep driving the primary's replot mouse-mode
+        re-apply), so we only repaint its icon active-state. A later primary
+        replot can transiently re-assert the primary's icon; the next focus or
+        pan/zoom change corrects it."""
+        toolbar = getattr(self, '_time_toolbar', None)
+        if toolbar is None:
+            return
+        target = self.focused_card().toolbar
+        mode = str(getattr(target, 'mode', '')).lower()
+        key = 'pan' if 'pan' in mode else ('zoom' if 'zoom' in mode else '')
+        _apply_mdi_icons(toolbar, active_key=key)
+
+    def _card_for_canvas(self, canvas):
+        """Owning time card for a cursor-emitting ``canvas`` (primary fallback)."""
+        if (canvas is not None
+                and self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            return self._secondary_card
+        return self._time_card
+
+    def _combined_split_pixmap(self):
+        """Return primary+secondary canvas pixels side-by-side while split."""
+        if not self.split_active() or self._secondary_card is None:
+            return None
+        left = _grab_pixmap_hidpi(self.canvas_time)
+        right = _grab_pixmap_hidpi(self._secondary_card.canvas)
+        if left is None or right is None or left.isNull() or right.isNull():
+            return None
+        gap = 8
+        out = QPixmap(
+            left.width() + gap + right.width(),
+            max(left.height(), right.height()),
+        )
+        out.fill(Qt.white)
+        painter = QPainter(out)
+        painter.drawPixmap(0, 0, left)
+        painter.drawPixmap(left.width() + gap, 0, right)
+        painter.end()
+        return out
+
+    def _cursor_mode_for_canvas(self, canvas):
+        """Per-pane cursor mode ('off'/'single'/'dual') for the pill formatter.
+
+        Mirrors :meth:`plot_mode_for_canvas`: the readout layout depends on the
+        mode of the pane that emitted it, not always the primary's."""
+        if (canvas is not None
+                and self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            return self._secondary_card.cursor_mode()
+        return self._primary_cursor_mode
+
+    def cursor_mode_for_canvas(self, canvas):
+        """Public per-pane cursor-mode accessor, matching plot_mode_for_canvas."""
+        return self._cursor_mode_for_canvas(canvas)
+
+    def _shared_time_controls_follow_secondary(self):
+        return (
+            self.split_active()
+            and self._secondary_card is not None
+            and self._focused_card is self._secondary_card
+        )
+
+    def _set_shared_plot_mode_silent(self, mode):
+        old = self._time_card.blockSignals(True)
+        try:
+            self._time_card.set_plot_mode(mode)
+        finally:
+            self._time_card.blockSignals(old)
+
+    def _set_shared_cursor_mode_silent(self, mode):
+        old = self._time_card.blockSignals(True)
+        try:
+            self._time_card.set_cursor_mode(mode)
+        finally:
+            self._time_card.blockSignals(old)
+
+    def _sync_shared_time_controls_to_focus(self):
+        """Reflect the focused pane's state on the shared time toolbar."""
+        if self._shared_time_controls_follow_secondary():
+            plot_mode = self._secondary_card.plot_mode()
+            cursor_mode = self._secondary_card.cursor_mode()
+        else:
+            plot_mode = self._primary_plot_mode
+            cursor_mode = self._primary_cursor_mode
+        self._set_shared_plot_mode_silent(plot_mode)
+        self._set_shared_cursor_mode_silent(cursor_mode)
+
+    def set_focused_card(self, card):
+        """Make ``card`` the focused time card and repaint the focus border.
+
+        No-op outside split mode and when the target is already focused. The
+        ``focused`` dynamic property drives the QSS accent border; after every
+        change both cards are unpolished/re-polished so the property selector
+        re-evaluates (Qt does not re-apply property-keyed rules automatically).
+        Emits :attr:`focus_changed` with True when the secondary is focused."""
+        if not self.split_active():
+            return
+        if card not in (self._time_card, self._secondary_card):
+            return
+        if card is self._focused_card:
+            # Still ensure the border reflects current state (e.g. just after
+            # enter_split seeded the primary as focused).
+            self._refresh_focus_borders()
+            self._sync_shared_time_controls_to_focus()
+            self._sync_shared_nav_highlight()
+            return
+        self._focused_card = card
+        self._refresh_focus_borders()
+        self._sync_secondary_controls_to_focus()
+        self._sync_shared_nav_highlight()
+        self.focus_changed.emit(card is self._secondary_card)
+
+    def set_focus_accent(self, color):
+        """Set the top-line accent color for the currently focused time card."""
+        self._focus_accent = color or "#2d7ff9"
+        self._refresh_focus_borders()
+
+    def _refresh_focus_borders(self):
+        """Sync the ``focused`` dynamic property + repaint for both cards.
+
+        Only highlights while split is active; in single-pane mode neither card
+        carries the property so the default ``#chartCard`` border applies."""
+        active = self.split_active()
+        focused = self._focused_card if active else None
+        cards = [self._time_card]
+        if self._secondary_card is not None:
+            cards.append(self._secondary_card)
+        for card in cards:
+            want = active and card is focused
+            if card.property("focused") != want:
+                card.setProperty("focused", want)
+            # Visual focus cue is the overlay accent strip (a QSS card border is
+            # painted over by the full-bleed canvas). Color = focused view tab.
+            marker = getattr(card, "set_focus_marker", None)
+            if callable(marker):
+                card.set_focus_marker(self._focus_accent if want else None)
+            # Keep the dynamic-property polish cycle for any QSS keyed on it.
+            card.style().unpolish(card)
+            card.style().polish(card)
+            card.update()
+
+    def _install_focus_filter(self, card):
+        """Watch mouse presses on a time card (and its canvas/viewport) so a
+        click anywhere on the card focuses it. Installed once per card; the
+        base card already filters its canvas for hint pausing, so stacking a
+        second filter here is safe and order-independent.
+
+        Also enables WA_StyledBackground so the #chartCard QSS border (and the
+        focused-accent override) paints reliably on the plain QWidget card —
+        without it Qt only paints the corners and the straight edges stay
+        un-bordered, which would make the focus accent invisible behind the
+        margin-0 toolbar/canvas children. The card already declares an explicit
+        background-color in QSS, so the flag has no white-bleed side effect."""
+        card.setAttribute(Qt.WA_StyledBackground, True)
+        card.installEventFilter(self)
+        canvas = getattr(card, 'canvas', None)
+        if canvas is not None:
+            canvas.installEventFilter(self)
+            glw = getattr(canvas, '_glw', None)
+            viewport = None
+            if glw is not None:
+                try:
+                    viewport = glw.viewport()
+                except Exception:
+                    viewport = None
+            if viewport is not None:
+                viewport.installEventFilter(self)
+
+    def _card_for_object(self, obj):
+        """Map a filtered object (card, canvas, or canvas viewport) back to its
+        owning time card, or None if it belongs to neither time card."""
+        for card in (self._time_card, self._secondary_card):
+            if card is None:
+                continue
+            if obj is card:
+                return card
+            canvas = getattr(card, 'canvas', None)
+            if canvas is None:
+                continue
+            if obj is canvas:
+                return card
+            glw = getattr(canvas, '_glw', None)
+            if glw is not None:
+                try:
+                    viewport = glw.viewport()
+                except Exception:
+                    viewport = None
+                if viewport is not None and obj is viewport:
+                    return card
+        return None
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress and self.split_active():
+            card = self._card_for_object(obj)
+            if card is not None and card is not self._focused_card:
+                self.set_focused_card(card)
+        return super().eventFilter(obj, event)
+
+    def enter_split(self):
+        if self._secondary_card is None:
+            canvas = TimeDomainCanvasPG(self)
+            self._secondary_card = TimeChartCard(canvas)
+            self._secondary_card.detach_toolbar(self._secondary_card).hide()
+            self._secondary_card.detach_bottom_hint_bar(self._secondary_card).hide()
+            self._set_secondary_time_controls_enabled(False)
+            self._secondary_card.copy_image_requested.connect(
+                lambda: self._copy_card_image(self._secondary_card)
+            )
+            # Per-pane control routing (P2 Task 9 1b): the secondary card's
+            # own 分屏/叠加/游标 segmented controls act on the SECONDARY canvas,
+            # not the primary. Plot-mode flips need a replot of the secondary
+            # (re-laid out subplot↔overlay), cursor flips toggle the secondary
+            # canvas's cursor directly. We keep these inside ChartStack so the
+            # secondary stays self-contained and never disturbs the primary.
+            self._secondary_card.plot_mode_changed.connect(
+                self._on_secondary_plot_mode_changed
+            )
+            self._secondary_card.cursor_mode_changed.connect(
+                self._on_secondary_cursor_mode_changed
+            )
+            # The secondary pane has its own pill so both split panes can show
+            # independent single/dual cursor readouts at the same time.
+            if self._pill_secondary is None:
+                self._pill_secondary = CursorPill(self.stack)
+                self._pill_secondary.setVisible(False)
+            canvas.cursor_info.connect(
+                lambda text, c=canvas: self._on_cursor_info(text, c)
+            )
+            canvas.dual_cursor_info.connect(
+                lambda text, c=canvas: self._on_dual_cursor_info(text, c)
+            )
+            if hasattr(canvas, 'dual_cursor_rows'):
+                canvas.dual_cursor_rows.connect(self._pill_secondary.set_dual_rows)
+            self._time_split.addWidget(self._secondary_card)
+            self._install_focus_filter(self._secondary_card)
+        self._secondary_card.setVisible(True)
+        total = max(2, self._time_split.width())
+        left = max(1, total // 2)
+        self._time_split.setSizes([left, max(1, total - left)])
+        # Entering split (re)seeds focus on the primary card and lights its
+        # accent border; the secondary stays unfocused until clicked.
+        self._focused_card = self._time_card
+        self._refresh_focus_borders()
+        self._sync_secondary_controls_to_focus()
+        self._sync_shared_nav_highlight()
+
+    def _on_secondary_plot_mode_changed(self, mode):
+        """Replot the secondary canvas in the new layout (subplot↔overlay).
+
+        Asks MainWindow to redraw the secondary pane while preserving its
+        visible X window (see TimeDomain state-preservation lesson). The
+        secondary card is the focused card whenever its controls are live, so
+        we route through ``replot_secondary`` rather than disturbing the
+        primary. No replot hook → silently no-op (secondary not yet wired)."""
+        replot = getattr(self, '_replot_secondary_cb', None)
+        if callable(replot):
+            replot()
+
+    def _on_secondary_cursor_mode_changed(self, mode):
+        """Toggle the secondary canvas's cursor (off/single/dual) in place."""
+        if mode == 'off' and self._pill_secondary is not None:
+            self._pill_secondary.clear()
+        canvas = self._secondary_card.canvas
+        canvas.set_cursor_visible(mode != 'off')
+        canvas.set_dual_cursor_mode(mode == 'dual')
+
+    def set_secondary_replot_callback(self, cb):
+        """MainWindow registers a callable that replots the secondary canvas
+        preserving its X window. Used when the secondary card's own plot-mode
+        control flips (subplot↔overlay needs a fresh layout)."""
+        self._replot_secondary_cb = cb
+
+    def exit_split(self):
+        if self._secondary_card is not None:
+            self._secondary_card.setVisible(False)
+        if self._pill_secondary is not None:
+            self._pill_secondary.setVisible(False)
+            self._pill_secondary.clear()
+        # Back to single pane: drop focus highlighting and reset to primary.
+        self._focused_card = self._time_card
+        self._refresh_focus_borders()
+        # Restore the primary card's controls (single live group again) and
+        # disable the now-hidden secondary's.
+        self._sync_secondary_controls_to_focus()
+        self._sync_shared_nav_highlight()
+
+    def attach_view_tabbar(self, manager):
+        from .view_tabbar import ViewTabBar
+
+        existing = getattr(self, '_view_tabbar', None)
+        if existing is not None:
+            existing.setVisible(self.current_mode() == 'time')
+            return existing
+
+        bar = ViewTabBar(manager, self._time_bottom_dock)
+        self._time_bottom_dock.layout().insertWidget(0, bar)
+        self._view_tabbar = bar
+        bar.setVisible(self.current_mode() == 'time')
+        return bar
+
+    def take_time_hint_bar(self, parent):
+        """Move the shared time-domain hint bar to another container."""
+        return self.take_hint_bar('time', parent)
+
+    def hint_bar_for_mode(self, mode):
+        if mode == 'time':
+            return self._time_card._hint_bar
+        if mode == 'fft':
+            return self._fft_card._hint_bar
+        if mode == 'fft_time':
+            return self._fft_time_card._hint_bar
+        if mode == 'order':
+            return self._order_card._hint_bar
+        raise KeyError(mode)
+
+    def take_hint_bar(self, mode, parent):
+        """Move the mode's hint bar to a shared external container."""
+        bar = self.hint_bar_for_mode(mode)
+        old_parent = bar.parentWidget()
+        if old_parent is not None:
+            layout = old_parent.layout()
+            if layout is not None and layout.indexOf(bar) >= 0:
+                layout.removeWidget(bar)
+        bar.setParent(parent)
+        bar.setVisible(True)
+        return bar
 
     def set_mode(self, mode):
         idx = _MODE_TO_INDEX[mode]
@@ -1422,6 +2194,10 @@ class ChartStack(QWidget):
             return
         self.stack.setCurrentIndex(idx)
         self.stats_strip.setVisible(_STATS_STRIP_ENABLED and mode == 'time')
+        bar = getattr(self, '_view_tabbar', None)
+        if bar is not None:
+            bar.setVisible(mode == 'time')
+        self._time_bottom_dock.setVisible(mode == 'time')
         self.mode_changed.emit(mode)
 
     def current_mode(self):
@@ -1429,16 +2205,120 @@ class ChartStack(QWidget):
 
     # ----- plot-mode / cursor-mode passthroughs -----
     def plot_mode(self):
-        return self._time_card.plot_mode()
+        return self._primary_plot_mode
 
     def set_plot_mode(self, mode):
-        self._time_card.set_plot_mode(mode)
+        if mode not in ('subplot', 'overlay'):
+            return
+        old_primary = self._primary_plot_mode
+        if old_primary == mode:
+            if not self._shared_time_controls_follow_secondary():
+                self._set_shared_plot_mode_silent(mode)
+            return
+        self._primary_plot_mode = mode
+        if not self._shared_time_controls_follow_secondary():
+            self._set_shared_plot_mode_silent(mode)
+        self.plot_mode_changed.emit(mode)
+
+    def plot_mode_for_canvas(self, canvas):
+        """Return the plot mode ('subplot'/'overlay') of the time card that
+        owns ``canvas`` (P2 Task 9 1b).
+
+        Each time pane now carries its OWN 分屏/叠加 state, so a replot must
+        read the mode from the card owning the target canvas, not always the
+        primary card. Falls back to the primary card's mode for any canvas we
+        don't recognise (keeps non-split behaviour byte-identical)."""
+        if (self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            return self._secondary_card.plot_mode()
+        return self._primary_plot_mode
+
+    def set_plot_mode_for_canvas(self, canvas, mode):
+        """Set plot mode on the card that owns ``canvas`` without re-emitting.
+
+        Used by ViewState apply/render paths where the target pane may be the
+        secondary compare card. The interactive controls still emit through the
+        existing set_plot_mode/_on_shared_plot_mode_changed paths.
+        """
+        if mode not in ('subplot', 'overlay'):
+            return
+        if (self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            self._set_secondary_plot_mode_silent(mode)
+            return
+        self._primary_plot_mode = mode
+        if not self._shared_time_controls_follow_secondary():
+            self._set_shared_plot_mode_silent(mode)
 
     def cursor_mode(self):
-        return self._time_card.cursor_mode()
+        return self._primary_cursor_mode
 
     def set_cursor_mode(self, mode):
-        self._time_card.set_cursor_mode(mode)
+        if mode not in ('off', 'single', 'dual'):
+            return
+        old_primary = self._primary_cursor_mode
+        if old_primary == mode:
+            if not self._shared_time_controls_follow_secondary():
+                self._set_shared_cursor_mode_silent(mode)
+            return
+        self._primary_cursor_mode = mode
+        if not self._shared_time_controls_follow_secondary():
+            self._set_shared_cursor_mode_silent(mode)
+        self._on_time_cursor_mode_changed(mode)
+
+    def set_cursor_mode_for_canvas(self, canvas, mode):
+        """Set cursor mode on the card/canvas owning ``canvas`` without signals."""
+        if mode not in ('off', 'single', 'dual'):
+            return
+        if (self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            self._set_secondary_cursor_mode_silent(mode)
+            target = self._secondary_card.canvas
+        else:
+            self._primary_cursor_mode = mode
+            if not self._shared_time_controls_follow_secondary():
+                self._set_shared_cursor_mode_silent(mode)
+            target = self.canvas_time
+        target.set_cursor_visible(mode != 'off')
+        target.set_dual_cursor_mode(mode == 'dual')
+
+    def _set_secondary_plot_mode_silent(self, mode):
+        if self._secondary_card is None:
+            return
+        old = self._secondary_card.blockSignals(True)
+        try:
+            self._secondary_card.set_plot_mode(mode)
+        finally:
+            self._secondary_card.blockSignals(old)
+
+    def _set_secondary_cursor_mode_silent(self, mode):
+        if self._secondary_card is None:
+            return
+        old = self._secondary_card.blockSignals(True)
+        try:
+            self._secondary_card.set_cursor_mode(mode)
+        finally:
+            self._secondary_card.blockSignals(old)
+
+    def _on_shared_plot_mode_changed(self, mode):
+        if (
+            self.split_active()
+            and self._secondary_card is not None
+            and self._focused_card is self._secondary_card
+        ):
+            self._set_secondary_plot_mode_silent(mode)
+        else:
+            self._primary_plot_mode = mode
+        self.plot_mode_changed.emit(mode)
+
+    def _on_shared_cursor_mode_changed(self, mode):
+        # Canvas toggling + per-pane cursor_mode write-back is owned by
+        # MainWindow._on_cursor_mode_changed (driven by the cursor_mode_changed
+        # signal emitted below); applying to both canvases here too would just
+        # double-toggle. Keep only the non-split primary bookkeeping.
+        if not (self.split_active() and self._secondary_card is not None):
+            self._primary_cursor_mode = mode
+        self._on_time_cursor_mode_changed(mode)
 
     def _on_time_cursor_mode_changed(self, mode):
         if mode == 'off':
@@ -1456,6 +2336,7 @@ class ChartStack(QWidget):
 
     def set_annotation_enabled(self, mode, enabled, notify=False):
         cards = {
+            'time': self._time_card,
             'fft': self._fft_card,
             'fft_time': self._fft_time_card,
             'order': self._order_card,
@@ -1466,9 +2347,43 @@ class ChartStack(QWidget):
 
     def full_reset_all(self):
         self.canvas_time.full_reset()
+        if self._secondary_card is not None:
+            self._secondary_card.canvas.full_reset()
         self.canvas_fft.full_reset()
         self.canvas_fft_time.full_reset()
         self.canvas_order.full_reset()
+
+    def _set_secondary_time_controls_enabled(self, enabled):
+        """Enable/disable the secondary card's own split/overlay/cursor
+        segmented controls (P2 Task 9 1b).
+
+        Semantics changed from "always disabled" to "enabled while this pane
+        is focused": when the compare (secondary) pane is the focused card its
+        分屏/叠加/游标 controls drive its OWN canvas, mirroring how the primary
+        card's identical controls drive the primary canvas. Outside split, or
+        while the primary pane is focused, the secondary's controls are
+        disabled so a single active control group is unambiguous."""
+        card = self._secondary_card
+        if card is None:
+            return
+        for button in (card.btn_subplot, card.btn_overlay):
+            button.setEnabled(enabled)
+        for button in card._cursor_buttons.values():
+            button.setEnabled(enabled)
+
+    def _sync_secondary_controls_to_focus(self):
+        """Keep the visible shared time controls live.
+
+        The secondary card keeps its own state object, but its toolbar is not
+        part of the split UI. The primary card's detached toolbar is the shared
+        toolbar and routes actions to the focused pane via MainWindow.
+        """
+        self._set_secondary_time_controls_enabled(False)
+        for button in (self._time_card.btn_subplot, self._time_card.btn_overlay):
+            button.setEnabled(True)
+        for button in self._time_card._cursor_buttons.values():
+            button.setEnabled(True)
+        self._sync_shared_time_controls_to_focus()
 
     def _copy_card_image(self, card):
         """Capture the card's canvas for MainWindow to publish. For the
@@ -1482,6 +2397,13 @@ class ChartStack(QWidget):
         effective factor so it still lines up on the magnified bitmap."""
         from PyQt5.QtCore import QRect
         from PyQt5.QtGui import QPainter
+        if (self.current_mode() == 'time'
+                and self.split_active()
+                and card in (self._time_card, self._secondary_card)):
+            pix = self._combined_split_pixmap()
+            if pix is not None and not pix.isNull():
+                self.image_captured.emit(pix)
+            return
         canvas = card.canvas
         pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():
@@ -1490,8 +2412,10 @@ class ChartStack(QWidget):
         canvas_h = max(1, int(canvas.height()))
         scale_x = max(1.0, float(pix.width()) / float(canvas_w))
         scale_y = max(1.0, float(pix.height()) / float(canvas_h))
-        if (card is self.stack.currentWidget()
-                and card is self._time_card
+        # Composite the floating pill onto whichever time pane is being copied
+        # (primary or the focused secondary); the overlap check below gates it
+        # to the case where the pill actually sits over THIS canvas.
+        if (self.current_mode() == 'time'
                 and self._pill.isVisible()):
             canvas_origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
             pill_geo = self._pill.geometry()
@@ -1544,16 +2468,30 @@ class ChartStack(QWidget):
             painter.end()
         return QPixmap.fromImage(img)
 
-    def _on_cursor_info(self, text):
-        primary, detail = self._format_cursor_info_for_pill(text)
-        self._pill.set_primary(primary)
-        if self.cursor_mode() == 'single':
-            self._pill.set_detail_html(detail)
-        self._pill.setVisible(self.current_mode() == 'time')
+    def _pill_for_canvas(self, canvas):
+        """Return the CursorPill that should show readouts for ``canvas``."""
+        if (self._pill_secondary is not None
+                and self._secondary_card is not None
+                and canvas is self._secondary_card.canvas):
+            return self._pill_secondary
+        return self._pill
+
+    def _on_cursor_info(self, text, source=None):
+        mode = self._cursor_mode_for_canvas(source)
+        if source is not None:
+            self._active_cursor_card = self._card_for_canvas(source)
+        primary, detail = self._format_cursor_info_for_pill(text, mode)
+        pill = self._pill_for_canvas(source)
+        pill.set_primary(primary)
+        if mode == 'single':
+            pill.set_detail_html(detail)
+        pill.setVisible(self.current_mode() == 'time')
         self._reposition_pill()
 
-    def _format_cursor_info_for_pill(self, text):
-        if self.cursor_mode() != 'single' or _CURSOR_HTML_SEP not in (text or ''):
+    def _format_cursor_info_for_pill(self, text, mode=None):
+        if mode is None:
+            mode = self.cursor_mode()
+        if mode != 'single' or _CURSOR_HTML_SEP not in (text or ''):
             return text, ''
         parts = [part for part in text.split(_CURSOR_HTML_SEP) if part]
         if len(parts) <= 1:
@@ -1569,33 +2507,47 @@ class ChartStack(QWidget):
         rows.append('</table>')
         return parts[0], ''.join(rows)
 
-    def _on_dual_cursor_info(self, text):
-        self._pill.set_detail_html(text)
-        if self.current_mode() == 'time' and (text or self._pill.primary_text()):
-            self._pill.setVisible(True)
+    def _on_dual_cursor_info(self, text, source=None):
+        if source is not None:
+            self._active_cursor_card = self._card_for_canvas(source)
+        pill = self._pill_for_canvas(source)
+        pill.set_detail_html(text)
+        if self.current_mode() == 'time' and (text or pill.primary_text()):
+            pill.setVisible(True)
         self._reposition_pill()
 
     def _reposition_pill(self):
         if self.current_mode() != 'time':
             self._pill.setVisible(False)
+            if self._pill_secondary is not None:
+                self._pill_secondary.setVisible(False)
             return
-        if self._pill.is_user_placed():
-            # Re-clamp into the visible area in case the window shrank.
+        self._reposition_one_pill(self._pill, self._time_card)
+        if self._pill_secondary is not None and self._secondary_card is not None:
+            self._reposition_one_pill(self._pill_secondary, self._secondary_card)
+
+    def _reposition_one_pill(self, pill, card):
+        """Anchor ``pill`` to ``card``'s canvas top-right corner (or honour
+        its user-placed position)."""
+        if not pill.isVisible():
+            return
+        if pill.is_user_placed():
             pw, ph = self.stack.width(), self.stack.height()
-            x = max(0, min(self._pill.x(), pw - self._pill.width()))
-            y = max(0, min(self._pill.y(), ph - self._pill.height()))
-            self._pill.move(x, y)
+            x = max(0, min(pill.x(), pw - pill.width()))
+            y = max(0, min(pill.y(), ph - pill.height()))
+            pill.move(x, y)
         else:
-            # Default anchor: top-right of the canvas area (under the toolbar)
-            # with an 8 px inset so the pill never covers toolbar buttons.
-            card = self.stack.currentWidget()
-            w = card.width() if card is not None else self.stack.width()
-            y_top = 8
-            if card is not None and hasattr(card, 'canvas'):
-                origin = card.canvas.mapTo(self.stack, card.canvas.rect().topLeft())
-                y_top = origin.y() + 8
-            self._pill.move(max(w - self._pill.width() - 8, 0), y_top)
-        self._pill.raise_()
+            canvas = getattr(card, 'canvas', None)
+            if canvas is not None:
+                origin = canvas.mapTo(self.stack, canvas.rect().topLeft())
+                x_right = origin.x() + canvas.width()
+                x = min(x_right - pill.width() - 8,
+                        self.stack.width() - pill.width())
+                pill.move(max(x, 0), origin.y() + 8)
+            else:
+                w = self.stack.width()
+                pill.move(max(w - pill.width() - 8, 0), 8)
+        pill.raise_()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1605,6 +2557,42 @@ class ChartStack(QWidget):
         """Clear pill content and hide it; preserves the user-placed flag so a
         subsequent cursor activation reappears at the spot the user chose."""
         self._pill.clear()
+        if self._pill_secondary is not None:
+            self._pill_secondary.clear()
+
+    def cursor_pill_snapshot(self):
+        """Return the current floating cursor pill UI state.
+
+        The pill content is not part of ViewState; it reflects the last cursor
+        hover/readout on the active canvas. Split rendering temporarily applies
+        another view through the primary controls, so callers can use this to
+        preserve the active readout across that off-screen render.
+        """
+        return {
+            'visible': self._pill.isVisible(),
+            'primary': self._pill.primary_text(),
+            'detail': self._pill._detail.text(),
+            'detail_visible': self._pill.has_detail(),
+            'user_placed': self._pill.is_user_placed(),
+            'pos': (self._pill.x(), self._pill.y()),
+        }
+
+    def restore_cursor_pill_snapshot(self, snapshot):
+        if not snapshot:
+            return
+        self._pill.set_primary(snapshot.get('primary') or '')
+        detail = snapshot.get('detail') if snapshot.get('detail_visible') else ''
+        self._pill.set_detail_html(detail or '')
+        self._pill.mark_user_placed(snapshot.get('user_placed', False))
+        pos = snapshot.get('pos')
+        if pos is not None:
+            self._pill.move(pos[0], pos[1])
+        self._pill.setVisible(bool(snapshot.get('visible')) and self.current_mode() == 'time')
+        if self._pill.isVisible():
+            if not self._pill.is_user_placed():
+                self._reposition_pill()
+            else:
+                self._pill.raise_()
 
     def cursor_pill_text(self):
         return self._pill.primary_text()

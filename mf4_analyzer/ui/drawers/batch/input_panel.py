@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
 
 from ....io.file_data import _TIME_NAMES
 from ....io.loader import unique_mdf_channel_locations
+from ....ui_kit.menus import apply_rounded_menu_chrome
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
 from .signal_picker import SignalPickerPopup
 
@@ -369,7 +370,7 @@ class FileListWidget(QWidget):
             self.intersectionChanged.emit(new_int)
 
     def _open_loaded_menu(self) -> None:
-        menu = QMenu(self)
+        menu = apply_rounded_menu_chrome(QMenu(self))
         any_added = False
         for fid, fd in (self._files_source or {}).items():
             # FileData stores the basename in `.filename` already; fall back

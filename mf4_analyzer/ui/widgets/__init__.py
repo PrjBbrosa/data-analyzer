@@ -19,19 +19,35 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QIcon, QPainter, QPen, QPixmap
 
-from ...ui_kit.icons import Icons
+from ...ui_kit.icons import Icons, icon_device_pixel_ratio
 
 
-def _swatch_icon(color, size=14):
-    pix = QPixmap(size, size)
+def _swatch_pixmap(color, size=11, ratio=None):
+    """Render the channel color swatch at ``ratio x`` physical resolution and
+    tag it with that devicePixelRatio so HiDPI (Retina) screens paint it crisp
+    rather than upscaling a 1x bitmap (which produced the jagged edges).
+
+    ``size`` is the logical icon box; the dot fills ``size - 4`` so it reads as
+    a compact colour chip aligned with the row text rather than a heavy block.
+    """
+    if ratio is None:
+        ratio = icon_device_pixel_ratio()
+    pix = QPixmap(round(size * ratio), round(size * ratio))
+    pix.setDevicePixelRatio(ratio)
     pix.fill(Qt.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.Antialiasing, True)
     p.setPen(QPen(QColor(color), 1))
     p.setBrush(QBrush(QColor(color)))
+    # Coordinates stay in LOGICAL units; the painter is scaled by the pixmap's
+    # devicePixelRatio automatically.
     p.drawRoundedRect(2, 2, size - 4, size - 4, 3, 3)
     p.end()
-    return QIcon(pix)
+    return pix
+
+
+def _swatch_icon(color, size=11):
+    return QIcon(_swatch_pixmap(color, size))
 
 
 class StatisticsPanel(QFrame):
@@ -72,6 +88,10 @@ class _CheckTolerantTree(QTreeWidget):
     """
 
     HIT_PAD = 6  # px tolerance added to each side of the indicator rect
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._consume_check_release = False
 
     def _check_hit_rect(self, item, index):
         """Return the enlarged clickable rect for ``item``'s checkbox, or
@@ -126,12 +146,39 @@ class _CheckTolerantTree(QTreeWidget):
                     # Route through setCheckState so the existing
                     # itemChanged → _on_item_changed cascade (file→child
                     # propagation, MAX_CHANNELS_WARNING, channels_changed)
-                    # runs exactly once. Consume the event: returning here
-                    # without super() prevents Qt's own indicator handling
-                    # from toggling a second time.
+                    # runs exactly once. Consume the event pair: returning
+                    # here handles the press, and mouseReleaseEvent suppresses
+                    # Qt's native indicator release toggle.
+                    self._consume_check_release = True
                     item.setCheckState(0, new_state)
+                    event.accept()
                     return
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._consume_check_release:
+            self._consume_check_release = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            pos = event.pos()
+            item = self.itemAt(pos)
+            if item is not None:
+                index = self.indexFromItem(item, 0)
+                hit = self._check_hit_rect(item, index)
+                if hit is not None and hit.contains(pos):
+                    new_state = (
+                        Qt.Unchecked
+                        if item.checkState(0) == Qt.Checked
+                        else Qt.Checked
+                    )
+                    item.setCheckState(0, new_state)
+                    event.accept()
+                    return
+        super().mouseDoubleClickEvent(event)
 
 
 class MultiFileChannelWidget(QWidget):
@@ -155,12 +202,18 @@ class MultiFileChannelWidget(QWidget):
         self.search.textChanged.connect(self._filter);
         layout.addWidget(self.search)
         bl = QHBoxLayout()
-        for lbl, fn in [("全选", self._all), ("全不", self._none), ("反选", self._inv)]:
+        for lbl, fn in [("全选", self._all), ("全不", self._none)]:
             b = QPushButton(lbl);
             b.setMaximumWidth(48);
             b.setProperty("role", "tool")
             b.clicked.connect(fn);
             bl.addWidget(b)
+        self.btn_selected_only = QPushButton("已选")
+        self.btn_selected_only.setMaximumWidth(48)
+        self.btn_selected_only.setProperty("role", "tool")
+        self.btn_selected_only.setCheckable(True)
+        self.btn_selected_only.toggled.connect(self._apply_filters)
+        bl.addWidget(self.btn_selected_only)
         bl.addStretch();
         # 编辑通道 lives on this row (right-aligned) instead of the top toolbar,
         # so the channel actions sit next to the channel tree they affect.
@@ -231,6 +284,7 @@ class MultiFileChannelWidget(QWidget):
             fi.addChild(ci)
         self.tree.addTopLevelItem(fi);
         self._file_items[fid] = fi
+        self._apply_filters()
         self._update_edit_enabled()
 
     def _update_edit_enabled(self):
@@ -269,6 +323,7 @@ class MultiFileChannelWidget(QWidget):
                 for i in range(item.childCount()):
                     item.child(i).setCheckState(0, Qt.Unchecked)
                 self._updating = False
+        self._apply_filters()
         self.channels_changed.emit()
 
     def _on_context_menu(self, pos):
@@ -316,25 +371,103 @@ class MultiFileChannelWidget(QWidget):
                     if d and d[0] == 'channel': r.append((d[1], d[2], self._colors.get((d[1], d[2]), '#1f77b4')))
         return r
 
+    def set_checked_channels(self, checked):
+        """Batch-restore checked channels without emitting channels_changed."""
+        wanted = set()
+        for entry in checked or []:
+            try:
+                fid, ch = entry[:2]
+            except (TypeError, ValueError):
+                continue
+            wanted.add((fid, ch))
+
+        self._updating = True
+        try:
+            for fid, fi in self._file_items.items():
+                all_checked = fi.childCount() > 0
+                for i in range(fi.childCount()):
+                    ci = fi.child(i)
+                    data = ci.data(0, Qt.UserRole)
+                    is_checked = bool(
+                        data
+                        and data[0] == 'channel'
+                        and (data[1], data[2]) in wanted
+                    )
+                    ci.setCheckState(0, Qt.Checked if is_checked else Qt.Unchecked)
+                    all_checked = all_checked and is_checked
+                fi.setCheckState(0, Qt.Checked if all_checked else Qt.Unchecked)
+        finally:
+            self._updating = False
+        self._apply_filters()
+
+    def get_channel_colors(self):
+        return dict(self._colors)
+
+    def set_channel_colors(self, colors):
+        valid_keys = set()
+        for fi in self._file_items.values():
+            for i in range(fi.childCount()):
+                data = fi.child(i).data(0, Qt.UserRole)
+                if data and data[0] == 'channel':
+                    valid_keys.add((data[1], data[2]))
+        self._colors = {
+            key: color for key, color in self._colors.items() if key in valid_keys
+        }
+
+        for key, hex_color in (colors or {}).items():
+            try:
+                fid, ch = key
+            except (TypeError, ValueError):
+                continue
+            if (fid, ch) not in valid_keys:
+                continue
+            self._colors[(fid, ch)] = hex_color
+
+        for fi in self._file_items.values():
+            for i in range(fi.childCount()):
+                ci = fi.child(i)
+                data = ci.data(0, Qt.UserRole)
+                if not data or data[0] != 'channel':
+                    continue
+                key = (data[1], data[2])
+                if key in self._colors:
+                    ci.setIcon(0, _swatch_icon(self._colors[key]))
+
     def get_file_data(self, fid):
         return self._files.get(fid)
 
     def check_first_channel(self, fid):
         if fid in self._file_items:
             fi = self._file_items[fid]
-            if fi.childCount() > 0: self._updating = True; fi.child(0).setCheckState(0,
-                                                                                     Qt.Checked); self._updating = False; self.channels_changed.emit()
+            if fi.childCount() > 0:
+                self._updating = True
+                fi.child(0).setCheckState(0, Qt.Checked)
+                self._updating = False
+                self._apply_filters()
+                self.channels_changed.emit()
 
     def _filter(self, txt):
-        t = txt.lower()
+        self._apply_filters()
+
+    def _apply_filters(self, _checked=None):
+        t = self.search.text().strip().lower()
+        show_checked_only = self.btn_selected_only.isChecked()
+        filtering = bool(t) or show_checked_only
         for fid, fi in self._file_items.items():
             v = 0
             for i in range(fi.childCount()):
                 ci = fi.child(i);
-                m = t in ci.text(0).lower();
+                matches_text = not t or t in ci.text(0).lower()
+                matches_checked = (
+                    not show_checked_only
+                    or ci.checkState(0) == Qt.Checked
+                )
+                m = matches_text and matches_checked
                 ci.setHidden(not m);
                 v += m
-            fi.setHidden(v == 0 and len(t) > 0)
+            fi.setHidden(v == 0 and filtering)
+            if filtering and v > 0:
+                fi.setExpanded(True)
 
     def _all(self):
         # 统计总共要勾选多少通道
@@ -352,6 +485,7 @@ class MultiFileChannelWidget(QWidget):
             for i in range(fi.childCount()):
                 if not fi.child(i).isHidden(): fi.child(i).setCheckState(0, Qt.Checked)
         self._updating = False;
+        self._apply_filters()
         self.channels_changed.emit()
 
     def _none(self):
@@ -360,16 +494,7 @@ class MultiFileChannelWidget(QWidget):
             fi.setCheckState(0, Qt.Unchecked)
             for i in range(fi.childCount()): fi.child(i).setCheckState(0, Qt.Unchecked)
         self._updating = False;
-        self.channels_changed.emit()
-
-    def _inv(self):
-        self._updating = True
-        for fi in self._file_items.values():
-            for i in range(fi.childCount()):
-                ci = fi.child(i)
-                if not ci.isHidden(): ci.setCheckState(0,
-                                                       Qt.Unchecked if ci.checkState(0) == Qt.Checked else Qt.Checked)
-        self._updating = False;
+        self._apply_filters()
         self.channels_changed.emit()
 
 

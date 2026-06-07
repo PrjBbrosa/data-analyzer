@@ -112,15 +112,16 @@ def test_channel_none_button_clears(qapp, qtbot):
         assert fi.child(i).checkState(0) == Qt.Unchecked
 
 
-def test_channel_inv_button_toggles(qapp, qtbot):
+def test_channel_selected_button_filters_to_checked(qapp, qtbot):
     nav = FileNavigator()
     qtbot.addWidget(nav)
     nav.add_file("f0", FakeFd())
     fi = nav.channel_list._file_items["f0"]
     fi.child(0).setCheckState(0, Qt.Checked)
-    nav.channel_list._inv()
-    assert fi.child(0).checkState(0) == Qt.Unchecked
-    assert fi.child(1).checkState(0) == Qt.Checked
+    nav.channel_list.btn_selected_only.click()
+    assert nav.channel_list.btn_selected_only.isChecked()
+    assert not fi.child(0).isHidden()
+    assert fi.child(1).isHidden()
 
 
 def test_navigator_tool_buttons_outer_size_compact(qapp):

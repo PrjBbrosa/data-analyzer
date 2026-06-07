@@ -1,5 +1,6 @@
 from PyQt5.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QPushButton
 
 from mf4_analyzer.ui.widgets import MultiFileChannelWidget
@@ -13,6 +14,16 @@ class _FakeFileData:
 
     def get_color_palette(self):
         return ["#1769e0"]
+
+
+class _MultiChannelFileData:
+    data = [1, 2, 3]
+
+    def get_signal_channels(self):
+        return ["speed", "Rte_TAS_mTorsionBarTorque_xds16", "torque"]
+
+    def get_color_palette(self):
+        return ["#1769e0", "#8b5cf6", "#f43f5e"]
 
 
 def test_channel_context_menu_uses_translucent_rounded_shell(qapp, qtbot, monkeypatch):
@@ -60,10 +71,73 @@ def test_channel_action_buttons_use_two_char_chinese(qapp, qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)
     labels = {b.text() for b in widget.findChildren(QPushButton)}
-    # All / None / Inv were localised to two-character Chinese labels.
-    assert {"全选", "全不", "反选"} <= labels
+    # The compact channel actions use two-character Chinese labels.
+    assert {"全选", "全不", "已选"} <= labels
+    assert "反选" not in labels
     # 编辑通道 moved down from the top toolbar onto the channel-action row.
     assert "编辑通道" in labels
+
+
+def test_channel_search_expands_parent_to_show_matches(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _MultiChannelFileData())
+    QCoreApplication.processEvents()
+
+    file_item = widget._file_items["file-a"]
+    file_item.setExpanded(False)
+    widget.search.setText("tas")
+    QCoreApplication.processEvents()
+
+    assert not file_item.isHidden()
+    assert file_item.isExpanded()
+    visible = [
+        (file_item.child(i).text(0), not file_item.child(i).isHidden())
+        for i in range(file_item.childCount())
+    ]
+    assert visible == [
+        ("speed", False),
+        ("Rte_TAS_mTorsionBarTorque_xds16", True),
+        ("torque", False),
+    ]
+
+
+def test_selected_filter_button_only_shows_checked_channels(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _MultiChannelFileData())
+    QCoreApplication.processEvents()
+
+    file_item = widget._file_items["file-a"]
+    file_item.setExpanded(False)
+    file_item.child(1).setCheckState(0, Qt.Checked)
+    QCoreApplication.processEvents()
+
+    selected_button = next(
+        button for button in widget.findChildren(QPushButton)
+        if button.text() == "已选"
+    )
+    selected_button.click()
+    QCoreApplication.processEvents()
+
+    assert selected_button.isChecked()
+    assert not file_item.isHidden()
+    assert file_item.isExpanded()
+    visible = [
+        (file_item.child(i).text(0), not file_item.child(i).isHidden())
+        for i in range(file_item.childCount())
+    ]
+    assert visible == [
+        ("speed", False),
+        ("Rte_TAS_mTorsionBarTorque_xds16", True),
+        ("torque", False),
+    ]
 
 
 def _left_click(tree, pos):
@@ -118,6 +192,74 @@ def test_checkbox_hit_tolerance_band_toggles_but_name_does_not(qapp, qtbot):
     assert channel_item.checkState(0) == Qt.Checked, (
         "clicking the channel name must leave the check state unchanged"
     )
+
+
+def test_checkbox_double_click_event_is_consumed_after_row_selection(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _FakeFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    tree = widget.tree
+    channel_item = widget._file_items["file-a"].child(0)
+    tree.scrollToItem(channel_item)
+    QCoreApplication.processEvents()
+
+    row = tree.visualItemRect(channel_item)
+    name_pos = row.center()
+    QTest.mouseClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, name_pos)
+    QCoreApplication.processEvents()
+    assert tree.currentItem() is channel_item
+
+    index = tree.indexFromItem(channel_item, 0)
+    hit = tree._check_hit_rect(channel_item, index)
+    assert hit is not None
+    assert channel_item.checkState(0) == Qt.Unchecked
+
+    double_clicked = []
+    tree.itemDoubleClicked.connect(
+        lambda item, column: double_clicked.append((item, column))
+    )
+
+    QTest.mouseDClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, hit.center())
+    QCoreApplication.processEvents()
+
+    assert channel_item.checkState(0) == Qt.Checked
+    assert double_clicked == []
+
+
+def test_selected_channel_checkbox_center_click_toggles_once(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _FakeFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    tree = widget.tree
+    channel_item = widget._file_items["file-a"].child(0)
+    tree.scrollToItem(channel_item)
+    QCoreApplication.processEvents()
+
+    row = tree.visualItemRect(channel_item)
+    QTest.mouseClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, row.center())
+    QCoreApplication.processEvents()
+    assert tree.currentItem() is channel_item
+
+    hit = tree._check_hit_rect(channel_item, tree.indexFromItem(channel_item, 0))
+    assert hit is not None
+    assert channel_item.checkState(0) == Qt.Unchecked
+
+    QTest.mouseClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, hit.center())
+    QCoreApplication.processEvents()
+
+    assert channel_item.checkState(0) == Qt.Checked
 
 
 def test_edit_channels_button_enables_with_file_and_emits(qapp, qtbot):

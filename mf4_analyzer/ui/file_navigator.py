@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..ui_kit.icons import Icons
+from ..ui_kit.menus import apply_rounded_menu_chrome
 from .widgets import MultiFileChannelWidget
 
 
@@ -231,6 +232,15 @@ class FileNavigator(QWidget):
     def get_checked_channels(self):
         return self.channel_list.get_checked_channels()
 
+    def set_checked_channels(self, checked):
+        self.channel_list.set_checked_channels(checked)
+
+    def get_channel_colors(self):
+        return self.channel_list.get_channel_colors()
+
+    def set_channel_colors(self, colors):
+        self.channel_list.set_channel_colors(colors)
+
     def get_file_data(self, fid):
         return self.channel_list.get_file_data(fid)
 
@@ -252,7 +262,7 @@ class FileNavigator(QWidget):
         self.file_close_requested.emit(fid)
 
     def _open_kebab(self):
-        menu = QMenu(self)
+        menu = apply_rounded_menu_chrome(QMenu(self))
         act = menu.addAction("全部关闭…")
         act.setEnabled(bool(self._rows))
         gp = self._btn_kebab.mapToGlobal(self._btn_kebab.rect().bottomLeft())

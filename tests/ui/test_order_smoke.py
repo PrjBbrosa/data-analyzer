@@ -2,9 +2,8 @@
 
 Two tests cover the user-visible behaviours added in Task 6:
 
-1. ``OrderContextual.cancel_requested`` exists as a Qt signal so the
-   Inspector can publish a cancel intent without MainWindow having to
-   peek into widget internals.
+1. ``OrderContextual`` no longer exposes the old cancel placeholder
+   because order analysis is still synchronous and cannot be cancelled.
 2. ``MainWindow.open_batch`` actively downgrades a stale
    ``_last_batch_preset`` (whose ``signal[0]`` references a fid no
    longer in ``self.files``) to ``None`` BEFORE forwarding to
@@ -19,12 +18,13 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import pytest
 
 
-def test_order_contextual_exposes_cancel_signal(qtbot):
+def test_order_contextual_does_not_expose_cancel_placeholder(qtbot):
     from mf4_analyzer.ui.inspector_sections import OrderContextual
 
     w = OrderContextual()
     qtbot.addWidget(w)
-    assert hasattr(w, 'cancel_requested')
+    assert not hasattr(w, 'cancel_requested')
+    assert not hasattr(w, 'btn_cancel')
 
 
 def test_open_batch_drops_stale_preset_signal(qtbot, monkeypatch):

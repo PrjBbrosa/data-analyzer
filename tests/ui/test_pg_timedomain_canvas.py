@@ -27,6 +27,7 @@ fallback branch was reached".
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -567,6 +568,260 @@ def _pg_signal_signature(bound) -> str:
     return raw.lstrip("0123456789")
 
 
+class TestTimeDomainCanvasPGAnnotations:
+    """Pin the remark tool behavior users exercise from the time toolbar."""
+
+    def test_remark_label_shows_coordinates_not_channel_name(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QPoint
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_nearest_data_point",
+            lambda _pos: ("speed", 1.25, 42.5, "#1769e0"),
+        )
+
+        canvas._annotations._add_remark(QPoint(120, 100))
+
+        label = canvas._annotations.remarks[-1]["text"].textItem.toPlainText()
+        assert "X=1.25" in label
+        assert "Y=42.5" in label
+        assert "speed" not in label
+
+    def test_remark_label_highlights_y_value_with_channel_color(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_nearest_data_point",
+            lambda _pos: ("speed", 1.25, 42.5, "#00b894"),
+        )
+
+        canvas._annotations._add_remark(QPoint(120, 100))
+
+        html = canvas._annotations.remarks[-1]["text"].textItem.toHtml().lower()
+        assert "#00b894" in html
+
+    def test_nearest_data_point_uses_curve_screen_distance_not_x_only(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QCoreApplication
+
+        t = np.asarray([0.0, 0.01, 10.0], dtype=np.float64)
+        sig = np.asarray([100.0, 0.0, 0.0], dtype=np.float64)
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels([
+            ("speed", True, t, sig, "#1769e0", "rpm", "fid-1"),
+        ], mode="subplot")
+        QCoreApplication.processEvents()
+        handle = canvas.axes_list[0]
+        point = _viewport_point_for_data(canvas, handle, 0.0, 0.0)
+        scene_pos = canvas._glw.mapToScene(point)
+        monkeypatch.setattr(canvas, "_cursor_data_x_from_viewport_pos", lambda _p: 0.0)
+        monkeypatch.setattr(canvas, "_viewport_pos_to_scene", lambda _p: scene_pos)
+
+        found = canvas._annotations._nearest_data_point(point)
+
+        assert found is not None
+        assert found[1] == pytest.approx(0.01)
+        assert found[2] == pytest.approx(0.0)
+
+    def test_remark_on_second_subplot_attaches_to_second_viewbox(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:2], mode="subplot")
+        QCoreApplication.processEvents()
+        second_handle = canvas.axes_list[1]
+        second_row = canvas.channel_data["torque"]
+        idx = len(second_row[0]) // 2
+        point = _viewport_point_for_data(
+            canvas,
+            second_handle,
+            float(second_row[0][idx]),
+            float(second_row[1][idx]),
+        )
+
+        canvas._annotations._add_remark(point)
+
+        assert canvas._annotations.remarks[-1]["vb"] is second_handle.view_box
+
+    def test_annotation_left_click_adds_on_release_not_press(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QPoint, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+        point = QPoint(80, 90)
+        added = []
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_add_remark",
+            lambda pos: added.append(pos),
+        )
+
+        press_consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_press(point, Qt.LeftButton),
+        )
+        release_consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_release(point, Qt.LeftButton),
+        )
+
+        assert press_consumed is False
+        assert release_consumed is True
+        assert added == [point]
+
+    def test_annotation_left_drag_does_not_add_remark(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QPoint, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+        start = QPoint(80, 90)
+        end = QPoint(140, 120)
+        added = []
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_add_remark",
+            lambda pos: added.append(pos),
+        )
+
+        canvas.eventFilter(canvas._glw.viewport(), self._mouse_press(start, Qt.LeftButton))
+        move_consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_move(end, Qt.LeftButton),
+        )
+        release_consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_release(end, Qt.LeftButton),
+        )
+
+        assert move_consumed is False
+        assert release_consumed is False
+        assert added == []
+
+    def test_annotation_mode_uses_bitmap_pen_cursor(self, qapp):
+        from PyQt5.QtCore import Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+
+        assert canvas._glw.viewport().cursor().shape() == Qt.BitmapCursor
+
+    def test_annotation_mode_left_press_on_existing_remark_allows_drag(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+        point = QPoint(80, 90)
+        added = []
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_remark_item_at_viewport_pos",
+            lambda _pos: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_add_remark",
+            lambda pos: added.append(pos),
+        )
+
+        consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_press(point, Qt.LeftButton),
+        )
+
+        assert consumed is False
+        assert added == []
+
+    def test_annotation_mode_left_press_on_real_label_does_not_add_remark(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint, QPointF, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_nearest_data_point",
+            lambda _pos: ("speed", 1.25, 42.5, "#1769e0"),
+        )
+        canvas._annotations._add_remark(QPoint(120, 100))
+        remark = canvas._annotations.remarks[-1]
+        label_pos = remark["text"].pos()
+        scene_pos = remark["vb"].mapViewToScene(
+            QPointF(label_pos.x(), label_pos.y())
+        )
+        label_viewport_pos = canvas._glw.mapFromScene(scene_pos)
+
+        canvas.set_remark_enabled(True)
+        consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_press(label_viewport_pos, Qt.LeftButton),
+        )
+
+        assert consumed is False
+        assert len(canvas._annotations.remarks) == 1
+        assert canvas._annotations.remarks[-1] is remark
+
+    def test_annotation_mode_right_press_deletes_nearest_remark(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+        point = QPoint(80, 90)
+        scene_pos = object()
+        removed = []
+        monkeypatch.setattr(canvas, "_viewport_pos_to_scene", lambda _pos: scene_pos)
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_remove_remark_at",
+            lambda sp: removed.append(sp),
+        )
+
+        consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_press(point, Qt.RightButton),
+        )
+
+        assert consumed is True
+        assert removed == [scene_pos]
+
+    def _mouse_press(self, point, button):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        return QMouseEvent(
+            QEvent.MouseButtonPress, point, button, button, Qt.NoModifier,
+        )
+
+    def _mouse_move(self, point, held_button):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        return QMouseEvent(
+            QEvent.MouseMove, point, Qt.NoButton, held_button, Qt.NoModifier,
+        )
+
+    def _mouse_release(self, point, button):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        return QMouseEvent(
+            QEvent.MouseButtonRelease, point, button, Qt.NoButton, Qt.NoModifier,
+        )
+
+
 class TestTimeDomainCanvasPGContract:
     """Pin the compatibility surface design §3.1 + §5.5 require so the
     new pyqtgraph canvas is a drop-in for the matplotlib TimeDomainCanvas.
@@ -692,14 +947,14 @@ class TestTimeDomainCanvasPGContract:
         canvas.set_dual_cursor_mode(False)
         # After putting the dual cursor in some state, reset_cursor_state
         # must restore the placing='A' / _ax=None / _bx=None invariant.
-        canvas._ax = 0.25
-        canvas._bx = 0.75
-        canvas._placing = "B"
+        canvas._cursor.ax = 0.25
+        canvas._cursor.bx = 0.75
+        canvas._cursor.placing = "B"
         canvas._refresh = False
         canvas.reset_cursor_state()
-        assert canvas._ax is None
-        assert canvas._bx is None
-        assert canvas._placing == "A"
+        assert canvas._cursor.ax is None
+        assert canvas._cursor.bx is None
+        assert canvas._cursor.placing == "A"
         assert canvas._refresh is True
 
     def test_get_statistics_reads_raw_channel_data_not_envelope_output(self, qapp):
@@ -1011,7 +1266,7 @@ class TestTimeDomainCanvasPGScreenshotGrab:
         assert curves, "expected PlotCurveItem(s) on the scene"
         before = [bool(c.opts.get("antialias")) for c in curves]
 
-        with canvas._curves_antialiased():
+        with canvas._quality._curves_antialiased():
             inside = [bool(c.opts.get("antialias")) for c in curves]
         after = [bool(c.opts.get("antialias")) for c in curves]
 
@@ -1177,6 +1432,28 @@ def _five_channel_rows():
     ]
 
 
+def _view_state_key(data_id, name):
+    return json.dumps([data_id, name], ensure_ascii=False, separators=(",", ":"))
+
+
+def test_visible_range_changed_emits_on_restore_xlim(qtbot, qapp):
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    qtbot.addWidget(canvas)
+    canvas.resize(600, 360)
+    canvas.show()
+    canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+    qapp.processEvents()
+
+    seen = []
+    canvas.visible_range_changed.connect(lambda: seen.append(True))
+    canvas.restore_visible_xlim((0.2, 0.6))
+    qapp.processEvents()
+
+    assert len(seen) == 1
+
+
 def _major_tick_labels(axis):
     levels = getattr(axis, "_tickLevels", None)
     assert levels is not None, "expected explicit X tick levels"
@@ -1288,6 +1565,7 @@ def test_target_x_ticks_refresh_after_xlim_change(qapp):
     handle = canvas.axes_list[0]
     before = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
     handle.set_xlim(20.0, 40.0)
+    canvas._flush_pending_refresh()
     QCoreApplication.processEvents()
     after = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
 
@@ -1316,6 +1594,7 @@ def test_target_x_ticks_refresh_after_reset_to_data_extents(qapp):
 
     handle = canvas.axes_list[0]
     handle.set_xlim(20.0, 40.0)
+    canvas._flush_pending_refresh()
     QCoreApplication.processEvents()
     zoomed = [value for value, _label in _major_tick_labels(handle.x_axis_item())]
     assert min(zoomed) >= 20.0 - 1e-9
@@ -1558,6 +1837,89 @@ class TestTimeDomainCanvasPGSubplotMode:
 
         assert canvas.axes_list[-1].get_xlim() == pytest.approx((0.20, 0.40))
         assert tuple(bottom_axis.range) == pytest.approx((0.20, 0.40))
+
+    def test_visible_xlim_restore_updates_visible_bottom_axis_numbers(self, qapp):
+        """The public view-state API must reuse the protected X restore path
+        so bottom AxisItem tick numbers stay synchronized."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        assert canvas.get_visible_xlim() is None
+
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+
+        bottom_axis = canvas.axes_list[-1].plot_item.getAxis("bottom")
+        canvas.restore_visible_xlim((0.25, 0.50))
+        QCoreApplication.processEvents()
+
+        assert canvas.get_visible_xlim() == pytest.approx((0.25, 0.50))
+        assert canvas.axes_list[-1].get_xlim() == pytest.approx((0.25, 0.50))
+        assert tuple(bottom_axis.range) == pytest.approx((0.25, 0.50))
+
+    def test_visible_ylims_roundtrip_and_missing_channels_are_skipped(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:2], mode="subplot")
+        QCoreApplication.processEvents()
+
+        speed = canvas._channel_lines["speed"][0]
+        torque = canvas._channel_lines["torque"][0]
+        speed.set_ylim(-1200.0, 1200.0)
+        torque.set_ylim(40.0, 60.0)
+        expected = canvas.get_visible_ylims()
+        assert expected == {
+            _view_state_key("fid-1", "speed"): pytest.approx((-1200.0, 1200.0)),
+            _view_state_key("fid-1", "torque"): pytest.approx((40.0, 60.0)),
+        }
+
+        speed.set_ylim(-1.0, 1.0)
+        torque.set_ylim(-2.0, 2.0)
+        canvas.restore_visible_ylims({"missing": (0.0, 1.0)})
+        assert speed.get_ylim() == pytest.approx((-1.0, 1.0))
+        assert torque.get_ylim() == pytest.approx((-2.0, 2.0))
+
+        canvas.restore_visible_ylims({**expected, "missing": (0.0, 1.0)})
+        assert speed.get_ylim() == pytest.approx((-1200.0, 1200.0))
+        assert torque.get_ylim() == pytest.approx((40.0, 60.0))
+
+    def test_visible_ylims_distinguish_duplicate_display_names(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("speed", True, t, np.sin(t), "#1769e0", "rpm", "file-a"),
+            ("speed", True, t, np.cos(t), "#ef4444", "rpm", "file-b"),
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+
+        first = canvas.axes_list[0]
+        second = canvas.axes_list[1]
+        first.set_ylim(-10.0, 10.0)
+        second.set_ylim(40.0, 60.0)
+        captured = canvas.get_visible_ylims()
+
+        assert set(captured) == {
+            _view_state_key("file-a", "speed"),
+            _view_state_key("file-b", "speed"),
+        }
+        assert captured[_view_state_key("file-a", "speed")] == pytest.approx(
+            (-10.0, 10.0)
+        )
+        assert captured[_view_state_key("file-b", "speed")] == pytest.approx(
+            (40.0, 60.0)
+        )
+
+        first.set_ylim(-1.0, 1.0)
+        second.set_ylim(-2.0, 2.0)
+        canvas.restore_visible_ylims(captured)
+
+        assert first.get_ylim() == pytest.approx((-10.0, 10.0))
+        assert second.get_ylim() == pytest.approx((40.0, 60.0))
+        assert "speed" in canvas._channel_lines
 
     def test_subplot_x_grid_geometry_is_aligned_before_first_frame(self, qapp):
         """The first rendered subplot frame must have one shared X grid.
@@ -2068,6 +2430,11 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         QCoreApplication.processEvents()
         return consumed
 
+    def _axis_center_point(self, canvas, channel):
+        axis = canvas._channel_lines[channel][0].y_axis_item()
+        rect = axis.sceneBoundingRect()
+        return canvas._glw.mapFromScene(rect.center())
+
     def test_press_on_nearest_curve_selects_that_channel(self, qapp):
         """A press within the 12px pick radius of a curve selects it."""
         canvas = self._overlay_canvas(qapp)
@@ -2084,9 +2451,9 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         consumed = self._press(canvas, qapp, point)
 
         assert consumed is True
-        assert canvas._selected_overlay_channel == "torque", (
+        assert canvas._overlay_axes.selected_channel == "torque", (
             f"press on torque curve must select it; got "
-            f"{canvas._selected_overlay_channel!r}"
+            f"{canvas._overlay_axes.selected_channel!r}"
         )
         assert emitted and emitted[-1] == "torque"
 
@@ -2108,7 +2475,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         consumed = self._press(canvas, qapp, point)
 
         assert consumed is True
-        assert canvas._selected_overlay_channel == "speed"
+        assert canvas._overlay_axes.selected_channel == "speed"
 
     def test_press_on_first_channel_then_drag_moves_only_its_axis(self, qapp):
         """Problem 3: the first channel is now draggable symmetrically —
@@ -2142,17 +2509,17 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         x_before = canvas._primary_xaxis_ax.get_xlim()
 
         self._press(canvas, qapp, start)
-        assert canvas._selected_overlay_channel == "speed", (
+        assert canvas._overlay_axes.selected_channel == "speed", (
             f"press on speed's peak must select speed; got "
-            f"{canvas._selected_overlay_channel!r}"
+            f"{canvas._overlay_axes.selected_channel!r}"
         )
-        assert canvas._overlay_dragging is True
+        assert canvas._overlay_axes.dragging is True
         from PyQt5.QtCore import QPoint
         moved_point = QPoint(start.x(), start.y() + 60)
         self._move(canvas, qapp, moved_point)
         self._release(canvas, qapp, moved_point)
 
-        assert canvas._overlay_dragging is False
+        assert canvas._overlay_axes.dragging is False
         assert speed_handle.get_ylim() != pytest.approx(speed_before), (
             "first-channel drag must shift its own Y range"
         )
@@ -2221,7 +2588,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         # Sanity: the point is genuinely blank (no curve within pick radius)
         # AND genuinely inside the plot rect (not the above-rect escape that
         # made the old test pass for the wrong reason).
-        assert dist > canvas._overlay_pick_radius_px, (
+        assert dist > canvas._overlay_axes.pick_radius_px, (
             f"could not find a blank in-plot point; nearest curve {dist:.1f}px"
         )
         master_rect = canvas._primary_xaxis_ax.view_box.sceneBoundingRect()
@@ -2234,7 +2601,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         consumed = self._press(canvas, qapp, viewport_pt)
 
         assert consumed is True
-        assert canvas._selected_overlay_channel is None
+        assert canvas._overlay_axes.selected_channel is None
         assert emitted and emitted[-1] is None
 
     def test_blank_click_deselects_and_emits_none(self, qapp):
@@ -2250,7 +2617,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         canvas.overlay_channel_selected.connect(emitted.append)
 
         scene_pt, dist = self._blankest_inplot_scene_point(canvas)
-        assert dist > canvas._overlay_pick_radius_px
+        assert dist > canvas._overlay_axes.pick_radius_px
         # Must be inside the plot rect — the old version clicked ABOVE it,
         # which passed only because no ViewBox contained the point.
         master_rect = canvas._primary_xaxis_ax.view_box.sceneBoundingRect()
@@ -2259,7 +2626,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         consumed = self._press(canvas, qapp, point)
 
         assert consumed is True
-        assert canvas._selected_overlay_channel is None
+        assert canvas._overlay_axes.selected_channel is None
         assert emitted and emitted[-1] is None
 
     def test_x_master_pan_disabled_during_drag(self, qapp):
@@ -2275,20 +2642,50 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
             canvas, handle, float(xdata[idx]), float(ydata[idx])
         )
 
-        # Before: X-master pan enabled.
-        assert master_vb.state["mouseEnabled"][0] is True
+        # Before: X-master allows shared-X panning only; its [0, 1] Y
+        # graticule must never be mouse-draggable.
+        assert master_vb.state["mouseEnabled"] == [True, False]
 
         self._press(canvas, qapp, start)
-        assert canvas._overlay_dragging is True
-        assert master_vb.state["mouseEnabled"][0] is False, (
-            "X-master pan must be disabled during a Y-drag"
+        assert canvas._overlay_axes.dragging is True
+        assert master_vb.state["mouseEnabled"] == [False, False], (
+            "X-master mouse must be disabled during a selected-channel Y-drag"
         )
 
         from PyQt5.QtCore import QPoint
         self._release(canvas, qapp, QPoint(start.x(), start.y() + 30))
-        assert master_vb.state["mouseEnabled"][0] is True, (
-            "X-master pan must be restored after the drag ends"
+        assert master_vb.state["mouseEnabled"] == [True, False], (
+            "X-master X pan must be restored without enabling graticule Y-drag"
         )
+
+    def test_overlay_y_axis_gutter_drag_moves_that_channel_only(self, qapp):
+        """Dragging a channel's own Y-axis/tick gutter should move that
+        channel even when the press is not on the curve body."""
+        from PyQt5.QtCore import QPoint
+
+        canvas = self._overlay_canvas(qapp)
+        speed = canvas._channel_lines["speed"][0]
+        torque = canvas._channel_lines["torque"][0]
+        speed.set_ylim(-1500.0, 1500.0)
+        torque.set_ylim(40.0, 60.0)
+
+        start = self._axis_center_point(canvas, "torque")
+        speed_before = speed.get_ylim()
+        torque_before = torque.get_ylim()
+        master_y_before = canvas._primary_xaxis_ax.get_ylim()
+
+        consumed = self._press(canvas, qapp, start)
+        assert consumed is True
+        assert canvas._overlay_axes.selected_channel == "torque"
+        assert canvas._overlay_axes.dragging is True
+
+        moved = QPoint(start.x(), start.y() + 60)
+        assert self._move(canvas, qapp, moved) is True
+        self._release(canvas, qapp, moved)
+
+        assert torque.get_ylim() != pytest.approx(torque_before)
+        assert speed.get_ylim() == pytest.approx(speed_before)
+        assert canvas._primary_xaxis_ax.get_ylim() == pytest.approx(master_y_before)
 
     def test_overlay_press_ignored_in_cursor_mode(self, qapp):
         """Cursor mode takes precedence over overlay selection
@@ -2307,7 +2704,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
             self._make_press_event(point)
         )
         assert consumed is False
-        assert canvas._selected_overlay_channel is None
+        assert canvas._overlay_axes.selected_channel is None
 
     def _make_press_event(self, point):
         from PyQt5.QtCore import QEvent, Qt
@@ -2366,7 +2763,7 @@ class TestOverlayPressModeSplit:
                 continue
             seen.add(id(vb))
             vb.setMouseMode(mode)
-        for vb in list(getattr(canvas, "_overlay_aux_viewboxes", []) or []):
+        for vb in list(canvas._overlay_axes.aux_viewboxes or []):
             if id(vb) not in seen:
                 vb.setMouseMode(mode)
                 seen.add(id(vb))
@@ -2383,8 +2780,8 @@ class TestOverlayPressModeSplit:
         consumed = canvas._handle_overlay_mouse_press(self._press_event(point))
 
         assert consumed is False, "RectMode press must let the rubber band start"
-        assert canvas._selected_overlay_channel is None
-        assert canvas._overlay_dragging is False
+        assert canvas._overlay_axes.selected_channel is None
+        assert canvas._overlay_axes.dragging is False
 
     def test_panmode_press_still_selects_and_drags(self, qapp):
         """PanMode press preserves the existing select + Y-drag behavior."""
@@ -2397,8 +2794,8 @@ class TestOverlayPressModeSplit:
         consumed = canvas._handle_overlay_mouse_press(self._press_event(point))
 
         assert consumed is True
-        assert canvas._selected_overlay_channel == "torque"
-        assert canvas._overlay_dragging is True
+        assert canvas._overlay_axes.selected_channel == "torque"
+        assert canvas._overlay_axes.dragging is True
 
 
 class _FakeDragEvent:
@@ -2630,8 +3027,8 @@ class TestTimeDomainCanvasPGCursorParity:
 
         pg._emit_single_cursor_html(0.5)
         single_html = single_emissions[-1]
-        pg._ax = 0.2
-        pg._bx = 0.8
+        pg._cursor.ax = 0.2
+        pg._cursor.bx = 0.8
         pg._emit_dual_cursor_html()
 
         assert dual_emissions and rest in dual_emissions[-1]
@@ -2668,8 +3065,8 @@ class TestTimeDomainCanvasPGCursorParity:
         pg.plot_channels(rows, mode="subplot")
         pg.set_cursor_visible(True)
         pg.set_dual_cursor_mode(True)
-        pg._ax = 0.20
-        pg._bx = 0.80
+        pg._cursor.ax = 0.20
+        pg._cursor.bx = 0.80
         QCoreApplication.processEvents()
 
         pg_dual = []
@@ -2713,7 +3110,7 @@ class TestTimeDomainCanvasPGCursorInteraction:
 
         assert seen, "mouse move in single-cursor mode must emit cursor_info"
         assert "t=" in seen[-1]
-        line_items = getattr(canvas, "_cursor_line_items", [])
+        line_items = canvas._cursor.line_items
         assert len(line_items) == len(canvas.axes_list)
         assert all(item.isVisible() for item in line_items)
 
@@ -2740,12 +3137,12 @@ class TestTimeDomainCanvasPGCursorInteraction:
         QTest.mouseClick(viewport, Qt.LeftButton, Qt.NoModifier, point_b)
         QCoreApplication.processEvents()
 
-        assert canvas._ax == pytest.approx(0.25, abs=0.03)
-        assert canvas._bx == pytest.approx(0.75, abs=0.03)
+        assert canvas._cursor.ax == pytest.approx(0.25, abs=0.03)
+        assert canvas._cursor.bx == pytest.approx(0.75, abs=0.03)
         assert primary_seen and "ΔT=" in primary_seen[-1]
         assert dual_seen and dual_seen[-1]
-        a_items = getattr(canvas, "_cursor_a_items", [])
-        b_items = getattr(canvas, "_cursor_b_items", [])
+        a_items = canvas._cursor.a_items
+        b_items = canvas._cursor.b_items
         assert len(a_items) == len(canvas.axes_list)
         assert len(b_items) == len(canvas.axes_list)
         assert all(item.isVisible() for item in a_items + b_items)
@@ -2776,7 +3173,7 @@ class TestTimeDomainCanvasPGCursorInteraction:
         )
         QCoreApplication.processEvents()
 
-        markers = getattr(canvas, "_dual_cursor_extreme_markers", [])
+        markers = canvas._cursor.extreme_markers
         assert len(markers) == 1
         xs, ys = markers[0].getData()
         assert list(xs) == pytest.approx([0.25, 0.75])
@@ -2809,13 +3206,13 @@ class TestTimeDomainCanvasPGCursorInteraction:
         monkeypatch.setattr(
             canvas, "_emit_dual_cursor_html", lambda *a, **k: calls.append(1)
         )
-        canvas._last_t = 0
+        canvas._cursor.last_t = 0
 
         point = _viewport_point_for_data(canvas, canvas.axes_list[1], 0.5)
         assert canvas._handle_cursor_mouse_move(_FakeMove(point.x(), point.y())) is True
 
         assert calls == []
-        line_items = getattr(canvas, "_cursor_line_items", [])
+        line_items = canvas._cursor.line_items
         assert line_items
         assert all(item.isVisible() for item in line_items)
 
@@ -2852,7 +3249,7 @@ class TestTimeDomainCanvasPGCursorInteraction:
 
         assert len(seen) == 1
 
-        canvas._last_t -= 40
+        canvas._cursor.last_t -= 40
         assert canvas._handle_cursor_mouse_move(point) is True
         assert len(seen) == 2
 
@@ -2862,13 +3259,19 @@ class _FakeMenuEvent:
     ``raiseContextMenu``. It needs ``acceptedItem`` (read by the scene's
     ``getContextMenus``) and ``screenPos()`` (read before ``popup``)."""
 
-    def __init__(self, accepted_item):
+    def __init__(self, accepted_item, scene_pos=None):
         self.acceptedItem = accepted_item
+        self._scene_pos = scene_pos
 
     def screenPos(self):
         from PyQt5.QtCore import QPointF
 
         return QPointF(0.0, 0.0)
+
+    def scenePos(self):
+        from PyQt5.QtCore import QPointF
+
+        return self._scene_pos or QPointF(0.0, 0.0)
 
 
 def _assemble_and_redesign_menu(qapp, canvas, view_box, monkeypatch):
@@ -2906,15 +3309,47 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
 
     # ---- §A structure: only the agreed items, removed ones absent ----
     def test_top_level_menu_contains_only_agreed_items(self, qapp, monkeypatch):
+        from PyQt5.QtWidgets import QWidgetAction
+
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
 
+        # Register a controller so the inline mouse-mode toggle row is added
+        # (mirrors the real app where ChartStack wires the toolbar in).
+        class _Ctl:
+            def current_mouse_mode(self):
+                return ""
+            def set_pan_mode(self):
+                pass
+            def set_zoom_mode(self):
+                pass
+        canvas.register_mouse_mode_controller(_Ctl())
+
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
         assert menu is not None
-        top = _top_level_texts(menu)
 
-        assert top == ["查看全部", "X 轴范围", "Y 轴范围", "鼠标操作", "网格"]
+        actions = [a for a in menu.actions() if not a.isSeparator()]
+        # §④b: the FIRST item is the inline mouse-mode toggle row — a
+        # textless QWidgetAction, not a 鼠标操作 子菜单.
+        assert isinstance(actions[0], QWidgetAction)
+        assert actions[0].text().replace("&", "").strip() == ""
+
+        # The remaining NAMED top-level items, in order.
+        named = [
+            a.text().replace("&", "").strip()
+            for a in actions[1:]
+        ]
+        assert named == [
+            "Y 轴自适应",
+            "查看全部",
+            "X 轴范围",
+            "Y 轴范围",
+            "网格",
+        ]
+        # No 鼠标操作 / 鼠标模式 submenu残留.
+        assert "鼠标操作" not in named
+        assert "鼠标模式" not in named
 
     def test_removed_entries_are_absent_from_assembled_menu(
         self, qapp, monkeypatch
@@ -2928,6 +3363,46 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
 
         for banned in ("绘图选项", "Plot Options", "导出...", "Export...", "变换", "降采样"):
             assert banned not in top
+
+    def test_annotation_delete_entries_are_absent_from_context_menu(
+        self, qapp, monkeypatch,
+    ):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+        canvas._annotations.remarks.append({"vb": vb})
+
+        _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        named = _top_level_texts(menu)
+
+        assert "删除最近标注" not in named
+        assert "删除全部标注" not in named
+
+    def test_annotation_mode_right_click_deletes_without_context_menu(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPointF
+        from PyQt5.QtWidgets import QMenu
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+        canvas.set_remark_enabled(True)
+        scene_pos = QPointF(12.0, 34.0)
+        removed = []
+        popped = []
+        monkeypatch.setattr(
+            canvas._annotations,
+            "_remove_remark_at",
+            lambda sp: removed.append(sp),
+        )
+        monkeypatch.setattr(QMenu, "popup", lambda *args, **kwargs: popped.append(args))
+
+        vb.raiseContextMenu(_FakeMenuEvent(vb, scene_pos))
+
+        assert removed == [scene_pos]
+        assert popped == []
 
     def test_grid_submenu_promoted_with_x_and_y_toggles(self, qapp, monkeypatch):
         canvas = _pg_canvas(qapp)
@@ -2972,7 +3447,7 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         assert not pi.getAxis("bottom").grid
         assert not pi.getAxis("left").grid
         assert not pi.getAxis("right").grid
-        for ax_item in canvas._overlay_aux_axes:
+        for ax_item in canvas._overlay_axes.aux_axes:
             assert not ax_item.grid
 
     def test_context_menu_view_all_resets_overlay_raw_x_and_per_channel_y(
@@ -3034,7 +3509,9 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
         # Parity anchor: the top-level menu is already translucent.
         assert menu.testAttribute(Qt.WA_TranslucentBackground)
-        for title in ("网格", "鼠标操作"):
+        # Only 网格 remains a hand-built submenu (鼠标操作 is now an inline
+        # toggle row, no longer a 子菜单, so it has no popup window to leak).
+        for title in ("网格",):
             action = next(
                 a for a in menu.actions()
                 if a.text().replace("&", "").strip() == title
@@ -3135,31 +3612,71 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
                     if not sub_action.isSeparator():
                         _assert_no_descriptive_tooltip(sub_action)
 
-    # ---- §D mouse-mode submenu vocabulary + controller routing ----
-    def test_mouse_mode_submenu_uses_toolbar_vocabulary(self, qapp, monkeypatch):
+    # ---- §④b inline mouse-mode toggle row + controller routing ----
+    @staticmethod
+    def _toggle_row_buttons(menu):
+        """Return (btn_zoom, btn_pan) from the first-row QWidgetAction.
+
+        The row layout is [btn_zoom, btn_pan, stretch]; the buttons carry the
+        框选 / 平移 tooltips so we identify them by tooltip rather than order
+        to stay robust against re-ordering."""
+        from PyQt5.QtWidgets import QToolButton, QWidgetAction
+
+        first = next(a for a in menu.actions() if not a.isSeparator())
+        assert isinstance(first, QWidgetAction)
+        widget = first.defaultWidget()
+        buttons = widget.findChildren(QToolButton)
+        by_tip = {b.toolTip(): b for b in buttons}
+        return by_tip["框选"], by_tip["平移"]
+
+    def test_mouse_mode_toggle_row_is_first_with_two_exclusive_buttons(
+        self, qapp, monkeypatch
+    ):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QToolButton, QWidgetAction
+
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
 
-        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        mouse_action = next(
-            a for a in menu.actions()
-            if a.text().replace("&", "").strip() == "鼠标操作"
-        )
-        mouse_menu = mouse_action.menu()
-        labels = [a.text() for a in mouse_menu.actions()]
-        assert labels == ["平移", "框选"]
-        # No 三键/单键 黑话 survives.
-        assert "三键模式" not in labels and "单键模式" not in labels
+        class _Ctl:
+            def __init__(self):
+                self.mode = ""
+            def current_mouse_mode(self):
+                return self.mode
+            def set_pan_mode(self):
+                self.mode = "pan"
+            def set_zoom_mode(self):
+                self.mode = "zoom"
 
-    def test_menu_mouse_mode_selection_updates_registered_controller(
+        canvas.register_mouse_mode_controller(_Ctl())
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        first = next(a for a in menu.actions() if not a.isSeparator())
+        assert isinstance(first, QWidgetAction)
+
+        widget = first.defaultWidget()
+        buttons = widget.findChildren(QToolButton)
+        assert len(buttons) == 2
+        # Both checkable, icon-only.
+        for b in buttons:
+            assert b.isCheckable()
+            assert b.toolButtonStyle() == Qt.ToolButtonIconOnly
+            assert b.text() == ""  # icon only, no label
+        # Exclusive: checking one un-checks the other.
+        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
+        btn_zoom.setChecked(True)
+        assert btn_zoom.isChecked() and not btn_pan.isChecked()
+        btn_pan.setChecked(True)
+        assert btn_pan.isChecked() and not btn_zoom.isChecked()
+
+    def test_toggle_row_checked_state_reflects_current_mode(
         self, qapp, monkeypatch
     ):
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
 
-        # Fake controller standing in for the toolbar (single source of truth).
         class _Ctl:
             def __init__(self):
                 self.mode = ""
@@ -3172,19 +3689,75 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
 
         ctl = _Ctl()
         canvas.register_mouse_mode_controller(ctl)
-        ctl.mode = "zoom"  # controller currently in zoom
+
+        # idle → 平移 highlighted by default.
+        ctl.mode = ""
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
+        assert btn_pan.isChecked() and not btn_zoom.isChecked()
+
+        # zoom → 框选 highlighted (menu is rebuilt each open).
+        ctl.mode = "zoom"
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
+        assert btn_zoom.isChecked() and not btn_pan.isChecked()
+
+        # pan → 平移 highlighted.
+        ctl.mode = "pan"
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
+        assert btn_pan.isChecked() and not btn_zoom.isChecked()
+
+    def test_toggle_row_clicks_route_through_controller(
+        self, qapp, monkeypatch
+    ):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        class _Ctl:
+            def __init__(self):
+                self.mode = ""
+            def current_mouse_mode(self):
+                return self.mode
+            def set_pan_mode(self):
+                self.mode = "pan"
+            def set_zoom_mode(self):
+                self.mode = "zoom"
+
+        ctl = _Ctl()
+        canvas.register_mouse_mode_controller(ctl)
+        ctl.mode = "pan"
 
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        mouse_menu = next(
-            a.menu() for a in menu.actions()
-            if a.text().replace("&", "").strip() == "鼠标操作"
-        )
-        pan_act, zoom_act = mouse_menu.actions()[0], mouse_menu.actions()[1]
-        # Checkmark reflects the controller's CURRENT mode (zoom).
-        assert zoom_act.isChecked() and not pan_act.isChecked()
-        # Selecting 平移 routes through the controller's set_pan_mode.
-        pan_act.trigger()
+        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
+
+        # Clicking 框选 routes through set_zoom_mode.
+        btn_zoom.click()
+        assert ctl.mode == "zoom"
+
+        # Re-open the menu (rebuilt) and click 平移 → set_pan_mode.
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
+        btn_pan.click()
         assert ctl.mode == "pan"
+
+    def test_toggle_row_absent_when_no_controller(self, qapp, monkeypatch):
+        from PyQt5.QtWidgets import QWidgetAction
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        # No controller registered → defensive: the row is not added at all.
+        canvas._mouse_mode_controller = None
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        assert not any(
+            isinstance(a, QWidgetAction) for a in menu.actions()
+        )
+        # First named item is then 「Y 轴自适应」.
+        top = _top_level_texts(menu)
+        assert top[0] == "Y 轴自适应"
 
     def test_context_menu_qss_uses_pgcontextmenu_light_surface(self):
         qss = (
@@ -3248,16 +3821,19 @@ class TestTimeDomainCanvasPGScroll:
         primary = canvas._primary_xaxis_ax
         primary.set_xlim(0.0, 1.0)
         primary.set_ylim(-2000.0, 2000.0)
+        canvas.select_overlay_channel("speed")
+        selected = canvas._channel_lines["speed"][0]
         QCoreApplication.processEvents()
 
         x_before = primary.get_xlim()
-        y_before = primary.get_ylim()
+        primary_y_before = primary.get_ylim()
+        y_before = selected.get_ylim()
 
         canvas._handle_wheel_dispatch(delta=120, modifiers=Qt.ShiftModifier, x_pos=0.5, y_pos=0.0)
         QCoreApplication.processEvents()
 
         x_after = primary.get_xlim()
-        y_after = primary.get_ylim()
+        y_after = selected.get_ylim()
 
         assert y_after != y_before, (
             f"Shift+wheel must change ylim; got {y_after!r} == {y_before!r}"
@@ -3269,6 +3845,7 @@ class TestTimeDomainCanvasPGScroll:
             f"Shift+wheel must NOT change xlim; before={x_before!r}, "
             f"after={x_after!r}"
         )
+        assert primary.get_ylim() == pytest.approx(primary_y_before)
 
     def test_plain_wheel_pans_y(self, qapp):
         from PyQt5.QtCore import QCoreApplication, Qt
@@ -3279,17 +3856,20 @@ class TestTimeDomainCanvasPGScroll:
         primary = canvas._primary_xaxis_ax
         primary.set_xlim(0.0, 1.0)
         primary.set_ylim(-2000.0, 2000.0)
+        canvas.select_overlay_channel("speed")
+        selected = canvas._channel_lines["speed"][0]
         QCoreApplication.processEvents()
 
         x_before = primary.get_xlim()
-        y_before = primary.get_ylim()
+        primary_y_before = primary.get_ylim()
+        y_before = selected.get_ylim()
         y_span_before = y_before[1] - y_before[0]
 
         canvas._handle_wheel_dispatch(delta=120, modifiers=Qt.NoModifier, x_pos=0.5, y_pos=0.0)
         QCoreApplication.processEvents()
 
         x_after = primary.get_xlim()
-        y_after = primary.get_ylim()
+        y_after = selected.get_ylim()
         y_span_after = y_after[1] - y_after[0]
 
         assert y_after != y_before, (
@@ -3305,6 +3885,7 @@ class TestTimeDomainCanvasPGScroll:
             f"plain wheel must NOT change xlim; before={x_before!r}, "
             f"after={x_after!r}"
         )
+        assert primary.get_ylim() == pytest.approx(primary_y_before)
 
     def test_shift_wheel_targets_source_subplot_y_not_primary(self, qapp):
         from PyQt5.QtCore import QCoreApplication, Qt
@@ -3506,8 +4087,8 @@ class TestTimeDomainCanvasPGVisualParityScreenshots:
         QCoreApplication.processEvents()
         QTest.mouseClick(viewport, Qt.LeftButton, Qt.NoModifier, point_b)
         QCoreApplication.processEvents()
-        assert canvas._cursor_a_items and canvas._cursor_b_items
-        assert all(item.isVisible() for item in canvas._cursor_a_items + canvas._cursor_b_items)
+        assert canvas._cursor.a_items and canvas._cursor.b_items
+        assert all(item.isVisible() for item in canvas._cursor.a_items + canvas._cursor.b_items)
 
         pix = canvas.grab_pixmap()
         assert pix is not None
@@ -3517,8 +4098,8 @@ class TestTimeDomainCanvasPGVisualParityScreenshots:
 
         # Cursor lines must lie inside the view bbox (geometry assertion).
         bbox = QRect(0, 0, pix.width(), pix.height())
-        ax_pix = canvas._cursor_x_to_pixmap_x(canvas._ax, pix.width())
-        bx_pix = canvas._cursor_x_to_pixmap_x(canvas._bx, pix.width())
+        ax_pix = canvas._cursor_x_to_pixmap_x(canvas._cursor.ax, pix.width())
+        bx_pix = canvas._cursor_x_to_pixmap_x(canvas._cursor.bx, pix.width())
         assert bbox.contains(int(ax_pix), pix.height() // 2), (
             f"cursor A at pixel x={ax_pix} not contained in bbox {bbox!r}"
         )
@@ -3588,10 +4169,10 @@ class TestTimeDomainCanvasPGHiDpiGrab:
         canvas._overlay_mode = True
 
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(10)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(10)]
         )
 
-        assert canvas._export_aa_affordable() is True
+        assert canvas._quality._export_aa_affordable() is True
 
     def test_export_aa_affordable_false_when_overlay_over_budget(
         self, qapp, monkeypatch,
@@ -3600,23 +4181,23 @@ class TestTimeDomainCanvasPGHiDpiGrab:
         canvas._overlay_mode = True
         over = int(canvas._AA_OVERLAY_SEGMENT_OFF) + 100
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(over)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(over)]
         )
 
-        assert canvas._export_aa_affordable() is False
+        assert canvas._quality._export_aa_affordable() is False
 
     def test_export_aa_affordable_does_not_mutate_idle_hysteresis(
         self, qapp, monkeypatch,
     ):
         canvas = _pg_canvas(qapp)
-        canvas._idle_aa_density_allowed = "SENTINEL_A"
-        canvas._idle_aa_density_seeded = "SENTINEL_S"
-        monkeypatch.setattr(canvas, "_collect_curve_items", lambda: [])
+        canvas._quality.density_allowed = "SENTINEL_A"
+        canvas._quality.density_seeded = "SENTINEL_S"
+        monkeypatch.setattr(canvas._quality, "_collect_curve_items", lambda: [])
 
-        canvas._export_aa_affordable()
+        canvas._quality._export_aa_affordable()
 
-        assert canvas._idle_aa_density_allowed == "SENTINEL_A"
-        assert canvas._idle_aa_density_seeded == "SENTINEL_S"
+        assert canvas._quality.density_allowed == "SENTINEL_A"
+        assert canvas._quality.density_seeded == "SENTINEL_S"
 
     def test_grab_pixmap_skips_forced_aa_when_not_affordable(self, qapp, monkeypatch):
         from PyQt5.QtCore import QCoreApplication
@@ -3625,10 +4206,10 @@ class TestTimeDomainCanvasPGHiDpiGrab:
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows(), mode="overlay")
         QCoreApplication.processEvents()
-        monkeypatch.setattr(canvas, "_export_aa_affordable", lambda: False)
+        monkeypatch.setattr(canvas._quality, "_export_aa_affordable", lambda: False)
 
         entered = []
-        orig = canvas._curves_antialiased
+        orig = canvas._quality._curves_antialiased
 
         @contextmanager
         def _spy():
@@ -3636,7 +4217,7 @@ class TestTimeDomainCanvasPGHiDpiGrab:
             with orig():
                 yield
 
-        monkeypatch.setattr(canvas, "_curves_antialiased", _spy)
+        monkeypatch.setattr(canvas._quality, "_curves_antialiased", _spy)
         pix = canvas.grab_pixmap(scale=2.0)
 
         assert not pix.isNull()
@@ -4050,7 +4631,7 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         canvas.set_tick_density(12, 7)
 
         assert len(calls) >= len(canvas.axes_list)
-        assert canvas._tick_density == (12, 7)
+        assert canvas._tick_density_controller.density == (12, 7)
 
     def test_set_tick_density_keeps_y_ticks_adaptive_and_x_ticks_major_only(self, qapp):
         """X uses explicit major ticks; Y keeps pyqtgraph adaptive density.
@@ -4537,8 +5118,8 @@ class TestOverlayAuxViewBoxTeardown:
         canvas.plot_channels(rows, mode="overlay")
         QCoreApplication.processEvents()
 
-        old_aux = list(canvas._overlay_aux_viewboxes)
-        old_axes = list(canvas._overlay_aux_axes)
+        old_aux = list(canvas._overlay_axes.aux_viewboxes)
+        old_axes = list(canvas._overlay_axes.aux_axes)
         assert old_aux, "overlay build must create aux ViewBoxes"
 
         canvas.plot_channels(rows, mode="subplot")
@@ -4608,13 +5189,13 @@ class TestOverlayGridSingleAxis:
             f"overlay right-axis Y grid must be OFF; right.grid={right.grid!r}"
         )
         # ch3+ appended aux right axes must also carry no Y grid.
-        for ax_item in canvas._overlay_aux_axes:
+        for ax_item in canvas._overlay_axes.aux_axes:
             assert not ax_item.grid, (
                 f"overlay aux axis Y grid must be OFF; grid={ax_item.grid!r}"
             )
         assert left.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
         assert right.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
-        for ax_item in canvas._overlay_aux_axes:
+        for ax_item in canvas._overlay_axes.aux_axes:
             assert ax_item.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
         canvas.deleteLater()
 
@@ -4642,9 +5223,9 @@ class TestOverlayGridSingleAxis:
         canvas.deleteLater()
 
     def test_overlay_grid_lines_created_on_plot(self, qapp):
-        """plot_channels overlay 后，应有 _N_OVERLAY_DIVISIONS - 1 条格线。"""
+        """plot_channels overlay 后，应有 _overlay_divisions - 1 条格线。"""
         from PyQt5.QtCore import QCoreApplication
-        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG, _N_OVERLAY_DIVISIONS
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
         canvas = TimeDomainCanvasPG()
         canvas.resize(900, 480)
@@ -4654,16 +5235,17 @@ class TestOverlayGridSingleAxis:
         canvas.plot_channels(_five_channel_rows()[:3], mode="overlay")
         QCoreApplication.processEvents()
 
-        assert len(canvas._overlay_grid_lines) == _N_OVERLAY_DIVISIONS - 1, (
-            f"expected {_N_OVERLAY_DIVISIONS - 1} grid lines, "
-            f"got {len(canvas._overlay_grid_lines)}"
+        expected = canvas._overlay_axes.divisions - 1
+        assert len(canvas._overlay_axes.grid_lines) == expected, (
+            f"expected {expected} grid lines, "
+            f"got {len(canvas._overlay_axes.grid_lines)}"
         )
         canvas.deleteLater()
 
     def test_overlay_grid_lines_cleared_on_rebuild(self, qapp):
         """重建后格线数量不应翻倍（清理后重建）。"""
         from PyQt5.QtCore import QCoreApplication
-        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG, _N_OVERLAY_DIVISIONS
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
         canvas = TimeDomainCanvasPG()
         canvas.resize(900, 480)
@@ -4675,9 +5257,10 @@ class TestOverlayGridSingleAxis:
         canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
         QCoreApplication.processEvents()
 
-        assert len(canvas._overlay_grid_lines) == _N_OVERLAY_DIVISIONS - 1, (
-            f"after rebuild, expected {_N_OVERLAY_DIVISIONS - 1}, "
-            f"got {len(canvas._overlay_grid_lines)}"
+        expected = canvas._overlay_axes.divisions - 1
+        assert len(canvas._overlay_axes.grid_lines) == expected, (
+            f"after rebuild, expected {expected}, "
+            f"got {len(canvas._overlay_axes.grid_lines)}"
         )
         canvas.deleteLater()
 
@@ -4784,11 +5367,11 @@ class TestAutoIdleAA:
         curves = self._curves(canvas)
         assert curves
 
-        n_on = canvas._set_curves_antialias(True)
+        n_on = canvas._quality._set_curves_antialias(True)
         assert n_on == len(curves)
         assert all(c.opts.get("antialias") for c in curves)
 
-        n_off = canvas._set_curves_antialias(False)
+        n_off = canvas._quality._set_curves_antialias(False)
         assert n_off == len(curves)
         assert not any(c.opts.get("antialias") for c in curves)
 
@@ -4800,13 +5383,29 @@ class TestAutoIdleAA:
             raise AssertionError("_set_curves_antialias must not call setData")
 
         monkeypatch.setattr(line.plot_data_item, "setData", fail_setdata)
-        canvas._set_curves_antialias(True)
+        canvas._quality._set_curves_antialias(True)
 
     def test_idle_timer_is_single_shot_150ms(self, qapp):
         canvas = _pg_canvas(qapp)
-        assert canvas._idle_aa_timer.isSingleShot()
-        assert canvas._idle_aa_timer.interval() == 150
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.timer.isSingleShot()
+        assert canvas._quality.timer.interval() == 150
+        assert canvas._quality.aa_on is False
+
+    def test_quality_status_reports_dense_overlay_gate(self, qapp, monkeypatch):
+        canvas = self._plot(qapp, mode="overlay")
+        canvas._overlay_mode = True
+        monkeypatch.setattr(
+            canvas._quality, "_collect_curve_items",
+            lambda: [_FakeCurveData(3000) for _ in range(5)],
+        )
+
+        status = canvas.quality_status()
+
+        assert status["state"] == "red"
+        assert status["metric"] == 15000
+        assert status["budget"] == canvas._AA_OVERLAY_SEGMENT_OFF
+        assert "叠加密度" in status["tooltip"]
+        assert "15000" in status["tooltip"]
 
     def test_idle_slot_enables_aa_when_mouse_up(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -4818,7 +5417,7 @@ class TestAutoIdleAA:
         )
 
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
         assert all(c.opts.get("antialias") for c in self._curves(canvas))
 
     def test_disable_interactive_quality_forces_aa_off(self, qapp, monkeypatch):
@@ -4830,11 +5429,11 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.disable_interactive_quality()
-        assert canvas._idle_aa_on is False
-        assert not canvas._idle_aa_timer.isActive()
+        assert canvas._quality.aa_on is False
+        assert not canvas._quality.timer.isActive()
         assert not any(c.opts.get("antialias") for c in self._curves(canvas))
 
     def test_idle_slot_blocked_while_mouse_down(self, qapp, monkeypatch):
@@ -4846,7 +5445,7 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.LeftButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
 
     def test_idle_slot_blocked_while_overlay_dragging(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -4856,21 +5455,21 @@ class TestAutoIdleAA:
         monkeypatch.setattr(
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
-        canvas._overlay_dragging = True
+        canvas._overlay_axes.dragging = True
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
 
     def test_schedule_idle_quality_starts_timer(self, qapp):
         canvas = self._plot(qapp)
         canvas.schedule_idle_quality()
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_initial_overlay_build_rearms_idle_timer(self, qapp):
         canvas = self._plot(qapp, mode="overlay")
 
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert not any(c.opts.get("antialias") for c in self._curves(canvas))
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_view_all_forces_aa_off_and_rearms_idle_timer(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -4881,13 +5480,13 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.reset_view_to_data_extents()
 
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert not any(c.opts.get("antialias") for c in self._curves(canvas))
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_xrange_change_forces_aa_off(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -4898,17 +5497,17 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.set_xlim(0.2, 0.8)
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert not any(c.opts.get("antialias") for c in self._curves(canvas))
 
     def test_refresh_rearms_idle_timer(self, qapp):
         canvas = self._plot(qapp)
         canvas.set_xlim(0.1, 0.9)
         canvas._flush_pending_refresh()
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_y_only_wheel_forces_aa_off_and_rearms_idle(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -4919,23 +5518,23 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         assert canvas._handle_wheel_dispatch(
             delta=120, modifiers=Qt.ShiftModifier, x_pos=0.5, y_pos=0.0,
         ) is True
-        assert canvas._idle_aa_on is False
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.aa_on is False
+        assert canvas._quality.timer.isActive()
 
-        canvas._idle_aa_timer.stop()
+        canvas._quality.timer.stop()
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         assert canvas._handle_wheel_dispatch(
             delta=120, modifiers=Qt.NoModifier, x_pos=0.5, y_pos=0.0,
         ) is True
-        assert canvas._idle_aa_on is False
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.aa_on is False
+        assert canvas._quality.timer.isActive()
 
     def test_mouse_release_rearms_after_blocked_idle_timeout(self, qapp, monkeypatch):
         from PyQt5.QtCore import QEvent, QPoint, Qt
@@ -4945,15 +5544,15 @@ class TestAutoIdleAA:
         canvas = self._plot(qapp)
         canvas.set_xlim(0.1, 0.9)
         canvas._flush_pending_refresh()
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
         monkeypatch.setattr(
             QApplication, "mouseButtons", staticmethod(lambda: Qt.LeftButton)
         )
-        canvas._idle_aa_timer.stop()
+        canvas._quality.timer.stop()
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is False
-        assert not canvas._idle_aa_timer.isActive()
+        assert canvas._quality.aa_on is False
+        assert not canvas._quality.timer.isActive()
 
         release = QMouseEvent(
             QEvent.MouseButtonRelease,
@@ -4963,7 +5562,7 @@ class TestAutoIdleAA:
             Qt.NoModifier,
         )
         canvas.eventFilter(canvas._glw.viewport(), release)
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_overlay_drag_drops_aa_and_release_rearms(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -4974,19 +5573,19 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
-        canvas._overlay_dragging = True
+        canvas._overlay_axes.dragging = True
         canvas.disable_interactive_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
 
-        canvas._overlay_dragging = False
+        canvas._overlay_axes.dragging = False
         canvas.schedule_idle_quality()
-        assert canvas._idle_aa_timer.isActive()
+        assert canvas._quality.timer.isActive()
 
     def test_replot_leaves_curves_aa_off(self, qapp):
         canvas = self._plot(qapp)
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         curves = self._curves(canvas)
         assert curves and not any(c.opts.get("antialias") for c in curves)
 
@@ -5000,18 +5599,18 @@ class TestAutoIdleAA:
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.set_cursor_visible(True)
         handle = canvas.axes_list[0]
         for i in range(10):
-            canvas._last_t = 0
+            canvas._cursor.last_t = 0
             point = _viewport_point_for_data(canvas, handle, 0.1 + 0.05 * i)
             assert canvas._handle_cursor_mouse_move(
                 _FakeMove(point.x(), point.y())
             ) is True
 
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
         assert all(c.opts.get("antialias") for c in self._curves(canvas))
 
     @staticmethod
@@ -5037,29 +5636,29 @@ class TestAutoIdleAA:
         )
         self._set_budgets(canvas, 1, 2)
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
 
     def test_density_gate_uses_hysteresis_window(self, qapp, monkeypatch):
         canvas = self._plot(qapp)
         self._set_budgets(canvas, 4, 6)
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(5)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(5)]
         )
 
         # Seed past the cold-start: a value strictly inside the (ON, OFF]
         # dead band holds whatever the previous decision was.
-        canvas._idle_aa_density_seeded = True
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is False
+        canvas._quality.density_seeded = True
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is False
 
-        canvas._idle_aa_density_allowed = True
-        assert canvas._idle_aa_density_ok() is True
+        canvas._quality.density_allowed = True
+        assert canvas._quality._idle_aa_density_ok() is True
 
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(7)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(7)]
         )
-        assert canvas._idle_aa_density_ok() is False
-        assert canvas._idle_aa_density_allowed is False
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality.density_allowed is False
 
     def test_overlay_metric_is_sum_across_all_curves(self, qapp, monkeypatch):
         """Correction 1 (2026-05-31): in OVERLAY mode the metric is the SUM
@@ -5071,13 +5670,13 @@ class TestAutoIdleAA:
         canvas._overlay_mode = True
         self._set_budgets(canvas, 8, 10)
         monkeypatch.setattr(
-            canvas, "_collect_curve_items",
+            canvas._quality, "_collect_curve_items",
             lambda: [_FakeCurveData(5) for _ in range(3)],
         )
         # Sum = 15 > OFF(10) on the cold-start seed → rejected, proving the
         # metric is the sum (a per-VB MAX would have been 5 → allowed).
-        canvas._idle_aa_density_seeded = False
-        assert canvas._idle_aa_density_ok() is False
+        canvas._quality.density_seeded = False
+        assert canvas._quality._idle_aa_density_ok() is False
 
     def test_subplot_metric_is_max_over_rows(self, qapp, monkeypatch):
         """Correction 1: in SUBPLOT mode the metric is the MAX over rows of
@@ -5088,11 +5687,11 @@ class TestAutoIdleAA:
         canvas._overlay_mode = False
         self._set_budgets(canvas, 8, 10)
         monkeypatch.setattr(
-            canvas, "_collect_curve_items",
+            canvas._quality, "_collect_curve_items",
             lambda: [_FakeCurveData(5) for _ in range(5)],
         )
-        canvas._idle_aa_density_seeded = False
-        assert canvas._idle_aa_density_ok() is True
+        canvas._quality.density_seeded = False
+        assert canvas._quality._idle_aa_density_ok() is True
 
     def test_single_subplot_curve_6000_passes_on_first_decision(
         self, qapp, monkeypatch,
@@ -5108,11 +5707,11 @@ class TestAutoIdleAA:
             "subplot OFF must cover a 4K maximized single curve (~7700 pts)"
         )
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(6000)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(6000)]
         )
-        canvas._idle_aa_density_seeded = False
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is True, (
+        canvas._quality.density_seeded = False
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is True, (
             "first decision must seed via the OFF threshold, not stick False"
         )
 
@@ -5129,12 +5728,12 @@ class TestAutoIdleAA:
             "(5×3000 ≈ +69 ms) would still be allowed"
         )
         monkeypatch.setattr(
-            canvas, "_collect_curve_items",
+            canvas._quality, "_collect_curve_items",
             lambda: [_FakeCurveData(3000) for _ in range(5)],
         )
-        canvas._idle_aa_density_seeded = False
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is False, (
+        canvas._quality.density_seeded = False
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is False, (
             "dense overlay (sum 15000) must gate AA off on the production "
             "overlay budget"
         )
@@ -5147,12 +5746,12 @@ class TestAutoIdleAA:
         # A 2-curve overlay at the ON budget point is the affordable case.
         n_each = canvas._AA_OVERLAY_SEGMENT_ON // 2  # sum == ON → allowed
         monkeypatch.setattr(
-            canvas, "_collect_curve_items",
+            canvas._quality, "_collect_curve_items",
             lambda: [_FakeCurveData(n_each) for _ in range(2)],
         )
-        canvas._idle_aa_density_seeded = False
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is True
+        canvas._quality.density_seeded = False
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is True
 
     def test_overlay_on_off_hysteresis_do_not_flap(self, qapp, monkeypatch):
         """Correction 3: overlay ON != OFF, so a sum parked between them
@@ -5164,17 +5763,17 @@ class TestAutoIdleAA:
             canvas._AA_OVERLAY_SEGMENT_ON + canvas._AA_OVERLAY_SEGMENT_OFF
         ) // 2
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_FakeCurveData(mid)]
+            canvas._quality, "_collect_curve_items", lambda: [_FakeCurveData(mid)]
         )
-        canvas._idle_aa_density_seeded = True
+        canvas._quality.density_seeded = True
 
-        canvas._idle_aa_density_allowed = True
-        assert canvas._idle_aa_density_ok() is True
-        assert canvas._idle_aa_density_ok() is True  # stable, no flap
+        canvas._quality.density_allowed = True
+        assert canvas._quality._idle_aa_density_ok() is True
+        assert canvas._quality._idle_aa_density_ok() is True  # stable, no flap
 
-        canvas._idle_aa_density_allowed = False
-        assert canvas._idle_aa_density_ok() is False
-        assert canvas._idle_aa_density_ok() is False
+        canvas._quality.density_allowed = False
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality._idle_aa_density_ok() is False
 
     def test_subplot_budget_more_generous_than_overlay(self, qapp):
         """Correction 3: the subplot budget (cached, cheap) must be strictly
@@ -5188,14 +5787,14 @@ class TestAutoIdleAA:
         self, qapp, monkeypatch,
     ):
         canvas = self._plot(qapp)
-        canvas._idle_aa_density_seeded = True
-        canvas._idle_aa_density_allowed = True
+        canvas._quality.density_seeded = True
+        canvas._quality.density_allowed = True
         monkeypatch.setattr(
-            canvas, "_collect_curve_items", lambda: [_BrokenCurveData()]
+            canvas._quality, "_collect_curve_items", lambda: [_BrokenCurveData()]
         )
 
-        assert canvas._idle_aa_density_ok() is False
-        assert canvas._idle_aa_density_allowed is False
+        assert canvas._quality._idle_aa_density_ok() is False
+        assert canvas._quality.density_allowed is False
 
     def test_resize_event_rearms_idle_timer(self, qapp):
         """Fix C: a resize debounces a settle pass; once the settle timer
@@ -5205,8 +5804,8 @@ class TestAutoIdleAA:
         from PyQt5.QtCore import QCoreApplication
 
         canvas = self._plot(qapp)
-        canvas._idle_aa_timer.stop()
-        assert not canvas._idle_aa_timer.isActive()
+        canvas._quality.timer.stop()
+        assert not canvas._quality.timer.isActive()
 
         canvas.resize(900, 500)
         QCoreApplication.processEvents()
@@ -5217,7 +5816,7 @@ class TestAutoIdleAA:
 
         # Fire the debounce slot as the live timer eventually would.
         canvas._on_resize_settled()
-        assert canvas._idle_aa_timer.isActive(), (
+        assert canvas._quality.timer.isActive(), (
             "settle pass must re-arm the idle-AA timer for the new width"
         )
 
@@ -5227,17 +5826,17 @@ class TestAutoIdleAA:
         from PyQt5.QtCore import QCoreApplication
 
         canvas = self._plot(qapp)
-        canvas._idle_aa_density_seeded = True
+        canvas._quality.density_seeded = True
 
         canvas.resize(900, 500)
         QCoreApplication.processEvents()
 
-        assert canvas._idle_aa_density_seeded is False
+        assert canvas._quality.density_seeded is False
 
     def test_default_line_width_is_1_5(self, qapp):
         """Co-tuned with idle AA to soften the AA-off/on visual jump."""
         canvas = _pg_canvas(qapp)
-        assert canvas._overlay_default_lw == 1.5
+        assert canvas._overlay_axes.default_lw == 1.5
 
     def test_grab_preserves_idle_aa_on_state(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -5254,7 +5853,7 @@ class TestAutoIdleAA:
         pix = canvas.grab_pixmap(scale=1.0)
         assert not pix.isNull()
         assert all(c.opts.get("antialias") for c in curves)
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
     def test_idle_aa_subplot_sets_device_coordinate_cache(self, qapp, monkeypatch):
         """Fix D (Correction 2, 2026-05-31): in SUBPLOT mode (disjoint rows)
@@ -5275,7 +5874,7 @@ class TestAutoIdleAA:
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
 
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
         assert all(
             c.cacheMode() == QGraphicsItem.DeviceCoordinateCache for c in curves
         ), "subplot idle AA must enable DeviceCoordinateCache on every curve"
@@ -5299,7 +5898,7 @@ class TestAutoIdleAA:
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
 
         canvas.try_enable_idle_quality()
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
         assert all(c.opts.get("antialias") for c in curves), (
             "overlay idle AA must still flip antialias on"
         )
@@ -5328,7 +5927,7 @@ class TestAutoIdleAA:
         )
 
         canvas.disable_interactive_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves), (
             "disable_interactive_quality must clear the device cache"
         )
@@ -5348,10 +5947,10 @@ class TestAutoIdleAA:
         )
         canvas.try_enable_idle_quality()
         curves = self._curves(canvas)
-        assert canvas._idle_aa_on is True
+        assert canvas._quality.aa_on is True
 
         canvas.disable_interactive_quality()
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
 
     def test_xrange_change_clears_device_cache_subplot(self, qapp, monkeypatch):
@@ -5372,7 +5971,7 @@ class TestAutoIdleAA:
         )
 
         canvas.set_xlim(0.2, 0.8)
-        assert canvas._idle_aa_on is False
+        assert canvas._quality.aa_on is False
         assert all(c.cacheMode() == QGraphicsItem.NoCache for c in curves)
 
 
@@ -5391,8 +5990,8 @@ class TestOverlayYSnapToGrid:
         assert _snap_y_to_divisions(0.999, 8) == pytest.approx(1.0)
         assert _snap_y_to_divisions(1.0, 8) == pytest.approx(1.0)
 
-    def test_snap_channel_preserves_span_on_degenerate_geometry(self, qapp):
-        """ViewBox 尺寸为零时（offscreen），span 应保持不变，不崩溃。"""
+    def test_snap_channel_reframes_to_nice_without_geometry(self, qapp):
+        """Offscreen/零尺寸路径也应重框到 nice graticule，不崩溃。"""
         from PyQt5.QtCore import QCoreApplication
         from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
@@ -5403,18 +6002,17 @@ class TestOverlayYSnapToGrid:
 
         ax = canvas.axes_list[0]
         ax.set_ylim(-300.0, 300.0)   # span = 600
-        lo_before, hi_before = ax.get_ylim()
-        span_before = hi_before - lo_before
 
-        # Should not raise even with degenerate (0-size) offscreen ViewBoxes.
         canvas._snap_overlay_channel_to_grid(ax)
         QCoreApplication.processEvents()
 
         lo_after, hi_after = ax.get_ylim()
-        span_after = hi_after - lo_after
-        assert abs(span_after - span_before) < 1e-4, (
-            f"span changed: {span_before} → {span_after}"
-        )
+        n = canvas._overlay_axes.divisions
+        per_div = (hi_after - lo_after) / n
+        assert abs(lo_after / per_div - round(lo_after / per_div)) < 1e-6
+        assert abs(hi_after / per_div - round(hi_after / per_div)) < 1e-6
+        major = ax.y_axis_item()._tickLevels[0]
+        assert len(major) == n + 1
         canvas.deleteLater()
 
     def test_snap_none_ax_is_noop(self, qapp):
@@ -5446,7 +6044,10 @@ class TestOverlayYSnapToGrid:
         canvas.select_overlay_channel(rows[0][0])
         QCoreApplication.processEvents()
         canvas._begin_overlay_y_drag_at(start_y_px=100.0)
-        canvas._overlay_dragging = True
+        canvas._overlay_axes.dragging = True
+        # Synchronous snap path (no animation) keeps this a single-call
+        # contract; the animated path is covered in test_overlay_grid_ticks.
+        canvas._overlay_axes.snap_anim_ms = 0
 
         snap_calls = []
         monkeypatch.setattr(
@@ -5487,13 +6088,9 @@ class TestOverlayYSnapToGrid:
         )
         canvas.deleteLater()
 
-    def test_snap_aligns_center_to_grid_in_real_geometry(self, qapp):
-        """有效几何下，snap 后 center 应对齐到 1/8 格（X-master 归一化空间）。
-
-        如果 ViewBox 在此环境下仍为 degenerate（height < 1），自动 skip。
-        """
-        from PyQt5.QtCore import QCoreApplication, QPointF
-        import pytest
+    def test_snap_reframes_ticks_in_real_geometry(self, qapp):
+        """有效几何下，snap 后边界与显式 ticks 应回到 nice graticule。"""
+        from PyQt5.QtCore import QCoreApplication
         from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
         canvas = TimeDomainCanvasPG()
@@ -5507,41 +6104,63 @@ class TestOverlayYSnapToGrid:
         QCoreApplication.processEvents()
 
         ax = canvas.axes_list[0]
-        ax.set_ylim(-300.0, 300.0)   # span = 600, center = 0
+        ax.set_ylim(-273.0, 319.0)
         QCoreApplication.processEvents()
-
-        # Check geometry is valid; skip if still degenerate.
-        aux_vb = getattr(ax, "view_box", None)
-        if aux_vb is None:
-            pytest.skip("no aux ViewBox")
-        rect = aux_vb.sceneBoundingRect()
-        if rect.height() < 1.0:
-            pytest.skip(f"degenerate geometry (height={rect.height():.1f}), skip snap test")
-
-        lo_before, hi_before = ax.get_ylim()
-        span_before = hi_before - lo_before
 
         canvas._snap_overlay_channel_to_grid(ax)
         QCoreApplication.processEvents()
 
         lo_after, hi_after = ax.get_ylim()
-        span_after = hi_after - lo_after
-
-        # Span must be preserved.
-        assert abs(span_after - span_before) < 1e-4, (
-            f"span changed: {span_before} → {span_after}"
-        )
-
-        # Center must align to k/8 in X-master normalized Y space.
-        center_after = (lo_after + hi_after) / 2.0
-        x_master_vb = getattr(canvas._x_master_handle, "view_box", None)
-        assert x_master_vb is not None, "X-master ViewBox missing"
-        scene_pt = aux_vb.mapViewToScene(QPointF(0.0, center_after))
-        xm_pt = x_master_vb.mapSceneToView(scene_pt)
-        xm_y = float(xm_pt.y())
-        remainder = abs(xm_y * 8 - round(xm_y * 8))
-        assert remainder < 0.01, (
-            f"center not aligned to 1/8 grid: xm_y={xm_y:.4f}, "
-            f"remainder={remainder:.4f}"
-        )
+        n = canvas._overlay_axes.divisions
+        per_div = (hi_after - lo_after) / n
+        assert abs(lo_after / per_div - round(lo_after / per_div)) < 1e-6
+        assert abs(hi_after / per_div - round(hi_after / per_div)) < 1e-6
+        major = ax.y_axis_item()._tickLevels[0]
+        assert [value for value, _label in major] == pytest.approx([
+            lo_after + k * per_div for k in range(n + 1)
+        ])
         canvas.deleteLater()
+
+
+class TestTimeDomainCanvasPGSubplotUnits:
+    """Subplot Y-axis labels keep channel units."""
+
+    def _rows(self, names_units):
+        t = np.linspace(0.0, 1.0, 64)
+        sig = np.sin(t * 6.28)
+        colors = ["#1769e0", "#e07b39", "#2bb673", "#c0392b"]
+        return [
+            (name, True, t, sig, colors[i % len(colors)], unit, "fid-1")
+            for i, (name, unit) in enumerate(names_units)
+        ]
+
+    def test_subplot_outside_label_includes_unit(self, qapp):
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 420)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(
+            self._rows([("a", "Nm"), ("b", "deg")]), mode="subplot"
+        )
+        qapp.processEvents()
+
+        labels = [h.get_ylabel() for h in canvas.axes_list]
+        assert any("Nm" in label for label in labels), labels
+        assert any("deg" in label for label in labels), labels
+
+    def test_subplot_inside_label_includes_unit(self, qapp):
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 420)
+        canvas.show()
+        qapp.processEvents()
+        rows = self._rows([
+            ("[tiaonorth] Rte_PA_mAtMotorTorque_xds16", "Nm"),
+            ("[tiaonorth] Rte_RackPosCorrPlausi_wSteeringAngle_xds16", "deg"),
+        ])
+        canvas.plot_channels(rows, mode="subplot")
+        qapp.processEvents()
+
+        texts = [item.toPlainText() for item in canvas._inside_label_items]
+        assert texts, "expected inside-label TextItems for long prefixed names"
+        assert any("Nm" in text for text in texts), texts
+        assert any("deg" in text for text in texts), texts

@@ -139,7 +139,9 @@ def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
 
-    assert not hasattr(cs._time_card, '_annotation_btn')
+    assert hasattr(cs._time_card, '_annotation_btn')
+    assert not hasattr(cs._time_card, '_clear_annotation_btn')
+    assert cs._time_card._annotation_btn.toolTip()
     for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
         assert hasattr(card, '_annotation_btn')
         assert hasattr(card, '_clear_annotation_btn')
@@ -147,31 +149,52 @@ def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
         assert card._annotation_btn.toolTip()
 
 
-def test_annotation_toolbar_controls_are_pushed_right_after_hint_label(qapp, qtbot):
+def test_time_annotation_control_follows_zoom_button(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    card = cs._time_card
+    actions = card.toolbar.actions()
+    zoom_index = next(i for i, act in enumerate(actions) if act.data() == 'zoom')
+    annotation_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card._annotation_btn
+    )
+    options_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card._options_btn
+    )
+
+    assert zoom_index < annotation_index < options_index
+
+
+def test_annotation_toolbar_controls_are_pushed_right_without_toolbar_hint(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
 
     for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
-        loc_label = getattr(card.toolbar, 'locLabel', None)
         actions = card.toolbar.actions()
-        hint_index = next(
-            i for i, act in enumerate(actions)
-            if card.toolbar.widgetForAction(act) is card._hint_label
+        toolbar_widgets = [card.toolbar.widgetForAction(act) for act in actions]
+        assert not any(
+            getattr(widget, "objectName", lambda: "")() == "chartHint"
+            for widget in toolbar_widgets
+            if widget is not None
+        )
+        assert not any(
+            getattr(widget, "objectName", lambda: "")() == "chartLocLabel"
+            for widget in toolbar_widgets
+            if widget is not None
         )
         spacer_index = next(
             i for i, act in enumerate(actions)
             if card.toolbar.widgetForAction(act) is card._annotation_spacer
-        )
-        loc_index = next(
-            i for i, act in enumerate(actions)
-            if card.toolbar.widgetForAction(act) is loc_label
         )
         annotation_index = next(
             i for i, act in enumerate(actions)
             if card.toolbar.widgetForAction(act) is card._annotation_label
         )
 
-        assert loc_index < hint_index < spacer_index < annotation_index
+        assert spacer_index < annotation_index
         assert (
             card._annotation_spacer.sizePolicy().horizontalPolicy()
             == QSizePolicy.Expanding
@@ -179,20 +202,26 @@ def test_annotation_toolbar_controls_are_pushed_right_after_hint_label(qapp, qtb
         assert card._annotation_spacer.testAttribute(Qt.WA_StyledBackground)
 
 
-def test_time_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
+def test_time_toolbar_controls_are_pushed_right_without_toolbar_coords(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
 
     card = cs._time_card
-    loc_label = getattr(card.toolbar, 'locLabel', None)
     actions = card.toolbar.actions()
+    toolbar_widgets = [card.toolbar.widgetForAction(act) for act in actions]
+    assert not any(
+        getattr(widget, "objectName", lambda: "")() == "chartHint"
+        for widget in toolbar_widgets
+        if widget is not None
+    )
+    assert not any(
+        getattr(widget, "objectName", lambda: "")() == "chartLocLabel"
+        for widget in toolbar_widgets
+        if widget is not None
+    )
     spacer_index = next(
         i for i, act in enumerate(actions)
         if card.toolbar.widgetForAction(act) is card._time_controls_spacer
-    )
-    loc_index = next(
-        i for i, act in enumerate(actions)
-        if card.toolbar.widgetForAction(act) is loc_label
     )
     subplot_index = next(
         i for i, act in enumerate(actions)
@@ -203,8 +232,7 @@ def test_time_toolbar_controls_are_pushed_right_before_loc_label(qapp, qtbot):
         if card.toolbar.widgetForAction(act) is card._cursor_buttons['dual']
     )
 
-    assert loc_index < spacer_index < subplot_index < cursor_dual_index
-    assert loc_label.minimumWidth() == loc_label.maximumWidth()
+    assert spacer_index < subplot_index < cursor_dual_index
     assert (
         card._time_controls_spacer.sizePolicy().horizontalPolicy()
         == QSizePolicy.Expanding
@@ -264,8 +292,15 @@ def test_time_card_segmented_buttons_have_alt_digit_shortcuts(qapp, qtbot):
         assert label in tip
         assert native in tip
 
+    annotation_shortcut = card._time_annotation_shortcut
+    assert annotation_shortcut.key().toString() == 'Alt+M'
+    assert annotation_shortcut.context() == Qt.WidgetWithChildrenShortcut
+    native = QKeySequence('Alt+M').toString(QKeySequence.NativeText)
+    assert '标注' in card._annotation_btn.toolTip()
+    assert native in card._annotation_btn.toolTip()
 
-def test_time_toolbar_loc_label_text_does_not_jostle_right_controls(qapp, qtbot):
+
+def test_time_toolbar_has_no_loc_label_to_jostle_right_controls(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
     cs.resize(1500, 520)
@@ -274,9 +309,15 @@ def test_time_toolbar_loc_label_text_does_not_jostle_right_controls(qapp, qtbot)
 
     card = cs._time_card
     loc_label = getattr(card.toolbar, 'locLabel', None)
+    assert loc_label is None or not loc_label.isVisible()
+    assert not any(
+        card.toolbar.widgetForAction(act) is loc_label
+        for act in card.toolbar.actions()
+    )
     before = card._cursor_buttons['dual'].geometry().topLeft()
 
-    loc_label.setText("(x, y) = (-19.0, 1.153)")
+    if loc_label is not None:
+        loc_label.setText("(x, y) = (-19.0, 1.153)")
     qapp.processEvents()
     after = card._cursor_buttons['dual'].geometry().topLeft()
 
@@ -442,20 +483,22 @@ def _open_redesigned_menu(canvas, view_box, monkeypatch):
     return captured.get("menu")
 
 
-def _mouse_mode_actions(menu):
-    """Return (pan_action, zoom_action) from the reshaped 鼠标操作 submenu."""
-    mouse_menu = next(
-        a.menu() for a in menu.actions()
-        if a.text().replace("&", "").strip() == "鼠标操作"
-    )
-    acts = mouse_menu.actions()
-    return acts[0], acts[1]
+def _mouse_mode_buttons(menu):
+    """Return (pan_button, zoom_button) from the inline mouse-mode row."""
+    from PyQt5.QtWidgets import QToolButton, QWidgetAction
+
+    first = next(a for a in menu.actions() if not a.isSeparator())
+    assert isinstance(first, QWidgetAction)
+    widget = first.defaultWidget()
+    buttons = widget.findChildren(QToolButton)
+    by_tip = {button.toolTip(): button for button in buttons}
+    return by_tip["平移"], by_tip["框选"]
 
 
 def test_pg_context_menu_mouse_mode_syncs_toolbar_both_directions(
     qapp, qtbot, monkeypatch
 ):
-    """Design D single source of truth: selecting a 鼠标操作 menu item drives
+    """Design D single source of truth: selecting a mouse-mode menu row drives
     the SAME toolbar mode state machine (and its ViewBoxes), and re-opening
     the menu reflects whatever the toolbar currently is — both directions."""
     import pyqtgraph as pg
@@ -483,11 +526,11 @@ def test_pg_context_menu_mouse_mode_syncs_toolbar_both_directions(
 
     # ---- Direction 1: menu → toolbar ----
     menu = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
-    pan_act, zoom_act = _mouse_mode_actions(menu)
+    pan_btn, zoom_btn = _mouse_mode_buttons(menu)
     # Checkmark reflects current toolbar state (pan).
-    assert pan_act.isChecked() and not zoom_act.isChecked()
+    assert pan_btn.isChecked() and not zoom_btn.isChecked()
     # Selecting 框选 must flip the SHARED toolbar state + the ViewBoxes.
-    zoom_act.trigger()
+    zoom_btn.click()
     qapp.processEvents()
     assert str(toolbar.mode).lower() == "zoom"
     assert [b.state["mouseMode"] for b in view_boxes] == [pg.ViewBox.RectMode] * len(view_boxes)
@@ -497,8 +540,8 @@ def test_pg_context_menu_mouse_mode_syncs_toolbar_both_directions(
     qapp.processEvents()
     assert str(toolbar.mode).lower() == "pan"
     menu2 = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
-    pan_act2, zoom_act2 = _mouse_mode_actions(menu2)
-    assert pan_act2.isChecked() and not zoom_act2.isChecked()
+    pan_btn2, zoom_btn2 = _mouse_mode_buttons(menu2)
+    assert pan_btn2.isChecked() and not zoom_btn2.isChecked()
 
 
 def _flush_history_debounce(toolbar, qapp):
@@ -727,6 +770,43 @@ def test_time_toolbar_controls_fit_when_inspector_narrows_chart(qapp, qtbot):
     for button in controls:
         assert button.isVisible()
         assert button.geometry().right() <= right_edge
+
+
+def test_time_card_quality_indicator_sits_on_canvas_lower_left(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    qapp.processEvents()
+
+    card = cs._time_card
+    indicator = card._quality_indicator
+    assert indicator.objectName() == "chartQualityIndicator"
+    assert indicator.parent() is card
+
+    canvas_rect = card.canvas.geometry()
+    dot_rect = indicator.geometry()
+    assert canvas_rect.contains(dot_rect.center())
+    assert dot_rect.left() >= canvas_rect.left()
+    assert dot_rect.bottom() <= canvas_rect.bottom()
+    assert dot_rect.left() - canvas_rect.left() <= 12
+    assert canvas_rect.bottom() - dot_rect.bottom() <= 12
+
+
+def test_time_quality_indicator_updates_from_canvas_status_signal(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    card = cs._time_card
+
+    cs.canvas_time.quality_status_changed.emit({
+        "state": "green",
+        "tooltip": "抗锯齿已完成",
+    })
+    qapp.processEvents()
+
+    assert card._quality_indicator.property("qualityState") == "green"
+    assert card._quality_indicator.toolTip() == "抗锯齿已完成"
 
 
 def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
@@ -983,7 +1063,7 @@ def test_overlay_curve_drag_leaves_toolbar_idle_during_selection(qapp, qtbot):
     # TimeChartCard wires to drop the nav toolbar out of pan.
     cs.canvas_time.select_overlay_channel("torque")
     qapp.processEvents()
-    assert cs.canvas_time._selected_overlay_channel == "torque"
+    assert cs.canvas_time._overlay_axes.selected_channel == "torque"
     selected_axis = cs.canvas_time._channel_lines["torque"][0]
     before_selected_ylim = selected_axis.get_ylim()
     # Selection must have dropped pan so a subsequent blank click can
@@ -1034,7 +1114,7 @@ def test_overlay_blank_click_clears_selection_after_curve_drag(qapp, qtbot):
 
     cs.canvas_time.select_overlay_channel("torque")
     qapp.processEvents()
-    assert cs.canvas_time._selected_overlay_channel == "torque"
+    assert cs.canvas_time._overlay_axes.selected_channel == "torque"
     assert events[-1] == "torque"
     assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
 
@@ -1044,7 +1124,7 @@ def test_overlay_blank_click_clears_selection_after_curve_drag(qapp, qtbot):
     cs.canvas_time.select_overlay_channel(None)
     qapp.processEvents()
 
-    assert cs.canvas_time._selected_overlay_channel is None
+    assert cs.canvas_time._overlay_axes.selected_channel is None
     assert events[-1] is None
     assert len(events) == 2  # exactly select + deselect
     assert primary.get_xlim() == pytest.approx(before_xlim, abs=0.0, rel=0.0)
@@ -1105,7 +1185,7 @@ def test_dblclick_chart_options_does_not_leave_pan_drag_active(qapp, qtbot, monk
     assert len(captured) == 1
     # No stuck pan-drag: the canvas's overlay-drag bookkeeping is cleared
     # and the ViewBox is back at its default PanMode mouse mode.
-    assert cs.canvas_time._overlay_y_drag_start is None
+    assert cs.canvas_time._overlay_axes.drag_start is None
     assert not cs.canvas_time._chart_options_opening
     import pyqtgraph as pg
     assert primary.view_box.state['mouseMode'] == pg.ViewBox.PanMode
@@ -1321,6 +1401,10 @@ def test_annotation_toolbar_toggles_canvas_modes(qapp, qtbot):
     seen = []
     cs.annotation_enabled_changed.connect(lambda mode, enabled: seen.append((mode, enabled)))
 
+    cs._time_card._annotation_btn.click()
+    assert cs.canvas_time._annotations.enabled is True
+    assert cs._time_card._annotation_btn.isChecked()
+
     cs._fft_card._annotation_btn.click()
     assert cs.canvas_fft._remark_enabled is True
     assert cs._fft_card._annotation_btn.text() == '关闭'
@@ -1333,6 +1417,7 @@ def test_annotation_toolbar_toggles_canvas_modes(qapp, qtbot):
     assert cs.canvas_order._remark_enabled is True
     assert cs._order_card._annotation_btn.text() == '关闭'
 
+    assert ('time', True) in seen
     assert ('fft', True) in seen
     assert ('fft_time', True) in seen
     assert ('order', True) in seen
@@ -1392,12 +1477,15 @@ def test_time_chart_card_has_segmented_controls(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack, TimeChartCard
     cs = ChartStack()
     qtbot.addWidget(cs)
-    # First card in the stack is the time-domain card.
-    card = cs.stack.widget(0)
+    # The time-domain card keeps the control objects, but its toolbar is now
+    # shared above the splitter instead of inside the left pane.
+    card = cs._time_card
     assert isinstance(card, TimeChartCard)
-    # Five segmented buttons on the card toolbar (post-i18n labels):
+    assert card.toolbar is cs._time_toolbar
+    assert card.toolbar.parentWidget() is cs._time_page
+    # Five segmented buttons on the shared toolbar (post-i18n labels):
     # 分屏 / 叠加 / 游标关 / 单游标 / 双游标
-    texts = {b.text() for b in card.findChildren(type(card.btn_subplot))}
+    texts = {b.text() for b in cs._time_toolbar.findChildren(type(card.btn_subplot))}
     assert {'分屏', '叠加', '游标关', '单游标', '双游标'} <= texts
 
 
@@ -1405,7 +1493,9 @@ def test_time_chart_card_removes_subplots_config_button(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     qtbot.addWidget(cs)
-    card = cs.stack.widget(0)
+    # The time-domain card now lives inside a QSplitter at stack index 0;
+    # reach the real card directly (== cs.stack.widget(0).widget(0)).
+    card = cs._time_card
     # No QAction on the native nav toolbar should map to 'configure_subplots'.
     native_tb = card.toolbar
     for act in native_tb.actions():
@@ -1578,7 +1668,7 @@ def test_spectrogram_canvas_export_pixmaps(qtbot):
     assert not canvas.grab_main_chart().isNull()
 
 
-# ---- Task 2.7: Chinese segmented buttons + idle hint ----
+# ---- Task 2.7: Chinese segmented buttons ----
 
 def test_time_card_segmented_buttons_chinese(qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
@@ -1591,14 +1681,6 @@ def test_time_card_segmented_buttons_chinese(qtbot):
     assert card._cursor_buttons['off'].text() == '游标关'
     assert card._cursor_buttons['single'].text() == '单游标'
     assert card._cursor_buttons['dual'].text() == '双游标'
-
-
-def test_tool_hints_idle_mentions_dblclick():
-    from mf4_analyzer.ui.chart_stack import _TOOL_HINTS
-    # _TOOL_HINTS values are (title, detail) tuples since MDI icon refactor;
-    # the double-click chart-options phrase lives in the detail string.
-    assert '双击图面' in _TOOL_HINTS[''][1]
-    assert '图表选项' in _TOOL_HINTS[''][1]
 
 
 # ---- Bottom hint bar (Persistent + Context layers) ----
@@ -1633,6 +1715,36 @@ def test_bottom_hint_bar_context_subplot_default_comes_from_registry(qapp):
     cs = ChartStack()
     card = cs._time_card
     assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+
+
+def test_flash_hint_shows_transient_context_text(qapp):
+    from mf4_analyzer.ui.chart_stack import _ChartCard
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    card = _ChartCard(canvas)
+    card.resize(640, 360)
+    card.show()
+    qapp.processEvents()
+
+    card.flash_hint("先选中一个通道，再用 Shift+滚轮缩放纵向")
+
+    assert "先选中一个通道" in card._hint_context.text()
+
+
+def test_overlay_needs_selection_signal_flashes_hint(qapp):
+    from mf4_analyzer.ui.chart_stack import _ChartCard
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    card = _ChartCard(canvas)
+    card.show()
+    qapp.processEvents()
+
+    canvas.overlay_y_needs_selection.emit()
+    qapp.processEvents()
+
+    assert "先选中一个通道" in card._hint_context.text()
 
 
 def test_bottom_hint_bar_context_uses_registry(qapp, monkeypatch):
@@ -1771,10 +1883,18 @@ def test_bottom_hint_bar_constants_exposed():
     assert _BOTTOM_HINT_PERSISTENT == "    ·    ".join(persistent_hints())
 
 
-def test_bottom_hint_bar_does_not_break_existing_top_hint(qapp):
-    """Sanity: existing in-toolbar _hint_label remains untouched."""
+def test_toolbar_hint_removed_but_bottom_hint_bar_stays(qapp):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
+    cs.show()
+    qapp.processEvents()
     card = cs._time_card
-    # Default mode is pan → top hint label paints '移动曲线' title.
-    assert "移动曲线" in card._hint_label.text()
+    toolbar_widgets = [card.toolbar.widgetForAction(act) for act in card.toolbar.actions()]
+    assert not any(
+        getattr(widget, "objectName", lambda: "")() == "chartHint"
+        for widget in toolbar_widgets
+        if widget is not None
+    )
+    assert card._hint_bar is not None
+    assert card._hint_bar.isVisible() is True
+    assert card._hint_persistent.text()

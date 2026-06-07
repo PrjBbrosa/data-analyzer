@@ -27,18 +27,20 @@ from .inspector_sections import (
 # Expanding children (QSpinBox / QComboBox / QLineEdit) stop growing
 # unboundedly when the right splitter pane is dragged wider. The cap
 # should be just wide enough to host the longest legitimate content.
-# The visible right pane is 360px wide; the content body is 344px so the
-# scroll area has room for its scrollbar and 2px pane margins.
-_INSPECTOR_CONTENT_MAX_WIDTH = 344
+# 2026-06-05 narrow-pane: the inspector was retuned from 360px → 288px so
+# its initial width matches the left file column (~250–288). The visible
+# right pane is 288px wide; the content body is 272px so the scroll area
+# has room for its scrollbar and 2px pane margins. The 坐标轴设置 group
+# was made fluid (range editors fill the remaining width, dB/Linear unit
+# wraps to its own right-aligned line) so it shrinks with the pane instead
+# of forcing a horizontal scrollbar — see _build_axis_row.
+_INSPECTOR_CONTENT_MAX_WIDTH = 272
 
 
 class Inspector(QWidget):
     plot_time_requested = pyqtSignal()
     fft_requested = pyqtSignal()
     fft_time_requested = pyqtSignal()
-    fft_time_force_requested = pyqtSignal()
-    fft_time_export_full_requested = pyqtSignal()
-    fft_time_export_main_requested = pyqtSignal()
     order_time_requested = pyqtSignal()
     xaxis_apply_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order')
@@ -72,7 +74,7 @@ class Inspector(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        lay.addWidget(self._scroll)
+        lay.addWidget(self._scroll, 1)
 
         # 2026-04-26 R3 紧凑化 fix-1:
         # The scroll uses a *host* widget that fills the viewport horizontally,
@@ -135,12 +137,8 @@ class Inspector(QWidget):
         self.order_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
         # R3 C: FFTTimeContextual now also owns a (builtin-aware) PresetBar.
         self.fft_time_ctx.preset_bar.acknowledged.connect(self.preset_acknowledged)
-        # FFT vs Time relays — Task 4 fills in the real controls; the
-        # signals are declared on the skeleton so this wiring stays valid.
+        # FFT vs Time primary compute relay.
         self.fft_time_ctx.fft_time_requested.connect(self.fft_time_requested)
-        self.fft_time_ctx.force_recompute_requested.connect(self.fft_time_force_requested)
-        self.fft_time_ctx.export_full_requested.connect(self.fft_time_export_full_requested)
-        self.fft_time_ctx.export_main_requested.connect(self.fft_time_export_main_requested)
         # T6 reviewer Important #2: relay rebuild_time_requested and
         # signal_changed from the fft_time contextual. Mirrors the
         # fft_ctx / order_ctx wiring above; the rebuild relay tags the

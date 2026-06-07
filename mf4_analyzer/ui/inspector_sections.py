@@ -35,6 +35,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..ui_kit.icons import Icons
+from ..ui_kit.menus import apply_rounded_menu_chrome
 from ..ui_kit.widgets.searchable_combo import SearchableComboBox
 from ._axis_defaults import z_range_for
 from .widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
@@ -772,7 +773,7 @@ class PresetBar(QWidget):
 
     def _show_menu(self, slot, pos):
         btn = self._load_btns[slot]
-        menu = QMenu(self)
+        menu = apply_rounded_menu_chrome(QMenu(self))
         act_save = menu.addAction("保存当前到本槽位")
         act_rename = menu.addAction("重命名…")
         if self._builtins is not None:
@@ -983,10 +984,22 @@ def _set_form_row_visible(form, field_widget, visible):
     the wrapper's direct child widgets so callers (and tests) see the
     expected hidden state on every individual control.
     """
-    field_widget.setVisible(visible)
-    for child in field_widget.findChildren(QWidget, options=Qt.FindDirectChildrenOnly):
+    form_field = field_widget
+    label = form.labelForField(form_field)
+    if label is None:
+        parent = field_widget.parentWidget()
+        while parent is not None:
+            label = form.labelForField(parent)
+            if label is not None:
+                form_field = parent
+                break
+            parent = parent.parentWidget()
+
+    form_field.setVisible(visible)
+    if form_field is not field_widget:
+        field_widget.setVisible(visible)
+    for child in form_field.findChildren(QWidget, options=Qt.FindDirectChildrenOnly):
         child.setVisible(visible)
-    label = form.labelForField(field_widget)
     if label is not None:
         label.setVisible(visible)
 
@@ -1040,52 +1053,80 @@ class _AxisRangeHost(QWidget):
         )
 
 
+# 2026-06-05 narrow-pane: shared column geometry so the 自动 / 最小 / 最大
+# header row (built by _build_axis_header) lines up pixel-for-pixel with the
+# per-axis rows. The 自动 column is now a bare checkbox (the header labels it
+# once) instead of three repeated "自动" texts — that frees ~24px which the
+# fluid min→max editors absorb.
+_AXIS_LABEL_W = 56
+_AXIS_CHK_W = 30
+_AXIS_ROW_GAP = 4
+_AXIS_ARROW_W = 12
+_AXIS_MANUAL_GAP = 3
+
+
 def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     """Build one inline axis row.
 
-    Visual states:
-    - auto checked: [label][chk][summary][unit]
-    - manual:       [label][chk][spin_min][→][spin_max][unit]
+    Visual states (columns line up under the 自动/最小/最大 header):
+    - auto checked: [label][✓][summary][unit]
+    - manual:       [label][✓][spin_min][→][spin_max][unit]
 
     Returns ``(row, parts)``; caller stores ``parts`` so _sync_axis_enabled
     can toggle summary vs. editable bounds.
     """
-    row = QWidget()
-    row.setObjectName("axisRow")
-    row.setAttribute(Qt.WA_StyledBackground, False)
-    row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-    lay = QHBoxLayout(row)
+    row_gap = _AXIS_ROW_GAP
+    arrow_width = _AXIS_ARROW_W
+    manual_gap = _AXIS_MANUAL_GAP
+    unit_width = 64
+    # 2026-06-05 narrow-pane: the range editors are now fluid (Expanding) so
+    # the whole group shrinks with the 288px pane instead of forcing a
+    # horizontal scrollbar. ``range_floor`` is the smallest the min→max area
+    # ever collapses to; the pane is wide enough that it normally renders
+    # ~120px, giving ~52px per spin. The dB/Linear unit (色阶 row only) no
+    # longer steals inline width — it wraps to its own right-aligned line so
+    # X / Y / Z editors all settle at the same width.
+    range_floor = 104
+    spin_floor = 42
+
+    # ``container`` is the widget added to the group: line 1 holds
+    # [label][auto][min → max]; an optional line 2 carries the unit combo
+    # right-aligned beneath the editors.
+    container = QWidget()
+    container.setObjectName("axisRow")
+    container.setAttribute(Qt.WA_StyledBackground, True)
+    container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    outer = QVBoxLayout(container)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.setSpacing(2)
+
+    line1 = QWidget(container)
+    line1.setObjectName("axisRowLine")
+    line1.setAttribute(Qt.WA_StyledBackground, True)
+    lay = QHBoxLayout(line1)
     lay.setContentsMargins(0, 0, 0, 0)
-    row_gap = 4
     lay.setSpacing(row_gap)
     lbl = QLabel(label)
-    lbl.setMinimumWidth(56)
-    lbl.setMaximumWidth(56)
+    lbl.setMinimumWidth(_AXIS_LABEL_W)
+    lbl.setMaximumWidth(_AXIS_LABEL_W)
     lay.addWidget(lbl)
-    chk.setMinimumWidth(54)
-    chk.setMaximumWidth(54)
-    lay.addWidget(chk)
+    # Bare checkbox centred in the 自动 column (the header labels it once).
+    chk_cell = QWidget(line1)
+    chk_cell.setObjectName("axisAutoCell")
+    chk_cell.setAttribute(Qt.WA_StyledBackground, True)
+    chk_cell.setFixedWidth(_AXIS_CHK_W)
+    chk_lay = QHBoxLayout(chk_cell)
+    chk_lay.setContentsMargins(0, 0, 0, 0)
+    chk_lay.setSpacing(0)
+    chk_lay.addStretch(1)
+    chk_lay.addWidget(chk)
+    chk_lay.addStretch(1)
+    lay.addWidget(chk_cell)
 
-    unit_width = 66
-    arrow_width = 12
-    manual_gap = 3
-    # All rows reserve the same trailing range area. Rows without a unit use
-    # the unit slot for wider min/max editors so their right edge lines up
-    # with the color row's dB/Linear combo box.
-    range_width_without_unit = 196
-    range_width_with_unit = range_width_without_unit - row_gap - unit_width
-    row.setMinimumWidth(56 + row_gap + 54 + row_gap + range_width_without_unit)
-
-    range_width = (
-        range_width_with_unit if unit_widget is not None
-        else range_width_without_unit
-    )
-    spin_width = int((range_width - arrow_width - (manual_gap * 2)) / 2)
-    range_host = _AxisRangeHost(range_width, row)
+    range_host = _AxisRangeHost(range_floor, line1)
     range_host.setObjectName("axisRangeHost")
-    range_host.setAttribute(Qt.WA_StyledBackground, False)
-    range_host.setFixedWidth(range_width)
-    range_host.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+    range_host.setAttribute(Qt.WA_StyledBackground, True)
+    range_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     stack = QStackedLayout(range_host)
     stack.setContentsMargins(0, 0, 0, 0)
     stack.setSpacing(0)
@@ -1093,7 +1134,6 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     summary_page = QWidget(range_host)
     summary_page.setObjectName("axisRangeSummaryPage")
     summary_page.setAttribute(Qt.WA_StyledBackground, False)
-    summary_page.setMinimumWidth(range_width)
     summary_lay = QHBoxLayout(summary_page)
     summary_lay.setContentsMargins(0, 0, 0, 0)
     summary_lay.setSpacing(0)
@@ -1105,16 +1145,14 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     manual_page = QWidget(range_host)
     manual_page.setObjectName("axisManualRangePage")
     manual_page.setAttribute(Qt.WA_StyledBackground, False)
-    manual_page.setMinimumWidth(range_width)
     manual_lay = QHBoxLayout(manual_page)
     manual_lay.setContentsMargins(0, 0, 0, 0)
     manual_lay.setSpacing(manual_gap)
-    spin_min.setButtonSymbols(QAbstractSpinBox.NoButtons)
-    spin_max.setButtonSymbols(QAbstractSpinBox.NoButtons)
-    spin_min.setMinimumWidth(spin_width)
-    spin_min.setMaximumWidth(spin_width)
-    spin_max.setMinimumWidth(spin_width)
-    spin_max.setMaximumWidth(spin_width)
+    for sp in (spin_min, spin_max):
+        sp.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        sp.setMinimumWidth(spin_floor)
+        sp.setMaximumWidth(120)
+        sp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     manual_lay.addWidget(spin_min, 1)
     arrow = QLabel('→')
     arrow.setAlignment(Qt.AlignCenter)
@@ -1129,13 +1167,23 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
     manual_page.setMinimumHeight(reserved_height)
     stack.addWidget(summary_page)
     stack.addWidget(manual_page)
-    lay.addWidget(range_host)
+    lay.addWidget(range_host, 1)
+    outer.addWidget(line1)
+
     if unit_widget is not None:
+        unit_line = QWidget(container)
+        unit_line.setObjectName("axisUnitLine")
+        unit_line.setAttribute(Qt.WA_StyledBackground, True)
+        unit_lay = QHBoxLayout(unit_line)
+        unit_lay.setContentsMargins(0, 0, 0, 0)
+        unit_lay.setSpacing(0)
+        unit_lay.addStretch(1)
         unit_widget.setMinimumWidth(unit_width)
         unit_widget.setMaximumWidth(unit_width)
-        lay.addWidget(unit_widget)
-    lay.addStretch(1)
-    return row, dict(
+        unit_lay.addWidget(unit_widget)
+        outer.addWidget(unit_line)
+
+    return container, dict(
         label=lbl,
         checkbox=chk,
         range_host=range_host,
@@ -1148,6 +1196,48 @@ def _build_axis_row(label, chk, spin_min, spin_max, unit_widget, summary_label):
         spin_max=spin_max,
         unit=unit_widget,
     )
+
+
+def _build_axis_header():
+    """Column header row for the 坐标轴设置 grid: 自动 / 最小 / 最大.
+
+    Mirrors the per-axis row column widths (_AXIS_* constants) so the
+    headers sit exactly above the checkbox and the two range editors.
+    """
+    row = QWidget()
+    row.setObjectName("axisHeaderRow")
+    row.setAttribute(Qt.WA_StyledBackground, True)
+    row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(_AXIS_ROW_GAP)
+
+    lay.addSpacing(_AXIS_LABEL_W)
+
+    auto_hdr = QLabel("自动")
+    auto_hdr.setProperty("axisHeader", True)
+    auto_hdr.setAlignment(Qt.AlignCenter)
+    auto_hdr.setFixedWidth(_AXIS_CHK_W)
+    lay.addWidget(auto_hdr)
+
+    rng = QWidget(row)
+    rng.setObjectName("axisHeaderRange")
+    rng.setAttribute(Qt.WA_StyledBackground, True)
+    rng.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    rl = QHBoxLayout(rng)
+    rl.setContentsMargins(0, 0, 0, 0)
+    rl.setSpacing(_AXIS_MANUAL_GAP)
+    min_hdr = QLabel("最小")
+    min_hdr.setProperty("axisHeader", True)
+    min_hdr.setAlignment(Qt.AlignCenter)
+    rl.addWidget(min_hdr, 1)
+    rl.addSpacing(_AXIS_ARROW_W)
+    max_hdr = QLabel("最大")
+    max_hdr.setProperty("axisHeader", True)
+    max_hdr.setAlignment(Qt.AlignCenter)
+    rl.addWidget(max_hdr, 1)
+    lay.addWidget(rng, 1)
+    return row
 
 
 def _make_axis_settings_group(
@@ -1198,13 +1288,22 @@ def _make_axis_settings_group(
     surface assumed by the Wave 3 OrderContextual tests.
     """
     g = QGroupBox("坐标轴设置")
+    # 2026-06-05 narrow-pane: zero the group's right padding (base Inspector
+    # QGroupBox carries 2px) so the now-fluid range editors reach the same
+    # right edge as the card's form fields (色图 etc.) instead of stopping
+    # 2px short. Scoped by objectName so other groups keep their padding.
+    g.setObjectName("axisSettingsGroup")
     lay = QVBoxLayout(g)
     lay.setContentsMargins(8, 8, 0, 8)
     lay.setSpacing(4)
     owner._axis_row_parts = {}
 
+    # ---- column header: 自动 / 最小 / 最大 (labels the checkbox + editors
+    # once instead of repeating "自动" on all three rows) ----
+    lay.addWidget(_build_axis_header())
+
     # ---- X row ----
-    owner.chk_x_auto = QCheckBox("自动")
+    owner.chk_x_auto = QCheckBox()
     owner.spin_x_min = _no_buttons(CompactDoubleSpinBox())
     owner.spin_x_min.setRange(0.0, 1e9)
     owner.spin_x_min.setDecimals(2)
@@ -1237,7 +1336,7 @@ def _make_axis_settings_group(
     lay.addWidget(x_row)
 
     # ---- Y row ----
-    owner.chk_y_auto = QCheckBox("自动")
+    owner.chk_y_auto = QCheckBox()
     owner.spin_y_min = _no_buttons(CompactDoubleSpinBox())
     owner.spin_y_min.setRange(0.0, 1e9)
     owner.spin_y_min.setDecimals(2)
@@ -1266,7 +1365,7 @@ def _make_axis_settings_group(
 
     # ---- Z (color scale) row ----
     if include_z:
-        owner.chk_z_auto = QCheckBox("自动")
+        owner.chk_z_auto = QCheckBox()
         owner.spin_z_floor = _no_buttons(CompactDoubleSpinBox())
         owner.spin_z_floor.setRange(-200.0, 200.0)
         owner.spin_z_floor.setDecimals(2)
@@ -1320,7 +1419,7 @@ class PersistentTop(QWidget):
     work even while the body widget is hidden.
     """
 
-    _SETTINGS_KEY = "inspector/persistent_top/expanded"
+    _SETTINGS_KEY = "inspector/persistent_top/expanded_v2"
 
     xaxis_apply_requested = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
@@ -1364,7 +1463,10 @@ class PersistentTop(QWidget):
         # ------- Collapser body (the three groups live here) -------
         self._collapser_body = QFrame(self)
         body_lay = QVBoxLayout(self._collapser_body)
-        body_lay.setContentsMargins(0, 0, 0, 0)
+        # Match the contextual cards below: the header remains full-width as
+        # the click target, while the expanded content keeps 10px breathing
+        # room on both sides.
+        body_lay.setContentsMargins(10, 0, 10, 0)
         body_lay.setSpacing(6)
         root.addWidget(self._collapser_body)
 
@@ -1373,6 +1475,7 @@ class PersistentTop(QWidget):
         fl = QFormLayout(g)
         _configure_form(fl)
         self._xaxis_form = fl
+        self._xlabel_auto_from_channel = False
         self.combo_xaxis = QComboBox()
         self.combo_xaxis.addItems(['自动(时间)', '指定通道'])
         fl.addRow("来源:", _fit_field(self.combo_xaxis))
@@ -1427,7 +1530,7 @@ class PersistentTop(QWidget):
         self.spin_xt.setToolTip("X 轴主刻度的大致数量，范围 3–30。")
         self.spin_yt = _no_buttons(QSpinBox())
         self.spin_yt.setRange(3, 20)
-        self.spin_yt.setValue(6)
+        self.spin_yt.setValue(8)
         self.spin_yt.setToolTip("Y 轴主刻度的大致数量，范围 3–20。")
         self._tick_row_host = _pair_field(
             self.spin_xt, "Y轴:", self.spin_yt,
@@ -1436,15 +1539,15 @@ class PersistentTop(QWidget):
         body_lay.addWidget(g)
 
         self._wire()
-        # Restore persisted collapser state (defaults to collapsed).
+        # Restore persisted collapser state (defaults to expanded).
         try:
-            persisted = _preset_settings().value(self._SETTINGS_KEY, False)
+            persisted = _preset_settings().value(self._SETTINGS_KEY, True)
             # QSettings can return strings on some platforms.
             if isinstance(persisted, str):
                 persisted = persisted.lower() in ("true", "1", "yes")
             initial_expanded = bool(persisted)
         except Exception:  # pragma: no cover
-            initial_expanded = False
+            initial_expanded = True
         self.btn_collapser.setChecked(initial_expanded)
         self._sync_collapser(initial_expanded)
         # 紧凑化【2】: apply initial conditional visibility once everything
@@ -1475,6 +1578,13 @@ class PersistentTop(QWidget):
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
         self.spin_xt.valueChanged.connect(self._emit_ticks)
         self.spin_yt.valueChanged.connect(self._emit_ticks)
+        # Sync label field when user changes channel selection interactively.
+        # blockSignals during restore/repopulate suppresses this correctly.
+        self._combo_xaxis_ch.currentIndexChanged.connect(self._sync_xlabel_from_channel)
+        self.combo_xaxis.currentIndexChanged.connect(self._sync_xlabel_for_xaxis_mode)
+        self.edit_xlabel.textEdited.connect(
+            lambda _text: setattr(self, '_xlabel_auto_from_channel', False)
+        )
         # R3 #6: collapser toggle reveals/hides the inner three groups
         # and persists the choice via QSettings.
         self.btn_collapser.toggled.connect(self._sync_collapser)
@@ -1492,6 +1602,23 @@ class PersistentTop(QWidget):
             _preset_settings().setValue(self._SETTINGS_KEY, expanded)
         except Exception:  # pragma: no cover
             pass
+
+    def _sync_xlabel_from_channel(self, idx):
+        if idx < 0:
+            return
+        data = self._combo_xaxis_ch.itemData(idx)
+        if data is not None:
+            _, ch = data
+            self.edit_xlabel.setText(ch)
+            self._xlabel_auto_from_channel = True
+
+    def _sync_xlabel_for_xaxis_mode(self, idx):
+        if idx == 1:
+            self._sync_xlabel_from_channel(self._combo_xaxis_ch.currentIndex())
+            return
+        if self._xlabel_auto_from_channel:
+            self.edit_xlabel.clear()
+            self._xlabel_auto_from_channel = False
 
     def _update_xaxis_channel_row_visible(self, index):
         _set_form_row_visible(self._xaxis_form, self._combo_xaxis_ch, index == 1)
@@ -1522,15 +1649,24 @@ class PersistentTop(QWidget):
         """candidates: list of (display_text, (fid, ch)) tuples."""
         prev = self._combo_xaxis_ch.currentData()
         self._combo_xaxis_ch.blockSignals(True)
-        self._combo_xaxis_ch.clear()
-        keep_idx = -1
-        for i, (text, data) in enumerate(candidates):
-            self._combo_xaxis_ch.addItem(text, data)
-            if prev is not None and data == prev:
-                keep_idx = i
-        if keep_idx >= 0:
-            self._combo_xaxis_ch.setCurrentIndex(keep_idx)
-        self._combo_xaxis_ch.blockSignals(False)
+        _le = self._combo_xaxis_ch.lineEdit()
+        _old_le = _le.blockSignals(True) if _le is not None else False
+        try:
+            self._combo_xaxis_ch.clear()
+            keep_idx = -1
+            for i, (text, data) in enumerate(candidates):
+                self._combo_xaxis_ch.addItem(text, data)
+                if prev is not None and data == prev:
+                    keep_idx = i
+            if keep_idx >= 0:
+                self._combo_xaxis_ch.setCurrentIndex(keep_idx)
+        finally:
+            self._combo_xaxis_ch.blockSignals(False)
+            if _le is not None:
+                _le.blockSignals(_old_le)
+        # Fresh population (no previous match): auto-fill label if empty.
+        if keep_idx < 0 and self._combo_xaxis_ch.count() > 0 and not self.edit_xlabel.text():
+            self._sync_xlabel_from_channel(0)
 
     def range_enabled(self):
         return self.chk_range.isChecked()
@@ -1702,8 +1838,12 @@ class FFTContextual(QWidget):
         self.combo_amp_y = QComboBox()
         self.combo_amp_y.addItems(['Linear', 'dB'])
         self.combo_amp_y.setCurrentText('Linear')
+        # 2026-06-05 narrow-pane: was "Amplitude 轴:" (144px) — the lone
+        # outlier that inflated the unified label column and forced the
+        # signal field to wrap at the 288px pane. The Chinese form matches
+        # the 幅值 (Y) axis label below and keeps the column tight.
         fl.addRow(
-            "Amplitude 轴:",
+            "幅值轴:",
             _fit_field(self.combo_amp_y, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         self.combo_psd_y = QComboBox()
@@ -1965,18 +2105,11 @@ class FFTContextual(QWidget):
 
 
 class OrderContextual(QWidget):
-    """Order-analysis contextual: source/params/3 compute btns + tracking sub-group."""
+    """Order-analysis contextual: source/params/presets + compute action."""
 
     order_time_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
-    # Placeholder cancel intent — the W4 cleanup (2026-05-01) removed the
-    # ``OrderWorker`` async path along with its dispatch / completion
-    # slots, so this signal currently has no producer and the host slot
-    # is a no-op. ``btn_cancel`` and the wiring are kept as scaffolding
-    # for a future async COT (compute-on-thread) worker; until then the
-    # button stays disabled and the signal is dormant.
-    cancel_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2103,11 +2236,6 @@ class OrderContextual(QWidget):
         # constructor default until the user actually toggles a checkbox).
         self._sync_axis_enabled()
 
-        self.btn_ot = QPushButton("时间-阶次")
-        self.btn_ot.setProperty("role", "primary")
-        self.btn_ot.setMinimumHeight(32)
-        root.addWidget(self.btn_ot)
-
         g = QGroupBox("预设配置")
         gl = QVBoxLayout(g)
         gl.setSpacing(4)
@@ -2117,18 +2245,13 @@ class OrderContextual(QWidget):
         gl.addWidget(self.preset_bar)
         root.addWidget(g)
 
+        self.btn_ot = QPushButton("时间-阶次")
+        self.btn_ot.setProperty("role", "primary")
+        self.btn_ot.setMinimumHeight(32)
+        root.addWidget(self.btn_ot)
+
         self.lbl_progress = QLabel("")
         root.addWidget(self.lbl_progress)
-
-        # T6: cancel-compute button. Sits at the END of the layout so it
-        # never crowds the primary "时间-阶次" button.
-        # ``clicked.connect(cancel_requested)`` re-emits without arguments;
-        # MainWindow listens to ``cancel_requested``, not the button.
-        self.btn_cancel = QPushButton("取消计算", self)
-        self.btn_cancel.setObjectName("orderCancelBtn")
-        self.btn_cancel.setEnabled(False)
-        self.btn_cancel.clicked.connect(self.cancel_requested)
-        root.addWidget(self.btn_cancel)
 
         root.addStretch()
 
@@ -2466,9 +2589,6 @@ class FFTTimeContextual(QWidget):
     Signals
     -------
     - ``fft_time_requested`` — primary "compute" button click.
-    - ``force_recompute_requested`` — force-recompute (cache bypass) button.
-    - ``export_full_requested`` — export full view (spectrogram + slice).
-    - ``export_main_requested`` — export main spectrogram only.
 
     Widgets (referenced by name from MainWindow / tests)
     ---------------------------------------------------
@@ -2490,8 +2610,6 @@ class FFTTimeContextual(QWidget):
       ``spin_freq_min`` IS ``spin_y_min``; ``spin_freq_max`` IS
       ``spin_y_max``. ``spin_freq_max == 0.0`` still means "use Nyquist".
     - ``btn_compute`` — primary action; disabled iff no candidate.
-    - ``btn_force`` / ``btn_export_full`` / ``btn_export_main`` — secondary
-      actions.
 
     ``get_params()`` returns a dict whose keys match exactly what
     ``MainWindow._fft_time_cache_key`` expects: ``signal``, ``fs``,
@@ -2506,9 +2624,6 @@ class FFTTimeContextual(QWidget):
     """
 
     fft_time_requested = pyqtSignal()
-    force_recompute_requested = pyqtSignal()
-    export_full_requested = pyqtSignal()
-    export_main_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
 
@@ -2671,23 +2786,6 @@ class FFTTimeContextual(QWidget):
         self.btn_compute.setEnabled(False)
         root.addWidget(self.btn_compute)
 
-        action_row = QHBoxLayout()
-        action_row.setSpacing(6)
-        self.btn_force = QPushButton("强制重算")
-        self.btn_force.setProperty("role", "tool")
-        self.btn_force.setToolTip("绕过缓存并重新计算")
-        action_row.addWidget(self.btn_force)
-        self.btn_export_full = QPushButton("导出完整视图")
-        self.btn_export_full.setIcon(Icons.export())
-        self.btn_export_full.setIconSize(QSize(14, 14))
-        self.btn_export_full.setProperty("role", "tool")
-        action_row.addWidget(self.btn_export_full)
-        self.btn_export_main = QPushButton("导出主图")
-        self.btn_export_main.setIcon(Icons.export())
-        self.btn_export_main.setIconSize(QSize(14, 14))
-        self.btn_export_main.setProperty("role", "tool")
-        action_row.addWidget(self.btn_export_main)
-        root.addLayout(action_row)
         root.addStretch()
 
         # 2026-04-27 fix-4: unify label-column width across the sig_card
@@ -2697,9 +2795,6 @@ class FFTTimeContextual(QWidget):
 
         # ---- wiring ----
         self.btn_compute.clicked.connect(self.fft_time_requested)
-        self.btn_force.clicked.connect(self.force_recompute_requested)
-        self.btn_export_full.clicked.connect(self.export_full_requested)
-        self.btn_export_main.clicked.connect(self.export_main_requested)
         # Wave 4/B polish: chk_freq_auto / spin_freq_min/max alias the
         # Y-frequency row of the 坐标轴设置 group; their enabled state is
         # driven by _sync_axis_enabled, which the helper wired to

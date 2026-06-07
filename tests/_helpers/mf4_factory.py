@@ -56,3 +56,24 @@ def write_source_path_mf4(
     mdf.save(str(path), overwrite=True)
     mdf.close()
     return path
+
+
+def write_conversion_unit_mf4(
+    path: Path,
+    *,
+    name: str = "trq",
+    unit: str = "Nm",
+    timestamps: Sequence[float] | np.ndarray = (0.0, 0.01, 0.02, 0.03),
+    samples: Sequence[float] | np.ndarray = (1.0, 2.0, 3.0, 4.0),
+) -> Path:
+    """Write a channel whose unit lives only on the conversion block."""
+    t = np.asarray(timestamps, dtype=float)
+    y = np.asarray(samples, dtype=float)
+    conversion = {"a": 1.0, "b": 0.0, "unit": unit}
+    mdf = MDF(version="4.10")
+    mdf.append([
+        Signal(samples=y, timestamps=t, name=name, unit="", conversion=conversion)
+    ])
+    mdf.save(str(path), overwrite=True)
+    mdf.close()
+    return path

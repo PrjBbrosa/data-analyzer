@@ -30,6 +30,38 @@ def test_persistent_top_xaxis_mode_toggle(qapp):
     assert pt._combo_xaxis_ch.isEnabled()
 
 
+def test_persistent_top_xaxis_channel_change_updates_auto_label(qapp):
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    pt = PersistentTop()
+    pt.set_xaxis_candidates([
+        ("file speed", ("fid", "speed")),
+        ("file angle", ("fid", "angle")),
+    ])
+    pt.set_xaxis_mode("channel")
+
+    pt._combo_xaxis_ch.setCurrentIndex(1)
+
+    assert pt.xaxis_label() == "angle"
+
+
+def test_persistent_top_time_mode_clears_auto_channel_label(qapp):
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    pt = PersistentTop()
+    pt.set_xaxis_candidates([
+        ("file speed", ("fid", "speed")),
+        ("file angle", ("fid", "angle")),
+    ])
+    pt.set_xaxis_mode("channel")
+    pt._combo_xaxis_ch.setCurrentIndex(1)
+    assert pt.xaxis_label() == "angle"
+
+    pt.set_xaxis_mode("time")
+
+    assert pt.xaxis_label() == ""
+
+
 def test_persistent_top_apply_emits(qapp, qtbot):
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     pt = PersistentTop()
@@ -139,6 +171,46 @@ def test_order_contextual_emits(qapp, qtbot):
         oc.btn_ot.click()
 
 
+def test_order_contextual_presets_precede_compute_and_no_cancel(qapp):
+    from PyQt5.QtWidgets import QGroupBox
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    oc = OrderContextual()
+    preset_group = next(
+        gb for gb in oc.findChildren(QGroupBox)
+        if gb.title() == "预设配置"
+    )
+
+    assert oc.layout().indexOf(preset_group) < oc.layout().indexOf(oc.btn_ot)
+    assert not hasattr(oc, "btn_cancel")
+    assert not hasattr(oc, "cancel_requested")
+
+
+def test_fft_time_contextual_keeps_only_compute_action(qapp):
+    from mf4_analyzer.ui.inspector import Inspector
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    assert ctx.btn_compute.text() == "计算时频图"
+    for name in (
+        "btn_force",
+        "btn_export_full",
+        "btn_export_main",
+        "force_recompute_requested",
+        "export_full_requested",
+        "export_main_requested",
+    ):
+        assert not hasattr(ctx, name)
+
+    insp = Inspector()
+    for name in (
+        "fft_time_force_requested",
+        "fft_time_export_full_requested",
+        "fft_time_export_main_requested",
+    ):
+        assert not hasattr(insp, name)
+
+
 def test_inspector_no_longer_exposes_mode_signals(qapp):
     """Spec §9: after 2026-04-24 cleanup, Inspector no longer relays
     plot_mode_changed / cursor_mode_changed — those are on ChartStack now."""
@@ -159,7 +231,7 @@ def test_persistent_top_tick_group_not_checkable(qapp):
     assert parent_gb is not None, "spin_xt has no QGroupBox ancestor"
     assert not parent_gb.isCheckable()
     # Key contract: tick density reflects current spin values (not zero).
-    assert pt.tick_density() == (10, 6)
+    assert pt.tick_density() == (10, 8)
 
 
 def test_inspector_exposes_fft_time_context(qtbot):
@@ -397,16 +469,23 @@ def test_persistent_top_xaxis_channel_row_hidden_when_auto(qapp):
     pt = PersistentTop()
     pt.show()
     try:
+        channel_field_host = pt._combo_xaxis_ch.parentWidget()
+        channel_label = pt._xaxis_form.labelForField(channel_field_host)
+        assert channel_label is not None
         # Default index is 0 = 自动(时间)
         assert pt.combo_xaxis.currentIndex() == 0
         assert pt._combo_xaxis_ch.isHidden(), \
             "通道 combo should be hidden when 来源 == 自动(时间)"
+        assert channel_label.isHidden(), \
+            "通道 label should be hidden with the channel combo row"
         # Switch to 指定通道 → row reveals
         pt.combo_xaxis.setCurrentIndex(1)
         assert not pt._combo_xaxis_ch.isHidden()
+        assert not channel_label.isHidden()
         # Back to auto → hidden again
         pt.combo_xaxis.setCurrentIndex(0)
         assert pt._combo_xaxis_ch.isHidden()
+        assert channel_label.isHidden()
     finally:
         pt.hide()
 
@@ -519,28 +598,67 @@ def test_inspector_groupbox_title_has_underline_and_compact_padding():
         "title font-weight must drop from 700 to 600 (R3 #3-B)"
 
 
+def test_combo_popup_style_removes_native_outer_focus_frame():
+    """Combo popups draw their rounded selection in QSS; Qt's native
+    item-view border/focus rectangle must be suppressed so it cannot stack
+    as a second square frame around the popup or selected item.
+    """
+    from pathlib import Path
+    import re
+
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    popup = re.search(
+        r"QComboBox\s+QAbstractItemView\s*\{([^}]*)\}",
+        qss,
+        flags=re.DOTALL,
+    )
+    assert popup, "QComboBox popup item-view rule not found"
+    popup_block = popup.group(1)
+    assert "outline: none" in popup_block or "outline: 0" in popup_block
+    assert "border: none" in popup_block
+    assert (
+        "background-color: transparent" in popup_block
+        or "background: transparent" in popup_block
+    )
+
+    selected = re.search(
+        r"QComboBox\s+QAbstractItemView::item:selected[^{]*\{([^}]*)\}",
+        qss,
+        flags=re.DOTALL,
+    )
+    assert selected, "QComboBox selected-item popup rule not found"
+    selected_block = selected.group(1)
+    assert "border: none" in selected_block
+    assert "border-radius" in selected_block
+
+
 # ---- R3 #6: PersistentTop collapser ----
 
 def test_persistent_top_has_collapser(qapp):
     """PersistentTop must wrap its three groups in a single collapsible
-    container that defaults to collapsed (R3 #6).
+    container that defaults to expanded.
     """
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     # The collapser persists its state in QSettings; clear it so this test
     # does not depend on whatever a previous run / fixture left behind.
-    QSettings("MF4Analyzer", "DataAnalyzer").remove(
-        "inspector/persistent_top/expanded",
-    )
+    settings = QSettings("MF4Analyzer", "DataAnalyzer")
+    settings.remove("inspector/persistent_top/expanded")
+    settings.remove("inspector/persistent_top/expanded_v2")
     pt = PersistentTop()
     assert hasattr(pt, "btn_collapser"), \
         "PersistentTop must expose btn_collapser (the toggle handle)"
     assert hasattr(pt, "_collapser_body"), \
         "PersistentTop must expose _collapser_body (the inner container)"
-    # Default: collapsed.
-    assert pt.btn_collapser.isChecked() is False
-    assert pt._collapser_body.isVisibleTo(pt) is False or \
-        pt._collapser_body.isHidden()
+    # Default: expanded, so the time-domain settings are immediately visible.
+    assert pt.btn_collapser.isChecked() is True
+    assert pt._collapser_body.isHidden() is False
+    pt.show()
+    try:
+        qapp.processEvents()
+        assert pt._collapser_body.isVisible() is True
+    finally:
+        pt.hide()
 
 
 def test_persistent_top_collapser_toggle_reveals_groups(qapp):
@@ -550,9 +668,9 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
     """
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import PersistentTop
-    QSettings("MF4Analyzer", "DataAnalyzer").remove(
-        "inspector/persistent_top/expanded",
-    )
+    settings = QSettings("MF4Analyzer", "DataAnalyzer")
+    settings.remove("inspector/persistent_top/expanded")
+    settings.remove("inspector/persistent_top/expanded_v2")
     pt = PersistentTop()
     # Programmatic access works regardless of visibility — preserves contract.
     for attr in (
@@ -560,17 +678,19 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
         "combo_xaxis", "_combo_xaxis_ch", "edit_xlabel", "btn_apply_xaxis",
     ):
         assert getattr(pt, attr) is not None, f"missing attr: {attr}"
-    # Toggle expand.
-    pt.btn_collapser.setChecked(True)
     pt.show()
     try:
+        qapp.processEvents()
+        assert pt._collapser_body.isVisible() is True
+        # Toggle collapse.
+        pt.btn_collapser.setChecked(False)
+        assert pt._collapser_body.isHidden() is True
+        # Toggle expand.
+        pt.btn_collapser.setChecked(True)
         assert pt._collapser_body.isVisible() is True
         # Group-level controls now visible.
         assert pt.combo_xaxis.isVisible() is True
         assert pt.spin_xt.isVisible() is True
-        # Toggle collapse.
-        pt.btn_collapser.setChecked(False)
-        assert pt._collapser_body.isHidden() is True
     finally:
         pt.hide()
 
@@ -1006,8 +1126,8 @@ def test_order_preset_collects_explicit_xyz_axes(qtbot):
 def test_inspector_scroll_body_caps_max_width(qapp):
     """fix-1 — Inspector content must cap its maxWidth so Expanding
     children stop growing past a sane threshold when the splitter pane
-    is dragged wider than ~360px. Without the cap, every Expanding
-    QSpinBox / QComboBox stretches to fill the entire pane width.
+    is dragged wider than the docked width. Without the cap, every
+    Expanding QSpinBox / QComboBox stretches to fill the entire pane width.
     """
     from mf4_analyzer.ui.inspector import Inspector
     insp = Inspector()
@@ -1017,9 +1137,9 @@ def test_inspector_scroll_body_caps_max_width(qapp):
         "Inspector._scroll_body has no maximumWidth cap — Expanding "
         "children will grow unbounded when the splitter widens."
     )
-    assert cap <= 400, (
+    assert cap <= 320, (
         f"Inspector._scroll_body.maximumWidth()={cap}px is too generous; "
-        "should be ~360 to keep the form column tight."
+        "should be ~272 to keep the form column tight (288px pane)."
     )
 
 
@@ -1096,8 +1216,8 @@ def test_fft_time_contextual_short_fields_capped(qapp):
         )
 
 
-def test_inspector_body_fills_360_width_under_qss(qapp, qtbot):
-    """Styled Inspector body should fill the 360px right pane."""
+def test_inspector_body_fills_288_width_under_qss(qapp, qtbot):
+    """Styled Inspector body should fill the 288px right pane."""
     from pathlib import Path
     from mf4_analyzer.ui.inspector import Inspector
 
@@ -1109,14 +1229,14 @@ def test_inspector_body_fills_360_width_under_qss(qapp, qtbot):
         )
         insp = Inspector()
         qtbot.addWidget(insp)
-        insp.resize(360, 850)
+        insp.resize(288, 850)
         insp.show()
         qtbot.waitExposed(insp)
         qtbot.wait(50)
 
-        assert insp.width() == 360
-        assert insp._scroll_body.width() >= 340, (
-            f"Inspector body should fill a 360px pane; body="
+        assert insp.width() == 288
+        assert insp._scroll_body.width() >= 268, (
+            f"Inspector body should fill a 288px pane; body="
             f"{insp._scroll_body.width()}, viewport={insp._scroll.viewport().width()}"
         )
     finally:
@@ -1167,6 +1287,58 @@ def test_fft_contextual_fields_fill_column_under_qss(qapp, qtbot):
             f"Field column should remain materially wider than compact 110px; "
             f"got {widths}"
         )
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
+def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbot):
+    """Expanded chart settings should use the same 10px content inset as
+    the contextual cards below it, while keeping the collapsible header full
+    width as the click target."""
+    from pathlib import Path
+    from PyQt5.QtWidgets import QGroupBox
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        insp = Inspector()
+        qtbot.addWidget(insp)
+        insp.resize(288, 850)
+        insp.set_mode('fft')
+        insp.top.btn_collapser.setChecked(True)
+        insp.show()
+        qtbot.waitExposed(insp)
+        qtbot.wait(50)
+
+        root = insp._scroll_body
+
+        def bounds(widget):
+            point = widget.mapTo(root, widget.rect().topLeft())
+            return point.x(), point.x() + widget.width()
+
+        header_left, header_right = bounds(insp.top.btn_collapser)
+        assert (header_left, header_right) == (0, root.width())
+
+        fft_section = next(
+            group for group in insp.fft_ctx.findChildren(QGroupBox)
+            if group.title() == "谱参数"
+        )
+        expected_left, expected_right = bounds(fft_section)
+        top_sections = {
+            group.title(): bounds(group)
+            for group in insp.top.findChildren(QGroupBox)
+        }
+        assert top_sections == {
+            "横坐标": (expected_left, expected_right),
+            "时间范围": (expected_left, expected_right),
+            "坐标刻度密度": (expected_left, expected_right),
+        }
+        assert expected_left == 10
+        assert root.width() - expected_right == 10
     finally:
         qapp.setStyleSheet(old_sheet)
 
@@ -2378,6 +2550,107 @@ def test_axis_rows_fit_inspector_and_align_with_panel_right_edge(qapp, qtbot):
                 f"{mode} axis rows should align to {group_right}, got {right_edges}"
             )
             inspector.hide()
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
+def test_axis_settings_grid_background_matches_white_panel(qapp, qtbot):
+    """The shared axis-settings grid should not paint the grey page surface.
+
+    FFT-vs-Time and Order both use the same helper. The blank cells behind
+    自动 / 最小 / 最大 and the auto-summary rows should read as part of the
+    white contextual panel rather than a separate grey table.
+    """
+    from pathlib import Path
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+
+        for mode, ctx_name in (
+            ("fft_time", "fft_time_ctx"),
+            ("order", "order_ctx"),
+        ):
+            inspector = Inspector()
+            qtbot.addWidget(inspector)
+            inspector.resize(288, 900)
+            inspector.set_mode(mode)
+            inspector.show()
+            qtbot.waitExposed(inspector)
+            bar = inspector._scroll.verticalScrollBar()
+            bar.setValue(bar.maximum())
+            qapp.processEvents()
+
+            ctx = getattr(inspector, ctx_name)
+            header = ctx.findChild(QWidget, "axisHeaderRow")
+            assert header is not None
+            samples = [header.mapTo(inspector, QPoint(8, header.height() // 2))]
+            for key in ("x", "y"):
+                host = ctx._axis_row_parts[key]["range_host"]
+                samples.append(host.mapTo(inspector, QPoint(host.width() - 8, host.height() // 2)))
+
+            image = inspector.grab().toImage()
+            for point in samples:
+                color = image.pixelColor(point)
+                assert color.red() >= 250 and color.green() >= 250, (
+                    f"{mode} axis grid background should match the white "
+                    f"panel, got {color.name()} at {point.x()},{point.y()}"
+                )
+            inspector.hide()
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
+def test_fft_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
+    """FFT keeps a subtle blue contextual surface; its axis grid should not
+    introduce white table rows inside that tinted panel."""
+    from pathlib import Path
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+
+        inspector = Inspector()
+        qtbot.addWidget(inspector)
+        inspector.resize(288, 900)
+        inspector.set_mode("fft")
+        inspector.show()
+        qtbot.waitExposed(inspector)
+        bar = inspector._scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        qapp.processEvents()
+
+        ctx = inspector.fft_ctx
+        header = ctx.findChild(QWidget, "axisHeaderRow")
+        assert header is not None
+        samples = [header.mapTo(inspector, QPoint(8, header.height() // 2))]
+        for key in ("x", "y"):
+            host = ctx._axis_row_parts[key]["range_host"]
+            samples.append(host.mapTo(inspector, QPoint(host.width() - 8, host.height() // 2)))
+
+        image = inspector.grab().toImage()
+        for point in samples:
+            color = image.pixelColor(point)
+            assert (
+                234 <= color.red() <= 242
+                and 240 <= color.green() <= 248
+                and color.blue() >= 250
+            ), (
+                "FFT axis grid background should match the tinted panel "
+                f"#eef4ff, got {color.name()} at {point.x()},{point.y()}"
+            )
     finally:
         qapp.setStyleSheet(old_sheet)
 

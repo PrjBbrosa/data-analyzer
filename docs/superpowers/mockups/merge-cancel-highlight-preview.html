@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TraceLab - 取消合并按钮高亮预览</title>
+<style>
+  :root{
+    --bg:#f4f6f9;
+    --panel:#ffffff;
+    --surface:#f7f9fc;
+    --line:#dfe5ee;
+    --line-strong:#cbd5e1;
+    --ink:#1f2937;
+    --muted:#64748b;
+    --blue:#1479f3;
+    --blue-soft:#eaf3ff;
+    --view1:#1479f3;
+    --view2:#f26a21;
+    --view3:#10a44a;
+    --view4:#9b3bbd;
+    --view6:#0097a7;
+    --danger:#be123c;
+    --danger-line:#fb7185;
+    --danger-bg:#fff1f2;
+    --danger-hover:#ffe4e6;
+    --amber:#c2410c;
+    --amber-line:#fb923c;
+    --amber-bg:#fff7ed;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    padding:24px;
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  }
+  h1{font-size:18px;line-height:1.35;margin:0 0 4px;}
+  .lead{margin:0 0 18px;color:var(--muted);font-size:13px;}
+  .lead b,.section-note b{color:var(--ink);}
+  .wrap{width:min(1280px,100%);margin:0 auto;}
+  .section{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:16px 18px 18px;
+    margin-bottom:16px;
+    box-shadow:0 6px 22px rgba(20,30,50,.05);
+  }
+  .section h2{font-size:14px;line-height:1.35;margin:0 0 2px;}
+  .section-note{margin:0 0 12px;color:var(--muted);font-size:12.5px;}
+  .mock-window{
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+    background:#fff;
+  }
+  .axis-row{
+    height:28px;
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    align-items:end;
+    color:#8a94a6;
+    font-size:17px;
+    line-height:1;
+    border-bottom:1px solid #d8dee8;
+    background:linear-gradient(#ffffff,#fbfcfe);
+  }
+  .axis-row span{text-align:center;}
+  .tabbar{
+    height:58px;
+    display:flex;
+    align-items:center;
+    gap:26px;
+    padding:0 22px 0 28px;
+    background:var(--surface);
+    border-top:1px solid #edf1f6;
+  }
+  .view-tab{
+    height:46px;
+    min-width:126px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:14px;
+    padding:0 18px;
+    border:1px solid transparent;
+    border-radius:7px;
+    color:#334155;
+    font-size:24px;
+    font-weight:650;
+    line-height:1;
+    white-space:nowrap;
+  }
+  .view-tab.active{
+    color:#14335f;
+    background:#eaf3ff;
+    border-color:#9bc4ff;
+    box-shadow:inset 0 -3px 0 var(--blue);
+  }
+  .swatch{
+    width:29px;
+    height:18px;
+    flex:0 0 auto;
+    border-radius:6px;
+    border:1px solid rgba(0,0,0,.18);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.35);
+  }
+  .split-swatch{background:linear-gradient(90deg,var(--view2) 0 50%,var(--view1) 50% 100%);}
+  .plus{
+    width:54px;
+    height:48px;
+    display:grid;
+    place-items:center;
+    flex:0 0 auto;
+    border:2px solid var(--line-strong);
+    border-radius:8px;
+    background:#fff;
+    color:#243047;
+    font-size:25px;
+    font-weight:700;
+  }
+  .spacer{flex:1 1 auto;min-width:18px;}
+  .cancel{
+    position:relative;
+    height:48px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    padding:0 18px;
+    border-radius:8px;
+    font-size:24px;
+    font-weight:700;
+    letter-spacing:0;
+    white-space:nowrap;
+  }
+  .cancel .mark{
+    font-size:29px;
+    line-height:1;
+    transform:translateY(-1px);
+  }
+  .cancel::after{
+    content:attr(data-tip);
+    position:absolute;
+    right:0;
+    bottom:calc(100% + 8px);
+    width:max-content;
+    max-width:360px;
+    padding:7px 10px;
+    border-radius:7px;
+    background:#1f2937;
+    color:#fff;
+    font-size:12.5px;
+    font-weight:500;
+    line-height:1.35;
+    box-shadow:0 10px 28px rgba(15,23,42,.18);
+    opacity:0;
+    pointer-events:none;
+    transform:translateY(4px);
+    transition:opacity .14s,transform .14s;
+  }
+  .cancel:hover::after,.cancel:focus-visible::after{opacity:.96;transform:translateY(0);}
+  .tone-soft{
+    border:2px solid var(--danger-line);
+    background:var(--danger-bg);
+    color:var(--danger);
+  }
+  .tone-soft:hover{background:var(--danger-hover);}
+  .tone-soft:focus-visible{outline:3px solid rgba(244,63,94,.22);outline-offset:2px;}
+  .tone-solid{
+    border:2px solid #e11d48;
+    background:#e11d48;
+    color:#fff;
+    box-shadow:0 4px 12px rgba(225,29,72,.18);
+  }
+  .tone-solid:hover{background:#be123c;border-color:#be123c;}
+  .tone-solid:focus-visible{outline:3px solid rgba(225,29,72,.25);outline-offset:2px;}
+  .tone-amber{
+    border:2px solid var(--amber-line);
+    background:var(--amber-bg);
+    color:var(--amber);
+  }
+  .tone-amber:hover{background:#ffedd5;}
+  .tone-amber:focus-visible{outline:3px solid rgba(251,146,60,.22);outline-offset:2px;}
+  .comparison{
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:14px;
+    margin-top:12px;
+  }
+  .mini{
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:13px;
+    background:#fbfcfe;
+  }
+  .mini h3{font-size:13px;margin:0 0 2px;}
+  .mini p{font-size:12px;color:var(--muted);margin:0 0 10px;}
+  .mini .cancel{
+    height:40px;
+    font-size:17px;
+    padding:0 13px;
+  }
+  .mini .cancel .mark{font-size:22px;}
+  .rule-list{
+    margin:12px 0 0;
+    padding:0;
+    display:grid;
+    gap:5px;
+    color:var(--muted);
+    font-size:12.5px;
+    list-style:none;
+  }
+  .rule-list li::before{
+    content:"";
+    width:6px;
+    height:6px;
+    display:inline-block;
+    margin:0 8px 1px 0;
+    border-radius:50%;
+    background:#94a3b8;
+  }
+  @media (max-width:900px){
+    body{padding:14px;}
+    .tabbar{gap:10px;padding:0 10px;overflow:auto;}
+    .view-tab{min-width:auto;font-size:18px;padding:0 12px;gap:9px;}
+    .cancel{font-size:18px;padding:0 13px;}
+    .comparison{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>TraceLab - 取消合并按钮高亮预览</h1>
+  <p class="lead">目标：去掉常驻的合并说明文字，只让“取消合并”成为右侧明确动作；合并关系细节放进 hover/accessible label。</p>
+
+  <section class="section">
+    <h2>A · 推荐：soft danger，高亮但不过度像删除数据</h2>
+    <p class="section-note">栏里不再显示合并说明长文案；需要细节时 hover 按钮即可看到。</p>
+    <div class="mock-window" aria-label="推荐方案预览">
+      <div class="axis-row"><span>Time (s)</span><span>Time (s)</span></div>
+      <div class="tabbar">
+        <span class="view-tab"><span class="swatch" style="background:var(--view1)"></span>View 1</span>
+        <span class="view-tab active"><span class="swatch split-swatch"></span>View 2</span>
+        <span class="view-tab"><span class="swatch" style="background:var(--view3)"></span>View 3</span>
+        <span class="view-tab"><span class="swatch" style="background:linear-gradient(90deg,var(--view4) 0 50%,var(--view3) 50% 100%)"></span>View 4</span>
+        <span class="view-tab"><span class="swatch" style="background:var(--view6)"></span>View 6</span>
+        <span class="plus">+</span>
+        <span class="spacer"></span>
+        <button class="cancel tone-soft" data-tip="取消 View 2 + View 1 合并；当前操作 View 1" aria-label="取消 View 2 与 View 1 的合并，当前操作 View 1">
+          <span class="mark">×</span><span>取消合并</span>
+        </button>
+      </div>
+    </div>
+    <ul class="rule-list">
+      <li>右侧只有一个动作按钮，不再用文字块解释当前合并状态。</li>
+      <li>红色使用浅底加红边，足够醒目，但语义上仍像“撤销关系”而不是“删除数据”。</li>
+      <li>按钮 hover/focus 时才展示完整合并对象，后续 Qt 里可落到 tooltip 和 accessibleName。</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>按钮强度对比</h2>
+    <p class="section-note">我建议用 A。B 更抢眼但有“危险删除”错觉；C 没有红色那么容易被扫到。</p>
+    <div class="comparison">
+      <div class="mini">
+        <h3>A · Soft red</h3>
+        <p>推荐。醒目、可逆、和 UI 其余部分冲突最少。</p>
+        <button class="cancel tone-soft" data-tip="取消 View 2 + View 1 合并；当前操作 View 1">
+          <span class="mark">×</span><span>取消合并</span>
+        </button>
+      </div>
+      <div class="mini">
+        <h3>B · Solid red</h3>
+        <p>最高可见性，但更像破坏性删除动作。</p>
+        <button class="cancel tone-solid" data-tip="取消 View 2 + View 1 合并；当前操作 View 1">
+          <span class="mark">×</span><span>取消合并</span>
+        </button>
+      </div>
+      <div class="mini">
+        <h3>C · Amber warning</h3>
+        <p>不吓人，但在这排彩色 tab 里不够明确。</p>
+        <button class="cancel tone-amber" data-tip="取消 View 2 + View 1 合并；当前操作 View 1">
+          <span class="mark">×</span><span>取消合并</span>
+        </button>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

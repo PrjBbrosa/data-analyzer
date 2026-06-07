@@ -89,6 +89,26 @@ def unique_mdf_channel_locations(mdf):
     return channel_locations
 
 
+def _resolve_channel_unit(mdf, sig, group_idx, ch_idx):
+    """Return a channel unit, falling back to the MDF conversion block."""
+    unit = str(getattr(sig, 'unit', '') or '')
+    if unit:
+        return unit
+    try:
+        channel = mdf.groups[group_idx].channels[ch_idx]
+    except Exception:
+        return ''
+    conversion = getattr(channel, 'conversion', None)
+    conv_unit = (
+        str(getattr(conversion, 'unit', '') or '')
+        if conversion is not None
+        else ''
+    )
+    if conv_unit:
+        return conv_unit
+    return str(getattr(channel, 'unit', '') or '')
+
+
 class DataLoader:
     @staticmethod
     def load_mf4(fp):
@@ -110,7 +130,7 @@ class DataLoader:
                 if sig.samples is not None and len(sig.samples) > 0 and np.issubdtype(sig.samples.dtype, np.number):
                     s = sig.samples.flatten() if len(sig.samples.shape) > 1 else sig.samples
                     sigs[ch_name] = {'s': np.array(s, float), 't': np.array(sig.timestamps, float)}
-                    units[ch_name] = str(getattr(sig, 'unit', '') or '')
+                    units[ch_name] = _resolve_channel_unit(mdf, sig, group_idx, ch_idx)
                     if len(sig.timestamps) > max_len:
                         max_len = len(sig.timestamps)
                         ref_ts = np.array(sig.timestamps, float)
@@ -121,7 +141,7 @@ class DataLoader:
                     if sig.samples is not None and len(sig.samples) > 0 and np.issubdtype(sig.samples.dtype, np.number):
                         s = sig.samples.flatten() if len(sig.samples.shape) > 1 else sig.samples
                         sigs[ch_name] = {'s': np.array(s, float), 't': np.array(sig.timestamps, float)}
-                        units[ch_name] = str(getattr(sig, 'unit', '') or '')
+                        units[ch_name] = _resolve_channel_unit(mdf, sig, group_idx, ch_idx)
                         if len(sig.timestamps) > max_len:
                             max_len = len(sig.timestamps)
                             ref_ts = np.array(sig.timestamps, float)

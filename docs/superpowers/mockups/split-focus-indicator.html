@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TraceLab — 并排焦点提示 v2</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --panel:#fff; --ink:#1f2733; --muted:#8a94a6; --line:#e4e8ef;
+    --view1:#2d7ff9; --view2:#e8590c;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:22px;
+       font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
+  h1{font-size:18px;margin:0 0 4px;}
+  .sub{color:var(--muted);margin:0 0 16px;font-size:13px;}
+  .sub b{color:var(--ink);}
+  .ctl{display:flex;gap:14px;align-items:center;margin-bottom:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);}
+  .ctl label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;cursor:pointer;font:inherit;color:var(--ink);}
+  .btn:hover{background:#f0f3f8;}
+
+  .app{width:920px;max-width:100%;background:var(--panel);border:1px solid var(--line);
+       border-radius:14px;box-shadow:0 8px 30px rgba(20,30,50,.06);overflow:hidden;}
+  .toolbar{display:flex;align-items:center;gap:4px;padding:8px 12px;border-bottom:1px solid var(--line);background:#fbfcfe;}
+  .tbtn{width:30px;height:28px;border-radius:7px;border:1px solid transparent;background:transparent;
+        display:grid;place-items:center;cursor:pointer;color:#56607a;font-size:15px;}
+  .tbtn:hover{background:#eef1f6;}
+  .tbtn.mode.on{background:#eef4ff;border-color:#cfe0ff;color:#1d4ed8;}
+  .tbsep{width:1px;height:18px;background:var(--line);margin:0 6px;}
+
+  .split{display:flex;gap:10px;padding:12px;}
+  .pane{flex:1;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:#fff;cursor:pointer;position:relative;}
+  /* 焦点 = 顶部一条线（不包边框）。线在图层之上、属于面板 chrome，导出图不含它。 */
+  .topline{height:3px;background:transparent;transition:background .12s;}
+  .pane.focused .topline{background:var(--accent);}
+  .chartwrap{padding:9px 9px 5px;}
+  svg{width:100%;height:200px;display:block;}
+
+  .tabbar{display:flex;align-items:center;gap:6px;padding:7px 12px;border-top:1px solid var(--line);background:#fbfcfe;}
+  .vtab{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:8px 8px 0 0;
+        border:1px solid var(--line);border-bottom:none;background:#fff;font-size:13px;cursor:pointer;}
+  .vtab .sw{width:11px;height:7px;border-radius:2px;}
+  .vtab.active{background:#eef4ff;}
+  .chip{margin-left:auto;display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);
+        padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:#fff;}
+  .chip b{color:var(--ink);}
+  .chip .x{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;cursor:pointer;color:var(--muted);}
+  .chip .x:hover{background:#f0f2f6;color:#ef4444;}
+
+  /* 瞬时 toast：仅 分叠/home/config，1.5s 自动消失，非常驻 */
+  .toast{position:fixed;left:50%;bottom:38px;transform:translateX(-50%) translateY(10px);
+         background:#1f2733;color:#fff;padding:9px 16px;border-radius:10px;font-size:13px;
+         opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;box-shadow:0 8px 24px rgba(0,0,0,.18);}
+  .toast.show{opacity:.96;transform:translateX(-50%) translateY(0);}
+
+  .note{width:920px;max-width:100%;margin-top:14px;color:var(--muted);font-size:12.5px;}
+  .note b{color:var(--ink);}
+  kbd{background:#eef1f6;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12px;color:#444;}
+
+  /* 导出预览覆盖层 */
+  .ov{position:fixed;inset:0;background:rgba(15,20,30,.45);display:none;place-items:center;z-index:9;}
+  .ov.show{display:grid;}
+  .ov .card{background:#fff;border-radius:12px;padding:14px;width:540px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,.3);}
+  .ov .card h3{margin:0 0 4px;font-size:14px;}
+  .ov .card p{margin:0 0 10px;color:var(--muted);font-size:12.5px;}
+  .ov .shot{border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+  .ov .shot svg{height:230px;}
+  .ov .close{margin-top:10px;text-align:right;}
+</style>
+</head>
+<body>
+  <h1>TraceLab — 并排「焦点 = 顶部一条线」v2</h1>
+  <p class="sub">合并单向：<b>View 2 含 View 2 + View 1</b>，View 1 仍是单栏。焦点只用<b>顶部一条 tab 色细线</b>标识，不包边框；<b>导出图不含这条线</b>。点画面切焦点（不提示）。</p>
+
+  <div class="ctl">
+    <label><input type="checkbox" id="toastOn" checked> 操作 分叠/home/config 时弹 1.5s 提示</label>
+    <button class="btn" id="exportBtn">📷 模拟存图（看导出不含焦点线）</button>
+  </div>
+
+  <div class="app">
+    <div class="toolbar">
+      <button class="tbtn" data-act="home" title="复位（聚焦栏 · 会提示）">⌂</button>
+      <button class="tbtn" data-act="back" title="后退（两栏各退各的 · 不提示）">←</button>
+      <button class="tbtn" data-act="forward" title="前进（两栏 · 不提示）">→</button>
+      <span class="tbsep"></span>
+      <button class="tbtn mode" data-act="pan" title="平移（两栏同时 · 不提示）">✛</button>
+      <button class="tbtn mode" data-act="zoom" title="框选缩放（两栏同时 · 不提示）">🔍</button>
+      <span class="tbsep"></span>
+      <button class="tbtn" data-act="save" title="存图（两栏拼一张 · 不提示）">💾</button>
+      <span class="tbsep"></span>
+      <button class="tbtn" data-act="split" title="分叠（聚焦栏 · 会提示）">▥</button>
+      <button class="tbtn" data-act="config" title="坐标设置（聚焦栏 · 会提示）">⚙</button>
+    </div>
+
+    <div class="split" id="split">
+      <div class="pane focused" id="pPrimary" style="--accent:var(--view2);">
+        <div class="topline"></div>
+        <div class="chartwrap"><svg id="svg2" viewBox="0 0 460 200" preserveAspectRatio="none"></svg></div>
+      </div>
+      <div class="pane unfocused" id="pSecondary" style="--accent:var(--view1);">
+        <div class="topline"></div>
+        <div class="chartwrap"><svg id="svg1" viewBox="0 0 460 200" preserveAspectRatio="none"></svg></div>
+      </div>
+    </div>
+
+    <div class="tabbar">
+      <span class="vtab"><span class="sw" style="background:var(--view1)"></span>View 1</span>
+      <span class="vtab active"><span class="sw" style="background:var(--view2)"></span>View 2</span>
+      <span class="vtab"><span class="sw" style="background:#2f9e44"></span>View 3</span>
+      <span class="chip">合并: <b>View 2</b> + View 1 · 编辑: <b id="chipEdit">主栏</b>
+        <span class="x" title="取消合并">×</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="note">
+    焦点线属于面板边缘，<b>在画布之上</b>；存图抓的是画布像素，所以导出图天然不含它（点上面「模拟存图」对比）。
+    提示只在 <kbd>▥ 分叠</kbd> / <kbd>⌂ home</kbd> / <kbd>⚙ config</kbd> 时弹；<kbd>✛/🔍</kbd> 两栏同时、<kbd>←/→/💾</kbd> 作用两栏，都不弹；切焦点也不弹。
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="ov" id="ov">
+    <div class="card">
+      <h3>导出 saved.png 预览</h3>
+      <p>这是存图导出的样子 —— <b>只有画布，没有焦点线、没有边框</b>。</p>
+      <div class="shot"><svg id="svgShot" viewBox="0 0 460 200" preserveAspectRatio="none"></svg></div>
+      <div class="close"><button class="btn" id="ovClose">关闭</button></div>
+    </div>
+  </div>
+
+<script>
+  function getCss(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+  function path(seed,amp,base){
+    let d="",n=92;
+    for(let i=0;i<=n;i++){const x=460*i/n,t=i/n*Math.PI*2;
+      const y=base+Math.sin(t*2+seed)*amp+Math.sin(t*5.3+seed*1.7)*amp*.35+Math.sin(t*11+seed)*amp*.12;
+      d+=(i?"L":"M")+x.toFixed(1)+","+y.toFixed(1)+" ";}
+    return d;
+  }
+  function grid(){let g="";for(let i=1;i<5;i++)g+=`<line x1="0" y1="${i*40}" x2="460" y2="${i*40}" stroke="#eef1f6"/>`;
+    for(let i=1;i<8;i++)g+=`<line x1="${i*57.5}" y1="0" x2="${i*57.5}" y2="200" stroke="#f3f5f9"/>`;return g;}
+  function draw(svg,color,seed){svg.innerHTML=grid()+`<path d="${path(seed,26,100)}" fill="none" stroke="${color}" stroke-width="1.6"/>`;}
+  draw(document.getElementById('svg2'),getCss('--view2'),0.4);
+  draw(document.getElementById('svg1'),getCss('--view1'),2.1);
+
+  const primary=document.getElementById('pPrimary'),secondary=document.getElementById('pSecondary');
+  const chipEdit=document.getElementById('chipEdit');
+  function setFocus(which){
+    const p=which==='primary';
+    primary.classList.toggle('focused',p);primary.classList.toggle('unfocused',!p);
+    secondary.classList.toggle('focused',!p);secondary.classList.toggle('unfocused',p);
+    chipEdit.textContent=p?'主栏':'副栏';
+  }
+  primary.addEventListener('click',()=>setFocus('primary'));   // 切焦点：不提示
+  secondary.addEventListener('click',()=>setFocus('secondary'));
+  setFocus('primary');
+
+  const toastOn=document.getElementById('toastOn');let tT=null;
+  function toast(msg){if(!toastOn.checked)return;const el=document.getElementById('toast');
+    el.textContent=msg;el.classList.add('show');clearTimeout(tT);tT=setTimeout(()=>el.classList.remove('show'),1500);}
+  const role=()=>primary.classList.contains('focused')?'主栏 · View 2':'副栏 · View 1';
+
+  document.querySelectorAll('.tbtn').forEach(b=>b.addEventListener('click',()=>{
+    const a=b.dataset.act;
+    if(a==='pan'||a==='zoom'){
+      document.querySelectorAll('.tbtn.mode').forEach(m=>m.classList.toggle('on',m===b?!m.classList.contains('on'):false));
+      // 两栏同时、不提示
+    }else if(a==='home'){ toast('复位 '+role()+' · 点另一栏可改为操作它'); }
+    else if(a==='split'){ toast('分叠 作用于 '+role()+' · 点另一栏可改'); }
+    else if(a==='config'){ toast('坐标设置 作用于 '+role()+' · 点另一栏可改'); }
+    // back/forward/save：作用两栏、不提示
+  }));
+
+  // 模拟存图：展示导出不含焦点线
+  const ov=document.getElementById('ov');
+  document.getElementById('exportBtn').addEventListener('click',()=>{
+    const focused=primary.classList.contains('focused')?{c:getCss('--view2'),s:0.4}:{c:getCss('--view1'),s:2.1};
+    draw(document.getElementById('svgShot'),focused.c,focused.s);
+    ov.classList.add('show');
+  });
+  document.getElementById('ovClose').addEventListener('click',()=>ov.classList.remove('show'));
+  ov.addEventListener('click',e=>{if(e.target===ov)ov.classList.remove('show');});
+</script>
+</body>
+</html>
