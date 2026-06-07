@@ -4631,7 +4631,7 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
         canvas.set_tick_density(12, 7)
 
         assert len(calls) >= len(canvas.axes_list)
-        assert canvas._tick_density == (12, 7)
+        assert canvas._tick_density_controller.density == (12, 7)
 
     def test_set_tick_density_keeps_y_ticks_adaptive_and_x_ticks_major_only(self, qapp):
         """X uses explicit major ticks; Y keeps pyqtgraph adaptive density.

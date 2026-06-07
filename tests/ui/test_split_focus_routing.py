@@ -231,13 +231,13 @@ def test_tick_density_change_routes_to_focused_secondary_view(
     _enter_split(w, qapp)
     _click_card(qapp, cs._secondary_card)
 
-    primary_before = cs.canvas_time._tick_density
+    primary_before = cs.canvas_time._tick_density_controller.density
 
     w._update_all_tick_density_pair(17, 4)
     qapp.processEvents()
 
-    assert cs.secondary_canvas()._tick_density == (17, 4)
-    assert cs.canvas_time._tick_density == primary_before
+    assert cs.secondary_canvas()._tick_density_controller.density == (17, 4)
+    assert cs.canvas_time._tick_density_controller.density == primary_before
     assert w.view_manager.get(1).axis_opts["tick_density"] == {"x": 17, "y": 4}
 
 

@@ -20,6 +20,7 @@ _MISSING = object()
 
 class _CanvasBackref:
     _delegate_names = frozenset()
+    _owned_names = frozenset()
 
     def __init__(self, canvas):
         object.__setattr__(self, "_c", canvas)
@@ -28,6 +29,7 @@ class _CanvasBackref:
         if name not in {
             "_c",
             "_delegate_names",
+            "_owned_names",
             "__dict__",
             "__class__",
             "__getattr__",
@@ -49,11 +51,18 @@ class _CanvasBackref:
         if name == "_c":
             object.__setattr__(self, name, value)
             return
+        owned_names = object.__getattribute__(self, "_owned_names")
+        delegate_names = object.__getattribute__(self, "_delegate_names")
+        if name in owned_names or name in delegate_names:
+            object.__setattr__(self, name, value)
+            return
         setattr(self._c, name, value)
 
 
 class TickDensityController(_CanvasBackref):
-    """Apply Inspector tick-density settings without owning density state."""
+    """Own and apply Inspector tick-density settings."""
+
+    _owned_names = frozenset({"density"})
 
     _delegate_names = frozenset({
         "set_tick_density",
@@ -70,14 +79,19 @@ class TickDensityController(_CanvasBackref):
         "_apply_axis_tick_density",
     })
 
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        # Defaults mirror PersistentTop defaults.
+        self.density = (10, 8)
+
     def set_tick_density(self, x, y):
         """Apply inspector-controlled tick density to PG axes."""
         try:
             x_n = max(3, int(x))
             y_n = max(3, int(y))
         except Exception:
-            x_n, y_n = self._tick_density
-        self._tick_density = (x_n, y_n)
+            x_n, y_n = self.density
+        self.density = (x_n, y_n)
         if self._overlay_mode:
             self._overlay_divisions = max(3, min(20, int(y_n)))
             self._build_overlay_y_grid()
@@ -93,7 +107,7 @@ class TickDensityController(_CanvasBackref):
         self.draw_idle()
 
     def _apply_tick_density_to_all_axes(self):
-        _x_n, y_n = self._tick_density
+        _x_n, y_n = self.density
         y_density = max(0.35, min(3.0, float(y_n) / 6.0))
         self._apply_target_x_ticks_to_all_axes()
         for handle in self.axes_list:
@@ -142,7 +156,7 @@ class TickDensityController(_CanvasBackref):
             pass
         self._apply_axis_tick_density(
             axis,
-            max(0.35, min(3.0, float(self._tick_density[0]) / 10.0)),
+            max(0.35, min(3.0, float(self.density[0]) / 10.0)),
         )
 
     def _compute_target_x_ticks(self, axis, lo, hi, axis_width):
@@ -151,7 +165,7 @@ class TickDensityController(_CanvasBackref):
         if axis_width <= 1.0:
             return []
 
-        target = max(_TARGET_X_TICK_MIN_COUNT, int(self._tick_density[0]))
+        target = max(_TARGET_X_TICK_MIN_COUNT, int(self.density[0]))
         raw_step = (hi - lo) / max(1, target - 1)
         candidates = []
         for step in self._nice_x_tick_steps(raw_step):

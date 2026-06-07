@@ -153,3 +153,9 @@ class TestCollaboratorStateOwnership:
             "_idle_aa_density_seeded",
         ):
             assert name not in pg_canvas.__dict__
+
+    def test_tick_density_state_lives_on_tick_density_controller(self, pg_canvas):
+        controller = pg_canvas._tick_density_controller
+
+        assert controller.density == (10, 8)
+        assert "_tick_density" not in pg_canvas.__dict__

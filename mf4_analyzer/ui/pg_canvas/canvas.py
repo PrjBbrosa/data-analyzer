@@ -456,9 +456,6 @@ class TimeDomainCanvasPG(QWidget):
         # can re-place labels without re-walking the plot.
         self._subplot_label_specs = []
 
-        # Inspector tick-density defaults mirror PersistentTop defaults.
-        self._tick_density = (10, 8)
-
         # Cursor line scene items. In single mode _cursor_line_items is the
         # live hover line on each subplot. In dual mode _cursor_a_items and
         # _cursor_b_items hold the placed A/B cursors.
@@ -635,7 +632,7 @@ class TimeDomainCanvasPG(QWidget):
                 self._connect_overlay_view_sync()
 
         self._refresh = True
-        self._apply_tick_density_to_all_axes()
+        self._tick_density_controller._apply_tick_density_to_all_axes()
         if self._overlay_mode:
             self._repin_overlay_channel_ticks()
         self._unify_subplot_bottom_axis_heights()
@@ -1163,7 +1160,7 @@ class TimeDomainCanvasPG(QWidget):
                     pass
             if did_set:
                 self._sync_x_axis_item_range(handle, lo, hi)
-        self._apply_target_x_ticks_to_all_axes()
+        self._tick_density_controller._apply_target_x_ticks_to_all_axes()
 
     def _build_overlay_y_grid(self):
         return OverlayAxisManager._build_overlay_y_grid(self._overlay_axes)
@@ -1420,85 +1417,7 @@ class TimeDomainCanvasPG(QWidget):
         # Intentionally no widget installed. self.span_selector stays None.
 
     def set_tick_density(self, x, y):
-        return TickDensityController.set_tick_density(
-            self._tick_density_controller,
-            x,
-            y,
-        )
-
-    def _apply_tick_density_to_all_axes(self):
-        return TickDensityController._apply_tick_density_to_all_axes(
-            self._tick_density_controller
-        )
-
-    def _apply_target_x_ticks_to_all_axes(self):
-        return TickDensityController._apply_target_x_ticks_to_all_axes(
-            self._tick_density_controller
-        )
-
-    def _x_tick_axis_handles(self):
-        return TickDensityController._x_tick_axis_handles(self._tick_density_controller)
-
-    def _apply_target_x_ticks(self, axis, handle):
-        return TickDensityController._apply_target_x_ticks(
-            self._tick_density_controller,
-            axis,
-            handle,
-        )
-
-    def _reset_x_ticks_to_adaptive(self, axis):
-        return TickDensityController._reset_x_ticks_to_adaptive(
-            self._tick_density_controller,
-            axis,
-        )
-
-    def _compute_target_x_ticks(self, axis, lo, hi, axis_width):
-        return TickDensityController._compute_target_x_ticks(
-            self._tick_density_controller,
-            axis,
-            lo,
-            hi,
-            axis_width,
-        )
-
-    def _nice_x_tick_steps(self, raw_step):
-        return TickDensityController._nice_x_tick_steps(
-            self._tick_density_controller,
-            raw_step,
-        )
-
-    def _x_tick_values_for_step(self, lo, hi, step):
-        return TickDensityController._x_tick_values_for_step(
-            self._tick_density_controller,
-            lo,
-            hi,
-            step,
-        )
-
-    def _format_x_tick_labels(self, axis, values, spacing):
-        return TickDensityController._format_x_tick_labels(
-            self._tick_density_controller,
-            axis,
-            values,
-            spacing,
-        )
-
-    def _fit_x_tick_labels(self, values, labels, lo, hi, axis_width):
-        return TickDensityController._fit_x_tick_labels(
-            self._tick_density_controller,
-            values,
-            labels,
-            lo,
-            hi,
-            axis_width,
-        )
-
-    def _apply_axis_tick_density(self, axis, density):
-        return TickDensityController._apply_axis_tick_density(
-            self._tick_density_controller,
-            axis,
-            density,
-        )
+        return self._tick_density_controller.set_tick_density(x, y)
 
     # ------------------------------------------------------------------
     # Chart-options dialog (Fix 1: parity with the matplotlib path's
@@ -2323,7 +2242,7 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             pass
         try:
-            self._apply_target_x_ticks_to_all_axes()
+            self._tick_density_controller._apply_target_x_ticks_to_all_axes()
             self._unify_subplot_left_axis_widths()
             self._unify_subplot_bottom_axis_heights()
         except Exception:

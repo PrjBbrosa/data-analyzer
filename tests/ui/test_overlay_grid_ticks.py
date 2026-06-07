@@ -575,7 +575,8 @@ class TestOverlaySwitchGeometry:
         density_applied = {"value": False}
         sync_calls = []
 
-        original_density = canvas._apply_tick_density_to_all_axes
+        tick_density = canvas._tick_density_controller
+        original_density = tick_density._apply_tick_density_to_all_axes
         original_sync = canvas._sync_overlay_aux_viewboxes
 
         def mark_density_applied():
@@ -586,7 +587,7 @@ class TestOverlaySwitchGeometry:
             sync_calls.append(density_applied["value"])
             return original_sync()
 
-        canvas._apply_tick_density_to_all_axes = mark_density_applied
+        tick_density._apply_tick_density_to_all_axes = mark_density_applied
         canvas._sync_overlay_aux_viewboxes = record_sync_order
 
         canvas.plot_channels(self._rows(), mode="overlay")

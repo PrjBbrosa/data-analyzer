@@ -195,7 +195,7 @@ class Renderer(_CanvasBackref):
 
         # Debounced tail work: retick axes and notify listeners only once after
         # rapid drag ticks settle, instead of blocking every mouse-move event.
-        self._apply_target_x_ticks_to_all_axes()
+        self._tick_density_controller._apply_target_x_ticks_to_all_axes()
         self._emit_xrange_changed()
         self._refresh = True
         self.schedule_idle_quality()

@@ -18,13 +18,14 @@ def _subplot_canvas():
 def test_tick_recompute_is_debounced_not_per_drag_tick(qapp):
     c = _subplot_canvas()
     calls = {"n": 0}
-    orig = c._apply_target_x_ticks_to_all_axes
+    tick_density = c._tick_density_controller
+    orig = tick_density._apply_target_x_ticks_to_all_axes
 
     def wrapped():
         calls["n"] += 1
         return orig()
 
-    c._apply_target_x_ticks_to_all_axes = wrapped
+    tick_density._apply_target_x_ticks_to_all_axes = wrapped
 
     src = c._primary_xaxis_ax
     for _ in range(20):
