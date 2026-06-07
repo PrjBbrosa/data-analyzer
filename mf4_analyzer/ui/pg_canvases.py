@@ -1685,7 +1685,6 @@ class TimeDomainCanvasPG(QWidget):
             self._set_xrange_to_data_union()
             self._emit_xrange_changed()
             if self._overlay_mode:
-                self._sync_overlay_aux_viewboxes()
                 self._connect_overlay_view_sync()
 
         self._refresh = True
@@ -1697,6 +1696,10 @@ class TimeDomainCanvasPG(QWidget):
         # after the early subplot label pass. Re-pin once at the end of build
         # so the first rendered frame already has one shared X grid.
         self._unify_subplot_left_axis_widths()
+
+        if self._overlay_mode:
+            self._settle_layout()
+            self._sync_overlay_aux_viewboxes()
 
         # Bug 3: notify owners that fresh ViewBoxes exist so they can
         # re-apply pinned interaction state (toolbar pan/zoom mode). Runs
@@ -2454,6 +2457,8 @@ class TimeDomainCanvasPG(QWidget):
                     handle.set_ylim(lo - pad, hi + pad)
                 except Exception:
                     pass
+            if self._overlay_mode:
+                self._repin_overlay_channel_ticks()
             self._refresh = True
             self.draw_idle()
         finally:
@@ -4216,6 +4221,15 @@ class TimeDomainCanvasPG(QWidget):
                 return handle
         return None
 
+    def _settle_layout(self):
+        """Force the pyqtgraph GraphicsLayout to recompute geometry now."""
+        try:
+            layout = self._glw.ci.layout
+            layout.invalidate()
+            layout.activate()
+        except Exception:
+            pass
+
     def _sync_overlay_aux_viewboxes(self):
         if not self._overlay_aux_viewboxes or self._primary_xaxis_ax is None:
             return
@@ -5406,6 +5420,12 @@ class TimeDomainCanvasPG(QWidget):
             self._apply_target_x_ticks_to_all_axes()
             self._unify_subplot_left_axis_widths()
             self._unify_subplot_bottom_axis_heights()
+        except Exception:
+            pass
+        try:
+            if self._overlay_mode:
+                self._settle_layout()
+                self._sync_overlay_aux_viewboxes()
         except Exception:
             pass
         # Recompute the envelope for the new plot-area width, matching the

@@ -494,3 +494,133 @@ class TestAnimatedSnap:
         QCoreApplication.processEvents()
         assert tick_values() == pytest.approx(expected)
         assert ax0.get_ylim() != pytest.approx((-0.474, 5.526), abs=1e-6)
+
+
+class TestFitYToVisibleOverlay:
+    """fit_y_to_visible_x must reframe overlay ticks back onto graticules."""
+
+    def _overlay(self, qapp):
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 256)
+        rows = [
+            ("ch0", True, t, 2.0 * np.sin(2 * np.pi * t) + 1.0, "#1769e0", "V", "fid-0"),
+            ("ch1", True, t, 0.4 * np.cos(2 * np.pi * 3 * t), "#e07b17", "A", "fid-1"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        return canvas
+
+    def test_fit_y_to_visible_x_keeps_overlay_ticks_on_grid(self, qapp):
+        canvas = self._overlay(qapp)
+        canvas.fit_y_to_visible_x()
+        n = canvas._overlay_divisions
+        for handle in canvas.axes_list:
+            lo, hi = handle.get_ylim()
+            span = hi - lo
+            assert span > 0
+            axis = handle.y_axis_item()
+            major = axis._tickLevels[0]
+            fracs = sorted(((value - lo) / span) for value, _label in major)
+            expected = [k / n for k in range(n + 1)]
+            assert fracs == pytest.approx(expected, abs=1e-6)
+
+    def test_fit_y_to_visible_x_subplot_does_not_reframe(self, qapp):
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 256)
+        sig0 = 3.1 * np.sin(2 * np.pi * t)
+        sig1 = 1.7 * np.cos(2 * np.pi * 2 * t)
+        rows = [
+            ("ch0", True, t, sig0, "#1769e0", "V", "fid-0"),
+            ("ch1", True, t, sig1, "#e07b17", "A", "fid-1"),
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        canvas.fit_y_to_visible_x()
+        handle = canvas.axes_list[0]
+        lo, hi = handle.get_ylim()
+        data_lo, data_hi = float(sig0.min()), float(sig0.max())
+        pad = (data_hi - data_lo) * 0.05
+        assert lo == pytest.approx(data_lo - pad, rel=1e-3)
+        assert hi == pytest.approx(data_hi + pad, rel=1e-3)
+
+
+class TestOverlaySwitchGeometry:
+    """Overlay aux ViewBoxes must sync after layout-affecting build work."""
+
+    def _rows(self):
+        t = np.linspace(0.0, 1.0, 256)
+        return [
+            ("ch0", True, t, 2.0 * np.sin(2 * np.pi * t), "#1769e0", "V", "fid-0"),
+            ("ch1", True, t, 0.5 * np.cos(2 * np.pi * 3 * t), "#e07b17", "A", "fid-1"),
+            ("ch2", True, t, 1.2 * np.sin(2 * np.pi * 5 * t), "#17a07b", "Nm", "fid-2"),
+        ]
+
+    def _assert_aux_match_xmaster(self, canvas, tol=1.0):
+        xm = canvas._x_master_handle.view_box.sceneBoundingRect()
+        assert canvas._overlay_aux_viewboxes, "overlay must build aux ViewBoxes"
+        assert xm.width() > 1.0 and xm.height() > 1.0, "X-master rect must be settled"
+        for aux in canvas._overlay_aux_viewboxes:
+            r = aux.sceneBoundingRect()
+            assert abs(r.x() - xm.x()) <= tol
+            assert abs(r.y() - xm.y()) <= tol
+            assert abs(r.width() - xm.width()) <= tol
+            assert abs(r.height() - xm.height()) <= tol
+
+    def test_overlay_build_syncs_aux_after_tick_density_layout_work(self, qapp):
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        density_applied = {"value": False}
+        sync_calls = []
+
+        original_density = canvas._apply_tick_density_to_all_axes
+        original_sync = canvas._sync_overlay_aux_viewboxes
+
+        def mark_density_applied():
+            density_applied["value"] = True
+            return original_density()
+
+        def record_sync_order():
+            sync_calls.append(density_applied["value"])
+            return original_sync()
+
+        canvas._apply_tick_density_to_all_axes = mark_density_applied
+        canvas._sync_overlay_aux_viewboxes = record_sync_order
+
+        canvas.plot_channels(self._rows(), mode="overlay")
+
+        assert sync_calls == [True], (
+            "overlay build must sync aux exactly once, after tick-density/axis "
+            "geometry work"
+        )
+
+    def test_switch_subplot_to_overlay_aux_matches_xmaster_after_build(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        rows = self._rows()
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        self._assert_aux_match_xmaster(canvas)
+
+    def test_resize_settled_resyncs_aux_geometry(self, qapp):
+        from PyQt5.QtCore import QCoreApplication, QRectF
+        from tests.ui.test_pg_timedomain_canvas import _pg_canvas
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(self._rows(), mode="overlay")
+        QCoreApplication.processEvents()
+
+        canvas._disconnect_overlay_view_sync()
+        for aux in canvas._overlay_aux_viewboxes:
+            aux.setGeometry(QRectF(0.0, 0.0, 5.0, 5.0))
+
+        canvas._on_resize_settled()
+        self._assert_aux_match_xmaster(canvas)
