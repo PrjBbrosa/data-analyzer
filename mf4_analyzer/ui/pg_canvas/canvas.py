@@ -56,8 +56,6 @@ import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
 import json
-import math
-import time as _time
 from collections import OrderedDict
 from typing import Tuple
 
@@ -70,7 +68,6 @@ from PyQt5.QtCore import (
     pyqtSignal,
 )
 from PyQt5.QtGui import (
-    QCursor,
     QPainterPath,
     QPixmap,
 )
@@ -79,63 +76,32 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from mf4_analyzer.signal._envelope_cutils import positions_envelope
+from mf4_analyzer.signal._envelope_cutils import (  # noqa: F401
+    positions_envelope,  # re-exported via the pg_canvases shim + renderer monkeypatch seam
+)
 from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
     PgAxisHandle,
 )
-from mf4_analyzer.ui.canvases import (
-    _format_dual_html,
-    _format_single_cursor_channel_html,
-    _interp_cursor_value,
-    _is_monotonic_array,
+from mf4_analyzer.ui.canvases import (  # noqa: F401
     _compact_axis_label,
-    _middle_ellipsis,
     _split_prefixed_label,
-    build_envelope,
+    build_envelope,  # re-exported via the pg_canvases shim + overlay monkeypatch seam
 )
-from mf4_analyzer.ui.pg_canvas.context_menu import (  # noqa: F401
-    _clean_menu_text,
-    _apply_context_widget_i18n,
-    _style_pg_context_menu,
+from mf4_analyzer.ui.pg_canvas.context_menu import (
     _localize_pg_context_actions,
     _localize_pg_context_menu,
-    _find_top_level_action,
-    _route_view_all_action,
-    _build_grid_submenu,
-    _add_mouse_mode_toggle_row,
-    _add_y_autofit_action,
-    _reorder_top_level_actions,
     redesign_pg_context_menu,
-    _strip_redundant_separators,
 )
-from mf4_analyzer.ui.pg_canvas.fonts import (  # noqa: F401
-    _pg_chart_font,
+from mf4_analyzer.ui.pg_canvas.fonts import (
     _apply_pg_axis_font,
     _apply_pg_text_item_font,
 )
-from mf4_analyzer.ui.pg_canvas.annotations import (  # noqa: F401
-    AnnotationManager,
-    _annotation_pen_cursor,
-)
+from mf4_analyzer.ui.pg_canvas.annotations import AnnotationManager
 from mf4_analyzer.ui.pg_canvas.cursor import CursorController
-from mf4_analyzer.ui.pg_canvas.ticks_math import (  # noqa: F401
-    _NICE_STEP_MANTISSAS,
-    _snap_y_to_divisions,
-    _nice_per_div,
-    _adjacent_nice_step,
-    _fmt_tick,
-    _frame_to_nice,
-    _quantize_range_key,
-)
-from mf4_analyzer.ui.pg_canvas.tick_density import (  # noqa: F401
-    TickDensityController,
-    _TARGET_X_TICK_NICE_FACTORS,
-    _TARGET_X_TICK_MIN_GAP_PX,
-    _TARGET_X_TICK_EDGE_PAD_PX,
-    _TARGET_X_TICK_MIN_COUNT,
-)
+from mf4_analyzer.ui.pg_canvas.ticks_math import _quantize_range_key
+from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox  # noqa: F401
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
 from mf4_analyzer.ui.pg_canvas.quality import QualityManager
