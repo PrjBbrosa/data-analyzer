@@ -56,6 +56,7 @@ def _view_state_channel_key(data_id, name):
 
 class _CanvasBackref:
     _delegate_names = frozenset()
+    _owned_names = frozenset()
 
     def __init__(self, canvas):
         object.__setattr__(self, "_c", canvas)
@@ -64,6 +65,7 @@ class _CanvasBackref:
         if name not in {
             "_c",
             "_delegate_names",
+            "_owned_names",
             "__dict__",
             "__class__",
             "__getattr__",
@@ -85,11 +87,43 @@ class _CanvasBackref:
         if name == "_c":
             object.__setattr__(self, name, value)
             return
+        owned_names = object.__getattribute__(self, "_owned_names")
+        delegate_names = object.__getattribute__(self, "_delegate_names")
+        if name in owned_names or name in delegate_names:
+            object.__setattr__(self, name, value)
+            return
         setattr(self._c, name, value)
 
 
 class OverlayAxisManager(_CanvasBackref):
     """Overlay axis binding, graticule, selection, and interaction routing."""
+
+    _owned_names = frozenset({
+        "selected_channel",
+        "drag_start",
+        "dragging",
+        "snap_anim",
+        "snap_anim_ms",
+        "divisions",
+        "_selected_overlay_channel",
+        "_overlay_default_lw",
+        "_overlay_default_alpha",
+        "_overlay_selected_lw",
+        "_overlay_selected_alpha",
+        "_overlay_de_emphasised_lw",
+        "_overlay_de_emphasised_alpha",
+        "_overlay_pick_radius_px",
+        "_overlay_axis_column_spacing",
+        "_overlay_y_drag_start",
+        "_overlay_dragging",
+        "_snap_anim",
+        "_snap_anim_ms",
+        "_overlay_aux_viewboxes",
+        "_overlay_aux_axes",
+        "_overlay_view_sync_conns",
+        "_overlay_divisions",
+        "_overlay_grid_lines",
+    })
 
     _delegate_names = frozenset({
         "_add_overlay_axis_handle",
@@ -128,6 +162,133 @@ class OverlayAxisManager(_CanvasBackref):
         "_selected_overlay_axes",
         "_handle_wheel_dispatch",
     })
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self._selected_overlay_channel = None
+        self._overlay_default_lw = 1.5
+        self._overlay_default_alpha = 1.0
+        self._overlay_selected_lw = 2.6
+        self._overlay_selected_alpha = 1.0
+        self._overlay_de_emphasised_lw = 1.35
+        self._overlay_de_emphasised_alpha = 0.42
+        self._overlay_pick_radius_px = 12.0
+        self._overlay_axis_column_spacing = 12
+        self._overlay_y_drag_start = None
+        self._overlay_dragging = False
+        self._snap_anim = None
+        self._snap_anim_ms = 150
+        self._overlay_aux_viewboxes = []
+        self._overlay_aux_axes = []
+        self._overlay_view_sync_conns = []
+        self._overlay_divisions = 8
+        self._overlay_grid_lines = []
+
+    @property
+    def selected_channel(self):
+        return self._selected_overlay_channel
+
+    @selected_channel.setter
+    def selected_channel(self, value):
+        self._selected_overlay_channel = value
+
+    @property
+    def default_lw(self):
+        return self._overlay_default_lw
+
+    @property
+    def default_alpha(self):
+        return self._overlay_default_alpha
+
+    @property
+    def selected_lw(self):
+        return self._overlay_selected_lw
+
+    @property
+    def selected_alpha(self):
+        return self._overlay_selected_alpha
+
+    @property
+    def de_emphasised_lw(self):
+        return self._overlay_de_emphasised_lw
+
+    @property
+    def de_emphasised_alpha(self):
+        return self._overlay_de_emphasised_alpha
+
+    @property
+    def pick_radius_px(self):
+        return self._overlay_pick_radius_px
+
+    @property
+    def axis_column_spacing(self):
+        return self._overlay_axis_column_spacing
+
+    @property
+    def drag_start(self):
+        return self._overlay_y_drag_start
+
+    @drag_start.setter
+    def drag_start(self, value):
+        self._overlay_y_drag_start = value
+
+    @property
+    def dragging(self):
+        return self._overlay_dragging
+
+    @dragging.setter
+    def dragging(self, value):
+        self._overlay_dragging = bool(value)
+
+    @property
+    def snap_anim(self):
+        return self._snap_anim
+
+    @snap_anim.setter
+    def snap_anim(self, value):
+        self._snap_anim = value
+
+    @property
+    def snap_anim_ms(self):
+        return self._snap_anim_ms
+
+    @snap_anim_ms.setter
+    def snap_anim_ms(self, value):
+        self._snap_anim_ms = int(value)
+
+    @property
+    def aux_viewboxes(self):
+        return self._overlay_aux_viewboxes
+
+    @property
+    def aux_axes(self):
+        return self._overlay_aux_axes
+
+    @property
+    def view_sync_connections(self):
+        return self._overlay_view_sync_conns
+
+    @property
+    def divisions(self):
+        return self._overlay_divisions
+
+    @divisions.setter
+    def divisions(self, value):
+        self._overlay_divisions = max(3, min(20, int(value)))
+
+    @property
+    def grid_lines(self):
+        return self._overlay_grid_lines
+
+    def reset_for_rebuild(self):
+        self._selected_overlay_channel = None
+        self._overlay_y_drag_start = None
+        self._overlay_dragging = False
+        self._snap_anim = None
+        self._overlay_aux_viewboxes = []
+        self._overlay_aux_axes = []
+        self._overlay_view_sync_conns = []
+        self._overlay_grid_lines = []
 
     def _add_overlay_axis_handle(self, primary_plot, index):
         """Create one dedicated Y axis/ViewBox for an overlay channel."""

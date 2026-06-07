@@ -107,21 +107,21 @@ class TestOverlayDivisions:
 
     def test_default_divisions_is_8(self, qapp):
         canvas = self._overlay(qapp)
-        assert canvas._overlay_divisions == 8
-        assert len(canvas._overlay_grid_lines) == 8 - 1
+        assert canvas._overlay_axes.divisions == 8
+        assert len(canvas._overlay_axes.grid_lines) == 8 - 1
 
     def test_set_tick_density_drives_divisions_and_gridlines(self, qapp):
         canvas = self._overlay(qapp)
         canvas.set_tick_density(10, 12)
-        assert canvas._overlay_divisions == 12
-        assert len(canvas._overlay_grid_lines) == 12 - 1
+        assert canvas._overlay_axes.divisions == 12
+        assert len(canvas._overlay_axes.grid_lines) == 12 - 1
 
     def test_density_clamped_to_3_20(self, qapp):
         canvas = self._overlay(qapp)
         canvas.set_tick_density(10, 99)
-        assert canvas._overlay_divisions == 20
+        assert canvas._overlay_axes.divisions == 20
         canvas.set_tick_density(10, 1)
-        assert canvas._overlay_divisions == 3
+        assert canvas._overlay_axes.divisions == 3
 
 
 class TestRepinTicks:
@@ -140,7 +140,7 @@ class TestRepinTicks:
     def test_each_channel_ticks_align_to_divisions(self, qapp):
         canvas = self._overlay(qapp)
         canvas._repin_overlay_channel_ticks()
-        n = canvas._overlay_divisions
+        n = canvas._overlay_axes.divisions
         for handle in canvas.axes_list:
             lo, hi = handle.get_ylim()
             span = hi - lo
@@ -224,7 +224,7 @@ class TestOverlayWheel:
         canvas.select_overlay_channel("ch0")
         ax0 = canvas._channel_lines["ch0"][0]
         lo0, hi0 = ax0.get_ylim()
-        per_div = (hi0 - lo0) / canvas._overlay_divisions
+        per_div = (hi0 - lo0) / canvas._overlay_axes.divisions
 
         canvas._handle_wheel_dispatch(
             delta=120.0,
@@ -275,7 +275,7 @@ class TestDragSnap:
         canvas._snap_overlay_channel_to_grid(ax0)
 
         lo, hi = ax0.get_ylim()
-        n = canvas._overlay_divisions
+        n = canvas._overlay_axes.divisions
         per_div = (hi - lo) / n
         assert abs(lo / per_div - round(lo / per_div)) < 1e-6
         assert abs(hi / per_div - round(hi / per_div)) < 1e-6
@@ -335,7 +335,7 @@ class TestOverlayBoxZoom:
         ax0.set_ylim(0.0, 100.0)
         QCoreApplication.processEvents()
         ch1_before = ax1.get_ylim()
-        n_lines_before = len(canvas._overlay_grid_lines)
+        n_lines_before = len(canvas._overlay_axes.grid_lines)
 
         xm = canvas._x_master_handle.view_box
         # Simulate the rubber-band finish exactly like pyqtgraph does: a
@@ -350,7 +350,7 @@ class TestOverlayBoxZoom:
 
         # X-master Y is re-locked → graticule lines all back in view.
         assert xm.viewRange()[1] == pytest.approx((0.0, 1.0), abs=1e-6)
-        assert len(canvas._overlay_grid_lines) == n_lines_before
+        assert len(canvas._overlay_axes.grid_lines) == n_lines_before
         # X stayed zoomed (handler must not touch shared X).
         assert xm.viewRange()[0] != pytest.approx((0.0, 1.0))
         # Selected channel zoomed into the box sub-range (~[30, 70]).
@@ -406,7 +406,7 @@ class TestOverlayBoxZoom:
         assert calls == [], "drag start (non-finish) must not apply box-zoom Y"
 
         calls.clear()
-        aux_vb = canvas._overlay_aux_viewboxes[0]
+        aux_vb = canvas._overlay_axes.aux_viewboxes[0]
         aux_vb.setMouseMode(pg.ViewBox.RectMode)
         aux_vb.mouseDragEvent(_FakeBox(Qt.LeftButton, finish=True), axis=None)
         assert calls == [], "box-zoom Y handler must fire only for the X-master"
@@ -435,13 +435,13 @@ class TestAnimatedSnap:
         canvas = self._sel(qapp)
         ax0 = canvas._channel_lines["ch0"][0]
         ax0.set_ylim(-1.731, 2.169)
-        canvas._snap_anim_ms = 0
-        canvas._overlay_dragging = True
+        canvas._overlay_axes.snap_anim_ms = 0
+        canvas._overlay_axes.dragging = True
         canvas._begin_overlay_y_drag_at(start_y_px=100.0)
         canvas._handle_overlay_mouse_release(MagicMock())
 
         lo, hi = ax0.get_ylim()
-        n = canvas._overlay_divisions
+        n = canvas._overlay_axes.divisions
         per_div = (hi - lo) / n
         assert abs(lo / per_div - round(lo / per_div)) < 1e-6
         assert abs(hi / per_div - round(hi / per_div)) < 1e-6
@@ -452,14 +452,14 @@ class TestAnimatedSnap:
         canvas = self._sel(qapp)
         ax0 = canvas._channel_lines["ch0"][0]
         ax0.set_ylim(-1.731, 2.169)
-        canvas._snap_anim_ms = 150
-        canvas._overlay_dragging = True
+        canvas._overlay_axes.snap_anim_ms = 150
+        canvas._overlay_axes.dragging = True
         canvas._begin_overlay_y_drag_at(start_y_px=100.0)
         canvas._handle_overlay_mouse_release(MagicMock())
 
         # The curve is still where the user dropped it; the snap glides in.
         assert ax0.get_ylim() == pytest.approx((-1.731, 2.169), abs=0.06)
-        assert canvas._snap_anim is not None
+        assert canvas._overlay_axes.snap_anim is not None
 
     def test_release_anim_pins_final_labels_without_flicker(self, qapp):
         """During the glide the axis labels must already be the final
@@ -471,12 +471,12 @@ class TestAnimatedSnap:
         canvas = self._sel(qapp)
         ax0 = canvas._channel_lines["ch0"][0]
         ax0.set_ylim(-0.474, 5.526)  # off-grid dragged window, span 6.0
-        canvas._snap_anim_ms = 150
-        canvas._overlay_dragging = True
+        canvas._overlay_axes.snap_anim_ms = 150
+        canvas._overlay_axes.dragging = True
         canvas._begin_overlay_y_drag_at(start_y_px=100.0)
         canvas._handle_overlay_mouse_release(MagicMock())
 
-        n = canvas._overlay_divisions
+        n = canvas._overlay_axes.divisions
         per_div = 6.0 / n
         bottom = round(-0.474 / per_div) * per_div
         expected = [bottom + k * per_div for k in range(n + 1)]
@@ -490,7 +490,7 @@ class TestAnimatedSnap:
         assert ax0.get_ylim() == pytest.approx((-0.474, 5.526), abs=1e-6)
 
         # Mid-glide: labels stay constant (no flicker), curve has moved.
-        canvas._snap_anim.setCurrentTime(75)
+        canvas._overlay_axes.snap_anim.setCurrentTime(75)
         QCoreApplication.processEvents()
         assert tick_values() == pytest.approx(expected)
         assert ax0.get_ylim() != pytest.approx((-0.474, 5.526), abs=1e-6)
@@ -514,7 +514,7 @@ class TestFitYToVisibleOverlay:
     def test_fit_y_to_visible_x_keeps_overlay_ticks_on_grid(self, qapp):
         canvas = self._overlay(qapp)
         canvas.fit_y_to_visible_x()
-        n = canvas._overlay_divisions
+        n = canvas._overlay_axes.divisions
         for handle in canvas.axes_list:
             lo, hi = handle.get_ylim()
             span = hi - lo
@@ -559,9 +559,9 @@ class TestOverlaySwitchGeometry:
 
     def _assert_aux_match_xmaster(self, canvas, tol=1.0):
         xm = canvas._x_master_handle.view_box.sceneBoundingRect()
-        assert canvas._overlay_aux_viewboxes, "overlay must build aux ViewBoxes"
+        assert canvas._overlay_axes.aux_viewboxes, "overlay must build aux ViewBoxes"
         assert xm.width() > 1.0 and xm.height() > 1.0, "X-master rect must be settled"
-        for aux in canvas._overlay_aux_viewboxes:
+        for aux in canvas._overlay_axes.aux_viewboxes:
             r = aux.sceneBoundingRect()
             assert abs(r.x() - xm.x()) <= tol
             assert abs(r.y() - xm.y()) <= tol
@@ -620,7 +620,7 @@ class TestOverlaySwitchGeometry:
         QCoreApplication.processEvents()
 
         canvas._disconnect_overlay_view_sync()
-        for aux in canvas._overlay_aux_viewboxes:
+        for aux in canvas._overlay_axes.aux_viewboxes:
             aux.setGeometry(QRectF(0.0, 0.0, 5.0, 5.0))
 
         canvas._on_resize_settled()

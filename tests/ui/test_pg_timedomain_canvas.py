@@ -2451,9 +2451,9 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         consumed = self._press(canvas, qapp, point)
 
         assert consumed is True
-        assert canvas._selected_overlay_channel == "torque", (
+        assert canvas._overlay_axes.selected_channel == "torque", (
             f"press on torque curve must select it; got "
-            f"{canvas._selected_overlay_channel!r}"
+            f"{canvas._overlay_axes.selected_channel!r}"
         )
         assert emitted and emitted[-1] == "torque"
 
@@ -2475,7 +2475,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         consumed = self._press(canvas, qapp, point)
 
         assert consumed is True
-        assert canvas._selected_overlay_channel == "speed"
+        assert canvas._overlay_axes.selected_channel == "speed"
 
     def test_press_on_first_channel_then_drag_moves_only_its_axis(self, qapp):
         """Problem 3: the first channel is now draggable symmetrically —
@@ -2509,17 +2509,17 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         x_before = canvas._primary_xaxis_ax.get_xlim()
 
         self._press(canvas, qapp, start)
-        assert canvas._selected_overlay_channel == "speed", (
+        assert canvas._overlay_axes.selected_channel == "speed", (
             f"press on speed's peak must select speed; got "
-            f"{canvas._selected_overlay_channel!r}"
+            f"{canvas._overlay_axes.selected_channel!r}"
         )
-        assert canvas._overlay_dragging is True
+        assert canvas._overlay_axes.dragging is True
         from PyQt5.QtCore import QPoint
         moved_point = QPoint(start.x(), start.y() + 60)
         self._move(canvas, qapp, moved_point)
         self._release(canvas, qapp, moved_point)
 
-        assert canvas._overlay_dragging is False
+        assert canvas._overlay_axes.dragging is False
         assert speed_handle.get_ylim() != pytest.approx(speed_before), (
             "first-channel drag must shift its own Y range"
         )
@@ -2588,7 +2588,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         # Sanity: the point is genuinely blank (no curve within pick radius)
         # AND genuinely inside the plot rect (not the above-rect escape that
         # made the old test pass for the wrong reason).
-        assert dist > canvas._overlay_pick_radius_px, (
+        assert dist > canvas._overlay_axes.pick_radius_px, (
             f"could not find a blank in-plot point; nearest curve {dist:.1f}px"
         )
         master_rect = canvas._primary_xaxis_ax.view_box.sceneBoundingRect()
@@ -2601,7 +2601,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         consumed = self._press(canvas, qapp, viewport_pt)
 
         assert consumed is True
-        assert canvas._selected_overlay_channel is None
+        assert canvas._overlay_axes.selected_channel is None
         assert emitted and emitted[-1] is None
 
     def test_blank_click_deselects_and_emits_none(self, qapp):
@@ -2617,7 +2617,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         canvas.overlay_channel_selected.connect(emitted.append)
 
         scene_pt, dist = self._blankest_inplot_scene_point(canvas)
-        assert dist > canvas._overlay_pick_radius_px
+        assert dist > canvas._overlay_axes.pick_radius_px
         # Must be inside the plot rect — the old version clicked ABOVE it,
         # which passed only because no ViewBox contained the point.
         master_rect = canvas._primary_xaxis_ax.view_box.sceneBoundingRect()
@@ -2626,7 +2626,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         consumed = self._press(canvas, qapp, point)
 
         assert consumed is True
-        assert canvas._selected_overlay_channel is None
+        assert canvas._overlay_axes.selected_channel is None
         assert emitted and emitted[-1] is None
 
     def test_x_master_pan_disabled_during_drag(self, qapp):
@@ -2647,7 +2647,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         assert master_vb.state["mouseEnabled"] == [True, False]
 
         self._press(canvas, qapp, start)
-        assert canvas._overlay_dragging is True
+        assert canvas._overlay_axes.dragging is True
         assert master_vb.state["mouseEnabled"] == [False, False], (
             "X-master mouse must be disabled during a selected-channel Y-drag"
         )
@@ -2676,8 +2676,8 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
 
         consumed = self._press(canvas, qapp, start)
         assert consumed is True
-        assert canvas._selected_overlay_channel == "torque"
-        assert canvas._overlay_dragging is True
+        assert canvas._overlay_axes.selected_channel == "torque"
+        assert canvas._overlay_axes.dragging is True
 
         moved = QPoint(start.x(), start.y() + 60)
         assert self._move(canvas, qapp, moved) is True
@@ -2704,7 +2704,7 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
             self._make_press_event(point)
         )
         assert consumed is False
-        assert canvas._selected_overlay_channel is None
+        assert canvas._overlay_axes.selected_channel is None
 
     def _make_press_event(self, point):
         from PyQt5.QtCore import QEvent, Qt
@@ -2763,7 +2763,7 @@ class TestOverlayPressModeSplit:
                 continue
             seen.add(id(vb))
             vb.setMouseMode(mode)
-        for vb in list(getattr(canvas, "_overlay_aux_viewboxes", []) or []):
+        for vb in list(canvas._overlay_axes.aux_viewboxes or []):
             if id(vb) not in seen:
                 vb.setMouseMode(mode)
                 seen.add(id(vb))
@@ -2780,8 +2780,8 @@ class TestOverlayPressModeSplit:
         consumed = canvas._handle_overlay_mouse_press(self._press_event(point))
 
         assert consumed is False, "RectMode press must let the rubber band start"
-        assert canvas._selected_overlay_channel is None
-        assert canvas._overlay_dragging is False
+        assert canvas._overlay_axes.selected_channel is None
+        assert canvas._overlay_axes.dragging is False
 
     def test_panmode_press_still_selects_and_drags(self, qapp):
         """PanMode press preserves the existing select + Y-drag behavior."""
@@ -2794,8 +2794,8 @@ class TestOverlayPressModeSplit:
         consumed = canvas._handle_overlay_mouse_press(self._press_event(point))
 
         assert consumed is True
-        assert canvas._selected_overlay_channel == "torque"
-        assert canvas._overlay_dragging is True
+        assert canvas._overlay_axes.selected_channel == "torque"
+        assert canvas._overlay_axes.dragging is True
 
 
 class _FakeDragEvent:
@@ -3447,7 +3447,7 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         assert not pi.getAxis("bottom").grid
         assert not pi.getAxis("left").grid
         assert not pi.getAxis("right").grid
-        for ax_item in canvas._overlay_aux_axes:
+        for ax_item in canvas._overlay_axes.aux_axes:
             assert not ax_item.grid
 
     def test_context_menu_view_all_resets_overlay_raw_x_and_per_channel_y(
@@ -5118,8 +5118,8 @@ class TestOverlayAuxViewBoxTeardown:
         canvas.plot_channels(rows, mode="overlay")
         QCoreApplication.processEvents()
 
-        old_aux = list(canvas._overlay_aux_viewboxes)
-        old_axes = list(canvas._overlay_aux_axes)
+        old_aux = list(canvas._overlay_axes.aux_viewboxes)
+        old_axes = list(canvas._overlay_axes.aux_axes)
         assert old_aux, "overlay build must create aux ViewBoxes"
 
         canvas.plot_channels(rows, mode="subplot")
@@ -5189,13 +5189,13 @@ class TestOverlayGridSingleAxis:
             f"overlay right-axis Y grid must be OFF; right.grid={right.grid!r}"
         )
         # ch3+ appended aux right axes must also carry no Y grid.
-        for ax_item in canvas._overlay_aux_axes:
+        for ax_item in canvas._overlay_axes.aux_axes:
             assert not ax_item.grid, (
                 f"overlay aux axis Y grid must be OFF; grid={ax_item.grid!r}"
             )
         assert left.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
         assert right.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
-        for ax_item in canvas._overlay_aux_axes:
+        for ax_item in canvas._overlay_axes.aux_axes:
             assert ax_item.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
         canvas.deleteLater()
 
@@ -5235,10 +5235,10 @@ class TestOverlayGridSingleAxis:
         canvas.plot_channels(_five_channel_rows()[:3], mode="overlay")
         QCoreApplication.processEvents()
 
-        expected = canvas._overlay_divisions - 1
-        assert len(canvas._overlay_grid_lines) == expected, (
+        expected = canvas._overlay_axes.divisions - 1
+        assert len(canvas._overlay_axes.grid_lines) == expected, (
             f"expected {expected} grid lines, "
-            f"got {len(canvas._overlay_grid_lines)}"
+            f"got {len(canvas._overlay_axes.grid_lines)}"
         )
         canvas.deleteLater()
 
@@ -5257,10 +5257,10 @@ class TestOverlayGridSingleAxis:
         canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
         QCoreApplication.processEvents()
 
-        expected = canvas._overlay_divisions - 1
-        assert len(canvas._overlay_grid_lines) == expected, (
+        expected = canvas._overlay_axes.divisions - 1
+        assert len(canvas._overlay_axes.grid_lines) == expected, (
             f"after rebuild, expected {expected}, "
-            f"got {len(canvas._overlay_grid_lines)}"
+            f"got {len(canvas._overlay_axes.grid_lines)}"
         )
         canvas.deleteLater()
 
@@ -5439,7 +5439,7 @@ class TestAutoIdleAA:
         monkeypatch.setattr(
             QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton)
         )
-        canvas._overlay_dragging = True
+        canvas._overlay_axes.dragging = True
         canvas.try_enable_idle_quality()
         assert canvas._quality.aa_on is False
 
@@ -5559,11 +5559,11 @@ class TestAutoIdleAA:
         canvas.try_enable_idle_quality()
         assert canvas._quality.aa_on is True
 
-        canvas._overlay_dragging = True
+        canvas._overlay_axes.dragging = True
         canvas.disable_interactive_quality()
         assert canvas._quality.aa_on is False
 
-        canvas._overlay_dragging = False
+        canvas._overlay_axes.dragging = False
         canvas.schedule_idle_quality()
         assert canvas._quality.timer.isActive()
 
@@ -5820,7 +5820,7 @@ class TestAutoIdleAA:
     def test_default_line_width_is_1_5(self, qapp):
         """Co-tuned with idle AA to soften the AA-off/on visual jump."""
         canvas = _pg_canvas(qapp)
-        assert canvas._overlay_default_lw == 1.5
+        assert canvas._overlay_axes.default_lw == 1.5
 
     def test_grab_preserves_idle_aa_on_state(self, qapp, monkeypatch):
         from PyQt5.QtCore import Qt
@@ -5991,7 +5991,7 @@ class TestOverlayYSnapToGrid:
         QCoreApplication.processEvents()
 
         lo_after, hi_after = ax.get_ylim()
-        n = canvas._overlay_divisions
+        n = canvas._overlay_axes.divisions
         per_div = (hi_after - lo_after) / n
         assert abs(lo_after / per_div - round(lo_after / per_div)) < 1e-6
         assert abs(hi_after / per_div - round(hi_after / per_div)) < 1e-6
@@ -6028,10 +6028,10 @@ class TestOverlayYSnapToGrid:
         canvas.select_overlay_channel(rows[0][0])
         QCoreApplication.processEvents()
         canvas._begin_overlay_y_drag_at(start_y_px=100.0)
-        canvas._overlay_dragging = True
+        canvas._overlay_axes.dragging = True
         # Synchronous snap path (no animation) keeps this a single-call
         # contract; the animated path is covered in test_overlay_grid_ticks.
-        canvas._snap_anim_ms = 0
+        canvas._overlay_axes.snap_anim_ms = 0
 
         snap_calls = []
         monkeypatch.setattr(
@@ -6095,7 +6095,7 @@ class TestOverlayYSnapToGrid:
         QCoreApplication.processEvents()
 
         lo_after, hi_after = ax.get_ylim()
-        n = canvas._overlay_divisions
+        n = canvas._overlay_axes.divisions
         per_div = (hi_after - lo_after) / n
         assert abs(lo_after / per_div - round(lo_after / per_div)) < 1e-6
         assert abs(hi_after / per_div - round(hi_after / per_div)) < 1e-6

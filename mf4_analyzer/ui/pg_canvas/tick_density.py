@@ -93,7 +93,7 @@ class TickDensityController(_CanvasBackref):
             x_n, y_n = self.density
         self.density = (x_n, y_n)
         if self._overlay_mode:
-            self._overlay_divisions = max(3, min(20, int(y_n)))
+            self._overlay_axes.divisions = y_n
             self._build_overlay_y_grid()
             self._repin_overlay_channel_ticks()
             self._apply_target_x_ticks_to_all_axes()

@@ -1013,7 +1013,7 @@ def test_overlay_curve_drag_leaves_toolbar_idle_during_selection(qapp, qtbot):
     # TimeChartCard wires to drop the nav toolbar out of pan.
     cs.canvas_time.select_overlay_channel("torque")
     qapp.processEvents()
-    assert cs.canvas_time._selected_overlay_channel == "torque"
+    assert cs.canvas_time._overlay_axes.selected_channel == "torque"
     selected_axis = cs.canvas_time._channel_lines["torque"][0]
     before_selected_ylim = selected_axis.get_ylim()
     # Selection must have dropped pan so a subsequent blank click can
@@ -1064,7 +1064,7 @@ def test_overlay_blank_click_clears_selection_after_curve_drag(qapp, qtbot):
 
     cs.canvas_time.select_overlay_channel("torque")
     qapp.processEvents()
-    assert cs.canvas_time._selected_overlay_channel == "torque"
+    assert cs.canvas_time._overlay_axes.selected_channel == "torque"
     assert events[-1] == "torque"
     assert 'pan' not in str(cs._time_card.toolbar.mode).lower()
 
@@ -1074,7 +1074,7 @@ def test_overlay_blank_click_clears_selection_after_curve_drag(qapp, qtbot):
     cs.canvas_time.select_overlay_channel(None)
     qapp.processEvents()
 
-    assert cs.canvas_time._selected_overlay_channel is None
+    assert cs.canvas_time._overlay_axes.selected_channel is None
     assert events[-1] is None
     assert len(events) == 2  # exactly select + deselect
     assert primary.get_xlim() == pytest.approx(before_xlim, abs=0.0, rel=0.0)
@@ -1135,7 +1135,7 @@ def test_dblclick_chart_options_does_not_leave_pan_drag_active(qapp, qtbot, monk
     assert len(captured) == 1
     # No stuck pan-drag: the canvas's overlay-drag bookkeeping is cleared
     # and the ViewBox is back at its default PanMode mouse mode.
-    assert cs.canvas_time._overlay_y_drag_start is None
+    assert cs.canvas_time._overlay_axes.drag_start is None
     assert not cs.canvas_time._chart_options_opening
     import pyqtgraph as pg
     assert primary.view_box.state['mouseMode'] == pg.ViewBox.PanMode

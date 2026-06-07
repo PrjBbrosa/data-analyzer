@@ -385,53 +385,6 @@ class TimeDomainCanvasPG(QWidget):
         # Mirrors canvases.py:_apply_overlay_selection_style (lw 1.0 / 1.8;
         # alpha 0.42 / 1.0). Stored per channel so test/UI can probe.
         self._overlay_mode = False
-        self._selected_overlay_channel = None
-        # Per-channel default emphasis: (line_width, alpha). Default
-        # state mirrors matplotlib's "no selection" line: lw=1.05,
-        # alpha=None (treated as 1.0). De-emphasised state is
-        # (1.0, 0.42); selected is (1.8, 1.0).
-        self._overlay_default_lw = 1.5
-        self._overlay_default_alpha = 1.0
-        self._overlay_selected_lw = 2.6
-        self._overlay_selected_alpha = 1.0
-        self._overlay_de_emphasised_lw = 1.35
-        self._overlay_de_emphasised_alpha = 0.42
-
-        # Pixel pick radius for overlay nearest-curve hit-test. Mirrors
-        # canvases.py:_overlay_pick_radius_px = 12.0 (the matplotlib
-        # reference). Used by _select_overlay_channel_from_scene_pos.
-        self._overlay_pick_radius_px = 12.0
-
-        # Horizontal spacing (px) inserted between the stacked overlay right
-        # axes via PlotItem.layout.setHorizontalSpacing so each rotated
-        # channel name clears the next axis's tick numbers. Each AxisItem's
-        # rotated label overhangs ~5px past its declared width(), so this
-        # must exceed that overhang to leave a visible gap. Replaces the old
-        # ``setWidth(44)`` HARD CLAMP (it jammed wide-number axes instead of
-        # acting as a floor); overlay axes now auto-size to their tick text.
-        self._overlay_axis_column_spacing = 12
-
-        # Selected-channel Y-drag bookkeeping: (start_y_px, (lo, hi)).
-        # _begin_overlay_y_drag_at captures, _apply_overlay_y_drag_at
-        # consumes. ChartStack/MainWindow wire mouse events to these.
-        self._overlay_y_drag_start = None
-        # True for the duration of a live mouse-driven Y-drag so the
-        # eventFilter knows MouseMove is a drag (Problem 2). Cleared on
-        # release. While True the X-master ViewBox's mouse pan is disabled
-        # so the curve Y-drag does not fight the default ViewBox pan.
-        self._overlay_dragging = False
-        # Drag-release snap animation: glide the channel to the nice
-        # graticule over ``_snap_anim_ms`` instead of jumping instantly
-        # (2026-06-06 release-snap smoothing). ms<=0 → synchronous snap.
-        self._snap_anim = None
-        self._snap_anim_ms = 150
-        self._overlay_aux_viewboxes = []
-        self._overlay_aux_axes = []
-        self._overlay_view_sync_conns = []
-        # Overlay Y grid/tick graticule. The inspector Y density spin drives
-        # this value directly in overlay mode.
-        self._overlay_divisions = 8
-        self._overlay_grid_lines: list = []
         # The X-master axis handle in overlay mode. Its ViewBox owns the
         # shared X range, the default mouse-pan, and the scene geometry
         # anchor; NO curves are attached to it (every channel — including
@@ -695,7 +648,7 @@ class TimeDomainCanvasPG(QWidget):
         if master is not None and getattr(master, "view_box", None) is view_box:
             return getattr(master, "plot_item", None)
         # Overlay aux ViewBoxes all render onto the X-master PlotItem.
-        if view_box in self._overlay_aux_viewboxes and master is not None:
+        if view_box in self._overlay_axes.aux_viewboxes and master is not None:
             return getattr(master, "plot_item", None)
         if master is not None:
             return getattr(master, "plot_item", None)
@@ -1214,15 +1167,12 @@ class TimeDomainCanvasPG(QWidget):
         # next plot_channels build starts from a clean slate. Inside-label
         # scene items were already removed by _teardown_inside_labels()
         # above (pg.GLW.clear() does NOT remove scene().addItem() items).
-        self._selected_overlay_channel = None
-        self._overlay_y_drag_start = None
-        self._overlay_dragging = False
         self._x_master_handle = None
-        self._overlay_aux_viewboxes = []
-        self._overlay_aux_axes = []
         # InfiniteLines were added via vb.addItem() on the X-master ViewBox,
         # which is part of the PlotItem already destroyed by _glw.clear() above.
-        self._overlay_grid_lines = []
+        # Overlay manager state is reset after the teardown path has walked
+        # its aux ViewBox/axis bookkeeping.
+        self._overlay_axes.reset_for_rebuild()
         self._subplot_label_specs = []
         self._cursor.clear_items()
         # Cursor placement is NOT cleared here — full_reset / reset_cursor_state
@@ -1458,7 +1408,7 @@ class TimeDomainCanvasPG(QWidget):
         # _clear_canvas_pointer_state). The PG canvas has no
         # _mouse_button_pressed flag, but it does carry overlay-drag
         # bookkeeping — drop it so the dialog cannot resume a stale drag.
-        self._overlay_y_drag_start = None
+        self._overlay_axes.drag_start = None
         self._chart_options_opening = True
         try:
             target_parent = parent if parent is not None else self.window()

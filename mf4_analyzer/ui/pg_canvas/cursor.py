@@ -493,7 +493,7 @@ class CursorController(_CanvasBackref):
             if dist < best_dist:
                 best_dist = dist
                 best_name = name
-        if best_name is not None and best_dist <= self._overlay_pick_radius_px:
+        if best_name is not None and best_dist <= self._overlay_axes.pick_radius_px:
             return best_name
         return None
 

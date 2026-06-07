@@ -186,3 +186,46 @@ class TestCollaboratorStateOwnership:
             "_dual_cursor_extreme_markers",
         ):
             assert name not in pg_canvas.__dict__
+
+    def test_overlay_state_lives_on_overlay_axis_manager(self, pg_canvas):
+        overlay = pg_canvas._overlay_axes
+
+        assert overlay.selected_channel is None
+        assert overlay.drag_start is None
+        assert overlay.dragging is False
+        assert overlay.snap_anim is None
+        assert overlay.snap_anim_ms == 150
+        assert overlay.aux_viewboxes == []
+        assert overlay.aux_axes == []
+        assert overlay.view_sync_connections == []
+        assert overlay.divisions == 8
+        assert overlay.grid_lines == []
+        assert overlay.default_lw == 1.5
+        assert overlay.default_alpha == 1.0
+        assert overlay.selected_lw == 2.6
+        assert overlay.selected_alpha == 1.0
+        assert overlay.de_emphasised_lw == 1.35
+        assert overlay.de_emphasised_alpha == 0.42
+        assert overlay.pick_radius_px == 12.0
+        assert overlay.axis_column_spacing == 12
+        for name in (
+            "_selected_overlay_channel",
+            "_overlay_y_drag_start",
+            "_overlay_dragging",
+            "_snap_anim",
+            "_snap_anim_ms",
+            "_overlay_aux_viewboxes",
+            "_overlay_aux_axes",
+            "_overlay_view_sync_conns",
+            "_overlay_divisions",
+            "_overlay_grid_lines",
+            "_overlay_default_lw",
+            "_overlay_default_alpha",
+            "_overlay_selected_lw",
+            "_overlay_selected_alpha",
+            "_overlay_de_emphasised_lw",
+            "_overlay_de_emphasised_alpha",
+            "_overlay_pick_radius_px",
+            "_overlay_axis_column_spacing",
+        ):
+            assert name not in pg_canvas.__dict__

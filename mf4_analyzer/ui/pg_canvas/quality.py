@@ -197,7 +197,7 @@ class QualityManager(_CanvasBackref):
                 return False
         except Exception:
             return False
-        if self._overlay_dragging:
+        if self._overlay_axes.dragging:
             return False
         return self._idle_aa_density_ok()
 
