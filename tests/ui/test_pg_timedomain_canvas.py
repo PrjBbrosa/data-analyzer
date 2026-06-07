@@ -589,6 +589,48 @@ class TestTimeDomainCanvasPGAnnotations:
         assert "Y=42.5" in label
         assert "speed" not in label
 
+    def test_remark_label_highlights_y_value_with_channel_color(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QPoint
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        monkeypatch.setattr(
+            canvas,
+            "_nearest_data_point",
+            lambda _pos: ("speed", 1.25, 42.5, "#00b894"),
+        )
+
+        canvas._add_remark(QPoint(120, 100))
+
+        html = canvas._remarks[-1]["text"].textItem.toHtml().lower()
+        assert "#00b894" in html
+
+    def test_nearest_data_point_uses_curve_screen_distance_not_x_only(
+        self, qapp, monkeypatch,
+    ):
+        from PyQt5.QtCore import QCoreApplication
+
+        t = np.asarray([0.0, 0.01, 10.0], dtype=np.float64)
+        sig = np.asarray([100.0, 0.0, 0.0], dtype=np.float64)
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels([
+            ("speed", True, t, sig, "#1769e0", "rpm", "fid-1"),
+        ], mode="subplot")
+        QCoreApplication.processEvents()
+        handle = canvas.axes_list[0]
+        point = _viewport_point_for_data(canvas, handle, 0.0, 0.0)
+        scene_pos = canvas._glw.mapToScene(point)
+        monkeypatch.setattr(canvas, "_cursor_data_x_from_viewport_pos", lambda _p: 0.0)
+        monkeypatch.setattr(canvas, "_viewport_pos_to_scene", lambda _p: scene_pos)
+
+        found = canvas._nearest_data_point(point)
+
+        assert found is not None
+        assert found[1] == pytest.approx(0.01)
+        assert found[2] == pytest.approx(0.0)
+
     def test_remark_on_second_subplot_attaches_to_second_viewbox(self, qapp):
         from PyQt5.QtCore import QCoreApplication
 
@@ -608,6 +650,60 @@ class TestTimeDomainCanvasPGAnnotations:
         canvas._add_remark(point)
 
         assert canvas._remarks[-1]["vb"] is second_handle.view_box
+
+    def test_annotation_left_click_adds_on_release_not_press(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QPoint, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+        point = QPoint(80, 90)
+        added = []
+        monkeypatch.setattr(canvas, "_add_remark", lambda pos: added.append(pos))
+
+        press_consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_press(point, Qt.LeftButton),
+        )
+        release_consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_release(point, Qt.LeftButton),
+        )
+
+        assert press_consumed is False
+        assert release_consumed is True
+        assert added == [point]
+
+    def test_annotation_left_drag_does_not_add_remark(self, qapp, monkeypatch):
+        from PyQt5.QtCore import QPoint, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+        start = QPoint(80, 90)
+        end = QPoint(140, 120)
+        added = []
+        monkeypatch.setattr(canvas, "_add_remark", lambda pos: added.append(pos))
+
+        canvas.eventFilter(canvas._glw.viewport(), self._mouse_press(start, Qt.LeftButton))
+        move_consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_move(end, Qt.LeftButton),
+        )
+        release_consumed = canvas.eventFilter(
+            canvas._glw.viewport(),
+            self._mouse_release(end, Qt.LeftButton),
+        )
+
+        assert move_consumed is False
+        assert release_consumed is False
+        assert added == []
+
+    def test_annotation_mode_uses_bitmap_pen_cursor(self, qapp):
+        from PyQt5.QtCore import Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.set_remark_enabled(True)
+
+        assert canvas._glw.viewport().cursor().shape() == Qt.BitmapCursor
 
     def test_annotation_mode_left_press_on_existing_remark_allows_drag(
         self, qapp, monkeypatch,
@@ -695,6 +791,22 @@ class TestTimeDomainCanvasPGAnnotations:
 
         return QMouseEvent(
             QEvent.MouseButtonPress, point, button, button, Qt.NoModifier,
+        )
+
+    def _mouse_move(self, point, held_button):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        return QMouseEvent(
+            QEvent.MouseMove, point, Qt.NoButton, held_button, Qt.NoModifier,
+        )
+
+    def _mouse_release(self, point, button):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        return QMouseEvent(
+            QEvent.MouseButtonRelease, point, button, Qt.NoButton, Qt.NoModifier,
         )
 
 
@@ -3240,7 +3352,9 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         for banned in ("绘图选项", "Plot Options", "导出...", "Export...", "变换", "降采样"):
             assert banned not in top
 
-    def test_annotation_delete_entries_do_not_duplicate(self, qapp, monkeypatch):
+    def test_annotation_delete_entries_are_absent_from_context_menu(
+        self, qapp, monkeypatch,
+    ):
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
@@ -3250,8 +3364,8 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
         named = _top_level_texts(menu)
 
-        assert named.count("删除最近标注") == 1
-        assert named.count("删除全部标注") == 1
+        assert "删除最近标注" not in named
+        assert "删除全部标注" not in named
 
     def test_annotation_mode_right_click_deletes_without_context_menu(
         self, qapp, monkeypatch,
@@ -5974,3 +6088,47 @@ class TestOverlayYSnapToGrid:
             lo_after + k * per_div for k in range(n + 1)
         ])
         canvas.deleteLater()
+
+
+class TestTimeDomainCanvasPGSubplotUnits:
+    """Subplot Y-axis labels keep channel units."""
+
+    def _rows(self, names_units):
+        t = np.linspace(0.0, 1.0, 64)
+        sig = np.sin(t * 6.28)
+        colors = ["#1769e0", "#e07b39", "#2bb673", "#c0392b"]
+        return [
+            (name, True, t, sig, colors[i % len(colors)], unit, "fid-1")
+            for i, (name, unit) in enumerate(names_units)
+        ]
+
+    def test_subplot_outside_label_includes_unit(self, qapp):
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 420)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(
+            self._rows([("a", "Nm"), ("b", "deg")]), mode="subplot"
+        )
+        qapp.processEvents()
+
+        labels = [h.get_ylabel() for h in canvas.axes_list]
+        assert any("Nm" in label for label in labels), labels
+        assert any("deg" in label for label in labels), labels
+
+    def test_subplot_inside_label_includes_unit(self, qapp):
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 420)
+        canvas.show()
+        qapp.processEvents()
+        rows = self._rows([
+            ("[tiaonorth] Rte_PA_mAtMotorTorque_xds16", "Nm"),
+            ("[tiaonorth] Rte_RackPosCorrPlausi_wSteeringAngle_xds16", "deg"),
+        ])
+        canvas.plot_channels(rows, mode="subplot")
+        qapp.processEvents()
+
+        texts = [item.toPlainText() for item in canvas._inside_label_items]
+        assert texts, "expected inside-label TextItems for long prefixed names"
+        assert any("Nm" in text for text in texts), texts
+        assert any("deg" in text for text in texts), texts

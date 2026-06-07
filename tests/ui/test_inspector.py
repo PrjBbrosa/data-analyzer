@@ -30,6 +30,38 @@ def test_persistent_top_xaxis_mode_toggle(qapp):
     assert pt._combo_xaxis_ch.isEnabled()
 
 
+def test_persistent_top_xaxis_channel_change_updates_auto_label(qapp):
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    pt = PersistentTop()
+    pt.set_xaxis_candidates([
+        ("file speed", ("fid", "speed")),
+        ("file angle", ("fid", "angle")),
+    ])
+    pt.set_xaxis_mode("channel")
+
+    pt._combo_xaxis_ch.setCurrentIndex(1)
+
+    assert pt.xaxis_label() == "angle"
+
+
+def test_persistent_top_time_mode_clears_auto_channel_label(qapp):
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    pt = PersistentTop()
+    pt.set_xaxis_candidates([
+        ("file speed", ("fid", "speed")),
+        ("file angle", ("fid", "angle")),
+    ])
+    pt.set_xaxis_mode("channel")
+    pt._combo_xaxis_ch.setCurrentIndex(1)
+    assert pt.xaxis_label() == "angle"
+
+    pt.set_xaxis_mode("time")
+
+    assert pt.xaxis_label() == ""
+
+
 def test_persistent_top_apply_emits(qapp, qtbot):
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     pt = PersistentTop()
@@ -437,16 +469,23 @@ def test_persistent_top_xaxis_channel_row_hidden_when_auto(qapp):
     pt = PersistentTop()
     pt.show()
     try:
+        channel_field_host = pt._combo_xaxis_ch.parentWidget()
+        channel_label = pt._xaxis_form.labelForField(channel_field_host)
+        assert channel_label is not None
         # Default index is 0 = 自动(时间)
         assert pt.combo_xaxis.currentIndex() == 0
         assert pt._combo_xaxis_ch.isHidden(), \
             "通道 combo should be hidden when 来源 == 自动(时间)"
+        assert channel_label.isHidden(), \
+            "通道 label should be hidden with the channel combo row"
         # Switch to 指定通道 → row reveals
         pt.combo_xaxis.setCurrentIndex(1)
         assert not pt._combo_xaxis_ch.isHidden()
+        assert not channel_label.isHidden()
         # Back to auto → hidden again
         pt.combo_xaxis.setCurrentIndex(0)
         assert pt._combo_xaxis_ch.isHidden()
+        assert channel_label.isHidden()
     finally:
         pt.hide()
 

@@ -984,10 +984,22 @@ def _set_form_row_visible(form, field_widget, visible):
     the wrapper's direct child widgets so callers (and tests) see the
     expected hidden state on every individual control.
     """
-    field_widget.setVisible(visible)
-    for child in field_widget.findChildren(QWidget, options=Qt.FindDirectChildrenOnly):
+    form_field = field_widget
+    label = form.labelForField(form_field)
+    if label is None:
+        parent = field_widget.parentWidget()
+        while parent is not None:
+            label = form.labelForField(parent)
+            if label is not None:
+                form_field = parent
+                break
+            parent = parent.parentWidget()
+
+    form_field.setVisible(visible)
+    if form_field is not field_widget:
+        field_widget.setVisible(visible)
+    for child in form_field.findChildren(QWidget, options=Qt.FindDirectChildrenOnly):
         child.setVisible(visible)
-    label = form.labelForField(field_widget)
     if label is not None:
         label.setVisible(visible)
 
@@ -1463,6 +1475,7 @@ class PersistentTop(QWidget):
         fl = QFormLayout(g)
         _configure_form(fl)
         self._xaxis_form = fl
+        self._xlabel_auto_from_channel = False
         self.combo_xaxis = QComboBox()
         self.combo_xaxis.addItems(['自动(时间)', '指定通道'])
         fl.addRow("来源:", _fit_field(self.combo_xaxis))
@@ -1568,6 +1581,10 @@ class PersistentTop(QWidget):
         # Sync label field when user changes channel selection interactively.
         # blockSignals during restore/repopulate suppresses this correctly.
         self._combo_xaxis_ch.currentIndexChanged.connect(self._sync_xlabel_from_channel)
+        self.combo_xaxis.currentIndexChanged.connect(self._sync_xlabel_for_xaxis_mode)
+        self.edit_xlabel.textEdited.connect(
+            lambda _text: setattr(self, '_xlabel_auto_from_channel', False)
+        )
         # R3 #6: collapser toggle reveals/hides the inner three groups
         # and persists the choice via QSettings.
         self.btn_collapser.toggled.connect(self._sync_collapser)
@@ -1593,6 +1610,15 @@ class PersistentTop(QWidget):
         if data is not None:
             _, ch = data
             self.edit_xlabel.setText(ch)
+            self._xlabel_auto_from_channel = True
+
+    def _sync_xlabel_for_xaxis_mode(self, idx):
+        if idx == 1:
+            self._sync_xlabel_from_channel(self._combo_xaxis_ch.currentIndex())
+            return
+        if self._xlabel_auto_from_channel:
+            self.edit_xlabel.clear()
+            self._xlabel_auto_from_channel = False
 
     def _update_xaxis_channel_row_visible(self, index):
         _set_form_row_visible(self._xaxis_form, self._combo_xaxis_ch, index == 1)

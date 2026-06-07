@@ -80,6 +80,8 @@ from PyQt5.QtGui import (
     QFontDatabase,
     QFontInfo,
     QFontMetrics,
+    QColor,
+    QCursor,
     QImage,
     QPainter,
     QPainterPath,
@@ -124,6 +126,40 @@ from mf4_analyzer.ui.canvases import (
 
 
 _log = logging.getLogger(__name__)
+
+
+_ANNOTATION_CURSOR = None
+
+
+def _annotation_pen_cursor():
+    global _ANNOTATION_CURSOR
+    if _ANNOTATION_CURSOR is not None:
+        return _ANNOTATION_CURSOR
+    pix = QPixmap(24, 24)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    try:
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(
+            QPen(QColor("#1769e0"), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        )
+        painter.drawLine(6, 18, 17, 7)
+        painter.drawLine(14, 6, 18, 10)
+        painter.drawLine(5, 19, 9, 19)
+        painter.setPen(
+            QPen(QColor("#1e293b"), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        )
+        painter.drawEllipse(3, 17, 4, 4)
+    finally:
+        painter.end()
+    _ANNOTATION_CURSOR = QCursor(pix, 5, 19)
+    return _ANNOTATION_CURSOR
+
+
+def _subplot_ylabel_text(name, unit):
+    """Subplot left-axis label: compact channel name plus unit suffix."""
+    compact = _compact_axis_label(name, unit, max_chars=20)
+    return f"{compact}" + (f" ({unit})" if unit else "")
 
 
 def _view_state_channel_key(data_id, name):
@@ -1416,6 +1452,8 @@ class TimeDomainCanvasPG(QWidget):
         # Annotation state
         self._annotation_enabled = False
         self._remarks = []  # list of annotation dicts
+        self._annotation_press_pos = None
+        self._annotation_press_dragged = False
         # Per-channel default emphasis: (line_width, alpha). Default
         # state mirrors matplotlib's "no selection" line: lw=1.05,
         # alpha=None (treated as 1.0). De-emphasised state is
@@ -1560,9 +1598,9 @@ class TimeDomainCanvasPG(QWidget):
             # exact, so we propagate explicitly via _propagate_xlim_to_siblings
             # on every sigXRangeChanged tick from the primary.
             # Subplot labels need bbox-overlap-driven inside/outside flip.
-            # vis[i] is (name, t, sig, color, unit, data_id); color at idx 3.
+            # vis[i] is (name, t, sig, color, unit, data_id); color idx3, unit idx4.
             self._subplot_label_specs = [
-                (self.axes_list[i], vis[i][0], vis[i][3])
+                (self.axes_list[i], vis[i][0], vis[i][3], vis[i][4])
                 for i in range(len(vis))
             ]
             # Apply once now; resize re-checks via resizeEvent.
@@ -1746,21 +1784,6 @@ class TimeDomainCanvasPG(QWidget):
             allow_y_grid=not self._overlay_mode,
         )
         self._remove_annotation_context_menu_actions(menu)
-        # Annotation delete actions (only when remarks exist).
-        if self._remarks:
-            sep = menu.addSeparator()
-            sep.setObjectName("tracelabAnnotationRemarkActionSeparator")
-            del_act = QAction("删除最近标注", menu)
-            del_act.setObjectName("tracelabAnnotationRemarkActionDeleteNearest")
-            sp = getattr(self, '_last_rclick_scene_pos', None)
-            del_act.triggered.connect(
-                lambda checked=False, _sp=sp: self._remove_remark_at(_sp)
-            )
-            menu.addAction(del_act)
-            clear_act = QAction("删除全部标注", menu)
-            clear_act.setObjectName("tracelabAnnotationRemarkActionClearAll")
-            clear_act.triggered.connect(self.clear_remarks)
-            menu.addAction(clear_act)
 
     def _remove_annotation_context_menu_actions(self, menu):
         if menu is None:
@@ -2067,8 +2090,7 @@ class TimeDomainCanvasPG(QWidget):
                 # short charts still fall back to a bounded middle ellipsis.
                 label = self._overlay_axis_label(axis_handle, name, unit)
             else:
-                compact = _compact_axis_label(name, unit, max_chars=20)
-                label = f"{compact}" + (f" ({unit})" if unit else "")
+                label = _subplot_ylabel_text(name, unit)
             axis_handle.set_ylabel(label)
             _apply_pg_axis_font(axis_handle.y_axis_item())
         except Exception:
@@ -3329,15 +3351,20 @@ class TimeDomainCanvasPG(QWidget):
     def set_remark_enabled(self, enabled):
         """Enable or disable annotation mode; changes cursor shape."""
         self._annotation_enabled = bool(enabled)
+        self._clear_annotation_press_state()
         try:
             vp = self._glw.viewport()
             if vp:
                 if self._annotation_enabled:
-                    vp.setCursor(Qt.CrossCursor)
+                    vp.setCursor(_annotation_pen_cursor())
                 else:
                     vp.setCursor(Qt.ArrowCursor)
         except Exception:
             pass
+
+    def _clear_annotation_press_state(self):
+        self._annotation_press_pos = None
+        self._annotation_press_dragged = False
 
     def _remark_target_axis_handle(self, viewport_pos):
         scene_pos = self._viewport_pos_to_scene(viewport_pos)
@@ -3351,7 +3378,6 @@ class TimeDomainCanvasPG(QWidget):
         Converts pos to the clicked subplot's data value, then finds the
         nearest sample by screen distance. Returns None if no channels.
         """
-        from PyQt5.QtCore import QPointF as _QPointF
         x_data = self._cursor_data_x_from_viewport_pos(viewport_pos)
         if x_data is None or not self.channel_data:
             return None
@@ -3373,32 +3399,76 @@ class TimeDomainCanvasPG(QWidget):
             scene_pos = None
         best = None
         best_dist = float('inf')
-        for ch, (tf, sf, color, unit) in candidate_items:
+        for ch, (tf, sf, color, _unit) in candidate_items:
             if not len(tf):
                 continue
-            idx = int(np.argmin(np.abs(tf - x_data)))
-            sx, sy = float(tf[idx]), float(sf[idx])
+            ax = self._channel_lines.get(ch, (None, None))[0]
+            if ax is None:
+                ax = target_handle or self._primary_xaxis_ax or (
+                    self.axes_list[0] if self.axes_list else None
+                )
+            vb = ax.view_box if ax else None
             if scene_pos is not None:
                 try:
-                    ax = self._channel_lines.get(ch, (None, None))[0]
-                    if ax is None:
-                        ax = target_handle or self._primary_xaxis_ax or (
-                            self.axes_list[0] if self.axes_list else None
+                    if vb is None:
+                        continue
+                    tf_arr = np.asarray(tf, dtype=float)
+                    sf_arr = np.asarray(sf, dtype=float)
+                    n = min(tf_arr.size, sf_arr.size)
+                    if n == 0:
+                        continue
+                    tf_arr = tf_arr[:n]
+                    sf_arr = sf_arr[:n]
+                    finite = np.isfinite(tf_arr) & np.isfinite(sf_arr)
+                    if not finite.any():
+                        continue
+                    tf_arr = tf_arr[finite]
+                    sf_arr = sf_arr[finite]
+                    try:
+                        x_range, _y_range = vb.viewRange()
+                        rect = vb.sceneBoundingRect()
+                        span = abs(float(x_range[1]) - float(x_range[0]))
+                        width = max(float(rect.width()), 1.0)
+                        half_window = max((span / width) * 48.0, 1e-12)
+                    except Exception:
+                        half_window = 0.0
+                    if half_window > 0.0:
+                        idxs = np.flatnonzero(np.abs(tf_arr - x_data) <= half_window)
+                    else:
+                        idxs = np.asarray([], dtype=int)
+                    if idxs.size == 0:
+                        nearest_idx = int(np.argmin(np.abs(tf_arr - x_data)))
+                        start = max(0, nearest_idx - 32)
+                        stop = min(tf_arr.size, nearest_idx + 33)
+                        idxs = np.arange(start, stop, dtype=int)
+                    scene_pts = self._map_view_points_to_scene(
+                        vb, tf_arr[idxs], sf_arr[idxs]
+                    )
+                    if scene_pts is None or scene_pts.size == 0:
+                        continue
+                    dist_sq = (
+                        (scene_pts[:, 0] - float(scene_pos.x())) ** 2
+                        + (scene_pts[:, 1] - float(scene_pos.y())) ** 2
+                    )
+                    local_i = int(np.argmin(dist_sq))
+                    dist = float(dist_sq[local_i])
+                    if dist < best_dist:
+                        src_idx = int(idxs[local_i])
+                        best_dist = dist
+                        best = (
+                            ch,
+                            float(tf_arr[src_idx]),
+                            float(sf_arr[src_idx]),
+                            color,
                         )
-                    vb = ax.view_box if ax else None
-                    if vb:
-                        pt = vb.mapViewToScene(_QPointF(sx, sy))
-                        dist = (pt.x() - scene_pos.x()) ** 2 + (
-                            pt.y() - scene_pos.y()
-                        ) ** 2
-                        if dist < best_dist:
-                            best_dist = dist
-                            best = (ch, sx, sy, color)
                 except Exception:
                     if best is None:
-                        best = (ch, sx, sy, color)
+                        idx = int(np.argmin(np.abs(tf - x_data)))
+                        best = (ch, float(tf[idx]), float(sf[idx]), color)
             else:
                 if best is None:
+                    idx = int(np.argmin(np.abs(tf - x_data)))
+                    sx, sy = float(tf[idx]), float(sf[idx])
                     best = (ch, sx, sy, color)
         return best
 
@@ -3445,9 +3515,9 @@ class TimeDomainCanvasPG(QWidget):
         )
         vb.addItem(leader)
         # Text label.
-        label_text = self._format_remark_label(dx, dy)
+        label_text = self._format_remark_label(dx, dy, color)
         text = pg.TextItem(
-            text=label_text,
+            html=label_text,
             color=color,
             fill=pg.mkBrush(255, 255, 255, 210),
             border=pg.mkPen(color, width=0.8),
@@ -3476,9 +3546,13 @@ class TimeDomainCanvasPG(QWidget):
                 return result
             text.itemChange = patched_item_change
 
-    def _format_remark_label(self, x_value, y_value):
+    def _format_remark_label(self, x_value, y_value, color=None):
         """Return the compact coordinate label shown by point remarks."""
-        return f"X={x_value:.4g}\nY={y_value:.4g}"
+        y_color = str(color or "#1769e0")
+        return (
+            f"<div>X={x_value:.4g}</div>"
+            f"<div style='color:{y_color}; font-weight:600;'>Y={y_value:.4g}</div>"
+        )
 
     def _remark_item_at_viewport_pos(self, viewport_pos):
         """Return the remark under a viewport click, or None.
@@ -3529,6 +3603,61 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             return None
         return None
+
+    def _annotation_drag_threshold(self):
+        try:
+            return max(1, int(QApplication.startDragDistance()))
+        except Exception:
+            return 10
+
+    def _handle_annotation_mouse_press(self, event):
+        if not self._annotation_enabled:
+            return None
+        if event.button() == Qt.RightButton:
+            scene_pos = self._viewport_pos_to_scene(event.pos())
+            self._last_rclick_scene_pos = scene_pos
+            self._remove_remark_at(scene_pos)
+            self._clear_annotation_press_state()
+            return True
+        if event.button() != Qt.LeftButton:
+            return None
+        if self._remark_item_at_viewport_pos(event.pos()) is not None:
+            self._clear_annotation_press_state()
+            return False
+        self._annotation_press_pos = event.pos()
+        self._annotation_press_dragged = False
+        return False
+
+    def _handle_annotation_mouse_move(self, event):
+        if not self._annotation_enabled or self._annotation_press_pos is None:
+            return None
+        try:
+            if event.buttons() & Qt.LeftButton:
+                delta = event.pos() - self._annotation_press_pos
+                if delta.manhattanLength() >= self._annotation_drag_threshold():
+                    self._annotation_press_dragged = True
+        except Exception:
+            pass
+        return False
+
+    def _handle_annotation_mouse_release(self, event):
+        if not self._annotation_enabled or self._annotation_press_pos is None:
+            return None
+        if event.button() != Qt.LeftButton:
+            self._clear_annotation_press_state()
+            return None
+        start_pos = self._annotation_press_pos
+        try:
+            delta = event.pos() - start_pos
+            moved = delta.manhattanLength() >= self._annotation_drag_threshold()
+        except Exception:
+            moved = self._annotation_press_dragged
+        dragged = self._annotation_press_dragged or moved
+        self._clear_annotation_press_state()
+        if dragged:
+            return False
+        self._add_remark(event.pos())
+        return True
 
     def _update_remark_leader(self, remark):
         """Redraw leader line from data point to text label current position."""
@@ -4002,19 +4131,9 @@ class TimeDomainCanvasPG(QWidget):
                     # Return False so the GraphicsView still processes the
                     # event for its own bookkeeping; we do not consume it.
             elif event.type() == QEvent.MouseButtonPress:
-                # Annotation mode: left-click blank/data space adds a remark;
-                # left-click on an existing label is left to Qt so it can drag.
-                if self._annotation_enabled:
-                    if event.button() == Qt.RightButton:
-                        scene_pos = self._viewport_pos_to_scene(event.pos())
-                        self._last_rclick_scene_pos = scene_pos
-                        self._remove_remark_at(scene_pos)
-                        return True
-                    if event.button() == Qt.LeftButton:
-                        if self._remark_item_at_viewport_pos(event.pos()) is not None:
-                            return False
-                        self._add_remark(event.pos())
-                        return True
+                annotation_result = self._handle_annotation_mouse_press(event)
+                if annotation_result is not None:
+                    return annotation_result
                 # Overlay selection / Y-drag begin takes precedence over
                 # cursor placement, but only outside cursor mode (cursor
                 # mode wins, matching canvases.py:853). _handle_overlay_
@@ -4024,11 +4143,19 @@ class TimeDomainCanvasPG(QWidget):
                 if self._handle_cursor_mouse_press(event):
                     return True
             elif event.type() == QEvent.MouseMove:
+                annotation_result = self._handle_annotation_mouse_move(event)
+                if annotation_result is not None:
+                    return annotation_result
                 if self._handle_overlay_mouse_move(event):
                     return True
                 if self._handle_cursor_mouse_move(event):
                     return True
             elif event.type() == QEvent.MouseButtonRelease:
+                annotation_result = self._handle_annotation_mouse_release(event)
+                if annotation_result is not None:
+                    if annotation_result:
+                        self.schedule_idle_quality()
+                    return annotation_result
                 if self._handle_overlay_mouse_release(event):
                     return True
                 self.schedule_idle_quality()
@@ -4967,7 +5094,7 @@ class TimeDomainCanvasPG(QWidget):
             return False
         if len(self.axes_list) >= 4:
             return True
-        for _handle, name, _color in self._subplot_label_specs:
+        for _handle, name, _color, _unit in self._subplot_label_specs:
             text = str(name)
             if len(text) > 32 or (text.startswith("[") and "]" in text):
                 return True
@@ -5059,7 +5186,7 @@ class TimeDomainCanvasPG(QWidget):
         self._teardown_inside_labels()
 
         need_inside = self._subplot_ylabels_need_inside_labels()
-        for handle, name, color in self._subplot_label_specs:
+        for handle, name, color, unit in self._subplot_label_specs:
             ax_item = handle._ax("left") if hasattr(handle, "_ax") else None
             if need_inside:
                 # Hide the outer label by clearing it; install a TextItem
@@ -5070,7 +5197,11 @@ class TimeDomainCanvasPG(QWidget):
                     except Exception:
                         pass
                 prefix, rest = _split_prefixed_label(str(name))
-                label_text = f"{prefix}\n{rest}" if prefix is not None else str(name)
+                unit_suffix = f" ({unit})" if unit else ""
+                if prefix is not None:
+                    label_text = f"{prefix}\n{rest}{unit_suffix}"
+                else:
+                    label_text = f"{str(name)}{unit_suffix}"
                 text_item = pg.TextItem(
                     text=f"● {label_text}",
                     color=pg.mkColor(color),
@@ -5109,7 +5240,7 @@ class TimeDomainCanvasPG(QWidget):
                 # Outside: ensure the standard axis label is set.
                 if ax_item is not None:
                     try:
-                        ax_item.setLabel(text=str(name))
+                        ax_item.setLabel(text=_subplot_ylabel_text(name, unit))
                         _apply_pg_axis_font(ax_item)
                     except Exception:
                         pass

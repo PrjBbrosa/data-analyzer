@@ -4,7 +4,11 @@ import pytest
 
 from mf4_analyzer.io.loader import DataLoader
 from mf4_analyzer.ui.drawers.batch.input_panel import _default_probe_signals_for
-from tests._helpers.mf4_factory import write_source_path_mf4
+from tests._helpers.mf4_factory import (
+    write_conversion_unit_mf4,
+    write_single_channel_mf4,
+    write_source_path_mf4,
+)
 
 
 def test_load_mf4_deduplicates_source_path_aliases(tmp_path):
@@ -52,3 +56,23 @@ def test_load_mf4_keeps_source_path_when_short_name_is_ambiguous(tmp_path):
     assert df["ECU2.sig"].tolist() == pytest.approx([5.0, 6.0, 7.0, 8.0])
     assert units["ECU1.sig"] == "V"
     assert units["ECU2.sig"] == "V"
+
+
+def test_load_mf4_reads_unit_from_conversion_block(tmp_path):
+    mf4 = write_conversion_unit_mf4(
+        tmp_path / "conv_unit.mf4", name="trq", unit="Nm"
+    )
+
+    df, channels, units = DataLoader.load_mf4(str(mf4))
+
+    assert "trq" in channels
+    assert units["trq"] == "Nm"
+    assert df["trq"].tolist() == pytest.approx([1.0, 2.0, 3.0, 4.0])
+
+
+def test_load_mf4_prefers_signal_unit_over_conversion(tmp_path):
+    mf4 = write_single_channel_mf4(tmp_path / "chan_unit.mf4", name="v", unit="V")
+
+    _df, _channels, units = DataLoader.load_mf4(str(mf4))
+
+    assert units["v"] == "V"
