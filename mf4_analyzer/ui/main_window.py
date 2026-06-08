@@ -1367,6 +1367,44 @@ class MainWindow(QMainWindow):
         self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
         self.toast(f"已关闭 {name}", "info")
 
+    def save_project(self, path):
+        """Serialize the current session (open files + all Views) to a
+        reference-only ``.tlproj`` JSON file. No UI entry point yet — this is
+        the callable used by tests and a future menu/button."""
+        from pathlib import Path
+        from . import project_io as pio
+        path = Path(path)
+
+        self._capture_focused_view()
+
+        file_refs = []
+        for fid, fd in self.files.items():
+            abs_p = str(Path(fd.filepath).resolve())
+            file_refs.append(pio.ProjectFileRef(
+                fid=fid,
+                path_abs=abs_p,
+                path_rel=pio.make_relative(abs_p, path),
+                fs=float(fd.fs),
+                time_source=fd._time_source,
+            ))
+
+        vm = {
+            "active": int(self.view_manager.active),
+            "split_pairs": {
+                str(host): int(src)
+                for host, src in self.view_manager._split_pairs.items()
+            },
+        }
+        doc = pio.ProjectDocument(
+            active_file=self._active,
+            current_mode=self.chart_stack.current_mode(),
+            files=file_refs,
+            views=[v.to_dict() for v in self.view_manager.views],
+            view_manager=vm,
+        )
+        pio.save_project_to_json(doc, path)
+        self.statusBar.showMessage(f"已保存项目: {path.name}")
+
     def close_all(self):
         if not self.files:
             return
