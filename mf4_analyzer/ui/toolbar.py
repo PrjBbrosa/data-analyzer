@@ -59,6 +59,7 @@ class Toolbar(QWidget):
             self.btn_add,
             self.btn_export,
             self.btn_batch,
+            self.btn_acquisition_cockpit,
         ):
             left.addWidget(b)
 
@@ -90,7 +91,6 @@ class Toolbar(QWidget):
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(10)
         right.addStretch(1)
-        right.addWidget(self.btn_acquisition_cockpit)
 
         # A right widget of the same fixed width as left_widget keeps the
         # segment_frame exactly centered while hosting right-aligned controls.
