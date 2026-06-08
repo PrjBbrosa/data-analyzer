@@ -219,6 +219,7 @@ class MainWindow(QMainWindow):
         self._install_status_hint_bar(self.chart_stack.current_mode())
         self.chart_stack.mode_changed.connect(self._install_status_hint_bar)
         self.statusBar.showMessage("Ready")
+        self._install_update_indicator()
 
         # Floating toast (constructed lazily on first use; the parent must
         # be the main window so the toast floats above the central canvas).
@@ -228,6 +229,35 @@ class MainWindow(QMainWindow):
         self._copy_thumbnail = CopyThumbnail(self)
         self._copy_thumbnail.clicked.connect(self._open_markup_editor)
         self._markup_editor = None
+
+    def _install_update_indicator(self):
+        """Far-right status-bar update affordance: a cloud-download icon
+        (no text, hover '检查更新') + the app version, linking to the release
+        page."""
+        from PyQt5.QtCore import Qt, QSize
+        from PyQt5.QtWidgets import QToolButton, QLabel
+        from ..ui_kit.icons import Icons
+        from .. import app_meta
+
+        self._update_btn = QToolButton(self)
+        self._update_btn.setIcon(Icons.cloud_download())
+        self._update_btn.setIconSize(QSize(18, 18))
+        self._update_btn.setAutoRaise(True)
+        self._update_btn.setCursor(Qt.PointingHandCursor)
+        self._update_btn.setToolTip("检查更新")
+        self._update_btn.clicked.connect(self._open_release_page)
+
+        self._version_label = QLabel(app_meta.APP_VERSION, self)
+        self._version_label.setObjectName("versionTag")
+
+        self.statusBar.addPermanentWidget(self._update_btn)
+        self.statusBar.addPermanentWidget(self._version_label)
+
+    def _open_release_page(self):
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+        from .. import app_meta
+        QDesktopServices.openUrl(QUrl(app_meta.RELEASE_URL))
 
     def _install_status_hint_bar(self, mode=None):
         """Keep exactly one mode hint bar in the global status line."""
@@ -242,7 +272,7 @@ class MainWindow(QMainWindow):
             current.hide()
             current.setParent(None)
         self._status_hint_bar = self.chart_stack.take_hint_bar(mode, self.statusBar)
-        self.statusBar.addPermanentWidget(self._status_hint_bar, 1)
+        self.statusBar.insertPermanentWidget(0, self._status_hint_bar, 1)
         self._status_hint_bar.show()
 
     # ---- public toast helper ----
