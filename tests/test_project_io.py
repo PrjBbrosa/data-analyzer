@@ -68,3 +68,30 @@ def test_resolve_missing_returns_none(tmp_path):
     ref = pio.ProjectFileRef(fid="f0", path_abs="/gone/x.csv",
                              path_rel="also/gone.csv", fs=1000.0, time_source="generated")
     assert pio.resolve_file_path(ref, proj) is None
+
+
+def test_remap_rewrites_and_drops():
+    view = {
+        "name": "V", "tab_color": "#fff",
+        "checked": [["f0", "rpm"], ["f1", "spd"]],
+        "colors": {'["f0","rpm"]': "#ff0000", '["f1","spd"]': "#00ff00"},
+        "overlay_primary": ["f1", "spd"],
+        "ylims": {"[a] rpm": [0.0, 10.0]},
+        "axis_opts": {"x_axis": {"mode": "channel", "fid": "f1",
+                                 "channel": "spd", "label": "spd"}},
+    }
+    # f0 -> f3 kept; f1 missing (absent from map) -> dropped
+    out = pio.remap_view_fids([view], {"f0": "f3"})[0]
+    assert out["checked"] == [["f3", "rpm"]]
+    assert out["colors"] == {'["f3","rpm"]': "#ff0000"}
+    assert out["overlay_primary"] is None
+    assert out["ylims"] == {"[a] rpm": [0.0, 10.0]}          # untouched
+    assert out["axis_opts"]["x_axis"]["fid"] is None
+    assert out["axis_opts"]["x_axis"]["mode"] == "time"
+
+
+def test_remap_identity_when_map_matches():
+    view = {"name": "V", "tab_color": "#fff",
+            "checked": [["f0", "rpm"]], "colors": {}, "overlay_primary": None}
+    out = pio.remap_view_fids([view], {"f0": "f0"})[0]
+    assert out["checked"] == [["f0", "rpm"]]

@@ -116,3 +116,51 @@ def resolve_file_path(ref: ProjectFileRef, project_path) -> "Path | None":
     if cand.exists():
         return cand
     return None
+
+
+def _encode_channel_key(fid: str, channel: str) -> str:
+    # Matches ui.view_state._encode_channel_key exactly.
+    return json.dumps([fid, channel], ensure_ascii=False, separators=(",", ":"))
+
+
+def remap_view_fids(views: list, fid_map: dict) -> list:
+    """Rewrite the fid of every channel reference in a list of
+    ``ViewState.to_dict()`` payloads, dropping references whose fid is absent
+    from ``fid_map`` (the file went missing on load)."""
+    out = []
+    for view in views:
+        v = dict(view)
+
+        v["checked"] = [
+            [fid_map[fid], ch]
+            for fid, ch in (tuple(x) for x in view.get("checked", []))
+            if fid in fid_map
+        ]
+
+        new_colors = {}
+        for key, color in (view.get("colors") or {}).items():
+            fid, ch = json.loads(key)
+            if fid in fid_map:
+                new_colors[_encode_channel_key(fid_map[fid], ch)] = color
+        v["colors"] = new_colors
+
+        op = view.get("overlay_primary")
+        v["overlay_primary"] = (
+            [fid_map[op[0]], op[1]] if op and op[0] in fid_map else None
+        )
+
+        axis = dict(view.get("axis_opts") or {})
+        if "x_axis" in axis:
+            xaxis = dict(axis["x_axis"])
+            xfid = xaxis.get("fid")
+            if xfid is not None and xfid in fid_map:
+                xaxis["fid"] = fid_map[xfid]
+            elif xfid is not None:
+                xaxis["fid"] = None
+                xaxis["channel"] = None
+                xaxis["mode"] = "time"
+            axis["x_axis"] = xaxis
+            v["axis_opts"] = axis
+
+        out.append(v)
+    return out
