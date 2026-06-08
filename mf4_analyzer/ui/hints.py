@@ -75,12 +75,6 @@ _HINTS = (
         priority=90,
     ),
     Hint(
-        id="chart.options",
-        text="双击图面 打开图表选项",
-        surface="persistent",
-        priority=80,
-    ),
-    Hint(
         id="toolbar.shortcuts_exist",
         text="顶部按钮支持快捷键，悬停按钮即可查看",
         surface="discovery",

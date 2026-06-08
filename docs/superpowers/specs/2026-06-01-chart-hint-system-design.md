@@ -51,7 +51,6 @@ the bar (still reachable; some move to tooltips).
 | --- | --- | --- |
 | `wheel.zoom_x` | `Ctrl + 滚轮 缩放 X` | modifier-only, invisible |
 | `wheel.zoom_y` | `Shift + 滚轮 缩放 Y` | modifier-only, invisible |
-| `chart.options` | `双击图面 打开图表选项` | no affordance for the dialog |
 
 ### Discovery — "this exists" (one-time, retire-on-use)
 

@@ -772,7 +772,7 @@ def test_time_toolbar_controls_fit_when_inspector_narrows_chart(qapp, qtbot):
         assert button.geometry().right() <= right_edge
 
 
-def test_time_card_quality_indicator_sits_on_canvas_lower_left(qapp, qtbot):
+def test_time_card_quality_indicator_sits_on_canvas_lower_right(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
     cs.resize(900, 520)
@@ -788,9 +788,9 @@ def test_time_card_quality_indicator_sits_on_canvas_lower_left(qapp, qtbot):
     canvas_rect = card.canvas.geometry()
     dot_rect = indicator.geometry()
     assert canvas_rect.contains(dot_rect.center())
-    assert dot_rect.left() >= canvas_rect.left()
+    assert dot_rect.right() <= canvas_rect.right()
     assert dot_rect.bottom() <= canvas_rect.bottom()
-    assert dot_rect.left() - canvas_rect.left() <= 12
+    assert canvas_rect.right() - dot_rect.right() <= 12
     assert canvas_rect.bottom() - dot_rect.bottom() <= 12
 
 
