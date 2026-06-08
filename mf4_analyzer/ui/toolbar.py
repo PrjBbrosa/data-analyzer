@@ -1,10 +1,12 @@
 """Top three-segment toolbar: file actions · mode switcher · canvas actions."""
-from PyQt5.QtCore import QSize, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import (
-    QButtonGroup, QFrame, QHBoxLayout, QPushButton, QSizePolicy, QWidget,
+    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QSizePolicy, QWidget,
 )
 
+from .. import app_meta
 from ..ui_kit.icons import Icons
 
 
@@ -91,6 +93,18 @@ class Toolbar(QWidget):
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(10)
         right.addStretch(1)
+
+        self._logo_label = QLabel(self)
+        self._logo_label.setToolTip("博世华域转向系统有限公司")
+        _logo_src = QPixmap(str(app_meta.asset_path("branding", "bosch_hasco_logo.png")))
+        if not _logo_src.isNull():
+            _app = QApplication.instance()
+            _dpr = _app.devicePixelRatio() if _app is not None else 1.0
+            _dpr = _dpr if _dpr and _dpr >= 1.0 else 1.0
+            _scaled = _logo_src.scaledToWidth(int(190 * _dpr), Qt.SmoothTransformation)
+            _scaled.setDevicePixelRatio(_dpr)
+            self._logo_label.setPixmap(_scaled)
+        right.addWidget(self._logo_label)
 
         # A right widget of the same fixed width as left_widget keeps the
         # segment_frame exactly centered while hosting right-aligned controls.

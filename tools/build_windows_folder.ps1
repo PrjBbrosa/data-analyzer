@@ -103,6 +103,8 @@ Copy-Item -Recurse -Force -Path $PyxcpSrc -Destination (Join-Path $VendorPyxcpDi
 Write-Step "Building folder-style exe with PyInstaller"
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
 $AddDataIcons = "$IconsDir;assets\icons"
+$BrandingDir = Join-Path $RepoRoot "assets\branding"
+$AddDataBranding = "$BrandingDir;assets\branding"
 $AddDataVendorPyxcp = "$VendorPyxcpDir;_vendor_pyxcp"
 $HiddenImports = @(
     "mf4_analyzer.ui_kit",
@@ -152,6 +154,7 @@ $PyInstallerArgs += @(
     "--specpath", $SpecDir,
     "--add-data", $AddDataStyle,
     "--add-data", $AddDataIcons,
+    "--add-data", $AddDataBranding,
     "--add-data", $AddDataVendorPyxcp,
     "--runtime-hook", $RuntimeHookPyxcp,
     "--exclude-module", "pyxcp",
