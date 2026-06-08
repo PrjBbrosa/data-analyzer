@@ -1455,16 +1455,18 @@ class MainWindow(QMainWindow):
         self._active = fid_map.get(doc.active_file)
         self.chart_stack.set_mode(doc.current_mode)
 
-        try:
-            self._apply_active_view(self.view_manager.active)
-        except Exception:
-            pass
-
         if missing:
             QMessageBox.warning(
                 self, "部分文件缺失",
                 "以下文件找不到，已跳过：\n" + "\n".join(missing),
             )
+
+        try:
+            self._apply_active_view(self.view_manager.active)
+        except Exception:
+            self.statusBar.showMessage(f"已打开项目: {path.name}（渲染恢复失败）")
+            return
+
         self.statusBar.showMessage(f"已打开项目: {path.name}")
 
     def close_all(self):
