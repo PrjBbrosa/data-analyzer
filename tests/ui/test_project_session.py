@@ -40,3 +40,44 @@ def test_save_project_writes_file(qapp, tmp_path):
     assert doc.files[0].path_rel == "a.csv"
     assert doc.views[0]["name"] == "主视图"
     assert doc.current_mode == "time"
+
+
+def test_open_project_roundtrip(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    csv_b = tmp_path / "b.csv"; _write_csv(csv_b)
+    proj = tmp_path / "s.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    mw._load_one(str(csv_b))
+    mw.view_manager.rename(0, "主视图")
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    mw2.open_project(proj)
+    assert [fd.filename for fd in mw2.files.values()] == ["a.csv", "b.csv"]
+    assert mw2.view_manager.views[0].name == "主视图"
+    assert mw2.chart_stack.current_mode() == "time"
+
+
+def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from PyQt5.QtWidgets import QMessageBox
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    csv_b = tmp_path / "b.csv"; _write_csv(csv_b)
+    proj = tmp_path / "s.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    mw._load_one(str(csv_b))
+    mw.save_project(proj)
+    csv_b.unlink()  # make one file missing
+
+    warned = {}
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *a, **k: warned.setdefault("hit", True))
+    mw2 = MainWindow()
+    mw2.open_project(proj)
+    assert [fd.filename for fd in mw2.files.values()] == ["a.csv"]
+    assert warned.get("hit") is True

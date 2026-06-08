@@ -1405,6 +1405,68 @@ class MainWindow(QMainWindow):
         pio.save_project_to_json(doc, path)
         self.statusBar.showMessage(f"已保存项目: {path.name}")
 
+    def open_project(self, path):
+        """Restore a session from a ``.tlproj`` file: re-read referenced source
+        files (skipping missing ones), reinstall saved Views with fids remapped
+        to freshly minted ids, and select the saved active file / mode."""
+        from pathlib import Path
+        from PyQt5.QtWidgets import QMessageBox
+        from . import project_io as pio
+        from .view_state import ViewState
+        path = Path(path)
+
+        doc = pio.load_project_from_json(path)
+        self.close_all()
+
+        fid_map = {}
+        missing = []
+        for ref in doc.files:
+            resolved = pio.resolve_file_path(ref, path)
+            if resolved is None:
+                missing.append(ref.path_abs)
+                continue
+            before = len(self.files)
+            self._load_one(str(resolved))
+            if len(self.files) <= before:
+                missing.append(ref.path_abs)
+                continue
+            new_fid = next(reversed(self.files))
+            fid_map[ref.fid] = new_fid
+            fd = self.files[new_fid]
+            fd.fs = float(ref.fs)
+            if ref.time_source in ("generated", "manual"):
+                fd.rebuild_time_axis(float(ref.fs))
+
+        remapped = pio.remap_view_fids(doc.views, fid_map)
+        states = [ViewState.from_dict(v) for v in remapped]
+        if not states:
+            states = [self.view_manager._make(0)]
+        self.view_manager.views = states
+        self.view_manager._split_pairs = {
+            int(host): int(src)
+            for host, src in (doc.view_manager.get("split_pairs") or {}).items()
+            if 0 <= int(host) < len(states) and 0 <= int(src) < len(states)
+        }
+        active_idx = int(doc.view_manager.get("active", 0))
+        self.view_manager.active = max(0, min(active_idx, len(states) - 1))
+        self.view_manager._set_active_split_from_pairs()
+        self.view_manager.views_changed.emit()
+
+        self._active = fid_map.get(doc.active_file)
+        self.chart_stack.set_mode(doc.current_mode)
+
+        try:
+            self._apply_active_view(self.view_manager.active)
+        except Exception:
+            pass
+
+        if missing:
+            QMessageBox.warning(
+                self, "部分文件缺失",
+                "以下文件找不到，已跳过：\n" + "\n".join(missing),
+            )
+        self.statusBar.showMessage(f"已打开项目: {path.name}")
+
     def close_all(self):
         if not self.files:
             return
