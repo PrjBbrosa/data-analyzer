@@ -102,3 +102,17 @@ def make_relative(path_abs: str, project_path) -> str | None:
         return os.path.relpath(path_abs, Path(project_path).parent)
     except ValueError:
         return None
+
+
+def resolve_file_path(ref: ProjectFileRef, project_path) -> "Path | None":
+    """Locate a referenced file: path_rel (relative to the .tlproj) first,
+    then path_abs. Returns None when neither exists."""
+    project_dir = Path(project_path).parent
+    if ref.path_rel:
+        cand = (project_dir / ref.path_rel).resolve()
+        if cand.exists():
+            return cand
+    cand = Path(ref.path_abs)
+    if cand.exists():
+        return cand
+    return None

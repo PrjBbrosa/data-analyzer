@@ -42,3 +42,29 @@ def test_unknown_version_rejected(tmp_path):
     path.write_text(json.dumps({"schema_version": 999}), encoding="utf-8")
     with pytest.raises(pio.UnsupportedProjectVersion):
         pio.load_project_from_json(path)
+
+
+def test_resolve_prefers_relative(tmp_path):
+    (tmp_path / "data").mkdir()
+    real = tmp_path / "data" / "a.csv"
+    real.write_text("x", encoding="utf-8")
+    proj = tmp_path / "s.tlproj"
+    ref = pio.ProjectFileRef(fid="f0", path_abs="/gone/a.csv",
+                             path_rel="data/a.csv", fs=1000.0, time_source="generated")
+    assert pio.resolve_file_path(ref, proj) == real.resolve()
+
+
+def test_resolve_falls_back_to_abs(tmp_path):
+    real = tmp_path / "b.csv"
+    real.write_text("x", encoding="utf-8")
+    proj = tmp_path / "s.tlproj"
+    ref = pio.ProjectFileRef(fid="f0", path_abs=str(real),
+                             path_rel="missing/b.csv", fs=1000.0, time_source="generated")
+    assert pio.resolve_file_path(ref, proj) == real
+
+
+def test_resolve_missing_returns_none(tmp_path):
+    proj = tmp_path / "s.tlproj"
+    ref = pio.ProjectFileRef(fid="f0", path_abs="/gone/x.csv",
+                             path_rel="also/gone.csv", fs=1000.0, time_source="generated")
+    assert pio.resolve_file_path(ref, proj) is None
