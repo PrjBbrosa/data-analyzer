@@ -343,6 +343,22 @@ class Icons:
             p.drawLine(QPointF(12, 8.5), QPointF(15, 8.5))
         return _line_icon(draw, c)
 
+    @classmethod
+    def cloud_download(cls):
+        """Cloud outline + down arrow — 'get the latest version'."""
+        def draw(p):
+            cloud = QPainterPath()
+            cloud.moveTo(6.0, 13.0)
+            cloud.cubicTo(2.6, 13.0, 2.6, 8.6, 6.3, 8.4)
+            cloud.cubicTo(6.7, 4.7, 12.4, 4.4, 13.2, 8.1)
+            cloud.cubicTo(16.6, 7.9, 16.9, 12.7, 13.8, 13.0)
+            cloud.lineTo(6.0, 13.0)
+            p.drawPath(cloud)
+            p.drawLine(QPointF(10.0, 9.5), QPointF(10.0, 16.8))
+            p.drawLine(QPointF(7.4, 14.0), QPointF(10.0, 16.8))
+            p.drawLine(QPointF(12.6, 14.0), QPointF(10.0, 16.8))
+        return _line_icon(draw, GRAY)
+
 
 # =============================================================================
 # QSS subcontrol-arrow icon cache (scheme B: qtawesome -> PNG -> QSS image:url)
