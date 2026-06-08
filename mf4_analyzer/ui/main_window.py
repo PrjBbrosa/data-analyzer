@@ -27,6 +27,7 @@ from PyQt5.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer
 from .canvases import CHART_TIGHT_LAYOUT_KW
+from .. import app_meta
 
 
 class FFTTimeWorker(QObject):
@@ -84,7 +85,7 @@ class FFTTimeWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("TraceLab v6.5")
+        self.setWindowTitle(app_meta.WINDOW_TITLE)
         self.setGeometry(100, 100, 1450, 850);
         # Spec §9 minimum window size: 1100 × 640.
         self.setMinimumSize(1100, 640)
