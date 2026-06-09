@@ -16,6 +16,7 @@ class Hint:
     id: str
     text: str
     surface: str
+    scope: str = "chart"
     tier: str = "S"
     modes: frozenset[str] = field(default_factory=frozenset)
     plot_modes: frozenset[str] = field(default_factory=frozenset)
@@ -112,11 +113,12 @@ _HINTS = (
     ),
     Hint(
         id="markup.capabilities",
-        text="裁剪 / 箭头 / 文字 / 序号，支持撤销",
+        text="箭头键移动标注，Shift 加速 · 双击文本可编辑 · 工具支持单键切换（悬停按钮看键位）",
         surface="discovery",
+        scope="markup",
         retire_on="markup_open",
         priority=40,
-        ship="later",
+        ship="now",
     ),
     Hint(
         id="overlay.drag_y",
@@ -192,20 +194,22 @@ def shortcut_tooltip(action_key):
     return _SHORTCUTS.get(action_key)
 
 
-def context_hints(state):
+def context_hints(state, scope="chart"):
     matches = [
         hint for hint in _HINTS
         if hint.surface == "context"
+        and hint.scope == scope
         and hint.id not in state.recently_used
         and _matches_state(hint, state)
     ]
     return tuple(sorted(matches, key=_context_sort_key))
 
 
-def discovery_hint(state):
+def discovery_hint(state, scope="chart"):
     candidates = [
         hint for hint in _HINTS
         if hint.surface == "discovery"
+        and hint.scope == scope
         and hint.ship == "now"
         and hint.id not in state.discovered
         and _matches_state(hint, state)

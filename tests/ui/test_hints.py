@@ -108,6 +108,39 @@ def test_shortcut_tooltip_returns_exact_registered_key():
     assert hints.shortcut_tooltip("missing") is None
 
 
+def test_hint_scope_defaults_to_chart():
+    assert all(
+        hint.scope == "chart"
+        for hint in hints.all_hints()
+        if hint.id != "markup.capabilities"
+    )
+
+
+def test_markup_capabilities_is_markup_scoped_ship_now_discovery():
+    hint = next(h for h in hints.all_hints() if h.id == "markup.capabilities")
+    assert hint.scope == "markup"
+    assert hint.surface == "discovery"
+    assert hint.ship == "now"
+    assert "箭头键" in hint.text
+    assert "双击文本" in hint.text
+
+
+def test_chart_discovery_queue_excludes_markup_scope():
+    state = HintState()
+    ids = []
+    while (hint := hints.discovery_hint(state)) is not None:
+        ids.append(hint.id)
+        state = HintState(discovered=state.discovered | {hint.id})
+    assert "markup.capabilities" not in ids
+
+
+def test_markup_scope_discovery_returns_then_retires_capabilities():
+    fresh = HintState()
+    assert hints.discovery_hint(fresh, scope="markup").id == "markup.capabilities"
+    retired = HintState(discovered=frozenset({"markup.capabilities"}))
+    assert hints.discovery_hint(retired, scope="markup") is None
+
+
 def test_design_curated_ids_exist_in_registry():
     spec = (
         "docs/superpowers/specs/2026-06-01-chart-hint-system-design.md"
