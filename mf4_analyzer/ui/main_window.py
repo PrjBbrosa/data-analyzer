@@ -1804,6 +1804,9 @@ class MainWindow(QMainWindow):
                 canvas.invalidate_envelope_cache("range filter changed")
             self._last_range_state = cur_range_state
 
+        from .chart_stack import _STATS_STRIP_ENABLED
+        collect_stats = update_primary_ui and _STATS_STRIP_ENABLED
+
         data = [];
         st = {}
         for fid, ch, color in checked:
@@ -1831,8 +1834,9 @@ class MainWindow(QMainWindow):
             # Statistics are computed from the (post-range-filter)
             # original samples — never from envelope output.
             data.append((name, True, x_axis, sig, color, unit, fid))
-            st[name] = {'min': np.min(sig), 'max': np.max(sig), 'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
-                        'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit}
+            if collect_stats:
+                st[name] = {'min': np.min(sig), 'max': np.max(sig), 'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
+                            'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit}
         if not data:
             canvas.clear()
             canvas.draw()
@@ -1851,7 +1855,8 @@ class MainWindow(QMainWindow):
         # If you need a per-range export tool, re-enable explicitly behind a
         # toolbar button rather than always-on.
         if update_primary_ui:
-            self.chart_stack.stats_strip.update_stats(st);
+            if collect_stats:
+                self.chart_stack.stats_strip.update_stats(st);
             self.statusBar.showMessage(f"绘制: {len(checked)} 通道, {len(set(fid for fid, _, _ in checked))} 文件")
 
     def open_editor(self):

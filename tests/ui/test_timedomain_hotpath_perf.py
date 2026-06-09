@@ -8,7 +8,9 @@ any rendered output (rendered-output parity is covered by the existing
 test_pg_timedomain_canvas.py suite).
 """
 import numpy as np
+import pandas as pd
 
+from mf4_analyzer.io.file_data import FileData
 from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
 
@@ -159,3 +161,71 @@ def test_monotonicity_cached_across_rebuilds(qtbot, qapp, monkeypatch):
     canvas.invalidate_monotonicity_cache()
     canvas.plot_channels(rows, mode="subplot")
     assert len(calls) == 4  # explicit invalidation forces a rescan
+
+
+def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
+    import types
+
+    from mf4_analyzer.ui import main_window as mw
+    from mf4_analyzer.ui.chart_stack import _STATS_STRIP_ENABLED
+
+    assert _STATS_STRIP_ENABLED is False
+
+    df = pd.DataFrame({
+        "time": np.linspace(0.0, 1.0, 16, dtype=np.float64),
+        "speed": np.linspace(10.0, 20.0, 16, dtype=np.float64),
+    })
+    fd = FileData("x.csv", df, list(df.columns), {"speed": "rpm"}, 0)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("stats function should not run when stats strip is disabled")
+
+    for name in ("min", "max", "mean", "sqrt", "std", "ptp"):
+        monkeypatch.setattr(mw.np, name, forbidden)
+
+    stats_updates = []
+
+    class FakeCanvas:
+        def plot_channels(self, data, mode, xlabel):
+            self.data = data
+            self.mode = mode
+            self.xlabel = xlabel
+
+        def set_tick_density(self, x, y):
+            self.tick_density = (x, y)
+
+        def invalidate_envelope_cache(self, reason):
+            self.invalidated = reason
+
+    fake = types.SimpleNamespace()
+    fake.files = {"fid": fd}
+    fake.channel_list = types.SimpleNamespace(
+        get_checked_channels=lambda: [("fid", "speed", "#1769e0")],
+        get_file_data=lambda fid: fake.files.get(fid),
+    )
+    fake.chart_stack = types.SimpleNamespace(
+        plot_mode_for_canvas=lambda canvas: "subplot",
+        stats_strip=types.SimpleNamespace(update_stats=lambda st: stats_updates.append(st)),
+    )
+    fake.inspector = types.SimpleNamespace(
+        top=types.SimpleNamespace(
+            range_enabled=lambda: False,
+            range_values=lambda: (0.0, 1.0),
+            xaxis_label=lambda: "Time (s)",
+            tick_density=lambda: (10, 8),
+        )
+    )
+    fake._overlay_primary = None
+    fake._last_plot_mode = None
+    fake._last_range_state = None
+    fake._custom_xaxis_fid = None
+    fake._custom_xaxis_ch = None
+    fake._custom_xlabel = None
+    fake._sync_time_range_inputs_from_visible_xlim = lambda: None
+    fake.statusBar = types.SimpleNamespace(showMessage=lambda *_args, **_kwargs: None)
+
+    canvas = FakeCanvas()
+    mw.MainWindow._plot_time_on_canvas(fake, canvas, update_primary_ui=True)
+
+    assert len(canvas.data) == 1
+    assert stats_updates == []
