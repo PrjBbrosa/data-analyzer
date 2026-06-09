@@ -308,6 +308,23 @@ Toolbar QPushButton {
     min-height: 22px;
     padding: 2px 12px;
 }
+Toolbar QPushButton[role="panel-toggle"] {
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background-color: transparent;
+}
+Toolbar QPushButton[role="panel-toggle"]:hover {
+    background-color: #f5f7fb;
+    border-color: #dfe5ee;
+}
+Toolbar QPushButton[role="panel-toggle"]:checked {
+    background-color: #e8efff;
+    border-color: #1769e0;
+    border-radius: 3px;
+}
 Toolbar QPushButton[segment="time"],
 Toolbar QPushButton[segment="fft"],
 Toolbar QPushButton[segment="fft_time"],
@@ -1410,6 +1427,13 @@ QStatusBar {
     border-top: 1px solid #eef2f7;
 }
 
+/* Version tag beside the status-bar update (cloud-download) icon. */
+QStatusBar QLabel#versionTag {
+    color: #8893a6;
+    font-size: 11px;
+    padding-right: 6px;
+}
+
 /* ============ Chart toolbar choice segments ============ */
 QWidget#chartToolbar QPushButton[role="chart-choice"] {
     min-height: 22px;
@@ -1455,13 +1479,6 @@ QFrame#chartToolbarSep {
     border: none;
 }
 
-QToolTip {
-    border: none;
-    border-radius: 8px;
-    background-color: rgba(255, 255, 255, 238);
-    color: #172033;
-    padding: 8px;
-}
 
 QLabel#chartHint {
     padding: 0 12px;

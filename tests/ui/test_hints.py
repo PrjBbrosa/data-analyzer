@@ -11,7 +11,6 @@ def test_persistent_hints_are_curated_universal_set():
     assert hints.persistent_hints() == (
         "Ctrl + 滚轮 缩放 X",
         "Shift + 滚轮 缩放 Y",
-        "双击图面 打开图表选项",
     )
 
 

@@ -27,6 +27,7 @@ from PyQt5.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer
 from .canvases import CHART_TIGHT_LAYOUT_KW
+from .. import app_meta
 
 
 class FFTTimeWorker(QObject):
@@ -84,13 +85,14 @@ class FFTTimeWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("TraceLab v6.3")
+        self.setWindowTitle(app_meta.WINDOW_TITLE)
         self.setGeometry(100, 100, 1450, 850);
         # Spec §9 minimum window size: 1100 × 640.
         self.setMinimumSize(1100, 640)
         self.files = OrderedDict();
         self._fc = 0;
         self._active = None
+        self._project_path = None
         # FFT vs Time LRU cache (Plan Task 6). Keys are produced by
         # ``_fft_time_cache_key`` from compute-relevant fields ONLY —
         # display options (amplitude_mode, cmap, dynamic, freq_*) do
@@ -134,7 +136,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self.toolbar)
 
         from PyQt5.QtWidgets import QHBoxLayout
-        from .side_panels import Side, SidePanelStrip, PeekOverlay, SidePanelController
+        from .side_panels import Side, SidePanelStrip, PeekOverlay, SidePanelController, Ev, PanelState
 
         splitter = QSplitter(Qt.Horizontal, self)
         self.splitter = splitter
@@ -218,6 +220,7 @@ class MainWindow(QMainWindow):
         self._install_status_hint_bar(self.chart_stack.current_mode())
         self.chart_stack.mode_changed.connect(self._install_status_hint_bar)
         self.statusBar.showMessage("Ready")
+        self._install_update_indicator()
 
         # Floating toast (constructed lazily on first use; the parent must
         # be the main window so the toast floats above the central canvas).
@@ -227,6 +230,36 @@ class MainWindow(QMainWindow):
         self._copy_thumbnail = CopyThumbnail(self)
         self._copy_thumbnail.clicked.connect(self._open_markup_editor)
         self._markup_editor = None
+
+    def _install_update_indicator(self):
+        """Far-right status-bar update affordance: a cloud-download icon
+        (no text, hover '检查更新') + the app version, linking to the release
+        page."""
+        from PyQt5.QtCore import Qt, QSize
+        from PyQt5.QtWidgets import QToolButton
+        from ..ui_kit.icons import Icons
+        from .. import app_meta
+
+        self._update_btn = QToolButton(self)
+        self._update_btn.setIcon(Icons.cloud_download())
+        self._update_btn.setIconSize(QSize(18, 18))
+        self._update_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._update_btn.setText(app_meta.APP_VERSION)
+        self._update_btn.setAutoRaise(True)
+        self._update_btn.setCursor(Qt.PointingHandCursor)
+        self._update_btn.setToolTip("检查更新")
+        self._update_btn.setStyleSheet(
+            "QToolButton { padding: 2px 6px; }"
+        )
+        self._update_btn.clicked.connect(self._open_release_page)
+
+        self.statusBar.addPermanentWidget(self._update_btn)
+
+    def _open_release_page(self):
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+        from .. import app_meta
+        QDesktopServices.openUrl(QUrl(app_meta.RELEASE_URL))
 
     def _install_status_hint_bar(self, mode=None):
         """Keep exactly one mode hint bar in the global status line."""
@@ -241,7 +274,7 @@ class MainWindow(QMainWindow):
             current.hide()
             current.setParent(None)
         self._status_hint_bar = self.chart_stack.take_hint_bar(mode, self.statusBar)
-        self.statusBar.addPermanentWidget(self._status_hint_bar, 1)
+        self.statusBar.insertPermanentWidget(0, self._status_hint_bar, 1)
         self._status_hint_bar.show()
 
     # ---- public toast helper ----
@@ -303,8 +336,8 @@ class MainWindow(QMainWindow):
 
     def _connect(self):
         # --- New-module wiring ---
-        self.toolbar.file_add_requested.connect(self.load_files)
-        self.toolbar.export_requested.connect(self.export_excel)
+        self.toolbar.open_requested.connect(self.open_files_or_project)
+        self.toolbar.save_project_requested.connect(self.save_project_via_dialog)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
@@ -419,6 +452,22 @@ class MainWindow(QMainWindow):
         if xrange_changed is not None:
             xrange_changed.connect(self._on_time_canvas_xrange_changed)
         self._connect_canvas_range_signals(self.canvas_time)
+
+        # ── Toolbar sidebar toggle buttons ───────────────────────────────────
+        from .side_panels import Ev, PanelState
+        self.toolbar.nav_panel_toggled.connect(
+            lambda: self._panel_ctrl_left._dispatch(Ev.CLICK)
+        )
+        self.toolbar.inspector_panel_toggled.connect(
+            lambda: self._panel_ctrl_right._dispatch(Ev.CLICK)
+        )
+        # Sync checked state when panel state changes (includes drag-collapse).
+        self._panel_ctrl_left.state_changed.connect(
+            lambda s: self.toolbar.set_nav_open(s == PanelState.PINNED)
+        )
+        self._panel_ctrl_right.state_changed.connect(
+            lambda s: self.toolbar.set_inspector_open(s == PanelState.PINNED)
+        )
 
     def _connect_canvas_range_signals(self, canvas):
         visible_range_changed = getattr(canvas, 'visible_range_changed', None)
@@ -1116,7 +1165,11 @@ class MainWindow(QMainWindow):
                 if sig_data is None or sig_data[0] == fid:
                     ctx.set_fs(fd.fs)
             if len(fd.time_array):
-                self.inspector.top.set_range_limits(0, fd.time_array[-1])
+                max_t = max(
+                    (f.time_array[-1] for f in self.files.values() if len(f.time_array)),
+                    default=0,
+                )
+                self.inspector.top.set_range_limits(0, max_t)
         self.toolbar.set_enabled_for_mode(
             self.toolbar.current_mode(), has_file=bool(self.files)
         )
@@ -1257,6 +1310,56 @@ class MainWindow(QMainWindow):
         self.statusBar.showMessage("游标已重置")
         self.toast("游标已重置", "info")
 
+    def open_files_or_project(self):
+        """统一打开入口：文件对话框同时接受数据文件和 .tlproj。
+        数据文件追加；单个项目替换（有文件时先确认）；项目+文件先开项目再追加；≥2个项目拒绝。"""
+        from pathlib import Path
+        fps, _ = QFileDialog.getOpenFileNames(
+            self, "打开", "",
+            "所有支持的文件 (*.mf4 *.csv *.xlsx *.xls *.tlproj);;"
+            "项目 (*.tlproj);;数据文件 (*.mf4 *.csv *.xlsx *.xls)",
+        )
+        if not fps:
+            return
+        projects = [p for p in fps if Path(p).suffix.lower() == ".tlproj"]
+        data_files = [p for p in fps if Path(p).suffix.lower() != ".tlproj"]
+
+        if len(projects) >= 2:
+            QMessageBox.warning(self, "无法打开", "一次只能打开一个项目（.tlproj）。")
+            return
+
+        if projects:
+            if self.files:
+                resp = QMessageBox.question(
+                    self, "打开项目",
+                    f"打开项目将关闭当前 {len(self.files)} 个文件，是否继续？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                )
+                if resp != QMessageBox.Yes:
+                    return
+            self.open_project(projects[0])
+            for fp in data_files:
+                self._load_one(fp)
+            return
+
+        for fp in data_files:
+            self._load_one(fp)
+
+    def save_project_via_dialog(self):
+        """保存项目 handler: overwrite the current .tlproj if one is open,
+        otherwise prompt Save-As."""
+        from pathlib import Path
+        from PyQt5.QtWidgets import QFileDialog
+        if self._project_path is not None:
+            self.save_project(self._project_path)
+            return
+        fp, _ = QFileDialog.getSaveFileName(self, "保存项目", "", "TraceLab 项目 (*.tlproj)")
+        if not fp:
+            return
+        if not fp.lower().endswith(".tlproj"):
+            fp = fp + ".tlproj"
+        self.save_project(Path(fp))
+
     def load_files(self):
         fps, _ = QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.csv *.xlsx *.xls)")
         for fp in fps: self._load_one(fp)
@@ -1365,6 +1468,122 @@ class MainWindow(QMainWindow):
         self._reset_plot_state(scope='file')
         self.statusBar.showMessage(f"已关闭 | 剩余 {len(self.files)} 文件")
         self.toast(f"已关闭 {name}", "info")
+
+    def save_project(self, path):
+        """Serialize the current session (open files + all Views) to a
+        reference-only ``.tlproj`` JSON file. No UI entry point yet — this is
+        the callable used by tests and a future menu/button."""
+        from pathlib import Path
+        from . import project_io as pio
+        path = Path(path)
+
+        self._capture_focused_view()
+
+        file_refs = []
+        for fid, fd in self.files.items():
+            abs_p = str(Path(fd.filepath).resolve())
+            file_refs.append(pio.ProjectFileRef(
+                fid=fid,
+                path_abs=abs_p,
+                path_rel=pio.make_relative(abs_p, path),
+                fs=float(fd.fs),
+                time_source=fd._time_source,
+            ))
+
+        vm = {
+            "active": int(self.view_manager.active),
+            "split_pairs": {
+                str(host): int(src)
+                for host, src in self.view_manager._split_pairs.items()
+            },
+        }
+        doc = pio.ProjectDocument(
+            active_file=self._active,
+            current_mode=self.chart_stack.current_mode(),
+            files=file_refs,
+            views=[v.to_dict() for v in self.view_manager.views],
+            view_manager=vm,
+        )
+        pio.save_project_to_json(doc, path)
+        self._project_path = path
+        self.statusBar.showMessage(f"已保存项目: {path.name}")
+
+    def open_project(self, path):
+        """Restore a session from a ``.tlproj`` file: re-read referenced source
+        files (skipping missing ones), reinstall saved Views with fids remapped
+        to freshly minted ids, and select the saved active file / mode."""
+        from pathlib import Path
+        from PyQt5.QtWidgets import QMessageBox
+        from . import project_io as pio
+        from .view_state import ViewState
+        path = Path(path)
+
+        doc = pio.load_project_from_json(path)
+        self.close_all()
+
+        fid_map = {}
+        missing = []
+        for ref in doc.files:
+            resolved = pio.resolve_file_path(ref, path)
+            if resolved is None:
+                missing.append(ref.path_abs)
+                continue
+            before = len(self.files)
+            self._load_one(str(resolved))
+            if len(self.files) <= before:
+                missing.append(ref.path_abs)
+                continue
+            new_fid = next(reversed(self.files))
+            fid_map[ref.fid] = new_fid
+            fd = self.files[new_fid]
+            fd.fs = float(ref.fs)
+            if ref.time_source in ("generated", "manual"):
+                fd.rebuild_time_axis(float(ref.fs))
+
+        remapped = pio.remap_view_fids(doc.views, fid_map)
+        states = [ViewState.from_dict(v) for v in remapped]
+        if not states:
+            states = [self.view_manager._make(0)]
+        self.view_manager.views = states
+        self.view_manager._split_pairs = {
+            int(host): int(src)
+            for host, src in (doc.view_manager.get("split_pairs") or {}).items()
+            if 0 <= int(host) < len(states) and 0 <= int(src) < len(states)
+        }
+        active_idx = int(doc.view_manager.get("active", 0))
+        self.view_manager.active = max(0, min(active_idx, len(states) - 1))
+        self.view_manager._set_active_split_from_pairs()
+        self.view_manager.views_changed.emit()
+
+        self._active = fid_map.get(doc.active_file)
+        # Route the mode through the toolbar's programmatic setter (not
+        # chart_stack.set_mode directly): _set_mode checks the matching
+        # segment button AND emits mode_changed -> _on_mode_changed, which
+        # syncs chart_stack + inspector + toolbar enabled-state together.
+        # Calling chart_stack.set_mode alone leaves the toolbar segment and
+        # the inspector panel stuck on the previous mode (desync on reopen of
+        # a project saved in FFT / Order / FFT-vs-Time).
+        self.toolbar._set_mode(doc.current_mode)
+
+        if missing:
+            QMessageBox.warning(
+                self, "部分文件缺失",
+                "以下文件找不到，已跳过：\n" + "\n".join(missing),
+            )
+
+        # The project's files/views are loaded by this point, so the document
+        # is "open" regardless of whether the final view render succeeds —
+        # record the path BEFORE the render guard so a render hiccup doesn't
+        # leave 保存项目 prompting Save-As for an already-open project.
+        self._project_path = path
+
+        try:
+            self._apply_active_view(self.view_manager.active)
+        except Exception:
+            self.statusBar.showMessage(f"已打开项目: {path.name}（渲染恢复失败）")
+            return
+
+        self.statusBar.showMessage(f"已打开项目: {path.name}")
 
     def close_all(self):
         if not self.files:
@@ -1645,6 +1864,7 @@ class MainWindow(QMainWindow):
         # user actually had selected, so we no longer assume self._active.
         drawer = ChannelEditorDrawer(self, self.files, self._active)
         drawer.applied.connect(self._apply_channel_edits)
+        drawer.export_requested.connect(self._do_export_excel)
         drawer.exec_()
 
 
@@ -1700,38 +1920,40 @@ class MainWindow(QMainWindow):
         )
         self._plot_time_preserving_xlim()
 
-    def export_excel(self):
-        if not self.files or not self._active:
-            self.toast("请先加载文件", "warning"); return
-        fd = self.files[self._active];
-        chs = fd.get_signal_channels()
-        if not chs: return
-        from .drawers.export_sheet import ExportSheet
-        dlg = ExportSheet(self, chs)
-        if dlg.exec_() == QDialog.Accepted:
-            sel = dlg.get_selected()
-            if not sel: return
-            fp, _ = QFileDialog.getSaveFileName(self, "保存", "", "Excel (*.xlsx)")
-            if not fp: return
-            try:
-                df = pd.DataFrame()
-                if dlg.chk_time.isChecked() and fd.time_array is not None: df['Time'] = fd.time_array
-                for ch in sel:
-                    if ch in fd.data.columns: df[ch] = fd.data[ch].values
-                if dlg.chk_range.isChecked() and fd.time_array is not None:
-                    lo, hi = self.inspector.top.range_values()
-                    m = (fd.time_array >= lo) & (fd.time_array <= hi);
-                    df = df.loc[m].reset_index(drop=True)
-                df.to_excel(fp, index=False, engine='openpyxl')
-                self.statusBar.showMessage(
-                    f"导出完成: {Path(fp).name} ({len(df)} 行 × {len(df.columns)} 列)"
-                )
-                self.toast(
-                    f"已导出 {Path(fp).name} · {len(df)} 行 × {len(df.columns)} 列",
-                    "success",
-                )
-            except Exception as e:
-                QMessageBox.critical(self, "错误", str(e))
+    def _do_export_excel(self, fid, channels, include_time, use_range):
+        """Write the given channels of file ``fid`` to an Excel file. Invoked
+        by the channel-editor's 导出 section (export_requested). Time column and
+        time-range filter mirror the former toolbar-export behavior."""
+        from pathlib import Path
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import pandas as pd
+        fd = self.files.get(fid)
+        if fd is None or not channels:
+            return
+        fp, _ = QFileDialog.getSaveFileName(self, "导出 Excel", "", "Excel (*.xlsx)")
+        if not fp:
+            return
+        try:
+            df = pd.DataFrame()
+            if include_time and fd.time_array is not None:
+                df['Time'] = fd.time_array
+            for ch in channels:
+                if ch in fd.data.columns:
+                    df[ch] = fd.data[ch].values
+            if use_range and fd.time_array is not None:
+                lo, hi = self.inspector.top.range_values()
+                m = (fd.time_array >= lo) & (fd.time_array <= hi)
+                df = df.loc[m].reset_index(drop=True)
+            df.to_excel(fp, index=False, engine='openpyxl')
+            self.statusBar.showMessage(
+                f"导出完成: {Path(fp).name} ({len(df)} 行 × {len(df.columns)} 列)"
+            )
+            self.toast(
+                f"已导出 {Path(fp).name} · {len(df)} 行 × {len(df.columns)} 列",
+                "success",
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "错误", str(e))
 
     def open_batch(self):
         from .drawers.batch import BatchSheet

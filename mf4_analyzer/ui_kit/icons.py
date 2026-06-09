@@ -343,6 +343,69 @@ class Icons:
             p.drawLine(QPointF(12, 8.5), QPointF(15, 8.5))
         return _line_icon(draw, c)
 
+    @classmethod
+    def cloud_download(cls):
+        """Cloud outline + down arrow — 'get the latest version'."""
+        def draw(p):
+            cloud = QPainterPath()
+            cloud.moveTo(6.0, 13.0)
+            cloud.cubicTo(2.6, 13.0, 2.6, 8.6, 6.3, 8.4)
+            cloud.cubicTo(6.7, 4.7, 12.4, 4.4, 13.2, 8.1)
+            cloud.cubicTo(16.6, 7.9, 16.9, 12.7, 13.8, 13.0)
+            cloud.lineTo(6.0, 13.0)
+            p.drawPath(cloud)
+            p.drawLine(QPointF(10.0, 9.5), QPointF(10.0, 16.8))
+            p.drawLine(QPointF(7.4, 14.0), QPointF(10.0, 16.8))
+            p.drawLine(QPointF(12.6, 14.0), QPointF(10.0, 16.8))
+        return _line_icon(draw, GRAY)
+
+    @classmethod
+    def panel_left(cls):
+        """Sidebar-left icon: outer rect + left panel divider + left fill."""
+        with _painting() as (pix, p):
+            pen = _pen(QColor("#64748b"), 1.4)
+            p.setPen(pen)
+            # outer rect
+            p.drawRoundedRect(QRectF(2, 2, 16, 16), 2, 2)
+            # vertical divider at x=7
+            p.drawLine(QPointF(7, 2), QPointF(7, 18))
+            # left panel fill
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(100, 116, 139, 60)))
+            p.drawRect(QRectF(2, 2, 5, 16))
+        return QIcon(pix)
+
+    @classmethod
+    def panel_right(cls):
+        """Sidebar-right icon: outer rect + right panel divider + right fill."""
+        with _painting() as (pix, p):
+            pen = _pen(QColor("#64748b"), 1.4)
+            p.setPen(pen)
+            p.drawRoundedRect(QRectF(2, 2, 16, 16), 2, 2)
+            p.drawLine(QPointF(13, 2), QPointF(13, 18))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(100, 116, 139, 60)))
+            p.drawRect(QRectF(13, 2, 5, 16))
+        return QIcon(pix)
+
+    @classmethod
+    def save_disk(cls):
+        """Floppy-disk 'save' glyph (distinct from the export tray-arrow)."""
+        def draw(p):
+            body = QPainterPath()
+            body.moveTo(4, 4)
+            body.lineTo(13.5, 4)
+            body.lineTo(16, 6.5)
+            body.lineTo(16, 16)
+            body.lineTo(4, 16)
+            body.closeSubpath()
+            p.drawPath(body)
+            # top shutter slot
+            p.drawRect(QRectF(7.5, 4, 4, 3))
+            # bottom label panel
+            p.drawRect(QRectF(6.5, 10.5, 7, 5.5))
+        return _line_icon(draw, GRAY)
+
 
 # =============================================================================
 # QSS subcontrol-arrow icon cache (scheme B: qtawesome -> PNG -> QSS image:url)

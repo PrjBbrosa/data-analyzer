@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from matplotlib import colors as mcolors
 
@@ -42,6 +42,7 @@ class ChannelEditorDialog(QDialog):
     # channel names stay visible and no blank gutter is left on the right (see
     # ``_narrow``). Tokens mirror style.qss (input radius 7 / button radius 8 /
     # primary #1769e0).
+    export_requested = pyqtSignal(str, list, bool, bool)
     INPUT_WIDTH = 178
     PANEL_WIDTH = 336
 
@@ -168,6 +169,27 @@ class ChannelEditorDialog(QDialog):
         gl2.setColumnStretch(1, 1)
         bl.addWidget(g2)
 
+        # 导出（在双通道运算之下、删除之上）
+        gx = QGroupBox("导出")
+        gxl = QVBoxLayout(gx)
+        gxl.setSpacing(8)
+        self.list_export = QListWidget()
+        self.list_export.setObjectName("channelExportList")
+        self.list_export.setMinimumHeight(108)
+        self.list_export.setMaximumHeight(120)
+        gxl.addWidget(self.list_export)
+        self.chk_export_time = QCheckBox("包含时间列")
+        self.chk_export_time.setChecked(True)
+        self.chk_export_range = QCheckBox("仅导出选定时间范围")
+        gxl.addWidget(self.chk_export_time)
+        gxl.addWidget(self.chk_export_range)
+        self.btn_export = QPushButton("导出 Excel")
+        self.btn_export.setObjectName("channelCreateBtn")
+        self.btn_export.setProperty("role", "create")
+        self.btn_export.clicked.connect(self._on_export_clicked)
+        gxl.addWidget(self.btn_export, 0, Qt.AlignLeft)
+        bl.addWidget(gx)
+
         # 删除通道
         g3 = QGroupBox("删除")
         g3l = QVBoxLayout(g3)
@@ -289,7 +311,30 @@ class ChannelEditorDialog(QDialog):
         self.list_rm.clear()
         for ch in chs:
             self.list_rm.addItem(ch)
+        self.list_export.clear()
+        for ch in chs:
+            it = QListWidgetItem(ch)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked)
+            self.list_export.addItem(it)
         self.lbl.setText("新增: 0")
+
+    def _on_export_clicked(self):
+        if self.current_fid is None:
+            return
+        channels = [
+            self.list_export.item(i).text()
+            for i in range(self.list_export.count())
+            if self.list_export.item(i).checkState() == Qt.Checked
+        ]
+        if not channels:
+            QMessageBox.information(self, "导出", "请先勾选要导出的通道。")
+            return
+        self.export_requested.emit(
+            self.current_fid, channels,
+            self.chk_export_time.isChecked(),
+            self.chk_export_range.isChecked(),
+        )
 
     def _create_single(self):
         src = self.combo_src.currentText()

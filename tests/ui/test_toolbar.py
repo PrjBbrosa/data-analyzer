@@ -21,11 +21,11 @@ def test_toolbar_enabled_matrix(qapp):
     tb = Toolbar()
     tb.set_enabled_for_mode('time', has_file=True)
     assert tb.btn_batch.isEnabled()
-    assert tb.btn_export.isEnabled()
+    assert tb.btn_save_project.isEnabled()
     tb.set_enabled_for_mode('fft', has_file=True)
     assert tb.btn_batch.isEnabled()
     tb.set_enabled_for_mode('time', has_file=False)
-    assert not tb.btn_export.isEnabled()
+    assert not tb.btn_save_project.isEnabled()
     assert tb.btn_batch.isEnabled()
 
 
@@ -41,7 +41,7 @@ def test_toolbar_batch_icon_is_distinct_from_export(qapp, qtbot):
     qtbot.addWidget(tb)
 
     assert not tb.btn_batch.icon().isNull()
-    assert tb.btn_batch.icon().cacheKey() != tb.btn_export.icon().cacheKey()
+    assert tb.btn_batch.icon().cacheKey() != tb.btn_add.icon().cacheKey()
 
 
 def test_toolbar_exposes_fft_time_mode(qtbot):
@@ -56,3 +56,15 @@ def test_toolbar_exposes_fft_time_mode(qtbot):
     assert tb.current_mode() == 'fft_time'
     assert seen[-1] == 'fft_time'
     assert tb.btn_mode_fft_time.text() == 'FFT vs Time'
+
+
+def test_toolbar_open_save_split_and_no_export(qtbot):
+    from mf4_analyzer.ui.toolbar import Toolbar
+    tb = Toolbar(); qtbot.addWidget(tb)
+    assert tb.btn_add.text() == "打开"
+    assert hasattr(tb, "btn_save_project")
+    assert tb.btn_save_project.text() == "保存项目"
+    assert not hasattr(tb, "btn_export")
+    assert hasattr(tb, "open_requested")
+    assert hasattr(tb, "save_project_requested")
+    assert not hasattr(tb, "export_requested")

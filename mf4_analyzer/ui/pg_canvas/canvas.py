@@ -882,10 +882,10 @@ class TimeDomainCanvasPG(QWidget):
                 if not (np.isfinite(lo) and np.isfinite(hi)):
                     continue
                 if hi <= lo:
-                    # Flat signal: give it a small symmetric pad so the line
-                    # is visible rather than a zero-height range.
                     pad = abs(lo) * 0.05 or 1.0
-                    lo, hi = lo - pad, hi + pad
+                else:
+                    pad = (hi - lo) * 0.05
+                lo, hi = lo - pad, hi + pad
                 try:
                     handle.set_ylim(lo, hi)
                 except Exception:

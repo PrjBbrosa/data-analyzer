@@ -1143,7 +1143,7 @@ class _ChartCard(QWidget):
             return
         canvas_rect = self.canvas.geometry()
         margin = 6
-        x = canvas_rect.left() + margin
+        x = canvas_rect.right() - indicator.width() - margin + 1
         y = canvas_rect.bottom() - indicator.height() - margin + 1
         indicator.move(max(0, x), max(0, y))
         indicator.raise_()
