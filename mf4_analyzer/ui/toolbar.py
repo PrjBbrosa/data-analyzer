@@ -12,8 +12,8 @@ from ..ui_kit.icons import Icons
 
 class Toolbar(QWidget):
     # Left segment
-    file_add_requested = pyqtSignal()
-    export_requested = pyqtSignal()
+    open_requested = pyqtSignal()
+    save_project_requested = pyqtSignal()
     batch_requested = pyqtSignal()
     # Center segment
     mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
@@ -27,11 +27,13 @@ class Toolbar(QWidget):
         lay.setSpacing(8)
 
         # ── left group ──────────────────────────────────────────────────────
-        self.btn_add = QPushButton("添加文件", self)
+        self.btn_add = QPushButton("打开", self)
         self.btn_add.setIcon(Icons.add_file(QColor("#ffffff")))
         self.btn_add.setProperty("role", "primary")
-        self.btn_export = QPushButton("导出", self)
-        self.btn_export.setIcon(Icons.export())
+        self.btn_add.setToolTip("打开数据文件或项目（.tlproj）")
+        self.btn_save_project = QPushButton("保存项目", self)
+        self.btn_save_project.setIcon(Icons.export())
+        self.btn_save_project.setToolTip("保存当前会话为 .tlproj 项目")
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
         self.btn_acquisition_cockpit = QPushButton("Cockpit", self)
@@ -48,7 +50,7 @@ class Toolbar(QWidget):
         self.btn_mode_order = QPushButton("阶次", self)
         self.btn_mode_order.setIcon(Icons.mode_order())
 
-        for b in (self.btn_add, self.btn_export, self.btn_batch,
+        for b in (self.btn_add, self.btn_save_project, self.btn_batch,
                   self.btn_acquisition_cockpit,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
                   self.btn_mode_order):
@@ -59,7 +61,7 @@ class Toolbar(QWidget):
         left.setSpacing(10)
         for b in (
             self.btn_add,
-            self.btn_export,
+            self.btn_save_project,
             self.btn_batch,
             self.btn_acquisition_cockpit,
         ):
@@ -140,8 +142,8 @@ class Toolbar(QWidget):
         self._right_widget.setFixedWidth(max(w, 1))
 
     def _wire(self):
-        self.btn_add.clicked.connect(self.file_add_requested)
-        self.btn_export.clicked.connect(self.export_requested)
+        self.btn_add.clicked.connect(self.open_requested)
+        self.btn_save_project.clicked.connect(self.save_project_requested)
         self.btn_batch.clicked.connect(self.batch_requested)
         self.btn_acquisition_cockpit.clicked.connect(self.acquisition_cockpit_requested)
         for key, b in [('time', self.btn_mode_time),
@@ -167,7 +169,7 @@ class Toolbar(QWidget):
 
     def set_enabled_for_mode(self, mode, has_file):
         """Implements the §7.1 enabled-state matrix."""
-        self.btn_export.setEnabled(has_file)
+        self.btn_save_project.setEnabled(has_file)
         self.btn_batch.setEnabled(True)
 
     def current_mode(self):

@@ -335,8 +335,8 @@ class MainWindow(QMainWindow):
 
     def _connect(self):
         # --- New-module wiring ---
-        self.toolbar.file_add_requested.connect(self.load_files)
-        self.toolbar.export_requested.connect(self.export_excel)
+        self.toolbar.open_requested.connect(self.open_files_or_project)
+        self.toolbar.save_project_requested.connect(self.save_project_via_dialog)
         self.toolbar.batch_requested.connect(self.open_batch)
         self.toolbar.acquisition_cockpit_requested.connect(self.open_acquisition_cockpit)
         self.toolbar.mode_changed.connect(self._on_mode_changed)
