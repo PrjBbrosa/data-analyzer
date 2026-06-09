@@ -19,6 +19,7 @@ class ChannelEditorDrawer(QDialog):
     # necessarily the originally-active file, since the dialog lets the user
     # switch files before applying.
     applied = pyqtSignal(str, dict, set)
+    export_requested = pyqtSignal(str, list, bool, bool)
 
     # Width matches the narrow "方案 A" layout; the inner dialog scrolls when
     # content overflows, so a modest height is fine.
@@ -38,6 +39,7 @@ class ChannelEditorDrawer(QDialog):
         root.addWidget(self._inner)
         self._inner.accepted.connect(self._on_applied)
         self._inner.rejected.connect(self.reject)
+        self._inner.export_requested.connect(self.export_requested)
         h = max(520, parent.height() - 80) if parent else 520
         self.resize(self.PANEL_WIDTH, h)
 

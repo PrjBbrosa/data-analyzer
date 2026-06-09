@@ -66,3 +66,15 @@ def test_editor_export_button_emits_signal(qapp, tmp_path):
     assert captured["fid"] == "f0"
     assert captured["chs"] == ["rpm"]
     assert captured["t"] is True and captured["r"] is False
+
+
+def test_drawer_reemits_export_requested(qapp, tmp_path):
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui.drawers.channel_editor_drawer import ChannelEditorDrawer
+    drawer = ChannelEditorDrawer(None, _make_files(tmp_path), "f0")
+    got = {}
+    drawer.export_requested.connect(
+        lambda fid, chs, t, r: got.update(fid=fid, chs=chs))
+    drawer._inner.btn_export.click()
+    assert got["fid"] == "f0"
+    assert got["chs"] == ["rpm", "spd"]   # both default-checked

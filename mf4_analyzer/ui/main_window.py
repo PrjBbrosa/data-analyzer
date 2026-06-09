@@ -1838,6 +1838,7 @@ class MainWindow(QMainWindow):
         # user actually had selected, so we no longer assume self._active.
         drawer = ChannelEditorDrawer(self, self.files, self._active)
         drawer.applied.connect(self._apply_channel_edits)
+        drawer.export_requested.connect(self._do_export_excel)
         drawer.exec_()
 
 
