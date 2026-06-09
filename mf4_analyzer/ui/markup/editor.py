@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Callable
 
-from PyQt5.QtCore import QLineF, QPointF, QRect, QRectF, QSize, Qt, QTimer
+from PyQt5.QtCore import QLineF, QPointF, QRect, QRectF, QSettings, QSize, Qt, QTimer
 from PyQt5.QtGui import (
     QBrush,
     QColor,
@@ -584,6 +584,9 @@ class MarkupEditor(QWidget):
         self._annotation_clipboard = []
         self._initial_fit_done = False
         self._auto_fit = True
+        self._hint_settings = QSettings()
+        self._hint_toast = None
+        self._capability_hint_shown = False
 
         self._scene = QGraphicsScene(self)
         self._background_item = QGraphicsPixmapItem(self._current_pixmap)
@@ -613,6 +616,28 @@ class MarkupEditor(QWidget):
         if not self._initial_fit_done:
             self._initial_fit_done = True
             QTimer.singleShot(0, self.fit_to_window)
+        self._maybe_show_capability_hint()
+
+    def set_hint_settings(self, settings):
+        """Inject a QSettings store (tests pass a temp INI)."""
+        self._hint_settings = settings
+
+    def _maybe_show_capability_hint(self):
+        if self._capability_hint_shown:
+            return
+        self._capability_hint_shown = True
+        from .. import hints
+        state = hints.HintState(
+            discovered=hints.load_discovered(self._hint_settings)
+        )
+        hint = hints.discovery_hint(state, scope="markup")
+        if hint is None:
+            return
+        if self._hint_toast is None:
+            from ..widgets import Toast
+            self._hint_toast = Toast(self)
+        self._hint_toast.show_message(hint.text, level="info")
+        hints.mark_discovered(self._hint_settings, hint.id)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

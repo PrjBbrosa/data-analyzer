@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QEvent, QPointF, QRectF, Qt
+from PyQt5.QtCore import QEvent, QPointF, QRectF, QSettings, Qt
 from PyQt5.QtGui import QColor, QMouseEvent, QPainterPath, QPixmap
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtWidgets import (
@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from mf4_analyzer.ui import hints
 from mf4_analyzer.ui.markup.editor import MarkupEditor
 
 
@@ -1145,3 +1146,35 @@ def test_toolbar_buttons_expose_their_shortcuts(qtbot):
     assert tips["markupUndoButton"] == "撤销 (Ctrl+Z)"
     assert tips["markupRedoButton"] == "重做 (Ctrl+Y)"
     assert tips["markupStyleButton"] == "样式（颜色 / 线宽） · [ ] 调线宽"
+
+
+def _temp_hint_settings(tmp_path):
+    return QSettings(str(tmp_path / "markup-hints.ini"), QSettings.IniFormat)
+
+
+def test_first_open_shows_capability_toast_and_retires_it(qtbot, tmp_path):
+    settings = _temp_hint_settings(tmp_path)
+    assert "markup.capabilities" not in hints.load_discovered(settings)
+
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.set_hint_settings(settings)
+    editor.show()
+    QApplication.processEvents()
+
+    assert editor._hint_toast is not None
+    assert editor._hint_toast.isVisible()
+    assert "markup.capabilities" in hints.load_discovered(settings)
+
+
+def test_capability_toast_not_shown_when_already_discovered(qtbot, tmp_path):
+    settings = _temp_hint_settings(tmp_path)
+    hints.mark_discovered(settings, "markup.capabilities")
+
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    editor.set_hint_settings(settings)
+    editor.show()
+    QApplication.processEvents()
+
+    assert editor._hint_toast is None
