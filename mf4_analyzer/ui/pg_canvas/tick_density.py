@@ -62,7 +62,7 @@ class _CanvasBackref:
 class TickDensityController(_CanvasBackref):
     """Own and apply Inspector tick-density settings."""
 
-    _owned_names = frozenset({"density"})
+    _owned_names = frozenset({"density", "ticks_cache"})
 
     _delegate_names = frozenset({
         "set_tick_density",
@@ -83,6 +83,7 @@ class TickDensityController(_CanvasBackref):
         super().__init__(canvas)
         # Defaults mirror PersistentTop defaults.
         self.density = (10, 8)
+        self.ticks_cache = {}
 
     def set_tick_density(self, x, y):
         """Apply inspector-controlled tick density to PG axes."""
@@ -139,7 +140,13 @@ class TickDensityController(_CanvasBackref):
         except Exception:
             self._reset_x_ticks_to_adaptive(axis)
             return
-        ticks = self._compute_target_x_ticks(axis, float(lo), float(hi), axis_width)
+        key = (float(lo), float(hi), round(axis_width, 1), int(self.density[0]))
+        ticks = self.ticks_cache.get(key)
+        if ticks is None:
+            ticks = self._compute_target_x_ticks(axis, float(lo), float(hi), axis_width)
+            if len(self.ticks_cache) > 32:
+                self.ticks_cache.clear()
+            self.ticks_cache[key] = ticks
         if not ticks:
             self._reset_x_ticks_to_adaptive(axis)
             return

@@ -77,3 +77,29 @@ def test_resize_defers_label_rework_to_settle(qtbot, qapp):
     canvas._on_resize_settled()
     # The settle pass does it exactly once.
     assert calls == [1]
+
+
+def test_x_tick_computation_memoized_across_rows_and_ticks(qtbot, qapp, monkeypatch):
+    from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
+
+    canvas = _make_canvas(qtbot, _rows(3), "subplot")
+    ctrl = canvas._tick_density_controller
+
+    calls = []
+    orig = TickDensityController._compute_target_x_ticks
+    monkeypatch.setattr(
+        TickDensityController,
+        "_compute_target_x_ticks",
+        lambda self, *a: calls.append(1) or orig(self, *a),
+    )
+
+    ctrl.ticks_cache.clear()
+    ctrl._apply_target_x_ticks_to_all_axes()
+    # 3 subplot rows share one (xlim, axis_width, density) key after axis
+    # unification -> at most one real computation.
+    assert len(calls) <= 1
+
+    calls.clear()
+    ctrl._apply_target_x_ticks_to_all_axes()
+    # Identical viewport (a debounce tick with unchanged xlim): pure cache.
+    assert calls == []
