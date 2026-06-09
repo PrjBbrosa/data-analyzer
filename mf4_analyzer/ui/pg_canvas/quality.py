@@ -67,6 +67,7 @@ class QualityManager(_CanvasBackref):
         "aa_on",
         "density_allowed",
         "density_seeded",
+        "last_emitted_status",
         "timer",
     })
 
@@ -92,6 +93,7 @@ class QualityManager(_CanvasBackref):
         self.timer.timeout.connect(self.try_enable_idle_quality)
         self.density_allowed = False
         self.density_seeded = False
+        self.last_emitted_status = None
 
     def reset_for_rebuild(self):
         """Reset idle-AA runtime state after the curve set is rebuilt."""
@@ -104,6 +106,7 @@ class QualityManager(_CanvasBackref):
         # Rebuild changes the curve set / point counts, so the next decision
         # must re-seed via the OFF threshold rather than inherit stale state.
         self.density_seeded = False
+        self.last_emitted_status = None
         self._emit_quality_status_changed()
 
     def _collect_curve_items(self):
@@ -147,12 +150,19 @@ class QualityManager(_CanvasBackref):
 
     def disable_interactive_quality(self):
         """Force the interactive path back to AA-off and cancel idle upgrade."""
+        timer_was_active = False
         try:
+            timer_was_active = self.timer.isActive()
             self.timer.stop()
         except Exception:
             pass
         if not self.aa_on:
-            self._emit_quality_status_changed()
+            # Hot path: after the first pan/zoom tick AA is already off and
+            # the idle timer is stopped. quality_status() walks the scene, so
+            # rebuild it only when cancelling a pending idle upgrade changed
+            # the reader-facing state from yellow to red.
+            if timer_was_active:
+                self._emit_quality_status_changed()
             return
         self._set_curves_antialias(False)
         # Fix D: a stale device-coordinate cache would smear during the
@@ -337,7 +347,11 @@ class QualityManager(_CanvasBackref):
 
     def _emit_quality_status_changed(self):
         try:
-            self.quality_status_changed.emit(self.quality_status())
+            status = self.quality_status()
+            if status == self.last_emitted_status:
+                return
+            self.last_emitted_status = status
+            self.quality_status_changed.emit(status)
         except Exception:
             pass
 

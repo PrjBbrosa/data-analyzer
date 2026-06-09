@@ -35,3 +35,30 @@ def _make_canvas(qtbot, rows, mode):
     canvas.plot_channels(rows, mode=mode)
     canvas._flush_pending_refresh()
     return canvas
+
+
+def test_repeated_quality_disable_emits_nothing_and_skips_scene_scan(
+    qtbot, qapp, monkeypatch
+):
+    from mf4_analyzer.ui.pg_canvas.quality import QualityManager
+
+    canvas = _make_canvas(qtbot, _rows(2), "subplot")
+    canvas.disable_interactive_quality()  # settle into AA-off once (warm-up)
+
+    emissions = []
+    canvas.quality_status_changed.connect(lambda st: emissions.append(st))
+    scans = []
+    orig = QualityManager._density_status
+    monkeypatch.setattr(
+        QualityManager,
+        "_density_status",
+        lambda self: scans.append(1) or orig(self),
+    )
+
+    for _ in range(5):
+        canvas.disable_interactive_quality()
+
+    # Drag ticks 2..N: AA already off, idle timer already stopped - the
+    # status cannot have changed, so no scene traversal and no emission.
+    assert emissions == []
+    assert scans == []
