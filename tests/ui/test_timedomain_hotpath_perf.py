@@ -261,3 +261,15 @@ def test_preserving_rebuild_skips_full_range_bind_envelope(qtbot, qapp, monkeypa
     for _axis, line in canvas._channel_lines.values():
         xd, _yd = line.plot_data_item.getData()
         assert xd is not None and len(xd) > 0
+
+
+def test_overlay_uses_single_cursor_line_item(qtbot, qapp):
+    canvas = _make_canvas(qtbot, _rows(3), "overlay")
+    items = canvas._cursor._ensure_cursor_items("_cursor_line_items", color="#1769e0")
+    # Overlay aux ViewBoxes all share one full-plot rect and one X transform:
+    # one line on the X-master covers every channel (was: N identical lines).
+    assert len(items) == 1
+
+    canvas.plot_channels(_rows(3), mode="subplot")
+    items = canvas._cursor._ensure_cursor_items("_cursor_line_items", color="#1769e0")
+    assert len(items) == 3  # subplot keeps one per row (rows do not overlap)

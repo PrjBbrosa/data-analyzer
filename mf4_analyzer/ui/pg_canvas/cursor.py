@@ -258,14 +258,21 @@ class CursorController(_CanvasBackref):
             except Exception:
                 pass
 
+    def _cursor_line_handles(self):
+        """ViewBox owners for vertical cursor/hover lines."""
+        if self._overlay_mode and self._x_master_handle is not None:
+            return [self._x_master_handle]
+        return list(self.axes_list)
+
     def _ensure_cursor_items(self, attr_name, *, color, width=1.0, style=Qt.SolidLine):
+        handles = self._cursor_line_handles()
         items = getattr(self, attr_name, [])
-        if len(items) == len(self.axes_list):
+        if len(items) == len(handles):
             return items
         self._remove_cursor_items(items)
         pen = pg.mkPen(color=color, width=width, style=style)
         new_items = []
-        for handle in self.axes_list:
+        for handle in handles:
             vb = handle.view_box
             if vb is None:
                 continue
