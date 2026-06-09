@@ -1,0 +1,82 @@
+# tests/ui/test_open_and_save_entry.py
+import csv
+from PyQt5.QtWidgets import QFileDialog, QMessageBox
+
+
+def _csv(path, n=30):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f); w.writerow(["time", "rpm"])
+        for i in range(n):
+            w.writerow([i / 100.0, float(i)])
+
+
+def test_open_data_files_appends(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    a = tmp_path / "a.csv"; _csv(a)
+    b = tmp_path / "b.csv"; _csv(b)
+    mw = MainWindow()
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames",
+                        lambda *a_, **k: ([str(a), str(b)], ""))
+    mw.open_files_or_project()
+    assert [fd.filename for fd in mw.files.values()] == ["a.csv", "b.csv"]
+
+
+def test_open_single_project_replaces(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    a = tmp_path / "a.csv"; _csv(a)
+    proj = tmp_path / "s.tlproj"
+    mw = MainWindow(); mw._load_one(str(a)); mw.save_project(proj)
+
+    mw2 = MainWindow()
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames",
+                        lambda *a_, **k: ([str(proj)], ""))
+    mw2.open_files_or_project()
+    assert [fd.filename for fd in mw2.files.values()] == ["a.csv"]
+
+
+def test_open_replace_confirm_cancel_aborts(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    a = tmp_path / "a.csv"; _csv(a)
+    b = tmp_path / "b.csv"; _csv(b)
+    proj = tmp_path / "s.tlproj"
+    mw = MainWindow(); mw._load_one(str(a)); mw.save_project(proj)
+
+    mw._load_one(str(b))
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames",
+                        lambda *a_, **k: ([str(proj)], ""))
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a_, **k: QMessageBox.No)
+    before = [fd.filename for fd in mw.files.values()]
+    mw.open_files_or_project()
+    assert [fd.filename for fd in mw.files.values()] == before  # unchanged
+
+
+def test_open_project_plus_files_adds_on_top(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    a = tmp_path / "a.csv"; _csv(a)
+    extra = tmp_path / "extra.csv"; _csv(extra)
+    proj = tmp_path / "s.tlproj"
+    mw = MainWindow(); mw._load_one(str(a)); mw.save_project(proj)
+
+    mw2 = MainWindow()
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames",
+                        lambda *a_, **k: ([str(proj), str(extra)], ""))
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a_, **k: QMessageBox.Yes)
+    mw2.open_files_or_project()
+    assert sorted(fd.filename for fd in mw2.files.values()) == ["a.csv", "extra.csv"]
+
+
+def test_open_multiple_projects_rejected(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    p1 = tmp_path / "x.tlproj"; p1.write_text("{}", encoding="utf-8")
+    p2 = tmp_path / "y.tlproj"; p2.write_text("{}", encoding="utf-8")
+    mw = MainWindow()
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames",
+                        lambda *a_, **k: ([str(p1), str(p2)], ""))
+    warned = {}
+    monkeypatch.setattr(QMessageBox, "warning",
+                        lambda *a_, **k: warned.setdefault("hit", True))
+    mw.open_files_or_project()
+    assert warned.get("hit") is True
+    assert len(mw.files) == 0

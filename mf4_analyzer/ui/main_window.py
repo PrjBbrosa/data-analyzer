@@ -1288,6 +1288,41 @@ class MainWindow(QMainWindow):
         self.statusBar.showMessage("游标已重置")
         self.toast("游标已重置", "info")
 
+    def open_files_or_project(self):
+        """统一打开入口：文件对话框同时接受数据文件和 .tlproj。
+        数据文件追加；单个项目替换（有文件时先确认）；项目+文件先开项目再追加；≥2个项目拒绝。"""
+        from pathlib import Path
+        fps, _ = QFileDialog.getOpenFileNames(
+            self, "打开", "",
+            "所有支持的文件 (*.mf4 *.csv *.xlsx *.xls *.tlproj);;"
+            "项目 (*.tlproj);;数据文件 (*.mf4 *.csv *.xlsx *.xls)",
+        )
+        if not fps:
+            return
+        projects = [p for p in fps if Path(p).suffix.lower() == ".tlproj"]
+        data_files = [p for p in fps if Path(p).suffix.lower() != ".tlproj"]
+
+        if len(projects) >= 2:
+            QMessageBox.warning(self, "无法打开", "一次只能打开一个项目（.tlproj）。")
+            return
+
+        if projects:
+            if self.files:
+                resp = QMessageBox.question(
+                    self, "打开项目",
+                    f"打开项目将关闭当前 {len(self.files)} 个文件，是否继续？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                )
+                if resp != QMessageBox.Yes:
+                    return
+            self.open_project(projects[0])
+            for fp in data_files:
+                self._load_one(fp)
+            return
+
+        for fp in data_files:
+            self._load_one(fp)
+
     def load_files(self):
         fps, _ = QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.csv *.xlsx *.xls)")
         for fp in fps: self._load_one(fp)
