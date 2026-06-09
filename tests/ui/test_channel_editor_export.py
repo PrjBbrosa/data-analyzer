@@ -78,3 +78,22 @@ def test_drawer_reemits_export_requested(qapp, tmp_path):
     drawer._inner.btn_export.click()
     assert got["fid"] == "f0"
     assert got["chs"] == ["rpm", "spd"]   # both default-checked
+
+
+def test_editor_export_no_selection_does_not_emit(qapp, tmp_path, monkeypatch):
+    # Clicking 导出 with nothing checked must show an info prompt and NOT emit
+    # (exercises the cold QMessageBox branch — guards against a NameError).
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QMessageBox
+    from mf4_analyzer.ui.dialogs import ChannelEditorDialog
+    dlg = ChannelEditorDialog(None, _make_files(tmp_path), "f0")
+    for i in range(dlg.list_export.count()):
+        dlg.list_export.item(i).setCheckState(Qt.Unchecked)
+    info = {}
+    monkeypatch.setattr(QMessageBox, "information",
+                        lambda *a, **k: info.setdefault("hit", True))
+    fired = {"n": 0}
+    dlg.export_requested.connect(lambda *a: fired.__setitem__("n", fired["n"] + 1))
+    dlg.btn_export.click()
+    assert fired["n"] == 0
+    assert info.get("hit") is True

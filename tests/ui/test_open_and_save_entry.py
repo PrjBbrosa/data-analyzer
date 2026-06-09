@@ -117,3 +117,20 @@ def test_open_project_sets_project_path(qapp, tmp_path):
     mw = MainWindow(); mw._load_one(str(a)); mw.save_project(proj)
     mw2 = MainWindow(); mw2.open_project(proj)
     assert str(mw2._project_path) == str(proj)
+
+
+def test_open_project_sets_path_even_if_render_fails(qapp, tmp_path, monkeypatch):
+    # The document is "open" once files/views load; a view-render hiccup must
+    # not leave _project_path None (which would make 保存项目 prompt Save-As
+    # for an already-open project).
+    from mf4_analyzer.ui.main_window import MainWindow
+    a = tmp_path / "a.csv"; _csv(a)
+    proj = tmp_path / "p.tlproj"
+    mw = MainWindow(); mw._load_one(str(a)); mw.save_project(proj)
+    mw2 = MainWindow()
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("render failed")
+    monkeypatch.setattr(mw2, "_apply_active_view", _boom)
+    mw2.open_project(proj)
+    assert str(mw2._project_path) == str(proj)

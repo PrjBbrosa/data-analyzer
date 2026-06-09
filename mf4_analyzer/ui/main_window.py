@@ -1148,7 +1148,11 @@ class MainWindow(QMainWindow):
                 if sig_data is None or sig_data[0] == fid:
                     ctx.set_fs(fd.fs)
             if len(fd.time_array):
-                self.inspector.top.set_range_limits(0, fd.time_array[-1])
+                max_t = max(
+                    (f.time_array[-1] for f in self.files.values() if len(f.time_array)),
+                    default=0,
+                )
+                self.inspector.top.set_range_limits(0, max_t)
         self.toolbar.set_enabled_for_mode(
             self.toolbar.current_mode(), has_file=bool(self.files)
         )
@@ -1550,13 +1554,18 @@ class MainWindow(QMainWindow):
                 "以下文件找不到，已跳过：\n" + "\n".join(missing),
             )
 
+        # The project's files/views are loaded by this point, so the document
+        # is "open" regardless of whether the final view render succeeds —
+        # record the path BEFORE the render guard so a render hiccup doesn't
+        # leave 保存项目 prompting Save-As for an already-open project.
+        self._project_path = path
+
         try:
             self._apply_active_view(self.view_manager.active)
         except Exception:
             self.statusBar.showMessage(f"已打开项目: {path.name}（渲染恢复失败）")
             return
 
-        self._project_path = path
         self.statusBar.showMessage(f"已打开项目: {path.name}")
 
     def close_all(self):

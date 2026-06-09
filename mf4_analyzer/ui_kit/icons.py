@@ -359,6 +359,24 @@ class Icons:
             p.drawLine(QPointF(12.6, 14.0), QPointF(10.0, 16.8))
         return _line_icon(draw, GRAY)
 
+    @classmethod
+    def save_disk(cls):
+        """Floppy-disk 'save' glyph (distinct from the export tray-arrow)."""
+        def draw(p):
+            body = QPainterPath()
+            body.moveTo(4, 4)
+            body.lineTo(13.5, 4)
+            body.lineTo(16, 6.5)
+            body.lineTo(16, 16)
+            body.lineTo(4, 16)
+            body.closeSubpath()
+            p.drawPath(body)
+            # top shutter slot
+            p.drawRect(QRectF(7.5, 4, 4, 3))
+            # bottom label panel
+            p.drawRect(QRectF(6.5, 10.5, 7, 5.5))
+        return _line_icon(draw, GRAY)
+
 
 # =============================================================================
 # QSS subcontrol-arrow icon cache (scheme B: qtawesome -> PNG -> QSS image:url)

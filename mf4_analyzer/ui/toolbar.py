@@ -32,7 +32,7 @@ class Toolbar(QWidget):
         self.btn_add.setProperty("role", "primary")
         self.btn_add.setToolTip("打开数据文件或项目（.tlproj）")
         self.btn_save_project = QPushButton("保存项目", self)
-        self.btn_save_project.setIcon(Icons.export())
+        self.btn_save_project.setIcon(Icons.save_disk())
         self.btn_save_project.setToolTip("保存当前会话为 .tlproj 项目")
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
