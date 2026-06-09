@@ -103,3 +103,26 @@ def test_x_tick_computation_memoized_across_rows_and_ticks(qtbot, qapp, monkeypa
     ctrl._apply_target_x_ticks_to_all_axes()
     # Identical viewport (a debounce tick with unchanged xlim): pure cache.
     assert calls == []
+
+
+def test_repeated_flush_with_same_xlim_skips_tail_work(qtbot, qapp, monkeypatch):
+    from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
+
+    canvas = _make_canvas(qtbot, _rows(2), "subplot")  # helper already flushed once
+
+    emitted = []
+    canvas.xrange_changed.connect(lambda lo, hi: emitted.append((lo, hi)))
+    reticks = []
+    monkeypatch.setattr(
+        TickDensityController,
+        "_apply_target_x_ticks_to_all_axes",
+        lambda self: reticks.append(1),
+    )
+
+    canvas._flush_pending_refresh()
+    canvas._flush_pending_refresh()
+
+    # Same xlim + same pixel width + every channel gated by its range key:
+    # the tail (retick + xrange/visible_range emits + quality emit) must not run.
+    assert emitted == []
+    assert reticks == []

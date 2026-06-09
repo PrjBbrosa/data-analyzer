@@ -158,6 +158,7 @@ class Renderer(_CanvasBackref):
         pixel_width = self._current_pixel_width()
         positions_envelope = _legacy_positions_envelope()
 
+        updated_any = False
         for name, (axis_facade, line_facade) in list(self._channel_lines.items()):
             entry = self.channel_data.get(name)
             if entry is None:
@@ -187,6 +188,7 @@ class Renderer(_CanvasBackref):
                 continue
 
             self._last_range_key[name] = range_key
+            updated_any = True
 
             try:
                 line_facade.plot_data_item.setData(env_t, env_s)
@@ -195,6 +197,10 @@ class Renderer(_CanvasBackref):
 
         # Debounced tail work: retick axes and notify listeners only once after
         # rapid drag ticks settle, instead of blocking every mouse-move event.
+        signature = (float(xlim[0]), float(xlim[1]), int(pixel_width))
+        if not updated_any and signature == self._last_refresh_signature:
+            return
+        self._last_refresh_signature = signature
         self._tick_density_controller._apply_target_x_ticks_to_all_axes()
         self._emit_xrange_changed()
         self._refresh = True

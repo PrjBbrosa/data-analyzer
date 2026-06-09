@@ -312,6 +312,7 @@ class TimeDomainCanvasPG(QWidget):
         # Per-channel "last range key" so a re-flush with no xlim change
         # is a no-op (pyqt-ui/2026-04-25-cache-invalidation-event-conditional).
         self._last_range_key: dict = {}
+        self._last_refresh_signature = None
 
         # --- compatibility seams expected by main_window / chart_stack --
         # span_selector kept as None so existing main_window code
@@ -846,23 +847,17 @@ class TimeDomainCanvasPG(QWidget):
         RAW ``channel_data`` arrays.
 
         Ordering honors pyqt-ui/2026-04-25-flush-after-axis-mutation-not-
-        before: set the X union FIRST, flush the debounced refresh so the
-        envelope repopulates for the global window, THEN set Y from raw.
-        A try/finally tail flush covers every return path so no stale
-        debounce frame lands after Home.
+        before: set the X union and Y ranges first (all synchronous, no
+        intermediate frame can paint), then the single try/finally tail
+        flush drains the debounce so the frame after Home holds the
+        global-window envelope.
         """
         self.disable_interactive_quality()
         try:
             # (1) Set X to the raw union on every handle (seeds the X-master
             # too in overlay mode).
             self._set_xrange_to_data_union()
-            # (2) Drain the debounced refresh scheduled by the X mutation so
-            # the visible curve holds the global-window envelope.
-            try:
-                self._flush_pending_refresh()
-            except Exception:
-                pass
-            # (3) Set Y per handle from the RAW channel data (full, finite),
+            # (2) Set Y per handle from the RAW channel data (full, finite),
             # not from the clipped PlotDataItem. Each handle hosts exactly
             # one channel (subplot/single: one per row; overlay: one per aux
             # ViewBox), so map handle -> channel via _channel_lines.
@@ -1069,6 +1064,7 @@ class TimeDomainCanvasPG(QWidget):
         self._primary_xaxis_ax = None
         self._curve_path_cache.clear()
         self._last_range_key.clear()
+        self._last_refresh_signature = None
         self._overlay_mode = False
         self._refresh = True
         # T6 — drop overlay selection + subplot label scaffolding so the
@@ -1092,6 +1088,7 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor.reset_all_state()
         self._curve_path_cache.clear()
         self._last_range_key.clear()
+        self._last_refresh_signature = None
         self.draw_idle()
 
     def set_cursor_visible(self, v):
@@ -1433,6 +1430,7 @@ class TimeDomainCanvasPG(QWidget):
         if data_id is None and channel is None:
             self._curve_path_cache.clear()
             self._last_range_key.clear()
+            self._last_refresh_signature = None
             return
         keys_to_drop = []
         for k in self._curve_path_cache:
