@@ -10,6 +10,7 @@ from PyQt5.QtCore import QEasingCurve, QVariantAnimation, Qt
 from PyQt5.QtGui import QFontMetrics
 
 from . import _binding  # noqa: F401
+from ._backref import _CanvasBackref
 
 import pyqtgraph as pg
 
@@ -36,9 +37,6 @@ _OVERLAY_AXIS_LABEL_MIN_CHARS = 12
 _OVERLAY_AXIS_LABEL_FALLBACK_CHARS = 22
 _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0
 
-_MISSING = object()
-
-
 def _subplot_ylabel_text(name, unit):
     """Subplot left-axis label: compact channel name plus unit suffix."""
     compact = _compact_axis_label(name, unit, max_chars=20)
@@ -52,47 +50,6 @@ def _view_state_channel_key(data_id, name):
         ensure_ascii=False,
         separators=(",", ":"),
     )
-
-
-class _CanvasBackref:
-    _delegate_names = frozenset()
-    _owned_names = frozenset()
-
-    def __init__(self, canvas):
-        object.__setattr__(self, "_c", canvas)
-
-    def __getattribute__(self, name):
-        if name not in {
-            "_c",
-            "_delegate_names",
-            "_owned_names",
-            "__dict__",
-            "__class__",
-            "__getattr__",
-            "__getattribute__",
-            "__setattr__",
-        }:
-            delegate_names = object.__getattribute__(self, "_delegate_names")
-            if name in delegate_names:
-                canvas = object.__getattribute__(self, "_c")
-                value = getattr(canvas, "__dict__", {}).get(name, _MISSING)
-                if value is not _MISSING:
-                    return value
-        return object.__getattribute__(self, name)
-
-    def __getattr__(self, name):
-        return getattr(self._c, name)
-
-    def __setattr__(self, name, value):
-        if name == "_c":
-            object.__setattr__(self, name, value)
-            return
-        owned_names = object.__getattribute__(self, "_owned_names")
-        delegate_names = object.__getattribute__(self, "_delegate_names")
-        if name in owned_names or name in delegate_names:
-            object.__setattr__(self, name, value)
-            return
-        setattr(self._c, name, value)
 
 
 class OverlayAxisManager(_CanvasBackref):

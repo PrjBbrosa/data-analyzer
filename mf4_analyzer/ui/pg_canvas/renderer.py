@@ -10,6 +10,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 
 from . import _binding  # noqa: F401
+from ._backref import _CanvasBackref
 
 import pyqtgraph as pg
 
@@ -74,43 +75,6 @@ def _legacy_positions_envelope():
     from mf4_analyzer.signal._envelope_cutils import positions_envelope
 
     return positions_envelope
-
-
-_MISSING = object()
-
-
-class _CanvasBackref:
-    _delegate_names = frozenset()
-
-    def __init__(self, canvas):
-        object.__setattr__(self, "_c", canvas)
-
-    def __getattribute__(self, name):
-        if name not in {
-            "_c",
-            "_delegate_names",
-            "__dict__",
-            "__class__",
-            "__getattr__",
-            "__getattribute__",
-            "__setattr__",
-        }:
-            delegate_names = object.__getattribute__(self, "_delegate_names")
-            if name in delegate_names:
-                canvas = object.__getattribute__(self, "_c")
-                value = getattr(canvas, "__dict__", {}).get(name, _MISSING)
-                if value is not _MISSING:
-                    return value
-        return object.__getattribute__(self, name)
-
-    def __getattr__(self, name):
-        return getattr(self._c, name)
-
-    def __setattr__(self, name, value):
-        if name == "_c":
-            object.__setattr__(self, name, value)
-            return
-        setattr(self._c, name, value)
 
 
 class Renderer(_CanvasBackref):
