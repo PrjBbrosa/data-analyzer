@@ -10,6 +10,14 @@ from .. import app_meta
 from ..ui_kit.icons import Icons
 
 
+def _make_sep(parent):
+    sep = QFrame(parent)
+    sep.setFrameShape(QFrame.VLine)
+    sep.setFixedWidth(1)
+    sep.setStyleSheet("background: #eef2f7; border: none;")
+    return sep
+
+
 class Toolbar(QWidget):
     # Left segment
     open_requested = pyqtSignal()
@@ -19,12 +27,32 @@ class Toolbar(QWidget):
     mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
     # Right segment
     acquisition_cockpit_requested = pyqtSignal()
+    # Panel toggle signals
+    nav_panel_toggled = pyqtSignal()
+    inspector_panel_toggled = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 2, 10, 2)
-        lay.setSpacing(8)
+        lay.setContentsMargins(4, 2, 4, 2)
+        lay.setSpacing(4)
+
+        # ── panel toggle buttons ─────────────────────────────────────────────
+        self.btn_toggle_nav = QPushButton(self)
+        self.btn_toggle_nav.setIcon(Icons.panel_left())
+        self.btn_toggle_nav.setIconSize(QSize(16, 16))
+        self.btn_toggle_nav.setCheckable(True)
+        self.btn_toggle_nav.setProperty("role", "panel-toggle")
+        self.btn_toggle_nav.setToolTip("收起/展开左侧导航")
+        self.btn_toggle_nav.setFixedSize(28, 22)
+
+        self.btn_toggle_inspector = QPushButton(self)
+        self.btn_toggle_inspector.setIcon(Icons.panel_right())
+        self.btn_toggle_inspector.setIconSize(QSize(16, 16))
+        self.btn_toggle_inspector.setCheckable(True)
+        self.btn_toggle_inspector.setProperty("role", "panel-toggle")
+        self.btn_toggle_inspector.setToolTip("收起/展开右侧检查器")
+        self.btn_toggle_inspector.setFixedSize(28, 22)
 
         # ── left group ──────────────────────────────────────────────────────
         self.btn_add = QPushButton("打开", self)
@@ -58,6 +86,7 @@ class Toolbar(QWidget):
 
         # left layout
         left = QHBoxLayout()
+        left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(10)
         for b in (
             self.btn_add,
@@ -114,11 +143,15 @@ class Toolbar(QWidget):
         right_widget.setLayout(right)
         right_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
 
+        lay.addWidget(self.btn_toggle_nav)
+        lay.addWidget(_make_sep(self))
         lay.addWidget(left_widget)
         lay.addStretch(1)
         lay.addWidget(segment_frame)
         lay.addStretch(1)
         lay.addWidget(right_widget)
+        lay.addWidget(_make_sep(self))
+        lay.addWidget(self.btn_toggle_inspector)
 
         self.btn_mode_time.setChecked(True)
         self._current_mode = 'time'
@@ -151,6 +184,8 @@ class Toolbar(QWidget):
                        ('fft_time', self.btn_mode_fft_time),
                        ('order', self.btn_mode_order)]:
             b.clicked.connect(lambda _=False, k=key: self._set_mode(k))
+        self.btn_toggle_nav.clicked.connect(self.nav_panel_toggled)
+        self.btn_toggle_inspector.clicked.connect(self.inspector_panel_toggled)
 
     def _set_mode(self, mode):
         if mode == self._current_mode:
@@ -174,4 +209,12 @@ class Toolbar(QWidget):
 
     def current_mode(self):
         return self._current_mode
+
+    def set_nav_open(self, open: bool):
+        """Sync the nav toggle button checked state (checked = panel hidden)."""
+        self.btn_toggle_nav.setChecked(not open)
+
+    def set_inspector_open(self, open: bool):
+        """Sync the inspector toggle button checked state (checked = panel hidden)."""
+        self.btn_toggle_inspector.setChecked(not open)
 

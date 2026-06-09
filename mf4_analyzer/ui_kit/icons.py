@@ -360,6 +360,35 @@ class Icons:
         return _line_icon(draw, GRAY)
 
     @classmethod
+    def panel_left(cls):
+        """Sidebar-left icon: outer rect + left panel divider + left fill."""
+        with _painting() as (pix, p):
+            pen = _pen(QColor("#64748b"), 1.4)
+            p.setPen(pen)
+            # outer rect
+            p.drawRoundedRect(QRectF(2, 2, 16, 16), 2, 2)
+            # vertical divider at x=7
+            p.drawLine(QPointF(7, 2), QPointF(7, 18))
+            # left panel fill
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(100, 116, 139, 60)))
+            p.drawRect(QRectF(2, 2, 5, 16))
+        return QIcon(pix)
+
+    @classmethod
+    def panel_right(cls):
+        """Sidebar-right icon: outer rect + right panel divider + right fill."""
+        with _painting() as (pix, p):
+            pen = _pen(QColor("#64748b"), 1.4)
+            p.setPen(pen)
+            p.drawRoundedRect(QRectF(2, 2, 16, 16), 2, 2)
+            p.drawLine(QPointF(13, 2), QPointF(13, 18))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(100, 116, 139, 60)))
+            p.drawRect(QRectF(13, 2, 5, 16))
+        return QIcon(pix)
+
+    @classmethod
     def save_disk(cls):
         """Floppy-disk 'save' glyph (distinct from the export tray-arrow)."""
         def draw(p):

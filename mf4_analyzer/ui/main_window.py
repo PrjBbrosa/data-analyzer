@@ -136,7 +136,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self.toolbar)
 
         from PyQt5.QtWidgets import QHBoxLayout
-        from .side_panels import Side, SidePanelStrip, PeekOverlay, SidePanelController
+        from .side_panels import Side, SidePanelStrip, PeekOverlay, SidePanelController, Ev, PanelState
 
         splitter = QSplitter(Qt.Horizontal, self)
         self.splitter = splitter
@@ -452,6 +452,22 @@ class MainWindow(QMainWindow):
         if xrange_changed is not None:
             xrange_changed.connect(self._on_time_canvas_xrange_changed)
         self._connect_canvas_range_signals(self.canvas_time)
+
+        # ── Toolbar sidebar toggle buttons ───────────────────────────────────
+        from .side_panels import Ev, PanelState
+        self.toolbar.nav_panel_toggled.connect(
+            lambda: self._panel_ctrl_left._dispatch(Ev.CLICK)
+        )
+        self.toolbar.inspector_panel_toggled.connect(
+            lambda: self._panel_ctrl_right._dispatch(Ev.CLICK)
+        )
+        # Sync checked state when panel state changes (includes drag-collapse).
+        self._panel_ctrl_left.state_changed.connect(
+            lambda s: self.toolbar.set_nav_open(s == PanelState.PINNED)
+        )
+        self._panel_ctrl_right.state_changed.connect(
+            lambda s: self.toolbar.set_inspector_open(s == PanelState.PINNED)
+        )
 
     def _connect_canvas_range_signals(self, canvas):
         visible_range_changed = getattr(canvas, 'visible_range_changed', None)

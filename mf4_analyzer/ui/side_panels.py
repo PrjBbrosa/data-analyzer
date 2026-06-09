@@ -50,6 +50,7 @@ _TRANSITIONS = {
     (PanelState.PEEK, Ev.OVERLAY_ENTERED): (PanelState.PEEK, (Effect.STOP_TIMER,)),
     (PanelState.PEEK, Ev.COLLAPSE_TIMEOUT): (PanelState.HIDDEN, (Effect.EXIT_PEEK,)),
     (PanelState.PINNED, Ev.DRAG_COLLAPSED): (PanelState.HIDDEN, (Effect.COLLAPSE_PINNED,)),
+    (PanelState.PINNED, Ev.CLICK): (PanelState.HIDDEN, (Effect.COLLAPSE_PINNED,)),
 }
 
 
@@ -175,6 +176,8 @@ class SidePanelController(QObject):
     widgets it drives are torn down.
     """
 
+    state_changed = pyqtSignal(object)   # emits new PanelState
+
     PEEK_EXTRA_PX = 24      # overlay is "a bit wider" than the docked width
     COLLAPSE_THRESHOLD = 24  # drag width <= this => collapsed
 
@@ -245,6 +248,7 @@ class SidePanelController(QObject):
         for eff in effects:
             self._run_effect(eff)
         self._apply_strip_visibility()
+        self.state_changed.emit(self.state)
 
     def _run_effect(self, eff):
         if eff == Effect.ENTER_PEEK:

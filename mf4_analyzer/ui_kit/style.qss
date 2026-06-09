@@ -308,6 +308,23 @@ Toolbar QPushButton {
     min-height: 22px;
     padding: 2px 12px;
 }
+Toolbar QPushButton[role="panel-toggle"] {
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background-color: transparent;
+}
+Toolbar QPushButton[role="panel-toggle"]:hover {
+    background-color: #f5f7fb;
+    border-color: #dfe5ee;
+}
+Toolbar QPushButton[role="panel-toggle"]:checked {
+    background-color: #e8efff;
+    border-color: #1769e0;
+    border-radius: 3px;
+}
 Toolbar QPushButton[segment="time"],
 Toolbar QPushButton[segment="fft"],
 Toolbar QPushButton[segment="fft_time"],
