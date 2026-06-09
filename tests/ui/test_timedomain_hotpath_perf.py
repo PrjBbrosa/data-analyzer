@@ -126,3 +126,15 @@ def test_repeated_flush_with_same_xlim_skips_tail_work(qtbot, qapp, monkeypatch)
     # the tail (retick + xrange/visible_range emits + quality emit) must not run.
     assert emitted == []
     assert reticks == []
+
+
+def test_propagate_equal_ranges_skips_axis_item_sync(qtbot, qapp):
+    canvas = _make_canvas(qtbot, _rows(3), "subplot")
+    canvas._propagate_xlim_to_siblings()  # converge every sibling first
+
+    calls = []
+    canvas._sync_x_axis_item_range = lambda *a: calls.append(a)
+    canvas._propagate_xlim_to_siblings()
+    # All siblings already hold the exact range: zero AxisItem.setRange calls
+    # (setRange unconditionally drops the tick picture even for equal values).
+    assert calls == []

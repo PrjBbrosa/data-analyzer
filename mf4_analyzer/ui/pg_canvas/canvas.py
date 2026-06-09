@@ -1582,7 +1582,9 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 cur_lo, cur_hi = (None, None)
             if cur_lo == float(lo) and cur_hi == float(hi):
-                self._sync_x_axis_item_range(handle, lo, hi)
+                # Already identical. AxisItem.setRange invalidates its cached
+                # tick picture even for equal values, so avoid re-syncing it on
+                # every sibling propagation tick.
                 continue
             did_set = False
             try:
