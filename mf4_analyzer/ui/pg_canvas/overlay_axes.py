@@ -383,7 +383,9 @@ class OverlayAxisManager(_CanvasBackref):
         self._channel_view_state_lines[
             _view_state_channel_key(data_id, name)
         ] = (axis_handle, line_handle)
-        self._channel_is_monotonic[name] = _is_monotonic_array(t_arr)
+        self._channel_is_monotonic[name] = self._cached_is_monotonic(
+            data_id, name, t_arr
+        )
 
         try:
             if self._overlay_mode:
@@ -403,6 +405,25 @@ class OverlayAxisManager(_CanvasBackref):
                 _apply_pg_axis_font(axis_handle.x_axis_item())
             except Exception:
                 pass
+
+    def _cached_is_monotonic(self, data_id, name, t_arr):
+        """Return monotonicity from a cheap cross-rebuild fingerprint cache."""
+        try:
+            n = int(len(t_arr))
+            if n:
+                key = (data_id, name, n, float(t_arr[0]), float(t_arr[-1]))
+            else:
+                key = (data_id, name, 0, 0.0, 0.0)
+        except Exception:
+            return _is_monotonic_array(t_arr)
+        cache = self._monotonic_fingerprint_cache
+        cached = cache.get(key)
+        if cached is None:
+            if len(cache) > 256:
+                cache.clear()
+            cached = bool(_is_monotonic_array(t_arr))
+            cache[key] = cached
+        return cached
 
     def _overlay_axis_label(self, axis_handle, name, unit):
         base = str(name).replace("\n", " ")

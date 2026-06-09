@@ -313,6 +313,7 @@ class TimeDomainCanvasPG(QWidget):
         # is a no-op (pyqt-ui/2026-04-25-cache-invalidation-event-conditional).
         self._last_range_key: dict = {}
         self._last_refresh_signature = None
+        self._monotonic_fingerprint_cache: dict = {}
 
         # --- compatibility seams expected by main_window / chart_stack --
         # span_selector kept as None so existing main_window code
@@ -1089,6 +1090,7 @@ class TimeDomainCanvasPG(QWidget):
         self._curve_path_cache.clear()
         self._last_range_key.clear()
         self._last_refresh_signature = None
+        self._monotonic_fingerprint_cache.clear()
         self.draw_idle()
 
     def set_cursor_visible(self, v):
@@ -1460,6 +1462,7 @@ class TimeDomainCanvasPG(QWidget):
         TimeDomainCanvas behavior — the next plot_channels rebuilds the
         dict."""
         self._channel_is_monotonic.clear()
+        self._monotonic_fingerprint_cache.clear()
 
     # ------------------------------------------------------------------
     # Viewport refresh wiring (design §5.2 hot path).

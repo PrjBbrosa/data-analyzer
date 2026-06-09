@@ -138,3 +138,24 @@ def test_propagate_equal_ranges_skips_axis_item_sync(qtbot, qapp):
     # All siblings already hold the exact range: zero AxisItem.setRange calls
     # (setRange unconditionally drops the tick picture even for equal values).
     assert calls == []
+
+
+def test_monotonicity_cached_across_rebuilds(qtbot, qapp, monkeypatch):
+    import mf4_analyzer.ui.pg_canvas.overlay_axes as oa
+
+    calls = []
+    orig = oa._is_monotonic_array
+    monkeypatch.setattr(
+        oa, "_is_monotonic_array", lambda t: calls.append(1) or orig(t)
+    )
+
+    rows = _rows(2)
+    canvas = _make_canvas(qtbot, rows, "subplot")
+    assert len(calls) == 2  # first build scans each channel once
+
+    canvas.plot_channels(rows, mode="overlay")  # same arrays, new layout
+    assert len(calls) == 2  # rebuild served from the fingerprint cache
+
+    canvas.invalidate_monotonicity_cache()
+    canvas.plot_channels(rows, mode="subplot")
+    assert len(calls) == 4  # explicit invalidation forces a rescan
