@@ -656,7 +656,11 @@ class MainWindow(QMainWindow):
             self._view_bridge.apply_controls_from_state(state, self, canvas)
             if update_primary_ui and state.cursor_mode == 'off':
                 self.chart_stack.clear_cursor_pill()
-            self._plot_time_on_canvas(canvas, update_primary_ui=update_primary_ui)
+            self._plot_time_on_canvas(
+                canvas,
+                update_primary_ui=update_primary_ui,
+                defer_first_frame=(state.xlim is not None),
+            )
             canvas.restore_visible_xlim(state.xlim)
             canvas.restore_visible_ylims(state.ylims)
             tick_opts = (state.axis_opts or {}).get('tick_density') or {}
@@ -1715,7 +1719,7 @@ class MainWindow(QMainWindow):
             focused, update_primary_ui=(focused is self.canvas_time)
         )
 
-    def _plot_time_on_canvas(self, canvas, update_primary_ui=True):
+    def _plot_time_on_canvas(self, canvas, update_primary_ui=True, defer_first_frame=False):
         if not self.files:
             canvas.clear()
             canvas.draw()
@@ -1845,7 +1849,12 @@ class MainWindow(QMainWindow):
             return
 
         xlabel = self._custom_xlabel or self.inspector.top.xaxis_label() or 'Time (s)'
-        canvas.plot_channels(data, mode, xlabel=xlabel)
+        canvas.plot_channels(
+            data,
+            mode,
+            xlabel=xlabel,
+            defer_first_frame=defer_first_frame,
+        )
         if update_primary_ui:
             self._sync_time_range_inputs_from_visible_xlim()
         xt, yt = self.inspector.top.tick_density()

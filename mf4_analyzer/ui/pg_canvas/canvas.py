@@ -399,7 +399,9 @@ class TimeDomainCanvasPG(QWidget):
     # Public surface (signal/method names frozen by W0 contract tests).
     # ------------------------------------------------------------------
 
-    def plot_channels(self, ch_list, mode="overlay", xlabel="Time (s)"):
+    def plot_channels(
+        self, ch_list, mode="overlay", xlabel="Time (s)", defer_first_frame=False
+    ):
         """Build the chart for ``ch_list``.
 
         Row shape (legacy or preferred):
@@ -409,6 +411,11 @@ class TimeDomainCanvasPG(QWidget):
 
         ``data_id`` is required for the curve-layer cache to key entries
         per-source-file; rows without it route through the slow path.
+
+        ``defer_first_frame`` skips the full-range bind envelope and binds
+        empty stubs. Only use it when an xlim restore + flush follows the
+        rebuild; plain plot_channels needs the bind envelope as its first
+        frame because data-union x seeding blocks range signals.
         """
         self.disable_interactive_quality()
         self.clear()
@@ -439,6 +446,7 @@ class TimeDomainCanvasPG(QWidget):
                 self._overlay_axes._bind_channel(
                     handle, name, t, sig, color, unit, data_id,
                     xlabel=xlabel if i == len(vis) - 1 else None,
+                    skip_envelope=defer_first_frame,
                 )
                 self._overlay_axes._configure_subplot_bottom_axis(
                     handle,
@@ -490,7 +498,12 @@ class TimeDomainCanvasPG(QWidget):
             # Channel 1 → dedicated aux ViewBox bound to the LEFT axis.
             first_handle = self._overlay_axes._add_overlay_axis_handle(pi, 0)
             self.axes_list.append(first_handle)
-            self._overlay_axes._bind_channel(first_handle, *vis[0], xlabel=xlabel)
+            self._overlay_axes._bind_channel(
+                first_handle,
+                *vis[0],
+                xlabel=xlabel,
+                skip_envelope=defer_first_frame,
+            )
             # Channels 2..N → dedicated aux ViewBoxes bound to right axes.
             for idx, (name, t, sig, color, unit, data_id) in enumerate(vis[1:], start=1):
                 handle = self._overlay_axes._add_overlay_axis_handle(pi, idx)
@@ -504,6 +517,7 @@ class TimeDomainCanvasPG(QWidget):
                     unit,
                     data_id,
                     xlabel=xlabel,
+                    skip_envelope=defer_first_frame,
                 )
             # Apply default emphasis state (no selection).
             self._overlay_axes._apply_overlay_emphasis()
@@ -535,6 +549,7 @@ class TimeDomainCanvasPG(QWidget):
                 unit,
                 data_id,
                 xlabel=xlabel,
+                skip_envelope=defer_first_frame,
             )
 
         for handle in self.axes_list:
@@ -580,6 +595,9 @@ class TimeDomainCanvasPG(QWidget):
         self._run_replot_callbacks()
         self.disable_interactive_quality()
         self.schedule_idle_quality()
+        if defer_first_frame:
+            self._refresh_pending = True
+            self._refresh_timer.start()
         # Restore cursor visual items when A/B positions survived clear().
         if self._cursor.visible and self._cursor.dual:
             if self._cursor.ax is not None:
@@ -722,7 +740,12 @@ class TimeDomainCanvasPG(QWidget):
         ``codex-confirmed-issue-list-means-remaining-scope`` annotations).
         """
         cur_xlim = self._capture_primary_xlim()
-        self.plot_channels(ch_list, mode=mode, xlabel=xlabel)
+        self.plot_channels(
+            ch_list,
+            mode=mode,
+            xlabel=xlabel,
+            defer_first_frame=(cur_xlim is not None),
+        )
         if cur_xlim is not None:
             self._restore_primary_xlim(cur_xlim)
 

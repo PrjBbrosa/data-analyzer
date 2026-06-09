@@ -343,23 +343,29 @@ class OverlayAxisManager(_CanvasBackref):
             allow_y_grid=False,
         )
 
-    def _bind_channel(self, axis_handle, name, t, sig, color, unit, data_id, *, xlabel=None):
+    def _bind_channel(
+        self, axis_handle, name, t, sig, color, unit, data_id,
+        *, xlabel=None, skip_envelope=False,
+    ):
         """Attach one channel to ``axis_handle``."""
         pi = axis_handle.plot_item
         if pi is None:
             return
-        try:
-            from mf4_analyzer.ui import pg_canvases as legacy_pg_canvases
-            envelope_builder = legacy_pg_canvases.build_envelope
-        except Exception:
-            from mf4_analyzer.ui.canvases import build_envelope as envelope_builder
-        bind_t, bind_s = envelope_builder(
-            np.asarray(t),
-            np.asarray(sig),
-            xlim=None,
-            pixel_width=self._initial_bind_pixel_width(axis_handle),
-            is_monotonic=None,
-        )
+        if skip_envelope:
+            bind_t = bind_s = np.empty(0, dtype=np.float64)
+        else:
+            try:
+                from mf4_analyzer.ui import pg_canvases as legacy_pg_canvases
+                envelope_builder = legacy_pg_canvases.build_envelope
+            except Exception:
+                from mf4_analyzer.ui.canvases import build_envelope as envelope_builder
+            bind_t, bind_s = envelope_builder(
+                np.asarray(t),
+                np.asarray(sig),
+                xlim=None,
+                pixel_width=self._initial_bind_pixel_width(axis_handle),
+                is_monotonic=None,
+            )
         pen = pg.mkPen(color=color, width=self._overlay_default_lw)
         primary_vb = pi.getViewBox() if hasattr(pi, "getViewBox") else None
         target_vb = axis_handle.view_box

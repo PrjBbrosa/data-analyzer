@@ -186,10 +186,11 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     stats_updates = []
 
     class FakeCanvas:
-        def plot_channels(self, data, mode, xlabel):
+        def plot_channels(self, data, mode, xlabel, defer_first_frame=False):
             self.data = data
             self.mode = mode
             self.xlabel = xlabel
+            self.defer_first_frame = defer_first_frame
 
         def set_tick_density(self, x, y):
             self.tick_density = (x, y)
@@ -237,3 +238,26 @@ def test_filedata_time_column_shares_memory_with_dataframe():
     # The float64 time column must be exposed as a view, not an
     # astype(copy=True) duplicate of the full column.
     assert np.shares_memory(fd.time_array, df["time"].to_numpy(copy=False))
+
+
+def test_preserving_rebuild_skips_full_range_bind_envelope(qtbot, qapp, monkeypatch):
+    import mf4_analyzer.ui.pg_canvases as legacy
+
+    calls = []
+    orig = legacy.build_envelope
+    monkeypatch.setattr(
+        legacy, "build_envelope", lambda *a, **k: calls.append(1) or orig(*a, **k)
+    )
+
+    rows = _rows(2)
+    canvas = _make_canvas(qtbot, rows, "overlay")
+    assert len(calls) == 2  # plain plot_channels still binds the first frame
+
+    calls.clear()
+    canvas.plot_channels_preserving_xlim(rows, mode="subplot")
+    # Deferred bind: the restore+flush right after the build paints the first
+    # frame from the viewport envelope; the full-range bind envelope is gone.
+    assert calls == []
+    for _axis, line in canvas._channel_lines.values():
+        xd, _yd = line.plot_data_item.getData()
+        assert xd is not None and len(xd) > 0
