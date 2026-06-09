@@ -129,22 +129,22 @@ class DataLoader:
                 sig = mdf.get(group=group_idx, index=ch_idx)
                 if sig.samples is not None and len(sig.samples) > 0 and np.issubdtype(sig.samples.dtype, np.number):
                     s = sig.samples.flatten() if len(sig.samples.shape) > 1 else sig.samples
-                    sigs[ch_name] = {'s': np.array(s, float), 't': np.array(sig.timestamps, float)}
+                    sigs[ch_name] = {'s': np.asarray(s, dtype=np.float64), 't': np.asarray(sig.timestamps, dtype=np.float64)}
                     units[ch_name] = _resolve_channel_unit(mdf, sig, group_idx, ch_idx)
                     if len(sig.timestamps) > max_len:
                         max_len = len(sig.timestamps)
-                        ref_ts = np.array(sig.timestamps, float)
+                        ref_ts = sigs[ch_name]['t']
             except Exception as e:
                 # 如果带group/index失败，尝试不带参数（兼容旧版本）
                 try:
                     sig = mdf.get(ch_name)
                     if sig.samples is not None and len(sig.samples) > 0 and np.issubdtype(sig.samples.dtype, np.number):
                         s = sig.samples.flatten() if len(sig.samples.shape) > 1 else sig.samples
-                        sigs[ch_name] = {'s': np.array(s, float), 't': np.array(sig.timestamps, float)}
+                        sigs[ch_name] = {'s': np.asarray(s, dtype=np.float64), 't': np.asarray(sig.timestamps, dtype=np.float64)}
                         units[ch_name] = _resolve_channel_unit(mdf, sig, group_idx, ch_idx)
                         if len(sig.timestamps) > max_len:
                             max_len = len(sig.timestamps)
-                            ref_ts = np.array(sig.timestamps, float)
+                            ref_ts = sigs[ch_name]['t']
                 except:
                     pass
 

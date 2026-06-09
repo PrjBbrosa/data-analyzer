@@ -229,3 +229,11 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
 
     assert len(canvas.data) == 1
     assert stats_updates == []
+
+
+def test_filedata_time_column_shares_memory_with_dataframe():
+    df = pd.DataFrame({"time": np.arange(8.0), "a": np.arange(8.0)})
+    fd = FileData("x.csv", df, list(df.columns), {}, 0)
+    # The float64 time column must be exposed as a view, not an
+    # astype(copy=True) duplicate of the full column.
+    assert np.shares_memory(fd.time_array, df["time"].to_numpy(copy=False))

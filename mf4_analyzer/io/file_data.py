@@ -30,7 +30,7 @@ class FileData:
         # 尝试从列名识别时间列
         for ch in chs:
             if ch.lower() in _TIME_NAMES:
-                self.time_array = df[ch].values.astype(float)
+                self.time_array = df[ch].to_numpy(copy=False).astype(float, copy=False)
                 if len(self.time_array) > 1:
                     dt = np.median(np.diff(self.time_array))
                     if dt > 0:
