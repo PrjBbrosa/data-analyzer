@@ -10,6 +10,6 @@ def test_update_button_opens_release_url(qapp, monkeypatch):
 
     mw = MainWindow()
     assert mw._update_btn.toolTip() == "检查更新"
-    assert mw._version_label.text() == app_meta.APP_VERSION
+    assert mw._update_btn.text() == app_meta.APP_VERSION
     mw._update_btn.click()
     assert captured["url"] == app_meta.RELEASE_URL

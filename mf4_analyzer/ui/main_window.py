@@ -236,23 +236,24 @@ class MainWindow(QMainWindow):
         (no text, hover '检查更新') + the app version, linking to the release
         page."""
         from PyQt5.QtCore import Qt, QSize
-        from PyQt5.QtWidgets import QToolButton, QLabel
+        from PyQt5.QtWidgets import QToolButton
         from ..ui_kit.icons import Icons
         from .. import app_meta
 
         self._update_btn = QToolButton(self)
         self._update_btn.setIcon(Icons.cloud_download())
         self._update_btn.setIconSize(QSize(18, 18))
+        self._update_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._update_btn.setText(app_meta.APP_VERSION)
         self._update_btn.setAutoRaise(True)
         self._update_btn.setCursor(Qt.PointingHandCursor)
         self._update_btn.setToolTip("检查更新")
+        self._update_btn.setStyleSheet(
+            "QToolButton { padding: 2px 6px; }"
+        )
         self._update_btn.clicked.connect(self._open_release_page)
 
-        self._version_label = QLabel(app_meta.APP_VERSION, self)
-        self._version_label.setObjectName("versionTag")
-
         self.statusBar.addPermanentWidget(self._update_btn)
-        self.statusBar.addPermanentWidget(self._version_label)
 
     def _open_release_page(self):
         from PyQt5.QtCore import QUrl

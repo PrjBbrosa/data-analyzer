@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QRadioButton,
     QToolButton,
@@ -145,6 +146,10 @@ def _apply_context_widget_i18n(widget):
             continue
         child.setText(translated[0])
         child.setToolTip("")
+    min_text = widget.findChild(QLineEdit, "minText")
+    max_text = widget.findChild(QLineEdit, "maxText")
+    if min_text is not None and max_text is not None:
+        QWidget.setTabOrder(min_text, max_text)
 
 
 def _style_pg_context_menu(menu):
