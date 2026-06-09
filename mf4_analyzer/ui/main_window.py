@@ -1893,38 +1893,40 @@ class MainWindow(QMainWindow):
         )
         self._plot_time_preserving_xlim()
 
-    def export_excel(self):
-        if not self.files or not self._active:
-            self.toast("请先加载文件", "warning"); return
-        fd = self.files[self._active];
-        chs = fd.get_signal_channels()
-        if not chs: return
-        from .drawers.export_sheet import ExportSheet
-        dlg = ExportSheet(self, chs)
-        if dlg.exec_() == QDialog.Accepted:
-            sel = dlg.get_selected()
-            if not sel: return
-            fp, _ = QFileDialog.getSaveFileName(self, "保存", "", "Excel (*.xlsx)")
-            if not fp: return
-            try:
-                df = pd.DataFrame()
-                if dlg.chk_time.isChecked() and fd.time_array is not None: df['Time'] = fd.time_array
-                for ch in sel:
-                    if ch in fd.data.columns: df[ch] = fd.data[ch].values
-                if dlg.chk_range.isChecked() and fd.time_array is not None:
-                    lo, hi = self.inspector.top.range_values()
-                    m = (fd.time_array >= lo) & (fd.time_array <= hi);
-                    df = df.loc[m].reset_index(drop=True)
-                df.to_excel(fp, index=False, engine='openpyxl')
-                self.statusBar.showMessage(
-                    f"导出完成: {Path(fp).name} ({len(df)} 行 × {len(df.columns)} 列)"
-                )
-                self.toast(
-                    f"已导出 {Path(fp).name} · {len(df)} 行 × {len(df.columns)} 列",
-                    "success",
-                )
-            except Exception as e:
-                QMessageBox.critical(self, "错误", str(e))
+    def _do_export_excel(self, fid, channels, include_time, use_range):
+        """Write the given channels of file ``fid`` to an Excel file. Invoked
+        by the channel-editor's 导出 section (export_requested). Time column and
+        time-range filter mirror the former toolbar-export behavior."""
+        from pathlib import Path
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+        import pandas as pd
+        fd = self.files.get(fid)
+        if fd is None or not channels:
+            return
+        fp, _ = QFileDialog.getSaveFileName(self, "导出 Excel", "", "Excel (*.xlsx)")
+        if not fp:
+            return
+        try:
+            df = pd.DataFrame()
+            if include_time and fd.time_array is not None:
+                df['Time'] = fd.time_array
+            for ch in channels:
+                if ch in fd.data.columns:
+                    df[ch] = fd.data[ch].values
+            if use_range and fd.time_array is not None:
+                lo, hi = self.inspector.top.range_values()
+                m = (fd.time_array >= lo) & (fd.time_array <= hi)
+                df = df.loc[m].reset_index(drop=True)
+            df.to_excel(fp, index=False, engine='openpyxl')
+            self.statusBar.showMessage(
+                f"导出完成: {Path(fp).name} ({len(df)} 行 × {len(df.columns)} 列)"
+            )
+            self.toast(
+                f"已导出 {Path(fp).name} · {len(df)} 行 × {len(df.columns)} 列",
+                "success",
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "错误", str(e))
 
     def open_batch(self):
         from .drawers.batch import BatchSheet
