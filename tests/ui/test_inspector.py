@@ -809,14 +809,29 @@ def test_preset_bar_uses_custom_hover_card_instead_of_qtooltip(qapp, qtbot):
     bar._delete(1)
 
 
-def test_tooltip_qss_does_not_draw_square_outer_frame():
+def test_tooltip_qss_does_not_draw_square_outer_frame(qapp):
+    """App-wide tooltips use the glass popup, so QSS must not restyle
+    native QToolTip chrome back into a square painted surface.
+    """
+    import re
     from pathlib import Path
 
-    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-    tooltip_block = qss[qss.index("QToolTip {"): qss.index("}", qss.index("QToolTip {"))]
+    from PyQt5.QtCore import Qt
+    from mf4_analyzer.ui_kit.glass_tooltip import _GlassTooltipPopup
 
-    assert "border: none" in tooltip_block
-    assert "border-radius: 8px" in tooltip_block
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    native_tooltip_rules = re.findall(
+        r"(?m)(?:^|[,{]\s*)QToolTip\b[^{]*\{",
+        qss,
+    )
+
+    assert native_tooltip_rules == []
+
+    popup = _GlassTooltipPopup.instance()
+    assert popup.testAttribute(Qt.WA_TranslucentBackground)
+    flags = popup.windowFlags()
+    assert bool(flags & Qt.ToolTip)
+    assert bool(flags & Qt.FramelessWindowHint)
 
 
 # ---- R3 #9: rebuild button moved to group header ----
