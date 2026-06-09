@@ -26,6 +26,7 @@ Runtime hints are not a standalone module yet.
 | Time chart shortcuts | `chart_stack.py` `_TIME_CARD_SHORTCUTS` | `Alt+1` through `Alt+5` for split/overlay/cursor controls. |
 | Channel-tree context action | `widgets/__init__.py` `MultiFileChannelWidget._on_context_menu` | Right-click channel -> `设为左轴`. |
 | Pyqtgraph right-click chart menu | `pg_canvases.py` context menu reshape helpers | Keeps `查看全部`, `X 轴范围`, `Y 轴范围`, `鼠标操作`, `网格`. |
+| Markup editor capability card | `markup/editor.py` `_maybe_show_capability_hint` | One-shot `markup.capabilities` toast on first open (scope="markup"); retires via shared `chartHints/discovered`. |
 
 ## Proposed Runtime Shape
 
