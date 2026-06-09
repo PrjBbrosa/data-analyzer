@@ -1410,6 +1410,13 @@ QStatusBar {
     border-top: 1px solid #eef2f7;
 }
 
+/* Version tag beside the status-bar update (cloud-download) icon. */
+QStatusBar QLabel#versionTag {
+    color: #8893a6;
+    font-size: 11px;
+    padding-right: 6px;
+}
+
 /* ============ Chart toolbar choice segments ============ */
 QWidget#chartToolbar QPushButton[role="chart-choice"] {
     min-height: 22px;

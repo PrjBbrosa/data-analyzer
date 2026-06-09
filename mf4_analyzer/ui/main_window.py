@@ -1483,7 +1483,14 @@ class MainWindow(QMainWindow):
         self.view_manager.views_changed.emit()
 
         self._active = fid_map.get(doc.active_file)
-        self.chart_stack.set_mode(doc.current_mode)
+        # Route the mode through the toolbar's programmatic setter (not
+        # chart_stack.set_mode directly): _set_mode checks the matching
+        # segment button AND emits mode_changed -> _on_mode_changed, which
+        # syncs chart_stack + inspector + toolbar enabled-state together.
+        # Calling chart_stack.set_mode alone leaves the toolbar segment and
+        # the inspector panel stuck on the previous mode (desync on reopen of
+        # a project saved in FFT / Order / FFT-vs-Time).
+        self.toolbar._set_mode(doc.current_mode)
 
         if missing:
             QMessageBox.warning(

@@ -61,6 +61,26 @@ def test_open_project_roundtrip(qapp, tmp_path):
     assert mw2.chart_stack.current_mode() == "time"
 
 
+def test_open_project_restores_non_time_mode_consistently(qapp, tmp_path):
+    # Reopening a project saved in a non-time mode must leave the chart,
+    # the toolbar segment, and the inspector all agreeing on that mode —
+    # not just the chart canvas (regression guard for the open_project
+    # mode-restore path going through toolbar._set_mode).
+    from mf4_analyzer.ui.main_window import MainWindow
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    proj = tmp_path / "s.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    mw.chart_stack.set_mode("fft")
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    mw2.open_project(proj)
+    assert mw2.chart_stack.current_mode() == "fft"
+    assert mw2.toolbar.current_mode() == "fft"
+
+
 def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
     from PyQt5.QtWidgets import QMessageBox
