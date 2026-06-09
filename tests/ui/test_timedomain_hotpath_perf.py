@@ -62,3 +62,18 @@ def test_repeated_quality_disable_emits_nothing_and_skips_scene_scan(
     # status cannot have changed, so no scene traversal and no emission.
     assert emissions == []
     assert scans == []
+
+
+def test_resize_defers_label_rework_to_settle(qtbot, qapp):
+    canvas = _make_canvas(qtbot, _rows(2), "subplot")
+    assert canvas._subplot_label_specs  # precondition: labels exist
+
+    calls = []
+    canvas._recheck_subplot_label_placement = lambda: calls.append(1)
+    canvas.resize(640, 400)
+    qapp.processEvents()
+    # resizeEvent itself must NOT tear down / rebuild label TextItems.
+    assert calls == []
+    canvas._on_resize_settled()
+    # The settle pass does it exactly once.
+    assert calls == [1]

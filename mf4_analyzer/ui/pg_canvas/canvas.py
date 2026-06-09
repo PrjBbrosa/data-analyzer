@@ -1991,31 +1991,12 @@ class TimeDomainCanvasPG(QWidget):
             pass
 
     def resizeEvent(self, event):
-        """Re-check subplot inside-label placement on resize.
-
-        Mirrors canvases.py's resize-driven inside/outside flip without
-        adding a new debounced QTimer (the existing `_refresh_timer` is
-        for envelope refresh only). The recheck is cheap: we just call
-        ``_recheck_subplot_label_placement`` which short-circuits when
-        ``_subplot_label_specs`` is empty.
-        """
+        """Defer resize-driven recompute to the 40 ms settle pass."""
         try:
             super().resizeEvent(event)
         finally:
-            try:
-                if self._subplot_label_specs:
-                    self._recheck_subplot_label_placement()
-                    # Resize changes label widths; re-pin so left edges
-                    # stay aligned across rows.
-                    self._unify_subplot_left_axis_widths()
-            except Exception:
-                pass
             # Fix C (2026-05-31): the plot-area width just changed, so the
             # idle-AA density budget and envelope point count are stale.
-            # Debounce a single settle pass (40 ms, _refresh_timer style)
-            # so dragging the window border does not recompute on every
-            # intermediate size, then recompute the envelope at the new
-            # width and re-arm idle AA so crisp curves recover.
             try:
                 self._quality.density_seeded = False
                 self._resize_settle_timer.start()
@@ -2037,6 +2018,11 @@ class TimeDomainCanvasPG(QWidget):
             pass
         try:
             self._refresh_overlay_axis_labels()
+        except Exception:
+            pass
+        try:
+            if self._subplot_label_specs:
+                self._recheck_subplot_label_placement()
         except Exception:
             pass
         try:
