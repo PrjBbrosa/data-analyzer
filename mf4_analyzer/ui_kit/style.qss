@@ -1479,13 +1479,6 @@ QFrame#chartToolbarSep {
     border: none;
 }
 
-QToolTip {
-    border: none;
-    border-radius: 8px;
-    background-color: rgba(255, 255, 255, 238);
-    color: #172033;
-    padding: 8px;
-}
 
 QLabel#chartHint {
     padding: 0 12px;

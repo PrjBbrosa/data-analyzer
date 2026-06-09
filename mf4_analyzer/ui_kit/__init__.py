@@ -17,6 +17,7 @@ Public surface (re-exported for convenience; deep imports also work):
   completer.
 """
 from .fonts import setup_chinese_font
+from .glass_tooltip import install_glass_tooltips
 from .icons import Icons, ensure_icon_cache, render_qss_template
 from .stylesheet import load_stylesheet
 from .widgets.searchable_combo import SearchableComboBox
@@ -25,6 +26,7 @@ __all__ = [
     "Icons",
     "SearchableComboBox",
     "ensure_icon_cache",
+    "install_glass_tooltips",
     "load_stylesheet",
     "render_qss_template",
     "setup_chinese_font",

@@ -73,6 +73,7 @@ def main():
     MainWindow = _import_symbol("ui", "MainWindow")
     setup_chinese_font = _import_symbol("ui_kit", "setup_chinese_font")
     load_stylesheet = _import_symbol("ui_kit", "load_stylesheet")
+    install_glass_tooltips = _import_symbol("ui_kit", "install_glass_tooltips")
 
     setup_chinese_font()
     app = QApplication(sys.argv)
@@ -81,6 +82,7 @@ def main():
     if icon is not None:
         app.setWindowIcon(icon)
     load_stylesheet(app)
+    install_glass_tooltips(app)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
