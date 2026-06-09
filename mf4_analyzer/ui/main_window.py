@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
         self.files = OrderedDict();
         self._fc = 0;
         self._active = None
+        self._project_path = None
         # FFT vs Time LRU cache (Plan Task 6). Keys are produced by
         # ``_fft_time_cache_key`` from compute-relevant fields ONLY —
         # display options (amplitude_mode, cmap, dynamic, freq_*) do
@@ -1323,6 +1324,21 @@ class MainWindow(QMainWindow):
         for fp in data_files:
             self._load_one(fp)
 
+    def save_project_via_dialog(self):
+        """保存项目 handler: overwrite the current .tlproj if one is open,
+        otherwise prompt Save-As."""
+        from pathlib import Path
+        from PyQt5.QtWidgets import QFileDialog
+        if self._project_path is not None:
+            self.save_project(self._project_path)
+            return
+        fp, _ = QFileDialog.getSaveFileName(self, "保存项目", "", "TraceLab 项目 (*.tlproj)")
+        if not fp:
+            return
+        if not fp.lower().endswith(".tlproj"):
+            fp = fp + ".tlproj"
+        self.save_project(Path(fp))
+
     def load_files(self):
         fps, _ = QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.csv *.xlsx *.xls)")
         for fp in fps: self._load_one(fp)
@@ -1468,6 +1484,7 @@ class MainWindow(QMainWindow):
             view_manager=vm,
         )
         pio.save_project_to_json(doc, path)
+        self._project_path = path
         self.statusBar.showMessage(f"已保存项目: {path.name}")
 
     def open_project(self, path):
@@ -1539,6 +1556,7 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage(f"已打开项目: {path.name}（渲染恢复失败）")
             return
 
+        self._project_path = path
         self.statusBar.showMessage(f"已打开项目: {path.name}")
 
     def close_all(self):

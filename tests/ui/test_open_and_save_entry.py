@@ -80,3 +80,40 @@ def test_open_multiple_projects_rejected(qapp, tmp_path, monkeypatch):
     mw.open_files_or_project()
     assert warned.get("hit") is True
     assert len(mw.files) == 0
+
+
+def test_save_via_dialog_first_time_prompts(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from PyQt5.QtWidgets import QFileDialog
+    a = tmp_path / "a.csv"; _csv(a)
+    proj = tmp_path / "new.tlproj"
+    mw = MainWindow(); mw._load_one(str(a))
+    assert mw._project_path is None
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a_, **k: (str(proj), ""))
+    mw.save_project_via_dialog()
+    assert proj.exists()
+    assert str(mw._project_path) == str(proj)
+
+
+def test_save_via_dialog_overwrites_known_path(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+    from PyQt5.QtWidgets import QFileDialog
+    a = tmp_path / "a.csv"; _csv(a)
+    proj = tmp_path / "p.tlproj"
+    mw = MainWindow(); mw._load_one(str(a)); mw.save_project(proj)   # sets _project_path
+    called = {"n": 0}
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a_, **k: called.__setitem__("n", called["n"] + 1) or ("", ""))
+    mw.save_project_via_dialog()
+    assert called["n"] == 0          # no Save-As prompt; overwrote known path
+    assert proj.exists()
+
+
+def test_open_project_sets_project_path(qapp, tmp_path):
+    from mf4_analyzer.ui.main_window import MainWindow
+    a = tmp_path / "a.csv"; _csv(a)
+    proj = tmp_path / "p.tlproj"
+    mw = MainWindow(); mw._load_one(str(a)); mw.save_project(proj)
+    mw2 = MainWindow(); mw2.open_project(proj)
+    assert str(mw2._project_path) == str(proj)
