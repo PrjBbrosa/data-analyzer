@@ -3484,13 +3484,19 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
             (float(t0.min()), float(t0.max())),
             abs=1e-6,
         )
+        # Home pads Y by 5% of the raw span (mirrors fit_y_to_visible_x,
+        # fix 3f6f8112) so curves do not press against the axis edges.
+        lo0, hi0 = float(sig0.min()), float(sig0.max())
+        pad0 = (hi0 - lo0) * 0.05
         assert left.get_ylim() == pytest.approx(
-            (float(sig0.min()), float(sig0.max())),
-            rel=0.08,
+            (lo0 - pad0, hi0 + pad0),
+            rel=1e-6,
         )
+        lo1, hi1 = float(sig1.min()), float(sig1.max())
+        pad1 = (hi1 - lo1) * 0.05
         assert right.get_ylim() == pytest.approx(
-            (float(sig1.min()), float(sig1.max())),
-            rel=0.08,
+            (lo1 - pad1, hi1 + pad1),
+            rel=1e-6,
         )
 
     # ---- box-leak fix: a rounded submenu whose host window is opaque leaves

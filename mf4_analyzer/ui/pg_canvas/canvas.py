@@ -888,11 +888,14 @@ class TimeDomainCanvasPG(QWidget):
                 hi = float(finite.max())
                 if not (np.isfinite(lo) and np.isfinite(hi)):
                     continue
+                # 5% symmetric pad, mirroring fit_y_to_visible_x, so Home
+                # does not press the waveform against the axis edges
+                # (restores 3f6f8112; a stale test once reverted it).
                 if hi <= lo:
-                    # Flat signal: give it a small symmetric pad so the line
-                    # is visible rather than a zero-height range.
                     pad = abs(lo) * 0.05 or 1.0
-                    lo, hi = lo - pad, hi + pad
+                else:
+                    pad = (hi - lo) * 0.05
+                lo, hi = lo - pad, hi + pad
                 try:
                     handle.set_ylim(lo, hi)
                 except Exception:
