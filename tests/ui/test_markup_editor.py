@@ -1127,3 +1127,21 @@ def test_markup_editor_has_no_dead_arrow_head_method(qtbot):
     editor = MarkupEditor(_pixmap())
     qtbot.addWidget(editor)
     assert not hasattr(MarkupEditor, "_arrow_head")
+
+
+def test_toolbar_buttons_expose_their_shortcuts(qtbot):
+    editor = MarkupEditor(_pixmap())
+    qtbot.addWidget(editor)
+    tips = {
+        name: editor.findChild(QToolButton, name).toolTip()
+        for name in (
+            "markupCloseButton",
+            "markupUndoButton",
+            "markupRedoButton",
+            "markupStyleButton",
+        )
+    }
+    assert tips["markupCloseButton"] == "关闭 (Esc)"
+    assert tips["markupUndoButton"] == "撤销 (Ctrl+Z)"
+    assert tips["markupRedoButton"] == "重做 (Ctrl+Y)"
+    assert tips["markupStyleButton"] == "样式（颜色 / 线宽） · [ ] 调线宽"
