@@ -55,7 +55,6 @@ from __future__ import annotations
 import os as _os
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 
-import json
 from collections import OrderedDict
 from typing import Tuple
 
@@ -85,7 +84,6 @@ from mf4_analyzer.ui._axis_handle import (
     PgAxisHandle,
 )
 from mf4_analyzer.ui.canvases import (  # noqa: F401
-    _compact_axis_label,
     _split_prefixed_label,
     build_envelope,  # re-exported via the pg_canvases shim + overlay monkeypatch seam
 )
@@ -111,20 +109,10 @@ from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     _HIDPI_MAX_WIDTH,
     _capped_hidpi_scale,
 )
-
-def _subplot_ylabel_text(name, unit):
-    """Subplot left-axis label: compact channel name plus unit suffix."""
-    compact = _compact_axis_label(name, unit, max_chars=20)
-    return f"{compact}" + (f" ({unit})" if unit else "")
-
-
-def _view_state_channel_key(data_id, name):
-    stable_data_id = None if data_id is None else str(data_id)
-    return json.dumps(
-        [stable_data_id, str(name)],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+from mf4_analyzer.ui.pg_canvas._shared import (  # noqa: F401
+    _subplot_ylabel_text,
+    _view_state_channel_key,
+)
 
 
 # Idle-AA density budget (Fix C, 2026-05-31 overlay-aa-interaction-fixes;

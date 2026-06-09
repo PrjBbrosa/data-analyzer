@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 
 import numpy as np
@@ -21,11 +20,11 @@ from mf4_analyzer.ui._axis_handle import (
     _PgLineHandle,
 )
 from mf4_analyzer.ui.canvases import (
-    _compact_axis_label,
     _is_monotonic_array,
     _middle_ellipsis,
 )
 
+from ._shared import _subplot_ylabel_text, _view_state_channel_key
 from .context_menu import _localize_pg_context_menu
 from .fonts import _apply_pg_axis_font, _pg_chart_font
 from .ticks_math import _adjacent_nice_step, _fmt_tick, _frame_to_nice
@@ -36,21 +35,6 @@ _OVERLAY_GRID_ALPHA = 0.28
 _OVERLAY_AXIS_LABEL_MIN_CHARS = 12
 _OVERLAY_AXIS_LABEL_FALLBACK_CHARS = 22
 _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0
-
-def _subplot_ylabel_text(name, unit):
-    """Subplot left-axis label: compact channel name plus unit suffix."""
-    compact = _compact_axis_label(name, unit, max_chars=20)
-    return f"{compact}" + (f" ({unit})" if unit else "")
-
-
-def _view_state_channel_key(data_id, name):
-    stable_data_id = None if data_id is None else str(data_id)
-    return json.dumps(
-        [stable_data_id, str(name)],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-
 
 class OverlayAxisManager(_CanvasBackref):
     """Overlay axis binding, graticule, selection, and interaction routing."""
