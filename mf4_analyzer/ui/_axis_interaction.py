@@ -1,4 +1,4 @@
-"""Pure axis-hit detection + side-effecting axis-edit helper.
+"""Pure axis-hit detection helpers.
 
 Extracted so all 4 canvases (TimeDomain, Plot, Spectrogram, Order) share
 the same hover/dblclick affordance without duplicating PlotCanvas-specific
@@ -76,36 +76,6 @@ def target_axes_for_event(fig, event, margin):
         return event_ax
     ax, _axis = find_axis_for_dblclick(fig, event.x, event.y, margin)
     return ax
-
-
-def edit_axis_dialog(parent_widget, ax, axis):
-    """Side-effecting: open ``AxisEditDialog`` modal, apply user's choice
-    to ``ax``, return ``True`` iff the dialog was accepted.
-
-    Caller is responsible for calling ``canvas.draw_idle()`` when this
-    returns ``True``.
-    """
-    from .dialogs import AxisEditDialog
-
-    dlg = AxisEditDialog(parent_widget, ax, axis)
-    if dlg.exec_() != QDialog.Accepted:
-        return False
-    vmin, vmax, label, auto = dlg.get_values()
-    if axis == 'x':
-        if auto:
-            ax.autoscale(axis='x')
-        else:
-            ax.set_xlim(vmin, vmax)
-        if label:
-            ax.set_xlabel(label)
-    else:
-        if auto:
-            ax.autoscale(axis='y')
-        else:
-            ax.set_ylim(vmin, vmax)
-        if label:
-            ax.set_ylabel(label)
-    return True
 
 
 def _make_handle(ax_or_view):

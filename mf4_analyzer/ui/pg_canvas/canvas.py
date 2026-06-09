@@ -1808,10 +1808,6 @@ class TimeDomainCanvasPG(QWidget):
         except Exception:
             pass
 
-    def _position_inside_label_items(self):
-        for handle, item in zip(self._inside_label_handles, self._inside_label_items):
-            self._position_inside_label_item(handle, item)
-
     def _attach_axis_handle_callbacks(self, handle):
         add_callback = getattr(handle, "add_title_changed_callback", None)
         if callable(add_callback):

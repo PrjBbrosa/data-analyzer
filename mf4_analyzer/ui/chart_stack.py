@@ -1533,13 +1533,6 @@ class TimeChartCard(_ChartCard):
         )
         self.view_tabbar = None
 
-    def mount_view_tabbar(self, bar):
-        """Mount the ViewTabBar between the canvas and bottom hint bar."""
-        bar.setParent(self)
-        lay = self.layout()
-        lay.insertWidget(lay.indexOf(self._hint_bar), bar)
-        self.view_tabbar = bar
-
     def _sync_responsive_toolbar(self):
         super()._sync_responsive_toolbar()
         labels = getattr(self, '_time_button_labels', None)
@@ -2160,10 +2153,6 @@ class ChartStack(QWidget):
         self._view_tabbar = bar
         bar.setVisible(self.current_mode() == 'time')
         return bar
-
-    def take_time_hint_bar(self, parent):
-        """Move the shared time-domain hint bar to another container."""
-        return self.take_hint_bar('time', parent)
 
     def hint_bar_for_mode(self, mode):
         if mode == 'time':

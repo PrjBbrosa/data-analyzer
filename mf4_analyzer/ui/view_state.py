@@ -239,9 +239,6 @@ class ViewManager(QObject):
             return None
         return partner
 
-    def has_split_pair(self, idx: int) -> bool:
-        return self.partner_for(idx) is not None
-
     def _set_active_split_from_pairs(self) -> None:
         self.split_with = self.partner_for(self.active)
 

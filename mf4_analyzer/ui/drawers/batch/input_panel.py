@@ -192,10 +192,6 @@ class FileListWidget(QWidget):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def set_files_source(self, files: dict) -> None:
-        """Update the source for the '+ 已加载' submenu."""
-        self._files_source = files or {}
-
     def add_loaded_file(
         self, fid: object, path: str, channels: frozenset
     ) -> None:

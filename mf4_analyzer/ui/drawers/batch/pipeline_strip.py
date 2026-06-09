@@ -34,7 +34,6 @@ class PipelineCard(QFrame):
         self.badge_label = QLabel("⚠")
         self.badge_label.setAlignment(Qt.AlignRight | Qt.AlignTop)
         self.badge_label.setStyleSheet("color:#f59e0b;")
-        title_row = lay.itemAt(0).widget()
         # badge stacked into title row via separate horizontal sub-layout
         # (kept simple here)
 

@@ -25,9 +25,6 @@ class _ElidedLabel(QLabel):
         self._full_text = text or ""
         self._apply_elided()
 
-    def fullText(self):
-        return self._full_text
-
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_elided()

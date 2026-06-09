@@ -31,7 +31,7 @@ from matplotlib import colors as mcolors
 
 from ..signal import ChannelMath
 from ..ui_kit.widgets.searchable_combo import SearchableComboBox
-from ._axis_handle import MplAxisHandle, make_handle
+from ._axis_handle import make_handle
 from .widgets.compact_spinbox import CompactDoubleSpinBox
 
 
@@ -462,52 +462,6 @@ class ExportDialog(QDialog):
     def get_selected(self):
         return [self.list_ch.item(i).text() for i in range(self.list_ch.count()) if
                 self.list_ch.item(i).checkState() == Qt.Checked]
-
-
-class AxisEditDialog(QDialog):
-    """双击坐标轴弹出的编辑对话框"""
-    def __init__(self, parent, ax, axis='x'):
-        super().__init__(parent)
-        self.ax = ax
-        self.axis = axis
-        self.setWindowTitle(f"{'X' if axis == 'x' else 'Y'}轴设置")
-        self.setMinimumWidth(280)
-        layout = QFormLayout(self)
-
-        if axis == 'x':
-            lo, hi = ax.get_xlim()
-            label = ax.get_xlabel()
-        else:
-            lo, hi = ax.get_ylim()
-            label = ax.get_ylabel()
-
-        self.spin_min = CompactDoubleSpinBox()
-        self.spin_min.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.spin_min.setRange(-1e15, 1e15)
-        self.spin_min.setDecimals(4)
-        self.spin_min.setValue(lo)
-        layout.addRow("最小值:", self.spin_min)
-
-        self.spin_max = CompactDoubleSpinBox()
-        self.spin_max.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.spin_max.setRange(-1e15, 1e15)
-        self.spin_max.setDecimals(4)
-        self.spin_max.setValue(hi)
-        layout.addRow("最大值:", self.spin_max)
-
-        self.edit_label = QLineEdit(label)
-        layout.addRow("标签:", self.edit_label)
-
-        self.chk_auto = QCheckBox("自动范围")
-        layout.addRow(self.chk_auto)
-
-        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        bb.accepted.connect(self.accept)
-        bb.rejected.connect(self.reject)
-        layout.addRow(bb)
-
-    def get_values(self):
-        return self.spin_min.value(), self.spin_max.value(), self.edit_label.text(), self.chk_auto.isChecked()
 
 
 class ChartOptionsDialog(QDialog):

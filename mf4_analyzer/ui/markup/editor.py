@@ -7,7 +7,6 @@ from PyQt5.QtCore import QLineF, QPointF, QRect, QRectF, QSize, Qt, QTimer
 from PyQt5.QtGui import (
     QBrush,
     QColor,
-    QFont,
     QIcon,
     QImage,
     QPainter,
@@ -1115,9 +1114,6 @@ class MarkupEditor(QWidget):
         item.setFlag(QGraphicsItem.ItemIsMovable, True)
         self._undo_stack.push(_AddItemCommand(self._scene, item))
         self.refresh_handles()
-
-    def _apply_style(self, item):
-        self._apply_style_to(item, self._color, self._stroke_width)
 
     def _apply_style_to(self, item, color, width):
         pen = QPen(QColor(color), int(width))

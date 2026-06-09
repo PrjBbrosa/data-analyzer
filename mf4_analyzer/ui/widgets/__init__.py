@@ -296,7 +296,6 @@ class MultiFileChannelWidget(QWidget):
         data = item.data(0, Qt.UserRole)
         if data and data[0] == 'file':
             # 文件级复选框被点击
-            fid = data[1]
             checked = item.checkState(0) == Qt.Checked
             if checked:
                 # 统计该文件下有多少通道

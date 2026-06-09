@@ -6,7 +6,6 @@
 import importlib
 
 import numpy as np
-import pandas as pd
 from pathlib import Path
 from collections import OrderedDict
 
@@ -17,12 +16,9 @@ from PyQt5.QtWidgets import (
     QColorDialog,
     QMainWindow,
     QMessageBox,
-    QSplitter,
     QStatusBar,
-    QVBoxLayout,
-    QWidget,
 )
-from PyQt5.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
+from PyQt5.QtCore import QTimer, QObject, QThread, pyqtSignal
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer
@@ -136,7 +132,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self.toolbar)
 
         from PyQt5.QtWidgets import QHBoxLayout
-        from .side_panels import Side, SidePanelStrip, PeekOverlay, SidePanelController, Ev, PanelState
+        from .side_panels import Side, SidePanelStrip, PeekOverlay, SidePanelController
 
         splitter = QSplitter(Qt.Horizontal, self)
         self.splitter = splitter
@@ -1447,9 +1443,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 
-    def close_active(self):
-        if self._active: self._close(self._active)
-
     def _close(self, fid):
         if fid not in self.files: return
         name = self.files[fid].short_name
@@ -1700,11 +1693,6 @@ class MainWindow(QMainWindow):
 
     def _restore_checked_channels(self, checked):
         self.channel_list.set_checked_channels(checked)
-
-    def _on_span(self, xmin, xmax):
-        self.inspector.top.set_range_from_span(xmin, xmax)
-        st = self.canvas_time.get_statistics(time_range=(xmin, xmax))
-        self.chart_stack.stats_strip.update_stats(st or {})
 
     def plot_time(self):
         # Route channel-check replots to the focused time card. Outside
