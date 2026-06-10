@@ -30,25 +30,20 @@ def _resolve_colormap(name: str) -> pg.ColorMap:
         return pg.colormap.get('viridis')
 
 
-class _DensityAxis(pg.AxisItem):
-    """AxisItem whose tick density scales with the global chart option.
+def _tick_counts_to_density(x_n: int, y_n: int) -> tuple:
+    """Convert inspector tick COUNTS to pg tick-density factors.
 
-    pg has no MaxNLocator equivalent; scaling the *size* argument that
-    tickSpacing sees makes pg believe there is more/less room, which
-    yields proportionally more/fewer major ticks.
+    Replicates the count->density convention of the time-domain canvas
+    (pg_canvas/tick_density.py: x_n/10.0 adaptive fallback at :123,
+    y_n/6.0 at :69, both clamped to [0.35, 3.0]) so every pg canvas
+    responds identically to the PersistentTop spinboxes (x 3-30 default
+    10, y 3-20 default 8). tick_density.py keeps these formulas inline
+    in `TickDensityController` (backref-bound to the time-domain
+    canvas), so they cannot be imported directly; keep both in sync.
     """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._density = 1.0
-
-    def set_density(self, density: float) -> None:
-        self._density = max(0.2, min(5.0, float(density)))
-        self.picture = None
-        self.update()
-
-    def tickSpacing(self, minVal, maxVal, size):
-        return super().tickSpacing(minVal, maxVal, size * self._density)
+    x_d = max(0.35, min(3.0, float(x_n) / 10.0))
+    y_d = max(0.35, min(3.0, float(y_n) / 6.0))
+    return x_d, y_d
 
 
 class PgHeatmapCanvas(QWidget):
@@ -69,12 +64,9 @@ class PgHeatmapCanvas(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._glw)
 
-        self._axis_bottom = _DensityAxis('bottom')
-        self._axis_left = _DensityAxis('left')
-        self._plot = self._glw.addPlot(
-            row=0, col=0,
-            axisItems={'bottom': self._axis_bottom, 'left': self._axis_left},
-        )
+        self._plot = self._glw.addPlot(row=0, col=0)
+        self._axis_bottom = self._plot.getAxis('bottom')
+        self._axis_left = self._plot.getAxis('left')
         self._plot.showGrid(x=True, y=True, alpha=0.25)
         self._img = pg.ImageItem()
         # row-major: matrix[row, col] -> row = Y (origin at rect bottom,
@@ -96,13 +88,15 @@ class PgHeatmapCanvas(QWidget):
         self, matrix, x_extent, y_extent, *,
         x_label='', y_label='', title='', cmap='turbo', interp=None,
         cbar_label='Amplitude', amplitude_mode='amplitude',
-        z_auto=False, z_floor=-30.0, z_ceiling=0.0,
+        z_auto=True, z_floor=-30.0, z_ceiling=0.0,
         x_auto=True, x_min=0.0, x_max=0.0,
         y_auto=True, y_min=0.0, y_max=0.0,
         vmin=None, vmax=None,
     ):
-        # ``interp`` accepted for call-site parity; pg ImageItem rendering
-        # is already smooth-scaled, no per-call interpolation knob.
+        # ``interp`` accepted for call-site parity but currently ignored:
+        # pg ImageItem.paint is a raw drawImage (no smoothing knob), so
+        # any visual difference vs mpl 'bilinear' is arbitrated by the
+        # P1 visual acceptance gate (M6).
         m = np.asarray(matrix, dtype=float)
 
         # -- dB conversion: line-for-line port of canvases.py:2221-2244 --
@@ -149,6 +143,10 @@ class PgHeatmapCanvas(QWidget):
             # at __init__ (pg 0.14.0 source: getAxis('left').setLabel) —
             # the right axis carries the tick values. Update the same axis.
             self._cbar.getAxis('left').setLabel(cbar_label)
+        # Adaptive drag granularity: the default rounding=1 snaps
+        # interactive level drags to whole units and enforces a minimum
+        # 1-unit span — unusable for linear amplitudes < 1.
+        self._cbar.rounding = max((float(vmax) - float(vmin)) / 1000.0, 1e-9)
         # ColorBarItem.setLevels in pg 0.14.0 does not emit
         # sigLevelsChanged (only user drags via _regionChanging do), but
         # block defensively so programmatic updates can never masquerade
@@ -177,9 +175,25 @@ class PgHeatmapCanvas(QWidget):
     def has_result(self) -> bool:
         return self._has_result
 
-    def set_tick_density(self, x_density, y_density) -> None:
-        self._axis_bottom.set_density(float(x_density))
-        self._axis_left.set_density(float(y_density))
+    def set_tick_density(self, x, y) -> None:
+        """Apply inspector tick density.
+
+        ``x``/``y`` are approximate tick COUNTS from
+        ``inspector.top.tick_density()`` (spinboxes: x 3-30 default 10,
+        y 3-20 default 8) — the same integers the mpl canvases fed into
+        ``MaxNLocator(nbins=...)`` — NOT pg density factors. They are
+        converted to native ``AxisItem.setTickDensity`` factors here,
+        the same mechanism TimeDomainCanvasPG uses (tick_density.py).
+        """
+        try:
+            x_n = max(3, int(x))
+            y_n = max(3, int(y))
+        except (TypeError, ValueError):
+            return
+        x_d, y_d = _tick_counts_to_density(x_n, y_n)
+        for axis, density in ((self._axis_bottom, x_d), (self._axis_left, y_d)):
+            axis.setStyle(maxTickLevel=0)
+            axis.setTickDensity(density)
 
     # ------------------------------------------------------------------
     def _on_cbar_levels(self, bar) -> None:
