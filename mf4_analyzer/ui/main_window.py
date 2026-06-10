@@ -397,6 +397,7 @@ class MainWindow(QMainWindow):
         self.view_tabbar.clear_split_requested.connect(self._on_view_clear_split)
         self.view_manager.active_changed.connect(self._apply_active_view)
         self.view_manager.split_changed.connect(self._on_view_split)
+        self._install_view_shortcuts()
 
         # FFT vs Time primary compute.
         self.inspector.fft_time_requested.connect(
@@ -559,6 +560,18 @@ class MainWindow(QMainWindow):
         name = self.view_manager.get(idx).name
         self.toast(f"{action_label} 作用于 {role} · {name} · 点另一栏可改", "info")
         return True
+
+    def _install_view_shortcuts(self):
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        from PyQt5.QtCore import Qt
+        self._view_shortcuts = []
+        for i in range(6):
+            sc = QShortcut(QKeySequence(f"Alt+{i + 1}"), self)
+            sc.setContext(Qt.ApplicationShortcut)
+            idx = i
+            sc.activated.connect(lambda bound=idx: self._switch_view(bound))
+            self._view_shortcuts.append(sc)
 
     def _switch_view(self, idx):
         if idx == self.view_manager.active:

@@ -307,12 +307,11 @@ _MDI_NAV_ICONS = {
     'save':    'mdi.content-save-outline',
 }
 
-# Chart nav shortcuts use Alt (not Ctrl): the app has NO QMenuBar so Alt
-# never collides with a menu mnemonic, and Alt+Z frees Ctrl+Z for app undo.
+# Chart nav shortcuts use Ctrl.
 # The wheel modifiers (Ctrl+wheel / Shift+wheel) intentionally STAY Ctrl/Shift.
 _NAV_SHORTCUTS = hints.NAV_SHORTCUTS
 
-# Time-card segmented controls — Alt+digit shortcuts (left-hand reachable).
+# Time-card segmented controls — Ctrl+digit shortcuts (left-hand reachable).
 # Keys mirror the attribute names so the install helper can locate the button.
 _TIME_CARD_SHORTCUTS = hints.TIME_CARD_SHORTCUTS
 
@@ -1491,7 +1490,7 @@ class TimeChartCard(_ChartCard):
         # mode, force the matplotlib nav toolbar OUT of pan/zoom so a blank-
         # area click can clear the selection without being eaten by a pan
         # press. Deselect intentionally does NOT restore the previous mode —
-        # the user re-engages pan via Alt+G if they want it back.
+        # the user re-engages pan via Ctrl+G if they want it back.
         if hasattr(self.canvas, 'overlay_channel_selected'):
             self.canvas.overlay_channel_selected.connect(
                 self._on_overlay_channel_selected
@@ -1505,10 +1504,10 @@ class TimeChartCard(_ChartCard):
             (self._cursor_buttons['dual'], '双游标', '双'),
         ]
         # Tooltips are populated by _install_button_shortcut below so they
-        # carry the "(Alt+N)" suffix; no plain-text setToolTip needed here.
+        # carry the "(Ctrl+N)" suffix; no plain-text setToolTip needed here.
         self._time_toolbar_compact = None
 
-        # Card-wide Alt+1..5 shortcuts for the segmented controls.
+        # Card-wide Ctrl+1..5 shortcuts for the segmented controls.
         self._time_button_shortcuts = []
         button_by_key = {
             'btn_subplot':   self.btn_subplot,
@@ -1528,7 +1527,7 @@ class TimeChartCard(_ChartCard):
             self,
             self._annotation_btn,
             "标注：左键添加，右键删除最近一处",
-            "Alt+M",
+            "Ctrl+M",
             "annotation",
         )
         self.view_tabbar = None
@@ -1600,7 +1599,7 @@ class TimeChartCard(_ChartCard):
 
         Pan / zoom would otherwise eat the next blank-area click and prevent
         deselect. We do NOT restore the previous mode on deselect — the user
-        can re-engage pan (Alt+G) or zoom (Alt+B) explicitly. Called with
+        can re-engage pan (Ctrl+G) or zoom (Ctrl+B) explicitly. Called with
         ``name=None`` on deselect; that path is a no-op.
         """
         if not name:

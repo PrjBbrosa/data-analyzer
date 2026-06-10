@@ -265,19 +265,18 @@ def test_time_chart_card_button_labels_are_exact_chinese_strings(qapp):
 # ---------------------------------------------------------------------------
 
 
-def test_time_chart_card_has_alt_1_through_5_shortcuts_wired(qapp):
-    """Design §3.2 (revised): Alt+1..Alt+5 must be wired (chart_stack.py
-    _TIME_CARD_SHORTCUTS). The app has no QMenuBar so Alt+digit is safe and
-    leaves Ctrl+digit free. We check both the module-level mapping and the
-    installed QShortcut sequences on the live card so a future refactor
-    cannot drop one without the test noticing."""
+def test_time_chart_card_has_ctrl_1_through_5_shortcuts_wired(qapp):
+    """Design §3.2 (revised): Ctrl+1..Ctrl+5 must be wired (chart_stack.py
+    _TIME_CARD_SHORTCUTS). Alt+1..6 are reserved for view switching. We check
+    both the module-level mapping and the installed QShortcut sequences on the
+    live card so a future refactor cannot drop one without the test noticing."""
     # Module-level constant pinned to the design.
     assert chart_stack_mod._TIME_CARD_SHORTCUTS == (
-        ("btn_subplot", "分屏", "Alt+1"),
-        ("btn_overlay", "叠加", "Alt+2"),
-        ("cursor_off", "游标关", "Alt+3"),
-        ("cursor_single", "单游标", "Alt+4"),
-        ("cursor_dual", "双游标", "Alt+5"),
+        ("btn_subplot", "分屏", "Ctrl+1"),
+        ("btn_overlay", "叠加", "Ctrl+2"),
+        ("cursor_off", "游标关", "Ctrl+3"),
+        ("cursor_single", "单游标", "Ctrl+4"),
+        ("cursor_dual", "双游标", "Ctrl+5"),
     )
 
     canvas = TimeDomainCanvas()
@@ -289,7 +288,7 @@ def test_time_chart_card_has_alt_1_through_5_shortcuts_wired(qapp):
         f"expected 5 segmented-control shortcuts, got {len(shortcuts)}"
     )
     sequences = {sc.key().toString() for sc in shortcuts}
-    assert sequences == {"Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5"}
+    assert sequences == {"Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5"}
 
 
 # ---------------------------------------------------------------------------

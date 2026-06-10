@@ -98,7 +98,7 @@ from mf4_analyzer.ui.pg_canvas.fonts import (
 )
 from mf4_analyzer.ui.pg_canvas.annotations import AnnotationManager
 from mf4_analyzer.ui.pg_canvas.cursor import CursorController
-from mf4_analyzer.ui.pg_canvas.ticks_math import _quantize_range_key
+from mf4_analyzer.ui.pg_canvas.ticks_math import _quantize_range_key, _frame_to_nice
 from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox  # noqa: F401
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
@@ -873,6 +873,7 @@ class TimeDomainCanvasPG(QWidget):
             # not from the clipped PlotDataItem. Each handle hosts exactly
             # one channel (subplot/single: one per row; overlay: one per aux
             # ViewBox), so map handle -> channel via _channel_lines.
+            n_y = max(3, min(20, self._tick_density_controller.density[1]))
             for name, (handle, _line) in self._channel_lines.items():
                 row = self.channel_data.get(name)
                 if row is None:
@@ -888,18 +889,20 @@ class TimeDomainCanvasPG(QWidget):
                 hi = float(finite.max())
                 if not (np.isfinite(lo) and np.isfinite(hi)):
                     continue
-                # 5% symmetric pad, mirroring fit_y_to_visible_x, so Home
-                # does not press the waveform against the axis edges
-                # (restores 3f6f8112; a stale test once reverted it).
                 if hi <= lo:
                     pad = abs(lo) * 0.05 or 1.0
                 else:
                     pad = (hi - lo) * 0.05
                 lo, hi = lo - pad, hi + pad
+                # Snap to nice tick boundaries so Y-axis labels and grid
+                # lines start and end exactly at the viewport edges.
+                lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
                 try:
                     handle.set_ylim(lo, hi)
                 except Exception:
                     pass
+            if self._overlay_mode:
+                self._repin_overlay_channel_ticks()
             self._refresh = True
             self.draw_idle()
         finally:
@@ -931,6 +934,7 @@ class TimeDomainCanvasPG(QWidget):
         """
         self.disable_interactive_quality()
         try:
+            n_y = max(3, min(20, self._tick_density_controller.density[1]))
             for name, (handle, _line) in self._channel_lines.items():
                 row = self.channel_data.get(name)
                 if row is None:
@@ -967,8 +971,10 @@ class TimeDomainCanvasPG(QWidget):
                     pad = abs(lo) * 0.05 or 1.0
                 else:
                     pad = (hi - lo) * 0.05
+                lo, hi = lo - pad, hi + pad
+                lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
                 try:
-                    handle.set_ylim(lo - pad, hi + pad)
+                    handle.set_ylim(lo, hi)
                 except Exception:
                     pass
             if self._overlay_mode:

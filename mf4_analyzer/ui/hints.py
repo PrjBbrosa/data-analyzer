@@ -42,19 +42,19 @@ class HintState:
 
 
 NAV_SHORTCUTS = {
-    "home": "Alt+R",
-    "back": "Alt+Z",
-    "forward": "Alt+Shift+Z",
-    "pan": "Alt+G",
-    "zoom": "Alt+B",
+    "home": "Ctrl+R",
+    "back": "Ctrl+Z",
+    "forward": "Ctrl+Shift+Z",
+    "pan": "Ctrl+G",
+    "zoom": "Ctrl+B",
 }
 
 TIME_CARD_SHORTCUTS = (
-    ("btn_subplot", "分屏", "Alt+1"),
-    ("btn_overlay", "叠加", "Alt+2"),
-    ("cursor_off", "游标关", "Alt+3"),
-    ("cursor_single", "单游标", "Alt+4"),
-    ("cursor_dual", "双游标", "Alt+5"),
+    ("btn_subplot", "分屏", "Ctrl+1"),
+    ("btn_overlay", "叠加", "Ctrl+2"),
+    ("cursor_off", "游标关", "Ctrl+3"),
+    ("cursor_single", "单游标", "Ctrl+4"),
+    ("cursor_dual", "双游标", "Ctrl+5"),
 )
 
 _SHORTCUTS = {
@@ -105,7 +105,7 @@ _HINTS = (
     ),
     Hint(
         id="view.history",
-        text="图表可后退/前进到上一个视图（Alt+Z）",
+        text="图表可后退/前进到上一个视图（Ctrl+Z）",
         surface="discovery",
         retire_on="view_history",
         priority=60,

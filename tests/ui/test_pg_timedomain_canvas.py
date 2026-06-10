@@ -3477,6 +3477,8 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         view_all.trigger()
         QCoreApplication.processEvents()
 
+        from mf4_analyzer.ui.pg_canvas.ticks_math import _frame_to_nice
+
         t0 = rows[0][2]
         sig0 = rows[0][3]
         sig1 = rows[1][3]
@@ -3484,20 +3486,17 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
             (float(t0.min()), float(t0.max())),
             abs=1e-6,
         )
-        # Home pads Y by 5% of the raw span (mirrors fit_y_to_visible_x,
-        # fix 3f6f8112) so curves do not press against the axis edges.
+        # Home pads Y by 5% then snaps to nice tick boundaries so Y-axis
+        # labels and grid lines start and end exactly at the viewport edges.
+        n_y = max(3, min(20, canvas._tick_density_controller.density[1]))
         lo0, hi0 = float(sig0.min()), float(sig0.max())
         pad0 = (hi0 - lo0) * 0.05
-        assert left.get_ylim() == pytest.approx(
-            (lo0 - pad0, hi0 + pad0),
-            rel=1e-6,
-        )
+        exp_lo0, exp_hi0, _ = _frame_to_nice(lo0 - pad0, hi0 + pad0, n_y)
+        assert left.get_ylim() == pytest.approx((exp_lo0, exp_hi0), rel=1e-6)
         lo1, hi1 = float(sig1.min()), float(sig1.max())
         pad1 = (hi1 - lo1) * 0.05
-        assert right.get_ylim() == pytest.approx(
-            (lo1 - pad1, hi1 + pad1),
-            rel=1e-6,
-        )
+        exp_lo1, exp_hi1, _ = _frame_to_nice(lo1 - pad1, hi1 + pad1, n_y)
+        assert right.get_ylim() == pytest.approx((exp_lo1, exp_hi1), rel=1e-6)
 
     # ---- box-leak fix: a rounded submenu whose host window is opaque leaves
     # a square frame outside the radius. The top-level menu already sets

@@ -1513,7 +1513,6 @@ class PersistentTop(QWidget):
         self.spin_end.setSuffix(" s")
         self.spin_end.setRange(0, 1e9)
         self.spin_end.setToolTip("时间范围终点，单位为秒。")
-        QWidget.setTabOrder(self.spin_start, self.spin_end)
         self._range_row_host = _pair_field(
             self.spin_start, "– 结束", self.spin_end,
         )
@@ -1534,7 +1533,6 @@ class PersistentTop(QWidget):
         self.spin_yt.setRange(3, 20)
         self.spin_yt.setValue(8)
         self.spin_yt.setToolTip("Y 轴主刻度的大致数量，范围 3–20。")
-        QWidget.setTabOrder(self.spin_xt, self.spin_yt)
         self._tick_row_host = _pair_field(
             self.spin_xt, "Y轴:", self.spin_yt,
         )
