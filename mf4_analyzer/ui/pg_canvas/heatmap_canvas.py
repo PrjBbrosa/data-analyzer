@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QRectF, pyqtSignal
+from PyQt5.QtCore import QRectF, Qt, pyqtSignal
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 
@@ -80,6 +80,9 @@ class PgHeatmapCanvas(QWidget):
         self._extents = None      # (x0, x1, y0, y1)
         self._remarks = []
         self._remark_enabled = False
+        # remarks: card contract is set_remark_enabled / clear_remarks
+        # (chart_stack.py:1314, 1330-1332).
+        self._plot.scene().sigMouseClicked.connect(self._on_scene_click)
 
     # ------------------------------------------------------------------
     # main API (signature mirrors canvases.PlotCanvas.plot_or_update_heatmap)
@@ -194,6 +197,82 @@ class PgHeatmapCanvas(QWidget):
         for axis, density in ((self._axis_bottom, x_d), (self._axis_left, y_d)):
             axis.setStyle(maxTickLevel=0)
             axis.setTickDensity(density)
+
+    # ------------------------------------------------------------------
+    # remarks (annotation parity with the matplotlib canvases)
+    # ------------------------------------------------------------------
+    def set_remark_enabled(self, enabled: bool) -> None:
+        self._remark_enabled = bool(enabled)
+        # Right-click priority (measured, pg 0.14.0): ViewBox.mouseClickEvent
+        # raises the context menu BEFORE GraphicsScene emits sigMouseClicked
+        # (GraphicsScene.sendClickEvent emits at the end), so ev.accept() in
+        # _on_scene_click cannot stop the popup. mouseClickEvent is gated on
+        # menuEnabled(), so disable the menu while annotating — right-click
+        # then reaches _on_scene_click un-consumed and deletes the nearest
+        # remark, mirroring the mpl tooltip contract (chart_stack.py:1263).
+        self._plot.vb.setMenuEnabled(not self._remark_enabled)
+
+    def clear_remarks(self) -> None:
+        for r in self._remarks:
+            self._plot.removeItem(r['label'])
+            self._plot.removeItem(r['dot'])
+        self._remarks = []
+
+    def add_remark_at(self, x: float, y: float) -> None:
+        if not self._remark_enabled or not self._has_result:
+            return
+        val = self._value_at(x, y)
+        if val is None:
+            return
+        label = pg.TextItem(
+            f"({x:.3g}, {y:.3g}, {val:.3g})", color='#111827',
+            fill=pg.mkBrush(255, 255, 255, 200), anchor=(0, 1),
+        )
+        label.setPos(x, y)
+        dot = pg.ScatterPlotItem(
+            [x], [y], size=7, brush=pg.mkBrush('#e03131'),
+            pen=pg.mkPen('w', width=1),
+        )
+        self._plot.addItem(label)
+        self._plot.addItem(dot)
+        self._remarks.append({'label': label, 'dot': dot})
+
+    def remove_remark_near(self, x: float, y: float) -> None:
+        if not self._remarks:
+            return
+        (x0, x1, y0, y1) = self._extents
+        sx = max(x1 - x0, 1e-12)
+        sy = max(y1 - y0, 1e-12)
+
+        def dist(r):
+            p = r['dot'].getData()
+            return ((p[0][0] - x) / sx) ** 2 + ((p[1][0] - y) / sy) ** 2
+
+        nearest = min(self._remarks, key=dist)
+        self._plot.removeItem(nearest['label'])
+        self._plot.removeItem(nearest['dot'])
+        self._remarks.remove(nearest)
+
+    def _value_at(self, x: float, y: float):
+        if self._matrix_disp is None or self._extents is None:
+            return None
+        x0, x1, y0, y1 = self._extents
+        rows, cols = self._matrix_disp.shape
+        if not (x0 <= x <= x1 and y0 <= y <= y1):
+            return None
+        col = min(int((x - x0) / max(x1 - x0, 1e-12) * cols), cols - 1)
+        row = min(int((y - y0) / max(y1 - y0, 1e-12) * rows), rows - 1)
+        return float(self._matrix_disp[row, col])
+
+    def _on_scene_click(self, ev) -> None:
+        if not self._plot.sceneBoundingRect().contains(ev.scenePos()):
+            return
+        p = self._plot.vb.mapSceneToView(ev.scenePos())
+        if ev.button() == Qt.LeftButton:
+            self.add_remark_at(p.x(), p.y())
+        elif ev.button() == Qt.RightButton and self._remark_enabled:
+            self.remove_remark_near(p.x(), p.y())
+            ev.accept()
 
     # ------------------------------------------------------------------
     def _on_cbar_levels(self, bar) -> None:

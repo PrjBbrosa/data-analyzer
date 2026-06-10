@@ -131,6 +131,39 @@ def test_db_mode_z_auto_defaults_true(canvas):
     assert hi == pytest.approx(0.0)
 
 
+def test_remark_add_and_clear(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at(5.0, 4.0)
+    assert len(canvas._remarks) == 1
+    # Label text carries (x, y, value)
+    assert '5' in canvas._remarks[0]['label'].toPlainText()
+    canvas.clear_remarks()
+    assert canvas._remarks == []
+
+
+def test_remark_disabled_noop(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.set_remark_enabled(False)
+    canvas.add_remark_at(5.0, 4.0)
+    assert canvas._remarks == []
+
+
+def test_value_at_maps_extent_to_cell(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    # peak cell [row 2, col 3]: col 3 of 5 → x ∈ [6,8); row 2 of 4 → y ∈ [4,6)
+    assert canvas._value_at(7.0, 5.0) == pytest.approx(100.0)
+
+
 def test_colorbar_rounding_adapts_to_level_span(canvas):
     # Default ColorBarItem rounding=1 snaps drags to whole units and
     # enforces a minimum 1-unit span — unusable when the full linear
