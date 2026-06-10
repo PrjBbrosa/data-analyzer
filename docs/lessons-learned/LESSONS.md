@@ -54,6 +54,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [checkindicator-subelementrect-needs-features-flag](pyqt-ui/2026-06-03-checkindicator-subelementrect-needs-features-flag.md) [qtreewidget][checkbox][hit-area][subelementrect][styleoption][offscreen][mousepress] — SE_ItemViewItemCheckIndicator returns null unless opt.features|=HasCheckIndicator + opt.checkState set; toggle via setCheckState and return without super() to avoid double-toggle.
 - [dynamic-property-border-needs-styledbackground-and-padding](pyqt-ui/2026-06-04-dynamic-property-border-needs-styledbackground-and-padding.md) [qss][dynamic-property][border][focus][wa-styledbackground][padding][verify-pixels][grab-lag][tint] — `[prop="true"]` border on a margin-0 container needs WA_StyledBackground + padding (+tint halo for legibility); verify with COMPOSITE-parent grab (leaf grab lags focus), trust the saved PNG over a thin-ring pixel probe.
 - [colorbaritem-label-axis-and-silent-setlevels](pyqt-ui/2026-06-11-colorbaritem-label-axis-and-silent-setlevels.md) [pyqtgraph][colorbaritem][heatmap][setlevels] — Vertical ColorBarItem `label=` lives on the LEFT axis (ticks on right); `setLevels` emits no sigLevelsChanged in 0.14.0 — keep blockSignals anyway.
+- [inspector-tick-counts-vs-pg-density-factors](pyqt-ui/2026-06-11-inspector-tick-counts-vs-pg-density-factors.md) [pyqtgraph][tick-density][inspector-contract][unit-mismatch] — set_tick_density takes tick COUNTS (10/8) not pg density factors; conversion is inline in TickDensityController; verify knob at extremes (step quantization).
 
 ## refactor
 
