@@ -55,6 +55,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [dynamic-property-border-needs-styledbackground-and-padding](pyqt-ui/2026-06-04-dynamic-property-border-needs-styledbackground-and-padding.md) [qss][dynamic-property][border][focus][wa-styledbackground][padding][verify-pixels][grab-lag][tint] — `[prop="true"]` border on a margin-0 container needs WA_StyledBackground + padding (+tint halo for legibility); verify with COMPOSITE-parent grab (leaf grab lags focus), trust the saved PNG over a thin-ring pixel probe.
 - [colorbaritem-label-axis-and-silent-setlevels](pyqt-ui/2026-06-11-colorbaritem-label-axis-and-silent-setlevels.md) [pyqtgraph][colorbaritem][heatmap][setlevels] — Vertical ColorBarItem `label=` lives on the LEFT axis (ticks on right); `setLevels` emits no sigLevelsChanged in 0.14.0 — keep blockSignals anyway.
 - [inspector-tick-counts-vs-pg-density-factors](pyqt-ui/2026-06-11-inspector-tick-counts-vs-pg-density-factors.md) [pyqtgraph][tick-density][inspector-contract][unit-mismatch] — set_tick_density takes tick COUNTS (10/8) not pg density factors; conversion is inline in TickDensityController; verify knob at extremes (step quantization).
+- [sigmouseclicked-fires-after-viewbox-menu](pyqt-ui/2026-06-11-sigmouseclicked-fires-after-viewbox-menu.md) [pyqtgraph][sigmouseclicked][context-menu][viewbox][event-order] — ev.accept() in a sigMouseClicked slot cannot block the ViewBox menu (emitted after item dispatch); gate via vb.setMenuEnabled or raiseContextMenu override.
 
 ## refactor
 
