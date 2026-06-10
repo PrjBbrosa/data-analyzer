@@ -6,7 +6,7 @@ the native Qt tooltip, positioned just below the hovered widget.
 """
 from PyQt5.QtCore import QEvent, QObject, QPoint, QTimer, Qt
 from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen
-from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
 
 class _GlassTooltipPopup(QWidget):
@@ -45,11 +45,15 @@ class _GlassTooltipPopup(QWidget):
         # Center horizontally on anchor, place below it
         x = anchor.x() - self.width() // 2
         y = anchor.y()
-        # Clamp so it doesn't go off-screen left
-        screen = self.screen()
+        # Use the screen that contains the anchor point, not self.screen(), which
+        # returns the popup's previous screen and causes tooltips to jump to the
+        # wrong monitor in dual-screen setups.
+        screen = QApplication.screenAt(anchor) or QApplication.primaryScreen()
         if screen is not None:
-            sg = screen.geometry()
+            sg = screen.availableGeometry()
             x = max(sg.left() + 4, min(x, sg.right() - self.width() - 4))
+            if y + self.height() + 4 > sg.bottom():
+                y = anchor.y() - self.height() - 5
         self.move(x, y)
         self.show()
         self._hide_timer.stop()
