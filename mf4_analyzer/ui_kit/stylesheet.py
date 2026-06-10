@@ -11,6 +11,7 @@ Extracted from ``mf4_analyzer.app._load_stylesheet`` during Stage 1 of
 """
 from pathlib import Path
 
+from .combo_popup_shell import install_combo_popup_shell
 from .icons import ensure_icon_cache, render_qss_template
 
 
@@ -49,3 +50,9 @@ def load_stylesheet(app):
         )
         stylesheet = template
     app.setStyleSheet(stylesheet)
+    # The QSS above rounds the inner QComboBox list, but the popup's
+    # top-level window stays a square, natively shadowed rectangle that
+    # leaks behind the rounded corners. Install the shared event filter
+    # that gives every combo dropdown — present and future — the
+    # translucent rounded shell, so no call site has to remember to.
+    install_combo_popup_shell(app)
