@@ -56,6 +56,8 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [colorbaritem-label-axis-and-silent-setlevels](pyqt-ui/2026-06-11-colorbaritem-label-axis-and-silent-setlevels.md) [pyqtgraph][colorbaritem][heatmap][setlevels][scene-rect][colormapmenu] — label= on LEFT axis; setLevels emits nothing; insert_in puts the bar INSIDE plot.sceneBoundingRect (guard by extents); bar's ColorMapMenu ignores host setMenuEnabled.
 - [inspector-tick-counts-vs-pg-density-factors](pyqt-ui/2026-06-11-inspector-tick-counts-vs-pg-density-factors.md) [pyqtgraph][tick-density][inspector-contract][unit-mismatch] — set_tick_density takes tick COUNTS (10/8) not pg density factors; conversion is inline in TickDensityController; verify knob at extremes (step quantization).
 - [sigmouseclicked-fires-after-viewbox-menu](pyqt-ui/2026-06-11-sigmouseclicked-fires-after-viewbox-menu.md) [pyqtgraph][sigmouseclicked][context-menu][viewbox][event-order] — ev.accept() in a sigMouseClicked slot cannot block the ViewBox menu (emitted after item dispatch); gate via vb.setMenuEnabled or raiseContextMenu override.
+- [qthread-terminate-noop-on-gil-bound-macos](pyqt-ui/2026-06-11-qthread-terminate-noop-on-gil-bound-macos.md) [qthread][terminate][qfatal][macos][gil] — terminate() never lands on GIL-held numpy workers on macOS (Windows-only backstop); calibrate stuck jobs ≥10× wait budget, reproduce exit-134 on old code first.
+- [qgraphicslayoutitem-destructor-self-heals-layout-count](pyqt-ui/2026-06-11-qgraphicslayoutitem-destructor-self-heals-layout-count.md) [qgraphicsgridlayout][destructor][mutation-testing][teardown] — ~QGraphicsLayoutItem self-removes from its parent layout when the item dies, making a lone layout.removeItem unfalsifiable; mutate the teardown GUARD, not the call.
 
 ## refactor
 
