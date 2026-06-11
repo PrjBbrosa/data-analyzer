@@ -171,6 +171,10 @@ class PgHeatmapCanvas(QWidget):
         elif y_max > y_min:
             self._plot.setYRange(float(y_min), float(y_max), padding=0)
 
+        # Remark labels embed the z value, so letting them survive a
+        # replot would display stale data against the new matrix (the
+        # mpl rebuild path dropped annotations on every replot anyway).
+        self.clear_remarks()
         self._matrix_disp = m
         self._extents = (x0, x1, y0, y1)
         self._has_result = True
@@ -230,7 +234,7 @@ class PgHeatmapCanvas(QWidget):
         )
         label.setPos(x, y)
         dot = pg.ScatterPlotItem(
-            [x], [y], size=7, brush=pg.mkBrush('#e03131'),
+            [x], [y], size=7, brush=pg.mkBrush('#dc2626'),
             pen=pg.mkPen('w', width=1),
         )
         self._plot.addItem(label)
@@ -271,6 +275,16 @@ class PgHeatmapCanvas(QWidget):
         if ev.button() == Qt.LeftButton:
             self.add_remark_at(p.x(), p.y())
         elif ev.button() == Qt.RightButton and self._remark_enabled:
+            # ``insert_in`` puts the ColorBarItem inside the PlotItem
+            # layout, so _plot.sceneBoundingRect() includes the colorbar
+            # column. Guard out-of-extent points (symmetric with the
+            # left-click path, where _value_at rejects them) so a
+            # right-click on the colorbar never deletes a remark.
+            if self._extents is None:
+                return
+            x0, x1, y0, y1 = self._extents
+            if not (x0 <= p.x() <= x1 and y0 <= p.y() <= y1):
+                return
             self.remove_remark_near(p.x(), p.y())
             ev.accept()
 

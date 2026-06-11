@@ -1,8 +1,27 @@
 """PgHeatmapCanvas: levels/extent math + API-parity tests (offscreen)."""
 import numpy as np
 import pytest
+from PyQt5.QtCore import QPointF, Qt
 
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+
+
+class _FakeSceneClick:
+    """Stand-in for a GraphicsScene MouseClickEvent (scenePos + button)."""
+
+    def __init__(self, scene_pos, button):
+        self._scene_pos = scene_pos
+        self._button = button
+        self.accepted = False
+
+    def scenePos(self):
+        return self._scene_pos
+
+    def button(self):
+        return self._button
+
+    def accept(self):
+        self.accepted = True
 
 
 @pytest.fixture
@@ -139,10 +158,81 @@ def test_remark_add_and_clear(canvas):
     canvas.set_remark_enabled(True)
     canvas.add_remark_at(5.0, 4.0)
     assert len(canvas._remarks) == 1
-    # Label text carries (x, y, value)
-    assert '5' in canvas._remarks[0]['label'].toPlainText()
+    # Label text carries the FULL (x, y, value) tuple: (5.0, 4.0) maps to
+    # cell [row 2, col 2] = 1.0, all rendered via %.3g.
+    assert canvas._remarks[0]['label'].toPlainText() == '(5, 4, 1)'
+    # Dot color matches the time-domain annotation dots
+    # (pg_canvas/annotations.py:221) and the mpl DANGER token
+    # (canvases.py:34), not an ad hoc red.
+    assert canvas._remarks[0]['dot'].opts['brush'].color().name() == '#dc2626'
     canvas.clear_remarks()
     assert canvas._remarks == []
+
+
+def test_replot_clears_stale_remarks(canvas):
+    # Unlike the mpl labels (x, y only), pg remark labels embed the z
+    # value — surviving a replot would display stale data. The mpl
+    # rebuild path (self.clear()) dropped annotations on every replot.
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at(5.0, 4.0)
+    assert canvas._remarks[0]['label'].toPlainText() == '(5, 4, 1)'
+    canvas.plot_or_update_heatmap(
+        matrix=_mat() * 7.0, x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    # Value at (5, 4) is now 7 — the retained label would still say 1.
+    assert canvas._remarks == []
+
+
+def test_right_click_on_colorbar_region_keeps_remarks(canvas, qapp):
+    # ``insert_in`` puts the ColorBarItem inside the PlotItem layout, so
+    # _plot.sceneBoundingRect() INCLUDES the colorbar column. A
+    # remark-mode right-click there maps to view x beyond the heatmap
+    # extent and must NOT delete the nearest remark.
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.show()
+    qapp.processEvents()  # realize the GraphicsLayout geometry
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at(5.0, 4.0)
+    assert len(canvas._remarks) == 1
+    # x=11 is outside extent (0, 10) but inside the plot's scene rect
+    # (the colorbar column) — the precondition assert pins the scenario.
+    sp = canvas._plot.vb.mapViewToScene(QPointF(11.0, 4.0))
+    assert canvas._plot.sceneBoundingRect().contains(sp)
+    canvas._on_scene_click(_FakeSceneClick(sp, Qt.RightButton))
+    assert len(canvas._remarks) == 1
+    canvas.hide()
+
+
+def test_remove_remark_near_deletes_nearest(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at(2.0, 2.0)
+    canvas.add_remark_at(8.0, 6.0)
+    canvas.remove_remark_near(7.5, 5.5)  # nearest is (8, 6)
+    assert len(canvas._remarks) == 1
+    xs, ys = canvas._remarks[0]['dot'].getData()
+    assert (xs[0], ys[0]) == (pytest.approx(2.0), pytest.approx(2.0))
+
+
+def test_remark_mode_gates_viewbox_menu(canvas):
+    # Right-click delete only works because the ViewBox context menu is
+    # suppressed while annotating (menuEnabled() is checked BEFORE the
+    # menu is raised; sigMouseClicked fires too late to block it).
+    canvas.set_remark_enabled(True)
+    assert canvas._plot.vb.menuEnabled() is False
+    canvas.set_remark_enabled(False)
+    assert canvas._plot.vb.menuEnabled() is True
 
 
 def test_remark_disabled_noop(canvas):
