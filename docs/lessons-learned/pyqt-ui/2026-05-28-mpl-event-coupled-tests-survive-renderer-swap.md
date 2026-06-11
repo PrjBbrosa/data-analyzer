@@ -1,8 +1,8 @@
 ---
 role: pyqt-ui
-tags: [renderer-swap, matplotlib, pyqtgraph, event-dispatch, test-coupling, contract-test]
+tags: [renderer-swap, matplotlib, pyqtgraph, event-dispatch, test-coupling, contract-test, production-consumers]
 created: 2026-05-28
-updated: 2026-05-28
+updated: 2026-06-11
 cause: insight
 supersedes: []
 ---
@@ -46,3 +46,18 @@ in the regression sweep for X-specific APIs (matplotlib:
 rewrite, OR an architectural decision to drop it. Surface that count in
 the planning return so the orchestrator can budget a follow-up subtask
 instead of treating the renderer swap as a one-shot diff.
+
+Update 2026-06-11 (M5, ``canvas_order`` PlotCanvas→PgHeatmapCanvas):
+grep PRODUCTION code for the swapped instance attribute too, not just
+tests. The plan named only the instantiation + toolbar branch, but
+``grep -n "canvas_order" mf4_analyzer/ui/`` exposed two unguarded
+mpl-contract consumers that no test covered:
+``MainWindow._update_all_tick_density_pair`` drove
+``canvas_order.fig.axes`` + ``draw_idle()`` (AttributeError on every
+tick-density change) and ``ChartStack.full_reset_all`` called
+``canvas_order.full_reset()`` (absent on the pg canvas → crash on file
+close). The audit unit is the canvas's consumed ATTRIBUTE SURFACE
+(``\.fig\b``, ``draw_idle``, ``axes_list``, ``full_reset``,
+``span_selector``) across the whole package — fix call sites via the
+cross-renderer contract (``set_tick_density``) or add the missing
+contract method to the new canvas; report both as named deviations.
