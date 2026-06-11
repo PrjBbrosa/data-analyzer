@@ -26,6 +26,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [pathlib-text-io-needs-explicit-utf8-on-windows](signal-processing/2026-04-27-pathlib-text-io-needs-explicit-utf8-on-windows.md) [io][encoding][windows][json][cjk][locale] — `Path.write_text` / `read_text` use locale codec on Windows (cp936/cp1252); `ensure_ascii=False` is a UTF-8-only choice and requires a paired `encoding="utf-8"` to be coherent end-to-end.
 - [branch-reached-is-not-behavior-correct](signal-processing/2026-05-19-branch-reached-is-not-behavior-correct.md) [testing][decoder][timestamp][dto][regression-gap][evidence-quality] — A decoder test asserting one-frame output proves only the branch executed; time-series correctness requires two frames at different input states with strictly different outputs (e.g. increasing timestamps).
 - [component-speedup-does-not-imply-end-to-end-target](signal-processing/2026-05-28-component-speedup-does-not-imply-end-to-end-target.md) [perf][envelope][end-to-end][micro-bench][hot-path] — A 76× envelope micro-bench win left the pan P50 at parity; measure the END-TO-END target path, not just the stage you optimized, before claiming an SLA win.
+- [cancel-gap-was-unwired-call-site-not-missing-poll](signal-processing/2026-06-11-cancel-gap-was-unwired-call-site-not-missing-poll.md) [cancel-token][plan-staleness][call-site-wiring] — Grep the target signature before implementing a "missing" hook; cancel gaps are often unwired call sites, and stale call-site comments propagate the false premise.
 
 ## pyqt-ui
 
