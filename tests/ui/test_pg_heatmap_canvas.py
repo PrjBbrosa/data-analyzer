@@ -318,6 +318,56 @@ def test_grab_pixmap_degenerate_fallback_is_unscaled_1x1(canvas, monkeypatch):
     )
 
 
+def test_full_reset_clears_state(canvas):
+    # File-close contract (ChartStack.full_reset_all): every trace of the
+    # previous result must go — remarks, result flag, colorbar, matrix.
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at(5.0, 4.0)
+    assert len(canvas._remarks) == 1  # precondition pins the scenario
+    canvas.full_reset()
+    assert canvas._remarks == []
+    assert not canvas.has_result()
+    assert canvas._cbar is None
+    assert canvas._matrix_disp is None
+
+
+def test_full_reset_then_replot_rebuilds_colorbar(canvas):
+    # full_reset detaches the ColorBarItem from the host PlotItem's
+    # QGraphicsGridLayout (pg 0.14.0 ColorBarItem.py:225 nests it via
+    # ``insert_in.layout.addItem(self, 2, 5)``). This path couples to pg
+    # internals, so pin the layout item count across reset+replot: a pg
+    # upgrade that breaks the detach would leak an orphaned colorbar
+    # column on every file-close/replot cycle.
+    baseline = canvas._plot.layout.count()
+    m1 = np.linspace(0.0, 10.0, 20).reshape(4, 5)
+    canvas.plot_or_update_heatmap(
+        matrix=m1, x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    lo, hi = canvas._img.getLevels()
+    assert (lo, hi) == (pytest.approx(0.0), pytest.approx(10.0))
+    assert canvas._plot.layout.count() == baseline + 1  # bar inserted
+    canvas.full_reset()
+    assert canvas._plot.layout.count() == baseline  # no orphan item left
+    m2 = np.linspace(0.5, 4.5, 20).reshape(4, 5)
+    canvas.plot_or_update_heatmap(
+        matrix=m2, x_extent=(0.0, 5.0), y_extent=(0.0, 4.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    assert canvas._cbar is not None
+    lo, hi = canvas._img.getLevels()
+    assert (lo, hi) == (pytest.approx(0.5), pytest.approx(4.5))
+    blo, bhi = canvas._cbar.levels()
+    assert (blo, bhi) == (pytest.approx(lo), pytest.approx(hi))
+    # Rebuilt bar occupies exactly one layout slot again — count is
+    # restored, not accumulated.
+    assert canvas._plot.layout.count() == baseline + 1
+
+
 def test_colorbar_rounding_adapts_to_level_span(canvas):
     # Default ColorBarItem rounding=1 snaps drags to whole units and
     # enforces a minimum 1-unit span — unusable when the full linear

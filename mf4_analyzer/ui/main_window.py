@@ -2415,8 +2415,8 @@ class MainWindow(QMainWindow):
         # QThread, same pattern as do_fft_time). Re-entry guard mirrors
         # the FFT-vs-Time one; the COT compute does not poll
         # ``worker.cancelled()`` (the algorithm has no per-frame poll
-        # point), so cancel is best-effort and closeEvent's wait(2000)
-        # is the backstop.
+        # point), so cancel is best-effort and closeEvent's
+        # wait(2000) + terminate() drain is the backstop.
         if getattr(self, '_order_thread', None) is not None and self._order_thread.isRunning():
             self.statusBar.showMessage("正在计算…")
             return
@@ -2558,14 +2558,18 @@ class MainWindow(QMainWindow):
 
         # Order (COT) worker: same drain. The COT job does not poll
         # ``cancelled()`` (no per-frame poll point), so cancel() is a
-        # no-op flag and wait(2000) is the real backstop.
+        # no-op flag and the terminate() fallback is the real backstop:
+        # without it, a compute that outlives wait(2000) leaves the
+        # ``QThread(self)`` running at destruction → Qt5 qFatal crash.
         order_thread = getattr(self, '_order_thread', None)
         order_worker = getattr(self, '_order_worker', None)
         if order_thread is not None and order_thread.isRunning():
             if order_worker is not None:
                 order_worker.cancel()
             order_thread.quit()
-            order_thread.wait(2000)
+            if not order_thread.wait(2000):
+                order_thread.terminate()
+                order_thread.wait(500)
 
         super().closeEvent(event)
 
