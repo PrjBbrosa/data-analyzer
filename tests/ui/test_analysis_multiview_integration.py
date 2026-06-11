@@ -313,3 +313,205 @@ def test_order_split_two_panes_render_distinct_sources(two_file_win, qtbot):
     # The per-pane result must trace back to the source's OWN cache entry.
     assert np.array_equal(c0._matrix_disp.shape, np.asarray(r0.amplitude.T).shape)
     assert np.array_equal(c1._matrix_disp.shape, np.asarray(r1.amplitude.T).shape)
+
+
+# ----------------------------------------------------------------------
+# V10: project save -> reopen round-trip for analysis_views. Build two
+# views per section (one split + distinct sources + edited params/compare),
+# save to a .tlproj, reopen in a FRESH MainWindow, and assert the full
+# view tree (count / active / pane count / sources / params / compare)
+# survives. Old projects without analysis_views are covered separately.
+# ----------------------------------------------------------------------
+from mf4_analyzer.ui.analysis_view_state import AnalysisViewState, PaneState
+
+
+def _fft_views(fids):
+    """Two fft views: v0 single-pane, v1 split (overlay + 2nd pane). Only the
+    fft-real param keys (window/nfft/overlap) are set so the non-active view's
+    stored params round-trip verbatim."""
+    v0 = AnalysisViewState(
+        name="FFT-A", tab_color="#1f77b4",
+        panes=[PaneState(sources=[(fids[0], "speed")])],
+        params={"window": "hanning", "nfft": 1024, "overlap": 0.5},
+        compare={"x_linked": True, "levels_locked": False},
+    )
+    v1 = AnalysisViewState(
+        name="FFT-B", tab_color="#ff7f0e",
+        panes=[
+            PaneState(sources=[(fids[0], "speed"), (fids[1], "speed")]),
+            PaneState(sources=[(fids[1], "torque")]),
+        ],
+        params={"window": "hamming", "nfft": 2048, "overlap": 0.75},
+        compare={"x_linked": False, "levels_locked": True},
+    )
+    return [v0, v1]
+
+
+def _order_views(fids):
+    """Two order views: v0 single-pane (sig+rpm), v1 split with distinct rpm.
+    Order's get_params keys are max_order/nfft/order_res/time_res."""
+    v0 = AnalysisViewState(
+        name="ORD-A", tab_color="#2ca02c",
+        panes=[PaneState(sources=[(fids[0], "torque")],
+                         rpm_source=(fids[0], "speed"))],
+        params={"max_order": 20, "nfft": 512, "order_res": 0.1,
+                "time_res": 0.05},
+        compare={"x_linked": True, "levels_locked": True},
+    )
+    v1 = AnalysisViewState(
+        name="ORD-B", tab_color="#d62728",
+        panes=[
+            PaneState(sources=[(fids[0], "torque")],
+                      rpm_source=(fids[0], "speed")),
+            PaneState(sources=[(fids[1], "torque")],
+                      rpm_source=(fids[1], "speed")),
+        ],
+        params={"max_order": 32, "nfft": 1024, "order_res": 0.2,
+                "time_res": 0.1},
+        compare={"x_linked": False, "levels_locked": False},
+    )
+    return [v0, v1]
+
+
+def _install_views(win, section, views, active):
+    """Install pre-built view states on a section manager and seed the live
+    UI from the active view (so save-time capture is idempotent, mirroring
+    a user who left that view focused)."""
+    mgr = win.analysis_managers[section]
+    mgr.views = views
+    mgr.active = active
+    mgr.views_changed.emit()
+    # active_changed -> _on_analysis_view_switched: applies structure +
+    # params + focused-pane source into the inspector / navigator so the
+    # subsequent _capture_active_analysis_view reads back the same values.
+    mgr.active_changed.emit(active)
+
+
+def _assert_section_equal(win, section, expected_views, expected_active,
+                          expected_active_params, param_keys):
+    mgr = win.analysis_managers[section]
+    assert len(mgr.views) == len(expected_views), f"{section}: view count"
+    assert mgr.active == expected_active, f"{section}: active index"
+    for i, (got, exp) in enumerate(zip(mgr.views, expected_views)):
+        assert len(got.panes) == len(exp.panes), f"{section} v{i}: pane count"
+        for pi, (gp, ep) in enumerate(zip(got.panes, exp.panes)):
+            assert [tuple(s) for s in gp.sources] == [tuple(s) for s in ep.sources], \
+                f"{section} v{i} pane{pi}: sources"
+            assert (tuple(gp.rpm_source) if gp.rpm_source else None) == \
+                (tuple(ep.rpm_source) if ep.rpm_source else None), \
+                f"{section} v{i} pane{pi}: rpm_source"
+        # Params: the ACTIVE view's params are re-captured from the live
+        # inspector at save time, so compare against what get_params() emitted
+        # (captured below). NON-active views keep their stored params verbatim.
+        if i == expected_active:
+            for k in param_keys:
+                assert got.params.get(k) == expected_active_params.get(k), \
+                    (f"{section} active v{i}: param {k} "
+                     f"({got.params.get(k)} != {expected_active_params.get(k)})")
+        else:
+            for k in param_keys:
+                assert got.params.get(k) == exp.params.get(k), \
+                    (f"{section} v{i}: param {k} "
+                     f"({got.params.get(k)} != {exp.params.get(k)})")
+        assert got.compare.get("x_linked") == exp.compare["x_linked"], \
+            f"{section} v{i}: compare.x_linked"
+        assert got.compare.get("levels_locked") == exp.compare["levels_locked"], \
+            f"{section} v{i}: compare.levels_locked"
+
+
+# Param keys that BOTH appear in the section's get_params AND round-trip
+# through apply_params (so a view restore reproduces them).
+_SECTION_PARAM_KEYS = {
+    "fft": ("window", "nfft", "overlap"),
+    "fft_time": ("window", "nfft", "overlap"),
+    "order": ("max_order", "nfft", "order_res", "time_res"),
+}
+
+
+def test_analysis_views_survive_project_save_reopen(two_file_win, tmp_path, qtbot):
+    win = two_file_win
+    fids = list(win.files.keys())
+    fft_views = _fft_views(fids)
+    order_views = _order_views(fids)
+    fft_time_views = _fft_views(fids)  # fft_time shares fft's param shape
+    actives = {"fft": 1, "order": 0, "fft_time": 1}
+
+    win.toolbar._set_mode("fft")
+    _install_views(win, "fft", fft_views, active=actives["fft"])
+    win.toolbar._set_mode("order")
+    _install_views(win, "order", order_views, active=actives["order"])
+    win.toolbar._set_mode("fft_time")
+    _install_views(win, "fft_time", fft_time_views, active=actives["fft_time"])
+
+    # The active view's params are whatever the live inspector holds at save —
+    # capture them per section so the assertion compares apples to apples.
+    expected_active_params = {
+        sec: dict(win._analysis_ctx(sec).get_params())
+        for sec in ("fft", "order", "fft_time")
+    }
+
+    proj = tmp_path / "session.tlproj"
+    win.save_project(proj)
+    assert proj.exists()
+
+    # Reopen in a FRESH MainWindow so nothing leaks via shared state.
+    win2 = MainWindow()
+    qtbot.addWidget(win2)
+    win2.open_project(proj)
+
+    # Files were re-loaded; the new fids may differ, but the channel names and
+    # ordering are preserved, so remap reproduces the same (fid, ch) pairs
+    # relative to the new fid order.
+    fids2 = list(win2.files.keys())
+    assert len(fids2) == 2, "both files reopened"
+    fid_remap = {fids[i]: fids2[i] for i in range(2)}
+
+    def remap_views(views):
+        out = []
+        for v in views:
+            panes = []
+            for p in v.panes:
+                panes.append(PaneState(
+                    sources=[(fid_remap[f], c) for f, c in p.sources],
+                    rpm_source=((fid_remap[p.rpm_source[0]], p.rpm_source[1])
+                                if p.rpm_source else None),
+                ))
+            out.append(AnalysisViewState(
+                name=v.name, tab_color=v.tab_color, panes=panes,
+                params=v.params, compare=v.compare))
+        return out
+
+    _assert_section_equal(
+        win2, "fft", remap_views(fft_views), actives["fft"],
+        expected_active_params["fft"], _SECTION_PARAM_KEYS["fft"])
+    _assert_section_equal(
+        win2, "order", remap_views(order_views), actives["order"],
+        expected_active_params["order"], _SECTION_PARAM_KEYS["order"])
+    _assert_section_equal(
+        win2, "fft_time", remap_views(fft_time_views), actives["fft_time"],
+        expected_active_params["fft_time"], _SECTION_PARAM_KEYS["fft_time"])
+
+
+def test_old_project_without_analysis_views_loads_with_defaults(
+    two_file_win, tmp_path, qtbot
+):
+    """Backward compatibility: a project saved before V10 has no
+    analysis_views key. Loading it must leave each section at its default
+    single view rather than crash."""
+    import json
+    win = two_file_win
+    proj = tmp_path / "legacy.tlproj"
+    win.save_project(proj)
+    # Strip analysis_views to simulate a pre-V10 file.
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+    raw.pop("analysis_views", None)
+    proj.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    win2 = MainWindow()
+    qtbot.addWidget(win2)
+    win2.open_project(proj)  # must not raise
+
+    for sec in ("fft", "order", "fft_time"):
+        mgr = win2.analysis_managers[sec]
+        assert len(mgr.views) == 1, f"{sec}: legacy load keeps the default view"
+        assert mgr.active == 0

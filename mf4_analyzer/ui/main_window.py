@@ -1899,6 +1899,12 @@ class MainWindow(QMainWindow):
         # is about to be released, so any cached SpectrogramResult keyed
         # under this fid is now strictly stale.
         self._fft_time_cache_clear_for_fid(fid)
+        # Per-section analysis caches (V7) are keyed on (fid, ch, params).
+        # _fft_time_cache and analysis_caches['fft_time'] are double-written
+        # on compute, so both must be torn down for this fid here — otherwise
+        # reopening a file that reuses the same fid would hit a stale result.
+        for cache in self.analysis_caches.values():
+            cache.invalidate_fid(fid)
         del self.files[fid]
         self.navigator.remove_file(fid)
         self._active = self.navigator._active_fid  # navigator picks fallback
@@ -1916,6 +1922,11 @@ class MainWindow(QMainWindow):
         path = Path(path)
 
         self._capture_focused_view()
+        # Flush each analysis section's live UI state into its active view so
+        # the last (uncommitted) inspector edit / source / compare toggle is
+        # serialized rather than lost.
+        for sec in self.analysis_managers:
+            self._capture_active_analysis_view(sec)
 
         file_refs = []
         for fid, fd in self.files.items():
@@ -1941,6 +1952,13 @@ class MainWindow(QMainWindow):
             files=file_refs,
             views=[v.to_dict() for v in self.view_manager.views],
             view_manager=vm,
+            analysis_views={
+                sec: {
+                    "active": mgr.active,
+                    "views": [v.to_dict() for v in mgr.views],
+                }
+                for sec, mgr in self.analysis_managers.items()
+            },
         )
         pio.save_project_to_json(doc, path)
         self._project_path = path
@@ -1993,6 +2011,24 @@ class MainWindow(QMainWindow):
         self.view_manager._set_active_split_from_pairs()
         self.view_manager.views_changed.emit()
 
+        # Restore each analysis section's view list (fids remapped to the
+        # freshly minted ids). An old project without analysis_views yields an
+        # empty remapped dict -> every section keeps its default single view.
+        from .project_io import remap_analysis_view_fids
+        from .analysis_view_state import AnalysisViewState
+        remapped = remap_analysis_view_fids(doc.analysis_views, fid_map)
+        for sec, mgr in self.analysis_managers.items():
+            block = remapped.get(sec)
+            if not block or not block.get("views"):
+                continue
+            mgr.views = [AnalysisViewState.from_dict(v) for v in block["views"]]
+            mgr.active = min(int(block.get("active", 0)), len(mgr.views) - 1)
+            mgr.views_changed.emit()
+            # active_changed drives _on_analysis_view_switched: it applies the
+            # restored structure/params/sources and renders from cache (which is
+            # empty post-load, so panes show their empty state until 计算).
+            mgr.active_changed.emit(mgr.active)
+
         self._active = fid_map.get(doc.active_file)
         # Route the mode through the toolbar's programmatic setter (not
         # chart_stack.set_mode directly): _set_mode checks the matching
@@ -2032,6 +2068,10 @@ class MainWindow(QMainWindow):
         self.canvas_time.invalidate_monotonicity_cache()
         # FFT vs Time cache: every entry is keyed against a now-dead fid.
         self._fft_time_cache.clear()
+        # Per-section analysis caches: every entry is now stale (close-all
+        # variant of the per-fid invalidate in ``_close``).
+        for cache in self.analysis_caches.values():
+            cache.clear()
         for fid in list(self.files.keys()):
             del self.files[fid]
             self.navigator.remove_file(fid)
