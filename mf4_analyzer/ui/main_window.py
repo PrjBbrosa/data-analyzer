@@ -858,10 +858,17 @@ class MainWindow(QMainWindow):
         ctx = self._analysis_ctx(section)
         p = ctx.get_params()
         if section == 'fft':
+            # Compute inputs for FFT spectra are window / nfft / averaging mode
+            # + averaging overlap (see _fft_compute_arrays). The plain
+            # ``overlap`` knob feeds only batch presets, NOT the spectrum
+            # compute, so it is excluded from the key (and its get/apply
+            # fraction-vs-percent asymmetry would make the key unstable).
+            cp = ctx.current_params()
             return {
                 'window': p.get('window'),
                 'nfft': p.get('nfft'),
-                'overlap': p.get('overlap'),
+                'avg_mode': cp.get('avg_mode', '单帧'),
+                'avg_overlap': cp.get('avg_overlap', 50),
             }
         if section == 'fft_time':
             return {
@@ -918,8 +925,10 @@ class MainWindow(QMainWindow):
                     entries.append(self._fft_entry_from_cache(
                         result, fid, ch, colors.get((fid, ch))))
                 if entries:
-                    self._plot_fft_entries(entries)
-                elif pane.sources:
+                    self._plot_fft_entries(entries, canvas)
+                else:
+                    # No cached curves (empty sources, or all sources missing
+                    # from the cache) -> empty canvas state.
                     self._clear_analysis_canvas(canvas)
             else:
                 if not pane.sources:
@@ -2563,7 +2572,109 @@ class MainWindow(QMainWindow):
         )
         return True
 
+    def _fft_compute_arrays(self, sig, fs, fft_params):
+        """Run the FFT compute branch (Welch avg / peak-hold / single-frame)
+        on a single signal, returning raw display-independent ``(freq, amp,
+        psd)``. Algorithm calls are byte-identical to the legacy do_fft."""
+        win = fft_params['window']
+        nfft = fft_params['nfft']
+        avg_mode = fft_params.get('avg_mode', '单帧')
+        overlap_pct = int(fft_params.get('avg_overlap', 50))
+        avg_overlap = max(0.0, min(0.95, overlap_pct / 100.0))
+        if avg_mode == '线性平均':
+            freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
+                sig, fs, win, nfft or 1024, avg_overlap)
+        elif avg_mode == '峰值保持':
+            freq, amp = FFTAnalyzer.compute_peak_hold_fft(
+                sig, fs, win=win, nfft=nfft or 1024, overlap=avg_overlap)
+            psd = amp ** 2
+        else:
+            freq, amp = FFTAnalyzer.compute_fft(sig, fs, win, nfft)
+            _, psd = FFTAnalyzer.compute_psd(sig, fs, win, nfft)
+        return freq, amp, psd
+
+    def _fft_fetch_signal(self, fid, ch):
+        """Fetch + range-gate a single FFT source's signal. Returns
+        ``(sig, fs)`` or ``(None, None)`` when unavailable."""
+        fd = self.files.get(fid)
+        if fd is None or ch not in fd.data.columns:
+            return None, None
+        sig = fd.data[ch].values
+        t = fd.time_array
+        if self.inspector.top.range_enabled() and t is not None:
+            lo, hi = self.inspector.top.range_values()
+            m = (t >= lo) & (t <= hi)
+            sig = sig[m]
+        return sig, fd.fs
+
     def do_fft(self):
+        """Compute the ACTIVE FFT view: every source of every pane.
+
+        Compute semantics (spec §4): the button computes the whole active
+        view. Each pane overlays N curves (its sources); each source is cached
+        on a (fid, ch, compute-params) key so re-render / view-switch is free.
+
+        Back-compat: when the focused pane has no navigator-checked sources
+        (or they are not fetchable), fall back to the legacy single-signal
+        ``_get_sig()`` path so the existing single-signal UX + tests are
+        unchanged.
+        """
+        self._capture_active_analysis_view('fft')
+        mgr = self.analysis_managers['fft']
+        state = mgr.get(mgr.active)
+        page = self.chart_stack.page_fft
+        fft_params = self.inspector.fft_ctx.current_params()
+        cache = self.analysis_caches['fft']
+        colors = dict(
+            ((fid, ch), color)
+            for fid, ch, color in self.navigator.get_checked_channels()
+        )
+
+        any_rendered = False
+        any_multi = False
+        for pane_idx in range(page.pane_count()):
+            if pane_idx >= len(state.panes):
+                break
+            sources = state.panes[pane_idx].sources
+            if not sources:
+                continue
+            any_multi = True
+            entries = []
+            for fid, ch in sources:
+                key = self._analysis_cache_key('fft', fid, ch)
+                result = cache.get(key)
+                if result is None:
+                    sig, fs = self._fft_fetch_signal(fid, ch)
+                    if sig is None or len(sig) < 10:
+                        continue
+                    fd = self.files.get(fid)
+                    if not self._check_uniform_or_prompt(fd, 'fft'):
+                        continue
+                    sig, fs = self._fft_fetch_signal(fid, ch)
+                    if sig is None or len(sig) < 10:
+                        continue
+                    try:
+                        result = self._fft_compute_arrays(
+                            sig, self.inspector.fft_ctx.fs(), fft_params)
+                    except Exception as e:
+                        QMessageBox.critical(self, 'FFT错误', str(e))
+                        continue
+                    cache.put(key, result)
+                entries.append(self._fft_entry_from_cache(
+                    result, fid, ch, colors.get((fid, ch))))
+            if entries:
+                self._plot_fft_entries(entries, page.pane_canvas(pane_idx))
+                any_rendered = True
+
+        if any_multi:
+            if any_rendered:
+                self.statusBar.showMessage('FFT 完成')
+                self.toast('FFT 完成', 'success')
+            return
+        # ---- legacy single-signal fallback (no navigator-checked sources) ----
+        self._do_fft_single()
+
+    def _do_fft_single(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 10:
             self.toast("请选择有效信号", "warning"); return
@@ -2599,30 +2710,12 @@ class MainWindow(QMainWindow):
         nfft = fft_params['nfft']
         overlap = fft_params['overlap']
         fs = self.inspector.fft_ctx.fs()
-        # Wave 2 / SP2 / Task 2.2: Welch averaging + peak-hold dispatch.
-        # Default '单帧' preserves the legacy compute_fft path so existing
-        # presets and snapshots stay backward-compatible.
-        avg_mode = fft_params.get('avg_mode', '单帧')
-        overlap_pct = int(fft_params.get('avg_overlap', 50))
-        avg_overlap = max(0.0, min(0.95, overlap_pct / 100.0))
 
         try:
             self.statusBar.showMessage('计算FFT...');
             QApplication.processEvents()
 
-            if avg_mode == '线性平均':
-                freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
-                    sig, fs, win, nfft or 1024, avg_overlap,
-                )
-            elif avg_mode == '峰值保持':
-                freq, amp = FFTAnalyzer.compute_peak_hold_fft(
-                    sig, fs, win=win, nfft=nfft or 1024, overlap=avg_overlap,
-                )
-                psd = amp ** 2
-            else:
-                # 单帧 — single-frame snapshot (legacy default).
-                freq, amp = FFTAnalyzer.compute_fft(sig, fs, win, nfft)
-                _, psd = FFTAnalyzer.compute_psd(sig, fs, win, nfft)
+            freq, amp, psd = self._fft_compute_arrays(sig, fs, fft_params)
 
             x_auto = bool(fft_params.get('x_auto', fft_params.get('autoscale', True)))
             x_min = float(fft_params.get('x_min', 0.0))
@@ -2695,6 +2788,9 @@ class MainWindow(QMainWindow):
     # ``do_fft_time``); ``_on_order_finished`` renders the result.
 
     def do_order_time(self):
+        # V7 Step 5: capture the active Order view (params + focused source +
+        # rpm_source) so a later view switch renders from analysis_caches.
+        self._capture_active_analysis_view('order')
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 100:
             self.toast("请选择有效信号", "warning")
@@ -2747,6 +2843,16 @@ class MainWindow(QMainWindow):
             return
         self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
         self.inspector.order_ctx.set_progress("计算中...")
+
+        # Stash the analysis cache key for this compute (focused source +
+        # rpm_source + COT params) so _on_order_finished can cache the result.
+        sig_data = self.inspector.order_ctx.current_signal()
+        rpm_data = self.inspector.order_ctx.current_rpm()
+        self._order_analysis_key = None
+        if sig_data:
+            self._order_analysis_key = self._analysis_cache_key(
+                'order', sig_data[0], sig_data[1],
+                rpm_source=tuple(rpm_data) if rpm_data else None)
 
         from .analysis_worker import AnalysisComputeWorker
 
@@ -2842,6 +2948,9 @@ class MainWindow(QMainWindow):
 
     def _on_order_finished(self, result):
         self.inspector.order_ctx.set_progress("")
+        analysis_key = getattr(self, '_order_analysis_key', None)
+        if analysis_key is not None:
+            self.analysis_caches['order'].put(analysis_key, result)
         self._render_order_time(result)
 
     def _on_order_failed(self, message):
@@ -3033,6 +3142,12 @@ class MainWindow(QMainWindow):
         the failed handler does NOT call ``canvas_fft_time.clear()``.
         """
         from ..signal import SpectrogramParams
+        # V7 Step 5: capture the active view's params + focused-pane source so a
+        # later view switch can render this result from analysis_caches. The
+        # heatmap section currently computes the focused pane's single source
+        # (the per-pane sequential worker queue for split heatmaps is a
+        # follow-up — see V7 report concerns).
+        self._capture_active_analysis_view('fft_time')
         # Re-entry guard: a previous compute is still on the thread.
         # Phase 1 ignores the click rather than queuing.
         if (
@@ -3073,9 +3188,15 @@ class MainWindow(QMainWindow):
             time_range = (float(t[0]), float(t[-1]))
         key_params = dict(p, fid=fid, channel=ch, time_range=time_range)
         key = self._fft_time_cache_key(key_params)
+        # V7: per-section analysis cache (keyed on the compute-param subset);
+        # lets view-switch render this result without recompute.
+        analysis_key = self._analysis_cache_key('fft_time', fid, ch)
         cached = None if force else self._fft_time_cache_get(key)
+        if cached is None and not force:
+            cached = self.analysis_caches['fft_time'].get(analysis_key)
         if cached is not None:
             # Cache hit stays on the main thread — no worker needed.
+            self.analysis_caches['fft_time'].put(analysis_key, cached)
             self._render_fft_time(cached, p)
             self.statusBar.showMessage(
                 "使用缓存结果 · "
@@ -3106,6 +3227,7 @@ class MainWindow(QMainWindow):
         self._fft_time_pending = {
             'cache_key': key,
             'render_params': p,
+            'analysis_key': analysis_key,
         }
         from .analysis_worker import AnalysisComputeWorker
 
@@ -3203,8 +3325,11 @@ class MainWindow(QMainWindow):
         pending = getattr(self, '_fft_time_pending', None) or {}
         key = pending.get('cache_key')
         p = pending.get('render_params')
+        analysis_key = pending.get('analysis_key')
         if key is not None:
             self._fft_time_cache_put(key, result)
+        if analysis_key is not None:
+            self.analysis_caches['fft_time'].put(analysis_key, result)
         if p is not None:
             self._render_fft_time(result, p)
         self.statusBar.showMessage(
