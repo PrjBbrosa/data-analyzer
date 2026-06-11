@@ -397,6 +397,69 @@ def _spec_result():
     )
 
 
+def _make_spec(channel, amplitude):
+    freqs = np.linspace(0, 500, 16)
+    times = np.linspace(0, 1.0, 4)
+    return SpectrogramResult(
+        times=times, frequencies=freqs, amplitude=amplitude,
+        params=SpectrogramParams(fs=1000.0, nfft=32),
+        channel_name=channel, unit='g', metadata={'frames': 4},
+    )
+
+
+def test_db_memo_keys_on_epoch_token_not_id(qapp):
+    """Regression for V7 commit 6d539d1c: the dB memo keys on a stamped
+    monotonic epoch token, NOT ``id(result)``.
+
+    After an ``AnalysisResultCache`` LRU eviction frees a SpectrogramResult,
+    CPython can reuse that id() for the NEXT result; an ``id()``-keyed dB memo
+    would then serve result A's dB matrix for result B (silent stale image).
+
+    We make the bug DETERMINISTIC by simulating an id() collision directly:
+    plot A (caches A's dB under A's token), then HAND-INJECT a fake cache
+    entry keyed on A's ``id()`` (what the old code would have produced) and
+    verify the current code does NOT read it for a distinct B — because B
+    carries its own distinct epoch token. We also assert the two results get
+    different tokens, which is the property the fix guarantees.
+    """
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(320, 240)
+
+    result_a = _make_spec('A', np.ones((16, 4), dtype=np.float32))
+    c.plot_result(result_a, amplitude_mode='amplitude_db', z_auto=True)
+    token_a = result_a._pg_db_epoch
+    disp_a = c._matrix_disp.copy()
+
+    # Result B: DIFFERENT amplitude (a ramp). Stamp B's token first so we can
+    # assert it differs from A's even when their id()s would collide.
+    ramp = np.tile(
+        np.linspace(0.01, 100.0, 16, dtype=np.float32)[:, None], (1, 4))
+    result_b = _make_spec('B', ramp)
+    token_b = c._result_db_token(result_b)
+    # The stamped tokens MUST differ — this is the whole fix. (Two live
+    # objects always get distinct monotonic epoch tokens; an id()-keyed token
+    # could collide once the first object is freed and its id() reused.)
+    assert token_b != ('epoch', token_a), "epoch token collided"
+    assert result_b._pg_db_epoch != token_a
+
+    # Poison the memo with an entry keyed on result_b's CPython id() and a
+    # dB ref of 1.0 — the exact shape the OLD ``(id(result), db_ref)`` key
+    # produced. If the current memo still consulted id(), plotting B would
+    # return this poisoned (A's flat) matrix instead of B's ramp.
+    c._db_cache = ((('id', id(result_b)), 1.0), disp_a)
+    c.plot_result(result_b, amplitude_mode='amplitude_db', z_auto=True)
+    disp_b = c._matrix_disp.copy()
+
+    # B's displayed dB matrix reflects B's ramp, not A's poisoned flat matrix.
+    assert not np.allclose(disp_b, disp_a), (
+        "B rendered A's stale dB matrix — id()-keyed memo bug regressed"
+    )
+    from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+    expected_b = SpectrogramAnalyzer.amplitude_to_db(ramp, 1.0)
+    np.testing.assert_allclose(disp_b, expected_b, rtol=1e-5)
+    c.deleteLater()
+
+
 def test_slice_updates_on_select(qapp):
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)

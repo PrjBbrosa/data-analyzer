@@ -392,8 +392,11 @@ class PgHeatmapCanvas(QWidget):
         time (X).
 
         dB conversion is done HERE (memoized via ``self._db_cache``,
-        keyed ``(id(result), db_reference)`` — parity with
-        ``SpectrogramCanvas._display_matrix``), and the already-converted
+        keyed ``(self._result_db_token(result), db_reference)`` — a
+        monotonic epoch token stamped on each result, NOT ``id(result)``,
+        so the memo never returns a stale matrix after an
+        ``AnalysisResultCache`` eviction frees + reuses an id()), and the
+        already-converted
         display matrix is handed to ``plot_or_update_heatmap`` with
         ``amplitude_mode='amplitude'`` plus explicit ``vmin``/``vmax`` so
         the heatmap's internal dB/auto branch never re-derives the
