@@ -61,3 +61,20 @@ close). The audit unit is the canvas's consumed ATTRIBUTE SURFACE
 ``span_selector``) across the whole package — fix call sites via the
 cross-renderer contract (``set_tick_density``) or add the missing
 contract method to the new canvas; report both as named deviations.
+
+Update 2026-06-11 (M6 visual gate): a consumer can FAIL SILENTLY rather
+than crash. ``PgNavigationToolbar`` (the shim attached to every pg
+canvas) walks ``canvas.axes_list`` / ``canvas._channel_lines`` /
+``reset_view_to_data_extents`` — all of which exist on
+``TimeDomainCanvasPG`` but NOT on ``PgHeatmapCanvas``. Because every
+access is ``getattr(..., None)``-guarded, the toolbar's
+home/back/forward/pan/zoom buttons became inert on the order heatmap
+with no traceback (measured: ``_view_boxes()`` returned ``[]`` and
+``home()`` left a zoomed view unchanged). No unit test caught it — the
+gap only shows under a live click. The fix is the same contract-method
+move: add ``reset_view_to_data_extents`` to the new canvas (``home()``
+already prefers it) rather than special-casing the toolbar. When grepping
+the swapped instance attribute, treat ``getattr``-guarded reads as
+deviations too: a guard prevents a crash but also hides a dead feature,
+so exercise the toolbar buttons on the live canvas, not just the render
+path.

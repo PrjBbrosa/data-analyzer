@@ -1,6 +1,6 @@
 ---
 role: pyqt-ui
-tags: [pyqtgraph, colorbaritem, heatmap, imageitem, label-axis, setlevels, signals, scene-rect, hit-test, colormapmenu]
+tags: [pyqtgraph, colorbaritem, heatmap, imageitem, label-axis, setlevels, signals, scene-rect, hit-test, colormapmenu, colormapmenu-false, single-source-of-truth]
 created: 2026-06-11
 updated: 2026-06-11
 cause: insight
@@ -47,3 +47,14 @@ scene-click feature must exclude the colorbar, check the mapped point
 against the data extents instead of `plot.sceneBoundingRect()`, and do
 not expect host `setMenuEnabled(False)` to silence the bar's own
 ColorMapMenu.
+
+Update 2026-06-11 (M6 visual gate): the ColorMapMenu IS silenceable —
+just not via the host ViewBox. `ColorBarItem(colorMapMenu=False)` makes
+the bar's own `mouseClickEvent` short-circuit (pg 0.14.0 line
+`if self.colorMapMenu is False: return`), so a real right-click raises
+no popup (verified: `QApplication.activePopupWidget()` went from
+`ColorMapMenu` to `None`). Pass that constructor kwarg whenever the
+colormap must stay a single source of truth (an Inspector cmap dropdown)
+— letting the user swap the map on the bar desyncs the two. The kwarg is
+construction-time only; there is no post-hoc disable, so set it when the
+bar is created.
