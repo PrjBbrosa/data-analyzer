@@ -134,7 +134,15 @@ class PgHeatmapCanvas(QWidget):
         # the hover/remark readout labels values 'dB' in dB mode and the
         # channel unit otherwise, and the slice y-label switches with it.
         self._amplitude_mode = 'amplitude_db'
-        self._db_cache = None   # (cache_key, ndarray) keyed (id(result), db_ref)
+        # dB conversion memo. Keyed on a STABLE per-result epoch token (see
+        # _result_db_token) + db_ref, NOT id(result): once
+        # AnalysisResultCache (V4) LRU-evicts a result, CPython can reuse its
+        # id() for a freshly computed result, and an id()-keyed memo would then
+        # return the OLD dB matrix for the NEW result (silent stale-image bug).
+        # The epoch token is stamped onto each distinct result the first time
+        # it is rendered, so it travels with the object and never collides.
+        self._db_cache = None   # (token, db_ref) -> ndarray
+        self._db_epoch_counter = 0
         if self._with_slice:
             # Second GraphicsLayout row: 1D frequency slice at the
             # selected frame (parity with SpectrogramCanvas._ax_slice,
@@ -353,6 +361,22 @@ class PgHeatmapCanvas(QWidget):
     # ------------------------------------------------------------------
     # FFT-vs-Time: spectrogram render + frequency slice (with_slice=True)
     # ------------------------------------------------------------------
+    def _result_db_token(self, result):
+        """Return a stable hashable token identifying ``result`` for the dB
+        memo. Stamps a monotonic ``_pg_db_epoch`` attribute on first sight so
+        the token travels with the object across AnalysisResultCache eviction
+        and never collides via id() reuse. Falls back to id() for exotic
+        results that reject attribute assignment (never in practice)."""
+        token = getattr(result, '_pg_db_epoch', None)
+        if token is None:
+            self._db_epoch_counter += 1
+            token = self._db_epoch_counter
+            try:
+                result._pg_db_epoch = token
+            except (AttributeError, TypeError):
+                return ('id', id(result))
+        return ('epoch', token)
+
     def plot_result(
         self, result, *, amplitude_mode='amplitude_db', cmap='turbo',
         z_auto=False, z_floor=-80.0, z_ceiling=0.0, freq_range=None,
@@ -386,7 +410,7 @@ class PgHeatmapCanvas(QWidget):
         unit = f" ({result.unit})" if result.unit else ""
         db_ref = float(result.params.db_reference)
         if amplitude_mode == 'amplitude_db':
-            key = (id(result), db_ref)
+            key = (self._result_db_token(result), db_ref)
             if self._db_cache is None or self._db_cache[0] != key:
                 from ...signal.spectrogram import SpectrogramAnalyzer
                 self._db_cache = (key, SpectrogramAnalyzer.amplitude_to_db(
