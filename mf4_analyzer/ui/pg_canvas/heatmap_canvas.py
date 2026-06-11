@@ -92,6 +92,11 @@ class PgHeatmapCanvas(QWidget):
         self._slice_plot = None
         self._slice_marker = None
         self._result = None     # SpectrogramResult-like payload
+        # Amplitude mode of the last plot_result render (slice mode only).
+        # Parity with SpectrogramCanvas._amplitude_mode (canvases.py:1622):
+        # the hover/remark readout labels values 'dB' in dB mode and the
+        # channel unit otherwise, and the slice y-label switches with it.
+        self._amplitude_mode = 'amplitude_db'
         self._db_cache = None   # (cache_key, ndarray) keyed (id(result), db_ref)
         if self._with_slice:
             # Second GraphicsLayout row: 1D frequency slice at the
@@ -101,6 +106,11 @@ class PgHeatmapCanvas(QWidget):
             self._slice_plot.setMaximumHeight(140)
             self._slice_plot.showGrid(x=True, y=True, alpha=0.25)
             self._slice_plot.setLabel('bottom', 'Frequency (Hz)')
+            # Left (amplitude) axis label. dB vs linear is switched per
+            # render in select_time_index, mirroring the mpl original's
+            # _plot_slice ylabel (canvases.py:1878-1880); seed the default
+            # here so the axis is never unlabeled before the first render.
+            self._slice_plot.setLabel('left', 'Amplitude (dB)')
             self._slice_curve = self._slice_plot.plot(
                 pen=pg.mkPen('#2563eb', width=1.2))
             # Vertical marker on the 2D map tracking the selected time.
@@ -331,6 +341,11 @@ class PgHeatmapCanvas(QWidget):
         nanmin/nanmax when they are ``None``.
         """
         self._result = result
+        # Pin the amplitude mode so hover/remark readouts label the value
+        # 'dB' (not the channel unit) in dB mode, and the slice y-label
+        # switches accordingly — parity with SpectrogramCanvas
+        # (canvases.py:1762, 1879, 1942, 2028).
+        self._amplitude_mode = amplitude_mode
         unit = f" ({result.unit})" if result.unit else ""
         db_ref = float(result.params.db_reference)
         if amplitude_mode == 'amplitude_db':
@@ -394,6 +409,13 @@ class PgHeatmapCanvas(QWidget):
         idx = int(np.clip(idx, 0, len(self._result.times) - 1))
         self._slice_curve.setData(
             self._result.frequencies, self._matrix_disp[:, idx])
+        # Switch the amplitude-axis label with the mode (mpl _plot_slice,
+        # canvases.py:1878-1880). _matrix_disp is dB in dB mode here.
+        self._slice_plot.setLabel(
+            'left',
+            'Amplitude (dB)' if self._amplitude_mode == 'amplitude_db'
+            else 'Amplitude',
+        )
         t = float(self._result.times[idx])
         self._slice_plot.setTitle(f"t = {t:.3f} s")
         self._slice_marker.setPos(t)
@@ -402,6 +424,22 @@ class PgHeatmapCanvas(QWidget):
     def _time_index_for(self, x: float) -> int:
         """Nearest frame index to a view-space time ``x``."""
         return int(np.argmin(np.abs(np.asarray(self._result.times) - x)))
+
+    def _freq_index_for(self, y: float) -> int:
+        """Nearest frequency-bin index to a view-space frequency ``y``."""
+        return int(np.argmin(np.abs(np.asarray(self._result.frequencies) - y)))
+
+    def _readout_unit(self) -> str:
+        """Unit token for the hover/remark value (slice mode).
+
+        dB mode labels the value 'dB' (the matrix is already in dB), every
+        other mode uses the channel unit. Parity with
+        SpectrogramCanvas._on_motion / _format_remark_label
+        (canvases.py:2028, 1942).
+        """
+        if self._amplitude_mode == 'amplitude_db':
+            return 'dB'
+        return self._result.unit or ''
 
     def _on_scene_hover(self, scene_pos) -> None:
         """Emit ``cursor_info`` (t / freq / value) on hover over the map.
@@ -426,13 +464,16 @@ class PgHeatmapCanvas(QWidget):
             # the colorbar column or padding) — clear the pill.
             self.cursor_info.emit('')
             return
-        t_idx = int(np.argmin(np.abs(np.asarray(self._result.times) - x)))
-        f_idx = int(np.argmin(np.abs(np.asarray(self._result.frequencies) - y)))
         rows, cols = self._matrix_disp.shape
         if rows == 0 or cols == 0:
             return
+        # Reuse the same argmin-nearest cell picker the slice selection and
+        # remarks use, so hover/remark/slice never disagree on which cell a
+        # coordinate maps to (M2 dedupe + caliber unification).
+        t_idx = self._time_index_for(x)
+        f_idx = self._freq_index_for(y)
         val = float(self._matrix_disp[min(f_idx, rows - 1), min(t_idx, cols - 1)])
-        unit = self._result.unit or ''
+        unit = self._readout_unit()
         msg = (
             f"t={float(self._result.times[t_idx]):.4g} s · "
             f"f={float(self._result.frequencies[f_idx]):.4g} Hz · "
@@ -502,6 +543,20 @@ class PgHeatmapCanvas(QWidget):
         rows, cols = self._matrix_disp.shape
         if not (x0 <= x <= x1 and y0 <= y <= y1):
             return None
+        if self._result is not None:
+            # Slice (FFT-vs-Time) mode: the matrix rows/cols correspond
+            # exactly to result.frequencies / result.times, so pick the
+            # cell by argmin-nearest over those axes — the SAME picker used
+            # by hover (_on_scene_hover) and frame selection. This keeps the
+            # hover readout and the placed remark in agreement on boundary
+            # cells, where floor-fraction and argmin-nearest disagree
+            # (caliber unification, 裁决 3). Order mode (self._result is
+            # None) keeps the floor-fraction mapping below untouched: it has
+            # no times/frequencies axis arrays and its remark tests pin the
+            # floor-fraction cell.
+            row = min(self._freq_index_for(y), rows - 1)
+            col = min(self._time_index_for(x), cols - 1)
+            return float(self._matrix_disp[row, col])
         col = min(int((x - x0) / max(x1 - x0, 1e-12) * cols), cols - 1)
         row = min(int((y - y0) / max(y1 - y0, 1e-12) * rows), rows - 1)
         return float(self._matrix_disp[row, col])

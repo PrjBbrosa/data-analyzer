@@ -534,3 +534,136 @@ def test_select_time_index_noop_without_slice(qapp):
     assert c._slice_plot is None
     assert c._slice_marker is None
     c.deleteLater()
+
+
+def test_hover_db_mode_labels_value_db_not_channel_unit(qapp):
+    # dB mode: _matrix_disp holds dB numbers, so the readout MUST label the
+    # value 'dB' — labeling it the channel unit 'g' is a unit error. Parity
+    # with SpectrogramCanvas._on_motion (canvases.py:2028).
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()  # unit='g'
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    received = []
+    c.cursor_info.connect(received.append)
+    sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
+    c._on_scene_hover(sp)
+    assert received, "hover over the map must emit cursor_info"
+    msg = received[-1]
+    assert msg.endswith(' dB'), f"dB-mode readout must end with ' dB', got {msg!r}"
+    # The channel unit 'g' must NOT trail the value in dB mode. Guard a
+    # naive substring 'g' (which appears in any value via %.4g) by anchoring
+    # on the trailing token only.
+    assert not msg.endswith(' g'), f"dB-mode readout wrongly labeled 'g': {msg!r}"
+    c.hide()
+    c.deleteLater()
+
+
+def test_hover_linear_mode_labels_value_channel_unit(qapp):
+    # Linear mode: value is in the channel unit, so the readout trails the
+    # result unit ('g'), NOT 'dB'.
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()  # unit='g'
+    c.plot_result(r, amplitude_mode='amplitude', cmap='turbo', z_auto=True)
+    received = []
+    c.cursor_info.connect(received.append)
+    sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
+    c._on_scene_hover(sp)
+    assert received, "hover over the map must emit cursor_info"
+    msg = received[-1]
+    assert msg.endswith(' g'), f"linear-mode readout must trail 'g', got {msg!r}"
+    assert ' dB' not in msg, f"linear-mode readout must not say 'dB': {msg!r}"
+    c.hide()
+    c.deleteLater()
+
+
+def test_hover_and_remark_read_same_value_in_slice_mode(qapp):
+    # Caliber unification (裁决 3): in with_slice mode the hover readout and
+    # a placed remark must resolve the SAME cell value at the same
+    # coordinate. Pick a boundary coordinate where floor-fraction and
+    # argmin-nearest would otherwise disagree, so the test bites.
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    # Pick a frequency coordinate where the floor-fraction picker (extent
+    # mapping) and the argmin-nearest picker (over result.frequencies)
+    # DISAGREE, so a regression to a floor-fraction _value_at would make
+    # this test fail. Search the bins for such a point and pin it.
+    freqs = r.frequencies
+    y0, y1 = float(freqs[0]), float(freqs[-1])
+    rows = len(freqs)
+
+    def _floor_row(yy):
+        return min(int((yy - y0) / max(y1 - y0, 1e-12) * rows), rows - 1)
+
+    x = float(r.times[3])
+    y = None
+    for k in range(1, rows - 1):
+        cand = float(freqs[k]) + 0.45 * float(freqs[k + 1] - freqs[k])
+        if _floor_row(cand) != int(np.argmin(np.abs(freqs - cand))):
+            y = cand
+            break
+    assert y is not None, "no diverging coordinate found — test would not bite"
+    assert _floor_row(y) != int(np.argmin(np.abs(freqs - y)))  # precondition
+    # Hover value: parse the trailing numeric token of the cursor pill.
+    received = []
+    c.cursor_info.connect(received.append)
+    sp = c._plot.vb.mapViewToScene(QPointF(x, y))
+    c._on_scene_hover(sp)
+    assert received
+    hover_token = received[-1].rsplit('·', 1)[-1].strip().split()[0]
+    # Remark value: _value_at is the remark取值器; it must agree with hover.
+    remark_val = c._value_at(x, y)
+    # The hover pill formats the value via %.4g; the remark reads the same
+    # cell at full precision. Agreement means the remark value formats to the
+    # identical %.4g token the hover emitted (same cell, not the same string
+    # rounding artifact).
+    assert f"{remark_val:.4g}" == hover_token, (
+        f"hover token {hover_token!r} vs remark {remark_val} disagree on the cell"
+    )
+    # And both must equal the argmin-nearest cell in the display matrix.
+    t_idx = int(np.argmin(np.abs(r.times - x)))
+    f_idx = int(np.argmin(np.abs(r.frequencies - y)))
+    assert remark_val == pytest.approx(float(c._matrix_disp[f_idx, t_idx]))
+    c.hide()
+    c.deleteLater()
+
+
+def test_value_at_keeps_floor_fraction_in_order_mode(qapp):
+    # Order mode (with_slice=False, no _result): _value_at MUST keep the
+    # floor-fraction mapping. The caliber unification is scoped to slice
+    # mode only — changing Order's picker would regress the existing Order
+    # remark tests and silently shift Order annotation values.
+    c = PgHeatmapCanvas(with_slice=False)
+    c.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    assert c._result is None  # precondition: Order mode never sets _result
+    # (8.0, 6.0) is a boundary point: floor-fraction → cell [row 3, col 4]
+    # = 1.0; argmin-nearest would round to the peak cell (100.0). The Order
+    # picker must stay on floor-fraction.
+    assert c._value_at(8.0, 6.0) == pytest.approx(1.0)
+    c.deleteLater()
+
+
+def test_slice_y_label_switches_with_amplitude_mode(qapp):
+    # M1: the slice subplot's left (amplitude) axis must be labeled, and the
+    # label switches dB vs linear with amplitude_mode (mpl _plot_slice,
+    # canvases.py:1878-1880).
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    assert c._slice_plot.getAxis('left').labelText == 'Amplitude (dB)'
+    c.plot_result(r, amplitude_mode='amplitude', cmap='turbo', z_auto=True)
+    assert c._slice_plot.getAxis('left').labelText == 'Amplitude'
+    c.deleteLater()
