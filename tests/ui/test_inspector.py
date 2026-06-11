@@ -2941,3 +2941,92 @@ def test_inspector_spinbox_subcontrols_take_zero_visible_space(qtbot):
             f"{spin.objectName() or type(spin).__name__} down button still "
             f"reserves {down_rect.width()}px"
         )
+
+
+# ---- V5b: FFTTimeContextual.apply_params round-trip (multiview bridge) ----
+#
+# V7's per-section bridge calls apply_params_from_state(ctx, state) →
+# ctx.apply_params(...). FFTTimeContextual previously had get_params /
+# current_params but no apply_params, so the bridge would AttributeError.
+# These two tests pin the round-trip contract: apply_params(get_params())
+# must be idempotent, and a partial dict must touch only its keys.
+
+def test_fft_time_apply_params_idempotent(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    # Give the signal combo a real candidate so the 'signal' key round-trips
+    # through findData (None would be a no-op which still satisfies idempotency,
+    # but a concrete candidate exercises the combo restore path).
+    ctx.set_signal_candidates([
+        ("file:a", ("f1", "a")),
+        ("file:b", ("f1", "b")),
+    ])
+    ctx.combo_sig.setCurrentIndex(1)
+
+    # Drive the controls into a distinctive, non-default state across every
+    # widget get_params reads (combos, spins, checkboxes, amp-unit token,
+    # all three axis rows). z_auto OFF so spin_z_floor/ceiling participate.
+    ctx.combo_nfft.setCurrentText('2048')
+    ctx.combo_win.setCurrentText('hamming')
+    ctx.spin_overlap.setValue(75)
+    ctx.chk_remove_mean.setChecked(False)
+    ctx.combo_amp_unit.setCurrentText('dB')
+    ctx.spin_db_ref.setValue(2.5)
+    ctx.combo_cmap.setCurrentText('viridis')
+    ctx.spin_fs.setValue(48000.0)
+    ctx.chk_x_auto.setChecked(False)
+    ctx.spin_x_min.setValue(1.0)
+    ctx.spin_x_max.setValue(9.0)
+    ctx.chk_y_auto.setChecked(False)
+    ctx.spin_y_min.setValue(50.0)
+    ctx.spin_y_max.setValue(2400.0)
+    ctx.chk_z_auto.setChecked(False)
+    ctx.spin_z_floor.setValue(-80.0)
+    ctx.spin_z_ceiling.setValue(-5.0)
+
+    p0 = ctx.get_params()
+    # Sanity: the amplitude_mode token we will have to reverse-map.
+    assert p0['amplitude_mode'] == 'amplitude_db'
+
+    # Perturb several controls so apply_params has real work to do.
+    ctx.combo_nfft.setCurrentText('4096')
+    ctx.combo_win.setCurrentText('hanning')
+    ctx.spin_overlap.setValue(25)
+    ctx.chk_remove_mean.setChecked(True)
+    ctx.combo_amp_unit.setCurrentText('Linear')
+    ctx.spin_db_ref.setValue(1.0)
+    ctx.combo_cmap.setCurrentText('turbo')
+    ctx.spin_fs.setValue(1000.0)
+    ctx.chk_x_auto.setChecked(True)
+    ctx.spin_x_min.setValue(-3.0)
+    ctx.chk_y_auto.setChecked(True)
+    ctx.chk_z_auto.setChecked(True)
+    ctx.spin_z_floor.setValue(-40.0)
+    ctx.spin_z_ceiling.setValue(0.0)
+    assert ctx.get_params() != p0  # the perturbation actually changed state
+
+    ctx.apply_params(p0)
+
+    # Idempotent round-trip: get_params after apply must equal the snapshot.
+    assert ctx.get_params() == p0
+
+
+def test_fft_time_apply_params_partial(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    before = ctx.get_params()
+
+    # A partial dict carrying only 'nfft' must update nfft and leave every
+    # other key untouched (and must not raise on the missing keys).
+    ctx.apply_params({'nfft': 4096})
+
+    after = ctx.get_params()
+    assert after['nfft'] == 4096
+    for key, val in before.items():
+        if key == 'nfft':
+            continue
+        assert after[key] == val, f"partial apply mutated unrelated key {key!r}"
