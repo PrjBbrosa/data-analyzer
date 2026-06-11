@@ -35,6 +35,8 @@ class ProjectDocument:
     files: list = field(default_factory=list)        # list[ProjectFileRef]
     views: list = field(default_factory=list)         # list[dict] (ViewState.to_dict)
     view_manager: dict = field(default_factory=dict)  # {"active": int, "split_pairs": {}}
+    # {"fft"|"fft_time"|"order": {"active": int, "views": [AnalysisViewState.to_dict()]}}
+    analysis_views: dict = field(default_factory=dict)
 
 
 def save_project_to_json(doc: ProjectDocument, path) -> None:
@@ -55,6 +57,7 @@ def save_project_to_json(doc: ProjectDocument, path) -> None:
         ],
         "views": doc.views,
         "view_manager": doc.view_manager,
+        "analysis_views": doc.analysis_views,
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -93,6 +96,7 @@ def load_project_from_json(path) -> ProjectDocument:
         files=files,
         views=list(raw.get("views", [])),
         view_manager=dict(raw.get("view_manager", {})),
+        analysis_views=dict(raw.get("analysis_views", {})),
     )
 
 
@@ -163,4 +167,32 @@ def remap_view_fids(views: list, fid_map: dict) -> list:
             v["axis_opts"] = axis
 
         out.append(v)
+    return out
+
+
+def remap_analysis_view_fids(analysis_views: dict, fid_map: dict) -> dict:
+    """Rewrite fids inside analysis_views payloads; drop refs whose fid
+    is absent from ``fid_map`` (same contract as remap_view_fids)."""
+    out = {}
+    for section, block in (analysis_views or {}).items():
+        views = []
+        for view in block.get("views", []):
+            v = dict(view)
+            panes = []
+            for pane in view.get("panes", []):
+                pn = dict(pane)
+                pn["sources"] = [
+                    [fid_map[fid], ch]
+                    for fid, ch in (tuple(s) for s in pane.get("sources", []))
+                    if fid in fid_map
+                ]
+                rpm = pane.get("rpm_source")
+                pn["rpm_source"] = (
+                    [fid_map[rpm[0]], rpm[1]]
+                    if rpm and rpm[0] in fid_map else None
+                )
+                panes.append(pn)
+            v["panes"] = panes
+            views.append(v)
+        out[section] = {"active": int(block.get("active", 0)), "views": views}
     return out
