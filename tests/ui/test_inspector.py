@@ -154,6 +154,35 @@ def test_fft_contextual_xy_axis_params_round_trip(qapp):
     assert fc.spin_y_max.value() == 1.0
 
 
+def test_fft_contextual_overlap_fraction_round_trip(qapp):
+    """V10: get_params() emits overlap as a FRACTION (0.5); apply_params must
+    accept a fraction (and percent) so a view/preset restore round-trips
+    instead of int(0.5)==0 drifting the overlap toward 0%."""
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    # Fraction in -> fraction out (the regression: was int(0.5) -> 0%).
+    fc.apply_params({"overlap": 0.5})
+    assert fc.spin_overlap.value() == 50
+    assert fc.get_params()["overlap"] == 0.5
+
+    # A get/apply round-trip is stable for several fractions.
+    for frac, pct in ((0.0, 0), (0.25, 25), (0.75, 75), (0.9, 90)):
+        fc.apply_params({"overlap": frac})
+        assert fc.spin_overlap.value() == pct
+        assert fc.get_params()["overlap"] == frac
+
+    # Backwards/percent path: a value > 1 is treated as already-percent.
+    fc.apply_params({"overlap": 60})
+    assert fc.spin_overlap.value() == 60
+    assert fc.get_params()["overlap"] == 0.6
+
+    # Non-numeric is tolerated (no crash, value unchanged).
+    fc.spin_overlap.setValue(40)
+    fc.apply_params({"overlap": None})
+    assert fc.spin_overlap.value() == 40
+
+
 # ---- Task 2.6: OrderContextual ----
 
 def test_order_contextual_params(qapp):
@@ -1552,31 +1581,13 @@ def test_fft_time_defaults_match_requested_screenshot(qtbot):
     )
 
 
-def test_spectrogram_canvas_uses_bilinear_interpolation(qtbot):
-    """SpectrogramCanvas.plot_result must build the imshow with
-    interpolation='bilinear' so the FFT-vs-Time render is visually
-    smooth without any DSP-side change.
-    """
-    import numpy as np
-    from mf4_analyzer.signal.spectrogram import (
-        SpectrogramParams, SpectrogramResult,
-    )
-    from mf4_analyzer.ui.canvases import SpectrogramCanvas
-    canvas = SpectrogramCanvas()
-    qtbot.addWidget(canvas)
-    result = SpectrogramResult(
-        times=np.array([0.0, 0.1, 0.2]),
-        frequencies=np.array([0.0, 50.0, 100.0]),
-        amplitude=np.ones((3, 3), dtype=np.float32),
-        params=SpectrogramParams(fs=200.0, nfft=8),
-        channel_name='demo',
-    )
-    canvas.plot_result(result, amplitude_mode='amplitude')
-    im = canvas._ax_spec.images[0]
-    assert im.get_interpolation() == 'bilinear', (
-        f"SpectrogramCanvas imshow interpolation = "
-        f"{im.get_interpolation()!r}; expected 'bilinear'."
-    )
+# M9 retired the matplotlib SpectrogramCanvas (FFT-vs-Time moved to
+# PgHeatmapCanvas with_slice=True). The bilinear-imshow-interpolation test
+# asserted a matplotlib-only render attribute
+# (canvas._ax_spec.images[0].get_interpolation()) that has no equivalent on
+# the pyqtgraph ImageItem, so it was removed rather than stubbed. The pg
+# canvas's render is verified in tests/ui/test_pg_heatmap_canvas.py and the
+# M6/M8 visual-acceptance gate.
 
 
 # ---- Wave 2 / SP2: FFT 1D Welch averaging + linear/dB toggle ----
@@ -1825,8 +1836,12 @@ def test_fft_contextual_axis_toggles_in_params(qapp):
 
 def test_fft_render_honors_axis_toggles(qtbot):
     """Toggling Amp axis to dB / PSD axis to Linear must change the y-label
-    text on the rendered subplots — this proves the toggles round-trip
+    text on the rendered rows — this proves the toggles round-trip
     through the render code in main_window.do_fft.
+
+    M11: canvas_fft is a PgLineCanvas; the amp row is ``_plot_amp`` and the
+    PSD row is ``_plot_psd``. The y-label lives on each plot's left
+    ``AxisItem.labelText`` (the pg analogue of mpl ``ax.get_ylabel()``).
     """
     import numpy as np
     from mf4_analyzer.ui.main_window import MainWindow
@@ -1845,20 +1860,26 @@ def test_fft_render_honors_axis_toggles(qtbot):
     win.inspector.fft_ctx.spin_fs.setValue(fs)
     win.inspector.fft_ctx.combo_avg_mode.setCurrentText('单帧')
 
+    canvas = win.canvas_fft
+
+    def amp_ylabel():
+        return canvas._plot_amp.getAxis('left').labelText
+
+    def psd_ylabel():
+        return canvas._plot_psd.getAxis('left').labelText
+
     # Default render: amp=Linear, psd=dB.
     win.do_fft()
-    axes = win.canvas_fft.fig.axes
-    assert len(axes) >= 2
-    assert 'dB' not in axes[0].get_ylabel()
-    assert 'dB' in axes[1].get_ylabel()
+    assert canvas.has_result()
+    assert 'dB' not in amp_ylabel()
+    assert 'dB' in psd_ylabel()
 
     # Flip: amp=dB, psd=Linear.
     win.inspector.fft_ctx.combo_amp_y.setCurrentText('dB')
     win.inspector.fft_ctx.combo_psd_y.setCurrentText('Linear')
     win.do_fft()
-    axes = win.canvas_fft.fig.axes
-    assert 'dB' in axes[0].get_ylabel()
-    assert 'dB' not in axes[1].get_ylabel()
+    assert 'dB' in amp_ylabel()
+    assert 'dB' not in psd_ylabel()
 
 
 def test_fft_render_honors_manual_xy_axis_ranges(qtbot):
@@ -1888,11 +1909,15 @@ def test_fft_render_honors_manual_xy_axis_ranges(qtbot):
 
     win.do_fft()
 
-    axes = win.canvas_fft.fig.axes
-    assert len(axes) >= 2
-    for ax in axes[:2]:
-        assert ax.get_xlim() == pytest.approx((10.0, 80.0))
-        assert ax.get_ylim() == pytest.approx((-2.0, 2.0))
+    # M11: read the manual X/Y range off each PgLineCanvas row's ViewBox
+    # (pg ``vb.viewRange()`` returns [[x0, x1], [y0, y1]]) — the analogue of
+    # the old mpl ``ax.get_xlim()`` / ``ax.get_ylim()``.
+    canvas = win.canvas_fft
+    assert canvas.has_result()
+    for plot in (canvas._plot_amp, canvas._plot_psd):
+        (x0, x1), (y0, y1) = plot.vb.viewRange()
+        assert (x0, x1) == pytest.approx((10.0, 80.0))
+        assert (y0, y1) == pytest.approx((-2.0, 2.0))
 
 
 # ---- Wave 3 (axis-settings + COT migration plan): 坐标轴设置 group ----
@@ -2945,3 +2970,92 @@ def test_inspector_spinbox_subcontrols_take_zero_visible_space(qtbot):
             f"{spin.objectName() or type(spin).__name__} down button still "
             f"reserves {down_rect.width()}px"
         )
+
+
+# ---- V5b: FFTTimeContextual.apply_params round-trip (multiview bridge) ----
+#
+# V7's per-section bridge calls apply_params_from_state(ctx, state) →
+# ctx.apply_params(...). FFTTimeContextual previously had get_params /
+# current_params but no apply_params, so the bridge would AttributeError.
+# These two tests pin the round-trip contract: apply_params(get_params())
+# must be idempotent, and a partial dict must touch only its keys.
+
+def test_fft_time_apply_params_idempotent(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    # Give the signal combo a real candidate so the 'signal' key round-trips
+    # through findData (None would be a no-op which still satisfies idempotency,
+    # but a concrete candidate exercises the combo restore path).
+    ctx.set_signal_candidates([
+        ("file:a", ("f1", "a")),
+        ("file:b", ("f1", "b")),
+    ])
+    ctx.combo_sig.setCurrentIndex(1)
+
+    # Drive the controls into a distinctive, non-default state across every
+    # widget get_params reads (combos, spins, checkboxes, amp-unit token,
+    # all three axis rows). z_auto OFF so spin_z_floor/ceiling participate.
+    ctx.combo_nfft.setCurrentText('2048')
+    ctx.combo_win.setCurrentText('hamming')
+    ctx.spin_overlap.setValue(75)
+    ctx.chk_remove_mean.setChecked(False)
+    ctx.combo_amp_unit.setCurrentText('dB')
+    ctx.spin_db_ref.setValue(2.5)
+    ctx.combo_cmap.setCurrentText('viridis')
+    ctx.spin_fs.setValue(48000.0)
+    ctx.chk_x_auto.setChecked(False)
+    ctx.spin_x_min.setValue(1.0)
+    ctx.spin_x_max.setValue(9.0)
+    ctx.chk_y_auto.setChecked(False)
+    ctx.spin_y_min.setValue(50.0)
+    ctx.spin_y_max.setValue(2400.0)
+    ctx.chk_z_auto.setChecked(False)
+    ctx.spin_z_floor.setValue(-80.0)
+    ctx.spin_z_ceiling.setValue(-5.0)
+
+    p0 = ctx.get_params()
+    # Sanity: the amplitude_mode token we will have to reverse-map.
+    assert p0['amplitude_mode'] == 'amplitude_db'
+
+    # Perturb several controls so apply_params has real work to do.
+    ctx.combo_nfft.setCurrentText('4096')
+    ctx.combo_win.setCurrentText('hanning')
+    ctx.spin_overlap.setValue(25)
+    ctx.chk_remove_mean.setChecked(True)
+    ctx.combo_amp_unit.setCurrentText('Linear')
+    ctx.spin_db_ref.setValue(1.0)
+    ctx.combo_cmap.setCurrentText('turbo')
+    ctx.spin_fs.setValue(1000.0)
+    ctx.chk_x_auto.setChecked(True)
+    ctx.spin_x_min.setValue(-3.0)
+    ctx.chk_y_auto.setChecked(True)
+    ctx.chk_z_auto.setChecked(True)
+    ctx.spin_z_floor.setValue(-40.0)
+    ctx.spin_z_ceiling.setValue(0.0)
+    assert ctx.get_params() != p0  # the perturbation actually changed state
+
+    ctx.apply_params(p0)
+
+    # Idempotent round-trip: get_params after apply must equal the snapshot.
+    assert ctx.get_params() == p0
+
+
+def test_fft_time_apply_params_partial(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    before = ctx.get_params()
+
+    # A partial dict carrying only 'nfft' must update nfft and leave every
+    # other key untouched (and must not raise on the missing keys).
+    ctx.apply_params({'nfft': 4096})
+
+    after = ctx.get_params()
+    assert after['nfft'] == 4096
+    for key, val in before.items():
+        if key == 'nfft':
+            continue
+        assert after[key] == val, f"partial apply mutated unrelated key {key!r}"

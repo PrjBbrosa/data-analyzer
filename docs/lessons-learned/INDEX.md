@@ -44,6 +44,7 @@ lesson by default.
 | [Qt Checkbox Press Release Toggle](codex-qt-checkbox-press-release-toggle.md) | Changing custom PyQt item-view checkbox hit handling, especially | See lesson |
 | [Overlay Graticule And Wheel Contract](codex-overlay-graticule-wheel-contract.md) | Work touching TimeDomain pyqtgraph overlay-mode grid lines, per-channel | See lesson |
 | [Cursor Pill View Apply](codex-cursor-pill-view-apply.md) | Touching view-tab apply/render paths, cursor mode restoration, or split-pane cursor pill routing. | See lesson |
+| [Timedomain New Channel Y-Fit After Restore](codex-timedomain-new-channel-yfit-after-restore.md) | Touching timedomain channel-selection replots, ViewState | See lesson |
 
 ## Selection Rules
 

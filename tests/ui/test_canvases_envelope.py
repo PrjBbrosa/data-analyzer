@@ -1,5 +1,4 @@
-"""Tests for module-level ``build_envelope`` helper and
-``PlotCanvas.plot_or_update_heatmap`` reuse semantics.
+"""Tests for the module-level ``build_envelope`` helper.
 
 Covers Task 4 of the order-canvas-perf plan
 (`docs/superpowers/plans/2026-04-26-order-canvas-perf-plan.md`):
@@ -12,10 +11,10 @@ Covers Task 4 of the order-canvas-perf plan
   - ``TimeDomainCanvas._envelope`` is a thin wrapper that **keeps its
     required-xlim signature**; ``None`` is the module helper's contract
     only and must not propagate.
-  - ``PlotCanvas.plot_or_update_heatmap`` reuses axes / image / colorbar
-    on a compatible call (4-clause check from spec §6.2), rebuilds on
-    shape change, and resets ``_heatmap_*`` state on ``clear()`` so a
-    2-subplot→heatmap round trip does not leave a colorbar ghost.
+
+The order heatmap's ``PlotCanvas.plot_or_update_heatmap`` reuse tests
+were removed when that method was deleted (M5/M6 renderer swap to
+``PgHeatmapCanvas``); see ``tests/ui/test_pg_heatmap_canvas.py``.
 """
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -82,142 +81,10 @@ def test_timedomain_envelope_thin_wrapper_does_not_accept_none(qtbot):
 
 
 # -------------------------------------------------------------------
-# PlotCanvas.plot_or_update_heatmap — reuse / rebuild / lifecycle
+# M9 retired the matplotlib SpectrogramCanvas (FFT-vs-Time moved to
+# PgHeatmapCanvas with_slice=True). Its ``_color_limits`` z-range helper
+# test was removed with the class; the pg canvas derives z-levels inline
+# in plot_result (z_floor/z_ceiling clip + nanmin/nanmax for z_auto) and
+# the rendered levels are pinned in tests/ui/test_pg_heatmap_canvas.py
+# (``_img.getLevels()`` equals the explicit window).
 # -------------------------------------------------------------------
-
-
-def test_plot_canvas_heatmap_reuses_artists_on_compatible_call(qtbot):
-    """Same shape on a second call must reuse ``_heatmap_ax`` /
-    ``_heatmap_im`` / ``_heatmap_cbar`` rather than rebuild — and not
-    grow ``fig.axes`` because each rebuild adds another colorbar axis.
-    """
-    canvas = cv.PlotCanvas()
-    qtbot.addWidget(canvas)
-    matrix1 = np.random.default_rng(0).random((20, 30))
-    canvas.plot_or_update_heatmap(
-        matrix=matrix1, x_extent=(0, 10), y_extent=(0, 5),
-        x_label='Time', y_label='Order', title='t1',
-    )
-    ax_obj_1 = canvas._heatmap_ax
-    im_obj_1 = canvas._heatmap_im
-    cbar_ax_1 = canvas._heatmap_cbar.ax
-    n_axes_1 = len(canvas.fig.axes)
-
-    matrix2 = np.random.default_rng(1).random((20, 30))   # same shape
-    canvas.plot_or_update_heatmap(
-        matrix=matrix2, x_extent=(0, 10), y_extent=(0, 5),
-        x_label='Time', y_label='Order', title='t2',
-    )
-    assert canvas._heatmap_ax is ax_obj_1, "heatmap axes object must be reused"
-    assert canvas._heatmap_im is im_obj_1, "imshow artist must be reused"
-    assert canvas._heatmap_cbar.ax is cbar_ax_1, "colorbar axes must be reused"
-    assert len(canvas.fig.axes) == n_axes_1, "axes count should not grow"
-
-
-def test_plot_canvas_heatmap_rebuilds_on_shape_change(qtbot):
-    """When ``matrix.shape`` changes the compat check fails clause 4 and
-    we must fall back to clear+rebuild; the new ``imshow`` artist must
-    carry the new shape and not raise.
-    """
-    canvas = cv.PlotCanvas()
-    qtbot.addWidget(canvas)
-    canvas.plot_or_update_heatmap(
-        matrix=np.zeros((20, 30)), x_extent=(0, 10), y_extent=(0, 5),
-        x_label='X', y_label='Y', title='small',
-    )
-    im_obj_1 = canvas._heatmap_im
-    canvas.plot_or_update_heatmap(
-        matrix=np.zeros((50, 80)),                       # different shape
-        x_extent=(0, 10), y_extent=(0, 5),
-        x_label='X', y_label='Y', title='big',
-    )
-    assert canvas._heatmap_im is not im_obj_1, "shape change must rebuild imshow artist"
-    assert canvas._heatmap_im.get_array().shape == (50, 80)
-
-
-def test_plot_canvas_heatmap_to_2subplot_to_heatmap_no_colorbar_ghost(qtbot):
-    """Colorbar-ghost invariant: heatmap → user switches to a 2-subplot
-    layout (calls ``clear()`` and adds 2 line subplots) → back to
-    heatmap. The figure must not retain a stale colorbar axis (which
-    would yield 3+ axes), and ``_heatmap_*`` must be reset by
-    ``clear()`` so the compat check correctly rebuilds. This guards the
-    heatmap → 2-subplot → heatmap round-trip regardless of which
-    feature drives the 2-subplot intermediate state.
-    """
-    canvas = cv.PlotCanvas()
-    qtbot.addWidget(canvas)
-    canvas.plot_or_update_heatmap(
-        matrix=np.ones((10, 15)), x_extent=(0, 10), y_extent=(0, 5),
-        x_label='X', y_label='Y', title='heatmap',
-    )
-    assert len(canvas.fig.axes) == 2   # heatmap + colorbar
-
-    # Simulate a 2-subplot render: clear + 2 line subplots.
-    canvas.clear()
-    canvas.fig.add_subplot(2, 1, 1).plot([1, 2, 3])
-    canvas.fig.add_subplot(2, 1, 2).plot([3, 2, 1])
-    assert canvas._heatmap_ax is None
-    assert canvas._heatmap_im is None
-    assert canvas._heatmap_cbar is None
-
-    # Back to heatmap.
-    canvas.plot_or_update_heatmap(
-        matrix=np.ones((10, 15)), x_extent=(0, 10), y_extent=(0, 5),
-        x_label='X', y_label='Y', title='heatmap2',
-    )
-    assert len(canvas.fig.axes) == 2   # heatmap + colorbar — no ghost
-    assert canvas._heatmap_cbar is not None
-
-
-# -------------------------------------------------------------------
-# Wave 5: new (z_auto, z_floor, z_ceiling, x_*, y_*) signatures
-# -------------------------------------------------------------------
-
-
-def test_color_limits_z_explicit_floor_ceiling():
-    """_color_limits accepts (z_auto=False, z_floor, z_ceiling) and returns them.
-    _color_limits accepts z_auto=True and returns (nanmin, nanmax)."""
-    import numpy as np
-    from mf4_analyzer.ui.canvases import SpectrogramCanvas
-
-    sc = SpectrogramCanvas()
-    z = np.array([[-50, -10, -5], [-100, -20, 0]], dtype=float)
-
-    vmin, vmax = sc._color_limits(
-        z, amplitude_mode='amplitude_db',
-        z_auto=False, z_floor=-30.0, z_ceiling=0.0,
-    )
-    assert (vmin, vmax) == (-30.0, 0.0)
-
-    vmin, vmax = sc._color_limits(
-        z, amplitude_mode='amplitude_db', z_auto=True,
-        z_floor=999, z_ceiling=999,  # ignored
-    )
-    assert vmin == -100.0
-    assert vmax == 0.0
-
-
-def test_plot_or_update_heatmap_axis_args(qtbot):
-    """plot_or_update_heatmap accepts new (z_auto, z_floor, z_ceiling, x_auto,
-    x_min, x_max, y_auto, y_min, y_max) kwargs without TypeError."""
-    import numpy as np
-    from mf4_analyzer.ui.canvases import PlotCanvas
-
-    pc = PlotCanvas()
-    qtbot.addWidget(pc)
-    m = np.random.RandomState(42).rand(8, 8)
-
-    pc.plot_or_update_heatmap(
-        matrix=m, x_extent=(0, 4), y_extent=(0, 20),
-        x_label='Time (s)', y_label='Order',
-        title='test', cmap='turbo', interp='bilinear',
-        cbar_label='Amplitude',
-        amplitude_mode='amplitude_db',
-        z_auto=False, z_floor=-30.0, z_ceiling=0.0,
-        x_auto=True, x_min=0.0, x_max=0.0,
-        y_auto=False, y_min=2.0, y_max=18.0,
-    )
-    ax = pc.fig.axes[0]
-    lo, hi = ax.get_ylim()
-    assert abs(lo - 2.0) < 0.01
-    assert abs(hi - 18.0) < 0.01

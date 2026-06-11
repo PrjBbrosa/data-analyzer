@@ -1,0 +1,330 @@
+"""AnalysisSectionPage: pane container structure + focus + split + link."""
+import numpy as np
+import pytest
+
+from PyQt5.QtCore import QEvent, QPointF, Qt
+from PyQt5.QtGui import QMouseEvent
+
+from mf4_analyzer.ui.analysis_section_page import AnalysisSectionPage
+from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+from mf4_analyzer.ui.view_state import ViewManager
+from mf4_analyzer.ui.analysis_view_state import AnalysisViewState
+
+
+def _make_manager():
+    return ViewManager(state_factory=AnalysisViewState)
+
+
+class _FakeCard:
+    """Card stub: AnalysisSectionPage only needs .canvas and QWidget-ness."""
+    def __new__(cls):
+        from PyQt5.QtWidgets import QWidget
+        w = QWidget()
+        w.setObjectName("chartCard")
+        w.canvas = PgHeatmapCanvas(w)
+        return w
+
+
+class _FakeLineCard:
+    """Line-canvas card variant (FFT section): canvas has no ._plot/_img."""
+    def __new__(cls):
+        from PyQt5.QtWidgets import QWidget
+        w = QWidget()
+        w.setObjectName("chartCard")
+        w.canvas = PgLineCanvas(w)
+        return w
+
+
+@pytest.fixture
+def page(qapp):
+    mgr = _make_manager()
+    p = AnalysisSectionPage(
+        section='order',
+        manager=mgr,
+        card_factory=lambda: _FakeCard(),
+    )
+    p.resize(800, 500)
+    p.show()  # 见教训：QSplitter.setSizes 前需 show()+resize
+    yield p
+    p.deleteLater()
+
+
+@pytest.fixture
+def line_page(qapp):
+    mgr = _make_manager()
+    p = AnalysisSectionPage(
+        section='fft',
+        manager=mgr,
+        card_factory=lambda: _FakeLineCard(),
+    )
+    p.resize(800, 500)
+    p.show()
+    yield p
+    p.deleteLater()
+
+
+def test_starts_with_one_pane(page):
+    assert page.pane_count() == 1
+    assert page.focused_index() == 0
+
+
+def test_enter_exit_split(page):
+    page.enter_split()
+    assert page.pane_count() == 2
+    page.exit_split()
+    assert page.pane_count() == 1
+    assert page.focused_index() == 0
+
+
+def test_set_focus(page):
+    page.enter_split()
+    page.set_focused_index(1)
+    assert page.focused_index() == 1
+
+
+def test_x_link_toggle(page):
+    page.enter_split()
+    page.set_linked(True)
+    vb0 = page.pane_canvas(0)._plot.vb
+    vb1 = page.pane_canvas(1)._plot.vb
+    assert vb1.linkedView(vb1.XAxis) is vb0
+    page.set_linked(False)
+    assert vb1.linkedView(vb1.XAxis) is None
+
+
+def test_heatmap_link_locks_both_axes(page):
+    """Heatmaps compare on BOTH axes (spec §6.1)."""
+    page.enter_split()
+    page.set_linked(True)
+    vb0 = page.pane_canvas(0)._plot.vb
+    vb1 = page.pane_canvas(1)._plot.vb
+    assert vb1.linkedView(vb1.YAxis) is vb0
+    page.set_linked(False)
+    assert vb1.linkedView(vb1.YAxis) is None
+
+
+def test_line_set_linked_no_attribute_error(line_page):
+    """PgLineCanvas has _plot_amp/_plot_psd, NOT _plot — set_linked must not
+    AttributeError, and the amp row's X axis must be linked (X only, no Y)."""
+    line_page.enter_split()
+    line_page.set_linked(True)  # would AttributeError on a naive ._plot.vb
+    vb0 = line_page.pane_canvas(0)._plot_amp.vb
+    vb1 = line_page.pane_canvas(1)._plot_amp.vb
+    assert vb1.linkedView(vb1.XAxis) is vb0
+    # Line sections do NOT Y-link (only heatmaps do).
+    assert vb1.linkedView(vb1.YAxis) is None
+    line_page.set_linked(False)
+    assert vb1.linkedView(vb1.XAxis) is None
+
+
+def test_click_pane_sets_focus(page):
+    """eventFilter: a mouse press on pane 1 makes it the focused pane."""
+    page.enter_split()
+    assert page.focused_index() == 0
+    card1 = page._cards[1]
+    ev = QMouseEvent(
+        QEvent.MouseButtonPress,
+        QPointF(5, 5),
+        Qt.LeftButton,
+        Qt.LeftButton,
+        Qt.NoModifier,
+    )
+    page.eventFilter(card1, ev)
+    assert page.focused_index() == 1
+
+
+def test_focus_signal_emitted(page):
+    received = []
+    page.focus_changed.connect(received.append)
+    page.enter_split()
+    page.set_focused_index(1)
+    assert received == [1]
+
+
+# -- V8: locked color levels -----------------------------------------------
+def _plot_heat(canvas, peak):
+    mm = np.ones((4, 5))
+    mm[2, 3] = peak
+    canvas.plot_or_update_heatmap(
+        matrix=mm, x_extent=(0, 10), y_extent=(0, 8),
+        amplitude_mode='amplitude', z_auto=True)
+
+
+def test_levels_lock_syncs_both_heatmaps(page):
+    page.enter_split()
+    for i, peak in ((0, 100.0), (1, 50.0)):
+        _plot_heat(page.pane_canvas(i), peak)
+    page.set_levels_locked(True)
+    lo0, hi0 = page.pane_canvas(0)._img.getLevels()
+    lo1, hi1 = page.pane_canvas(1)._img.getLevels()
+    assert (lo0, hi0) == (lo1, hi1)
+    # combined auto range = min/max across BOTH matrices
+    assert hi0 == pytest.approx(100.0) and lo0 == pytest.approx(1.0)
+
+
+def test_levels_drag_propagates_when_locked(page):
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    page.set_levels_locked(True)
+    page.pane_canvas(0)._cbar.setLevels((5.0, 60.0))   # simulate user drag…
+    # …emit like a drag (M2: setLevels is silent; sigLevelsChanged only on
+    # interactive region drag). _on_cbar_levels relays to canvas.levels_changed.
+    page.pane_canvas(0)._cbar.sigLevelsChanged.emit(page.pane_canvas(0)._cbar)
+    # _img.getLevels() returns an ndarray in pg 0.14.0 — unpack to scalars
+    # before approx-comparing (an ndarray == tuple yields an array and the
+    # bare assert would raise ambiguous-truth).
+    lo1, hi1 = page.pane_canvas(1)._img.getLevels()
+    assert (lo1, hi1) == (pytest.approx(5.0), pytest.approx(60.0))
+
+
+def test_levels_unlock_disconnects_propagation(page):
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    page.set_levels_locked(True)
+    page.set_levels_locked(False)
+    # After unlock, a drag on pane 0 must NOT touch pane 1.
+    before = tuple(page.pane_canvas(1)._img.getLevels())
+    page.pane_canvas(0)._cbar.setLevels((5.0, 60.0))
+    page.pane_canvas(0)._cbar.sigLevelsChanged.emit(page.pane_canvas(0)._cbar)
+    assert tuple(page.pane_canvas(1)._img.getLevels()) == before
+
+
+def test_repeated_lock_does_not_multiconnect(page):
+    """Re-locking must disconnect first so one drag fires propagation once.
+
+    The propagation handler ``_on_locked_levels_changed`` blocks the
+    downstream colorbar signals (so pane 1's own ``levels_changed`` never
+    re-fires), making the final ``_img`` value idempotent and unable to
+    reveal a multi-connect. Count handler invocations directly instead: a
+    single simulated drag must call it exactly once no matter how many
+    times the lock was (re)applied."""
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    calls = []
+    orig = page._on_locked_levels_changed
+    page._on_locked_levels_changed = (
+        lambda lo, hi: (calls.append((lo, hi)), orig(lo, hi))[1])
+    page.set_levels_locked(True)
+    page.set_levels_locked(True)  # idempotent re-lock
+    page.set_levels_locked(True)
+    page.pane_canvas(0)._cbar.setLevels((7.0, 70.0))
+    page.pane_canvas(0)._cbar.sigLevelsChanged.emit(page.pane_canvas(0)._cbar)
+    # Exactly one propagation despite three locks (disconnect-before-connect).
+    assert len(calls) == 1
+    lo1, hi1 = page.pane_canvas(1)._img.getLevels()
+    assert (lo1, hi1) == (pytest.approx(7.0), pytest.approx(70.0))
+
+
+# -- V11 Step 0: split combined export -------------------------------------
+def _non_white_pixels(pixmap):
+    """Count pixels that are not pure white in the pixmap (proxy for content)."""
+    img = pixmap.toImage()
+    count = 0
+    w, h = img.width(), img.height()
+    # Sample a coarse grid to stay fast on a 2x bitmap.
+    for y in range(0, h, max(1, h // 60)):
+        for x in range(0, w, max(1, w // 60)):
+            if img.pixel(x, y) & 0x00FFFFFF != 0x00FFFFFF:
+                count += 1
+    return count
+
+
+def test_grab_combined_single_pane_matches_pane_width(page):
+    """Single pane: grab_combined_pixmap == pane_canvas(0).grab_pixmap width."""
+    _plot_heat(page.pane_canvas(0), 100.0)
+    page.repaint()
+    solo = page.pane_canvas(0).grab_pixmap(scale=2.0)
+    combined = page.grab_combined_pixmap(scale=2.0)
+    assert combined is not None and not combined.isNull()
+    assert combined.width() == solo.width()
+
+
+def test_grab_combined_split_is_wider_than_single(page):
+    """Split: composited width exceeds a single pane's grab (both panes drawn)."""
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    page.repaint()
+    solo = page.pane_canvas(0).grab_pixmap(scale=2.0)
+    combined = page.grab_combined_pixmap(scale=2.0)
+    assert combined is not None and not combined.isNull()
+    # Two panes + gutter → strictly wider than one pane.
+    assert combined.width() > solo.width()
+    # Roughly twice as wide (allow gutter + rounding slack).
+    assert combined.width() >= 2 * solo.width() - 8
+
+
+def test_grab_combined_split_has_content_not_all_white(page):
+    """The composited bitmap must carry rendered heatmap pixels, not be blank."""
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    page.repaint()
+    combined = page.grab_combined_pixmap(scale=2.0)
+    assert _non_white_pixels(combined) > 0
+
+
+def test_grab_combined_line_section_split(line_page):
+    """FFT (line) section also composites: split width > single pane width."""
+    line_page.enter_split()
+    line_page.repaint()
+    solo = line_page.pane_canvas(0).grab_pixmap(scale=2.0)
+    combined = line_page.grab_combined_pixmap(scale=2.0)
+    assert combined is not None and not combined.isNull()
+    assert combined.width() > solo.width()
+
+
+# -- V8: compare toggle buttons --------------------------------------------
+def test_compare_toggled_signal_x_linked(page):
+    """联动缩放 toggle emits compare_toggled('x_linked', bool) on edge."""
+    page.enter_split()
+    received = []
+    page.compare_toggled.connect(lambda k, on: received.append((k, on)))
+    page.btn_link.setChecked(False)
+    page.btn_link.setChecked(True)
+    assert received == [('x_linked', False), ('x_linked', True)]
+
+
+def test_compare_toggled_signal_levels_locked(page):
+    """锁定色阶 toggle emits compare_toggled('levels_locked', bool)."""
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    received = []
+    page.compare_toggled.connect(lambda k, on: received.append((k, on)))
+    page.btn_lock_levels.setChecked(True)
+    page.btn_lock_levels.setChecked(False)
+    assert received == [('levels_locked', True), ('levels_locked', False)]
+
+
+def test_levels_lock_button_hidden_for_line_section(line_page):
+    """FFT line section has no _img/_cbar → 锁定色阶 button stays hidden."""
+    line_page.enter_split()
+    assert not line_page.btn_lock_levels.isVisible()
+    # 联动缩放 applies to all sections.
+    assert line_page.btn_link.isVisible()
+
+
+def test_compare_buttons_hidden_in_single_pane(page):
+    """Both toggles only matter in split; hidden/disabled when one pane."""
+    assert not page.btn_link.isVisible()
+    assert not page.btn_lock_levels.isVisible()
+    page.enter_split()
+    assert page.btn_link.isVisible()
+    page.exit_split()
+    assert not page.btn_link.isVisible()
+
+
+def test_set_compare_buttons_no_edge_emit(page):
+    """Programmatic sync (sync_compare_buttons) must NOT emit compare_toggled
+    (state→button, not button→state)."""
+    page.enter_split()
+    received = []
+    page.compare_toggled.connect(lambda k, on: received.append((k, on)))
+    page.sync_compare_buttons(x_linked=False, levels_locked=True)
+    assert received == []
+    assert page.btn_link.isChecked() is False

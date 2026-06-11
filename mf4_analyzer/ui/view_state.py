@@ -98,15 +98,16 @@ class ViewManager(QObject):
     active_changed = pyqtSignal(int)
     split_changed = pyqtSignal(object)
 
-    def __init__(self, parent: QObject | None = None):
+    def __init__(self, parent: QObject | None = None, state_factory=None):
         super().__init__(parent)
-        self.views: list[ViewState] = [self._make(0)]
+        self._state_factory = state_factory or ViewState
+        self.views: list = [self._make(0)]
         self.active = 0
         self.split_with: int | None = None
         self._split_pairs: dict[int, int] = {}
 
-    def _make(self, idx: int) -> ViewState:
-        return ViewState(
+    def _make(self, idx: int):
+        return self._state_factory(
             name=f"View {idx + 1}",
             tab_color=_PALETTE[idx % len(_PALETTE)],
         )
@@ -154,7 +155,7 @@ class ViewManager(QObject):
         pairs = self._snapshot_pairs_by_object()
         active_state = self.views[self.active]
         source = self.views[idx]
-        copied = ViewState.from_dict(source.to_dict())
+        copied = type(source).from_dict(source.to_dict())
         copied.name = f"{source.name} 副本"
         self.views.insert(idx + 1, copied)
         self.active = self._index_of_state(active_state)

@@ -98,6 +98,50 @@ def test_cot_params_has_fs_field():
     assert p.fs == 100.0
 
 
+def test_cot_cancel_token_false_is_bit_identical_to_no_token():
+    """Backward compat: a never-true cancel_token must not change one bit."""
+    t, sig, rpm = _synth_constant_rpm_with_2nd_order()
+    p = COTParams(samples_per_rev=256, nfft=1024, max_order=10.0,
+                  order_res=0.05, time_res=0.5)
+    baseline = COTOrderAnalyzer.compute(sig, rpm, t, p)
+    res = COTOrderAnalyzer.compute(sig, rpm, t, p, cancel_token=lambda: False)
+    np.testing.assert_array_equal(res.amplitude, baseline.amplitude)
+    np.testing.assert_array_equal(res.times, baseline.times)
+    np.testing.assert_array_equal(res.orders, baseline.orders)
+
+
+def test_cot_cancel_token_true_raises_cancelled():
+    """An always-true token cancels immediately, mirroring spectrogram's
+    ``RuntimeError('spectrogram computation cancelled')`` pattern."""
+    import pytest
+    t, sig, rpm = _synth_constant_rpm_with_2nd_order()
+    p = COTParams(samples_per_rev=256, nfft=1024, max_order=10.0,
+                  order_res=0.05, time_res=0.5)
+    with pytest.raises(RuntimeError, match="cancelled") as excinfo:
+        COTOrderAnalyzer.compute(sig, rpm, t, p, cancel_token=lambda: True)
+    assert str(excinfo.value) == "order computation cancelled"
+
+
+def test_cot_cancel_token_mid_loop_cancels():
+    """Token flipping True after N polls still cancels — proves the poll
+    sits inside the per-frame loop, not a one-shot check at entry."""
+    import pytest
+    t, sig, rpm = _synth_constant_rpm_with_2nd_order()
+    p = COTParams(samples_per_rev=256, nfft=1024, max_order=10.0,
+                  order_res=0.05, time_res=0.5)
+    state = {'count': 0}
+
+    def cancel_after_three_polls():
+        state['count'] += 1
+        return state['count'] > 3
+
+    with pytest.raises(RuntimeError, match="cancelled"):
+        COTOrderAnalyzer.compute(sig, rpm, t, p,
+                                 cancel_token=cancel_after_three_polls)
+    # Polled at least 4 times -> the token is consulted per frame.
+    assert state['count'] >= 4
+
+
 def test_cot_result_params_carries_fs():
     """COT result must round-trip fs so downstream code can read result.params.fs."""
     import numpy as np

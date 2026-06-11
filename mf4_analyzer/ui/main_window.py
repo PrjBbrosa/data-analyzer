@@ -18,64 +18,11 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QStatusBar,
 )
-from PyQt5.QtCore import QTimer, QObject, QThread, pyqtSignal
+from PyQt5.QtCore import QTimer, QThread
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer
-from .canvases import CHART_TIGHT_LAYOUT_KW
 from .. import app_meta
-
-
-class FFTTimeWorker(QObject):
-    """Run :class:`SpectrogramAnalyzer.compute` on a worker QThread.
-
-    Plan Task 7. The worker is a plain ``QObject`` (NOT a QThread
-    subclass); the canonical Qt pattern is to instantiate the worker on
-    the main thread, ``moveToThread(thread)``, and connect
-    ``thread.started`` to ``worker.run``. ``finished``/``failed`` both
-    quit the thread; the cleanup chain
-    (``thread.finished -> worker.deleteLater`` /
-    ``thread.deleteLater``) keeps the QThread from leaking.
-
-    The analyzer's ``compute()`` polls ``cancel_token`` at the top of
-    every frame (see ``signal/spectrogram.py``); flipping
-    ``self._cancelled`` via :meth:`cancel` is the only way to stop a
-    running compute mid-loop.
-    """
-
-    progress = pyqtSignal(int, int)
-    finished = pyqtSignal(object)
-    failed = pyqtSignal(str)
-
-    def __init__(self, sig, t, params, channel_name, unit):
-        super().__init__()
-        self.sig = sig
-        self.t = t
-        self.params = params
-        self.channel_name = channel_name
-        self.unit = unit
-        self._cancelled = False
-
-    def cancel(self):
-        """Flip the cancel flag; ``compute`` polls it at every frame."""
-        self._cancelled = True
-
-    def run(self):
-        from ..signal import SpectrogramAnalyzer
-        try:
-            result = SpectrogramAnalyzer.compute(
-                self.sig,
-                self.t,
-                self.params,
-                channel_name=self.channel_name,
-                unit=self.unit,
-                progress_callback=self.progress.emit,
-                cancel_token=lambda: self._cancelled,
-            )
-        except Exception as exc:
-            self.failed.emit(str(exc))
-        else:
-            self.finished.emit(result)
 
 
 class MainWindow(QMainWindow):
@@ -106,6 +53,22 @@ class MainWindow(QMainWindow):
         # ``_fft_time_thread.isRunning()``.
         self._fft_time_thread = None
         self._fft_time_worker = None
+        # V7b: split-heatmap sequential compute queue. ``do_fft_time``
+        # builds a list of cache-miss ``(pane_idx, fid, ch)`` jobs (focused
+        # pane first); each job runs on the SAME single worker/thread above,
+        # one at a time, so a 2-pane compare computes both panes without
+        # spawning concurrent threads. ``_fft_time_pending`` carries the
+        # current job's render target; the queue drives the next dispatch
+        # from ``_on_fft_time_thread_done``.
+        self._fft_time_queue = []
+        # Order (COT) worker thread (M5). Same QObject + QThread pattern
+        # as the FFT-vs-Time pair above; refs set in ``do_order_time``,
+        # cleared in ``_on_order_thread_done``.
+        self._order_thread = None
+        self._order_worker = None
+        # V7b: Order split-heatmap sequential compute queue (mirrors the
+        # FFT-vs-Time queue above). Jobs are ``(pane_idx, fid, ch, rpm_source)``.
+        self._order_queue = []
         self._last_batch_preset = None
         self._acquisition_cockpit_window = None
         self._init_ui();
@@ -209,6 +172,21 @@ class MainWindow(QMainWindow):
         self._primary_view_idx = self.view_manager.active
         self._secondary_view_idx = None
         self._focused_view_idx = self.view_manager.active
+
+        # V7 Step 2: per-section analysis view managers (owned by ChartStack so
+        # the per-section ViewTabBar can dereference a real manager at
+        # construction) + per-section LRU result caches (owned here).
+        from .analysis_cache import AnalysisResultCache
+        self.analysis_managers = self.chart_stack.analysis_managers
+        self.analysis_caches = {
+            'fft': AnalysisResultCache(32),
+            'fft_time': AnalysisResultCache(12),
+            'order': AnalysisResultCache(12),
+        }
+        # Re-entrancy guard: while a view switch is applying state to the UI,
+        # suppress the inspector signal handlers that would otherwise capture
+        # the half-applied controls back into the outgoing view.
+        self._applying_analysis_view = False
 
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
@@ -399,6 +377,60 @@ class MainWindow(QMainWindow):
         self.view_manager.split_changed.connect(self._on_view_split)
         self._install_view_shortcuts()
 
+        # V7 Step 2: per-section analysis tab bars ↔ managers. The ViewTabBar
+        # already self-connects views_changed/active_changed/split_changed to
+        # its own refresh in __init__, so here we only wire the user-intent
+        # signals into the manager and the manager.active_changed into the
+        # view-switch pipeline (_on_analysis_view_switched). split_requested /
+        # clear_split_requested mean "add / remove the second pane of THIS
+        # view" for analysis sections (panes live inside the view, not the
+        # time-domain cross-view pairing).
+        for sec, page in (
+            ('fft', self.chart_stack.page_fft),
+            ('fft_time', self.chart_stack.page_fft_time),
+            ('order', self.chart_stack.page_order),
+        ):
+            mgr = self.analysis_managers[sec]
+            bar = page.tabbar
+            bar.switch_requested.connect(
+                lambda idx, s=sec: self._on_analysis_switch(s, idx))
+            bar.new_requested.connect(
+                lambda s=sec: self._on_analysis_new(s))
+            bar.delete_requested.connect(
+                lambda idx, s=sec: self._on_analysis_delete(s, idx))
+            bar.rename_requested.connect(mgr.rename)
+            bar.duplicate_requested.connect(
+                lambda idx, s=sec: self._on_analysis_duplicate(s, idx))
+            bar.color_requested.connect(
+                lambda idx, s=sec: self._on_analysis_color(s, idx))
+            bar.reorder_requested.connect(mgr.reorder)
+            bar.split_requested.connect(
+                lambda _idx, s=sec: self._on_analysis_split(s, True))
+            bar.clear_split_requested.connect(
+                lambda _idx, s=sec: self._on_analysis_split(s, False))
+            mgr.active_changed.connect(
+                lambda idx, s=sec: self._on_analysis_view_switched(s, idx))
+            page.focus_changed.connect(
+                lambda idx, s=sec: self._on_analysis_focus_changed(s, idx))
+            # V8: compare toggle write-back. The page's buttons emit an EDGE
+            # (key, on) — write it onto the active view's state.compare so a
+            # later view switch reads it back (closes the x_linked/levels
+            # write-back loop; V7 only READ state.compare).
+            page.compare_toggled.connect(
+                lambda key, on, s=sec: self._on_analysis_compare_toggled(
+                    s, key, on))
+            # V8: colorbar-drag → inspector Z sync. Heatmap sections only
+            # (fft is a line section with no colorbar / no levels_changed).
+            # While levels are locked the page already mirrors the drag onto
+            # BOTH pane canvases internally (_on_locked_levels_changed); this
+            # MainWindow path is the SEPARATE concern of echoing the FOCUSED
+            # pane's dragged range back into the inspector Z controls. Pane 1
+            # is wired later in _connect_new_pane (it does not exist yet).
+            if sec != 'fft':
+                page.pane_canvas(0).levels_changed.connect(
+                    lambda lo, hi, s=sec: self._on_analysis_levels_dragged(
+                        s, 0, lo, hi))
+
         # FFT vs Time primary compute.
         self.inspector.fft_time_requested.connect(
             lambda: self.do_fft_time(force=False)
@@ -411,7 +443,7 @@ class MainWindow(QMainWindow):
         self.inspector.fft_time_signal_changed.connect(
             self._on_fft_time_signal_changed
         )
-        # Hover readout: surface SpectrogramCanvas.cursor_info in the
+        # Hover readout: surface PgHeatmapCanvas.cursor_info in the
         # status bar (reviewer Important #1; design §6.4 mouse-move
         # readout). Pattern matches canvas_time.cursor_info → ChartStack
         # CursorPill — the pill is gated to time mode, so the spectrogram
@@ -683,6 +715,405 @@ class MainWindow(QMainWindow):
                 self._project_view_controls(restore_idx)
             if cursor_pill_snapshot is not None:
                 self.chart_stack.restore_cursor_pill_snapshot(cursor_pill_snapshot)
+
+    # ==================================================================
+    # V7: per-section analysis view routing (Steps 2-4)
+    # ==================================================================
+    def _analysis_ctx(self, section):
+        return {
+            'fft': self.inspector.fft_ctx,
+            'fft_time': self.inspector.fft_time_ctx,
+            'order': self.inspector.order_ctx,
+        }[section]
+
+    def _analysis_page(self, section):
+        return {
+            'fft': self.chart_stack.page_fft,
+            'fft_time': self.chart_stack.page_fft_time,
+            'order': self.chart_stack.page_order,
+        }[section]
+
+    # -- tab-bar intent handlers (capture outgoing view first) ----------
+    def _on_analysis_switch(self, section, idx):
+        mgr = self.analysis_managers[section]
+        if idx == mgr.active:
+            return
+        self._capture_active_analysis_view(section)
+        mgr.set_active(idx)
+
+    def _on_analysis_new(self, section):
+        self._capture_active_analysis_view(section)
+        self.analysis_managers[section].new_view()
+
+    def _on_analysis_delete(self, section, idx):
+        self._capture_active_analysis_view(section)
+        self.analysis_managers[section].delete_view(idx)
+
+    def _on_analysis_duplicate(self, section, idx):
+        self._capture_active_analysis_view(section)
+        self.analysis_managers[section].duplicate(idx)
+
+    def _on_analysis_color(self, section, idx):
+        mgr = self.analysis_managers[section]
+        if not (0 <= idx < len(mgr.views)):
+            return
+        from PyQt5.QtGui import QColor
+        current = QColor(mgr.get(idx).tab_color)
+        color = QColorDialog.getColor(current, self, "选择标签颜色")
+        if color.isValid():
+            mgr.set_color(idx, color.name())
+
+    def _on_analysis_split(self, section, on):
+        """split_requested / clear_split_requested → add / remove pane 2 of the
+        ACTIVE view of this section."""
+        mgr = self.analysis_managers[section]
+        state = mgr.get(mgr.active)
+        page = self._analysis_page(section)
+        if on:
+            if state.add_pane():
+                page.enter_split()
+                self._connect_new_pane(section, page)
+        else:
+            state.remove_second_pane()
+            page.exit_split()
+
+    def _connect_new_pane(self, section, page):
+        """Wire copy/annotation relays for a freshly split pane card so the
+        compare pane behaves like pane 0."""
+        if page.pane_count() < 2:
+            return
+        self.chart_stack._connect_analysis_card_signals(page._cards[1])
+        # V8: pane 1's colorbar-drag → inspector Z echo (heatmap sections).
+        # Guarded against double-wiring across repeated splits via a marker on
+        # the canvas (enter_split builds a fresh card each time, so a stale
+        # connection on a destroyed canvas is never reused — but a duplicate
+        # connect on the same long-lived canvas would double-fire).
+        if section != 'fft':
+            canvas = page.pane_canvas(1)
+            if not getattr(canvas, '_levels_echo_wired', False):
+                canvas.levels_changed.connect(
+                    lambda lo, hi: self._on_analysis_levels_dragged(
+                        section, 1, lo, hi))
+                canvas._levels_echo_wired = True
+
+    # -- view-switch pipeline (capture → switch → apply → render) -------
+    def _capture_active_analysis_view(self, section):
+        from .analysis_view_bridge import capture_params_to_state
+        mgr = self.analysis_managers[section]
+        state = mgr.get(mgr.active)
+        capture_params_to_state(self._analysis_ctx(section), state)
+        self._capture_analysis_sources(section, state)
+
+    def _on_analysis_view_switched(self, section, idx):
+        """manager.active_changed → apply the new view's structure, params and
+        sources, then render whatever the cache already holds (never compute)."""
+        from .analysis_view_bridge import apply_params_from_state
+        mgr = self.analysis_managers[section]
+        if not (0 <= idx < len(mgr.views)):
+            return
+        state = mgr.get(idx)
+        page = self._analysis_page(section)
+        self._applying_analysis_view = True
+        try:
+            # 1. Align the pane structure to the view (1 or 2 panes).
+            if len(state.panes) == 2 and page.pane_count() == 1:
+                page.enter_split()
+                self._connect_new_pane(section, page)
+            elif len(state.panes) == 1 and page.pane_count() == 2:
+                page.exit_split()
+            # 2. Compare options (state is the source of truth; enter_split
+            #    above may have emitted a non-edge link_toggled — we ignore
+            #    that signal entirely and drive set_linked from state here).
+            #    V8 closes the loop: set_levels_locked is now also state-driven,
+            #    and the toggle buttons are re-seeded from state.compare (under
+            #    _applying_analysis_view, so the resulting button edges do not
+            #    write back onto the state we just read).
+            x_linked = bool(state.compare.get('x_linked', True))
+            levels_locked = bool(state.compare.get('levels_locked', False))
+            page.set_linked(x_linked)
+            page.set_levels_locked(levels_locked)
+            page.sync_compare_buttons(
+                x_linked=x_linked, levels_locked=levels_locked)
+            # 3. Params + focused-pane source echo.
+            apply_params_from_state(self._analysis_ctx(section), state)
+            self._apply_analysis_sources(section, state)
+        finally:
+            self._applying_analysis_view = False
+        # 4. Render from cache only (spec §4: switching never auto-computes).
+        self._render_analysis_view_from_cache(section, state)
+
+    def _on_analysis_focus_changed(self, section, idx):
+        """A pane click changed the focused pane: capture the source selection
+        into the PREVIOUS focused pane, then echo the now-focused pane's
+        source back into the inspector / navigator."""
+        if self._applying_analysis_view:
+            return
+        mgr = self.analysis_managers[section]
+        state = mgr.get(mgr.active)
+        # The page already advanced focused_index() before emitting, so capture
+        # cannot tell which pane was focused before. The capture path reads the
+        # CURRENT focused pane; since focus just moved, we instead re-echo the
+        # new focused pane's stored source (capture of the old pane happens on
+        # the next compute / view switch). Echo keeps the inspector consistent
+        # with the pane the user just selected.
+        self._apply_analysis_sources(section, state)
+
+    def _on_analysis_compare_toggled(self, section, key, on):
+        """A page compare toggle (联动缩放 / 锁定色阶) flipped → persist it onto
+        the active view's ``state.compare`` so a later view switch reads it
+        back (V8 write-back loop: toggle → state → _on_analysis_view_switched
+        reads state to drive set_linked / set_levels_locked)."""
+        if self._applying_analysis_view:
+            return
+        mgr = self.analysis_managers[section]
+        state = mgr.get(mgr.active)
+        state.compare[key] = bool(on)
+
+    def _on_analysis_levels_dragged(self, section, pane_idx, lo, hi):
+        """User dragged a heatmap colorbar → echo (lo, hi) into the inspector
+        Z controls (manual range). Only the FOCUSED pane's drag drives the
+        inspector, since the inspector mirrors the focused pane. fft (line
+        section) has no colorbar so it never reaches here.
+
+        The two-pane *canvas* sync under a level lock is handled entirely
+        inside the page (_on_locked_levels_changed); this path is strictly
+        canvas → inspector, so the two never fight: the page mutates the
+        sibling canvas's levels, MainWindow mutates the inspector spinboxes.
+        apply_params here is an existing inspector API called with corrected
+        args — no algorithm/loader is touched."""
+        if self._applying_analysis_view:
+            return
+        page = self._analysis_page(section)
+        if pane_idx != page.focused_index():
+            return
+        ctx = self._analysis_ctx(section)
+        ctx.apply_params({
+            'z_auto': False,
+            'z_floor': float(lo),
+            'z_ceiling': float(hi),
+        })
+
+    # -- source routing (Step 4) ----------------------------------------
+    def _capture_analysis_sources(self, section, state):
+        page = self._analysis_page(section)
+        idx = min(page.focused_index(), len(state.panes) - 1)
+        pane = state.panes[idx]
+        if section == 'fft':
+            checked = self.navigator.get_checked_channels()
+            pane.sources = [(fid, ch) for fid, ch, _color in checked]
+        else:
+            ctx = self._analysis_ctx(section)
+            sig = ctx.current_signal()
+            pane.sources = [tuple(sig)] if sig else []
+            if section == 'order':
+                rpm = ctx.current_rpm()
+                pane.rpm_source = tuple(rpm) if rpm else None
+
+    def _apply_analysis_sources(self, section, state):
+        page = self._analysis_page(section)
+        idx = min(page.focused_index(), len(state.panes) - 1)
+        pane = state.panes[idx]
+        if section == 'fft':
+            self.navigator.set_checked_channels(list(pane.sources))
+        else:
+            ctx = self._analysis_ctx(section)
+            if pane.sources:
+                self._echo_combo_signal(ctx.combo_sig, pane.sources[0])
+            if section == 'order' and pane.rpm_source is not None:
+                self._echo_combo_signal(ctx.combo_rpm, pane.rpm_source)
+
+    @staticmethod
+    def _echo_combo_signal(combo, key):
+        """Select ``key`` (a (fid, ch) tuple) in a SearchableComboBox by its
+        userData, tolerating list/tuple shape drift."""
+        if key is None:
+            return
+        target = tuple(key)
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            if data is not None and tuple(data) == target:
+                combo.setCurrentIndex(i)
+                return
+
+    # -- cache-backed render on switch (Step 3) -------------------------
+    def _analysis_compute_params(self, section):
+        """Compute-relevant params (cache-key inputs) for the active inspector
+        state of ``section``. Display-only knobs are excluded so toggling them
+        does not invalidate the cache."""
+        ctx = self._analysis_ctx(section)
+        p = ctx.get_params()
+        if section == 'fft':
+            # Compute inputs for FFT spectra are window / nfft / averaging mode
+            # + averaging overlap (see _fft_compute_arrays). The plain
+            # ``overlap`` knob feeds only batch presets, NOT the spectrum
+            # compute, so it is excluded from the key (and its get/apply
+            # fraction-vs-percent asymmetry would make the key unstable).
+            cp = ctx.current_params()
+            return {
+                'window': p.get('window'),
+                'nfft': p.get('nfft'),
+                'avg_mode': cp.get('avg_mode', '单帧'),
+                'avg_overlap': cp.get('avg_overlap', 50),
+            }
+        if section == 'fft_time':
+            return {
+                'fs': p.get('fs'),
+                'nfft': p.get('nfft'),
+                'window': p.get('window'),
+                'overlap': p.get('overlap'),
+                'remove_mean': p.get('remove_mean'),
+                'db_reference': p.get('db_reference', 1.0),
+            }
+        # order: COT params + rpm_source must both be in the key (changing the
+        # RPM channel must NOT hit an old result).
+        return {
+            'nfft': p.get('nfft'),
+            'max_order': p.get('max_order'),
+            'order_res': p.get('order_res'),
+            'time_res': p.get('time_res'),
+            'samples_per_rev': ctx.current_params().get('samples_per_rev'),
+        }
+
+    def _analysis_cache_key(self, section, fid, ch, rpm_source=None):
+        cache = self.analysis_caches[section]
+        params = dict(self._analysis_compute_params(section))
+        if section == 'order':
+            params['rpm_source'] = (
+                list(rpm_source) if rpm_source else None
+            )
+        return cache.make_key(fid, ch, params)
+
+    def _render_analysis_view_from_cache(self, section, state):
+        """Render each pane from cached results; panes whose sources are not all
+        cached show an empty state and a 'click 计算' status hint. Never
+        computes (spec §4)."""
+        page = self._analysis_page(section)
+        any_missing = False
+        for pane_idx in range(page.pane_count()):
+            if pane_idx >= len(state.panes):
+                break
+            pane = state.panes[pane_idx]
+            canvas = page.pane_canvas(pane_idx)
+            cache = self.analysis_caches[section]
+            if section == 'fft':
+                entries = []
+                colors = dict(
+                    ((fid, ch), color)
+                    for fid, ch, color in self.navigator.get_checked_channels()
+                )
+                for fid, ch in pane.sources:
+                    key = self._analysis_cache_key(section, fid, ch)
+                    result = cache.get(key)
+                    if result is None:
+                        any_missing = True
+                        continue
+                    entries.append(self._fft_entry_from_cache(
+                        result, fid, ch, colors.get((fid, ch))))
+                if entries:
+                    self._plot_fft_entries(entries, canvas)
+                else:
+                    # No cached curves (empty sources, or all sources missing
+                    # from the cache) -> empty canvas state.
+                    self._clear_analysis_canvas(canvas)
+            else:
+                if not pane.sources:
+                    self._clear_analysis_canvas(canvas)
+                    continue
+                fid, ch = pane.sources[0]
+                key = self._analysis_cache_key(
+                    section, fid, ch,
+                    rpm_source=pane.rpm_source if section == 'order' else None)
+                result = cache.get(key)
+                if result is None:
+                    any_missing = True
+                    self._clear_analysis_canvas(canvas)
+                else:
+                    self._render_cached_heatmap(section, canvas, result)
+        if any_missing:
+            self.statusBar.showMessage("参数/源已就绪，点击计算")
+
+    def _clear_analysis_canvas(self, canvas):
+        if hasattr(canvas, 'full_reset'):
+            try:
+                canvas.full_reset()
+            except Exception:
+                pass
+
+    # -- render glue (shared by cache-switch and compute paths) ---------
+    def _file_display_name(self, fid):
+        fd = self.files.get(fid)
+        if fd is None:
+            return str(fid)
+        return getattr(fd, 'short_name', None) or str(fid)
+
+    def _fft_entry_from_cache(self, result, fid, ch, color):
+        """Build a plot_spectra entry from a cached FFT result.
+
+        ``result`` is the raw compute tuple ``(freq, amp, psd)`` (linear). The
+        dB/linear display transform is applied here from the CURRENT inspector
+        axis toggles, so toggling dB re-renders without recompute (display-only
+        knobs are excluded from the cache key)."""
+        freq, amp, psd = result
+        p = self.inspector.fft_ctx.current_params()
+        amp_y = p.get('amp_y', 'Linear')
+        psd_y = p.get('psd_y', 'dB')
+        if amp_y == 'dB':
+            amp_disp = 20 * np.log10(
+                np.clip(amp, 1e-12, None) / max(amp.max(), 1e-12))
+        else:
+            amp_disp = amp
+        psd_disp = 10 * np.log10(psd + 1e-12) if psd_y == 'dB' else psd
+        label = f"{self._file_display_name(fid)} · {ch}"
+        return {
+            'label': label,
+            'color': color or '#2563eb',
+            'freq': freq,
+            'amp': amp_disp,
+            'psd': psd_disp,
+        }
+
+    def _plot_fft_entries(self, entries, canvas=None):
+        """Render a pane's FFT overlay entries with axis labels/limits pulled
+        from the current inspector state."""
+        if canvas is None:
+            canvas = self.canvas_fft
+        if not entries:
+            return
+        p = self.inspector.fft_ctx.current_params()
+        amp_y = p.get('amp_y', 'Linear')
+        psd_y = p.get('psd_y', 'dB')
+        x_auto = bool(p.get('x_auto', p.get('autoscale', True)))
+        x_min = float(p.get('x_min', 0.0))
+        x_max = float(p.get('x_max', 0.0))
+        if x_auto:
+            freq0 = entries[0]['freq']
+            amp0 = entries[0]['amp']
+            xlim = (0.0, self._fft_auto_xlim(freq0, amp0))
+        elif x_max > x_min:
+            xlim = (x_min, x_max)
+        else:
+            xlim = (0.0, self.inspector.fft_ctx.fs() / 2)
+        canvas.plot_spectra(
+            entries,
+            xlim=xlim,
+            amp_label='Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
+            psd_label='PSD (dB)' if psd_y == 'dB' else 'PSD',
+            title=f'FFT · {len(entries)} 条曲线',
+            y_auto=bool(p.get('y_auto', True)),
+            y_min=float(p.get('y_min', 0.0)),
+            y_max=float(p.get('y_max', 0.0)),
+        )
+        xt, yt = self.inspector.top.tick_density()
+        canvas.set_tick_density(xt, yt)
+
+    def _render_cached_heatmap(self, section, canvas, result):
+        """Render a cached heatmap result on ``canvas`` using the current
+        section inspector's display options."""
+        if section == 'fft_time':
+            p = self.inspector.fft_time_ctx.get_params()
+            self._render_fft_time_on(canvas, result, p)
+        else:
+            self._render_order_on(canvas, result)
 
     def _on_view_new(self):
         self._capture_current_view()
@@ -1063,15 +1494,12 @@ class MainWindow(QMainWindow):
             axis_opts = dict(state.axis_opts or {})
             axis_opts['tick_density'] = {'x': int(xt), 'y': int(yt)}
             state.axis_opts = axis_opts
-        from matplotlib.ticker import MaxNLocator
-        for ax in self.canvas_fft.fig.axes:
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
-        self.canvas_fft.draw_idle()
-        for ax in self.canvas_order.fig.axes:
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
-        self.canvas_order.draw_idle()
+        # M5/M11: canvas_fft (PgLineCanvas) and canvas_order
+        # (PgHeatmapCanvas) are pyqtgraph widgets — no ``fig``/``draw_idle``.
+        # Their set_tick_density takes the same inspector tick COUNTS the
+        # old MaxNLocator(nbins=...) loop consumed, so the knob semantics hold.
+        self.canvas_fft.set_tick_density(xt, yt)
+        self.canvas_order.set_tick_density(xt, yt)
 
     def _show_rebuild_popover(self, anchor, mode='fft'):
         """Open the 重建时间轴 modal popover for the active selection.
@@ -1471,6 +1899,12 @@ class MainWindow(QMainWindow):
         # is about to be released, so any cached SpectrogramResult keyed
         # under this fid is now strictly stale.
         self._fft_time_cache_clear_for_fid(fid)
+        # Per-section analysis caches (V7) are keyed on (fid, ch, params).
+        # _fft_time_cache and analysis_caches['fft_time'] are double-written
+        # on compute, so both must be torn down for this fid here — otherwise
+        # reopening a file that reuses the same fid would hit a stale result.
+        for cache in self.analysis_caches.values():
+            cache.invalidate_fid(fid)
         del self.files[fid]
         self.navigator.remove_file(fid)
         self._active = self.navigator._active_fid  # navigator picks fallback
@@ -1488,6 +1922,11 @@ class MainWindow(QMainWindow):
         path = Path(path)
 
         self._capture_focused_view()
+        # Flush each analysis section's live UI state into its active view so
+        # the last (uncommitted) inspector edit / source / compare toggle is
+        # serialized rather than lost.
+        for sec in self.analysis_managers:
+            self._capture_active_analysis_view(sec)
 
         file_refs = []
         for fid, fd in self.files.items():
@@ -1513,6 +1952,13 @@ class MainWindow(QMainWindow):
             files=file_refs,
             views=[v.to_dict() for v in self.view_manager.views],
             view_manager=vm,
+            analysis_views={
+                sec: {
+                    "active": mgr.active,
+                    "views": [v.to_dict() for v in mgr.views],
+                }
+                for sec, mgr in self.analysis_managers.items()
+            },
         )
         pio.save_project_to_json(doc, path)
         self._project_path = path
@@ -1565,6 +2011,24 @@ class MainWindow(QMainWindow):
         self.view_manager._set_active_split_from_pairs()
         self.view_manager.views_changed.emit()
 
+        # Restore each analysis section's view list (fids remapped to the
+        # freshly minted ids). An old project without analysis_views yields an
+        # empty remapped dict -> every section keeps its default single view.
+        from .project_io import remap_analysis_view_fids
+        from .analysis_view_state import AnalysisViewState
+        remapped = remap_analysis_view_fids(doc.analysis_views, fid_map)
+        for sec, mgr in self.analysis_managers.items():
+            block = remapped.get(sec)
+            if not block or not block.get("views"):
+                continue
+            mgr.views = [AnalysisViewState.from_dict(v) for v in block["views"]]
+            mgr.active = min(int(block.get("active", 0)), len(mgr.views) - 1)
+            mgr.views_changed.emit()
+            # active_changed drives _on_analysis_view_switched: it applies the
+            # restored structure/params/sources and renders from cache (which is
+            # empty post-load, so panes show their empty state until 计算).
+            mgr.active_changed.emit(mgr.active)
+
         self._active = fid_map.get(doc.active_file)
         # Route the mode through the toolbar's programmatic setter (not
         # chart_stack.set_mode directly): _set_mode checks the matching
@@ -1604,6 +2068,10 @@ class MainWindow(QMainWindow):
         self.canvas_time.invalidate_monotonicity_cache()
         # FFT vs Time cache: every entry is keyed against a now-dead fid.
         self._fft_time_cache.clear()
+        # Per-section analysis caches: every entry is now stale (close-all
+        # variant of the per-fid invalidate in ``_close``).
+        for cache in self.analysis_caches.values():
+            cache.clear()
         for fid in list(self.files.keys()):
             del self.files[fid]
             self.navigator.remove_file(fid)
@@ -2229,7 +2697,109 @@ class MainWindow(QMainWindow):
         )
         return True
 
+    def _fft_compute_arrays(self, sig, fs, fft_params):
+        """Run the FFT compute branch (Welch avg / peak-hold / single-frame)
+        on a single signal, returning raw display-independent ``(freq, amp,
+        psd)``. Algorithm calls are byte-identical to the legacy do_fft."""
+        win = fft_params['window']
+        nfft = fft_params['nfft']
+        avg_mode = fft_params.get('avg_mode', '单帧')
+        overlap_pct = int(fft_params.get('avg_overlap', 50))
+        avg_overlap = max(0.0, min(0.95, overlap_pct / 100.0))
+        if avg_mode == '线性平均':
+            freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
+                sig, fs, win, nfft or 1024, avg_overlap)
+        elif avg_mode == '峰值保持':
+            freq, amp = FFTAnalyzer.compute_peak_hold_fft(
+                sig, fs, win=win, nfft=nfft or 1024, overlap=avg_overlap)
+            psd = amp ** 2
+        else:
+            freq, amp = FFTAnalyzer.compute_fft(sig, fs, win, nfft)
+            _, psd = FFTAnalyzer.compute_psd(sig, fs, win, nfft)
+        return freq, amp, psd
+
+    def _fft_fetch_signal(self, fid, ch):
+        """Fetch + range-gate a single FFT source's signal. Returns
+        ``(sig, fs)`` or ``(None, None)`` when unavailable."""
+        fd = self.files.get(fid)
+        if fd is None or ch not in fd.data.columns:
+            return None, None
+        sig = fd.data[ch].values
+        t = fd.time_array
+        if self.inspector.top.range_enabled() and t is not None:
+            lo, hi = self.inspector.top.range_values()
+            m = (t >= lo) & (t <= hi)
+            sig = sig[m]
+        return sig, fd.fs
+
     def do_fft(self):
+        """Compute the ACTIVE FFT view: every source of every pane.
+
+        Compute semantics (spec §4): the button computes the whole active
+        view. Each pane overlays N curves (its sources); each source is cached
+        on a (fid, ch, compute-params) key so re-render / view-switch is free.
+
+        Back-compat: when the focused pane has no navigator-checked sources
+        (or they are not fetchable), fall back to the legacy single-signal
+        ``_get_sig()`` path so the existing single-signal UX + tests are
+        unchanged.
+        """
+        self._capture_active_analysis_view('fft')
+        mgr = self.analysis_managers['fft']
+        state = mgr.get(mgr.active)
+        page = self.chart_stack.page_fft
+        fft_params = self.inspector.fft_ctx.current_params()
+        cache = self.analysis_caches['fft']
+        colors = dict(
+            ((fid, ch), color)
+            for fid, ch, color in self.navigator.get_checked_channels()
+        )
+
+        any_rendered = False
+        any_multi = False
+        for pane_idx in range(page.pane_count()):
+            if pane_idx >= len(state.panes):
+                break
+            sources = state.panes[pane_idx].sources
+            if not sources:
+                continue
+            any_multi = True
+            entries = []
+            for fid, ch in sources:
+                key = self._analysis_cache_key('fft', fid, ch)
+                result = cache.get(key)
+                if result is None:
+                    sig, fs = self._fft_fetch_signal(fid, ch)
+                    if sig is None or len(sig) < 10:
+                        continue
+                    fd = self.files.get(fid)
+                    if not self._check_uniform_or_prompt(fd, 'fft'):
+                        continue
+                    sig, fs = self._fft_fetch_signal(fid, ch)
+                    if sig is None or len(sig) < 10:
+                        continue
+                    try:
+                        result = self._fft_compute_arrays(
+                            sig, self.inspector.fft_ctx.fs(), fft_params)
+                    except Exception as e:
+                        QMessageBox.critical(self, 'FFT错误', str(e))
+                        continue
+                    cache.put(key, result)
+                entries.append(self._fft_entry_from_cache(
+                    result, fid, ch, colors.get((fid, ch))))
+            if entries:
+                self._plot_fft_entries(entries, page.pane_canvas(pane_idx))
+                any_rendered = True
+
+        if any_multi:
+            if any_rendered:
+                self.statusBar.showMessage('FFT 完成')
+                self.toast('FFT 完成', 'success')
+            return
+        # ---- legacy single-signal fallback (no navigator-checked sources) ----
+        self._do_fft_single()
+
+    def _do_fft_single(self):
         t, sig, fs = self._get_sig()
         if sig is None or len(sig) < 10:
             self.toast("请选择有效信号", "warning"); return
@@ -2265,32 +2835,12 @@ class MainWindow(QMainWindow):
         nfft = fft_params['nfft']
         overlap = fft_params['overlap']
         fs = self.inspector.fft_ctx.fs()
-        # Wave 2 / SP2 / Task 2.2: Welch averaging + peak-hold dispatch.
-        # Default '单帧' preserves the legacy compute_fft path so existing
-        # presets and snapshots stay backward-compatible.
-        avg_mode = fft_params.get('avg_mode', '单帧')
-        overlap_pct = int(fft_params.get('avg_overlap', 50))
-        avg_overlap = max(0.0, min(0.95, overlap_pct / 100.0))
 
         try:
             self.statusBar.showMessage('计算FFT...');
             QApplication.processEvents()
 
-            if avg_mode == '线性平均':
-                freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
-                    sig, fs, win, nfft or 1024, avg_overlap,
-                )
-            elif avg_mode == '峰值保持':
-                freq, amp = FFTAnalyzer.compute_peak_hold_fft(
-                    sig, fs, win=win, nfft=nfft or 1024, overlap=avg_overlap,
-                )
-                psd = amp ** 2
-            else:
-                # 单帧 — single-frame snapshot (legacy default).
-                freq, amp = FFTAnalyzer.compute_fft(sig, fs, win, nfft)
-                _, psd = FFTAnalyzer.compute_psd(sig, fs, win, nfft)
-
-            self.canvas_fft.clear()
+            freq, amp, psd = self._fft_compute_arrays(sig, fs, fft_params)
 
             x_auto = bool(fft_params.get('x_auto', fft_params.get('autoscale', True)))
             x_min = float(fft_params.get('x_min', 0.0))
@@ -2319,39 +2869,24 @@ class MainWindow(QMainWindow):
             else:
                 psd_disp = psd
 
-            ax1 = self.canvas_fft.fig.add_subplot(2, 1, 1)
-            ax1.plot(freq, amp_disp, '#2563eb', lw=1.0);
-            ax1.set_xlabel('Frequency (Hz)');
-            ax1.set_ylabel(
-                'Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
-                labelpad=10,
+            sig_label = self.inspector.fft_ctx.combo_sig.currentText()
+            entry = {
+                'label': sig_label,
+                'color': '#2563eb',
+                'freq': freq,
+                'amp': amp_disp,
+                'psd': psd_disp,
+            }
+            self.canvas_fft.plot_spectra(
+                [entry],
+                xlim=xlim,
+                amp_label='Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
+                psd_label='PSD (dB)' if psd_y == 'dB' else 'PSD',
+                title=f'FFT - {sig_label} (窗:{win}, NFFT:{nfft or "auto"})',
+                y_auto=y_auto, y_min=y_min, y_max=y_max,
             )
-            ax1.set_title(f'FFT - {self.inspector.fft_ctx.combo_sig.currentText()} (窗:{win}, NFFT:{nfft or "auto"})');
-            ax1.grid(True, alpha=0.25, ls='--');
-            ax1.set_xlim(*xlim)
-            if not y_auto and y_max > y_min:
-                ax1.set_ylim(y_min, y_max)
-            ax2 = self.canvas_fft.fig.add_subplot(2, 1, 2)
-            ax2.plot(freq, psd_disp, '#dc2626', lw=1.0);
-            ax2.set_xlabel('Frequency (Hz)');
-            ax2.set_ylabel(
-                'PSD (dB)' if psd_y == 'dB' else 'PSD',
-                labelpad=10,
-            )
-            ax2.set_title('功率谱密度');
-            ax2.grid(True, alpha=0.25, ls='--');
-            ax2.set_xlim(*xlim)
-            if not y_auto and y_max > y_min:
-                ax2.set_ylim(y_min, y_max)
-
-            # 存储曲线数据用于remark吸附
-            self.canvas_fft.store_line_data(0, freq, amp_disp)
-            self.canvas_fft.store_line_data(1, freq, psd_disp)
-
-            self.canvas_fft.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
             xt, yt = self.inspector.top.tick_density()
             self.canvas_fft.set_tick_density(xt, yt)
-            self.canvas_fft.draw();
             self._remember_batch_preset(
                 "当前 FFT",
                 "fft",
@@ -2370,42 +2905,168 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, 'FFT错误', str(e))
 
     # ------------------------------------------------------------------
-    # Order analysis (synchronous COT path)
+    # Order analysis (COT on a worker QThread, M5)
     # ------------------------------------------------------------------
-    # ``do_order_time`` runs ``COTOrderAnalyzer.compute`` synchronously
-    # on the GUI thread (Wave 2, 2026-04-28). An async COT worker
-    # remains out of scope.
+    # ``do_order_time`` gathers signal/rpm/params on the GUI thread,
+    # then runs ``COTOrderAnalyzer.compute`` on an
+    # ``AnalysisComputeWorker`` + QThread (same lifecycle wiring as
+    # ``do_fft_time``); ``_on_order_finished`` renders the result.
 
-    def do_order_time(self):
-        t, sig, fs = self._get_sig()
-        if sig is None or len(sig) < 100:
-            self.toast("请选择有效信号", "warning")
-            return
+    def _order_sig_for(self, source):
+        """Fetch + range-gate an explicit Order signal source ``(fid, ch)``.
+        Returns ``(t, sig)`` or ``(None, None)``. V7b: the split queue must
+        fetch a NON-focused pane's source, not the inspector selection."""
+        if not source:
+            return None, None
+        fid, ch = source
+        if fid not in self.files:
+            return None, None
+        fd = self.files[fid]
+        if ch not in fd.data.columns:
+            return None, None
+        t = fd.time_array
+        sig = fd.data[ch].values
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
-            t, sig = t[m], sig[m]
-        rpm = self._get_rpm(len(sig))
-        if rpm is None:
+            t = t[m] if t is not None else None
+            sig = sig[m]
+        return t, sig
+
+    def _order_rpm_for(self, rpm_source, n):
+        """Fetch + range-gate + scale an explicit Order RPM source. ``n`` is
+        the signal length the rpm must match. Returns the scaled rpm array or
+        ``None`` (caller skips the pane). The scale factor is the current
+        inspector ``rpm_factor`` — shared across panes like the COT params."""
+        if not rpm_source:
+            return None
+        fid, ch = rpm_source
+        if fid not in self.files:
+            return None
+        fd = self.files[fid]
+        if ch not in fd.data.columns:
+            return None
+        factor = self.inspector.order_ctx.rpm_factor()
+        rpm = fd.data[ch].values.copy() * factor
+        if self.inspector.top.range_enabled() and fd.time_array is not None:
+            lo, hi = self.inspector.top.range_values()
+            m = (fd.time_array >= lo) & (fd.time_array <= hi)
+            rpm = rpm[m]
+        if len(rpm) != n:
+            return None
+        return rpm
+
+    def do_order_time(self):
+        """Compute the WHOLE active Order view — every pane (V7b).
+
+        Each pane carries one signal source ``(fid, ch)`` plus its own
+        ``rpm_source``. For every pane we build the analysis cache key and
+        either render a cache HIT onto that pane's canvas immediately, or
+        enqueue a ``(pane_idx, fid, ch, rpm_source)`` job. The focused pane
+        is enqueued first. Miss jobs run sequentially on ONE shared worker
+        QThread; :meth:`_on_order_thread_done` pumps the next. A single
+        (non-split) pane yields one job, identical to the V7 path.
+
+        Re-entry while a worker is running drops the whole new request with
+        ``正在计算…``. A pane whose source/rpm is unfetchable is skipped
+        without aborting the queue.
+        """
+        # V7 Step 5: capture the active Order view (params + per-pane sources +
+        # rpm_source) so a later view switch renders from analysis_caches.
+        self._capture_active_analysis_view('order')
+        # Re-entry guard: a previous compute / queue is still running.
+        if getattr(self, '_order_thread', None) is not None and self._order_thread.isRunning():
+            self.statusBar.showMessage("正在计算…")
             return
+        mgr = self.analysis_managers['order']
+        state = mgr.get(mgr.active)
+        page = self._analysis_page('order')
+        cache = self.analysis_caches['order']
+
+        focus = page.focused_index()
+        pane_order = sorted(
+            range(min(page.pane_count(), len(state.panes))),
+            key=lambda i: (i != focus, i),
+        )
+        queue = []
+        any_source = False
+        for pane_idx in pane_order:
+            sources = state.panes[pane_idx].sources
+            if not sources:
+                continue
+            any_source = True
+            fid, ch = sources[0]
+            rpm_source = state.panes[pane_idx].rpm_source
+            analysis_key = self._analysis_cache_key(
+                'order', fid, ch,
+                rpm_source=tuple(rpm_source) if rpm_source else None)
+            cached = cache.get(analysis_key)
+            if cached is not None:
+                cache.put(analysis_key, cached)
+                self._render_order_on(page.pane_canvas(pane_idx), cached)
+            else:
+                queue.append((pane_idx, fid, ch, rpm_source))
+
+        if not queue:
+            if not any_source:
+                # No captured pane source → legacy inspector-selection path so
+                # the standalone-signal UX + existing tests are unchanged.
+                self._do_order_time_single()
+                return
+            self.statusBar.showMessage("使用缓存结果")
+            return
+
+        self._order_queue = queue
+        self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
+        self.inspector.order_ctx.set_progress("计算中...")
+        self._start_next_order_job()
+
+    def _do_order_time_single(self):
+        """Legacy single-source Order path: compute the inspector's selected
+        signal/rpm onto the primary canvas. Kept for the standalone-signal UX
+        and the pre-V7b tests."""
+        sig_data = self.inspector.order_ctx.current_signal()
+        rpm_data = self.inspector.order_ctx.current_rpm()
+        if not sig_data:
+            self.toast("请选择有效信号", "warning")
+            return
+        page = self._analysis_page('order')
+        self._order_queue = []
+        self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
+        self.inspector.order_ctx.set_progress("计算中...")
+        if not self._dispatch_order_job(
+                page.focused_index(), sig_data[0], sig_data[1],
+                tuple(rpm_data) if rpm_data else None):
+            self.inspector.order_ctx.set_progress("")
+
+    def _start_next_order_job(self):
+        """Dispatch the head Order job, skipping unfetchable sources."""
+        while self._order_queue:
+            pane_idx, fid, ch, rpm_source = self._order_queue.pop(0)
+            if self._dispatch_order_job(pane_idx, fid, ch, rpm_source):
+                return
+        # Queue drained.
+        self.inspector.order_ctx.set_progress("")
+
+    def _dispatch_order_job(self, pane_idx, fid, ch, rpm_source):
+        """Fetch the ``(fid, ch)`` signal + ``rpm_source`` rpm, then start the
+        shared COT worker, rendering onto ``page.pane_canvas(pane_idx)``.
+        Returns True if a worker started, False if the source was skipped."""
+        from ..signal.order_cot import COTOrderAnalyzer, COTParams
+        t, sig = self._order_sig_for((fid, ch))
+        if sig is None or len(sig) < 100:
+            return False
+        rpm = self._order_rpm_for(rpm_source, len(sig))
+        if rpm is None:
+            return False
         fs = self.inspector.order_ctx.fs()
-        # Wave 2 (2026-04-28 plan): COT is the only tracking algorithm.
-        # The frequency-domain branch has been deleted alongside
-        # combo_algorithm. COTOrderAnalyzer runs synchronously on the
-        # GUI thread — acceptable for v1 wiring; an async COT worker
-        # remains out of scope.
         order_params = self.inspector.order_ctx.current_params()
         op = self.inspector.order_ctx.get_params()
-        from ..signal.order_cot import COTOrderAnalyzer, COTParams
-        # Audit fix R6/C7: COTOrderAnalyzer.compute requires a strictly
-        # monotonic ``t``; real MF4 column timestamps can carry
-        # microsecond jitter that trips ``np.diff(t) <= 0`` on the GUI
-        # thread. Mirror the batch fallback (Wave 1, Step 1.3): when the
-        # timestamp array is degenerate, synthesise a uniform grid from
-        # the inspector-supplied fs.
-        t_arr = np.asarray(t, dtype=float)
+        # Audit fix R6/C7: COT requires strictly monotonic ``t``; synthesise a
+        # uniform grid from the inspector fs when the timestamps are degenerate.
+        t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
         if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
-            t_arr = np.arange(len(t_arr), dtype=float) / float(fs)
+            t_arr = np.arange(len(sig), dtype=float) / float(fs)
         try:
             p = COTParams(
                 samples_per_rev=int(order_params.get('samples_per_rev', 256)),
@@ -2416,27 +3077,46 @@ class MainWindow(QMainWindow):
                 time_res=float(op['time_res']),
                 fs=fs,
             )
-            self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
-            self.inspector.order_ctx.set_progress("计算中...")
-            result = COTOrderAnalyzer.compute(sig, rpm, t_arr, p)
         except Exception as e:
-            self.inspector.order_ctx.set_progress("")
             QMessageBox.critical(self, "错误", str(e))
-            return
-        self.inspector.order_ctx.set_progress("")
-        self._render_order_time(result)
-        return
+            return False
+        # Stash the analysis cache key + render target for this job.
+        self._order_analysis_key = self._analysis_cache_key(
+            'order', fid, ch,
+            rpm_source=tuple(rpm_source) if rpm_source else None)
+        self._order_render_pane = pane_idx
 
-    def _render_order_time(self, result):
+        from .analysis_worker import AnalysisComputeWorker
+
+        def job(worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p):
+            return COTOrderAnalyzer.compute(_sig, _rpm, _t, _p,
+                                            cancel_token=worker.cancelled)
+
+        worker = AnalysisComputeWorker(job)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(self._on_order_finished)
+        worker.failed.connect(self._on_order_failed)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_order_thread_done)
+        self._order_thread = thread
+        self._order_worker = worker
+        thread.start()
+        return True
+
+    def _render_order_on(self, canvas, result):
+        """Multi-pane variant: draw an Order COT ``result`` on an arbitrary
+        order heatmap canvas using the current OrderContextual display knobs.
+        Pure canvas draw — no preset/status side-effects (those stay in
+        ``_render_order_time``)."""
         title = (
             f"时间-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} "
             f"(分辨率:{result.params.order_res})"
         )
-        # Wave 3 / Task 3.2: pull HEAD-parity display knobs from the
-        # OrderContextual. Inspector exposes amplitude_mode ∈
-        # {'Amplitude dB', 'Amplitude'} and dynamic ∈
-        # {'30 dB', '50 dB', '80 dB', 'Auto'}; canvas expects the
-        # internal token 'amplitude_db' / 'amplitude' for the first.
         ctx = self.inspector.order_ctx
         order_params = ctx.current_params() if hasattr(ctx, 'current_params') else {}
         amp_mode_token = (
@@ -2444,9 +3124,7 @@ class MainWindow(QMainWindow):
             if order_params.get('amplitude_mode', 'Amplitude dB') == 'Amplitude dB'
             else 'amplitude'
         )
-        # `result.amplitude` is (frames, orders) → transpose so imshow
-        # gets (rows=Y_orders, cols=X_times); x_extent=times, y_extent=orders.
-        self.canvas_order.plot_or_update_heatmap(
+        canvas.plot_or_update_heatmap(
             matrix=result.amplitude.T,
             x_extent=(float(result.times[0]), float(result.times[-1])),
             y_extent=(float(result.orders[0]), float(result.orders[-1])),
@@ -2468,7 +3146,17 @@ class MainWindow(QMainWindow):
             y_max=float(order_params.get('y_max', 0.0)),
         )
         xt, yt = self.inspector.top.tick_density()
-        self.canvas_order.set_tick_density(xt, yt)
+        canvas.set_tick_density(xt, yt)
+
+    def _render_order_time(self, result):
+        # Wave 3 / Task 3.2: pull HEAD-parity display knobs from the
+        # OrderContextual. Inspector exposes amplitude_mode ∈
+        # {'Amplitude dB', 'Amplitude'} and dynamic ∈
+        # {'30 dB', '50 dB', '80 dB', 'Auto'}; canvas expects the
+        # internal token 'amplitude_db' / 'amplitude' for the first.
+        # `result.amplitude` is (frames, orders) → transpose so imshow
+        # gets (rows=Y_orders, cols=X_times); x_extent=times, y_extent=orders.
+        self._render_order_on(self.canvas_order, result)
         self._remember_batch_preset(
             "当前时间-阶次", "order_time",
             self.inspector.order_ctx.current_signal(),
@@ -2490,16 +3178,65 @@ class MainWindow(QMainWindow):
             "success",
         )
 
+    def _on_order_finished(self, result):
+        analysis_key = getattr(self, '_order_analysis_key', None)
+        if analysis_key is not None:
+            self.analysis_caches['order'].put(analysis_key, result)
+        # V7b: render onto the SPECIFIC pane this job was computed for.
+        # ``_render_order_time`` (preset + status + toast side-effects) runs
+        # only for the primary pane (0); compare panes get a pure canvas draw.
+        page = self._analysis_page('order')
+        pane_idx = getattr(self, '_order_render_pane', 0)
+        if pane_idx == 0:
+            self._render_order_time(result)
+        elif pane_idx < page.pane_count():
+            self._render_order_on(page.pane_canvas(pane_idx), result)
+        else:
+            self._render_order_time(result)
+        # Clear the in-progress label only when no more jobs are queued; the
+        # thread-done pump re-sets it for the next job otherwise.
+        if not self._order_queue:
+            self.inspector.order_ctx.set_progress("")
+
+    def _on_order_failed(self, message):
+        # A single pane's failure must not abort the queue; the wired
+        # ``failed -> thread.quit -> _on_order_thread_done`` pump advances to
+        # the next job. Surface the error but keep going.
+        #
+        # V8 minor: use the non-modal ``toast`` (symmetric with
+        # ``_on_fft_time_failed``) instead of ``QMessageBox.critical``. A
+        # modal exec() raised mid-queue spins a nested event loop that can
+        # re-enter the compute pump (and hangs under offscreen Qt with no
+        # user to click OK — lesson qmessagebox-static-warning-hangs-offscreen).
+        msg = str(message)
+        self.toast(msg, "error")
+        self.statusBar.showMessage(f"阶次分析错误: {msg}")
+        if not self._order_queue:
+            self.inspector.order_ctx.set_progress("")
+
+    def _on_order_thread_done(self):
+        self._order_thread = None
+        self._order_worker = None
+        if self._order_queue:
+            self._start_next_order_job()
+
     def closeEvent(self, event):
         """Stop the FFT-vs-Time worker before the window is destroyed.
 
         ``_fft_time_thread + _fft_time_worker`` is a ``QObject + QThread``
-        pair (see :class:`FFTTimeWorker` / :meth:`do_fft_time`). The
-        worker has ``cancel()`` (sets a flag the analyzer polls per
-        frame); the thread is what owns ``isRunning()``. The wired
-        ``thread.finished -> deleteLater`` chain handles cleanup — we
-        just need to give it time to run via ``quit() + wait()``.
+        pair (an :class:`AnalysisComputeWorker` running the spectrogram
+        job; see :meth:`do_fft_time`). The worker has ``cancel()`` (flips
+        the flag its ``cancelled()`` token returns, which the analyzer
+        polls per frame); the thread is what owns ``isRunning()``. The
+        wired ``thread.finished -> deleteLater`` chain handles cleanup —
+        we just need to give it time to run via ``quit() + wait()``.
         """
+        # V7b: drop any pending split-queue jobs FIRST so the cooperative
+        # ``quit()+wait()`` drain below — which fires ``_on_*_thread_done``
+        # via the wired ``thread.finished`` — does not pump a NEW worker job
+        # onto a window that is being destroyed.
+        self._fft_time_queue = []
+        self._order_queue = []
         fft_thread = getattr(self, '_fft_time_thread', None)
         fft_worker = getattr(self, '_fft_time_worker', None)
         if fft_thread is not None and fft_thread.isRunning():
@@ -2513,6 +3250,26 @@ class MainWindow(QMainWindow):
             if not fft_thread.wait(2000):
                 fft_thread.terminate()
                 fft_thread.wait(500)
+
+        # Order (COT) worker: same drain. The COT job now polls
+        # ``cancelled()`` per frame (``do_order_time`` passes
+        # ``cancel_token=worker.cancelled`` into ``COTOrderAnalyzer.compute``),
+        # so cancel() takes effect within a frame and the cooperative
+        # ``quit() + wait(2000)`` is the normal exit path. The terminate()
+        # fallback is only a GIL-thread / Windows backstop: on macOS
+        # ``terminate()`` never lands on a GIL-held numpy worker (see
+        # pyqt-ui/2026-06-11-qthread-terminate-noop-on-gil-bound-macos),
+        # but it still guards a Qt5 qFatal crash if a non-cooperative
+        # compute ever outlives wait(2000) at destruction.
+        order_thread = getattr(self, '_order_thread', None)
+        order_worker = getattr(self, '_order_worker', None)
+        if order_thread is not None and order_thread.isRunning():
+            if order_worker is not None:
+                order_worker.cancel()
+            order_thread.quit()
+            if not order_thread.wait(2000):
+                order_thread.terminate()
+                order_thread.wait(500)
 
         super().closeEvent(event)
 
@@ -2593,9 +3350,18 @@ class MainWindow(QMainWindow):
         ``do_fft_time`` can surface a single warning and bail.
         """
         data = self.inspector.fft_time_ctx.current_signal()
-        if not data:
+        return self._fft_time_signal_for(data)
+
+    def _fft_time_signal_for(self, source):
+        """Resolve the (fid, channel, time, signal, file_data) tuple for an
+        explicit ``(fid, ch)`` source. V7b: the split-heatmap queue needs to
+        fetch a NON-focused pane's source directly, not the inspector's
+        current selection. Returns ``(None,) * 5`` when the source is
+        unavailable so the queue can skip that job without aborting the rest.
+        """
+        if not source:
             return None, None, None, None, None
-        fid, ch = data
+        fid, ch = source
         if fid not in self.files:
             return None, None, None, None, None
         fd = self.files[fid]
@@ -2635,43 +3401,108 @@ class MainWindow(QMainWindow):
         return (lo, hi)
 
     def do_fft_time(self, force=False):
-        """Compute and render the FFT-vs-Time spectrogram on a worker.
+        """Compute and render the FFT-vs-Time spectrogram(s) for the active view.
 
-        ``force=True`` bypasses the LRU cache; ``force=False`` consults
-        the cache first. Cache hits stay synchronous (no thread).
-        Cache misses dispatch :class:`FFTTimeWorker` on a ``QThread``;
-        results land in :meth:`_on_fft_time_finished`, errors in
-        :meth:`_on_fft_time_failed`. There is no synchronous fallback.
+        V7b: computes the WHOLE active view — every pane, not just the
+        focused one. Each pane carries one heatmap source ``(fid, ch)``.
+        For every pane we build the analysis cache key and either:
+          * cache HIT  → render that result on the pane's own canvas
+            immediately (synchronous, no thread); or
+          * cache MISS → enqueue a ``(pane_idx, fid, ch)`` job.
+        The focused pane is enqueued first so the user's primary chart
+        appears first. The miss jobs run sequentially on ONE shared worker
+        QThread (no concurrent threads): :meth:`_start_next_fft_time_job`
+        dispatches the head job, :meth:`_on_fft_time_finished` caches +
+        renders onto ``page.pane_canvas(job_pane_idx)``, then
+        :meth:`_on_fft_time_thread_done` drives the next job. A single
+        pane (non-split) view yields exactly one job, so behaviour is
+        identical to the V7 focused-single-pane path.
 
-        Re-entry while a worker is still running is dropped with a
-        ``正在计算…`` status message (Plan Task 7 Phase 1: ignore, do
-        not queue). On compute failure the OLD chart stays visible —
-        the failed handler does NOT call ``canvas_fft_time.clear()``.
+        ``force=True`` bypasses the LRU cache. Re-entry while a worker is
+        still running is dropped with a ``正在计算…`` status message
+        (the whole new request is discarded; we do not interleave a new
+        view's jobs into a running queue). On compute failure the OLD
+        chart for that pane stays visible — the failed handler does NOT
+        clear the canvas — and the next queued job still runs.
         """
-        from ..signal import SpectrogramParams
-        # Re-entry guard: a previous compute is still on the thread.
-        # Phase 1 ignores the click rather than queuing.
+        # V7 Step 5: capture the active view's params + per-pane sources so a
+        # later view switch renders from analysis_caches.
+        self._capture_active_analysis_view('fft_time')
+        # Re-entry guard: a previous compute / queue is still on the thread.
+        # We drop the whole new request rather than interleaving jobs.
         if (
             self._fft_time_thread is not None
             and self._fft_time_thread.isRunning()
         ):
             self.statusBar.showMessage("正在计算…")
             return
+        mgr = self.analysis_managers['fft_time']
+        state = mgr.get(mgr.active)
+        page = self._analysis_page('fft_time')
+        p = self.inspector.fft_time_ctx.get_params()
+        cache = self.analysis_caches['fft_time']
+
+        # Build the job list: focused pane first so its chart appears first.
+        focus = page.focused_index()
+        pane_order = sorted(
+            range(min(page.pane_count(), len(state.panes))),
+            key=lambda i: (i != focus, i),
+        )
+        queue = []
+        any_source = False
+        for pane_idx in pane_order:
+            sources = state.panes[pane_idx].sources
+            if not sources:
+                continue
+            any_source = True
+            fid, ch = sources[0]
+            analysis_key = self._analysis_cache_key('fft_time', fid, ch)
+            cached = None if force else cache.get(analysis_key)
+            if cached is not None:
+                # Cache hit → render on THIS pane's canvas immediately
+                # (touch the LRU so it stays warm) — no worker needed.
+                cache.put(analysis_key, cached)
+                self._render_fft_time_on(page.pane_canvas(pane_idx), cached, p)
+            else:
+                queue.append((pane_idx, fid, ch))
+
+        if not queue:
+            if not any_source:
+                # No pane has a source selected → legacy single-source path
+                # so the standalone-signal UX + existing tests are unchanged.
+                self._do_fft_time_single(force=force)
+                return
+            self.statusBar.showMessage(
+                "使用缓存结果 · NFFT %s" % p.get('nfft'))
+            return
+
+        self._fft_time_queue = queue
+        self._start_next_fft_time_job()
+
+    def _do_fft_time_single(self, force=False):
+        """Legacy single-source FFT-vs-Time path: compute the inspector's
+        currently-selected signal onto the primary canvas. Kept so a view
+        whose panes have no captured source (e.g. a brand-new heatmap view
+        before the navigator/inspector echo wires a source) still computes
+        the inspector selection, matching pre-V7b behaviour and tests.
+
+        Fetches via :meth:`_get_fft_time_signal` (the inspector-selection
+        getter, which standalone-signal tests monkeypatch) rather than the
+        per-pane ``_fft_time_signal_for`` used by the split queue.
+        """
+        from ..signal import SpectrogramParams
+        self._fft_time_queue = []
+        page = self._analysis_page('fft_time')
+        pane_idx = page.focused_index()
         fid, ch, t, sig, fd = self._get_fft_time_signal()
         if sig is None or len(sig) < 2:
             self.toast("请选择有效信号", "warning")
             return
-        # Pre-flight uniformity gate (T2, 2026-04-26): if the time axis
-        # is non-uniform we route through the rebuild popover BEFORE
-        # dispatching the worker. This collapses the old "worker raises
-        # -> failed handler reopens popover -> deferred retry" path
-        # (which had a latent retry-flag lifecycle bug, H4 in T1
-        # diagnosis) into a single synchronous gate.
+        # Pre-flight uniformity gate (T2, 2026-04-26): rebuild a non-uniform
+        # time axis BEFORE dispatching the worker.
         if not self._check_uniform_or_prompt(fd, 'fft_time'):
             return
-        # The popover Accept branch rebuilt ``fd.time_array`` to
-        # ``arange(n)/fs`` and cleared the per-fid cache; refresh the
-        # locals we captured pre-popover.
+        # The rebuild may have rewritten ``fd.time_array``; re-fetch.
         fid, ch, t, sig, fd = self._get_fft_time_signal()
         if sig is None or len(sig) < 2:
             self.toast("请选择有效信号", "warning")
@@ -2689,18 +3520,19 @@ class MainWindow(QMainWindow):
             time_range = (float(t[0]), float(t[-1]))
         key_params = dict(p, fid=fid, channel=ch, time_range=time_range)
         key = self._fft_time_cache_key(key_params)
+        analysis_key = self._analysis_cache_key('fft_time', fid, ch)
         cached = None if force else self._fft_time_cache_get(key)
+        if cached is None and not force:
+            cached = self.analysis_caches['fft_time'].get(analysis_key)
         if cached is not None:
             # Cache hit stays on the main thread — no worker needed.
+            self.analysis_caches['fft_time'].put(analysis_key, cached)
             self._render_fft_time(cached, p)
             self.statusBar.showMessage(
                 "使用缓存结果 · "
                 f"{cached.metadata.get('frames', 0)} frames · NFFT {p['nfft']}"
             )
             return
-        # SpectrogramParams is the cache key on the analyzer side; build
-        # it from compute-relevant fields only (matches our
-        # _fft_time_cache_key contract).
         params = SpectrogramParams(
             fs=float(p['fs']),
             nfft=int(p['nfft']),
@@ -2712,36 +3544,120 @@ class MainWindow(QMainWindow):
         unit = ''
         if fd is not None and hasattr(fd, 'channel_units'):
             unit = fd.channel_units.get(ch, '') or ''
-        # Stash everything the finished handler needs to cache + render.
-        # ``_render_fft_time`` re-reads display options from ``p`` so we
-        # pass it through; ``key`` is the cache slot the result belongs
-        # in. (T2 2026-04-26: ``force`` no longer needs to be stashed --
-        # the prior non-uniform auto-retry path that consumed it has
-        # been replaced by the synchronous ``_check_uniform_or_prompt``
-        # pre-flight at the top of this method.)
         self._fft_time_pending = {
             'cache_key': key,
             'render_params': p,
+            'analysis_key': analysis_key,
+            'pane_idx': pane_idx,
         }
-        worker = FFTTimeWorker(sig, t, params, channel_name=ch, unit=unit)
+
+        def job(worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit):
+            from ..signal import SpectrogramAnalyzer
+            return SpectrogramAnalyzer.compute(
+                _sig, _t, _params, channel_name=_ch, unit=_unit,
+                progress_callback=worker.progress.emit,
+                cancel_token=worker.cancelled,
+            )
+
+        self._start_fft_time_worker(job)
+
+    def _start_next_fft_time_job(self):
+        """Dispatch the head job of the FFT-vs-Time queue, skipping jobs whose
+        source has become unfetchable. Stops (queue empty) when none remain."""
+        page = self._analysis_page('fft_time')
+        while self._fft_time_queue:
+            pane_idx, fid, ch = self._fft_time_queue.pop(0)
+            if self._dispatch_fft_time_job(pane_idx, fid, ch):
+                return
+        # Queue drained.
+        self.statusBar.showMessage("FFT vs Time 完成")
+
+    def _dispatch_fft_time_job(self, pane_idx, fid, ch, force=False):
+        """Fetch + range-gate the ``(fid, ch)`` source, then start the shared
+        worker for it, rendering onto ``page.pane_canvas(pane_idx)`` when done.
+        Returns True if a worker was started, False if the source was skipped
+        (caller advances to the next queued job)."""
+        from ..signal import SpectrogramParams
+        fid, ch, t, sig, fd = self._fft_time_signal_for((fid, ch))
+        if sig is None or len(sig) < 2:
+            return False
+        # Pre-flight uniformity gate (T2, 2026-04-26): rebuild a non-uniform
+        # time axis BEFORE dispatching the worker. Best-effort per pane —
+        # a failed rebuild skips this job, not the whole queue.
+        if not self._check_uniform_or_prompt(fd, 'fft_time'):
+            return False
+        # The rebuild may have rewritten ``fd.time_array``; re-fetch.
+        fid, ch, t, sig, fd = self._fft_time_signal_for((fid, ch))
+        if sig is None or len(sig) < 2:
+            return False
+        p = self.inspector.fft_time_ctx.get_params()
+        if self.inspector.top.range_enabled():
+            lo, hi = self.inspector.top.range_values()
+            m = (t >= lo) & (t <= hi)
+            t = t[m]; sig = sig[m]
+            if len(sig) < 2:
+                return False
+            time_range = (float(lo), float(hi))
+        else:
+            time_range = (float(t[0]), float(t[-1]))
+        key_params = dict(p, fid=fid, channel=ch, time_range=time_range)
+        key = self._fft_time_cache_key(key_params)
+        analysis_key = self._analysis_cache_key('fft_time', fid, ch)
+        # SpectrogramParams is the cache key on the analyzer side; build
+        # it from compute-relevant fields only.
+        params = SpectrogramParams(
+            fs=float(p['fs']),
+            nfft=int(p['nfft']),
+            window=str(p['window']),
+            overlap=float(p['overlap']),
+            remove_mean=bool(p['remove_mean']),
+            db_reference=float(p.get('db_reference', 1.0)),
+        )
+        unit = ''
+        if fd is not None and hasattr(fd, 'channel_units'):
+            unit = fd.channel_units.get(ch, '') or ''
+        # Stash everything the finished handler needs to cache + render the
+        # RIGHT pane. ``pane_idx`` is the load-bearing field: the finished
+        # handler renders onto ``page.pane_canvas(pane_idx)``, never pane 0.
+        self._fft_time_pending = {
+            'cache_key': key,
+            'render_params': p,
+            'analysis_key': analysis_key,
+            'pane_idx': pane_idx,
+        }
+
+        def job(worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit):
+            from ..signal import SpectrogramAnalyzer
+            return SpectrogramAnalyzer.compute(
+                _sig, _t, _params, channel_name=_ch, unit=_unit,
+                progress_callback=worker.progress.emit,
+                cancel_token=worker.cancelled,
+            )
+
+        self._start_fft_time_worker(job)
+        return True
+
+    def _start_fft_time_worker(self, job):
+        """Wire + start the shared FFT-vs-Time worker/QThread for ``job``.
+        The caller has already populated ``self._fft_time_pending`` (incl. the
+        render ``pane_idx``)."""
+        from .analysis_worker import AnalysisComputeWorker
+        worker = AnalysisComputeWorker(job)
         thread = QThread(self)
         worker.moveToThread(thread)
         # Standard QThread cleanup chain. The order matters:
         #   started -> run        : entry point lives on the worker thread
         #   finished/failed -> quit: stops the event loop on the worker thread
-        #   finished -> handler   : runs on the MAIN thread (default
-        #                           connection type AutoConnection across
-        #                           threads = QueuedConnection)
+        #   finished -> handler   : runs on the MAIN thread (AutoConnection
+        #                           across threads = QueuedConnection)
         #   thread.finished -> deleteLater (worker, thread)
-        #   thread.finished -> _on_fft_time_thread_done : clears refs
+        #   thread.finished -> _on_fft_time_thread_done : clears refs + pumps
+        #                       the next queued job
         thread.started.connect(worker.run)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
         worker.finished.connect(self._on_fft_time_finished)
         worker.failed.connect(self._on_fft_time_failed)
-        # Optional progress wiring — Phase 1 has no progress dialog,
-        # but the signal is hot so future tasks (T8 export, T9 progress
-        # bar) can subscribe without retrofitting.
         worker.progress.connect(self._on_fft_time_progress)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
@@ -2752,11 +3668,16 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _render_fft_time(self, result, p):
-        """Apply display-only options and draw on the canvas.
+        """Apply display-only options and draw on the primary canvas.
 
         Display fields are NOT part of the cache key; this is the sole
         place they are read.
         """
+        self._render_fft_time_on(self.canvas_fft_time, result, p)
+
+    def _render_fft_time_on(self, canvas, result, p):
+        """Multi-pane variant: render ``result`` on an arbitrary FFT-vs-Time
+        heatmap canvas with display options from ``p``."""
         freq_range = self._normalize_freq_range(p)
         # Wave 5: legacy ``dynamic: str`` is gone; we forward the explicit
         # z_auto / z_floor / z_ceiling triplet that FFTTimeContextual now
@@ -2764,7 +3685,7 @@ class MainWindow(QMainWindow):
         # (precedes freq_range on the canvas). amplitude_mode is already
         # the canvas's lowercase token ('amplitude_db' / 'amplitude') in
         # FFTTimeContextual.get_params, so no translation needed.
-        self.canvas_fft_time.plot_result(
+        canvas.plot_result(
             result,
             amplitude_mode=p['amplitude_mode'],
             cmap=p['cmap'],
@@ -2781,10 +3702,10 @@ class MainWindow(QMainWindow):
         )
 
     def _on_fft_time_cursor_info(self, text):
-        """Surface SpectrogramCanvas hover readout in the status bar.
+        """Surface PgHeatmapCanvas hover readout in the status bar.
 
-        Empty text (cursor outside ``_ax_spec`` or before a result is
-        plotted) restores the active-file summary so the bar does not
+        Empty text (cursor outside the heatmap scene or before a result
+        is plotted) restores the active-file summary so the bar does not
         remain blank. Reviewer Important #1.
         """
         if text:
@@ -2799,15 +3720,26 @@ class MainWindow(QMainWindow):
 
         Runs on the main thread (Qt cross-thread signals default to
         ``QueuedConnection``), so it is safe to touch the LRU cache and
-        the matplotlib canvas here.
+        the pyqtgraph canvas here.
         """
         pending = getattr(self, '_fft_time_pending', None) or {}
         key = pending.get('cache_key')
         p = pending.get('render_params')
+        analysis_key = pending.get('analysis_key')
+        pane_idx = pending.get('pane_idx')
         if key is not None:
             self._fft_time_cache_put(key, result)
+        if analysis_key is not None:
+            self.analysis_caches['fft_time'].put(analysis_key, result)
         if p is not None:
-            self._render_fft_time(result, p)
+            # V7b: render onto the SPECIFIC pane this job was computed for,
+            # never the focused pane / pane 0. ``pane_idx`` falls back to the
+            # primary canvas only when the queue never set it (legacy path).
+            page = self._analysis_page('fft_time')
+            if pane_idx is not None and pane_idx < page.pane_count():
+                self._render_fft_time_on(page.pane_canvas(pane_idx), result, p)
+            else:
+                self._render_fft_time(result, p)
         self.statusBar.showMessage(
             f"FFT vs Time 完成 · {result.metadata.get('frames', 0)} frames"
         )
@@ -2855,15 +3787,22 @@ class MainWindow(QMainWindow):
         pass
 
     def _on_fft_time_thread_done(self):
-        """Worker thread emitted ``finished`` — clear refs.
+        """Worker thread emitted ``finished`` — clear refs, then pump the
+        next queued job.
 
         Both ``worker`` and ``thread`` are scheduled for deleteLater
         before this slot fires (per the connect order in
-        :meth:`do_fft_time`); we just drop the local references so the
-        re-entry guard in ``do_fft_time`` lets the next compute through.
+        :meth:`_dispatch_fft_time_job`); we drop the local references so the
+        re-entry guard in :meth:`do_fft_time` lets the next compute through,
+        then dispatch the next job in the split queue (V7b). The refs MUST be
+        cleared before :meth:`_start_next_fft_time_job` so the new job's
+        ``thread.isRunning()`` re-entry guard does not see the just-finished
+        thread.
         """
         self._fft_time_thread = None
         self._fft_time_worker = None
+        if self._fft_time_queue:
+            self._start_next_fft_time_job()
 
     # ---- FFT vs Time export (Plan Task 9) ----
     def _copy_fft_time_image(self, mode='full'):
@@ -2872,7 +3811,7 @@ class MainWindow(QMainWindow):
         ``mode='full'`` grabs the whole canvas (spectrogram + slice +
         colorbar). ``mode='main'`` grabs only the spectrogram + colorbar
         region; under headless Qt platforms the canvas falls back to
-        the full grab transparently (see SpectrogramCanvas.grab_main_chart).
+        the full grab transparently (see PgHeatmapCanvas.grab_main_chart).
 
         Guards on ``canvas_fft_time.has_result()`` so an empty canvas
         cannot be pushed to the clipboard — a warning toast surfaces

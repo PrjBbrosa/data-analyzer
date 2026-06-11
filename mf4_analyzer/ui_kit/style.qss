@@ -175,9 +175,9 @@ QSpinBox[compact="true"]::down-arrow, QDoubleSpinBox[compact="true"]::down-arrow
 
 QComboBox QAbstractItemView {
     padding: 4px;
-    border: none;
+    border: 1px solid #dfe5ee;
     border-radius: 8px;
-    background-color: transparent;
+    background-color: #ffffff;
     outline: none;
     selection-background-color: transparent;
     selection-color: #111827;

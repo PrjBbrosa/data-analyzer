@@ -276,10 +276,14 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as Navigatio
 import qtawesome as qta
 
 from ..ui_kit.icons import Icons
-from .canvases import PlotCanvas, SpectrogramCanvas
 from . import hints
 from .pg_canvases import TimeDomainCanvasPG
+from .pg_canvas.heatmap_canvas import PgHeatmapCanvas
+from .pg_canvas.line_canvas import PgLineCanvas
 from .widgets import StatsStrip
+from .analysis_section_page import AnalysisSectionPage
+from .analysis_view_state import AnalysisViewState
+from .view_state import ViewManager
 
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
@@ -967,7 +971,7 @@ class _ChartCard(QWidget):
         # exposes the exact same six action keys + mode/pan/zoom surface so
         # downstream helpers (i18n, MDI icons, shortcuts, _find_action) keep
         # working unchanged.
-        if isinstance(canvas, TimeDomainCanvasPG):
+        if isinstance(canvas, (TimeDomainCanvasPG, PgHeatmapCanvas, PgLineCanvas)):
             self.toolbar = PgNavigationToolbar(canvas, self)
             # Bug 3: re-apply the toolbar's current pan/zoom mode to the
             # ViewBoxes that plot_channels rebuilds, so box-zoom survives a
@@ -1612,20 +1616,6 @@ class TimeChartCard(_ChartCard):
         self._refresh_hint()
 
 
-class SpectrogramChartCard(_ChartCard):
-    """Spectrogram (FFT vs Time) chart card. Adds a spectrogram-specific
-    bottom-bar hint when the toolbar isn't in pan/zoom — guides the user to
-    click on the spectrogram to surface the per-frame frequency slice."""
-
-    def __init__(self, canvas, parent=None, annotations=False):
-        super().__init__(
-            canvas,
-            parent,
-            annotations=annotations,
-            chart_mode='fft_time',
-        )
-
-
 class ChartStack(QWidget):
     mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
@@ -1647,9 +1637,6 @@ class ChartStack(QWidget):
         lay.setSpacing(4)
         self.stack = QStackedWidget(self)
         self.canvas_time = TimeDomainCanvasPG(self)
-        self.canvas_fft = PlotCanvas(self)
-        self.canvas_fft_time = SpectrogramCanvas(self)
-        self.canvas_order = PlotCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
         self._primary_plot_mode = self._time_card.plot_mode()
         self._primary_cursor_mode = self._time_card.cursor_mode()
@@ -1686,27 +1673,55 @@ class ChartStack(QWidget):
         self._focused_card = self._time_card
         self._focus_accent = "#2d7ff9"
         self._install_focus_filter(self._time_card)
-        self._fft_card = _ChartCard(
-            self.canvas_fft,
-            annotations=True,
-            chart_mode='fft',
+        # V7 Step 1: the three analysis sections become per-section
+        # AnalysisSectionPage instances (QSplitter pane container + per-section
+        # ViewTabBar). ChartStack owns the three ViewManagers because V6's
+        # ViewTabBar dereferences its manager in __init__ (manager.views_changed
+        # .connect + refresh()) and cannot accept None; MainWindow reads them via
+        # ``self.chart_stack.analysis_managers`` and owns all routing/compute.
+        # ``canvas_fft`` / ``_fft_card`` etc. survive as @property aliases onto
+        # pane 0 so the large existing call surface stays unchanged (single-pane
+        # behaviour == pre-V7).
+        self.analysis_managers = {
+            'fft': ViewManager(self, state_factory=AnalysisViewState),
+            'fft_time': ViewManager(self, state_factory=AnalysisViewState),
+            'order': ViewManager(self, state_factory=AnalysisViewState),
+        }
+
+        def _fft_card_factory():
+            return _ChartCard(
+                PgLineCanvas(self), annotations=True, chart_mode='fft'
+            )
+
+        def _fft_time_card_factory():
+            return _ChartCard(
+                PgHeatmapCanvas(self, with_slice=True),
+                annotations=True, chart_mode='fft_time',
+            )
+
+        def _order_card_factory():
+            return _ChartCard(
+                PgHeatmapCanvas(self), annotations=True, chart_mode='order'
+            )
+
+        self.page_fft = AnalysisSectionPage(
+            section='fft', manager=self.analysis_managers['fft'],
+            card_factory=_fft_card_factory, parent=self,
         )
-        self._fft_time_card = SpectrogramChartCard(
-            self.canvas_fft_time, annotations=True,
+        self.page_fft_time = AnalysisSectionPage(
+            section='fft_time', manager=self.analysis_managers['fft_time'],
+            card_factory=_fft_time_card_factory, parent=self,
         )
-        self._order_card = _ChartCard(
-            self.canvas_order,
-            annotations=True,
-            chart_mode='order',
+        self.page_order = AnalysisSectionPage(
+            section='order', manager=self.analysis_managers['order'],
+            card_factory=_order_card_factory, parent=self,
         )
         self.stack.addWidget(self._time_page)
-        self.stack.addWidget(self._fft_card)
-        self.stack.addWidget(self._fft_time_card)
-        self.stack.addWidget(self._order_card)
-        for card in (self._fft_card, self._fft_time_card, self._order_card):
-            card.copy_image_requested.connect(
-                lambda c=card: self._copy_card_image(c)
-            )
+        self.stack.addWidget(self.page_fft)
+        self.stack.addWidget(self.page_fft_time)
+        self.stack.addWidget(self.page_order)
+        for page in (self.page_fft, self.page_fft_time, self.page_order):
+            self._connect_analysis_card_signals(page._cards[0])
         # The time card's copy button lives on the shared toolbar; route it to
         # the focused pane so 复制为图片 captures whichever pane is focused.
         self._time_card.copy_image_requested.connect(
@@ -1766,20 +1781,69 @@ class ChartStack(QWidget):
         self._time_card.cursor_mode_changed.connect(
             self._on_shared_cursor_mode_changed
         )
-        for mode, card in (
-            ('time', self._time_card),
-            ('fft', self._fft_card),
-            ('fft_time', self._fft_time_card),
-            ('order', self._order_card),
-        ):
-            card.annotation_enabled_changed.connect(
-                lambda enabled, m=mode: self.annotation_enabled_changed.emit(m, enabled)
-            )
+        # The time card's annotation relay; analysis cards (pane 0) are wired in
+        # _connect_analysis_card_signals during page construction above.
+        self._time_card.annotation_enabled_changed.connect(
+            lambda enabled: self.annotation_enabled_changed.emit('time', enabled)
+        )
 
         # Initial sync: stats_strip is currently disabled at the product level.
         self.stats_strip.setVisible(
             _STATS_STRIP_ENABLED and self.current_mode() == 'time'
         )
+
+    # ---- analysis-section page accessors (V7 Step 1) ----
+    # The three analysis sections are AnalysisSectionPage instances; pane 0 of
+    # each page hosts the legacy single-canvas/card. These @property aliases
+    # keep the pre-V7 attribute names (canvas_fft / _fft_card / ...) pointing at
+    # pane 0 so MainWindow's render/copy/annotation/tick call surface and the
+    # existing test suite stay unchanged while single-pane behaviour is
+    # byte-identical to before.
+    def _connect_analysis_card_signals(self, card):
+        """Wire copy + annotation relays for an analysis pane card.
+
+        Called for pane 0 at construction and (via MainWindow re-wiring) is the
+        single place a freshly split pane's card would be hooked. ``_chart_mode``
+        is the card's section key ('fft'/'fft_time'/'order')."""
+        card.copy_image_requested.connect(
+            lambda c=card: self._copy_card_image(c)
+        )
+        mode = card._chart_mode
+        card.annotation_enabled_changed.connect(
+            lambda enabled, m=mode: self.annotation_enabled_changed.emit(m, enabled)
+        )
+
+    @property
+    def page_for_mode(self):
+        return {
+            'fft': self.page_fft,
+            'fft_time': self.page_fft_time,
+            'order': self.page_order,
+        }
+
+    @property
+    def _fft_card(self):
+        return self.page_fft._cards[0]
+
+    @property
+    def _fft_time_card(self):
+        return self.page_fft_time._cards[0]
+
+    @property
+    def _order_card(self):
+        return self.page_order._cards[0]
+
+    @property
+    def canvas_fft(self):
+        return self.page_fft.pane_canvas(0)
+
+    @property
+    def canvas_fft_time(self):
+        return self.page_fft_time.pane_canvas(0)
+
+    @property
+    def canvas_order(self):
+        return self.page_order.pane_canvas(0)
 
     def _configure_time_hint_bar(self):
         self._time_hint_bar.setFixedHeight(20)
@@ -2392,6 +2456,19 @@ class ChartStack(QWidget):
             if pix is not None and not pix.isNull():
                 self.image_captured.emit(pix)
             return
+        # Analysis sections (fft/fft_time/order) own their own per-section
+        # split via AnalysisSectionPage. When the card's page is split, export
+        # ALL panes composited side-by-side (grab_combined_pixmap), parallel to
+        # the time-domain _combined_split_pixmap branch above. Single-pane falls
+        # through to the plain grab below (byte-identical to pre-split copy).
+        mode = getattr(card, '_chart_mode', '')
+        if mode in ('fft', 'fft_time', 'order'):
+            page = self.page_for_mode.get(mode)
+            if page is not None and page.pane_count() > 1:
+                pix = page.grab_combined_pixmap(scale=_HIDPI_EXPORT_SCALE)
+                if pix is not None and not pix.isNull():
+                    self.image_captured.emit(_pixmap_as_device_pixels(pix))
+                return
         canvas = card.canvas
         pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():

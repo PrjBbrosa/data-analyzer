@@ -2079,8 +2079,13 @@ class FFTContextual(QWidget):
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
         if 'overlap' in d:
+            # get_params() emits overlap as a FRACTION (0.5); the spinbox is in
+            # PERCENT. Accept either: <= 1 is treated as a fraction, > 1 as an
+            # already-percent value. Without this, a view-restore round-trip
+            # would do int(0.5) == 0 and drift the overlap toward 0 %.
             try:
-                self.spin_overlap.setValue(int(d['overlap']))
+                v = float(d['overlap'])
+                self.spin_overlap.setValue(int(v * 100) if v <= 1 else int(v))
             except (TypeError, ValueError):
                 pass
         self._apply_axis_params(d)
@@ -2943,6 +2948,126 @@ class FFTTimeContextual(QWidget):
     # current_params; runtime callers continue to use get_params.
     def current_params(self):
         return self.get_params()
+
+    def apply_params(self, d):
+        """Round-trip every key get_params emits back onto its control.
+
+        V5b: the per-section multiview bridge calls apply_params_from_state →
+        ctx.apply_params(...). Mirrors FFTContextual/OrderContextual.apply_params:
+        each key is fault-tolerant (`if 'k' in d:` so partial dicts are fine)
+        and `apply_params(get_params())` is idempotent.
+
+        Three get_params shapes need reverse mapping, not a naive setter:
+        - ``overlap`` is a FRACTION (0.75); spin_overlap holds the percent (75).
+        - ``amplitude_mode`` is the lowercase token 'amplitude_db' / 'amplitude';
+          combo_amp_unit shows 'dB' / 'Linear'. We match on ``'db' in lower``
+          (the legacy '_apply_preset' `'dB' in val` form would mis-read the
+          lowercase token). blockSignals so _on_amp_unit_changed does not force
+          z_auto on and stomp the explicit z_floor/z_ceiling arriving alongside.
+        - ``dynamic`` / ``freq_*`` are derived aliases of z_floor / the Y row;
+          they are skipped whenever the authoritative explicit key is present
+          (always true for get_params output) so they cannot break idempotency.
+        """
+        if 'signal' in d and d['signal'] is not None:
+            i = self.combo_sig.findData(d['signal'])
+            if i >= 0:
+                self.combo_sig.setCurrentIndex(i)
+        if 'fs' in d:
+            try:
+                self.spin_fs.setValue(float(d['fs']))
+            except (TypeError, ValueError):
+                pass
+        if 'window' in d:
+            i = self.combo_win.findText(str(d['window']))
+            if i >= 0:
+                self.combo_win.setCurrentIndex(i)
+        if 'nfft' in d:
+            i = self.combo_nfft.findText(str(d['nfft']))
+            if i >= 0:
+                self.combo_nfft.setCurrentIndex(i)
+        if 'overlap' in d:
+            try:
+                # get_params stores overlap as a fraction; the spin is percent.
+                self.spin_overlap.setValue(int(round(float(d['overlap']) * 100)))
+            except (TypeError, ValueError):
+                pass
+        if 'remove_mean' in d:
+            self.chk_remove_mean.setChecked(bool(d['remove_mean']))
+        if 'db_reference' in d:
+            try:
+                self.spin_db_ref.setValue(float(d['db_reference']))
+            except (TypeError, ValueError):
+                pass
+        if 'cmap' in d:
+            i = self.combo_cmap.findText(str(d['cmap']))
+            if i >= 0:
+                self.combo_cmap.setCurrentIndex(i)
+
+        # amplitude_mode token → combo_amp_unit. Reverse-map on a
+        # case-insensitive 'db' substring so the lowercase 'amplitude_db'
+        # token from get_params lands on 'dB' (and the legacy 'Amplitude dB'
+        # preset string keeps working). blockSignals so _on_amp_unit_changed
+        # does not flip z_auto on and clobber the explicit z range below.
+        if 'amplitude_mode' in d:
+            val = str(d['amplitude_mode'])
+            target = 'dB' if 'db' in val.lower() else 'Linear'
+            i = self.combo_amp_unit.findText(target)
+            if i >= 0:
+                self.combo_amp_unit.blockSignals(True)
+                self.combo_amp_unit.setCurrentIndex(i)
+                self.combo_amp_unit.blockSignals(False)
+
+        # Legacy ``dynamic`` only fires when no explicit z_floor accompanies
+        # it (get_params always emits z_floor, so this is a partial-dict
+        # safety net, never reached on a full round-trip).
+        if 'dynamic' in d and 'z_floor' not in d:
+            raw = str(d['dynamic'])
+            if raw == 'Auto':
+                self.chk_z_auto.setChecked(True)
+            else:
+                try:
+                    n = float(raw.replace('dB', '').strip())
+                    self.chk_z_auto.setChecked(False)
+                    self.spin_z_floor.setValue(-abs(n))
+                    self.spin_z_ceiling.setValue(0.0)
+                except ValueError:
+                    pass
+
+        # Legacy ``freq_*`` alias the Y-frequency row; only applied when the
+        # explicit ``y_*`` key is absent so they cannot fight the round-trip.
+        if 'freq_auto' in d and 'y_auto' not in d:
+            self.chk_y_auto.setChecked(bool(d['freq_auto']))
+        if 'freq_min' in d and 'y_min' not in d:
+            try:
+                self.spin_y_min.setValue(float(d['freq_min']))
+            except (TypeError, ValueError):
+                pass
+        if 'freq_max' in d and 'y_max' not in d:
+            try:
+                self.spin_y_max.setValue(float(d['freq_max']))
+            except (TypeError, ValueError):
+                pass
+
+        # Explicit axis keys (preferred path, authoritative).
+        for key, attr in (
+            ('x_auto', 'chk_x_auto'),
+            ('y_auto', 'chk_y_auto'),
+            ('z_auto', 'chk_z_auto'),
+        ):
+            if key in d:
+                getattr(self, attr).setChecked(bool(d[key]))
+        for key, attr in (
+            ('x_min', 'spin_x_min'), ('x_max', 'spin_x_max'),
+            ('y_min', 'spin_y_min'), ('y_max', 'spin_y_max'),
+            ('z_floor', 'spin_z_floor'), ('z_ceiling', 'spin_z_ceiling'),
+        ):
+            if key in d:
+                try:
+                    getattr(self, attr).setValue(float(d[key]))
+                except (TypeError, ValueError):
+                    pass
+
+        self._sync_axis_enabled()
 
     # ---- built-in presets (design §7) ----
     #

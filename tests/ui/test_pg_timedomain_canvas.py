@@ -1884,6 +1884,62 @@ class TestTimeDomainCanvasPGSubplotMode:
         assert speed.get_ylim() == pytest.approx((-1200.0, 1200.0))
         assert torque.get_ylim() == pytest.approx((40.0, 60.0))
 
+    def test_restore_visible_ylims_fits_new_overlay_channel_to_visible_x(self, qapp):
+        """A newly checked overlay channel has no saved ylim yet.
+
+        Rebuilds with ``defer_first_frame=True`` bind empty curves while the
+        view restores X. Existing channels then get saved ylims back; the new
+        channel must use the same visible-X raw-data fit as the context-menu
+        Y-autofit path instead of staying on the empty/default range.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 10.0, 1001, dtype=np.float64)
+        speed = np.sin(t)
+        torque = 50.0 + np.cos(t)
+        pressure = 100.0 + 5.0 * np.sin(t)
+        pressure[-1] = 1_000_000.0
+        base_rows = [
+            ("speed", True, t, speed, "#1769e0", "rpm", "fid-1"),
+            ("torque", True, t, torque, "#ef4444", "Nm", "fid-1"),
+        ]
+        canvas.plot_channels(base_rows, mode="overlay")
+        canvas.restore_visible_xlim((2.0, 3.0))
+        QCoreApplication.processEvents()
+
+        canvas._channel_lines["speed"][0].set_ylim(-10.0, 10.0)
+        canvas._channel_lines["torque"][0].set_ylim(40.0, 60.0)
+        saved_ylims = canvas.get_visible_ylims()
+
+        rows_with_new_channel = [
+            *base_rows,
+            ("pressure", True, t, pressure, "#00b894", "bar", "fid-1"),
+        ]
+        canvas.plot_channels(
+            rows_with_new_channel,
+            mode="overlay",
+            defer_first_frame=True,
+        )
+        canvas.restore_visible_xlim((2.0, 3.0))
+        canvas.restore_visible_ylims(saved_ylims)
+        QCoreApplication.processEvents()
+
+        assert canvas.get_visible_ylims()[_view_state_key("fid-1", "speed")] == (
+            pytest.approx((-10.0, 10.0))
+        )
+        assert canvas.get_visible_ylims()[_view_state_key("fid-1", "torque")] == (
+            pytest.approx((40.0, 60.0))
+        )
+
+        pressure_ylim = canvas.get_visible_ylims()[
+            _view_state_key("fid-1", "pressure")
+        ]
+        visible = pressure[(t >= 2.0) & (t <= 3.0)]
+        assert pressure_ylim[0] <= float(visible.min())
+        assert pressure_ylim[1] >= float(visible.max())
+        assert pressure_ylim[1] < 200.0
+
     def test_visible_ylims_distinguish_duplicate_display_names(self, qapp):
         from PyQt5.QtCore import QCoreApplication
 

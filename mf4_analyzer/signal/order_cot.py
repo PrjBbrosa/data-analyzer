@@ -129,8 +129,11 @@ class COTOrderAnalyzer:
         times_arr = np.zeros(n_frames, dtype=float)
 
         def _check_cancel():
+            # Mirrors spectrogram.py / order.py: poll once per frame (NOT
+            # inside the FFT hot path); '... computation cancelled' is the
+            # message family the UI failure handlers recognise.
             if cancel_token is not None and cancel_token():
-                raise RuntimeError("COT cancelled")
+                raise RuntimeError("order computation cancelled")
 
         for idx, start in enumerate(starts):
             _check_cancel()
