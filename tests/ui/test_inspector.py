@@ -154,6 +154,35 @@ def test_fft_contextual_xy_axis_params_round_trip(qapp):
     assert fc.spin_y_max.value() == 1.0
 
 
+def test_fft_contextual_overlap_fraction_round_trip(qapp):
+    """V10: get_params() emits overlap as a FRACTION (0.5); apply_params must
+    accept a fraction (and percent) so a view/preset restore round-trips
+    instead of int(0.5)==0 drifting the overlap toward 0%."""
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    fc = FFTContextual()
+    # Fraction in -> fraction out (the regression: was int(0.5) -> 0%).
+    fc.apply_params({"overlap": 0.5})
+    assert fc.spin_overlap.value() == 50
+    assert fc.get_params()["overlap"] == 0.5
+
+    # A get/apply round-trip is stable for several fractions.
+    for frac, pct in ((0.0, 0), (0.25, 25), (0.75, 75), (0.9, 90)):
+        fc.apply_params({"overlap": frac})
+        assert fc.spin_overlap.value() == pct
+        assert fc.get_params()["overlap"] == frac
+
+    # Backwards/percent path: a value > 1 is treated as already-percent.
+    fc.apply_params({"overlap": 60})
+    assert fc.spin_overlap.value() == 60
+    assert fc.get_params()["overlap"] == 0.6
+
+    # Non-numeric is tolerated (no crash, value unchanged).
+    fc.spin_overlap.setValue(40)
+    fc.apply_params({"overlap": None})
+    assert fc.spin_overlap.value() == 40
+
+
 # ---- Task 2.6: OrderContextual ----
 
 def test_order_contextual_params(qapp):

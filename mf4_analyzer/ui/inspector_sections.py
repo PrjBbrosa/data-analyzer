@@ -2079,8 +2079,13 @@ class FFTContextual(QWidget):
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
         if 'overlap' in d:
+            # get_params() emits overlap as a FRACTION (0.5); the spinbox is in
+            # PERCENT. Accept either: <= 1 is treated as a fraction, > 1 as an
+            # already-percent value. Without this, a view-restore round-trip
+            # would do int(0.5) == 0 and drift the overlap toward 0 %.
             try:
-                self.spin_overlap.setValue(int(d['overlap']))
+                v = float(d['overlap'])
+                self.spin_overlap.setValue(int(v * 100) if v <= 1 else int(v))
             except (TypeError, ValueError):
                 pass
         self._apply_axis_params(d)
