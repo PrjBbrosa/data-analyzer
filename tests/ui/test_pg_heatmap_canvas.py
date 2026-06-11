@@ -667,3 +667,50 @@ def test_slice_y_label_switches_with_amplitude_mode(qapp):
     c.plot_result(r, amplitude_mode='amplitude', cmap='turbo', z_auto=True)
     assert c._slice_plot.getAxis('left').labelText == 'Amplitude'
     c.deleteLater()
+
+
+# ----------------------------------------------------------------------
+# full/main export modes (FFT-vs-Time copy: full view vs main chart). M8.
+# ----------------------------------------------------------------------
+def test_grab_full_vs_main(qapp):
+    # full = whole widget (heatmap + slice row); main = heatmap + colorbar
+    # only (slice row cropped out). Parity with SpectrogramCanvas
+    # grab_full_view / grab_main_chart (canvases.py:2053/2064).
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()  # realize the GraphicsLayout geometry
+    c.plot_result(
+        _spec_result(), amplitude_mode='amplitude_db', cmap='turbo',
+        z_auto=True, z_floor=-80.0, z_ceiling=0.0, freq_range=None,
+        x_auto=True, x_min=0.0, x_max=0.0, y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    full = c.grab_full_view()
+    main = c.grab_main_chart()
+    assert not full.isNull() and not main.isNull()
+    # main excludes the slice row → strictly shorter
+    assert main.height() < full.height()
+    c.hide()
+    c.deleteLater()
+
+
+def test_grab_main_chart_order_mode_no_slice_does_not_crash(qapp):
+    # with_slice=False (Order map): no slice row exists, so grab_main_chart
+    # must not crash and main ≈ full height (nothing to crop). The export
+    # button is wired for both sections.
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True, cmap='turbo',
+    )
+    full = c.grab_full_view()
+    main = c.grab_main_chart()
+    assert not full.isNull() and not main.isNull()
+    # No slice row to crop → main spans essentially the whole height (allow
+    # a small slack for the heatmap-vs-widget rect difference).
+    assert main.height() >= full.height() * 0.5
+    c.hide()
+    c.deleteLater()

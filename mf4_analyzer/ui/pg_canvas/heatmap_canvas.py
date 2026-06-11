@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPainter, QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 
@@ -624,3 +624,62 @@ class PgHeatmapCanvas(QWidget):
             int(round(base.height() * scale)),
             Qt.KeepAspectRatio, Qt.SmoothTransformation,
         )
+
+    # ------------------------------------------------------------------
+    # full/main export modes (FFT-vs-Time copy command, M9 wires the modes)
+    # ------------------------------------------------------------------
+    def grab_full_view(self) -> QPixmap:
+        """Snapshot of the entire widget (heatmap + slice row).
+
+        Phase-1 export contract consumed by
+        ``MainWindow._copy_fft_time_image`` with ``mode='full'`` (M9
+        wiring). Mirrors ``SpectrogramCanvas.grab_full_view``
+        (canvases.py:2053 → ``self.grab()``); here the grab targets the
+        inner GraphicsLayoutWidget via the shared ``grab_pixmap`` so the
+        hi-DPI 2× scaling and the un-scaled 1×1 degenerate fallback stay
+        identical to the plain copy/export path.
+        """
+        return self.grab_pixmap(scale=2.0)
+
+    def grab_main_chart(self) -> QPixmap:
+        """Heatmap + colorbar only (no slice row).
+
+        Renders the scene region covering row 0 of the GraphicsLayout
+        (the heatmap PlotItem plus its nested colorbar), excluding the
+        ``with_slice=True`` frequency-slice strip in row 1. Parity with
+        ``SpectrogramCanvas.grab_main_chart`` (canvases.py:2064), used by
+        ``MainWindow._copy_fft_time_image`` with ``mode='main'``.
+
+        Falls back to :meth:`grab_full_view` when the scene geometry is
+        degenerate (no result plotted, layout not yet realized, or the
+        scene rects collapse under offscreen Qt) — the documented headless
+        fallback the SpectrogramCanvas original also keeps, so the export
+        button never returns a null pixmap when ``has_result()`` is True.
+        With ``with_slice=False`` (Order map) there is no row 1, so the
+        row-0 region already spans the whole map and ``main ≈ full``.
+        """
+        scale = 2.0
+        scene = self._glw.scene()
+        rect = self._plot.sceneBoundingRect()
+        if self._cbar is not None:
+            # The colorbar is nested in the PlotItem layout via
+            # ``insert_in=self._plot``, so it is normally already inside
+            # the plot's scene rect; union defensively in case a future
+            # pg version lays it out beyond that rect.
+            rect = rect.united(self._cbar.sceneBoundingRect())
+        if rect.width() < 2 or rect.height() < 2:
+            return self.grab_full_view()
+        target = QPixmap(int(rect.width() * scale), int(rect.height() * scale))
+        target.fill(Qt.white)
+        painter = QPainter(target)
+        painter.setRenderHint(QPainter.Antialiasing)
+        # scene.render(painter, target_rect, source_rect): map the row-0
+        # scene rect (heatmap + colorbar) onto the scaled pixmap, cropping
+        # out the slice row that sits below it in the scene.
+        scene.render(
+            painter,
+            QRectF(0, 0, rect.width() * scale, rect.height() * scale),
+            rect,
+        )
+        painter.end()
+        return target
