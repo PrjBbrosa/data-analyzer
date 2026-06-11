@@ -22,7 +22,6 @@ from PyQt5.QtCore import QTimer, QThread
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer
-from .canvases import CHART_TIGHT_LAYOUT_KW
 from .. import app_meta
 
 
@@ -1016,14 +1015,11 @@ class MainWindow(QMainWindow):
             axis_opts = dict(state.axis_opts or {})
             axis_opts['tick_density'] = {'x': int(xt), 'y': int(yt)}
             state.axis_opts = axis_opts
-        from matplotlib.ticker import MaxNLocator
-        for ax in self.canvas_fft.fig.axes:
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
-        self.canvas_fft.draw_idle()
-        # M5: canvas_order is now PgHeatmapCanvas (no ``fig``/``draw_idle``).
-        # Its set_tick_density takes the same inspector tick COUNTS the
-        # MaxNLocator(nbins=...) loop consumed, so the knob semantics hold.
+        # M5/M11: canvas_fft (PgLineCanvas) and canvas_order
+        # (PgHeatmapCanvas) are pyqtgraph widgets — no ``fig``/``draw_idle``.
+        # Their set_tick_density takes the same inspector tick COUNTS the
+        # old MaxNLocator(nbins=...) loop consumed, so the knob semantics hold.
+        self.canvas_fft.set_tick_density(xt, yt)
         self.canvas_order.set_tick_density(xt, yt)
 
     def _show_rebuild_popover(self, anchor, mode='fft'):
@@ -2243,8 +2239,6 @@ class MainWindow(QMainWindow):
                 freq, amp = FFTAnalyzer.compute_fft(sig, fs, win, nfft)
                 _, psd = FFTAnalyzer.compute_psd(sig, fs, win, nfft)
 
-            self.canvas_fft.clear()
-
             x_auto = bool(fft_params.get('x_auto', fft_params.get('autoscale', True)))
             x_min = float(fft_params.get('x_min', 0.0))
             x_max = float(fft_params.get('x_max', 0.0))
@@ -2272,39 +2266,24 @@ class MainWindow(QMainWindow):
             else:
                 psd_disp = psd
 
-            ax1 = self.canvas_fft.fig.add_subplot(2, 1, 1)
-            ax1.plot(freq, amp_disp, '#2563eb', lw=1.0);
-            ax1.set_xlabel('Frequency (Hz)');
-            ax1.set_ylabel(
-                'Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
-                labelpad=10,
+            sig_label = self.inspector.fft_ctx.combo_sig.currentText()
+            entry = {
+                'label': sig_label,
+                'color': '#2563eb',
+                'freq': freq,
+                'amp': amp_disp,
+                'psd': psd_disp,
+            }
+            self.canvas_fft.plot_spectra(
+                [entry],
+                xlim=xlim,
+                amp_label='Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
+                psd_label='PSD (dB)' if psd_y == 'dB' else 'PSD',
+                title=f'FFT - {sig_label} (窗:{win}, NFFT:{nfft or "auto"})',
+                y_auto=y_auto, y_min=y_min, y_max=y_max,
             )
-            ax1.set_title(f'FFT - {self.inspector.fft_ctx.combo_sig.currentText()} (窗:{win}, NFFT:{nfft or "auto"})');
-            ax1.grid(True, alpha=0.25, ls='--');
-            ax1.set_xlim(*xlim)
-            if not y_auto and y_max > y_min:
-                ax1.set_ylim(y_min, y_max)
-            ax2 = self.canvas_fft.fig.add_subplot(2, 1, 2)
-            ax2.plot(freq, psd_disp, '#dc2626', lw=1.0);
-            ax2.set_xlabel('Frequency (Hz)');
-            ax2.set_ylabel(
-                'PSD (dB)' if psd_y == 'dB' else 'PSD',
-                labelpad=10,
-            )
-            ax2.set_title('功率谱密度');
-            ax2.grid(True, alpha=0.25, ls='--');
-            ax2.set_xlim(*xlim)
-            if not y_auto and y_max > y_min:
-                ax2.set_ylim(y_min, y_max)
-
-            # 存储曲线数据用于remark吸附
-            self.canvas_fft.store_line_data(0, freq, amp_disp)
-            self.canvas_fft.store_line_data(1, freq, psd_disp)
-
-            self.canvas_fft.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
             xt, yt = self.inspector.top.tick_density()
             self.canvas_fft.set_tick_density(xt, yt)
-            self.canvas_fft.draw();
             self._remember_batch_preset(
                 "当前 FFT",
                 "fft",

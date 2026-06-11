@@ -1,6 +1,7 @@
 """Generic analysis compute worker (QObject; move-to-QThread pattern).
 
-Mirrors the proven ``FFTTimeWorker`` contract (main_window.py:29-78) but
+Mirrors the contract of the retired ``FFTTimeWorker`` (now the
+``do_fft_time`` / ``do_order_time`` job closures) but
 takes an opaque ``job`` callable so Order / FFT-vs-Time / future analyses
 share one worker class. The job receives the worker itself, so it can
 emit ``progress`` and poll ``cancelled()`` as its cancel token.

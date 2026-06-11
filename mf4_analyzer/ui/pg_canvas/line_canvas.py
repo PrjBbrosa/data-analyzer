@@ -17,6 +17,22 @@ from PyQt5.QtWidgets import QVBoxLayout, QWidget
 from .heatmap_canvas import _tick_counts_to_density
 
 
+class _AxisShim:
+    """Minimal axis handle exposing ``view_box`` for ``PgNavigationToolbar``.
+
+    The toolbar's ``_view_boxes`` walks ``canvas.axes_list`` and reads
+    ``ax.view_box`` to apply pan/box-zoom modes. PgLineCanvas has two fixed
+    PlotItems (amp + psd) rather than the dynamic per-channel axes a time
+    canvas builds, so a lightweight static shim per plot is enough — it never
+    rebuilds, so no replot re-binding is needed.
+    """
+
+    __slots__ = ("view_box",)
+
+    def __init__(self, view_box):
+        self.view_box = view_box
+
+
 class PgLineCanvas(QWidget):
     cursor_info = pyqtSignal(str)
 
@@ -38,11 +54,25 @@ class PgLineCanvas(QWidget):
             p.addLegend(offset=(8, 8))
         self._plot_psd.setXLink(self._plot_amp)
 
+        # Toolbar contract (PgNavigationToolbar._view_boxes walks axes_list →
+        # ax.view_box to apply pan/box-zoom mode). Static shims, one per fixed
+        # plot. Without this the FFT toolbar's pan/zoom mode buttons go
+        # silently inert on the pg canvas (lesson:
+        # 2026-05-28-mpl-event-coupled-tests-survive-renderer-swap M6).
+        self.axes_list = [
+            _AxisShim(self._plot_amp.vb),
+            _AxisShim(self._plot_psd.vb),
+        ]
+
         self._amp_curves = []
         self._psd_curves = []
         self._entries = []      # plotted data for readout/snap
         self._remarks = []
         self._remark_enabled = False
+        # Last view applied by plot_spectra; the toolbar Home button restores
+        # it (reset_view_to_data_extents).
+        self._last_xlim = None
+        self._last_yrange = None  # (y_min, y_max) when manual, else None
 
         self._cursor_amp = pg.InfiniteLine(angle=90, movable=False,
                                            pen=pg.mkPen('#94a3b8', width=1))
@@ -79,12 +109,65 @@ class PgLineCanvas(QWidget):
         self._plot_amp.setLabel('left', amp_label)
         self._plot_psd.setLabel('left', psd_label)
         self._plot_psd.setLabel('bottom', 'Frequency (Hz)')
+        self._last_xlim = (float(xlim[0]), float(xlim[1]))
+        manual_y = (not y_auto) and y_max > y_min
+        self._last_yrange = (float(y_min), float(y_max)) if manual_y else None
         for p in (self._plot_amp, self._plot_psd):
             p.setXRange(float(xlim[0]), float(xlim[1]), padding=0)
-            if not y_auto and y_max > y_min:
+            if manual_y:
                 p.setYRange(float(y_min), float(y_max), padding=0)
             else:
                 p.enableAutoRange(axis='y')
+
+    def reset_view_to_data_extents(self) -> None:
+        """Toolbar Home helper: restore the view applied by plot_spectra.
+
+        ``PgNavigationToolbar.home`` prefers a canvas
+        ``reset_view_to_data_extents`` over its ``axes_list`` autoRange
+        fallback; without it the Home button would re-derive the X range from
+        ``channel_data`` (which this canvas does not populate) and leave the
+        manual FFT xlim. Restores the last plot_spectra X range and either the
+        manual Y range or per-row Y autorange. Falls back to pg ``autoRange``
+        when nothing has been plotted yet.
+        """
+        if self._last_xlim is None:
+            for p in (self._plot_amp, self._plot_psd):
+                p.vb.autoRange()
+            return
+        for p in (self._plot_amp, self._plot_psd):
+            p.setXRange(self._last_xlim[0], self._last_xlim[1], padding=0)
+            if self._last_yrange is not None:
+                p.setYRange(self._last_yrange[0], self._last_yrange[1],
+                            padding=0)
+            else:
+                p.enableAutoRange(axis='y')
+
+    def full_reset(self) -> None:
+        """Clear both rows' curves, remarks, result state and labels.
+
+        File-close contract: ``ChartStack.full_reset_all``
+        (chart_stack.py) calls ``full_reset()`` on every canvas, mirroring
+        the matplotlib ``PlotCanvas.full_reset`` it replaced. Without this
+        method the call AttributeErrors and the FFT canvas keeps a stale
+        spectrum after the data is unloaded.
+        """
+        for p, curves in ((self._plot_amp, self._amp_curves),
+                          (self._plot_psd, self._psd_curves)):
+            for c in curves:
+                p.removeItem(c)
+            curves.clear()
+        self.clear_remarks()
+        self._entries = []
+        self._last_xlim = None
+        self._last_yrange = None
+        self._cursor_amp.setVisible(False)
+        self._cursor_psd.setVisible(False)
+        self._plot_amp.setTitle(None)
+        for p in (self._plot_amp, self._plot_psd):
+            p.setLabel('left', '')
+            p.enableAutoRange(axis='y')
+        self._plot_psd.setLabel('bottom', '')
+        self.cursor_info.emit("")
 
     def has_result(self) -> bool:
         return bool(self._entries)

@@ -276,10 +276,10 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as Navigatio
 import qtawesome as qta
 
 from ..ui_kit.icons import Icons
-from .canvases import PlotCanvas
 from . import hints
 from .pg_canvases import TimeDomainCanvasPG
 from .pg_canvas.heatmap_canvas import PgHeatmapCanvas
+from .pg_canvas.line_canvas import PgLineCanvas
 from .widgets import StatsStrip
 
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
@@ -968,7 +968,7 @@ class _ChartCard(QWidget):
         # exposes the exact same six action keys + mode/pan/zoom surface so
         # downstream helpers (i18n, MDI icons, shortcuts, _find_action) keep
         # working unchanged.
-        if isinstance(canvas, (TimeDomainCanvasPG, PgHeatmapCanvas)):
+        if isinstance(canvas, (TimeDomainCanvasPG, PgHeatmapCanvas, PgLineCanvas)):
             self.toolbar = PgNavigationToolbar(canvas, self)
             # Bug 3: re-apply the toolbar's current pan/zoom mode to the
             # ViewBoxes that plot_channels rebuilds, so box-zoom survives a
@@ -1634,7 +1634,7 @@ class ChartStack(QWidget):
         lay.setSpacing(4)
         self.stack = QStackedWidget(self)
         self.canvas_time = TimeDomainCanvasPG(self)
-        self.canvas_fft = PlotCanvas(self)
+        self.canvas_fft = PgLineCanvas(self)
         self.canvas_fft_time = PgHeatmapCanvas(self, with_slice=True)
         self.canvas_order = PgHeatmapCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)

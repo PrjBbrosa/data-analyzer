@@ -1807,8 +1807,12 @@ def test_fft_contextual_axis_toggles_in_params(qapp):
 
 def test_fft_render_honors_axis_toggles(qtbot):
     """Toggling Amp axis to dB / PSD axis to Linear must change the y-label
-    text on the rendered subplots — this proves the toggles round-trip
+    text on the rendered rows — this proves the toggles round-trip
     through the render code in main_window.do_fft.
+
+    M11: canvas_fft is a PgLineCanvas; the amp row is ``_plot_amp`` and the
+    PSD row is ``_plot_psd``. The y-label lives on each plot's left
+    ``AxisItem.labelText`` (the pg analogue of mpl ``ax.get_ylabel()``).
     """
     import numpy as np
     from mf4_analyzer.ui.main_window import MainWindow
@@ -1827,20 +1831,26 @@ def test_fft_render_honors_axis_toggles(qtbot):
     win.inspector.fft_ctx.spin_fs.setValue(fs)
     win.inspector.fft_ctx.combo_avg_mode.setCurrentText('单帧')
 
+    canvas = win.canvas_fft
+
+    def amp_ylabel():
+        return canvas._plot_amp.getAxis('left').labelText
+
+    def psd_ylabel():
+        return canvas._plot_psd.getAxis('left').labelText
+
     # Default render: amp=Linear, psd=dB.
     win.do_fft()
-    axes = win.canvas_fft.fig.axes
-    assert len(axes) >= 2
-    assert 'dB' not in axes[0].get_ylabel()
-    assert 'dB' in axes[1].get_ylabel()
+    assert canvas.has_result()
+    assert 'dB' not in amp_ylabel()
+    assert 'dB' in psd_ylabel()
 
     # Flip: amp=dB, psd=Linear.
     win.inspector.fft_ctx.combo_amp_y.setCurrentText('dB')
     win.inspector.fft_ctx.combo_psd_y.setCurrentText('Linear')
     win.do_fft()
-    axes = win.canvas_fft.fig.axes
-    assert 'dB' in axes[0].get_ylabel()
-    assert 'dB' not in axes[1].get_ylabel()
+    assert 'dB' in amp_ylabel()
+    assert 'dB' not in psd_ylabel()
 
 
 def test_fft_render_honors_manual_xy_axis_ranges(qtbot):
@@ -1870,11 +1880,15 @@ def test_fft_render_honors_manual_xy_axis_ranges(qtbot):
 
     win.do_fft()
 
-    axes = win.canvas_fft.fig.axes
-    assert len(axes) >= 2
-    for ax in axes[:2]:
-        assert ax.get_xlim() == pytest.approx((10.0, 80.0))
-        assert ax.get_ylim() == pytest.approx((-2.0, 2.0))
+    # M11: read the manual X/Y range off each PgLineCanvas row's ViewBox
+    # (pg ``vb.viewRange()`` returns [[x0, x1], [y0, y1]]) — the analogue of
+    # the old mpl ``ax.get_xlim()`` / ``ax.get_ylim()``.
+    canvas = win.canvas_fft
+    assert canvas.has_result()
+    for plot in (canvas._plot_amp, canvas._plot_psd):
+        (x0, x1), (y0, y1) = plot.vb.viewRange()
+        assert (x0, x1) == pytest.approx((10.0, 80.0))
+        assert (y0, y1) == pytest.approx((-2.0, 2.0))
 
 
 # ---- Wave 3 (axis-settings + COT migration plan): 坐标轴设置 group ----
