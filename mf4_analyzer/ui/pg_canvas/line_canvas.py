@@ -205,6 +205,31 @@ class PgLineCanvas(QWidget):
                          float(e['amp'][idx]), float(e['psd'][idx])))
         return rows
 
+    def format_readout(self, freq: float) -> str:
+        """Cursor readout string for ``freq`` with a per-curve Δ column.
+
+        ``readout_at`` snaps to the nearest sample on every overlay curve;
+        this formats one segment per curve and, for every curve after the
+        first/primary, appends ``Δ`` = (this curve's amplitude − the primary
+        curve's amplitude). The values are display-space (the canvas is fed
+        already-converted amp/psd), so under a dB axis the Δ is a dB
+        difference and under a linear axis a plain value difference — both
+        semantically correct without extra conversion. A single curve has no
+        Δ (the gate is curve index > 0); no entries yield an empty string so
+        the status pill clears.
+        """
+        rows = self.readout_at(freq)
+        if not rows:
+            return ""
+        parts = []
+        base_amp = rows[0][2]
+        for i, (label, _f, amp, psd) in enumerate(rows):
+            seg = f"{label}: {amp:.4g} / {psd:.4g}"
+            if i > 0:
+                seg += f"  Δ{amp - base_amp:+.4g}"
+            parts.append(seg)
+        return f"f={rows[0][1]:.2f} Hz  " + "  |  ".join(parts)
+
     def _on_hover(self, pos) -> None:
         target = None
         # vb rect, NOT p.sceneBoundingRect(): the plot rect includes the
@@ -224,10 +249,7 @@ class PgLineCanvas(QWidget):
         for line in (self._cursor_amp, self._cursor_psd):
             line.setPos(x)
             line.setVisible(True)
-        rows = self.readout_at(x)
-        text = "  |  ".join(
-            f"{label}: {amp:.4g} / {psd:.4g}" for label, _f, amp, psd in rows)
-        self.cursor_info.emit(f"f={rows[0][1]:.2f} Hz  {text}")
+        self.cursor_info.emit(self.format_readout(x))
 
     # ------------------------------------------------------------------
     # remarks: snap to nearest sample on nearest curve (PlotCanvas parity)

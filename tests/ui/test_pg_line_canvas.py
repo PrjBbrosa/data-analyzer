@@ -171,6 +171,49 @@ def test_grab_pixmap_offscreen_smoke(canvas, qapp):
     canvas.hide()
 
 
+def test_readout_text_includes_delta_for_multi_curve(canvas):
+    # FFT overlay comparison: format_readout adds a per-curve Δ column
+    # (display-space difference vs the first/primary curve) so the user
+    # reads the gap as a number instead of eyeballing two lines. Under a
+    # dB axis the display-space subtraction is a dB difference; under a
+    # linear axis it is a plain value difference — correct either way
+    # because the canvas already holds display-space values.
+    e1, e2 = _entry('a', '#2563eb'), _entry('b', '#dc2626')
+    e2 = dict(e2, amp=e2['amp'] * 0.5, psd=e2['psd'] * 0.25)
+    canvas.plot_spectra(
+        [e1, e2], xlim=(0.0, 500.0), amp_label='Amplitude',
+        psd_label='PSD', title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    text = canvas.format_readout(120.0)
+    assert 'Δ' in text
+    # b is a = a * 0.5 everywhere, so at any snapped sample Δ(b-a) = -a/2.
+    # Cross-check against the canvas's own readout instead of hardcoding
+    # the linspace sample value: near the 120 Hz peak a≈1.0 → Δ≈-0.5.
+    rows = canvas.readout_at(120.0)
+    expected_delta = rows[1][2] - rows[0][2]
+    assert expected_delta == pytest.approx(-0.5, abs=0.01)
+    assert f"{expected_delta:+.4g}" in text
+    # the first/primary curve carries no Δ; only later curves do.
+    a_seg = text.split('|')[0]
+    assert 'Δ' not in a_seg
+
+
+def test_readout_text_no_delta_for_single_curve(canvas):
+    # Single curve → nothing to compare against → no Δ column. The Δ is
+    # gated on curve index > 0, so a lone primary curve stays clean.
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        psd_label='PSD', title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    text = canvas.format_readout(120.0)
+    assert text != ""
+    assert 'Δ' not in text
+
+
+def test_format_readout_empty_when_no_entries(canvas):
+    assert canvas.format_readout(120.0) == ""
+
+
 def test_set_tick_density_accepts_inspector_counts(canvas):
     # Inspector PersistentTop passes integer tick COUNTS (x spinbox
     # 3-30, y spinbox 3-20; defaults 10/8), NOT pg density factors —
