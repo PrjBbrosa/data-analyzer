@@ -254,6 +254,70 @@ def test_value_at_maps_extent_to_cell(canvas):
     assert canvas._value_at(7.0, 5.0) == pytest.approx(100.0)
 
 
+def test_grab_pixmap_scaled_nonnull(canvas, qapp):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    # Force a layout pass so the inner GraphicsLayoutWidget has real
+    # geometry under offscreen Qt (same precedent as the time-domain
+    # _pg_canvas helper, test_pg_timedomain_canvas.py:535).
+    canvas.show()
+    qapp.processEvents()
+    pix = canvas.grab_pixmap(scale=2.0)
+    assert pix is not None and not pix.isNull()
+    assert pix.width() >= canvas.width() * 2 - 2
+    canvas.hide()
+
+
+def test_grab_pixmap_export_center_pixels_not_all_white(canvas, qapp):
+    # This repo has an OpenGL all-white-export history (time-domain
+    # canvas); export tests must verify PIXELS, not just geometry
+    # (pattern: test_pg_timedomain_canvas.py:1228 writes the rendered
+    # offscreen output to /tmp for human inspection).
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True, cmap='turbo',
+    )
+    canvas.show()
+    qapp.processEvents()
+    pix = canvas.grab_pixmap(scale=2.0)
+    assert pix is not None and not pix.isNull()
+    out_path = "/tmp/pg_heatmap_grab_pixmap.png"
+    assert pix.save(out_path), f"failed to write screenshot to {out_path!r}"
+    # The heatmap fill spans the plot area; sample a 3x3 grid around the
+    # image center — at least one sample must be a non-white colormap
+    # pixel (turbo's low end is dark blue, its peak red; the white
+    # GraphicsLayoutWidget background would mean a blank export).
+    img = pix.toImage()
+    w, h = img.width(), img.height()
+    samples = [
+        img.pixelColor(int(w * fx), int(h * fy))
+        for fx in (0.35, 0.45, 0.55)
+        for fy in (0.35, 0.45, 0.55)
+    ]
+    assert any(
+        (c.red(), c.green(), c.blue()) != (255, 255, 255) for c in samples
+    ), "center region of the exported heatmap is all white"
+    canvas.hide()
+
+
+def test_grab_pixmap_degenerate_fallback_is_unscaled_1x1(canvas, monkeypatch):
+    # Lesson 2026-04-25-tightbbox-survives-offscreen-qt: the 1x1
+    # degenerate fallback must stay 1x1 regardless of requested scale
+    # (precedent: test_hidpi_grab_preserves_offscreen_fallback,
+    # test_pg_timedomain_canvas.py:4301 — force grab() null).
+    from PyQt5.QtGui import QPixmap
+
+    monkeypatch.setattr(canvas._glw, "grab", lambda *a, **k: QPixmap())
+    pix = canvas.grab_pixmap(scale=2.0)
+    assert pix is not None
+    assert not pix.isNull(), "fallback pixmap must not be null"
+    assert (pix.width(), pix.height()) == (1, 1), (
+        f"expected un-scaled 1x1 fallback, got {pix.width()}x{pix.height()}"
+    )
+
+
 def test_colorbar_rounding_adapts_to_level_span(canvas):
     # Default ColorBarItem rounding=1 snaps drags to whole units and
     # enforces a minimum 1-unit span — unusable when the full linear

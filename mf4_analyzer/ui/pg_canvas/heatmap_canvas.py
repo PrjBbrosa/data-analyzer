@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QRectF, Qt, pyqtSignal
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 
@@ -292,3 +293,33 @@ class PgHeatmapCanvas(QWidget):
     def _on_cbar_levels(self, bar) -> None:
         lo, hi = bar.levels()
         self.levels_changed.emit(float(lo), float(hi))
+
+    # ------------------------------------------------------------------
+    def grab_pixmap(self, scale: float = 2.0) -> QPixmap:
+        """Snapshot of the canvas for copy/export.
+
+        Consumed by ``chart_stack._grab_pixmap_hidpi`` (chart_stack.py:30)
+        as its first-preference branch. Uses ``QWidget.grab()`` + smooth
+        magnification rather than ``QWidget.render(QPainter)`` with a
+        scale transform: a scaled render() clips to the widget rect in
+        device pixels, exporting only the top-left quadrant at 2x
+        (verified offscreen, Qt 5.15.14). grab() is also the
+        realizability probe (lesson
+        2026-04-25-tightbbox-survives-offscreen-qt); pattern mirrors
+        PgLineCanvas.grab_pixmap (line_canvas.py:209) and
+        Renderer.grab_pixmap / _grab_widget_scaled (renderer.py:283).
+        Callers must check ``pix.isNull()`` — the degenerate 1x1
+        fallback is never scaled up.
+        """
+        base = self._glw.grab()
+        if base.isNull() or base.width() <= 0 or base.height() <= 0:
+            fallback = QPixmap(1, 1)
+            fallback.fill(Qt.transparent)
+            return fallback
+        if scale <= 1.0:
+            return base
+        return base.scaled(
+            int(round(base.width() * scale)),
+            int(round(base.height() * scale)),
+            Qt.KeepAspectRatio, Qt.SmoothTransformation,
+        )
