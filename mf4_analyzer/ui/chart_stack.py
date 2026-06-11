@@ -276,7 +276,7 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as Navigatio
 import qtawesome as qta
 
 from ..ui_kit.icons import Icons
-from .canvases import PlotCanvas, SpectrogramCanvas
+from .canvases import PlotCanvas
 from . import hints
 from .pg_canvases import TimeDomainCanvasPG
 from .pg_canvas.heatmap_canvas import PgHeatmapCanvas
@@ -1613,20 +1613,6 @@ class TimeChartCard(_ChartCard):
         self._refresh_hint()
 
 
-class SpectrogramChartCard(_ChartCard):
-    """Spectrogram (FFT vs Time) chart card. Adds a spectrogram-specific
-    bottom-bar hint when the toolbar isn't in pan/zoom — guides the user to
-    click on the spectrogram to surface the per-frame frequency slice."""
-
-    def __init__(self, canvas, parent=None, annotations=False):
-        super().__init__(
-            canvas,
-            parent,
-            annotations=annotations,
-            chart_mode='fft_time',
-        )
-
-
 class ChartStack(QWidget):
     mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
@@ -1649,7 +1635,7 @@ class ChartStack(QWidget):
         self.stack = QStackedWidget(self)
         self.canvas_time = TimeDomainCanvasPG(self)
         self.canvas_fft = PlotCanvas(self)
-        self.canvas_fft_time = SpectrogramCanvas(self)
+        self.canvas_fft_time = PgHeatmapCanvas(self, with_slice=True)
         self.canvas_order = PgHeatmapCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
         self._primary_plot_mode = self._time_card.plot_mode()
@@ -1692,8 +1678,10 @@ class ChartStack(QWidget):
             annotations=True,
             chart_mode='fft',
         )
-        self._fft_time_card = SpectrogramChartCard(
-            self.canvas_fft_time, annotations=True,
+        self._fft_time_card = _ChartCard(
+            self.canvas_fft_time,
+            annotations=True,
+            chart_mode='fft_time',
         )
         self._order_card = _ChartCard(
             self.canvas_order,

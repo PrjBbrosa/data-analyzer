@@ -1,12 +1,15 @@
 """Tests for the matplotlib canvases that remain on the FFT/time path:
-``SpectrogramCanvas`` layout/range controls, ``TimeDomainCanvas``
-dual-cursor + overlay selection, and the shared dual-cursor HTML helper.
+``TimeDomainCanvas`` dual-cursor + overlay selection, and the shared
+dual-cursor HTML helper.
 
 The order heatmap moved to ``PgHeatmapCanvas`` (M5 renderer swap); its
 amplitude-mode / dB / colorbar behaviour is verified in
 ``tests/ui/test_pg_heatmap_canvas.py`` and the M6 visual-acceptance gate,
 so the old ``PlotCanvas.plot_or_update_heatmap`` tests were removed with
-that method.
+that method. FFT-vs-Time also moved to ``PgHeatmapCanvas(with_slice=True)``
+(M9 renderer swap); the old ``SpectrogramCanvas`` ``_ax_spec`` / ``_ax_slice``
+/ ``_colorbar`` gridspec tests were matplotlib-internal and are covered for
+the pg canvas in ``tests/ui/test_pg_heatmap_canvas.py``.
 """
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -17,54 +20,9 @@ from types import SimpleNamespace
 
 from mf4_analyzer.ui.canvases import (
     PlotCanvas,
-    SpectrogramCanvas,
     TimeDomainCanvas,
     _format_dual_html,
 )
-
-
-def test_spectrogram_manual_x_range_controls_time_axis(qapp):
-    """FFT Time manual X controls are time-axis limits, not frequency limits."""
-    canvas = SpectrogramCanvas()
-    result = SimpleNamespace(
-        times=np.array([0.0, 1.0, 2.0, 3.0]),
-        frequencies=np.array([0.0, 10.0, 20.0]),
-        amplitude=np.ones((3, 4), dtype=float),
-        params=SimpleNamespace(db_reference=1.0),
-    )
-
-    canvas.plot_result(
-        result,
-        amplitude_mode='amplitude',
-        x_auto=False,
-        x_min=1.0,
-        x_max=2.0,
-    )
-
-    assert canvas._ax_spec.get_xlim() == pytest.approx((1.0, 2.0))
-
-
-def test_spectrogram_layout_uses_right_canvas_and_aligns_axes(qtbot):
-    canvas = SpectrogramCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(1400, 800)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-    result = SimpleNamespace(
-        times=np.linspace(0.0, 40.0, 64),
-        frequencies=np.linspace(0.0, 50.0, 32),
-        amplitude=np.ones((32, 64), dtype=float),
-        params=SimpleNamespace(db_reference=1.0),
-    )
-
-    canvas.plot_result(result)
-    canvas.draw()
-
-    spec_pos = canvas._ax_spec.get_position()
-    slice_pos = canvas._ax_slice.get_position()
-    cbar_pos = canvas._colorbar.ax.get_position()
-    assert abs(spec_pos.x1 - slice_pos.x1) < 0.01
-    assert cbar_pos.x1 > 0.93
 
 
 def test_dual_cursor_html_labels_endpoint_delta_with_hollow_triangle():

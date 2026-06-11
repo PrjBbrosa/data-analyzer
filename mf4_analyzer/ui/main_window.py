@@ -18,64 +18,12 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QStatusBar,
 )
-from PyQt5.QtCore import QTimer, QObject, QThread, pyqtSignal
+from PyQt5.QtCore import QTimer, QThread
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
 from ..signal import FFTAnalyzer
 from .canvases import CHART_TIGHT_LAYOUT_KW
 from .. import app_meta
-
-
-class FFTTimeWorker(QObject):
-    """Run :class:`SpectrogramAnalyzer.compute` on a worker QThread.
-
-    Plan Task 7. The worker is a plain ``QObject`` (NOT a QThread
-    subclass); the canonical Qt pattern is to instantiate the worker on
-    the main thread, ``moveToThread(thread)``, and connect
-    ``thread.started`` to ``worker.run``. ``finished``/``failed`` both
-    quit the thread; the cleanup chain
-    (``thread.finished -> worker.deleteLater`` /
-    ``thread.deleteLater``) keeps the QThread from leaking.
-
-    The analyzer's ``compute()`` polls ``cancel_token`` at the top of
-    every frame (see ``signal/spectrogram.py``); flipping
-    ``self._cancelled`` via :meth:`cancel` is the only way to stop a
-    running compute mid-loop.
-    """
-
-    progress = pyqtSignal(int, int)
-    finished = pyqtSignal(object)
-    failed = pyqtSignal(str)
-
-    def __init__(self, sig, t, params, channel_name, unit):
-        super().__init__()
-        self.sig = sig
-        self.t = t
-        self.params = params
-        self.channel_name = channel_name
-        self.unit = unit
-        self._cancelled = False
-
-    def cancel(self):
-        """Flip the cancel flag; ``compute`` polls it at every frame."""
-        self._cancelled = True
-
-    def run(self):
-        from ..signal import SpectrogramAnalyzer
-        try:
-            result = SpectrogramAnalyzer.compute(
-                self.sig,
-                self.t,
-                self.params,
-                channel_name=self.channel_name,
-                unit=self.unit,
-                progress_callback=self.progress.emit,
-                cancel_token=lambda: self._cancelled,
-            )
-        except Exception as exc:
-            self.failed.emit(str(exc))
-        else:
-            self.finished.emit(result)
 
 
 class MainWindow(QMainWindow):
@@ -416,7 +364,7 @@ class MainWindow(QMainWindow):
         self.inspector.fft_time_signal_changed.connect(
             self._on_fft_time_signal_changed
         )
-        # Hover readout: surface SpectrogramCanvas.cursor_info in the
+        # Hover readout: surface PgHeatmapCanvas.cursor_info in the
         # status bar (reviewer Important #1; design §6.4 mouse-move
         # readout). Pattern matches canvas_time.cursor_info → ChartStack
         # CursorPill — the pill is gated to time mode, so the spectrogram
@@ -2537,11 +2485,12 @@ class MainWindow(QMainWindow):
         """Stop the FFT-vs-Time worker before the window is destroyed.
 
         ``_fft_time_thread + _fft_time_worker`` is a ``QObject + QThread``
-        pair (see :class:`FFTTimeWorker` / :meth:`do_fft_time`). The
-        worker has ``cancel()`` (sets a flag the analyzer polls per
-        frame); the thread is what owns ``isRunning()``. The wired
-        ``thread.finished -> deleteLater`` chain handles cleanup — we
-        just need to give it time to run via ``quit() + wait()``.
+        pair (an :class:`AnalysisComputeWorker` running the spectrogram
+        job; see :meth:`do_fft_time`). The worker has ``cancel()`` (flips
+        the flag its ``cancelled()`` token returns, which the analyzer
+        polls per frame); the thread is what owns ``isRunning()``. The
+        wired ``thread.finished -> deleteLater`` chain handles cleanup —
+        we just need to give it time to run via ``quit() + wait()``.
         """
         fft_thread = getattr(self, '_fft_time_thread', None)
         fft_worker = getattr(self, '_fft_time_worker', None)
@@ -2557,11 +2506,16 @@ class MainWindow(QMainWindow):
                 fft_thread.terminate()
                 fft_thread.wait(500)
 
-        # Order (COT) worker: same drain. The COT job does not poll
-        # ``cancelled()`` (no per-frame poll point), so cancel() is a
-        # no-op flag and the terminate() fallback is the real backstop:
-        # without it, a compute that outlives wait(2000) leaves the
-        # ``QThread(self)`` running at destruction → Qt5 qFatal crash.
+        # Order (COT) worker: same drain. The COT job now polls
+        # ``cancelled()`` per frame (``do_order_time`` passes
+        # ``cancel_token=worker.cancelled`` into ``COTOrderAnalyzer.compute``),
+        # so cancel() takes effect within a frame and the cooperative
+        # ``quit() + wait(2000)`` is the normal exit path. The terminate()
+        # fallback is only a GIL-thread / Windows backstop: on macOS
+        # ``terminate()`` never lands on a GIL-held numpy worker (see
+        # pyqt-ui/2026-06-11-qthread-terminate-noop-on-gil-bound-macos),
+        # but it still guards a Qt5 qFatal crash if a non-cooperative
+        # compute ever outlives wait(2000) at destruction.
         order_thread = getattr(self, '_order_thread', None)
         order_worker = getattr(self, '_order_worker', None)
         if order_thread is not None and order_thread.isRunning():
@@ -2697,7 +2651,8 @@ class MainWindow(QMainWindow):
 
         ``force=True`` bypasses the LRU cache; ``force=False`` consults
         the cache first. Cache hits stay synchronous (no thread).
-        Cache misses dispatch :class:`FFTTimeWorker` on a ``QThread``;
+        Cache misses dispatch an :class:`AnalysisComputeWorker` (running
+        the spectrogram compute job) on a ``QThread``;
         results land in :meth:`_on_fft_time_finished`, errors in
         :meth:`_on_fft_time_failed`. There is no synchronous fallback.
 
@@ -2781,7 +2736,17 @@ class MainWindow(QMainWindow):
             'cache_key': key,
             'render_params': p,
         }
-        worker = FFTTimeWorker(sig, t, params, channel_name=ch, unit=unit)
+        from .analysis_worker import AnalysisComputeWorker
+
+        def job(worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit):
+            from ..signal import SpectrogramAnalyzer
+            return SpectrogramAnalyzer.compute(
+                _sig, _t, _params, channel_name=_ch, unit=_unit,
+                progress_callback=worker.progress.emit,
+                cancel_token=worker.cancelled,
+            )
+
+        worker = AnalysisComputeWorker(job)
         thread = QThread(self)
         worker.moveToThread(thread)
         # Standard QThread cleanup chain. The order matters:
@@ -2839,10 +2804,10 @@ class MainWindow(QMainWindow):
         )
 
     def _on_fft_time_cursor_info(self, text):
-        """Surface SpectrogramCanvas hover readout in the status bar.
+        """Surface PgHeatmapCanvas hover readout in the status bar.
 
-        Empty text (cursor outside ``_ax_spec`` or before a result is
-        plotted) restores the active-file summary so the bar does not
+        Empty text (cursor outside the heatmap scene or before a result
+        is plotted) restores the active-file summary so the bar does not
         remain blank. Reviewer Important #1.
         """
         if text:
@@ -2857,7 +2822,7 @@ class MainWindow(QMainWindow):
 
         Runs on the main thread (Qt cross-thread signals default to
         ``QueuedConnection``), so it is safe to touch the LRU cache and
-        the matplotlib canvas here.
+        the pyqtgraph canvas here.
         """
         pending = getattr(self, '_fft_time_pending', None) or {}
         key = pending.get('cache_key')
@@ -2930,7 +2895,7 @@ class MainWindow(QMainWindow):
         ``mode='full'`` grabs the whole canvas (spectrogram + slice +
         colorbar). ``mode='main'`` grabs only the spectrogram + colorbar
         region; under headless Qt platforms the canvas falls back to
-        the full grab transparently (see SpectrogramCanvas.grab_main_chart).
+        the full grab transparently (see PgHeatmapCanvas.grab_main_chart).
 
         Guards on ``canvas_fft_time.has_result()`` so an empty canvas
         cannot be pushed to the clipboard — a warning toast surfaces

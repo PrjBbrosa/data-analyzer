@@ -215,98 +215,10 @@ def test_plot_canvas_hover_short_circuit_during_drag(qtbot):
     # Cursor should NOT be PointingHandCursor since drag is active
     assert canvas.cursor().shape() != Qt.PointingHandCursor
 
-
-def test_spectrogram_canvas_dblclick_main_axis_opens_chart_options(qtbot, monkeypatch):
-    from mf4_analyzer.ui.canvases import SpectrogramCanvas
-    canvas = SpectrogramCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(800, 600)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-    canvas.draw()
-
-    # SpectrogramCanvas creates 2 axes (spec + slice) via gridspec; both
-    # should accept dblclick.
-    from mf4_analyzer.ui import _axis_interaction
-    hits = []
-
-    def fake_edit(parent, ax_):
-        hits.append(ax_)
-        return True
-
-    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
-                        fake_edit, raising=False)
-
-    # Force the canvas to build its 2-axes layout (plot_result requires a
-    # SpectrogramResult; we instead build the gridspec directly so the
-    # test exercises only the dblclick wiring, not the rendering path).
-    canvas._ax_spec = canvas.fig.add_subplot(2, 1, 1)
-    canvas._ax_slice = canvas.fig.add_subplot(2, 1, 2)
-    canvas.draw()
-
-    main_ax = canvas._ax_spec
-    bbox = main_ax.get_window_extent()
-    from matplotlib.backend_bases import MouseEvent
-    e = MouseEvent('button_press_event', canvas, x=bbox.x0 - 30,
-                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
-    canvas.callbacks.process('button_press_event', e)
-    assert any(ax is main_ax for ax in hits)
-
-
-def test_spectrogram_canvas_dblclick_slice_axis_opens_chart_options(qtbot, monkeypatch):
-    from mf4_analyzer.ui.canvases import SpectrogramCanvas
-    canvas = SpectrogramCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(800, 600)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-    canvas.draw()
-    from mf4_analyzer.ui import _axis_interaction
-    hits = []
-    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
-                        lambda p, ax: (hits.append(ax), True)[1],
-                        raising=False)
-
-    canvas._ax_spec = canvas.fig.add_subplot(2, 1, 1)
-    canvas._ax_slice = canvas.fig.add_subplot(2, 1, 2)
-    canvas.draw()
-
-    slice_ax = canvas._ax_slice
-    bbox = slice_ax.get_window_extent()
-    from matplotlib.backend_bases import MouseEvent
-    e = MouseEvent('button_press_event', canvas, x=bbox.x0 - 30,
-                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
-    canvas.callbacks.process('button_press_event', e)
-    assert any(ax is slice_ax for ax in hits)
-
-
-def test_spectrogram_canvas_dblclick_inside_slice_axis_opens_chart_options(qtbot, monkeypatch):
-    from mf4_analyzer.ui.canvases import SpectrogramCanvas
-    canvas = SpectrogramCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(800, 600)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-    canvas.draw()
-    from mf4_analyzer.ui import _axis_interaction
-    hits = []
-    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
-                        lambda p, ax: (hits.append(ax), True)[1],
-                        raising=False)
-
-    canvas._ax_spec = canvas.fig.add_subplot(2, 1, 1)
-    canvas._ax_slice = canvas.fig.add_subplot(2, 1, 2)
-    canvas.draw()
-
-    slice_ax = canvas._ax_slice
-    bbox = slice_ax.get_window_extent()
-    from matplotlib.backend_bases import MouseEvent
-    e = MouseEvent('button_press_event', canvas, x=(bbox.x0 + bbox.x1) / 2,
-                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
-    e.inaxes = slice_ax
-    canvas.callbacks.process('button_press_event', e)
-    assert any(ax is slice_ax for ax in hits)
-
-    hits.clear()
-    canvas.open_chart_options_dialog()
-    assert hits == [slice_ax]
+# M9 retired the matplotlib SpectrogramCanvas (FFT-vs-Time moved to
+# PgHeatmapCanvas with_slice=True). Its three axis-dblclick ->
+# edit_chart_options_dialog tests drove matplotlib MouseEvent through
+# canvas.callbacks.process on _ax_spec/_ax_slice gridspec axes -- a
+# matplotlib-only event surface with no equivalent on the pyqtgraph
+# canvas, so they were removed rather than stubbed (see
+# pyqt-ui/2026-05-28-mpl-event-coupled-tests-survive-renderer-swap).

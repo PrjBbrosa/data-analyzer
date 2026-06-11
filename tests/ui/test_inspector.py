@@ -1552,31 +1552,13 @@ def test_fft_time_defaults_match_requested_screenshot(qtbot):
     )
 
 
-def test_spectrogram_canvas_uses_bilinear_interpolation(qtbot):
-    """SpectrogramCanvas.plot_result must build the imshow with
-    interpolation='bilinear' so the FFT-vs-Time render is visually
-    smooth without any DSP-side change.
-    """
-    import numpy as np
-    from mf4_analyzer.signal.spectrogram import (
-        SpectrogramParams, SpectrogramResult,
-    )
-    from mf4_analyzer.ui.canvases import SpectrogramCanvas
-    canvas = SpectrogramCanvas()
-    qtbot.addWidget(canvas)
-    result = SpectrogramResult(
-        times=np.array([0.0, 0.1, 0.2]),
-        frequencies=np.array([0.0, 50.0, 100.0]),
-        amplitude=np.ones((3, 3), dtype=np.float32),
-        params=SpectrogramParams(fs=200.0, nfft=8),
-        channel_name='demo',
-    )
-    canvas.plot_result(result, amplitude_mode='amplitude')
-    im = canvas._ax_spec.images[0]
-    assert im.get_interpolation() == 'bilinear', (
-        f"SpectrogramCanvas imshow interpolation = "
-        f"{im.get_interpolation()!r}; expected 'bilinear'."
-    )
+# M9 retired the matplotlib SpectrogramCanvas (FFT-vs-Time moved to
+# PgHeatmapCanvas with_slice=True). The bilinear-imshow-interpolation test
+# asserted a matplotlib-only render attribute
+# (canvas._ax_spec.images[0].get_interpolation()) that has no equivalent on
+# the pyqtgraph ImageItem, so it was removed rather than stubbed. The pg
+# canvas's render is verified in tests/ui/test_pg_heatmap_canvas.py and the
+# M6/M8 visual-acceptance gate.
 
 
 # ---- Wave 2 / SP2: FFT 1D Welch averaging + linear/dB toggle ----

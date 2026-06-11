@@ -722,12 +722,15 @@ def test_returning_to_time_mode_preserves_xlim(qapp, qtbot, loaded_csv):
 
 def test_main_window_promotes_fft_time_canvas(qtbot):
     from mf4_analyzer.ui.main_window import MainWindow
-    from mf4_analyzer.ui.canvases import SpectrogramCanvas
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
 
     win = MainWindow()
     qtbot.addWidget(win)
 
-    assert isinstance(win.canvas_fft_time, SpectrogramCanvas)
+    # M9: FFT-vs-Time moved from the matplotlib SpectrogramCanvas to
+    # PgHeatmapCanvas(with_slice=True). The slice row must be present.
+    assert isinstance(win.canvas_fft_time, PgHeatmapCanvas)
+    assert win.canvas_fft_time._with_slice is True
     assert win.canvas_fft_time is win.chart_stack.canvas_fft_time
 
 
@@ -900,9 +903,10 @@ def test_fft_time_failed_compute_keeps_old_chart(qtbot, monkeypatch):
         seed, amplitude_mode='amplitude', cmap='turbo', z_auto=True,
         freq_range=None,
     )
-    assert win.canvas_fft_time._ax_spec is not None
-    images_before = len(win.canvas_fft_time._ax_spec.images)
-    assert images_before >= 1
+    # M9: pg canvas exposes has_result() + _result instead of mpl
+    # ``_ax_spec.images`` — the behaviour under test is "a failed recompute
+    # leaves the previously rendered result on screen".
+    assert win.canvas_fft_time.has_result()
 
     # Force the analyzer to fail. Use force=True to skip the cache.
     def boom(*a, **kw):
@@ -931,9 +935,8 @@ def test_fft_time_failed_compute_keeps_old_chart(qtbot, monkeypatch):
     # main thread (clears _fft_time_thread to None).
     qtbot.waitUntil(lambda: win._fft_time_thread is None, timeout=5000)
 
-    # The old chart is still on the canvas.
-    assert win.canvas_fft_time._ax_spec is not None
-    assert len(win.canvas_fft_time._ax_spec.images) == images_before
+    # The old chart is still on the canvas (no clear() on failure).
+    assert win.canvas_fft_time.has_result()
     # The original SpectrogramResult object is still the canvas's
     # ``_result`` (clear() would have set it to None).
     assert win.canvas_fft_time._result is seed
@@ -1148,36 +1151,50 @@ def test_fft_time_rebuild_popover_resolves_signal_via_fft_time_ctx(
 # ---------------------------------------------------------------------------
 
 
+def _fft_time_spectrogram_job(sig, t, params, ch='ch', unit='V'):
+    """Build the same spectrogram closure ``do_fft_time`` now hands to
+    ``AnalysisComputeWorker`` (M9). The job receives the worker so it can
+    relay progress and poll ``worker.cancelled`` as its cancel token —
+    identical wiring to production.
+    """
+    def job(worker, _sig=sig, _t=t, _params=params, _ch=ch, _unit=unit):
+        from mf4_analyzer.signal import SpectrogramAnalyzer
+        return SpectrogramAnalyzer.compute(
+            _sig, _t, _params, channel_name=_ch, unit=_unit,
+            progress_callback=worker.progress.emit,
+            cancel_token=worker.cancelled,
+        )
+    return job
+
+
 def test_fft_time_worker_emits_finished(qtbot):
-    """Happy-path smoke: a small spectrogram run on a worker QThread
-    must emit ``finished`` with a SpectrogramResult-like payload.
+    """Happy-path smoke: the M9 FFT-vs-Time spectrogram job, run on an
+    ``AnalysisComputeWorker`` + QThread, must emit ``finished`` with a
+    SpectrogramResult payload.
 
     ``thread.quit`` is thread-safe (per Qt docs); we wire it with a
     DirectConnection so it fires on the worker thread without going
     through the main event loop. Without that, ``thread.wait(5000)``
     blocks the main thread, the queued ``finished -> thread.quit`` slot
-    cannot drain, and the wait deadlocks.
+    cannot drain, and the wait deadlocks (see
+    pyqt-ui/2026-04-25-qthread-wait-deadlocks-queued-quit).
     """
     import numpy as np
     from PyQt5.QtCore import Qt, QThread
     from mf4_analyzer.signal.spectrogram import SpectrogramParams
-    from mf4_analyzer.ui.main_window import FFTTimeWorker
+    from mf4_analyzer.ui.analysis_worker import AnalysisComputeWorker
 
     fs = 1000.0
     nfft = 256
     t = np.arange(2048) / fs
     sig = np.sin(2 * np.pi * 100 * t)
-    worker = FFTTimeWorker(sig, t, SpectrogramParams(fs=fs, nfft=nfft), 'ch', 'V')
+    worker = AnalysisComputeWorker(
+        _fft_time_spectrogram_job(sig, t, SpectrogramParams(fs=fs, nfft=nfft))
+    )
     thread = QThread()
     worker.moveToThread(thread)
     thread.started.connect(worker.run)
     results = []
-    # ``finished -> results.append`` is allowed to be queued (we read
-    # the list after thread.wait returns, so we just need the emission
-    # itself to have happened — Qt buffers queued emissions on the
-    # receiver thread's queue once the connection fires the post).
-    # But to actually USE that buffer here we must let the main loop
-    # run; simpler: store via a DirectConnection lambda.
     worker.finished.connect(lambda r: results.append(r), Qt.DirectConnection)
     worker.finished.connect(thread.quit, Qt.DirectConnection)
 
@@ -1191,7 +1208,8 @@ def test_fft_time_worker_emits_finished(qtbot):
 
 
 def test_fft_time_worker_cancels(qtbot):
-    """``worker.cancel()`` flips the cancel token; the analyzer raises
+    """``worker.cancel()`` flips the cancel token the spectrogram job
+    polls via ``worker.cancelled``; the analyzer raises
     ``RuntimeError('spectrogram computation cancelled')`` mid-loop and
     the worker re-emits the message via ``failed``.
 
@@ -1201,15 +1219,17 @@ def test_fft_time_worker_cancels(qtbot):
     import numpy as np
     from PyQt5.QtCore import Qt, QThread
     from mf4_analyzer.signal.spectrogram import SpectrogramParams
-    from mf4_analyzer.ui.main_window import FFTTimeWorker
+    from mf4_analyzer.ui.analysis_worker import AnalysisComputeWorker
 
     fs = 1000.0
     nfft = 64
     n = 200_000  # many frames so cancel has time to fire
     t = np.arange(n) / fs
     sig = np.sin(2 * np.pi * 100 * t)
-    worker = FFTTimeWorker(
-        sig, t, SpectrogramParams(fs=fs, nfft=nfft, overlap=0.9), 'ch', 'V'
+    worker = AnalysisComputeWorker(
+        _fft_time_spectrogram_job(
+            sig, t, SpectrogramParams(fs=fs, nfft=nfft, overlap=0.9)
+        )
     )
     thread = QThread()
     worker.moveToThread(thread)

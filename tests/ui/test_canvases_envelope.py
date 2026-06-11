@@ -1,5 +1,4 @@
-"""Tests for the module-level ``build_envelope`` helper and the
-``SpectrogramCanvas._color_limits`` z-range signature.
+"""Tests for the module-level ``build_envelope`` helper.
 
 Covers Task 4 of the order-canvas-perf plan
 (`docs/superpowers/plans/2026-04-26-order-canvas-perf-plan.md`):
@@ -82,28 +81,10 @@ def test_timedomain_envelope_thin_wrapper_does_not_accept_none(qtbot):
 
 
 # -------------------------------------------------------------------
-# Wave 5: SpectrogramCanvas color-limit signatures
+# M9 retired the matplotlib SpectrogramCanvas (FFT-vs-Time moved to
+# PgHeatmapCanvas with_slice=True). Its ``_color_limits`` z-range helper
+# test was removed with the class; the pg canvas derives z-levels inline
+# in plot_result (z_floor/z_ceiling clip + nanmin/nanmax for z_auto) and
+# the rendered levels are pinned in tests/ui/test_pg_heatmap_canvas.py
+# (``_img.getLevels()`` equals the explicit window).
 # -------------------------------------------------------------------
-
-
-def test_color_limits_z_explicit_floor_ceiling():
-    """_color_limits accepts (z_auto=False, z_floor, z_ceiling) and returns them.
-    _color_limits accepts z_auto=True and returns (nanmin, nanmax)."""
-    import numpy as np
-    from mf4_analyzer.ui.canvases import SpectrogramCanvas
-
-    sc = SpectrogramCanvas()
-    z = np.array([[-50, -10, -5], [-100, -20, 0]], dtype=float)
-
-    vmin, vmax = sc._color_limits(
-        z, amplitude_mode='amplitude_db',
-        z_auto=False, z_floor=-30.0, z_ceiling=0.0,
-    )
-    assert (vmin, vmax) == (-30.0, 0.0)
-
-    vmin, vmax = sc._color_limits(
-        z, amplitude_mode='amplitude_db', z_auto=True,
-        z_floor=999, z_ceiling=999,  # ignored
-    )
-    assert vmin == -100.0
-    assert vmax == 0.0
