@@ -2413,10 +2413,10 @@ class MainWindow(QMainWindow):
             t_arr = np.arange(len(t_arr), dtype=float) / float(fs)
         # M5: COT moved off the GUI thread (AnalysisComputeWorker +
         # QThread, same pattern as do_fft_time). Re-entry guard mirrors
-        # the FFT-vs-Time one; the COT compute does not poll
-        # ``worker.cancelled()`` (the algorithm has no per-frame poll
-        # point), so cancel is best-effort and closeEvent's
-        # wait(2000) + terminate() drain is the backstop.
+        # the FFT-vs-Time one; the COT compute polls ``worker.cancelled``
+        # once per frame (cancel_token), so closeEvent's cancel() lands
+        # cross-platform — terminate() is only a Windows backstop (see
+        # pyqt-ui/2026-06-11-qthread-terminate-noop-on-gil-bound-macos).
         if getattr(self, '_order_thread', None) is not None and self._order_thread.isRunning():
             self.statusBar.showMessage("正在计算…")
             return
@@ -2439,7 +2439,8 @@ class MainWindow(QMainWindow):
         from .analysis_worker import AnalysisComputeWorker
 
         def job(worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p):
-            return COTOrderAnalyzer.compute(_sig, _rpm, _t, _p)
+            return COTOrderAnalyzer.compute(_sig, _rpm, _t, _p,
+                                            cancel_token=worker.cancelled)
 
         worker = AnalysisComputeWorker(job)
         thread = QThread(self)
