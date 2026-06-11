@@ -136,8 +136,18 @@ class PgHeatmapCanvas(QWidget):
         self._img.setLevels((vmin, vmax))
 
         if self._cbar is None:
+            # colorMapMenu=False suppresses pg's built-in right-click
+            # ColorMapMenu on the bar. That menu (verified live: actions
+            # None/local/cet/matplotlib under a real right-click) lets the
+            # user swap the colormap straight on the bar, desyncing it from
+            # the Inspector cmap dropdown — a double source of truth. The
+            # host ViewBox's setMenuEnabled(False) does NOT silence it
+            # (lesson 2026-06-11-colorbaritem-label-axis-and-silent-setlevels);
+            # the bar's own mouseClickEvent short-circuits only when
+            # colorMapMenu is False (pg 0.14.0 ColorBarItem.mouseClickEvent).
             self._cbar = pg.ColorBarItem(
                 colorMap=cm, interactive=True, label=cbar_label,
+                colorMapMenu=False,
             )
             self._cbar.setImageItem(self._img, insert_in=self._plot)
             self._cbar.sigLevelsChanged.connect(self._on_cbar_levels)
@@ -233,6 +243,26 @@ class PgHeatmapCanvas(QWidget):
         for axis, density in ((self._axis_bottom, x_d), (self._axis_left, y_d)):
             axis.setStyle(maxTickLevel=0)
             axis.setTickDensity(density)
+
+    def reset_view_to_data_extents(self) -> None:
+        """Toolbar Home helper: restore the view to the full data extents.
+
+        ``PgNavigationToolbar.home`` (chart_stack.py:719) prefers a canvas
+        ``reset_view_to_data_extents`` and otherwise falls back to a
+        ``axes_list``/``_channel_lines`` walk that the heatmap canvas has
+        no surface for — so without this method the Home button is inert on
+        the order map (measured: a zoomed view was unchanged by home()).
+        Native pg pan/wheel-zoom and the ViewBox "View All" still work; this
+        wires the most discoverable reset affordance (the toolbar Home
+        button) to the same full-extent restore. Falls back to pg's
+        ``autoRange`` when no result has been plotted yet.
+        """
+        if self._extents is None:
+            self._plot.vb.autoRange()
+            return
+        x0, x1, y0, y1 = self._extents
+        self._plot.setXRange(float(x0), float(x1), padding=0)
+        self._plot.setYRange(float(y0), float(y1), padding=0)
 
     # ------------------------------------------------------------------
     # remarks (annotation parity with the matplotlib canvases)

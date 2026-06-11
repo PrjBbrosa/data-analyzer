@@ -200,20 +200,6 @@ def _apply_heatmap_axes_style(ax):
         spine.set_visible(False)
 
 
-def _apply_heatmap_colorbar_style(cbar):
-    if cbar is None:
-        return
-    cax = cbar.ax
-    cax.grid(False)
-    cax.xaxis.set_visible(False)
-    cax.tick_params(axis='x', which='both', bottom=False, top=False,
-                    labelbottom=False, labeltop=False)
-    for spine in cax.spines.values():
-        spine.set_visible(False)
-    if getattr(cbar, 'outline', None) is not None:
-        cbar.outline.set_visible(False)
-
-
 def _split_prefixed_label(text):
     """Return (prefix, rest) for labels shaped like '[filename] channel'.
     Returns (None, text) when the pattern doesn't match."""
@@ -2141,176 +2127,17 @@ class PlotCanvas(FigureCanvas):
         self._scroll_timer = QTimer()
         self._scroll_timer.setSingleShot(True)
         self._scroll_timer.timeout.connect(lambda: self.draw_idle())
-        # Heatmap reuse handles (spec §6.2 / plan T4 step 7).
-        # ``plot_or_update_heatmap`` populates these; ``clear()`` resets
-        # them. Init here so the first call's ``getattr(..., None)`` is
-        # not the only thing keeping the compat-check honest — the
-        # matplotlib-axes-callbacks-lifecycle lesson applies: stale
-        # handles after a structural rebuild silently bypass the
-        # 4-clause check otherwise.
-        self._heatmap_ax = None
-        self._heatmap_im = None
-        self._heatmap_cbar = None
         self._chart_options_ax = None
 
     def clear(self):
         self._remarks = []
         self._line_data = {}
         self._chart_options_ax = None
-        # Reset heatmap handles BEFORE fig.clear() so any caller racing
-        # against a partially-cleared figure sees a consistent "no
-        # heatmap" state. fig.clear() destroys the underlying axes; if
-        # we leave the handles dangling, the next plot_or_update_heatmap
-        # may pass clauses 1-3 of the compat check (handles not None,
-        # in fig.axes if Python still holds the ref) yet operate on a
-        # dead artist.
-        self._heatmap_ax = None
-        self._heatmap_im = None
-        self._heatmap_cbar = None
         self.fig.clear()
         self.fig.set_facecolor(CHART_FACE)
 
     def open_chart_options_dialog(self, ax=None):
-        return _open_chart_options_for_axes(
-            self, ax=ax, preferred=(self._heatmap_ax,)
-        )
-
-    def plot_or_update_heatmap(self, *, matrix, x_extent, y_extent,
-                                x_label, y_label, title,
-                                cmap='turbo', interp='bilinear',
-                                vmin=None, vmax=None,
-                                cbar_label='Amplitude',
-                                amplitude_mode='amplitude',
-                                z_auto=True, z_floor=-30.0, z_ceiling=0.0,
-                                x_auto=True, x_min=0.0, x_max=0.0,
-                                y_auto=True, y_min=0.0, y_max=0.0):
-        """Render a 2-D heatmap; on a compatible second call reuse the
-        existing axes / image / colorbar via ``set_data`` instead of
-        rebuilding (spec §4.2 / §6.2).
-
-        ``matrix`` is shape ``(N_y, N_x)`` matching ``imshow`` row/col
-        layout. ``x_extent`` / ``y_extent`` are ``(min, max)``.
-
-        Wave 5 (2026-04-28): the legacy ``dynamic: str`` API is replaced
-        by explicit ``(z_auto, z_floor, z_ceiling)`` and the new
-        ``(x_auto, x_min, x_max)`` / ``(y_auto, y_min, y_max)`` overrides
-        for caller-driven manual axis ranges. When ``*_auto`` is True the
-        canvas falls back to the data extent (``x_extent`` / ``y_extent``);
-        when False AND ``*_max > *_min`` the override wins on BOTH the
-        fast-reuse path and the rebuild path.
-
-        Compatibility judgement (all 4 must hold to take the
-        ``set_data`` fast path; otherwise fall back to ``clear()`` +
-        rebuild):
-
-        1. Three handles all non-``None``;
-        2. heatmap axes still member of ``fig.axes`` (rules out
-           accidental destruction by external code paths);
-        3. ``len(fig.axes) == 2`` — heatmap + its colorbar exactly,
-           rules out 2-subplot mixed layouts;
-        4. existing image's array shape equals the new matrix shape —
-           ``AxesImage.set_data`` accepts shape changes but downstream
-           extent/clim wiring becomes brittle; we conservatively rebuild
-           in that case.
-
-        Non-uniform-grid warning: ``imshow`` requires a uniform grid on
-        both axes. If a future caller introduces logarithmic RPM bins
-        etc., do NOT call this method — fall back to ``pcolormesh`` or a
-        dedicated canvas.
-        """
-        m = np.asarray(matrix, dtype=float)
-        # dB conversion if requested. Reference = current matrix peak.
-        if amplitude_mode == 'amplitude_db':
-            ref = float(np.nanmax(m))
-            if ref <= 0:
-                m_disp = np.full_like(m, fill_value=-100.0)
-            else:
-                with np.errstate(divide='ignore'):
-                    m_disp = 20.0 * np.log10(np.clip(m, 1e-12, None) / ref)
-            # Wave 5: clip only when the user opts out of z-auto.
-            if not z_auto:
-                m_disp = np.clip(m_disp, float(z_floor), float(z_ceiling))
-            m = m_disp
-            if vmin is None:
-                vmin = float(z_floor) if not z_auto else float(np.nanmin(m))
-            if vmax is None:
-                vmax = float(z_ceiling) if not z_auto else 0.0
-            if 'dB' not in cbar_label:
-                cbar_label = f"{cbar_label} (dB)"
-        else:
-            if vmin is None:
-                vmin = float(np.nanmin(m))
-            if vmax is None:
-                vmax = float(np.nanmax(m))
-
-        existing_ax = getattr(self, '_heatmap_ax', None)
-        existing_im = getattr(self, '_heatmap_im', None)
-        existing_cbar = getattr(self, '_heatmap_cbar', None)
-        compatible = (
-            existing_ax is not None
-            and existing_im is not None
-            and existing_cbar is not None
-            and existing_ax in self.fig.axes
-            and len(self.fig.axes) == 2
-            and existing_im.get_array().shape == m.shape
-        )
-        if compatible:
-            existing_im.set_data(m)
-            existing_im.set_extent([x_extent[0], x_extent[1],
-                                    y_extent[0], y_extent[1]])
-            existing_im.set_cmap(cmap)
-            existing_im.set_interpolation(interp)
-            existing_im.set_clim(vmin, vmax)
-            # Wave 5: respect x_auto/y_auto on the fast-reuse path so a
-            # second compute click does not silently revert user-set
-            # ranges to the auto extent.
-            if x_auto:
-                existing_ax.set_xlim(x_extent)
-            elif x_max > x_min:
-                existing_ax.set_xlim(float(x_min), float(x_max))
-            if y_auto:
-                existing_ax.set_ylim(y_extent)
-            elif y_max > y_min:
-                existing_ax.set_ylim(float(y_min), float(y_max))
-            existing_ax.set_xlabel(x_label)
-            existing_ax.set_ylabel(y_label)
-            existing_ax.set_title(title)
-            existing_cbar.update_normal(existing_im)
-            existing_cbar.set_label(cbar_label)
-            _apply_heatmap_axes_style(existing_ax)
-            _apply_heatmap_colorbar_style(existing_cbar)
-            self.draw_idle()
-            return
-
-        # Incompatible / first call → rebuild from scratch.
-        self.clear()
-        ax = self.fig.add_subplot(1, 1, 1)
-        im = ax.imshow(
-            m, origin='lower', aspect='auto',
-            extent=[x_extent[0], x_extent[1], y_extent[0], y_extent[1]],
-            cmap=cmap, interpolation=interp,
-            vmin=vmin, vmax=vmax,
-        )
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-        ax.set_title(title)
-        cbar = self.fig.colorbar(im, ax=ax, label=cbar_label)
-        _apply_heatmap_axes_style(ax)
-        _apply_heatmap_colorbar_style(cbar)
-        try:
-            self.fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
-        except Exception:
-            pass
-        # Wave 5: caller-driven manual range override on the rebuild
-        # path (after tight_layout so it isn't undone).
-        if not x_auto and x_max > x_min:
-            ax.set_xlim(float(x_min), float(x_max))
-        if not y_auto and y_max > y_min:
-            ax.set_ylim(float(y_min), float(y_max))
-        self._heatmap_ax = ax
-        self._heatmap_im = im
-        self._heatmap_cbar = cbar
-        self.draw_idle()
+        return _open_chart_options_for_axes(self, ax=ax)
 
     def full_reset(self):
         """Clear figure AND remarks/stored-line-data."""
@@ -2437,11 +2264,6 @@ class PlotCanvas(FigureCanvas):
 
         if e.inaxes is None or e.xdata is None:
             return
-        # Skip clicks landing in the heatmap colorbar — single/right
-        # clicks there would otherwise place a remark on the cax or
-        # try to snap to its (non-existent) data.
-        if self._heatmap_cbar is not None and e.inaxes is self._heatmap_cbar.ax:
-            return
         # 找到点击的是哪个axes
         ax_index = -1
         for i, ax in enumerate(self.fig.axes):
@@ -2463,25 +2285,14 @@ class PlotCanvas(FigureCanvas):
             self._add_remark(e.inaxes, ax_index, x, y)
 
     def set_tick_density(self, x, y):
-        cbar_ax = self._heatmap_cbar.ax if self._heatmap_cbar is not None else None
-        axes = [
-            ax for ax in self.fig.axes
-            if ax is not cbar_ax
-        ]
-        for ax in axes:
+        for ax in self.fig.axes:
             _apply_heatmap_axes_style(ax)
             ax.xaxis.set_major_locator(MaxNLocator(nbins=x, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=y, min_n_ticks=3))
-        _apply_heatmap_colorbar_style(self._heatmap_cbar)
         self.draw_idle()
 
     def _on_scroll(self, e):
         if e.inaxes is None: return
-        # Ignore wheel events on the heatmap colorbar — scrolling on the
-        # colorbar would otherwise rewrite its color mapping range and
-        # distort the legend (the user's intent is panning the data axes).
-        if self._heatmap_cbar is not None and e.inaxes is self._heatmap_cbar.ax:
-            return
         ax = e.inaxes;
         step = e.step;
         key = e.key or '';
