@@ -1,6 +1,6 @@
 ---
 role: pyqt-ui
-tags: [renderer-swap, matplotlib, pyqtgraph, event-dispatch, test-coupling, contract-test, production-consumers]
+tags: [renderer-swap, matplotlib, pyqtgraph, event-dispatch, test-coupling, contract-test, production-consumers, toolbar-branch-flip]
 created: 2026-05-28
 updated: 2026-06-11
 cause: insight
@@ -78,3 +78,26 @@ the swapped instance attribute, treat ``getattr``-guarded reads as
 deviations too: a guard prevents a crash but also hides a dead feature,
 so exercise the toolbar buttons on the live canvas, not just the render
 path.
+
+Update 2026-06-11 (M11, ``canvas_fft`` PlotCanvas→PgLineCanvas, plan-1
+closing gate): the FFT canvas was a ``FigureCanvas``, so it took
+``_ChartCard``'s ``else`` toolbar branch (matplotlib ``NavigationToolbar``,
+whose home/pan/zoom drive mpl axes natively). Adding ``PgLineCanvas`` to
+the ``isinstance(canvas, (TimeDomainCanvasPG, PgHeatmapCanvas, ...))``
+branch flips it to ``PgNavigationToolbar`` — so the swap doesn't just lose
+the old toolbar's behavior, it ROUTES THROUGH a different toolbar whose
+``_view_boxes`` walks ``canvas.axes_list`` → ``ax.view_box``. PgLineCanvas
+has no ``axes_list`` (it has two FIXED PlotItems, not dynamic per-channel
+axes), so pan/box-zoom mode was a silent no-op and Home was inert — same
+M6 failure, new trigger. Fix: expose ``axes_list`` as static one-shim-per-
+plot (``_AxisShim.view_box``; no replot re-bind needed since the plots
+never rebuild) AND add ``reset_view_to_data_extents`` (Home restores the
+last ``plot_spectra`` xlim + manual/auto Y). Also: the FFT card's 图表选项
+button silently no-ops in production because PgLineCanvas (like
+PgHeatmapCanvas) has no ``open_chart_options_dialog`` — only
+TimeDomainCanvasPG does; this matches the established order/fft-time
+precedent, not a new regression, but note it. Test coupling this round was
+``win.canvas_fft.fig.axes`` + ``ax.get_ylabel()`` / ``ax.get_xlim()`` in
+two render tests — rewrite to ``canvas._plot_amp.getAxis('left').labelText``
+and ``plot.vb.viewRange()`` (the pg analogues), don't stub ``fig`` on the
+pg widget.
