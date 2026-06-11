@@ -59,6 +59,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [sigmouseclicked-fires-after-viewbox-menu](pyqt-ui/2026-06-11-sigmouseclicked-fires-after-viewbox-menu.md) [pyqtgraph][sigmouseclicked][context-menu][viewbox][event-order] — ev.accept() in a sigMouseClicked slot cannot block the ViewBox menu (emitted after item dispatch); gate via vb.setMenuEnabled or raiseContextMenu override.
 - [qthread-terminate-noop-on-gil-bound-macos](pyqt-ui/2026-06-11-qthread-terminate-noop-on-gil-bound-macos.md) [qthread][terminate][qfatal][macos][gil] — terminate() never lands on GIL-held numpy workers on macOS (Windows-only backstop); calibrate stuck jobs ≥10× wait budget, reproduce exit-134 on old code first.
 - [qgraphicslayoutitem-destructor-self-heals-layout-count](pyqt-ui/2026-06-11-qgraphicslayoutitem-destructor-self-heals-layout-count.md) [qgraphicsgridlayout][destructor][mutation-testing][teardown] — ~QGraphicsLayoutItem self-removes from its parent layout when the item dies, making a lone layout.removeItem unfalsifiable; mutate the teardown GUARD, not the call.
+- [slice-must-read-same-display-matrix-as-heatmap](pyqt-ui/2026-06-11-slice-must-read-same-display-matrix-as-heatmap.md) [pyqtgraph][heatmap][slice][display-space][vmin-vmax][db] — Convert dB ONCE in plot_result, hand the display matrix + explicit vmin/vmax to plot_or_update_heatmap(amplitude_mode='amplitude'); the slice reads _matrix_disp so letting the heatmap re-convert silently desyncs slice vs image levels.
 
 ## refactor
 
