@@ -31,6 +31,27 @@ def _resolve_colormap(name: str) -> pg.ColorMap:
         return pg.colormap.get('viridis')
 
 
+class _AxisShim:
+    """Minimal axis handle exposing ``view_box`` for ``PgNavigationToolbar``.
+
+    The toolbar's ``_view_boxes`` walks ``canvas.axes_list`` and reads
+    ``ax.view_box`` to apply pan/box-zoom modes (``_set_all_mouse_modes``)
+    and to resolve the primary ViewBox (``_primary_view_box``). The heatmap
+    has one fixed PlotItem ViewBox, so one static shim is enough — it never
+    rebuilds, so no replot re-binding is needed.
+
+    Same-source as ``line_canvas._AxisShim`` (M11): kept a private copy here
+    rather than cross-importing, since ``line_canvas`` already imports
+    ``_tick_counts_to_density`` from this module and a reverse import would
+    cycle. Future cleanup may hoist both to a shared ``_shared`` helper.
+    """
+
+    __slots__ = ("view_box",)
+
+    def __init__(self, view_box):
+        self.view_box = view_box
+
+
 def _tick_counts_to_density(x_n: int, y_n: int) -> tuple:
     """Convert inspector tick COUNTS to pg tick-density factors.
 
@@ -74,6 +95,22 @@ class PgHeatmapCanvas(QWidget):
         # matching imshow origin='lower'), col = X.
         self._img.setOpts(axisOrder='row-major')
         self._plot.addItem(self._img)
+
+        # Toolbar contract (PgNavigationToolbar._view_boxes walks axes_list →
+        # ax.view_box to apply pan/box-zoom mode; _primary_view_box reads
+        # axes_list[0].view_box; home() prefers reset_view_to_data_extents).
+        # Without this the order/FFT-vs-Time toolbar's pan/zoom mode buttons
+        # go silently inert on the pg canvas — mouseMode stays PanMode and
+        # box-zoom is dead (lesson:
+        # 2026-05-28-mpl-event-coupled-tests-survive-renderer-swap M6/M11).
+        # The FFT-vs-Time slice row (with_slice=True) is deliberately NOT in
+        # axes_list: it is a click-driven auxiliary readout with an
+        # INDEPENDENT X axis (Frequency Hz, not XLinked to the heatmap's Time
+        # axis — verified at runtime), so a box-zoom rectangle dragged on the
+        # main map is meaningless against the slice's freq×amplitude axes, and
+        # folding it into the toolbar's view-history would conflate two
+        # unrelated coordinate systems. Pan/zoom act on the main heatmap only.
+        self.axes_list = [_AxisShim(self._plot.vb)]
 
         self._cbar = None
         self._has_result = False

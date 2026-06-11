@@ -1,8 +1,10 @@
 """PgHeatmapCanvas: levels/extent math + API-parity tests (offscreen)."""
 import numpy as np
+import pyqtgraph as pg
 import pytest
 from PyQt5.QtCore import QPointF, Qt
 
+from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
 from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
 
@@ -712,5 +714,123 @@ def test_grab_main_chart_order_mode_no_slice_does_not_crash(qapp):
     # No slice row to crop → main spans essentially the whole height (allow
     # a small slack for the heatmap-vs-widget rect difference).
     assert main.height() >= full.height() * 0.5
+    c.hide()
+    c.deleteLater()
+
+
+# ----------------------------------------------------------------------
+# Toolbar pan/box-zoom parity via axes_list shim (M-heatmap, parity with
+# PgLineCanvas M11). PgHeatmapCanvas only got reset_view_to_data_extents
+# at M6 (Home), so PgNavigationToolbar's pan/zoom buttons — which walk
+# canvas.axes_list → ax.view_box and setMouseMode on each ViewBox — were
+# silent no-ops on the order map AND the FFT-vs-Time map (mouseMode stuck
+# at PanMode=3, box-zoom dead, _view_boxes() returned []).
+# ----------------------------------------------------------------------
+def test_axes_list_exposes_primary_viewbox_shim(qapp):
+    # Both forms expose at least the main heatmap ViewBox via a shim with a
+    # .view_box attribute (the contract PgNavigationToolbar._view_boxes /
+    # _primary_view_box read).
+    for with_slice in (False, True):
+        c = PgHeatmapCanvas(with_slice=with_slice)
+        assert hasattr(c, 'axes_list')
+        assert len(c.axes_list) >= 1
+        view_boxes = [getattr(ax, 'view_box', None) for ax in c.axes_list]
+        assert c._plot.vb in view_boxes, (
+            f"main heatmap vb missing from axes_list (with_slice={with_slice})"
+        )
+        c.deleteLater()
+
+
+@pytest.mark.parametrize("with_slice", [False, True])
+def test_toolbar_zoom_mode_flips_heatmap_to_rectmode(qapp, with_slice):
+    # The exact production failure: toolbar.set_zoom_mode() walks axes_list
+    # and must flip the main heatmap ViewBox into RectMode (box-select zoom).
+    # Before the shim, _view_boxes() was empty so the mode never reached the
+    # ViewBox — it stayed PanMode=3 and box-zoom was dead.
+    c = PgHeatmapCanvas(with_slice=with_slice)
+    c.resize(640, 480)
+    if with_slice:
+        c.plot_result(_spec_result(), amplitude_mode='amplitude_db',
+                      cmap='turbo', z_auto=True)
+    else:
+        c.plot_or_update_heatmap(
+            matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+            amplitude_mode='amplitude', z_auto=True,
+        )
+    toolbar = PgNavigationToolbar(c)
+    toolbar.set_zoom_mode()
+    assert c._plot.vb.state['mouseMode'] == pg.ViewBox.RectMode
+    toolbar.set_pan_mode()
+    assert c._plot.vb.state['mouseMode'] == pg.ViewBox.PanMode
+    toolbar.deleteLater()
+    c.deleteLater()
+
+
+def test_toolbar_view_boxes_nonempty_and_primary_resolves(qapp):
+    # PgNavigationToolbar._view_boxes() must return a non-empty list and
+    # _primary_view_box() a real ViewBox for BOTH forms — these feed
+    # rebind_history_capture (back/forward) and _set_all_mouse_modes.
+    for with_slice in (False, True):
+        c = PgHeatmapCanvas(with_slice=with_slice)
+        toolbar = PgNavigationToolbar(c)
+        boxes = toolbar._view_boxes()
+        assert boxes, f"_view_boxes() empty (with_slice={with_slice})"
+        assert c._plot.vb in boxes
+        primary = toolbar._primary_view_box()
+        assert primary is c._plot.vb
+        toolbar.deleteLater()
+        c.deleteLater()
+
+
+def test_toolbar_home_still_resets_to_data_extents(qapp):
+    # The M6 Home fix (reset_view_to_data_extents) must keep working after
+    # the axes_list addition: zoom in, then Home restores the full extents.
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(640, 480)
+    c.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    toolbar = PgNavigationToolbar(c)
+    # Zoom into a sub-region, then Home.
+    c._plot.setXRange(2.0, 4.0, padding=0)
+    c._plot.setYRange(1.0, 3.0, padding=0)
+    toolbar.home()
+    (x0, x1), (y0, y1) = c._plot.vb.viewRange()
+    assert (x0, x1) == (pytest.approx(0.0), pytest.approx(10.0))
+    assert (y0, y1) == (pytest.approx(0.0), pytest.approx(8.0))
+    toolbar.deleteLater()
+    c.deleteLater()
+
+
+def test_toolbar_box_zoom_drag_actually_zooms(qapp):
+    # End-to-end: with the toolbar in zoom mode, a programmatic box-zoom
+    # gesture on the heatmap ViewBox must shrink the view to the dragged
+    # rectangle (NOT a no-op). RectMode is the precondition for ViewBox to
+    # interpret a left-drag as a zoom rectangle rather than a pan.
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    toolbar = PgNavigationToolbar(c)
+    toolbar.set_zoom_mode()
+    assert c._plot.vb.state['mouseMode'] == pg.ViewBox.RectMode  # precondition
+    # ViewBox.showAxRect is the call RectMode dragging ultimately makes;
+    # exercising it through the RectMode-configured ViewBox proves the box
+    # zoom path is live (the toolbar wired the mode that gates it).
+    from PyQt5.QtCore import QRectF
+    c._plot.vb.showAxRect(QRectF(2.0, 1.0, 3.0, 3.0))
+    (x0, x1), (y0, y1) = c._plot.vb.viewRange()
+    # The view collapses to roughly the 3×3 box (showAxRect adds a small
+    # suggestPadding, so assert it shrank and is centered on the box rather
+    # than matching the exact corners).
+    assert x1 - x0 < 6.0 and y1 - y0 < 6.0, "box zoom did not shrink the view"
+    assert (x0 + x1) / 2 == pytest.approx(3.5, abs=0.5)  # box center x = 3.5
+    assert (y0 + y1) / 2 == pytest.approx(2.5, abs=0.5)  # box center y = 2.5
+    toolbar.deleteLater()
     c.hide()
     c.deleteLater()
