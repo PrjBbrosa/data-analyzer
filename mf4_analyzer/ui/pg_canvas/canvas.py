@@ -791,21 +791,79 @@ class TimeDomainCanvasPG(QWidget):
         return out
 
     def restore_visible_ylims(self, ylims):
-        """Restore per-channel Y ranges; silently skip missing channels."""
+        """Restore per-channel Y ranges; fit newly-added channels once."""
         view_state_lines = getattr(self, "_channel_view_state_lines", None) or {}
         legacy_lines = getattr(self, "_channel_lines", None) or {}
         changed = False
+        restored_keys = set()
         for name, ylim in (ylims or {}).items():
             pair = view_state_lines.get(name) or legacy_lines.get(name)
             if pair is None:
                 continue
             try:
                 pair[0].set_ylim(*ylim)
+                if name in view_state_lines:
+                    restored_keys.add(name)
                 changed = True
             except Exception:
                 continue
+        if restored_keys and len(restored_keys) < len(view_state_lines):
+            n_y = max(3, min(20, self._tick_density_controller.density[1]))
+            for key, (handle, line) in view_state_lines.items():
+                if key in restored_keys:
+                    continue
+                get_label = getattr(line, "get_label", None)
+                channel_name = get_label() if callable(get_label) else key
+                if self._fit_channel_y_to_visible_x(
+                    channel_name,
+                    handle,
+                    n_y,
+                    frame_to_nice=self._overlay_mode,
+                ):
+                    changed = True
         if changed:
             self.visible_range_changed.emit()
+
+    def _fit_channel_y_to_visible_x(self, name, handle, n_y, *, frame_to_nice):
+        row = self.channel_data.get(name)
+        if row is None:
+            return False
+        try:
+            x0, x1 = handle.get_xlim()
+        except Exception:
+            return False
+        if x1 < x0:
+            x0, x1 = x1, x0
+        try:
+            t = np.asarray(row[0], dtype=float)
+            sig = np.asarray(row[1], dtype=float)
+        except Exception:
+            return False
+        if t.size == 0 or sig.size == 0:
+            return False
+        mask = np.isfinite(t) & np.isfinite(sig) & (t >= x0) & (t <= x1)
+        window = sig[mask] if mask.any() else sig[np.array([], dtype=int)]
+        if window.size == 0:
+            finite = sig[np.isfinite(sig)]
+            if finite.size == 0:
+                return False
+            window = finite
+        lo = float(window.min())
+        hi = float(window.max())
+        if not (np.isfinite(lo) and np.isfinite(hi)):
+            return False
+        if hi <= lo:
+            pad = abs(lo) * 0.05 or 1.0
+        else:
+            pad = (hi - lo) * 0.05
+        lo, hi = lo - pad, hi + pad
+        if frame_to_nice:
+            lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
+        try:
+            handle.set_ylim(lo, hi)
+        except Exception:
+            return False
+        return True
 
     def _sync_x_axis_item_range(self, handle, lo, hi):
         try:
@@ -936,47 +994,12 @@ class TimeDomainCanvasPG(QWidget):
         try:
             n_y = max(3, min(20, self._tick_density_controller.density[1]))
             for name, (handle, _line) in self._channel_lines.items():
-                row = self.channel_data.get(name)
-                if row is None:
-                    continue
-                try:
-                    x0, x1 = handle.get_xlim()
-                except Exception:
-                    continue
-                if x1 < x0:
-                    x0, x1 = x1, x0
-                try:
-                    t = np.asarray(row[0], dtype=float)
-                    sig = np.asarray(row[1], dtype=float)
-                except Exception:
-                    continue
-                if t.size == 0 or sig.size == 0:
-                    continue
-                # Samples inside the visible X window AND finite in Y.
-                mask = np.isfinite(t) & np.isfinite(sig) & (t >= x0) & (t <= x1)
-                window = sig[mask] if mask.any() else sig[np.array([], dtype=int)]
-                if window.size == 0:
-                    # No sample strictly inside (very narrow window between two
-                    # points): fall back to the whole channel so Y is never
-                    # collapsed to a degenerate range.
-                    finite = sig[np.isfinite(sig)]
-                    if finite.size == 0:
-                        continue
-                    window = finite
-                lo = float(window.min())
-                hi = float(window.max())
-                if not (np.isfinite(lo) and np.isfinite(hi)):
-                    continue
-                if hi <= lo:
-                    pad = abs(lo) * 0.05 or 1.0
-                else:
-                    pad = (hi - lo) * 0.05
-                lo, hi = lo - pad, hi + pad
-                lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
-                try:
-                    handle.set_ylim(lo, hi)
-                except Exception:
-                    pass
+                self._fit_channel_y_to_visible_x(
+                    name,
+                    handle,
+                    n_y,
+                    frame_to_nice=self._overlay_mode,
+                )
             if self._overlay_mode:
                 self._repin_overlay_channel_ticks()
             self._refresh = True
