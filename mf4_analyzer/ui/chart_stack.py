@@ -2456,6 +2456,19 @@ class ChartStack(QWidget):
             if pix is not None and not pix.isNull():
                 self.image_captured.emit(pix)
             return
+        # Analysis sections (fft/fft_time/order) own their own per-section
+        # split via AnalysisSectionPage. When the card's page is split, export
+        # ALL panes composited side-by-side (grab_combined_pixmap), parallel to
+        # the time-domain _combined_split_pixmap branch above. Single-pane falls
+        # through to the plain grab below (byte-identical to pre-split copy).
+        mode = getattr(card, '_chart_mode', '')
+        if mode in ('fft', 'fft_time', 'order'):
+            page = self.page_for_mode.get(mode)
+            if page is not None and page.pane_count() > 1:
+                pix = page.grab_combined_pixmap(scale=_HIDPI_EXPORT_SCALE)
+                if pix is not None and not pix.isNull():
+                    self.image_captured.emit(_pixmap_as_device_pixels(pix))
+                return
         canvas = card.canvas
         pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():

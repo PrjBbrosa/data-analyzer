@@ -219,6 +219,65 @@ def test_repeated_lock_does_not_multiconnect(page):
     assert (lo1, hi1) == (pytest.approx(7.0), pytest.approx(70.0))
 
 
+# -- V11 Step 0: split combined export -------------------------------------
+def _non_white_pixels(pixmap):
+    """Count pixels that are not pure white in the pixmap (proxy for content)."""
+    img = pixmap.toImage()
+    count = 0
+    w, h = img.width(), img.height()
+    # Sample a coarse grid to stay fast on a 2x bitmap.
+    for y in range(0, h, max(1, h // 60)):
+        for x in range(0, w, max(1, w // 60)):
+            if img.pixel(x, y) & 0x00FFFFFF != 0x00FFFFFF:
+                count += 1
+    return count
+
+
+def test_grab_combined_single_pane_matches_pane_width(page):
+    """Single pane: grab_combined_pixmap == pane_canvas(0).grab_pixmap width."""
+    _plot_heat(page.pane_canvas(0), 100.0)
+    page.repaint()
+    solo = page.pane_canvas(0).grab_pixmap(scale=2.0)
+    combined = page.grab_combined_pixmap(scale=2.0)
+    assert combined is not None and not combined.isNull()
+    assert combined.width() == solo.width()
+
+
+def test_grab_combined_split_is_wider_than_single(page):
+    """Split: composited width exceeds a single pane's grab (both panes drawn)."""
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    page.repaint()
+    solo = page.pane_canvas(0).grab_pixmap(scale=2.0)
+    combined = page.grab_combined_pixmap(scale=2.0)
+    assert combined is not None and not combined.isNull()
+    # Two panes + gutter → strictly wider than one pane.
+    assert combined.width() > solo.width()
+    # Roughly twice as wide (allow gutter + rounding slack).
+    assert combined.width() >= 2 * solo.width() - 8
+
+
+def test_grab_combined_split_has_content_not_all_white(page):
+    """The composited bitmap must carry rendered heatmap pixels, not be blank."""
+    page.enter_split()
+    for i in (0, 1):
+        _plot_heat(page.pane_canvas(i), 100.0)
+    page.repaint()
+    combined = page.grab_combined_pixmap(scale=2.0)
+    assert _non_white_pixels(combined) > 0
+
+
+def test_grab_combined_line_section_split(line_page):
+    """FFT (line) section also composites: split width > single pane width."""
+    line_page.enter_split()
+    line_page.repaint()
+    solo = line_page.pane_canvas(0).grab_pixmap(scale=2.0)
+    combined = line_page.grab_combined_pixmap(scale=2.0)
+    assert combined is not None and not combined.isNull()
+    assert combined.width() > solo.width()
+
+
 # -- V8: compare toggle buttons --------------------------------------------
 def test_compare_toggled_signal_x_linked(page):
     """联动缩放 toggle emits compare_toggled('x_linked', bool) on edge."""

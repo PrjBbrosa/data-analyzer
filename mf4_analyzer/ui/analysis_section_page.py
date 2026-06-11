@@ -170,6 +170,52 @@ class AnalysisSectionPage(QWidget):
     def pane_canvas(self, idx: int):
         return self._cards[idx].canvas
 
+    def grab_combined_pixmap(self, scale: float = 2.0):
+        """Return every pane's canvas pixels composited side-by-side.
+
+        Single-pane: the lone canvas's ``grab_pixmap(scale)`` (byte-identical
+        width to ``pane_canvas(0).grab_pixmap(scale)``). Split: each pane's
+        ``grab_pixmap`` laid out left-to-right with a thin white gutter,
+        mirroring the time-domain ``chart_stack._combined_split_pixmap`` so
+        both export paths read the same. Device-pixel-ratio is normalized to
+        1.0 on each grab BEFORE composing so the widths add in real pixels
+        (a Retina 2× DPR pixmap would otherwise report half its pixel width
+        to ``width()``, mis-sizing the canvas). Null/degenerate grabs are
+        skipped; an all-null result returns ``None``.
+        """
+        from PyQt5.QtGui import QPainter, QPixmap
+        from PyQt5.QtCore import Qt
+
+        pixes = []
+        for card in self._cards:
+            canvas = getattr(card, 'canvas', None)
+            if canvas is None:
+                continue
+            pix = canvas.grab_pixmap(scale=scale)
+            if pix is None or pix.isNull():
+                continue
+            if abs(pix.devicePixelRatioF() - 1.0) >= 1e-9:
+                norm = QPixmap.fromImage(pix.toImage())
+                norm.setDevicePixelRatio(1.0)
+                pix = norm
+            pixes.append(pix)
+        if not pixes:
+            return None
+        if len(pixes) == 1:
+            return pixes[0]
+        gap = max(1, int(round(4 * scale)))
+        w = sum(p.width() for p in pixes) + gap * (len(pixes) - 1)
+        h = max(p.height() for p in pixes)
+        out = QPixmap(w, h)
+        out.fill(Qt.white)
+        painter = QPainter(out)
+        x = 0
+        for p in pixes:
+            painter.drawPixmap(x, 0, p)
+            x += p.width() + gap
+        painter.end()
+        return out
+
     def enter_split(self) -> None:
         if len(self._cards) >= 2:
             return
