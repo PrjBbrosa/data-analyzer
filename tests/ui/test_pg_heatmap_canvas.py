@@ -4,6 +4,7 @@ import pytest
 from PyQt5.QtCore import QPointF, Qt
 
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
 
 
 class _FakeSceneClick:
@@ -378,3 +379,158 @@ def test_colorbar_rounding_adapts_to_level_span(canvas):
         amplitude_mode='amplitude', z_auto=True,
     )
     assert canvas._cbar.rounding == pytest.approx(0.5 / 1000.0)
+
+
+# ----------------------------------------------------------------------
+# FFT-vs-Time slice row (with_slice=True). Task 7.
+# ----------------------------------------------------------------------
+def _spec_result():
+    freqs = np.linspace(0, 500, 64)
+    times = np.linspace(0, 2.0, 10)
+    amp = np.random.RandomState(7).rand(64, 10).astype(np.float32) + 0.01
+    return SpectrogramResult(
+        times=times, frequencies=freqs, amplitude=amp,
+        params=SpectrogramParams(fs=1000.0, nfft=128),
+        channel_name='vib', unit='g', metadata={'frames': 10},
+    )
+
+
+def test_slice_updates_on_select(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', cmap='turbo',
+        z_auto=True, z_floor=-80.0, z_ceiling=0.0, freq_range=None,
+        x_auto=True, x_min=0.0, x_max=0.0, y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    c.select_time_index(3)
+    xs, ys = c._slice_curve.getData()
+    assert len(xs) == 64
+    # slice shows the SAME display-space (dB) values as column 3
+    expected = c._matrix_disp[:, 3]
+    np.testing.assert_allclose(ys, expected, rtol=1e-6)
+    c.deleteLater()
+
+
+def test_plot_result_without_slice_flag_has_no_slice_row(qapp):
+    c = PgHeatmapCanvas(with_slice=False)
+    assert not hasattr(c, '_slice_curve') or c._slice_curve is None
+    c.deleteLater()
+
+
+def test_plot_result_db_vmin_vmax_not_overridden_by_internal_auto(qapp):
+    # The dB matrix + clip + levels are computed in plot_result; the
+    # explicit vmin/vmax it hands to plot_or_update_heatmap must survive
+    # (amplitude_mode='amplitude' + non-None vmin/vmax → no nanmin/nanmax
+    # override). With z_auto=False the levels are exactly (z_floor,
+    # z_ceiling), NOT the data's nanmin/nanmax.
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', cmap='turbo',
+        z_auto=False, z_floor=-60.0, z_ceiling=-3.0, freq_range=None,
+    )
+    lo, hi = c._img.getLevels()
+    assert (lo, hi) == (pytest.approx(-60.0), pytest.approx(-3.0))
+    # If plot_or_update_heatmap's linear branch had re-derived levels from
+    # the display matrix (nanmin/nanmax), it would NOT equal the explicit
+    # (-60, -3) window — confirm the two differ so the test bites.
+    clipped = c._matrix_disp
+    auto_lo, auto_hi = float(np.nanmin(clipped)), float(np.nanmax(clipped))
+    assert (auto_lo, auto_hi) != (pytest.approx(-60.0), pytest.approx(-3.0))
+    # The colorbar mirrors the same explicit window, not a re-derived one.
+    blo, bhi = c._cbar.levels()
+    assert (blo, bhi) == (pytest.approx(-60.0), pytest.approx(-3.0))
+    c.deleteLater()
+
+
+def test_left_click_selects_frame_when_remark_off(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True,
+    )
+    # Click near t=1.0s (frame index 5 of times linspace(0,2,10)).
+    sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
+    c._on_scene_click(_FakeSceneClick(sp, Qt.LeftButton))
+    xs, ys = c._slice_curve.getData()
+    expected_idx = int(np.argmin(np.abs(r.times - 1.0)))
+    np.testing.assert_allclose(ys, c._matrix_disp[:, expected_idx], rtol=1e-6)
+    # Marker follows the selected time.
+    assert c._slice_marker.value() == pytest.approx(float(r.times[expected_idx]))
+    assert c._slice_marker.isVisible()
+    c.hide()
+    c.deleteLater()
+
+
+def test_left_click_adds_remark_when_remark_on_not_slice(qapp):
+    # When remark mode is on, left-click annotates (does NOT select a
+    # frame); the two left-click behaviors are mutually exclusive.
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    # plot_result selected frame 0; record its slice for comparison.
+    _, ys0 = c._slice_curve.getData()
+    c.set_remark_enabled(True)
+    sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
+    c._on_scene_click(_FakeSceneClick(sp, Qt.LeftButton))
+    assert len(c._remarks) == 1  # annotated, not frame-selected
+    _, ys1 = c._slice_curve.getData()
+    np.testing.assert_allclose(ys1, ys0)  # slice unchanged
+    c.hide()
+    c.deleteLater()
+
+
+def test_hover_emits_cursor_info(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    received = []
+    c.cursor_info.connect(received.append)
+    sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
+    c._on_scene_hover(sp)
+    assert received, "hover over the map must emit cursor_info"
+    assert received[-1].startswith('t=')
+    assert 'Hz' in received[-1]
+    c.hide()
+    c.deleteLater()
+
+
+def test_full_reset_clears_slice_state(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    assert c._slice_marker.isVisible()  # precondition
+    c.full_reset()
+    assert c._result is None
+    assert c._db_cache is None
+    assert not c._slice_marker.isVisible()
+    xs, ys = c._slice_curve.getData()
+    # cleared curve has no data
+    assert xs is None or len(xs) == 0
+    # slice widgets survive the reset (row not orphaned)
+    assert c._slice_curve is not None and c._slice_plot is not None
+    c.deleteLater()
+
+
+def test_select_time_index_noop_without_slice(qapp):
+    # Order mode (with_slice=False): select_time_index must be inert and
+    # never build a slice row or marker.
+    c = PgHeatmapCanvas(with_slice=False)
+    c.select_time_index(2)  # no result, no slice → silent no-op
+    assert c._slice_curve is None
+    assert c._slice_plot is None
+    assert c._slice_marker is None
+    c.deleteLater()

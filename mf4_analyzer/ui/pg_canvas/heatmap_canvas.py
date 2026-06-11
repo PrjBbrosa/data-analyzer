@@ -85,6 +85,35 @@ class PgHeatmapCanvas(QWidget):
         # (chart_stack.py:1314, 1330-1332).
         self._plot.scene().sigMouseClicked.connect(self._on_scene_click)
 
+        # FFT-vs-Time slice row (with_slice=True). The Order map
+        # (with_slice=False) never builds these; every consumer of the
+        # slice state guards on ``self._slice_curve is not None``.
+        self._slice_curve = None
+        self._slice_plot = None
+        self._slice_marker = None
+        self._result = None     # SpectrogramResult-like payload
+        self._db_cache = None   # (cache_key, ndarray) keyed (id(result), db_ref)
+        if self._with_slice:
+            # Second GraphicsLayout row: 1D frequency slice at the
+            # selected frame (parity with SpectrogramCanvas._ax_slice,
+            # canvases.py:1775). Capped height keeps the 2D map dominant.
+            self._slice_plot = self._glw.addPlot(row=1, col=0)
+            self._slice_plot.setMaximumHeight(140)
+            self._slice_plot.showGrid(x=True, y=True, alpha=0.25)
+            self._slice_plot.setLabel('bottom', 'Frequency (Hz)')
+            self._slice_curve = self._slice_plot.plot(
+                pen=pg.mkPen('#2563eb', width=1.2))
+            # Vertical marker on the 2D map tracking the selected time.
+            # movable=False — selection is driven by clicks, not drags.
+            self._slice_marker = pg.InfiniteLine(
+                angle=90, movable=False, pen=pg.mkPen('#e03131', width=1))
+            self._plot.addItem(self._slice_marker)
+            self._slice_marker.setVisible(False)
+            # Hover readout (t / freq / value) parity with
+            # SpectrogramCanvas._on_motion (canvases.py:2000). Only wired
+            # in slice mode; the Order map has no hover-readout contract.
+            self._plot.scene().sigMouseMoved.connect(self._on_scene_hover)
+
     # ------------------------------------------------------------------
     # main API (signature mirrors canvases.PlotCanvas.plot_or_update_heatmap)
     # ------------------------------------------------------------------
@@ -223,6 +252,16 @@ class PgHeatmapCanvas(QWidget):
         self._matrix_disp = None
         self._extents = None
         self._has_result = False
+        # FFT-vs-Time slice state. Keep the persistent slice row / curve /
+        # marker widgets (built once in __init__) so the GraphicsLayout
+        # row is not orphaned; just blank them and drop the result + dB
+        # cache so a stale slice never outlives its data.
+        self._result = None
+        self._db_cache = None
+        if self._slice_curve is not None:
+            self._slice_curve.clear()
+            self._slice_plot.setTitle(None)
+            self._slice_marker.setVisible(False)
 
     def set_tick_density(self, x, y) -> None:
         """Apply inspector tick density.
@@ -263,6 +302,143 @@ class PgHeatmapCanvas(QWidget):
         x0, x1, y0, y1 = self._extents
         self._plot.setXRange(float(x0), float(x1), padding=0)
         self._plot.setYRange(float(y0), float(y1), padding=0)
+
+    # ------------------------------------------------------------------
+    # FFT-vs-Time: spectrogram render + frequency slice (with_slice=True)
+    # ------------------------------------------------------------------
+    def plot_result(
+        self, result, *, amplitude_mode='amplitude_db', cmap='turbo',
+        z_auto=False, z_floor=-80.0, z_ceiling=0.0, freq_range=None,
+        x_auto=True, x_min=0.0, x_max=0.0,
+        y_auto=True, y_min=0.0, y_max=0.0,
+    ):
+        """Render a ``SpectrogramResult`` as a 2D heatmap + frequency slice.
+
+        Signature mirrors ``SpectrogramCanvas.plot_result``
+        (canvases.py:1722) and the ``MainWindow._render_fft_time`` call
+        site (main_window.py:2825). ``result.amplitude`` is shape
+        ``(freq_bins, frames)`` → rows are frequency (Y), columns are
+        time (X).
+
+        dB conversion is done HERE (memoized via ``self._db_cache``,
+        keyed ``(id(result), db_reference)`` — parity with
+        ``SpectrogramCanvas._display_matrix``), and the already-converted
+        display matrix is handed to ``plot_or_update_heatmap`` with
+        ``amplitude_mode='amplitude'`` plus explicit ``vmin``/``vmax`` so
+        the heatmap's internal dB/auto branch never re-derives the
+        levels. The explicit ``vmin``/``vmax`` survive because the linear
+        branch of ``plot_or_update_heatmap`` only fills them from
+        nanmin/nanmax when they are ``None``.
+        """
+        self._result = result
+        unit = f" ({result.unit})" if result.unit else ""
+        db_ref = float(result.params.db_reference)
+        if amplitude_mode == 'amplitude_db':
+            key = (id(result), db_ref)
+            if self._db_cache is None or self._db_cache[0] != key:
+                from ...signal.spectrogram import SpectrogramAnalyzer
+                self._db_cache = (key, SpectrogramAnalyzer.amplitude_to_db(
+                    result.amplitude, db_ref))
+            m = self._db_cache[1]
+            if not z_auto:
+                m = np.clip(m, float(z_floor), float(z_ceiling))
+            vmin = float(z_floor) if not z_auto else float(np.nanmin(m))
+            vmax = float(z_ceiling) if not z_auto else float(np.nanmax(m))
+            cbar = f"Amplitude{unit} (dB re {db_ref:g})"
+        else:
+            m = result.amplitude
+            vmin, vmax = float(np.nanmin(m)), float(np.nanmax(m))
+            cbar = f"Amplitude{unit}"
+
+        y_lo = float(result.frequencies[0])
+        y_hi = float(result.frequencies[-1])
+        if freq_range is not None:
+            # freq_range controls the Y axis only; (lo, hi) with hi<=lo or
+            # hi<=0 falls back to the Nyquist bin (parity with
+            # SpectrogramCanvas.plot_result, canvases.py:1808-1811).
+            lo, hi = float(freq_range[0]), float(freq_range[1])
+            if hi <= 0 or hi <= lo:
+                hi = y_hi
+            y_auto, y_min, y_max = False, lo, hi
+
+        # amplitude is (freq_bins, frames) → rows=freq(Y), cols=time(X).
+        # amplitude_mode='amplitude' here: dB conversion already done
+        # above, so vmin/vmax pass through untouched (the dB branch would
+        # re-clip and could re-derive levels).
+        self.plot_or_update_heatmap(
+            matrix=m,
+            x_extent=(float(result.times[0]), float(result.times[-1])),
+            y_extent=(y_lo, y_hi),
+            x_label='Time (s)', y_label='Frequency (Hz)',
+            title=f'FFT vs Time - {result.channel_name}',
+            cmap=cmap, cbar_label=cbar,
+            amplitude_mode='amplitude',  # conversion already done above
+            z_auto=True, vmin=vmin, vmax=vmax,
+            x_auto=x_auto, x_min=x_min, x_max=x_max,
+            y_auto=y_auto, y_min=y_min, y_max=y_max,
+        )
+        # plot_or_update_heatmap stores the matrix it was handed (the
+        # display matrix) in self._matrix_disp; re-pin it explicitly so
+        # the slice and remarks read the same display-space values.
+        self._matrix_disp = m
+        if self._slice_curve is not None and len(result.times):
+            self.select_time_index(0)
+
+    def select_time_index(self, idx: int) -> None:
+        """Update the frequency slice + marker to frame ``idx``.
+
+        Clamps to ``[0, frames-1]``. No-op without a result or slice row.
+        """
+        if self._result is None or self._slice_curve is None:
+            return
+        idx = int(np.clip(idx, 0, len(self._result.times) - 1))
+        self._slice_curve.setData(
+            self._result.frequencies, self._matrix_disp[:, idx])
+        t = float(self._result.times[idx])
+        self._slice_plot.setTitle(f"t = {t:.3f} s")
+        self._slice_marker.setPos(t)
+        self._slice_marker.setVisible(True)
+
+    def _time_index_for(self, x: float) -> int:
+        """Nearest frame index to a view-space time ``x``."""
+        return int(np.argmin(np.abs(np.asarray(self._result.times) - x)))
+
+    def _on_scene_hover(self, scene_pos) -> None:
+        """Emit ``cursor_info`` (t / freq / value) on hover over the map.
+
+        Slice-mode only (Order has no hover-readout contract). Parity
+        with SpectrogramCanvas._on_motion (canvases.py:2000): clears the
+        readout when the pointer leaves the data extents or before a
+        result is plotted.
+        """
+        if self._result is None or self._matrix_disp is None:
+            return
+        if not self._plot.sceneBoundingRect().contains(scene_pos):
+            self.cursor_info.emit('')
+            return
+        p = self._plot.vb.mapSceneToView(scene_pos)
+        x, y = p.x(), p.y()
+        if self._extents is None:
+            return
+        x0, x1, y0, y1 = self._extents
+        if not (x0 <= x <= x1 and y0 <= y <= y1):
+            # Inside the plot's scene rect but outside the heatmap (e.g.
+            # the colorbar column or padding) — clear the pill.
+            self.cursor_info.emit('')
+            return
+        t_idx = int(np.argmin(np.abs(np.asarray(self._result.times) - x)))
+        f_idx = int(np.argmin(np.abs(np.asarray(self._result.frequencies) - y)))
+        rows, cols = self._matrix_disp.shape
+        if rows == 0 or cols == 0:
+            return
+        val = float(self._matrix_disp[min(f_idx, rows - 1), min(t_idx, cols - 1)])
+        unit = self._result.unit or ''
+        msg = (
+            f"t={float(self._result.times[t_idx]):.4g} s · "
+            f"f={float(self._result.frequencies[f_idx]):.4g} Hz · "
+            f"{val:.4g} {unit}"
+        ).rstrip()
+        self.cursor_info.emit(msg)
 
     # ------------------------------------------------------------------
     # remarks (annotation parity with the matplotlib canvases)
@@ -335,7 +511,16 @@ class PgHeatmapCanvas(QWidget):
             return
         p = self._plot.vb.mapSceneToView(ev.scenePos())
         if ev.button() == Qt.LeftButton:
-            self.add_remark_at(p.x(), p.y())
+            if self._remark_enabled:
+                self.add_remark_at(p.x(), p.y())
+            elif self._slice_curve is not None and self._result is not None:
+                # FFT-vs-Time: left-click selects the nearest frame and
+                # updates the slice + marker. Guard out-of-extent clicks
+                # (the colorbar column is inside the plot's scene rect).
+                if self._extents is not None:
+                    x0, x1, y0, y1 = self._extents
+                    if x0 <= p.x() <= x1:
+                        self.select_time_index(self._time_index_for(p.x()))
         elif ev.button() == Qt.RightButton and self._remark_enabled:
             # ``insert_in`` puts the ColorBarItem inside the PlotItem
             # layout, so _plot.sceneBoundingRect() includes the colorbar
