@@ -106,6 +106,11 @@ class MainWindow(QMainWindow):
         # ``_fft_time_thread.isRunning()``.
         self._fft_time_thread = None
         self._fft_time_worker = None
+        # Order (COT) worker thread (M5). Same QObject + QThread pattern
+        # as the FFT-vs-Time pair above; refs set in ``do_order_time``,
+        # cleared in ``_on_order_thread_done``.
+        self._order_thread = None
+        self._order_worker = None
         self._last_batch_preset = None
         self._acquisition_cockpit_window = None
         self._init_ui();
@@ -1068,10 +1073,10 @@ class MainWindow(QMainWindow):
             ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
             ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
         self.canvas_fft.draw_idle()
-        for ax in self.canvas_order.fig.axes:
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=xt, min_n_ticks=3))
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=yt, min_n_ticks=3))
-        self.canvas_order.draw_idle()
+        # M5: canvas_order is now PgHeatmapCanvas (no ``fig``/``draw_idle``).
+        # Its set_tick_density takes the same inspector tick COUNTS the
+        # MaxNLocator(nbins=...) loop consumed, so the knob semantics hold.
+        self.canvas_order.set_tick_density(xt, yt)
 
     def _show_rebuild_popover(self, anchor, mode='fft'):
         """Open the 重建时间轴 modal popover for the active selection.
@@ -2370,11 +2375,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, 'FFT错误', str(e))
 
     # ------------------------------------------------------------------
-    # Order analysis (synchronous COT path)
+    # Order analysis (COT on a worker QThread, M5)
     # ------------------------------------------------------------------
-    # ``do_order_time`` runs ``COTOrderAnalyzer.compute`` synchronously
-    # on the GUI thread (Wave 2, 2026-04-28). An async COT worker
-    # remains out of scope.
+    # ``do_order_time`` gathers signal/rpm/params on the GUI thread,
+    # then runs ``COTOrderAnalyzer.compute`` on an
+    # ``AnalysisComputeWorker`` + QThread (same lifecycle wiring as
+    # ``do_fft_time``); ``_on_order_finished`` renders the result.
 
     def do_order_time(self):
         t, sig, fs = self._get_sig()
@@ -2391,9 +2397,8 @@ class MainWindow(QMainWindow):
         fs = self.inspector.order_ctx.fs()
         # Wave 2 (2026-04-28 plan): COT is the only tracking algorithm.
         # The frequency-domain branch has been deleted alongside
-        # combo_algorithm. COTOrderAnalyzer runs synchronously on the
-        # GUI thread — acceptable for v1 wiring; an async COT worker
-        # remains out of scope.
+        # combo_algorithm. Since M5 the compute runs on a worker QThread
+        # (see below); results land in ``_on_order_finished``.
         order_params = self.inspector.order_ctx.current_params()
         op = self.inspector.order_ctx.get_params()
         from ..signal.order_cot import COTOrderAnalyzer, COTParams
@@ -2406,6 +2411,15 @@ class MainWindow(QMainWindow):
         t_arr = np.asarray(t, dtype=float)
         if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
             t_arr = np.arange(len(t_arr), dtype=float) / float(fs)
+        # M5: COT moved off the GUI thread (AnalysisComputeWorker +
+        # QThread, same pattern as do_fft_time). Re-entry guard mirrors
+        # the FFT-vs-Time one; the COT compute does not poll
+        # ``worker.cancelled()`` (the algorithm has no per-frame poll
+        # point), so cancel is best-effort and closeEvent's wait(2000)
+        # is the backstop.
+        if getattr(self, '_order_thread', None) is not None and self._order_thread.isRunning():
+            self.statusBar.showMessage("正在计算…")
+            return
         try:
             p = COTParams(
                 samples_per_rev=int(order_params.get('samples_per_rev', 256)),
@@ -2416,15 +2430,31 @@ class MainWindow(QMainWindow):
                 time_res=float(op['time_res']),
                 fs=fs,
             )
-            self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
-            self.inspector.order_ctx.set_progress("计算中...")
-            result = COTOrderAnalyzer.compute(sig, rpm, t_arr, p)
         except Exception as e:
-            self.inspector.order_ctx.set_progress("")
             QMessageBox.critical(self, "错误", str(e))
             return
-        self.inspector.order_ctx.set_progress("")
-        self._render_order_time(result)
+        self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
+        self.inspector.order_ctx.set_progress("计算中...")
+
+        from .analysis_worker import AnalysisComputeWorker
+
+        def job(worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p):
+            return COTOrderAnalyzer.compute(_sig, _rpm, _t, _p)
+
+        worker = AnalysisComputeWorker(job)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(self._on_order_finished)
+        worker.failed.connect(self._on_order_failed)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_order_thread_done)
+        self._order_thread = thread
+        self._order_worker = worker
+        thread.start()
         return
 
     def _render_order_time(self, result):
@@ -2490,6 +2520,18 @@ class MainWindow(QMainWindow):
             "success",
         )
 
+    def _on_order_finished(self, result):
+        self.inspector.order_ctx.set_progress("")
+        self._render_order_time(result)
+
+    def _on_order_failed(self, message):
+        self.inspector.order_ctx.set_progress("")
+        QMessageBox.critical(self, "错误", str(message))
+
+    def _on_order_thread_done(self):
+        self._order_thread = None
+        self._order_worker = None
+
     def closeEvent(self, event):
         """Stop the FFT-vs-Time worker before the window is destroyed.
 
@@ -2513,6 +2555,17 @@ class MainWindow(QMainWindow):
             if not fft_thread.wait(2000):
                 fft_thread.terminate()
                 fft_thread.wait(500)
+
+        # Order (COT) worker: same drain. The COT job does not poll
+        # ``cancelled()`` (no per-frame poll point), so cancel() is a
+        # no-op flag and wait(2000) is the real backstop.
+        order_thread = getattr(self, '_order_thread', None)
+        order_worker = getattr(self, '_order_worker', None)
+        if order_thread is not None and order_thread.isRunning():
+            if order_worker is not None:
+                order_worker.cancel()
+            order_thread.quit()
+            order_thread.wait(2000)
 
         super().closeEvent(event)
 

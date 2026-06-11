@@ -183,6 +183,37 @@ class PgHeatmapCanvas(QWidget):
     def has_result(self) -> bool:
         return self._has_result
 
+    def full_reset(self) -> None:
+        """Clear the heatmap, colorbar, remarks and result state.
+
+        File-close contract: ``ChartStack.full_reset_all``
+        (chart_stack.py:2336) calls ``full_reset()`` on every canvas —
+        mirrors ``PlotCanvas.full_reset`` (canvases.py:655), which wiped
+        the whole matplotlib figure. The colorbar is detached (not just
+        hidden) so a stale color scale never outlives its data; the next
+        ``plot_or_update_heatmap`` recreates it.
+        """
+        self.clear_remarks()
+        self._img.clear()
+        if self._cbar is not None:
+            # setImageItem(insert_in=...) nested the bar in the host
+            # PlotItem's QGraphicsGridLayout; detach from layout AND
+            # scene so no orphaned column remains.
+            try:
+                self._plot.layout.removeItem(self._cbar)
+            except Exception:
+                pass
+            scene = self._cbar.scene()
+            if scene is not None:
+                scene.removeItem(self._cbar)
+            self._cbar = None
+        self._plot.setTitle(None)
+        self._plot.setLabel('bottom', '')
+        self._plot.setLabel('left', '')
+        self._matrix_disp = None
+        self._extents = None
+        self._has_result = False
+
     def set_tick_density(self, x, y) -> None:
         """Apply inspector tick density.
 

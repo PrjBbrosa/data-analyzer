@@ -279,6 +279,7 @@ from ..ui_kit.icons import Icons
 from .canvases import PlotCanvas, SpectrogramCanvas
 from . import hints
 from .pg_canvases import TimeDomainCanvasPG
+from .pg_canvas.heatmap_canvas import PgHeatmapCanvas
 from .widgets import StatsStrip
 
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
@@ -967,7 +968,7 @@ class _ChartCard(QWidget):
         # exposes the exact same six action keys + mode/pan/zoom surface so
         # downstream helpers (i18n, MDI icons, shortcuts, _find_action) keep
         # working unchanged.
-        if isinstance(canvas, TimeDomainCanvasPG):
+        if isinstance(canvas, (TimeDomainCanvasPG, PgHeatmapCanvas)):
             self.toolbar = PgNavigationToolbar(canvas, self)
             # Bug 3: re-apply the toolbar's current pan/zoom mode to the
             # ViewBoxes that plot_channels rebuilds, so box-zoom survives a
@@ -1649,7 +1650,7 @@ class ChartStack(QWidget):
         self.canvas_time = TimeDomainCanvasPG(self)
         self.canvas_fft = PlotCanvas(self)
         self.canvas_fft_time = SpectrogramCanvas(self)
-        self.canvas_order = PlotCanvas(self)
+        self.canvas_order = PgHeatmapCanvas(self)
         self._time_card = TimeChartCard(self.canvas_time)
         self._primary_plot_mode = self._time_card.plot_mode()
         self._primary_cursor_mode = self._time_card.cursor_mode()
