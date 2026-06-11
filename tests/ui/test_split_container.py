@@ -60,7 +60,10 @@ def test_mode_switching_uses_wrapped_time_page(qtbot):
 
     cs.set_mode("fft")
     assert cs.current_mode() == "fft"
-    assert cs.stack.currentWidget() is cs._fft_card
+    # V7: the FFT stacked widget is now the AnalysisSectionPage; the card is
+    # pane 0 of that page.
+    assert cs.stack.currentWidget() is cs.page_fft
+    assert cs._fft_card is cs.page_fft._cards[0]
 
     cs.set_mode("time")
     assert cs.current_mode() == "time"

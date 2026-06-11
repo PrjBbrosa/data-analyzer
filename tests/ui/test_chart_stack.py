@@ -1508,7 +1508,9 @@ def test_fft_card_also_strips_subplots_button(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     qtbot.addWidget(cs)
-    fft_card = cs.stack.widget(1)
+    # V7: stack.widget(1) is now the FFT AnalysisSectionPage; the card lives at
+    # pane 0 (aliased as cs._fft_card).
+    fft_card = cs._fft_card
     for act in fft_card.toolbar.actions():
         assert act.text().lower() not in ('subplots', 'configure subplots')
 
@@ -1552,7 +1554,10 @@ def test_chart_stack_exposes_fft_time_card(qtbot):
 
     assert stack.current_mode() == 'fft_time'
     assert stack.canvas_fft_time is not None
-    assert stack.stack.currentWidget() is stack._fft_time_card
+    # V7: the stacked widget is the FFT-vs-Time AnalysisSectionPage; the card is
+    # pane 0 of that page (cs._fft_time_card).
+    assert stack.stack.currentWidget() is stack.page_fft_time
+    assert stack._fft_time_card is stack.page_fft_time._cards[0]
 
 
 # M9 retired the matplotlib SpectrogramCanvas (FFT-vs-Time moved to
