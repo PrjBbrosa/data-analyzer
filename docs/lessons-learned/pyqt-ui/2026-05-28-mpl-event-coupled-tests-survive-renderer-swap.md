@@ -101,3 +101,27 @@ precedent, not a new regression, but note it. Test coupling this round was
 two render tests — rewrite to ``canvas._plot_amp.getAxis('left').labelText``
 and ``plot.vb.viewRange()`` (the pg analogues), don't stub ``fig`` on the
 pg widget.
+
+Update 2026-06-11 (heatmap pan/box-zoom parity, closing the M6 partial
+fix): M6 gave ``PgHeatmapCanvas`` only ``reset_view_to_data_extents``
+(Home) and NEVER added ``axes_list`` — so the heatmap was a HALF-FIXED
+canvas: Home worked while pan/box-zoom stayed silently dead in BOTH the
+Order (``with_slice=False``) and FFT-vs-Time (``with_slice=True``)
+production sections. Runtime proof: after ``toolbar.set_zoom_mode()`` the
+main ``_plot.vb.state['mouseMode']`` was still PanMode(3), box-zoom was a
+no-op, ``_view_boxes()`` returned ``[]`` and ``_primary_view_box()`` was
+``None``. The lesson within the lesson: "Home works" does NOT imply the
+toolbar is wired — Home reads ``reset_view_to_data_extents`` while
+pan/zoom read ``axes_list``; they are INDEPENDENT contract surfaces, so
+verify each button class separately on the live canvas. Fix is identical
+to M11: expose ``axes_list`` as one static ``_AxisShim(self._plot.vb)``.
+Decision on the FFT-vs-Time slice row: EXCLUDE it from ``axes_list``. The
+slice ViewBox is a separate, click-driven auxiliary readout whose X axis
+is Frequency (Hz) and is NOT XLinked to the heatmap's Time axis (verified:
+``slice.vb.linkedView(0) is not main.vb``), so a box-zoom rectangle
+dragged on the time×freq map is meaningless against the slice's
+freq×amplitude axes, and ``_set_all_mouse_modes``/history would conflate
+two unrelated coordinate systems. The ``_AxisShim`` is a private copy
+(``__slots__``) rather than a cross-import — ``line_canvas`` already
+imports ``_tick_counts_to_density`` from ``heatmap_canvas``, so a reverse
+import would cycle (future cleanup: hoist both shims to ``_shared``).
