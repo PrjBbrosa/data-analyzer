@@ -412,6 +412,24 @@ class MainWindow(QMainWindow):
                 lambda idx, s=sec: self._on_analysis_view_switched(s, idx))
             page.focus_changed.connect(
                 lambda idx, s=sec: self._on_analysis_focus_changed(s, idx))
+            # V8: compare toggle write-back. The page's buttons emit an EDGE
+            # (key, on) — write it onto the active view's state.compare so a
+            # later view switch reads it back (closes the x_linked/levels
+            # write-back loop; V7 only READ state.compare).
+            page.compare_toggled.connect(
+                lambda key, on, s=sec: self._on_analysis_compare_toggled(
+                    s, key, on))
+            # V8: colorbar-drag → inspector Z sync. Heatmap sections only
+            # (fft is a line section with no colorbar / no levels_changed).
+            # While levels are locked the page already mirrors the drag onto
+            # BOTH pane canvases internally (_on_locked_levels_changed); this
+            # MainWindow path is the SEPARATE concern of echoing the FOCUSED
+            # pane's dragged range back into the inspector Z controls. Pane 1
+            # is wired later in _connect_new_pane (it does not exist yet).
+            if sec != 'fft':
+                page.pane_canvas(0).levels_changed.connect(
+                    lambda lo, hi, s=sec: self._on_analysis_levels_dragged(
+                        s, 0, lo, hi))
 
         # FFT vs Time primary compute.
         self.inspector.fft_time_requested.connect(
@@ -765,6 +783,18 @@ class MainWindow(QMainWindow):
         if page.pane_count() < 2:
             return
         self.chart_stack._connect_analysis_card_signals(page._cards[1])
+        # V8: pane 1's colorbar-drag → inspector Z echo (heatmap sections).
+        # Guarded against double-wiring across repeated splits via a marker on
+        # the canvas (enter_split builds a fresh card each time, so a stale
+        # connection on a destroyed canvas is never reused — but a duplicate
+        # connect on the same long-lived canvas would double-fire).
+        if section != 'fft':
+            canvas = page.pane_canvas(1)
+            if not getattr(canvas, '_levels_echo_wired', False):
+                canvas.levels_changed.connect(
+                    lambda lo, hi: self._on_analysis_levels_dragged(
+                        section, 1, lo, hi))
+                canvas._levels_echo_wired = True
 
     # -- view-switch pipeline (capture → switch → apply → render) -------
     def _capture_active_analysis_view(self, section):
@@ -791,10 +821,19 @@ class MainWindow(QMainWindow):
                 self._connect_new_pane(section, page)
             elif len(state.panes) == 1 and page.pane_count() == 2:
                 page.exit_split()
-            # 2. Linked zoom (state is the source of truth; enter_split above
-            #    may have emitted a non-edge link_toggled — we ignore that
-            #    signal entirely and drive set_linked from state here).
-            page.set_linked(bool(state.compare.get('x_linked', True)))
+            # 2. Compare options (state is the source of truth; enter_split
+            #    above may have emitted a non-edge link_toggled — we ignore
+            #    that signal entirely and drive set_linked from state here).
+            #    V8 closes the loop: set_levels_locked is now also state-driven,
+            #    and the toggle buttons are re-seeded from state.compare (under
+            #    _applying_analysis_view, so the resulting button edges do not
+            #    write back onto the state we just read).
+            x_linked = bool(state.compare.get('x_linked', True))
+            levels_locked = bool(state.compare.get('levels_locked', False))
+            page.set_linked(x_linked)
+            page.set_levels_locked(levels_locked)
+            page.sync_compare_buttons(
+                x_linked=x_linked, levels_locked=levels_locked)
             # 3. Params + focused-pane source echo.
             apply_params_from_state(self._analysis_ctx(section), state)
             self._apply_analysis_sources(section, state)
@@ -818,6 +857,41 @@ class MainWindow(QMainWindow):
         # the next compute / view switch). Echo keeps the inspector consistent
         # with the pane the user just selected.
         self._apply_analysis_sources(section, state)
+
+    def _on_analysis_compare_toggled(self, section, key, on):
+        """A page compare toggle (联动缩放 / 锁定色阶) flipped → persist it onto
+        the active view's ``state.compare`` so a later view switch reads it
+        back (V8 write-back loop: toggle → state → _on_analysis_view_switched
+        reads state to drive set_linked / set_levels_locked)."""
+        if self._applying_analysis_view:
+            return
+        mgr = self.analysis_managers[section]
+        state = mgr.get(mgr.active)
+        state.compare[key] = bool(on)
+
+    def _on_analysis_levels_dragged(self, section, pane_idx, lo, hi):
+        """User dragged a heatmap colorbar → echo (lo, hi) into the inspector
+        Z controls (manual range). Only the FOCUSED pane's drag drives the
+        inspector, since the inspector mirrors the focused pane. fft (line
+        section) has no colorbar so it never reaches here.
+
+        The two-pane *canvas* sync under a level lock is handled entirely
+        inside the page (_on_locked_levels_changed); this path is strictly
+        canvas → inspector, so the two never fight: the page mutates the
+        sibling canvas's levels, MainWindow mutates the inspector spinboxes.
+        apply_params here is an existing inspector API called with corrected
+        args — no algorithm/loader is touched."""
+        if self._applying_analysis_view:
+            return
+        page = self._analysis_page(section)
+        if pane_idx != page.focused_index():
+            return
+        ctx = self._analysis_ctx(section)
+        ctx.apply_params({
+            'z_auto': False,
+            'z_floor': float(lo),
+            'z_ceiling': float(hi),
+        })
 
     # -- source routing (Step 4) ----------------------------------------
     def _capture_analysis_sources(self, section, state):
@@ -3088,7 +3162,15 @@ class MainWindow(QMainWindow):
         # A single pane's failure must not abort the queue; the wired
         # ``failed -> thread.quit -> _on_order_thread_done`` pump advances to
         # the next job. Surface the error but keep going.
-        QMessageBox.critical(self, "错误", str(message))
+        #
+        # V8 minor: use the non-modal ``toast`` (symmetric with
+        # ``_on_fft_time_failed``) instead of ``QMessageBox.critical``. A
+        # modal exec() raised mid-queue spins a nested event loop that can
+        # re-enter the compute pump (and hangs under offscreen Qt with no
+        # user to click OK — lesson qmessagebox-static-warning-hangs-offscreen).
+        msg = str(message)
+        self.toast(msg, "error")
+        self.statusBar.showMessage(f"阶次分析错误: {msg}")
         if not self._order_queue:
             self.inspector.order_ctx.set_progress("")
 
