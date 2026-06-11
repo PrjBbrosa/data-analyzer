@@ -1,8 +1,27 @@
 """PgLineCanvas: dual-row spectrum canvas tests (offscreen)."""
 import numpy as np
 import pytest
+from PyQt5.QtCore import QCoreApplication, QPointF, Qt
 
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+
+
+class _FakeSceneClick:
+    """Stand-in for a GraphicsScene MouseClickEvent (scenePos + button)."""
+
+    def __init__(self, scene_pos, button):
+        self._scene_pos = scene_pos
+        self._button = button
+        self.accepted = False
+
+    def scenePos(self):
+        return self._scene_pos
+
+    def button(self):
+        return self._button
+
+    def accept(self):
+        self.accepted = True
 
 
 @pytest.fixture
@@ -69,9 +88,87 @@ def test_remark_snaps_to_curve(canvas):
     canvas.set_remark_enabled(True)
     canvas.add_remark_at('amp', 119.0, 0.5)   # off-curve y → snaps to nearest sample
     assert len(canvas._remarks) == 1
-    assert '1' in canvas._remarks[0]['label'].toPlainText()  # snapped peak ≈1
+    # Nearest sample to x=119.0 on linspace(0, 500, 256) is index 61 →
+    # x = 61*500/255 ≈ 119.6078; y must snap to the CURVE value
+    # exp(-((119.6078-120)/15)**2) ≈ 0.9993, not the clicked 0.5.
+    xs, ys = canvas._remarks[0]['dot'].getData()
+    assert xs[0] == pytest.approx(119.6078, abs=1e-3)
+    assert ys[0] == pytest.approx(0.9993, abs=1e-3)
+    # Dot color matches the time-domain annotation dots and the mpl
+    # DANGER token (#dc2626), same as PgHeatmapCanvas — not an ad hoc red.
+    assert canvas._remarks[0]['dot'].opts['brush'].color().name() == '#dc2626'
     canvas.clear_remarks()
     assert canvas._remarks == []
+
+
+def test_axis_region_click_neither_adds_nor_deletes_remark(canvas, qapp):
+    # plot.sceneBoundingRect() INCLUDES the axis/title/legend chrome, so a
+    # click in the left-axis gutter used to map through vb.mapSceneToView
+    # to an extrapolated coordinate: left-click added an off-plot remark,
+    # right-click deleted the nearest remark with no distance gate. The
+    # guard must use vb.sceneBoundingRect() (same family as the heatmap
+    # colorbar guard, test_right_click_on_colorbar_region_keeps_remarks).
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        psd_label='PSD', title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.show()
+    qapp.processEvents()  # realize the GraphicsLayout geometry
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at('amp', 119.0, 0.5)
+    assert len(canvas._remarks) == 1
+
+    plot_rect = canvas._plot_amp.sceneBoundingRect()
+    vb_rect = canvas._plot_amp.vb.sceneBoundingRect()
+    # Midpoint of the left-axis gutter: inside the plot's scene rect but
+    # outside the ViewBox — the precondition asserts pin the scenario.
+    sp = QPointF((plot_rect.left() + vb_rect.left()) / 2.0,
+                 vb_rect.center().y())
+    assert plot_rect.contains(sp)
+    assert not vb_rect.contains(sp)
+
+    canvas._on_click(_FakeSceneClick(sp, Qt.LeftButton))
+    assert len(canvas._remarks) == 1, "axis-gutter left-click added a remark"
+    canvas._on_click(_FakeSceneClick(sp, Qt.RightButton))
+    assert len(canvas._remarks) == 1, "axis-gutter right-click deleted a remark"
+    canvas.hide()
+
+
+def test_grab_pixmap_offscreen_smoke(canvas, qapp):
+    # Pattern per test_pg_timedomain_canvas.py grab smoke + the export
+    # pixel characterization tests: non-null, ~2x geometry, written to
+    # /tmp for human inspection, and a non-all-white pixel sample (this
+    # repo has an OpenGL all-white-export history — geometry alone does
+    # not prove the export rendered).
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        psd_label='PSD (dB)', title='FFT - vib',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.show()
+    QCoreApplication.processEvents()
+
+    pix = canvas.grab_pixmap()  # default scale=2.0
+    assert pix is not None
+    assert not pix.isNull(), "grab_pixmap returned a null pixmap"
+    dpr = canvas._glw.devicePixelRatioF()
+    assert pix.width() == pytest.approx(canvas._glw.width() * dpr * 2.0, abs=2)
+    assert pix.height() == pytest.approx(canvas._glw.height() * dpr * 2.0, abs=2)
+
+    out_path = "/tmp/pg_line_canvas_fft_smoke.png"
+    assert pix.save(out_path), f"failed to write screenshot to {out_path!r}"
+
+    # Sampled non-white assertion (white background → curve/axes/legend
+    # must leave a substantial non-white footprint).
+    img = pix.toImage()
+    nonwhite = 0
+    for y in range(0, img.height(), 4):
+        for x in range(0, img.width(), 4):
+            c = img.pixelColor(x, y)
+            if c.red() < 245 or c.green() < 245 or c.blue() < 245:
+                nonwhite += 1
+    assert nonwhite > 200, "2x export looks blank (all-white)"
+    canvas.hide()
 
 
 def test_set_tick_density_accepts_inspector_counts(canvas):

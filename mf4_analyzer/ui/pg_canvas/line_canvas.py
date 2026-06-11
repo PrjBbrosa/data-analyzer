@@ -124,8 +124,12 @@ class PgLineCanvas(QWidget):
 
     def _on_hover(self, pos) -> None:
         target = None
+        # vb rect, NOT p.sceneBoundingRect(): the plot rect includes the
+        # axis/title/legend chrome, so hovering an axis label would map to
+        # an extrapolated view coordinate (same trap as the heatmap
+        # colorbar column, lesson 2026-06-11-colorbaritem-label-axis…).
         for p in (self._plot_amp, self._plot_psd):
-            if p.sceneBoundingRect().contains(pos):
+            if p.vb.sceneBoundingRect().contains(pos):
                 target = p
                 break
         if target is None or not self._entries:
@@ -177,8 +181,10 @@ class PgLineCanvas(QWidget):
         label = pg.TextItem(f"({sx:.2f}, {sy:.4g})", color='#111827',
                             fill=pg.mkBrush(255, 255, 255, 200), anchor=(0, 1))
         label.setPos(sx, sy)
+        # DANGER token red — matches the time-domain annotation dots
+        # (pg_canvas/annotations.py) and PgHeatmapCanvas remark dots.
         dot = pg.ScatterPlotItem([sx], [sy], size=7,
-                                 brush=pg.mkBrush('#e03131'),
+                                 brush=pg.mkBrush('#dc2626'),
                                  pen=pg.mkPen('w', width=1))
         plot.addItem(label)
         plot.addItem(dot)
@@ -195,8 +201,12 @@ class PgLineCanvas(QWidget):
         self._remarks.remove(nearest)
 
     def _on_click(self, ev) -> None:
+        # vb rect, NOT p.sceneBoundingRect() — see _on_hover. With the
+        # plot rect, a left-click on the axis gutter added a remark at an
+        # extrapolated coordinate and a right-click deleted the nearest
+        # remark with no distance gate.
         for which, p in (('amp', self._plot_amp), ('psd', self._plot_psd)):
-            if p.sceneBoundingRect().contains(ev.scenePos()):
+            if p.vb.sceneBoundingRect().contains(ev.scenePos()):
                 v = p.vb.mapSceneToView(ev.scenePos())
                 if ev.button() == Qt.LeftButton:
                     self.add_remark_at(which, v.x(), v.y())
