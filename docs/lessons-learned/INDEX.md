@@ -48,6 +48,7 @@ lesson by default.
 | [Pyqtgraph Heatmap Split Layout Alignment](codex-pg-heatmap-split-layout-alignment.md) | Touching Analysis split panes for Order or FFT-vs-Time heatmaps, | See lesson |
 | [Shared ViewTabBar And Pyqtgraph Frames](codex-shared-viewtabbar-and-pg-frames.md) | Touching ViewTabBar QSS, TimeDomain or analysis-section view tab | See lesson |
 | [Codex FFT Spectrum Time Preview](codex-fft-spectrum-time-preview.md) | Load when changing the FFT spectrum UI, FFT overlay source routing, or `PgLineCanvas.plot_spectra`. | See lesson |
+| [Analysis View-All Visual Padding](codex-analysis-view-all-visual-padding.md) | Touching pyqtgraph analysis canvas Home/View-All behavior for FFT, | See lesson |
 
 ## Selection Rules
 

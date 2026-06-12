@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 from PyQt5.QtCore import QCoreApplication, QPointF, Qt
 
+from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
 
 
@@ -97,6 +98,36 @@ def test_plot_spectra_single_entry(canvas):
     assert len(tx) == 1000
     assert len(ty) == 1000
     assert canvas._plot_time.getAxis('bottom').labelText == 'Time (s)'
+
+
+def test_toolbar_home_keeps_full_fft_range_with_visual_padding(canvas, qapp):
+    """Home/查看全部 should include all FFT data without pinning boundary
+    tick labels directly on the plot frame."""
+    canvas.show()
+    qapp.processEvents()
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label='Amplitude',
+        title='FFT - vib', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    toolbar = PgNavigationToolbar(canvas)
+
+    canvas._plot_amp.setXRange(100.0, 200.0, padding=0)
+    canvas._plot_time.setXRange(0.25, 0.5, padding=0)
+    toolbar.home()
+    qapp.processEvents()
+
+    (x0, x1), _ = canvas._plot_amp.vb.viewRange()
+    (tx0, tx1), _ = canvas._plot_time.vb.viewRange()
+    assert x0 < 0.0
+    assert x1 > 500.0
+    assert tx0 < 0.0
+    assert tx1 > 1.0
+    assert x0 > -50.0
+    assert tx0 > -0.1
+
+    toolbar.deleteLater()
+    canvas.hide()
 
 
 def test_fft_curves_are_antialiased(canvas):

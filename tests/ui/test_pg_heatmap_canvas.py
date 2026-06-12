@@ -988,7 +988,8 @@ def test_toolbar_view_boxes_nonempty_and_primary_resolves(qapp):
 
 def test_toolbar_home_still_resets_to_data_extents(qapp):
     # The M6 Home fix (reset_view_to_data_extents) must keep working after
-    # the axes_list addition: zoom in, then Home restores the full extents.
+    # the axes_list addition: zoom in, then Home restores a view containing the
+    # full extents. A tiny visual margin keeps boundary tick labels off-frame.
     c = PgHeatmapCanvas(with_slice=False)
     c.resize(640, 480)
     c.plot_or_update_heatmap(
@@ -1001,9 +1002,45 @@ def test_toolbar_home_still_resets_to_data_extents(qapp):
     c._plot.setYRange(1.0, 3.0, padding=0)
     toolbar.home()
     (x0, x1), (y0, y1) = c._plot.vb.viewRange()
-    assert (x0, x1) == (pytest.approx(0.0), pytest.approx(10.0))
-    assert (y0, y1) == (pytest.approx(0.0), pytest.approx(8.0))
+    assert x0 < 0.0 and x1 > 10.0
+    assert y0 < 0.0 and y1 > 8.0
+    assert x0 == pytest.approx(-0.15)
+    assert x1 == pytest.approx(10.15)
+    assert y0 == pytest.approx(-0.12)
+    assert y1 == pytest.approx(8.12)
     toolbar.deleteLater()
+    c.deleteLater()
+
+
+@pytest.mark.parametrize("with_slice", [False, True])
+def test_toolbar_home_keeps_heatmap_extents_with_visual_padding(qapp, with_slice):
+    """Order and FFT-vs-Time Home/查看全部 should include full data without
+    placing boundary tick labels directly on the plot frame."""
+    c = PgHeatmapCanvas(with_slice=with_slice)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=True,
+    )
+    toolbar = PgNavigationToolbar(c)
+
+    c._plot.setXRange(2.0, 4.0, padding=0)
+    c._plot.setYRange(1.0, 3.0, padding=0)
+    toolbar.home()
+    qapp.processEvents()
+
+    (x0, x1), (y0, y1) = c._plot.vb.viewRange()
+    assert x0 < 0.0
+    assert x1 > 10.0
+    assert y0 < 0.0
+    assert y1 > 8.0
+    assert x0 > -1.0
+    assert y0 > -1.0
+
+    toolbar.deleteLater()
+    c.hide()
     c.deleteLater()
 
 

@@ -13,7 +13,11 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFontMetricsF, QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
-from .heatmap_canvas import _apply_neutral_axis_frame, _tick_counts_to_density
+from .heatmap_canvas import (
+    _apply_neutral_axis_frame,
+    _tick_counts_to_density,
+    _visual_padded_bounds,
+)
 from .context_menu import redesign_pg_context_menu
 from .viewbox import _ModifierWheelViewBox
 
@@ -159,13 +163,19 @@ class PgLineCanvas(QWidget):
             for p in (self._plot_amp, self._plot_time):
                 p.vb.autoRange()
             return
-        self._plot_amp.setXRange(self._last_xlim[0], self._last_xlim[1], padding=0)
+        x0, x1 = _visual_padded_bounds(self._last_xlim[0], self._last_xlim[1])
+        self._plot_amp.setXRange(x0, x1, padding=0)
         if self._last_yrange is not None:
+            y0, y1 = _visual_padded_bounds(self._last_yrange[0], self._last_yrange[1])
             self._plot_amp.setYRange(
-                self._last_yrange[0], self._last_yrange[1], padding=0)
+                y0, y1, padding=0)
         else:
             self._plot_amp.enableAutoRange(axis='y')
         self.select_time_entry(self._selected_time_entry_idx)
+        bounds = self._combined_time_bounds()
+        if bounds is not None:
+            tx0, tx1 = _visual_padded_bounds(bounds[0], bounds[1])
+            self._plot_time.setXRange(tx0, tx1, padding=0)
 
     def full_reset(self) -> None:
         for p, curves in ((self._plot_amp, self._amp_curves),
@@ -258,6 +268,19 @@ class PgLineCanvas(QWidget):
                 self._plot_time.setXRange(lo - 0.5, hi + 0.5, padding=0)
         self._plot_time.enableAutoRange(axis='y')
         self.layout_geometry_changed.emit()
+
+    def _combined_time_bounds(self):
+        bounds = []
+        for e in self._entries:
+            t = np.asarray(e.get('time', []), dtype=float)
+            if t.size == 0:
+                continue
+            finite = t[np.isfinite(t)]
+            if finite.size:
+                bounds.append((float(finite.min()), float(finite.max())))
+        if not bounds:
+            return None
+        return min(lo for lo, _hi in bounds), max(hi for _lo, hi in bounds)
 
     # ------------------------------------------------------------------
     # split-pane layout alignment

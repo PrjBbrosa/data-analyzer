@@ -75,6 +75,24 @@ def _tick_counts_to_density(x_n: int, y_n: int) -> tuple:
     return x_d, y_d
 
 
+def _visual_padded_bounds(lo: float, hi: float, *, fraction: float = 0.015) -> tuple:
+    """Return a small display margin around full data bounds.
+
+    Home/View-All should include every data point without placing boundary
+    tick labels directly on the plot frame. Keep this visual-only margin tiny
+    so reset still reads as "full data range" to the user.
+    """
+    lo = float(lo)
+    hi = float(hi)
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        return lo, hi
+    span = hi - lo
+    if span <= 0:
+        return lo, hi
+    pad = span * float(fraction)
+    return lo - pad, hi + pad
+
+
 def _apply_neutral_axis_frame(plot) -> None:
     """Draw a full frame with axes, avoiding ViewBox border/axis overlap."""
     vb = plot.getViewBox()
@@ -455,8 +473,10 @@ class PgHeatmapCanvas(QWidget):
             self._plot.vb.autoRange()
             return
         x0, x1, y0, y1 = self._extents
-        self._plot.setXRange(float(x0), float(x1), padding=0)
-        self._plot.setYRange(float(y0), float(y1), padding=0)
+        px0, px1 = _visual_padded_bounds(x0, x1)
+        py0, py1 = _visual_padded_bounds(y0, y1)
+        self._plot.setXRange(px0, px1, padding=0)
+        self._plot.setYRange(py0, py1, padding=0)
 
     # ------------------------------------------------------------------
     # FFT-vs-Time: spectrogram render + frequency slice (with_slice=True)
