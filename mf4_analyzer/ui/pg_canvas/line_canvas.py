@@ -8,10 +8,10 @@ breaks grab_pixmap exports on this project.
 from __future__ import annotations
 
 import numpy as np
-import pyqtgraph as pg
 from PyQt5.QtCore import QPointF, Qt, pyqtSignal
-from PyQt5.QtGui import QFontMetricsF, QPixmap
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
+import pyqtgraph as pg
 
 from mf4_analyzer.ui.canvases import build_envelope
 
@@ -631,27 +631,30 @@ class PgLineCanvas(QWidget):
         self._apply_title_text(self._plot_time, self._raw_time_title)
 
     def _apply_title_text(self, plot, title: str) -> None:
-        title = title or ''
-        width = self._split_title_width
-        label = plot.titleLabel
-        if width is None or not title:
+        try:
+            plot.setTitle(None)
+        except Exception:
             try:
-                label.setMinimumWidth(0)
-                label.setMaximumWidth(1000000)
+                plot.setTitle("")
             except Exception:
                 pass
-            plot.setTitle(title)
-            return
+        label = plot.titleLabel
+        for name, value in (
+            ("setMinimumHeight", 0),
+            ("setMaximumHeight", 0),
+            ("setPreferredHeight", 0),
+        ):
+            setter = getattr(label, name, None)
+            if callable(setter):
+                try:
+                    setter(value)
+                except Exception:
+                    pass
         try:
-            fm = QFontMetricsF(label.item.font())
-            title = fm.elidedText(title, Qt.ElideMiddle, int(round(width)))
+            label.setVisible(False)
         except Exception:
             pass
-        plot.setTitle(title)
         try:
-            label.setMinimumWidth(0)
-            label.setMaximumWidth(float(width))
-            label.setPreferredWidth(float(width))
             label.updateMin()
             label.updateGeometry()
         except Exception:

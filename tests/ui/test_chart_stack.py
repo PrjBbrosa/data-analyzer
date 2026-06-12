@@ -145,8 +145,13 @@ def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
     for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
         assert hasattr(card, '_annotation_btn')
         assert hasattr(card, '_clear_annotation_btn')
-        assert card._annotation_btn.text() == '开启'
+        assert card._annotation_btn.objectName() == 'chartAnnotationButton'
+        assert card._annotation_btn.text() == ''
+        assert card._annotation_btn.isCheckable()
         assert card._annotation_btn.toolTip()
+        assert card._clear_annotation_btn.objectName() == 'chartAnnotationClearButton'
+        assert card._clear_annotation_btn.text() == ''
+        assert card._clear_annotation_btn.toolTip()
 
 
 def test_time_annotation_control_follows_zoom_button(qapp, qtbot):
@@ -160,15 +165,25 @@ def test_time_annotation_control_follows_zoom_button(qapp, qtbot):
         i for i, act in enumerate(actions)
         if card.toolbar.widgetForAction(act) is card._annotation_btn
     )
+    copy_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card._copy_btn
+    )
+    tick_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card._tick_density_btn
+    )
     options_index = next(
         i for i, act in enumerate(actions)
         if card.toolbar.widgetForAction(act) is card._options_btn
     )
+    save_index = next(i for i, act in enumerate(actions) if act.data() == 'save')
 
-    assert zoom_index < annotation_index < options_index
+    assert zoom_index < annotation_index < copy_index < tick_index
+    assert tick_index < options_index < save_index
 
 
-def test_annotation_toolbar_controls_are_pushed_right_without_toolbar_hint(qapp, qtbot):
+def test_analysis_annotation_controls_follow_zoom_on_left(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
 
@@ -185,21 +200,21 @@ def test_annotation_toolbar_controls_are_pushed_right_without_toolbar_hint(qapp,
             for widget in toolbar_widgets
             if widget is not None
         )
-        spacer_index = next(
-            i for i, act in enumerate(actions)
-            if card.toolbar.widgetForAction(act) is card._annotation_spacer
-        )
+        zoom_index = next(i for i, act in enumerate(actions) if act.data() == 'zoom')
         annotation_index = next(
             i for i, act in enumerate(actions)
-            if card.toolbar.widgetForAction(act) is card._annotation_label
+            if card.toolbar.widgetForAction(act) is card._annotation_btn
+        )
+        clear_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._clear_annotation_btn
+        )
+        copy_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._copy_btn
         )
 
-        assert spacer_index < annotation_index
-        assert (
-            card._annotation_spacer.sizePolicy().horizontalPolicy()
-            == QSizePolicy.Expanding
-        )
-        assert card._annotation_spacer.testAttribute(Qt.WA_StyledBackground)
+        assert zoom_index < annotation_index < clear_index < copy_index
 
 
 def test_time_toolbar_controls_are_pushed_right_without_toolbar_coords(qapp, qtbot):
@@ -1342,10 +1357,9 @@ def test_dblclick_second_subplot_opens_options_for_that_axis(qapp, qtbot, monkey
     assert captured[-1].view_box is handles[0].view_box
 
 
-def test_annotation_toolbar_spacer_has_toolbar_background_rule():
+def test_time_controls_spacer_has_toolbar_background_rule():
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
 
-    assert "QWidget#chartToolbar QWidget#chartAnnotationSpacer" in qss
     assert "background-color: #ffffff;" in qss
     assert "QWidget#chartToolbar QWidget#chartTimeControlsSpacer" in qss
 
@@ -1366,6 +1380,83 @@ def test_chart_cards_have_chart_options_toolbar_button(qapp, qtbot):
         assert card._options_btn.objectName() == 'chartOptionsButton'
         assert card._options_btn.toolTip() == '图表选项'
         assert card._options_btn.autoRaise()
+
+
+def test_chart_cards_have_tick_density_popout_button(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        assert hasattr(card, "_tick_density_btn")
+        assert hasattr(card, "_tick_density_popover")
+        assert card._tick_density_btn.objectName() == "chartTickDensityButton"
+        assert card._tick_density_btn.text() == ""
+        assert not card._tick_density_btn.icon().isNull()
+        assert card._tick_density_btn.width() == 32
+        assert card._tick_density_btn.focusPolicy() == Qt.NoFocus
+
+        pop = card._tick_density_popover
+        assert pop.objectName() == "TickDensityPopover"
+        layout = pop._surface.layout()
+        assert layout.indexOf(pop._preset_host) < layout.indexOf(pop._x_row)
+        assert layout.indexOf(pop._preset_host) < layout.indexOf(pop._y_row)
+
+
+def test_analysis_tick_density_and_config_precede_save_on_left(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
+        actions = card.toolbar.actions()
+        copy_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._copy_btn
+        )
+        tick_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._tick_density_btn
+        )
+        options_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._options_btn
+        )
+        save_index = next(i for i, act in enumerate(actions) if act.data() == 'save')
+        annotation_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._annotation_btn
+        )
+        clear_index = next(
+            i for i, act in enumerate(actions)
+            if card.toolbar.widgetForAction(act) is card._clear_annotation_btn
+        )
+
+        assert annotation_index < clear_index < copy_index
+        assert copy_index < tick_index < options_index < save_index
+
+
+def test_tick_density_popout_preset_emits_and_updates_button(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    card = cs._time_card
+    pop = card._tick_density_popover
+
+    with qtbot.waitSignal(card.tick_density_changed, timeout=200) as blocker:
+        pop._preset_buttons["密"].click()
+
+    assert blocker.args == [20, 14]
+    assert pop.density() == (20, 14)
+    assert card._tick_density_btn.text() == ""
+    assert card._tick_density_btn.toolTip() == "刻度密度 X20 / Y14"
+
+
+def test_chart_stack_relays_tick_density_popout_signal(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    with qtbot.waitSignal(cs.tick_density_changed, timeout=200) as blocker:
+        cs._order_card._tick_density_popover.set_density(6, 5, emit=True)
+
+    assert blocker.args == [6, 5]
 
 
 def test_chart_options_toolbar_button_delegates_to_canvas(qapp, qtbot):
@@ -1407,15 +1498,15 @@ def test_annotation_toolbar_toggles_canvas_modes(qapp, qtbot):
 
     cs._fft_card._annotation_btn.click()
     assert cs.canvas_fft._remark_enabled is True
-    assert cs._fft_card._annotation_btn.text() == '关闭'
+    assert cs._fft_card._annotation_btn.isChecked()
 
     cs._fft_time_card._annotation_btn.click()
     assert cs.canvas_fft_time._remark_enabled is True
-    assert cs._fft_time_card._annotation_btn.text() == '关闭'
+    assert cs._fft_time_card._annotation_btn.isChecked()
 
     cs._order_card._annotation_btn.click()
     assert cs.canvas_order._remark_enabled is True
-    assert cs._order_card._annotation_btn.text() == '关闭'
+    assert cs._order_card._annotation_btn.isChecked()
 
     assert ('time', True) in seen
     assert ('fft', True) in seen

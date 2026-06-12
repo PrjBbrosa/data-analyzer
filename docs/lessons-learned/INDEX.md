@@ -49,6 +49,8 @@ lesson by default.
 | [Shared ViewTabBar And Pyqtgraph Frames](codex-shared-viewtabbar-and-pg-frames.md) | Touching ViewTabBar QSS, TimeDomain or analysis-section view tab | See lesson |
 | [Codex FFT Spectrum Time Preview](codex-fft-spectrum-time-preview.md) | Load when changing the FFT spectrum UI, FFT overlay source routing, or `PgLineCanvas.plot_spectra`. | See lesson |
 | [Analysis View-All Visual Padding](codex-analysis-view-all-visual-padding.md) | Touching pyqtgraph analysis canvas Home/View-All behavior for FFT, | See lesson |
+| [Analysis Section State Needs Pane-Local Sources](codex-analysis-section-state-needs-pane-local-sources.md) | Work on analysis View tabs, split panes, FFT source colors, or project | See lesson |
+| [Tick Density Lives In Chart Toolbar Popout](codex-tick-density-toolbar-popout.md) | Touching global tick-density controls, Inspector persistent chart | See lesson |
 
 ## Selection Rules
 

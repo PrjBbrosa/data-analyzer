@@ -1407,11 +1407,11 @@ def _make_axis_settings_group(
     return g
 
 class PersistentTop(QWidget):
-    """Xaxis / Range / Ticks sections.
+    """Xaxis / Range sections plus hidden tick-density compatibility state.
 
     R3 #6: the three sections live inside a collapsible container that
     defaults to collapsed (single-row affordance reading "▶ 图表设置 (横坐标
-    · 时间范围 · 刻度密度)"). The collapsed state is persisted via QSettings under
+    · 时间范围)"). The collapsed state is persisted via QSettings under
     ``_SETTINGS_KEY`` so layouts survive between sessions.
 
     All public attributes / methods documented on the class remain
@@ -1440,7 +1440,7 @@ class PersistentTop(QWidget):
         self.btn_collapser.setObjectName("inspectorCollapser")
         self.btn_collapser.setCheckable(True)
         self.btn_collapser.setAutoRaise(True)
-        self.btn_collapser.setText("图表设置 (横坐标 · 时间范围 · 刻度密度)")
+        self.btn_collapser.setText("图表设置 (横坐标 · 时间范围)")
         self.btn_collapser.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.btn_collapser.setArrowType(Qt.RightArrow)
         self.btn_collapser.setSizePolicy(
@@ -1519,25 +1519,20 @@ class PersistentTop(QWidget):
         fl.addRow("开始:", self._range_row_host)
         body_lay.addWidget(g)
 
-        # ------- Tick density group (§6.1 ▸ 刻度) -------
-        g = QGroupBox("坐标刻度密度")
-        g.setToolTip("控制图表 X/Y 轴主刻度的大致数量；数值越大，刻度越密。")
-        fl = QFormLayout(g)
-        _configure_form(fl)
-        # 紧凑化【1】: X / Y share one form row.
-        self.spin_xt = _no_buttons(QSpinBox())
+        # ------- Tick density compatibility state -------
+        # The visible control moved to the chart toolbar popout. Keep these
+        # hidden spin boxes so existing view-state/project plumbing can keep
+        # using ``PersistentTop.tick_density()`` without a broad rewrite.
+        self.spin_xt = _no_buttons(QSpinBox(self))
         self.spin_xt.setRange(3, 30)
         self.spin_xt.setValue(10)
         self.spin_xt.setToolTip("X 轴主刻度的大致数量，范围 3–30。")
-        self.spin_yt = _no_buttons(QSpinBox())
+        self.spin_xt.hide()
+        self.spin_yt = _no_buttons(QSpinBox(self))
         self.spin_yt.setRange(3, 20)
         self.spin_yt.setValue(8)
         self.spin_yt.setToolTip("Y 轴主刻度的大致数量，范围 3–20。")
-        self._tick_row_host = _pair_field(
-            self.spin_xt, "Y轴:", self.spin_yt,
-        )
-        fl.addRow("X轴:", self._tick_row_host)
-        body_lay.addWidget(g)
+        self.spin_yt.hide()
 
         self._wire()
         self._xaxis_section_visible = True
@@ -1610,9 +1605,9 @@ class PersistentTop(QWidget):
         self._xaxis_section_visible = bool(visible)
         self._xaxis_group.setVisible(self._xaxis_section_visible)
         text = (
-            "图表设置 (横坐标 · 时间范围 · 刻度密度)"
+            "图表设置 (横坐标 · 时间范围)"
             if self._xaxis_section_visible
-            else "图表设置 (时间范围 · 刻度密度)"
+            else "图表设置 (时间范围)"
         )
         self.btn_collapser.setText(text)
 

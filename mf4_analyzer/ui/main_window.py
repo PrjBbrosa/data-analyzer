@@ -346,6 +346,7 @@ class MainWindow(QMainWindow):
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
+        self.chart_stack.tick_density_changed.connect(self._update_all_tick_density_pair)
         self.inspector.remark_toggled.connect(
             lambda enabled: self.chart_stack.set_annotation_enabled('fft', enabled)
         )
@@ -797,12 +798,13 @@ class MainWindow(QMainWindow):
                 canvas._levels_echo_wired = True
 
     # -- view-switch pipeline (capture → switch → apply → render) -------
-    def _capture_active_analysis_view(self, section):
+    def _capture_active_analysis_view(self, section, *, capture_sources=True):
         from .analysis_view_bridge import capture_params_to_state
         mgr = self.analysis_managers[section]
         state = mgr.get(mgr.active)
         capture_params_to_state(self._analysis_ctx(section), state)
-        self._capture_analysis_sources(section, state)
+        if capture_sources:
+            self._capture_analysis_sources(section, state)
 
     def _on_analysis_view_switched(self, section, idx):
         """manager.active_changed → apply the new view's structure, params and
@@ -909,6 +911,24 @@ class MainWindow(QMainWindow):
                 rpm = ctx.current_rpm()
                 pane.rpm_source = tuple(rpm) if rpm else None
 
+    def _analysis_channel_color_map(self):
+        colors = {}
+        getter = getattr(self.navigator, 'get_channel_colors', None)
+        if callable(getter):
+            for key, color in getter().items():
+                try:
+                    fid, ch = key[:2]
+                except (TypeError, ValueError):
+                    continue
+                colors[(fid, ch)] = color
+        for row in self.navigator.get_checked_channels():
+            try:
+                fid, ch, color = row[:3]
+            except (TypeError, ValueError):
+                continue
+            colors[(fid, ch)] = color
+        return colors
+
     def _apply_analysis_sources(self, section, state):
         page = self._analysis_page(section)
         idx = min(page.focused_index(), len(state.panes) - 1)
@@ -998,10 +1018,7 @@ class MainWindow(QMainWindow):
             cache = self.analysis_caches[section]
             if section == 'fft':
                 entries = []
-                colors = dict(
-                    ((fid, ch), color)
-                    for fid, ch, color in self.navigator.get_checked_channels()
-                )
+                colors = self._analysis_channel_color_map()
                 for fid, ch in pane.sources:
                     key = self._analysis_cache_key(section, fid, ch)
                     result = cache.get(key)
@@ -1279,16 +1296,34 @@ class MainWindow(QMainWindow):
         tick_opts = axis_opts.get('tick_density') or {}
         xt = tick_opts.get('x', 10)
         yt = tick_opts.get('y', 6)
+        self._set_tick_density_controls_silent(xt, yt)
+
+    def _set_tick_density_controls_silent(self, xt, yt):
+        xt = int(xt)
+        yt = int(yt)
+        top = self.inspector.top
         old_xt = top.spin_xt.blockSignals(True)
         old_yt = top.spin_yt.blockSignals(True)
         try:
-            top.spin_xt.setValue(int(xt))
-            top.spin_yt.setValue(int(yt))
+            top.spin_xt.setValue(xt)
+            top.spin_yt.setValue(yt)
         finally:
             top.spin_yt.blockSignals(old_yt)
             top.spin_xt.blockSignals(old_xt)
+        setter = getattr(self.chart_stack, 'set_tick_density_controls', None)
+        if callable(setter):
+            setter(xt, yt)
 
     def _on_mode_changed(self, mode):
+        old_mode = self.chart_stack.current_mode()
+        if (
+            old_mode != mode
+            and not getattr(self, '_opening_project', False)
+        ):
+            if old_mode == 'time':
+                self._capture_focused_view()
+            elif old_mode in self.analysis_managers:
+                self._capture_active_analysis_view(old_mode)
         self.chart_stack.set_mode(mode)
         self.inspector.set_mode(mode)
         self.toolbar.set_enabled_for_mode(mode, has_file=bool(self.files))
@@ -1553,6 +1588,9 @@ class MainWindow(QMainWindow):
                 chk.blockSignals(False)
 
     def _update_all_tick_density_pair(self, xt, yt):
+        xt = int(xt)
+        yt = int(yt)
+        self._set_tick_density_controls_silent(xt, yt)
         canvas = self.chart_stack.focused_canvas()
         canvas.set_tick_density(xt, yt)
         idx = self._view_index_for_canvas(canvas)
@@ -1566,8 +1604,13 @@ class MainWindow(QMainWindow):
         # (PgHeatmapCanvas) are pyqtgraph widgets — no ``fig``/``draw_idle``.
         # Their set_tick_density takes the same inspector tick COUNTS the
         # old MaxNLocator(nbins=...) loop consumed, so the knob semantics hold.
-        self.canvas_fft.set_tick_density(xt, yt)
-        self.canvas_order.set_tick_density(xt, yt)
+        for page in (
+            self.chart_stack.page_fft,
+            self.chart_stack.page_fft_time,
+            self.chart_stack.page_order,
+        ):
+            for pane_idx in range(page.pane_count()):
+                page.pane_canvas(pane_idx).set_tick_density(xt, yt)
 
     def _show_rebuild_popover(self, anchor, mode='fft'):
         """Open the 重建时间轴 modal popover for the active selection.
@@ -1997,8 +2040,10 @@ class MainWindow(QMainWindow):
         # Flush each analysis section's live UI state into its active view so
         # the last (uncommitted) inspector edit / source / compare toggle is
         # serialized rather than lost.
+        current_mode = self.chart_stack.current_mode()
         for sec in self.analysis_managers:
-            self._capture_active_analysis_view(sec)
+            self._capture_active_analysis_view(
+                sec, capture_sources=(sec == current_mode))
 
         file_refs = []
         for fid, fd in self.files.items():
@@ -2109,7 +2154,11 @@ class MainWindow(QMainWindow):
         # Calling chart_stack.set_mode alone leaves the toolbar segment and
         # the inspector panel stuck on the previous mode (desync on reopen of
         # a project saved in FFT / Order / FFT-vs-Time).
-        self.toolbar._set_mode(doc.current_mode)
+        self._opening_project = True
+        try:
+            self.toolbar._set_mode(doc.current_mode)
+        finally:
+            self._opening_project = False
 
         if missing:
             QMessageBox.warning(
@@ -2829,10 +2878,7 @@ class MainWindow(QMainWindow):
         page = self.chart_stack.page_fft
         fft_params = self.inspector.fft_ctx.current_params()
         cache = self.analysis_caches['fft']
-        colors = dict(
-            ((fid, ch), color)
-            for fid, ch, color in self.navigator.get_checked_channels()
-        )
+        colors = self._analysis_channel_color_map()
 
         any_rendered = False
         any_multi = False
@@ -3776,6 +3822,8 @@ class MainWindow(QMainWindow):
             y_min=float(p.get('y_min', 0.0)),
             y_max=float(p.get('y_max', 0.0)),
         )
+        xt, yt = self.inspector.top.tick_density()
+        canvas.set_tick_density(xt, yt)
 
     def _on_fft_time_cursor_info(self, text):
         """Surface PgHeatmapCanvas hover readout in the status bar.

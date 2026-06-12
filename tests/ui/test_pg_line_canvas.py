@@ -100,6 +100,20 @@ def test_plot_spectra_single_entry(canvas):
     assert canvas._plot_time.getAxis('bottom').labelText == 'Time (s)'
 
 
+def test_line_canvas_hides_title_rows_and_disables_axis_si_prefix(canvas):
+    canvas.plot_spectra(
+        [_entry(), _entry("f2 · vib", "#dc2626")], xlim=(0.0, 500.0),
+        amp_label='Amplitude',
+        title='FFT · 2 条曲线', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+
+    for plot in (canvas._plot_amp, canvas._plot_time):
+        assert not plot.titleLabel.isVisible()
+        assert plot.titleLabel.maximumHeight() == 0
+        assert plot.getAxis('left').autoSIPrefix is False
+        assert plot.getAxis('bottom').autoSIPrefix is False
+
+
 def test_toolbar_home_keeps_full_fft_range_with_visual_padding(canvas, qapp):
     """Home/查看全部 should include all FFT data without pinning boundary
     tick labels directly on the plot frame."""

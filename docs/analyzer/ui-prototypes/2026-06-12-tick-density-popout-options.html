@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraceLab 刻度密度 Popout 方案对比</title>
+<style>
+  :root {
+    --app-bg: #f3f6fb;
+    --surface: #ffffff;
+    --panel: #eef4ff;
+    --line: #dbe5f1;
+    --line-strong: #b7c8dc;
+    --text: #111827;
+    --muted: #64748b;
+    --blue: #0b7af3;
+    --blue-soft: #e7f1ff;
+    --green: #16a34a;
+    --orange: #f97316;
+    --danger: #e11d48;
+    --shadow: 0 12px 28px rgba(15, 23, 42, .18);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: #101820;
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+  }
+
+  header {
+    padding: 18px 24px 12px;
+    color: #e5edf7;
+    border-bottom: 1px solid rgba(219, 229, 241, .16);
+  }
+  h1 { margin: 0 0 4px; font-size: 18px; font-weight: 700; letter-spacing: 0; }
+  .sub { color: #9fb0c3; font-size: 12px; }
+
+  main {
+    padding: 18px 24px 32px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(360px, 1fr));
+    gap: 18px;
+  }
+
+  .option {
+    background: #17212d;
+    border: 1px solid #2b3a4b;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .option.recommended {
+    border-color: #2f8cff;
+    box-shadow: 0 0 0 1px rgba(47, 140, 255, .7);
+  }
+  .option-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    color: #e5edf7;
+    border-bottom: 1px solid #263546;
+  }
+  .badge {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    background: #243346;
+    color: #bdd5f0;
+  }
+  .recommended .badge { background: var(--blue); color: #fff; }
+  .option-title { font-weight: 700; flex: 1; }
+  .tag {
+    color: #bfdbfe;
+    background: rgba(11, 122, 243, .16);
+    border: 1px solid rgba(11, 122, 243, .35);
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+  }
+
+  .mock {
+    margin: 14px;
+    height: 455px;
+    background: var(--app-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+  }
+  .mock-toolbar {
+    height: 52px;
+    background: #f7f9fc;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 10px;
+  }
+  .tool {
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    border-radius: 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #334155;
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .tool.primary {
+    color: var(--blue);
+    border-color: var(--blue);
+    background: var(--blue-soft);
+  }
+  .tool.compact {
+    width: 44px;
+    font-size: 12px;
+    letter-spacing: 0;
+  }
+  .sep {
+    width: 1px;
+    height: 24px;
+    background: var(--line);
+    margin: 0 3px;
+  }
+  .mock-body {
+    height: calc(100% - 52px);
+    display: grid;
+    grid-template-columns: 1fr 124px;
+  }
+  .chart {
+    background: #fff;
+    border-right: 1px solid var(--line);
+    position: relative;
+    overflow: hidden;
+  }
+  .grid {
+    position: absolute;
+    inset: 34px 24px 48px 54px;
+    background:
+      linear-gradient(to right, rgba(100, 116, 139, .18) 1px, transparent 1px) 0 0 / 54px 100%,
+      linear-gradient(to bottom, rgba(100, 116, 139, .18) 1px, transparent 1px) 0 0 / 100% 38px;
+    border: 1px solid #a9b8c9;
+  }
+  .grid::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    top: 58%;
+    height: 2px;
+    background: linear-gradient(90deg, #0ea5e9, #2563eb);
+    transform: skewY(-3deg);
+  }
+  .axis-label {
+    position: absolute;
+    color: #94a3b8;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .axis-x { bottom: 18px; left: 50%; transform: translateX(-50%); }
+  .axis-y { left: 10px; top: 46%; transform: rotate(-90deg); transform-origin: left top; }
+  .side {
+    padding: 13px 10px;
+    background: #eaf2ff;
+  }
+  .side h3 { margin: 0 0 12px; font-size: 14px; }
+  .field {
+    height: 32px;
+    border: 1px solid var(--line);
+    background: #fff;
+    border-radius: 7px;
+    margin-bottom: 9px;
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    color: #334155;
+  }
+  .blue-btn {
+    height: 34px;
+    background: var(--blue);
+    color: #fff;
+    border-radius: 7px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    margin-top: 18px;
+  }
+
+  .pop {
+    position: absolute;
+    background: #fff;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    padding: 11px;
+    width: 240px;
+    z-index: 5;
+  }
+  .pop.small { width: 214px; }
+  .pop h4 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 20px 1fr 34px;
+    align-items: center;
+    gap: 9px;
+    margin: 9px 0;
+  }
+  .row label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #334155;
+  }
+  .rail {
+    height: 5px;
+    border-radius: 999px;
+    background: #d9e5f5;
+    position: relative;
+  }
+  .fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 56%;
+    background: var(--blue);
+    border-radius: inherit;
+  }
+  .knob {
+    position: absolute;
+    left: 56%;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border: 2px solid var(--blue);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .val {
+    height: 26px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    color: #1e293b;
+  }
+  .presets {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .preset {
+    border: 1px solid var(--line);
+    background: #fff;
+    color: #334155;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 12px;
+  }
+  .preset.on {
+    color: var(--blue);
+    border-color: var(--blue);
+    background: var(--blue-soft);
+  }
+  .reset {
+    margin-top: 8px;
+    height: 28px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #475569;
+    font-size: 12px;
+  }
+  .hint {
+    margin-top: 9px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .a .pop { top: 46px; left: 170px; }
+  .b .pop { top: 80px; left: 162px; }
+  .c .pop { right: 18px; bottom: 18px; }
+
+  .menu {
+    position: absolute;
+    top: 82px;
+    left: 78px;
+    width: 150px;
+    background: #fff;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    padding: 5px;
+  }
+  .menu-item {
+    height: 29px;
+    display: flex;
+    align-items: center;
+    padding: 0 9px;
+    border-radius: 5px;
+    color: #1f2937;
+    font-size: 12px;
+  }
+  .menu-item.hot { background: var(--blue-soft); color: var(--blue); font-weight: 700; }
+
+  .floating-pill {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    height: 34px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--blue);
+    background: rgba(255, 255, 255, .94);
+    border: 1px solid var(--blue);
+    border-radius: 7px;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, .14);
+    font-weight: 700;
+  }
+
+  .notes {
+    padding: 0 14px 14px;
+    color: #b8c6d8;
+    font-size: 12px;
+  }
+  .notes b { color: #e5edf7; }
+  .notes ul { margin: 8px 0 0 18px; padding: 0; }
+  .notes li { margin: 4px 0; }
+
+  @media (max-width: 1180px) {
+    main { grid-template-columns: 1fr; }
+    .mock { max-width: 620px; margin-left: auto; margin-right: auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>刻度密度 Popout 方案对比</h1>
+  <div class="sub">TraceLab v7.0 / 视图控制从 Inspector 移到图表区域的候选 UI</div>
+</header>
+
+<main>
+  <section class="option recommended">
+    <div class="option-head">
+      <span class="badge">A</span>
+      <span class="option-title">工具条按钮 + Popout</span>
+      <span class="tag">推荐</span>
+    </div>
+    <div class="mock a">
+      <div class="mock-toolbar">
+        <div class="tool">⌂</div><div class="tool">←</div><div class="tool">→</div>
+        <div class="tool">✥</div><div class="tool">⌕</div>
+        <div class="tool primary">╂</div>
+        <div class="tool">▣</div><div class="tool">▤</div>
+        <div class="sep"></div>
+        <div class="tool compact">X10</div>
+      </div>
+      <div class="mock-body">
+        <div class="chart">
+          <div class="grid"></div>
+          <div class="axis-label axis-y">Amplitude</div>
+          <div class="axis-label axis-x">Time (s)</div>
+        </div>
+        <aside class="side">
+          <h3>分析信号</h3>
+          <div class="field">Fs 100.0 Hz</div>
+          <div class="field">窗口 hanning</div>
+          <div class="blue-btn">计算 FFT</div>
+        </aside>
+      </div>
+      <div class="pop">
+        <h4>刻度密度 <span style="color:#64748b;font-size:11px;">全局</span></h4>
+        <div class="row"><label>X</label><div class="rail"><span class="fill"></span><span class="knob"></span></div><div class="val">10</div></div>
+        <div class="row"><label>Y</label><div class="rail"><span class="fill" style="width:44%"></span><span class="knob" style="left:44%"></span></div><div class="val">8</div></div>
+        <div class="presets"><div class="preset">疏</div><div class="preset on">标准</div><div class="preset">密</div></div>
+        <div class="reset">恢复默认 10 / 8</div>
+        <div class="hint">靠近 Home / Zoom / Grid，像视图控制，不再挤占右侧参数。</div>
+      </div>
+    </div>
+    <div class="notes">
+      <b>适合落地。</b>
+      <ul>
+        <li>入口清楚，和缩放/网格同一工具条语义。</li>
+        <li>Inspector 变轻，分析参数不会混进显示设置。</li>
+        <li>按钮可显示当前 X 密度或只显示网格图标。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="option">
+    <div class="option-head">
+      <span class="badge">B</span>
+      <span class="option-title">右键菜单子项</span>
+    </div>
+    <div class="mock b">
+      <div class="mock-toolbar">
+        <div class="tool">⌂</div><div class="tool">←</div><div class="tool">→</div>
+        <div class="tool">✥</div><div class="tool">⌕</div><div class="tool">╂</div>
+        <div class="tool">▣</div><div class="tool">▤</div>
+      </div>
+      <div class="mock-body">
+        <div class="chart">
+          <div class="grid"></div>
+          <div class="axis-label axis-y">Amplitude</div>
+          <div class="axis-label axis-x">Time (s)</div>
+          <div class="menu">
+            <div class="menu-item">查看全部</div>
+            <div class="menu-item">X 轴范围</div>
+            <div class="menu-item">Y 轴范围</div>
+            <div class="menu-item hot">刻度密度 ›</div>
+            <div class="menu-item">网格</div>
+          </div>
+        </div>
+        <aside class="side">
+          <h3>分析信号</h3>
+          <div class="field">Fs 100.0 Hz</div>
+          <div class="field">窗口 hanning</div>
+          <div class="blue-btn">计算 FFT</div>
+        </aside>
+      </div>
+      <div class="pop small">
+        <h4>刻度密度</h4>
+        <div class="presets"><div class="preset">疏</div><div class="preset on">标准</div><div class="preset">密</div></div>
+        <div class="row"><label>X</label><div class="rail"><span class="fill"></span><span class="knob"></span></div><div class="val">10</div></div>
+        <div class="row"><label>Y</label><div class="rail"><span class="fill" style="width:44%"></span><span class="knob" style="left:44%"></span></div><div class="val">8</div></div>
+      </div>
+    </div>
+    <div class="notes">
+      <b>最省界面空间。</b>
+      <ul>
+        <li>和现有右键绘图选项自然同组。</li>
+        <li>发现成本高，用户不一定知道这里能调全局密度。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="option">
+    <div class="option-head">
+      <span class="badge">C</span>
+      <span class="option-title">画布右下角浮动按钮</span>
+    </div>
+    <div class="mock c">
+      <div class="mock-toolbar">
+        <div class="tool">⌂</div><div class="tool">←</div><div class="tool">→</div>
+        <div class="tool">✥</div><div class="tool">⌕</div><div class="tool">╂</div>
+        <div class="tool">▣</div><div class="tool">▤</div>
+      </div>
+      <div class="mock-body">
+        <div class="chart">
+          <div class="grid"></div>
+          <div class="axis-label axis-y">Amplitude</div>
+          <div class="axis-label axis-x">Time (s)</div>
+          <div class="floating-pill">╂ 刻度</div>
+        </div>
+        <aside class="side">
+          <h3>分析信号</h3>
+          <div class="field">Fs 100.0 Hz</div>
+          <div class="field">窗口 hanning</div>
+          <div class="blue-btn">计算 FFT</div>
+        </aside>
+      </div>
+      <div class="pop">
+        <h4>视图刻度</h4>
+        <div class="row"><label>X</label><div class="rail"><span class="fill"></span><span class="knob"></span></div><div class="val">10</div></div>
+        <div class="row"><label>Y</label><div class="rail"><span class="fill" style="width:44%"></span><span class="knob" style="left:44%"></span></div><div class="val">8</div></div>
+        <div class="hint">在画布里最直接，但容易占住低频/时间轴信息。</div>
+      </div>
+    </div>
+    <div class="notes">
+      <b>视觉最直观。</b>
+      <ul>
+        <li>不挤工具条，也不需要右键发现。</li>
+        <li>容易遮挡图表，分屏/截图时要额外处理。</li>
+      </ul>
+    </div>
+  </section>
+</main>
+</body>
+</html>

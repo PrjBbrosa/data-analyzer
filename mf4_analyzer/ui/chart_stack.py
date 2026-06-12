@@ -2,8 +2,9 @@
 from PyQt5.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
-    QAction, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
-    QSplitter, QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QAction, QAbstractSpinBox, QButtonGroup, QFileDialog, QFrame, QGridLayout,
+    QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider, QSpinBox, QSplitter,
+    QStackedWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 # Hi-DPI copy/save scale (spec §E). The TimeDomainCanvasPG caps the
@@ -403,6 +404,158 @@ def _vline():
     f.setFixedHeight(20)
     f.setContentsMargins(0, 0, 0, 0)
     return f
+
+
+class _TickDensityPopover(QFrame):
+    density_changed = pyqtSignal(int, int)
+
+    _PRESETS = {
+        "疏": (6, 5),
+        "标准": (10, 8),
+        "密": (20, 14),
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint,
+        )
+        self.setObjectName("TickDensityPopover")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setFixedWidth(240)
+        self._updating = False
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self._surface = QFrame(self)
+        self._surface.setObjectName("TickDensitySurface")
+        lay = QVBoxLayout(self._surface)
+        lay.setContentsMargins(11, 11, 11, 11)
+        lay.setSpacing(9)
+        root.addWidget(self._surface)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+        title = QLabel("刻度密度", self._surface)
+        title.setObjectName("tickDensityTitle")
+        scope = QLabel("全局", self._surface)
+        scope.setObjectName("tickDensityScope")
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        title_row.addWidget(scope)
+        lay.addLayout(title_row)
+
+        self._preset_host = QFrame(self._surface)
+        self._preset_host.setObjectName("tickDensityPresetHost")
+        preset_lay = QHBoxLayout(self._preset_host)
+        preset_lay.setContentsMargins(0, 0, 0, 0)
+        preset_lay.setSpacing(6)
+        self._preset_group = QButtonGroup(self)
+        self._preset_group.setExclusive(True)
+        self._preset_buttons = {}
+        for label, pair in self._PRESETS.items():
+            btn = QPushButton(label, self._preset_host)
+            btn.setObjectName("tickDensityPresetButton")
+            btn.setCheckable(True)
+            btn.setProperty("role", "tick-density-preset")
+            btn.clicked.connect(
+                lambda _checked=False, p=pair: self.set_density(*p, emit=True)
+            )
+            self._preset_group.addButton(btn)
+            self._preset_buttons[label] = btn
+            preset_lay.addWidget(btn)
+        lay.addWidget(self._preset_host)
+
+        self._x_row, self._slider_x, self._spin_x = self._build_axis_row(
+            "X", 3, 30, 10
+        )
+        self._y_row, self._slider_y, self._spin_y = self._build_axis_row(
+            "Y", 3, 20, 8
+        )
+        lay.addWidget(self._x_row)
+        lay.addWidget(self._y_row)
+
+        self._reset_btn = QPushButton("恢复默认 10 / 8", self._surface)
+        self._reset_btn.setObjectName("tickDensityResetButton")
+        self._reset_btn.clicked.connect(lambda: self.set_density(10, 8, emit=True))
+        lay.addWidget(self._reset_btn)
+
+        self._slider_x.valueChanged.connect(
+            lambda value: self.set_density(value, self._spin_y.value(), emit=True)
+        )
+        self._slider_y.valueChanged.connect(
+            lambda value: self.set_density(self._spin_x.value(), value, emit=True)
+        )
+        self._spin_x.valueChanged.connect(
+            lambda value: self.set_density(value, self._spin_y.value(), emit=True)
+        )
+        self._spin_y.valueChanged.connect(
+            lambda value: self.set_density(self._spin_x.value(), value, emit=True)
+        )
+        self.set_density(10, 8, emit=False)
+
+    def _build_axis_row(self, label, minimum, maximum, value):
+        row = QFrame(self._surface)
+        row.setObjectName("tickDensityAxisRow")
+        grid = QGridLayout(row)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(9)
+        grid.setVerticalSpacing(0)
+        axis_label = QLabel(label, row)
+        axis_label.setObjectName("tickDensityAxisLabel")
+        slider = QSlider(Qt.Horizontal, row)
+        slider.setObjectName("tickDensitySlider")
+        slider.setRange(minimum, maximum)
+        slider.setValue(value)
+        spin = QSpinBox(row)
+        spin.setObjectName("tickDensitySpin")
+        spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        spin.setRange(minimum, maximum)
+        spin.setValue(value)
+        spin.setFixedWidth(38)
+        grid.addWidget(axis_label, 0, 0)
+        grid.addWidget(slider, 0, 1)
+        grid.addWidget(spin, 0, 2)
+        return row, slider, spin
+
+    def density(self):
+        return self._spin_x.value(), self._spin_y.value()
+
+    def set_density(self, x, y, *, emit=False):
+        if self._updating:
+            return
+        x = max(3, min(30, int(x)))
+        y = max(3, min(20, int(y)))
+        self._updating = True
+        widgets = (
+            self._slider_x, self._spin_x,
+            self._slider_y, self._spin_y,
+        )
+        old = [w.blockSignals(True) for w in widgets]
+        try:
+            self._slider_x.setValue(x)
+            self._spin_x.setValue(x)
+            self._slider_y.setValue(y)
+            self._spin_y.setValue(y)
+        finally:
+            for widget, blocked in zip(widgets, old):
+                widget.blockSignals(blocked)
+            self._updating = False
+        self._sync_preset_checks(x, y)
+        if emit:
+            self.density_changed.emit(x, y)
+
+    def _sync_preset_checks(self, x, y):
+        self._preset_group.setExclusive(False)
+        try:
+            for label, btn in self._preset_buttons.items():
+                btn.setChecked(self._PRESETS[label] == (x, y))
+        finally:
+            self._preset_group.setExclusive(True)
 
 
 class PgNavigationToolbar(QToolBar):
@@ -942,6 +1095,7 @@ class _ChartCard(QWidget):
 
     copy_image_requested = pyqtSignal()  # emitted when the toolbar copy btn is clicked
     annotation_enabled_changed = pyqtSignal(bool)
+    tick_density_changed = pyqtSignal(int, int)
 
     def __init__(self, canvas, parent=None, annotations=False, chart_mode=''):
         super().__init__(parent)
@@ -1047,17 +1201,42 @@ class _ChartCard(QWidget):
         self.copy_image_requested.connect(
             lambda: self.mark_discovered("chart.copy_image")
         )
+        self._tick_density_popover = _TickDensityPopover(self)
+        self._tick_density_popover.density_changed.connect(
+            self._on_tick_density_changed
+        )
+        self._tick_density_btn = QToolButton(self.toolbar)
+        self._tick_density_btn.setObjectName("chartTickDensityButton")
+        self._tick_density_btn.setIcon(
+            qta.icon('ri.ruler-2-line', color=_ICON_COLOR)
+        )
+        self._tick_density_btn.setIconSize(QSize(18, 18))
+        self._tick_density_btn.setFixedSize(QSize(32, 32))
+        self._tick_density_btn.setToolTip("刻度密度 X10 / Y8")
+        self._tick_density_btn.setFocusPolicy(Qt.NoFocus)
+        self._tick_density_btn.setAutoRaise(True)
+        self._tick_density_btn.clicked.connect(self._show_tick_density_popover)
+        self._tick_density_sep = _vline()
         if save_act is not None:
-            self.toolbar.insertWidget(save_act, self._options_btn)
             self.toolbar.insertWidget(save_act, self._copy_btn)
+            self.toolbar.insertWidget(save_act, self._tick_density_sep)
+            self.toolbar.insertWidget(save_act, self._tick_density_btn)
+            self.toolbar.insertWidget(save_act, self._options_btn)
         else:
-            self.toolbar.addWidget(self._options_btn)
             self.toolbar.addWidget(self._copy_btn)
+            self.toolbar.addWidget(self._tick_density_sep)
+            self.toolbar.addWidget(self._tick_density_btn)
+            self.toolbar.addWidget(self._options_btn)
 
         self._loc_action = None
 
         if annotations:
-            self._install_annotation_controls(None)
+            zoom_act = _find_action(self.toolbar, 'zoom')
+            self._install_compact_annotation_control_after(zoom_act)
+            annotation_act = self._toolbar_action_for_widget(
+                self._annotation_btn
+            )
+            self._install_compact_clear_annotation_control_after(annotation_act)
 
         # Only pan/zoom toggling changes the hint; one-shot buttons don't.
         # Subclasses (TimeChartCard) listen to this same signal to flip the
@@ -1256,6 +1435,12 @@ class _ChartCard(QWidget):
                 return
         self.toolbar.addWidget(widget)
 
+    def _toolbar_action_for_widget(self, widget):
+        for action in self.toolbar.actions():
+            if self.toolbar.widgetForAction(action) is widget:
+                return action
+        return None
+
     def _install_compact_annotation_control_after(self, after_action):
         self._annotation_btn = QToolButton(self.toolbar)
         self._annotation_btn.setObjectName("chartAnnotationButton")
@@ -1271,43 +1456,18 @@ class _ChartCard(QWidget):
         )
         self._insert_toolbar_widget_after(after_action, self._annotation_btn)
 
-    def _install_annotation_controls(self, loc_action):
-        self._annotation_spacer = QWidget(self.toolbar)
-        self._annotation_spacer.setObjectName("chartAnnotationSpacer")
-        self._annotation_spacer.setAttribute(Qt.WA_StyledBackground, True)
-        self._annotation_spacer.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Preferred
+    def _install_compact_clear_annotation_control_after(self, after_action):
+        self._clear_annotation_btn = QToolButton(self.toolbar)
+        self._clear_annotation_btn.setObjectName("chartAnnotationClearButton")
+        self._clear_annotation_btn.setIcon(
+            qta.icon('mdi.eraser', color=_ICON_COLOR)
         )
-        self._insert_right_toolbar_widget(loc_action, self._annotation_spacer)
-
-        self._insert_right_toolbar_widget(loc_action, _vline())
-        self._annotation_label = QLabel("标注", self.toolbar)
-        self._annotation_label.setObjectName("chartAnnotationLabel")
-        self._annotation_label.setAlignment(Qt.AlignVCenter)
-        self._insert_right_toolbar_widget(loc_action, self._annotation_label)
-
-        self._annotation_btn = QPushButton("开启", self.toolbar)
-        self._annotation_btn.setIcon(
-            qta.icon('mdi.map-marker-plus-outline', color=_ICON_COLOR)
-        )
-        self._annotation_btn.setIconSize(QSize(14, 14))
-        self._annotation_btn.setCheckable(True)
-        self._annotation_btn.setProperty("role", "chart-choice")
-        self._annotation_btn.setFlat(True)
-        self._annotation_btn.setToolTip("开启后左键添加标注；右键删除最近标注")
-        self._annotation_btn.clicked.connect(
-            lambda checked=False: self.set_annotation_enabled(checked)
-        )
-        self._insert_right_toolbar_widget(loc_action, self._annotation_btn)
-
-        self._clear_annotation_btn = QPushButton("清除", self.toolbar)
-        self._clear_annotation_btn.setIcon(qta.icon('mdi.eraser', color=_ICON_COLOR))
-        self._clear_annotation_btn.setIconSize(QSize(14, 14))
-        self._clear_annotation_btn.setProperty("role", "chart-choice")
-        self._clear_annotation_btn.setFlat(True)
+        self._clear_annotation_btn.setIconSize(QSize(18, 18))
+        self._clear_annotation_btn.setFixedSize(QSize(32, 32))
+        self._clear_annotation_btn.setAutoRaise(True)
         self._clear_annotation_btn.setToolTip("清除当前图表中的所有标注")
         self._clear_annotation_btn.clicked.connect(self.clear_annotations)
-        self._insert_right_toolbar_widget(loc_action, self._clear_annotation_btn)
+        self._insert_toolbar_widget_after(after_action, self._clear_annotation_btn)
 
     def annotation_enabled(self):
         return self._annotation_enabled
@@ -1346,6 +1506,27 @@ class _ChartCard(QWidget):
         if opener is not None:
             return opener()
         return False
+
+    def _show_tick_density_popover(self):
+        pop = self._tick_density_popover
+        if pop.isVisible():
+            pop.hide()
+            return
+        pos = self._tick_density_btn.mapToGlobal(
+            self._tick_density_btn.rect().bottomLeft()
+        )
+        pop.move(pos.x(), pos.y() + 4)
+        pop.show()
+        pop.raise_()
+        self._tick_density_btn.clearFocus()
+
+    def _on_tick_density_changed(self, x, y):
+        self.set_tick_density_controls(x, y)
+        self.tick_density_changed.emit(int(x), int(y))
+
+    def set_tick_density_controls(self, x, y):
+        self._tick_density_popover.set_density(x, y, emit=False)
+        self._tick_density_btn.setToolTip(f"刻度密度 X{int(x)} / Y{int(y)}")
 
     def _on_mouse_mode_changed(self, *_):
         """Design D: a mouse-mode change driven by the right-click 鼠标操作
@@ -1629,6 +1810,7 @@ class ChartStack(QWidget):
     # canvas; it is inert (never emitted) outside split mode.
     focus_changed = pyqtSignal(bool)
     home_triggered = pyqtSignal()
+    tick_density_changed = pyqtSignal(int, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1786,6 +1968,9 @@ class ChartStack(QWidget):
         self._time_card.annotation_enabled_changed.connect(
             lambda enabled: self.annotation_enabled_changed.emit('time', enabled)
         )
+        self._time_card.tick_density_changed.connect(
+            self._on_card_tick_density_changed
+        )
 
         # Initial sync: stats_strip is currently disabled at the product level.
         self.stats_strip.setVisible(
@@ -1812,6 +1997,25 @@ class ChartStack(QWidget):
         card.annotation_enabled_changed.connect(
             lambda enabled, m=mode: self.annotation_enabled_changed.emit(m, enabled)
         )
+        card.tick_density_changed.connect(self._on_card_tick_density_changed)
+
+    def _all_cards(self):
+        cards = [self._time_card]
+        if self._secondary_card is not None:
+            cards.append(self._secondary_card)
+        for page in (self.page_fft, self.page_fft_time, self.page_order):
+            cards.extend(page._cards)
+        return [card for card in cards if card is not None]
+
+    def _on_card_tick_density_changed(self, x, y):
+        self.set_tick_density_controls(x, y)
+        self.tick_density_changed.emit(int(x), int(y))
+
+    def set_tick_density_controls(self, x, y):
+        for card in self._all_cards():
+            setter = getattr(card, "set_tick_density_controls", None)
+            if callable(setter):
+                setter(x, y)
 
     @property
     def page_for_mode(self):
@@ -2124,6 +2328,9 @@ class ChartStack(QWidget):
             self._set_secondary_time_controls_enabled(False)
             self._secondary_card.copy_image_requested.connect(
                 lambda: self._copy_card_image(self._secondary_card)
+            )
+            self._secondary_card.tick_density_changed.connect(
+                self._on_card_tick_density_changed
             )
             # Per-pane control routing (P2 Task 9 1b): the secondary card's
             # own 分屏/叠加/游标 segmented controls act on the SECONDARY canvas,

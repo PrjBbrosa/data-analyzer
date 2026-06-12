@@ -91,6 +91,20 @@ def test_linear_mode_levels_auto(canvas):
     assert lo == pytest.approx(1.0) and hi == pytest.approx(100.0)
 
 
+def test_heatmap_hides_title_row_and_disables_axis_si_prefix(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        x_label='Frequency (Hz)', y_label='Order',
+        title='Order · 3 条曲线',
+        amplitude_mode='amplitude', z_auto=True,
+    )
+
+    assert not canvas._plot.titleLabel.isVisible()
+    assert canvas._plot.titleLabel.maximumHeight() == 0
+    assert canvas._plot.getAxis('left').autoSIPrefix is False
+    assert canvas._plot.getAxis('bottom').autoSIPrefix is False
+
+
 def test_db_mode_manual_levels_clip(canvas):
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),

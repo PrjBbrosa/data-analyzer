@@ -248,18 +248,24 @@ def test_inspector_no_longer_exposes_mode_signals(qapp):
     assert not hasattr(insp, 'cursor_mode_changed')
 
 
-def test_persistent_top_tick_group_not_checkable(qapp):
-    """刻度 GroupBox must be always-open per spec §3.3 (2026-04-24 cleanup)."""
+def test_persistent_top_no_longer_renders_tick_density_group(qapp):
+    """刻度密度入口已迁移到图表 toolbar；Inspector 不再显示旧组。"""
     from PyQt5.QtWidgets import QGroupBox
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     pt = PersistentTop()
-    # Walk up from spin_xt to its QGroupBox ancestor.
+
+    titles = {gb.title() for gb in pt.findChildren(QGroupBox)}
+    assert "坐标刻度密度" not in titles
+    assert "刻度密度" not in pt.btn_collapser.text()
+
+    # Back-compat: existing state/project plumbing can still read the
+    # tick-count values, but the legacy controls are no longer visible.
     parent_gb = pt.spin_xt.parentWidget()
     while parent_gb is not None and not isinstance(parent_gb, QGroupBox):
         parent_gb = parent_gb.parentWidget()
-    assert parent_gb is not None, "spin_xt has no QGroupBox ancestor"
-    assert not parent_gb.isCheckable()
-    # Key contract: tick density reflects current spin values (not zero).
+    assert parent_gb is None
+    assert pt.spin_xt.isHidden() is True
+    assert pt.spin_yt.isHidden() is True
     assert pt.tick_density() == (10, 8)
 
 
@@ -416,16 +422,15 @@ def _form_row_for(widget):
     return fl, -1, None
 
 
-def test_persistent_top_tick_xy_share_one_form_row(qapp):
-    """Tick group must collapse "X" and "Y" into a single QFormLayout row."""
-    from PyQt5.QtWidgets import QFormLayout
+def test_persistent_top_tick_controls_are_not_in_form_layout(qapp):
+    """The hidden compatibility tick widgets must not reserve Inspector rows."""
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     pt = PersistentTop()
     fl_x, r_x, _ = _form_row_for(pt.spin_xt)
     fl_y, r_y, _ = _form_row_for(pt.spin_yt)
-    assert isinstance(fl_x, QFormLayout)
-    assert fl_x is fl_y, "spin_xt and spin_yt must live in the same QFormLayout"
-    assert r_x == r_y >= 0
+    assert fl_x is None
+    assert fl_y is None
+    assert r_x == r_y == -1
 
 
 def test_persistent_top_range_share_one_form_row(qapp):
@@ -717,9 +722,12 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
         # Toggle expand.
         pt.btn_collapser.setChecked(True)
         assert pt._collapser_body.isVisible() is True
-        # Group-level controls now visible.
+        # Group-level controls still visible; migrated tick controls stay out
+        # of the Inspector even when the body is expanded.
         assert pt.combo_xaxis.isVisible() is True
-        assert pt.spin_xt.isVisible() is True
+        assert pt.spin_start.isVisible() is True
+        assert pt.spin_xt.isHidden() is True
+        assert pt.spin_yt.isHidden() is True
     finally:
         pt.hide()
 
@@ -1413,7 +1421,6 @@ def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbo
         }
         assert top_sections == {
             "时间范围": (expected_left, expected_right),
-            "坐标刻度密度": (expected_left, expected_right),
         }
         assert expected_left == 10
         assert root.width() - expected_right == 10

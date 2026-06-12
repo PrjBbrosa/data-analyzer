@@ -1147,6 +1147,25 @@ QToolBar#chartToolbar QToolButton,
 QWidget#chartToolbar QToolButton {
     padding: 2px 4px;
 }
+QWidget#chartToolbar QToolButton#chartTickDensityButton {
+    color: #334155;
+    border: 1px solid #b7c8dc;
+    border-radius: 7px;
+    background-color: #ffffff;
+    padding: 0;
+}
+QWidget#chartToolbar QToolButton#chartTickDensityButton:hover {
+    color: #0b7af3;
+    border-color: #0b7af3;
+    background-color: #e7f1ff;
+}
+QWidget#chartToolbar QToolButton#chartTickDensityButton:pressed,
+QWidget#chartToolbar QToolButton#chartTickDensityButton:focus,
+QWidget#chartToolbar QToolButton#chartTickDensityButton:checked {
+    color: #334155;
+    border-color: #b7c8dc;
+    background-color: #ffffff;
+}
 QWidget#chartToolbar QToolButton:disabled {
     border: 1px solid #e5eaf2;
     border-radius: 6px;
@@ -1216,6 +1235,83 @@ QFrame#PopoverSurface {
     background-color: #ffffff;
 }
 QFrame#PopoverSurface QLabel { color: #334155; }
+
+QFrame#TickDensitySurface {
+    border: 1px solid #b7c8dc;
+    border-radius: 8px;
+    background-color: #ffffff;
+}
+QFrame#TickDensitySurface QLabel#tickDensityTitle {
+    color: #111827;
+    font-size: 13px;
+    font-weight: 700;
+}
+QFrame#TickDensitySurface QLabel#tickDensityScope {
+    color: #64748b;
+    font-size: 11px;
+}
+QFrame#TickDensitySurface QFrame#tickDensityPresetHost {
+    background-color: transparent;
+}
+QFrame#TickDensitySurface QPushButton[role="tick-density-preset"] {
+    min-height: 28px;
+    border: 1px solid #dbe5f1;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 700;
+}
+QFrame#TickDensitySurface QPushButton[role="tick-density-preset"]:hover {
+    border-color: #b7c8dc;
+    background-color: #f8fbff;
+}
+QFrame#TickDensitySurface QPushButton[role="tick-density-preset"]:checked {
+    color: #0b7af3;
+    border-color: #0b7af3;
+    background-color: #e7f1ff;
+}
+QFrame#TickDensitySurface QFrame#tickDensityAxisRow {
+    background-color: transparent;
+}
+QFrame#TickDensitySurface QLabel#tickDensityAxisLabel {
+    color: #334155;
+    font-size: 12px;
+    font-weight: 700;
+}
+QFrame#TickDensitySurface QSlider::groove:horizontal {
+    height: 5px;
+    border-radius: 2px;
+    background-color: #d9e5f5;
+}
+QFrame#TickDensitySurface QSlider::handle:horizontal {
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border: 2px solid #0b7af3;
+    border-radius: 7px;
+    background-color: #ffffff;
+}
+QFrame#TickDensitySurface QSpinBox#tickDensitySpin {
+    min-height: 24px;
+    border: 1px solid #dbe5f1;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #1e293b;
+    font-weight: 700;
+}
+QFrame#TickDensitySurface QPushButton#tickDensityResetButton {
+    min-height: 28px;
+    border: 1px solid #dbe5f1;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #475569;
+    font-size: 12px;
+}
+QFrame#TickDensitySurface QPushButton#tickDensityResetButton:hover {
+    border-color: #b7c8dc;
+    background-color: #f8fbff;
+}
 
 QDialog#ChartOptionsDialog {
     border: 1px solid #dfe5ee;
@@ -1453,17 +1549,6 @@ QWidget#chartToolbar QPushButton[role="chart-choice"]:checked {
     background-color: #e8efff;
     border-color: #2563eb;
     color: #2563eb;
-}
-
-QWidget#chartToolbar QLabel#chartAnnotationLabel {
-    margin-left: 2px;
-    margin-right: 2px;
-    color: #475569;
-    font-weight: 600;
-}
-
-QWidget#chartToolbar QWidget#chartAnnotationSpacer {
-    background-color: #ffffff;
 }
 
 QWidget#chartToolbar QWidget#chartTimeControlsSpacer {

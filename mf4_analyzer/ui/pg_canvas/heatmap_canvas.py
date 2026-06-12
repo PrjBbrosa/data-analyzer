@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QFontMetricsF, QPainter, QPixmap
+from PyQt5.QtGui import QPainter, QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from mf4_analyzer.ui._axis_handle import (
@@ -107,6 +107,10 @@ def _apply_neutral_axis_frame(plot) -> None:
     )
     for side in ('left', 'bottom', 'top', 'right'):
         axis = plot.getAxis(side)
+        try:
+            axis.enableAutoSIPrefix(False)
+        except Exception:
+            pass
         axis.setPen(frame_pen)
     for side in ('top', 'right'):
         axis = plot.getAxis(side)
@@ -115,6 +119,42 @@ def _apply_neutral_axis_frame(plot) -> None:
         axis.setLabel('')
     plot.getAxis('top').setHeight(1)
     plot.getAxis('right').setWidth(1)
+
+
+def _hide_plot_title(plot) -> None:
+    """Remove pyqtgraph's title row so analysis plots keep maximum height."""
+    try:
+        plot.setTitle(None)
+    except Exception:
+        try:
+            plot.setTitle("")
+        except Exception:
+            pass
+    label = getattr(plot, "titleLabel", None)
+    if label is None:
+        return
+    for name, value in (
+        ("setMinimumHeight", 0),
+        ("setMaximumHeight", 0),
+        ("setPreferredHeight", 0),
+    ):
+        setter = getattr(label, name, None)
+        if callable(setter):
+            try:
+                setter(value)
+            except Exception:
+                pass
+    try:
+        label.setVisible(False)
+    except Exception:
+        pass
+    for name in ("updateMin", "updateGeometry"):
+        updater = getattr(label, name, None)
+        if callable(updater):
+            try:
+                updater()
+            except Exception:
+                pass
 
 
 class _SmoothImageItem(pg.ImageItem):
@@ -392,7 +432,7 @@ class PgHeatmapCanvas(QWidget):
             if scene is not None:
                 scene.removeItem(self._cbar)
             self._cbar = None
-        self._plot.setTitle(None)
+        _hide_plot_title(self._plot)
         self._raw_title = ''
         self._plot.setLabel('bottom', '')
         self._plot.setLabel('left', '')
@@ -407,7 +447,7 @@ class PgHeatmapCanvas(QWidget):
         self._db_cache = None
         if self._slice_curve is not None:
             self._slice_curve.clear()
-            self._slice_plot.setTitle(None)
+            _hide_plot_title(self._slice_plot)
             self._slice_marker.setVisible(False)
         self.reset_split_layout_alignment()
         self.layout_geometry_changed.emit()
@@ -604,7 +644,7 @@ class PgHeatmapCanvas(QWidget):
             else 'Amplitude',
         )
         t = float(self._result.times[idx])
-        self._slice_plot.setTitle(f"t = {t:.3f} s")
+        _hide_plot_title(self._slice_plot)
         self._slice_marker.setPos(t)
         self._slice_marker.setVisible(True)
         self.layout_geometry_changed.emit()
@@ -750,31 +790,7 @@ class PgHeatmapCanvas(QWidget):
             pass
 
     def _apply_title_text(self) -> None:
-        title = self._raw_title or ''
-        width = self._split_title_width
-        label = self._plot.titleLabel
-        if width is None or not title:
-            try:
-                label.setMinimumWidth(0)
-                label.setMaximumWidth(1000000)
-            except Exception:
-                pass
-            self._plot.setTitle(title)
-            return
-        try:
-            fm = QFontMetricsF(label.item.font())
-            title = fm.elidedText(title, Qt.ElideMiddle, int(round(width)))
-        except Exception:
-            pass
-        self._plot.setTitle(title)
-        try:
-            label.setMinimumWidth(0)
-            label.setMaximumWidth(float(width))
-            label.setPreferredWidth(float(width))
-            label.updateMin()
-            label.updateGeometry()
-        except Exception:
-            pass
+        _hide_plot_title(self._plot)
 
     def _activate_graphics_layout(self) -> None:
         try:

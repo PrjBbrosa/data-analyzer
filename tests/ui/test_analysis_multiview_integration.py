@@ -63,6 +63,40 @@ def test_fft_view_overlays_two_files(two_file_win):
     assert "左侧已选 2 个信号" in win.inspector.fft_ctx.lbl_source_summary.text()
 
 
+def test_fft_split_cache_render_uses_channel_swatch_colors(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fids = list(win.files.keys())
+    red = "#ff0000"
+    green = "#00aa00"
+    win.navigator.set_channel_colors({
+        (fids[0], "speed"): red,
+        (fids[1], "speed"): green,
+    })
+
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    win._on_analysis_split("fft", True)
+    state.panes[0].sources = [(fids[0], "speed")]
+    state.panes[1].sources = [(fids[1], "speed")]
+
+    freq = np.asarray([0.0, 1.0, 2.0], dtype=float)
+    amp = np.asarray([1.0, 0.5, 0.25], dtype=float)
+    for fid, ch in (state.panes[0].sources + state.panes[1].sources):
+        key = win._analysis_cache_key("fft", fid, ch)
+        win.analysis_caches["fft"].put(key, (freq, amp, amp ** 2))
+
+    # The currently focused/navigator-checked source is only pane 1. Pane 0
+    # still has to render with its own left-side channel swatch color.
+    win.navigator.set_checked_channels([(fids[1], "speed")])
+    win._render_analysis_view_from_cache("fft", state)
+
+    c0 = win.chart_stack.page_fft.pane_canvas(0)
+    c1 = win.chart_stack.page_fft.pane_canvas(1)
+    assert c0._amp_curves[0].opts["pen"].color().name() == red
+    assert c1._amp_curves[0].opts["pen"].color().name() == green
+
+
 def test_fft_mode_channel_selection_previews_time_before_compute(two_file_win, qapp):
     win = two_file_win
     win.toolbar._set_mode("fft")
@@ -544,6 +578,31 @@ def test_analysis_views_survive_project_save_reopen(two_file_win, tmp_path, qtbo
     _assert_section_equal(
         win2, "fft_time", remap_views(fft_time_views), actives["fft_time"],
         expected_active_params["fft_time"], _SECTION_PARAM_KEYS["fft_time"])
+
+
+def test_project_save_preserves_all_analysis_sections_after_time_selection(
+    two_file_win, tmp_path
+):
+    import json
+
+    win = two_file_win
+    fids = list(win.files.keys())
+
+    win.toolbar._set_mode("fft")
+    win.navigator.set_checked_channels([(fids[0], "speed")])
+    # Switching away should first capture FFT's source into its own state.
+    win.toolbar._set_mode("time")
+    # Time-domain selection changes the same navigator, but must not overwrite
+    # the inactive FFT view's saved sources.
+    win.navigator.set_checked_channels([(fids[1], "torque")])
+
+    proj = tmp_path / "session_sections.tlproj"
+    win.save_project(proj)
+    raw = json.loads(proj.read_text(encoding="utf-8"))
+
+    assert set(raw["analysis_views"]) >= {"fft", "fft_time", "order"}
+    fft_sources = raw["analysis_views"]["fft"]["views"][0]["panes"][0]["sources"]
+    assert fft_sources == [[fids[0], "speed"]]
 
 
 def test_old_project_without_analysis_views_loads_with_defaults(
