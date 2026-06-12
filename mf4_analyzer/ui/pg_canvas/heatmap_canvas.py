@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QPainter, QPixmap
+from PyQt5.QtGui import QFontMetricsF, QPainter, QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 
@@ -98,6 +98,9 @@ class PgHeatmapCanvas(QWidget):
     cursor_info = pyqtSignal(str)
     # Emitted when the user drags the interactive colorbar (lo, hi).
     levels_changed = pyqtSignal(float, float)
+    # Emitted after labels/ticks/title/colorbar changes that can resize the
+    # pyqtgraph layout. Analysis split pages coalesce this and align panes.
+    layout_geometry_changed = pyqtSignal()
 
     def __init__(self, parent=None, with_slice: bool = False):
         super().__init__(parent)
@@ -142,6 +145,8 @@ class PgHeatmapCanvas(QWidget):
         self._has_result = False
         self._matrix_disp = None  # display-space matrix
         self._extents = None      # (x0, x1, y0, y1)
+        self._raw_title = ''
+        self._split_title_width = None
         self._remarks = []
         self._remark_enabled = False
         # remarks: card contract is set_remark_enabled / clear_remarks
@@ -279,7 +284,8 @@ class PgHeatmapCanvas(QWidget):
 
         self._plot.setLabel('bottom', x_label)
         self._plot.setLabel('left', y_label)
-        self._plot.setTitle(title)
+        self._raw_title = title or ''
+        self._apply_title_text()
 
         if x_auto:
             self._plot.setXRange(x0, x1, padding=0)
@@ -297,6 +303,7 @@ class PgHeatmapCanvas(QWidget):
         self._matrix_disp = m
         self._extents = (x0, x1, y0, y1)
         self._has_result = True
+        self.layout_geometry_changed.emit()
 
     def has_result(self) -> bool:
         return self._has_result
@@ -326,6 +333,7 @@ class PgHeatmapCanvas(QWidget):
                 scene.removeItem(self._cbar)
             self._cbar = None
         self._plot.setTitle(None)
+        self._raw_title = ''
         self._plot.setLabel('bottom', '')
         self._plot.setLabel('left', '')
         self._matrix_disp = None
@@ -341,6 +349,8 @@ class PgHeatmapCanvas(QWidget):
             self._slice_curve.clear()
             self._slice_plot.setTitle(None)
             self._slice_marker.setVisible(False)
+        self.reset_split_layout_alignment()
+        self.layout_geometry_changed.emit()
 
     def set_tick_density(self, x, y) -> None:
         """Apply inspector tick density.
@@ -361,6 +371,7 @@ class PgHeatmapCanvas(QWidget):
         for axis, density in ((self._axis_bottom, x_d), (self._axis_left, y_d)):
             axis.setStyle(maxTickLevel=0)
             axis.setTickDensity(density)
+        self.layout_geometry_changed.emit()
 
     def reset_view_to_data_extents(self) -> None:
         """Toolbar Home helper: restore the view to the full data extents.
@@ -486,6 +497,7 @@ class PgHeatmapCanvas(QWidget):
         self._matrix_disp = m
         if self._slice_curve is not None and len(result.times):
             self.select_time_index(0)
+        self.layout_geometry_changed.emit()
 
     def select_time_index(self, idx: int) -> None:
         """Update the frequency slice + marker to frame ``idx``.
@@ -508,6 +520,191 @@ class PgHeatmapCanvas(QWidget):
         self._slice_plot.setTitle(f"t = {t:.3f} s")
         self._slice_marker.setPos(t)
         self._slice_marker.setVisible(True)
+        self.layout_geometry_changed.emit()
+
+    # ------------------------------------------------------------------
+    # split-pane layout alignment
+    # ------------------------------------------------------------------
+    def recommended_split_title_width(self) -> float:
+        """Conservative title width that cannot widen a split pane's scene.
+
+        Long per-channel titles otherwise increase the PlotItem's minimum
+        width beyond the viewport, making side-by-side panes drift even when
+        their outer QSplitter slots are equal.
+        """
+        viewport_w = 0.0
+        try:
+            viewport_w = float(self._glw.viewport().width())
+        except Exception:
+            viewport_w = float(self._glw.width())
+        return max(120.0, viewport_w - 160.0)
+
+    def prepare_split_layout_alignment(self, title_width: float | None) -> None:
+        """Release stale pins, constrain the title, and realize geometry.
+
+        Called by AnalysisSectionPage before it measures multiple heatmap
+        panes. The release step mirrors TimeDomain's axis-width unifier: first
+        measure natural current text/tick sizes, then pin all panes to maxima.
+        """
+        self._split_title_width = (
+            max(80.0, float(title_width))
+            if title_width is not None else None
+        )
+        for axis in self._alignment_left_axes():
+            try:
+                axis.setWidth(None)
+            except Exception:
+                pass
+        for axis in self._alignment_bottom_axes():
+            try:
+                axis.setHeight(None)
+            except Exception:
+                pass
+        self._set_slice_right_spacer(None)
+        self._apply_title_text()
+        self._activate_graphics_layout()
+
+    def reset_split_layout_alignment(self) -> None:
+        self.prepare_split_layout_alignment(None)
+
+    def heatmap_layout_metrics(self) -> dict:
+        left_widths = []
+        for axis in self._alignment_left_axes():
+            try:
+                left_widths.append(float(axis.width()))
+            except Exception:
+                pass
+        bottom_heights = []
+        for axis in self._alignment_bottom_axes():
+            try:
+                bottom_heights.append(float(axis.height()))
+            except Exception:
+                pass
+        metrics = {
+            'left_axis_width': max(left_widths) if left_widths else 0.0,
+            'main_bottom_axis_height': (
+                bottom_heights[0] if bottom_heights else 0.0
+            ),
+            'slice_bottom_axis_height': (
+                bottom_heights[1] if len(bottom_heights) > 1 else 0.0
+            ),
+            'slice_right_reserve': 0.0,
+        }
+        if self._slice_plot is not None:
+            try:
+                main_rect = self._plot.vb.sceneBoundingRect()
+                slice_rect = self._slice_plot.vb.sceneBoundingRect()
+                metrics['slice_right_reserve'] = max(
+                    0.0, float(slice_rect.right() - main_rect.right())
+                )
+            except Exception:
+                pass
+        return metrics
+
+    def apply_split_layout_alignment(
+        self, *,
+        left_axis_width: float,
+        main_bottom_axis_height: float | None = None,
+        slice_bottom_axis_height: float | None = None,
+        slice_right_reserve: float | None = None,
+    ) -> None:
+        for axis in self._alignment_left_axes():
+            try:
+                axis.setWidth(float(left_axis_width))
+            except Exception:
+                pass
+        if main_bottom_axis_height is not None:
+            try:
+                self._plot.getAxis('bottom').setHeight(
+                    float(main_bottom_axis_height))
+            except Exception:
+                pass
+        if self._slice_plot is not None and slice_bottom_axis_height is not None:
+            try:
+                self._slice_plot.getAxis('bottom').setHeight(
+                    float(slice_bottom_axis_height))
+            except Exception:
+                pass
+        if slice_right_reserve is not None:
+            self._set_slice_right_spacer(float(slice_right_reserve))
+        self._activate_graphics_layout()
+
+    def _alignment_left_axes(self):
+        axes = [self._plot.getAxis('left')]
+        if self._slice_plot is not None:
+            axes.append(self._slice_plot.getAxis('left'))
+        return axes
+
+    def _alignment_bottom_axes(self):
+        axes = [self._plot.getAxis('bottom')]
+        if self._slice_plot is not None:
+            axes.append(self._slice_plot.getAxis('bottom'))
+        return axes
+
+    def _set_slice_right_spacer(self, width: float | None) -> None:
+        if self._slice_plot is None:
+            return
+        axis = self._slice_plot.getAxis('right')
+        if width is None or width <= 0:
+            try:
+                self._slice_plot.showAxis('right', False)
+                axis.setWidth(None)
+            except Exception:
+                pass
+            return
+        try:
+            self._slice_plot.showAxis('right', True)
+            transparent = pg.mkPen((0, 0, 0, 0))
+            axis.setPen(transparent)
+            axis.setTextPen(transparent)
+            axis.setStyle(showValues=False, tickLength=0)
+            axis.setWidth(float(width))
+        except Exception:
+            pass
+
+    def _apply_title_text(self) -> None:
+        title = self._raw_title or ''
+        width = self._split_title_width
+        label = self._plot.titleLabel
+        if width is None or not title:
+            try:
+                label.setMinimumWidth(0)
+                label.setMaximumWidth(1000000)
+            except Exception:
+                pass
+            self._plot.setTitle(title)
+            return
+        try:
+            fm = QFontMetricsF(label.item.font())
+            title = fm.elidedText(title, Qt.ElideMiddle, int(round(width)))
+        except Exception:
+            pass
+        self._plot.setTitle(title)
+        try:
+            label.setMinimumWidth(0)
+            label.setMaximumWidth(float(width))
+            label.setPreferredWidth(float(width))
+            label.updateMin()
+            label.updateGeometry()
+        except Exception:
+            pass
+
+    def _activate_graphics_layout(self) -> None:
+        try:
+            self._glw.ci.resize(self._glw.width(), self._glw.height())
+        except Exception:
+            pass
+        for item in (self._plot, self._slice_plot, self._cbar, self._glw.ci):
+            if item is None:
+                continue
+            layout = getattr(item, 'layout', None)
+            if layout is None:
+                continue
+            try:
+                layout.invalidate()
+                layout.activate()
+            except Exception:
+                pass
 
     def _time_index_for(self, x: float) -> int:
         """Nearest frame index to a view-space time ``x``."""

@@ -45,6 +45,7 @@ lesson by default.
 | [Overlay Graticule And Wheel Contract](codex-overlay-graticule-wheel-contract.md) | Work touching TimeDomain pyqtgraph overlay-mode grid lines, per-channel | See lesson |
 | [Cursor Pill View Apply](codex-cursor-pill-view-apply.md) | Touching view-tab apply/render paths, cursor mode restoration, or split-pane cursor pill routing. | See lesson |
 | [Timedomain New Channel Y-Fit After Restore](codex-timedomain-new-channel-yfit-after-restore.md) | Touching timedomain channel-selection replots, ViewState | See lesson |
+| [Pyqtgraph Heatmap Split Layout Alignment](codex-pg-heatmap-split-layout-alignment.md) | Touching Analysis split panes for Order or FFT-vs-Time heatmaps, | See lesson |
 
 ## Selection Rules
 

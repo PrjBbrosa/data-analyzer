@@ -15,7 +15,7 @@ ChartStack/MainWindow (state capture/apply, tabbar signal handling).
 from __future__ import annotations
 
 import numpy as np
-from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QSplitter,
@@ -91,8 +91,11 @@ class AnalysisSectionPage(QWidget):
 
         self._split = QSplitter(Qt.Horizontal, self)
         self._split.setChildrenCollapsible(False)
+        self._layout_sync_pending = False
         self._cards = [self._make_card()]
         self._split.addWidget(self._cards[0])
+        self._split.splitterMoved.connect(
+            lambda *_args: self._schedule_heatmap_layout_sync())
         lay.addWidget(self._split, stretch=1)
 
         self._focused = 0
@@ -163,6 +166,12 @@ class AnalysisSectionPage(QWidget):
         card.installEventFilter(self)
         canvas = getattr(card, 'canvas', None)
         if canvas is not None:
+            signal = getattr(canvas, 'layout_geometry_changed', None)
+            if signal is not None:
+                try:
+                    signal.connect(self._schedule_heatmap_layout_sync)
+                except Exception:
+                    pass
             canvas.installEventFilter(self)
             glw = getattr(canvas, '_glw', None)
             if glw is not None:
@@ -238,6 +247,7 @@ class AnalysisSectionPage(QWidget):
         self._apply_focus_style()
         self._refresh_compare_buttons()
         self.tabbar.refresh_split_controls()
+        self._schedule_heatmap_layout_sync()
 
     def exit_split(self) -> None:
         if len(self._cards) < 2:
@@ -254,6 +264,7 @@ class AnalysisSectionPage(QWidget):
         self._apply_focus_style()
         self._refresh_compare_buttons()
         self.tabbar.refresh_split_controls()
+        self._schedule_heatmap_layout_sync()
 
     # -- focus ----------------------------------------------------------
     def focused_index(self) -> int:
@@ -353,6 +364,66 @@ class AnalysisSectionPage(QWidget):
                     hasattr(canvas, '_cbar'):
                 out.append(canvas)
         return out
+
+    def _schedule_heatmap_layout_sync(self) -> None:
+        if self._layout_sync_pending:
+            return
+        self._layout_sync_pending = True
+        QTimer.singleShot(0, self.sync_heatmap_layouts)
+
+    def sync_heatmap_layouts(self) -> None:
+        """Align plot-area geometry across split heatmap panes.
+
+        QSplitter only equalizes the outer cards. Each pyqtgraph PlotItem
+        still auto-sizes its title, left axis, colorbar, and FFT-vs-Time slice
+        row independently, so split panes can drift by several pixels. This
+        pins the pane-local reserves to shared maxima while leaving line
+        sections and single-pane heatmaps untouched.
+        """
+        self._layout_sync_pending = False
+        canvases = [
+            c for c in self._heatmap_canvases()
+            if hasattr(c, 'prepare_split_layout_alignment')
+            and hasattr(c, 'heatmap_layout_metrics')
+            and hasattr(c, 'apply_split_layout_alignment')
+            and hasattr(c, 'recommended_split_title_width')
+        ]
+        if len(canvases) < 2:
+            for c in canvases:
+                try:
+                    c.reset_split_layout_alignment()
+                except Exception:
+                    pass
+            return
+
+        title_width = min(c.recommended_split_title_width() for c in canvases)
+        for c in canvases:
+            c.prepare_split_layout_alignment(title_width)
+
+        metrics = [c.heatmap_layout_metrics() for c in canvases]
+        left_width = max(m.get('left_axis_width', 0.0) for m in metrics)
+        main_bottom_height = max(
+            m.get('main_bottom_axis_height', 0.0) for m in metrics)
+        slice_bottom_height = max(
+            m.get('slice_bottom_axis_height', 0.0) for m in metrics)
+
+        for c in canvases:
+            c.apply_split_layout_alignment(
+                left_axis_width=left_width,
+                main_bottom_axis_height=main_bottom_height,
+                slice_bottom_axis_height=slice_bottom_height,
+            )
+
+        metrics = [c.heatmap_layout_metrics() for c in canvases]
+        slice_right_reserve = max(
+            m.get('slice_right_reserve', 0.0) for m in metrics)
+        for c in canvases:
+            c.apply_split_layout_alignment(
+                left_axis_width=left_width,
+                main_bottom_axis_height=main_bottom_height,
+                slice_bottom_axis_height=slice_bottom_height,
+                slice_right_reserve=slice_right_reserve,
+            )
 
     def _is_heatmap_section(self) -> bool:
         canvas = getattr(self._cards[0], 'canvas', None)

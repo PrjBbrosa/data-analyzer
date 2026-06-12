@@ -4,12 +4,14 @@ import pytest
 
 from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtWidgets import QVBoxLayout
 
 from mf4_analyzer.ui.analysis_section_page import AnalysisSectionPage
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
 from mf4_analyzer.ui.view_state import ViewManager
 from mf4_analyzer.ui.analysis_view_state import AnalysisViewState
+from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
 
 
 def _make_manager():
@@ -33,6 +35,20 @@ class _FakeLineCard:
         w = QWidget()
         w.setObjectName("chartCard")
         w.canvas = PgLineCanvas(w)
+        return w
+
+
+class _FakeSliceCard:
+    """Real layout wrapper for FFT-vs-Time geometry assertions."""
+
+    def __new__(cls):
+        from PyQt5.QtWidgets import QWidget
+        w = QWidget()
+        w.setObjectName("chartCard")
+        w.canvas = PgHeatmapCanvas(w, with_slice=True)
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(w.canvas)
         return w
 
 
@@ -60,6 +76,21 @@ def line_page(qapp):
     )
     p.resize(800, 500)
     p.show()
+    yield p
+    p.deleteLater()
+
+
+@pytest.fixture
+def slice_page(qapp):
+    mgr = _make_manager()
+    p = AnalysisSectionPage(
+        section='fft_time',
+        manager=mgr,
+        card_factory=lambda: _FakeSliceCard(),
+    )
+    p.resize(1200, 700)
+    p.show()
+    qapp.processEvents()
     yield p
     p.deleteLater()
 
@@ -161,6 +192,73 @@ def _plot_heat(canvas, peak):
     canvas.plot_or_update_heatmap(
         matrix=mm, x_extent=(0, 10), y_extent=(0, 8),
         amplitude_mode='amplitude', z_auto=True)
+
+
+def _slice_result(channel, *, fmax, scale=1.0, unit='g'):
+    freqs = np.linspace(0.0, float(fmax), 64)
+    times = np.linspace(0.0, 2.0, 20)
+    amp = (
+        np.random.RandomState(int(scale * 10)).rand(64, 20).astype(np.float32)
+        + 0.01
+    ) * float(scale)
+    return SpectrogramResult(
+        times=times,
+        frequencies=freqs,
+        amplitude=amp,
+        params=SpectrogramParams(fs=10000.0, nfft=128),
+        channel_name=channel,
+        unit=unit,
+        metadata={'frames': 20},
+    )
+
+
+def test_split_fft_time_heatmap_and_slice_plot_areas_align(slice_page, qapp):
+    """Split FFT-vs-Time must align data plot areas, not just card widths.
+
+    The left pane uses short labels; the right pane forces wider frequency
+    ticks and a long title. Before layout synchronization, pyqtgraph gives
+    the two pane-internal PlotItems different axis/title reserves, so the
+    main heatmaps and the slice rows no longer line up.
+    """
+    slice_page.enter_split()
+    qapp.processEvents()
+
+    slice_page.pane_canvas(0).plot_result(
+        _slice_result('short', fmax=500.0, scale=1.0),
+        amplitude_mode='amplitude_db',
+        z_auto=True,
+    )
+    slice_page.pane_canvas(1).plot_result(
+        _slice_result(
+            'very_long_channel_name_for_alignment_probe',
+            fmax=5000.0,
+            scale=1000.0,
+            unit='m/s^2',
+        ),
+        amplitude_mode='amplitude_db',
+        z_auto=True,
+    )
+    for _ in range(3):
+        qapp.processEvents()
+
+    c0 = slice_page.pane_canvas(0)
+    c1 = slice_page.pane_canvas(1)
+    main0 = c0._plot.vb.sceneBoundingRect()
+    main1 = c1._plot.vb.sceneBoundingRect()
+    slice0 = c0._slice_plot.vb.sceneBoundingRect()
+    slice1 = c1._slice_plot.vb.sceneBoundingRect()
+
+    assert main0.left() == pytest.approx(main1.left(), abs=1.0)
+    assert main0.width() == pytest.approx(main1.width(), abs=1.0)
+    assert slice0.left() == pytest.approx(slice1.left(), abs=1.0)
+    assert slice0.width() == pytest.approx(slice1.width(), abs=1.0)
+    for canvas, main_rect, slice_rect in (
+        (c0, main0, slice0),
+        (c1, main1, slice1),
+    ):
+        assert slice_rect.left() == pytest.approx(main_rect.left(), abs=1.0)
+        assert slice_rect.right() == pytest.approx(main_rect.right(), abs=1.0)
+        assert canvas._glw.ci.geometry().width() <= canvas._glw.width() + 1.0
 
 
 def test_levels_lock_syncs_both_heatmaps(page):
