@@ -108,6 +108,43 @@ def test_fft_mode_channel_selection_previews_time_before_compute(two_file_win, q
     assert len(canvas._time_curves) == 2
 
 
+def test_fft_section_switch_away_and_back_preserves_spectrum(two_file_win, qapp):
+    """Compute FFT, switch to another section, switch back: the computed
+    spectrum must survive. The old mode-entry path ran an unconditional
+    ``_refresh_fft_time_preview(clear_spectrum=True)`` that wiped the amplitude
+    curves and never restored them. An unchanged round-trip must also reuse the
+    retained curves (no wipe + rebuild) and never recompute."""
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    qapp.processEvents()
+    win.do_fft()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) == 2
+    curves_before = list(canvas._amp_curves)
+
+    compute_calls = {"n": 0}
+    real_compute = win._fft_compute_arrays
+
+    def spy_compute(*a, **kw):
+        compute_calls["n"] += 1
+        return real_compute(*a, **kw)
+
+    win._fft_compute_arrays = spy_compute
+
+    # Round-trip through the order section without touching any fft input.
+    win.toolbar._set_mode("order")
+    qapp.processEvents()
+    win.toolbar._set_mode("fft")
+    qapp.processEvents()
+
+    assert len(canvas._amp_curves) == 2, "spectrum must survive a section round-trip"
+    assert canvas._amp_curves == curves_before, (
+        "unchanged round-trip must reuse the retained curves, not rebuild them")
+    assert compute_calls["n"] == 0, "section switch must never recompute"
+
+
 def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp):
     win = two_file_win
     win.toolbar._set_mode("fft")

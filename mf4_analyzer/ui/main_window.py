@@ -187,6 +187,11 @@ class MainWindow(QMainWindow):
         # suppress the inspector signal handlers that would otherwise capture
         # the half-applied controls back into the outgoing view.
         self._applying_analysis_view = False
+        # Identity of the inputs behind the last fft-canvas render. Re-entering
+        # fft mode with the same signature reuses the retained stacked-page
+        # canvas instead of wiping + rebuilding it (keeps the computed spectrum
+        # alive across section round-trips and skips the preview rebuild cost).
+        self._fft_last_render_sig = None
 
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
@@ -1130,6 +1135,72 @@ class MainWindow(QMainWindow):
                          clear_spectrum=clear_spectrum)
             xt, yt = self.inspector.top.tick_density()
             canvas.set_tick_density(xt, yt)
+        # The fft canvas now matches the current inputs (a selection change
+        # routes here too); record the signature so a later section round-trip
+        # with the same inputs can skip the rebuild.
+        self._fft_last_render_sig = self._fft_render_signature()
+
+    def _fft_render_signature(self):
+        """Identity of everything the fft-canvas render depends on that can
+        change while another section is showing. Two fft-mode entries with the
+        same signature show identical content, so the retained stacked-page
+        canvas may be reused untouched (no spectrum wipe, no preview rebuild).
+
+        Only fft *inputs* go in here: the navigator selection (shared across
+        sections), the compute params (cache-key inputs), the time-range
+        filter (drives the preview), and the dB/linear display toggle. The
+        remaining fft knobs live in the fft-only inspector that is hidden in
+        other sections, so they cannot drift while away."""
+        sources = tuple(
+            (str(row[0]), str(row[1]))
+            for row in self.navigator.get_checked_channels()
+            if len(row) >= 2
+        )
+        params = self._analysis_compute_params('fft')
+        range_sig = None
+        if self.inspector.top.range_enabled():
+            try:
+                range_sig = tuple(
+                    float(v) for v in self.inspector.top.range_values())
+            except Exception:
+                range_sig = None
+        amp_y = self.inspector.fft_ctx.current_params().get('amp_y', 'Linear')
+        return (sources, tuple(sorted(params.items())), range_sig, amp_y)
+
+    def _fft_any_source_cached(self, state):
+        cache = self.analysis_caches['fft']
+        for pane in state.panes:
+            for fid, ch in pane.sources:
+                if cache.get(self._analysis_cache_key('fft', fid, ch)) is not None:
+                    return True
+        return False
+
+    def _enter_fft_mode(self):
+        """Render the fft section on mode entry without the blanket wipe the old
+        ``_refresh_fft_time_preview`` default did.
+
+        The stacked page is never destroyed, so when nothing changed since the
+        last fft render its spectrum + preview are still on the canvas — skip
+        all work (fixes both the vanishing spectrum and the re-entry lag). When
+        the inputs did change, restore the spectrum from cache (also redraws the
+        preview); fall back to a bare time preview only when no source is
+        cached."""
+        if self.chart_stack.current_mode() != 'fft' or not self.files:
+            return
+        mgr = self.analysis_managers['fft']
+        state = mgr.get(mgr.active)
+        # Mirror do_fft / the view-switch path: pull the (possibly changed)
+        # navigator selection into the active view so the cache lookup and the
+        # signature reflect what is actually selected right now.
+        self._capture_active_analysis_view('fft')
+        signature = self._fft_render_signature()
+        if signature == self._fft_last_render_sig:
+            return
+        self._fft_last_render_sig = signature
+        if self._fft_any_source_cached(state):
+            self._render_analysis_view_from_cache('fft', state)
+        else:
+            self._refresh_fft_time_preview()
 
     def _fft_entry_from_cache(self, result, fid, ch, color):
         """Build a plot_spectra entry from a cached FFT result.
@@ -1335,7 +1406,7 @@ class MainWindow(QMainWindow):
         if mode == 'time' and self.files and self.navigator.get_checked_channels():
             QTimer.singleShot(0, self._plot_time_preserving_xlim)
         elif mode == 'fft' and self.files:
-            QTimer.singleShot(0, self._refresh_fft_time_preview)
+            QTimer.singleShot(0, self._enter_fft_mode)
 
     def _on_cursor_mode_changed(self, mode):
         if self.chart_stack.split_active():
