@@ -35,6 +35,9 @@ class _FakeLineCard:
         w = QWidget()
         w.setObjectName("chartCard")
         w.canvas = PgLineCanvas(w)
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(w.canvas)
         return w
 
 
@@ -159,6 +162,82 @@ def test_line_set_linked_no_attribute_error(line_page):
     assert vb1.linkedView(vb1.YAxis) is None
     line_page.set_linked(False)
     assert vb1.linkedView(vb1.XAxis) is None
+
+
+def _line_entry(label, *, color="#2563eb", scale=1.0):
+    freq = np.linspace(0.0, 200.0, 128)
+    time = np.linspace(0.0, 1.0, 160)
+    return {
+        "label": label,
+        "freq": freq,
+        "amp": np.sin(freq / 25.0) * scale,
+        "time": time,
+        "signal": np.cos(time * 10.0) * scale,
+        "color": color,
+    }
+
+
+def test_analysis_split_hides_real_card_hint_bars(qtbot, qapp):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(1000, 620)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode("fft")
+    page = cs.page_fft
+
+    page.enter_split()
+    qapp.processEvents()
+
+    assert all(card._hint_bar.isHidden() for card in page._cards)
+
+    page.exit_split()
+    qapp.processEvents()
+
+    assert page._cards[0]._hint_bar.isVisible()
+
+
+def test_split_fft_line_plot_areas_align(line_page, qapp):
+    """FFT compare panes should align both rows' data rects."""
+    line_page.enter_split()
+    qapp.processEvents()
+
+    line_page.pane_canvas(0).plot_spectra(
+        [_line_entry("short", scale=1.0)],
+        xlim=(0.0, 200.0),
+        amp_label="Amplitude",
+        title="FFT - short",
+    )
+    line_page.pane_canvas(1).plot_spectra(
+        [_line_entry(
+            "very_long_channel_name_for_alignment_probe",
+            color="#64748b",
+            scale=1000.0,
+        )],
+        xlim=(0.0, 200.0),
+        amp_label="Amplitude (x0.001)",
+        title="FFT - very_long_channel_name_for_alignment_probe",
+    )
+    for _ in range(3):
+        qapp.processEvents()
+
+    c0 = line_page.pane_canvas(0)
+    c1 = line_page.pane_canvas(1)
+    amp0 = c0._plot_amp.vb.sceneBoundingRect()
+    amp1 = c1._plot_amp.vb.sceneBoundingRect()
+    time0 = c0._plot_time.vb.sceneBoundingRect()
+    time1 = c1._plot_time.vb.sceneBoundingRect()
+
+    assert amp0.left() == pytest.approx(amp1.left(), abs=1.0)
+    assert amp0.width() == pytest.approx(amp1.width(), abs=1.0)
+    assert time0.left() == pytest.approx(time1.left(), abs=1.0)
+    assert time0.width() == pytest.approx(time1.width(), abs=1.0)
+    assert time0.left() == pytest.approx(amp0.left(), abs=1.0)
+    assert time0.right() == pytest.approx(amp0.right(), abs=1.0)
+    assert time1.left() == pytest.approx(amp1.left(), abs=1.0)
+    assert time1.right() == pytest.approx(amp1.right(), abs=1.0)
 
 
 def test_click_pane_sets_focus(page):

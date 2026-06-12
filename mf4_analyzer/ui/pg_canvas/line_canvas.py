@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QFontMetricsF, QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from .heatmap_canvas import _apply_neutral_axis_frame, _tick_counts_to_density
@@ -30,6 +30,7 @@ class _AxisShim:
 class PgLineCanvas(QWidget):
     cursor_info = pyqtSignal(str)
     context_menu_requested = pyqtSignal()
+    layout_geometry_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -67,6 +68,9 @@ class PgLineCanvas(QWidget):
         self._last_xlim = None
         self._last_yrange = None
         self._mouse_mode_controller = None
+        self._raw_amp_title = ''
+        self._raw_time_title = ''
+        self._split_title_width = None
 
         self._glw.scene().sigMouseMoved.connect(self._on_hover)
         self._glw.scene().sigMouseClicked.connect(self._on_click)
@@ -113,7 +117,8 @@ class PgLineCanvas(QWidget):
                     e['freq'], e['amp'], pen=pen, name=e['label'],
                     antialias=True))
 
-        self._plot_amp.setTitle(title)
+        self._raw_amp_title = title or ''
+        self._apply_title_texts()
         self._plot_amp.setLabel('left', amp_label)
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
         self._last_xlim = (float(xlim[0]), float(xlim[1]))
@@ -143,7 +148,8 @@ class PgLineCanvas(QWidget):
             self._selected_time_entry_idx = None
             self._last_xlim = None
             self._last_yrange = None
-            self._plot_amp.setTitle(None)
+            self._raw_amp_title = ''
+            self._apply_title_texts()
             self._plot_amp.setLabel('left', '')
             self._plot_amp.setLabel('bottom', '')
         self._plot_time_preview_entries(list(entries or []), title=title)
@@ -172,13 +178,15 @@ class PgLineCanvas(QWidget):
         self._selected_time_entry_idx = None
         self._last_xlim = None
         self._last_yrange = None
-        self._plot_amp.setTitle(None)
-        self._plot_time.setTitle(None)
+        self._raw_amp_title = ''
+        self._raw_time_title = ''
+        self._apply_title_texts()
         for p in (self._plot_amp, self._plot_time):
             p.setLabel('left', '')
             p.setLabel('bottom', '')
             p.enableAutoRange(axis='y')
         self.cursor_info.emit("")
+        self.layout_geometry_changed.emit()
 
     def has_result(self) -> bool:
         return bool(self._entries)
@@ -195,6 +203,7 @@ class PgLineCanvas(QWidget):
                                   (plot.getAxis('left'), y_d)):
                 axis.setStyle(maxTickLevel=0)
                 axis.setTickDensity(density)
+        self.layout_geometry_changed.emit()
 
     # ------------------------------------------------------------------
     def select_time_entry(self, idx) -> None:
@@ -209,9 +218,11 @@ class PgLineCanvas(QWidget):
         entries = list(entries or [])
         if not entries:
             self._selected_time_entry_idx = None
-            self._plot_time.setTitle(title)
+            self._raw_time_title = title or ''
+            self._apply_title_texts()
             self._plot_time.setLabel('left', 'Amplitude')
             self._plot_time.setLabel('bottom', 'Time (s)')
+            self.layout_geometry_changed.emit()
             return
         if selected_idx is None:
             self._selected_time_entry_idx = None
@@ -219,9 +230,10 @@ class PgLineCanvas(QWidget):
             self._selected_time_entry_idx = int(
                 np.clip(int(selected_idx), 0, len(entries) - 1))
         if len(entries) > 1:
-            self._plot_time.setTitle(f"{title} · {len(entries)} 条曲线")
+            self._raw_time_title = f"{title} · {len(entries)} 条曲线"
         else:
-            self._plot_time.setTitle(f"{title} - {entries[0].get('label', '')}")
+            self._raw_time_title = f"{title} - {entries[0].get('label', '')}"
+        self._apply_title_texts()
         self._plot_time.setLabel('left', 'Amplitude')
         self._plot_time.setLabel('bottom', 'Time (s)')
         x_bounds = []
@@ -245,6 +257,175 @@ class PgLineCanvas(QWidget):
             else:
                 self._plot_time.setXRange(lo - 0.5, hi + 0.5, padding=0)
         self._plot_time.enableAutoRange(axis='y')
+        self.layout_geometry_changed.emit()
+
+    # ------------------------------------------------------------------
+    # split-pane layout alignment
+    # ------------------------------------------------------------------
+    def recommended_split_title_width(self) -> float:
+        viewport_w = 0.0
+        try:
+            viewport_w = float(self._glw.viewport().width())
+        except Exception:
+            viewport_w = float(self._glw.width())
+        return max(120.0, viewport_w - 140.0)
+
+    def prepare_split_layout_alignment(self, title_width: float | None) -> None:
+        self._split_title_width = (
+            max(80.0, float(title_width))
+            if title_width is not None else None
+        )
+        for axis in self._alignment_left_axes():
+            try:
+                axis.setWidth(None)
+            except Exception:
+                pass
+        for axis in self._alignment_bottom_axes():
+            try:
+                axis.setHeight(None)
+            except Exception:
+                pass
+        self._set_right_spacer(self._plot_amp, None)
+        self._set_right_spacer(self._plot_time, None)
+        self._apply_title_texts()
+        self._activate_graphics_layout()
+
+    def reset_split_layout_alignment(self) -> None:
+        self.prepare_split_layout_alignment(None)
+
+    def line_layout_metrics(self) -> dict:
+        left_widths = []
+        for axis in self._alignment_left_axes():
+            try:
+                left_widths.append(float(axis.width()))
+            except Exception:
+                pass
+        bottom_heights = []
+        for axis in self._alignment_bottom_axes():
+            try:
+                bottom_heights.append(float(axis.height()))
+            except Exception:
+                pass
+        return {
+            'left_axis_width': max(left_widths) if left_widths else 0.0,
+            'amp_bottom_axis_height': (
+                bottom_heights[0] if bottom_heights else 0.0
+            ),
+            'time_bottom_axis_height': (
+                bottom_heights[1] if len(bottom_heights) > 1 else 0.0
+            ),
+            'amp_right_reserve': self._right_reserve(self._plot_amp),
+            'time_right_reserve': self._right_reserve(self._plot_time),
+        }
+
+    def apply_split_layout_alignment(
+        self,
+        *,
+        left_axis_width: float,
+        amp_bottom_axis_height: float | None = None,
+        time_bottom_axis_height: float | None = None,
+        amp_right_reserve: float | None = None,
+        time_right_reserve: float | None = None,
+    ) -> None:
+        for axis in self._alignment_left_axes():
+            try:
+                axis.setWidth(float(left_axis_width))
+            except Exception:
+                pass
+        if amp_bottom_axis_height is not None:
+            try:
+                self._plot_amp.getAxis('bottom').setHeight(
+                    float(amp_bottom_axis_height))
+            except Exception:
+                pass
+        if time_bottom_axis_height is not None:
+            try:
+                self._plot_time.getAxis('bottom').setHeight(
+                    float(time_bottom_axis_height))
+            except Exception:
+                pass
+        if amp_right_reserve is not None:
+            self._set_right_spacer(self._plot_amp, float(amp_right_reserve))
+        if time_right_reserve is not None:
+            self._set_right_spacer(self._plot_time, float(time_right_reserve))
+        self._activate_graphics_layout()
+
+    def _alignment_left_axes(self):
+        return [self._plot_amp.getAxis('left'), self._plot_time.getAxis('left')]
+
+    def _alignment_bottom_axes(self):
+        return [
+            self._plot_amp.getAxis('bottom'),
+            self._plot_time.getAxis('bottom'),
+        ]
+
+    def _right_reserve(self, plot) -> float:
+        try:
+            return max(
+                0.0,
+                float(plot.sceneBoundingRect().right()
+                      - plot.vb.sceneBoundingRect().right()),
+            )
+        except Exception:
+            return 0.0
+
+    def _set_right_spacer(self, plot, width: float | None) -> None:
+        axis = plot.getAxis('right')
+        if width is None or width <= 0:
+            try:
+                plot.showAxis('right', False)
+                axis.setWidth(None)
+            except Exception:
+                pass
+            return
+        try:
+            plot.showAxis('right', True)
+            transparent = pg.mkPen((0, 0, 0, 0))
+            axis.setPen(transparent)
+            axis.setTextPen(transparent)
+            axis.setStyle(showValues=False, tickLength=0)
+            axis.setWidth(float(width))
+        except Exception:
+            pass
+
+    def _apply_title_texts(self) -> None:
+        self._apply_title_text(self._plot_amp, self._raw_amp_title)
+        self._apply_title_text(self._plot_time, self._raw_time_title)
+
+    def _apply_title_text(self, plot, title: str) -> None:
+        title = title or ''
+        width = self._split_title_width
+        label = plot.titleLabel
+        if width is None or not title:
+            try:
+                label.setMinimumWidth(0)
+                label.setMaximumWidth(1000000)
+            except Exception:
+                pass
+            plot.setTitle(title)
+            return
+        try:
+            fm = QFontMetricsF(label.item.font())
+            title = fm.elidedText(title, Qt.ElideMiddle, int(round(width)))
+        except Exception:
+            pass
+        plot.setTitle(title)
+        try:
+            label.setMinimumWidth(0)
+            label.setMaximumWidth(float(width))
+            label.setPreferredWidth(float(width))
+            label.updateMin()
+            label.updateGeometry()
+        except Exception:
+            pass
+
+    def _activate_graphics_layout(self) -> None:
+        try:
+            layout = self._glw.ci.layout
+            layout.invalidate()
+            layout.activate()
+        except Exception:
+            pass
 
     def readout_at(self, freq: float):
         rows = []

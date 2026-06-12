@@ -159,6 +159,7 @@ class AnalysisSectionPage(QWidget):
 
         self._apply_focus_style()
         self._refresh_compare_buttons()
+        self._sync_card_hint_bars()
 
     # -- pane management -----------------------------------------------
     def _make_card(self):
@@ -258,6 +259,7 @@ class AnalysisSectionPage(QWidget):
         self.set_linked(self._linked)
         self._apply_focus_style()
         self._refresh_compare_buttons()
+        self._sync_card_hint_bars()
         self.tabbar.refresh_split_controls()
         self._schedule_heatmap_layout_sync()
 
@@ -303,8 +305,17 @@ class AnalysisSectionPage(QWidget):
         self._previous_focused = 0
         self._apply_focus_style()
         self._refresh_compare_buttons()
+        self._sync_card_hint_bars()
         self.tabbar.refresh_split_controls()
         self._schedule_heatmap_layout_sync()
+
+    def _sync_card_hint_bars(self) -> None:
+        """Analysis compare panes do not show per-card shortcut hint bands."""
+        show = len(self._cards) == 1
+        for card in self._cards:
+            bar = getattr(card, '_hint_bar', None)
+            if bar is not None:
+                bar.setVisible(show)
 
     # -- focus ----------------------------------------------------------
     def focused_index(self) -> int:
@@ -412,13 +423,11 @@ class AnalysisSectionPage(QWidget):
         QTimer.singleShot(0, self.sync_heatmap_layouts)
 
     def sync_heatmap_layouts(self) -> None:
-        """Align plot-area geometry across split heatmap panes.
+        """Align plot-area geometry across split analysis panes.
 
         QSplitter only equalizes the outer cards. Each pyqtgraph PlotItem
-        still auto-sizes its title, left axis, colorbar, and FFT-vs-Time slice
-        row independently, so split panes can drift by several pixels. This
-        pins the pane-local reserves to shared maxima while leaving line
-        sections and single-pane heatmaps untouched.
+        still auto-sizes its title and axes independently, so split panes can
+        drift by several pixels. Pin pane-local reserves to shared maxima.
         """
         self._layout_sync_pending = False
         canvases = [
@@ -434,35 +443,75 @@ class AnalysisSectionPage(QWidget):
                     c.reset_split_layout_alignment()
                 except Exception:
                     pass
+        else:
+            title_width = min(c.recommended_split_title_width() for c in canvases)
+            for c in canvases:
+                c.prepare_split_layout_alignment(title_width)
+
+            metrics = [c.heatmap_layout_metrics() for c in canvases]
+            left_width = max(m.get('left_axis_width', 0.0) for m in metrics)
+            main_bottom_height = max(
+                m.get('main_bottom_axis_height', 0.0) for m in metrics)
+            slice_bottom_height = max(
+                m.get('slice_bottom_axis_height', 0.0) for m in metrics)
+
+            for c in canvases:
+                c.apply_split_layout_alignment(
+                    left_axis_width=left_width,
+                    main_bottom_axis_height=main_bottom_height,
+                    slice_bottom_axis_height=slice_bottom_height,
+                )
+
+            metrics = [c.heatmap_layout_metrics() for c in canvases]
+            slice_right_reserve = max(
+                m.get('slice_right_reserve', 0.0) for m in metrics)
+            for c in canvases:
+                c.apply_split_layout_alignment(
+                    left_axis_width=left_width,
+                    main_bottom_axis_height=main_bottom_height,
+                    slice_bottom_axis_height=slice_bottom_height,
+                    slice_right_reserve=slice_right_reserve,
+                )
+
+        line_canvases = [
+            c for c in (
+                getattr(card, 'canvas', None) for card in self._cards
+            )
+            if hasattr(c, 'prepare_split_layout_alignment')
+            and hasattr(c, 'line_layout_metrics')
+            and hasattr(c, 'apply_split_layout_alignment')
+            and hasattr(c, 'recommended_split_title_width')
+        ]
+        if len(line_canvases) < 2:
+            for c in line_canvases:
+                try:
+                    c.reset_split_layout_alignment()
+                except Exception:
+                    pass
             return
 
-        title_width = min(c.recommended_split_title_width() for c in canvases)
-        for c in canvases:
+        title_width = min(c.recommended_split_title_width() for c in line_canvases)
+        for c in line_canvases:
             c.prepare_split_layout_alignment(title_width)
 
-        metrics = [c.heatmap_layout_metrics() for c in canvases]
+        metrics = [c.line_layout_metrics() for c in line_canvases]
         left_width = max(m.get('left_axis_width', 0.0) for m in metrics)
-        main_bottom_height = max(
-            m.get('main_bottom_axis_height', 0.0) for m in metrics)
-        slice_bottom_height = max(
-            m.get('slice_bottom_axis_height', 0.0) for m in metrics)
+        amp_bottom_height = max(
+            m.get('amp_bottom_axis_height', 0.0) for m in metrics)
+        time_bottom_height = max(
+            m.get('time_bottom_axis_height', 0.0) for m in metrics)
+        amp_right_reserve = max(
+            m.get('amp_right_reserve', 0.0) for m in metrics)
+        time_right_reserve = max(
+            m.get('time_right_reserve', 0.0) for m in metrics)
 
-        for c in canvases:
+        for c in line_canvases:
             c.apply_split_layout_alignment(
                 left_axis_width=left_width,
-                main_bottom_axis_height=main_bottom_height,
-                slice_bottom_axis_height=slice_bottom_height,
-            )
-
-        metrics = [c.heatmap_layout_metrics() for c in canvases]
-        slice_right_reserve = max(
-            m.get('slice_right_reserve', 0.0) for m in metrics)
-        for c in canvases:
-            c.apply_split_layout_alignment(
-                left_axis_width=left_width,
-                main_bottom_axis_height=main_bottom_height,
-                slice_bottom_axis_height=slice_bottom_height,
-                slice_right_reserve=slice_right_reserve,
+                amp_bottom_axis_height=amp_bottom_height,
+                time_bottom_axis_height=time_bottom_height,
+                amp_right_reserve=amp_right_reserve,
+                time_right_reserve=time_right_reserve,
             )
 
     def _is_heatmap_section(self) -> bool:

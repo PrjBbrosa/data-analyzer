@@ -1472,6 +1472,7 @@ class PersistentTop(QWidget):
 
         # ------- Xaxis group -------
         g = QGroupBox("横坐标")
+        self._xaxis_group = g
         fl = QFormLayout(g)
         _configure_form(fl)
         self._xaxis_form = fl
@@ -1539,6 +1540,7 @@ class PersistentTop(QWidget):
         body_lay.addWidget(g)
 
         self._wire()
+        self._xaxis_section_visible = True
         # Restore persisted collapser state (defaults to expanded).
         try:
             persisted = _preset_settings().value(self._SETTINGS_KEY, True)
@@ -1602,6 +1604,17 @@ class PersistentTop(QWidget):
             _preset_settings().setValue(self._SETTINGS_KEY, expanded)
         except Exception:  # pragma: no cover
             pass
+
+    def set_xaxis_section_visible(self, visible):
+        """Show/hide the global custom-X controls for modes that use them."""
+        self._xaxis_section_visible = bool(visible)
+        self._xaxis_group.setVisible(self._xaxis_section_visible)
+        text = (
+            "图表设置 (横坐标 · 时间范围 · 刻度密度)"
+            if self._xaxis_section_visible
+            else "图表设置 (时间范围 · 刻度密度)"
+        )
+        self.btn_collapser.setText(text)
 
     def _sync_xlabel_from_channel(self, idx):
         if idx < 0:

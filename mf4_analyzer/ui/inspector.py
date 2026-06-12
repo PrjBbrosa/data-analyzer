@@ -150,6 +150,7 @@ class Inspector(QWidget):
     def set_mode(self, mode):
         idx = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}[mode]
         self.contextual_stack.setCurrentIndex(idx)
+        self.top.set_xaxis_section_visible(mode not in {'fft', 'order'})
 
     def current_mode(self):
         return self.contextual_widget_name()

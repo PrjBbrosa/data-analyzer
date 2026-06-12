@@ -724,6 +724,40 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
         pt.hide()
 
 
+def test_inspector_hides_persistent_xaxis_section_for_fft_and_order(qapp, qtbot):
+    """FFT and Order use their own analysis axes; the global custom-X section
+    should not take Inspector space in those modes."""
+    from PyQt5.QtWidgets import QGroupBox
+    from mf4_analyzer.ui.inspector import Inspector
+
+    inspector = Inspector()
+    qtbot.addWidget(inspector)
+    inspector.show()
+    try:
+        qapp.processEvents()
+        xaxis_group = next(
+            group for group in inspector.top.findChildren(QGroupBox)
+            if group.title() == "横坐标"
+        )
+
+        inspector.set_mode("time")
+        assert xaxis_group.isVisible() is True
+        assert "横坐标" in inspector.top.btn_collapser.text()
+
+        inspector.set_mode("fft")
+        assert xaxis_group.isHidden() is True
+        assert "横坐标" not in inspector.top.btn_collapser.text()
+
+        inspector.set_mode("order")
+        assert xaxis_group.isHidden() is True
+
+        inspector.set_mode("fft_time")
+        assert xaxis_group.isVisible() is True
+        assert "横坐标" in inspector.top.btn_collapser.text()
+    finally:
+        inspector.hide()
+
+
 # ---- R3 #8: PresetBar single-row + right-click save ----
 
 def test_preset_bar_single_row_three_buttons(qapp):
@@ -1375,9 +1409,9 @@ def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbo
         top_sections = {
             group.title(): bounds(group)
             for group in insp.top.findChildren(QGroupBox)
+            if group.isVisible()
         }
         assert top_sections == {
-            "横坐标": (expected_left, expected_right),
             "时间范围": (expected_left, expected_right),
             "坐标刻度密度": (expected_left, expected_right),
         }
