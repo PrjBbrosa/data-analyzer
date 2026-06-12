@@ -1,9 +1,9 @@
-"""PgLineCanvas: FFT amplitude overlay plus selected-source time preview.
+"""PgLineCanvas: FFT amplitude overlay plus FFT-source time preview.
 
-Replaces the inline matplotlib plotting in MainWindow.do_fft. The top row
-draws N overlaid FFT amplitude curves; the bottom row shows the original
-time-domain trace for the selected spectrum source. NO OpenGL: it breaks
-grab_pixmap exports on this project.
+The top row draws overlaid FFT amplitude curves after computation. The lower
+row shows the time-domain input sources immediately when they are selected,
+and remains an overlay when multiple FFT sources are active. NO OpenGL: it
+breaks grab_pixmap exports on this project.
 """
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from .heatmap_canvas import _apply_neutral_axis_frame, _tick_counts_to_density
+from .context_menu import redesign_pg_context_menu
+from .viewbox import _ModifierWheelViewBox
 
 
 class _AxisShim:
@@ -27,6 +29,7 @@ class _AxisShim:
 
 class PgLineCanvas(QWidget):
     cursor_info = pyqtSignal(str)
+    context_menu_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,8 +39,14 @@ class PgLineCanvas(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._glw)
 
-        self._plot_amp = self._glw.addPlot(row=0, col=0)
-        self._plot_time = self._glw.addPlot(row=1, col=0)
+        self._plot_amp = self._glw.addPlot(
+            row=0, col=0,
+            viewBox=_ModifierWheelViewBox(owner_canvas=self),
+        )
+        self._plot_time = self._glw.addPlot(
+            row=1, col=0,
+            viewBox=_ModifierWheelViewBox(owner_canvas=self),
+        )
         for p in (self._plot_amp, self._plot_time):
             _apply_neutral_axis_frame(p)
             p.showGrid(x=True, y=True, alpha=0.25)
@@ -57,23 +66,38 @@ class PgLineCanvas(QWidget):
         self._remark_enabled = False
         self._last_xlim = None
         self._last_yrange = None
-
-        self._cursor_amp = pg.InfiniteLine(
-            angle=90, movable=False, pen=pg.mkPen('#94a3b8', width=1))
-        self._cursor_amp.setVisible(False)
-        self._plot_amp.addItem(self._cursor_amp)
+        self._mouse_mode_controller = None
 
         self._glw.scene().sigMouseMoved.connect(self._on_hover)
         self._glw.scene().sigMouseClicked.connect(self._on_click)
 
+    def register_mouse_mode_controller(self, controller) -> None:
+        self._mouse_mode_controller = controller
+
+    def _plot_item_for_view_box(self, view_box):
+        for plot in (self._plot_amp, self._plot_time):
+            if plot.vb is view_box:
+                return plot
+        return self._plot_amp
+
+    def _redesign_context_menu_for_viewbox(self, view_box, menu) -> None:
+        redesign_pg_context_menu(
+            menu,
+            self._plot_item_for_view_box(view_box),
+            self._mouse_mode_controller,
+            view_all_handler=self.reset_view_to_data_extents,
+            y_autofit_handler=None,
+            allow_y_grid=True,
+            keep_plot_options=True,
+        )
+
+    def _handle_wheel_dispatch(self, **_kwargs):
+        return False
+
     # ------------------------------------------------------------------
     def plot_spectra(self, entries, *, xlim, amp_label, title,
                      y_auto=True, y_min=0.0, y_max=0.0):
-        """Plot FFT curves and seed the lower time preview.
-
-        ``entries`` are dictionaries with display-space ``freq``/``amp`` and
-        optional raw ``time``/``signal`` arrays for the preview row.
-        """
+        """Plot FFT curves and show all source time traces below."""
         for p, curves in ((self._plot_amp, self._amp_curves),
                           (self._plot_time, self._time_curves)):
             for c in curves:
@@ -92,8 +116,6 @@ class PgLineCanvas(QWidget):
         self._plot_amp.setTitle(title)
         self._plot_amp.setLabel('left', amp_label)
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
-        self._plot_time.setLabel('left', 'Amplitude')
-        self._plot_time.setLabel('bottom', 'Time (s)')
         self._last_xlim = (float(xlim[0]), float(xlim[1]))
         manual_y = (not y_auto) and y_max > y_min
         self._last_yrange = (float(y_min), float(y_max)) if manual_y else None
@@ -104,7 +126,27 @@ class PgLineCanvas(QWidget):
         else:
             self._plot_amp.enableAutoRange(axis='y')
 
-        self.select_time_entry(0 if self._entries else None)
+        self._plot_time_preview_entries(
+            self._entries, selected_idx=0 if self._entries else None,
+            title="时域预览",
+        )
+
+    def plot_time_preview(self, entries, *, title="时域预览",
+                          clear_spectrum=True) -> None:
+        """Show selected FFT input sources before spectrum computation."""
+        if clear_spectrum:
+            for c in self._amp_curves:
+                self._plot_amp.removeItem(c)
+            self._amp_curves.clear()
+            self.clear_remarks()
+            self._entries = []
+            self._selected_time_entry_idx = None
+            self._last_xlim = None
+            self._last_yrange = None
+            self._plot_amp.setTitle(None)
+            self._plot_amp.setLabel('left', '')
+            self._plot_amp.setLabel('bottom', '')
+        self._plot_time_preview_entries(list(entries or []), title=title)
 
     def reset_view_to_data_extents(self) -> None:
         if self._last_xlim is None:
@@ -130,7 +172,6 @@ class PgLineCanvas(QWidget):
         self._selected_time_entry_idx = None
         self._last_xlim = None
         self._last_yrange = None
-        self._cursor_amp.setVisible(False)
         self._plot_amp.setTitle(None)
         self._plot_time.setTitle(None)
         for p in (self._plot_amp, self._plot_time):
@@ -157,31 +198,52 @@ class PgLineCanvas(QWidget):
 
     # ------------------------------------------------------------------
     def select_time_entry(self, idx) -> None:
+        self._plot_time_preview_entries(self._entries, selected_idx=idx,
+                                        title="时域预览")
+
+    def _plot_time_preview_entries(self, entries, selected_idx=None,
+                                   title="时域预览") -> None:
         for c in self._time_curves:
             self._plot_time.removeItem(c)
         self._time_curves.clear()
-        if idx is None or not self._entries:
+        entries = list(entries or [])
+        if not entries:
             self._selected_time_entry_idx = None
-            self._plot_time.setTitle("时域")
+            self._plot_time.setTitle(title)
+            self._plot_time.setLabel('left', 'Amplitude')
+            self._plot_time.setLabel('bottom', 'Time (s)')
             return
-        idx = int(np.clip(int(idx), 0, len(self._entries) - 1))
-        e = self._entries[idx]
-        t = np.asarray(e.get('time', []), dtype=float)
-        sig = np.asarray(e.get('signal', []), dtype=float)
-        self._selected_time_entry_idx = idx
-        self._plot_time.setTitle(f"时域 - {e['label']}")
-        if t.size == 0 or sig.size == 0:
-            self._plot_time.enableAutoRange()
-            return
-        n = min(t.size, sig.size)
-        pen = pg.mkPen(e.get('color', '#2563eb'), width=1.1)
-        self._time_curves.append(
-            self._plot_time.plot(t[:n], sig[:n], pen=pen, antialias=True))
-        if n == 1:
-            self._plot_time.setXRange(float(t[0]) - 0.5, float(t[0]) + 0.5,
-                                      padding=0)
+        if selected_idx is None:
+            self._selected_time_entry_idx = None
         else:
-            self._plot_time.setXRange(float(t[0]), float(t[n - 1]), padding=0)
+            self._selected_time_entry_idx = int(
+                np.clip(int(selected_idx), 0, len(entries) - 1))
+        if len(entries) > 1:
+            self._plot_time.setTitle(f"{title} · {len(entries)} 条曲线")
+        else:
+            self._plot_time.setTitle(f"{title} - {entries[0].get('label', '')}")
+        self._plot_time.setLabel('left', 'Amplitude')
+        self._plot_time.setLabel('bottom', 'Time (s)')
+        x_bounds = []
+        for i, e in enumerate(entries):
+            t = np.asarray(e.get('time', []), dtype=float)
+            sig = np.asarray(e.get('signal', []), dtype=float)
+            if t.size == 0 or sig.size == 0:
+                continue
+            n = min(t.size, sig.size)
+            width = 1.7 if i == self._selected_time_entry_idx else 1.1
+            pen = pg.mkPen(e.get('color', '#2563eb'), width=width)
+            self._time_curves.append(
+                self._plot_time.plot(t[:n], sig[:n], pen=pen,
+                                     antialias=True))
+            x_bounds.append((float(t[0]), float(t[n - 1])))
+        if x_bounds:
+            lo = min(a for a, _b in x_bounds)
+            hi = max(b for _a, b in x_bounds)
+            if hi > lo:
+                self._plot_time.setXRange(lo, hi, padding=0)
+            else:
+                self._plot_time.setXRange(lo - 0.5, hi + 0.5, padding=0)
         self._plot_time.enableAutoRange(axis='y')
 
     def readout_at(self, freq: float):
@@ -210,12 +272,9 @@ class PgLineCanvas(QWidget):
 
     def _on_hover(self, pos) -> None:
         if not self._plot_amp.vb.sceneBoundingRect().contains(pos) or not self._entries:
-            self._cursor_amp.setVisible(False)
             self.cursor_info.emit("")
             return
         x = self._plot_amp.vb.mapSceneToView(pos).x()
-        self._cursor_amp.setPos(x)
-        self._cursor_amp.setVisible(True)
         self.cursor_info.emit(self.format_readout(x))
 
     def _nearest_entry_index(self, freq: float, amp_y: float) -> int | None:

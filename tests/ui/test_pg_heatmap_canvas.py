@@ -27,6 +27,46 @@ class _FakeSceneClick:
         self.accepted = True
 
 
+class _FakeMenuEvent:
+    def __init__(self, accepted_item):
+        self.acceptedItem = accepted_item
+
+    def screenPos(self):
+        return QPointF(0.0, 0.0)
+
+
+class _FakeMouseModeController:
+    def current_mouse_mode(self):
+        return "pan"
+
+    def set_pan_mode(self):
+        pass
+
+    def set_zoom_mode(self):
+        pass
+
+
+def _open_context_menu(view_box, monkeypatch):
+    from PyQt5.QtWidgets import QMenu
+
+    captured = {}
+
+    def _fake_popup(self, *_args, **_kwargs):
+        captured["menu"] = self
+
+    monkeypatch.setattr(QMenu, "popup", _fake_popup, raising=True)
+    view_box.raiseContextMenu(_FakeMenuEvent(view_box))
+    return captured.get("menu")
+
+
+def _menu_texts(menu):
+    return [
+        action.text().replace("&", "").strip()
+        for action in menu.actions()
+        if not action.isSeparator() and action.text().replace("&", "").strip()
+    ]
+
+
 @pytest.fixture
 def canvas(qapp):
     c = PgHeatmapCanvas()
@@ -185,6 +225,29 @@ def test_heatmap_default_interpolation_is_smooth(canvas):
     )
 
     assert canvas._img.smooth_transform_enabled() is True
+
+
+def test_heatmap_context_menu_is_chinese_and_keeps_plot_options(canvas, monkeypatch):
+    canvas.register_mouse_mode_controller(_FakeMouseModeController())
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude',
+        z_auto=True,
+    )
+
+    menu = _open_context_menu(canvas._plot.vb, monkeypatch)
+
+    assert menu is not None
+    top = _menu_texts(menu)
+    assert "绘图选项" in top
+    assert "Plot Options" not in top
+    assert "查看全部" in top
+    assert "X 轴范围" in top
+    assert "Y 轴范围" in top
+    assert "网格" in top
+    assert "Mouse Mode" not in top
 
 
 def test_remark_add_and_clear(canvas):

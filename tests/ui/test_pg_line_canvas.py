@@ -24,6 +24,46 @@ class _FakeSceneClick:
         self.accepted = True
 
 
+class _FakeMenuEvent:
+    def __init__(self, accepted_item):
+        self.acceptedItem = accepted_item
+
+    def screenPos(self):
+        return QPointF(0.0, 0.0)
+
+
+class _FakeMouseModeController:
+    def current_mouse_mode(self):
+        return "pan"
+
+    def set_pan_mode(self):
+        pass
+
+    def set_zoom_mode(self):
+        pass
+
+
+def _open_context_menu(view_box, monkeypatch):
+    from PyQt5.QtWidgets import QMenu
+
+    captured = {}
+
+    def _fake_popup(self, *_args, **_kwargs):
+        captured["menu"] = self
+
+    monkeypatch.setattr(QMenu, "popup", _fake_popup, raising=True)
+    view_box.raiseContextMenu(_FakeMenuEvent(view_box))
+    return captured.get("menu")
+
+
+def _menu_texts(menu):
+    return [
+        action.text().replace("&", "").strip()
+        for action in menu.actions()
+        if not action.isSeparator() and action.text().replace("&", "").strip()
+    ]
+
+
 @pytest.fixture
 def canvas(qapp):
     c = PgLineCanvas()
@@ -81,7 +121,7 @@ def test_plot_spectra_overlay_n(canvas):
         title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
     )
     assert len(canvas._amp_curves) == 3
-    assert len(canvas._time_curves) == 1
+    assert len(canvas._time_curves) == 3
     # replot replaces, never accumulates
     canvas.plot_spectra(
         [_entry()], xlim=(0.0, 500.0), amp_label='A',
@@ -89,6 +129,67 @@ def test_plot_spectra_overlay_n(canvas):
     )
     assert len(canvas._amp_curves) == 1
     assert len(canvas._time_curves) == 1
+
+
+def test_time_preview_overlays_multiple_sources_before_fft(canvas):
+    e1 = _entry('a', '#2563eb')
+    e2 = _entry('b', '#dc2626')
+    e2 = dict(e2, signal=e2['signal'] * 0.5)
+
+    canvas.plot_time_preview([e1, e2], title='时域预览')
+
+    assert len(canvas._amp_curves) == 0
+    assert len(canvas._time_curves) == 2
+    tx0, ty0 = canvas._time_curves[0].getData()
+    tx1, ty1 = canvas._time_curves[1].getData()
+    np.testing.assert_allclose(tx0, e1['time'])
+    np.testing.assert_allclose(ty0, e1['signal'])
+    np.testing.assert_allclose(tx1, e2['time'])
+    np.testing.assert_allclose(ty1, e2['signal'])
+    assert canvas.has_result() is False
+
+
+def test_time_preview_does_not_show_channel_name_legend(canvas):
+    canvas.plot_time_preview(
+        [_entry('a', '#2563eb'), _entry('b', '#dc2626')],
+        title='时域预览',
+    )
+
+    assert canvas._plot_time.legend is None
+
+
+def test_plot_spectra_keeps_all_source_time_previews(canvas):
+    e1 = _entry('a', '#2563eb')
+    e2 = _entry('b', '#dc2626')
+
+    canvas.plot_spectra(
+        [e1, e2], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+
+    assert len(canvas._amp_curves) == 2
+    assert len(canvas._time_curves) == 2
+
+
+def test_line_canvas_has_no_hover_cursor_line(canvas):
+    assert not hasattr(canvas, '_cursor_amp')
+
+
+def test_fft_context_menu_is_chinese_and_keeps_plot_options(canvas, monkeypatch):
+    canvas.register_mouse_mode_controller(_FakeMouseModeController())
+    canvas.plot_time_preview([_entry()], title='时域预览')
+
+    menu = _open_context_menu(canvas._plot_time.vb, monkeypatch)
+
+    assert menu is not None
+    top = _menu_texts(menu)
+    assert "绘图选项" in top
+    assert "Plot Options" not in top
+    assert "查看全部" in top
+    assert "X 轴范围" in top
+    assert "Y 轴范围" in top
+    assert "网格" in top
+    assert "Mouse Mode" not in top
 
 
 def test_cursor_readout_values(canvas):
@@ -291,7 +392,9 @@ def test_selecting_fft_curve_updates_time_preview(canvas):
     canvas.select_time_entry(1)
 
     assert canvas._selected_time_entry_idx == 1
-    tx, ty = canvas._time_curves[0].getData()
+    tx, ty = canvas._time_curves[1].getData()
     np.testing.assert_allclose(tx, e2['time'])
     np.testing.assert_allclose(ty, e2['signal'])
-    assert 'b' in canvas._plot_time.titleLabel.text
+    selected_width = canvas._time_curves[1].opts['pen'].widthF()
+    primary_width = canvas._time_curves[0].opts['pen'].widthF()
+    assert selected_width > primary_width

@@ -452,6 +452,7 @@ def redesign_pg_context_menu(
     view_all_handler=None,
     y_autofit_handler=None,
     allow_y_grid=True,
+    keep_plot_options=False,
 ):
     """Reshape the assembled pyqtgraph context menu."""
     if menu is None:
@@ -462,7 +463,10 @@ def redesign_pg_context_menu(
     for action in list(menu.actions()):
         if action.isSeparator():
             continue
-        if _clean_menu_text(action.text()) in _PG_MENU_REMOVE_TEXTS:
+        text = _clean_menu_text(action.text())
+        if keep_plot_options and text in ("Plot Options", "绘图选项"):
+            continue
+        if text in _PG_MENU_REMOVE_TEXTS:
             menu.removeAction(action)
 
     toggle_row = _add_mouse_mode_toggle_row(menu, controller)
@@ -478,7 +482,7 @@ def redesign_pg_context_menu(
 
     _reorder_top_level_actions(
         menu,
-        ("Y 轴自适应", "查看全部", "X 轴范围", "Y 轴范围", "网格"),
+        ("Y 轴自适应", "查看全部", "X 轴范围", "Y 轴范围", "绘图选项", "网格"),
         pinned_first=toggle_row,
     )
     _strip_redundant_separators(menu)

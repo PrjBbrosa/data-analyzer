@@ -1073,6 +1073,47 @@ class MainWindow(QMainWindow):
             sig = sig[mask]
         return t, sig
 
+    def _fft_time_preview_entries(self, checked=None):
+        if checked is None:
+            checked = self.navigator.get_checked_channels()
+        sources = []
+        if checked:
+            for item in checked:
+                if len(item) < 2:
+                    continue
+                color = item[2] if len(item) >= 3 else '#2563eb'
+                sources.append((item[0], item[1], color))
+        else:
+            sig = self.inspector.fft_ctx.current_signal()
+            if sig:
+                sources.append((sig[0], sig[1], '#2563eb'))
+
+        entries = []
+        for fid, ch, color in sources:
+            t, sig = self._fft_trace_for_source(fid, ch)
+            if t is None or sig is None or len(sig) == 0:
+                continue
+            entries.append({
+                'label': f"{self._file_display_name(fid)} · {ch}",
+                'color': color or '#2563eb',
+                'time': t,
+                'signal': sig,
+            })
+        return entries
+
+    def _refresh_fft_time_preview(self, clear_spectrum=True):
+        if self.chart_stack.current_mode() != 'fft':
+            return
+        page = self.chart_stack.page_fft
+        canvas = page.pane_canvas(page.focused_index())
+        entries = self._fft_time_preview_entries()
+        plot_preview = getattr(canvas, 'plot_time_preview', None)
+        if callable(plot_preview):
+            plot_preview(entries, title="时域预览",
+                         clear_spectrum=clear_spectrum)
+            xt, yt = self.inspector.top.tick_density()
+            canvas.set_tick_density(xt, yt)
+
     def _fft_entry_from_cache(self, result, fid, ch, color):
         """Build a plot_spectra entry from a cached FFT result.
 
@@ -1258,6 +1299,8 @@ class MainWindow(QMainWindow):
         # blanks after fft → time toggle).
         if mode == 'time' and self.files and self.navigator.get_checked_channels():
             QTimer.singleShot(0, self._plot_time_preserving_xlim)
+        elif mode == 'fft' and self.files:
+            QTimer.singleShot(0, self._refresh_fft_time_preview)
 
     def _on_cursor_mode_changed(self, mode):
         if self.chart_stack.split_active():
@@ -1597,6 +1640,7 @@ class MainWindow(QMainWindow):
         fs = self.files[fid].fs
         if mode == 'fft':
             self.inspector.fft_ctx.set_fs(fs)
+            self._refresh_fft_time_preview()
         elif mode == 'order':
             self.inspector.order_ctx.set_fs(fs)
 
@@ -2197,6 +2241,7 @@ class MainWindow(QMainWindow):
             invalidate("selection changed")
         if self.chart_stack.current_mode() == 'fft':
             self._sync_fft_source_summary()
+            self._refresh_fft_time_preview()
         if self.files and self.chart_stack.current_mode() == 'time':
             self._replot_canvas_for_view(idx, focused)
 

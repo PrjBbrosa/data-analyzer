@@ -53,7 +53,7 @@ def test_fft_view_overlays_two_files(two_file_win):
 
     canvas = win.chart_stack.page_fft.pane_canvas(0)
     assert len(canvas._amp_curves) == 2, "two checked sources -> two overlay curves"
-    assert len(canvas._time_curves) == 1, "lower row shows the selected source time trace"
+    assert len(canvas._time_curves) == 2, "lower row overlays the source time traces"
     assert canvas._selected_time_entry_idx == 0
 
     # the active view's pane 0 captured both sources
@@ -61,6 +61,28 @@ def test_fft_view_overlays_two_files(two_file_win):
     state = mgr.get(mgr.active)
     assert len(state.panes[0].sources) == 2
     assert "左侧已选 2 个信号" in win.inspector.fft_ctx.lbl_source_summary.text()
+
+
+def test_fft_mode_channel_selection_previews_time_before_compute(two_file_win, qapp):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    qapp.processEvents()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) == 0
+    assert len(canvas._time_curves) == 2
+
+
+def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    win.navigator.set_checked_channels([])
+    qapp.processEvents()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) == 0
+    assert len(canvas._time_curves) == 1
 
 
 def test_new_view_is_empty_then_switch_back_hits_cache(two_file_win):
@@ -102,7 +124,7 @@ def test_new_view_is_empty_then_switch_back_hits_cache(two_file_win):
 
     assert mgr.active == 0
     assert len(canvas._amp_curves) == 2, "switch-back re-renders the 2 cached curves"
-    assert len(canvas._time_curves) == 1
+    assert len(canvas._time_curves) == 2
     assert get_calls["n"] >= 2, "both sources looked up in the cache on switch"
     assert compute_calls["n"] == 0, "switch-back must NOT recompute (cache hit)"
 

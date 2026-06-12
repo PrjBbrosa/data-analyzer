@@ -75,6 +75,23 @@ def test_mode_switching_uses_wrapped_time_page(qtbot):
     assert cs.cursor_mode() == "single"
 
 
+def test_analysis_split_uses_one_shared_toolbar_and_equal_widths(qtbot, qapp):
+    cs = _shown_chart_stack(qtbot)
+    cs.set_mode("fft")
+    page = cs.page_fft
+
+    page.enter_split()
+    qapp.processEvents()
+
+    assert page.pane_count() == 2
+    assert page._toolbar.parentWidget() is page
+    assert page._cards[0].toolbar is page._toolbar
+    assert page._toolbar.isVisibleTo(page)
+    assert not page._cards[1].toolbar.isVisibleTo(page)
+    left, right = page._split.sizes()
+    assert abs(left - right) <= 2
+
+
 def test_secondary_time_controls_disabled_until_focus_routing(qtbot):
     cs = _shown_chart_stack(qtbot)
 

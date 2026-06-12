@@ -22,6 +22,8 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
 )
+from mf4_analyzer.ui.pg_canvas.context_menu import redesign_pg_context_menu
+from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
 
 
 def _resolve_colormap(name: str) -> pg.ColorMap:
@@ -125,6 +127,7 @@ class _SmoothImageItem(pg.ImageItem):
 
 class PgHeatmapCanvas(QWidget):
     cursor_info = pyqtSignal(str)
+    context_menu_requested = pyqtSignal()
     # Emitted when the user drags the interactive colorbar (lo, hi).
     levels_changed = pyqtSignal(float, float)
     # Emitted after labels/ticks/title/colorbar changes that can resize the
@@ -144,7 +147,10 @@ class PgHeatmapCanvas(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._glw)
 
-        self._plot = self._glw.addPlot(row=0, col=0)
+        self._plot = self._glw.addPlot(
+            row=0, col=0,
+            viewBox=_ModifierWheelViewBox(owner_canvas=self),
+        )
         _apply_neutral_axis_frame(self._plot)
         self._axis_bottom = self._plot.getAxis('bottom')
         self._axis_left = self._plot.getAxis('left')
@@ -179,6 +185,7 @@ class PgHeatmapCanvas(QWidget):
         self._split_title_width = None
         self._remarks = []
         self._remark_enabled = False
+        self._mouse_mode_controller = None
         # remarks: card contract is set_remark_enabled / clear_remarks
         # (chart_stack.py:1314, 1330-1332).
         self._plot.scene().sigMouseClicked.connect(self._on_scene_click)
@@ -208,7 +215,10 @@ class PgHeatmapCanvas(QWidget):
             # Second GraphicsLayout row: 1D frequency slice at the
             # selected frame (parity with SpectrogramCanvas._ax_slice,
             # canvases.py:1775). Capped height keeps the 2D map dominant.
-            self._slice_plot = self._glw.addPlot(row=1, col=0)
+            self._slice_plot = self._glw.addPlot(
+                row=1, col=0,
+                viewBox=_ModifierWheelViewBox(owner_canvas=self),
+            )
             _apply_neutral_axis_frame(self._slice_plot)
             self._slice_plot.setMaximumHeight(140)
             self._slice_plot.showGrid(x=True, y=True, alpha=0.25)
@@ -383,6 +393,29 @@ class PgHeatmapCanvas(QWidget):
             self._slice_marker.setVisible(False)
         self.reset_split_layout_alignment()
         self.layout_geometry_changed.emit()
+
+    def register_mouse_mode_controller(self, controller) -> None:
+        self._mouse_mode_controller = controller
+
+    def _plot_item_for_view_box(self, view_box):
+        for plot in (self._plot, self._slice_plot):
+            if plot is not None and plot.vb is view_box:
+                return plot
+        return self._plot
+
+    def _redesign_context_menu_for_viewbox(self, view_box, menu) -> None:
+        redesign_pg_context_menu(
+            menu,
+            self._plot_item_for_view_box(view_box),
+            self._mouse_mode_controller,
+            view_all_handler=self.reset_view_to_data_extents,
+            y_autofit_handler=None,
+            allow_y_grid=True,
+            keep_plot_options=True,
+        )
+
+    def _handle_wheel_dispatch(self, **_kwargs):
+        return False
 
     def set_tick_density(self, x, y) -> None:
         """Apply inspector tick density.

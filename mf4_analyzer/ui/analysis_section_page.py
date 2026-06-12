@@ -96,6 +96,12 @@ class AnalysisSectionPage(QWidget):
         self._split.addWidget(self._cards[0])
         self._split.splitterMoved.connect(
             lambda *_args: self._schedule_heatmap_layout_sync())
+        self._toolbar = None
+        detach_toolbar = getattr(self._cards[0], 'detach_toolbar', None)
+        if callable(detach_toolbar) and getattr(self._cards[0], 'toolbar', None) is not None:
+            self._toolbar = detach_toolbar(self)
+            lay.addWidget(self._toolbar)
+            self._configure_shared_toolbar()
         lay.addWidget(self._split, stretch=1)
 
         self._focused = 0
@@ -240,14 +246,48 @@ class AnalysisSectionPage(QWidget):
             return
         card = self._make_card()
         self._cards.append(card)
+        detach_toolbar = getattr(card, 'detach_toolbar', None)
+        if self._toolbar is not None and callable(detach_toolbar):
+            hidden_toolbar = detach_toolbar(card)
+            hidden_toolbar.hide()
         self._split.addWidget(card)
-        half = max(1, self._split.width() // 2)
-        self._split.setSizes([half, half])
+        total = max(2, self._split.width())
+        left = max(1, total // 2)
+        self._split.setSizes([left, max(1, total - left)])
+        self._configure_shared_toolbar()
         self.set_linked(self._linked)
         self._apply_focus_style()
         self._refresh_compare_buttons()
         self.tabbar.refresh_split_controls()
         self._schedule_heatmap_layout_sync()
+
+    def _configure_shared_toolbar(self) -> None:
+        toolbar = getattr(self, '_toolbar', None)
+        if toolbar is None:
+            return
+        toolbar._action_delegate_provider = self._focused_nav_delegate
+        toolbar._peer_toolbars_provider = self._peer_toolbars
+        toolbar._save_pixmap_provider = self.grab_combined_pixmap
+        if self._cards:
+            self._cards[0]._options_canvas_provider = self.focused_canvas
+
+    def _focused_nav_delegate(self):
+        if self._focused <= 0 or self._focused >= len(self._cards):
+            return None
+        return getattr(self._cards[self._focused], 'toolbar', None)
+
+    def _peer_toolbars(self):
+        if len(self._cards) < 2:
+            return []
+        return [
+            toolbar for toolbar in (
+                getattr(card, 'toolbar', None) for card in self._cards[1:]
+            )
+            if toolbar is not None
+        ]
+
+    def focused_canvas(self):
+        return self.pane_canvas(self.focused_index())
 
     def exit_split(self) -> None:
         if len(self._cards) < 2:
