@@ -375,5 +375,3 @@ def test_timedomain_overlay_blank_drag_does_not_deselect(qtbot):
     )
     canvas.callbacks.process("button_release_event", release)
     assert canvas.selected_overlay_channel() == "torque"
-
-
