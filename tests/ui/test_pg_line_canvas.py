@@ -130,7 +130,91 @@ def test_toolbar_home_keeps_full_fft_range_with_visual_padding(canvas, qapp):
     canvas.hide()
 
 
-def test_fft_curves_are_antialiased(canvas):
+def test_toolbar_home_preview_only_keeps_time_padding_without_amp_autorange(canvas, qapp):
+    """Before FFT is computed, View All should reset the source preview without
+    letting the empty spectrum plot auto-range into a drifting blank frame."""
+    canvas.show()
+    qapp.processEvents()
+    canvas.plot_time_preview([_entry()], title='时域预览')
+    toolbar = PgNavigationToolbar(canvas)
+
+    canvas._plot_amp.setXRange(0.0, 1.0, padding=0)
+    canvas._plot_amp.setYRange(0.0, 1.0, padding=0)
+    canvas._plot_time.setXRange(0.25, 0.5, padding=0)
+    toolbar.home()
+    qapp.processEvents()
+
+    (x0, x1), (y0, y1) = canvas._plot_amp.vb.viewRange()
+    (tx0, tx1), _ = canvas._plot_time.vb.viewRange()
+    assert x0 == pytest.approx(0.0)
+    assert x1 == pytest.approx(1.0)
+    assert y0 == pytest.approx(0.0)
+    assert y1 == pytest.approx(1.0)
+    assert tx0 < 0.0
+    assert tx1 > 1.0
+    assert tx0 > -0.1
+
+    toolbar.deleteLater()
+    canvas.hide()
+
+
+def test_ctrl_wheel_zooms_fft_line_canvas_x_only(canvas, qapp):
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label='Amplitude',
+        title='FFT - vib', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas._plot_amp.setXRange(0.0, 500.0, padding=0)
+    canvas._plot_amp.setYRange(-1.0, 1.0, padding=0)
+    qapp.processEvents()
+
+    x_before, y_before = canvas._plot_amp.vb.viewRange()
+    consumed = canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier,
+        x_pos=250.0, y_pos=0.0, view_box=canvas._plot_amp.vb,
+    )
+    qapp.processEvents()
+    x_after, y_after = canvas._plot_amp.vb.viewRange()
+
+    assert consumed is True
+    assert (x_after[1] - x_after[0]) < (x_before[1] - x_before[0])
+    assert y_after == pytest.approx(y_before)
+
+
+def test_shift_wheel_zooms_fft_line_canvas_current_plot_y_only(canvas, qapp):
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0),
+        amp_label='Amplitude',
+        title='FFT - vib', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas._plot_amp.setXRange(0.0, 500.0, padding=0)
+    canvas._plot_amp.setYRange(-1.0, 1.0, padding=0)
+    canvas._plot_time.setYRange(-2.0, 2.0, padding=0)
+    qapp.processEvents()
+
+    x_before, amp_y_before = canvas._plot_amp.vb.viewRange()
+    _time_x_before, time_y_before = canvas._plot_time.vb.viewRange()
+    consumed = canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ShiftModifier,
+        x_pos=250.0, y_pos=0.0, view_box=canvas._plot_time.vb,
+    )
+    qapp.processEvents()
+    x_after, amp_y_after = canvas._plot_amp.vb.viewRange()
+    _time_x_after, time_y_after = canvas._plot_time.vb.viewRange()
+
+    assert consumed is True
+    assert x_after == pytest.approx(x_before)
+    assert amp_y_after == pytest.approx(amp_y_before)
+    assert (time_y_after[1] - time_y_after[0]) < (
+        time_y_before[1] - time_y_before[0])
+
+
+def test_fft_amp_curves_are_antialiased(canvas):
+    # The FFT amplitude overlay (top row) is always antialiased — it is a
+    # bounded spectrum (~freq-bin count), not a multi-million-point time
+    # source, so AA cost is negligible. The time-preview (bottom) row is
+    # governed separately (AA off for multi-source overlay); see
+    # test_time_preview_disables_antialias_for_overlay.
     canvas.plot_spectra(
         [_entry(), _entry('f2 · vib', '#dc2626')],
         xlim=(0.0, 500.0),
@@ -140,9 +224,11 @@ def test_fft_curves_are_antialiased(canvas):
         y_min=0.0,
         y_max=0.0,
     )
-    curves = canvas._amp_curves + canvas._time_curves
-    assert curves
-    assert all(c.opts.get('antialias') is True for c in curves)
+    assert canvas._amp_curves
+    assert all(c.opts.get('antialias') is True for c in canvas._amp_curves)
+    # Single-entry preview keeps AA; this two-entry spectrum overlay has a
+    # two-source time preview, which goes AA-off.
+    assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
 
 
 def test_plot_spectra_overlay_n(canvas):
@@ -429,3 +515,76 @@ def test_selecting_fft_curve_updates_time_preview(canvas):
     selected_width = canvas._time_curves[1].opts['pen'].widthF()
     primary_width = canvas._time_curves[0].opts['pen'].widthF()
     assert selected_width > primary_width
+
+
+def _big_entry(label='big', color='#2563eb', n=4_000_000, freq_hz=12.0):
+    """A multi-million-point time source (worst case for the per-selection
+    full-resolution antialiased re-raster the preview used to do)."""
+    time = np.linspace(0.0, 10.0, n)
+    signal = np.sin(2 * np.pi * freq_hz * time)
+    freq = np.linspace(0, 500, 256)
+    amp = np.exp(-((freq - 120) / 15.0) ** 2)
+    return {'label': label, 'color': color, 'freq': freq, 'amp': amp,
+            'time': time, 'signal': signal}
+
+
+def test_time_preview_decimates_large_source_but_preserves_peaks(canvas, qapp):
+    # A multi-million-point trace must NOT be plotted at full resolution:
+    # the preview decimates to a min/max envelope (far fewer points) while
+    # preserving the visible-window peaks. This is the headline perf change
+    # — overlaying N channels at full-res antialias was CPU-raster bound.
+    canvas.resize(900, 480)
+    canvas.show()
+    qapp.processEvents()  # realize plot-area geometry so pixel width is real
+
+    e = _big_entry()
+    canvas.plot_time_preview([e], title='时域预览')
+
+    assert len(canvas._time_curves) == 1
+    tx, ty = canvas._time_curves[0].getData()
+    raw_n = e['signal'].size
+    # Decimated curve holds far fewer points than the raw input.
+    assert tx.size < raw_n // 100, (
+        f"expected heavy decimation, got {tx.size} of {raw_n} points")
+    # Peaks preserved: global min/max within float tolerance of the raw.
+    assert ty.max() == pytest.approx(e['signal'].max(), abs=1e-6)
+    assert ty.min() == pytest.approx(e['signal'].min(), abs=1e-6)
+    # Time bounds preserved (no clipping of the first/last sample).
+    assert tx.min() == pytest.approx(e['time'].min(), abs=1e-3)
+    assert tx.max() == pytest.approx(e['time'].max(), abs=1e-3)
+    canvas.hide()
+
+
+def test_time_preview_single_point_source_still_renders(canvas):
+    # n == 1: a single-sample source must still draw exactly one point and
+    # must not crash the envelope/decimation path.
+    e = {'label': 's', 'color': '#2563eb',
+         'freq': np.linspace(0, 500, 16), 'amp': np.ones(16),
+         'time': np.array([0.5]), 'signal': np.array([3.0])}
+    canvas.plot_time_preview([e], title='时域预览')
+    assert len(canvas._time_curves) == 1
+    tx, ty = canvas._time_curves[0].getData()
+    np.testing.assert_allclose(tx, [0.5])
+    np.testing.assert_allclose(ty, [3.0])
+
+
+def test_time_preview_empty_arrays_render_no_curve(canvas):
+    # Empty time/signal arrays: no curve is added and nothing raises.
+    e = {'label': 'empty', 'color': '#2563eb',
+         'freq': np.linspace(0, 500, 16), 'amp': np.ones(16),
+         'time': np.array([]), 'signal': np.array([])}
+    canvas.plot_time_preview([e], title='时域预览')
+    assert len(canvas._time_curves) == 0
+
+
+def test_time_preview_disables_antialias_for_overlay(canvas):
+    # Single channel keeps antialias (crisp); overlaying >1 channel turns
+    # antialias OFF — the win is cutting (points-rasterized × channels),
+    # and AA on multi-curve overlays is the CPU-raster cost.
+    e1 = _entry('a', '#2563eb')
+    canvas.plot_time_preview([e1], title='时域预览')
+    assert canvas._time_curves[0].opts.get('antialias') is True
+
+    e2 = _entry('b', '#dc2626')
+    canvas.plot_time_preview([e1, e2], title='时域预览')
+    assert all(c.opts.get('antialias') is False for c in canvas._time_curves)

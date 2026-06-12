@@ -1640,7 +1640,10 @@ class MainWindow(QMainWindow):
         fs = self.files[fid].fs
         if mode == 'fft':
             self.inspector.fft_ctx.set_fs(fs)
-            self._refresh_fft_time_preview()
+            # FFT source selection changed: keep the computed spectrum but
+            # mark it stale (no auto-recompute); the live preview still
+            # refreshes to the new source below via plot_time_preview.
+            self._refresh_fft_time_preview(clear_spectrum=False)
         elif mode == 'order':
             self.inspector.order_ctx.set_fs(fs)
 
@@ -2241,7 +2244,10 @@ class MainWindow(QMainWindow):
             invalidate("selection changed")
         if self.chart_stack.current_mode() == 'fft':
             self._sync_fft_source_summary()
-            self._refresh_fft_time_preview()
+            # Channel-checkbox selection changed: keep the already-computed
+            # spectrum on screen but mark it stale (dim + "结果已过期" marker).
+            # Do NOT auto-recompute — the user re-clicks 计算 to refresh.
+            self._refresh_fft_time_preview(clear_spectrum=False)
         if self.files and self.chart_stack.current_mode() == 'time':
             self._replot_canvas_for_view(idx, focused)
 
@@ -2802,7 +2808,6 @@ class MainWindow(QMainWindow):
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
-            t = t[m]
             sig = sig[m]
         return sig, fd.fs
 

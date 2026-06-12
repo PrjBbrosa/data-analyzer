@@ -1,8 +1,8 @@
 ---
 role: pyqt-ui
-tags: [qss, dynamic-property, border, focus, wa-styledbackground, padding, contentsmargins, unpolish, verify-pixels, splitter, grab-lag, tint, composite-grab]
+tags: [qss, dynamic-property, border, focus, wa-styledbackground, padding, contentsmargins, unpolish, verify-pixels, splitter, grab-lag, tint, composite-grab, stale-state, opacity, banner, additive-vs-subtractive-probe]
 created: 2026-06-04
-updated: 2026-06-04
+updated: 2026-06-12
 cause: insight
 supersedes: []
 ---
@@ -64,3 +64,28 @@ inline blueness sampler as a flaky convenience, not proof. Next time: grab the
 composite container (not the leaf widget), re-polish all property-bearing
 siblings + double-pump events before the grab, and confirm by eye on the saved
 image.
+
+## Followup (2026-06-12, FFT spectrum stale-state): additive marker INVERTS a region non-white probe
+
+Marking an already-computed pyqtgraph FFT spectrum "stale" on a source-
+selection change (dim the amp curves to ``curve.setOpacity(0.28)`` + overlay a
+``pg.TextItem("结果已过期，请重新计算")`` banner pinned top-center via
+``vb.addItem`` + reposition on ``sigResized``/``sigRangeChanged``) is a state
+change that is SIMULTANEOUSLY subtractive (curves fade toward white) AND
+additive (the banner's gray fill/border/text adds NEW non-white pixels in the
+SAME region). A "non-white fraction of the amp region" probe therefore moved
+the WRONG way (stale 0.082 > normal 0.072) even though the curves were
+correctly dimmed — the banner's added pixels outweighed the faded curves at a
+3px sampling stride. The directional probe is not merely noisy here, it is
+inverted, so it would falsely "prove" the dimming failed. The saved PNGs were
+again the only honest evidence (faded blue/red curves clearly visible, marker
+present, then full-strength + marker gone after re-compute). When a verify step
+changes content that both removes and adds ink in one area, do NOT assert on an
+aggregate region count; assert on the OBJECT state you control
+(``curve.opacity()==0.28``, ``banner.toPlainText()==exact_text``,
+``is_spectrum_stale()``) AND eyeball the saved PNG. Bonus pg detail: a
+``pg.TextItem`` keeps constant on-screen size on its own (no
+``ItemIgnoresTransformations`` needed), so only its data-space POSITION must be
+re-pinned (``setPos(vb.mapSceneToView(top_center_scene))``) on resize/range
+changes; disconnect-before-connect those handlers or repeated stale marks stack
+duplicate slots.

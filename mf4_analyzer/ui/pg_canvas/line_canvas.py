@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QPointF, Qt, pyqtSignal
 from PyQt5.QtGui import QFontMetricsF, QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
+
+from mf4_analyzer.ui.canvases import build_envelope
 
 from .heatmap_canvas import (
     _apply_neutral_axis_frame,
@@ -20,6 +22,33 @@ from .heatmap_canvas import (
 )
 from .context_menu import redesign_pg_context_menu
 from .viewbox import _ModifierWheelViewBox
+
+
+# Fallback envelope bucket count used when the time-preview plot area has no
+# realized geometry yet (canvas not shown / mid-build). Generous so a trace
+# of up to ~2x this many points still renders untouched (build_envelope's
+# small-visible shortcut returns the input when n <= 2*pixel_width); the win
+# only matters for multi-million-point sources, which always exceed it.
+_PREVIEW_FALLBACK_PIXEL_WIDTH = 2000
+
+# Minimum believable realized plot-area width (px). Below this the
+# GraphicsLayout has not been laid out yet (an un-shown / collapsed canvas
+# reports ~45 px), so a measured width under the floor is treated as
+# unrealized and routed to the generous fallback — otherwise a small source
+# would be needlessly decimated against a phantom 46-px viewport.
+_PREVIEW_MIN_REALIZED_PIXEL_WIDTH = 200
+
+# Stale-state chrome for the already-computed spectrum when the source
+# selection changed but the user has not re-clicked 计算. Deliberately a
+# desaturated neutral so it can NEVER be mistaken for a data-series line
+# (file palette: blues/greens/reds/oranges/cyans/purples/slate) nor for the
+# red remark dot (#dc2626). The marker text is fixed by product copy.
+_STALE_MARKER_TEXT = "结果已过期，请重新计算"
+_STALE_MARKER_TEXT_COLOR = "#6b7280"      # neutral slate-500, UI chrome
+_STALE_MARKER_FILL = (243, 244, 246, 235)  # gray-100 translucent banner
+_STALE_MARKER_BORDER = "#9ca3af"          # gray-400 hairline
+# Opacity applied to the amp curves while stale (dim, not hidden).
+_STALE_CURVE_OPACITY = 0.28
 
 
 class _AxisShim:
@@ -75,6 +104,8 @@ class PgLineCanvas(QWidget):
         self._raw_amp_title = ''
         self._raw_time_title = ''
         self._split_title_width = None
+        self._spectrum_stale = False
+        self._stale_banner = None
 
         self._glw.scene().sigMouseMoved.connect(self._on_hover)
         self._glw.scene().sigMouseClicked.connect(self._on_click)
@@ -99,8 +130,39 @@ class PgLineCanvas(QWidget):
             keep_plot_options=True,
         )
 
-    def _handle_wheel_dispatch(self, **_kwargs):
-        return False
+    def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
+                               view_box=None):
+        step = 1 if delta > 0 else -1 if delta < 0 else 0
+        if step == 0 or view_box is None:
+            return False
+        ctrl = bool(modifiers & Qt.ControlModifier)
+        shift = bool(modifiers & Qt.ShiftModifier)
+        if not (ctrl or shift):
+            return False
+
+        factor = 0.85 if step > 0 else 1.0 / 0.85
+        try:
+            x_range, y_range = view_box.viewRange()
+            if ctrl:
+                lo, hi = x_range
+                center = float(x_pos) if np.isfinite(x_pos) else (lo + hi) / 2.0
+                view_box.setXRange(
+                    center - (center - lo) * factor,
+                    center + (hi - center) * factor,
+                    padding=0,
+                )
+            elif shift:
+                lo, hi = y_range
+                center = float(y_pos) if np.isfinite(y_pos) else (lo + hi) / 2.0
+                view_box.setYRange(
+                    center - (center - lo) * factor,
+                    center + (hi - center) * factor,
+                    padding=0,
+                )
+        except Exception:
+            return False
+        self.layout_geometry_changed.emit()
+        return True
 
     # ------------------------------------------------------------------
     def plot_spectra(self, entries, *, xlim, amp_label, title,
@@ -112,14 +174,18 @@ class PgLineCanvas(QWidget):
                 p.removeItem(c)
             curves.clear()
         self.clear_remarks()
+        # A fresh compute supersedes any stale marker; restore the NORMAL
+        # visual state (full-opacity curves rebuilt below + marker removed).
+        self._clear_spectrum_stale()
         self._entries = list(entries)
 
         for e in self._entries:
             pen = pg.mkPen(e.get('color', '#2563eb'), width=1.2)
-            self._amp_curves.append(
-                self._plot_amp.plot(
-                    e['freq'], e['amp'], pen=pen, name=e['label'],
-                    antialias=True))
+            curve = self._plot_amp.plot(
+                e['freq'], e['amp'], pen=pen, name=e['label'],
+                antialias=True)
+            curve.setOpacity(1.0)
+            self._amp_curves.append(curve)
 
         self._raw_amp_title = title or ''
         self._apply_title_texts()
@@ -142,12 +208,20 @@ class PgLineCanvas(QWidget):
 
     def plot_time_preview(self, entries, *, title="时域预览",
                           clear_spectrum=True) -> None:
-        """Show selected FFT input sources before spectrum computation."""
+        """Show selected FFT input sources before spectrum computation.
+
+        ``clear_spectrum=True`` (genuine reset: mode entry / file close) wipes
+        the upper amplitude row. ``clear_spectrum=False`` (selection change on
+        an already-computed spectrum) KEEPS the amplitude curves visible but
+        DIMS them and overlays a "结果已过期" marker, while the lower time row
+        still updates live to the new selection. The next ``plot_spectra``
+        restores the normal visual state."""
         if clear_spectrum:
             for c in self._amp_curves:
                 self._plot_amp.removeItem(c)
             self._amp_curves.clear()
             self.clear_remarks()
+            self._clear_spectrum_stale()
             self._entries = []
             self._selected_time_entry_idx = None
             self._last_xlim = None
@@ -156,12 +230,104 @@ class PgLineCanvas(QWidget):
             self._apply_title_texts()
             self._plot_amp.setLabel('left', '')
             self._plot_amp.setLabel('bottom', '')
+        elif self._amp_curves:
+            # Keep the computed spectrum but flag it stale. Nothing to flag
+            # when no spectrum exists yet (behaves like a plain preview).
+            self.mark_spectrum_stale()
         self._plot_time_preview_entries(list(entries or []), title=title)
+
+    # ------------------------------------------------------------------
+    # stale spectrum state (selection changed, awaiting re-compute)
+    # ------------------------------------------------------------------
+    def mark_spectrum_stale(self) -> None:
+        """Dim the computed amplitude curves and show the over-stale marker.
+
+        Idempotent and a no-op when there is no computed spectrum."""
+        if not self._amp_curves:
+            return
+        self._spectrum_stale = True
+        for c in self._amp_curves:
+            try:
+                c.setOpacity(_STALE_CURVE_OPACITY)
+            except Exception:
+                pass
+        self._show_stale_banner()
+
+    def _clear_spectrum_stale(self) -> None:
+        """Restore full-opacity curves and remove the stale marker."""
+        self._spectrum_stale = False
+        for c in self._amp_curves:
+            try:
+                c.setOpacity(1.0)
+            except Exception:
+                pass
+        self._remove_stale_banner()
+
+    def is_spectrum_stale(self) -> bool:
+        return bool(self._spectrum_stale)
+
+    def _show_stale_banner(self) -> None:
+        if self._stale_banner is None:
+            # pg.TextItem already renders at a constant on-screen size
+            # (it does not scale with the view transform), so only its
+            # data-space POSITION must be re-pinned on range/resize changes.
+            banner = pg.TextItem(
+                _STALE_MARKER_TEXT,
+                color=_STALE_MARKER_TEXT_COLOR,
+                fill=pg.mkBrush(*_STALE_MARKER_FILL),
+                border=pg.mkPen(_STALE_MARKER_BORDER, width=1),
+                anchor=(0.5, 0.0),
+            )
+            banner.setZValue(1000)
+            self._stale_banner = banner
+        if self._stale_banner.scene() is None:
+            self._plot_amp.vb.addItem(self._stale_banner, ignoreBounds=True)
+        self._stale_banner.setVisible(True)
+        # Keep the banner pinned to the top-center of the ViewBox through
+        # resize AND pan/zoom (range changes remap scene→view coords).
+        # Disconnect-before-connect avoids stacking duplicate handlers when
+        # mark_spectrum_stale is called repeatedly across selection changes.
+        for sig in (self._plot_amp.vb.sigResized,
+                    self._plot_amp.vb.sigRangeChanged):
+            try:
+                sig.disconnect(self._reposition_stale_banner)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                sig.connect(self._reposition_stale_banner)
+            except Exception:
+                pass
+        self._reposition_stale_banner()
+
+    def _reposition_stale_banner(self, *_args) -> None:
+        if self._stale_banner is None or not self._spectrum_stale:
+            return
+        try:
+            rect = self._plot_amp.vb.sceneBoundingRect()
+            top_center_scene = QPointF(rect.center().x(), rect.top() + 8.0)
+            self._stale_banner.setPos(
+                self._plot_amp.vb.mapSceneToView(top_center_scene))
+        except Exception:
+            pass
+
+    def _remove_stale_banner(self) -> None:
+        if self._stale_banner is None:
+            return
+        for sig in (self._plot_amp.vb.sigResized,
+                    self._plot_amp.vb.sigRangeChanged):
+            try:
+                sig.disconnect(self._reposition_stale_banner)
+            except (TypeError, RuntimeError):
+                pass
+        try:
+            self._plot_amp.vb.removeItem(self._stale_banner)
+        except Exception:
+            pass
+        self._stale_banner = None
 
     def reset_view_to_data_extents(self) -> None:
         if self._last_xlim is None:
-            for p in (self._plot_amp, self._plot_time):
-                p.vb.autoRange()
+            self._reset_time_preview_to_extents()
             return
         x0, x1 = _visual_padded_bounds(self._last_xlim[0], self._last_xlim[1])
         self._plot_amp.setXRange(x0, x1, padding=0)
@@ -177,6 +343,14 @@ class PgLineCanvas(QWidget):
             tx0, tx1 = _visual_padded_bounds(bounds[0], bounds[1])
             self._plot_time.setXRange(tx0, tx1, padding=0)
 
+    def _reset_time_preview_to_extents(self) -> None:
+        bounds = self._combined_time_bounds()
+        if bounds is None:
+            return
+        tx0, tx1 = _visual_padded_bounds(bounds[0], bounds[1])
+        self._plot_time.setXRange(tx0, tx1, padding=0)
+        self._plot_time.enableAutoRange(axis='y')
+
     def full_reset(self) -> None:
         for p, curves in ((self._plot_amp, self._amp_curves),
                           (self._plot_time, self._time_curves)):
@@ -184,6 +358,7 @@ class PgLineCanvas(QWidget):
                 p.removeItem(c)
             curves.clear()
         self.clear_remarks()
+        self._clear_spectrum_stale()
         self._entries = []
         self._selected_time_entry_idx = None
         self._last_xlim = None
@@ -246,6 +421,14 @@ class PgLineCanvas(QWidget):
         self._apply_title_texts()
         self._plot_time.setLabel('left', 'Amplitude')
         self._plot_time.setLabel('bottom', 'Time (s)')
+        # Overlaying multiple full-resolution antialiased traces is CPU-raster
+        # bound (project lesson: TimeDomain 卡顿=CPU 光栅,随 overlay 通道数超
+        # 线性). The win comes from cutting points-rasterized × channels, so we
+        # (1) decimate each source to a viewport-pixel-width min/max envelope
+        # via the same build_envelope used by TimeDomainCanvasPG, and (2) drop
+        # antialias once more than one channel is overlaid.
+        pixel_width = self._preview_pixel_width()
+        antialias = len(entries) <= 1
         x_bounds = []
         for i, e in enumerate(entries):
             t = np.asarray(e.get('time', []), dtype=float)
@@ -253,12 +436,21 @@ class PgLineCanvas(QWidget):
             if t.size == 0 or sig.size == 0:
                 continue
             n = min(t.size, sig.size)
+            t = t[:n]
+            sig = sig[:n]
+            # Full-range envelope: the preview always shows the whole trace
+            # (the view is reset to data extents below), so xlim=None is the
+            # correct viewport. build_envelope preserves peaks (min/max per
+            # bucket), passes small/single-point traces through untouched, and
+            # emits NaN breaks for gaps.
+            t_env, sig_env = build_envelope(
+                t, sig, xlim=None, pixel_width=pixel_width)
             width = 1.7 if i == self._selected_time_entry_idx else 1.1
             pen = pg.mkPen(e.get('color', '#2563eb'), width=width)
             self._time_curves.append(
-                self._plot_time.plot(t[:n], sig[:n], pen=pen,
-                                     antialias=True))
-            x_bounds.append((float(t[0]), float(t[n - 1])))
+                self._plot_time.plot(t_env, sig_env, pen=pen,
+                                     antialias=antialias))
+            x_bounds.append((float(t[0]), float(t[-1])))
         if x_bounds:
             lo = min(a for a, _b in x_bounds)
             hi = max(b for _a, b in x_bounds)
@@ -269,6 +461,19 @@ class PgLineCanvas(QWidget):
         self._plot_time.enableAutoRange(axis='y')
         self.layout_geometry_changed.emit()
 
+    def _preview_pixel_width(self) -> int:
+        """Bucket count for the time-preview envelope: the pixel width of the
+        time plot's ViewBox (≈ one bucket per pixel, like TimeDomainCanvasPG),
+        with a generous fallback when geometry is not yet realized."""
+        try:
+            rect = self._plot_time.vb.sceneBoundingRect()
+            w = int(round(rect.width()))
+            if w >= _PREVIEW_MIN_REALIZED_PIXEL_WIDTH:
+                return w
+        except Exception:
+            pass
+        return _PREVIEW_FALLBACK_PIXEL_WIDTH
+
     def _combined_time_bounds(self):
         bounds = []
         for e in self._entries:
@@ -278,6 +483,16 @@ class PgLineCanvas(QWidget):
             finite = t[np.isfinite(t)]
             if finite.size:
                 bounds.append((float(finite.min()), float(finite.max())))
+        if not bounds:
+            for curve in self._time_curves:
+                try:
+                    t, _sig = curve.getData()
+                except Exception:
+                    continue
+                t = np.asarray(t, dtype=float)
+                finite = t[np.isfinite(t)]
+                if finite.size:
+                    bounds.append((float(finite.min()), float(finite.max())))
         if not bounds:
             return None
         return min(lo for lo, _hi in bounds), max(hi for _lo, hi in bounds)
