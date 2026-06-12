@@ -96,6 +96,7 @@ class AnalysisSectionPage(QWidget):
         lay.addWidget(self._split, stretch=1)
 
         self._focused = 0
+        self._previous_focused = 0
         self._linked = False
         self._levels_locked = False
         # Swallows the toggled(bool) edge during programmatic
@@ -118,7 +119,19 @@ class AnalysisSectionPage(QWidget):
         row.setSpacing(6)
 
         # ViewTabBar's ctor is (manager, parent) — pass the manager, NOT self.
-        self.tabbar = ViewTabBar(manager, self._compare_row)
+        # Analysis split adds/removes pane 2 inside the ACTIVE view, unlike
+        # TimeDomain's two-View merge/pair semantics.
+        self.tabbar = ViewTabBar(
+            manager,
+            self._compare_row,
+            split_action_mode='active_pane',
+            active_split_provider=self.pane_count,
+            split_action_labels={
+                'split': "添加对比窗格",
+                'replace': "添加对比窗格",
+                'clear': "关闭对比窗格",
+            },
+        )
         row.addWidget(self.tabbar, 1)
 
         self.btn_link = self._make_toggle(
@@ -129,12 +142,9 @@ class AnalysisSectionPage(QWidget):
         row.addWidget(self.btn_lock_levels, 0)
         self.btn_link.toggled.connect(self._on_link_button_toggled)
         self.btn_lock_levels.toggled.connect(self._on_lock_button_toggled)
-        # 联动缩放 defaults ON (spec §6.1; mirrors state.compare default
-        # x_linked=True). 锁定色阶 defaults OFF at construction — locking an
-        # empty heatmap is meaningless; MainWindow re-seeds both from the
-        # active view's state.compare via sync_compare_buttons on view switch.
+        # 联动缩放 + 锁定色阶 defaults mirror AnalysisViewState.compare.
         # Seed under suppression so no compare_toggled fires at construction.
-        self.sync_compare_buttons(x_linked=True, levels_locked=False)
+        self.sync_compare_buttons(x_linked=True, levels_locked=True)
 
         lay.addWidget(self._compare_row)
 
@@ -227,6 +237,7 @@ class AnalysisSectionPage(QWidget):
         self.set_linked(self._linked)
         self._apply_focus_style()
         self._refresh_compare_buttons()
+        self.tabbar.refresh_split_controls()
 
     def exit_split(self) -> None:
         if len(self._cards) < 2:
@@ -239,18 +250,24 @@ class AnalysisSectionPage(QWidget):
         card.setParent(None)
         card.deleteLater()
         self.set_focused_index(0)
+        self._previous_focused = 0
         self._apply_focus_style()
         self._refresh_compare_buttons()
+        self.tabbar.refresh_split_controls()
 
     # -- focus ----------------------------------------------------------
     def focused_index(self) -> int:
         return self._focused
+
+    def previous_focused_index(self) -> int:
+        return self._previous_focused
 
     def set_focused_index(self, idx: int) -> None:
         idx = max(0, min(idx, len(self._cards) - 1))
         if idx == self._focused:
             self._apply_focus_style()
             return
+        self._previous_focused = self._focused
         self._focused = idx
         self._apply_focus_style()
         self.focus_changed.emit(idx)

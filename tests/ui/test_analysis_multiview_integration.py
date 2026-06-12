@@ -104,6 +104,35 @@ def test_new_view_is_empty_then_switch_back_hits_cache(two_file_win):
     assert compute_calls["n"] == 0, "switch-back must NOT recompute (cache hit)"
 
 
+def test_fft_time_focus_switch_preserves_previous_pane_source(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    fids = list(win.files.keys())
+    page = win.chart_stack.page_fft_time
+    mgr = win.analysis_managers["fft_time"]
+    state = mgr.get(mgr.active)
+
+    win._on_analysis_split("fft_time", True)
+    assert page.focused_index() == 0
+
+    win._echo_combo_signal(win.inspector.fft_time_ctx.combo_sig, (fids[0], "speed"))
+    page.set_focused_index(1)
+
+    assert state.panes[0].sources == [(fids[0], "speed")]
+
+
+def test_analysis_view_switch_missing_compare_defaults_lock_levels_true(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    mgr = win.analysis_managers["fft_time"]
+    state = mgr.get(mgr.active)
+    state.compare = {}
+
+    win._on_analysis_view_switched("fft_time", mgr.active)
+
+    assert win.chart_stack.page_fft_time.btn_lock_levels.isChecked() is True
+
+
 # ----------------------------------------------------------------------
 # V7b: heatmap (FFT-vs-Time / Order) split multi-pane sequential compute
 # queue. Two panes, two DIFFERENT sources → each pane must render its OWN

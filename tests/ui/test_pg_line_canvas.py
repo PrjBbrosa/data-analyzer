@@ -53,6 +53,22 @@ def test_plot_spectra_single_entry(canvas):
     assert (x0, x1) == (pytest.approx(0.0), pytest.approx(500.0))
 
 
+def test_fft_curves_are_antialiased(canvas):
+    canvas.plot_spectra(
+        [_entry(), _entry('f2 · vib', '#dc2626')],
+        xlim=(0.0, 500.0),
+        amp_label='Amplitude',
+        psd_label='PSD',
+        title='FFT',
+        y_auto=True,
+        y_min=0.0,
+        y_max=0.0,
+    )
+    curves = canvas._amp_curves + canvas._psd_curves
+    assert curves
+    assert all(c.opts.get('antialias') is True for c in curves)
+
+
 def test_plot_spectra_overlay_n(canvas):
     canvas.plot_spectra(
         [_entry('a', '#2563eb'), _entry('b', '#dc2626'), _entry('c', '#16a34a')],

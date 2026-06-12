@@ -153,6 +153,28 @@ def test_db_mode_z_auto_defaults_true(canvas):
     assert hi == pytest.approx(0.0)
 
 
+def test_interp_bilinear_enables_smooth_image_paint(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude',
+        z_auto=True,
+        interp='bilinear',
+    )
+    assert canvas._img.smooth_transform_enabled() is True
+
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude',
+        z_auto=True,
+        interp='nearest',
+    )
+    assert canvas._img.smooth_transform_enabled() is False
+
+
 def test_remark_add_and_clear(canvas):
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),

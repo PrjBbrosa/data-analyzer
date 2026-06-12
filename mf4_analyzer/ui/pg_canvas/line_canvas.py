@@ -101,9 +101,13 @@ class PgLineCanvas(QWidget):
         for e in self._entries:
             pen = pg.mkPen(e['color'], width=1.2)
             self._amp_curves.append(
-                self._plot_amp.plot(e['freq'], e['amp'], pen=pen, name=e['label']))
+                self._plot_amp.plot(
+                    e['freq'], e['amp'], pen=pen, name=e['label'],
+                    antialias=True))
             self._psd_curves.append(
-                self._plot_psd.plot(e['freq'], e['psd'], pen=pen, name=e['label']))
+                self._plot_psd.plot(
+                    e['freq'], e['psd'], pen=pen, name=e['label'],
+                    antialias=True))
 
         self._plot_amp.setTitle(title)
         self._plot_amp.setLabel('left', amp_label)

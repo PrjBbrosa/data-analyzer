@@ -83,6 +83,18 @@ def test_set_focus(page):
     assert page.focused_index() == 1
 
 
+def test_previous_focused_index_tracks_focus_change(page):
+    page.enter_split()
+    assert page.focused_index() == 0
+    assert page.previous_focused_index() == 0
+    page.set_focused_index(1)
+    assert page.previous_focused_index() == 0
+    assert page.focused_index() == 1
+    page.set_focused_index(0)
+    assert page.previous_focused_index() == 1
+    assert page.focused_index() == 0
+
+
 def test_x_link_toggle(page):
     page.enter_split()
     page.set_linked(True)
@@ -289,6 +301,10 @@ def test_compare_toggled_signal_x_linked(page):
     assert received == [('x_linked', False), ('x_linked', True)]
 
 
+def test_heatmap_compare_defaults_lock_levels_on(page):
+    assert page.btn_lock_levels.isChecked() is True
+
+
 def test_compare_toggled_signal_levels_locked(page):
     """锁定色阶 toggle emits compare_toggled('levels_locked', bool)."""
     page.enter_split()
@@ -296,9 +312,9 @@ def test_compare_toggled_signal_levels_locked(page):
         _plot_heat(page.pane_canvas(i), 100.0)
     received = []
     page.compare_toggled.connect(lambda k, on: received.append((k, on)))
-    page.btn_lock_levels.setChecked(True)
     page.btn_lock_levels.setChecked(False)
-    assert received == [('levels_locked', True), ('levels_locked', False)]
+    page.btn_lock_levels.setChecked(True)
+    assert received == [('levels_locked', False), ('levels_locked', True)]
 
 
 def test_levels_lock_button_hidden_for_line_section(line_page):
@@ -328,3 +344,18 @@ def test_set_compare_buttons_no_edge_emit(page):
     page.sync_compare_buttons(x_linked=False, levels_locked=True)
     assert received == []
     assert page.btn_link.isChecked() is False
+
+
+def test_analysis_tabbar_uses_active_pane_split_controls(page):
+    labels = page.tabbar.split_action_labels()
+    assert labels['split'] == "添加对比窗格"
+    assert labels['replace'] == "添加对比窗格"
+    assert labels['clear'] == "关闭对比窗格"
+    assert page.tabbar.split_action_mode() == "active_pane"
+
+    assert not page.tabbar._split_clear.isVisible()
+    page.enter_split()
+    page.tabbar.refresh_split_controls()
+    assert page.tabbar._split_clear.isVisible()
+    assert page.tabbar._split_clear.text() == "✕ 关闭对比窗格"
+    assert page.tabbar._split_clear.toolTip() == "关闭当前 View 的对比窗格"

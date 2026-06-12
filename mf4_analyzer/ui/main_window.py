@@ -829,7 +829,7 @@ class MainWindow(QMainWindow):
             #    _applying_analysis_view, so the resulting button edges do not
             #    write back onto the state we just read).
             x_linked = bool(state.compare.get('x_linked', True))
-            levels_locked = bool(state.compare.get('levels_locked', False))
+            levels_locked = bool(state.compare.get('levels_locked', True))
             page.set_linked(x_linked)
             page.set_levels_locked(levels_locked)
             page.sync_compare_buttons(
@@ -850,12 +850,9 @@ class MainWindow(QMainWindow):
             return
         mgr = self.analysis_managers[section]
         state = mgr.get(mgr.active)
-        # The page already advanced focused_index() before emitting, so capture
-        # cannot tell which pane was focused before. The capture path reads the
-        # CURRENT focused pane; since focus just moved, we instead re-echo the
-        # new focused pane's stored source (capture of the old pane happens on
-        # the next compute / view switch). Echo keeps the inspector consistent
-        # with the pane the user just selected.
+        page = self._analysis_page(section)
+        old_idx = min(page.previous_focused_index(), len(state.panes) - 1)
+        self._capture_analysis_sources(section, state, pane_idx=old_idx)
         self._apply_analysis_sources(section, state)
 
     def _on_analysis_compare_toggled(self, section, key, on):
@@ -894,9 +891,11 @@ class MainWindow(QMainWindow):
         })
 
     # -- source routing (Step 4) ----------------------------------------
-    def _capture_analysis_sources(self, section, state):
+    def _capture_analysis_sources(self, section, state, pane_idx=None):
         page = self._analysis_page(section)
-        idx = min(page.focused_index(), len(state.panes) - 1)
+        if pane_idx is None:
+            pane_idx = page.focused_index()
+        idx = min(int(pane_idx), len(state.panes) - 1)
         pane = state.panes[idx]
         if section == 'fft':
             checked = self.navigator.get_checked_channels()

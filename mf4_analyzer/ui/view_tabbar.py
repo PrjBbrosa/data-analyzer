@@ -36,10 +36,27 @@ class ViewTabBar(QWidget):
     split_requested = pyqtSignal(int)
     clear_split_requested = pyqtSignal(int)
 
-    def __init__(self, manager, parent=None):
+    def __init__(
+        self,
+        manager,
+        parent=None,
+        *,
+        split_action_labels=None,
+        split_action_mode='view_pair',
+        active_split_provider=None,
+    ):
         super().__init__(parent)
         self.setObjectName("viewTabBar")
         self._manager = manager
+        self._split_action_labels = {
+            'split': "与此 View 并排",
+            'replace': "与此 View 并排（替换当前合并）",
+            'clear': "取消合并",
+        }
+        if split_action_labels:
+            self._split_action_labels.update(split_action_labels)
+        self._split_action_mode = str(split_action_mode)
+        self._active_split_provider = active_split_provider
         self._suppress = False
         self._rename_editor = None
         self._rename_index = -1
@@ -132,6 +149,15 @@ class ViewTabBar(QWidget):
     def tabBar(self) -> QTabBar:
         return self._tabs
 
+    def split_action_labels(self) -> dict:
+        return dict(self._split_action_labels)
+
+    def split_action_mode(self) -> str:
+        return self._split_action_mode
+
+    def refresh_split_controls(self) -> None:
+        self._update_split_chip()
+
     def refresh(self) -> None:
         if self._reordering:
             # A live drag-reorder is on the stack. Qt has ALREADY moved the
@@ -205,7 +231,28 @@ class ViewTabBar(QWidget):
     def _on_split_clear_clicked(self) -> None:
         self.clear_split_requested.emit(self._manager.active)
 
+    def _active_pane_split_visible(self) -> bool:
+        if self._split_action_mode != 'active_pane':
+            return False
+        provider = self._active_split_provider
+        if provider is None:
+            return False
+        try:
+            return int(provider()) > 1
+        except Exception:
+            return False
+
     def _update_split_chip(self) -> None:
+        if self._split_action_mode == 'active_pane':
+            visible = self._active_pane_split_visible()
+            self._split_chip.setVisible(False)
+            self._split_chip.setText("")
+            self._split_clear.setVisible(visible)
+            self._split_clear.setText("✕ " + self._split_action_labels['clear'])
+            self._split_clear.setToolTip("关闭当前 View 的对比窗格")
+            self._split_clear.setAccessibleName(
+                "关闭当前 View 的对比窗格" if visible else "")
+            return
         partner_for = getattr(self._manager, "partner_for", None)
         partner = partner_for(self._manager.active) if callable(partner_for) else None
         visible = partner is not None
@@ -320,13 +367,20 @@ class ViewTabBar(QWidget):
             and active_partner is not None
             and active_partner != idx
         )
-        if partner is not None:
-            split_action = menu.addAction("取消合并")
-        elif will_replace:
-            split_action = menu.addAction("与此 View 并排（替换当前合并）")
+        if self._split_action_mode == 'active_pane':
+            if self._active_pane_split_visible() and idx == self._manager.active:
+                split_action = menu.addAction(self._split_action_labels['clear'])
+            else:
+                split_action = menu.addAction(self._split_action_labels['split'])
+            split_action.setEnabled(idx == self._manager.active)
         else:
-            split_action = menu.addAction("与此 View 并排")
-            split_action.setEnabled(idx != self._manager.active)
+            if partner is not None:
+                split_action = menu.addAction(self._split_action_labels['clear'])
+            elif will_replace:
+                split_action = menu.addAction(self._split_action_labels['replace'])
+            else:
+                split_action = menu.addAction(self._split_action_labels['split'])
+                split_action.setEnabled(idx != self._manager.active)
         menu.addSeparator()
         delete_action = menu.addAction("删除")
         delete_action.setEnabled(len(self._manager.views) > 1)
@@ -341,6 +395,12 @@ class ViewTabBar(QWidget):
         elif chosen is color_action:
             self.color_requested.emit(idx)
         elif chosen is split_action:
+            if self._split_action_mode == 'active_pane':
+                if self._active_pane_split_visible():
+                    self.clear_split_requested.emit(idx)
+                else:
+                    self.split_requested.emit(idx)
+                return
             if partner is not None:
                 self.clear_split_requested.emit(idx)
             else:

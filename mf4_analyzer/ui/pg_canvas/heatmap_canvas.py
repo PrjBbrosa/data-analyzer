@@ -68,6 +68,32 @@ def _tick_counts_to_density(x_n: int, y_n: int) -> tuple:
     return x_d, y_d
 
 
+class _SmoothImageItem(pg.ImageItem):
+    """ImageItem that honors mpl-style interpolation hints via QPainter."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._smooth_transform = False
+
+    def set_smooth_transform(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if self._smooth_transform == enabled:
+            return
+        self._smooth_transform = enabled
+        self.update()
+
+    def smooth_transform_enabled(self) -> bool:
+        return self._smooth_transform
+
+    def paint(self, painter, *args):
+        previous = painter.testRenderHint(QPainter.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, self._smooth_transform)
+        try:
+            return super().paint(painter, *args)
+        finally:
+            painter.setRenderHint(QPainter.SmoothPixmapTransform, previous)
+
+
 class PgHeatmapCanvas(QWidget):
     cursor_info = pyqtSignal(str)
     # Emitted when the user drags the interactive colorbar (lo, hi).
@@ -90,7 +116,7 @@ class PgHeatmapCanvas(QWidget):
         self._axis_bottom = self._plot.getAxis('bottom')
         self._axis_left = self._plot.getAxis('left')
         self._plot.showGrid(x=True, y=True, alpha=0.25)
-        self._img = pg.ImageItem()
+        self._img = _SmoothImageItem()
         # row-major: matrix[row, col] -> row = Y (origin at rect bottom,
         # matching imshow origin='lower'), col = X.
         self._img.setOpts(axisOrder='row-major')
@@ -181,10 +207,8 @@ class PgHeatmapCanvas(QWidget):
         y_auto=True, y_min=0.0, y_max=0.0,
         vmin=None, vmax=None,
     ):
-        # ``interp`` accepted for call-site parity but currently ignored:
-        # pg ImageItem.paint is a raw drawImage (no smoothing knob), so
-        # any visual difference vs mpl 'bilinear' is arbitrated by the
-        # P1 visual acceptance gate (M6).
+        smooth = str(interp or '').lower() in {'bilinear', 'bicubic', 'hanning'}
+        self._img.set_smooth_transform(smooth)
         m = np.asarray(matrix, dtype=float)
 
         # -- dB conversion: line-for-line port of canvases.py:2221-2244 --
