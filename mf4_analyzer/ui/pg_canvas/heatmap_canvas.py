@@ -18,6 +18,11 @@ from PyQt5.QtCore import QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QFontMetricsF, QPainter, QPixmap
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
+from mf4_analyzer.ui._axis_handle import (
+    PG_AXIS_NEUTRAL_COLOR,
+    PG_AXIS_NEUTRAL_WIDTH,
+)
+
 
 def _resolve_colormap(name: str) -> pg.ColorMap:
     """Map the inspector's matplotlib cmap names to pg ColorMaps.
@@ -68,6 +73,30 @@ def _tick_counts_to_density(x_n: int, y_n: int) -> tuple:
     return x_d, y_d
 
 
+def _apply_neutral_axis_frame(plot) -> None:
+    """Draw a full frame with axes, avoiding ViewBox border/axis overlap."""
+    vb = plot.getViewBox()
+    # pg 0.14 setBorder(None) stores a NoPen QPen, so ViewBox.paint still
+    # enters its border branch. Clear the private value after resetting the
+    # auxiliary border item so the visible frame is composed only from axes.
+    vb.setBorder(None)
+    vb.border = None
+    frame_pen = pg.mkPen(
+        color=PG_AXIS_NEUTRAL_COLOR,
+        width=PG_AXIS_NEUTRAL_WIDTH,
+    )
+    for side in ('left', 'bottom', 'top', 'right'):
+        axis = plot.getAxis(side)
+        axis.setPen(frame_pen)
+    for side in ('top', 'right'):
+        axis = plot.getAxis(side)
+        plot.showAxis(side)
+        axis.setStyle(showValues=False, tickLength=0)
+        axis.setLabel('')
+    plot.getAxis('top').setHeight(1)
+    plot.getAxis('right').setWidth(1)
+
+
 class _SmoothImageItem(pg.ImageItem):
     """ImageItem that honors mpl-style interpolation hints via QPainter."""
 
@@ -116,6 +145,7 @@ class PgHeatmapCanvas(QWidget):
         lay.addWidget(self._glw)
 
         self._plot = self._glw.addPlot(row=0, col=0)
+        _apply_neutral_axis_frame(self._plot)
         self._axis_bottom = self._plot.getAxis('bottom')
         self._axis_left = self._plot.getAxis('left')
         self._plot.showGrid(x=True, y=True, alpha=0.25)
@@ -179,6 +209,7 @@ class PgHeatmapCanvas(QWidget):
             # selected frame (parity with SpectrogramCanvas._ax_slice,
             # canvases.py:1775). Capped height keeps the 2D map dominant.
             self._slice_plot = self._glw.addPlot(row=1, col=0)
+            _apply_neutral_axis_frame(self._slice_plot)
             self._slice_plot.setMaximumHeight(140)
             self._slice_plot.showGrid(x=True, y=True, alpha=0.25)
             self._slice_plot.setLabel('bottom', 'Frequency (Hz)')
@@ -212,7 +243,8 @@ class PgHeatmapCanvas(QWidget):
         y_auto=True, y_min=0.0, y_max=0.0,
         vmin=None, vmax=None,
     ):
-        smooth = str(interp or '').lower() in {'bilinear', 'bicubic', 'hanning'}
+        interp_mode = 'bilinear' if interp is None else str(interp).lower()
+        smooth = interp_mode in {'bilinear', 'bicubic', 'hanning'}
         self._img.set_smooth_transform(smooth)
         m = np.asarray(matrix, dtype=float)
 
@@ -417,6 +449,7 @@ class PgHeatmapCanvas(QWidget):
         z_auto=False, z_floor=-80.0, z_ceiling=0.0, freq_range=None,
         x_auto=True, x_min=0.0, x_max=0.0,
         y_auto=True, y_min=0.0, y_max=0.0,
+        interp='bilinear',
     ):
         """Render a ``SpectrogramResult`` as a 2D heatmap + frequency slice.
 
@@ -487,6 +520,7 @@ class PgHeatmapCanvas(QWidget):
             title=f'FFT vs Time - {result.channel_name}',
             cmap=cmap, cbar_label=cbar,
             amplitude_mode='amplitude',  # conversion already done above
+            interp=interp,
             z_auto=True, vmin=vmin, vmax=vmax,
             x_auto=x_auto, x_min=x_min, x_max=x_max,
             y_auto=y_auto, y_min=y_min, y_max=y_max,

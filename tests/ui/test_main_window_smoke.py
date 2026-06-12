@@ -770,6 +770,25 @@ def test_fft_time_cache_key_ignores_display_only_options(qtbot):
     assert win._fft_time_cache_key(base) == win._fft_time_cache_key(changed)
 
 
+def test_render_fft_time_on_requests_smooth_heatmap_interpolation(qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    class _CaptureCanvas:
+        def __init__(self):
+            self.kwargs = None
+
+        def plot_result(self, result, **kwargs):
+            self.kwargs = dict(kwargs)
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    canvas = _CaptureCanvas()
+
+    win._render_fft_time_on(canvas, result=object(), p=_fft_time_base_params())
+
+    assert canvas.kwargs["interp"] == "bilinear"
+
+
 def test_fft_time_cache_hit_status(qtbot, monkeypatch):
     import numpy as np
     from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult

@@ -900,6 +900,7 @@ class MainWindow(QMainWindow):
         if section == 'fft':
             checked = self.navigator.get_checked_channels()
             pane.sources = [(fid, ch) for fid, ch, _color in checked]
+            self._sync_fft_source_summary(checked)
         else:
             ctx = self._analysis_ctx(section)
             sig = ctx.current_signal()
@@ -914,6 +915,7 @@ class MainWindow(QMainWindow):
         pane = state.panes[idx]
         if section == 'fft':
             self.navigator.set_checked_channels(list(pane.sources))
+            self._sync_fft_source_summary()
         else:
             ctx = self._analysis_ctx(section)
             if pane.sources:
@@ -1045,30 +1047,56 @@ class MainWindow(QMainWindow):
             return str(fid)
         return getattr(fd, 'short_name', None) or str(fid)
 
+    def _sync_fft_source_summary(self, checked=None):
+        if checked is None:
+            checked = self.navigator.get_checked_channels()
+        labels = []
+        for item in checked or []:
+            if len(item) < 2:
+                continue
+            fid, ch = item[0], item[1]
+            labels.append(f"{self._file_display_name(fid)} · {ch}")
+        setter = getattr(self.inspector.fft_ctx, 'set_source_summary', None)
+        if callable(setter):
+            setter(labels)
+
+    def _fft_trace_for_source(self, fid, ch):
+        fd = self.files.get(fid)
+        if fd is None or ch not in fd.data.columns:
+            return None, None
+        t = np.asarray(fd.time_array, dtype=float)
+        sig = np.asarray(fd.data[ch].to_numpy(copy=False), dtype=float)
+        if self.inspector.top.range_enabled() and t is not None:
+            lo, hi = self.inspector.top.range_values()
+            mask = (t >= lo) & (t <= hi)
+            t = t[mask]
+            sig = sig[mask]
+        return t, sig
+
     def _fft_entry_from_cache(self, result, fid, ch, color):
         """Build a plot_spectra entry from a cached FFT result.
 
         ``result`` is the raw compute tuple ``(freq, amp, psd)`` (linear). The
         dB/linear display transform is applied here from the CURRENT inspector
-        axis toggles, so toggling dB re-renders without recompute (display-only
+        axis toggle, so toggling dB re-renders without recompute (display-only
         knobs are excluded from the cache key)."""
-        freq, amp, psd = result
+        freq, amp, _psd = result
         p = self.inspector.fft_ctx.current_params()
         amp_y = p.get('amp_y', 'Linear')
-        psd_y = p.get('psd_y', 'dB')
         if amp_y == 'dB':
             amp_disp = 20 * np.log10(
                 np.clip(amp, 1e-12, None) / max(amp.max(), 1e-12))
         else:
             amp_disp = amp
-        psd_disp = 10 * np.log10(psd + 1e-12) if psd_y == 'dB' else psd
         label = f"{self._file_display_name(fid)} · {ch}"
+        t, sig = self._fft_trace_for_source(fid, ch)
         return {
             'label': label,
             'color': color or '#2563eb',
             'freq': freq,
             'amp': amp_disp,
-            'psd': psd_disp,
+            'time': [] if t is None else t,
+            'signal': [] if sig is None else sig,
         }
 
     def _plot_fft_entries(self, entries, canvas=None):
@@ -1080,7 +1108,6 @@ class MainWindow(QMainWindow):
             return
         p = self.inspector.fft_ctx.current_params()
         amp_y = p.get('amp_y', 'Linear')
-        psd_y = p.get('psd_y', 'dB')
         x_auto = bool(p.get('x_auto', p.get('autoscale', True)))
         x_min = float(p.get('x_min', 0.0))
         x_max = float(p.get('x_max', 0.0))
@@ -1096,7 +1123,6 @@ class MainWindow(QMainWindow):
             entries,
             xlim=xlim,
             amp_label='Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
-            psd_label='PSD (dB)' if psd_y == 'dB' else 'PSD',
             title=f'FFT · {len(entries)} 条曲线',
             y_auto=bool(p.get('y_auto', True)),
             y_min=float(p.get('y_min', 0.0)),
@@ -2136,6 +2162,7 @@ class MainWindow(QMainWindow):
         self.inspector.fft_time_ctx.set_signal_candidates(sig_cands)
         self.inspector.order_ctx.set_signal_candidates(sig_cands)
         self.inspector.order_ctx.set_rpm_candidates(rpm_cands)
+        self._sync_fft_source_summary()
 
     def _on_chart_focus_changed(self, secondary_focused):
         if not self.chart_stack.split_active():
@@ -2168,6 +2195,8 @@ class MainWindow(QMainWindow):
         invalidate = getattr(focused, 'invalidate_envelope_cache', None)
         if callable(invalidate):
             invalidate("selection changed")
+        if self.chart_stack.current_mode() == 'fft':
+            self._sync_fft_source_summary()
         if self.files and self.chart_stack.current_mode() == 'time':
             self._replot_canvas_for_view(idx, focused)
 
@@ -2728,6 +2757,7 @@ class MainWindow(QMainWindow):
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
+            t = t[m]
             sig = sig[m]
         return sig, fd.fs
 
@@ -2828,6 +2858,7 @@ class MainWindow(QMainWindow):
         if self.inspector.top.range_enabled() and t is not None:
             lo, hi = self.inspector.top.range_values()
             m = (t >= lo) & (t <= hi)
+            t = t[m]
             sig = sig[m]
         fft_params = self.inspector.fft_ctx.current_params()
         win = fft_params['window']
@@ -2839,7 +2870,7 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage('计算FFT...');
             QApplication.processEvents()
 
-            freq, amp, psd = self._fft_compute_arrays(sig, fs, fft_params)
+            freq, amp, _psd = self._fft_compute_arrays(sig, fs, fft_params)
 
             x_auto = bool(fft_params.get('x_auto', fft_params.get('autoscale', True)))
             x_min = float(fft_params.get('x_min', 0.0))
@@ -2856,17 +2887,12 @@ class MainWindow(QMainWindow):
 
             # Wave 2 / SP2 / Task 2.3: per-subplot Linear/dB toggle.
             amp_y = fft_params.get('amp_y', 'Linear')
-            psd_y = fft_params.get('psd_y', 'dB')
             if amp_y == 'dB':
                 amp_disp = 20 * np.log10(
                     np.clip(amp, 1e-12, None) / max(amp.max(), 1e-12)
                 )
             else:
                 amp_disp = amp
-            if psd_y == 'dB':
-                psd_disp = 10 * np.log10(psd + 1e-12)
-            else:
-                psd_disp = psd
 
             sig_label = self.inspector.fft_ctx.combo_sig.currentText()
             entry = {
@@ -2874,13 +2900,13 @@ class MainWindow(QMainWindow):
                 'color': '#2563eb',
                 'freq': freq,
                 'amp': amp_disp,
-                'psd': psd_disp,
+                'time': t,
+                'signal': sig,
             }
             self.canvas_fft.plot_spectra(
                 [entry],
                 xlim=xlim,
                 amp_label='Amplitude (dB)' if amp_y == 'dB' else 'Amplitude',
-                psd_label='PSD (dB)' if psd_y == 'dB' else 'PSD',
                 title=f'FFT - {sig_label} (窗:{win}, NFFT:{nfft or "auto"})',
                 y_auto=y_auto, y_min=y_min, y_max=y_max,
             )
@@ -3692,6 +3718,7 @@ class MainWindow(QMainWindow):
             z_floor=float(p.get('z_floor', -80.0)),
             z_ceiling=float(p.get('z_ceiling', 0.0)),
             freq_range=freq_range,
+            interp='bilinear',
             x_auto=bool(p.get('x_auto', True)),
             x_min=float(p.get('x_min', 0.0)),
             x_max=float(p.get('x_max', 0.0)),

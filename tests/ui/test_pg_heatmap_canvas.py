@@ -175,6 +175,18 @@ def test_interp_bilinear_enables_smooth_image_paint(canvas):
     assert canvas._img.smooth_transform_enabled() is False
 
 
+def test_heatmap_default_interpolation_is_smooth(canvas):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude',
+        z_auto=True,
+    )
+
+    assert canvas._img.smooth_transform_enabled() is True
+
+
 def test_remark_add_and_clear(canvas):
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
@@ -405,6 +417,37 @@ def test_colorbar_rounding_adapts_to_level_span(canvas):
     assert canvas._cbar.rounding == pytest.approx(0.5 / 1000.0)
 
 
+@pytest.mark.parametrize("with_slice", [False, True])
+def test_heatmap_plots_draw_full_neutral_axis_frame_without_viewbox_overlap(
+    qapp, with_slice
+):
+    from mf4_analyzer.ui._axis_handle import (
+        PG_AXIS_NEUTRAL_COLOR,
+        PG_AXIS_NEUTRAL_WIDTH,
+    )
+
+    c = PgHeatmapCanvas(with_slice=with_slice)
+    try:
+        plots = [c._plot]
+        if with_slice:
+            plots.append(c._slice_plot)
+
+        for plot in plots:
+            assert getattr(plot.getViewBox(), "border", None) is None
+            for side in ("left", "bottom", "top", "right"):
+                axis = plot.getAxis(side)
+                assert axis.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
+                assert axis.pen().widthF() == pytest.approx(PG_AXIS_NEUTRAL_WIDTH)
+            assert plot.getAxis("top").isVisible()
+            assert plot.getAxis("right").isVisible()
+            assert plot.getAxis("top").style.get("showValues") is False
+            assert plot.getAxis("right").style.get("showValues") is False
+            assert float(plot.getAxis("top").height()) <= 4.0
+            assert float(plot.getAxis("right").width()) <= 4.0
+    finally:
+        c.deleteLater()
+
+
 # ----------------------------------------------------------------------
 # FFT-vs-Time slice row (with_slice=True). Task 7.
 # ----------------------------------------------------------------------
@@ -506,6 +549,16 @@ def test_plot_result_without_slice_flag_has_no_slice_row(qapp):
     c.deleteLater()
 
 
+def test_plot_result_defaults_to_smooth_image_paint(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.plot_result(_spec_result(), amplitude_mode='amplitude_db', cmap='turbo')
+
+        assert c._img.smooth_transform_enabled() is True
+    finally:
+        c.deleteLater()
+
+
 def test_plot_result_db_vmin_vmax_not_overridden_by_internal_auto(qapp):
     # The dB matrix + clip + levels are computed in plot_result; the
     # explicit vmin/vmax it hands to plot_or_update_heatmap must survive
@@ -542,11 +595,14 @@ def test_left_click_selects_frame_when_remark_off(qapp):
     c.plot_result(
         r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True,
     )
-    # Click near t=1.0s (frame index 5 of times linspace(0,2,10)).
-    sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
+    # Click near the frame at ~1.11s. Avoid the exact midpoint between two
+    # frames (1.0s), where 1px layout/frame changes can legitimately flip the
+    # nearest-bin tie.
+    click_t = float(r.times[5])
+    sp = c._plot.vb.mapViewToScene(QPointF(click_t, 250.0))
     c._on_scene_click(_FakeSceneClick(sp, Qt.LeftButton))
     xs, ys = c._slice_curve.getData()
-    expected_idx = int(np.argmin(np.abs(r.times - 1.0)))
+    expected_idx = int(np.argmin(np.abs(r.times - click_t)))
     np.testing.assert_allclose(ys, c._matrix_disp[:, expected_idx], rtol=1e-6)
     # Marker follows the selected time.
     assert c._slice_marker.value() == pytest.approx(float(r.times[expected_idx]))

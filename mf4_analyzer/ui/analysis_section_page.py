@@ -57,7 +57,7 @@ def _primary_vb(canvas):
 
     PgHeatmapCanvas exposes the single main PlotItem as ``canvas._plot``;
     PgLineCanvas has NO ``_plot`` — it has two fixed rows ``_plot_amp`` +
-    ``_plot_psd`` (the PSD row is already XLinked to amp at construction),
+    ``_plot_time`` (the preview row follows the amp row's X navigation),
     so linking the two canvases' AMP ViewBoxes propagates to the whole line
     figure. A naive ``canvas._plot.vb`` AttributeErrors on the line canvas.
     """

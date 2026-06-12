@@ -175,9 +175,9 @@ QSpinBox[compact="true"]::down-arrow, QDoubleSpinBox[compact="true"]::down-arrow
 
 QComboBox QAbstractItemView {
     padding: 4px;
-    border: 1px solid #dfe5ee;
+    border: none;
     border-radius: 8px;
-    background-color: #ffffff;
+    background-color: transparent;
     outline: none;
     selection-background-color: transparent;
     selection-color: #111827;
@@ -1488,16 +1488,16 @@ QLabel#chartHint {
     background-color: transparent;
 }
 
-QFrame#timeViewBottomDock QWidget#viewTabBar {
-    background-color: #fbfcff;
+QWidget#viewTabBar {
+    background-color: transparent;
     border: none;
 }
 
-QFrame#timeViewBottomDock QTabBar#viewTabs {
+QWidget#viewTabBar QTabBar#viewTabs {
     background-color: transparent;
 }
 
-QFrame#timeViewBottomDock QTabBar#viewTabs::tab {
+QWidget#viewTabBar QTabBar#viewTabs::tab {
     min-width: 58px;
     height: 20px;
     margin: 3px 2px 1px 0;
@@ -1510,13 +1510,13 @@ QFrame#timeViewBottomDock QTabBar#viewTabs::tab {
     font-weight: 600;
 }
 
-QFrame#timeViewBottomDock QTabBar#viewTabs::tab:hover {
+QWidget#viewTabBar QTabBar#viewTabs::tab:hover {
     background-color: #eef4ff;
     border-color: #c7d7f2;
     color: #1f3b68;
 }
 
-QFrame#timeViewBottomDock QTabBar#viewTabs::tab:selected {
+QWidget#viewTabBar QTabBar#viewTabs::tab:selected {
     background-color: #e8f0ff;
     border-color: #a7bfea;
     border-bottom: 2px solid #2563eb;
@@ -1530,7 +1530,7 @@ QFrame#timeViewBottomDock QTabBar#viewTabs::tab:selected {
  * where the label text is. The geometry is set in view_tabbar.py to cover the
  * tab's text region; padding here keeps the text horizontally aligned with the
  * label it replaces. */
-QFrame#timeViewBottomDock QLineEdit#viewTabRenameEditor {
+QWidget#viewTabBar QLineEdit#viewTabRenameEditor {
     background-color: #e8f0ff;
     border: 1px solid #a7bfea;
     border-radius: 4px;
@@ -1542,7 +1542,7 @@ QFrame#timeViewBottomDock QLineEdit#viewTabRenameEditor {
     selection-color: #ffffff;
 }
 
-QFrame#timeViewBottomDock QPushButton#viewTabPlus {
+QWidget#viewTabBar QPushButton#viewTabPlus {
     min-width: 24px;
     max-width: 24px;
     min-height: 22px;
@@ -1556,7 +1556,7 @@ QFrame#timeViewBottomDock QPushButton#viewTabPlus {
     font-weight: 700;
 }
 
-QFrame#timeViewBottomDock QPushButton#viewTabPlus:hover {
+QWidget#viewTabBar QPushButton#viewTabPlus:hover {
     background-color: #e8f0ff;
     border-color: #a7bfea;
     color: #173262;
@@ -1565,7 +1565,7 @@ QFrame#timeViewBottomDock QPushButton#viewTabPlus:hover {
 /* Disabled = View count hit MAX_VIEWS (6). _update_plus_state already calls
  * setEnabled(False); this rule makes that visually obvious (greyed fill, edge
  * and glyph) so the user sees the cap rather than a still-bright button. */
-QFrame#timeViewBottomDock QPushButton#viewTabPlus:disabled {
+QWidget#viewTabBar QPushButton#viewTabPlus:disabled {
     background-color: #f1f5f9;
     border-color: #e2e8f0;
     color: #b8c2d0;
@@ -1576,13 +1576,13 @@ QFrame#timeViewBottomDock QPushButton#viewTabPlus:disabled {
  * persistent status sentence. The button still needs an explicit QSS
  * background/border, otherwise the macOS native push-button bezel can render an
  * empty rounded box and the label disappears. */
-QFrame#timeViewBottomDock QLabel#viewSplitChip {
+QWidget#viewTabBar QLabel#viewSplitChip {
     color: #5a6478;
     padding: 0 6px;
     margin: 3px 0 1px 0;
 }
 
-QFrame#timeViewBottomDock QPushButton#viewSplitClear {
+QWidget#viewTabBar QPushButton#viewSplitClear {
     min-height: 22px;
     margin: 3px 2px 1px 0;
     padding: 0 10px;
@@ -1593,13 +1593,13 @@ QFrame#timeViewBottomDock QPushButton#viewSplitClear {
     font-weight: 600;
 }
 
-QFrame#timeViewBottomDock QPushButton#viewSplitClear:hover {
+QWidget#viewTabBar QPushButton#viewSplitClear:hover {
     background-color: #ffe4e6;
     border-color: #f43f5e;
     color: #9f1239;
 }
 
-QFrame#timeViewBottomDock QPushButton#viewSplitClear:pressed {
+QWidget#viewTabBar QPushButton#viewSplitClear:pressed {
     background-color: #fecdd3;
     border-color: #e11d48;
     color: #881337;

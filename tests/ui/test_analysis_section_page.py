@@ -148,7 +148,7 @@ def test_heatmap_link_locks_both_axes(page):
 
 
 def test_line_set_linked_no_attribute_error(line_page):
-    """PgLineCanvas has _plot_amp/_plot_psd, NOT _plot — set_linked must not
+    """PgLineCanvas has _plot_amp/_plot_time, NOT _plot — set_linked must not
     AttributeError, and the amp row's X axis must be linked (X only, no Y)."""
     line_page.enter_split()
     line_page.set_linked(True)  # would AttributeError on a naive ._plot.vb

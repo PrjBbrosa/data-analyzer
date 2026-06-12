@@ -1648,7 +1648,6 @@ def test_fft_preset_collects_extended_analysis_params(qapp):
     w.combo_avg_mode.setCurrentText('线性平均')
     w.spin_avg_overlap.setValue(75)
     w.combo_amp_y.setCurrentText('dB')
-    w.combo_psd_y.setCurrentText('Linear')
 
     p = w._collect_preset()
 
@@ -1658,7 +1657,7 @@ def test_fft_preset_collects_extended_analysis_params(qapp):
     assert p['avg_mode'] == '线性平均'
     assert p['avg_overlap'] == 75
     assert p['amp_y'] == 'dB'
-    assert p['psd_y'] == 'Linear'
+    assert 'psd_y' not in p
 
 
 def test_fft_preset_applies_extended_analysis_params(qapp):
@@ -1672,7 +1671,6 @@ def test_fft_preset_applies_extended_analysis_params(qapp):
         'avg_mode': '峰值保持',
         'avg_overlap': 88,
         'amp_y': 'dB',
-        'psd_y': 'Linear',
     })
 
     assert w.combo_win.currentText() == 'blackman'
@@ -1681,7 +1679,6 @@ def test_fft_preset_applies_extended_analysis_params(qapp):
     assert w.combo_avg_mode.currentText() == '峰值保持'
     assert w.spin_avg_overlap.value() == 88
     assert w.combo_amp_y.currentText() == 'dB'
-    assert w.combo_psd_y.currentText() == 'Linear'
 
 
 # ---- Task 2.2: averaging routes through DSP helpers ----
@@ -1816,31 +1813,42 @@ def test_fft_contextual_has_axis_toggles(qapp):
     from mf4_analyzer.ui.inspector_sections import FFTContextual
     w = FFTContextual()
     assert hasattr(w, 'combo_amp_y')
-    assert hasattr(w, 'combo_psd_y')
     assert w.combo_amp_y.currentText() == 'Linear'
-    assert w.combo_psd_y.currentText() == 'dB'
+    assert not hasattr(w, 'combo_psd_y') or not w.combo_psd_y.isVisible()
 
 
 def test_fft_contextual_axis_toggles_in_params(qapp):
     from mf4_analyzer.ui.inspector_sections import FFTContextual
     w = FFTContextual()
     w.combo_amp_y.setCurrentText('dB')
-    w.combo_psd_y.setCurrentText('Linear')
     p = w.current_params()
     assert p.get('amp_y') == 'dB'
-    assert p.get('psd_y') == 'Linear'
-    w.apply_params({'amp_y': 'Linear', 'psd_y': 'dB'})
+    assert 'psd_y' not in p
+    w.apply_params({'amp_y': 'Linear'})
     assert w.combo_amp_y.currentText() == 'Linear'
-    assert w.combo_psd_y.currentText() == 'dB'
 
 
-def test_fft_render_honors_axis_toggles(qtbot):
-    """Toggling Amp axis to dB / PSD axis to Linear must change the y-label
-    text on the rendered rows — this proves the toggles round-trip
+def test_fft_contextual_source_summary_replaces_signal_combo_for_checked_sources(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    w = FFTContextual()
+    w.set_source_summary(["file1 Â· speed", "file2 Â· speed"])
+
+    assert "左侧已选 2 个信号" in w.lbl_source_summary.text()
+    assert w.combo_sig.isHidden() is True
+
+    w.set_source_summary([])
+
+    assert "单信号" in w.lbl_source_summary.text()
+    assert w.combo_sig.isHidden() is False
+
+
+def test_fft_render_honors_amplitude_axis_toggle(qtbot):
+    """Toggling Amp axis to dB must change the spectrum y-label text — this
+    proves the toggle round-trips
     through the render code in main_window.do_fft.
 
     M11: canvas_fft is a PgLineCanvas; the amp row is ``_plot_amp`` and the
-    PSD row is ``_plot_psd``. The y-label lives on each plot's left
+    time preview row is ``_plot_time``. The y-label lives on each plot's left
     ``AxisItem.labelText`` (the pg analogue of mpl ``ax.get_ylabel()``).
     """
     import numpy as np
@@ -1865,21 +1873,19 @@ def test_fft_render_honors_axis_toggles(qtbot):
     def amp_ylabel():
         return canvas._plot_amp.getAxis('left').labelText
 
-    def psd_ylabel():
-        return canvas._plot_psd.getAxis('left').labelText
+    def time_xlabel():
+        return canvas._plot_time.getAxis('bottom').labelText
 
     # Default render: amp=Linear, psd=dB.
     win.do_fft()
     assert canvas.has_result()
     assert 'dB' not in amp_ylabel()
-    assert 'dB' in psd_ylabel()
+    assert time_xlabel() == 'Time (s)'
 
     # Flip: amp=dB, psd=Linear.
     win.inspector.fft_ctx.combo_amp_y.setCurrentText('dB')
-    win.inspector.fft_ctx.combo_psd_y.setCurrentText('Linear')
     win.do_fft()
     assert 'dB' in amp_ylabel()
-    assert 'dB' not in psd_ylabel()
 
 
 def test_fft_render_honors_manual_xy_axis_ranges(qtbot):
@@ -1914,10 +1920,41 @@ def test_fft_render_honors_manual_xy_axis_ranges(qtbot):
     # the old mpl ``ax.get_xlim()`` / ``ax.get_ylim()``.
     canvas = win.canvas_fft
     assert canvas.has_result()
-    for plot in (canvas._plot_amp, canvas._plot_psd):
-        (x0, x1), (y0, y1) = plot.vb.viewRange()
-        assert (x0, x1) == pytest.approx((10.0, 80.0))
-        assert (y0, y1) == pytest.approx((-2.0, 2.0))
+    (x0, x1), (y0, y1) = canvas._plot_amp.vb.viewRange()
+    assert (x0, x1) == pytest.approx((10.0, 80.0))
+    assert (y0, y1) == pytest.approx((-2.0, 2.0))
+
+    (tx0, tx1), _ = canvas._plot_time.vb.viewRange()
+    assert (tx0, tx1) == pytest.approx((0.0, float(t[-1])), abs=0.02)
+
+
+def test_fft_time_preview_honors_selected_time_range(qtbot):
+    import pytest
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    fs = 1000.0
+    n = 4096
+    t = np.arange(n) / fs
+    sig = np.sin(2 * np.pi * 20 * t)
+    win._get_sig = lambda: (t, sig, fs)
+    win._check_uniform_or_prompt = lambda fd, mode: True
+    win.files = {}
+    win.inspector.fft_ctx.set_signal_candidates([("dummy", (None, "ch"))])
+    win.inspector.fft_ctx.spin_fs.setValue(fs)
+    win.inspector.fft_ctx.combo_avg_mode.setCurrentText('单帧')
+    win.inspector.top.set_range_values(1.0, 2.0)
+    win.inspector.top.chk_range.setChecked(True)
+
+    win.do_fft()
+
+    canvas = win.canvas_fft
+    assert canvas.has_result()
+    (tx0, tx1), _ = canvas._plot_time.vb.viewRange()
+    assert (tx0, tx1) == pytest.approx((1.0, 2.0), abs=0.02)
 
 
 # ---- Wave 3 (axis-settings + COT migration plan): 坐标轴设置 group ----

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QLineEdit, QMessageBox, QPushButton
 
@@ -69,6 +71,32 @@ def test_initial_plus_button_hugs_first_tab(qtbot):
     gap = bar._plus.geometry().left() - tab_right - 1
 
     assert gap <= 3
+
+
+def test_view_tabbar_chrome_is_shared_outside_time_domain_dock():
+    """Analysis section View tabs must use the same chrome as TimeDomain.
+
+    The production bug was QSS scoped only under ``#timeViewBottomDock``, so
+    ViewTabBar instances embedded in other section rows fell back to platform
+    tab styling.
+    """
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+
+    required_selectors = [
+        "QWidget#viewTabBar {",
+        "QWidget#viewTabBar QTabBar#viewTabs {",
+        "QWidget#viewTabBar QTabBar#viewTabs::tab {",
+        "QWidget#viewTabBar QTabBar#viewTabs::tab:hover {",
+        "QWidget#viewTabBar QTabBar#viewTabs::tab:selected {",
+        "QWidget#viewTabBar QLineEdit#viewTabRenameEditor {",
+        "QWidget#viewTabBar QPushButton#viewTabPlus {",
+        "QWidget#viewTabBar QPushButton#viewTabPlus:hover {",
+        "QWidget#viewTabBar QPushButton#viewTabPlus:disabled {",
+        "QWidget#viewTabBar QPushButton#viewSplitClear {",
+    ]
+
+    for selector in required_selectors:
+        assert selector in qss
 
 
 def test_views_changed_rerenders_after_manager_adds_view(qtbot):

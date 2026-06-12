@@ -299,7 +299,7 @@ class _PresetHoverCard(QFrame):
         if kind == 'fft':
             keys = (
                 'window', 'nfft', 'overlap', 'avg_mode', 'avg_overlap',
-                'amp_y', 'psd_y',
+                'amp_y',
             )
         elif kind == 'fft_time':
             keys = (
@@ -603,7 +603,6 @@ class PresetBar(QWidget):
         'avg_mode': '平均模式',
         'avg_overlap': '平均重叠',
         'amp_y': 'Amplitude 轴',
-        'psd_y': 'PSD 轴',
         'amplitude_mode': 'Amplitude 轴',
         'remove_mean': '去均值',
         'db_reference': 'dB 参考',
@@ -1769,9 +1768,20 @@ class FFTContextual(QWidget):
         sig_lay.addWidget(_make_group_header("分析信号", self.btn_rebuild))
         fl = QFormLayout()
         _configure_form(fl)
+        self.lbl_source_summary = QLabel("未勾选左侧通道 · 使用单信号下拉框")
+        self.lbl_source_summary.setObjectName("fftSourceSummary")
+        self.lbl_source_summary.setWordWrap(True)
+        fl.addRow(
+            "输入源:",
+            _fit_field(self.lbl_source_summary, max_width=_LONG_FIELD_MAX_WIDTH),
+        )
         self.combo_sig = SearchableComboBox()
         # combo_sig hosts long signal names — keep the long-text cap.
-        fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
+        self.lbl_single_signal = QLabel("单信号:")
+        fl.addRow(
+            self.lbl_single_signal,
+            _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH),
+        )
         self.spin_fs = _no_buttons(CompactDoubleSpinBox())
         self.spin_fs.setRange(1, 1e6)
         self.spin_fs.setValue(1000)
@@ -1834,8 +1844,7 @@ class FFTContextual(QWidget):
             lambda txt: self.spin_avg_overlap.setEnabled(txt != '单帧')
         )
 
-        # --- Y-axis scale per subplot — Wave 2 / SP2 / Task 2.3 ---
-        # Amplitude defaults Linear (legacy). PSD defaults dB (HEAD-parity).
+        # --- Y-axis scale for the spectrum row ---
         self.combo_amp_y = QComboBox()
         self.combo_amp_y.addItems(['Linear', 'dB'])
         self.combo_amp_y.setCurrentText('Linear')
@@ -1846,13 +1855,6 @@ class FFTContextual(QWidget):
         fl.addRow(
             "幅值轴:",
             _fit_field(self.combo_amp_y, max_width=_SHORT_FIELD_MAX_WIDTH),
-        )
-        self.combo_psd_y = QComboBox()
-        self.combo_psd_y.addItems(['Linear', 'dB'])
-        self.combo_psd_y.setCurrentText('dB')
-        fl.addRow(
-            "PSD 轴:",
-            _fit_field(self.combo_psd_y, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         root.addWidget(g)
 
@@ -1957,7 +1959,6 @@ class FFTContextual(QWidget):
             avg_mode=self.combo_avg_mode.currentText(),
             avg_overlap=self.spin_avg_overlap.value(),
             amp_y=self.combo_amp_y.currentText(),
-            psd_y=self.combo_psd_y.currentText(),
             autoscale=self.chk_x_auto.isChecked(),
             x_auto=self.chk_x_auto.isChecked(),
             x_min=float(self.spin_x_min.value()),
@@ -1991,17 +1992,28 @@ class FFTContextual(QWidget):
                 self.spin_avg_overlap.setValue(int(d['avg_overlap']))
             except (TypeError, ValueError):
                 pass
-        for k, combo in (
-            ('amp_y', self.combo_amp_y),
-            ('psd_y', self.combo_psd_y),
-        ):
-            if k in d:
-                i = combo.findText(str(d[k]))
-                if i >= 0:
-                    combo.setCurrentIndex(i)
+        if 'amp_y' in d:
+            i = self.combo_amp_y.findText(str(d['amp_y']))
+            if i >= 0:
+                self.combo_amp_y.setCurrentIndex(i)
 
     def _on_sig_index_changed(self):
         self.signal_changed.emit(self.combo_sig.currentData())
+
+    def set_source_summary(self, labels):
+        labels = [str(v) for v in (labels or []) if str(v)]
+        if labels:
+            n = len(labels)
+            suffix = " · 叠加" if n > 1 else ""
+            self.lbl_source_summary.setText(f"左侧已选 {n} 个信号{suffix}")
+            self.lbl_source_summary.setToolTip("\n".join(labels))
+            self.lbl_single_signal.setVisible(False)
+            self.combo_sig.setVisible(False)
+        else:
+            self.lbl_source_summary.setText("未勾选左侧通道 · 使用单信号下拉框")
+            self.lbl_source_summary.setToolTip("")
+            self.lbl_single_signal.setVisible(True)
+            self.combo_sig.setVisible(True)
 
     def set_signal_candidates(self, candidates):
         # Preserve the user's current selection across repopulation —
@@ -2066,7 +2078,6 @@ class FFTContextual(QWidget):
         p['avg_mode'] = self.combo_avg_mode.currentText()
         p['avg_overlap'] = int(self.spin_avg_overlap.value())
         p['amp_y'] = self.combo_amp_y.currentText()
-        p['psd_y'] = self.combo_psd_y.currentText()
         return p
 
     def apply_params(self, d):
@@ -2100,14 +2111,10 @@ class FFTContextual(QWidget):
                 self.spin_avg_overlap.setValue(int(d['avg_overlap']))
             except (TypeError, ValueError):
                 pass
-        for k, combo in (
-            ('amp_y', self.combo_amp_y),
-            ('psd_y', self.combo_psd_y),
-        ):
-            if k in d:
-                i = combo.findText(str(d[k]))
-                if i >= 0:
-                    combo.setCurrentIndex(i)
+        if 'amp_y' in d:
+            i = self.combo_amp_y.findText(str(d['amp_y']))
+            if i >= 0:
+                self.combo_amp_y.setCurrentIndex(i)
 
 
 class OrderContextual(QWidget):
