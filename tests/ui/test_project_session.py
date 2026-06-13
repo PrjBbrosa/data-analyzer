@@ -81,6 +81,39 @@ def test_open_project_restores_non_time_mode_consistently(qapp, tmp_path):
     assert mw2.toolbar.current_mode() == "fft"
 
 
+def test_open_project_auto_recomputes_source_bearing_analysis_views(
+        qapp, tmp_path, monkeypatch):
+    """Recompute-on-open: a saved project stores each analysis view's params +
+    sources but NOT the numeric results, so opening it must auto-recompute every
+    view that has sources (and leave source-less views alone)."""
+    from mf4_analyzer.ui.main_window import MainWindow
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    proj = tmp_path / "s.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    fid = next(iter(mw.files))
+    # Give the Order view a source while the app is in 'time' mode — save then
+    # preserves these sources (capture_sources only re-reads the navigator for
+    # the CURRENT mode). The FFT view is left source-less.
+    mw.analysis_managers['order'].get(0).panes[0].sources = [(fid, 'rpm')]
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    recomputed = []
+    monkeypatch.setattr(
+        type(mw2), '_recompute_analysis_section',
+        lambda self, section: recomputed.append(section),
+    )
+    mw2.open_project(proj)
+    # Recompute is deferred via QTimer.singleShot so it never pops a modal
+    # mid-open; pump the event loop to let the queued dispatch run.
+    qapp.processEvents()
+
+    assert 'order' in recomputed, "source-bearing Order view must auto-recompute"
+    assert 'fft' not in recomputed, "source-less FFT view must NOT recompute"
+
+
 def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
     from PyQt5.QtWidgets import QMessageBox

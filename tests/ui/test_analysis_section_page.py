@@ -98,6 +98,18 @@ def slice_page(qapp):
     p.deleteLater()
 
 
+def test_compare_row_has_bar_chrome_like_time_dock(page):
+    """The analysis View-tab row reads as a real bar (like the time-domain
+    #timeViewBottomDock): a light background + 1px top divider, painted by an
+    explicit styled background rather than the old translucent/transparent row."""
+    row = page._compare_row
+    # No longer translucent (that suppressed any background fill).
+    assert not row.testAttribute(Qt.WA_TranslucentBackground)
+    from mf4_analyzer.ui.analysis_section_page import _COMPARE_ROW_QSS
+    assert "#fbfcff" in _COMPARE_ROW_QSS
+    assert "border-top" in _COMPARE_ROW_QSS
+
+
 def test_starts_with_one_pane(page):
     assert page.pane_count() == 1
     assert page.focused_index() == 0

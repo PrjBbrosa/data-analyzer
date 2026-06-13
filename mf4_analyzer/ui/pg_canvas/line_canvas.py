@@ -13,10 +13,16 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 import pyqtgraph as pg
 
+from mf4_analyzer.ui._axis_handle import (
+    PG_AXIS_NEUTRAL_COLOR,
+    PG_AXIS_NEUTRAL_WIDTH,
+)
 from mf4_analyzer.ui.canvases import build_envelope
 
 from .heatmap_canvas import (
     _apply_neutral_axis_frame,
+    _apply_plot_collapse,
+    _PlotCollapseControl,
     _tick_counts_to_density,
     _visual_padded_bounds,
 )
@@ -50,6 +56,15 @@ _STALE_MARKER_BORDER = "#9ca3af"          # gray-400 hairline
 # Opacity applied to the amp curves while stale (dim, not hidden).
 _STALE_CURVE_OPACITY = 0.28
 
+# Default axis titles. Both plots carry titles AT ALL TIMES (incl. the empty
+# pre-compute state) so the FFT panel never shows one labelled plot beside one
+# bare plot. plot_spectra overrides the amp-left title with the chosen
+# amplitude label (Amplitude / dB); everything else falls back to these.
+_AMP_LEFT_LABEL = 'Amplitude'
+_AMP_BOTTOM_LABEL = 'Frequency (Hz)'
+_TIME_LEFT_LABEL = 'Amplitude'
+_TIME_BOTTOM_LABEL = 'Time (s)'
+
 
 class _AxisShim:
     """Minimal axis handle exposing ``view_box`` for ``PgNavigationToolbar``."""
@@ -65,6 +80,11 @@ class PgLineCanvas(QWidget):
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     time_preview_range_changed = pyqtSignal(float, float)
+    # AA status traffic-light (mirrors TimeDomainCanvasPG). _ChartCard wires
+    # this signal + quality_status() into the bottom-right quality dot, so the
+    # FFT card shows the same red/yellow/green antialiasing indicator the
+    # time-domain card does.
+    quality_status_changed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -87,6 +107,7 @@ class PgLineCanvas(QWidget):
             p.showGrid(x=True, y=True, alpha=0.25)
         self._plot_amp.addLegend(offset=(8, 8))
         self._plot_time.setMaximumHeight(170)
+        self._apply_default_axis_labels()
 
         self.axes_list = [
             _AxisShim(self._plot_amp.vb),
@@ -95,6 +116,12 @@ class PgLineCanvas(QWidget):
 
         self._amp_curves = []
         self._time_curves = []
+        # Multi-Y overlay for the time preview: when >1 source is overlaid each
+        # extra curve gets its own auto-scaled aux ViewBox + a colour-coded
+        # right axis (mirrors TimeDomainCanvasPG overlay). The first curve stays
+        # on _plot_time's own left axis.
+        self._time_overlay_vbs = []
+        self._time_overlay_axes = []
         self._entries = []
         self._selected_time_entry_idx = None
         self._remarks = []
@@ -112,6 +139,7 @@ class PgLineCanvas(QWidget):
         # antialiasing while the user pans/zooms so each frame is a cheap
         # non-AA raster, then restore crisp AA after a short hands-off idle.
         self._aa_on = True
+        self._last_quality_status = None
         self._aa_idle_timer = QTimer(self)
         self._aa_idle_timer.setSingleShot(True)
         self._aa_idle_timer.setInterval(150)
@@ -127,6 +155,15 @@ class PgLineCanvas(QWidget):
 
         self._glw.scene().sigMouseMoved.connect(self._on_hover)
         self._glw.scene().sigMouseClicked.connect(self._on_click)
+        # Keep the overlay aux ViewBoxes glued to the time plot's main ViewBox
+        # (geometry on resize, X range on pan/zoom) so the extra Y axes track.
+        self._plot_time.vb.sigResized.connect(self._sync_time_overlay_vbs)
+        self._plot_time.vb.sigXRangeChanged.connect(self._sync_time_overlay_vbs)
+
+        # Collapse divider between the spectrum (top) and time-preview (bottom).
+        self._collapse_ctrl = _PlotCollapseControl(self)
+        self._collapse_ctrl.collapse_changed.connect(self._on_collapse_changed)
+        self._plot_amp.vb.sigResized.connect(self._position_collapse_ctrl)
 
     # ------------------------------------------------------------------
     # Interactive vs idle curve antialiasing
@@ -174,6 +211,7 @@ class PgLineCanvas(QWidget):
             self._glw.update()
         except Exception:
             pass
+        self._emit_quality_status()
 
     def schedule_idle_quality(self):
         """Re-arm the idle-AA timer after a settled interaction."""
@@ -181,6 +219,7 @@ class PgLineCanvas(QWidget):
             self._aa_idle_timer.start()
         except Exception:
             pass
+        self._emit_quality_status()
 
     def _enable_idle_quality(self):
         """Idle-timer slot: restore crisp AA once the user is hands-off. If a
@@ -197,6 +236,50 @@ class PgLineCanvas(QWidget):
         self._aa_on = True
         try:
             self._glw.update()
+        except Exception:
+            pass
+        self._emit_quality_status()
+
+    # ------------------------------------------------------------------
+    # AA status (reader-facing traffic light) — mirrors QualityManager on the
+    # time-domain canvas but scoped to this canvas's own AA hysteresis state.
+    # ------------------------------------------------------------------
+    def quality_status(self):
+        """Return the {state, tooltip} dict consumed by the chart quality dot.
+
+        Judged on the amplitude spectrum curves (the primary FFT trace); the
+        time-preview curves intentionally drop AA when >1 source is overlaid,
+        so they are not used to decide the green/red readiness state.
+        """
+        judged = self._amp_curves or self._time_curves
+        if not judged:
+            return {"state": "red", "tooltip": "抗锯齿未激活：无曲线"}
+
+        def _aa(curve):
+            try:
+                return bool(curve.opts.get("antialias", False))
+            except Exception:
+                return False
+
+        actual_on = all(_aa(c) for c in judged)
+        if self._aa_on and actual_on:
+            return {"state": "green", "tooltip": "抗锯齿已完成"}
+        try:
+            timer_active = self._aa_idle_timer.isActive()
+        except Exception:
+            timer_active = False
+        if timer_active:
+            return {"state": "yellow", "tooltip": "抗锯齿等待空闲刷新"}
+        return {"state": "red", "tooltip": "抗锯齿未激活"}
+
+    def _emit_quality_status(self):
+        """Emit quality_status_changed only when the status actually changes."""
+        try:
+            status = self.quality_status()
+            if status == self._last_quality_status:
+                return
+            self._last_quality_status = status
+            self.quality_status_changed.emit(status)
         except Exception:
             pass
 
@@ -227,13 +310,58 @@ class PgLineCanvas(QWidget):
                 return plot
         return self._plot_amp
 
+    def _fit_y_to_visible_x(self, plot) -> None:
+        """Right-click 「Y 轴自适应」: keep the CURRENT X window fixed and
+        autoscale Y to just the curve samples inside it.
+
+        Mirrors ``TimeDomainCanvasPG.fit_y_to_visible_x`` but for the FFT line
+        plots. Distinct from ``reset_view_to_data_extents`` (查看全部), which
+        restores BOTH axes to the full data extent. Unlike the time-domain hot
+        path the line curves hold their full (non-decimated) samples, so we can
+        fit directly on ``getData()`` rather than re-slicing a raw signal.
+        """
+        if plot is self._plot_time:
+            curves = self._time_curves
+        else:
+            plot = self._plot_amp
+            curves = self._amp_curves
+        try:
+            (x0, x1), _ = plot.vb.viewRange()
+        except Exception:
+            return
+        lo, hi = np.inf, -np.inf
+        for c in curves:
+            try:
+                xs, ys = c.getData()
+            except Exception:
+                continue
+            if xs is None or ys is None or len(xs) == 0:
+                continue
+            xs = np.asarray(xs)
+            ys = np.asarray(ys)
+            mask = (xs >= x0) & (xs <= x1) & np.isfinite(ys)
+            if not np.any(mask):
+                continue
+            yv = ys[mask]
+            lo = min(lo, float(np.min(yv)))
+            hi = max(hi, float(np.max(yv)))
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi < lo:
+            return
+        pad = (hi - lo) * 0.05 if hi > lo else (abs(hi) * 0.05 or 1.0)
+        self.disable_interactive_quality()
+        plot.setYRange(lo - pad, hi + pad, padding=0)
+        self.schedule_idle_quality()
+
     def _redesign_context_menu_for_viewbox(self, view_box, menu) -> None:
+        plot = self._plot_item_for_view_box(view_box)
         redesign_pg_context_menu(
             menu,
-            self._plot_item_for_view_box(view_box),
+            plot,
             self._mouse_mode_controller,
             view_all_handler=self.reset_view_to_data_extents,
-            y_autofit_handler=None,
+            # Per-viewbox: fit Y on whichever plot (amp / time preview) was
+            # right-clicked — matches the time-domain 「Y 轴自适应」 entry.
+            y_autofit_handler=lambda: self._fit_y_to_visible_x(plot),
             allow_y_grid=True,
             keep_plot_options=True,
         )
@@ -319,6 +447,9 @@ class PgLineCanvas(QWidget):
             self._entries, selected_idx=0 if self._entries else None,
             title="时域预览",
         )
+        # Fresh curves are rebuilt AA-on; surface the resulting (green) state
+        # on the quality dot immediately.
+        self._emit_quality_status()
 
     def plot_time_preview(self, entries, *, title="时域预览",
                           clear_spectrum=True) -> None:
@@ -342,8 +473,10 @@ class PgLineCanvas(QWidget):
             self._last_yrange = None
             self._raw_amp_title = ''
             self._apply_title_texts()
-            self._plot_amp.setLabel('left', '')
-            self._plot_amp.setLabel('bottom', '')
+            # Keep the amp plot labelled (default titles) so it never goes bare
+            # while the time-preview row below stays labelled.
+            self._plot_amp.setLabel('left', _AMP_LEFT_LABEL)
+            self._plot_amp.setLabel('bottom', _AMP_BOTTOM_LABEL)
         elif self._amp_curves:
             # Keep the computed spectrum but flag it stale. Nothing to flag
             # when no spectrum exists yet (behaves like a plain preview).
@@ -469,8 +602,14 @@ class PgLineCanvas(QWidget):
         for p, curves in ((self._plot_amp, self._amp_curves),
                           (self._plot_time, self._time_curves)):
             for c in curves:
-                p.removeItem(c)
+                try:
+                    p.removeItem(c)
+                except Exception:
+                    pass
             curves.clear()
+        # Aux overlay curves live in their own ViewBoxes, not in _plot_time —
+        # tear those down too so no orphan axes/curves linger.
+        self._clear_time_overlay_axes()
         self.clear_remarks()
         self._clear_spectrum_stale()
         self._entries = []
@@ -480,12 +619,54 @@ class PgLineCanvas(QWidget):
         self._raw_amp_title = ''
         self._raw_time_title = ''
         self._apply_title_texts()
+        # Keep both plots labelled in the empty state (consistency fix).
+        self._apply_default_axis_labels()
         for p in (self._plot_amp, self._plot_time):
-            p.setLabel('left', '')
-            p.setLabel('bottom', '')
             p.enableAutoRange(axis='y')
         self.cursor_info.emit("")
         self.layout_geometry_changed.emit()
+        # Curves are gone → the AA dot must fall back to red ("no curves")
+        # instead of showing the previous render's stale green.
+        self._emit_quality_status()
+
+    def _apply_default_axis_labels(self) -> None:
+        """Pin both plots' axis titles to their defaults so neither row ever
+        renders bare. Called at construction and on full_reset; plot_spectra
+        later overrides the amp-left title with the chosen amplitude label."""
+        self._plot_amp.setLabel('left', _AMP_LEFT_LABEL)
+        self._plot_amp.setLabel('bottom', _AMP_BOTTOM_LABEL)
+        self._plot_time.setLabel('left', _TIME_LEFT_LABEL)
+        self._plot_time.setLabel('bottom', _TIME_BOTTOM_LABEL)
+
+    # ------------------------------------------------------------------
+    # collapse divider (spectrum vs time-preview)
+    # ------------------------------------------------------------------
+    def _on_collapse_changed(self, state) -> None:
+        _apply_plot_collapse(self._plot_amp, self._plot_time, state, 170)
+        self._position_collapse_ctrl()
+        self.layout_geometry_changed.emit()
+
+    def _position_collapse_ctrl(self, *_args) -> None:
+        ctrl = getattr(self, '_collapse_ctrl', None)
+        if ctrl is None:
+            return
+        try:
+            rect = self._plot_amp.vb.sceneBoundingRect()
+        except Exception:
+            return
+        ctrl.adjustSize()
+        x = int(rect.center().x() - ctrl.width() / 2)
+        y = int(rect.bottom() - ctrl.height() / 2)
+        ctrl.move(max(0, x), max(0, y))
+        ctrl.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_collapse_ctrl()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._position_collapse_ctrl()
 
     def has_result(self) -> bool:
         return bool(self._entries)
@@ -509,11 +690,80 @@ class PgLineCanvas(QWidget):
         self._plot_time_preview_entries(self._entries, selected_idx=idx,
                                         title="时域预览")
 
+    # ------------------------------------------------------------------
+    # Time-preview multi-Y overlay (one colour-coded right axis per extra curve)
+    # ------------------------------------------------------------------
+    def _clear_time_overlay_axes(self) -> None:
+        """Tear down every aux overlay ViewBox + right axis on the time plot."""
+        for vb in self._time_overlay_vbs:
+            try:
+                vb.clear()
+            except Exception:
+                pass
+            try:
+                sc = vb.scene()
+                if sc is not None:
+                    sc.removeItem(vb)
+            except Exception:
+                pass
+        for ax in self._time_overlay_axes:
+            try:
+                self._plot_time.layout.removeItem(ax)
+            except Exception:
+                pass
+            try:
+                sc = ax.scene()
+                if sc is not None:
+                    sc.removeItem(ax)
+            except Exception:
+                pass
+        self._time_overlay_vbs = []
+        self._time_overlay_axes = []
+
+    def _add_time_overlay_axis(self, color, position):
+        """Create one aux ViewBox + colour-coded right axis for an overlay
+        curve. ``position`` is the 1-based overlay slot (2nd curve → 1, …)."""
+        aux_vb = pg.ViewBox()
+        axis = pg.AxisItem('right')
+        # Frame line stays neutral; the tick TEXT follows the curve colour so a
+        # glance maps each right axis to its trace (no channel-name clutter).
+        axis.setPen(pg.mkPen(color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH))
+        axis.setTextPen(pg.mkPen(color=color))
+        self._plot_time.layout.addItem(axis, 2, 2 + position)
+        self._plot_time.layout.setHorizontalSpacing(8)
+        self._plot_time.scene().addItem(aux_vb)
+        axis.linkToView(aux_vb)
+        aux_vb.setXLink(self._plot_time.vb)
+        aux_vb.setMouseEnabled(x=False, y=False)
+        aux_vb.setZValue(-10000)
+        aux_vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+        self._time_overlay_vbs.append(aux_vb)
+        self._time_overlay_axes.append(axis)
+        return aux_vb
+
+    def _sync_time_overlay_vbs(self, *_args) -> None:
+        """Glue every aux ViewBox geometry to the time plot's main ViewBox."""
+        if not self._time_overlay_vbs:
+            return
+        try:
+            rect = self._plot_time.vb.sceneBoundingRect()
+        except Exception:
+            return
+        for vb in self._time_overlay_vbs:
+            try:
+                vb.setGeometry(rect)
+            except Exception:
+                pass
+
     def _plot_time_preview_entries(self, entries, selected_idx=None,
                                    title="时域预览") -> None:
         for c in self._time_curves:
-            self._plot_time.removeItem(c)
+            try:
+                self._plot_time.removeItem(c)
+            except Exception:
+                pass
         self._time_curves.clear()
+        self._clear_time_overlay_axes()
         entries = list(entries or [])
         if not entries:
             self._selected_time_entry_idx = None
@@ -560,10 +810,22 @@ class PgLineCanvas(QWidget):
             t_env, sig_env = build_envelope(
                 t, sig, xlim=None, pixel_width=pixel_width)
             width = 1.7 if i == self._selected_time_entry_idx else 1.1
-            pen = pg.mkPen(e.get('color', '#2563eb'), width=width)
-            self._time_curves.append(
-                self._plot_time.plot(t_env, sig_env, pen=pen,
-                                     antialias=antialias))
+            color = e.get('color', '#2563eb')
+            pen = pg.mkPen(color, width=width)
+            if i == 0:
+                # First source keeps the plot's own left axis.
+                curve = self._plot_time.plot(t_env, sig_env, pen=pen,
+                                             antialias=antialias)
+            else:
+                # Each extra source gets its own auto-scaled aux ViewBox + a
+                # colour-coded right axis so traces with different amplitude
+                # ranges are not squashed onto one shared scale.
+                aux_vb = self._add_time_overlay_axis(color, i)
+                curve = pg.PlotDataItem(t_env, sig_env, pen=pen,
+                                        antialias=antialias)
+                aux_vb.addItem(curve)
+            curve._channel_name = e.get('label', '')
+            self._time_curves.append(curve)
             x_bounds.append((float(t[0]), float(t[-1])))
         if x_bounds:
             lo = min(a for a, _b in x_bounds)
@@ -573,7 +835,14 @@ class PgLineCanvas(QWidget):
             else:
                 self._plot_time.setXRange(lo - 0.5, hi + 0.5, padding=0)
         self._plot_time.enableAutoRange(axis='y')
+        # Position any aux overlay ViewBoxes now, and again on the next resize
+        # (sigResized) once the layout with the new right axes is realized.
+        self._sync_time_overlay_vbs()
         self.layout_geometry_changed.emit()
+        # Time-preview-only updates (source selection before 计算) rebuild the
+        # curve set, so refresh the AA dot here too — otherwise it keeps the
+        # previous render's state until the next pan/zoom.
+        self._emit_quality_status()
 
     def _preview_pixel_width(self) -> int:
         """Bucket count for the time-preview envelope: the pixel width of the
@@ -724,9 +993,18 @@ class PgLineCanvas(QWidget):
     def _set_right_spacer(self, plot, width: float | None) -> None:
         axis = plot.getAxis('right')
         if width is None or width <= 0:
+            # No split reserve (single-pane): keep a thin VISIBLE right frame so
+            # the plot reads as a closed rectangle, matching the top/left/bottom
+            # frame from _apply_neutral_axis_frame. Previously this hid the right
+            # axis entirely, leaving the time-preview plot's right edge open
+            # (user-reported missing border).
             try:
-                plot.showAxis('right', False)
-                axis.setWidth(None)
+                plot.showAxis('right', True)
+                frame_pen = pg.mkPen(
+                    color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH)
+                axis.setPen(frame_pen)
+                axis.setStyle(showValues=False, tickLength=0)
+                axis.setWidth(1)
             except Exception:
                 pass
             return

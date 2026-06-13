@@ -105,6 +105,15 @@ def test_heatmap_hides_title_row_and_disables_axis_si_prefix(canvas):
     assert canvas._plot.getAxis('bottom').autoSIPrefix is False
 
 
+def test_heatmap_grid_is_major_only(canvas):
+    """Heatmap canvas defaults to a major-only grid (no minor sub-grid lines):
+    maxTickLevel=0 on the bottom/left axes, matching the time-domain canvas."""
+    for side in ('bottom', 'left'):
+        assert canvas._plot.getAxis(side).style.get('maxTickLevel') == 0, (
+            f"{side} axis should be major-grid-only (maxTickLevel=0)"
+        )
+
+
 def test_db_mode_manual_levels_clip(canvas):
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
@@ -623,6 +632,92 @@ def test_slice_updates_on_select(qapp):
 def test_plot_result_without_slice_flag_has_no_slice_row(qapp):
     c = PgHeatmapCanvas(with_slice=False)
     assert not hasattr(c, '_slice_curve') or c._slice_curve is None
+    c.deleteLater()
+
+
+def test_slice_direction_toggle_switches_axis(qapp):
+    """The X/Y switch flips the slice between a fixed-time cut (amp vs freq,
+    vertical marker) and a fixed-frequency cut (amp vs time, horizontal
+    marker)."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()  # 64 freqs × 10 times
+    c.plot_result(r, amplitude_mode='amplitude_db', z_auto=True)
+
+    # Default = X slice: amp vs frequency (64), vertical marker.
+    xs, _ = c._slice_curve.getData()
+    assert len(xs) == 64
+    assert c._slice_marker.angle == 90
+
+    # Switch to Y slice: amp vs time (10), horizontal marker.
+    c.set_slice_direction('y')
+    xs, _ = c._slice_curve.getData()
+    assert len(xs) == 10
+    assert c._slice_marker.angle == 0
+    assert c._slice_plot.getAxis('bottom').labelText == 'Time (s)'
+    c.deleteLater()
+
+
+def test_order_style_slice_works_without_result(qapp):
+    """The Order map renders via plot_or_update_heatmap (no SpectrogramResult);
+    the slice still works off the supplied x/y coords in both directions."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.set_slice_button_labels('按时间', '按阶次')
+    c.set_slice_direction('y')
+    orders = np.linspace(0, 10, 32)
+    times = np.linspace(0, 3, 20)
+    mat = np.random.RandomState(4).rand(32, 20)
+    c.plot_or_update_heatmap(
+        matrix=mat, x_extent=(0, 3), y_extent=(0, 10),
+        x_label='Time (s)', y_label='Order', x_coords=times, y_coords=orders)
+    c._seed_slice()
+
+    # Y slice (按阶次): amp vs time (20 frames).
+    xs, _ = c._slice_curve.getData()
+    assert len(xs) == 20
+    assert c._slice_marker.angle == 0
+
+    # Switch to X slice (按时间): amp vs order (32).
+    c.set_slice_direction('x')
+    xs, _ = c._slice_curve.getData()
+    assert len(xs) == 32
+    assert c._slice_marker.angle == 90
+    # Toggle reads the order-specific captions.
+    assert c._slice_toggle._btn_y.text() == '按阶次'
+    c.deleteLater()
+
+
+def test_heatmap_collapse_divider_folds_slice(qapp):
+    """The collapse control on a with_slice heatmap folds the map or the slice;
+    a no-slice heatmap has no control."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(560, 460)
+    assert c._collapse_ctrl is not None
+    c._on_collapse_changed('bottom')
+    assert not c._slice_plot.isVisible()
+    assert c._plot.isVisible()
+    c._on_collapse_changed('none')
+    assert c._slice_plot.isVisible()
+    c.deleteLater()
+
+    c2 = PgHeatmapCanvas(with_slice=False)
+    assert c2._collapse_ctrl is None
+    c2.deleteLater()
+
+
+def test_slice_marker_drag_reslices(qapp):
+    """Dragging the marker snaps to the nearest cell and re-renders the slice."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()  # times 0..2 over 10 frames
+    c.plot_result(r, amplitude_mode='amplitude_db', z_auto=True)
+    c.select_time_index(0)  # X slice at t=0
+    # Move the vertical marker to ~t=2.0 → should select the last frame.
+    c._slice_marker.setValue(2.0)
+    _xs, ys = c._slice_curve.getData()
+    np.testing.assert_allclose(ys, c._matrix_disp[:, c._slice_x_idx], rtol=1e-6)
+    assert c._slice_x_idx == 9
     c.deleteLater()
 
 

@@ -33,7 +33,10 @@ _FOCUS_ACCENT = "#2d7ff9"
 # tabbar + toggles must NOT paint the default platform grey, so the row
 # frame stays translucent and only the buttons carry chrome.
 _COMPARE_ROW_QSS = """
-QWidget#analysisCompareRow { background: transparent; }
+QWidget#analysisCompareRow {
+    background-color: #fbfcff;
+    border-top: 1px solid #dbe3ee;
+}
 QToolButton#analysisCompareToggle {
     background: transparent;
     border: 1px solid #d4d8de;
@@ -119,9 +122,13 @@ class AnalysisSectionPage(QWidget):
         self._compare_row = QWidget(self)
         self._compare_row.setObjectName("analysisCompareRow")
         self._compare_row.setAttribute(Qt.WA_StyledBackground, True)
-        # WA_TranslucentBackground + transparent QSS so the embedded row
-        # never paints the default grey (lesson no-gray-bg-embedded-widgets).
-        self._compare_row.setAttribute(Qt.WA_TranslucentBackground, True)
+        # 2026-06-13: this bottom row is the analysis section's view-tab bar.
+        # Give it the same chrome as the time-domain dock (#timeViewBottomDock):
+        # a light #fbfcff bar with a 1px top divider, so the View 1/2/3 tabs
+        # read as a real bar instead of floating on the page. An explicit
+        # background (not the old WA_TranslucentBackground + transparent QSS)
+        # is what paints the bar — WA_StyledBackground keeps it from falling
+        # back to the platform grey (lesson no-gray-bg-embedded-widgets).
         self._compare_row.setStyleSheet(_COMPARE_ROW_QSS)
         row = QHBoxLayout(self._compare_row)
         row.setContentsMargins(0, 0, 8, 0)

@@ -91,6 +91,35 @@ def _make_group_header(title, action_button=None, parent=None):
     return frame
 
 
+def _make_params_card(owner, object_name):
+    """Build the lower 谱参数 / 时频参数 panel as a standalone tinted card.
+
+    2026-06-13 分析信号/谱参数 split: the analysis-signal card and the
+    spectrum-parameter groups used to share one tinted contextual surface
+    (the green ``sig_card`` nested inside the contextual's own background).
+    The user asked for two independent, vertically-separated panels each with
+    its own border and backdrop. This frame hosts everything below the
+    ``sig_card`` (params + axis settings + presets + compute button) so it
+    renders as a second full-width card; the contextual widget itself is now
+    a transparent host and an 8px gutter (root spacing) separates the cards.
+
+    The inner padding (10px horizontal) mirrors the ``sig_card`` so the form
+    field columns of both panels still share one width / right edge — the A1
+    contract enforced by ``test_fft_contextual_fields_fill_column_under_qss``.
+
+    Returns ``(card, layout)``; the caller adds its groups to ``layout`` and
+    adds ``card`` to the contextual's root once, in place of the per-group
+    ``root.addWidget`` calls.
+    """
+    card = QFrame(owner)
+    card.setObjectName(object_name)
+    card.setAttribute(Qt.WA_StyledBackground, True)
+    lay = QVBoxLayout(card)
+    lay.setContentsMargins(10, 8, 10, 10)
+    lay.setSpacing(6)
+    return card, lay
+
+
 def _preset_value_text(value):
     if isinstance(value, bool):
         return '是' if value else '否'
@@ -1756,9 +1785,12 @@ class FFTContextual(QWidget):
         self.setObjectName("fftContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
-        # 紧凑化【3】: tightened from 10 → 6 (2026-04-26).
-        root.setSpacing(6)
+        # 2026-06-13 分析信号/谱参数 split: the contextual is a transparent
+        # host for two full-width cards (sig_card + params_card). Zero
+        # horizontal margins so each card spans the pane edge-to-edge; the
+        # spacing is the 8px gutter between the two cards.
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(8)
 
         # R3 #9: build btn_rebuild *before* the analyse-signal group so we
         # can hand it off to the group's header row instead of attaching
@@ -1782,7 +1814,11 @@ class FFTContextual(QWidget):
         sig_card = QFrame(self)
         sig_card.setObjectName("fftSignalCard")
         sig_lay = QVBoxLayout(sig_card)
-        sig_lay.setContentsMargins(0, 0, 0, 0)
+        # 2026-06-13 split: sig_card now carries its own 10px inner padding
+        # (the outer contextual no longer supplies it) so it reads as a
+        # self-contained full-width panel whose fields stay column-aligned
+        # with the params_card below.
+        sig_lay.setContentsMargins(10, 8, 10, 10)
         sig_lay.setSpacing(4)
         sig_lay.addWidget(_make_group_header("分析信号 + 时间", self.btn_rebuild))
         fl = QFormLayout()
@@ -1812,6 +1848,11 @@ class FFTContextual(QWidget):
         self._time_range_slot.setSpacing(0)
         sig_lay.addLayout(self._time_range_slot)
         root.addWidget(sig_card)
+
+        # 2026-06-13 split: everything below the green analysis-signal card
+        # lives in its own full-width tinted panel (谱参数 + 坐标轴设置 +
+        # 预设配置 + 计算 FFT).
+        params_card, params_lay = _make_params_card(self, "fftParamsCard")
 
         g = QGroupBox("谱参数")
         fl = QFormLayout(g)
@@ -1879,7 +1920,7 @@ class FFTContextual(QWidget):
             "幅值轴:",
             _fit_field(self.combo_amp_y, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
-        root.addWidget(g)
+        params_lay.addWidget(g)
 
         axis_g = _make_axis_settings_group(
             self,
@@ -1895,7 +1936,7 @@ class FFTContextual(QWidget):
         )
         for spin in (self.spin_y_min, self.spin_y_max):
             spin.setRange(-1e12, 1e12)
-        root.addWidget(axis_g)
+        params_lay.addWidget(axis_g)
         # Backward-compatible alias for old presets and rendering code:
         # legacy "autoscale" is now the X-axis auto toggle.
         self.chk_autoscale = self.chk_x_auto
@@ -1911,13 +1952,14 @@ class FFTContextual(QWidget):
             'fft', self._collect_preset, self._apply_preset, parent=self,
         )
         gl.addWidget(self.preset_bar)
-        root.addWidget(g)
+        params_lay.addWidget(g)
 
         self.btn_fft = QPushButton("计算 FFT")
         self.btn_fft.setIcon(Icons.mode_fft())
         self.btn_fft.setIconSize(QSize(16, 16))
         self.btn_fft.setProperty("role", "primary")
-        root.addWidget(self.btn_fft)
+        params_lay.addWidget(self.btn_fft)
+        root.addWidget(params_card)
         root.addStretch()
 
         # 2026-04-27 fix-4: unify the label-column width across the
@@ -2155,9 +2197,10 @@ class OrderContextual(QWidget):
         self.setObjectName("orderContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
-        # 紧凑化【3】: tightened from 10 → 6 (2026-04-26).
-        root.setSpacing(6)
+        # 2026-06-13 分析信号/谱参数 split: transparent host for two
+        # full-width cards (sig_card + params_card); spacing is the gutter.
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(8)
 
         # R3 #9: build btn_rebuild before the signal-source group so we
         # can dock it on the group's header row.
@@ -2177,7 +2220,8 @@ class OrderContextual(QWidget):
         sig_card = QFrame(self)
         sig_card.setObjectName("orderSignalCard")
         sig_lay = QVBoxLayout(sig_card)
-        sig_lay.setContentsMargins(0, 0, 0, 0)
+        # 2026-06-13 split: sig_card carries its own 10px inner padding.
+        sig_lay.setContentsMargins(10, 8, 10, 10)
         sig_lay.setSpacing(4)
         sig_lay.addWidget(_make_group_header("信号源 + 时间", self.btn_rebuild))
         fl = QFormLayout()
@@ -2202,6 +2246,10 @@ class OrderContextual(QWidget):
         self._time_range_slot.setSpacing(0)
         sig_lay.addLayout(self._time_range_slot)
         root.addWidget(sig_card)
+
+        # 2026-06-13 split: lower full-width tinted panel (谱参数 +
+        # 坐标轴设置 + 预设配置 + 时间-阶次 action).
+        params_card, params_lay = _make_params_card(self, "orderParamsCard")
 
         g = QGroupBox("谱参数")
         fl = QFormLayout(g)
@@ -2242,7 +2290,7 @@ class OrderContextual(QWidget):
         # labels (e.g. "阶次分辨率:") never wrap or get elided when the
         # Inspector pane is narrow. _enforce_label_widths walks every form
         # in this widget after construction.
-        root.addWidget(g)
+        params_lay.addWidget(g)
 
         # ---- 坐标轴设置 (Wave 3 of the 2026-04-28 plan; refactored to
         # use the module-level _make_axis_settings_group helper in Wave 4
@@ -2269,7 +2317,7 @@ class OrderContextual(QWidget):
         # helper uses a generic 1e9 ceiling; tighten it here so the user
         # cannot pick a display range exceeding the max calc order.
         self.spin_y_max.setRange(0.0, float(self.spin_mo.value()))
-        root.addWidget(axis_g)
+        params_lay.addWidget(axis_g)
 
         # ---- order-specific wiring (helper already wired chk_*_auto and
         # combo_amp_unit) ----
@@ -2286,16 +2334,17 @@ class OrderContextual(QWidget):
             'order', self._collect_preset, self._apply_preset, parent=self,
         )
         gl.addWidget(self.preset_bar)
-        root.addWidget(g)
+        params_lay.addWidget(g)
 
         self.btn_ot = QPushButton("时间-阶次")
         self.btn_ot.setProperty("role", "primary")
         self.btn_ot.setMinimumHeight(32)
-        root.addWidget(self.btn_ot)
+        params_lay.addWidget(self.btn_ot)
 
         self.lbl_progress = QLabel("")
-        root.addWidget(self.lbl_progress)
+        params_lay.addWidget(self.lbl_progress)
 
+        root.addWidget(params_card)
         root.addStretch()
 
         self.btn_ot.clicked.connect(self.order_time_requested)
@@ -2678,9 +2727,10 @@ class FFTTimeContextual(QWidget):
         self.setObjectName("fftTimeContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
-        # 紧凑化【3】: tightened from 10 → 6 (2026-04-26).
-        root.setSpacing(6)
+        # 2026-06-13 分析信号/谱参数 split: transparent host for two
+        # full-width cards (sig_card + params_card); spacing is the gutter.
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(8)
 
         # ---- 分析信号 (R3 #9: btn_rebuild docked on header bar) ----
         # 2026-04-26 R3 紧凑化 fix-4: setFixedSize(24, 24).
@@ -2697,7 +2747,8 @@ class FFTTimeContextual(QWidget):
         sig_card = QFrame(self)
         sig_card.setObjectName("fftTimeSignalCard")
         sig_lay = QVBoxLayout(sig_card)
-        sig_lay.setContentsMargins(0, 0, 0, 0)
+        # 2026-06-13 split: sig_card carries its own 10px inner padding.
+        sig_lay.setContentsMargins(10, 8, 10, 10)
         sig_lay.setSpacing(4)
         sig_lay.addWidget(_make_group_header("分析信号 + 时间", self.btn_rebuild))
         fl = QFormLayout()
@@ -2715,6 +2766,10 @@ class FFTTimeContextual(QWidget):
         self._time_range_slot.setSpacing(0)
         sig_lay.addLayout(self._time_range_slot)
         root.addWidget(sig_card)
+
+        # 2026-06-13 split: lower full-width tinted panel hosts 时频参数 +
+        # 幅值 + 坐标轴设置 + 色标 + 预设 + 计算时频图.
+        params_card, params_lay = _make_params_card(self, "fftTimeParamsCard")
 
         # ---- 时频参数 ----
         # 2026-04-26 R3 紧凑化 fix-3: cap each short field.
@@ -2740,7 +2795,7 @@ class FFTTimeContextual(QWidget):
         self.chk_remove_mean = QCheckBox("去均值")
         self.chk_remove_mean.setChecked(True)
         fl.addRow(self.chk_remove_mean)
-        root.addWidget(g)
+        params_lay.addWidget(g)
 
         # ---- 幅值 (Wave 4: combo_amp_mode dropped — amplitude unit now
         # lives on the Z row of 坐标轴设置 as combo_amp_unit. spin_db_ref
@@ -2754,7 +2809,7 @@ class FFTTimeContextual(QWidget):
         self.spin_db_ref.setDecimals(6)
         self.spin_db_ref.setValue(1.0)
         fl.addRow("dB 参考:", _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH))
-        root.addWidget(g)
+        params_lay.addWidget(g)
 
         # ---- 坐标轴设置 (2026-04-29 B polish) ----
         # The rendered FFT-vs-Time spectrogram is X = time, Y = frequency,
@@ -2777,7 +2832,7 @@ class FFTTimeContextual(QWidget):
             y_auto_summary="0 → Nyquist",
             z_auto_summary="自动色阶",
         )
-        root.addWidget(axis_g)
+        params_lay.addWidget(axis_g)
         # Backward-compat aliases (per plan): downstream main_window callers
         # still read chk_freq_auto / spin_freq_min / spin_freq_max.
         # MUST be set inside __init__ so test_fft_time_contextual_has_axis_
@@ -2797,7 +2852,7 @@ class FFTTimeContextual(QWidget):
         self.combo_cmap = QComboBox()
         self.combo_cmap.addItems(['turbo', 'viridis', 'gray'])
         fl.addRow("色图:", _fit_field(self.combo_cmap, max_width=_SHORT_FIELD_MAX_WIDTH))
-        root.addWidget(g)
+        params_lay.addWidget(g)
 
         # ---- 预设 (R3 C: builtin-aware PresetBar) ----
         g = QGroupBox("预设")
@@ -2825,7 +2880,7 @@ class FFTTimeContextual(QWidget):
             builtin_defaults=builtin_defaults,
         )
         gl.addWidget(self.preset_bar)
-        root.addWidget(g)
+        params_lay.addWidget(g)
 
         # ---- 操作 ----
         self.btn_compute = QPushButton("计算时频图")
@@ -2834,8 +2889,9 @@ class FFTTimeContextual(QWidget):
         # ``set_signal_candidates`` hook keeps this in sync with the
         # candidate list.
         self.btn_compute.setEnabled(False)
-        root.addWidget(self.btn_compute)
+        params_lay.addWidget(self.btn_compute)
 
+        root.addWidget(params_card)
         root.addStretch()
 
         # 2026-04-27 fix-4: unify label-column width across the sig_card

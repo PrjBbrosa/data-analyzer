@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>FFT canvas 改进 + 切片方案 mockup</title>
+<style>
+  :root{
+    --ink:#1f2937; --muted:#6b7280; --line:#d6deea; --frame:#9aa6b8;
+    --blue:#2563eb; --green:#22c55e; --orange:#f59e0b; --red:#e03131;
+    --bg:#f3f5f9; --card:#ffffff;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;padding:28px;background:var(--bg);
+    font-family:"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif;color:var(--ink);}
+  h1{font-size:19px;margin:0 0 2px;}
+  h2{font-size:15px;margin:26px 0 8px;color:#1f3b63;border-bottom:2px solid #e3e9f2;padding-bottom:4px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 8px;}
+  .row{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap;}
+  .note{font-size:12px;color:var(--muted);line-height:1.65;margin:8px 2px 0;max-width:380px;}
+  .tag{display:inline-block;font-size:10px;font-weight:700;border-radius:9px;padding:1px 7px;margin-left:6px;}
+  .fix{background:#e9f9f1;color:#047857;} .feat{background:#eef2ff;color:#3a52c0;} .new{background:#fff4e6;color:#b45309;}
+
+  /* a fake chart card */
+  .card{background:var(--card);border:1px solid #e6ebf3;border-radius:10px;padding:8px;width:430px;}
+  .toolbar{display:flex;gap:5px;align-items:center;padding:2px 2px 8px;border-bottom:1px solid #eef2f7;margin-bottom:6px;}
+  .tbtn{width:24px;height:24px;border:1px solid #dfe5ee;border-radius:6px;background:#fff;display:flex;
+    align-items:center;justify-content:center;font-size:12px;color:#5a6b86;}
+  .tbtn.on{background:#e8f0ff;border-color:#2563eb;color:#2563eb;}
+  .tbtn.slice{width:auto;padding:0 8px;gap:5px;font-size:11px;font-weight:600;}
+  .spacer{flex:1;}
+
+  .plot{position:relative;border:1px solid var(--frame);border-radius:3px;background:
+    repeating-linear-gradient(0deg,transparent,transparent 23px,#eef2f7 23px,#eef2f7 24px),
+    repeating-linear-gradient(90deg,transparent,transparent 47px,#eef2f7 47px,#eef2f7 48px);}
+  .plot .ylab{position:absolute;left:-3px;top:50%;transform:translateY(-50%) rotate(-90deg);
+    transform-origin:left;font-size:10px;color:var(--muted);white-space:nowrap;}
+  .plot .xlab{position:absolute;bottom:2px;right:8px;font-size:10px;color:var(--muted);}
+  .ampPlot{height:150px;margin-left:34px;}
+  .timePlot{height:104px;margin-left:34px;}
+  svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;}
+
+  /* collapse divider */
+  .divider{display:flex;align-items:center;justify-content:center;gap:6px;height:18px;margin:3px 0 3px 34px;
+    background:linear-gradient(#f7f9fc,#eef2f7);border:1px solid #e0e6ef;border-radius:5px;}
+  .divider .grip{flex:1;height:1px;background:#cdd6e3;}
+  .cbtn{width:22px;height:14px;border:1px solid #c7d0de;border-radius:3px;background:#fff;display:flex;
+    align-items:center;justify-content:center;font-size:9px;color:#5a6b86;cursor:pointer;}
+
+  /* multi-Y axes on the right */
+  .yaxes{position:absolute;right:-2px;top:0;bottom:0;display:flex;gap:2px;align-items:stretch;}
+  .yax{width:16px;writing-mode:vertical-rl;text-align:center;font-size:9px;font-weight:600;}
+
+  /* heatmap */
+  .heat{height:150px;margin-left:34px;border:1px solid var(--frame);position:relative;
+    background:linear-gradient(105deg,#1b1b46,#3b0f64 22%,#7a1f6e 42%,#c0392b 60%,#e8a33d 78%,#f4e04d);}
+  .colorbar{position:absolute;right:-16px;top:0;bottom:0;width:10px;border:1px solid var(--frame);
+    background:linear-gradient(#f4e04d,#e8a33d,#c0392b,#7a1f6e,#3b0f64,#1b1b46);}
+  .marker-v{position:absolute;top:0;bottom:0;width:2px;background:var(--red);}
+  .marker-h{position:absolute;left:0;right:0;height:2px;background:var(--red);}
+  .mlabel{position:absolute;font-size:9px;background:var(--red);color:#fff;padding:0 3px;border-radius:3px;}
+  .sliceP{height:74px;margin-left:34px;}
+  .legendrow{font-size:10px;color:var(--muted);margin:3px 0 0 34px;}
+  .legendrow b{color:var(--ink);}
+</style>
+</head>
+<body>
+<h1>FFT canvas 改进 + 热力图切片方案</h1>
+<p class="sub">浏览器打开查看。这是讨论用 mockup —— 拿到确认后再实现。</p>
+
+<!-- ============ FFT 双图 canvas ============ -->
+<h2>一、FFT 双图 canvas：空状态标题 + 右边框 + 多纵轴 + 折叠分界栏</h2>
+<div class="row">
+  <div class="card">
+    <div class="toolbar">
+      <div class="tbtn">⌂</div><div class="tbtn on">✥</div><div class="tbtn">🔍</div>
+      <div class="tbtn">⊞</div><div class="spacer"></div><div class="tbtn">⚙</div>
+    </div>
+
+    <!-- amp plot: 现在空状态也有标题 -->
+    <div class="plot ampPlot">
+      <span class="ylab">Amplitude</span>
+      <span class="xlab">Frequency (Hz)</span>
+    </div>
+
+    <!-- 折叠分界栏 -->
+    <div class="divider">
+      <span class="cbtn" title="折叠下图">▲</span>
+      <span class="grip"></span>
+      <span style="font-size:9px;color:#8a94a6;">拖动调整 · 点箭头折叠</span>
+      <span class="grip"></span>
+      <span class="cbtn" title="折叠上图">▼</span>
+    </div>
+
+    <!-- time preview: 多曲线多纵轴 + 右边框 -->
+    <div class="plot timePlot">
+      <span class="ylab">Time preview</span>
+      <span class="xlab">Time (s)</span>
+      <svg viewBox="0 0 360 104" preserveAspectRatio="none">
+        <polyline points="4,86 90,70 170,78 250,46 356,30" fill="none" stroke="#2563eb" stroke-width="1.6"/>
+        <polyline points="4,40 90,52 170,30 250,58 356,44" fill="none" stroke="#22c55e" stroke-width="1.6"/>
+        <polyline points="4,64 90,58 170,66 250,52 356,70" fill="none" stroke="#f59e0b" stroke-width="1.6"/>
+      </svg>
+      <div class="yaxes">
+        <div class="yax" style="color:#2563eb;border-left:1px solid #2563eb;">通道1</div>
+        <div class="yax" style="color:#22c55e;border-left:1px solid #22c55e;">通道2</div>
+        <div class="yax" style="color:#f59e0b;border-left:1px solid #f59e0b;">通道3</div>
+      </div>
+    </div>
+    <div class="legendrow">多曲线叠加 → 每条一个<b>右侧纵轴（颜色对应）</b>，不写通道名；鼠标悬停曲线弹通道名。</div>
+  </div>
+
+  <div class="note">
+    <b>①空状态标题 <span class="tag fix">小修</span></b><br>
+    现在未算 FFT 时，上图(幅值)没有左轴标题、下图(时域预览)有。统一成<b>两张图都常驻标题</b>（上：Amplitude / Frequency；下：Amplitude / Time）。<br><br>
+    <b>②下图右边框 <span class="tag fix">小修</span></b><br>
+    下图右侧因高度上限(170px)被挤掉了右边框，补回来，和上图一致围成完整框。<br><br>
+    <b>③多纵轴叠加 <span class="tag feat">功能</span></b><br>
+    时域预览多通道叠加时，复用时域页已有的 overlay 多纵轴机制：每条曲线一个右侧颜色纵轴，不显示通道名（看颜色），悬停曲线显示通道名。<br><br>
+    <b>④折叠分界栏 <span class="tag feat">功能</span></b><br>
+    上下两图中间加一条分界栏，▲折叠下图 / ▼折叠上图，被折的那张让出全部面积。同一机制也用到 FFT-vs-Time / 阶次的「图+切片」上。
+  </div>
+</div>
+
+<!-- ============ 切片方案 ============ -->
+<h2>二、切片方案：FFT-vs-Time 与 阶次 都支持「横切 / 纵切」切换</h2>
+<p class="sub">核心：热力图有 X、Y 两个轴 + 颜色(幅值)。切片 = 固定一个轴，得到一条 1D 曲线。工具栏加一个<b>切片方向切换钮</b>。</p>
+
+<div class="row">
+  <!-- FFT vs Time: 纵切（现有） -->
+  <div class="card">
+    <div class="toolbar">
+      <div class="tbtn">⌂</div><div class="tbtn on">✥</div><div class="tbtn">🔍</div>
+      <div class="spacer"></div>
+      <div class="tbtn slice on" title="切片方向">▏ 按时间</div>
+      <div class="tbtn">⚙</div>
+    </div>
+    <div class="heat">
+      <div class="colorbar"></div>
+      <div class="marker-v" style="left:46%;"></div>
+      <div class="mlabel" style="left:42%;top:-13px;">t=2.4s</div>
+    </div>
+    <div class="sliceP plot" style="margin-top:10px;">
+      <span class="ylab">Amplitude</span><span class="xlab">Frequency (Hz)</span>
+      <svg viewBox="0 0 360 74" preserveAspectRatio="none">
+        <polyline points="4,66 60,30 90,12 120,40 200,58 360,64" fill="none" stroke="#2563eb" stroke-width="1.6"/>
+      </svg>
+    </div>
+    <div class="legendrow"><b>纵切（按时间）</b>：点/拖竖线选一个时刻 → 看该时刻的<b>幅值 vs 频率</b>（现有行为）</div>
+  </div>
+
+  <!-- FFT vs Time: 横切（新增） -->
+  <div class="card">
+    <div class="toolbar">
+      <div class="tbtn">⌂</div><div class="tbtn on">✥</div><div class="tbtn">🔍</div>
+      <div class="spacer"></div>
+      <div class="tbtn slice on" title="切片方向">▔ 按频率</div>
+      <div class="tbtn">⚙</div>
+    </div>
+    <div class="heat">
+      <div class="colorbar"></div>
+      <div class="marker-h" style="top:40%;"></div>
+      <div class="mlabel" style="left:2px;top:34%;">f=180Hz</div>
+    </div>
+    <div class="sliceP plot" style="margin-top:10px;">
+      <span class="ylab">Amplitude</span><span class="xlab">Time (s)</span>
+      <svg viewBox="0 0 360 74" preserveAspectRatio="none">
+        <polyline points="4,60 70,40 140,52 210,20 280,44 360,34" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+      </svg>
+    </div>
+    <div class="legendrow"><b>横切（按频率）<span class="tag new">新增</span></b>：点/拖横线选一个频率 → 看该频率的<b>幅值 vs 时间</b></div>
+  </div>
+
+  <!-- Order: 横切（新增，常用） -->
+  <div class="card">
+    <div class="toolbar">
+      <div class="tbtn">⌂</div><div class="tbtn on">✥</div><div class="tbtn">🔍</div>
+      <div class="spacer"></div>
+      <div class="tbtn slice on" title="切片方向">▔ 按阶次</div>
+      <div class="tbtn">⚙</div>
+    </div>
+    <div class="heat">
+      <div class="colorbar"></div>
+      <div class="marker-h" style="top:52%;"></div>
+      <div class="mlabel" style="left:2px;top:46%;">order=3</div>
+    </div>
+    <div class="sliceP plot" style="margin-top:10px;">
+      <span class="ylab">Amplitude</span><span class="xlab">Time (s)</span>
+      <svg viewBox="0 0 360 74" preserveAspectRatio="none">
+        <polyline points="4,58 60,30 130,46 190,18 260,40 360,28" fill="none" stroke="#7a1f6e" stroke-width="1.6"/>
+      </svg>
+    </div>
+    <div class="legendrow"><b>阶次横切 <span class="tag new">新增</span></b>：阶次页原本<b>没有切片</b>。新增切片图，选某个阶次 → 看<b>该阶次幅值 vs 时间</b>（最常用）。也可切到「按时间」看某时刻 幅值 vs 阶次。</div>
+  </div>
+</div>
+
+<div class="note" style="max-width:880px;margin-top:14px;">
+  <b>切换按钮</b>：工具栏加一个两态切换钮（如上图），点一下在「纵切(固定时间)」↔「横切(固定频率/阶次)」之间切换，按钮文字/图标随之变化。热力图上的红色标记线随方向变竖线/横线，可<b>拖动实时刷新</b>切片（也支持点击定位）。切片图的横纵轴标题随方向自动改。<br>
+  <b>v1 用单行/单列最近邻切片</b>（和现状一致，最简单）；后续可选增强：拖一个<b>窄带区间</b>（在小范围频率/阶次上求平均）更稳。
+</div>
+
+</body>
+</html>

@@ -14,9 +14,15 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QRectF, Qt, pyqtSignal
+from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QPainter, QPixmap
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
@@ -24,6 +30,125 @@ from mf4_analyzer.ui._axis_handle import (
 )
 from mf4_analyzer.ui.pg_canvas.context_menu import redesign_pg_context_menu
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
+
+
+class _SliceDirToggle(QWidget):
+    """Two-segment X/Y slice-direction switch overlaid on the slice view's
+    top-right corner. ``direction_changed`` emits 'x' or 'y'.
+
+    'x' = fix a position on the X axis (a time) → slice shows amplitude vs the
+    Y axis (frequency / order). 'y' = fix a position on the Y axis → slice
+    shows amplitude vs time. The two button labels are supplied by the owner so
+    FFT-vs-Time reads 「按时间 / 按频率」 and Order reads 「按时间 / 按阶次」.
+    """
+
+    direction_changed = pyqtSignal(str)
+
+    def __init__(self, x_label, y_label, parent=None):
+        super().__init__(parent)
+        self.setObjectName("sliceDirToggle")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setCursor(Qt.PointingHandCursor)
+        box = QHBoxLayout(self)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
+        self._btn_x = QPushButton(x_label, self)
+        self._btn_y = QPushButton(y_label, self)
+        for b, d in ((self._btn_x, 'x'), (self._btn_y, 'y')):
+            b.setCheckable(True)
+            b.setProperty("role", "slice-seg")
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, _d=d: self.set_direction(_d))
+            box.addWidget(b)
+        self._dir = 'x'
+        self._sync_buttons()
+
+    def direction(self):
+        return self._dir
+
+    def set_direction(self, d, *, emit=True):
+        d = 'y' if d == 'y' else 'x'
+        if d == self._dir:
+            self._sync_buttons()
+            return
+        self._dir = d
+        self._sync_buttons()
+        if emit:
+            self.direction_changed.emit(d)
+
+    def _sync_buttons(self):
+        self._btn_x.setChecked(self._dir == 'x')
+        self._btn_y.setChecked(self._dir == 'y')
+
+
+class _PlotCollapseControl(QWidget):
+    """Tiny overlay bar pinned to the divider between two stacked plots.
+
+    ▲ collapses the top plot, ▼ collapses the bottom — the other plot then
+    takes the full area for a larger view. Clicking the active arrow again
+    restores both. ``collapse_changed`` emits 'none' | 'top' | 'bottom'.
+    """
+
+    collapse_changed = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("plotCollapseBar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self._state = 'none'
+        box = QHBoxLayout(self)
+        box.setContentsMargins(6, 0, 6, 0)
+        box.setSpacing(4)
+        self._btn_up = QPushButton('▲', self)
+        self._btn_down = QPushButton('▼', self)
+        for b in (self._btn_up, self._btn_down):
+            b.setProperty('role', 'collapse-arrow')
+            b.setFixedSize(QSize(28, 14))
+            b.setCursor(Qt.PointingHandCursor)
+        self._btn_up.setToolTip('折叠上图 / 展开')
+        self._btn_down.setToolTip('折叠下图 / 展开')
+        self._btn_up.clicked.connect(lambda: self._toggle('top'))
+        self._btn_down.clicked.connect(lambda: self._toggle('bottom'))
+        box.addStretch(1)
+        box.addWidget(self._btn_up)
+        box.addWidget(self._btn_down)
+        box.addStretch(1)
+        self._sync()
+
+    def state(self):
+        return self._state
+
+    def _toggle(self, which):
+        self._state = 'none' if self._state == which else which
+        self._sync()
+        self.collapse_changed.emit(self._state)
+
+    def _sync(self):
+        # Flip the active arrow to a "restore" glyph so the affordance reads
+        # as a toggle (collapsed-top shows ▼ = bring it back down).
+        self._btn_up.setText('▼' if self._state == 'top' else '▲')
+        self._btn_down.setText('▲' if self._state == 'bottom' else '▼')
+
+
+def _apply_plot_collapse(top_plot, bottom_plot, state, bottom_default_max):
+    """Collapse one of two stacked plots by toggling row heights (keeps the
+    shared GraphicsLayout scene intact — no QSplitter restructure)."""
+    big = 100000
+    if state == 'top':
+        top_plot.setMaximumHeight(0)
+        top_plot.setVisible(False)
+        bottom_plot.setVisible(True)
+        bottom_plot.setMaximumHeight(big)
+    elif state == 'bottom':
+        bottom_plot.setMaximumHeight(0)
+        bottom_plot.setVisible(False)
+        top_plot.setVisible(True)
+        top_plot.setMaximumHeight(big)
+    else:
+        top_plot.setVisible(True)
+        top_plot.setMaximumHeight(big)
+        bottom_plot.setVisible(True)
+        bottom_plot.setMaximumHeight(int(bottom_default_max))
 
 
 def _resolve_colormap(name: str) -> pg.ColorMap:
@@ -112,6 +237,18 @@ def _apply_neutral_axis_frame(plot) -> None:
         except Exception:
             pass
         axis.setPen(frame_pen)
+        if side in ('left', 'bottom'):
+            # 2026-06-13: major grid only. pyqtgraph's default maxTickLevel
+            # (2) draws faint minor (sub-)grid lines at tick levels 1-2; the
+            # analysis canvases (FFT line + FFT-vs-Time / Order heatmaps)
+            # should match the time-domain grid, which shows major lines only.
+            # ``set_tick_density`` re-asserts maxTickLevel=0, but pin it here at
+            # construction so the FIRST rendered frame (before any density
+            # change) is already major-only instead of flashing the sub-grid.
+            try:
+                axis.setStyle(maxTickLevel=0)
+            except Exception:
+                pass
     for side in ('top', 'right'):
         axis = plot.getAxis(side)
         plot.showAxis(side)
@@ -248,12 +385,29 @@ class PgHeatmapCanvas(QWidget):
         # (chart_stack.py:1314, 1330-1332).
         self._plot.scene().sigMouseClicked.connect(self._on_scene_click)
 
-        # FFT-vs-Time slice row (with_slice=True). The Order map
-        # (with_slice=False) never builds these; every consumer of the
-        # slice state guards on ``self._slice_curve is not None``.
+        # Slice row (with_slice=True). Every consumer guards on
+        # ``self._slice_curve is not None``.
         self._slice_curve = None
         self._slice_plot = None
         self._slice_marker = None
+        self._slice_toggle = None
+        self._slice_hint = None
+        # Slice direction: 'x' fixes a time (curve = amp vs Y axis); 'y' fixes a
+        # Y position — frequency / order — (curve = amp vs time). Indices index
+        # into _matrix_disp (shape: rows=Y, cols=X).
+        self._slice_dir = 'x'
+        self._slice_x_idx = 0
+        self._slice_y_idx = 0
+        # Axis coordinate arrays + labels for the slice. Set by plot_result /
+        # plot_or_update_heatmap; the slice reads these instead of the result
+        # object so Order (no SpectrogramResult) slices the same way.
+        self._x_coords = None
+        self._y_coords = None
+        self._x_label = ''
+        self._y_label = ''
+        # Button labels for the X/Y toggle, e.g. ('按时间', '按频率').
+        self._slice_x_btn_label = '按时间'
+        self._slice_y_btn_label = '按频率'
         self._result = None     # SpectrogramResult-like payload
         # Amplitude mode of the last plot_result render (slice mode only).
         # Parity with SpectrogramCanvas._amplitude_mode (canvases.py:1622):
@@ -288,16 +442,35 @@ class PgHeatmapCanvas(QWidget):
             self._slice_plot.setLabel('left', 'Amplitude (dB)')
             self._slice_curve = self._slice_plot.plot(
                 pen=pg.mkPen('#2563eb', width=1.2))
-            # Vertical marker on the 2D map tracking the selected time.
-            # movable=False — selection is driven by clicks, not drags.
+            # Marker on the 2D map at the slice position. Draggable (live
+            # re-slice) AND click-positioned. angle flips with direction:
+            # 90 (vertical) for an X slice, 0 (horizontal) for a Y slice.
             self._slice_marker = pg.InfiniteLine(
-                angle=90, movable=False, pen=pg.mkPen('#e03131', width=1))
+                angle=90, movable=True, pen=pg.mkPen('#e03131', width=1))
             self._plot.addItem(self._slice_marker)
             self._slice_marker.setVisible(False)
+            self._slice_marker.sigPositionChanged.connect(
+                self._on_slice_marker_dragged)
             # Hover readout (t / freq / value) parity with
             # SpectrogramCanvas._on_motion (canvases.py:2000). Only wired
             # in slice mode; the Order map has no hover-readout contract.
             self._plot.scene().sigMouseMoved.connect(self._on_scene_hover)
+            # X/Y direction switch overlaid on the slice view's top-right.
+            self._slice_toggle = _SliceDirToggle(
+                self._slice_x_btn_label, self._slice_y_btn_label, self)
+            self._slice_toggle.direction_changed.connect(self.set_slice_direction)
+            self._slice_toggle.hide()
+            # Small caption under the switch: current fixed value + meaning.
+            self._slice_hint = QLabel('', self)
+            self._slice_hint.setObjectName("sliceHint")
+            self._slice_hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self._slice_hint.hide()
+            # Collapse divider between the 2D map (top) and the slice (bottom).
+            self._collapse_ctrl = _PlotCollapseControl(self)
+            self._collapse_ctrl.collapse_changed.connect(self._on_collapse_changed)
+            self._plot.vb.sigResized.connect(self._position_collapse_ctrl)
+        else:
+            self._collapse_ctrl = None
 
     # ------------------------------------------------------------------
     # main API (signature mirrors canvases.PlotCanvas.plot_or_update_heatmap)
@@ -310,7 +483,18 @@ class PgHeatmapCanvas(QWidget):
         x_auto=True, x_min=0.0, x_max=0.0,
         y_auto=True, y_min=0.0, y_max=0.0,
         vmin=None, vmax=None,
+        x_coords=None, y_coords=None,
     ):
+        # Remember the axis labels + coordinate arrays so the slice can read
+        # them (the slice plots amplitude against the OTHER axis). When coords
+        # are not supplied they are derived from the extents + matrix shape in
+        # _slice_coords (regular display grid).
+        self._x_label = x_label or self._x_label
+        self._y_label = y_label or self._y_label
+        self._x_coords = (
+            np.asarray(x_coords, dtype=float) if x_coords is not None else None)
+        self._y_coords = (
+            np.asarray(y_coords, dtype=float) if y_coords is not None else None)
         interp_mode = 'bilinear' if interp is None else str(interp).lower()
         smooth = interp_mode in {'bilinear', 'bicubic', 'hanning'}
         self._img.set_smooth_transform(smooth)
@@ -445,10 +629,16 @@ class PgHeatmapCanvas(QWidget):
         # cache so a stale slice never outlives its data.
         self._result = None
         self._db_cache = None
+        self._x_coords = None
+        self._y_coords = None
         if self._slice_curve is not None:
             self._slice_curve.clear()
             _hide_plot_title(self._slice_plot)
             self._slice_marker.setVisible(False)
+            if self._slice_toggle is not None:
+                self._slice_toggle.hide()
+            if self._slice_hint is not None:
+                self._slice_hint.hide()
         self.reset_split_layout_alignment()
         self.layout_geometry_changed.emit()
 
@@ -617,37 +807,214 @@ class PgHeatmapCanvas(QWidget):
             z_auto=True, vmin=vmin, vmax=vmax,
             x_auto=x_auto, x_min=x_min, x_max=x_max,
             y_auto=y_auto, y_min=y_min, y_max=y_max,
+            x_coords=result.times, y_coords=result.frequencies,
         )
         # plot_or_update_heatmap stores the matrix it was handed (the
         # display matrix) in self._matrix_disp; re-pin it explicitly so
         # the slice and remarks read the same display-space values.
         self._matrix_disp = m
         if self._slice_curve is not None and len(result.times):
-            self.select_time_index(0)
+            self._seed_slice()
         self.layout_geometry_changed.emit()
+
+    # ------------------------------------------------------------------
+    # slice (X / Y direction)
+    # ------------------------------------------------------------------
+    def _slice_coords(self):
+        """Return (x_coords, y_coords) for the displayed matrix, falling back
+        to a regular grid derived from the extents when no explicit arrays were
+        supplied (parity with how the image is drawn across the extents)."""
+        m = self._matrix_disp
+        if m is None or self._extents is None:
+            return None, None
+        nrows, ncols = m.shape[0], m.shape[1]
+        x0, x1, y0, y1 = self._extents
+        xc = self._x_coords
+        if xc is None or len(xc) != ncols:
+            xc = np.linspace(float(x0), float(x1), ncols)
+        yc = self._y_coords
+        if yc is None or len(yc) != nrows:
+            yc = np.linspace(float(y0), float(y1), nrows)
+        return xc, yc
+
+    def _seed_slice(self):
+        """Place the slice at the middle of the active axis and render it."""
+        m = self._matrix_disp
+        if m is None or self._slice_curve is None:
+            return
+        nrows, ncols = m.shape[0], m.shape[1]
+        self._slice_x_idx = ncols // 2
+        self._slice_y_idx = nrows // 2
+        self._apply_slice()
+
+    def set_slice_direction(self, direction: str) -> None:
+        """Switch the slice between 'x' (fix time → amp vs Y) and 'y' (fix
+        frequency/order → amp vs time). Re-renders the slice + flips the marker."""
+        direction = 'y' if direction == 'y' else 'x'
+        self._slice_dir = direction
+        if self._slice_toggle is not None:
+            self._slice_toggle.set_direction(direction, emit=False)
+        self._apply_slice()
 
     def select_time_index(self, idx: int) -> None:
-        """Update the frequency slice + marker to frame ``idx``.
-
-        Clamps to ``[0, frames-1]``. No-op without a result or slice row.
-        """
-        if self._result is None or self._slice_curve is None:
+        """Back-compat entry point: place an X slice (fixed time) at frame
+        ``idx``. Preserved for the FFT-vs-Time auto-seed + tests."""
+        if self._matrix_disp is None or self._slice_curve is None:
             return
-        idx = int(np.clip(idx, 0, len(self._result.times) - 1))
-        self._slice_curve.setData(
-            self._result.frequencies, self._matrix_disp[:, idx])
-        # Switch the amplitude-axis label with the mode (mpl _plot_slice,
-        # canvases.py:1878-1880). _matrix_disp is dB in dB mode here.
-        self._slice_plot.setLabel(
-            'left',
-            'Amplitude (dB)' if self._amplitude_mode == 'amplitude_db'
-            else 'Amplitude',
-        )
-        t = float(self._result.times[idx])
+        ncols = self._matrix_disp.shape[1]
+        self._slice_dir = 'x'
+        self._slice_x_idx = int(np.clip(idx, 0, max(0, ncols - 1)))
+        if self._slice_toggle is not None:
+            self._slice_toggle.set_direction('x', emit=False)
+        self._apply_slice()
+
+    def _apply_slice(self) -> None:
+        """Render the slice curve + marker for the current direction/index."""
+        m = self._matrix_disp
+        if m is None or self._slice_curve is None:
+            return
+        xc, yc = self._slice_coords()
+        if xc is None:
+            return
+        nrows, ncols = m.shape[0], m.shape[1]
+        amp_label = ('Amplitude (dB)'
+                     if self._amplitude_mode == 'amplitude_db' else 'Amplitude')
+        if self._slice_dir == 'y':
+            # Fix a Y position (frequency / order) → curve = amplitude vs time.
+            idx = int(np.clip(self._slice_y_idx, 0, max(0, nrows - 1)))
+            self._slice_y_idx = idx
+            self._slice_curve.setData(xc, m[idx, :])
+            self._slice_plot.setLabel('bottom', self._x_label or 'Time (s)')
+            self._slice_marker.setAngle(0)
+            self._slice_marker.setValue(float(yc[idx]))
+            fixed_val, fixed_lbl = float(yc[idx]), self._y_label
+        else:
+            # Fix a time → curve = amplitude vs Y (frequency / order).
+            idx = int(np.clip(self._slice_x_idx, 0, max(0, ncols - 1)))
+            self._slice_x_idx = idx
+            self._slice_curve.setData(yc, m[:, idx])
+            self._slice_plot.setLabel('bottom', self._y_label or 'Frequency (Hz)')
+            self._slice_marker.setAngle(90)
+            self._slice_marker.setValue(float(xc[idx]))
+            fixed_val, fixed_lbl = float(xc[idx]), self._x_label
+        self._slice_plot.setLabel('left', amp_label)
         _hide_plot_title(self._slice_plot)
-        self._slice_marker.setPos(t)
         self._slice_marker.setVisible(True)
+        self._update_slice_hint(fixed_lbl, fixed_val)
+        if self._slice_toggle is not None and self._slice_toggle.isHidden():
+            self._slice_toggle.show()
+        self._position_slice_overlay()
         self.layout_geometry_changed.emit()
+
+    def _on_slice_marker_dragged(self, *_args) -> None:
+        """Marker drag → snap to the nearest index along the active axis and
+        re-slice live."""
+        if self._matrix_disp is None or self._slice_curve is None:
+            return
+        xc, yc = self._slice_coords()
+        if xc is None:
+            return
+        try:
+            pos = float(self._slice_marker.value())
+        except Exception:
+            return
+        if self._slice_dir == 'y':
+            self._slice_y_idx = int(np.argmin(np.abs(yc - pos)))
+        else:
+            self._slice_x_idx = int(np.argmin(np.abs(xc - pos)))
+        self._apply_slice()
+
+    def _update_slice_hint(self, label: str, value: float) -> None:
+        if self._slice_hint is None:
+            return
+        axis = (label or '').strip() or ('Y' if self._slice_dir == 'y' else 'X')
+        if self._slice_dir == 'y':
+            meaning = '幅值-时间'
+        else:
+            meaning = '幅值-' + (self._y_label or '频率').split(' ')[0]
+        self._slice_hint.setText(f"固定 {axis}={value:g} · 看 {meaning}")
+        self._slice_hint.adjustSize()
+        if self._slice_hint.isHidden():
+            self._slice_hint.show()
+
+    def _select_slice_at(self, x: float, y: float) -> None:
+        """Position the slice at a clicked map point, respecting direction and
+        the data extents (a click on the colorbar/padding is ignored)."""
+        if (self._matrix_disp is None or self._slice_curve is None
+                or self._extents is None):
+            return
+        x0, x1, y0, y1 = self._extents
+        if self._slice_dir == 'y':
+            if y0 <= y <= y1:
+                self._slice_y_idx = self._freq_index_for(y)
+                self._apply_slice()
+        else:
+            if x0 <= x <= x1:
+                self._slice_x_idx = self._time_index_for(x)
+                self._apply_slice()
+
+    def set_slice_button_labels(self, x_label: str, y_label: str) -> None:
+        """Set the X/Y toggle segment captions (Order uses 按阶次 for Y)."""
+        self._slice_x_btn_label = x_label
+        self._slice_y_btn_label = y_label
+        if self._slice_toggle is not None:
+            self._slice_toggle._btn_x.setText(x_label)
+            self._slice_toggle._btn_y.setText(y_label)
+
+    def _position_slice_overlay(self) -> None:
+        """Pin the X/Y toggle (and its hint caption) to the slice view's
+        top-right corner, in canvas-widget coordinates."""
+        if self._slice_toggle is None or self._slice_plot is None:
+            return
+        try:
+            rect = self._slice_plot.vb.sceneBoundingRect()
+        except Exception:
+            return
+        margin = 6
+        self._slice_toggle.adjustSize()
+        tw = self._slice_toggle.width()
+        x = int(rect.right() - tw - margin)
+        y = int(rect.top() + margin)
+        self._slice_toggle.move(max(0, x), max(0, y))
+        self._slice_toggle.raise_()
+        if self._slice_hint is not None:
+            self._slice_hint.adjustSize()
+            hx = int(rect.right() - self._slice_hint.width() - margin)
+            hy = y + self._slice_toggle.height() + 2
+            self._slice_hint.move(max(0, hx), max(0, hy))
+            self._slice_hint.raise_()
+
+    def _on_collapse_changed(self, state) -> None:
+        if self._slice_plot is None:
+            return
+        _apply_plot_collapse(self._plot, self._slice_plot, state, 140)
+        self._position_collapse_ctrl()
+        self._position_slice_overlay()
+        self.layout_geometry_changed.emit()
+
+    def _position_collapse_ctrl(self, *_args) -> None:
+        ctrl = getattr(self, '_collapse_ctrl', None)
+        if ctrl is None:
+            return
+        try:
+            rect = self._plot.vb.sceneBoundingRect()
+        except Exception:
+            return
+        ctrl.adjustSize()
+        x = int(rect.center().x() - ctrl.width() / 2)
+        y = int(rect.bottom() - ctrl.height() / 2)
+        ctrl.move(max(0, x), max(0, y))
+        ctrl.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_slice_overlay()
+        self._position_collapse_ctrl()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._position_slice_overlay()
+        self._position_collapse_ctrl()
 
     # ------------------------------------------------------------------
     # split-pane layout alignment
@@ -810,12 +1177,19 @@ class PgHeatmapCanvas(QWidget):
                 pass
 
     def _time_index_for(self, x: float) -> int:
-        """Nearest frame index to a view-space time ``x``."""
-        return int(np.argmin(np.abs(np.asarray(self._result.times) - x)))
+        """Nearest X (time) column index to a view-space ``x``. Coordinate-
+        based so it works for the Order map too (no SpectrogramResult)."""
+        xc, _ = self._slice_coords()
+        if xc is None or len(xc) == 0:
+            return 0
+        return int(np.argmin(np.abs(xc - x)))
 
     def _freq_index_for(self, y: float) -> int:
-        """Nearest frequency-bin index to a view-space frequency ``y``."""
-        return int(np.argmin(np.abs(np.asarray(self._result.frequencies) - y)))
+        """Nearest Y (frequency / order) row index to a view-space ``y``."""
+        _, yc = self._slice_coords()
+        if yc is None or len(yc) == 0:
+            return 0
+        return int(np.argmin(np.abs(yc - y)))
 
     def _readout_unit(self) -> str:
         """Unit token for the hover/remark value (slice mode).
@@ -956,14 +1330,11 @@ class PgHeatmapCanvas(QWidget):
         if ev.button() == Qt.LeftButton:
             if self._remark_enabled:
                 self.add_remark_at(p.x(), p.y())
-            elif self._slice_curve is not None and self._result is not None:
-                # FFT-vs-Time: left-click selects the nearest frame and
-                # updates the slice + marker. Guard out-of-extent clicks
-                # (the colorbar column is inside the plot's scene rect).
-                if self._extents is not None:
-                    x0, x1, y0, y1 = self._extents
-                    if x0 <= p.x() <= x1:
-                        self.select_time_index(self._time_index_for(p.x()))
+            elif self._slice_curve is not None and self._matrix_disp is not None:
+                # Left-click positions the slice at the nearest cell along the
+                # active axis (X slice → snap time; Y slice → snap freq/order).
+                # Works for both FFT-vs-Time and Order.
+                self._select_slice_at(p.x(), p.y())
         elif ev.button() == Qt.RightButton and self._remark_enabled:
             # ``insert_in`` puts the ColorBarItem inside the PlotItem
             # layout, so _plot.sceneBoundingRect() includes the colorbar

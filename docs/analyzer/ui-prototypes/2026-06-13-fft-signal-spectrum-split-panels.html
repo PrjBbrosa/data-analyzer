@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>FFT Inspector — 分析信号 / 谱参数 拆分面板 mockup</title>
+<style>
+  :root{
+    --green-bg:#effaf4; --green-bd:#b9dfca;
+    --blue-bg:#eef4ff;  --blue-bd:#dde7f5;
+    --ink:#111827; --muted:#647086; --hair:#dfe5ee;
+    --field-bg:#ffffff; --field-bd:#cfd8e6;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:32px;
+    background:#f3f5f9;
+    font-family:"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif;
+    color:var(--ink);
+  }
+  h1{font-size:18px;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 24px;}
+  .stage{display:flex;gap:40px;align-items:flex-start;flex-wrap:wrap;}
+  .col{width:304px;}
+  .col h2{font-size:13px;font-weight:700;margin:0 0 10px;color:#1f3b63;}
+  .col .note{font-size:12px;color:var(--muted);margin:10px 2px 0;line-height:1.6;}
+  .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:2px 8px;margin-left:6px;}
+  .tag.bad{background:#fdecec;color:#c0392b;}
+  .tag.good{background:#e9f9f1;color:#047857;}
+
+  /* ---- inspector pane frame (288px visible) ---- */
+  .pane{
+    width:288px; padding:2px; background:#fbfcfe;
+    border:1px solid #e6ebf3; border-radius:8px;
+  }
+  .body{width:272px;margin:0 auto;}
+
+  /* ===== CURRENT (nested) ===== */
+  .ctx-outer{
+    border:1px solid var(--blue-bd); border-radius:10px;
+    background:var(--blue-bg); padding:10px 10px 12px;
+  }
+  .sigcard-nested{
+    background:var(--green-bg); border:1px solid var(--green-bd);
+    border-radius:8px; padding:8px 10px 10px;
+  }
+
+  /* ===== PROPOSED (two stacked panels) ===== */
+  .stack{display:flex;flex-direction:column;gap:8px;}
+  .panel{border-radius:10px;padding:10px 12px 12px;}
+  .panel.green{background:var(--green-bg);border:1px solid var(--green-bd);}
+  .panel.blue {background:var(--blue-bg); border:1px solid var(--blue-bd);}
+
+  /* ---- shared inner bits ---- */
+  .ghead{display:flex;align-items:center;justify-content:space-between;
+    border-bottom:1px solid var(--hair);padding:2px 0 6px;margin-bottom:8px;}
+  .ghead .t{font-size:12px;font-weight:600;color:var(--ink);}
+  .ghead .ico{width:22px;height:22px;border-radius:6px;border:1px solid var(--field-bd);
+    background:#fff;display:flex;align-items:center;justify-content:center;color:#5a6b86;font-size:13px;}
+  .gtitle{font-size:12px;font-weight:600;color:var(--ink);
+    border-bottom:1px solid var(--hair);padding:2px 0 6px;margin:0 0 8px;}
+  .gtitle.mt{margin-top:14px;}
+
+  .row{display:flex;align-items:center;gap:8px;margin:5px 0;}
+  .row label{width:60px;text-align:right;font-size:12px;color:#2b3banchor;color:#33425c;flex:none;}
+  .field{flex:1;height:26px;border:1px solid var(--field-bd);border-radius:6px;background:var(--field-bg);
+    display:flex;align-items:center;padding:0 8px;font-size:12px;color:#33425c;}
+  .field.muted{color:#9aa6b8;}
+  .field.sel::after{content:"▾";margin-left:auto;color:#9aa6b8;font-size:11px;}
+  .chk{display:flex;align-items:center;gap:6px;margin:6px 0;font-size:12px;color:#33425c;}
+  .box{width:14px;height:14px;border:1px solid var(--field-bd);border-radius:3px;background:#fff;flex:none;}
+  .twin{display:flex;gap:6px;flex:1;}
+  .twin .field{flex:1;}
+  .arrow{align-self:center;color:#9aa6b8;font-size:12px;}
+
+  .axhead{display:flex;font-size:11px;color:#97a1b2;margin:2px 0 2px 60px;}
+  .axhead .a{width:30px;text-align:center;}
+  .axhead .r{flex:1;display:flex;}
+  .axhead .r span{flex:1;text-align:center;}
+  .axrow{display:flex;align-items:center;gap:6px;margin:4px 0;}
+  .axrow .lab{width:54px;text-align:right;font-size:12px;color:#33425c;}
+  .axrow .auto{width:30px;display:flex;justify-content:center;}
+  .preset{display:flex;gap:6px;margin-top:4px;}
+  .pbtn{flex:1;height:28px;border:1px solid var(--field-bd);border-radius:6px;background:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:12px;color:#5a6b86;}
+  .cta{height:34px;border-radius:8px;background:#2f6fed;color:#fff;display:flex;align-items:center;
+    justify-content:center;gap:6px;font-size:13px;font-weight:600;margin-top:10px;}
+</style>
+</head>
+<body>
+  <h1>分析信号 / 谱参数 — 拆成上下两个独立面板</h1>
+  <p class="sub">面板宽度 288px（实际 Inspector 宽度）。左＝现状（卡套卡），右＝方案（两个满宽面板，上下分开，绿/蓝底色区分）。</p>
+
+  <div class="stage">
+
+    <!-- ================= CURRENT ================= -->
+    <div class="col">
+      <h2>现状 <span class="tag bad">绿卡嵌在蓝卡内</span></h2>
+      <div class="pane"><div class="body">
+        <div class="ctx-outer">
+          <!-- nested green sig card -->
+          <div class="sigcard-nested">
+            <div class="ghead"><span class="t">分析信号 + 时间</span><span class="ico">⟳</span></div>
+            <div class="row"><label>输入源</label><div class="field muted">未勾选左侧通道</div></div>
+            <div class="row"><label>单信号</label><div class="field sel"></div></div>
+            <div class="row"><label>Fs</label><div class="field">1000.0 Hz</div></div>
+            <div class="gtitle">分析时间</div>
+            <div class="chk"><span class="box"></span>使用选定时间范围</div>
+            <div class="row"><label>&nbsp;</label><div class="twin"><div class="field">0.0 s</div><span class="arrow">–</span><div class="field">0.0 s</div></div></div>
+          </div>
+          <!-- transparent groups sitting on blue bg -->
+          <div class="gtitle mt">谱参数</div>
+          <div class="row"><label>窗函数</label><div class="field sel">hanning</div></div>
+          <div class="row"><label>NFFT</label><div class="field sel">自动</div></div>
+          <div class="row"><label>重叠</label><div class="field">50 %</div></div>
+          <div class="row"><label>平均模式</label><div class="field sel">单帧</div></div>
+          <div class="row"><label>幅值轴</label><div class="field sel">Linear</div></div>
+          <div class="gtitle mt">坐标轴设置</div>
+          <div class="axhead"><span class="a">自动</span><span class="r"><span>最小</span><span>最大</span></span></div>
+          <div class="axrow"><span class="lab">频率(X)</span><span class="auto"><span class="box"></span></span><div class="twin"><div class="field">0.0</div><span class="arrow">→</span><div class="field">0.0</div></div></div>
+        </div>
+      </div></div>
+      <p class="note">外层蓝卡有 10px 内边距 → 绿卡边框被往里缩一圈、显得窄；谱参数/坐标轴是透明组，直接坐在蓝底上，和分析信号"共用一个面板"。</p>
+    </div>
+
+    <!-- ================= PROPOSED ================= -->
+    <div class="col">
+      <h2>方案 <span class="tag good">两个独立面板 · 满宽</span></h2>
+      <div class="pane"><div class="body">
+        <div class="stack">
+
+          <!-- Panel 1: green, full width -->
+          <div class="panel green">
+            <div class="ghead"><span class="t">分析信号 + 时间</span><span class="ico">⟳</span></div>
+            <div class="row"><label>输入源</label><div class="field muted">未勾选左侧通道</div></div>
+            <div class="row"><label>单信号</label><div class="field sel"></div></div>
+            <div class="row"><label>Fs</label><div class="field">1000.0 Hz</div></div>
+            <div class="gtitle">分析时间</div>
+            <div class="chk"><span class="box"></span>使用选定时间范围</div>
+            <div class="row"><label>&nbsp;</label><div class="twin"><div class="field">0.0 s</div><span class="arrow">–</span><div class="field">0.0 s</div></div></div>
+          </div>
+
+          <!-- Panel 2: blue, full width -->
+          <div class="panel blue">
+            <div class="gtitle" style="margin-top:0">谱参数</div>
+            <div class="row"><label>窗函数</label><div class="field sel">hanning</div></div>
+            <div class="row"><label>NFFT</label><div class="field sel">自动</div></div>
+            <div class="row"><label>重叠</label><div class="field">50 %</div></div>
+            <div class="row"><label>平均模式</label><div class="field sel">单帧</div></div>
+            <div class="row"><label>幅值轴</label><div class="field sel">Linear</div></div>
+            <div class="gtitle mt">坐标轴设置</div>
+            <div class="axhead"><span class="a">自动</span><span class="r"><span>最小</span><span>最大</span></span></div>
+            <div class="axrow"><span class="lab">频率(X)</span><span class="auto"><span class="box"></span></span><div class="twin"><div class="field">0.0</div><span class="arrow">→</span><div class="field">0.0</div></div></div>
+            <div class="axrow"><span class="lab">幅值(Y)</span><span class="auto"><span class="box"></span></span><div class="twin"><div class="field">0.0</div><span class="arrow">→</span><div class="field">0.0</div></div></div>
+            <div class="gtitle mt">预设配置</div>
+            <div class="preset"><div class="pbtn">配置 1</div><div class="pbtn">配置 2</div><div class="pbtn">配置 3</div></div>
+            <div class="cta">⊞ 计算 FFT</div>
+          </div>
+
+        </div>
+      </div></div>
+      <p class="note">两个面板各自满宽、边框顶到两边（分析信号边框因此更宽）；中间 8px 间隙分隔；绿底＝信号输入，蓝底＝分析参数。外层那圈蓝卡边框被移除，不再"卡套卡"。</p>
+    </div>
+
+  </div>
+</body>
+</html>

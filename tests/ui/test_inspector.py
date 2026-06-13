@@ -210,7 +210,13 @@ def test_order_contextual_presets_precede_compute_and_no_cancel(qapp):
         if gb.title() == "预设配置"
     )
 
-    assert oc.layout().indexOf(preset_group) < oc.layout().indexOf(oc.btn_ot)
+    # 2026-06-13 split: presets + compute action now share the params_card,
+    # so order is asserted within that card's layout (not the root).
+    from PyQt5.QtWidgets import QFrame
+    params = oc.findChild(QFrame, "orderParamsCard")
+    assert params is not None
+    plan = params.layout()
+    assert plan.indexOf(preset_group) < plan.indexOf(oc.btn_ot)
     assert not hasattr(oc, "btn_cancel")
     assert not hasattr(oc, "cancel_requested")
 
@@ -589,23 +595,35 @@ def test_persistent_top_root_spacing_compact(qapp):
     assert pt.layout().spacing() == 6
 
 
+# 2026-06-13 分析信号/谱参数 split: the contextual root now holds just two
+# stacked cards, so its spacing is the 8px gutter between them; the compact
+# 6px group rhythm moved into the lower params_card.
 def test_fft_contextual_root_spacing_compact(qapp):
+    from PyQt5.QtWidgets import QFrame
     from mf4_analyzer.ui.inspector_sections import FFTContextual
     fc = FFTContextual()
-    assert fc.layout().spacing() == 6
+    assert fc.layout().spacing() == 8
+    params = fc.findChild(QFrame, "fftParamsCard")
+    assert params is not None and params.layout().spacing() == 6
 
 
 def test_order_contextual_root_spacing_compact(qapp):
+    from PyQt5.QtWidgets import QFrame
     from mf4_analyzer.ui.inspector_sections import OrderContextual
     oc = OrderContextual()
-    assert oc.layout().spacing() == 6
+    assert oc.layout().spacing() == 8
+    params = oc.findChild(QFrame, "orderParamsCard")
+    assert params is not None and params.layout().spacing() == 6
 
 
 def test_fft_time_contextual_root_spacing_compact(qtbot):
+    from PyQt5.QtWidgets import QFrame
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
-    assert ctx.layout().spacing() == 6
+    assert ctx.layout().spacing() == 8
+    params = ctx.findChild(QFrame, "fftTimeParamsCard")
+    assert params is not None and params.layout().spacing() == 6
 
 
 # ---- R3 #3-B: GroupBox title 紧凑+下划线分隔 ----
@@ -1501,17 +1519,27 @@ def test_order_contextual_old_tinted_background_removed():
     assert "#fff5e8" not in qss
 
 
-def test_fft_time_and_order_contextual_backgrounds_are_unified():
-    """FFT Time and Order contextual panels should share the same neutral
-    background so the upper/lower Inspector areas read as one surface."""
+def test_analysis_params_panels_share_unified_tint():
+    """2026-06-13 分析信号/谱参数 split: the lower parameter panel
+    (``params_card``) of all three analysis modes shares one #eef4ff tint so
+    the lower Inspector panels read consistently. The contextual hosts
+    themselves are now transparent — the two stacked cards carry the tint."""
     import pathlib
     qss_path = pathlib.Path(__file__).resolve().parents[2] / (
         "mf4_analyzer/ui_kit/style.qss"
     )
     qss = qss_path.read_text(encoding="utf-8")
-    assert "QWidget#fftTimeContextual" in qss
-    assert "QWidget#orderContextual" in qss
-    assert "background-color: #ffffff;" in qss
+    for object_name in (
+        "fftParamsCard",
+        "fftTimeParamsCard",
+        "orderParamsCard",
+    ):
+        assert f"#{object_name}" in qss, (
+            f"style.qss is missing the #{object_name} tint rule — the lower "
+            "parameter panel will fall back to the default white QFrame fill"
+        )
+    # The unified lower-panel tint shared across all three modes.
+    assert "#eef4ff" in qss
 
 
 def test_checkbox_text_background_is_transparent():
@@ -2703,12 +2731,14 @@ def test_axis_rows_fit_inspector_and_align_with_panel_right_edge(qapp, qtbot):
         qapp.setStyleSheet(old_sheet)
 
 
-def test_axis_settings_grid_background_matches_white_panel(qapp, qtbot):
+def test_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
     """The shared axis-settings grid should not paint the grey page surface.
 
-    FFT-vs-Time and Order both use the same helper. The blank cells behind
-    自动 / 最小 / 最大 and the auto-summary rows should read as part of the
-    white contextual panel rather than a separate grey table.
+    FFT-vs-Time and Order both use the same helper. After the 2026-06-13
+    分析信号/谱参数 split their axis grid sits inside the lower params_card,
+    which shares FFT's #eef4ff tint — so the blank cells behind 自动 / 最小 /
+    最大 and the auto-summary rows should read as part of that tinted panel
+    rather than a separate grey/white table.
     """
     from pathlib import Path
     from PyQt5.QtCore import QPoint
@@ -2747,9 +2777,14 @@ def test_axis_settings_grid_background_matches_white_panel(qapp, qtbot):
             image = inspector.grab().toImage()
             for point in samples:
                 color = image.pixelColor(point)
-                assert color.red() >= 250 and color.green() >= 250, (
-                    f"{mode} axis grid background should match the white "
-                    f"panel, got {color.name()} at {point.x()},{point.y()}"
+                assert (
+                    234 <= color.red() <= 242
+                    and 240 <= color.green() <= 248
+                    and color.blue() >= 250
+                ), (
+                    f"{mode} axis grid background should match the tinted "
+                    f"params panel #eef4ff, got {color.name()} at "
+                    f"{point.x()},{point.y()}"
                 )
             inspector.hide()
     finally:

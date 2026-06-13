@@ -824,6 +824,30 @@ def test_time_quality_indicator_updates_from_canvas_status_signal(qapp, qtbot):
     assert card._quality_indicator.toolTip() == "抗锯齿已完成"
 
 
+def test_fft_card_quality_indicator_present_like_time_card(qapp, qtbot):
+    """The FFT analysis card shows the same bottom-right AA traffic light the
+    time-domain card does — PgLineCanvas now exposes quality_status* so
+    _ChartCard wires the dot for the FFT pane too."""
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+    qapp.processEvents()
+
+    card = cs._fft_card
+    indicator = card._quality_indicator
+    assert indicator is not None, "FFT card should host an AA quality dot"
+    assert indicator.objectName() == "chartQualityIndicator"
+    assert indicator.parent() is card
+
+    cs.canvas_fft.quality_status_changed.emit({
+        "state": "green", "tooltip": "抗锯齿已完成",
+    })
+    qapp.processEvents()
+    assert card._quality_indicator.property("qualityState") == "green"
+
+
 def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)

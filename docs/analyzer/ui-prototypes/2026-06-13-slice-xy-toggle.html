@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>切片 X/Y 方向开关 mockup</title>
+<style>
+  :root{ --ink:#1f2937; --muted:#6b7280; --frame:#9aa6b8; --blue:#2563eb; --red:#e03131;
+    --bg:#f3f5f9; --card:#fff; --sw:#2563eb; }
+  *{box-sizing:border-box;}
+  body{margin:0;padding:30px;background:var(--bg);
+    font-family:"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif;color:var(--ink);}
+  h1{font-size:19px;margin:0 0 2px;} h2{font-size:14px;margin:24px 0 10px;color:#1f3b63;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 6px;}
+  .row{display:flex;gap:30px;flex-wrap:wrap;align-items:flex-start;}
+  .card{background:var(--card);border:1px solid #e6ebf3;border-radius:10px;padding:10px;width:400px;}
+  .cap{font-size:11px;color:var(--muted);margin:6px 2px 0;line-height:1.6;}
+  .cap b{color:var(--ink);}
+
+  .heat{height:150px;margin-left:34px;border:1px solid var(--frame);position:relative;
+    background:linear-gradient(105deg,#1b1b46,#3b0f64 22%,#7a1f6e 42%,#c0392b 60%,#e8a33d 78%,#f4e04d);}
+  .heat .ylab{position:absolute;left:-30px;top:50%;transform:translateY(-50%) rotate(-90deg);font-size:10px;color:var(--muted);}
+  .colorbar{position:absolute;right:-15px;top:0;bottom:0;width:9px;border:1px solid var(--frame);
+    background:linear-gradient(#f4e04d,#e8a33d,#c0392b,#7a1f6e,#3b0f64,#1b1b46);}
+  .marker-v{position:absolute;top:0;bottom:0;width:2px;background:var(--red);cursor:ew-resize;}
+  .marker-h{position:absolute;left:0;right:0;height:2px;background:var(--red);cursor:ns-resize;}
+  .grip{position:absolute;width:9px;height:9px;border-radius:50%;background:var(--red);border:2px solid #fff;}
+
+  /* slice view with the corner switch */
+  .slice{position:relative;height:96px;margin:12px 0 0 34px;border:1px solid var(--frame);border-radius:3px;
+    background:repeating-linear-gradient(0deg,transparent,transparent 23px,#eef2f7 23px,#eef2f7 24px),
+              repeating-linear-gradient(90deg,transparent,transparent 47px,#eef2f7 47px,#eef2f7 48px);}
+  .slice .ylab{position:absolute;left:-30px;top:50%;transform:translateY(-50%) rotate(-90deg);font-size:10px;color:var(--muted);}
+  .slice .xlab{position:absolute;bottom:2px;right:8px;font-size:10px;color:var(--muted);}
+  svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;}
+
+  /* ---- the corner X/Y switch ---- */
+  .swap{position:absolute;top:6px;right:8px;z-index:5;display:flex;flex-direction:column;align-items:flex-end;gap:2px;}
+  .switch{display:flex;border:1px solid #c7d2e2;border-radius:13px;background:#eef2f8;
+    box-shadow:0 1px 2px rgba(20,40,80,.08);overflow:hidden;font-size:11px;font-weight:700;}
+  .switch span{padding:3px 11px;color:#7b8699;cursor:pointer;display:flex;align-items:center;gap:4px;}
+  .switch span.on{background:var(--sw);color:#fff;}
+  .switch .ico{font-size:12px;}
+  .swap .hint{font-size:9px;color:#9aa6b8;background:#ffffffcc;padding:0 4px;border-radius:3px;}
+
+  .tagrow{margin-top:6px}
+  .tag{display:inline-block;font-size:10px;font-weight:700;border-radius:9px;padding:1px 7px;}
+  .now{background:#eef9f0;color:#15803d;}
+</style>
+</head>
+<body>
+<h1>切片视图右上角的 X / Y 方向开关</h1>
+<p class="sub">开关放在<b>下方切片视图的右上角</b>。X = 沿横轴选位置(固定时间)→纵向切；Y = 沿纵轴选位置(固定频率/阶次)→横向切。红色标记线可拖动+点击。</p>
+
+<h2>FFT vs Time</h2>
+<div class="row">
+  <!-- X 切 -->
+  <div class="card">
+    <div class="heat">
+      <span class="ylab">Frequency (Hz)</span>
+      <div class="colorbar"></div>
+      <div class="marker-v" style="left:46%;"><div class="grip" style="left:-4px;top:-5px;"></div></div>
+    </div>
+    <div class="slice">
+      <span class="ylab">Amplitude</span><span class="xlab">Frequency (Hz)</span>
+      <div class="swap">
+        <div class="switch">
+          <span class="on"><span class="ico">▏</span>X 切</span>
+          <span><span class="ico">▔</span>Y 切</span>
+        </div>
+        <div class="hint">固定时间 t=2.4s · 看 幅值-频率</div>
+      </div>
+      <svg viewBox="0 0 360 96" preserveAspectRatio="none">
+        <polyline points="4,84 60,40 90,16 120,50 200,72 360,80" fill="none" stroke="#2563eb" stroke-width="1.6"/>
+      </svg>
+    </div>
+    <div class="tagrow"><span class="tag now">X 方向切（现有行为）</span></div>
+    <div class="cap">沿<b>横轴(时间)</b>选一个时刻 → 切片显示<b>幅值 vs 频率</b>。热力图上是<b>竖线</b>标记。</div>
+  </div>
+
+  <!-- Y 切 -->
+  <div class="card">
+    <div class="heat">
+      <span class="ylab">Frequency (Hz)</span>
+      <div class="colorbar"></div>
+      <div class="marker-h" style="top:40%;"><div class="grip" style="left:-5px;top:-4px;"></div></div>
+    </div>
+    <div class="slice">
+      <span class="ylab">Amplitude</span><span class="xlab">Time (s)</span>
+      <div class="swap">
+        <div class="switch">
+          <span><span class="ico">▏</span>X 切</span>
+          <span class="on"><span class="ico">▔</span>Y 切</span>
+        </div>
+        <div class="hint">固定频率 f=180Hz · 看 幅值-时间</div>
+      </div>
+      <svg viewBox="0 0 360 96" preserveAspectRatio="none">
+        <polyline points="4,78 70,52 140,66 210,26 280,56 360,44" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+      </svg>
+    </div>
+    <div class="tagrow"><span class="tag now" style="background:#fef0e7;color:#b45309;">Y 方向切（新增）</span></div>
+    <div class="cap">沿<b>纵轴(频率)</b>选一个频率 → 切片显示<b>幅值 vs 时间</b>。热力图上是<b>横线</b>标记。</div>
+  </div>
+</div>
+
+<h2>阶次（原本完全没有切片，本次新增整套）</h2>
+<div class="row">
+  <div class="card">
+    <div class="heat">
+      <span class="ylab">Order</span>
+      <div class="colorbar"></div>
+      <div class="marker-h" style="top:52%;"><div class="grip" style="left:-5px;top:-4px;"></div></div>
+    </div>
+    <div class="slice">
+      <span class="ylab">Amplitude</span><span class="xlab">Time (s)</span>
+      <div class="swap">
+        <div class="switch">
+          <span><span class="ico">▏</span>X 切</span>
+          <span class="on"><span class="ico">▔</span>Y 切</span>
+        </div>
+        <div class="hint">固定阶次 order=3 · 看 幅值-时间</div>
+      </div>
+      <svg viewBox="0 0 360 96" preserveAspectRatio="none">
+        <polyline points="4,76 60,40 130,58 190,24 260,52 360,36" fill="none" stroke="#7a1f6e" stroke-width="1.6"/>
+      </svg>
+    </div>
+    <div class="cap"><b>常用：Y 切</b>=固定某阶次 → 看<b>该阶次幅值 vs 时间</b>。切到 X 切则固定某时刻 → 看 幅值 vs 阶次。</div>
+  </div>
+
+  <div style="width:330px;font-size:12px;color:#555;line-height:1.7;">
+    <b>开关说明</b><br>
+    · 一个小开关浮在切片视图右上角，两段：<b>X 切</b>（竖线，固定时间）/ <b>Y 切</b>（横线，固定频率/阶次）。<br>
+    · 点哪段就切哪个方向，标记线变竖/横，切片图横纵轴标题随之自动改。<br>
+    · 标记线<b>可拖动实时刷新</b>，也可在热力图上点击定位。<br>
+    · 下面那行小灰字(hint)显示当前固定值 + 切片含义，可保留也可去掉，你定。<br><br>
+    若觉得「X 切 / Y 切」不够直观，也可改成「按时间 / 按频率」「按时间 / 按阶次」文字 —— 告诉我用哪种。
+  </div>
+</div>
+
+</body>
+</html>

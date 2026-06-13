@@ -294,6 +294,52 @@ def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp):
     assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
 
 
+def test_fft_quality_status_traffic_light_tracks_aa_state(canvas, qapp):
+    """The FFT canvas exposes the same AA traffic-light contract as the
+    time-domain canvas so _ChartCard renders the bottom-right quality dot:
+    red when there are no curves, green when the spectrum is settled+crisp,
+    red during an interactive pan, yellow while waiting for the idle refresh,
+    and green again once idle restores AA. Each transition emits the signal."""
+    emissions = []
+    canvas.quality_status_changed.connect(lambda st: emissions.append(st))
+
+    # No curves yet → red.
+    assert canvas.quality_status()["state"] == "red"
+
+    canvas.show()
+    qapp.processEvents()
+    canvas.plot_spectra(
+        [_entry(), _entry('f2 · vib', '#dc2626')],
+        xlim=(0.0, 500.0), amp_label='Amplitude', title='FFT',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    # Fresh crisp spectrum → green, and the render emitted the change.
+    assert canvas.quality_status()["state"] == "green"
+    assert emissions and emissions[-1]["state"] == "green"
+
+    # Interactive pan drops AA → red.
+    vb = canvas._plot_amp.vb
+    vb.sigRangeChangedManually.emit(vb.state['mouseEnabled'])
+    assert canvas._aa_on is False
+    # disable_interactive_quality emitted red; schedule_idle_quality then
+    # emitted yellow (idle timer armed) — the latest state is yellow.
+    assert canvas._aa_idle_timer.isActive()
+    assert canvas.quality_status()["state"] == "yellow"
+    assert any(st["state"] == "red" for st in emissions)
+    assert emissions[-1]["state"] == "yellow"
+
+    # Idle restores AA → green again. Drive the settled state directly rather
+    # than via _enable_idle_quality(), whose QApplication.mouseButtons() gate is
+    # flaky under cross-test synthetic mouse events (a leaked press from an
+    # earlier test makes it re-arm instead of restoring AA).
+    canvas._aa_idle_timer.stop()
+    canvas._apply_idle_curve_aa()
+    canvas._aa_on = True
+    canvas._emit_quality_status()
+    assert canvas.quality_status()["state"] == "green"
+    assert emissions[-1]["state"] == "green"
+
+
 def test_fft_ctrl_wheel_zoom_drops_curve_aa(canvas):
     """The custom ctrl/shift wheel zoom sets the range programmatically (no
     sigRangeChangedManually), so it must drop AA explicitly via the wheel
@@ -374,6 +420,87 @@ def test_line_canvas_has_no_hover_cursor_line(canvas):
     assert not hasattr(canvas, '_cursor_amp')
 
 
+def test_empty_fft_keeps_both_plots_labelled(canvas):
+    """Empty state: both the amp plot and the time-preview plot carry axis
+    titles, so the panel never shows one labelled plot next to a bare one."""
+    canvas.full_reset()
+    assert canvas._plot_amp.getAxis('left').labelText == 'Amplitude'
+    assert canvas._plot_amp.getAxis('bottom').labelText == 'Frequency (Hz)'
+    assert canvas._plot_time.getAxis('left').labelText == 'Amplitude'
+    assert canvas._plot_time.getAxis('bottom').labelText == 'Time (s)'
+
+
+def test_both_plots_keep_right_frame_border_single_pane(canvas):
+    """Single-pane (no split reserve) must keep a visible right frame on BOTH
+    plots — the time-preview right border used to be hidden."""
+    canvas.reset_split_layout_alignment()
+    assert canvas._plot_amp.getAxis('right').isVisible()
+    assert canvas._plot_time.getAxis('right').isVisible()
+
+
+def test_time_preview_multi_curve_adds_color_coded_y_axes(canvas):
+    """Overlaying >1 time-preview source gives each extra curve its own aux
+    ViewBox + colour-coded right axis; a single source has none."""
+    def _entry(label, color):
+        t = np.linspace(0, 1, 200)
+        return {'label': label, 'color': color, 'freq': t, 'amp': t,
+                'time': t, 'signal': np.sin(t)}
+
+    canvas.plot_time_preview(
+        [_entry('a', '#2563eb'), _entry('b', '#22c55e'), _entry('c', '#f59e0b')])
+    assert len(canvas._time_overlay_axes) == 2
+    assert len(canvas._time_overlay_vbs) == 2
+    # The aux axis tick text is colour-coded to its curve.
+    assert canvas._time_overlay_axes[0].textPen().color().name() == '#22c55e'
+    assert canvas._time_overlay_axes[1].textPen().color().name() == '#f59e0b'
+
+    # Collapsing back to a single source tears the aux axes down.
+    canvas.plot_time_preview([_entry('a', '#2563eb')])
+    assert canvas._time_overlay_axes == []
+    assert canvas._time_overlay_vbs == []
+
+
+def test_collapse_divider_toggles_plot_visibility(canvas):
+    """The collapse control folds the top or bottom plot so the other gets the
+    full area; restoring brings both back with the time row's 170px cap."""
+    assert canvas._collapse_ctrl is not None
+    canvas._on_collapse_changed('bottom')
+    assert not canvas._plot_time.isVisible()
+    assert canvas._plot_amp.isVisible()
+    canvas._on_collapse_changed('top')
+    assert not canvas._plot_amp.isVisible()
+    assert canvas._plot_time.isVisible()
+    assert canvas._plot_time.maximumHeight() > 170
+    canvas._on_collapse_changed('none')
+    assert canvas._plot_amp.isVisible() and canvas._plot_time.isVisible()
+    assert canvas._plot_time.maximumHeight() == 170
+
+
+def test_collapse_control_toggle_is_sticky_off(qapp):
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _PlotCollapseControl
+    ctrl = _PlotCollapseControl()
+    emitted = []
+    ctrl.collapse_changed.connect(emitted.append)
+    ctrl._toggle('top')
+    assert ctrl.state() == 'top'
+    ctrl._toggle('top')           # clicking the active arrow restores
+    assert ctrl.state() == 'none'
+    ctrl._toggle('bottom')
+    assert ctrl.state() == 'bottom'
+    assert emitted == ['top', 'none', 'bottom']
+
+
+def test_line_canvas_grid_is_major_only(canvas):
+    """Analysis canvases default to a major-only grid (no faint minor sub-grid),
+    matching the time-domain canvas: maxTickLevel=0 on both plots' bottom/left
+    axes so showGrid never draws level-1/2 lines."""
+    for plot in (canvas._plot_amp, canvas._plot_time):
+        for side in ('bottom', 'left'):
+            assert plot.getAxis(side).style.get('maxTickLevel') == 0, (
+                f"{side} axis should be major-grid-only (maxTickLevel=0)"
+            )
+
+
 def test_fft_context_menu_is_chinese_and_keeps_plot_options(canvas, monkeypatch):
     canvas.register_mouse_mode_controller(_FakeMouseModeController())
     canvas.plot_time_preview([_entry()], title='时域预览')
@@ -389,6 +516,41 @@ def test_fft_context_menu_is_chinese_and_keeps_plot_options(canvas, monkeypatch)
     assert "Y 轴范围" in top
     assert "网格" in top
     assert "Mouse Mode" not in top
+
+
+def test_fft_context_menu_includes_y_autofit(canvas, monkeypatch):
+    """The FFT right-click menu gains a 「Y 轴自适应」 entry, mirroring the
+    time-domain canvas (previously the line canvas passed y_autofit_handler=None
+    so the action never appeared)."""
+    canvas.register_mouse_mode_controller(_FakeMouseModeController())
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    menu = _open_context_menu(canvas._plot_amp.vb, monkeypatch)
+    assert menu is not None
+    assert "Y 轴自适应" in _menu_texts(menu)
+
+
+def test_fft_y_autofit_fits_to_visible_x_window(canvas, qapp):
+    """「Y 轴自适应」 keeps the current X window and collapses Y to the samples
+    inside it — zooming X past the spectral peak fits Y to the near-zero tail."""
+    canvas.show()
+    qapp.processEvents()
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    # The _entry() gaussian peaks (~1.0) near 120 Hz; a 250-400 Hz window is ~0.
+    canvas._plot_amp.setXRange(250.0, 400.0, padding=0)
+    (x0_before, x1_before), _ = canvas._plot_amp.vb.viewRange()
+    canvas._fit_y_to_visible_x(canvas._plot_amp)
+    qapp.processEvents()
+    (x0, x1), (y0, y1) = canvas._plot_amp.vb.viewRange()
+    # X is untouched; Y collapses to the visible near-zero band (not the peak).
+    assert (x0, x1) == (pytest.approx(x0_before), pytest.approx(x1_before))
+    assert y1 < 0.2, f"Y should fit the visible near-zero window, got {y1}"
+    canvas.hide()
 
 
 def test_cursor_readout_values(canvas):

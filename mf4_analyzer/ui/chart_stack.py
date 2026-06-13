@@ -1882,9 +1882,13 @@ class ChartStack(QWidget):
             )
 
         def _order_card_factory():
-            return _ChartCard(
-                PgHeatmapCanvas(self), annotations=True, chart_mode='order'
-            )
+            canvas = PgHeatmapCanvas(self, with_slice=True)
+            # Order slice toggle reads 按时间 / 按阶次 (Y axis is order). Default
+            # to the 按阶次 (Y) slice — the common case is "one order's amplitude
+            # over time".
+            canvas.set_slice_button_labels('按时间', '按阶次')
+            canvas.set_slice_direction('y')
+            return _ChartCard(canvas, annotations=True, chart_mode='order')
 
         self.page_fft = AnalysisSectionPage(
             section='fft', manager=self.analysis_managers['fft'],

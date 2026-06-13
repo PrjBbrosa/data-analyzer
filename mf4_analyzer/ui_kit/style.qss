@@ -954,21 +954,36 @@ Inspector QFrame#fftTimeSignalCard {
     padding: 0;
 }
 
-/* Mode-specific contextual blocks. FFT keeps its subtle analysis tint;
- * FFT-vs-Time and Order use the neutral surface so the upper/lower
- * Inspector areas read as one consistent panel. */
-QWidget#fftContextual {
-    border: 1px solid #dde7f5;
-    border-radius: 10px;
-    background-color: #eef4ff;
-}
+/* 2026-06-13 分析信号/谱参数 split: each analysis contextual is now a
+ * transparent host for two stacked, full-width cards — the green
+ * analysis-signal card (sig_card) on top and the tinted parameter card
+ * (params_card) below, separated by an 8px #f5f7fb gutter (root spacing).
+ * The visible borders/backdrops live on those two cards so they read as two
+ * independent panels instead of the old card-inside-a-card; dropping the
+ * outer border also lets the analysis-signal card span the pane edge-to-edge
+ * (the wider frame the user asked for). */
+QWidget#fftContextual,
 QWidget#fftTimeContextual,
 QWidget#orderContextual {
-    border: 1px solid #dde7f5;
-    border-radius: 10px;
-    background-color: #ffffff;
+    border: none;
+    background-color: transparent;
 }
 
+/* Lower parameter panel (谱参数 / 时频参数 + 坐标轴设置 + 预设 + action).
+ * Unified across all three analysis modes to the same #eef4ff tint FFT
+ * already used, so the lower panel reads consistently (was: FFT blue,
+ * FFT-vs-Time / Order white). */
+Inspector QFrame#fftParamsCard,
+Inspector QFrame#fftTimeParamsCard,
+Inspector QFrame#orderParamsCard {
+    background-color: #eef4ff;
+    border: 1px solid #dde7f5;
+    border-radius: 10px;
+}
+
+/* The axis-settings grid is always hosted inside the tinted params_card, so
+ * its blank cells stay transparent and let the #eef4ff card show through —
+ * no separate white table rows over the panel. */
 Inspector QWidget#axisRow,
 Inspector QWidget#axisRowLine,
 Inspector QWidget#axisAutoCell,
@@ -978,23 +993,6 @@ Inspector QWidget#axisManualRangePage,
 Inspector QWidget#axisUnitLine,
 Inspector QWidget#axisHeaderRow,
 Inspector QWidget#axisHeaderRange {
-    background-color: #ffffff;
-}
-Inspector QFrame#fftSignalCard QGroupBox,
-Inspector QFrame#orderSignalCard QGroupBox,
-Inspector QFrame#fftTimeSignalCard QGroupBox,
-Inspector QFrame#fftSignalCard QWidget#axisRow,
-Inspector QFrame#orderSignalCard QWidget#axisRow,
-Inspector QFrame#fftTimeSignalCard QWidget#axisRow,
-Inspector QWidget#fftContextual QWidget#axisRow,
-Inspector QWidget#fftContextual QWidget#axisRowLine,
-Inspector QWidget#fftContextual QWidget#axisAutoCell,
-Inspector QWidget#fftContextual QWidget#axisRangeHost,
-Inspector QWidget#fftContextual QWidget#axisRangeSummaryPage,
-Inspector QWidget#fftContextual QWidget#axisManualRangePage,
-Inspector QWidget#fftContextual QWidget#axisUnitLine,
-Inspector QWidget#fftContextual QWidget#axisHeaderRow,
-Inspector QWidget#fftContextual QWidget#axisHeaderRange {
     background-color: transparent;
 }
 /* 自动 / 最小 / 最大 column headers above the axis grid — muted + small. */
@@ -1137,6 +1135,54 @@ QWidget#chartCard {
 QWidget#chartCard[focused="true"] {
     border-radius: 12px;
     background-color: #ffffff;
+}
+
+/* 2026-06-13 slice X/Y direction switch, overlaid on the slice view's
+ * top-right corner. A 2-segment pill: the active segment is solid blue. */
+QWidget#sliceDirToggle {
+    background-color: #eef2f8;
+    border: 1px solid #c7d2e2;
+    border-radius: 12px;
+}
+QWidget#sliceDirToggle QPushButton[role="slice-seg"] {
+    border: none;
+    background: transparent;
+    color: #7b8699;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 11px;
+    border-radius: 11px;
+}
+QWidget#sliceDirToggle QPushButton[role="slice-seg"]:checked {
+    background-color: #2563eb;
+    color: #ffffff;
+}
+QLabel#sliceHint {
+    color: #8a94a6;
+    font-size: 10px;
+    background-color: rgba(255, 255, 255, 200);
+    padding: 0 4px;
+    border-radius: 3px;
+}
+
+/* 2026-06-13 collapse divider between two stacked plots (FFT amp/time,
+ * heatmap map/slice): ▲ folds the top plot, ▼ folds the bottom. */
+QWidget#plotCollapseBar {
+    background-color: rgba(247, 249, 252, 235);
+    border: 1px solid #e0e6ef;
+    border-radius: 5px;
+}
+QWidget#plotCollapseBar QPushButton[role="collapse-arrow"] {
+    border: 1px solid #c7d0de;
+    border-radius: 3px;
+    background-color: #ffffff;
+    color: #5a6b86;
+    font-size: 9px;
+    padding: 0;
+}
+QWidget#plotCollapseBar QPushButton[role="collapse-arrow"]:hover {
+    border-color: #2563eb;
+    color: #2563eb;
 }
 
 /* Chart toolbar — compact spacing & padding (post-i18n). Three selectors
