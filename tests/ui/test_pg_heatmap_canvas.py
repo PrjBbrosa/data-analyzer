@@ -1141,20 +1141,27 @@ def test_toolbar_home_still_resets_to_data_extents(qapp):
     c._plot.setYRange(1.0, 3.0, padding=0)
     toolbar.home()
     (x0, x1), (y0, y1) = c._plot.vb.viewRange()
-    assert x0 < 0.0 and x1 > 10.0
-    assert y0 < 0.0 and y1 > 8.0
-    assert x0 == pytest.approx(-0.15)
-    assert x1 == pytest.approx(10.15)
-    assert y0 == pytest.approx(-0.12)
-    assert y1 == pytest.approx(8.12)
+    # Flush to the exact data extents — mirrors the initial render
+    # (plot_or_update_heatmap setXRange/setYRange(padding=0)).
+    assert x0 == pytest.approx(0.0)
+    assert x1 == pytest.approx(10.0)
+    assert y0 == pytest.approx(0.0)
+    assert y1 == pytest.approx(8.0)
     toolbar.deleteLater()
     c.deleteLater()
 
 
 @pytest.mark.parametrize("with_slice", [False, True])
-def test_toolbar_home_keeps_heatmap_extents_with_visual_padding(qapp, with_slice):
-    """Order and FFT-vs-Time Home/查看全部 should include full data without
-    placing boundary tick labels directly on the plot frame."""
+def test_toolbar_home_keeps_heatmap_flush_to_extents(qapp, with_slice):
+    """Order and FFT-vs-Time Home/查看全部 must restore the view flush to the
+    image rect — no white margin band at the edges.
+
+    Regression: reset_view_to_data_extents previously added a 1.5%/side
+    visual margin, over-expanding the ViewBox past the image so the white
+    ViewBox background showed as an edge band after Home (initial open was
+    flush; only Home introduced the margin). Home must reproduce the flush
+    initial render on BOTH sections.
+    """
     c = PgHeatmapCanvas(with_slice=with_slice)
     c.resize(640, 480)
     c.show()
@@ -1171,12 +1178,11 @@ def test_toolbar_home_keeps_heatmap_extents_with_visual_padding(qapp, with_slice
     qapp.processEvents()
 
     (x0, x1), (y0, y1) = c._plot.vb.viewRange()
-    assert x0 < 0.0
-    assert x1 > 10.0
-    assert y0 < 0.0
-    assert y1 > 8.0
-    assert x0 > -1.0
-    assert y0 > -1.0
+    # Exact extents (no padding) so the image meets the frame flush.
+    assert x0 == pytest.approx(0.0)
+    assert x1 == pytest.approx(10.0)
+    assert y0 == pytest.approx(0.0)
+    assert y1 == pytest.approx(8.0)
 
     toolbar.deleteLater()
     c.hide()

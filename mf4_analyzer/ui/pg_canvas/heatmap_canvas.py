@@ -697,15 +697,23 @@ class PgHeatmapCanvas(QWidget):
         wires the most discoverable reset affordance (the toolbar Home
         button) to the same full-extent restore. Falls back to pg's
         ``autoRange`` when no result has been plotted yet.
+
+        The image ``setRect`` (plot_or_update_heatmap) spans EXACTLY
+        ``[x0,x1]x[y0,y1]``, and the initial render fills the ViewBox with
+        ``setXRange(x0,x1,padding=0)`` / ``setYRange(y0,y1,padding=0)`` so
+        the image meets the frame flush. Home must reproduce that flush
+        edge: the shared ``_visual_padded_bounds`` 1.5%/side breathing room
+        (which line-plot resets on a white background need to avoid pressing
+        the frame) would over-expand the ViewBox past the image rect and
+        expose the white ViewBox background as a margin band on a heatmap.
+        So reset to the raw extents here, mirroring the initial render.
         """
         if self._extents is None:
             self._plot.vb.autoRange()
             return
         x0, x1, y0, y1 = self._extents
-        px0, px1 = _visual_padded_bounds(x0, x1)
-        py0, py1 = _visual_padded_bounds(y0, y1)
-        self._plot.setXRange(px0, px1, padding=0)
-        self._plot.setYRange(py0, py1, padding=0)
+        self._plot.setXRange(x0, x1, padding=0)
+        self._plot.setYRange(y0, y1, padding=0)
 
     # ------------------------------------------------------------------
     # FFT-vs-Time: spectrogram render + frequency slice (with_slice=True)
