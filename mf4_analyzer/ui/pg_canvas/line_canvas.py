@@ -422,7 +422,9 @@ class PgLineCanvas(QWidget):
         self._entries = list(entries)
 
         for e in self._entries:
-            pen = pg.mkPen(e.get('color', '#2563eb'), width=1.2)
+            pen = pg.mkPen(e.get('color', '#2563eb'), width=1.5)
+            pen.setJoinStyle(Qt.RoundJoin)
+            pen.setCapStyle(Qt.RoundCap)
             curve = self._plot_amp.plot(
                 e['freq'], e['amp'], pen=pen, name=e['label'],
                 antialias=True)
@@ -809,7 +811,7 @@ class PgLineCanvas(QWidget):
             # emits NaN breaks for gaps.
             t_env, sig_env = build_envelope(
                 t, sig, xlim=None, pixel_width=pixel_width)
-            width = 1.7 if i == self._selected_time_entry_idx else 1.1
+            width = 1.9 if i == self._selected_time_entry_idx else 1.5
             color = e.get('color', '#2563eb')
             pen = pg.mkPen(color, width=width)
             if i == 0:
