@@ -487,6 +487,7 @@ class PgHeatmapCanvas(QWidget):
             self._collapse_ctrl = _PlotCollapseControl(self)
             self._collapse_ctrl.collapse_changed.connect(self._on_collapse_changed)
             self._plot.vb.sigResized.connect(self._position_collapse_ctrl)
+            self._ensure_colorbar(_resolve_colormap('turbo'), 'Amplitude (dB)')
         else:
             self._collapse_ctrl = None
 
@@ -550,28 +551,8 @@ class PgHeatmapCanvas(QWidget):
         self._img.setColorMap(cm)
         self._img.setLevels((vmin, vmax))
 
-        if self._cbar is None:
-            # colorMapMenu=False suppresses pg's built-in right-click
-            # ColorMapMenu on the bar. That menu (verified live: actions
-            # None/local/cet/matplotlib under a real right-click) lets the
-            # user swap the colormap straight on the bar, desyncing it from
-            # the Inspector cmap dropdown — a double source of truth. The
-            # host ViewBox's setMenuEnabled(False) does NOT silence it
-            # (lesson 2026-06-11-colorbaritem-label-axis-and-silent-setlevels);
-            # the bar's own mouseClickEvent short-circuits only when
-            # colorMapMenu is False (pg 0.14.0 ColorBarItem.mouseClickEvent).
-            self._cbar = pg.ColorBarItem(
-                colorMap=cm, interactive=True, label=cbar_label,
-                colorMapMenu=False,
-            )
-            self._cbar.setImageItem(self._img, insert_in=self._plot)
-            self._cbar.sigLevelsChanged.connect(self._on_cbar_levels)
-        else:
-            self._cbar.setColorMap(cm)
-            # Vertical ColorBarItem places its ``label=`` on the LEFT axis
-            # at __init__ (pg 0.14.0 source: getAxis('left').setLabel) —
-            # the right axis carries the tick values. Update the same axis.
-            self._cbar.getAxis('left').setLabel(cbar_label)
+        self._ensure_colorbar(cm, cbar_label)
+
         # Adaptive drag granularity: the default rounding=1 snaps
         # interactive level drags to whole units and enforces a minimum
         # 1-unit span — unusable for linear amplitudes < 1.
@@ -654,7 +635,9 @@ class PgHeatmapCanvas(QWidget):
             _hide_plot_title(self._slice_plot)
             self._slice_marker.setVisible(False)
             if self._slice_panel is not None:
-                self._slice_panel.hide()
+                self._slice_panel.show()
+        if self._with_slice:
+            self._ensure_colorbar(_resolve_colormap('turbo'), 'Amplitude (dB)')
         self.reset_split_layout_alignment()
         self.layout_geometry_changed.emit()
 
@@ -1155,6 +1138,24 @@ class PgHeatmapCanvas(QWidget):
             except Exception:
                 pass
         return metrics
+
+    def _ensure_colorbar(self, cm: pg.ColorMap, cbar_label: str):
+        if self._cbar is None:
+            self._img.setColorMap(cm)
+            self._img.setLevels((-70.0, -20.0))
+            self._cbar = pg.ColorBarItem(
+                colorMap=cm, interactive=True, label=cbar_label,
+                colorMapMenu=False,
+            )
+            self._cbar.setImageItem(self._img, insert_in=self._plot)
+            self._cbar.sigLevelsChanged.connect(self._on_cbar_levels)
+            self._cbar.blockSignals(True)
+            self._cbar.setLevels((-70.0, -20.0))
+            self._cbar.blockSignals(False)
+        else:
+            self._cbar.setColorMap(cm)
+            self._cbar.getAxis('left').setLabel(cbar_label)
+        return self._cbar
 
     def apply_split_layout_alignment(
         self, *,
