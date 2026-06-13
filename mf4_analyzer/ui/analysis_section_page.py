@@ -507,18 +507,21 @@ class AnalysisSectionPage(QWidget):
             m.get('amp_bottom_axis_height', 0.0) for m in metrics)
         time_bottom_height = max(
             m.get('time_bottom_axis_height', 0.0) for m in metrics)
-        amp_right_reserve = max(
-            m.get('amp_right_reserve', 0.0) for m in metrics)
-        time_right_reserve = max(
-            m.get('time_right_reserve', 0.0) for m in metrics)
 
+        # Right reserves are intentionally NOT cross-synced for line canvases.
+        # The time-preview overlay Y-axes (one per extra source) are a per-pane
+        # feature that already occupy their own layout columns. Pushing the
+        # global-max reserve (spacer + overlay) onto every pane's right SPACER
+        # double-counts the overlay width — it shrank both panes' plot areas and
+        # inset an overlay-free pane by the other pane's overlay reserve. Each
+        # pane keeps the thin frame set by prepare() and is inset only by its
+        # OWN overlay axes; the FFT spectrum row (no overlay) stays aligned via
+        # the shared left-axis width and bottom-axis heights below.
         for c in line_canvases:
             c.apply_split_layout_alignment(
                 left_axis_width=left_width,
                 amp_bottom_axis_height=amp_bottom_height,
                 time_bottom_axis_height=time_bottom_height,
-                amp_right_reserve=amp_right_reserve,
-                time_right_reserve=time_right_reserve,
             )
 
     def _is_heatmap_section(self) -> bool:

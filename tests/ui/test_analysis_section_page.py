@@ -252,6 +252,52 @@ def test_split_fft_line_plot_areas_align(line_page, qapp):
     assert time1.right() == pytest.approx(amp1.right(), abs=1.0)
 
 
+def test_split_fft_overlay_does_not_shrink_peer_time_preview(line_page, qapp):
+    """Solution A: the time-preview overlay Y-axes are a PER-PANE feature.
+
+    Adding overlay sources to ONE pane must NOT inset the OTHER pane's
+    time-preview ViewBox. Regression guard for the double-counted right
+    reserve: the global-max ``time_right_reserve`` (spacer + overlay axes of
+    the busiest pane) used to be pushed onto every pane's right SPACER while
+    the overlay axes still occupied their own layout columns — shrinking
+    both panes' plot areas.
+    """
+    line_page.enter_split()
+    qapp.processEvents()
+
+    # Pane 0: three sources → two colour-coded overlay right axes.
+    line_page.pane_canvas(0).plot_spectra(
+        [_line_entry("a", color="#2563eb"),
+         _line_entry("b", color="#22c55e"),
+         _line_entry("c", color="#f59e0b")],
+        xlim=(0.0, 200.0), amp_label="Amplitude", title="multi",
+    )
+    # Pane 1: single source → no overlay axis.
+    line_page.pane_canvas(1).plot_spectra(
+        [_line_entry("solo", color="#64748b")],
+        xlim=(0.0, 200.0), amp_label="Amplitude", title="solo",
+    )
+    line_page.sync_heatmap_layouts()
+    for _ in range(3):
+        qapp.processEvents()
+
+    c0 = line_page.pane_canvas(0)
+    c1 = line_page.pane_canvas(1)
+    assert len(c0._time_overlay_axes) == 2
+    assert len(c1._time_overlay_axes) == 0
+
+    amp1 = c1._plot_amp.vb.sceneBoundingRect()
+    time0 = c0._plot_time.vb.sceneBoundingRect()
+    time1 = c1._plot_time.vb.sceneBoundingRect()
+
+    # The overlay-free pane keeps its time-preview ViewBox aligned with its
+    # OWN amp right edge — it is NOT inset by the other pane's overlay axes.
+    assert time1.right() == pytest.approx(amp1.right(), abs=1.5)
+    assert time1.width() == pytest.approx(amp1.width(), abs=2.0)
+    # And it is genuinely wider than the pane that carries two overlay axes.
+    assert time1.width() > time0.width() + 5.0
+
+
 def test_click_pane_sets_focus(page):
     """eventFilter: a mouse press on pane 1 makes it the focused pane."""
     page.enter_split()
