@@ -1,104 +1,170 @@
-"""Give every ``QComboBox`` dropdown the rounded-popup translucent shell.
+"""Central QComboBox popup chrome and sizing.
 
-Background
-----------
-``style.qss`` rounds the *inner* list of every combo::
-
-    QComboBox QAbstractItemView { border-radius: 8px; background: #fff; ... }
-
-but a combo popup is shown inside a **top-level window** —
-``QComboBoxPrivateContainer`` (a ``QFrame``). That window is, by default,
-an opaque, square, natively shadowed rectangle. The rounded QSS then
-paints *inside* it, so the square corners and the rectangular native
-shadow leak out behind the rounded list — the "矩形框叠在圆角框后面"
-users see on every dropdown.
-
-Fix / prevention
-----------------
-Every other rounded popup in the app (markup style menu, pyqtgraph
-context menus, ``RebuildTimePopover``, ``SignalPickerPopup`` …) pairs its
-rounded QSS with ``Qt.WA_TranslucentBackground`` + ``FramelessWindowHint
-| NoDropShadowWindowHint`` on the popup window. Combos are created at ~30
-call sites across Analyzer and Cockpit, so patching each one is both
-tedious and fragile — the next ``QComboBox(...)`` would forget again.
-
-Instead we install a single application-level event filter (from the
-shared ``load_stylesheet`` chokepoint that both processes already call).
-It configures the popup window of *every* combo — present and future —
-the first time the combo is shown, while its container is still hidden,
-so there is no re-show flicker. This is the structural guard that keeps
-the bug from recurring; see
-``docs/lessons-learned/codex-rounded-qt-popups-need-translucent-shell.md``.
+QComboBox popups are rendered in a top-level private container
+(``QComboBoxPrivateContainer``). Styling only the inner item view is not
+enough: the native popup window can draw an opaque square frame or shadow for
+one frame before the rounded list paints. This module prepares the popup
+window, list view, viewport background, and width from one application-level
+event filter so individual combo call sites do not carry popup policy.
 """
 from PyQt5.QtCore import QEvent, QObject, Qt
-from PyQt5.QtWidgets import QComboBox
+from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtWidgets import QComboBox, QFrame
 
 
-# The native-shadow flags that kill the rectangular backing/shadow. Paired
-# with WA_TranslucentBackground (set in _apply_shell) for parity with the
-# rest of the app's rounded popups.
 _SHELL_FLAGS = Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+_MAX_QWIDGET_SIZE = 16777215
+
+_POPUP_VIEW_QSS = """
+QAbstractItemView {
+    padding: 4px;
+    border: none;
+    border-radius: 8px;
+    background-color: #ffffff;
+    outline: none;
+    selection-background-color: transparent;
+    selection-color: #111827;
+}
+QAbstractItemView::item {
+    min-height: 24px;
+    padding: 4px 8px;
+    border: none;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #111827;
+}
+QAbstractItemView::item:hover,
+QAbstractItemView::item:selected {
+    border: none;
+    border-radius: 6px;
+    background-color: #1769e0;
+    color: #ffffff;
+}
+"""
 
 
 def _apply_shell(window):
-    """Apply the translucent rounded-popup shell to ``window`` once.
-
-    Returns ``True`` only when the shell was newly applied (used by the
-    fallback path to decide whether a re-show is needed). Idempotent: a
-    window that already carries ``WA_TranslucentBackground`` is left
-    untouched, so repeated Show events are cheap no-ops.
-    """
+    """Apply a transparent, frameless shell to a popup window once."""
     if window is None or window.testAttribute(Qt.WA_TranslucentBackground):
         return False
     window.setWindowFlags(window.windowFlags() | _SHELL_FLAGS)
     window.setAttribute(Qt.WA_TranslucentBackground, True)
-    # Translucency alone removes the opaque square *fill*, but
-    # QComboBoxPrivateContainer also paints a 1px square *frame* in its
-    # own paintEvent (via the style, independent of frameShape) — that is
-    # the leftover gray rectangle outside the rounded inner list. A global
-    # QSS rule does not reach this private top-level popup window, so the
-    # border must be cleared on the container directly.
     window.setStyleSheet(
-        "QComboBoxPrivateContainer { border: none; background: transparent; }"
+        "QComboBoxPrivateContainer, QFrame { "
+        "border: none; background: transparent; }"
     )
     return True
 
 
-class _ComboPopupShellFilter(QObject):
-    """Application event filter that rounds every combo dropdown.
+def _int_property(widget, name):
+    value = widget.property(name)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
-    Catching it centrally — rather than at each ``QComboBox(...)`` call
-    site — means no current or future combo can forget the shell.
+
+def _apply_view_chrome(view):
+    if view is None:
+        return
+    view.setFrameShape(QFrame.NoFrame)
+    view.setLineWidth(0)
+    view.setMidLineWidth(0)
+    view.setAttribute(Qt.WA_StyledBackground, True)
+    if view.styleSheet() != _POPUP_VIEW_QSS:
+        view.setStyleSheet(_POPUP_VIEW_QSS)
+
+    viewport = view.viewport()
+    if viewport is not None:
+        palette = viewport.palette()
+        white = QColor("#ffffff")
+        palette.setColor(QPalette.Base, white)
+        palette.setColor(QPalette.Window, white)
+        viewport.setPalette(palette)
+        viewport.setAutoFillBackground(True)
+        viewport.setStyleSheet("background-color: #ffffff;")
+
+
+def _sync_popup_width(combo, view):
+    if combo is None or view is None:
+        return
+    fixed = _int_property(combo, "popupWidth")
+    if fixed is not None:
+        view.setMinimumWidth(fixed)
+        view.setMaximumWidth(fixed)
+        return
+
+    minimum = _int_property(combo, "popupMinWidth")
+    maximum = _int_property(combo, "popupMaxWidth")
+    width = max(1, combo.width())
+    if minimum is None and maximum is None:
+        view.setMinimumWidth(width)
+        view.setMaximumWidth(width)
+        return
+    if minimum is not None:
+        width = max(width, minimum)
+    view.setMinimumWidth(width)
+    if maximum is not None:
+        view.setMaximumWidth(max(width, maximum))
+    else:
+        view.setMaximumWidth(_MAX_QWIDGET_SIZE)
+
+
+def _popup_views(combo):
+    views = []
+    view = combo.view()
+    if view is not None:
+        views.append(view)
+    completer = combo.completer()
+    if completer is not None:
+        popup = completer.popup()
+        if popup is not None and popup not in views:
+            views.append(popup)
+    return views
+
+
+def prepare_combo_popup(combo):
+    """Prepare popup shell, first-frame background, and width.
+
+    Dynamic properties:
+    - ``popupWidth`` fixes the popup width.
+    - ``popupMinWidth`` and ``popupMaxWidth`` bound the popup width.
     """
+    if not isinstance(combo, QComboBox):
+        return combo
+    for view in _popup_views(combo):
+        _apply_view_chrome(view)
+        _apply_shell(view.window())
+        _sync_popup_width(combo, view)
+    return combo
+
+
+class _ComboPopupShellFilter(QObject):
+    """Application event filter that prepares every combo dropdown."""
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Show:
+        event_type = event.type()
+        if event_type in (
+            QEvent.Polish,
+            QEvent.Show,
+            QEvent.MouseButtonPress,
+            QEvent.FocusIn,
+        ):
             if isinstance(obj, QComboBox):
-                # Primary path: a combo is shown long before its popup
-                # opens, so we force-create and configure the (still
-                # hidden) container with zero re-show flicker.
-                _apply_shell(obj.view().window())
-            elif obj.metaObject().className() == "QComboBoxPrivateContainer":
-                # Fallback: a popup whose owning combo we never observed
-                # being shown. The window is already mapped, so changing
-                # its flags hides it — re-show the now-translucent popup.
+                prepare_combo_popup(obj)
+        if event_type == QEvent.Show:
+            if obj.metaObject().className() == "QComboBoxPrivateContainer":
                 if _apply_shell(obj):
                     obj.show()
         return False
 
 
-# One filter per process. Kept module-global so a second load_stylesheet
-# call (or a test re-invoking install) does not stack duplicate filters.
 _filter_ref = []
 
 
 def install_combo_popup_shell(app):
-    """Install the combo-popup shell filter on ``app`` (idempotent).
-
-    Returns the active filter instance. Call once, after ``QApplication``
-    construction — ``load_stylesheet`` does this for both Analyzer and
-    Cockpit.
-    """
+    """Install the combo-popup shell filter on ``app`` idempotently."""
     if _filter_ref:
         return _filter_ref[0]
     filt = _ComboPopupShellFilter(app)

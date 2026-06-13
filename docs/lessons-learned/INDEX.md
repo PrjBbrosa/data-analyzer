@@ -51,6 +51,7 @@ lesson by default.
 | [Analysis View-All Visual Padding](codex-analysis-view-all-visual-padding.md) | Touching pyqtgraph analysis canvas Home/View-All behavior for FFT, | See lesson |
 | [Analysis Section State Needs Pane-Local Sources](codex-analysis-section-state-needs-pane-local-sources.md) | Work on analysis View tabs, split panes, FFT source colors, or project | See lesson |
 | [Tick Density Lives In Chart Toolbar Popout](codex-tick-density-toolbar-popout.md) | Touching global tick-density controls, Inspector persistent chart | See lesson |
+| [Codex Time Range Preserve Xaxis Draft](codex-time-range-preserve-xaxis-draft.md) | Changing time-range toggles, custom X-axis controls, or time-domain | See lesson |
 
 ## Selection Rules
 

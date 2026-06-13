@@ -187,6 +187,13 @@ class MainWindow(QMainWindow):
         # suppress the inspector signal handlers that would otherwise capture
         # the half-applied controls back into the outgoing view.
         self._applying_analysis_view = False
+        # Post-load auto-recompute queue. A saved project carries each analysis
+        # view's compute params + signal sources but NOT the numeric results
+        # (recompute-on-open, per the user's choice). open_project seeds this
+        # with every (section, view_idx) that has sources; the first time such a
+        # view is rendered we recompute it instead of showing the empty
+        # "click 计算" state, then drop it from the set.
+        self._analysis_restore_pending = set()
         # Identity of the inputs behind the last fft-canvas render. Re-entering
         # fft mode with the same signature reuses the retained stacked-page
         # canvas instead of wiping + rebuilding it (keeps the computed spectrum
@@ -1022,10 +1029,48 @@ class MainWindow(QMainWindow):
             )
         return cache.make_key(fid, ch, params)
 
+    def _recompute_analysis_section(self, section):
+        """Dispatch the active view's compute for ``section`` (used by the
+        post-load auto-recompute path). Reuses the same entry points as the
+        计算 buttons, so caching / rendering / split-pane handling are shared.
+
+        Runs deferred (QTimer.singleShot) from the restore path; guard the whole
+        dispatch so a compute failure can never bubble out of the event-loop
+        callback and tear down the freshly opened project."""
+        try:
+            if section == 'fft':
+                self.do_fft()
+            elif section == 'order':
+                self.do_order_time()
+            elif section == 'fft_time':
+                self.do_fft_time()
+        except Exception:
+            pass
+
     def _render_analysis_view_from_cache(self, section, state):
         """Render each pane from cached results; panes whose sources are not all
-        cached show an empty state and a 'click 计算' status hint. Never
-        computes (spec §4)."""
+        cached show an empty state and a 'click 计算' status hint.
+
+        Normally never computes (spec §4). The one exception is the post-load
+        auto-recompute: when this (section, view) was queued by open_project
+        and still has sources, recompute it once so the saved params + sources
+        repopulate the chart, then fall back to the normal cache-render path on
+        every subsequent call."""
+        mgr = self.analysis_managers.get(section)
+        if mgr is not None:
+            restore_key = (section, mgr.active)
+            if restore_key in self._analysis_restore_pending:
+                self._analysis_restore_pending.discard(restore_key)
+                if any(p.sources for p in state.panes):
+                    # Defer the recompute to the next event-loop turn instead of
+                    # running it inline. open_project drives this for all three
+                    # sections mid-restore; a synchronous compute could pop a
+                    # blocking QMessageBox (FFT/order compute error) that would
+                    # interrupt the half-finished open. Deferring lets the window
+                    # finish opening first, so any error surfaces cleanly after.
+                    QTimer.singleShot(
+                        0, lambda s=section: self._recompute_analysis_section(s))
+                    return
         page = self._analysis_page(section)
         any_missing = False
         for pane_idx in range(page.pane_count()):
@@ -1382,6 +1427,73 @@ class MainWindow(QMainWindow):
         yt = tick_opts.get('y', 6)
         self._set_tick_density_controls_silent(xt, yt)
 
+    def _applied_xaxis_opts(self):
+        custom_active = (
+            self._custom_xaxis_fid is not None
+            and self._custom_xaxis_ch is not None
+        )
+        if custom_active:
+            return {
+                "mode": "channel",
+                "fid": self._custom_xaxis_fid,
+                "channel": self._custom_xaxis_ch,
+                "label": self._custom_xlabel or self._custom_xaxis_ch,
+            }
+        return {
+            "mode": "time",
+            "fid": None,
+            "channel": None,
+            "label": self._custom_xlabel or "",
+        }
+
+    def _capture_range_change_into_view(self, state, canvas):
+        prev_axis_opts = state.axis_opts or {}
+        prev_x_axis = prev_axis_opts.get('x_axis') or self._applied_xaxis_opts()
+        self._view_bridge.capture_controls_into(state, self, canvas)
+        axis_opts = dict(state.axis_opts or {})
+        axis_opts['x_axis'] = prev_x_axis
+        state.axis_opts = axis_opts
+
+    def _snapshot_xaxis_controls(self):
+        top = self.inspector.top
+        return {
+            "mode": top.xaxis_mode(),
+            "channel_data": top._combo_xaxis_ch.currentData(),
+            "label": top.xaxis_label(),
+            "auto_label": getattr(top, "_xlabel_auto_from_channel", False),
+        }
+
+    def _restore_xaxis_controls_snapshot(self, snapshot):
+        if not snapshot:
+            return
+        top = self.inspector.top
+        old_mode = top.combo_xaxis.blockSignals(True)
+        old_combo = top._combo_xaxis_ch.blockSignals(True)
+        old_label = top.edit_xlabel.blockSignals(True)
+        line_edit = top._combo_xaxis_ch.lineEdit()
+        old_line = line_edit.blockSignals(True) if line_edit is not None else False
+        try:
+            mode = snapshot.get("mode") or "time"
+            top.set_xaxis_mode(mode)
+            top._combo_xaxis_ch.setEnabled(mode == "channel")
+            if mode == "channel":
+                data = snapshot.get("channel_data")
+                for i in range(top._combo_xaxis_ch.count()):
+                    if top._combo_xaxis_ch.itemData(i) == data:
+                        top._combo_xaxis_ch.setCurrentIndex(i)
+                        break
+            top.edit_xlabel.setText(snapshot.get("label") or "")
+            top._xlabel_auto_from_channel = bool(snapshot.get("auto_label", False))
+        finally:
+            top.edit_xlabel.blockSignals(old_label)
+            top._combo_xaxis_ch.blockSignals(old_combo)
+            top.combo_xaxis.blockSignals(old_mode)
+            if line_edit is not None:
+                line_edit.blockSignals(old_line)
+        update_xaxis_row = getattr(top, '_update_xaxis_channel_row_visible', None)
+        if callable(update_xaxis_row):
+            update_xaxis_row(top.combo_xaxis.currentIndex())
+
     def _set_tick_density_controls_silent(self, xt, yt):
         xt = int(xt)
         yt = int(yt)
@@ -1660,19 +1772,23 @@ class MainWindow(QMainWindow):
 
     def _on_time_range_enabled_changed(self, enabled):
         canvas = self.chart_stack.focused_canvas()
-        if enabled:
-            xlim = None
-            get_xlim = getattr(canvas, 'get_visible_xlim', None)
-            if callable(get_xlim):
-                xlim = get_xlim()
-            self._sync_time_range_inputs_from_visible_xlim(xlim)
-        idx = self._view_index_for_canvas(canvas)
-        if idx is not None and 0 <= idx < len(self.view_manager.views):
-            self._view_bridge.capture_controls_into(
-                self.view_manager.get(idx), self, canvas
-            )
-        if self.files and self.navigator.get_checked_channels():
-            self._replot_canvas_for_view(idx, canvas)
+        xaxis_draft = self._snapshot_xaxis_controls()
+        try:
+            if enabled:
+                xlim = None
+                get_xlim = getattr(canvas, 'get_visible_xlim', None)
+                if callable(get_xlim):
+                    xlim = get_xlim()
+                self._sync_time_range_inputs_from_visible_xlim(xlim)
+            idx = self._view_index_for_canvas(canvas)
+            if idx is not None and 0 <= idx < len(self.view_manager.views):
+                self._capture_range_change_into_view(
+                    self.view_manager.get(idx), canvas
+                )
+            if self.files and self.navigator.get_checked_channels():
+                self._replot_canvas_for_view(idx, canvas)
+        finally:
+            self._restore_xaxis_controls_snapshot(xaxis_draft)
 
     def _on_annotation_enabled_changed(self, mode, enabled):
         if mode == 'fft':
@@ -2188,6 +2304,8 @@ class MainWindow(QMainWindow):
 
         doc = pio.load_project_from_json(path)
         self.close_all()
+        # Fresh restore: clear any stale auto-recompute queue from a prior open.
+        self._analysis_restore_pending = set()
 
         fid_map = {}
         missing = []
@@ -2235,10 +2353,17 @@ class MainWindow(QMainWindow):
                 continue
             mgr.views = [AnalysisViewState.from_dict(v) for v in block["views"]]
             mgr.active = min(int(block.get("active", 0)), len(mgr.views) - 1)
+            # Queue every source-bearing view for auto-recompute (recompute-on-
+            # open): the project stored params + sources but not the numeric
+            # results. The active view recomputes immediately via the emit
+            # below; the rest recompute lazily the first time they're shown.
+            for i, v in enumerate(mgr.views):
+                if any(p.sources for p in v.panes):
+                    self._analysis_restore_pending.add((sec, i))
             mgr.views_changed.emit()
             # active_changed drives _on_analysis_view_switched: it applies the
-            # restored structure/params/sources and renders from cache (which is
-            # empty post-load, so panes show their empty state until 计算).
+            # restored structure/params/sources, then _render_analysis_view_from
+            # _cache recomputes this view (queued above) so the chart repopulates.
             mgr.active_changed.emit(mgr.active)
 
         self._active = fid_map.get(doc.active_file)
@@ -3340,6 +3465,10 @@ class MainWindow(QMainWindow):
             if order_params.get('amplitude_mode', 'Amplitude dB') == 'Amplitude dB'
             else 'amplitude'
         )
+        # Pin the amplitude mode so the slice's amplitude-axis label reads
+        # 'Amplitude (dB)' vs 'Amplitude' correctly (Order renders through
+        # plot_or_update_heatmap, which does not set it like plot_result does).
+        canvas._amplitude_mode = amp_mode_token
         canvas.plot_or_update_heatmap(
             matrix=result.amplitude.T,
             x_extent=(float(result.times[0]), float(result.times[-1])),
@@ -3360,7 +3489,12 @@ class MainWindow(QMainWindow):
             y_auto=bool(order_params.get('y_auto', True)),
             y_min=float(order_params.get('y_min', 0.0)),
             y_max=float(order_params.get('y_max', 0.0)),
+            x_coords=result.times, y_coords=result.orders,
         )
+        # Seed the order slice (default 按阶次 / Y is most useful, but keep the
+        # current direction if the user already switched it).
+        if getattr(canvas, '_slice_curve', None) is not None:
+            canvas._seed_slice()
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
 

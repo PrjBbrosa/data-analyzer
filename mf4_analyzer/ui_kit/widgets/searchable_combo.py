@@ -14,6 +14,8 @@ from PyQt5.QtCore import QSortFilterProxyModel, QSize, Qt
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QComboBox, QCompleter, QStyledItemDelegate, QStyle
 
+from ..combo_popup_shell import prepare_combo_popup
+
 
 _TOKEN_SPLIT_RE = re.compile(r"[\s_\-:./\\|,;()[\]{}]+")
 
@@ -259,8 +261,8 @@ class SearchableComboBox(QComboBox):
         self._sync_popup_geometry()
 
     def _sync_popup_geometry(self):
-        width = max(1, self.width())
         height = _TwoLineChannelDelegate.ROW_HEIGHT * self.maxVisibleItems() + 8
+        prepare_combo_popup(self)
         views = [self.view()]
         c = self.completer()
         if c is not None:
@@ -268,8 +270,6 @@ class SearchableComboBox(QComboBox):
         for view in views:
             if view is None:
                 continue
-            view.setMinimumWidth(width)
-            view.setMaximumWidth(width)
             view.setMaximumHeight(height)
 
     def resizeEvent(self, event):
@@ -278,6 +278,7 @@ class SearchableComboBox(QComboBox):
 
     def showPopup(self):
         self._sync_popup_geometry()
+        prepare_combo_popup(self)
         super().showPopup()
 
     def _set_item_tooltip(self, index):

@@ -676,6 +676,36 @@ def test_checking_time_range_uses_current_visible_xlim_without_manual_entry(
     assert len(t) == len(w.files[next(iter(w.files))].time_array)
 
 
+def test_time_range_toggle_preserves_unapplied_xaxis_channel_draft(
+    qapp, qtbot, loaded_csv
+):
+    w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    top = w.inspector.top
+
+    top.set_xaxis_mode("channel")
+    w._on_xaxis_mode_changed("channel")
+    combo = top._combo_xaxis_ch
+    target = next(
+        i for i in range(combo.count())
+        if combo.itemData(i) == (fid, "torque")
+    )
+    combo.setCurrentIndex(target)
+
+    assert top.xaxis_mode() == "channel"
+    assert combo.currentData() == (fid, "torque")
+    assert w._custom_xaxis_fid is None
+    assert w._custom_xaxis_ch is None
+
+    top.chk_range.setChecked(True)
+    qapp.processEvents()
+
+    assert top.xaxis_mode() == "channel"
+    assert combo.currentData() == (fid, "torque")
+    assert w._custom_xaxis_fid is None
+    assert w._custom_xaxis_ch is None
+    assert w.view_manager.get(0).axis_opts["x_axis"]["mode"] == "time"
+
+
 def test_channel_editor_apply_preserves_checked_xlim(qapp, qtbot, loaded_csv):
     import numpy as np
     import pytest

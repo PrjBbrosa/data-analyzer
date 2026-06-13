@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import QComboBox
 
 from mf4_analyzer.ui_kit.combo_popup_shell import (
     install_combo_popup_shell,
+    prepare_combo_popup,
     _apply_shell,
 )
 from mf4_analyzer.ui_kit.widgets.searchable_combo import SearchableComboBox
@@ -61,6 +62,33 @@ def test_searchable_combo_popup_gets_shell_on_show(qapp):
         _assert_shell(combo.view().window())
     finally:
         combo.deleteLater()
+
+
+def test_prepare_combo_popup_sets_first_frame_view_chrome(qapp):
+    combo = QComboBox()
+    combo.addItems(["first", "second"])
+
+    prepare_combo_popup(combo)
+    view = combo.view()
+    viewport = view.viewport()
+
+    _assert_shell(view.window())
+    assert view.frameShape() == view.NoFrame
+    assert "background-color: #ffffff" in viewport.styleSheet()
+    assert viewport.palette().color(viewport.backgroundRole()).name().lower() == "#ffffff"
+    combo.deleteLater()
+
+
+def test_prepare_combo_popup_honors_fixed_popup_width_property(qapp):
+    combo = QComboBox()
+    combo.setProperty("popupWidth", 260)
+    combo.addItems(["short", "a much longer option"])
+
+    prepare_combo_popup(combo)
+
+    assert combo.view().minimumWidth() == 260
+    assert combo.view().maximumWidth() == 260
+    combo.deleteLater()
 
 
 def test_install_is_idempotent(qapp):
