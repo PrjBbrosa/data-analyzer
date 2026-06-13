@@ -237,6 +237,93 @@ def test_time_preview_manual_range_emits_analysis_window(canvas, qapp):
     assert emitted[-1] == pytest.approx((0.2, 0.6), abs=1e-6)
 
 
+def test_select_time_region_emits_range_without_panning(canvas):
+    t = np.linspace(0.0, 10.0, 500)
+    canvas.plot_spectra(
+        [{'label': 's', 'color': '#2563eb', 'freq': np.linspace(0, 50, 128),
+          'amp': np.ones(128), 'time': t, 'signal': np.sin(t)}],
+        xlim=(0.0, 50.0), amp_label='Amplitude', title='t')
+    x_before = tuple(canvas._plot_time.vb.viewRange()[0])
+    got = []
+    canvas.time_preview_range_changed.connect(lambda lo, hi: got.append((lo, hi)))
+    canvas.select_time_region(2.0, 6.0)
+    # region 已建立、范围已发射
+    assert canvas._time_region.isVisible()
+    assert got and got[-1][0] == pytest.approx(2.0, abs=1e-6)
+    assert got[-1][1] == pytest.approx(6.0, abs=1e-6)
+    # 关键：X 视图未被平移
+    x_after = tuple(canvas._plot_time.vb.viewRange()[0])
+    assert x_after == pytest.approx(x_before, abs=1e-6)
+
+
+def test_clear_time_region_hides_selection(canvas):
+    t = np.linspace(0.0, 10.0, 500)
+    canvas.plot_spectra(
+        [{'label': 's', 'color': '#2563eb', 'freq': np.linspace(0, 50, 128),
+          'amp': np.ones(128), 'time': t, 'signal': np.sin(t)}],
+        xlim=(0.0, 50.0), amp_label='Amplitude', title='t')
+    canvas.select_time_region(2.0, 6.0)
+    canvas.clear_time_region()
+    assert not canvas._time_region.isVisible()
+
+
+def test_time_preview_left_drag_builds_region_not_pan(canvas):
+    t = np.linspace(0.0, 10.0, 500)
+    canvas.plot_spectra(
+        [{'label': 's', 'color': '#2563eb', 'freq': np.linspace(0, 50, 128),
+          'amp': np.ones(128), 'time': t, 'signal': np.sin(t)}],
+        xlim=(0.0, 50.0), amp_label='Amplitude', title='t')
+    vb = canvas._plot_time.vb
+    from mf4_analyzer.ui.pg_canvas.line_canvas import _TimePreviewViewBox
+    assert isinstance(vb, _TimePreviewViewBox)
+    x_before = tuple(vb.viewRange()[0])
+    # 数据坐标的拖动 [3, 7] → 选区建立、X 不平移
+    vb.build_region_from_data(3.0, 7.0)
+    assert canvas._time_region.isVisible()
+    lo, hi = canvas._time_region.getRegion()
+    assert (lo, hi) == pytest.approx((3.0, 7.0), abs=1e-6)
+    assert tuple(vb.viewRange()[0]) == pytest.approx(x_before, abs=1e-6)
+
+
+def test_time_preview_menu_has_clear_selection(canvas, monkeypatch):
+    """The time-preview right-click menu carries a 「清除选区」 entry that hides
+    the active region (the amp menu does NOT — it has no region)."""
+    canvas.register_mouse_mode_controller(_FakeMouseModeController())
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0)
+    canvas.select_time_region(0.2, 0.6)
+    assert canvas._time_region.isVisible()
+
+    time_menu = _open_context_menu(canvas._plot_time.vb, monkeypatch)
+    assert time_menu is not None
+    assert "清除选区" in _menu_texts(time_menu)
+    # The amp plot has no region → no clear entry there.
+    amp_menu = _open_context_menu(canvas._plot_amp.vb, monkeypatch)
+    assert "清除选区" not in _menu_texts(amp_menu)
+
+    # Triggering the action hides the selection.
+    clear_action = next(
+        a for a in time_menu.actions()
+        if a.text().replace("&", "").strip() == "清除选区")
+    clear_action.trigger()
+    assert not canvas._time_region.isVisible()
+
+
+def test_grab_pixmap_with_active_region_not_null(canvas):
+    """Exporting while a selection region is active still produces a valid
+    pixmap (smoke) and leaves the region visible afterwards (restore)."""
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0)
+    canvas.select_time_region(0.2, 0.6)
+    pm = canvas.grab_pixmap(scale=1.0)
+    assert pm is not None and not pm.isNull()
+    assert pm.width() > 0 and pm.height() > 0
+    # The region stays visible after the grab (it was only hidden transiently).
+    assert canvas._time_region.isVisible()
+
+
 def test_fft_amp_curves_are_antialiased(canvas):
     # The FFT amplitude overlay (top row) is always antialiased — it is a
     # bounded spectrum (~freq-bin count), not a multi-million-point time

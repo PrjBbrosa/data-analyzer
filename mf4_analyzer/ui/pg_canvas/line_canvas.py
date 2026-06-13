@@ -80,6 +80,32 @@ class _AxisShim:
         self.view_box = view_box
 
 
+class _TimePreviewViewBox(_ModifierWheelViewBox):
+    """时域预览专用 ViewBox：左键拖动 = 框选 FFT 时间范围（不平移）。
+
+    其余交互（Ctrl/Shift 滚轮缩放、右键菜单）沿用父类
+    ``_ModifierWheelViewBox``（继承 ``wheelEvent`` / ``raiseContextMenu`` /
+    overlay-sync 的 sigResized/sigXRangeChanged 连接全部不变）。"""
+
+    def build_region_from_data(self, x0, x1):
+        owner = self._owner_canvas
+        if owner is not None and hasattr(owner, "select_time_region"):
+            owner.select_time_region(x0, x1)
+
+    def mouseDragEvent(self, ev, axis=None):
+        if ev.button() == Qt.LeftButton and axis is None:
+            # Left-drag on the 2D plot area frames a FFT time window instead of
+            # panning. Axis drags (axis is not None) and all other buttons fall
+            # through to the parent so Ctrl/Shift wheel-zoom, the right-click
+            # menu, and box-zoom mode keep working.
+            ev.accept()
+            p0 = self.mapToView(ev.buttonDownPos())
+            p1 = self.mapToView(ev.pos())
+            self.build_region_from_data(float(p0.x()), float(p1.x()))
+            return
+        super().mouseDragEvent(ev, axis=axis)
+
+
 class PgLineCanvas(QWidget):
     cursor_info = pyqtSignal(str)
     context_menu_requested = pyqtSignal()
@@ -105,7 +131,7 @@ class PgLineCanvas(QWidget):
         )
         self._plot_time = self._glw.addPlot(
             row=1, col=0,
-            viewBox=_ModifierWheelViewBox(owner_canvas=self),
+            viewBox=_TimePreviewViewBox(owner_canvas=self),
         )
         for p in (self._plot_amp, self._plot_time):
             _apply_neutral_axis_frame(p)
@@ -196,6 +222,43 @@ class PgLineCanvas(QWidget):
         self._split_divider.reset_requested.connect(self._on_split_reset)
         self._plot_amp.vb.sigResized.connect(self._position_collapse_ctrl)
         self._plot_amp.vb.sigResized.connect(self._position_split_divider)
+
+        # 时域预览的"框选范围做 FFT"选区。左键拖动建立（见 _TimePreviewViewBox），
+        # 区间变化驱动 time_preview_range_changed；视图不平移。
+        self._time_region = pg.LinearRegionItem(
+            brush=pg.mkBrush(37, 99, 235, 40),
+            pen=pg.mkPen('#2563eb', width=1),
+            movable=True,
+        )
+        self._time_region.setZValue(20)
+        self._time_region.setVisible(False)
+        self._plot_time.addItem(self._time_region, ignoreBounds=True)
+        self._time_region.sigRegionChangeFinished.connect(
+            self._on_time_region_changed)
+
+    # ------------------------------------------------------------------
+    # FFT time-window selection (left-drag frame-select, not pan)
+    # ------------------------------------------------------------------
+    def select_time_region(self, t0, t1):
+        """Set the FFT time-window selection to [t0, t1] (no view pan) and emit
+        the range so the FFT inspector picks it up."""
+        lo, hi = (float(t0), float(t1)) if t0 <= t1 else (float(t1), float(t0))
+        self._time_region.blockSignals(True)
+        try:
+            self._time_region.setRegion((lo, hi))
+        finally:
+            self._time_region.blockSignals(False)
+        self._time_region.setVisible(True)
+        if hi > lo:
+            self.time_preview_range_changed.emit(lo, hi)
+
+    def clear_time_region(self):
+        self._time_region.setVisible(False)
+
+    def _on_time_region_changed(self, *_args):
+        lo, hi = self._time_region.getRegion()
+        if hi > lo:
+            self.time_preview_range_changed.emit(float(lo), float(hi))
 
     # ------------------------------------------------------------------
     # Interactive vs idle curve antialiasing
@@ -408,6 +471,30 @@ class PgLineCanvas(QWidget):
             allow_y_grid=True,
             keep_plot_options=True,
         )
+        # 时域预览特有：左键拖动框选后，右键提供「清除选区」隐藏 region。Append
+        # AFTER redesign_pg_context_menu's internal reorder so it lands at the
+        # bottom (un-listed actions go last) rather than being shuffled away. The
+        # amp plot owns no region, so this entry is time-plot-only.
+        if plot is self._plot_time:
+            self._append_clear_region_action(menu)
+
+    def _append_clear_region_action(self, menu) -> None:
+        from PyQt5.QtWidgets import QAction
+        for act in menu.actions():
+            if (not act.isSeparator()
+                    and act.text().replace("&", "").strip() == "清除选区"):
+                return
+        action = QAction("清除选区", menu)
+        action.setToolTip("")
+
+        def _trigger(_checked=False):
+            try:
+                self.clear_time_region()
+            except Exception:
+                pass
+
+        action.triggered.connect(_trigger)
+        menu.addAction(action)
 
     def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
                                view_box=None):
@@ -1254,7 +1341,18 @@ class PgLineCanvas(QWidget):
 
     # ------------------------------------------------------------------
     def grab_pixmap(self, scale: float = 2.0) -> QPixmap:
-        base = self._glw.grab()
+        # The FFT time-window selection is interactive chrome, not data — keep
+        # it out of exported pixels. Hide a visible region around the grab and
+        # restore it afterward so the on-screen selection is unaffected.
+        region = getattr(self, "_time_region", None)
+        region_was_visible = bool(region is not None and region.isVisible())
+        if region_was_visible:
+            region.setVisible(False)
+        try:
+            base = self._glw.grab()
+        finally:
+            if region_was_visible:
+                region.setVisible(True)
         if base.isNull() or base.width() <= 0 or base.height() <= 0:
             fallback = QPixmap(1, 1)
             fallback.fill(Qt.transparent)
