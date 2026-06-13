@@ -77,8 +77,25 @@ def _apply_pg_text_item_font(item, point_size=9):
         pass
 
 
+def apply_global_chart_font(app=None):
+    """Set the application default font FAMILY to the resolved CJK chart family,
+    preserving the existing point size, so pyqtgraph graphics items (TextItem,
+    and axes without an explicit tickFont) stop falling back to the platform
+    default (SimSun on Windows). Family-only change keeps widget metrics stable.
+    """
+    app = app or QApplication.instance()
+    if app is None:
+        return
+    family = _pg_chart_font().family()
+    base = app.font()
+    if base.family() != family:
+        base.setFamily(family)
+        app.setFont(base)
+
+
 __all__ = [
     "_pg_chart_font",
     "_apply_pg_axis_font",
     "_apply_pg_text_item_font",
+    "apply_global_chart_font",
 ]

@@ -77,6 +77,8 @@ def main():
 
     setup_chinese_font()
     app = QApplication(sys.argv)
+    from mf4_analyzer.ui.pg_canvas.fonts import apply_global_chart_font
+    apply_global_chart_font(app)
     app.setStyle('Fusion')
     icon = _load_app_icon()
     if icon is not None:

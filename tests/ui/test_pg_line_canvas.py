@@ -962,3 +962,21 @@ def test_time_preview_disables_antialias_for_overlay(canvas):
     e2 = _entry('b', '#dc2626')
     canvas.plot_time_preview([e1, e2], title='时域预览')
     assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
+
+
+def test_apply_global_chart_font_sets_cjk_family(qapp):
+    import pyqtgraph as pg
+    from mf4_analyzer.ui.pg_canvas.fonts import (
+        apply_global_chart_font, _pg_chart_font,
+    )
+    saved = qapp.font()
+    try:
+        apply_global_chart_font(qapp)
+        family = _pg_chart_font().family()
+        # 应用默认字体 family 跟随解析出的 CJK family（字号不强制相等）
+        assert qapp.font().family() == family
+        # 未显式设字体的 pg.TextItem 继承之（标注/banner 走这条路）
+        item = pg.TextItem("x")
+        assert item.textItem.font().family() == family
+    finally:
+        qapp.setFont(saved)
