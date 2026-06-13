@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>切片方向面板 · 精简预览 v3</title>
+<style>
+  :root{
+    --panel-bg:#fbfcff; --panel-bd:#e1e7f0;
+    --toggle-bg:#eef2f8; --toggle-bd:#c7d2e2;
+    --seg-fg:#7b8699; --seg-on-bg:#2563eb;
+    --hint:#33425c; --gray:#8a94a6; --value:#1f3b63;
+    --PANEL-W:118px;            /* 面板宽度不变 */
+    --GAP:10px;                 /* 开关 → 读数 行距 */
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:34px 30px 46px;
+    background:#9aa3ad;
+    font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;
+    color:#222;
+  }
+  h1{font-size:16px;font-weight:700;color:#fff;margin:0 0 4px;}
+  .sub{font-size:12px;color:#e6ebf2;margin:0 0 28px;}
+  .row{display:flex;gap:40px;align-items:flex-start;flex-wrap:wrap;}
+  .col{display:flex;flex-direction:column;align-items:center;gap:11px;}
+  .cap{font-size:12px;font-weight:700;color:#fff;text-align:center;}
+  .cap small{display:block;font-weight:400;color:#dfe5ee;font-size:11px;margin-top:2px;}
+
+  /* ---- 面板本体（QWidget#slicePanel）---- */
+  .panel{
+    width:var(--PANEL-W);
+    background:var(--panel-bg);
+    border:1px solid var(--panel-bd);
+    border-radius:7px;
+    padding:6px 6px 8px;
+    text-align:center;          /* 让内层收缩容器水平居中 */
+  }
+  /* 收缩到内容的居中容器：宽度 = 开关行 / 读数行 里较宽者，二者由此等宽 */
+  .inner{
+    display:inline-flex;flex-direction:column;align-items:stretch;
+    text-align:initial;
+  }
+  /* ---- 分段开关（QWidget#sliceDirToggle）---- */
+  .toggle{
+    width:100%;                 /* 撑满 inner = 与读数等宽 */
+    display:flex;background:var(--toggle-bg);
+    border:1px solid var(--toggle-bd);border-radius:8px;overflow:hidden;
+  }
+  .seg{
+    flex:1;
+    display:flex;align-items:center;justify-content:center;
+    border:none;background:transparent;
+    color:var(--seg-fg);font-size:9px;font-weight:700;
+    min-height:18px;padding:0 4px;border-radius:7px;
+    cursor:pointer;user-select:none;white-space:nowrap;
+  }
+  .seg.on{background:var(--seg-on-bg);color:#fff;}
+  /* ---- 读数（QLabel#sliceHint）---- */
+  .readout{
+    width:100%;margin-top:var(--GAP);
+    text-align:center;line-height:1.1;white-space:nowrap;
+    color:var(--hint);font-size:9px;
+  }
+  .readout .g{color:var(--gray);}
+  .readout b{font-size:14px;font-weight:800;color:var(--value);}
+  .empty{
+    width:100%;margin-top:var(--GAP);
+    text-align:center;white-space:nowrap;color:var(--gray);font-size:9px;
+  }
+  .legend{margin-top:40px;max-width:680px;line-height:1.7;}
+  code{background:#00000022;padding:1px 4px;border-radius:3px;color:#fff;}
+</style>
+</head>
+<body>
+  <h1>「切片方向」面板 — 精简预览 v3</h1>
+  <p class="sub">前缀全拼 Time / Freq / Order · 开关行与读数行等宽并居中 · 开关收窄不再撑满面板 · 面板宽度仍 118px</p>
+
+  <div class="row">
+
+    <!-- 时间（FFT） -->
+    <div class="col">
+      <div class="cap">按时间<small>固定一个时间</small></div>
+      <div class="panel"><div class="inner">
+        <div class="toggle"><div class="seg on">时间</div><div class="seg">频率</div></div>
+        <div class="readout"><span class="g">Time = </span><b>1.23</b><span class="g"> s</span></div>
+      </div></div>
+    </div>
+
+    <!-- 频率（FFT） -->
+    <div class="col">
+      <div class="cap">按频率<small>固定一个频率</small></div>
+      <div class="panel"><div class="inner">
+        <div class="toggle"><div class="seg">时间</div><div class="seg on">频率</div></div>
+        <div class="readout"><span class="g">Freq = </span><b>50.0</b><span class="g"> Hz</span></div>
+      </div></div>
+    </div>
+
+    <!-- 阶次（Order） -->
+    <div class="col">
+      <div class="cap">按阶次<small>阶次分析模式</small></div>
+      <div class="panel"><div class="inner">
+        <div class="toggle"><div class="seg">时间</div><div class="seg on">阶次</div></div>
+        <div class="readout"><span class="g">Order = </span><b>3.00</b></div>
+      </div></div>
+    </div>
+
+    <!-- 未选 -->
+    <div class="col">
+      <div class="cap">未选切片<small>空态</small></div>
+      <div class="panel"><div class="inner">
+        <div class="toggle"><div class="seg on">时间</div><div class="seg">频率</div></div>
+        <div class="empty">点击图中选择切片</div>
+      </div></div>
+    </div>
+
+  </div>
+
+  <p class="legend sub">
+    说明：开关与读数包在同一个「收缩到内容」的居中容器里，容器宽度自动取两行中较宽的一条，
+    所以<strong>两行严格等宽</strong>且共中轴；开关因此从撑满面板收窄到内容宽度（更窄）。
+    读数随方向：<code>Time = 1.23 s</code> / <code>Freq = 50.0 Hz</code> / <code>Order = 3.00</code>。
+    空态那一栏因「点击图中选择切片」较长，容器会按它取宽——若想空态也保持同样窄，可改成更短的提示（如 <code>未选切片</code>）。
+  </p>
+</body>
+</html>

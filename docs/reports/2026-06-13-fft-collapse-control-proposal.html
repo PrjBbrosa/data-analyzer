@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FFT 折叠按钮 / 分割线 / 拖动改造方案</title>
+<style>
+  :root{
+    --ink:#1f2937; --muted:#6b7280; --line:#e3e8f0; --bg:#f5f7fb;
+    --accent:#2563eb; --accent-soft:#e8f0ff; --seg-border:#c9d3e1;
+    --gut:#7b8699; --bad:#ef4444; --good:#16a34a;
+    --plot-grid:#eef2f7; --plot-axis:#9aa5b4; --plot-line:#2563eb;
+    --plot-line2:#f59e0b; --divider:#c7d2e2; --divider-hot:#2563eb;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",
+                "Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+    font-size:13px; line-height:1.55; padding:28px 32px 60px;
+  }
+  h1{font-size:20px; margin:0 0 4px; letter-spacing:.2px;}
+  .sub{color:var(--muted); margin:0 0 22px; font-size:12.5px;}
+  h2{font-size:14px; margin:30px 0 12px; padding-bottom:7px;
+     border-bottom:1px solid var(--line); letter-spacing:.3px;}
+  code{font-family:"SF Mono",Menlo,Consolas,monospace; font-size:11.5px;
+       background:#eef2f7; padding:1px 5px; border-radius:4px; color:#334155;}
+
+  .probs{display:flex; gap:14px; flex-wrap:wrap; margin-bottom:8px;}
+  .prob{flex:1 1 200px; background:#fff; border:1px solid var(--line);
+        border-radius:10px; padding:13px 15px;}
+  .prob .tag{display:inline-block; font-size:10.5px; font-weight:700;
+        color:#fff; background:var(--good); border-radius:6px;
+        padding:1px 8px; margin-bottom:7px; letter-spacing:.4px;}
+  .prob b{display:block; margin-bottom:3px; font-size:12.5px;}
+  .prob p{margin:0; color:var(--muted); font-size:11.5px;}
+
+  .ctl{display:flex; align-items:center; gap:10px; margin:6px 0 20px;}
+  .seg{display:inline-flex; background:#fff; border:1px solid var(--seg-border);
+       border-radius:9px; overflow:hidden;}
+  .seg button{border:none; background:#fff; color:var(--gut); font-size:12px;
+       font-weight:600; padding:6px 16px; cursor:pointer;}
+  .seg button.on{background:var(--accent); color:#fff;}
+  .ctl .note{font-size:11.5px; color:var(--muted);}
+
+  .row{display:flex; gap:26px; align-items:flex-start; flex-wrap:wrap;}
+  .col{flex:0 0 auto;}
+  .col h3{font-size:12px; margin:0 0 9px; color:var(--muted); font-weight:600;
+          text-align:center; letter-spacing:.3px;}
+  .col h3 em{font-style:normal; color:var(--accent); font-weight:700;}
+
+  .card{width:340px; background:#fff; border:1px solid var(--line);
+        border-radius:10px; padding:8px 8px 0; box-shadow:0 1px 3px rgba(20,30,60,.05);}
+  .toolbar{display:flex; gap:5px; align-items:center; height:26px;
+           padding:0 2px 5px; border-bottom:1px solid var(--line); margin-bottom:6px;}
+  .tbtn{width:18px; height:18px; border-radius:4px; background:#f1f5fb;}
+  .hintbar{height:20px; border-top:1px solid var(--line); margin-top:6px;
+           display:flex; align-items:center; color:#aeb6c2; font-size:9.5px;
+           padding:0 4px;}
+
+  .stage{position:relative; user-select:none;}
+  svg{display:block;}
+
+  /* OLD two-segment control */
+  .old-ctrl{position:absolute; display:flex; flex-direction:column;}
+  .old-ctrl button{width:18px; height:14px; border:1px solid var(--seg-border);
+        background:#fff; color:var(--gut); font-size:9px; line-height:1; padding:0;
+        cursor:pointer; display:flex; align-items:center; justify-content:center;}
+  .old-ctrl button:first-child{border-radius:4px 4px 0 0; border-bottom:none;}
+  .old-ctrl button:last-child{border-radius:0 0 4px 4px;}
+
+  /* NEW single small triangle */
+  .new-ctrl{position:absolute; width:16px; height:16px; border:1px solid var(--seg-border);
+        background:#fff; border-radius:4px; cursor:pointer; padding:0; z-index:6;
+        display:flex; align-items:center; justify-content:center;
+        box-shadow:0 1px 2px rgba(20,30,60,.06);}
+  .new-ctrl:hover{background:#f1f5fb;}
+  .new-ctrl svg{width:8px; height:8px; transition:transform .18s ease;}
+  .new-ctrl .tri{fill:var(--gut);}
+  .new-ctrl.collapsed{background:var(--accent-soft); border-color:#b9ceff;}
+  .new-ctrl.collapsed .tri{fill:var(--accent);}
+  .new-ctrl.collapsed svg{transform:rotate(-90deg);}
+
+  /* drag grab-strip over the divider */
+  .grip{position:absolute; left:0; height:11px; cursor:ns-resize; z-index:5;}
+  .grip:hover .gline, .grip.drag .gline{background:var(--divider-hot); height:2px;}
+  .gline{position:absolute; left:0; right:0; top:5px; height:1.4px;
+         background:var(--divider);}
+  .grip .pip{position:absolute; left:50%; top:2px; width:26px; height:6px;
+         transform:translateX(-50%); display:flex; gap:2px; align-items:center;
+         justify-content:center; opacity:0; transition:opacity .12s;}
+  .grip:hover .pip, .grip.drag .pip{opacity:1;}
+  .grip .pip i{width:3px; height:3px; border-radius:50%; background:var(--divider-hot);}
+
+  .ratio{position:absolute; right:6px; background:rgba(37,99,235,.92); color:#fff;
+         font-size:10px; font-weight:700; padding:2px 7px; border-radius:6px;
+         z-index:7; pointer-events:none; opacity:0; transition:opacity .1s;
+         font-family:"SF Mono",Menlo,monospace;}
+  .ratio.show{opacity:1;}
+
+  .callout{position:absolute; font-size:10.5px; color:var(--bad); font-weight:600;
+           white-space:nowrap; pointer-events:none;}
+
+  .legend{margin-top:10px; display:flex; gap:18px; flex-wrap:wrap;
+          font-size:11px; color:var(--muted);}
+  .legend span{display:inline-flex; align-items:center; gap:6px;}
+  .swatch{width:22px; height:0; border-top:2px solid var(--divider);}
+  .swatch.tri{width:14px;height:14px;border:1px solid var(--seg-border);
+        border-radius:3px;border-top:1px solid var(--seg-border);}
+
+  table{border-collapse:collapse; width:100%; max-width:960px; margin-top:6px; font-size:12px;}
+  th,td{border:1px solid var(--line); padding:7px 11px; text-align:left; vertical-align:top;}
+  th{background:#f0f4fa; font-weight:700; font-size:11.5px;}
+  td code{font-size:11px;}
+  .rules{background:#fff; border:1px solid var(--line); border-radius:10px;
+         padding:4px 20px; max-width:960px;}
+  .rules li{margin:9px 0; font-size:12.5px;}
+  .rules li b{color:var(--accent);}
+  .k{display:inline-block; min-width:64px; font-weight:700; color:var(--ink);}
+</style>
+</head>
+<body>
+
+<h1>FFT 折叠控件 / 分割线 / 拖动调整 — 改造方案 v2</h1>
+<p class="sub">2026-06-13 · 三个原始问题（按钮、位置、分割线）已确认方向；本版加入「拖动分割线调整两图大小」的完整交互。下方「改造后」面板里：<b>拖中间那条线</b>可改比例，<b>双击线</b>回默认，<b>点左侧小三角</b>折叠/恢复下图。</p>
+
+<div class="probs">
+  <div class="prob"><span class="tag">已定 1</span><b>一个小三角</b>
+    <p>替换 ▲▼ 两段为单个三角（约 16×16），折叠时转 90° 高亮。</p></div>
+  <div class="prob"><span class="tag">已定 2</span><b>位置对齐</b>
+    <p>FFT 改用 <code>rect.left()-w-8</code>，与 Order/FFTvsTime 一致（外侧 gutter）。</p></div>
+  <div class="prob"><span class="tag">已定 3</span><b>分割线</b>
+    <p>两图边界补 1px 线，并作为拖动手柄。</p></div>
+  <div class="prob"><span class="tag">新增 4</span><b>拖动调整</b>
+    <p>分割线可上下拖动改变上下两图比例（本版重点）。</p></div>
+</div>
+
+<div class="ctl">
+  <div class="seg" id="seg">
+    <button data-v="cur" class="on">改造前</button>
+    <button data-v="new">改造后（可拖 / 可折叠）</button>
+  </div>
+  <span class="note" id="note"></span>
+</div>
+
+<div class="row" id="row">
+  <div class="col">
+    <h3>FFT section</h3>
+    <div class="card">
+      <div class="toolbar"><div class="tbtn"></div><div class="tbtn"></div><div class="tbtn"></div>
+        <div style="flex:1"></div><div class="tbtn"></div><div class="tbtn"></div></div>
+      <div class="stage" id="fftStage"></div>
+      <div class="hintbar">拖分割线调大小 · 双击重置 · 小三角折叠</div>
+    </div>
+  </div>
+  <div class="col">
+    <h3>Order section <em>（位置 / 分割线基准）</em></h3>
+    <div class="card">
+      <div class="toolbar"><div class="tbtn"></div><div class="tbtn"></div><div class="tbtn"></div>
+        <div style="flex:1"></div><div class="tbtn"></div><div class="tbtn"></div></div>
+      <div class="stage" id="ordStage"></div>
+      <div class="hintbar">拖分割线调大小 · 双击重置 · 小三角折叠</div>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <span><span class="swatch"></span> 分割线（兼拖动手柄，hover 变蓝 + 抓点）</span>
+  <span><span class="swatch tri"></span> 小三角（折叠/恢复下图）</span>
+</div>
+
+<h2>交互逻辑（你提的两个问题的答案）</h2>
+<ul class="rules">
+  <li><span class="k">拖动</span><b>拖分割线 = 任意比例调整上下两图。</b>可以拖到对半甚至更极端，但<b>两边各留最小高度（拖不到 0）</b>。"只看一张图"由三角负责，拖动不把谁拖没 —— 折叠入口只有一个，心智干净。</li>
+  <li><span class="k">折叠</span><b>小三角 = 完全折叠 / 恢复下图。</b>折叠时下图 height→0、上图占满，三角转 90° 高亮。</li>
+  <li><span class="k">恢复</span><b>折叠后恢复 → 回到「你上次拖的比例」（记住），不是固定默认。</b>三角=临时最大化主图的开关，恢复时把你之前的布局原样还回来（没拖过就是默认 60/40）。同 IDE 面板折叠再展开的习惯。</li>
+  <li><span class="k">重置</span><b>双击分割线 = 回默认比例（60/40）。</b>给一个"拖乱了想还原"的明确入口。</li>
+  <li><span class="k">边界</span>拖动时只在「两图都显示」时可用；折叠状态下没有分割线可拖，只有三角生效。窗口 resize 时按记住的比例重算，下图不会突然变形。</li>
+</ul>
+
+<h2>落地改动</h2>
+<table>
+  <tr><th>项</th><th>文件 / 位置</th><th>改动</th></tr>
+  <tr><td>① 小三角</td><td><code>heatmap_canvas.py</code>·<code>_PlotCollapseControl</code></td>
+    <td>▲▼ 两段 → 单三角按钮，两态（展开/折叠）。</td></tr>
+  <tr><td>② 位置</td><td><code>line_canvas.py:663</code></td>
+    <td><code>x=rect.left()+2</code> → <code>rect.left()-ctrl.width()-8</code>。</td></tr>
+  <tr><td>③ 分割线</td><td>两 canvas 共用新 helper</td>
+    <td>边界画 1px 线（<code>#c7d2e2</code>），随 resize/折叠/拖动重定位。</td></tr>
+  <tr><td>④ 拖动</td><td>新增 <code>_SplitDragHandle</code>（覆盖在分割线上的窄条）</td>
+    <td>状态 <code>_split_ratio</code>（默认 0.60）；拖动更新它并夹紧上下最小高度；松手记住；折叠用 <code>setMaximumHeight(0)</code>、恢复用 <code>_split_ratio</code> 反算行高；双击 reset。替换现在写死的 <code>bottom_default_max</code>(170/140)。</td></tr>
+</table>
+
+<script>
+const NS="http://www.w3.org/2000/svg";
+const W=324, H=250;
+const PADL=34, PADR=12, PADT=8, PADB=22, GAP=10;
+const DEF_RATIO=0.60, MIN_TOP=50, MIN_BOT=42;
+const innerTop=PADT, innerH=H-PADT-PADB, usable=innerH-GAP;
+
+function el(t,a){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+
+function axes(svg,x,y,w,h){
+  if(h<=2)return;
+  svg.appendChild(el("rect",{x,y,width:w,height:h,fill:"#fff",stroke:"#d7deea","stroke-width":1}));
+  for(let i=1;i<5;i++){const gx=x+w*i/5;svg.appendChild(el("line",{x1:gx,y1:y,x2:gx,y2:y+h,stroke:"var(--plot-grid)"}));}
+  for(let i=1;i<4;i++){const gy=y+h*i/4;svg.appendChild(el("line",{x1:x,y1:gy,x2:x+w,y2:gy,stroke:"var(--plot-grid)"}));}
+}
+function spectrum(svg,x,y,w,h){if(h<=4)return;let d=`M ${x} ${y+h-2}`;
+  const pk=[[0.12,0.85],[0.27,0.42],[0.5,0.7],[0.68,0.3],[0.83,0.55]];
+  for(let i=0;i<=60;i++){const t=i/60;let v=0.04;pk.forEach(([p,a])=>{v+=a*Math.exp(-Math.pow((t-p)/0.025,2));});
+    v=Math.min(v,1);d+=` L ${x+w*t} ${y+h-2-(h-6)*v}`;}
+  svg.appendChild(el("path",{d,fill:"none",stroke:"var(--plot-line)","stroke-width":1.3}));}
+function timewave(svg,x,y,w,h){if(h<=4)return;let d=`M ${x} ${y+h/2}`;
+  for(let i=0;i<=80;i++){const t=i/80;const v=Math.sin(t*22)*0.6*Math.exp(-t*0.4)+Math.sin(t*7)*0.2;
+    d+=` L ${x+w*t} ${y+h/2-(h/2-4)*v}`;}
+  svg.appendChild(el("path",{d,fill:"none",stroke:"var(--plot-line2)","stroke-width":1.1}));}
+function heatmap(svg,x,y,w,h){if(h<=4)return;const cols=26,rows=10,cw=w/cols,ch=h/rows;
+  for(let c=0;c<cols;c++)for(let r=0;r<rows;r++){const t=c/cols,f=r/rows;
+    let v=0.15+0.8*Math.exp(-Math.pow((f-0.3-0.15*Math.sin(t*6))/0.16,2))*(0.5+0.5*t);
+    v=Math.min(Math.max(v,0),1);
+    svg.appendChild(el("rect",{x:x+c*cw,y:y+r*ch,width:cw+0.5,height:ch+0.5,fill:viridis(v)}));}
+  svg.appendChild(el("rect",{x,y,width:w,height:h,fill:"none",stroke:"#d7deea"}));}
+function sliceplot(svg,x,y,w,h){if(h<=4)return;let d=`M ${x} ${y+h-2}`;
+  for(let i=0;i<=60;i++){const t=i/60;const v=Math.exp(-Math.pow((t-0.4)/0.12,2))*0.9+Math.exp(-Math.pow((t-0.72)/0.07,2))*0.5;
+    d+=` L ${x+w*t} ${y+h-2-(h-6)*Math.min(v,1)}`;}
+  svg.appendChild(el("path",{d,fill:"none",stroke:"#0ea5b7","stroke-width":1.2}));}
+function viridis(t){const s=[[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+  const z=t*(s.length-1),i=Math.floor(z),f=z-i,a=s[i],b=s[Math.min(i+1,s.length-1)];
+  const c=a.map((v,k)=>Math.round(v+(b[k]-v)*f));return `rgb(${c[0]},${c[1]},${c[2]})`;}
+function xlabel(svg,text,x,y,w){const t=el("text",{x:x+w/2,y,"text-anchor":"middle","font-size":10,fill:"var(--muted)"});
+  t.textContent=text;svg.appendChild(t);}
+
+function build(stageId,kind,view){
+  const stage=document.getElementById(stageId);
+  stage.innerHTML="";
+  const ratio = stage.dataset.ratio? parseFloat(stage.dataset.ratio): DEF_RATIO;
+  const collapsed = stage.dataset.collapsed==="1";
+  const px=PADL, pw=W-PADL-PADR;
+  let topH, botH, splitY;
+  if(collapsed){ topH=innerH; botH=0; splitY=innerTop+topH; }
+  else { topH=Math.round(usable*ratio); botH=usable-topH; splitY=innerTop+topH; }
+
+  const svg=el("svg",{width:W,height:H,viewBox:`0 0 ${W} ${H}`});
+  axes(svg,px,innerTop,pw,topH);
+  if(kind==='fft') spectrum(svg,px,innerTop,pw,topH); else heatmap(svg,px,innerTop,pw,topH);
+  if(!collapsed){
+    const by=splitY+GAP;
+    axes(svg,px,by,pw,botH);
+    if(kind==='fft') timewave(svg,px,by,pw,botH); else sliceplot(svg,px,by,pw,botH);
+    xlabel(svg,kind==='fft'?'Frequency (Hz)':'Order',px,by+botH+15,pw);
+  } else xlabel(svg,kind==='fft'?'Frequency (Hz)':'Order',px,innerTop+topH+15,pw);
+  stage.appendChild(svg);
+
+  const cy = collapsed ? (innerTop+topH-8) : (splitY+GAP/2-8);
+
+  if(view==='cur'){
+    // OLD two-seg control. FFT = inside-left (problem); Order = gutter.
+    const c=document.createElement("div"); c.className="old-ctrl";
+    const left = kind==='fft' ? (px+2) : (px-18-8);
+    c.style.left=left+"px"; c.style.top=(splitY-14)+"px";
+    c.innerHTML="<button>▲</button><button>▼</button>";
+    stage.appendChild(c);
+    if(kind==='fft'){
+      addCallout(stage,"两段太大 / 压在轴内侧",px+24,splitY-6);
+      addCallout(stage,"缺分割线",px+pw*0.45,splitY-2);
+    }
+    return;
+  }
+
+  // NEW view: divider + drag grip + triangle ----------------------------
+  if(!collapsed){
+    const grip=document.createElement("div");
+    grip.className="grip"; grip.style.width=W+"px";
+    grip.style.top=(splitY+GAP/2-5)+"px";
+    grip.innerHTML='<div class="gline"></div><div class="pip"><i></i><i></i><i></i></div>';
+    stage.appendChild(grip);
+    attachDrag(grip,stage,stageId,kind);
+    grip.addEventListener("dblclick",()=>{ stage.dataset.ratio=DEF_RATIO; build(stageId,kind,"new"); });
+  } else {
+    // collapsed: faint line at the very bottom edge of the now-full top plot
+    const ln=document.createElement("div");
+    ln.style.cssText=`position:absolute;left:0;width:${W}px;top:${innerTop+topH+4}px;height:1px;background:var(--divider);opacity:.5;`;
+    stage.appendChild(ln);
+  }
+
+  const b=document.createElement("button");
+  b.className="new-ctrl"+(collapsed?" collapsed":"");
+  b.style.left=(px-16-8)+"px"; b.style.top=cy+"px";
+  b.title=collapsed?"恢复下图（回到上次比例）":"折叠下图";
+  b.innerHTML='<svg viewBox="0 0 10 10"><path class="tri" d="M1 3 L9 3 L5 8 Z"/></svg>';
+  b.onclick=()=>{ stage.dataset.collapsed=collapsed?"0":"1"; build(stageId,kind,"new"); };
+  stage.appendChild(b);
+
+  // ratio readout pill
+  const pill=document.createElement("div"); pill.className="ratio"; pill.id=stageId+"_pill";
+  pill.style.top=(splitY-9)+"px";
+  stage.appendChild(pill);
+}
+
+function attachDrag(grip,stage,stageId,kind){
+  grip.addEventListener("mousedown",e=>{
+    e.preventDefault(); grip.classList.add("drag");
+    const pill=document.getElementById(stageId+"_pill");
+    const rect=stage.getBoundingClientRect();
+    const move=ev=>{
+      let topH = ev.clientY-rect.top-innerTop-GAP/2;
+      topH=Math.max(MIN_TOP,Math.min(usable-MIN_BOT,topH));
+      const ratio=topH/usable;
+      stage.dataset.ratio=ratio;
+      if(pill){const tp=Math.round(ratio*100); pill.textContent=`上 ${tp}% / 下 ${100-tp}%`;
+        pill.classList.add("show"); pill.style.top=(innerTop+topH-9)+"px";}
+      // live redraw without rebuilding the grip (keep dragging smooth)
+      redrawPlots(stage,kind,ratio);
+      const sY=innerTop+topH;
+      grip.style.top=(sY+GAP/2-5)+"px";
+      const tri=stage.querySelector(".new-ctrl"); if(tri) tri.style.top=(sY+GAP/2-8)+"px";
+    };
+    const up=()=>{ grip.classList.remove("drag");
+      if(pill)pill.classList.remove("show");
+      document.removeEventListener("mousemove",move);
+      document.removeEventListener("mouseup",up);
+      build(stageId,kind,"new"); };
+    document.addEventListener("mousemove",move);
+    document.addEventListener("mouseup",up);
+  });
+}
+
+function redrawPlots(stage,kind,ratio){
+  const svg=stage.querySelector("svg"); if(!svg)return;
+  while(svg.firstChild)svg.removeChild(svg.firstChild);
+  const px=PADL, pw=W-PADL-PADR;
+  const topH=Math.round(usable*ratio), botH=usable-topH, splitY=innerTop+topH;
+  axes(svg,px,innerTop,pw,topH);
+  if(kind==='fft')spectrum(svg,px,innerTop,pw,topH);else heatmap(svg,px,innerTop,pw,topH);
+  const by=splitY+GAP; axes(svg,px,by,pw,botH);
+  if(kind==='fft')timewave(svg,px,by,pw,botH);else sliceplot(svg,px,by,pw,botH);
+  xlabel(svg,kind==='fft'?'Frequency (Hz)':'Order',px,by+botH+15,pw);
+}
+
+function addCallout(stage,text,x,y){const c=document.createElement("div");
+  c.className="callout";c.textContent=text;c.style.left=x+"px";c.style.top=y+"px";stage.appendChild(c);}
+
+function render(view){
+  ["fftStage","ordStage"].forEach(id=>{const s=document.getElementById(id);
+    s.dataset.collapsed="0"; s.dataset.ratio=DEF_RATIO;});
+  build("fftStage","fft",view); build("ordStage","order",view);
+  document.getElementById("note").textContent =
+    view==='cur' ? "改造前：FFT 按钮压在轴内侧、两段过大、无分割线"
+                 : "改造后：拖中间线调比例 · 双击线回默认 · 小三角折叠/恢复";
+}
+document.getElementById("seg").addEventListener("click",e=>{
+  const btn=e.target.closest("button");if(!btn)return;
+  [...document.querySelectorAll("#seg button")].forEach(b=>b.classList.remove("on"));
+  btn.classList.add("on"); render(btn.dataset.v);
+});
+render("cur");
+</script>
+</body>
+</html>
