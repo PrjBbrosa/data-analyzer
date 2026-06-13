@@ -245,6 +245,60 @@ def test_fft_amp_curves_are_antialiased(canvas):
     assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
 
 
+def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp):
+    """During a user pan the overlaid FFT curves must drop antialiasing for a
+    cheap raster — mirroring the time-domain canvas's interactive-quality
+    policy — then restore crisp AA after a hands-off idle tick. Previously the
+    amp curves were ``antialias=True`` permanently with no interactive hook, so
+    dragging a multi-curve spectrum re-rasterized AA every frame and stuttered.
+    """
+    canvas.show()
+    qapp.processEvents()
+    canvas.plot_spectra(
+        [_entry(), _entry('f2 · vib', '#dc2626')],
+        xlim=(0.0, 500.0), amp_label='Amplitude', title='FFT',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    assert len(canvas._amp_curves) == 2
+    # A fresh plot leaves the spectrum crisp (programmatic range, not a drag).
+    assert all(c.opts.get('antialias') is True for c in canvas._amp_curves)
+
+    # Simulate a user pan: pyqtgraph's ViewBox.mouseDragEvent emits
+    # sigRangeChangedManually on every drag move, unlike a programmatic setRange.
+    vb = canvas._plot_amp.vb
+    vb.sigRangeChangedManually.emit(vb.state['mouseEnabled'])
+    assert all(c.opts.get('antialias') is False for c in canvas._amp_curves), \
+        "pan must drop AA on the overlaid FFT curves"
+    assert canvas._aa_on is False
+
+    # Hands-off idle tick restores AA on the spectrum overlay.
+    canvas._enable_idle_quality()
+    assert canvas._aa_on is True
+    assert all(c.opts.get('antialias') is True for c in canvas._amp_curves), \
+        "idle restores crisp AA on the spectrum"
+    # The two-source time preview stays AA-off even when idle (overlay perf).
+    assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
+
+
+def test_fft_ctrl_wheel_zoom_drops_curve_aa(canvas):
+    """The custom ctrl/shift wheel zoom sets the range programmatically (no
+    sigRangeChangedManually), so it must drop AA explicitly via the wheel
+    dispatch hook the same way a drag does."""
+    canvas.plot_spectra(
+        [_entry(), _entry('f2 · vib', '#dc2626')],
+        xlim=(0.0, 500.0), amp_label='Amplitude', title='FFT',
+        y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    assert all(c.opts.get('antialias') is True for c in canvas._amp_curves)
+    consumed = canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier, x_pos=250.0, y_pos=0.5,
+        view_box=canvas._plot_amp.vb,
+    )
+    assert consumed is True
+    assert all(c.opts.get('antialias') is False for c in canvas._amp_curves), \
+        "ctrl-wheel zoom must drop AA for the interactive raster"
+
+
 def test_plot_spectra_overlay_n(canvas):
     canvas.plot_spectra(
         [_entry('a', '#2563eb'), _entry('b', '#dc2626'), _entry('c', '#16a34a')],

@@ -8,9 +8,9 @@ breaks grab_pixmap exports on this project.
 from __future__ import annotations
 
 import numpy as np
-from PyQt5.QtCore import QPointF, Qt, pyqtSignal
+from PyQt5.QtCore import QPointF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 import pyqtgraph as pg
 
 from mf4_analyzer.ui.canvases import build_envelope
@@ -107,8 +107,100 @@ class PgLineCanvas(QWidget):
         self._spectrum_stale = False
         self._stale_banner = None
 
+        # Interactive curve-AA policy (mirrors the time-domain canvas): drop
+        # antialiasing while the user pans/zooms so each frame is a cheap
+        # non-AA raster, then restore crisp AA after a short hands-off idle.
+        self._aa_on = True
+        self._aa_idle_timer = QTimer(self)
+        self._aa_idle_timer.setSingleShot(True)
+        self._aa_idle_timer.setInterval(150)
+        self._aa_idle_timer.timeout.connect(self._enable_idle_quality)
+        for _p in (self._plot_amp, self._plot_time):
+            # Pan / box-zoom / plain wheel emit sigRangeChangedManually (a
+            # programmatic setRange, e.g. plot_spectra, does NOT — so a fresh
+            # plot stays crisp). The custom ctrl/shift wheel zoom is hooked
+            # separately in _handle_wheel_dispatch.
+            _p.vb.sigRangeChangedManually.connect(
+                self._on_interactive_range_changed)
+
         self._glw.scene().sigMouseMoved.connect(self._on_hover)
         self._glw.scene().sigMouseClicked.connect(self._on_click)
+
+    # ------------------------------------------------------------------
+    # Interactive vs idle curve antialiasing
+    # ------------------------------------------------------------------
+    # FFT curves are few but can be dense (nfft/2 bins × overlaid sources), and
+    # overlaying multiple antialiased curves is CPU-raster bound (project
+    # lesson: TimeDomain 卡顿=CPU 光栅, 随 overlay 通道数超线性). Re-rasterizing
+    # AA on every drag frame is the dominant pan/zoom cost, so AA is dropped for
+    # the interactive path and restored once the view settles.
+    def _interactive_curves(self):
+        return [*self._amp_curves, *self._time_curves]
+
+    @staticmethod
+    def _set_curve_aa(curve, on):
+        try:
+            curve.opts["antialias"] = bool(on)
+        except Exception:
+            pass
+
+    def _apply_idle_curve_aa(self):
+        """Restore each curve's settled-state AA: the amplitude overlay is
+        always crisp; the time preview keeps AA off whenever more than one
+        source is overlaid (its creation policy in
+        ``_plot_time_preview_entries``)."""
+        time_idle_aa = len(self._time_curves) <= 1
+        for c in self._amp_curves:
+            self._set_curve_aa(c, True)
+        for c in self._time_curves:
+            self._set_curve_aa(c, time_idle_aa)
+
+    def disable_interactive_quality(self):
+        """Drop curve AA for the interactive (pan/zoom) path and cancel any
+        pending idle upgrade. Also invoked by the ViewBox drag hook
+        (``_ModifierWheelViewBox.mouseDragEvent``)."""
+        try:
+            self._aa_idle_timer.stop()
+        except Exception:
+            pass
+        if not self._aa_on:
+            return
+        for c in self._interactive_curves():
+            self._set_curve_aa(c, False)
+        self._aa_on = False
+        try:
+            self._glw.update()
+        except Exception:
+            pass
+
+    def schedule_idle_quality(self):
+        """Re-arm the idle-AA timer after a settled interaction."""
+        try:
+            self._aa_idle_timer.start()
+        except Exception:
+            pass
+
+    def _enable_idle_quality(self):
+        """Idle-timer slot: restore crisp AA once the user is hands-off. If a
+        mouse button is still down the gesture is ongoing, so re-arm instead."""
+        if self._aa_on:
+            return
+        try:
+            if QApplication.mouseButtons() != Qt.NoButton:
+                self._aa_idle_timer.start()
+                return
+        except Exception:
+            pass
+        self._apply_idle_curve_aa()
+        self._aa_on = True
+        try:
+            self._glw.update()
+        except Exception:
+            pass
+
+    def _on_interactive_range_changed(self, *_args):
+        self.disable_interactive_quality()
+        self.schedule_idle_quality()
 
     def register_mouse_mode_controller(self, controller) -> None:
         self._mouse_mode_controller = controller
@@ -161,6 +253,10 @@ class PgLineCanvas(QWidget):
                 )
         except Exception:
             return False
+        # This zoom sets the range programmatically (no sigRangeChangedManually),
+        # so drop AA for the interactive raster and re-arm the idle restore here.
+        self.disable_interactive_quality()
+        self.schedule_idle_quality()
         self.layout_geometry_changed.emit()
         return True
 
