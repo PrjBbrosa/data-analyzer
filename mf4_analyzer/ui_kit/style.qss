@@ -1172,25 +1172,36 @@ QWidget#sliceDirToggle QPushButton[role="slice-seg"]:checked {
 }
 QLabel#sliceHint {
     color: #33425c;
-    font-size: 11px;
+    font-size: 9px;
     background: transparent;
+}
+
+QLabel#slicePanelTitle {
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QWidget#sliceDirToggle QPushButton[role="slice-seg"] {
+    font-size: 9px;
+    min-height: 18px;
+    padding: 0 3px;
 }
 
 /* 2026-06-13 collapse divider — flat narrow capsule, left-aligned on the
  * divider. ▲ folds the top plot, ▼ folds the bottom; the folded segment is
  * highlighted (the glyph never flips). */
 QWidget#plotCollapseBar {
-    background-color: #ffffff;
-    border: 1px solid #d4dbe6;
-    border-radius: 7px;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
 }
 QWidget#plotCollapseBar QPushButton[role="collapse-seg"] {
-    border: none;
-    background: transparent;
+    border: 1px solid #c9d3e1;
+    background: #ffffff;
     color: #7b8699;
     font-size: 9px;
     padding: 0;
-    border-radius: 6px;
+    border-radius: 4px;
 }
 QWidget#plotCollapseBar QPushButton[role="collapse-seg"]:hover {
     background-color: #f1f5fb;

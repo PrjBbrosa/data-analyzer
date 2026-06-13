@@ -96,7 +96,7 @@ class _PlotCollapseControl(QWidget):
         self.setObjectName("plotCollapseBar")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._state = 'none'
-        box = QHBoxLayout(self)
+        box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(0)
         self._btn_up = QPushButton('▲', self)
@@ -105,7 +105,7 @@ class _PlotCollapseControl(QWidget):
             b.setCheckable(True)
             b.setProperty('role', 'collapse-seg')
             b.setCursor(Qt.PointingHandCursor)
-            b.setFixedSize(QSize(24, 14))
+            b.setFixedSize(QSize(18, 14))
             b.clicked.connect(lambda _=False, _d=d: self._toggle(_d))
         self._btn_up.setToolTip('折叠上图')
         self._btn_down.setToolTip('折叠下图')
@@ -463,8 +463,8 @@ class PgHeatmapCanvas(QWidget):
             self._slice_panel.setObjectName("slicePanel")
             self._slice_panel.setAttribute(Qt.WA_StyledBackground, True)
             pl = QVBoxLayout(self._slice_panel)
-            pl.setContentsMargins(8, 7, 8, 7)
-            pl.setSpacing(6)
+            pl.setContentsMargins(6, 5, 6, 5)
+            pl.setSpacing(4)
             _title = QLabel('切片方向', self._slice_panel)
             _title.setObjectName('slicePanelTitle')
             pl.addWidget(_title)
@@ -998,6 +998,11 @@ class PgHeatmapCanvas(QWidget):
     def _position_slice_panel(self) -> None:
         """Pin the slice info panel into the colorbar column (right of the
         aligned slice plot, below the colorbar)."""
+        ctrl = getattr(self, '_collapse_ctrl', None)
+        if ctrl is not None and ctrl.state() == 'bottom':
+            if self._slice_panel is not None:
+                self._slice_panel.hide()
+            return
         if self._slice_panel is None or self._slice_plot is None:
             return
         try:
@@ -1025,10 +1030,13 @@ class PgHeatmapCanvas(QWidget):
         if self._slice_plot is None:
             return
         _apply_plot_collapse(self._plot, self._slice_plot, state, 140)
+        if self._slice_panel is not None:
+            self._slice_panel.setVisible(state != 'bottom')
         self._position_collapse_ctrl()
         if state == 'none':
             self._align_slice_to_main()
-        self._position_slice_panel()
+        if state != 'bottom':
+            self._position_slice_panel()
         self.layout_geometry_changed.emit()
 
     def _position_collapse_ctrl(self, *_args) -> None:
@@ -1040,7 +1048,7 @@ class PgHeatmapCanvas(QWidget):
         except Exception:
             return
         ctrl.adjustSize()
-        x = int(rect.left() + 2)
+        x = int(rect.left() - ctrl.width() - 8)
         y = int(rect.bottom() - ctrl.height() / 2)
         ctrl.move(max(0, x), max(0, y))
         ctrl.raise_()
