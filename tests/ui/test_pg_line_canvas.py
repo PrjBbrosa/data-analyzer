@@ -639,6 +639,21 @@ def test_line_canvas_grid_is_major_only(canvas):
             )
 
 
+def test_grid_only_on_left_and_bottom(canvas):
+    for plot in (canvas._plot_amp, canvas._plot_time):
+        assert plot.getAxis('top').grid is False
+        assert plot.getAxis('right').grid is False
+        assert plot.getAxis('left').grid is not False     # 仍开启（int alpha）
+        assert plot.getAxis('bottom').grid is not False
+
+
+def test_empty_state_time_y_padded_off_top_frame(canvas):
+    """空状态最高刻度网格线不贴顶边框（视图上界 > 1.0）。"""
+    canvas.full_reset()
+    (_y0, y1) = canvas._plot_time.vb.viewRange()[1]
+    assert y1 > 1.0
+
+
 def test_fft_context_menu_is_chinese_and_keeps_plot_options(canvas, monkeypatch):
     canvas.register_mouse_mode_controller(_FakeMouseModeController())
     canvas.plot_time_preview([_entry()], title='时域预览')

@@ -115,6 +115,10 @@ class PgLineCanvas(QWidget):
                     p.getAxis(_ax).setStyle(maxTickLevel=0)
                 except Exception:
                     pass
+            # major grid 只画在 left+bottom；top/right 关掉，避免横向网格被
+            # 左右两轴重复过绘、且顶部网格线与边框叠成"双线"（spec R2）。
+            p.getAxis('top').setGrid(False)
+            p.getAxis('right').setGrid(False)
         self._plot_amp.addLegend(offset=(8, 8))
         # Open up the gap between the two stacked plots so the draggable divider
         # line sits in clear whitespace instead of merging with the plot frames.
@@ -662,8 +666,10 @@ class PgLineCanvas(QWidget):
         self._apply_title_texts()
         # Keep both plots labelled in the empty state (consistency fix).
         self._apply_default_axis_labels()
+        # 空状态：显式留白，避免最高刻度网格线贴顶边框（spec R2）。有数据时
+        # 后续 plot_*/reset 会重新设范围，这里只管空态观感。
         for p in (self._plot_amp, self._plot_time):
-            p.enableAutoRange(axis='y')
+            p.setYRange(0.0, 1.0, padding=0.08)
         self.cursor_info.emit("")
         self.layout_geometry_changed.emit()
         # Curves are gone → the AA dot must fall back to red ("no curves")
