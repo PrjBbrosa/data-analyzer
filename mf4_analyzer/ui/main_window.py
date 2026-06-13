@@ -1943,8 +1943,8 @@ class MainWindow(QMainWindow):
         from pathlib import Path
         fps, _ = QFileDialog.getOpenFileNames(
             self, "打开", "",
-            "所有支持的文件 (*.mf4 *.csv *.xlsx *.xls *.tlproj);;"
-            "项目 (*.tlproj);;数据文件 (*.mf4 *.csv *.xlsx *.xls)",
+            "所有支持的文件 (*.mf4 *.mdf *.csv *.xlsx *.xls *.tlproj);;"
+            "项目 (*.tlproj);;数据文件 (*.mf4 *.mdf *.csv *.xlsx *.xls)",
         )
         if not fps:
             return
@@ -1988,7 +1988,7 @@ class MainWindow(QMainWindow):
         self.save_project(Path(fp))
 
     def load_files(self):
-        fps, _ = QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.csv *.xlsx *.xls)")
+        fps, _ = QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.mdf *.csv *.xlsx *.xls)")
         for fp in fps: self._load_one(fp)
 
     def load_file(self, path) -> None:
@@ -2032,7 +2032,7 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
             p = Path(fp);
             ext = p.suffix.lower()
-            if ext == '.mf4':
+            if ext in ('.mf4', '.mdf'):
                 if not HAS_ASAMMDF: QMessageBox.critical(self, "错误", "asammdf 未安装"); return
                 data, chs, units = DataLoader.load_mf4(fp)
             elif ext in ('.xlsx', '.xls'):

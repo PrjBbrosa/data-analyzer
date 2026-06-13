@@ -26,6 +26,29 @@ def write_single_channel_mf4(
     return path
 
 
+def write_single_channel_mdf(
+    path: Path,
+    *,
+    name: str = "sig",
+    unit: str = "V",
+    timestamps: Sequence[float] | np.ndarray = (0.0, 0.01, 0.02, 0.03),
+    samples: Sequence[float] | np.ndarray = (1.0, 2.0, 3.0, 4.0),
+) -> Path:
+    """Write a single-channel MDF v3 file (``.mdf`` extension is the caller's).
+
+    MDF v3 is what most ``.mdf`` files in the wild are; asammdf reads it via
+    the same ``MDF()`` entrypoint as v4 ``.mf4``. Used to prove the UI dispatch
+    routes ``.mdf`` to ``load_mf4`` rather than the CSV fallback.
+    """
+    t = np.asarray(timestamps, dtype=float)
+    y = np.asarray(samples, dtype=float)
+    mdf = MDF(version="3.30")
+    mdf.append([Signal(samples=y, timestamps=t, name=name, unit=unit)])
+    mdf.save(str(path), overwrite=True)
+    mdf.close()
+    return path
+
+
 def write_source_path_mf4(
     path: Path,
     *,
