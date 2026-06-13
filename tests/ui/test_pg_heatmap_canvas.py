@@ -778,6 +778,56 @@ def test_heatmap_collapse_divider_folds_slice(qapp):
     c2.deleteLater()
 
 
+def test_heatmap_split_divider_spans_full_canvas_width(qapp):
+    """Shared divider widget reaches both canvas edges (Order / FFT-vs-Time)."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(600, 480)
+    c.show()
+    qapp.processEvents()
+    c._position_collapse_ctrl()
+    c._position_split_divider()
+    div = c._split_divider
+    assert div is not None
+    assert div.x() <= 1
+    assert div.x() + div.width() >= c.width() - 1
+    c.hide()
+    c.deleteLater()
+
+
+def test_heatmap_collapse_restores_last_dragged_height(qapp):
+    """Fold-then-restore returns the slice to its last dragged height."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(600, 480)
+    c.show()
+    qapp.processEvents()
+    c._on_split_drag_started()
+    c._on_split_drag_delta(25)               # slice now 165
+    assert c._bottom_split_h == pytest.approx(165)
+    c._on_collapse_changed('bottom')
+    assert not c._slice_plot.isVisible()
+    c._on_collapse_changed('none')
+    assert c._slice_plot.isVisible()
+    assert c._slice_plot.maximumHeight() == 165
+    c.hide()
+    c.deleteLater()
+
+
+def test_heatmap_split_reset_returns_to_default(qapp):
+    """Double-click reset restores the heatmap's default slice height (140)."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(600, 480)
+    c.show()
+    qapp.processEvents()
+    c._on_split_drag_started()
+    c._on_split_drag_delta(30)
+    assert c._bottom_split_h == pytest.approx(170)
+    c._on_split_reset()
+    assert c._bottom_split_h == pytest.approx(140)
+    assert c._slice_plot.maximumHeight() == 140
+    c.hide()
+    c.deleteLater()
+
+
 def test_slice_marker_drag_reslices(qapp):
     """Dragging the marker snaps to the nearest cell and re-renders the slice."""
     c = PgHeatmapCanvas(with_slice=True)
@@ -1167,10 +1217,12 @@ def test_toolbar_view_boxes_nonempty_and_primary_resolves(qapp):
         c.deleteLater()
 
 
-def test_toolbar_home_still_resets_to_data_extents(qapp):
+def test_toolbar_home_resets_to_exact_data_extents(qapp):
     # The M6 Home fix (reset_view_to_data_extents) must keep working after
-    # the axes_list addition: zoom in, then Home restores a view containing the
-    # full extents. A tiny visual margin keeps boundary tick labels off-frame.
+    # the axes_list addition: zoom in, then Home restores the view. The image
+    # rect spans EXACTLY the data extents, so Home must reset to those exact
+    # extents (no visual padding) — a 1.5%/side margin would over-expand the
+    # ViewBox past the image and expose the white background as an edge band.
     c = PgHeatmapCanvas(with_slice=False)
     c.resize(640, 480)
     c.plot_or_update_heatmap(

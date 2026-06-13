@@ -1912,10 +1912,10 @@ class ChartStack(QWidget):
         def _order_card_factory():
             canvas = PgHeatmapCanvas(self, with_slice=True)
             canvas.set_default_axis_labels(x_label='Time (s)', y_label='Order')
-            # Order slice toggle reads 按时间 / 按阶次 (Y axis is order). Default
-            # to the 按阶次 (Y) slice — the common case is "one order's amplitude
+            # Order slice toggle reads 时间 / 阶次 (Y axis is order). Default
+            # to the 阶次 (Y) slice — the common case is "one order's amplitude
             # over time".
-            canvas.set_slice_button_labels('按时间', '按阶次')
+            canvas.set_slice_button_labels('时间', '阶次')
             canvas.set_slice_direction('y')
             return _ChartCard(canvas, annotations=True, chart_mode='order')
 

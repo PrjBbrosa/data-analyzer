@@ -703,6 +703,11 @@ class TimeDomainCanvasPG(QWidget):
             pi.showGrid(x=True, y=True, alpha=0.28)
         except Exception:
             pass
+        for axis_name in ("left", "right", "bottom", "top"):
+            try:
+                pi.getAxis(axis_name).setStyle(maxTickLevel=0)
+            except Exception:
+                pass
         for axis_name in ("left", "right", "bottom"):
             try:
                 axis = pi.getAxis(axis_name)

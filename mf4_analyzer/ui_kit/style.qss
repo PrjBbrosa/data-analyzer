@@ -1187,28 +1187,14 @@ QWidget#sliceDirToggle QPushButton[role="slice-seg"] {
     padding: 0 3px;
 }
 
-/* 2026-06-13 collapse divider — flat narrow capsule, left-aligned on the
- * divider. ▲ folds the top plot, ▼ folds the bottom; the folded segment is
- * highlighted (the glyph never flips). */
-QWidget#plotCollapseBar {
-    background-color: transparent;
+/* 2026-06-13 collapse triangle + split divider. The triangle (#plotCollapseBar)
+ * is a single bare solid triangle painted by the widget itself — no box/border/
+ * background. The divider (#plotSplitDivider) paints its own full-width 1px
+ * line. Both keep a clear background so only the glyph / line shows. */
+QWidget#plotCollapseBar,
+QWidget#plotSplitDivider {
+    background: transparent;
     border: none;
-    border-radius: 0;
-}
-QWidget#plotCollapseBar QPushButton[role="collapse-seg"] {
-    border: 1px solid #c9d3e1;
-    background: #ffffff;
-    color: #7b8699;
-    font-size: 9px;
-    padding: 0;
-    border-radius: 4px;
-}
-QWidget#plotCollapseBar QPushButton[role="collapse-seg"]:hover {
-    background-color: #f1f5fb;
-}
-QWidget#plotCollapseBar QPushButton[role="collapse-seg"]:checked {
-    background-color: #e8f0ff;
-    color: #2563eb;
 }
 
 /* Chart toolbar — compact spacing & padding (post-i18n). Three selectors

@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QPainter, QPixmap
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -83,50 +83,166 @@ class _SliceDirToggle(QWidget):
 
 
 class _PlotCollapseControl(QWidget):
-    """Flat, narrow capsule pinned to the LEFT of the divider between two
-    stacked plots. Two fixed-glyph segments: ▲ folds the top plot, ▼ folds the
-    bottom — the other plot then takes the full area. The active (folded)
-    segment is highlighted (the glyph never changes direction); clicking it
-    again restores both. ``collapse_changed`` emits 'none' | 'top' | 'bottom'.
-    """
+    """A single small triangle pinned to the left gutter at the divider between
+    two stacked plots. ▾ when the bottom plot is shown (click to fold it away),
+    ▴ when folded (click to restore to the last split size). The folded state
+    is also shown by a checked highlight. ``collapse_changed`` emits
+    'none' | 'bottom' (the old fold-top mode was dropped in the single-triangle
+    redesign — drag the divider to resize instead)."""
 
     collapse_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("plotCollapseBar")
-        self.setAttribute(Qt.WA_StyledBackground, True)
+        # Bare solid triangle — no box/border/background chrome. The widget
+        # paints its own filled triangle so nothing but the glyph shows.
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(QSize(13, 11))
         self._state = 'none'
-        box = QVBoxLayout(self)
-        box.setContentsMargins(0, 0, 0, 0)
-        box.setSpacing(0)
-        self._btn_up = QPushButton('▲', self)
-        self._btn_down = QPushButton('▼', self)
-        for b, d in ((self._btn_up, 'top'), (self._btn_down, 'bottom')):
-            b.setCheckable(True)
-            b.setProperty('role', 'collapse-seg')
-            b.setCursor(Qt.PointingHandCursor)
-            b.setFixedSize(QSize(18, 14))
-            b.clicked.connect(lambda _=False, _d=d: self._toggle(_d))
-        self._btn_up.setToolTip('折叠上图')
-        self._btn_down.setToolTip('折叠下图')
-        box.addWidget(self._btn_up)
-        box.addWidget(self._btn_down)
-        self._sync()
+        self._hover = False
+        self.setToolTip('折叠下图')
 
     def state(self):
         return self._state
 
-    def _toggle(self, which):
-        self._state = 'none' if self._state == which else which
-        self._sync()
+    def set_state(self, state, *, emit=False):
+        state = 'bottom' if state == 'bottom' else 'none'
+        if state == self._state:
+            self.update()
+            return
+        self._state = state
+        self.setToolTip('恢复下图' if state == 'bottom' else '折叠下图')
+        self.update()
+        if emit:
+            self.collapse_changed.emit(self._state)
+
+    def _toggle(self):
+        self._state = 'bottom' if self._state == 'none' else 'none'
+        self.setToolTip('恢复下图' if self._state == 'bottom' else '折叠下图')
+        self.update()
         self.collapse_changed.emit(self._state)
 
-    def _sync(self):
-        # Fixed glyphs; the folded direction is shown by the checked highlight,
-        # NOT by swapping the arrow.
-        self._btn_up.setChecked(self._state == 'top')
-        self._btn_down.setChecked(self._state == 'bottom')
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._toggle()
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def enterEvent(self, e):
+        self._hover = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self.update()
+        super().leaveEvent(e)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            collapsed = self._state == 'bottom'
+            color = (QColor("#2563eb") if (collapsed or self._hover)
+                     else QColor("#7b8699"))
+            w, h, m = float(self.width()), float(self.height()), 1.0
+            if collapsed:
+                # ▴ up — points back to where the folded bottom plot returns.
+                pts = [QPointF(w / 2, m), QPointF(w - m, h - m), QPointF(m, h - m)]
+            else:
+                # ▾ down — points at the bottom plot it will fold.
+                pts = [QPointF(m, m), QPointF(w - m, m), QPointF(w / 2, h - m)]
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(color)
+            painter.drawPolygon(QPolygonF(pts))
+        finally:
+            painter.end()
+
+
+# Minimum PlotItem heights enforced while dragging the split divider, so a drag
+# can never fully starve either plot (full collapse is the triangle's job).
+_SPLIT_MIN_TOP = 90
+_SPLIT_MIN_BOTTOM = 70
+# Vertical gap between the two stacked plots — wide enough for the divider line
+# to read as a separator in clear whitespace (not merged with the plot frames).
+_SPLIT_ROW_SPACING = 18
+
+
+class _SplitDivider(QWidget):
+    """Thin draggable horizontal divider drawn on the boundary between two
+    stacked plots. It paints a 1px line across its width (set to the data-area
+    width so it never crosses the collapse triangle in the left gutter), drags
+    to resize the two plots, and resets to the default split on double-click.
+
+    ``drag_started`` fires on press, ``drag_delta`` emits the pixels moved since
+    press (positive = dragged up = bottom grows), ``drag_finished`` on release,
+    and ``reset_requested`` on double-click."""
+
+    drag_started = pyqtSignal()
+    drag_delta = pyqtSignal(int)
+    drag_finished = pyqtSignal()
+    reset_requested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("plotSplitDivider")
+        self.setFixedHeight(9)
+        self.setCursor(Qt.SizeVerCursor)
+        self._press_y = None
+
+    def _hot(self):
+        return self._press_y is not None or self.underMouse()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            y = self.height() / 2.0
+            hot = self._hot()
+            color = QColor("#2563eb") if hot else QColor("#c7d2e2")
+            painter.setPen(QPen(color, 2.0 if hot else 1.0))
+            painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
+        finally:
+            painter.end()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._press_y = e.globalPos().y()
+            self.update()
+            self.drag_started.emit()
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._press_y is not None:
+            self.drag_delta.emit(int(self._press_y - e.globalPos().y()))
+            e.accept()
+            return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self._press_y is not None:
+            self._press_y = None
+            self.update()
+            self.drag_finished.emit()
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
+
+    def mouseDoubleClickEvent(self, e):
+        self.reset_requested.emit()
+        e.accept()
+
+    def enterEvent(self, e):
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self.update()
+        super().leaveEvent(e)
 
 
 def _apply_plot_collapse(top_plot, bottom_plot, state, bottom_default_max):
@@ -148,6 +264,79 @@ def _apply_plot_collapse(top_plot, bottom_plot, state, bottom_default_max):
         top_plot.setMaximumHeight(big)
         bottom_plot.setVisible(True)
         bottom_plot.setMaximumHeight(int(bottom_default_max))
+
+
+def _available_split_height(canvas) -> float:
+    """Total height the two stacked plots share — used to clamp the drag so the
+    top plot can't be starved below ``_SPLIT_MIN_TOP``."""
+    glw = getattr(canvas, '_glw', None)
+    if glw is not None:
+        try:
+            h = float(glw.viewport().height())
+            if h > 0:
+                return h
+        except Exception:
+            pass
+    try:
+        return float(canvas.height())
+    except Exception:
+        return 0.0
+
+
+def _clamp_bottom_split(value, total) -> float:
+    """Clamp the bottom plot height to [MIN_BOTTOM, total - MIN_TOP]."""
+    hi = max(float(_SPLIT_MIN_BOTTOM), float(total) - _SPLIT_MIN_TOP)
+    return max(float(_SPLIT_MIN_BOTTOM), min(hi, float(value)))
+
+
+def _split_boundary_y(top_plot, bottom_plot, collapsed) -> float:
+    """Y of the divider/triangle: the centre of the white gap BETWEEN the two
+    PlotItems (so the line sits in the gap, not on the top plot's axis frame).
+    When the bottom plot is folded away, fall back to the full top plot's
+    data-frame bottom."""
+    if collapsed or bottom_plot is None:
+        return float(top_plot.vb.sceneBoundingRect().bottom())
+    top_b = float(top_plot.sceneBoundingRect().bottom())
+    bot_t = float(bottom_plot.sceneBoundingRect().top())
+    return (top_b + bot_t) / 2.0
+
+
+def _position_split_controls(ctrl, divider, top_plot, bottom_plot) -> None:
+    """Place the collapse triangle (left gutter) and the draggable divider line
+    on the boundary between two stacked plots. Both anchor to the gap centre
+    between the two PlotItems. The line spans only the data area (left → right
+    of the top viewbox), so it starts to the right of the gutter triangle and
+    never crosses it. Shared by all three analysis sections so they match."""
+    if ctrl is None:
+        return
+    try:
+        vb = top_plot.vb.sceneBoundingRect()
+    except Exception:
+        return
+    collapsed = ctrl.state() == 'bottom'
+    try:
+        boundary_y = _split_boundary_y(top_plot, bottom_plot, collapsed)
+    except Exception:
+        boundary_y = float(vb.bottom())
+    ctrl.adjustSize()
+    cx = int(vb.left() - ctrl.width() - 8)
+    cy = int(boundary_y - ctrl.height() / 2)
+    ctrl.move(max(0, cx), max(0, cy))
+    ctrl.raise_()
+    if divider is None:
+        return
+    # Full-bleed: the line runs edge to edge across the whole canvas, with the
+    # solid triangle riding on it at the left.
+    parent = divider.parentWidget()
+    width = int(parent.width()) if parent is not None else int(vb.width())
+    if collapsed or not top_plot.isVisible() or width <= 0:
+        divider.hide()
+        return
+    divider.setFixedWidth(width)
+    divider.move(0, max(0, int(boundary_y - divider.height() / 2)))
+    divider.show()
+    divider.raise_()
+    ctrl.raise_()      # keep the triangle on top of the line
 
 
 def _resolve_colormap(name: str) -> pg.ColorMap:
@@ -252,7 +441,7 @@ def _apply_neutral_axis_frame(plot) -> None:
     for side in ('top', 'right'):
         axis = plot.getAxis(side)
         plot.showAxis(side)
-        axis.setStyle(showValues=False, tickLength=0)
+        axis.setStyle(showValues=False, tickLength=0, maxTickLevel=0)
         axis.setLabel('')
     plot.getAxis('top').setHeight(1)
     plot.getAxis('right').setWidth(1)
@@ -350,6 +539,11 @@ class PgHeatmapCanvas(QWidget):
         self._axis_bottom = self._plot.getAxis('bottom')
         self._axis_left = self._plot.getAxis('left')
         self._plot.showGrid(x=True, y=True, alpha=0.25)
+        for _ax in ('left', 'bottom', 'top', 'right'):
+            try:
+                self._plot.getAxis(_ax).setStyle(maxTickLevel=0)
+            except Exception:
+                pass
         self._img = _SmoothImageItem()
         # row-major: matrix[row, col] -> row = Y (origin at rect bottom,
         # matching imshow origin='lower'), col = X.
@@ -408,9 +602,15 @@ class PgHeatmapCanvas(QWidget):
         self._y_label = ''
         self._default_x_label = 'Time (s)'
         self._default_y_label = 'Frequency (Hz)'
-        # Button labels for the X/Y toggle, e.g. ('按时间', '按频率').
-        self._slice_x_btn_label = '按时间'
-        self._slice_y_btn_label = '按频率'
+        # Button labels for the X/Y toggle, e.g. ('时间', '频率'). The '按'
+        # prefix is dropped — the toggle's role is self-evident, every char
+        # counts in the narrow colorbar column.
+        self._slice_x_btn_label = '时间'
+        self._slice_y_btn_label = '频率'
+        # Shared centred width for the toggle + readout inside the panel. The
+        # toggle is pinned ~5% wider than a typical readout so it reads as the
+        # primary control; _position_slice_panel clamps it on a narrow column.
+        self._slice_toggle_w = 86
         self._result = None     # SpectrogramResult-like payload
         # Amplitude mode of the last plot_result render (slice mode only).
         # Parity with SpectrogramCanvas._amplitude_mode (canvases.py:1622):
@@ -435,8 +635,23 @@ class PgHeatmapCanvas(QWidget):
                 viewBox=_ModifierWheelViewBox(owner_canvas=self),
             )
             _apply_neutral_axis_frame(self._slice_plot)
-            self._slice_plot.setMaximumHeight(140)
+            # Open the gap between map + slice so the divider line reads clearly.
+            try:
+                self._glw.ci.layout.setVerticalSpacing(_SPLIT_ROW_SPACING)
+            except Exception:
+                pass
+            # Bottom (slice) plot height when expanded. Stateful so the divider
+            # drag can resize it and fold/restore can remember the last size.
+            self._bottom_split_default = 140.0
+            self._bottom_split_h = self._bottom_split_default
+            self._drag_start_bottom_h = self._bottom_split_h
+            self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
             self._slice_plot.showGrid(x=True, y=True, alpha=0.25)
+            for _ax in ('left', 'bottom', 'top', 'right'):
+                try:
+                    self._slice_plot.getAxis(_ax).setStyle(maxTickLevel=0)
+                except Exception:
+                    pass
             self._slice_plot.setLabel('bottom', 'Frequency (Hz)')
             # Left (amplitude) axis label. dB vs linear is switched per
             # render in select_time_index, mirroring the mpl original's
@@ -468,32 +683,42 @@ class PgHeatmapCanvas(QWidget):
             self._slice_panel.setAttribute(Qt.WA_StyledBackground, True)
             pl = QVBoxLayout(self._slice_panel)
             pl.setContentsMargins(6, 5, 6, 5)
-            pl.setSpacing(4)
-            _title = QLabel('切片方向', self._slice_panel)
-            _title.setObjectName('slicePanelTitle')
-            pl.addWidget(_title)
+            pl.setSpacing(9)   # roomier toggle -> readout gap (was 4, too tight)
+            # No title row: the toggle already says what this is. The toggle and
+            # readout are centred at a shared narrow width (panel fills the whole
+            # colorbar column, far wider than the content needs).
             self._slice_toggle = _SliceDirToggle(
                 self._slice_x_btn_label, self._slice_y_btn_label,
                 self._slice_panel)
             self._slice_toggle.direction_changed.connect(self.set_slice_direction)
-            pl.addWidget(self._slice_toggle)
-            self._slice_hint = QLabel(
-                '固定 Time (s)<br><b>--</b><br>查看峰值 --',
-                self._slice_panel,
-            )
+            self._slice_toggle.setFixedWidth(self._slice_toggle_w)
+            pl.addWidget(self._slice_toggle, 0, Qt.AlignHCenter)
+            self._slice_hint = QLabel('点击图中选择切片', self._slice_panel)
             self._slice_hint.setObjectName("sliceHint")
-            self._slice_hint.setWordWrap(True)
+            self._slice_hint.setWordWrap(False)
             self._slice_hint.setTextFormat(Qt.RichText)
-            pl.addWidget(self._slice_hint)
+            self._slice_hint.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+            pl.addWidget(self._slice_hint, 0, Qt.AlignHCenter)
             pl.addStretch(1)
             self._slice_panel.show()
-            # Collapse divider between the 2D map (top) and the slice (bottom).
+            # Collapse triangle + draggable divider between the 2D map (top)
+            # and the slice (bottom).
             self._collapse_ctrl = _PlotCollapseControl(self)
             self._collapse_ctrl.collapse_changed.connect(self._on_collapse_changed)
+            self._split_divider = _SplitDivider(self)
+            self._split_divider.drag_started.connect(self._on_split_drag_started)
+            self._split_divider.drag_delta.connect(self._on_split_drag_delta)
+            self._split_divider.drag_finished.connect(self._on_split_drag_finished)
+            self._split_divider.reset_requested.connect(self._on_split_reset)
             self._plot.vb.sigResized.connect(self._position_collapse_ctrl)
+            self._plot.vb.sigResized.connect(self._position_split_divider)
             self._ensure_colorbar(_resolve_colormap('turbo'), 'Amplitude (dB)')
         else:
             self._collapse_ctrl = None
+            self._split_divider = None
+            self._bottom_split_default = 140.0
+            self._bottom_split_h = self._bottom_split_default
+            self._drag_start_bottom_h = self._bottom_split_h
         self._x_label = self._default_x_label
         self._y_label = self._default_y_label
 
@@ -973,19 +1198,39 @@ class PgHeatmapCanvas(QWidget):
             self._slice_x_idx = int(np.argmin(np.abs(xc - pos)))
         self._apply_slice()
 
+    @staticmethod
+    def _short_axis_label(label: str):
+        """Split an axis label like 'Time (s)' / 'Frequency (Hz)' / 'Order'
+        into a short prefix ('Time' / 'Freq' / 'Order') and a unit ('s' / 'Hz'
+        / '')."""
+        raw = (label or '').strip()
+        if '(' in raw:
+            name = raw.split('(', 1)[0].strip()
+            unit = raw.split('(', 1)[1].split(')', 1)[0].strip()
+        else:
+            name, unit = raw, ''
+        abbr = {
+            'Frequency': 'Freq', 'frequency': 'Freq', '频率': 'Freq',
+            'Time': 'Time', '时间': 'Time',
+            'Order': 'Order', '阶次': 'Order',
+        }.get(name, name)
+        return (abbr or 'X'), unit
+
     def _update_slice_hint(self, label: str, value: float) -> None:
         if self._slice_hint is None:
             return
-        axis = (label or '').strip() or ('Y' if self._slice_dir == 'y' else 'X')
-        if self._slice_dir == 'y':
-            meaning = '幅值 — 时间'
-        else:
-            meaning = '幅值 — ' + (self._y_label or '频率').split(' ')[0]
+        prefix, unit = self._short_axis_label(label)
+        unit_part = f' {unit}' if unit else ''
+        # At most 2 decimals, trailing zeros trimmed (3.00 -> 3, 4.0336 -> 4.03).
+        vtxt = f'{round(float(value), 2):.2f}'.rstrip('0').rstrip('.')
+        if vtxt in ('', '-0'):
+            vtxt = '0'
+        # Single centred line: 'Prefix = <value> unit', value emphasised.
         self._slice_hint.setText(
-            f'<span style="color:#8a94a6;">固定 {axis}</span><br>'
+            f'<span style="color:#8a94a6;">{prefix} = </span>'
             f'<span style="font-size:14px;font-weight:800;color:#1f3b63;">'
-            f'{value:g}</span><br>'
-            f'<span style="color:#8a94a6;">看 {meaning}</span>'
+            f'{vtxt}</span>'
+            f'<span style="color:#8a94a6;">{unit_part}</span>'
         )
 
     def _select_slice_at(self, x: float, y: float) -> None:
@@ -1059,16 +1304,26 @@ class PgHeatmapCanvas(QWidget):
         w = max(70, int(self.width() - x - margin))
         h = max(40, int(srect.height()))
         self._slice_panel.setGeometry(x, y, w, h)
+        # Clamp the centred toggle to the available content width so it never
+        # clips on a very narrow column (margins are 6 each side).
+        if self._slice_toggle is not None:
+            self._slice_toggle.setFixedWidth(
+                min(self._slice_toggle_w, max(52, w - 12)))
         self._slice_panel.show()
         self._slice_panel.raise_()
 
     def _on_collapse_changed(self, state) -> None:
         if self._slice_plot is None:
             return
-        _apply_plot_collapse(self._plot, self._slice_plot, state, 140)
+        _apply_plot_collapse(self._plot, self._slice_plot, state,
+                             self._bottom_split_h)
+        if self._collapse_ctrl is not None:
+            self._collapse_ctrl.set_state(
+                'bottom' if state == 'bottom' else 'none')
         if self._slice_panel is not None:
             self._slice_panel.setVisible(state != 'bottom')
         self._position_collapse_ctrl()
+        self._position_split_divider()
         if state == 'none':
             self._align_slice_to_main()
         if state != 'bottom':
@@ -1076,18 +1331,47 @@ class PgHeatmapCanvas(QWidget):
         self.layout_geometry_changed.emit()
 
     def _position_collapse_ctrl(self, *_args) -> None:
-        ctrl = getattr(self, '_collapse_ctrl', None)
-        if ctrl is None:
+        _position_split_controls(
+            getattr(self, '_collapse_ctrl', None),
+            getattr(self, '_split_divider', None),
+            self._plot, self._slice_plot)
+
+    def _position_split_divider(self, *_args) -> None:
+        self._position_collapse_ctrl()
+
+    # ---- split-divider drag (resize) / double-click (reset) --------------
+    def _available_split_height(self) -> float:
+        return _available_split_height(self)
+
+    def _on_split_drag_started(self) -> None:
+        self._drag_start_bottom_h = float(self._bottom_split_h)
+
+    def _on_split_drag_delta(self, delta) -> None:
+        if self._slice_plot is None:
             return
-        try:
-            rect = self._plot.vb.sceneBoundingRect()
-        except Exception:
-            return
-        ctrl.adjustSize()
-        x = int(rect.left() - ctrl.width() - 8)
-        y = int(rect.bottom() - ctrl.height() / 2)
-        ctrl.move(max(0, x), max(0, y))
-        ctrl.raise_()
+        self._bottom_split_h = _clamp_bottom_split(
+            self._drag_start_bottom_h + delta, self._available_split_height())
+        self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
+        self._position_collapse_ctrl()
+        self._position_split_divider()
+        self._position_slice_panel()
+        self.layout_geometry_changed.emit()
+
+    def _on_split_drag_finished(self) -> None:
+        self._align_slice_to_main()
+        self._position_slice_panel()
+        self._position_split_divider()
+
+    def _on_split_reset(self) -> None:
+        self._bottom_split_h = float(self._bottom_split_default)
+        if self._collapse_ctrl is None or self._collapse_ctrl.state() == 'none':
+            if self._slice_plot is not None:
+                self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
+        self._position_collapse_ctrl()
+        self._position_split_divider()
+        self._align_slice_to_main()
+        self._position_slice_panel()
+        self.layout_geometry_changed.emit()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1097,6 +1381,7 @@ class PgHeatmapCanvas(QWidget):
         # to avoid transiently fighting the shared split reserve.
         self._position_slice_panel()
         self._position_collapse_ctrl()
+        self._position_split_divider()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1105,6 +1390,7 @@ class PgHeatmapCanvas(QWidget):
         self._align_slice_to_main()
         self._position_slice_panel()
         self._position_collapse_ctrl()
+        self._position_split_divider()
 
     # ------------------------------------------------------------------
     # split-pane layout alignment

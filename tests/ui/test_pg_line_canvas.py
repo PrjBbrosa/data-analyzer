@@ -476,18 +476,139 @@ def test_collapse_divider_toggles_plot_visibility(canvas):
     assert canvas._plot_time.maximumHeight() == 170
 
 
-def test_collapse_control_toggle_is_sticky_off(qapp):
+def test_collapse_control_is_single_triangle_toggling_bottom(qapp):
+    """The collapse control is ONE bare solid triangle (custom-painted, no boxed
+    button chrome). A click folds the bottom plot; clicking again restores it.
+    Two-state only — fold-top was dropped in the single-triangle redesign."""
+    from PyQt5.QtWidgets import QPushButton
     from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _PlotCollapseControl
     ctrl = _PlotCollapseControl()
+    assert ctrl.findChildren(QPushButton) == []   # no boxed button chrome
     emitted = []
     ctrl.collapse_changed.connect(emitted.append)
-    ctrl._toggle('top')
-    assert ctrl.state() == 'top'
-    ctrl._toggle('top')           # clicking the active arrow restores
     assert ctrl.state() == 'none'
-    ctrl._toggle('bottom')
+    ctrl._toggle()
     assert ctrl.state() == 'bottom'
-    assert emitted == ['top', 'none', 'bottom']
+    ctrl._toggle()
+    assert ctrl.state() == 'none'
+    assert emitted == ['bottom', 'none']
+
+
+def test_fft_collapse_control_sits_in_left_gutter(canvas, qapp):
+    """FFT's collapse triangle must sit OUTSIDE the data area in the left
+    gutter — the same formula the heatmap uses (rect.left() - w - 8), not the
+    old rect.left()+2 that pinned it inside, over the axis."""
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.show()
+    qapp.processEvents()
+    canvas._position_collapse_ctrl()
+    ctrl = canvas._collapse_ctrl
+    left = canvas._plot_amp.vb.sceneBoundingRect().left()
+    assert ctrl.x() + ctrl.width() <= left          # entirely in the gutter
+    assert ctrl.x() == max(0, int(left - ctrl.width() - 8))
+    canvas.hide()
+
+
+def test_fft_split_divider_spans_full_canvas_width(canvas, qapp):
+    """The divider line reaches both canvas edges (full width), with the solid
+    triangle riding on it at the left gutter."""
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.show()
+    qapp.processEvents()
+    canvas._position_collapse_ctrl()
+    canvas._position_split_divider()
+    div = canvas._split_divider
+    assert div is not None
+    assert div.x() <= 1                                  # reaches the left edge
+    assert div.x() + div.width() >= canvas.width() - 1   # reaches the right edge
+    canvas.hide()
+
+
+def test_fft_split_drag_resizes_bottom_with_clamp(canvas, qapp):
+    """Dragging the divider up grows the bottom plot; clamps keep neither plot
+    below its minimum (drag never fully collapses — that's the triangle)."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _SPLIT_MIN_BOTTOM, _SPLIT_MIN_TOP,
+    )
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.show()
+    qapp.processEvents()
+    assert canvas._plot_time.maximumHeight() == 170
+    canvas._on_split_drag_started()
+    canvas._on_split_drag_delta(40)              # drag up → bottom grows
+    assert canvas._bottom_split_h == pytest.approx(210)
+    assert canvas._plot_time.maximumHeight() == 210
+    canvas._on_split_drag_started()
+    canvas._on_split_drag_delta(-100000)         # floor clamp
+    assert canvas._bottom_split_h == pytest.approx(_SPLIT_MIN_BOTTOM)
+    canvas._on_split_drag_started()
+    canvas._on_split_drag_delta(100000)          # ceiling clamp
+    total = canvas._available_split_height()
+    assert canvas._bottom_split_h <= total - _SPLIT_MIN_TOP + 0.5
+    canvas.hide()
+
+
+def test_fft_collapse_restores_last_dragged_height(canvas, qapp):
+    """Fold-then-restore returns to the LAST dragged split (remembered), not a
+    hardcoded default."""
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.show()
+    qapp.processEvents()
+    canvas._on_split_drag_started()
+    canvas._on_split_drag_delta(30)              # bottom now 200
+    assert canvas._bottom_split_h == pytest.approx(200)
+    canvas._on_collapse_changed('bottom')
+    assert not canvas._plot_time.isVisible()
+    canvas._on_collapse_changed('none')
+    assert canvas._plot_time.isVisible()
+    assert canvas._plot_time.maximumHeight() == 200   # remembered, not 170
+    canvas.hide()
+
+
+def test_fft_split_reset_returns_to_default(canvas, qapp):
+    """Double-click reset restores the default split size."""
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.show()
+    qapp.processEvents()
+    canvas._on_split_drag_started()
+    canvas._on_split_drag_delta(50)
+    assert canvas._bottom_split_h == pytest.approx(220)
+    canvas._on_split_reset()
+    assert canvas._bottom_split_h == pytest.approx(170)
+    assert canvas._plot_time.maximumHeight() == 170
+    canvas.hide()
+
+
+def test_fft_split_divider_hidden_when_collapsed(canvas, qapp):
+    """No divider to drag while the bottom plot is folded away."""
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.show()
+    qapp.processEvents()
+    canvas._position_split_divider()
+    assert canvas._split_divider.isVisible()
+    canvas._on_collapse_changed('bottom')
+    assert not canvas._split_divider.isVisible()
+    canvas._on_collapse_changed('none')
+    assert canvas._split_divider.isVisible()
+    canvas.hide()
 
 
 def test_line_canvas_grid_is_major_only(canvas):

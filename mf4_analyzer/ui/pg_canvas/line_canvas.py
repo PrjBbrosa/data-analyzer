@@ -22,7 +22,12 @@ from mf4_analyzer.ui.canvases import build_envelope
 from .heatmap_canvas import (
     _apply_neutral_axis_frame,
     _apply_plot_collapse,
+    _available_split_height,
+    _clamp_bottom_split,
     _PlotCollapseControl,
+    _position_split_controls,
+    _SPLIT_ROW_SPACING,
+    _SplitDivider,
     _tick_counts_to_density,
     _visual_padded_bounds,
 )
@@ -105,8 +110,24 @@ class PgLineCanvas(QWidget):
         for p in (self._plot_amp, self._plot_time):
             _apply_neutral_axis_frame(p)
             p.showGrid(x=True, y=True, alpha=0.25)
+            for _ax in ('left', 'bottom', 'top', 'right'):
+                try:
+                    p.getAxis(_ax).setStyle(maxTickLevel=0)
+                except Exception:
+                    pass
         self._plot_amp.addLegend(offset=(8, 8))
-        self._plot_time.setMaximumHeight(170)
+        # Open up the gap between the two stacked plots so the draggable divider
+        # line sits in clear whitespace instead of merging with the plot frames.
+        try:
+            self._glw.ci.layout.setVerticalSpacing(_SPLIT_ROW_SPACING)
+        except Exception:
+            pass
+        # Bottom (time-preview) plot height when expanded. Stateful so the
+        # divider drag can resize it and fold/restore can remember the size.
+        self._bottom_split_default = 170.0
+        self._bottom_split_h = self._bottom_split_default
+        self._drag_start_bottom_h = self._bottom_split_h
+        self._plot_time.setMaximumHeight(int(self._bottom_split_h))
         self._apply_default_axis_labels()
 
         self.axes_list = [
@@ -160,10 +181,17 @@ class PgLineCanvas(QWidget):
         self._plot_time.vb.sigResized.connect(self._sync_time_overlay_vbs)
         self._plot_time.vb.sigXRangeChanged.connect(self._sync_time_overlay_vbs)
 
-        # Collapse divider between the spectrum (top) and time-preview (bottom).
+        # Collapse triangle + draggable divider between the spectrum (top) and
+        # time-preview (bottom).
         self._collapse_ctrl = _PlotCollapseControl(self)
         self._collapse_ctrl.collapse_changed.connect(self._on_collapse_changed)
+        self._split_divider = _SplitDivider(self)
+        self._split_divider.drag_started.connect(self._on_split_drag_started)
+        self._split_divider.drag_delta.connect(self._on_split_drag_delta)
+        self._split_divider.drag_finished.connect(self._on_split_drag_finished)
+        self._split_divider.reset_requested.connect(self._on_split_reset)
         self._plot_amp.vb.sigResized.connect(self._position_collapse_ctrl)
+        self._plot_amp.vb.sigResized.connect(self._position_split_divider)
 
     # ------------------------------------------------------------------
     # Interactive vs idle curve antialiasing
@@ -644,31 +672,64 @@ class PgLineCanvas(QWidget):
     # collapse divider (spectrum vs time-preview)
     # ------------------------------------------------------------------
     def _on_collapse_changed(self, state) -> None:
-        _apply_plot_collapse(self._plot_amp, self._plot_time, state, 170)
+        _apply_plot_collapse(self._plot_amp, self._plot_time, state,
+                             self._bottom_split_h)
+        # Keep the triangle glyph/highlight in sync when the handler is driven
+        # directly (the real path toggled it before emitting; this is idempotent
+        # there and authoritative for programmatic calls).
+        if self._collapse_ctrl is not None:
+            self._collapse_ctrl.set_state(
+                'bottom' if state == 'bottom' else 'none')
         self._position_collapse_ctrl()
+        self._position_split_divider()
         self.layout_geometry_changed.emit()
 
     def _position_collapse_ctrl(self, *_args) -> None:
-        ctrl = getattr(self, '_collapse_ctrl', None)
-        if ctrl is None:
-            return
-        try:
-            rect = self._plot_amp.vb.sceneBoundingRect()
-        except Exception:
-            return
-        ctrl.adjustSize()
-        x = int(rect.left() + 2)
-        y = int(rect.bottom() - ctrl.height() / 2)
-        ctrl.move(max(0, x), max(0, y))
-        ctrl.raise_()
+        # Left gutter + divider on the gap between the two plots, matching the
+        # heatmap sections so all three analysis cards place them identically.
+        _position_split_controls(
+            getattr(self, '_collapse_ctrl', None),
+            getattr(self, '_split_divider', None),
+            self._plot_amp, self._plot_time)
+
+    def _position_split_divider(self, *_args) -> None:
+        self._position_collapse_ctrl()
+
+    # ---- split-divider drag (resize) / double-click (reset) --------------
+    def _available_split_height(self) -> float:
+        return _available_split_height(self)
+
+    def _on_split_drag_started(self) -> None:
+        self._drag_start_bottom_h = float(self._bottom_split_h)
+
+    def _on_split_drag_delta(self, delta) -> None:
+        self._bottom_split_h = _clamp_bottom_split(
+            self._drag_start_bottom_h + delta, self._available_split_height())
+        self._plot_time.setMaximumHeight(int(self._bottom_split_h))
+        self._position_collapse_ctrl()
+        self._position_split_divider()
+        self.layout_geometry_changed.emit()
+
+    def _on_split_drag_finished(self) -> None:
+        self._position_split_divider()
+
+    def _on_split_reset(self) -> None:
+        self._bottom_split_h = float(self._bottom_split_default)
+        if self._collapse_ctrl is None or self._collapse_ctrl.state() == 'none':
+            self._plot_time.setMaximumHeight(int(self._bottom_split_h))
+        self._position_collapse_ctrl()
+        self._position_split_divider()
+        self.layout_geometry_changed.emit()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_collapse_ctrl()
+        self._position_split_divider()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._position_collapse_ctrl()
+        self._position_split_divider()
 
     def has_result(self) -> bool:
         return bool(self._entries)
