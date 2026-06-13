@@ -206,10 +206,21 @@ class PgLineCanvas(QWidget):
 
     @staticmethod
     def _set_curve_aa(curve, on):
+        on = bool(on)
         try:
-            curve.opts["antialias"] = bool(on)
+            curve.opts["antialias"] = on
         except Exception:
             pass
+        # pyqtgraph 0.14: PlotDataItem 的 antialias 只在 updateItems() 经
+        # curve.setData(...) 流到子 PlotCurveItem；FFT 预览平移不重新 setData，
+        # 故直接落到被渲染的子 curve 并触发重绘（不重新 setData，便宜）。
+        child = getattr(curve, "curve", None)
+        if child is not None:
+            try:
+                child.opts["antialias"] = on
+                child.update()
+            except Exception:
+                pass
 
     def _apply_idle_curve_aa(self):
         """Restore each curve's settled-state AA: the amplitude overlay is

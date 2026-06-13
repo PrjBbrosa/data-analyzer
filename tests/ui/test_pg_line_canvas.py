@@ -294,6 +294,23 @@ def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp):
     assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
 
 
+def test_disable_interactive_quality_drops_aa_on_rendered_child(canvas):
+    """AA 必须落到被绘制的子 PlotCurveItem，否则平移期 AA 根本没关。"""
+    import numpy as np
+    def _e(label, color):
+        t = np.linspace(0, 1, 200)
+        return {'label': label, 'color': color, 'freq': t, 'amp': t,
+                'time': t, 'signal': np.sin(t)}
+    canvas.plot_spectra(
+        [_e('a', '#2563eb'), _e('b', '#22c55e'), _e('c', '#f59e0b')],
+        xlim=(0.0, 1.0), amp_label='Amplitude', title='t')
+    canvas.disable_interactive_quality()
+    for c in canvas._interactive_curves():
+        child = getattr(c, 'curve', None)
+        assert child is not None
+        assert child.opts.get('antialias') is False
+
+
 def test_fft_quality_status_traffic_light_tracks_aa_state(canvas, qapp):
     """The FFT canvas exposes the same AA traffic-light contract as the
     time-domain canvas so _ChartCard renders the bottom-right quality dot:
