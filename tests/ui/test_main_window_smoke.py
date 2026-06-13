@@ -57,6 +57,33 @@ def test_main_window_keeps_single_active_hint_bar_in_status_line(qapp, qtbot):
         assert status_bars == [active_bar]
 
 
+def test_fft_quality_indicator_repositions_after_first_mode_layout(qapp, qtbot):
+    """First FFT entry moves its hint bar to the status line, changing the
+    child canvas height after the card has already shown.
+
+    The quality indicator is card chrome positioned from the current canvas
+    geometry, so it must follow that late child-layout pass.
+    """
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1450, 850)
+    w.show()
+    qtbot.waitExposed(w)
+    qapp.processEvents()
+
+    w._on_mode_changed("fft")
+    qapp.processEvents()
+    qapp.processEvents()
+
+    card = w.chart_stack._fft_card
+    canvas_rect = card.canvas.geometry()
+    dot_rect = card._quality_indicator.geometry()
+
+    assert canvas_rect.contains(dot_rect.center())
+    assert canvas_rect.right() - dot_rect.right() <= 12
+    assert canvas_rect.bottom() - dot_rect.bottom() <= 12
+
+
 def test_main_window_has_splitter_with_three_panes(qapp):
     w = MainWindow()
     # The central widget contains a QSplitter with 3 widgets

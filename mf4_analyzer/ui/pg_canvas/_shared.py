@@ -20,3 +20,10 @@ def _view_state_channel_key(data_id, name):
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _hide_native_auto_button(plot) -> None:
+    """Hide pyqtgraph's built-in lower-left auto-range button."""
+    hide = getattr(plot, "hideButtons", None)
+    if callable(hide):
+        hide()

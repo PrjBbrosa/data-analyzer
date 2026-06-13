@@ -110,6 +110,7 @@ from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     _capped_hidpi_scale,
 )
 from mf4_analyzer.ui.pg_canvas._shared import (  # noqa: F401
+    _hide_native_auto_button,
     _subplot_ylabel_text,
     _view_state_channel_key,
 )
@@ -694,6 +695,7 @@ class TimeDomainCanvasPG(QWidget):
             )
         )
         pi = self._glw.addPlot(row=row, col=col, viewBox=vb)
+        _hide_native_auto_button(pi)
         _localize_pg_context_menu(getattr(vb, "menu", None))
         _localize_pg_context_menu(getattr(pi, "ctrlMenu", None))
         _localize_pg_context_actions(getattr(pi.scene(), "contextMenu", []))

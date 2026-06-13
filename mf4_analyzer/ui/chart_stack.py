@@ -1108,6 +1108,7 @@ class _ChartCard(QWidget):
             viewport = canvas._glw.viewport()
         except Exception:
             viewport = None
+        self._canvas_viewport = viewport
         if viewport is not None:
             viewport.installEventFilter(self)
         self._chart_mode = chart_mode
@@ -1307,6 +1308,7 @@ class _ChartCard(QWidget):
         self._focus_bar.hide()
 
         self._quality_indicator = None
+        self._quality_indicator_position_pending = False
         quality_signal = getattr(self.canvas, "quality_status_changed", None)
         quality_status = getattr(self.canvas, "quality_status", None)
         if quality_signal is not None and callable(quality_status):
@@ -1321,14 +1323,28 @@ class _ChartCard(QWidget):
 
     def _position_quality_indicator(self):
         indicator = getattr(self, "_quality_indicator", None)
-        if indicator is None:
+        canvas = getattr(self, "canvas", None)
+        if indicator is None or canvas is None:
             return
-        canvas_rect = self.canvas.geometry()
+        canvas_rect = canvas.geometry()
         margin = 6
         x = canvas_rect.right() - indicator.width() - margin + 1
         y = canvas_rect.bottom() - indicator.height() - margin + 1
         indicator.move(max(0, x), max(0, y))
         indicator.raise_()
+
+    def _schedule_quality_indicator_position(self):
+        indicator = getattr(self, "_quality_indicator", None)
+        if indicator is None:
+            return
+        if getattr(self, "_quality_indicator_position_pending", False):
+            return
+        self._quality_indicator_position_pending = True
+        QTimer.singleShot(0, self._flush_quality_indicator_position)
+
+    def _flush_quality_indicator_position(self):
+        self._quality_indicator_position_pending = False
+        self._position_quality_indicator()
 
     def _set_quality_status(self, status):
         indicator = getattr(self, "_quality_indicator", None)
@@ -1359,6 +1375,7 @@ class _ChartCard(QWidget):
         self._sync_responsive_toolbar()
         self._position_focus_bar()
         self._position_quality_indicator()
+        self._schedule_quality_indicator_position()
         bar = getattr(self, "_focus_bar", None)
         if bar is not None and bar.isVisible():
             bar.raise_()
@@ -1367,6 +1384,7 @@ class _ChartCard(QWidget):
         super().showEvent(event)
         self._sync_responsive_toolbar()
         self._position_quality_indicator()
+        self._schedule_quality_indicator_position()
         bar = getattr(self, "_focus_bar", None)
         if bar is not None and bar.isVisible():
             self._position_focus_bar()
@@ -1378,6 +1396,16 @@ class _ChartCard(QWidget):
             self.set_hint_rotation_paused(True)
         elif etype in (QEvent.MouseButtonRelease, QEvent.Leave):
             self.set_hint_rotation_paused(False)
+        canvas = getattr(self, "canvas", None)
+        if obj is canvas and etype in (
+            QEvent.Resize, QEvent.Show, QEvent.LayoutRequest
+        ):
+            self._position_quality_indicator()
+            self._schedule_quality_indicator_position()
+        elif obj is getattr(self, "_canvas_viewport", None) and etype in (
+            QEvent.Resize, QEvent.Show
+        ):
+            self._schedule_quality_indicator_position()
         return super().eventFilter(obj, event)
 
     def detach_toolbar(self, parent):
@@ -1883,6 +1911,7 @@ class ChartStack(QWidget):
 
         def _order_card_factory():
             canvas = PgHeatmapCanvas(self, with_slice=True)
+            canvas.set_default_axis_labels(x_label='Time (s)', y_label='Order')
             # Order slice toggle reads 按时间 / 按阶次 (Y axis is order). Default
             # to the 按阶次 (Y) slice — the common case is "one order's amplitude
             # over time".

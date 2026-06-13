@@ -42,6 +42,31 @@ def test_chart_stack_has_three_canvases(qapp):
     assert cs.count() == 4
 
 
+def test_analysis_heatmap_sections_start_with_section_axis_labels(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    fft_time = cs.canvas_fft_time
+    fft_time.setParent(None)
+    qtbot.addWidget(fft_time)
+    fft_time.show()
+    qapp.processEvents()
+    assert fft_time._plot.getAxis('bottom').labelText == 'Time (s)'
+    assert fft_time._plot.getAxis('left').labelText == 'Frequency (Hz)'
+    assert fft_time._slice_plot.getAxis('bottom').labelText == 'Frequency (Hz)'
+    assert fft_time._slice_plot.getAxis('left').labelText == 'Amplitude (dB)'
+
+    order = cs.canvas_order
+    order.setParent(None)
+    qtbot.addWidget(order)
+    order.show()
+    qapp.processEvents()
+    assert order._plot.getAxis('bottom').labelText == 'Time (s)'
+    assert order._plot.getAxis('left').labelText == 'Order'
+    assert order._slice_plot.getAxis('bottom').labelText == 'Time (s)'
+    assert order._slice_plot.getAxis('left').labelText == 'Amplitude (dB)'
+
+
 def test_chart_stack_set_mode(qapp):
     cs = ChartStack()
     cs.set_mode('fft')

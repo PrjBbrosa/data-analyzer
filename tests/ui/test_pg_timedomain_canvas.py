@@ -4619,6 +4619,16 @@ class TestTimeDomainCanvasPGVisualStyleDefaults:
             assert border.color().name().lower() == PG_AXIS_NEUTRAL_COLOR
             assert border.widthF() == pytest.approx(PG_AXIS_NEUTRAL_WIDTH)
 
+    def test_plot_items_hide_native_auto_fit_buttons(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        QCoreApplication.processEvents()
+
+        for handle in canvas.axes_list:
+            assert getattr(handle.plot_item, "buttonsHidden", False) is True
+
     def test_pg_axes_use_explicit_chart_font(self, qapp):
         from PyQt5.QtCore import QCoreApplication
         from mf4_analyzer.ui.pg_canvases import _pg_chart_font

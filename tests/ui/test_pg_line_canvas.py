@@ -741,6 +741,15 @@ def test_line_plots_draw_full_neutral_axis_frame_without_viewbox_overlap(qapp):
         c.deleteLater()
 
 
+def test_line_plots_hide_native_auto_fit_buttons(qapp):
+    c = PgLineCanvas()
+    try:
+        for plot in (c._plot_amp, c._plot_time):
+            assert getattr(plot, "buttonsHidden", False) is True
+    finally:
+        c.deleteLater()
+
+
 def test_selecting_fft_curve_updates_time_preview(canvas):
     e1 = _entry('a', '#2563eb')
     e2 = _entry('b', '#dc2626')

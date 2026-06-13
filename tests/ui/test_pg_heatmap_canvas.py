@@ -114,6 +114,48 @@ def test_heatmap_grid_is_major_only(canvas):
         )
 
 
+def test_heatmap_empty_state_has_default_main_axis_labels(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.show()
+        qapp.processEvents()
+        assert c._plot.getAxis('bottom').labelText == 'Time (s)'
+        assert c._plot.getAxis('left').labelText == 'Frequency (Hz)'
+        assert c._slice_plot.getAxis('bottom').labelText == 'Frequency (Hz)'
+        assert c._slice_plot.getAxis('left').labelText == 'Amplitude (dB)'
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_full_reset_restores_empty_state_axis_labels(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.show()
+        qapp.processEvents()
+        c.plot_or_update_heatmap(
+            matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+            x_label='Custom X', y_label='Custom Y',
+            amplitude_mode='amplitude', z_auto=True,
+        )
+        c.full_reset()
+        qapp.processEvents()
+        assert c._plot.getAxis('bottom').labelText == 'Time (s)'
+        assert c._plot.getAxis('left').labelText == 'Frequency (Hz)'
+        assert c._slice_plot.getAxis('bottom').labelText == 'Frequency (Hz)'
+        assert c._slice_plot.getAxis('left').labelText == 'Amplitude (dB)'
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_plots_hide_native_auto_fit_buttons(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        for plot in (c._plot, c._slice_plot):
+            assert getattr(plot, "buttonsHidden", False) is True
+    finally:
+        c.deleteLater()
+
+
 def test_db_mode_manual_levels_clip(canvas):
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),

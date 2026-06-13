@@ -29,6 +29,7 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_WIDTH,
 )
 from mf4_analyzer.ui.pg_canvas.context_menu import redesign_pg_context_menu
+from mf4_analyzer.ui.pg_canvas._shared import _hide_native_auto_button
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
 
 
@@ -218,6 +219,7 @@ def _visual_padded_bounds(lo: float, hi: float, *, fraction: float = 0.015) -> t
 
 def _apply_neutral_axis_frame(plot) -> None:
     """Draw a full frame with axes, avoiding ViewBox border/axis overlap."""
+    _hide_native_auto_button(plot)
     vb = plot.getViewBox()
     # pg 0.14 setBorder(None) stores a NoPen QPen, so ViewBox.paint still
     # enters its border branch. Clear the private value after resetting the
@@ -404,6 +406,8 @@ class PgHeatmapCanvas(QWidget):
         self._y_coords = None
         self._x_label = ''
         self._y_label = ''
+        self._default_x_label = 'Time (s)'
+        self._default_y_label = 'Frequency (Hz)'
         # Button labels for the X/Y toggle, e.g. ('按时间', '按频率').
         self._slice_x_btn_label = '按时间'
         self._slice_y_btn_label = '按频率'
@@ -490,6 +494,8 @@ class PgHeatmapCanvas(QWidget):
             self._ensure_colorbar(_resolve_colormap('turbo'), 'Amplitude (dB)')
         else:
             self._collapse_ctrl = None
+        self._x_label = self._default_x_label
+        self._y_label = self._default_y_label
 
     # ------------------------------------------------------------------
     # main API (signature mirrors canvases.PlotCanvas.plot_or_update_heatmap)
@@ -508,8 +514,8 @@ class PgHeatmapCanvas(QWidget):
         # them (the slice plots amplitude against the OTHER axis). When coords
         # are not supplied they are derived from the extents + matrix shape in
         # _slice_coords (regular display grid).
-        self._x_label = x_label or self._x_label
-        self._y_label = y_label or self._y_label
+        self._x_label = x_label or self._default_x_label
+        self._y_label = y_label or self._default_y_label
         self._x_coords = (
             np.asarray(x_coords, dtype=float) if x_coords is not None else None)
         self._y_coords = (
@@ -565,8 +571,8 @@ class PgHeatmapCanvas(QWidget):
         self._cbar.setLevels((vmin, vmax))
         self._cbar.blockSignals(False)
 
-        self._plot.setLabel('bottom', x_label)
-        self._plot.setLabel('left', y_label)
+        self._plot.setLabel('bottom', self._x_label)
+        self._plot.setLabel('left', self._y_label)
         self._raw_title = title or ''
         self._apply_title_text()
 
@@ -617,8 +623,6 @@ class PgHeatmapCanvas(QWidget):
             self._cbar = None
         _hide_plot_title(self._plot)
         self._raw_title = ''
-        self._plot.setLabel('bottom', '')
-        self._plot.setLabel('left', '')
         self._matrix_disp = None
         self._extents = None
         self._has_result = False
@@ -638,8 +642,40 @@ class PgHeatmapCanvas(QWidget):
                 self._slice_panel.show()
         if self._with_slice:
             self._ensure_colorbar(_resolve_colormap('turbo'), 'Amplitude (dB)')
+        if self.isVisible():
+            self._apply_default_axis_labels()
+        else:
+            self._x_label = self._default_x_label
+            self._y_label = self._default_y_label
         self.reset_split_layout_alignment()
         self.layout_geometry_changed.emit()
+
+    def set_default_axis_labels(self, *, x_label: str | None = None,
+                                y_label: str | None = None) -> None:
+        """Configure labels used before the first render and after reset."""
+        if x_label is not None:
+            self._default_x_label = x_label
+        if y_label is not None:
+            self._default_y_label = y_label
+        if not self._has_result and self.isVisible():
+            self._apply_default_axis_labels()
+        elif not self._has_result:
+            self._x_label = self._default_x_label
+            self._y_label = self._default_y_label
+
+    def _apply_default_axis_labels(self) -> None:
+        self._x_label = self._default_x_label
+        self._y_label = self._default_y_label
+        self._plot.setLabel('bottom', self._default_x_label)
+        self._plot.setLabel('left', self._default_y_label)
+        if self._slice_plot is not None:
+            bottom = (self._default_x_label if self._slice_dir == 'y'
+                      else self._default_y_label)
+            amp_label = ('Amplitude (dB)'
+                         if self._amplitude_mode == 'amplitude_db'
+                         else 'Amplitude')
+            self._slice_plot.setLabel('bottom', bottom)
+            self._slice_plot.setLabel('left', amp_label)
 
     def register_mouse_mode_controller(self, controller) -> None:
         self._mouse_mode_controller = controller
@@ -861,6 +897,11 @@ class PgHeatmapCanvas(QWidget):
         self._slice_dir = direction
         if self._slice_toggle is not None:
             self._slice_toggle.set_direction(direction, emit=False)
+        if self._matrix_disp is None:
+            if not self.isVisible():
+                return
+            self._apply_default_axis_labels()
+            return
         self._apply_slice()
 
     def select_time_index(self, idx: int) -> None:
@@ -1059,6 +1100,8 @@ class PgHeatmapCanvas(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not self._has_result:
+            self._apply_default_axis_labels()
         self._align_slice_to_main()
         self._position_slice_panel()
         self._position_collapse_ctrl()
