@@ -1463,6 +1463,7 @@ class PersistentTop(QWidget):
         # ------- Collapser body (the three groups live here) -------
         self._collapser_body = QFrame(self)
         body_lay = QVBoxLayout(self._collapser_body)
+        self._body_lay = body_lay
         # Match the contextual cards below: the header remains full-width as
         # the click target, while the expanded content keeps 10px breathing
         # room on both sides.
@@ -1493,6 +1494,7 @@ class PersistentTop(QWidget):
 
         # ------- Range group -------
         g = QGroupBox("时间范围")
+        self._range_group = g
         g.setToolTip("限制参与绘图、统计、单次分析和导出的时间窗口（单位：秒）。")
         fl = QFormLayout(g)
         _configure_form(fl)
@@ -1610,6 +1612,15 @@ class PersistentTop(QWidget):
             else "图表设置 (时间范围)"
         )
         self.btn_collapser.setText(text)
+
+    def range_group(self):
+        return self._range_group
+
+    def range_group_layout(self):
+        return self._body_lay
+
+    def set_range_group_embedded(self, embedded):
+        self._range_group.setTitle("分析时间" if embedded else "时间范围")
 
     def _sync_xlabel_from_channel(self, idx):
         if idx < 0:
@@ -1773,7 +1784,7 @@ class FFTContextual(QWidget):
         sig_lay = QVBoxLayout(sig_card)
         sig_lay.setContentsMargins(0, 0, 0, 0)
         sig_lay.setSpacing(4)
-        sig_lay.addWidget(_make_group_header("分析信号", self.btn_rebuild))
+        sig_lay.addWidget(_make_group_header("分析信号 + 时间", self.btn_rebuild))
         fl = QFormLayout()
         _configure_form(fl)
         self.lbl_source_summary = QLabel("未勾选左侧通道 · 使用单信号下拉框")
@@ -1796,6 +1807,10 @@ class FFTContextual(QWidget):
         self.spin_fs.setSuffix(" Hz")
         fl.addRow("Fs:", _fit_field(self.spin_fs, max_width=_SHORT_FIELD_MAX_WIDTH))
         sig_lay.addLayout(fl)
+        self._time_range_slot = QVBoxLayout()
+        self._time_range_slot.setContentsMargins(0, 0, 0, 0)
+        self._time_range_slot.setSpacing(0)
+        sig_lay.addLayout(self._time_range_slot)
         root.addWidget(sig_card)
 
         g = QGroupBox("谱参数")
@@ -1923,6 +1938,9 @@ class FFTContextual(QWidget):
         self._sync_axis_enabled()
         # §6.3 Fs rule: spin_fs reflects selected signal's source file Fs.
         # MainWindow will call set_fs via the signal_changed relay.
+
+    def time_range_layout(self):
+        return self._time_range_slot
 
     def _sync_axis_enabled(self):
         for key in ('x', 'y'):
@@ -2161,7 +2179,7 @@ class OrderContextual(QWidget):
         sig_lay = QVBoxLayout(sig_card)
         sig_lay.setContentsMargins(0, 0, 0, 0)
         sig_lay.setSpacing(4)
-        sig_lay.addWidget(_make_group_header("信号源", self.btn_rebuild))
+        sig_lay.addWidget(_make_group_header("信号源 + 时间", self.btn_rebuild))
         fl = QFormLayout()
         _configure_form(fl)
         self.combo_sig = SearchableComboBox()
@@ -2179,6 +2197,10 @@ class OrderContextual(QWidget):
         self.spin_rf.setValue(1)
         fl.addRow("RPM系数:", _fit_field(self.spin_rf, max_width=_SHORT_FIELD_MAX_WIDTH))
         sig_lay.addLayout(fl)
+        self._time_range_slot = QVBoxLayout()
+        self._time_range_slot.setContentsMargins(0, 0, 0, 0)
+        self._time_range_slot.setSpacing(0)
+        sig_lay.addLayout(self._time_range_slot)
         root.addWidget(sig_card)
 
         g = QGroupBox("谱参数")
@@ -2291,6 +2313,9 @@ class OrderContextual(QWidget):
             max_field_width=_SHORT_FIELD_MAX_WIDTH,
             unify_columns=True,
         )
+
+    def time_range_layout(self):
+        return self._time_range_slot
 
     # ---- 2026-04-28: axis settings group helpers (Wave 3 introduced; row-
     # builder lifted to module level in Wave 4 — see _make_axis_settings_group).
@@ -2674,7 +2699,7 @@ class FFTTimeContextual(QWidget):
         sig_lay = QVBoxLayout(sig_card)
         sig_lay.setContentsMargins(0, 0, 0, 0)
         sig_lay.setSpacing(4)
-        sig_lay.addWidget(_make_group_header("分析信号", self.btn_rebuild))
+        sig_lay.addWidget(_make_group_header("分析信号 + 时间", self.btn_rebuild))
         fl = QFormLayout()
         _configure_form(fl)
         self.combo_sig = SearchableComboBox()
@@ -2685,6 +2710,10 @@ class FFTTimeContextual(QWidget):
         self.spin_fs.setSuffix(" Hz")
         fl.addRow("Fs:", _fit_field(self.spin_fs, max_width=_SHORT_FIELD_MAX_WIDTH))
         sig_lay.addLayout(fl)
+        self._time_range_slot = QVBoxLayout()
+        self._time_range_slot.setContentsMargins(0, 0, 0, 0)
+        self._time_range_slot.setSpacing(0)
+        sig_lay.addLayout(self._time_range_slot)
         root.addWidget(sig_card)
 
         # ---- 时频参数 ----
@@ -2825,6 +2854,9 @@ class FFTTimeContextual(QWidget):
         self._sync_axis_enabled()
 
     # ---- helpers ----
+    def time_range_layout(self):
+        return self._time_range_slot
+
     def _sync_axis_enabled(self):
         """Toggle each axis row between auto summary and manual bounds.
 

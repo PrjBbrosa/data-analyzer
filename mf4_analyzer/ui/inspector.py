@@ -115,7 +115,9 @@ class Inspector(QWidget):
         host_lay.addStretch(1)
 
         self._scroll.setWidget(host)
+        self._range_group_owner_layout = self.top.range_group_layout()
         self._wire()
+        self._place_range_group_for_mode('time')
 
     def _wire(self):
         self.top.xaxis_apply_requested.connect(self.xaxis_apply_requested)
@@ -150,7 +152,30 @@ class Inspector(QWidget):
     def set_mode(self, mode):
         idx = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}[mode]
         self.contextual_stack.setCurrentIndex(idx)
-        self.top.set_xaxis_section_visible(mode not in {'fft', 'order'})
+        self._place_range_group_for_mode(mode)
+
+    def _place_range_group_for_mode(self, mode):
+        group = self.top.range_group()
+        old_layout = self._range_group_owner_layout
+        if old_layout is not None:
+            old_layout.removeWidget(group)
+        if mode == 'time':
+            target_layout = self.top.range_group_layout()
+            self.top.set_range_group_embedded(False)
+            self.top.set_xaxis_section_visible(True)
+            self.top.setVisible(True)
+        else:
+            ctx = {
+                'fft': self.fft_ctx,
+                'fft_time': self.fft_time_ctx,
+                'order': self.order_ctx,
+            }[mode]
+            target_layout = ctx.time_range_layout()
+            self.top.set_range_group_embedded(True)
+            self.top.setVisible(False)
+        target_layout.addWidget(group)
+        self._range_group_owner_layout = target_layout
+        group.setVisible(True)
 
     def current_mode(self):
         return self.contextual_widget_name()

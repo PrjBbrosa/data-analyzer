@@ -436,6 +436,8 @@ class MainWindow(QMainWindow):
                 page.pane_canvas(0).levels_changed.connect(
                     lambda lo, hi, s=sec: self._on_analysis_levels_dragged(
                         s, 0, lo, hi))
+            else:
+                self._connect_fft_preview_range_signal(page.pane_canvas(0), 0)
 
         # FFT vs Time primary compute.
         self.inspector.fft_time_requested.connect(
@@ -789,6 +791,8 @@ class MainWindow(QMainWindow):
         if page.pane_count() < 2:
             return
         self.chart_stack._connect_analysis_card_signals(page._cards[1])
+        if section == 'fft':
+            self._connect_fft_preview_range_signal(page.pane_canvas(1), 1)
         # V8: pane 1's colorbar-drag → inspector Z echo (heatmap sections).
         # Guarded against double-wiring across repeated splits via a marker on
         # the canvas (enter_split builds a fresh card each time, so a stale
@@ -801,6 +805,15 @@ class MainWindow(QMainWindow):
                     lambda lo, hi: self._on_analysis_levels_dragged(
                         section, 1, lo, hi))
                 canvas._levels_echo_wired = True
+
+    def _connect_fft_preview_range_signal(self, canvas, pane_idx):
+        signal = getattr(canvas, 'time_preview_range_changed', None)
+        if signal is None or getattr(canvas, '_fft_preview_range_wired', False):
+            return
+        signal.connect(
+            lambda lo, hi, idx=pane_idx: self._on_fft_preview_range_changed(
+                idx, lo, hi))
+        canvas._fft_preview_range_wired = True
 
     # -- view-switch pipeline (capture → switch → apply → render) -------
     def _capture_active_analysis_view(self, section, *, capture_sources=True):
@@ -1632,6 +1645,17 @@ class MainWindow(QMainWindow):
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
             return False
         self.inspector.top.set_range_values(lo, hi)
+        return True
+
+    def _on_fft_preview_range_changed(self, pane_idx, lo, hi):
+        if self.chart_stack.current_mode() != 'fft':
+            return False
+        page = self.chart_stack.page_fft
+        if pane_idx != page.focused_index():
+            return False
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return False
+        self.inspector.top.set_range_from_span(lo, hi)
         return True
 
     def _on_time_range_enabled_changed(self, enabled):

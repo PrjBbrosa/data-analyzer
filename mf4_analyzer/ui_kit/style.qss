@@ -948,8 +948,10 @@ Inspector QFrame#inspectorGroupHeader QLabel#inspectorGroupTitle {
 Inspector QFrame#fftSignalCard,
 Inspector QFrame#orderSignalCard,
 Inspector QFrame#fftTimeSignalCard {
-    background-color: transparent;
-    border: none;
+    background-color: #effaf4;
+    border: 1px solid #b9dfca;
+    border-radius: 8px;
+    padding: 0;
 }
 
 /* Mode-specific contextual blocks. FFT keeps its subtle analysis tint;
@@ -978,6 +980,12 @@ Inspector QWidget#axisHeaderRow,
 Inspector QWidget#axisHeaderRange {
     background-color: #ffffff;
 }
+Inspector QFrame#fftSignalCard QGroupBox,
+Inspector QFrame#orderSignalCard QGroupBox,
+Inspector QFrame#fftTimeSignalCard QGroupBox,
+Inspector QFrame#fftSignalCard QWidget#axisRow,
+Inspector QFrame#orderSignalCard QWidget#axisRow,
+Inspector QFrame#fftTimeSignalCard QWidget#axisRow,
 Inspector QWidget#fftContextual QWidget#axisRow,
 Inspector QWidget#fftContextual QWidget#axisRowLine,
 Inspector QWidget#fftContextual QWidget#axisAutoCell,
@@ -987,7 +995,7 @@ Inspector QWidget#fftContextual QWidget#axisManualRangePage,
 Inspector QWidget#fftContextual QWidget#axisUnitLine,
 Inspector QWidget#fftContextual QWidget#axisHeaderRow,
 Inspector QWidget#fftContextual QWidget#axisHeaderRange {
-    background-color: #eef4ff;
+    background-color: transparent;
 }
 /* 自动 / 最小 / 最大 column headers above the axis grid — muted + small. */
 Inspector QLabel[axisHeader="true"] {

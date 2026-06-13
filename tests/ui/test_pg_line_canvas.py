@@ -223,6 +223,20 @@ def test_shift_wheel_zooms_fft_line_canvas_current_plot_y_only(canvas, qapp):
         time_y_before[1] - time_y_before[0])
 
 
+def test_time_preview_manual_range_emits_analysis_window(canvas, qapp):
+    canvas.plot_time_preview([_entry()], title='时域预览')
+    emitted = []
+    canvas.time_preview_range_changed.connect(lambda lo, hi: emitted.append((lo, hi)))
+
+    canvas._plot_time.setXRange(0.2, 0.6, padding=0)
+    canvas._plot_time.vb.sigRangeChangedManually.emit(
+        canvas._plot_time.vb.state['mouseEnabled'])
+    qapp.processEvents()
+
+    assert emitted
+    assert emitted[-1] == pytest.approx((0.2, 0.6), abs=1e-6)
+
+
 def test_fft_amp_curves_are_antialiased(canvas):
     # The FFT amplitude overlay (top row) is always antialiased — it is a
     # bounded spectrum (~freq-bin count), not a multi-million-point time

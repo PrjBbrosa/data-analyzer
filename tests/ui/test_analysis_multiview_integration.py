@@ -108,6 +108,25 @@ def test_fft_mode_channel_selection_previews_time_before_compute(two_file_win, q
     assert len(canvas._time_curves) == 2
 
 
+def test_fft_time_preview_drag_updates_analysis_time_range(two_file_win, qapp):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    qapp.processEvents()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._time_curves) == 2
+    win.inspector.top.chk_range.setChecked(False)
+
+    canvas._plot_time.setXRange(0.2, 0.6, padding=0)
+    canvas._plot_time.vb.sigRangeChangedManually.emit(
+        canvas._plot_time.vb.state['mouseEnabled'])
+    qapp.processEvents()
+
+    assert win.inspector.top.range_enabled() is True
+    assert win.inspector.top.range_values() == pytest.approx((0.2, 0.6), abs=1e-6)
+
+
 def test_fft_section_switch_away_and_back_preserves_spectrum(two_file_win, qapp):
     """Compute FFT, switch to another section, switch back: the computed
     spectrum must survive. The old mode-entry path ran an unconditional

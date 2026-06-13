@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraceLab 分析 Inspector 重组预览</title>
+<style>
+  :root {
+    --app-bg: #f3f6fb;
+    --surface: #ffffff;
+    --panel: #eef4ff;
+    --panel-strong: #e7f0ff;
+    --line: #dbe5f1;
+    --line-strong: #b7c8dc;
+    --text: #111827;
+    --muted: #64748b;
+    --blue: #0b7af3;
+    --blue-soft: #e7f1ff;
+    --green: #16a34a;
+    --orange: #f97316;
+    --danger: #e11d48;
+    --slate: #334155;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: #e9eef6;
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    letter-spacing: 0;
+  }
+
+  .shell {
+    width: 1540px;
+    margin: 18px auto;
+    background: var(--app-bg);
+    border: 1px solid #cfd8e5;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .titlebar {
+    height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid var(--line);
+    color: #475569;
+    font-weight: 700;
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .red { background: #ff5f57; }
+  .yellow { background: #ffbd2e; }
+  .green { background: #28c840; margin-right: 8px; }
+
+  .topbar {
+    height: 54px;
+    display: grid;
+    grid-template-columns: 270px 1fr 270px;
+    align-items: center;
+    padding: 0 12px;
+    background: #f6f8fc;
+    border-bottom: 1px solid var(--line);
+  }
+  .actions, .brand { display: flex; align-items: center; gap: 8px; }
+  .brand { justify-content: flex-end; color: #475569; font-weight: 700; }
+  button, .btn {
+    height: 32px;
+    border: 1px solid #cbd8e8;
+    background: #fff;
+    color: #1f2937;
+    border-radius: 7px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font: inherit;
+    font-weight: 700;
+  }
+  .primary { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .icon-btn { width: 32px; padding: 0; }
+  .segments {
+    justify-self: center;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #eef3fb;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px;
+  }
+  .seg {
+    min-width: 92px;
+    height: 32px;
+    border-radius: 6px;
+    color: #475569;
+    background: transparent;
+    border-color: transparent;
+  }
+  .seg.active { background: #fff; color: #0f172a; border-color: #d3dfed; }
+
+  .workspace {
+    height: 820px;
+    display: grid;
+    grid-template-columns: 270px 1fr 390px;
+  }
+  .left {
+    background: #f4f7fb;
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+  }
+  .left-head {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--line);
+    font-weight: 700;
+  }
+  .file-card {
+    margin: 10px;
+    padding: 12px;
+    border: 1px solid #c7d8ed;
+    border-left: 3px solid var(--blue);
+    border-radius: 8px;
+    background: #eef4ff;
+  }
+  .file-card b { display: block; margin-bottom: 6px; }
+  .file-card span { color: #64748b; }
+  .filter {
+    margin-top: auto;
+    padding: 10px;
+    border-top: 1px solid var(--line);
+    background: #fff;
+  }
+  .filter input {
+    width: 100%;
+    height: 34px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 0 10px;
+    color: #64748b;
+  }
+  .channel-row {
+    display: grid;
+    grid-template-columns: 22px 1fr 58px;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid #edf2f8;
+    background: #fff;
+  }
+  .check {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #b8c7d8;
+    border-radius: 2px;
+    background: #fff;
+    position: relative;
+  }
+  .check.on::after {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    border-radius: 2px;
+    background: var(--blue);
+  }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+
+  .center {
+    display: grid;
+    grid-template-rows: 42px 1fr 210px 34px;
+    background: #fff;
+  }
+  .toolbar {
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+  }
+  .tool {
+    width: 32px;
+    height: 32px;
+    border: 1px solid #cbd8e8;
+    border-radius: 7px;
+    background: #fff;
+    display: grid;
+    place-items: center;
+    color: #334155;
+    font-weight: 800;
+  }
+  .tool.active { border-color: var(--blue); color: var(--blue); background: var(--blue-soft); }
+  .plot {
+    position: relative;
+    background: #fff;
+    overflow: hidden;
+  }
+  .grid {
+    position: absolute;
+    inset: 26px 24px 46px 62px;
+    border: 1px solid #9fafc2;
+    background:
+      linear-gradient(to right, rgba(100, 116, 139, .18) 1px, transparent 1px) 0 0 / 72px 100%,
+      linear-gradient(to bottom, rgba(100, 116, 139, .18) 1px, transparent 1px) 0 0 / 100% 44px;
+  }
+  .curve {
+    position: absolute;
+    left: 70px;
+    right: 42px;
+    top: 160px;
+    height: 85px;
+    border-bottom: 2px solid transparent;
+  }
+  .curve::before,
+  .curve::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: #0b7af3;
+    transform: rotate(-2deg);
+    transform-origin: left center;
+  }
+  .curve::after {
+    top: 46px;
+    background: #ef4444;
+    transform: rotate(2deg);
+  }
+  .heat {
+    position: absolute;
+    inset: 34px 38px 52px 70px;
+    border: 1px solid #9fafc2;
+    background:
+      linear-gradient(90deg, rgba(15, 23, 42, .08), rgba(11, 122, 243, .75), rgba(22, 163, 74, .78), rgba(249, 115, 22, .8), rgba(225, 29, 72, .72)),
+      repeating-linear-gradient(to right, transparent 0 54px, rgba(255,255,255,.18) 54px 55px),
+      repeating-linear-gradient(to bottom, transparent 0 38px, rgba(255,255,255,.18) 38px 39px);
+  }
+  .selection {
+    position: absolute;
+    left: 31%;
+    right: 24%;
+    top: 26px;
+    bottom: 46px;
+    border-left: 2px solid #e11d48;
+    border-right: 2px solid #e11d48;
+    background: rgba(225, 29, 72, .07);
+  }
+  .select-label {
+    position: absolute;
+    left: 32%;
+    top: 18px;
+    background: #fff;
+    border: 1px solid #fecdd3;
+    color: #be123c;
+    border-radius: 5px;
+    padding: 4px 7px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .axis {
+    position: absolute;
+    color: #94a3b8;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .x-axis { bottom: 17px; left: 50%; transform: translateX(-50%); }
+  .y-axis { left: 17px; top: 46%; transform: rotate(-90deg); transform-origin: left top; }
+  .preview {
+    border-top: 1px solid var(--line);
+    position: relative;
+  }
+  .preview .grid { inset: 28px 24px 40px 62px; }
+  .preview .curve { top: 80px; height: 60px; }
+  .preview-title {
+    position: absolute;
+    left: 64px;
+    top: 8px;
+    color: #64748b;
+    font-weight: 700;
+  }
+  .hintbar {
+    display: flex;
+    align-items: center;
+    padding: 0 10px;
+    gap: 18px;
+    background: #f3f6fb;
+    color: #475569;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+  }
+
+  .inspector {
+    border-left: 1px solid var(--line);
+    background: #eaf2ff;
+    display: flex;
+    flex-direction: column;
+  }
+  .inspector-head {
+    min-height: 44px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #d3dfed;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 800;
+  }
+  .scroll {
+    overflow: auto;
+    padding: 10px;
+  }
+  .module {
+    background: #fff;
+    border: 1px solid #cfe0f4;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .module.emphasis {
+    background: #effaf4;
+    border-color: #b9dfca;
+  }
+  .module.emphasis .module-head,
+  .module.emphasis .range-card {
+    border-color: #cce9d8;
+  }
+  .module-head {
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-bottom: 1px solid #d9e5f3;
+    font-size: 16px;
+    font-weight: 800;
+  }
+  .module-sub {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .form {
+    padding: 9px 10px 10px;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 78px 1fr;
+    gap: 9px;
+    align-items: center;
+    margin-bottom: 9px;
+  }
+  .row label { font-weight: 700; color: #111827; }
+  .field {
+    min-height: 34px;
+    border: 1px solid #d6e2f0;
+    background: #fff;
+    border-radius: 7px;
+    padding: 6px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #0f172a;
+  }
+  .field.muted { color: #64748b; }
+  .select-like::after { content: "▾"; color: #64748b; font-size: 12px; }
+  .range-card {
+    padding: 9px 10px 10px;
+    border-top: 1px solid #d9e5f3;
+  }
+  .range-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-weight: 800;
+  }
+  .toggle-line {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 8px;
+    font-weight: 700;
+    color: #334155;
+  }
+  .box {
+    width: 18px;
+    height: 18px;
+    border: 1px solid #9fb2c9;
+    border-radius: 4px;
+    background: #fff;
+  }
+  .range-fields {
+    display: grid;
+    grid-template-columns: 1fr 20px 1fr;
+    gap: 8px;
+    align-items: center;
+  }
+  .chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .chip {
+    border: 1px solid #cfe0f4;
+    background: #f8fbff;
+    border-radius: 999px;
+    padding: 3px 8px;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .params-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .full { grid-column: 1 / -1; }
+  .calc {
+    height: 44px;
+    width: 100%;
+    background: var(--blue);
+    border-color: var(--blue);
+    color: #fff;
+    margin-top: 4px;
+  }
+  .note {
+    border-left: 3px solid var(--blue);
+    padding: 7px 9px;
+    background: #f8fbff;
+    color: #475569;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .mode-note {
+    padding: 10px 12px;
+    background: #f8fbff;
+    border-bottom: 1px solid var(--line);
+    color: #475569;
+    line-height: 1.5;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 6px;
+    padding: 10px 10px 0;
+    background: #eaf2ff;
+  }
+  .tab {
+    flex: 1;
+    height: 32px;
+    border-radius: 7px 7px 0 0;
+    border: 1px solid #cfe0f4;
+    border-bottom: none;
+    background: #f8fbff;
+    color: #475569;
+    font-weight: 800;
+  }
+  .tab.active {
+    background: #fff;
+    color: var(--blue);
+  }
+  .pane { display: none; }
+  .pane.active { display: block; }
+
+  .kbd {
+    border: 1px solid #cbd8e8;
+    border-bottom-color: #9fb2c9;
+    border-radius: 4px;
+    background: #fff;
+    padding: 1px 5px;
+    font-size: 12px;
+    font-weight: 800;
+    color: #334155;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="titlebar">
+    <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+    TraceLab v7.0 · 分析 Inspector 重组预览
+  </div>
+  <div class="topbar">
+    <div class="actions">
+      <button class="primary">打开</button>
+      <button>保存项目</button>
+      <button>批处理</button>
+    </div>
+    <div class="segments">
+      <button class="seg">时域</button>
+      <button class="seg active" data-mode="fft">FFT</button>
+      <button class="seg" data-mode="fft-time">FFT vs Time</button>
+      <button class="seg" data-mode="order">阶次</button>
+    </div>
+    <div class="brand">BOSCH</div>
+  </div>
+
+  <div class="workspace">
+    <aside class="left">
+      <div class="left-head"><span>文件</span><span>1</span></div>
+      <div class="file-card"><b>X04C_Ripple</b><span>25509 行 · 100.0 Hz · 255.10 s</span></div>
+      <div class="channel-row"><span></span><b>Channel</b><b>Pts</b></div>
+      <div class="channel-row"><span class="check on"></span><span><span class="swatch" style="background:#ef4444"></span>Rte_RotationSpeed</span><span>25509</span></div>
+      <div class="channel-row"><span class="check on"></span><span><span class="swatch" style="background:#0b7af3"></span>Rte_ActReturnTorque</span><span>25509</span></div>
+      <div class="channel-row"><span class="check"></span><span><span class="swatch" style="background:#16a34a"></span>Rte_MotorCurrent</span><span>25509</span></div>
+      <div class="filter"><input value="Filter channel..."></div>
+    </aside>
+
+    <main class="center">
+      <div class="toolbar">
+        <span class="tool">⌂</span>
+        <span class="tool">←</span>
+        <span class="tool">→</span>
+        <span class="tool">✥</span>
+        <span class="tool active">⌕</span>
+        <span class="tool">⌁</span>
+        <span class="tool">◆</span>
+        <span class="tool">⧉</span>
+        <span class="tool">▥</span>
+        <span class="tool">≡</span>
+        <span class="tool">▣</span>
+      </div>
+
+      <section class="plot" id="mainPlot">
+        <div class="grid"></div>
+        <div class="heat" hidden></div>
+        <div class="curve"></div>
+        <div class="axis y-axis">Amplitude</div>
+        <div class="axis x-axis">Frequency (Hz)</div>
+      </section>
+
+      <section class="preview">
+        <div class="preview-title">时域预览 · 可拖拽选择分析时间</div>
+        <div class="grid"></div>
+        <div class="curve"></div>
+        <div class="selection"></div>
+        <div class="select-label">选区 94.502 s - 195.978 s</div>
+        <div class="axis y-axis">Amplitude</div>
+        <div class="axis x-axis">Time (s)</div>
+      </section>
+
+      <div class="hintbar">
+        <span><span class="kbd">拖拽</span> 更新右侧分析时间</span>
+        <span><span class="kbd">不选择</span> 使用全时段</span>
+        <span>先选通道，再选择分析时间，最后计算</span>
+      </div>
+    </main>
+
+    <aside class="inspector">
+      <div class="tabs">
+        <button class="tab active" data-pane="fft">FFT</button>
+        <button class="tab" data-pane="fft-time">FFT vs Time</button>
+        <button class="tab" data-pane="order">Order</button>
+      </div>
+
+      <section class="pane active" id="pane-fft">
+        <div class="inspector-head"><span>FFT</span><span class="module-sub">流程重组</span></div>
+        <div class="mode-note">
+          取消独立横坐标设置。FFT 的横轴固定为频率；下方时域预览承担“选择分析时间”的入口。
+        </div>
+        <div class="scroll">
+          <div class="module emphasis">
+            <div class="module-head"><span>分析信号 + 时间</span><span class="module-sub">同一输入模块</span></div>
+            <div class="form">
+              <div class="row"><label>输入源:</label><div class="field">左侧已选 2 个信号 · 叠加</div></div>
+              <div class="row"><label>Fs:</label><div class="field">100.0 Hz</div></div>
+            </div>
+            <div class="range-card">
+              <div class="range-title"><span>分析时间</span><span class="module-sub">来自下方时域预览</span></div>
+              <div class="toggle-line"><span class="box"></span><span>使用选定时间范围</span></div>
+              <div class="range-fields">
+                <div class="field">94.502 s</div><span>–</span><div class="field">195.978 s</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="module">
+            <div class="module-head"><span>谱参数</span><span class="module-sub">单独模块</span></div>
+            <div class="form params-grid">
+              <div class="field select-like">hanning</div>
+              <div class="field select-like">NFFT 自动</div>
+              <div class="field">重叠 50 %</div>
+              <div class="field select-like">平均 单帧</div>
+              <div class="field select-like full">幅值轴 Linear</div>
+              <button class="calc full">计算 FFT</button>
+            </div>
+          </div>
+
+          <div class="note">
+            交互逻辑：先在左侧选择通道；如果需要局部分析，就在下方时域预览拖出选区，右侧时间输入同步。未选择时默认全时段。
+          </div>
+        </div>
+      </section>
+
+      <section class="pane" id="pane-fft-time">
+        <div class="inspector-head"><span>FFT vs Time</span><span class="module-sub">移除横坐标</span></div>
+        <div class="mode-note">
+          不再显示全局“横坐标”组。FFT vs Time 的 X 轴固定为时间，Y 轴固定为频率，时间窗口并入输入模块。
+        </div>
+        <div class="scroll">
+          <div class="module emphasis">
+            <div class="module-head"><span>分析信号 + 时间</span><button class="icon-btn">↻</button></div>
+            <div class="form">
+              <div class="row"><label>信号:</label><div class="field select-like">[tiaofri] t [1:0]</div></div>
+              <div class="row"><label>Fs:</label><div class="field">100.0 Hz</div></div>
+            </div>
+            <div class="range-card">
+              <div class="range-title"><span>分析时间</span><span class="module-sub">全时段或选区</span></div>
+              <div class="toggle-line"><span class="box"></span><span>使用选定时间范围</span></div>
+              <div class="range-fields">
+                <div class="field">0.000 s</div><span>–</span><div class="field">349.482 s</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="module">
+            <div class="module-head"><span>谱参数</span><span class="module-sub">STFT</span></div>
+            <div class="form params-grid">
+              <div class="field select-like">FFT 点数 1024</div>
+              <div class="field select-like">窗函数 hanning</div>
+              <div class="field">重叠 80 %</div>
+              <div class="field">dB 参考 1.0</div>
+              <div class="field select-like">色图 turbo</div>
+              <div class="field select-like">色阶 dB</div>
+              <button class="calc full">计算时频图</button>
+            </div>
+          </div>
+
+          <div class="module">
+            <div class="module-head"><span>坐标轴设置</span><span class="module-sub">保留图内语义</span></div>
+            <div class="form">
+              <div class="chips">
+                <span class="chip">X 时间: 全时段</span>
+                <span class="chip">Y 频率: 0 → Nyquist</span>
+                <span class="chip">Z 幅值: -70 → -20 dB</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="pane" id="pane-order">
+        <div class="inspector-head"><span>Order</span><span class="module-sub">上方输入 section</span></div>
+        <div class="mode-note">
+          Order 上面部分整合成“信号源 + 时间”section；转速、信号、Fs、RPM 系数和分析时间属于同一个前置模块。
+        </div>
+        <div class="scroll">
+          <div class="module emphasis">
+            <div class="module-head"><span>信号源 + 时间</span><button class="icon-btn">↻</button></div>
+            <div class="form">
+              <div class="row"><label>信号:</label><div class="field select-like">[tiaofri] t [1:0]</div></div>
+              <div class="row"><label>转速:</label><div class="field select-like">None</div></div>
+              <div class="row"><label>Fs:</label><div class="field">100.0 Hz</div></div>
+              <div class="row"><label>RPM系数:</label><div class="field">1.0</div></div>
+            </div>
+            <div class="range-card">
+              <div class="range-title"><span>分析时间</span><span class="module-sub">与信号源同组</span></div>
+              <div class="toggle-line"><span class="box"></span><span>使用选定时间范围</span></div>
+              <div class="range-fields">
+                <div class="field">0.000 s</div><span>–</span><div class="field">349.482 s</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="module">
+            <div class="module-head"><span>谱参数</span><span class="module-sub">阶次计算</span></div>
+            <div class="form params-grid">
+              <div class="field">最大阶次 20</div>
+              <div class="field">阶次分辨率 0.1</div>
+              <div class="field">时间分辨率 0.05 s</div>
+              <div class="field select-like">FFT 点数 2048</div>
+              <div class="field full">每转样本数 256</div>
+              <button class="calc full">时间-阶次</button>
+            </div>
+          </div>
+
+          <div class="module">
+            <div class="module-head"><span>坐标轴设置</span><span class="module-sub">图内语义</span></div>
+            <div class="form">
+              <div class="chips">
+                <span class="chip">X 时间: 全时段</span>
+                <span class="chip">Y 阶次: 0 → 最大阶次</span>
+                <span class="chip">Z 幅值: -50 → -10 dB</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<script>
+  const buttons = [...document.querySelectorAll('[data-pane]')];
+  const segs = [...document.querySelectorAll('[data-mode]')];
+  const panes = {
+    'fft': document.getElementById('pane-fft'),
+    'fft-time': document.getElementById('pane-fft-time'),
+    'order': document.getElementById('pane-order')
+  };
+  const mainPlot = document.getElementById('mainPlot');
+
+  function setMode(mode) {
+    buttons.forEach(btn => btn.classList.toggle('active', btn.dataset.pane === mode));
+    segs.forEach(btn => btn.classList.toggle('active', btn.dataset.mode === mode));
+    Object.entries(panes).forEach(([key, pane]) => pane.classList.toggle('active', key === mode));
+
+    const isHeat = mode !== 'fft';
+    mainPlot.querySelector('.grid').hidden = isHeat;
+    mainPlot.querySelector('.curve').hidden = isHeat;
+    mainPlot.querySelector('.heat').hidden = !isHeat;
+    mainPlot.querySelector('.x-axis').textContent = isHeat ? 'Time (s)' : 'Frequency (Hz)';
+    mainPlot.querySelector('.y-axis').textContent = mode === 'order' ? 'Order' : (mode === 'fft-time' ? 'Frequency (Hz)' : 'Amplitude');
+  }
+
+  buttons.forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.pane)));
+  segs.forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
+</script>
+</body>
+</html>

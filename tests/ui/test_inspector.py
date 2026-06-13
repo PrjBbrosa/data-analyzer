@@ -732,9 +732,9 @@ def test_persistent_top_collapser_toggle_reveals_groups(qapp):
         pt.hide()
 
 
-def test_inspector_hides_persistent_xaxis_section_for_fft_and_order(qapp, qtbot):
-    """FFT and Order use their own analysis axes; the global custom-X section
-    should not take Inspector space in those modes."""
+def test_inspector_hides_persistent_top_for_analysis_modes(qapp, qtbot):
+    """Analysis modes own their time/axis controls inside contextual cards, so
+    the global time-domain chart settings block should not take space."""
     from PyQt5.QtWidgets import QGroupBox
     from mf4_analyzer.ui.inspector import Inspector
 
@@ -753,15 +753,13 @@ def test_inspector_hides_persistent_xaxis_section_for_fft_and_order(qapp, qtbot)
         assert "横坐标" in inspector.top.btn_collapser.text()
 
         inspector.set_mode("fft")
-        assert xaxis_group.isHidden() is True
-        assert "横坐标" not in inspector.top.btn_collapser.text()
+        assert inspector.top.isHidden() is True
 
         inspector.set_mode("order")
-        assert xaxis_group.isHidden() is True
+        assert inspector.top.isHidden() is True
 
         inspector.set_mode("fft_time")
-        assert xaxis_group.isVisible() is True
-        assert "横坐标" in inspector.top.btn_collapser.text()
+        assert inspector.top.isHidden() is True
     finally:
         inspector.hide()
 
@@ -1394,7 +1392,7 @@ def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbo
         insp = Inspector()
         qtbot.addWidget(insp)
         insp.resize(288, 850)
-        insp.set_mode('fft')
+        insp.set_mode('time')
         insp.top.btn_collapser.setChecked(True)
         insp.show()
         qtbot.waitExposed(insp)
@@ -1409,23 +1407,56 @@ def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbo
         header_left, header_right = bounds(insp.top.btn_collapser)
         assert (header_left, header_right) == (0, root.width())
 
-        fft_section = next(
-            group for group in insp.fft_ctx.findChildren(QGroupBox)
-            if group.title() == "谱参数"
+        time_section = next(
+            group for group in insp.top.findChildren(QGroupBox)
+            if group.title() == "时间范围"
         )
-        expected_left, expected_right = bounds(fft_section)
+        expected_left, expected_right = bounds(time_section)
         top_sections = {
             group.title(): bounds(group)
             for group in insp.top.findChildren(QGroupBox)
             if group.isVisible()
         }
         assert top_sections == {
+            "横坐标": (expected_left, expected_right),
             "时间范围": (expected_left, expected_right),
         }
         assert expected_left == 10
         assert root.width() - expected_right == 10
     finally:
         qapp.setStyleSheet(old_sheet)
+
+
+def test_analysis_modes_embed_time_range_in_input_card(qapp, qtbot):
+    from mf4_analyzer.ui.inspector import Inspector
+
+    inspector = Inspector()
+    qtbot.addWidget(inspector)
+
+    def ancestor_object_names(widget):
+        names = []
+        cur = widget.parentWidget()
+        while cur is not None:
+            names.append(cur.objectName())
+            cur = cur.parentWidget()
+        return names
+
+    for mode, card_name, title in (
+        ("fft", "fftSignalCard", "分析时间"),
+        ("fft_time", "fftTimeSignalCard", "分析时间"),
+        ("order", "orderSignalCard", "分析时间"),
+    ):
+        inspector.set_mode(mode)
+        qapp.processEvents()
+        group = inspector.top.range_group()
+        assert inspector.top.isHidden() is True
+        assert group.title() == title
+        assert card_name in ancestor_object_names(group)
+
+    inspector.set_mode("time")
+    qapp.processEvents()
+    assert inspector.top.isHidden() is False
+    assert inspector.top.range_group().title() == "时间范围"
 
 
 def test_signal_card_qframes_have_no_white_bleed(qapp):

@@ -64,6 +64,7 @@ class PgLineCanvas(QWidget):
     cursor_info = pyqtSignal(str)
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
+    time_preview_range_changed = pyqtSignal(float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -121,7 +122,8 @@ class PgLineCanvas(QWidget):
             # plot stays crisp). The custom ctrl/shift wheel zoom is hooked
             # separately in _handle_wheel_dispatch.
             _p.vb.sigRangeChangedManually.connect(
-                self._on_interactive_range_changed)
+                lambda *_args, _plot=_p: self._on_interactive_range_changed(
+                    _plot))
 
         self._glw.scene().sigMouseMoved.connect(self._on_hover)
         self._glw.scene().sigMouseClicked.connect(self._on_click)
@@ -198,9 +200,23 @@ class PgLineCanvas(QWidget):
         except Exception:
             pass
 
-    def _on_interactive_range_changed(self, *_args):
+    def _on_interactive_range_changed(self, plot=None, *_args):
         self.disable_interactive_quality()
         self.schedule_idle_quality()
+        if plot is self._plot_time:
+            self._emit_time_preview_range()
+
+    def _emit_time_preview_range(self) -> bool:
+        try:
+            (lo, hi), _yr = self._plot_time.vb.viewRange()
+            lo = float(lo)
+            hi = float(hi)
+        except Exception:
+            return False
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return False
+        self.time_preview_range_changed.emit(lo, hi)
+        return True
 
     def register_mouse_mode_controller(self, controller) -> None:
         self._mouse_mode_controller = controller
@@ -257,6 +273,8 @@ class PgLineCanvas(QWidget):
         # so drop AA for the interactive raster and re-arm the idle restore here.
         self.disable_interactive_quality()
         self.schedule_idle_quality()
+        if view_box is self._plot_time.vb:
+            self._emit_time_preview_range()
         self.layout_geometry_changed.emit()
         return True
 
