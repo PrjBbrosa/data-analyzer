@@ -26,7 +26,7 @@ import unittest
 
 import numpy as np
 
-from mf4_analyzer.signal.fft import FFTAnalyzer
+from mf4_analyzer.signal.fft import FFTAnalyzer, get_analysis_window
 
 
 class FFTAmplitudeNormalizationTests(unittest.TestCase):
@@ -151,6 +151,109 @@ class FFTAmplitudeNormalizationTests(unittest.TestCase):
                 f"(rel_err={rel_err:.4%})"
             ),
         )
+
+
+class WelchShortSignalTests(unittest.TestCase):
+    """``compute_averaged_fft`` (Welch / 线性平均) must produce a real
+    spectrum when the signal is shorter than ``nfft``.
+
+    Regression for the bug where ``n < nfft`` made ``compute_averaged_fft``
+    return an all-zero amplitude curve (a flat line glued to 0): the loop
+    body's ``if end > n: break`` fired before any segment was accumulated,
+    so ``psd_sum`` stayed all zeros and ``amp = sqrt(0)``.
+
+    Per docs/lessons-learned/signal-processing/2026-05-19-branch-reached-is-not-behavior-correct.md
+    these tests do NOT settle for an "amp is not all zero" branch check.
+    They drive a known single tone and assert the recovered spectrum has
+    its peak at the expected bin and the peak amplitude matches an
+    independently computed single-frame Welch reference (and the closed-form
+    RMS amplitude ``A / sqrt(2)``) to tolerance, plus the freq/amp arrays are
+    self-consistent at length ``effective_nfft // 2`` where
+    ``effective_nfft = min(nfft, n)``.
+    """
+
+    @staticmethod
+    def _welch_single_frame_reference(sig, fs, win, eff):
+        """Single-segment Welch amplitude over the whole (length-``eff``)
+        signal, computed independently of the implementation under test.
+
+        Mirrors ``compute_averaged_fft``'s own math (mean-removed segment,
+        windowed full FFT, one-sided ``[:eff//2]`` slice, PSD ``* 2`` /
+        ``w_sum**2``, ``amp = sqrt(psd)``) for a single n_segments==1 frame,
+        which is exactly what the clamped (effective_nfft == n) path reduces
+        to. This is the equivalent single-frame reference the spectrum must
+        match.
+        """
+        w = get_analysis_window(win, eff)
+        w_sum = np.sum(w)
+        seg = sig[:eff] - np.mean(sig[:eff])
+        fft_r = np.fft.fft(seg * w)
+        psd = np.abs(fft_r[:eff // 2]) ** 2 / 1 / (w_sum ** 2) * 2.0
+        return np.sqrt(psd)
+
+    def _assert_short_signal_spectrum(self, n, nfft=1024, amplitude=2.0, win="hanning"):
+        fs = 1000.0
+        eff = min(nfft, n)  # effective_nfft == n in the short-signal regime
+        # Bin-align the tone to the EFFECTIVE length so the peak sits on an
+        # exact bin (no scalloping); k chosen well away from DC/Nyquist.
+        k = 40
+        freq_hz = k * fs / eff
+        t = np.arange(n) / fs
+        sig = amplitude * np.sin(2 * np.pi * freq_hz * t)
+
+        freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
+            sig, fs, win=win, nfft=nfft, overlap=0.5,
+        )
+
+        # (1) Self-consistent, correct length: clamped to effective_nfft.
+        expected_len = eff // 2
+        self.assertEqual(
+            len(freq), expected_len,
+            msg=f"[n={n}] len(freq)={len(freq)} != effective_nfft//2={expected_len}",
+        )
+        self.assertEqual(
+            len(amp), expected_len,
+            msg=f"[n={n}] len(amp)={len(amp)} != effective_nfft//2={expected_len}",
+        )
+
+        # (2) Peak sits at the expected bin (not a flat zero line).
+        peak_idx = int(np.argmax(amp))
+        self.assertEqual(
+            peak_idx, k,
+            msg=(
+                f"[n={n}] peak bin {peak_idx} != expected {k}; "
+                f"amp.max()={amp.max():.6e} amp.sum()={amp.sum():.6e}"
+            ),
+        )
+
+        # (3) Peak amplitude matches the independent single-frame Welch
+        #     reference AND the closed-form RMS amplitude A/sqrt(2).
+        ref = self._welch_single_frame_reference(sig, fs, win, eff)
+        np.testing.assert_allclose(
+            amp, ref, rtol=1e-9, atol=1e-9,
+            err_msg=f"[n={n}] amp does not match single-frame Welch reference",
+        )
+        rms = amplitude / np.sqrt(2.0)
+        rel_err = abs(amp[peak_idx] - rms) / rms
+        self.assertLess(
+            rel_err, 0.01,
+            msg=(
+                f"[n={n}] recovered RMS peak={amp[peak_idx]:.6f} vs expected "
+                f"A/sqrt(2)={rms:.6f} (rel_err={rel_err:.4%})"
+            ),
+        )
+
+        # psd is the squared amplitude convention returned alongside.
+        np.testing.assert_allclose(
+            amp, np.sqrt(psd), rtol=1e-9, atol=1e-12,
+            err_msg=f"[n={n}] amp != sqrt(psd)",
+        )
+
+    def test_n_500_shorter_than_nfft_1024(self):
+        self._assert_short_signal_spectrum(n=500, nfft=1024)
+
+    def test_n_1000_shorter_than_nfft_1024(self):
+        self._assert_short_signal_spectrum(n=1000, nfft=1024)
 
 
 if __name__ == "__main__":

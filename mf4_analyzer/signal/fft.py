@@ -182,27 +182,44 @@ class FFTAnalyzer:
         Window construction routes through :func:`get_analysis_window`
         so the shared helper actually owns window construction across
         the module.
+
+        When the signal is shorter than ``nfft`` the effective segment
+        length is clamped to ``len(sig)`` (``effective_nfft = min(nfft,
+        n)``), matching ``scipy.signal.welch``'s ``nperseg`` behaviour,
+        so at least one segment covers the whole signal. The window,
+        ``w_sum``, frequency axis, and accumulator are ALL rebuilt from
+        ``effective_nfft`` so the returned ``freq``/``amp`` arrays stay
+        the same length and self-consistent. For ``n >= nfft`` the
+        clamp is a no-op (``effective_nfft == nfft``) and the numerical
+        result is byte-for-byte unchanged.
         """
         n = len(sig)
-        hop = int(nfft * (1 - overlap))
+        # Clamp the segment length to the signal length so a short signal
+        # (n < nfft) still yields a real, covering segment instead of an
+        # all-zero spectrum. No-op when n >= nfft.
+        effective_nfft = min(nfft, n)
+        hop = int(effective_nfft * (1 - overlap))
         if hop <= 0:
-            hop = nfft // 2
-        n_segments = max((n - nfft) // hop + 1, 1)
+            hop = effective_nfft // 2
+        if hop <= 0:
+            hop = 1
+        n_segments = max((n - effective_nfft) // hop + 1, 1)
 
-        w = get_analysis_window(win, nfft)
+        w = get_analysis_window(win, effective_nfft)
         w_sum = np.sum(w)
 
-        freq = np.fft.fftfreq(nfft, 1 / fs)[:nfft // 2]
-        psd_sum = np.zeros(nfft // 2)
+        half = effective_nfft // 2
+        freq = np.fft.fftfreq(effective_nfft, 1 / fs)[:half]
+        psd_sum = np.zeros(half)
 
         for i in range(n_segments):
             start = i * hop
-            end = start + nfft
+            end = start + effective_nfft
             if end > n:
                 break
             seg = sig[start:end] - np.mean(sig[start:end])
             fft_r = np.fft.fft(seg * w)
-            psd_sum += np.abs(fft_r[:nfft // 2]) ** 2
+            psd_sum += np.abs(fft_r[:half]) ** 2
 
         psd = psd_sum / n_segments / (w_sum ** 2) * 2
         amp = np.sqrt(psd)
