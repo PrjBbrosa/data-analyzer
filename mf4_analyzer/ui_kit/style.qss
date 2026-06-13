@@ -1137,12 +1137,25 @@ QWidget#chartCard[focused="true"] {
     background-color: #ffffff;
 }
 
-/* 2026-06-13 slice X/Y direction switch, overlaid on the slice view's
- * top-right corner. A 2-segment pill: the active segment is solid blue. */
+/* 2026-06-13 slice info panel — sits in the colorbar column below the
+ * colorbar (the slice plot's right edge is pulled in to align its time axis
+ * with the heatmap, freeing this column). Holds the X/Y direction switch +
+ * the current fixed value / meaning. */
+QWidget#slicePanel {
+    background-color: #fbfcff;
+    border: 1px solid #e1e7f0;
+    border-radius: 7px;
+}
+QLabel#slicePanelTitle {
+    color: #5b6471;
+    font-size: 11px;
+    font-weight: 700;
+    background: transparent;
+}
 QWidget#sliceDirToggle {
     background-color: #eef2f8;
     border: 1px solid #c7d2e2;
-    border-radius: 12px;
+    border-radius: 8px;
 }
 QWidget#sliceDirToggle QPushButton[role="slice-seg"] {
     border: none;
@@ -1150,38 +1163,40 @@ QWidget#sliceDirToggle QPushButton[role="slice-seg"] {
     color: #7b8699;
     font-size: 11px;
     font-weight: 700;
-    padding: 3px 11px;
-    border-radius: 11px;
+    padding: 4px 8px;
+    border-radius: 7px;
 }
 QWidget#sliceDirToggle QPushButton[role="slice-seg"]:checked {
     background-color: #2563eb;
     color: #ffffff;
 }
 QLabel#sliceHint {
-    color: #8a94a6;
-    font-size: 10px;
-    background-color: rgba(255, 255, 255, 200);
-    padding: 0 4px;
-    border-radius: 3px;
+    color: #33425c;
+    font-size: 11px;
+    background: transparent;
 }
 
-/* 2026-06-13 collapse divider between two stacked plots (FFT amp/time,
- * heatmap map/slice): ▲ folds the top plot, ▼ folds the bottom. */
+/* 2026-06-13 collapse divider — flat narrow capsule, left-aligned on the
+ * divider. ▲ folds the top plot, ▼ folds the bottom; the folded segment is
+ * highlighted (the glyph never flips). */
 QWidget#plotCollapseBar {
-    background-color: rgba(247, 249, 252, 235);
-    border: 1px solid #e0e6ef;
-    border-radius: 5px;
-}
-QWidget#plotCollapseBar QPushButton[role="collapse-arrow"] {
-    border: 1px solid #c7d0de;
-    border-radius: 3px;
     background-color: #ffffff;
-    color: #5a6b86;
+    border: 1px solid #d4dbe6;
+    border-radius: 7px;
+}
+QWidget#plotCollapseBar QPushButton[role="collapse-seg"] {
+    border: none;
+    background: transparent;
+    color: #7b8699;
     font-size: 9px;
     padding: 0;
+    border-radius: 6px;
 }
-QWidget#plotCollapseBar QPushButton[role="collapse-arrow"]:hover {
-    border-color: #2563eb;
+QWidget#plotCollapseBar QPushButton[role="collapse-seg"]:hover {
+    background-color: #f1f5fb;
+}
+QWidget#plotCollapseBar QPushButton[role="collapse-seg"]:checked {
+    background-color: #e8f0ff;
     color: #2563eb;
 }
 

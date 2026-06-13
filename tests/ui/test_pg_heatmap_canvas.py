@@ -688,6 +688,36 @@ def test_order_style_slice_works_without_result(qapp):
     c.deleteLater()
 
 
+def test_slice_aligns_with_heatmap_and_panel_in_colorbar_column(qapp):
+    """The slice plot's right edge is pulled in to match the heatmap (whose
+    right edge is inset by the colorbar), so their time axes line up; the X/Y
+    info panel sits in the freed colorbar column to the right of the slice."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(620, 470)
+    c.set_slice_button_labels('按时间', '按阶次')
+    c.set_slice_direction('y')
+    orders = np.linspace(0, 20, 40)
+    times = np.linspace(0, 90, 60)
+    mat = np.random.RandomState(5).rand(40, 60)
+    c.show()
+    qapp.processEvents()
+    c.plot_or_update_heatmap(
+        matrix=mat, x_extent=(0, 90), y_extent=(0, 20),
+        x_label='Time (s)', y_label='Order', cbar_label='Amplitude',
+        x_coords=times, y_coords=orders, z_auto=True)
+    c._seed_slice()
+    for _ in range(5):
+        qapp.processEvents()
+    main_r = float(c._plot.vb.sceneBoundingRect().right())
+    slice_r = float(c._slice_plot.vb.sceneBoundingRect().right())
+    assert abs(slice_r - main_r) <= 3, (
+        f"slice time axis not aligned with heatmap: {slice_r} vs {main_r}")
+    assert not c._slice_panel.isHidden()
+    # panel begins at/after the aligned slice's right edge (the freed column)
+    assert c._slice_panel.geometry().x() >= int(slice_r) - 6
+    c.deleteLater()
+
+
 def test_heatmap_collapse_divider_folds_slice(qapp):
     """The collapse control on a with_slice heatmap folds the map or the slice;
     a no-slice heatmap has no control."""

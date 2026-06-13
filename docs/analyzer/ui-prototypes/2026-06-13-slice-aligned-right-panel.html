@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>切片对齐 + 右侧信息栏布局</title>
+<style>
+  :root{ --ink:#1f2937; --muted:#6b7280; --frame:#9aa6b8; --blue:#2563eb; --bg:#f3f5f9; }
+  *{box-sizing:border-box;}
+  body{margin:0;padding:26px;background:var(--bg);
+    font-family:"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif;color:var(--ink);}
+  h1{font-size:18px;margin:0 0 2px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 18px;max-width:760px;line-height:1.6;}
+  .card{background:#fff;border:1px solid #e6ebf3;border-radius:10px;padding:10px;width:720px;}
+
+  /* shared column geometry: [ left axis | plot area | gap | right column ] */
+  .axisW{width:34px;}        /* left axis gutter */
+  .rightW{width:128px;}      /* colorbar / info column */
+  .gap{width:10px;}
+
+  .rowH{display:flex;align-items:stretch;}
+  .plotArea{position:relative;border:1px solid var(--frame);border-radius:2px;flex:1;}
+  .heat{height:230px;background:linear-gradient(105deg,#1b1b46,#2a0f52 18%,#7a1f6e 40%,#c0392b 58%,#e8a33d 76%,#f4e04d);}
+  .slice{height:120px;background:
+    repeating-linear-gradient(0deg,transparent,transparent 23px,#eef2f7 23px,#eef2f7 24px),
+    repeating-linear-gradient(90deg,transparent,transparent 60px,#eef2f7 60px,#eef2f7 61px);}
+  .ylab{width:34px;writing-mode:vertical-rl;transform:rotate(180deg);display:flex;align-items:center;justify-content:center;
+    font-size:11px;color:var(--muted);}
+  svg{position:absolute;inset:0;width:100%;height:100%;}
+  .marker-h{position:absolute;left:0;right:0;height:2px;background:#e03131;}
+  .xaxis{display:flex;font-size:10px;color:var(--muted);margin-top:2px;}
+  .xaxis .ticks{flex:1;display:flex;justify-content:space-between;padding:0 2px;}
+  .xaxis .cap{text-align:center;font-size:10px;color:var(--muted);}
+
+  /* colorbar */
+  .cbar{flex:1;border:1px solid var(--frame);
+    background:linear-gradient(#f4e04d,#e8a33d,#c0392b,#7a1f6e,#2a0f52,#1b1b46);}
+  .cbarLab{width:14px;writing-mode:vertical-rl;text-align:center;font-size:10px;color:var(--muted);}
+
+  /* divider with LEFT-aligned collapse A */
+  .divider{display:flex;align-items:center;height:18px;}
+  .collapseA{display:flex;border:1px solid #d4dbe6;border-radius:8px;overflow:hidden;background:#fff;height:15px;
+     box-shadow:0 1px 2px rgba(20,40,80,.06);}
+  .collapseA b{width:26px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#7b8699;cursor:pointer;}
+  .collapseA b+b{border-left:1px solid #e6ebf3;}
+  .collapseA b.on{background:#e8f0ff;color:#2563eb;}
+
+  /* right info/control panel (under the colorbar, beside the slice) */
+  .infoPanel{border:1px solid #e1e7f0;border-radius:7px;background:#fbfcff;padding:8px;display:flex;flex-direction:column;gap:7px;}
+  .infoPanel .ttl{font-size:11px;color:#5b6471;font-weight:700;}
+  .seg{display:flex;border:1px solid #c7d2e2;border-radius:8px;overflow:hidden;}
+  .seg b{flex:1;text-align:center;font-size:11px;font-weight:700;color:#7b8699;padding:4px 0;cursor:pointer;}
+  .seg b.on{background:#2563eb;color:#fff;}
+  .kv{font-size:11px;color:#33425c;line-height:1.5;}
+  .kv .big{font-size:15px;font-weight:800;color:#1f3b63;}
+  .kv .mut{color:#8a94a6;}
+  .divline{height:1px;background:#eef2f7;margin:1px 0;}
+</style>
+</head>
+<body>
+<h1>阶次切片 · 对齐彩图 + 右侧信息栏</h1>
+<p class="sub">切片的时间轴与上方彩图<b>严格对齐</b>（切片右边止于彩图右边、不再伸到 colorbar 下方）；右侧腾出的一列（colorbar 正下方）放<b>按时间/按阶次开关 + 切片信息</b>。折叠按钮（方案 A 扁平胶囊）移到<b>分界栏左侧</b>，箭头不变向。</p>
+
+<div class="card">
+
+  <!-- ===== heatmap row ===== -->
+  <div class="rowH">
+    <div class="ylab">Order</div>
+    <div class="plotArea heat">
+      <div class="marker-h" style="top:64%;"></div>
+    </div>
+    <div class="gap"></div>
+    <div class="rowH" style="width:128px;">
+      <div class="plotArea cbar"></div>
+      <div class="cbarLab">Amplitude (dB)</div>
+    </div>
+  </div>
+  <!-- heatmap x ticks: aligned area only -->
+  <div class="xaxis">
+    <div class="axisW"></div>
+    <div class="ticks"><span>0</span><span>20</span><span>40</span><span>60</span><span>80</span></div>
+    <div class="gap"></div><div class="rightW"></div>
+  </div>
+
+  <!-- ===== divider: collapse A on the LEFT ===== -->
+  <div class="divider">
+    <div class="axisW"></div>
+    <div class="collapseA" title="▲ 折叠上图 / ▼ 折叠下图">
+      <b title="折叠上图">▲</b><b title="折叠下图">▼</b>
+    </div>
+    <div style="flex:1;"></div>
+    <div class="gap"></div><div class="rightW"></div>
+  </div>
+
+  <!-- ===== slice row: aligned time axis + right info panel ===== -->
+  <div class="rowH">
+    <div class="ylab">Amplitude</div>
+    <div class="plotArea slice">
+      <svg viewBox="0 0 600 120" preserveAspectRatio="none">
+        <polyline points="2,66 60,40 120,58 180,30 240,70 300,42 360,60 420,24 480,52 540,38 598,46"
+          fill="none" stroke="#2563eb" stroke-width="1.5"/>
+      </svg>
+    </div>
+    <div class="gap"></div>
+    <!-- info panel sits exactly under the colorbar column -->
+    <div class="infoPanel" style="width:128px;">
+      <div class="ttl">切片方向</div>
+      <div class="seg"><b>按时间</b><b class="on">按阶次</b></div>
+      <div class="divline"></div>
+      <div class="kv"><span class="mut">固定</span> Order<br><span class="big">0.80</span></div>
+      <div class="kv mut">看 幅值 — 时间</div>
+      <div class="divline"></div>
+      <div class="kv"><span class="mut">峰值</span><br>−18.3 dB @ 61.2 s</div>
+    </div>
+  </div>
+  <!-- slice x ticks: aligned with heatmap above -->
+  <div class="xaxis">
+    <div class="axisW"></div>
+    <div class="ticks"><span>0</span><span>20</span><span>40</span><span>60</span><span>80</span></div>
+    <div class="gap"></div><div class="rightW cap">Time (s)</div>
+  </div>
+
+</div>
+
+<p class="sub" style="margin-top:14px;">
+要点：① 彩图与切片左边（轴）、右边（绘图区）<b>同一列宽</b>，时间刻度上下对齐；② colorbar 与右侧信息栏<b>同一列</b>，上下接续；③ 折叠胶囊在左、不变向；④ 「按时间/按阶次」从原来浮在切片右上角，移到右侧信息栏，并显示当前固定值、含义、（可选）峰值读数。<br>
+若右侧栏太满，「峰值」那块可去掉，只留 开关 + 固定值 + 含义。
+</p>
+
+</body>
+</html>

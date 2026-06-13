@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>折叠分界栏 — 窄扁平方案</title>
+<style>
+  :root{ --ink:#1f2937; --muted:#6b7280; --frame:#cbd5e1; --blue:#2563eb; --bg:#f3f5f9; }
+  *{box-sizing:border-box;}
+  body{margin:0;padding:28px;background:var(--bg);
+    font-family:"Microsoft YaHei UI","PingFang SC",system-ui,sans-serif;color:var(--ink);}
+  h1{font-size:18px;margin:0 0 2px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 20px;}
+  .grid{display:flex;gap:34px;flex-wrap:wrap;align-items:flex-start;}
+  .col{width:360px;}
+  .col h2{font-size:14px;margin:0 0 8px;color:#1f3b63;}
+  .note{font-size:12px;color:var(--muted);line-height:1.6;margin:8px 2px 0;}
+  .pair{font-size:11px;color:#9aa6b8;margin:14px 0 4px;}
+
+  /* fake stacked plots */
+  .stack{border:1px solid #e6ebf3;border-radius:8px;background:#fff;padding:8px;}
+  .plot{position:relative;border:1px solid var(--frame);border-radius:2px;background:
+    repeating-linear-gradient(0deg,transparent,transparent 21px,#eef2f7 21px,#eef2f7 22px),
+    repeating-linear-gradient(90deg,transparent,transparent 44px,#eef2f7 44px,#eef2f7 45px);}
+  .top{height:120px;} .bot{height:84px;}
+  /* the divider zone holds the control */
+  .divzone{position:relative;height:0;}
+  .ctr{position:absolute;left:50%;top:0;transform:transl(-50%,-50%);transform:translateX(-50%) translateY(-50%);z-index:5;}
+
+  /* ---------- A: flat capsule, fixed glyphs ---------- */
+  .a{display:flex;border:1px solid #d4dbe6;border-radius:8px;overflow:hidden;background:#fff;height:15px;}
+  .a span{width:26px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#7b8699;cursor:pointer;}
+  .a span+span{border-left:1px solid #e6ebf3;}
+  .a span.active{background:#e8f0ff;color:#2563eb;}
+  .a span:hover{background:#f1f5fb;}
+
+  /* ---------- B: borderless twin chevrons ---------- */
+  .b{display:flex;gap:10px;}
+  .b span{font-size:11px;color:#9aa6b8;cursor:pointer;line-height:1;padding:2px;}
+  .b span.active{color:#2563eb;}
+  .b span:hover{color:#5a6b86;}
+
+  /* ---------- C: thin full-width rule + center tab ---------- */
+  .crule{position:absolute;left:0;right:0;top:0;height:1px;background:#dbe3ee;}
+  .ctab{display:flex;background:#fff;border:1px solid #dbe3ee;border-radius:7px;height:14px;padding:0 2px;align-items:center;gap:2px;}
+  .ctab span{width:18px;text-align:center;font-size:8px;color:#8a94a6;cursor:pointer;border-radius:3px;}
+  .ctab span.active{background:#2563eb;color:#fff;}
+  .ctab span:hover{background:#eef3fb;}
+
+  /* ---------- D: grip handle ---------- */
+  .d{display:flex;align-items:center;gap:6px;background:#f7f9fc;border:1px solid #e3e9f2;border-radius:9px;height:13px;padding:0 7px;}
+  .d .dots{letter-spacing:1px;color:#c2ccda;font-size:8px;}
+  .d span{font-size:8px;color:#7b8699;cursor:pointer;}
+  .d span.active{color:#2563eb;font-weight:700;}
+</style>
+</head>
+<body>
+<h1>折叠分界栏 — 窄、扁平、箭头方向固定</h1>
+<p class="sub">左列＝普通态，右列＝「已折叠上图」时的样子（箭头<b>不变向</b>，只用高亮/底色表示当前折叠了哪个；再点一次该箭头即展开）。▲＝折叠上图，▼＝折叠下图，始终如此。</p>
+
+<div class="grid">
+
+  <!-- A -->
+  <div class="col">
+    <h2>方案 A · 扁平胶囊（分段高亮）</h2>
+    <div class="stack">
+      <div class="plot top"></div>
+      <div class="divzone"><div class="ctr"><div class="a"><span>▲</span><span>▼</span></div></div></div>
+      <div class="plot bot"></div>
+    </div>
+    <div class="pair">折叠上图后（▲ 高亮，glyph 不变）：</div>
+    <div class="stack">
+      <div class="plot top" style="height:0;border:none;"></div>
+      <div class="divzone"><div class="ctr"><div class="a"><span class="active">▲</span><span>▼</span></div></div></div>
+      <div class="plot bot" style="height:200px;"></div>
+    </div>
+    <div class="note">15px 高、52px 宽，两段一体；当前折叠的那段蓝色高亮。最克制、目标明确。</div>
+  </div>
+
+  <!-- B -->
+  <div class="col">
+    <h2>方案 B · 无框双箭头（极简）</h2>
+    <div class="stack">
+      <div class="plot top"></div>
+      <div class="divzone"><div class="ctr"><div class="b"><span>▲</span><span>▼</span></div></div></div>
+      <div class="plot bot"></div>
+    </div>
+    <div class="pair">折叠上图后（▲ 变蓝）：</div>
+    <div class="stack">
+      <div class="plot top" style="height:0;border:none;"></div>
+      <div class="divzone"><div class="ctr"><div class="b"><span class="active">▲</span><span>▼</span></div></div></div>
+      <div class="plot bot" style="height:200px;"></div>
+    </div>
+    <div class="note">完全无底框，只有两个小箭头浮在分界处；hover 才加深。最轻、几乎不挡画面，但可发现性稍弱。</div>
+  </div>
+
+  <!-- C -->
+  <div class="col">
+    <h2>方案 C · 细分隔线 + 中央小 tab</h2>
+    <div class="stack">
+      <div class="plot top"></div>
+      <div class="divzone"><div class="crule"></div><div class="ctr"><div class="ctab"><span>▲</span><span>▼</span></div></div></div>
+      <div class="plot bot"></div>
+    </div>
+    <div class="pair">折叠上图后（▲ 蓝底）：</div>
+    <div class="stack">
+      <div class="plot top" style="height:0;border:none;"></div>
+      <div class="divzone"><div class="crule"></div><div class="ctr"><div class="ctab"><span class="active">▲</span><span>▼</span></div></div></div>
+      <div class="plot bot" style="height:200px;"></div>
+    </div>
+    <div class="note">一条贯穿的 1px 细线 + 居中 14px tab，强调"这是分界"；tab 比 A 更小更扁。最像传统分隔条。</div>
+  </div>
+
+  <!-- D -->
+  <div class="col">
+    <h2>方案 D · 抓手条（grip + 箭头）</h2>
+    <div class="stack">
+      <div class="plot top"></div>
+      <div class="divzone"><div class="ctr"><div class="d"><span>▲</span><span class="dots">⋯</span><span>▼</span></div></div></div>
+      <div class="plot bot"></div>
+    </div>
+    <div class="pair">折叠上图后（▲ 蓝）：</div>
+    <div class="stack">
+      <div class="plot top" style="height:0;border:none;"></div>
+      <div class="divzone"><div class="ctr"><div class="d"><span class="active">▲</span><span class="dots">⋯</span><span>▼</span></div></div></div>
+      <div class="plot bot" style="height:200px;"></div>
+    </div>
+    <div class="note">13px 高的细抓手条，中间一点纹理点 + 两侧箭头；暗示"可拖/可折"。比现状窄一半。</div>
+  </div>
+
+</div>
+</body>
+</html>

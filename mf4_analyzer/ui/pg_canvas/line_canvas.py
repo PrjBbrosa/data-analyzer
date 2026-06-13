@@ -655,7 +655,7 @@ class PgLineCanvas(QWidget):
         except Exception:
             return
         ctrl.adjustSize()
-        x = int(rect.center().x() - ctrl.width() / 2)
+        x = int(rect.left() + 2)
         y = int(rect.bottom() - ctrl.height() / 2)
         ctrl.move(max(0, x), max(0, y))
         ctrl.raise_()

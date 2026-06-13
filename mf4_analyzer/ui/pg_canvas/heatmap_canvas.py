@@ -59,7 +59,7 @@ class _SliceDirToggle(QWidget):
             b.setProperty("role", "slice-seg")
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _=False, _d=d: self.set_direction(_d))
-            box.addWidget(b)
+            box.addWidget(b, 1)  # split the panel width evenly
         self._dir = 'x'
         self._sync_buttons()
 
@@ -82,11 +82,11 @@ class _SliceDirToggle(QWidget):
 
 
 class _PlotCollapseControl(QWidget):
-    """Tiny overlay bar pinned to the divider between two stacked plots.
-
-    ▲ collapses the top plot, ▼ collapses the bottom — the other plot then
-    takes the full area for a larger view. Clicking the active arrow again
-    restores both. ``collapse_changed`` emits 'none' | 'top' | 'bottom'.
+    """Flat, narrow capsule pinned to the LEFT of the divider between two
+    stacked plots. Two fixed-glyph segments: ▲ folds the top plot, ▼ folds the
+    bottom — the other plot then takes the full area. The active (folded)
+    segment is highlighted (the glyph never changes direction); clicking it
+    again restores both. ``collapse_changed`` emits 'none' | 'top' | 'bottom'.
     """
 
     collapse_changed = pyqtSignal(str)
@@ -97,22 +97,20 @@ class _PlotCollapseControl(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._state = 'none'
         box = QHBoxLayout(self)
-        box.setContentsMargins(6, 0, 6, 0)
-        box.setSpacing(4)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
         self._btn_up = QPushButton('▲', self)
         self._btn_down = QPushButton('▼', self)
-        for b in (self._btn_up, self._btn_down):
-            b.setProperty('role', 'collapse-arrow')
-            b.setFixedSize(QSize(28, 14))
+        for b, d in ((self._btn_up, 'top'), (self._btn_down, 'bottom')):
+            b.setCheckable(True)
+            b.setProperty('role', 'collapse-seg')
             b.setCursor(Qt.PointingHandCursor)
-        self._btn_up.setToolTip('折叠上图 / 展开')
-        self._btn_down.setToolTip('折叠下图 / 展开')
-        self._btn_up.clicked.connect(lambda: self._toggle('top'))
-        self._btn_down.clicked.connect(lambda: self._toggle('bottom'))
-        box.addStretch(1)
+            b.setFixedSize(QSize(24, 14))
+            b.clicked.connect(lambda _=False, _d=d: self._toggle(_d))
+        self._btn_up.setToolTip('折叠上图')
+        self._btn_down.setToolTip('折叠下图')
         box.addWidget(self._btn_up)
         box.addWidget(self._btn_down)
-        box.addStretch(1)
         self._sync()
 
     def state(self):
@@ -124,10 +122,10 @@ class _PlotCollapseControl(QWidget):
         self.collapse_changed.emit(self._state)
 
     def _sync(self):
-        # Flip the active arrow to a "restore" glyph so the affordance reads
-        # as a toggle (collapsed-top shows ▼ = bring it back down).
-        self._btn_up.setText('▼' if self._state == 'top' else '▲')
-        self._btn_down.setText('▲' if self._state == 'bottom' else '▼')
+        # Fixed glyphs; the folded direction is shown by the checked highlight,
+        # NOT by swapping the arrow.
+        self._btn_up.setChecked(self._state == 'top')
+        self._btn_down.setChecked(self._state == 'bottom')
 
 
 def _apply_plot_collapse(top_plot, bottom_plot, state, bottom_default_max):
@@ -392,6 +390,7 @@ class PgHeatmapCanvas(QWidget):
         self._slice_marker = None
         self._slice_toggle = None
         self._slice_hint = None
+        self._slice_panel = None
         # Slice direction: 'x' fixes a time (curve = amp vs Y axis); 'y' fixes a
         # Y position — frequency / order — (curve = amp vs time). Indices index
         # into _matrix_disp (shape: rows=Y, cols=X).
@@ -455,16 +454,32 @@ class PgHeatmapCanvas(QWidget):
             # SpectrogramCanvas._on_motion (canvases.py:2000). Only wired
             # in slice mode; the Order map has no hover-readout contract.
             self._plot.scene().sigMouseMoved.connect(self._on_scene_hover)
-            # X/Y direction switch overlaid on the slice view's top-right.
+            # Right-side info panel (sits in the colorbar column, below the
+            # colorbar, beside the slice). Holds the X/Y direction switch +
+            # the current fixed value / meaning. The slice plot's right edge is
+            # pulled in (via _align_slice_to_main) so its time axis lines up
+            # with the heatmap above, freeing this column.
+            self._slice_panel = QWidget(self)
+            self._slice_panel.setObjectName("slicePanel")
+            self._slice_panel.setAttribute(Qt.WA_StyledBackground, True)
+            pl = QVBoxLayout(self._slice_panel)
+            pl.setContentsMargins(8, 7, 8, 7)
+            pl.setSpacing(6)
+            _title = QLabel('切片方向', self._slice_panel)
+            _title.setObjectName('slicePanelTitle')
+            pl.addWidget(_title)
             self._slice_toggle = _SliceDirToggle(
-                self._slice_x_btn_label, self._slice_y_btn_label, self)
+                self._slice_x_btn_label, self._slice_y_btn_label,
+                self._slice_panel)
             self._slice_toggle.direction_changed.connect(self.set_slice_direction)
-            self._slice_toggle.hide()
-            # Small caption under the switch: current fixed value + meaning.
-            self._slice_hint = QLabel('', self)
+            pl.addWidget(self._slice_toggle)
+            self._slice_hint = QLabel('', self._slice_panel)
             self._slice_hint.setObjectName("sliceHint")
-            self._slice_hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            self._slice_hint.hide()
+            self._slice_hint.setWordWrap(True)
+            self._slice_hint.setTextFormat(Qt.RichText)
+            pl.addWidget(self._slice_hint)
+            pl.addStretch(1)
+            self._slice_panel.hide()
             # Collapse divider between the 2D map (top) and the slice (bottom).
             self._collapse_ctrl = _PlotCollapseControl(self)
             self._collapse_ctrl.collapse_changed.connect(self._on_collapse_changed)
@@ -635,10 +650,8 @@ class PgHeatmapCanvas(QWidget):
             self._slice_curve.clear()
             _hide_plot_title(self._slice_plot)
             self._slice_marker.setVisible(False)
-            if self._slice_toggle is not None:
-                self._slice_toggle.hide()
-            if self._slice_hint is not None:
-                self._slice_hint.hide()
+            if self._slice_panel is not None:
+                self._slice_panel.hide()
         self.reset_split_layout_alignment()
         self.layout_geometry_changed.emit()
 
@@ -901,9 +914,10 @@ class PgHeatmapCanvas(QWidget):
         _hide_plot_title(self._slice_plot)
         self._slice_marker.setVisible(True)
         self._update_slice_hint(fixed_lbl, fixed_val)
-        if self._slice_toggle is not None and self._slice_toggle.isHidden():
-            self._slice_toggle.show()
-        self._position_slice_overlay()
+        if self._slice_panel is not None and self._slice_panel.isHidden():
+            self._slice_panel.show()
+        self._align_slice_to_main()
+        self._position_slice_panel()
         self.layout_geometry_changed.emit()
 
     def _on_slice_marker_dragged(self, *_args) -> None:
@@ -929,13 +943,15 @@ class PgHeatmapCanvas(QWidget):
             return
         axis = (label or '').strip() or ('Y' if self._slice_dir == 'y' else 'X')
         if self._slice_dir == 'y':
-            meaning = '幅值-时间'
+            meaning = '幅值 — 时间'
         else:
-            meaning = '幅值-' + (self._y_label or '频率').split(' ')[0]
-        self._slice_hint.setText(f"固定 {axis}={value:g} · 看 {meaning}")
-        self._slice_hint.adjustSize()
-        if self._slice_hint.isHidden():
-            self._slice_hint.show()
+            meaning = '幅值 — ' + (self._y_label or '频率').split(' ')[0]
+        self._slice_hint.setText(
+            f'<span style="color:#8a94a6;">固定 {axis}</span><br>'
+            f'<span style="font-size:14px;font-weight:800;color:#1f3b63;">'
+            f'{value:g}</span><br>'
+            f'<span style="color:#8a94a6;">看 {meaning}</span>'
+        )
 
     def _select_slice_at(self, x: float, y: float) -> None:
         """Position the slice at a clicked map point, respecting direction and
@@ -961,35 +977,58 @@ class PgHeatmapCanvas(QWidget):
             self._slice_toggle._btn_x.setText(x_label)
             self._slice_toggle._btn_y.setText(y_label)
 
-    def _position_slice_overlay(self) -> None:
-        """Pin the X/Y toggle (and its hint caption) to the slice view's
-        top-right corner, in canvas-widget coordinates."""
-        if self._slice_toggle is None or self._slice_plot is None:
+    def _align_slice_to_main(self) -> None:
+        """Pull the slice plot's right edge in to match the heatmap's, so the
+        time axis lines up vertically (the heatmap's right edge is inset by the
+        colorbar). Single-pane; split alignment handles the multi-pane case."""
+        if self._slice_plot is None:
             return
         try:
-            rect = self._slice_plot.vb.sceneBoundingRect()
+            self._set_slice_right_spacer(None)
+            self._activate_graphics_layout()
+            main_r = float(self._plot.vb.sceneBoundingRect().right())
+            slice_r = float(self._slice_plot.vb.sceneBoundingRect().right())
         except Exception:
             return
-        margin = 6
-        self._slice_toggle.adjustSize()
-        tw = self._slice_toggle.width()
-        x = int(rect.right() - tw - margin)
-        y = int(rect.top() + margin)
-        self._slice_toggle.move(max(0, x), max(0, y))
-        self._slice_toggle.raise_()
-        if self._slice_hint is not None:
-            self._slice_hint.adjustSize()
-            hx = int(rect.right() - self._slice_hint.width() - margin)
-            hy = y + self._slice_toggle.height() + 2
-            self._slice_hint.move(max(0, hx), max(0, hy))
-            self._slice_hint.raise_()
+        reserve = slice_r - main_r
+        if reserve > 1.0:
+            self._set_slice_right_spacer(reserve)
+            self._activate_graphics_layout()
+
+    def _position_slice_panel(self) -> None:
+        """Pin the slice info panel into the colorbar column (right of the
+        aligned slice plot, below the colorbar)."""
+        if self._slice_panel is None or self._slice_plot is None:
+            return
+        try:
+            srect = self._slice_plot.vb.sceneBoundingRect()
+        except Exception:
+            return
+        cbar_left = None
+        if self._cbar is not None:
+            try:
+                cbar_left = float(self._cbar.sceneBoundingRect().left())
+            except Exception:
+                cbar_left = None
+        if cbar_left is not None and cbar_left > srect.right():
+            x = int(cbar_left) - 2
+        else:
+            x = int(srect.right()) + 6
+        margin = 4
+        y = int(srect.top())
+        w = max(70, int(self.width() - x - margin))
+        h = max(40, int(srect.height()))
+        self._slice_panel.setGeometry(x, y, w, h)
+        self._slice_panel.raise_()
 
     def _on_collapse_changed(self, state) -> None:
         if self._slice_plot is None:
             return
         _apply_plot_collapse(self._plot, self._slice_plot, state, 140)
         self._position_collapse_ctrl()
-        self._position_slice_overlay()
+        if state == 'none':
+            self._align_slice_to_main()
+        self._position_slice_panel()
         self.layout_geometry_changed.emit()
 
     def _position_collapse_ctrl(self, *_args) -> None:
@@ -1001,19 +1040,24 @@ class PgHeatmapCanvas(QWidget):
         except Exception:
             return
         ctrl.adjustSize()
-        x = int(rect.center().x() - ctrl.width() / 2)
+        x = int(rect.left() + 2)
         y = int(rect.bottom() - ctrl.height() / 2)
         ctrl.move(max(0, x), max(0, y))
         ctrl.raise_()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._position_slice_overlay()
+        # Slice re-alignment on resize is owned by the AnalysisSectionPage
+        # layout sync (single → reset_split_layout_alignment; split →
+        # apply_split_layout_alignment), so only reposition the overlays here
+        # to avoid transiently fighting the shared split reserve.
+        self._position_slice_panel()
         self._position_collapse_ctrl()
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._position_slice_overlay()
+        self._align_slice_to_main()
+        self._position_slice_panel()
         self._position_collapse_ctrl()
 
     # ------------------------------------------------------------------
@@ -1060,6 +1104,11 @@ class PgHeatmapCanvas(QWidget):
 
     def reset_split_layout_alignment(self) -> None:
         self.prepare_split_layout_alignment(None)
+        # Single-pane: align the slice's right edge to the heatmap (the split
+        # path does this via slice_right_reserve; do it here for one pane too).
+        if self._collapse_ctrl is None or self._collapse_ctrl.state() == 'none':
+            self._align_slice_to_main()
+            self._position_slice_panel()
 
     def heatmap_layout_metrics(self) -> dict:
         left_widths = []
