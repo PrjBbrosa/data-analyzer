@@ -473,7 +473,10 @@ class PgHeatmapCanvas(QWidget):
                 self._slice_panel)
             self._slice_toggle.direction_changed.connect(self.set_slice_direction)
             pl.addWidget(self._slice_toggle)
-            self._slice_hint = QLabel('固定 Time (s)<br><b>--</b>', self._slice_panel)
+            self._slice_hint = QLabel(
+                '固定 Time (s)<br><b>--</b><br>查看峰值 --',
+                self._slice_panel,
+            )
             self._slice_hint.setObjectName("sliceHint")
             self._slice_hint.setWordWrap(True)
             self._slice_hint.setTextFormat(Qt.RichText)
@@ -1024,6 +1027,7 @@ class PgHeatmapCanvas(QWidget):
         w = max(70, int(self.width() - x - margin))
         h = max(40, int(srect.height()))
         self._slice_panel.setGeometry(x, y, w, h)
+        self._slice_panel.show()
         self._slice_panel.raise_()
 
     def _on_collapse_changed(self, state) -> None:
