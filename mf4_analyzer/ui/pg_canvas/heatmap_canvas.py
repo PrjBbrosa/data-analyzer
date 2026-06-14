@@ -17,6 +17,7 @@ import pyqtgraph as pg
 from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -243,6 +244,98 @@ class _SplitDivider(QWidget):
     def leaveEvent(self, e):
         self.update()
         super().leaveEvent(e)
+
+
+# Bottom-plot height (px) below which a divider drag collapses the lower plot
+# instead of clamping — the vertical analog of SidePanelController.COLLAPSE_THRESHOLD.
+_SPLIT_COLLAPSE_AT = 40
+
+
+class _CollapsedRail(QFrame):
+    """Thin horizontal rail shown at the canvas bottom when the lower plot is
+    folded away — the vertical analog of side_panels.SidePanelStrip. Paints a
+    small gray ▴; left-click re-expands the bottom plot. Laid out by the canvas
+    QVBoxLayout (below the GraphicsLayoutWidget); hidden => occupies 0 height,
+    so it never overlaps the top plot's bottom axis."""
+
+    expand_requested = pyqtSignal()
+    HEIGHT_PX = 14
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("plotCollapsedRail")
+        self.setFixedHeight(self.HEIGHT_PX)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("展开下图")
+        self._hover = False
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.expand_requested.emit()
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def enterEvent(self, e):
+        self._hover = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self.update()
+        super().leaveEvent(e)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)  # QSS faint bg + top border
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            color = QColor("#2563eb") if self._hover else QColor("#7b8699")
+            cx, cy = self.width() / 2.0, self.height() / 2.0
+            hw, hh = 5.0, 3.0
+            pts = [QPointF(cx, cy - hh), QPointF(cx + hw, cy + hh),
+                   QPointF(cx - hw, cy + hh)]  # ▴ apex up
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(color)
+            painter.drawPolygon(QPolygonF(pts))
+        finally:
+            painter.end()
+
+
+def _position_collapse_layout(rail, divider, top_plot, bottom_plot, collapsed):
+    """Drawer-style placement: when collapsed, hide the divider and surface the
+    bottom rail (the rail is laid out by the canvas QVBoxLayout, so it only
+    needs show + raise); when expanded, hide the rail and place the draggable
+    divider on the gap between the two plots (data-area width)."""
+    if collapsed:
+        if divider is not None:
+            divider.hide()
+        if rail is not None:
+            rail.setVisible(True)
+            rail.raise_()
+        return
+    if rail is not None:
+        rail.setVisible(False)
+    if divider is None:
+        return
+    try:
+        vb = top_plot.vb.sceneBoundingRect()
+    except Exception:
+        return
+    try:
+        boundary_y = _split_boundary_y(top_plot, bottom_plot, False)
+    except Exception:
+        boundary_y = float(vb.bottom())
+    parent = divider.parentWidget()
+    width = int(parent.width()) if parent is not None else int(vb.width())
+    if not top_plot.isVisible() or width <= 0:
+        divider.hide()
+        return
+    divider.setFixedWidth(width)
+    divider.move(0, max(0, int(boundary_y - divider.height() / 2)))
+    divider.show()
+    divider.raise_()
 
 
 def _apply_plot_collapse(top_plot, bottom_plot, state, bottom_default_max):

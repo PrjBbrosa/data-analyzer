@@ -1163,3 +1163,17 @@ def test_select_time_region_hides_zero_width(canvas):
     assert not canvas._time_region.isVisible()
     canvas.select_time_region(0.2, 0.6)
     assert canvas._time_region.isVisible()
+
+
+def test_collapsed_rail_emits_expand_on_left_click(qapp):
+    from PyQt5.QtCore import QPoint, Qt
+    from PyQt5.QtGui import QMouseEvent
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _CollapsedRail
+    rail = _CollapsedRail()
+    got = []
+    rail.expand_requested.connect(lambda: got.append(True))
+    ev = QMouseEvent(QMouseEvent.MouseButtonPress, QPoint(5, 5),
+                     Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    rail.mousePressEvent(ev)
+    assert got == [True]
+    assert rail.height() == _CollapsedRail.HEIGHT_PX
