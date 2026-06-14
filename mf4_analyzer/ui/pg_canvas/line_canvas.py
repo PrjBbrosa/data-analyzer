@@ -24,8 +24,10 @@ from .heatmap_canvas import (
     _apply_plot_collapse,
     _available_split_height,
     _clamp_bottom_split,
-    _PlotCollapseControl,
+    _CollapsedRail,
+    _position_collapse_layout,
     _position_split_controls,
+    _SPLIT_COLLAPSE_AT,
     _SPLIT_ROW_SPACING,
     _SplitDivider,
     _tick_counts_to_density,
@@ -212,17 +214,21 @@ class PgLineCanvas(QWidget):
         self._plot_time.vb.sigResized.connect(self._sync_time_overlay_vbs)
         self._plot_time.vb.sigXRangeChanged.connect(self._sync_time_overlay_vbs)
 
-        # Collapse triangle + draggable divider between the spectrum (top) and
-        # time-preview (bottom).
-        self._collapse_ctrl = _PlotCollapseControl(self)
-        self._collapse_ctrl.collapse_changed.connect(self._on_collapse_changed)
+        # Draggable split divider (resize) + drawer-style collapsed rail.
+        # Drag the divider near the bottom to collapse the time preview; click
+        # the rail's ▴ to bring it back. (Replaces the old gutter triangle.)
+        self._bottom_collapsed = False
         self._split_divider = _SplitDivider(self)
         self._split_divider.drag_started.connect(self._on_split_drag_started)
         self._split_divider.drag_delta.connect(self._on_split_drag_delta)
         self._split_divider.drag_finished.connect(self._on_split_drag_finished)
         self._split_divider.reset_requested.connect(self._on_split_reset)
+        self._collapsed_rail = _CollapsedRail(self)
+        self._collapsed_rail.setVisible(False)
+        self.layout().addWidget(self._collapsed_rail)
+        self._collapsed_rail.expand_requested.connect(
+            lambda: self._set_bottom_collapsed(False))
         self._plot_amp.vb.sigResized.connect(self._position_collapse_ctrl)
-        self._plot_amp.vb.sigResized.connect(self._position_split_divider)
 
         # 时域预览的"框选范围做 FFT"选区。左键拖动建立（见 _TimePreviewViewBox），
         # 区间变化驱动 time_preview_range_changed；视图不平移。
@@ -776,26 +782,24 @@ class PgLineCanvas(QWidget):
     # ------------------------------------------------------------------
     # collapse divider (spectrum vs time-preview)
     # ------------------------------------------------------------------
-    def _on_collapse_changed(self, state) -> None:
+    def _set_bottom_collapsed(self, collapsed: bool) -> None:
+        self._bottom_collapsed = bool(collapsed)
+        state = 'bottom' if self._bottom_collapsed else 'none'
         _apply_plot_collapse(self._plot_amp, self._plot_time, state,
                              self._bottom_split_h)
-        # Keep the triangle glyph/highlight in sync when the handler is driven
-        # directly (the real path toggled it before emitting; this is idempotent
-        # there and authoritative for programmatic calls).
-        if self._collapse_ctrl is not None:
-            self._collapse_ctrl.set_state(
-                'bottom' if state == 'bottom' else 'none')
         self._position_collapse_ctrl()
-        self._position_split_divider()
         self.layout_geometry_changed.emit()
 
+    def _on_collapse_changed(self, state) -> None:
+        # Compat entry (programmatic / tests): 'bottom' collapses, else expands.
+        self._set_bottom_collapsed(state == 'bottom')
+
     def _position_collapse_ctrl(self, *_args) -> None:
-        # Left gutter + divider on the gap between the two plots, matching the
-        # heatmap sections so all three analysis cards place them identically.
-        _position_split_controls(
-            getattr(self, '_collapse_ctrl', None),
+        _position_collapse_layout(
+            getattr(self, '_collapsed_rail', None),
             getattr(self, '_split_divider', None),
-            self._plot_amp, self._plot_time)
+            self._plot_amp, self._plot_time,
+            getattr(self, '_bottom_collapsed', False))
 
     def _position_split_divider(self, *_args) -> None:
         self._position_collapse_ctrl()
@@ -808,8 +812,12 @@ class PgLineCanvas(QWidget):
         self._drag_start_bottom_h = float(self._bottom_split_h)
 
     def _on_split_drag_delta(self, delta) -> None:
+        raw = self._drag_start_bottom_h + delta
+        if raw <= _SPLIT_COLLAPSE_AT:
+            self._set_bottom_collapsed(True)
+            return
         self._bottom_split_h = _clamp_bottom_split(
-            self._drag_start_bottom_h + delta, self._available_split_height())
+            raw, self._available_split_height())
         self._plot_time.setMaximumHeight(int(self._bottom_split_h))
         self._position_collapse_ctrl()
         self._position_split_divider()
@@ -820,7 +828,7 @@ class PgLineCanvas(QWidget):
 
     def _on_split_reset(self) -> None:
         self._bottom_split_h = float(self._bottom_split_default)
-        if self._collapse_ctrl is None or self._collapse_ctrl.state() == 'none':
+        if not self._bottom_collapsed:
             self._plot_time.setMaximumHeight(int(self._bottom_split_h))
         self._position_collapse_ctrl()
         self._position_split_divider()

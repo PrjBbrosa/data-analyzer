@@ -565,54 +565,28 @@ def test_time_preview_multi_curve_adds_color_coded_y_axes(canvas):
 
 
 def test_collapse_divider_toggles_plot_visibility(canvas):
-    """The collapse control folds the top or bottom plot so the other gets the
+    """The collapse compat entry folds the bottom plot so the spectrum gets the
     full area; restoring brings both back with the time row's 170px cap."""
-    assert canvas._collapse_ctrl is not None
     canvas._on_collapse_changed('bottom')
     assert not canvas._plot_time.isVisible()
     assert canvas._plot_amp.isVisible()
+    # Only 'bottom' collapses now; any other state (incl. legacy 'top') is
+    # treated as expanded → both plots visible.
     canvas._on_collapse_changed('top')
-    assert not canvas._plot_amp.isVisible()
+    assert canvas._plot_amp.isVisible()
     assert canvas._plot_time.isVisible()
-    assert canvas._plot_time.maximumHeight() > 170
     canvas._on_collapse_changed('none')
     assert canvas._plot_amp.isVisible() and canvas._plot_time.isVisible()
     assert canvas._plot_time.maximumHeight() == 170
 
 
-def test_collapse_control_is_single_triangle_toggling_bottom(qapp):
-    """The collapse control is ONE bare solid triangle (custom-painted, no boxed
-    button chrome). A click folds the bottom plot; clicking again restores it.
-    Two-state only — fold-top was dropped in the single-triangle redesign."""
-    from PyQt5.QtWidgets import QPushButton
-    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _PlotCollapseControl
-    ctrl = _PlotCollapseControl()
-    assert ctrl.findChildren(QPushButton) == []   # no boxed button chrome
-    emitted = []
-    ctrl.collapse_changed.connect(emitted.append)
-    assert ctrl.state() == 'none'
-    ctrl._toggle()
-    assert ctrl.state() == 'bottom'
-    ctrl._toggle()
-    assert ctrl.state() == 'none'
-    assert emitted == ['bottom', 'none']
-
-
-def test_fft_collapse_control_sits_in_left_gutter(canvas, qapp):
-    """FFT's collapse triangle must sit OUTSIDE the data area in the left
-    gutter — the same formula the heatmap uses (rect.left() - w - 8), not the
-    old rect.left()+2 that pinned it inside, over the axis."""
-    canvas.plot_spectra(
-        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
-        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
-    )
-    canvas.show()
+def test_fft_collapsed_rail_shows_at_bottom_when_folded(canvas, qapp):
+    canvas.resize(900, 460); canvas.show(); qapp.processEvents()
+    canvas._on_collapse_changed('bottom')
     qapp.processEvents()
-    canvas._position_collapse_ctrl()
-    ctrl = canvas._collapse_ctrl
-    left = canvas._plot_amp.vb.sceneBoundingRect().left()
-    assert ctrl.x() + ctrl.width() <= left          # entirely in the gutter
-    assert ctrl.x() == max(0, int(left - ctrl.width() - 8))
+    assert canvas._collapsed_rail.isVisible()
+    # rail 在画布底部、且不与上图数据区重叠
+    assert canvas._collapsed_rail.y() >= canvas._plot_amp.vb.sceneBoundingRect().bottom() - 2
     canvas.hide()
 
 
@@ -635,10 +609,12 @@ def test_fft_split_divider_spans_full_canvas_width(canvas, qapp):
 
 
 def test_fft_split_drag_resizes_bottom_with_clamp(canvas, qapp):
-    """Dragging the divider up grows the bottom plot; clamps keep neither plot
-    below its minimum (drag never fully collapses — that's the triangle)."""
+    """Dragging the divider up grows the bottom plot; a dead-zone drag (above the
+    collapse threshold) floor-clamps without folding; a big drag-up ceiling
+    clamps. (A near-bottom drag past the threshold collapses — covered
+    separately by test_fft_drag_near_bottom_collapses_and_rail_expands.)"""
     from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
-        _SPLIT_MIN_BOTTOM, _SPLIT_MIN_TOP,
+        _SPLIT_COLLAPSE_AT, _SPLIT_MIN_BOTTOM, _SPLIT_MIN_TOP,
     )
     canvas.plot_spectra(
         [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
@@ -651,8 +627,12 @@ def test_fft_split_drag_resizes_bottom_with_clamp(canvas, qapp):
     canvas._on_split_drag_delta(40)              # drag up → bottom grows
     assert canvas._bottom_split_h == pytest.approx(210)
     assert canvas._plot_time.maximumHeight() == 210
+    # Dead-zone drag: target above the collapse threshold but below MIN_BOTTOM →
+    # floor clamp, NOT collapse.
     canvas._on_split_drag_started()
-    canvas._on_split_drag_delta(-100000)         # floor clamp
+    target = (_SPLIT_COLLAPSE_AT + _SPLIT_MIN_BOTTOM) / 2.0
+    canvas._on_split_drag_delta(int(target - canvas._drag_start_bottom_h))
+    assert canvas._bottom_collapsed is False
     assert canvas._bottom_split_h == pytest.approx(_SPLIT_MIN_BOTTOM)
     canvas._on_split_drag_started()
     canvas._on_split_drag_delta(100000)          # ceiling clamp
@@ -1177,3 +1157,33 @@ def test_collapsed_rail_emits_expand_on_left_click(qapp):
     rail.mousePressEvent(ev)
     assert got == [True]
     assert rail.height() == _CollapsedRail.HEIGHT_PX
+
+
+def test_fft_drag_near_bottom_collapses_and_rail_expands(canvas, qapp):
+    canvas.resize(900, 460); canvas.show(); qapp.processEvents()
+    # 拖到近底部：raw 目标高 <= 阈值 -> 折叠
+    canvas._on_split_drag_started()
+    canvas._on_split_drag_delta(-100000)   # 大负 delta 把下图拖没
+    assert canvas._bottom_collapsed is True
+    assert not canvas._plot_time.isVisible()
+    assert canvas._collapsed_rail.isVisible()
+    assert not canvas._split_divider.isVisible()
+    # 点 rail 展开，恢复到记忆高度
+    canvas._collapsed_rail.expand_requested.emit()
+    assert canvas._bottom_collapsed is False
+    assert canvas._plot_time.isVisible()
+    assert not canvas._collapsed_rail.isVisible()
+    assert canvas._split_divider.isVisible()
+    assert canvas._plot_time.maximumHeight() == int(canvas._bottom_split_h)
+
+
+def test_fft_drag_dead_zone_does_not_collapse(canvas, qapp):
+    canvas.resize(900, 460); canvas.show(); qapp.processEvents()
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _SPLIT_COLLAPSE_AT, _SPLIT_MIN_BOTTOM)
+    canvas._on_split_drag_started()
+    # 落在 (阈值, MIN_BOTTOM] 的死区：clamp 到最小、不折叠
+    target = (_SPLIT_COLLAPSE_AT + _SPLIT_MIN_BOTTOM) / 2.0
+    canvas._on_split_drag_delta(int(target - canvas._drag_start_bottom_h))
+    assert canvas._bottom_collapsed is False
+    assert canvas._plot_time.isVisible()
