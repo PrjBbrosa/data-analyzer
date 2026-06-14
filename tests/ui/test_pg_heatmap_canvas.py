@@ -821,22 +821,182 @@ def test_heatmap_split_divider_spans_full_canvas_width(qapp):
     c.deleteLater()
 
 
-def test_heatmap_collapse_restores_last_dragged_height(qapp):
-    """Fold-then-restore returns the slice to its last dragged height."""
+def test_heatmap_collapse_restores_default_height(qapp):
+    """Fold-then-restore ALWAYS returns the slice to its default height
+    (confirmed product decision), not the last dragged height — a near-collapse
+    drag floor-clamps the remembered value, so restoring it would bring the
+    slice back at half size; expand resets to the default (140) instead."""
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(600, 480)
     c.show()
     qapp.processEvents()
     c._on_split_drag_started()
-    c._on_split_drag_delta(25)               # slice now 165
+    c._on_split_drag_delta(25)               # slice dragged to 165
     assert c._bottom_split_h == pytest.approx(165)
     c._on_collapse_changed('bottom')
     assert not c._slice_plot.isVisible()
     c._on_collapse_changed('none')
     assert c._slice_plot.isVisible()
-    assert c._slice_plot.maximumHeight() == 165
+    # Expand restores the DEFAULT (140), NOT the last dragged 165.
+    assert c._bottom_split_h == pytest.approx(140)
+    assert c._slice_plot.maximumHeight() == 140
     c.hide()
     c.deleteLater()
+
+
+def test_heatmap_drag_collapse_then_expand_restores_default_height(qapp):
+    """Fix 1: a near-collapse drag floor-clamps _bottom_split_h to
+    _SPLIT_MIN_BOTTOM in its final pre-fold step; expand must restore the slice
+    at the DEFAULT height, not that clamped half-height."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        PgHeatmapCanvas, _SPLIT_MIN_BOTTOM)
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(900, 520); c.show(); qapp.processEvents()
+    default = c._bottom_split_default
+    c._on_split_drag_started()
+    c._on_split_drag_delta(int(_SPLIT_MIN_BOTTOM - default) - 5)  # below floor
+    assert c._bottom_split_h == pytest.approx(_SPLIT_MIN_BOTTOM)  # clamped
+    c._on_split_drag_started()
+    c._on_split_drag_delta(-100000)   # past collapse threshold → fold
+    assert c._bottom_collapsed is True
+    assert c._bottom_split_h == pytest.approx(_SPLIT_MIN_BOTTOM)
+    # Expand: always returns to the default, NOT the clamped floor.
+    c._set_bottom_collapsed(False)
+    assert c._bottom_collapsed is False
+    assert c._bottom_split_h == pytest.approx(default)
+    assert c._slice_plot.maximumHeight() == int(default)
+    c.hide()
+    c.deleteLater()
+
+
+def test_heatmap_single_pane_unifies_stacked_left_axis_widths(qapp):
+    """Fix 2: in single-pane mode the heatmap and slice left axes must share one
+    width so the two plot areas line up on the left (previously each kept its
+    own natural width → misaligned left edges)."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    for _ in range(5):
+        qapp.processEvents()
+    c.reset_split_layout_alignment()
+    for _ in range(5):
+        qapp.processEvents()
+    main_w = float(c._plot.getAxis('left').width())
+    slice_w = float(c._slice_plot.getAxis('left').width())
+    assert main_w == pytest.approx(slice_w, abs=0.5), (
+        f"stacked left axes not unified: main={main_w} slice={slice_w}")
+    main_left = float(c._plot.vb.sceneBoundingRect().left())
+    slice_left = float(c._slice_plot.vb.sceneBoundingRect().left())
+    assert abs(main_left - slice_left) <= 2.0, (
+        f"left edges misaligned: main={main_left} slice={slice_left}")
+    c.hide()
+    c.deleteLater()
+
+
+def test_heatmap_empty_state_unifies_stacked_left_axis_widths(qapp):
+    """Fix 2, empty state: the bare panel (no result) still shares one left-axis
+    width across the map and the slice."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.reset_split_layout_alignment()
+    for _ in range(3):
+        qapp.processEvents()
+    main_w = float(c._plot.getAxis('left').width())
+    slice_w = float(c._slice_plot.getAxis('left').width())
+    assert main_w == pytest.approx(slice_w, abs=0.5)
+    c.hide()
+    c.deleteLater()
+
+
+def test_heatmap_axes_are_boundary_grid_axis_items(qapp):
+    """Fix 3: the left+bottom axes of the map and slice use the boundary-grid-
+    suppressing AxisItem subclass; top/right stay default (no grid)."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _BoundaryGridAxisItem
+    c = PgHeatmapCanvas(with_slice=True)
+    for plot in (c._plot, c._slice_plot):
+        assert isinstance(plot.getAxis('left'), _BoundaryGridAxisItem)
+        assert isinstance(plot.getAxis('bottom'), _BoundaryGridAxisItem)
+    c.deleteLater()
+
+
+def test_boundary_grid_axis_drops_only_edge_grid_lines(qapp, monkeypatch):
+    """Fix 3 (filter logic): given a tickSpec list whose first/last lines sit on
+    the linked-view rect edges and the rest are interior, the override drops
+    exactly the two boundary lines and keeps every interior one — driven through
+    a stubbed parent generateDrawSpecs so the filter is tested in isolation (no
+    fake-painter text measurement, which crashes Qt's QPicture path)."""
+    import pyqtgraph as pg
+    from pyqtgraph import Point
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _BoundaryGridAxisItem, _BOUNDARY_GRID_EPS_PX)
+
+    glw = pg.GraphicsLayoutWidget()
+    # A real linked ViewBox so linkedView()/mapRectToItem return a real rect.
+    plot = glw.addPlot(
+        row=0, col=0,
+        axisItems={'left': _BoundaryGridAxisItem(orientation='left')},
+    )
+    left = plot.getAxis('left')
+    left.setGrid(120)
+    glw.resize(400, 300)
+    glw.show()
+    qapp.processEvents()
+    plot.setYRange(0.0, 1.0, padding=0.08)
+    for _ in range(3):
+        qapp.processEvents()
+
+    rect = left.linkedView().mapRectToItem(left, left.linkedView().boundingRect())
+    lo, hi = rect.top(), rect.bottom()
+    interior = [lo + (hi - lo) * f for f in (0.25, 0.5, 0.75)]
+    pen = pg.mkPen('#9ca3af')
+    # Left axis → axis index 0 → value coordinate is p[1] (Y). Build specs whose
+    # value-position sits at the boundary (lo, hi) and at the interior points.
+    fake = []
+    for vpos in [lo, hi, *interior]:
+        p1 = Point(rect.right(), vpos)
+        p2 = Point(rect.left(), vpos)
+        fake.append((pen, p1, p2))
+    axis_spec = (pen, Point(0, lo), Point(0, hi))
+
+    monkeypatch.setattr(
+        pg.AxisItem, 'generateDrawSpecs',
+        lambda self, p: (axis_spec, list(fake), []))
+
+    _ax, kept, _text = left.generateDrawSpecs(None)
+    kept_vpos = sorted(round(p1[1], 3) for _pen, p1, _p2 in kept)
+    # Both boundary lines dropped; all three interior lines survive.
+    assert len(kept) == 3
+    for v in kept_vpos:
+        assert abs(v - lo) > _BOUNDARY_GRID_EPS_PX
+        assert abs(v - hi) > _BOUNDARY_GRID_EPS_PX
+    np.testing.assert_allclose(kept_vpos, sorted(round(v, 3) for v in interior))
+    glw.hide()
+    glw.deleteLater()
+
+
+def test_boundary_grid_axis_passthrough_when_grid_off(qapp, monkeypatch):
+    """Fix 3 guard: when the grid is off (self.grid is False) the override must
+    NOT filter — short ticks at the edges (top/right axes) stay intact."""
+    import pyqtgraph as pg
+    from pyqtgraph import Point
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _BoundaryGridAxisItem
+
+    axis = _BoundaryGridAxisItem(orientation='left')
+    assert axis.grid is False  # default: no grid
+    pen = pg.mkPen('#9ca3af')
+    fake = [(pen, Point(10.0, 0.0), Point(0.0, 0.0)),
+            (pen, Point(10.0, 50.0), Point(0.0, 50.0))]
+    monkeypatch.setattr(
+        pg.AxisItem, 'generateDrawSpecs',
+        lambda self, p: ((pen, Point(0, 0), Point(0, 1)), list(fake), []))
+    _ax, kept, _text = axis.generateDrawSpecs(None)
+    assert len(kept) == 2  # untouched when grid is off
+    axis.deleteLater()
 
 
 def test_heatmap_split_reset_returns_to_default(qapp):

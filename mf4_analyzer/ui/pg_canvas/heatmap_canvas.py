@@ -381,6 +381,86 @@ def _visual_padded_bounds(lo: float, hi: float, *, fraction: float = 0.015) -> t
     return lo - pad, hi + pad
 
 
+# Pixel tolerance for "this grid line sits on the view boundary". The
+# outermost grid line lands within ~1px of the linked-view rect edge; widen
+# slightly so a sub-pixel layout rounding never lets the boundary line slip
+# through. Internal grid lines are many px away so they are never touched.
+_BOUNDARY_GRID_EPS_PX = 1.5
+
+
+class _BoundaryGridAxisItem(pg.AxisItem):
+    """AxisItem that suppresses ONLY the outermost (view-boundary) grid line.
+
+    Analysis plots keep explicit Y/X whitespace (e.g. the empty-state
+    ``setYRange(0, 1, padding=0.08)`` and pyqtgraph's autorange margin in the
+    data state) so the highest/lowest tick is NOT flush with the frame. With a
+    grid enabled, that boundary tick still draws a long grid line right next to
+    the neutral frame line → it reads as a "double line" at the top/bottom
+    edge (spec R2 side effect). The product decision (confirmed with the user)
+    is to KEEP the padding but drop the grid line that is glued to the frame,
+    leaving one frame line + interior grid lines.
+
+    Implementation: ``generateDrawSpecs`` returns ``(axisSpec, tickSpecs,
+    textSpecs)`` where each tickSpec is ``(pen, p1, p2)`` and — when the grid
+    is on — the line spans the linked-view rect. The grid line's position
+    along the VALUE axis is ``point[1 - axis]`` (axis=0 for left/right →
+    value is Y; axis=1 for top/bottom → value is X). We drop any spec whose
+    value-position is within ``_BOUNDARY_GRID_EPS_PX`` of the linked-view rect
+    edge. Short ticks (grid off) are unaffected because their spans never
+    reach the rect edges the same way; left+bottom carry the grid here.
+    """
+
+    def generateDrawSpecs(self, p):
+        specs = super().generateDrawSpecs(p)
+        # generateDrawSpecs returns None when the axis has no realized
+        # geometry; pass that through unchanged (drawPicture handles None).
+        if specs is None or self.grid is False:
+            return specs
+        axis_spec, tick_specs, text_specs = specs
+        linked = self.linkedView()
+        if linked is None:
+            return specs
+        try:
+            rect = linked.mapRectToItem(self, linked.boundingRect())
+        except Exception:
+            return specs
+        # axis index along which the tick line extends: 0 for left/right
+        # (vertical axis → value runs in Y), 1 for top/bottom (value in X).
+        axis = 0 if self.orientation in ('left', 'right') else 1
+        if axis == 0:
+            lo, hi = rect.top(), rect.bottom()
+        else:
+            lo, hi = rect.left(), rect.right()
+        eps = _BOUNDARY_GRID_EPS_PX
+        kept = []
+        for pen, p1, p2 in tick_specs:
+            # The value-position is the coordinate NOT pinned to tickStart/
+            # tickStop; both points share it, so read it off p1.
+            value_pos = p1[1 - axis]
+            if abs(value_pos - lo) <= eps or abs(value_pos - hi) <= eps:
+                continue  # boundary grid line glued to the frame — drop it
+            kept.append((pen, p1, p2))
+        return axis_spec, kept, text_specs
+
+
+def _make_analysis_plot(glw, row, col, view_box):
+    """Add a PlotItem whose left+bottom axes use ``_BoundaryGridAxisItem`` so the
+    outermost grid line never doubles up with the neutral frame.
+
+    Top/right stay default AxisItems (they carry no grid — ``setGrid(False)`` /
+    ``_apply_neutral_axis_frame`` keep them as plain frame lines). The custom
+    axes inherit every later mutation (``_apply_neutral_axis_frame`` pen/style,
+    ``set_tick_density``) because they are ordinary AxisItem subclasses."""
+    return glw.addPlot(
+        row=row, col=col,
+        viewBox=view_box,
+        axisItems={
+            'left': _BoundaryGridAxisItem(orientation='left'),
+            'bottom': _BoundaryGridAxisItem(orientation='bottom'),
+        },
+    )
+
+
 def _apply_neutral_axis_frame(plot) -> None:
     """Draw a full frame with axes, avoiding ViewBox border/axis overlap."""
     _hide_native_auto_button(plot)
@@ -506,10 +586,8 @@ class PgHeatmapCanvas(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._glw)
 
-        self._plot = self._glw.addPlot(
-            row=0, col=0,
-            viewBox=_ModifierWheelViewBox(owner_canvas=self),
-        )
+        self._plot = _make_analysis_plot(
+            self._glw, 0, 0, _ModifierWheelViewBox(owner_canvas=self))
         _apply_neutral_axis_frame(self._plot)
         self._axis_bottom = self._plot.getAxis('bottom')
         self._axis_left = self._plot.getAxis('left')
@@ -605,10 +683,8 @@ class PgHeatmapCanvas(QWidget):
             # Second GraphicsLayout row: 1D frequency slice at the
             # selected frame (parity with SpectrogramCanvas._ax_slice,
             # canvases.py:1775). Capped height keeps the 2D map dominant.
-            self._slice_plot = self._glw.addPlot(
-                row=1, col=0,
-                viewBox=_ModifierWheelViewBox(owner_canvas=self),
-            )
+            self._slice_plot = _make_analysis_plot(
+                self._glw, 1, 0, _ModifierWheelViewBox(owner_canvas=self))
             _apply_neutral_axis_frame(self._slice_plot)
             # Open the gap between map + slice so the divider line reads clearly.
             try:
@@ -1300,6 +1376,15 @@ class PgHeatmapCanvas(QWidget):
         if self._slice_plot is None:
             return
         self._bottom_collapsed = bool(collapsed)
+        if not self._bottom_collapsed:
+            # Expand always returns to the DEFAULT height (confirmed product
+            # decision). A near-collapse drag floor-clamps _bottom_split_h to
+            # _SPLIT_MIN_BOTTOM in its last pre-fold steps, so reading the
+            # remembered value here would restore the slice at half height;
+            # reset to the default before applying so the row comes back full
+            # size. Double-click reset (_on_split_reset) is a separate path
+            # that already restores the default.
+            self._bottom_split_h = float(self._bottom_split_default)
         state = 'bottom' if self._bottom_collapsed else 'none'
         _apply_plot_collapse(self._plot, self._slice_plot, state,
                              self._bottom_split_h)
@@ -1431,11 +1516,46 @@ class PgHeatmapCanvas(QWidget):
     def reset_split_layout_alignment(self) -> None:
         self._split_aligned = False
         self.prepare_split_layout_alignment(None)
-        # Single-pane: align the slice's right edge to the heatmap (the split
-        # path does this via slice_right_reserve; do it here for one pane too).
+        # Single-pane: unify the two stacked left axes to a common width so the
+        # map and the slice share a left edge (prepare_* just released them to
+        # their natural widths, which differ when the y tick labels differ →
+        # misaligned left edges). Order matters: unify the left axes FIRST (it
+        # shifts each plot's left edge), then align the slice's RIGHT edge to
+        # the heatmap. Split mode (≥2 panes) is handled by the page via
+        # apply_split_layout_alignment, which already unifies left widths.
         if not getattr(self, '_bottom_collapsed', False):
+            self._unify_stacked_left_axes()
             self._align_slice_to_main()
             self._position_slice_panel()
+
+    def _unify_stacked_left_axes(self) -> None:
+        """Pin the map's and the slice's left axes to the MAX of their natural
+        widths so both plots share a left edge in single-pane mode.
+
+        Call only AFTER prepare_split_layout_alignment(None) has released the
+        widths (setWidth(None)) and realized the layout, so width() reports each
+        axis's natural size. No-op without a slice row (single plot, nothing to
+        align)."""
+        if self._slice_plot is None:
+            return
+        axes = self._alignment_left_axes()
+        if len(axes) < 2:
+            return
+        widths = []
+        for axis in axes:
+            try:
+                widths.append(float(axis.width()))
+            except Exception:
+                pass
+        if not widths:
+            return
+        target = max(widths)
+        for axis in axes:
+            try:
+                axis.setWidth(target)
+            except Exception:
+                pass
+        self._activate_graphics_layout()
 
     def heatmap_layout_metrics(self) -> dict:
         left_widths = []

@@ -641,9 +641,11 @@ def test_fft_split_drag_resizes_bottom_with_clamp(canvas, qapp):
     canvas.hide()
 
 
-def test_fft_collapse_restores_last_dragged_height(canvas, qapp):
-    """Fold-then-restore returns to the LAST dragged split (remembered), not a
-    hardcoded default."""
+def test_fft_collapse_restores_default_height(canvas, qapp):
+    """Fold-then-restore ALWAYS returns to the default split height (confirmed
+    product decision), regardless of any prior manual drag — a near-collapse
+    drag floor-clamps the remembered height, so restoring it would bring the
+    time preview back at half size; expand resets to the default instead."""
     canvas.plot_spectra(
         [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
         title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
@@ -651,13 +653,15 @@ def test_fft_collapse_restores_last_dragged_height(canvas, qapp):
     canvas.show()
     qapp.processEvents()
     canvas._on_split_drag_started()
-    canvas._on_split_drag_delta(30)              # bottom now 200
+    canvas._on_split_drag_delta(30)              # bottom dragged to 200
     assert canvas._bottom_split_h == pytest.approx(200)
     canvas._on_collapse_changed('bottom')
     assert not canvas._plot_time.isVisible()
     canvas._on_collapse_changed('none')
     assert canvas._plot_time.isVisible()
-    assert canvas._plot_time.maximumHeight() == 200   # remembered, not 170
+    # Expand restores the DEFAULT (170), NOT the last dragged 200.
+    assert canvas._bottom_split_h == pytest.approx(170)
+    assert canvas._plot_time.maximumHeight() == 170
     canvas.hide()
 
 
@@ -1187,3 +1191,77 @@ def test_fft_drag_dead_zone_does_not_collapse(canvas, qapp):
     canvas._on_split_drag_delta(int(target - canvas._drag_start_bottom_h))
     assert canvas._bottom_collapsed is False
     assert canvas._plot_time.isVisible()
+
+
+def test_fft_drag_collapse_then_expand_restores_default_height(canvas, qapp):
+    """Fix 1: dragging the divider down past the collapse threshold floor-clamps
+    _bottom_split_h to _SPLIT_MIN_BOTTOM in its final pre-fold step; on expand
+    the time preview must come back at the DEFAULT height, not that clamped
+    half-height (the bug was that expand read the stale clamped value)."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _SPLIT_MIN_BOTTOM
+    canvas.resize(900, 460); canvas.show(); qapp.processEvents()
+    default = canvas._bottom_split_default
+    # Simulate the real divider drag: a sequence that walks the bottom plot
+    # down through the floor and across the collapse threshold.
+    canvas._on_split_drag_started()
+    canvas._on_split_drag_delta(int(_SPLIT_MIN_BOTTOM - default) - 5)  # below floor
+    assert canvas._bottom_split_h == pytest.approx(_SPLIT_MIN_BOTTOM)  # clamped
+    canvas._on_split_drag_started()
+    canvas._on_split_drag_delta(-100000)   # past collapse threshold → fold
+    assert canvas._bottom_collapsed is True
+    # The clamped value is still the floor — restoring it would be half-height.
+    assert canvas._bottom_split_h == pytest.approx(_SPLIT_MIN_BOTTOM)
+    # Expand: always returns to the default, NOT the clamped 70.
+    canvas._set_bottom_collapsed(False)
+    assert canvas._bottom_collapsed is False
+    assert canvas._bottom_split_h == pytest.approx(default)
+    assert canvas._plot_time.maximumHeight() == int(default)
+    canvas.hide()
+
+
+def test_fft_single_pane_unifies_stacked_left_axis_widths(canvas, qapp):
+    """Fix 2: in single-pane mode the amp and time-preview left axes must share
+    one width so both rows' left edges line up (previously each kept its own
+    natural width → misaligned left edges)."""
+    canvas.show()
+    qapp.processEvents()
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    qapp.processEvents()
+    canvas.reset_split_layout_alignment()
+    qapp.processEvents()
+    amp_w = float(canvas._plot_amp.getAxis('left').width())
+    time_w = float(canvas._plot_time.getAxis('left').width())
+    assert amp_w == pytest.approx(time_w, abs=0.5), (
+        f"stacked left axes not unified: amp={amp_w} time={time_w}")
+    # And the two plots' left edges line up within ~1px.
+    amp_left = float(canvas._plot_amp.vb.sceneBoundingRect().left())
+    time_left = float(canvas._plot_time.vb.sceneBoundingRect().left())
+    assert abs(amp_left - time_left) <= 2.0, (
+        f"left edges misaligned: amp={amp_left} time={time_left}")
+    canvas.hide()
+
+
+def test_fft_empty_state_unifies_stacked_left_axis_widths(canvas, qapp):
+    """Fix 2, empty state: even before any spectrum is computed the two left
+    axes share a width (the bug is visible on the bare panel too)."""
+    canvas.show()
+    qapp.processEvents()
+    canvas.full_reset()
+    canvas.reset_split_layout_alignment()
+    qapp.processEvents()
+    amp_w = float(canvas._plot_amp.getAxis('left').width())
+    time_w = float(canvas._plot_time.getAxis('left').width())
+    assert amp_w == pytest.approx(time_w, abs=0.5)
+    canvas.hide()
+
+
+def test_line_axes_are_boundary_grid_axis_items(canvas):
+    """Fix 3: the left+bottom axes of both plots use the boundary-grid-
+    suppressing AxisItem subclass; top/right stay default (no grid)."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _BoundaryGridAxisItem
+    for plot in (canvas._plot_amp, canvas._plot_time):
+        assert isinstance(plot.getAxis('left'), _BoundaryGridAxisItem)
+        assert isinstance(plot.getAxis('bottom'), _BoundaryGridAxisItem)

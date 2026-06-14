@@ -25,6 +25,7 @@ from .heatmap_canvas import (
     _available_split_height,
     _clamp_bottom_split,
     _CollapsedRail,
+    _make_analysis_plot,
     _position_collapse_layout,
     _SPLIT_COLLAPSE_AT,
     _SPLIT_ROW_SPACING,
@@ -127,14 +128,10 @@ class PgLineCanvas(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._glw)
 
-        self._plot_amp = self._glw.addPlot(
-            row=0, col=0,
-            viewBox=_ModifierWheelViewBox(owner_canvas=self),
-        )
-        self._plot_time = self._glw.addPlot(
-            row=1, col=0,
-            viewBox=_TimePreviewViewBox(owner_canvas=self),
-        )
+        self._plot_amp = _make_analysis_plot(
+            self._glw, 0, 0, _ModifierWheelViewBox(owner_canvas=self))
+        self._plot_time = _make_analysis_plot(
+            self._glw, 1, 0, _TimePreviewViewBox(owner_canvas=self))
         for p in (self._plot_amp, self._plot_time):
             _apply_neutral_axis_frame(p)
             p.showGrid(x=True, y=True, alpha=0.25)
@@ -783,6 +780,15 @@ class PgLineCanvas(QWidget):
     # ------------------------------------------------------------------
     def _set_bottom_collapsed(self, collapsed: bool) -> None:
         self._bottom_collapsed = bool(collapsed)
+        if not self._bottom_collapsed:
+            # Expand always returns to the DEFAULT height (confirmed product
+            # decision). A near-collapse drag floor-clamps _bottom_split_h to
+            # _SPLIT_MIN_BOTTOM in its last pre-fold steps, so reading the
+            # remembered value here would restore the time preview at half
+            # height; reset to the default before applying so the row comes
+            # back full size. Double-click reset (_on_split_reset) already
+            # restores the default by its own path.
+            self._bottom_split_h = float(self._bottom_split_default)
         state = 'bottom' if self._bottom_collapsed else 'none'
         _apply_plot_collapse(self._plot_amp, self._plot_time, state,
                              self._bottom_split_h)
@@ -1088,6 +1094,38 @@ class PgLineCanvas(QWidget):
 
     def reset_split_layout_alignment(self) -> None:
         self.prepare_split_layout_alignment(None)
+        # Single-pane: unify the amp and time-preview left axes to a common
+        # width so both rows share a left edge. prepare_* just released the
+        # widths to their natural sizes, which differ when the two plots' y
+        # tick labels differ (e.g. spectrum amplitude vs time-domain
+        # amplitude) → misaligned left edges. Split mode (≥2 panes) is handled
+        # by the page via apply_split_layout_alignment, which already unifies
+        # left widths, so do this only on the single-pane reset path.
+        self._unify_stacked_left_axes()
+
+    def _unify_stacked_left_axes(self) -> None:
+        """Pin the amp and time-preview left axes to the MAX of their natural
+        widths so both stacked plots share a left edge in single-pane mode.
+
+        Call only AFTER prepare_split_layout_alignment(None) released the
+        widths (setWidth(None)) and realized the layout, so width() reports each
+        axis's natural size."""
+        axes = self._alignment_left_axes()
+        widths = []
+        for axis in axes:
+            try:
+                widths.append(float(axis.width()))
+            except Exception:
+                pass
+        if not widths:
+            return
+        target = max(widths)
+        for axis in axes:
+            try:
+                axis.setWidth(target)
+            except Exception:
+                pass
+        self._activate_graphics_layout()
 
     def line_layout_metrics(self) -> dict:
         left_widths = []
