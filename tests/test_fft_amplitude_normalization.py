@@ -23,6 +23,7 @@ test isolated from the UI stack.
 from __future__ import annotations
 
 import unittest
+import warnings
 
 import numpy as np
 
@@ -201,9 +202,10 @@ class WelchShortSignalTests(unittest.TestCase):
         t = np.arange(n) / fs
         sig = amplitude * np.sin(2 * np.pi * freq_hz * t)
 
-        freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
-            sig, fs, win=win, nfft=nfft, overlap=0.5,
-        )
+        with self.assertWarnsRegex(UserWarning, "frequency resolution"):
+            freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
+                sig, fs, win=win, nfft=nfft, overlap=0.5,
+            )
 
         # (1) Self-consistent, correct length: clamped to effective_nfft.
         expected_len = eff // 2
@@ -260,15 +262,29 @@ class WelchShortSignalTests(unittest.TestCase):
         fs = 100.0
         for n in (0, 1, 2, 3):
             sig = np.ones(n)
-            freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
-                sig, fs, win="hanning", nfft=1024, overlap=0.5,
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
+                    sig, fs, win="hanning", nfft=1024, overlap=0.5,
+                )
             self.assertTrue(np.all(np.isfinite(amp)), f"n={n}: non-finite amp")
             self.assertTrue(np.all(np.isfinite(psd)), f"n={n}: non-finite psd")
             self.assertEqual(amp.shape, freq.shape)
             self.assertEqual(psd.shape, freq.shape)
             self.assertTrue(np.all(amp == 0.0), f"n={n}: expected zero amp")
             self.assertTrue(np.all(psd == 0.0), f"n={n}: expected zero psd")
+
+    def test_short_signal_warns_about_resolution_clamp(self):
+        fs = 1000.0
+        sig = np.ones(500)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            FFTAnalyzer.compute_averaged_fft(sig, fs, win="hanning", nfft=1024)
+
+        self.assertTrue(
+            any(issubclass(w.category, UserWarning) for w in caught),
+            "expected a UserWarning for Welch resolution clamp",
+        )
 
 
 if __name__ == "__main__":

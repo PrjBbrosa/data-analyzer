@@ -135,3 +135,19 @@ decomposition-scope miss.)
 **Rework check:** S1 (`inspector_sections.py`, `inspector.py`), S2
 (`heatmap_canvas.py`), S3 (`context_menu.py`) have DISJOINT non-test filesets →
 no cross-specialist rework. All three ran as `pyqt-ui-engineer`, serialized.
+
+## Post-review correction addendum (C1)
+
+Any decomposition wording that implies the short-signal FFT paths are
+"三路径一致" / identical is too broad. Their behavior is intentionally
+different:
+
+- Welch / 线性平均 clamps the segment length to the real signal length
+  (`effective_nfft = n`) and returns the true `fs/n` resolution; this path now
+  emits a `UserWarning` when it clamps a requested `nfft`.
+- Single-frame FFT and peak-hold fallback still zero-pad the short signal to
+  the requested `nfft`.
+
+So for `n < nfft`, returned lengths and frequency spans are allowed to differ;
+the invariant is that each path is explicit and numerically defined, not that
+all three produce identical output.

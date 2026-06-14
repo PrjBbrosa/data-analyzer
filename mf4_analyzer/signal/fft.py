@@ -23,6 +23,8 @@ test suite.
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from scipy.signal import get_window as _scipy_get_window
 
@@ -189,9 +191,10 @@ class FFTAnalyzer:
         so at least one segment covers the whole signal. The window,
         ``w_sum``, frequency axis, and accumulator are ALL rebuilt from
         ``effective_nfft`` so the returned ``freq``/``amp`` arrays stay
-        the same length and self-consistent. For ``n >= nfft`` the
-        clamp is a no-op (``effective_nfft == nfft``) and the numerical
-        result is byte-for-byte unchanged.
+        the same length and self-consistent. A ``UserWarning`` is emitted
+        when this clamp changes the requested frequency resolution. For
+        ``n >= nfft`` the clamp is a no-op (``effective_nfft == nfft``)
+        and the numerical result is byte-for-byte unchanged.
         """
         n = len(sig)
         if n == 0:
@@ -202,6 +205,13 @@ class FFTAnalyzer:
         # (n < nfft) still yields a real, covering segment instead of an
         # all-zero spectrum. No-op when n >= nfft.
         effective_nfft = min(nfft, n)
+        if effective_nfft < nfft:
+            warnings.warn(
+                f"signal length {n} < nfft {nfft}; frequency resolution "
+                f"clamped to fs/{effective_nfft} (matches scipy.signal.welch).",
+                UserWarning,
+                stacklevel=2,
+            )
         hop = int(effective_nfft * (1 - overlap))
         if hop <= 0:
             hop = effective_nfft // 2
