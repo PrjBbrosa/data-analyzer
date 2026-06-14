@@ -246,6 +246,21 @@ def test_set_tick_density_clamps_at_spinbox_maxima(canvas):
     assert canvas._plot.getAxis('left')._tickDensity == pytest.approx(3.0)
 
 
+def test_set_tick_density_also_applies_to_slice_subplot(qapp):
+    # FFT-vs-Time renders a freq/amplitude slice subplot with its OWN bottom/
+    # left axes. The density control must reach those too — previously it only
+    # touched the main map axes, so the slice grid silently ignored the setting.
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.set_tick_density(10, 8)
+        sb = c._slice_plot.getAxis('bottom')
+        sl = c._slice_plot.getAxis('left')
+        assert sb._tickDensity == pytest.approx(10 / 10.0)  # x → bottom
+        assert sl._tickDensity == pytest.approx(8 / 6.0)    # y → left
+    finally:
+        c.deleteLater()
+
+
 def test_db_mode_z_auto_defaults_true(canvas):
     # mpl original (canvases.py:2184) defaults z_auto=True; omitting it
     # must NOT clip the matrix to the (-30, 0) manual window.
@@ -1686,5 +1701,171 @@ def test_left_and_right_grid_line_counts_match_no_extra_boundary(qapp):
         # ON (and boundary-filtered) is the single source of horizontal lines.
         assert plot.getAxis('right').grid is False
         assert plot.getAxis('left').grid is not False
+    c.hide()
+    c.deleteLater()
+
+
+# ----------------------------------------------------------------------
+# FIX A — first-show left-axis re-alignment. On first entry the eager
+# showEvent align runs before the GraphicsLayout geometry is realized, so the
+# two stacked left axes settle to DIFFERENT natural widths with nothing
+# re-unifying them. showEvent now schedules a deferred re-alignment
+# (QTimer.singleShot(0)) that runs after the first paint. Offscreen the two
+# widths happen to measure EQUAL (geometry not fully realized headless), so a
+# pure width-equality assertion is weak — SPY the show path instead.
+# ----------------------------------------------------------------------
+def test_first_show_schedules_deferred_left_axis_realign(qapp):
+    """A single-pane (page-less) canvas must self-re-align after the first
+    paint: showEvent schedules QTimer.singleShot(0, _deferred_first_show_align),
+    and processing events fires it. We wrap reset_split_layout_alignment to
+    count calls and assert the deferred show path triggered a re-alignment;
+    we also assert no exception and the two left axes end equal-width."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    calls = {'n': 0}
+    orig = c.reset_split_layout_alignment
+
+    def _counting_reset():
+        calls['n'] += 1
+        return orig()
+
+    c.reset_split_layout_alignment = _counting_reset
+    # Plot a result so the left axes carry real (differently wide) tick labels.
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    before = calls['n']
+    c.show()
+    # singleShot(0) is queued on show; draining the event loop fires it.
+    for _ in range(5):
+        qapp.processEvents()
+    assert calls['n'] > before, (
+        "first-show did not schedule/run a deferred left-axis re-alignment"
+    )
+    # The two stacked left axes end equal-width (single shared left edge).
+    main_w = float(c._plot.getAxis('left').width())
+    slice_w = float(c._slice_plot.getAxis('left').width())
+    assert main_w == pytest.approx(slice_w, abs=0.5), (
+        f"stacked left axes not unified after first show: "
+        f"main={main_w} slice={slice_w}"
+    )
+    c.hide()
+    c.deleteLater()
+
+
+def test_first_show_deferred_align_is_split_pane_safe(qapp):
+    """The deferred first-show handler must NOT self-reset alignment when the
+    page already drives split alignment (_split_aligned True) — that would set
+    _split_aligned False and fight the page. It must still emit
+    layout_geometry_changed so the page re-syncs. And the emit chain must
+    terminate (no infinite layout_geometry_changed loop)."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    # Simulate a page having taken over split alignment.
+    c.apply_split_layout_alignment(left_axis_width=40.0)
+    assert c._split_aligned is True
+    reset_calls = {'n': 0}
+    orig = c.reset_split_layout_alignment
+
+    def _counting_reset():
+        reset_calls['n'] += 1
+        return orig()
+
+    c.reset_split_layout_alignment = _counting_reset
+    geo = {'n': 0}
+    c.layout_geometry_changed.connect(lambda: geo.__setitem__('n', geo['n'] + 1))
+    c._deferred_first_show_align()
+    # Page-managed: must NOT self-reset (would flip _split_aligned False).
+    assert reset_calls['n'] == 0, "deferred align fought the page's split alignment"
+    assert c._split_aligned is True
+    # Must still notify the page to re-sync.
+    assert geo['n'] >= 1, "deferred align did not notify the page"
+    # Emit chain terminates: a bounded number of emits (no runaway loop).
+    assert geo['n'] < 50, "layout_geometry_changed appears to loop"
+    c.deleteLater()
+
+
+# ----------------------------------------------------------------------
+# FIX B — right-click "查看全部" / toolbar Home on the EMPTY map must restore
+# the non-negative empty default, not pg's autoRange() origin-recenter (which
+# went negative: X=[-15,15], Y=[-500,500]).
+# ----------------------------------------------------------------------
+def test_view_all_on_empty_map_keeps_non_negative_range(qapp):
+    """reset_view_to_data_extents() with no data must apply the non-negative
+    empty default (NOT pg autoRange, which recenters on the origin → negative
+    time/freq/order). Both the toolbar Home and the menu "查看全部" route here."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _EMPTY_X_RANGE, _EMPTY_Y_RANGE)
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    assert not c.has_result()  # precondition: empty map
+    c.reset_view_to_data_extents()
+    qapp.processEvents()
+    (x0, x1), (y0, y1) = c._plot.vb.viewRange()
+    assert x0 >= 0.0, f"empty View-All X min went negative: {x0}"
+    assert y0 >= 0.0, f"empty View-All Y min went negative: {y0}"
+    assert (x0, x1) == pytest.approx(_EMPTY_X_RANGE)
+    assert (y0, y1) == pytest.approx(_EMPTY_Y_RANGE)
+    c.hide()
+    c.deleteLater()
+
+
+# ----------------------------------------------------------------------
+# FIX C — the slice X-range lock must not leak from 'y' (time-pin) into 'x'
+# (freq spectrum). FIX3's setXRange in the 'y' branch DISABLES the slice's X
+# auto-range; the 'x' branch must re-enable it so the spectrum re-fits the
+# frequency/order extent instead of staying squished in the time extent.
+# ----------------------------------------------------------------------
+def test_x_slice_reranges_to_freq_after_y_slice(qapp):
+    """y→x: the 'x' slice (amp vs frequency) must re-range its X to the FREQUENCY
+    extent, NOT stay pinned to the time extent the prior 'y' slice set. Default
+    'x' is freq-autoranged; 'y' is time-pinned; back to 'x' must be freq again."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()  # times 0..2 over 10 frames; freqs 0..500 over 64 bins
+    c.plot_result(r, amplitude_mode='amplitude_db', z_auto=True)
+    qapp.processEvents()
+    time_lo, time_hi = float(r.times[0]), float(r.times[-1])
+    freq_lo, freq_hi = float(r.frequencies[0]), float(r.frequencies[-1])
+
+    # Default 'x' = amp vs frequency; X auto-ranged to ~freq extent.
+    assert c._slice_dir == 'x'
+    assert c._slice_plot.getAxis('bottom').labelText == 'Frequency (Hz)'
+    (x0_x, x1_x), _ = c._slice_plot.vb.viewRange()
+    # X spans roughly the frequency extent (autorange adds a little padding).
+    assert x1_x > x0_x
+    assert x1_x == pytest.approx(freq_hi, rel=0.25)
+    # And NOT the (much narrower) time extent.
+    assert x1_x > time_hi * 2
+
+    # 'y' = amp vs time; X pinned to the TIME extent (padding=0).
+    c.set_slice_direction('y')
+    qapp.processEvents()
+    assert c._slice_plot.getAxis('bottom').labelText == 'Time (s)'
+    (sy0, sy1), _ = c._slice_plot.vb.viewRange()
+    assert sy0 == pytest.approx(time_lo, abs=1e-6)
+    assert sy1 == pytest.approx(time_hi, abs=1e-6)
+
+    # Back to 'x': X must re-range to the FREQUENCY extent, NOT stay at [0,2].
+    c.set_slice_direction('x')
+    qapp.processEvents()
+    assert c._slice_plot.getAxis('bottom').labelText == 'Frequency (Hz)'
+    (x0_b, x1_b), _ = c._slice_plot.vb.viewRange()
+    # The bug left this stuck at the time extent (~[0,2]); the fix re-fits freq.
+    assert x1_b == pytest.approx(freq_hi, rel=0.25), (
+        f"x-after-y did not re-range to freq extent: X=({x0_b},{x1_b}), "
+        f"time_hi={time_hi}, freq_hi={freq_hi}"
+    )
+    assert x1_b > time_hi * 2, (
+        f"x-after-y slice X stuck at time extent: ({x0_b},{x1_b})"
+    )
+    # X auto-range must be re-enabled in 'x' mode. pyqtgraph stores autorange
+    # as a fractional weight (1.0 = fully enabled, False = disabled), so assert
+    # truthiness rather than identity to True.
+    assert bool(c._slice_plot.vb.autoRangeEnabled()[0]), (
+        "slice X auto-range not re-enabled in 'x' mode"
+    )
     c.hide()
     c.deleteLater()

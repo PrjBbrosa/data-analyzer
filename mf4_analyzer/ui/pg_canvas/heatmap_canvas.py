@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QFrame,
@@ -1049,7 +1049,15 @@ class PgHeatmapCanvas(QWidget):
         except (TypeError, ValueError):
             return
         x_d, y_d = _tick_counts_to_density(x_n, y_n)
-        for axis, density in ((self._axis_bottom, x_d), (self._axis_left, y_d)):
+        pairs = [(self._axis_bottom, x_d), (self._axis_left, y_d)]
+        # The FFT-vs-Time frequency/amplitude slice subplot (with_slice=True)
+        # carries its own bottom/left axes that the main-plot pair above never
+        # touched, so the density control silently skipped the slice. Apply the
+        # same factors there (x→bottom, y→left) so the slice grid tracks the map.
+        if self._with_slice and self._slice_plot is not None:
+            pairs.append((self._slice_plot.getAxis('bottom'), x_d))
+            pairs.append((self._slice_plot.getAxis('left'), y_d))
+        for axis, density in pairs:
             axis.setStyle(maxTickLevel=0)
             axis.setTickDensity(density)
         self.layout_geometry_changed.emit()
@@ -1078,7 +1086,13 @@ class PgHeatmapCanvas(QWidget):
         So reset to the raw extents here, mirroring the initial render.
         """
         if self._extents is None:
-            self._plot.vb.autoRange()
+            # No result yet: pg's autoRange() with no image item recenters on
+            # the origin → negative range (X=[-15,15], Y=[-500,500]), which both
+            # the toolbar Home and the right-click "查看全部" would then show as
+            # negative time/freq/order ticks. Restore the SAME non-negative
+            # empty default used by __init__/full_reset so the blank map stays
+            # consistent on reset.
+            self._apply_empty_state_range()
             return
         x0, x1, y0, y1 = self._extents
         self._plot.setXRange(x0, x1, padding=0)
@@ -1288,6 +1302,14 @@ class PgHeatmapCanvas(QWidget):
             idx = int(np.clip(self._slice_x_idx, 0, max(0, ncols - 1)))
             self._slice_x_idx = idx
             self._slice_curve.setData(yc, m[:, idx])
+            # Re-enable X auto-range so the spectrum re-fits to the
+            # frequency/order extent. The 'y' branch above pins the slice X to
+            # the TIME extent via setXRange(padding=0), which DISABLES the
+            # slice plot's X auto-range (autoRangeX → False); without this
+            # re-enable, switching y→x would leave the freq spectrum squished
+            # into the stale time extent ([0,30]) instead of re-ranging to the
+            # frequency axis. The 'y' branch's time-pin is left exactly as is.
+            self._slice_plot.enableAutoRange(axis='x')
             self._slice_plot.setLabel('bottom', self._y_label or 'Frequency (Hz)')
             self._slice_marker.setAngle(90)
             self._slice_marker.setValue(float(xc[idx]))
@@ -1531,6 +1553,40 @@ class PgHeatmapCanvas(QWidget):
         self._position_slice_panel()
         self._position_collapse_ctrl()
         self._position_split_divider()
+        # First-show left-axis unification: on the FIRST entry the eager
+        # alignment above runs before the on-screen GraphicsLayout geometry /
+        # tick-label widths are realized, so _unify_stacked_left_axes measures
+        # stale (equal) widths and no-ops — the wide main Y axis ("0–1000") and
+        # the narrow slice Y axis ("0.8") then settle to DIFFERENT natural
+        # widths with nothing re-unifying them, leaving the slice's left edge
+        # off the map's until a later layout_geometry_changed (collapse/expand)
+        # re-runs the page sync against realized geometry. Defer a re-alignment
+        # to AFTER the first paint/realize so it measures real widths.
+        if self._slice_plot is not None:
+            QTimer.singleShot(0, self._deferred_first_show_align)
+
+    def _deferred_first_show_align(self) -> None:
+        """Re-run left-axis/slice alignment after the first paint realizes the
+        GraphicsLayout geometry (scheduled from showEvent via singleShot(0)).
+
+        Split-pane-safe: it does NOT unconditionally call
+        reset_split_layout_alignment (which sets _split_aligned=False and would
+        fight the page's apply_split_layout_alignment in compare/split mode).
+        Instead it always re-emits layout_geometry_changed so the owning
+        AnalysisSectionPage re-runs its single/split-aware sync against the now-
+        realized geometry; and ONLY for the page-less single-pane case (not
+        already split-aligned, slice not collapsed) does it also self-align
+        directly so a standalone canvas still unifies its left edges. Both
+        reset_split_layout_alignment and _unify_stacked_left_axes do NOT emit
+        layout_geometry_changed, so the emit chain terminates (no loop)."""
+        if self._slice_plot is None:
+            return
+        # Always notify the page (if any) to re-sync against realized geometry.
+        self.layout_geometry_changed.emit()
+        # Page-less single-pane fallback: self-align so a standalone canvas
+        # (no AnalysisSectionPage driving alignment) unifies its left edges.
+        if not self._split_aligned and not self._bottom_collapsed:
+            self.reset_split_layout_alignment()
 
     # ------------------------------------------------------------------
     # split-pane layout alignment
