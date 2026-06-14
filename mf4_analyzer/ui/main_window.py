@@ -1385,7 +1385,7 @@ class MainWindow(QMainWindow):
         top.set_range_values(range_start, range_end)
         update_range_rows = getattr(top, '_update_range_rows_visible', None)
         if callable(update_range_rows):
-            update_range_rows(range_enabled)
+            update_range_rows()
 
         x_opts = axis_opts.get('x_axis') or {}
         requested_mode = x_opts.get('mode') or 'time'
