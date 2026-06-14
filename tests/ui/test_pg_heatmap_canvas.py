@@ -819,6 +819,47 @@ def test_slice_right_frame_visible_after_colorbar_reserve(qapp):
     c.deleteLater()
 
 
+def test_slice_right_frame_visible_without_colorbar_reserve(qapp):
+    """The slice right frame remains visible when the colorbar column is absent."""
+    from mf4_analyzer.ui._axis_handle import (
+        PG_AXIS_NEUTRAL_COLOR,
+        PG_AXIS_NEUTRAL_WIDTH,
+    )
+
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(620, 470)
+    c.show()
+    qapp.processEvents()
+
+    # Force the colorbar-less/no-reserve geometry path. The constructor builds a
+    # colorbar for normal FFT-vs-Time use, but _align_slice_to_main must still
+    # leave the slice box closed if a future caller has no colorbar reserve.
+    assert c._cbar is not None
+    try:
+        c._plot.layout.removeItem(c._cbar)
+    except Exception:
+        pass
+    scene = c._cbar.scene()
+    if scene is not None:
+        scene.removeItem(c._cbar)
+    c._cbar = None
+    for _ in range(3):
+        qapp.processEvents()
+
+    c._align_slice_to_main()
+    qapp.processEvents()
+
+    ax = c._slice_plot.getAxis('right')
+    assert ax.isVisible()
+    assert ax.pen().color().alpha() > 0
+    assert ax.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
+    assert ax.pen().widthF() == pytest.approx(PG_AXIS_NEUTRAL_WIDTH)
+    assert ax.style.get('showValues') is False
+    assert ax.width() == pytest.approx(PG_AXIS_NEUTRAL_WIDTH, abs=0.5)
+    assert ax.grid is False
+    c.deleteLater()
+
+
 def test_heatmap_drag_near_bottom_collapses_and_rail_expands(qapp):
     from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
     c = PgHeatmapCanvas(with_slice=True)

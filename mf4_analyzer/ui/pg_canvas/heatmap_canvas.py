@@ -1415,9 +1415,9 @@ class PgHeatmapCanvas(QWidget):
         except Exception:
             return
         reserve = slice_r - main_r
-        if reserve > 1.0:
-            self._set_slice_right_spacer(reserve)
-            self._activate_graphics_layout()
+        self._set_slice_right_spacer(
+            reserve if reserve > 1.0 else PG_AXIS_NEUTRAL_WIDTH)
+        self._activate_graphics_layout()
 
     def _position_slice_panel(self) -> None:
         """Pin the slice info panel into the colorbar column (right of the
