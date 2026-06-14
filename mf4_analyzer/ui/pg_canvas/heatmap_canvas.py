@@ -1771,7 +1771,12 @@ class PgHeatmapCanvas(QWidget):
         if self._slice_plot is None:
             return
         axis = self._slice_plot.getAxis('right')
-        if width is None or width <= 0:
+        frame_pen = pg.mkPen(
+            color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH)
+        transparent = pg.mkPen((0, 0, 0, 0))
+        if width is None:
+            # _align_slice_to_main 在测量 colorbar 内缩量之前会先调用本分支做一次
+            # 瞬时复位——此时把右轴从测量中移除，保持 reserve 计算干净，不画边框。
             try:
                 self._slice_plot.showAxis('right', False)
                 axis.setWidth(None)
@@ -1780,11 +1785,12 @@ class PgHeatmapCanvas(QWidget):
             return
         try:
             self._slice_plot.showAxis('right', True)
-            transparent = pg.mkPen((0, 0, 0, 0))
-            axis.setPen(transparent)
+            # 在 slice viewbox 的右缘画一条可见边框线，使下方图右侧闭合（与热力图右
+            # 边框对齐）。刻度文字保持隐藏；width>0 时仍预留 colorbar 列的间距。
+            axis.setPen(frame_pen)
             axis.setTextPen(transparent)
             axis.setStyle(showValues=False, tickLength=0)
-            axis.setWidth(float(width))
+            axis.setWidth(float(width) if width > 0 else 1.0)
         except Exception:
             pass
 

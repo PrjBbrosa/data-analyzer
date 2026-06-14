@@ -775,6 +775,50 @@ def test_slice_aligns_with_heatmap_and_panel_in_colorbar_column(qapp):
     c.deleteLater()
 
 
+def test_slice_right_frame_visible_after_colorbar_reserve(qapp):
+    """The slice (下方图) keeps a VISIBLE right frame line even though the right
+    axis reserves the colorbar-column spacer, so the plot box closes on the
+    right (aligned with the heatmap). Regression: the width>0 branch previously
+    set a fully-transparent pen, leaving the box open on the right."""
+    from mf4_analyzer.ui._axis_handle import (
+        PG_AXIS_NEUTRAL_COLOR,
+        PG_AXIS_NEUTRAL_WIDTH,
+    )
+
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(620, 470)
+    c.set_slice_button_labels('按时间', '按阶次')
+    c.set_slice_direction('y')
+    orders = np.linspace(0, 20, 40)
+    times = np.linspace(0, 90, 60)
+    mat = np.random.RandomState(5).rand(40, 60)
+    c.show()
+    qapp.processEvents()
+    c.plot_or_update_heatmap(
+        matrix=mat, x_extent=(0, 90), y_extent=(0, 20),
+        x_label='Time (s)', y_label='Order', cbar_label='Amplitude',
+        x_coords=times, y_coords=orders, z_auto=True)
+    c._seed_slice()
+    for _ in range(5):
+        qapp.processEvents()
+    # _align_slice_to_main has run with a real (colorbar-inset) reserve.
+    ax = c._slice_plot.getAxis('right')
+    assert ax.isVisible()
+    # Pen must NOT be transparent — the frame line is what closes the box.
+    assert ax.pen().color().alpha() > 0
+    assert ax.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
+    assert ax.pen().widthF() == pytest.approx(PG_AXIS_NEUTRAL_WIDTH)
+    # Tick text stays hidden; the right axis is a frame line only.
+    assert ax.style.get('showValues') is False
+    # The colorbar-column reserve is still in place (right edge inset).
+    main_r = float(c._plot.vb.sceneBoundingRect().right())
+    slice_r = float(c._slice_plot.vb.sceneBoundingRect().right())
+    assert abs(slice_r - main_r) <= 3
+    # Right-axis grid stays off (tests elsewhere assert right.grid is False).
+    assert ax.grid is False
+    c.deleteLater()
+
+
 def test_heatmap_drag_near_bottom_collapses_and_rail_expands(qapp):
     from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
     c = PgHeatmapCanvas(with_slice=True)
