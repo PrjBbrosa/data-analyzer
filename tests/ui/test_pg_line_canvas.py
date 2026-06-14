@@ -1099,3 +1099,67 @@ def test_apply_global_chart_font_sets_cjk_family(qapp):
         assert item.textItem.font().family() == family
     finally:
         qapp.setFont(saved)
+
+
+class _FakeDrag:
+    def __init__(self, button):
+        self._b = button
+
+    def button(self):
+        return self._b
+
+    def buttonDownPos(self):
+        return QPointF(0.0, 0.0)
+
+    def pos(self):
+        return QPointF(10.0, 0.0)
+
+    def accept(self):
+        pass
+
+
+def test_time_preview_zoom_mode_left_drag_does_not_frame_select(canvas, qapp, monkeypatch):
+    """In box-zoom (RectMode) a left-drag on the time preview must fall through
+    to super() (box-zoom), NOT frame-select the FFT range."""
+    import pyqtgraph as pg
+    from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
+    canvas.plot_time_preview([_entry()], title='t')
+    canvas.show()
+    qapp.processEvents()
+    vb = canvas._plot_time.vb
+    vb.setMouseMode(pg.ViewBox.RectMode)
+    selected = []
+    monkeypatch.setattr(canvas, 'select_time_region',
+                        lambda *a: selected.append(a))
+    superseded = []
+    monkeypatch.setattr(_ModifierWheelViewBox, 'mouseDragEvent',
+                        lambda self, ev, axis=None: superseded.append(True))
+    vb.mouseDragEvent(_FakeDrag(Qt.LeftButton))
+    assert selected == []          # no frame-select while zoom mode is active
+    assert superseded == [True]    # delegated to super → box-zoom
+    canvas.hide()
+
+
+def test_time_preview_pan_mode_left_drag_frame_selects(canvas, qapp, monkeypatch):
+    """In pan mode (default) a left-drag frame-selects the FFT time window."""
+    import pyqtgraph as pg
+    canvas.plot_time_preview([_entry()], title='t')
+    canvas.show()
+    qapp.processEvents()
+    vb = canvas._plot_time.vb
+    vb.setMouseMode(pg.ViewBox.PanMode)
+    selected = []
+    monkeypatch.setattr(canvas, 'select_time_region',
+                        lambda *a: selected.append(a))
+    vb.mouseDragEvent(_FakeDrag(Qt.LeftButton))
+    assert len(selected) == 1
+    canvas.hide()
+
+
+def test_select_time_region_hides_zero_width(canvas):
+    """A zero/negative-width selection must not show a phantom region."""
+    canvas.plot_time_preview([_entry()], title='t')
+    canvas.select_time_region(0.3, 0.3)
+    assert not canvas._time_region.isVisible()
+    canvas.select_time_region(0.2, 0.6)
+    assert canvas._time_region.isVisible()

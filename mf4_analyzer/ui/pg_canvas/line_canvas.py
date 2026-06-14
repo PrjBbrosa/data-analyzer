@@ -93,11 +93,12 @@ class _TimePreviewViewBox(_ModifierWheelViewBox):
             owner.select_time_region(x0, x1)
 
     def mouseDragEvent(self, ev, axis=None):
-        if ev.button() == Qt.LeftButton and axis is None:
-            # Left-drag on the 2D plot area frames a FFT time window instead of
-            # panning. Axis drags (axis is not None) and all other buttons fall
-            # through to the parent so Ctrl/Shift wheel-zoom, the right-click
-            # menu, and box-zoom mode keep working.
+        is_rect = self.state.get("mouseMode") == pg.ViewBox.RectMode
+        if ev.button() == Qt.LeftButton and axis is None and not is_rect:
+            # Pan-mode left-drag on the 2D plot area frames a FFT time window
+            # instead of panning. In RectMode (toolbar 缩放) we fall through to
+            # super() so box-zoom still works; axis drags (axis is not None) and
+            # all other buttons also fall through (Ctrl/Shift wheel-zoom, menu).
             ev.accept()
             p0 = self.mapToView(ev.buttonDownPos())
             p1 = self.mapToView(ev.pos())
@@ -248,7 +249,7 @@ class PgLineCanvas(QWidget):
             self._time_region.setRegion((lo, hi))
         finally:
             self._time_region.blockSignals(False)
-        self._time_region.setVisible(True)
+        self._time_region.setVisible(hi > lo)
         if hi > lo:
             self.time_preview_range_changed.emit(lo, hi)
 
