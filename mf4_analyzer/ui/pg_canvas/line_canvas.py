@@ -26,7 +26,6 @@ from .heatmap_canvas import (
     _clamp_bottom_split,
     _CollapsedRail,
     _position_collapse_layout,
-    _position_split_controls,
     _SPLIT_COLLAPSE_AT,
     _SPLIT_ROW_SPACING,
     _SplitDivider,

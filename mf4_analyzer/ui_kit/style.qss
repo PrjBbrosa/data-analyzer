@@ -1187,14 +1187,19 @@ QWidget#sliceDirToggle QPushButton[role="slice-seg"] {
     padding: 0 3px;
 }
 
-/* 2026-06-13 collapse triangle + split divider. The triangle (#plotCollapseBar)
- * is a single bare solid triangle painted by the widget itself — no box/border/
- * background. The divider (#plotSplitDivider) paints its own full-width 1px
- * line. Both keep a clear background so only the glyph / line shows. */
-QWidget#plotCollapseBar,
+/* 2026-06-14 折叠下图后的底部细带（drawer 风格，复刻 #sidePanelStrip 淡色）。
+ * #plotSplitDivider 仍画自身 1px 拖拽线。 */
 QWidget#plotSplitDivider {
     background: transparent;
     border: none;
+}
+QFrame#plotCollapsedRail {
+    background-color: #f3f5f8;
+    border: none;
+    border-top: 1px solid #e2e6eb;
+}
+QFrame#plotCollapsedRail:hover {
+    background-color: #e7ecf2;
 }
 
 /* Chart toolbar — compact spacing & padding (post-i18n). Three selectors

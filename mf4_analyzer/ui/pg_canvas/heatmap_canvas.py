@@ -83,86 +83,6 @@ class _SliceDirToggle(QWidget):
         self._btn_y.setChecked(self._dir == 'y')
 
 
-class _PlotCollapseControl(QWidget):
-    """A single small triangle pinned to the left gutter at the divider between
-    two stacked plots. ▾ when the bottom plot is shown (click to fold it away),
-    ▴ when folded (click to restore to the last split size). The folded state
-    is also shown by a checked highlight. ``collapse_changed`` emits
-    'none' | 'bottom' (the old fold-top mode was dropped in the single-triangle
-    redesign — drag the divider to resize instead)."""
-
-    collapse_changed = pyqtSignal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("plotCollapseBar")
-        # Bare solid triangle — no box/border/background chrome. The widget
-        # paints its own filled triangle so nothing but the glyph shows.
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(QSize(13, 11))
-        self._state = 'none'
-        self._hover = False
-        self.setToolTip('折叠下图')
-
-    def state(self):
-        return self._state
-
-    def set_state(self, state, *, emit=False):
-        state = 'bottom' if state == 'bottom' else 'none'
-        if state == self._state:
-            self.update()
-            return
-        self._state = state
-        self.setToolTip('恢复下图' if state == 'bottom' else '折叠下图')
-        self.update()
-        if emit:
-            self.collapse_changed.emit(self._state)
-
-    def _toggle(self):
-        self._state = 'bottom' if self._state == 'none' else 'none'
-        self.setToolTip('恢复下图' if self._state == 'bottom' else '折叠下图')
-        self.update()
-        self.collapse_changed.emit(self._state)
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self._toggle()
-            e.accept()
-            return
-        super().mousePressEvent(e)
-
-    def enterEvent(self, e):
-        self._hover = True
-        self.update()
-        super().enterEvent(e)
-
-    def leaveEvent(self, e):
-        self._hover = False
-        self.update()
-        super().leaveEvent(e)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        try:
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            collapsed = self._state == 'bottom'
-            color = (QColor("#2563eb") if (collapsed or self._hover)
-                     else QColor("#7b8699"))
-            w, h, m = float(self.width()), float(self.height()), 1.0
-            if collapsed:
-                # ▴ up — points back to where the folded bottom plot returns.
-                pts = [QPointF(w / 2, m), QPointF(w - m, h - m), QPointF(m, h - m)]
-            else:
-                # ▾ down — points at the bottom plot it will fold.
-                pts = [QPointF(m, m), QPointF(w - m, m), QPointF(w / 2, h - m)]
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(color)
-            painter.drawPolygon(QPolygonF(pts))
-        finally:
-            painter.end()
-
-
 # Minimum PlotItem heights enforced while dragging the split divider, so a drag
 # can never fully starve either plot (full collapse is the triangle's job).
 _SPLIT_MIN_TOP = 90
@@ -392,44 +312,6 @@ def _split_boundary_y(top_plot, bottom_plot, collapsed) -> float:
     top_b = float(top_plot.sceneBoundingRect().bottom())
     bot_t = float(bottom_plot.sceneBoundingRect().top())
     return (top_b + bot_t) / 2.0
-
-
-def _position_split_controls(ctrl, divider, top_plot, bottom_plot) -> None:
-    """Place the collapse triangle (left gutter) and the draggable divider line
-    on the boundary between two stacked plots. Both anchor to the gap centre
-    between the two PlotItems. The line spans only the data area (left → right
-    of the top viewbox), so it starts to the right of the gutter triangle and
-    never crosses it. Shared by all three analysis sections so they match."""
-    if ctrl is None:
-        return
-    try:
-        vb = top_plot.vb.sceneBoundingRect()
-    except Exception:
-        return
-    collapsed = ctrl.state() == 'bottom'
-    try:
-        boundary_y = _split_boundary_y(top_plot, bottom_plot, collapsed)
-    except Exception:
-        boundary_y = float(vb.bottom())
-    ctrl.adjustSize()
-    cx = int(vb.left() - ctrl.width() - 8)
-    cy = int(boundary_y - ctrl.height() / 2)
-    ctrl.move(max(0, cx), max(0, cy))
-    ctrl.raise_()
-    if divider is None:
-        return
-    # Full-bleed: the line runs edge to edge across the whole canvas, with the
-    # solid triangle riding on it at the left.
-    parent = divider.parentWidget()
-    width = int(parent.width()) if parent is not None else int(vb.width())
-    if collapsed or not top_plot.isVisible() or width <= 0:
-        divider.hide()
-        return
-    divider.setFixedWidth(width)
-    divider.move(0, max(0, int(boundary_y - divider.height() / 2)))
-    divider.show()
-    divider.raise_()
-    ctrl.raise_()      # keep the triangle on top of the line
 
 
 def _resolve_colormap(name: str) -> pg.ColorMap:
