@@ -2,6 +2,7 @@
 import numpy as np
 import pytest
 from PyQt5.QtCore import QCoreApplication, QPointF, Qt
+from PyQt5.QtWidgets import QApplication
 
 from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
@@ -280,7 +281,7 @@ def test_fft_amp_curves_are_antialiased(canvas):
     assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
 
 
-def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp):
+def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp, monkeypatch):
     """During a user pan the overlaid FFT curves must drop antialiasing for a
     cheap raster — mirroring the time-domain canvas's interactive-quality
     policy — then restore crisp AA after a hands-off idle tick. Previously the
@@ -306,7 +307,11 @@ def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp):
         "pan must drop AA on the overlaid FFT curves"
     assert canvas._aa_on is False
 
-    # Hands-off idle tick restores AA on the spectrum overlay.
+    # Hands-off idle tick restores AA on the spectrum overlay. The slot's real
+    # drag guard checks QApplication.mouseButtons(); pin it here because this
+    # unit test invokes the slot directly instead of driving an actual release.
+    monkeypatch.setattr(
+        QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton))
     canvas._enable_idle_quality()
     assert canvas._aa_on is True
     assert all(c.opts.get('antialias') is True for c in canvas._amp_curves), \
