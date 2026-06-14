@@ -2,7 +2,7 @@
 role: pyqt-ui
 tags: [renderer-swap, matplotlib, pyqtgraph, event-dispatch, test-coupling, contract-test, production-consumers, toolbar-branch-flip]
 created: 2026-05-28
-updated: 2026-06-11
+updated: 2026-06-14
 cause: insight
 supersedes: []
 ---
@@ -101,6 +101,34 @@ precedent, not a new regression, but note it. Test coupling this round was
 two render tests — rewrite to ``canvas._plot_amp.getAxis('left').labelText``
 and ``plot.vb.viewRange()`` (the pg analogues), don't stub ``fig`` on the
 pg widget.
+
+Update 2026-06-14 (FFT view-history C, ``PgLineCanvas`` back/forward): the
+attribute audit must include the card-side REGISTRATION GATE, not only the
+attributes the toolbar reads. ``register_replot_callback`` is never read by
+``PgNavigationToolbar`` — but ``_ChartCard`` gates BOTH
+``register(toolbar.apply_current_mouse_mode)`` AND
+``register(toolbar.rebind_history_capture)`` on
+``callable(getattr(canvas, 'register_replot_callback', None))``
+(chart_stack.py:1134-1141). So a pg canvas that already has ``axes_list`` +
+``_channel_lines`` + ``reset_view_to_data_extents`` STILL has silently-dead
+back/forward (history never seeds a baseline, ``sigRangeChangedManually`` is
+never bound) AND a mouse mode that silently resets after every replot, purely
+because the callback method is absent and the whole ``if callable(register):``
+block is skipped. Fix: add ``register_replot_callback``/``_run_replot_callbacks``
+and CALL ``_run_replot_callbacks()`` at the tail of every rebuild entry point
+(``plot_spectra``/``plot_time_preview``/``full_reset``) — registration alone is
+inert without the per-rebuild fire. Also, history snapshot/restore reads
+``canvas._channel_lines`` as ``{name: (handle, _)}`` where ``handle`` needs
+``get_xlim/set_xlim/get_ylim/set_ylim`` — a fixed-PlotItem canvas can satisfy
+this with a one-time ``_HistoryHandle(vb, with_y=...)`` shell (no per-rebuild
+re-bind, the PlotItems never rebuild), and the time-preview handle's
+``set_ylim`` must be a NO-OP so a history restore only rewinds X (its Y is
+auto-framed to a graticule and a Y restore would fight that). Drive the LIVE
+toolbar: build ``PgNavigationToolbar(canvas)``, register the two callbacks as
+the card does, ``plot_spectra``, assert ``_view_stack`` seeded, pan a vb,
+``_commit_pending_view``, then ``back()``/``forward()`` and assert the X range
+actually moved — a code-review of "the method exists now" does not prove the
+gate opened.
 
 Update 2026-06-11 (heatmap pan/box-zoom parity, closing the M6 partial
 fix): M6 gave ``PgHeatmapCanvas`` only ``reset_view_to_data_extents``
