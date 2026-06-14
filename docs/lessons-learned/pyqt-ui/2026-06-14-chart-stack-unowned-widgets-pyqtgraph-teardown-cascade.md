@@ -1,9 +1,9 @@
 # chart_stack tests: un-owned ChartStack → pyqtgraph LabelItem teardown cascade
 
 **Date:** 2026-06-14
-**Status:** Known pre-existing issue, descoped from the 2026-06-14 review-fixes
-batch (finding C3). The two stale-shortcut FAILURES (C1) are fixed; these
-teardown ERRORS are a separate, module-wide infra issue.
+**Status:** RESOLVED 2026-06-14 via a tracking autouse fixture (see "The fix
+that works" below). Originally descoped from the review-fixes batch (C3) while
+the canvas was mid-refactor; fixed once the drawer-collapse refactor settled.
 
 ## Symptom
 
@@ -46,16 +46,39 @@ it cascades across the trailing tests.
   mole** — owning 7 dropped errors 8→4 but shifted them onto 4 previously-green
   tests. The leak is cumulative/ordering, not localized.
 
-## What WOULD fix it (deferred)
+## The fix that works
 
-Give **every** `ChartStack()` in the module `qtbot` ownership (so pytest-qt keeps
-it alive and drains its events at teardown before deletion), OR cancel/flush a
-canvas's pending `singleShot` layout callbacks on destruction (production-side).
-Owning ~60 constructions is large, mechanical churn and was deferred because
-`heatmap_canvas.py` / `line_canvas.py` were being refactored in parallel (codex
-`_CollapsedRail` / `_position_collapse_layout`), so a sweeping test edit risked
-colliding. Do it as a dedicated test-infra pass when the canvas refactor settles
-— ideally via a shared `chart_stack` fixture that all these tests adopt.
+A single module `autouse` fixture that monkeypatches `ChartStack.__init__` to
+record every instance, then — at teardown — drains the event loop **while the
+widgets are still referenced (alive)**, and only then `deleteLater()`s them:
+
+```python
+@pytest.fixture(autouse=True)
+def _own_chartstacks(qapp, monkeypatch):
+    created = []
+    orig_init = ChartStack.__init__
+    def _tracking_init(self, *a, **k):
+        orig_init(self, *a, **k); created.append(self)
+    monkeypatch.setattr(ChartStack, "__init__", _tracking_init)
+    yield
+    qapp.processEvents()          # fire queued callbacks on LIVE widgets
+    for cs in created:
+        cs.deleteLater()
+    created.clear()
+    qapp.processEvents()          # let deferred deletes complete
+```
+
+Why it works where the alternatives didn't: the cascade is caused by the local
+`cs` being GC'd at function return (deleting the C++ tree) BEFORE the queued
+callback fires. Holding a ref in `created` keeps every ChartStack alive past the
+test body, so the drain fires the `singleShot` callbacks on live objects (no
+`sizeHint` on a half-dead `LabelItem`), and the explicit `deleteLater` + drain
+disposes them cleanly. Result: `76 passed, 0 errors` (was `76 passed, 9 errors`),
+no per-test churn, no production change.
+
+Rejected alternatives: a plain post-yield `processEvents` (cs already GC'd by
+then — fires the bad callback itself); `qtbot.addWidget` on only the erroring
+tests (whack-a-mole — shifts the error onto other previously-green tests).
 
 ## Scope note
 
