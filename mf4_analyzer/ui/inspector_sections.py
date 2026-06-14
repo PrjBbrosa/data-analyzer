@@ -1555,8 +1555,7 @@ class PersistentTop(QWidget):
             )
         except Exception:  # pragma: no cover — defensive on Qt style failures
             pass
-        # Host row: [chk_range][stretch][btn_range_max]. The checkbox row stays
-        # visible regardless of checked state; only the 开始/结束 row toggles.
+        # Host row: [chk_range][stretch][btn_range_max].
         self._chk_range_host = QWidget()
         _chk_host_lay = QHBoxLayout(self._chk_range_host)
         _chk_host_lay.setContentsMargins(0, 0, 0, 0)
@@ -1623,7 +1622,7 @@ class PersistentTop(QWidget):
         # 紧凑化【2】: apply initial conditional visibility once everything
         # is wired (so a programmatic reset before show() also lands).
         self._update_xaxis_channel_row_visible(self.combo_xaxis.currentIndex())
-        self._update_range_rows_visible(self.chk_range.isChecked())
+        self._update_range_rows_visible()
 
         # 2026-04-26 R3 紧凑化 fix-3: cap the short numeric fields so toggling
         # 时间范围 / 通道 visibility no longer makes the pane look wider.
@@ -1643,7 +1642,6 @@ class PersistentTop(QWidget):
         self.combo_xaxis.currentIndexChanged.connect(
             self._update_xaxis_channel_row_visible
         )
-        # 紧凑化【2】: hide 开始/结束 row entirely when range disabled.
         self.chk_range.toggled.connect(self._update_range_rows_visible)
         # 「最大」按钮只转发信号；MainWindow 负责按当前模式重绘/刷新。
         self.btn_range_max.clicked.connect(self.max_range_requested)
@@ -1715,7 +1713,7 @@ class PersistentTop(QWidget):
     def _update_xaxis_channel_row_visible(self, index):
         _set_form_row_visible(self._xaxis_form, self._combo_xaxis_ch, index == 1)
 
-    def _update_range_rows_visible(self, checked):
+    def _update_range_rows_visible(self):
         _set_form_row_visible(self._range_form, self._range_row_host, True)
 
     def _emit_ticks(self):
@@ -1790,7 +1788,7 @@ class PersistentTop(QWidget):
         finally:
             self.chk_range.blockSignals(old)
         self._range_checked_by_mode[self._range_mode] = True
-        self._update_range_rows_visible(True)
+        self._update_range_rows_visible()
 
     def checkout_range_for_mode(self, mode):
         """Snapshot the outgoing mode's range-checkbox state and restore the
@@ -1813,9 +1811,7 @@ class PersistentTop(QWidget):
         finally:
             self.chk_range.blockSignals(old)
         self._range_mode = mode
-        # Keep the conditional 开始/结束 row visibility honest for the
-        # restored state (do NOT break the paired-field visibility sync).
-        self._update_range_rows_visible(target)
+        self._update_range_rows_visible()
 
     def set_range_limits(self, lo, hi):
         for sp in (self.spin_start, self.spin_end):
