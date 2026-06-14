@@ -255,6 +255,21 @@ class WelchShortSignalTests(unittest.TestCase):
     def test_n_1000_shorter_than_nfft_1024(self):
         self._assert_short_signal_spectrum(n=1000, nfft=1024)
 
+    def test_tiny_signal_returns_finite_zero_spectrum(self):
+        """n in {0,1,2,3} must yield finite zero arrays, never NaN."""
+        fs = 100.0
+        for n in (0, 1, 2, 3):
+            sig = np.ones(n)
+            freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
+                sig, fs, win="hanning", nfft=1024, overlap=0.5,
+            )
+            self.assertTrue(np.all(np.isfinite(amp)), f"n={n}: non-finite amp")
+            self.assertTrue(np.all(np.isfinite(psd)), f"n={n}: non-finite psd")
+            self.assertEqual(amp.shape, freq.shape)
+            self.assertEqual(psd.shape, freq.shape)
+            self.assertTrue(np.all(amp == 0.0), f"n={n}: expected zero amp")
+            self.assertTrue(np.all(psd == 0.0), f"n={n}: expected zero psd")
+
 
 if __name__ == "__main__":
     unittest.main()

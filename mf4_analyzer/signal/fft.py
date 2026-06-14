@@ -194,6 +194,10 @@ class FFTAnalyzer:
         result is byte-for-byte unchanged.
         """
         n = len(sig)
+        if n == 0:
+            empty = np.array([], dtype=float)
+            return empty, empty, empty
+
         # Clamp the segment length to the signal length so a short signal
         # (n < nfft) still yields a real, covering segment instead of an
         # all-zero spectrum. No-op when n >= nfft.
@@ -206,10 +210,14 @@ class FFTAnalyzer:
         n_segments = max((n - effective_nfft) // hop + 1, 1)
 
         w = get_analysis_window(win, effective_nfft)
-        w_sum = np.sum(w)
+        w_sum = float(np.sum(w))
 
         half = effective_nfft // 2
         freq = np.fft.fftfreq(effective_nfft, 1 / fs)[:half]
+        if half == 0 or w_sum <= 0.0:
+            zeros = np.zeros(half, dtype=float)
+            return freq, zeros, zeros
+
         psd_sum = np.zeros(half)
 
         for i in range(n_segments):
