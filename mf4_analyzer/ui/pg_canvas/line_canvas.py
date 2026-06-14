@@ -7,6 +7,8 @@ breaks grab_pixmap exports on this project.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from PyQt5.QtCore import QPointF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
@@ -36,6 +38,9 @@ from .heatmap_canvas import (
 from .context_menu import redesign_pg_context_menu
 from .ticks_math import _frame_to_nice, _fmt_tick
 from .viewbox import _ModifierWheelViewBox
+
+
+logger = logging.getLogger(__name__)
 
 
 # Fallback envelope bucket count used when the time-preview plot area has no
@@ -430,7 +435,7 @@ class PgLineCanvas(QWidget):
             try:
                 cb()
             except Exception:
-                pass
+                logger.debug("replot callback %r failed", cb, exc_info=True)
 
     def _plot_item_for_view_box(self, view_box):
         for plot in (self._plot_amp, self._plot_time):

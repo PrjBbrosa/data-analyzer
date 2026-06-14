@@ -1352,6 +1352,25 @@ def test_register_replot_callback_fires_on_plot_spectra(canvas):
     assert calls, "replot callback not fired on plot_spectra"
 
 
+def test_replot_callback_failure_is_logged_not_swallowed(canvas, caplog):
+    import logging
+
+    def _broken_callback():
+        raise ValueError("boom")
+
+    canvas.register_replot_callback(_broken_callback)
+    with caplog.at_level(
+        logging.DEBUG, logger="mf4_analyzer.ui.pg_canvas.line_canvas"
+    ):
+        canvas._run_replot_callbacks()
+
+    assert any(
+        (record.exc_info and "boom" in str(record.exc_info[1]))
+        or "boom" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_channel_lines_history_contract_shape(canvas):
     # _snapshot_view/_restore_view iterate (name, pair) and call pair[0]'s
     # get/set_xlim/ylim. Provide both an amp and a time handle.
