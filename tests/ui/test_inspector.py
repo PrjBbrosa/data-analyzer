@@ -2057,6 +2057,107 @@ def test_fft_time_preview_honors_selected_time_range(qtbot):
     assert (tx0, tx1) == pytest.approx((1.0, 2.0), abs=0.02)
 
 
+# ---- Regression: FFT time-window drag must not leak chk_range into time ----
+#
+# Bug: the SINGLE shared ``chk_range`` QCheckBox is reparented across
+# time/fft/fft_time/order modes (inspector._place_range_group_for_mode).
+# An FFT time-window region drag routes through set_range_from_span, which
+# force-checks the box; because the instance is shared, the checked state
+# leaked into Time-Domain when the user switched back. The fix decouples the
+# checked flag per mode (PersistentTop.checkout_range_for_mode), invoked on
+# every mode switch. These tests pin both halves: the drag still enables the
+# range for the FFT compute (within FFT mode) AND the box does NOT arrive
+# checked in Time-Domain after a mode switch.
+
+
+def test_fft_preview_span_does_not_leak_chk_range_into_time(qapp):
+    """An FFT time-window drag (set_range_from_span) must enable the range
+    while FFT mode is active, but switching back to time must restore the
+    time-domain checkbox to its own (unchecked) state."""
+    insp = Inspector()
+    top = insp.top
+
+    # Start in time mode with the box unchecked (constructor default).
+    insp.set_mode('time')
+    assert not top.range_enabled()
+
+    # Enter FFT mode and drag a time window -> stages start/end AND checks the
+    # box so the FFT compute (which reads range_enabled()) uses the window.
+    insp.set_mode('fft')
+    top.set_range_from_span(2.0, 4.0)
+    assert top.range_enabled()
+    assert top.range_values() == (2.0, 4.0)
+
+    # Switch back to time-domain: the shared checkbox must NOT carry the FFT
+    # drag's checked state. This is the bug under regression.
+    insp.set_mode('time')
+    assert not top.range_enabled(), (
+        "FFT time-window drag leaked chk_range into Time-Domain mode"
+    )
+    # On this branch the 开始/结束 row is unconditionally visible; the
+    # per-mode checkout must not break that (the spin row stays shown).
+    assert not top.spin_start.isHidden()
+    assert not top.spin_end.isHidden()
+
+    # Returning to FFT restores FFT's own (checked) intent.
+    insp.set_mode('fft')
+    assert top.range_enabled()
+    assert not top.spin_start.isHidden()
+
+
+def test_time_domain_chk_range_survives_round_trip_through_fft(qapp):
+    """If the user explicitly checks the box in Time-Domain, that intent must
+    survive a round-trip through FFT mode (where FFT has its own state)."""
+    insp = Inspector()
+    top = insp.top
+
+    insp.set_mode('time')
+    top.chk_range.setChecked(True)
+    top.set_range_values(1.0, 3.0)
+    assert top.range_enabled()
+
+    # FFT mode starts from its own (unchecked) state, independent of time.
+    insp.set_mode('fft')
+    assert not top.range_enabled()
+
+    # Back to time: the user's original checked intent is preserved.
+    insp.set_mode('time')
+    assert top.range_enabled()
+    assert top.range_values() == (1.0, 3.0)
+
+
+def test_main_window_fft_preview_path_does_not_check_time_box(qapp, qtbot):
+    """End-to-end: drive the real _on_fft_preview_range_changed handler in FFT
+    mode, then switch the inspector back to time-domain; the time-domain
+    checkbox must remain unchecked (no leak through the live signal path)."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    top = win.inspector.top
+    # Baseline: time mode, box unchecked.
+    win.chart_stack.set_mode('time')
+    win.inspector.set_mode('time')
+    assert not top.range_enabled()
+
+    # Enter FFT mode on both the chart stack (gating) and the inspector
+    # (range-group reparent + per-mode checkout).
+    win.chart_stack.set_mode('fft')
+    win.inspector.set_mode('fft')
+    page = win.chart_stack.page_fft
+    handled = win._on_fft_preview_range_changed(page.focused_index(), 2.0, 4.0)
+    assert handled is True
+    assert top.range_enabled()  # FFT compute window is armed within FFT mode.
+
+    # Switch back to time-domain: the shared checkbox must not be checked.
+    win.chart_stack.set_mode('time')
+    win.inspector.set_mode('time')
+    assert not top.range_enabled(), (
+        "live FFT-preview path leaked chk_range into Time-Domain mode"
+    )
+
+
 # ---- Wave 3 (axis-settings + COT migration plan): 坐标轴设置 group ----
 #
 # OrderContextual replaces the legacy combo_amp_mode + combo_dynamic combos

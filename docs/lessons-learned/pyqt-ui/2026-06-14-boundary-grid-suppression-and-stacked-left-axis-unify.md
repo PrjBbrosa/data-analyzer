@@ -1,6 +1,6 @@
 ---
 role: pyqt-ui
-tags: [pyqtgraph, axisitem, generateDrawSpecs, grid, double-line, setWidth, stacked-plots, left-axis-align, single-pane, offscreen-testing]
+tags: [pyqtgraph, axisitem, generateDrawSpecs, grid, double-line, setWidth, stacked-plots, left-axis-align, single-pane, offscreen-testing, setGrid, top-right-axis, showgrid, context-menu]
 created: 2026-06-14
 updated: 2026-06-14
 cause: insight
@@ -35,6 +35,21 @@ left axis ``width()``, take the MAX, and ``setWidth(max)`` on both — here
 it forces the narrower axis up to the shared width. Order matters in the heatmap:
 unify LEFT first (shifts each plot's left edge), THEN ``_align_slice_to_main``
 (right-edge match).
+
+(3) The ``_BoundaryGridAxisItem`` subclass only suppresses the boundary line on
+the axes it is INSTALLED on (left+bottom). ``showGrid(x=True, y=True)`` lights
+the grid on ALL FOUR built-in axes, and top/right are PLAIN ``AxisItem``s that
+re-draw the very boundary line left/bottom suppressed PLUS over-draw the interior
+lines — so during zoom their sub-pixel offset doubles every grid line (offscreen:
+right axis returned 6 horizontal gridlines vs left's 4). The other half of the
+double-line fix is therefore ``getAxis('top').setGrid(False)`` +
+``getAxis('right').setGrid(False)`` after EACH ``showGrid`` call, on every plot
+(``line_canvas`` already did this; the heatmap map+slice did not). CAVEAT: the
+SHARED ``context_menu._build_grid_submenu`` grid toggle calls
+``plot_item.showGrid(x,y)`` again on user toggle, which RE-LIGHTS top/right and
+undoes the constructor ``setGrid(False)`` — a cross-canvas trap affecting both
+the line and heatmap canvases (the durable fix belongs in ``context_menu.py``:
+re-disable top/right after its ``showGrid``, or toggle only left/bottom).
 
 ## How to apply
 For a pyqtgraph "grid line doubles the frame" complaint when padding is

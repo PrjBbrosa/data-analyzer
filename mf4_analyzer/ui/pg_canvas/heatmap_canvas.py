@@ -387,6 +387,18 @@ def _visual_padded_bounds(lo: float, hi: float, *, fraction: float = 0.015) -> t
 # through. Internal grid lines are many px away so they are never touched.
 _BOUNDARY_GRID_EPS_PX = 1.5
 
+# Empty-state axis range for the main heatmap (no result loaded / after
+# file-close). Time, frequency, and order are all non-negative quantities, so
+# the empty map must NOT inherit pyqtgraph's default [-0.5, 0.5] symmetric
+# range (which puts the origin in the middle and shows negative tick labels on
+# an axis that can never hold negative values). A fixed, simple, non-negative
+# default reads as a sensible "blank chart" until real extents arrive. The
+# numbers are deliberately NOT derived from loaded-channel extents (product
+# decision: keep it simple). Applied identically in __init__ and full_reset via
+# _apply_empty_state_range so the two paths can never drift.
+_EMPTY_X_RANGE = (0.0, 30.0)
+_EMPTY_Y_RANGE = (0.0, 1000.0)
+
 
 class _BoundaryGridAxisItem(pg.AxisItem):
     """AxisItem that suppresses ONLY the outermost (view-boundary) grid line.
@@ -592,6 +604,14 @@ class PgHeatmapCanvas(QWidget):
         self._axis_bottom = self._plot.getAxis('bottom')
         self._axis_left = self._plot.getAxis('left')
         self._plot.showGrid(x=True, y=True, alpha=0.25)
+        # showGrid(x,y) lights the grid on ALL FOUR built-in axes; left+bottom
+        # are _BoundaryGridAxisItem (boundary line suppressed), but top+right
+        # are plain AxisItems that re-draw the boundary line + over-draw the
+        # interior lines, so during zoom sub-pixel offsets double every grid
+        # line. Disable their grid (mirrors line_canvas.py:145-146) so only the
+        # boundary-suppressing left+bottom carry the grid.
+        self._plot.getAxis('top').setGrid(False)
+        self._plot.getAxis('right').setGrid(False)
         for _ax in ('left', 'bottom', 'top', 'right'):
             try:
                 self._plot.getAxis(_ax).setStyle(maxTickLevel=0)
@@ -701,6 +721,10 @@ class PgHeatmapCanvas(QWidget):
             self._split_aligned = False
             self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
             self._slice_plot.showGrid(x=True, y=True, alpha=0.25)
+            # Same boundary-doubling fix as the main plot: kill top/right grid
+            # so only the boundary-suppressing left+bottom axes draw grid lines.
+            self._slice_plot.getAxis('top').setGrid(False)
+            self._slice_plot.getAxis('right').setGrid(False)
             for _ax in ('left', 'bottom', 'top', 'right'):
                 try:
                     self._slice_plot.getAxis(_ax).setStyle(maxTickLevel=0)
@@ -782,6 +806,25 @@ class PgHeatmapCanvas(QWidget):
             self._split_aligned = False
         self._x_label = self._default_x_label
         self._y_label = self._default_y_label
+        # Empty state on construction: pin a fixed non-negative range so the
+        # blank map never inherits pyqtgraph's default symmetric [-0.5, 0.5]
+        # (negative time/freq/order ticks). Real extents from the first
+        # plot_or_update_heatmap override this via setXRange/setYRange.
+        self._apply_empty_state_range()
+
+    def _apply_empty_state_range(self) -> None:
+        """Pin the empty-map view to fixed non-negative defaults.
+
+        Time / frequency / order are never negative, so the no-result map must
+        not show pyqtgraph's default centred [-0.5, 0.5] range. Applied at
+        construction and again on full_reset (file-close) from the SAME module
+        constants so the two empty-state paths cannot drift. The slice plot's
+        own empty state already defaults non-negative ([0,1]×[0,1]); only the
+        main map needs the explicit override."""
+        x0, x1 = _EMPTY_X_RANGE
+        y0, y1 = _EMPTY_Y_RANGE
+        self._plot.setXRange(float(x0), float(x1), padding=0)
+        self._plot.setYRange(float(y0), float(y1), padding=0)
 
     # ------------------------------------------------------------------
     # main API (signature mirrors canvases.PlotCanvas.plot_or_update_heatmap)
@@ -934,6 +977,10 @@ class PgHeatmapCanvas(QWidget):
             self._x_label = self._default_x_label
             self._y_label = self._default_y_label
         self.reset_split_layout_alignment()
+        # File-close empty state: restore the fixed non-negative default range
+        # (same constants as __init__) so the blank map never shows negative
+        # time/freq/order ticks after the data is cleared.
+        self._apply_empty_state_range()
         self.layout_geometry_changed.emit()
 
     def set_default_axis_labels(self, *, x_label: str | None = None,
@@ -1218,6 +1265,20 @@ class PgHeatmapCanvas(QWidget):
             idx = int(np.clip(self._slice_y_idx, 0, max(0, nrows - 1)))
             self._slice_y_idx = idx
             self._slice_curve.setData(xc, m[idx, :])
+            # Top/bottom grid-line ALIGNMENT (spec FIX 3, 'y' direction only):
+            # the slice X axis is deliberately NOT XLinked to the map X (the
+            # 'x' direction plots amplitude-vs-frequency, an unrelated axis), so
+            # the slice keeps its own auto X range here. In 'y' mode the slice X
+            # IS time — the same quantity as the map's bottom X — but pyqtgraph
+            # auto-ranges the curve with its own padding, so the slice's time
+            # ticks/grid land at different positions than the map's (which uses
+            # setXRange(x0,x1,padding=0)). Pin the slice X to the FULL time
+            # extent with padding=0 to match the map exactly so the top/bottom
+            # gridlines line up vertically. Only the 'y' branch is touched; the
+            # 'x' branch (freq/order on X) is left exactly as before.
+            if len(xc) >= 2:
+                self._slice_plot.setXRange(
+                    float(xc[0]), float(xc[-1]), padding=0)
             self._slice_plot.setLabel('bottom', self._x_label or 'Time (s)')
             self._slice_marker.setAngle(0)
             self._slice_marker.setValue(float(yc[idx]))

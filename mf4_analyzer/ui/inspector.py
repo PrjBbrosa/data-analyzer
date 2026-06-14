@@ -155,6 +155,11 @@ class Inspector(QWidget):
         self._place_range_group_for_mode(mode)
 
     def _place_range_group_for_mode(self, mode):
+        # Decouple the shared chk_range checked state per mode BEFORE the
+        # group is reparented, so an FFT time-window drag's force-check does
+        # not leak into Time-Domain (and vice versa). The checkbox INSTANCE is
+        # shared across modes; only its per-mode intent must be restored here.
+        self.top.checkout_range_for_mode(mode)
         group = self.top.range_group()
         old_layout = self._range_group_owner_layout
         if old_layout is not None:

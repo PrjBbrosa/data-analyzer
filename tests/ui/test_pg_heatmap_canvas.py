@@ -1542,3 +1542,149 @@ def test_split_drag_finish_self_aligns_single_but_delegates_in_split(qapp, monke
     assert len(align) == a0 + 1     # self-align resumes
     c.hide()
     c.deleteLater()
+
+
+# ----------------------------------------------------------------------
+# FIX 2 — empty-state heatmap axes are non-negative (time/freq/order never < 0).
+# ----------------------------------------------------------------------
+def test_empty_state_main_axes_are_non_negative_on_construct(qapp):
+    """A fresh PgHeatmapCanvas must NOT inherit pyqtgraph's default symmetric
+    [-0.5, 0.5] view: time/frequency/order are all non-negative, so the blank
+    map's X and Y view minima must be >= 0."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _EMPTY_X_RANGE, _EMPTY_Y_RANGE)
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    (x0, x1), (y0, y1) = c._plot.vb.viewRange()
+    assert x0 >= 0.0, f"empty X min must be >= 0, got {x0}"
+    assert y0 >= 0.0, f"empty Y min must be >= 0, got {y0}"
+    # The fixed module-level defaults are honored exactly (padding=0).
+    assert (x0, x1) == pytest.approx(_EMPTY_X_RANGE)
+    assert (y0, y1) == pytest.approx(_EMPTY_Y_RANGE)
+    c.hide()
+    c.deleteLater()
+
+
+def test_empty_state_main_axes_are_non_negative_after_full_reset(qapp):
+    """After plotting real data and then full_reset (file-close), the map must
+    return to the SAME non-negative empty-state range — never leaving negative
+    time/freq ticks behind."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _EMPTY_X_RANGE, _EMPTY_Y_RANGE)
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    qapp.processEvents()
+    c.full_reset()
+    qapp.processEvents()
+    (x0, x1), (y0, y1) = c._plot.vb.viewRange()
+    assert x0 >= 0.0, f"post-reset X min must be >= 0, got {x0}"
+    assert y0 >= 0.0, f"post-reset Y min must be >= 0, got {y0}"
+    assert (x0, x1) == pytest.approx(_EMPTY_X_RANGE)
+    assert (y0, y1) == pytest.approx(_EMPTY_Y_RANGE)
+    c.hide()
+    c.deleteLater()
+
+
+# ----------------------------------------------------------------------
+# FIX 3 — 'y' slice direction aligns its time X range to the map exactly so the
+# top/bottom gridlines line up by time. The default 'x' direction is untouched.
+# ----------------------------------------------------------------------
+def test_y_slice_x_range_matches_map_x_range(qapp):
+    """In 'y' slice mode (fixed freq/order → amp-vs-time), the slice plot's X
+    view must equal the map's X view so their time gridlines align vertically."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    qapp.processEvents()
+    c.set_slice_direction('y')
+    qapp.processEvents()
+    (mx0, mx1), _ = c._plot.vb.viewRange()
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    # Both are the full time extent [times[0], times[-1]] with padding=0.
+    assert sx0 == pytest.approx(mx0, abs=1e-6)
+    assert sx1 == pytest.approx(mx1, abs=1e-6)
+    # The slice bottom axis is the time axis in this direction.
+    assert c._slice_plot.getAxis('bottom').labelText == 'Time (s)'
+    c.hide()
+    c.deleteLater()
+
+
+def test_x_slice_direction_unchanged_by_fix3(qapp):
+    """The default 'x' direction (fixed time → amp vs frequency) must keep its
+    own frequency X axis; FIX 3 only pins the 'y' branch. Switching x→y→x leaves
+    'x' behaving exactly as before (freq-labelled bottom axis, 64-freq curve)."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    qapp.processEvents()
+    # Default 'x' direction: amp vs frequency (64 bins), freq-labelled axis.
+    assert c._slice_dir == 'x'
+    assert c._slice_plot.getAxis('bottom').labelText == 'Frequency (Hz)'
+    xs_x, _ = c._slice_curve.getData()
+    assert len(xs_x) == 64
+    # x -> y -> x must restore the 'x' behaviour exactly.
+    c.set_slice_direction('y')
+    qapp.processEvents()
+    c.set_slice_direction('x')
+    qapp.processEvents()
+    assert c._slice_plot.getAxis('bottom').labelText == 'Frequency (Hz)'
+    xs_xx, _ = c._slice_curve.getData()
+    assert len(xs_xx) == 64
+    np.testing.assert_allclose(xs_x, xs_xx)
+    c.hide()
+    c.deleteLater()
+
+
+# ----------------------------------------------------------------------
+# FIX 4 — showGrid(x,y) lights ALL four built-in axes; top/right are plain
+# AxisItems that re-draw the boundary line the left/bottom axes suppress, so
+# during zoom sub-pixel offsets double every grid line. top/right grid must be
+# disabled on BOTH plots (mirrors line_canvas.py:145-146).
+# ----------------------------------------------------------------------
+def test_top_and_right_grid_disabled_on_both_plots(qapp):
+    """``ax.grid is False`` on the top+right axes of the map AND the slice — the
+    only axes carrying grid are the boundary-suppressing left+bottom. Asserted
+    on ``ax.grid`` (per the cited lesson: driving the real generateDrawSpecs with
+    QPainter(QPicture()) access-violates)."""
+    c = PgHeatmapCanvas(with_slice=True)
+    for plot in (c._plot, c._slice_plot):
+        assert plot.getAxis('top').grid is False
+        assert plot.getAxis('right').grid is False
+        # The boundary-suppressing axes DO carry the grid.
+        assert plot.getAxis('left').grid is not False
+        assert plot.getAxis('bottom').grid is not False
+    c.deleteLater()
+
+
+def test_left_and_right_grid_line_counts_match_no_extra_boundary(qapp):
+    """The extra/duplicate gridlines came from the right (plain) AxisItem
+    re-drawing the boundary line the left (_BoundaryGridAxisItem) suppresses.
+    With the right grid disabled, the right axis emits ZERO horizontal grid
+    lines while the left emits its (boundary-filtered) interior set — so the
+    right axis can no longer add a doubled boundary line.
+
+    Tested via ax.grid state (cheap + stable), NOT by driving the real
+    generateDrawSpecs through a QPainter(QPicture()) which access-violates in
+    the text boundingRect path (cited lesson)."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+    qapp.processEvents()
+    for plot in (c._plot, c._slice_plot):
+        # right grid OFF means it contributes no gridlines at all; left grid
+        # ON (and boundary-filtered) is the single source of horizontal lines.
+        assert plot.getAxis('right').grid is False
+        assert plot.getAxis('left').grid is not False
+    c.hide()
+    c.deleteLater()

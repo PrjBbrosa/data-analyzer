@@ -276,6 +276,24 @@ def _build_grid_submenu(menu, plot_item, *, allow_y_grid=True):
             )
         except Exception:
             pass
+        # pyqtgraph's showGrid -> updateGrid lights the grid on ALL FOUR
+        # built-in axes. The canvases install boundary-suppressing
+        # _BoundaryGridAxisItem only on left+bottom and deliberately keep
+        # top+right grid OFF (plain AxisItems re-draw the boundary line and
+        # double every grid line during zoom — heatmap_canvas.py:613-614,
+        # line_canvas.py:145-146). This shared menu must preserve that
+        # policy, so re-disable top+right after every showGrid toggle.
+        for _side in ("top", "right"):
+            try:
+                _ax = plot_item.getAxis(_side)
+            except Exception:
+                _ax = None
+            if _ax is None:
+                continue
+            try:
+                _ax.setGrid(False)
+            except Exception:
+                pass
 
     def _on_x(checked):
         state["x"] = bool(checked)

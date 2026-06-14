@@ -3506,6 +3506,44 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         for ax_item in canvas._overlay_axes.aux_axes:
             assert not ax_item.grid
 
+    def test_grid_submenu_toggle_keeps_top_right_grid_disabled(self, qapp):
+        """The SHARED grid submenu must honor the line/heatmap canvas policy:
+        only left+bottom carry the grid; top+right stay OFF. pyqtgraph's
+        showGrid lights all four built-in axes, so without the
+        re-disable-top/right guard a single context-menu toggle would re-light
+        them and re-introduce the FIX4 double-gridline (boundary) artifact.
+        Assert ``ax.grid`` state per the boundary-grid lesson — do NOT drive
+        the real generateDrawSpecs (it access-violates offscreen)."""
+        import pyqtgraph as pg
+        from mf4_analyzer.ui.pg_canvas.context_menu import _build_grid_submenu
+
+        glw = pg.GraphicsLayoutWidget()
+        plot_item = glw.addPlot()
+        # Reproduce the canvases' constructor policy: top+right grid OFF
+        # (heatmap_canvas.py:613-614, line_canvas.py:145-146).
+        plot_item.getAxis("top").setGrid(False)
+        plot_item.getAxis("right").setGrid(False)
+
+        menu = pg.QtWidgets.QMenu()
+        grid_menu = _build_grid_submenu(menu, plot_item, allow_y_grid=True)
+        act_x, act_y = grid_menu.actions()
+
+        # Enable both X and Y grid through the shared submenu toggle path.
+        if not act_x.isChecked():
+            act_x.trigger()
+        if not act_y.isChecked():
+            act_y.trigger()
+
+        # left+bottom carry the grid (boundary-suppressing axes)...
+        assert plot_item.getAxis("bottom").grid
+        assert plot_item.getAxis("left").grid
+        # ...but top+right MUST remain disabled despite showGrid lighting all
+        # four — otherwise the plain top/right axes re-draw the boundary line.
+        assert plot_item.getAxis("top").grid is False
+        assert plot_item.getAxis("right").grid is False
+
+        glw.deleteLater()
+
     def test_context_menu_view_all_resets_overlay_raw_x_and_per_channel_y(
         self, qapp, monkeypatch
     ):

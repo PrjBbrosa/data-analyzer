@@ -1565,6 +1565,16 @@ class PersistentTop(QWidget):
         self.spin_yt.setToolTip("Y 轴主刻度的大致数量，范围 3–20。")
         self.spin_yt.hide()
 
+        # Per-mode range-checkbox state. ``chk_range`` is a SINGLE QCheckBox
+        # instance reparented across time/fft/fft_time/order modes by
+        # inspector._place_range_group_for_mode. Its checked state must NOT
+        # leak between modes (e.g. an FFT time-window drag force-checking the
+        # box must not arrive checked when the user switches back to
+        # Time-Domain). We snapshot/restore the checked flag per mode so each
+        # mode keeps its own intent. Defaults to unchecked for every mode.
+        self._range_mode = 'time'
+        self._range_checked_by_mode = {}
+
         self._wire()
         self._xaxis_section_visible = True
         # Restore persisted collapser state (defaults to expanded).
@@ -1733,13 +1743,45 @@ class PersistentTop(QWidget):
             self.spin_end.blockSignals(old_end)
 
     def set_range_from_span(self, xmin, xmax):
+        # Invoked by the FFT/order time-window region-drag preview path. It
+        # stages the start/end values AND enables the range filter so the
+        # next analysis compute (which reads range_enabled()) uses the dragged
+        # window. The checked flag is recorded against the CURRENT mode via
+        # checkout_range_for_mode, so it does not leak into Time-Domain when
+        # the user later switches modes.
         self.set_range_values(xmin, xmax)
         old = self.chk_range.blockSignals(True)
         try:
             self.chk_range.setChecked(True)
         finally:
             self.chk_range.blockSignals(old)
+        self._range_checked_by_mode[self._range_mode] = True
         self._update_range_rows_visible(True)
+
+    def checkout_range_for_mode(self, mode):
+        """Snapshot the outgoing mode's range-checkbox state and restore the
+        incoming mode's. Called by inspector._place_range_group_for_mode on
+        every mode switch so the SINGLE shared ``chk_range`` instance carries
+        per-mode intent instead of leaking a force-checked state across modes.
+
+        Restoring is done with signals blocked: the mode switch drives its own
+        replot pipeline, and main_window wires ``chk_range.toggled`` to a
+        replot slot that must not fire spuriously here.
+        """
+        # Save current mode's state before leaving it.
+        self._range_checked_by_mode[self._range_mode] = self.chk_range.isChecked()
+        if mode == self._range_mode:
+            return
+        target = bool(self._range_checked_by_mode.get(mode, False))
+        old = self.chk_range.blockSignals(True)
+        try:
+            self.chk_range.setChecked(target)
+        finally:
+            self.chk_range.blockSignals(old)
+        self._range_mode = mode
+        # Keep the conditional 开始/结束 row visibility honest for the
+        # restored state (do NOT break the paired-field visibility sync).
+        self._update_range_rows_visible(target)
 
     def set_range_limits(self, lo, hi):
         for sp in (self.spin_start, self.spin_end):

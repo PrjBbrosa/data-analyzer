@@ -1,8 +1,8 @@
 ---
 role: pyqt-ui
-tags: [visibility, init, qformlayout, paired-field, isHidden, inspector]
+tags: [visibility, init, qformlayout, paired-field, isHidden, inspector, reparent, shared-widget, per-mode-state, chk_range]
 created: 2026-04-26
-updated: 2026-04-26
+updated: 2026-06-14
 cause: insight
 supersedes: []
 ---
@@ -58,3 +58,32 @@ single widget or a `_pair_field` wrapper:
   same way) — a missing initial sync on any of them is a latent timing
   bomb that only surfaces when a snapshot/test runs before the first
   toggle.
+
+## 2026-06-14 addendum — shared/reparented checkbox leaks state across modes
+
+The same `chk_range` QCheckBox is a SINGLE instance reparented across
+time/fft/fft_time/order modes (`inspector._place_range_group_for_mode`).
+An FFT time-window region drag routed through `set_range_from_span`,
+which force-checks the box so the FFT compute (gated on
+`PersistentTop.range_enabled()`) uses the dragged window — but because
+the *instance* is shared, the checked flag leaked into Time-Domain the
+moment the user switched back.
+
+Lesson: a reparented control carries ONE checked/visibility flag for ALL
+modes; "each mode keeps its own intent" cannot be expressed by the widget
+alone. Decouple by snapshotting the outgoing mode's state and restoring
+the incoming mode's at the single reparent point
+(`PersistentTop.checkout_range_for_mode(mode)` called from
+`_place_range_group_for_mode`), defaulting unknown modes to unchecked.
+
+How to apply: when a stateful widget (checkbox, spin, combo) is shared by
+reparenting across N contexts, do NOT rely on the widget to remember
+per-context state — keep a `{mode: value}` dict on the owner and
+save-old/restore-new at the switch boundary. Restore with `blockSignals`
+(the mode switch drives its own replot pipeline, and any `toggled` slot
+wired in MainWindow must not fire spuriously), and re-run the conditional
+row-visibility helper for the restored value so the paired-field
+`isHidden()` sync stays honest. Pin it with a regression that drives the
+LIVE handler (`MainWindow._on_fft_preview_range_changed`) in FFT mode then
+switches back to time and asserts `not range_enabled()` — it must FAIL on
+the pre-fix code.
