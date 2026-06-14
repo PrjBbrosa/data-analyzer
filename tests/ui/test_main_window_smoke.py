@@ -673,17 +673,25 @@ def test_max_range_button_sets_full_extent_and_replots_time_mode(
     qapp.processEvents()
     assert top.range_enabled() is False
 
-    lo = top.spin_start.minimum()
-    hi = top.spin_end.maximum()
-    assert hi > lo  # data extent is available after load
+    data_lo = 0.0
+    data_hi = float(w.files[fid].time_array[-1])
+    assert data_hi > data_lo  # data extent is available after load
+
+    # Simulate stale/narrow spinbox limits. The Max button must fill the data
+    # extent directly, not merely echo whatever limits happen to be installed.
+    stale_hi = data_hi / 2.0
+    top.set_range_limits(data_lo, stale_hi)
+    top.set_range_values(0.1, stale_hi)
+    assert top.spin_end.maximum() == pytest.approx(stale_hi, abs=1e-6)
 
     # Drive the live signal path the button uses.
     top.max_range_requested.emit()
     qapp.processEvents()
 
     rlo, rhi = top.range_values()
-    assert rlo == pytest.approx(lo, abs=1e-6)
-    assert rhi == pytest.approx(hi, abs=1e-6)
+    assert rlo == pytest.approx(data_lo, abs=1e-6)
+    assert rhi == pytest.approx(data_hi, abs=1e-6)
+    assert top.spin_end.maximum() == pytest.approx(data_hi, abs=1e-6)
     assert top.range_enabled() is True
     # A replot must have produced a live primary axis (no exception raised).
     assert w.canvas_time._primary_xaxis_ax is not None

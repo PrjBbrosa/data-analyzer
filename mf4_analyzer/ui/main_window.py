@@ -1788,21 +1788,37 @@ class MainWindow(QMainWindow):
         self.inspector.top.set_range_from_span(lo, hi)
         return True
 
+    def _time_data_extent(self):
+        hi = 0.0
+        for fd in self.files.values():
+            times = getattr(fd, 'time_array', None)
+            if times is None or len(times) == 0:
+                continue
+            try:
+                candidate = float(times[-1])
+            except Exception:
+                continue
+            if np.isfinite(candidate):
+                hi = max(hi, candidate)
+        return 0.0, hi
+
     def _on_time_range_max_requested(self):
         """「最大」按钮：把时间范围设为整段数据 [0, 全程] 并勾选「使用选定时间
         范围」，再按当前模式重绘/刷新。
 
-        数据范围已经在 spinbox 的上下限里（MainWindow 通过 set_range_limits
-        保持其最新值）。这里特意走 set_range_from_span（它会 blockSignals 地
-        勾选 chk_range 并按当前模式记录 per-mode 勾选状态），从而避开
-        _on_time_range_enabled_changed —— 后者会用画布当前可见 xlim 覆盖
-        spinbox，正是我们要避免的。
+        数据范围直接来自已加载文件的 time_array；不要从 spinbox limits
+        反推，因为 limits 是 UI 状态，可能暂时滞后。这里特意走
+        set_range_from_span（它会 blockSignals 地勾选 chk_range 并按当前模式
+        记录 per-mode 勾选状态），从而避开 _on_time_range_enabled_changed
+        —— 后者会用画布当前可见 xlim 覆盖 spinbox，正是我们要避免的。
         """
         top = self.inspector.top
-        lo = top.spin_start.minimum()
-        hi = top.spin_end.maximum()
+        lo, hi = self._time_data_extent()
         if not (hi > lo):          # 还没有数据 / 没有可用的整段范围
             return
+        # Keep spinbox limits fresh before setting values; stale/narrow limits
+        # would otherwise clamp the data extent back to the old UI maximum.
+        top.set_range_limits(lo, hi)
         # 同步填入 [lo, hi] 并（blockSignals 地）勾选，避免可见 xlim 覆盖。
         top.set_range_from_span(lo, hi)
         # 按当前模式应用（与现有处理器的尾部保持一致）。
