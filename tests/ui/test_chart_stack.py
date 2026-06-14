@@ -285,11 +285,11 @@ def test_chart_nav_actions_have_chart_area_shortcuts(qapp, qtbot):
     qtbot.addWidget(cs)
 
     expected = {
-        "home": "Alt+R",
-        "back": "Alt+Z",
-        "forward": "Alt+Shift+Z",
-        "pan": "Alt+G",
-        "zoom": "Alt+B",
+        "home": "Ctrl+R",
+        "back": "Ctrl+Z",
+        "forward": "Ctrl+Shift+Z",
+        "pan": "Ctrl+G",
+        "zoom": "Ctrl+B",
     }
     for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
         card_action_keys = {act.data() for act in card.actions()}
@@ -304,8 +304,8 @@ def test_chart_nav_actions_have_chart_area_shortcuts(qapp, qtbot):
             assert action.shortcut().toString(QKeySequence.NativeText) in action.toolTip()
 
 
-def test_time_card_segmented_buttons_have_alt_digit_shortcuts(qapp, qtbot):
-    """Alt+1..5 are wired to 分屏/叠加/游标关/单游标/双游标 buttons and the
+def test_time_card_segmented_buttons_have_ctrl_digit_shortcuts(qapp, qtbot):
+    """Ctrl+1..5 are wired to 分屏/叠加/游标关/单游标/双游标 buttons and the
     tooltip carries the shortcut in native form."""
     cs = ChartStack()
     qtbot.addWidget(cs)
@@ -313,11 +313,11 @@ def test_time_card_segmented_buttons_have_alt_digit_shortcuts(qapp, qtbot):
     qtbot.waitExposed(cs)
     card = cs._time_card
     expected_pairs = [
-        (card.btn_subplot,                'Alt+1', '分屏'),
-        (card.btn_overlay,                'Alt+2', '叠加'),
-        (card._cursor_buttons['off'],     'Alt+3', '游标关'),
-        (card._cursor_buttons['single'],  'Alt+4', '单游标'),
-        (card._cursor_buttons['dual'],    'Alt+5', '双游标'),
+        (card.btn_subplot,                'Ctrl+1', '分屏'),
+        (card.btn_overlay,                'Ctrl+2', '叠加'),
+        (card._cursor_buttons['off'],     'Ctrl+3', '游标关'),
+        (card._cursor_buttons['single'],  'Ctrl+4', '单游标'),
+        (card._cursor_buttons['dual'],    'Ctrl+5', '双游标'),
     ]
     registered = {
         s.key().toString(): s for s in card._time_button_shortcuts
@@ -333,9 +333,9 @@ def test_time_card_segmented_buttons_have_alt_digit_shortcuts(qapp, qtbot):
         assert native in tip
 
     annotation_shortcut = card._time_annotation_shortcut
-    assert annotation_shortcut.key().toString() == 'Alt+M'
+    assert annotation_shortcut.key().toString() == 'Ctrl+M'
     assert annotation_shortcut.context() == Qt.WidgetWithChildrenShortcut
-    native = QKeySequence('Alt+M').toString(QKeySequence.NativeText)
+    native = QKeySequence('Ctrl+M').toString(QKeySequence.NativeText)
     assert '标注' in card._annotation_btn.toolTip()
     assert native in card._annotation_btn.toolTip()
 
