@@ -1537,24 +1537,20 @@ class PersistentTop(QWidget):
         )
         # 「最大」按钮停靠在勾选框这一行的右端：一键把开始/结束填成整段数据
         # [0, 全程时长] 并勾选「使用选定时间范围」。用扁平 QToolButton 复用
-        # inspectorCollapser 的轻量观感，宽度收窄以免撑宽窄面板。
+        # inspectorCollapser 的轻量观感。
         self.btn_range_max = QToolButton(self)
         self.btn_range_max.setObjectName("inspectorRangeMax")
         self.btn_range_max.setText("最大")
         self.btn_range_max.setToolTip("将时间范围设为整段数据（0 ~ 全程）")
         self.btn_range_max.setAutoRaise(True)
         self.btn_range_max.setCursor(Qt.PointingHandCursor)
-        self.btn_range_max.setMaximumWidth(_SHORT_FIELD_MAX_WIDTH)
-        try:
-            self.btn_range_max.setStyleSheet(
-                "QToolButton#inspectorRangeMax { "
-                "  padding: 2px 8px; border: none; background: transparent; "
-                "  color: #2563eb; font-weight: 600; "
-                "}"
-                "QToolButton#inspectorRangeMax:hover { background: #eef2f7; }"
-            )
-        except Exception:  # pragma: no cover — defensive on Qt style failures
-            pass
+        self.btn_range_max.setStyleSheet(
+            "QToolButton#inspectorRangeMax { "
+            "  padding: 2px 8px; border: none; background: transparent; "
+            "  color: #2563eb; font-weight: 600; "
+            "}"
+            "QToolButton#inspectorRangeMax:hover { background: #eef2f7; }"
+        )
         # Host row: [chk_range][stretch][btn_range_max].
         self._chk_range_host = QWidget()
         _chk_host_lay = QHBoxLayout(self._chk_range_host)
