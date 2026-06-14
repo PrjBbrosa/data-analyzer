@@ -44,6 +44,7 @@ package-lock.json
 
 # Local sample data (not part of the repo's own tests)
 testdoc/
+testfile/
 
 # Local secrets / dotenv
 .env
