@@ -2167,32 +2167,31 @@ def test_main_window_fft_preview_path_does_not_check_time_box(qapp, qtbot):
 # ``set_range_from_span`` (which records per-mode checked intent).
 
 
-def test_max_range_button_fills_full_extent_and_enables(qapp):
+def test_max_range_button_fills_full_extent_and_enables(qapp, qtbot):
     """Clicking 「最大」 stages the full [lo, hi] extent into the spinboxes and
     enables the range filter — even from a partial, unchecked selection.
 
     The widget itself only emits ``max_range_requested``; the owner
-    (MainWindow) does the staging via ``set_range_from_span``. We wire a
-    minimal owner-side handler that mirrors MainWindow's apply so the
-    button's end-to-end contract is exercised without a full window.
+    (MainWindow) does the staging via ``set_range_from_span``.
     """
-    from mf4_analyzer.ui.inspector_sections import PersistentTop
+    from types import SimpleNamespace
 
-    top = PersistentTop()
+    import numpy as np
 
-    # Owner-side handler (mirrors MainWindow._on_time_range_max_requested):
-    # stage [minimum, maximum] and tick the box via set_range_from_span.
-    def _apply_max():
-        lo = top.spin_start.minimum()
-        hi = top.spin_end.maximum()
-        if hi > lo:
-            top.set_range_from_span(lo, hi)
+    from mf4_analyzer.ui.main_window import MainWindow
 
-    top.max_range_requested.connect(_apply_max)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    top = win.inspector.top
+    win.files = {
+        "fid": SimpleNamespace(time_array=np.array([0.0, 100.0], dtype=float))
+    }
+    win.chart_stack.set_mode('time')
+    win.inspector.set_mode('time')
 
-    # Data extent: spinbox limits define [0, 100]; main_window keeps these
-    # current via set_range_limits. A partial selection sits inside the extent.
-    top.set_range_limits(0, 100)
+    # Start from a stale/narrow UI limit to prove the real slot reads the data
+    # extent and refreshes limits before filling the range.
+    top.set_range_limits(0, 50)
     top.set_range_values(10, 20)
     top.chk_range.setChecked(False)
     assert top.range_enabled() is False
@@ -2202,6 +2201,7 @@ def test_max_range_button_fills_full_extent_and_enables(qapp):
     top.btn_range_max.click()
 
     assert top.range_values() == (0.0, 100.0)
+    assert top.spin_end.maximum() == 100.0
     assert top.range_enabled() is True
 
 
