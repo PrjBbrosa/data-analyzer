@@ -83,6 +83,43 @@ class _AxisShim:
         self.view_box = view_box
 
 
+class _HistoryHandle:
+    """Lightweight view-history handle for ``PgNavigationToolbar``.
+
+    ``_snapshot_view``/``_restore_view`` (chart_stack) iterate the canvas's
+    ``_channel_lines`` and call ``pair[0].get_xlim()/get_ylim()`` to snapshot
+    and ``set_xlim()/set_ylim()`` to restore. This shell reads/writes the
+    wrapped ViewBox's ``viewRange()``/``setRange`` directly.
+
+    ``with_y=False`` (the time-preview handle) makes ``set_ylim`` a no-op so a
+    history restore only rewinds the X window: the preview Y is auto-framed to
+    a nice graticule (Task A's ``_reframe_time_y_to_grid``) and restoring an
+    older Y would drag it off those grid lines (spec §3.4/§6).
+    """
+
+    __slots__ = ("_vb", "_y")
+
+    def __init__(self, view_box, with_y=True):
+        self._vb = view_box
+        self._y = bool(with_y)
+
+    def get_xlim(self):
+        (lo, hi), _ = self._vb.viewRange()
+        return (lo, hi)
+
+    def set_xlim(self, lo, hi):
+        self._vb.setXRange(lo, hi, padding=0)
+
+    def get_ylim(self):
+        _, (lo, hi) = self._vb.viewRange()
+        return (lo, hi)
+
+    def set_ylim(self, lo, hi):
+        if self._y:
+            self._vb.setYRange(lo, hi, padding=0)
+        # with_y=False (__time__): intentionally a no-op — see class docstring.
+
+
 class PgLineCanvas(QWidget):
     cursor_info = pyqtSignal(str)
     context_menu_requested = pyqtSignal()
@@ -159,6 +196,13 @@ class PgLineCanvas(QWidget):
         self._last_xlim = None
         self._last_yrange = None
         self._mouse_mode_controller = None
+        # Replot callbacks: the card registers the toolbar's
+        # apply_current_mouse_mode + rebind_history_capture here (chart_stack
+        # gates registration on register_replot_callback being present), and
+        # they fire at the end of every plot_spectra/plot_time_preview/full_reset
+        # so the view-history capture re-binds to the live ViewBoxes and seeds a
+        # baseline after each rebuild (Task C).
+        self._replot_callbacks = []
         self._raw_amp_title = ''
         self._raw_time_title = ''
         self._split_title_width = None
@@ -210,6 +254,17 @@ class PgLineCanvas(QWidget):
         # pan/zoom the preview and `_emit_time_preview_range` (driven by
         # sigRangeChangedManually) pushes it to the inspector. There is no
         # separate left-drag region selector anymore — it collided with pan.
+
+        # View-history contract for PgNavigationToolbar (Task C). The toolbar's
+        # _snapshot_view/_restore_view walk this map and call pair[0]'s
+        # get/set_xlim/ylim. The amp row snapshots+restores X and Y; the time
+        # preview restores ONLY X (its Y is auto-framed to a graticule, so a Y
+        # restore would fight Task A — see _HistoryHandle). The two PlotItems are
+        # fixed (never rebuilt), so these handles are built once here.
+        self._channel_lines = {
+            '__amp__': (_HistoryHandle(self._plot_amp.vb, with_y=True), None),
+            '__time__': (_HistoryHandle(self._plot_time.vb, with_y=False), None),
+        }
 
     # ------------------------------------------------------------------
     # Interactive vs idle curve antialiasing
@@ -360,6 +415,22 @@ class PgLineCanvas(QWidget):
 
     def register_mouse_mode_controller(self, controller) -> None:
         self._mouse_mode_controller = controller
+
+    def register_replot_callback(self, cb) -> None:
+        """Register a callback fired after every chart rebuild.
+
+        The card registers the toolbar's ``apply_current_mouse_mode`` and
+        ``rebind_history_capture`` (chart_stack only does so when this method
+        exists), so back/forward history works on the FFT canvas (Task C)."""
+        if callable(cb):
+            self._replot_callbacks.append(cb)
+
+    def _run_replot_callbacks(self) -> None:
+        for cb in list(self._replot_callbacks):
+            try:
+                cb()
+            except Exception:
+                pass
 
     def _plot_item_for_view_box(self, view_box):
         for plot in (self._plot_amp, self._plot_time):
@@ -514,6 +585,9 @@ class PgLineCanvas(QWidget):
         # Fresh curves are rebuilt AA-on; surface the resulting (green) state
         # on the quality dot immediately.
         self._emit_quality_status()
+        # Re-bind history capture + re-apply mouse mode on the rebuilt view
+        # (Task C: lets the toolbar's back/forward seed a baseline).
+        self._run_replot_callbacks()
 
     def plot_time_preview(self, entries, *, title="时域预览",
                           clear_spectrum=True) -> None:
@@ -546,6 +620,8 @@ class PgLineCanvas(QWidget):
             # when no spectrum exists yet (behaves like a plain preview).
             self.mark_spectrum_stale()
         self._plot_time_preview_entries(list(entries or []), title=title)
+        # Task C: re-bind history capture + re-apply mouse mode after rebuild.
+        self._run_replot_callbacks()
 
     # ------------------------------------------------------------------
     # stale spectrum state (selection changed, awaiting re-compute)
@@ -698,6 +774,8 @@ class PgLineCanvas(QWidget):
         # Curves are gone → the AA dot must fall back to red ("no curves")
         # instead of showing the previous render's stale green.
         self._emit_quality_status()
+        # Task C: re-bind history capture after the reset rebuild.
+        self._run_replot_callbacks()
 
     def _apply_default_axis_labels(self) -> None:
         """Pin both plots' axis titles to their defaults so neither row ever

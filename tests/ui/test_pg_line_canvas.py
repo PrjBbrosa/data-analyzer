@@ -1337,3 +1337,65 @@ def test_spectrum_remark_still_works_with_time_branch(canvas):
     assert canvas._remarks[-1]['plot'] is canvas._plot_amp
     canvas.clear_remarks()
     assert canvas._remarks == []
+
+
+# ---------------------------------------------------------------------------
+# C — view history (back/forward) on the FFT canvas
+# ---------------------------------------------------------------------------
+
+
+def test_register_replot_callback_fires_on_plot_spectra(canvas):
+    calls = []
+    canvas.register_replot_callback(lambda: calls.append(1))
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    assert calls, "replot callback not fired on plot_spectra"
+
+
+def test_channel_lines_history_contract_shape(canvas):
+    # _snapshot_view/_restore_view iterate (name, pair) and call pair[0]'s
+    # get/set_xlim/ylim. Provide both an amp and a time handle.
+    lines = canvas._channel_lines
+    assert '__amp__' in lines and '__time__' in lines
+    for name in ('__amp__', '__time__'):
+        handle = lines[name][0]
+        for attr in ('get_xlim', 'set_xlim', 'get_ylim', 'set_ylim'):
+            assert callable(getattr(handle, attr, None)), \
+                f"{name} handle missing {attr}"
+
+
+def test_fft_view_history_back_forward(canvas):
+    tb = PgNavigationToolbar(canvas)
+    calls = []
+    canvas.register_replot_callback(lambda: calls.append(1))
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    assert calls, "replot callback not fired"
+    # The card normally registers this; drive it explicitly here.
+    tb.rebind_history_capture()
+    assert tb._view_stack, "baseline view not seeded"
+    # Simulate one manual range change (pan) on the time preview, then commit.
+    canvas._plot_time.vb.setXRange(2.0, 6.0, padding=0)
+    tb._commit_pending_view()
+    assert len(tb._view_stack) >= 2
+    x_now = tuple(canvas._plot_time.vb.viewRange()[0])
+    tb.back()
+    x_back = tuple(canvas._plot_time.vb.viewRange()[0])
+    # back() restored the previous X window — different from the panned one.
+    assert x_back != pytest.approx(x_now, abs=1e-6)
+    tb.forward()
+    assert tuple(canvas._plot_time.vb.viewRange()[0]) == pytest.approx(
+        x_now, abs=1e-6)
+
+
+def test_fft_history_time_handle_only_restores_x(canvas):
+    # The __time__ handle must NOT restore Y (it would fight the graticule):
+    # set_ylim is a no-op, get_ylim reflects the current range.
+    handle = canvas._channel_lines['__time__'][0]
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    canvas._plot_time.vb.setYRange(-7.0, 7.0, padding=0)
+    before = tuple(canvas._plot_time.vb.viewRange()[1])
+    handle.set_ylim(-999.0, 999.0)
+    after = tuple(canvas._plot_time.vb.viewRange()[1])
+    assert after == pytest.approx(before, abs=1e-6)
