@@ -2068,3 +2068,37 @@ def test_overlay_primary_cleared_when_channel_unchecked(qapp, qtbot, tmp_path):
     assert left_name is not None and not left_name.endswith("pressure"), (
         f"unchecked primary must be ignored; got {left_name!r}"
     )
+
+
+def test_alt_view_shortcut_switches_active_section(qapp, qtbot):
+    """Alt+i view switching must drive the CURRENTLY shown section's view
+    manager (fft/fft_time/order), not only the time section."""
+    from mf4_analyzer.ui_kit import load_stylesheet
+    qapp.setStyle("Fusion")
+    load_stylesheet(qapp)
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1400, 850)
+    w.show()
+    qtbot.waitExposed(w)
+    qapp.processEvents()
+
+    w._on_mode_changed("fft")
+    qapp.processEvents()
+    mgr = w.analysis_managers['fft']
+    while len(mgr.views) < 2:
+        mgr.new_view()
+    mgr.set_active(0)
+    qapp.processEvents()
+
+    captured = []
+    orig = w._on_analysis_switch
+
+    def _spy(section, idx):
+        captured.append((section, idx))
+        return orig(section, idx)
+
+    w._on_analysis_switch = _spy
+    w._switch_view_for_active_section(1)   # what Alt+2 invokes
+    assert ('fft', 1) in captured
+    assert mgr.active == 1

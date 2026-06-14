@@ -617,8 +617,23 @@ class MainWindow(QMainWindow):
             sc = QShortcut(QKeySequence(f"Alt+{i + 1}"), self)
             sc.setContext(Qt.ApplicationShortcut)
             idx = i
-            sc.activated.connect(lambda bound=idx: self._switch_view(bound))
+            sc.activated.connect(
+                lambda bound=idx: self._switch_view_for_active_section(bound))
             self._view_shortcuts.append(sc)
+
+    def _switch_view_for_active_section(self, idx):
+        """Alt+i: switch the view of whatever section is currently shown.
+
+        The time section keeps the cross-view pairing path (``_switch_view``);
+        analysis sections (fft/fft_time/order) route to their own manager via
+        ``_on_analysis_switch``. Both already guard idx range + no-op on no
+        change, so out-of-range Alt keys are safe.
+        """
+        mode = self.chart_stack.current_mode()
+        if mode in ('fft', 'fft_time', 'order'):
+            self._on_analysis_switch(mode, idx)
+        else:
+            self._switch_view(idx)
 
     def _switch_view(self, idx):
         if idx == self.view_manager.active:
