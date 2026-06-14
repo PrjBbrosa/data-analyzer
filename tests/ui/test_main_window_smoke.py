@@ -833,9 +833,16 @@ def test_render_fft_time_on_requests_smooth_heatmap_interpolation(qtbot):
     class _CaptureCanvas:
         def __init__(self):
             self.kwargs = None
+            self.tick_density = None
 
         def plot_result(self, result, **kwargs):
             self.kwargs = dict(kwargs)
+
+        # Real FFT-time canvases (PgHeatmapCanvas) expose set_tick_density;
+        # _render_fft_time_on calls it after plot_result, so the fake double
+        # must carry it too (capture for an optional assertion).
+        def set_tick_density(self, x, y):
+            self.tick_density = (x, y)
 
     win = MainWindow()
     qtbot.addWidget(win)
