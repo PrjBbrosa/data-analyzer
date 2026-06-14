@@ -797,21 +797,27 @@ class PgHeatmapCanvas(QWidget):
             pl.addWidget(self._slice_hint, 0, Qt.AlignHCenter)
             pl.addStretch(1)
             self._slice_panel.show()
-            # Collapse triangle + draggable divider between the 2D map (top)
-            # and the slice (bottom).
-            self._collapse_ctrl = _PlotCollapseControl(self)
-            self._collapse_ctrl.collapse_changed.connect(self._on_collapse_changed)
+            # Draggable split divider (resize) + drawer-style collapsed rail
+            # between the 2D map (top) and the slice (bottom). Drag the divider
+            # near the bottom to collapse the slice; click the rail's ▴ to bring
+            # it back. (Replaces the old gutter triangle.)
+            self._bottom_collapsed = False
             self._split_divider = _SplitDivider(self)
             self._split_divider.drag_started.connect(self._on_split_drag_started)
             self._split_divider.drag_delta.connect(self._on_split_drag_delta)
             self._split_divider.drag_finished.connect(self._on_split_drag_finished)
             self._split_divider.reset_requested.connect(self._on_split_reset)
+            self._collapsed_rail = _CollapsedRail(self)
+            self._collapsed_rail.setVisible(False)
+            self.layout().addWidget(self._collapsed_rail)
+            self._collapsed_rail.expand_requested.connect(
+                lambda: self._set_bottom_collapsed(False))
             self._plot.vb.sigResized.connect(self._position_collapse_ctrl)
-            self._plot.vb.sigResized.connect(self._position_split_divider)
             self._ensure_colorbar(_resolve_colormap('turbo'), 'Amplitude (dB)')
         else:
-            self._collapse_ctrl = None
+            self._collapsed_rail = None
             self._split_divider = None
+            self._bottom_collapsed = False
             self._bottom_split_default = 140.0
             self._bottom_split_h = self._bottom_split_default
             self._drag_start_bottom_h = self._bottom_split_h
@@ -1375,8 +1381,7 @@ class PgHeatmapCanvas(QWidget):
     def _position_slice_panel(self) -> None:
         """Pin the slice info panel into the colorbar column (right of the
         aligned slice plot, below the colorbar)."""
-        ctrl = getattr(self, '_collapse_ctrl', None)
-        if ctrl is not None and ctrl.state() == 'bottom':
+        if getattr(self, '_bottom_collapsed', False):
             if self._slice_panel is not None:
                 self._slice_panel.hide()
             return
@@ -1409,29 +1414,31 @@ class PgHeatmapCanvas(QWidget):
         self._slice_panel.show()
         self._slice_panel.raise_()
 
-    def _on_collapse_changed(self, state) -> None:
+    def _set_bottom_collapsed(self, collapsed: bool) -> None:
         if self._slice_plot is None:
             return
+        self._bottom_collapsed = bool(collapsed)
+        state = 'bottom' if self._bottom_collapsed else 'none'
         _apply_plot_collapse(self._plot, self._slice_plot, state,
                              self._bottom_split_h)
-        if self._collapse_ctrl is not None:
-            self._collapse_ctrl.set_state(
-                'bottom' if state == 'bottom' else 'none')
         if self._slice_panel is not None:
-            self._slice_panel.setVisible(state != 'bottom')
+            self._slice_panel.setVisible(not self._bottom_collapsed)
         self._position_collapse_ctrl()
-        self._position_split_divider()
-        if state == 'none' and not self._split_aligned:
+        if not self._bottom_collapsed:
             self._align_slice_to_main()
-        if state != 'bottom':
             self._position_slice_panel()
         self.layout_geometry_changed.emit()
 
+    def _on_collapse_changed(self, state) -> None:
+        # Compat entry (programmatic / tests): 'bottom' collapses, else expands.
+        self._set_bottom_collapsed(state == 'bottom')
+
     def _position_collapse_ctrl(self, *_args) -> None:
-        _position_split_controls(
-            getattr(self, '_collapse_ctrl', None),
+        _position_collapse_layout(
+            getattr(self, '_collapsed_rail', None),
             getattr(self, '_split_divider', None),
-            self._plot, self._slice_plot)
+            self._plot, self._slice_plot,
+            getattr(self, '_bottom_collapsed', False))
 
     def _position_split_divider(self, *_args) -> None:
         self._position_collapse_ctrl()
@@ -1446,8 +1453,12 @@ class PgHeatmapCanvas(QWidget):
     def _on_split_drag_delta(self, delta) -> None:
         if self._slice_plot is None:
             return
+        raw = self._drag_start_bottom_h + delta
+        if raw <= _SPLIT_COLLAPSE_AT:
+            self._set_bottom_collapsed(True)
+            return
         self._bottom_split_h = _clamp_bottom_split(
-            self._drag_start_bottom_h + delta, self._available_split_height())
+            raw, self._available_split_height())
         self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
         self._position_collapse_ctrl()
         self._position_split_divider()
@@ -1465,9 +1476,8 @@ class PgHeatmapCanvas(QWidget):
 
     def _on_split_reset(self) -> None:
         self._bottom_split_h = float(self._bottom_split_default)
-        if self._collapse_ctrl is None or self._collapse_ctrl.state() == 'none':
-            if self._slice_plot is not None:
-                self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
+        if not self._bottom_collapsed and self._slice_plot is not None:
+            self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
         self._position_collapse_ctrl()
         self._position_split_divider()
         if not self._split_aligned:
@@ -1541,7 +1551,7 @@ class PgHeatmapCanvas(QWidget):
         self.prepare_split_layout_alignment(None)
         # Single-pane: align the slice's right edge to the heatmap (the split
         # path does this via slice_right_reserve; do it here for one pane too).
-        if self._collapse_ctrl is None or self._collapse_ctrl.state() == 'none':
+        if not getattr(self, '_bottom_collapsed', False):
             self._align_slice_to_main()
             self._position_slice_panel()
 

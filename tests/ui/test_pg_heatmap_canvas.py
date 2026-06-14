@@ -760,12 +760,39 @@ def test_slice_aligns_with_heatmap_and_panel_in_colorbar_column(qapp):
     c.deleteLater()
 
 
+def test_heatmap_drag_near_bottom_collapses_and_rail_expands(qapp):
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(900, 520); c.show(); qapp.processEvents()
+    c._on_split_drag_started()
+    c._on_split_drag_delta(-100000)
+    assert c._bottom_collapsed is True
+    assert not c._slice_plot.isVisible()
+    assert c._collapsed_rail.isVisible()
+    assert not c._split_divider.isVisible()
+    if c._slice_panel is not None:
+        assert not c._slice_panel.isVisible()
+    c._collapsed_rail.expand_requested.emit()
+    assert c._bottom_collapsed is False
+    assert c._slice_plot.isVisible()
+    assert not c._collapsed_rail.isVisible()
+    c.hide()
+    c.deleteLater()
+
+
+def test_heatmap_no_slice_has_no_rail(qapp):
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+    c = PgHeatmapCanvas(with_slice=False)
+    assert c._collapsed_rail is None
+    assert c._split_divider is None
+    c.deleteLater()
+
+
 def test_heatmap_collapse_divider_folds_slice(qapp):
     """The collapse control on a with_slice heatmap folds the map or the slice;
-    a no-slice heatmap has no control."""
+    a no-slice heatmap has no rail."""
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(560, 460)
-    assert c._collapse_ctrl is not None
     c._on_collapse_changed('bottom')
     assert not c._slice_plot.isVisible()
     assert c._plot.isVisible()
@@ -774,7 +801,7 @@ def test_heatmap_collapse_divider_folds_slice(qapp):
     c.deleteLater()
 
     c2 = PgHeatmapCanvas(with_slice=False)
-    assert c2._collapse_ctrl is None
+    assert c2._collapsed_rail is None
     c2.deleteLater()
 
 
