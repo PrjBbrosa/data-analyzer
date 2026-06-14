@@ -16,6 +16,30 @@ def qapp():
 
 
 @pytest.fixture(autouse=True)
+def _own_chartstacks(qapp, monkeypatch):
+    """Keep unowned ChartStack widgets alive until queued layout callbacks drain."""
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    created = []
+    orig_init = ChartStack.__init__
+
+    def _tracking_init(self, *args, **kwargs):
+        orig_init(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(ChartStack, "__init__", _tracking_init)
+    yield
+    qapp.processEvents()
+    for cs in created:
+        try:
+            cs.deleteLater()
+        except Exception:
+            pass
+    created.clear()
+    qapp.processEvents()
+
+
+@pytest.fixture(autouse=True)
 def _collect_mpl_cycles_between_tests():
     # matplotlib Figure/FigureCanvasQTAgg hold strong reference cycles
     # (figure.canvas <-> canvas.figure plus mpl_connect lambdas capturing

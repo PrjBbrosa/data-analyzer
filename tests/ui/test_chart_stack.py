@@ -11,40 +11,6 @@ from PyQt5.QtWidgets import QSizePolicy
 from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
 
 
-@pytest.fixture(autouse=True)
-def _own_chartstacks(qapp, monkeypatch):
-    """Keep every ChartStack built in a test alive until its queued
-    ``QTimer.singleShot(0, ...)`` layout callbacks (quality-indicator / heatmap
-    layout sync) are drained, then delete it cleanly.
-
-    Most tests here construct ``ChartStack()`` without ``qtbot`` ownership and
-    never spin the event loop, so those callbacks stay queued; the local ``cs``
-    is GC'd at function return, deleting the C++ tree, and pytest-qt's teardown
-    ``processEvents`` then fires a callback on a half-dead pyqtgraph
-    ``LabelItem`` (``'LabelItem' object has no attribute '_sizeHint'``) — an
-    order-dependent teardown-error cascade. Holding a ref here keeps the widget
-    ALIVE so the drain runs on a live object, then we deleteLater + drain again.
-    See docs/lessons-learned/pyqt-ui/2026-06-14-chart-stack-unowned-widgets-pyqtgraph-teardown-cascade.md
-    """
-    created = []
-    orig_init = ChartStack.__init__
-
-    def _tracking_init(self, *args, **kwargs):
-        orig_init(self, *args, **kwargs)
-        created.append(self)
-
-    monkeypatch.setattr(ChartStack, "__init__", _tracking_init)
-    yield
-    qapp.processEvents()           # fire queued callbacks while widgets are live
-    for cs in created:
-        try:
-            cs.deleteLater()
-        except Exception:
-            pass
-    created.clear()
-    qapp.processEvents()           # let the deferred deletes complete
-
-
 def test_apply_mdi_icons_sets_navactive_property_on_active_button(qtbot):
     from PyQt5.QtWidgets import QToolBar, QToolButton
     from mf4_analyzer.ui.chart_stack import _apply_mdi_icons, _MDI_NAV_ICONS
