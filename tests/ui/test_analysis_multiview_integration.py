@@ -171,6 +171,16 @@ def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp):
     qapp.processEvents()
 
     canvas = win.chart_stack.page_fft.pane_canvas(0)
+    # No nav channels checked AND no signal picked yet -> no phantom default
+    # preview. The auto-select-first-signal behavior was removed so opening a
+    # never-computed project (or clearing the selection) plots nothing.
+    assert len(canvas._amp_curves) == 0
+    assert len(canvas._time_curves) == 0
+
+    # Explicitly picking a signal in the combo previews its time trace before
+    # the user hits 计算 — the preview-before-compute UX is now selection-driven.
+    win.inspector.fft_ctx.combo_sig.setCurrentIndex(0)
+    qapp.processEvents()
     assert len(canvas._amp_curves) == 0
     assert len(canvas._time_curves) == 1
 

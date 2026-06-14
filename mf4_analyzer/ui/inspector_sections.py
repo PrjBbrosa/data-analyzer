@@ -2138,18 +2138,20 @@ class FFTContextual(QWidget):
             self.combo_sig.addItem(text, data)
             if prev is not None and data == prev:
                 keep_idx = i
-        if keep_idx >= 0:
-            self.combo_sig.setCurrentIndex(keep_idx)
+        # No prior selection to preserve -> leave the combo unselected (-1)
+        # instead of defaulting to the first signal. The old auto-select + emit
+        # planted a phantom default (drew a time preview / looked like a
+        # configured analysis) on project open even when nothing was ever
+        # computed. The saved-source restore (_apply_analysis_sources) selects
+        # the signal explicitly when the project did compute this analysis, so
+        # the "previously computed -> preselect" case is unaffected.
+        self.combo_sig.setCurrentIndex(keep_idx)
         self.combo_sig.blockSignals(False)
         try:
             self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
         except TypeError:
             pass
         self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
-        # Only emit for newly-populated default (no prev preserved); a
-        # preserved selection has not changed, so no signal needed.
-        if keep_idx < 0:
-            self._on_sig_index_changed()
 
     def current_signal(self):
         return self.combo_sig.currentData()
@@ -2550,16 +2552,16 @@ class OrderContextual(QWidget):
             self.combo_sig.addItem(text, data)
             if prev is not None and data == prev:
                 keep_idx = i
-        if keep_idx >= 0:
-            self.combo_sig.setCurrentIndex(keep_idx)
+        # No prior selection to preserve -> leave the combo unselected (-1)
+        # rather than defaulting to the first signal; see
+        # FFTContextual.set_signal_candidates for the phantom-default rationale.
+        self.combo_sig.setCurrentIndex(keep_idx)
         self.combo_sig.blockSignals(False)
         try:
             self.combo_sig.currentIndexChanged.disconnect(self._on_sig_index_changed)
         except TypeError:
             pass
         self.combo_sig.currentIndexChanged.connect(self._on_sig_index_changed)
-        if keep_idx < 0:
-            self._on_sig_index_changed()
 
     def set_rpm_candidates(self, candidates):
         # Preserve current rpm selection — same regression class as
@@ -3013,8 +3015,10 @@ class FFTTimeContextual(QWidget):
             self.combo_sig.addItem(text, data)
             if prev is not None and data == prev:
                 keep_idx = i
-        if keep_idx >= 0:
-            self.combo_sig.setCurrentIndex(keep_idx)
+        # No prior selection to preserve -> leave unselected (-1) instead of
+        # sitting on the first signal; see FFTContextual.set_signal_candidates
+        # for the phantom-default rationale.
+        self.combo_sig.setCurrentIndex(keep_idx)
         self.combo_sig.blockSignals(False)
         # Re-attach signal_changed listener exactly once.
         try:
