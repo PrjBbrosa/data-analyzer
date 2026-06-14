@@ -1314,3 +1314,44 @@ def test_toolbar_box_zoom_drag_actually_zooms(qapp):
     toolbar.deleteLater()
     c.hide()
     c.deleteLater()
+
+
+def test_split_drag_finish_self_aligns_single_but_delegates_in_split(qapp, monkeypatch):
+    """Single pane (standalone): drag-finish self-aligns the slice. Split mode
+    (page-managed): drag-finish must NOT run single-pane align (it fights the
+    page) but must still emit layout_geometry_changed so the page re-syncs."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(600, 480)
+    c.show()
+    qapp.processEvents()
+    align = []
+    geo = []
+    monkeypatch.setattr(c, '_align_slice_to_main', lambda: align.append(1))
+    c.layout_geometry_changed.connect(lambda: geo.append(1))
+
+    # Measure the delta around each drag-finish (apply/reset themselves also
+    # touch align/geo, so cumulative counts would be noisy).
+    # Single-pane / standalone (default): drag-finish self-aligns + notifies.
+    assert c._split_aligned is False
+    a0, g0 = len(align), len(geo)
+    c._on_split_drag_finished()
+    assert len(align) == a0 + 1     # self-aligned
+    assert len(geo) == g0 + 1       # notified the page
+
+    # Page took over split alignment → flag True; drag-finish skips self-align,
+    # still notifies the page.
+    c.apply_split_layout_alignment(left_axis_width=40.0)
+    assert c._split_aligned is True
+    a0, g0 = len(align), len(geo)
+    c._on_split_drag_finished()
+    assert len(align) == a0         # did NOT self-align (page owns it)
+    assert len(geo) == g0 + 1       # still notified
+
+    # Page reset to single → flag False again; self-align resumes.
+    c.reset_split_layout_alignment()
+    assert c._split_aligned is False
+    a0 = len(align)
+    c._on_split_drag_finished()
+    assert len(align) == a0 + 1     # self-align resumes
+    c.hide()
+    c.deleteLater()

@@ -645,6 +645,9 @@ class PgHeatmapCanvas(QWidget):
             self._bottom_split_default = 140.0
             self._bottom_split_h = self._bottom_split_default
             self._drag_start_bottom_h = self._bottom_split_h
+            # True while the page (AnalysisSectionPage) is driving split-pane
+            # alignment; the divider handlers then skip single-pane self-align.
+            self._split_aligned = False
             self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
             self._slice_plot.showGrid(x=True, y=True, alpha=0.25)
             for _ax in ('left', 'bottom', 'top', 'right'):
@@ -719,6 +722,7 @@ class PgHeatmapCanvas(QWidget):
             self._bottom_split_default = 140.0
             self._bottom_split_h = self._bottom_split_default
             self._drag_start_bottom_h = self._bottom_split_h
+            self._split_aligned = False
         self._x_label = self._default_x_label
         self._y_label = self._default_y_label
 
@@ -1324,7 +1328,7 @@ class PgHeatmapCanvas(QWidget):
             self._slice_panel.setVisible(state != 'bottom')
         self._position_collapse_ctrl()
         self._position_split_divider()
-        if state == 'none':
+        if state == 'none' and not self._split_aligned:
             self._align_slice_to_main()
         if state != 'bottom':
             self._position_slice_panel()
@@ -1358,9 +1362,13 @@ class PgHeatmapCanvas(QWidget):
         self.layout_geometry_changed.emit()
 
     def _on_split_drag_finished(self) -> None:
-        self._align_slice_to_main()
-        self._position_slice_panel()
+        # Single pane self-aligns; in split mode the page owns alignment, so
+        # just notify it via layout_geometry_changed (emitted below).
+        if not self._split_aligned:
+            self._align_slice_to_main()
+            self._position_slice_panel()
         self._position_split_divider()
+        self.layout_geometry_changed.emit()
 
     def _on_split_reset(self) -> None:
         self._bottom_split_h = float(self._bottom_split_default)
@@ -1369,8 +1377,9 @@ class PgHeatmapCanvas(QWidget):
                 self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
         self._position_collapse_ctrl()
         self._position_split_divider()
-        self._align_slice_to_main()
-        self._position_slice_panel()
+        if not self._split_aligned:
+            self._align_slice_to_main()
+            self._position_slice_panel()
         self.layout_geometry_changed.emit()
 
     def resizeEvent(self, event):
@@ -1435,6 +1444,7 @@ class PgHeatmapCanvas(QWidget):
         self._activate_graphics_layout()
 
     def reset_split_layout_alignment(self) -> None:
+        self._split_aligned = False
         self.prepare_split_layout_alignment(None)
         # Single-pane: align the slice's right edge to the heatmap (the split
         # path does this via slice_right_reserve; do it here for one pane too).
@@ -1501,6 +1511,7 @@ class PgHeatmapCanvas(QWidget):
         slice_bottom_axis_height: float | None = None,
         slice_right_reserve: float | None = None,
     ) -> None:
+        self._split_aligned = True
         for axis in self._alignment_left_axes():
             try:
                 axis.setWidth(float(left_axis_width))
