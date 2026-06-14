@@ -2158,6 +2158,81 @@ def test_main_window_fft_preview_path_does_not_check_time_box(qapp, qtbot):
     )
 
 
+# ---- 「最大」 (maximize time range) button ----
+#
+# A flat 「最大」 button sits on the right of the 「使用选定时间范围」 row.
+# Clicking it fills 开始/结束 to the full data extent [0, 全程时长] AND ticks
+# the range checkbox, then (in MainWindow) applies for the current mode. The
+# widget itself only emits ``max_range_requested``; the staging is done via
+# ``set_range_from_span`` (which records per-mode checked intent).
+
+
+def test_max_range_button_fills_full_extent_and_enables(qapp):
+    """Clicking 「最大」 stages the full [lo, hi] extent into the spinboxes and
+    enables the range filter — even from a partial, unchecked selection.
+
+    The widget itself only emits ``max_range_requested``; the owner
+    (MainWindow) does the staging via ``set_range_from_span``. We wire a
+    minimal owner-side handler that mirrors MainWindow's apply so the
+    button's end-to-end contract is exercised without a full window.
+    """
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    top = PersistentTop()
+
+    # Owner-side handler (mirrors MainWindow._on_time_range_max_requested):
+    # stage [minimum, maximum] and tick the box via set_range_from_span.
+    def _apply_max():
+        lo = top.spin_start.minimum()
+        hi = top.spin_end.maximum()
+        if hi > lo:
+            top.set_range_from_span(lo, hi)
+
+    top.max_range_requested.connect(_apply_max)
+
+    # Data extent: spinbox limits define [0, 100]; main_window keeps these
+    # current via set_range_limits. A partial selection sits inside the extent.
+    top.set_range_limits(0, 100)
+    top.set_range_values(10, 20)
+    top.chk_range.setChecked(False)
+    assert top.range_enabled() is False
+    assert top.range_values() == (10.0, 20.0)
+
+    # Drive the button the same way the user would.
+    top.btn_range_max.click()
+
+    assert top.range_values() == (0.0, 100.0)
+    assert top.range_enabled() is True
+
+
+def test_max_range_button_emits_signal(qapp):
+    """The button is a pure signal source: clicking it emits
+    ``max_range_requested`` (MainWindow owns the mode-aware apply)."""
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    top = PersistentTop()
+    fired = []
+    top.max_range_requested.connect(lambda: fired.append(True))
+    top.btn_range_max.click()
+    assert fired == [True]
+
+
+def test_max_range_button_lives_on_chk_range_row(qapp):
+    """The 「最大」 button shares the host row with chk_range; the checkbox row
+    itself stays visible regardless of checked state, and the button carries
+    the exact spec'd label + tooltip."""
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    top = PersistentTop()
+    assert top.btn_range_max.text() == "最大"
+    assert top.btn_range_max.toolTip() == "将时间范围设为整段数据（0 ~ 全程）"
+    # chk_range and btn_range_max share the same host parent.
+    assert top.btn_range_max.parentWidget() is top.chk_range.parentWidget()
+    # The checkbox row stays visible even when unchecked.
+    top.chk_range.setChecked(False)
+    assert not top.chk_range.isHidden()
+
+
 # ---- Wave 3 (axis-settings + COT migration plan): 坐标轴设置 group ----
 #
 # OrderContextual replaces the legacy combo_amp_mode + combo_dynamic combos

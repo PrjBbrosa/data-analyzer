@@ -492,6 +492,9 @@ class MainWindow(QMainWindow):
         self.inspector.top.chk_range.toggled.connect(
             self._on_time_range_enabled_changed
         )
+        self.inspector.top.max_range_requested.connect(
+            self._on_time_range_max_requested
+        )
         xrange_changed = getattr(self.canvas_time, 'xrange_changed', None)
         if xrange_changed is not None:
             xrange_changed.connect(self._on_time_canvas_xrange_changed)
@@ -1784,6 +1787,39 @@ class MainWindow(QMainWindow):
             return False
         self.inspector.top.set_range_from_span(lo, hi)
         return True
+
+    def _on_time_range_max_requested(self):
+        """「最大」按钮：把时间范围设为整段数据 [0, 全程] 并勾选「使用选定时间
+        范围」，再按当前模式重绘/刷新。
+
+        数据范围已经在 spinbox 的上下限里（MainWindow 通过 set_range_limits
+        保持其最新值）。这里特意走 set_range_from_span（它会 blockSignals 地
+        勾选 chk_range 并按当前模式记录 per-mode 勾选状态），从而避开
+        _on_time_range_enabled_changed —— 后者会用画布当前可见 xlim 覆盖
+        spinbox，正是我们要避免的。
+        """
+        top = self.inspector.top
+        lo = top.spin_start.minimum()
+        hi = top.spin_end.maximum()
+        if not (hi > lo):          # 还没有数据 / 没有可用的整段范围
+            return
+        # 同步填入 [lo, hi] 并（blockSignals 地）勾选，避免可见 xlim 覆盖。
+        top.set_range_from_span(lo, hi)
+        # 按当前模式应用（与现有处理器的尾部保持一致）。
+        canvas = self.chart_stack.focused_canvas()
+        idx = self._view_index_for_canvas(canvas)
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            self._capture_range_change_into_view(
+                self.view_manager.get(idx), canvas
+            )
+        mode = self.chart_stack.current_mode()
+        if mode == 'time':
+            if self.files and self.navigator.get_checked_channels():
+                self._replot_canvas_for_view(idx, canvas)
+        elif mode == 'fft':
+            self._refresh_fft_time_preview(clear_spectrum=False)
+        # fft_time / order: 仅做暂存即可，其计算是手动触发的
+        # （与拖拽预览路径一致）。
 
     def _on_time_range_enabled_changed(self, enabled):
         canvas = self.chart_stack.focused_canvas()

@@ -1452,6 +1452,9 @@ class PersistentTop(QWidget):
 
     xaxis_apply_requested = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
+    # 「最大」按钮：将时间范围设为整段数据并勾选「使用选定时间范围」。
+    # 控件只负责发信号，由 MainWindow 按当前模式负责重绘/刷新。
+    max_range_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1532,7 +1535,36 @@ class PersistentTop(QWidget):
         self.chk_range.setToolTip(
             "勾选后，只使用开始到结束之间的数据；取消勾选则使用全时段。"
         )
-        fl.addRow(self.chk_range)
+        # 「最大」按钮停靠在勾选框这一行的右端：一键把开始/结束填成整段数据
+        # [0, 全程时长] 并勾选「使用选定时间范围」。用扁平 QToolButton 复用
+        # inspectorCollapser 的轻量观感，宽度收窄以免撑宽窄面板。
+        self.btn_range_max = QToolButton(self)
+        self.btn_range_max.setObjectName("inspectorRangeMax")
+        self.btn_range_max.setText("最大")
+        self.btn_range_max.setToolTip("将时间范围设为整段数据（0 ~ 全程）")
+        self.btn_range_max.setAutoRaise(True)
+        self.btn_range_max.setCursor(Qt.PointingHandCursor)
+        self.btn_range_max.setMaximumWidth(_SHORT_FIELD_MAX_WIDTH)
+        try:
+            self.btn_range_max.setStyleSheet(
+                "QToolButton#inspectorRangeMax { "
+                "  padding: 2px 8px; border: none; background: transparent; "
+                "  color: #2563eb; font-weight: 600; "
+                "}"
+                "QToolButton#inspectorRangeMax:hover { background: #eef2f7; }"
+            )
+        except Exception:  # pragma: no cover — defensive on Qt style failures
+            pass
+        # Host row: [chk_range][stretch][btn_range_max]. The checkbox row stays
+        # visible regardless of checked state; only the 开始/结束 row toggles.
+        self._chk_range_host = QWidget()
+        _chk_host_lay = QHBoxLayout(self._chk_range_host)
+        _chk_host_lay.setContentsMargins(0, 0, 0, 0)
+        _chk_host_lay.setSpacing(6)
+        _chk_host_lay.addWidget(self.chk_range)
+        _chk_host_lay.addStretch(1)
+        _chk_host_lay.addWidget(self.btn_range_max)
+        fl.addRow(self._chk_range_host)
         # 紧凑化【1】: 开始 / 结束 share one form row.
         self.spin_start = _no_buttons(CompactDoubleSpinBox())
         self.spin_start.setDecimals(3)
@@ -1613,6 +1645,8 @@ class PersistentTop(QWidget):
         )
         # 紧凑化【2】: hide 开始/结束 row entirely when range disabled.
         self.chk_range.toggled.connect(self._update_range_rows_visible)
+        # 「最大」按钮只转发信号；MainWindow 负责按当前模式重绘/刷新。
+        self.btn_range_max.clicked.connect(self.max_range_requested)
         self.btn_apply_xaxis.clicked.connect(self.xaxis_apply_requested)
         self.spin_xt.valueChanged.connect(self._emit_ticks)
         self.spin_yt.valueChanged.connect(self._emit_ticks)

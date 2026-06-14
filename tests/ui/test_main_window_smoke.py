@@ -653,6 +653,60 @@ def test_channel_selection_change_preserves_xlim(qapp, qtbot, loaded_csv):
     assert nhi == pytest.approx(t1, abs=1e-6)
 
 
+def test_max_range_button_sets_full_extent_and_replots_time_mode(
+    qapp, qtbot, loaded_csv
+):
+    """「最大」 in time mode: emitting ``max_range_requested`` with a file loaded
+    and a channel checked stages the full [0, 全程] extent, enables the range
+    filter, and triggers a replot without error."""
+    import pytest
+
+    w, fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    w.chart_stack.set_mode('time')
+    w.inspector.set_mode('time')
+    qapp.processEvents()
+
+    top = w.inspector.top
+    # Start from a partial, unchecked selection inside the data extent.
+    top.set_range_values(0.2, 0.6)
+    top.chk_range.setChecked(False)
+    qapp.processEvents()
+    assert top.range_enabled() is False
+
+    lo = top.spin_start.minimum()
+    hi = top.spin_end.maximum()
+    assert hi > lo  # data extent is available after load
+
+    # Drive the live signal path the button uses.
+    top.max_range_requested.emit()
+    qapp.processEvents()
+
+    rlo, rhi = top.range_values()
+    assert rlo == pytest.approx(lo, abs=1e-6)
+    assert rhi == pytest.approx(hi, abs=1e-6)
+    assert top.range_enabled() is True
+    # A replot must have produced a live primary axis (no exception raised).
+    assert w.canvas_time._primary_xaxis_ax is not None
+
+
+def test_max_range_button_noops_without_data_extent(qapp, qtbot):
+    """With no file loaded, the spinbox extent is degenerate; emitting
+    ``max_range_requested`` must be a safe no-op (no replot, no exception)."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.chart_stack.set_mode('time')
+    w.inspector.set_mode('time')
+
+    top = w.inspector.top
+    top.set_range_limits(0, 0)  # degenerate extent (mirrors close-file reset)
+    top.chk_range.setChecked(False)
+    # Should not raise and should not enable the range filter.
+    top.max_range_requested.emit()
+    assert top.range_enabled() is False
+
+
 def test_time_range_fields_track_current_visible_xlim_when_unchecked(
     qapp, qtbot, loaded_csv
 ):

@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraceLab · 时间范围「最大」按钮 原型</title>
+<style>
+  :root {
+    --app-bg: #f3f6fb;
+    --surface: #ffffff;
+    --panel: #eef4ff;
+    --line: #dbe5f1;
+    --line-strong: #b7c8dc;
+    --text: #111827;
+    --muted: #64748b;
+    --blue: #0b7af3;
+    --blue-soft: #e7f1ff;
+    --green: #16a34a;
+    --green-soft: #effaf4;
+    --orange: #f97316;
+    --danger: #e11d48;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: #e9eef6;
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+  }
+  .wrap { max-width: 1180px; margin: 22px auto 60px; padding: 0 18px; }
+  h1 { font-size: 21px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 22px; }
+
+  .logic {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--blue);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 26px;
+    line-height: 1.6;
+  }
+  .logic h2 { font-size: 15px; margin: 0 0 8px; }
+  .logic code {
+    background: #f1f5fb;
+    border: 1px solid #e2e9f3;
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px;
+    color: #0b4ea2;
+  }
+  .logic ul { margin: 6px 0 0; padding-left: 20px; }
+  .logic li { margin-bottom: 5px; }
+
+  .grid3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+  @media (max-width: 980px) { .grid3 { grid-template-columns: 1fr; } }
+
+  .opt {
+    background: var(--app-bg);
+    border: 1px solid #cfd8e5;
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .opt-head {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    background: #f6f8fc;
+  }
+  .opt-head .tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 800;
+    color: #fff;
+    background: var(--blue);
+    border-radius: 5px;
+    padding: 1px 7px;
+    margin-right: 7px;
+  }
+  .opt.reco .opt-head .tag { background: var(--green); }
+  .opt-head b { font-size: 14.5px; }
+  .opt-head .desc { color: var(--muted); font-size: 12.5px; margin-top: 5px; line-height: 1.5; }
+
+  /* ---- inspector card replica ---- */
+  .insp { background: #eaf2ff; padding: 12px; flex: 1; }
+  .module {
+    background: #fff;
+    border: 1px solid #cfe0f4;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .module.emphasis { background: var(--green-soft); border-color: #b9dfca; }
+  .module-head {
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 10px;
+    border-bottom: 1px solid #d9e5f3;
+    font-size: 14px;
+    font-weight: 800;
+  }
+  .module.emphasis .module-head { border-color: #cce9d8; }
+  .range-card { padding: 9px 10px 11px; }
+  .range-title {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px; font-weight: 800;
+  }
+  .module-sub { color: var(--muted); font-size: 11.5px; font-weight: 700; }
+  .toggle-line {
+    display: flex; align-items: center; gap: 9px;
+    margin-bottom: 9px; font-weight: 700; color: #334155;
+  }
+  .box {
+    width: 17px; height: 17px; border: 1px solid #9fb2c9;
+    border-radius: 4px; background: #fff; position: relative; flex: none;
+  }
+  .box.on::after {
+    content: ""; position: absolute; inset: 3px;
+    border-radius: 2px; background: var(--blue);
+  }
+  .range-fields {
+    display: grid;
+    grid-template-columns: 1fr 14px 1fr;
+    gap: 7px; align-items: center;
+  }
+  .field {
+    min-height: 33px;
+    border: 1px solid #d6e2f0;
+    background: #fff;
+    border-radius: 7px;
+    padding: 6px 9px;
+    display: flex; align-items: center;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+  }
+  .dash { text-align: center; color: var(--muted); }
+
+  /* the max button, several shapes */
+  .maxbtn {
+    height: 30px;
+    border: 1px solid #cbd8e8;
+    background: #fff;
+    color: var(--blue);
+    border-radius: 7px;
+    padding: 0 11px;
+    font: inherit;
+    font-weight: 800;
+    font-size: 13px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    white-space: nowrap;
+  }
+  .maxbtn:hover { background: var(--blue-soft); border-color: var(--blue); }
+  .maxbtn:active { transform: translateY(1px); }
+  .maxbtn .ic { font-size: 13px; }
+  .link-btn {
+    border: none; background: transparent; color: var(--blue);
+    font: inherit; font-weight: 800; font-size: 12.5px; cursor: pointer;
+    padding: 2px 4px; border-radius: 5px;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .link-btn:hover { background: var(--blue-soft); }
+
+  /* Option A: inline row with trailing button */
+  .range-fields.with-btn {
+    grid-template-columns: 1fr 12px 1fr auto;
+  }
+
+  .note {
+    margin: 9px 0 0;
+    font-size: 12px; color: var(--muted); line-height: 1.5;
+  }
+  .pro { color: var(--green); font-weight: 700; }
+  .con { color: var(--orange); font-weight: 700; }
+
+  .demo-hint {
+    text-align: center; color: var(--muted); font-size: 12.5px;
+    margin: 18px 0 0;
+  }
+  .demo-hint b { color: var(--blue); }
+  .ctx-tabs { display: flex; gap: 8px; margin: 26px 0 14px; }
+  .ctx-tab {
+    border: 1px solid #cbd8e8; background: #fff; color: #475569;
+    border-radius: 8px; padding: 7px 14px; font: inherit; font-weight: 800;
+    cursor: pointer;
+  }
+  .ctx-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>时间范围「最大」按钮 — 放置方案对比</h1>
+  <p class="sub">2026-06-14 · 一键把「开始 / 结束」填满整段数据。点击任意卡片里的「最大」按钮看效果。</p>
+
+  <div class="logic">
+    <h2>逻辑（复用现成的上下界，零额外计算）</h2>
+    <ul>
+      <li>每次加载 / 激活 / 重建文件时，<code>main_window</code> 已经调用
+        <code>set_range_limits(0, max_t)</code>，其中
+        <code>max_t = max(各文件 time_array[-1])</code>。所以 spinbox 的
+        <code>minimum()</code> / <code>maximum()</code> 就是整段数据的上下界。</li>
+      <li>「最大」点击 → <code>set_range_values(spin_start.minimum(), spin_end.maximum())</code>
+        → 即 <code>[0, 全程时长]</code>。直接复用已有方法，不新增数据通路。</li>
+      <li>同一个范围组在 时域 / FFT / FFT vs Time / 阶次 四个模式间复用 →
+        <b>按钮只加一处，四个模式同时生效</b>。</li>
+      <li>待定的小决策（见底部问题）：点「最大」后是否顺带勾上「使用选定时间范围」；
+        以及文案用「最大 / 全程 / 全时段」。</li>
+    </ul>
+  </div>
+
+  <div class="ctx-tabs">
+    <button class="ctx-tab active" data-ctx="time">时域 ·「时间范围」组</button>
+    <button class="ctx-tab" data-ctx="fft">分析模式 ·「分析时间」组（FFT/阶次）</button>
+  </div>
+
+  <div class="grid3">
+
+    <!-- Option A -->
+    <div class="opt" data-opt="A">
+      <div class="opt-head">
+        <div><span class="tag">方案 A</span><b>行尾内联按钮</b></div>
+        <div class="desc">紧跟「结束」框后面，紧贴它影响的控件，扫视最直接。</div>
+      </div>
+      <div class="insp">
+        <div class="module ctx-emph">
+          <div class="module-head"><span class="ctx-title">时间范围</span><span class="module-sub ctx-sub">绘图 / 统计 / 导出</span></div>
+          <div class="range-card">
+            <div class="toggle-line"><span class="box on"></span><span>使用选定时间范围</span></div>
+            <div class="range-fields with-btn">
+              <div class="field f-start">94.502 s</div>
+              <span class="dash">–</span>
+              <div class="field f-end">195.978 s</div>
+              <button class="maxbtn"><span class="ic">⤢</span>最大</button>
+            </div>
+          </div>
+        </div>
+        <p class="note"><span class="pro">优点</span>：与起止框同一行、就近操作。<br>
+        <span class="con">注意</span>：Inspector 较窄，该行有最大宽度限制，按钮要做紧凑（图标+短字）。</p>
+      </div>
+    </div>
+
+    <!-- Option B (recommended) -->
+    <div class="opt reco" data-opt="B">
+      <div class="opt-head">
+        <div><span class="tag">方案 B · 推荐</span><b>复选框行右对齐</b></div>
+        <div class="desc">放在「使用选定时间范围」那一行的最右侧，不挤压起止框宽度。</div>
+      </div>
+      <div class="insp">
+        <div class="module ctx-emph">
+          <div class="module-head"><span class="ctx-title">时间范围</span><span class="module-sub ctx-sub">绘图 / 统计 / 导出</span></div>
+          <div class="range-card">
+            <div class="toggle-line">
+              <span class="box on"></span><span>使用选定时间范围</span>
+              <span style="flex:1"></span>
+              <button class="link-btn"><span class="ic">⤢</span>最大</button>
+            </div>
+            <div class="range-fields">
+              <div class="field f-start">94.502 s</div>
+              <span class="dash">–</span>
+              <div class="field f-end">195.978 s</div>
+            </div>
+          </div>
+        </div>
+        <p class="note"><span class="pro">优点</span>：不占起止框宽度；位置固定，四模式一致；和复选框语义相邻（“范围”动作集中在一行）。<br>
+        <span class="con">注意</span>：复选框未勾选时该行仍在，按钮始终可点（点了会顺带勾上 → 见底部问题）。</p>
+      </div>
+    </div>
+
+    <!-- Option C -->
+    <div class="opt" data-opt="C">
+      <div class="opt-head">
+        <div><span class="tag">方案 C</span><b>分组标题右对齐</b></div>
+        <div class="desc">放在「时间范围 / 分析时间」标题栏右上角，作为该组的统一动作位。</div>
+      </div>
+      <div class="insp">
+        <div class="module ctx-emph">
+          <div class="module-head">
+            <span class="ctx-title">时间范围</span>
+            <button class="link-btn"><span class="ic">⤢</span>最大</button>
+          </div>
+          <div class="range-card">
+            <div class="toggle-line"><span class="box on"></span><span>使用选定时间范围</span></div>
+            <div class="range-fields">
+              <div class="field f-start">94.502 s</div>
+              <span class="dash">–</span>
+              <div class="field f-end">195.978 s</div>
+            </div>
+          </div>
+        </div>
+        <p class="note"><span class="pro">优点</span>：位置最稳定、视觉最干净，组级动作的常规落点。<br>
+        <span class="con">注意</span>：离起止框略远；FFT/阶次模式下标题右侧已有「来自时域预览 / ↻」等说明，可能要让位。</p>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="demo-hint">点击任意「最大」按钮：起止框跳到 <b>0.000 s – 255.100 s</b>（演示用 255.10 s 全程）。再点击别处复位。</p>
+</div>
+
+<script>
+  const FULL_START = "0.000 s";
+  const FULL_END = "255.100 s";
+  const SEL_START = "94.502 s";
+  const SEL_END = "195.978 s";
+
+  // context titles
+  const ctxTabs = [...document.querySelectorAll('.ctx-tab')];
+  function applyCtx(ctx) {
+    ctxTabs.forEach(t => t.classList.toggle('active', t.dataset.ctx === ctx));
+    const isFft = ctx === 'fft';
+    document.querySelectorAll('.ctx-title').forEach(e => e.textContent = isFft ? '分析时间' : '时间范围');
+    document.querySelectorAll('.ctx-sub').forEach(e => e.textContent = isFft ? '本次分析的时间窗口' : '绘图 / 统计 / 导出');
+    document.querySelectorAll('.ctx-emph').forEach(e => e.classList.toggle('emphasis', isFft));
+  }
+  ctxTabs.forEach(t => t.addEventListener('click', () => applyCtx(t.dataset.ctx)));
+
+  // max button demo
+  document.querySelectorAll('.maxbtn, .link-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const card = btn.closest('.module');
+      card.querySelector('.f-start').textContent = FULL_START;
+      card.querySelector('.f-end').textContent = FULL_END;
+      const box = card.querySelector('.box');
+      if (box) box.classList.add('on');
+    });
+  });
+  // click elsewhere resets
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('.maxbtn') || e.target.closest('.link-btn') || e.target.closest('.ctx-tab')) return;
+    document.querySelectorAll('.module').forEach(card => {
+      card.querySelector('.f-start').textContent = SEL_START;
+      card.querySelector('.f-end').textContent = SEL_END;
+    });
+  });
+</script>
+</body>
+</html>
