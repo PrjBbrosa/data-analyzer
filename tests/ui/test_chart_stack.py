@@ -873,6 +873,22 @@ def test_fft_card_quality_indicator_present_like_time_card(qapp, qtbot):
     assert card._quality_indicator.property("qualityState") == "green"
 
 
+def test_flush_quality_indicator_swallows_dead_canvas(qapp, monkeypatch):
+    """Queued quality-dot placement must tolerate a deleted canvas/card."""
+    cs = ChartStack()
+    card = cs._time_card
+    card._quality_indicator_position_pending = True
+
+    def _dead_canvas():
+        raise RuntimeError("wrapped C/C++ object of type QWidget has been deleted")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(card, "_position_quality_indicator", _dead_canvas)
+        card._flush_quality_indicator_position()
+
+    assert card._quality_indicator_position_pending is False
+
+
 def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)

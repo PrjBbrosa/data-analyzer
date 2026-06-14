@@ -1344,7 +1344,12 @@ class _ChartCard(QWidget):
 
     def _flush_quality_indicator_position(self):
         self._quality_indicator_position_pending = False
-        self._position_quality_indicator()
+        try:
+            self._position_quality_indicator()
+        except RuntimeError:
+            # The queued singleShot can fire after Qt has already torn down the
+            # canvas/card C++ object; there is nothing left to position.
+            pass
 
     def _set_quality_status(self, status):
         indicator = getattr(self, "_quality_indicator", None)
