@@ -1240,3 +1240,100 @@ def test_constant_signal_does_not_raise(canvas):
           'amp': np.ones(64), 'time': t, 'signal': np.full_like(t, 3.0)}],
         xlim=(0.0, 50.0), amp_label='Amplitude', title='t')
     canvas._reframe_time_y_to_grid()   # min == max → zero span, must not raise
+
+
+# --- B: annotations on the time-preview plot, not just the spectrum row ----
+
+def test_annotation_enabled_disables_time_menu(canvas):
+    # Annotation mode must suppress the time-preview's default right-click
+    # ViewBox menu so a right-click can reach the delete-nearest slot
+    # (lesson: sigmouseclicked-fires-after-viewbox-menu — the gate is
+    # vb.setMenuEnabled, not ev.accept()).
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    canvas.set_remark_enabled(True)
+    assert canvas._plot_amp.vb.menuEnabled() is False
+    assert canvas._plot_time.vb.menuEnabled() is False
+    canvas.set_remark_enabled(False)
+    assert canvas._plot_amp.vb.menuEnabled() is True
+    assert canvas._plot_time.vb.menuEnabled() is True
+
+
+def test_add_and_clear_remark_on_time_preview(canvas):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    canvas.set_remark_enabled(True)
+    n0 = len(canvas._remarks)
+    canvas.add_remark_at('time', 5.0, 0.0)
+    assert len(canvas._remarks) == n0 + 1
+    last = canvas._remarks[-1]
+    # The annotation lands on a time-preview surface: either the main plot
+    # (curve 0 / left axis) or one of the aux overlay ViewBoxes.
+    assert (last.get('plot') is canvas._plot_time
+            or last.get('vb') in canvas._time_overlay_vbs
+            or last.get('vb') is canvas._plot_time.vb)
+    canvas.clear_remarks()
+    assert len(canvas._remarks) == 0
+
+
+def test_time_remark_picks_nearest_in_screen_space(canvas, qapp):
+    # Overlay curves live on DIFFERENT Y scales (0.04x sin on the main/left axis
+    # vs 50x cos on an aux right axis). A data-space nearest search would always
+    # favour the large-scale right-axis curve; the pick must be in SCREEN space.
+    # The two curves are out of phase, so at t≈π/2 the small main curve sits at
+    # its screen TOP (sin=1) while the big curve is mid-height (cos=0) — clicking
+    # the top must snap to the MAIN curve, proving screen-space selection.
+    t = np.linspace(0.0, 10.0, 500)
+    entries = [
+        {'label': 'a', 'color': '#2563eb', 'freq': np.linspace(0, 50, 128),
+         'amp': np.ones(128), 'time': t, 'signal': 0.04 * np.sin(t)},
+        {'label': 'b', 'color': '#22c55e', 'freq': np.linspace(0, 50, 128),
+         'amp': np.ones(128), 'time': t, 'signal': 50.0 * np.cos(t)},
+    ]
+    canvas.show()
+    qapp.processEvents()  # realize geometry so mapViewToScene is meaningful
+    canvas.plot_spectra(entries, xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    qapp.processEvents()
+    canvas.set_remark_enabled(True)
+    # t≈π/2 (≈1.57); y near the small main curve's peak value in ITS own scale.
+    canvas.add_remark_at('time', 1.57, 0.04)
+    assert len(canvas._remarks) == 1
+    # Must land on the MAIN plot (curve 0) whose values are ~±0.04 — NOT the
+    # right-axis curve whose values are ~±50.
+    last = canvas._remarks[-1]
+    assert last['plot'] is canvas._plot_time
+    assert last['vb'] is canvas._plot_time.vb
+    _xs, ys = last['dot'].getData()
+    assert abs(float(ys[0])) < 0.5, "snapped to a large-scale curve, not screen-nearest"
+    canvas.clear_remarks()
+    canvas.hide()
+
+
+def test_time_remark_right_click_removes_nearest(canvas):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at('time', 2.0, 0.0)
+    canvas.add_remark_at('time', 8.0, 0.0)
+    assert len(canvas._remarks) == 2
+    x_far = canvas._remarks[-1]['dot'].getData()[0][0]
+    canvas.remove_remark_near('time', float(x_far))
+    assert len(canvas._remarks) == 1
+    # The remaining remark is the OTHER one (near x=2), not the deleted one.
+    x_left = canvas._remarks[-1]['dot'].getData()[0][0]
+    assert abs(x_left - 2.0) < abs(x_far - 2.0)
+
+
+def test_spectrum_remark_still_works_with_time_branch(canvas):
+    # Adding the time branch must NOT regress the existing amp-row path.
+    canvas.plot_spectra(
+        [_entry()], xlim=(0.0, 500.0), amp_label='Amplitude',
+        title='FFT', y_auto=True, y_min=0.0, y_max=0.0,
+    )
+    canvas.set_remark_enabled(True)
+    canvas.add_remark_at('amp', 119.0, 0.5)
+    assert len(canvas._remarks) == 1
+    assert canvas._remarks[-1]['plot'] is canvas._plot_amp
+    canvas.clear_remarks()
+    assert canvas._remarks == []

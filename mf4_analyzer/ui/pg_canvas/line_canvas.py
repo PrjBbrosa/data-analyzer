@@ -1313,17 +1313,34 @@ class PgLineCanvas(QWidget):
     # ------------------------------------------------------------------
     def set_remark_enabled(self, enabled: bool) -> None:
         self._remark_enabled = bool(enabled)
+        # Suppress BOTH plots' default right-click ViewBox menu while annotating
+        # so a right-click reaches the delete-nearest slot. ev.accept() in the
+        # click slot is structurally too late to block the menu (the menu is
+        # raised during item dispatch, before sigMouseClicked fires) — the menu's
+        # real gate is menuEnabled(). Lesson: sigmouseclicked-fires-after-viewbox-menu.
         self._plot_amp.vb.setMenuEnabled(not self._remark_enabled)
-        self._plot_time.vb.setMenuEnabled(True)
+        self._plot_time.vb.setMenuEnabled(not self._remark_enabled)
 
     def clear_remarks(self) -> None:
         for r in self._remarks:
-            r['plot'].removeItem(r['label'])
-            r['plot'].removeItem(r['dot'])
+            # Aux overlay annotations live on an aux ViewBox, not on the plot
+            # directly, so remove from the stored owner — vb if recorded
+            # (aux curves), else the plot (amp row / main time curve).
+            owner = r.get('vb') or r.get('plot')
+            try:
+                owner.removeItem(r['label'])
+                owner.removeItem(r['dot'])
+            except Exception:
+                pass
         self._remarks = []
 
     def add_remark_at(self, which: str, x: float, y: float) -> None:
-        if which != 'amp' or not self._remark_enabled or not self._entries:
+        if not self._remark_enabled:
+            return
+        if which == 'time':
+            self._add_time_remark_at(x, y)
+            return
+        if which != 'amp' or not self._entries:
             return
         best = None
         for e in self._entries:
@@ -1349,7 +1366,91 @@ class PgLineCanvas(QWidget):
         self._plot_amp.addItem(dot)
         self._remarks.append({'label': label, 'dot': dot, 'plot': self._plot_amp})
 
+    def _time_curve_owners(self):
+        """Yield ``(curve, vb, plot_or_none)`` for each time-preview curve.
+
+        Curve 0 lives on the main ViewBox (``_plot_time.vb`` / its left axis);
+        each extra curve lives on its own aux ViewBox (``_time_overlay_vbs[i-1]``)
+        with a colour-coded right axis. ``plot_or_none`` is ``_plot_time`` only
+        for curve 0 (annotation items go onto the plot so they share the left
+        axis); aux annotations go straight onto the aux ViewBox."""
+        if not self._time_curves:
+            return
+        yield (self._time_curves[0], self._plot_time.vb, self._plot_time)
+        for curve, vb in zip(self._time_curves[1:], self._time_overlay_vbs):
+            yield (curve, vb, None)
+
+    def _add_time_remark_at(self, x: float, y: float) -> None:
+        if not self._time_curves:
+            return
+        # Each overlay curve sits on a different Y scale (own aux ViewBox), so a
+        # data-space nearest search would always favour the largest-scale curve.
+        # Compare in SCREEN (scene) space: project the clicked point and every
+        # candidate sample through each curve's OWN ViewBox, then pick the
+        # globally nearest sample. The clicked (x, y) is in the MAIN ViewBox's
+        # data space (the click handler maps via _plot_time.vb), so anchor the
+        # scene reference there. Lesson: overlay nearest-point must be screen-space.
+        try:
+            click_scene = self._plot_time.vb.mapViewToScene(QPointF(x, y))
+        except Exception:
+            return
+        best = None  # (dist2, sx, sy, vb, plot_or_none)
+        for curve, vb, plot in self._time_curve_owners():
+            try:
+                xs, ys = curve.getData()
+            except Exception:
+                continue
+            if xs is None or ys is None:
+                continue
+            xs = np.asarray(xs, dtype=float)
+            ys = np.asarray(ys, dtype=float)
+            mask = np.isfinite(xs) & np.isfinite(ys)
+            if not mask.any():
+                continue
+            xs, ys = xs[mask], ys[mask]
+            # Narrow to the few samples nearest in X first (cheap), then compare
+            # the handful in screen space — projecting every sample is wasteful.
+            xi = int(np.argmin(np.abs(xs - x)))
+            lo = max(0, xi - 2)
+            hi = min(xs.size, xi + 3)
+            for j in range(lo, hi):
+                sx, sy = float(xs[j]), float(ys[j])
+                try:
+                    pt = vb.mapViewToScene(QPointF(sx, sy))
+                except Exception:
+                    continue
+                dx = pt.x() - click_scene.x()
+                dy = pt.y() - click_scene.y()
+                d2 = dx * dx + dy * dy
+                if best is None or d2 < best[0]:
+                    best = (d2, sx, sy, vb, plot)
+        if best is None:
+            return
+        _d2, sx, sy, vb, plot = best
+        label = pg.TextItem(f"({sx:.3g}, {sy:.4g})", color='#111827',
+                            fill=pg.mkBrush(255, 255, 255, 200), anchor=(0, 1))
+        label.setPos(sx, sy)
+        dot = pg.ScatterPlotItem([sx], [sy], size=7,
+                                 brush=pg.mkBrush('#dc2626'),
+                                 pen=pg.mkPen('w', width=1))
+        owner = plot if plot is not None else vb
+        owner.addItem(label)
+        owner.addItem(dot)
+        self._remarks.append({'label': label, 'dot': dot,
+                              'plot': plot, 'vb': vb})
+
     def remove_remark_near(self, which: str, x: float) -> None:
+        if which == 'time':
+            time_vbs = {self._plot_time.vb, *self._time_overlay_vbs}
+            cands = [r for r in self._remarks if r.get('vb') in time_vbs]
+            if not cands:
+                return
+            nearest = min(cands, key=lambda r: abs(r['dot'].getData()[0][0] - x))
+            owner = nearest.get('vb') or nearest.get('plot')
+            owner.removeItem(nearest['label'])
+            owner.removeItem(nearest['dot'])
+            self._remarks.remove(nearest)
+            return
         if which != 'amp':
             return
         cands = [r for r in self._remarks if r['plot'] is self._plot_amp]
@@ -1361,20 +1462,34 @@ class PgLineCanvas(QWidget):
         self._remarks.remove(nearest)
 
     def _on_click(self, ev) -> None:
-        if not self._plot_amp.vb.sceneBoundingRect().contains(ev.scenePos()):
+        scene_pos = ev.scenePos()
+        # Spectrum (amp) row.
+        if self._plot_amp.vb.sceneBoundingRect().contains(scene_pos):
+            v = self._plot_amp.vb.mapSceneToView(scene_pos)
+            if ev.button() == Qt.LeftButton:
+                if self._remark_enabled:
+                    self.add_remark_at('amp', v.x(), v.y())
+                else:
+                    idx = self._nearest_entry_index(v.x(), v.y())
+                    if idx is not None:
+                        self.select_time_entry(idx)
+                return
+            if ev.button() == Qt.RightButton and self._remark_enabled:
+                self.remove_remark_near('amp', v.x())
+                ev.accept()
             return
-        v = self._plot_amp.vb.mapSceneToView(ev.scenePos())
-        if ev.button() == Qt.LeftButton:
-            if self._remark_enabled:
-                self.add_remark_at('amp', v.x(), v.y())
-            else:
-                idx = self._nearest_entry_index(v.x(), v.y())
-                if idx is not None:
-                    self.select_time_entry(idx)
-            return
-        if ev.button() == Qt.RightButton and self._remark_enabled:
-            self.remove_remark_near('amp', v.x())
-            ev.accept()
+        # Time-preview row: annotations only (no entry-selection here). Coordinates
+        # come from the MAIN ViewBox (curve 0 / left axis); the aux overlay curves
+        # are X-linked to it, and _add_time_remark_at projects each curve through
+        # its own ViewBox to pick the screen-nearest sample.
+        if (self._remark_enabled
+                and self._plot_time.vb.sceneBoundingRect().contains(scene_pos)):
+            v = self._plot_time.vb.mapSceneToView(scene_pos)
+            if ev.button() == Qt.LeftButton:
+                self.add_remark_at('time', v.x(), v.y())
+            elif ev.button() == Qt.RightButton:
+                self.remove_remark_near('time', v.x())
+                ev.accept()
 
     # ------------------------------------------------------------------
     def grab_pixmap(self, scale: float = 2.0) -> QPixmap:
