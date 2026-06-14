@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chart Fold Controls Prototype</title>
+  <style>
+    :root {
+      --bg: #e8edf4;
+      --panel: #f9fbfe;
+      --plot-bg: #ffffff;
+      --ink: #182334;
+      --muted: #6f7e91;
+      --line: #bac7d8;
+      --line-soft: #dde5ef;
+      --blue: #2268d8;
+      --blue-dark: #164ea8;
+      --cyan: #20a6d9;
+      --button: #ffffff;
+      --shadow: 0 16px 38px rgba(31, 45, 65, 0.18);
+      --axis: 34px;
+      --scale: 42px;
+      --controls: 94px;
+      font-family: "Aptos", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 12% 18%, rgba(46, 118, 214, 0.12), transparent 26%),
+        radial-gradient(circle at 88% 72%, rgba(32, 166, 217, 0.12), transparent 24%),
+        linear-gradient(135deg, #eef3f8, var(--bg));
+      color: var(--ink);
+    }
+
+    .prototype-shell {
+      width: min(1040px, calc(100vw - 32px));
+      padding: 22px;
+      border: 1px solid rgba(148, 163, 184, 0.48);
+      border-radius: 18px;
+      background: rgba(250, 252, 255, 0.82);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .prototype-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    .prototype-title h1 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0.01em;
+      font-weight: 760;
+    }
+
+    .prototype-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .spectral-board {
+      display: grid;
+      grid-template-columns: var(--axis) minmax(0, 1fr) var(--scale) var(--controls);
+      grid-template-rows: 382px 26px 132px;
+      column-gap: 10px;
+      row-gap: 0;
+      align-items: stretch;
+      min-height: 540px;
+      transition: grid-template-rows 180ms ease;
+    }
+
+    .spectral-board.top-collapsed {
+      grid-template-rows: 70px 26px 444px;
+    }
+
+    .spectral-board.bottom-collapsed {
+      grid-template-rows: 488px 26px 26px;
+    }
+
+    .axis {
+      position: relative;
+      color: #7a8798;
+      font-size: 11px;
+    }
+
+    .axis-y {
+      grid-column: 1;
+      grid-row: 1;
+      display: grid;
+      place-items: center;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+    }
+
+    .axis-bottom-y {
+      grid-column: 1;
+      grid-row: 3;
+      display: grid;
+      place-items: center;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+    }
+
+    .plot-card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid #91a1b6;
+      background: var(--plot-bg);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+    }
+
+    .heatmap-card {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    .heatmap {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, transparent 0 39px, rgba(76, 97, 124, 0.28) 40px, transparent 41px),
+        linear-gradient(0deg, transparent 0 30px, rgba(76, 97, 124, 0.24) 31px, transparent 32px),
+        repeating-linear-gradient(0deg,
+          rgba(180, 30, 16, 0.85) 0 2px,
+          rgba(255, 196, 38, 0.92) 3px 4px,
+          rgba(67, 228, 105, 0.82) 5px 7px,
+          rgba(31, 205, 224, 0.86) 8px 10px,
+          rgba(58, 138, 245, 0.82) 11px 12px,
+          rgba(255, 232, 42, 0.88) 13px 14px),
+        linear-gradient(90deg,
+          rgba(43, 242, 88, 0.74) 0%,
+          rgba(255, 220, 50, 0.8) 23%,
+          rgba(54, 224, 100, 0.7) 40%,
+          rgba(21, 61, 151, 0.9) 49%,
+          rgba(33, 185, 230, 0.75) 57%,
+          rgba(91, 235, 99, 0.72) 76%,
+          rgba(255, 185, 43, 0.76) 100%);
+      background-size: 80px 100%, 100% 38px, 100% 26px, 100% 100%;
+      filter: saturate(1.18) contrast(1.05);
+    }
+
+    .heatmap::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at 50% 52%, rgba(5, 25, 92, 0.72), transparent 12%),
+        radial-gradient(ellipse at 53% 44%, rgba(9, 48, 150, 0.58), transparent 8%),
+        linear-gradient(90deg, transparent 0 47%, rgba(10, 48, 136, 0.66) 49%, rgba(27, 75, 167, 0.78) 53%, transparent 60%);
+      mix-blend-mode: multiply;
+    }
+
+    .heatmap::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 52.3%;
+      width: 2px;
+      background: #8a0d18;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+    }
+
+    .plot-axis-label {
+      position: absolute;
+      left: 50%;
+      bottom: -26px;
+      transform: translateX(-50%);
+      color: #8793a4;
+      font-size: 11px;
+      pointer-events: none;
+    }
+
+    .frequency-ticks,
+    .time-ticks {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      color: rgba(86, 101, 120, 0.82);
+      font-size: 11px;
+    }
+
+    .frequency-ticks span,
+    .time-ticks span {
+      position: absolute;
+    }
+
+    .frequency-ticks span:nth-child(1) { left: -22px; bottom: 17%; }
+    .frequency-ticks span:nth-child(2) { left: -22px; bottom: 38%; }
+    .frequency-ticks span:nth-child(3) { left: -22px; bottom: 59%; }
+    .frequency-ticks span:nth-child(4) { left: -22px; bottom: 80%; }
+    .time-ticks span:nth-child(1) { left: 10%; bottom: -20px; }
+    .time-ticks span:nth-child(2) { left: 33%; bottom: -20px; }
+    .time-ticks span:nth-child(3) { left: 56%; bottom: -20px; }
+    .time-ticks span:nth-child(4) { left: 79%; bottom: -20px; }
+
+    .color-scale {
+      grid-column: 3;
+      grid-row: 1;
+      position: relative;
+      border: 1px solid #77869b;
+      background: linear-gradient(180deg,
+        #7d0000 0%,
+        #e53114 17%,
+        #ffd33e 35%,
+        #39ed71 52%,
+        #2ab8f0 67%,
+        #3369e6 82%,
+        #2d154e 100%);
+    }
+
+    .color-scale::before,
+    .color-scale::after {
+      content: "";
+      position: absolute;
+      left: -2px;
+      right: -2px;
+      height: 2px;
+      background: #ffffff;
+      box-shadow: 0 0 0 1px rgba(22, 33, 49, 0.18);
+    }
+
+    .color-scale::before {
+      top: 25%;
+    }
+
+    .color-scale::after {
+      top: 74%;
+    }
+
+    .scale-label {
+      position: absolute;
+      right: -35px;
+      top: 50%;
+      transform: translateY(-50%) rotate(-90deg);
+      transform-origin: center;
+      white-space: nowrap;
+      color: #5d6d80;
+      font-size: 11px;
+    }
+
+    .scale-ticks {
+      position: absolute;
+      right: -26px;
+      top: 0;
+      bottom: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      color: #6b7788;
+      font-size: 11px;
+    }
+
+    .top-spacer {
+      grid-column: 4;
+      grid-row: 1;
+    }
+
+    .divider {
+      grid-column: 1 / 5;
+      grid-row: 2;
+      position: relative;
+      display: grid;
+      align-items: center;
+    }
+
+    .divider::before {
+      content: "";
+      height: 1px;
+      background: linear-gradient(90deg, transparent 0, var(--line) 34px, var(--line) calc(100% - 122px), transparent 100%);
+    }
+
+    .fold-button {
+      position: absolute;
+      left: 7px;
+      z-index: 2;
+      width: 18px;
+      height: 16px;
+      border: 1px solid #c5d0df;
+      border-radius: 5px;
+      background: linear-gradient(180deg, #ffffff, #f2f6fb);
+      color: #526174;
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 1;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      box-shadow: 0 2px 5px rgba(34, 49, 70, 0.16);
+      transition: transform 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+    }
+
+    .fold-button:hover {
+      border-color: #7f95b0;
+      color: var(--blue);
+      box-shadow: 0 3px 7px rgba(34, 49, 70, 0.2);
+    }
+
+    .fold-button:active {
+      transform: translateY(1px);
+    }
+
+    .fold-button--top {
+      top: 0;
+    }
+
+    .fold-button--bottom {
+      bottom: 0;
+    }
+
+    .line-card {
+      grid-column: 2;
+      grid-row: 3;
+      min-height: 0;
+    }
+
+    .line-plot {
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, transparent 0 59px, rgba(99, 113, 133, 0.34) 60px, transparent 61px),
+        linear-gradient(0deg, transparent 0 20px, rgba(99, 113, 133, 0.26) 21px, transparent 22px),
+        linear-gradient(#f8fafc, #f8fafc);
+      background-size: 125px 100%, 100% 22px, 100% 100%;
+    }
+
+    .line-plot svg {
+      position: absolute;
+      inset: 8px 8px 10px 8px;
+      width: calc(100% - 16px);
+      height: calc(100% - 18px);
+      overflow: visible;
+    }
+
+    .line-plot polyline {
+      fill: none;
+      stroke: #145dff;
+      stroke-width: 1.35;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .bottom-axis-label {
+      position: absolute;
+      left: 50%;
+      bottom: -32px;
+      transform: translateX(-50%);
+      color: #8793a4;
+      font-size: 11px;
+    }
+
+    .slice-card {
+      grid-column: 4;
+      grid-row: 3;
+      align-self: start;
+      border: 1px solid #cdd8e6;
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(243, 247, 252, 0.92)),
+        #f7faff;
+      box-shadow: 0 6px 16px rgba(42, 59, 80, 0.12);
+      padding: 6px;
+      transition: opacity 140ms ease, transform 140ms ease;
+    }
+
+    .slice-title {
+      margin-bottom: 5px;
+      font-size: 10px;
+      font-weight: 800;
+      color: #334154;
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2px;
+      padding: 2px;
+      border: 1px solid #c6d2e1;
+      border-radius: 7px;
+      background: #eaf0f8;
+    }
+
+    .segment {
+      border: 0;
+      border-radius: 5px;
+      min-height: 20px;
+      background: transparent;
+      color: #5e6f84;
+      font-size: 9px;
+      font-weight: 760;
+      cursor: pointer;
+    }
+
+    .segment.is-active {
+      background: linear-gradient(180deg, #2f7bf0, #185dc9);
+      color: #ffffff;
+      box-shadow: 0 2px 7px rgba(34, 104, 216, 0.35);
+    }
+
+    .slice-readout {
+      margin-top: 6px;
+      padding-top: 5px;
+      border-top: 1px solid #dce4ef;
+    }
+
+    .readout-label {
+      color: #7c8796;
+      font-size: 9px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .readout-value {
+      margin-top: 2px;
+      color: #162033;
+      font-size: 13px;
+      font-weight: 860;
+      letter-spacing: 0.02em;
+    }
+
+    .collapsed-note {
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: repeating-linear-gradient(-45deg, #f8fafc 0 8px, #eef3f8 8px 16px);
+      color: #657489;
+      font-size: 12px;
+      font-weight: 760;
+      letter-spacing: 0.04em;
+    }
+
+    .top-collapsed .heatmap-card .collapsed-note,
+    .bottom-collapsed .line-card .collapsed-note {
+      display: grid;
+    }
+
+    .top-collapsed .heatmap,
+    .bottom-collapsed .line-plot {
+      opacity: 0.18;
+    }
+
+    .top-collapsed .color-scale {
+      opacity: 0.35;
+    }
+
+    .top-collapsed .slice-card {
+      grid-row: 3;
+      align-self: start;
+    }
+
+    .bottom-collapsed .slice-card {
+      opacity: 0;
+      transform: translateY(-4px);
+      pointer-events: none;
+    }
+
+    @media (max-width: 760px) {
+      .prototype-shell {
+        width: calc(100vw - 18px);
+        padding: 12px;
+      }
+
+      .prototype-title {
+        display: block;
+      }
+
+      .prototype-title span {
+        display: block;
+        margin-top: 5px;
+      }
+
+      .spectral-board {
+        --axis: 26px;
+        --scale: 28px;
+        --controls: 84px;
+        grid-template-rows: 300px 26px 126px;
+        column-gap: 6px;
+      }
+
+      .fold-button {
+        left: 4px;
+      }
+
+      .slice-card {
+        padding: 7px;
+      }
+
+      .readout-value { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="prototype-shell">
+    <div class="prototype-title">
+      <h1>上下图折叠与切片控制原型</h1>
+      <span>重点：细线分割、按钮依附分割线、右侧控制区收紧对齐</span>
+    </div>
+
+    <section class="spectral-board" id="board" aria-label="Spectrum analysis layout prototype">
+      <div class="axis axis-y">Frequency (Hz)</div>
+
+      <div class="plot-card heatmap-card">
+        <div class="heatmap"></div>
+        <div class="frequency-ticks" aria-hidden="true">
+          <span>10</span>
+          <span>20</span>
+          <span>30</span>
+          <span>40</span>
+        </div>
+        <div class="time-ticks" aria-hidden="true">
+          <span>10</span>
+          <span>20</span>
+          <span>30</span>
+          <span>40</span>
+        </div>
+        <div class="plot-axis-label">Time (s)</div>
+        <div class="collapsed-note">上图已折叠</div>
+      </div>
+
+      <div class="color-scale" aria-label="Amplitude color scale">
+        <div class="scale-label">Amplitude (U Nm) (dB re 1)</div>
+        <div class="scale-ticks" aria-hidden="true">
+          <span>-20</span>
+          <span>-30</span>
+          <span>-40</span>
+          <span>-50</span>
+          <span>-60</span>
+          <span>-70</span>
+        </div>
+      </div>
+
+      <div class="top-spacer"></div>
+
+      <div class="divider" aria-label="Chart divider">
+        <button class="fold-button fold-button--top" id="toggleTop" type="button" aria-expanded="true" aria-controls="board" title="折叠或展开上图">▲</button>
+        <button class="fold-button fold-button--bottom" id="toggleBottom" type="button" aria-expanded="true" aria-controls="board" title="折叠或展开下图">▼</button>
+      </div>
+
+      <div class="axis axis-bottom-y">Amplitude (dB)</div>
+
+      <div class="plot-card line-card">
+        <div class="line-plot">
+          <svg viewBox="0 0 1000 120" preserveAspectRatio="none" aria-hidden="true">
+            <polyline points="
+              0,16 8,18 14,44 22,70 30,57 38,82 46,64 54,88 62,74 70,96
+              78,78 86,105 94,92 102,74 110,99 118,88 126,102 134,80 142,94
+              150,86 158,110 166,78 174,92 182,84 190,108 198,96 206,76 214,98
+              222,90 230,103 238,88 246,72 254,98 262,90 270,102 278,82 286,94
+              294,100 302,88 310,96 318,79 326,106 334,92 342,76 350,101 358,90
+              366,83 374,104 382,96 390,72 398,98 406,90 414,106 422,78 430,92
+              438,86 446,100 454,74 462,95 470,82 478,108 486,90 494,101 502,78
+              510,94 518,88 526,102 534,74 542,92 550,80 558,98 566,68 574,90
+              582,76 590,104 598,84 606,98 614,74 622,92 630,86 638,104 646,78
+              654,96 662,88 670,106 678,82 686,93 694,80 702,101 710,78 718,92
+              726,86 734,100 742,74 750,92 758,82 766,104 774,78 782,94 790,84
+              798,102 806,70 814,92 822,78 830,98 838,82 846,94 854,76 862,88
+              870,72 878,94 886,66 894,86 902,58 910,82 918,32 926,78 934,64
+              942,88 950,72 958,94 966,76 974,86 982,70 990,98 1000,90">
+            </polyline>
+          </svg>
+        </div>
+        <div class="bottom-axis-label">Frequency (Hz)</div>
+        <div class="collapsed-note">下图已折叠</div>
+      </div>
+
+      <aside class="slice-card" aria-label="Slice controls">
+        <div class="slice-title">切片方向</div>
+        <div class="segmented" role="tablist" aria-label="切片方向">
+          <button class="segment is-active" id="timeMode" type="button" role="tab" aria-selected="true">按时间</button>
+          <button class="segment" id="freqMode" type="button" role="tab" aria-selected="false">按频率</button>
+        </div>
+        <div class="slice-readout">
+          <div class="readout-label" id="readoutLabel">固定 Time (s)</div>
+          <div class="readout-value" id="readoutValue">27.5627</div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const board = document.getElementById("board");
+    const toggleTop = document.getElementById("toggleTop");
+    const toggleBottom = document.getElementById("toggleBottom");
+    const timeMode = document.getElementById("timeMode");
+    const freqMode = document.getElementById("freqMode");
+    const readoutLabel = document.getElementById("readoutLabel");
+    const readoutValue = document.getElementById("readoutValue");
+
+    toggleTop.addEventListener("click", () => {
+      const collapsed = !board.classList.contains("top-collapsed");
+      board.classList.toggle("top-collapsed", collapsed);
+      if (collapsed) {
+        board.classList.remove("bottom-collapsed");
+        toggleBottom.textContent = "▼";
+        toggleBottom.setAttribute("aria-expanded", "true");
+      }
+      toggleTop.textContent = collapsed ? "▼" : "▲";
+      toggleTop.setAttribute("aria-expanded", String(!collapsed));
+    });
+
+    toggleBottom.addEventListener("click", () => {
+      const collapsed = !board.classList.contains("bottom-collapsed");
+      board.classList.toggle("bottom-collapsed", collapsed);
+      if (collapsed) {
+        board.classList.remove("top-collapsed");
+        toggleTop.textContent = "▲";
+        toggleTop.setAttribute("aria-expanded", "true");
+      }
+      toggleBottom.textContent = collapsed ? "▲" : "▼";
+      toggleBottom.setAttribute("aria-expanded", String(!collapsed));
+    });
+
+    function setSliceMode(mode) {
+      const isTime = mode === "time";
+      timeMode.classList.toggle("is-active", isTime);
+      freqMode.classList.toggle("is-active", !isTime);
+      timeMode.setAttribute("aria-selected", String(isTime));
+      freqMode.setAttribute("aria-selected", String(!isTime));
+      readoutLabel.textContent = isTime ? "固定 Time (s)" : "固定 Frequency (Hz)";
+      readoutValue.textContent = isTime ? "27.5627" : "12.8400";
+    }
+
+    timeMode.addEventListener("click", () => setSliceMode("time"));
+    freqMode.addEventListener("click", () => setSliceMode("frequency"));
+  </script>
+</body>
+</html>
