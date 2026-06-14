@@ -103,8 +103,8 @@ def test_mark_discovered_round_trips_through_qsettings():
 
 
 def test_shortcut_tooltip_returns_exact_registered_key():
-    assert hints.shortcut_tooltip("pan") == "Alt+G"
-    assert hints.shortcut_tooltip("btn_overlay") == "Alt+2"
+    assert hints.shortcut_tooltip("pan") == "Ctrl+G"
+    assert hints.shortcut_tooltip("btn_overlay") == "Ctrl+2"
     assert hints.shortcut_tooltip("missing") is None
 
 
