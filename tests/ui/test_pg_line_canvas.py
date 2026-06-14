@@ -863,16 +863,23 @@ def test_set_tick_density_accepts_inspector_counts(canvas):
     # same contract as PgHeatmapCanvas.set_tick_density (lesson
     # 2026-06-11-inspector-tick-counts-vs-pg-density-factors).
     canvas.set_tick_density(10, 8)
-    for plot in (canvas._plot_amp, canvas._plot_time):
-        assert plot.getAxis('bottom')._tickDensity == pytest.approx(10 / 10.0)
-        assert plot.getAxis('left')._tickDensity == pytest.approx(8 / 6.0)
+    # Bottom (X) axes of BOTH rows still use the density factor. The spectrum
+    # left axis also uses density. The time-preview left axis is now driven by
+    # the shared graticule (n divisions, see _reframe_time_y_to_grid), NOT by
+    # setTickDensity — the Y count drives _time_divisions instead.
+    assert canvas._plot_amp.getAxis('bottom')._tickDensity == pytest.approx(10 / 10.0)
+    assert canvas._plot_time.getAxis('bottom')._tickDensity == pytest.approx(10 / 10.0)
+    assert canvas._plot_amp.getAxis('left')._tickDensity == pytest.approx(8 / 6.0)
+    assert canvas._time_divisions == 8
 
 
 def test_set_tick_density_clamps_at_spinbox_maxima(canvas):
     canvas.set_tick_density(30, 20)
-    for plot in (canvas._plot_amp, canvas._plot_time):
-        assert plot.getAxis('bottom')._tickDensity == pytest.approx(3.0)
-        assert plot.getAxis('left')._tickDensity == pytest.approx(3.0)
+    assert canvas._plot_amp.getAxis('bottom')._tickDensity == pytest.approx(3.0)
+    assert canvas._plot_time.getAxis('bottom')._tickDensity == pytest.approx(3.0)
+    assert canvas._plot_amp.getAxis('left')._tickDensity == pytest.approx(3.0)
+    # Y count is clamped into the graticule division range [3, 20].
+    assert canvas._time_divisions == 20
 
 
 def test_line_plots_draw_full_neutral_axis_frame_without_viewbox_overlap(qapp):
@@ -1152,3 +1159,84 @@ def test_line_axes_are_boundary_grid_axis_items(canvas):
     for plot in (canvas._plot_amp, canvas._plot_time):
         assert isinstance(plot.getAxis('left'), _BoundaryGridAxisItem)
         assert isinstance(plot.getAxis('bottom'), _BoundaryGridAxisItem)
+
+
+# ----------------------------------------------------------------------
+# A — time-preview Y axes framed to a shared nice graticule, driven by the
+# Y tick density (mirrors the time-domain overlay's k/n graticule). The
+# left axis carries curve 0 on _plot_time.vb; each extra curve gets an aux
+# ViewBox + colour-coded right axis, and ALL must land on the same set of
+# horizontal grid lines (same normalized k/n positions inside their own vb).
+# ----------------------------------------------------------------------
+def _overlay_entries():
+    t = np.linspace(0.0, 10.0, 500)
+    return [
+        {'label': 'a', 'color': '#2563eb', 'freq': np.linspace(0, 50, 128),
+         'amp': np.ones(128), 'time': t, 'signal': 0.04 * np.sin(t)},
+        {'label': 'b', 'color': '#22c55e', 'freq': np.linspace(0, 50, 128),
+         'amp': np.ones(128), 'time': t, 'signal': 1.0 * np.sin(t)},
+        {'label': 'c', 'color': '#f59e0b', 'freq': np.linspace(0, 50, 128),
+         'amp': np.ones(128), 'time': t, 'signal': 50.0 * np.sin(t)},
+    ]
+
+
+def _major_tick_values(axis):
+    # pyqtgraph AxisItem.setTicks stores the pinned ticks in axis._tickLevels;
+    # level 0 is the major-tick (value, label) list.
+    levels = getattr(axis, '_tickLevels', None)
+    assert levels, "axis has no pinned major ticks"
+    return [v for v, _label in levels[0]]
+
+
+def test_time_preview_axes_share_grid_divisions(canvas):
+    canvas.set_tick_density(10, 8)            # n = 8
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    left = canvas._plot_time.getAxis('left')
+    rights = list(canvas._time_overlay_axes)
+    assert len(rights) == 2
+    # Every axis carries exactly n+1 = 9 pinned major ticks.
+    for axis in (left, *rights):
+        assert len(_major_tick_values(axis)) == 9
+
+    # Each axis's tick positions, normalized inside its own ViewBox, share the
+    # SAME k/n sequence as the left axis → they coincide on screen.
+    def fractions(axis, vb):
+        (lo, hi) = vb.viewRange()[1]
+        return [round((v - lo) / (hi - lo), 6) for v in _major_tick_values(axis)]
+
+    base = fractions(left, canvas._plot_time.vb)
+    for axis, vb in zip(rights, canvas._time_overlay_vbs):
+        assert fractions(axis, vb) == pytest.approx(base, abs=1e-6)
+
+
+def test_tick_density_changes_right_axis_divisions(canvas):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    canvas.set_tick_density(10, 6)
+    assert canvas._time_divisions == 6
+    for axis in canvas._time_overlay_axes:
+        assert len(_major_tick_values(axis)) == 7
+    canvas.set_tick_density(10, 12)
+    assert canvas._time_divisions == 12
+    for axis in canvas._time_overlay_axes:
+        assert len(_major_tick_values(axis)) == 13
+
+
+def test_fit_y_keeps_time_axes_on_grid(canvas):
+    canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
+                        amp_label='Amplitude', title='t')
+    canvas._fit_y_to_visible_x(canvas._plot_time)
+    left = canvas._plot_time.getAxis('left')
+    (lo, hi) = canvas._plot_time.vb.viewRange()[1]
+    fr = [round((v - lo) / (hi - lo), 6) for v in _major_tick_values(left)]
+    assert fr == pytest.approx([k / 8 for k in range(9)], abs=1e-6)
+
+
+def test_constant_signal_does_not_raise(canvas):
+    t = np.linspace(0, 1, 100)
+    canvas.plot_spectra(
+        [{'label': 'k', 'color': '#2563eb', 'freq': np.linspace(0, 50, 64),
+          'amp': np.ones(64), 'time': t, 'signal': np.full_like(t, 3.0)}],
+        xlim=(0.0, 50.0), amp_label='Amplitude', title='t')
+    canvas._reframe_time_y_to_grid()   # min == max → zero span, must not raise

@@ -34,6 +34,7 @@ from .heatmap_canvas import (
     _visual_padded_bounds,
 )
 from .context_menu import redesign_pg_context_menu
+from .ticks_math import _frame_to_nice, _fmt_tick
 from .viewbox import _ModifierWheelViewBox
 
 
@@ -145,6 +146,12 @@ class PgLineCanvas(QWidget):
         # on _plot_time's own left axis.
         self._time_overlay_vbs = []
         self._time_overlay_axes = []
+        # Time-preview Y graticule division count (mirrors the time-domain
+        # overlay's divisions). Driven by the Y tick density; the left axis and
+        # every aux right axis are framed to this many equal nice divisions so
+        # all their ticks land on the SAME set of horizontal grid lines. Default
+        # 8 matches the FFT card's default Y tick count.
+        self._time_divisions = 8
         self._entries = []
         self._selected_time_entry_idx = None
         self._remarks = []
@@ -400,6 +407,11 @@ class PgLineCanvas(QWidget):
         pad = (hi - lo) * 0.05 if hi > lo else (abs(hi) * 0.05 or 1.0)
         self.disable_interactive_quality()
         plot.setYRange(lo - pad, hi + pad, padding=0)
+        # Re-snap the time preview's fitted Y back onto the shared graticule so
+        # the right axes stay aligned (mirrors the time-domain fit path); the
+        # spectrum row has no graticule and keeps the raw fitted range.
+        if plot is self._plot_time:
+            self._reframe_time_y_to_grid()
         self.schedule_idle_quality()
 
     def _redesign_context_menu_for_viewbox(self, view_box, menu) -> None:
@@ -641,6 +653,9 @@ class PgLineCanvas(QWidget):
         if bounds is not None:
             tx0, tx1 = _visual_padded_bounds(bounds[0], bounds[1])
             self._plot_time.setXRange(tx0, tx1, padding=0)
+        # Re-frame Y to the shared graticule after the X reset so the left +
+        # aux right axes stay aligned on the same horizontal grid lines.
+        self._reframe_time_y_to_grid()
 
     def _reset_time_preview_to_extents(self) -> None:
         bounds = self._combined_time_bounds()
@@ -648,7 +663,8 @@ class PgLineCanvas(QWidget):
             return
         tx0, tx1 = _visual_padded_bounds(bounds[0], bounds[1])
         self._plot_time.setXRange(tx0, tx1, padding=0)
-        self._plot_time.enableAutoRange(axis='y')
+        # Re-frame Y to the shared graticule (was per-axis autoRange).
+        self._reframe_time_y_to_grid()
 
     def full_reset(self) -> None:
         for p, curves in ((self._plot_amp, self._amp_curves),
@@ -776,11 +792,20 @@ class PgLineCanvas(QWidget):
         except (TypeError, ValueError):
             return
         x_d, y_d = _tick_counts_to_density(x_n, y_n)
-        for plot in (self._plot_amp, self._plot_time):
-            for axis, density in ((plot.getAxis('bottom'), x_d),
-                                  (plot.getAxis('left'), y_d)):
-                axis.setStyle(maxTickLevel=0)
-                axis.setTickDensity(density)
+        # Spectrum (top): no aux right axes, no graticule — keep the plain
+        # density-driven ticks on both axes.
+        for axis, density in ((self._plot_amp.getAxis('bottom'), x_d),
+                              (self._plot_amp.getAxis('left'), y_d)):
+            axis.setStyle(maxTickLevel=0)
+            axis.setTickDensity(density)
+        # Time preview: X still uses density; Y drives the shared graticule
+        # divisions so the left axis AND every aux right axis re-tick together
+        # (fixes "Y tick density had no effect on the right axes").
+        tb = self._plot_time.getAxis('bottom')
+        tb.setStyle(maxTickLevel=0)
+        tb.setTickDensity(x_d)
+        self._time_divisions = max(3, min(20, y_n))
+        self._reframe_time_y_to_grid()
         self.layout_geometry_changed.emit()
 
     # ------------------------------------------------------------------
@@ -838,6 +863,52 @@ class PgLineCanvas(QWidget):
         self._time_overlay_vbs.append(aux_vb)
         self._time_overlay_axes.append(axis)
         return aux_vb
+
+    def _reframe_time_y_to_grid(self) -> None:
+        """Frame the time-preview's main axis (curve 0 / left / ``_plot_time.vb``)
+        and every aux right axis to ``_time_divisions`` equal nice divisions and
+        pin their ticks, so all axes land on the SAME k/n horizontal grid lines
+        (mirrors the time-domain overlay graticule).
+
+        Curve 0 lives on the main ViewBox (its left axis grid IS the k/n
+        graticule); each extra curve lives on its own aux ViewBox + right axis,
+        so framing every axis to the same n divisions makes the right-axis ticks
+        coincide with the left-axis grid. Empty / constant-signal curves are
+        skipped (``_frame_to_nice`` already guards a zero span)."""
+        n = max(3, min(20, int(self._time_divisions)))
+        if not self._time_curves:
+            return
+        # Single unified pairing: (main vb, left axis, curve0), then each aux.
+        triples = [(self._plot_time.vb,
+                    self._plot_time.getAxis('left'),
+                    self._time_curves[0])]
+        triples.extend(zip(self._time_overlay_vbs,
+                           self._time_overlay_axes,
+                           self._time_curves[1:]))
+        for vb, axis, curve in triples:
+            try:
+                _xs, ys = curve.getData()
+                ys = np.asarray(ys, dtype=float)
+                ys = ys[np.isfinite(ys)]
+                if ys.size == 0:
+                    continue
+                lo, hi = float(ys.min()), float(ys.max())
+            except Exception:
+                continue
+            bottom, top, ticks = _frame_to_nice(lo, hi, n)
+            try:
+                vb.enableAutoRange(axis='y', enable=False)
+                vb.setYRange(bottom, top, padding=0)
+                axis.setStyle(maxTickLevel=0)
+                axis.setTicks([[(v, _fmt_tick(v)) for v in ticks], []])
+            except Exception:
+                pass
+        # Preview Y is pinned to the graticule: left-drag pans X only (= picks
+        # the FFT window). Confirmed product decision to lock Y.
+        try:
+            self._plot_time.vb.setMouseEnabled(x=True, y=False)
+        except Exception:
+            pass
 
     def _sync_time_overlay_vbs(self, *_args) -> None:
         """Glue every aux ViewBox geometry to the time plot's main ViewBox."""
@@ -932,7 +1003,10 @@ class PgLineCanvas(QWidget):
                 self._plot_time.setXRange(lo, hi, padding=0)
             else:
                 self._plot_time.setXRange(lo - 0.5, hi + 0.5, padding=0)
-        self._plot_time.enableAutoRange(axis='y')
+        # Frame the left + each aux right Y axis to a shared nice graticule so
+        # every axis's ticks land on the same horizontal grid lines (replaces
+        # per-axis autoRange, which let each right axis pick its own scale).
+        self._reframe_time_y_to_grid()
         # Position any aux overlay ViewBoxes now, and again on the next resize
         # (sigResized) once the layout with the new right axes is realized.
         self._sync_time_overlay_vbs()
