@@ -156,6 +156,9 @@ _TARGET_BOTTOM_TICK_MIN_COUNT = 3
 def _apply_target_bottom_ticks(axis, view_box, target_count: int) -> bool:
     """Pin bottom-axis ticks to a readable target count when geometry exists."""
     try:
+        update_auto_range = getattr(view_box, "updateAutoRange", None)
+        if callable(update_auto_range):
+            update_auto_range()
         (lo, hi), _yr = view_box.viewRange()
         width = float(axis.size().width())
     except Exception:
