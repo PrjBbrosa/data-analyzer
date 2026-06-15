@@ -94,6 +94,13 @@ def _axis_font_family_size(axis):
     )
 
 
+def _bottom_tick_labels(axis):
+    levels = getattr(axis, "_tickLevels", None)
+    if not levels:
+        return []
+    return [str(label) for _value, label in levels[0]]
+
+
 def test_linear_mode_levels_auto(canvas):
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
@@ -242,8 +249,9 @@ def test_set_tick_density_accepts_inspector_counts(canvas):
     canvas.set_tick_density(10, 8)
     bottom = canvas._plot.getAxis('bottom')
     left = canvas._plot.getAxis('left')
-    # Count->density convention from pg_canvas/tick_density.py
-    # (x_n/10.0, y_n/6.0, clamped to [0.35, 3.0]).
+    # Without realized geometry, bottom X falls back to the count->density
+    # convention from pg_canvas/tick_density.py (x_n/10.0, clamped to
+    # [0.35, 3.0]). Left Y always keeps density behavior.
     assert bottom._tickDensity == pytest.approx(10 / 10.0)
     assert left._tickDensity == pytest.approx(8 / 6.0)
     for density in (bottom._tickDensity, left._tickDensity):
@@ -254,7 +262,12 @@ def test_set_tick_density_accepts_inspector_counts(canvas):
 def test_set_tick_density_clamps_at_spinbox_maxima(canvas):
     # Spinbox maxima (30, 20) hit the density ceiling, never beyond it.
     canvas.set_tick_density(30, 20)
-    assert canvas._plot.getAxis('bottom')._tickDensity == pytest.approx(3.0)
+    bottom = canvas._plot.getAxis('bottom')
+    levels = getattr(bottom, "_tickLevels", None)
+    if levels:
+        assert 3 <= len(levels[0]) <= 30
+    else:
+        assert bottom._tickDensity == pytest.approx(3.0)
     assert canvas._plot.getAxis('left')._tickDensity == pytest.approx(3.0)
 
 
@@ -267,6 +280,7 @@ def test_set_tick_density_also_applies_to_slice_subplot(qapp):
         c.set_tick_density(10, 8)
         sb = c._slice_plot.getAxis('bottom')
         sl = c._slice_plot.getAxis('left')
+        # Unshown slice bottom X uses fallback density.
         assert sb._tickDensity == pytest.approx(10 / 10.0)  # x → bottom
         assert sl._tickDensity == pytest.approx(8 / 6.0)    # y → left
     finally:
@@ -746,6 +760,33 @@ def test_heatmap_slice_and_colorbar_axes_use_chart_font(qapp):
             assert size == pytest.approx(9.0)
             assert label_family == expected.family()
             assert label_size == pytest.approx(9.0)
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_narrow_bottom_ticks_are_pinned_and_fit(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(220, 620)
+        c.show()
+        qapp.processEvents()
+        c.plot_or_update_heatmap(
+            matrix=_mat(),
+            x_extent=(0.0, 30.0),
+            y_extent=(10.0, 50.0),
+            x_label="Time (s)",
+            y_label="Frequency (Hz)",
+            cbar_label="Amplitude",
+        )
+        c.select_time_index(2)
+        c.set_tick_density(10, 8)
+        qapp.processEvents()
+
+        for plot in (c._plot, c._slice_plot):
+            axis = plot.getAxis("bottom")
+            labels = _bottom_tick_labels(axis)
+            assert 3 <= len(labels) <= 10
+            assert getattr(axis, "_tickLevels", None), "bottom axis should be pinned"
     finally:
         c.deleteLater()
 

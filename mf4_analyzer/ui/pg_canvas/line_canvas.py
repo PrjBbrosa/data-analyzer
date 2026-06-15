@@ -22,7 +22,9 @@ from mf4_analyzer.ui._axis_handle import (
 from mf4_analyzer.ui.canvases import build_envelope
 
 from .heatmap_canvas import (
+    _apply_axis_tick_density,
     _apply_neutral_axis_frame,
+    _apply_target_bottom_ticks,
     _make_analysis_plot,
     _tick_counts_to_density,
     _visual_padded_bounds,
@@ -814,18 +816,16 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         except (TypeError, ValueError):
             return
         x_d, y_d = _tick_counts_to_density(x_n, y_n)
-        # Spectrum (top): no aux right axes, no graticule — keep the plain
-        # density-driven ticks on both axes.
-        for axis, density in ((self._plot_amp.getAxis('bottom'), x_d),
-                              (self._plot_amp.getAxis('left'), y_d)):
-            axis.setStyle(maxTickLevel=0)
-            axis.setTickDensity(density)
-        # Time preview: X still uses density; Y drives the shared graticule
-        # divisions so the left axis AND every aux right axis re-tick together
-        # (fixes "Y tick density had no effect on the right axes").
-        tb = self._plot_time.getAxis('bottom')
-        tb.setStyle(maxTickLevel=0)
-        tb.setTickDensity(x_d)
+        # Bottom X axes use TimeDomain-style target-count ticks once the plot
+        # geometry is realized; before layout, fall back to native density.
+        for plot in (self._plot_amp, self._plot_time):
+            bottom = plot.getAxis('bottom')
+            if not _apply_target_bottom_ticks(bottom, plot.vb, x_n):
+                _apply_axis_tick_density(bottom, x_d)
+        # Spectrum Y keeps plain density. Time-preview Y drives the shared
+        # graticule divisions so the left axis AND every aux right axis re-tick
+        # together (fixes "Y tick density had no effect on the right axes").
+        _apply_axis_tick_density(self._plot_amp.getAxis('left'), y_d)
         self._time_divisions = max(3, min(20, y_n))
         self._reframe_time_y_to_grid()
         self.layout_geometry_changed.emit()

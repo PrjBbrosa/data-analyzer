@@ -95,6 +95,13 @@ def _axis_font_family_size(axis):
     )
 
 
+def _bottom_tick_labels(axis):
+    levels = getattr(axis, "_tickLevels", None)
+    if not levels:
+        return []
+    return [str(label) for _value, label in levels[0]]
+
+
 def test_plot_spectra_single_entry(canvas):
     canvas.plot_spectra(
         [_entry()], xlim=(0.0, 500.0),
@@ -153,6 +160,30 @@ def test_fft_time_preview_aux_axes_use_chart_font(canvas):
         assert size == pytest.approx(9.0)
         assert label_family == expected.family()
         assert label_size == pytest.approx(9.0)
+
+
+def test_fft_line_canvas_narrow_bottom_ticks_are_pinned_and_fit(qapp):
+    c = PgLineCanvas()
+    try:
+        c.resize(220, 620)
+        c.show()
+        qapp.processEvents()
+        c.plot_spectra(
+            [_entry()],
+            xlim=(0.0, 500.0),
+            amp_label="Amplitude",
+            title="FFT",
+        )
+        c.set_tick_density(10, 8)
+        qapp.processEvents()
+
+        for plot in (c._plot_amp, c._plot_time):
+            axis = plot.getAxis("bottom")
+            labels = _bottom_tick_labels(axis)
+            assert 3 <= len(labels) <= 10
+            assert getattr(axis, "_tickLevels", None), "bottom axis should be pinned"
+    finally:
+        c.deleteLater()
 
 
 def test_line_canvas_hides_title_rows_and_disables_axis_si_prefix(canvas):
@@ -922,10 +953,11 @@ def test_set_tick_density_accepts_inspector_counts(canvas):
     # same contract as PgHeatmapCanvas.set_tick_density (lesson
     # 2026-06-11-inspector-tick-counts-vs-pg-density-factors).
     canvas.set_tick_density(10, 8)
-    # Bottom (X) axes of BOTH rows still use the density factor. The spectrum
-    # left axis also uses density. The time-preview left axis is now driven by
-    # the shared graticule (n divisions, see _reframe_time_y_to_grid), NOT by
-    # setTickDensity — the Y count drives _time_divisions instead.
+    # With no realized geometry, bottom (X) axes fall back to the density
+    # factor. The spectrum left axis also uses density. The time-preview left
+    # axis is driven by the shared graticule (n divisions, see
+    # _reframe_time_y_to_grid), NOT by setTickDensity — the Y count drives
+    # _time_divisions instead.
     assert canvas._plot_amp.getAxis('bottom')._tickDensity == pytest.approx(10 / 10.0)
     assert canvas._plot_time.getAxis('bottom')._tickDensity == pytest.approx(10 / 10.0)
     assert canvas._plot_amp.getAxis('left')._tickDensity == pytest.approx(8 / 6.0)
@@ -934,6 +966,8 @@ def test_set_tick_density_accepts_inspector_counts(canvas):
 
 def test_set_tick_density_clamps_at_spinbox_maxima(canvas):
     canvas.set_tick_density(30, 20)
+    # Unshown canvases have no usable bottom-axis width, so the X axes keep the
+    # adaptive fallback density and still honor the spinbox maximum.
     assert canvas._plot_amp.getAxis('bottom')._tickDensity == pytest.approx(3.0)
     assert canvas._plot_time.getAxis('bottom')._tickDensity == pytest.approx(3.0)
     assert canvas._plot_amp.getAxis('left')._tickDensity == pytest.approx(3.0)
