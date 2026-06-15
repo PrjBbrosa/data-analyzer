@@ -791,6 +791,24 @@ def test_heatmap_narrow_bottom_ticks_are_pinned_and_fit(qapp):
         c.deleteLater()
 
 
+def test_heatmap_canvas_uses_compact_outer_pg_layout(canvas):
+    layout = canvas._glw.ci.layout
+    assert layout.getContentsMargins() == pytest.approx((2.0, 2.0, 2.0, 2.0))
+    assert layout.horizontalSpacing() == pytest.approx(2.0)
+    assert layout.verticalSpacing() == pytest.approx(2.0)
+
+
+def test_heatmap_slice_canvas_preserves_split_gap(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        layout = c._glw.ci.layout
+        assert layout.getContentsMargins() == pytest.approx((2.0, 2.0, 2.0, 2.0))
+        assert layout.horizontalSpacing() == pytest.approx(2.0)
+        assert layout.verticalSpacing() == pytest.approx(18.0)
+    finally:
+        c.deleteLater()
+
+
 def test_slice_direction_toggle_switches_axis(qapp):
     """The X/Y switch flips the slice between a fixed-time cut (amp vs freq,
     vertical marker) and a fixed-frequency cut (amp vs time, horizontal

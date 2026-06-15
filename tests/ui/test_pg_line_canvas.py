@@ -186,6 +186,15 @@ def test_fft_line_canvas_narrow_bottom_ticks_are_pinned_and_fit(qapp):
         c.deleteLater()
 
 
+def test_fft_line_canvas_uses_compact_outer_pg_layout(canvas):
+    layout = canvas._glw.ci.layout
+    assert layout.getContentsMargins() == pytest.approx((2.0, 2.0, 2.0, 2.0))
+    assert layout.horizontalSpacing() == pytest.approx(2.0)
+    # Keep the deliberate two-row divider gap; this is not TimeDomain's 2px row
+    # spacing.
+    assert layout.verticalSpacing() == pytest.approx(18.0)
+
+
 def test_line_canvas_hides_title_rows_and_disables_axis_si_prefix(canvas):
     canvas.plot_spectra(
         [_entry(), _entry("f2 · vib", "#dc2626")], xlim=(0.0, 500.0),

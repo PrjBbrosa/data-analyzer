@@ -142,6 +142,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         super().__init__(parent)
         self._glw = pg.GraphicsLayoutWidget(self)
         self._glw.setBackground("#ffffff")
+        self._glw.ci.setContentsMargins(2, 2, 2, 2)
+        self._glw.ci.setSpacing(2)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._glw)

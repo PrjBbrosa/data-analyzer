@@ -496,6 +496,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # CHART_FACE; full style parity is arbitrated in the P1 visual
         # acceptance task.
         self._glw.setBackground("#ffffff")
+        self._glw.ci.setContentsMargins(2, 2, 2, 2)
+        self._glw.ci.setSpacing(2)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._glw)
