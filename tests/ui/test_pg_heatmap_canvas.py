@@ -827,6 +827,33 @@ def test_heatmap_bottom_ticks_recompute_after_x_range_change(qapp):
         c.deleteLater()
 
 
+def test_heatmap_tick_density_preserves_manual_x_range(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(360, 620)
+        c.show()
+        qapp.processEvents()
+        c.plot_or_update_heatmap(
+            matrix=_mat(),
+            x_extent=(0.0, 30.0),
+            y_extent=(10.0, 50.0),
+            x_label="Time (s)",
+            y_label="Frequency (Hz)",
+            cbar_label="Amplitude",
+        )
+        c._plot.setXRange(10.0, 20.0, padding=0)
+        qapp.processEvents()
+
+        c.set_tick_density(10, 8)
+        qapp.processEvents()
+
+        x_range, _ = c._plot.vb.viewRange()
+        assert x_range[0] == pytest.approx(10.0)
+        assert x_range[1] == pytest.approx(20.0)
+    finally:
+        c.deleteLater()
+
+
 def test_heatmap_unshown_bottom_ticks_fall_back_to_density():
     c = PgHeatmapCanvas(with_slice=True)
     try:
