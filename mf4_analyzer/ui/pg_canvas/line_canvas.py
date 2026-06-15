@@ -213,6 +213,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._split_title_width = None
         self._spectrum_stale = False
         self._stale_banner = None
+        self._bottom_tick_target = None
+        self._bottom_tick_density = None
 
         # Interactive curve-AA policy (mirrors the time-domain canvas): drop
         # antialiasing while the user pans/zooms so each frame is a cheap
@@ -238,6 +240,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # (geometry on resize, X range on pan/zoom) so the extra Y axes track.
         self._plot_time.vb.sigResized.connect(self._sync_time_overlay_vbs)
         self._plot_time.vb.sigXRangeChanged.connect(self._sync_time_overlay_vbs)
+        for _p in (self._plot_amp, self._plot_time):
+            _p.vb.sigXRangeChanged.connect(self._refresh_bottom_x_ticks)
+            _p.vb.sigResized.connect(self._refresh_bottom_x_ticks)
 
         # Draggable split divider (resize) + drawer-style collapsed rail.
         # Drag the divider near the bottom to collapse the time preview; click
@@ -803,10 +808,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_collapse_ctrl()
+        self._refresh_bottom_x_ticks()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._position_collapse_ctrl()
+        self._refresh_bottom_x_ticks()
 
     def has_result(self) -> bool:
         return bool(self._entries)
@@ -818,12 +825,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         except (TypeError, ValueError):
             return
         x_d, y_d = _tick_counts_to_density(x_n, y_n)
-        # Bottom X axes use TimeDomain-style target-count ticks once the plot
-        # geometry is realized; before layout, fall back to native density.
-        for plot in (self._plot_amp, self._plot_time):
-            bottom = plot.getAxis('bottom')
-            if not _apply_target_bottom_ticks(bottom, plot.vb, x_n):
-                _apply_axis_tick_density(bottom, x_d)
+        self._bottom_tick_target = x_n
+        self._bottom_tick_density = x_d
+        self._refresh_bottom_x_ticks()
         # Spectrum Y keeps plain density. Time-preview Y drives the shared
         # graticule divisions so the left axis AND every aux right axis re-tick
         # together (fixes "Y tick density had no effect on the right axes").
@@ -831,6 +835,18 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._time_divisions = max(3, min(20, y_n))
         self._reframe_time_y_to_grid()
         self.layout_geometry_changed.emit()
+
+    def _refresh_bottom_x_ticks(self, *_args) -> None:
+        if self._bottom_tick_target is None or self._bottom_tick_density is None:
+            return
+        # Bottom X axes use TimeDomain-style target-count ticks once the plot
+        # geometry is realized; before layout, fall back to native density.
+        for plot in (self._plot_amp, self._plot_time):
+            bottom = plot.getAxis('bottom')
+            if not _apply_target_bottom_ticks(
+                bottom, plot.vb, self._bottom_tick_target, self
+            ):
+                _apply_axis_tick_density(bottom, self._bottom_tick_density)
 
     # ------------------------------------------------------------------
     def select_time_entry(self, idx) -> None:

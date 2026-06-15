@@ -102,6 +102,13 @@ def _bottom_tick_labels(axis):
     return [str(label) for _value, label in levels[0]]
 
 
+def _bottom_tick_values(axis):
+    levels = getattr(axis, "_tickLevels", None)
+    if not levels:
+        return []
+    return [float(value) for value, _label in levels[0]]
+
+
 def test_plot_spectra_single_entry(canvas):
     canvas.plot_spectra(
         [_entry()], xlim=(0.0, 500.0),
@@ -182,6 +189,75 @@ def test_fft_line_canvas_narrow_bottom_ticks_are_pinned_and_fit(qapp):
             labels = _bottom_tick_labels(axis)
             assert 3 <= len(labels) <= 10
             assert getattr(axis, "_tickLevels", None), "bottom axis should be pinned"
+    finally:
+        c.deleteLater()
+
+
+def test_fft_line_canvas_bottom_ticks_recompute_after_x_range_change(qapp):
+    c = PgLineCanvas()
+    try:
+        c.resize(360, 620)
+        c.show()
+        qapp.processEvents()
+        c.plot_spectra(
+            [_entry()],
+            xlim=(0.0, 500.0),
+            amp_label="Amplitude",
+            title="FFT",
+        )
+        c.set_tick_density(10, 8)
+        qapp.processEvents()
+
+        c._plot_amp.setXRange(100.0, 200.0, padding=0)
+        qapp.processEvents()
+
+        values = _bottom_tick_values(c._plot_amp.getAxis("bottom"))
+        assert values
+        assert min(values) >= 100.0 - 1e-6
+        assert max(values) <= 200.0 + 1e-6
+    finally:
+        c.deleteLater()
+
+
+def test_fft_line_canvas_tick_density_preserves_manual_x_range(qapp):
+    c = PgLineCanvas()
+    try:
+        c.resize(360, 620)
+        c.show()
+        qapp.processEvents()
+        c.plot_spectra(
+            [_entry()],
+            xlim=(0.0, 500.0),
+            amp_label="Amplitude",
+            title="FFT",
+        )
+        c._plot_amp.setXRange(100.0, 200.0, padding=0)
+        qapp.processEvents()
+
+        c.set_tick_density(10, 8)
+        qapp.processEvents()
+
+        x_range, _ = c._plot_amp.vb.viewRange()
+        assert x_range[0] == pytest.approx(100.0)
+        assert x_range[1] == pytest.approx(200.0)
+    finally:
+        c.deleteLater()
+
+
+def test_fft_line_canvas_unshown_bottom_ticks_fall_back_to_density():
+    c = PgLineCanvas()
+    try:
+        c.plot_spectra(
+            [_entry()],
+            xlim=(0.0, 500.0),
+            amp_label="Amplitude",
+            title="FFT",
+        )
+        c.set_tick_density(10, 8)
+
+        for plot in (c._plot_amp, c._plot_time):
+            axis = plot.getAxis("bottom")
+            assert not getattr(axis, "_tickLevels", None)
     finally:
         c.deleteLater()
 
