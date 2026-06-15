@@ -1777,6 +1777,39 @@ def test_bottom_hint_bar_anchor_leads_each_section(qapp):
         assert pool[0].text == anchors[mode], (mode, pool[0].id)
 
 
+def test_bottom_hint_bar_rotating_row_geometry_stays_anchored(qapp):
+    """Long/short rotating hints should elide in place, not push the right slot."""
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    try:
+        cs.resize(760, 520)
+        cs.show()
+        cs.set_mode("fft")
+        qapp.processEvents()
+        card = cs._fft_card
+        bar = card._hint_bar
+        card._hint_discovery.setText("右侧发现提示")
+
+        def _positions(text):
+            card._hint_context.setText(text)
+            bar.layout().activate()
+            qapp.processEvents()
+            context = card._hint_context.geometry()
+            discovery = card._hint_discovery.geometry()
+            return context.left(), context.right(), discovery.left(), discovery.right()
+
+        short = _positions("短提示")
+        long = _positions(
+            "这是一条很长的轮播提示，用来确认文字变长时左侧锚点不跳动"
+        )
+
+        assert long[0] == short[0]
+        assert long[3] == short[3]
+        assert long[1] < long[2]
+    finally:
+        cs.deleteLater()
+
+
 def test_bottom_hint_bar_context_subplot_default_comes_from_registry(qapp):
     """Default TimeDomain state is subplot; the rotating row leads with the line
     base-gesture anchor and the subplot wheel tip is next in the lap."""
