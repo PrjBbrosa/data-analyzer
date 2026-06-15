@@ -82,6 +82,18 @@ def _mat():
     return m
 
 
+def _axis_font_family_size(axis):
+    font = axis.style.get("tickFont")
+    label = getattr(axis, "label", None)
+    label_font = label.font() if label is not None else None
+    return (
+        font.family() if font is not None else None,
+        font.pointSizeF() if font is not None else None,
+        label_font.family() if label_font is not None else None,
+        label_font.pointSizeF() if label_font is not None else None,
+    )
+
+
 def test_linear_mode_levels_auto(canvas):
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
@@ -690,6 +702,52 @@ def test_plot_result_without_slice_flag_has_no_slice_row(qapp):
     c = PgHeatmapCanvas(with_slice=False)
     assert not hasattr(c, '_slice_curve') or c._slice_curve is None
     c.deleteLater()
+
+
+def test_heatmap_axes_use_time_domain_chart_font(canvas):
+    from mf4_analyzer.ui.pg_canvas.fonts import _pg_chart_font
+
+    expected = _pg_chart_font(9)
+    for side in ("left", "bottom"):
+        family, size, label_family, label_size = _axis_font_family_size(
+            canvas._plot.getAxis(side)
+        )
+        assert family == expected.family()
+        assert size == pytest.approx(9.0)
+        assert label_family == expected.family()
+        assert label_size == pytest.approx(9.0)
+
+
+def test_heatmap_slice_and_colorbar_axes_use_chart_font(qapp):
+    from mf4_analyzer.ui.pg_canvas.fonts import _pg_chart_font
+
+    expected = _pg_chart_font(9)
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.plot_or_update_heatmap(
+            matrix=_mat(),
+            x_extent=(0.0, 1.0),
+            y_extent=(10.0, 50.0),
+            x_label="Time (s)",
+            y_label="Frequency (Hz)",
+            cbar_label="Amplitude",
+        )
+        c.select_time_index(2)
+
+        axes = [
+            c._slice_plot.getAxis("left"),
+            c._slice_plot.getAxis("bottom"),
+            c._cbar.getAxis("left"),
+            c._cbar.getAxis("right"),
+        ]
+        for axis in axes:
+            family, size, label_family, label_size = _axis_font_family_size(axis)
+            assert family == expected.family()
+            assert size == pytest.approx(9.0)
+            assert label_family == expected.family()
+            assert label_size == pytest.approx(9.0)
+    finally:
+        c.deleteLater()
 
 
 def test_slice_direction_toggle_switches_axis(qapp):

@@ -42,6 +42,7 @@ from mf4_analyzer.ui.pg_canvas._split_mixin import (
     _SplitDivider,
     _StackedSplitMixin,
 )
+from mf4_analyzer.ui.pg_canvas.fonts import _apply_pg_axis_font
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
 
 
@@ -272,6 +273,7 @@ def _apply_neutral_axis_frame(plot) -> None:
             axis.enableAutoSIPrefix(False)
         except Exception:
             pass
+        _apply_pg_axis_font(axis)
         axis.setPen(frame_pen)
         if side in ('left', 'bottom'):
             # 2026-06-13: major grid only. pyqtgraph's default maxTickLevel
@@ -1439,6 +1441,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         else:
             self._cbar.setColorMap(cm)
             self._cbar.getAxis('left').setLabel(cbar_label)
+        _apply_pg_axis_font(self._cbar.getAxis('left'))
+        _apply_pg_axis_font(self._cbar.getAxis('right'))
         return self._cbar
 
     def apply_split_layout_alignment(

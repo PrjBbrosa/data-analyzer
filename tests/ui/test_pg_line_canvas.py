@@ -83,6 +83,18 @@ def _entry(label='f1 · vib', color='#2563eb'):
             'amp': amp, 'time': time, 'signal': signal}
 
 
+def _axis_font_family_size(axis):
+    font = axis.style.get("tickFont")
+    label = getattr(axis, "label", None)
+    label_font = label.font() if label is not None else None
+    return (
+        font.family() if font is not None else None,
+        font.pointSizeF() if font is not None else None,
+        label_font.family() if label_font is not None else None,
+        label_font.pointSizeF() if label_font is not None else None,
+    )
+
+
 def test_plot_spectra_single_entry(canvas):
     canvas.plot_spectra(
         [_entry()], xlim=(0.0, 500.0),
@@ -99,6 +111,48 @@ def test_plot_spectra_single_entry(canvas):
     assert len(tx) == 1000
     assert len(ty) == 1000
     assert canvas._plot_time.getAxis('bottom').labelText == 'Time (s)'
+
+
+def test_fft_line_canvas_axes_use_time_domain_chart_font(canvas):
+    from mf4_analyzer.ui.pg_canvas.fonts import _pg_chart_font
+
+    expected = _pg_chart_font(9)
+    canvas.plot_spectra(
+        [_entry()],
+        xlim=(0.0, 500.0),
+        amp_label="Amplitude",
+        title="FFT",
+    )
+
+    for plot in (canvas._plot_amp, canvas._plot_time):
+        for side in ("left", "bottom"):
+            family, size, label_family, label_size = _axis_font_family_size(
+                plot.getAxis(side)
+            )
+            assert family == expected.family()
+            assert size == pytest.approx(9.0)
+            assert label_family == expected.family()
+            assert label_size == pytest.approx(9.0)
+
+
+def test_fft_time_preview_aux_axes_use_chart_font(canvas):
+    from mf4_analyzer.ui.pg_canvas.fonts import _pg_chart_font
+
+    expected = _pg_chart_font(9)
+    canvas.plot_spectra(
+        [_entry("a", "#2563eb"), _entry("b", "#dc2626")],
+        xlim=(0.0, 500.0),
+        amp_label="Amplitude",
+        title="FFT",
+    )
+
+    assert canvas._time_overlay_axes
+    for axis in canvas._time_overlay_axes:
+        family, size, label_family, label_size = _axis_font_family_size(axis)
+        assert family == expected.family()
+        assert size == pytest.approx(9.0)
+        assert label_family == expected.family()
+        assert label_size == pytest.approx(9.0)
 
 
 def test_line_canvas_hides_title_rows_and_disables_axis_si_prefix(canvas):

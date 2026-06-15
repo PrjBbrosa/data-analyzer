@@ -28,6 +28,7 @@ from .heatmap_canvas import (
     _visual_padded_bounds,
 )
 from .context_menu import redesign_pg_context_menu
+from .fonts import _apply_pg_axis_font
 from ._shared import show_major_grid_left_bottom_only
 from ._split_mixin import (
     _CollapsedRail,
@@ -869,6 +870,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         curve. ``position`` is the 1-based overlay slot (2nd curve → 1, …)."""
         aux_vb = pg.ViewBox()
         axis = pg.AxisItem('right')
+        _apply_pg_axis_font(axis)
         # Frame line stays neutral; the tick TEXT follows the curve colour so a
         # glance maps each right axis to its trace (no channel-name clutter).
         axis.setPen(pg.mkPen(color=PG_AXIS_NEUTRAL_COLOR, width=PG_AXIS_NEUTRAL_WIDTH))
