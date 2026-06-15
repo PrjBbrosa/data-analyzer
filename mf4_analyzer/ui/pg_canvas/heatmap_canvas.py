@@ -14,10 +14,9 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
+from PyQt5.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QPainter, QPixmap
 from PyQt5.QtWidgets import (
-    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -31,6 +30,15 @@ from mf4_analyzer.ui._axis_handle import (
 )
 from mf4_analyzer.ui.pg_canvas.context_menu import redesign_pg_context_menu
 from mf4_analyzer.ui.pg_canvas._shared import _hide_native_auto_button
+from mf4_analyzer.ui.pg_canvas._split_mixin import (
+    _CollapsedRail,
+    _SPLIT_COLLAPSE_AT,
+    _SPLIT_MIN_BOTTOM,
+    _SPLIT_MIN_TOP,
+    _SPLIT_ROW_SPACING,
+    _SplitDivider,
+    _StackedSplitMixin,
+)
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
 
 
@@ -81,237 +89,6 @@ class _SliceDirToggle(QWidget):
     def _sync_buttons(self):
         self._btn_x.setChecked(self._dir == 'x')
         self._btn_y.setChecked(self._dir == 'y')
-
-
-# Minimum PlotItem heights enforced while dragging the split divider, so a drag
-# can never fully starve either plot (full collapse is the triangle's job).
-_SPLIT_MIN_TOP = 90
-_SPLIT_MIN_BOTTOM = 70
-# Vertical gap between the two stacked plots — wide enough for the divider line
-# to read as a separator in clear whitespace (not merged with the plot frames).
-_SPLIT_ROW_SPACING = 18
-
-
-class _SplitDivider(QWidget):
-    """Thin draggable horizontal divider drawn on the boundary between two
-    stacked plots. It paints a 1px line across its width (set to the data-area
-    width so it never crosses the collapse triangle in the left gutter), drags
-    to resize the two plots, and resets to the default split on double-click.
-
-    ``drag_started`` fires on press, ``drag_delta`` emits the pixels moved since
-    press (positive = dragged up = bottom grows), ``drag_finished`` on release,
-    and ``reset_requested`` on double-click."""
-
-    drag_started = pyqtSignal()
-    drag_delta = pyqtSignal(int)
-    drag_finished = pyqtSignal()
-    reset_requested = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("plotSplitDivider")
-        self.setFixedHeight(9)
-        self.setCursor(Qt.SizeVerCursor)
-        self._press_y = None
-
-    def _hot(self):
-        return self._press_y is not None or self.underMouse()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        try:
-            y = self.height() / 2.0
-            hot = self._hot()
-            color = QColor("#2563eb") if hot else QColor("#c7d2e2")
-            painter.setPen(QPen(color, 2.0 if hot else 1.0))
-            painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
-        finally:
-            painter.end()
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self._press_y = e.globalPos().y()
-            self.update()
-            self.drag_started.emit()
-            e.accept()
-            return
-        super().mousePressEvent(e)
-
-    def mouseMoveEvent(self, e):
-        if self._press_y is not None:
-            self.drag_delta.emit(int(self._press_y - e.globalPos().y()))
-            e.accept()
-            return
-        super().mouseMoveEvent(e)
-
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.LeftButton and self._press_y is not None:
-            self._press_y = None
-            self.update()
-            self.drag_finished.emit()
-            e.accept()
-            return
-        super().mouseReleaseEvent(e)
-
-    def mouseDoubleClickEvent(self, e):
-        self.reset_requested.emit()
-        e.accept()
-
-    def enterEvent(self, e):
-        self.update()
-        super().enterEvent(e)
-
-    def leaveEvent(self, e):
-        self.update()
-        super().leaveEvent(e)
-
-
-# Bottom-plot height (px) below which a divider drag collapses the lower plot
-# instead of clamping — the vertical analog of SidePanelController.COLLAPSE_THRESHOLD.
-_SPLIT_COLLAPSE_AT = 40
-
-
-class _CollapsedRail(QFrame):
-    """Thin horizontal rail shown at the canvas bottom when the lower plot is
-    folded away — the vertical analog of side_panels.SidePanelStrip. Paints a
-    small gray ▴; left-click re-expands the bottom plot. Laid out by the canvas
-    QVBoxLayout (below the GraphicsLayoutWidget); hidden => occupies 0 height,
-    so it never overlaps the top plot's bottom axis."""
-
-    expand_requested = pyqtSignal()
-    HEIGHT_PX = 14
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("plotCollapsedRail")
-        self.setFixedHeight(self.HEIGHT_PX)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("展开下图")
-        self._hover = False
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self.expand_requested.emit()
-            e.accept()
-            return
-        super().mousePressEvent(e)
-
-    def enterEvent(self, e):
-        self._hover = True
-        self.update()
-        super().enterEvent(e)
-
-    def leaveEvent(self, e):
-        self._hover = False
-        self.update()
-        super().leaveEvent(e)
-
-    def paintEvent(self, event):
-        super().paintEvent(event)  # QSS faint bg + top border
-        painter = QPainter(self)
-        try:
-            painter.setRenderHint(QPainter.Antialiasing, True)
-            color = QColor("#2563eb") if self._hover else QColor("#7b8699")
-            cx, cy = self.width() / 2.0, self.height() / 2.0
-            hw, hh = 5.0, 3.0
-            pts = [QPointF(cx, cy - hh), QPointF(cx + hw, cy + hh),
-                   QPointF(cx - hw, cy + hh)]  # ▴ apex up
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(color)
-            painter.drawPolygon(QPolygonF(pts))
-        finally:
-            painter.end()
-
-
-def _position_collapse_layout(rail, divider, top_plot, bottom_plot, collapsed):
-    """Drawer-style placement: when collapsed, hide the divider and surface the
-    bottom rail (the rail is laid out by the canvas QVBoxLayout, so it only
-    needs show + raise); when expanded, hide the rail and place the draggable
-    divider on the gap between the two plots (data-area width)."""
-    if collapsed:
-        if divider is not None:
-            divider.hide()
-        if rail is not None:
-            rail.setVisible(True)
-            rail.raise_()
-        return
-    if rail is not None:
-        rail.setVisible(False)
-    if divider is None:
-        return
-    try:
-        vb = top_plot.vb.sceneBoundingRect()
-    except Exception:
-        return
-    try:
-        boundary_y = _split_boundary_y(top_plot, bottom_plot, False)
-    except Exception:
-        boundary_y = float(vb.bottom())
-    parent = divider.parentWidget()
-    width = int(parent.width()) if parent is not None else int(vb.width())
-    if not top_plot.isVisible() or width <= 0:
-        divider.hide()
-        return
-    divider.setFixedWidth(width)
-    divider.move(0, max(0, int(boundary_y - divider.height() / 2)))
-    divider.show()
-    divider.raise_()
-
-
-def _apply_plot_collapse(top_plot, bottom_plot, state, bottom_default_max):
-    """Collapse one of two stacked plots by toggling row heights (keeps the
-    shared GraphicsLayout scene intact — no QSplitter restructure)."""
-    big = 100000
-    if state == 'top':
-        top_plot.setMaximumHeight(0)
-        top_plot.setVisible(False)
-        bottom_plot.setVisible(True)
-        bottom_plot.setMaximumHeight(big)
-    elif state == 'bottom':
-        bottom_plot.setMaximumHeight(0)
-        bottom_plot.setVisible(False)
-        top_plot.setVisible(True)
-        top_plot.setMaximumHeight(big)
-    else:
-        top_plot.setVisible(True)
-        top_plot.setMaximumHeight(big)
-        bottom_plot.setVisible(True)
-        bottom_plot.setMaximumHeight(int(bottom_default_max))
-
-
-def _available_split_height(canvas) -> float:
-    """Total height the two stacked plots share — used to clamp the drag so the
-    top plot can't be starved below ``_SPLIT_MIN_TOP``."""
-    glw = getattr(canvas, '_glw', None)
-    if glw is not None:
-        try:
-            h = float(glw.viewport().height())
-            if h > 0:
-                return h
-        except Exception:
-            pass
-    try:
-        return float(canvas.height())
-    except Exception:
-        return 0.0
-
-
-def _clamp_bottom_split(value, total) -> float:
-    """Clamp the bottom plot height to [MIN_BOTTOM, total - MIN_TOP]."""
-    hi = max(float(_SPLIT_MIN_BOTTOM), float(total) - _SPLIT_MIN_TOP)
-    return max(float(_SPLIT_MIN_BOTTOM), min(hi, float(value)))
-
-
-def _split_boundary_y(top_plot, bottom_plot, collapsed) -> float:
-    """Y of the divider/triangle: the centre of the white gap BETWEEN the two
-    PlotItems (so the line sits in the gap, not on the top plot's axis frame).
-    When the bottom plot is folded away, fall back to the full top plot's
-    data-frame bottom."""
-    if collapsed or bottom_plot is None:
-        return float(top_plot.vb.sceneBoundingRect().bottom())
-    top_b = float(top_plot.sceneBoundingRect().bottom())
-    bot_t = float(bottom_plot.sceneBoundingRect().top())
-    return (top_b + bot_t) / 2.0
 
 
 def _resolve_colormap(name: str) -> pg.ColorMap:
@@ -576,7 +353,7 @@ class _SmoothImageItem(pg.ImageItem):
             painter.setRenderHint(QPainter.SmoothPixmapTransform, previous)
 
 
-class PgHeatmapCanvas(QWidget):
+class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     cursor_info = pyqtSignal(str)
     context_menu_requested = pyqtSignal()
     # Emitted when the user drags the interactive colorbar (lo, hi).
@@ -1455,85 +1232,34 @@ class PgHeatmapCanvas(QWidget):
         self._slice_panel.show()
         self._slice_panel.raise_()
 
-    def _set_bottom_collapsed(self, collapsed: bool) -> None:
-        if self._slice_plot is None:
-            return
-        self._bottom_collapsed = bool(collapsed)
-        if not self._bottom_collapsed:
-            # Expand always returns to the DEFAULT height (confirmed product
-            # decision). A near-collapse drag floor-clamps _bottom_split_h to
-            # _SPLIT_MIN_BOTTOM in its last pre-fold steps, so reading the
-            # remembered value here would restore the slice at half height;
-            # reset to the default before applying so the row comes back full
-            # size. Double-click reset (_on_split_reset) is a separate path
-            # that already restores the default.
-            self._bottom_split_h = float(self._bottom_split_default)
-        state = 'bottom' if self._bottom_collapsed else 'none'
-        _apply_plot_collapse(self._plot, self._slice_plot, state,
-                             self._bottom_split_h)
+    def _split_top_plot(self):
+        return self._plot
+
+    def _split_bottom_plot(self):
+        return self._slice_plot
+
+    def _after_split_collapse_changed(self) -> None:
         if self._slice_panel is not None:
             self._slice_panel.setVisible(not self._bottom_collapsed)
-        self._position_collapse_ctrl()
         if not self._bottom_collapsed:
             self._align_slice_to_main()
             self._position_slice_panel()
-        self.layout_geometry_changed.emit()
 
-    def _on_collapse_changed(self, state) -> None:
-        # Compat entry (programmatic / tests): 'bottom' collapses, else expands.
-        self._set_bottom_collapsed(state == 'bottom')
-
-    def _position_collapse_ctrl(self, *_args) -> None:
-        _position_collapse_layout(
-            getattr(self, '_collapsed_rail', None),
-            getattr(self, '_split_divider', None),
-            self._plot, self._slice_plot,
-            getattr(self, '_bottom_collapsed', False))
-
-    def _position_split_divider(self, *_args) -> None:
-        self._position_collapse_ctrl()
-
-    # ---- split-divider drag (resize) / double-click (reset) --------------
-    def _available_split_height(self) -> float:
-        return _available_split_height(self)
-
-    def _on_split_drag_started(self) -> None:
-        self._drag_start_bottom_h = float(self._bottom_split_h)
-
-    def _on_split_drag_delta(self, delta) -> None:
-        if self._slice_plot is None:
-            return
-        raw = self._drag_start_bottom_h + delta
-        if raw <= _SPLIT_COLLAPSE_AT:
-            self._set_bottom_collapsed(True)
-            return
-        self._bottom_split_h = _clamp_bottom_split(
-            raw, self._available_split_height())
-        self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
-        self._position_collapse_ctrl()
-        self._position_split_divider()
+    def _after_split_height_changed(self) -> None:
         self._position_slice_panel()
-        self.layout_geometry_changed.emit()
 
-    def _on_split_drag_finished(self) -> None:
+    def _after_split_drag_finished(self) -> bool:
         # Single pane self-aligns; in split mode the page owns alignment, so
-        # just notify it via layout_geometry_changed (emitted below).
+        # the shared layout_geometry_changed signal asks the page to align it.
         if not self._split_aligned:
             self._align_slice_to_main()
             self._position_slice_panel()
-        self._position_split_divider()
-        self.layout_geometry_changed.emit()
+        return True
 
-    def _on_split_reset(self) -> None:
-        self._bottom_split_h = float(self._bottom_split_default)
-        if not self._bottom_collapsed and self._slice_plot is not None:
-            self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
-        self._position_collapse_ctrl()
-        self._position_split_divider()
+    def _after_split_reset(self) -> None:
         if not self._split_aligned:
             self._align_slice_to_main()
             self._position_slice_panel()
-        self.layout_geometry_changed.emit()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1543,7 +1269,6 @@ class PgHeatmapCanvas(QWidget):
         # to avoid transiently fighting the shared split reserve.
         self._position_slice_panel()
         self._position_collapse_ctrl()
-        self._position_split_divider()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1552,7 +1277,6 @@ class PgHeatmapCanvas(QWidget):
         self._align_slice_to_main()
         self._position_slice_panel()
         self._position_collapse_ctrl()
-        self._position_split_divider()
         # First-show left-axis unification: on the FIRST entry the eager
         # alignment above runs before the on-screen GraphicsLayout geometry /
         # tick-label widths are realized, so _unify_stacked_left_axes measures

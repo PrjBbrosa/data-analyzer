@@ -23,19 +23,17 @@ from mf4_analyzer.ui.canvases import build_envelope
 
 from .heatmap_canvas import (
     _apply_neutral_axis_frame,
-    _apply_plot_collapse,
-    _available_split_height,
-    _clamp_bottom_split,
-    _CollapsedRail,
     _make_analysis_plot,
-    _position_collapse_layout,
-    _SPLIT_COLLAPSE_AT,
-    _SPLIT_ROW_SPACING,
-    _SplitDivider,
     _tick_counts_to_density,
     _visual_padded_bounds,
 )
 from .context_menu import redesign_pg_context_menu
+from ._split_mixin import (
+    _CollapsedRail,
+    _SPLIT_ROW_SPACING,
+    _SplitDivider,
+    _StackedSplitMixin,
+)
 from .ticks_math import _frame_to_nice, _fmt_tick
 from .viewbox import _ModifierWheelViewBox
 
@@ -125,7 +123,7 @@ class _HistoryHandle:
         # with_y=False (__time__): intentionally a no-op — see class docstring.
 
 
-class PgLineCanvas(QWidget):
+class PgLineCanvas(_StackedSplitMixin, QWidget):
     cursor_info = pyqtSignal(str)
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
@@ -794,76 +792,19 @@ class PgLineCanvas(QWidget):
     # ------------------------------------------------------------------
     # collapse divider (spectrum vs time-preview)
     # ------------------------------------------------------------------
-    def _set_bottom_collapsed(self, collapsed: bool) -> None:
-        self._bottom_collapsed = bool(collapsed)
-        if not self._bottom_collapsed:
-            # Expand always returns to the DEFAULT height (confirmed product
-            # decision). A near-collapse drag floor-clamps _bottom_split_h to
-            # _SPLIT_MIN_BOTTOM in its last pre-fold steps, so reading the
-            # remembered value here would restore the time preview at half
-            # height; reset to the default before applying so the row comes
-            # back full size. Double-click reset (_on_split_reset) already
-            # restores the default by its own path.
-            self._bottom_split_h = float(self._bottom_split_default)
-        state = 'bottom' if self._bottom_collapsed else 'none'
-        _apply_plot_collapse(self._plot_amp, self._plot_time, state,
-                             self._bottom_split_h)
-        self._position_collapse_ctrl()
-        self.layout_geometry_changed.emit()
+    def _split_top_plot(self):
+        return self._plot_amp
 
-    def _on_collapse_changed(self, state) -> None:
-        # Compat entry (programmatic / tests): 'bottom' collapses, else expands.
-        self._set_bottom_collapsed(state == 'bottom')
-
-    def _position_collapse_ctrl(self, *_args) -> None:
-        _position_collapse_layout(
-            getattr(self, '_collapsed_rail', None),
-            getattr(self, '_split_divider', None),
-            self._plot_amp, self._plot_time,
-            getattr(self, '_bottom_collapsed', False))
-
-    def _position_split_divider(self, *_args) -> None:
-        self._position_collapse_ctrl()
-
-    # ---- split-divider drag (resize) / double-click (reset) --------------
-    def _available_split_height(self) -> float:
-        return _available_split_height(self)
-
-    def _on_split_drag_started(self) -> None:
-        self._drag_start_bottom_h = float(self._bottom_split_h)
-
-    def _on_split_drag_delta(self, delta) -> None:
-        raw = self._drag_start_bottom_h + delta
-        if raw <= _SPLIT_COLLAPSE_AT:
-            self._set_bottom_collapsed(True)
-            return
-        self._bottom_split_h = _clamp_bottom_split(
-            raw, self._available_split_height())
-        self._plot_time.setMaximumHeight(int(self._bottom_split_h))
-        self._position_collapse_ctrl()
-        self._position_split_divider()
-        self.layout_geometry_changed.emit()
-
-    def _on_split_drag_finished(self) -> None:
-        self._position_split_divider()
-
-    def _on_split_reset(self) -> None:
-        self._bottom_split_h = float(self._bottom_split_default)
-        if not self._bottom_collapsed:
-            self._plot_time.setMaximumHeight(int(self._bottom_split_h))
-        self._position_collapse_ctrl()
-        self._position_split_divider()
-        self.layout_geometry_changed.emit()
+    def _split_bottom_plot(self):
+        return self._plot_time
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_collapse_ctrl()
-        self._position_split_divider()
 
     def showEvent(self, event):
         super().showEvent(event)
         self._position_collapse_ctrl()
-        self._position_split_divider()
 
     def has_result(self) -> bool:
         return bool(self._entries)
