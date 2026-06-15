@@ -1211,6 +1211,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 self._slice_plot.vb.autoRange()
             except Exception:
                 pass
+            self._slice_plot.enableAutoRange(axis='x')
             self._slice_plot.setLabel('bottom', self._y_label or 'Frequency (Hz)')
             self._slice_marker.setAngle(90)
             self._slice_marker.setValue(float(xc[idx]))
