@@ -25,6 +25,13 @@ class _ElidedLabel(QLabel):
         self._full_text = text or ""
         self._apply_elided()
 
+    def full_text(self):
+        """The complete (un-elided) string last assigned via ``setText``.
+
+        ``text()`` returns the possibly-elided string actually painted; callers
+        and tests that need the logical value should read this instead."""
+        return self._full_text
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_elided()

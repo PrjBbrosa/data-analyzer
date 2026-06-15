@@ -31,10 +31,13 @@ def test_context_hints_filter_by_mode_and_tier_priority():
 
 
 def test_context_hints_filter_special_chart_modes_and_requirements():
+    # FFT-vs-Time keeps the slice hint as its lead context hint; the redesign
+    # adds spectrogram colorbar/divider tips that also surface on this section.
     fft_time = HintState(mode="fft_time", chart_kind="fft_time")
-    assert [hint.id for hint in hints.context_hints(fft_time)] == [
-        "spectrogram.slice",
-    ]
+    fft_time_ids = [hint.id for hint in hints.context_hints(fft_time)]
+    assert fft_time_ids[0] == "spectrogram.slice"
+    assert "spectrogram.colorbar_scale" in fft_time_ids
+    assert "spectrogram.divider" in fft_time_ids
 
     order_without_annotation = HintState(mode="order", chart_kind="order")
     assert "annotation.mode" not in {
@@ -46,9 +49,13 @@ def test_context_hints_filter_special_chart_modes_and_requirements():
         chart_kind="order",
         annotation_on=True,
     )
-    assert [hint.id for hint in hints.context_hints(order_with_annotation)] == [
-        "annotation.mode",
+    # Annotation mode surfaces the add/delete hint; the redesign keeps it as the
+    # lead while also offering the order slice + spectrogram tips on this section.
+    order_annot_ids = [
+        hint.id for hint in hints.context_hints(order_with_annotation)
     ]
+    assert order_annot_ids[0] == "annotation.mode"
+    assert "order.slice" in order_annot_ids
 
 
 def test_context_hints_suppress_recently_used_ids():
@@ -139,6 +146,74 @@ def test_markup_scope_discovery_returns_then_retires_capabilities():
     assert hints.discovery_hint(fresh, scope="markup").id == "markup.capabilities"
     retired = HintState(discovered=frozenset({"markup.capabilities"}))
     assert hints.discovery_hint(retired, scope="markup") is None
+
+
+def test_legacy_hints_dwell_defaults_derive_from_priority():
+    # No legacy hint sets dwell_ms/weight explicitly, so they must fall back to
+    # the priority-derived defaults (behavior-preserving for the original 15).
+    for hint in hints.all_hints():
+        if hint.id.startswith("anchor."):
+            continue  # anchors deliberately set explicit dwell/weight
+        if hint.dwell_ms is None:
+            expected = 4000 + max(0, hint.priority) * 80
+            expected = max(3500, min(13000, expected))
+            assert hint.effective_dwell_ms() == expected
+        if hint.weight is None:
+            assert hint.base_weight() == hint.priority
+
+
+def test_rotation_pool_anchor_leads_each_section():
+    # Line sections (time/fft) lead with the Ctrl/Shift wheel anchor; heatmap
+    # sections (fft_time/order) lead with the slice/colorbar anchor.
+    for mode, chart_kind, plot_mode, lead in [
+        ("time", "time", "subplot", "anchor.line_wheel"),
+        ("fft", "fft", "", "anchor.line_wheel"),
+        ("fft_time", "fft_time", "", "anchor.heatmap_gesture"),
+        ("order", "order", "", "anchor.heatmap_gesture"),
+    ]:
+        state = HintState(mode=mode, chart_kind=chart_kind, plot_mode=plot_mode)
+        rot = hints.rotation_hints(state)
+        assert rot, f"empty rotation pool for {mode}"
+        assert rot[0].id == lead, (mode, [h.id for h in rot])
+        # Anchor lingers longest in the lap.
+        assert hints.rotation_dwell_ms(rot[0]) >= max(
+            hints.rotation_dwell_ms(h) for h in rot
+        )
+
+
+def test_rotation_pool_section_gating_keeps_tips_off_other_pages():
+    time_ids = {h.id for h in hints.rotation_hints(
+        HintState(mode="time", chart_kind="time", plot_mode="subplot")
+    )}
+    assert "order.slice" not in time_ids
+    assert "spectrogram.colorbar_scale" not in time_ids
+    assert "fft.preview_pick_source" not in time_ids
+
+
+def test_rotation_used_tip_drops_but_anchor_only_demotes():
+    used = HintState(
+        mode="order", chart_kind="order",
+        recently_used=frozenset({"order.slice", "anchor.heatmap_gesture"}),
+    )
+    ids = [h.id for h in hints.rotation_hints(used)]
+    assert "order.slice" not in ids  # used tip leaves the lap
+    assert "anchor.heatmap_gesture" in ids  # base gesture stays reachable
+
+
+def test_rotation_discovered_echo_retires_tip_across_sessions():
+    disc = HintState(
+        mode="order", chart_kind="order",
+        discovered=frozenset({"spectrogram.colorbar"}),
+    )
+    ids = [h.id for h in hints.rotation_hints(disc)]
+    assert "spectrogram.colorbar_scale" not in ids
+
+
+def test_flash_tip_registry_has_section_gestures():
+    assert hints.flash_tip("preset.right_click")
+    assert hints.flash_tip("spectrogram.slice_pick")
+    assert hints.flash_tip("fft.preview_source")
+    assert hints.flash_tip("missing.id") is None
 
 
 def test_design_curated_ids_exist_in_registry():

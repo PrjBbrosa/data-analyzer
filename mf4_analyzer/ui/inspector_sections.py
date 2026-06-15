@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (
 from ..ui_kit.icons import Icons
 from ..ui_kit.menus import apply_rounded_menu_chrome
 from ..ui_kit.widgets.searchable_combo import SearchableComboBox
+from . import hints
 from ._axis_defaults import z_range_for
 from .widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 
@@ -800,6 +801,10 @@ class PresetBar(QWidget):
         )
 
     def _show_menu(self, slot, pos):
+        # Record the preset right-click as a discovered gesture (shared default
+        # QSettings, the same set the chart-card hint system reads), so the hint
+        # system can treat "right-click a preset slot" as a learned interaction.
+        hints.mark_discovered(QSettings(), "preset.right_click")
         btn = self._load_btns[slot]
         menu = apply_rounded_menu_chrome(QMenu(self))
         act_save = menu.addAction("保存当前到本槽位")

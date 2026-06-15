@@ -209,6 +209,42 @@ def test_image_rect_matches_extents(canvas):
     assert mapped.bottom() == pytest.approx(9.0)
 
 
+def test_wheel_dispatch_locks_axis_with_modifier(canvas):
+    """Ctrl+wheel zooms X only, Shift+wheel zooms Y only, so the spectrogram
+    matches the chart-card footer hint and the line canvases. A plain wheel is
+    NOT consumed (pyqtgraph keeps its native both-axis zoom)."""
+    vb = canvas._plot.vb
+    vb.setXRange(0.0, 100.0, padding=0)
+    vb.setYRange(0.0, 50.0, padding=0)
+    x0, y0 = vb.viewRange()
+
+    # Ctrl + wheel-up → X shrinks (zoom in), Y unchanged.
+    consumed = canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ControlModifier,
+        x_pos=50.0, y_pos=25.0, view_box=vb,
+    )
+    x1, y1 = vb.viewRange()
+    assert consumed is True
+    assert (x1[1] - x1[0]) < (x0[1] - x0[0])
+    assert (y1[1] - y1[0]) == pytest.approx(y0[1] - y0[0])
+
+    # Shift + wheel-up → Y shrinks, X unchanged.
+    consumed = canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.ShiftModifier,
+        x_pos=50.0, y_pos=25.0, view_box=vb,
+    )
+    x2, y2 = vb.viewRange()
+    assert consumed is True
+    assert (y2[1] - y2[0]) < (y1[1] - y1[0])
+    assert (x2[1] - x2[0]) == pytest.approx(x1[1] - x1[0])
+
+    # Plain wheel (no modifier) → not consumed (native fallback preserved).
+    assert canvas._handle_wheel_dispatch(
+        delta=120, modifiers=Qt.NoModifier,
+        x_pos=50.0, y_pos=25.0, view_box=vb,
+    ) is False
+
+
 def test_has_result_lifecycle(canvas):
     assert not canvas.has_result()
     canvas.plot_or_update_heatmap(

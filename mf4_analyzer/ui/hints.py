@@ -11,6 +11,23 @@ from PyQt5.QtCore import QSettings
 DISCOVERED_SETTINGS_KEY = "chartHints/discovered"
 
 
+# Variable-dwell rotation tuning. The footer shows one rotating hint at a time;
+# higher-priority hints linger longer so the important gestures stay readable
+# while low-frequency tips still get a brief turn each lap.
+_DWELL_BASE_MS = 4000
+_DWELL_PER_PRIORITY_MS = 80
+_DWELL_MIN_MS = 3500
+_DWELL_MAX_MS = 13000
+
+# "The longer you use it, the quieter it gets." A rotating hint whose gesture the
+# user keeps performing loses weight each session-use and is dropped from the
+# pool entirely once it has been used / discovered enough times. recently_used is
+# a session set (no count), so a single repeat demotes; a persisted ``discovered``
+# id (mark_discovered) is treated as a full retirement of its rotating echo.
+_USED_WEIGHT_PENALTY = 60
+_RETIRE_AFTER_USES = 1  # a session-used rotating hint drops out for that session
+
+
 @dataclass(frozen=True)
 class Hint:
     id: str
@@ -27,6 +44,23 @@ class Hint:
     retire_on: str | None = None
     priority: int = 50
     ship: str = "now"
+    # Both optional: when left None they fall back to priority-derived defaults so
+    # every legacy hint keeps its old rotation behavior unchanged.
+    dwell_ms: int | None = None  # how long this hint lingers in the footer
+    weight: int | None = None    # rotation-pool ordering weight (defaults to priority)
+    # When a discovery id retires this rotating hint's "echo" (e.g. the base-gesture
+    # anchor for a capability the user has now exercised), name it here.
+    retire_when_discovered: str | None = None
+
+    def effective_dwell_ms(self) -> int:
+        if self.dwell_ms is not None:
+            base = int(self.dwell_ms)
+        else:
+            base = _DWELL_BASE_MS + max(0, int(self.priority)) * _DWELL_PER_PRIORITY_MS
+        return max(_DWELL_MIN_MS, min(_DWELL_MAX_MS, base))
+
+    def base_weight(self) -> int:
+        return int(self.weight) if self.weight is not None else int(self.priority)
 
 
 @dataclass(frozen=True)
@@ -179,7 +213,114 @@ _HINTS = (
         mouse_modes=frozenset({"zoom"}),
         priority=80,
     ),
+    # ---- Anchor hints (base gestures, folded into the rotation pool) ----
+    # These replace the old static persistent label. They are the longest-dwell,
+    # highest-weight entries so the universal base gesture stays readable on every
+    # lap, while the section text matches what that section's wheel actually does.
+    # Line charts (time + FFT spectrum) honour Ctrl→X / Shift→Y in their wheel
+    # dispatch; the spectrogram heatmaps (FFT-vs-Time / Order) do too once the
+    # heatmap wheel dispatch is wired, but their headline gesture is slice/colorbar.
+    Hint(
+        id="anchor.line_wheel",
+        text="Ctrl / Shift + 滚轮 缩放 X / Y",
+        surface="anchor",
+        modes=frozenset({"time", "fft"}),
+        priority=70,
+        dwell_ms=12000,
+        weight=130,
+    ),
+    Hint(
+        id="anchor.heatmap_gesture",
+        text="点击谱图取切片 · 拖 colorbar 调色阶",
+        surface="anchor",
+        modes=frozenset({"fft_time", "order"}),
+        priority=70,
+        dwell_ms=12000,
+        weight=130,
+    ),
+    # ---- Section-specific hidden-gesture tips ----
+    # Spectrogram (FFT-vs-Time / Order): slice picking, marker drag, colorbar
+    # scaling/reset, and the draggable map/slice divider. Gated to the heatmap
+    # sections so they only surface on the right pages.
+    Hint(
+        id="spectrogram.colorbar_scale",
+        text="拖 colorbar 调色阶范围 · 双击 colorbar 重置",
+        surface="context",
+        tier="A",
+        modes=frozenset({"fft_time", "order"}),
+        chart_kinds=frozenset({"fft_time", "order"}),
+        priority=70,
+        retire_when_discovered="spectrogram.colorbar",
+    ),
+    Hint(
+        id="spectrogram.divider",
+        text="拖上下分隔条调谱图/切片高度 · 双击重置 · 底部可折叠/展开",
+        surface="context",
+        tier="A",
+        modes=frozenset({"fft_time", "order"}),
+        chart_kinds=frozenset({"fft_time", "order"}),
+        priority=60,
+        retire_when_discovered="spectrogram.divider",
+    ),
+    Hint(
+        id="order.slice",
+        text="点击谱图某一时刻 → 查看该阶次切片",
+        surface="context",
+        modes=frozenset({"order"}),
+        chart_kinds=frozenset({"order"}),
+        priority=100,
+        retire_when_discovered="spectrogram.slice_pick",
+    ),
+    # FFT time-domain preview (lives on the FFT spectrum line card, below the
+    # spectrum): click a curve to choose the source, and the preview honours
+    # Ctrl/Shift wheel zoom independently of the spectrum above it.
+    Hint(
+        id="fft.preview_pick_source",
+        text="点击上方频谱曲线 → 选为下方时域预览的源",
+        surface="context",
+        tier="A",
+        modes=frozenset({"fft"}),
+        chart_kinds=frozenset({"fft"}),
+        priority=75,
+        retire_when_discovered="fft.preview_source",
+    ),
+    Hint(
+        id="fft.preview_wheel",
+        text="时域预览图内 Ctrl / Shift + 滚轮 单独缩放预览",
+        surface="context",
+        tier="A",
+        modes=frozenset({"fft"}),
+        chart_kinds=frozenset({"fft"}),
+        priority=55,
+    ),
+    # Annotation gesture, gated on annotation mode, for the FFT-vs-Time + Order
+    # cards as well (the existing annotation.mode hint only covers fft + order).
+    Hint(
+        id="annotation.mode_fft_time",
+        text="左键添加标注 · 右键删除最近一处",
+        surface="context",
+        modes=frozenset({"fft_time"}),
+        requires=frozenset({"annotation_on"}),
+        priority=100,
+    ),
 )
+
+
+# Discovery-style tips that are surfaced by an in-app gesture (mark_discovered /
+# flash) rather than the rotating pool. They live in the registry so the wiring
+# in chart_stack / inspector points at a single source of truth for the text.
+_FLASH_TIPS = {
+    "spectrogram.slice_pick": "已取该帧切片 · 也可拖动切片标记线移动取样位置",
+    "spectrogram.colorbar": "拖 colorbar 调色阶 · 双击 colorbar 可重置范围",
+    "spectrogram.divider": "拖上下分隔条调高度 · 双击重置 · 底部可折叠/展开",
+    "fft.preview_source": "已选为时域预览的源 · 预览图支持 Ctrl/Shift 滚轮独立缩放",
+    "preset.right_click": "预设槽右键可保存 / 重命名 / 重置为默认",
+}
+
+
+def flash_tip(tip_id):
+    """Return the curated flash-tip text for ``tip_id`` (or None)."""
+    return _FLASH_TIPS.get(tip_id)
 
 
 def all_hints():
@@ -200,9 +341,75 @@ def context_hints(state, scope="chart"):
         if hint.surface == "context"
         and hint.scope == scope
         and hint.id not in state.recently_used
+        and not _retired_by_discovery(hint, state)
         and _matches_state(hint, state)
     ]
     return tuple(sorted(matches, key=_context_sort_key))
+
+
+def rotation_hints(state, scope="chart"):
+    """The full footer rotation pool for one lap.
+
+    Merges the per-section ``anchor`` base-gesture hints with the ``context``
+    tips and orders them by effective weight (descending), so the important
+    base gesture leads and lingers while low-frequency tips still get a short
+    turn each lap. The result is single-lap, mode-gated, and decays with use:
+
+    * a context tip whose gesture the user just performed (id in
+      ``recently_used``) drops out for the session;
+    * a context tip whose capability has been discovered across sessions
+      (``retire_when_discovered`` id in ``discovered``) drops out for good;
+    * an ``anchor`` never disappears (the base gesture must stay reachable) but
+      loses weight once used so it rotates to the back of the lap.
+    """
+    pool = []
+    for hint in _HINTS:
+        if hint.scope != scope:
+            continue
+        if hint.surface not in ("anchor", "context"):
+            continue
+        if not _matches_state(hint, state):
+            continue
+        if _retired_by_discovery(hint, state):
+            continue
+        used = hint.id in state.recently_used
+        if used and hint.surface != "anchor":
+            # Used-enough tips drop out of the lap (the system gets quieter as
+            # the user demonstrates the gesture).
+            if _RETIRE_AFTER_USES <= 1:
+                continue
+        pool.append((hint, used))
+    return tuple(
+        hint for hint, _used in sorted(pool, key=_rotation_sort_key)
+    )
+
+
+def rotation_dwell_ms(hint):
+    """Variable dwell for the rotating footer hint (priority-derived default)."""
+    if hint is None:
+        return _DWELL_BASE_MS
+    return hint.effective_dwell_ms()
+
+
+def _effective_rotation_weight(hint, used):
+    weight = hint.base_weight()
+    if used:
+        # Anchors stay in the lap (they reach here only when surface == anchor)
+        # but sink toward the back once their gesture has been performed.
+        weight -= _USED_WEIGHT_PENALTY
+    return weight
+
+
+def _rotation_sort_key(entry):
+    hint, used = entry
+    # Higher weight first; anchors before equal-weight context; stable by id.
+    surface_rank = 0 if hint.surface == "anchor" else 1
+    return (-_effective_rotation_weight(hint, used), surface_rank, hint.id)
+
+
+def _retired_by_discovery(hint, state):
+    echo = getattr(hint, "retire_when_discovered", None)
+    return bool(echo) and echo in state.discovered
 
 
 def discovery_hint(state, scope="chart"):

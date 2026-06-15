@@ -490,6 +490,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # Emitted after labels/ticks/title/colorbar changes that can resize the
     # pyqtgraph layout. Analysis split pages coalesce this and align panes.
     layout_geometry_changed = pyqtSignal()
+    # Hidden-gesture discovery signals. The chart card connects these to the
+    # hint system (mark_discovered / flash) so the matching rotating-pool tip
+    # retires once the user has performed the gesture for the first time.
+    slice_picked = pyqtSignal()       # user clicked the map to position a slice
+    divider_adjusted = pyqtSignal()   # user dragged / reset the map↔slice divider
 
     def __init__(self, parent=None, with_slice: bool = False):
         super().__init__(parent)
@@ -692,6 +697,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._split_divider.drag_delta.connect(self._on_split_drag_delta)
             self._split_divider.drag_finished.connect(self._on_split_drag_finished)
             self._split_divider.reset_requested.connect(self._on_split_reset)
+            # Surface the divider gesture to the hint system (retires the
+            # "drag the divider" tip once the user has actually used it).
+            self._split_divider.drag_started.connect(self.divider_adjusted)
+            self._split_divider.reset_requested.connect(self.divider_adjusted)
             self._collapsed_rail = _CollapsedRail(self)
             self._collapsed_rail.setVisible(False)
             self.layout().addWidget(self._collapsed_rail)
@@ -933,8 +942,49 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             keep_plot_options=True,
         )
 
-    def _handle_wheel_dispatch(self, **_kwargs):
-        return False
+    def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
+                               view_box=None):
+        """Lock the wheel to one axis on the spectrogram, matching the line
+        canvases and the footer hint (``Ctrl + 滚轮`` → X, ``Shift + 滚轮`` → Y).
+
+        Without this the spectrogram fell back to pyqtgraph's default wheel
+        (both axes at once, no Ctrl/Shift lock), so the chart-card footer's
+        "Ctrl 缩放 X / Shift 缩放 Y" guidance was literally wrong on Order /
+        FFT-vs-Time. Mirrors ``PgLineCanvas._handle_wheel_dispatch``: only the
+        modifier-held wheel is consumed; a plain wheel returns False so the
+        ViewBox keeps its native both-axis zoom. Applies to whichever viewbox
+        was scrolled (the 2D map or, with_slice, the 1D slice subplot)."""
+        step = 1 if delta > 0 else -1 if delta < 0 else 0
+        if step == 0 or view_box is None:
+            return False
+        ctrl = bool(modifiers & Qt.ControlModifier)
+        shift = bool(modifiers & Qt.ShiftModifier)
+        if not (ctrl or shift):
+            return False
+
+        factor = 0.85 if step > 0 else 1.0 / 0.85
+        try:
+            x_range, y_range = view_box.viewRange()
+            if ctrl:
+                lo, hi = x_range
+                center = float(x_pos) if np.isfinite(x_pos) else (lo + hi) / 2.0
+                view_box.setXRange(
+                    center - (center - lo) * factor,
+                    center + (hi - center) * factor,
+                    padding=0,
+                )
+            elif shift:
+                lo, hi = y_range
+                center = float(y_pos) if np.isfinite(y_pos) else (lo + hi) / 2.0
+                view_box.setYRange(
+                    center - (center - lo) * factor,
+                    center + (hi - center) * factor,
+                    padding=0,
+                )
+        except Exception:
+            return False
+        self.layout_geometry_changed.emit()
+        return True
 
     def set_tick_density(self, x, y) -> None:
         """Apply inspector tick density.
@@ -1313,10 +1363,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             if y0 <= y <= y1:
                 self._slice_y_idx = self._freq_index_for(y)
                 self._apply_slice()
+                self.slice_picked.emit()
         else:
             if x0 <= x <= x1:
                 self._slice_x_idx = self._time_index_for(x)
                 self._apply_slice()
+                self.slice_picked.emit()
 
     def set_slice_button_labels(self, x_label: str, y_label: str) -> None:
         """Set the X/Y toggle segment captions (Order uses 按阶次 for Y)."""

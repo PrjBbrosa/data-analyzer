@@ -278,6 +278,7 @@ import qtawesome as qta
 
 from ..ui_kit.icons import Icons
 from . import hints
+from .file_navigator import _ElidedLabel
 from .pg_canvases import TimeDomainCanvasPG
 from .pg_canvas.heatmap_canvas import PgHeatmapCanvas
 from .pg_canvas.line_canvas import PgLineCanvas
@@ -289,9 +290,12 @@ from .view_state import ViewManager
 _MODE_TO_INDEX = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}
 _INDEX_TO_MODE = {v: k for k, v in _MODE_TO_INDEX.items()}
 
-# Bottom hint bar — persistent (always-on) shortcuts.
-# Rendered left-aligned in muted gray inside QFrame#chartHintBar.
-# Context-layer copy is selected at runtime by hints.context_hints().
+# Legacy module constant. The static "persistent" footer label was RETIRED:
+# the base gestures are now the highest-weight anchors of the rotating pool
+# (hints.rotation_hints), so the bottom bar no longer renders this string. Kept
+# as a registry-derived compatibility value (hints.persistent_hints() still
+# returns the two universal wheel strings). Rotating-row copy is selected at
+# runtime by hints.rotation_hints(); the right slot by hints.discovery_hint().
 _BOTTOM_HINT_PERSISTENT = "    ·    ".join(hints.persistent_hints())
 
 # Icon colour tokens (match Precision Light palette)
@@ -1118,8 +1122,12 @@ class _ChartCard(QWidget):
         self._context_hint_index = 0
         self._context_hint_signature = ()
         self._hint_rotation_paused = False
+        # Variable-dwell rotation: a single-shot timer that re-arms itself with
+        # the CURRENT hint's dwell after each advance (replaces the old fixed
+        # 10s interval). High-priority/anchor hints linger; low-frequency tips
+        # get a short turn each lap.
         self._hint_rotation_timer = QTimer(self)
-        self._hint_rotation_timer.setInterval(10000)
+        self._hint_rotation_timer.setSingleShot(True)
         self._hint_rotation_timer.timeout.connect(self._advance_context_hint)
         # Pick the matplotlib NavigationToolbar2QT for matplotlib canvases
         # and the pyqtgraph-aware shim for TimeDomainCanvasPG. The shim
@@ -1157,6 +1165,19 @@ class _ChartCard(QWidget):
             context_menu_requested.connect(
                 lambda: self.mark_discovered("chart.right_click_menu")
             )
+        # Hidden-gesture discovery wiring. Each canvas exposes a signal that
+        # fires the first time the user performs the gesture; we mark the
+        # matching discovery echo (so its rotating-pool tip retires) and flash a
+        # one-shot confirmation in the footer. Mirrors the context-menu wiring
+        # above. getattr-guarded so canvases without the signal are unaffected.
+        self._wire_discovery_signal(
+            canvas, 'slice_picked', 'spectrogram.slice_pick')
+        self._wire_discovery_signal(
+            canvas, 'divider_adjusted', 'spectrogram.divider')
+        self._wire_discovery_signal(
+            canvas, 'levels_changed', 'spectrogram.colorbar')
+        self._wire_discovery_signal(
+            canvas, 'time_source_selected', 'fft.preview_source')
         self.toolbar.setObjectName("chartToolbar")
         self.toolbar.setIconSize(QSize(18, 18))
         for act in self.toolbar.actions():
@@ -1250,10 +1271,19 @@ class _ChartCard(QWidget):
             if name in ('pan', 'zoom'):
                 act.triggered.connect(self._on_nav_mode_toggled)
 
-        # Bottom hint bar (Persistent + Context layers). Sits BELOW the canvas
-        # so it does not jostle the toolbar layout. The persistent label is
-        # always populated; the context label updates via _refresh_bottom_hint
-        # whenever pan/zoom toggles or (in subclasses) cursor mode changes.
+        # Bottom hint bar. Sits BELOW the canvas so it does not jostle the
+        # toolbar layout. The old static persistent label is RETIRED: the base
+        # gestures are now the highest-weight, longest-dwell entries of the
+        # rotating pool (hints.rotation_hints), so the left slot is a single
+        # rotating row whose text matches the active section. The right slot is
+        # the discovery ("this exists") hint.
+        #
+        # 提示位置 (stable placement): the rotating row is the LEFT element with
+        # an Ignored horizontal size policy and ElideRight (it inherits both from
+        # _ElidedLabel). Its left edge is therefore pinned at the bar's left edge
+        # and it elides rather than widening, so changing between long/short
+        # rotating strings never shifts it left/right nor pushes the discovery
+        # slot — the discovery row stays right-anchored after the stretch.
         self._hint_bar = QFrame(self)
         self._hint_bar.setObjectName("chartHintBar")
         self._hint_bar.setAttribute(Qt.WA_StyledBackground, True)
@@ -1261,12 +1291,9 @@ class _ChartCard(QWidget):
         bar_lay = QHBoxLayout(self._hint_bar)
         bar_lay.setContentsMargins(4, 2, 4, 2)
         bar_lay.setSpacing(0)
-        self._hint_persistent = QLabel(_BOTTOM_HINT_PERSISTENT, self._hint_bar)
-        self._hint_persistent.setObjectName("chartHintPersistent")
-        self._hint_persistent.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self._hint_context = QLabel("", self._hint_bar)
+        self._hint_context = _ElidedLabel("", self._hint_bar)
         self._hint_context.setObjectName("chartHintContext")
-        self._hint_context.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._hint_context.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._flash_hint_timer = QTimer(self)
         self._flash_hint_timer.setSingleShot(True)
         self._flash_hint_timer.setInterval(2500)
@@ -1280,17 +1307,22 @@ class _ChartCard(QWidget):
         self._hint_discovery = QLabel("", self._hint_bar)
         self._hint_discovery.setObjectName("chartHintDiscovery")
         self._hint_discovery.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        bar_lay.addWidget(self._hint_persistent)
-        bar_lay.addStretch(1)
-        bar_lay.addWidget(self._hint_discovery)
-        bar_lay.addWidget(self._hint_context)
+        # Keep the discovery slot from being squeezed to zero by the eliding
+        # rotating row: it dictates its own width and is right-anchored.
+        self._hint_discovery.setSizePolicy(
+            QSizePolicy.Maximum, QSizePolicy.Preferred
+        )
+        bar_lay.addWidget(self._hint_context, 1)
+        bar_lay.addStretch(0)
+        bar_lay.addWidget(self._hint_discovery, 0)
 
         # Default: activate the pan tool.
         mode = str(getattr(self.toolbar, 'mode', '')).lower()
         if 'pan' not in mode:
             self.toolbar.pan()
+        # _refresh_hint -> _set_context_hint arms the single-shot rotation timer
+        # with the first hint's dwell, so no explicit fixed-interval start here.
         self._refresh_hint()
-        self._hint_rotation_timer.start()
 
         lay.addWidget(self.toolbar)
         lay.addWidget(canvas, stretch=1)
@@ -1594,41 +1626,80 @@ class _ChartCard(QWidget):
             recently_used=frozenset(self._recent_context_hint_ids),
         )
 
+    def _rotation_candidates(self):
+        """The rotating-row pool for the current state: section base-gesture
+        anchors merged with context tips, weight-ordered, with use/discovery
+        decay (hints.rotation_hints)."""
+        return hints.rotation_hints(self._hint_state())
+
     def _refresh_bottom_hint(self, *_):
         discovery = hints.discovery_hint(self._hint_state())
         self._hint_discovery.setText(discovery.text if discovery else '')
         self._set_context_hint(reset=True)
 
     def _set_context_hint(self, reset=False):
-        candidates = hints.context_hints(self._hint_state())
+        candidates = self._rotation_candidates()
         signature = tuple(hint.id for hint in candidates)
         if reset or signature != self._context_hint_signature:
             self._context_hint_index = 0
             self._context_hint_signature = signature
         if not candidates:
             self._hint_context.setText('')
+            self._hint_rotation_timer.stop()
             return
         index = self._context_hint_index % len(candidates)
-        self._hint_context.setText(candidates[index].text)
+        current = candidates[index]
+        self._hint_context.setText(current.text)
+        self._arm_rotation_timer(current)
+
+    def _arm_rotation_timer(self, hint):
+        """(Re)start the single-shot rotation timer with this hint's dwell, so
+        the next advance happens after a variable, priority-derived delay."""
+        if self._hint_rotation_paused:
+            return
+        self._hint_rotation_timer.start(hints.rotation_dwell_ms(hint))
 
     def flash_hint(self, text):
         """Show a transient context hint, then restore the rotating hint."""
         self._hint_context.setText(str(text))
+        # Hold the flash for its full window: pause the rotation timer so a
+        # variable-dwell advance cannot overwrite the flash mid-display. The
+        # flash timer's timeout (_set_context_hint(reset=True)) re-arms rotation.
+        self._hint_rotation_timer.stop()
         self._flash_hint_timer.start()
 
     def _advance_context_hint(self):
         if self._hint_rotation_paused:
             return
-        candidates = hints.context_hints(self._hint_state())
-        if len(candidates) <= 1:
+        candidates = self._rotation_candidates()
+        if not candidates:
             self._set_context_hint()
+            return
+        if len(candidates) <= 1:
+            # Single hint: keep it shown and re-arm so a state change is still
+            # picked up on the next tick.
+            self._context_hint_signature = tuple(h.id for h in candidates)
+            self._context_hint_index = 0
+            self._hint_context.setText(candidates[0].text)
+            self._arm_rotation_timer(candidates[0])
             return
         self._context_hint_index = (self._context_hint_index + 1) % len(candidates)
         self._context_hint_signature = tuple(hint.id for hint in candidates)
         self._set_context_hint()
 
     def set_hint_rotation_paused(self, paused):
-        self._hint_rotation_paused = bool(paused)
+        paused = bool(paused)
+        was_paused = self._hint_rotation_paused
+        self._hint_rotation_paused = paused
+        if paused:
+            # Freeze the footer while the user reads / drags so it does not jump.
+            self._hint_rotation_timer.stop()
+        elif was_paused:
+            # Resume: re-arm against the currently shown hint's dwell.
+            candidates = self._rotation_candidates()
+            if candidates:
+                index = self._context_hint_index % len(candidates)
+                self._arm_rotation_timer(candidates[index])
 
     def mark_context_hint_used(self, hint_id):
         self._recent_context_hint_ids.add(hint_id)
@@ -1641,6 +1712,26 @@ class _ChartCard(QWidget):
     def mark_discovered(self, hint_id):
         hints.mark_discovered(self._hint_settings, hint_id)
         self._refresh_bottom_hint()
+
+    def _wire_discovery_signal(self, canvas, signal_name, echo_id):
+        """Connect a canvas hidden-gesture signal to discovery + flash, if the
+        canvas exposes it. The lambda swallows any signal payload (e.g.
+        ``levels_changed`` carries lo/hi)."""
+        signal = getattr(canvas, signal_name, None)
+        if signal is None:
+            return
+        signal.connect(lambda *_: self._discover_gesture(echo_id))
+
+    def _discover_gesture(self, echo_id):
+        """Record a first-time gesture: persist its discovery id (so the
+        matching rotating tip retires across sessions) and flash a one-shot
+        confirmation in the footer."""
+        already = echo_id in hints.load_discovered(self._hint_settings)
+        self.mark_discovered(echo_id)
+        if not already:
+            tip = hints.flash_tip(echo_id)
+            if tip:
+                self.flash_hint(tip)
 
     def _refresh_hint(self, *_):
         key = self._current_mode_key()
@@ -2088,23 +2179,26 @@ class ChartStack(QWidget):
         return self.page_order.pane_canvas(0)
 
     def _configure_time_hint_bar(self):
+        # Time-view docked footer. Mirrors the in-card hint bar layout now that
+        # the static persistent label is retired: the rotating row (which leads
+        # with the section base-gesture anchor) is left-anchored and elides, the
+        # discovery hint is right-anchored. Left-anchoring the eliding row keeps
+        # its left edge fixed across long/short rotating strings (提示位置).
         self._time_hint_bar.setFixedHeight(20)
         lay = self._time_hint_bar.layout()
         while lay.count():
             lay.takeAt(0)
         lay.setContentsMargins(8, 1, 8, 1)
         lay.setSpacing(0)
-        for label in (
-            self._time_card._hint_persistent,
-            self._time_card._hint_discovery,
-            self._time_card._hint_context,
-        ):
-            label.setAlignment(Qt.AlignCenter)
-        lay.addStretch(1)
-        lay.addWidget(self._time_card._hint_persistent, 0)
+        self._time_card._hint_context.setAlignment(
+            Qt.AlignLeft | Qt.AlignVCenter
+        )
+        self._time_card._hint_discovery.setAlignment(
+            Qt.AlignRight | Qt.AlignVCenter
+        )
+        lay.addWidget(self._time_card._hint_context, 1)
+        lay.addStretch(0)
         lay.addWidget(self._time_card._hint_discovery, 0)
-        lay.addWidget(self._time_card._hint_context, 0)
-        lay.addStretch(1)
 
     def count(self):
         return self.stack.count()

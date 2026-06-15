@@ -132,6 +132,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     time_preview_range_changed = pyqtSignal(float, float)
+    # Hidden-gesture discovery: emitted when the user clicks a spectrum curve to
+    # pick the time-preview source. The chart card retires the "click a curve to
+    # choose the source" tip once this fires.
+    time_source_selected = pyqtSignal()
     # AA status traffic-light (mirrors TimeDomainCanvasPG). _ChartCard wires
     # this signal + quality_status() into the bottom-right quality dot, so the
     # FFT card shows the same red/yellow/green antialiasing indicator the
@@ -1514,6 +1518,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                     idx = self._nearest_entry_index(v.x(), v.y())
                     if idx is not None:
                         self.select_time_entry(idx)
+                        # User picked the preview source by clicking the curve.
+                        self.time_source_selected.emit()
                 return
             if ev.button() == Qt.RightButton and self._remark_enabled:
                 self.remove_remark_near('amp', v.x())

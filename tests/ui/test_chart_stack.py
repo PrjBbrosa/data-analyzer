@@ -1745,13 +1745,20 @@ def test_time_card_segmented_buttons_chinese(qtbot):
 
 # ---- Bottom hint bar (Persistent + Context layers) ----
 
-def test_bottom_hint_bar_persistent_always_present(qapp):
+def test_bottom_hint_bar_anchor_leads_each_section(qapp):
+    """The static persistent label is retired; each section's rotating row now
+    LEADS with its base-gesture anchor (line sections show the Ctrl/Shift wheel
+    anchor, heatmap sections show the slice/colorbar anchor)."""
     from mf4_analyzer.ui.chart_stack import ChartStack
-    from mf4_analyzer.ui.hints import persistent_hints
     cs = ChartStack()
     cs.show()
     qapp.processEvents()
-    expected = "    ·    ".join(persistent_hints())
+    anchors = {
+        "time": "Ctrl / Shift + 滚轮 缩放 X / Y",
+        "fft": "Ctrl / Shift + 滚轮 缩放 X / Y",
+        "fft_time": "点击谱图取切片 · 拖 colorbar 调色阶",
+        "order": "点击谱图取切片 · 拖 colorbar 调色阶",
+    }
     for mode, card in (
         ("time", cs._time_card),
         ("fft", cs._fft_card),
@@ -1760,21 +1767,27 @@ def test_bottom_hint_bar_persistent_always_present(qapp):
     ):
         cs.set_mode(mode)
         qapp.processEvents()
-        # Bar exists, is visible, and the persistent label spells the three
-        # always-on shortcuts.
         assert card._hint_bar is not None
         assert card._hint_bar.isVisible() is True
-        assert card._hint_persistent is not None
-        text = card._hint_persistent.text()
-        assert text == expected
+        # The retired static persistent label no longer exists.
+        assert not hasattr(card, "_hint_persistent")
+        # The rotating row's first hint is the section base-gesture anchor.
+        pool = card._rotation_candidates()
+        assert pool, mode
+        assert pool[0].text == anchors[mode], (mode, pool[0].id)
 
 
 def test_bottom_hint_bar_context_subplot_default_comes_from_registry(qapp):
-    """Default TimeDomain state is subplot, so the registry's subplot hint wins."""
+    """Default TimeDomain state is subplot; the rotating row leads with the line
+    base-gesture anchor and the subplot wheel tip is next in the lap."""
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     card = cs._time_card
-    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+    # full_text(): the rotating row elides for display, so assert the logical value.
+    assert card._hint_context.full_text() == "Ctrl / Shift + 滚轮 缩放 X / Y"
+    pool_ids = [h.id for h in card._rotation_candidates()]
+    assert pool_ids[0] == "anchor.line_wheel"
+    assert "subplot.wheel_target" in pool_ids
 
 
 def test_flash_hint_shows_transient_context_text(qapp):
@@ -1815,15 +1828,18 @@ def test_bottom_hint_bar_context_uses_registry(qapp, monkeypatch):
     cs = ChartStack()
     card = cs._time_card
 
-    def fake_context_hints(state):
+    # The rotating row now reads the merged anchor+context pool from the
+    # registry (hints.rotation_hints); no context strings are hard-coded in
+    # the card.
+    def fake_rotation_hints(state, scope="chart"):
         assert state.mode == "time"
         assert state.plot_mode == "subplot"
-        return (Hint(id="test.registry", text="registry controlled", surface="context"),)
+        return (Hint(id="test.registry", text="registry controlled", surface="anchor"),)
 
-    monkeypatch.setattr(hints, "context_hints", fake_context_hints)
+    monkeypatch.setattr(hints, "rotation_hints", fake_rotation_hints)
     card._refresh_bottom_hint()
 
-    assert card._hint_context.text() == "registry controlled"
+    assert card._hint_context.full_text() == "registry controlled"
 
 
 def test_bottom_hint_bar_discovery_slot_advances_when_marked(qapp):
@@ -1882,13 +1898,44 @@ def test_context_hint_rotation_advances_and_pause_holds(qapp):
     cs = ChartStack()
     card = cs._time_card
 
-    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+    # Subplot rotation pool: anchor leads, then subplot tips, single lap.
+    # full_text(): the rotating row elides for display, assert the logical value.
+    assert card._hint_context.full_text() == "Ctrl / Shift + 滚轮 缩放 X / Y"
     card._advance_context_hint()
-    assert card._hint_context.text() == "Shift + 滚轮 缩放当前子图 Y"
+    assert card._hint_context.full_text() == "滚轮作用于鼠标所在子图"
+    card._advance_context_hint()
+    assert card._hint_context.full_text() == "Shift + 滚轮 缩放当前子图 Y"
 
+    # Paused: an advance is a no-op (the footer freezes during interaction).
     card.set_hint_rotation_paused(True)
+    held = card._hint_context.full_text()
     card._advance_context_hint()
-    assert card._hint_context.text() == "Shift + 滚轮 缩放当前子图 Y"
+    assert card._hint_context.full_text() == held
+
+
+def test_rotation_timer_uses_variable_dwell(qapp):
+    """The single-shot rotation timer re-arms with the CURRENT hint's dwell, not
+    a fixed 10s interval."""
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    from mf4_analyzer.ui import hints
+
+    cs = ChartStack()
+    card = cs._time_card
+    # The timer is single-shot (variable re-arm), never a fixed repeating timer.
+    assert card._hint_rotation_timer.isSingleShot() is True
+
+    # Drive a deterministic refresh so the timer is armed to the lead hint's
+    # dwell regardless of any construction-time event-loop timing.
+    card.set_hint_rotation_paused(False)
+    card._set_context_hint(reset=True)
+    pool = card._rotation_candidates()
+    lead = pool[0]
+    assert card._hint_rotation_timer.isActive() is True
+    # Armed interval is exactly the lead hint's variable dwell (anchor = 12000),
+    # not the legacy fixed 10000.
+    assert card._hint_rotation_timer.interval() == hints.rotation_dwell_ms(lead)
+    assert hints.rotation_dwell_ms(lead) == 12000  # anchor.line_wheel dwell
+    assert card._hint_rotation_timer.interval() != 10000
 
 
 def test_mark_context_hint_used_suppresses_it_for_session(qapp):
@@ -1899,22 +1946,32 @@ def test_mark_context_hint_used_suppresses_it_for_session(qapp):
 
     card.mark_context_hint_used("subplot.wheel_target")
 
-    assert card._hint_context.text() == "Shift + 滚轮 缩放当前子图 Y"
+    # The used tip drops out of the lap; the anchor still leads, and the other
+    # subplot tip remains.
+    pool_ids = [h.id for h in card._rotation_candidates()]
+    assert "subplot.wheel_target" not in pool_ids
+    assert pool_ids[0] == "anchor.line_wheel"
+    assert "subplot.shift_y" in pool_ids
 
 
 def test_bottom_hint_bar_context_switches_with_cursor_mode(qapp):
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     card = cs._time_card
-    # cursor=single currently has no curated bar hint.
+
+    def pool_ids():
+        return [h.id for h in card._rotation_candidates()]
+
+    # cursor=single currently has no curated bar hint; the anchor still leads.
     card.set_cursor_mode('single')
-    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
-    # cursor=dual → dual cursor hint
+    assert pool_ids()[0] == "anchor.line_wheel"
+    assert "cursor.dual_ab" not in pool_ids()
+    # cursor=dual → the dual cursor hint joins the lap (anchor still leads).
     card.set_cursor_mode('dual')
-    assert card._hint_context.text() == "点 A 点 B → 显示 ΔT 与区间统计"
-    # cursor=off → back to current subplot hint
+    assert "cursor.dual_ab" in pool_ids()
+    # cursor=off → the dual hint leaves the lap.
     card.set_cursor_mode('off')
-    assert card._hint_context.text() == "滚轮作用于鼠标所在子图"
+    assert "cursor.dual_ab" not in pool_ids()
 
 
 def test_bottom_hint_bar_spectrogram_hint(qapp):
@@ -1922,17 +1979,21 @@ def test_bottom_hint_bar_spectrogram_hint(qapp):
     cs = ChartStack()
     fft_time = cs._fft_time_card
     fft_time._refresh_bottom_hint()
-    assert fft_time._hint_context.text() == "点击谱图某一时刻 → 查看该帧频率切片"
+    # The heatmap anchor leads; the slice hint is the next tip in the lap.
+    pool_ids = [h.id for h in fft_time._rotation_candidates()]
+    assert pool_ids[0] == "anchor.heatmap_gesture"
+    assert "spectrogram.slice" in pool_ids
 
 
-def test_bottom_hint_bar_idle_for_base_card_with_no_mode(qapp):
-    """Plain _ChartCard (e.g. fft / order) with no toolbar mode shows empty."""
+def test_bottom_hint_bar_base_card_anchor_persists_with_no_mode(qapp):
+    """Plain _ChartCard (fft) keeps its base-gesture anchor even with no toolbar
+    mouse mode — the base gesture is mode-independent and always reachable."""
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     card = cs._fft_card
     card.toolbar.mode = ''  # type: ignore[attr-defined]
     card._refresh_bottom_hint()
-    assert card._hint_context.text() == ''
+    assert card._hint_context.full_text() == "Ctrl / Shift + 滚轮 缩放 X / Y"
 
 
 def test_bottom_hint_bar_constants_exposed():
@@ -1957,4 +2018,6 @@ def test_toolbar_hint_removed_but_bottom_hint_bar_stays(qapp):
     )
     assert card._hint_bar is not None
     assert card._hint_bar.isVisible() is True
-    assert card._hint_persistent.text()
+    # The rotating row is populated (the retired static persistent label is gone).
+    assert card._hint_context.text()
+    assert not hasattr(card, "_hint_persistent")
