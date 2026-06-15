@@ -52,6 +52,7 @@ lesson by default.
 | [Analysis Section State Needs Pane-Local Sources](codex-analysis-section-state-needs-pane-local-sources.md) | Work on analysis View tabs, split panes, FFT source colors, or project | See lesson |
 | [Tick Density Lives In Chart Toolbar Popout](codex-tick-density-toolbar-popout.md) | Touching global tick-density controls, Inspector persistent chart | See lesson |
 | [Codex Time Range Preserve Xaxis Draft](codex-time-range-preserve-xaxis-draft.md) | Changing time-range toggles, custom X-axis controls, or time-domain | See lesson |
+| [Analysis Bottom Axis Explicit Ticks Retick On Range Change](analysis-bottom-axis-explicit-ticks-retick-on-range-change.md) | Changing pyqtgraph Analysis bottom-axis tick generation from adaptive density to explicit `AxisItem.setTicks(...)`. | See lesson |
 
 ## Selection Rules
 
