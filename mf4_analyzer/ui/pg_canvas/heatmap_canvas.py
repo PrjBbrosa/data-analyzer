@@ -29,7 +29,10 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_WIDTH,
 )
 from mf4_analyzer.ui.pg_canvas.context_menu import redesign_pg_context_menu
-from mf4_analyzer.ui.pg_canvas._shared import _hide_native_auto_button
+from mf4_analyzer.ui.pg_canvas._shared import (
+    _hide_native_auto_button,
+    show_major_grid_left_bottom_only,
+)
 from mf4_analyzer.ui.pg_canvas._split_mixin import (
     _CollapsedRail,
     _SPLIT_COLLAPSE_AT,
@@ -380,15 +383,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         _apply_neutral_axis_frame(self._plot)
         self._axis_bottom = self._plot.getAxis('bottom')
         self._axis_left = self._plot.getAxis('left')
-        self._plot.showGrid(x=True, y=True, alpha=0.25)
-        # showGrid(x,y) lights the grid on ALL FOUR built-in axes; left+bottom
-        # are _BoundaryGridAxisItem (boundary line suppressed), but top+right
-        # are plain AxisItems that re-draw the boundary line + over-draw the
-        # interior lines, so during zoom sub-pixel offsets double every grid
-        # line. Disable their grid (mirrors line_canvas.py:145-146) so only the
-        # boundary-suppressing left+bottom carry the grid.
-        self._plot.getAxis('top').setGrid(False)
-        self._plot.getAxis('right').setGrid(False)
+        show_major_grid_left_bottom_only(self._plot, alpha=0.25)
         for _ax in ('left', 'bottom', 'top', 'right'):
             try:
                 self._plot.getAxis(_ax).setStyle(maxTickLevel=0)
@@ -497,11 +492,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # alignment; the divider handlers then skip single-pane self-align.
             self._split_aligned = False
             self._slice_plot.setMaximumHeight(int(self._bottom_split_h))
-            self._slice_plot.showGrid(x=True, y=True, alpha=0.25)
-            # Same boundary-doubling fix as the main plot: kill top/right grid
-            # so only the boundary-suppressing left+bottom axes draw grid lines.
-            self._slice_plot.getAxis('top').setGrid(False)
-            self._slice_plot.getAxis('right').setGrid(False)
+            show_major_grid_left_bottom_only(self._slice_plot, alpha=0.25)
             for _ax in ('left', 'bottom', 'top', 'right'):
                 try:
                     self._slice_plot.getAxis(_ax).setStyle(maxTickLevel=0)

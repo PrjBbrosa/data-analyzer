@@ -113,6 +113,7 @@ from mf4_analyzer.ui.pg_canvas._shared import (  # noqa: F401
     _hide_native_auto_button,
     _subplot_ylabel_text,
     _view_state_channel_key,
+    show_major_grid_left_bottom_only,
 )
 
 
@@ -700,7 +701,7 @@ class TimeDomainCanvasPG(QWidget):
         _localize_pg_context_menu(getattr(pi, "ctrlMenu", None))
         _localize_pg_context_actions(getattr(pi.scene(), "contextMenu", []))
         try:
-            pi.showGrid(x=True, y=True, alpha=0.28)
+            show_major_grid_left_bottom_only(pi, alpha=0.28)
         except Exception:
             pass
         for axis_name in ("left", "right", "bottom", "top"):

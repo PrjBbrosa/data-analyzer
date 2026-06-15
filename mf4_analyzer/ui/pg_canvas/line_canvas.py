@@ -28,6 +28,7 @@ from .heatmap_canvas import (
     _visual_padded_bounds,
 )
 from .context_menu import redesign_pg_context_menu
+from ._shared import show_major_grid_left_bottom_only
 from ._split_mixin import (
     _CollapsedRail,
     _SPLIT_ROW_SPACING,
@@ -148,16 +149,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._glw, 1, 0, _ModifierWheelViewBox(owner_canvas=self))
         for p in (self._plot_amp, self._plot_time):
             _apply_neutral_axis_frame(p)
-            p.showGrid(x=True, y=True, alpha=0.25)
+            show_major_grid_left_bottom_only(p, alpha=0.25)
             for _ax in ('left', 'bottom', 'top', 'right'):
                 try:
                     p.getAxis(_ax).setStyle(maxTickLevel=0)
                 except Exception:
                     pass
-            # major grid 只画在 left+bottom；top/right 关掉，避免横向网格被
-            # 左右两轴重复过绘、且顶部网格线与边框叠成"双线"（spec R2）。
-            p.getAxis('top').setGrid(False)
-            p.getAxis('right').setGrid(False)
         self._plot_amp.addLegend(offset=(8, 8))
         # Open up the gap between the two stacked plots so the draggable divider
         # line sits in clear whitespace instead of merging with the plot frames.
