@@ -153,12 +153,13 @@ _TARGET_BOTTOM_TICK_EDGE_PAD_PX = 2.0
 _TARGET_BOTTOM_TICK_MIN_COUNT = 3
 
 
-def _apply_target_bottom_ticks(axis, view_box, target_count: int) -> bool:
+def _apply_target_bottom_ticks(
+    axis, view_box, target_count: int, owner: QWidget | None = None
+) -> bool:
     """Pin bottom-axis ticks to a readable target count when geometry exists."""
     try:
-        update_auto_range = getattr(view_box, "updateAutoRange", None)
-        if callable(update_auto_range):
-            update_auto_range()
+        if owner is not None and not owner.isVisible():
+            return False
         (lo, hi), _yr = view_box.viewRange()
         width = float(axis.size().width())
     except Exception:
@@ -547,9 +548,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._remarks = []
         self._remark_enabled = False
         self._mouse_mode_controller = None
+        self._bottom_tick_target = None
+        self._bottom_tick_density = None
         # remarks: card contract is set_remark_enabled / clear_remarks
         # (chart_stack.py:1314, 1330-1332).
         self._plot.scene().sigMouseClicked.connect(self._on_scene_click)
+        self._plot.vb.sigXRangeChanged.connect(self._refresh_bottom_x_ticks)
+        self._plot.vb.sigResized.connect(self._refresh_bottom_x_ticks)
 
         # Slice row (with_slice=True). Every consumer guards on
         # ``self._slice_curve is not None``.
@@ -605,6 +610,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._slice_plot = _make_analysis_plot(
                 self._glw, 1, 0, _ModifierWheelViewBox(owner_canvas=self))
             _apply_neutral_axis_frame(self._slice_plot)
+            self._slice_plot.vb.sigXRangeChanged.connect(
+                self._refresh_bottom_x_ticks)
+            self._slice_plot.vb.sigResized.connect(self._refresh_bottom_x_ticks)
             # Open the gap between map + slice so the divider line reads clearly.
             try:
                 self._glw.ci.layout.setVerticalSpacing(_SPLIT_ROW_SPACING)
@@ -944,7 +952,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         except (TypeError, ValueError):
             return
         x_d, y_d = _tick_counts_to_density(x_n, y_n)
-        bottom_pairs = [(self._axis_bottom, self._plot.vb)]
+        self._bottom_tick_target = x_n
+        self._bottom_tick_density = x_d
+        self._refresh_bottom_x_ticks()
         left_axes = [self._axis_left]
         # The FFT-vs-Time frequency/amplitude slice subplot (with_slice=True)
         # carries its own bottom/left axes that the main-plot pair above never
@@ -952,17 +962,25 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # use target-count ticks when the widget has realized geometry; left/Y
         # axes keep pyqtgraph density behavior.
         if self._with_slice and self._slice_plot is not None:
+            left_axes.append(self._slice_plot.getAxis('left'))
+        for axis in left_axes:
+            _apply_axis_tick_density(axis, y_d)
+        self.layout_geometry_changed.emit()
+
+    def _refresh_bottom_x_ticks(self, *_args) -> None:
+        if self._bottom_tick_target is None or self._bottom_tick_density is None:
+            return
+        bottom_pairs = [(self._axis_bottom, self._plot.vb)]
+        if self._with_slice and self._slice_plot is not None:
             bottom_pairs.append((
                 self._slice_plot.getAxis('bottom'),
                 self._slice_plot.vb,
             ))
-            left_axes.append(self._slice_plot.getAxis('left'))
         for axis, view_box in bottom_pairs:
-            if not _apply_target_bottom_ticks(axis, view_box, x_n):
-                _apply_axis_tick_density(axis, x_d)
-        for axis in left_axes:
-            _apply_axis_tick_density(axis, y_d)
-        self.layout_geometry_changed.emit()
+            if not _apply_target_bottom_ticks(
+                axis, view_box, self._bottom_tick_target, self
+            ):
+                _apply_axis_tick_density(axis, self._bottom_tick_density)
 
     def reset_view_to_data_extents(self) -> None:
         """Toolbar Home helper: restore the view to the full data extents.
@@ -1399,6 +1417,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # to avoid transiently fighting the shared split reserve.
         self._position_slice_panel()
         self._position_collapse_ctrl()
+        self._refresh_bottom_x_ticks()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1407,6 +1426,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._align_slice_to_main()
         self._position_slice_panel()
         self._position_collapse_ctrl()
+        self._refresh_bottom_x_ticks()
         # First-show left-axis unification: on the FIRST entry the eager
         # alignment above runs before the on-screen GraphicsLayout geometry /
         # tick-label widths are realized, so _unify_stacked_left_axes measures

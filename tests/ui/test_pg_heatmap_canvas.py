@@ -101,6 +101,13 @@ def _bottom_tick_labels(axis):
     return [str(label) for _value, label in levels[0]]
 
 
+def _bottom_tick_values(axis):
+    levels = getattr(axis, "_tickLevels", None)
+    if not levels:
+        return []
+    return [float(value) for value, _label in levels[0]]
+
+
 def test_linear_mode_levels_auto(canvas):
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
@@ -787,6 +794,56 @@ def test_heatmap_narrow_bottom_ticks_are_pinned_and_fit(qapp):
             labels = _bottom_tick_labels(axis)
             assert 3 <= len(labels) <= 10
             assert getattr(axis, "_tickLevels", None), "bottom axis should be pinned"
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_bottom_ticks_recompute_after_x_range_change(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(360, 620)
+        c.show()
+        qapp.processEvents()
+        c.plot_or_update_heatmap(
+            matrix=_mat(),
+            x_extent=(0.0, 30.0),
+            y_extent=(10.0, 50.0),
+            x_label="Time (s)",
+            y_label="Frequency (Hz)",
+            cbar_label="Amplitude",
+        )
+        c.select_time_index(2)
+        c.set_tick_density(10, 8)
+        qapp.processEvents()
+
+        c._plot.setXRange(10.0, 20.0, padding=0)
+        qapp.processEvents()
+
+        values = _bottom_tick_values(c._plot.getAxis("bottom"))
+        assert values
+        assert min(values) >= 10.0 - 1e-6
+        assert max(values) <= 20.0 + 1e-6
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_unshown_bottom_ticks_fall_back_to_density():
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.plot_or_update_heatmap(
+            matrix=_mat(),
+            x_extent=(0.0, 30.0),
+            y_extent=(10.0, 50.0),
+            x_label="Time (s)",
+            y_label="Frequency (Hz)",
+            cbar_label="Amplitude",
+        )
+        c.select_time_index(2)
+        c.set_tick_density(10, 8)
+
+        for plot in (c._plot, c._slice_plot):
+            axis = plot.getAxis("bottom")
+            assert not getattr(axis, "_tickLevels", None)
     finally:
         c.deleteLater()
 
