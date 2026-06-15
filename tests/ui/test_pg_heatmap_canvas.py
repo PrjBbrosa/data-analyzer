@@ -912,7 +912,7 @@ def test_heatmap_split_divider_spans_full_canvas_width(qapp):
     c.show()
     qapp.processEvents()
     c._position_collapse_ctrl()
-    c._position_split_divider()
+    c._position_collapse_ctrl()
     div = c._split_divider
     assert div is not None
     assert div.x() <= 1

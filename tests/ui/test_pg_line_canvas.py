@@ -539,7 +539,7 @@ def test_fft_split_divider_spans_full_canvas_width(canvas, qapp):
     canvas.show()
     qapp.processEvents()
     canvas._position_collapse_ctrl()
-    canvas._position_split_divider()
+    canvas._position_collapse_ctrl()
     div = canvas._split_divider
     assert div is not None
     assert div.x() <= 1                                  # reaches the left edge
@@ -629,7 +629,7 @@ def test_fft_split_divider_hidden_when_collapsed(canvas, qapp):
     )
     canvas.show()
     qapp.processEvents()
-    canvas._position_split_divider()
+    canvas._position_collapse_ctrl()
     assert canvas._split_divider.isVisible()
     canvas._on_collapse_changed('bottom')
     assert not canvas._split_divider.isVisible()

@@ -256,9 +256,6 @@ class _StackedSplitMixin:
             self._split_top_plot(), self._split_bottom_plot(),
             getattr(self, '_bottom_collapsed', False))
 
-    def _position_split_divider(self, *_args) -> None:
-        self._position_collapse_ctrl()
-
     def _available_split_height(self) -> float:
         return _available_split_height(self)
 
