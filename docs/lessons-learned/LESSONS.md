@@ -32,6 +32,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 
 ## pyqt-ui
 
+- [bottom-tick-fitter-reject-overfine-not-thin](pyqt-ui/2026-06-17-bottom-tick-fitter-reject-overfine-not-thin.md) [pyqtgraph][tick-density][bottom-ticks][target-count][min-gap][fft-frequency-axis][right-edge-truncation] — Target-count nice-tick fitters must REJECT a candidate on interior min-gap collision (not thin it); thinning let an over-fine 0.01 step win on count and truncate the FFT/heatmap X axis short of the right edge. `_apply_target_bottom_ticks` used `continue`; sibling `_fit_x_tick_labels` already `return None`s (why time-domain was fine). Keep thinning only in `extreme_narrow`.
 - [responsive-pane-containers](pyqt-ui/2026-04-24-responsive-pane-containers.md) [layout][inspector][navigator][wide-pane] — Use scroll/splitters; verify wide pane (1.5×~3× default) so Expanding children stay capped.
 - [flush-after-axis-mutation-not-before](pyqt-ui/2026-04-25-flush-after-axis-mutation-not-before.md) [debounce][qtimer][xlim-changed][ordering] — Drain debounced refresh AFTER the set_xlim/set_ylim mutation that re-schedules it; use try/finally for one-call-site coverage of all return paths.
 - [cache-invalidation-event-conditional](pyqt-ui/2026-04-25-cache-invalidation-event-conditional.md) [cache][qtimer][handler-replay] — Invalidate state-derived caches on a last-value diff, not on handler entry; QTimer.singleShot(0, handler) replays will otherwise wipe the cache every tick.

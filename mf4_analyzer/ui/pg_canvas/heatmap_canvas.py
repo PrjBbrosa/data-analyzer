@@ -222,6 +222,7 @@ def _apply_target_bottom_ticks(
 
             previous_right = None
             fitted = []
+            too_dense = False
             for tick_value, label in zip(values, labels):
                 x_pos = (float(tick_value) - lo) / (hi - lo) * width
                 text = str(label)
@@ -236,10 +237,22 @@ def _apply_target_bottom_ticks(
                 if right > width - edge_pad:
                     continue
                 if previous_right is not None and left - previous_right < min_gap:
-                    continue
+                    # Interior labels collide → this step is too fine. Reject the
+                    # WHOLE candidate rather than thinning it: a thinned over-fine
+                    # step (e.g. 0.01) yields non-round, truncated ticks (0.21,
+                    # 0.69, …) that can hit the target count exactly and beat the
+                    # genuine nice steps, leaving the right edge tickless. This
+                    # mirrors tick_density.py:_fit_x_tick_labels, whose `return
+                    # None` is why the time-domain axis never had this bug. In
+                    # extreme-narrow mode min_gap is 0 and thinning is the only
+                    # way to fit any labels, so keep skipping there.
+                    if extreme_narrow:
+                        continue
+                    too_dense = True
+                    break
                 fitted.append((float(tick_value), text))
                 previous_right = right
-            if len(fitted) < _TARGET_BOTTOM_TICK_MIN_COUNT:
+            if too_dense or len(fitted) < _TARGET_BOTTOM_TICK_MIN_COUNT:
                 continue
             candidates.append((
                 abs(len(fitted) - target),

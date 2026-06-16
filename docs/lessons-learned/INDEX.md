@@ -53,6 +53,7 @@ lesson by default.
 | [Tick Density Lives In Chart Toolbar Popout](codex-tick-density-toolbar-popout.md) | Touching global tick-density controls, Inspector persistent chart | See lesson |
 | [Codex Time Range Preserve Xaxis Draft](codex-time-range-preserve-xaxis-draft.md) | Changing time-range toggles, custom X-axis controls, or time-domain | See lesson |
 | [Analysis Bottom Axis Explicit Ticks Retick On Range Change](analysis-bottom-axis-explicit-ticks-retick-on-range-change.md) | Changing pyqtgraph Analysis bottom-axis tick generation from adaptive density to explicit `AxisItem.setTicks(...)`. | See lesson |
+| [Bottom Tick Fitter Reject Over-Fine Not Thin](pyqt-ui/2026-06-17-bottom-tick-fitter-reject-overfine-not-thin.md) | Touching `_apply_target_bottom_ticks` / `_fit_x_tick_labels` target-count tick fitting; FFT/heatmap X ticks non-round or truncated short of the right edge. | `tests/ui/test_pg_heatmap_canvas.py` |
 
 ## Selection Rules
 

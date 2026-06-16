@@ -5,7 +5,11 @@ import pytest
 from PyQt5.QtCore import QPointF, Qt
 
 from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
-from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+    PgHeatmapCanvas,
+    _apply_target_bottom_ticks,
+    _make_analysis_plot,
+)
 from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
 
 
@@ -909,6 +913,57 @@ def test_heatmap_unshown_bottom_ticks_fall_back_to_density():
             assert not getattr(axis, "_tickLevels", None)
     finally:
         c.deleteLater()
+
+
+def _target_bottom_ticks_for(qapp, lo, hi, *, width, target=10):
+    """Run ``_apply_target_bottom_ticks`` against a real axis of ``width`` px
+    over the view range ``[lo, hi]`` and return the pinned tick values."""
+    glw = pg.GraphicsLayoutWidget()
+    glw.resize(int(width) + 80, 400)
+    plot = _make_analysis_plot(glw, 0, 0, pg.ViewBox())
+    glw.show()
+    qapp.processEvents()
+    axis = plot.getAxis("bottom")
+    plot.vb.setXRange(lo, hi, padding=0)
+    # Pin the axis to the exact width the regression depends on.
+    axis.setWidth(float(width))
+    qapp.processEvents()
+    ok = _apply_target_bottom_ticks(axis, plot.vb, target, glw)
+    try:
+        return ok, _bottom_tick_values(axis)
+    finally:
+        glw.deleteLater()
+
+
+def test_bottom_ticks_span_to_right_edge_for_nonround_range(qapp):
+    # Regression: an FFT spectrum auto-x range like [0, 7.162] must not leave a
+    # large blank gap at the right. The over-fine-step candidate (e.g. 0.01)
+    # used to win by thinning down to exactly the target count, stopping near
+    # 4.57 and leaving ~36% of the axis tickless.
+    ok, values = _target_bottom_ticks_for(qapp, 0.0, 7.162, width=505)
+    assert ok and len(values) >= 3
+    spacing = min(
+        b - a for a, b in zip(values, values[1:]) if b > a
+    )
+    gap = 7.162 - max(values)
+    assert gap <= 1.5 * spacing, (
+        f"rightmost tick {max(values):.3f} leaves a {gap:.3f} blank "
+        f"(> 1.5x spacing {spacing:.3f}) before the edge 7.162; ticks={values}"
+    )
+
+
+def test_bottom_ticks_use_round_grid_for_nonround_range(qapp):
+    # The pinned ticks should sit on a clean grid anchored at 0 (e.g. 1,2,3,…)
+    # rather than arbitrary thinned positions (0.21, 0.69, 1.16, …).
+    _ok, values = _target_bottom_ticks_for(qapp, 0.0, 7.162, width=505)
+    spacing = min(
+        b - a for a, b in zip(values, values[1:]) if b > a
+    )
+    for value in values:
+        ratio = value / spacing
+        assert abs(ratio - round(ratio)) <= 0.05, (
+            f"tick {value:.3f} is off the {spacing:.3f} grid; ticks={values}"
+        )
 
 
 def test_heatmap_canvas_uses_compact_outer_pg_layout(canvas):
