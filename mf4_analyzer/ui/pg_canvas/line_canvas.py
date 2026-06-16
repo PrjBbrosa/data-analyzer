@@ -21,6 +21,12 @@ from mf4_analyzer.ui._axis_handle import (
 )
 from mf4_analyzer.ui.canvases import build_envelope
 
+# Overlay AA point-density budget, shared with TimeDomainCanvasPG (canvas.py:
+# 145-146): ON=5000 / OFF=7000 with hysteresis. Imported (not re-defined) so
+# the two renderers cannot drift — the time preview's AA must gate on the same
+# per-frame drawn-point SUM economics as the main time-domain overlay.
+from .canvas import _AA_OVERLAY_SEGMENT_OFF, _AA_OVERLAY_SEGMENT_ON
+
 from .heatmap_canvas import (
     _apply_axis_tick_density,
     _apply_neutral_axis_frame,
@@ -224,6 +230,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # antialiasing while the user pans/zooms so each frame is a cheap
         # non-AA raster, then restore crisp AA after a short hands-off idle.
         self._aa_on = True
+        # Time-preview AA density-budget hysteresis (mirrors QualityManager's
+        # density_seeded/density_allowed for the overlay branch). Re-seeded
+        # against the OFF budget whenever the curve set is rebuilt; thereafter
+        # metric<=ON→on, metric>OFF→off, dead band holds last.
+        self._time_aa_density_allowed = False
+        self._time_aa_density_seeded = False
         self._last_quality_status = None
         self._aa_idle_timer = QTimer(self)
         self._aa_idle_timer.setSingleShot(True)
@@ -309,12 +321,45 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             except Exception:
                 pass
 
+    def _time_preview_aa_allowed(self) -> bool:
+        """Hysteresis AA gate for the time preview, keyed to drawn-point SUM.
+
+        Replaces the old ``len(entries) <= 1`` one-cut kill: the overlaid
+        time traces share one full-plot raster region (like TimeDomainCanvasPG
+        overlay), so AA cost is linear in the SUM of points across all
+        ``_time_curves``. Gate on the same ON=5000 / OFF=7000 budget with
+        hysteresis: an empty/single curve set is always AA-on; otherwise seed
+        against OFF, then metric<=ON→on, metric>OFF→off, dead band holds. The
+        result is cached on ``_time_aa_density_allowed`` and reused as the
+        conservative fallback if ``getData()`` is unavailable / raises."""
+        curves = list(self._time_curves)
+        if len(curves) <= 1:
+            # A single trace (or none) is one cheap region — always crisp.
+            self._time_aa_density_allowed = True
+            return True
+        try:
+            total = 0
+            for c in curves:
+                xd, _yd = c.getData()
+                total += 0 if xd is None else len(xd)
+        except Exception:
+            # Defensive: keep the last settled allowance rather than crash.
+            return bool(self._time_aa_density_allowed)
+        if not self._time_aa_density_seeded:
+            self._time_aa_density_allowed = total <= int(_AA_OVERLAY_SEGMENT_OFF)
+            self._time_aa_density_seeded = True
+        elif total <= int(_AA_OVERLAY_SEGMENT_ON):
+            self._time_aa_density_allowed = True
+        elif total > int(_AA_OVERLAY_SEGMENT_OFF):
+            self._time_aa_density_allowed = False
+        return bool(self._time_aa_density_allowed)
+
     def _apply_idle_curve_aa(self):
         """Restore each curve's settled-state AA: the amplitude overlay is
-        always crisp; the time preview keeps AA off whenever more than one
-        source is overlaid (its creation policy in
-        ``_plot_time_preview_entries``)."""
-        time_idle_aa = len(self._time_curves) <= 1
+        always crisp; the time preview's AA follows the drawn-point density
+        budget (``_time_preview_aa_allowed``), so light multi-source overlays
+        stay crisp while dense ones drop AA — matching TimeDomainCanvasPG."""
+        time_idle_aa = self._time_preview_aa_allowed()
         for c in self._amp_curves:
             self._set_curve_aa(c, True)
         for c in self._time_curves:
@@ -374,8 +419,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         """Return the {state, tooltip} dict consumed by the chart quality dot.
 
         Judged on the amplitude spectrum curves (the primary FFT trace); the
-        time-preview curves intentionally drop AA when >1 source is overlaid,
-        so they are not used to decide the green/red readiness state.
+        time-preview curves gate their AA on a drawn-point density budget
+        (light overlays stay crisp, dense ones drop AA), so they are not a
+        reliable signal for the green/red readiness state and are excluded.
         """
         judged = self._amp_curves or self._time_curves
         if not judged:
@@ -977,6 +1023,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             except Exception:
                 pass
         self._time_curves.clear()
+        # New curve set → re-seed the AA density hysteresis against the OFF
+        # budget so a fresh overlay is judged on its own drawn-point sum.
+        self._time_aa_density_seeded = False
         self._clear_time_overlay_axes()
         entries = list(entries or [])
         if not entries:
@@ -1003,10 +1052,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # bound (project lesson: TimeDomain 卡顿=CPU 光栅,随 overlay 通道数超
         # 线性). The win comes from cutting points-rasterized × channels, so we
         # (1) decimate each source to a viewport-pixel-width min/max envelope
-        # via the same build_envelope used by TimeDomainCanvasPG, and (2) drop
-        # antialias once more than one channel is overlaid.
+        # via the same build_envelope used by TimeDomainCanvasPG, and (2) gate
+        # antialias on the overlay drawn-point density budget (ON=5000/OFF=7000,
+        # imported from canvas.py). The curves are built AA-off provisionally —
+        # their real point counts are only known once every curve is appended —
+        # then ``_apply_idle_curve_aa`` lands the budgeted AA below.
         pixel_width = self._preview_pixel_width()
-        antialias = len(entries) <= 1
+        antialias = False
         x_bounds = []
         for i, e in enumerate(entries):
             t = np.asarray(e.get('time', []), dtype=float)
@@ -1056,6 +1108,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # (sigResized) once the layout with the new right axes is realized.
         self._sync_time_overlay_vbs()
         self.layout_geometry_changed.emit()
+        # Curves were built AA-off provisionally; now that every curve is in
+        # _time_curves their real drawn-point sum is known, so land the budgeted
+        # AA. Only in the settled (_aa_on) state — a rebuild mid pan/zoom keeps
+        # AA off, and the idle timer's _apply_idle_curve_aa lands it on restore.
+        if self._aa_on:
+            self._apply_idle_curve_aa()
         # Time-preview-only updates (source selection before 计算) rebuild the
         # curve set, so refresh the AA dot here too — otherwise it keeps the
         # previous render's state until the next pan/zoom.

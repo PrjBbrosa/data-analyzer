@@ -433,8 +433,8 @@ def test_fft_amp_curves_are_antialiased(canvas):
     # The FFT amplitude overlay (top row) is always antialiased — it is a
     # bounded spectrum (~freq-bin count), not a multi-million-point time
     # source, so AA cost is negligible. The time-preview (bottom) row is
-    # governed separately (AA off for multi-source overlay); see
-    # test_time_preview_disables_antialias_for_overlay.
+    # governed separately by a drawn-point density budget (light overlays stay
+    # crisp, dense ones drop AA); see test_time_preview_aa_follows_density_budget.
     canvas.plot_spectra(
         [_entry(), _entry('f2 · vib', '#dc2626')],
         xlim=(0.0, 500.0),
@@ -446,9 +446,10 @@ def test_fft_amp_curves_are_antialiased(canvas):
     )
     assert canvas._amp_curves
     assert all(c.opts.get('antialias') is True for c in canvas._amp_curves)
-    # Single-entry preview keeps AA; this two-entry spectrum overlay has a
-    # two-source time preview, which goes AA-off.
-    assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
+    # Each _entry() time trace is ~1000 pts, so this two-source preview sums to
+    # ~2000 pts < ON(5000): under the density budget it stays AA-ON (no longer
+    # the old len>1 one-cut kill).
+    assert all(c.opts.get('antialias') is True for c in canvas._time_curves)
 
 
 def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp, monkeypatch):
@@ -486,8 +487,9 @@ def test_fft_pan_drops_curve_aa_until_idle(canvas, qapp, monkeypatch):
     assert canvas._aa_on is True
     assert all(c.opts.get('antialias') is True for c in canvas._amp_curves), \
         "idle restores crisp AA on the spectrum"
-    # The two-source time preview stays AA-off even when idle (overlay perf).
-    assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
+    # This light two-source preview (~2000 pts < ON) restores AA-on when idle,
+    # via the density budget — not the old unconditional overlay AA-off.
+    assert all(c.opts.get('antialias') is True for c in canvas._time_curves)
 
 
 def test_disable_interactive_quality_drops_aa_on_rendered_child(canvas):
@@ -1032,9 +1034,13 @@ def test_format_readout_empty_when_no_entries(canvas):
     assert canvas.format_readout(120.0) == ""
 
 
+def test_fft_time_preview_default_divisions_match_standard_y_density(canvas):
+    assert canvas._time_divisions == 10
+
+
 def test_set_tick_density_accepts_inspector_counts(canvas):
     # Inspector PersistentTop passes integer tick COUNTS (x spinbox
-    # 3-30, y spinbox 3-20; defaults 10/8), NOT pg density factors —
+    # 3-30, y spinbox 3-20; defaults 10/10), NOT pg density factors —
     # same contract as PgHeatmapCanvas.set_tick_density (lesson
     # 2026-06-11-inspector-tick-counts-vs-pg-density-factors).
     canvas.set_tick_density(10, 8)
@@ -1173,16 +1179,26 @@ def test_time_preview_empty_arrays_render_no_curve(canvas):
     assert len(canvas._time_curves) == 0
 
 
-def test_time_preview_disables_antialias_for_overlay(canvas):
-    # Single channel keeps antialias (crisp); overlaying >1 channel turns
-    # antialias OFF — the win is cutting (points-rasterized × channels),
-    # and AA on multi-curve overlays is the CPU-raster cost.
+def test_time_preview_aa_follows_density_budget(canvas):
+    # AA is no longer a len>1 one-cut kill: it follows the overlay drawn-point
+    # density budget (ON=5000/OFF=7000), mirroring TimeDomainCanvasPG. A single
+    # channel is always crisp; a LIGHT multi-source overlay stays AA-ON; a HEAVY
+    # one drops AA. Each curve passes build_envelope's small-visible shortcut
+    # (n <= 2*fallback_pixel_width=4000) so its point count is deterministic.
     e1 = _entry('a', '#2563eb')
     canvas.plot_time_preview([e1], title='时域预览')
     assert canvas._time_curves[0].opts.get('antialias') is True
 
+    # Light overlay: 2 traces × ~1000 pts ≈ 2000 < ON → stays AA-ON.
     e2 = _entry('b', '#dc2626')
     canvas.plot_time_preview([e1, e2], title='时域预览')
+    assert all(c.opts.get('antialias') is True for c in canvas._time_curves)
+
+    # Heavy overlay: 2 traces × 4000 pts = 8000 > OFF → drops AA.
+    heavy = _time_only_entries(4000, 2)
+    canvas.plot_time_preview(heavy, title='时域预览')
+    total = sum(len(c.getData()[0]) for c in canvas._time_curves)
+    assert total > 7000, f"heavy setup must exceed OFF budget, got {total}"
     assert all(c.opts.get('antialias') is False for c in canvas._time_curves)
 
 
@@ -1408,7 +1424,7 @@ def test_fit_y_keeps_time_axes_on_grid(canvas):
     left = canvas._plot_time.getAxis('left')
     (lo, hi) = canvas._plot_time.vb.viewRange()[1]
     fr = [round((v - lo) / (hi - lo), 6) for v in _major_tick_values(left)]
-    assert fr == pytest.approx([k / 8 for k in range(9)], abs=1e-6)
+    assert fr == pytest.approx([k / 10 for k in range(11)], abs=1e-6)
 
 
 def test_constant_signal_does_not_raise(canvas):
@@ -1596,3 +1612,109 @@ def test_fft_history_time_handle_only_restores_x(canvas):
     handle.set_ylim(-999.0, 999.0)
     after = tuple(canvas._plot_time.vb.viewRange()[1])
     assert after == pytest.approx(before, abs=1e-6)
+
+
+# ----------------------------------------------------------------------
+# Time-preview AA density budget (移植 TimeDomainCanvasPG overlay 预算到
+# FFT 卡底部的时域预览). The old gate was `len(entries) <= 1` — a one-cut
+# kill that dropped AA on ANY overlay regardless of point count. The new
+# gate sums each `_time_curves` curve's drawn points and runs the same
+# ON=5000 / OFF=7000 hysteresis as the main time-domain canvas.
+# ----------------------------------------------------------------------
+
+
+class _FakeCurve:
+    """Minimal stand-in: only getData() length + opts['antialias'] matter."""
+
+    def __init__(self, n):
+        self._n = int(n)
+        self.opts = {"antialias": False}
+
+    def getData(self):
+        x = np.zeros(self._n, dtype=float)
+        return x, x
+
+
+def _time_only_entries(n_points, n_curves, colors=None):
+    """n_curves time-preview entries whose envelope passes through untouched.
+
+    Each entry uses a SMALL n_points so build_envelope's small-visible
+    shortcut returns the raw series (n <= 2*pixel_width), making the per-
+    curve point count deterministic == n_points regardless of realized
+    plot width. amp/freq are dummies (time preview ignores them)."""
+    palette = colors or ['#2563eb', '#dc2626', '#22c55e', '#f59e0b', '#a855f7']
+    out = []
+    for i in range(n_curves):
+        t = np.linspace(0.0, 1.0, n_points)
+        out.append({
+            'label': f's{i}',
+            'color': palette[i % len(palette)],
+            'freq': np.linspace(0, 50, 8),
+            'amp': np.ones(8),
+            'time': t,
+            'signal': np.sin(2 * np.pi * 3.0 * t),
+        })
+    return out
+
+
+def _aa_flags(canvas):
+    return [bool(c.opts.get("antialias", False)) for c in canvas._time_curves]
+
+
+def test_time_preview_low_density_multi_overlay_keeps_aa_on(canvas):
+    # 3 light traces, total points 3000 < ON(5000): the new budget keeps AA
+    # ON even though >1 source is overlaid. Old `len(entries)<=1` set False.
+    canvas.plot_time_preview(_time_only_entries(1000, 3))
+    assert len(canvas._time_curves) == 3
+    flags = _aa_flags(canvas)
+    assert all(flags), f"expected AA on for all light overlaid curves, got {flags}"
+
+
+def test_time_preview_high_density_multi_overlay_drops_aa(canvas):
+    # 3 heavy traces, total points 12000 > OFF(7000): budget gates AA OFF.
+    canvas.plot_time_preview(_time_only_entries(4000, 3))
+    assert len(canvas._time_curves) == 3
+    # Sanity: each curve really carries ~4000 points (envelope passed through).
+    total = sum(len(c.getData()[0]) for c in canvas._time_curves)
+    assert total > 7000, f"test setup must exceed OFF budget, got {total}"
+    flags = _aa_flags(canvas)
+    assert not any(flags), f"expected AA off for dense overlay, got {flags}"
+
+
+def test_time_preview_single_entry_keeps_aa_on(canvas):
+    # Single source must stay AA-on (no regression vs the old single-cut).
+    canvas.plot_time_preview(_time_only_entries(4000, 1))
+    assert len(canvas._time_curves) == 1
+    assert _aa_flags(canvas) == [True]
+
+
+def test_time_preview_aa_gate_hysteresis_recovers_below_on(canvas):
+    # Hysteresis: once gated OFF by a dense set, a fresh rebuild that lands
+    # between ON and OFF re-seeds against OFF and a subsequent shrink to <=ON
+    # recovers. We exercise the gate method directly with controlled curves
+    # to avoid coupling to realized envelope geometry.
+    # Seed high → off.
+    canvas._time_curves = [_FakeCurve(4000), _FakeCurve(4000)]   # 8000 > OFF
+    canvas._time_aa_density_seeded = False
+    assert canvas._time_preview_aa_allowed() is False
+    # Still seeded; metric in the dead band (5000<m<=7000) holds OFF.
+    canvas._time_curves = [_FakeCurve(3000), _FakeCurve(3000)]   # 6000 dead band
+    assert canvas._time_preview_aa_allowed() is False
+    # Drop to <= ON → recovers to True.
+    canvas._time_curves = [_FakeCurve(2000), _FakeCurve(2000)]   # 4000 <= ON
+    assert canvas._time_preview_aa_allowed() is True
+
+
+def test_time_preview_aa_gate_defends_against_baddata(canvas):
+    # A curve whose getData() raises must not crash the gate; it falls back
+    # to the cached allowance.
+    class _Boom:
+        opts = {"antialias": True}
+
+        def getData(self):
+            raise RuntimeError("no data")
+
+    canvas._time_aa_density_allowed = True
+    canvas._time_curves = [_FakeCurve(1000), _Boom()]
+    # Should not raise; conservative fallback returns the cached value.
+    assert canvas._time_preview_aa_allowed() in (True, False)
