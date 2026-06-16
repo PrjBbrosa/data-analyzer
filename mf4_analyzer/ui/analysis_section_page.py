@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QSplitter,
@@ -111,6 +112,8 @@ class AnalysisSectionPage(QWidget):
         self._previous_focused = 0
         self._linked = False
         self._levels_locked = False
+        self.manager.active_changed.connect(self.refresh_focus_style)
+        self.manager.views_changed.connect(self.refresh_focus_style)
         # Swallows the toggled(bool) edge during programmatic
         # sync_compare_buttons so state→button seeding never loops back as a
         # compare_toggled write. Set before the buttons are wired.
@@ -371,10 +374,26 @@ class AnalysisSectionPage(QWidget):
                 return i
         return None
 
+    def _active_view_focus_accent(self) -> str:
+        try:
+            accent = self.manager.get(self.manager.active).tab_color
+        except Exception:
+            accent = None
+        if not accent or not QColor(accent).isValid():
+            return _FOCUS_ACCENT
+        return accent
+
+    def refresh_focus_style(self, *_args) -> None:
+        self._apply_focus_style()
+
     def _apply_focus_style(self) -> None:
+        focus_accent = self._active_view_focus_accent()
         for i, card in enumerate(self._cards):
-            accent = (_FOCUS_ACCENT if (i == self._focused and
-                                        len(self._cards) > 1) else "transparent")
+            accent = (
+                focus_accent
+                if (i == self._focused and len(self._cards) > 1)
+                else "transparent"
+            )
             # padding insets the layout content rect so the margin-0 canvas
             # child stops overpainting the 1px ring (same lesson as
             # WA_StyledBackground above).

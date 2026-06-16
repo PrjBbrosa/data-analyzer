@@ -6,7 +6,7 @@ from PyQt5.QtCore import QEvent, QPointF, Qt
 from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import QVBoxLayout
 
-from mf4_analyzer.ui.analysis_section_page import AnalysisSectionPage
+from mf4_analyzer.ui.analysis_section_page import AnalysisSectionPage, _FOCUS_ACCENT
 from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
 from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
 from mf4_analyzer.ui.view_state import ViewManager
@@ -320,6 +320,63 @@ def test_focus_signal_emitted(page):
     page.enter_split()
     page.set_focused_index(1)
     assert received == [1]
+
+
+def test_split_focus_border_uses_active_view_tab_color(page):
+    page.manager.set_color(page.manager.active, "#e8590c")
+
+    page.enter_split()
+    page.set_focused_index(1)
+
+    assert "#e8590c" in page._cards[1].styleSheet()
+    assert "#e8590c" not in page._cards[0].styleSheet()
+    assert "transparent" in page._cards[0].styleSheet()
+
+
+def test_focus_border_invalid_view_color_falls_back_to_default(page):
+    page.manager.set_color(page.manager.active, "bad")
+
+    page.enter_split()
+    page.set_focused_index(1)
+
+    assert _FOCUS_ACCENT in page._cards[1].styleSheet()
+    assert "bad" not in page._cards[1].styleSheet()
+    assert _FOCUS_ACCENT not in page._cards[0].styleSheet()
+    assert "transparent" in page._cards[0].styleSheet()
+
+
+def test_single_analysis_pane_does_not_show_focus_border(page):
+    page.manager.set_color(page.manager.active, "#e8590c")
+
+    page.set_focused_index(0)
+
+    style = page._cards[0].styleSheet()
+    assert "#e8590c" not in style
+    assert "border: 1px solid transparent" in style
+    assert "padding: 0px" in style
+
+
+def test_focus_border_refreshes_when_active_view_color_changes(page):
+    page.enter_split()
+    page.set_focused_index(1)
+
+    page.manager.set_color(page.manager.active, "#059669")
+
+    assert "#059669" in page._cards[1].styleSheet()
+    assert "#059669" not in page._cards[0].styleSheet()
+
+
+def test_focus_border_refreshes_when_active_view_changes(page):
+    new_idx = page.manager.new_view()
+    page.manager.set_color(new_idx, "#9c36b5")
+    page.manager.set_active(0)
+    page.enter_split()
+    page.set_focused_index(1)
+
+    page.manager.set_active(new_idx)
+
+    assert "#9c36b5" in page._cards[1].styleSheet()
+    assert "#9c36b5" not in page._cards[0].styleSheet()
 
 
 # -- V8: locked color levels -----------------------------------------------

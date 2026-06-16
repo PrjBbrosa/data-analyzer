@@ -14,15 +14,24 @@ def test_default_view_one_empty_pane():
 def test_round_trip_preserves_everything():
     v = AnalysisViewState(name="对比", tab_color="#e8590c")
     v.panes = [
-        PaneState(sources=[("f1", "vib_x"), ("f2", "vib_x")]),
-        PaneState(sources=[("f1", "vib_y")], rpm_source=("f1", "rpm")),
+        PaneState(
+            sources=[("f1", "vib_x"), ("f2", "vib_x")],
+            time_range=(1.25, 2.75),
+        ),
+        PaneState(
+            sources=[("f1", "vib_y")],
+            rpm_source=("f1", "rpm"),
+            time_range=(5.0, 8.0),
+        ),
     ]
     v.params = {"nfft": 4096, "window": "hanning"}
     v.compare = {"x_linked": False, "levels_locked": True}
     v2 = AnalysisViewState.from_dict(v.to_dict())
     assert v2.name == "对比"
     assert v2.panes[0].sources == [("f1", "vib_x"), ("f2", "vib_x")]
+    assert v2.panes[0].time_range == (1.25, 2.75)
     assert v2.panes[1].rpm_source == ("f1", "rpm")
+    assert v2.panes[1].time_range == (5.0, 8.0)
     assert v2.params["nfft"] == 4096
     assert v2.compare["x_linked"] is False
 
@@ -30,7 +39,23 @@ def test_round_trip_preserves_everything():
 def test_from_dict_tolerates_missing_fields():
     v = AnalysisViewState.from_dict({"name": "x", "tab_color": "#fff"})
     assert v.panes[0].sources == []
+    assert v.panes[0].time_range is None
     assert v.params == {}
+
+
+def test_from_dict_tolerates_existing_pane_missing_time_range():
+    v = AnalysisViewState.from_dict({
+        "name": "x",
+        "tab_color": "#fff",
+        "panes": [{
+            "sources": [["f1", "vib_x"]],
+            "rpm_source": ["f1", "rpm"],
+        }],
+    })
+
+    assert v.panes[0].sources == [("f1", "vib_x")]
+    assert v.panes[0].rpm_source == ("f1", "rpm")
+    assert v.panes[0].time_range is None
 
 
 def test_overlay_validation():

@@ -1942,6 +1942,105 @@ def test_fft_contextual_source_summary_replaces_signal_combo_for_checked_sources
     assert w.combo_sig.isHidden() is False
 
 
+def test_fft_auto_xlim_keeps_low_frequency_spectrum_tight():
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    freq = np.linspace(0.0, 25.0, 251)
+    amp = np.zeros_like(freq)
+    meaningful = (freq >= 1.0) & (freq <= 8.0)
+    amp[meaningful] = 1.0
+    amp[freq > 8.0] = 0.005
+
+    xmax = MainWindow._fft_auto_xlim(freq, amp)
+
+    assert xmax > 8.0
+    assert xmax <= 10.0
+    assert xmax <= freq[-1]
+
+
+def test_plot_fft_entries_auto_xlim_includes_all_overlay_sources(qtbot):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    class _Canvas:
+        def __init__(self):
+            self.plot_kwargs = None
+            self.tick_density = None
+
+        def plot_spectra(self, entries, **kwargs):
+            self.plot_kwargs = kwargs
+
+        def set_tick_density(self, xt, yt):
+            self.tick_density = (xt, yt)
+
+    def amp_through(cutoff):
+        amp = np.zeros_like(freq)
+        amp[(freq >= 1.0) & (freq <= cutoff)] = 1.0
+        amp[freq > cutoff] = 0.005
+        return amp
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    freq = np.linspace(0.0, 25.0, 251)
+    entries = [
+        {"label": "low", "color": "#2563eb", "freq": freq,
+         "amp": amp_through(8.0), "time": [], "signal": []},
+        {"label": "higher", "color": "#dc2626", "freq": freq,
+         "amp": amp_through(12.0), "time": [], "signal": []},
+    ]
+    canvas = _Canvas()
+
+    win._plot_fft_entries(entries, canvas)
+
+    xmax = canvas.plot_kwargs["xlim"][1]
+    assert xmax > 12.0
+    assert xmax <= 15.0
+    assert xmax <= freq[-1]
+
+
+def test_plot_fft_entries_auto_xlim_uses_raw_amp_in_db_mode(qtbot):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    class _Canvas:
+        def __init__(self):
+            self.plot_kwargs = None
+
+        def plot_spectra(self, entries, **kwargs):
+            self.plot_kwargs = kwargs
+
+        def set_tick_density(self, xt, yt):
+            pass
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.inspector.fft_ctx.combo_amp_y.setCurrentText("dB")
+    freq = np.linspace(0.0, 25.0, 251)
+    amp = np.zeros_like(freq)
+    amp[(freq >= 1.0) & (freq <= 8.0)] = 1.0
+    amp[freq > 8.0] = 0.005
+    amp_db = 20 * np.log10(
+        np.clip(amp, 1e-12, None) / max(amp.max(), 1e-12)
+    )
+    entries = [{
+        "label": "low",
+        "color": "#2563eb",
+        "freq": freq,
+        "amp": amp_db,
+        "amp_for_xlim": amp,
+        "time": [],
+        "signal": [],
+    }]
+    canvas = _Canvas()
+
+    win._plot_fft_entries(entries, canvas)
+
+    xmax = canvas.plot_kwargs["xlim"][1]
+    assert xmax > 8.0
+    assert xmax <= 10.0
+
+
 def test_fft_render_honors_amplitude_axis_toggle(qtbot):
     """Toggling Amp axis to dB must change the spectrum y-label text — this
     proves the toggle round-trips

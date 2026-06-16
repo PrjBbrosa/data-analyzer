@@ -127,6 +127,269 @@ def test_fft_time_preview_drag_updates_analysis_time_range(two_file_win, qapp):
     assert win.inspector.top.range_values() == pytest.approx((0.2, 0.6), abs=1e-6)
 
 
+def test_fft_split_same_source_different_time_ranges_have_distinct_cache_keys(
+    two_file_win, qapp
+):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fids = list(win.files.keys())
+    page = win.chart_stack.page_fft
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+
+    win._on_analysis_split("fft", True)
+    state.panes[0].sources = [(fids[0], "speed")]
+    state.panes[0].time_range = (0.0, 0.35)
+    state.panes[1].sources = [(fids[0], "speed")]
+    state.panes[1].time_range = (0.55, 1.0)
+    win.navigator.set_checked_channels(state.panes[0].sources)
+    win.inspector.top.set_range_from_span(0.0, 0.35)
+
+    k0 = win._analysis_cache_key("fft", fids[0], "speed", pane_idx=0)
+    k1 = win._analysis_cache_key("fft", fids[0], "speed", pane_idx=1)
+
+    assert k0 != k1
+
+    win.do_fft()
+    qapp.processEvents()
+
+    c0 = page.pane_canvas(0)
+    c1 = page.pane_canvas(1)
+    assert len(c0._amp_curves) == 1
+    assert len(c1._amp_curves) == 1
+    assert win.analysis_caches["fft"].get(k0) is not None
+    assert win.analysis_caches["fft"].get(k1) is not None
+
+
+def _time_range_slice(fd, ch, time_range):
+    lo, hi = time_range
+    t = np.asarray(fd.time_array, dtype=float)
+    sig = np.asarray(fd.data[ch].to_numpy(copy=False), dtype=float)
+    mask = (t >= lo) & (t <= hi)
+    return t[mask], sig[mask]
+
+
+def test_fft_split_same_source_uses_each_pane_time_range(two_file_win, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fids = list(win.files.keys())
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    win._on_analysis_split("fft", True)
+    state.panes[0].sources = [(fids[0], "speed")]
+    state.panes[0].time_range = (0.0, 0.25)
+    state.panes[1].sources = [(fids[0], "speed")]
+    state.panes[1].time_range = (0.75, 1.0)
+    win.navigator.set_checked_channels(state.panes[0].sources)
+    win.inspector.top.set_range_from_span(*state.panes[0].time_range)
+
+    seen_slices = []
+    real_compute = win._fft_compute_arrays
+
+    def spy_compute(sig, fs, fft_params):
+        seen_slices.append((len(sig), float(sig[0]), float(sig[-1])))
+        return real_compute(sig, fs, fft_params)
+
+    monkeypatch.setattr(win, "_fft_compute_arrays", spy_compute)
+
+    win.do_fft()
+
+    fd = win.files[fids[0]]
+    expected = []
+    for rng in (state.panes[0].time_range, state.panes[1].time_range):
+        _t, sig = _time_range_slice(fd, "speed", rng)
+        expected.append((len(sig), float(sig[0]), float(sig[-1])))
+
+    assert len(seen_slices) == 2
+    assert all(length < len(fd.data) for length, _first, _last in seen_slices)
+    assert seen_slices == pytest.approx(expected)
+
+
+def test_fft_cached_render_uses_each_pane_time_range_for_preview(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fids = list(win.files.keys())
+    fid = fids[0]
+    page = win.chart_stack.page_fft
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    win._on_analysis_split("fft", True)
+    state.panes[0].sources = [(fid, "speed")]
+    state.panes[0].time_range = (0.10, 0.20)
+    state.panes[1].sources = [(fid, "speed")]
+    state.panes[1].time_range = (0.70, 0.90)
+
+    freq = np.asarray([0.0, 1.0, 2.0], dtype=float)
+    amp = np.asarray([1.0, 0.5, 0.25], dtype=float)
+    for pane_idx in (0, 1):
+        key = win._analysis_cache_key("fft", fid, "speed", pane_idx=pane_idx)
+        win.analysis_caches["fft"].put(key, (freq, amp, amp ** 2))
+
+    win.inspector.top.set_range_from_span(0.40, 0.45)
+
+    win._render_analysis_view_from_cache("fft", state)
+
+    for pane_idx in (0, 1):
+        canvas = page.pane_canvas(pane_idx)
+        assert len(canvas._time_curves) == 1
+        tx, _ty = canvas._time_curves[0].getData()
+        expected_t, _expected_sig = _time_range_slice(
+            win.files[fid], "speed", state.panes[pane_idx].time_range
+        )
+        np.testing.assert_allclose(tx, expected_t)
+
+
+def test_fft_time_dispatch_uses_explicit_time_range(two_file_win, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    fids = list(win.files.keys())
+    win.inspector.top.set_range_from_span(0.0, 0.25)
+
+    seen = []
+
+    from mf4_analyzer.signal import spectrogram as spectrogram_mod
+
+    def fake_compute(
+        sig,
+        time,
+        params,
+        channel_name="",
+        unit="",
+        progress_callback=None,
+        cancel_token=None,
+    ):
+        seen.append((len(sig), float(time[0]), float(time[-1])))
+        return object()
+
+    class DummyProgress:
+        def emit(self, *args):
+            pass
+
+    class DummyWorker:
+        progress = DummyProgress()
+        cancelled = False
+
+    monkeypatch.setattr(
+        spectrogram_mod.SpectrogramAnalyzer,
+        "compute",
+        staticmethod(fake_compute),
+    )
+    monkeypatch.setattr(
+        win, "_start_fft_time_worker", lambda job: job(DummyWorker())
+    )
+
+    assert win._dispatch_fft_time_job(
+        1, fids[0], "speed", time_range=(0.75, 1.0)
+    )
+
+    t, sig = _time_range_slice(win.files[fids[0]], "speed", (0.75, 1.0))
+    assert seen == pytest.approx([(len(sig), float(t[0]), float(t[-1]))])
+
+
+def test_fft_time_dispatch_omitted_time_range_uses_inspector_fallback(
+    two_file_win, monkeypatch
+):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    fids = list(win.files.keys())
+    win.inspector.top.set_range_from_span(0.20, 0.30)
+
+    seen = []
+
+    from mf4_analyzer.signal import spectrogram as spectrogram_mod
+
+    def fake_compute(
+        sig,
+        time,
+        params,
+        channel_name="",
+        unit="",
+        progress_callback=None,
+        cancel_token=None,
+    ):
+        seen.append((len(sig), float(time[0]), float(time[-1])))
+        return object()
+
+    class DummyProgress:
+        def emit(self, *args):
+            pass
+
+    class DummyWorker:
+        progress = DummyProgress()
+        cancelled = False
+
+    monkeypatch.setattr(
+        spectrogram_mod.SpectrogramAnalyzer,
+        "compute",
+        staticmethod(fake_compute),
+    )
+    monkeypatch.setattr(
+        win, "_start_fft_time_worker", lambda job: job(DummyWorker())
+    )
+
+    assert win._dispatch_fft_time_job(1, fids[0], "speed")
+    assert win._dispatch_fft_time_job(1, fids[0], "speed", time_range=None)
+
+    inspector_t, inspector_sig = _time_range_slice(
+        win.files[fids[0]], "speed", (0.20, 0.30)
+    )
+    full_t = np.asarray(win.files[fids[0]].time_array, dtype=float)
+    full_sig = np.asarray(
+        win.files[fids[0]].data["speed"].to_numpy(copy=False), dtype=float
+    )
+    assert len(seen) == 2
+    assert seen[0] == pytest.approx(
+        (len(inspector_sig), float(inspector_t[0]), float(inspector_t[-1]))
+    )
+    assert seen[1] == pytest.approx(
+        (len(full_sig), float(full_t[0]), float(full_t[-1]))
+    )
+
+
+def test_order_helpers_use_explicit_time_range(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("order")
+    fids = list(win.files.keys())
+    win.inspector.top.set_range_from_span(0.0, 0.25)
+
+    t, sig = win._order_sig_for((fids[0], "speed"), time_range=(0.75, 1.0))
+    rpm = win._order_rpm_for(
+        (fids[0], "speed"), len(sig), time_range=(0.75, 1.0)
+    )
+
+    expected_t, expected_sig = _time_range_slice(
+        win.files[fids[0]], "speed", (0.75, 1.0)
+    )
+    np.testing.assert_array_equal(t, expected_t)
+    np.testing.assert_array_equal(sig, expected_sig)
+    np.testing.assert_array_equal(rpm, expected_sig)
+
+
+def test_analysis_focus_switch_echoes_pane_local_time_range(two_file_win, qapp):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fids = list(win.files.keys())
+    page = win.chart_stack.page_fft
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+
+    win._on_analysis_split("fft", True)
+    state.panes[0].sources = [(fids[0], "speed")]
+    state.panes[0].time_range = (0.1, 0.3)
+    state.panes[1].sources = [(fids[0], "speed")]
+    state.panes[1].time_range = (0.6, 0.9)
+    win.inspector.top.set_range_from_span(0.1, 0.3)
+
+    page.set_focused_index(0)
+    win._on_analysis_focus_changed("fft", 0)
+    assert win.inspector.top.range_enabled() is True
+    assert win.inspector.top.range_values() == pytest.approx((0.1, 0.3))
+
+    page.set_focused_index(1)
+    assert win.inspector.top.range_enabled() is True
+    assert win.inspector.top.range_values() == pytest.approx((0.6, 0.9))
+
+
 def test_fft_section_switch_away_and_back_preserves_spectrum(two_file_win, qapp):
     """Compute FFT, switch to another section, switch back: the computed
     spectrum must survive. The old mode-entry path ran an unconditional

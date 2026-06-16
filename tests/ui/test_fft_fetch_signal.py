@@ -71,6 +71,16 @@ def test_range_enabled_masks_signal_inclusive(win_with_source, monkeypatch):
     assert fs == fd.fs
 
 
+def test_explicit_time_range_masks_signal_without_inspector(win_with_source, monkeypatch):
+    w, fd = win_with_source
+    monkeypatch.setattr(w.inspector.top, 'range_enabled', lambda: False)
+
+    sig, fs = w._fft_fetch_signal(0, 'sig', time_range=(0.25, 0.75))
+
+    np.testing.assert_array_equal(sig, np.array([30.0, 40.0, 50.0, 60.0, 70.0]))
+    assert fs == fd.fs
+
+
 def test_range_bounds_are_inclusive(win_with_source, monkeypatch):
     w, fd = win_with_source
     # Exact bounds at sample positions must be included (>= / <=).

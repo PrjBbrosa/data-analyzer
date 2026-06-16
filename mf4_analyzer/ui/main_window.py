@@ -25,6 +25,9 @@ from ..signal import FFTAnalyzer
 from .. import app_meta
 
 
+_INSPECTOR_TIME_RANGE = object()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -846,6 +849,7 @@ class MainWindow(QMainWindow):
         mgr = self.analysis_managers[section]
         state = mgr.get(mgr.active)
         capture_params_to_state(self._analysis_ctx(section), state)
+        self._capture_analysis_time_range(section, state)
         if capture_sources:
             self._capture_analysis_sources(section, state)
 
@@ -882,6 +886,7 @@ class MainWindow(QMainWindow):
             # 3. Params + focused-pane source echo.
             apply_params_from_state(self._analysis_ctx(section), state)
             self._apply_analysis_sources(section, state)
+            self._apply_analysis_time_range(section, state)
         finally:
             self._applying_analysis_view = False
         # 4. Render from cache only (spec §4: switching never auto-computes).
@@ -898,7 +903,9 @@ class MainWindow(QMainWindow):
         page = self._analysis_page(section)
         old_idx = min(page.previous_focused_index(), len(state.panes) - 1)
         self._capture_analysis_sources(section, state, pane_idx=old_idx)
+        self._capture_analysis_time_range(section, state, pane_idx=old_idx)
         self._apply_analysis_sources(section, state)
+        self._apply_analysis_time_range(section, state)
 
     def _on_analysis_compare_toggled(self, section, key, on):
         """A page compare toggle (联动缩放 / 锁定色阶) flipped → persist it onto
@@ -936,6 +943,85 @@ class MainWindow(QMainWindow):
         })
 
     # -- source routing (Step 4) ----------------------------------------
+    @staticmethod
+    def _normalize_analysis_time_range(value):
+        if not value:
+            return None
+        try:
+            lo = float(value[0])
+            hi = float(value[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+        return (lo, hi)
+
+    def _mask_time_range(self, t, *arrays, time_range=None):
+        rng = self._normalize_analysis_time_range(time_range)
+        if rng is None or t is None:
+            return (t, *arrays)
+        lo, hi = rng
+        mask = (t >= lo) & (t <= hi)
+        masked = [arr[mask] for arr in arrays]
+        return (t[mask], *masked)
+
+    @staticmethod
+    def _analysis_section_uses_time_range(section):
+        return section in {"fft", "fft_time", "order"}
+
+    def _capture_analysis_time_range(self, section, state, pane_idx=None):
+        if not self._analysis_section_uses_time_range(section):
+            return
+        page = self._analysis_page(section)
+        if pane_idx is None:
+            pane_idx = page.focused_index()
+        idx = min(int(pane_idx), len(state.panes) - 1)
+        pane = state.panes[idx]
+        if self.inspector.top.range_enabled():
+            pane.time_range = self._normalize_analysis_time_range(
+                self.inspector.top.range_values()
+            )
+        else:
+            pane.time_range = None
+
+    def _set_top_range_enabled_silently(self, enabled):
+        top = self.inspector.top
+        old = top.chk_range.blockSignals(True)
+        try:
+            top.chk_range.setChecked(bool(enabled))
+        finally:
+            top.chk_range.blockSignals(old)
+        top._range_checked_by_mode[top._range_mode] = bool(enabled)
+        update = getattr(top, "_update_range_rows_visible", None)
+        if callable(update):
+            update()
+
+    def _apply_analysis_time_range(self, section, state):
+        if not self._analysis_section_uses_time_range(section):
+            return
+        page = self._analysis_page(section)
+        idx = min(page.focused_index(), len(state.panes) - 1)
+        rng = self._normalize_analysis_time_range(state.panes[idx].time_range)
+        top = self.inspector.top
+        if rng is None:
+            self._set_top_range_enabled_silently(False)
+            return
+        top.set_range_from_span(*rng)
+
+    def _pane_time_range_for(self, section, pane_idx=None):
+        if not self._analysis_section_uses_time_range(section):
+            return None
+        mgr = self.analysis_managers[section]
+        state = mgr.get(mgr.active)
+        if pane_idx is None:
+            page = self._analysis_page(section)
+            pane_idx = page.focused_index()
+        if not (0 <= int(pane_idx) < len(state.panes)):
+            return None
+        return self._normalize_analysis_time_range(
+            state.panes[int(pane_idx)].time_range
+        )
+
     def _capture_analysis_sources(self, section, state, pane_idx=None):
         page = self._analysis_page(section)
         if pane_idx is None:
@@ -1038,9 +1124,11 @@ class MainWindow(QMainWindow):
             'samples_per_rev': ctx.current_params().get('samples_per_rev'),
         }
 
-    def _analysis_cache_key(self, section, fid, ch, rpm_source=None):
+    def _analysis_cache_key(self, section, fid, ch, rpm_source=None, pane_idx=None):
         cache = self.analysis_caches[section]
         params = dict(self._analysis_compute_params(section))
+        if section in {'fft', 'fft_time', 'order'}:
+            params['time_range'] = self._pane_time_range_for(section, pane_idx)
         if section == 'order':
             params['rpm_source'] = (
                 list(rpm_source) if rpm_source else None
@@ -1100,14 +1188,17 @@ class MainWindow(QMainWindow):
             if section == 'fft':
                 entries = []
                 colors = self._analysis_channel_color_map()
+                time_range = self._pane_time_range_for(section, pane_idx)
                 for fid, ch in pane.sources:
-                    key = self._analysis_cache_key(section, fid, ch)
+                    key = self._analysis_cache_key(
+                        section, fid, ch, pane_idx=pane_idx)
                     result = cache.get(key)
                     if result is None:
                         any_missing = True
                         continue
                     entries.append(self._fft_entry_from_cache(
-                        result, fid, ch, colors.get((fid, ch))))
+                        result, fid, ch, colors.get((fid, ch)),
+                        time_range=time_range))
                 if entries:
                     self._plot_fft_entries(entries, canvas)
                 else:
@@ -1121,7 +1212,8 @@ class MainWindow(QMainWindow):
                 fid, ch = pane.sources[0]
                 key = self._analysis_cache_key(
                     section, fid, ch,
-                    rpm_source=pane.rpm_source if section == 'order' else None)
+                    rpm_source=pane.rpm_source if section == 'order' else None,
+                    pane_idx=pane_idx)
                 result = cache.get(key)
                 if result is None:
                     any_missing = True
@@ -1158,20 +1250,25 @@ class MainWindow(QMainWindow):
         if callable(setter):
             setter(labels)
 
-    def _fft_trace_for_source(self, fid, ch):
+    def _fft_trace_for_source(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE):
         fd = self.files.get(fid)
         if fd is None or ch not in fd.data.columns:
             return None, None
         t = np.asarray(fd.time_array, dtype=float)
         sig = np.asarray(fd.data[ch].to_numpy(copy=False), dtype=float)
-        if self.inspector.top.range_enabled() and t is not None:
-            lo, hi = self.inspector.top.range_values()
-            mask = (t >= lo) & (t <= hi)
-            t = t[mask]
-            sig = sig[mask]
+        if (
+            time_range is _INSPECTOR_TIME_RANGE
+            and self.inspector.top.range_enabled()
+        ):
+            time_range = self.inspector.top.range_values()
+        if time_range is _INSPECTOR_TIME_RANGE:
+            time_range = None
+        t, sig = self._mask_time_range(t, sig, time_range=time_range)
         return t, sig
 
-    def _fft_time_preview_entries(self, checked=None):
+    def _fft_time_preview_entries(
+        self, checked=None, time_range=_INSPECTOR_TIME_RANGE
+    ):
         if checked is None:
             checked = self.navigator.get_checked_channels()
         sources = []
@@ -1188,7 +1285,7 @@ class MainWindow(QMainWindow):
 
         entries = []
         for fid, ch, color in sources:
-            t, sig = self._fft_trace_for_source(fid, ch)
+            t, sig = self._fft_trace_for_source(fid, ch, time_range=time_range)
             if t is None or sig is None or len(sig) == 0:
                 continue
             entries.append({
@@ -1245,9 +1342,11 @@ class MainWindow(QMainWindow):
 
     def _fft_any_source_cached(self, state):
         cache = self.analysis_caches['fft']
-        for pane in state.panes:
+        for pane_idx, pane in enumerate(state.panes):
             for fid, ch in pane.sources:
-                if cache.get(self._analysis_cache_key('fft', fid, ch)) is not None:
+                key = self._analysis_cache_key(
+                    'fft', fid, ch, pane_idx=pane_idx)
+                if cache.get(key) is not None:
                     return True
         return False
 
@@ -1278,7 +1377,9 @@ class MainWindow(QMainWindow):
         else:
             self._refresh_fft_time_preview()
 
-    def _fft_entry_from_cache(self, result, fid, ch, color):
+    def _fft_entry_from_cache(
+        self, result, fid, ch, color, time_range=_INSPECTOR_TIME_RANGE
+    ):
         """Build a plot_spectra entry from a cached FFT result.
 
         ``result`` is the raw compute tuple ``(freq, amp, psd)`` (linear). The
@@ -1294,12 +1395,13 @@ class MainWindow(QMainWindow):
         else:
             amp_disp = amp
         label = f"{self._file_display_name(fid)} · {ch}"
-        t, sig = self._fft_trace_for_source(fid, ch)
+        t, sig = self._fft_trace_for_source(fid, ch, time_range=time_range)
         return {
             'label': label,
             'color': color or '#2563eb',
             'freq': freq,
             'amp': amp_disp,
+            'amp_for_xlim': amp,
             'time': [] if t is None else t,
             'signal': [] if sig is None else sig,
         }
@@ -1317,9 +1419,13 @@ class MainWindow(QMainWindow):
         x_min = float(p.get('x_min', 0.0))
         x_max = float(p.get('x_max', 0.0))
         if x_auto:
-            freq0 = entries[0]['freq']
-            amp0 = entries[0]['amp']
-            xlim = (0.0, self._fft_auto_xlim(freq0, amp0))
+            xmax = max(
+                self._fft_auto_xlim(
+                    entry['freq'], entry.get('amp_for_xlim', entry['amp'])
+                )
+                for entry in entries
+            )
+            xlim = (0.0, xmax)
         elif x_max > x_min:
             xlim = (x_min, x_max)
         else:
@@ -1786,6 +1892,9 @@ class MainWindow(QMainWindow):
         if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
             return False
         self.inspector.top.set_range_from_span(lo, hi)
+        mgr = self.analysis_managers['fft']
+        state = mgr.get(mgr.active)
+        state.panes[pane_idx].time_range = (float(lo), float(hi))
         return True
 
     def _time_data_extent(self):
@@ -2994,44 +3103,42 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _fft_auto_xlim(freq, amp):
-        """自适应计算 FFT 频率范围。
-
-        策略：忽略 DC 分量，找到「最高的有意义峰位」——即幅值仍达到全频段
-        峰值 1% 以上的最高频率点；再取 1.3x 余量并向上取整到
-        1/2/5/10/20/50/100… 美观刻度。该算法相比单纯的累计能量法对
-        包含直流偏置或低频主导分量的信号更鲁棒。
-        """
+        """Return a tight automatic FFT frequency max with a small margin."""
+        freq = np.asarray(freq, dtype=float).ravel()
+        amp = np.asarray(amp, dtype=float).ravel()
         if len(freq) < 2 or len(amp) < 2:
-            return freq[-1] if len(freq) else 100
+            return float(freq[-1]) if len(freq) else 100
 
-        amp = np.asarray(amp, dtype=float)
-        # 跳过 DC：从 index 1 起；若分辨率极低也至少保留 1 个点
+        n = min(len(freq), len(amp))
+        freq = freq[:n]
+        amp = amp[:n]
+        max_freq = float(freq[-1])
+        if not np.isfinite(max_freq):
+            finite_freq = freq[np.isfinite(freq)]
+            return float(finite_freq[-1]) if len(finite_freq) else 100
+
+        # Skip DC: start at index 1 and ignore non-finite amplitudes.
         body = amp[1:] if len(amp) > 1 else amp
+        body = np.where(np.isfinite(body), body, 0.0)
         peak = float(np.max(body)) if len(body) else 0.0
         if peak <= 0 or not np.isfinite(peak):
-            return freq[-1]
+            return max_freq
 
-        # 「最高有意义谱线」：amp >= 1% 峰值的最大频率索引（含 DC 偏移 +1）
+        # Highest meaningful non-DC bin: amp >= 1% of the non-DC peak.
         threshold = peak * 0.01
         meaningful = np.where(body >= threshold)[0]
         if len(meaningful) == 0:
-            return freq[-1]
+            return max_freq
         idx = int(meaningful[-1]) + 1
         f_cutoff = float(freq[min(idx, len(freq) - 1)])
-        # 再加 1.3x 余量，避免恰好压在最右一根谱线上
-        f_cutoff *= 1.3
-        # 与最大可达频率取小，防止超过 Nyquist
-        f_cutoff = min(f_cutoff, float(freq[-1]))
+        if not np.isfinite(f_cutoff):
+            return max_freq
 
-        nice_vals = []
-        for exp in range(-1, 7):
-            for m in [1, 2, 5]:
-                nice_vals.append(m * 10 ** exp)
-        nice_vals.sort()
-        for nv in nice_vals:
-            if nv >= f_cutoff:
-                return nv
-        return freq[-1]
+        diffs = np.diff(freq)
+        diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
+        df = float(np.median(diffs)) if len(diffs) else 0.0
+        margin = max(2.0 * df, 0.08 * max(f_cutoff, df))
+        return min(max_freq, f_cutoff + margin)
 
     def _check_uniform_or_prompt(self, fd, mode):
         """Pre-flight non-uniform time-axis check before worker dispatch.
@@ -3133,7 +3240,7 @@ class MainWindow(QMainWindow):
             _, psd = FFTAnalyzer.compute_psd(sig, fs, win, nfft)
         return freq, amp, psd
 
-    def _fft_fetch_signal(self, fid, ch):
+    def _fft_fetch_signal(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE):
         """Fetch + range-gate a single FFT source's signal. Returns
         ``(sig, fs)`` or ``(None, None)`` when unavailable."""
         fd = self.files.get(fid)
@@ -3141,10 +3248,15 @@ class MainWindow(QMainWindow):
             return None, None
         sig = fd.data[ch].values
         t = fd.time_array
-        if self.inspector.top.range_enabled() and t is not None:
-            lo, hi = self.inspector.top.range_values()
-            m = (t >= lo) & (t <= hi)
-            sig = sig[m]
+        if (
+            time_range is _INSPECTOR_TIME_RANGE
+            and self.inspector.top.range_enabled()
+        ):
+            time_range = self.inspector.top.range_values()
+        if time_range is _INSPECTOR_TIME_RANGE:
+            time_range = None
+        if time_range is not None and t is not None:
+            _t, sig = self._mask_time_range(t, sig, time_range=time_range)
         return sig, fd.fs
 
     def do_fft(self):
@@ -3177,17 +3289,21 @@ class MainWindow(QMainWindow):
                 continue
             any_multi = True
             entries = []
+            time_range = self._pane_time_range_for('fft', pane_idx)
             for fid, ch in sources:
-                key = self._analysis_cache_key('fft', fid, ch)
+                key = self._analysis_cache_key(
+                    'fft', fid, ch, pane_idx=pane_idx)
                 result = cache.get(key)
                 if result is None:
-                    sig, fs = self._fft_fetch_signal(fid, ch)
+                    sig, fs = self._fft_fetch_signal(
+                        fid, ch, time_range=time_range)
                     if sig is None or len(sig) < 10:
                         continue
                     fd = self.files.get(fid)
                     if not self._check_uniform_or_prompt(fd, 'fft'):
                         continue
-                    sig, fs = self._fft_fetch_signal(fid, ch)
+                    sig, fs = self._fft_fetch_signal(
+                        fid, ch, time_range=time_range)
                     if sig is None or len(sig) < 10:
                         continue
                     try:
@@ -3198,7 +3314,8 @@ class MainWindow(QMainWindow):
                         continue
                     cache.put(key, result)
                 entries.append(self._fft_entry_from_cache(
-                    result, fid, ch, colors.get((fid, ch))))
+                    result, fid, ch, colors.get((fid, ch)),
+                    time_range=time_range))
             if entries:
                 self._plot_fft_entries(entries, page.pane_canvas(pane_idx))
                 any_rendered = True
@@ -3283,6 +3400,7 @@ class MainWindow(QMainWindow):
                 'color': '#2563eb',
                 'freq': freq,
                 'amp': amp_disp,
+                'amp_for_xlim': amp,
                 'time': t,
                 'signal': sig,
             }
@@ -3320,7 +3438,7 @@ class MainWindow(QMainWindow):
     # ``AnalysisComputeWorker`` + QThread (same lifecycle wiring as
     # ``do_fft_time``); ``_on_order_finished`` renders the result.
 
-    def _order_sig_for(self, source):
+    def _order_sig_for(self, source, time_range=_INSPECTOR_TIME_RANGE):
         """Fetch + range-gate an explicit Order signal source ``(fid, ch)``.
         Returns ``(t, sig)`` or ``(None, None)``. V7b: the split queue must
         fetch a NON-focused pane's source, not the inspector selection."""
@@ -3334,14 +3452,18 @@ class MainWindow(QMainWindow):
             return None, None
         t = fd.time_array
         sig = fd.data[ch].values
-        if self.inspector.top.range_enabled() and t is not None:
-            lo, hi = self.inspector.top.range_values()
-            m = (t >= lo) & (t <= hi)
-            t = t[m] if t is not None else None
-            sig = sig[m]
+        if (
+            time_range is _INSPECTOR_TIME_RANGE
+            and self.inspector.top.range_enabled()
+        ):
+            time_range = self.inspector.top.range_values()
+        if time_range is _INSPECTOR_TIME_RANGE:
+            time_range = None
+        if time_range is not None and t is not None:
+            t, sig = self._mask_time_range(t, sig, time_range=time_range)
         return t, sig
 
-    def _order_rpm_for(self, rpm_source, n):
+    def _order_rpm_for(self, rpm_source, n, time_range=_INSPECTOR_TIME_RANGE):
         """Fetch + range-gate + scale an explicit Order RPM source. ``n`` is
         the signal length the rpm must match. Returns the scaled rpm array or
         ``None`` (caller skips the pane). The scale factor is the current
@@ -3356,10 +3478,16 @@ class MainWindow(QMainWindow):
             return None
         factor = self.inspector.order_ctx.rpm_factor()
         rpm = fd.data[ch].values.copy() * factor
-        if self.inspector.top.range_enabled() and fd.time_array is not None:
-            lo, hi = self.inspector.top.range_values()
-            m = (fd.time_array >= lo) & (fd.time_array <= hi)
-            rpm = rpm[m]
+        if (
+            time_range is _INSPECTOR_TIME_RANGE
+            and self.inspector.top.range_enabled()
+        ):
+            time_range = self.inspector.top.range_values()
+        if time_range is _INSPECTOR_TIME_RANGE:
+            time_range = None
+        if time_range is not None and fd.time_array is not None:
+            _t, rpm = self._mask_time_range(
+                fd.time_array, rpm, time_range=time_range)
         if len(rpm) != n:
             return None
         return rpm
@@ -3407,7 +3535,8 @@ class MainWindow(QMainWindow):
             rpm_source = state.panes[pane_idx].rpm_source
             analysis_key = self._analysis_cache_key(
                 'order', fid, ch,
-                rpm_source=tuple(rpm_source) if rpm_source else None)
+                rpm_source=tuple(rpm_source) if rpm_source else None,
+                pane_idx=pane_idx)
             cached = cache.get(analysis_key)
             if cached is not None:
                 cache.put(analysis_key, cached)
@@ -3461,10 +3590,11 @@ class MainWindow(QMainWindow):
         shared COT worker, rendering onto ``page.pane_canvas(pane_idx)``.
         Returns True if a worker started, False if the source was skipped."""
         from ..signal.order_cot import COTOrderAnalyzer, COTParams
-        t, sig = self._order_sig_for((fid, ch))
+        time_range = self._pane_time_range_for('order', pane_idx)
+        t, sig = self._order_sig_for((fid, ch), time_range=time_range)
         if sig is None or len(sig) < 100:
             return False
-        rpm = self._order_rpm_for(rpm_source, len(sig))
+        rpm = self._order_rpm_for(rpm_source, len(sig), time_range=time_range)
         if rpm is None:
             return False
         fs = self.inspector.order_ctx.fs()
@@ -3491,7 +3621,8 @@ class MainWindow(QMainWindow):
         # Stash the analysis cache key + render target for this job.
         self._order_analysis_key = self._analysis_cache_key(
             'order', fid, ch,
-            rpm_source=tuple(rpm_source) if rpm_source else None)
+            rpm_source=tuple(rpm_source) if rpm_source else None,
+            pane_idx=pane_idx)
         self._order_render_pane = pane_idx
 
         from .analysis_worker import AnalysisComputeWorker
@@ -3873,7 +4004,8 @@ class MainWindow(QMainWindow):
                 continue
             any_source = True
             fid, ch = sources[0]
-            analysis_key = self._analysis_cache_key('fft_time', fid, ch)
+            analysis_key = self._analysis_cache_key(
+                'fft_time', fid, ch, pane_idx=pane_idx)
             cached = None if force else cache.get(analysis_key)
             if cached is not None:
                 # Cache hit → render on THIS pane's canvas immediately
@@ -3937,7 +4069,8 @@ class MainWindow(QMainWindow):
             time_range = (float(t[0]), float(t[-1]))
         key_params = dict(p, fid=fid, channel=ch, time_range=time_range)
         key = self._fft_time_cache_key(key_params)
-        analysis_key = self._analysis_cache_key('fft_time', fid, ch)
+        analysis_key = self._analysis_cache_key(
+            'fft_time', fid, ch, pane_idx=pane_idx)
         cached = None if force else self._fft_time_cache_get(key)
         if cached is None and not force:
             cached = self.analysis_caches['fft_time'].get(analysis_key)
@@ -3984,12 +4117,18 @@ class MainWindow(QMainWindow):
         page = self._analysis_page('fft_time')
         while self._fft_time_queue:
             pane_idx, fid, ch = self._fft_time_queue.pop(0)
-            if self._dispatch_fft_time_job(pane_idx, fid, ch):
+            time_range = self._pane_time_range_for('fft_time', pane_idx)
+            if self._dispatch_fft_time_job(
+                pane_idx, fid, ch, time_range=time_range
+            ):
                 return
         # Queue drained.
         self.statusBar.showMessage("FFT vs Time 完成")
 
-    def _dispatch_fft_time_job(self, pane_idx, fid, ch, force=False):
+    def _dispatch_fft_time_job(
+        self, pane_idx, fid, ch, force=False,
+        time_range=_INSPECTOR_TIME_RANGE,
+    ):
         """Fetch + range-gate the ``(fid, ch)`` source, then start the shared
         worker for it, rendering onto ``page.pane_canvas(pane_idx)`` when done.
         Returns True if a worker was started, False if the source was skipped
@@ -4008,18 +4147,26 @@ class MainWindow(QMainWindow):
         if sig is None or len(sig) < 2:
             return False
         p = self.inspector.fft_time_ctx.get_params()
-        if self.inspector.top.range_enabled():
-            lo, hi = self.inspector.top.range_values()
-            m = (t >= lo) & (t <= hi)
-            t = t[m]; sig = sig[m]
+        if (
+            time_range is _INSPECTOR_TIME_RANGE
+            and self.inspector.top.range_enabled()
+        ):
+            time_range = self.inspector.top.range_values()
+        if time_range is _INSPECTOR_TIME_RANGE:
+            time_range = None
+        rng = self._normalize_analysis_time_range(time_range)
+        if rng is not None:
+            t, sig = self._mask_time_range(t, sig, time_range=rng)
             if len(sig) < 2:
                 return False
-            time_range = (float(lo), float(hi))
+            effective_time_range = rng
         else:
-            time_range = (float(t[0]), float(t[-1]))
-        key_params = dict(p, fid=fid, channel=ch, time_range=time_range)
+            effective_time_range = (float(t[0]), float(t[-1]))
+        key_params = dict(
+            p, fid=fid, channel=ch, time_range=effective_time_range)
         key = self._fft_time_cache_key(key_params)
-        analysis_key = self._analysis_cache_key('fft_time', fid, ch)
+        analysis_key = self._analysis_cache_key(
+            'fft_time', fid, ch, pane_idx=pane_idx)
         # SpectrogramParams is the cache key on the analyzer side; build
         # it from compute-relevant fields only.
         params = SpectrogramParams(

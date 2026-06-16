@@ -27,6 +27,7 @@ def _coerce_key(value: Any) -> ChannelKey:
 class PaneState:
     sources: list[ChannelKey] = field(default_factory=list)
     rpm_source: ChannelKey | None = None     # Order only
+    time_range: tuple[float, float] | None = None
     xlim: tuple[float, float] | None = None
     ylim: tuple[float, float] | None = None
 
@@ -34,6 +35,7 @@ class PaneState:
         return {
             "sources": [list(k) for k in self.sources],
             "rpm_source": list(self.rpm_source) if self.rpm_source else None,
+            "time_range": list(self.time_range) if self.time_range else None,
             "xlim": list(self.xlim) if self.xlim else None,
             "ylim": list(self.ylim) if self.ylim else None,
         }
@@ -46,6 +48,7 @@ class PaneState:
             sources=[_coerce_key(k) for k in data.get("sources", [])],
             rpm_source=(_coerce_key(data["rpm_source"])
                         if data.get("rpm_source") else None),
+            time_range=pair(data.get("time_range")),
             xlim=pair(data.get("xlim")),
             ylim=pair(data.get("ylim")),
         )
