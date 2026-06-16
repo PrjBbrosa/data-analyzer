@@ -1777,35 +1777,111 @@ def test_bottom_hint_bar_anchor_leads_each_section(qapp):
         assert pool[0].text == anchors[mode], (mode, pool[0].id)
 
 
-def test_bottom_hint_bar_rotating_row_geometry_stays_anchored(qapp):
-    """Long/short rotating hints should elide in place, not push the right slot."""
+def test_bottom_hint_bar_group_is_centered_with_symmetric_padding(qapp):
+    """The rotating row + discovery form ONE centered group: symmetric stretch
+    on both sides, separator between the two segments, and the group sits in the
+    middle of the bar (not hugging either edge)."""
+    from PyQt5.QtCore import QPoint
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     try:
-        cs.resize(760, 520)
+        cs.resize(900, 520)
         cs.show()
         cs.set_mode("fft")
         qapp.processEvents()
         card = cs._fft_card
         bar = card._hint_bar
-        card._hint_discovery.setText("右侧发现提示")
+        card._hint_context.setText("Ctrl / Shift + 滚轮 缩放 X / Y")
+        card._hint_discovery.setText("复制按钮可导出带游标读数的图片")
+        card._sync_hint_separator()
+        bar.layout().activate()
+        qapp.processEvents()
 
-        def _positions(text):
-            card._hint_context.setText(text)
-            bar.layout().activate()
-            qapp.processEvents()
-            context = card._hint_context.geometry()
-            discovery = card._hint_discovery.geometry()
-            return context.left(), context.right(), discovery.left(), discovery.right()
+        group = card._hint_group
+        grp_left = group.mapTo(bar, QPoint(0, 0)).x()
+        grp_right = grp_left + group.width()
+        left_gap = grp_left
+        right_gap = bar.width() - grp_right
 
-        short = _positions("短提示")
-        long = _positions(
-            "这是一条很长的轮播提示，用来确认文字变长时左侧锚点不跳动"
-        )
+        # Symmetric side padding => the group is horizontally centered.
+        assert abs(left_gap - right_gap) <= 2, (left_gap, right_gap)
+        # Not hugging the far left (the old left-anchored layout).
+        assert grp_left > 4
+        # Separator appears between context and discovery when discovery is set.
+        assert card._hint_separator.isVisible() is True
 
-        assert long[0] == short[0]
-        assert long[3] == short[3]
-        assert long[1] < long[2]
+        def _bar_left(w):
+            return w.mapTo(bar, QPoint(0, 0)).x()
+
+        ctx_right = _bar_left(card._hint_context) + card._hint_context.width()
+        disc_left = _bar_left(card._hint_discovery)
+        assert ctx_right <= disc_left  # context precedes discovery, no overlap
+    finally:
+        cs.deleteLater()
+
+
+def test_bottom_hint_bar_no_dangling_separator_when_discovery_empty(qapp):
+    """When discovery is empty the separator hides (no dangling ' · ') and the
+    lone rotating row stays centered."""
+    from PyQt5.QtCore import QPoint
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    try:
+        cs.resize(900, 520)
+        cs.show()
+        cs.set_mode("fft")
+        qapp.processEvents()
+        card = cs._fft_card
+        card._hint_context.setText("Ctrl / Shift + 滚轮 缩放 X / Y")
+        card._hint_discovery.setText("")
+        card._sync_hint_separator()
+        bar = card._hint_bar
+        bar.layout().activate()
+        qapp.processEvents()
+
+        assert card._hint_separator.isVisible() is False
+
+        group = card._hint_group
+        grp_left = group.mapTo(bar, QPoint(0, 0)).x()
+        grp_right = grp_left + group.width()
+        left_gap = grp_left
+        right_gap = bar.width() - grp_right
+        assert abs(left_gap - right_gap) <= 2, (left_gap, right_gap)
+    finally:
+        cs.deleteLater()
+
+
+def test_bottom_hint_bar_elides_under_narrow_bar_without_overflow(qapp):
+    """A bar narrower than the group's natural width must elide the rotating row
+    (Preferred + min-0) and keep the group within the bar (no overflow / no
+    negative stretch)."""
+    from PyQt5.QtCore import QPoint
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    try:
+        cs.resize(900, 520)
+        cs.show()
+        cs.set_mode("fft")
+        qapp.processEvents()
+        card = cs._fft_card
+        bar = card._hint_bar
+        long_text = "这是一条很长的轮播提示，用来确认窄窗下文字会省略而不是溢出或裁剪"
+        card._hint_context.setText(long_text)
+        card._hint_discovery.setText("复制按钮可导出带游标读数的图片")
+        card._sync_hint_separator()
+        bar.setFixedWidth(260)
+        bar.layout().activate()
+        qapp.processEvents()
+
+        # text() returns the elided string; full_text() the logical value.
+        assert card._hint_context.full_text() == long_text
+        assert card._hint_context.text() != long_text  # elided
+
+        group = card._hint_group
+        grp_left = group.mapTo(bar, QPoint(0, 0)).x()
+        grp_right = grp_left + group.width()
+        assert grp_left >= -1
+        assert grp_right <= bar.width() + 1
     finally:
         cs.deleteLater()
 
@@ -1835,7 +1911,9 @@ def test_flash_hint_shows_transient_context_text(qapp):
 
     card.flash_hint("先选中一个通道，再用 Shift+滚轮缩放纵向")
 
-    assert "先选中一个通道" in card._hint_context.text()
+    # full_text(): the centered rotating row elides for display (and collapses to
+    # '' in a zero-width unshown card), so assert the logical value.
+    assert "先选中一个通道" in card._hint_context.full_text()
 
 
 def test_overlay_needs_selection_signal_flashes_hint(qapp):
@@ -1850,7 +1928,8 @@ def test_overlay_needs_selection_signal_flashes_hint(qapp):
     canvas.overlay_y_needs_selection.emit()
     qapp.processEvents()
 
-    assert "先选中一个通道" in card._hint_context.text()
+    # full_text(): see test_flash_hint_shows_transient_context_text.
+    assert "先选中一个通道" in card._hint_context.full_text()
 
 
 def test_bottom_hint_bar_context_uses_registry(qapp, monkeypatch):
@@ -2052,5 +2131,6 @@ def test_toolbar_hint_removed_but_bottom_hint_bar_stays(qapp):
     assert card._hint_bar is not None
     assert card._hint_bar.isVisible() is True
     # The rotating row is populated (the retired static persistent label is gone).
-    assert card._hint_context.text()
+    # full_text() is the logical value; text() may elide/collapse when centered.
+    assert card._hint_context.full_text()
     assert not hasattr(card, "_hint_persistent")
