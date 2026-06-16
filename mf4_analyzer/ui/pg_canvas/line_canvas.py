@@ -25,7 +25,11 @@ from mf4_analyzer.ui.canvases import build_envelope
 # 145-146): ON=5000 / OFF=7000 with hysteresis. Imported (not re-defined) so
 # the two renderers cannot drift — the time preview's AA must gate on the same
 # per-frame drawn-point SUM economics as the main time-domain overlay.
-from .canvas import _AA_OVERLAY_SEGMENT_OFF, _AA_OVERLAY_SEGMENT_ON
+from .canvas import (
+    _AA_OVERLAY_SEGMENT_OFF,
+    _AA_OVERLAY_SEGMENT_ON,
+    _OVERLAY_GRID_ALPHA,
+)
 
 from .heatmap_canvas import (
     _apply_axis_tick_density,
@@ -198,6 +202,16 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # on _plot_time's own left axis.
         self._time_overlay_vbs = []
         self._time_overlay_axes = []
+        # Shared horizontal grid for the time-preview overlay. Each aux right
+        # axis lives in its own ViewBox with its own Y range, so the built-in
+        # left-axis Y grid alone cannot be a common visual anchor (and it is
+        # cleared whenever a refresh path pushes plain density onto the left
+        # axis). A dedicated grid ViewBox locked to Y=[0,1] and X-linked to the
+        # main vb draws n-1 InfiniteLines at i/n — the single graticule every
+        # axis's k/n ticks must coincide with (mirrors TimeDomainCanvasPG's
+        # _build_overlay_y_grid). Created lazily on first frame.
+        self._time_grid_vb = None
+        self._time_grid_lines = []
         # Time-preview Y graticule division count (mirrors the time-domain
         # overlay's divisions). Driven by the Y tick density; the left axis and
         # every aux right axis are framed to this many equal nice divisions so
@@ -932,12 +946,30 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 pass
         self._time_overlay_vbs = []
         self._time_overlay_axes = []
+        # Also tear down the shared horizontal graticule lines so an empty or
+        # rebuilt preview leaves no orphaned InfiniteLines in the scene. The
+        # grid ViewBox itself is reused (lazily created once); only its lines
+        # are rebuilt per division-count by _build_time_y_grid.
+        for line in list(self._time_grid_lines):
+            try:
+                if self._time_grid_vb is not None:
+                    self._time_grid_vb.removeItem(line)
+            except Exception:
+                pass
+        self._time_grid_lines = []
 
     def _add_time_overlay_axis(self, color, position):
         """Create one aux ViewBox + colour-coded right axis for an overlay
         curve. ``position`` is the 1-based overlay slot (2nd curve → 1, …)."""
         aux_vb = pg.ViewBox()
         axis = pg.AxisItem('right')
+        # Keep auto SI prefix OFF so a large-range right axis never renders
+        # '1k'/'1m', which would clash with the left axis's _fmt_tick style
+        # (mirrors _add_overlay_axis_handle in overlay_axes.py).
+        try:
+            axis.enableAutoSIPrefix(False)
+        except Exception:
+            pass
         _apply_pg_axis_font(axis)
         # Frame line stays neutral; the tick TEXT follows the curve colour so a
         # glance maps each right axis to its trace (no channel-name clutter).
@@ -954,6 +986,67 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._time_overlay_vbs.append(aux_vb)
         self._time_overlay_axes.append(axis)
         return aux_vb
+
+    def _ensure_time_grid_vb(self):
+        """Lazily create the dedicated grid ViewBox (Y locked to [0,1], X-linked
+        to the main time vb) that hosts the shared horizontal graticule lines.
+
+        Sits BELOW every aux ViewBox (z = -20000 vs the aux -10000) so the grid
+        lines never paint over the curves, and is read-only/non-interactive —
+        the preview Y stays locked, this only supplies a common visual anchor."""
+        if self._time_grid_vb is not None:
+            return self._time_grid_vb
+        grid_vb = pg.ViewBox()
+        try:
+            self._plot_time.scene().addItem(grid_vb)
+            grid_vb.setXLink(self._plot_time.vb)
+            grid_vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=False)
+            grid_vb.setYRange(0.0, 1.0, padding=0)
+            grid_vb.setMouseEnabled(x=False, y=False)
+            grid_vb.setZValue(-20000)
+        except Exception:
+            pass
+        self._time_grid_vb = grid_vb
+        return grid_vb
+
+    def _build_time_y_grid(self, n: int) -> None:
+        """(Re)build the n-1 shared horizontal grid lines at i/n (i = 1..n-1).
+
+        Rebuilt whenever the division count changes; old lines are removed from
+        the grid ViewBox first so scene items never accumulate across rebuilds
+        (mirrors _clear_time_overlay_axes' detach discipline)."""
+        grid_vb = self._ensure_time_grid_vb()
+        for line in list(self._time_grid_lines):
+            try:
+                grid_vb.removeItem(line)
+            except Exception:
+                pass
+        self._time_grid_lines = []
+        if not self._time_curves:
+            return
+        alpha_int = max(1, min(255, int(round(_OVERLAY_GRID_ALPHA * 255))))
+        pen = pg.mkPen(color=(180, 180, 180, alpha_int), width=1)
+        lines = []
+        for i in range(1, n):
+            line = pg.InfiniteLine(pos=i / n, angle=0, movable=False, pen=pen)
+            try:
+                grid_vb.addItem(line)
+                lines.append(line)
+            except Exception:
+                pass
+        self._time_grid_lines = lines
+        self._sync_time_grid_vb()
+
+    def _sync_time_grid_vb(self, *_args) -> None:
+        """Glue the grid ViewBox geometry to the main time ViewBox so the shared
+        graticule tracks resize/pan exactly like the aux overlay ViewBoxes."""
+        if self._time_grid_vb is None:
+            return
+        try:
+            self._time_grid_vb.setGeometry(
+                self._plot_time.vb.sceneBoundingRect())
+        except Exception:
+            pass
 
     def _reframe_time_y_to_grid(self) -> None:
         """Frame the time-preview's main axis (curve 0 / left / ``_plot_time.vb``)
@@ -990,10 +1083,24 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             try:
                 vb.enableAutoRange(axis='y', enable=False)
                 vb.setYRange(bottom, top, padding=0)
+                # SI prefix OFF + density OFF so this explicit setTicks is the
+                # axis's only tick source — otherwise any earlier
+                # _apply_axis_tick_density(setTicks(None)+setTickDensity) on the
+                # left axis would have it auto-pick a DIFFERENT count than the
+                # aux axes, dropping the left ticks off the shared grid.
+                try:
+                    axis.enableAutoSIPrefix(False)
+                except Exception:
+                    pass
                 axis.setStyle(maxTickLevel=0)
+                axis.setTickDensity(1.0)
                 axis.setTicks([[(v, _fmt_tick(v)) for v in ticks], []])
             except Exception:
                 pass
+        # Shared horizontal graticule: build/refresh the n-1 grid lines AFTER
+        # every axis is pinned to n divisions so the visual anchor always
+        # matches the live division count.
+        self._build_time_y_grid(n)
         # Preview Y is pinned to the graticule: left-drag pans X only (= picks
         # the FFT window). Confirmed product decision to lock Y.
         try:
@@ -1002,7 +1109,11 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             pass
 
     def _sync_time_overlay_vbs(self, *_args) -> None:
-        """Glue every aux ViewBox geometry to the time plot's main ViewBox."""
+        """Glue every aux ViewBox + the shared grid ViewBox geometry to the time
+        plot's main ViewBox so the right axes and graticule track resize/pan."""
+        # The grid ViewBox is independent of the aux axes (it exists even for a
+        # single source), so sync it unconditionally before the early return.
+        self._sync_time_grid_vb()
         if not self._time_overlay_vbs:
             return
         try:

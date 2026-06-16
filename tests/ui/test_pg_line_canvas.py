@@ -675,6 +675,178 @@ def test_time_preview_multi_curve_adds_color_coded_y_axes(canvas):
     assert canvas._time_overlay_vbs == []
 
 
+# --------------------------------------------------------------------------
+# Time-preview overlay Y graticule alignment (shared horizontal grid lines +
+# strict same-n ticks across the left axis and every aux right axis).
+# --------------------------------------------------------------------------
+def _multi_amplitude_entries():
+    """3 overlay sources whose amplitude RANGES differ by orders of magnitude,
+    so each aux ViewBox auto-frames to a distinct Y span — the case where a
+    per-axis tick recompute would visibly diverge from the left axis grid."""
+    t = np.linspace(0, 1.0, 1000)
+    base = np.sin(2 * np.pi * 12.0 * t)
+    return [
+        {'label': 'a', 'color': '#2563eb', 'time': t, 'signal': 1.0 * base,
+         'freq': np.linspace(0, 500, 256), 'amp': np.abs(base[:256])},
+        {'label': 'b', 'color': '#22c55e', 'time': t, 'signal': 5.0 + 0.3 * base,
+         'freq': np.linspace(0, 500, 256), 'amp': np.abs(base[:256])},
+        {'label': 'c', 'color': '#f59e0b', 'time': t, 'signal': -100.0 + 50.0 * base,
+         'freq': np.linspace(0, 500, 256), 'amp': np.abs(base[:256])},
+    ]
+
+
+def _value_tick_values(axis):
+    levels = getattr(axis, "_tickLevels", None)
+    if not levels:
+        return []
+    return [float(value) for value, _label in levels[0]]
+
+
+def _grid_line_positions(canvas):
+    lines = getattr(canvas, "_time_grid_lines", [])
+    return sorted(float(line.value()) for line in lines)
+
+
+def _realized(qapp, entries):
+    c = PgLineCanvas()
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c.plot_time_preview(entries, title='时域预览')
+    qapp.processEvents()
+    return c
+
+
+def test_time_preview_left_and_aux_axes_share_tick_count(qapp):
+    """Core alignment regression: with >=3 overlay sources of different amplitude
+    ranges, the left axis and EVERY aux right axis must carry the SAME number of
+    value ticks (= n+1 = grid-line count + 1) so all ticks land on the same
+    horizontal grid lines."""
+    c = _realized(qapp, _multi_amplitude_entries())
+    try:
+        n = c._time_divisions
+        left = c._plot_time.getAxis('left')
+        left_ticks = _value_tick_values(left)
+        assert len(left_ticks) == n + 1, (
+            f"left axis should pin {n + 1} ticks, got {len(left_ticks)}")
+        for i, ax in enumerate(c._time_overlay_axes):
+            aux_ticks = _value_tick_values(ax)
+            assert len(aux_ticks) == len(left_ticks), (
+                f"aux axis {i} tick count {len(aux_ticks)} != left {len(left_ticks)}")
+        # Axis ticks include BOTH end boundaries (n+1); the shared grid draws
+        # only the n-1 INTERNAL lines at i/n (the ends are the axis frame), so
+        # the tick count is grid-line count + 2 (mirrors _build_overlay_y_grid).
+        assert len(left_ticks) == len(_grid_line_positions(c)) + 2
+    finally:
+        c.deleteLater()
+
+
+def test_time_preview_shared_grid_lines_at_i_over_n(qapp):
+    """The shared horizontal grid acts as the common visual anchor: n-1 lines at
+    proportional heights i/n (i = 1..n-1) inside the [0,1] grid ViewBox."""
+    c = _realized(qapp, _multi_amplitude_entries())
+    try:
+        n = c._time_divisions
+        positions = _grid_line_positions(c)
+        assert len(positions) == n - 1
+        expected = [i / n for i in range(1, n)]
+        np.testing.assert_allclose(positions, expected, atol=1e-9)
+    finally:
+        c.deleteLater()
+
+
+def test_time_preview_tick_density_resyncs_grid_and_all_axes(qapp):
+    """Changing the Y tick count must move the grid-line count AND the left/aux
+    tick counts together (n -> grid n-1, axes n+1)."""
+    c = _realized(qapp, _multi_amplitude_entries())
+    try:
+        c.set_tick_density(10, 6)
+        qapp.processEvents()
+        assert c._time_divisions == 6
+        assert len(_grid_line_positions(c)) == 5      # n - 1
+        left_ticks = _value_tick_values(c._plot_time.getAxis('left'))
+        assert len(left_ticks) == 7                   # n + 1
+        for ax in c._time_overlay_axes:
+            assert len(_value_tick_values(ax)) == 7
+
+        c.set_tick_density(10, 12)
+        qapp.processEvents()
+        assert c._time_divisions == 12
+        assert len(_grid_line_positions(c)) == 11
+        left_ticks = _value_tick_values(c._plot_time.getAxis('left'))
+        assert len(left_ticks) == 13
+        for ax in c._time_overlay_axes:
+            assert len(_value_tick_values(ax)) == 13
+    finally:
+        c.deleteLater()
+
+
+def test_time_preview_aux_axes_disable_si_prefix(qapp):
+    """Aux right axes (and the left axis) must keep auto SI prefix OFF so large
+    overlay ranges never render '1k'/'1m' that clash with the left _fmt_tick."""
+    c = _realized(qapp, _multi_amplitude_entries())
+    try:
+        assert c._plot_time.getAxis('left').autoSIPrefix is False
+        for ax in c._time_overlay_axes:
+            assert ax.autoSIPrefix is False
+    finally:
+        c.deleteLater()
+
+
+def test_time_preview_single_entry_still_grids_and_aligns(qapp):
+    """No regression for the single-source preview: it still builds the shared
+    grid and keeps the left axis pinned to n+1 ticks."""
+    t = np.linspace(0, 1.0, 1000)
+    e = {'label': 'solo', 'color': '#2563eb', 'time': t,
+         'signal': np.sin(2 * np.pi * 12.0 * t),
+         'freq': np.linspace(0, 500, 256), 'amp': np.abs(np.sin(t[:256]))}
+    c = _realized(qapp, [e])
+    try:
+        n = c._time_divisions
+        assert len(_grid_line_positions(c)) == n - 1
+        assert len(_value_tick_values(c._plot_time.getAxis('left'))) == n + 1
+    finally:
+        c.deleteLater()
+
+
+def test_time_preview_clear_removes_grid_lines_without_leak(qapp):
+    """Clearing the preview (empty entries) tears down the shared grid lines and
+    detaches them from the scene — no scene-item leak across rebuilds."""
+    c = _realized(qapp, _multi_amplitude_entries())
+    try:
+        lines = list(getattr(c, "_time_grid_lines", []))
+        assert lines, "expected grid lines after a multi-source plot"
+        c.plot_time_preview([], title='时域预览')
+        qapp.processEvents()
+        assert c._time_grid_lines == []
+        for line in lines:
+            assert line.scene() is None, "grid line still attached to a scene (leak)"
+    finally:
+        c.deleteLater()
+
+
+def test_time_preview_density_path_does_not_unpin_left_ticks(qapp):
+    """Guards the specific override discovered in the field: a generic density
+    recompute on the time-preview left axis must NOT leave the left axis on
+    pyqtgraph auto ticks while the aux axes stay pinned (count divergence)."""
+    c = _realized(qapp, _multi_amplitude_entries())
+    try:
+        from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _apply_axis_tick_density
+        # Simulate any refresh path that pushes a plain density onto the left
+        # axis (which calls setTicks(None) and clears the pinned graticule).
+        _apply_axis_tick_density(c._plot_time.getAxis('left'), 8 / 6.0)
+        # Re-frame should restore the shared graticule on the left axis.
+        c._reframe_time_y_to_grid()
+        qapp.processEvents()
+        left_ticks = _value_tick_values(c._plot_time.getAxis('left'))
+        assert len(left_ticks) == c._time_divisions + 1, (
+            "re-frame must re-pin the left axis to the shared graticule")
+        for ax in c._time_overlay_axes:
+            assert len(_value_tick_values(ax)) == len(left_ticks)
+    finally:
+        c.deleteLater()
+
+
 def test_collapse_divider_toggles_plot_visibility(canvas):
     """The collapse compat entry folds the bottom plot so the spectrum gets the
     full area; restoring brings both back with the time row's 170px cap."""
