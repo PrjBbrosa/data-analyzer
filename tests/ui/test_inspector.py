@@ -201,24 +201,290 @@ def test_order_contextual_emits(qapp, qtbot):
 
 
 def test_order_contextual_presets_precede_compute_and_no_cancel(qapp):
-    from PyQt5.QtWidgets import QGroupBox
+    from PyQt5.QtWidgets import QFrame, QGroupBox
     from mf4_analyzer.ui.inspector_sections import OrderContextual
 
     oc = OrderContextual()
-    preset_group = next(
-        gb for gb in oc.findChildren(QGroupBox)
-        if gb.title() == "预设配置"
-    )
 
     # 2026-06-13 split: presets + compute action now share the params_card,
     # so order is asserted within that card's layout (not the root).
-    from PyQt5.QtWidgets import QFrame
     params = oc.findChild(QFrame, "orderParamsCard")
     assert params is not None
     plan = params.layout()
-    assert plan.indexOf(preset_group) < plan.indexOf(oc.btn_ot)
+    assert hasattr(oc, "_order_section")
+    assert plan.indexOf(oc._order_section) < plan.indexOf(oc.btn_ot)
+    assert oc.preset_bar.parentWidget() is not oc
+    assert not any(gb.title() == "预设配置" for gb in oc.findChildren(QGroupBox))
     assert not hasattr(oc, "btn_cancel")
     assert not hasattr(oc, "cancel_requested")
+
+
+def test_collapsible_param_section_defaults_collapsed_persists_and_keeps_persistent_visible(
+    qtbot, tmp_path,
+):
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QLabel, QToolButton
+    from mf4_analyzer.ui.inspector_sections import _CollapsibleParamSection
+
+    settings = QSettings(str(tmp_path / "inspector.ini"), QSettings.IniFormat)
+    key = "tests/params_expanded"
+    settings.remove(key)
+
+    section = _CollapsibleParamSection("谱参数", key, settings=settings)
+    persistent = QLabel("preset bar")
+    body = QLabel("body controls")
+    section.add_persistent(persistent)
+    section.set_body(body)
+    section.set_summary("2048 · hanning · 50%")
+
+    qtbot.addWidget(section)
+    section.resize(320, 140)
+    section.show()
+    qtbot.waitExposed(section)
+
+    collapser = section.findChild(QToolButton, "inspectorCollapser")
+    assert collapser is not None
+    assert section.findChild(QLabel, "inspectorParamSummary").text() == (
+        "2048 · hanning · 50%"
+    )
+    assert section.summary_text() == "2048 · hanning · 50%"
+    assert section.is_expanded() is False
+    assert persistent.isVisible()
+    assert not body.isVisible()
+
+    section.set_expanded(True)
+    assert section.is_expanded() is True
+    assert body.isVisible()
+    settings.sync()
+
+    restored = _CollapsibleParamSection("谱参数", key, settings=settings)
+    restored_persistent = QLabel("restored preset")
+    restored_body = QLabel("restored body")
+    restored.add_persistent(restored_persistent)
+    restored.set_body(restored_body)
+    qtbot.addWidget(restored)
+    restored.resize(320, 140)
+    restored.show()
+    qtbot.waitExposed(restored)
+
+    assert restored.is_expanded() is True
+    assert restored_persistent.isVisible()
+    assert restored_body.isVisible()
+
+    restored.set_expanded(False)
+    assert restored.is_expanded() is False
+    assert restored_persistent.isVisible()
+    assert not restored_body.isVisible()
+
+
+def _param_section_summary(ctx, kind):
+    if kind in ("fft", "fft_time"):
+        return (
+            f"{ctx.combo_nfft.currentText()} · "
+            f"{ctx.combo_win.currentText()} · "
+            f"{ctx.spin_overlap.value()}%"
+        )
+    return (
+        f"≤{ctx.spin_mo.value()}阶 · "
+        f"{ctx.spin_order_res.value():g} · "
+        f"{ctx.combo_nfft.currentText()}"
+    )
+
+
+def _set_first_summary_field(ctx, kind):
+    if kind == "fft_time":
+        ctx.combo_nfft.setCurrentText("2048")
+    elif kind == "fft":
+        ctx.combo_nfft.setCurrentText("4096")
+    else:
+        ctx.spin_order_res.setValue(0.25)
+
+
+def _mutate_non_summary_param(ctx, kind):
+    if kind == "fft_time":
+        ctx.chk_remove_mean.toggle()
+    elif kind == "fft":
+        ctx.combo_avg_mode.setCurrentIndex(1)
+    else:
+        ctx.spin_time_res.setValue(0.2)
+
+
+def _preset_payload(ctx, kind):
+    if kind == "fft_time":
+        return {
+            "nfft": "2048",
+            "window": "flattop",
+            "overlap": 75,
+            "remove_mean": False,
+        }
+    if kind == "fft":
+        return {
+            "nfft": "4096",
+            "window": "flattop",
+            "overlap": 75,
+            "avg_mode": ctx.combo_avg_mode.itemText(1),
+        }
+    return {
+        "max_order": 30,
+        "order_res": 0.25,
+        "time_res": 0.2,
+        "nfft": "4096",
+        "samples_per_rev": 512,
+    }
+
+
+def _save_settings(settings, keys):
+    return {
+        key: (settings.contains(key), settings.value(key))
+        for key in keys
+    }
+
+
+def _restore_settings(settings, saved):
+    for key, (exists, value) in saved.items():
+        if exists:
+            settings.setValue(key, value)
+        else:
+            settings.remove(key)
+    settings.sync()
+
+
+@pytest.mark.parametrize(
+    "kind, cls_name, section_attr, helper_name, title, settings_key",
+    [
+        (
+            "fft_time",
+            "FFTTimeContextual",
+            "_tf_section",
+            "is_tf_expanded",
+            "时频参数",
+            "inspector/fft_time/params_expanded",
+        ),
+        (
+            "fft",
+            "FFTContextual",
+            "_fft_section",
+            "is_fft_params_expanded",
+            "谱参数",
+            "inspector/fft/params_expanded",
+        ),
+        (
+            "order",
+            "OrderContextual",
+            "_order_section",
+            "is_order_params_expanded",
+            "谱参数",
+            "inspector/order/params_expanded",
+        ),
+    ],
+)
+def test_contextual_param_sections_are_merged_collapsed_and_summarized(
+    qapp, qtbot, kind, cls_name, section_attr, helper_name, title, settings_key,
+):
+    from PyQt5.QtWidgets import QGroupBox, QToolButton
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual,
+        FFTTimeContextual,
+        OrderContextual,
+        _preset_settings,
+    )
+
+    classes = {
+        "FFTTimeContextual": FFTTimeContextual,
+        "FFTContextual": FFTContextual,
+        "OrderContextual": OrderContextual,
+    }
+    settings = _preset_settings()
+    saved = _save_settings(settings, [settings_key])
+    settings.remove(settings_key)
+    settings.sync()
+    try:
+        ctx = classes[cls_name]()
+        qtbot.addWidget(ctx)
+        ctx.resize(360, 760)
+        ctx.show()
+        qtbot.waitExposed(ctx)
+
+        section = getattr(ctx, section_attr)
+        collapser = section.findChild(QToolButton, "inspectorCollapser")
+        assert collapser is not None
+        assert collapser.text() == title
+        assert section.is_expanded() is False
+        assert getattr(ctx, helper_name)() is False
+        assert ctx.preset_bar.isVisible()
+        assert not ctx.combo_nfft.isVisible()
+        assert section.summary_text() == _param_section_summary(ctx, kind)
+        assert not any(
+            gb.title() in {title, "预设", "预设配置"}
+            for gb in ctx.findChildren(QGroupBox)
+        )
+
+        _set_first_summary_field(ctx, kind)
+        assert section.summary_text() == _param_section_summary(ctx, kind)
+
+        section.set_expanded(True)
+        assert getattr(ctx, helper_name)() is True
+        assert ctx.combo_nfft.isVisible()
+    finally:
+        _restore_settings(settings, saved)
+
+
+@pytest.mark.parametrize(
+    "kind, cls_name, settings_key",
+    [
+        ("fft_time", "FFTTimeContextual", "inspector/fft_time/params_expanded"),
+        ("fft", "FFTContextual", "inspector/fft/params_expanded"),
+        ("order", "OrderContextual", "inspector/order/params_expanded"),
+    ],
+)
+def test_contextual_param_sections_preserve_and_clear_preset_highlight(
+    qapp, qtbot, kind, cls_name, settings_key,
+):
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual,
+        FFTTimeContextual,
+        OrderContextual,
+        _preset_settings,
+    )
+
+    classes = {
+        "FFTTimeContextual": FFTTimeContextual,
+        "FFTContextual": FFTContextual,
+        "OrderContextual": OrderContextual,
+    }
+    settings = _preset_settings()
+    keys = [settings_key] + [f"{kind}/preset_override/{slot}" for slot in (1, 2, 3)]
+    saved = _save_settings(settings, keys)
+    for key in keys:
+        settings.remove(key)
+    settings.sync()
+    try:
+        ctx = classes[cls_name]()
+        qtbot.addWidget(ctx)
+
+        ctx.preset_bar.set_recommended(1)
+        _mutate_non_summary_param(ctx, kind)
+        assert all(
+            ctx.preset_bar._load_btns[slot].property("recommended") == "false"
+            for slot in (1, 2, 3)
+        )
+
+        ctx.preset_bar.set_recommended(1)
+        ctx._apply_preset(_preset_payload(ctx, kind))
+        assert ctx.preset_bar._load_btns[1].property("recommended") == "true"
+        assert ctx.preset_bar._load_btns[2].property("recommended") == "false"
+        section_attr = {
+            "fft_time": "_tf_section",
+            "fft": "_fft_section",
+            "order": "_order_section",
+        }[kind]
+        assert getattr(ctx, section_attr).summary_text() == _param_section_summary(ctx, kind)
+
+        ctx.preset_bar.set_recommended(None)
+        ctx.preset_bar._load(2)
+        assert ctx.preset_bar._load_btns[2].property("recommended") == "true"
+    finally:
+        _restore_settings(settings, saved)
 
 
 def test_fft_time_contextual_keeps_only_compute_action(qapp):
@@ -1378,6 +1644,9 @@ def test_fft_contextual_fields_fill_column_under_qss(qapp, qtbot):
         qtbot.wait(50)
 
         ctx = insp.fft_ctx
+        ctx._fft_section.set_expanded(True)
+        qapp.processEvents()
+        qtbot.wait(50)
         fields = [
             ctx.combo_sig,
             ctx.spin_fs,

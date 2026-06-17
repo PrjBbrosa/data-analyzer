@@ -904,6 +904,15 @@ Inspector QGroupBox {
 Inspector QGroupBox#axisSettingsGroup {
     padding-right: 0;
 }
+/* Title-less 谱参数 / 时频参数 group nested inside a _CollapsibleParamSection:
+ * the section header already renders the title, so drop the empty title band
+ * (6px margin + 18px top padding) and carry a hairline divider above the
+ * expanded detail fields — matches docs/mockups/tf-params-merged-section.html. */
+Inspector QGroupBox#paramsSectionBody {
+    margin-top: 0;
+    padding-top: 9px;
+    border-top: 1px solid #dfe5ee;
+}
 Inspector QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;

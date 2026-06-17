@@ -205,6 +205,137 @@ def _make_params_card(owner, object_name):
     return card, lay
 
 
+def _settings_bool(settings, key, default):
+    raw = settings.value(key, default)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(default)
+
+
+class _CollapsibleParamSection(QWidget):
+    """Merged preset + advanced-params section for contextual inspectors."""
+
+    def __init__(
+        self,
+        title,
+        settings_key,
+        *,
+        settings=None,
+        default_expanded=False,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._settings = settings if settings is not None else _preset_settings()
+        self._settings_key = settings_key
+        self._expanded = _settings_bool(
+            self._settings,
+            self._settings_key,
+            default_expanded,
+        )
+        self._body_widget = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(6)
+
+        header = QWidget(self)
+        header_lay = QHBoxLayout(header)
+        header_lay.setContentsMargins(0, 0, 0, 0)
+        header_lay.setSpacing(6)
+
+        self.btn_collapser = QToolButton(header)
+        self.btn_collapser.setObjectName("inspectorCollapser")
+        self.btn_collapser.setCheckable(True)
+        self.btn_collapser.setAutoRaise(True)
+        self.btn_collapser.setText(title)
+        self.btn_collapser.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_collapser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        try:
+            self.btn_collapser.setStyleSheet(
+                "QToolButton#inspectorCollapser { "
+                "  text-align: left; padding: 4px 6px; font-weight: 600; "
+                "  border: none; background: transparent; "
+                "}"
+                "QToolButton#inspectorCollapser:hover { background: #eef2f7; }"
+            )
+        except Exception:  # pragma: no cover - defensive on Qt style failures
+            pass
+        self.btn_collapser.toggled.connect(self.set_expanded)
+        header_lay.addWidget(self.btn_collapser, 1)
+
+        self._summary = QLabel("", header)
+        self._summary.setObjectName("inspectorParamSummary")
+        self._summary.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._summary.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self._summary.setStyleSheet(
+            "QLabel#inspectorParamSummary { color: #64748b; font-size: 11px; }"
+        )
+        header_lay.addWidget(self._summary, 0)
+        root.addWidget(header)
+
+        self._persistent_host = QWidget(self)
+        self._persistent_lay = QVBoxLayout(self._persistent_host)
+        self._persistent_lay.setContentsMargins(0, 0, 0, 0)
+        self._persistent_lay.setSpacing(4)
+        root.addWidget(self._persistent_host)
+
+        self._body = QFrame(self)
+        self._body_lay = QVBoxLayout(self._body)
+        self._body_lay.setContentsMargins(0, 0, 0, 0)
+        self._body_lay.setSpacing(0)
+        root.addWidget(self._body)
+
+        self._sync_expanded(persist=False)
+
+    def set_summary(self, text):
+        self._summary.setText(str(text))
+
+    def summary_text(self):
+        return self._summary.text()
+
+    def add_persistent(self, widget):
+        self._persistent_lay.addWidget(widget)
+
+    def set_body(self, widget):
+        while self._body_lay.count():
+            item = self._body_lay.takeAt(0)
+            old = item.widget()
+            if old is not None:
+                old.setParent(None)
+        self._body_widget = widget
+        self._body_lay.addWidget(widget)
+        widget.setVisible(self._expanded)
+        self._body.setVisible(self._expanded)
+
+    def is_expanded(self):
+        return bool(self._expanded)
+
+    def set_expanded(self, expanded):
+        expanded = bool(expanded)
+        if self._expanded == expanded:
+            self._sync_expanded(persist=True)
+            return
+        self._expanded = expanded
+        self._sync_expanded(persist=True)
+
+    def _sync_expanded(self, *, persist):
+        self.btn_collapser.blockSignals(True)
+        self.btn_collapser.setChecked(self._expanded)
+        self.btn_collapser.blockSignals(False)
+        self.btn_collapser.setArrowType(
+            Qt.DownArrow if self._expanded else Qt.RightArrow
+        )
+        self._body.setVisible(self._expanded)
+        if self._body_widget is not None:
+            self._body_widget.setVisible(self._expanded)
+        if persist:
+            self._settings.setValue(self._settings_key, self._expanded)
+
+
 def _preset_value_text(value):
     if isinstance(value, bool):
         return '是' if value else '否'
@@ -860,6 +991,7 @@ class PresetBar(QWidget):
         except Exception as e:
             self.acknowledged.emit("error", f"加载失败: {e}")
             return
+        self.set_recommended(slot)
         self.acknowledged.emit("success", f"已加载「{name}」")
 
     def _rename(self, slot):
@@ -1980,6 +2112,7 @@ class FFTContextual(QWidget):
         super().__init__(parent)
         self.setObjectName("fftContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self._applying_preset = False
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: the contextual is a transparent
         # host for two full-width cards (sig_card + params_card). Zero
@@ -2116,7 +2249,18 @@ class FFTContextual(QWidget):
             "幅值轴:",
             _fit_field(self.combo_amp_y, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
-        params_lay.addWidget(g)
+        g.setTitle("")
+        # The section header already shows the title; drop the title band and
+        # let the body carry a hairline top divider (see style.qss
+        # #paramsSectionBody) so the expanded detail matches the mockup.
+        g.setObjectName("paramsSectionBody")
+        self._fft_section = _CollapsibleParamSection(
+            "谱参数",
+            "inspector/fft/params_expanded",
+            parent=self,
+        )
+        self._fft_section.set_body(g)
+        params_lay.addWidget(self._fft_section)
 
         axis_g = _make_axis_settings_group(
             self,
@@ -2141,17 +2285,13 @@ class FFTContextual(QWidget):
         self.chk_remark = QCheckBox("点击标注", self)
         self.chk_remark.setVisible(False)
 
-        g = QGroupBox("预设配置")
-        gl = QVBoxLayout(g)
-        gl.setSpacing(4)
         # Signal-type built-in presets (扭矩类 / 振动类 / 启停类). Slot order
         # is the shared contract from BUILTIN_PRESET_KEYS.
         self.preset_bar = PresetBar(
             'fft', self._collect_preset, self._apply_preset, parent=self,
             builtin_defaults=self._builtin_preset_defaults(),
         )
-        gl.addWidget(self.preset_bar)
-        params_lay.addWidget(g)
+        self._fft_section.add_persistent(self.preset_bar)
 
         self.btn_fft = QPushButton("计算 FFT")
         self.btn_fft.setIcon(Icons.mode_fft())
@@ -2176,12 +2316,38 @@ class FFTContextual(QWidget):
             lambda: self.rebuild_time_requested.emit(self.btn_rebuild)
         )
         self.chk_remark.toggled.connect(self.remark_toggled)
+        self._connect_preset_param_signals()
+        self._refresh_fft_summary()
         self._sync_axis_enabled()
         # §6.3 Fs rule: spin_fs reflects selected signal's source file Fs.
         # MainWindow will call set_fs via the signal_changed relay.
 
     def time_range_layout(self):
         return self._time_range_slot
+
+    def is_fft_params_expanded(self):
+        return self._fft_section.is_expanded()
+
+    def _fft_summary_text(self):
+        return (
+            f"{self.combo_nfft.currentText()} · "
+            f"{self.combo_win.currentText()} · "
+            f"{self.spin_overlap.value()}%"
+        )
+
+    def _refresh_fft_summary(self):
+        self._fft_section.set_summary(self._fft_summary_text())
+
+    def _on_preset_param_changed(self, *_):
+        if not self._applying_preset:
+            self.preset_bar.set_recommended(None)
+        self._refresh_fft_summary()
+
+    def _connect_preset_param_signals(self):
+        for combo in (self.combo_win, self.combo_nfft, self.combo_avg_mode, self.combo_amp_y):
+            combo.currentTextChanged.connect(self._on_preset_param_changed)
+        for spin in (self.spin_overlap, self.spin_avg_overlap):
+            spin.valueChanged.connect(self._on_preset_param_changed)
 
     def _sync_axis_enabled(self):
         for key in ('x', 'y'):
@@ -2275,6 +2441,14 @@ class FFTContextual(QWidget):
         )
 
     def _apply_preset(self, d):
+        self._applying_preset = True
+        try:
+            self._apply_preset_values(d)
+        finally:
+            self._applying_preset = False
+            self._refresh_fft_summary()
+
+    def _apply_preset_values(self, d):
         if 'window' in d:
             i = self.combo_win.findText(str(d['window']))
             if i >= 0:
@@ -2435,6 +2609,7 @@ class OrderContextual(QWidget):
         super().__init__(parent)
         self.setObjectName("orderContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self._applying_preset = False
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: transparent host for two
         # full-width cards (sig_card + params_card); spacing is the gutter.
@@ -2529,7 +2704,18 @@ class OrderContextual(QWidget):
         # labels (e.g. "阶次分辨率:") never wrap or get elided when the
         # Inspector pane is narrow. _enforce_label_widths walks every form
         # in this widget after construction.
-        params_lay.addWidget(g)
+        g.setTitle("")
+        # The section header already shows the title; drop the title band and
+        # let the body carry a hairline top divider (see style.qss
+        # #paramsSectionBody) so the expanded detail matches the mockup.
+        g.setObjectName("paramsSectionBody")
+        self._order_section = _CollapsibleParamSection(
+            "谱参数",
+            "inspector/order/params_expanded",
+            parent=self,
+        )
+        self._order_section.set_body(g)
+        params_lay.addWidget(self._order_section)
 
         # ---- 坐标轴设置 (Wave 3 of the 2026-04-28 plan; refactored to
         # use the module-level _make_axis_settings_group helper in Wave 4
@@ -2566,16 +2752,12 @@ class OrderContextual(QWidget):
         # constructor default until the user actually toggles a checkbox).
         self._sync_axis_enabled()
 
-        g = QGroupBox("预设配置")
-        gl = QVBoxLayout(g)
-        gl.setSpacing(4)
         # Signal-type built-in presets (扭矩类 / 振动类 / 启停类).
         self.preset_bar = PresetBar(
             'order', self._collect_preset, self._apply_preset, parent=self,
             builtin_defaults=self._builtin_preset_defaults(),
         )
-        gl.addWidget(self.preset_bar)
-        params_lay.addWidget(g)
+        self._order_section.add_persistent(self.preset_bar)
 
         self.btn_ot = QPushButton("时间-阶次")
         self.btn_ot.setProperty("role", "primary")
@@ -2589,6 +2771,8 @@ class OrderContextual(QWidget):
         root.addStretch()
 
         self.btn_ot.clicked.connect(self.order_time_requested)
+        self._connect_preset_param_signals()
+        self._refresh_order_summary()
 
         # R3 B + 2026-04-26 紧凑化 fix-3: pin labels & cap fields so
         # 阶次分辨率 / 时间分辨率 / RPM分辨率 never wrap when the Inspector
@@ -2606,6 +2790,34 @@ class OrderContextual(QWidget):
 
     def time_range_layout(self):
         return self._time_range_slot
+
+    def is_order_params_expanded(self):
+        return self._order_section.is_expanded()
+
+    def _order_summary_text(self):
+        return (
+            f"≤{self.spin_mo.value()}阶 · "
+            f"{self.spin_order_res.value():g} · "
+            f"{self.combo_nfft.currentText()}"
+        )
+
+    def _refresh_order_summary(self):
+        self._order_section.set_summary(self._order_summary_text())
+
+    def _on_preset_param_changed(self, *_):
+        if not self._applying_preset:
+            self.preset_bar.set_recommended(None)
+        self._refresh_order_summary()
+
+    def _connect_preset_param_signals(self):
+        for spin in (
+            self.spin_mo,
+            self.spin_order_res,
+            self.spin_time_res,
+            self.spin_samples_per_rev,
+        ):
+            spin.valueChanged.connect(self._on_preset_param_changed)
+        self.combo_nfft.currentTextChanged.connect(self._on_preset_param_changed)
 
     # ---- 2026-04-28: axis settings group helpers (Wave 3 introduced; row-
     # builder lifted to module level in Wave 4 — see _make_axis_settings_group).
@@ -2707,6 +2919,14 @@ class OrderContextual(QWidget):
         )
 
     def _apply_preset(self, d):
+        self._applying_preset = True
+        try:
+            self._apply_preset_values(d)
+        finally:
+            self._applying_preset = False
+            self._refresh_order_summary()
+
+    def _apply_preset_values(self, d):
         if 'rpm_factor' in d:
             self.spin_rf.setValue(float(d['rpm_factor']))
         if 'max_order' in d:
@@ -3004,6 +3224,7 @@ class FFTTimeContextual(QWidget):
         super().__init__(parent)
         self.setObjectName("fftTimeContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self._applying_preset = False
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: transparent host for two
         # full-width cards (sig_card + params_card); spacing is the gutter.
@@ -3073,7 +3294,18 @@ class FFTTimeContextual(QWidget):
         self.chk_remove_mean = QCheckBox("去均值")
         self.chk_remove_mean.setChecked(True)
         fl.addRow(self.chk_remove_mean)
-        params_lay.addWidget(g)
+        g.setTitle("")
+        # The section header already shows the title; drop the title band and
+        # let the body carry a hairline top divider (see style.qss
+        # #paramsSectionBody) so the expanded detail matches the mockup.
+        g.setObjectName("paramsSectionBody")
+        self._tf_section = _CollapsibleParamSection(
+            "时频参数",
+            "inspector/fft_time/params_expanded",
+            parent=self,
+        )
+        self._tf_section.set_body(g)
+        params_lay.addWidget(self._tf_section)
 
         # ---- 幅值 (Wave 4: combo_amp_mode dropped — amplitude unit now
         # lives on the Z row of 坐标轴设置 as combo_amp_unit. spin_db_ref
@@ -3133,9 +3365,6 @@ class FFTTimeContextual(QWidget):
         params_lay.addWidget(g)
 
         # ---- 预设 (R3 C: builtin-aware PresetBar) ----
-        g = QGroupBox("预设")
-        gl = QVBoxLayout(g)
-        gl.setSpacing(4)
         # The preset_bar is single-row, builtin-aware: each slot starts with
         # its signal-type display name (扭矩类 / 振动类 / 启停类), left-click
         # loads (override-or-builtin), right-click menu integrates 保存当前 /
@@ -3155,8 +3384,7 @@ class FFTTimeContextual(QWidget):
             parent=self,
             builtin_defaults=builtin_defaults,
         )
-        gl.addWidget(self.preset_bar)
-        params_lay.addWidget(g)
+        self._tf_section.add_persistent(self.preset_bar)
 
         # ---- 操作 ----
         self.btn_compute = QPushButton("计算时频图")
@@ -3183,11 +3411,37 @@ class FFTTimeContextual(QWidget):
         # chk_y_auto.toggled.
         # Seed the initial enabled state once at __init__ end (per the
         # 2026-04-26 init-sync lesson).
+        self._connect_preset_param_signals()
+        self._refresh_tf_summary()
         self._sync_axis_enabled()
 
     # ---- helpers ----
     def time_range_layout(self):
         return self._time_range_slot
+
+    def is_tf_expanded(self):
+        return self._tf_section.is_expanded()
+
+    def _tf_summary_text(self):
+        return (
+            f"{self.combo_nfft.currentText()} · "
+            f"{self.combo_win.currentText()} · "
+            f"{self.spin_overlap.value()}%"
+        )
+
+    def _refresh_tf_summary(self):
+        self._tf_section.set_summary(self._tf_summary_text())
+
+    def _on_preset_param_changed(self, *_):
+        if not self._applying_preset:
+            self.preset_bar.set_recommended(None)
+        self._refresh_tf_summary()
+
+    def _connect_preset_param_signals(self):
+        self.combo_nfft.currentTextChanged.connect(self._on_preset_param_changed)
+        self.combo_win.currentTextChanged.connect(self._on_preset_param_changed)
+        self.spin_overlap.valueChanged.connect(self._on_preset_param_changed)
+        self.chk_remove_mean.toggled.connect(self._on_preset_param_changed)
 
     def _sync_axis_enabled(self):
         """Toggle each axis row between auto summary and manual bounds.
@@ -3585,6 +3839,14 @@ class FFTTimeContextual(QWidget):
         )
 
     def _apply_preset(self, d):
+        self._applying_preset = True
+        try:
+            self._apply_preset_values(d)
+        finally:
+            self._applying_preset = False
+            self._refresh_tf_summary()
+
+    def _apply_preset_values(self, d):
         """Restore previously-saved params from PresetBar load (R3 C).
 
         Wave 4: legacy ``amplitude_mode`` / ``dynamic`` / ``freq_*`` keys
