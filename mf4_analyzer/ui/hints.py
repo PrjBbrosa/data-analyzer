@@ -3,12 +3,36 @@
 The chart bar consumes this module instead of parsing design docs or keeping
 free-floating hint strings in widget code.
 """
+import unicodedata
 from dataclasses import dataclass, field
 
 from PyQt5.QtCore import QSettings
 
 
 DISCOVERED_SETTINGS_KEY = "chartHints/discovered"
+
+
+# The footer shares one bar between a left (rotating gesture) slot and a right
+# (discovery) slot that hug opposite edges. Each line must therefore stay short
+# enough that the two do not collide on a normal-width chart, so every registry
+# hint is capped at HINT_MAX_WIDTH *full-width units*: CJK ideographs and
+# full-width punctuation count 1; narrow ASCII/Latin glyphs (letters, digits,
+# spaces, "·", "→") count 0, since they render at ~half width and are not what
+# drives a hint past the bar. ``test_hints`` enforces this on ``all_hints()`` so
+# new hints stay within budget at definition time. (On a too-narrow window the
+# left slot simply elides — see chart_stack's bottom hint bar.)
+HINT_MAX_WIDTH = 18
+
+
+def hint_display_width(text):
+    """Full-width-glyph count of ``text`` (the bottom-bar length budget).
+
+    East-Asian Wide (``W``) and Fullwidth (``F``) characters count 1; every
+    other character counts 0. See ``HINT_MAX_WIDTH`` for the rationale.
+    """
+    return sum(
+        1 for ch in text if unicodedata.east_asian_width(ch) in ("W", "F")
+    )
 
 
 # Variable-dwell rotation tuning. The footer shows one rotating hint at a time;
@@ -118,14 +142,14 @@ _HINTS = (
     ),
     Hint(
         id="chart.copy_image",
-        text="复制按钮可导出带游标读数的图片，并打开标注编辑器",
+        text="复制按钮导出带游标读数的图片并标注",
         surface="discovery",
         retire_on="copy_image",
         priority=95,
     ),
     Hint(
         id="chart.right_click_menu",
-        text="右键图表 → 查看全部 · 轴范围 · 网格 等选项",
+        text="右键图表 → 查看全部 · 轴范围 · 网格",
         surface="discovery",
         retire_on="chart_context_menu",
         priority=90,
@@ -147,7 +171,7 @@ _HINTS = (
     ),
     Hint(
         id="markup.capabilities",
-        text="箭头键移动标注，Shift 加速 · 双击文本可编辑 · 工具支持单键切换（悬停按钮看键位）",
+        text="箭头移动标注 · 双击编辑文本 · 单键切换工具",
         surface="discovery",
         scope="markup",
         retire_on="markup_open",
@@ -244,7 +268,7 @@ _HINTS = (
     # sections so they only surface on the right pages.
     Hint(
         id="spectrogram.colorbar_scale",
-        text="拖 colorbar 调色阶范围 · 双击 colorbar 重置",
+        text="拖 colorbar 调色阶 · 双击重置",
         surface="context",
         tier="A",
         modes=frozenset({"fft_time", "order"}),
@@ -254,7 +278,7 @@ _HINTS = (
     ),
     Hint(
         id="spectrogram.divider",
-        text="拖上下分隔条调谱图/切片高度 · 双击重置 · 底部可折叠/展开",
+        text="拖分隔条调谱图/切片高度 · 双击重置",
         surface="context",
         tier="A",
         modes=frozenset({"fft_time", "order"}),
@@ -286,7 +310,7 @@ _HINTS = (
     ),
     Hint(
         id="fft.preview_wheel",
-        text="时域预览图内 Ctrl / Shift + 滚轮 单独缩放预览",
+        text="预览图内 Ctrl/Shift+滚轮 独立缩放",
         surface="context",
         tier="A",
         modes=frozenset({"fft"}),

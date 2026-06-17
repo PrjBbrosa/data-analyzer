@@ -1746,9 +1746,9 @@ QWidget#viewTabBar QPushButton#viewSplitClear:pressed {
 }
 
 /* Bottom hint bar — sits beneath the canvas inside each chart card.
- * Two layers:
- *   #chartHintPersistent (left, gray) always-on shortcut reminders
- *   #chartHintContext    (right, blue) mode-driven contextual prompts
+ * Two edge-anchored slots:
+ *   #chartHintContext   (left edge, blue)  rotating gesture / context prompts
+ *   #chartHintDiscovery (right edge, blue) "this exists" discovery prompts
  * The bar itself has a soft tinted backdrop and a hairline top edge so it
  * reads as a quiet status footer rather than another piece of toolbar. */
 QFrame#chartHintBar {
@@ -1775,15 +1775,6 @@ QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 2px 8px;
     background-color: transparent;
 }
-QFrame#chartHintBar QWidget#chartHintGroup {
-    background-color: transparent;
-}
-QFrame#chartHintBar QLabel#chartHintSeparator {
-    color: #94a3b8;
-    font-size: 11px;
-    padding: 2px 0;
-    background-color: transparent;
-}
 
 QFrame#timeViewBottomDock QFrame#chartHintBar {
     background-color: #fbfcff;
@@ -1795,9 +1786,6 @@ QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintContext,
 QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 1px 6px;
 }
-QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintSeparator {
-    padding: 1px 0;
-}
 
 QStatusBar QFrame#chartHintBar {
     background-color: transparent;
@@ -1808,9 +1796,6 @@ QStatusBar QFrame#chartHintBar QLabel#chartHintPersistent,
 QStatusBar QFrame#chartHintBar QLabel#chartHintContext,
 QStatusBar QFrame#chartHintBar QLabel#chartHintDiscovery {
     padding: 0 6px;
-}
-QStatusBar QFrame#chartHintBar QLabel#chartHintSeparator {
-    padding: 0;
 }
 
 /* Batch signal picker chips */

@@ -14,6 +14,27 @@ def test_persistent_hints_are_curated_universal_set():
     )
 
 
+def test_hint_display_width_counts_full_width_glyphs_only():
+    # CJK ideographs and full-width punctuation count 1; narrow ASCII/Latin
+    # glyphs (letters, digits, spaces, "·", "→") count 0.
+    assert hints.hint_display_width("缩放") == 2
+    assert hints.hint_display_width("Ctrl + 滚轮 缩放 X / Y") == 4
+    assert hints.hint_display_width("右键图表 → 查看全部 · 轴范围 · 网格") == 13
+    assert hints.hint_display_width("，（）") == 3  # full-width punctuation counts
+
+
+def test_every_registry_hint_stays_within_length_budget():
+    # The footer's two edge-anchored slots only fit side by side when each hint
+    # is short; this guards the cap at definition time so new hints stay in
+    # budget instead of eliding on a normal-width bar.
+    too_long = [
+        (hint.id, hints.hint_display_width(hint.text), hint.text)
+        for hint in hints.all_hints()
+        if hints.hint_display_width(hint.text) > hints.HINT_MAX_WIDTH
+    ]
+    assert not too_long, too_long
+
+
 def test_context_hints_filter_by_mode_and_tier_priority():
     overlay = HintState(mode="time", plot_mode="overlay")
     assert [hint.id for hint in hints.context_hints(overlay)] == [
@@ -128,8 +149,8 @@ def test_markup_capabilities_is_markup_scoped_ship_now_discovery():
     assert hint.scope == "markup"
     assert hint.surface == "discovery"
     assert hint.ship == "now"
-    assert "箭头键" in hint.text
-    assert "双击文本" in hint.text
+    assert "箭头移动标注" in hint.text
+    assert "双击编辑文本" in hint.text
 
 
 def test_chart_discovery_queue_excludes_markup_scope():

@@ -1777,10 +1777,10 @@ def test_bottom_hint_bar_anchor_leads_each_section(qapp):
         assert pool[0].text == anchors[mode], (mode, pool[0].id)
 
 
-def test_bottom_hint_bar_group_is_centered_with_symmetric_padding(qapp):
-    """The rotating row + discovery form ONE centered group: symmetric stretch
-    on both sides, separator between the two segments, and the group sits in the
-    middle of the bar (not hugging either edge)."""
+def test_bottom_hint_bar_hugs_left_and_right_edges(qapp):
+    """The rotating row hugs the LEFT edge and the discovery hint hugs the RIGHT
+    edge, with the empty gap between them in the middle (no centered group, no
+    separator)."""
     from PyQt5.QtCore import QPoint
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
@@ -1792,37 +1792,33 @@ def test_bottom_hint_bar_group_is_centered_with_symmetric_padding(qapp):
         card = cs._fft_card
         bar = card._hint_bar
         card._hint_context.setText("Ctrl / Shift + 滚轮 缩放 X / Y")
-        card._hint_discovery.setText("复制按钮可导出带游标读数的图片")
-        card._sync_hint_separator()
+        card._hint_discovery.setText("复制按钮导出带游标读数的图片并标注")
         bar.layout().activate()
         qapp.processEvents()
 
-        group = card._hint_group
-        grp_left = group.mapTo(bar, QPoint(0, 0)).x()
-        grp_right = grp_left + group.width()
-        left_gap = grp_left
-        right_gap = bar.width() - grp_right
-
-        # Symmetric side padding => the group is horizontally centered.
-        assert abs(left_gap - right_gap) <= 2, (left_gap, right_gap)
-        # Not hugging the far left (the old left-anchored layout).
-        assert grp_left > 4
-        # Separator appears between context and discovery when discovery is set.
-        assert card._hint_separator.isVisible() is True
+        # The retired centered group + separator are gone.
+        assert not hasattr(card, "_hint_group")
+        assert not hasattr(card, "_hint_separator")
 
         def _bar_left(w):
             return w.mapTo(bar, QPoint(0, 0)).x()
 
-        ctx_right = _bar_left(card._hint_context) + card._hint_context.width()
+        ctx_left = _bar_left(card._hint_context)
+        disc_right = _bar_left(card._hint_discovery) + card._hint_discovery.width()
+        # Context hugs the left edge, discovery hugs the right edge.
+        assert ctx_left <= 6, ctx_left
+        assert disc_right >= bar.width() - 6, (disc_right, bar.width())
+        # A real gap sits between them (the two are not glued in the middle).
+        ctx_right = ctx_left + card._hint_context.width()
         disc_left = _bar_left(card._hint_discovery)
-        assert ctx_right <= disc_left  # context precedes discovery, no overlap
+        assert ctx_right <= disc_left, (ctx_right, disc_left)
     finally:
         cs.deleteLater()
 
 
-def test_bottom_hint_bar_no_dangling_separator_when_discovery_empty(qapp):
-    """When discovery is empty the separator hides (no dangling ' · ') and the
-    lone rotating row stays centered."""
+def test_bottom_hint_bar_context_stays_left_when_discovery_empty(qapp):
+    """When discovery is empty the lone rotating row still hugs the LEFT edge
+    (it does not recenter), so its position is stable across discovery churn."""
     from PyQt5.QtCore import QPoint
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
@@ -1834,28 +1830,28 @@ def test_bottom_hint_bar_no_dangling_separator_when_discovery_empty(qapp):
         card = cs._fft_card
         card._hint_context.setText("Ctrl / Shift + 滚轮 缩放 X / Y")
         card._hint_discovery.setText("")
-        card._sync_hint_separator()
         bar = card._hint_bar
         bar.layout().activate()
         qapp.processEvents()
 
-        assert card._hint_separator.isVisible() is False
-
-        group = card._hint_group
-        grp_left = group.mapTo(bar, QPoint(0, 0)).x()
-        grp_right = grp_left + group.width()
-        left_gap = grp_left
-        right_gap = bar.width() - grp_right
-        assert abs(left_gap - right_gap) <= 2, (left_gap, right_gap)
+        ctx_left = card._hint_context.mapTo(bar, QPoint(0, 0)).x()
+        assert ctx_left <= 6, ctx_left
     finally:
         cs.deleteLater()
 
 
-def test_bottom_hint_bar_elides_under_narrow_bar_without_overflow(qapp):
-    """A bar narrower than the group's natural width must elide the rotating row
-    (Preferred + min-0) and keep the group within the bar (no overflow / no
-    negative stretch)."""
+def test_bottom_hint_bar_left_yields_width_right_stays_firm(qapp):
+    """Under a narrow bar the LEFT rotating row is the slot that yields width
+    (stretch=1, eliding _ElidedLabel) while the RIGHT discovery row is firm
+    (stretch=0, a non-shrinking policy) and keeps its full text — so a long left
+    hint can never push the right one off the bar.
+
+    Pixel-level eliding can't be asserted under the headless offscreen platform,
+    whose font metrics report 0-width for CJK text; we assert the layout
+    invariant that *produces* eliding instead, plus that the discovery text is
+    preserved in full and stays within the bar."""
     from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QSizePolicy
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     try:
@@ -1865,23 +1861,32 @@ def test_bottom_hint_bar_elides_under_narrow_bar_without_overflow(qapp):
         qapp.processEvents()
         card = cs._fft_card
         bar = card._hint_bar
-        long_text = "这是一条很长的轮播提示，用来确认窄窗下文字会省略而不是溢出或裁剪"
+        long_text = "这是一条很长的轮播提示，用来确认窄窗下左条让位而右条不被挤掉"
+        discovery_text = "复制按钮导出带游标读数的图片并标注"
         card._hint_context.setText(long_text)
-        card._hint_discovery.setText("复制按钮可导出带游标读数的图片")
-        card._sync_hint_separator()
+        card._hint_discovery.setText(discovery_text)
         bar.setFixedWidth(260)
         bar.layout().activate()
         qapp.processEvents()
 
-        # text() returns the elided string; full_text() the logical value.
+        lay = bar.layout()
+        # The left rotating row owns the stretch (it absorbs the shrink and
+        # elides); the right discovery row takes none.
+        assert lay.stretch(0) == 1   # context (left)
+        assert lay.stretch(1) == 0   # discovery (right)
+        # The discovery policy never shrinks below its full text, so it is never
+        # clipped — the left row yields instead.
+        assert card._hint_discovery.sizePolicy().horizontalPolicy() in (
+            QSizePolicy.Minimum, QSizePolicy.Fixed,
+        )
+        # The left row is an eliding label (its width is what yields).
+        assert hasattr(card._hint_context, "full_text")
         assert card._hint_context.full_text() == long_text
-        assert card._hint_context.text() != long_text  # elided
-
-        group = card._hint_group
-        grp_left = group.mapTo(bar, QPoint(0, 0)).x()
-        grp_right = grp_left + group.width()
-        assert grp_left >= -1
-        assert grp_right <= bar.width() + 1
+        # Discovery keeps its full text and stays within the bar at the right.
+        assert card._hint_discovery.text() == discovery_text
+        disc_left = card._hint_discovery.mapTo(bar, QPoint(0, 0)).x()
+        disc_right = disc_left + card._hint_discovery.width()
+        assert disc_right <= bar.width() + 1
     finally:
         cs.deleteLater()
 
@@ -1968,7 +1973,7 @@ def test_bottom_hint_bar_discovery_slot_advances_when_marked(qapp):
     assert card._hint_discovery.text() == "顶部按钮支持快捷键，悬停按钮即可查看"
 
     card.mark_discovered("toolbar.shortcuts_exist")
-    assert card._hint_discovery.text() == "复制按钮可导出带游标读数的图片，并打开标注编辑器"
+    assert card._hint_discovery.text() == "复制按钮导出带游标读数的图片并标注"
 
 
 def test_copy_button_marks_copy_image_discovered(qapp):

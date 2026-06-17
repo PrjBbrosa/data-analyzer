@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>底部提示条 · 左右靠边方案</title>
+<style>
+  body { font-family: "Segoe UI","Microsoft YaHei",sans-serif; background:#eef2f7;
+         margin:0; padding:28px; color:#1f2937; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  p.sub { color:#64748b; margin:0 0 22px; font-size:13px; }
+  .case { margin-bottom:24px; }
+  .case > .tag { font-size:12px; font-weight:600; color:#334155; margin-bottom:6px; }
+  .case > .note { font-size:12px; color:#94a3b8; margin-top:6px; }
+
+  /* canvas frame so the bar reads in context */
+  .frame { width:760px; background:#fff; border:1px solid #d8e0ea; border-radius:8px;
+           overflow:hidden; box-shadow:0 1px 3px rgba(15,23,42,.06); }
+  .canvas { height:54px; background:
+            repeating-linear-gradient(0deg,#fbfdff,#fbfdff 12px,#f4f8fd 12px,#f4f8fd 13px);
+            display:flex; align-items:center; justify-content:center;
+            color:#cbd5e1; font-size:12px; }
+
+  /* the hint bar */
+  .bar { height:22px; background:#f8fafc; border-top:1px solid #e2e8f0;
+         display:flex; align-items:center; padding:0 8px; box-sizing:border-box;
+         font-size:11px; }
+  .ctx  { color:#2563eb; font-weight:500; white-space:nowrap;
+          overflow:hidden; text-overflow:ellipsis; }
+  .disc { color:#2563eb; font-weight:600; white-space:nowrap; flex:0 0 auto;
+          padding-left:12px; }
+  .sep  { color:#94a3b8; padding:0 6px; flex:0 0 auto; }
+  .spacer { flex:1 1 auto; min-width:12px; }
+  .grp  { display:flex; align-items:center; min-width:0; }
+
+  /* current = centered group */
+  .bar.center { justify-content:center; }
+  .bar.center .ctx { flex:0 1 auto; }
+</style>
+</head>
+<body>
+  <h1>底部提示条 — 左右靠边</h1>
+  <p class="sub">左侧旋转手势提示靠左缘，右侧"发现"提示靠右缘，中间留空。</p>
+
+  <!-- CURRENT -->
+  <div class="case">
+    <div class="tag">现状（两条都堆在中间，一组居中）</div>
+    <div class="frame">
+      <div class="canvas">— chart canvas —</div>
+      <div class="bar center">
+        <div class="grp">
+          <span class="ctx">Ctrl / Shift + 滚轮 缩放 X / Y</span>
+          <span class="sep">·</span>
+          <span class="disc">顶部按钮支持快捷键，悬停按钮即可查看</span>
+        </div>
+      </div>
+    </div>
+    <div class="note">两条挤在中间；左侧文字一长就被居中挤压、提早省略，左缘大片空白浪费。</div>
+  </div>
+
+  <!-- PROPOSED, normal -->
+  <div class="case">
+    <div class="tag">方案：左右靠边（常规长度）</div>
+    <div class="frame">
+      <div class="canvas">— chart canvas —</div>
+      <div class="bar">
+        <span class="ctx">Ctrl / Shift + 滚轮 缩放 X / Y</span>
+        <span class="spacer"></span>
+        <span class="disc">顶部按钮支持快捷键，悬停按钮即可查看</span>
+      </div>
+    </div>
+    <div class="note">左条贴左缘、右条贴右缘，分隔点"·"取消。左条独享整段左侧空间。</div>
+  </div>
+
+  <!-- PROPOSED, long left text -->
+  <div class="case">
+    <div class="tag">方案：左侧文字很长时（先省略，绝不挤掉右条）</div>
+    <div class="frame">
+      <div class="canvas">— chart canvas —</div>
+      <div class="bar">
+        <span class="ctx">箭头键移动标注，Shift 加速 · 双击文本可编辑 · 工具支持单键切换（悬停按钮看键位）</span>
+        <span class="spacer"></span>
+        <span class="disc">顶部按钮支持快捷键，悬停按钮即可查看</span>
+      </div>
+    </div>
+    <div class="note">左条占满到右条左缘后以"…"省略；右条始终完整可见、不被推走。</div>
+  </div>
+
+  <!-- PROPOSED, only one hint -->
+  <div class="case">
+    <div class="tag">方案：右条已"退役"/为空时（只剩左条）</div>
+    <div class="frame">
+      <div class="canvas">— chart canvas —</div>
+      <div class="bar">
+        <span class="ctx">点击谱图某一时刻 → 查看该帧频率切片</span>
+        <span class="spacer"></span>
+      </div>
+    </div>
+    <div class="note">只有一条时仍贴左缘，位置稳定、不跳到中间。</div>
+  </div>
+</body>
+</html>

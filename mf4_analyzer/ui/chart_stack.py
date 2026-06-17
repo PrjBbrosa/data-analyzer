@@ -1278,17 +1278,13 @@ class _ChartCard(QWidget):
         # rotating row whose text matches the active section. The right slot is
         # the discovery ("this exists") hint.
         #
-        # 提示位置 (centered group): the rotating row + discovery hint form ONE
-        # group that is centered in the bar with symmetric stretch padding on
-        # both sides (addStretch(1) | [group] | addStretch(1)). The group lives
-        # in a hug-content sub-container so the two labels stay glued together;
-        # a separator " · " between them is shown only when discovery is
-        # non-empty (see _refresh_bottom_hint), so a retired/empty discovery
-        # never leaves a dangling dot. The group's center stays put; its left/
-        # right edges move symmetrically as text length changes — accepted as
-        # the centering trade-off. When the bar is too narrow for the group's
-        # natural width, the rotating row (Preferred policy + ElideRight, min 0)
-        # yields width first and elides instead of overflowing.
+        # 提示位置 (left / right edges): the rotating row hugs the LEFT edge and
+        # the discovery hint hugs the RIGHT edge, with the empty gap between them
+        # in the middle (no centered group, no separator). Hint text is
+        # length-capped at the registry (hints.HINT_MAX_WIDTH) so the two slots
+        # fit side by side on a normal-width bar. When the bar is too narrow for
+        # both, the left rotating row (Preferred + ElideRight, min 0) yields width
+        # first and elides, so the right discovery row is never pushed off the bar.
         self._hint_bar = QFrame(self)
         self._hint_bar.setObjectName("chartHintBar")
         self._hint_bar.setAttribute(Qt.WA_StyledBackground, True)
@@ -1298,10 +1294,10 @@ class _ChartCard(QWidget):
         bar_lay.setSpacing(0)
         self._hint_context = _ElidedLabel("", self._hint_bar)
         self._hint_context.setObjectName("chartHintContext")
-        self._hint_context.setAlignment(Qt.AlignCenter)
-        # _ElidedLabel defaults to Ignored (collapses to 0 when centered/hugged);
-        # Preferred lets the centered group size to the rotating text yet still
-        # shrink (min width 0) and elide under a narrow bar.
+        self._hint_context.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # _ElidedLabel defaults to Ignored (collapses to 0); Preferred + stretch
+        # lets the left slot own the whole left span (left-aligned text, empty
+        # gap to its right) yet still shrink to min-0 and elide under a narrow bar.
         self._hint_context.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self._flash_hint_timer = QTimer(self)
         self._flash_hint_timer.setSingleShot(True)
@@ -1313,23 +1309,22 @@ class _ChartCard(QWidget):
             self.canvas.overlay_y_needs_selection.connect(
                 lambda: self.flash_hint("先选中一个通道，再用 Shift+滚轮缩放纵向")
             )
-        self._hint_separator = QLabel("·", self._hint_bar)
-        self._hint_separator.setObjectName("chartHintSeparator")
-        self._hint_separator.setAlignment(Qt.AlignCenter)
-        self._hint_separator.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-        self._hint_separator.setVisible(False)
         self._hint_discovery = QLabel("", self._hint_bar)
         self._hint_discovery.setObjectName("chartHintDiscovery")
-        self._hint_discovery.setAlignment(Qt.AlignCenter)
-        # The discovery slot hugs its own width so the eliding rotating row
-        # yields to it rather than squeezing it to zero.
+        self._hint_discovery.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # Minimum (not Maximum): the discovery slot must never shrink below its
+        # full text. Pinned to the right edge, it stays firm while the left
+        # rotating row (stretch=1, min-0) absorbs all the shrink and elides — so
+        # a long left hint can never squeeze the discovery row off the bar.
         self._hint_discovery.setSizePolicy(
-            QSizePolicy.Maximum, QSizePolicy.Preferred
+            QSizePolicy.Minimum, QSizePolicy.Preferred
         )
-        self._hint_group = self._build_hint_group(self._hint_bar)
-        bar_lay.addStretch(1)
-        bar_lay.addWidget(self._hint_group, 0)
-        bar_lay.addStretch(1)
+        # Two edge-anchored slots, no centered group / separator: the rotating
+        # gesture row hugs the LEFT edge (stretch=1, so it owns the whole left
+        # span and elides there if too long), the discovery row hugs the RIGHT
+        # edge. A long left row can never squeeze the right row off the bar.
+        bar_lay.addWidget(self._hint_context, 1)
+        bar_lay.addWidget(self._hint_discovery, 0)
 
         # Default: activate the pan tool.
         mode = str(getattr(self.toolbar, 'mode', '')).lower()
@@ -1647,31 +1642,9 @@ class _ChartCard(QWidget):
         decay (hints.rotation_hints)."""
         return hints.rotation_hints(self._hint_state())
 
-    def _build_hint_group(self, parent):
-        """Wrap the rotating row, separator, and discovery slot in a single
-        hug-content container so they read as one centered group. The container
-        carries no max-width cap: under a narrow bar the eliding rotating row
-        (Preferred + min-0) shrinks first, so the group never overflows."""
-        group = QWidget(parent)
-        group.setObjectName("chartHintGroup")
-        group.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-        glay = QHBoxLayout(group)
-        glay.setContentsMargins(0, 0, 0, 0)
-        glay.setSpacing(0)
-        glay.addWidget(self._hint_context, 1)
-        glay.addWidget(self._hint_separator, 0)
-        glay.addWidget(self._hint_discovery, 0)
-        return group
-
-    def _sync_hint_separator(self):
-        """Show the separator only when the discovery slot carries text, so a
-        retired/empty discovery hint never leaves a dangling ' · '."""
-        self._hint_separator.setVisible(bool(self._hint_discovery.text()))
-
     def _refresh_bottom_hint(self, *_):
         discovery = hints.discovery_hint(self._hint_state())
         self._hint_discovery.setText(discovery.text if discovery else '')
-        self._sync_hint_separator()
         self._set_context_hint(reset=True)
 
     def _set_context_hint(self, reset=False):
@@ -2216,20 +2189,19 @@ class ChartStack(QWidget):
         return self.page_order.pane_canvas(0)
 
     def _configure_time_hint_bar(self):
-        # Time-view docked footer. Mirrors the in-card hint bar layout: the
-        # rotating row + discovery hint form ONE centered group with symmetric
-        # stretch padding (提示位置 居中). The detached _hint_bar already carries
-        # the centered group; we only re-assert the outer structure (in case the
-        # layout was disturbed) and tune the dock margins/height.
+        # Time-view docked footer. This IS the time card's detached _hint_bar
+        # (see detach_bottom_hint_bar), so we re-assert the same edge-anchored
+        # layout after clearing it: the rotating row hugs the LEFT edge
+        # (stretch=1), the discovery hint hugs the RIGHT edge (提示位置 左右靠边).
+        # We only tune the dock margins / height here.
         self._time_hint_bar.setFixedHeight(20)
         lay = self._time_hint_bar.layout()
         while lay.count():
             lay.takeAt(0)
         lay.setContentsMargins(8, 1, 8, 1)
         lay.setSpacing(0)
-        lay.addStretch(1)
-        lay.addWidget(self._time_card._hint_group, 0)
-        lay.addStretch(1)
+        lay.addWidget(self._time_card._hint_context, 1)
+        lay.addWidget(self._time_card._hint_discovery, 0)
 
     def count(self):
         return self.stack.count()
