@@ -319,16 +319,8 @@ def _param_section_summary(ctx, kind):
     if kind == "fft_time":
         return ctx._tf_summary_text()
     if kind == "fft":
-        return (
-            f"{ctx.combo_nfft.currentText()} · "
-            f"{ctx.combo_win.currentText()} · "
-            f"{ctx.spin_overlap.value()}%"
-        )
-    return (
-        f"≤{ctx.spin_mo.value()}阶 · "
-        f"{ctx.spin_order_res.value():g} · "
-        f"{ctx.combo_nfft.currentText()}"
-    )
+        return ctx._fft_summary_text()
+    return ctx._order_summary_text()
 
 
 def _set_first_summary_field(ctx, kind):
@@ -2734,7 +2726,9 @@ def test_order_contextual_defaults_match_requested_screenshot(qtbot):
     assert p['max_order'] == 20
     assert p['order_res'] == 0.1
     assert p['time_res'] == 0.05
-    assert p['nfft'] == 2048
+    assert p['nfft'] is None
+    assert p['nfft_mode'] == 'auto'
+    assert p['nfft_preview'] == 4096
     assert p['samples_per_rev'] == 256
     assert p['x_auto'] is True
     assert p['y_auto'] is True
@@ -3869,6 +3863,51 @@ def test_fft_time_fixed_nfft_params_still_return_int(qtbot):
     assert p["nfft_effective"] == 4096
 
 
+def test_order_auto_nfft_params_are_preview_only(qtbot):
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    ctx = OrderContextual()
+    qtbot.addWidget(ctx)
+    auto = ctx._AUTO_NFFT_LABEL
+
+    assert ctx.combo_nfft.findText(auto) >= 0
+    assert ctx.combo_nfft.currentText() == auto
+
+    p = ctx.get_params()
+    assert p["nfft"] is None
+    assert p["nfft_mode"] == "auto"
+    assert p["nfft_preview"] == 4096
+    assert f"{auto}(4096)" in ctx._order_summary_text()
+
+    ctx.spin_order_res.setValue(0.05)
+    assert ctx.get_params()["nfft_preview"] == 8192
+    assert f"{auto}(8192)" in ctx._order_summary_text()
+
+    ctx.spin_order_res.setValue(0.25)
+    assert ctx.get_params()["nfft_preview"] == 1024
+    assert f"{auto}(1024)" in ctx._order_summary_text()
+
+
+def test_order_fixed_nfft_params_and_legacy_preset_still_return_int(qtbot):
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    ctx = OrderContextual()
+    qtbot.addWidget(ctx)
+
+    ctx.apply_params({"nfft": 4096})
+    p = ctx.get_params()
+    assert ctx.combo_nfft.currentText() == "4096"
+    assert p["nfft"] == 4096
+    assert p["nfft_mode"] == "fixed"
+    assert p["nfft_effective"] == 4096
+
+    ctx._apply_preset({"nfft": "2048"})
+    p = ctx.current_params()
+    assert ctx.combo_nfft.currentText() == "2048"
+    assert p["nfft"] == 2048
+    assert p["nfft_mode"] == "fixed"
+
+
 # ---- Signal-type built-in presets + per-unit 推荐 highlight ----
 
 def test_recommend_preset_for_unit_exact_match(qapp):
@@ -3982,17 +4021,18 @@ def test_order_builtin_presets_apply_through_combos(qapp):
         OrderContextual, BUILTIN_PRESET_KEYS,
     )
     oc = OrderContextual()
+    auto = oc._AUTO_NFFT_LABEL
     expected = {
         'torque': dict(
-            max_order=20, order_res=0.05, time_res=0.10, nfft='4096',
+            max_order=20, order_res=0.05, time_res=0.10, nfft=auto,
             samples_per_rev=256, amplitude_mode='Amplitude dB',
         ),
         'vibration': dict(
-            max_order=50, order_res=0.10, time_res=0.05, nfft='4096',
+            max_order=50, order_res=0.10, time_res=0.05, nfft=auto,
             samples_per_rev=512, amplitude_mode='Amplitude dB',
         ),
         'transient': dict(
-            max_order=30, order_res=0.25, time_res=0.02, nfft='1024',
+            max_order=30, order_res=0.25, time_res=0.02, nfft=auto,
             samples_per_rev=256, amplitude_mode='Amplitude dB',
         ),
     }
@@ -4008,7 +4048,10 @@ def test_order_builtin_presets_apply_through_combos(qapp):
     oc._apply_preset(oc._SIGNAL_BUILTIN_PRESETS['torque'])
     params = oc.current_params()
     assert 'dB' in params['amplitude_mode']
-    assert params['nfft'] == 4096
+    assert params['nfft'] is None
+    assert params['nfft_mode'] == 'auto'
+    assert params['nfft_preview'] == 8192
+    assert f"{auto}(8192)" in oc._order_summary_text()
 
 
 def test_fft_time_builtin_presets_apply_through_combos(qtbot):

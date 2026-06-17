@@ -437,6 +437,156 @@ def test_fft_analysis_cache_key_auto_uses_effective_nfft(qapp, qtbot, monkeypatc
     assert key_96 != key_1000
 
 
+def test_order_effective_auto_nfft_resolves_from_angle_domain(qapp, qtbot):
+    import numpy as np
+
+    from mf4_analyzer.signal import resolve_order_nfft
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    t = np.arange(1000, dtype=float) / 100.0
+    rpm = np.full_like(t, 1200.0)
+    p = {
+        "nfft": None,
+        "nfft_mode": "auto",
+        "samples_per_rev": 256,
+        "order_res": 0.05,
+    }
+
+    effective = w._resolve_order_effective_params(p, rpm, t)
+    n_angle = int(round(256 * np.trapezoid(np.abs(rpm) / 60.0, t)))
+    expected = resolve_order_nfft(256, 0.05, n_angle)
+
+    assert effective["nfft"] == expected
+    assert effective["nfft_effective"] == expected
+    assert effective["nfft_mode"] == "auto"
+    assert effective["n_angle_samples"] == n_angle
+
+    reverse = w._resolve_order_effective_params(p, -rpm, t)
+    assert reverse["nfft"] == expected
+
+    fixed = w._resolve_order_effective_params(
+        dict(p, nfft=2048, nfft_mode="fixed"), rpm, t
+    )
+    assert fixed["nfft"] == 2048
+    assert fixed["nfft_effective"] == 2048
+    assert fixed["nfft_mode"] == "fixed"
+
+
+def test_order_analysis_cache_key_auto_uses_effective_nfft(
+    qapp, qtbot, monkeypatch
+):
+    import json
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    t = np.arange(1000, dtype=float) / 100.0
+    sig = np.sin(2.0 * np.pi * 12.0 * t)
+    rpm = np.full_like(t, 1200.0)
+    w.files["f1"] = SimpleNamespace(
+        data=pd.DataFrame({"sig": sig, "rpm": rpm}),
+        time_array=t,
+        fs=100.0,
+        channel_units={"sig": "g", "rpm": "rpm"},
+    )
+    params = {
+        "nfft": None,
+        "nfft_mode": "auto",
+        "nfft_preview": 8192,
+        "window": "hanning",
+        "max_order": 20.0,
+        "order_res": 0.05,
+        "time_res": 0.05,
+    }
+    current = dict(params, samples_per_rev=256)
+    monkeypatch.setattr(w, "_pane_time_range_for", lambda *_args, **_kw: None)
+    monkeypatch.setattr(w.inspector.order_ctx, "rpm_factor", lambda: 1.0)
+    monkeypatch.setattr(w.inspector.order_ctx, "get_params", lambda: params)
+    monkeypatch.setattr(w.inspector.order_ctx, "current_params", lambda: current)
+
+    generic_key = w._analysis_cache_key(
+        "order", "f1", "sig", rpm_source=("f1", "rpm"), pane_idx=0
+    )
+    effective = w._resolve_order_effective_params(current, rpm, t)
+    key_params = json.loads(generic_key[2])
+
+    assert key_params["nfft"] == effective["nfft_effective"]
+    assert key_params["nfft_mode"] == "auto"
+    assert key_params["rpm_source"] == ["f1", "rpm"]
+
+
+def test_order_dispatch_uses_effective_auto_nfft(qtbot, monkeypatch):
+    import numpy as np
+    import pandas as pd
+    from types import SimpleNamespace
+
+    from PyQt5.QtCore import QThread
+
+    from mf4_analyzer.signal import order_cot
+    from mf4_analyzer.ui import main_window as mw_mod
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    t = np.arange(1000, dtype=float) / 100.0
+    sig = np.sin(2.0 * np.pi * 12.0 * t)
+    rpm = np.full_like(t, 1200.0)
+    win.files["f1"] = SimpleNamespace(
+        data=pd.DataFrame({"sig": sig, "rpm": rpm}),
+        time_array=t,
+        fs=100.0,
+        channel_units={"sig": "g", "rpm": "rpm"},
+    )
+
+    params = {
+        "nfft": None,
+        "nfft_mode": "auto",
+        "nfft_preview": 8192,
+        "window": "hanning",
+        "max_order": 20.0,
+        "order_res": 0.05,
+        "time_res": 0.05,
+    }
+    current = dict(params, samples_per_rev=256, amplitude_mode="Amplitude dB")
+    monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args, **_kw: None)
+    monkeypatch.setattr(win.inspector.order_ctx, "rpm_factor", lambda: 1.0)
+    monkeypatch.setattr(win.inspector.order_ctx, "fs", lambda: 100.0)
+    monkeypatch.setattr(win.inspector.order_ctx, "current_params", lambda: current)
+    monkeypatch.setattr(win.inspector.order_ctx, "get_params", lambda: params)
+
+    real_cot_params = order_cot.COTParams
+    seen = {}
+
+    def recording_cot_params(**kwargs):
+        seen["nfft"] = kwargs["nfft"]
+        return real_cot_params(**kwargs)
+
+    monkeypatch.setattr(order_cot, "COTParams", recording_cot_params)
+
+    started_threads = []
+    QThreadBase = QThread
+
+    class RecordingThread(QThreadBase):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.started_called = False
+            started_threads.append(self)
+
+        def start(self, priority=QThreadBase.InheritPriority):
+            self.started_called = True
+
+    monkeypatch.setattr(mw_mod, "QThread", RecordingThread)
+
+    assert win._dispatch_order_job(0, "f1", "sig", ("f1", "rpm")) is True
+    expected = win._resolve_order_effective_params(current, rpm, t)["nfft_effective"]
+    assert seen["nfft"] == expected
+    assert started_threads and started_threads[0].started_called is True
+
+
 def test_main_window_moves_time_hints_to_status_line(qapp, qtbot):
     w = MainWindow()
     qtbot.addWidget(w)

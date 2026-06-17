@@ -21,7 +21,13 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QTimer, QThread
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
-from ..signal import FFTAnalyzer, assess_speed_for_order, energy_band_fmax, resolve_nfft
+from ..signal import (
+    FFTAnalyzer,
+    assess_speed_for_order,
+    energy_band_fmax,
+    resolve_nfft,
+    resolve_order_nfft,
+)
 from .. import app_meta
 
 
@@ -1120,6 +1126,9 @@ class MainWindow(QMainWindow):
         # RPM channel must NOT hit an old result).
         return {
             'nfft': p.get('nfft'),
+            'nfft_mode': p.get('nfft_mode'),
+            'nfft_preview': p.get('nfft_preview'),
+            'nfft_effective': p.get('nfft_effective'),
             'max_order': p.get('max_order'),
             'order_res': p.get('order_res'),
             'time_res': p.get('time_res'),
@@ -1160,13 +1169,28 @@ class MainWindow(QMainWindow):
                 time_range,
             )
             return self._fft_analysis_cache_key(fid, ch, params, time_range)
+        if section == 'order':
+            time_range = self._pane_time_range_for(section, pane_idx)
+            params = self._analysis_compute_params(section)
+            effective = self._order_effective_params_for_source(
+                params,
+                fid,
+                ch,
+                rpm_source,
+                time_range,
+            )
+            if effective is not None:
+                params = effective
+            return self._order_analysis_cache_key(
+                fid,
+                ch,
+                params,
+                rpm_source,
+                time_range,
+            )
         params = dict(self._analysis_compute_params(section))
         if section in {'fft', 'fft_time', 'order'}:
             params['time_range'] = self._pane_time_range_for(section, pane_idx)
-        if section == 'order':
-            params['rpm_source'] = (
-                list(rpm_source) if rpm_source else None
-            )
         return cache.make_key(fid, ch, params)
 
     def _recompute_analysis_section(self, section):
@@ -3607,6 +3631,107 @@ class MainWindow(QMainWindow):
             return None
         return rpm
 
+    @staticmethod
+    def _order_angle_sample_count(samples_per_rev, rpm, t):
+        samples_per_rev = float(samples_per_rev)
+        rpm_arr = np.asarray(rpm, dtype=float).reshape(-1)
+        t_arr = np.asarray(t, dtype=float).reshape(-1)
+        n = min(rpm_arr.size, t_arr.size)
+        if n < 2:
+            return 1
+        rpm_arr = rpm_arr[:n]
+        t_arr = t_arr[:n]
+        finite = np.isfinite(rpm_arr) & np.isfinite(t_arr)
+        rpm_arr = rpm_arr[finite]
+        t_arr = t_arr[finite]
+        if rpm_arr.size < 2:
+            return 1
+        dt = np.diff(t_arr)
+        valid_dt = np.isfinite(dt) & (dt > 0.0)
+        if not np.any(valid_dt):
+            return 1
+        abs_rpm = np.abs(rpm_arr)
+        revs = np.sum(
+            0.5
+            * (abs_rpm[:-1][valid_dt] + abs_rpm[1:][valid_dt])
+            / 60.0
+            * dt[valid_dt]
+        )
+        if not np.isfinite(revs) or revs <= 0.0:
+            return 1
+        return max(1, int(round(samples_per_rev * float(revs))))
+
+    @staticmethod
+    def _resolve_order_effective_params(p, rpm, t):
+        """Return COT params with a concrete NFFT for auto mode."""
+        out = dict(p)
+        nfft = out.get('nfft')
+        auto = (
+            nfft is None
+            or out.get('nfft_mode') == 'auto'
+            or str(nfft) == '自动'
+        )
+        samples_per_rev = int(out.get('samples_per_rev', 256))
+        out['samples_per_rev'] = samples_per_rev
+        if auto:
+            n_angle = MainWindow._order_angle_sample_count(
+                samples_per_rev,
+                rpm,
+                t,
+            )
+            effective = resolve_order_nfft(
+                samples_per_rev,
+                out.get('order_res', 0.05),
+                n_angle,
+                overlap=0.75,
+            )
+            out['nfft'] = int(effective)
+            out['nfft_effective'] = int(effective)
+            out['nfft_mode'] = 'auto'
+            out['n_angle_samples'] = int(n_angle)
+        else:
+            effective = int(nfft)
+            out['nfft'] = effective
+            out['nfft_effective'] = effective
+            out['nfft_mode'] = 'fixed'
+        return out
+
+    @staticmethod
+    def _order_compute_cache_params(p, rpm_source, time_range):
+        nfft = p.get('nfft_effective', p.get('nfft'))
+        if nfft is None:
+            nfft = p.get('nfft_preview') or 256
+        return {
+            'nfft': int(nfft),
+            'nfft_mode': p.get('nfft_mode', 'fixed'),
+            'max_order': p.get('max_order'),
+            'order_res': p.get('order_res'),
+            'time_res': p.get('time_res'),
+            'samples_per_rev': p.get('samples_per_rev'),
+            'rpm_source': list(rpm_source) if rpm_source else None,
+            'time_range': time_range,
+        }
+
+    def _order_analysis_cache_key(self, fid, ch, p, rpm_source, time_range):
+        return self.analysis_caches['order'].make_key(
+            fid,
+            ch,
+            self._order_compute_cache_params(p, rpm_source, time_range),
+        )
+
+    def _order_effective_params_for_source(self, p, fid, ch, rpm_source, time_range):
+        t, sig = self._order_sig_for((fid, ch), time_range=time_range)
+        if sig is None or len(sig) < 100:
+            return None
+        rpm = self._order_rpm_for(rpm_source, len(sig), time_range=time_range)
+        if rpm is None:
+            return None
+        fs = self.inspector.order_ctx.fs()
+        t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
+        if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
+            t_arr = np.arange(len(sig), dtype=float) / float(fs)
+        return self._resolve_order_effective_params(p, rpm, t_arr)
+
     def _warn_if_order_speed_unsuitable(self, rpm):
         ok, message = assess_speed_for_order(rpm)
         if ok:
@@ -3723,16 +3848,18 @@ class MainWindow(QMainWindow):
         self._warn_if_order_speed_unsuitable(rpm)
         fs = self.inspector.order_ctx.fs()
         order_params = self.inspector.order_ctx.current_params()
-        op = self.inspector.order_ctx.get_params()
+        op = dict(self.inspector.order_ctx.get_params())
+        op['samples_per_rev'] = int(order_params.get('samples_per_rev', 256))
         # Audit fix R6/C7: COT requires strictly monotonic ``t``; synthesise a
         # uniform grid from the inspector fs when the timestamps are degenerate.
         t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
         if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
             t_arr = np.arange(len(sig), dtype=float) / float(fs)
+        op = self._resolve_order_effective_params(op, rpm, t_arr)
         try:
             p = COTParams(
-                samples_per_rev=int(order_params.get('samples_per_rev', 256)),
-                nfft=int(op['nfft']),
+                samples_per_rev=int(op.get('samples_per_rev', 256)),
+                nfft=int(op.get('nfft_effective', op['nfft'])),
                 window=op.get('window', 'hanning'),
                 max_order=float(op['max_order']),
                 order_res=float(op['order_res']),
@@ -3743,10 +3870,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", str(e))
             return False
         # Stash the analysis cache key + render target for this job.
-        self._order_analysis_key = self._analysis_cache_key(
-            'order', fid, ch,
+        self._order_analysis_key = self._order_analysis_cache_key(
+            fid,
+            ch,
+            op,
             rpm_source=tuple(rpm_source) if rpm_source else None,
-            pane_idx=pane_idx)
+            time_range=time_range,
+        )
         self._order_render_pane = pane_idx
 
         from .analysis_worker import AnalysisComputeWorker

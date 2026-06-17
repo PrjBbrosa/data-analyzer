@@ -467,10 +467,11 @@
 
   <main>
     <section class="hero-grid">
-      <div class="verdict">
-        <h2>硬结论：软件侧已补齐，仍不要跳过离车预检</h2>
-        <p><strong>Phase A 的代码侧阻塞已经清掉：</strong>真实 Bside A2L 可重复加载 323/323；Cockpit 车辆路径不会静默走 fake；CLI vector 会绑定 A2L event；<code>daq_timestamp_size = 0</code> 输出 session-relative timestamp；<code>vector_probe</code> 分层更准。</p>
-        <p>下一道门槛是 Phase B：Windows + VN1630 离车 <code>vector_probe --open</code> 全绿。Phase B 过了，才带到车上先点 Test Connection，再做 3 信号 30 秒 smoke。</p>
+      <div class="verdict" style="border-left-color: var(--green); background: #ecfdf3;">
+        <h2 style="color: var(--green);">硬结论（2026-06-17 更新）：Phase A + Phase B 全通过，只差产品</h2>
+        <p><strong>Phase A 代码侧</strong>已清（A2L 可重复加载 323/323；车辆路径不静默走 fake；CLI vector 绑定 event；<code>ts_size=0</code> 输出相对时间戳；<code>vector_probe</code> 分层）。</p>
+        <p><strong>Phase B 离车预检已全绿（2026-06-17）：</strong>Windows + VN1630A（serial 594136）+ <code>app_name=Python</code> / <code>channel=0</code> / 500k，<code>vector_probe --open</code> 四段全绿、<code>bus open=true</code>、物理设备已枚举。driver 25.20.14、<code>python-can 4.6.1</code> + <code>pyxcp 0.29.10</code> 已装。</p>
+        <p><strong>现在唯一的阻塞是没有产品（ECU）。</strong>HW 这一层到顶了，XCP / CAN / DAQ 必须有 ECU 在总线上才能往下；下一步是 Phase C：接产品 → 加载 A2L → Test Connection → 3 信号 30 秒 smoke。</p>
       </div>
       <div>
         <h2>当前证据 + 链路扫描结论</h2>
@@ -479,17 +480,17 @@
             <div class="label">O-1</div>
             <div class="value">Bside A2L 323/323 已验证</div>
           </div>
-          <div class="metric wait">
+          <div class="metric done">
             <div class="label">O-2</div>
-            <div class="value">等待 Vector app_name / channel</div>
+            <div class="value">App=Python / Ch=0 / VN1630A 594136 已确认</div>
           </div>
           <div class="metric wait">
             <div class="label">O-3</div>
-            <div class="value">等待 ECU auth / Seed&amp;Key</div>
+            <div class="value">等待 ECU auth / Seed&amp;Key（需产品）</div>
           </div>
           <div class="metric block">
             <div class="label">PR-4</div>
-            <div class="value">仍未做 bench / 车上验收</div>
+            <div class="value">等产品做 bench / 车上验收</div>
           </div>
         </div>
         <div class="callout">
@@ -498,7 +499,10 @@
         <div class="callout danger">
           <strong>2026-05-20 软件侧补齐：</strong>
           A2L 导入处理已有 <code>.a2ldb</code>；A2L 加载原子化；Cockpit 默认硬阻断 fake fallback；CLI vector 绑定 event/address/payload；<code>ts_size=0</code> 时间戳改为相对录制开始；<code>vector_probe</code> stage1 真实检查 driver。
-          剩余未知只属于 Windows/VN1630/ECU 真实环境。
+        </div>
+        <div class="callout danger">
+          <strong>2026-06-17 最大真机风险（接产品后第一个坎）：</strong>
+          <code>backends.py</code> 的 <code>_read_dto_frame</code> 是没在真机验证过的占位，只会试 <code>master.fetch</code> / <code>transport.fetch</code>，取不到就静默返回 None。本机实际装的是 <strong>pyxcp 0.29.10</strong>（spec 当初假设 ≥0.22），取帧 API 很可能对不上。预期失败现象＝<strong>「Test Connection 绿、但 Record 后 0 样本」</strong>（见底部失败分流表）。届时保留 console + session summary，由 codex 侧按实际 pyxcp 0.29 API 修。
         </div>
         <div class="progress-bar"><span id="phaseA-progress" style="width: 0%"></span></div>
         <div class="progress-text">Phase A 进度：<span id="phaseA-count">0 / 8</span></div>
@@ -529,11 +533,11 @@
             <td>连续 DTO 帧在 <code>daq_timestamp_size=0</code> 时用每帧到达时间生成 session-relative MF4 timestamp，有回归测试。</td>
             <td>不上车；否则录到 MF4 也可能时间轴不可用。</td>
           </tr>
-          <tr>
-            <td>VN1630 离车可打开</td>
+          <tr style="background: #f3fbf6;">
+            <td>VN1630 离车可打开 <span class="badge done">✅ 已通过</span></td>
             <td><span class="owner user">你</span></td>
             <td>Windows 设备管理器 / Vector Hardware Configurator 识别 VN1630，python-can 可打开 app/channel。</td>
-            <td>不接车；先修 Vector 驱动或 app/channel。</td>
+            <td><strong>2026-06-17 已满足</strong>：VN1630A serial 594136 已枚举，<code>vector_probe --open</code> 全绿。</td>
           </tr>
           <tr>
             <td>XCP 连接参数明确</td>
@@ -640,28 +644,28 @@
       <div class="lane user">
         <h2>你先做：准备 VN1630 / Windows / ECU 条件</h2>
         <div class="step-list">
-          <div class="step">
+          <div class="step done">
             <div class="num">1</div>
             <div>
-              <h3>确认 Windows 测试机</h3>
+              <h3><span class="badge done">✅</span>确认 Windows 测试机</h3>
               <p>Windows 能运行项目 venv，能拉到我给你的测试分支，能安装 <code>python-can[vector]</code> 和 <code>pyxcp</code>。</p>
-              <small>你要截图或复制输出：Python 版本、pip install 结果、repo branch。</small>
+              <small><strong>已确认</strong>：Python 3.12.10 venv；<code>python-can 4.6.1</code> + <code>pyxcp 0.29.10</code> 安装成功。</small>
             </div>
           </div>
-          <div class="step">
+          <div class="step done">
             <div class="num">2</div>
             <div>
-              <h3>确认 VN1630 被 Vector 识别</h3>
+              <h3><span class="badge done">✅</span>确认 VN1630 被 Vector 识别</h3>
               <p>打开 Vector Hardware Configurator，插 VN1630，确认硬件型号、driver version、channel 数。</p>
-              <small>你要记录：VN1630 serial、driver version、channel index。注意 python-can 常用 0-based channel。</small>
+              <small><strong>已确认</strong>：VN1630A，serial 594136，driver 25.20.14，5 物理通道（+2 虚拟）；channel 0 = VN1630A Channel 1（python-can 0-based）。</small>
             </div>
           </div>
-          <div class="step">
+          <div class="step done">
             <div class="num">3</div>
             <div>
-              <h3>确认 <code>app_name</code></h3>
+              <h3><span class="badge done">✅</span>确认 <code>app_name</code></h3>
               <p>Vector backend 不是靠“VN1630”这个型号开设备，而是靠 <code>app_name + channel</code>。你需要确认或创建一个应用槽，比如 <code>Python</code>。</p>
-              <small>没有这个，最常见失败就是 <code>Vector application 'Python' not configured</code>。</small>
+              <small><strong>已确认</strong>：<code>Python</code> 应用槽 channel 0 已绑定到 VN1630A（hw_type=57, hw_index=0, hw_channel=0）。</small>
             </div>
           </div>
           <div class="step">
@@ -698,16 +702,18 @@
       <div class="callout danger">如果这 8 项没完成，你上车就是在替软件做探索测试，不是做车辆验证。</div>
     </section>
 
-    <section class="phase user">
-      <h2>阶段 B：你在桌面完成离车预检</h2>
-      <p>这个阶段不接 ECU，只确认“Windows + VN1630 + Vector app/channel”本身是通的。</p>
-      <div class="command">.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m can_logger.p0.vector_probe --open --app-name Python --channel 0 --bitrate 500000</div>
-      <label class="checkline"><input type="checkbox"> Vector Hardware Configurator 能看到 VN1630。</label>
-      <label class="checkline"><input type="checkbox"> <code>app_name</code> 已确认，优先用 <code>Python</code>；如果你用 <code>CANalyzer</code>/<code>CANoe</code>，记录实际名字。</label>
-      <label class="checkline"><input type="checkbox"> channel 已确认，先从 <code>0</code> 开始；失败再按硬件配置调整。</label>
-      <label class="checkline"><input type="checkbox"> python-can 能 open bus，不报 <code>vxlapi</code>、app、channel 错误。</label>
-      <div class="callout ok">阶段 B 通过，才值得把 VN1630 带到车上。阶段 B 不通过，上车也不会神奇变好。</div>
+    <section class="phase joint">
+      <h2>阶段 B：离车预检 <span class="badge done">✅ 已通过（2026-06-17）</span></h2>
+      <p>这个阶段不接 ECU，只确认“Windows + VN1630 + Vector app/channel”本身是通的。<strong>已全绿。</strong></p>
+      <div class="command">.\.venv\Scripts\python.exe -m pip install "python-can[vector]" pyxcp
+.\.venv\Scripts\python.exe -m can_logger.p0.vector_probe --open --app-name Python --channel 0 --bitrate 500000
+# → stage1 driver=loadable / stage2 app configured / stage3 channel present count=7 / stage4 bus open=true / result: all_green</div>
+      <label class="checkline"><input type="checkbox" checked> Vector Hardware Configurator 能看到 VN1630。<strong>（VN1630A serial 594136，5 物理通道 + 2 虚拟）</strong></label>
+      <label class="checkline"><input type="checkbox" checked> <code>app_name</code> 已确认＝<code>Python</code>。</label>
+      <label class="checkline"><input type="checkbox" checked> channel 已确认＝<code>0</code>（VN1630A Channel 1）。</label>
+      <label class="checkline"><input type="checkbox" checked> python-can 能 open bus，无 <code>vxlapi</code>/app/channel 错误（driver 25.20.14）。</label>
+      <div class="callout ok"><strong>阶段 B 通过。</strong>PC ↔ VN1630 链路完全验证 OK，cockpit HW 灯为真绿（背后是物理 594136，非虚拟通道）。下一步只等产品做阶段 C。
+      <br><strong>注意</strong>：曾出现 <code>XL_ERR_HW_NOT_PRESENT</code> 一次，根因＝设备未被驱动枚举（只剩虚拟通道）；重新插好 VN1630 后即恢复。若复现，先确认设备在 Vector Hardware Configurator 里被认到。</div>
     </section>
 
     <section class="phase joint">
@@ -844,9 +850,10 @@
     </section>
 
     <section>
-      <h2>最短可执行路线</h2>
-      <p><span class="owner codex">我</span> 已补齐“诊断版软件 + runbook”。<span class="owner user">你</span> 在桌面把 Windows + VN1630 + app_name/channel 预检跑通。<span class="owner joint">一起</span> 上车只先点 Test Connection，绿了再做 3 信号 30 秒，最后才做 12 信号 60 秒。</p>
-      <div class="callout danger">不要跳过离车预检，不要一上车就 Record，不要看到红色后连续乱改多个参数。每次只改一个变量，保留原始失败信息。</div>
+      <h2>最短可执行路线（2026-06-17 当前位置）</h2>
+      <p>✅ <span class="owner codex">我</span> 已补齐“诊断版软件 + runbook”（Phase A）。<br>✅ <span class="owner user">你</span> 已在桌面把 Windows + VN1630 + app_name/channel 预检跑通（Phase B 全绿）。<br>⏭️ <strong>下一步＝Phase C，唯一前置是「有一个产品(ECU)可接」</strong>：接 VN1630 CAN1 ↔ 产品（CAN_H/CAN_L/GND + 120Ω，产品上电）→ cockpit 加载 A2L → 只点 Test Connection，绿了（XCP 灯转绿）再做 3 信号 30 秒，最后才 12 信号 60 秒。</p>
+      <div class="callout ok"><strong>没产品时能做的都做完了。</strong>XCP / CAN / DAQ 三个灯在没 ECU 时红/灰是正常的，不用排查。拿到产品再继续。</div>
+      <div class="callout danger">接产品后：不要一上车就 Record，先 Test Connection；看到红色后每次只改一个变量，保留原始失败信息。最可能先撞上的是 <code>_read_dto_frame</code> / pyxcp 0.29 取帧问题（见顶部红框 + 失败分流表「Test Connection 绿但 0 样本」一行）。</div>
     </section>
   </main>
 
@@ -857,6 +864,7 @@
       <li><strong>第一版（codex 初稿）</strong>：Phase A 5 项——timestamp、Vector 入口、Windows 离车预检、PR-4 runbook、Mac 测试。</li>
       <li><strong>第二版（链路扫描后）</strong>：扩到 8 项。补：T1-1+T1-2（A2L→左栏）、T1-6（配置持久化）、T2-2+T2-3（A2L 选错硬提示）；细化每项的代码定位（文件:行号）；阶段 A 出口闸做成自动同步进度条。</li>
       <li><strong>第三版（2026-05-20 修复后）</strong>：补齐 A2L sidecar 幂等导入、A2L 原子状态、fake hard-block、CLI event 绑定、session-relative timestamp、vector_probe driver stage；状态改为 Phase B 离车预检待执行。</li>
+      <li><strong>第四版（2026-06-17 离车预检通过）</strong>：在 Windows 测试机装好 <code>python-can 4.6.1</code> + <code>pyxcp 0.29.10</code>；<code>vector_probe --open</code> 四段全绿（VN1630A serial 594136，channel 0，bus open=true，driver 25.20.14）。Phase B 标记通过，O-2 关闭。新增最大真机风险提示：<code>_read_dto_frame</code> 对 pyxcp 0.29 取帧 API 未验证，预期「Test Connection 绿但 Record 0 样本」。重心转入 Phase C（仅缺产品/ECU）。</li>
       <li><strong>执行规则</strong>：每项做完把对应卡片的徽章翻成 ✅，进度条自动走；任何需要 Windows + VN1630 / 上车操作的步骤遇到立刻停，等用户回报。</li>
     </ul>
   </footer>

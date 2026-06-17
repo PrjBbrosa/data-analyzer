@@ -2643,6 +2643,8 @@ class FFTContextual(QWidget):
 class OrderContextual(QWidget):
     """Order-analysis contextual: source/params/presets + compute action."""
 
+    _AUTO_NFFT_LABEL = "自动"
+
     order_time_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # (fid, ch) tuple or None
@@ -2725,8 +2727,10 @@ class OrderContextual(QWidget):
         self.spin_time_res.setSuffix(" s")
         fl.addRow("时间分辨率:", _fit_field(self.spin_time_res))
         self.combo_nfft = QComboBox()
-        self.combo_nfft.addItems(['512', '1024', '2048', '4096', '8192'])
-        self.combo_nfft.setCurrentText('2048')
+        self.combo_nfft.addItems([
+            self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192', '16384'
+        ])
+        self.combo_nfft.setCurrentText(self._AUTO_NFFT_LABEL)
         fl.addRow("FFT点数:", _fit_field(self.combo_nfft))
 
         # COT is now the only tracking algorithm (Wave 2 of the
@@ -2837,10 +2841,13 @@ class OrderContextual(QWidget):
         return self._order_section.is_expanded()
 
     def _order_summary_text(self):
+        nfft_text = self.combo_nfft.currentText()
+        if nfft_text == self._AUTO_NFFT_LABEL:
+            nfft_text = f"{self._AUTO_NFFT_LABEL}({self._order_nfft_preview()})"
         return (
             f"≤{self.spin_mo.value()}阶 · "
             f"{self.spin_order_res.value():g} · "
-            f"{self.combo_nfft.currentText()}"
+            f"{nfft_text}"
         )
 
     def _refresh_order_summary(self):
@@ -2901,21 +2908,31 @@ class OrderContextual(QWidget):
         if self.spin_y_max.value() > float(val):
             self.spin_y_max.setValue(float(val))
 
+    def _order_nfft_preview(self):
+        from ..signal import ceil_pow2
+
+        target = (
+            float(self.spin_samples_per_rev.value())
+            / float(self.spin_order_res.value())
+        )
+        nfft = ceil_pow2(target)
+        return int(min(max(nfft, 256), 16384))
+
     # Signal-type built-in preset params (信号专家 校核定稿 — do NOT alter the
     # numeric values). Order presets carry NO window field (COT internally
     # fixes the window); amplitude axis is the legacy ``amplitude_mode`` token
     # ('Amplitude' / 'Amplitude dB') reverse-mapped onto combo_amp_unit.
     _SIGNAL_BUILTIN_PRESETS = {
         'torque': dict(
-            max_order=20, order_res=0.05, time_res=0.10, nfft='4096',
+            max_order=20, order_res=0.05, time_res=0.10, nfft=_AUTO_NFFT_LABEL,
             samples_per_rev=256, amplitude_mode='Amplitude dB',
         ),
         'vibration': dict(
-            max_order=50, order_res=0.10, time_res=0.05, nfft='4096',
+            max_order=50, order_res=0.10, time_res=0.05, nfft=_AUTO_NFFT_LABEL,
             samples_per_rev=512, amplitude_mode='Amplitude dB',
         ),
         'transient': dict(
-            max_order=30, order_res=0.25, time_res=0.02, nfft='1024',
+            max_order=30, order_res=0.25, time_res=0.02, nfft=_AUTO_NFFT_LABEL,
             samples_per_rev=256, amplitude_mode='Amplitude dB',
         ),
     }
@@ -2944,6 +2961,11 @@ class OrderContextual(QWidget):
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
             nfft=self.combo_nfft.currentText(),
+            nfft_mode=(
+                'auto'
+                if self.combo_nfft.currentText() == self._AUTO_NFFT_LABEL
+                else 'fixed'
+            ),
             amplitude_mode=(
                 'Amplitude dB' if self.combo_amp_unit.currentText() == 'dB'
                 else 'Amplitude'
@@ -2978,7 +3000,14 @@ class OrderContextual(QWidget):
         if 'time_res' in d:
             self.spin_time_res.setValue(float(d['time_res']))
         if 'nfft' in d:
-            i = self.combo_nfft.findText(str(d['nfft']))
+            if (
+                d.get('nfft_mode') == 'auto'
+                or d['nfft'] is None
+                or str(d['nfft']) == self._AUTO_NFFT_LABEL
+            ):
+                i = self.combo_nfft.findText(self._AUTO_NFFT_LABEL)
+            else:
+                i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
         if 'samples_per_rev' in d:
@@ -3092,11 +3121,25 @@ class OrderContextual(QWidget):
         return self.spin_rf.value()
 
     def get_params(self):
+        nfft_text = self.combo_nfft.currentText()
+        if nfft_text == self._AUTO_NFFT_LABEL:
+            nfft = None
+            nfft_mode = 'auto'
+            nfft_effective = None
+            nfft_preview = self._order_nfft_preview()
+        else:
+            nfft = int(nfft_text)
+            nfft_mode = 'fixed'
+            nfft_effective = nfft
+            nfft_preview = nfft
         return dict(
             max_order=self.spin_mo.value(),
             order_res=self.spin_order_res.value(),
             time_res=self.spin_time_res.value(),
-            nfft=int(self.combo_nfft.currentText()),
+            nfft=nfft,
+            nfft_mode=nfft_mode,
+            nfft_preview=nfft_preview,
+            nfft_effective=nfft_effective,
         )
 
     # --- Wave 3 (2026-04-28 plan): test-friendly param accessors ---
@@ -3147,7 +3190,14 @@ class OrderContextual(QWidget):
             except (TypeError, ValueError):
                 pass
         if 'nfft' in d:
-            i = self.combo_nfft.findText(str(d['nfft']))
+            if (
+                d.get('nfft_mode') == 'auto'
+                or d['nfft'] is None
+                or str(d['nfft']) == self._AUTO_NFFT_LABEL
+            ):
+                i = self.combo_nfft.findText(self._AUTO_NFFT_LABEL)
+            else:
+                i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
         # ---- Wave 3 (2026-04-28 plan): new axis fields (preferred path) ----

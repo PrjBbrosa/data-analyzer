@@ -6,6 +6,7 @@ from mf4_analyzer.signal import (
     ceil_pow2,
     energy_band_fmax,
     resolve_nfft,
+    resolve_order_nfft,
 )
 
 
@@ -48,6 +49,22 @@ def test_resolve_nfft_rejects_invalid_overlap(overlap):
 
 def test_resolve_nfft_can_resolve_to_floor_for_short_target_window():
     assert resolve_nfft(96, 5002, 0.6, 0.75) == 64
+
+
+def test_resolve_order_nfft_maps_order_resolution_to_angle_domain_window():
+    assert resolve_order_nfft(256, 0.05, 1_000_000) == 8192
+    assert resolve_order_nfft(512, 0.10, 1_000_000) == 8192
+    assert resolve_order_nfft(256, 0.25, 1_000_000) == 1024
+
+
+def test_resolve_order_nfft_reduces_for_short_angle_record():
+    assert resolve_order_nfft(256, 0.05, 4096) == 1024
+    assert resolve_order_nfft(256, 0.05, 12000) == 4096
+
+
+def test_resolve_order_nfft_uses_order_specific_floor_and_ceiling():
+    assert resolve_order_nfft(64, 1.0, 1_000_000) == 256
+    assert resolve_order_nfft(1024, 0.01, 10_000_000) == 16384
 
 
 def test_energy_band_fmax_narrowband_uses_headroom_and_nice_ceil():

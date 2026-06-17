@@ -59,6 +59,36 @@ def resolve_nfft(
     return int(min(max(nfft, floor), ceil))
 
 
+def resolve_order_nfft(
+    samples_per_rev,
+    order_res,
+    n_angle_samples,
+    *,
+    overlap=0.75,
+    floor=256,
+    ceil=16384,
+    min_frames=8,
+    max_window_frac=0.5,
+):
+    """Resolve COT FFT length from angle-domain samples and order resolution."""
+    samples_per_rev = float(samples_per_rev)
+    order_res = float(order_res)
+    if samples_per_rev <= 0.0 or not math.isfinite(samples_per_rev):
+        raise ValueError("samples_per_rev must be positive")
+    if order_res <= 0.0 or not math.isfinite(order_res):
+        raise ValueError("order_res must be positive")
+    return resolve_nfft(
+        samples_per_rev,
+        n_angle_samples,
+        1.0 / order_res,
+        overlap,
+        floor=floor,
+        ceil=ceil,
+        min_frames=min_frames,
+        max_window_frac=max_window_frac,
+    )
+
+
 def _nice_ceil_125(value):
     if value <= 0.0 or not math.isfinite(value):
         return 0.0
