@@ -221,6 +221,50 @@ def test_mode_change_routes_to_chart_stack(qapp, qtbot):
     assert w.inspector.contextual_widget_name() == 'fft'
 
 
+def test_signal_change_handlers_update_unit_recommendation(qapp, qtbot):
+    from types import SimpleNamespace
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.files['f1'] = SimpleNamespace(
+        fs=1000.0,
+        channel_units={'torque': 'Nm', 'vib': 'g', 'empty': ''},
+    )
+
+    w._on_inspector_signal_changed('fft', ('f1', 'torque'))
+    assert w.inspector.fft_ctx.preset_bar._load_btns[1].property(
+        'recommended'
+    ) == 'true'
+    assert w.inspector.order_ctx.preset_bar._load_btns[1].property(
+        'recommended'
+    ) == 'true'
+
+    w._on_inspector_signal_changed('order', ('f1', 'vib'))
+    assert w.inspector.fft_ctx.preset_bar._load_btns[2].property(
+        'recommended'
+    ) == 'true'
+    assert w.inspector.order_ctx.preset_bar._load_btns[2].property(
+        'recommended'
+    ) == 'true'
+
+    w._on_inspector_signal_changed('fft', None)
+    for ctx in (w.inspector.fft_ctx, w.inspector.order_ctx):
+        for n in (1, 2, 3):
+            assert ctx.preset_bar._load_btns[n].property('recommended') == 'false'
+
+    w._on_fft_time_signal_changed(('f1', 'empty'))
+    assert w.inspector.fft_time_ctx.preset_bar._load_btns[2].property(
+        'recommended'
+    ) == 'true'
+
+    w._on_fft_time_signal_changed(None)
+    for n in (1, 2, 3):
+        assert w.inspector.fft_time_ctx.preset_bar._load_btns[n].property(
+            'recommended'
+        ) == 'false'
+
+
 def _combo_texts(combo):
     return [combo.itemText(i) for i in range(combo.count())]
 

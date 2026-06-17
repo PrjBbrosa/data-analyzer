@@ -371,27 +371,30 @@ def test_fft_time_context_builtin_presets(qtbot):
 
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
-    ctx.apply_builtin_preset('amplitude_accuracy')
+    # 扭矩类: flattop / 2048 / 75% overlap / linear amplitude / Auto dynamic.
+    ctx.apply_builtin_preset('torque')
     params = ctx.get_params()
 
     assert params['window'] == 'flattop'
-    assert params['nfft'] == 4096
+    assert params['nfft'] == 2048
+    assert params['overlap'] == 0.75
     assert params['amplitude_mode'] == 'amplitude'
 
-    # Sanity-check the other two presets land on their distinguishing
-    # parameters per design §7.
-    ctx.apply_builtin_preset('diagnostic')
-    p_diag = ctx.get_params()
-    assert p_diag['window'] == 'hanning'
-    assert p_diag['nfft'] == 2048
-    assert p_diag['overlap'] == 0.75
-    assert p_diag['dynamic'] == '80 dB'
+    # 振动类: hanning / 2048 / 50% / dB / 80 dB dynamic.
+    ctx.apply_builtin_preset('vibration')
+    p_vib = ctx.get_params()
+    assert p_vib['window'] == 'hanning'
+    assert p_vib['nfft'] == 2048
+    assert p_vib['overlap'] == 0.50
+    assert p_vib['dynamic'] == '80 dB'
 
-    ctx.apply_builtin_preset('high_frequency')
-    p_hf = ctx.get_params()
-    assert p_hf['nfft'] == 4096
-    assert p_hf['overlap'] == 0.50
-    assert p_hf['dynamic'] == '60 dB'
+    # 启停类: hanning / 1024 / 75% / dB / 60 dB dynamic.
+    ctx.apply_builtin_preset('transient')
+    p_tr = ctx.get_params()
+    assert p_tr['window'] == 'hanning'
+    assert p_tr['nfft'] == 1024
+    assert p_tr['overlap'] == 0.75
+    assert p_tr['dynamic'] == '60 dB'
 
 
 # ---- 紧凑化【1】同行并排：X+Y / 开始+结束 / 窗函数+NFFT / 频率下限+上限 ----
@@ -1039,7 +1042,7 @@ def test_fft_time_presets_use_preset_bar(qtbot):
 
 def test_fft_time_preset_bar_default_button_names_match_builtins(qtbot):
     """Default button labels for the FFTTime preset bar must read as the
-    builtin display names: 配置1 / 配置2 / 配置3 (Wave 2 #2.13)."""
+    shared signal-type display names: 扭矩类 / 振动类 / 启停类."""
     from PyQt5.QtWidgets import QPushButton
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     # Use a fresh QSettings org/app per test by wiping any prior overrides
@@ -1051,9 +1054,9 @@ def test_fft_time_preset_bar_default_button_names_match_builtins(qtbot):
     qtbot.addWidget(ctx)
     btns = ctx.preset_bar.findChildren(QPushButton)
     texts = [b.text() for b in btns]
-    assert "配置1" in texts
-    assert "配置2" in texts
-    assert "配置3" in texts
+    assert "扭矩类" in texts
+    assert "振动类" in texts
+    assert "启停类" in texts
 
 
 def test_fft_time_preset_bar_menu_includes_reset_to_default(qtbot, monkeypatch):
@@ -1124,34 +1127,44 @@ def test_fft_time_preset_bar_reset_restores_builtin(qtbot):
         s.remove(f"fft_time/preset_override/{slot}")
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
-    # Save an override on slot 1 (the diagnostic slot).
+    # Save an override on slot 1 (the 扭矩类 slot).
     ctx.combo_nfft.setCurrentText('512')
     ctx.preset_bar._save(1)
     # Reset slot 1.
     ctx.preset_bar._reset_to_default(1)
-    # Mutate then load slot 1 — should now apply the builtin diagnostic
-    # preset (nfft=2048, window=hanning, overlap=75).
+    # Mutate then load slot 1 — should now apply the builtin 扭矩类 preset
+    # (nfft=2048, window=flattop, overlap=75).
     ctx.combo_nfft.setCurrentText('8192')
     ctx.combo_win.setCurrentText('blackman')
     ctx.spin_overlap.setValue(10)
     ctx.preset_bar._load(1)
     assert ctx.combo_nfft.currentText() == '2048'
-    assert ctx.combo_win.currentText() == 'hanning'
+    assert ctx.combo_win.currentText() == 'flattop'
     assert ctx.spin_overlap.value() == 75
 
 
-def test_fft_time_apply_builtin_preset_still_callable(qtbot):
-    """The apply_builtin_preset(name) method must remain callable as it
-    is referenced by tests (and possibly by external regression paths).
-    """
+def test_fft_time_apply_builtin_preset_still_accepts_legacy_keys(qtbot):
+    """Legacy FFT-time preset keys map to the closest new signal-type preset."""
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
     assert callable(getattr(ctx, "apply_builtin_preset", None))
+
+    ctx.apply_builtin_preset('amplitude_accuracy')
+    p = ctx.get_params()
+    assert p['window'] == 'flattop'
+    assert p['nfft'] == 2048
+
     ctx.apply_builtin_preset('diagnostic')
     p = ctx.get_params()
     assert p['nfft'] == 2048
     assert p['window'] == 'hanning'
+    assert p['overlap'] == 0.50
+
+    ctx.apply_builtin_preset('high_frequency')
+    p = ctx.get_params()
+    assert p['nfft'] == 1024
+    assert p['dynamic'] == '60 dB'
 
 
 def test_fft_time_preset_collects_explicit_xyz_axes(qtbot):
@@ -1604,17 +1617,17 @@ def test_btn_rebuild_outer_size_compact(qapp):
         )
 
 
-# ---- Wave 2 Task 2.13: builtin preset display names → 配置1/2/3 ----
+# ---- Signal-type builtin preset display names → 扭矩类/振动类/启停类 ----
 #
 # PresetBar exposes per-slot text via the internal ``_load_btns[n].text()``
 # accessor (no public ``slot_text`` getter), and writes overrides through
 # ``_write(slot, name, params)`` (no public ``set_slot_override``). Both
-# tests below honor the plan's intent — default labels read 配置1/2/3 and
+# tests below honor the plan's intent — default labels read 扭矩类/振动类/启停类 and
 # reset-to-default still surfaces those names — while using the real API.
 
 def test_fft_time_preset_bar_default_names(qtbot):
-    """Default slot labels for the FFTTime preset bar must be the new
-    builtin display names: 配置1 / 配置2 / 配置3 (Wave 2 #2.13)."""
+    """Default slot labels for the FFTTime preset bar must be the shared
+    signal-type display names: 扭矩类 / 振动类 / 启停类."""
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     s = QSettings("MF4Analyzer", "DataAnalyzer")
@@ -1624,14 +1637,14 @@ def test_fft_time_preset_bar_default_names(qtbot):
     qtbot.addWidget(w)
     bar = w.preset_bar
     # PresetBar exposes per-slot text via ``_load_btns[n].text()``.
-    assert bar._load_btns[1].text() == '配置1'
-    assert bar._load_btns[2].text() == '配置2'
-    assert bar._load_btns[3].text() == '配置3'
+    assert bar._load_btns[1].text() == '扭矩类'
+    assert bar._load_btns[2].text() == '振动类'
+    assert bar._load_btns[3].text() == '启停类'
 
 
 def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     """After resetting an overridden slot, the slot text must restore to
-    the new builtin name (配置1) — not the legacy 诊断模式 (Wave 2 #2.13).
+    the signal-type builtin name (扭矩类) — not the legacy 诊断模式.
     """
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
@@ -1647,7 +1660,7 @@ def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     bar._refresh_states()
     assert bar._load_btns[1].text() == 'Custom A'
     bar._reset_to_default(1)
-    assert bar._load_btns[1].text() == '配置1'
+    assert bar._load_btns[1].text() == '扭矩类'
 
 
 # ---- Requested first-open defaults for FFT-vs-Time spectrogram ----
@@ -3478,3 +3491,213 @@ def test_fft_time_apply_params_partial(qtbot):
         if key == 'nfft':
             continue
         assert after[key] == val, f"partial apply mutated unrelated key {key!r}"
+
+
+# ---- Signal-type built-in presets + per-unit 推荐 highlight ----
+
+def test_recommend_preset_for_unit_exact_match(qapp):
+    """Unit -> preset key uses EXACT alias matching with vibration fallback."""
+    from mf4_analyzer.ui.inspector_sections import recommend_preset_for_unit
+
+    # Torque-family aliases.
+    assert recommend_preset_for_unit('Nm') == 'torque'
+    assert recommend_preset_for_unit('kPa') == 'torque'
+    assert recommend_preset_for_unit('°') == 'torque'  # degree sign
+    assert recommend_preset_for_unit('deg') == 'torque'
+    assert recommend_preset_for_unit('%') == 'torque'
+    # Vibration-family aliases (incl. superscript-folding equivalence).
+    assert recommend_preset_for_unit('g') == 'vibration'
+    assert recommend_preset_for_unit('m/s²') == 'vibration'
+    assert recommend_preset_for_unit('m/s^2') == 'vibration'
+    assert recommend_preset_for_unit('m/s2') == 'vibration'
+    assert recommend_preset_for_unit('mm/s') == 'vibration'
+    # Fallback (unrecognized / empty -> vibration).
+    assert recommend_preset_for_unit('rpm') == 'vibration'
+    assert recommend_preset_for_unit('') == 'vibration'
+    assert recommend_preset_for_unit(None) == 'vibration'
+
+
+def test_recommend_preset_for_unit_no_substring_false_positive(qapp):
+    """Exact matching must not let aliases bleed into longer unit strings."""
+    from mf4_analyzer.ui.inspector_sections import (
+        recommend_preset_for_unit, _normalize_unit,
+        _TORQUE_UNITS, _VIBRATION_UNITS,
+    )
+
+    # 'kg' is unknown -> fallback (vibration), but must NOT be an alias.
+    assert recommend_preset_for_unit('kg') == 'vibration'
+    assert _normalize_unit('kg') not in _VIBRATION_UNITS
+    assert _normalize_unit('kg') not in _TORQUE_UNITS
+    # 'kPa' is explicitly torque and must not be reclassified by a 'pa' hit.
+    assert recommend_preset_for_unit('kPa') == 'torque'
+    # Longer strings containing torque aliases must not match by substring.
+    assert recommend_preset_for_unit('kPa/s') == 'vibration'
+    assert recommend_preset_for_unit('foobar') == 'vibration'
+
+
+def test_preset_bar_set_recommended_toggles_property(qapp):
+    """set_recommended(slot) flags that slot; set_recommended(None) clears all."""
+    from mf4_analyzer.ui.inspector_sections import PresetBar
+
+    bar = PresetBar('test_kind_recommend', lambda: {}, lambda d: None)
+    bar.set_recommended(2)
+    assert bar._load_btns[1].property('recommended') == 'false'
+    assert bar._load_btns[2].property('recommended') == 'true'
+    assert bar._load_btns[3].property('recommended') == 'false'
+    assert bar._load_btns[2].text().startswith('★ ')
+    assert not bar._load_btns[1].text().startswith('★ ')
+
+    bar.set_recommended(3)
+    assert bar._load_btns[2].property('recommended') == 'false'
+    assert bar._load_btns[3].property('recommended') == 'true'
+    assert not bar._load_btns[2].text().startswith('★ ')
+
+    bar.set_recommended(None)
+    for n in (1, 2, 3):
+        assert bar._load_btns[n].property('recommended') == 'false'
+        assert not bar._load_btns[n].text().startswith('★ ')
+
+
+def _combo_text_hits(combo, value):
+    return combo.findText(str(value)) >= 0
+
+
+def test_fft_builtin_presets_apply_through_combos(qapp):
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual, BUILTIN_PRESET_KEYS,
+    )
+    fc = FFTContextual()
+    expected = {
+        'torque': dict(
+            window='flattop', nfft='4096', overlap=75,
+            amp_y='Linear', avg_mode='线性平均', avg_overlap=75,
+        ),
+        'vibration': dict(
+            window='hanning', nfft='2048', overlap=50,
+            amp_y='dB', avg_mode='线性平均', avg_overlap=50,
+        ),
+        'transient': dict(
+            window='hanning', nfft='1024', overlap=75,
+            amp_y='dB', avg_mode='峰值保持', avg_overlap=75,
+        ),
+    }
+    assert fc._SIGNAL_BUILTIN_PRESETS == expected
+    for key in BUILTIN_PRESET_KEYS:
+        p = fc._SIGNAL_BUILTIN_PRESETS[key]
+        assert 'remove_mean' not in p
+        assert _combo_text_hits(fc.combo_win, p['window']), (key, p['window'])
+        assert _combo_text_hits(fc.combo_nfft, p['nfft']), (key, p['nfft'])
+        assert _combo_text_hits(fc.combo_amp_y, p['amp_y']), (key, p['amp_y'])
+        assert _combo_text_hits(fc.combo_avg_mode, p['avg_mode']), (
+            key, p['avg_mode'])
+
+
+def test_order_builtin_presets_apply_through_combos(qapp):
+    from mf4_analyzer.ui.inspector_sections import (
+        OrderContextual, BUILTIN_PRESET_KEYS,
+    )
+    oc = OrderContextual()
+    expected = {
+        'torque': dict(
+            max_order=20, order_res=0.05, time_res=0.10, nfft='4096',
+            samples_per_rev=256, amplitude_mode='Amplitude',
+        ),
+        'vibration': dict(
+            max_order=50, order_res=0.10, time_res=0.05, nfft='4096',
+            samples_per_rev=512, amplitude_mode='Amplitude dB',
+        ),
+        'transient': dict(
+            max_order=30, order_res=0.25, time_res=0.02, nfft='1024',
+            samples_per_rev=256, amplitude_mode='Amplitude dB',
+        ),
+    }
+    assert oc._SIGNAL_BUILTIN_PRESETS == expected
+    for key in BUILTIN_PRESET_KEYS:
+        p = oc._SIGNAL_BUILTIN_PRESETS[key]
+        assert 'window' not in p
+        assert oc.spin_mo.minimum() <= p['max_order'] <= oc.spin_mo.maximum()
+        assert _combo_text_hits(oc.combo_nfft, p['nfft']), (key, p['nfft'])
+        target = 'dB' if 'dB' in p['amplitude_mode'] else 'Linear'
+        assert _combo_text_hits(oc.combo_amp_unit, target), (key, target)
+
+
+def test_fft_time_builtin_presets_apply_through_combos(qtbot):
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTTimeContextual, BUILTIN_PRESET_KEYS,
+    )
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    expected = {
+        'torque': dict(
+            window='flattop', nfft=2048, overlap=75,
+            amplitude_mode='Amplitude', freq_auto=True,
+            dynamic='Auto', cmap='viridis',
+        ),
+        'vibration': dict(
+            window='hanning', nfft=2048, overlap=50,
+            amplitude_mode='Amplitude dB', freq_auto=True,
+            dynamic='80 dB', cmap='turbo',
+        ),
+        'transient': dict(
+            window='hanning', nfft=1024, overlap=75,
+            amplitude_mode='Amplitude dB', freq_auto=True,
+            dynamic='60 dB', cmap='turbo',
+        ),
+    }
+    assert ctx._BUILTIN_PRESETS == expected
+    for key in BUILTIN_PRESET_KEYS:
+        p = ctx._BUILTIN_PRESETS[key]
+        assert _combo_text_hits(ctx.combo_win, p['window']), (key, p['window'])
+        assert _combo_text_hits(ctx.combo_nfft, p['nfft']), (key, p['nfft'])
+        assert _combo_text_hits(ctx.combo_cmap, p['cmap']), (key, p['cmap'])
+    assert ctx._builtin_preset_full_params('torque')['z_auto'] is True
+    assert ctx._builtin_preset_full_params('vibration')['z_floor'] == -80.0
+    assert ctx._builtin_preset_full_params('transient')['z_floor'] == -60.0
+
+
+def test_order_builtin_presets_respect_order_nyquist(qapp):
+    """Order Nyquist: each preset keeps samples_per_rev >= 2 * max_order."""
+    from mf4_analyzer.ui.inspector_sections import (
+        OrderContextual, BUILTIN_PRESET_KEYS,
+    )
+    oc = OrderContextual()
+    for key in BUILTIN_PRESET_KEYS:
+        p = oc._SIGNAL_BUILTIN_PRESETS[key]
+        assert p['samples_per_rev'] >= 2 * p['max_order'], (
+            f"{key}: samples_per_rev={p['samples_per_rev']} violates "
+            f"order-Nyquist for max_order={p['max_order']}"
+        )
+
+
+def test_set_recommended_for_unit_highlights_correct_slot(qapp, qtbot):
+    """set_recommended_for_unit maps unit -> slot (torque=1/vibration=2/transient=3)."""
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual, FFTTimeContextual, OrderContextual,
+    )
+    fc = FFTContextual()
+    qtbot.addWidget(fc)
+    fc.set_recommended_for_unit('Nm')  # torque -> slot 1
+    assert fc.preset_bar._load_btns[1].property('recommended') == 'true'
+    fc.set_recommended_for_unit('g')  # vibration -> slot 2
+    assert fc.preset_bar._load_btns[2].property('recommended') == 'true'
+    fc.set_recommended_for_unit('rpm')  # fallback vibration -> slot 2
+    assert fc.preset_bar._load_btns[2].property('recommended') == 'true'
+    fc.set_recommended_for_unit('')  # empty unit also falls back to vibration
+    assert fc.preset_bar._load_btns[2].property('recommended') == 'true'
+    fc.set_recommended_for_unit(None)  # clear
+    for n in (1, 2, 3):
+        assert fc.preset_bar._load_btns[n].property('recommended') == 'false'
+
+    oc = OrderContextual()
+    qtbot.addWidget(oc)
+    oc.set_recommended_for_unit('°')  # torque -> slot 1
+    assert oc.preset_bar._load_btns[1].property('recommended') == 'true'
+    oc.set_recommended_for_unit('m/s²')  # vibration -> slot 2
+    assert oc.preset_bar._load_btns[2].property('recommended') == 'true'
+
+    tc = FFTTimeContextual()
+    qtbot.addWidget(tc)
+    tc.set_recommended_for_unit('Nm')  # torque -> slot 1
+    assert tc.preset_bar._load_btns[1].property('recommended') == 'true'
+    tc.set_recommended_for_unit('unknown-unit')  # fallback vibration -> slot 2
+    assert tc.preset_bar._load_btns[2].property('recommended') == 'true'

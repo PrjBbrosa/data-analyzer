@@ -50,6 +50,90 @@ def _preset_settings():
     return QSettings(_PRESET_ORG, _PRESET_APP)
 
 
+# ---- Signal-type built-in presets (shared by FFT-1D / FFT-time / Order) ----
+#
+# The three analysis views share ONE set of three built-in presets, displayed
+# as 扭矩类 / 振动类 / 启停类 on PresetBar slots 1/2/3. Slot order is a
+# contract consumed by ``recommend_preset_for_unit`` (torque=1, vibration=2,
+# transient=3) and the per-view ``set_recommended_for_unit`` wiring.
+BUILTIN_PRESET_KEYS = ('torque', 'vibration', 'transient')
+BUILTIN_PRESET_DISPLAY = {
+    'torque': '扭矩类',
+    'vibration': '振动类',
+    'transient': '启停类',
+}
+# preset key -> PresetBar slot index (slots are 1-based: 1/2/3).
+_PRESET_KEY_TO_SLOT = {'torque': 1, 'vibration': 2, 'transient': 3}
+
+
+def _normalize_unit(unit):
+    """Normalize a channel-unit string for exact alias matching.
+
+    Lower-cases, strips whitespace, and folds the Unicode superscript-two
+    (``²``) into ``2`` so ``m/s²`` / ``m/s^2`` / ``m/s2`` all compare equal.
+    The ``^`` and leftover whitespace inside the token are dropped too so the
+    canonical form for "metre per second squared" is ``m/s2``.
+    """
+    if unit is None:
+        return ''
+    s = str(unit).strip().lower()
+    # Fold superscripts to plain digits, then drop the ^ exponent marker so
+    # m/s², m/s^2 and m/s2 all collapse to the same canonical token.
+    s = (
+        s.replace('²', '2')  # ² superscript two
+         .replace('³', '3')  # ³ superscript three
+         .replace('^', '')
+    )
+    # Collapse any internal whitespace (e.g. "n m" -> "nm").
+    s = ''.join(s.split())
+    return s
+
+
+# Exact-match alias sets (already normalized via _normalize_unit). Exact match
+# is intentional — substring matching would mis-route 'g' onto 'kg'/'deg' and
+# 'pa' onto 'kpa'.
+_TORQUE_UNITS = frozenset({
+    'nm', 'n·m', 'n.m', 'n*m', 'mnm', 'knm', 'cnm',
+    'bar', 'mbar', 'kpa', 'mpa', 'hpa', 'pa', 'psi',
+    '°', 'deg', 'mm', 'µm', 'um', '%',
+})
+_VIBRATION_UNITS = frozenset({
+    'g', 'mg', 'm/s2', 'mm/s', 'mm/s2', 'µm/s', 'um/s', 'in/s',
+})
+
+
+def _dynamic_to_floor(dynamic):
+    """Parse a legacy ``dynamic`` token into a z-axis floor (negative dB).
+
+    Accepts ``'Auto'`` (→ -80.0 default span) and any ``'NN dB'`` form
+    (→ -NN). Generalizing the old hard-coded -80/-60 branch so an arbitrary
+    span (e.g. '100 dB') maps to floor = -100 without a special case.
+    """
+    raw = str(dynamic).strip()
+    if not raw or raw == 'Auto':
+        return -80.0
+    try:
+        return -abs(float(raw.lower().replace('db', '').strip()))
+    except ValueError:
+        return -80.0
+
+
+def recommend_preset_for_unit(unit):
+    """Return the recommended built-in preset key for a channel unit.
+
+    Returns one of ``'torque'`` / ``'vibration'`` / ``'transient'``.
+    Unknown / unrecognized units fall back to ``'vibration'`` (the default).
+    Matching is on the normalized form (see :func:`_normalize_unit`) with an
+    EXACT alias lookup so 'kg' is not mistaken for 'g' nor 'kpa' for 'pa'.
+    """
+    norm = _normalize_unit(unit)
+    if norm in _TORQUE_UNITS:
+        return 'torque'
+    if norm in _VIBRATION_UNITS:
+        return 'vibration'
+    return 'vibration'
+
+
 def _no_buttons(spin):
     """Strip the up/down stepper from a Q(Double)SpinBox.
 
@@ -423,8 +507,8 @@ class PresetBar(QWidget):
     parameters that the bar treats as the slot's "default":
 
     - The slot button shows ``builtin_defaults[slot]['display_name']`` when
-      no user override exists (so the FFT-vs-Time bar reads as 配置1 /
-      配置2 / 配置3 out of the box).
+      no user override exists (for signal-type presets this reads as 扭矩类 /
+      振动类 / 启停类 out of the box).
     - Left-click loads either the user override (if any) or the builtin.
     - The right-click menu adds a "重置为默认" entry that removes the
       override and restores the builtin.
@@ -464,6 +548,8 @@ class PresetBar(QWidget):
         self._builtins = builtin_defaults  # None => legacy mode
         self._hover_card = _PresetHoverCard()
         self._hover_slot = None
+        # Slot currently flagged as the unit-推荐 highlight (None => none).
+        self._recommended_slot = None
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -556,8 +642,45 @@ class PresetBar(QWidget):
                 btn.setText(name)
                 btn.setEnabled(True)
                 btn.setProperty("filled", "true")
+            # Re-stamp the recommended flag on every refresh so the
+            # unit-推荐 highlight survives an unpolish/polish cycle (the
+            # property would otherwise reset to its last-written value, but
+            # _refresh_states does not touch it — so it is preserved here for
+            # clarity and to mirror the "★推荐" text prefix).
+            recommended = self._recommended_slot == n
+            btn.setProperty("recommended", "true" if recommended else "false")
+            self._apply_recommended_text(n, recommended)
             btn.style().unpolish(btn)
             btn.style().polish(btn)
+
+    def _apply_recommended_text(self, slot, recommended):
+        """Prefix the recommended slot's label with a ★ marker (and strip it
+        from non-recommended slots). Operates on whatever text the slot
+        currently shows so it composes with builtin display names, user
+        overrides, and the legacy "＋ 配置 N" placeholder.
+        """
+        btn = self._load_btns[slot]
+        text = btn.text()
+        marker = "★ "
+        had_marker = text.startswith(marker)
+        if recommended and not had_marker:
+            btn.setText(marker + text)
+        elif not recommended and had_marker:
+            btn.setText(text[len(marker):])
+
+    def set_recommended(self, slot):
+        """Highlight ``slot`` as the unit-推荐 preset (green ★ accent).
+
+        ``slot`` is 1-based (1/2/3) to match :data:`PresetBar.SLOTS`, or
+        ``None`` to clear every highlight. Manual interaction is unaffected —
+        this is a visual hint only. The highlight is driven by a QSS dynamic
+        property (``recommended="true"``) + unpolish/polish so it composes
+        with the project theme instead of overriding it via setStyleSheet.
+        """
+        if slot is not None and slot not in self.SLOTS:
+            slot = None
+        self._recommended_slot = slot
+        self._refresh_states()
 
     def eventFilter(self, obj, event):
         slot = None
@@ -2021,8 +2144,11 @@ class FFTContextual(QWidget):
         g = QGroupBox("预设配置")
         gl = QVBoxLayout(g)
         gl.setSpacing(4)
+        # Signal-type built-in presets (扭矩类 / 振动类 / 启停类). Slot order
+        # is the shared contract from BUILTIN_PRESET_KEYS.
         self.preset_bar = PresetBar(
             'fft', self._collect_preset, self._apply_preset, parent=self,
+            builtin_defaults=self._builtin_preset_defaults(),
         )
         gl.addWidget(self.preset_bar)
         params_lay.addWidget(g)
@@ -2091,6 +2217,44 @@ class FFTContextual(QWidget):
                 except (TypeError, ValueError):
                     pass
         self._sync_axis_enabled()
+
+    # Signal-type built-in preset params (信号专家 校核定稿 — do NOT alter the
+    # numeric values). FFT-1D has NO remove_mean field; amplitude axis is
+    # ``amp_y`` ('Linear'/'dB'); 平均模式 text is 单帧/线性平均/峰值保持.
+    _SIGNAL_BUILTIN_PRESETS = {
+        'torque': dict(
+            window='flattop', nfft='4096', overlap=75,
+            amp_y='Linear', avg_mode='线性平均', avg_overlap=75,
+        ),
+        'vibration': dict(
+            window='hanning', nfft='2048', overlap=50,
+            amp_y='dB', avg_mode='线性平均', avg_overlap=50,
+        ),
+        'transient': dict(
+            window='hanning', nfft='1024', overlap=75,
+            amp_y='dB', avg_mode='峰值保持', avg_overlap=75,
+        ),
+    }
+
+    def _builtin_preset_defaults(self):
+        return {
+            _PRESET_KEY_TO_SLOT[key]: {
+                'display_name': BUILTIN_PRESET_DISPLAY[key],
+                'params': dict(self._SIGNAL_BUILTIN_PRESETS[key]),
+            }
+            for key in BUILTIN_PRESET_KEYS
+        }
+
+    def set_recommended_for_unit(self, unit):
+        """Highlight the preset slot recommended for ``unit`` (or clear).
+
+        ``unit=None`` clears the highlight (used when the selection is empty).
+        """
+        if unit is None:
+            self.preset_bar.set_recommended(None)
+            return
+        key = recommend_preset_for_unit(unit)
+        self.preset_bar.set_recommended(_PRESET_KEY_TO_SLOT[key])
 
     def _collect_preset(self):
         return dict(
@@ -2405,8 +2569,10 @@ class OrderContextual(QWidget):
         g = QGroupBox("预设配置")
         gl = QVBoxLayout(g)
         gl.setSpacing(4)
+        # Signal-type built-in presets (扭矩类 / 振动类 / 启停类).
         self.preset_bar = PresetBar(
             'order', self._collect_preset, self._apply_preset, parent=self,
+            builtin_defaults=self._builtin_preset_defaults(),
         )
         gl.addWidget(self.preset_bar)
         params_lay.addWidget(g)
@@ -2480,6 +2646,42 @@ class OrderContextual(QWidget):
         self.spin_y_max.setMaximum(float(val))
         if self.spin_y_max.value() > float(val):
             self.spin_y_max.setValue(float(val))
+
+    # Signal-type built-in preset params (信号专家 校核定稿 — do NOT alter the
+    # numeric values). Order presets carry NO window field (COT internally
+    # fixes the window); amplitude axis is the legacy ``amplitude_mode`` token
+    # ('Amplitude' / 'Amplitude dB') reverse-mapped onto combo_amp_unit.
+    _SIGNAL_BUILTIN_PRESETS = {
+        'torque': dict(
+            max_order=20, order_res=0.05, time_res=0.10, nfft='4096',
+            samples_per_rev=256, amplitude_mode='Amplitude',
+        ),
+        'vibration': dict(
+            max_order=50, order_res=0.10, time_res=0.05, nfft='4096',
+            samples_per_rev=512, amplitude_mode='Amplitude dB',
+        ),
+        'transient': dict(
+            max_order=30, order_res=0.25, time_res=0.02, nfft='1024',
+            samples_per_rev=256, amplitude_mode='Amplitude dB',
+        ),
+    }
+
+    def _builtin_preset_defaults(self):
+        return {
+            _PRESET_KEY_TO_SLOT[key]: {
+                'display_name': BUILTIN_PRESET_DISPLAY[key],
+                'params': dict(self._SIGNAL_BUILTIN_PRESETS[key]),
+            }
+            for key in BUILTIN_PRESET_KEYS
+        }
+
+    def set_recommended_for_unit(self, unit):
+        """Highlight the preset slot recommended for ``unit`` (or clear)."""
+        if unit is None:
+            self.preset_bar.set_recommended(None)
+            return
+        key = recommend_preset_for_unit(unit)
+        self.preset_bar.set_recommended(_PRESET_KEY_TO_SLOT[key])
 
     def _collect_preset(self):
         return dict(
@@ -2789,8 +2991,9 @@ class FFTTimeContextual(QWidget):
     ``x_auto``/``x_min``/``x_max``, ``y_auto``/``y_min``/``y_max``,
     ``z_auto``/``z_floor``/``z_ceiling`` alongside the legacy keys.
 
-    Built-in presets (per design §7): ``diagnostic``, ``amplitude_accuracy``,
-    ``high_frequency``.
+    Built-in presets: ``torque``, ``vibration``, ``transient``. Legacy keys
+    (``diagnostic``, ``amplitude_accuracy``, ``high_frequency``) remain aliases
+    for old regression callers.
     """
 
     fft_time_requested = pyqtSignal()
@@ -2934,18 +3137,16 @@ class FFTTimeContextual(QWidget):
         gl = QVBoxLayout(g)
         gl.setSpacing(4)
         # The preset_bar is single-row, builtin-aware: each slot starts with
-        # its builtin display name (配置1 / 配置2 / 配置3), left-click
+        # its signal-type display name (扭矩类 / 振动类 / 启停类), left-click
         # loads (override-or-builtin), right-click menu integrates 保存当前 /
-        # 重命名 / 重置为默认.
+        # 重命名 / 重置为默认. Slot order is the shared BUILTIN_PRESET_KEYS
+        # contract so unit-推荐 highlighting lines up across all three views.
         builtin_defaults = {
-            slot: {
-                'display_name': self._BUILTIN_PRESET_DISPLAY[name],
-                'params': self._builtin_preset_full_params(name),
+            _PRESET_KEY_TO_SLOT[key]: {
+                'display_name': self._BUILTIN_PRESET_DISPLAY[key],
+                'params': self._builtin_preset_full_params(key),
             }
-            for slot, name in zip(
-                (1, 2, 3),
-                ('diagnostic', 'amplitude_accuracy', 'high_frequency'),
-            )
+            for key in BUILTIN_PRESET_KEYS
         }
         self.preset_bar = PresetBar(
             'fft_time',
@@ -3260,43 +3461,53 @@ class FFTTimeContextual(QWidget):
     # combo_amp_unit + chk_y_auto / spin_y_min/max), so the literals here
     # survive untouched. Wave 5 / 6 will rewrite them in the new shape.
     # DEPRECATED key form; survives via _apply_preset legacy migration on load.
+    #
+    # Signal-type built-in presets (信号专家 校核定稿 — do NOT alter the numeric
+    # values). The compact shape (window/nfft/overlap/amplitude_mode/freq_auto/
+    # dynamic/cmap) is preserved; _builtin_preset_full_params spreads it to the
+    # full collect-preset shape and parses ``dynamic`` ('Auto' / 'NN dB') into
+    # z_auto / z_floor.
     _BUILTIN_PRESETS = {
-        'diagnostic': dict(
-            window='hanning',
-            nfft=2048,
-            overlap=75,
-            amplitude_mode='Amplitude dB',
-            freq_auto=True,
-            dynamic='80 dB',
-            cmap='turbo',
-        ),
-        'amplitude_accuracy': dict(
+        'torque': dict(
             window='flattop',
-            nfft=4096,
+            nfft=2048,
             overlap=75,
             amplitude_mode='Amplitude',
             freq_auto=True,
             dynamic='Auto',
             cmap='viridis',
         ),
-        'high_frequency': dict(
+        'vibration': dict(
             window='hanning',
-            nfft=4096,
+            nfft=2048,
             overlap=50,
+            amplitude_mode='Amplitude dB',
+            freq_auto=True,
+            dynamic='80 dB',
+            cmap='turbo',
+        ),
+        'transient': dict(
+            window='hanning',
+            nfft=1024,
+            overlap=75,
             amplitude_mode='Amplitude dB',
             freq_auto=True,
             dynamic='60 dB',
             cmap='turbo',
         ),
     }
-
-    # User-facing display names for the three builtin slots (R3 C —
-    # what the PresetBar shows on the slot button when no override exists).
-    _BUILTIN_PRESET_DISPLAY = {
-        'diagnostic': '配置1',
-        'amplitude_accuracy': '配置2',
-        'high_frequency': '配置3',
+    _LEGACY_BUILTIN_PRESET_ALIASES = {
+        'diagnostic': 'vibration',
+        'amplitude_accuracy': 'torque',
+        'high_frequency': 'transient',
     }
+
+    # User-facing display names for the three builtin slots — shared signal-type
+    # labels (扭矩类 / 振动类 / 启停类).
+    _BUILTIN_PRESET_DISPLAY = dict(BUILTIN_PRESET_DISPLAY)
+
+    def _resolve_builtin_preset_key(self, name):
+        return self._LEGACY_BUILTIN_PRESET_ALIASES.get(name, name)
 
     def _builtin_preset_full_params(self, name):
         """Return a JSON-serializable param dict for a builtin preset.
@@ -3305,7 +3516,7 @@ class FFTTimeContextual(QWidget):
         builtin-aware PresetBar can save / reset / load the same shape
         round-trip.
         """
-        cfg = self._BUILTIN_PRESETS.get(name, {})
+        cfg = self._BUILTIN_PRESETS.get(self._resolve_builtin_preset_key(name), {})
         # Spread the legacy compact dict to the full collect_preset shape
         # — fields we don't override default to "the same value the
         # widget has at construction time" so an unspecified field doesn't
@@ -3329,9 +3540,7 @@ class FFTTimeContextual(QWidget):
             'y_min': 0.0,
             'y_max': 0.0,
             'z_auto': cfg.get('dynamic') == 'Auto',
-            'z_floor': (
-                -80.0 if cfg.get('dynamic', '80 dB') != '60 dB' else -60.0
-            ),
+            'z_floor': _dynamic_to_floor(cfg.get('dynamic', '80 dB')),
             'z_ceiling': 0.0,
         }
 
@@ -3475,15 +3684,23 @@ class FFTTimeContextual(QWidget):
         self._sync_axis_enabled()
 
     def apply_builtin_preset(self, name):
-        """Apply one of the built-in presets (``'diagnostic'``,
-        ``'amplitude_accuracy'``, ``'high_frequency'``).
+        """Apply one of the built-in presets by key (``'torque'`` /
+        ``'vibration'`` / ``'transient'``).
 
-        Retained for backward compatibility with regression tests and
-        any external regression harness — internally this delegates to
-        the PresetBar's full-params dict so the builtin-aware path and
-        the legacy method stay in sync.
+        Legacy keys (``'diagnostic'``, ``'amplitude_accuracy'``,
+        ``'high_frequency'``) are accepted as aliases for the closest new
+        signal-type preset so old regression paths do not silently no-op.
         """
-        cfg = self._BUILTIN_PRESETS.get(name)
+        key = self._resolve_builtin_preset_key(name)
+        cfg = self._BUILTIN_PRESETS.get(key)
         if not cfg:
             return
-        self._apply_preset(self._builtin_preset_full_params(name))
+        self._apply_preset(self._builtin_preset_full_params(key))
+
+    def set_recommended_for_unit(self, unit):
+        """Highlight the preset slot recommended for ``unit`` (or clear)."""
+        if unit is None:
+            self.preset_bar.set_recommended(None)
+            return
+        key = recommend_preset_for_unit(unit)
+        self.preset_bar.set_recommended(_PRESET_KEY_TO_SLOT[key])

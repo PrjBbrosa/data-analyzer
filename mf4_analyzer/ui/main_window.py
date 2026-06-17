@@ -2060,8 +2060,35 @@ class MainWindow(QMainWindow):
             return True
         return False
 
+    def _unit_for_signal(self, data):
+        """Resolve the channel unit for a ``(fid, ch)`` signal payload.
+
+        Returns an empty string when the file/channel is unknown — callers
+        pass that on to ``set_recommended_for_unit`` which falls back to the
+        default (振动类) recommendation for unrecognized units.
+        """
+        if not data:
+            return None
+        fid, ch = data
+        fd = self.files.get(fid)
+        if fd is None or not hasattr(fd, 'channel_units'):
+            return ''
+        return fd.channel_units.get(ch, '') or ''
+
     def _on_inspector_signal_changed(self, mode, data):
-        """Fs auto-sync per §6.3: spin_fs reflects selected signal's source file Fs."""
+        """Fs auto-sync per §6.3: spin_fs reflects selected signal's source file Fs.
+
+        Also drives the per-unit preset 推荐 highlight on the FFT / Order
+        contextual preset bars — ``data=None`` (cleared selection) clears the
+        highlight.
+        """
+        # FFT and Order share the same source signal selector contract for
+        # recommendations. Keep both preset bars in sync regardless of which
+        # contextual emitted the change; Fs sync below remains mode-specific.
+        unit = self._unit_for_signal(data)
+        if mode in ('fft', 'order'):
+            self.inspector.fft_ctx.set_recommended_for_unit(unit)
+            self.inspector.order_ctx.set_recommended_for_unit(unit)
         if not data:
             return
         fid, _ch = data
@@ -2080,7 +2107,12 @@ class MainWindow(QMainWindow):
     def _on_fft_time_signal_changed(self, data):
         """Fs auto-sync for the FFT vs Time panel — mirrors the
         ``_on_inspector_signal_changed`` Fs behavior for the
-        ``fft_time_ctx`` route. Reviewer Important #2 hand-off."""
+        ``fft_time_ctx`` route. Reviewer Important #2 hand-off.
+
+        Also drives the per-unit preset 推荐 highlight on the FFT-vs-Time
+        preset bar (``data=None`` clears it)."""
+        unit = self._unit_for_signal(data)
+        self.inspector.fft_time_ctx.set_recommended_for_unit(unit)
         if not data:
             return
         fid, _ch = data

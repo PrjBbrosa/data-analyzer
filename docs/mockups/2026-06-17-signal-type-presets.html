@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>按信号类型的三套预设 + 单位自动推荐 — Mockup</title>
+<style>
+  :root{
+    --ink:#172033; --sub:#647086; --line:#d5dfeb; --chip-bg:#f1f6fc;
+    --sec-title:#1f3b63; --accent:#047857; --accent-bg:#e9f9f1;
+    --panel:#ffffff; --app-bg:#eef2f7;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:"Microsoft YaHei","Segoe UI",sans-serif;margin:0;
+       background:var(--app-bg);color:var(--ink);padding:28px;}
+  h1{font-size:19px;margin:0 0 4px;}
+  .lead{color:var(--sub);font-size:13px;margin:0 0 22px;max-width:760px;line-height:1.6;}
+  .stage{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap;}
+
+  /* ---- left: current channel picker ---- */
+  .picker{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+          padding:14px 14px 8px;width:230px;flex:0 0 auto;}
+  .picker h3{font-size:12px;color:var(--sec-title);margin:0 0 10px;font-weight:800;}
+  .ch{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);
+      border-radius:8px;margin-bottom:8px;cursor:pointer;background:#fbfdff;transition:.12s;}
+  .ch:hover{border-color:#9fb6d4;}
+  .ch.sel{border-color:var(--accent);background:var(--accent-bg);}
+  .ch .nm{font-weight:700;font-size:13px;}
+  .ch .un{margin-left:auto;font-size:12px;color:var(--sub);
+          border:1px solid var(--line);border-radius:9px;padding:1px 7px;background:#fff;}
+  .ch.sel .un{border-color:#9fd9bf;color:var(--accent);}
+
+  /* ---- right: inspector preset block ---- */
+  .inspector{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+             padding:16px 18px;width:430px;flex:0 0 auto;}
+  .tabs{display:flex;gap:6px;margin-bottom:14px;}
+  .tab{font-size:12px;padding:6px 12px;border:1px solid var(--line);border-radius:8px;
+       background:#fbfdff;cursor:pointer;color:var(--sub);}
+  .tab.on{background:#1f3b63;border-color:#1f3b63;color:#fff;font-weight:700;}
+  .grouphdr{font-size:12px;color:var(--sec-title);font-weight:800;margin:0 0 10px;}
+
+  .slots{display:flex;gap:8px;}
+  .slot{flex:1;border:1px solid var(--line);border-radius:9px;background:#fbfdff;
+        padding:10px 8px;cursor:pointer;position:relative;text-align:center;transition:.12s;}
+  .slot:hover{border-color:#9fb6d4;transform:translateY(-1px);}
+  .slot .ttl{font-weight:800;font-size:13px;}
+  .slot .cue{font-size:11px;color:var(--sub);margin-top:3px;line-height:1.35;}
+  .slot.reco{border-color:var(--accent);background:var(--accent-bg);
+             box-shadow:0 0 0 3px rgba(4,120,87,.12);}
+  .reco-badge{position:absolute;top:-9px;left:50%;transform:translateX(-50%);
+        background:var(--accent);color:#fff;font-size:10px;font-weight:700;
+        padding:2px 8px;border-radius:9px;white-space:nowrap;}
+  .reco .ttl{color:var(--accent);}
+
+  .why{margin-top:14px;font-size:12px;color:var(--sub);line-height:1.6;
+       border-top:1px dashed var(--line);padding-top:10px;}
+  .why b{color:var(--ink);}
+
+  /* ---- hover card ---- */
+  .hover{margin-top:18px;border:1px solid var(--line);border-radius:9px;
+         background:rgba(248,251,255,.92);padding:13px 14px;}
+  .hover .top{display:flex;align-items:center;gap:8px;margin-bottom:4px;}
+  .hover .htitle{font-size:15px;font-weight:800;}
+  .hover .hbadge{font-size:11px;font-weight:700;color:var(--accent);
+        background:var(--accent-bg);border-radius:11px;padding:2px 8px;}
+  .hover .hsub{font-size:12px;color:var(--sub);margin-bottom:10px;}
+  .hsec-title{font-size:11px;color:var(--sec-title);font-weight:800;margin:8px 0 6px;}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .chip{font-size:11.5px;border:1px solid var(--line);border-radius:10px;
+        background:var(--chip-bg);padding:3px 8px;}
+  .chip b{color:var(--sec-title);}
+  .chip.warn{border-color:#d9b56e;}
+  .foot{font-size:11px;color:var(--sub);margin-top:10px;font-style:italic;}
+</style>
+</head>
+<body>
+  <h1>按信号类型的三套预设 + 单位自动推荐</h1>
+  <p class="lead">左侧切换「当前通道」（模拟打开不同信号）。三个预设槽会按通道单位/幅值自动把推荐的那一套高亮（绿色 + "推荐"徽章）。
+     上方切 FFT-1D / FFT时频 / 阶次，看同一套预设在不同视图下展开的参数。鼠标悬停（这里默认展开）看完整参数卡。</p>
+
+  <div class="stage">
+    <div class="picker">
+      <h3>当前通道（模拟）</h3>
+      <div class="ch sel" data-type="torque" onclick="pick(this)">
+        <span class="nm">发动机扭矩</span><span class="un">Nm</span></div>
+      <div class="ch" data-type="vib" onclick="pick(this)">
+        <span class="nm">缸盖振动</span><span class="un">g</span></div>
+      <div class="ch" data-type="vib" onclick="pick(this)">
+        <span class="nm">轴承加速度</span><span class="un">m/s²</span></div>
+      <div class="ch" data-type="torque" onclick="pick(this)">
+        <span class="nm">油轨压力</span><span class="un">bar</span></div>
+      <div class="ch" data-type="transient" onclick="pick(this)">
+        <span class="nm">启停冲击</span><span class="un">g · 扫频</span></div>
+    </div>
+
+    <div class="inspector">
+      <div class="tabs">
+        <div class="tab on" data-view="fft" onclick="setView(this)">FFT-1D</div>
+        <div class="tab" data-view="fftt" onclick="setView(this)">FFT 时频</div>
+        <div class="tab" data-view="order" onclick="setView(this)">阶次</div>
+      </div>
+      <div class="grouphdr">预设配置</div>
+      <div class="slots" id="slots"></div>
+      <div class="why" id="why"></div>
+      <div class="hover" id="hover"></div>
+    </div>
+  </div>
+
+<script>
+  // 三套预设：按信号类型。每个视图一组参数 + 幅值轴。
+  const PRESETS = {
+    lowfreq: {
+      name:"低频精读", cue:"扭矩 / 压力 / 低速轴",
+      sub:"幅值小、动态范围小、能量在低频(0~200Hz)、看低阶次",
+      fft:[["窗","hanning"],["NFFT","4096"],["重叠","75%"],["幅值轴","线性"],["去均值","开"]],
+      fftt:[["窗","hanning"],["NFFT","4096"],["重叠","75%"],["幅值","线性"],["色阶","自动"]],
+      order:[["最大阶次","20"],["阶次分辨率","0.05"],["时间分辨率","0.10 s"],["FFT点数","4096"],["每转样本","256"],["幅值轴","线性"]],
+      why:"大 NFFT 换低频细分辨率；线性轴直读 Nm；阶次分辨率细以分开低阶谐波。"
+    },
+    broadband: {
+      name:"宽频振动", cue:"加速度 / NVH（默认）",
+      sub:"幅值跨数量级、宽频(0~几kHz)、大动态范围、看谐波+噪声底",
+      fft:[["窗","hanning"],["NFFT","2048"],["重叠","50%"],["幅值轴","dB"],["去均值","开"]],
+      fftt:[["窗","hanning"],["NFFT","2048"],["重叠","50%"],["幅值","dB"],["动态","80 dB"]],
+      order:[["最大阶次","50"],["阶次分辨率","0.10"],["时间分辨率","0.05 s"],["FFT点数","2048"],["每转样本","512"],["幅值轴","dB"]],
+      why:"时频均衡；dB 同屏看大谐波和小噪声底；高阶覆盖高频谐波。"
+    },
+    transient: {
+      name:"瞬态启停", cue:"冲击 / run-up / coast-down",
+      sub:"非平稳、瞬时峰值、扫频",
+      fft:[["窗","hanning"],["NFFT","1024"],["重叠","75%"],["幅值轴","dB"],["去均值","开"]],
+      fftt:[["窗","hanning"],["NFFT","1024"],["重叠","75%"],["幅值","dB"],["动态","60 dB"]],
+      order:[["最大阶次","30"],["阶次分辨率","0.10"],["时间分辨率","0.02 s"],["FFT点数","1024"],["每转样本","256"],["幅值轴","dB"]],
+      why:"小 NFFT + 高重叠换时间定位，跟得住转速快变和冲击。"
+    }
+  };
+  const ORDER = ["lowfreq","broadband","transient"];
+  // 单位/类型 → 推荐预设
+  const RECO = { torque:"lowfreq", vib:"broadband", transient:"transient" };
+
+  let view = "fft";
+  let chType = "torque";
+
+  function recoKey(){ return RECO[chType]; }
+
+  function render(){
+    const slots = document.getElementById("slots");
+    slots.innerHTML = "";
+    ORDER.forEach(k=>{
+      const p = PRESETS[k];
+      const reco = (k === recoKey());
+      const el = document.createElement("div");
+      el.className = "slot" + (reco ? " reco" : "");
+      el.innerHTML = (reco ? '<div class="reco-badge">★ 推荐</div>' : '') +
+        '<div class="ttl">'+p.name+'</div><div class="cue">'+p.cue+'</div>';
+      el.onmouseenter = ()=>showHover(k);
+      slots.appendChild(el);
+    });
+    showHover(recoKey());
+    const r = PRESETS[recoKey()];
+    document.getElementById("why").innerHTML =
+      '<b>为何推荐「'+r.name+'」：</b>当前通道单位提示属于该类信号。'+r.why;
+  }
+
+  function showHover(k){
+    const p = PRESETS[k];
+    const rows = p[view];
+    const chips = rows.map(([a,b])=>{
+      const warn = (a.indexOf("幅值")>=0) ? " warn" : "";
+      return '<span class="chip'+warn+'"><b>'+a+'</b> '+b+'</span>';
+    }).join("");
+    const reco = (k === recoKey());
+    document.getElementById("hover").innerHTML =
+      '<div class="top"><span class="htitle">'+p.name+'</span>'+
+        (reco?'<span class="hbadge">★ 当前通道推荐</span>':'')+'</div>'+
+      '<div class="hsub">'+p.sub+'</div>'+
+      '<div class="hsec-title">本视图参数（'+viewLabel()+'）</div>'+
+      '<div class="chips">'+chips+'</div>'+
+      '<div class="foot">提示：黄边 = 幅值轴随信号自适应（线性/dB），其余按信号类型固定。</div>';
+  }
+
+  function viewLabel(){ return {fft:"FFT-1D",fftt:"FFT 时频",order:"阶次"}[view]; }
+
+  function pick(el){
+    document.querySelectorAll(".ch").forEach(c=>c.classList.remove("sel"));
+    el.classList.add("sel");
+    chType = el.dataset.type;
+    render();
+  }
+  function setView(el){
+    document.querySelectorAll(".tab").forEach(t=>t.classList.remove("on"));
+    el.classList.add("on");
+    view = el.dataset.view;
+    render();
+  }
+  render();
+</script>
+</body>
+</html>
