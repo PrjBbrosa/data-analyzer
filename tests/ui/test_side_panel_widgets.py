@@ -242,15 +242,15 @@ def test_peek_one_side_then_other_side_events_do_not_crash(qtbot):
     assert ctrl_r.state == PanelState.PEEK
 
 
-def test_toolbar_has_no_inspector_button_and_cockpit_in_left(qtbot):
+def test_toolbar_has_no_inspector_or_cockpit_button(qtbot):
     from mf4_analyzer.ui.toolbar import Toolbar
     tb = Toolbar()
     qtbot.addWidget(tb)
     assert not hasattr(tb, "btn_inspector")
     assert not hasattr(tb, "inspector_visibility_changed")
-    # Cockpit button now sits in the left cluster next to 批处理; the old
-    # right-segment band hosts the BOSCH logo instead.
-    assert tb.btn_acquisition_cockpit.parent() is tb._left_widget
+    # The Cockpit button was removed; the right-segment BOSCH logo now hosts
+    # the hidden entry (triple-click), so no dedicated button exists.
+    assert not hasattr(tb, "btn_acquisition_cockpit")
 
 
 def test_peek_overlay_clamps_width_to_capped_panel(qtbot):

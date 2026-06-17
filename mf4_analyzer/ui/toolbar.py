@@ -1,5 +1,5 @@
 """Top three-segment toolbar: file actions · mode switcher · canvas actions."""
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QSize, QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
@@ -16,6 +16,52 @@ def _make_sep(parent):
     sep.setFixedWidth(1)
     sep.setStyleSheet("background: #eef2f7; border: none;")
     return sep
+
+
+class _LogoLabel(QLabel):
+    """Brand logo that doubles as a hidden Cockpit entry.
+
+    Three rapid left-clicks emit :pyattr:`triple_clicked`. The gesture is
+    deliberately undiscoverable — the cursor and tooltip are unchanged, so
+    the logo looks and behaves exactly like a static brand mark.
+
+    Qt promotes the second press of a fast sequence into a
+    ``mouseDoubleClickEvent`` (not a second ``mousePressEvent``), so we count
+    both event kinds. A single-shot timer keyed to the platform double-click
+    interval resets the counter once the clicks stop, so only *consecutive*
+    clicks accumulate toward the gesture.
+    """
+
+    triple_clicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._clicks = 0
+        self._reset_timer = QTimer(self)
+        self._reset_timer.setSingleShot(True)
+        self._reset_timer.timeout.connect(self._clear)
+
+    def _clear(self):
+        self._clicks = 0
+
+    def _register_click(self):
+        self._clicks += 1
+        if self._clicks >= 3:
+            self._clicks = 0
+            self._reset_timer.stop()
+            self.triple_clicked.emit()
+        else:
+            self._reset_timer.start(QApplication.doubleClickInterval())
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._register_click()
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._register_click()
+        super().mouseDoubleClickEvent(event)
 
 
 class Toolbar(QWidget):
@@ -64,9 +110,6 @@ class Toolbar(QWidget):
         self.btn_save_project.setToolTip("保存当前会话为 .tlproj 项目")
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
-        self.btn_acquisition_cockpit = QPushButton("Cockpit", self)
-        self.btn_acquisition_cockpit.setIcon(Icons.plot())
-        self.btn_acquisition_cockpit.setToolTip("打开 Acquisition Cockpit")
 
         # ── center mode segment ─────────────────────────────────────────────
         self.btn_mode_time = QPushButton("时域", self)
@@ -79,7 +122,6 @@ class Toolbar(QWidget):
         self.btn_mode_order.setIcon(Icons.mode_order())
 
         for b in (self.btn_add, self.btn_save_project, self.btn_batch,
-                  self.btn_acquisition_cockpit,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
                   self.btn_mode_order):
             b.setIconSize(QSize(16, 16))
@@ -92,7 +134,6 @@ class Toolbar(QWidget):
             self.btn_add,
             self.btn_save_project,
             self.btn_batch,
-            self.btn_acquisition_cockpit,
         ):
             left.addWidget(b)
 
@@ -125,7 +166,7 @@ class Toolbar(QWidget):
         right.setSpacing(10)
         right.addStretch(1)
 
-        self._logo_label = QLabel(self)
+        self._logo_label = _LogoLabel(self)
         self._logo_label.setToolTip("博世华域转向系统有限公司")
         _logo_src = QPixmap(str(app_meta.asset_path("branding", "bosch_hasco_logo.png")))
         if not _logo_src.isNull():
@@ -178,7 +219,8 @@ class Toolbar(QWidget):
         self.btn_add.clicked.connect(self.open_requested)
         self.btn_save_project.clicked.connect(self.save_project_requested)
         self.btn_batch.clicked.connect(self.batch_requested)
-        self.btn_acquisition_cockpit.clicked.connect(self.acquisition_cockpit_requested)
+        # Hidden Cockpit entry: triple-click the brand logo (see _LogoLabel).
+        self._logo_label.triple_clicked.connect(self.acquisition_cockpit_requested)
         for key, b in [('time', self.btn_mode_time),
                        ('fft', self.btn_mode_fft),
                        ('fft_time', self.btn_mode_fft_time),

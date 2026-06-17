@@ -1,8 +1,26 @@
 # tests/ui/test_toolbar_branding.py
-def test_cockpit_button_in_left_cluster(qapp):
+from PyQt5.QtCore import Qt
+
+
+def test_no_cockpit_button(qapp):
     from mf4_analyzer.ui.toolbar import Toolbar
     tb = Toolbar()
-    assert tb.btn_acquisition_cockpit.parentWidget() is tb._left_widget
+    # The visible Cockpit button was removed; the entry now lives on the logo.
+    assert not hasattr(tb, "btn_acquisition_cockpit")
+
+
+def test_logo_triple_click_opens_cockpit(qtbot):
+    from mf4_analyzer.ui.toolbar import Toolbar
+    tb = Toolbar()
+    qtbot.addWidget(tb)
+    fired = []
+    tb.acquisition_cockpit_requested.connect(lambda: fired.append(True))
+
+    qtbot.mouseClick(tb._logo_label, Qt.LeftButton)
+    qtbot.mouseClick(tb._logo_label, Qt.LeftButton)
+    assert fired == []                       # two clicks must not trigger
+    qtbot.mouseClick(tb._logo_label, Qt.LeftButton)
+    assert fired == [True]                    # the third consecutive click does
 
 
 def test_toolbar_shows_logo(qapp):

@@ -73,6 +73,13 @@ def test_importing_cockpit_main_window_does_not_import_pya2l():
     )
 
 
+def _triple_click_logo(qtbot, window):
+    """Fire the hidden Cockpit gesture: three rapid clicks on the brand logo."""
+    logo = window.toolbar._logo_label
+    for _ in range(3):
+        qtbot.mouseClick(logo, Qt.LeftButton)
+
+
 def _patch_cockpit_import(monkeypatch, cockpit_cls):
     import mf4_analyzer.ui.main_window as main_window_module
 
@@ -105,9 +112,11 @@ def test_analyzer_toolbar_opens_cockpit_when_none_open(qapp, qtbot, monkeypatch)
 
     window = MainWindow()
     qtbot.addWidget(window)
-    assert window.toolbar.btn_acquisition_cockpit.toolTip() == "打开 Acquisition Cockpit"
+    # Hidden entry: the logo keeps the company tooltip, no Cockpit button.
+    assert window.toolbar._logo_label.toolTip() == "博世华域转向系统有限公司"
+    assert not hasattr(window.toolbar, "btn_acquisition_cockpit")
 
-    qtbot.mouseClick(window.toolbar.btn_acquisition_cockpit, Qt.LeftButton)
+    _triple_click_logo(qtbot, window)
     qapp.processEvents()
 
     assert len(FakeCockpit.instances) == 1
@@ -177,7 +186,7 @@ def test_analyzer_toolbar_reopens_cockpit_after_close(qapp, qtbot, monkeypatch):
     window = MainWindow()
     qtbot.addWidget(window)
 
-    qtbot.mouseClick(window.toolbar.btn_acquisition_cockpit, Qt.LeftButton)
+    _triple_click_logo(qtbot, window)
     qapp.processEvents()
     assert len(FakeCockpit.instances) == 1
     first = FakeCockpit.instances[0]
@@ -188,7 +197,7 @@ def test_analyzer_toolbar_reopens_cockpit_after_close(qapp, qtbot, monkeypatch):
     qapp.processEvents()
     assert not first.isVisible()
 
-    qtbot.mouseClick(window.toolbar.btn_acquisition_cockpit, Qt.LeftButton)
+    _triple_click_logo(qtbot, window)
     qapp.processEvents()
 
     visible = [c for c in FakeCockpit.instances if c.isVisible()]
