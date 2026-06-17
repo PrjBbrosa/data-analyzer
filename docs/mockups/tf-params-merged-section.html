@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>时频参数 · 合并预设 + 折叠 (方案 B)</title>
+<style>
+  body { font-family:"Microsoft YaHei","Segoe UI",sans-serif; background:#eef2f7;
+         margin:0; padding:26px; color:#111827; }
+  h1 { font-size:17px; margin:0 0 4px; }
+  p.sub { color:#64748b; margin:0 0 20px; font-size:13px; }
+  .row { display:flex; gap:26px; align-items:flex-start; flex-wrap:wrap; }
+  .case { }
+  .tag { font-size:12px; font-weight:600; color:#334155; margin-bottom:8px; }
+
+  /* analysis side panel — pale mint tinted card like the app */
+  .panel { width:300px; background:#eef6f1; border:1px solid #d6e6dc;
+           border-radius:12px; padding:12px 13px; box-sizing:border-box; }
+  .panel-title { display:flex; align-items:center; justify-content:space-between;
+                 font-size:13px; font-weight:700; color:#111827; margin-bottom:10px; }
+  .refresh { color:#1769e0; font-size:13px; }
+
+  .field { margin:7px 0; }
+  .field .lab { font-size:12px; color:#374151; margin-bottom:3px; }
+  .input { background:#fff; border:1px solid #dfe5ee; border-radius:7px;
+           height:26px; display:flex; align-items:center; padding:0 9px;
+           font-size:12px; color:#111827; justify-content:space-between; }
+  .input .chev { color:#94a3b8; }
+  .grouphdr { font-size:12px; font-weight:700; color:#111827; margin:12px 0 4px; }
+  .timerow { display:flex; align-items:center; gap:8px; font-size:12px; color:#374151; }
+  .blue { color:#1769e0; }
+  .twocol { display:flex; gap:8px; }
+  .twocol .input { flex:1; }
+
+  hr.sep { border:none; border-top:1px solid #d6e6dc; margin:12px 0; }
+
+  /* the merged 时频参数 section */
+  .tf { background:#fbfdfc; border:1px solid #dde9e1; border-radius:9px;
+        padding:9px 10px; margin-top:4px; }
+  .tf-hdr { display:flex; align-items:center; justify-content:space-between;
+            cursor:pointer; }
+  .tf-hdr .left { display:flex; align-items:center; gap:7px; }
+  .tf-hdr .chev { color:#475569; font-size:11px; width:12px; }
+  .tf-hdr .title { font-size:12px; font-weight:700; color:#111827; }
+  .tf-hdr .summary { font-size:11px; color:#64748b; }
+  .presets { display:flex; gap:8px; margin-top:10px; }
+  .preset { flex:1; text-align:center; background:#fff; border:1px solid #dfe5ee;
+            border-radius:7px; height:30px; line-height:30px; font-size:12px;
+            color:#334155; }
+  .preset.on { border-color:#1769e0; background:#e8f0ff; color:#1769e0; font-weight:600; }
+  .detail { margin-top:11px; padding-top:10px; border-top:1px dashed #dde9e1; }
+  .drow { display:flex; align-items:center; justify-content:space-between; margin:7px 0; }
+  .drow .lab { font-size:12px; color:#374151; }
+  .drow .input { width:150px; }
+  .note { font-size:12px; color:#94a3b8; margin-top:8px; max-width:300px; }
+</style>
+</head>
+<body>
+  <h1>时频参数 — 合并「预设 + 折叠」(方案 B)</h1>
+  <p class="sub">预设按钮常驻;标题行右侧显示当前参数摘要;箭头展开才露出 FFT点数 / 窗函数 / 重叠。默认折叠。</p>
+
+  <div class="row">
+
+    <!-- COLLAPSED (default) -->
+    <div class="case">
+      <div class="tag">默认状态(折叠)</div>
+      <div class="panel">
+        <div class="panel-title"><span>分析信号 + 时间</span><span class="refresh">⟳</span></div>
+        <div class="field"><div class="lab">信号:</div><div class="input"><span>&nbsp;</span><span class="chev">▾</span></div></div>
+        <div class="field"><div class="lab">Fs:</div><div class="input"><span>1000.0 Hz</span><span></span></div></div>
+
+        <div class="grouphdr">分析时间</div>
+        <div class="timerow"><span>☐ 使用选定时间范围</span><span style="flex:1"></span><span class="blue">最大</span></div>
+        <div class="twocol" style="margin-top:6px;">
+          <div class="input"><span>0.0 s</span></div>
+          <div class="input"><span>结束 0.0 s</span></div>
+        </div>
+
+        <hr class="sep">
+
+        <div class="tf">
+          <div class="tf-hdr">
+            <div class="left"><span class="chev">▶</span><span class="title">时频参数</span></div>
+            <span class="summary">1024 · hanning · 80%</span>
+          </div>
+          <div class="presets">
+            <div class="preset">扭矩类</div>
+            <div class="preset on">振动类</div>
+            <div class="preset">启停类</div>
+          </div>
+        </div>
+      </div>
+      <div class="note">看一眼就知道当前是 1024 · hanning · 80%,且选中了「振动类」。不展开也不丢状态。</div>
+    </div>
+
+    <!-- EXPANDED -->
+    <div class="case">
+      <div class="tag">点箭头展开后(自定义)</div>
+      <div class="panel">
+        <div class="panel-title"><span>分析信号 + 时间</span><span class="refresh">⟳</span></div>
+        <div class="field"><div class="lab">信号:</div><div class="input"><span>&nbsp;</span><span class="chev">▾</span></div></div>
+        <div class="field"><div class="lab">Fs:</div><div class="input"><span>1000.0 Hz</span><span></span></div></div>
+
+        <div class="grouphdr">分析时间</div>
+        <div class="timerow"><span>☐ 使用选定时间范围</span><span style="flex:1"></span><span class="blue">最大</span></div>
+        <div class="twocol" style="margin-top:6px;">
+          <div class="input"><span>0.0 s</span></div>
+          <div class="input"><span>结束 0.0 s</span></div>
+        </div>
+
+        <hr class="sep">
+
+        <div class="tf">
+          <div class="tf-hdr">
+            <div class="left"><span class="chev">▼</span><span class="title">时频参数</span></div>
+            <span class="summary">1024 · hanning · 80%</span>
+          </div>
+          <div class="presets">
+            <div class="preset">扭矩类</div>
+            <div class="preset on">振动类</div>
+            <div class="preset">启停类</div>
+          </div>
+          <div class="detail">
+            <div class="drow"><span class="lab">FFT 点数</span><div class="input"><span>1024</span><span class="chev">▾</span></div></div>
+            <div class="drow"><span class="lab">窗函数</span><div class="input"><span>hanning</span><span class="chev">▾</span></div></div>
+            <div class="drow"><span class="lab">重叠</span><div class="input"><span>80 %</span><span></span></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="note">手动改任一项 → 顶部摘要同步更新;手动改后预设按钮可显示为未选中(脱离配方)。</div>
+    </div>
+
+  </div>
+</body>
+</html>
