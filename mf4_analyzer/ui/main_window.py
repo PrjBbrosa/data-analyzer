@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QTimer, QThread
 
 from ..io import DataLoader, FileData, HAS_ASAMMDF
-from ..signal import FFTAnalyzer
+from ..signal import FFTAnalyzer, assess_speed_for_order, energy_band_fmax, resolve_nfft
 from .. import app_meta
 
 
@@ -1102,6 +1102,8 @@ class MainWindow(QMainWindow):
             return {
                 'window': p.get('window'),
                 'nfft': p.get('nfft'),
+                'nfft_mode': p.get('nfft_mode'),
+                't_win_s': p.get('t_win_s', 1.5),
                 'avg_mode': cp.get('avg_mode', '单帧'),
                 'avg_overlap': cp.get('avg_overlap', 50),
             }
@@ -1126,6 +1128,38 @@ class MainWindow(QMainWindow):
 
     def _analysis_cache_key(self, section, fid, ch, rpm_source=None, pane_idx=None):
         cache = self.analysis_caches[section]
+        if section == 'fft_time':
+            p = self.inspector.fft_time_ctx.get_params()
+            time_range = self._pane_time_range_for(section, pane_idx)
+            prepared = self._fft_time_effective_params_for_source(
+                p, fid, ch, time_range)
+            if prepared is not None:
+                effective_p, _effective_time_range = prepared
+                return self._fft_time_analysis_cache_key(
+                    fid, ch, effective_p, pane_idx)
+            params = {
+                'fs': p.get('fs'),
+                'nfft': int(
+                    p.get('nfft_effective')
+                    or p.get('nfft')
+                    or p.get('nfft_preview')
+                ),
+                'window': p.get('window'),
+                'overlap': p.get('overlap'),
+                'remove_mean': p.get('remove_mean'),
+                'db_reference': p.get('db_reference', 1.0),
+                'time_range': time_range,
+            }
+            return cache.make_key(fid, ch, params)
+        if section == 'fft':
+            time_range = self._pane_time_range_for(section, pane_idx)
+            params = self._fft_effective_params_for_source(
+                self._analysis_compute_params(section),
+                fid,
+                ch,
+                time_range,
+            )
+            return self._fft_analysis_cache_key(fid, ch, params, time_range)
         params = dict(self._analysis_compute_params(section))
         if section in {'fft', 'fft_time', 'order'}:
             params['time_range'] = self._pane_time_range_for(section, pane_idx)
@@ -3135,42 +3169,26 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _fft_auto_xlim(freq, amp):
-        """Return a tight automatic FFT frequency max with a small margin."""
-        freq = np.asarray(freq, dtype=float).ravel()
-        amp = np.asarray(amp, dtype=float).ravel()
-        if len(freq) < 2 or len(amp) < 2:
-            return float(freq[-1]) if len(freq) else 100
+        """Return display-only FFT fmax from the non-DC energy band."""
+        return energy_band_fmax(freq, amp)
 
-        n = min(len(freq), len(amp))
-        freq = freq[:n]
-        amp = amp[:n]
-        max_freq = float(freq[-1])
-        if not np.isfinite(max_freq):
-            finite_freq = freq[np.isfinite(freq)]
-            return float(finite_freq[-1]) if len(finite_freq) else 100
+    @staticmethod
+    def _fft_time_auto_freq_range(result):
+        """Return display-only FFT-vs-Time frequency range from energy.
 
-        # Skip DC: start at index 1 and ignore non-finite amplitudes.
-        body = amp[1:] if len(amp) > 1 else amp
-        body = np.where(np.isfinite(body), body, 0.0)
-        peak = float(np.max(body)) if len(body) else 0.0
-        if peak <= 0 or not np.isfinite(peak):
-            return max_freq
-
-        # Highest meaningful non-DC bin: amp >= 1% of the non-DC peak.
-        threshold = peak * 0.01
-        meaningful = np.where(body >= threshold)[0]
-        if len(meaningful) == 0:
-            return max_freq
-        idx = int(meaningful[-1]) + 1
-        f_cutoff = float(freq[min(idx, len(freq) - 1)])
-        if not np.isfinite(f_cutoff):
-            return max_freq
-
-        diffs = np.diff(freq)
-        diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
-        df = float(np.median(diffs)) if len(diffs) else 0.0
-        margin = max(2.0 * df, 0.08 * max(f_cutoff, df))
-        return min(max_freq, f_cutoff + margin)
+        ``SpectrogramResult.amplitude`` is ``freq_bins x frames``. Max over
+        frames is intentionally conservative: intermittent low-frequency
+        energy still expands the displayed frequency band enough to show it.
+        """
+        freq = getattr(result, 'frequencies', None)
+        if freq is None:
+            freq = getattr(result, 'freq', [])
+        amp = np.asarray(getattr(result, 'amplitude', []), dtype=float)
+        if amp.ndim >= 2:
+            representative = np.nanmax(amp, axis=1)
+        else:
+            representative = amp
+        return (0.0, energy_band_fmax(freq, representative))
 
     def _check_uniform_or_prompt(self, fd, mode):
         """Pre-flight non-uniform time-axis check before worker dispatch.
@@ -3251,21 +3269,82 @@ class MainWindow(QMainWindow):
         )
         return True
 
+    @staticmethod
+    def _resolve_fft_effective_params(fft_params, n_samples, fs):
+        """Return FFT spectrum params with effective NFFT when auto is resolvable.
+
+        Averaged and peak-hold spectrum modes need a concrete segment length.
+        Single-frame auto keeps the legacy whole-segment ``nfft=None``
+        semantics, letting ``FFTAnalyzer.compute_fft`` use the signal length.
+        """
+        out = dict(fft_params)
+        nfft = out.get('nfft')
+        auto = (
+            nfft is None
+            or out.get('nfft_mode') == 'auto'
+            or str(nfft) == '自动'
+        )
+        avg_mode = out.get('avg_mode', '单帧')
+        if auto:
+            out['nfft_mode'] = 'auto'
+            out['t_win_s'] = float(out.get('t_win_s', 1.5))
+            if avg_mode in {'线性平均', '峰值保持'}:
+                overlap = float(out.get('avg_overlap', 50)) / 100.0
+                effective = resolve_nfft(
+                    fs,
+                    n_samples,
+                    out.get('t_win_s', 1.5),
+                    overlap,
+                )
+                out['nfft'] = int(effective)
+                out['nfft_effective'] = int(effective)
+            else:
+                out['nfft'] = None
+                out['nfft_effective'] = None
+        else:
+            effective = int(nfft)
+            out['nfft'] = effective
+            out['nfft_effective'] = effective
+            out['nfft_mode'] = 'fixed'
+        return out
+
+    @staticmethod
+    def _fft_compute_cache_params(fft_params):
+        return {
+            'window': fft_params.get('window'),
+            'nfft': fft_params.get('nfft_effective', fft_params.get('nfft')),
+            'avg_mode': fft_params.get('avg_mode', '单帧'),
+            'avg_overlap': fft_params.get('avg_overlap', 50),
+        }
+
+    def _fft_analysis_cache_key(self, fid, ch, fft_params, time_range):
+        params = self._fft_compute_cache_params(fft_params)
+        params['time_range'] = time_range
+        return self.analysis_caches['fft'].make_key(fid, ch, params)
+
+    def _fft_effective_params_for_source(self, fft_params, fid, ch, time_range):
+        sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
+        if sig is None or fs is None or len(sig) <= 0:
+            return dict(fft_params)
+        return self._resolve_fft_effective_params(fft_params, len(sig), fs)
+
     def _fft_compute_arrays(self, sig, fs, fft_params):
         """Run the FFT compute branch (Welch avg / peak-hold / single-frame)
         on a single signal, returning raw display-independent ``(freq, amp,
         psd)``. Algorithm calls are byte-identical to the legacy do_fft."""
+        fft_params = self._resolve_fft_effective_params(
+            fft_params, len(sig), fs)
         win = fft_params['window']
-        nfft = fft_params['nfft']
+        nfft = fft_params.get('nfft_effective', fft_params.get('nfft'))
         avg_mode = fft_params.get('avg_mode', '单帧')
         overlap_pct = int(fft_params.get('avg_overlap', 50))
         avg_overlap = max(0.0, min(0.95, overlap_pct / 100.0))
         if avg_mode == '线性平均':
             freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
-                sig, fs, win, nfft or 1024, avg_overlap)
+                sig, fs, win, int(nfft), avg_overlap)
         elif avg_mode == '峰值保持':
             freq, amp = FFTAnalyzer.compute_peak_hold_fft(
-                sig, fs, win=win, nfft=nfft or 1024, overlap=avg_overlap)
+                sig, fs, win=win, nfft=int(nfft), overlap=avg_overlap)
             psd = amp ** 2
         else:
             freq, amp = FFTAnalyzer.compute_fft(sig, fs, win, nfft)
@@ -3323,24 +3402,26 @@ class MainWindow(QMainWindow):
             entries = []
             time_range = self._pane_time_range_for('fft', pane_idx)
             for fid, ch in sources:
-                key = self._analysis_cache_key(
-                    'fft', fid, ch, pane_idx=pane_idx)
+                sig, fs = self._fft_fetch_signal(
+                    fid, ch, time_range=time_range)
+                if sig is None or len(sig) < 10:
+                    continue
+                fd = self.files.get(fid)
+                if not self._check_uniform_or_prompt(fd, 'fft'):
+                    continue
+                sig, fs = self._fft_fetch_signal(
+                    fid, ch, time_range=time_range)
+                if sig is None or len(sig) < 10:
+                    continue
+                effective_params = self._resolve_fft_effective_params(
+                    fft_params, len(sig), fs)
+                key = self._fft_analysis_cache_key(
+                    fid, ch, effective_params, time_range)
                 result = cache.get(key)
                 if result is None:
-                    sig, fs = self._fft_fetch_signal(
-                        fid, ch, time_range=time_range)
-                    if sig is None or len(sig) < 10:
-                        continue
-                    fd = self.files.get(fid)
-                    if not self._check_uniform_or_prompt(fd, 'fft'):
-                        continue
-                    sig, fs = self._fft_fetch_signal(
-                        fid, ch, time_range=time_range)
-                    if sig is None or len(sig) < 10:
-                        continue
                     try:
                         result = self._fft_compute_arrays(
-                            sig, self.inspector.fft_ctx.fs(), fft_params)
+                            sig, fs, effective_params)
                     except Exception as e:
                         QMessageBox.critical(self, 'FFT错误', str(e))
                         continue
@@ -3393,10 +3474,12 @@ class MainWindow(QMainWindow):
             t = t[m]
             sig = sig[m]
         fft_params = self.inspector.fft_ctx.current_params()
+        fs = self.inspector.fft_ctx.fs()
+        fft_params = self._resolve_fft_effective_params(
+            fft_params, len(sig), fs)
         win = fft_params['window']
         nfft = fft_params['nfft']
         overlap = fft_params['overlap']
-        fs = self.inspector.fft_ctx.fs()
 
         try:
             self.statusBar.showMessage('计算FFT...');
@@ -3524,6 +3607,14 @@ class MainWindow(QMainWindow):
             return None
         return rpm
 
+    def _warn_if_order_speed_unsuitable(self, rpm):
+        ok, message = assess_speed_for_order(rpm)
+        if ok:
+            return True
+        self.toast(message, "warning")
+        self.statusBar.showMessage(message)
+        return False
+
     def do_order_time(self):
         """Compute the WHOLE active Order view — every pane (V7b).
 
@@ -3629,6 +3720,7 @@ class MainWindow(QMainWindow):
         rpm = self._order_rpm_for(rpm_source, len(sig), time_range=time_range)
         if rpm is None:
             return False
+        self._warn_if_order_speed_unsuitable(rpm)
         fs = self.inspector.order_ctx.fs()
         order_params = self.inspector.order_ctx.current_params()
         op = self.inspector.order_ctx.get_params()
@@ -3869,6 +3961,64 @@ class MainWindow(QMainWindow):
     # ``fft_time_requested``), not handler-replayed via
     # ``QTimer.singleShot`` re-entry.
 
+    @staticmethod
+    def _resolve_fft_time_effective_params(p, n_samples):
+        """Return FFT-vs-Time params with a concrete integer NFFT.
+
+        ``FFTTimeContextual`` may emit ``nfft=None`` for auto mode because the
+        real sample count is unknown at collection time. Resolve it only after
+        the caller has applied the active time-range mask.
+        """
+        out = dict(p)
+        auto = out.get('nfft') is None or out.get('nfft_mode') == 'auto'
+        if auto:
+            effective = resolve_nfft(
+                out['fs'],
+                n_samples,
+                out.get('t_win_s', 1.5),
+                out['overlap'],
+            )
+            out['nfft'] = int(effective)
+            out['nfft_effective'] = int(effective)
+            out['nfft_mode'] = 'auto'
+        else:
+            effective = int(out['nfft'])
+            out['nfft'] = effective
+            out['nfft_effective'] = effective
+            out['nfft_mode'] = 'fixed'
+        return out
+
+    def _fft_time_analysis_cache_key(self, fid, ch, p, pane_idx):
+        cache = self.analysis_caches['fft_time']
+        params = {
+            'fs': p.get('fs'),
+            'nfft': int(p.get('nfft_effective', p.get('nfft'))),
+            'window': p.get('window'),
+            'overlap': p.get('overlap'),
+            'remove_mean': p.get('remove_mean'),
+            'db_reference': p.get('db_reference', 1.0),
+            'time_range': self._pane_time_range_for('fft_time', pane_idx),
+        }
+        return cache.make_key(fid, ch, params)
+
+    def _fft_time_effective_params_for_source(self, p, fid, ch, time_range):
+        """Resolve params for cache lookup without starting a worker."""
+        _fid, _ch, t, sig, _fd = self._fft_time_signal_for((fid, ch))
+        if sig is None or len(sig) < 2:
+            return None
+        rng = self._normalize_analysis_time_range(time_range)
+        if rng is not None:
+            _t, sig = self._mask_time_range(t, sig, time_range=rng)
+            if len(sig) < 2:
+                return None
+            effective_time_range = rng
+        else:
+            effective_time_range = (float(t[0]), float(t[-1]))
+        return (
+            self._resolve_fft_time_effective_params(p, len(sig)),
+            effective_time_range,
+        )
+
     def _fft_time_cache_key(self, params):
         """Build the LRU cache key from compute-relevant fields ONLY.
 
@@ -3876,12 +4026,15 @@ class MainWindow(QMainWindow):
         ``freq_auto``, ``freq_min``, ``freq_max``) are deliberately
         absent so toggling them re-renders without recomputing.
         """
+        nfft = params.get('nfft_effective', params.get('nfft'))
+        if nfft is None or str(nfft) == '自动':
+            raise ValueError('FFT-vs-Time cache key requires effective nfft')
         return (
             params.get('fid'),
             params.get('channel'),
             tuple(params.get('time_range') or (None, None)),
             float(params.get('fs')),
-            int(params.get('nfft')),
+            int(nfft),
             str(params.get('window')),
             float(params.get('overlap')),
             bool(params.get('remove_mean')),
@@ -4030,20 +4183,41 @@ class MainWindow(QMainWindow):
         )
         queue = []
         any_source = False
+        last_cached_nfft = None
         for pane_idx in pane_order:
             sources = state.panes[pane_idx].sources
             if not sources:
                 continue
             any_source = True
             fid, ch = sources[0]
-            analysis_key = self._analysis_cache_key(
-                'fft_time', fid, ch, pane_idx=pane_idx)
-            cached = None if force else cache.get(analysis_key)
+            cached = None
+            analysis_key = None
+            render_p = p
+            time_range = self._pane_time_range_for('fft_time', pane_idx)
+            prepared = self._fft_time_effective_params_for_source(
+                p, fid, ch, time_range)
+            if prepared is not None:
+                render_p, effective_time_range = prepared
+                analysis_key = self._fft_time_analysis_cache_key(
+                    fid, ch, render_p, pane_idx)
+                if not force:
+                    cached = cache.get(analysis_key)
+                    if cached is None:
+                        key_params = dict(
+                            render_p,
+                            fid=fid,
+                            channel=ch,
+                            time_range=effective_time_range,
+                        )
+                        cached = self._fft_time_cache_get(
+                            self._fft_time_cache_key(key_params))
+                    if cached is not None and analysis_key is not None:
+                        cache.put(analysis_key, cached)
             if cached is not None:
-                # Cache hit → render on THIS pane's canvas immediately
-                # (touch the LRU so it stays warm) — no worker needed.
-                cache.put(analysis_key, cached)
-                self._render_fft_time_on(page.pane_canvas(pane_idx), cached, p)
+                last_cached_nfft = render_p.get(
+                    'nfft_effective', render_p.get('nfft'))
+                self._render_fft_time_on(
+                    page.pane_canvas(pane_idx), cached, render_p)
             else:
                 queue.append((pane_idx, fid, ch))
 
@@ -4054,7 +4228,11 @@ class MainWindow(QMainWindow):
                 self._do_fft_time_single(force=force)
                 return
             self.statusBar.showMessage(
-                "使用缓存结果 · NFFT %s" % p.get('nfft'))
+                "使用缓存结果 · NFFT %s" % (
+                    last_cached_nfft
+                    if last_cached_nfft is not None
+                    else p.get('nfft_effective', p.get('nfft'))
+                ))
             return
 
         self._fft_time_queue = queue
@@ -4099,10 +4277,11 @@ class MainWindow(QMainWindow):
             time_range = (float(lo), float(hi))
         else:
             time_range = (float(t[0]), float(t[-1]))
+        p = self._resolve_fft_time_effective_params(p, len(sig))
         key_params = dict(p, fid=fid, channel=ch, time_range=time_range)
         key = self._fft_time_cache_key(key_params)
-        analysis_key = self._analysis_cache_key(
-            'fft_time', fid, ch, pane_idx=pane_idx)
+        analysis_key = self._fft_time_analysis_cache_key(
+            fid, ch, p, pane_idx)
         cached = None if force else self._fft_time_cache_get(key)
         if cached is None and not force:
             cached = self.analysis_caches['fft_time'].get(analysis_key)
@@ -4112,12 +4291,13 @@ class MainWindow(QMainWindow):
             self._render_fft_time(cached, p)
             self.statusBar.showMessage(
                 "使用缓存结果 · "
-                f"{cached.metadata.get('frames', 0)} frames · NFFT {p['nfft']}"
+                f"{cached.metadata.get('frames', 0)} frames · "
+                f"NFFT {p['nfft_effective']}"
             )
             return
         params = SpectrogramParams(
             fs=float(p['fs']),
-            nfft=int(p['nfft']),
+            nfft=int(p['nfft_effective']),
             window=str(p['window']),
             overlap=float(p['overlap']),
             remove_mean=bool(p['remove_mean']),
@@ -4194,16 +4374,17 @@ class MainWindow(QMainWindow):
             effective_time_range = rng
         else:
             effective_time_range = (float(t[0]), float(t[-1]))
+        p = self._resolve_fft_time_effective_params(p, len(sig))
         key_params = dict(
             p, fid=fid, channel=ch, time_range=effective_time_range)
         key = self._fft_time_cache_key(key_params)
-        analysis_key = self._analysis_cache_key(
-            'fft_time', fid, ch, pane_idx=pane_idx)
+        analysis_key = self._fft_time_analysis_cache_key(
+            fid, ch, p, pane_idx)
         # SpectrogramParams is the cache key on the analyzer side; build
         # it from compute-relevant fields only.
         params = SpectrogramParams(
             fs=float(p['fs']),
-            nfft=int(p['nfft']),
+            nfft=int(p['nfft_effective']),
             window=str(p['window']),
             overlap=float(p['overlap']),
             remove_mean=bool(p['remove_mean']),
@@ -4260,7 +4441,13 @@ class MainWindow(QMainWindow):
         thread.finished.connect(self._on_fft_time_thread_done)
         self._fft_time_thread = thread
         self._fft_time_worker = worker
-        self.statusBar.showMessage("正在计算…")
+        pending = getattr(self, '_fft_time_pending', None) or {}
+        p = pending.get('render_params') or {}
+        nfft = p.get('nfft_effective', p.get('nfft'))
+        if nfft is not None:
+            self.statusBar.showMessage(f"正在计算… · NFFT {nfft}")
+        else:
+            self.statusBar.showMessage("正在计算…")
         thread.start()
 
     def _render_fft_time(self, result, p):
@@ -4274,7 +4461,10 @@ class MainWindow(QMainWindow):
     def _render_fft_time_on(self, canvas, result, p):
         """Multi-pane variant: render ``result`` on an arbitrary FFT-vs-Time
         heatmap canvas with display options from ``p``."""
-        freq_range = self._normalize_freq_range(p)
+        if bool(p.get('freq_auto', p.get('y_auto', True))):
+            freq_range = self._fft_time_auto_freq_range(result)
+        else:
+            freq_range = self._normalize_freq_range(p)
         # Wave 5: legacy ``dynamic: str`` is gone; we forward the explicit
         # z_auto / z_floor / z_ceiling triplet that FFTTimeContextual now
         # emits, plus y_auto / y_min / y_max for the manual Y override
@@ -4339,8 +4529,11 @@ class MainWindow(QMainWindow):
                 self._render_fft_time_on(page.pane_canvas(pane_idx), result, p)
             else:
                 self._render_fft_time(result, p)
+        nfft = getattr(getattr(result, 'params', None), 'nfft', None)
+        suffix = f" · NFFT {int(nfft)}" if nfft is not None else ""
         self.statusBar.showMessage(
             f"FFT vs Time 完成 · {result.metadata.get('frames', 0)} frames"
+            f"{suffix}"
         )
 
     def _on_fft_time_failed(self, message):

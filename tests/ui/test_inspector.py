@@ -277,8 +277,48 @@ def test_collapsible_param_section_defaults_collapsed_persists_and_keeps_persist
     assert not restored_body.isVisible()
 
 
+def test_collapsible_param_section_background_hosts_have_qss_contract(qapp):
+    from pathlib import Path
+    from PyQt5.QtWidgets import QFrame, QWidget
+    from mf4_analyzer.ui.inspector_sections import _CollapsibleParamSection
+    import mf4_analyzer.ui_kit as ui_kit
+
+    section = _CollapsibleParamSection("谱参数", "tests/params_style_contract")
+
+    hosts = [
+        (section, "inspectorParamSection"),
+        (section.findChild(QWidget, "inspectorParamHeader"), "inspectorParamHeader"),
+        (
+            section.findChild(QWidget, "inspectorParamPersistentHost"),
+            "inspectorParamPersistentHost",
+        ),
+        (section.findChild(QFrame, "inspectorParamBody"), "inspectorParamBody"),
+    ]
+    for widget, object_name in hosts:
+        assert widget is not None
+        assert widget.objectName() == object_name
+
+    qss = (Path(ui_kit.__file__).resolve().parent / "style.qss").read_text(
+        encoding="utf-8"
+    )
+    for selector in (
+        "Inspector QWidget#inspectorParamSection",
+        "Inspector QWidget#inspectorParamHeader",
+        "Inspector QWidget#inspectorParamPersistentHost",
+        "Inspector QWidget#inspectorPresetBar",
+        "Inspector QFrame#inspectorParamBody",
+    ):
+        assert selector in qss
+    assert "background-color: transparent;" in qss[
+        qss.index("Inspector QWidget#inspectorParamSection"):
+        qss.index("Inspector QToolButton#inspectorCollapser")
+    ]
+
+
 def _param_section_summary(ctx, kind):
-    if kind in ("fft", "fft_time"):
+    if kind == "fft_time":
+        return ctx._tf_summary_text()
+    if kind == "fft":
         return (
             f"{ctx.combo_nfft.currentText()} · "
             f"{ctx.combo_win.currentText()} · "
@@ -411,6 +451,7 @@ def test_contextual_param_sections_are_merged_collapsed_and_summarized(
         assert collapser.text() == title
         assert section.is_expanded() is False
         assert getattr(ctx, helper_name)() is False
+        assert ctx.preset_bar.objectName() == "inspectorPresetBar"
         assert ctx.preset_bar.isVisible()
         assert not ctx.combo_nfft.isVisible()
         assert section.summary_text() == _param_section_summary(ctx, kind)
@@ -637,28 +678,34 @@ def test_fft_time_context_builtin_presets(qtbot):
 
     ctx = FFTTimeContextual()
     qtbot.addWidget(ctx)
-    # 扭矩类: flattop / 2048 / 75% overlap / linear amplitude / Auto dynamic.
+    # 扭矩类: flattop / auto 2.5 s / 75% overlap / dB amplitude / Auto dynamic.
     ctx.apply_builtin_preset('torque')
     params = ctx.get_params()
 
     assert params['window'] == 'flattop'
-    assert params['nfft'] == 2048
+    assert params['nfft'] is None
+    assert params['nfft_mode'] == 'auto'
+    assert params['t_win_s'] == 2.5
     assert params['overlap'] == 0.75
-    assert params['amplitude_mode'] == 'amplitude'
+    assert params['amplitude_mode'] == 'amplitude_db'
 
-    # 振动类: hanning / 2048 / 50% / dB / 80 dB dynamic.
+    # 振动类: hanning / auto 1.5 s / 50% / dB / 80 dB dynamic.
     ctx.apply_builtin_preset('vibration')
     p_vib = ctx.get_params()
     assert p_vib['window'] == 'hanning'
-    assert p_vib['nfft'] == 2048
+    assert p_vib['nfft'] is None
+    assert p_vib['nfft_mode'] == 'auto'
+    assert p_vib['t_win_s'] == 1.5
     assert p_vib['overlap'] == 0.50
     assert p_vib['dynamic'] == '80 dB'
 
-    # 启停类: hanning / 1024 / 75% / dB / 60 dB dynamic.
+    # 启停类: hanning / auto 0.6 s / 75% / dB / 60 dB dynamic.
     ctx.apply_builtin_preset('transient')
     p_tr = ctx.get_params()
     assert p_tr['window'] == 'hanning'
-    assert p_tr['nfft'] == 1024
+    assert p_tr['nfft'] is None
+    assert p_tr['nfft_mode'] == 'auto'
+    assert p_tr['t_win_s'] == 0.6
     assert p_tr['overlap'] == 0.75
     assert p_tr['dynamic'] == '60 dB'
 
@@ -1399,12 +1446,13 @@ def test_fft_time_preset_bar_reset_restores_builtin(qtbot):
     # Reset slot 1.
     ctx.preset_bar._reset_to_default(1)
     # Mutate then load slot 1 — should now apply the builtin 扭矩类 preset
-    # (nfft=2048, window=flattop, overlap=75).
+    # (auto NFFT, window=flattop, overlap=75).
     ctx.combo_nfft.setCurrentText('8192')
     ctx.combo_win.setCurrentText('blackman')
     ctx.spin_overlap.setValue(10)
     ctx.preset_bar._load(1)
-    assert ctx.combo_nfft.currentText() == '2048'
+    assert ctx.combo_nfft.currentText() == '自动'
+    assert ctx._t_win_s == 2.5
     assert ctx.combo_win.currentText() == 'flattop'
     assert ctx.spin_overlap.value() == 75
 
@@ -1419,17 +1467,23 @@ def test_fft_time_apply_builtin_preset_still_accepts_legacy_keys(qtbot):
     ctx.apply_builtin_preset('amplitude_accuracy')
     p = ctx.get_params()
     assert p['window'] == 'flattop'
-    assert p['nfft'] == 2048
+    assert p['nfft'] is None
+    assert p['nfft_mode'] == 'auto'
+    assert p['t_win_s'] == 2.5
 
     ctx.apply_builtin_preset('diagnostic')
     p = ctx.get_params()
-    assert p['nfft'] == 2048
+    assert p['nfft'] is None
+    assert p['nfft_mode'] == 'auto'
+    assert p['t_win_s'] == 1.5
     assert p['window'] == 'hanning'
     assert p['overlap'] == 0.50
 
     ctx.apply_builtin_preset('high_frequency')
     p = ctx.get_params()
-    assert p['nfft'] == 1024
+    assert p['nfft'] is None
+    assert p['nfft_mode'] == 'auto'
+    assert p['t_win_s'] == 0.6
     assert p['dynamic'] == '60 dB'
 
 
@@ -1940,7 +1994,10 @@ def test_fft_time_defaults_match_requested_screenshot(qtbot):
     qtbot.addWidget(ctx)
 
     params = ctx.get_params()
-    assert params['nfft'] == 1024
+    assert params['nfft'] is None
+    assert params['nfft_mode'] == 'auto'
+    assert params['t_win_s'] == 1.5
+    assert params['nfft_preview'] == 2048
     assert params['window'] == 'hanning'
     assert params['overlap'] == 0.80
     assert params['remove_mean'] is True
@@ -2026,6 +2083,7 @@ def test_fft_preset_collects_extended_analysis_params(qapp):
     w = FFTContextual()
     w.combo_win.setCurrentText('flattop')
     w.combo_nfft.setCurrentText('4096')
+    w._t_win_s = 2.5
     w.spin_overlap.setValue(25)
     w.combo_avg_mode.setCurrentText('线性平均')
     w.spin_avg_overlap.setValue(75)
@@ -2035,6 +2093,7 @@ def test_fft_preset_collects_extended_analysis_params(qapp):
 
     assert p['window'] == 'flattop'
     assert p['nfft'] == '4096'
+    assert p['t_win_s'] == 2.5
     assert p['overlap'] == 25
     assert p['avg_mode'] == '线性平均'
     assert p['avg_overlap'] == 75
@@ -2048,7 +2107,9 @@ def test_fft_preset_applies_extended_analysis_params(qapp):
 
     w._apply_preset({
         'window': 'blackman',
-        'nfft': '8192',
+        'nfft': '自动',
+        'nfft_mode': 'auto',
+        't_win_s': 0.6,
         'overlap': 35,
         'avg_mode': '峰值保持',
         'avg_overlap': 88,
@@ -2056,11 +2117,32 @@ def test_fft_preset_applies_extended_analysis_params(qapp):
     })
 
     assert w.combo_win.currentText() == 'blackman'
-    assert w.combo_nfft.currentText() == '8192'
+    assert w.combo_nfft.currentText() == '自动'
+    assert w._t_win_s == 0.6
     assert w.spin_overlap.value() == 35
     assert w.combo_avg_mode.currentText() == '峰值保持'
     assert w.spin_avg_overlap.value() == 88
     assert w.combo_amp_y.currentText() == 'dB'
+
+
+def test_fft_preset_apply_legacy_fixed_nfft_without_t_win(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    w = FFTContextual()
+    w._apply_preset({
+        'window': 'hanning',
+        'nfft': '4096',
+        'overlap': 50,
+        'avg_mode': '线性平均',
+        'avg_overlap': 75,
+        'amp_y': 'dB',
+    })
+
+    assert w.combo_nfft.currentText() == '4096'
+    p = w.current_params()
+    assert p['nfft'] == 4096
+    assert p['nfft_mode'] == 'fixed'
+    assert p['t_win_s'] == 1.5
 
 
 # ---- Task 2.2: averaging routes through DSP helpers ----
@@ -2230,14 +2312,12 @@ def test_fft_auto_xlim_keeps_low_frequency_spectrum_tight():
 
     freq = np.linspace(0.0, 25.0, 251)
     amp = np.zeros_like(freq)
-    meaningful = (freq >= 1.0) & (freq <= 8.0)
-    amp[meaningful] = 1.0
-    amp[freq > 8.0] = 0.005
+    amp[np.argmin(np.abs(freq - 1.0))] = 1.0
 
     xmax = MainWindow._fft_auto_xlim(freq, amp)
 
-    assert xmax > 8.0
-    assert xmax <= 10.0
+    assert xmax >= 2.0
+    assert xmax == 5.0
     assert xmax <= freq[-1]
 
 
@@ -2258,8 +2338,7 @@ def test_plot_fft_entries_auto_xlim_includes_all_overlay_sources(qtbot):
 
     def amp_through(cutoff):
         amp = np.zeros_like(freq)
-        amp[(freq >= 1.0) & (freq <= cutoff)] = 1.0
-        amp[freq > cutoff] = 0.005
+        amp[np.argmin(np.abs(freq - cutoff))] = 1.0
         return amp
 
     win = MainWindow()
@@ -2267,17 +2346,16 @@ def test_plot_fft_entries_auto_xlim_includes_all_overlay_sources(qtbot):
     freq = np.linspace(0.0, 25.0, 251)
     entries = [
         {"label": "low", "color": "#2563eb", "freq": freq,
-         "amp": amp_through(8.0), "time": [], "signal": []},
+         "amp": amp_through(1.0), "time": [], "signal": []},
         {"label": "higher", "color": "#dc2626", "freq": freq,
-         "amp": amp_through(12.0), "time": [], "signal": []},
+         "amp": amp_through(3.0), "time": [], "signal": []},
     ]
     canvas = _Canvas()
 
     win._plot_fft_entries(entries, canvas)
 
     xmax = canvas.plot_kwargs["xlim"][1]
-    assert xmax > 12.0
-    assert xmax <= 15.0
+    assert xmax == 20.0
     assert xmax <= freq[-1]
 
 
@@ -2300,8 +2378,7 @@ def test_plot_fft_entries_auto_xlim_uses_raw_amp_in_db_mode(qtbot):
     win.inspector.fft_ctx.combo_amp_y.setCurrentText("dB")
     freq = np.linspace(0.0, 25.0, 251)
     amp = np.zeros_like(freq)
-    amp[(freq >= 1.0) & (freq <= 8.0)] = 1.0
-    amp[freq > 8.0] = 0.005
+    amp[np.argmin(np.abs(freq - 1.0))] = 1.0
     amp_db = 20 * np.log10(
         np.clip(amp, 1e-12, None) / max(amp.max(), 1e-12)
     )
@@ -2319,8 +2396,7 @@ def test_plot_fft_entries_auto_xlim_uses_raw_amp_in_db_mode(qtbot):
     win._plot_fft_entries(entries, canvas)
 
     xmax = canvas.plot_kwargs["xlim"][1]
-    assert xmax > 8.0
-    assert xmax <= 10.0
+    assert xmax == 5.0
 
 
 def test_fft_render_honors_amplitude_axis_toggle(qtbot):
@@ -3757,9 +3833,40 @@ def test_fft_time_apply_params_partial(qtbot):
     after = ctx.get_params()
     assert after['nfft'] == 4096
     for key, val in before.items():
-        if key == 'nfft':
+        if key in {'nfft', 'nfft_mode', 'nfft_preview', 'nfft_effective'}:
             continue
         assert after[key] == val, f"partial apply mutated unrelated key {key!r}"
+
+
+def test_fft_time_auto_nfft_params_are_preview_only(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+
+    assert ctx.combo_nfft.findText("自动") >= 0
+    assert ctx.combo_nfft.currentText() == "自动"
+
+    p = ctx.get_params()
+    assert p["nfft"] is None
+    assert p["nfft_mode"] == "auto"
+    assert p["t_win_s"] == 1.5
+    assert p["nfft_preview"] == 2048
+    assert "自动(" in ctx._tf_summary_text()
+
+
+def test_fft_time_fixed_nfft_params_still_return_int(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    ctx.combo_nfft.setCurrentText("4096")
+
+    p = ctx.get_params()
+    assert p["nfft"] == 4096
+    assert isinstance(p["nfft"], int)
+    assert p["nfft_mode"] == "fixed"
+    assert p["nfft_effective"] == 4096
 
 
 # ---- Signal-type built-in presets + per-unit 推荐 highlight ----
@@ -3838,15 +3945,15 @@ def test_fft_builtin_presets_apply_through_combos(qapp):
     fc = FFTContextual()
     expected = {
         'torque': dict(
-            window='flattop', nfft='4096', overlap=75,
-            amp_y='Linear', avg_mode='线性平均', avg_overlap=75,
+            window='flattop', nfft='自动', t_win_s=2.5, overlap=75,
+            amp_y='dB', avg_mode='线性平均', avg_overlap=75,
         ),
         'vibration': dict(
-            window='hanning', nfft='2048', overlap=50,
+            window='hanning', nfft='自动', t_win_s=1.5, overlap=50,
             amp_y='dB', avg_mode='线性平均', avg_overlap=50,
         ),
         'transient': dict(
-            window='hanning', nfft='1024', overlap=75,
+            window='hanning', nfft='自动', t_win_s=0.6, overlap=75,
             amp_y='dB', avg_mode='峰值保持', avg_overlap=75,
         ),
     }
@@ -3860,6 +3967,15 @@ def test_fft_builtin_presets_apply_through_combos(qapp):
         assert _combo_text_hits(fc.combo_avg_mode, p['avg_mode']), (
             key, p['avg_mode'])
 
+    fc._apply_preset(fc._SIGNAL_BUILTIN_PRESETS['torque'])
+    assert fc.combo_nfft.currentText() == '自动'
+    assert fc.combo_amp_y.currentText() == 'dB'
+    assert fc._t_win_s == 2.5
+    params = fc.current_params()
+    assert params['nfft'] is None
+    assert params['nfft_mode'] == 'auto'
+    assert params['t_win_s'] == 2.5
+
 
 def test_order_builtin_presets_apply_through_combos(qapp):
     from mf4_analyzer.ui.inspector_sections import (
@@ -3869,7 +3985,7 @@ def test_order_builtin_presets_apply_through_combos(qapp):
     expected = {
         'torque': dict(
             max_order=20, order_res=0.05, time_res=0.10, nfft='4096',
-            samples_per_rev=256, amplitude_mode='Amplitude',
+            samples_per_rev=256, amplitude_mode='Amplitude dB',
         ),
         'vibration': dict(
             max_order=50, order_res=0.10, time_res=0.05, nfft='4096',
@@ -3889,6 +4005,11 @@ def test_order_builtin_presets_apply_through_combos(qapp):
         target = 'dB' if 'dB' in p['amplitude_mode'] else 'Linear'
         assert _combo_text_hits(oc.combo_amp_unit, target), (key, target)
 
+    oc._apply_preset(oc._SIGNAL_BUILTIN_PRESETS['torque'])
+    params = oc.current_params()
+    assert 'dB' in params['amplitude_mode']
+    assert params['nfft'] == 4096
+
 
 def test_fft_time_builtin_presets_apply_through_combos(qtbot):
     from mf4_analyzer.ui.inspector_sections import (
@@ -3898,17 +4019,17 @@ def test_fft_time_builtin_presets_apply_through_combos(qtbot):
     qtbot.addWidget(ctx)
     expected = {
         'torque': dict(
-            window='flattop', nfft=2048, overlap=75,
-            amplitude_mode='Amplitude', freq_auto=True,
+            window='flattop', t_win_s=2.5, overlap=75,
+            amplitude_mode='Amplitude dB', freq_auto=True,
             dynamic='Auto', cmap='viridis',
         ),
         'vibration': dict(
-            window='hanning', nfft=2048, overlap=50,
+            window='hanning', t_win_s=1.5, overlap=50,
             amplitude_mode='Amplitude dB', freq_auto=True,
             dynamic='80 dB', cmap='turbo',
         ),
         'transient': dict(
-            window='hanning', nfft=1024, overlap=75,
+            window='hanning', t_win_s=0.6, overlap=75,
             amplitude_mode='Amplitude dB', freq_auto=True,
             dynamic='60 dB', cmap='turbo',
         ),
@@ -3917,11 +4038,21 @@ def test_fft_time_builtin_presets_apply_through_combos(qtbot):
     for key in BUILTIN_PRESET_KEYS:
         p = ctx._BUILTIN_PRESETS[key]
         assert _combo_text_hits(ctx.combo_win, p['window']), (key, p['window'])
-        assert _combo_text_hits(ctx.combo_nfft, p['nfft']), (key, p['nfft'])
+        assert _combo_text_hits(ctx.combo_nfft, "自动")
         assert _combo_text_hits(ctx.combo_cmap, p['cmap']), (key, p['cmap'])
+        full = ctx._builtin_preset_full_params(key)
+        assert full['nfft'] == "自动"
+        assert full['nfft_mode'] == "auto"
+        assert full['t_win_s'] == p['t_win_s']
     assert ctx._builtin_preset_full_params('torque')['z_auto'] is True
     assert ctx._builtin_preset_full_params('vibration')['z_floor'] == -80.0
     assert ctx._builtin_preset_full_params('transient')['z_floor'] == -60.0
+
+    ctx.apply_builtin_preset('torque')
+    assert ctx.combo_nfft.currentText() == "自动"
+    assert ctx._t_win_s == 2.5
+    assert ctx.combo_amp_unit.currentText() == "dB"
+    assert "自动(" in ctx._tf_summary_text()
 
 
 def test_order_builtin_presets_respect_order_nyquist(qapp):

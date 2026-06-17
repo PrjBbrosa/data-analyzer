@@ -9,6 +9,434 @@ def test_main_window_constructs(qapp):
     assert w.inspector is not None
 
 
+def test_fft_time_effective_auto_nfft_resolves_before_cache_key(qapp, qtbot):
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    p = {
+        "fid": "f1",
+        "channel": "speed",
+        "time_range": (0.0, 52.1),
+        "fs": 96.0,
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": 1.5,
+        "overlap": 0.75,
+        "window": "hanning",
+        "remove_mean": True,
+        "db_reference": 1.0,
+    }
+    effective = w._resolve_fft_time_effective_params(p, 5002)
+
+    assert effective["nfft"] == 256
+    assert effective["nfft_effective"] == 256
+    assert effective["nfft_mode"] == "auto"
+    key = w._fft_time_cache_key(effective)
+    assert isinstance(key[4], int)
+    assert key[4] == 256
+
+    fixed = w._resolve_fft_time_effective_params(
+        dict(p, nfft=1024, nfft_mode="fixed"), 5002
+    )
+    assert fixed["nfft"] == 1024
+    assert fixed["nfft_effective"] == 1024
+    assert fixed["nfft_mode"] == "fixed"
+
+
+def test_fft_time_analysis_cache_key_auto_uses_effective_nfft(
+    qapp, qtbot, monkeypatch
+):
+    import json
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    t = np.arange(5002, dtype=float) / 96.0
+    sig = np.sin(2.0 * np.pi * 3.0 * t)
+    w.files["f1"] = SimpleNamespace(
+        data=pd.DataFrame({"speed": sig}),
+        time_array=t,
+        channel_units={"speed": "rpm"},
+    )
+    params = {
+        "fs": 96.0,
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": 1.5,
+        "nfft_preview": 256,
+        "overlap": 0.75,
+        "window": "hanning",
+        "remove_mean": True,
+        "db_reference": 1.0,
+    }
+    monkeypatch.setattr(w.inspector.fft_time_ctx, "get_params", lambda: params)
+
+    generic_key = w._analysis_cache_key("fft_time", "f1", "speed", pane_idx=0)
+    effective = w._resolve_fft_time_effective_params(params, len(sig))
+    effective_key = w._fft_time_analysis_cache_key("f1", "speed", effective, 0)
+    key_params = json.loads(generic_key[2])
+
+    assert generic_key == effective_key
+    assert key_params["nfft"] == 256
+
+
+def test_fft_time_dispatch_uses_effective_auto_nfft(qapp, qtbot, monkeypatch):
+    import numpy as np
+    import pandas as pd
+    from types import SimpleNamespace
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    t = np.arange(5002, dtype=float) / 96.0
+    sig = np.sin(2.0 * np.pi * 3.0 * t)
+    w.files["f1"] = SimpleNamespace(
+        data=pd.DataFrame({"speed": sig}),
+        time_array=t,
+        channel_units={"speed": "rpm"},
+    )
+    monkeypatch.setattr(w, "_check_uniform_or_prompt", lambda *_args: True)
+    monkeypatch.setattr(
+        w.inspector.fft_time_ctx,
+        "get_params",
+        lambda: {
+            "fs": 96.0,
+            "nfft": None,
+            "nfft_mode": "auto",
+            "t_win_s": 1.5,
+            "overlap": 0.75,
+            "window": "hanning",
+            "remove_mean": True,
+            "db_reference": 1.0,
+            "amplitude_mode": "amplitude_db",
+            "cmap": "turbo",
+        },
+    )
+
+    seen = {}
+
+    from mf4_analyzer.signal import spectrogram as spectrogram_mod
+
+    def fake_compute(
+        _sig,
+        _time,
+        params,
+        channel_name="",
+        unit="",
+        progress_callback=None,
+        cancel_token=None,
+    ):
+        seen["nfft"] = params.nfft
+        seen["pending_nfft"] = w._fft_time_pending["render_params"]["nfft"]
+        seen["cache_key_nfft"] = w._fft_time_pending["cache_key"][4]
+        return object()
+
+    class DummyProgress:
+        def emit(self, *args):
+            pass
+
+    class DummyWorker:
+        progress = DummyProgress()
+        cancelled = False
+
+    monkeypatch.setattr(
+        spectrogram_mod.SpectrogramAnalyzer,
+        "compute",
+        staticmethod(fake_compute),
+    )
+    monkeypatch.setattr(
+        w, "_start_fft_time_worker", lambda job: job(DummyWorker())
+    )
+
+    assert w._dispatch_fft_time_job(0, "f1", "speed", time_range=None)
+    assert seen == {
+        "nfft": 256,
+        "pending_nfft": 256,
+        "cache_key_nfft": 256,
+    }
+
+
+def test_fft_time_render_auto_frequency_range_uses_energy_band(qapp, qtbot):
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    class Canvas:
+        def __init__(self):
+            self.kwargs = None
+
+        def plot_result(self, result, **kwargs):
+            self.kwargs = kwargs
+
+        def set_tick_density(self, xt, yt):
+            pass
+
+    freq = np.arange(0.0, 51.0, 1.0)
+    amp = np.zeros((freq.size, 4), dtype=float)
+    amp[1, :] = [0.2, 1.0, 0.5, 0.1]
+    result = SimpleNamespace(
+        times=np.arange(4, dtype=float),
+        frequencies=freq,
+        amplitude=amp,
+        params=SimpleNamespace(db_reference=1.0),
+        channel_name="speed",
+        unit="rpm",
+    )
+    p = {
+        "amplitude_mode": "amplitude",
+        "cmap": "turbo",
+        "freq_auto": True,
+        "x_auto": True,
+        "y_auto": True,
+        "z_auto": True,
+    }
+    canvas = Canvas()
+
+    w._render_fft_time_on(canvas, result, p)
+
+    assert canvas.kwargs["freq_range"] == (0.0, 5.0)
+
+
+def test_fft_time_render_manual_frequency_range_is_preserved(qapp, qtbot):
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    class Canvas:
+        def __init__(self):
+            self.kwargs = None
+
+        def plot_result(self, result, **kwargs):
+            self.kwargs = kwargs
+
+        def set_tick_density(self, xt, yt):
+            pass
+
+    freq = np.arange(0.0, 51.0, 1.0)
+    amp = np.zeros((freq.size, 2), dtype=float)
+    amp[1, :] = 1.0
+    result = SimpleNamespace(
+        times=np.arange(2, dtype=float),
+        frequencies=freq,
+        amplitude=amp,
+        params=SimpleNamespace(db_reference=1.0),
+        channel_name="speed",
+        unit="rpm",
+    )
+    p = {
+        "amplitude_mode": "amplitude",
+        "cmap": "turbo",
+        "freq_auto": False,
+        "freq_min": 2.0,
+        "freq_max": 12.0,
+        "x_auto": True,
+        "y_auto": False,
+        "z_auto": True,
+    }
+    canvas = Canvas()
+
+    w._render_fft_time_on(canvas, result, p)
+
+    assert canvas.kwargs["freq_range"] == (2.0, 12.0)
+
+
+def test_fft_effective_auto_nfft_resolves_for_average_modes(qapp, qtbot):
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    base = {
+        "window": "hanning",
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": 1.5,
+        "avg_mode": "线性平均",
+        "avg_overlap": 75,
+    }
+
+    linear = w._resolve_fft_effective_params(base, 5002, 96.0)
+    assert linear["nfft"] == 256
+    assert linear["nfft_effective"] == 256
+    assert linear["nfft_mode"] == "auto"
+
+    peak_hold = w._resolve_fft_effective_params(
+        dict(base, avg_mode="峰值保持"), 5002, 96.0
+    )
+    assert peak_hold["nfft"] == 256
+    assert peak_hold["nfft_effective"] == 256
+
+    high_fs = w._resolve_fft_effective_params(base, 60000, 1000.0)
+    assert high_fs["nfft"] == 2048
+    assert high_fs["nfft_effective"] == 2048
+
+    single_frame = w._resolve_fft_effective_params(
+        dict(base, avg_mode="单帧"), 5002, 96.0
+    )
+    assert single_frame["nfft"] is None
+    assert single_frame["nfft_effective"] is None
+    assert single_frame["nfft_mode"] == "auto"
+
+
+def test_fft_compute_arrays_uses_effective_nfft_for_auto_average(
+    qapp, qtbot, monkeypatch
+):
+    import numpy as np
+
+    from mf4_analyzer.ui import main_window as main_window_mod
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    sig = np.ones(5002, dtype=float)
+    seen = {}
+
+    def fake_averaged(_sig, _fs, _win, nfft, _overlap):
+        seen["averaged"] = nfft
+        freq = np.arange(4, dtype=float)
+        amp = np.ones(4, dtype=float)
+        return freq, amp, amp ** 2
+
+    def fake_peak_hold(_sig, _fs, win, nfft, overlap):
+        seen["peak"] = nfft
+        return np.arange(4, dtype=float), np.ones(4, dtype=float)
+
+    monkeypatch.setattr(
+        main_window_mod.FFTAnalyzer,
+        "compute_averaged_fft",
+        staticmethod(fake_averaged),
+    )
+    monkeypatch.setattr(
+        main_window_mod.FFTAnalyzer,
+        "compute_peak_hold_fft",
+        staticmethod(fake_peak_hold),
+    )
+
+    params = {
+        "window": "hanning",
+        "nfft": None,
+        "nfft_effective": 256,
+        "avg_mode": "线性平均",
+        "avg_overlap": 75,
+    }
+    w._fft_compute_arrays(sig, 96.0, params)
+    w._fft_compute_arrays(sig, 96.0, dict(params, avg_mode="峰值保持"))
+
+    assert seen == {"averaged": 256, "peak": 256}
+
+
+def test_plot_fft_entries_auto_xlim_uses_energy_band_and_manual_stays_fixed(
+    qapp, qtbot, monkeypatch
+):
+    import numpy as np
+
+    from mf4_analyzer.signal import energy_band_fmax
+
+    class _Canvas:
+        def __init__(self):
+            self.plot_kwargs = None
+
+        def plot_spectra(self, entries, **kwargs):
+            self.plot_kwargs = kwargs
+
+        def set_tick_density(self, _xt, _yt):
+            pass
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    freq = np.linspace(0.0, 50.0, 501)
+    amp = np.zeros_like(freq)
+    amp[np.argmin(np.abs(freq - 1.0))] = 10.0
+    amp[np.argmin(np.abs(freq - 1.6))] = 4.0
+    entry = {
+        "label": "narrow",
+        "color": "#2563eb",
+        "freq": freq,
+        "amp": amp,
+        "time": [],
+        "signal": [],
+    }
+
+    auto_canvas = _Canvas()
+    w._plot_fft_entries([entry], auto_canvas)
+
+    auto_xmax = auto_canvas.plot_kwargs["xlim"][1]
+    assert auto_xmax == energy_band_fmax(freq, amp)
+    assert 2.0 <= auto_xmax < freq[-1] * 0.25
+
+    params = w.inspector.fft_ctx.current_params()
+    monkeypatch.setattr(
+        w.inspector.fft_ctx,
+        "current_params",
+        lambda: dict(params, x_auto=False, autoscale=False, x_min=0.0, x_max=80.0),
+    )
+    manual_canvas = _Canvas()
+    w._plot_fft_entries([entry], manual_canvas)
+
+    assert manual_canvas.plot_kwargs["xlim"] == (0.0, 80.0)
+
+
+def test_fft_auto_xlim_keeps_broadband_spectrum_near_nyquist(qapp, qtbot):
+    import numpy as np
+
+    from mf4_analyzer.signal import energy_band_fmax
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    freq = np.linspace(0.0, 50.0, 501)
+    amp = np.ones_like(freq)
+
+    assert w._fft_auto_xlim(freq, amp) == energy_band_fmax(freq, amp)
+    assert w._fft_auto_xlim(freq, amp) == freq[-1]
+
+
+def test_fft_analysis_cache_key_auto_uses_effective_nfft(qapp, qtbot, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    t_96 = np.arange(5002, dtype=float) / 96.0
+    t_1000 = np.arange(60000, dtype=float) / 1000.0
+    w.files["f96"] = SimpleNamespace(
+        data=pd.DataFrame({"sig": np.sin(2.0 * np.pi * 3.0 * t_96)}),
+        time_array=t_96,
+        fs=96.0,
+    )
+    w.files["f1000"] = SimpleNamespace(
+        data=pd.DataFrame({"sig": np.sin(2.0 * np.pi * 3.0 * t_1000)}),
+        time_array=t_1000,
+        fs=1000.0,
+    )
+    params = {
+        "window": "hanning",
+        "nfft": None,
+        "nfft_mode": "auto",
+        "t_win_s": 1.5,
+        "avg_mode": "线性平均",
+        "avg_overlap": 75,
+    }
+    monkeypatch.setattr(w.inspector.fft_ctx, "get_params", lambda: params)
+    monkeypatch.setattr(w.inspector.fft_ctx, "current_params", lambda: params)
+
+    key_96 = w._analysis_cache_key("fft", "f96", "sig", pane_idx=0)
+    key_1000 = w._analysis_cache_key("fft", "f1000", "sig", pane_idx=0)
+
+    params_96 = json.loads(key_96[2])
+    params_1000 = json.loads(key_1000[2])
+    assert params_96["nfft"] == 256
+    assert params_1000["nfft"] == 2048
+    assert key_96 != key_1000
+
+
 def test_main_window_moves_time_hints_to_status_line(qapp, qtbot):
     w = MainWindow()
     qtbot.addWidget(w)
@@ -481,6 +909,120 @@ def test_file_activation_updates_inspector_fs_and_range(qapp, qtbot, loaded_csv)
     assert w.inspector.order_ctx.fs() == pytest.approx(fd.fs, abs=0.01)
     # range limit upper bound should match time_array tail
     assert w.inspector.top.spin_end.maximum() >= fd.time_array[-1]
+
+
+def test_order_speed_suitability_helper_stable_rpm_does_not_warn(qtbot, monkeypatch):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    captured = []
+    monkeypatch.setattr(
+        win, 'toast',
+        lambda msg, level='info': captured.append((msg, level)),
+    )
+    win.statusBar.clearMessage()
+
+    assert win._warn_if_order_speed_unsuitable(np.full(64, 1200.0)) is True
+    assert captured == []
+    assert "转速" not in win.statusBar.currentMessage()
+
+
+def test_order_speed_suitability_helper_warns_for_bad_rpm(qtbot, monkeypatch):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    cases = [
+        np.array([1000.0, -1000.0, 1000.0, -1000.0, 1000.0, -1000.0]),
+        np.array([900.0, 0.0, 10.0, 20.0, 30.0, 900.0]),
+    ]
+
+    for rpm in cases:
+        captured = []
+        monkeypatch.setattr(
+            win, 'toast',
+            lambda msg, level='info', bucket=captured: bucket.append((msg, level)),
+        )
+        win.statusBar.clearMessage()
+
+        assert win._warn_if_order_speed_unsuitable(rpm) is False
+        assert any(level == 'warning' and "转速" in msg for msg, level in captured)
+        assert "转速" in win.statusBar.currentMessage()
+
+
+def test_order_dispatch_unsuitable_rpm_warns_but_starts_worker(
+    qtbot, monkeypatch
+):
+    import numpy as np
+    import pandas as pd
+    from types import SimpleNamespace
+    from PyQt5.QtCore import QThread
+    from mf4_analyzer.ui import main_window as mw_mod
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    n = 512
+    t = np.arange(n, dtype=float) / 1000.0
+    sig = np.sin(2.0 * np.pi * 12.0 * t)
+    rpm = np.tile([1000.0, -1000.0], n // 2)
+    win.files['f1'] = SimpleNamespace(
+        data=pd.DataFrame({'sig': sig, 'rpm': rpm}),
+        time_array=t,
+        channel_units={'sig': 'g', 'rpm': 'rpm'},
+    )
+
+    monkeypatch.setattr(win, '_pane_time_range_for', lambda *_args, **_kw: None)
+    monkeypatch.setattr(win.inspector.order_ctx, 'rpm_factor', lambda: 1.0)
+    monkeypatch.setattr(win.inspector.order_ctx, 'fs', lambda: 1000.0)
+    monkeypatch.setattr(
+        win.inspector.order_ctx,
+        'current_params',
+        lambda: {'samples_per_rev': 256, 'amplitude_mode': 'Amplitude dB'},
+    )
+    monkeypatch.setattr(
+        win.inspector.order_ctx,
+        'get_params',
+        lambda: {
+            'nfft': 256,
+            'window': 'hanning',
+            'max_order': 20.0,
+            'order_res': 0.05,
+            'time_res': 0.05,
+        },
+    )
+
+    captured = []
+    monkeypatch.setattr(
+        win, 'toast',
+        lambda msg, level='info': captured.append((msg, level)),
+    )
+
+    started_threads = []
+    QThreadBase = QThread
+
+    class RecordingThread(QThreadBase):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.started_called = False
+            started_threads.append(self)
+
+        def start(self, priority=QThreadBase.InheritPriority):
+            self.started_called = True
+
+    monkeypatch.setattr(mw_mod, 'QThread', RecordingThread)
+
+    assert win._dispatch_order_job(0, 'f1', 'sig', ('f1', 'rpm')) is True
+    assert started_threads and started_threads[0].started_called is True
+    assert any(level == 'warning' and "转速" in msg for msg, level in captured)
+    assert "转速" in win.statusBar.currentMessage()
+    btn_ot = getattr(win.inspector.order_ctx, 'btn_ot', None)
+    if btn_ot is not None:
+        assert btn_ot.isEnabled()
 
 
 def test_close_file_resets_inspector(qapp, qtbot, loaded_csv):
@@ -957,6 +1499,86 @@ def test_render_fft_time_on_requests_smooth_heatmap_interpolation(qtbot):
     win._render_fft_time_on(canvas, result=object(), p=_fft_time_base_params())
 
     assert canvas.kwargs["interp"] == "bilinear"
+
+
+def test_render_fft_time_on_auto_freq_range_uses_energy_band(qtbot):
+    import numpy as np
+
+    from mf4_analyzer.signal import energy_band_fmax
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    class _CaptureCanvas:
+        def __init__(self):
+            self.kwargs = None
+
+        def plot_result(self, result, **kwargs):
+            self.kwargs = dict(kwargs)
+
+        def set_tick_density(self, _x, _y):
+            pass
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    freq = np.linspace(0.0, 50.0, 501)
+    amp = np.zeros((freq.size, 3), dtype=np.float32)
+    amp[np.argmin(np.abs(freq - 1.0)), :] = (2.0, 8.0, 3.0)
+    amp[np.argmin(np.abs(freq - 1.8)), :] = (1.0, 4.0, 0.5)
+    result = SpectrogramResult(
+        times=np.array([0.0, 0.5, 1.0]),
+        frequencies=freq,
+        amplitude=amp,
+        params=SpectrogramParams(fs=100.0, nfft=100),
+        channel_name="narrow",
+        metadata={"frames": 3, "freq_bins": freq.size},
+    )
+
+    canvas = _CaptureCanvas()
+    win._render_fft_time_on(canvas, result, _fft_time_base_params())
+
+    representative_amp = np.nanmax(amp, axis=1)
+    expected = energy_band_fmax(freq, representative_amp)
+    assert canvas.kwargs["freq_range"] == (0.0, expected)
+    assert 2.0 <= expected < freq[-1] * 0.25
+
+
+def test_render_fft_time_on_manual_freq_range_is_preserved(qtbot):
+    import numpy as np
+
+    from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    class _CaptureCanvas:
+        def __init__(self):
+            self.kwargs = None
+
+        def plot_result(self, result, **kwargs):
+            self.kwargs = dict(kwargs)
+
+        def set_tick_density(self, _x, _y):
+            pass
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    freq = np.linspace(0.0, 50.0, 51)
+    result = SpectrogramResult(
+        times=np.array([0.0, 1.0]),
+        frequencies=freq,
+        amplitude=np.ones((freq.size, 2), dtype=np.float32),
+        params=SpectrogramParams(fs=100.0, nfft=100),
+        channel_name="manual",
+    )
+    p = dict(
+        _fft_time_base_params(),
+        freq_auto=False,
+        freq_min=3.0,
+        freq_max=17.0,
+    )
+
+    canvas = _CaptureCanvas()
+    win._render_fft_time_on(canvas, result, p)
+
+    assert canvas.kwargs["freq_range"] == (3.0, 17.0)
 
 
 def test_fft_time_cache_hit_status(qtbot, monkeypatch):

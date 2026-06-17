@@ -913,6 +913,27 @@ Inspector QGroupBox#paramsSectionBody {
     padding-top: 9px;
     border-top: 1px solid #dfe5ee;
 }
+/* The merged preset/params section sits inside the tinted lower params card.
+ * Its wrapper widgets must not repaint the global QWidget/QFrame white or
+ * base-gray surfaces over that card; leave the #eef4ff panel visible through
+ * the header, persistent preset strip, and expanded body. */
+Inspector QWidget#inspectorParamSection,
+Inspector QWidget#inspectorParamHeader,
+Inspector QWidget#inspectorParamPersistentHost,
+Inspector QWidget#inspectorPresetBar,
+Inspector QFrame#inspectorParamBody {
+    background-color: transparent;
+}
+Inspector QToolButton#inspectorCollapser {
+    text-align: left;
+    padding: 4px 6px;
+    font-weight: 600;
+    border: none;
+    background-color: transparent;
+}
+Inspector QToolButton#inspectorCollapser:hover {
+    background-color: #eef2f7;
+}
 Inspector QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;

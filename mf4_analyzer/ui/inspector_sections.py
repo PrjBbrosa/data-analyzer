@@ -9,7 +9,6 @@ import json
 from html import escape
 
 from PyQt5.QtCore import QEvent, QPoint, QSettings, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -17,7 +16,6 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QFormLayout,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -229,6 +227,7 @@ class _CollapsibleParamSection(QWidget):
         parent=None,
     ):
         super().__init__(parent)
+        self.setObjectName("inspectorParamSection")
         self._settings = settings if settings is not None else _preset_settings()
         self._settings_key = settings_key
         self._expanded = _settings_bool(
@@ -243,6 +242,7 @@ class _CollapsibleParamSection(QWidget):
         root.setSpacing(6)
 
         header = QWidget(self)
+        header.setObjectName("inspectorParamHeader")
         header_lay = QHBoxLayout(header)
         header_lay.setContentsMargins(0, 0, 0, 0)
         header_lay.setSpacing(6)
@@ -278,12 +278,14 @@ class _CollapsibleParamSection(QWidget):
         root.addWidget(header)
 
         self._persistent_host = QWidget(self)
+        self._persistent_host.setObjectName("inspectorParamPersistentHost")
         self._persistent_lay = QVBoxLayout(self._persistent_host)
         self._persistent_lay.setContentsMargins(0, 0, 0, 0)
         self._persistent_lay.setSpacing(4)
         root.addWidget(self._persistent_host)
 
         self._body = QFrame(self)
+        self._body.setObjectName("inspectorParamBody")
         self._body_lay = QVBoxLayout(self._body)
         self._body_lay.setContentsMargins(0, 0, 0, 0)
         self._body_lay.setSpacing(0)
@@ -372,18 +374,20 @@ class _PresetHoverCard(QFrame):
         self._root = QVBoxLayout(self._panel)
         self._root.setContentsMargins(12, 11, 12, 10)
         self._root.setSpacing(8)
-        shadow = QGraphicsDropShadowEffect(self._panel)
-        shadow.setBlurRadius(34)
-        shadow.setOffset(0, 12)
-        shadow.setColor(QColor(15, 23, 42, 44))
-        self._panel.setGraphicsEffect(shadow)
+        # NOTE: no QGraphicsDropShadowEffect here. QGraphicsEffect ignores the
+        # screen devicePixelRatio (QTBUG-65035 and friends), so on fractional
+        # display scaling (125% / 150%, common on Windows) it renders the whole
+        # panel — text included — to a 1x offscreen pixmap and upscales it. That
+        # blurs the card and visually merges adjacent lines (title + subtitle
+        # piling on top of each other). The card's elevation now comes from the
+        # panel border alone, which is DPR-correct.
         self.setStyleSheet("""
             QFrame#presetHoverCard {
                 border: none;
                 background: transparent;
             }
             QFrame#presetHoverPanel {
-                border: 1px solid rgba(190, 203, 220, 210);
+                border: 1px solid rgba(160, 177, 200, 245);
                 border-radius: 8px;
                 background-color: #ffffff;
             }
@@ -673,6 +677,7 @@ class PresetBar(QWidget):
             docstring).
         """
         super().__init__(parent)
+        self.setObjectName("inspectorPresetBar")
         self._kind = kind
         self._collect = collect_fn
         self._apply = apply_fn
@@ -2107,12 +2112,14 @@ class FFTContextual(QWidget):
     rebuild_time_requested = pyqtSignal(object)
     remark_toggled = pyqtSignal(bool)
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
+    _AUTO_NFFT_LABEL = "自动"
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("fftContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._applying_preset = False
+        self._t_win_s = 1.5
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: the contextual is a transparent
         # host for two full-width cards (sig_card + params_card). Zero
@@ -2197,7 +2204,7 @@ class FFTContextual(QWidget):
         fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_nfft = QComboBox()
         self.combo_nfft.addItems(
-            ['自动', '512', '1024', '2048', '4096', '8192', '16384']
+            [self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192', '16384']
         )
         fl.addRow("NFFT:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_overlap = _no_buttons(QSpinBox())
@@ -2389,15 +2396,15 @@ class FFTContextual(QWidget):
     # ``amp_y`` ('Linear'/'dB'); 平均模式 text is 单帧/线性平均/峰值保持.
     _SIGNAL_BUILTIN_PRESETS = {
         'torque': dict(
-            window='flattop', nfft='4096', overlap=75,
-            amp_y='Linear', avg_mode='线性平均', avg_overlap=75,
+            window='flattop', nfft='自动', t_win_s=2.5, overlap=75,
+            amp_y='dB', avg_mode='线性平均', avg_overlap=75,
         ),
         'vibration': dict(
-            window='hanning', nfft='2048', overlap=50,
+            window='hanning', nfft='自动', t_win_s=1.5, overlap=50,
             amp_y='dB', avg_mode='线性平均', avg_overlap=50,
         ),
         'transient': dict(
-            window='hanning', nfft='1024', overlap=75,
+            window='hanning', nfft='自动', t_win_s=0.6, overlap=75,
             amp_y='dB', avg_mode='峰值保持', avg_overlap=75,
         ),
     }
@@ -2426,6 +2433,12 @@ class FFTContextual(QWidget):
         return dict(
             window=self.combo_win.currentText(),
             nfft=self.combo_nfft.currentText(),
+            nfft_mode=(
+                'auto'
+                if self.combo_nfft.currentText() == self._AUTO_NFFT_LABEL
+                else 'fixed'
+            ),
+            t_win_s=float(self._t_win_s),
             overlap=self.spin_overlap.value(),
             avg_mode=self.combo_avg_mode.currentText(),
             avg_overlap=self.spin_avg_overlap.value(),
@@ -2453,8 +2466,20 @@ class FFTContextual(QWidget):
             i = self.combo_win.findText(str(d['window']))
             if i >= 0:
                 self.combo_win.setCurrentIndex(i)
+        if 't_win_s' in d:
+            try:
+                self._t_win_s = float(d['t_win_s'])
+            except (TypeError, ValueError):
+                pass
         if 'nfft' in d:
-            i = self.combo_nfft.findText(str(d['nfft']))
+            if (
+                d.get('nfft_mode') == 'auto'
+                or d['nfft'] is None
+                or str(d['nfft']) == self._AUTO_NFFT_LABEL
+            ):
+                i = self.combo_nfft.findText(self._AUTO_NFFT_LABEL)
+            else:
+                i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
         if 'overlap' in d:
@@ -2527,9 +2552,14 @@ class FFTContextual(QWidget):
 
     def get_params(self):
         nfft_text = self.combo_nfft.currentText()
+        auto = nfft_text == self._AUTO_NFFT_LABEL
+        nfft = None if auto else int(nfft_text)
         return dict(
             window=self.combo_win.currentText(),
-            nfft=None if nfft_text == '自动' else int(nfft_text),
+            nfft=nfft,
+            nfft_mode='auto' if auto else 'fixed',
+            t_win_s=float(self._t_win_s),
+            nfft_effective=None if auto else nfft,
             overlap=self.spin_overlap.value() / 100.0,
             autoscale=self.chk_x_auto.isChecked(),
             x_auto=bool(self.chk_x_auto.isChecked()),
@@ -2566,8 +2596,20 @@ class FFTContextual(QWidget):
             i = self.combo_win.findText(str(d['window']))
             if i >= 0:
                 self.combo_win.setCurrentIndex(i)
+        if 't_win_s' in d:
+            try:
+                self._t_win_s = float(d['t_win_s'])
+            except (TypeError, ValueError):
+                pass
         if 'nfft' in d:
-            i = self.combo_nfft.findText(str(d['nfft']))
+            if (
+                d.get('nfft_mode') == 'auto'
+                or d['nfft'] is None
+                or str(d['nfft']) == self._AUTO_NFFT_LABEL
+            ):
+                i = self.combo_nfft.findText(self._AUTO_NFFT_LABEL)
+            else:
+                i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
         if 'overlap' in d:
@@ -2866,7 +2908,7 @@ class OrderContextual(QWidget):
     _SIGNAL_BUILTIN_PRESETS = {
         'torque': dict(
             max_order=20, order_res=0.05, time_res=0.10, nfft='4096',
-            samples_per_rev=256, amplitude_mode='Amplitude',
+            samples_per_rev=256, amplitude_mode='Amplitude dB',
         ),
         'vibration': dict(
             max_order=50, order_res=0.10, time_res=0.05, nfft='4096',
@@ -3219,12 +3261,14 @@ class FFTTimeContextual(QWidget):
     fft_time_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
+    _AUTO_NFFT_LABEL = "自动"
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("fftTimeContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._applying_preset = False
+        self._t_win_s = 1.5
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: transparent host for two
         # full-width cards (sig_card + params_card); spacing is the gutter.
@@ -3276,8 +3320,10 @@ class FFTTimeContextual(QWidget):
         fl = QFormLayout(g)
         _configure_form(fl)
         self.combo_nfft = QComboBox()
-        self.combo_nfft.addItems(['512', '1024', '2048', '4096', '8192'])
-        self.combo_nfft.setCurrentText('1024')
+        self.combo_nfft.addItems([
+            self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192',
+        ])
+        self.combo_nfft.setCurrentText(self._AUTO_NFFT_LABEL)
         fl.addRow("FFT 点数:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_win = QComboBox()
         self.combo_win.addItems(
@@ -3423,8 +3469,11 @@ class FFTTimeContextual(QWidget):
         return self._tf_section.is_expanded()
 
     def _tf_summary_text(self):
+        nfft_text = self.combo_nfft.currentText()
+        if nfft_text == self._AUTO_NFFT_LABEL:
+            nfft_text = f"{self._AUTO_NFFT_LABEL}({self._nfft_preview()})"
         return (
-            f"{self.combo_nfft.currentText()} · "
+            f"{nfft_text} · "
             f"{self.combo_win.currentText()} · "
             f"{self.spin_overlap.value()}%"
         )
@@ -3529,6 +3578,13 @@ class FFTTimeContextual(QWidget):
         self.spin_fs.blockSignals(True)
         self.spin_fs.setValue(float(fs))
         self.spin_fs.blockSignals(False)
+        self._refresh_tf_summary()
+
+    def _nfft_preview(self):
+        from ..signal import ceil_pow2
+
+        nfft = ceil_pow2(float(self.spin_fs.value()) * float(self._t_win_s))
+        return int(min(max(nfft, 64), 8192))
 
     def get_params(self):
         # Wave 4: amplitude_mode now derives from combo_amp_unit (the dB↔
@@ -3547,10 +3603,25 @@ class FFTTimeContextual(QWidget):
         else:
             span = abs(float(self.spin_z_floor.value()))
             dynamic_legacy = f"{int(round(span))} dB"
+        nfft_text = self.combo_nfft.currentText()
+        if nfft_text == self._AUTO_NFFT_LABEL:
+            nfft = None
+            nfft_mode = 'auto'
+            nfft_effective = None
+            nfft_preview = self._nfft_preview()
+        else:
+            nfft = int(nfft_text)
+            nfft_mode = 'fixed'
+            nfft_effective = nfft
+            nfft_preview = nfft
         params = dict(
             signal=self.combo_sig.currentData(),
             fs=self.spin_fs.value(),
-            nfft=int(self.combo_nfft.currentText()),
+            nfft=nfft,
+            nfft_mode=nfft_mode,
+            t_win_s=float(self._t_win_s),
+            nfft_preview=nfft_preview,
+            nfft_effective=nfft_effective,
             window=self.combo_win.currentText(),
             overlap=self.spin_overlap.value() / 100.0,
             remove_mean=self.chk_remove_mean.isChecked(),
@@ -3616,8 +3687,16 @@ class FFTTimeContextual(QWidget):
             i = self.combo_win.findText(str(d['window']))
             if i >= 0:
                 self.combo_win.setCurrentIndex(i)
+        if 't_win_s' in d:
+            try:
+                self._t_win_s = float(d['t_win_s'])
+            except (TypeError, ValueError):
+                pass
         if 'nfft' in d:
-            i = self.combo_nfft.findText(str(d['nfft']))
+            if d.get('nfft_mode') == 'auto' or d['nfft'] is None:
+                i = self.combo_nfft.findText(self._AUTO_NFFT_LABEL)
+            else:
+                i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
         if 'overlap' in d:
@@ -3724,16 +3803,16 @@ class FFTTimeContextual(QWidget):
     _BUILTIN_PRESETS = {
         'torque': dict(
             window='flattop',
-            nfft=2048,
+            t_win_s=2.5,
             overlap=75,
-            amplitude_mode='Amplitude',
+            amplitude_mode='Amplitude dB',
             freq_auto=True,
             dynamic='Auto',
             cmap='viridis',
         ),
         'vibration': dict(
             window='hanning',
-            nfft=2048,
+            t_win_s=1.5,
             overlap=50,
             amplitude_mode='Amplitude dB',
             freq_auto=True,
@@ -3742,7 +3821,7 @@ class FFTTimeContextual(QWidget):
         ),
         'transient': dict(
             window='hanning',
-            nfft=1024,
+            t_win_s=0.6,
             overlap=75,
             amplitude_mode='Amplitude dB',
             freq_auto=True,
@@ -3777,7 +3856,9 @@ class FFTTimeContextual(QWidget):
         # silently mutate.
         return {
             'window': cfg.get('window', 'hanning'),
-            'nfft': cfg.get('nfft', 2048),
+            'nfft': self._AUTO_NFFT_LABEL,
+            'nfft_mode': 'auto',
+            't_win_s': cfg.get('t_win_s', 1.5),
             'overlap': cfg.get('overlap', 75),
             'amplitude_mode': cfg.get('amplitude_mode', 'Amplitude dB'),
             'remove_mean': True,
@@ -3818,6 +3899,12 @@ class FFTTimeContextual(QWidget):
         return dict(
             window=self.combo_win.currentText(),
             nfft=self.combo_nfft.currentText(),
+            nfft_mode=(
+                'auto'
+                if self.combo_nfft.currentText() == self._AUTO_NFFT_LABEL
+                else 'fixed'
+            ),
+            t_win_s=float(self._t_win_s),
             overlap=self.spin_overlap.value(),
             amplitude_mode=amp_mode,
             remove_mean=self.chk_remove_mean.isChecked(),
@@ -3859,8 +3946,16 @@ class FFTTimeContextual(QWidget):
             i = self.combo_win.findText(str(d['window']))
             if i >= 0:
                 self.combo_win.setCurrentIndex(i)
+        if 't_win_s' in d:
+            try:
+                self._t_win_s = float(d['t_win_s'])
+            except (TypeError, ValueError):
+                pass
         if 'nfft' in d:
-            i = self.combo_nfft.findText(str(d['nfft']))
+            if d.get('nfft_mode') == 'auto' or d['nfft'] is None:
+                i = self.combo_nfft.findText(self._AUTO_NFFT_LABEL)
+            else:
+                i = self.combo_nfft.findText(str(d['nfft']))
             if i >= 0:
                 self.combo_nfft.setCurrentIndex(i)
         if 'overlap' in d:
