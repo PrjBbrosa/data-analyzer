@@ -380,7 +380,7 @@ def test_heatmap_default_interpolation_is_smooth(canvas):
     assert canvas._img.smooth_transform_enabled() is True
 
 
-def test_heatmap_context_menu_is_chinese_and_keeps_plot_options(canvas, monkeypatch):
+def test_heatmap_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch):
     canvas.register_mouse_mode_controller(_FakeMouseModeController())
     canvas.plot_or_update_heatmap(
         matrix=_mat(),
@@ -394,7 +394,7 @@ def test_heatmap_context_menu_is_chinese_and_keeps_plot_options(canvas, monkeypa
 
     assert menu is not None
     top = _menu_texts(menu)
-    assert "绘图选项" in top
+    assert "绘图选项" not in top  # hidden for now in fft_time / order
     assert "Plot Options" not in top
     assert "查看全部" in top
     assert "X 轴范围" in top

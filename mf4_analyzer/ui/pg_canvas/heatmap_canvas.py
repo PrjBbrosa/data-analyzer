@@ -952,7 +952,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             view_all_handler=self.reset_view_to_data_extents,
             y_autofit_handler=None,
             allow_y_grid=True,
-            keep_plot_options=True,
+            # Plot Options hidden for now in the fft_time / order sections
+            # (per request). Default is already False; set explicitly so the
+            # intentional "off for now" reads clearly and is easy to flip back.
+            keep_plot_options=False,
         )
 
     def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,

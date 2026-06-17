@@ -1008,7 +1008,7 @@ def test_empty_state_time_y_padded_off_top_frame(canvas):
     assert y1 > 1.0
 
 
-def test_fft_context_menu_is_chinese_and_keeps_plot_options(canvas, monkeypatch):
+def test_fft_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch):
     canvas.register_mouse_mode_controller(_FakeMouseModeController())
     canvas.plot_time_preview([_entry()], title='时域预览')
 
@@ -1016,7 +1016,7 @@ def test_fft_context_menu_is_chinese_and_keeps_plot_options(canvas, monkeypatch)
 
     assert menu is not None
     top = _menu_texts(menu)
-    assert "绘图选项" in top
+    assert "绘图选项" not in top  # hidden for now in the fft section
     assert "Plot Options" not in top
     assert "查看全部" in top
     assert "X 轴范围" in top

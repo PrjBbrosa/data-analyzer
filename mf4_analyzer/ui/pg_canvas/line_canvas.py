@@ -570,7 +570,10 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             # right-clicked — matches the time-domain 「Y 轴自适应」 entry.
             y_autofit_handler=lambda: self._fit_y_to_visible_x(plot),
             allow_y_grid=True,
-            keep_plot_options=True,
+            # Plot Options hidden for now in the fft section (per request).
+            # Default is already False; set explicitly so the intentional
+            # "off for now" reads clearly and is easy to flip back.
+            keep_plot_options=False,
         )
 
     def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
