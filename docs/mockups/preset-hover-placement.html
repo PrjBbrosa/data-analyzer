@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>预设 Hover 卡定位方案对照</title>
+<style>
+  :root{
+    --ink:#172033; --muted:#647086; --line:#d7e0ec; --line-strong:#b8c7da;
+    --blue:#0b73e7; --green:#0f9f6e; --soft-green:#e9f9f1;
+    --shadow:0 18px 42px rgba(31,45,71,.16);
+    --glass-shadow:0 22px 58px rgba(9,30,66,.22);
+    font-family:"Microsoft YaHei UI","PingFang SC","Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:linear-gradient(180deg,#eaf1fb,#f4f7fb 320px);color:var(--ink);padding:26px;}
+  h1{font-size:21px;margin:0 0 4px;}
+  .lead{color:var(--muted);margin:0 0 22px;line-height:1.6;max-width:900px;}
+  .cases{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start;}
+  .case h2{font-size:15px;margin:0 0 10px;display:flex;align-items:center;gap:8px;}
+  .tag{font-size:12px;font-weight:700;padding:2px 9px;border-radius:999px;}
+  .tag.bad{background:#fdecec;color:#c0392b;}
+  .tag.good{background:var(--soft-green);color:#047857;}
+
+  .app{position:relative;display:grid;grid-template-columns:1fr 296px;height:430px;
+       background:#fff;border:1px solid var(--line);border-radius:9px;box-shadow:var(--shadow);overflow:hidden;}
+  .chart{position:relative;background:
+      linear-gradient(180deg,rgba(255,255,255,.95),rgba(247,250,255,.95)),
+      repeating-linear-gradient(0deg,transparent 0 38px,rgba(148,163,184,.16) 39px),
+      repeating-linear-gradient(90deg,transparent 0 50px,rgba(148,163,184,.13) 51px);
+      border-right:1px solid var(--line);}
+  .chart .axisx{position:absolute;left:42%;bottom:12px;color:#56657d;font-size:12px;}
+  .chart .label{position:absolute;left:16px;top:14px;color:#8493a8;font-size:12px;}
+
+  .inspector{padding:12px 12px 16px;background:linear-gradient(180deg,#eef5ff,#f8fbff 38%,#fff);overflow:hidden;}
+  .sec{margin-bottom:13px;}
+  .sec > .h{display:flex;align-items:center;gap:6px;padding-bottom:7px;margin-bottom:9px;
+            border-bottom:1px solid #dfe7f2;font-weight:700;font-size:14px;}
+  .sec > .h .arrow{color:#7c8aa0;font-size:11px;}
+  .sec > .h .sum{margin-left:auto;color:#8493a8;font-size:11px;font-weight:500;}
+  .presets{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:4px 0 2px;}
+  .preset{height:40px;border:1px solid var(--line-strong);border-radius:7px;background:#fff;
+          color:#064a98;font-weight:700;font-size:13px;display:grid;place-items:center;}
+  .preset.hot{border-color:var(--blue);box-shadow:0 6px 16px rgba(11,115,231,.18);}
+  .field{display:grid;grid-template-columns:64px 1fr;gap:8px;align-items:center;margin:7px 0;}
+  .field label{text-align:right;color:#46556d;font-weight:600;font-size:13px;}
+  .field .ctrl{height:30px;border:1px solid var(--line);border-radius:6px;background:#fff;
+               display:flex;align-items:center;padding:0 9px;color:#33405a;font-size:13px;}
+
+  /* hover card */
+  .card{position:absolute;width:300px;border:1px solid rgba(190,203,220,.85);border-radius:8px;
+        background:#fff;box-shadow:var(--glass-shadow);padding:12px;z-index:30;}
+  .card .ch{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+  .card .tt{font-size:15px;font-weight:800;}
+  .card .sub{color:var(--muted);font-size:12px;margin-top:2px;}
+  .badge{background:var(--soft-green);color:#047857;font-weight:700;font-size:12px;
+         padding:3px 8px;border-radius:999px;white-space:nowrap;}
+  .card .grp{margin-top:9px;border:1px solid #d5dfeb;border-radius:7px;background:rgba(248,251,255,.9);padding:8px;}
+  .card .grp h3{margin:0 0 6px;color:#1f3b63;font-size:12px;}
+  .chips{display:flex;flex-wrap:wrap;gap:5px;}
+  .chip{border:1px solid #d5dfeb;border-radius:9px;background:#f1f6fc;padding:3px 7px;font-size:12px;}
+  .chip .k{color:#61708a;}.chip .v{color:var(--blue);font-weight:800;}
+
+  /* placement: current (overlaps inspector) */
+  .pos-overlap{right:14px;top:150px;}
+  /* placement: option A (floats left, over chart) */
+  .pos-left{right:312px;top:96px;}
+  .pointer{position:absolute;width:10px;height:10px;background:#fff;border:1px solid rgba(190,203,220,.85);
+           transform:rotate(45deg);}
+  .pointer.right{right:-6px;top:30px;border-left:none;border-bottom:none;}
+
+  .note{margin-top:18px;padding:12px 14px;border:1px solid #cfe1fb;border-radius:8px;
+        background:#f2f7ff;color:#34445d;line-height:1.6;font-size:13px;}
+  .note b{color:#0b63ce;}
+</style>
+</head>
+<body>
+  <h1>预设 Hover 预览卡 · 定位方案对照</h1>
+  <p class="lead">左：现状——卡片落到按钮下方，压住 Inspector 的「坐标轴设置」等文字（截图里的“堆叠”）。右：方案 A——卡片浮向 Inspector 左侧、悬在图表区上方，与按钮所在行垂直对齐，永不遮挡 Inspector 文本。</p>
+
+  <div class="cases">
+    <!-- ===== 现状 ===== -->
+    <div class="case">
+      <h2>现状 <span class="tag bad">文字堆叠</span></h2>
+      <div class="app">
+        <div class="chart"><span class="label">FFT 频谱</span><span class="axisx">Frequency (Hz)</span></div>
+        <div class="inspector">
+          <div class="sec">
+            <div class="h"><span class="arrow">▶</span>谱参数<span class="sum">自动 · hanning · 50%</span></div>
+            <div class="presets">
+              <div class="preset">扭矩类</div>
+              <div class="preset hot">振动类</div>
+              <div class="preset">启停类</div>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="h">坐标轴设置</div>
+            <div class="field"><label>X</label><div class="ctrl">自动范围</div></div>
+            <div class="field"><label>Y</label><div class="ctrl">自动范围</div></div>
+          </div>
+        </div>
+
+        <div class="card pos-overlap">
+          <div class="ch">
+            <div><div class="tt">振动类</div><div class="sub">已保存参数快照 · 来源：FFT</div></div>
+            <span class="badge">内置</span>
+          </div>
+          <div class="grp"><h3>分析参数</h3>
+            <div class="chips">
+              <span class="chip"><span class="k">窗</span> <span class="v">hanning</span></span>
+              <span class="chip"><span class="k">NFFT</span> <span class="v">4096</span></span>
+              <span class="chip"><span class="k">重叠</span> <span class="v">50%</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 方案 A ===== -->
+    <div class="case">
+      <h2>方案 A：左侧浮出 <span class="tag good">推荐</span></h2>
+      <div class="app">
+        <div class="chart"><span class="label">FFT 频谱</span><span class="axisx">Frequency (Hz)</span></div>
+        <div class="inspector">
+          <div class="sec">
+            <div class="h"><span class="arrow">▶</span>谱参数<span class="sum">自动 · hanning · 50%</span></div>
+            <div class="presets">
+              <div class="preset">扭矩类</div>
+              <div class="preset hot">振动类</div>
+              <div class="preset">启停类</div>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="h">坐标轴设置</div>
+            <div class="field"><label>X</label><div class="ctrl">自动范围</div></div>
+            <div class="field"><label>Y</label><div class="ctrl">自动范围</div></div>
+          </div>
+        </div>
+
+        <div class="card pos-left">
+          <div class="pointer right"></div>
+          <div class="ch">
+            <div><div class="tt">振动类</div><div class="sub">已保存参数快照 · 来源：FFT</div></div>
+            <span class="badge">内置</span>
+          </div>
+          <div class="grp"><h3>分析参数</h3>
+            <div class="chips">
+              <span class="chip"><span class="k">窗</span> <span class="v">hanning</span></span>
+              <span class="chip"><span class="k">NFFT</span> <span class="v">4096</span></span>
+              <span class="chip"><span class="k">重叠</span> <span class="v">50%</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>方案 A 实现要点：</b>改 <code>PresetBar._place_hover</code> —— 先尝试把卡片放到 Inspector / 按钮的<b>左侧</b>（贴着 Inspector 左边界，悬在图表区上方），垂直方向与按钮顶端对齐并做屏幕内夹取；左侧空间不足（如 Inspector 已拉到最宽贴住左屏）时回退到「上方」，仍放不下才回退「下方」。可选加一个指向按钮的小三角。<br>
+    <b>方案 B（更稳妥）：</b>通用「上 → 左 → 下」三级避让，对未来 Inspector 以浮层弹出等情况也安全，但逻辑更多。<br>
+    <b>方案 C（改交互）：</b>取消 hover 浮层，改为左键展开行内详情。改动最大，这里不推荐。
+  </div>
+</body>
+</html>
