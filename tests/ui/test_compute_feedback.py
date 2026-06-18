@@ -55,3 +55,33 @@ def test_partial_failure():
     assert summarize_compute(
         ComputeOutcome(computed=1, failed=2), section_label="FFT"
     ) == ("warning", "1 图已出 · 2 个出错")
+
+
+def test_cached_and_failed_returns_warning_not_success():
+    level, message = summarize_compute(ComputeOutcome(cached=1, failed=1))
+    assert level == "warning"
+    assert "已出" in message
+    assert "出错" in message
+
+
+def test_computed_cached_and_failed_returns_warning_not_success():
+    level, message = summarize_compute(ComputeOutcome(computed=1, cached=1, failed=1))
+    assert level == "warning"
+    assert "2 图已出" in message
+    assert "出错" in message
+
+
+def test_skipped_and_failed_without_rendered_includes_skip_summary():
+    assert summarize_compute(
+        ComputeOutcome(skipped=["信号过短"], failed=1), section_label="FFT"
+    ) == ("error", "FFT失败：1 个图计算出错；1 图跳过（1 个信号过短）")
+
+
+def test_skipped_and_failed_with_rendered_includes_all_parts():
+    level, message = summarize_compute(
+        ComputeOutcome(computed=1, skipped=["信号过短"], failed=1)
+    )
+    assert level == "warning"
+    assert "1 图已出" in message
+    assert "1 图跳过（1 个信号过短）" in message
+    assert "1 个出错" in message

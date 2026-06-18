@@ -34,7 +34,10 @@ def summarize_compute(
 
     if rendered == 0:
         if failed:
-            return ("error", f"{section_label}失败：{failed} 个图计算出错")
+            message = f"{section_label}失败：{failed} 个图计算出错"
+            if skipped:
+                message = f"{message}；{_skip_text(skipped, none_rendered=False)}"
+            return ("error", message)
         return ("warning", _skip_text(skipped, none_rendered=True))
 
     if failed == 0 and not skipped:
