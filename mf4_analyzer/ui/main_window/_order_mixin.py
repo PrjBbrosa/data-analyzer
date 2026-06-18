@@ -141,6 +141,7 @@ class OrderMixin:
         nfft = p.get('nfft_effective', p.get('nfft'))
         if nfft is None:
             nfft = p.get('nfft_preview') or 256
+        # 规约：凡进入 COT 计算的用户可调参数都必须在此登记，否则改了不刷新。
         return {
             'nfft': int(nfft),
             'nfft_mode': p.get('nfft_mode', 'fixed'),
@@ -148,6 +149,8 @@ class OrderMixin:
             'order_res': p.get('order_res'),
             'time_res': p.get('time_res'),
             'samples_per_rev': p.get('samples_per_rev'),
+            'rpm_factor': p.get('rpm_factor'),
+            'fs': p.get('fs'),
             'rpm_source': list(rpm_source) if rpm_source else None,
             'time_range': time_range,
         }

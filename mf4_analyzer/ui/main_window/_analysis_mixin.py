@@ -388,6 +388,8 @@ class AnalysisMixin:
             'order_res': p.get('order_res'),
             'time_res': p.get('time_res'),
             'samples_per_rev': ctx.current_params().get('samples_per_rev'),
+            'rpm_factor': p.get('rpm_factor'),
+            'fs': p.get('fs'),
         }
 
     def _analysis_cache_key(self, section, fid, ch, rpm_source=None, pane_idx=None):

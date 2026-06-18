@@ -539,6 +539,8 @@ class OrderContextual(QWidget):
             nfft_mode=nfft_mode,
             nfft_preview=nfft_preview,
             nfft_effective=nfft_effective,
+            rpm_factor=self.spin_rf.value(),
+            fs=self.spin_fs.value(),
         )
 
     # --- Wave 3 (2026-04-28 plan): test-friendly param accessors ---
