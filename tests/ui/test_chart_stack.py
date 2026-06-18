@@ -1462,6 +1462,14 @@ def test_chart_cards_have_tick_density_popout_button(qapp, qtbot):
 
         pop = card._tick_density_popover
         assert pop.objectName() == "TickDensityPopover"
+        assert pop._PRESETS == {
+            "疏": (6, 5),
+            "标准": (10, 10),
+            "密": (20, 15),
+        }
+        assert pop.density() == (10, 10)
+        assert pop._reset_btn.text() == "恢复默认 10 / 10"
+        assert card._tick_density_btn.toolTip() == "刻度密度 X10 / Y10"
         layout = pop._surface.layout()
         assert layout.indexOf(pop._preset_host) < layout.indexOf(pop._x_row)
         assert layout.indexOf(pop._preset_host) < layout.indexOf(pop._y_row)
@@ -1508,10 +1516,10 @@ def test_tick_density_popout_preset_emits_and_updates_button(qapp, qtbot):
     with qtbot.waitSignal(card.tick_density_changed, timeout=200) as blocker:
         pop._preset_buttons["密"].click()
 
-    assert blocker.args == [20, 14]
-    assert pop.density() == (20, 14)
+    assert blocker.args == [20, 15]
+    assert pop.density() == (20, 15)
     assert card._tick_density_btn.text() == ""
-    assert card._tick_density_btn.toolTip() == "刻度密度 X20 / Y14"
+    assert card._tick_density_btn.toolTip() == "刻度密度 X20 / Y15"
 
 
 def test_chart_stack_relays_tick_density_popout_signal(qapp, qtbot):

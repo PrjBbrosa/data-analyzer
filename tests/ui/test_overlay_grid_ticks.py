@@ -105,10 +105,10 @@ class TestOverlayDivisions:
         canvas.plot_channels(rows, mode="overlay")
         return canvas
 
-    def test_default_divisions_is_8(self, qapp):
+    def test_default_divisions_is_10(self, qapp):
         canvas = self._overlay(qapp)
-        assert canvas._overlay_axes.divisions == 8
-        assert len(canvas._overlay_axes.grid_lines) == 8 - 1
+        assert canvas._overlay_axes.divisions == 10
+        assert len(canvas._overlay_axes.grid_lines) == 10 - 1
 
     def test_set_tick_density_drives_divisions_and_gridlines(self, qapp):
         canvas = self._overlay(qapp)

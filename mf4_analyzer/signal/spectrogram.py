@@ -113,6 +113,14 @@ class SpectrogramAnalyzer:
     """
 
     @staticmethod
+    def _frame_starts(n_samples: int, nfft: int, hop: int) -> np.ndarray:
+        starts = np.arange(0, n_samples - nfft + 1, hop, dtype=int)
+        tail_start = int(n_samples) - int(nfft)
+        if starts.size and int(starts[-1]) != tail_start:
+            starts = np.append(starts, tail_start)
+        return starts
+
+    @staticmethod
     def amplitude_to_db(amplitude, reference: float = 1.0) -> np.ndarray:
         """Linear amplitude -> dB using ``20 * log10(max(amp, eps) / ref)``.
 
@@ -251,7 +259,7 @@ class SpectrogramAnalyzer:
         hop = int(nfft * (1.0 - float(params.overlap)))
         if hop <= 0:
             raise ValueError('overlap leaves no positive hop size')
-        starts = np.arange(0, sig.size - nfft + 1, hop, dtype=int)
+        starts = SpectrogramAnalyzer._frame_starts(sig.size, nfft, hop)
         total = int(starts.size)
         if total <= 0:
             raise ValueError('no complete spectrogram frames')
@@ -300,5 +308,14 @@ class SpectrogramAnalyzer:
             params=params,
             channel_name=str(channel_name),
             unit=str(unit or ''),
-            metadata={'frames': total, 'hop': hop, 'freq_bins': freq_bins},
+            metadata={
+                'frames': total,
+                'hop': hop,
+                'freq_bins': freq_bins,
+                'coverage_start': float(t[int(starts[0])]),
+                'coverage_end': float(t[int(starts[-1]) + nfft - 1]),
+                'time_start': float(t[0]),
+                'time_end': float(t[-1]),
+                'window_samples': nfft,
+            },
         )

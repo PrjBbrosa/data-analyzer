@@ -30,6 +30,7 @@ from .viewbox import _ModifierWheelViewBox
 
 
 _OVERLAY_GRID_ALPHA = 0.28
+_DEFAULT_OVERLAY_DIVISIONS = 10
 _OVERLAY_AXIS_LABEL_MIN_CHARS = 12
 _OVERLAY_AXIS_LABEL_FALLBACK_CHARS = 22
 _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0
@@ -120,7 +121,7 @@ class OverlayAxisManager(_CanvasBackref):
         self._overlay_aux_viewboxes = []
         self._overlay_aux_axes = []
         self._overlay_view_sync_conns = []
-        self._overlay_divisions = 8
+        self._overlay_divisions = _DEFAULT_OVERLAY_DIVISIONS
         self._overlay_grid_lines = []
 
     @property
@@ -214,6 +215,11 @@ class OverlayAxisManager(_CanvasBackref):
     @divisions.setter
     def divisions(self, value):
         self._overlay_divisions = max(3, min(20, int(value)))
+
+    def _current_overlay_divisions(self):
+        return max(3, min(20, int(getattr(
+            self, "_overlay_divisions", _DEFAULT_OVERLAY_DIVISIONS
+        ))))
 
     @property
     def grid_lines(self):
@@ -585,7 +591,7 @@ class OverlayAxisManager(_CanvasBackref):
                 pass
         self._overlay_grid_lines = []
 
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        n = self._current_overlay_divisions()
         alpha_int = max(1, min(255, int(round(_OVERLAY_GRID_ALPHA * 255))))
         pen = pg.mkPen(color=(180, 180, 180, alpha_int), width=1)
         lines = []
@@ -607,7 +613,7 @@ class OverlayAxisManager(_CanvasBackref):
         """Frame overlay channels and pin their ticks to the shared graticule."""
         if not getattr(self, "_overlay_mode", False):
             return
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        n = self._current_overlay_divisions()
         for handle in list(self.axes_list):
             try:
                 lo, hi = handle.get_ylim()
@@ -641,7 +647,7 @@ class OverlayAxisManager(_CanvasBackref):
         span = hi - lo
         if not (math.isfinite(span) and span > 0):
             return
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        n = self._current_overlay_divisions()
         per_div = span / n
         if not (math.isfinite(per_div) and per_div > 0):
             return
@@ -681,7 +687,7 @@ class OverlayAxisManager(_CanvasBackref):
         span = hi - lo
         if not (math.isfinite(span) and span > 0):
             return
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        n = self._current_overlay_divisions()
         per_div = span / n
         if not (math.isfinite(per_div) and per_div > 0):
             return
@@ -776,7 +782,7 @@ class OverlayAxisManager(_CanvasBackref):
             return
         new_lo = clo + f0 * cspan
         new_hi = clo + f1 * cspan
-        n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+        n = self._current_overlay_divisions()
         bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
         try:
             sel.set_ylim(bottom, top)
@@ -1137,7 +1143,7 @@ class OverlayAxisManager(_CanvasBackref):
                 lo, hi = target.get_ylim()
             except Exception:
                 return True
-            n = max(3, min(20, int(getattr(self, "_overlay_divisions", 8))))
+            n = self._current_overlay_divisions()
             span = hi - lo
             if not math.isfinite(span) or span <= 0:
                 bottom, top, ticks = _frame_to_nice(lo, hi, n)

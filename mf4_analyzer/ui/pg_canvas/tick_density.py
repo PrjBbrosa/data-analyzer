@@ -39,7 +39,7 @@ class TickDensityController(_CanvasBackref):
     def __init__(self, canvas):
         super().__init__(canvas)
         # Defaults mirror PersistentTop defaults.
-        self.density = (10, 8)
+        self.density = (10, 10)
         self.ticks_cache = {}
 
     def set_tick_density(self, x, y):

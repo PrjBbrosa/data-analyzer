@@ -215,9 +215,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # Time-preview Y graticule division count (mirrors the time-domain
         # overlay's divisions). Driven by the Y tick density; the left axis and
         # every aux right axis are framed to this many equal nice divisions so
-        # all their ticks land on the SAME set of horizontal grid lines. Default
-        # 8 matches the FFT card's default Y tick count.
-        self._time_divisions = 8
+        # all their ticks land on the SAME set of horizontal grid lines.
+        # Default 10 matches the standard global Y tick count.
+        self._time_divisions = 10
         self._entries = []
         self._selected_time_entry_idx = None
         self._remarks = []

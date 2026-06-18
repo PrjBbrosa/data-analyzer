@@ -137,13 +137,62 @@ def _tick_counts_to_density(x_n: int, y_n: int) -> tuple:
     (pg_canvas/tick_density.py: x_n/10.0 adaptive fallback at :123,
     y_n/6.0 at :69, both clamped to [0.35, 3.0]) so every pg canvas
     responds identically to the PersistentTop spinboxes (x 3-30 default
-    10, y 3-20 default 8). tick_density.py keeps these formulas inline
+    10, y 3-20 default 10). tick_density.py keeps these formulas inline
     in `TickDensityController` (backref-bound to the time-domain
     canvas), so they cannot be imported directly; keep both in sync.
     """
     x_d = max(0.35, min(3.0, float(x_n) / 10.0))
     y_d = max(0.35, min(3.0, float(y_n) / 6.0))
     return x_d, y_d
+
+
+def _finite_float(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if np.isfinite(value) else None
+
+
+def time_axis_display_extent(times, *, params=None, metadata=None, fallback=None):
+    """Return the displayed X extent for time-window heatmaps.
+
+    ``times`` are frame centers. When analyzer metadata carries the real
+    window coverage, prefer that so the image spans the analyzed time range
+    rather than stopping at the first/last center.
+    """
+    md = metadata or {}
+    lo = _finite_float(md.get('coverage_start'))
+    hi = _finite_float(md.get('coverage_end'))
+    if lo is not None and hi is not None and hi > lo:
+        return lo, hi
+
+    arr = np.asarray(times, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size:
+        fs = _finite_float(getattr(params, 'fs', None))
+        try:
+            nfft = int(getattr(params, 'nfft'))
+        except (TypeError, ValueError):
+            nfft = 0
+        if fs is not None and fs > 0 and nfft > 1:
+            half_window = (nfft - 1) / (2.0 * fs)
+            lo = float(arr[0] - half_window)
+            if arr[0] >= 0.0:
+                lo = max(0.0, lo)
+            return lo, float(arr[-1] + half_window)
+        if arr.size >= 2:
+            left_half = (arr[1] - arr[0]) / 2.0
+            right_half = (arr[-1] - arr[-2]) / 2.0
+            lo = float(arr[0] - left_half)
+            if arr[0] >= 0.0:
+                lo = max(0.0, lo)
+            return lo, float(arr[-1] + right_half)
+        return float(arr[0]), float(arr[0])
+
+    if fallback is not None:
+        return float(fallback[0]), float(fallback[1])
+    return 0.0, 0.0
 
 
 _TARGET_BOTTOM_TICK_NICE_FACTORS = (1.0, 2.0, 2.5, 5.0, 10.0)
@@ -798,9 +847,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 cbar_label = f"{cbar_label} (dB)"
         else:
             if vmin is None:
-                vmin = float(np.nanmin(m))
+                vmin = float(z_floor) if not z_auto else float(np.nanmin(m))
             if vmax is None:
-                vmax = float(np.nanmax(m))
+                vmax = float(z_ceiling) if not z_auto else float(np.nanmax(m))
 
         x0, x1 = float(x_extent[0]), float(x_extent[1])
         y0, y1 = float(y_extent[0]), float(y_extent[1])
@@ -1007,7 +1056,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
         ``x``/``y`` are approximate tick COUNTS from
         ``inspector.top.tick_density()`` (spinboxes: x 3-30 default 10,
-        y 3-20 default 8) — the same integers the mpl canvases fed into
+        y 3-20 default 10) — the same integers the mpl canvases fed into
         ``MaxNLocator(nbins=...)`` — NOT pg density factors. They are
         converted to native ``AxisItem.setTickDensity`` factors here,
         the same mechanism TimeDomainCanvasPG uses (tick_density.py).
@@ -1153,7 +1202,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             cbar = f"Amplitude{unit} (dB re {db_ref:g})"
         else:
             m = result.amplitude
-            vmin, vmax = float(np.nanmin(m)), float(np.nanmax(m))
+            if not z_auto:
+                vmin, vmax = float(z_floor), float(z_ceiling)
+            else:
+                vmin, vmax = float(np.nanmin(m)), float(np.nanmax(m))
             cbar = f"Amplitude{unit}"
 
         y_lo = float(result.frequencies[0])
@@ -1173,7 +1225,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # re-clip and could re-derive levels).
         self.plot_or_update_heatmap(
             matrix=m,
-            x_extent=(float(result.times[0]), float(result.times[-1])),
+            x_extent=time_axis_display_extent(
+                result.times,
+                params=result.params,
+                metadata=getattr(result, 'metadata', None),
+                fallback=(float(result.times[0]), float(result.times[-1])),
+            ),
             y_extent=(y_lo, y_hi),
             x_label='Time (s)', y_label='Frequency (Hz)',
             title=f'FFT vs Time - {result.channel_name}',
@@ -1276,7 +1333,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # extent with padding=0 to match the map exactly so the top/bottom
             # gridlines line up vertically. Only the 'y' branch is touched; the
             # 'x' branch (freq/order on X) is left exactly as before.
-            if len(xc) >= 2:
+            if self._extents is not None:
+                x0, x1, _y0, _y1 = self._extents
+                self._slice_plot.setXRange(float(x0), float(x1), padding=0)
+            elif len(xc) >= 2:
                 self._slice_plot.setXRange(
                     float(xc[0]), float(xc[-1]), padding=0)
             self._slice_plot.setLabel('bottom', self._x_label or 'Time (s)')

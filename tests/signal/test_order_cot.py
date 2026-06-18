@@ -154,3 +154,20 @@ def test_cot_result_params_carries_fs():
                   order_res=0.05, time_res=0.5, fs=fs)
     res = COTOrderAnalyzer.compute(sig, rpm, t, p)
     assert res.params.fs == fs
+
+
+def test_cot_tail_frame_metadata_covers_time_end():
+    fs = 1000.0
+    t, sig, rpm = _synth_constant_rpm_with_2nd_order(fs=fs, dur=5.3)
+    p = COTParams(
+        samples_per_rev=256, nfft=512, max_order=8.0,
+        order_res=0.1, time_res=0.5, fs=fs,
+    )
+
+    res = COTOrderAnalyzer.compute(sig, rpm, t, p)
+
+    assert 'coverage_start' in res.metadata
+    assert 'coverage_end' in res.metadata
+    assert res.metadata['coverage_start'] <= res.times[0]
+    assert res.metadata['coverage_end'] >= res.times[-1]
+    assert abs(float(res.metadata['coverage_end']) - float(t[-1])) < 0.02

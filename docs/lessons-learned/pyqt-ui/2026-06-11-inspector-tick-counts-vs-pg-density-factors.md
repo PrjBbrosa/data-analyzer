@@ -10,7 +10,7 @@ supersedes: []
 ## Context
 PgHeatmapCanvas's skeleton implemented `set_tick_density(x, y)` as pg
 density factors (0.2–5.0), but the Inspector contract emits integer
-tick COUNTS (PersistentTop spinboxes x 3–30 / y 3–20, defaults 10/8 —
+tick COUNTS (PersistentTop spinboxes x 3–30 / y 3–20, defaults 10/10 —
 the values mpl fed into `MaxNLocator(nbins=...)`), so counts clamped to
 max and the knob silently died.
 

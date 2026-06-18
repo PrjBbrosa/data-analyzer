@@ -1651,6 +1651,41 @@ def test_render_fft_time_on_requests_smooth_heatmap_interpolation(qtbot):
     assert canvas.kwargs["interp"] == "bilinear"
 
 
+def test_render_order_on_uses_time_coverage_extent(qtbot):
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    class _CaptureCanvas:
+        def __init__(self):
+            self.kwargs = None
+            self.tick_density = None
+            self._slice_curve = None
+
+        def plot_or_update_heatmap(self, **kwargs):
+            self.kwargs = dict(kwargs)
+
+        def set_tick_density(self, x, y):
+            self.tick_density = (x, y)
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    canvas = _CaptureCanvas()
+    result = SimpleNamespace(
+        times=np.array([5.0, 7.0]),
+        orders=np.array([1.0, 2.0, 3.0]),
+        amplitude=np.ones((2, 3), dtype=float),
+        params=SimpleNamespace(order_res=0.1),
+        metadata={'coverage_start': 0.0, 'coverage_end': 12.0},
+    )
+
+    win._render_order_on(canvas, result)
+
+    assert canvas.kwargs["x_extent"] == (0.0, 12.0)
+
+
 def test_render_fft_time_on_auto_freq_range_uses_energy_band(qtbot):
     import numpy as np
 

@@ -349,6 +349,8 @@ class OrderMixin:
         order heatmap canvas using the current OrderContextual display knobs.
         Pure canvas draw — no preset/status side-effects (those stay in
         ``_render_order_time``)."""
+        from ..pg_canvas.heatmap_canvas import time_axis_display_extent
+
         title = (
             f"时间-阶次谱 - {self.inspector.order_ctx.combo_sig.currentText()} "
             f"(分辨率:{result.params.order_res})"
@@ -366,7 +368,12 @@ class OrderMixin:
         canvas._amplitude_mode = amp_mode_token
         canvas.plot_or_update_heatmap(
             matrix=result.amplitude.T,
-            x_extent=(float(result.times[0]), float(result.times[-1])),
+            x_extent=time_axis_display_extent(
+                result.times,
+                params=getattr(result, 'params', None),
+                metadata=getattr(result, 'metadata', None),
+                fallback=(float(result.times[0]), float(result.times[-1])),
+            ),
             y_extent=(float(result.orders[0]), float(result.orders[-1])),
             x_label='Time (s)',
             y_label='Order',

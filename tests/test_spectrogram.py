@@ -105,6 +105,25 @@ class SpectrogramAnalyzerTests(unittest.TestCase):
         self.assertAlmostEqual(float(result.times[0]), (nfft - 1) / (2 * fs), places=9)
         self.assertAlmostEqual(float(result.times[1] - result.times[0]), 0.1, places=9)
 
+    def test_tail_frame_covers_requested_time_end(self):
+        fs = 50.0
+        nfft = 512
+        duration = 71.02
+        t = np.arange(int(duration * fs) + 1) / fs
+        sig = np.sin(2 * np.pi * 3 * t)
+        params = SpectrogramParams(fs=fs, nfft=nfft, window='hanning', overlap=0.8)
+
+        result = SpectrogramAnalyzer.compute(sig, t, params, channel_name='tail', unit='')
+
+        half_window = (nfft - 1) / (2.0 * fs)
+        self.assertAlmostEqual(
+            float(result.times[-1] + half_window),
+            float(t[-1]),
+            places=9,
+        )
+        self.assertAlmostEqual(float(result.metadata['coverage_start']), float(t[0]), places=9)
+        self.assertAlmostEqual(float(result.metadata['coverage_end']), float(t[-1]), places=9)
+
     def test_rejects_signal_shorter_than_nfft(self):
         params = SpectrogramParams(fs=1000.0, nfft=1024, window='hanning', overlap=0.5)
         with self.assertRaisesRegex(ValueError, 'shorter than nfft'):

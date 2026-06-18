@@ -9,6 +9,7 @@ from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
     PgHeatmapCanvas,
     _apply_target_bottom_ticks,
     _make_analysis_plot,
+    time_axis_display_extent,
 )
 from mf4_analyzer.signal.spectrogram import SpectrogramParams, SpectrogramResult
 
@@ -119,6 +120,20 @@ def test_linear_mode_levels_auto(canvas):
     )
     lo, hi = canvas._img.getLevels()
     assert lo == pytest.approx(1.0) and hi == pytest.approx(100.0)
+
+
+def test_linear_mode_manual_levels_drive_image_and_colorbar(canvas):
+    matrix = np.linspace(0.1, 1.6, 20, dtype=float).reshape(4, 5)
+    canvas.plot_or_update_heatmap(
+        matrix=matrix, x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude', z_auto=False,
+        z_floor=0.0, z_ceiling=0.2,
+    )
+
+    lo, hi = canvas._img.getLevels()
+    assert (lo, hi) == (pytest.approx(0.0), pytest.approx(0.2))
+    blo, bhi = canvas._cbar.levels()
+    assert (blo, bhi) == (pytest.approx(0.0), pytest.approx(0.2))
 
 
 def test_heatmap_hides_title_row_and_disables_axis_si_prefix(canvas):
@@ -291,7 +306,7 @@ def test_update_path_reuses_colorbar_and_relabels_left_axis(canvas):
 
 def test_set_tick_density_accepts_inspector_counts(canvas):
     # Inspector PersistentTop passes integer tick COUNTS (x spinbox
-    # 3-30, y spinbox 3-20; defaults 10/8) — the same values the mpl
+    # 3-30, y spinbox 3-20; defaults 10/10) — the same values the mpl
     # canvases fed into MaxNLocator(nbins=...). NOT pg density factors.
     canvas.set_tick_density(10, 8)
     bottom = canvas._plot.getAxis('bottom')
@@ -1432,6 +1447,63 @@ def test_plot_result_defaults_to_smooth_image_paint(qapp):
         c.deleteLater()
 
 
+def test_plot_result_linear_manual_levels_not_overridden_by_auto_data(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()
+    c.plot_result(
+        r, amplitude_mode='amplitude', cmap='turbo',
+        z_auto=False, z_floor=0.0, z_ceiling=0.2,
+    )
+
+    lo, hi = c._img.getLevels()
+    assert (lo, hi) == (pytest.approx(0.0), pytest.approx(0.2))
+    assert (float(np.nanmin(r.amplitude)), float(np.nanmax(r.amplitude))) != (
+        pytest.approx(0.0), pytest.approx(0.2)
+    )
+    blo, bhi = c._cbar.levels()
+    assert (blo, bhi) == (pytest.approx(0.0), pytest.approx(0.2))
+    c.deleteLater()
+
+
+def test_plot_result_uses_window_coverage_extent_when_available(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = SpectrogramResult(
+        times=np.array([5.0, 7.0]),
+        frequencies=np.array([0.0, 50.0]),
+        amplitude=np.ones((2, 2), dtype=np.float32),
+        params=SpectrogramParams(fs=50.0, nfft=512),
+        channel_name='vib',
+        metadata={
+            'frames': 2,
+            'hop': 100,
+            'freq_bins': 2,
+            'coverage_start': 0.0,
+            'coverage_end': 12.0,
+        },
+    )
+
+    c.plot_result(r, amplitude_mode='amplitude', z_auto=True)
+
+    x0, x1, _y0, _y1 = c._extents
+    assert (x0, x1) == (pytest.approx(0.0), pytest.approx(12.0))
+    (vx0, vx1), _ = c._plot.vb.viewRange()
+    assert (vx0, vx1) == (pytest.approx(0.0), pytest.approx(12.0))
+    c.deleteLater()
+
+
+def test_time_axis_display_extent_clamps_nonnegative_fallback_start():
+    lo, hi = time_axis_display_extent(
+        np.array([0.0, 1.0]),
+        params=SpectrogramParams(fs=1000.0, nfft=128),
+        metadata={},
+    )
+
+    assert lo == pytest.approx(0.0)
+    assert hi > 1.0
+
+
 def test_plot_result_db_vmin_vmax_not_overridden_by_internal_auto(qapp):
     # The dB matrix + clip + levels are computed in plot_result; the
     # explicit vmin/vmax it hands to plot_or_update_heatmap must survive
@@ -1999,7 +2071,7 @@ def test_y_slice_x_range_matches_map_x_range(qapp):
     qapp.processEvents()
     (mx0, mx1), _ = c._plot.vb.viewRange()
     (sx0, sx1), _ = c._slice_plot.vb.viewRange()
-    # Both are the full time extent [times[0], times[-1]] with padding=0.
+    # Both are the displayed heatmap time extent, not just first/last centers.
     assert sx0 == pytest.approx(mx0, abs=1e-6)
     assert sx1 == pytest.approx(mx1, abs=1e-6)
     # The slice bottom axis is the time axis in this direction.
@@ -2204,7 +2276,7 @@ def test_x_slice_reranges_to_freq_after_y_slice(qapp):
     r = _spec_result()  # times 0..2 over 10 frames; freqs 0..500 over 64 bins
     c.plot_result(r, amplitude_mode='amplitude_db', z_auto=True)
     qapp.processEvents()
-    time_lo, time_hi = float(r.times[0]), float(r.times[-1])
+    time_lo, time_hi = c._extents[0], c._extents[1]
     freq_lo, freq_hi = float(r.frequencies[0]), float(r.frequencies[-1])
 
     # Default 'x' = amp vs frequency; X auto-ranged to ~freq extent.

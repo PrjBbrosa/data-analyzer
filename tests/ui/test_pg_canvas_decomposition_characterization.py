@@ -157,7 +157,7 @@ class TestCollaboratorStateOwnership:
     def test_tick_density_state_lives_on_tick_density_controller(self, pg_canvas):
         controller = pg_canvas._tick_density_controller
 
-        assert controller.density == (10, 8)
+        assert controller.density == (10, 10)
         assert "_tick_density" not in pg_canvas.__dict__
 
     def test_cursor_state_lives_on_cursor_controller(self, pg_canvas):
@@ -198,7 +198,7 @@ class TestCollaboratorStateOwnership:
         assert overlay.aux_viewboxes == []
         assert overlay.aux_axes == []
         assert overlay.view_sync_connections == []
-        assert overlay.divisions == 8
+        assert overlay.divisions == 10
         assert overlay.grid_lines == []
         assert overlay.default_lw == 1.5
         assert overlay.default_alpha == 1.0

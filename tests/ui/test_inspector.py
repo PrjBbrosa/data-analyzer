@@ -571,7 +571,7 @@ def test_persistent_top_no_longer_renders_tick_density_group(qapp):
     assert parent_gb is None
     assert pt.spin_xt.isHidden() is True
     assert pt.spin_yt.isHidden() is True
-    assert pt.tick_density() == (10, 8)
+    assert pt.tick_density() == (10, 10)
 
 
 def test_inspector_exposes_fft_time_context(qtbot):

@@ -15,8 +15,8 @@ class _TickDensityPopover(QFrame):
 
     _PRESETS = {
         "疏": (6, 5),
-        "标准": (10, 8),
-        "密": (20, 14),
+        "标准": (10, 10),
+        "密": (20, 15),
     }
 
     def __init__(self, parent=None):
@@ -78,14 +78,14 @@ class _TickDensityPopover(QFrame):
             "X", 3, 30, 10
         )
         self._y_row, self._slider_y, self._spin_y = self._build_axis_row(
-            "Y", 3, 20, 8
+            "Y", 3, 20, 10
         )
         lay.addWidget(self._x_row)
         lay.addWidget(self._y_row)
 
-        self._reset_btn = QPushButton("恢复默认 10 / 8", self._surface)
+        self._reset_btn = QPushButton("恢复默认 10 / 10", self._surface)
         self._reset_btn.setObjectName("tickDensityResetButton")
-        self._reset_btn.clicked.connect(lambda: self.set_density(10, 8, emit=True))
+        self._reset_btn.clicked.connect(lambda: self.set_density(10, 10, emit=True))
         lay.addWidget(self._reset_btn)
 
         self._slider_x.valueChanged.connect(
@@ -100,7 +100,7 @@ class _TickDensityPopover(QFrame):
         self._spin_y.valueChanged.connect(
             lambda value: self.set_density(self._spin_x.value(), value, emit=True)
         )
-        self.set_density(10, 8, emit=False)
+        self.set_density(10, 10, emit=False)
 
     def _build_axis_row(self, label, minimum, maximum, value):
         row = QFrame(self._surface)

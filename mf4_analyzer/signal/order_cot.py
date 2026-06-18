@@ -53,6 +53,14 @@ class COTResult:
 
 class COTOrderAnalyzer:
     @staticmethod
+    def _frame_starts(n_samples: int, nfft: int, hop: int) -> np.ndarray:
+        starts = np.arange(0, n_samples - nfft + 1, hop, dtype=int)
+        tail_start = int(n_samples) - int(nfft)
+        if starts.size and int(starts[-1]) != tail_start:
+            starts = np.append(starts, tail_start)
+        return starts
+
+    @staticmethod
     def _validate(sig, rpm, t):
         sig = np.asarray(sig, dtype=float)
         rpm = np.asarray(rpm, dtype=float)
@@ -110,7 +118,7 @@ class COTOrderAnalyzer:
         # hop in samples = time_res * (samples_per_rev * mean_rps) seconds-equivalent
         # but in angle domain we just hop by a fixed fraction of nfft.
         hop_angle = max(int(nfft * 0.25), 1)            # 75% overlap default
-        starts = np.arange(0, len(s_theta) - nfft + 1, hop_angle)
+        starts = COTOrderAnalyzer._frame_starts(len(s_theta), nfft, hop_angle)
         n_frames = len(starts)
         if n_frames == 0:
             raise ValueError("not enough angle-domain samples for one frame")
@@ -168,8 +176,14 @@ class COTOrderAnalyzer:
             params=params,
             metadata={
                 'frames': n_frames,
+                'hop': hop_angle,
                 'samples_per_rev': params.samples_per_rev,
                 'theta_max_rev': theta_max / (2 * np.pi),
                 'angle_samples': len(s_theta),
+                'coverage_start': float(t_uniform[int(starts[0])]),
+                'coverage_end': float(t_uniform[int(starts[-1]) + nfft - 1]),
+                'time_start': float(t[0]),
+                'time_end': float(t[-1]),
+                'window_samples': nfft,
             },
         )

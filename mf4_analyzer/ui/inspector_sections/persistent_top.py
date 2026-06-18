@@ -185,7 +185,7 @@ class PersistentTop(QWidget):
         self.spin_xt.hide()
         self.spin_yt = _no_buttons(QSpinBox(self))
         self.spin_yt.setRange(3, 20)
-        self.spin_yt.setValue(8)
+        self.spin_yt.setValue(10)
         self.spin_yt.setToolTip("Y 轴主刻度的大致数量，范围 3–20。")
         self.spin_yt.hide()
 
