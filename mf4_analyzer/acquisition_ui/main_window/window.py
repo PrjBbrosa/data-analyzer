@@ -1,0 +1,838 @@
+"""Cockpit ``QMainWindow``.
+
+Spec: ``docs/analyzer/acquisition/specs/2026-05-15-acquisition-cockpit-ui-spec.md``
+Plan: ``docs/analyzer/acquisition/plans/2026-05-15-acquisition-cockpit-ui-implementation.md``
+Polish wave: ``docs/analyzer/acquisition/specs/2026-05-15-cockpit-polish-wave-spec.md``
+
+Current deliverables wired up here:
+
+- Toolbar with A2L/DBC/output controls (DBC selector is permanently
+  disabled per spec Product Decisions), Settings, segment marker,
+  mode label (`采集 / 回放 / 历史`), REC indicator, and stateful main
+  button (`连接 ECU` / `● 采集` / `■ Stop & 复盘`).
+- 32 px health strip beneath the toolbar driven by
+  ``HealthAggregator.poll_once()`` polled on a ``QTimer`` at
+  ``thresholds.HEALTH_POLL_INTERVAL_S``.
+- Three-pane center body: A2L left pane, center live cards, right
+  state-aware inspector.
+- Real read-only Replay tab and manifest-backed History tab.
+- Four-state machine (in :mod:`state`) driving page transitions,
+  control freeze, and button labels.
+- ``RingBuffer.watermark_changed`` (the non-Qt observer shim) bridged
+  to a Qt slot via the shim's ``connect`` API: 30 fps for
+  green/yellow_low, 10 fps for red/red_drop, auto-stop on
+  red_drop_sustained.
+- Stop/flush/finalize, ReviewModal, archive, and Analyzer handoff.
+  The no-controller demo path still uses a small placeholder modal.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable, Iterable
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtWidgets import (
+    QAction,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    QStatusBar,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from mf4_analyzer.acquisition_capture import thresholds
+from mf4_analyzer.acquisition_capture.backends import (
+    FakeRecorderBackend,
+    RecorderBackend,
+)
+from mf4_analyzer.acquisition_capture.config_store import ConfigSchemaError
+from mf4_analyzer.acquisition_capture.controller import CaptureController
+from mf4_analyzer.acquisition_capture.session import SessionSummary
+from mf4_analyzer.acquisition_capture.health import HealthAggregator
+from mf4_analyzer.acquisition_capture.ring_buffer import RingBuffer
+from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.acquisition_ui.history_tab import HistoryTab
+from mf4_analyzer.acquisition_ui.replay_tab import ReplayTab
+from mf4_analyzer.acquisition_ui.review_modal import (
+    ACTION_SAVE_AND_ARCHIVE,
+    ReviewContext,
+    ReviewModal,
+    StopFlushFinalizeResult,
+    run_stop_flush_finalize,
+)
+from mf4_analyzer.acquisition_ui.state import (
+    CockpitState,
+    CockpitStateMachine,
+)
+from mf4_analyzer.acquisition_ui.widgets.health_strip import HealthStrip
+from mf4_analyzer.acquisition_ui.widgets.left_pane import LeftPane
+from mf4_analyzer.acquisition_ui.widgets.right_panel import RightPanel
+from ._defs import (
+    DBC_DISABLED_TOOLTIP,
+    HISTORY_TAB_TITLE,
+    MODE_SEGMENTS,
+    REPLAY_TAB_TITLE,
+)
+from ._toolbar_mixin import ToolbarMixin
+from ._connection_mixin import ConnectionMixin
+from ._polling_mixin import PollingMixin
+from ._settings_mixin import SettingsMixin
+
+from can_logger.p0.a2l_probe import MeasurementSummary
+
+
+class _PlaceholderReviewModal(QDialog):
+    """Stage 4 stub for the review modal.
+
+    Spec §State Machine ``ReviewModal`` requires `丢弃 / 仅保存文件 /
+    保存并归档 / 在 Analyzer 打开`. Stage 5 owns that. For Stage 4 we
+    open a minimal modal that closes itself so the four-state cycle
+    is observable end-to-end.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("reviewModalPlaceholder")
+        self.setWindowTitle("复盘 (Stage 5)")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+        layout.addWidget(QLabel("Stage 5 将在此显示完整的复盘流程。"))
+        layout.addWidget(QLabel("点击「关闭」回到「已连接 · 待机」状态。"))
+        close_btn = QPushButton("关闭", self)
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+
+class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMixin, QMainWindow):
+    """Acquisition Cockpit window — same-process partner of Analyzer.
+
+    Construction parameters:
+
+    ``backend``
+        A ``RecorderBackend`` instance. Defaults to
+        :class:`FakeRecorderBackend` so ``--demo`` works on macOS
+        without Vector packages.
+    ``health_aggregator``
+        Optional pre-configured ``HealthAggregator``. The window
+        installs its own probes for the demo path (Hw stub, fake
+        Can/Xcp/Daq/Rec snapshots that pull from the live state).
+    ``initial_pool``
+        Optional list of ``MeasurementSummary`` to seed the left
+        pane in demo mode.
+    ``allow_fake_backend``
+        Explicit opt-in for the Stage 4 demo path. Production/vehicle
+        windows should leave this false so a failed Vector swap blocks
+        the connection attempt instead of silently starting synthetic
+        data.
+    """
+
+    # Public Qt signals — Stage 5 wires the auto-stop handler here.
+    auto_stop_requested = pyqtSignal(str)  # arg: reason ("ring_buffer" / "disk")
+
+    # Re-arm gating constants for the dropped-frame prompt (B5).
+    # ``REARM_S`` is the minimum wall-clock interval between two prompts;
+    # ``REARM_DELTA`` is the minimum new drops the user must accumulate
+    # before re-prompting. Both gates must clear so a one-off click on
+    # the close button can't drown the user during a single bad burst,
+    # but persistent drops still surface a second time.
+    _DROPPED_PROMPT_REARM_S = 5.0
+    _DROPPED_PROMPT_REARM_DELTA = 200
+
+    def __init__(
+        self,
+        *,
+        backend: RecorderBackend | None = None,
+        health_aggregator: HealthAggregator | None = None,
+        initial_pool: Iterable[MeasurementSummary] | None = None,
+        config_path: Path | None = None,
+        allow_fake_backend: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("AcquisitionCockpit")
+        self.setWindowTitle("MF4 采集 Cockpit")
+        self.resize(1280, 760)
+        # Spec §S4.2 — clamp the window so the toolbar's primary action
+        # and REC indicator never clip when the user drags the frame
+        # narrower than ~1100px. Additive; resize(1280, 760) stays.
+        self.setMinimumSize(960, 600)
+        self._settings_load_error: str | None = None
+        self._load_threshold_overrides()
+
+        # ----- core state ------------------------------------------------
+        self._state_machine = CockpitStateMachine()
+        self._state_machine.subscribe(self._on_state_changed)
+        self._backend: RecorderBackend = backend or FakeRecorderBackend()
+        self._external_backend = backend is not None and not isinstance(
+            backend, FakeRecorderBackend
+        )
+        self._owns_vector_backend = False
+        self._ring = RingBuffer(capacity=thresholds.DEFAULT_RING_CAPACITY)
+        # Bridge the non-Qt observer to a Qt slot. The shim's connect
+        # API matches pyqtSignal.connect — synchronous, single-arg.
+        self._ring.watermark_changed.connect(self._on_ring_watermark_changed)
+        self._target_fps = thresholds.LIVE_FPS_NORMAL
+        self._connection_attempt_started: float | None = None
+        self._first_frame_ts: float | None = None
+        self._rec_start_ts: float | None = None
+        self._stream_start_ts: float | None = None
+        self._a2l_name: str | None = None
+        self._output_dir_label = "data/runs"
+        self._cumulative_rx_count = 0
+        self._cumulative_dropped = 0
+        # Dropped-frame prompt re-arming: replaced the single-shot
+        # ``_dropped_prompt_shown`` latch with a (timestamp, count)
+        # pair so the user is re-notified when frames keep dropping
+        # after the first prompt is dismissed (B5).
+        self._dropped_prompt_last_ts: float | None = None
+        self._dropped_prompt_last_count: int = 0
+        self._fake_rec_state: str = "off"
+        self._fake_last_rx_monotonic: float | None = None
+        self._fake_xcp_connected: bool = False
+        self._fake_can_load_pct: float | None = None
+        self._transport_config = None
+        self._ifdata_xcp = None
+        self._allow_fake_backend = bool(allow_fake_backend)
+        # T1-6: optional persistent config path. When set, the cockpit
+        # rehydrates Transport on startup and writes it back on every
+        # Settings save. ``None`` keeps the legacy in-memory-only
+        # behavior used by the bulk of the test fixtures.
+        self._config_path: Path | None = (
+            Path(config_path) if config_path is not None else None
+        )
+        # User-supplied A2L pool for the left pane (None in pure demo).
+        self._initial_pool = tuple(initial_pool or ())
+        # Stage 5 hand-off — Stage 5 owns the real CaptureController.
+        # Until then the auto-stop path can still be exercised in tests
+        # by injecting a controller via :meth:`set_capture_controller`.
+        # ``_last_session_summary`` carries the ``auto_stop=True`` flag
+        # forward to whichever review modal Stage 5 wires (the Stage 4
+        # placeholder modal ignores it).
+        self._capture_controller: CaptureController | None = None
+        self._last_session_summary: SessionSummary | None = None
+        self._review_modal: QDialog | None = None
+        self._settings_dialog = None
+        self._connection_warning_box: QMessageBox | None = None
+        # Stage 5 hand-off: the most recent stop/flush/finalize run, used
+        # by tests (and the eventual history tab) to introspect ordering.
+        self._last_stop_result: StopFlushFinalizeResult | None = None
+        # Optional Analyzer handoff sink — Stage 5 tests inject a spy to
+        # observe ``MainWindow.load_file`` calls without spinning up a
+        # real Analyzer window. When ``None`` the cockpit walks
+        # ``QApplication.topLevelWidgets()`` to find an Analyzer instance.
+        self._analyzer_handoff: "Callable[[str], None] | None" = None  # type: ignore[name-defined]
+        # Stage 5: the cockpit Stage 5 review-modal action selected on
+        # the last review modal close (one of the four spec action
+        # constants, or ``None`` when the modal was dismissed without
+        # an explicit click — Stage 4 placeholder path).
+        self._last_review_action: str | None = None
+        # Optional manifest target for ``保存并归档``. Tests pass tmp_path
+        # manifests via :meth:`set_manifest_target`.
+        self._manifest_path: Path | None = None
+
+        # ----- health aggregator ----------------------------------------
+        # Hook the aggregator's probes into the Cockpit's own simulated
+        # state so the demo path produces realistic snapshots.
+        self._health_aggregator = health_aggregator or HealthAggregator(
+            hw_probe=self._probe_hw,
+            can_probe=self._probe_can,
+            xcp_probe=self._probe_xcp,
+            daq_probe=self._probe_daq,
+            rec_probe=self._probe_rec,
+        )
+
+        # ----- timers ----------------------------------------------------
+        # Health poll — caller-driven per spec.
+        self._health_timer = QTimer(self)
+        self._health_timer.setInterval(int(thresholds.HEALTH_POLL_INTERVAL_S * 1000))
+        self._health_timer.timeout.connect(self._poll_health)
+
+        # Live data poll. Repaints at ``self._target_fps``.
+        self._live_timer = QTimer(self)
+        self._live_timer.setInterval(int(1000 / self._target_fps))
+        self._live_timer.timeout.connect(self._poll_live)
+
+        # ----- UI scaffolding -------------------------------------------
+        self._build_ui()
+        self._apply_state_to_ui(CockpitState.DISCONNECTED, CockpitState.DISCONNECTED)
+        if self._initial_pool:
+            self._left_pane.set_pool(self._initial_pool)
+
+        # T1-6: hydrate from acquisition_config.yaml AFTER _build_ui so
+        # the toolbar chip / left-pane favorites both exist when we
+        # push values into them.
+        self._hydrate_from_config_path()
+        if not self._health_timer.isActive():
+            self._health_timer.start()
+        self._poll_health()
+
+    # ------------------------------------------------------------------
+    # UI scaffolding
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        central = QWidget(self)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._toolbar = self._build_toolbar()
+        outer.addWidget(self._toolbar)
+
+        self._health_strip = HealthStrip(self)
+        self._health_strip.levels_changed.connect(self._on_health_levels_changed)
+        outer.addWidget(self._health_strip)
+
+        # Mode tabs — spec §Toolbar: `采集 / 回放 / 历史`.
+        self._mode_tabs = QTabWidget(self)
+        self._mode_tabs.setObjectName("cockpitModeTabs")
+        self._neutralize_mode_tab_bar()
+        # 采集 page is the three-pane layout.
+        self._mode_tabs.addTab(self._build_acquisition_page(), "采集")
+        self._replay_tab = ReplayTab(parent=self)
+        self._mode_tabs.addTab(self._replay_tab, REPLAY_TAB_TITLE)
+        self._history_tab = HistoryTab(parent=self)
+        self._history_tab.analyzer_open_requested.connect(
+            self._on_analyzer_open_requested
+        )
+        self._mode_tabs.addTab(self._history_tab, HISTORY_TAB_TITLE)
+        self._mode_tabs.currentChanged.connect(self._on_mode_tab_changed)
+        outer.addWidget(self._mode_tabs, stretch=1)
+        self._sync_mode_segment(self._mode_tabs.currentIndex())
+
+        self.setCentralWidget(central)
+        self._status = QStatusBar(self)
+        self.setStatusBar(self._status)
+        self._update_status_bar()
+        if self._settings_load_error:
+            self._status.showMessage(f"设置加载失败: {self._settings_load_error}")
+
+    def _load_threshold_overrides(self) -> None:
+        try:
+            thresholds.apply_overrides(thresholds.load_user_settings())
+        except (ConfigSchemaError, OSError, UnicodeDecodeError) as exc:
+            self._settings_load_error = str(exc)
+            logger.warning("could not load acquisition settings: %s", exc)
+
+    def _on_mode_tab_changed(self, index: int) -> None:
+        self._sync_mode_segment(index if index >= 0 else 0)
+
+    # ------------------------------------------------------------------
+    # State transitions / button label management
+    # ------------------------------------------------------------------
+
+    def _on_state_changed(
+        self, old: CockpitState, new: CockpitState
+    ) -> None:
+        self._apply_state_to_ui(old, new)
+
+    def _apply_state_to_ui(
+        self, old: CockpitState, new: CockpitState
+    ) -> None:
+        if hasattr(self, "_segment_action"):
+            segment_visible = new == CockpitState.RECORDING
+            self._segment_action.setVisible(segment_visible)
+            if hasattr(self, "_segment_btn"):
+                self._segment_btn.setVisible(segment_visible)
+        if new == CockpitState.DISCONNECTED:
+            self._main_btn.setText("连接 ECU")
+            self._main_btn.setEnabled(True)
+            self._set_visual_property(self._main_btn, "cockpitAction", "connect")
+            self._rec_indicator.setText("● REC OFF")
+            self._set_visual_property(self._rec_indicator, "recState", "off")
+            self._right_panel.show_disconnected(
+                snapshot=self._health_aggregator.last,
+                first_frame_received=self._first_frame_ts is not None,
+                first_failure=(
+                    self._state_machine.last_healthy_result.first_failure
+                    if self._state_machine.last_healthy_result
+                    else None
+                ),
+                selection_count=len(self._left_pane.current_selection())
+                if hasattr(self, "_left_pane")
+                else 0,
+            )
+            self._update_status_bar()
+            self._center.set_recording(False, None)
+        elif new == CockpitState.CONNECTED_IDLE:
+            self._main_btn.setText("● 采集")
+            self._set_visual_property(self._main_btn, "cockpitAction", "record")
+            self._rec_indicator.setText("● REC OFF")
+            self._set_visual_property(self._rec_indicator, "recState", "off")
+            self._center.set_recording(False, None)
+            self._refresh_idle_right_panel()
+            self._update_status_bar()
+            # Update record-button enabled state based on latest health.
+            self._update_record_button_enabled()
+        elif new == CockpitState.RECORDING:
+            if self._rec_start_ts is None:
+                self._rec_start_ts = time.monotonic()
+            self._main_btn.setText("■ Stop & 复盘")
+            self._main_btn.setEnabled(True)
+            self._set_visual_property(self._main_btn, "cockpitAction", "stop")
+            self._rec_indicator.setText("● REC")
+            self._set_visual_property(self._rec_indicator, "recState", "recording")
+            self._left_pane.set_frozen(True)
+            self._center.set_recording(True, self._rec_start_ts)
+            self._update_status_bar()
+            self._refresh_recording_right_panel()
+        elif new == CockpitState.REVIEW_MODAL:
+            self._main_btn.setEnabled(False)
+            self._set_visual_property(self._main_btn, "cockpitAction", "disabled")
+            self._rec_indicator.setText("● REC OFF")
+            self._set_visual_property(self._rec_indicator, "recState", "off")
+            self._left_pane.set_frozen(False)
+            self._status.showMessage("复盘")
+            self._open_review_modal()
+
+    # ------------------------------------------------------------------
+    # Main button handler
+    # ------------------------------------------------------------------
+
+    def _on_main_button(self) -> None:
+        st = self._state_machine.state
+        if st == CockpitState.DISCONNECTED:
+            self._begin_connection_attempt()
+        elif st == CockpitState.CONNECTED_IDLE:
+            self._start_recording()
+        elif st == CockpitState.RECORDING:
+            # Stage 5: run the canonical stop/flush/finalize sequence
+            # before flipping the state machine. When no controller is
+            # attached (Stage 4 demo path) we fall through to the
+            # placeholder modal so the four-state cycle still works.
+            self.request_stop_and_review()
+        # Review modal close is driven by the dialog's finished signal.
+
+    def request_stop_and_review(self, *, auto_stop: bool = False) -> None:
+        """Stage 5 entry point: run stop/flush/finalize and open review.
+
+        Called from:
+        - the toolbar Stop button (``_on_main_button``),
+        - the dropped-frames prompt's ``停止并复盘`` button,
+        - the auto-stop request slot (when the user is mid-recording).
+
+        ``auto_stop=True`` arms ``SessionSummary.auto_stop`` even when
+        the controller's own summary did not flag it (the auto-stop
+        request can arrive from the disk-free predicate, which doesn't
+        flow through the controller's auto-stop accounting).
+        """
+        if self._state_machine.state != CockpitState.RECORDING:
+            return
+        self._rec_start_ts = None
+        # Build expected_channels verbatim from the current selection so
+        # the post-record diagnostics check matches the writer's
+        # channel-naming contract (spec §Recorder Backend).
+        selection = (
+            self._left_pane.current_selection()
+            if hasattr(self, "_left_pane")
+            else []
+        )
+        expected_channels: tuple[str, ...] = tuple(m.name for m in selection)
+        result: StopFlushFinalizeResult | None = None
+        finalized = False
+        if self._capture_controller is not None:
+            try:
+                result = run_stop_flush_finalize(
+                    controller=self._capture_controller,
+                    expected_channels=expected_channels,
+                    compute_sha=False,  # SHA on archive only — review modal decides
+                )
+                finalized = True
+                self._last_stop_result = result
+                if auto_stop:
+                    result.summary.auto_stop = True
+                self._last_session_summary = result.summary
+            except Exception as exc:  # noqa: BLE001 — keep UI responsive on stop error
+                logger.exception("stop/flush/finalize failed: %s", exc)
+                # Surface to the status bar; stay in Recording so the
+                # user can retry.
+                self._status.showMessage(f"停止失败: {exc}")
+                return
+        else:
+            # No controller — Stage 4 demo path. Arm a stub summary so
+            # downstream callers can still inspect ``auto_stop``.
+            self._last_session_summary = SessionSummary(auto_stop=auto_stop)
+            finalized = True
+
+        # Drive the state machine.
+        self._state_machine.request_stop_recording(finalized=finalized)
+        # ``_apply_state_to_ui(REVIEW_MODAL)`` will open the modal in
+        # response to the state change. It picks the real review modal
+        # when ``result is not None`` and falls back to the Stage 4
+        # placeholder otherwise.
+
+    def _reset_connection_attempt_state(self) -> None:
+        self._connection_attempt_started = None
+        self._stream_start_ts = None
+        self._first_frame_ts = None
+        self._fake_xcp_connected = False
+        self._fake_rec_state = "off"
+        self._fake_can_load_pct = None
+
+    def _stop_backend_best_effort(self, backend: RecorderBackend) -> None:
+        try:
+            backend.stop()
+        except Exception as exc:  # noqa: BLE001 - cleanup must not mask UI flow
+            logger.warning("backend cleanup failed: %s", exc)
+
+    def closeEvent(self, event):  # noqa: N802 - Qt API name
+        """Drain timers and the backend before destruction (B4).
+
+        Without this, closing the cockpit window while a Vector backend
+        is running leaks the hardware handle: the next connection
+        attempt fails with 'channel busy'. Timers fire against a
+        destroyed parent and Qt logs warnings. Best-effort everywhere
+        because closeEvent must not raise.
+        """
+        try:
+            if getattr(self, "_live_timer", None) is not None and self._live_timer.isActive():
+                self._live_timer.stop()
+        except Exception:  # noqa: BLE001 - cleanup best-effort
+            pass
+        try:
+            if getattr(self, "_health_timer", None) is not None and self._health_timer.isActive():
+                self._health_timer.stop()
+        except Exception:  # noqa: BLE001 - cleanup best-effort
+            pass
+        try:
+            if getattr(self, "_backend", None) is not None:
+                self._stop_backend_best_effort(self._backend)
+        except Exception:  # noqa: BLE001 - cleanup best-effort
+            pass
+        super().closeEvent(event)
+
+    def _start_recording(self) -> None:
+        # Spec: red health disables record. The button enabled state
+        # already enforces this — defensive double-check here.
+        if not self._main_btn.isEnabled():
+            return
+        levels = self._health_strip.current_levels()
+        if any(level == "red" for level in levels.values()):
+            return
+        self._rec_start_ts = time.monotonic()
+        self._fake_rec_state = "recording"
+        self._cumulative_rx_count = 0
+        self._cumulative_dropped = 0
+        # Re-arm the dropped-frame prompt for the new session (B5).
+        self._dropped_prompt_last_ts = None
+        self._dropped_prompt_last_count = 0
+        self._state_machine.request_start_recording()
+
+    def _open_review_modal(self) -> None:
+        """Open the Stage 5 review modal when stop/flush/finalize ran,
+        otherwise fall back to the Stage 4 placeholder.
+
+        Spec §State Machine `ReviewModal` requires the four-action set;
+        the real :class:`ReviewModal` implements it. The placeholder
+        remains for the no-controller demo path so the four-state cycle
+        is observable end-to-end during development.
+        """
+        if self._last_stop_result is not None:
+            # CR3 finding 4: ReviewContext.expected_channels MUST equal
+            # the selected measurement names tuple that was passed into
+            # diagnostics — NOT PreflightResult.channels (which is just
+            # "what we ended up writing" and so silences the manifest's
+            # missing-channel detection forever). Fall back to a fresh
+            # selection only when the stop sequence ran with no expected
+            # channels (demo / no-selection paths).
+            selected_names = self._last_stop_result.selected_measurement_names
+            if not selected_names:
+                selected_names = tuple(
+                    m.name for m in (
+                        self._left_pane.current_selection()
+                        if hasattr(self, "_left_pane")
+                        else []
+                    )
+                )
+            ctx = ReviewContext(
+                mf4_path=Path(self._last_stop_result.summary.output_mf4),
+                sidecar_path=self._last_stop_result.sidecar_path,
+                summary=self._last_stop_result.summary,
+                preflight=self._last_stop_result.preflight,
+                preflight_sidecar_path=self._last_stop_result.preflight_sidecar_path,
+                expected_channels=selected_names,
+                manifest_path=self._manifest_path,
+            )
+            modal = ReviewModal(ctx, self)
+            modal.analyzer_open_requested.connect(self._on_analyzer_open_requested)
+            modal.finished.connect(self._on_review_modal_closed)
+            modal.open()
+            self._review_modal = modal
+        else:
+            # Stage 4 demo / no controller — placeholder so the cycle
+            # terminates.
+            modal = _PlaceholderReviewModal(self)
+            modal.finished.connect(self._on_review_modal_closed)
+            modal.open()
+            self._review_modal = modal
+
+    def _on_review_modal_closed(self, _result: int) -> None:
+        # Capture the chosen action (real modal only) BEFORE the
+        # reference is dropped, so callers / tests can introspect.
+        modal = self._review_modal
+        if isinstance(modal, ReviewModal):
+            self._last_review_action = modal.chosen_action
+            if (
+                self._last_review_action == ACTION_SAVE_AND_ARCHIVE
+                and hasattr(self, "_history_tab")
+            ):
+                self._history_tab.reload()
+        self._review_modal = None
+        # Reset stop_result so the next REVIEW_MODAL entry rebuilds
+        # context from a fresh stop sequence.
+        self._last_stop_result = None
+        try:
+            self._state_machine.request_review_close()
+        except ValueError:
+            # Modal closed after the state moved elsewhere — ignore.
+            pass
+
+    def _on_analyzer_open_requested(self, mf4_path: str) -> None:
+        """Bridge the review modal's ``在 Analyzer 打开`` signal to the
+        public Analyzer handoff (``MainWindow.load_file``).
+
+        Production path walks ``QApplication.topLevelWidgets()`` to find
+        an existing Analyzer ``MainWindow``; if none exists we create
+        one. Tests inject ``_analyzer_handoff`` to spy.
+        """
+        if self._analyzer_handoff is not None:
+            try:
+                self._analyzer_handoff(mf4_path)
+            except Exception:  # noqa: BLE001
+                logger.exception("analyzer handoff sink raised")
+            return
+        # Production path: find or create the Analyzer MainWindow.
+        try:
+            from PyQt5.QtWidgets import QApplication
+
+            from mf4_analyzer.ui.main_window import MainWindow as AnalyzerMainWindow
+
+            analyzer: AnalyzerMainWindow | None = None
+            for w in QApplication.topLevelWidgets():
+                if isinstance(w, AnalyzerMainWindow):
+                    analyzer = w
+                    break
+            if analyzer is None:
+                analyzer = AnalyzerMainWindow()
+                analyzer.show()
+            analyzer.load_file(mf4_path)
+            analyzer.raise_()
+            analyzer.activateWindow()
+        except Exception:  # noqa: BLE001
+            logger.exception("could not hand off MF4 to Analyzer")
+
+    # ------------------------------------------------------------------
+    # Controller injection — Stage 5 hand-off seam.
+    # ------------------------------------------------------------------
+
+    def set_capture_controller(
+        self, controller: CaptureController | None
+    ) -> None:
+        """Attach the live :class:`CaptureController` for auto-stop wiring.
+
+        Stage 4 keeps the controller external — the cockpit window
+        drives the simulated backend directly via ``self._backend``.
+        Stage 5 will own controller lifecycle and call this setter once
+        the controller is constructed and started. Tests inject a
+        spy/mock here to assert ``stop()`` is invoked on auto-stop.
+        """
+        self._capture_controller = controller
+
+    def set_analyzer_handoff(
+        self, handoff: Callable[[str], None] | None
+    ) -> None:
+        """Inject a sink for ``在 Analyzer 打开`` handoff.
+
+        Production path walks ``QApplication.topLevelWidgets()`` to find
+        an existing Analyzer ``MainWindow`` and calls its public
+        ``load_file`` method. Tests inject a spy here so the modal can
+        be exercised without spinning up a real Analyzer window.
+        """
+        self._analyzer_handoff = handoff
+
+    def set_manifest_target(self, manifest_path: Path | str | None) -> None:
+        """Set the project manifest path used by ``保存并归档``.
+
+        When ``None`` the archive action reports "no manifest
+        configured" rather than crashing.
+        """
+        self._manifest_path = Path(manifest_path) if manifest_path else None
+        if hasattr(self, "_history_tab"):
+            self._history_tab.set_manifest_path(self._manifest_path)
+
+    @property
+    def last_session_summary(self) -> SessionSummary | None:
+        """Most recent :class:`SessionSummary` (None until auto-stop or
+        Stage 5's normal stop path produces one). Carries the
+        ``auto_stop=True`` flag for the review modal."""
+        return self._last_session_summary
+
+    @property
+    def last_stop_result(self) -> StopFlushFinalizeResult | None:
+        """Most recent :class:`StopFlushFinalizeResult`.
+
+        Stage 5 tests inspect ``last_stop_result.order`` to assert the
+        stop/flush/finalize sequence ran in the spec-mandated order.
+        """
+        return self._last_stop_result
+
+    @property
+    def last_review_action(self) -> str | None:
+        """Last action chosen on the real :class:`ReviewModal` (one of
+        the four spec action constants, or ``None`` when the placeholder
+        modal was used / the modal was dismissed)."""
+        return self._last_review_action
+
+    @property
+    def review_modal(self) -> "QDialog | None":
+        """The currently open review modal (None when not in
+        :data:`CockpitState.REVIEW_MODAL`)."""
+        return self._review_modal
+
+    # ------------------------------------------------------------------
+    # Health levels → record button + REC indicator
+    # ------------------------------------------------------------------
+
+    def _on_health_levels_changed(self, levels: dict) -> None:
+        # Mirror REC chip into the toolbar indicator property for QSS.
+        rec_level = levels.get("REC", "off")
+        if rec_level == "red":
+            self._rec_indicator.setText("● REC ERROR")
+            self._set_visual_property(self._rec_indicator, "recState", "error")
+        elif rec_level == "yellow":
+            self._rec_indicator.setText("● REC WARN")
+            self._set_visual_property(self._rec_indicator, "recState", "warn")
+        elif self._state_machine.state == CockpitState.RECORDING:
+            self._rec_indicator.setText("● REC")
+            self._set_visual_property(self._rec_indicator, "recState", "recording")
+        else:
+            self._rec_indicator.setText("● REC OFF")
+            self._set_visual_property(self._rec_indicator, "recState", "off")
+        self._update_record_button_enabled()
+
+    def _update_record_button_enabled(self) -> None:
+        if self._state_machine.state != CockpitState.CONNECTED_IDLE:
+            return
+        levels = self._health_strip.current_levels()
+        if any(level == "red" for level in levels.values()):
+            self._main_btn.setEnabled(False)
+            self._set_visual_property(self._main_btn, "cockpitAction", "disabled")
+        else:
+            self._main_btn.setEnabled(True)
+            self._set_visual_property(self._main_btn, "cockpitAction", "record")
+
+    # ------------------------------------------------------------------
+    # Right-panel refreshers
+    # ------------------------------------------------------------------
+
+    def _refresh_idle_right_panel(self) -> None:
+        if not hasattr(self, "_right_panel"):
+            return
+        selection = self._left_pane.current_selection()
+        # Stage 4 demo: no real A2L event capacity — fabricate a
+        # generous mapping so the DAQ row reads green when at least
+        # one measurement has an event.
+        event_capacity = {
+            m.event: 32 for m in selection if m.event is not None
+        }
+        disk_free_bytes = self._estimate_disk_free_bytes()
+        self._right_panel.show_idle(
+            selection=selection,
+            event_capacity=event_capacity,
+            disk_free_bytes=disk_free_bytes,
+        )
+
+    def _refresh_recording_right_panel(self) -> None:
+        snapshot = self._health_aggregator.last
+        if snapshot is None:
+            return
+        self._right_panel.show_recording(
+            snapshot=snapshot,
+            disk_free_bytes=self._estimate_disk_free_bytes(),
+        )
+
+    def _check_recording_auto_stop(self) -> None:
+        if self._estimate_disk_free_bytes() < thresholds.DISK_FREE_AUTO_STOP_BYTES:
+            self._on_auto_stop_request("disk")
+
+    # ------------------------------------------------------------------
+    # Selection change handler
+    # ------------------------------------------------------------------
+
+    def _on_selection_changed(self) -> None:
+        if self._state_machine.state == CockpitState.CONNECTED_IDLE:
+            # Update center cards for the new selection.
+            self._center.set_signals(
+                [
+                    (m.name, m.unit, m.event)
+                    for m in self._left_pane.current_selection()
+                ]
+            )
+            self._refresh_idle_right_panel()
+
+    # ------------------------------------------------------------------
+    # Test helpers / accessors
+    # ------------------------------------------------------------------
+
+    @property
+    def state_machine(self) -> CockpitStateMachine:
+        return self._state_machine
+
+    @property
+    def ring_buffer(self) -> RingBuffer:
+        return self._ring
+
+    @property
+    def health_strip(self) -> HealthStrip:
+        return self._health_strip
+
+    @property
+    def left_pane(self) -> LeftPane:
+        return self._left_pane
+
+    @property
+    def right_panel(self) -> RightPanel:
+        return self._right_panel
+
+    @property
+    def main_button(self) -> QPushButton:
+        return self._main_btn
+
+    @property
+    def dbc_button(self) -> QPushButton:
+        return self._dbc_btn
+
+    @property
+    def mode_tabs(self) -> QTabWidget:
+        return self._mode_tabs
+
+    @property
+    def replay_tab(self) -> ReplayTab:
+        return self._replay_tab
+
+    @property
+    def history_tab(self) -> HistoryTab:
+        return self._history_tab
+
+    @property
+    def settings_action(self) -> QAction:
+        return self._settings_action
+
+    @property
+    def segment_action(self) -> QAction:
+        return self._segment_action
