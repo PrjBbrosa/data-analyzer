@@ -774,6 +774,88 @@ def test_slice_updates_on_select(qapp):
     c.deleteLater()
 
 
+def _slice_curve_aa_enabled(canvas):
+    curve = canvas._slice_curve
+    child = getattr(curve, "curve", None)
+    assert child is not None
+    return (
+        bool(curve.opts.get("antialias", False)),
+        bool(child.opts.get("antialias", False)),
+    )
+
+
+def test_heatmap_slice_curve_aa_drops_until_idle(qapp, monkeypatch):
+    """The 1D slice curve should mirror TimeDomain/FFT interaction quality:
+    crisp at rest, non-AA while the user pans/drags, then crisp again after
+    a hands-off idle tick."""
+    from PyQt5.QtWidgets import QApplication
+
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(640, 480)
+        c.show()
+        qapp.processEvents()
+        c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+
+        assert _slice_curve_aa_enabled(c) == (True, True)
+
+        vb = c._slice_plot.vb
+        vb.sigRangeChangedManually.emit(vb.state['mouseEnabled'])
+
+        assert c._slice_aa_on is False
+        assert c._slice_aa_idle_timer.isActive()
+        assert _slice_curve_aa_enabled(c) == (False, False)
+
+        monkeypatch.setattr(
+            QApplication, "mouseButtons", staticmethod(lambda: Qt.NoButton))
+        c._slice_aa_idle_timer.stop()
+        c.try_enable_idle_quality()
+
+        assert c._slice_aa_on is True
+        assert _slice_curve_aa_enabled(c) == (True, True)
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_slice_ctrl_wheel_drops_curve_aa(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(640, 480)
+        c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+
+        assert _slice_curve_aa_enabled(c) == (True, True)
+        consumed = c._handle_wheel_dispatch(
+            delta=120,
+            modifiers=Qt.ControlModifier,
+            x_pos=250.0,
+            y_pos=-30.0,
+            view_box=c._slice_plot.vb,
+        )
+
+        assert consumed is True
+        assert c._slice_aa_on is False
+        assert c._slice_aa_idle_timer.isActive()
+        assert _slice_curve_aa_enabled(c) == (False, False)
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_slice_marker_drag_drops_curve_aa(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(640, 480)
+        c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+
+        assert _slice_curve_aa_enabled(c) == (True, True)
+        c._slice_marker.setValue(float(c._slice_marker.value()) + 0.2)
+
+        assert c._slice_aa_on is False
+        assert c._slice_aa_idle_timer.isActive()
+        assert _slice_curve_aa_enabled(c) == (False, False)
+    finally:
+        c.deleteLater()
+
+
 def test_plot_result_without_slice_flag_has_no_slice_row(qapp):
     c = PgHeatmapCanvas(with_slice=False)
     assert not hasattr(c, '_slice_curve') or c._slice_curve is None

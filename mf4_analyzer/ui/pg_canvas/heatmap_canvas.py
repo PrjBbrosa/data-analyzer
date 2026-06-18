@@ -19,6 +19,7 @@ import pyqtgraph as pg
 from PyQt5.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFontMetrics, QPainter, QPixmap
 from PyQt5.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -617,11 +618,18 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._mouse_mode_controller = None
         self._bottom_tick_target = None
         self._bottom_tick_density = None
+        self._slice_aa_on = True
+        self._slice_aa_idle_timer = QTimer(self)
+        self._slice_aa_idle_timer.setSingleShot(True)
+        self._slice_aa_idle_timer.setInterval(150)
+        self._slice_aa_idle_timer.timeout.connect(self.try_enable_idle_quality)
         # remarks: card contract is set_remark_enabled / clear_remarks
         # (chart_stack.py:1314, 1330-1332).
         self._plot.scene().sigMouseClicked.connect(self._on_scene_click)
         self._plot.vb.sigXRangeChanged.connect(self._refresh_bottom_x_ticks)
         self._plot.vb.sigResized.connect(self._refresh_bottom_x_ticks)
+        self._plot.vb.sigRangeChangedManually.connect(
+            self._on_interactive_range_changed)
 
         # Slice row (with_slice=True). Every consumer guards on
         # ``self._slice_curve is not None``.
@@ -637,6 +645,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._slice_dir = 'x'
         self._slice_x_idx = 0
         self._slice_y_idx = 0
+        self._slice_marker_updating = False
         # Axis coordinate arrays + labels for the slice. Set by plot_result /
         # plot_or_update_heatmap; the slice reads these instead of the result
         # object so Order (no SpectrogramResult) slices the same way.
@@ -680,6 +689,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._slice_plot.vb.sigXRangeChanged.connect(
                 self._refresh_bottom_x_ticks)
             self._slice_plot.vb.sigResized.connect(self._refresh_bottom_x_ticks)
+            self._slice_plot.vb.sigRangeChangedManually.connect(
+                self._on_interactive_range_changed)
             # Open the gap between map + slice so the divider line reads clearly.
             try:
                 self._glw.ci.layout.setVerticalSpacing(_SPLIT_ROW_SPACING)
@@ -785,6 +796,74 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # (negative time/freq/order ticks). Real extents from the first
         # plot_or_update_heatmap override this via setXRange/setYRange.
         self._apply_empty_state_range()
+
+    @staticmethod
+    def _set_curve_aa(curve, on: bool) -> None:
+        on = bool(on)
+        try:
+            curve.opts["antialias"] = on
+        except Exception:
+            pass
+        child = getattr(curve, "curve", None)
+        if child is not None:
+            try:
+                child.opts["antialias"] = on
+                child.update()
+            except Exception:
+                pass
+
+    def _apply_slice_curve_aa_state(self) -> None:
+        if self._slice_curve is None:
+            return
+        self._set_curve_aa(self._slice_curve, self._slice_aa_on)
+        try:
+            self._glw.update()
+        except Exception:
+            pass
+
+    def _reset_slice_quality_for_rebuild(self) -> None:
+        try:
+            self._slice_aa_idle_timer.stop()
+        except Exception:
+            pass
+        self._slice_aa_on = True
+        self._apply_slice_curve_aa_state()
+
+    def disable_interactive_quality(self) -> None:
+        """Drop slice-curve AA while the user is actively moving the view."""
+        try:
+            self._slice_aa_idle_timer.stop()
+        except Exception:
+            pass
+        if self._slice_curve is None or not self._slice_aa_on:
+            return
+        self._slice_aa_on = False
+        self._apply_slice_curve_aa_state()
+
+    def schedule_idle_quality(self) -> None:
+        """Restore slice-curve AA after the interaction has settled."""
+        if self._slice_curve is None:
+            return
+        try:
+            self._slice_aa_idle_timer.start()
+        except Exception:
+            pass
+
+    def try_enable_idle_quality(self) -> None:
+        if self._slice_curve is None or self._slice_aa_on:
+            return
+        try:
+            if QApplication.mouseButtons() != Qt.NoButton:
+                self._slice_aa_idle_timer.start()
+                return
+        except Exception:
+            pass
+        self._slice_aa_on = True
+        self._apply_slice_curve_aa_state()
+
+    def _on_interactive_range_changed(self, *_args) -> None:
+        self.disable_interactive_quality()
+        self.schedule_idle_quality()
 
     def _apply_empty_state_range(self) -> None:
         """Pin the empty-map view to fixed non-negative defaults.
@@ -895,6 +974,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._matrix_disp = m
         self._extents = (x0, x1, y0, y1)
         self._has_result = True
+        self._reset_slice_quality_for_rebuild()
         self.layout_geometry_changed.emit()
 
     def has_result(self) -> bool:
@@ -1048,6 +1128,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 )
         except Exception:
             return False
+        self.disable_interactive_quality()
+        self.schedule_idle_quality()
         self.layout_geometry_changed.emit()
         return True
 
@@ -1340,8 +1422,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 self._slice_plot.setXRange(
                     float(xc[0]), float(xc[-1]), padding=0)
             self._slice_plot.setLabel('bottom', self._x_label or 'Time (s)')
-            self._slice_marker.setAngle(0)
-            self._slice_marker.setValue(float(yc[idx]))
+            self._slice_marker_updating = True
+            try:
+                self._slice_marker.setAngle(0)
+                self._slice_marker.setValue(float(yc[idx]))
+            finally:
+                self._slice_marker_updating = False
             fixed_val, fixed_lbl = float(yc[idx]), self._y_label
         else:
             # Fix a time → curve = amplitude vs Y (frequency / order).
@@ -1362,9 +1448,14 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 pass
             self._slice_plot.enableAutoRange(axis='x')
             self._slice_plot.setLabel('bottom', self._y_label or 'Frequency (Hz)')
-            self._slice_marker.setAngle(90)
-            self._slice_marker.setValue(float(xc[idx]))
+            self._slice_marker_updating = True
+            try:
+                self._slice_marker.setAngle(90)
+                self._slice_marker.setValue(float(xc[idx]))
+            finally:
+                self._slice_marker_updating = False
             fixed_val, fixed_lbl = float(xc[idx]), self._x_label
+        self._apply_slice_curve_aa_state()
         self._slice_plot.setLabel('left', amp_label)
         _hide_plot_title(self._slice_plot)
         self._slice_marker.setVisible(True)
@@ -1378,6 +1469,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def _on_slice_marker_dragged(self, *_args) -> None:
         """Marker drag → snap to the nearest index along the active axis and
         re-slice live."""
+        if self._slice_marker_updating:
+            return
         if self._matrix_disp is None or self._slice_curve is None:
             return
         xc, yc = self._slice_coords()
@@ -1387,11 +1480,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             pos = float(self._slice_marker.value())
         except Exception:
             return
+        self.disable_interactive_quality()
         if self._slice_dir == 'y':
             self._slice_y_idx = int(np.argmin(np.abs(yc - pos)))
         else:
             self._slice_x_idx = int(np.argmin(np.abs(xc - pos)))
         self._apply_slice()
+        self.schedule_idle_quality()
 
     @staticmethod
     def _short_axis_label(label: str):

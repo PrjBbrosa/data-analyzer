@@ -56,6 +56,7 @@ lesson by default.
 | [Bottom Tick Fitter Reject Over-Fine Not Thin](pyqt-ui/2026-06-17-bottom-tick-fitter-reject-overfine-not-thin.md) | Touching `_apply_target_bottom_ticks` / `_fit_x_tick_labels` target-count tick fitting; FFT/heatmap X ticks non-round or truncated short of the right edge. | `tests/ui/test_pg_heatmap_canvas.py` |
 | [Signal Time-Window Heatmap Coverage Extents](signal-time-window-heatmap-coverage-extents.md) | Touching FFT-vs-Time, Order/COT, or any heatmap that plots a matrix | See lesson |
 | [Qt Render Probes Isolate QSettings](codex-qt-render-probes-isolate-qsettings.md) | Writing or running Qt screenshot/render probes, smoke scripts, or UI | See lesson |
+| [Pyqt Heatmap Slice Curve AA Interaction Guard](pyqt-heatmap-slice-curve-aa-interaction-guard.md) | Touching `PgHeatmapCanvas` slice-curve rendering, slice marker | See lesson |
 
 ## Selection Rules
 
