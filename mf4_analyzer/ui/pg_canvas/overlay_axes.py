@@ -19,10 +19,8 @@ from mf4_analyzer.ui._axis_handle import (
     PgAxisHandle,
     _PgLineHandle,
 )
-from mf4_analyzer.ui.canvases import (
-    _is_monotonic_array,
-    _middle_ellipsis,
-)
+from mf4_analyzer.signal.envelope import _is_monotonic_array
+from mf4_analyzer.ui.plot_helpers import _middle_ellipsis
 
 from ._shared import _subplot_ylabel_text, _view_state_channel_key
 from .context_menu import _localize_pg_context_menu
@@ -299,7 +297,7 @@ class OverlayAxisManager(_CanvasBackref):
                 from mf4_analyzer.ui import pg_canvases as legacy_pg_canvases
                 envelope_builder = legacy_pg_canvases.build_envelope
             except Exception:
-                from mf4_analyzer.ui.canvases import build_envelope as envelope_builder
+                from mf4_analyzer.signal.envelope import build_envelope as envelope_builder
             bind_t, bind_s = envelope_builder(
                 np.asarray(t),
                 np.asarray(sig),

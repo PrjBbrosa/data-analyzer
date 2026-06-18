@@ -103,89 +103,9 @@ def _percentile(values: list[float], q: float) -> float:
 # --- the benchmark -------------------------------------------------------
 
 
-def test_timedomain_pan_refresh_baseline():
-    """Time the current matplotlib pan refresh on 5x100k channels.
-
-    This is the *current* code path baseline:
-        set_xlim(lo, hi)  # synchronously fires xlim_changed callback,
-                          # which schedules a 40 ms QTimer-debounced
-                          # refresh via _on_xlim_changed
-        _flush_pending_refresh()  # drains the pending refresh synchronously
-                                  # -> _refresh_visible_data() -> envelope
-                                  # recompute + Line2D.set_data + draw_idle
-    """
-    _qapp_or_skip()
-    # Defer the canvas import until after QApplication exists, mirroring
-    # how the rest of the UI test suite constructs offscreen widgets.
-    from mf4_analyzer.ui.canvases import TimeDomainCanvas
-
-    cv = TimeDomainCanvas()
-    cv.resize(1600, 800)
-
-    n_channels = 5
-    n_samples = 100_000
-    rows = _make_channels(n_channels, n_samples)
-    # subplot mode for a multi-axis layout matches the typical 5-channel
-    # interactive scenario; overlay would funnel everything through one
-    # axis and undercount per-axis envelope work.
-    cv.plot_channels(rows, mode="subplot")
-
-    primary = cv._primary_xaxis_ax
-    assert primary is not None, "TimeDomainCanvas primary axis not set"
-
-    # Drain any plot_channels-scheduled refresh so the warmup measurement
-    # starts from a known-quiet state.
-    cv._refresh_pending = False
-    if cv._refresh_timer.isActive():
-        cv._refresh_timer.stop()
-
-    # Pan windows: shift a 2-second window across the full 10-second span
-    # in steps of ~0.4s, then back. ~50 iterations is enough for stable
-    # P95 without bloating wall-clock.
-    window_w = 2.0
-    starts = np.concatenate([
-        np.linspace(0.0, 8.0, 25),
-        np.linspace(8.0, 0.0, 25),
-    ])
-
-    # Warmup: first refreshes pay first-draw cost and cache misses.
-    for s in starts[:5]:
-        primary.set_xlim(float(s), float(s) + window_w)
-        cv._flush_pending_refresh()
-
-    # Timed loop.
-    samples_ms: list[float] = []
-    for s in starts:
-        lo = float(s)
-        hi = lo + window_w
-        t0 = time.perf_counter()
-        primary.set_xlim(lo, hi)
-        cv._flush_pending_refresh()
-        t1 = time.perf_counter()
-        samples_ms.append((t1 - t0) * 1000.0)
-
-    n = len(samples_ms)
-    p50 = _percentile(samples_ms, 50.0)
-    p95 = _percentile(samples_ms, 95.0)
-    mean = statistics.fmean(samples_ms)
-    mn = min(samples_ms)
-    mx = max(samples_ms)
-
-    # Emit a single line the migration's results report can scrape.
-    print(
-        f"\nTIMEDOMAIN_PAN_PERF "
-        f"path=matplotlib channels={n_channels} samples={n_samples} "
-        f"iters={n} p50_ms={p50:.3f} p95_ms={p95:.3f} "
-        f"mean_ms={mean:.3f} min_ms={mn:.3f} max_ms={mx:.3f}"
-    )
-
-    # Smoke assertions only: never gate on absolute timing, but make sure
-    # the timer actually executed work (drain succeeded, no NaNs in stats).
-    assert n > 0
-    assert all(v >= 0.0 for v in samples_ms)
-    # After the last flush, no pending refresh should remain.
-    assert cv._refresh_pending is False
-    assert cv._refresh_timer.isActive() is False
+# test_timedomain_pan_refresh_baseline was removed in Phase D (2026-06-18)
+# when TimeDomainCanvas (matplotlib) was retired.  The pyqtgraph benchmark
+# below (test_timedomain_pan_refresh_pg_canvas) is the surviving gate.
 
 
 def test_timedomain_pan_refresh_pg_canvas():

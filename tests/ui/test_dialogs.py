@@ -323,52 +323,10 @@ def test_pg_chart_options_overlay_aux_axis_yscale_updates_own_curve(qapp):
     assert aux_line.opts["logMode"][1] is True
 
 
-def test_chart_options_dialog_curve_color_updates_owned_axis_and_inside_label(qtbot):
-    from mf4_analyzer.ui.canvases import TimeDomainCanvas
-    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
-
-    canvas = TimeDomainCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(1000, 420)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-
-    t = np.linspace(0.0, 1.0, 200)
-    names = [
-        "[Recorder_2026-04-2] AppCtrl_ES_DistanceRollingCounter_u16",
-        "[Recorder_2026-04-2] AppCtrl_ES_DistanceRangeCheckStatus_bool",
-    ]
-    canvas.plot_channels([
-        (names[0], True, t, np.sin(t * 12.0), "#ef4444", ""),
-        (names[1], True, t, np.cos(t * 10.0), "#f97316", ""),
-    ], mode="subplot")
-    canvas.draw()
-
-    assert canvas._last_channel_label_mode == "inside"
-    ax, line = canvas._channel_lines[names[0]]
-    inside_label = next(
-        artist for artist in canvas._inside_channel_label_artists
-        if artist.get_gid() == names[0]
-    )
-
-    dlg = ChartOptionsDialog(canvas, ax)
-    dlg.edit_curve_color.setText("#123456")
-    dlg.apply_changes()
-
-    assert mcolors.to_hex(line.get_color()).lower() == "#123456"
-    assert mcolors.to_hex(ax.yaxis.label.get_color()).lower() == "#123456"
-    assert mcolors.to_hex(ax.spines["left"].get_edgecolor()).lower() == "#123456"
-    visible_tick_labels = [
-        tick.label1 for tick in ax.yaxis.get_major_ticks()
-        if tick.label1.get_visible()
-    ]
-    assert visible_tick_labels
-    assert all(
-        mcolors.to_hex(label.get_color()).lower() == "#123456"
-        for label in visible_tick_labels
-    )
-    assert mcolors.to_hex(inside_label.get_color()).lower() == "#123456"
-    assert mcolors.to_hex(inside_label.get_bbox_patch().get_edgecolor()).lower() == "#123456"
+# test_chart_options_dialog_curve_color_updates_owned_axis_and_inside_label
+# was removed in Phase D (2026-06-18) when TimeDomainCanvas (matplotlib) was
+# retired.  The equivalent behavior is covered by
+# tests/ui/test_pg_timedomain_canvas.py for the pyqtgraph canvas.
 
 
 def test_chart_options_dialog_applies_heatmap_cmap_and_range(qapp):

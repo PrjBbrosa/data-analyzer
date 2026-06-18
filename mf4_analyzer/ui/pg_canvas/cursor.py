@@ -12,7 +12,7 @@ from ._backref import _CanvasBackref
 
 import pyqtgraph as pg
 
-from mf4_analyzer.ui.canvases import (
+from mf4_analyzer.ui.plot_helpers import (
     _format_dual_html,
     _format_single_cursor_channel_html,
     _interp_cursor_value,

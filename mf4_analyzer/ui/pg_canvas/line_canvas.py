@@ -19,7 +19,7 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
 )
-from mf4_analyzer.ui.canvases import build_envelope
+from mf4_analyzer.signal.envelope import build_envelope
 
 # Overlay AA point-density budget, shared with TimeDomainCanvasPG (canvas.py:
 # 145-146): ON=5000 / OFF=7000 with hysteresis. Imported (not re-defined) so

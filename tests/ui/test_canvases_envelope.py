@@ -3,14 +3,15 @@
 Covers Task 4 of the order-canvas-perf plan
 (`docs/superpowers/plans/2026-04-26-order-canvas-perf-plan.md`):
 
-  - ``build_envelope`` is module-level on ``mf4_analyzer.ui.canvases``
-    and behaviourally identical to the legacy
-    ``TimeDomainCanvas._envelope`` for tuple ``xlim``.
+  - ``build_envelope`` is accessible via ``mf4_analyzer.ui.canvases``
+    (re-export shim) and directly from ``mf4_analyzer.signal.envelope``.
   - ``build_envelope`` accepts ``xlim=None`` (full-range) — this is the
     auxiliary callers needing the xlim=None full-range entry; spec §6.4.
-  - ``TimeDomainCanvas._envelope`` is a thin wrapper that **keeps its
-    required-xlim signature**; ``None`` is the module helper's contract
-    only and must not propagate.
+
+Tests that required a live ``TimeDomainCanvas`` instance
+(``test_build_envelope_matches_timedomain_envelope_behaviour``,
+``test_timedomain_envelope_thin_wrapper_does_not_accept_none``) were
+removed in Phase D (2026-06-18) when that class was retired.
 
 The order heatmap's ``PlotCanvas.plot_or_update_heatmap`` reuse tests
 were removed when that method was deleted (M5/M6 renderer swap to
@@ -34,19 +35,7 @@ def test_build_envelope_is_module_level():
     assert hasattr(cv, 'build_envelope'), "build_envelope must be module-level"
 
 
-def test_build_envelope_matches_timedomain_envelope_behaviour(qtbot):
-    canvas = cv.TimeDomainCanvas()
-    qtbot.addWidget(canvas)
-    n = 100_000
-    t = np.linspace(0.0, 10.0, n)
-    sig = np.sin(2 * np.pi * 1.0 * t) + 0.1 * np.random.default_rng(0).standard_normal(n)
-    xs1, ys1 = canvas._envelope(t, sig, xlim=(2.0, 8.0), pixel_width=800)
-    xs2, ys2 = cv.build_envelope(t, sig, xlim=(2.0, 8.0), pixel_width=800)
-    np.testing.assert_array_equal(xs1, xs2)
-    np.testing.assert_array_equal(ys1, ys2)
-
-
-def test_build_envelope_xlim_none_uses_full_range(qtbot):
+def test_build_envelope_xlim_none_uses_full_range():
     """codex round-2 G22: callers may invoke ``build_envelope`` with
     ``xlim=None``; that must equal ``xlim=(t[0], t[-1])`` rather than
     raise ``TypeError``.
@@ -60,24 +49,6 @@ def test_build_envelope_xlim_none_uses_full_range(qtbot):
     )
     np.testing.assert_array_equal(xs_none, xs_full)
     np.testing.assert_array_equal(ys_none, ys_full)
-
-
-def test_timedomain_envelope_thin_wrapper_does_not_accept_none(qtbot):
-    """``TimeDomainCanvas._envelope`` is a thin wrapper that keeps its
-    required-``xlim`` signature; ``None`` is ``build_envelope``'s
-    contract only and must not be propagated into the wrapper to avoid
-    inflating the canvas's compatibility surface.
-    """
-    canvas = cv.TimeDomainCanvas()
-    qtbot.addWidget(canvas)
-    n = 100
-    t = np.linspace(0.0, 1.0, n)
-    sig = np.zeros(n)
-    # Tuple xlim must work (existing contract).
-    canvas._envelope(t, sig, xlim=(0.0, 1.0), pixel_width=200)
-    # None must raise — the thin wrapper does NOT widen the contract.
-    with pytest.raises(TypeError):
-        canvas._envelope(t, sig, xlim=None, pixel_width=200)
 
 
 # -------------------------------------------------------------------

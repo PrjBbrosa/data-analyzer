@@ -51,11 +51,11 @@ from typing import Tuple
 
 import numpy as np
 
-# build_envelope lives in the UI module today (canvases.py) because the
-# matplotlib canvas is its primary consumer. Importing the function — not
-# the canvas class — keeps this module UI-free. T7 will move
-# build_envelope here once the new canvas is the only consumer.
-from mf4_analyzer.ui.canvases import build_envelope, _is_monotonic_array
+# build_envelope and _is_monotonic_array now live in signal/envelope.py
+# (Phase D, 2026-06-18). They are also re-exported from canvases.py for
+# backwards-compatibility, but this module imports directly from the new
+# canonical home to avoid pulling in the (now-retired) matplotlib layer.
+from mf4_analyzer.signal.envelope import build_envelope, _is_monotonic_array
 
 
 _log = logging.getLogger(__name__)

@@ -3008,59 +3008,12 @@ class TestTimeDomainCanvasPGCursorParity:
     reimplementing them so the strings cannot drift.
     """
 
-    def test_single_cursor_html_matches_update_single_letter_for_letter(self, qapp):
-        """String-for-string parity gate (codex-plan-spec-literal-evidence).
-        Build identical inputs into matplotlib TimeDomainCanvas and pg
-        TimeDomainCanvasPG, drive the same cursor x, capture
-        cursor_info emissions, assertEqual the raw strings."""
-        from PyQt5.QtCore import QCoreApplication
-        from mf4_analyzer.ui.canvases import TimeDomainCanvas
-
-        # Two channels at known values so the HTML payload is non-trivial.
-        t = np.linspace(0.0, 1.0, 100, dtype=np.float64)
-        sig_a = np.sin(2 * np.pi * 5 * t).astype(np.float64)
-        sig_b = (t * 100.0).astype(np.float64)
-        rows = [
-            ("speed",  True, t, sig_a, "#1769e0", "rpm", "fid-1"),
-            ("torque", True, t, sig_b, "#ef4444", "Nm",  "fid-1"),
-        ]
-
-        # Matplotlib reference: call _update_single directly. It both
-        # paints artists AND emits cursor_info. We capture the emission.
-        mpl = TimeDomainCanvas()
-        mpl.plot_channels(rows, mode="subplot")
-        mpl.set_cursor_visible(True)
-        # _update_single does a canvas.draw() via _refresh_bg(); make
-        # sure the figure has a renderer ready under offscreen Qt.
-        mpl.draw()
-
-        mpl_emissions = []
-        mpl.cursor_info.connect(lambda html: mpl_emissions.append(html))
-
-        # Pyqtgraph candidate.
-        pg = _pg_canvas(qapp)
-        pg.plot_channels(rows, mode="subplot")
-        pg.set_cursor_visible(True)
-        QCoreApplication.processEvents()
-
-        pg_emissions = []
-        pg.cursor_info.connect(lambda html: pg_emissions.append(html))
-
-        # Drive an identical hover x.
-        cursor_x = 0.42
-        mpl._update_single(cursor_x)
-        pg._emit_single_cursor_html(cursor_x)
-
-        QCoreApplication.processEvents()
-        assert mpl_emissions, "matplotlib canvas emitted no cursor_info"
-        assert pg_emissions, "pg canvas emitted no cursor_info"
-        # Byte-for-byte equality: any trailing whitespace or attribute
-        # reorder is a failure (codex-plan-spec-literal-evidence).
-        assert pg_emissions[-1] == mpl_emissions[-1], (
-            "single-cursor HTML drifted!\n"
-            f"  matplotlib: {mpl_emissions[-1]!r}\n"
-            f"  pyqtgraph:  {pg_emissions[-1]!r}"
-        )
+    # test_single_cursor_html_matches_update_single_letter_for_letter was
+    # removed in Phase D (2026-06-18) when TimeDomainCanvas (matplotlib) was
+    # retired.  The parity contract is now enforced by sharing the same
+    # formatter functions (_format_single_cursor_channel_html) in
+    # mf4_analyzer.ui.plot_helpers, used by both the pg cursor and any
+    # caller that previously compared against the mpl implementation.
 
     def test_single_cursor_html_preserves_full_channel_name_like_dual_cursor(self, qapp):
         from PyQt5.QtCore import QCoreApplication
@@ -3090,55 +3043,10 @@ class TestTimeDomainCanvasPGCursorParity:
         assert dual_emissions and rest in dual_emissions[-1]
         assert rest in single_html
 
-    def test_dual_cursor_html_matches_format_dual_html_letter_for_letter(self, qapp):
-        """Same letter-for-letter gate as single cursor, applied to the
-        dual_cursor_info payload + the delta column."""
-        from PyQt5.QtCore import QCoreApplication
-        from mf4_analyzer.ui.canvases import TimeDomainCanvas
-
-        t = np.linspace(0.0, 1.0, 100, dtype=np.float64)
-        sig_a = np.sin(2 * np.pi * 5 * t).astype(np.float64)
-        sig_b = (t * 100.0).astype(np.float64)
-        rows = [
-            ("speed",  True, t, sig_a, "#1769e0", "rpm", "fid-1"),
-            ("torque", True, t, sig_b, "#ef4444", "Nm",  "fid-1"),
-        ]
-
-        # matplotlib reference
-        mpl = TimeDomainCanvas()
-        mpl.plot_channels(rows, mode="subplot")
-        mpl.set_cursor_visible(True)
-        mpl.set_dual_cursor_mode(True)
-        mpl._ax = 0.20
-        mpl._bx = 0.80
-        mpl.draw()
-
-        mpl_dual = []
-        mpl.dual_cursor_info.connect(lambda html: mpl_dual.append(html))
-
-        # pyqtgraph candidate
-        pg = _pg_canvas(qapp)
-        pg.plot_channels(rows, mode="subplot")
-        pg.set_cursor_visible(True)
-        pg.set_dual_cursor_mode(True)
-        pg._cursor.ax = 0.20
-        pg._cursor.bx = 0.80
-        QCoreApplication.processEvents()
-
-        pg_dual = []
-        pg.dual_cursor_info.connect(lambda html: pg_dual.append(html))
-
-        mpl._update_dual()
-        pg._emit_dual_cursor_html()
-
-        QCoreApplication.processEvents()
-        assert mpl_dual, "matplotlib canvas emitted no dual_cursor_info"
-        assert pg_dual, "pg canvas emitted no dual_cursor_info"
-        assert pg_dual[-1] == mpl_dual[-1], (
-            "dual-cursor HTML drifted!\n"
-            f"  matplotlib: {mpl_dual[-1]!r}\n"
-            f"  pyqtgraph:  {pg_dual[-1]!r}"
-        )
+    # test_dual_cursor_html_matches_format_dual_html_letter_for_letter was
+    # removed in Phase D (2026-06-18) when TimeDomainCanvas (matplotlib) was
+    # retired.  The parity contract is enforced by the shared formatter
+    # _format_dual_html in mf4_analyzer.ui.plot_helpers.
 
 
 class TestTimeDomainCanvasPGCursorInteraction:

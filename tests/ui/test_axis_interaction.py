@@ -1,4 +1,10 @@
-"""Tests for the pure axis-hit detection helper used by all 4 canvases."""
+"""Tests for the pure axis-hit detection helper used by all 4 canvases.
+
+TimeDomainCanvas and PlotCanvas tests that drove mpl-internal event dispatch
+(canvas.callbacks.process, MouseEvent, fig.bbox) were removed when those
+classes were retired in Phase D (2026-06-18).  The pg-based equivalents are
+covered in tests/ui/test_pg_timedomain_canvas.py.
+"""
 import pytest
 from matplotlib.figure import Figure
 
@@ -47,174 +53,6 @@ def test_find_axis_no_hit_returns_none():
     assert axis is None
 
 
-def test_timedomain_canvas_dblclick_opens_chart_options_from_axis_gutter(qtbot, monkeypatch):
-    from PyQt5.QtCore import Qt
-    from mf4_analyzer.ui.canvases import TimeDomainCanvas
-
-    canvas = TimeDomainCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(600, 400)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-
-    # Plot something so axes have a bbox
-    ax = canvas.fig.add_subplot(111)
-    ax.plot([0, 1, 2], [0, 1, 4])
-    canvas.draw()
-
-    # Stub the dialog to auto-accept and mutate the target axes.
-    from mf4_analyzer.ui import _axis_interaction
-    called = {}
-
-    def fake_edit(parent_widget, ax_):
-        called['ax'] = ax_
-        ax_.set_xlim(0, 10)
-        return True
-
-    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
-                        fake_edit, raising=False)
-
-    # Synthesize a dblclick event in the X-axis gutter
-    bbox = ax.get_window_extent()
-    from matplotlib.backend_bases import MouseEvent
-    e = MouseEvent('button_press_event', canvas, x=(bbox.x0 + bbox.x1) / 2,
-                   y=bbox.y0 - 30, button=1, dblclick=True)
-    canvas.callbacks.process('button_press_event', e)
-
-    assert called.get('ax') is ax
-    assert ax.get_xlim() == (0, 10)
-
-
-def test_timedomain_canvas_dblclick_inside_axes_opens_chart_options(qtbot, monkeypatch):
-    from mf4_analyzer.ui.canvases import TimeDomainCanvas
-
-    canvas = TimeDomainCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(600, 400)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-
-    ax = canvas.fig.add_subplot(111)
-    ax.plot([0, 1, 2], [0, 1, 4])
-    canvas.draw()
-
-    from mf4_analyzer.ui import _axis_interaction
-    called = {}
-
-    def fake_edit(parent_widget, ax_):
-        called['ax'] = ax_
-        ax_.set_title("edited")
-        return True
-
-    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
-                        fake_edit, raising=False)
-
-    bbox = ax.get_window_extent()
-    from matplotlib.backend_bases import MouseEvent
-    e = MouseEvent('button_press_event', canvas, x=(bbox.x0 + bbox.x1) / 2,
-                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
-    e.inaxes = ax
-    canvas.callbacks.process('button_press_event', e)
-
-    assert called.get('ax') is ax
-    assert ax.get_title() == "edited"
-
-
-def test_timedomain_canvas_hover_axis_changes_cursor(qtbot, monkeypatch):
-    from PyQt5.QtCore import Qt
-    from mf4_analyzer.ui.canvases import TimeDomainCanvas
-
-    canvas = TimeDomainCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(600, 400)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-
-    ax = canvas.fig.add_subplot(111)
-    ax.plot([0, 1, 2], [0, 1, 4])
-    canvas.draw()
-
-    bbox = ax.get_window_extent()
-    from matplotlib.backend_bases import MouseEvent
-    e = MouseEvent('motion_notify_event', canvas, x=bbox.x0 - 30,
-                   y=(bbox.y0 + bbox.y1) / 2, button=None)
-    canvas.callbacks.process('motion_notify_event', e)
-
-    assert canvas.cursor().shape() == Qt.PointingHandCursor
-    assert canvas.toolTip() == "双击打开图表选项"
-
-
-def test_plot_canvas_dblclick_uses_chart_options_helper(qtbot, monkeypatch):
-    from mf4_analyzer.ui.canvases import PlotCanvas
-    canvas = PlotCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(600, 400)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-    ax = canvas.fig.add_subplot(111)
-    ax.plot([0, 1, 2], [0, 1, 4])
-    canvas.draw()
-
-    from mf4_analyzer.ui import _axis_interaction
-    called = {}
-
-    def fake_edit(parent, ax_):
-        called['ax'] = ax_
-        ax_.set_ylim(-1, 99)
-        return True
-
-    monkeypatch.setattr(_axis_interaction, 'edit_chart_options_dialog',
-                        fake_edit, raising=False)
-
-    bbox = ax.get_window_extent()
-    from matplotlib.backend_bases import MouseEvent
-    e = MouseEvent('button_press_event', canvas, x=bbox.x0 - 30,
-                   y=(bbox.y0 + bbox.y1) / 2, button=1, dblclick=True)
-    canvas.callbacks.process('button_press_event', e)
-    assert called.get('ax') is ax
-    assert ax.get_ylim() == (-1, 99)
-
-
-def test_plot_canvas_hover_axis(qtbot):
-    from PyQt5.QtCore import Qt
-    from mf4_analyzer.ui.canvases import PlotCanvas
-    canvas = PlotCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(600, 400)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-    ax = canvas.fig.add_subplot(111)
-    ax.plot([0, 1, 2], [0, 1, 4])
-    canvas.draw()
-
-    bbox = ax.get_window_extent()
-    from matplotlib.backend_bases import MouseEvent
-    e = MouseEvent('motion_notify_event', canvas, x=bbox.x0 - 30,
-                   y=(bbox.y0 + bbox.y1) / 2, button=None)
-    canvas.callbacks.process('motion_notify_event', e)
-    assert canvas.cursor().shape() == Qt.PointingHandCursor
-
-
-def test_plot_canvas_hover_short_circuit_during_drag(qtbot):
-    from PyQt5.QtCore import Qt
-    from mf4_analyzer.ui.canvases import PlotCanvas
-    canvas = PlotCanvas()
-    qtbot.addWidget(canvas)
-    canvas.resize(600, 400)
-    canvas.show()
-    qtbot.waitExposed(canvas)
-    ax = canvas.fig.add_subplot(111)
-    canvas.draw()
-
-    canvas._mouse_button_pressed = True
-    bbox = ax.get_window_extent()
-    from matplotlib.backend_bases import MouseEvent
-    e = MouseEvent('motion_notify_event', canvas, x=bbox.x0 - 30,
-                   y=(bbox.y0 + bbox.y1) / 2, button=None)
-    canvas.callbacks.process('motion_notify_event', e)
-    # Cursor should NOT be PointingHandCursor since drag is active
-    assert canvas.cursor().shape() != Qt.PointingHandCursor
-
 # M9 retired the matplotlib SpectrogramCanvas (FFT-vs-Time moved to
 # PgHeatmapCanvas with_slice=True). Its three axis-dblclick ->
 # edit_chart_options_dialog tests drove matplotlib MouseEvent through
@@ -222,3 +60,11 @@ def test_plot_canvas_hover_short_circuit_during_drag(qtbot):
 # matplotlib-only event surface with no equivalent on the pyqtgraph
 # canvas, so they were removed rather than stubbed (see
 # pyqt-ui/2026-05-28-mpl-event-coupled-tests-survive-renderer-swap).
+#
+# Phase D (2026-06-18): TimeDomainCanvas and PlotCanvas dblclick/hover tests
+# (test_timedomain_canvas_dblclick_opens_chart_options_from_axis_gutter,
+# test_timedomain_canvas_dblclick_inside_axes_opens_chart_options,
+# test_timedomain_canvas_hover_axis_changes_cursor,
+# test_plot_canvas_dblclick_uses_chart_options_helper,
+# test_plot_canvas_hover_axis,
+# test_plot_canvas_hover_short_circuit_during_drag) removed with the classes.

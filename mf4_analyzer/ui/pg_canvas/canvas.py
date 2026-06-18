@@ -83,10 +83,8 @@ from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_WIDTH,
     PgAxisHandle,
 )
-from mf4_analyzer.ui.canvases import (  # noqa: F401
-    _split_prefixed_label,
-    build_envelope,  # re-exported via the pg_canvases shim + overlay monkeypatch seam
-)
+from mf4_analyzer.ui.plot_helpers import _split_prefixed_label  # noqa: F401
+from mf4_analyzer.signal.envelope import build_envelope  # noqa: F401
 from mf4_analyzer.ui.pg_canvas.context_menu import (
     _localize_pg_context_actions,
     _localize_pg_context_menu,

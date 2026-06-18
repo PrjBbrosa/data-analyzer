@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from mf4_analyzer.ui.canvases import _compact_axis_label
+from mf4_analyzer.ui.plot_helpers import _compact_axis_label
 
 
 def _subplot_ylabel_text(name, unit):

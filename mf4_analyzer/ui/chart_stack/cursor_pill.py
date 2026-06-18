@@ -159,7 +159,7 @@ class CursorPill(QFrame):
     def _refresh_detail(self):
         if not self._dual_rows:
             return
-        from ..canvases import _format_dual_html
+        from ..plot_helpers import _format_dual_html
         html = _format_dual_html(self._dual_rows) if self._mode == "full" else _format_mini_html(self._dual_rows)
         if html:
             self._detail.setText(html)
