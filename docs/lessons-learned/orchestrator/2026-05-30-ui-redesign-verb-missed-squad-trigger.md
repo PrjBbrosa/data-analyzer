@@ -1,6 +1,6 @@
 # UI-redesign / optimize verbs miss the squad trigger keyword set
 
-**Date:** 2026-05-30 (updated 2026-05-31)
+**Date:** 2026-05-30 (updated 2026-06-18)
 **Tag:** cause: routing · roster-gap · trigger-keywords
 **Run:** 2026-05-30 TimeDomain right-click menu redesign + hi-DPI copy/save;
 2026-05-31 overlay AA / interaction bug-fix (spec→实现)
@@ -61,6 +61,13 @@ pyqt-ui-engineer task (4 fixes, single file).
 3. The reliable signal is not the keyword but the **act**: does the message
    ask for `.py` source edits? If yes and it's not the escape hatch
    (`skip squad:` / `直接改：`), route.
+
+**2026-06-18 third occurrence (退役 matplot + EF 优化):** the user request
+"退役 matplot 然后进行 EF的优化" contained 优化 but none of the trigger
+tokens. The main clause "退役 matplot" (retire matplotlib) and "EF的优化"
+(phase E/F refactor) are large multi-file structural refactors on a live
+branch. Routed correctly via Missed-triggers. Confirms "优化" recurs as a
+non-trigger verb for substantial source changes.
 
 ## Action items applied to this run
 
