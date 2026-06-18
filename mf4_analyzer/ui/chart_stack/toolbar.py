@@ -3,8 +3,8 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QAbstractSpinBox, QAction, QButtonGroup, QFileDialog, QFrame,
-    QGridLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QSlider,
-    QSpinBox, QToolBar, QVBoxLayout,
+    QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy,
+    QSlider, QSpinBox, QToolBar, QVBoxLayout,
 )
 
 from ._helpers import _grab_pixmap_hidpi
@@ -649,9 +649,13 @@ class PgNavigationToolbar(QToolBar):
             pix = _grab_pixmap_hidpi(canvas)
         if pix is None or pix.isNull():
             return
+        ok = False
         try:
-            pix.save(path)
+            ok = bool(pix.save(path))
         except Exception:
+            ok = False
+        if not ok:
+            QMessageBox.warning(self, "保存失败", f"无法保存图片到：\n{path}")
             return
 
     # ----- split-mode action routing (forward clicks to focused pane) ------

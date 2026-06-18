@@ -1108,6 +1108,46 @@ def test_save_figure_uses_hidpi_scale(qapp, qtbot, monkeypatch, tmp_path):
     assert Path(out).exists(), "save_figure did not write the file"
 
 
+def test_save_image_failure_warns(qapp, qtbot, monkeypatch, tmp_path):
+    """pix.save() returning False must surface a failure warning."""
+    import mf4_analyzer.ui.chart_stack as chart_stack_pkg
+    import mf4_analyzer.ui.chart_stack.toolbar as toolbar_mod
+
+    class _FailingPixmap:
+        def isNull(self):
+            return False
+
+        def save(self, _path):
+            return False
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    toolbar = cs._time_card.toolbar
+
+    out = str(tmp_path / "blocked.png")
+    monkeypatch.setattr(
+        chart_stack_pkg.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *a, **k: (out, "PNG (*.png)")),
+    )
+    calls = []
+
+    class _MessageBoxSpy:
+        @staticmethod
+        def warning(*args):
+            calls.append(args)
+
+    monkeypatch.setattr(toolbar_mod, "QMessageBox", _MessageBoxSpy, raising=False)
+    toolbar._save_pixmap_provider = lambda: _FailingPixmap()
+
+    toolbar.save_figure()
+
+    assert calls, "save failure must raise a warning dialog"
+    assert calls[0][0] is toolbar
+    assert calls[0][1] == "保存失败"
+    assert out in calls[0][2]
+
+
 def test_overlay_curve_drag_leaves_toolbar_idle_during_selection(qapp, qtbot):
     """Selecting a curve in overlay mode must drop pan (so blank clicks can
     later deselect), and a Y-drag on the selected curve must shift its ylim
