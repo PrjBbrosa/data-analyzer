@@ -8,6 +8,49 @@ import pytest
 from PyQt5.QtWidgets import QApplication
 
 
+@pytest.fixture(autouse=True)
+def _isolate_qsettings(tmp_path, monkeypatch):
+    """Keep UI tests from polluting the real MF4Analyzer/DataAnalyzer store.
+
+    Constructing a persistent UI widget (Inspector param sections,
+    PersistentTop, PresetBar) and toggling it calls ``set_expanded`` /
+    ``setValue`` on the ``QSettings`` returned by ``_preset_settings()``. On
+    Windows the native backend is the registry, so a UI test that expands a
+    section writes ``inspector/{fft,order,fft_time}/params_expanded=true`` into
+    the live store; the next real app launch then opens that section expanded,
+    appearing to violate the default-collapsed spec even though the code
+    default is correct (lesson ``codex-qt-render-probes-isolate-qsettings``).
+
+    ``QSettings(org, app)`` ignores ``setDefaultFormat`` — it hard-binds the
+    native backend — so redirecting it requires monkeypatching the
+    ``_preset_settings`` factory itself, in every module that imported it by
+    name *and* the package re-export the tests pull from. Each test gets its
+    own throwaway INI. ``setDefaultFormat`` + ``setPath`` additionally divert
+    any bare ``QSettings()`` (hint bars) away from the registry.
+    """
+    from PyQt5.QtCore import QSettings
+    import mf4_analyzer.ui.inspector_sections as _pkg
+    import mf4_analyzer.ui.inspector_sections._helpers as _helpers_mod
+    import mf4_analyzer.ui.inspector_sections.collapsible as _collapsible_mod
+    import mf4_analyzer.ui.inspector_sections.presets as _presets_mod
+    import mf4_analyzer.ui.inspector_sections.persistent_top as _persistent_top_mod
+
+    ini = str(tmp_path / "qsettings.ini")
+
+    def _temp_settings(*_args, **_kwargs):
+        return QSettings(ini, QSettings.IniFormat)
+
+    for mod in (_pkg, _helpers_mod, _collapsible_mod, _presets_mod,
+                _persistent_top_mod):
+        if hasattr(mod, "_preset_settings"):
+            monkeypatch.setattr(mod, "_preset_settings", _temp_settings)
+
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
+    QSettings.setPath(QSettings.IniFormat, QSettings.SystemScope, str(tmp_path))
+    yield
+
+
 @pytest.fixture(scope="session")
 def qapp():
     """Session-wide QApplication so each test reuses the instance."""

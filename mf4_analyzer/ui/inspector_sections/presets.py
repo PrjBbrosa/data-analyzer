@@ -20,6 +20,8 @@ from PyQt5.QtWidgets import (
 from ...ui_kit.menus import apply_rounded_menu_chrome
 from .. import hints
 from ._helpers import (
+    BUILTIN_PRESET_BLURB,
+    _PRESET_KEY_TO_SLOT,
     _preset_settings,
     _preset_value_text,
 )
@@ -114,7 +116,7 @@ class _PresetHoverCard(QFrame):
         """)
 
     def set_summary(self, *, name, params, kind, label_map, current_params=None,
-                    builtin=False):
+                    builtin=False, blurb=''):
         self._clear()
         params = params if isinstance(params, dict) else {}
         current_params = current_params if isinstance(current_params, dict) else {}
@@ -128,7 +130,8 @@ class _PresetHoverCard(QFrame):
         title = QLabel(str(name), self._panel)
         title.setObjectName("presetHoverTitle")
         title_box.addWidget(title)
-        sub = QLabel(f"已保存参数快照 · 来源：{self._kind_label(kind)}", self._panel)
+        sub_text = blurb if (builtin and blurb) else f"已保存参数快照 · 来源：{self._kind_label(kind)}"
+        sub = QLabel(sub_text, self._panel)
         sub.setObjectName("presetHoverSub")
         title_box.addWidget(sub)
         head.addLayout(title_box, 1)
@@ -321,8 +324,8 @@ class PresetBar(QWidget):
     parameters that the bar treats as the slot's "default":
 
     - The slot button shows ``builtin_defaults[slot]['display_name']`` when
-      no user override exists (for signal-type presets this reads as 扭矩类 /
-      振动类 / 启停类 out of the box).
+      no user override exists (for signal-type presets this reads as 频率优先 /
+      均衡 / 时间优先 out of the box).
     - Left-click loads either the user override (if any) or the builtin.
     - The right-click menu adds a "重置为默认" entry that removes the
       override and restores the builtin.
@@ -527,6 +530,12 @@ class PresetBar(QWidget):
             current_params = self._collect()
         except Exception:
             current_params = {}
+        # Resolve blurb for builtin slots: reverse-map slot index → preset key.
+        _SLOT_TO_KEY = {v: k for k, v in _PRESET_KEY_TO_SLOT.items()}
+        builtin_blurb = (
+            BUILTIN_PRESET_BLURB.get(_SLOT_TO_KEY.get(slot, ''), '')
+            if builtin else ''
+        )
         self._hover_slot = slot
         self._hover_card.set_summary(
             name=name,
@@ -535,6 +544,7 @@ class PresetBar(QWidget):
             label_map=self._SUMMARY_LABELS,
             current_params=current_params,
             builtin=builtin,
+            blurb=builtin_blurb,
         )
         self._place_hover(slot)
         self._hover_card.show()

@@ -28,3 +28,16 @@ Verification: Before finishing a Qt visual probe, grep for `QSettings` and
 persistent setters in the probe path, then verify affected real keys are either
 unchanged or cleared. For Inspector param sections, confirm fresh construction
 prints `expanded=False` for `fft`, `order`, and `fft_time`.
+
+Resolution (2026-06-19): `tests/ui/conftest.py` now ships an autouse
+`_isolate_qsettings` fixture that monkeypatches `_preset_settings` (in
+`_helpers`, `collapsible`, `presets`, `persistent_top`, and the package
+re-export the tests import) to a per-test temp INI, plus
+`QSettings.setDefaultFormat`/`setPath` to divert bare `QSettings()` (hint
+bars). Running `tests/ui/**` no longer writes `inspector/*/params_expanded`
+into the real `MF4Analyzer/DataAnalyzer` store — verified by clearing the keys,
+running `test_inspector.py`, and confirming they stay absent. Key gotcha:
+`QSettings(organization, application)` ignores `setDefaultFormat` (it
+hard-binds the native/registry backend), so isolating that store requires
+patching the `_preset_settings` factory itself — format/path redirection alone
+only catches the bare `QSettings()` default constructor.

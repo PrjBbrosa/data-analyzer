@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>预设改名 + 谱参数 tooltip — Mockup (2026-06-19)</title>
+<style>
+  :root { font-family: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif; }
+  body {
+    margin: 0; padding: 28px;
+    background: #eef2f7; color: #1f2733;
+  }
+  .page { max-width: 920px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .lede { color: #5b6675; font-size: 13px; margin: 0 0 20px; }
+  .decided {
+    display: inline-block; font-size: 12px; color: #047857;
+    background: #e9f9f1; border: 1px solid #b6e6cf;
+    border-radius: 11px; padding: 3px 10px; margin: 0 6px 18px 0;
+  }
+  .zone {
+    background: #fff; border: 1px solid #d8e0ea; border-radius: 12px;
+    padding: 18px 20px; margin: 0 0 18px;
+    box-shadow: 0 1px 2px rgba(20,40,70,.04);
+  }
+  .zone > h2 {
+    font-size: 14px; margin: 0 0 4px; color: #1f3b63;
+  }
+  .zone > .hint { font-size: 12px; color: #7a8597; margin: 0 0 14px; }
+
+  /* ---------- 预设条 ---------- */
+  .params-card {
+    background: #f4f8fd; border: 1px solid #dbe6f2; border-radius: 10px;
+    padding: 12px; max-width: 320px;
+  }
+  .preset-bar { display: flex; gap: 6px; }
+  .slot {
+    flex: 1; position: relative; text-align: center;
+    font-size: 13px; padding: 8px 4px; border-radius: 8px;
+    border: 1px solid #cdd9e8; background: #fff; color: #2a3647;
+    cursor: default;
+  }
+  .slot.reco {
+    border-color: #2f8f6b; box-shadow: 0 0 0 1px #2f8f6b inset;
+    background: #f3fbf7;
+  }
+  .reco-pill {
+    position: absolute; top: -9px; right: -6px;
+    font-size: 10px; color: #047857; background: #e9f9f1;
+    border: 1px solid #b6e6cf; border-radius: 9px; padding: 1px 6px;
+  }
+  .old { color: #98a3b3; text-decoration: line-through; font-size: 12px; }
+  .arrow { color: #98a3b3; margin: 0 6px; }
+  .rename-row { display: flex; align-items: center; gap: 4px; margin-top: 12px; font-size: 13px; }
+
+  /* ---------- 悬浮卡 (还原真实 QSS) ---------- */
+  .hovercard {
+    width: 380px; padding: 8px 10px 14px;
+  }
+  .hoverpanel {
+    border: 1px solid rgba(160,177,200,.96); border-radius: 8px;
+    background: #ffffff; padding: 11px 12px 10px;
+  }
+  .hover-head { display: flex; align-items: flex-start; gap: 8px; }
+  .hover-titlebox { flex: 1; }
+  .hover-title { color: #172033; font-size: 15px; font-weight: 800; }
+  .hover-sub { color: #647086; font-size: 12px; margin-top: 3px; line-height: 1.5; }
+  .hover-sub b { color: #2a3647; font-weight: 700; }
+  .hover-badge {
+    color: #047857; background: #e9f9f1; border-radius: 11px;
+    padding: 3px 8px; font-size: 12px; font-weight: 700; white-space: nowrap;
+  }
+  .hover-section {
+    border: 1px solid #d5dfeb; border-radius: 7px;
+    background: rgba(248,251,255,.91); padding: 9px 10px; margin-top: 10px;
+  }
+  .hover-section-title { color: #1f3b63; font-size: 12px; font-weight: 800; margin-bottom: 7px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    padding: 3px 7px; border: 1px solid #d5dfeb; border-radius: 10px;
+    background: #f1f6fc; font-size: 12px; color: #34425a;
+  }
+  .chip.warn { border-color: #d9b56e; }
+  .newtag { color: #b45309; font-size: 11px; font-weight: 700; }
+
+  /* ---------- 谱参数 + tooltip ---------- */
+  .form { max-width: 320px; }
+  .frow {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0; border-bottom: 1px dashed #e6ecf3;
+  }
+  .frow:last-child { border-bottom: none; }
+  .flabel { width: 84px; text-align: right; color: #3a4658; font-size: 13px; }
+  .ffield {
+    flex: 1; border: 1px solid #cdd9e8; border-radius: 6px;
+    padding: 4px 8px; font-size: 13px; background: #fff; color: #2a3647;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .ffield .caret { color: #9aa6b6; }
+  .info { color: #2f7dd1; font-size: 12px; cursor: help; }
+
+  /* 真实玻璃态弹层：磨砂白、圆角、无箭头、行下方居中 */
+  .tipbubble {
+    display: inline-block;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid rgba(209,219,235,0.9);
+    color: #1e293b; font-size: 12px; line-height: 1.55;
+    border-radius: 10px; padding: 6px 12px;
+    box-shadow: 0 6px 18px rgba(30,50,80,.12);
+  }
+  .tip-under { margin: 7px 0 12px 92px; }   /* 缩进对齐到字段列、模拟"控件正下方" */
+  .frow.hot .ffield { border-color: #2f7dd1; box-shadow: 0 0 0 2px rgba(47,125,209,.12); }
+
+  /* ---------- tooltip 文案清单 ---------- */
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #eceff4; vertical-align: top; }
+  th { color: #1f3b63; font-size: 12px; background: #f6f9fd; }
+  td.k { white-space: nowrap; color: #2a3647; font-weight: 600; width: 130px; }
+  td.v { color: #4a5566; }
+  .sec-tag { color: #7a8597; font-size: 11px; }
+  .foot { color: #8b95a4; font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>预设改名 + 谱参数 tooltip · 效果确认</h1>
+  <p class="lede">2026-06-19 · 三套视图（FFT-1D / 时频图 / 阶次）共用同一套预设，本图以「时频图」为例。</p>
+  <div>
+    <span class="decided">命名方案 B · 取舍导向</span>
+    <span class="decided">参数 tooltip + 悬浮卡说明</span>
+    <span class="decided">内部 key / 按单位推荐 / 历史预设 不变</span>
+  </div>
+
+  <!-- ZONE 1 -->
+  <div class="zone">
+    <h2>① 预设条（显示名）</h2>
+    <p class="hint">仅改显示文字；下例为某 Nm 通道：按单位自动把「频率优先」高亮为推荐（逻辑不变）。</p>
+    <div class="params-card">
+      <div class="preset-bar">
+        <div class="slot reco">频率优先<span class="reco-pill">推荐</span></div>
+        <div class="slot">均衡</div>
+        <div class="slot">时间优先</div>
+      </div>
+    </div>
+    <div class="rename-row">
+      <span class="old">扭矩类</span><span class="arrow">→</span><b>频率优先</b>
+      <span style="margin:0 10px;color:#dde3ec">|</span>
+      <span class="old">振动类</span><span class="arrow">→</span><b>均衡</b>
+      <span style="margin:0 10px;color:#dde3ec">|</span>
+      <span class="old">启停类</span><span class="arrow">→</span><b>时间优先</b>
+    </div>
+  </div>
+
+  <!-- ZONE 2 -->
+  <div class="zone">
+    <h2>② 悬浮卡（鼠标停在预设上）</h2>
+    <p class="hint">副标题改为「特性 + 适合工况」（<span class="newtag">新增</span>），下方参数 chips 维持现状。三张卡内容如下，先展示「频率优先」。</p>
+    <div class="hovercard">
+      <div class="hoverpanel">
+        <div class="hover-head">
+          <div class="hover-titlebox">
+            <div class="hover-title">频率优先</div>
+            <div class="hover-sub"><span class="newtag">新</span> 长窗 + flattop，<b>频率 / 幅值最准</b>，时间偏粗（稳态）<br>适合：扭矩、压力、角度等稳态量</div>
+          </div>
+          <div class="hover-badge">内置</div>
+        </div>
+        <div class="hover-section">
+          <div class="hover-section-title">分析参数</div>
+          <div class="chips">
+            <span class="chip warn">窗函数 flattop</span>
+            <span class="chip">窗长 2.5 s</span>
+            <span class="chip">重叠 75%</span>
+            <span class="chip">动态 自动</span>
+            <span class="chip">去均值 是</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:8px">
+      <div class="hovercard" style="width:300px; padding-left:0">
+        <div class="hoverpanel">
+          <div class="hover-head">
+            <div class="hover-titlebox">
+              <div class="hover-title">均衡</div>
+              <div class="hover-sub">中窗 + hanning，<b>宽动态(80dB)</b>，时间-频率折中（通用）<br>适合：振动等通用诊断</div>
+            </div>
+            <div class="hover-badge">内置</div>
+          </div>
+        </div>
+      </div>
+      <div class="hovercard" style="width:300px; padding-left:0">
+        <div class="hoverpanel">
+          <div class="hover-head">
+            <div class="hover-titlebox">
+              <div class="hover-title">时间优先</div>
+              <div class="hover-sub">短窗 + 峰值保持，<b>时间最细</b>，频率偏粗（瞬态/启停）<br>适合：启停、冲击、快变工况</div>
+            </div>
+            <div class="hover-badge">内置</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ZONE 3 -->
+  <div class="zone">
+    <h2>③ 谱参数 tooltip（真实样式 = 全局玻璃态弹层）</h2>
+    <p class="hint">不是原生淡黄方框、也没有箭头：悬停某行 → 在该行<b>正下方居中</b>弹出磨砂白圆角层（项目里所有 tooltip 都长这样）。较长文案用 <code>\n</code> 手动断行避免拉太宽。</p>
+    <div class="form">
+      <div class="frow"><span class="flabel">FFT 点数:</span><span class="ffield">自动 <span class="caret">▾</span></span></div>
+      <div class="frow hot"><span class="flabel">窗函数:</span><span class="ffield">flattop <span class="caret">▾</span></span></div>
+      <div class="tip-under"><span class="tipbubble">抑制频谱泄漏：flattop 幅值最准、<br>hanning 最均衡、blackman 旁瓣最低。</span></div>
+      <div class="frow hot"><span class="flabel">重叠:</span><span class="ffield">75 %</span></div>
+      <div class="tip-under"><span class="tipbubble">相邻时间帧的重叠：越高时频图越平滑、<br>计算量越大。</span></div>
+      <div class="frow"><span class="flabel">去均值:</span><span class="ffield" style="justify-content:flex-start">☑</span></div>
+    </div>
+  </div>
+
+  <!-- ZONE 4 -->
+  <div class="zone">
+    <h2>④ tooltip 文案清单（全部）</h2>
+    <p class="hint">同名参数在三套视图共用同一句；视图特有的参数单列。</p>
+    <table>
+      <thead><tr><th>参数</th><th>提示文案</th><th>所在视图</th></tr></thead>
+      <tbody>
+        <tr><td class="k">窗函数</td><td class="v">抑制频谱泄漏：flattop 幅值最准、hanning 最均衡、blackman 旁瓣最低（分辨力略降）。</td><td class="sec-tag">时频 / FFT-1D</td></tr>
+        <tr><td class="k">FFT 点数 / NFFT</td><td class="v">越大频率越细、计算量越高；"自动" ＝ 按窗长取 2 的幂。</td><td class="sec-tag">全部</td></tr>
+        <tr><td class="k">重叠</td><td class="v">相邻时间帧的重叠：越高时频图越平滑、计算量越大。</td><td class="sec-tag">时频</td></tr>
+        <tr><td class="k">去均值</td><td class="v">减去直流，避免 0 Hz 大值压低低频成分。</td><td class="sec-tag">时频</td></tr>
+        <tr><td class="k">dB 参考</td><td class="v">0 dB 对应的线性幅值，仅平移 dB 刻度、不改波形。</td><td class="sec-tag">时频</td></tr>
+        <tr><td class="k">幅值单位 (dB/Linear)</td><td class="v">dB 看宽动态，Linear 看绝对幅值。</td><td class="sec-tag">时频 / FFT-1D</td></tr>
+        <tr><td class="k">色阶 下/上限</td><td class="v">颜色映射区间(dB)：缩小区间增强弱信号对比。</td><td class="sec-tag">时频</td></tr>
+        <tr><td class="k">最大阶次</td><td class="v">分析的最高阶次；越大覆盖越宽、计算量越大。</td><td class="sec-tag">阶次</td></tr>
+        <tr><td class="k">阶次分辨率</td><td class="v">阶次轴细度：越小越细，但需更多转数 / 更长数据。</td><td class="sec-tag">阶次</td></tr>
+        <tr><td class="k">时间分辨率</td><td class="v">阶次谱图时间轴细度：越小时间越细、阶次相应变粗。</td><td class="sec-tag">阶次</td></tr>
+      </tbody>
+    </table>
+    <p class="foot">「每转样本数 / 平均模式 / 重叠率」已有 tooltip，仅对齐语气，不重写。</p>
+  </div>
+
+</div>
+</body>
+</html>

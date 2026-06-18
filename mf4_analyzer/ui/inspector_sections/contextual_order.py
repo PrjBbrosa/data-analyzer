@@ -110,22 +110,26 @@ class OrderContextual(QWidget):
         self.spin_mo = _no_buttons(QSpinBox())
         self.spin_mo.setRange(1, 100)
         self.spin_mo.setValue(20)
+        self.spin_mo.setToolTip('分析的最高阶次；越大覆盖越宽、计算量越大。')
         fl.addRow("最大阶次:", _fit_field(self.spin_mo))
         self.spin_order_res = _no_buttons(CompactDoubleSpinBox())
         self.spin_order_res.setRange(0.01, 1.0)
         self.spin_order_res.setValue(0.1)
         self.spin_order_res.setSingleStep(0.05)
+        self.spin_order_res.setToolTip('阶次轴细度：越小越细，\n但需更多转数 / 更长数据。')
         fl.addRow("阶次分辨率:", _fit_field(self.spin_order_res))
         self.spin_time_res = _no_buttons(CompactDoubleSpinBox())
         self.spin_time_res.setRange(0.01, 1.0)
         self.spin_time_res.setValue(0.05)
         self.spin_time_res.setSuffix(" s")
+        self.spin_time_res.setToolTip('阶次谱图时间轴细度：\n越小时间越细、阶次相应变粗。')
         fl.addRow("时间分辨率:", _fit_field(self.spin_time_res))
         self.combo_nfft = QComboBox()
         self.combo_nfft.addItems([
             self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192', '16384'
         ])
         self.combo_nfft.setCurrentText(self._AUTO_NFFT_LABEL)
+        self.combo_nfft.setToolTip('越大阶次越细、计算量越高；\n「自动」＝按需取 2 的幂。')
         fl.addRow("FFT点数:", _fit_field(self.combo_nfft))
 
         # COT is now the only tracking algorithm (Wave 2 of the
@@ -193,7 +197,7 @@ class OrderContextual(QWidget):
         # constructor default until the user actually toggles a checkbox).
         self._sync_axis_enabled()
 
-        # Signal-type built-in presets (扭矩类 / 振动类 / 启停类).
+        # Signal-type built-in presets (频率优先 / 均衡 / 时间优先).
         self.preset_bar = PresetBar(
             'order', self._collect_preset, self._apply_preset, parent=self,
             builtin_defaults=self._builtin_preset_defaults(),

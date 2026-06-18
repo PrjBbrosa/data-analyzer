@@ -133,16 +133,19 @@ class FFTContextual(QWidget):
         self.combo_win.addItems(
             ['hanning', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop']
         )
+        self.combo_win.setToolTip('抑制频谱泄漏：flattop 幅值最准、\nhanning 最均衡、blackman 旁瓣最低。')
         fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_nfft = QComboBox()
         self.combo_nfft.addItems(
             [self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192', '16384']
         )
+        self.combo_nfft.setToolTip('越大频率越细、计算量越高；\n「自动」＝按窗长取 2 的幂。')
         fl.addRow("NFFT:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_overlap = _no_buttons(QSpinBox())
         self.spin_overlap.setRange(0, 90)
         self.spin_overlap.setValue(50)
         self.spin_overlap.setSuffix(" %")
+        self.spin_overlap.setToolTip('相邻分析帧的重叠：越高频谱越平滑、计算量越大。')
         fl.addRow("重叠:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH))
 
         # --- Averaging (Welch / peak-hold) — Wave 2 / SP2 / Task 2.1 ---
@@ -180,6 +183,7 @@ class FFTContextual(QWidget):
         self.combo_amp_y = QComboBox()
         self.combo_amp_y.addItems(['Linear', 'dB'])
         self.combo_amp_y.setCurrentText('Linear')
+        self.combo_amp_y.setToolTip('dB 看宽动态，Linear 看绝对幅值。')
         # 2026-06-05 narrow-pane: was "Amplitude 轴:" (144px) — the lone
         # outlier that inflated the unified label column and forced the
         # signal field to wrap at the 288px pane. The Chinese form matches
@@ -224,7 +228,7 @@ class FFTContextual(QWidget):
         self.chk_remark = QCheckBox("点击标注", self)
         self.chk_remark.setVisible(False)
 
-        # Signal-type built-in presets (扭矩类 / 振动类 / 启停类). Slot order
+        # Signal-type built-in presets (频率优先 / 均衡 / 时间优先). Slot order
         # is the shared contract from BUILTIN_PRESET_KEYS.
         self.preset_bar = PresetBar(
             'fft', self._collect_preset, self._apply_preset, parent=self,

@@ -34,17 +34,23 @@ def _preset_settings():
 # ---- Signal-type built-in presets (shared by FFT-1D / FFT-time / Order) ----
 #
 # The three analysis views share ONE set of three built-in presets, displayed
-# as 扭矩类 / 振动类 / 启停类 on PresetBar slots 1/2/3. Slot order is a
+# as 频率优先 / 均衡 / 时间优先 on PresetBar slots 1/2/3. Slot order is a
 # contract consumed by ``recommend_preset_for_unit`` (torque=1, vibration=2,
 # transient=3) and the per-view ``set_recommended_for_unit`` wiring.
 BUILTIN_PRESET_KEYS = ('torque', 'vibration', 'transient')
 BUILTIN_PRESET_DISPLAY = {
-    'torque': '扭矩类',
-    'vibration': '振动类',
-    'transient': '启停类',
+    'torque': '频率优先',
+    'vibration': '均衡',
+    'transient': '时间优先',
 }
 # preset key -> PresetBar slot index (slots are 1-based: 1/2/3).
 _PRESET_KEY_TO_SLOT = {'torque': 1, 'vibration': 2, 'transient': 3}
+# Blurb text for builtin hover cards (view-agnostic).
+BUILTIN_PRESET_BLURB = {
+    'torque': '频率 / 幅值最准，时间偏粗 · 适合扭矩、压力等稳态量',
+    'vibration': '时间-频率折中，宽动态 · 适合振动等通用诊断',
+    'transient': '时间最细，频率偏粗 · 适合启停、冲击等瞬态',
+}
 
 
 def _normalize_unit(unit):

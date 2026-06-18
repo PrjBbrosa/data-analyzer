@@ -1222,7 +1222,7 @@ class MainWindow(
 
         Returns an empty string when the file/channel is unknown — callers
         pass that on to ``set_recommended_for_unit`` which falls back to the
-        default (振动类) recommendation for unrecognized units.
+        default (均衡) recommendation for unrecognized units.
         """
         if not data:
             return None

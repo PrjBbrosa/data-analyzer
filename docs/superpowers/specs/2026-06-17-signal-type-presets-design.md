@@ -4,6 +4,8 @@
 状态：已分析（参数经 `signal-processing-expert` 校核，见 §1；交互/单位通路经代码核验，见 §4）
 配套 plan：`docs/superpowers/plans/2026-06-17-signal-type-presets.md`
 
+> **2026-06-19 更新：** 显示名已改为取舍导向（频率优先 / 均衡 / 时间优先），内部 key 与单位推荐不变，见 `docs/superpowers/plans/2026-06-19-preset-rename-tooltips.md`。
+
 ## 0. 范围
 
 三个分析视图的"预设配置"栏（`mf4_analyzer/ui/inspector_sections.py` 的 `PresetBar`，三槽位）：

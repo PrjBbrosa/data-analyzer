@@ -1347,7 +1347,7 @@ def test_fft_time_presets_use_preset_bar(qtbot):
 
 def test_fft_time_preset_bar_default_button_names_match_builtins(qtbot):
     """Default button labels for the FFTTime preset bar must read as the
-    shared signal-type display names: 扭矩类 / 振动类 / 启停类."""
+    shared signal-type display names: 频率优先 / 均衡 / 时间优先."""
     from PyQt5.QtWidgets import QPushButton
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     # Use a fresh QSettings org/app per test by wiping any prior overrides
@@ -1359,9 +1359,9 @@ def test_fft_time_preset_bar_default_button_names_match_builtins(qtbot):
     qtbot.addWidget(ctx)
     btns = ctx.preset_bar.findChildren(QPushButton)
     texts = [b.text() for b in btns]
-    assert "扭矩类" in texts
-    assert "振动类" in texts
-    assert "启停类" in texts
+    assert "频率优先" in texts
+    assert "均衡" in texts
+    assert "时间优先" in texts
 
 
 def test_fft_time_preset_bar_menu_includes_reset_to_default(qtbot, monkeypatch):
@@ -1635,7 +1635,7 @@ def test_fft_time_contextual_short_fields_capped(qapp):
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     ctx = FFTTimeContextual()
     for w in (ctx.spin_overlap, ctx.spin_fs, ctx.combo_nfft, ctx.combo_win,
-              ctx.spin_db_ref, ctx.combo_cmap):
+              ctx.spin_db_ref):
         assert 200 <= w.maximumWidth() <= 260, (
             f"FFTTimeContextual field "
             f"{w.objectName() or type(w).__name__} maximumWidth="
@@ -1932,17 +1932,17 @@ def test_btn_rebuild_outer_size_compact(qapp):
         )
 
 
-# ---- Signal-type builtin preset display names → 扭矩类/振动类/启停类 ----
+# ---- Signal-type builtin preset display names → 频率优先/均衡/时间优先 ----
 #
 # PresetBar exposes per-slot text via the internal ``_load_btns[n].text()``
 # accessor (no public ``slot_text`` getter), and writes overrides through
 # ``_write(slot, name, params)`` (no public ``set_slot_override``). Both
-# tests below honor the plan's intent — default labels read 扭矩类/振动类/启停类 and
+# tests below honor the plan's intent — default labels read 频率优先/均衡/时间优先 and
 # reset-to-default still surfaces those names — while using the real API.
 
 def test_fft_time_preset_bar_default_names(qtbot):
     """Default slot labels for the FFTTime preset bar must be the shared
-    signal-type display names: 扭矩类 / 振动类 / 启停类."""
+    signal-type display names: 频率优先 / 均衡 / 时间优先."""
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
     s = QSettings("MF4Analyzer", "DataAnalyzer")
@@ -1952,14 +1952,14 @@ def test_fft_time_preset_bar_default_names(qtbot):
     qtbot.addWidget(w)
     bar = w.preset_bar
     # PresetBar exposes per-slot text via ``_load_btns[n].text()``.
-    assert bar._load_btns[1].text() == '扭矩类'
-    assert bar._load_btns[2].text() == '振动类'
-    assert bar._load_btns[3].text() == '启停类'
+    assert bar._load_btns[1].text() == '频率优先'
+    assert bar._load_btns[2].text() == '均衡'
+    assert bar._load_btns[3].text() == '时间优先'
 
 
 def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     """After resetting an overridden slot, the slot text must restore to
-    the signal-type builtin name (扭矩类) — not the legacy 诊断模式.
+    the signal-type builtin name (频率优先) — not the legacy 诊断模式.
     """
     from PyQt5.QtCore import QSettings
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
@@ -1975,7 +1975,7 @@ def test_fft_time_preset_bar_reset_to_default_keeps_new_names(qtbot):
     bar._refresh_states()
     assert bar._load_btns[1].text() == 'Custom A'
     bar._reset_to_default(1)
-    assert bar._load_btns[1].text() == '扭矩类'
+    assert bar._load_btns[1].text() == '频率优先'
 
 
 # ---- Requested first-open defaults for FFT-vs-Time spectrogram ----
@@ -3335,12 +3335,6 @@ def test_axis_rows_fit_inspector_and_align_with_panel_right_edge(qapp, qtbot):
                 axis_group.mapTo(ctx, axis_group.rect().topLeft()).x()
                 + axis_group.width()
             )
-            if mode == "fft_time":
-                cmap_right = (
-                    ctx.combo_cmap.mapTo(ctx, ctx.combo_cmap.rect().topLeft()).x()
-                    + ctx.combo_cmap.width()
-                )
-                assert cmap_right == group_right
 
             right_edges = []
             for key in ("x", "y", "z"):
@@ -3774,7 +3768,6 @@ def test_fft_time_apply_params_idempotent(qtbot):
     ctx.chk_remove_mean.setChecked(False)
     ctx.combo_amp_unit.setCurrentText('dB')
     ctx.spin_db_ref.setValue(2.5)
-    ctx.combo_cmap.setCurrentText('viridis')
     ctx.spin_fs.setValue(48000.0)
     ctx.chk_x_auto.setChecked(False)
     ctx.spin_x_min.setValue(1.0)
@@ -3797,7 +3790,6 @@ def test_fft_time_apply_params_idempotent(qtbot):
     ctx.chk_remove_mean.setChecked(True)
     ctx.combo_amp_unit.setCurrentText('Linear')
     ctx.spin_db_ref.setValue(1.0)
-    ctx.combo_cmap.setCurrentText('turbo')
     ctx.spin_fs.setValue(1000.0)
     ctx.chk_x_auto.setChecked(True)
     ctx.spin_x_min.setValue(-3.0)
@@ -4082,7 +4074,6 @@ def test_fft_time_builtin_presets_apply_through_combos(qtbot):
         p = ctx._BUILTIN_PRESETS[key]
         assert _combo_text_hits(ctx.combo_win, p['window']), (key, p['window'])
         assert _combo_text_hits(ctx.combo_nfft, "自动")
-        assert _combo_text_hits(ctx.combo_cmap, p['cmap']), (key, p['cmap'])
         full = ctx._builtin_preset_full_params(key)
         assert full['nfft'] == "自动"
         assert full['nfft_mode'] == "auto"
@@ -4144,3 +4135,99 @@ def test_set_recommended_for_unit_highlights_correct_slot(qapp, qtbot):
     assert tc.preset_bar._load_btns[1].property('recommended') == 'true'
     tc.set_recommended_for_unit('unknown-unit')  # fallback vibration -> slot 2
     assert tc.preset_bar._load_btns[2].property('recommended') == 'true'
+
+
+# ---- Task 2: Built-in preset hover card shows blurb, not '已保存参数快照' ----
+
+def test_preset_hover_card_builtin_blurb(qtbot):
+    """Built-in preset hover card sub-label shows blurb, not '已保存参数快照'."""
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    from PyQt5.QtWidgets import QLabel
+    from PyQt5.QtCore import QSettings
+    s = QSettings("MF4Analyzer", "DataAnalyzer")
+    for slot in (1, 2, 3):
+        s.remove(f"fft_time/preset_override/{slot}")
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    bar = ctx.preset_bar
+    # Trigger hover for slot 1 (频率优先/torque builtin)
+    bar._show_hover(1)
+    sub_labels = bar._hover_card.findChildren(QLabel)
+    sub_texts = [l.text() for l in sub_labels]
+    # Should contain blurb keyword '适合' and NOT '已保存参数快照'
+    assert any("适合" in t for t in sub_texts), f"No '适合' in: {sub_texts}"
+    assert not any("已保存参数快照" in t for t in sub_texts), f"Old sub found: {sub_texts}"
+    # Non-builtin user-saved: sub should still show '已保存参数快照'
+    bar._write(1, '我的预设', {})
+    bar._show_hover(1)
+    sub_labels2 = bar._hover_card.findChildren(QLabel)
+    sub_texts2 = [l.text() for l in sub_labels2]
+    assert any("已保存参数快照" in t for t in sub_texts2), f"Missing old sub: {sub_texts2}"
+    s.remove("fft_time/preset_override/1")
+
+
+# ---- Task 3: FFTTimeContextual spectral-param tooltip coverage ----
+
+def test_fft_time_param_tooltips(qtbot):
+    """FFTTimeContextual spectral-param widgets must have non-empty tooltips."""
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    checks = [
+        (ctx.combo_win, "泄漏"),
+        (ctx.combo_nfft, "频率"),
+        (ctx.spin_overlap, "重叠"),
+        (ctx.chk_remove_mean, "直流"),
+        (ctx.spin_db_ref, "dB"),
+        (ctx.combo_amp_unit, "动态"),
+        (ctx.spin_z_floor, "映射"),
+    ]
+    for widget, keyword in checks:
+        tip = widget.toolTip()
+        assert tip and keyword in tip, (
+            f"{widget.objectName() or type(widget).__name__} toolTip missing '{keyword}': {tip!r}"
+        )
+
+
+# ---- Task 4: FFTContextual spectral-param tooltip coverage ----
+
+def test_fft_param_tooltips(qtbot):
+    """FFTContextual spectral-param widgets must have non-empty tooltips."""
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    checks = [
+        (ctx.combo_win, "泄漏"),
+        (ctx.combo_nfft, "频率"),
+        (ctx.spin_overlap, "重叠"),
+        (ctx.combo_amp_y, "动态"),
+    ]
+    for widget, keyword in checks:
+        tip = widget.toolTip()
+        assert tip and keyword in tip, (
+            f"{type(widget).__name__} toolTip missing '{keyword}': {tip!r}"
+        )
+    # Pre-existing tooltips must NOT be cleared
+    assert ctx.combo_avg_mode.toolTip(), "combo_avg_mode tooltip cleared"
+
+
+# ---- Task 5: OrderContextual spectral-param tooltip coverage ----
+
+def test_order_param_tooltips(qtbot):
+    """OrderContextual spectral-param widgets must have non-empty tooltips."""
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    ctx = OrderContextual()
+    qtbot.addWidget(ctx)
+    checks = [
+        (ctx.spin_mo, "阶次"),
+        (ctx.spin_order_res, "细度"),
+        (ctx.spin_time_res, "时间"),
+        (ctx.combo_nfft, "阶次"),
+    ]
+    for widget, keyword in checks:
+        tip = widget.toolTip()
+        assert tip and keyword in tip, (
+            f"{type(widget).__name__} toolTip missing '{keyword}': {tip!r}"
+        )
+    # spin_samples_per_rev must still have its original tooltip
+    assert ctx.spin_samples_per_rev.toolTip(), "spin_samples_per_rev tooltip cleared"

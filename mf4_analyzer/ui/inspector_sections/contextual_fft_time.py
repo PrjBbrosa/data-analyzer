@@ -54,7 +54,6 @@ class FFTTimeContextual(QWidget):
     - ``combo_nfft`` / ``combo_win`` / ``spin_overlap`` /
       ``chk_remove_mean`` — analysis parameters.
     - ``spin_db_ref`` — dB reference (linear amplitude).
-    - ``combo_cmap`` — color map selector.
     - 坐标轴设置 group (2026-04-29 B polish):
       ``chk_x_auto`` / ``spin_x_min`` / ``spin_x_max`` — X time (s);
       ``chk_y_auto`` / ``spin_y_min`` / ``spin_y_max`` — Y frequency (Hz);
@@ -84,6 +83,9 @@ class FFTTimeContextual(QWidget):
     rebuild_time_requested = pyqtSignal(object)  # anchor widget
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
     _AUTO_NFFT_LABEL = "自动"
+    # 2026-06-19: 时频图色图固定为 turbo（用户要求移除可切换的色图控件）。
+    # get_params()/_collect_preset() 以此常量发出 cmap 键，保持下游契约不变。
+    _FIXED_CMAP = "turbo"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -133,7 +135,7 @@ class FFTTimeContextual(QWidget):
         root.addWidget(sig_card)
 
         # 2026-06-13 split: lower full-width tinted panel hosts 时频参数 +
-        # 幅值 + 坐标轴设置 + 色标 + 预设 + 计算时频图.
+        # 幅值 + 坐标轴设置 + 预设 + 计算时频图（色图固定 turbo，无色标控件）.
         params_card, params_lay = _make_params_card(self, "fftTimeParamsCard")
 
         # ---- 时频参数 ----
@@ -146,11 +148,13 @@ class FFTTimeContextual(QWidget):
             self._AUTO_NFFT_LABEL, '512', '1024', '2048', '4096', '8192',
         ])
         self.combo_nfft.setCurrentText(self._AUTO_NFFT_LABEL)
+        self.combo_nfft.setToolTip('越大频率越细、计算量越高；\n「自动」＝按窗长取 2 的幂。')
         fl.addRow("FFT 点数:", _fit_field(self.combo_nfft, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.combo_win = QComboBox()
         self.combo_win.addItems(
             ['hanning', 'flattop', 'hamming', 'blackman', 'kaiser', 'bartlett']
         )
+        self.combo_win.setToolTip('抑制频谱泄漏：flattop 幅值最准、\nhanning 最均衡、blackman 旁瓣最低。')
         fl.addRow("窗函数:", _fit_field(self.combo_win, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.spin_overlap = _no_buttons(QSpinBox())
         # Requested first-open default: 80% overlap. Keep the 95% ceiling so
@@ -158,9 +162,11 @@ class FFTTimeContextual(QWidget):
         self.spin_overlap.setRange(0, 95)
         self.spin_overlap.setValue(80)
         self.spin_overlap.setSuffix(" %")
+        self.spin_overlap.setToolTip('相邻时间帧的重叠：越高时频图越平滑、\n计算量越大。')
         fl.addRow("重叠:", _fit_field(self.spin_overlap, max_width=_SHORT_FIELD_MAX_WIDTH))
         self.chk_remove_mean = QCheckBox("去均值")
         self.chk_remove_mean.setChecked(True)
+        self.chk_remove_mean.setToolTip('减去直流，避免 0 Hz 大值压低低频成分。')
         fl.addRow(self.chk_remove_mean)
         g.setTitle("")
         # The section header already shows the title; drop the title band and
@@ -186,6 +192,7 @@ class FFTTimeContextual(QWidget):
         self.spin_db_ref.setRange(1e-9, 1e9)
         self.spin_db_ref.setDecimals(6)
         self.spin_db_ref.setValue(1.0)
+        self.spin_db_ref.setToolTip('0 dB 对应的线性幅值，仅平移 dB 刻度、不改波形。')
         fl.addRow("dB 参考:", _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH))
         params_lay.addWidget(g)
 
@@ -211,6 +218,10 @@ class FFTTimeContextual(QWidget):
             z_auto_summary="自动色阶",
         )
         params_lay.addWidget(axis_g)
+        # Tooltips for widgets created inside _make_axis_settings_group.
+        self.combo_amp_unit.setToolTip('dB 看宽动态，Linear 看绝对幅值。')
+        self.spin_z_floor.setToolTip('颜色映射区间(dB)：缩小区间增强弱信号对比。')
+        self.spin_z_ceiling.setToolTip('颜色映射区间(dB)：缩小区间增强弱信号对比。')
         # Backward-compat aliases (per plan): downstream main_window callers
         # still read chk_freq_auto / spin_freq_min / spin_freq_max.
         # MUST be set inside __init__ so test_fft_time_contextual_has_axis_
@@ -222,19 +233,15 @@ class FFTTimeContextual(QWidget):
         # the legacy A1 cap (the helper uses 72px which is plenty for 5
         # digits + Hz suffix; no change needed here).
 
-        # ---- 色标 (cmap retains its own row; 动态范围 absorbed by Z row
-        # of the axis group) ----
-        g = QGroupBox("色标")
-        fl = QFormLayout(g)
-        _configure_form(fl)
-        self.combo_cmap = QComboBox()
-        self.combo_cmap.addItems(['turbo', 'viridis', 'gray'])
-        fl.addRow("色图:", _fit_field(self.combo_cmap, max_width=_SHORT_FIELD_MAX_WIDTH))
-        params_lay.addWidget(g)
+        # ---- 色标 ----
+        # 2026-06-19：用户要求移除可切换的色图控件，时频图色图固定为 turbo。
+        # 原 combo_cmap + 「色标」分组已删除；色图由 _FIXED_CMAP 常量经
+        # get_params()/_collect_preset() 下发，main_window._render_fft_time
+        # 与预设保存的字段契约保持不变。
 
         # ---- 预设 (R3 C: builtin-aware PresetBar) ----
         # The preset_bar is single-row, builtin-aware: each slot starts with
-        # its signal-type display name (扭矩类 / 振动类 / 启停类), left-click
+        # its signal-type display name (频率优先 / 均衡 / 时间优先), left-click
         # loads (override-or-builtin), right-click menu integrates 保存当前 /
         # 重命名 / 重置为默认. Slot order is the shared BUILTIN_PRESET_KEYS
         # contract so unit-推荐 highlighting lines up across all three views.
@@ -454,7 +461,7 @@ class FFTTimeContextual(QWidget):
             freq_min=float(self.spin_y_min.value()),
             freq_max=float(self.spin_y_max.value()),
             dynamic=dynamic_legacy,
-            cmap=self.combo_cmap.currentText(),
+            cmap=self._FIXED_CMAP,
         )
         # Wave 4 (2026-04-28 plan): explicit X/Y/Z range + auto flags for
         # the new 坐标轴设置 group. These coexist with the legacy keys
@@ -534,10 +541,7 @@ class FFTTimeContextual(QWidget):
                 self.spin_db_ref.setValue(float(d['db_reference']))
             except (TypeError, ValueError):
                 pass
-        if 'cmap' in d:
-            i = self.combo_cmap.findText(str(d['cmap']))
-            if i >= 0:
-                self.combo_cmap.setCurrentIndex(i)
+        # cmap 固定 turbo：无控件可应用，预设/视图状态里的 cmap 键被忽略。
 
         # amplitude_mode token → combo_amp_unit. Reverse-map on a
         # case-insensitive 'db' substring so the lowercase 'amplitude_db'
@@ -658,7 +662,7 @@ class FFTTimeContextual(QWidget):
     }
 
     # User-facing display names for the three builtin slots — shared signal-type
-    # labels (扭矩类 / 振动类 / 启停类).
+    # labels (频率优先 / 均衡 / 时间优先).
     _BUILTIN_PRESET_DISPLAY = dict(BUILTIN_PRESET_DISPLAY)
 
     def _resolve_builtin_preset_key(self, name):
@@ -735,7 +739,7 @@ class FFTTimeContextual(QWidget):
             freq_min=float(self.spin_y_min.value()),
             freq_max=float(self.spin_y_max.value()),
             dynamic=dynamic_legacy,
-            cmap=self.combo_cmap.currentText(),
+            cmap=self._FIXED_CMAP,
             x_auto=bool(self.chk_x_auto.isChecked()),
             x_min=float(self.spin_x_min.value()),
             x_max=float(self.spin_x_max.value()),
@@ -792,10 +796,7 @@ class FFTTimeContextual(QWidget):
                 self.spin_db_ref.setValue(float(d['db_reference']))
             except (TypeError, ValueError):
                 pass
-        if 'cmap' in d:
-            i = self.combo_cmap.findText(str(d['cmap']))
-            if i >= 0:
-                self.combo_cmap.setCurrentIndex(i)
+        # cmap 固定 turbo：无控件可应用，预设/视图状态里的 cmap 键被忽略。
 
         # ---- Wave 4 axis-key migration (legacy + new) ----
         # Legacy ``dynamic`` translates to z_floor / z_ceiling / z_auto.
