@@ -2001,6 +2001,26 @@ def test_heatmap_slice_hint_signal_flashes_hint(qapp):
     card.deleteLater()
 
 
+def test_heatmap_slice_hint_disconnects_when_card_is_deleted(qapp):
+    from mf4_analyzer.ui.chart_stack import _ChartCard
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+
+    canvas = PgHeatmapCanvas(with_slice=True)
+    card = _ChartCard(canvas)
+    card.show()
+    qapp.processEvents()
+
+    card.deleteLater()
+    qapp.processEvents()
+
+    canvas.slice_hint_requested.emit("点击位置超出谱图范围")
+    canvas.slice_picked.emit()
+    canvas.levels_changed.emit(0.0, 1.0)
+    qapp.processEvents()
+
+    canvas.deleteLater()
+
+
 def test_bottom_hint_bar_context_uses_registry(qapp, monkeypatch):
     from mf4_analyzer.ui import hints
     from mf4_analyzer.ui.chart_stack import ChartStack

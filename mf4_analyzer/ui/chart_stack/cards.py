@@ -118,7 +118,7 @@ class _ChartCard(QWidget):
             canvas, 'time_source_selected', 'fft.preview_source')
         slice_hint_requested = getattr(canvas, 'slice_hint_requested', None)
         if slice_hint_requested is not None:
-            slice_hint_requested.connect(lambda text: self.flash_hint(text))
+            slice_hint_requested.connect(self._on_slice_hint_requested)
         self.toolbar.setObjectName("chartToolbar")
         self.toolbar.setIconSize(QSize(18, 18))
         for act in self.toolbar.actions():
@@ -243,12 +243,10 @@ class _ChartCard(QWidget):
         self._flash_hint_timer = QTimer(self)
         self._flash_hint_timer.setSingleShot(True)
         self._flash_hint_timer.setInterval(2500)
-        self._flash_hint_timer.timeout.connect(
-            lambda: self._set_context_hint(reset=True)
-        )
+        self._flash_hint_timer.timeout.connect(self._restore_rotating_hint)
         if hasattr(self.canvas, 'overlay_y_needs_selection'):
             self.canvas.overlay_y_needs_selection.connect(
-                lambda: self.flash_hint("先选中一个通道，再用 Shift+滚轮缩放纵向")
+                self._on_overlay_y_needs_selection
             )
         self._hint_discovery = QLabel("", self._hint_bar)
         self._hint_discovery.setObjectName("chartHintDiscovery")
@@ -666,12 +664,40 @@ class _ChartCard(QWidget):
 
     def _wire_discovery_signal(self, canvas, signal_name, echo_id):
         """Connect a canvas hidden-gesture signal to discovery + flash, if the
-        canvas exposes it. The lambda swallows any signal payload (e.g.
-        ``levels_changed`` carries lo/hi)."""
+        canvas exposes it. Bound QObject methods are used instead of lambdas so
+        Qt disconnects them when the card is destroyed."""
         signal = getattr(canvas, signal_name, None)
         if signal is None:
             return
-        signal.connect(lambda *_: self._discover_gesture(echo_id))
+        slot = {
+            'slice_picked': self._on_slice_picked_discovered,
+            'divider_adjusted': self._on_divider_adjusted_discovered,
+            'levels_changed': self._on_levels_changed_discovered,
+            'time_source_selected': self._on_time_source_selected_discovered,
+        }.get(signal_name)
+        if slot is not None:
+            signal.connect(slot)
+
+    def _on_slice_picked_discovered(self):
+        self._discover_gesture('spectrogram.slice_pick')
+
+    def _on_divider_adjusted_discovered(self):
+        self._discover_gesture('spectrogram.divider')
+
+    def _on_levels_changed_discovered(self, *_):
+        self._discover_gesture('spectrogram.colorbar')
+
+    def _on_time_source_selected_discovered(self, *_):
+        self._discover_gesture('fft.preview_source')
+
+    def _on_slice_hint_requested(self, text):
+        self.flash_hint(text)
+
+    def _restore_rotating_hint(self):
+        self._set_context_hint(reset=True)
+
+    def _on_overlay_y_needs_selection(self):
+        self.flash_hint("先选中一个通道，再用 Shift+滚轮缩放纵向")
 
     def _discover_gesture(self, echo_id):
         """Record a first-time gesture: persist its discovery id (so the
