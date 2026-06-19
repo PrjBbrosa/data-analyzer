@@ -60,3 +60,29 @@ def test_load_hdf_groups_by_factor_and_drops_nan(tmp_path):
     np.testing.assert_allclose(slow["data"]["SP"].to_numpy(), spd)
     # 元数据回传
     assert fast["channel_metadata"]["MOTOR X"]["quantity"] == "acceleration"
+
+
+def test_groups_build_multiple_filedata(tmp_path):
+    n = 4
+    p = write_head_hdf(
+        tmp_path / "m.hdf", n_scans=n, delta=1.0, start_of_data=2048,
+        channels=[
+            {"name": "MOTOR X", "factor": 2, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0,
+             "samples": np.arange(n * 2, dtype=float)},
+            {"name": "SP", "factor": 1, "quantity": "speed of rotation",
+             "unit": "deg/s", "calibration": 1.0,
+             "samples": np.array([1., 2., 3., 4.])},
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    fds = [FileData(str(p), g["data"], g["channels"], g["units"], i,
+                    source_metadata=g["source_metadata"],
+                    channel_metadata=g["channel_metadata"],
+                    label_suffix=g["label_suffix"]) for i, g in enumerate(groups)]
+    assert len(fds) == 2
+    suffixes = {fd.label_suffix for fd in fds}
+    assert suffixes == {"2x", "1x"}
+    fast = next(fd for fd in fds if fd.label_suffix == "2x")
+    # 快组 fs = 1/period, period = delta*max_factor/factor = 1*2/2 = 1 -> fs≈1
+    assert fast.fs > 0
+    assert fast.channel_metadata["MOTOR X"]["quantity"] == "acceleration"

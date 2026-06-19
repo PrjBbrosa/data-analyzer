@@ -30,8 +30,8 @@ class ProjectIOMixin:
         _QFileDialog = getattr(_pkg, 'QFileDialog', QFileDialog) if _pkg is not None else QFileDialog
         fps, _ = _QFileDialog.getOpenFileNames(
             self, "打开", "",
-            "所有支持的文件 (*.mf4 *.mdf *.csv *.xlsx *.xls *.tlproj);;"
-            "项目 (*.tlproj);;数据文件 (*.mf4 *.mdf *.csv *.xlsx *.xls)",
+            "所有支持的文件 (*.mf4 *.mdf *.csv *.xlsx *.xls *.hdf *.tlproj);;"
+            "项目 (*.tlproj);;数据文件 (*.mf4 *.mdf *.csv *.xlsx *.xls *.hdf)",
         )
         if not fps:
             return
@@ -78,7 +78,7 @@ class ProjectIOMixin:
         import sys as _sys
         _pkg = _sys.modules.get('mf4_analyzer.ui.main_window')
         _QFileDialog = getattr(_pkg, 'QFileDialog', QFileDialog) if _pkg is not None else QFileDialog
-        fps, _ = _QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.mdf *.csv *.xlsx *.xls)")
+        fps, _ = _QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.mdf *.csv *.xlsx *.xls *.hdf)")
         for fp in fps: self._load_one(fp)
 
     def load_file(self, path) -> None:
@@ -98,6 +98,28 @@ class ProjectIOMixin:
         """
         self._load_one(str(path))
 
+    def _register_file_data(self, fp, data, chs, units, *,
+                            source_metadata=None, channel_metadata=None,
+                            label_suffix=""):
+        fid = f"f{self._fc}"; self._fc += 1
+        fd = FileData(fp, data, chs, units, len(self.files),
+                      source_metadata=source_metadata,
+                      channel_metadata=channel_metadata,
+                      label_suffix=label_suffix)
+        self.files[fid] = fd
+        self.navigator.add_file(fid, fd)
+        self.canvas_time.invalidate_envelope_cache("file loaded")
+        self.canvas_time.invalidate_monotonicity_cache()
+        self._fft_time_cache_clear_for_fid(fid)
+        self._refresh_channel_dependent_controls()
+        if fd.time_array is not None and len(fd.time_array):
+            current_hi = self.inspector.top.spin_end.maximum()
+            new_hi = max(current_hi, fd.time_array[-1])
+            self.inspector.top.set_range_limits(0, new_hi)
+            if len(self.files) == 1:
+                self.inspector.top.spin_end.setValue(fd.time_array[-1])
+        return fd
+
     def _load_one(self, fp):
         try:
             self.statusBar.showMessage(f"加载: {fp}");
@@ -109,28 +131,22 @@ class ProjectIOMixin:
                 data, chs, units = DataLoader.load_mf4(fp)
             elif ext in ('.xlsx', '.xls'):
                 data, chs, units = DataLoader.load_excel(fp)
+            elif ext == '.hdf':
+                groups = DataLoader.load_hdf(fp)
+                for g in groups:
+                    self._register_file_data(
+                        fp, g["data"], g["channels"], g["units"],
+                        source_metadata=g["source_metadata"],
+                        channel_metadata=g["channel_metadata"],
+                        label_suffix=g["label_suffix"])
+                self._update_info()
+                self.statusBar.showMessage(
+                    f"✅ 已加载: {p.name} → {len(groups)} 组 | 共 {len(self.files)} 文件")
+                self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
+                return
             else:
                 data, chs, units = DataLoader.load_csv(fp)
-            fid = f"f{self._fc}";
-            self._fc += 1
-            fd = FileData(fp, data, chs, units, len(self.files));
-            self.files[fid] = fd
-            self.navigator.add_file(fid, fd)
-            # Cache invalidation site 1: a new file's data_id is now in
-            # play. Drop everything — channel selections will redraw.
-            self.canvas_time.invalidate_envelope_cache("file loaded")
-            self.canvas_time.invalidate_monotonicity_cache()
-            # FFT vs Time cache: scrub any stale entries that share this
-            # freshly minted fid (defensive; fid is monotonic per-session
-            # but the helper is cheap and keeps the invariant tight).
-            self._fft_time_cache_clear_for_fid(fid)
-            self._refresh_channel_dependent_controls()
-            if fd.time_array is not None and len(fd.time_array):
-                current_hi = self.inspector.top.spin_end.maximum()
-                new_hi = max(current_hi, fd.time_array[-1])
-                self.inspector.top.set_range_limits(0, new_hi)
-                if len(self.files) == 1:
-                    self.inspector.top.spin_end.setValue(fd.time_array[-1])
+            fd = self._register_file_data(fp, data, chs, units)
             # User-request 2026-05-20: do NOT auto-select channel[0] on file
             # load. The canvas opens empty; the user picks the channel(s)
             # they want explicitly. Any previously-checked channels on
