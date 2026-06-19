@@ -872,15 +872,15 @@ QHeaderView::section {
 
 /* ============ Inspector ============ */
 Inspector {
-    background-color: #f5f7fb;
-    border-left: 1px solid #eef2f7;
+    background-color: #f0f3f7;
+    border-left: 1px solid #dde4ee;
 }
 QScrollArea#inspectorScroll {
     border: none;
-    background-color: #f5f7fb;
+    background-color: #f0f3f7;
 }
 QScrollArea#inspectorScroll > QWidget > QWidget {
-    background-color: #f5f7fb;
+    background-color: #f0f3f7;
 }
 Inspector QWidget[inspectorFieldHost="true"] {
     background-color: transparent;
