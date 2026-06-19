@@ -258,17 +258,22 @@ class ProjectIOMixin:
 
         fid_map = {}
         missing = []
+        pending_by_path = {}  # resolved path -> new fids from one _load_one, unconsumed
         for ref in doc.files:
             resolved = pio.resolve_file_path(ref, path)
             if resolved is None:
                 missing.append(ref.path_abs)
                 continue
-            before = len(self.files)
-            self._load_one(str(resolved))
-            if len(self.files) <= before:
-                missing.append(ref.path_abs)
-                continue
-            new_fid = next(reversed(self.files))
+            key = str(resolved)
+            if not pending_by_path.get(key):
+                before = set(self.files.keys())
+                self._load_one(key)
+                new_fids = [f for f in self.files.keys() if f not in before]
+                if not new_fids:
+                    missing.append(ref.path_abs)
+                    continue
+                pending_by_path[key] = new_fids
+            new_fid = pending_by_path[key].pop(0)
             fid_map[ref.fid] = new_fid
             fd = self.files[new_fid]
             fd.fs = float(ref.fs)

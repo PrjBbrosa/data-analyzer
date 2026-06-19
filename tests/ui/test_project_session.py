@@ -114,6 +114,53 @@ def test_open_project_auto_recomputes_source_bearing_analysis_views(
     assert 'fft' not in recomputed, "source-less FFT view must NOT recompute"
 
 
+def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):
+    """Regression: a 2-group .hdf must reload as 2 groups (not 4) on open_project.
+
+    Bug: open_project called _load_one once per ProjectFileRef, so a 2-group
+    .hdf with 2 refs → 2× _load_one → 4 groups. The fix deduplicates by path
+    and assigns new fids in order from a single _load_one call.
+    """
+    import numpy as np
+    from tests._helpers.head_hdf_factory import write_head_hdf
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    n_scans = 8
+    fast_samples = np.arange(n_scans * 2, dtype=float)  # factor 2, label_suffix "2x"
+    slow_samples = np.arange(n_scans, dtype=float) * 5.0  # factor 1, label_suffix "1x"
+    hdf = write_head_hdf(
+        tmp_path / "synth.hdf",
+        n_scans=n_scans,
+        start_of_data=4096,
+        channels=[
+            {"name": "Accel", "factor": 2, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0, "samples": fast_samples},
+            {"name": "Speed", "factor": 1, "quantity": "speed of rotation",
+             "unit": "deg/s", "calibration": 1.0, "samples": slow_samples},
+        ],
+    )
+
+    mw = MainWindow()
+    mw._load_one(str(hdf))
+    assert len(mw.files) == 2, "sanity: _load_one of a 2-group .hdf must yield 2 FileData"
+
+    proj = tmp_path / "multi.tlproj"
+    mw.save_project(proj)
+
+    mw2 = MainWindow()
+    mw2.open_project(proj)
+
+    # THE regression: buggy code gives 4 (two _load_one calls × 2 groups each)
+    assert len(mw2.files) == 2, (
+        f"expected 2 groups after roundtrip, got {len(mw2.files)} — "
+        "likely double-load bug in open_project"
+    )
+    suffixes = {fd.label_suffix for fd in mw2.files.values()}
+    assert suffixes == {"2x", "1x"}, f"wrong label_suffixes after roundtrip: {suffixes}"
+    for fid, fd in mw2.files.items():
+        assert fd.fs > 0, f"fid {fid} has non-positive fs={fd.fs}"
+
+
 def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):
     from mf4_analyzer.ui.main_window import MainWindow
     from PyQt5.QtWidgets import QMessageBox
