@@ -15,7 +15,7 @@
 
 ## Current Evidence
 
-- `mf4_analyzer/ui/main_window/window.py:105-114` creates `QWidget#centralTray`, root margins `5px`, and root spacing currently `8px`.
+- `mf4_analyzer/ui/main_window/window.py:120-129` creates `QWidget#centralTray` with root margins `5, 3, 5, 5` and root spacing `3px`.
 - `mf4_analyzer/ui/main_window/window.py:225-230` creates `self.statusBar = QStatusBar()` and registers it through `setStatusBar`.
 - `mf4_analyzer/ui/toolbar.py:67-84` defines `Toolbar(QWidget)` with no explicit `WA_StyledBackground`.
 - `mf4_analyzer/ui_kit/style.qss:299-303` paints `Toolbar` as tray gray.
@@ -134,12 +134,12 @@ def test_surface_shell_uses_porcelain_tray_and_real_statusbar(qapp, qtbot):
         root = win.centralWidget().layout()
         assert win.centralWidget().objectName() == "centralTray"
         assert root.contentsMargins().left() == 5
-        assert root.contentsMargins().top() == 5
-        assert root.spacing() == 5
+        assert root.contentsMargins().top() == 3
+        assert root.spacing() == 3
 
         assert win.toolbar.objectName() == "surfaceTopBar"
-        assert win.toolbar.minimumHeight() == 50
-        assert win.toolbar.maximumHeight() == 50
+        assert win.toolbar.minimumHeight() == 44
+        assert win.toolbar.maximumHeight() == 44
 
         assert isinstance(win.statusBar, QStatusBar)
         assert win.statusBar.objectName() == "surfaceStatusBar"
@@ -208,7 +208,7 @@ TMPDIR=/tmp QT_QPA_PLATFORM=offscreen PYTHONPATH=. .venv/bin/python -m pytest \
   -q
 ```
 
-Expected before implementation: failures mention `surfaceTopBar`, `surfaceStatusBar`, `root.spacing() == 5`, porcelain tokens, or transparent chart toolbar.
+Expected before implementation: failures mention `surfaceTopBar`, `surfaceStatusBar`, `root.spacing() == 3`, porcelain tokens, or transparent chart toolbar.
 
 ---
 
@@ -247,23 +247,21 @@ In `mf4_analyzer/ui/toolbar.py`, inside `Toolbar.__init__` immediately after `su
 ```python
 self.setObjectName("surfaceTopBar")
 self.setAttribute(Qt.WA_StyledBackground, True)
-self.setFixedHeight(50)
+self.setFixedHeight(44)
 ```
 
 `Qt` is already imported in this file.
 
-- [ ] **Step 3: Tighten shell vertical rhythm**
+- [x] **Step 3: Tighten shell vertical rhythm**
 
-In `MainWindow._init_ui`, keep root margins at `5, 5, 5, 5`, but change:
+In `MainWindow._init_ui`, keep the topbar at `44px` high and use the selected `3+44+3` rhythm:
 
 ```python
-root.setSpacing(8)
+root.setContentsMargins(5, 3, 5, 5)
 ```
 
-to:
-
 ```python
-root.setSpacing(5)
+root.setSpacing(3)
 ```
 
 - [ ] **Step 4: Move status bar into the central tray layout**
@@ -467,20 +465,23 @@ In the left navigator section:
 FileNavigator {
     background-color: #ffffff;
     border: 1px solid #dbe2eb;
-    border-radius: 10px;
+    border-radius: 7px;
 }
 
-QWidget#fileArea { background-color: #fafbfc; }
-
-QScrollArea#fileScroll,
+QWidget#fileArea,
 QWidget#channelCard {
     background-color: #ffffff;
     border: 1px solid #dbe2eb;
-    border-radius: 11px;
+    border-radius: 6px;
+}
+
+QScrollArea#fileScroll {
+    background-color: transparent;
+    border: none;
 }
 
 QScrollArea#fileScroll > QWidget > QWidget {
-    background-color: #ffffff;
+    background-color: transparent;
 }
 ```
 

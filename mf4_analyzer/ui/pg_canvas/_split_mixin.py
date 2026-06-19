@@ -88,7 +88,7 @@ class _CollapsedRail(QFrame):
     """Thin horizontal rail shown when the lower plot is folded away."""
 
     expand_requested = pyqtSignal()
-    HEIGHT_PX = 14
+    HEIGHT_PX = 10
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -122,7 +122,7 @@ class _CollapsedRail(QFrame):
             painter.setRenderHint(QPainter.Antialiasing, True)
             color = QColor("#2563eb") if self._hover else QColor("#7b8699")
             cx, cy = self.width() / 2.0, self.height() / 2.0
-            hw, hh = 5.0, 3.0
+            hw, hh = 4.5, 2.5
             pts = [QPointF(cx, cy - hh), QPointF(cx + hw, cy + hh),
                    QPointF(cx - hw, cy + hh)]  # triangle apex up
             painter.setPen(Qt.NoPen)

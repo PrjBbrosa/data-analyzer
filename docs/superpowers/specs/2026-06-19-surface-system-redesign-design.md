@@ -66,10 +66,10 @@ These are the current approved values from the HTML sketch and earlier live tuni
 
 | Area | Target |
 |---|---|
-| Topbar height | `50px` fixed visual height |
+| Topbar height | `44px` fixed visual height |
 | Bottombar height | `40px` fixed visual height |
-| Top/work/bottom vertical spacing | `5px` |
-| Outer tray margin | keep `5px` in `MainWindow._init_ui` |
+| Topbar vertical rhythm | `3px + 44px + 3px` |
+| Outer tray margin | keep side/bottom `5px`; top margin is `3px` in `MainWindow._init_ui` |
 | Main splitter handle/gap | keep `3px` hit area, tray-colored |
 | Main panel radius | `10px` |
 | Top/bottom bar radius | `13px` |
@@ -85,7 +85,7 @@ Do not change panel min widths, signal-processing code, pyqtgraph numeric logic,
 Create the correct app shell before tuning inner widgets.
 
 - `QMainWindow` and `QWidget#centralTray` paint the porcelain tray.
-- `Toolbar` paints a white rounded top surface, fixed to 50px.
+- `Toolbar` paints a white rounded top surface, fixed to 44px.
 - The status area remains a real `QStatusBar` instance for API compatibility, but is displayed as a bottom white rounded surface inside the central tray, fixed to 40px.
 - `self.statusBar.showMessage`, `currentMessage`, `clearMessage`, `insertPermanentWidget`, `addPermanentWidget`, and `removeWidget` must keep working.
 - Do not replace `self.statusBar` with a plain `QWidget`.

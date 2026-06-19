@@ -45,17 +45,17 @@ QSplitter::handle:hover { background-color: #cbd5e1; }
 /* Scroll areas */
 QScrollArea { border: none; background: transparent; }
 
-QScrollBar:vertical { width: 10px; margin: 2px; border: none; background: transparent; }
-QScrollBar::handle:vertical { min-height: 28px; border-radius: 5px; background: #cbd5e1; }
-QScrollBar::handle:vertical:hover { background: #94a3b8; }
+QScrollBar:vertical { width: 8px; margin: 1px; border: none; background: transparent; }
+QScrollBar::handle:vertical { min-height: 28px; border-radius: 4px; background: #d7dee8; }
+QScrollBar::handle:vertical:hover { background: #aeb9c8; }
 QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical,
 QScrollBar::add-page:vertical,
 QScrollBar::sub-page:vertical { height: 0; background: transparent; }
 
-QScrollBar:horizontal { height: 10px; margin: 2px; border: none; background: transparent; }
-QScrollBar::handle:horizontal { min-width: 28px; border-radius: 5px; background: #cbd5e1; }
-QScrollBar::handle:horizontal:hover { background: #94a3b8; }
+QScrollBar:horizontal { height: 8px; margin: 1px; border: none; background: transparent; }
+QScrollBar::handle:horizontal { min-width: 28px; border-radius: 4px; background: #d7dee8; }
+QScrollBar::handle:horizontal:hover { background: #aeb9c8; }
 QScrollBar::add-line:horizontal,
 QScrollBar::sub-line:horizontal,
 QScrollBar::add-page:horizontal,
@@ -338,13 +338,15 @@ Toolbar QPushButton[segment="fft"],
 Toolbar QPushButton[segment="fft_time"],
 Toolbar QPushButton[segment="order"] {
     min-width: 60px;
-    min-height: 20px;
+    min-height: 24px;
     margin: 0 1px;
     padding: 2px 10px;
     border: none;
     border-radius: 6px;
     background-color: transparent;
     color: #64748b;
+    font-size: 13px;
+    font-weight: 700;
 }
 Toolbar QPushButton[segment]:hover {
     background-color: #eef2f7;
@@ -357,8 +359,6 @@ Toolbar QPushButton[segment]:checked {
 }
 QWidget#modeSegment {
     padding: 2px;
-    border: 1px solid #dfe5ee;
-    border-radius: 8px;
     background-color: transparent;
 }
 
@@ -796,12 +796,19 @@ FileNavigator {
     border: 1px solid #dbe2eb;
     border-radius: 7px;
 }
-QWidget#fileArea { background-color: #fafbfc; }
-QScrollArea#fileScroll,
+QWidget#fileArea {
+    background-color: #ffffff;
+    border: 1px solid #dbe2eb;
+    border-radius: 6px;
+}
 QWidget#channelCard {
     background-color: #ffffff;
     border: 1px solid #dbe2eb;
     border-radius: 6px;
+}
+QScrollArea#fileScroll {
+    background-color: transparent;
+    border: none;
 }
 QScrollArea#fileScroll > QWidget > QWidget { background-color: transparent; }
 

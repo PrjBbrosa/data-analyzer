@@ -26,7 +26,6 @@ from ._helpers import (
     _ICON_COLOR,
     _ICON_ACTIVE,
     _TOOLBAR_COMPACT_WIDTH,
-    _QT_WIDGETSIZE_MAX,
 )
 from .toolbar import PgNavigationToolbar, _TickDensityPopover
 from .cursor_pill import _QualityStatusIndicator
@@ -726,8 +725,12 @@ class TimeChartCard(_ChartCard):
 
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent, chart_mode='time')
+        if self.toolbar.layout() is not None:
+            self.toolbar.layout().setSpacing(4)
         zoom_act = _find_action(self.toolbar, 'zoom')
         self._install_compact_annotation_control_after(zoom_act)
+        annotation_act = self._toolbar_action_for_widget(self._annotation_btn)
+        self._install_compact_clear_annotation_control_after(annotation_act)
         # Right-align time-only controls with the same spacer pattern used by
         # annotation controls on analysis cards.
         loc_action = getattr(self, '_loc_action', None)
@@ -818,26 +821,21 @@ class TimeChartCard(_ChartCard):
             "annotation",
         )
         self.view_tabbar = None
+        self._sync_responsive_toolbar()
 
     def _sync_responsive_toolbar(self):
         super()._sync_responsive_toolbar()
         labels = getattr(self, '_time_button_labels', None)
         if not labels:
             return
-        compact = self.toolbar.width() < _TOOLBAR_COMPACT_WIDTH
-        if compact == self._time_toolbar_compact:
-            return
-        self._time_toolbar_compact = compact
-        for button, full, short in labels:
-            button.setText(short if compact else full)
-            if compact:
-                button.setMinimumWidth(0)
-                button.setMaximumWidth(44)
-            else:
-                button.setMinimumWidth(0)
-                button.setMaximumWidth(_QT_WIDGETSIZE_MAX)
+        self._time_toolbar_compact = False
+        for button, full, _short in labels:
+            button.setText(full)
+            text_width = button.fontMetrics().horizontalAdvance(full)
+            button_width = max(52, text_width + 24)
+            button.setFixedWidth(button_width)
         for sep in self._time_separators:
-            sep.setVisible(not compact)
+            sep.setVisible(True)
         self.toolbar.updateGeometry()
 
     # ----- plot mode -----

@@ -84,7 +84,7 @@ class Toolbar(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
-        self.setFixedHeight(50)
+        self.setFixedHeight(44)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(4, 2, 4, 2)
         lay.setSpacing(4)
@@ -152,6 +152,7 @@ class Toolbar(QWidget):
 
         # center layout inside a framed segment widget
         center = QHBoxLayout()
+        center.setContentsMargins(0, 0, 0, 0)
         center.setSpacing(0)
         segment_frame = QFrame(self)
         segment_frame.setObjectName("modeSegment")
@@ -165,7 +166,7 @@ class Toolbar(QWidget):
             b.setCheckable(True)
             b.setProperty("segment", key)
             self._mode_group.addButton(b)
-            center.addWidget(b)
+            center.addWidget(b, 0, Qt.AlignVCenter)
 
         # ── right layout ────────────────────────────────────────────────────
         right = QHBoxLayout()

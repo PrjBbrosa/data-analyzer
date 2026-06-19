@@ -3,9 +3,12 @@ import re
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QImage, QPainter
-from PyQt5.QtWidgets import QStatusBar
+from PyQt5.QtWidgets import QScrollArea, QStatusBar, QWidget
 
+from mf4_analyzer import app_meta
+from mf4_analyzer.ui.pg_canvas._split_mixin import _CollapsedRail
 from mf4_analyzer.ui.main_window import MainWindow
+from mf4_analyzer.ui.side_panels import SidePanelStrip
 
 
 QSS_PATH = Path("mf4_analyzer/ui_kit/style.qss")
@@ -36,12 +39,14 @@ def test_surface_shell_uses_porcelain_tray_and_real_statusbar(qapp, qtbot):
         root = win.centralWidget().layout()
         assert win.centralWidget().objectName() == "centralTray"
         assert root.contentsMargins().left() == 5
-        assert root.contentsMargins().top() == 5
-        assert root.spacing() == 5
+        assert root.contentsMargins().top() == 3
+        assert root.contentsMargins().bottom() == 5
+        assert root.spacing() == 3
 
         assert win.toolbar.objectName() == "surfaceTopBar"
-        assert win.toolbar.minimumHeight() == 50
-        assert win.toolbar.maximumHeight() == 50
+        assert win.toolbar.minimumHeight() == 44
+        assert win.toolbar.maximumHeight() == 44
+        assert win._strip_row.geometry().top() == 50
 
         assert win.navigator.channel_list.objectName() == "channelCard"
         assert win.navigator.channel_list.testAttribute(Qt.WA_StyledBackground)
@@ -85,6 +90,117 @@ def test_surface_qss_contract_has_porcelain_bars_and_flat_chart_toolbar():
     assert "background-color: #e8ecf2;" not in qss
 
 
+def test_surface_global_scrollbars_are_slim_and_quiet():
+    qss = QSS_PATH.read_text(encoding="utf-8")
+
+    vertical = _qss_block(qss, "QScrollBar:vertical")
+    horizontal = _qss_block(qss, "QScrollBar:horizontal")
+    vertical_handle = _qss_block(qss, "QScrollBar::handle:vertical")
+    horizontal_handle = _qss_block(qss, "QScrollBar::handle:horizontal")
+    vertical_hover = _qss_block(qss, "QScrollBar::handle:vertical:hover")
+    horizontal_hover = _qss_block(qss, "QScrollBar::handle:horizontal:hover")
+
+    assert "width: 8px;" in vertical
+    assert "height: 8px;" in horizontal
+    assert "margin: 1px;" in vertical
+    assert "margin: 1px;" in horizontal
+    assert "border-radius: 4px;" in vertical_handle
+    assert "border-radius: 4px;" in horizontal_handle
+    assert "background: #d7dee8;" in vertical_handle
+    assert "background: #d7dee8;" in horizontal_handle
+    assert "background: #aeb9c8;" in vertical_hover
+    assert "background: #aeb9c8;" in horizontal_hover
+
+
+def test_surface_mode_segment_has_no_outer_border():
+    qss = QSS_PATH.read_text(encoding="utf-8")
+    block = _qss_block(qss, "QWidget#modeSegment")
+
+    assert "border:" not in block
+    assert "background-color: transparent;" in block
+
+
+def test_surface_mode_buttons_use_readable_centered_type():
+    qss = QSS_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        r'Toolbar QPushButton\[segment="time"\],\s*'
+        r'Toolbar QPushButton\[segment="fft"\],\s*'
+        r'Toolbar QPushButton\[segment="fft_time"\],\s*'
+        r'Toolbar QPushButton\[segment="order"\]\s*\{(?P<body>[^}]*)\}',
+        qss,
+        flags=re.S,
+    )
+    assert match is not None
+    block = match.group("body")
+
+    assert "min-height: 24px;" in block
+    assert "font-size: 13px;" in block
+    assert "font-weight: 700;" in block
+
+
+def test_surface_mode_buttons_are_vertically_centered_in_topbar(qapp, qtbot):
+    old = _apply_app_qss(qapp)
+    try:
+        win = MainWindow()
+        qtbot.addWidget(win)
+        win.resize(1450, 850)
+        win.show()
+        qtbot.waitExposed(win)
+        qapp.processEvents()
+
+        toolbar_center_y = win.toolbar.rect().center().y()
+        for button in (
+            win.toolbar.btn_mode_time,
+            win.toolbar.btn_mode_fft,
+            win.toolbar.btn_mode_fft_time,
+            win.toolbar.btn_mode_order,
+        ):
+            button_center = button.mapTo(win.toolbar, button.rect().center()).y()
+            assert abs(button_center - toolbar_center_y) <= 1, button.text()
+    finally:
+        qapp.setStyleSheet(old)
+
+
+def test_surface_file_area_is_outer_card_aligned_with_channel_card(qapp, qtbot):
+    old = _apply_app_qss(qapp)
+    try:
+        win = MainWindow()
+        qtbot.addWidget(win)
+        win.resize(1450, 850)
+        win.show()
+        qtbot.waitExposed(win)
+        qapp.processEvents()
+
+        file_area = win.navigator.findChild(QWidget, "fileArea")
+        file_scroll = win.navigator.findChild(QScrollArea, "fileScroll")
+        channel_card = win.navigator.channel_list
+        assert file_area is not None
+        assert file_scroll is not None
+
+        assert file_area.testAttribute(Qt.WA_StyledBackground)
+        assert file_area.parentWidget() is channel_card.parentWidget()
+        assert file_area.geometry().x() == channel_card.geometry().x()
+        assert file_area.geometry().width() == channel_card.geometry().width()
+
+        qss = QSS_PATH.read_text(encoding="utf-8")
+        file_area_block = _qss_block(qss, "QWidget#fileArea")
+        assert "background-color: #ffffff;" in file_area_block
+        assert "border: 1px solid #dbe2eb;" in file_area_block
+        assert "border-radius: 6px;" in file_area_block
+
+        file_scroll_block = _qss_block(qss, "QScrollArea#fileScroll")
+        assert "background-color: transparent;" in file_scroll_block
+        assert "border: none;" in file_scroll_block
+        assert "border-radius" not in file_scroll_block
+    finally:
+        qapp.setStyleSheet(old)
+
+
+def test_surface_collapsed_rails_use_compact_affordance_widths():
+    assert SidePanelStrip.WIDTH_PX == 10
+    assert _CollapsedRail.HEIGHT_PX == 10
+
+
 def test_surface_qss_uses_compact_radius_scale():
     qss = QSS_PATH.read_text(encoding="utf-8")
 
@@ -109,12 +225,17 @@ def test_surface_qss_uses_compact_radius_scale():
     assert "border-radius: 10px;" not in inspector_block
 
 
-def _corner_alphas(widget):
+def _render_widget(widget):
     img = QImage(widget.width(), widget.height(), QImage.Format_ARGB32_Premultiplied)
     img.fill(0)
     painter = QPainter(img)
     widget.render(painter)
     painter.end()
+    return img
+
+
+def _corner_alphas(widget):
+    img = _render_widget(widget)
     w = img.width() - 1
     h = img.height() - 1
     return [
@@ -123,6 +244,29 @@ def _corner_alphas(widget):
         QColor(img.pixelColor(0, h)).alpha(),
         QColor(img.pixelColor(w, h)).alpha(),
     ]
+
+
+def _has_opaque_white_body(widget):
+    img = _render_widget(widget)
+    w = img.width() - 1
+    h = img.height() - 1
+    points = [
+        (min(8, w), min(8, h)),
+        (max(0, w - 8), min(8, h)),
+        (img.width() // 2, img.height() // 2),
+        (img.width() // 3, img.height() // 3),
+        ((img.width() * 2) // 3, (img.height() * 2) // 3),
+    ]
+    for x, y in points:
+        color = QColor(img.pixelColor(x, y))
+        if (
+            color.alpha() > 240
+            and color.red() > 245
+            and color.green() > 245
+            and color.blue() > 245
+        ):
+            return True
+    return False
 
 
 def test_surface_version_affordance_is_transparent_icon_text(qapp, qtbot):
@@ -137,7 +281,7 @@ def test_surface_version_affordance_is_transparent_icon_text(qapp, qtbot):
         btn = win._update_btn
         assert btn.objectName() == "surfaceVersionButton"
         assert btn.autoRaise()
-        assert btn.text() == "v7.0"
+        assert btn.text() == app_meta.APP_VERSION
         assert btn.styleSheet() == ""
 
         qss = QSS_PATH.read_text(encoding="utf-8")
@@ -202,5 +346,6 @@ def test_surface_top_bottom_and_panels_render_rounded_corners(qapp, qtbot):
             alphas = _corner_alphas(widget)
             label = widget.objectName() or type(widget).__name__
             assert max(alphas) < 12, f"{label} has opaque corner pixels: {alphas}"
+            assert _has_opaque_white_body(widget), f"{label} lost its opaque body"
     finally:
         qapp.setStyleSheet(old)

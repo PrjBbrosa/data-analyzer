@@ -165,7 +165,10 @@ def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
     qtbot.addWidget(cs)
 
     assert hasattr(cs._time_card, '_annotation_btn')
-    assert not hasattr(cs._time_card, '_clear_annotation_btn')
+    assert hasattr(cs._time_card, '_clear_annotation_btn')
+    assert cs._time_card._clear_annotation_btn.objectName() == 'chartAnnotationClearButton'
+    assert cs._time_card._clear_annotation_btn.text() == ''
+    assert cs._time_card._clear_annotation_btn.toolTip()
     assert cs._time_card._annotation_btn.toolTip()
     for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
         assert hasattr(card, '_annotation_btn')
@@ -190,6 +193,10 @@ def test_time_annotation_control_follows_zoom_button(qapp, qtbot):
         i for i, act in enumerate(actions)
         if card.toolbar.widgetForAction(act) is card._annotation_btn
     )
+    clear_index = next(
+        i for i, act in enumerate(actions)
+        if card.toolbar.widgetForAction(act) is card._clear_annotation_btn
+    )
     copy_index = next(
         i for i, act in enumerate(actions)
         if card.toolbar.widgetForAction(act) is card._copy_btn
@@ -204,8 +211,20 @@ def test_time_annotation_control_follows_zoom_button(qapp, qtbot):
     )
     save_index = next(i for i, act in enumerate(actions) if act.data() == 'save')
 
-    assert zoom_index < annotation_index < copy_index < tick_index
+    assert zoom_index < annotation_index < clear_index < copy_index < tick_index
     assert tick_index < options_index < save_index
+
+
+def test_time_clear_annotation_button_calls_canvas_clear_remarks(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    calls = []
+    cs._time_card.canvas.clear_remarks = lambda: calls.append("clear")
+
+    cs._time_card._clear_annotation_btn.click()
+
+    assert calls == ["clear"]
 
 
 def test_analysis_annotation_controls_follow_zoom_on_left(qapp, qtbot):
@@ -1716,6 +1735,34 @@ def test_time_chart_card_has_segmented_controls(qapp, qtbot):
     # 分屏 / 叠加 / 游标关 / 单游标 / 双游标
     texts = {b.text() for b in cs._time_toolbar.findChildren(type(card.btn_subplot))}
     assert {'分屏', '叠加', '游标关', '单游标', '双游标'} <= texts
+
+
+def test_time_toolbar_segment_labels_stay_full_when_narrow(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    card = cs._time_card
+    card.toolbar.resize(640, max(card.toolbar.height(), 40))
+    card._time_toolbar_compact = None
+    card._sync_responsive_toolbar()
+
+    buttons = [
+        card.btn_subplot,
+        card.btn_overlay,
+        card._cursor_buttons['off'],
+        card._cursor_buttons['single'],
+        card._cursor_buttons['dual'],
+    ]
+    assert [button.text() for button in buttons] == [
+        '分屏',
+        '叠加',
+        '游标关',
+        '单游标',
+        '双游标',
+    ]
+    assert all(button.maximumWidth() > 44 for button in buttons)
+    assert all(not sep.isHidden() for sep in card._time_separators)
 
 
 def test_time_chart_card_removes_subplots_config_button(qapp, qtbot):

@@ -72,7 +72,7 @@ class SidePanelStrip(QFrame):
     peek_requested = pyqtSignal(object)  # Side
     pin_requested = pyqtSignal(object)   # Side
 
-    WIDTH_PX = 12
+    WIDTH_PX = 10
 
     def __init__(self, side, hover_delay_ms=150, parent=None):
         super().__init__(parent)
