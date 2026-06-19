@@ -1,8 +1,11 @@
 """DataLoader: reads MF4 / Excel / CSV inputs."""
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from .head_hdf import parse_head_hdf
 
 try:
     from asammdf import MDF
@@ -186,3 +189,79 @@ class DataLoader:
         for col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
         df = df.dropna(how='all').interpolate().ffill().bfill().reset_index(drop=True)
         return df, list(df.columns), {}
+
+    @staticmethod
+    def load_hdf(fp):
+        hf = parse_head_hdf(fp)
+        max_factor = max((f for _, f in hf.ch_order), default=1)
+
+        # 标定 + 丢全 NaN
+        live = []
+        for c in hf.channels:
+            if c.samples is None:
+                continue
+            s = c.samples * float(c.calibration)
+            if np.isnan(s).all():
+                continue
+            live.append((c, s))
+
+        # RPM 源（speed of rotation 且非全 0）
+        rpm = next((s for c, s in live
+                    if "speed of rotation" in c.quantity.lower()
+                    and np.any(s != 0)), None)
+        rpm_factor = next((c.factor for c, s in live
+                           if "speed of rotation" in c.quantity.lower()
+                           and np.any(s != 0)), None)
+
+        def axis(factor, length):
+            period = hf.delta * (max_factor / factor)
+            return hf.first_value + np.arange(length, dtype=float) * period
+
+        groups = []
+        by_factor = {}
+        for c, s in live:
+            by_factor.setdefault(c.factor, []).append((c, s))
+
+        for factor, items in sorted(by_factor.items(), reverse=True):
+            length = items[0][1].size
+            t = axis(factor, length)
+            data = {"Time": t}
+            units = {}
+            cmeta = {}
+            for c, s in items:
+                data[c.name] = s
+                units[c.name] = c.unit
+                cmeta[c.name] = {
+                    "quantity": c.quantity, "unit": c.unit,
+                    "calibration": c.calibration,
+                    "db_reference": c.db_reference, "moniker": c.moniker,
+                    "physical_channel_nbr": c.physical_channel_nbr,
+                    "raster_factor": c.factor, "impl_type": c.impl_type,
+                    "equalization": c.equalization, "emphasis": c.emphasis,
+                }
+            # 转速注入：仅注入到含 acceleration 的组、且本组不是转速所在组
+            has_acc = any("acceleration" in c.quantity.lower() for c, _ in items)
+            if rpm is not None and has_acc and factor != rpm_factor:
+                rpm_t = axis(rpm_factor, rpm.size)
+                inj = np.interp(t, rpm_t, rpm)
+                data["SP (rpm-injected)"] = inj
+                units["SP (rpm-injected)"] = "deg/s"
+                cmeta["SP (rpm-injected)"] = {"quantity": "speed of rotation",
+                                              "raster_factor": factor,
+                                              "injected": True}
+            smeta = {
+                "recording_date": hf.recording_date, "timezone": hf.timezone,
+                "version": hf.version, "release": hf.release,
+                "kind": hf.kind, "scan_mode": hf.scan_mode,
+                "code_page": hf.code_page, "delta": hf.delta,
+                "n_scans": hf.n_scans, "max_factor": max_factor,
+                "source_filename": Path(fp).name,
+            }
+            groups.append({
+                "data": pd.DataFrame(data), "channels": list(data.keys()),
+                "units": units, "channel_metadata": cmeta,
+                "source_metadata": smeta, "label_suffix": f"{factor}x",
+            })
+        if not groups:
+            raise ValueError("HEAD .hdf: no live channels after NaN drop")
+        return groups
