@@ -681,7 +681,8 @@ def test_fft_time_context_builtin_presets(qtbot):
     assert params['overlap'] == 0.75
     assert params['amplitude_mode'] == 'amplitude_db'
 
-    # 振动类: hanning / auto 1.5 s / 50% / dB / 80 dB dynamic.
+    # 振动类(均衡): hanning / auto 1.5 s / 50% / dB / auto color,
+    # with a 50 dB manual fallback.
     ctx.apply_builtin_preset('vibration')
     p_vib = ctx.get_params()
     assert p_vib['window'] == 'hanning'
@@ -689,9 +690,12 @@ def test_fft_time_context_builtin_presets(qtbot):
     assert p_vib['nfft_mode'] == 'auto'
     assert p_vib['t_win_s'] == 1.5
     assert p_vib['overlap'] == 0.50
-    assert p_vib['dynamic'] == '80 dB'
+    assert p_vib['dynamic'] == 'Auto'
+    assert p_vib['z_auto'] is True
+    assert p_vib['z_floor'] == -50.0
 
-    # 启停类: hanning / auto 0.6 s / 75% / dB / 60 dB dynamic.
+    # 启停类(时间优先): hanning / auto 0.6 s / 75% / dB / auto color,
+    # with a tighter 40 dB manual fallback.
     ctx.apply_builtin_preset('transient')
     p_tr = ctx.get_params()
     assert p_tr['window'] == 'hanning'
@@ -699,7 +703,9 @@ def test_fft_time_context_builtin_presets(qtbot):
     assert p_tr['nfft_mode'] == 'auto'
     assert p_tr['t_win_s'] == 0.6
     assert p_tr['overlap'] == 0.75
-    assert p_tr['dynamic'] == '60 dB'
+    assert p_tr['dynamic'] == 'Auto'
+    assert p_tr['z_auto'] is True
+    assert p_tr['z_floor'] == -40.0
 
 
 # ---- 紧凑化【1】同行并排：X+Y / 开始+结束 / 窗函数+NFFT / 频率下限+上限 ----
@@ -960,8 +966,8 @@ def test_inspector_groupbox_title_has_underline_and_compact_padding():
 
 def test_combo_popup_style_removes_native_outer_focus_frame():
     """Combo popups draw their rounded selection in QSS; Qt's native
-    item-view border/focus rectangle must be suppressed so it cannot stack
-    as a second square frame around the popup or selected item.
+    focus rectangle must be suppressed while the custom rounded list border
+    remains visible.
     """
     from pathlib import Path
     import re
@@ -975,7 +981,7 @@ def test_combo_popup_style_removes_native_outer_focus_frame():
     assert popup, "QComboBox popup item-view rule not found"
     popup_block = popup.group(1)
     assert "outline: none" in popup_block or "outline: 0" in popup_block
-    assert "border: none" in popup_block
+    assert "border: 1px solid #cbd5e1;" in popup_block
     assert (
         "background-color: transparent" in popup_block
         or "background: transparent" in popup_block
@@ -1476,7 +1482,8 @@ def test_fft_time_apply_builtin_preset_still_accepts_legacy_keys(qtbot):
     assert p['nfft'] is None
     assert p['nfft_mode'] == 'auto'
     assert p['t_win_s'] == 0.6
-    assert p['dynamic'] == '60 dB'
+    assert p['dynamic'] == 'Auto'
+    assert p['z_floor'] == -40.0
 
 
 def test_fft_time_preset_collects_explicit_xyz_axes(qtbot):
@@ -1883,6 +1890,24 @@ def test_checkbox_text_background_is_transparent():
     assert m, "QCheckBox/QRadioButton rule not found"
     block = m.group(1)
     assert "background-color: transparent;" in block
+
+
+def test_time_range_rows_have_transparent_style_rule():
+    """The time-range row hosts follow their parent analysis-time panel."""
+    import pathlib
+    import re
+    qss_path = pathlib.Path(__file__).resolve().parents[2] / (
+        "mf4_analyzer/ui_kit/style.qss"
+    )
+    qss = qss_path.read_text(encoding="utf-8")
+    m = re.search(
+        r"Inspector\s+QWidget#timeRangeToggleRow,\s*"
+        r"Inspector\s+QWidget#inspectorPairField\s*\{([^}]*)\}",
+        qss,
+        re.DOTALL,
+    )
+    assert m, "time-range transparent row-host rule not found"
+    assert "background-color: transparent;" in m.group(1)
 
 
 def test_checkbox_indicator_has_visible_checked_state():
@@ -2294,7 +2319,8 @@ def test_fft_contextual_source_summary_replaces_signal_combo_for_checked_sources
 
     w.set_source_summary([])
 
-    assert "单信号" in w.lbl_source_summary.text()
+    assert w.lbl_source_summary.text() == "未选通道，使用单信号"
+    assert w.lbl_source_summary.wordWrap() is False
     assert w.combo_sig.isHidden() is False
 
 
@@ -2680,6 +2706,84 @@ def test_max_range_button_lives_on_chk_range_row(qapp):
     # The checkbox row stays visible even when unchecked.
     top.chk_range.setChecked(False)
     assert not top.chk_range.isHidden()
+
+
+def test_time_range_toggle_row_background_tracks_parent_panel(qapp, qtbot):
+    """The range toggle row must not repaint the generic QWidget page grey.
+
+    This uses a deliberately high-contrast stylesheet: all generic QWidget
+    children are grey, while QGroupBox panels are green. The blank stretch
+    between the checkbox label and 「最大」 should sample the panel color.
+    """
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QLabel
+    from mf4_analyzer.ui.inspector_sections import PersistentTop
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet("""
+            QWidget { background-color: #d1d5db; }
+            QGroupBox {
+                background-color: #e9fbf2;
+                border: 0;
+                margin-top: 18px;
+                padding-top: 18px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 0;
+            }
+            QWidget#timeRangeToggleRow,
+            QWidget#inspectorPairField { background: transparent; }
+            QCheckBox, QToolButton { background: transparent; }
+        """)
+
+        top = PersistentTop()
+        qtbot.addWidget(top)
+        top.resize(288, 240)
+        top.show()
+        qtbot.waitExposed(top)
+        qapp.processEvents()
+
+        host = top._chk_range_host
+        assert host.objectName() == "timeRangeToggleRow"
+        checkbox_right = top.chk_range.mapTo(
+            host, QPoint(top.chk_range.width(), 0)
+        ).x()
+        button_left = top.btn_range_max.mapTo(host, QPoint(0, 0)).x()
+        if button_left - checkbox_right > 8:
+            sample_x = (checkbox_right + button_left) // 2
+        else:
+            sample_x = max(4, host.width() - 8)
+        point = host.mapTo(top, QPoint(sample_x, host.height() // 2))
+
+        color = top.grab().toImage().pixelColor(point)
+        assert color.name().lower() == "#e9fbf2", (
+            "time range toggle row should inherit the parent panel "
+            f"background, got {color.name()}"
+        )
+
+        range_host = top._range_row_host
+        assert range_host.objectName() == "inspectorPairField"
+        end_label = next(
+            label for label in range_host.findChildren(QLabel)
+            if "结束" in label.text()
+        )
+        label_right = end_label.mapTo(
+            range_host, QPoint(end_label.width(), 0)
+        ).x()
+        end_left = top.spin_end.mapTo(range_host, QPoint(0, 0)).x()
+        sample_x = max(label_right + 1, min(end_left - 1, (label_right + end_left) // 2))
+        point = range_host.mapTo(top, QPoint(sample_x, range_host.height() // 2))
+
+        color = top.grab().toImage().pixelColor(point)
+        assert color.name().lower() == "#e9fbf2", (
+            "time range start/end pair row should inherit the parent panel "
+            f"background, got {color.name()}"
+        )
+    finally:
+        qapp.setStyleSheet(old_sheet)
 
 
 # ---- Wave 3 (axis-settings + COT migration plan): 坐标轴设置 group ----
@@ -3504,6 +3608,22 @@ def test_fft_time_contextual_apply_legacy_dynamic_80db(qtbot):
     assert fc.spin_z_ceiling.value() == 0.0
 
 
+def test_fft_time_contextual_accepts_deep_db_colorbar_echo(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    fc = FFTTimeContextual()
+    qtbot.addWidget(fc)
+
+    fc.apply_params({
+        'z_auto': False,
+        'z_floor': -330.0,
+        'z_ceiling': -315.0,
+    })
+
+    assert fc.chk_z_auto.isChecked() is False
+    assert fc.spin_z_floor.value() == -330.0
+    assert fc.spin_z_ceiling.value() == -315.0
+
+
 # ---- 2026-05-01 (codex review P7-L1' fix): FFTTimeContextual must satisfy
 # the same unit-toggle reset invariant as OrderContextual. Closes the test
 # blind spot P7-T1 from the review.
@@ -4171,12 +4291,12 @@ def test_fft_time_builtin_presets_apply_through_combos(qtbot):
         'vibration': dict(
             window='hanning', t_win_s=1.5, overlap=50,
             amplitude_mode='Amplitude dB', freq_auto=True,
-            dynamic='80 dB', cmap='turbo',
+            dynamic='Auto', cmap='turbo',
         ),
         'transient': dict(
             window='hanning', t_win_s=0.6, overlap=75,
             amplitude_mode='Amplitude dB', freq_auto=True,
-            dynamic='60 dB', cmap='turbo',
+            dynamic='Auto', cmap='turbo',
         ),
     }
     assert ctx._BUILTIN_PRESETS == expected
@@ -4189,8 +4309,11 @@ def test_fft_time_builtin_presets_apply_through_combos(qtbot):
         assert full['nfft_mode'] == "auto"
         assert full['t_win_s'] == p['t_win_s']
     assert ctx._builtin_preset_full_params('torque')['z_auto'] is True
-    assert ctx._builtin_preset_full_params('vibration')['z_floor'] == -80.0
-    assert ctx._builtin_preset_full_params('transient')['z_floor'] == -60.0
+    assert ctx._builtin_preset_full_params('vibration')['z_auto'] is True
+    assert ctx._builtin_preset_full_params('transient')['z_auto'] is True
+    assert ctx._builtin_preset_full_params('torque')['z_floor'] == -50.0
+    assert ctx._builtin_preset_full_params('vibration')['z_floor'] == -50.0
+    assert ctx._builtin_preset_full_params('transient')['z_floor'] == -40.0
 
     ctx.apply_builtin_preset('torque')
     assert ctx.combo_nfft.currentText() == "自动"

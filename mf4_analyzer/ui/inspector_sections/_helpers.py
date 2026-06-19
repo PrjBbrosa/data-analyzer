@@ -299,6 +299,9 @@ def _pair_field(widget_a, label_b_text, widget_b):
     row's leading label.
     """
     host = QWidget()
+    host.setObjectName("inspectorPairField")
+    host.setAutoFillBackground(False)
+    host.setAttribute(Qt.WA_StyledBackground, False)
     box = QHBoxLayout(host)
     box.setContentsMargins(0, 0, 0, 0)
     box.setSpacing(6)
@@ -775,10 +778,10 @@ def _make_axis_settings_group(
     if include_z:
         owner.chk_z_auto = QCheckBox()
         owner.spin_z_floor = _no_buttons(CompactDoubleSpinBox())
-        owner.spin_z_floor.setRange(-200.0, 200.0)
+        owner.spin_z_floor.setRange(-500.0, 500.0)
         owner.spin_z_floor.setDecimals(2)
         owner.spin_z_ceiling = _no_buttons(CompactDoubleSpinBox())
-        owner.spin_z_ceiling.setRange(-200.0, 200.0)
+        owner.spin_z_ceiling.setRange(-500.0, 500.0)
         owner.spin_z_ceiling.setDecimals(2)
         owner.combo_amp_unit = QComboBox()
         owner.combo_amp_unit.addItems(['dB', 'Linear'])

@@ -523,25 +523,13 @@ def _open_redesigned_menu(canvas, view_box, monkeypatch):
     return captured.get("menu")
 
 
-def _mouse_mode_buttons(menu):
-    """Return (pan_button, zoom_button) from the inline mouse-mode row."""
-    from PyQt5.QtWidgets import QToolButton, QWidgetAction
-
-    first = next(a for a in menu.actions() if not a.isSeparator())
-    assert isinstance(first, QWidgetAction)
-    widget = first.defaultWidget()
-    buttons = widget.findChildren(QToolButton)
-    by_tip = {button.toolTip(): button for button in buttons}
-    return by_tip["平移"], by_tip["框选"]
-
-
-def test_pg_context_menu_mouse_mode_syncs_toolbar_both_directions(
+def test_pg_context_menu_keeps_top_mouse_mode_shortcuts(
     qapp, qtbot, monkeypatch
 ):
-    """Design D single source of truth: selecting a mouse-mode menu row drives
-    the SAME toolbar mode state machine (and its ViewBoxes), and re-opening
-    the menu reflects whatever the toolbar currently is — both directions."""
+    """The right-click menu keeps the compact top shortcuts while the axis
+    form itself owns only coordinate operations."""
     import pyqtgraph as pg
+    from PyQt5.QtWidgets import QToolButton, QWidgetAction
 
     cs = ChartStack()
     qtbot.addWidget(cs)
@@ -564,24 +552,27 @@ def test_pg_context_menu_mouse_mode_syncs_toolbar_both_directions(
     # Default card start is pan.
     assert str(toolbar.mode).lower() == "pan"
 
-    # ---- Direction 1: menu → toolbar ----
-    menu = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
-    pan_btn, zoom_btn = _mouse_mode_buttons(menu)
-    # Checkmark reflects current toolbar state (pan).
-    assert pan_btn.isChecked() and not zoom_btn.isChecked()
-    # Selecting 框选 must flip the SHARED toolbar state + the ViewBoxes.
-    zoom_btn.click()
+    toolbar.zoom()
     qapp.processEvents()
     assert str(toolbar.mode).lower() == "zoom"
     assert [b.state["mouseMode"] for b in view_boxes] == [pg.ViewBox.RectMode] * len(view_boxes)
 
-    # ---- Direction 2: toolbar → menu ----
-    toolbar.pan()
+    menu = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
+    toggle_row = next(
+        action.defaultWidget()
+        for action in menu.actions()
+        if isinstance(action, QWidgetAction)
+        and action.defaultWidget() is not None
+        and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
+    )
+    buttons = toggle_row.findChildren(QToolButton)
+    assert [btn.toolTip() for btn in buttons] == ["框选", "平移"]
+
+    buttons[1].click()
     qapp.processEvents()
+
     assert str(toolbar.mode).lower() == "pan"
-    menu2 = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
-    pan_btn2, zoom_btn2 = _mouse_mode_buttons(menu2)
-    assert pan_btn2.isChecked() and not zoom_btn2.isChecked()
+    assert [b.state["mouseMode"] for b in view_boxes] == [pg.ViewBox.PanMode] * len(view_boxes)
 
 
 def _flush_history_debounce(toolbar, qapp):
@@ -1585,6 +1576,35 @@ def test_chart_options_toolbar_button_delegates_to_canvas(qapp, qtbot):
     cs._fft_card._options_btn.click()
 
     assert called == [True]
+
+
+def test_pg_analysis_chart_options_buttons_open_axis_dialog(
+    qapp, qtbot, monkeypatch,
+):
+    from mf4_analyzer.ui import _axis_interaction
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    opened = []
+
+    def fake_edit(parent, handle):
+        opened.append((parent, handle))
+        return True
+
+    monkeypatch.setattr(
+        _axis_interaction, "edit_chart_options_dialog", fake_edit,
+        raising=True,
+    )
+
+    for card in (cs._fft_card, cs._fft_time_card, cs._order_card):
+        card._options_btn.click()
+
+    assert len(opened) == 3
+    assert [handle.get_xlabel() for _parent, handle in opened] == [
+        "Frequency (Hz)",
+        "Time (s)",
+        "Time (s)",
+    ]
 
 
 def test_chart_toolbar_removes_native_customize_button(qapp, qtbot):

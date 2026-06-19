@@ -24,10 +24,10 @@ from mf4_analyzer.ui.pg_canvas._shared import show_major_grid_left_bottom_only
 
 
 _PG_CONTEXT_ACTIONS = {
-    "ViewBox options": ("视图选项", "配置当前图表的视图范围、坐标轴和鼠标交互。"),
+    "ViewBox options": ("视图选项", "配置当前图表的视图范围和坐标轴。"),
     "View All": ("查看全部", "回到完整数据范围，等同于顶部工具栏的重置视图。"),
-    "X axis": ("X 轴范围", "设置横轴范围、自动缩放、鼠标交互。"),
-    "Y axis": ("Y 轴范围", "设置纵轴范围、自动缩放、鼠标交互。"),
+    "X axis": ("X 轴范围", "设置横轴范围。"),
+    "Y axis": ("Y 轴范围", "设置纵轴范围。"),
     "Mouse Mode": ("鼠标模式", "切换图面左键拖动时的默认行为。"),
     "3 button": ("三键模式", "左键平移；右键或组合鼠标手势用于缩放。"),
     "1 button": ("单键模式", "左键框选缩放；适合临时放大一个局部区域。"),
@@ -81,7 +81,9 @@ _PG_AXIS_FORM_HIDE_OBJECTS = frozenset({
     "visibleOnlyCheck",
     "autoRadio",
     "autoPercentSpin",
+    "mouseCheck",
 })
+_PG_AXIS_FORM_HIDE_TEXTS = frozenset({"Mouse Enabled", "鼠标交互"})
 
 _PG_MOUSE_MODE_PAN = "pan"
 _PG_MOUSE_MODE_ZOOM = "zoom"
@@ -116,7 +118,6 @@ _MOUSE_MODE_TOGGLE_QSS = (
     "}"
 )
 
-
 def _clean_menu_text(text):
     return (text or "").replace("&", "").strip()
 
@@ -143,6 +144,12 @@ def _apply_context_widget_i18n(widget):
         if not isinstance(child, (QCheckBox, QRadioButton, QLabel)):
             continue
         text = _clean_menu_text(child.text())
+        if text in _PG_AXIS_FORM_HIDE_TEXTS:
+            try:
+                child.setVisible(False)
+            except Exception:
+                pass
+            continue
         translated = _PG_CONTEXT_WIDGETS.get(text)
         if translated is None:
             continue
@@ -299,26 +306,24 @@ def _build_grid_submenu(menu, plot_item, *, allow_y_grid=True):
 
 
 def _add_mouse_mode_toggle_row(menu, controller):
-    """Insert an inline icon-only box-zoom/pan toggle row."""
+    """Insert the compact top shortcut row without exposing axis mouseCheck."""
     if controller is None:
         return None
 
-    for _act in menu.actions():
-        if isinstance(_act, QWidgetAction):
-            _w = _act.defaultWidget()
-            if _w is not None and _w.objectName() == "pgMouseModeToggleRow":
+    for action in menu.actions():
+        if isinstance(action, QWidgetAction):
+            widget = action.defaultWidget()
+            if widget is not None and widget.objectName() == "pgMouseModeToggleRow":
                 try:
-                    _cur = controller.current_mouse_mode()
-                    _zoom = _cur == _PG_MOUSE_MODE_ZOOM
-                    _btns = _w.findChildren(QToolButton)
-                    if len(_btns) >= 2:
-                        _btns[0].setChecked(_zoom)
-                        _btns[1].setChecked(not _zoom)
+                    current = controller.current_mouse_mode()
+                    buttons = widget.findChildren(QToolButton)
+                    if len(buttons) >= 2:
+                        buttons[0].setChecked(current == _PG_MOUSE_MODE_ZOOM)
+                        buttons[1].setChecked(current != _PG_MOUSE_MODE_ZOOM)
                 except Exception:
                     pass
-                return _act
+                return action
 
-    current = None
     try:
         current = controller.current_mouse_mode()
     except Exception:
@@ -361,7 +366,6 @@ def _add_mouse_mode_toggle_row(menu, controller):
 
     btn_zoom.setChecked(is_zoom)
     btn_pan.setChecked(not is_zoom)
-
     row.setStyleSheet(_MOUSE_MODE_TOGGLE_QSS)
 
     def _select_zoom(_checked=False):

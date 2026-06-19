@@ -3279,8 +3279,8 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
 
-        # Register a controller so the inline mouse-mode toggle row is added
-        # (mirrors the real app where ChartStack wires the toolbar in).
+        # Register a controller to mirror the real app. The context menu should
+        # still keep mouse-mode operations toolbar-owned.
         class _Ctl:
             def current_mouse_mode(self):
                 return ""
@@ -3293,16 +3293,19 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
         assert menu is not None
 
-        actions = [a for a in menu.actions() if not a.isSeparator()]
-        # §④b: the FIRST item is the inline mouse-mode toggle row — a
-        # textless QWidgetAction, not a 鼠标操作 子菜单.
-        assert isinstance(actions[0], QWidgetAction)
-        assert actions[0].text().replace("&", "").strip() == ""
+        assert any(
+            isinstance(action, QWidgetAction)
+            and action.defaultWidget() is not None
+            and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
+            for action in menu.actions()
+        )
 
-        # The remaining NAMED top-level items, in order.
+        # The NAMED top-level items, in order.
+        actions = [a for a in menu.actions() if not a.isSeparator()]
         named = [
             a.text().replace("&", "").strip()
-            for a in actions[1:]
+            for a in actions
+            if a.text().replace("&", "").strip()
         ]
         assert named == [
             "Y 轴自适应",
@@ -3570,17 +3573,18 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         # widget).
         for name in ("linkCombo", "label", "invertCheck",
                      "autoPanCheck", "visibleOnlyCheck",
-                     "autoRadio", "autoPercentSpin"):
+                     "autoRadio", "autoPercentSpin", "mouseCheck"):
             child = axis_widget.findChild(QWidget, name)
             assert child is not None
             assert child.isHidden(), f"{name} should be hidden"
-        # Manual min/max + mouse-interaction survive; the 自动 row is removed
-        # per request, so only 手动 remains among the radios.
+        # Only the manual min/max coordinate controls remain. Mouse interaction
+        # is toolbar-owned and should not be exposed from the right-click axis
+        # form.
         check_texts = {c.text() for c in axis_widget.findChildren(QCheckBox)
                        if not c.isHidden()}
         radio_texts = {c.text() for c in axis_widget.findChildren(QRadioButton)
                        if not c.isHidden()}
-        assert "鼠标交互" in check_texts
+        assert "鼠标交互" not in check_texts
         assert "手动" in radio_texts
         assert "自动" not in radio_texts, "自动 row removed per request"
 
@@ -3619,27 +3623,8 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
                     if not sub_action.isSeparator():
                         _assert_no_descriptive_tooltip(sub_action)
 
-    # ---- §④b inline mouse-mode toggle row + controller routing ----
-    @staticmethod
-    def _toggle_row_buttons(menu):
-        """Return (btn_zoom, btn_pan) from the first-row QWidgetAction.
-
-        The row layout is [btn_zoom, btn_pan, stretch]; the buttons carry the
-        框选 / 平移 tooltips so we identify them by tooltip rather than order
-        to stay robust against re-ordering."""
-        from PyQt5.QtWidgets import QToolButton, QWidgetAction
-
-        first = next(a for a in menu.actions() if not a.isSeparator())
-        assert isinstance(first, QWidgetAction)
-        widget = first.defaultWidget()
-        buttons = widget.findChildren(QToolButton)
-        by_tip = {b.toolTip(): b for b in buttons}
-        return by_tip["框选"], by_tip["平移"]
-
-    def test_mouse_mode_toggle_row_is_first_with_two_exclusive_buttons(
-        self, qapp, monkeypatch
-    ):
-        from PyQt5.QtCore import Qt
+    # ---- §④b context menu keeps mouse mode toolbar-owned ----
+    def test_context_menu_keeps_mouse_mode_shortcut_row(self, qapp, monkeypatch):
         from PyQt5.QtWidgets import QToolButton, QWidgetAction
 
         canvas = _pg_canvas(qapp)
@@ -3659,95 +3644,18 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         canvas.register_mouse_mode_controller(_Ctl())
 
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        first = next(a for a in menu.actions() if not a.isSeparator())
-        assert isinstance(first, QWidgetAction)
-
-        widget = first.defaultWidget()
-        buttons = widget.findChildren(QToolButton)
-        assert len(buttons) == 2
-        # Both checkable, icon-only.
-        for b in buttons:
-            assert b.isCheckable()
-            assert b.toolButtonStyle() == Qt.ToolButtonIconOnly
-            assert b.text() == ""  # icon only, no label
-        # Exclusive: checking one un-checks the other.
-        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
-        btn_zoom.setChecked(True)
-        assert btn_zoom.isChecked() and not btn_pan.isChecked()
-        btn_pan.setChecked(True)
-        assert btn_pan.isChecked() and not btn_zoom.isChecked()
-
-    def test_toggle_row_checked_state_reflects_current_mode(
-        self, qapp, monkeypatch
-    ):
-        canvas = _pg_canvas(qapp)
-        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
-        vb = canvas.axes_list[0].view_box
-
-        class _Ctl:
-            def __init__(self):
-                self.mode = ""
-            def current_mouse_mode(self):
-                return self.mode
-            def set_pan_mode(self):
-                self.mode = "pan"
-            def set_zoom_mode(self):
-                self.mode = "zoom"
-
-        ctl = _Ctl()
-        canvas.register_mouse_mode_controller(ctl)
-
-        # idle → 平移 highlighted by default.
-        ctl.mode = ""
-        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
-        assert btn_pan.isChecked() and not btn_zoom.isChecked()
-
-        # zoom → 框选 highlighted (menu is rebuilt each open).
-        ctl.mode = "zoom"
-        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
-        assert btn_zoom.isChecked() and not btn_pan.isChecked()
-
-        # pan → 平移 highlighted.
-        ctl.mode = "pan"
-        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
-        assert btn_pan.isChecked() and not btn_zoom.isChecked()
-
-    def test_toggle_row_clicks_route_through_controller(
-        self, qapp, monkeypatch
-    ):
-        canvas = _pg_canvas(qapp)
-        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
-        vb = canvas.axes_list[0].view_box
-
-        class _Ctl:
-            def __init__(self):
-                self.mode = ""
-            def current_mouse_mode(self):
-                return self.mode
-            def set_pan_mode(self):
-                self.mode = "pan"
-            def set_zoom_mode(self):
-                self.mode = "zoom"
-
-        ctl = _Ctl()
-        canvas.register_mouse_mode_controller(ctl)
-        ctl.mode = "pan"
-
-        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
-
-        # Clicking 框选 routes through set_zoom_mode.
-        btn_zoom.click()
-        assert ctl.mode == "zoom"
-
-        # Re-open the menu (rebuilt) and click 平移 → set_pan_mode.
-        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        btn_zoom, btn_pan = self._toggle_row_buttons(menu)
-        btn_pan.click()
-        assert ctl.mode == "pan"
+        toggle_row = next(
+            action.defaultWidget()
+            for action in menu.actions()
+            if isinstance(action, QWidgetAction)
+            and action.defaultWidget() is not None
+            and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
+        )
+        buttons = toggle_row.findChildren(QToolButton)
+        assert [btn.toolTip() for btn in buttons] == ["框选", "平移"]
+        buttons[0].click()
+        assert canvas._mouse_mode_controller.mode == "zoom"
+        assert _top_level_texts(menu)[0] == ""
 
     def test_toggle_row_absent_when_no_controller(self, qapp, monkeypatch):
         from PyQt5.QtWidgets import QWidgetAction

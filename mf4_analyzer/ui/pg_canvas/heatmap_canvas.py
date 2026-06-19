@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
 from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
+    PgAxisHandle,
 )
 from mf4_analyzer.ui.pg_canvas.context_menu import redesign_pg_context_menu
 from mf4_analyzer.ui.pg_canvas._shared import (
@@ -131,6 +132,70 @@ class _AxisShim:
         self.view_box = view_box
 
 
+class _NamedColorMap:
+    __slots__ = ("name",)
+
+    def __init__(self, name: str):
+        self.name = str(name or "turbo")
+
+
+class _HeatmapMappable:
+    """Matplotlib-like color mappable facade for ChartOptionsDialog."""
+
+    def __init__(self, canvas):
+        self._canvas = canvas
+
+    def get_cmap(self):
+        return _NamedColorMap(getattr(self._canvas, "_cmap_name", "turbo"))
+
+    def set_cmap(self, name):
+        name = str(name or "turbo")
+        cm = _resolve_colormap(name)
+        canvas = self._canvas
+        canvas._cmap_name = name
+        canvas._img.setColorMap(cm)
+        if canvas._cbar is not None:
+            canvas._cbar.setColorMap(cm)
+        canvas.layout_geometry_changed.emit()
+
+    def get_clim(self):
+        canvas = self._canvas
+        if canvas._cbar is not None:
+            lo, hi = canvas._cbar.levels()
+            return float(lo), float(hi)
+        levels = canvas._img.getLevels()
+        if levels is not None:
+            lo, hi = levels
+            return float(lo), float(hi)
+        return _finite_data_bounds(canvas._matrix_disp)
+
+    def set_clim(self, vmin, vmax):
+        lo, hi = float(vmin), float(vmax)
+        canvas = self._canvas
+        canvas._img.setLevels((lo, hi))
+        if canvas._cbar is not None:
+            canvas._cbar.blockSignals(True)
+            canvas._cbar.setLevels((lo, hi))
+            canvas._cbar.blockSignals(False)
+        canvas.levels_changed.emit(lo, hi)
+        canvas.layout_geometry_changed.emit()
+
+    def get_array(self):
+        return self._canvas._matrix_disp
+
+
+class _HeatmapAxisHandle(PgAxisHandle):
+    def __init__(self, canvas):
+        super().__init__(canvas._plot, owner_canvas=canvas)
+        self._canvas = canvas
+        self._mappable = _HeatmapMappable(canvas)
+
+    def get_mappables(self):
+        if self._canvas._matrix_disp is None:
+            return []
+        return [self._mappable]
+
+
 def _tick_counts_to_density(x_n: int, y_n: int) -> tuple:
     """Convert inspector tick COUNTS to pg tick-density factors.
 
@@ -153,6 +218,31 @@ def _finite_float(value):
     except (TypeError, ValueError):
         return None
     return value if np.isfinite(value) else None
+
+
+def _finite_data_bounds(matrix):
+    arr = np.asarray(matrix, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return 0.0, 1.0
+    lo = float(np.nanmin(finite))
+    hi = float(np.nanmax(finite))
+    if hi <= lo:
+        hi = lo + 1.0
+    return lo, hi
+
+
+def _auto_db_level_window(matrix, z_floor, z_ceiling):
+    """Return a peak-relative dB display window for auto color levels."""
+    data_lo, data_hi = _finite_data_bounds(matrix)
+    floor = _finite_float(z_floor)
+    ceiling = _finite_float(z_ceiling)
+    if floor is None or ceiling is None:
+        return data_lo, data_hi
+    offset_lo, offset_hi = sorted((floor, ceiling))
+    if offset_hi <= offset_lo:
+        return data_lo, data_hi
+    return data_hi + offset_lo, data_hi + offset_hi
 
 
 def time_axis_display_extent(times, *, params=None, metadata=None, fallback=None):
@@ -553,6 +643,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # Emitted after labels/ticks/title/colorbar changes that can resize the
     # pyqtgraph layout. Analysis split pages coalesce this and align panes.
     layout_geometry_changed = pyqtSignal()
+    # Emitted after a render path programmatically resets image/colorbar levels.
+    levels_rebased = pyqtSignal()
     # Hidden-gesture discovery signals. The chart card connects these to the
     # hint system (mark_discovered / flash) so the matching rotating-pool tip
     # retires once the user has performed the gesture for the first time.
@@ -668,6 +760,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # primary control; _position_slice_panel clamps it on a narrow column.
         self._slice_toggle_w = 86
         self._result = None     # SpectrogramResult-like payload
+        self._cmap_name = "turbo"
         # Amplitude mode of the last plot_result render (slice mode only).
         # Parity with SpectrogramCanvas._amplitude_mode (canvases.py:1622):
         # the hover/remark readout labels values 'dB' in dB mode and the
@@ -726,7 +819,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # re-slice) AND click-positioned. angle flips with direction:
             # 90 (vertical) for an X slice, 0 (horizontal) for a Y slice.
             self._slice_marker = pg.InfiniteLine(
-                angle=90, movable=True, pen=pg.mkPen('#e03131', width=1))
+                angle=90,
+                movable=True,
+                pen=pg.mkPen('#e03131', width=1),
+                hoverPen=pg.mkPen('#ff3b30', width=3),
+            )
             self._plot.addItem(self._slice_marker)
             self._slice_marker.setVisible(False)
             self._slice_marker.sigPositionChanged.connect(
@@ -792,8 +889,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._bottom_split_h = self._bottom_split_default
             self._drag_start_bottom_h = self._bottom_split_h
             self._split_aligned = False
-        self._x_label = self._default_x_label
-        self._y_label = self._default_y_label
+        self._apply_default_axis_labels()
         # Empty state on construction: pin a fixed non-negative range so the
         # blank map never inherits pyqtgraph's default symmetric [-0.5, 0.5]
         # (negative time/freq/order ticks). Real extents from the first
@@ -982,22 +1078,25 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             if not z_auto:
                 m_disp = np.clip(m_disp, float(z_floor), float(z_ceiling))
             m = m_disp
+            auto_vmin, auto_vmax = _auto_db_level_window(m, z_floor, z_ceiling)
             if vmin is None:
-                vmin = float(z_floor) if not z_auto else float(np.nanmin(m))
+                vmin = float(z_floor) if not z_auto else auto_vmin
             if vmax is None:
-                vmax = float(z_ceiling) if not z_auto else 0.0
+                vmax = float(z_ceiling) if not z_auto else auto_vmax
             if 'dB' not in cbar_label:
                 cbar_label = f"{cbar_label} (dB)"
         else:
+            auto_vmin, auto_vmax = _finite_data_bounds(m)
             if vmin is None:
-                vmin = float(z_floor) if not z_auto else float(np.nanmin(m))
+                vmin = float(z_floor) if not z_auto else auto_vmin
             if vmax is None:
-                vmax = float(z_ceiling) if not z_auto else float(np.nanmax(m))
+                vmax = float(z_ceiling) if not z_auto else auto_vmax
 
         x0, x1 = float(x_extent[0]), float(x_extent[1])
         y0, y1 = float(y_extent[0]), float(y_extent[1])
 
         cm = _resolve_colormap(cmap)
+        self._cmap_name = str(cmap or 'turbo')
         self._img.setImage(m, autoLevels=False)
         self._img.setRect(QRectF(x0, y0, x1 - x0, y1 - y0))
         self._img.setColorMap(cm)
@@ -1039,6 +1138,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._extents = (x0, x1, y0, y1)
         self._has_result = True
         self._reset_slice_quality_for_rebuild()
+        self.levels_rebased.emit()
         self.layout_geometry_changed.emit()
 
     def has_result(self) -> bool:
@@ -1229,6 +1329,15 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             _apply_axis_tick_density(axis, y_d)
         self.layout_geometry_changed.emit()
 
+    def open_chart_options_dialog(self, parent=None):
+        """Open coordinate/color-scale options for the main heatmap."""
+        from mf4_analyzer.ui import _axis_interaction
+
+        handle = _HeatmapAxisHandle(self)
+        target_parent = parent if parent is not None else self.window()
+        return bool(_axis_interaction.edit_chart_options_dialog(
+            target_parent, handle))
+
     def _refresh_bottom_x_ticks(self, *_args) -> None:
         if self._bottom_tick_target is None or self._bottom_tick_density is None:
             return
@@ -1344,15 +1453,17 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             m = self._db_cache[1]
             if not z_auto:
                 m = np.clip(m, float(z_floor), float(z_ceiling))
-            vmin = float(z_floor) if not z_auto else float(np.nanmin(m))
-            vmax = float(z_ceiling) if not z_auto else float(np.nanmax(m))
+            if z_auto:
+                vmin, vmax = _auto_db_level_window(m, z_floor, z_ceiling)
+            else:
+                vmin, vmax = float(z_floor), float(z_ceiling)
             cbar = f"Amplitude{unit} (dB re {db_ref:g})"
         else:
             m = result.amplitude
             if not z_auto:
                 vmin, vmax = float(z_floor), float(z_ceiling)
             else:
-                vmin, vmax = float(np.nanmin(m)), float(np.nanmax(m))
+                vmin, vmax = _finite_data_bounds(m)
             cbar = f"Amplitude{unit}"
 
         y_lo = float(result.frequencies[0])

@@ -18,6 +18,7 @@ import pyqtgraph as pg
 from mf4_analyzer.ui._axis_handle import (
     PG_AXIS_NEUTRAL_COLOR,
     PG_AXIS_NEUTRAL_WIDTH,
+    PgAxisHandle,
 )
 from mf4_analyzer.signal.envelope import build_envelope
 
@@ -967,6 +968,15 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._time_divisions = max(3, min(20, y_n))
         self._reframe_time_y_to_grid()
         self.layout_geometry_changed.emit()
+
+    def open_chart_options_dialog(self, parent=None):
+        """Open chart options for the main FFT axis."""
+        from mf4_analyzer.ui import _axis_interaction
+
+        handle = PgAxisHandle(self._plot_amp, owner_canvas=self)
+        target_parent = parent if parent is not None else self.window()
+        return bool(_axis_interaction.edit_chart_options_dialog(
+            target_parent, handle))
 
     def _refresh_bottom_x_ticks(self, *_args) -> None:
         if self._bottom_tick_target is None or self._bottom_tick_density is None:

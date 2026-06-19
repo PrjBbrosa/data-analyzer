@@ -35,14 +35,17 @@ class _FakeMenuEvent:
 
 
 class _FakeMouseModeController:
+    def __init__(self):
+        self.mode = "pan"
+
     def current_mouse_mode(self):
-        return "pan"
+        return self.mode
 
     def set_pan_mode(self):
-        pass
+        self.mode = "pan"
 
     def set_zoom_mode(self):
-        pass
+        self.mode = "zoom"
 
 
 def _open_context_menu(view_box, monkeypatch):
@@ -280,6 +283,33 @@ def test_fft_line_canvas_unshown_bottom_ticks_fall_back_to_density():
             assert not getattr(axis, "_tickLevels", None)
     finally:
         c.deleteLater()
+
+
+def test_fft_line_canvas_opens_chart_options_dialog(canvas, monkeypatch):
+    from mf4_analyzer.ui import _axis_interaction
+
+    captured = {}
+
+    def fake_edit(parent, handle):
+        captured["parent"] = parent
+        captured["handle"] = handle
+        return True
+
+    monkeypatch.setattr(
+        _axis_interaction, "edit_chart_options_dialog", fake_edit,
+        raising=True,
+    )
+
+    assert canvas.open_chart_options_dialog(parent=canvas) is True
+
+    handle = captured["handle"]
+    assert captured["parent"] is canvas
+    assert handle.get_xlabel() == "Frequency (Hz)"
+    assert handle.get_ylabel() == "Amplitude"
+    assert handle.get_mappables() == []
+    handle.set_xlim(10.0, 20.0)
+    x_range, _ = canvas._plot_amp.vb.viewRange()
+    assert x_range == pytest.approx([10.0, 20.0])
 
 
 def test_fft_line_canvas_uses_compact_outer_pg_layout(canvas):
@@ -1029,7 +1059,10 @@ def test_empty_state_time_y_padded_off_top_frame(canvas):
 
 
 def test_fft_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch):
-    canvas.register_mouse_mode_controller(_FakeMouseModeController())
+    from PyQt5.QtWidgets import QToolButton, QWidgetAction
+
+    controller = _FakeMouseModeController()
+    canvas.register_mouse_mode_controller(controller)
     canvas.plot_time_preview([_entry()], title='时域预览')
 
     menu = _open_context_menu(canvas._plot_time.vb, monkeypatch)
@@ -1043,6 +1076,17 @@ def test_fft_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch)
     assert "Y 轴范围" in top
     assert "网格" in top
     assert "Mouse Mode" not in top
+    toggle_row = next(
+        action.defaultWidget()
+        for action in menu.actions()
+        if isinstance(action, QWidgetAction)
+        and action.defaultWidget() is not None
+        and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
+    )
+    buttons = toggle_row.findChildren(QToolButton)
+    assert [btn.toolTip() for btn in buttons] == ["框选", "平移"]
+    buttons[0].click()
+    assert controller.mode == "zoom"
 
 
 def test_fft_context_menu_includes_y_autofit(canvas, monkeypatch):

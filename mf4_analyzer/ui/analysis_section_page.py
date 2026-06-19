@@ -39,10 +39,12 @@ QWidget#analysisCompareRow {
     border-top: 1px solid #dbe3ee;
 }
 QToolButton#analysisCompareToggle {
+    min-height: 22px;
+    max-height: 22px;
     background: transparent;
     border: 1px solid #d4d8de;
     border-radius: 4px;
-    padding: 1px 9px;
+    padding: 0 8px;
     color: #5b6471;
     font-size: 11px;
 }
@@ -119,7 +121,7 @@ class AnalysisSectionPage(QWidget):
         # compare_toggled write. Set before the buttons are wired.
         self._suppress_compare_edge = False
 
-        # Bottom row: [ViewTabBar ........... 联动缩放 | 锁定色阶].
+        # Bottom row: [ViewTabBar ........... 关闭对比窗格 | 联动缩放 | 锁定色阶].
         # The toggles live on THIS page (not inside the shared ViewTabBar,
         # which the time-domain section reuses unchanged).
         self._compare_row = QWidget(self)
@@ -164,6 +166,8 @@ class AnalysisSectionPage(QWidget):
         # 联动缩放 + 锁定色阶 defaults mirror AnalysisViewState.compare.
         # Seed under suppression so no compare_toggled fires at construction.
         self.sync_compare_buttons(x_linked=True, levels_locked=True)
+        self.set_linked(True)
+        self.set_levels_locked(True)
 
         lay.addWidget(self._compare_row)
 
@@ -184,6 +188,12 @@ class AnalysisSectionPage(QWidget):
             if signal is not None:
                 try:
                     signal.connect(self._schedule_heatmap_layout_sync)
+                except Exception:
+                    pass
+            levels_rebased = getattr(canvas, 'levels_rebased', None)
+            if levels_rebased is not None:
+                try:
+                    levels_rebased.connect(self._on_canvas_levels_rebased)
                 except Exception:
                     pass
             canvas.installEventFilter(self)
@@ -264,6 +274,7 @@ class AnalysisSectionPage(QWidget):
         self._split.setSizes([left, max(1, total - left)])
         self._configure_shared_toolbar()
         self.set_linked(self._linked)
+        self.set_levels_locked(self._levels_locked)
         self._apply_focus_style()
         self._refresh_compare_buttons()
         self._sync_card_hint_bars()
@@ -303,7 +314,7 @@ class AnalysisSectionPage(QWidget):
             return
         self.set_linked(False)
         # Tear down level-lock signal wiring before the pane is destroyed.
-        self.set_levels_locked(False)
+        self._disconnect_level_lock_handlers(self._heatmap_canvases())
         card = self._cards.pop(1)
         card.removeEventFilter(self)
         card.setParent(None)
@@ -559,11 +570,7 @@ class AnalysisSectionPage(QWidget):
         self._levels_locked = bool(locked)
         canvases = self._heatmap_canvases()
         # Always disconnect first (idempotent re-lock + clean unlock).
-        for c in canvases:
-            try:
-                c.levels_changed.disconnect(self._on_locked_levels_changed)
-            except TypeError:
-                pass
+        self._disconnect_level_lock_handlers(canvases)
         if not self._levels_locked or len(canvases) < 2:
             self._refresh_compare_buttons()
             return
@@ -578,6 +585,23 @@ class AnalysisSectionPage(QWidget):
     def is_levels_locked(self) -> bool:
         return self._levels_locked
 
+    def _disconnect_level_lock_handlers(self, canvases) -> None:
+        for c in canvases:
+            try:
+                c.levels_changed.disconnect(self._on_locked_levels_changed)
+            except TypeError:
+                pass
+
+    def _on_canvas_levels_rebased(self) -> None:
+        if not self._levels_locked:
+            return
+        canvases = self._heatmap_canvases()
+        if len(canvases) < 2:
+            return
+        if not all(getattr(c, 'has_result', lambda: False)() for c in canvases):
+            return
+        self.set_levels_locked(True)
+
     @staticmethod
     def _combined_levels(canvases):
         """Merged (min, max) across every pane's display-space matrix.
@@ -586,15 +610,21 @@ class AnalysisSectionPage(QWidget):
         matrix yet (e.g. one pane computed, the other still empty)."""
         los, his = [], []
         for c in canvases:
+            lv = c._img.getLevels()
+            if lv is not None and lv[0] is not None:
+                lo = float(lv[0])
+                hi = float(lv[1])
+                if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+                    los.append(lo)
+                    his.append(hi)
+                    continue
             m = getattr(c, '_matrix_disp', None)
             if m is not None and np.size(m):
-                los.append(float(np.nanmin(m)))
-                his.append(float(np.nanmax(m)))
-            else:
-                lv = c._img.getLevels()
-                if lv is not None and lv[0] is not None:
-                    los.append(float(lv[0]))
-                    his.append(float(lv[1]))
+                lo = float(np.nanmin(m))
+                hi = float(np.nanmax(m))
+                if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+                    los.append(lo)
+                    his.append(hi)
         if not los:
             return None, None
         return min(los), max(his)
@@ -630,6 +660,7 @@ class AnalysisSectionPage(QWidget):
         btn.setCheckable(True)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFocusPolicy(Qt.NoFocus)
+        btn.setFixedHeight(22)
         return btn
 
     def _on_link_button_toggled(self, on: bool) -> None:

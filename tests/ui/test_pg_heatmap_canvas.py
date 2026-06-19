@@ -41,14 +41,17 @@ class _FakeMenuEvent:
 
 
 class _FakeMouseModeController:
+    def __init__(self):
+        self.mode = "pan"
+
     def current_mouse_mode(self):
-        return "pan"
+        return self.mode
 
     def set_pan_mode(self):
-        pass
+        self.mode = "pan"
 
     def set_zoom_mode(self):
-        pass
+        self.mode = "zoom"
 
 
 def _open_context_menu(view_box, monkeypatch):
@@ -304,6 +307,54 @@ def test_update_path_reuses_colorbar_and_relabels_left_axis(canvas):
     assert canvas._cbar.getAxis('left').labelText == 'Order Amp'
 
 
+def test_heatmap_chart_options_dialog_exposes_axis_and_color_scale(
+    canvas, monkeypatch,
+):
+    from mf4_analyzer.ui import _axis_interaction
+
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        x_label="Time (s)",
+        y_label="Frequency (Hz)",
+        amplitude_mode='amplitude',
+        z_auto=False,
+        z_floor=-2.0,
+        z_ceiling=4.0,
+        cmap='turbo',
+        cbar_label='Amplitude',
+    )
+    captured = {}
+
+    def fake_edit(parent, handle):
+        captured["parent"] = parent
+        captured["handle"] = handle
+        return True
+
+    monkeypatch.setattr(
+        _axis_interaction, "edit_chart_options_dialog", fake_edit,
+        raising=True,
+    )
+
+    assert canvas.open_chart_options_dialog(parent=canvas) is True
+
+    handle = captured["handle"]
+    assert captured["parent"] is canvas
+    assert handle.get_xlabel() == "Time (s)"
+    assert handle.get_ylabel() == "Frequency (Hz)"
+    mappables = handle.get_mappables()
+    assert len(mappables) == 1
+    mappable = mappables[0]
+    assert mappable.get_cmap().name == "turbo"
+    assert mappable.get_clim() == pytest.approx((-2.0, 4.0))
+
+    mappable.set_clim(1.0, 3.0)
+
+    assert canvas._img.getLevels() == pytest.approx((1.0, 3.0))
+    assert canvas._cbar.levels() == pytest.approx((1.0, 3.0))
+
+
 def test_set_tick_density_accepts_inspector_counts(canvas):
     # Inspector PersistentTop passes integer tick COUNTS (x spinbox
     # 3-30, y spinbox 3-20; defaults 10/10) — the same values the mpl
@@ -351,14 +402,34 @@ def test_set_tick_density_also_applies_to_slice_subplot(qapp):
 
 def test_db_mode_z_auto_defaults_true(canvas):
     # mpl original (canvases.py:2184) defaults z_auto=True; omitting it
-    # must NOT clip the matrix to the (-30, 0) manual window.
+    # must NOT clip the matrix to the (-30, 0) manual window, but the displayed
+    # color scale should use that 30 dB span instead of the full data floor.
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
         amplitude_mode='amplitude_db',
     )
     lo, hi = canvas._img.getLevels()
-    assert lo == pytest.approx(-40.0)  # 20*log10(1/100), unclipped
+    assert lo == pytest.approx(-30.0)
     assert hi == pytest.approx(0.0)
+    # Matrix data remains unclipped: 20*log10(1/100) = -40 dB.
+    assert float(np.nanmin(canvas._matrix_disp)) == pytest.approx(-40.0)
+
+
+def test_db_auto_levels_use_configured_span_without_clipping_matrix(canvas):
+    matrix = np.array([[1.0, 1e-16], [1e-8, 1e-4]], dtype=float)
+    canvas.plot_or_update_heatmap(
+        matrix=matrix,
+        x_extent=(0.0, 2.0),
+        y_extent=(0.0, 2.0),
+        amplitude_mode='amplitude_db',
+        z_auto=True,
+        z_floor=-50.0,
+        z_ceiling=0.0,
+    )
+
+    lo, hi = canvas._img.getLevels()
+    assert (lo, hi) == (pytest.approx(-50.0), pytest.approx(0.0))
+    assert float(np.nanmin(canvas._matrix_disp)) < -200.0
 
 
 def test_interp_bilinear_enables_smooth_image_paint(canvas):
@@ -396,7 +467,10 @@ def test_heatmap_default_interpolation_is_smooth(canvas):
 
 
 def test_heatmap_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch):
-    canvas.register_mouse_mode_controller(_FakeMouseModeController())
+    from PyQt5.QtWidgets import QToolButton, QWidgetAction
+
+    controller = _FakeMouseModeController()
+    canvas.register_mouse_mode_controller(controller)
     canvas.plot_or_update_heatmap(
         matrix=_mat(),
         x_extent=(0.0, 10.0),
@@ -416,6 +490,17 @@ def test_heatmap_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypa
     assert "Y 轴范围" in top
     assert "网格" in top
     assert "Mouse Mode" not in top
+    toggle_row = next(
+        action.defaultWidget()
+        for action in menu.actions()
+        if isinstance(action, QWidgetAction)
+        and action.defaultWidget() is not None
+        and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
+    )
+    buttons = toggle_row.findChildren(QToolButton)
+    assert [btn.toolTip() for btn in buttons] == ["框选", "平移"]
+    buttons[0].click()
+    assert controller.mode == "zoom"
 
 
 def test_remark_add_and_clear(canvas):
@@ -1002,6 +1087,30 @@ def test_heatmap_slice_marker_drag_drops_curve_aa(qapp):
         assert c._slice_aa_on is False
         assert c._slice_aa_idle_timer.isActive()
         assert _slice_curve_aa_enabled(c) == (False, False)
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_slice_marker_hover_pen_highlights_line(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        c.resize(640, 480)
+        c.plot_result(_spec_result(), amplitude_mode='amplitude_db', z_auto=True)
+
+        marker = c._slice_marker
+        assert marker.pen.widthF() <= 1.5
+        assert marker.hoverPen.widthF() >= 3.0
+
+        marker.setMouseHover(True)
+        assert marker.currentPen.widthF() == pytest.approx(
+            marker.hoverPen.widthF())
+
+        marker.setMouseHover(False)
+        assert marker.currentPen.widthF() == pytest.approx(marker.pen.widthF())
+
+        c.set_slice_direction('y')
+        assert marker.angle == 0
+        assert marker.hoverPen.widthF() >= 3.0
     finally:
         c.deleteLater()
 
@@ -1760,6 +1869,31 @@ def test_plot_result_db_vmin_vmax_not_overridden_by_internal_auto(qapp):
     # The colorbar mirrors the same explicit window, not a re-derived one.
     blo, bhi = c._cbar.levels()
     assert (blo, bhi) == (pytest.approx(-60.0), pytest.approx(-3.0))
+    c.deleteLater()
+
+
+def test_plot_result_db_auto_span_tracks_data_peak(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = SpectrogramResult(
+        times=np.array([0.0, 1.0]),
+        frequencies=np.array([0.0, 10.0]),
+        amplitude=np.array([[1e-16, 1e-15], [1e-12, 1e-10]], dtype=float),
+        params=SpectrogramParams(fs=100.0, nfft=64, db_reference=1.0),
+        channel_name='quiet',
+        metadata={'frames': 2},
+    )
+
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', cmap='turbo',
+        z_auto=True, z_floor=-50.0, z_ceiling=0.0,
+    )
+
+    peak = float(np.nanmax(c._matrix_disp))
+    lo, hi = c._img.getLevels()
+    assert hi == pytest.approx(peak)
+    assert lo == pytest.approx(peak - 50.0)
+    assert peak < -100.0
     c.deleteLater()
 
 

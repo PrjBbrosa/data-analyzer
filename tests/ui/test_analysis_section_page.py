@@ -629,6 +629,22 @@ def test_compare_toggled_signal_x_linked(page):
 
 def test_heatmap_compare_defaults_lock_levels_on(page):
     assert page.btn_lock_levels.isChecked() is True
+    assert page.is_levels_locked() is True
+
+
+def test_default_levels_lock_reapplies_after_heatmap_render(page, qapp):
+    page.enter_split()
+    assert page.btn_lock_levels.isChecked() is True
+    assert page.is_levels_locked() is True
+
+    for i, peak in ((0, 100.0), (1, 50.0)):
+        _plot_heat(page.pane_canvas(i), peak)
+    qapp.processEvents()
+
+    lo0, hi0 = page.pane_canvas(0)._img.getLevels()
+    lo1, hi1 = page.pane_canvas(1)._img.getLevels()
+    assert (lo0, hi0) == (pytest.approx(1.0), pytest.approx(100.0))
+    assert (lo1, hi1) == (pytest.approx(1.0), pytest.approx(100.0))
 
 
 def test_compare_toggled_signal_levels_locked(page):
@@ -685,3 +701,38 @@ def test_analysis_tabbar_uses_active_pane_split_controls(page):
     assert page.tabbar._split_clear.isVisible()
     assert page.tabbar._split_clear.text() == "✕ 关闭对比窗格"
     assert page.tabbar._split_clear.toolTip() == "关闭当前 View 的对比窗格"
+
+
+@pytest.mark.parametrize("fixture_name", ["page", "line_page", "slice_page"])
+def test_analysis_compare_buttons_are_compact_and_right_aligned(
+    request, qapp, fixture_name,
+):
+    page = request.getfixturevalue(fixture_name)
+    original_qss = qapp.styleSheet()
+    qapp.setStyleSheet(
+        original_qss + "\nQToolButton { min-height: 26px; padding: 2px 8px; }"
+    )
+    try:
+        page.enter_split()
+        qapp.processEvents()
+
+        clear = page.tabbar._split_clear
+        link = page.btn_link
+        assert clear.isVisible()
+        assert link.isVisible()
+
+        clear_right = clear.mapTo(page._compare_row, clear.rect().topRight()).x()
+        clear_left = clear.mapTo(page._compare_row, clear.rect().topLeft()).x()
+        link_left = link.mapTo(page._compare_row, link.rect().topLeft()).x()
+        rightmost = page.btn_lock_levels if page.btn_lock_levels.isVisible() else link
+        rightmost_right = rightmost.mapTo(
+            page._compare_row, rightmost.rect().topRight()).x()
+        gap = link_left - clear_right - 1
+        right_gap = page._compare_row.width() - rightmost_right - 1
+
+        assert link.height() <= 24
+        assert 0 <= gap <= 10
+        assert clear_left > page._compare_row.width() // 2
+        assert 0 <= right_gap <= 12
+    finally:
+        qapp.setStyleSheet(original_qss)

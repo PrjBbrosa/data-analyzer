@@ -622,11 +622,11 @@ class FFTTimeContextual(QWidget):
     # survive untouched. Wave 5 / 6 will rewrite them in the new shape.
     # DEPRECATED key form; survives via _apply_preset legacy migration on load.
     #
-    # Signal-type built-in presets (信号专家 校核定稿 — do NOT alter the numeric
-    # values). The compact shape (window/nfft/overlap/amplitude_mode/freq_auto/
-    # dynamic/cmap) is preserved; _builtin_preset_full_params spreads it to the
-    # full collect-preset shape and parses ``dynamic`` ('Auto' / 'NN dB') into
-    # z_auto / z_floor.
+    # Signal-type built-in presets. The compact shape
+    # (window/nfft/overlap/amplitude_mode/freq_auto/dynamic/cmap) is preserved;
+    # _builtin_preset_full_params spreads it to the full collect-preset shape.
+    # Builtins use auto color levels, with per-preset manual fallback spans for
+    # when the user unticks 色阶 auto.
     _BUILTIN_PRESETS = {
         'torque': dict(
             window='flattop',
@@ -643,7 +643,7 @@ class FFTTimeContextual(QWidget):
             overlap=50,
             amplitude_mode='Amplitude dB',
             freq_auto=True,
-            dynamic='80 dB',
+            dynamic='Auto',
             cmap='turbo',
         ),
         'transient': dict(
@@ -652,9 +652,14 @@ class FFTTimeContextual(QWidget):
             overlap=75,
             amplitude_mode='Amplitude dB',
             freq_auto=True,
-            dynamic='60 dB',
+            dynamic='Auto',
             cmap='turbo',
         ),
+    }
+    _BUILTIN_Z_FALLBACK_FLOORS = {
+        'torque': -50.0,
+        'vibration': -50.0,
+        'transient': -40.0,
     }
     _LEGACY_BUILTIN_PRESET_ALIASES = {
         'diagnostic': 'vibration',
@@ -676,7 +681,12 @@ class FFTTimeContextual(QWidget):
         builtin-aware PresetBar can save / reset / load the same shape
         round-trip.
         """
-        cfg = self._BUILTIN_PRESETS.get(self._resolve_builtin_preset_key(name), {})
+        key = self._resolve_builtin_preset_key(name)
+        cfg = self._BUILTIN_PRESETS.get(key, {})
+        dynamic = cfg.get('dynamic', '80 dB')
+        z_floor = self._BUILTIN_Z_FALLBACK_FLOORS.get(
+            key, _dynamic_to_floor(dynamic),
+        )
         # Spread the legacy compact dict to the full collect_preset shape
         # — fields we don't override default to "the same value the
         # widget has at construction time" so an unspecified field doesn't
@@ -693,7 +703,7 @@ class FFTTimeContextual(QWidget):
             'freq_auto': cfg.get('freq_auto', True),
             'freq_min': 0.0,
             'freq_max': 0.0,
-            'dynamic': cfg.get('dynamic', '80 dB'),
+            'dynamic': dynamic,
             'cmap': cfg.get('cmap', 'turbo'),
             'x_auto': True,
             'x_min': 0.0,
@@ -701,8 +711,8 @@ class FFTTimeContextual(QWidget):
             'y_auto': cfg.get('freq_auto', True),
             'y_min': 0.0,
             'y_max': 0.0,
-            'z_auto': cfg.get('dynamic') == 'Auto',
-            'z_floor': _dynamic_to_floor(cfg.get('dynamic', '80 dB')),
+            'z_auto': dynamic == 'Auto',
+            'z_floor': z_floor,
             'z_ceiling': 0.0,
         }
 

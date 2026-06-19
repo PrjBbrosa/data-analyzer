@@ -984,6 +984,12 @@ Inspector QFrame#fftTimeSignalCard {
     padding: 0;
 }
 
+Inspector QWidget#timeRangeToggleRow,
+Inspector QWidget#inspectorPairField {
+    background-color: transparent;
+    border: none;
+}
+
 /* 2026-06-13 分析信号/谱参数 split: each analysis contextual is now a
  * transparent host for two stacked, full-width cards — the green
  * analysis-signal card (sig_card) on top and the tinted parameter card

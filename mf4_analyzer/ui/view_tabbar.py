@@ -70,7 +70,8 @@ class ViewTabBar(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 0, 8, 0)
+        right_margin = 4 if self._split_action_mode == 'active_pane' else 8
+        layout.setContentsMargins(8, 0, right_margin, 0)
         layout.setSpacing(2)
 
         self._tabs = QTabBar(self)

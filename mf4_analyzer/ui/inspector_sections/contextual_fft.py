@@ -41,6 +41,7 @@ class FFTContextual(QWidget):
     remark_toggled = pyqtSignal(bool)
     signal_changed = pyqtSignal(object)  # emits (fid, ch) or None
     _AUTO_NFFT_LABEL = "自动"
+    _NO_SOURCE_SUMMARY = "未选通道，使用单信号"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,9 +90,9 @@ class FFTContextual(QWidget):
         _configure_form(fl)
         self.lbl_source_summary = QWidget()
         from PyQt5.QtWidgets import QLabel
-        self.lbl_source_summary = QLabel("未勾选左侧通道 · 使用单信号下拉框")
+        self.lbl_source_summary = QLabel(self._NO_SOURCE_SUMMARY)
         self.lbl_source_summary.setObjectName("fftSourceSummary")
-        self.lbl_source_summary.setWordWrap(True)
+        self.lbl_source_summary.setWordWrap(False)
         fl.addRow(
             "输入源:",
             _fit_field(self.lbl_source_summary, max_width=_LONG_FIELD_MAX_WIDTH),
@@ -451,7 +452,7 @@ class FFTContextual(QWidget):
             self.lbl_single_signal.setVisible(False)
             self.combo_sig.setVisible(False)
         else:
-            self.lbl_source_summary.setText("未勾选左侧通道 · 使用单信号下拉框")
+            self.lbl_source_summary.setText(self._NO_SOURCE_SUMMARY)
             self.lbl_source_summary.setToolTip("")
             self.lbl_single_signal.setVisible(True)
             self.combo_sig.setVisible(True)

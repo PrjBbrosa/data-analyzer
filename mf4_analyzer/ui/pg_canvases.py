@@ -18,7 +18,6 @@ from mf4_analyzer.ui.pg_canvas.canvas import (  # noqa: F401
     positions_envelope,
 )
 from mf4_analyzer.ui.pg_canvas.context_menu import (  # noqa: F401
-    _add_mouse_mode_toggle_row,
     _add_y_autofit_action,
     _apply_context_widget_i18n,
     _build_grid_submenu,

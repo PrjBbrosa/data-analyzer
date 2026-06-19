@@ -150,6 +150,9 @@ class PersistentTop(QWidget):
         )
         # Host row: [chk_range][stretch][btn_range_max].
         self._chk_range_host = QWidget()
+        self._chk_range_host.setObjectName("timeRangeToggleRow")
+        self._chk_range_host.setAutoFillBackground(False)
+        self._chk_range_host.setAttribute(Qt.WA_StyledBackground, False)
         _chk_host_lay = QHBoxLayout(self._chk_range_host)
         _chk_host_lay.setContentsMargins(0, 0, 0, 0)
         _chk_host_lay.setSpacing(6)
