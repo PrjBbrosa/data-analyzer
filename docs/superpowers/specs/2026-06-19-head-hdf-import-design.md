@@ -55,7 +55,7 @@
 - **GBK 解码确认**：ch7–9 解出 `输出轴 z/y/x`（输出轴三轴加速度）。
 - **数据语义对上**：L/R ≈ ±0.4（声压音频），MOTOR X/Y/Z 与输出轴 ≈ ±3~13（加速度），SP/`Com_RPS_Speed` 为速度量级。
 - **空通道**：12 个 `Com_*`（ch10–16/20–23/26–27）全 0（本次未采）——**保留**（合法空通道，与 MF4 行为一致）。
-- **ch28（48× "CAN 1@SQuadriga"）全为 NaN** → 空占位，**按"全 NaN 丢弃"**（同现有 CSV loader `dropna(how='all')`）。丢弃后 48× 组消失 → **本文件实际 2 组（24×/1×）**。
+- **ch28（48× "CAN 1@SQuadriga"）的 `implementation type` 是 UINT32**（非 FLOAT32；早期按 `<f4` 探查时误读成"全 NaN"——其实是 UINT32 字节按 f4 解出的 NaN 位型）。该通道**按"非 FLOAT32 → 丢弃并记录"**处理（见 §3.6）。丢弃后 48× 组消失 → **本文件实际 2 组（24×/1×）**。（Task 8 真实文件集成测试发现：原"任何非 FLOAT32 整文件报错"的守卫会使真实文件打不开。）
 - **footer**：数据块后 137 字节 `; xmlAppendix_utf16 …`（UTF-16，`<HdfAppendix version="1"><UserDoc /></HdfAppendix>`），无采样率信息。
 - **采样率仍需 HEAD Companion 定死**：读法 (a) 0.191s 使音频达 6.2 MHz（物理不可能）→ **排除**。剩两候选：① delta=24×周期 → 音频 259 kHz、控制 10.8 kHz、时长 4.59 s；② delta=48×周期 → 音频 129.5 kHz、控制 5.4 kHz、时长 9.17 s。loader 用 `period = delta × (max_factor_in_ch_order / factor)` 计算（max_factor 取 `ch order` 原始最大值，本文件含 ch28 即 48 → 候选②）；最终以 HEAD Companion 显示的 fs/时长为准。
 
@@ -106,7 +106,11 @@
 
 ### 3.6 错误处理（变体守卫）
 
-v1 仅支持：`version 4` / `kind: Time data` / 所有数据通道 `implementation type FLOAT32` / `byte order Intel` / `scan mode synchronised multiple`。遇到 INT16/24、DOUBLE、谱数据、大端等→抛 `NotImplementedError` 并**打印实际读到的值**（便于日后扩展），绝不静默误解。
+**文件级守卫（硬失败）**：`version != 4`、`kind != Time data`、`byte order != Intel` → 抛 `NotImplementedError`（含实际值），整文件不解析。
+
+**单通道 `implementation type` 非 FLOAT32（如 UINT32/INT16/DOUBLE）→ 丢弃该通道并记录，不连累整文件**：解析器对这类通道跳过 demux（`samples` 留 None，因 demux 只按 `<f4` 读，其它 dtype 不能正确解释），`load_hdf` 把它与全 NaN 通道一并丢弃，并把丢弃的通道名+原因记入 `source_metadata["dropped_channels"]`（不静默）。只要还有 ≥1 个 FLOAT32 数据通道存活就正常加载；若无则 `load_hdf` 抛 `ValueError`。
+
+> 真实文件依据：ch28 `CAN 1@SQuadriga` 为 UINT32，须被丢弃而非使整文件失败（Task 8 集成测试发现）。
 
 ## 4. 测试策略（TDD-first；数值改动必须先测）
 

@@ -69,6 +69,20 @@ tokens. The main clause "退役 matplot" (retire matplotlib) and "EF的优化"
 branch. Routed correctly via Missed-triggers. Confirms "优化" recurs as a
 non-trigger verb for substantial source changes.
 
+**2026-06-19 fourth occurrence (playground 落地 — style/layout NOUNS, not
+verbs):** the request was to land playground-tuned three-pane panel styling
+(三栏间距 3px / 外边距 5px / 外层圆角 10px) into the live main window. This
+adds a NEW miss class distinct from the verb misses above: the operative
+tokens were *style/layout nouns* — 圆角 (corner-radius) / 间距 (spacing) /
+面板 (panel) / 外边距 (margin) — describing a "copy the values out of the
+playground and apply them to source" hand-off. Zero trigger hits; even the
+verb "改" (change) carries no work-type noun. The playground-to-source
+hand-off pattern (see 2026-04-26-interactive-playground-unblocks-ui-alignment)
+reliably produces triggerless implementation messages because the user is
+just relaying tuned constants. Routed via Missed-triggers; single bundled
+pyqt-ui-engineer subtask (all three knobs touch the same container layout
++ QSS, so no cross-specialist rework surface).
+
 ## Action items applied to this run
 
 - Routed via Missed-triggers; orchestrator informed of the missed keyword.
