@@ -223,6 +223,7 @@ class ProjectIOMixin:
         pio.save_project_to_json(doc, path)
         self._project_path = path
         self.statusBar.showMessage(f"已保存项目: {path.name}")
+        self.toast("已保存项目", "success")
 
     def open_project(self, path):
         """Restore a session from a ``.tlproj`` file: re-read referenced source
@@ -328,6 +329,7 @@ class ProjectIOMixin:
             self._apply_active_view(self.view_manager.active)
         except Exception:
             self.statusBar.showMessage(f"已打开项目: {path.name}（渲染恢复失败）")
+            self.toast("恢复渲染失败，请手动点计算", "warning")
             return
 
         self.statusBar.showMessage(f"已打开项目: {path.name}")

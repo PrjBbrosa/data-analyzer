@@ -481,7 +481,7 @@ class AnalysisMixin:
             elif section == 'fft_time':
                 self.do_fft_time()
         except Exception:
-            pass
+            self.toast("恢复渲染失败，请手动点计算", "warning")
 
     def _render_analysis_view_from_cache(self, section, state):
         """Render each pane from cached results; panes whose sources are not all

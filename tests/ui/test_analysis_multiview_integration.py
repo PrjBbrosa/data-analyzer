@@ -108,6 +108,21 @@ def test_fft_compute_feedback_success_toast(two_file_win, monkeypatch):
     assert calls == [("success", "FFT完成 · 2 图")]
 
 
+def test_recovery_render_failure_toasts_warning(two_file_win, monkeypatch):
+    win = two_file_win
+
+    def fail_compute():
+        raise RuntimeError("boom")
+
+    calls = []
+    monkeypatch.setattr(win, "do_fft", fail_compute)
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win._recompute_analysis_section("fft")
+
+    assert calls == [("warning", "恢复渲染失败，请手动点计算")]
+
+
 def test_fft_nonuniform_skip_reason_matches_feedback_contract(
     two_file_win, monkeypatch
 ):
@@ -1272,6 +1287,37 @@ def test_project_save_preserves_all_analysis_sections_after_time_selection(
     assert set(raw["analysis_views"]) >= {"fft", "fft_time", "order"}
     fft_sources = raw["analysis_views"]["fft"]["views"][0]["panes"][0]["sources"]
     assert fft_sources == [[fids[0], "speed"]]
+
+
+def test_save_project_success_toasts_success(two_file_win, tmp_path, monkeypatch):
+    win = two_file_win
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win.save_project(tmp_path / "saved.tlproj")
+
+    assert calls == [("success", "已保存项目")]
+
+
+def test_open_project_render_failure_toasts_warning(
+    two_file_win, tmp_path, qtbot, monkeypatch
+):
+    proj = tmp_path / "render_failure.tlproj"
+    two_file_win.save_project(proj)
+
+    win2 = MainWindow()
+    qtbot.addWidget(win2)
+
+    def fail_apply(_idx):
+        raise RuntimeError("boom")
+
+    calls = []
+    monkeypatch.setattr(win2, "_apply_active_view", fail_apply)
+    monkeypatch.setattr(win2, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win2.open_project(proj)
+
+    assert ("warning", "恢复渲染失败，请手动点计算") in calls
 
 
 def test_old_project_without_analysis_views_loads_with_defaults(
