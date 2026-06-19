@@ -1,12 +1,11 @@
-/* ==== MF4 Analyzer — Precision Light visual system ====
- * Palette (3 neutral surfaces + 1 interaction blue)
- *   surface-base    #f5f7fb   window, side panes, status bar
- *   surface-card    #ffffff   cards, inputs, tree, menus, toolbar
- *   surface-hover   #eef2f7   hover / pressed on plain controls
- *   surface-accent  #e8efff   checked / selected blue
- * Hairline borders
- *   hairline        #eef2f7   dividers, card edges (1% contrast)
- *   hairline-strong #dfe5ee   group containers that still need a visible frame
+/* ==== MF4 Analyzer — Precision Light visual system (云白/snow) ====
+ * Snow tokens (3-level neutral elevation + 1 interaction blue)
+ *   base            #f0f3f7   window, side panes, status/hint/view bars, toolbar band
+ *   surface         #f7f9fc   center chart panel (lighter than sidebars)
+ *   card            #ffffff   cards, inputs, tree, menus
+ *   divider         #dde4ee   splitter line, panel seams, frame seams, card edges
+ *   hairline        #eef2f7   within-card sub-section separators (soft)
+ *   accent #1769e0  ·  accent-wash #e8efff   (interaction only)
  * Text / hierarchy — by size + weight only, no background fills:
  *   pane / card title  13px / 700   #111827
  *   body               12px / 400   #111827
@@ -16,7 +15,7 @@
 
 QMainWindow,
 QWidget {
-    background-color: #f5f7fb;
+    background-color: #f0f3f7;
     color: #111827;
     font-family: "Microsoft YaHei", "Segoe UI", "PingFang SC", "SF Pro Text", sans-serif;
     font-size: 12px;
