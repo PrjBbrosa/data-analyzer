@@ -1011,8 +1011,8 @@ QWidget#orderContextual {
 Inspector QFrame#fftParamsCard,
 Inspector QFrame#fftTimeParamsCard,
 Inspector QFrame#orderParamsCard {
-    background-color: #eef4ff;
-    border: 1px solid #dde7f5;
+    background-color: #ffffff;
+    border: 1px solid #dde4ee;
     border-radius: 10px;
 }
 
