@@ -63,6 +63,51 @@ def test_fft_view_overlays_two_files(two_file_win):
     assert "左侧已选 2 个信号" in win.inspector.fft_ctx.lbl_source_summary.text()
 
 
+def test_fft_all_sources_too_short_warns(two_file_win, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.inspector.top.set_range_from_span(0.0, 0.005)
+
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win.do_fft()
+
+    assert calls == [("warning", "无可计算的图：2 个信号过短")]
+
+
+def test_fft_all_cached_emits_info_toast(two_file_win, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    win.do_fft()
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) == 2
+
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+    canvas.full_reset()
+
+    win.do_fft()
+
+    assert calls == [("info", "已用缓存结果（参数未变）· 2 图")]
+    assert len(canvas._amp_curves) == 2
+
+
+def test_fft_compute_feedback_success_toast(two_file_win, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win.do_fft()
+
+    assert calls == [("success", "FFT完成 · 2 图")]
+
+
 def test_fft_split_cache_render_uses_channel_swatch_colors(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft")

@@ -5,6 +5,7 @@ import numpy as np
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from ...signal import FFTAnalyzer, resolve_nfft, energy_band_fmax
+from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 
 
@@ -141,8 +142,8 @@ class FFTMixin:
         cache = self.analysis_caches['fft']
         colors = self._analysis_channel_color_map()
 
-        any_rendered = False
         any_multi = False
+        outcome = ComputeOutcome()
         for pane_idx in range(page.pane_count()):
             if pane_idx >= len(state.panes):
                 break
@@ -155,14 +156,23 @@ class FFTMixin:
             for fid, ch in sources:
                 sig, fs = self._fft_fetch_signal(
                     fid, ch, time_range=time_range)
-                if sig is None or len(sig) < 10:
+                if sig is None:
+                    outcome.skipped.append("源通道缺失")
+                    continue
+                if len(sig) < 10:
+                    outcome.skipped.append("信号过短")
                     continue
                 fd = self.files.get(fid)
                 if not self._check_uniform_or_prompt(fd, 'fft'):
+                    outcome.skipped.append("时间轴非均匀")
                     continue
                 sig, fs = self._fft_fetch_signal(
                     fid, ch, time_range=time_range)
-                if sig is None or len(sig) < 10:
+                if sig is None:
+                    outcome.skipped.append("源通道缺失")
+                    continue
+                if len(sig) < 10:
+                    outcome.skipped.append("信号过短")
                     continue
                 effective_params = self._resolve_fft_effective_params(
                     fft_params, len(sig), fs)
@@ -174,20 +184,22 @@ class FFTMixin:
                         result = self._fft_compute_arrays(
                             sig, fs, effective_params)
                     except Exception as e:
+                        outcome.failed += 1
                         QMessageBox.critical(self, 'FFT错误', str(e))
                         continue
                     cache.put(key, result)
+                    outcome.computed += 1
+                else:
+                    outcome.cached += 1
                 entries.append(self._fft_entry_from_cache(
                     result, fid, ch, colors.get((fid, ch)),
                     time_range=time_range))
             if entries:
                 self._plot_fft_entries(entries, page.pane_canvas(pane_idx))
-                any_rendered = True
 
         if any_multi:
-            if any_rendered:
-                self.statusBar.showMessage('FFT 完成')
-                self.toast('FFT 完成', 'success')
+            if not self._emit_compute_feedback(outcome, section_label="FFT"):
+                self._do_fft_single()
             return
         # ---- legacy single-signal fallback (no navigator-checked sources) ----
         self._do_fft_single()
