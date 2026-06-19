@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>TraceLab v7.0 — 三大面板 + 面板内漂浮 mockup</title>
+<style>
+  :root{
+    --card:#ffffff;        /* 漂浮的组件卡 */
+    --ink:#111827; --ink-2:#5b6573; --ink-3:#9aa3b2;
+    --accent:#1769e0; --wash:#e8efff; --on-accent:#fff; --link:#1769e0;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 5px 14px rgba(16,24,40,.06);
+    --shadow-sm:0 1px 2px rgba(16,24,40,.05);
+    --r-card:12px; --r-ctl:8px;
+    font-family:-apple-system,"SF Pro Text","SF Pro Display","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  /* ===== 三套高级中性底色(结构 / 蓝色强调不变,只换底)=====
+   * --frame 窗口框架 · --panel 左右侧栏面 · --surface 中间画布面 · --split 分割线 · --hair 卡内发丝线 */
+  body[data-base="warm"]{--frame:#e9e4dc;--panel:#efe9e1;--surface:#f5f1ea;--split:#dcd5ca;--hair:#ebe5db}
+  body[data-base="cool"]{--frame:#e8edf3;--panel:#eef2f8;--surface:#f4f7fb;--split:#dbe2ec;--hair:#e7edf4}
+  body[data-base="snow"]{--frame:#eaedf1;--panel:#f6f8fa;--surface:#fbfcfd;--split:#e1e5ec;--hair:#edf0f4}
+
+  .switch{position:fixed;top:14px;right:18px;z-index:50;display:flex;gap:6px;background:#fff;
+          border:1px solid #e3e3e6;border-radius:10px;padding:6px;box-shadow:0 6px 18px rgba(0,0,0,.14)}
+  .switch b{font-size:11px;color:#666;align-self:center;padding:0 6px}
+  .switch button{font:inherit;font-size:12px;border:1px solid #e3e3e6;background:#fff;color:#222;
+                 border-radius:7px;padding:6px 12px;cursor:pointer;display:flex;align-items:center;gap:6px}
+  .switch button .dot{width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,.1)}
+  .switch button[aria-pressed="true"]{border-color:var(--accent);background:var(--wash);font-weight:600}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#cfd4dc;padding:26px;-webkit-font-smoothing:antialiased;color:var(--ink)}
+
+  .app{max-width:1340px;margin:0 auto;background:var(--frame);border-radius:14px;overflow:hidden;
+       box-shadow:0 20px 60px rgba(16,24,40,.28);border:1px solid rgba(0,0,0,.06)}
+
+  /* 框架:标题 + 工具栏 + 状态栏 */
+  .titlebar{height:30px;display:flex;align-items:center;gap:10px;padding:0 14px}
+  .lights{display:flex;gap:8px}
+  .lights i{width:12px;height:12px;border-radius:50%}
+  .lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+  .titlebar .t{font-size:13px;color:var(--ink-2);font-weight:500}
+
+  .toolbar{display:flex;align-items:center;gap:10px;padding:8px 14px 13px;border-bottom:1px solid var(--split)}
+  .btn{font:inherit;font-size:13px;border-radius:var(--r-ctl);padding:8px 14px;border:1px solid var(--hair);
+       background:var(--card);color:var(--ink);display:inline-flex;align-items:center;gap:7px;box-shadow:var(--shadow-sm)}
+  .btn.primary{background:var(--accent);color:var(--on-accent);border-color:transparent;font-weight:600;box-shadow:0 1px 2px rgba(16,24,40,.12)}
+  .btn.ghost{color:var(--ink-3)}
+  .seg{display:flex;background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:4px;gap:2px;margin:0 auto;box-shadow:var(--shadow-sm)}
+  .seg .s{font-size:13px;padding:7px 16px;border-radius:7px;color:var(--ink-2);display:flex;gap:7px;align-items:center}
+  .seg .s.on{color:var(--ink);font-weight:600;background:var(--wash)}
+  .brand{display:flex;align-items:center;gap:10px;margin-left:auto}
+  .brand .co{text-align:right;font-size:11px;color:var(--ink-2);line-height:1.25}
+  .brand .co b{font-size:12px;color:var(--ink);display:block}
+  .brand .bosch{font-weight:800;letter-spacing:.04em;color:#e2231a;font-size:20px}
+  .icobtn{width:30px;height:30px;border-radius:7px;border:1px solid var(--hair);background:var(--card);
+          display:grid;place-items:center;color:var(--ink-2);box-shadow:var(--shadow-sm)}
+
+  /* ===== 三大面板:贴合,竖分割线隔开 ===== */
+  .body{display:grid;grid-template-columns:300px 1fr 388px;background:var(--frame)}
+  .panel{padding:7px;display:flex;flex-direction:column;gap:7px;min-height:760px}
+  .panel.left{background:var(--panel);border-right:1px solid var(--split)}
+  .panel.center{background:var(--surface);border-right:1px solid var(--split)}
+  .panel.right{background:var(--panel)}
+
+  .card{background:var(--card);border:1px solid var(--hair);border-radius:var(--r-card);box-shadow:var(--shadow)}
+  .pad{padding:13px 15px}
+  .muted{color:var(--ink-3)}
+  .sec{font-size:12px;font-weight:700;color:var(--ink);margin:4px 0 2px}
+  .sec.sep{border-top:1px solid var(--hair);padding-top:13px;margin-top:15px}
+
+  /* 左:文件卡(填满左面板) */
+  .left .filecard{flex:1;display:flex;flex-direction:column}
+  .left .hd{display:flex;align-items:center;justify-content:space-between;padding:13px 15px 6px}
+  .left .hd .ti{font-size:13px;font-weight:700}.left .hd .b{font-size:12px;color:var(--ink-3)}
+  .left .in{padding:6px 15px 14px;display:flex;flex-direction:column;gap:12px;flex:1}
+  .input{height:34px;border:1px solid var(--hair);border-radius:var(--r-ctl);background:#fff;display:flex;align-items:center;padding:0 11px;font-size:13px;color:var(--ink-3)}
+  .chips{display:flex;align-items:center;gap:14px;font-size:12px;color:var(--ink-2)}
+  .chips .grow{margin-left:auto}.chips .link{color:var(--link);display:flex;gap:5px;align-items:center}
+  .thead{display:flex;justify-content:space-between;font-size:12px;font-weight:600;color:var(--link);padding-top:6px;border-top:1px solid var(--hair)}
+
+  /* 中:绘图 */
+  .plotcard{flex:1;display:flex;flex-direction:column;padding:10px}
+  .plottools{display:flex;gap:4px;padding:2px 2px 10px}
+  .tool{width:34px;height:34px;border-radius:7px;display:grid;place-items:center;color:var(--ink-2);font-size:15px;border:1px solid transparent}
+  .tool.on{background:var(--wash);color:var(--ink);border-color:var(--accent)}
+  .plotwrap{flex:1;display:flex;gap:8px;min-height:360px}
+  .plot{flex:1;position:relative;border:1px solid var(--hair);border-radius:6px;background:
+        repeating-linear-gradient(to right,transparent 0,transparent calc(20% - 1px),#eef1f6 calc(20% - 1px),#eef1f6 20%),
+        repeating-linear-gradient(to bottom,transparent 0,transparent calc(25% - 1px),#eef1f6 calc(25% - 1px),#eef1f6 25%)}
+  .plot .ylab{position:absolute;left:-2px;top:50%;transform:rotate(-90deg);transform-origin:left;font-size:11px;color:var(--ink-3);white-space:nowrap}
+  .plot .xlab{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:11px;color:var(--ink-3)}
+  .colorbar{width:18px;border-radius:5px;border:1px solid var(--hair);
+            background:linear-gradient(to bottom,#b81c1c,#e8552a,#f4a13a,#f3d23f,#9bc845,#46b59a,#2f86d4,#274aa0,#15183f)}
+  .cbticks{display:flex;flex-direction:column;justify-content:space-between;font-size:10px;color:var(--ink-3);padding:2px 0}
+
+  .slicecard{height:170px;padding:10px;display:flex;flex-direction:column}
+  .slicewrap{flex:1;display:flex;gap:10px}
+  .slice{flex:1;border:1px solid var(--hair);border-radius:6px;position:relative;background:
+         repeating-linear-gradient(to right,transparent 0,transparent calc(20% - 1px),#f1f3f7 calc(20% - 1px),#f1f3f7 20%)}
+  .sliceside{width:150px;display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+  .minseg{display:flex;border:1px solid var(--hair);border-radius:7px;overflow:hidden;font-size:12px}
+  .minseg span{padding:5px 12px;color:var(--ink-2)}.minseg span.on{background:var(--accent);color:var(--on-accent);font-weight:600}
+  .sliceside .hint{font-size:12px;color:var(--ink-3);text-align:right}
+
+  /* View 标签:直接漂在中间面板上(非卡),活动页是白胶囊 */
+  .viewbar{display:flex;align-items:center;gap:8px;padding:2px}
+  .vtab{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--hair);border-radius:9px;padding:8px 14px;font-size:13px;font-weight:600;box-shadow:var(--shadow-sm)}
+  .vtab .vd{width:18px;height:11px;border-radius:6px;background:var(--accent)}
+  .vadd{width:34px;height:34px;border:1px dashed var(--split);border-radius:9px;display:grid;place-items:center;color:var(--ink-3)}
+
+  /* 右:inspector */
+  .field{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:9px 0}
+  .field .k{font-size:13px;color:var(--ink-2)}
+  .ctl{flex:1;max-width:220px;height:36px;border:1px solid var(--hair);border-radius:var(--r-ctl);background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 11px;font-size:13px}
+  .ctl.sm{max-width:120px}
+  .seg3{display:flex;gap:8px;margin:10px 0 4px}
+  .seg3 .s{flex:1;text-align:center;font-size:13px;padding:9px 0;border:1px solid var(--hair);border-radius:var(--r-ctl);background:#fff;color:var(--ink);box-shadow:var(--shadow-sm)}
+  .axis .cols{display:flex;justify-content:space-around;font-size:11px;color:var(--ink-3);padding-left:64px}
+  .axis .hrow{display:grid;grid-template-columns:64px 1fr;align-items:center;margin:7px 0}
+  .ck{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--split);display:inline-grid;place-items:center;color:#fff;font-size:12px;background:#fff}
+  .ck.on{background:var(--accent);border-color:var(--accent)}
+  .axval{display:flex;align-items:center;gap:8px;font-size:13px}
+  .pill{border:1px solid var(--hair);border-radius:7px;padding:6px 12px;min-width:66px;text-align:center;font-size:13px;background:#fff}
+  .compute{width:100%;border:none;border-radius:10px;background:var(--accent);color:var(--on-accent);font:inherit;font-size:15px;font-weight:700;padding:15px;margin-top:6px;box-shadow:0 2px 8px rgba(16,24,40,.14)}
+  .right .filler{min-height:120px}
+
+  .status{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;border-top:1px solid var(--split)}
+  .status .hint{font-size:12px;color:var(--link)}
+  .ver{display:flex;gap:7px;align-items:center;font-size:12px;color:var(--ink-2);background:var(--card);border:1px solid var(--hair);border-radius:8px;padding:6px 11px;box-shadow:var(--shadow-sm)}
+</style>
+</head>
+<body data-base="warm">
+  <div class="switch">
+    <b>底色</b>
+    <button data-b="warm" aria-pressed="true"><span class="dot" style="background:#e3d6c0"></span>暖瓷</button>
+    <button data-b="cool" aria-pressed="false"><span class="dot" style="background:#cfe0f2"></span>雾蓝</button>
+    <button data-b="snow" aria-pressed="false"><span class="dot" style="background:#eef2f7"></span>云白</button>
+  </div>
+  <div class="app">
+    <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="t">TraceLab v7.0</div></div>
+
+    <div class="toolbar">
+      <button class="btn primary">⤓ 打开</button>
+      <button class="btn ghost">▢ 保存项目</button>
+      <button class="btn">⇄ 批处理</button>
+      <div class="seg">
+        <span class="s">〜 时域</span><span class="s on">▮ FFT</span>
+        <span class="s">▤ FFT vs Time</span><span class="s">▦ 阶次</span>
+      </div>
+      <div class="brand">
+        <div class="co"><b>博世华域转向系统有限公司</b>BOSCH HASCO STEERING SYSTEMS CO.,LTD.</div>
+        <div class="bosch">BOSCH</div><div class="icobtn">▥</div>
+      </div>
+    </div>
+
+    <div class="body">
+      <!-- 左面板 -->
+      <div class="panel left">
+        <div class="card filecard">
+          <div class="hd"><span class="ti">文件</span><span class="b">0 &nbsp;⋮</span></div>
+          <div class="in">
+            <div class="input">Filter channel…</div>
+            <div class="chips"><span>全选</span><span>全不</span><span>已选</span><span class="grow"></span><span class="link">⚙ 编辑通道</span></div>
+            <div class="thead"><span>Channel</span><span>Pts</span></div>
+            <div style="flex:1"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 中面板 -->
+      <div class="panel center">
+        <div class="card plotcard">
+          <div class="plottools">
+            <span class="tool">⌂</span><span class="tool">←</span><span class="tool">→</span><span class="tool on">✥</span>
+            <span class="tool">⌕</span><span class="tool">✎</span><span class="tool">⌫</span><span class="tool">⧉</span>
+            <span class="tool">▥</span><span class="tool">⚙</span><span class="tool">▭</span>
+          </div>
+          <div class="plotwrap">
+            <div class="plot"><span class="ylab">Frequency (Hz)</span><span class="xlab">Time (s)</span></div>
+            <div class="colorbar"></div>
+            <div class="cbticks"><span>−20</span><span>−30</span><span>−40</span><span>−50</span><span>−60</span><span>−70</span></div>
+          </div>
+        </div>
+        <div class="card slicecard">
+          <div class="slicewrap">
+            <div class="slice"><span style="position:absolute;bottom:4px;left:0;right:0;text-align:center;font-size:11px;color:var(--ink-3)">Frequency (Hz)</span></div>
+            <div class="sliceside"><div class="minseg"><span class="on">时间</span><span>频率</span></div><div class="hint">点击图中选择切片</div></div>
+          </div>
+        </div>
+        <div class="viewbar"><div class="vtab"><span class="vd"></span>View 1</div><div class="vadd">+</div></div>
+      </div>
+
+      <!-- 右面板 -->
+      <div class="panel right">
+        <div class="card pad">
+          <div class="field" style="margin-top:0">
+            <span class="sec" style="margin:0">分析信号 + 时间</span><span class="icobtn" style="box-shadow:none">↻</span>
+          </div>
+          <div class="field"><span class="k">信号</span><div class="ctl"><span></span><span class="muted">▾</span></div></div>
+          <div class="field"><span class="k">Fs</span><div class="ctl">1000.0 Hz</div></div>
+          <div class="sec sep">分析时间</div>
+          <div class="field"><span class="k"><span class="ck"></span> 使用选定时间范围</span><span class="link" style="font-weight:600">最大</span></div>
+          <div class="field"><div class="ctl sm">0.0 s</div><span class="k">— 结束</span><div class="ctl sm">0.0 s</div></div>
+        </div>
+
+        <div class="card pad">
+          <div class="field" style="margin-top:0"><span class="sec" style="margin:0">▸ 时频参数</span><span class="muted" style="font-size:11px">自动(2048) · hanning · 80%</span></div>
+          <div class="seg3"><span class="s">频率优先</span><span class="s">均衡</span><span class="s">时间优先</span></div>
+          <div class="sec sep">幅值</div>
+          <div class="field"><span class="k">dB 参考</span><div class="ctl">1.0</div></div>
+          <div class="sec sep">坐标轴设置</div>
+          <div class="axis">
+            <div class="cols"><span>自动</span><span>最小</span><span>最大</span></div>
+            <div class="hrow"><span class="k">时间 (X)</span><div class="axval"><span class="ck on">✓</span><span>全时段</span></div></div>
+            <div class="hrow"><span class="k">频率 (Y)</span><div class="axval"><span class="ck on">✓</span><span>0 → Nyquist</span></div></div>
+            <div class="hrow"><span class="k">色阶</span><div class="axval"><span class="ck"></span><span class="pill">−70.0</span><span>→</span><span class="pill">−20.0</span></div></div>
+            <div class="hrow"><span class="k"></span><div class="ctl sm" style="max-width:110px">dB ▾</div></div>
+          </div>
+          <button class="compute">计算时频图</button>
+        </div>
+
+        <div class="card filler"></div>
+      </div>
+    </div>
+
+    <div class="status"><span class="hint">点击谱图某一时刻 → 查看该帧频率切片</span><span class="ver">☁ v7.0</span></div>
+  </div>
+
+  <script>
+    const btns=[...document.querySelectorAll('.switch button')];
+    btns.forEach(b=>b.addEventListener('click',()=>{
+      document.body.dataset.base=b.dataset.b;
+      btns.forEach(x=>x.setAttribute('aria-pressed', x===b));
+    }));
+  </script>
+</body>
+</html>

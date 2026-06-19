@@ -200,9 +200,11 @@ class MultiFileChannelWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("channelCard")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         layout = QVBoxLayout(self);
-        layout.setContentsMargins(0, 0, 0, 0);
-        layout.setSpacing(2)
+        layout.setContentsMargins(8, 8, 8, 8);
+        layout.setSpacing(6)
         self.search = QLineEdit();
         self.search.setObjectName("channelSearch")
         self.search.setPlaceholderText("Filter channel...");

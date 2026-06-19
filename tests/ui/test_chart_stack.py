@@ -1456,8 +1456,13 @@ def test_dblclick_second_subplot_opens_options_for_that_axis(qapp, qtbot, monkey
 def test_time_controls_spacer_has_toolbar_background_rule():
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
 
-    assert "background-color: #ffffff;" in qss
-    assert "QWidget#chartToolbar QWidget#chartTimeControlsSpacer" in qss
+    match = re.search(
+        r"QWidget#chartToolbar QWidget#chartTimeControlsSpacer\s*\{(?P<body>[^}]*)\}",
+        qss,
+        flags=re.S,
+    )
+    assert match is not None
+    assert "background-color: transparent;" in match.group("body")
 
 
 def test_chart_toolbar_disabled_nav_buttons_have_visible_style():

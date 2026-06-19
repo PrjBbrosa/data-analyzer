@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TraceLab Surface Layering Options</title>
+  <style>
+    :root {
+      --tray: #edf1f6;
+      --tray-edge: #d8e0ea;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --line: #d9e1ec;
+      --hairline: #edf1f6;
+      --ink: #111827;
+      --muted: #657386;
+      --blue: #1474e8;
+      --blue-soft: #e8f1ff;
+      --shadow: 0 12px 30px rgba(15, 23, 42, .08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #f6f7f9;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Microsoft YaHei", sans-serif;
+    }
+
+    .page {
+      width: min(1480px, calc(100vw - 28px));
+      padding: 18px;
+    }
+
+    .notes {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 12px;
+      color: #475569;
+      font-size: 13px;
+    }
+
+    .notes strong {
+      color: #0f172a;
+      font-size: 15px;
+    }
+
+    .choices {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .choice {
+      border: 1px solid #cbd5e1;
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: #fff;
+      color: #334155;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .choice[data-active="true"] {
+      border-color: var(--blue);
+      background: var(--blue-soft);
+      color: #0f55b8;
+    }
+
+    .app {
+      min-height: 862px;
+      border: 1px solid #d5dce6;
+      border-radius: 18px;
+      background: var(--tray);
+      box-shadow: 0 20px 50px rgba(15, 23, 42, .14);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: 50px minmax(750px, 1fr) 40px;
+      gap: 5px;
+      padding: 6px;
+    }
+
+    .topbar,
+    .statusbar {
+      display: grid;
+      align-items: center;
+      border: 1px solid var(--tray-edge);
+      border-radius: 13px;
+      background: rgba(255, 255, 255, .92);
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      grid-template-columns: 1fr auto 1fr;
+      padding: 0 10px;
+    }
+
+    .left-tools,
+    .brand,
+    .mode-tabs,
+    .status-left,
+    .status-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand { justify-content: flex-end; color: #111827; font-weight: 800; }
+
+    .btn,
+    .icon-btn,
+    .tab,
+    .field,
+    .pill {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #263447;
+      font-weight: 700;
+    }
+
+    .btn {
+      height: 30px;
+      padding: 0 12px;
+      border-radius: 9px;
+    }
+
+    .btn.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: white;
+    }
+
+    .icon-btn {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+    }
+
+    .mode-tabs {
+      height: 34px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--panel-soft);
+    }
+
+    .tab {
+      height: 26px;
+      min-width: 88px;
+      padding: 0 14px;
+      border-color: transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .tab.active {
+      border-color: var(--blue);
+      background: #fff;
+      color: var(--blue);
+      box-shadow: 0 2px 8px rgba(20, 116, 232, .12);
+    }
+
+    .work {
+      min-height: 750px;
+      display: grid;
+      grid-template-columns: 250px 1fr 330px;
+      gap: 6px;
+    }
+
+    .panel {
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid var(--tray-edge);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, .95);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-body {
+      min-height: 0;
+      flex: 1;
+      padding: 8px;
+      background: linear-gradient(#fff, var(--panel-soft));
+    }
+
+    .panel-title {
+      height: 42px;
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--hairline);
+      background: #fff;
+      font-weight: 800;
+    }
+
+    .inner-card {
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #fff;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, .045);
+    }
+
+    .file-stack {
+      height: 100%;
+      display: grid;
+      grid-template-rows: 1fr 1.55fr;
+      gap: 8px;
+    }
+
+    .file-empty {
+      padding: 14px;
+      color: #9aa6b5;
+      font-weight: 700;
+    }
+
+    .channel-card {
+      display: grid;
+      grid-template-rows: 44px 32px 1fr;
+      overflow: hidden;
+    }
+
+    .search {
+      margin: 8px;
+      height: 32px;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      color: #9aa6b5;
+      font-weight: 700;
+    }
+
+    .chips {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 8px 8px;
+      border-bottom: 1px solid var(--hairline);
+    }
+
+    .chip {
+      height: 22px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 7px;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .table-head {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 12px;
+      color: #657386;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .chart-panel .panel-body {
+      display: grid;
+      grid-template-rows: 42px 1fr 34px;
+      gap: 8px;
+    }
+
+    .chart-toolbar,
+    .viewbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 8px;
+    }
+
+    .chart-toolbar {
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      padding: 4px 0;
+    }
+
+    .canvas {
+      position: relative;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background:
+        linear-gradient(#eef2f7 1px, transparent 1px),
+        linear-gradient(90deg, #eef2f7 1px, transparent 1px),
+        #fff;
+      background-size: 100% 96px, 126px 100%, auto;
+      overflow: hidden;
+    }
+
+    .canvas::after {
+      content: "";
+      position: absolute;
+      right: 18px;
+      bottom: 18px;
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #ff3049;
+    }
+
+    .viewbar {
+      justify-content: space-between;
+    }
+
+    .viewtab {
+      height: 24px;
+      min-width: 104px;
+      padding: 0 12px;
+      border-radius: 8px;
+      border: 1px solid var(--blue);
+      background: var(--blue-soft);
+      color: #164a91;
+      font-weight: 800;
+    }
+
+    .inspector .panel-body {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 8px;
+    }
+
+    .form-card {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .card-title {
+      font-weight: 850;
+      color: #1f2937;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      align-items: center;
+      gap: 8px;
+      color: #334155;
+      font-weight: 700;
+    }
+
+    .field {
+      height: 34px;
+      border-radius: 9px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      color: #475569;
+    }
+
+    .wide-primary {
+      height: 40px;
+      border-radius: 10px;
+      border: 1px solid var(--blue);
+      background: var(--blue);
+      color: #fff;
+      font-weight: 850;
+    }
+
+    .statusbar {
+      grid-template-columns: 1fr auto;
+      padding: 0 12px;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .pill {
+      height: 27px;
+      border-radius: 10px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      color: #1e293b;
+    }
+
+    body[data-theme="graphite"] {
+      --tray: #e7ebf1;
+      --tray-edge: #cfd8e4;
+      --panel-soft: #f6f8fb;
+      --shadow: 0 12px 28px rgba(22, 32, 48, .085);
+    }
+
+    body[data-theme="porcelain"] {
+      --tray: #f2f4f7;
+      --tray-edge: #dbe2eb;
+      --panel-soft: #fafbfc;
+      --shadow: 0 10px 24px rgba(15, 23, 42, .055);
+    }
+
+    body[data-theme="white"] {
+      --tray: #fbfcfe;
+      --tray-edge: #dfe5ee;
+      --panel-soft: #fbfcfe;
+      --shadow: none;
+    }
+  </style>
+</head>
+<body data-theme="porcelain">
+  <main class="page">
+    <section class="notes">
+      <div>
+        <strong>TraceLab surface layering sketch</strong>
+        <span>外层灰 tray 只做空气感，白色长条和三 panel 才是主体浮层。</span>
+      </div>
+      <div class="choices" aria-label="background choices">
+        <button class="choice" data-theme="graphite">A 推荐: 冷灰托盘</button>
+        <button class="choice" data-theme="porcelain" data-active="true">B 更浅: 瓷白托盘</button>
+        <button class="choice" data-theme="white">C 最克制: 近白无阴影</button>
+      </div>
+    </section>
+
+    <section class="app" aria-label="TraceLab shell mockup">
+      <header class="topbar">
+        <div class="left-tools">
+          <span class="icon-btn">▱</span>
+          <button class="btn primary">打开</button>
+          <button class="btn">保存项目</button>
+          <button class="btn">批处理</button>
+        </div>
+        <nav class="mode-tabs">
+          <button class="tab active">时域</button>
+          <button class="tab">FFT</button>
+          <button class="tab">FFT vs Time</button>
+          <button class="tab">阶次</button>
+        </nav>
+        <div class="brand">
+          <span>博世华域转向系统有限公司</span>
+          <span style="color:#e11d2e;font-size:18px;">BOSCH</span>
+          <span class="icon-btn">▰</span>
+        </div>
+      </header>
+
+      <section class="work">
+        <aside class="panel">
+          <div class="panel-title"><span>文件</span><span style="color:#657386">0 ⋮</span></div>
+          <div class="panel-body">
+            <div class="file-stack">
+              <div class="inner-card file-empty">文件列表空态</div>
+              <div class="inner-card channel-card">
+                <div class="search">Filter channel...</div>
+                <div class="chips">
+                  <span class="chip">全选</span>
+                  <span class="chip">全不</span>
+                  <span class="chip">已选</span>
+                  <span style="flex:1"></span>
+                  <span class="chip">编辑通道</span>
+                </div>
+                <div class="table-head"><span>Channel</span><span>Pts</span></div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="panel chart-panel">
+          <div class="panel-body">
+            <div class="inner-card chart-toolbar">
+              <span class="icon-btn">⌂</span><span class="icon-btn">←</span><span class="icon-btn">→</span>
+              <span class="icon-btn" style="border-color:var(--blue);color:var(--blue);background:var(--blue-soft);">✣</span>
+              <span class="icon-btn">⌕</span><span class="icon-btn">▣</span><span class="icon-btn">▥</span>
+              <span style="flex:1"></span>
+              <button class="tab active">分</button><button class="tab">叠</button><button class="tab active">关</button>
+            </div>
+            <div class="canvas"></div>
+            <div class="inner-card viewbar">
+              <div><span class="viewtab">● View 1</span> <span class="icon-btn" style="display:inline-grid">+</span></div>
+              <span style="color:#657386;font-weight:800;">图表状态和提示归在同一条底部浮层</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel inspector">
+          <div class="panel-title"><span>图表设置</span><span style="color:var(--blue)">横坐标 · 时间范围</span></div>
+          <div class="panel-body">
+            <div class="inner-card form-card">
+              <div class="card-title">横坐标</div>
+              <div class="field-row"><span>来源:</span><span class="field">自动(时间)</span></div>
+              <div class="field-row"><span>标签:</span><span class="field">Time (s)</span></div>
+              <button class="wide-primary">应用</button>
+            </div>
+            <div class="inner-card form-card">
+              <div class="card-title">时间范围</div>
+              <div class="field-row"><span>使用:</span><span class="field">选定时间范围 · 最大</span></div>
+              <div class="field-row"><span>范围:</span><span class="field">0.0 s  —  0.0 s</span></div>
+              <button class="wide-primary">绘图</button>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <footer class="statusbar">
+        <div class="status-left">Shift + 滚轮 缩放当前子图 Y</div>
+        <div class="status-right"><span class="pill">☁ v7.0</span></div>
+      </footer>
+    </section>
+  </main>
+
+  <script>
+    const choices = document.querySelectorAll(".choice");
+    choices.forEach((button) => {
+      button.addEventListener("click", () => {
+        document.body.dataset.theme = button.dataset.theme;
+        choices.forEach((item) => item.dataset.active = String(item === button));
+      });
+    });
+  </script>
+</body>
+</html>

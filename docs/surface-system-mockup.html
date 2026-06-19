@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>TraceLab — 面/底色系统优化 mockup</title>
+<style>
+  :root{
+    /* ===== 提议的 token 系统 ===== */
+    --canvas:#eef1f6;      /* 托盘 / 窗口 / 左栏 / 状态栏 / 卡间隙 */
+    --card:#ffffff;        /* 所有卡片 */
+    --hair:#e3e7ee;        /* 发丝线 */
+    --hair-strong:#d6dbe4; /* 需要明显框时 */
+    --accent:#1769e0;      /* 交互:主按钮 / 选中指示 */
+    --accent-wash:#e8efff; /* 选中态浅填(全局唯一蓝填充) */
+    --ink:#111827; --ink-2:#64748b; --ink-3:#97a1b2;
+    --shadow:0 1px 2px rgba(16,24,40,.04), 0 4px 12px rgba(16,24,40,.05);
+    font-family:-apple-system,"SF Pro Text","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#dfe3ea;color:var(--ink);padding:32px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  h1{font-size:20px;font-weight:700;margin-bottom:4px}
+  .sub{color:var(--ink-2);font-size:13px;margin-bottom:24px}
+  h2{font-size:14px;font-weight:700;margin:28px 0 12px}
+
+  /* ---- 调色板 ---- */
+  .palette{display:flex;flex-wrap:wrap;gap:12px}
+  .sw{width:140px;background:var(--card);border:1px solid var(--hair);border-radius:10px;overflow:hidden;box-shadow:var(--shadow)}
+  .sw .chip{height:54px}
+  .sw .meta{padding:8px 10px;font-size:11px}
+  .sw .meta b{display:block;font-size:12px}
+  .sw .meta span{color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+  /* ---- before/after 布局 ---- */
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .col h3{font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.04em}
+  .col.before h3{color:#b4564b}
+  .col.after h3{color:#2c8a5a}
+
+  /* ---- 模拟 inspector ---- */
+  .tray{background:var(--canvas);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:8px}
+  .panel{border-radius:10px;padding:12px 14px}
+  .panel .ph{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .panel .ph b{font-size:13px;font-weight:700}
+  .row{display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:5px 0}
+  .row .k{color:var(--ink-2)}
+  .field{background:#fff;border:1px solid var(--hair);border-radius:7px;padding:5px 9px;font-size:12px;min-width:96px;text-align:right;color:var(--ink)}
+  .btn{background:var(--accent);color:#fff;border:none;border-radius:9px;padding:11px;font-size:13px;font-weight:600;width:100%;margin-top:4px}
+
+  /* BEFORE 的旧色 */
+  .green-card{background:#effaf4;border:1px solid #b9dfca}
+  .blue-card{background:#eef4ff;border:1px solid #dde7f5}
+  .tray-before{background:#f5f7fb}
+  .field-before{background:#fff;border:1px solid #fff} /* 旧态:白卡里白输入,边界靠染色背景兜 */
+
+  /* AFTER 的新色 */
+  .white-card{background:var(--card);border:1px solid var(--hair);box-shadow:var(--shadow)}
+
+  /* ---- 顶栏 tab 对比 ---- */
+  .tabs{display:flex;gap:4px;align-items:center}
+  .tab{font-size:13px;padding:7px 14px;border-radius:8px;color:var(--ink-2);display:flex;gap:6px;align-items:center}
+  /* before: 重蓝药丸 */
+  .tab.b-on{background:var(--accent-wash);color:var(--accent);border:1px solid var(--accent)}
+  /* after: 轻底 + 蓝下划线 */
+  .tab.a-on{color:var(--ink);font-weight:600;position:relative}
+  .tab.a-on::after{content:"";position:absolute;left:12px;right:12px;bottom:-7px;height:2.5px;border-radius:2px;background:var(--accent)}
+  .barwrap{background:var(--card);border:1px solid var(--hair);border-radius:10px;padding:10px 14px}
+  .note{font-size:12px;color:var(--ink-2);margin-top:8px}
+  .legend{font-size:11px;color:var(--ink-3);margin-top:6px}
+</style>
+</head>
+<body>
+  <h1>TraceLab · 面/底色系统优化</h1>
+  <div class="sub">原则:结构靠「中性层级 + 发丝线 + 留白」区分,颜色只留给交互与状态。绿/蓝面板底色全部并入纯白卡。</div>
+
+  <h2>1 · Token 调色板</h2>
+  <div class="palette">
+    <div class="sw"><div class="chip" style="background:#eef1f6"></div><div class="meta"><b>canvas 托盘</b><span>#eef1f6</span></div></div>
+    <div class="sw"><div class="chip" style="background:#ffffff;border-bottom:1px solid #e3e7ee"></div><div class="meta"><b>card 卡片</b><span>#ffffff</span></div></div>
+    <div class="sw"><div class="chip" style="background:#e3e7ee"></div><div class="meta"><b>hairline 发丝线</b><span>#e3e7ee</span></div></div>
+    <div class="sw"><div class="chip" style="background:#1769e0"></div><div class="meta"><b>accent 强调</b><span>#1769e0</span></div></div>
+    <div class="sw"><div class="chip" style="background:#e8efff"></div><div class="meta"><b>accent wash 选中</b><span>#e8efff</span></div></div>
+    <div class="sw"><div class="chip" style="background:#fffbeb"></div><div class="meta"><b>warning 仅瞬时</b><span>#fffbeb</span></div></div>
+    <div class="sw"><div class="chip" style="background:#fef2f2"></div><div class="meta"><b>error 仅瞬时</b><span>#fef2f2</span></div></div>
+  </div>
+  <div class="legend">状态色(黄/红/绿)只在录制/告警/出错时短暂出现,不再作为常驻面板底色。</div>
+
+  <h2>2 · 右侧 inspector(你截图里的绿卡 + 蓝卡)</h2>
+  <div class="ba">
+    <div class="col before">
+      <h3>● 现状:绿底 + 蓝底(靠色相分区)</h3>
+      <div class="tray tray-before">
+        <div class="panel green-card">
+          <div class="ph"><b>分析信号 + 时间</b></div>
+          <div class="row"><span class="k">信号</span><span class="field field-before">　　　　▾</span></div>
+          <div class="row"><span class="k">Fs</span><span class="field field-before">1000.0 Hz</span></div>
+        </div>
+        <div class="panel blue-card">
+          <div class="ph"><b>时频参数</b><span style="font-size:11px;color:var(--ink-3)">自动 · hanning · 80%</span></div>
+          <div class="row"><span class="k">dB 参考</span><span class="field field-before">1.0</span></div>
+          <div class="row"><span class="k">色阶</span><span class="field field-before">−70 → −20</span></div>
+          <button class="btn">计算时频图</button>
+        </div>
+      </div>
+      <div class="note">两张相邻卡用绿/蓝两种色相硬分,和左侧白栏、灰底一起共 4 种底色在打架。</div>
+    </div>
+
+    <div class="col after">
+      <h3>● 提议:纯白卡 + 发丝线 + 微投影(靠层级分区)</h3>
+      <div class="tray">
+        <div class="panel white-card">
+          <div class="ph"><b>分析信号 + 时间</b></div>
+          <div class="row"><span class="k">信号</span><span class="field">　　　　▾</span></div>
+          <div class="row"><span class="k">Fs</span><span class="field">1000.0 Hz</span></div>
+        </div>
+        <div class="panel white-card">
+          <div class="ph"><b>时频参数</b><span style="font-size:11px;color:var(--ink-3)">自动 · hanning · 80%</span></div>
+          <div class="row"><span class="k">dB 参考</span><span class="field">1.0</span></div>
+          <div class="row"><span class="k">色阶</span><span class="field">−70 → −20</span></div>
+          <button class="btn">计算时频图</button>
+        </div>
+      </div>
+      <div class="note">托盘 #eef1f6 稍深,两张纯白卡浮起来;间隙 + 发丝线 + 投影分区,蓝只剩在「计算」按钮上。</div>
+    </div>
+  </div>
+
+  <h2>3 · 顶栏模式 tab</h2>
+  <div class="ba">
+    <div class="col before">
+      <h3>● 现状:重蓝药丸</h3>
+      <div class="barwrap"><div class="tabs">
+        <span class="tab">〜 时域</span>
+        <span class="tab">▮ FFT</span>
+        <span class="tab b-on">▤ FFT vs Time</span>
+        <span class="tab">▦ 阶次</span>
+      </div></div>
+    </div>
+    <div class="col after">
+      <h3>● 提议:轻底 + 蓝下划线指示</h3>
+      <div class="barwrap"><div class="tabs">
+        <span class="tab">〜 时域</span>
+        <span class="tab">▮ FFT</span>
+        <span class="tab a-on">▤ FFT vs Time</span>
+        <span class="tab">▦ 阶次</span>
+      </div></div>
+    </div>
+  </div>
+
+</body>
+</html>

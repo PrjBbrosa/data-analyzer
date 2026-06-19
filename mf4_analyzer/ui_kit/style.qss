@@ -1,6 +1,6 @@
 /* ==== MF4 Analyzer — Precision Light visual system (tray/floating-panels) ====
  * Tray / panel depth:
- *   tray  #e8ecf2   backdrop (QMainWindow base, toolbar band, status bar, splitter gaps)
+ *   tray  #f2f4f7   backdrop (QMainWindow base, central tray, splitter gaps)
  *   panel/card #ffffff   floating blocks (FileNavigator, ChartStack, Inspector) + cards, inputs, tree, menus
  *   divider    #d3dbe6   splitter line, panel seams, frame seams, card edges (stronger)
  *   hairline   #eef2f7   within-card sub-section separators (soft)
@@ -12,7 +12,8 @@
  *   numeric badge      11px / 600   #475569  (no fill)
  */
 
-QMainWindow,
+QMainWindow { background-color: #f2f4f7; }
+
 QWidget {
     background-color: #ffffff;
     color: #111827;
@@ -36,7 +37,7 @@ QLabel {
 }
 
 /* Splitter — tray color fills the gap so the panels float apart */
-QSplitter::handle { margin: 0; background-color: #e8ecf2; }
+QSplitter::handle { margin: 0; background-color: #f2f4f7; }
 QSplitter::handle:horizontal { width: 3px; margin: 0; }
 QSplitter::handle:vertical { height: 3px; margin: 0; }
 QSplitter::handle:hover { background-color: #cbd5e1; }
@@ -297,9 +298,11 @@ QToolButton[role="tool"] {
 }
 
 /* Toolbar */
-Toolbar {
-    background-color: #e8ecf2;
-    border-bottom: 1px solid #d3dbe6;
+Toolbar#surfaceTopBar,
+QWidget#surfaceTopBar {
+    background-color: #ffffff;
+    border: 1px solid #dbe2eb;
+    border-radius: 8px;
 }
 /* Left action group + logo group: transparent so they sit on the tray band
  * (no white box; lets the logo embed into the tray). */
@@ -790,10 +793,17 @@ QFrame#rightVerdictBanner[verdict="error"] QLabel {
 /* ============ Left navigator ============ */
 FileNavigator {
     background-color: #ffffff;
-    border: 1px solid #d3dbe6;
-    border-radius: 10px;
+    border: 1px solid #dbe2eb;
+    border-radius: 7px;
 }
-QWidget#fileArea { background-color: #ffffff; }
+QWidget#fileArea { background-color: #fafbfc; }
+QScrollArea#fileScroll,
+QWidget#channelCard {
+    background-color: #ffffff;
+    border: 1px solid #dbe2eb;
+    border-radius: 6px;
+}
+QScrollArea#fileScroll > QWidget > QWidget { background-color: transparent; }
 
 /* Pane-level heading — 13/700, breathe via padding-right for tracking */
 QLabel#paneHeader {
@@ -880,15 +890,19 @@ QHeaderView::section {
 /* ============ Inspector ============ */
 Inspector {
     background-color: #ffffff;
-    border: 1px solid #d3dbe6;
-    border-radius: 10px;
+    border: 1px solid #dbe2eb;
+    border-radius: 7px;
 }
 QScrollArea#inspectorScroll {
     border: none;
-    background-color: #ffffff;
+    background-color: transparent;
 }
 QScrollArea#inspectorScroll > QWidget > QWidget {
-    background-color: #ffffff;
+    background-color: transparent;
+}
+QWidget#inspectorScrollBody {
+    background-color: #fafbfc;
+    border: none;
 }
 Inspector QWidget[inspectorFieldHost="true"] {
     background-color: transparent;
@@ -920,9 +934,9 @@ Inspector QGroupBox#paramsSectionBody {
     padding-top: 9px;
     border-top: 1px solid #dfe5ee;
 }
-/* The merged preset/params section sits inside the tinted lower params card.
+/* The merged preset/params section sits inside the lower params card.
  * Its wrapper widgets must not repaint the global QWidget/QFrame white or
- * base-gray surfaces over that card; leave the #eef4ff panel visible through
+ * base-gray surfaces over that card; leave the card surface visible through
  * the header, persistent preset strip, and expanded body. */
 Inspector QWidget#inspectorParamSection,
 Inspector QWidget#inspectorParamHeader,
@@ -973,21 +987,16 @@ Inspector QFrame#inspectorGroupHeader QLabel#inspectorGroupTitle {
 
 /* 2026-04-26 R3 紧凑化 fix-2:
  * The sig-card QFrames (fftSignalCard / orderSignalCard / fftTimeSignalCard)
- * are wrappers that group "分析信号" / "信号源" header + fields inside the
- * already-tinted contextual cards. Without this rule, the global
- * "QFrame { background-color: #ffffff }" rule above paints them white and
- * breaks the tinted backdrop bleed-through, producing the screenshot
- * complaint that "信号源 / 分析信号 都变成白底" after R3. We re-transparentize
- * them here AND drop their border, so the tinted contextual is the visual
- * surface and the sig_card is invisible chrome. See lesson
- * pyqt-ui/2026-04-26-inspector-content-max-width-and-tinted-card-bleed.md.
+ * are wrappers that group "分析信号" / "信号源" header + fields. They now render
+ * as white inner cards on the neutral Inspector body, while preserving the
+ * paired object-name rule required by the wrapper-QFrame lesson.
  */
 Inspector QFrame#fftSignalCard,
 Inspector QFrame#orderSignalCard,
 Inspector QFrame#fftTimeSignalCard {
     background-color: #ffffff;
-    border: 1px solid #d3dbe6;
-    border-radius: 8px;
+    border: 1px solid #dbe2eb;
+    border-radius: 6px;
     padding: 0;
 }
 
@@ -998,8 +1007,8 @@ Inspector QWidget#inspectorPairField {
 }
 
 /* 2026-06-13 分析信号/谱参数 split: each analysis contextual is now a
- * transparent host for two stacked, full-width cards — the green
- * analysis-signal card (sig_card) on top and the tinted parameter card
+ * transparent host for two stacked, full-width cards — the white
+ * analysis-signal card (sig_card) on top and the white parameter card
  * (params_card) below, separated by an 8px #f5f7fb gutter (root spacing).
  * The visible borders/backdrops live on those two cards so they read as two
  * independent panels instead of the old card-inside-a-card; dropping the
@@ -1012,20 +1021,17 @@ QWidget#orderContextual {
     background-color: transparent;
 }
 
-/* Lower parameter panel (谱参数 / 时频参数 + 坐标轴设置 + 预设 + action).
- * Unified across all three analysis modes to the same #eef4ff tint FFT
- * already used, so the lower panel reads consistently (was: FFT blue,
- * FFT-vs-Time / Order white). */
+/* Lower parameter panel (谱参数 / 时频参数 + 坐标轴设置 + 预设 + action). */
 Inspector QFrame#fftParamsCard,
 Inspector QFrame#fftTimeParamsCard,
 Inspector QFrame#orderParamsCard {
     background-color: #ffffff;
-    border: 1px solid #d3dbe6;
-    border-radius: 10px;
+    border: 1px solid #dbe2eb;
+    border-radius: 6px;
 }
 
-/* The axis-settings grid is always hosted inside the tinted params_card, so
- * its blank cells stay transparent and let the #eef4ff card show through —
+/* The axis-settings grid is always hosted inside the params_card, so
+ * its blank cells stay transparent and let the white card show through —
  * no separate white table rows over the panel. */
 Inspector QWidget#axisRow,
 Inspector QWidget#axisRowLine,
@@ -1167,20 +1173,20 @@ Inspector QPushButton[role="choice"]:checked {
 Inspector QPushButton[role="primary"] { min-height: 30px; }
 
 /* ============ Chart stack ============ */
-ChartStack { background-color: #ffffff; border: 1px solid #d3dbe6; border-radius: 10px; }
+ChartStack { background-color: #ffffff; border: 1px solid #dbe2eb; border-radius: 7px; }
 
 QWidget#timeDomainPage {
-    background-color: #ffffff;
+    background-color: transparent;
 }
 
 QFrame#timeViewBottomDock {
-    background-color: #fbfcff;
+    background-color: transparent;
     border-top: 1px solid #dbe3ee;
 }
 
 QWidget#chartCard {
     border: 1px solid #d3dbe6;
-    border-radius: 12px;
+    border-radius: 6px;
     background-color: #ffffff;
 }
 
@@ -1190,7 +1196,7 @@ QWidget#chartCard {
  * the focused card keeps the plain #chartCard look here; no frame, no tint,
  * no data-area dimming. */
 QWidget#chartCard[focused="true"] {
-    border-radius: 12px;
+    border-radius: 6px;
     background-color: #ffffff;
 }
 
@@ -1250,8 +1256,8 @@ QToolBar#chartToolbar,
 QWidget#chartToolbar,
 NavigationToolbar2QT#chartToolbar,
 NavigationToolbar2QT {
-    background-color: #ffffff;
-    border-bottom: none;
+    background-color: transparent;
+    border: none;
     spacing: 1px;
     padding: 1px;
 }
@@ -1629,10 +1635,29 @@ QMenu#pgContextMenu::separator {
     background-color: rgba(148, 163, 184, 90);
 }
 
-QStatusBar {
-    background-color: #e8ecf2;
+QStatusBar#surfaceStatusBar {
+    background-color: #ffffff;
     color: #64748b;
-    border-top: 1px solid #d3dbe6;
+    border: 1px solid #dbe2eb;
+    border-radius: 8px;
+}
+
+QStatusBar#surfaceStatusBar QToolButton#surfaceVersionButton {
+    min-height: 22px;
+    padding: 1px 7px;
+    background-color: transparent;
+    border: none;
+    border-radius: 5px;
+    color: #111827;
+    font-weight: 700;
+}
+
+QStatusBar#surfaceStatusBar QToolButton#surfaceVersionButton:hover {
+    background-color: #f5f7fb;
+}
+
+QStatusBar#surfaceStatusBar QToolButton#surfaceVersionButton:pressed {
+    background-color: #eef2f7;
 }
 
 /* Version tag beside the status-bar update (cloud-download) icon. */
@@ -1664,7 +1689,7 @@ QWidget#chartToolbar QPushButton[role="chart-choice"]:checked {
 }
 
 QWidget#chartToolbar QWidget#chartTimeControlsSpacer {
-    background-color: #ffffff;
+    background-color: transparent;
 }
 
 QFrame#chartToolbarSep {
@@ -1809,7 +1834,7 @@ QWidget#viewTabBar QPushButton#viewSplitClear:pressed {
  * The bar itself has a soft tinted backdrop and a hairline top edge so it
  * reads as a quiet status footer rather than another piece of toolbar. */
 QFrame#chartHintBar {
-    background-color: #e8ecf2;
+    background-color: transparent;
     border-top: 1px solid #d3dbe6;
 }
 QFrame#chartHintBar QLabel#chartHintPersistent {
@@ -1834,7 +1859,7 @@ QFrame#chartHintBar QLabel#chartHintDiscovery {
 }
 
 QFrame#timeViewBottomDock QFrame#chartHintBar {
-    background-color: #e8ecf2;
+    background-color: transparent;
     border-top: 1px solid #d3dbe6;
 }
 
@@ -1891,9 +1916,8 @@ QFrame#peekOverlay {
 }
 
 /* Frame seams (Rule B): anchor the bottom bands so View tab + hint are not floating. */
-QStatusBar { background-color: #e8ecf2; border-top: 1px solid #d3dbe6; }
 QFrame#chartHintBar { border-top: 1px solid #d3dbe6; }
-QWidget#viewTabBar { border-top: 1px solid #d3dbe6; }
+QWidget#viewTabBar { border: none; }
 
 /* Central tray backdrop — the three rounded panels float on this. */
-QWidget#centralTray { background-color: #e8ecf2; }
+QWidget#centralTray { background-color: #f2f4f7; }

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TraceLab 面板 Playground</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2230; --border: #2a3140;
+    --text: #e6edf3; --muted: #8b949e; --accent: #4c8dff;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: grid; grid-template-columns: 348px 1fr; height: 100vh; overflow: hidden;
+  }
+
+  /* ---------- Controls ---------- */
+  .controls { background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; padding: 18px 18px 60px; }
+  .controls h1 { font-size: 15px; font-weight: 650; margin-bottom: 2px; }
+  .controls .sub { color: var(--muted); font-size: 12px; margin-bottom: 14px; line-height: 1.55; }
+  .controls .sub b { color: #c9d6e5; }
+
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+  .preset { background: var(--panel2); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 6px 10px; border-radius: 7px; cursor: pointer; transition: .12s; }
+  .preset:hover { border-color: var(--accent); color: #fff; }
+  .preset.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .group { margin-bottom: 16px; border-left: 2px solid transparent; }
+  .group.outer { border-color: #46f1c0; padding-left: 12px; margin-left: -2px; }
+  .group.inner { border-color: #4c8dff; padding-left: 12px; margin-left: -2px; }
+  .group > .label { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 10px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+  .group.outer > .label { color: #46f1c0; }
+  .group.inner > .label { color: #6ea4ff; }
+  .group.inner.off .ctrl[data-key] { opacity: .35; pointer-events: none; }
+  .ctrl { margin-bottom: 12px; }
+  .ctrl .row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; }
+  .ctrl .name { font-size: 13px; }
+  .ctrl .val { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 3px; background: var(--border); outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 15px; height: 15px; border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid #0d1117; }
+  .colorRow { display: flex; align-items: center; gap: 10px; }
+  .colorRow input[type=color] { width: 38px; height: 28px; border: 1px solid var(--border); border-radius: 6px; background: none; cursor: pointer; padding: 2px; }
+  .colorRow .hex { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .switch { position: relative; width: 38px; height: 22px; flex-shrink: 0; }
+  .switch input { display: none; }
+  .switch .track { position: absolute; inset: 0; background: var(--border); border-radius: 11px; transition: .15s; cursor: pointer; }
+  .switch .track::after { content: ""; position: absolute; width: 18px; height: 18px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: .15s; }
+  .switch input:checked + .track { background: var(--accent); }
+  .switch input:checked + .track::after { transform: translateX(16px); }
+
+  /* ---------- Preview ---------- */
+  .stage { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+  .previewWrap { flex: 1; overflow: auto; padding: 24px; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 20% 20%, #14181f, var(--bg) 60%); }
+
+  .app { width: 980px; height: 590px; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.5); display: flex; flex-direction: column; font-size: 12px; color: #1e2430; }
+  .titlebar { height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 12px; flex-shrink: 0; }
+  .lights { display: flex; gap: 6px; }
+  .lights span { width: 11px; height: 11px; border-radius: 50%; }
+  .l1 { background: #ff5f57; } .l2 { background: #febc2e; } .l3 { background: #28c840; }
+  .title { font-weight: 600; font-size: 12px; color: #2b3340; }
+  .titlebar .spacer { flex: 1; }
+  .bosch { font-weight: 800; color: #e2001a; letter-spacing: .5px; font-size: 13px; }
+  .toptabs { display: flex; gap: 2px; background: #fff; border-radius: 9px; padding: 4px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .toptabs button { border: none; background: none; font-size: 11px; padding: 5px 11px; border-radius: 6px; cursor: pointer; color: #5a6373; font-weight: 500; }
+  .toptabs button.active { background: #e8f0ff; color: var(--accent); }
+  .topbtns { display: flex; gap: 6px; }
+  .topbtns button { border: none; font-size: 11px; padding: 6px 11px; border-radius: 7px; cursor: pointer; font-weight: 500; }
+  .topbtns .primary { background: var(--accent); color: #fff; }
+  .topbtns .ghost { background: rgba(255,255,255,.55); color: #3a4150; }
+
+  .bodyrow { flex: 1; display: flex; min-height: 0; }
+  .col { display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  .colInner { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .area { background: transparent; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+
+  .cardHd { display: flex; align-items: center; justify-content: space-between; padding: 9px 11px; flex-shrink: 0; }
+  .cardHd .t { font-weight: 600; font-size: 12px; }
+  .cardHd .c { color: #9aa3b2; font-size: 11px; }
+  .menu { width: 22px; height: 22px; border: 1px solid #eceef3; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #9aa3b2; }
+
+  .filter { margin: 8px 10px; height: 28px; border: 1px solid #e3e7ee; border-radius: 7px; display: flex; align-items: center; padding: 0 9px; color: #aab; font-size: 12px; flex-shrink: 0; }
+  .chips { display: flex; gap: 5px; padding: 0 10px 8px; flex-wrap: wrap; flex-shrink: 0; }
+  .chip { font-size: 10px; padding: 3px 8px; border: 1px solid #e3e7ee; border-radius: 6px; color: #5a6373; }
+  .chip.accent { color: var(--accent); border-color: #d7e2f5; }
+  .listhd { display: flex; justify-content: space-between; padding: 8px 11px; font-weight: 600; font-size: 11px; color: #3a4150; }
+
+  .miatoolbar { display: flex; align-items: center; gap: 4px; padding: 7px 9px; }
+  .icbtn { width: 24px; height: 24px; border-radius: 6px; background: #f2f4f8; display: flex; align-items: center; justify-content: center; color: #4a5263; font-size: 12px; }
+  .icbtn.on { background: #e8f0ff; color: var(--accent); }
+  .miatoolbar .spacer { flex: 1; }
+  .modes { display: flex; gap: 4px; }
+  .modes .m { font-size: 11px; padding: 3px 8px; border-radius: 6px; color: #5a6373; }
+  .modes .m.on { background: #e8f0ff; color: var(--accent); }
+  .plot { flex: 1; margin: 8px; border: 1px solid #eceef3; border-radius: 6px; position: relative; min-height: 0;
+          background: linear-gradient(#fafbfc,#fafbfc), repeating-linear-gradient(90deg, transparent, transparent 63px, #f0f2f6 63px, #f0f2f6 64px); }
+  .plot .dot { position: absolute; right: 14px; bottom: 12px; width: 8px; height: 8px; border-radius: 50%; background: #e2001a; }
+  .viewrow { display: flex; gap: 6px; align-items: center; padding: 6px 8px; flex-shrink: 0; }
+  .viewrow .v { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 4px 10px; border: 1px solid #d7e2f5; border-radius: 7px; color: #3a4150; background: #fff; }
+  .viewrow .v::before { content: ""; width: 16px; height: 9px; border-radius: 5px; background: var(--accent); }
+  .viewrow .plus { width: 22px; height: 22px; border-radius: 6px; background: #fff; border: 1px solid #eceef3; display: flex; align-items: center; justify-content: center; color: #5a6373; }
+
+  .rsec { padding: 2px 11px 10px; overflow: hidden; }
+  .rlabel { font-size: 11px; font-weight: 600; margin: 6px 0 7px; }
+  .field { margin-bottom: 8px; }
+  .field .fl { font-size: 10px; color: #8a93a2; margin-bottom: 3px; }
+  .field .fi { height: 26px; border: 1px solid #e3e7ee; border-radius: 6px; background: #fafbfc; }
+  .rbtn { height: 28px; background: var(--accent); color: #fff; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 500; margin: 4px 0 10px; }
+
+  .statusbar { height: 26px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; font-size: 11px; color: var(--accent); flex-shrink: 0; }
+  .statusbar .ver { background: #fff; padding: 3px 9px; border-radius: 6px; color: #3a4150; }
+
+  /* ---------- Prompt ---------- */
+  .promptBar { border-top: 1px solid var(--border); background: var(--panel); padding: 14px 18px; flex-shrink: 0; }
+  .promptBar .hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .promptBar .hd .ttl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  .copyBtn { background: var(--accent); color: #fff; border: none; padding: 6px 14px; border-radius: 7px; font-size: 12px; cursor: pointer; font-weight: 500; }
+  .copyBtn.done { background: #2ea043; }
+  .promptOut { font-family: var(--mono); font-size: 12px; line-height: 1.6; color: #c9d1d9; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; max-height: 150px; overflow-y: auto; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <h1>TraceLab 面板 Playground</h1>
+  <div class="sub">默认＝<b>当前扁平态</b>（三栏无圆角、靠分隔线隔开、无嵌套）。往上调圆角 / 浮起 / 嵌套，把它变成<b>圆角浮起</b>的目标设计。底部 prompt 描述从扁平→目标的改动。</div>
+
+  <div class="presets" id="presets"></div>
+
+  <div class="group">
+    <div class="label">布局尺寸</div>
+    <div class="ctrl" data-key="leftWidth"><div class="row"><span class="name">左栏宽度</span><span class="val"></span></div><input type="range" min="160" max="360" step="2"></div>
+    <div class="ctrl" data-key="rightWidth"><div class="row"><span class="name">右栏宽度</span><span class="val"></span></div><input type="range" min="180" max="400" step="2"></div>
+    <div class="ctrl" data-key="columnGap"><div class="row"><span class="name">三栏间距（0＝贴合分隔线）</span><span class="val"></span></div><input type="range" min="0" max="28" step="1"></div>
+    <div class="ctrl" data-key="outerMargin"><div class="row"><span class="name">距窗口/托盘边缘</span><span class="val"></span></div><input type="range" min="0" max="28" step="1"></div>
+  </div>
+
+  <div class="group outer">
+    <div class="label">外层面板（每一栏的容器）</div>
+    <div class="ctrl" data-key="outerRadius"><div class="row"><span class="name">圆角（0＝直角，当前态）</span><span class="val"></span></div><input type="range" min="0" max="28" step="1"></div>
+    <div class="ctrl" data-key="outerShadow"><div class="row"><span class="name">浮起阴影</span><span class="val"></span></div><input type="range" min="0" max="44" step="1"></div>
+    <div class="ctrl colorRow"><input type="color" id="outerBg"><span class="name">背景色</span><span class="hex" id="outerBgHex"></span></div>
+  </div>
+
+  <div class="group inner off" id="innerGroup">
+    <div class="label"><span>内层 section（栏内小卡片）</span>
+      <label class="switch"><input type="checkbox" id="nesting"><span class="track"></span></label>
+    </div>
+    <div class="ctrl" data-key="innerRadius"><div class="row"><span class="name">圆角</span><span class="val"></span></div><input type="range" min="0" max="24" step="1"></div>
+    <div class="ctrl" data-key="innerInset"><div class="row"><span class="name">外层到卡片的留白</span><span class="val"></span></div><input type="range" min="0" max="24" step="1"></div>
+    <div class="ctrl" data-key="innerGap"><div class="row"><span class="name">卡片之间间距</span><span class="val"></span></div><input type="range" min="0" max="24" step="1"></div>
+    <div class="ctrl" data-key="innerShadow"><div class="row"><span class="name">浮起阴影</span><span class="val"></span></div><input type="range" min="0" max="30" step="1"></div>
+  </div>
+
+  <div class="group">
+    <div class="label">托盘背景</div>
+    <div class="ctrl colorRow"><input type="color" id="trayColor"><span class="name">托盘色（白＝无托盘，当前态）</span><span class="hex" id="trayHex"></span></div>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="previewWrap">
+    <div class="app" id="app">
+      <div class="titlebar">
+        <div class="lights"><span class="l1"></span><span class="l2"></span><span class="l3"></span></div>
+        <span class="title">TraceLab v7.0</span>
+        <div class="topbtns" style="margin-left:8px">
+          <button class="primary">打开</button><button class="ghost">保存项目</button><button class="ghost">批处理</button>
+        </div>
+        <div class="spacer"></div>
+        <div class="toptabs"><button class="active">时域</button><button>FFT</button><button>FFT vs Time</button><button>阶次</button></div>
+        <div class="spacer"></div>
+        <span class="bosch">BOSCH</span>
+      </div>
+
+      <div class="bodyrow" id="bodyrow">
+        <!-- LEFT: two stacked areas (files / channels) -->
+        <div class="col" data-col="left">
+          <div class="colInner">
+            <div class="area" data-area="files" style="flex:0 0 40%">
+              <div class="cardHd"><span class="t">文件</span><span style="display:flex;gap:8px;align-items:center"><span class="c">0</span><span class="menu">⋮</span></span></div>
+            </div>
+            <div class="area" data-area="chan" style="flex:1 1 auto">
+              <div class="filter">Filter channel…</div>
+              <div class="chips"><span class="chip">全选</span><span class="chip">全不</span><span class="chip">已选</span><span class="chip accent">⚙ 编辑通道</span></div>
+              <div class="listhd"><span>Channel</span><span>Pts</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MIDDLE: toolbar + plot, view tabs -->
+        <div class="col" data-col="mid" style="flex:1 1 auto">
+          <div class="colInner">
+            <div class="area" data-area="toolbar" data-nodivider style="flex:0 0 auto">
+              <div class="miatoolbar">
+                <span class="icbtn">⌂</span><span class="icbtn">←</span><span class="icbtn">→</span>
+                <span class="icbtn on">✛</span><span class="icbtn">⚲</span><span class="icbtn">⎘</span>
+                <span class="icbtn">▤</span><span class="icbtn">⇅</span><span class="icbtn">⊟</span>
+                <span class="spacer"></span>
+                <div class="modes"><span class="m on">分</span><span class="m">叠</span><span class="m on">关</span><span class="m">单</span><span class="m">双</span></div>
+              </div>
+            </div>
+            <div class="area" data-area="plot" data-nodivider style="flex:1 1 auto">
+              <div class="plot"><div class="dot"></div></div>
+            </div>
+            <div class="viewrow"><span class="v">View 1</span><span class="plus">+</span></div>
+          </div>
+        </div>
+
+        <!-- RIGHT: settings -->
+        <div class="col" data-col="right">
+          <div class="colInner">
+            <div class="area" data-area="settings" style="flex:1 1 auto">
+              <div class="cardHd"><span class="t">▾ 图表设置（横坐标·时间范围）</span></div>
+              <div class="rsec">
+                <div class="rlabel">横坐标</div>
+                <div class="field"><div class="fl">来源</div><div class="fi"></div></div>
+                <div class="field"><div class="fl">标签</div><div class="fi"></div></div>
+                <div class="rbtn">应用</div>
+                <div class="rlabel">时间范围</div>
+                <div class="field"><div class="fi"></div></div>
+                <div class="rbtn">绘图</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="statusbar"><span>滚轮作用于鼠标所在子图</span><span class="ver">v7.0</span></div>
+    </div>
+  </div>
+
+  <div class="promptBar">
+    <div class="hd"><span class="ttl">生成的 Prompt</span><button class="copyBtn" id="copyBtn">复制 Prompt</button></div>
+    <div class="promptOut" id="promptOut"></div>
+  </div>
+</div>
+
+<script>
+// DEFAULTS == 当前扁平态
+const DEFAULTS = {
+  leftWidth: 272, rightWidth: 280, columnGap: 0, outerMargin: 0,
+  outerRadius: 0, outerShadow: 0, outerBg: '#ffffff',
+  nesting: false, innerRadius: 10, innerInset: 8, innerGap: 8, innerShadow: 6,
+  trayColor: '#ffffff',
+};
+const state = { ...DEFAULTS };
+
+const PRESETS = {
+  '当前态·扁平': { ...DEFAULTS },
+  '目标·圆角浮起': { leftWidth: 272, rightWidth: 280, columnGap: 8, outerMargin: 8, outerRadius: 14, outerShadow: 16, outerBg: '#ffffff', nesting: true, innerRadius: 10, innerInset: 8, innerGap: 8, innerShadow: 6, trayColor: '#e8ecf2' },
+  '只外层圆角': { leftWidth: 272, rightWidth: 280, columnGap: 8, outerMargin: 8, outerRadius: 14, outerShadow: 14, outerBg: '#ffffff', nesting: false, innerRadius: 10, innerInset: 8, innerGap: 8, innerShadow: 6, trayColor: '#e8ecf2' },
+  '双层强浮起': { leftWidth: 272, rightWidth: 280, columnGap: 14, outerMargin: 16, outerRadius: 18, outerShadow: 30, outerBg: '#f4f6fa', nesting: true, innerRadius: 14, innerInset: 12, innerGap: 12, innerShadow: 16, trayColor: '#e8ecf2' },
+  '宽中间': { leftWidth: 210, rightWidth: 230, columnGap: 8, outerMargin: 10, outerRadius: 12, outerShadow: 12, outerBg: '#ffffff', nesting: true, innerRadius: 10, innerInset: 8, innerGap: 8, innerShadow: 6, trayColor: '#eaeef3' },
+};
+
+const presetsEl = document.getElementById('presets');
+Object.keys(PRESETS).forEach(name => {
+  const b = document.createElement('button'); b.className = 'preset'; b.textContent = name;
+  b.onclick = () => applyPreset(name); presetsEl.appendChild(b);
+});
+function applyPreset(name) {
+  Object.assign(state, PRESETS[name]); syncControls(); updateAll();
+  document.querySelectorAll('.preset').forEach(p => p.classList.toggle('active', p.textContent === name));
+}
+
+document.querySelectorAll('.ctrl[data-key]').forEach(ctrl => {
+  const key = ctrl.dataset.key; const range = ctrl.querySelector('input[type=range]'); if (!range) return;
+  range.addEventListener('input', () => { state[key] = parseInt(range.value, 10); clearPreset(); updateAll(); });
+});
+const outerBg = document.getElementById('outerBg');
+outerBg.addEventListener('input', () => { state.outerBg = outerBg.value; clearPreset(); updateAll(); });
+const trayColor = document.getElementById('trayColor');
+trayColor.addEventListener('input', () => { state.trayColor = trayColor.value; clearPreset(); updateAll(); });
+const nesting = document.getElementById('nesting');
+nesting.addEventListener('change', () => { state.nesting = nesting.checked; clearPreset(); updateAll(); });
+
+function clearPreset() { document.querySelectorAll('.preset').forEach(p => p.classList.remove('active')); }
+
+function syncControls() {
+  document.querySelectorAll('.ctrl[data-key]').forEach(ctrl => {
+    const range = ctrl.querySelector('input[type=range]'); if (range) range.value = state[ctrl.dataset.key];
+  });
+  outerBg.value = state.outerBg; trayColor.value = state.trayColor; nesting.checked = state.nesting;
+}
+
+function renderPreview() {
+  const app = document.getElementById('app');
+  const body = document.getElementById('bodyrow');
+  app.style.background = state.trayColor;
+  body.style.gap = state.columnGap + 'px';
+  body.style.padding = `0 ${state.outerMargin}px ${state.outerMargin}px`;
+
+  const os = state.outerShadow;
+  const outerShadow = os > 0 ? `0 ${Math.round(os/2)}px ${Math.round(os*1.4)}px rgba(35,50,75,${(0.05 + os*0.005).toFixed(3)})` : 'none';
+  const showColDivider = state.columnGap <= 1 && state.outerRadius === 0;
+
+  const cols = [...document.querySelectorAll('.col')];
+  cols.forEach((col, i) => {
+    col.style.background = state.outerBg;
+    col.style.borderRadius = state.outerRadius + 'px';
+    col.style.boxShadow = outerShadow;
+    col.style.borderRight = (showColDivider && i < cols.length - 1) ? '1px solid #e7eaf0' : 'none';
+    const inner = col.querySelector('.colInner');
+    inner.style.padding = state.nesting ? state.innerInset + 'px' : '0';
+    inner.style.gap = state.nesting ? state.innerGap + 'px' : '0';
+  });
+  document.querySelector('.col[data-col="left"]').style.flex = `0 0 ${state.leftWidth}px`;
+  document.querySelector('.col[data-col="right"]').style.flex = `0 0 ${state.rightWidth}px`;
+  document.querySelector('.col[data-col="mid"]').style.flex = '1 1 auto';
+
+  const is = state.innerShadow;
+  const innerShadow = is > 0 ? `0 ${Math.round(is/3)}px ${is}px rgba(40,55,80,${(0.04 + is*0.006).toFixed(3)})` : 'none';
+
+  document.querySelectorAll('.col').forEach(col => {
+    const areas = [...col.querySelectorAll('.area')];
+    areas.forEach((a, idx) => {
+      if (state.nesting) {
+        a.style.background = '#fff';
+        a.style.borderRadius = state.innerRadius + 'px';
+        a.style.boxShadow = innerShadow;
+        a.style.border = '1px solid #e9ecf2';
+        a.style.borderTop = '1px solid #e9ecf2';
+      } else {
+        a.style.background = 'transparent';
+        a.style.borderRadius = '0';
+        a.style.boxShadow = 'none';
+        a.style.border = 'none';
+        // flat divider line between stacked areas (skip first & explicit no-divider)
+        const divide = idx > 0 && a.dataset.nodivider === undefined;
+        a.style.borderTop = divide ? '1px solid #eef0f4' : 'none';
+      }
+    });
+  });
+
+  // labels
+  document.querySelectorAll('.ctrl[data-key]').forEach(ctrl => {
+    const v = ctrl.querySelector('.val'); if (v) v.textContent = state[ctrl.dataset.key] + 'px';
+  });
+  document.getElementById('outerBgHex').textContent = state.outerBg;
+  document.getElementById('trayHex').textContent = state.trayColor;
+  document.getElementById('innerGroup').classList.toggle('off', !state.nesting);
+}
+
+function shadowWord(v, hi, mid) {
+  if (v === 0) return '无阴影';
+  if (v > hi) return '明显浮起阴影';
+  if (v > mid) return '中等阴影';
+  return '轻微阴影';
+}
+
+function updatePrompt() {
+  const d = DEFAULTS, parts = [];
+
+  const lay = [];
+  if (state.leftWidth !== d.leftWidth) lay.push(`左栏 ${state.leftWidth}px`);
+  if (state.rightWidth !== d.rightWidth) lay.push(`右栏 ${state.rightWidth}px`);
+  if (lay.length) parts.push(`侧栏宽度：${lay.join('、')}（中间栏自适应剩余空间）`);
+  if (state.columnGap !== d.columnGap) parts.push(`三栏之间留 ${state.columnGap}px 间距（替代当前的分隔线）`);
+  if (state.outerMargin !== d.outerMargin) parts.push(`整体距窗口边缘 ${state.outerMargin}px`);
+
+  const outer = [];
+  if (state.outerRadius !== d.outerRadius) outer.push(`圆角从直角改为 ${state.outerRadius}px`);
+  if (state.outerShadow !== d.outerShadow) outer.push(shadowWord(state.outerShadow, 24, 10) + '（浮起感）');
+  if (state.outerBg.toLowerCase() !== d.outerBg.toLowerCase()) outer.push(`背景色 ${state.outerBg}`);
+  if (outer.length) parts.push(`外层面板（左/中/右三栏容器）：${outer.join('、')}`);
+
+  if (state.nesting) {
+    const inner = [`圆角 ${state.innerRadius}px`, `外层到卡片留白 ${state.innerInset}px`, `卡片间距 ${state.innerGap}px`, shadowWord(state.innerShadow, 16, 6)];
+    parts.push(`开启内层嵌套：把栏内子区块（左栏的「文件」「通道列表」、中栏的「工具栏」「图表」、右栏的设置块）做成圆角浮起的小卡片（${inner.join('、')}）`);
+  }
+
+  if (state.trayColor.toLowerCase() !== d.trayColor.toLowerCase()) parts.push(`加入托盘背景色 ${state.trayColor}，让三栏浮在托盘上`);
+
+  const out = document.getElementById('promptOut');
+  if (!parts.length) { out.textContent = '当前＝真实扁平态（三栏无圆角、分隔线、无嵌套），未做改动。往上调圆角 / 浮起 / 嵌套来设计目标样式。'; return; }
+
+  out.textContent =
+`把 TraceLab v7.0 主窗口从当前的「扁平三栏（无圆角、靠分隔线隔开、无嵌套；FFT vs Time 视图下仅右栏有两段堆叠子块）」改为：
+
+· ${parts.join('；\n· ')}。
+
+要求三栏统一同一套圆角/阴影风格；左栏 272px 是历史红线宽度，改动需确认通道列表列宽仍够用；只改面板/卡片容器样式与布局留白，不动 pyqtgraph 画布、信号处理与控件逻辑。`;
+}
+
+function updateAll() { renderPreview(); updatePrompt(); }
+
+document.getElementById('copyBtn').addEventListener('click', () => {
+  navigator.clipboard.writeText(document.getElementById('promptOut').textContent).then(() => {
+    const b = document.getElementById('copyBtn');
+    b.textContent = '已复制 ✓'; b.classList.add('done');
+    setTimeout(() => { b.textContent = '复制 Prompt'; b.classList.remove('done'); }, 1400);
+  });
+});
+
+syncControls(); updateAll();
+document.querySelector('.preset').classList.add('active');
+</script>
+</body>
+</html>

@@ -63,6 +63,9 @@ class Inspector(QWidget):
         # plain QWidget subclass once WA_StyledBackground is set; without it Qt
         # skips the styled fill/border and the rounded card never renders.
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
         # 2026-04-26 fix: cap the inspector widget itself so the splitter cannot
         # allocate more width than its capped content (_INSPECTOR_CONTENT_MAX_WIDTH).
         # Surplus split-pane width was previously absorbed by host_lay.addStretch,
@@ -70,11 +73,15 @@ class Inspector(QWidget):
         # +16 covers the QScrollArea vertical scrollbar + 2px-each-side margins.
         self.setFixedWidth(_INSPECTOR_CONTENT_MAX_WIDTH + 16)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setContentsMargins(3, 3, 3, 3)
         lay.setSpacing(0)
 
         self._scroll = QScrollArea(self)
         self._scroll.setObjectName("inspectorScroll")
+        self._scroll.setAutoFillBackground(False)
+        self._scroll.viewport().setAutoFillBackground(False)
+        self._scroll.viewport().setAttribute(Qt.WA_TranslucentBackground, True)
+        self._scroll.viewport().setAttribute(Qt.WA_NoSystemBackground, True)
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -89,11 +96,16 @@ class Inspector(QWidget):
         # splitter widens the right pane, producing the "toggle a checkbox →
         # pane visually balloons" defect that the user reported.
         host = QWidget(self._scroll)
+        host.setAutoFillBackground(False)
+        host.setAttribute(Qt.WA_TranslucentBackground, True)
+        host.setAttribute(Qt.WA_NoSystemBackground, True)
         host_lay = QHBoxLayout(host)
         host_lay.setContentsMargins(0, 0, 0, 0)
         host_lay.setSpacing(0)
 
         self._scroll_body = QWidget(host)
+        self._scroll_body.setObjectName("inspectorScrollBody")
+        self._scroll_body.setAttribute(Qt.WA_StyledBackground, True)
         self._scroll_body.setFixedWidth(_INSPECTOR_CONTENT_MAX_WIDTH)
         body_lay = QVBoxLayout(self._scroll_body)
         body_lay.setContentsMargins(0, 0, 0, 0)

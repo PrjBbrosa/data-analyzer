@@ -1,6 +1,6 @@
 """Top three-segment toolbar: file actions · mode switcher · canvas actions."""
 from PyQt5.QtCore import QSize, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPixmap
+from PyQt5.QtGui import QColor, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
     QSizePolicy, QWidget,
@@ -79,6 +79,12 @@ class Toolbar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("surfaceTopBar")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
+        self.setFixedHeight(50)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(4, 2, 4, 2)
         lay.setSpacing(4)
@@ -212,6 +218,15 @@ class Toolbar(QWidget):
         super().showEvent(event)
         self._sync_mirror()
 
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(QColor("#dbe2eb"))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
+        painter.end()
+        super().paintEvent(event)
+
     def _sync_mirror(self):
         """Keep the right-side control host the same width as left_widget."""
         w = self._left_widget.sizeHint().width()
@@ -261,4 +276,3 @@ class Toolbar(QWidget):
     def set_inspector_open(self, open: bool):
         """Sync the inspector toggle button checked state (checked = panel hidden)."""
         self.btn_toggle_inspector.setChecked(not open)
-

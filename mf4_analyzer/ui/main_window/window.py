@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QStatusBar,
 )
-from PyQt5.QtCore import QTimer, QThread
+from PyQt5.QtCore import QTimer, QThread, Qt
 
 from ...io import DataLoader, FileData, HAS_ASAMMDF
 from ...signal import (
@@ -37,6 +37,21 @@ from ._order_mixin import OrderMixin
 from ._fft_time_mixin import FFTTimeMixin
 from ._project_io_mixin import ProjectIOMixin
 from ._view_mixin import ViewMixin
+
+
+class SurfaceStatusBar(QStatusBar):
+    """QStatusBar API, displayed as the bottom rounded surface inside the tray."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("surfaceStatusBar")
+        self.setContentsMargins(8, 2, 8, 2)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
+        self.setSizeGripEnabled(False)
+        self.setFixedHeight(40)
 
 
 class MainWindow(
@@ -109,9 +124,9 @@ class MainWindow(
         # Playground-tuned panel chrome (tracelab-panel-playground.html):
         #   outer margin 5px (window edge -> three-pane row, all four sides),
         #   inter-pane gap 3px (the tray-colored QSplitter handle below),
-        #   panel corner radius 10px (FileNavigator/ChartStack/Inspector QSS).
+        #   panel corner radius 7px (FileNavigator/ChartStack/Inspector QSS).
         root.setContentsMargins(5, 5, 5, 5)
-        root.setSpacing(8)
+        root.setSpacing(5)
 
         self.toolbar = Toolbar(self)
         root.addWidget(self.toolbar)
@@ -222,8 +237,8 @@ class MainWindow(
         # alive across section round-trips and skips the preview rebuild cost).
         self._fft_last_render_sig = None
 
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
+        self.statusBar = SurfaceStatusBar(self)
+        root.addWidget(self.statusBar)
         self._status_hint_bar = None
         self._install_status_hint_bar(self.chart_stack.current_mode())
         self.chart_stack.mode_changed.connect(self._install_status_hint_bar)
@@ -249,6 +264,7 @@ class MainWindow(
         from ... import app_meta
 
         self._update_btn = QToolButton(self)
+        self._update_btn.setObjectName("surfaceVersionButton")
         self._update_btn.setIcon(Icons.cloud_download())
         self._update_btn.setIconSize(QSize(18, 18))
         self._update_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -256,9 +272,6 @@ class MainWindow(
         self._update_btn.setAutoRaise(True)
         self._update_btn.setCursor(Qt.PointingHandCursor)
         self._update_btn.setToolTip("检查更新")
-        self._update_btn.setStyleSheet(
-            "QToolButton { padding: 2px 6px; }"
-        )
         self._update_btn.clicked.connect(self._open_release_page)
 
         self.statusBar.addPermanentWidget(self._update_btn)

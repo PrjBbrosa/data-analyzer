@@ -177,6 +177,9 @@ class FileNavigator(QWidget):
         # on a plain QWidget subclass once WA_StyledBackground is set; without it
         # Qt skips the styled fill/border and the rounded card never renders.
         self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
         # rows_key -> _FileRow
         # rows_key = filepath_str when label_suffix is non-empty (grouped mode)
         # rows_key = fid when label_suffix is empty (flat mode, backwards compat)
@@ -185,7 +188,7 @@ class FileNavigator(QWidget):
         self._fid_to_key = {}
         self._active_fid = None
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setContentsMargins(3, 3, 3, 3)
         lay.setSpacing(4)
 
         splitter = QSplitter(Qt.Vertical, self)
@@ -198,7 +201,7 @@ class FileNavigator(QWidget):
         # otherwise the inner white surface above the channel splitter is unpainted.
         file_area.setAttribute(Qt.WA_StyledBackground, True)
         file_lay = QVBoxLayout(file_area)
-        file_lay.setContentsMargins(0, 0, 0, 0)
+        file_lay.setContentsMargins(8, 0, 8, 8)
         file_lay.setSpacing(4)
 
         # Header with kebab
@@ -228,12 +231,20 @@ class FileNavigator(QWidget):
 
         # File list (scrollable rows)
         self._file_holder = QWidget()
+        self._file_holder.setAutoFillBackground(False)
+        self._file_holder.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._file_holder.setAttribute(Qt.WA_NoSystemBackground, True)
         self._file_layout = QVBoxLayout(self._file_holder)
         self._file_layout.setContentsMargins(0, 0, 0, 0)
         self._file_layout.setSpacing(2)
         self._file_layout.addStretch()
         scroll = QScrollArea()
         scroll.setObjectName("fileScroll")
+        scroll.setAttribute(Qt.WA_StyledBackground, True)
+        scroll.setAutoFillBackground(False)
+        scroll.viewport().setAutoFillBackground(False)
+        scroll.viewport().setAttribute(Qt.WA_TranslucentBackground, True)
+        scroll.viewport().setAttribute(Qt.WA_NoSystemBackground, True)
         scroll.setWidgetResizable(True)
         scroll.setWidget(self._file_holder)
         scroll.setFrameShape(QFrame.NoFrame)
