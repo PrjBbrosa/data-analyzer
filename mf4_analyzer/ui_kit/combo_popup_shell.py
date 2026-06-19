@@ -18,7 +18,7 @@ _MAX_QWIDGET_SIZE = 16777215
 _POPUP_VIEW_QSS = """
 QAbstractItemView {
     padding: 4px;
-    border: none;
+    border: 1px solid #cbd5e1;
     border-radius: 8px;
     background-color: #ffffff;
     outline: none;

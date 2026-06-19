@@ -8,6 +8,8 @@ an application event filter (install_combo_popup_shell), so this asserts
 the central mechanism covers plain QComboBox AND SearchableComboBox
 without any per-call-site opt-in.
 """
+from pathlib import Path
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QComboBox
 
@@ -74,9 +76,20 @@ def test_prepare_combo_popup_sets_first_frame_view_chrome(qapp):
 
     _assert_shell(view.window())
     assert view.frameShape() == view.NoFrame
+    assert "border: 1px solid #cbd5e1;" in view.styleSheet()
     assert "background-color: #ffffff" in viewport.styleSheet()
     assert viewport.palette().color(viewport.backgroundRole()).name().lower() == "#ffffff"
     combo.deleteLater()
+
+
+def test_combo_popup_global_qss_draws_inner_rounded_border():
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    selector = "QComboBox QAbstractItemView {"
+    start = qss.index(selector)
+    block = qss[start:qss.index("}", start)]
+
+    assert "border: 1px solid #cbd5e1;" in block
+    assert "border-radius: 8px;" in block
 
 
 def test_prepare_combo_popup_honors_fixed_popup_width_property(qapp):
