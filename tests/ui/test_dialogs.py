@@ -179,6 +179,63 @@ def test_pg_chart_options_reads_yscale_initial_state(qapp):
     assert dlg.combo_y_scale.currentText() == "对数"
 
 
+def _channel_editor_files(tmp_path):
+    import pandas as pd
+    from mf4_analyzer.io.file_data import FileData
+
+    df = pd.DataFrame({
+        "time": np.arange(20) / 100.0,
+        "rpm": np.arange(20.0),
+        "spd": np.arange(20.0) * 2,
+    })
+    fd = FileData(str(tmp_path / "demo.mf4"), df, list(df.columns), {}, 0)
+    return {"f0": fd}
+
+
+def test_single_channel_missing_source_warns(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui import dialogs
+
+    dlg = dialogs.ChannelEditorDialog(None, _channel_editor_files(tmp_path), "f0")
+    dlg.combo_src.setCurrentText("missing-source")
+    warning_calls = []
+    monkeypatch.setattr(
+        dialogs.QMessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warning_calls.append(args)),
+    )
+
+    dlg._create_single()
+
+    assert warning_calls
+    assert warning_calls[0][0] is dlg
+    assert warning_calls[0][1] == "无法创建"
+
+
+@pytest.mark.parametrize("missing_combo", ["a", "b"])
+def test_dual_channel_missing_channel_warns(qapp, tmp_path, monkeypatch, missing_combo):
+    from mf4_analyzer.ui import dialogs
+
+    dlg = dialogs.ChannelEditorDialog(None, _channel_editor_files(tmp_path), "f0")
+    dlg.combo_a.setCurrentText("rpm")
+    dlg.combo_b.setCurrentText("spd")
+    if missing_combo == "a":
+        dlg.combo_a.setCurrentText("missing-a")
+    else:
+        dlg.combo_b.setCurrentText("missing-b")
+    warning_calls = []
+    monkeypatch.setattr(
+        dialogs.QMessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warning_calls.append(args)),
+    )
+
+    dlg._create_dual()
+
+    assert warning_calls
+    assert warning_calls[0][0] is dlg
+    assert warning_calls[0][1] == "无法创建"
+
+
 def test_pg_chart_options_rebuilds_legend_idempotently(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 

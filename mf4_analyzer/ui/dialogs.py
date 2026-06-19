@@ -338,7 +338,9 @@ class ChannelEditorDialog(QDialog):
 
     def _create_single(self):
         src = self.combo_src.currentText()
-        if src not in self.fd.data.columns: return
+        if src not in self.fd.data.columns:
+            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+            return
         sig = self.fd.data[src].values.astype(float)
         t = self.fd.time_array;
         op = self.combo_op.currentIndex();
@@ -358,6 +360,7 @@ class ChannelEditorDialog(QDialog):
             elif op == 5:
                 r = np.abs(sig)
             else:
+                QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
                 return
             name = f"{prefixes[op]}{src}"
             while name in self.fd.data.columns or name in self.new_channels: name += "_1"
@@ -372,8 +375,12 @@ class ChannelEditorDialog(QDialog):
     def _create_dual(self):
         ch_a = self.combo_a.currentText()
         ch_b = self.combo_b.currentText()
-        if ch_a not in self.fd.data.columns and ch_a not in self.new_channels: return
-        if ch_b not in self.fd.data.columns and ch_b not in self.new_channels: return
+        if ch_a not in self.fd.data.columns and ch_a not in self.new_channels:
+            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+            return
+        if ch_b not in self.fd.data.columns and ch_b not in self.new_channels:
+            QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+            return
 
         # 获取数据
         if ch_a in self.new_channels:
@@ -406,6 +413,7 @@ class ChannelEditorDialog(QDialog):
             elif op == 5:
                 r = np.minimum(sig_a, sig_b)
             else:
+                QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
                 return
 
             # 生成名称

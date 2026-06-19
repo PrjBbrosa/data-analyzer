@@ -1804,6 +1804,7 @@ class MainWindow(
         import pandas as pd
         fd = self.files.get(fid)
         if fd is None or not channels:
+            self.toast("没有可导出的数据或未勾选通道", "warning")
             return
         fp, _ = QFileDialog.getSaveFileName(self, "导出 Excel", "", "Excel (*.xlsx)")
         if not fp:

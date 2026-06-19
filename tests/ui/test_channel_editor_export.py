@@ -1,6 +1,7 @@
 # tests/ui/test_channel_editor_export.py
 import csv
 import openpyxl
+import pytest
 from PyQt5.QtWidgets import QFileDialog
 
 
@@ -24,6 +25,36 @@ def test_do_export_excel_writes_selected(qapp, tmp_path, monkeypatch):
     wb = openpyxl.load_workbook(out)
     headers = [c.value for c in wb.active[1]]
     assert headers == ["Time", "rpm"]
+
+
+@pytest.mark.parametrize(
+    ("fid_kind", "channels"),
+    [
+        ("loaded", []),
+        ("missing", ["rpm"]),
+    ],
+)
+def test_do_export_excel_export_no_data_toasts_warning_without_save_dialog(
+    qapp, tmp_path, monkeypatch, fid_kind, channels
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"; _csv(a)
+    mw = MainWindow(); mw._load_one(str(a))
+    loaded_fid = next(iter(mw.files))
+    fid = loaded_fid if fid_kind == "loaded" else "missing-fid"
+
+    toasts = []
+    monkeypatch.setattr(mw, "toast", lambda msg, level="info": toasts.append((msg, level)))
+
+    def fail_save_dialog(*args, **kwargs):
+        raise AssertionError("save dialog must not open when export has no data")
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", fail_save_dialog)
+
+    mw._do_export_excel(fid, channels, include_time=True, use_range=False)
+
+    assert toasts == [("没有可导出的数据或未勾选通道", "warning")]
 
 
 def _make_files(tmp_path):
