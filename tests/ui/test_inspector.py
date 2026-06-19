@@ -3965,6 +3965,74 @@ def test_preset_bar_set_recommended_toggles_property(qapp):
         assert not bar._load_btns[n].text().startswith('★ ')
 
 
+def test_builtin_preset_second_left_click_restores_default_params(qapp):
+    from mf4_analyzer.ui.inspector_sections import PresetBar
+
+    applied = []
+    bar = PresetBar(
+        'test_kind_builtin_toggle',
+        lambda: {'mode': 'current'},
+        lambda d: applied.append(dict(d)),
+        builtin_defaults={
+            1: {'display_name': '频率优先', 'params': {'mode': 'frequency'}},
+        },
+        default_params={'mode': 'default'},
+    )
+
+    bar._on_left_click(1)
+    assert applied[-1] == {'mode': 'frequency'}
+    assert bar._load_btns[1].property('recommended') == 'true'
+
+    bar._on_left_click(1)
+    assert applied[-1] == {'mode': 'default'}
+    assert bar._load_btns[1].property('recommended') == 'false'
+
+
+def test_recommended_only_builtin_click_still_loads_preset(qapp):
+    from mf4_analyzer.ui.inspector_sections import PresetBar
+
+    applied = []
+    bar = PresetBar(
+        'test_kind_builtin_recommend_only',
+        lambda: {'mode': 'current'},
+        lambda d: applied.append(dict(d)),
+        builtin_defaults={
+            1: {'display_name': '频率优先', 'params': {'mode': 'frequency'}},
+        },
+        default_params={'mode': 'default'},
+    )
+
+    bar.set_recommended(1)
+    bar._on_left_click(1)
+
+    assert applied[-1] == {'mode': 'frequency'}
+    assert bar._load_btns[1].property('recommended') == 'true'
+
+
+def test_recommendation_change_clears_builtin_toggle_selection(qapp):
+    from mf4_analyzer.ui.inspector_sections import PresetBar
+
+    applied = []
+    bar = PresetBar(
+        'test_kind_builtin_recommendation_change',
+        lambda: {'mode': 'current'},
+        lambda d: applied.append(dict(d)),
+        builtin_defaults={
+            1: {'display_name': '频率优先', 'params': {'mode': 'frequency'}},
+            2: {'display_name': '均衡', 'params': {'mode': 'balanced'}},
+        },
+        default_params={'mode': 'default'},
+    )
+
+    bar._on_left_click(1)
+    bar.set_recommended(2)
+    bar._on_left_click(1)
+
+    assert applied[-1] == {'mode': 'frequency'}
+    assert bar._load_btns[1].property('recommended') == 'true'
+    assert bar._load_btns[2].property('recommended') == 'false'
+
+
 def _combo_text_hits(combo, value):
     return combo.findText(str(value)) >= 0
 
@@ -4008,6 +4076,28 @@ def test_fft_builtin_presets_apply_through_combos(qapp):
     assert params['t_win_s'] == 2.5
 
 
+def test_fft_builtin_preset_second_click_restores_defaults(qapp):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+    from mf4_analyzer.ui.inspector_sections._helpers import _preset_settings
+
+    settings = _preset_settings()
+    for slot in (1, 2, 3):
+        settings.remove(f"fft/preset_override/{slot}")
+    fc = FFTContextual()
+
+    fc.preset_bar._on_left_click(1)
+    assert fc.combo_win.currentText() == 'flattop'
+    assert fc.spin_overlap.value() == 75
+    assert fc.combo_avg_mode.currentText() == '线性平均'
+    assert fc.preset_bar._load_btns[1].property('recommended') == 'true'
+
+    fc.preset_bar._on_left_click(1)
+    assert fc.combo_win.currentText() == 'hanning'
+    assert fc.spin_overlap.value() == 50
+    assert fc.combo_avg_mode.currentText() == '单帧'
+    assert fc.preset_bar._load_btns[1].property('recommended') == 'false'
+
+
 def test_order_builtin_presets_apply_through_combos(qapp):
     from mf4_analyzer.ui.inspector_sections import (
         OrderContextual, BUILTIN_PRESET_KEYS,
@@ -4044,6 +4134,26 @@ def test_order_builtin_presets_apply_through_combos(qapp):
     assert params['nfft_mode'] == 'auto'
     assert params['nfft_preview'] == 8192
     assert f"{auto}(8192)" in oc._order_summary_text()
+
+
+def test_order_builtin_preset_second_click_restores_defaults(qapp):
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+    from mf4_analyzer.ui.inspector_sections._helpers import _preset_settings
+
+    settings = _preset_settings()
+    for slot in (1, 2, 3):
+        settings.remove(f"order/preset_override/{slot}")
+    oc = OrderContextual()
+
+    oc.preset_bar._on_left_click(1)
+    assert oc.spin_order_res.value() == 0.05
+    assert oc.spin_time_res.value() == 0.10
+    assert oc.preset_bar._load_btns[1].property('recommended') == 'true'
+
+    oc.preset_bar._on_left_click(1)
+    assert oc.spin_order_res.value() == 0.10
+    assert oc.spin_time_res.value() == 0.05
+    assert oc.preset_bar._load_btns[1].property('recommended') == 'false'
 
 
 def test_fft_time_builtin_presets_apply_through_combos(qtbot):
@@ -4087,6 +4197,31 @@ def test_fft_time_builtin_presets_apply_through_combos(qtbot):
     assert ctx._t_win_s == 2.5
     assert ctx.combo_amp_unit.currentText() == "dB"
     assert "自动(" in ctx._tf_summary_text()
+
+
+def test_fft_time_builtin_preset_second_click_restores_defaults(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+    from mf4_analyzer.ui.inspector_sections._helpers import _preset_settings
+
+    settings = _preset_settings()
+    for slot in (1, 2, 3):
+        settings.remove(f"fft_time/preset_override/{slot}")
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+
+    ctx.preset_bar._on_left_click(1)
+    assert ctx.combo_win.currentText() == 'flattop'
+    assert ctx.spin_overlap.value() == 75
+    assert ctx.chk_z_auto.isChecked() is True
+    assert ctx.preset_bar._load_btns[1].property('recommended') == 'true'
+
+    ctx.preset_bar._on_left_click(1)
+    assert ctx.combo_win.currentText() == 'hanning'
+    assert ctx.spin_overlap.value() == 80
+    assert ctx.chk_z_auto.isChecked() is False
+    assert ctx.spin_z_floor.value() == -70.0
+    assert ctx.spin_z_ceiling.value() == -20.0
+    assert ctx.preset_bar._load_btns[1].property('recommended') == 'false'
 
 
 def test_order_builtin_presets_respect_order_nyquist(qapp):

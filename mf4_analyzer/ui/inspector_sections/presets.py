@@ -341,6 +341,7 @@ class PresetBar(QWidget):
 
     def __init__(
         self, kind, collect_fn, apply_fn, parent=None, builtin_defaults=None,
+        default_params=None,
     ):
         """Construct a preset bar.
 
@@ -357,6 +358,10 @@ class PresetBar(QWidget):
             Mapping ``slot -> {'display_name': str, 'params': dict}``.
             When provided, the bar runs in builtin-aware mode (see class
             docstring).
+        default_params : dict | None
+            Baseline params to restore when the currently loaded builtin slot is
+            clicked again. This is distinct from reset-to-default, which edits
+            the slot override stored in QSettings.
         """
         super().__init__(parent)
         self.setObjectName("inspectorPresetBar")
@@ -364,10 +369,17 @@ class PresetBar(QWidget):
         self._collect = collect_fn
         self._apply = apply_fn
         self._builtins = builtin_defaults  # None => legacy mode
+        self._default_params = (
+            dict(default_params) if isinstance(default_params, dict) else None
+        )
         self._hover_card = _PresetHoverCard()
         self._hover_slot = None
         # Slot currently flagged as the unit-推荐 highlight (None => none).
         self._recommended_slot = None
+        # Slot that was actually applied by a left-click. A unit recommendation
+        # can also set the visual highlight, but it must not make the next click
+        # behave as a toggle-off before the preset has ever been loaded.
+        self._selected_slot = None
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -497,6 +509,8 @@ class PresetBar(QWidget):
         """
         if slot is not None and slot not in self.SLOTS:
             slot = None
+        if slot != self._selected_slot:
+            self._selected_slot = None
         self._recommended_slot = slot
         self._refresh_states()
 
@@ -645,8 +659,12 @@ class PresetBar(QWidget):
     # ---- actions ----
     def _on_left_click(self, slot):
         """Slot left-click: load if filled, else save current (legacy
-        mode) or load builtin (builtin mode).
+        mode) or load builtin (builtin mode). Clicking the already-applied
+        builtin slot again restores the contextual's default params.
         """
+        if self._builtins is not None and self._selected_slot == slot:
+            self._restore_default_params(slot)
+            return
         entry = self._read(slot)
         if entry is None and self._builtins is None:
             # Legacy mode + empty slot → primary action is "save current".
@@ -685,8 +703,23 @@ class PresetBar(QWidget):
         except Exception as e:
             self.acknowledged.emit("error", f"加载失败: {e}")
             return
+        self._selected_slot = slot
         self.set_recommended(slot)
         self.acknowledged.emit("success", f"已加载「{name}」")
+
+    def _restore_default_params(self, slot):
+        params = self._default_params
+        if not isinstance(params, dict):
+            self.set_recommended(None)
+            self.acknowledged.emit("info", "已取消预设")
+            return
+        try:
+            self._apply(dict(params))
+        except Exception as e:
+            self.acknowledged.emit("error", f"恢复默认失败: {e}")
+            return
+        self.set_recommended(None)
+        self.acknowledged.emit("info", f"已取消「{self._default_name(slot)}」，恢复默认参数")
 
     def _rename(self, slot):
         entry = self._read(slot)

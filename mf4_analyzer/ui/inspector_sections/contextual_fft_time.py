@@ -258,6 +258,7 @@ class FFTTimeContextual(QWidget):
             self._apply_preset,
             parent=self,
             builtin_defaults=builtin_defaults,
+            default_params=self._collect_preset(),
         )
         self._tf_section.add_persistent(self.preset_bar)
 

@@ -233,6 +233,7 @@ class FFTContextual(QWidget):
         self.preset_bar = PresetBar(
             'fft', self._collect_preset, self._apply_preset, parent=self,
             builtin_defaults=self._builtin_preset_defaults(),
+            default_params=self._collect_preset(),
         )
         self._fft_section.add_persistent(self.preset_bar)
 
