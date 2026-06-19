@@ -783,10 +783,10 @@ QFrame#rightVerdictBanner[verdict="error"] QLabel {
 
 /* ============ Left navigator ============ */
 FileNavigator {
-    background-color: #f5f7fb;
-    border-right: 1px solid #eef2f7;
+    background-color: #f0f3f7;
+    border-right: 1px solid #dde4ee;
 }
-QWidget#fileArea { background-color: #f5f7fb; }
+QWidget#fileArea { background-color: #f0f3f7; }
 
 /* Pane-level heading — 13/700, breathe via padding-right for tracking */
 QLabel#paneHeader {
