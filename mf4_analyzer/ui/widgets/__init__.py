@@ -22,6 +22,13 @@ from PyQt5.QtGui import QColor, QBrush, QIcon, QPainter, QPen, QPixmap
 from ...ui_kit.icons import Icons, icon_device_pixel_ratio
 
 
+def _fmt_rate(fs):
+    """Format a sample rate in Hz or kHz for display (≥1000 Hz → kHz)."""
+    if fs >= 1000:
+        return f"{fs / 1000:.1f} kHz"
+    return f"{fs:.0f} Hz"
+
+
 def _swatch_pixmap(color, size=11, ratio=None):
     """Render the channel color swatch at ``ratio x`` physical resolution and
     tag it with that devicePixelRatio so HiDPI (Retina) screens paint it crisp
@@ -281,7 +288,7 @@ class MultiFileChannelWidget(QWidget):
 
             # Create raster subgroup node
             n_rows = len(fd.data)
-            raster_item = QTreeWidgetItem([f"{fd.fs:.1f} Hz", str(n_rows)])
+            raster_item = QTreeWidgetItem([_fmt_rate(fd.fs), str(n_rows)])
             raster_item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
             raster_item.setFlags(raster_item.flags() | Qt.ItemIsUserCheckable)
             raster_item.setCheckState(0, Qt.Unchecked)

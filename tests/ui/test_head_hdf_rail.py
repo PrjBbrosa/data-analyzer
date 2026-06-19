@@ -89,6 +89,13 @@ def test_channel_tree_nested_structure(qapp, tmp_path):
     rd0 = r0.data(0, Qt.UserRole)
     assert rd0 and rd0[0] == 'raster', f"raster node role should be 'raster', got {rd0}"
 
+    # Raster node labels use kHz for rates ≥ 1000 Hz
+    r1 = file_node.child(1)
+    assert "kHz" in r0.text(0), f"fast raster (2000 Hz) label should use kHz, got {r0.text(0)!r}"
+    assert "2.0 kHz" in r0.text(0), f"fast raster label should be '2.0 kHz', got {r0.text(0)!r}"
+    assert "kHz" in r1.text(0), f"slow raster (1000 Hz) label should use kHz, got {r1.text(0)!r}"
+    assert "1.0 kHz" in r1.text(0), f"slow raster label should be '1.0 kHz', got {r1.text(0)!r}"
+
     # Channels at 3rd level
     assert r0.childCount() == 2, "fast raster has 2 channel leaves"
     ch0 = r0.child(0)
