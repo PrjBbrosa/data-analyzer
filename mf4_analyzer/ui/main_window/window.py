@@ -1803,7 +1803,12 @@ class MainWindow(
         from PyQt5.QtWidgets import QFileDialog, QMessageBox
         import pandas as pd
         fd = self.files.get(fid)
-        if fd is None or not channels:
+        requested_channels = channels or []
+        valid_channels = [
+            ch for ch in requested_channels
+            if fd is not None and ch in fd.data.columns
+        ]
+        if fd is None or not valid_channels:
             self.toast("没有可导出的数据或未勾选通道", "warning")
             return
         fp, _ = QFileDialog.getSaveFileName(self, "导出 Excel", "", "Excel (*.xlsx)")
@@ -1813,9 +1818,8 @@ class MainWindow(
             df = pd.DataFrame()
             if include_time and fd.time_array is not None:
                 df['Time'] = fd.time_array
-            for ch in channels:
-                if ch in fd.data.columns:
-                    df[ch] = fd.data[ch].values
+            for ch in valid_channels:
+                df[ch] = fd.data[ch].values
             if use_range and fd.time_array is not None:
                 lo, hi = self.inspector.top.range_values()
                 m = (fd.time_array >= lo) & (fd.time_array <= hi)

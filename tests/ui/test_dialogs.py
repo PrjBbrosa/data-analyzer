@@ -209,6 +209,7 @@ def test_single_channel_missing_source_warns(qapp, tmp_path, monkeypatch):
     assert warning_calls
     assert warning_calls[0][0] is dlg
     assert warning_calls[0][1] == "无法创建"
+    assert "源通道不存在或参数越界" in warning_calls[0][2]
 
 
 @pytest.mark.parametrize("missing_combo", ["a", "b"])
@@ -234,6 +235,50 @@ def test_dual_channel_missing_channel_warns(qapp, tmp_path, monkeypatch, missing
     assert warning_calls
     assert warning_calls[0][0] is dlg
     assert warning_calls[0][1] == "无法创建"
+    assert "源通道不存在或参数越界" in warning_calls[0][2]
+
+
+def test_single_channel_unknown_op_warns(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui import dialogs
+
+    dlg = dialogs.ChannelEditorDialog(None, _channel_editor_files(tmp_path), "f0")
+    dlg.combo_src.setCurrentText("rpm")
+    monkeypatch.setattr(dlg.combo_op, "currentIndex", lambda: 99)
+    warning_calls = []
+    monkeypatch.setattr(
+        dialogs.QMessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warning_calls.append(args)),
+    )
+
+    dlg._create_single()
+
+    assert warning_calls
+    assert warning_calls[0][0] is dlg
+    assert warning_calls[0][1] == "无法创建"
+    assert "源通道不存在或参数越界" in warning_calls[0][2]
+
+
+def test_dual_channel_unknown_op_warns(qapp, tmp_path, monkeypatch):
+    from mf4_analyzer.ui import dialogs
+
+    dlg = dialogs.ChannelEditorDialog(None, _channel_editor_files(tmp_path), "f0")
+    dlg.combo_a.setCurrentText("rpm")
+    dlg.combo_b.setCurrentText("spd")
+    monkeypatch.setattr(dlg.combo_op2, "currentIndex", lambda: 99)
+    warning_calls = []
+    monkeypatch.setattr(
+        dialogs.QMessageBox,
+        "warning",
+        staticmethod(lambda *args, **kwargs: warning_calls.append(args)),
+    )
+
+    dlg._create_dual()
+
+    assert warning_calls
+    assert warning_calls[0][0] is dlg
+    assert warning_calls[0][1] == "无法创建"
+    assert "源通道不存在或参数越界" in warning_calls[0][2]
 
 
 def test_pg_chart_options_rebuilds_legend_idempotently(qapp):

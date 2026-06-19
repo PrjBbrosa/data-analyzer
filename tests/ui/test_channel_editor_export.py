@@ -31,6 +31,7 @@ def test_do_export_excel_writes_selected(qapp, tmp_path, monkeypatch):
     ("fid_kind", "channels"),
     [
         ("loaded", []),
+        ("loaded", ["missing-channel"]),
         ("missing", ["rpm"]),
     ],
 )
