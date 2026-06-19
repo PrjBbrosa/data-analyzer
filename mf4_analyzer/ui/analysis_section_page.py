@@ -174,11 +174,8 @@ class AnalysisSectionPage(QWidget):
     # -- pane management -----------------------------------------------
     def _make_card(self):
         card = self._card_factory()
-        # WA_StyledBackground so the #chartCard focus border actually paints
-        # on the plain QWidget card; without it Qt paints only the rounded
-        # corners and the straight edges stay un-bordered, hiding the accent
-        # behind the margin-0 canvas child (lesson
-        # 2026-06-04-dynamic-property-border-needs-styledbackground-and-padding).
+        # Keep the card eligible for the shared #chartCard chrome. Focus itself
+        # is painted by _ChartCard.set_focus_marker(), matching TimeDomain.
         card.setAttribute(Qt.WA_StyledBackground, True)
         card.installEventFilter(self)
         canvas = getattr(card, 'canvas', None)
@@ -389,18 +386,14 @@ class AnalysisSectionPage(QWidget):
     def _apply_focus_style(self) -> None:
         focus_accent = self._active_view_focus_accent()
         for i, card in enumerate(self._cards):
-            accent = (
-                focus_accent
-                if (i == self._focused and len(self._cards) > 1)
-                else "transparent"
-            )
-            # padding insets the layout content rect so the margin-0 canvas
-            # child stops overpainting the 1px ring (same lesson as
-            # WA_StyledBackground above).
-            card.setStyleSheet(
-                f"QWidget#chartCard {{ border: 1px solid {accent}; "
-                f"padding: {1 if accent != 'transparent' else 0}px; }}"
-            )
+            focused = i == self._focused and len(self._cards) > 1
+            marker = getattr(card, 'set_focus_marker', None)
+            if callable(marker):
+                marker(focus_accent if focused else None)
+            # Drop the legacy per-card focus border so the pyqtgraph data area
+            # does not get inset by 1px and the shared #chartCard QSS wins.
+            if card.styleSheet():
+                card.setStyleSheet("")
 
     # -- compare: linked zoom (spec §6.1) --------------------------------
     def set_linked(self, linked: bool) -> None:

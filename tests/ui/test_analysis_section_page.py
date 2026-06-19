@@ -25,6 +25,12 @@ class _FakeCard:
         w = QWidget()
         w.setObjectName("chartCard")
         w.canvas = PgHeatmapCanvas(w)
+        w._focus_marker_color = None
+
+        def set_focus_marker(color):
+            w._focus_marker_color = color
+
+        w.set_focus_marker = set_focus_marker
         return w
 
 
@@ -35,6 +41,12 @@ class _FakeLineCard:
         w = QWidget()
         w.setObjectName("chartCard")
         w.canvas = PgLineCanvas(w)
+        w._focus_marker_color = None
+
+        def set_focus_marker(color):
+            w._focus_marker_color = color
+
+        w.set_focus_marker = set_focus_marker
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(w.canvas)
@@ -49,6 +61,12 @@ class _FakeSliceCard:
         w = QWidget()
         w.setObjectName("chartCard")
         w.canvas = PgHeatmapCanvas(w, with_slice=True)
+        w._focus_marker_color = None
+
+        def set_focus_marker(color):
+            w._focus_marker_color = color
+
+        w.set_focus_marker = set_focus_marker
         lay = QVBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(w.canvas)
@@ -322,51 +340,45 @@ def test_focus_signal_emitted(page):
     assert received == [1]
 
 
-def test_split_focus_border_uses_active_view_tab_color(page):
+def test_split_focus_marker_uses_active_view_tab_color(page):
     page.manager.set_color(page.manager.active, "#e8590c")
 
     page.enter_split()
     page.set_focused_index(1)
 
-    assert "#e8590c" in page._cards[1].styleSheet()
-    assert "#e8590c" not in page._cards[0].styleSheet()
-    assert "transparent" in page._cards[0].styleSheet()
+    assert page._cards[1]._focus_marker_color == "#e8590c"
+    assert page._cards[0]._focus_marker_color is None
 
 
-def test_focus_border_invalid_view_color_falls_back_to_default(page):
+def test_focus_marker_invalid_view_color_falls_back_to_default(page):
     page.manager.set_color(page.manager.active, "bad")
 
     page.enter_split()
     page.set_focused_index(1)
 
-    assert _FOCUS_ACCENT in page._cards[1].styleSheet()
-    assert "bad" not in page._cards[1].styleSheet()
-    assert _FOCUS_ACCENT not in page._cards[0].styleSheet()
-    assert "transparent" in page._cards[0].styleSheet()
+    assert page._cards[1]._focus_marker_color == _FOCUS_ACCENT
+    assert page._cards[0]._focus_marker_color is None
 
 
-def test_single_analysis_pane_does_not_show_focus_border(page):
+def test_single_analysis_pane_does_not_show_focus_marker(page):
     page.manager.set_color(page.manager.active, "#e8590c")
 
     page.set_focused_index(0)
 
-    style = page._cards[0].styleSheet()
-    assert "#e8590c" not in style
-    assert "border: 1px solid transparent" in style
-    assert "padding: 0px" in style
+    assert page._cards[0]._focus_marker_color is None
 
 
-def test_focus_border_refreshes_when_active_view_color_changes(page):
+def test_focus_marker_refreshes_when_active_view_color_changes(page):
     page.enter_split()
     page.set_focused_index(1)
 
     page.manager.set_color(page.manager.active, "#059669")
 
-    assert "#059669" in page._cards[1].styleSheet()
-    assert "#059669" not in page._cards[0].styleSheet()
+    assert page._cards[1]._focus_marker_color == "#059669"
+    assert page._cards[0]._focus_marker_color is None
 
 
-def test_focus_border_refreshes_when_active_view_changes(page):
+def test_focus_marker_refreshes_when_active_view_changes(page):
     new_idx = page.manager.new_view()
     page.manager.set_color(new_idx, "#9c36b5")
     page.manager.set_active(0)
@@ -375,8 +387,30 @@ def test_focus_border_refreshes_when_active_view_changes(page):
 
     page.manager.set_active(new_idx)
 
-    assert "#9c36b5" in page._cards[1].styleSheet()
-    assert "#9c36b5" not in page._cards[0].styleSheet()
+    assert page._cards[1]._focus_marker_color == "#9c36b5"
+    assert page._cards[0]._focus_marker_color is None
+
+
+def test_real_analysis_card_focus_marker_is_three_pixel_top_bar(qtbot, qapp):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(1000, 620)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode("fft")
+    page = cs.page_fft
+    page.manager.set_color(page.manager.active, "#11aa77")
+
+    page.enter_split()
+    page.set_focused_index(1)
+    qapp.processEvents()
+
+    assert page._cards[1]._focus_bar.height() == 3
+    assert page._cards[1]._focus_bar.isHidden() is False
+    assert "#11aa77" in page._cards[1]._focus_bar.styleSheet()
+    assert page._cards[0]._focus_bar.isHidden() is True
 
 
 # -- V8: locked color levels -----------------------------------------------
