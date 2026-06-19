@@ -158,6 +158,24 @@ def test_fft_split_cache_render_uses_channel_swatch_colors(two_file_win):
     assert c1._amp_curves[0].opts["pen"].color().name() == green
 
 
+def test_fft_cache_miss_shows_click_compute_empty_hint(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fids = list(win.files.keys())
+
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    state.panes[0].sources = [(fids[0], "speed")]
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    win._render_analysis_view_from_cache("fft", state)
+
+    assert "点击" in canvas._empty_hint_text
+    assert "计算" in canvas._empty_hint_text
+    assert "生成" in canvas._empty_hint_text
+    assert win.statusBar.currentMessage() == "参数/源已就绪，点击计算"
+
+
 def test_fft_mode_channel_selection_previews_time_before_compute(two_file_win, qapp):
     win = two_file_win
     win.toolbar._set_mode("fft")

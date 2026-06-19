@@ -237,6 +237,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._split_title_width = None
         self._spectrum_stale = False
         self._stale_banner = None
+        self._empty_hint_text = ''
+        self._empty_hint_item = None
         self._bottom_tick_target = None
         self._bottom_tick_density = None
 
@@ -617,9 +619,70 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         return True
 
     # ------------------------------------------------------------------
+    # empty hint (source/params selected, result cache not ready)
+    # ------------------------------------------------------------------
+    def show_empty_hint(self, text: str) -> None:
+        self._empty_hint_text = str(text or '')
+        if not self._empty_hint_text:
+            self.clear_empty_hint()
+            return
+        if self._empty_hint_item is None:
+            hint = pg.TextItem(
+                '',
+                color='#6b7280',
+                fill=pg.mkBrush(255, 255, 255, 220),
+                border=pg.mkPen('#d1d5db', width=1),
+                anchor=(0.5, 0.5),
+            )
+            hint.setZValue(1000)
+            self._empty_hint_item = hint
+        self._empty_hint_item.setText(self._empty_hint_text)
+        if self._empty_hint_item.scene() is None:
+            self._plot_amp.vb.addItem(self._empty_hint_item, ignoreBounds=True)
+        self._empty_hint_item.setVisible(True)
+        for sig in (self._plot_amp.vb.sigResized,
+                    self._plot_amp.vb.sigRangeChanged):
+            try:
+                sig.disconnect(self._reposition_empty_hint)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                sig.connect(self._reposition_empty_hint)
+            except Exception:
+                pass
+        self._reposition_empty_hint()
+
+    def _reposition_empty_hint(self, *_args) -> None:
+        if self._empty_hint_item is None or not self._empty_hint_text:
+            return
+        try:
+            rect = self._plot_amp.vb.sceneBoundingRect()
+            self._empty_hint_item.setPos(
+                self._plot_amp.vb.mapSceneToView(rect.center()))
+        except Exception:
+            pass
+
+    def clear_empty_hint(self) -> None:
+        self._empty_hint_text = ''
+        if self._empty_hint_item is None:
+            return
+        for sig in (self._plot_amp.vb.sigResized,
+                    self._plot_amp.vb.sigRangeChanged):
+            try:
+                sig.disconnect(self._reposition_empty_hint)
+            except (TypeError, RuntimeError):
+                pass
+        try:
+            self._plot_amp.vb.removeItem(self._empty_hint_item)
+        except Exception:
+            pass
+        self._empty_hint_item = None
+
+    # ------------------------------------------------------------------
     def plot_spectra(self, entries, *, xlim, amp_label, title,
                      y_auto=True, y_min=0.0, y_max=0.0):
         """Plot FFT curves and show all source time traces below."""
+        self.clear_empty_hint()
         for p, curves in ((self._plot_amp, self._amp_curves),
                           (self._plot_time, self._time_curves)):
             for c in curves:
@@ -820,6 +883,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._reframe_time_y_to_grid()
 
     def full_reset(self) -> None:
+        self.clear_empty_hint()
         for p, curves in ((self._plot_amp, self._amp_curves),
                           (self._plot_time, self._time_curves)):
             for c in curves:

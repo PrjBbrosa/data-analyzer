@@ -535,6 +535,8 @@ class AnalysisMixin:
                     # No cached curves (empty sources, or all sources missing
                     # from the cache) -> empty canvas state.
                     self._clear_analysis_canvas(canvas)
+                    if pane.sources:
+                        self._show_analysis_empty_hint(canvas)
             else:
                 if not pane.sources:
                     self._clear_analysis_canvas(canvas)
@@ -548,14 +550,33 @@ class AnalysisMixin:
                 if result is None:
                     any_missing = True
                     self._clear_analysis_canvas(canvas)
+                    self._show_analysis_empty_hint(canvas)
                 else:
                     self._render_cached_heatmap(section, canvas, result)
         if any_missing:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
 
+    def _show_analysis_empty_hint(self, canvas):
+        text = "点击『计算』生成"
+        if hasattr(canvas, 'show_empty_hint'):
+            try:
+                canvas.show_empty_hint(text)
+                return
+            except Exception:
+                pass
+        try:
+            canvas._empty_hint_text = text
+        except Exception:
+            pass
+
     def _clear_analysis_canvas(self, canvas):
         if hasattr(canvas, 'full_reset'):
             try:
                 canvas.full_reset()
+            except Exception:
+                pass
+        if hasattr(canvas, 'clear_empty_hint'):
+            try:
+                canvas.clear_empty_hint()
             except Exception:
                 pass

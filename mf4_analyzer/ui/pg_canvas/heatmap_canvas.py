@@ -616,6 +616,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._split_title_width = None
         self._remarks = []
         self._remark_enabled = False
+        self._empty_hint_text = ''
+        self._empty_hint_item = None
         self._mouse_mode_controller = None
         self._bottom_tick_target = None
         self._bottom_tick_density = None
@@ -881,6 +883,66 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._plot.setYRange(float(y0), float(y1), padding=0)
 
     # ------------------------------------------------------------------
+    # empty hint (source/params selected, result cache not ready)
+    # ------------------------------------------------------------------
+    def show_empty_hint(self, text: str) -> None:
+        self._empty_hint_text = str(text or '')
+        if not self._empty_hint_text:
+            self.clear_empty_hint()
+            return
+        if self._empty_hint_item is None:
+            hint = pg.TextItem(
+                '',
+                color='#6b7280',
+                fill=pg.mkBrush(255, 255, 255, 220),
+                border=pg.mkPen('#d1d5db', width=1),
+                anchor=(0.5, 0.5),
+            )
+            hint.setZValue(1000)
+            self._empty_hint_item = hint
+        self._empty_hint_item.setText(self._empty_hint_text)
+        if self._empty_hint_item.scene() is None:
+            self._plot.vb.addItem(self._empty_hint_item, ignoreBounds=True)
+        self._empty_hint_item.setVisible(True)
+        for sig in (self._plot.vb.sigResized,
+                    self._plot.vb.sigRangeChanged):
+            try:
+                sig.disconnect(self._reposition_empty_hint)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                sig.connect(self._reposition_empty_hint)
+            except Exception:
+                pass
+        self._reposition_empty_hint()
+
+    def _reposition_empty_hint(self, *_args) -> None:
+        if self._empty_hint_item is None or not self._empty_hint_text:
+            return
+        try:
+            rect = self._plot.vb.sceneBoundingRect()
+            self._empty_hint_item.setPos(
+                self._plot.vb.mapSceneToView(rect.center()))
+        except Exception:
+            pass
+
+    def clear_empty_hint(self) -> None:
+        self._empty_hint_text = ''
+        if self._empty_hint_item is None:
+            return
+        for sig in (self._plot.vb.sigResized,
+                    self._plot.vb.sigRangeChanged):
+            try:
+                sig.disconnect(self._reposition_empty_hint)
+            except (TypeError, RuntimeError):
+                pass
+        try:
+            self._plot.vb.removeItem(self._empty_hint_item)
+        except Exception:
+            pass
+        self._empty_hint_item = None
+
+    # ------------------------------------------------------------------
     # main API (signature mirrors canvases.PlotCanvas.plot_or_update_heatmap)
     # ------------------------------------------------------------------
     def plot_or_update_heatmap(
@@ -893,6 +955,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         vmin=None, vmax=None,
         x_coords=None, y_coords=None,
     ):
+        self.clear_empty_hint()
         # Remember the axis labels + coordinate arrays so the slice can read
         # them (the slice plots amplitude against the OTHER axis). When coords
         # are not supplied they are derived from the extents + matrix shape in
@@ -991,6 +1054,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         hidden) so a stale color scale never outlives its data; the next
         ``plot_or_update_heatmap`` recreates it.
         """
+        self.clear_empty_hint()
         self.clear_remarks()
         self._img.clear()
         if self._cbar is not None:
