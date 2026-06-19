@@ -641,6 +641,73 @@ def test_fft_time_split_cache_hit_renders_both_panes_without_recompute(
     assert page.pane_canvas(1)._result is cache.get(k1)
 
 
+def test_fft_time_all_cached_emits_info_toast(two_file_win, qtbot, monkeypatch):
+    win = two_file_win
+    _fids, page = _split_fft_time_two_sources(win)
+
+    win.do_fft_time()
+    _drain_fft_time_queue(win, qtbot)
+    assert page.pane_canvas(0).has_result()
+    assert page.pane_canvas(1).has_result()
+
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+    page.pane_canvas(0).full_reset()
+    page.pane_canvas(1).full_reset()
+
+    win.do_fft_time()
+
+    assert win._fft_time_thread is None
+    assert calls == [("info", "已用缓存结果（参数未变）· 2 图")]
+    assert page.pane_canvas(0).has_result()
+    assert page.pane_canvas(1).has_result()
+
+
+def test_fft_time_skip_missing_source_warns_without_short_signal_reason(
+    two_file_win, qtbot, monkeypatch
+):
+    win = two_file_win
+    _fids, _page = _split_fft_time_two_sources(win)
+    mgr = win.analysis_managers["fft_time"]
+    state = mgr.get(mgr.active)
+    state.panes[1].sources = [(state.panes[1].sources[0][0], "missing_signal")]
+
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win.do_fft_time()
+    _drain_fft_time_queue(win, qtbot)
+
+    assert calls
+    level, msg = calls[-1]
+    assert level == "warning"
+    assert "源通道缺失" in msg
+    assert "信号过短" not in msg
+
+
+def test_fft_time_reentry_busy_toast(two_file_win, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+
+    class RunningThread:
+        def isRunning(self):
+            return True
+
+        def quit(self):
+            pass
+
+        def wait(self, _timeout=None):
+            return True
+
+    win._fft_time_thread = RunningThread()
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win.do_fft_time()
+
+    assert calls == [("info", "FFT-vs-Time进行中，请稍候…")]
+
+
 def test_fft_time_single_pane_unchanged_by_queue(two_file_win, qtbot):
     # Regression guard: a non-split (1-pane) view computes exactly the focused
     # pane's source — V7 behaviour — and produces exactly one cache entry.

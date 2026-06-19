@@ -5,6 +5,7 @@ import numpy as np
 from PyQt5.QtCore import QThread
 
 from ...signal import resolve_nfft
+from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 
 
@@ -229,7 +230,11 @@ class FFTTimeMixin:
             self._fft_time_thread is not None
             and self._fft_time_thread.isRunning()
         ):
-            self.statusBar.showMessage("正在计算…")
+            self._emit_compute_feedback(
+                ComputeOutcome(),
+                busy=True,
+                section_label="FFT-vs-Time",
+            )
             return
         mgr = self.analysis_managers['fft_time']
         state = mgr.get(mgr.active)
@@ -245,7 +250,7 @@ class FFTTimeMixin:
         )
         queue = []
         any_source = False
-        last_cached_nfft = None
+        outcome = ComputeOutcome()
         for pane_idx in pane_order:
             sources = state.panes[pane_idx].sources
             if not sources:
@@ -276,10 +281,9 @@ class FFTTimeMixin:
                     if cached is not None and analysis_key is not None:
                         cache.put(analysis_key, cached)
             if cached is not None:
-                last_cached_nfft = render_p.get(
-                    'nfft_effective', render_p.get('nfft'))
                 self._render_fft_time_on(
                     page.pane_canvas(pane_idx), cached, render_p)
+                outcome.cached += 1
             else:
                 queue.append((pane_idx, fid, ch))
 
@@ -289,15 +293,11 @@ class FFTTimeMixin:
                 # so the standalone-signal UX + existing tests are unchanged.
                 self._do_fft_time_single(force=force)
                 return
-            self.statusBar.showMessage(
-                "使用缓存结果 · NFFT %s" % (
-                    last_cached_nfft
-                    if last_cached_nfft is not None
-                    else p.get('nfft_effective', p.get('nfft'))
-                ))
+            self._emit_compute_feedback(outcome, section_label="FFT-vs-Time")
             return
 
         self._fft_time_queue = queue
+        self._fft_time_outcome = outcome
         self._start_next_fft_time_job()
 
     def _do_fft_time_single(self, force=False):
@@ -397,7 +397,19 @@ class FFTTimeMixin:
             ):
                 return
         # Queue drained.
-        self.statusBar.showMessage("FFT vs Time 完成")
+        self._finish_fft_time_outcome_feedback()
+
+    def _finish_fft_time_outcome_feedback(self):
+        outcome = getattr(self, '_fft_time_outcome', None)
+        if outcome is None:
+            return
+        self._emit_compute_feedback(outcome, section_label="FFT-vs-Time")
+        self._fft_time_outcome = None
+
+    def _record_fft_time_skip(self, reason):
+        outcome = getattr(self, '_fft_time_outcome', None)
+        if outcome is not None:
+            outcome.skipped.append(reason)
 
     def _dispatch_fft_time_job(
         self, pane_idx, fid, ch, force=False,
@@ -409,16 +421,25 @@ class FFTTimeMixin:
         (caller advances to the next queued job)."""
         from ...signal import SpectrogramParams
         fid, ch, t, sig, fd = self._fft_time_signal_for((fid, ch))
-        if sig is None or len(sig) < 2:
+        if sig is None:
+            self._record_fft_time_skip("源通道缺失")
+            return False
+        if len(sig) < 2:
+            self._record_fft_time_skip("信号过短")
             return False
         # Pre-flight uniformity gate (T2, 2026-04-26): rebuild a non-uniform
         # time axis BEFORE dispatching the worker. Best-effort per pane —
         # a failed rebuild skips this job, not the whole queue.
         if not self._check_uniform_or_prompt(fd, 'fft_time'):
+            self._record_fft_time_skip("时间轴非均匀")
             return False
         # The rebuild may have rewritten ``fd.time_array``; re-fetch.
         fid, ch, t, sig, fd = self._fft_time_signal_for((fid, ch))
-        if sig is None or len(sig) < 2:
+        if sig is None:
+            self._record_fft_time_skip("源通道缺失")
+            return False
+        if len(sig) < 2:
+            self._record_fft_time_skip("信号过短")
             return False
         p = self.inspector.fft_time_ctx.get_params()
         if (
@@ -432,6 +453,7 @@ class FFTTimeMixin:
         if rng is not None:
             t, sig = self._mask_time_range(t, sig, time_range=rng)
             if len(sig) < 2:
+                self._record_fft_time_skip("样本不足")
                 return False
             effective_time_range = rng
         else:
@@ -585,6 +607,9 @@ class FFTTimeMixin:
             self._fft_time_cache_put(key, result)
         if analysis_key is not None:
             self.analysis_caches['fft_time'].put(analysis_key, result)
+        outcome = getattr(self, '_fft_time_outcome', None)
+        if outcome is not None:
+            outcome.computed += 1
         if p is not None:
             # V7b: render onto the SPECIFIC pane this job was computed for,
             # never the focused pane / pane 0. ``pane_idx`` falls back to the
@@ -628,7 +653,11 @@ class FFTTimeMixin:
         重建时间轴 manually.
         """
         msg = str(message)
-        self.toast(msg, "error")
+        outcome = getattr(self, '_fft_time_outcome', None)
+        if outcome is not None:
+            outcome.failed += 1
+        else:
+            self.toast(msg, "error")
         self.statusBar.showMessage(f"FFT vs Time 错误: {message}")
 
     def _on_fft_time_progress(self, current, total):
@@ -660,3 +689,5 @@ class FFTTimeMixin:
         self._fft_time_worker = None
         if self._fft_time_queue:
             self._start_next_fft_time_job()
+        else:
+            self._finish_fft_time_outcome_feedback()
