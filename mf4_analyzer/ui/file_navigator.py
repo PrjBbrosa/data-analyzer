@@ -173,6 +173,10 @@ class FileNavigator(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # QSS (FileNavigator { border-radius:10px; background:#fff }) only paints
+        # on a plain QWidget subclass once WA_StyledBackground is set; without it
+        # Qt skips the styled fill/border and the rounded card never renders.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         # rows_key -> _FileRow
         # rows_key = filepath_str when label_suffix is non-empty (grouped mode)
         # rows_key = fid when label_suffix is empty (flat mode, backwards compat)
@@ -190,6 +194,9 @@ class FileNavigator(QWidget):
 
         file_area = QWidget(self)
         file_area.setObjectName("fileArea")
+        # QWidget#fileArea { background:#fff } needs WA_StyledBackground too,
+        # otherwise the inner white surface above the channel splitter is unpainted.
+        file_area.setAttribute(Qt.WA_StyledBackground, True)
         file_lay = QVBoxLayout(file_area)
         file_lay.setContentsMargins(0, 0, 0, 0)
         file_lay.setSpacing(4)

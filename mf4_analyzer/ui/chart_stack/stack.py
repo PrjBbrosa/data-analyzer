@@ -45,6 +45,10 @@ class ChartStack(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # QSS (ChartStack { border-radius:10px; background:#fff }) only paints on
+        # a plain QWidget subclass once WA_StyledBackground is set; without it Qt
+        # skips the styled fill/border and the rounded card never renders.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 4, 0, 0)
         lay.setSpacing(4)

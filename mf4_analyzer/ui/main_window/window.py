@@ -106,7 +106,11 @@ class MainWindow(
         self.setCentralWidget(cw)
         cw.setObjectName("centralTray")
         root = QVBoxLayout(cw)
-        root.setContentsMargins(8, 8, 8, 8)
+        # Playground-tuned panel chrome (tracelab-panel-playground.html):
+        #   outer margin 5px (window edge -> three-pane row, all four sides),
+        #   inter-pane gap 3px (the tray-colored QSplitter handle below),
+        #   panel corner radius 10px (FileNavigator/ChartStack/Inspector QSS).
+        root.setContentsMargins(5, 5, 5, 5)
         root.setSpacing(8)
 
         self.toolbar = Toolbar(self)

@@ -59,6 +59,10 @@ class Inspector(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # QSS (Inspector { border-radius:10px; background:#fff }) only paints on a
+        # plain QWidget subclass once WA_StyledBackground is set; without it Qt
+        # skips the styled fill/border and the rounded card never renders.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         # 2026-04-26 fix: cap the inspector widget itself so the splitter cannot
         # allocate more width than its capped content (_INSPECTOR_CONTENT_MAX_WIDTH).
         # Surplus split-pane width was previously absorbed by host_lay.addStretch,
