@@ -15,10 +15,16 @@ _TIME_NAMES = frozenset({
 
 
 class FileData:
-    def __init__(self, fp, df, chs, units, idx=0):
+    def __init__(self, fp, df, chs, units, idx=0, *,
+                 source_metadata=None, channel_metadata=None, label_suffix=""):
         self.filepath = Path(fp)
         self.filename = self.filepath.name
         self.short_name = self.filepath.stem[:18]
+        self.source_metadata = dict(source_metadata or {})
+        self.channel_metadata = dict(channel_metadata or {})
+        self.label_suffix = str(label_suffix or "")
+        if self.label_suffix:
+            self.short_name = f"{self.short_name[:14]} ·{self.label_suffix}"
         self.data = df
         self.channels = chs
         self.channel_units = units
