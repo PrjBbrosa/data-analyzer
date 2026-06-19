@@ -342,9 +342,9 @@ Toolbar QPushButton[segment]:hover {
     color: #334155;
 }
 Toolbar QPushButton[segment]:checked {
-    background-color: #ffffff;
-    color: #111827;
-    border: 1px solid #dfe5ee;
+    background-color: #e8efff;
+    color: #1769e0;
+    border: 1px solid #1769e0;
 }
 QWidget#modeSegment {
     padding: 2px;
