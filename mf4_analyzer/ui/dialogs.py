@@ -360,7 +360,7 @@ class ChannelEditorDialog(QDialog):
             elif op == 5:
                 r = np.abs(sig)
             else:
-                QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+                QMessageBox.warning(self, "无法创建", "不支持的运算类型")
                 return
             name = f"{prefixes[op]}{src}"
             while name in self.fd.data.columns or name in self.new_channels: name += "_1"
@@ -413,7 +413,7 @@ class ChannelEditorDialog(QDialog):
             elif op == 5:
                 r = np.minimum(sig_a, sig_b)
             else:
-                QMessageBox.warning(self, "无法创建", "源通道不存在或参数越界")
+                QMessageBox.warning(self, "无法创建", "不支持的运算类型")
                 return
 
             # 生成名称

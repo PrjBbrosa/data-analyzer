@@ -256,7 +256,7 @@ def test_single_channel_unknown_op_warns(qapp, tmp_path, monkeypatch):
     assert warning_calls
     assert warning_calls[0][0] is dlg
     assert warning_calls[0][1] == "无法创建"
-    assert "源通道不存在或参数越界" in warning_calls[0][2]
+    assert "不支持的运算类型" in warning_calls[0][2]
 
 
 def test_dual_channel_unknown_op_warns(qapp, tmp_path, monkeypatch):
@@ -278,7 +278,7 @@ def test_dual_channel_unknown_op_warns(qapp, tmp_path, monkeypatch):
     assert warning_calls
     assert warning_calls[0][0] is dlg
     assert warning_calls[0][1] == "无法创建"
-    assert "源通道不存在或参数越界" in warning_calls[0][2]
+    assert "不支持的运算类型" in warning_calls[0][2]
 
 
 def test_pg_chart_options_rebuilds_legend_idempotently(qapp):
