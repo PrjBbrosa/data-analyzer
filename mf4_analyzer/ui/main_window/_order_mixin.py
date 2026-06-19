@@ -299,7 +299,12 @@ class OrderMixin:
         from ...signal.order_cot import COTOrderAnalyzer, COTParams
         time_range = self._pane_time_range_for('order', pane_idx)
         t, sig = self._order_sig_for((fid, ch), time_range=time_range)
-        if sig is None or len(sig) < 100:
+        if sig is None:
+            outcome = getattr(self, '_order_outcome', None)
+            if outcome is not None:
+                outcome.skipped.append("源通道缺失")
+            return False
+        if len(sig) < 100:
             outcome = getattr(self, '_order_outcome', None)
             if outcome is not None:
                 outcome.skipped.append("信号过短")

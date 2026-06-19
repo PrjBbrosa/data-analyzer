@@ -773,6 +773,26 @@ def test_order_skip_short_signal_warns(two_file_win, qtbot, monkeypatch):
     assert calls == [("warning", "无可计算的图：1 个信号过短")]
 
 
+def test_order_missing_source_warns_without_short_signal_reason(
+    two_file_win, qtbot, monkeypatch
+):
+    win = two_file_win
+    _fids, _page, state = _split_order_two_sources(win)
+    state.panes[1].sources = [(state.panes[1].sources[0][0], "missing_signal")]
+
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win.do_order_time()
+    _drain_order_queue(win, qtbot)
+
+    assert calls
+    level, msg = calls[-1]
+    assert level == "warning"
+    assert "源通道缺失" in msg
+    assert "信号过短" not in msg
+
+
 def test_order_reentry_emits_busy_toast(two_file_win, monkeypatch):
     win = two_file_win
     win.toolbar._set_mode("order")
