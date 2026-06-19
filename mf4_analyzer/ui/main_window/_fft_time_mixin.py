@@ -236,6 +236,7 @@ class FFTTimeMixin:
                 section_label="FFT-vs-Time",
             )
             return
+        self._fft_time_outcome = None
         mgr = self.analysis_managers['fft_time']
         state = mgr.get(mgr.active)
         page = self._analysis_page('fft_time')

@@ -210,6 +210,7 @@ class OrderMixin:
                 section_label="时间-阶次",
             )
             return
+        self._order_outcome = None
         mgr = self.analysis_managers['order']
         state = mgr.get(mgr.active)
         page = self._analysis_page('order')

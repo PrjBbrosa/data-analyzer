@@ -1596,14 +1596,17 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self.slice_hint_requested.emit("先点计算生成谱图")
             return
         x0, x1, y0, y1 = self._extents
-        if not (x0 <= x <= x1 and y0 <= y <= y1):
-            self.slice_hint_requested.emit("点击位置超出谱图范围")
-            return
         if self._slice_dir == 'y':
+            if not (y0 <= y <= y1):
+                self.slice_hint_requested.emit("点击位置超出谱图范围")
+                return
             self._slice_y_idx = self._freq_index_for(y)
             self._apply_slice()
             self.slice_picked.emit()
         else:
+            if not (x0 <= x <= x1):
+                self.slice_hint_requested.emit("点击位置超出谱图范围")
+                return
             self._slice_x_idx = self._time_index_for(x)
             self._apply_slice()
             self.slice_picked.emit()

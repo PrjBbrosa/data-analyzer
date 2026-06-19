@@ -875,6 +875,55 @@ def test_y_slice_scene_click_hint_and_pick_paths(qapp):
     c.deleteLater()
 
 
+def test_slice_uses_relevant_axis_only(qapp):
+    """y-slice: only y must be in range; x out-of-range is fine (and vice versa)."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    hints = []
+    picks = []
+    c.slice_hint_requested.connect(hints.append)
+    c.slice_picked.connect(lambda: picks.append(True))
+
+    x0, x1, y0, y1 = c._extents
+
+    # --- y-slice: x out-of-range but y valid → should succeed (not emit hint) ---
+    c.set_slice_direction('y')
+    x_out = x1 + max((x1 - x0) * 0.1, 1.0)
+    y_valid = (y0 + y1) / 2.0
+    c._select_slice_at(x_out, y_valid)
+    assert hints == [], f"y-slice with x out-of-range should NOT emit hint, got: {hints}"
+    assert picks == [True], "y-slice with x out-of-range but y valid should emit slice_picked"
+    hints.clear()
+    picks.clear()
+
+    # --- y-slice: y out-of-range → should emit hint ---
+    y_out = y0 - max((y1 - y0) * 0.1, 1.0)
+    c._select_slice_at((x0 + x1) / 2.0, y_out)
+    assert hints == ["点击位置超出谱图范围"], "y-slice with y out-of-range should emit range hint"
+    assert picks == []
+    hints.clear()
+
+    # --- x-slice: y out-of-range but x valid → should succeed ---
+    c.set_slice_direction('x')
+    x_valid = (x0 + x1) / 2.0
+    y_out2 = y1 + max((y1 - y0) * 0.1, 1.0)
+    c._select_slice_at(x_valid, y_out2)
+    assert hints == [], f"x-slice with y out-of-range should NOT emit hint, got: {hints}"
+    assert picks == [True], "x-slice with y out-of-range but x valid should emit slice_picked"
+    hints.clear()
+    picks.clear()
+
+    # --- x-slice: x out-of-range → should emit hint ---
+    x_out2 = x0 - max((x1 - x0) * 0.1, 1.0)
+    c._select_slice_at(x_out2, (y0 + y1) / 2.0)
+    assert hints == ["点击位置超出谱图范围"], "x-slice with x out-of-range should emit range hint"
+    assert picks == []
+
+    c.deleteLater()
+
+
 def _slice_curve_aa_enabled(canvas):
     curve = canvas._slice_curve
     child = getattr(curve, "curve", None)
