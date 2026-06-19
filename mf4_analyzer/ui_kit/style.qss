@@ -301,6 +301,13 @@ Toolbar {
     background-color: #e8ecf2;
     border-bottom: 1px solid #d3dbe6;
 }
+/* Left action group + logo group: transparent so they sit on the tray band
+ * (no white box; lets the logo embed into the tray). */
+Toolbar QWidget#toolbarLeftGroup,
+Toolbar QWidget#toolbarRightGroup {
+    background-color: transparent;
+    border: none;
+}
 Toolbar QPushButton {
     min-width: 0;
     min-height: 22px;

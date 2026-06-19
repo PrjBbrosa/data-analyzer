@@ -142,6 +142,7 @@ class Toolbar(QWidget):
         left_widget = QWidget(self)
         left_widget.setLayout(left)
         left_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        left_widget.setObjectName("toolbarLeftGroup")
 
         # center layout inside a framed segment widget
         center = QHBoxLayout()
@@ -183,6 +184,7 @@ class Toolbar(QWidget):
         right_widget = QWidget(self)
         right_widget.setLayout(right)
         right_widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        right_widget.setObjectName("toolbarRightGroup")
 
         lay.addWidget(self.btn_toggle_nav)
         lay.addWidget(_make_sep(self))
