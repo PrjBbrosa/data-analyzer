@@ -3460,10 +3460,11 @@ def test_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
     """The shared axis-settings grid should not paint the grey page surface.
 
     FFT-vs-Time and Order both use the same helper. After the 2026-06-13
-    分析信号/谱参数 split their axis grid sits inside the lower params_card,
-    which shares FFT's #eef4ff tint — so the blank cells behind 自动 / 最小 /
-    最大 and the auto-summary rows should read as part of that tinted panel
-    rather than a separate grey/white table.
+    分析信号/谱参数 split their axis grid sits inside the lower params_card.
+    After the 2026-06-19 surface-snow redesign the params card is white
+    (#ffffff) — the blank cells behind 自动 / 最小 / 最大 and the auto-summary
+    rows should read as part of that white card rather than a separate
+    grey/table surface.
     """
     from pathlib import Path
     from PyQt5.QtCore import QPoint
@@ -3502,13 +3503,16 @@ def test_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
             image = inspector.grab().toImage()
             for point in samples:
                 color = image.pixelColor(point)
+                # After the 2026-06-19 surface-snow redesign the params card
+                # is white (#ffffff); grid cells must be transparent so they
+                # show the same white card background (not a grey/tinted table).
                 assert (
-                    234 <= color.red() <= 242
-                    and 240 <= color.green() <= 248
+                    color.red() >= 250
+                    and color.green() >= 250
                     and color.blue() >= 250
                 ), (
-                    f"{mode} axis grid background should match the tinted "
-                    f"params panel #eef4ff, got {color.name()} at "
+                    f"{mode} axis grid background should match the white "
+                    f"params card #ffffff, got {color.name()} at "
                     f"{point.x()},{point.y()}"
                 )
             inspector.hide()
@@ -3517,8 +3521,11 @@ def test_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
 
 
 def test_fft_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
-    """FFT keeps a subtle blue contextual surface; its axis grid should not
-    introduce white table rows inside that tinted panel."""
+    """FFT params card is white after the 2026-06-19 surface-snow redesign;
+    the axis grid should not introduce a separate grey/table surface inside
+    the white card — transparent grid cells must blend with the card's
+    #ffffff background.
+    """
     from pathlib import Path
     from PyQt5.QtCore import QPoint
     from PyQt5.QtWidgets import QWidget
@@ -3552,13 +3559,16 @@ def test_fft_axis_settings_grid_background_matches_tinted_panel(qapp, qtbot):
         image = inspector.grab().toImage()
         for point in samples:
             color = image.pixelColor(point)
+            # After the 2026-06-19 surface-snow redesign the params card is
+            # white (#ffffff); grid cells must be transparent so they show the
+            # same white card background.
             assert (
-                234 <= color.red() <= 242
-                and 240 <= color.green() <= 248
+                color.red() >= 250
+                and color.green() >= 250
                 and color.blue() >= 250
             ), (
-                "FFT axis grid background should match the tinted panel "
-                f"#eef4ff, got {color.name()} at {point.x()},{point.y()}"
+                "FFT axis grid background should match the white params card "
+                f"#ffffff, got {color.name()} at {point.x()},{point.y()}"
             )
     finally:
         qapp.setStyleSheet(old_sheet)
