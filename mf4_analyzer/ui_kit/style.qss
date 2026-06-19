@@ -1,9 +1,9 @@
-/* ==== MF4 Analyzer — Precision Light visual system (云白/snow) ====
- * Snow tokens (all-white panels + 1 interaction blue)
- *   panels/surface/frame  #ffffff   all three panes + toolbar + status/hint/view bars
- *   card                  #ffffff   cards, inputs, tree, menus
- *   divider               #d3dbe6   splitter line, panel seams, frame seams, card edges (stronger)
- *   hairline              #eef2f7   within-card sub-section separators (soft)
+/* ==== MF4 Analyzer — Precision Light visual system (tray/floating-panels) ====
+ * Tray / panel depth:
+ *   tray  #e8ecf2   backdrop (QMainWindow base, toolbar band, status bar, splitter gaps)
+ *   panel/card #ffffff   floating blocks (FileNavigator, ChartStack, Inspector) + cards, inputs, tree, menus
+ *   divider    #d3dbe6   splitter line, panel seams, frame seams, card edges (stronger)
+ *   hairline   #eef2f7   within-card sub-section separators (soft)
  *   accent #1769e0  ·  accent-wash #e8efff   (interaction only)
  * Text / hierarchy — by size + weight only, no background fills:
  *   pane / card title  13px / 700   #111827
@@ -14,7 +14,7 @@
 
 QMainWindow,
 QWidget {
-    background-color: #ffffff;
+    background-color: #e8ecf2;
     color: #111827;
     font-family: "Microsoft YaHei", "Segoe UI", "PingFang SC", "SF Pro Text", sans-serif;
     font-size: 12px;
@@ -35,8 +35,8 @@ QLabel {
     background-color: transparent;
 }
 
-/* Splitter — subtle */
-QSplitter::handle { margin: 0; background-color: transparent; }
+/* Splitter — tray color fills the gap so the panels float apart */
+QSplitter::handle { margin: 0; background-color: #e8ecf2; }
 QSplitter::handle:horizontal { width: 3px; margin: 0; }
 QSplitter::handle:vertical { height: 3px; margin: 0; }
 QSplitter::handle:hover { background-color: #cbd5e1; }
@@ -298,7 +298,7 @@ QToolButton[role="tool"] {
 
 /* Toolbar */
 Toolbar {
-    background-color: #ffffff;
+    background-color: #e8ecf2;
     border-bottom: 1px solid #d3dbe6;
 }
 Toolbar QPushButton {
@@ -783,7 +783,7 @@ QFrame#rightVerdictBanner[verdict="error"] QLabel {
 /* ============ Left navigator ============ */
 FileNavigator {
     background-color: #ffffff;
-    border-right: 1px solid #d3dbe6;
+    border-right: none;
 }
 QWidget#fileArea { background-color: #ffffff; }
 
@@ -872,7 +872,7 @@ QHeaderView::section {
 /* ============ Inspector ============ */
 Inspector {
     background-color: #ffffff;
-    border-left: 1px solid #d3dbe6;
+    border-left: none;
 }
 QScrollArea#inspectorScroll {
     border: none;
@@ -1621,9 +1621,9 @@ QMenu#pgContextMenu::separator {
 }
 
 QStatusBar {
-    background-color: #f5f7fb;
+    background-color: #e8ecf2;
     color: #64748b;
-    border-top: 1px solid #eef2f7;
+    border-top: 1px solid #d3dbe6;
 }
 
 /* Version tag beside the status-bar update (cloud-download) icon. */
@@ -1882,6 +1882,6 @@ QFrame#peekOverlay {
 }
 
 /* Frame seams (Rule B): anchor the bottom bands so View tab + hint are not floating. */
-QStatusBar { background-color: #ffffff; border-top: 1px solid #d3dbe6; }
+QStatusBar { background-color: #e8ecf2; border-top: 1px solid #d3dbe6; }
 QFrame#chartHintBar { border-top: 1px solid #d3dbe6; }
 QWidget#viewTabBar { border-top: 1px solid #d3dbe6; }
