@@ -977,8 +977,8 @@ Inspector QFrame#inspectorGroupHeader QLabel#inspectorGroupTitle {
 Inspector QFrame#fftSignalCard,
 Inspector QFrame#orderSignalCard,
 Inspector QFrame#fftTimeSignalCard {
-    background-color: #effaf4;
-    border: 1px solid #b9dfca;
+    background-color: #ffffff;
+    border: 1px solid #dde4ee;
     border-radius: 8px;
     padding: 0;
 }
