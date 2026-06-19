@@ -27,6 +27,28 @@ def test_do_export_excel_writes_selected(qapp, tmp_path, monkeypatch):
     assert headers == ["Time", "rpm"]
 
 
+def test_do_export_excel_filters_missing_channels_preserving_valid_request_order(
+    qapp, tmp_path, monkeypatch
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    a = tmp_path / "a.csv"; _csv(a)
+    out = tmp_path / "filtered.xlsx"
+    mw = MainWindow(); mw._load_one(str(a))
+    fid = next(iter(mw.files))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a_, **k: (str(out), ""))
+
+    mw._do_export_excel(
+        fid, ["spd", "missing", "rpm"], include_time=True, use_range=False
+    )
+
+    wb = openpyxl.load_workbook(out)
+    headers = [c.value for c in wb.active[1]]
+    assert headers == ["Time", "spd", "rpm"]
+    assert "missing" not in headers
+
+
 @pytest.mark.parametrize(
     ("fid_kind", "channels"),
     [
