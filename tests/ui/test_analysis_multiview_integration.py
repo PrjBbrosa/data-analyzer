@@ -199,6 +199,32 @@ def test_fft_preview_clears_cache_miss_empty_hint(two_file_win):
     assert canvas._empty_hint_item is None
 
 
+def test_fft_cache_hit_render_clears_cache_miss_empty_hint(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fids = list(win.files.keys())
+
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    state.panes[0].sources = [(fids[0], "speed")]
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    win._render_analysis_view_from_cache("fft", state)
+    assert canvas._empty_hint_item is not None
+    assert canvas._empty_hint_item.isVisible()
+
+    key = win._analysis_cache_key("fft", fids[0], "speed", pane_idx=0)
+    freq = np.asarray([0.0, 1.0, 2.0], dtype=float)
+    amp = np.asarray([1.0, 0.5, 0.25], dtype=float)
+    win.analysis_caches["fft"].put(key, (freq, amp, amp ** 2))
+
+    win._render_analysis_view_from_cache("fft", state)
+
+    assert len(canvas._amp_curves) == 1
+    assert canvas._empty_hint_text == ""
+    assert canvas._empty_hint_item is None
+
+
 def test_fft_time_cache_miss_shows_visible_empty_hint(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft_time")

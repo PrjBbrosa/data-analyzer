@@ -603,6 +603,18 @@ def test_full_reset_clears_state(canvas):
     assert canvas._matrix_disp is None
 
 
+def test_full_reset_clears_empty_hint(canvas):
+    canvas.show_empty_hint("点击『计算』生成")
+    assert canvas._empty_hint_item is not None
+    assert canvas._empty_hint_item.scene() is not None
+    assert canvas._empty_hint_item.isVisible()
+
+    canvas.full_reset()
+
+    assert canvas._empty_hint_text == ""
+    assert canvas._empty_hint_item is None
+
+
 def test_full_reset_then_replot_rebuilds_colorbar(canvas):
     # full_reset detaches the ColorBarItem from the host PlotItem's
     # QGraphicsGridLayout (pg 0.14.0 ColorBarItem.py:225 nests it via
