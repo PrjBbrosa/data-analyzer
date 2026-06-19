@@ -14,7 +14,7 @@
 
 QMainWindow,
 QWidget {
-    background-color: #e8ecf2;
+    background-color: #ffffff;
     color: #111827;
     font-family: "Microsoft YaHei", "Segoe UI", "PingFang SC", "SF Pro Text", sans-serif;
     font-size: 12px;
@@ -783,7 +783,8 @@ QFrame#rightVerdictBanner[verdict="error"] QLabel {
 /* ============ Left navigator ============ */
 FileNavigator {
     background-color: #ffffff;
-    border-right: none;
+    border: 1px solid #d3dbe6;
+    border-radius: 10px;
 }
 QWidget#fileArea { background-color: #ffffff; }
 
@@ -872,7 +873,8 @@ QHeaderView::section {
 /* ============ Inspector ============ */
 Inspector {
     background-color: #ffffff;
-    border-left: none;
+    border: 1px solid #d3dbe6;
+    border-radius: 10px;
 }
 QScrollArea#inspectorScroll {
     border: none;
@@ -1158,7 +1160,7 @@ Inspector QPushButton[role="choice"]:checked {
 Inspector QPushButton[role="primary"] { min-height: 30px; }
 
 /* ============ Chart stack ============ */
-ChartStack { background-color: #ffffff; }
+ChartStack { background-color: #ffffff; border: 1px solid #d3dbe6; border-radius: 10px; }
 
 QWidget#timeDomainPage {
     background-color: #ffffff;
@@ -1800,8 +1802,8 @@ QWidget#viewTabBar QPushButton#viewSplitClear:pressed {
  * The bar itself has a soft tinted backdrop and a hairline top edge so it
  * reads as a quiet status footer rather than another piece of toolbar. */
 QFrame#chartHintBar {
-    background-color: #f8fafc;
-    border-top: 1px solid #e2e8f0;
+    background-color: #e8ecf2;
+    border-top: 1px solid #d3dbe6;
 }
 QFrame#chartHintBar QLabel#chartHintPersistent {
     color: #64748b;
@@ -1825,8 +1827,8 @@ QFrame#chartHintBar QLabel#chartHintDiscovery {
 }
 
 QFrame#timeViewBottomDock QFrame#chartHintBar {
-    background-color: #fbfcff;
-    border-top: 1px solid #e5ebf3;
+    background-color: #e8ecf2;
+    border-top: 1px solid #d3dbe6;
 }
 
 QFrame#timeViewBottomDock QFrame#chartHintBar QLabel#chartHintPersistent,
