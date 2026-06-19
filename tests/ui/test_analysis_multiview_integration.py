@@ -679,8 +679,7 @@ def _drain_order_queue(win, qtbot):
     )
 
 
-def test_order_split_two_panes_render_distinct_sources(two_file_win, qtbot):
-    win = two_file_win
+def _split_order_two_sources(win):
     win.toolbar._set_mode("order")
     fids = list(win.files.keys())
     mgr = win.analysis_managers["order"]
@@ -689,16 +688,18 @@ def test_order_split_two_panes_render_distinct_sources(two_file_win, qtbot):
     win._on_analysis_split("order", True)
     assert page.pane_count() == 2
     assert page.focused_index() == 0
-    # Two distinct signal sources, each with a rpm source. abs(rpm) is used by
-    # COT so the sinusoidal 'speed' supplies a valid time-varying |rpm|.
-    # Focused pane (0): wire signal + rpm through the inspector combos so the
-    # capture step (which reads current_signal/current_rpm) stores them.
+
     ctx = win.inspector.order_ctx
     win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
     win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
-    # Non-focused pane (1): set directly on the state.
     state.panes[1].sources = [(fids[1], "torque")]
     state.panes[1].rpm_source = (fids[1], "speed")
+    return fids, page, state
+
+
+def test_order_split_two_panes_render_distinct_sources(two_file_win, qtbot):
+    win = two_file_win
+    fids, page, _state = _split_order_two_sources(win)
 
     win.do_order_time()
     _drain_order_queue(win, qtbot)
@@ -730,6 +731,69 @@ def test_order_split_two_panes_render_distinct_sources(two_file_win, qtbot):
     # The per-pane result must trace back to the source's OWN cache entry.
     assert np.array_equal(c0._matrix_disp.shape, np.asarray(r0.amplitude.T).shape)
     assert np.array_equal(c1._matrix_disp.shape, np.asarray(r1.amplitude.T).shape)
+
+
+def test_order_all_cached_emits_info_toast(two_file_win, qtbot, monkeypatch):
+    win = two_file_win
+    _fids, page, _state = _split_order_two_sources(win)
+
+    win.do_order_time()
+    _drain_order_queue(win, qtbot)
+    assert page.pane_canvas(0).has_result()
+    assert page.pane_canvas(1).has_result()
+
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+    page.pane_canvas(0).full_reset()
+    page.pane_canvas(1).full_reset()
+
+    win.do_order_time()
+
+    assert win._order_thread is None
+    assert calls == [("info", "已用缓存结果（参数未变）· 2 图")]
+    assert page.pane_canvas(0).has_result()
+    assert page.pane_canvas(1).has_result()
+
+
+def test_order_skip_short_signal_warns(two_file_win, qtbot, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode("order")
+    fids = list(win.files.keys())
+    ctx = win.inspector.order_ctx
+    win._echo_combo_signal(ctx.combo_sig, (fids[0], "torque"))
+    win._echo_combo_signal(ctx.combo_rpm, (fids[0], "speed"))
+    win.inspector.top.set_range_from_span(0.0, 0.05)
+
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win.do_order_time()
+    _drain_order_queue(win, qtbot)
+
+    assert calls == [("warning", "无可计算的图：1 个信号过短")]
+
+
+def test_order_reentry_emits_busy_toast(two_file_win, monkeypatch):
+    win = two_file_win
+    win.toolbar._set_mode("order")
+
+    class RunningThread:
+        def isRunning(self):
+            return True
+
+        def quit(self):
+            pass
+
+        def wait(self, _timeout=None):
+            return True
+
+    win._order_thread = RunningThread()
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win.do_order_time()
+
+    assert calls == [("info", "时间-阶次进行中，请稍候…")]
 
 
 # ----------------------------------------------------------------------

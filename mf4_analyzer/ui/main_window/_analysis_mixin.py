@@ -14,6 +14,8 @@ import numpy as np
 from PyQt5.QtWidgets import QColorDialog
 from PyQt5.QtCore import QTimer
 
+from ..compute_feedback import summarize_compute
+
 
 class AnalysisMixin:
     def _analysis_ctx(self, section):
@@ -29,6 +31,19 @@ class AnalysisMixin:
             'fft_time': self.chart_stack.page_fft_time,
             'order': self.chart_stack.page_order,
         }[section]
+
+    def _emit_compute_feedback(self, outcome, *, busy=False, section_label="计算"):
+        res = summarize_compute(
+            outcome,
+            busy=busy,
+            section_label=section_label,
+        )
+        if res is None:
+            return False
+        level, msg = res
+        self.toast(msg, level)
+        self.statusBar.showMessage(msg)
+        return True
 
     # -- tab-bar intent handlers (capture outgoing view first) ----------
     def _on_analysis_switch(self, section, idx):

@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QThread
 
 from ...signal import assess_speed_for_order, resolve_order_nfft
+from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 
 
@@ -203,7 +204,11 @@ class OrderMixin:
         self._capture_active_analysis_view('order')
         # Re-entry guard: a previous compute / queue is still running.
         if getattr(self, '_order_thread', None) is not None and self._order_thread.isRunning():
-            self.statusBar.showMessage("正在计算…")
+            self._emit_compute_feedback(
+                ComputeOutcome(),
+                busy=True,
+                section_label="时间-阶次",
+            )
             return
         mgr = self.analysis_managers['order']
         state = mgr.get(mgr.active)
@@ -217,6 +222,7 @@ class OrderMixin:
         )
         queue = []
         any_source = False
+        outcome = ComputeOutcome()
         for pane_idx in pane_order:
             sources = state.panes[pane_idx].sources
             if not sources:
@@ -232,6 +238,7 @@ class OrderMixin:
             if cached is not None:
                 cache.put(analysis_key, cached)
                 self._render_order_on(page.pane_canvas(pane_idx), cached)
+                outcome.cached += 1
             else:
                 queue.append((pane_idx, fid, ch, rpm_source))
 
@@ -241,10 +248,11 @@ class OrderMixin:
                 # the standalone-signal UX + existing tests are unchanged.
                 self._do_order_time_single()
                 return
-            self.statusBar.showMessage("使用缓存结果")
+            self._emit_compute_feedback(outcome, section_label="时间-阶次")
             return
 
         self._order_queue = queue
+        self._order_outcome = outcome
         self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
         self.inspector.order_ctx.set_progress("计算中...")
         self._start_next_order_job()
@@ -275,6 +283,14 @@ class OrderMixin:
                 return
         # Queue drained.
         self.inspector.order_ctx.set_progress("")
+        self._finish_order_outcome_feedback()
+
+    def _finish_order_outcome_feedback(self):
+        outcome = getattr(self, '_order_outcome', None)
+        if outcome is None:
+            return
+        self._emit_compute_feedback(outcome, section_label="时间-阶次")
+        self._order_outcome = None
 
     def _dispatch_order_job(self, pane_idx, fid, ch, rpm_source):
         """Fetch the ``(fid, ch)`` signal + ``rpm_source`` rpm, then start the
@@ -284,9 +300,15 @@ class OrderMixin:
         time_range = self._pane_time_range_for('order', pane_idx)
         t, sig = self._order_sig_for((fid, ch), time_range=time_range)
         if sig is None or len(sig) < 100:
+            outcome = getattr(self, '_order_outcome', None)
+            if outcome is not None:
+                outcome.skipped.append("信号过短")
             return False
         rpm = self._order_rpm_for(rpm_source, len(sig), time_range=time_range)
         if rpm is None:
+            outcome = getattr(self, '_order_outcome', None)
+            if outcome is not None:
+                outcome.skipped.append("缺转速")
             return False
         self._warn_if_order_speed_unsuitable(rpm)
         fs = self.inspector.order_ctx.fs()
@@ -310,7 +332,11 @@ class OrderMixin:
                 fs=fs,
             )
         except Exception as e:
-            QMessageBox.critical(self, "错误", str(e))
+            outcome = getattr(self, '_order_outcome', None)
+            if outcome is not None:
+                outcome.failed += 1
+            else:
+                QMessageBox.critical(self, "错误", str(e))
             return False
         # Stash the analysis cache key + render target for this job.
         self._order_analysis_key = self._order_analysis_cache_key(
@@ -403,7 +429,7 @@ class OrderMixin:
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
 
-    def _render_order_time(self, result):
+    def _render_order_time(self, result, *, emit_feedback=True):
         # Wave 3 / Task 3.2: pull HEAD-parity display knobs from the
         # OrderContextual. Inspector exposes amplitude_mode ∈
         # {'Amplitude dB', 'Amplitude'} and dynamic ∈
@@ -425,29 +451,33 @@ class OrderMixin:
             },
             rpm_signal=self.inspector.order_ctx.current_rpm(),
         )
-        self.statusBar.showMessage(
-            f'完成 | {len(result.times)} 时间点 × {len(result.orders)} 阶次'
-        )
-        self.toast(
-            f"时间-阶次谱完成 · {len(result.times)} × {len(result.orders)}",
-            "success",
-        )
+        if emit_feedback:
+            self.statusBar.showMessage(
+                f'完成 | {len(result.times)} 时间点 × {len(result.orders)} 阶次'
+            )
+            self.toast(
+                f"时间-阶次谱完成 · {len(result.times)} × {len(result.orders)}",
+                "success",
+            )
 
     def _on_order_finished(self, result):
         analysis_key = getattr(self, '_order_analysis_key', None)
         if analysis_key is not None:
             self.analysis_caches['order'].put(analysis_key, result)
+        outcome = getattr(self, '_order_outcome', None)
+        if outcome is not None:
+            outcome.computed += 1
         # V7b: render onto the SPECIFIC pane this job was computed for.
         # ``_render_order_time`` (preset + status + toast side-effects) runs
         # only for the primary pane (0); compare panes get a pure canvas draw.
         page = self._analysis_page('order')
         pane_idx = getattr(self, '_order_render_pane', 0)
         if pane_idx == 0:
-            self._render_order_time(result)
+            self._render_order_time(result, emit_feedback=outcome is None)
         elif pane_idx < page.pane_count():
             self._render_order_on(page.pane_canvas(pane_idx), result)
         else:
-            self._render_order_time(result)
+            self._render_order_time(result, emit_feedback=outcome is None)
         # Clear the in-progress label only when no more jobs are queued; the
         # thread-done pump re-sets it for the next job otherwise.
         if not self._order_queue:
@@ -464,7 +494,11 @@ class OrderMixin:
         # re-enter the compute pump (and hangs under offscreen Qt with no
         # user to click OK — lesson qmessagebox-static-warning-hangs-offscreen).
         msg = str(message)
-        self.toast(msg, "error")
+        outcome = getattr(self, '_order_outcome', None)
+        if outcome is not None:
+            outcome.failed += 1
+        else:
+            self.toast(msg, "error")
         self.statusBar.showMessage(f"阶次分析错误: {msg}")
         if not self._order_queue:
             self.inspector.order_ctx.set_progress("")
@@ -474,3 +508,5 @@ class OrderMixin:
         self._order_worker = None
         if self._order_queue:
             self._start_next_order_job()
+        else:
+            self._finish_order_outcome_feedback()
