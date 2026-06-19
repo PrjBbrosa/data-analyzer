@@ -130,17 +130,16 @@ def parse_head_hdf(path) -> HeadHdfFile:
     for i, c in enumerate(channels, 1):
         c.factor = factor_by_ch.get(i, 1)
 
-    # --- variant guards ---
+    # --- variant guards (file-level hard-fails) ---
     if int(top.get("version", "0") or 0) != 4:
         raise NotImplementedError(f"unsupported version: {top.get('version')!r}")
     if top.get("kind", "") != "Time data":
         raise NotImplementedError(f"unsupported kind: {top.get('kind')!r}")
     if top.get("byte order", "") != "Intel":
         raise NotImplementedError(f"unsupported byte order: {top.get('byte order')!r}")
-    for c in channels:
-        if c.impl_type and c.impl_type != "FLOAT32":
-            raise NotImplementedError(
-                f"unsupported implementation type: {c.impl_type!r} ({c.name})")
+    # NOTE: per-channel non-FLOAT32 is NOT a hard fail here; those channels
+    # are skipped in the demux below (samples stays None) and dropped by the
+    # loader with a reason recorded in source_metadata["dropped_channels"].
 
     # --- binary demux (insert before building HeadHdfFile) ---
     per_scan = sum(f for _, f in ch_order)
@@ -156,6 +155,11 @@ def parse_head_hdf(path) -> HeadHdfFile:
         for i, c in enumerate(channels, 1):
             o, f = offsets.get(i, (None, c.factor))
             if o is None:
+                continue
+            # Skip non-FLOAT32 channels: demux reads everything as <f4, so
+            # other dtypes (UINT32, INT16, DOUBLE…) would produce garbage.
+            # Leave samples=None; loader will drop and record the reason.
+            if c.impl_type and c.impl_type != "FLOAT32":
                 continue
             c.samples = mat[:, o:o + f].reshape(-1)
 

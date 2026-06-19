@@ -195,13 +195,20 @@ class DataLoader:
         hf = parse_head_hdf(fp)
         max_factor = max((f for _, f in hf.ch_order), default=1)
 
-        # 标定 + 丢全 NaN
+        # 标定 + 丢全 NaN；收集被丢通道名+原因（不静默丢弃）
         live = []
+        dropped = []
         for c in hf.channels:
             if c.samples is None:
+                # samples=None means non-FLOAT32 impl_type (skipped in demux)
+                reason = (f"non-FLOAT32: {c.impl_type}"
+                          if c.impl_type and c.impl_type != "FLOAT32"
+                          else "no samples (unknown)")
+                dropped.append({"name": c.name, "reason": reason})
                 continue
             s = c.samples * float(c.calibration)
             if np.isnan(s).all():
+                dropped.append({"name": c.name, "reason": "all-NaN"})
                 continue
             live.append((c, s))
 
@@ -256,6 +263,7 @@ class DataLoader:
                 "code_page": hf.code_page, "delta": hf.delta,
                 "n_scans": hf.n_scans, "max_factor": max_factor,
                 "source_filename": Path(fp).name,
+                "dropped_channels": dropped,
             }
             groups.append({
                 "data": pd.DataFrame(data), "channels": list(data.keys()),

@@ -82,14 +82,50 @@ def test_demux_native_samples(tmp_path):
     assert hf.channels[1].samples.size == 4
 
 
-def test_guard_rejects_non_float32(tmp_path):
+def test_non_float32_channel_skipped_not_fatal(tmp_path):
+    """A file with one FLOAT32 + one non-FLOAT32 channel must parse without error.
+
+    The non-FLOAT32 channel's .samples must be None (demux skipped it);
+    the FLOAT32 channel must have its samples populated.
+    """
+    fast = np.arange(4, dtype=float)  # factor 1, 4 scans -> 4 samples
     p = write_head_hdf(
-        tmp_path / "i16.hdf", n_scans=4, start_of_data=2048,
-        channels=[{"name": "L", "factor": 1, "quantity": "sound pressure",
-                   "unit": "Pa", "calibration": 1.0, "impl_type": "INT16",
-                   "samples": np.zeros(4)}])
-    with pytest.raises(NotImplementedError, match="INT16"):
-        parse_head_hdf(p)
+        tmp_path / "mixed.hdf", n_scans=4, start_of_data=2048,
+        channels=[
+            {"name": "L", "factor": 1, "quantity": "sound pressure",
+             "unit": "Pa", "calibration": 1.0, "samples": fast},
+            {"name": "CAN", "factor": 1, "quantity": "raw",
+             "unit": "", "calibration": 1.0, "impl_type": "INT16",
+             "samples": np.zeros(4)},
+        ])
+    hf = parse_head_hdf(p)
+    # FLOAT32 channel L must have samples
+    l_ch = next(c for c in hf.channels if c.name == "L")
+    assert l_ch.samples is not None
+    np.testing.assert_allclose(l_ch.samples, fast)
+    # INT16 channel CAN must be skipped (samples=None)
+    can_ch = next(c for c in hf.channels if c.name == "CAN")
+    assert can_ch.samples is None
+
+
+def test_all_non_float32_channels_parse_without_error(tmp_path):
+    """A file where ALL channels are non-FLOAT32 still parses (samples all None).
+
+    The loader would raise ValueError (no live channels), but the parser itself
+    must not raise.
+    """
+    p = write_head_hdf(
+        tmp_path / "alluint.hdf", n_scans=4, start_of_data=2048,
+        channels=[
+            {"name": "CAN1", "factor": 1, "quantity": "raw",
+             "unit": "", "calibration": 1.0, "impl_type": "UINT32",
+             "samples": np.zeros(4)},
+            {"name": "CAN2", "factor": 1, "quantity": "raw",
+             "unit": "", "calibration": 1.0, "impl_type": "UINT32",
+             "samples": np.zeros(4)},
+        ])
+    hf = parse_head_hdf(p)
+    assert all(c.samples is None for c in hf.channels)
 
 
 def test_guard_rejects_non_time_data(tmp_path):
