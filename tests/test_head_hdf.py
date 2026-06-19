@@ -80,3 +80,23 @@ def test_demux_native_samples(tmp_path):
     np.testing.assert_allclose(hf.channels[1].samples, slow)
     assert hf.channels[0].samples.size == 8
     assert hf.channels[1].samples.size == 4
+
+
+def test_guard_rejects_non_float32(tmp_path):
+    p = write_head_hdf(
+        tmp_path / "i16.hdf", n_scans=4, start_of_data=2048,
+        channels=[{"name": "L", "factor": 1, "quantity": "sound pressure",
+                   "unit": "Pa", "calibration": 1.0, "impl_type": "INT16",
+                   "samples": np.zeros(4)}])
+    with pytest.raises(NotImplementedError, match="INT16"):
+        parse_head_hdf(p)
+
+
+def test_guard_rejects_non_time_data(tmp_path):
+    p = write_head_hdf(
+        tmp_path / "spec.hdf", n_scans=4, start_of_data=2048,
+        kind="Spectrum data",
+        channels=[{"name": "L", "factor": 1, "quantity": "x", "unit": "Pa",
+                   "calibration": 1.0, "samples": np.zeros(4)}])
+    with pytest.raises(NotImplementedError, match="Spectrum data"):
+        parse_head_hdf(p)

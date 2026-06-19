@@ -130,6 +130,18 @@ def parse_head_hdf(path) -> HeadHdfFile:
     for i, c in enumerate(channels, 1):
         c.factor = factor_by_ch.get(i, 1)
 
+    # --- variant guards ---
+    if int(top.get("version", "0") or 0) != 4:
+        raise NotImplementedError(f"unsupported version: {top.get('version')!r}")
+    if top.get("kind", "") != "Time data":
+        raise NotImplementedError(f"unsupported kind: {top.get('kind')!r}")
+    if top.get("byte order", "") != "Intel":
+        raise NotImplementedError(f"unsupported byte order: {top.get('byte order')!r}")
+    for c in channels:
+        if c.impl_type and c.impl_type != "FLOAT32":
+            raise NotImplementedError(
+                f"unsupported implementation type: {c.impl_type!r} ({c.name})")
+
     # --- binary demux (insert before building HeadHdfFile) ---
     per_scan = sum(f for _, f in ch_order)
     n = int(abscissa.get("nbr of scans", "0") or 0)
