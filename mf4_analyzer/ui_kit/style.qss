@@ -37,7 +37,7 @@ QLabel {
 }
 
 /* Splitter — subtle */
-QSplitter::handle { margin: 0; background-color: #eef2f7; }
+QSplitter::handle { margin: 0; background-color: transparent; }
 QSplitter::handle:horizontal { width: 3px; margin: 0; }
 QSplitter::handle:vertical { height: 3px; margin: 0; }
 QSplitter::handle:hover { background-color: #cbd5e1; }
@@ -299,8 +299,8 @@ QToolButton[role="tool"] {
 
 /* Toolbar */
 Toolbar {
-    background-color: #ffffff;
-    border-bottom: 1px solid #eef2f7;
+    background-color: #f0f3f7;
+    border-bottom: 1px solid #dde4ee;
 }
 Toolbar QPushButton {
     min-width: 0;
@@ -1881,3 +1881,8 @@ QFrame#peekOverlay {
     border: 1px solid #d3d8df;
     border-radius: 10px;
 }
+
+/* Frame seams (Rule B): anchor the bottom bands so View tab + hint are not floating. */
+QStatusBar { background-color: #f0f3f7; border-top: 1px solid #dde4ee; }
+QFrame#chartHintBar { border-top: 1px solid #dde4ee; }
+QWidget#viewTabBar { border-top: 1px solid #dde4ee; }
