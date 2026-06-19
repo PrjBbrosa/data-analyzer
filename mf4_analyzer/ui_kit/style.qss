@@ -1,10 +1,9 @@
 /* ==== MF4 Analyzer — Precision Light visual system (云白/snow) ====
- * Snow tokens (3-level neutral elevation + 1 interaction blue)
- *   base            #f0f3f7   window, side panes, status/hint/view bars, toolbar band
- *   surface         #f7f9fc   center chart panel (lighter than sidebars)
- *   card            #ffffff   cards, inputs, tree, menus
- *   divider         #dde4ee   splitter line, panel seams, frame seams, card edges
- *   hairline        #eef2f7   within-card sub-section separators (soft)
+ * Snow tokens (all-white panels + 1 interaction blue)
+ *   panels/surface/frame  #ffffff   all three panes + toolbar + status/hint/view bars
+ *   card                  #ffffff   cards, inputs, tree, menus
+ *   divider               #d3dbe6   splitter line, panel seams, frame seams, card edges (stronger)
+ *   hairline              #eef2f7   within-card sub-section separators (soft)
  *   accent #1769e0  ·  accent-wash #e8efff   (interaction only)
  * Text / hierarchy — by size + weight only, no background fills:
  *   pane / card title  13px / 700   #111827
@@ -15,7 +14,7 @@
 
 QMainWindow,
 QWidget {
-    background-color: #f0f3f7;
+    background-color: #ffffff;
     color: #111827;
     font-family: "Microsoft YaHei", "Segoe UI", "PingFang SC", "SF Pro Text", sans-serif;
     font-size: 12px;
@@ -299,8 +298,8 @@ QToolButton[role="tool"] {
 
 /* Toolbar */
 Toolbar {
-    background-color: #f0f3f7;
-    border-bottom: 1px solid #dde4ee;
+    background-color: #ffffff;
+    border-bottom: 1px solid #d3dbe6;
 }
 Toolbar QPushButton {
     min-width: 0;
@@ -783,10 +782,10 @@ QFrame#rightVerdictBanner[verdict="error"] QLabel {
 
 /* ============ Left navigator ============ */
 FileNavigator {
-    background-color: #f0f3f7;
-    border-right: 1px solid #dde4ee;
+    background-color: #ffffff;
+    border-right: 1px solid #d3dbe6;
 }
-QWidget#fileArea { background-color: #f0f3f7; }
+QWidget#fileArea { background-color: #ffffff; }
 
 /* Pane-level heading — 13/700, breathe via padding-right for tracking */
 QLabel#paneHeader {
@@ -872,15 +871,15 @@ QHeaderView::section {
 
 /* ============ Inspector ============ */
 Inspector {
-    background-color: #f0f3f7;
-    border-left: 1px solid #dde4ee;
+    background-color: #ffffff;
+    border-left: 1px solid #d3dbe6;
 }
 QScrollArea#inspectorScroll {
     border: none;
-    background-color: #f0f3f7;
+    background-color: #ffffff;
 }
 QScrollArea#inspectorScroll > QWidget > QWidget {
-    background-color: #f0f3f7;
+    background-color: #ffffff;
 }
 Inspector QWidget[inspectorFieldHost="true"] {
     background-color: transparent;
@@ -978,7 +977,7 @@ Inspector QFrame#fftSignalCard,
 Inspector QFrame#orderSignalCard,
 Inspector QFrame#fftTimeSignalCard {
     background-color: #ffffff;
-    border: 1px solid #dde4ee;
+    border: 1px solid #d3dbe6;
     border-radius: 8px;
     padding: 0;
 }
@@ -1012,7 +1011,7 @@ Inspector QFrame#fftParamsCard,
 Inspector QFrame#fftTimeParamsCard,
 Inspector QFrame#orderParamsCard {
     background-color: #ffffff;
-    border: 1px solid #dde4ee;
+    border: 1px solid #d3dbe6;
     border-radius: 10px;
 }
 
@@ -1159,10 +1158,10 @@ Inspector QPushButton[role="choice"]:checked {
 Inspector QPushButton[role="primary"] { min-height: 30px; }
 
 /* ============ Chart stack ============ */
-ChartStack { background-color: #f7f9fc; }
+ChartStack { background-color: #ffffff; }
 
 QWidget#timeDomainPage {
-    background-color: #f7f9fc;
+    background-color: #ffffff;
 }
 
 QFrame#timeViewBottomDock {
@@ -1171,7 +1170,7 @@ QFrame#timeViewBottomDock {
 }
 
 QWidget#chartCard {
-    border: 1px solid #dde4ee;
+    border: 1px solid #d3dbe6;
     border-radius: 12px;
     background-color: #ffffff;
 }
@@ -1883,6 +1882,6 @@ QFrame#peekOverlay {
 }
 
 /* Frame seams (Rule B): anchor the bottom bands so View tab + hint are not floating. */
-QStatusBar { background-color: #f0f3f7; border-top: 1px solid #dde4ee; }
-QFrame#chartHintBar { border-top: 1px solid #dde4ee; }
-QWidget#viewTabBar { border-top: 1px solid #dde4ee; }
+QStatusBar { background-color: #ffffff; border-top: 1px solid #d3dbe6; }
+QFrame#chartHintBar { border-top: 1px solid #d3dbe6; }
+QWidget#viewTabBar { border-top: 1px solid #d3dbe6; }
