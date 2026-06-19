@@ -1887,3 +1887,6 @@ QFrame#peekOverlay {
 QStatusBar { background-color: #e8ecf2; border-top: 1px solid #d3dbe6; }
 QFrame#chartHintBar { border-top: 1px solid #d3dbe6; }
 QWidget#viewTabBar { border-top: 1px solid #d3dbe6; }
+
+/* Central tray backdrop — the three rounded panels float on this. */
+QWidget#centralTray { background-color: #e8ecf2; }

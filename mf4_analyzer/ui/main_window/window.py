@@ -104,9 +104,10 @@ class MainWindow(
 
         cw = QWidget()
         self.setCentralWidget(cw)
+        cw.setObjectName("centralTray")
         root = QVBoxLayout(cw)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
 
         self.toolbar = Toolbar(self)
         root.addWidget(self.toolbar)
