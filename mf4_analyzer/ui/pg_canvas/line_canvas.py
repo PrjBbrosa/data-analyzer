@@ -739,6 +739,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         DIMS them and overlays a "结果已过期" marker, while the lower time row
         still updates live to the new selection. The next ``plot_spectra``
         restores the normal visual state."""
+        self.clear_empty_hint()
         if clear_spectrum:
             for c in self._amp_curves:
                 self._plot_amp.removeItem(c)

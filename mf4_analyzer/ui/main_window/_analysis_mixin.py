@@ -557,17 +557,7 @@ class AnalysisMixin:
             self.statusBar.showMessage("参数/源已就绪，点击计算")
 
     def _show_analysis_empty_hint(self, canvas):
-        text = "点击『计算』生成"
-        if hasattr(canvas, 'show_empty_hint'):
-            try:
-                canvas.show_empty_hint(text)
-                return
-            except Exception:
-                pass
-        try:
-            canvas._empty_hint_text = text
-        except Exception:
-            pass
+        canvas.show_empty_hint("点击『计算』生成")
 
     def _clear_analysis_canvas(self, canvas):
         if hasattr(canvas, 'full_reset'):

@@ -170,10 +170,94 @@ def test_fft_cache_miss_shows_click_compute_empty_hint(two_file_win):
     canvas = win.chart_stack.page_fft.pane_canvas(0)
     win._render_analysis_view_from_cache("fft", state)
 
+    assert canvas._empty_hint_item is not None
+    assert canvas._empty_hint_item.scene() is not None
+    assert canvas._empty_hint_item.isVisible()
     assert "点击" in canvas._empty_hint_text
     assert "计算" in canvas._empty_hint_text
     assert "生成" in canvas._empty_hint_text
     assert win.statusBar.currentMessage() == "参数/源已就绪，点击计算"
+
+
+def test_fft_preview_clears_cache_miss_empty_hint(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fids = list(win.files.keys())
+
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    state.panes[0].sources = [(fids[0], "speed")]
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    win._render_analysis_view_from_cache("fft", state)
+    assert canvas._empty_hint_item is not None
+    assert canvas._empty_hint_item.isVisible()
+
+    canvas.plot_time_preview([], title="时域预览", clear_spectrum=True)
+
+    assert canvas._empty_hint_text == ""
+    assert canvas._empty_hint_item is None
+
+
+def test_fft_time_cache_miss_shows_visible_empty_hint(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+    fids = list(win.files.keys())
+
+    mgr = win.analysis_managers["fft_time"]
+    state = mgr.get(mgr.active)
+    state.panes[0].sources = [(fids[0], "speed")]
+
+    canvas = win.chart_stack.page_fft_time.pane_canvas(0)
+    win._render_analysis_view_from_cache("fft_time", state)
+
+    assert canvas._empty_hint_item is not None
+    assert canvas._empty_hint_item.scene() is not None
+    assert canvas._empty_hint_item.isVisible()
+    assert "点击" in canvas._empty_hint_text
+    assert "计算" in canvas._empty_hint_text
+    assert "生成" in canvas._empty_hint_text
+    assert win.statusBar.currentMessage() == "参数/源已就绪，点击计算"
+
+
+def test_fft_time_no_sources_does_not_show_empty_hint(two_file_win):
+    win = two_file_win
+    win.toolbar._set_mode("fft_time")
+
+    mgr = win.analysis_managers["fft_time"]
+    state = mgr.get(mgr.active)
+    state.panes[0].sources = []
+
+    canvas = win.chart_stack.page_fft_time.pane_canvas(0)
+    win._render_analysis_view_from_cache("fft_time", state)
+
+    assert canvas._empty_hint_text == ""
+    assert canvas._empty_hint_item is None
+
+
+def test_cache_miss_empty_hint_raises_when_canvas_api_fails(
+    two_file_win, monkeypatch
+):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    fids = list(win.files.keys())
+
+    mgr = win.analysis_managers["fft"]
+    state = mgr.get(mgr.active)
+    state.panes[0].sources = [(fids[0], "speed")]
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+
+    def fail_empty_hint(_text):
+        raise RuntimeError("broken visible hint")
+
+    monkeypatch.setattr(canvas, "show_empty_hint", fail_empty_hint)
+
+    with pytest.raises(RuntimeError, match="broken visible hint"):
+        win._render_analysis_view_from_cache("fft", state)
+
+    assert canvas._empty_hint_text == ""
+    assert canvas._empty_hint_item is None
 
 
 def test_fft_mode_channel_selection_previews_time_before_compute(two_file_win, qapp):
