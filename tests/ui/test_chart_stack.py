@@ -1985,6 +1985,22 @@ def test_overlay_needs_selection_signal_flashes_hint(qapp):
     assert "先选中一个通道" in card._hint_context.full_text()
 
 
+def test_heatmap_slice_hint_signal_flashes_hint(qapp):
+    from mf4_analyzer.ui.chart_stack import _ChartCard
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+
+    canvas = PgHeatmapCanvas(with_slice=True)
+    card = _ChartCard(canvas)
+    card.show()
+    qapp.processEvents()
+
+    canvas.slice_hint_requested.emit("点击位置超出谱图范围")
+    qapp.processEvents()
+
+    assert "点击位置超出谱图范围" in card._hint_context.full_text()
+    card.deleteLater()
+
+
 def test_bottom_hint_bar_context_uses_registry(qapp, monkeypatch):
     from mf4_analyzer.ui import hints
     from mf4_analyzer.ui.chart_stack import ChartStack

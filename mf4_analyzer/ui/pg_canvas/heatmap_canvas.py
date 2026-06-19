@@ -557,6 +557,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     # hint system (mark_discovered / flash) so the matching rotating-pool tip
     # retires once the user has performed the gesture for the first time.
     slice_picked = pyqtSignal()       # user clicked the map to position a slice
+    slice_hint_requested = pyqtSignal(str)  # user clicked where no slice can apply
     divider_adjusted = pyqtSignal()   # user dragged / reset the map↔slice divider
 
     def __init__(self, parent=None, with_slice: bool = False):
@@ -1528,18 +1529,20 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         the data extents (a click on the colorbar/padding is ignored)."""
         if (self._matrix_disp is None or self._slice_curve is None
                 or self._extents is None):
+            self.slice_hint_requested.emit("先点计算生成谱图")
             return
         x0, x1, y0, y1 = self._extents
+        if not (x0 <= x <= x1 and y0 <= y <= y1):
+            self.slice_hint_requested.emit("点击位置超出谱图范围")
+            return
         if self._slice_dir == 'y':
-            if y0 <= y <= y1:
-                self._slice_y_idx = self._freq_index_for(y)
-                self._apply_slice()
-                self.slice_picked.emit()
+            self._slice_y_idx = self._freq_index_for(y)
+            self._apply_slice()
+            self.slice_picked.emit()
         else:
-            if x0 <= x <= x1:
-                self._slice_x_idx = self._time_index_for(x)
-                self._apply_slice()
-                self.slice_picked.emit()
+            self._slice_x_idx = self._time_index_for(x)
+            self._apply_slice()
+            self.slice_picked.emit()
 
     def set_slice_button_labels(self, x_label: str, y_label: str) -> None:
         """Set the X/Y toggle segment captions (Order uses 按阶次 for Y)."""

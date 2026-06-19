@@ -774,6 +774,54 @@ def test_slice_updates_on_select(qapp):
     c.deleteLater()
 
 
+def test_slice_hint_emits_when_slice_data_missing(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    hints = []
+    c.slice_hint_requested.connect(hints.append)
+
+    c._select_slice_at(1.0, 1.0)
+
+    assert hints == ["先点计算生成谱图"]
+    c.deleteLater()
+
+
+def test_slice_out_of_range_emits_hint(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    hints = []
+    picks = []
+    c.slice_hint_requested.connect(hints.append)
+    c.slice_picked.connect(lambda: picks.append(True))
+
+    x0, _x1, y0, y1 = c._extents
+    c._select_slice_at(x0 - 1.0, (y0 + y1) / 2.0)
+
+    assert hints == ["点击位置超出谱图范围"]
+    assert picks == []
+    c.deleteLater()
+
+
+def test_slice_hint_not_emitted_for_in_range_pick(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    hints = []
+    picks = []
+    c.slice_hint_requested.connect(hints.append)
+    c.slice_picked.connect(lambda: picks.append(True))
+
+    x0, x1, y0, y1 = c._extents
+    c._select_slice_at((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+
+    assert hints == []
+    assert picks == [True]
+    c.deleteLater()
+
+
 def _slice_curve_aa_enabled(canvas):
     curve = canvas._slice_curve
     child = getattr(curve, "curve", None)

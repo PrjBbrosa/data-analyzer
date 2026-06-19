@@ -116,6 +116,9 @@ class _ChartCard(QWidget):
             canvas, 'levels_changed', 'spectrogram.colorbar')
         self._wire_discovery_signal(
             canvas, 'time_source_selected', 'fft.preview_source')
+        slice_hint_requested = getattr(canvas, 'slice_hint_requested', None)
+        if slice_hint_requested is not None:
+            slice_hint_requested.connect(lambda text: self.flash_hint(text))
         self.toolbar.setObjectName("chartToolbar")
         self.toolbar.setIconSize(QSize(18, 18))
         for act in self.toolbar.actions():
