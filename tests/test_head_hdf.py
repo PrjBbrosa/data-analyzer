@@ -62,3 +62,21 @@ def test_parse_header_fields_and_gbk(tmp_path):
     assert hf.channels[0].db_reference == "1e-003"
     assert hf.channels[0].factor == 2
     assert hf.channels[1].factor == 1
+
+
+def test_demux_native_samples(tmp_path):
+    fast = np.arange(8, dtype=float)          # factor 2, n_scans 4 -> [0..7]
+    slow = np.array([10., 20., 30., 40.])     # factor 1
+    p = write_head_hdf(
+        tmp_path / "d.hdf", n_scans=4, start_of_data=2048,
+        channels=[
+            {"name": "L", "factor": 2, "quantity": "sound pressure",
+             "unit": "Pa", "calibration": 1.0, "samples": fast},
+            {"name": "SP", "factor": 1, "quantity": "speed of rotation",
+             "unit": "deg/s", "calibration": 1.0, "samples": slow},
+        ])
+    hf = parse_head_hdf(p)
+    np.testing.assert_allclose(hf.channels[0].samples, fast)
+    np.testing.assert_allclose(hf.channels[1].samples, slow)
+    assert hf.channels[0].samples.size == 8
+    assert hf.channels[1].samples.size == 4

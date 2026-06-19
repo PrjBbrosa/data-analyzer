@@ -130,6 +130,23 @@ def parse_head_hdf(path) -> HeadHdfFile:
     for i, c in enumerate(channels, 1):
         c.factor = factor_by_ch.get(i, 1)
 
+    # --- binary demux (insert before building HeadHdfFile) ---
+    per_scan = sum(f for _, f in ch_order)
+    n = int(abscissa.get("nbr of scans", "0") or 0)
+    if per_scan and n:
+        floats = np.frombuffer(raw[start:start + n * per_scan * 4], dtype="<f4")
+        mat = floats.reshape(n, per_scan).astype(np.float64)
+        col = 0
+        offsets = {}
+        for ch, f in ch_order:        # storage order
+            offsets[ch] = (col, f)
+            col += f
+        for i, c in enumerate(channels, 1):
+            o, f = offsets.get(i, (None, c.factor))
+            if o is None:
+                continue
+            c.samples = mat[:, o:o + f].reshape(-1)
+
     return HeadHdfFile(
         version=int(top.get("version", "0") or 0),
         release=top.get("release", ""),
