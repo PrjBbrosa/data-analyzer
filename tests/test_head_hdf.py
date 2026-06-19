@@ -2,6 +2,8 @@
 from __future__ import annotations
 import numpy as np
 from tests._helpers.head_hdf_factory import write_head_hdf
+import pytest
+from mf4_analyzer.io.head_hdf import sniff_head_hdf, parse_head_hdf
 
 
 def _two_channel_file(path, n_scans=4):
@@ -25,3 +27,38 @@ def test_factory_writes_signature_and_offset(tmp_path):
     # body floats == sum(factor)*n_scans == (2+1)*4 == 12
     body = raw[2048:]
     assert len(body) == 12 * 4
+
+
+def test_sniff_true_false(tmp_path):
+    p = _two_channel_file(tmp_path / "s.hdf")
+    assert sniff_head_hdf(p) is True
+    bad = tmp_path / "bad.hdf"
+    bad.write_bytes(b"\x89HDF\r\n\x1a\n" + b"\x00" * 100)   # HDF5 magic
+    assert sniff_head_hdf(bad) is False
+
+
+def test_parse_header_fields_and_gbk(tmp_path):
+    fast = np.arange(8, dtype=float)
+    slow = np.arange(4, dtype=float)
+    p = write_head_hdf(
+        tmp_path / "g.hdf", n_scans=4, start_of_data=2048,
+        channels=[
+            {"name": "输出轴 x", "factor": 2, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.5, "db_reference": "1e-003",
+             "moniker": "Audio.Decoded", "samples": fast},
+            {"name": "SP", "factor": 1, "quantity": "speed of rotation",
+             "unit": "deg/s", "calibration": 3.0, "samples": slow},
+        ])
+    hf = parse_head_hdf(p)
+    assert hf.version == 4
+    assert hf.byte_order == "Intel"
+    assert hf.kind == "Time data"
+    assert hf.start_of_data == 2048
+    assert hf.n_scans == 4
+    assert hf.ch_order == [(1, 2), (2, 1)]
+    assert [c.name for c in hf.channels] == ["输出轴 x", "SP"]
+    assert hf.channels[0].quantity == "acceleration"
+    assert hf.channels[0].calibration == pytest.approx(1.5)
+    assert hf.channels[0].db_reference == "1e-003"
+    assert hf.channels[0].factor == 2
+    assert hf.channels[1].factor == 1
