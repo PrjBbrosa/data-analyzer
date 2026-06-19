@@ -1251,7 +1251,7 @@ QWidget#chartToolbar,
 NavigationToolbar2QT#chartToolbar,
 NavigationToolbar2QT {
     background-color: #ffffff;
-    border-bottom: 1px solid #eef2f7;
+    border-bottom: none;
     spacing: 1px;
     padding: 1px;
 }
