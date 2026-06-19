@@ -774,15 +774,19 @@ def test_slice_updates_on_select(qapp):
     c.deleteLater()
 
 
-def test_slice_hint_emits_when_slice_data_missing(qapp):
+def test_slice_hint_emits_when_scene_click_has_no_slice_data(qapp):
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
     hints = []
     c.slice_hint_requested.connect(hints.append)
 
-    c._select_slice_at(1.0, 1.0)
+    sp = c._plot.vb.mapViewToScene(QPointF(1.0, 1.0))
+    c._on_scene_click(_FakeSceneClick(sp, Qt.LeftButton))
 
     assert hints == ["先点计算生成谱图"]
+    c.hide()
     c.deleteLater()
 
 
@@ -819,6 +823,43 @@ def test_slice_hint_not_emitted_for_in_range_pick(qapp):
 
     assert hints == []
     assert picks == [True]
+    c.deleteLater()
+
+
+def test_y_slice_scene_click_hint_and_pick_paths(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
+    c.set_slice_direction('y')
+    hints = []
+    picks = []
+    c.slice_hint_requested.connect(hints.append)
+    c.slice_picked.connect(lambda: picks.append(True))
+
+    x0, x1, y0, y1 = c._extents
+    x_mid = (x0 + x1) / 2.0
+    y_out = y0 - max((y1 - y0) * 0.1, 1.0)
+    c._plot.setYRange(y_out, y1, padding=0)
+    qapp.processEvents()
+
+    sp = c._plot.vb.mapViewToScene(QPointF(x_mid, y_out))
+    c._on_scene_click(_FakeSceneClick(sp, Qt.LeftButton))
+
+    assert hints == ["点击位置超出谱图范围"]
+    assert picks == []
+
+    hints.clear()
+    y_pick = float(r.frequencies[10])
+    sp = c._plot.vb.mapViewToScene(QPointF(x_mid, y_pick))
+    c._on_scene_click(_FakeSceneClick(sp, Qt.LeftButton))
+
+    assert hints == []
+    assert picks == [True]
+    assert c._slice_marker.value() == pytest.approx(y_pick)
+    c.hide()
     c.deleteLater()
 
 

@@ -2070,7 +2070,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         if ev.button() == Qt.LeftButton:
             if self._remark_enabled:
                 self.add_remark_at(p.x(), p.y())
-            elif self._slice_curve is not None and self._matrix_disp is not None:
+            elif self._slice_curve is not None:
                 # Left-click positions the slice at the nearest cell along the
                 # active axis (X slice → snap time; Y slice → snap freq/order).
                 # Works for both FFT-vs-Time and Order.
