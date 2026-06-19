@@ -1159,10 +1159,10 @@ Inspector QPushButton[role="choice"]:checked {
 Inspector QPushButton[role="primary"] { min-height: 30px; }
 
 /* ============ Chart stack ============ */
-ChartStack { background-color: #ffffff; }
+ChartStack { background-color: #f7f9fc; }
 
 QWidget#timeDomainPage {
-    background-color: #ffffff;
+    background-color: #f7f9fc;
 }
 
 QFrame#timeViewBottomDock {
@@ -1171,7 +1171,7 @@ QFrame#timeViewBottomDock {
 }
 
 QWidget#chartCard {
-    border: 1px solid #eef2f7;
+    border: 1px solid #dde4ee;
     border-radius: 12px;
     background-color: #ffffff;
 }
