@@ -108,6 +108,22 @@ def test_fft_compute_feedback_success_toast(two_file_win, monkeypatch):
     assert calls == [("success", "FFT完成 · 2 图")]
 
 
+def test_fft_nonuniform_skip_reason_matches_feedback_contract(
+    two_file_win, monkeypatch
+):
+    win = two_file_win
+    win.toolbar._set_mode("fft")
+    _check_speed_in_both(win)
+    monkeypatch.setattr(win, "_check_uniform_or_prompt", lambda _fd, _mode: False)
+
+    calls = []
+    monkeypatch.setattr(win, "toast", lambda msg, level: calls.append((level, msg)))
+
+    win.do_fft()
+
+    assert calls == [("warning", "无可计算的图：2 个非均匀且未重建")]
+
+
 def test_fft_split_cache_render_uses_channel_swatch_colors(two_file_win):
     win = two_file_win
     win.toolbar._set_mode("fft")

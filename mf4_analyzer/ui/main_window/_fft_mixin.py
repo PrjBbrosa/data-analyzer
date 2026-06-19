@@ -129,10 +129,10 @@ class FFTMixin:
         view. Each pane overlays N curves (its sources); each source is cached
         on a (fid, ch, compute-params) key so re-render / view-switch is free.
 
-        Back-compat: when the focused pane has no navigator-checked sources
-        (or they are not fetchable), fall back to the legacy single-signal
-        ``_get_sig()`` path so the existing single-signal UX + tests are
-        unchanged.
+        Back-compat: when no pane has captured sources, fall back to the
+        legacy single-signal ``_get_sig()`` path so the existing
+        single-signal UX + tests are unchanged. Captured-but-unfetchable
+        sources are summarized as skipped instead.
         """
         self._capture_active_analysis_view('fft')
         mgr = self.analysis_managers['fft']
@@ -164,7 +164,7 @@ class FFTMixin:
                     continue
                 fd = self.files.get(fid)
                 if not self._check_uniform_or_prompt(fd, 'fft'):
-                    outcome.skipped.append("时间轴非均匀")
+                    outcome.skipped.append("非均匀且未重建")
                     continue
                 sig, fs = self._fft_fetch_signal(
                     fid, ch, time_range=time_range)
