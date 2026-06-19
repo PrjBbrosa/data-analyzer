@@ -141,7 +141,7 @@ class ProjectIOMixin:
                         label_suffix=g["label_suffix"])
                 self._update_info()
                 self.statusBar.showMessage(
-                    f"✅ 已加载: {p.name} → {len(groups)} 组 | 共 {len(self.files)} 文件")
+                    f"✅ 已加载: {p.name} → {len(groups)} 组 | 共 {self.navigator.file_list_count()} 个源文件")
                 self.toast(f"已加载 {p.name} · {len(groups)} 组", "success")
                 return
             else:

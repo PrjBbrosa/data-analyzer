@@ -243,47 +243,112 @@ class MultiFileChannelWidget(QWidget):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self.tree)
-        self._file_items = {};
-        self._colors = {};
-        self._files = {};
+        self._file_items = {}   # fid -> QTreeWidgetItem (flat mode: top-level; nested mode: raster node)
+        self._colors = {}
+        self._files = {}
         self._updating = False
+        # NEW: for nested (HEAD .hdf) mode
+        self._source_items = {}  # filepath_str -> QTreeWidgetItem (top-level file node)
+        self._raster_items = {}  # fid -> QTreeWidgetItem (raster subgroup node)
 
     def add_file(self, fid, fd):
         self._files[fid] = fd
-        fp = getattr(fd, "filepath", None)
-        if fp is not None:
-            file_label = fp.stem
-            file_tip = fp.name
+        label_suffix = getattr(fd, 'label_suffix', '')
+
+        if label_suffix:
+            # NESTED MODE: source file node → raster subgroup → channel leaves
+            fp = getattr(fd, 'filepath', None)
+            fp_str = str(fp) if fp is not None else fid
+            file_label = fp.stem if fp is not None else fp_str
+
+            # Get or create file-level source node
+            if fp_str not in self._source_items:
+                source_item = QTreeWidgetItem([file_label, ""])
+                if fp is not None:
+                    source_item.setToolTip(0, fp.name)
+                source_item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                source_item.setFlags(source_item.flags() | Qt.ItemIsUserCheckable)
+                source_item.setCheckState(0, Qt.Unchecked)
+                source_item.setData(0, Qt.UserRole, ('source', fp_str))
+                source_item.setExpanded(True)
+                font = source_item.font(0)
+                font.setBold(True)
+                source_item.setFont(0, font)
+                self.tree.addTopLevelItem(source_item)
+                self._source_items[fp_str] = source_item
+            else:
+                source_item = self._source_items[fp_str]
+
+            # Create raster subgroup node
+            n_rows = len(fd.data)
+            raster_item = QTreeWidgetItem([f"{fd.fs:.1f} Hz", str(n_rows)])
+            raster_item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+            raster_item.setFlags(raster_item.flags() | Qt.ItemIsUserCheckable)
+            raster_item.setCheckState(0, Qt.Unchecked)
+            raster_item.setData(0, Qt.UserRole, ('raster', fid))
+            raster_item.setExpanded(True)
+            raster_item.setToolTip(0, f"{n_rows} 行")
+            font2 = raster_item.font(0)
+            font2.setBold(True)
+            raster_item.setFont(0, font2)
+            source_item.addChild(raster_item)
+            self._raster_items[fid] = raster_item
+
+            # Add channel leaves under raster node
+            palette = fd.get_color_palette()
+            for i, ch in enumerate(fd.get_signal_channels()):
+                color = palette[i % len(palette)]
+                self._colors[(fid, ch)] = color
+                ci = QTreeWidgetItem([ch, str(n_rows)])
+                ci.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                ci.setFlags(ci.flags() | Qt.ItemIsUserCheckable)
+                ci.setCheckState(0, Qt.Unchecked)
+                ci.setData(0, Qt.UserRole, ('channel', fid, ch))
+                ci.setIcon(0, _swatch_icon(color))
+                ci.setForeground(0, QBrush(QColor('#111827')))
+                ci.setForeground(1, QBrush(QColor('#64748b')))
+                raster_item.addChild(ci)
+
+            # Also store raster_item in _file_items for backwards-compat APIs
+            self._file_items[fid] = raster_item
+
         else:
-            file_tip = getattr(fd, "filename", "") or getattr(fd, "short_name", "")
-            file_label = file_tip.rsplit(".", 1)[0] if "." in file_tip else file_tip
-        fi = QTreeWidgetItem([file_label, f"{len(fd.data)}"])
-        if file_tip:
-            fi.setToolTip(0, file_tip)
-        fi.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
-        # 不使用AutoTristate，手动控制文件级勾选
-        fi.setFlags(fi.flags() | Qt.ItemIsUserCheckable)
-        fi.setCheckState(0, Qt.Unchecked)
-        fi.setData(0, Qt.UserRole, ('file', fid));
-        fi.setExpanded(True)
-        font = fi.font(0);
-        font.setBold(True);
-        fi.setFont(0, font)
-        palette = fd.get_color_palette()
-        for i, ch in enumerate(fd.get_signal_channels()):
-            color = palette[i % len(palette)];
-            self._colors[(fid, ch)] = color
-            ci = QTreeWidgetItem([ch, str(len(fd.data))])
-            ci.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
-            ci.setFlags(ci.flags() | Qt.ItemIsUserCheckable);
-            ci.setCheckState(0, Qt.Unchecked)
-            ci.setData(0, Qt.UserRole, ('channel', fid, ch));
-            ci.setIcon(0, _swatch_icon(color))
-            ci.setForeground(0, QBrush(QColor('#111827')))
-            ci.setForeground(1, QBrush(QColor('#64748b')))
-            fi.addChild(ci)
-        self.tree.addTopLevelItem(fi);
-        self._file_items[fid] = fi
+            # FLAT MODE: existing 2-level behavior (unchanged)
+            fp = getattr(fd, "filepath", None)
+            if fp is not None:
+                file_label = fp.stem
+                file_tip = fp.name
+            else:
+                file_tip = getattr(fd, "filename", "") or getattr(fd, "short_name", "")
+                file_label = file_tip.rsplit(".", 1)[0] if "." in file_tip else file_tip
+            fi = QTreeWidgetItem([file_label, f"{len(fd.data)}"])
+            if file_tip:
+                fi.setToolTip(0, file_tip)
+            fi.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+            # 不使用AutoTristate，手动控制文件级勾选
+            fi.setFlags(fi.flags() | Qt.ItemIsUserCheckable)
+            fi.setCheckState(0, Qt.Unchecked)
+            fi.setData(0, Qt.UserRole, ('file', fid))
+            fi.setExpanded(True)
+            font = fi.font(0)
+            font.setBold(True)
+            fi.setFont(0, font)
+            palette = fd.get_color_palette()
+            for i, ch in enumerate(fd.get_signal_channels()):
+                color = palette[i % len(palette)]
+                self._colors[(fid, ch)] = color
+                ci = QTreeWidgetItem([ch, str(len(fd.data))])
+                ci.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                ci.setFlags(ci.flags() | Qt.ItemIsUserCheckable)
+                ci.setCheckState(0, Qt.Unchecked)
+                ci.setData(0, Qt.UserRole, ('channel', fid, ch))
+                ci.setIcon(0, _swatch_icon(color))
+                ci.setForeground(0, QBrush(QColor('#111827')))
+                ci.setForeground(1, QBrush(QColor('#64748b')))
+                fi.addChild(ci)
+            self.tree.addTopLevelItem(fi)
+            self._file_items[fid] = fi
+
         self._apply_filters()
         self._update_edit_enabled()
 
@@ -292,18 +357,31 @@ class MultiFileChannelWidget(QWidget):
         self.btn_edit.setEnabled(bool(self._files))
 
     def _on_item_changed(self, item, col):
-        if self._updating: return
+        if self._updating:
+            return
         data = item.data(0, Qt.UserRole)
-        if data and data[0] == 'file':
-            # 文件级复选框被点击
+
+        if data and data[0] in ('file', 'source', 'raster'):
             checked = item.checkState(0) == Qt.Checked
+
+            # Count all descendant channel leaves
+            def _count_channels(node):
+                total = 0
+                for i in range(node.childCount()):
+                    child = node.child(i)
+                    cd = child.data(0, Qt.UserRole)
+                    if cd and cd[0] == 'channel':
+                        total += 1
+                    else:
+                        total += _count_channels(child)
+                return total
+
             if checked:
-                # 统计该文件下有多少通道
-                n_channels = item.childCount()
+                n_channels = _count_channels(item)
                 if n_channels > self.MAX_CHANNELS_WARNING:
                     reply = QMessageBox.question(
                         self.tree, "确认",
-                        f"该文件有 {n_channels} 个通道，全部勾选可能导致卡顿。\n确定要全选吗？",
+                        f"该节点有 {n_channels} 个通道，全部勾选可能导致卡顿。\n确定要全选吗？",
                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No
                     )
                     if reply != QMessageBox.Yes:
@@ -311,17 +389,19 @@ class MultiFileChannelWidget(QWidget):
                         item.setCheckState(0, Qt.Unchecked)
                         self._updating = False
                         return
-                # 勾选所有子通道
-                self._updating = True
-                for i in range(item.childCount()):
-                    item.child(i).setCheckState(0, Qt.Checked)
-                self._updating = False
-            else:
-                # 取消所有子通道
-                self._updating = True
-                for i in range(item.childCount()):
-                    item.child(i).setCheckState(0, Qt.Unchecked)
-                self._updating = False
+
+            # Recursively set all descendant nodes
+            def _set_all(node, state):
+                for i in range(node.childCount()):
+                    child = node.child(i)
+                    child.setCheckState(0, state)
+                    _set_all(child, state)
+
+            state = Qt.Checked if checked else Qt.Unchecked
+            self._updating = True
+            _set_all(item, state)
+            self._updating = False
+
         self._apply_filters()
         self.channels_changed.emit()
 
@@ -351,24 +431,53 @@ class MultiFileChannelWidget(QWidget):
             self.primary_channel_requested.emit(fid, ch)
 
     def remove_file(self, fid):
-        if fid in self._file_items:
-            i = self._file_items.pop(fid);
-            idx = self.tree.indexOfTopLevelItem(i)
-            if idx >= 0: self.tree.takeTopLevelItem(idx)
-        for k in [k for k in self._colors if k[0] == fid]: del self._colors[k]
-        if fid in self._files: del self._files[fid]
+        # Clean up colors and files dict
+        for k in [k for k in self._colors if k[0] == fid]:
+            del self._colors[k]
+        if fid in self._files:
+            del self._files[fid]
+
+        # Check if nested (raster) or flat
+        if fid in self._raster_items:
+            raster_item = self._raster_items.pop(fid)
+            parent = raster_item.parent()
+            if parent is not None:
+                parent.removeChild(raster_item)
+                # If the source node has no more raster children, remove it
+                if parent.childCount() == 0:
+                    pdata = parent.data(0, Qt.UserRole)
+                    if pdata and pdata[0] == 'source':
+                        fp_str = pdata[1]
+                        self._source_items.pop(fp_str, None)
+                        idx = self.tree.indexOfTopLevelItem(parent)
+                        if idx >= 0:
+                            self.tree.takeTopLevelItem(idx)
+            # Also clean up _file_items (which pointed to raster_item)
+            self._file_items.pop(fid, None)
+        elif fid in self._file_items:
+            # Flat mode
+            fi = self._file_items.pop(fid)
+            idx = self.tree.indexOfTopLevelItem(fi)
+            if idx >= 0:
+                self.tree.takeTopLevelItem(idx)
+
         self._update_edit_enabled()
         self.channels_changed.emit()
 
     def get_checked_channels(self):
-        r = []
-        for fid, fi in self._file_items.items():
-            for i in range(fi.childCount()):
-                ci = fi.child(i)
-                if ci.checkState(0) == Qt.Checked:
-                    d = ci.data(0, Qt.UserRole)
-                    if d and d[0] == 'channel': r.append((d[1], d[2], self._colors.get((d[1], d[2]), '#1f77b4')))
-        return r
+        result = []
+
+        def _collect(item):
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'channel' and item.checkState(0) == Qt.Checked:
+                fid, ch = data[1], data[2]
+                result.append((fid, ch, self._colors.get((fid, ch), '#1f77b4')))
+            for i in range(item.childCount()):
+                _collect(item.child(i))
+
+        for i in range(self.tree.topLevelItemCount()):
+            _collect(self.tree.topLevelItem(i))
+        return result
 
     def set_checked_channels(self, checked):
         """Batch-restore checked channels without emitting channels_changed."""
@@ -382,19 +491,38 @@ class MultiFileChannelWidget(QWidget):
 
         self._updating = True
         try:
-            for fid, fi in self._file_items.items():
-                all_checked = fi.childCount() > 0
-                for i in range(fi.childCount()):
-                    ci = fi.child(i)
-                    data = ci.data(0, Qt.UserRole)
-                    is_checked = bool(
-                        data
-                        and data[0] == 'channel'
-                        and (data[1], data[2]) in wanted
-                    )
-                    ci.setCheckState(0, Qt.Checked if is_checked else Qt.Unchecked)
-                    all_checked = all_checked and is_checked
-                fi.setCheckState(0, Qt.Checked if all_checked else Qt.Unchecked)
+            def _set_in_subtree(item):
+                data = item.data(0, Qt.UserRole)
+                if data and data[0] == 'channel':
+                    is_checked = (data[1], data[2]) in wanted
+                    item.setCheckState(0, Qt.Checked if is_checked else Qt.Unchecked)
+                else:
+                    for i in range(item.childCount()):
+                        _set_in_subtree(item.child(i))
+                    # Update container check state based on descendants
+                    if item.childCount() > 0:
+                        all_ch = True
+                        any_ch = False
+
+                        def _check_leaves(node):
+                            nonlocal all_ch, any_ch
+                            for i in range(node.childCount()):
+                                c = node.child(i)
+                                cd = c.data(0, Qt.UserRole)
+                                if cd and cd[0] == 'channel':
+                                    st = c.checkState(0) == Qt.Checked
+                                    all_ch = all_ch and st
+                                    any_ch = any_ch or st
+                                else:
+                                    _check_leaves(c)
+
+                        all_ch = True
+                        any_ch = False
+                        _check_leaves(item)
+                        item.setCheckState(0, Qt.Checked if all_ch else Qt.Unchecked)
+
+            for i in range(self.tree.topLevelItemCount()):
+                _set_in_subtree(self.tree.topLevelItem(i))
         finally:
             self._updating = False
         self._apply_filters()
@@ -403,16 +531,20 @@ class MultiFileChannelWidget(QWidget):
         return dict(self._colors)
 
     def set_channel_colors(self, colors):
+        # Rebuild valid_keys from all channel leaves in tree
         valid_keys = set()
-        for fi in self._file_items.values():
-            for i in range(fi.childCount()):
-                data = fi.child(i).data(0, Qt.UserRole)
-                if data and data[0] == 'channel':
-                    valid_keys.add((data[1], data[2]))
-        self._colors = {
-            key: color for key, color in self._colors.items() if key in valid_keys
-        }
 
+        def _collect_keys(item):
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'channel':
+                valid_keys.add((data[1], data[2]))
+            for i in range(item.childCount()):
+                _collect_keys(item.child(i))
+
+        for i in range(self.tree.topLevelItemCount()):
+            _collect_keys(self.tree.topLevelItem(i))
+
+        self._colors = {k: v for k, v in self._colors.items() if k in valid_keys}
         for key, hex_color in (colors or {}).items():
             try:
                 fid, ch = key
@@ -422,21 +554,32 @@ class MultiFileChannelWidget(QWidget):
                 continue
             self._colors[(fid, ch)] = hex_color
 
-        for fi in self._file_items.values():
-            for i in range(fi.childCount()):
-                ci = fi.child(i)
-                data = ci.data(0, Qt.UserRole)
-                if not data or data[0] != 'channel':
-                    continue
+        # Update icons in tree
+        def _update_icons(item):
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'channel':
                 key = (data[1], data[2])
                 if key in self._colors:
-                    ci.setIcon(0, _swatch_icon(self._colors[key]))
+                    item.setIcon(0, _swatch_icon(self._colors[key]))
+            for i in range(item.childCount()):
+                _update_icons(item.child(i))
+
+        for i in range(self.tree.topLevelItemCount()):
+            _update_icons(self.tree.topLevelItem(i))
 
     def get_file_data(self, fid):
         return self._files.get(fid)
 
     def check_first_channel(self, fid):
-        if fid in self._file_items:
+        if fid in self._raster_items:
+            ri = self._raster_items[fid]
+            if ri.childCount() > 0:
+                self._updating = True
+                ri.child(0).setCheckState(0, Qt.Checked)
+                self._updating = False
+                self._apply_filters()
+                self.channels_changed.emit()
+        elif fid in self._file_items:
             fi = self._file_items[fid]
             if fi.childCount() > 0:
                 self._updating = True
@@ -452,25 +595,46 @@ class MultiFileChannelWidget(QWidget):
         t = self.search.text().strip().lower()
         show_checked_only = self.btn_selected_only.isChecked()
         filtering = bool(t) or show_checked_only
-        for fid, fi in self._file_items.items():
-            v = 0
-            for i in range(fi.childCount()):
-                ci = fi.child(i);
-                matches_text = not t or t in ci.text(0).lower()
-                matches_checked = (
-                    not show_checked_only
-                    or ci.checkState(0) == Qt.Checked
-                )
-                m = matches_text and matches_checked
-                ci.setHidden(not m);
-                v += m
-            fi.setHidden(v == 0 and filtering)
-            if filtering and v > 0:
-                fi.setExpanded(True)
+
+        def _apply_to_node(item):
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'channel':
+                matches_text = not t or t in item.text(0).lower()
+                matches_checked = not show_checked_only or item.checkState(0) == Qt.Checked
+                visible = matches_text and matches_checked
+                item.setHidden(not visible)
+                return visible
+            else:
+                # Container node: visible if any child is visible
+                visible_children = 0
+                for i in range(item.childCount()):
+                    if _apply_to_node(item.child(i)):
+                        visible_children += 1
+                hide = (visible_children == 0 and filtering)
+                item.setHidden(hide)
+                if filtering and visible_children > 0:
+                    item.setExpanded(True)
+                return visible_children > 0
+
+        for i in range(self.tree.topLevelItemCount()):
+            _apply_to_node(self.tree.topLevelItem(i))
 
     def _all(self):
-        # 统计总共要勾选多少通道
-        total = sum(fi.childCount() for fi in self._file_items.values())
+        # Count total visible channel leaves across the whole tree
+        def _count_visible_channels(item):
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'channel':
+                return 0 if item.isHidden() else 1
+            total = 0
+            for i in range(item.childCount()):
+                total += _count_visible_channels(item.child(i))
+            return total
+
+        total = sum(
+            _count_visible_channels(self.tree.topLevelItem(i))
+            for i in range(self.tree.topLevelItemCount())
+        )
+
         if total > self.MAX_CHANNELS_WARNING:
             reply = QMessageBox.question(
                 self.tree, "确认",
@@ -479,20 +643,35 @@ class MultiFileChannelWidget(QWidget):
             )
             if reply != QMessageBox.Yes:
                 return
+
         self._updating = True
-        for fi in self._file_items.values():
-            for i in range(fi.childCount()):
-                if not fi.child(i).isHidden(): fi.child(i).setCheckState(0, Qt.Checked)
-        self._updating = False;
+
+        def _check_visible(item):
+            data = item.data(0, Qt.UserRole)
+            if data and data[0] == 'channel':
+                if not item.isHidden():
+                    item.setCheckState(0, Qt.Checked)
+            else:
+                for i in range(item.childCount()):
+                    _check_visible(item.child(i))
+
+        for i in range(self.tree.topLevelItemCount()):
+            _check_visible(self.tree.topLevelItem(i))
+        self._updating = False
         self._apply_filters()
         self.channels_changed.emit()
 
     def _none(self):
         self._updating = True
-        for fi in self._file_items.values():
-            fi.setCheckState(0, Qt.Unchecked)
-            for i in range(fi.childCount()): fi.child(i).setCheckState(0, Qt.Unchecked)
-        self._updating = False;
+
+        def _uncheck_all(item):
+            item.setCheckState(0, Qt.Unchecked)
+            for i in range(item.childCount()):
+                _uncheck_all(item.child(i))
+
+        for i in range(self.tree.topLevelItemCount()):
+            _uncheck_all(self.tree.topLevelItem(i))
+        self._updating = False
         self._apply_filters()
         self.channels_changed.emit()
 

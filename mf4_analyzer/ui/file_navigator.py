@@ -48,14 +48,19 @@ class _ElidedLabel(QLabel):
 
 
 class _FileRow(QFrame):
-    activated = pyqtSignal(str)
-    close_requested = pyqtSignal(str)
+    activated = pyqtSignal(str)       # emits primary fid
+    close_requested = pyqtSignal(str)  # emits rows_key (filepath_str or fid)
 
     def __init__(self, fid, fd, parent=None):
         super().__init__(parent)
-        self.fid = fid
+        # --- fid list (ordered) ---
+        self._fids = [fid]
+        self._fds = [fd]
+        self.fid = fid  # primary fid (backwards compat)
+        self._rows_key = fid  # default key; caller may override via _set_rows_key
         self.setObjectName("fileRow")
         self._active = False
+
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(7)
@@ -87,16 +92,58 @@ class _FileRow(QFrame):
         self._btn_close.setToolTip("关闭文件")
         self._btn_close.setProperty("role", "tool")
         self._btn_close.setAutoRaise(True)
-        self._btn_close.clicked.connect(lambda: self.close_requested.emit(self.fid))
+        self._btn_close.clicked.connect(
+            lambda: self.close_requested.emit(self._rows_key)
+        )
         top.addWidget(self._btn_close, 0, Qt.AlignVCenter)
         lay.addLayout(top)
-        dur = fd.time_array[-1] if len(fd.time_array) else 0
-        self._lbl_meta = QLabel(
-            f"{len(fd.data)} 行 · {fd.fs:.1f} Hz · {dur:.2f} s"
-        )
+        self._lbl_meta = QLabel("")
         self._lbl_meta.setObjectName("fileRowMeta")
         lay.addWidget(self._lbl_meta)
         outer.addLayout(lay, stretch=1)
+        self._refresh_meta()
+
+    def _set_rows_key(self, key):
+        """Set the key this row emits on close (filepath_str in grouped mode, fid in flat)."""
+        self._rows_key = key
+
+    def _refresh_meta(self):
+        if len(self._fids) == 1:
+            fd = self._fds[0]
+            dur = fd.time_array[-1] if fd.time_array is not None and len(fd.time_array) else 0
+            self._lbl_meta.setText(
+                f"{len(fd.data)} 行 · {fd.fs:.1f} Hz · {dur:.2f} s"
+            )
+        else:
+            # N>1 fids: "N 轨 · fs1k/fs2k Hz · dur s"
+            hz_parts = "/".join(f"{fd.fs / 1000:.1f}k" for fd in self._fds)
+            max_dur = 0.0
+            for fd in self._fds:
+                if fd.time_array is not None and len(fd.time_array):
+                    max_dur = max(max_dur, fd.time_array[-1])
+            self._lbl_meta.setText(
+                f"{len(self._fids)} 轨 · {hz_parts} Hz · {max_dur:.2f} s"
+            )
+
+    def add_fid(self, fid, fd):
+        """Merge a new fid into this group card and refresh the meta label."""
+        self._fids.append(fid)
+        self._fds.append(fd)
+        self._refresh_meta()
+
+    def remove_fid(self, fid):
+        """Remove a fid from this group. Returns True if the group is now empty."""
+        try:
+            idx = self._fids.index(fid)
+            self._fids.pop(idx)
+            self._fds.pop(idx)
+        except ValueError:
+            pass
+        if self._fids:
+            self.fid = self._fids[0]
+            self._refresh_meta()
+            return False
+        return True
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -126,7 +173,12 @@ class FileNavigator(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._rows = {}        # fid -> _FileRow
+        # rows_key -> _FileRow
+        # rows_key = filepath_str when label_suffix is non-empty (grouped mode)
+        # rows_key = fid when label_suffix is empty (flat mode, backwards compat)
+        self._rows = {}
+        # fid -> rows_key
+        self._fid_to_key = {}
         self._active_fid = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
@@ -201,33 +253,64 @@ class FileNavigator(QWidget):
 
     # ---- public API used by MainWindow ----
     def add_file(self, fid, fd):
-        row = _FileRow(fid, fd, self)
-        row.activated.connect(self._activate)
-        row.close_requested.connect(self._request_close)
-        insert_pos = self._file_layout.count() - 1  # before the stretch
-        self._file_layout.insertWidget(insert_pos, row)
-        self._rows[fid] = row
+        label_suffix = getattr(fd, 'label_suffix', '')
+        fp = getattr(fd, 'filepath', None)
+
+        if label_suffix and fp is not None:
+            # GROUPED MODE: use filepath_str as the rows key
+            fp_str = str(fp)
+            if fp_str in self._rows:
+                # Add to existing group card
+                self._rows[fp_str].add_fid(fid, fd)
+                self._fid_to_key[fid] = fp_str
+            else:
+                # Create new group card
+                row = _FileRow(fid, fd, self)
+                row._set_rows_key(fp_str)
+                row.activated.connect(self._activate)
+                row.close_requested.connect(self._request_close_group)
+                insert_pos = self._file_layout.count() - 1  # before the stretch
+                self._file_layout.insertWidget(insert_pos, row)
+                self._rows[fp_str] = row
+                self._fid_to_key[fid] = fp_str
+        else:
+            # FLAT MODE: use fid as the rows key (backwards compat)
+            row = _FileRow(fid, fd, self)
+            row._set_rows_key(fid)
+            row.activated.connect(self._activate)
+            row.close_requested.connect(self._request_close_group)
+            insert_pos = self._file_layout.count() - 1  # before the stretch
+            self._file_layout.insertWidget(insert_pos, row)
+            self._rows[fid] = row
+            self._fid_to_key[fid] = fid
+
         self.channel_list.add_file(fid, fd)
         self._refresh_header()
         self._activate(fid)
 
     def remove_file(self, fid):
-        row = self._rows.pop(fid, None)
-        if row is not None:
-            row.setParent(None)
-            row.deleteLater()
+        rows_key = self._fid_to_key.pop(fid, None)
+        if rows_key is not None:
+            row = self._rows.get(rows_key)
+            if row is not None:
+                empty = row.remove_fid(fid)
+                if empty:
+                    self._rows.pop(rows_key)
+                    row.setParent(None)
+                    row.deleteLater()
         self.channel_list.remove_file(fid)
         if self._active_fid == fid:
-            new_active = next(iter(self._rows), None)
-            self._active_fid = None  # force _activate to re-emit
+            remaining = list(self._fid_to_key.keys())
+            new_active = remaining[0] if remaining else None
+            self._active_fid = None
             if new_active is not None:
                 self._activate(new_active)
             else:
-                # No files left; still notify MainWindow so Inspector resets
                 self.file_activated.emit("")
         self._refresh_header()
 
     def file_list_count(self):
+        """Returns the number of unique source file cards (not fid count)."""
         return len(self._rows)
 
     def set_active(self, fid):
@@ -255,15 +338,29 @@ class FileNavigator(QWidget):
     def _activate(self, fid):
         if fid == self._active_fid:
             return
-        if self._active_fid in self._rows:
-            self._rows[self._active_fid].set_active(False)
+        # Deactivate old active row
+        if self._active_fid is not None:
+            old_key = self._fid_to_key.get(self._active_fid)
+            if old_key is not None and old_key in self._rows:
+                new_key = self._fid_to_key.get(fid)
+                if old_key != new_key:
+                    self._rows[old_key].set_active(False)
         self._active_fid = fid
-        if fid in self._rows:
-            self._rows[fid].set_active(True)
+        new_key = self._fid_to_key.get(fid)
+        if new_key is not None and new_key in self._rows:
+            self._rows[new_key].set_active(True)
         self.file_activated.emit(fid)
 
+    def _request_close_group(self, rows_key):
+        """Emit close_requested for ALL fids belonging to this rows_key."""
+        fids = [f for f, k in self._fid_to_key.items() if k == rows_key]
+        for f in fids:
+            self.file_close_requested.emit(f)
+
+    # Backwards-compat alias used by existing tests that call _request_close(fid)
     def _request_close(self, fid):
-        self.file_close_requested.emit(fid)
+        rows_key = self._fid_to_key.get(fid, fid)
+        self._request_close_group(rows_key)
 
     def _open_kebab(self):
         menu = apply_rounded_menu_chrome(QMenu(self))
@@ -272,8 +369,9 @@ class FileNavigator(QWidget):
         gp = self._btn_kebab.mapToGlobal(self._btn_kebab.rect().bottomLeft())
         chosen = menu.exec_(gp)
         if chosen == act:
+            n_fids = len(self._fid_to_key)
             ans = QMessageBox.question(
-                self, "确认", f"关闭全部 {len(self._rows)} 文件?",
+                self, "确认", f"关闭全部 {n_fids} 文件?",
                 QMessageBox.Yes | QMessageBox.No,
             )
             if ans == QMessageBox.Yes:
