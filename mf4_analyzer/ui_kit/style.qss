@@ -1007,6 +1007,13 @@ Inspector QFrame#fftTimeSignalCard {
     padding: 0;
 }
 
+Inspector QFrame#timeDomainSettingsCard {
+    background-color: #ffffff;
+    border: 1px solid #dbe2eb;
+    border-radius: 6px;
+    padding: 0;
+}
+
 Inspector QWidget#timeRangeToggleRow,
 Inspector QWidget#inspectorPairField {
     background-color: transparent;

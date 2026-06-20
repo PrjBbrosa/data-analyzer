@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TraceLab inline axis/grid context menu</title>
+  <style>
+    :root {
+      --tray: #f2f4f7;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --hair: #dbe2eb;
+      --hair-soft: #e8eef6;
+      --ink: #0f172a;
+      --muted: #64748b;
+      --faint: #94a3b8;
+      --blue: #0b7af3;
+      --blue-strong: #2563eb;
+      --blue-soft: #e8efff;
+      --blue-softer: #f3f7ff;
+      --shadow: 0 14px 34px rgba(15, 23, 42, 0.12);
+      --radius-menu: 15px;
+      --radius-control: 7px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--tray);
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+    }
+
+    .stage {
+      width: min(1080px, calc(100vw - 48px));
+      height: 680px;
+      position: relative;
+      border: 1px solid var(--hair);
+      border-radius: 14px;
+      overflow: hidden;
+      background:
+        linear-gradient(var(--hair-soft) 1px, transparent 1px),
+        linear-gradient(90deg, var(--hair-soft) 1px, transparent 1px),
+        #fff;
+      background-size: 170px 128px, 170px 128px;
+      box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
+    }
+
+    .axis-line-x,
+    .axis-line-y {
+      position: absolute;
+      background: #b8c4d3;
+      opacity: 0.7;
+    }
+
+    .axis-line-x {
+      left: 0;
+      right: 0;
+      top: 330px;
+      height: 1px;
+    }
+
+    .axis-line-y {
+      top: 0;
+      bottom: 0;
+      left: 360px;
+      width: 1px;
+    }
+
+    .menu {
+      position: absolute;
+      left: 44px;
+      top: 58px;
+      width: 292px;
+      padding: 10px;
+      border: 1px solid #b9cbe1;
+      border-radius: var(--radius-menu);
+      background: rgba(255, 255, 255, 0.97);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-row {
+      min-height: 32px;
+      display: grid;
+      grid-template-columns: 204px 48px;
+      align-items: center;
+      column-gap: 11px;
+      margin-top: 6px;
+    }
+
+    .panel-row:first-child {
+      margin-top: 0;
+    }
+
+    .control-group {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 88px 28px 88px;
+      align-items: center;
+      justify-items: center;
+    }
+
+    .row-label {
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 650;
+      text-align: left;
+      letter-spacing: 0;
+    }
+
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: #334155;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .icon-btn.active {
+      border-color: var(--blue-strong);
+      background: var(--blue-soft);
+      color: var(--blue-strong);
+      box-shadow: inset 0 0 0 1px rgba(11, 122, 243, 0.1);
+    }
+
+    .text-btn {
+      height: 30px;
+      width: 88px;
+      padding: 0 10px;
+      border: 1px solid #d6e0ec;
+      border-radius: 8px;
+      background: #fff;
+      color: #334155;
+      font-size: 14px;
+      font-weight: 750;
+    }
+
+    .text-btn.primary,
+    .chip.active,
+    .icon-btn.active {
+      border-color: var(--blue-strong);
+      background: var(--blue-soft);
+      color: var(--blue-strong);
+    }
+
+    .range-input {
+      width: 88px;
+      height: 30px;
+      border: 1px solid #d6e0ec;
+      border-radius: var(--radius-control);
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 8px;
+      color: #111827;
+      font-size: 15px;
+      font-weight: 650;
+      text-align: center;
+      box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.02);
+    }
+
+    .dash {
+      color: #64748b;
+      font-size: 16px;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .chip {
+      width: 56px;
+      height: 30px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: #64748b;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 800;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .hint {
+      position: absolute;
+      left: 44px;
+      top: 346px;
+      width: 292px;
+      padding: 12px 14px;
+      border: 1px solid var(--hair);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.82);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .callout {
+      position: absolute;
+      left: 370px;
+      top: 112px;
+      width: 330px;
+      border: 1px solid var(--hair);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.92);
+      padding: 14px 16px;
+      color: #334155;
+      font-size: 14px;
+      line-height: 1.6;
+      box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #0f172a;
+      font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <div class="axis-line-x"></div>
+    <div class="axis-line-y"></div>
+
+    <section class="menu" aria-label="图表右键菜单原型">
+      <div class="panel-row">
+        <div class="control-group">
+          <div class="icon-btn" title="框选">⌕</div>
+          <div></div>
+          <div class="icon-btn active" title="平移">✣</div>
+        </div>
+        <div class="row-label">鼠标</div>
+      </div>
+
+      <div class="panel-row">
+        <div class="control-group">
+          <button class="text-btn" type="button">Y适应</button>
+          <div></div>
+          <button class="text-btn" type="button">全图</button>
+        </div>
+        <div class="row-label">查看</div>
+      </div>
+
+      <div class="panel-row">
+        <div class="control-group">
+          <div class="range-input">0.0</div>
+          <div class="dash">—</div>
+          <div class="range-input">1.0</div>
+        </div>
+        <div class="row-label">X范围</div>
+      </div>
+
+      <div class="panel-row">
+        <div class="control-group">
+          <div class="range-input">-1.0</div>
+          <div class="dash">—</div>
+          <div class="range-input">1.0</div>
+        </div>
+        <div class="row-label">Y范围</div>
+      </div>
+
+      <div class="panel-row">
+        <div class="control-group">
+          <button class="chip active" type="button" aria-pressed="true">X</button>
+          <div></div>
+          <button class="chip active" type="button" aria-pressed="true">Y</button>
+        </div>
+        <div class="row-label">网格</div>
+      </div>
+    </section>
+
+    <aside class="callout">
+      <strong>落地风格</strong>
+      范围和网格都在一级。X/Y 网格 chip 的选中态复用 pan/zoom 的浅蓝底和蓝色边框，减少菜单层级，也保留工具感。
+    </aside>
+
+    <aside class="hint">
+      交互假设：输入任意 min/max 后切到手动范围；把输入清空或点恢复按钮再回到自适应状态。网格 X/Y 可以直接点击切换。
+    </aside>
+  </main>
+
+  <script>
+    document.querySelectorAll(".chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        chip.classList.toggle("active");
+        chip.setAttribute("aria-pressed", chip.classList.contains("active"));
+      });
+    });
+  </script>
+</body>
+</html>

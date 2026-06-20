@@ -75,6 +75,36 @@ def _menu_texts(menu):
     ]
 
 
+def _inline_panel(menu):
+    from PyQt5.QtWidgets import QWidgetAction
+
+    panels = [
+        action.defaultWidget()
+        for action in menu.actions()
+        if isinstance(action, QWidgetAction)
+        and action.defaultWidget() is not None
+        and action.defaultWidget().objectName() == "pgContextInlinePanel"
+    ]
+    assert len(panels) == 1
+    return panels[0]
+
+
+def _panel_button(panel, object_name):
+    from PyQt5.QtWidgets import QPushButton, QToolButton
+
+    button = panel.findChild((QPushButton, QToolButton), object_name)
+    assert button is not None
+    return button
+
+
+def _panel_edit(panel, object_name):
+    from PyQt5.QtWidgets import QLineEdit
+
+    edit = panel.findChild(QLineEdit, object_name)
+    assert edit is not None
+    return edit
+
+
 @pytest.fixture
 def canvas(qapp):
     c = PgHeatmapCanvas()
@@ -513,7 +543,7 @@ def test_heatmap_replot_clears_transient_zoom(canvas):
 
 
 def test_heatmap_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch):
-    from PyQt5.QtWidgets import QToolButton, QWidgetAction
+    from PyQt5.QtWidgets import QToolButton
 
     controller = _FakeMouseModeController()
     canvas.register_mouse_mode_controller(controller)
@@ -531,22 +561,129 @@ def test_heatmap_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypa
     top = _menu_texts(menu)
     assert "绘图选项" not in top  # hidden for now in fft_time / order
     assert "Plot Options" not in top
-    assert "查看全部" in top
-    assert "X 轴范围" in top
-    assert "Y 轴范围" in top
-    assert "网格" in top
+    assert "查看全部" not in top
+    assert "X 轴范围" not in top
+    assert "Y 轴范围" not in top
+    assert "网格" not in top
     assert "Mouse Mode" not in top
-    toggle_row = next(
-        action.defaultWidget()
-        for action in menu.actions()
-        if isinstance(action, QWidgetAction)
-        and action.defaultWidget() is not None
-        and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
-    )
-    buttons = toggle_row.findChildren(QToolButton)
+    panel = _inline_panel(menu)
+    buttons = [
+        panel.findChild(QToolButton, "pgContextZoomButton"),
+        panel.findChild(QToolButton, "pgContextPanButton"),
+    ]
     assert [btn.toolTip() for btn in buttons] == ["框选", "平移"]
+    assert panel.findChild(QToolButton, "pgContextGridXChip").text() == "X"
+    assert panel.findChild(QToolButton, "pgContextGridYChip").text() == "Y"
     buttons[0].click()
     assert controller.mode == "zoom"
+
+
+def test_heatmap_context_menu_view_all_button_restores_full_extents(
+    canvas, monkeypatch, qapp
+):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude',
+        z_auto=True,
+    )
+    canvas._plot.setXRange(2.0, 4.0, padding=0)
+    canvas._plot.setYRange(1.0, 3.0, padding=0)
+    qapp.processEvents()
+
+    menu = _open_context_menu(canvas._plot.vb, monkeypatch)
+    panel = _inline_panel(menu)
+    _panel_button(panel, "pgContextViewAllButton").click()
+    qapp.processEvents()
+
+    (x0, x1), (y0, y1) = canvas._plot.vb.viewRange()
+    assert (x0, x1) == pytest.approx((0.0, 10.0))
+    assert (y0, y1) == pytest.approx((0.0, 8.0))
+
+
+def test_heatmap_context_menu_range_edits_apply_valid_and_restore_invalid(
+    canvas, monkeypatch, qapp
+):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude',
+        z_auto=True,
+    )
+    qapp.processEvents()
+
+    panel = _inline_panel(_open_context_menu(canvas._plot.vb, monkeypatch))
+    x_min = _panel_edit(panel, "pgContextXMinEdit")
+    x_max = _panel_edit(panel, "pgContextXMaxEdit")
+    y_min = _panel_edit(panel, "pgContextYMinEdit")
+    y_max = _panel_edit(panel, "pgContextYMaxEdit")
+
+    x_min.setText("1.5")
+    x_max.setText("6.5")
+    x_max.editingFinished.emit()
+    qapp.processEvents()
+    assert canvas._plot.vb.viewRange()[0] == pytest.approx([1.5, 6.5])
+
+    y_min.setText("2")
+    y_max.setText("7")
+    y_max.editingFinished.emit()
+    qapp.processEvents()
+    assert canvas._plot.vb.viewRange()[1] == pytest.approx([2.0, 7.0])
+
+    x_min.setText("not-a-number")
+    x_max.editingFinished.emit()
+    qapp.processEvents()
+    assert canvas._plot.vb.viewRange()[0] == pytest.approx([1.5, 6.5])
+    assert (x_min.text(), x_max.text()) == ("1.5", "6.5")
+
+    y_min.setText("9")
+    y_max.setText("3")
+    y_max.editingFinished.emit()
+    qapp.processEvents()
+    assert canvas._plot.vb.viewRange()[1] == pytest.approx([2.0, 7.0])
+    assert (y_min.text(), y_max.text()) == ("2", "7")
+
+
+def test_heatmap_context_menu_grid_chips_keep_top_right_grid_disabled(
+    canvas, monkeypatch, qapp
+):
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude',
+        z_auto=True,
+    )
+    qapp.processEvents()
+
+    panel = _inline_panel(_open_context_menu(canvas._plot.vb, monkeypatch))
+    x_chip = _panel_button(panel, "pgContextGridXChip")
+    y_chip = _panel_button(panel, "pgContextGridYChip")
+
+    assert x_chip.text() == "X"
+    assert y_chip.text() == "Y"
+    assert x_chip.isChecked()
+    assert y_chip.isChecked()
+    assert canvas._plot.getAxis('top').grid is False
+    assert canvas._plot.getAxis('right').grid is False
+
+    x_chip.click()
+    y_chip.click()
+    qapp.processEvents()
+    assert canvas._plot.getAxis('bottom').grid is False
+    assert canvas._plot.getAxis('left').grid is False
+    assert canvas._plot.getAxis('top').grid is False
+    assert canvas._plot.getAxis('right').grid is False
+
+    x_chip.click()
+    y_chip.click()
+    qapp.processEvents()
+    assert canvas._plot.getAxis('bottom').grid is not False
+    assert canvas._plot.getAxis('left').grid is not False
+    assert canvas._plot.getAxis('top').grid is False
+    assert canvas._plot.getAxis('right').grid is False
 
 
 def test_remark_add_and_clear(canvas):

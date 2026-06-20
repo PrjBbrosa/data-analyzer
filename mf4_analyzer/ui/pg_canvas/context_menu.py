@@ -9,11 +9,13 @@ from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
+    QPushButton,
     QRadioButton,
     QToolButton,
     QWidget,
@@ -97,6 +99,10 @@ _PG_MOUSE_MODE_ICONS = {
 }
 _PG_ICON_COLOR = "#374151"
 _PG_ICON_ACTIVE = "#2563eb"
+_INLINE_TRACK_WIDTH = 72
+_INLINE_MIDDLE_WIDTH = 24
+_INLINE_LABEL_WIDTH = 40
+_INLINE_CONTROL_HEIGHT = 30
 
 _MOUSE_MODE_TOGGLE_QSS = (
     "QWidget#pgMouseModeToggleRow {"
@@ -115,6 +121,42 @@ _MOUSE_MODE_TOGGLE_QSS = (
     "QToolButton:checked {"
     " background: #e8f0ff;"
     " border: 1px solid #2563eb;"
+    "}"
+)
+
+_INLINE_PANEL_QSS = (
+    "QWidget#pgContextInlinePanel {"
+    " background: transparent;"
+    "}"
+    "QLabel#pgContextInlineLabel {"
+    " color: #94a3b8;"
+    " font-size: 12px;"
+    " font-weight: 600;"
+    " background: transparent;"
+    "}"
+    "QPushButton, QLineEdit, QToolButton {"
+    " border: 1px solid #d6e0ec;"
+    " border-radius: 8px;"
+    " background: #ffffff;"
+    " color: #334155;"
+    " padding: 0px 4px;"
+    "}"
+    "QPushButton:hover, QToolButton:hover {"
+    " background: #f8fafc;"
+    "}"
+    "QToolButton:checked {"
+    " background: #e8f0ff;"
+    " border-color: #2563eb;"
+    " color: #2563eb;"
+    "}"
+    "QToolButton:disabled {"
+    " color: #94a3b8;"
+    " background: #f1f5f9;"
+    " border-color: #d6e0ec;"
+    "}"
+    "QLineEdit {"
+    " color: #111827;"
+    " selection-background-color: #bfdbfe;"
     "}"
 )
 
@@ -260,6 +302,340 @@ def _route_view_all_action(menu, handler):
             pass
 
     action.triggered.connect(_trigger)
+
+
+def _format_range_value(value):
+    """Format ViewBox range values for compact inline editing."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return "0"
+    if abs(value) >= 1000 or (0 < abs(value) < 0.01):
+        return f"{value:.3g}"
+    return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def _view_range(view_box, axis):
+    ranges = view_box.viewRange()
+    idx = 1 if axis == "y" else 0
+    lo, hi = ranges[idx]
+    return float(lo), float(hi)
+
+
+def _axis_grid_enabled(plot_item, side):
+    try:
+        axis = plot_item.getAxis(side)
+        return bool(getattr(axis, "grid", False))
+    except Exception:
+        return False
+
+
+class _PgContextInlinePanel(QWidget):
+    """First-level context-menu controls for pyqtgraph plot navigation."""
+
+    def __init__(
+        self,
+        menu,
+        plot_item,
+        controller,
+        *,
+        view_all_handler=None,
+        y_autofit_handler=None,
+        allow_y_grid=True,
+        view_box=None,
+    ):
+        super().__init__(menu)
+        self._menu = menu
+        self._plot_item = plot_item
+        self._view_box = (
+            view_box if view_box is not None else getattr(plot_item, "vb", None)
+        )
+        self._controller = controller
+        self._view_all_handler = view_all_handler
+        self._y_autofit_handler = y_autofit_handler
+        self._allow_y_grid = bool(allow_y_grid)
+        self._grid_state = {
+            "x": _axis_grid_enabled(plot_item, "bottom") if plot_item else False,
+            "y": (
+                _axis_grid_enabled(plot_item, "left")
+                or _axis_grid_enabled(plot_item, "right")
+            ) if plot_item else False,
+        }
+        if not self._allow_y_grid:
+            self._grid_state["y"] = False
+
+        self.setObjectName("pgContextInlinePanel")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet(_INLINE_PANEL_QSS)
+
+        layout = QGridLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setHorizontalSpacing(0)
+        layout.setVerticalSpacing(6)
+        layout.setColumnMinimumWidth(0, _INLINE_TRACK_WIDTH)
+        layout.setColumnMinimumWidth(1, _INLINE_MIDDLE_WIDTH)
+        layout.setColumnMinimumWidth(2, _INLINE_TRACK_WIDTH)
+        layout.setColumnMinimumWidth(3, 8)
+        layout.setColumnMinimumWidth(4, _INLINE_LABEL_WIDTH)
+        for col in range(5):
+            layout.setColumnStretch(col, 0)
+
+        self._build_mouse_row(layout, 0)
+        self._build_view_row(layout, 1)
+        self._build_range_row(layout, 2, "x")
+        self._build_range_row(layout, 3, "y")
+        self._build_grid_row(layout, 4)
+
+    def _add_label(self, layout, row, text):
+        label = QLabel(text, self)
+        label.setObjectName("pgContextInlineLabel")
+        label.setFixedWidth(_INLINE_LABEL_WIDTH)
+        label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        layout.addWidget(label, row, 4)
+        return label
+
+    def _make_text_button(self, text, object_name):
+        button = QPushButton(text, self)
+        button.setObjectName(object_name)
+        button.setFixedSize(_INLINE_TRACK_WIDTH, _INLINE_CONTROL_HEIGHT)
+        button.setCursor(Qt.PointingHandCursor)
+        button.setToolTip("")
+        return button
+
+    def _make_tool_button(self, mode):
+        label, _tip = _PG_MOUSE_MODE_LABELS[mode]
+        button = QToolButton(self)
+        button.setObjectName(
+            "pgContextZoomButton"
+            if mode == _PG_MOUSE_MODE_ZOOM
+            else "pgContextPanButton"
+        )
+        button.setIcon(qta.icon(
+            _PG_MOUSE_MODE_ICONS[mode],
+            color=_PG_ICON_COLOR,
+            color_on=_PG_ICON_ACTIVE,
+        ))
+        button.setIconSize(QSize(18, 18))
+        button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        button.setCheckable(True)
+        button.setAutoRaise(False)
+        button.setFixedSize(32, _INLINE_CONTROL_HEIGHT)
+        button.setToolTip(label)
+        button.setCursor(Qt.PointingHandCursor)
+        return button
+
+    def _build_mouse_row(self, layout, row):
+        zoom_button = self._make_tool_button(_PG_MOUSE_MODE_ZOOM)
+        pan_button = self._make_tool_button(_PG_MOUSE_MODE_PAN)
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        group.addButton(zoom_button)
+        group.addButton(pan_button)
+
+        try:
+            current = self._controller.current_mouse_mode()
+        except Exception:
+            current = None
+        _sync_mouse_mode_toggle_buttons([zoom_button, pan_button], current)
+
+        zoom_button.clicked.connect(
+            lambda _checked=False: self._select_mouse_mode(_PG_MOUSE_MODE_ZOOM)
+        )
+        pan_button.clicked.connect(
+            lambda _checked=False: self._select_mouse_mode(_PG_MOUSE_MODE_PAN)
+        )
+        if self._controller is None:
+            zoom_button.setEnabled(False)
+            pan_button.setEnabled(False)
+
+        layout.addWidget(zoom_button, row, 0, alignment=Qt.AlignCenter)
+        layout.addWidget(pan_button, row, 2, alignment=Qt.AlignCenter)
+        self._add_label(layout, row, "鼠标")
+
+    def _select_mouse_mode(self, mode):
+        if self._controller is None:
+            return
+        try:
+            setter = getattr(self._controller, "set_mouse_mode_broadcast", None)
+            if callable(setter):
+                setter(mode)
+            elif mode == _PG_MOUSE_MODE_ZOOM:
+                self._controller.set_zoom_mode()
+            else:
+                self._controller.set_pan_mode()
+        except Exception:
+            pass
+        self._close_menu()
+
+    def _build_view_row(self, layout, row):
+        y_fit = self._make_text_button("Y适应", "pgContextYFitButton")
+        view_all = self._make_text_button("全图", "pgContextViewAllButton")
+        y_fit.setEnabled(callable(self._y_autofit_handler))
+        view_all.setEnabled(callable(self._view_all_handler))
+        y_fit.clicked.connect(lambda _checked=False: self._run_handler(
+            self._y_autofit_handler,
+            close=True,
+        ))
+        view_all.clicked.connect(lambda _checked=False: self._run_handler(
+            self._view_all_handler,
+            close=True,
+        ))
+        layout.addWidget(y_fit, row, 0)
+        layout.addWidget(view_all, row, 2)
+        self._add_label(layout, row, "查看")
+
+    def _make_range_edit(self, object_name):
+        edit = QLineEdit(self)
+        edit.setObjectName(object_name)
+        edit.setAlignment(Qt.AlignCenter)
+        edit.setFixedSize(_INLINE_TRACK_WIDTH, _INLINE_CONTROL_HEIGHT)
+        edit.setToolTip("")
+        return edit
+
+    def _build_range_row(self, layout, row, axis):
+        label = "X范围" if axis == "x" else "Y范围"
+        prefix = "X" if axis == "x" else "Y"
+        min_edit = self._make_range_edit(f"pgContext{prefix}MinEdit")
+        max_edit = self._make_range_edit(f"pgContext{prefix}MaxEdit")
+        dash = QLabel("—", self)
+        dash.setAlignment(Qt.AlignCenter)
+        dash.setFixedWidth(_INLINE_MIDDLE_WIDTH)
+        dash.setStyleSheet("background: transparent; color: #94a3b8;")
+
+        self._refresh_range_edits(axis, min_edit, max_edit)
+        min_edit.editingFinished.connect(
+            lambda axis=axis, lo=min_edit, hi=max_edit: self._apply_range(axis, lo, hi)
+        )
+        max_edit.editingFinished.connect(
+            lambda axis=axis, lo=min_edit, hi=max_edit: self._apply_range(axis, lo, hi)
+        )
+        min_edit.returnPressed.connect(
+            lambda axis=axis, lo=min_edit, hi=max_edit: self._apply_range(axis, lo, hi)
+        )
+        max_edit.returnPressed.connect(
+            lambda axis=axis, lo=min_edit, hi=max_edit: self._apply_range(axis, lo, hi)
+        )
+
+        layout.addWidget(min_edit, row, 0)
+        layout.addWidget(dash, row, 1)
+        layout.addWidget(max_edit, row, 2)
+        self._add_label(layout, row, label)
+
+    def _refresh_range_edits(self, axis, min_edit, max_edit):
+        if self._view_box is None:
+            min_edit.setText("0")
+            max_edit.setText("0")
+            return
+        try:
+            lo, hi = _view_range(self._view_box, axis)
+        except Exception:
+            lo, hi = 0.0, 0.0
+        min_edit.setText(_format_range_value(lo))
+        max_edit.setText(_format_range_value(hi))
+
+    def _apply_range(self, axis, min_edit, max_edit):
+        if self._view_box is None:
+            return
+        try:
+            lo = float(min_edit.text())
+            hi = float(max_edit.text())
+        except (TypeError, ValueError):
+            self._refresh_range_edits(axis, min_edit, max_edit)
+            return
+        if hi <= lo:
+            self._refresh_range_edits(axis, min_edit, max_edit)
+            return
+        try:
+            if axis == "x":
+                self._view_box.setXRange(lo, hi, padding=0)
+            else:
+                self._view_box.setYRange(lo, hi, padding=0)
+        except Exception:
+            pass
+        self._refresh_range_edits(axis, min_edit, max_edit)
+
+    def _make_grid_chip(self, axis):
+        chip = QToolButton(self)
+        chip.setObjectName(
+            "pgContextGridXChip" if axis == "x" else "pgContextGridYChip"
+        )
+        chip.setText(axis.upper())
+        chip.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        chip.setCheckable(True)
+        chip.setFixedSize(48, _INLINE_CONTROL_HEIGHT)
+        chip.setToolTip("")
+        chip.setCursor(Qt.PointingHandCursor)
+        chip.setChecked(bool(self._grid_state[axis]))
+        if axis == "y" and not self._allow_y_grid:
+            chip.setChecked(False)
+            chip.setEnabled(False)
+        return chip
+
+    def _build_grid_row(self, layout, row):
+        x_chip = self._make_grid_chip("x")
+        y_chip = self._make_grid_chip("y")
+        x_chip.toggled.connect(lambda checked: self._set_grid("x", checked))
+        y_chip.toggled.connect(lambda checked: self._set_grid("y", checked))
+        layout.addWidget(x_chip, row, 0, alignment=Qt.AlignCenter)
+        layout.addWidget(y_chip, row, 2, alignment=Qt.AlignCenter)
+        self._add_label(layout, row, "网格")
+
+    def _set_grid(self, axis, checked):
+        if axis == "y" and not self._allow_y_grid:
+            self._grid_state["y"] = False
+            return
+        self._grid_state[axis] = bool(checked)
+        if self._plot_item is None:
+            return
+        try:
+            show_major_grid_left_bottom_only(
+                self._plot_item,
+                x=self._grid_state["x"],
+                y=self._grid_state["y"] if self._allow_y_grid else False,
+                alpha=0.28,
+            )
+        except Exception:
+            pass
+
+    def _run_handler(self, handler, *, close=False):
+        if callable(handler):
+            try:
+                handler()
+            except Exception:
+                pass
+        if close:
+            self._close_menu()
+
+    def _close_menu(self):
+        try:
+            self._menu.close()
+        except Exception:
+            pass
+
+
+def _make_inline_context_panel_action(
+    menu,
+    plot_item,
+    controller,
+    *,
+    view_all_handler=None,
+    y_autofit_handler=None,
+    allow_y_grid=True,
+    view_box=None,
+):
+    panel = _PgContextInlinePanel(
+        menu,
+        plot_item,
+        controller,
+        view_all_handler=view_all_handler,
+        y_autofit_handler=y_autofit_handler,
+        allow_y_grid=allow_y_grid,
+        view_box=view_box,
+    )
+    action = QWidgetAction(menu)
+    action.setDefaultWidget(panel)
+    return action
 
 
 def _build_grid_submenu(menu, plot_item, *, allow_y_grid=True):
@@ -480,38 +856,36 @@ def redesign_pg_context_menu(
     y_autofit_handler=None,
     allow_y_grid=True,
     keep_plot_options=False,
+    view_box=None,
 ):
     """Reshape the assembled pyqtgraph context menu."""
     if menu is None:
         return
     _localize_pg_context_menu(menu)
-    _route_view_all_action(menu, view_all_handler)
 
     for action in list(menu.actions()):
         if action.isSeparator():
+            menu.removeAction(action)
             continue
         text = _clean_menu_text(action.text())
         if keep_plot_options and text in ("Plot Options", "绘图选项"):
             continue
-        if text in _PG_MENU_REMOVE_TEXTS:
-            menu.removeAction(action)
+        menu.removeAction(action)
 
-    toggle_row = _add_mouse_mode_toggle_row(menu, controller)
-    _add_y_autofit_action(menu, y_autofit_handler)
-
-    if plot_item is not None and _find_top_level_action(menu, "网格") is None:
-        grid_menu = _build_grid_submenu(
-            menu,
-            plot_item,
-            allow_y_grid=allow_y_grid,
-        )
-        menu.addMenu(grid_menu)
-
-    _reorder_top_level_actions(
+    inline_action = _make_inline_context_panel_action(
         menu,
-        ("Y 轴自适应", "查看全部", "X 轴范围", "Y 轴范围", "绘图选项", "网格"),
-        pinned_first=toggle_row,
+        plot_item,
+        controller,
+        view_all_handler=view_all_handler,
+        y_autofit_handler=y_autofit_handler,
+        allow_y_grid=allow_y_grid,
+        view_box=view_box,
     )
+    actions = list(menu.actions())
+    if actions:
+        menu.insertAction(actions[0], inline_action)
+    else:
+        menu.addAction(inline_action)
     _strip_redundant_separators(menu)
 
 

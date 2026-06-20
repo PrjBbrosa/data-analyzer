@@ -98,7 +98,7 @@ def test_fft_contextual_fft_button_emits(qapp, qtbot):
 
 
 def test_fft_contextual_uses_xy_axis_settings_group(qapp):
-    from PyQt5.QtWidgets import QGroupBox
+    from PyQt5.QtWidgets import QFrame, QGroupBox
     from mf4_analyzer.ui.inspector_sections import FFTContextual
 
     fc = FFTContextual()
@@ -198,6 +198,18 @@ def test_order_contextual_emits(qapp, qtbot):
     oc = OrderContextual()
     with qtbot.waitSignal(oc.order_time_requested, timeout=200):
         oc.btn_ot.click()
+
+
+def test_analysis_compute_button_labels_are_consistent(qapp):
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual,
+        FFTTimeContextual,
+        OrderContextual,
+    )
+
+    assert FFTContextual().btn_fft.text() == "计算 FFT"
+    assert FFTTimeContextual().btn_compute.text() == "计算时频图"
+    assert OrderContextual().btn_ot.text() == "计算阶次图"
 
 
 def test_order_contextual_presets_precede_compute_and_no_cancel(qapp):
@@ -555,7 +567,7 @@ def test_inspector_no_longer_exposes_mode_signals(qapp):
 
 def test_persistent_top_no_longer_renders_tick_density_group(qapp):
     """刻度密度入口已迁移到图表 toolbar；Inspector 不再显示旧组。"""
-    from PyQt5.QtWidgets import QGroupBox
+    from PyQt5.QtWidgets import QFrame, QGroupBox
     from mf4_analyzer.ui.inspector_sections import PersistentTop
     pt = PersistentTop()
 
@@ -1733,7 +1745,7 @@ def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbo
     the contextual cards below it, while keeping the collapsible header full
     width as the click target."""
     from pathlib import Path
-    from PyQt5.QtWidgets import QGroupBox
+    from PyQt5.QtWidgets import QFrame, QGroupBox
     from mf4_analyzer.ui.inspector import Inspector
 
     old_sheet = qapp.styleSheet()
@@ -1752,13 +1764,18 @@ def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbo
         qtbot.wait(50)
 
         root = insp._scroll_body
+        card = insp.findChild(QFrame, "timeDomainSettingsCard")
+        assert card is not None
 
         def bounds(widget):
             point = widget.mapTo(root, widget.rect().topLeft())
             return point.x(), point.x() + widget.width()
 
+        card_inner_left = card.mapTo(root, card.contentsRect().topLeft()).x()
+        card_inner_right = card_inner_left + card.contentsRect().width()
+
         header_left, header_right = bounds(insp.top.btn_collapser)
-        assert (header_left, header_right) == (0, root.width())
+        assert (header_left, header_right) == (card_inner_left, card_inner_right)
 
         time_section = next(
             group for group in insp.top.findChildren(QGroupBox)
@@ -1774,10 +1791,65 @@ def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbo
             "横坐标": (expected_left, expected_right),
             "时间范围": (expected_left, expected_right),
         }
-        assert expected_left == 10
-        assert root.width() - expected_right == 10
+        assert expected_left == card_inner_left + 10
+        assert card_inner_right - expected_right == 10
     finally:
         qapp.setStyleSheet(old_sheet)
+
+
+def test_time_domain_settings_render_inside_single_rounded_card(qapp, qtbot):
+    from pathlib import Path
+    from PyQt5.QtWidgets import QFrame
+    from mf4_analyzer.ui.inspector import Inspector
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        insp = Inspector()
+        qtbot.addWidget(insp)
+        insp.resize(288, 850)
+        insp.set_mode("time")
+        insp.top.btn_collapser.setChecked(True)
+        insp.show()
+        qtbot.waitExposed(insp)
+        qtbot.wait(50)
+
+        card = insp.findChild(QFrame, "timeDomainSettingsCard")
+        assert card is not None
+        assert card.isVisible()
+        assert insp.top.parentWidget() is card
+        assert insp.time_ctx.parentWidget() is card
+        assert card.layout().indexOf(insp.top) >= 0
+        assert card.layout().indexOf(insp.time_ctx) >= 0
+
+        body_left = insp._scroll_body.mapTo(
+            insp, insp._scroll_body.rect().topLeft()
+        ).x()
+        card_left = card.mapTo(insp, card.rect().topLeft()).x()
+        assert card_left == body_left
+        assert card.width() == insp._scroll_body.width()
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
+def test_time_domain_settings_card_qss_matches_contextual_cards():
+    from pathlib import Path
+    import re
+
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    block = re.search(
+        r"Inspector\s+QFrame#timeDomainSettingsCard\s*\{([^}]*)\}",
+        qss,
+        flags=re.DOTALL,
+    )
+    assert block, "timeDomainSettingsCard QSS block missing"
+    text = block.group(1)
+    assert "background-color: #ffffff" in text
+    assert "border: 1px solid #dbe2eb" in text
+    assert "border-radius: 6px" in text
 
 
 def test_analysis_modes_embed_time_range_in_input_card(qapp, qtbot):

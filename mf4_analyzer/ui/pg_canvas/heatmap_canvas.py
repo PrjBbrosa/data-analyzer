@@ -1256,6 +1256,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # (per request). Default is already False; set explicitly so the
             # intentional "off for now" reads clearly and is easy to flip back.
             keep_plot_options=False,
+            view_box=view_box,
         )
 
     def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,

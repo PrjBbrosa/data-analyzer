@@ -76,9 +76,26 @@ def _toggle_row_buttons(menu):
         if not isinstance(action, QWidgetAction):
             continue
         widget = action.defaultWidget()
-        if widget is not None and widget.objectName() == "pgMouseModeToggleRow":
-            return widget.findChildren(QToolButton)
+        if widget is not None and widget.objectName() == "pgContextInlinePanel":
+            return [
+                widget.findChild(QToolButton, "pgContextZoomButton"),
+                widget.findChild(QToolButton, "pgContextPanButton"),
+            ]
     return []
+
+
+def _inline_panel(menu):
+    from PyQt5.QtWidgets import QWidgetAction
+
+    panels = [
+        action.defaultWidget()
+        for action in menu.actions()
+        if isinstance(action, QWidgetAction)
+        and action.defaultWidget() is not None
+        and action.defaultWidget().objectName() == "pgContextInlinePanel"
+    ]
+    assert len(panels) == 1
+    return panels[0]
 
 
 @pytest.fixture
@@ -1112,7 +1129,7 @@ def test_empty_state_time_y_padded_off_top_frame(canvas):
 
 
 def test_fft_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch):
-    from PyQt5.QtWidgets import QToolButton, QWidgetAction
+    from PyQt5.QtWidgets import QToolButton
 
     controller = _FakeMouseModeController()
     canvas.register_mouse_mode_controller(controller)
@@ -1124,19 +1141,16 @@ def test_fft_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch)
     top = _menu_texts(menu)
     assert "绘图选项" not in top  # hidden for now in the fft section
     assert "Plot Options" not in top
-    assert "查看全部" in top
-    assert "X 轴范围" in top
-    assert "Y 轴范围" in top
-    assert "网格" in top
+    assert "查看全部" not in top
+    assert "X 轴范围" not in top
+    assert "Y 轴范围" not in top
+    assert "网格" not in top
     assert "Mouse Mode" not in top
-    toggle_row = next(
-        action.defaultWidget()
-        for action in menu.actions()
-        if isinstance(action, QWidgetAction)
-        and action.defaultWidget() is not None
-        and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
-    )
-    buttons = toggle_row.findChildren(QToolButton)
+    panel = _inline_panel(menu)
+    buttons = [
+        panel.findChild(QToolButton, "pgContextZoomButton"),
+        panel.findChild(QToolButton, "pgContextPanButton"),
+    ]
     assert [btn.toolTip() for btn in buttons] == ["框选", "平移"]
     buttons[0].click()
     assert controller.mode == "zoom"
@@ -1162,7 +1176,7 @@ def test_menu_pan_button_calls_broadcast(qapp):
             calls.append(("broadcast", mode))
 
     menu = QMenu()
-    cm._add_mouse_mode_toggle_row(menu, _Ctrl())
+    menu.addAction(cm._make_inline_context_panel_action(menu, None, _Ctrl()))
 
     zoom_btn, pan_btn = _toggle_row_buttons(menu)
     assert zoom_btn.toolTip() == "框选"
@@ -1189,7 +1203,7 @@ def test_idle_mode_leaves_both_buttons_unchecked(qapp):
             pass
 
     menu = QMenu()
-    cm._add_mouse_mode_toggle_row(menu, _Ctrl())
+    menu.addAction(cm._make_inline_context_panel_action(menu, None, _Ctrl()))
 
     zoom_btn, pan_btn = _toggle_row_buttons(menu)
     assert zoom_btn.isChecked() is False
@@ -1197,7 +1211,7 @@ def test_idle_mode_leaves_both_buttons_unchecked(qapp):
 
 
 def test_reused_mouse_mode_row_allows_idle_unchecked(qapp):
-    from PyQt5.QtWidgets import QMenu
+    from PyQt5.QtWidgets import QMenu, QToolButton
     from mf4_analyzer.ui.pg_canvas import context_menu as cm
 
     class _Ctrl:
@@ -1214,13 +1228,20 @@ def test_reused_mouse_mode_row_allows_idle_unchecked(qapp):
 
     menu = QMenu()
     ctrl = _Ctrl()
-    cm._add_mouse_mode_toggle_row(menu, ctrl)
+    menu.addAction(cm._make_inline_context_panel_action(menu, None, ctrl))
     zoom_btn, pan_btn = _toggle_row_buttons(menu)
     assert zoom_btn.isChecked() is False
     assert pan_btn.isChecked() is True
 
     ctrl.mode = ""
-    cm._add_mouse_mode_toggle_row(menu, ctrl)
+    panel = _inline_panel(menu)
+    cm._sync_mouse_mode_toggle_buttons(
+        [
+            panel.findChild(QToolButton, "pgContextZoomButton"),
+            panel.findChild(QToolButton, "pgContextPanButton"),
+        ],
+        ctrl.current_mouse_mode(),
+    )
 
     assert zoom_btn.isChecked() is False
     assert pan_btn.isChecked() is False
@@ -1241,7 +1262,7 @@ def test_pan_mode_checks_only_pan(qapp):
             pass
 
     menu = QMenu()
-    cm._add_mouse_mode_toggle_row(menu, _Ctrl())
+    menu.addAction(cm._make_inline_context_panel_action(menu, None, _Ctrl()))
 
     zoom_btn, pan_btn = _toggle_row_buttons(menu)
     assert zoom_btn.isChecked() is False
@@ -1263,7 +1284,7 @@ def test_zoom_mode_checks_only_zoom(qapp):
             pass
 
     menu = QMenu()
-    cm._add_mouse_mode_toggle_row(menu, _Ctrl())
+    menu.addAction(cm._make_inline_context_panel_action(menu, None, _Ctrl()))
 
     zoom_btn, pan_btn = _toggle_row_buttons(menu)
     assert zoom_btn.isChecked() is True
@@ -1281,7 +1302,14 @@ def test_fft_context_menu_includes_y_autofit(canvas, monkeypatch):
     )
     menu = _open_context_menu(canvas._plot_amp.vb, monkeypatch)
     assert menu is not None
-    assert "Y 轴自适应" in _menu_texts(menu)
+    assert "Y 轴自适应" not in _menu_texts(menu)
+    from PyQt5.QtWidgets import QPushButton
+
+    panel = _inline_panel(menu)
+    y_fit = panel.findChild(QPushButton, "pgContextYFitButton")
+    assert y_fit is not None
+    assert y_fit.text() == "Y适应"
+    assert y_fit.isEnabled()
 
 
 def test_fft_y_autofit_fits_to_visible_x_window(canvas, qapp):

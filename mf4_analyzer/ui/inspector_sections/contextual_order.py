@@ -205,7 +205,7 @@ class OrderContextual(QWidget):
         )
         self._order_section.add_persistent(self.preset_bar)
 
-        self.btn_ot = QPushButton("时间-阶次")
+        self.btn_ot = QPushButton("计算阶次图")
         self.btn_ot.setProperty("role", "primary")
         self.btn_ot.setMinimumHeight(32)
         params_lay.addWidget(self.btn_ot)

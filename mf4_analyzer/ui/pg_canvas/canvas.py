@@ -666,6 +666,7 @@ class TimeDomainCanvasPG(QWidget):
             view_all_handler=self.reset_view_to_data_extents,
             y_autofit_handler=self.fit_y_to_visible_x,
             allow_y_grid=not self._overlay_mode,
+            view_box=view_box,
         )
         self._remove_annotation_context_menu_actions(menu)
 

@@ -111,18 +111,28 @@ class Inspector(QWidget):
         body_lay.setContentsMargins(0, 0, 0, 0)
         body_lay.setSpacing(6)
 
-        self.top = PersistentTop(self._scroll_body)
-        body_lay.addWidget(self.top)
+        self._current_mode = 'time'
+        self._time_domain_card = QFrame(self._scroll_body)
+        self._time_domain_card.setObjectName("timeDomainSettingsCard")
+        self._time_domain_card.setAttribute(Qt.WA_StyledBackground, True)
+        time_card_lay = QVBoxLayout(self._time_domain_card)
+        time_card_lay.setContentsMargins(0, 0, 0, 0)
+        time_card_lay.setSpacing(0)
+        self.top = PersistentTop(self._time_domain_card)
+        time_card_lay.addWidget(self.top)
+        self.time_ctx = TimeContextual(self._time_domain_card)
+        time_card_lay.addWidget(self.time_ctx)
+        body_lay.addWidget(self._time_domain_card)
+
         self.contextual_stack = QStackedWidget(self._scroll_body)
-        self.time_ctx = TimeContextual(self._scroll_body)
         self.fft_ctx = FFTContextual(self._scroll_body)
         self.fft_time_ctx = FFTTimeContextual(self._scroll_body)
         self.order_ctx = OrderContextual(self._scroll_body)
-        self.contextual_stack.addWidget(self.time_ctx)
         self.contextual_stack.addWidget(self.fft_ctx)
         self.contextual_stack.addWidget(self.fft_time_ctx)
         self.contextual_stack.addWidget(self.order_ctx)
         body_lay.addWidget(self.contextual_stack)
+        self.contextual_stack.setVisible(False)
         body_lay.addStretch(1)
 
         # Anchor the capped body to the leading edge; the trailing stretch
@@ -166,8 +176,15 @@ class Inspector(QWidget):
         self.fft_time_ctx.signal_changed.connect(self.fft_time_signal_changed)
 
     def set_mode(self, mode):
-        idx = {'time': 0, 'fft': 1, 'fft_time': 2, 'order': 3}[mode]
-        self.contextual_stack.setCurrentIndex(idx)
+        self._current_mode = mode
+        if mode == 'time':
+            self._time_domain_card.setVisible(True)
+            self.contextual_stack.setVisible(False)
+        else:
+            idx = {'fft': 0, 'fft_time': 1, 'order': 2}[mode]
+            self._time_domain_card.setVisible(False)
+            self.contextual_stack.setVisible(True)
+            self.contextual_stack.setCurrentIndex(idx)
         self._place_range_group_for_mode(mode)
 
     def _place_range_group_for_mode(self, mode):
@@ -202,4 +219,4 @@ class Inspector(QWidget):
         return self.contextual_widget_name()
 
     def contextual_widget_name(self):
-        return {0: 'time', 1: 'fft', 2: 'fft_time', 3: 'order'}[self.contextual_stack.currentIndex()]
+        return self._current_mode

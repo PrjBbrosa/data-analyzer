@@ -3266,13 +3266,53 @@ def _top_level_texts(menu):
     ]
 
 
+def _inline_panel(menu):
+    from PyQt5.QtWidgets import QWidgetAction
+
+    panels = [
+        action.defaultWidget()
+        for action in menu.actions()
+        if isinstance(action, QWidgetAction)
+        and action.defaultWidget() is not None
+        and action.defaultWidget().objectName() == "pgContextInlinePanel"
+    ]
+    assert len(panels) == 1
+    return panels[0]
+
+
+def _panel_button(panel, object_name):
+    from PyQt5.QtWidgets import QPushButton, QToolButton
+
+    button = panel.findChild((QPushButton, QToolButton), object_name)
+    assert button is not None
+    return button
+
+
+def _panel_edit(panel, object_name):
+    from PyQt5.QtWidgets import QLineEdit
+
+    edit = panel.findChild(QLineEdit, object_name)
+    assert edit is not None
+    return edit
+
+
+def _panel_labels(panel):
+    from PyQt5.QtWidgets import QLabel
+
+    return [
+        label.text()
+        for label in panel.findChildren(QLabel)
+        if label.objectName() == "pgContextInlineLabel"
+    ]
+
+
 class TestTimeDomainCanvasPGContextMenuRedesign:
     """Design 2026-05-30 §A–§D: the right-click menu is the reshaped native
     pyqtgraph QMenu — only the agreed top-level items survive, tooltips are
     off, and 鼠标操作 is wired to the toolbar's mouse-mode state machine."""
 
     # ---- §A structure: only the agreed items, removed ones absent ----
-    def test_top_level_menu_contains_only_agreed_items(self, qapp, monkeypatch):
+    def test_top_level_menu_contains_only_inline_panel(self, qapp, monkeypatch):
         from PyQt5.QtWidgets import QWidgetAction
 
         canvas = _pg_canvas(qapp)
@@ -3293,28 +3333,12 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
         assert menu is not None
 
-        assert any(
-            isinstance(action, QWidgetAction)
-            and action.defaultWidget() is not None
-            and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
-            for action in menu.actions()
-        )
+        _inline_panel(menu)
 
-        # The NAMED top-level items, in order.
-        actions = [a for a in menu.actions() if not a.isSeparator()]
-        named = [
-            a.text().replace("&", "").strip()
-            for a in actions
-            if a.text().replace("&", "").strip()
-        ]
-        assert named == [
-            "Y 轴自适应",
-            "查看全部",
-            "X 轴范围",
-            "Y 轴范围",
-            "网格",
-        ]
-        # No 鼠标操作 / 鼠标模式 submenu残留.
+        named = _top_level_texts(menu)
+        assert named == [""]
+        for removed in ("Y 轴自适应", "查看全部", "X 轴范围", "Y 轴范围", "网格"):
+            assert removed not in named
         assert "鼠标操作" not in named
         assert "鼠标模式" not in named
 
@@ -3330,6 +3354,28 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
 
         for banned in ("绘图选项", "Plot Options", "导出...", "Export...", "变换", "降采样"):
             assert banned not in top
+
+    def test_keep_plot_options_keeps_plot_options_after_inline_panel(self, qapp):
+        from PyQt5.QtWidgets import QAction, QMenu
+
+        from mf4_analyzer.ui.pg_canvas.context_menu import redesign_pg_context_menu
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        handle = canvas.axes_list[0]
+        menu = QMenu()
+        menu.addAction(QAction("View All", menu))
+        menu.addAction(QAction("Plot Options", menu))
+
+        redesign_pg_context_menu(
+            menu,
+            handle.plot_item,
+            None,
+            keep_plot_options=True,
+        )
+
+        assert _inline_panel(menu).objectName() == "pgContextInlinePanel"
+        assert _top_level_texts(menu) == ["", "绘图选项"]
 
     def test_annotation_delete_entries_are_absent_from_context_menu(
         self, qapp, monkeypatch,
@@ -3371,24 +3417,40 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         assert removed == [scene_pos]
         assert popped == []
 
-    def test_grid_submenu_promoted_with_x_and_y_toggles(self, qapp, monkeypatch):
+    def test_inline_panel_rows_labels_and_buttons_match_contract(
+        self, qapp, monkeypatch
+    ):
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
 
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        grid_action = next(
-            a for a in menu.actions()
-            if a.text().replace("&", "").strip() == "网格"
-        )
-        grid_menu = grid_action.menu()
-        assert grid_menu is not None
-        grid_items = [a.text() for a in grid_menu.actions()]
-        assert grid_items == ["显示 X 网格", "显示 Y 网格"]
-        # Both default checked (grid is force-enabled on the plot item).
-        assert all(a.isChecked() for a in grid_menu.actions())
+        panel = _inline_panel(menu)
 
-    def test_overlay_grid_menu_x_toggle_does_not_enable_y_grid(self, qapp, monkeypatch):
+        assert _panel_labels(panel) == ["鼠标", "查看", "X范围", "Y范围", "网格"]
+        assert _panel_button(panel, "pgContextYFitButton").text() == "Y适应"
+        assert _panel_button(panel, "pgContextViewAllButton").text() == "全图"
+        assert _panel_button(panel, "pgContextZoomButton").toolTip() == "框选"
+        assert _panel_button(panel, "pgContextPanButton").toolTip() == "平移"
+        assert _panel_button(panel, "pgContextGridXChip").text() == "X"
+        assert _panel_button(panel, "pgContextGridYChip").text() == "Y"
+        for name in (
+            "pgContextYFitButton",
+            "pgContextViewAllButton",
+            "pgContextXMinEdit",
+            "pgContextXMaxEdit",
+            "pgContextYMinEdit",
+            "pgContextYMaxEdit",
+        ):
+            widget = panel.findChild(QWidget, name)
+            assert widget.width() == 72
+            assert widget.height() == 30
+        for name in ("pgContextGridXChip", "pgContextGridYChip"):
+            chip = _panel_button(panel, name)
+            assert chip.width() == 48
+            assert chip.height() == 30
+
+    def test_overlay_grid_chip_x_toggle_does_not_enable_y_grid(self, qapp, monkeypatch):
         from PyQt5.QtCore import QCoreApplication
 
         canvas = _pg_canvas(qapp)
@@ -3398,17 +3460,15 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         pi = canvas._x_master_handle.plot_item
         vb = canvas._x_master_handle.view_box
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        grid_menu = next(
-            a.menu() for a in menu.actions()
-            if a.text().replace("&", "").strip() == "网格"
-        )
-        act_x, act_y = grid_menu.actions()
+        panel = _inline_panel(menu)
+        act_x = _panel_button(panel, "pgContextGridXChip")
+        act_y = _panel_button(panel, "pgContextGridYChip")
 
         assert act_x.isChecked()
         assert not act_y.isChecked()
         assert not act_y.isEnabled()
 
-        act_x.trigger()
+        act_x.click()
         QCoreApplication.processEvents()
 
         assert not pi.getAxis("bottom").grid
@@ -3417,7 +3477,7 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         for ax_item in canvas._overlay_axes.aux_axes:
             assert not ax_item.grid
 
-    def test_grid_submenu_toggle_keeps_top_right_grid_disabled(self, qapp):
+    def test_inline_grid_chip_toggle_keeps_top_right_grid_disabled(self, qapp):
         """The SHARED grid submenu must honor the line/heatmap canvas policy:
         only left+bottom carry the grid; top+right stay OFF. pyqtgraph's
         showGrid lights all four built-in axes, so without the
@@ -3426,7 +3486,9 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         Assert ``ax.grid`` state per the boundary-grid lesson — do NOT drive
         the real generateDrawSpecs (it access-violates offscreen)."""
         import pyqtgraph as pg
-        from mf4_analyzer.ui.pg_canvas.context_menu import _build_grid_submenu
+        from mf4_analyzer.ui.pg_canvas.context_menu import (
+            _make_inline_context_panel_action,
+        )
 
         glw = pg.GraphicsLayoutWidget()
         plot_item = glw.addPlot()
@@ -3436,14 +3498,21 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         plot_item.getAxis("right").setGrid(False)
 
         menu = pg.QtWidgets.QMenu()
-        grid_menu = _build_grid_submenu(menu, plot_item, allow_y_grid=True)
-        act_x, act_y = grid_menu.actions()
+        menu.addAction(_make_inline_context_panel_action(
+            menu,
+            plot_item,
+            None,
+            allow_y_grid=True,
+        ))
+        panel = _inline_panel(menu)
+        act_x = _panel_button(panel, "pgContextGridXChip")
+        act_y = _panel_button(panel, "pgContextGridYChip")
 
         # Enable both X and Y grid through the shared submenu toggle path.
         if not act_x.isChecked():
-            act_x.trigger()
+            act_x.click()
         if not act_y.isChecked():
-            act_y.trigger()
+            act_y.click()
 
         # left+bottom carry the grid (boundary-suppressing axes)...
         assert plot_item.getAxis("bottom").grid
@@ -3475,11 +3544,8 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         menu = _assemble_and_redesign_menu(
             qapp, canvas, canvas._x_master_handle.view_box, monkeypatch
         )
-        view_all = next(
-            a for a in menu.actions()
-            if a.text().replace("&", "").strip() == "查看全部"
-        )
-        view_all.trigger()
+        view_all = _panel_button(_inline_panel(menu), "pgContextViewAllButton")
+        view_all.click()
         QCoreApplication.processEvents()
 
         from mf4_analyzer.ui.pg_canvas.ticks_math import _frame_to_nice
@@ -3503,11 +3569,7 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         exp_lo1, exp_hi1, _ = _frame_to_nice(lo1 - pad1, hi1 + pad1, n_y)
         assert right.get_ylim() == pytest.approx((exp_lo1, exp_hi1), rel=1e-6)
 
-    # ---- box-leak fix: a rounded submenu whose host window is opaque leaves
-    # a square frame outside the radius. The top-level menu already sets
-    # WA_TranslucentBackground (parity anchor); the promoted 网格 / 鼠标操作
-    # submenus are built by hand and must set it too. ----
-    def test_promoted_submenus_have_translucent_background(
+    def test_inline_panel_has_translucent_background_and_no_submenus(
         self, qapp, monkeypatch
     ):
         from PyQt5.QtCore import Qt
@@ -3519,18 +3581,10 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
         # Parity anchor: the top-level menu is already translucent.
         assert menu.testAttribute(Qt.WA_TranslucentBackground)
-        # Only 网格 remains a hand-built submenu (鼠标操作 is now an inline
-        # toggle row, no longer a 子菜单, so it has no popup window to leak).
-        for title in ("网格",):
-            action = next(
-                a for a in menu.actions()
-                if a.text().replace("&", "").strip() == title
-            )
-            sub = action.menu()
-            assert sub is not None, f"{title} submenu missing"
-            assert sub.testAttribute(Qt.WA_TranslucentBackground), (
-                f"{title} 子菜单需设 WA_TranslucentBackground,否则圆角外留方框"
-            )
+        panel = _inline_panel(menu)
+        assert panel.testAttribute(Qt.WA_TranslucentBackground)
+        assert panel.autoFillBackground() is False
+        assert all(action.menu() is None for action in menu.actions())
 
     def test_context_menus_disable_native_drop_shadow(self, qapp, monkeypatch):
         """The rounded QSS corners render transparent, but macOS still paints a
@@ -3544,8 +3598,7 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         vb = canvas.axes_list[0].view_box
 
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        menus = [menu] + [a.menu() for a in menu.actions()
-                          if a.menu() is not None]
+        menus = [menu]
         for m in menus:
             flags = m.windowFlags()
             assert bool(flags & Qt.NoDropShadowWindowHint), (
@@ -3555,38 +3608,101 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
                 f"{m.title()!r} menu must set FramelessWindowHint"
             )
 
-    def test_axis_form_hides_link_invert_and_auto_rows(self, qapp, monkeypatch):
+    def test_inline_range_edits_show_current_viewbox_values_and_apply_valid_input(
+        self, qapp, monkeypatch
+    ):
+        from PyQt5.QtCore import QCoreApplication
+
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
+        vb.setXRange(1.25, 4.5, padding=0)
+        vb.setYRange(-2.5, 3.75, padding=0)
+        QCoreApplication.processEvents()
 
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        x_action = next(
-            a for a in menu.actions()
-            if a.text().replace("&", "").strip() == "X 轴范围"
+        panel = _inline_panel(menu)
+        x_min = _panel_edit(panel, "pgContextXMinEdit")
+        x_max = _panel_edit(panel, "pgContextXMaxEdit")
+        y_min = _panel_edit(panel, "pgContextYMinEdit")
+        y_max = _panel_edit(panel, "pgContextYMaxEdit")
+
+        assert (x_min.text(), x_max.text()) == ("1.25", "4.5")
+        assert (y_min.text(), y_max.text()) == ("-2.5", "3.75")
+        assert "自动" not in {x_min.text(), x_max.text(), y_min.text(), y_max.text()}
+
+        x_min.setText("2")
+        x_max.setText("3")
+        x_max.editingFinished.emit()
+        QCoreApplication.processEvents()
+        assert vb.viewRange()[0] == pytest.approx([2.0, 3.0])
+
+        y_min.setText("-1")
+        y_max.setText("1")
+        y_max.editingFinished.emit()
+        QCoreApplication.processEvents()
+        assert vb.viewRange()[1] == pytest.approx([-1.0, 1.0])
+
+    def test_inline_range_edits_reject_invalid_input_and_restore_current_range(
+        self, qapp, monkeypatch
+    ):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+        vb.setXRange(1.0, 2.0, padding=0)
+        vb.setYRange(-3.0, 4.0, padding=0)
+        QCoreApplication.processEvents()
+
+        panel = _inline_panel(_assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch))
+        x_min = _panel_edit(panel, "pgContextXMinEdit")
+        x_max = _panel_edit(panel, "pgContextXMaxEdit")
+        y_min = _panel_edit(panel, "pgContextYMinEdit")
+        y_max = _panel_edit(panel, "pgContextYMaxEdit")
+
+        x_min.setText("oops")
+        x_max.editingFinished.emit()
+        assert vb.viewRange()[0] == pytest.approx([1.0, 2.0])
+        assert (x_min.text(), x_max.text()) == ("1", "2")
+
+        y_min.setText("9")
+        y_max.setText("1")
+        y_max.editingFinished.emit()
+        QCoreApplication.processEvents()
+        assert vb.viewRange()[1] == pytest.approx([-3.0, 4.0])
+        assert (y_min.text(), y_max.text()) == ("-3", "4")
+
+    def test_inline_y_range_edits_target_triggered_overlay_viewbox(
+        self, qapp, monkeypatch
+    ):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:2], mode="overlay")
+        QCoreApplication.processEvents()
+
+        master = canvas.axes_list[0]
+        aux = canvas.axes_list[1]
+        master.set_ylim(-1.0, 1.0)
+        aux.set_ylim(40.0, 60.0)
+        QCoreApplication.processEvents()
+
+        menu = _assemble_and_redesign_menu(qapp, canvas, aux.view_box, monkeypatch)
+        panel = _inline_panel(menu)
+        y_min = _panel_edit(panel, "pgContextYMinEdit")
+        y_max = _panel_edit(panel, "pgContextYMaxEdit")
+        assert tuple(float(edit.text()) for edit in (y_min, y_max)) == pytest.approx(
+            (40.0, 60.0)
         )
-        axis_widget = x_action.menu().actions()[0].defaultWidget()
-        # Link Axis combo + caption, Invert, and the whole 自动 row (auto radio
-        # + 100% spin) are explicitly hidden. isHidden() reflects the explicit
-        # hide flag independent of whether the never-popped parent menu has
-        # been shown (isVisible would be False for ALL children of an unshown
-        # widget).
-        for name in ("linkCombo", "label", "invertCheck",
-                     "autoPanCheck", "visibleOnlyCheck",
-                     "autoRadio", "autoPercentSpin", "mouseCheck"):
-            child = axis_widget.findChild(QWidget, name)
-            assert child is not None
-            assert child.isHidden(), f"{name} should be hidden"
-        # Only the manual min/max coordinate controls remain. Mouse interaction
-        # is toolbar-owned and should not be exposed from the right-click axis
-        # form.
-        check_texts = {c.text() for c in axis_widget.findChildren(QCheckBox)
-                       if not c.isHidden()}
-        radio_texts = {c.text() for c in axis_widget.findChildren(QRadioButton)
-                       if not c.isHidden()}
-        assert "鼠标交互" not in check_texts
-        assert "手动" in radio_texts
-        assert "自动" not in radio_texts, "自动 row removed per request"
+
+        y_min.setText("42")
+        y_max.setText("58")
+        y_max.editingFinished.emit()
+        QCoreApplication.processEvents()
+
+        assert master.get_ylim() == pytest.approx((-1.0, 1.0))
+        assert aux.get_ylim() == pytest.approx((42.0, 58.0))
 
     # ---- §B tooltip fix ----
     def test_tooltips_visible_is_false_and_actions_have_no_tooltip(
@@ -3616,17 +3732,16 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
             if action.isSeparator():
                 continue
             _assert_no_descriptive_tooltip(action)
-            sub = action.menu()
-            if sub is not None:
-                assert sub.toolTipsVisible() is False
-                for sub_action in sub.actions():
-                    if not sub_action.isSeparator():
-                        _assert_no_descriptive_tooltip(sub_action)
+            assert action.menu() is None
+
+        panel = _inline_panel(menu)
+        assert _panel_button(panel, "pgContextZoomButton").toolTip() == "框选"
+        assert _panel_button(panel, "pgContextPanButton").toolTip() == "平移"
+        assert _panel_button(panel, "pgContextYFitButton").toolTip() == ""
+        assert _panel_button(panel, "pgContextViewAllButton").toolTip() == ""
 
     # ---- §④b context menu keeps mouse mode toolbar-owned ----
-    def test_context_menu_keeps_mouse_mode_shortcut_row(self, qapp, monkeypatch):
-        from PyQt5.QtWidgets import QToolButton, QWidgetAction
-
+    def test_context_menu_keeps_mouse_mode_inline_buttons(self, qapp, monkeypatch):
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
@@ -3644,48 +3759,48 @@ class TestTimeDomainCanvasPGContextMenuRedesign:
         canvas.register_mouse_mode_controller(_Ctl())
 
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        toggle_row = next(
-            action.defaultWidget()
-            for action in menu.actions()
-            if isinstance(action, QWidgetAction)
-            and action.defaultWidget() is not None
-            and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
-        )
-        buttons = toggle_row.findChildren(QToolButton)
-        assert [btn.toolTip() for btn in buttons] == ["框选", "平移"]
-        buttons[0].click()
+        panel = _inline_panel(menu)
+        zoom = _panel_button(panel, "pgContextZoomButton")
+        pan = _panel_button(panel, "pgContextPanButton")
+        assert zoom.toolTip() == "框选"
+        assert pan.toolTip() == "平移"
+        assert not zoom.isChecked()
+        assert not pan.isChecked()
+        zoom.click()
         assert canvas._mouse_mode_controller.mode == "zoom"
         assert _top_level_texts(menu)[0] == ""
 
-    def test_toggle_row_absent_when_no_controller(self, qapp, monkeypatch):
-        from PyQt5.QtWidgets import QWidgetAction
+    def test_inline_panel_keeps_mouse_buttons_disabled_when_no_controller(
+        self, qapp, monkeypatch
+    ):
+        canvas = _pg_canvas(qapp)
+        canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+        vb = canvas.axes_list[0].view_box
+
+        # No controller registered -> defensive: the panel remains the single
+        # menu entry, but toolbar-owned mouse buttons cannot mutate state.
+        canvas._mouse_mode_controller = None
+        menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+        panel = _inline_panel(menu)
+        assert _top_level_texts(menu) == [""]
+        assert not _panel_button(panel, "pgContextZoomButton").isEnabled()
+        assert not _panel_button(panel, "pgContextPanButton").isEnabled()
+
+    def test_context_menu_shell_and_inline_panel_are_transparent(
+        self, qapp, monkeypatch
+    ):
+        from PyQt5.QtCore import Qt
 
         canvas = _pg_canvas(qapp)
         canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
         vb = canvas.axes_list[0].view_box
 
-        # No controller registered → defensive: the row is not added at all.
-        canvas._mouse_mode_controller = None
         menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
-        assert not any(
-            isinstance(a, QWidgetAction) for a in menu.actions()
-        )
-        # First named item is then 「Y 轴自适应」.
-        top = _top_level_texts(menu)
-        assert top[0] == "Y 轴自适应"
-
-    def test_context_menu_qss_uses_pgcontextmenu_light_surface(self):
-        qss = (
-            Path(__file__).resolve().parents[2]
-            / "mf4_analyzer" / "ui_kit" / "style.qss"
-        ).read_text(encoding="utf-8")
-
-        assert "QMenu#pgContextMenu" in qss
-        assert "background-color: #ffffff" in qss
-        assert "QMenu#pgContextMenu::item" in qss
-        assert "QMenu#pgContextMenu::item:selected" in qss
-        # light-blue selected state token
-        assert "#e8efff" in qss
+        panel = _inline_panel(menu)
+        assert menu.objectName() == "pgContextMenu"
+        assert menu.testAttribute(Qt.WA_TranslucentBackground)
+        assert panel.testAttribute(Qt.WA_TranslucentBackground)
+        assert panel.autoFillBackground() is False
 
 
 class TestTimeDomainCanvasPGScroll:
