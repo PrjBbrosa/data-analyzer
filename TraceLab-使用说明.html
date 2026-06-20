@@ -248,7 +248,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       "blocks": [
         { "type": "lead", "html": "TraceLab 把「打开测量数据 → 看图分析 → 导出结果」连成一条龙；还能直接连设备，边录边看。下面六件事，是你最常用到的。" },
         { "type": "cards", "cols": 3, "items": [
-          { "no": "01", "h": "打开各种数据", "p": "直接打开 MF4 测量文件，也支持 CSV、Excel、HEAD 声学（.hdf）、MDF 等，拖进来就能用。" },
+          { "no": "01", "h": "打开各种数据", "p": "直接打开 MF4 测量文件，也支持 CSV、Excel、HEAD 声学（.hdf）、MDF、音视频（.mp4 / .mp3）等，拖进来就能用。" },
           { "no": "02", "h": "看波形随时间变化", "p": "多条通道的时域曲线一起看，随手拖动、放大查看细节。" },
           { "no": "03", "h": "看信号里的频率", "p": "一键 FFT，找出振动或噪声里主要是哪些频率。" },
           { "no": "04", "h": "看转速相关的振动", "p": "阶次分析，专为发动机、电机这类会转的设备准备。", "accent": "teal" },
@@ -269,8 +269,8 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             "软件自动读出里面的<b>所有通道</b>，列在左侧；同时显示文件的行数、采样率、时长。"
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "能打开哪些格式",
-            "pills": [".mf4", ".mdf", ".csv", ".xlsx", ".xls", ".hdf"],
-            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>HEAD 声学（.hdf）</b>也能打开：软件会自动按采样率分组、把各通道列出来，照常做时域、FFT 等分析。" ] } ] },
+            "pills": [".mf4", ".mdf", ".csv", ".xlsx", ".xls", ".hdf", ".mp4", ".mp3", ".wav"],
+            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>HEAD 声学（.hdf）</b>也能打开：软件会自动按采样率分组、把各通道列出来，照常做时域、FFT 等分析。", "<b>音视频文件（.mp4 / .mov / .mp3 / .wav 等）</b>也能拖进来：软件会取出里面的<b>声音轨道</b>当成信号通道，照常看波形、做 FFT；做声音的 FFT 时还能开 <b>A 计权</b>（见「看频率」页）。" ] } ] },
         { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
       ] },
 
@@ -342,6 +342,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           "right": [ { "type": "card", "no": "参数怎么调", "h": "不用记原理，照着选", "paras": [
             "<b>窗函数</b> — 让频谱更干净，一般保持默认即可。",
             "<b>频率分辨率</b> — 调得越细，频率分得越清楚，算得稍慢。",
+            "<b>频率加权</b> — 默认「无」；分析声音时可切到 <b>A 计权</b>，按人耳听感对各频段加权（IEC 61672），更贴近主观响度。",
             "<b>平均 / 峰值保持</b> — 信号有波动时，用「平均」让谱更稳，或用「峰值」抓住最大值。"
           ], "tip": { "label": "选段", "html": "FFT 图上方有一条<b>时间预览</b>，直接在上面<b>左键一拖</b>就能圈定要分析的时间段，不用去右侧填数字。" } } ] }
       ] },
@@ -461,6 +462,10 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
   ],
 
   "changelog": [
+    { "v": "v2.1", "date": "2026-06-20", "items": [
+      "「打开数据」新增支持<b>音视频文件</b>（.mp4 / .mov / .mp3 / .wav 等）：自动取出里面的声音轨道作为通道，照常做时域、FFT 分析。",
+      "FFT 参数新增「<b>频率加权</b>」：可选 <b>A 计权</b>（IEC 61672），按人耳听感对各频段加权，分析声音更贴切。"
+    ] },
     { "v": "v2.0", "date": "2026-06-20", "items": [
       "对齐软件 v7.0：新增「项目工程文件」「多视图 / 分屏对比」「智能分析预设」三页专门说明。",
       "「打开数据」新增支持 HEAD .hdf、MDF .mdf 两类文件。",
