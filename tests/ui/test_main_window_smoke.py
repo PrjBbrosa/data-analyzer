@@ -3015,3 +3015,55 @@ def test_alt_view_shortcut_switches_active_section(qapp, qtbot):
     w._switch_view_for_active_section(1)   # what Alt+2 invokes
     assert ('fft', 1) in captured
     assert mgr.active == 1
+
+
+# ---- Task 4: FFT dB reference render tests ----
+
+def test_fft_amplitude_to_db_uses_reference():
+    import numpy as np
+    from mf4_analyzer.ui.main_window._fft_mixin import FFTMixin
+
+    out = FFTMixin._amplitude_to_db(np.array([1.0, 10.0]), 1.0)
+    np.testing.assert_allclose(out, np.array([0.0, 20.0]), atol=1e-6)
+
+
+def test_fft_entry_from_cache_uses_db_reference(monkeypatch, qapp):
+    import numpy as np
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    freq = np.array([10.0, 20.0])
+    amp = np.array([1.0, 10.0])
+
+    monkeypatch.setattr(
+        win.inspector.fft_ctx,
+        "current_params",
+        lambda: {"amp_y": "dB", "db_reference": 1.0},
+    )
+    monkeypatch.setattr(win, "_file_display_name", lambda fid: str(fid))
+    monkeypatch.setattr(
+        win,
+        "_fft_trace_for_source",
+        lambda fid, ch, time_range=None: (None, None),
+    )
+
+    entry = win._fft_entry_from_cache((freq, amp, None), "f1", "sig", "#2563eb")
+
+    np.testing.assert_allclose(entry["amp"], np.array([0.0, 20.0]), atol=1e-6)
+    np.testing.assert_allclose(entry["amp_for_xlim"], amp)
+
+
+def test_fft_cache_key_excludes_db_reference_display_only():
+    """db_reference is display-only and must NOT affect the FFT compute cache key."""
+    from mf4_analyzer.ui.main_window._fft_mixin import FFTMixin
+
+    base = {
+        "window": "hanning",
+        "nfft_effective": 1024,
+        "avg_mode": "单帧",
+        "avg_overlap": 50,
+        "weighting": "A",
+    }
+    k1 = FFTMixin._fft_compute_cache_params(dict(base, db_reference=1.0))
+    k2 = FFTMixin._fft_compute_cache_params(dict(base, db_reference=2.0))
+    assert k1 == k2

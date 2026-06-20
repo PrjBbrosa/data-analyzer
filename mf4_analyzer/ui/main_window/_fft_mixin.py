@@ -24,6 +24,19 @@ class FFTMixin:
     """
 
     @staticmethod
+    def _amplitude_to_db(amp, reference):
+        """Convert linear amplitude to dB relative to ``reference``.
+
+        ``20 * log10(max(|amp|, eps) / max(reference, eps))`` — display-only
+        transform.  ``reference`` is the linear amplitude value that maps to
+        0 dB. ``amp_for_xlim`` (auto x-limit) is computed from the linear
+        amplitude before calling this, so it is unaffected.
+        """
+        arr = np.asarray(amp, dtype=float)
+        ref = max(float(reference), 1e-12)
+        return 20.0 * np.log10(np.clip(arr, 1e-12, None) / ref)
+
+    @staticmethod
     def _resolve_fft_effective_params(fft_params, n_samples, fs):
         """Return FFT spectrum params with effective NFFT when auto is resolvable.
 
@@ -288,8 +301,8 @@ class FFTMixin:
             # Wave 2 / SP2 / Task 2.3: per-subplot Linear/dB toggle.
             amp_y = fft_params.get('amp_y', 'Linear')
             if amp_y == 'dB':
-                amp_disp = 20 * np.log10(
-                    np.clip(amp, 1e-12, None) / max(amp.max(), 1e-12)
+                amp_disp = self._amplitude_to_db(
+                    amp, fft_params.get('db_reference', 1.0)
                 )
             else:
                 amp_disp = amp

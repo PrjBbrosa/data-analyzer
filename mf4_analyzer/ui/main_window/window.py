@@ -391,6 +391,14 @@ class MainWindow(
         self.inspector.plot_time_requested.connect(self.plot_time)
         self.inspector.fft_requested.connect(self.do_fft)
         self.inspector.order_time_requested.connect(self.do_order_time)
+        # dB reference is display-only: changing it while in FFT mode should
+        # immediately re-render without recompute. Re-evaluate _fft_render_signature
+        # (which now includes db_reference) so the stale-check in _enter_fft_mode
+        # detects the change and re-draws from cache.
+        from PyQt5.QtCore import QTimer as _QTimer
+        self.inspector.fft_ctx.spin_db_ref.valueChanged.connect(
+            lambda _: _QTimer.singleShot(0, self._enter_fft_mode)
+        )
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
@@ -668,8 +676,10 @@ class MainWindow(
                     float(v) for v in self.inspector.top.range_values())
             except Exception:
                 range_sig = None
-        amp_y = self.inspector.fft_ctx.current_params().get('amp_y', 'Linear')
-        return (sources, tuple(sorted(params.items())), range_sig, amp_y)
+        fft_display_params = self.inspector.fft_ctx.current_params()
+        amp_y = fft_display_params.get('amp_y', 'Linear')
+        db_reference = float(fft_display_params.get('db_reference', 1.0))
+        return (sources, tuple(sorted(params.items())), range_sig, amp_y, db_reference)
 
     def _fft_any_source_cached(self, state):
         cache = self.analysis_caches['fft']
@@ -721,8 +731,7 @@ class MainWindow(
         p = self.inspector.fft_ctx.current_params()
         amp_y = p.get('amp_y', 'Linear')
         if amp_y == 'dB':
-            amp_disp = 20 * np.log10(
-                np.clip(amp, 1e-12, None) / max(amp.max(), 1e-12))
+            amp_disp = self._amplitude_to_db(amp, p.get('db_reference', 1.0))
         else:
             amp_disp = amp
         label = f"{self._file_display_name(fid)} · {ch}"
