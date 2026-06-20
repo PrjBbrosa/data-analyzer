@@ -131,6 +131,16 @@ class OrderContextual(QWidget):
         self.combo_nfft.setCurrentText(self._AUTO_NFFT_LABEL)
         self.combo_nfft.setToolTip('越大阶次越细、计算量越高；\n「自动」＝按需取 2 的幂。')
         fl.addRow("FFT点数:", _fit_field(self.combo_nfft))
+        self.combo_weighting = QComboBox()
+        self.combo_weighting.addItems(['None', 'A'])
+        self.combo_weighting.setCurrentText('None')
+        self.combo_weighting.setToolTip(
+            'A 计权（IEC 61672）：相对加权频谱，非绝对 dB SPL'
+        )
+        fl.addRow(
+            "频率加权:",
+            _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
 
         # COT is now the only tracking algorithm (Wave 2 of the
         # 2026-04-28 axis-settings + COT migration plan removed the
@@ -267,6 +277,18 @@ class OrderContextual(QWidget):
         ):
             spin.valueChanged.connect(self._on_preset_param_changed)
         self.combo_nfft.currentTextChanged.connect(self._on_preset_param_changed)
+        self.combo_weighting.currentTextChanged.connect(self._on_preset_param_changed)
+
+    def _apply_weighting_value(self, value):
+        target = 'A' if str(value).upper() == 'A' else 'None'
+        i = self.combo_weighting.findText(target)
+        if i >= 0:
+            self.combo_weighting.setCurrentIndex(i)
+
+    def set_weighting_default(self, mode):
+        if self._applying_preset:
+            return
+        self._apply_weighting_value(mode)
 
     # ---- 2026-04-28: axis settings group helpers (Wave 3 introduced; row-
     # builder lifted to module level in Wave 4 — see _make_axis_settings_group).
@@ -370,6 +392,7 @@ class OrderContextual(QWidget):
                 'Amplitude dB' if self.combo_amp_unit.currentText() == 'dB'
                 else 'Amplitude'
             ),
+            weighting=self.combo_weighting.currentText(),
             samples_per_rev=int(self.spin_samples_per_rev.value()),
             x_auto=bool(self.chk_x_auto.isChecked()),
             x_min=float(self.spin_x_min.value()),
@@ -415,6 +438,7 @@ class OrderContextual(QWidget):
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
             except (TypeError, ValueError):
                 pass
+        self._apply_weighting_value(d.get('weighting', 'None'))
         # ---- Wave 3 (2026-04-28 plan): legacy + new axis-key compat ----
         # Legacy 'dynamic' key compat — translate to z_floor/ceiling/auto.
         # Preferred path: explicit z_floor/ceiling/auto keys override the
@@ -542,6 +566,7 @@ class OrderContextual(QWidget):
             nfft_effective=nfft_effective,
             rpm_factor=self.spin_rf.value(),
             fs=self.spin_fs.value(),
+            weighting=self.combo_weighting.currentText(),
         )
 
     # --- Wave 3 (2026-04-28 plan): test-friendly param accessors ---
@@ -659,6 +684,7 @@ class OrderContextual(QWidget):
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
             except (TypeError, ValueError):
                 pass
+        self._apply_weighting_value(d.get('weighting', 'None'))
 
         self._sync_axis_enabled()
 

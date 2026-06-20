@@ -25,6 +25,21 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         assert token in text
 
 
+def test_windows_folder_build_script_copies_user_guide_next_to_exe():
+    script = ROOT / "tools" / "build_windows_folder.ps1"
+
+    assert script.exists()
+    text = script.read_text(encoding="utf-8")
+
+    # Both the root user manual (TraceLab-*.html) and the versioned release
+    # notes (docs\TraceLab-v$Version-*.html) are copied into the exe output
+    # folder ($OutputDir) by wildcard, keyed to the build $Version.
+    assert "Copy-Item" in text
+    assert '"TraceLab-*.html"' in text
+    assert 'TraceLab-v$Version-*.html' in text
+    assert "-Destination $OutputDir" in text
+
+
 def test_windows_folder_build_script_vendors_pyxcp_without_analysis_import():
     script = ROOT / "tools" / "build_windows_folder.ps1"
     runtime_hook = ROOT / "tools" / "pyinstaller_rthook_pyxcp_vendor.py"

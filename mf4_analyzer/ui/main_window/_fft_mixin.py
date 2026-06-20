@@ -1,5 +1,7 @@
 """FFTMixin: FFT spectrum compute, cache, and render methods for MainWindow."""
 
+import inspect
+
 import numpy as np
 
 from PyQt5.QtWidgets import QApplication, QMessageBox
@@ -67,7 +69,18 @@ class FFTMixin:
             'nfft': fft_params.get('nfft_effective', fft_params.get('nfft')),
             'avg_mode': fft_params.get('avg_mode', '单帧'),
             'avg_overlap': fft_params.get('avg_overlap', 50),
+            'weighting': str(fft_params.get('weighting', 'None')),
         }
+
+    @staticmethod
+    def _call_fft_analyzer(func, *args, weighting='None', **kwargs):
+        try:
+            accepts_weighting = 'weighting' in inspect.signature(func).parameters
+        except (TypeError, ValueError):
+            accepts_weighting = False
+        if accepts_weighting:
+            kwargs['weighting'] = weighting
+        return func(*args, **kwargs)
 
     def _fft_analysis_cache_key(self, fid, ch, fft_params, time_range):
         params = self._fft_compute_cache_params(fft_params)
@@ -91,16 +104,25 @@ class FFTMixin:
         avg_mode = fft_params.get('avg_mode', '单帧')
         overlap_pct = int(fft_params.get('avg_overlap', 50))
         avg_overlap = max(0.0, min(0.95, overlap_pct / 100.0))
+        weighting = str(fft_params.get('weighting', 'None'))
         if avg_mode == '线性平均':
-            freq, amp, psd = FFTAnalyzer.compute_averaged_fft(
-                sig, fs, win, int(nfft), avg_overlap)
+            freq, amp, psd = self._call_fft_analyzer(
+                FFTAnalyzer.compute_averaged_fft,
+                sig, fs, win, int(nfft), avg_overlap,
+                weighting=weighting)
         elif avg_mode == '峰值保持':
-            freq, amp = FFTAnalyzer.compute_peak_hold_fft(
-                sig, fs, win=win, nfft=int(nfft), overlap=avg_overlap)
+            freq, amp = self._call_fft_analyzer(
+                FFTAnalyzer.compute_peak_hold_fft,
+                sig, fs, win=win, nfft=int(nfft), overlap=avg_overlap,
+                weighting=weighting)
             psd = amp ** 2
         else:
-            freq, amp = FFTAnalyzer.compute_fft(sig, fs, win, nfft)
-            _, psd = FFTAnalyzer.compute_psd(sig, fs, win, nfft)
+            freq, amp = self._call_fft_analyzer(
+                FFTAnalyzer.compute_fft, sig, fs, win, nfft,
+                weighting=weighting)
+            _, psd = self._call_fft_analyzer(
+                FFTAnalyzer.compute_psd, sig, fs, win, nfft,
+                weighting=weighting)
         return freq, amp, psd
 
     def _fft_fetch_signal(self, fid, ch, time_range=_INSPECTOR_TIME_RANGE):

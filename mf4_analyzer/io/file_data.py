@@ -15,7 +15,7 @@ _TIME_NAMES = frozenset({
 
 
 class FileData:
-    def __init__(self, fp, df, chs, units, idx=0, *,
+    def __init__(self, fp, df, chs, units, idx=0, *, fs=None,
                  source_metadata=None, channel_metadata=None, label_suffix=""):
         self.filepath = Path(fp)
         self.filename = self.filepath.name
@@ -33,21 +33,26 @@ class FileData:
         self.fs = 1000.0
         self._time_source = 'auto'  # 'auto', 'column', 'generated'
 
-        # 尝试从列名识别时间列
-        for ch in chs:
-            if ch.lower() in _TIME_NAMES:
-                self.time_array = df[ch].to_numpy(copy=False).astype(float, copy=False)
-                if len(self.time_array) > 1:
-                    dt = np.median(np.diff(self.time_array))
-                    if dt > 0:
-                        self.fs = 1.0 / dt
-                        self._time_source = 'column'
-                break
-
-        # 如果没有时间列，根据采样率生成
-        if self.time_array is None:
+        if fs is not None:
+            self.fs = float(fs)
             self.time_array = np.arange(len(df), dtype=float) / self.fs
-            self._time_source = 'generated'
+            self._time_source = 'audio'
+        else:
+            # 尝试从列名识别时间列
+            for ch in chs:
+                if ch.lower() in _TIME_NAMES:
+                    self.time_array = df[ch].to_numpy(copy=False).astype(float, copy=False)
+                    if len(self.time_array) > 1:
+                        dt = np.median(np.diff(self.time_array))
+                        if dt > 0:
+                            self.fs = 1.0 / dt
+                            self._time_source = 'column'
+                    break
+
+            # 如果没有时间列，根据采样率生成
+            if self.time_array is None:
+                self.time_array = np.arange(len(df), dtype=float) / self.fs
+                self._time_source = 'generated'
 
     def rebuild_time_axis(self, fs):
         """根据新的采样率重建时间轴"""
@@ -55,6 +60,10 @@ class FileData:
         n = len(self.data)
         self.time_array = np.arange(n, dtype=float) / fs
         self._time_source = 'manual'
+
+    def is_audio_source(self):
+        """True iff this file was imported from an audio/video track."""
+        return self.source_metadata.get('source_kind') == 'audio'
 
     def is_time_axis_uniform(self, tolerance=None):
         """Pre-flight predicate matching SpectrogramAnalyzer._validate_time_axis.

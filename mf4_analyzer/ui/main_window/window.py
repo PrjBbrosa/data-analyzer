@@ -1251,6 +1251,25 @@ class MainWindow(
             return ''
         return fd.channel_units.get(ch, '') or ''
 
+    def _apply_audio_weighting_default(self, data):
+        if not data:
+            return
+        fid, _ch = data
+        fd = self.files.get(fid)
+        is_audio_source = getattr(fd, 'is_audio_source', None)
+        try:
+            is_audio = bool(is_audio_source()) if callable(is_audio_source) else False
+        except Exception:
+            is_audio = False
+        if not is_audio:
+            return
+        for ctx in (
+            self.inspector.fft_ctx,
+            self.inspector.fft_time_ctx,
+            self.inspector.order_ctx,
+        ):
+            ctx.set_weighting_default('A')
+
     def _on_inspector_signal_changed(self, mode, data):
         """Fs auto-sync per §6.3: spin_fs reflects selected signal's source file Fs.
 
@@ -1265,12 +1284,14 @@ class MainWindow(
         if mode in ('fft', 'order'):
             self.inspector.fft_ctx.set_recommended_for_unit(unit)
             self.inspector.order_ctx.set_recommended_for_unit(unit)
+        self._apply_audio_weighting_default(data)
         if not data:
             return
         fid, _ch = data
         if fid not in self.files:
             return
-        fs = self.files[fid].fs
+        fd = self.files[fid]
+        fs = fd.fs
         if mode == 'fft':
             self.inspector.fft_ctx.set_fs(fs)
             # FFT source selection changed: keep the computed spectrum but
@@ -1289,12 +1310,14 @@ class MainWindow(
         preset bar (``data=None`` clears it)."""
         unit = self._unit_for_signal(data)
         self.inspector.fft_time_ctx.set_recommended_for_unit(unit)
+        self._apply_audio_weighting_default(data)
         if not data:
             return
         fid, _ch = data
         if fid not in self.files:
             return
-        self.inspector.fft_time_ctx.set_fs(self.files[fid].fs)
+        fd = self.files[fid]
+        self.inspector.fft_time_ctx.set_fs(fd.fs)
 
     def set_active_file(self, fid):
         """Public entrypoint matching §12.1 contract."""

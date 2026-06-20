@@ -60,6 +60,7 @@ class FFTTimeMixin:
             'overlap': p.get('overlap'),
             'remove_mean': p.get('remove_mean'),
             'db_reference': p.get('db_reference', 1.0),
+            'weighting': str(p.get('weighting', 'None')),
             'time_range': self._pane_time_range_for('fft_time', pane_idx),
         }
         return cache.make_key(fid, ch, params)
@@ -102,6 +103,7 @@ class FFTTimeMixin:
             float(params.get('overlap')),
             bool(params.get('remove_mean')),
             float(params.get('db_reference', 1.0)),
+            str(params.get('weighting', 'None')),
         )
 
     def _fft_time_cache_get(self, key):
@@ -365,6 +367,7 @@ class FFTTimeMixin:
             overlap=float(p['overlap']),
             remove_mean=bool(p['remove_mean']),
             db_reference=float(p.get('db_reference', 1.0)),
+            weighting=str(p.get('weighting', 'None')),
         )
         unit = ''
         if fd is not None and hasattr(fd, 'channel_units'):
@@ -474,6 +477,7 @@ class FFTTimeMixin:
             overlap=float(p['overlap']),
             remove_mean=bool(p['remove_mean']),
             db_reference=float(p.get('db_reference', 1.0)),
+            weighting=str(p.get('weighting', 'None')),
         )
         unit = ''
         if fd is not None and hasattr(fd, 'channel_units'):

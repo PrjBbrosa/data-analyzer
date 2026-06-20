@@ -145,10 +145,23 @@ class _LoadFailure:
 def _default_loader(path):
     """Default disk loader for ``BatchRunner.file_paths`` resolution.
 
+    Extension-based dispatch keeps batch parity with the GUI loader.
     Returns FileData. Idx -1 marks "not registered with main_window".
     """
     from mf4_analyzer.io import DataLoader, FileData
-    data, chs, units = DataLoader.load_mf4(path)
+    from mf4_analyzer.io.loader import AUDIO_VIDEO_EXTS
+
+    ext = Path(path).suffix.lower()
+    if ext in AUDIO_VIDEO_EXTS:
+        data, chs, units, fs, smeta = DataLoader.load_audio_video(path)
+        return FileData(path, data, chs, units, idx=-1, fs=fs,
+                        source_metadata=smeta)
+    if ext == '.csv':
+        data, chs, units = DataLoader.load_csv(path)
+    elif ext in ('.xls', '.xlsx'):
+        data, chs, units = DataLoader.load_excel(path)
+    else:
+        data, chs, units = DataLoader.load_mf4(path)
     return FileData(path, data, chs, units, idx=-1)
 
 
@@ -571,6 +584,7 @@ class BatchRunner:
             fs,
             win=params.get('window', params.get('win', 'hanning')),
             nfft=nfft,
+            weighting=str(params.get('weighting', 'None')),
         )
         return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
 
@@ -600,6 +614,7 @@ class BatchRunner:
             order_res=float(params.get('order_res', 0.1)),
             time_res=float(params.get('time_res', 0.05)),
             fs=float(fs),
+            weighting=str(params.get('weighting', 'None')),
         )
         result = COTOrderAnalyzer.compute(sig, rpm, time_arr, cot_params)
         return _Spectro2D(
@@ -644,6 +659,7 @@ class BatchRunner:
             overlap=float(params.get('overlap', 0.5)),
             remove_mean=bool(params.get('remove_mean', True)),
             db_reference=float(params.get('db_reference', 1.0)),
+            weighting=str(params.get('weighting', 'None')),
         )
         result = SpectrogramAnalyzer.compute(
             signal=sig, time=time, params=sp,

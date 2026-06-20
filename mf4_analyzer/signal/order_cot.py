@@ -18,6 +18,7 @@ from typing import Optional
 import numpy as np
 
 from .fft import get_analysis_window
+from .weighting import _validate_weighting, a_weighting_gain_linear
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class COTParams:
     time_res: float = 0.05      # in seconds, hop in time domain (mapped to angle)
     fs: float = 0.0             # source sample rate; carried through for batch-preset capture
     min_rpm_floor: float = 10.0  # frames whose mean |rpm| below this are zeroed
+    weighting: str = 'None'
 
     def __post_init__(self):
         if self.samples_per_rev <= 0:
@@ -40,6 +42,7 @@ class COTParams:
             raise ValueError("max_order must be > 0")
         if self.order_res <= 0:
             raise ValueError("order_res must be > 0")
+        _validate_weighting(self.weighting)
 
 
 @dataclass
@@ -81,6 +84,7 @@ class COTOrderAnalyzer:
     def compute(sig, rpm, t, params: COTParams,
                 progress_callback=None, cancel_token=None) -> COTResult:
         sig, rpm, t = COTOrderAnalyzer._validate(sig, rpm, t)
+        weighting = _validate_weighting(params.weighting)
 
         abs_rpm = np.abs(rpm)
         omega = abs_rpm * 2.0 * np.pi / 60.0           # rad/s
@@ -162,6 +166,9 @@ class COTOrderAnalyzer:
             # interpolate raw_orders -> out_orders
             amp_matrix[idx, :] = np.interp(out_orders, raw_orders, amp_raw,
                                            left=0.0, right=0.0)
+            if weighting == 'A' and mean_rpm_frame > 0.0:
+                freqs_hz = out_orders * mean_rpm_frame / 60.0
+                amp_matrix[idx, :] *= a_weighting_gain_linear(freqs_hz)
 
             if progress_callback is not None:
                 progress_callback(idx + 1, n_frames)

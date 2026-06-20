@@ -4,6 +4,7 @@ PyQt5
 matplotlib
 scipy>=1.10
 asammdf
+av
 pyqtgraph>=0.13.3
 openpyxl
 pytest>=7.0

@@ -193,6 +193,16 @@ class FFTContextual(QWidget):
             "幅值轴:",
             _fit_field(self.combo_amp_y, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
+        self.combo_weighting = QComboBox()
+        self.combo_weighting.addItems(['None', 'A'])
+        self.combo_weighting.setCurrentText('None')
+        self.combo_weighting.setToolTip(
+            'A 计权（IEC 61672）：相对加权频谱，非绝对 dB SPL'
+        )
+        fl.addRow(
+            "频率加权:",
+            _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
         g.setTitle("")
         # The section header already shows the title; drop the title band and
         # let the body carry a hairline top divider (see style.qss
@@ -289,10 +299,27 @@ class FFTContextual(QWidget):
         self._refresh_fft_summary()
 
     def _connect_preset_param_signals(self):
-        for combo in (self.combo_win, self.combo_nfft, self.combo_avg_mode, self.combo_amp_y):
+        for combo in (
+            self.combo_win,
+            self.combo_nfft,
+            self.combo_avg_mode,
+            self.combo_amp_y,
+            self.combo_weighting,
+        ):
             combo.currentTextChanged.connect(self._on_preset_param_changed)
         for spin in (self.spin_overlap, self.spin_avg_overlap):
             spin.valueChanged.connect(self._on_preset_param_changed)
+
+    def _apply_weighting_value(self, value):
+        target = 'A' if str(value).upper() == 'A' else 'None'
+        i = self.combo_weighting.findText(target)
+        if i >= 0:
+            self.combo_weighting.setCurrentIndex(i)
+
+    def set_weighting_default(self, mode):
+        if self._applying_preset:
+            return
+        self._apply_weighting_value(mode)
 
     def _sync_axis_enabled(self):
         for key in ('x', 'y'):
@@ -381,6 +408,7 @@ class FFTContextual(QWidget):
             avg_mode=self.combo_avg_mode.currentText(),
             avg_overlap=self.spin_avg_overlap.value(),
             amp_y=self.combo_amp_y.currentText(),
+            weighting=self.combo_weighting.currentText(),
             autoscale=self.chk_x_auto.isChecked(),
             x_auto=self.chk_x_auto.isChecked(),
             x_min=float(self.spin_x_min.value()),
@@ -438,6 +466,7 @@ class FFTContextual(QWidget):
             i = self.combo_amp_y.findText(str(d['amp_y']))
             if i >= 0:
                 self.combo_amp_y.setCurrentIndex(i)
+        self._apply_weighting_value(d.get('weighting', 'None'))
 
     def _on_sig_index_changed(self):
         self.signal_changed.emit(self.combo_sig.currentData())
@@ -499,6 +528,7 @@ class FFTContextual(QWidget):
             t_win_s=float(self._t_win_s),
             nfft_effective=None if auto else nfft,
             overlap=self.spin_overlap.value() / 100.0,
+            weighting=self.combo_weighting.currentText(),
             autoscale=self.chk_x_auto.isChecked(),
             x_auto=bool(self.chk_x_auto.isChecked()),
             x_min=float(self.spin_x_min.value()),
@@ -576,3 +606,4 @@ class FFTContextual(QWidget):
             i = self.combo_amp_y.findText(str(d['amp_y']))
             if i >= 0:
                 self.combo_amp_y.setCurrentIndex(i)
+        self._apply_weighting_value(d.get('weighting', 'None'))

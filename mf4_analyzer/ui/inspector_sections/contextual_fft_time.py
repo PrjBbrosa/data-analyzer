@@ -168,6 +168,16 @@ class FFTTimeContextual(QWidget):
         self.chk_remove_mean.setChecked(True)
         self.chk_remove_mean.setToolTip('减去直流，避免 0 Hz 大值压低低频成分。')
         fl.addRow(self.chk_remove_mean)
+        self.combo_weighting = QComboBox()
+        self.combo_weighting.addItems(['None', 'A'])
+        self.combo_weighting.setCurrentText('None')
+        self.combo_weighting.setToolTip(
+            'A 计权（IEC 61672）：相对加权频谱，非绝对 dB SPL'
+        )
+        fl.addRow(
+            "频率加权:",
+            _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
         g.setTitle("")
         # The section header already shows the title; drop the title band and
         # let the body carry a hairline top divider (see style.qss
@@ -319,8 +329,20 @@ class FFTTimeContextual(QWidget):
     def _connect_preset_param_signals(self):
         self.combo_nfft.currentTextChanged.connect(self._on_preset_param_changed)
         self.combo_win.currentTextChanged.connect(self._on_preset_param_changed)
+        self.combo_weighting.currentTextChanged.connect(self._on_preset_param_changed)
         self.spin_overlap.valueChanged.connect(self._on_preset_param_changed)
         self.chk_remove_mean.toggled.connect(self._on_preset_param_changed)
+
+    def _apply_weighting_value(self, value):
+        target = 'A' if str(value).upper() == 'A' else 'None'
+        i = self.combo_weighting.findText(target)
+        if i >= 0:
+            self.combo_weighting.setCurrentIndex(i)
+
+    def set_weighting_default(self, mode):
+        if self._applying_preset:
+            return
+        self._apply_weighting_value(mode)
 
     def _sync_axis_enabled(self):
         """Toggle each axis row between auto summary and manual bounds.
@@ -454,6 +476,7 @@ class FFTTimeContextual(QWidget):
             nfft_effective=nfft_effective,
             window=self.combo_win.currentText(),
             overlap=self.spin_overlap.value() / 100.0,
+            weighting=self.combo_weighting.currentText(),
             remove_mean=self.chk_remove_mean.isChecked(),
             amplitude_mode=amp_mode,
             db_reference=self.spin_db_ref.value(),
@@ -542,6 +565,7 @@ class FFTTimeContextual(QWidget):
                 self.spin_db_ref.setValue(float(d['db_reference']))
             except (TypeError, ValueError):
                 pass
+        self._apply_weighting_value(d.get('weighting', 'None'))
         # cmap 固定 turbo：无控件可应用，预设/视图状态里的 cmap 键被忽略。
 
         # amplitude_mode token → combo_amp_unit. Reverse-map on a
@@ -700,6 +724,7 @@ class FFTTimeContextual(QWidget):
             'amplitude_mode': cfg.get('amplitude_mode', 'Amplitude dB'),
             'remove_mean': True,
             'db_reference': 1.0,
+            'weighting': 'None',
             'freq_auto': cfg.get('freq_auto', True),
             'freq_min': 0.0,
             'freq_max': 0.0,
@@ -743,6 +768,7 @@ class FFTTimeContextual(QWidget):
             ),
             t_win_s=float(self._t_win_s),
             overlap=self.spin_overlap.value(),
+            weighting=self.combo_weighting.currentText(),
             amplitude_mode=amp_mode,
             remove_mean=self.chk_remove_mean.isChecked(),
             db_reference=self.spin_db_ref.value(),
@@ -807,6 +833,7 @@ class FFTTimeContextual(QWidget):
                 self.spin_db_ref.setValue(float(d['db_reference']))
             except (TypeError, ValueError):
                 pass
+        self._apply_weighting_value(d.get('weighting', 'None'))
         # cmap 固定 turbo：无控件可应用，预设/视图状态里的 cmap 键被忽略。
 
         # ---- Wave 4 axis-key migration (legacy + new) ----

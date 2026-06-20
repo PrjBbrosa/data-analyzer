@@ -28,6 +28,8 @@ import warnings
 import numpy as np
 from scipy.signal import get_window as _scipy_get_window
 
+from .weighting import _validate_weighting, a_weighting_gain_linear
+
 
 # App-owned alias normalization. Keeps "hann" and "hanning" pointing at
 # the same definition so callers can use either spelling.
@@ -153,7 +155,7 @@ class FFTAnalyzer:
         return get_analysis_window(name, n)
 
     @staticmethod
-    def compute_fft(sig, fs, win='hanning', nfft=None):
+    def compute_fft(sig, fs, win='hanning', nfft=None, weighting='None'):
         """Windowed one-sided FFT amplitude spectrum.
 
         Preserves the historical contract of returning ``nfft//2`` bins
@@ -170,15 +172,23 @@ class FFTAnalyzer:
         nfft = int(nfft)
         freq, amp = one_sided_amplitude(sig, fs, win=win, nfft=nfft, remove_mean=True)
         nh = nfft // 2
-        return freq[:nh], amp[:nh]
+        freq_out = freq[:nh]
+        amp_out = amp[:nh]
+        if _validate_weighting(weighting) == 'A':
+            amp_out = amp_out * a_weighting_gain_linear(freq_out)
+        return freq_out, amp_out
 
     @staticmethod
-    def compute_psd(sig, fs, win='hanning', nfft=None):
-        f, a = FFTAnalyzer.compute_fft(sig, fs, win, nfft)
+    def compute_psd(sig, fs, win='hanning', nfft=None, weighting='None'):
+        f, a = FFTAnalyzer.compute_fft(
+            sig, fs, win=win, nfft=nfft, weighting=weighting,
+        )
         return f, a ** 2
 
     @staticmethod
-    def compute_averaged_fft(sig, fs, win='hanning', nfft=1024, overlap=0.5):
+    def compute_averaged_fft(
+        sig, fs, win='hanning', nfft=1024, overlap=0.5, weighting='None',
+    ):
         """Welch-style averaged amplitude spectrum.
 
         Window construction routes through :func:`get_analysis_window`
@@ -196,6 +206,7 @@ class FFTAnalyzer:
         ``n >= nfft`` the clamp is a no-op (``effective_nfft == nfft``)
         and the numerical result is byte-for-byte unchanged.
         """
+        weighting = _validate_weighting(weighting)
         n = len(sig)
         if n == 0:
             empty = np.array([], dtype=float)
@@ -241,10 +252,15 @@ class FFTAnalyzer:
 
         psd = psd_sum / n_segments / (w_sum ** 2) * 2
         amp = np.sqrt(psd)
+        if weighting == 'A':
+            amp = amp * a_weighting_gain_linear(freq)
+            psd = amp ** 2
         return freq, amp, psd
 
     @staticmethod
-    def compute_peak_hold_fft(sig, fs, win='hanning', nfft=1024, overlap=0.5):
+    def compute_peak_hold_fft(
+        sig, fs, win='hanning', nfft=1024, overlap=0.5, weighting='None',
+    ):
         """Per-frequency max amplitude across overlapping FFT segments.
 
         Wraps :func:`one_sided_amplitude` with a sliding window of length
@@ -257,6 +273,7 @@ class FFTAnalyzer:
         to a single-frame :func:`one_sided_amplitude` over the whole
         signal so the caller still receives a usable spectrum.
         """
+        weighting = _validate_weighting(weighting)
         sig = np.asarray(sig, dtype=float)
         n = len(sig)
         hop = max(int(nfft * (1 - overlap)), 1)
@@ -277,4 +294,6 @@ class FFTAnalyzer:
                 np.maximum(peak, a, out=peak)
         if peak is None:
             freq, peak = one_sided_amplitude(sig, fs, win=win, nfft=nfft)
+        if weighting == 'A':
+            peak = peak * a_weighting_gain_linear(freq)
         return freq, peak

@@ -382,6 +382,7 @@ class AnalysisMixin:
                 't_win_s': p.get('t_win_s', 1.5),
                 'avg_mode': cp.get('avg_mode', '单帧'),
                 'avg_overlap': cp.get('avg_overlap', 50),
+                'weighting': p.get('weighting', 'None'),
             }
         if section == 'fft_time':
             return {
@@ -391,6 +392,7 @@ class AnalysisMixin:
                 'overlap': p.get('overlap'),
                 'remove_mean': p.get('remove_mean'),
                 'db_reference': p.get('db_reference', 1.0),
+                'weighting': p.get('weighting', 'None'),
             }
         # order: COT params + rpm_source must both be in the key (changing the
         # RPM channel must NOT hit an old result).
@@ -405,6 +407,7 @@ class AnalysisMixin:
             'samples_per_rev': ctx.current_params().get('samples_per_rev'),
             'rpm_factor': p.get('rpm_factor'),
             'fs': p.get('fs'),
+            'weighting': p.get('weighting', 'None'),
         }
 
     def _analysis_cache_key(self, section, fid, ch, rpm_source=None, pane_idx=None):

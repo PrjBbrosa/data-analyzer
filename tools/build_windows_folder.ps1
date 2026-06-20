@@ -174,6 +174,28 @@ if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
 }
 
+# Ship the user guide + release notes alongside the exe so end users can open
+# them straight from the install folder. Matched by wildcard (the file names
+# have non-ASCII characters) to avoid embedding them in this .ps1, which Windows
+# PowerShell 5.1 would mis-decode without a BOM. The docs glob is keyed to the
+# build $Version so the bundled release notes track the build.
+Write-Step "Copying user guides next to exe"
+$UserGuideGlobs = @(
+    (Join-Path $RepoRoot "TraceLab-*.html"),
+    (Join-Path $RepoRoot "docs\TraceLab-v$Version-*.html")
+)
+$UserGuides = @($UserGuideGlobs | ForEach-Object {
+    Get-ChildItem -Path $_ -File -ErrorAction SilentlyContinue
+})
+if ($UserGuides.Count -gt 0) {
+    foreach ($Guide in $UserGuides) {
+        Copy-Item -Force -Path $Guide.FullName -Destination $OutputDir
+        Write-Host "Guide:  $(Join-Path $OutputDir $Guide.Name)"
+    }
+} else {
+    Write-Warning "No user guide found, skipping copy ($($UserGuideGlobs -join '; '))"
+}
+
 Write-Step "Build output"
 Write-Host "Folder: $OutputDir"
 Write-Host "Exe:    $ExePath"

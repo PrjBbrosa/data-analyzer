@@ -5,6 +5,22 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from ...io import DataLoader, FileData, HAS_ASAMMDF
+from ...io.loader import AUDIO_VIDEO_EXTS
+
+
+AUDIO_VIDEO_GLOB = "*.mp4 *.mov *.mkv *.m4v *.mp3 *.m4a *.aac *.wav *.flac"
+DATA_FILE_GLOB = f"*.mf4 *.mdf *.csv *.xlsx *.xls *.hdf {AUDIO_VIDEO_GLOB}"
+PROJECT_OR_DATA_FILTER = (
+    f"所有支持的文件 ({DATA_FILE_GLOB} *.tlproj);;"
+    f"项目 (*.tlproj);;数据文件 ({DATA_FILE_GLOB});;"
+    f"音视频文件 ({AUDIO_VIDEO_GLOB})"
+)
+OPEN_FILES_FILTER = (
+    f"所有支持的文件 ({DATA_FILE_GLOB});;"
+    f"数据文件 ({DATA_FILE_GLOB});;"
+    f"音视频文件 ({AUDIO_VIDEO_GLOB})"
+)
+AUDIO_VIDEO_FILE_FILTER = f"音视频文件 ({AUDIO_VIDEO_GLOB})"
 
 
 class ProjectIOMixin:
@@ -29,9 +45,7 @@ class ProjectIOMixin:
         _pkg = _sys.modules.get('mf4_analyzer.ui.main_window')
         _QFileDialog = getattr(_pkg, 'QFileDialog', QFileDialog) if _pkg is not None else QFileDialog
         fps, _ = _QFileDialog.getOpenFileNames(
-            self, "打开", "",
-            "所有支持的文件 (*.mf4 *.mdf *.csv *.xlsx *.xls *.hdf *.tlproj);;"
-            "项目 (*.tlproj);;数据文件 (*.mf4 *.mdf *.csv *.xlsx *.xls *.hdf)",
+            self, "打开", "", PROJECT_OR_DATA_FILTER,
         )
         if not fps:
             return
@@ -78,7 +92,8 @@ class ProjectIOMixin:
         import sys as _sys
         _pkg = _sys.modules.get('mf4_analyzer.ui.main_window')
         _QFileDialog = getattr(_pkg, 'QFileDialog', QFileDialog) if _pkg is not None else QFileDialog
-        fps, _ = _QFileDialog.getOpenFileNames(self, "选择文件", "", "All (*.mf4 *.mdf *.csv *.xlsx *.xls *.hdf)")
+        fps, _ = _QFileDialog.getOpenFileNames(
+            self, "选择文件", "", OPEN_FILES_FILTER)
         for fp in fps: self._load_one(fp)
 
     def load_file(self, path) -> None:
@@ -99,13 +114,28 @@ class ProjectIOMixin:
         self._load_one(str(path))
 
     def _register_file_data(self, fp, data, chs, units, *,
+                            fs=None,
                             source_metadata=None, channel_metadata=None,
                             label_suffix=""):
         fid = f"f{self._fc}"; self._fc += 1
-        fd = FileData(fp, data, chs, units, len(self.files),
-                      source_metadata=source_metadata,
-                      channel_metadata=channel_metadata,
-                      label_suffix=label_suffix)
+        kwargs = dict(
+            source_metadata=source_metadata,
+            channel_metadata=channel_metadata,
+            label_suffix=label_suffix,
+        )
+        if fs is not None:
+            kwargs["fs"] = fs
+        try:
+            fd = FileData(fp, data, chs, units, len(self.files), **kwargs)
+        except TypeError as exc:
+            if fs is None or "fs" not in str(exc):
+                raise
+            kwargs.pop("fs", None)
+            fd = FileData(fp, data, chs, units, len(self.files), **kwargs)
+            try:
+                fd.rebuild_time_axis(float(fs))
+            except Exception:
+                fd.fs = float(fs)
         self.files[fid] = fd
         self.navigator.add_file(fid, fd)
         self.canvas_time.invalidate_envelope_cache("file loaded")
@@ -131,6 +161,15 @@ class ProjectIOMixin:
                 data, chs, units = DataLoader.load_mf4(fp)
             elif ext in ('.xlsx', '.xls'):
                 data, chs, units = DataLoader.load_excel(fp)
+            elif ext in AUDIO_VIDEO_EXTS:
+                data, chs, units, fs, smeta = DataLoader.load_audio_video(fp)
+                fd = self._register_file_data(
+                    fp, data, chs, units, fs=fs, source_metadata=smeta)
+                self._update_info()
+                self.statusBar.showMessage(
+                    f"✅ 已加载音轨: {p.name} ({len(data)} 采样 @ {fs:.0f} Hz) | 共 {len(self.files)} 文件")
+                self.toast(f"已加载音轨 {p.name}", "success")
+                return
             elif ext == '.hdf':
                 groups = DataLoader.load_hdf(fp)
                 for g in groups:

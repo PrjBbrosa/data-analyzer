@@ -4,7 +4,7 @@ This module is the GUI-free signal-processing core of the FFT vs Time
 mode. It owns:
 
   * the ``SpectrogramParams`` cache key (fs, nfft, window, overlap,
-    remove_mean, db_reference);
+    remove_mean, db_reference, weighting);
   * the ``SpectrogramResult`` payload returned to the canvas;
   * frame construction (uniform-time validation, hop computation,
     frame center times);
@@ -34,6 +34,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from .fft import one_sided_amplitude
+from .weighting import _validate_weighting, a_weighting_gain_linear
 
 
 # Hard ceiling on the rendered float32 amplitude matrix size.
@@ -67,6 +68,10 @@ class SpectrogramParams:
     overlap: float = 0.5
     remove_mean: bool = True
     db_reference: float = 1.0
+    weighting: str = 'None'
+
+    def __post_init__(self):
+        _validate_weighting(self.weighting)
 
 
 @dataclass
@@ -238,6 +243,7 @@ class SpectrogramAnalyzer:
         RuntimeError
             If ``cancel_token`` returns truthy mid-compute.
         """
+        weighting = _validate_weighting(params.weighting)
         fs = float(params.fs)
         if fs <= 0:
             raise ValueError('fs must be > 0')
@@ -300,6 +306,10 @@ class SpectrogramAnalyzer:
                 (i + 1) % progress_step == 0 or (i + 1) == total
             ):
                 progress_callback(i + 1, total)
+
+        if weighting == 'A':
+            gain = a_weighting_gain_linear(freq).astype(np.float32, copy=False)
+            amplitude *= gain[:, np.newaxis]
 
         return SpectrogramResult(
             times=times,

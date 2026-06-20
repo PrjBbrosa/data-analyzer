@@ -152,6 +152,7 @@ class OrderMixin:
             'samples_per_rev': p.get('samples_per_rev'),
             'rpm_factor': p.get('rpm_factor'),
             'fs': p.get('fs'),
+            'weighting': str(p.get('weighting', 'None')),
             'rpm_source': list(rpm_source) if rpm_source else None,
             'time_range': time_range,
         }
@@ -336,6 +337,7 @@ class OrderMixin:
                 order_res=float(op['order_res']),
                 time_res=float(op['time_res']),
                 fs=fs,
+                weighting=str(op.get('weighting', 'None')),
             )
         except Exception as e:
             outcome = getattr(self, '_order_outcome', None)

@@ -112,6 +112,12 @@ def _resolve_channel_unit(mdf, sig, group_idx, ch_idx):
     return str(getattr(channel, 'unit', '') or '')
 
 
+AUDIO_VIDEO_EXTS = {
+    '.mp4', '.mov', '.mkv', '.m4v',
+    '.mp3', '.m4a', '.aac', '.wav', '.flac',
+}
+
+
 class DataLoader:
     @staticmethod
     def load_mf4(fp):
@@ -165,6 +171,116 @@ class DataLoader:
                 pass
 
         return pd.DataFrame(data), list(data.keys()), units
+
+    @staticmethod
+    def load_audio_video(fp):
+        import av
+
+        container = av.open(str(fp))
+        stream = None
+        container_name = ''
+        codec_name = ''
+        fs = None
+        chunks = None
+
+        def channel_count_from(*objects):
+            for obj in objects:
+                if obj is None:
+                    continue
+                channels = getattr(obj, 'channels', None)
+                if isinstance(channels, int) and channels > 0:
+                    return int(channels)
+                try:
+                    count = len(channels)
+                except Exception:
+                    count = 0
+                if count > 0:
+                    return int(count)
+            return 0
+
+        def resampled_frames(result):
+            if result is None:
+                return ()
+            if isinstance(result, (list, tuple)):
+                return result
+            return (result,)
+
+        def append_frame(frame):
+            nonlocal chunks, fs
+            arr = np.asarray(frame.to_ndarray(), dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+            if arr.ndim != 2:
+                arr = arr.reshape(1, -1)
+            if chunks is None:
+                chunks = [[] for _ in range(arr.shape[0])]
+            elif arr.shape[0] != len(chunks) and arr.shape[1] == len(chunks):
+                arr = arr.T
+            take = min(len(chunks), arr.shape[0])
+            for ci in range(take):
+                chunks[ci].append(arr[ci].astype(np.float32, copy=False))
+            if fs is None:
+                sample_rate = getattr(frame, 'sample_rate', None)
+                if sample_rate:
+                    fs = float(sample_rate)
+
+        try:
+            streams = list(container.streams.audio)
+            if not streams:
+                raise ValueError("文件不含音轨")
+            stream = streams[0]
+            codec_context = getattr(stream, 'codec_context', None)
+            layout = getattr(stream, 'layout', None) or getattr(codec_context, 'layout', None)
+            fs = getattr(stream, 'rate', None) or getattr(codec_context, 'rate', None)
+            fs = float(fs) if fs else None
+            container_name = str(getattr(getattr(container, 'format', None), 'name', '') or '')
+            codec_name = str(getattr(codec_context, 'name', '') or '')
+            expected_channels = channel_count_from(stream, codec_context, layout)
+            if expected_channels > 0:
+                chunks = [[] for _ in range(expected_channels)]
+
+            resampler_kwargs = {'format': 'fltp'}
+            if layout is not None:
+                resampler_kwargs['layout'] = layout
+            resampler = av.AudioResampler(**resampler_kwargs)
+
+            for frame in container.decode(stream):
+                for out_frame in resampled_frames(resampler.resample(frame)):
+                    append_frame(out_frame)
+            for out_frame in resampled_frames(resampler.resample(None)):
+                append_frame(out_frame)
+        finally:
+            container.close()
+
+        if chunks is None:
+            chunks = []
+        cols = [
+            np.concatenate(parts).astype(np.float32, copy=False)
+            if parts else np.zeros(0, dtype=np.float32)
+            for parts in chunks
+        ]
+        n = min((len(col) for col in cols), default=0)
+        cols = [col[:n].astype(np.float32, copy=False) for col in cols]
+        n_ch = len(cols)
+
+        if n_ch == 1:
+            names = ['audio']
+        elif n_ch == 2:
+            names = ['L', 'R']
+        else:
+            names = [f'ch{i}' for i in range(n_ch)]
+
+        data = pd.DataFrame({name: col for name, col in zip(names, cols)})
+        units = {name: '' for name in names}
+        fs = float(fs or 0.0)
+        source_metadata = {
+            'source_kind': 'audio',
+            'container': container_name,
+            'codec': codec_name,
+            'fs': fs,
+            'channels': n_ch,
+        }
+        return data, names, units, fs, source_metadata
 
     @staticmethod
     def load_csv(fp):
