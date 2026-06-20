@@ -142,6 +142,23 @@ class ProjectIOMixin:
         self.canvas_time.invalidate_monotonicity_cache()
         self._fft_time_cache_clear_for_fid(fid)
         self._refresh_channel_dependent_controls()
+        is_audio_source = getattr(fd, "is_audio_source", None)
+        try:
+            is_audio = bool(is_audio_source()) if callable(is_audio_source) else False
+        except Exception:
+            is_audio = False
+        if is_audio:
+            signal_channels = (
+                fd.get_signal_channels()
+                if hasattr(fd, "get_signal_channels")
+                else chs
+            )
+            if signal_channels:
+                apply_audio_default = getattr(
+                    self, "_apply_audio_weighting_default", None
+                )
+                if callable(apply_audio_default):
+                    apply_audio_default((fid, signal_channels[0]))
         if fd.time_array is not None and len(fd.time_array):
             current_hi = self.inspector.top.spin_end.maximum()
             new_hi = max(current_hi, fd.time_array[-1])

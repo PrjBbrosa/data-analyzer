@@ -48,6 +48,7 @@ class FFTContextual(QWidget):
         self.setObjectName("fftContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._applying_preset = False
+        self._source_weighting_default = 'None'
         self._t_win_s = 1.5
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: the contextual is a transparent
@@ -316,10 +317,26 @@ class FFTContextual(QWidget):
         if i >= 0:
             self.combo_weighting.setCurrentIndex(i)
 
+    def _sync_source_weighting_defaults(self):
+        target = self._source_weighting_default
+        bar = getattr(self, 'preset_bar', None)
+        builtins = getattr(bar, '_builtins', None)
+        if isinstance(builtins, dict):
+            for entry in builtins.values():
+                if isinstance(entry, dict) and isinstance(entry.get('params'), dict):
+                    entry['params']['weighting'] = target
+        default_params = getattr(bar, '_default_params', None)
+        if isinstance(default_params, dict):
+            default_params['weighting'] = target
+
     def set_weighting_default(self, mode):
         if self._applying_preset:
             return
-        self._apply_weighting_value(mode)
+        self._source_weighting_default = (
+            'A' if str(mode).upper() == 'A' else 'None'
+        )
+        self._sync_source_weighting_defaults()
+        self._apply_weighting_value(self._source_weighting_default)
 
     def _sync_axis_enabled(self):
         for key in ('x', 'y'):

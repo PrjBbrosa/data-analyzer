@@ -49,6 +49,7 @@ class OrderContextual(QWidget):
         self.setObjectName("orderContextual")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._applying_preset = False
+        self._source_weighting_default = 'None'
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: transparent host for two
         # full-width cards (sig_card + params_card); spacing is the gutter.
@@ -285,10 +286,26 @@ class OrderContextual(QWidget):
         if i >= 0:
             self.combo_weighting.setCurrentIndex(i)
 
+    def _sync_source_weighting_defaults(self):
+        target = self._source_weighting_default
+        bar = getattr(self, 'preset_bar', None)
+        builtins = getattr(bar, '_builtins', None)
+        if isinstance(builtins, dict):
+            for entry in builtins.values():
+                if isinstance(entry, dict) and isinstance(entry.get('params'), dict):
+                    entry['params']['weighting'] = target
+        default_params = getattr(bar, '_default_params', None)
+        if isinstance(default_params, dict):
+            default_params['weighting'] = target
+
     def set_weighting_default(self, mode):
         if self._applying_preset:
             return
-        self._apply_weighting_value(mode)
+        self._source_weighting_default = (
+            'A' if str(mode).upper() == 'A' else 'None'
+        )
+        self._sync_source_weighting_defaults()
+        self._apply_weighting_value(self._source_weighting_default)
 
     # ---- 2026-04-28: axis settings group helpers (Wave 3 introduced; row-
     # builder lifted to module level in Wave 4 — see _make_axis_settings_group).

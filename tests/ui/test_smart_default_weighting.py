@@ -62,6 +62,28 @@ def test_audio_signal_selection_enables_a_weighting_for_fft_time_path(
     assert _all_weightings(win) == {"fft": "A", "fft_time": "A", "order": "A"}
 
 
+def test_audio_source_builtin_presets_keep_a_weighting_across_all_sections(
+    qapp, qtbot
+):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.files["audio"] = _fake_file(audio=True)
+
+    win._on_inspector_signal_changed("fft", ("audio", "audio"))
+
+    contexts = (
+        win.inspector.fft_ctx,
+        win.inspector.fft_time_ctx,
+        win.inspector.order_ctx,
+    )
+    for ctx in contexts:
+        for slot in ctx.preset_bar.SLOTS:
+            ctx.preset_bar._load(slot)
+            assert ctx.get_params()["weighting"] == "A"
+
+
 def test_non_audio_signal_selection_leaves_weighting_untouched(qapp, qtbot):
     from mf4_analyzer.ui.main_window import MainWindow
 
@@ -125,3 +147,4 @@ def test_load_one_registers_wav_as_audio_source_with_fs(qapp, qtbot, tmp_path):
     assert fd.is_audio_source() is True
     assert fd.fs == pytest.approx(float(fs))
     assert "audio" in fd.channels
+    assert _all_weightings(win) == {"fft": "A", "fft_time": "A", "order": "A"}

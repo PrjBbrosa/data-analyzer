@@ -69,6 +69,8 @@ _PREVIEW_FALLBACK_PIXEL_WIDTH = 2000
 # unrealized and routed to the generous fallback — otherwise a small source
 # would be needlessly decimated against a phantom 46-px viewport.
 _PREVIEW_MIN_REALIZED_PIXEL_WIDTH = 200
+_SPECTRUM_FALLBACK_PIXEL_WIDTH = 2400
+_SPECTRUM_MIN_REALIZED_PIXEL_WIDTH = 200
 
 # Stale-state chrome for the already-computed spectrum when the source
 # selection changed but the user has not re-clicked 计算. Deliberately a
@@ -705,8 +707,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             pen = pg.mkPen(e.get('color', '#2563eb'), width=1.5)
             pen.setJoinStyle(Qt.RoundJoin)
             pen.setCapStyle(Qt.RoundCap)
+            freq, amp = self._spectrum_plot_arrays(e['freq'], e['amp'])
             curve = self._plot_amp.plot(
-                e['freq'], e['amp'], pen=pen, name=e['label'],
+                freq, amp, pen=pen, name=e['label'],
                 antialias=True)
             curve.setOpacity(1.0)
             self._amp_curves.append(curve)
@@ -1329,6 +1332,29 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         except Exception:
             pass
         return _PREVIEW_FALLBACK_PIXEL_WIDTH
+
+    def _spectrum_pixel_width(self) -> int:
+        try:
+            rect = self._plot_amp.vb.sceneBoundingRect()
+            w = int(round(rect.width()))
+            if w >= _SPECTRUM_MIN_REALIZED_PIXEL_WIDTH:
+                return w
+        except Exception:
+            pass
+        return _SPECTRUM_FALLBACK_PIXEL_WIDTH
+
+    def _spectrum_plot_arrays(self, freq, amp):
+        freq_arr = np.asarray(freq, dtype=float)
+        amp_arr = np.asarray(amp, dtype=float)
+        n = min(freq_arr.size, amp_arr.size)
+        if n == 0:
+            return freq_arr[:0], amp_arr[:0]
+        freq_arr = freq_arr[:n]
+        amp_arr = amp_arr[:n]
+        pixel_width = self._spectrum_pixel_width()
+        if n <= max(1, pixel_width * 2):
+            return freq_arr, amp_arr
+        return build_envelope(freq_arr, amp_arr, xlim=None, pixel_width=pixel_width)
 
     def _combined_time_bounds(self):
         bounds = []
