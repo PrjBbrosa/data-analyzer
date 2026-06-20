@@ -653,14 +653,17 @@ def test_pg_context_menu_keeps_top_mouse_mode_shortcuts(
     assert [b.state["mouseMode"] for b in view_boxes] == [pg.ViewBox.RectMode] * len(view_boxes)
 
     menu = _open_redesigned_menu(cs.canvas_time, vb, monkeypatch)
-    toggle_row = next(
+    inline_panel = next(
         action.defaultWidget()
         for action in menu.actions()
         if isinstance(action, QWidgetAction)
         and action.defaultWidget() is not None
-        and action.defaultWidget().objectName() == "pgMouseModeToggleRow"
+        and action.defaultWidget().objectName() == "pgContextInlinePanel"
     )
-    buttons = toggle_row.findChildren(QToolButton)
+    buttons = [
+        inline_panel.findChild(QToolButton, "pgContextZoomButton"),
+        inline_panel.findChild(QToolButton, "pgContextPanButton"),
+    ]
     assert [btn.toolTip() for btn in buttons] == ["框选", "平移"]
 
     buttons[1].click()
