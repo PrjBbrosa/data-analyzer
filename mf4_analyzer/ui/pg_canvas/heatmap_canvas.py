@@ -232,8 +232,31 @@ def _finite_data_bounds(matrix):
     return lo, hi
 
 
+# Default dynamic range span used by the *absolute-dB* auto color window
+# (plot_result path, FFT-vs-Time and Order).  The canvas normalises to
+# [peak - _AUTO_SPAN_DB, peak] so the "auto" and "manual-after-write-back"
+# windows are identical — eliminating the 30+ dB jump that occurred when
+# the old code treated z_floor/z_ceiling as *peak offsets* while the
+# manual path used them as *absolute* dB values.
+#
+# Deliberately NOT read from the inspector's z_floor/z_ceiling: reading
+# from those fields would make the auto window depend on spin state and
+# re-introduce a feedback loop.  A fixed span is predictable and safe.
+_AUTO_SPAN_DB: float = 40.0
+
+
 def _auto_db_level_window(matrix, z_floor, z_ceiling):
-    """Return a peak-relative dB display window for auto color levels."""
+    """Return a peak-relative dB display window for auto color levels.
+
+    Used by ``plot_or_update_heatmap``'s ``amplitude_db`` branch, which
+    first normalises the matrix peak to 0 dB so ``data_hi`` is always 0.
+    The result is therefore ``(z_floor, z_ceiling)`` regardless — the
+    peak-offset and absolute interpretations coincide when peak == 0.
+
+    Do NOT call this from ``plot_result`` (absolute-dB path); use
+    ``_AUTO_SPAN_DB`` there so the auto window is independent of the spin
+    values.
+    """
     data_lo, data_hi = _finite_data_bounds(matrix)
     floor = _finite_float(z_floor)
     ceiling = _finite_float(z_ceiling)
@@ -777,6 +800,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # it is rendered, so it travels with the object and never collides.
         self._db_cache = None   # (token, db_ref) -> ndarray
         self._db_epoch_counter = 0
+        # Set by plot_result when z_auto=True so the caller can read back
+        # the absolute vmin/vmax that were actually applied and write them
+        # into the inspector spins (blockSignals) — eliminating the jump
+        # when the user switches from auto to manual mode.
+        self._last_auto_levels: tuple[float, float] | None = None
         if self._with_slice:
             # Second GraphicsLayout row: 1D frequency slice at the
             # selected frame (parity with SpectrogramCanvas._ax_slice,
@@ -1465,9 +1493,23 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             if not z_auto:
                 m = np.clip(m, float(z_floor), float(z_ceiling))
             if z_auto:
-                vmin, vmax = _auto_db_level_window(m, z_floor, z_ceiling)
+                # Use a fixed SPAN anchored at the data peak so the auto
+                # window is expressed in *absolute* dB — matching the
+                # manual-mode semantics of z_floor/z_ceiling.  This
+                # eliminates the 30-40 dB jump that occurred when the old
+                # code used z_floor/z_ceiling as *peak offsets* while the
+                # manual path treated them as absolute values.
+                # _AUTO_SPAN_DB is intentionally NOT read from the spin
+                # widgets to prevent a feedback loop.
+                _, data_hi = _finite_data_bounds(m)
+                vmin, vmax = data_hi - _AUTO_SPAN_DB, data_hi
+                # Store the computed absolute window so the caller can
+                # write it back to the inspector spins (blockSignals),
+                # making auto→manual a seamless no-jump transition.
+                self._last_auto_levels = (vmin, vmax)
             else:
                 vmin, vmax = float(z_floor), float(z_ceiling)
+                self._last_auto_levels = None
             cbar = f"Amplitude{unit} (dB re {db_ref:g})"
         else:
             m = result.amplitude
