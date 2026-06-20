@@ -201,6 +201,21 @@ def test_surface_collapsed_rails_use_compact_affordance_widths():
     assert _CollapsedRail.HEIGHT_PX == 10
 
 
+def test_surface_side_panel_strip_is_transparent_host_for_pill():
+    qss = QSS_PATH.read_text(encoding="utf-8")
+
+    block = _qss_block(qss, "QFrame#sidePanelStrip")
+    hover = _qss_block(qss, "QFrame#sidePanelStrip:hover")
+    right = _qss_block(qss, 'QFrame#sidePanelStrip[side="right"]')
+
+    assert "background-color: transparent;" in block
+    assert "border: none;" in block
+    assert "background-color: transparent;" in hover
+    assert "border: none;" in right
+    assert "#f3f5f8" not in block
+    assert "#e7ecf2" not in hover
+
+
 def test_surface_qss_uses_compact_radius_scale():
     qss = QSS_PATH.read_text(encoding="utf-8")
 

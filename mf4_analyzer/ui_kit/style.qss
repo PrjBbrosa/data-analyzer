@@ -1911,18 +1911,17 @@ QStatusBar QFrame#chartHintBar QLabel#chartHintDiscovery {
 }
 #SignalChipRemove:hover { color: #ef4444; }
 
-/* Collapsible side panels: faint edge rail + peek overlay */
+/* Collapsible side panels: transparent host; SidePanelStrip paints a
+   white rounded pill and blue chevron in Python for crisp corners. */
 QFrame#sidePanelStrip {
-    background-color: #f3f5f8;
+    background-color: transparent;
     border: none;
-    border-right: 1px solid #e2e6eb;
 }
 QFrame#sidePanelStrip[side="right"] {
-    border-right: none;
-    border-left: 1px solid #e2e6eb;
+    border: none;
 }
 QFrame#sidePanelStrip:hover {
-    background-color: #e7ecf2;
+    background-color: transparent;
 }
 QFrame#peekOverlay {
     background-color: #ffffff;

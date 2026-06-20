@@ -1,11 +1,17 @@
 # tests/ui/test_side_panel_widgets.py
 """qtbot widget/controller tests for collapsible side panels."""
+from pathlib import Path
+
 import pytest
 from PyQt5.QtCore import Qt, QPoint
+from PyQt5.QtGui import QColor, QImage, QPainter
 from PyQt5.QtWidgets import QWidget, QSplitter
 from PyQt5.QtTest import QTest
 
 from mf4_analyzer.ui.side_panels import Side, SidePanelStrip
+
+
+QSS_PATH = Path("mf4_analyzer/ui_kit/style.qss")
 
 
 def test_strip_emits_pin_on_left_click(qtbot):
@@ -34,6 +40,50 @@ def test_strip_hover_out_before_debounce_cancels(qtbot):
     strip.leaveEvent(None)   # leaves before 300ms debounce elapses
     qtbot.wait(120)
     assert fired == []
+
+
+def test_strip_renders_porcelain_pill_with_blue_chevron(qapp, qtbot):
+    old = qapp.styleSheet()
+    qapp.setStyleSheet(QSS_PATH.read_text(encoding="utf-8"))
+    try:
+        assert SidePanelStrip.PILL_RADIUS == 3.0
+
+        strip = SidePanelStrip(Side.RIGHT, hover_delay_ms=300)
+        qtbot.addWidget(strip)
+        strip.resize(SidePanelStrip.WIDTH_PX, 120)
+        strip.show()
+        qtbot.waitExposed(strip)
+        qapp.processEvents()
+
+        image = QImage(strip.size(), QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        strip.render(painter)
+        painter.end()
+
+        fill = image.pixelColor(strip.width() // 2, 10)
+        assert fill.name().lower() == SidePanelStrip.PILL_FILL
+        assert fill.alpha() == 255
+        assert image.pixelColor(0, 0).alpha() <= 12
+
+        target = QColor(SidePanelStrip.CHEVRON_COLOR)
+        has_blue = False
+        for y in range(image.height()):
+            for x in range(image.width()):
+                c = image.pixelColor(x, y)
+                distance = (
+                    abs(c.red() - target.red())
+                    + abs(c.green() - target.green())
+                    + abs(c.blue() - target.blue())
+                )
+                if c.alpha() > 150 and distance < 90:
+                    has_blue = True
+                    break
+            if has_blue:
+                break
+        assert has_blue
+    finally:
+        qapp.setStyleSheet(old)
 
 
 from mf4_analyzer.ui.side_panels import PeekOverlay

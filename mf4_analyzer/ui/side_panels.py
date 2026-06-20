@@ -7,8 +7,8 @@ so the transition logic is unit-testable without an event loop.
 """
 from enum import Enum, auto
 
-from PyQt5.QtCore import QObject, QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter
+from PyQt5.QtCore import QObject, QPointF, QRectF, QTimer, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import QApplication, QFrame, QVBoxLayout
 
 
@@ -73,13 +73,22 @@ class SidePanelStrip(QFrame):
     pin_requested = pyqtSignal(object)   # Side
 
     WIDTH_PX = 10
+    PILL_FILL = "#ffffff"
+    PILL_HOVER_FILL = "#f8fbff"
+    PILL_BORDER = "#dbe2eb"
+    PILL_HOVER_BORDER = "#9fc5ff"
+    CHEVRON_COLOR = "#1769e0"
+    PILL_RADIUS = 3.0
 
     def __init__(self, side, hover_delay_ms=150, parent=None):
         super().__init__(parent)
         self._side = side
+        self._hovered = False
         self.setObjectName("sidePanelStrip")
         self.setProperty("side", "left" if side == Side.LEFT else "right")
         self.setFixedWidth(self.WIDTH_PX)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
         self.setCursor(Qt.PointingHandCursor)
         chevron = "‹" if side == Side.LEFT else "›"  # ‹ / ›  (points inward)
         self.setToolTip("文件 / 通道" if side == Side.LEFT else "Inspector")
@@ -90,10 +99,14 @@ class SidePanelStrip(QFrame):
         self._hover_timer.timeout.connect(lambda: self.peek_requested.emit(self._side))
 
     def enterEvent(self, event):
+        self._hovered = True
+        self.update()
         self._hover_timer.start()
         super().enterEvent(event) if event is not None else None
 
     def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
         self._hover_timer.stop()
         super().leaveEvent(event) if event is not None else None
 
@@ -104,10 +117,32 @@ class SidePanelStrip(QFrame):
         super().mousePressEvent(event)
 
     def paintEvent(self, event):
-        super().paintEvent(event)
         p = QPainter(self)
-        p.setPen(QColor("#9aa3ad"))
-        p.drawText(self.rect(), Qt.AlignCenter, self._chevron)
+        p.setRenderHint(QPainter.Antialiasing, True)
+
+        pill = QRectF(1.0, 2.0, max(1.0, self.width() - 2.0), max(1.0, self.height() - 4.0))
+        p.setPen(QPen(QColor(self.PILL_HOVER_BORDER if self._hovered else self.PILL_BORDER), 1.0))
+        p.setBrush(QColor(self.PILL_HOVER_FILL if self._hovered else self.PILL_FILL))
+        p.drawRoundedRect(pill, self.PILL_RADIUS, self.PILL_RADIUS)
+
+        center = self.rect().center()
+        y = float(center.y())
+        if self._side == Side.LEFT:
+            points = (
+                QPointF(6.4, y - 5.0),
+                QPointF(3.2, y),
+                QPointF(6.4, y + 5.0),
+            )
+        else:
+            points = (
+                QPointF(3.6, y - 5.0),
+                QPointF(6.8, y),
+                QPointF(3.6, y + 5.0),
+            )
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(self.CHEVRON_COLOR), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawLine(points[0], points[1])
+        p.drawLine(points[1], points[2])
         p.end()
 
 
