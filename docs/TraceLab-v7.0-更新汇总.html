@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TraceLab v7.0 更新汇总（验真版）</title>
+<style>
+:root{
+  --coral:#ff5a36; --coral-soft:#fff1ed; --coral-line:rgba(255,90,54,.28);
+  --teal:#1f7f96; --teal-soft:#eaf4f6;
+  --ink:#2c2520; --ink2:#6a5f56; --mut:#a89a8e;
+  --paper:#f6efe5; --card:#fff; --bd:rgba(40,30,25,.12);
+  --green:#3a8a4a; --green-soft:#eef7ef;
+  --amber:#b9821a; --amber-soft:#fff6e6;
+  --red:#c0392b; --red-soft:#fdecea;
+  --font:'Segoe UI',system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:'JetBrains Mono',"SF Mono",Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:var(--font);color:var(--ink);line-height:1.6;
+  background:radial-gradient(130% 120% at 75% -10%,#fbf6f0,#f3ece2 60%,#ece3d6);min-height:100vh;}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px 80px;}
+
+.hero{padding:64px 0 36px;border-bottom:2px solid var(--coral);margin-bottom:8px;}
+.hero .kick{font-family:var(--mono);font-size:14px;letter-spacing:.22em;text-transform:uppercase;color:var(--teal);margin-bottom:14px;}
+.hero h1{font-size:46px;line-height:1.08;font-weight:800;letter-spacing:-.01em;}
+.hero h1 .v{color:var(--coral);}
+.hero .sub{font-size:18px;color:var(--ink2);margin-top:12px;max-width:680px;}
+.meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px;}
+.chip{font-family:var(--mono);font-size:13px;padding:6px 13px;border-radius:20px;background:#fff;border:1px solid var(--bd);color:var(--ink2);}
+.chip b{color:var(--coral);}
+.note{margin-top:20px;background:var(--teal-soft);border-left:4px solid var(--teal);
+  border-radius:8px;padding:14px 18px;font-size:14.5px;color:var(--ink);}
+
+.sec{margin-top:48px;}
+.sec-h{display:flex;align-items:baseline;gap:14px;margin-bottom:20px;}
+.sec-h .n{font-family:var(--mono);font-size:15px;color:#fff;background:var(--coral);
+  width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
+.sec-h h2{font-size:25px;font-weight:700;}
+.sec-h .tag{font-family:var(--mono);font-size:12.5px;color:var(--mut);}
+
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:22px 24px;
+  position:relative;box-shadow:0 2px 10px rgba(40,30,25,.04);overflow:hidden;}
+.card::before{content:"";position:absolute;left:0;top:0;width:4px;height:100%;background:var(--coral);}
+.card.teal::before{background:var(--teal);}
+.card .ch{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
+.card .no{font-family:var(--mono);font-size:13px;color:var(--coral);font-weight:700;}
+.card.teal .no{color:var(--teal);}
+.card h3{font-size:18px;font-weight:700;}
+.card p{font-size:14.5px;color:var(--ink2);}
+.card p + p{margin-top:8px;}
+.card code,.k{font-family:var(--mono);font-size:.88em;background:var(--coral-soft);
+  color:var(--coral);padding:1px 7px;border-radius:5px;}
+.pill{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;
+  padding:3px 9px;border-radius:20px;margin-left:auto;flex:0 0 auto;}
+.pill.ok{background:var(--green-soft);color:var(--green);}
+
+.callout{border-radius:12px;padding:20px 24px;margin-top:16px;}
+.callout h3{font-size:17px;margin-bottom:6px;display:flex;align-items:center;gap:8px;}
+.callout ul{margin:8px 0 0 2px;list-style:none;}
+.callout li{font-size:14.5px;padding:7px 0;border-top:1px dashed var(--bd);color:var(--ink);}
+.callout li:first-child{border-top:none;}
+.c-amber{background:var(--amber-soft);border-left:4px solid var(--amber);}
+.c-amber h3{color:var(--amber);}
+.c-red{background:var(--red-soft);border-left:4px solid var(--red);}
+.c-red h3{color:var(--red);}
+
+.suggest{margin-top:48px;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:26px 28px;}
+.suggest h2{font-size:20px;margin-bottom:14px;}
+.suggest table{width:100%;border-collapse:collapse;font-size:14px;}
+.suggest td{padding:9px 10px;border-bottom:1px solid var(--bd);vertical-align:top;}
+.suggest td:first-child{font-family:var(--mono);color:var(--teal);white-space:nowrap;width:130px;}
+.suggest .lead-row td{color:var(--ink2);}
+.foot{margin-top:40px;font-size:13px;color:var(--mut);text-align:center;font-family:var(--mono);}
+
+@media(max-width:720px){.grid{grid-template-columns:1fr;}.hero h1{font-size:34px;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kick">Release Notes · 验真版</div>
+    <h1>TraceLab <span class="v">v7.0</span> 更新汇总</h1>
+    <p class="sub">面向「更新说明书」的参考清单 —— 只收录已逐项确认<b>接入界面、用户真能用到</b>的功能。</p>
+    <div class="meta">
+      <span class="chip">基线 <b>6.0</b> · 2026-05-23</span>
+      <span class="chip">当前 <b>7.0</b></span>
+      <span class="chip">已接入 <b>9</b> 项</span>
+      <span class="chip">待确认 <b>2</b> 项</span>
+    </div>
+    <div class="note">验真方法：不只看 commit 标题，而是查 <span class="k">ui/</span> 是否真的调用了对应代码——接到界面、用户能操作到才算数。写好了算法但没接界面的，已剔除（见文末红框）。</div>
+  </header>
+
+  <section class="sec">
+    <div class="sec-h"><span class="n">1</span><h2>新增能力</h2><span class="tag">6.0 说明书完全没有的</span></div>
+    <div class="grid">
+      <div class="card">
+        <div class="ch"><span class="no">01</span><h3>项目工程 <code>.tlproj</code></h3><span class="pill ok">✓ 已接入</span></div>
+        <p>把「打开了哪些文件 + 勾了哪些通道 + 视图布局 + 各分析参数」整体存成一个工程，下次一键还原；只记文件位置、体积小、便于分享。</p>
+        <p>工具栏因此改版：原「添加文件 / 导出」→ <b>「打开 / 保存项目」</b>；「导出」挪进了「编辑通道」。</p>
+      </div>
+      <div class="card">
+        <div class="ch"><span class="no">02</span><h3>多视图 / 分屏对比</h3><span class="pill ok">✓ 已接入</span></div>
+        <p>图表区可<b>并排分屏</b>，缩放/平移<b>联动</b>；点某栏<b>聚焦</b>后操作只作用于它；FFT / 阶次 / 时频可开<b>「对比」叠加</b>；时频热图并排可<b>锁定色阶</b>；<code>Alt+1..6</code> 快速切视图；布局随工程保存。</p>
+      </div>
+      <div class="card">
+        <div class="ch"><span class="no">03</span><h3>打开 HEAD 声学 <code>.hdf</code></h3><span class="pill ok">✓ 已接入</span></div>
+        <p>能直接打开 HEAD <code>.hdf</code>：有<b>专门的导入对话框</b>，可选采样率组、按采样率/物理量分组、应用标定。打开后照常做时域、FFT 等分析。</p>
+        <p style="color:var(--amber)">⚠️ 只写「能打开」。A计权/响度/倍频程等<b>声学专用分析的算法虽然写了，但没接到界面</b>，别写。</p>
+      </div>
+      <div class="card">
+        <div class="ch"><span class="no">04</span><h3>信号类型预设</h3><span class="pill ok">✓ 已接入</span></div>
+        <p>参数面板里可选<b>信号类型预设（扭矩 / 振动 / 启停）</b>，按通道<b>自动推荐</b>合适预设，参数旁有<b>说明气泡</b>。</p>
+        <p style="color:var(--amber)">❓ 目前只确认这 <b>3 种</b>接入了面板，其余待你确认（见文末）。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sec-h"><span class="n">2</span><h2>已有功能更好用</h2></div>
+    <div class="grid">
+      <div class="card teal">
+        <div class="ch"><span class="no">05</span><h3>FFT 框选 + 「最大」按钮</h3><span class="pill ok">✓ 已接入</span></div>
+        <p>FFT 上方<b>时间预览区左键一拖</b>即可圈定分析时段；时间范围新增<b>「最大」按钮</b>，一键设为整段数据。</p>
+      </div>
+      <div class="card teal">
+        <div class="ch"><span class="no">06</span><h3>折叠抽屉 + 游标差值</h3><span class="pill ok">✓ 已接入</span></div>
+        <p>时间预览 / 切片面板可<b>拖动折叠</b>收起；游标显示<b>每条曲线相对主曲线的差值</b>。</p>
+      </div>
+      <div class="card teal">
+        <div class="ch"><span class="no">07</span><h3>导出更细</h3><span class="pill ok">✓ 已接入</span></div>
+        <p>在<b>「编辑通道」</b>里：勾选要导的通道 → 导出 Excel；可选<b>仅导出可见范围</b>、<b>是否含时间列</b>。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sec-h"><span class="n">3</span><h2>更快 &amp; 更好看</h2></div>
+    <div class="grid">
+      <div class="card">
+        <div class="ch"><span class="no">08</span><h3>渲染换代 + GPU 开关</h3><span class="pill ok">✓ 已接入</span></div>
+        <p>分析图表换用 <b>pyqtgraph</b> 引擎，重计算<b>移出界面线程、可随时取消</b>，大数据更顺滑；新增 <b>GPU 渲染开关</b>、<b>高清（HiDPI）导出</b>。</p>
+      </div>
+      <div class="card">
+        <div class="ch"><span class="no">09</span><h3>全新外观</h3><span class="pill ok">✓ 已接入</span></div>
+        <p><b>雪色界面</b>（浮起圆角面板）；<b>底部操作提示条</b>；工具栏 <b>BOSCH logo</b>；状态栏<b>更新图标</b>（点击跳发布页）。</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="callout c-amber">
+    <h3>❓ 待你自行确认的 2 点（确认前先空着）</h3>
+    <ul>
+      <li><b>MDF <span class="k" style="background:#fff;color:var(--amber)">.mdf</span></b>：底层模块做了，但 ui/ 没接入。<b>在「打开」对话框里能选到 .mdf 吗？</b>能 → 在格式里补一句；不能 → 别写。</li>
+      <li><b>信号类型预设种类</b>：除扭矩 / 振动 / 启停外还有没有别的？只写你确认在界面里真能选到的。</li>
+    </ul>
+  </div>
+
+  <div class="callout c-red">
+    <h3>❌ 明确不要写进说明书（已验真排除）</h3>
+    <ul>
+      <li><b>声学 / 心理声学 / 倍频程 / 阶次跟踪</b>：算法层已写（数百行），但你 <b>2026-06-15 的 commit 自己标了「（未接UI）」</b>，ui/ 零调用——用户用不到。留给后续版本。</li>
+      <li><b>故障诊断 / 包络解调 / 报告生成（PDF·Word）/ ICP 采集调理</b>：只在帮助文本 <span class="k" style="background:#fff;color:var(--red)">help_topics.py</span>，没有算法，不是功能。</li>
+    </ul>
+  </div>
+
+  <div class="suggest">
+    <h2>对应说明书的更新建议（现有 14 页 deck）</h2>
+    <table>
+      <tr><td>meta</td><td>version <code>v6.0</code>→<code>v7.0</code>、docVersion <code>1.0</code>→<code>2.0</code>、updated 日期</td></tr>
+      <tr><td>新增 3 页</td><td>① 项目工程 <code>.tlproj</code>　② 多视图 / 分屏对比　③ 信号类型预设</td></tr>
+      <tr><td>interface</td><td>工具栏改「打开 / 保存项目」+ 更新图标 + BOSCH</td></tr>
+      <tr><td>load</td><td>格式加 <code>.hdf</code>（<code>.mdf</code> 待确认）</td></tr>
+      <tr><td>fft</td><td>加「时间预览框选」</td></tr>
+      <tr><td>export</td><td>入口挪到「编辑通道」+ 仅可见范围 / 含时间列</td></tr>
+      <tr><td>cheat</td><td>快捷键加 <code>Alt+1..6</code>、FFT 预览拖选</td></tr>
+      <tr><td>changelog</td><td>加一条 <code>v2.0</code></td></tr>
+      <tr class="lead-row"><td>spectro</td><td>「点击取切片/悬停读数」此项我未单独验真接入，写前你顺手确认下</td></tr>
+    </table>
+  </div>
+
+  <div class="foot">TraceLab v7.0 · 更新汇总（验真版）· 仅供更新说明书参考</div>
+
+</div>
+</body>
+</html>

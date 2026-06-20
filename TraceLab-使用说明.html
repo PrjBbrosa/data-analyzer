@@ -232,20 +232,23 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
 {
   "meta": {
     "title": "TraceLab",
-    "version": "v6.0",
-    "versionLabel": "使用说明 · V6.0",
+    "version": "v7.0",
+    "versionLabel": "使用说明 · V7.0",
     "subtitle": "打开数据、看图分析、导出结果 —— 一份照着做就会的使用说明",
-    "docVersion": "1.0",
-    "updated": "2026-06-03"
+    "docVersion": "2.0",
+    "updated": "2026-06-20"
   },
   "slides": [
     { "type": "cover" },
+
+    { "id": "changelog", "sec": "更新", "kicker": "CHANGELOG", "title": "更新<c>日志</c>", "foot": "本说明会随软件持续更新",
+      "blocks": [ { "type": "changelog" } ] },
 
     { "id": "overview", "sec": "开始之前", "kicker": "OVERVIEW", "title": "它能帮你做<c>什么</c>", "foot": "TraceLab",
       "blocks": [
         { "type": "lead", "html": "TraceLab 把「打开测量数据 → 看图分析 → 导出结果」连成一条龙；还能直接连设备，边录边看。下面六件事，是你最常用到的。" },
         { "type": "cards", "cols": 3, "items": [
-          { "no": "01", "h": "打开各种数据", "p": "直接打开 MF4 测量文件，也支持 CSV、Excel 表格，拖进来就能用。" },
+          { "no": "01", "h": "打开各种数据", "p": "直接打开 MF4 测量文件，也支持 CSV、Excel、HEAD 声学（.hdf）、MDF 等，拖进来就能用。" },
           { "no": "02", "h": "看波形随时间变化", "p": "多条通道的时域曲线一起看，随手拖动、放大查看细节。" },
           { "no": "03", "h": "看信号里的频率", "p": "一键 FFT，找出振动或噪声里主要是哪些频率。" },
           { "no": "04", "h": "看转速相关的振动", "p": "阶次分析，专为发动机、电机这类会转的设备准备。", "accent": "teal" },
@@ -254,8 +257,8 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         ] }
       ] },
 
-    { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件，中间切视图，右边开采集",
-      "blocks": [ { "type": "raw", "html": "<div class='apptb reveal'><span class='btn'>添加文件</span><span class='btn'>编辑通道</span><span class='btn'>导出</span><span class='btn'>批处理</span><span class='sp'></span><span class='btn on'>时域</span><span class='btn'>FFT</span><span class='btn'>FFT vs Time</span><span class='btn'>阶次</span><span class='sp'></span><span class='btn teal'>Cockpit 采集</span></div><div class='mock reveal' style='position:absolute;left:0;right:0;top:392px;bottom:0;'><div class='col nav'><div class='label'>① 左侧 · 文件与通道</div><div class='desc'>在这里加文件、勾选要看的通道。</div><div class='ch'><span class='dot' style='background:#ff5a36'></span>Engine_Speed</div><div class='ch'><span class='dot' style='background:#1f7f96'></span>Vibration_X</div><div class='ch'><span class='dot' style='background:#e0a92e'></span>Oil_Temp</div><div class='ch'><span class='dot' style='background:#7a9e3a'></span>Torque</div></div><div class='col center'><div class='label'>② 中间 · 图表区</div><div class='desc'>你的波形和分析结果都显示在这里。</div><div class='mini'><svg viewBox='0 0 600 170' preserveAspectRatio='none'><path d='M0,120 C60,40 120,40 180,110 S300,160 360,90 480,30 540,100 600,120 600,120' fill='none' stroke='#ff5a36' stroke-width='3'/><path d='M0,140 C80,120 120,60 200,95 280,130 320,70 400,110 480,150 520,90 600,130' fill='none' stroke='#1f7f96' stroke-width='2.5'/></svg></div><div class='pbar'></div></div><div class='col insp'><div class='label'>③ 右侧 · 参数面板</div><div class='desc'>切到 FFT / 阶次时，在这里调参数；顶部还能裁时间范围。</div><div class='pbar'></div><div class='ch' style='justify-content:space-between'>窗函数<span style='color:#ff5a36'>Hanning</span></div><div class='ch' style='justify-content:space-between'>分辨率<span style='color:#ff5a36'>中</span></div></div></div>" } ] },
+    { "id": "interface", "sec": "界面导览", "kicker": "THE WINDOW", "title": "界面分三块，<c>各管一件事</c>", "foot": "顶部工具栏：左边管文件与项目，中间切视图，右上是品牌与更新",
+      "blocks": [ { "type": "raw", "html": "<div class='apptb reveal'><span class='btn'>打开</span><span class='btn'>保存项目</span><span class='btn'>编辑通道</span><span class='btn'>批处理</span><span class='btn teal'>Cockpit 采集</span><span class='sp'></span><span class='btn on'>时域</span><span class='btn'>FFT</span><span class='btn'>FFT vs Time</span><span class='btn'>阶次</span><span class='sp'></span><span class='btn'>☁ 更新</span></div><div class='mock reveal' style='position:absolute;left:0;right:0;top:392px;bottom:0;'><div class='col nav'><div class='label'>① 左侧 · 文件与通道</div><div class='desc'>在这里加文件、勾选要看的通道。</div><div class='ch'><span class='dot' style='background:#ff5a36'></span>Engine_Speed</div><div class='ch'><span class='dot' style='background:#1f7f96'></span>Vibration_X</div><div class='ch'><span class='dot' style='background:#e0a92e'></span>Oil_Temp</div><div class='ch'><span class='dot' style='background:#7a9e3a'></span>Torque</div></div><div class='col center'><div class='label'>② 中间 · 图表区</div><div class='desc'>你的波形和分析结果都显示在这里。</div><div class='mini'><svg viewBox='0 0 600 170' preserveAspectRatio='none'><path d='M0,120 C60,40 120,40 180,110 S300,160 360,90 480,30 540,100 600,120 600,120' fill='none' stroke='#ff5a36' stroke-width='3'/><path d='M0,140 C80,120 120,60 200,95 280,130 320,70 400,110 480,150 520,90 600,130' fill='none' stroke='#1f7f96' stroke-width='2.5'/></svg></div><div class='pbar'></div></div><div class='col insp'><div class='label'>③ 右侧 · 参数面板</div><div class='desc'>切到 FFT / 阶次时，在这里调参数；顶部还能裁时间范围。</div><div class='pbar'></div><div class='ch' style='justify-content:space-between'>窗函数<span style='color:#ff5a36'>Hanning</span></div><div class='ch' style='justify-content:space-between'>分辨率<span style='color:#ff5a36'>中</span></div></div></div>" } ] },
 
     { "id": "load", "sec": "第一步", "kicker": "STEP 1 · LOAD", "title": "第一步 · 打开你的<c>数据</c>", "foot": "TraceLab",
       "blocks": [
@@ -266,9 +269,23 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             "软件自动读出里面的<b>所有通道</b>，列在左侧；同时显示文件的行数、采样率、时长。"
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "能打开哪些格式",
-            "pills": [".mf4", ".csv", ".xlsx", ".xls"],
-            "paras": [ "MF4 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。" ] } ] },
+            "pills": [".mf4", ".mdf", ".csv", ".xlsx", ".xls", ".hdf"],
+            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>HEAD 声学（.hdf）</b>也能打开：软件会自动按采样率分组、把各通道列出来，照常做时域、FFT 等分析。" ] } ] },
         { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
+      ] },
+
+    { "id": "project", "sec": "存工程", "kicker": "PROJECT · .tlproj", "title": "把整个分析存成<c>工程</c>", "foot": "保存项目 → 下次一键还原",
+      "blocks": [
+        { "type": "when", "html": "分析做到一半想下次接着做，或者想把「这一整套分析」原样发给同事时用它。" },
+        { "type": "cols", "align": "start",
+          "left": [ { "type": "steps", "items": [
+            "把文件、通道、视图、参数都调到你满意的样子。",
+            "点工具栏 <span class='mono'>保存项目</span>，存成一个 <b>.tlproj</b> 工程文件。",
+            "下次点 <span class='mono'>打开</span> 选这个工程，画面<b>原样还原</b>，接着分析。"
+          ] } ],
+          "right": [ { "type": "card", "accent": "teal", "no": "工程里存了什么", "h": "连「怎么看」一起记住",
+            "paras": [ "打开了哪些文件、勾了哪些通道、分了几个视图、每个分析的参数 —— 全都记在工程里。", "工程只记文件的<b>位置</b>、不复制数据，所以体积很小，方便存档和分享。" ] } ] },
+        { "type": "tip", "label": "提示", "html": "<b>打开</b> 会自动识别：选<b>数据文件</b>是追加到当前；选 <b>.tlproj 工程</b>则整体还原。原文件找不到时会自动跳过并提示你。" }
       ] },
 
     { "id": "channels", "sec": "第二步", "kicker": "STEP 2 · CHANNELS", "title": "第二步 · 选择要查看的<c>通道</c>", "foot": "勾选 → 立即出图",
@@ -299,6 +316,20 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         ] }
       ] },
 
+    { "id": "multiview", "sec": "并排比", "kicker": "MULTI-VIEW · SPLIT", "title": "多个视图<c>并排对比</c>", "foot": "拖动分屏 · 缩放联动 · Alt+1..6 切视图",
+      "blocks": [
+        { "type": "when", "html": "想把同一份数据的不同看法、或不同文件的同一分析<b>放在一起比</b>时用它。" },
+        { "type": "cards", "cols": 3, "items": [
+          { "no": "分屏", "h": "并排两栏", "p": "把图表区拆成并排两块，左右各看一份，互不打架。" },
+          { "no": "联动", "h": "缩放同步", "p": "一栏平移缩放，另一栏跟着动，方便逐点对照。" },
+          { "no": "聚焦", "h": "点谁操作谁", "p": "点一下某一栏，它会高亮；接下来的操作只作用在它身上。", "accent": "teal" },
+          { "no": "对比", "h": "叠加比较", "p": "FFT / 阶次 / 时频开「对比」，把多条结果叠在一起，差异一眼看出。", "accent": "teal" },
+          { "no": "锁色阶", "h": "热图同标尺", "p": "时频图并排时锁定同一颜色范围，深浅才真正可比。", "accent": "teal" },
+          { "no": "切视图", "h": "Alt+1..6", "p": "在当前区域用快捷键在时域 / FFT / 阶次等之间快速切换。" }
+        ] },
+        { "type": "tip", "label": "提示", "html": "分屏布局会跟着<b>工程一起保存</b>；导出图片时也能把并排的几栏<b>拼成一张</b>。" }
+      ] },
+
     { "id": "fft", "sec": "看频率", "kicker": "FREQUENCY · FFT", "title": "看频率成分 · <c>FFT</c> 分析", "foot": "峰值 = 主要频率",
       "blocks": [
         { "type": "when", "html": "想知道「信号里主要有哪些频率」——找振动、噪声、共振的来源时用它。" },
@@ -312,7 +343,21 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             "<b>窗函数</b> — 让频谱更干净，一般保持默认即可。",
             "<b>频率分辨率</b> — 调得越细，频率分得越清楚，算得稍慢。",
             "<b>平均 / 峰值保持</b> — 信号有波动时，用「平均」让谱更稳，或用「峰值」抓住最大值。"
-          ] } ] }
+          ], "tip": { "label": "选段", "html": "FFT 图上方有一条<b>时间预览</b>，直接在上面<b>左键一拖</b>就能圈定要分析的时间段，不用去右侧填数字。" } } ] }
+      ] },
+
+    { "id": "preset", "sec": "智能预设", "kicker": "SMART PRESET", "title": "参数不用愁 · <c>智能预设</c>", "foot": "选信号类型 → 参数自动配好",
+      "blocks": [
+        { "type": "when", "html": "做 FFT / 阶次 / 时频，又拿不准参数怎么填时 —— 让软件按数据帮你配。" },
+        { "type": "cols", "align": "start",
+          "left": [ { "type": "steps", "items": [
+            "在参数面板挑一个<b>信号类型预设</b>：扭矩、振动、启停…",
+            "软件按通道<b>单位</b>自动<b>推荐</b>合适的预设，并把推荐项标出来。",
+            "采样率、频率范围等会<b>自动适配</b>，不用手算；想微调随时改。"
+          ] } ],
+          "right": [ { "type": "card", "accent": "teal", "no": "为什么省心", "h": "照着选就对，不用懂原理",
+            "paras": [ "每个预设是一套<b>取舍已经替你定好</b>的参数（要分辨率还是要速度，都帮你权衡过）。", "每个参数旁都有<b>说明气泡</b>，鼠标停上去就告诉你它管什么。" ] } ] },
+        { "type": "tip", "label": "联动批处理", "html": "调好的这套设置可以<b>存成预设</b>，在「批处理」里套给一批文件用 —— 详见后面的批处理页。" }
       ] },
 
     { "id": "order", "sec": "看阶次", "kicker": "ORDER ANALYSIS", "title": "看转速相关的振动 · <c>阶次</c>分析", "foot": "先选转速通道，再做阶次",
@@ -373,7 +418,7 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       "blocks": [
         { "type": "cols", "align": "start",
           "left": [
-            { "type": "card", "no": "导出表格", "h": "导出 Excel 数据", "paras": [ "点工具栏 <b>导出</b> → 勾选要导出的通道 → 选好两个选项 → 保存为 Excel。" ] },
+            { "type": "card", "no": "导出表格", "h": "导出 Excel 数据", "paras": [ "打开 <b>编辑通道</b>，在<b>导出</b>区勾选要导出的通道 → 选好选项 → 保存为 Excel。" ] },
             { "type": "card", "accent": "teal", "no": "导出图片", "h": "保存图表为图片", "mt": 24, "paras": [ "当前图表可直接存成图片（PNG）；批处理时也能自动出图。" ] }
           ],
           "right": [ { "type": "kv", "items": [
@@ -391,7 +436,9 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             { "k": "按住拖动", "v": "左右平移时间" },
             { "k": "鼠标滚轮", "v": "放大 / 缩小" },
             { "k": "移动光标", "v": "读当前时刻各通道的值" },
-            { "k": "右键通道", "v": "设为左轴（叠加显示时，把某通道固定到左侧刻度）" },
+            { "k": "Alt + 1..6", "v": "在时域 / FFT / 阶次等视图间快速切换" },
+            { "k": "FFT 预览拖选", "v": "在时间预览上左键拖动，圈定分析时间段" },
+            { "k": "右键通道", "v": "设为左轴（叠加显示时固定到左侧刻度）" },
             { "k": "双击图上文字", "v": "添加 / 编辑标注" },
             { "k": "搜索框", "v": "快速过滤通道" }
           ] } ],
@@ -402,21 +449,24 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           ] } ] }
       ] },
 
-    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v6.0 · 使用说明",
+    { "id": "playbook", "sec": "照着做", "kicker": "PLAYBOOK", "title": "三个常见场景，<c>照着做就行</c>", "foot": "TraceLab v7.0 · 使用说明",
       "blocks": [
         { "type": "flow", "height": 640, "cols": [
           { "title": "场景一", "key": "快速看一个文件", "items": [ "添加文件", "勾选要看的通道", "时域看波形、拖动放大", "需要就切 FFT / 阶次", "导出 Excel 或图片" ] },
           { "title": "场景二", "key": "批量分析一批文件", "accent": "teal", "items": [ "先分析好一个代表文件", "存成预设", "选中一批文件", "跑批处理", "自动出图、出表" ] },
           { "title": "场景三", "key": "边录边看", "items": [ "打开 Cockpit", "配置要采集的信号", "开始采集、看实时卡片", "停止，自动存档", "用 Replay 回放分析" ] }
         ] },
-        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v6.0" }
-      ] },
-
-    { "id": "changelog", "sec": "更新", "kicker": "CHANGELOG", "title": "更新<c>日志</c>", "foot": "本说明会随软件持续更新",
-      "blocks": [ { "type": "changelog" } ] }
+        { "type": "lead", "center": true, "html": "有数据，就能很快看明白。 —— TraceLab v7.0" }
+      ] }
   ],
 
   "changelog": [
+    { "v": "v2.0", "date": "2026-06-20", "items": [
+      "对齐软件 v7.0：新增「项目工程文件」「多视图 / 分屏对比」「智能分析预设」三页专门说明。",
+      "「打开数据」新增支持 HEAD .hdf、MDF .mdf 两类文件。",
+      "界面导览 / 导出 / 速查页随新版工具栏与快捷键同步更新（框选选段、一键最大、视图切换等）。",
+      "补充说明：分析图表换用新绘图引擎，更顺滑、可随时取消；界面改为全新雪色外观。"
+    ] },
     { "v": "v1.0", "date": "2026-06-03", "items": [
       "首版上线：14 页面向使用者的操作指南（加载数据 / 通道 / 时域 / FFT / 阶次 / 时频 / 批处理 / 采集 / 导出 / 速查 / 场景）。",
       "改为数据驱动结构：所有文案集中在文件顶部的数据块，页码自动生成。",
