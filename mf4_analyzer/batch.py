@@ -192,24 +192,43 @@ class BatchRunner:
         blocked: list[str] = []
         cancelled = False
         total = len(tasks)
+        prev_disk_key = None  # last disk-path key resident in _disk_cache (for eviction)
 
-        for index, task in enumerate(tasks, start=1):
-            fid, fd_or_fail, signal_name = task
+        for index, (file_key, signal_name) in enumerate(tasks, start=1):
+            # File-major ordering → evict the previous disk file when we move on
+            # to a different file key.  This keeps peak _disk_cache resident ≤ 1.
+            if prev_disk_key is not None and file_key != prev_disk_key:
+                self._disk_cache.pop(prev_disk_key, None)
+                prev_disk_key = None
+
             if cancel_token is not None and cancel_token.is_set():
                 cancelled = True
-                # Emit task_cancelled for this and all remaining
+                # Emit task_cancelled for this and all remaining tasks
                 for j in range(index, total + 1):
-                    fid_j, fd_j, sig_j = tasks[j - 1]
-                    fname = (fd_j.path if isinstance(fd_j, _LoadFailure)
-                             else getattr(fd_j, 'filename', str(fid_j)))
+                    key_j, sig_j = tasks[j - 1]
+                    if key_j in self.files:
+                        fname_j = getattr(self.files[key_j], 'filename', str(key_j))
+                    elif key_j in self._disk_cache:
+                        cached = self._disk_cache[key_j]
+                        fname_j = (cached.path if isinstance(cached, _LoadFailure)
+                                   else getattr(cached, 'filename', str(key_j)))
+                    else:
+                        fname_j = str(key_j)
                     if on_event:
                         on_event(BatchProgressEvent(
                             kind='task_cancelled',
                             task_index=j, total=total,
-                            file_name=fname, signal=sig_j,
+                            file_name=fname_j, signal=sig_j,
                             method=preset.method,
                         ))
                 break
+
+            # Resolve the file (lazy load if disk path, live lookup if registered fid)
+            fid, fd_or_fail = self._resolve_task_file(file_key)
+
+            # Track which disk key is currently resident so we can evict later
+            if file_key not in self.files:
+                prev_disk_key = file_key
 
             # Determine file_name for events (works for _LoadFailure too)
             if isinstance(fd_or_fail, _LoadFailure):
@@ -258,6 +277,10 @@ class BatchRunner:
                         method=preset.method, error=str(exc),
                     ))
 
+        # Evict any trailing disk file after the loop completes
+        if prev_disk_key is not None:
+            self._disk_cache.pop(prev_disk_key, None)
+
         if cancelled:
             status = 'cancelled'
         elif blocked and len(blocked) == len(items):
@@ -272,6 +295,42 @@ class BatchRunner:
                 kind='run_finished', final_status=status,
             ))
         return BatchRunResult(status=status, items=items, blocked=blocked)
+
+    def _resolve_task_file(self, file_key):
+        """Resolve a deferred task ``file_key`` to ``(fid, fd_or_failure)``.
+
+        Registered fid → live ``FileData`` directly from ``self.files``.
+        Disk path → loaded via ``self._loader``, cached in ``self._disk_cache``
+        (value is either ``FileData`` or ``_LoadFailure``).
+        """
+        fd = self.files.get(file_key)
+        if fd is not None:
+            return file_key, fd
+        if file_key in self._disk_cache:
+            return file_key, self._disk_cache[file_key]
+        try:
+            fd = self._loader(file_key)
+        except Exception as exc:  # noqa: BLE001
+            fd = _LoadFailure(str(file_key), str(exc))
+        self._disk_cache[file_key] = fd
+        return file_key, fd
+
+    def _any_target_could_match(self, file_keys, target_signals):
+        """Return True if any task in the cartesian product might succeed.
+
+        Already-loaded files are checked against their real columns; disk
+        paths (not yet loaded) and unknown keys are assumed possibly-matching
+        (verified per-task inside ``run()``).  This preserves the existing
+        "all-loaded + none-match → blocked" semantic while avoiding eager loads.
+        """
+        for key in file_keys:
+            fd = self.files.get(key)
+            if fd is None:
+                # Disk path or unknown — assume it could match; run() verifies.
+                return True
+            if any(ch in fd.data.columns for ch in target_signals):
+                return True
+        return False
 
     def _resolve_files(self, preset):
         """Yield (fid, FileData) pairs for the preset.
@@ -326,34 +385,25 @@ class BatchRunner:
             fid, ch = preset.signal
             fd = self.files.get(fid)
             if fd is not None and ch in fd.data.columns:
-                yield fid, fd, ch
+                yield fid, ch
             return
-        files_iter = list(self._resolve_files(preset))
         if preset.target_signals:
-            # Phase 1: will phase 2 yield ANY task at all?
-            # _LoadFailure entries DO count — phase 2 yields them so run() can
-            # surface task_failed rows (per spec §3.2 / §7: disk-load failures
-            # become per-task failure, not a blanket blocked status).
-            has_any_yield = False
-            for fid, fd in files_iter:
-                if isinstance(fd, _LoadFailure):
-                    has_any_yield = True
-                    break
+            # Lazy path: enumerate the full cartesian product of
+            # (file_keys × target_signals) WITHOUT loading any disk files.
+            # Disk loading is deferred to run() via _resolve_task_file().
+            file_keys = list(preset.file_ids) + list(preset.file_paths)
+            if not file_keys:
+                # Legacy fallback: use all already-loaded files.
+                file_keys = list(self.files.keys())
+            if not self._any_target_could_match(file_keys, preset.target_signals):
+                return  # all-loaded & none match → run() returns blocked (preserved)
+            for key in file_keys:
                 for ch in preset.target_signals:
-                    if ch in fd.data.columns:
-                        has_any_yield = True
-                        break
-                if has_any_yield:
-                    break
-            if not has_any_yield:
-                return  # → run() blocked path (UI rule § 7 normally pre-empts this)
-            # Phase 2: yield full cartesian product (load failures and missing
-            # signals surface as task_failed via run() try/except).
-            for fid, fd in files_iter:
-                for ch in preset.target_signals:
-                    yield fid, fd, ch
+                    yield key, ch
             return
-        # Pattern fallback (existing behavior unchanged for tests)
+        # Pattern fallback (legacy / test path): eager load to enumerate channels.
+        # UI never produces pattern mode (always uses target_signals via free_config).
+        files_iter = list(self._resolve_files(preset))
         pattern = preset.signal_pattern.strip()
         for fid, fd in files_iter:
             if isinstance(fd, _LoadFailure):
@@ -362,7 +412,7 @@ class BatchRunner:
                 if preset.method.startswith('order') and ch == preset.rpm_channel:
                     continue
                 if self._matches(ch, pattern):
-                    yield fid, fd, ch
+                    yield fid, ch
 
     @staticmethod
     def _matches(channel, pattern):

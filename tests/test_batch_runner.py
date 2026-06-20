@@ -786,3 +786,72 @@ def test_image_only_export_skips_long_dataframe(tmp_path, monkeypatch):
     BatchRunner._write_image(('order_time', sp), tmp_path / 'i.png',
                              params={'z_auto': True})
     assert calls['n'] == 0  # image render must not trigger long-table construction
+
+
+# ---------------------------------------------------------------------------
+# Task 2: lazy per-task file load + single-file disk eviction (TDD-first)
+# ---------------------------------------------------------------------------
+
+
+def test_file_paths_loaded_lazily_and_evicted(tmp_path):
+    """Loader must be called once per disk path, in task order (not upfront),
+    and _disk_cache must hold at most 1 disk file at a time."""
+    import numpy as np
+    import pandas as pd
+    import dataclasses
+    from mf4_analyzer.batch import BatchRunner, AnalysisPreset, BatchOutput
+    from mf4_analyzer.io import FileData
+
+    load_order = []
+    peak = {'max': 0}
+
+    def spy_loader(path):
+        load_order.append(path)
+        df = pd.DataFrame({'sig': np.zeros(8), 'rpm': np.linspace(1, 2, 8)})
+        return FileData(path, df, list(df.columns), {}, idx=-1)
+
+    runner = BatchRunner(files={}, loader=spy_loader)
+
+    # Wrap _disk_cache to observe peak simultaneous resident count.
+    class WatchDict(dict):
+        def __setitem__(self, k, v):
+            super().__setitem__(k, v)
+            peak['max'] = max(peak['max'], len(self))
+
+    runner._disk_cache = WatchDict()
+
+    preset = AnalysisPreset.free_config(
+        name='t', method='fft', target_signals=('sig',),
+        outputs=BatchOutput(export_data=True, export_image=False,
+                            data_format='csv'),
+        params={'fs': 1.0, 'window': 'hanning', 'nfft': 8},
+    )
+    preset = dataclasses.replace(preset, file_paths=('a.mf4', 'b.mf4', 'c.mf4'))
+
+    result = runner.run(preset, tmp_path)
+
+    assert result.status == 'done'
+    assert load_order == ['a.mf4', 'b.mf4', 'c.mf4']  # loaded in task order
+    assert peak['max'] == 1  # at most 1 disk file resident at a time
+
+
+def test_target_signals_none_match_loaded_files_blocks(tmp_path):
+    """All-loaded files with no matching target_signals → blocked (preserved semantic)."""
+    import numpy as np
+    import pandas as pd
+    import dataclasses
+    from mf4_analyzer.batch import BatchRunner, AnalysisPreset
+    from mf4_analyzer.io import FileData
+
+    df = pd.DataFrame({'foo': np.zeros(8)})
+    fd = FileData('f.mf4', df, list(df.columns), {}, idx=0)
+    runner = BatchRunner(files={'f0': fd})
+
+    preset = AnalysisPreset.free_config(name='t', method='fft',
+                                        target_signals=('nope',),
+                                        params={'fs': 1.0})
+    preset = dataclasses.replace(preset, file_ids=('f0',))
+
+    result = runner.run(preset, tmp_path)
+    assert result.status == 'blocked'
+    assert result.blocked == ['no matching batch tasks']
