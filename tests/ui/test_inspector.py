@@ -527,7 +527,8 @@ def test_contextual_param_sections_preserve_and_clear_preset_highlight(
 
         ctx.preset_bar.set_recommended(None)
         ctx.preset_bar._load(2)
-        assert ctx.preset_bar._load_btns[2].property("recommended") == "true"
+        assert ctx.preset_bar._load_btns[2].property("applied") == "true"
+        assert ctx.preset_bar._load_btns[2].property("recommended") == "false"
     finally:
         _restore_settings(settings, saved)
 
@@ -4145,7 +4146,7 @@ def test_recommend_preset_for_unit_no_substring_false_positive(qapp):
 
 
 def test_preset_bar_set_recommended_toggles_property(qapp):
-    """set_recommended(slot) flags that slot; set_recommended(None) clears all."""
+    """Recommendation is a badge hint; it must not mark the slot as applied."""
     from mf4_analyzer.ui.inspector_sections import PresetBar
 
     bar = PresetBar('test_kind_recommend', lambda: {}, lambda d: None)
@@ -4153,18 +4154,25 @@ def test_preset_bar_set_recommended_toggles_property(qapp):
     assert bar._load_btns[1].property('recommended') == 'false'
     assert bar._load_btns[2].property('recommended') == 'true'
     assert bar._load_btns[3].property('recommended') == 'false'
-    assert bar._load_btns[2].text().startswith('★ ')
-    assert not bar._load_btns[1].text().startswith('★ ')
+    assert bar._load_btns[2].property('applied') == 'false'
+    assert not bar._load_btns[2].text().startswith('★ ')
+    assert bar._recommend_badges[2].text() == '荐'
+    assert bar._recommend_badges[2].width() == 14
+    assert bar._recommend_badges[2].height() == 14
+    assert not bar._recommend_badges[2].isHidden()
+    assert bar._recommend_badges[1].isHidden()
 
     bar.set_recommended(3)
     assert bar._load_btns[2].property('recommended') == 'false'
     assert bar._load_btns[3].property('recommended') == 'true'
-    assert not bar._load_btns[2].text().startswith('★ ')
+    assert bar._recommend_badges[2].isHidden()
+    assert not bar._recommend_badges[3].isHidden()
 
     bar.set_recommended(None)
     for n in (1, 2, 3):
         assert bar._load_btns[n].property('recommended') == 'false'
         assert not bar._load_btns[n].text().startswith('★ ')
+        assert bar._recommend_badges[n].isHidden()
 
 
 def test_builtin_preset_second_left_click_restores_default_params(qapp):
@@ -4183,10 +4191,12 @@ def test_builtin_preset_second_left_click_restores_default_params(qapp):
 
     bar._on_left_click(1)
     assert applied[-1] == {'mode': 'frequency'}
-    assert bar._load_btns[1].property('recommended') == 'true'
+    assert bar._load_btns[1].property('applied') == 'true'
+    assert bar._load_btns[1].property('recommended') == 'false'
 
     bar._on_left_click(1)
     assert applied[-1] == {'mode': 'default'}
+    assert bar._load_btns[1].property('applied') == 'false'
     assert bar._load_btns[1].property('recommended') == 'false'
 
 
@@ -4209,6 +4219,7 @@ def test_recommended_only_builtin_click_still_loads_preset(qapp):
 
     assert applied[-1] == {'mode': 'frequency'}
     assert bar._load_btns[1].property('recommended') == 'true'
+    assert bar._load_btns[1].property('applied') == 'true'
 
 
 def test_recommendation_change_clears_builtin_toggle_selection(qapp):
@@ -4231,8 +4242,9 @@ def test_recommendation_change_clears_builtin_toggle_selection(qapp):
     bar._on_left_click(1)
 
     assert applied[-1] == {'mode': 'frequency'}
-    assert bar._load_btns[1].property('recommended') == 'true'
-    assert bar._load_btns[2].property('recommended') == 'false'
+    assert bar._load_btns[1].property('applied') == 'true'
+    assert bar._load_btns[1].property('recommended') == 'false'
+    assert bar._load_btns[2].property('recommended') == 'true'
 
 
 def _combo_text_hits(combo, value):
@@ -4291,13 +4303,13 @@ def test_fft_builtin_preset_second_click_restores_defaults(qapp):
     assert fc.combo_win.currentText() == 'flattop'
     assert fc.spin_overlap.value() == 75
     assert fc.combo_avg_mode.currentText() == '线性平均'
-    assert fc.preset_bar._load_btns[1].property('recommended') == 'true'
+    assert fc.preset_bar._load_btns[1].property('applied') == 'true'
 
     fc.preset_bar._on_left_click(1)
     assert fc.combo_win.currentText() == 'hanning'
     assert fc.spin_overlap.value() == 50
     assert fc.combo_avg_mode.currentText() == '单帧'
-    assert fc.preset_bar._load_btns[1].property('recommended') == 'false'
+    assert fc.preset_bar._load_btns[1].property('applied') == 'false'
 
 
 def test_order_builtin_presets_apply_through_combos(qapp):
@@ -4350,12 +4362,12 @@ def test_order_builtin_preset_second_click_restores_defaults(qapp):
     oc.preset_bar._on_left_click(1)
     assert oc.spin_order_res.value() == 0.05
     assert oc.spin_time_res.value() == 0.10
-    assert oc.preset_bar._load_btns[1].property('recommended') == 'true'
+    assert oc.preset_bar._load_btns[1].property('applied') == 'true'
 
     oc.preset_bar._on_left_click(1)
     assert oc.spin_order_res.value() == 0.10
     assert oc.spin_time_res.value() == 0.05
-    assert oc.preset_bar._load_btns[1].property('recommended') == 'false'
+    assert oc.preset_bar._load_btns[1].property('applied') == 'false'
 
 
 def test_fft_time_builtin_presets_apply_through_combos(qtbot):
@@ -4418,7 +4430,7 @@ def test_fft_time_builtin_preset_second_click_restores_defaults(qtbot):
     assert ctx.combo_win.currentText() == 'flattop'
     assert ctx.spin_overlap.value() == 75
     assert ctx.chk_z_auto.isChecked() is True
-    assert ctx.preset_bar._load_btns[1].property('recommended') == 'true'
+    assert ctx.preset_bar._load_btns[1].property('applied') == 'true'
 
     ctx.preset_bar._on_left_click(1)
     assert ctx.combo_win.currentText() == 'hanning'
@@ -4426,7 +4438,7 @@ def test_fft_time_builtin_preset_second_click_restores_defaults(qtbot):
     assert ctx.chk_z_auto.isChecked() is False
     assert ctx.spin_z_floor.value() == -70.0
     assert ctx.spin_z_ceiling.value() == -20.0
-    assert ctx.preset_bar._load_btns[1].property('recommended') == 'false'
+    assert ctx.preset_bar._load_btns[1].property('applied') == 'false'
 
 
 def test_order_builtin_presets_respect_order_nyquist(qapp):

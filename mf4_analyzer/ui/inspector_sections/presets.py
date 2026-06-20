@@ -385,6 +385,7 @@ class PresetBar(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
         self._load_btns = {}
+        self._recommend_badges = {}
         for n in self.SLOTS:
             ld = QPushButton(self._default_name(n), self)
             ld.setProperty("role", "preset-load")
@@ -397,6 +398,13 @@ class PresetBar(QWidget):
             )
             row.addWidget(ld, 1)
             self._load_btns[n] = ld
+            badge = QLabel("荐", ld)
+            badge.setObjectName("presetRecommendBadge")
+            badge.setAlignment(Qt.AlignCenter)
+            badge.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            badge.setFixedSize(14, 14)
+            badge.hide()
+            self._recommend_badges[n] = badge
         self._refresh_states()
 
     # ---- naming helpers ----
@@ -472,40 +480,36 @@ class PresetBar(QWidget):
                 btn.setText(name)
                 btn.setEnabled(True)
                 btn.setProperty("filled", "true")
-            # Re-stamp the recommended flag on every refresh so the
-            # unit-推荐 highlight survives an unpolish/polish cycle (the
-            # property would otherwise reset to its last-written value, but
-            # _refresh_states does not touch it — so it is preserved here for
-            # clarity and to mirror the "★推荐" text prefix).
+            # Re-stamp visual state on every refresh so both the unit-推荐
+            # badge and the applied button body survive unpolish/polish cycles.
             recommended = self._recommended_slot == n
             btn.setProperty("recommended", "true" if recommended else "false")
-            self._apply_recommended_text(n, recommended)
+            applied = self._selected_slot == n
+            btn.setProperty("applied", "true" if applied else "false")
+            self._set_recommend_badge(n, recommended)
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
-    def _apply_recommended_text(self, slot, recommended):
-        """Prefix the recommended slot's label with a ★ marker (and strip it
-        from non-recommended slots). Operates on whatever text the slot
-        currently shows so it composes with builtin display names, user
-        overrides, and the legacy "＋ 配置 N" placeholder.
-        """
+    def _position_recommend_badge(self, slot):
         btn = self._load_btns[slot]
-        text = btn.text()
-        marker = "★ "
-        had_marker = text.startswith(marker)
-        if recommended and not had_marker:
-            btn.setText(marker + text)
-        elif not recommended and had_marker:
-            btn.setText(text[len(marker):])
+        badge = self._recommend_badges[slot]
+        badge.move(max(0, btn.width() - badge.width() - 4), 2)
+
+    def _set_recommend_badge(self, slot, recommended):
+        """Show recommendation as a small corner badge, not as button body state."""
+        badge = self._recommend_badges[slot]
+        badge.setVisible(bool(recommended))
+        if recommended:
+            self._position_recommend_badge(slot)
+            badge.raise_()
 
     def set_recommended(self, slot):
-        """Highlight ``slot`` as the unit-推荐 preset (green ★ accent).
+        """Mark ``slot`` as the unit-推荐 preset (corner badge only).
 
         ``slot`` is 1-based (1/2/3) to match :data:`PresetBar.SLOTS`, or
         ``None`` to clear every highlight. Manual interaction is unaffected —
-        this is a visual hint only. The highlight is driven by a QSS dynamic
-        property (``recommended="true"``) + unpolish/polish so it composes
-        with the project theme instead of overriding it via setStyleSheet.
+        this is a visual hint only. The recommendation badge is separate from
+        the ``applied`` property that marks a preset the user actually loaded.
         """
         if slot is not None and slot not in self.SLOTS:
             slot = None
@@ -526,6 +530,8 @@ class PresetBar(QWidget):
             self._show_hover(slot)
         elif event.type() in (QEvent.Leave, QEvent.MouseButtonPress):
             self._hide_hover()
+        elif event.type() == QEvent.Resize:
+            self._position_recommend_badge(slot)
         return super().eventFilter(obj, event)
 
     def _show_hover(self, slot):
@@ -704,7 +710,7 @@ class PresetBar(QWidget):
             self.acknowledged.emit("error", f"加载失败: {e}")
             return
         self._selected_slot = slot
-        self.set_recommended(slot)
+        self._refresh_states()
         self.acknowledged.emit("success", f"已加载「{name}」")
 
     def _restore_default_params(self, slot):

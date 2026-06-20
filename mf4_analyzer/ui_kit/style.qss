@@ -1103,24 +1103,30 @@ QPushButton[role="preset-load"][filled="true"] {
     border-color: #b7c4d3;
     color: #0f3f8f;
 }
+QPushButton[role="preset-load"][applied="true"] {
+    color: #0b73e7;
+    background-color: #e8f1ff;
+    border: 1px solid #0b73e7;
+    font-weight: 700;
+}
+QPushButton[role="preset-load"][applied="true"]:hover {
+    background-color: #dcecff;
+    border-color: #0a66d4;
+}
 QPushButton[role="preset-load"]:disabled {
     color: #a3aebd;
     background-color: transparent;
     border: 1px dashed #cdd5e0;
 }
-/* Unit-推荐 highlight: the preset whose signal type matches the active
-   channel's unit. Subtle green tint + accent border (reuses the preset
-   hover-card success palette #047857 / #e9f9f1) so it reads as a soft
-   recommendation, not a saturated selection block. */
-QPushButton[role="preset-load"][recommended="true"] {
-    color: #047857;
-    background-color: #e9f9f1;
-    border: 1px solid #34b27f;
-    font-weight: 700;
-}
-QPushButton[role="preset-load"][recommended="true"]:hover {
-    background-color: #ddf4ea;
-    border-color: #047857;
+/* Unit recommendation is a corner badge only; the button body is reserved
+   for the actually applied preset state. */
+QLabel#presetRecommendBadge {
+    color: #ffffff;
+    background-color: #10b981;
+    border: 1px solid #059669;
+    border-radius: 7px;
+    font-size: 9px;
+    font-weight: 800;
 }
 QPushButton[role="preset-save"] {
     min-height: 22px;
