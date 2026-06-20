@@ -29,6 +29,7 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [component-speedup-does-not-imply-end-to-end-target](signal-processing/2026-05-28-component-speedup-does-not-imply-end-to-end-target.md) [perf][envelope][end-to-end][micro-bench][hot-path] — A 76× envelope micro-bench win left the pan P50 at parity; measure the END-TO-END target path, not just the stage you optimized, before claiming an SLA win.
 - [cancel-gap-was-unwired-call-site-not-missing-poll](signal-processing/2026-06-11-cancel-gap-was-unwired-call-site-not-missing-poll.md) [cancel-token][plan-staleness][call-site-wiring] — Grep the target signature before implementing a "missing" hook; cancel gaps are often unwired call sites, and stale call-site comments propagate the false premise.
 - [unrealized-viewbox-width-phantom-decimates-small-traces](signal-processing/2026-06-12-unrealized-viewbox-width-phantom-decimates-small-traces.md) [envelope][downsample][pixel-width][pyqtgraph][viewbox][preview] — An un-shown pyqtgraph ViewBox reports a phantom ~45 px width (not 0); gate envelope bucket count with a min-realized FLOOR + generous fallback so small traces pass through untouched.
+- [static-image-writer-test-api-wider-than-plan](signal-processing/2026-06-20-static-image-writer-test-api-wider-than-plan.md) [batch][write-image][backward-compat][static-method][test-api-surface] — Static batch helpers are often called DIRECTLY in tests with the old payload type; grep direct call sites before narrowing a @staticmethod's accepted type or add a dual-accept isinstance branch.
 
 ## pyqt-ui
 
