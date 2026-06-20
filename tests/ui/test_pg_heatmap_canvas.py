@@ -2056,6 +2056,21 @@ def test_plot_result_db_vmin_vmax_not_overridden_by_internal_auto(qapp):
 
 
 def test_plot_result_db_auto_span_tracks_data_peak(qapp):
+    """Auto color-scale uses a fixed _AUTO_SPAN_DB anchor, NOT the z_floor
+    spin value.
+
+    Old contract (before fix): z_floor was treated as a *peak offset*, so
+    z_floor=-50 produced lo = peak - 50 and z_floor=-40 produced lo = peak-40.
+    That made the auto and manual windows use different semantics (peak-relative
+    vs absolute), causing a 30+ dB jump when the user toggled auto off.
+
+    New contract (after fix): lo = peak - _AUTO_SPAN_DB ALWAYS, regardless of
+    z_floor.  z_floor/z_ceiling now have a single meaning: absolute dB values
+    used in MANUAL mode only.  Tests that asserted the old peak-offset semantics
+    are updated to the new fixed-span contract.
+    """
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _AUTO_SPAN_DB
+
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
     r = SpectrogramResult(
@@ -2075,7 +2090,8 @@ def test_plot_result_db_auto_span_tracks_data_peak(qapp):
     peak = float(np.nanmax(c._matrix_disp))
     lo, hi = c._img.getLevels()
     assert hi == pytest.approx(peak)
-    assert lo == pytest.approx(peak - 50.0)
+    # Fixed-span contract: lo = peak - _AUTO_SPAN_DB, regardless of z_floor.
+    assert lo == pytest.approx(peak - _AUTO_SPAN_DB)
     assert peak < -100.0
     c.deleteLater()
 
@@ -2890,3 +2906,120 @@ def test_heatmap_view_all_does_not_emit_levels_changed(qapp):
     c.reset_view_to_data_extents()
 
     assert seen == []
+
+
+# -----------------------------------------------------------------------
+# Invariant tests: FFT-vs-Time auto/manual color-scale consistency
+# (TDD: these MUST fail before the fix, and pass after)
+# -----------------------------------------------------------------------
+
+def _real_spec_result():
+    """Construct a SpectrogramResult via the actual compute path so the
+    absolute dB matrix has a peak that is NOT 0 dB (typical audio signal).
+    Peak will be around -34 dB for the 0.02 Pa sine used here."""
+    from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+
+    fs = 2000.0
+    rng = np.random.default_rng(0)
+    t = np.arange(0, 2.0, 1.0 / fs)
+    sig = 0.02 * np.sin(2 * np.pi * 200 * t) + 0.002 * rng.standard_normal(t.size)
+
+    params = SpectrogramParams(fs=fs, nfft=256, window='hann', overlap=0.75,
+                               remove_mean=True, db_reference=1.0, weighting='None')
+    return SpectrogramAnalyzer.compute(sig, t, params, channel_name='ch', unit='Pa')
+
+
+def test_plot_result_auto_manual_no_jump(qapp):
+    """Invariant 1 (no jump): auto-mode vmin/vmax must equal what manual
+    mode produces after the inspector spin values have been written back to
+    the values the canvas computed automatically.
+
+    Before the fix: z_auto=True gives [peak-40, peak] ≈ (-74.65, -34.65),
+    while z_auto=False with the same spin values (-40/0) gives (-40, 0) —
+    a 34.65 dB shift.  After the fix both must agree within 0.5 dB.
+    """
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _AUTO_SPAN_DB
+
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(320, 240)
+    result = _real_spec_result()
+
+    # Step 1: render in auto mode.
+    c.plot_result(result, amplitude_mode='amplitude_db',
+                  z_auto=True, z_floor=-40.0, z_ceiling=0.0)
+    auto_lo, auto_hi = (float(x) for x in c._img.getLevels())
+
+    # Step 2: render in manual mode — BUT the spin values are already the
+    # values that the auto render wrote back (simulating the write-back).
+    # After the fix, _last_auto_levels must be set and equal (auto_lo, auto_hi).
+    written_lo = float(c._last_auto_levels[0])
+    written_hi = float(c._last_auto_levels[1])
+    c.plot_result(result, amplitude_mode='amplitude_db',
+                  z_auto=False, z_floor=written_lo, z_ceiling=written_hi)
+    man_lo, man_hi = (float(x) for x in c._img.getLevels())
+
+    assert auto_lo == pytest.approx(man_lo, abs=0.5), (
+        f"auto→manual jump on lo: auto={auto_lo:.3f} man={man_lo:.3f}")
+    assert auto_hi == pytest.approx(man_hi, abs=0.5), (
+        f"auto→manual jump on hi: auto={auto_hi:.3f} man={man_hi:.3f}")
+    c.deleteLater()
+
+
+def test_plot_result_manual_reproducible(qapp):
+    """Invariant 2 (reproducible): manual mode with the same z_floor/z_ceiling
+    called twice must produce bit-identical levels."""
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(320, 240)
+    result = _real_spec_result()
+
+    c.plot_result(result, amplitude_mode='amplitude_db',
+                  z_auto=False, z_floor=-50.0, z_ceiling=-10.0)
+    lo1, hi1 = (float(x) for x in c._img.getLevels())
+
+    c.plot_result(result, amplitude_mode='amplitude_db',
+                  z_auto=False, z_floor=-50.0, z_ceiling=-10.0)
+    lo2, hi2 = (float(x) for x in c._img.getLevels())
+
+    assert lo1 == lo2 and hi1 == hi2, (
+        f"manual levels not reproducible: ({lo1},{hi1}) vs ({lo2},{hi2})")
+    c.deleteLater()
+
+
+def test_plot_result_auto_decoupled_from_spin_values(qapp):
+    """Invariant 3 (decoupled): in auto mode the displayed window's SPAN
+    and upper edge must be data-driven, NOT affected by z_floor/z_ceiling.
+
+    Before the fix, z_auto=True used z_floor/z_ceiling as peak offsets,
+    so different spin values produced different windows.  After the fix,
+    [peak - AUTO_SPAN_DB, peak] is always used regardless of spin values.
+    """
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _AUTO_SPAN_DB
+
+    c = PgHeatmapCanvas(with_slice=False)
+    c.resize(320, 240)
+    result = _real_spec_result()
+
+    c.plot_result(result, amplitude_mode='amplitude_db',
+                  z_auto=True, z_floor=-40.0, z_ceiling=0.0)
+    lo_a, hi_a = (float(x) for x in c._img.getLevels())
+
+    # Different spin values — must produce the SAME window.
+    c.plot_result(result, amplitude_mode='amplitude_db',
+                  z_auto=True, z_floor=-80.0, z_ceiling=-10.0)
+    lo_b, hi_b = (float(x) for x in c._img.getLevels())
+
+    assert lo_a == pytest.approx(lo_b, abs=0.5), (
+        f"auto window lo changed with spin values: {lo_a:.3f} vs {lo_b:.3f}")
+    assert hi_a == pytest.approx(hi_b, abs=0.5), (
+        f"auto window hi changed with spin values: {hi_a:.3f} vs {hi_b:.3f}")
+
+    # Also verify the window is [peak - AUTO_SPAN_DB, peak].
+    from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+    m_db = SpectrogramAnalyzer.amplitude_to_db(result.amplitude, 1.0)
+    expected_hi = float(np.nanmax(m_db))
+    expected_lo = expected_hi - _AUTO_SPAN_DB
+    assert hi_a == pytest.approx(expected_hi, abs=0.5), (
+        f"auto hi should be peak={expected_hi:.3f}, got {hi_a:.3f}")
+    assert lo_a == pytest.approx(expected_lo, abs=0.5), (
+        f"auto lo should be peak-SPAN={expected_lo:.3f}, got {lo_a:.3f}")
+    c.deleteLater()
