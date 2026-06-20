@@ -88,7 +88,6 @@ body{font-family:var(--font);color:var(--ink);line-height:1.6;
       <span class="chip">基线 <b>6.0</b> · 2026-05-23</span>
       <span class="chip">当前 <b>7.0</b></span>
       <span class="chip">已接入 <b>9</b> 项</span>
-      <span class="chip">待确认 <b>2</b> 项</span>
     </div>
     <div class="note">验真方法：不只看 commit 标题，而是查 <span class="k">ui/</span> 是否真的调用了对应代码——接到界面、用户能操作到才算数。写好了算法但没接界面的，已剔除（见文末红框）。</div>
   </header>
@@ -155,22 +154,6 @@ body{font-family:var(--font);color:var(--ink);line-height:1.6;
       </div>
     </div>
   </section>
-
-  <div class="callout c-amber">
-    <h3>❓ 待你自行确认的 2 点（确认前先空着）</h3>
-    <ul>
-      <li><b>MDF <span class="k" style="background:#fff;color:var(--amber)">.mdf</span></b>：底层模块做了，但 ui/ 没接入。<b>在「打开」对话框里能选到 .mdf 吗？</b>能 → 在格式里补一句；不能 → 别写。</li>
-      <li><b>信号类型预设种类</b>：除扭矩 / 振动 / 启停外还有没有别的？只写你确认在界面里真能选到的。</li>
-    </ul>
-  </div>
-
-  <div class="callout c-red">
-    <h3>❌ 明确不要写进说明书（已验真排除）</h3>
-    <ul>
-      <li><b>心理声学 / 倍频程 / 阶次跟踪</b>：算法层已写（数百行），但你 <b>2026-06-15 的 commit 自己标了「（未接UI）」</b>，ui/ 零调用——用户用不到。留给后续版本。<br><span style="color:var(--amber)">（注：A 计权已于 2026-06-20 接入 FFT/时频/阶次，已不在此列——见卡片 10。）</span></li>
-      <li><b>故障诊断 / 包络解调 / 报告生成（PDF·Word）/ ICP 采集调理</b>：只在帮助文本 <span class="k" style="background:#fff;color:var(--red)">help_topics.py</span>，没有算法，不是功能。</li>
-    </ul>
-  </div>
 
   <div class="suggest">
     <h2>对应说明书的更新建议（现有 14 页 deck）</h2>
