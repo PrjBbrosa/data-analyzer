@@ -102,6 +102,9 @@ class _ChartCard(QWidget):
             context_menu_requested.connect(
                 lambda: self.mark_discovered("chart.right_click_menu")
             )
+        manual_zoom_changed = getattr(canvas, 'manual_zoom_changed', None)
+        if manual_zoom_changed is not None:
+            manual_zoom_changed.connect(self.set_transient_zoom_hint)
         # Hidden-gesture discovery wiring. Each canvas exposes a signal that
         # fires the first time the user performs the gesture; we mark the
         # matching discovery echo (so its rotating-pool tip retires) and flash a
@@ -129,6 +132,17 @@ class _ChartCard(QWidget):
         self._toolbar_compact = None
         _strip_subplots_action(self.toolbar)
         self._remove_toolbar_loc_label()
+        self._toolbar_leading_spacer = QWidget(self.toolbar)
+        self._toolbar_leading_spacer.setObjectName("chartToolbarLeadingSpacer")
+        self._toolbar_leading_spacer.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._toolbar_leading_spacer.setAttribute(Qt.WA_NoSystemBackground, True)
+        self._toolbar_leading_spacer.setAutoFillBackground(False)
+        self._toolbar_leading_spacer.setFixedWidth(4)
+        first_action = self.toolbar.actions()[0] if self.toolbar.actions() else None
+        self._toolbar_leading_spacer_action = (
+            self.toolbar.insertWidget(first_action, self._toolbar_leading_spacer)
+            if first_action is not None else self.toolbar.addWidget(self._toolbar_leading_spacer)
+        )
 
         # Find Save BEFORE i18n changes labels (text is still 'Save' here);
         # the reference stays valid after relabel because we keep the QAction.
@@ -615,6 +629,16 @@ class _ChartCard(QWidget):
         # flash timer's timeout (_set_context_hint(reset=True)) re-arms rotation.
         self._hint_rotation_timer.stop()
         self._flash_hint_timer.start()
+
+    def set_transient_zoom_hint(self, on):
+        """Show or clear the analysis-canvas transient-zoom footer hint."""
+        self._flash_hint_timer.stop()
+        if bool(on):
+            self.set_hint_rotation_paused(True)
+            self._hint_context.setText("临时缩放 · 重算 / 查看全部将回到设定范围")
+            return
+        self.set_hint_rotation_paused(False)
+        self._set_context_hint(reset=True)
 
     def _advance_context_hint(self):
         if self._hint_rotation_paused:

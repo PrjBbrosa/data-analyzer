@@ -143,6 +143,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     context_menu_requested = pyqtSignal()
     layout_geometry_changed = pyqtSignal()
     time_preview_range_changed = pyqtSignal(float, float)
+    manual_zoom_changed = pyqtSignal(bool)
     # Hidden-gesture discovery: emitted when the user clicks a spectrum curve to
     # pick the time-preview source. The chart card retires the "click a curve to
     # choose the source" tip once this fires.
@@ -477,6 +478,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self.schedule_idle_quality()
         if plot is self._plot_time:
             self._emit_time_preview_range()
+        elif plot is self._plot_amp:
+            self.manual_zoom_changed.emit(True)
 
     def _emit_time_preview_range(self) -> bool:
         try:
@@ -616,6 +619,8 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self.schedule_idle_quality()
         if view_box is self._plot_time.vb:
             self._emit_time_preview_range()
+        elif view_box is self._plot_amp.vb:
+            self.manual_zoom_changed.emit(True)
         self.layout_geometry_changed.emit()
         return True
 
@@ -718,6 +723,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             self._plot_amp.setYRange(float(y_min), float(y_max), padding=0)
         else:
             self._plot_amp.enableAutoRange(axis='y')
+        self.manual_zoom_changed.emit(False)
 
         self._plot_time_preview_entries(
             self._entries, selected_idx=0 if self._entries else None,
@@ -857,6 +863,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def reset_view_to_data_extents(self) -> None:
         if self._last_xlim is None:
             self._reset_time_preview_to_extents()
+            self.manual_zoom_changed.emit(False)
             return
         x0, x1 = _visual_padded_bounds(self._last_xlim[0], self._last_xlim[1])
         self._plot_amp.setXRange(x0, x1, padding=0)
@@ -874,6 +881,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # Re-frame Y to the shared graticule after the X reset so the left +
         # aux right axes stay aligned on the same horizontal grid lines.
         self._reframe_time_y_to_grid()
+        self.manual_zoom_changed.emit(False)
 
     def _reset_time_preview_to_extents(self) -> None:
         bounds = self._combined_time_bounds()

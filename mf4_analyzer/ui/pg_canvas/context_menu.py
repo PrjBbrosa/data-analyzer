@@ -118,6 +118,22 @@ _MOUSE_MODE_TOGGLE_QSS = (
     "}"
 )
 
+
+def _sync_mouse_mode_toggle_buttons(buttons, current):
+    """Reflect the toolbar mode on the compact menu row."""
+    if len(buttons) < 2:
+        return
+    group = buttons[0].group()
+    previous_exclusive = None
+    if group is not None:
+        previous_exclusive = group.exclusive()
+        group.setExclusive(False)
+    buttons[0].setChecked(current == _PG_MOUSE_MODE_ZOOM)
+    buttons[1].setChecked(current == _PG_MOUSE_MODE_PAN)
+    if group is not None:
+        group.setExclusive(previous_exclusive)
+
+
 def _clean_menu_text(text):
     return (text or "").replace("&", "").strip()
 
@@ -317,9 +333,7 @@ def _add_mouse_mode_toggle_row(menu, controller):
                 try:
                     current = controller.current_mouse_mode()
                     buttons = widget.findChildren(QToolButton)
-                    if len(buttons) >= 2:
-                        buttons[0].setChecked(current == _PG_MOUSE_MODE_ZOOM)
-                        buttons[1].setChecked(current != _PG_MOUSE_MODE_ZOOM)
+                    _sync_mouse_mode_toggle_buttons(buttons, current)
                 except Exception:
                     pass
                 return action
@@ -328,7 +342,6 @@ def _add_mouse_mode_toggle_row(menu, controller):
         current = controller.current_mouse_mode()
     except Exception:
         current = None
-    is_zoom = current == _PG_MOUSE_MODE_ZOOM
 
     row = QWidget(menu)
     row.setObjectName("pgMouseModeToggleRow")
@@ -364,13 +377,16 @@ def _add_mouse_mode_toggle_row(menu, controller):
     group.addButton(btn_zoom)
     group.addButton(btn_pan)
 
-    btn_zoom.setChecked(is_zoom)
-    btn_pan.setChecked(not is_zoom)
+    _sync_mouse_mode_toggle_buttons([btn_zoom, btn_pan], current)
     row.setStyleSheet(_MOUSE_MODE_TOGGLE_QSS)
 
     def _select_zoom(_checked=False):
         try:
-            controller.set_zoom_mode()
+            setter = getattr(controller, "set_mouse_mode_broadcast", None)
+            if callable(setter):
+                setter(_PG_MOUSE_MODE_ZOOM)
+            else:
+                controller.set_zoom_mode()
         except Exception:
             pass
         try:
@@ -380,7 +396,11 @@ def _add_mouse_mode_toggle_row(menu, controller):
 
     def _select_pan(_checked=False):
         try:
-            controller.set_pan_mode()
+            setter = getattr(controller, "set_mouse_mode_broadcast", None)
+            if callable(setter):
+                setter(_PG_MOUSE_MODE_PAN)
+            else:
+                controller.set_pan_mode()
         except Exception:
             pass
         try:

@@ -466,6 +466,52 @@ def test_heatmap_default_interpolation_is_smooth(canvas):
     assert canvas._img.smooth_transform_enabled() is True
 
 
+def test_heatmap_main_manual_zoom_emits_transient_true(canvas):
+    seen = []
+    canvas.manual_zoom_changed.connect(seen.append)
+
+    canvas._on_main_manual_zoom()
+
+    assert seen == [True]
+
+
+def test_heatmap_slice_zoom_does_not_emit_transient(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    try:
+        seen = []
+        c.manual_zoom_changed.connect(seen.append)
+
+        c._on_interactive_range_changed()
+
+        assert seen == []
+    finally:
+        c.deleteLater()
+
+
+def test_heatmap_reset_clears_transient_without_extents(canvas):
+    seen = []
+    canvas.manual_zoom_changed.connect(seen.append)
+
+    canvas.reset_view_to_data_extents()
+
+    assert seen and seen[-1] is False
+
+
+def test_heatmap_replot_clears_transient_zoom(canvas):
+    seen = []
+    canvas.manual_zoom_changed.connect(seen.append)
+
+    canvas.plot_or_update_heatmap(
+        matrix=_mat(),
+        x_extent=(0.0, 10.0),
+        y_extent=(0.0, 8.0),
+        amplitude_mode='amplitude',
+        z_auto=True,
+    )
+
+    assert seen and seen[-1] is False
+
+
 def test_heatmap_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch):
     from PyQt5.QtWidgets import QToolButton, QWidgetAction
 

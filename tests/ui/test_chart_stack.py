@@ -36,6 +36,82 @@ def test_apply_mdi_icons_sets_navactive_property_on_active_button(qtbot):
     assert zoom_btn.property("navActive") is True
 
 
+class _StubCanvasForToolbar:
+    axes_list = []
+    _overlay_mode = False
+    _x_master_handle = None
+
+    def register_replot_callback(self, *_args):
+        pass
+
+
+def test_set_mouse_mode_broadcast_sets_self_and_peers(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
+
+    t_main = PgNavigationToolbar(_StubCanvasForToolbar())
+    t_peer = PgNavigationToolbar(_StubCanvasForToolbar())
+    qtbot.addWidget(t_main)
+    qtbot.addWidget(t_peer)
+    t_main._peer_toolbars_provider = lambda: [t_peer]
+
+    t_main.set_mouse_mode_broadcast("zoom")
+    assert t_main.mode == "zoom"
+    assert t_peer.mode == "zoom"
+
+    t_main.set_mouse_mode_broadcast("pan")
+    assert t_main.mode == "pan"
+    assert t_peer.mode == "pan"
+
+
+def test_mouse_mode_broadcast_uses_non_broadcast_peer_setter(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import PgNavigationToolbar
+
+    t_main = PgNavigationToolbar(_StubCanvasForToolbar())
+    t_peer = PgNavigationToolbar(_StubCanvasForToolbar())
+    qtbot.addWidget(t_main)
+    qtbot.addWidget(t_peer)
+    t_main._peer_toolbars_provider = lambda: [t_peer]
+    t_peer._peer_toolbars_provider = lambda: [t_main]
+
+    def _forbidden(_mode):
+        raise AssertionError("peer broadcast setter must not be called")
+
+    t_peer.set_mouse_mode_broadcast = _forbidden
+
+    t_main.set_mouse_mode_broadcast("zoom")
+
+    assert t_main.mode == "zoom"
+    assert t_peer.mode == "zoom"
+
+
+def test_shared_toolbar_highlight_refreshes_on_mouse_mode_signal(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    calls = []
+    cs._sync_shared_nav_highlight = lambda: calls.append("sync")
+
+    cs._time_toolbar.mouse_mode_changed.emit("zoom")
+
+    assert calls == ["sync"]
+
+
+def test_secondary_toolbar_broadcasts_mouse_mode_to_primary_in_split(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.enter_split()
+    qapp.processEvents()
+
+    secondary_toolbar = cs._secondary_card.toolbar
+
+    secondary_toolbar.set_mouse_mode_broadcast("zoom")
+
+    assert secondary_toolbar.mode == "zoom"
+    assert cs._time_toolbar.mode == "zoom"
+
+
 def test_chart_stack_has_three_canvases(qapp):
     cs = ChartStack()
     # Four canvases after Task 3 (time / fft / fft_time / order); test name kept for git history.
@@ -2039,6 +2115,39 @@ def test_flash_hint_shows_transient_context_text(qapp):
     # full_text(): the centered rotating row elides for display (and collapses to
     # '' in a zero-width unshown card), so assert the logical value.
     assert "先选中一个通道" in card._hint_context.full_text()
+
+
+def test_card_transient_zoom_hint_shows_and_clears(qapp):
+    from mf4_analyzer.ui.chart_stack import _ChartCard
+    from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+
+    canvas = PgLineCanvas()
+    card = _ChartCard(canvas, chart_mode="fft")
+    card.show()
+    qapp.processEvents()
+
+    card.set_transient_zoom_hint(True)
+    assert "临时缩放" in card._hint_context.full_text()
+
+    card.set_transient_zoom_hint(False)
+    assert "临时缩放" not in card._hint_context.full_text()
+    card.deleteLater()
+
+
+def test_card_wires_canvas_manual_zoom_to_hint(qapp):
+    from mf4_analyzer.ui.chart_stack import _ChartCard
+    from mf4_analyzer.ui.pg_canvas.line_canvas import PgLineCanvas
+
+    canvas = PgLineCanvas()
+    card = _ChartCard(canvas, chart_mode="fft")
+    card.show()
+    qapp.processEvents()
+
+    canvas.manual_zoom_changed.emit(True)
+    qapp.processEvents()
+
+    assert "临时缩放" in card._hint_context.full_text()
+    card.deleteLater()
 
 
 def test_overlay_needs_selection_signal_flashes_hint(qapp):

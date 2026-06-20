@@ -622,7 +622,9 @@ class TimeDomainCanvasPG(QWidget):
 
         ``controller`` must expose ``current_mouse_mode()`` returning
         ``'pan'`` / ``'zoom'`` / ``''`` plus ``set_pan_mode()`` and
-        ``set_zoom_mode()``. ``_ChartCard`` registers the
+        ``set_zoom_mode()``. It may also expose
+        ``set_mouse_mode_broadcast(mode)``; the right-click menu prefers that
+        entry so split panes stay in sync. ``_ChartCard`` registers the
         ``PgNavigationToolbar`` here so the right-click 鼠标操作 submenu and the
         toolbar share ONE state machine — selecting a menu item updates the
         toolbar (and its ViewBoxes/icons), and opening the menu reflects the

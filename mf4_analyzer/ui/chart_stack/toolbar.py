@@ -618,6 +618,15 @@ class PgNavigationToolbar(QToolBar):
             self.apply_current_mouse_mode()
             self.mouse_mode_changed.emit(self.mode)
 
+    def set_mouse_mode_broadcast(self, mode):
+        """Set this toolbar's mouse mode once, then mirror it to peer panes."""
+        if mode == self._MODE_ZOOM:
+            self.set_zoom_mode()
+        else:
+            self.set_pan_mode()
+        for toolbar in self._peers():
+            toolbar.set_mouse_mode(self.mode)
+
     def save_figure(self, *_args):
         """Open a Save-As dialog and write the canvas grab to disk.
 

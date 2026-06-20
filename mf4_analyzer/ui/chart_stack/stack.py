@@ -191,6 +191,9 @@ class ChartStack(QWidget):
                 _act.triggered.connect(
                     lambda _checked=False: self._sync_shared_nav_highlight()
                 )
+        self._time_toolbar.mouse_mode_changed.connect(
+            lambda *_a: self._sync_shared_nav_highlight()
+        )
         lay.addWidget(self.stack, stretch=1)
 
         # Stats strip retained for later re-enable, but hidden from the UI for now.
@@ -597,6 +600,12 @@ class ChartStack(QWidget):
             )
             self._secondary_card.cursor_mode_changed.connect(
                 self._on_secondary_cursor_mode_changed
+            )
+            self._secondary_card.toolbar._peer_toolbars_provider = (
+                lambda: [self._time_toolbar] if self.split_active() else []
+            )
+            self._secondary_card.toolbar.mouse_mode_changed.connect(
+                lambda *_a: self._sync_shared_nav_highlight()
             )
             # The secondary pane has its own pill so both split panes can show
             # independent single/dual cursor readouts at the same time.

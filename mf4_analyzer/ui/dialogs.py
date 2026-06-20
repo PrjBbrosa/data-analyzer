@@ -707,23 +707,16 @@ class ChartOptionsDialog(QDialog):
         form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(8)
 
-        self.combo_cmap = QComboBox(group)
-        self.combo_cmap.addItems([
-            "turbo", "viridis", "plasma", "inferno", "magma",
-            "cividis", "jet", "gray",
-        ])
         self.chk_color_auto = QCheckBox("自动色阶范围", group)
         self.spin_color_min = self._spin(group)
         self.spin_color_max = self._spin(group)
 
-        form.addRow("色图", self.combo_cmap)
         form.addRow("最小值", self.spin_color_min)
         form.addRow("最大值", self.spin_color_max)
         box.addLayout(form)
         box.addWidget(self.chk_color_auto)
 
         if not self._mappables:
-            self.combo_cmap.setEnabled(False)
             self.chk_color_auto.setEnabled(False)
             self.spin_color_min.setEnabled(False)
             self.spin_color_max.setEnabled(False)
@@ -766,14 +759,18 @@ class ChartOptionsDialog(QDialog):
             x_scale_raw = self.ax.get_xscale()
         if self.ax is not None and not hasattr(self.handle, "get_yscale"):
             y_scale_raw = self.ax.get_yscale()
+        if hasattr(self.handle, "is_autorange"):
+            x_auto = bool(self.handle.is_autorange("x"))
+            y_auto = bool(self.handle.is_autorange("y"))
+        else:
+            x_auto = False
+            y_auto = False
         line = self._current_line()
         line_color = self._line_color_text(line) if line is not None else ""
         mappable = self._current_mappable()
         if mappable is not None:
-            cmap = mappable.get_cmap().name
             cmin, cmax = mappable.get_clim()
         else:
-            cmap = "turbo"
             cmin, cmax = 0.0, 1.0
         return {
             "title": self.handle.get_title(),
@@ -781,17 +778,16 @@ class ChartOptionsDialog(QDialog):
             "x_max": float(xhi),
             "x_label": self.handle.get_xlabel(),
             "x_scale": self.SCALE_TO_TEXT.get(x_scale_raw, x_scale_raw),
-            "x_auto": False,
+            "x_auto": x_auto,
             "y_min": float(ylo),
             "y_max": float(yhi),
             "y_label": self.handle.get_ylabel(),
             "y_scale": self.SCALE_TO_TEXT.get(y_scale_raw, y_scale_raw),
-            "y_auto": False,
+            "y_auto": y_auto,
             "grid": grid_visible,
             "legend": False,
             "curve_index": 0,
             "curve_color": line_color,
-            "cmap": cmap,
             "color_min": float(cmin),
             "color_max": float(cmax),
             "color_auto": False,
@@ -814,7 +810,6 @@ class ChartOptionsDialog(QDialog):
         self.chk_legend.setChecked(d["legend"])
         self.combo_curve.setCurrentIndex(d["curve_index"] if self._lines else 0)
         self.edit_curve_color.setText(d["curve_color"])
-        self._set_combo_text(self.combo_cmap, d["cmap"])
         self.spin_color_min.setValue(d["color_min"])
         self.spin_color_max.setValue(d["color_max"])
         self.chk_color_auto.setChecked(d["color_auto"])
@@ -841,7 +836,8 @@ class ChartOptionsDialog(QDialog):
             label=self.edit_y_label.text(),
             scale_text=self.combo_y_scale.currentText(),
         )
-        self.handle.grid(self.chk_grid.isChecked())
+        if self.chk_grid.isChecked() != self._initial.get("grid", False):
+            self.handle.grid(self.chk_grid.isChecked())
         if self.chk_legend.isChecked() and hasattr(self.handle, "rebuild_legend"):
             self.handle.rebuild_legend()
         elif self.chk_legend.isChecked() and self.ax is not None:
@@ -926,11 +922,6 @@ class ChartOptionsDialog(QDialog):
         except ValueError:
             return str(line.get_color())
 
-    def _set_combo_text(self, combo, text):
-        if combo.findText(text) < 0:
-            combo.addItem(text)
-        combo.setCurrentText(text)
-
     def _sync_curve_color(self):
         line = self._current_line()
         if line is not None:
@@ -970,7 +961,6 @@ class ChartOptionsDialog(QDialog):
         mappable = self._current_mappable()
         if mappable is None:
             return
-        mappable.set_cmap(self.combo_cmap.currentText())
         if self.chk_color_auto.isChecked():
             arr = mappable.get_array()
             if arr is not None:

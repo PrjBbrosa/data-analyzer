@@ -343,6 +343,60 @@ def test_pg_axis_handle_grid_can_disallow_y_grid(qapp):
     assert not plot_item.getAxis("left").grid
 
 
+def test_pg_axis_handle_grid_uses_shared_helper_with_alpha(qapp, monkeypatch):
+    import pyqtgraph as pg
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    from mf4_analyzer.ui.pg_canvas import _shared
+
+    captured = {}
+
+    def _fake(plot, *, x, y, alpha=0.25):
+        captured.update(plot=plot, x=x, y=y, alpha=alpha)
+
+    monkeypatch.setattr(_shared, "show_major_grid_left_bottom_only", _fake)
+
+    plot_item = pg.PlotItem()
+    h = PgAxisHandle(plot_item=plot_item)
+    h.grid(True)
+
+    assert captured == {
+        "plot": plot_item,
+        "x": True,
+        "y": True,
+        "alpha": 0.28,
+    }
+
+
+def test_pg_axis_handle_is_autorange(qapp):
+    import pyqtgraph as pg
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+
+    plot_item = pg.PlotItem()
+    h = PgAxisHandle(plot_item=plot_item)
+
+    plot_item.vb.enableAutoRange(axis="y", enable=True)
+    plot_item.vb.setXRange(0.0, 1.0, padding=0)
+
+    assert h.is_autorange("y") is True
+    assert h.is_autorange("x") is False
+
+
+def test_dialog_reflects_real_autorange(qapp):
+    import pyqtgraph as pg
+    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    plot_item = pg.PlotItem()
+    plot_item.vb.enableAutoRange(axis="y", enable=True)
+    plot_item.vb.setXRange(0.0, 1.0, padding=0)
+    handle = PgAxisHandle(plot_item=plot_item)
+
+    dlg = ChartOptionsDialog(None, handle)
+
+    assert dlg.chk_y_auto.isChecked() is True
+    assert dlg.chk_x_auto.isChecked() is False
+
+
 def test_pg_axis_handle_sync_line_axis_color(qapp):
     import os
     os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")

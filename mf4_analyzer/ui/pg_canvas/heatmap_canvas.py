@@ -640,6 +640,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     context_menu_requested = pyqtSignal()
     # Emitted when the user drags the interactive colorbar (lo, hi).
     levels_changed = pyqtSignal(float, float)
+    manual_zoom_changed = pyqtSignal(bool)
     # Emitted after labels/ticks/title/colorbar changes that can resize the
     # pyqtgraph layout. Analysis split pages coalesce this and align panes.
     layout_geometry_changed = pyqtSignal()
@@ -725,6 +726,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._plot.vb.sigResized.connect(self._refresh_bottom_x_ticks)
         self._plot.vb.sigRangeChangedManually.connect(
             self._on_interactive_range_changed)
+        self._plot.vb.sigRangeChangedManually.connect(self._on_main_manual_zoom)
 
         # Slice row (with_slice=True). Every consumer guards on
         # ``self._slice_curve is not None``.
@@ -964,6 +966,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self.disable_interactive_quality()
         self.schedule_idle_quality()
 
+    def _on_main_manual_zoom(self, *_args) -> None:
+        self.manual_zoom_changed.emit(True)
+
     def _apply_empty_state_range(self) -> None:
         """Pin the empty-map view to fixed non-negative defaults.
 
@@ -1140,6 +1145,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._reset_slice_quality_for_rebuild()
         self.levels_rebased.emit()
         self.layout_geometry_changed.emit()
+        self.manual_zoom_changed.emit(False)
 
     def has_result(self) -> bool:
         return self._has_result
@@ -1295,6 +1301,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             return False
         self.disable_interactive_quality()
         self.schedule_idle_quality()
+        if view_box is self._plot.vb:
+            self.manual_zoom_changed.emit(True)
         self.layout_geometry_changed.emit()
         return True
 
@@ -1384,10 +1392,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # empty default used by __init__/full_reset so the blank map stays
             # consistent on reset.
             self._apply_empty_state_range()
+            self.manual_zoom_changed.emit(False)
             return
         x0, x1, y0, y1 = self._extents
         self._plot.setXRange(x0, x1, padding=0)
         self._plot.setYRange(y0, y1, padding=0)
+        self.manual_zoom_changed.emit(False)
 
     # ------------------------------------------------------------------
     # FFT-vs-Time: spectrogram render + frequency slice (with_slice=True)

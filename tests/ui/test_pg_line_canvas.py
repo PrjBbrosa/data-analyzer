@@ -69,6 +69,18 @@ def _menu_texts(menu):
     ]
 
 
+def _toggle_row_buttons(menu):
+    from PyQt5.QtWidgets import QToolButton, QWidgetAction
+
+    for action in menu.actions():
+        if not isinstance(action, QWidgetAction):
+            continue
+        widget = action.defaultWidget()
+        if widget is not None and widget.objectName() == "pgMouseModeToggleRow":
+            return widget.findChildren(QToolButton)
+    return []
+
+
 @pytest.fixture
 def canvas(qapp):
     c = PgLineCanvas()
@@ -1032,6 +1044,47 @@ def test_fft_split_divider_hidden_when_collapsed(canvas, qapp):
     canvas.hide()
 
 
+def test_amp_manual_zoom_emits_transient_true(canvas):
+    seen = []
+    canvas.manual_zoom_changed.connect(seen.append)
+
+    canvas._on_interactive_range_changed(canvas._plot_amp)
+
+    assert seen == [True]
+
+
+def test_time_preview_zoom_does_not_emit_transient(canvas):
+    seen = []
+    canvas.manual_zoom_changed.connect(seen.append)
+
+    canvas._on_interactive_range_changed(canvas._plot_time)
+
+    assert seen == []
+
+
+def test_plot_spectra_clears_transient_zoom(canvas):
+    seen = []
+    canvas.manual_zoom_changed.connect(seen.append)
+
+    canvas.plot_spectra(
+        [_entry()],
+        xlim=(0.0, 500.0),
+        amp_label="Amplitude",
+        title="FFT",
+    )
+
+    assert seen and seen[-1] is False
+
+
+def test_reset_view_to_data_extents_clears_transient_without_result(canvas):
+    seen = []
+    canvas.manual_zoom_changed.connect(seen.append)
+
+    canvas.reset_view_to_data_extents()
+
+    assert seen and seen[-1] is False
+
+
 def test_line_canvas_grid_is_major_only(canvas):
     """Analysis canvases default to a major-only grid (no faint minor sub-grid),
     matching the time-domain canvas: maxTickLevel=0 on both plots' bottom/left
@@ -1087,6 +1140,134 @@ def test_fft_context_menu_is_chinese_and_hides_plot_options(canvas, monkeypatch)
     assert [btn.toolTip() for btn in buttons] == ["框选", "平移"]
     buttons[0].click()
     assert controller.mode == "zoom"
+
+
+def test_menu_pan_button_calls_broadcast(qapp):
+    from PyQt5.QtWidgets import QMenu
+    from mf4_analyzer.ui.pg_canvas import context_menu as cm
+
+    calls = []
+
+    class _Ctrl:
+        def current_mouse_mode(self):
+            return "zoom"
+
+        def set_pan_mode(self):
+            calls.append(("set_pan_mode",))
+
+        def set_zoom_mode(self):
+            calls.append(("set_zoom_mode",))
+
+        def set_mouse_mode_broadcast(self, mode):
+            calls.append(("broadcast", mode))
+
+    menu = QMenu()
+    cm._add_mouse_mode_toggle_row(menu, _Ctrl())
+
+    zoom_btn, pan_btn = _toggle_row_buttons(menu)
+    assert zoom_btn.toolTip() == "框选"
+    assert pan_btn.toolTip() == "平移"
+
+    pan_btn.click()
+
+    assert ("broadcast", "pan") in calls
+    assert ("set_pan_mode",) not in calls
+
+
+def test_idle_mode_leaves_both_buttons_unchecked(qapp):
+    from PyQt5.QtWidgets import QMenu
+    from mf4_analyzer.ui.pg_canvas import context_menu as cm
+
+    class _Ctrl:
+        def current_mouse_mode(self):
+            return ""
+
+        def set_pan_mode(self):
+            pass
+
+        def set_zoom_mode(self):
+            pass
+
+    menu = QMenu()
+    cm._add_mouse_mode_toggle_row(menu, _Ctrl())
+
+    zoom_btn, pan_btn = _toggle_row_buttons(menu)
+    assert zoom_btn.isChecked() is False
+    assert pan_btn.isChecked() is False
+
+
+def test_reused_mouse_mode_row_allows_idle_unchecked(qapp):
+    from PyQt5.QtWidgets import QMenu
+    from mf4_analyzer.ui.pg_canvas import context_menu as cm
+
+    class _Ctrl:
+        mode = "pan"
+
+        def current_mouse_mode(self):
+            return self.mode
+
+        def set_pan_mode(self):
+            pass
+
+        def set_zoom_mode(self):
+            pass
+
+    menu = QMenu()
+    ctrl = _Ctrl()
+    cm._add_mouse_mode_toggle_row(menu, ctrl)
+    zoom_btn, pan_btn = _toggle_row_buttons(menu)
+    assert zoom_btn.isChecked() is False
+    assert pan_btn.isChecked() is True
+
+    ctrl.mode = ""
+    cm._add_mouse_mode_toggle_row(menu, ctrl)
+
+    assert zoom_btn.isChecked() is False
+    assert pan_btn.isChecked() is False
+
+
+def test_pan_mode_checks_only_pan(qapp):
+    from PyQt5.QtWidgets import QMenu
+    from mf4_analyzer.ui.pg_canvas import context_menu as cm
+
+    class _Ctrl:
+        def current_mouse_mode(self):
+            return "pan"
+
+        def set_pan_mode(self):
+            pass
+
+        def set_zoom_mode(self):
+            pass
+
+    menu = QMenu()
+    cm._add_mouse_mode_toggle_row(menu, _Ctrl())
+
+    zoom_btn, pan_btn = _toggle_row_buttons(menu)
+    assert zoom_btn.isChecked() is False
+    assert pan_btn.isChecked() is True
+
+
+def test_zoom_mode_checks_only_zoom(qapp):
+    from PyQt5.QtWidgets import QMenu
+    from mf4_analyzer.ui.pg_canvas import context_menu as cm
+
+    class _Ctrl:
+        def current_mouse_mode(self):
+            return "zoom"
+
+        def set_pan_mode(self):
+            pass
+
+        def set_zoom_mode(self):
+            pass
+
+    menu = QMenu()
+    cm._add_mouse_mode_toggle_row(menu, _Ctrl())
+
+    zoom_btn, pan_btn = _toggle_row_buttons(menu)
+    assert zoom_btn.isChecked() is True
+    assert pan_btn.isChecked() is False
 
 
 def test_fft_context_menu_includes_y_autofit(canvas, monkeypatch):

@@ -158,6 +158,52 @@ def test_dialog_log_scale_with_non_positive_range_falls_back_to_autoscale(qapp):
     assert len(captured) == 1
 
 
+def test_grid_apply_skipped_when_checkbox_unchanged(qapp):
+    from mf4_analyzer.ui._axis_handle import MplAxisHandle
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    ax = _axes_with_curve()
+    handle = MplAxisHandle(ax)
+    dlg = ChartOptionsDialog(None, handle)
+
+    calls = []
+    handle.grid = lambda enabled: calls.append(enabled)
+
+    dlg.apply_changes()
+
+    assert calls == []
+
+
+def test_grid_apply_runs_when_checkbox_changed(qapp):
+    from mf4_analyzer.ui._axis_handle import MplAxisHandle
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    ax = _axes_with_curve()
+    handle = MplAxisHandle(ax)
+    dlg = ChartOptionsDialog(None, handle)
+
+    calls = []
+    handle.grid = lambda enabled: calls.append(enabled)
+
+    dlg.chk_grid.setChecked(not dlg._initial["grid"])
+    dlg.apply_changes()
+
+    assert calls == [not dlg._initial["grid"]]
+
+
+def test_dialog_has_no_cmap_combo(qapp):
+    from mf4_analyzer.ui._axis_handle import MplAxisHandle
+    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+
+    ax = _axes_with_curve()
+    dlg = ChartOptionsDialog(None, MplAxisHandle(ax))
+
+    assert not hasattr(dlg, "combo_cmap")
+    assert hasattr(dlg, "spin_color_min")
+    assert hasattr(dlg, "spin_color_max")
+    assert hasattr(dlg, "chk_color_auto")
+
+
 # ---------------------------------------------------------------------------
 # Layout-snapshot: visible widget tree byte-identical pre/post refactor
 # ---------------------------------------------------------------------------
@@ -215,7 +261,7 @@ EXPECTED_SNAPSHOT = {
         "最小值", "最大值", "标签", "刻度",      # X axis form
         "最小值", "最大值", "标签", "刻度",      # Y axis form
         "对象", "颜色",                          # curve form
-        "色图", "最小值", "最大值",              # color form
+        "最小值", "最大值",                      # color range form
     ]),
     "buttons": sorted([
         "重置", "取消", "应用", "确定", "选择",

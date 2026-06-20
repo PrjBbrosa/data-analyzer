@@ -631,9 +631,12 @@ class PgAxisHandle:
         if pi is None or not hasattr(pi, "showGrid"):
             return
         self._grid_enabled = bool(enabled)
-        pi.showGrid(
+        from mf4_analyzer.ui.pg_canvas import _shared
+        _shared.show_major_grid_left_bottom_only(
+            pi,
             x=self._grid_enabled,
             y=self._grid_enabled if self._allow_y_grid else False,
+            alpha=0.28,
         )
 
     def is_grid_enabled(self) -> bool:
@@ -644,6 +647,18 @@ class PgAxisHandle:
         except Exception:
             pass
         return bool(self._grid_enabled)
+
+    def is_autorange(self, axis: str = "x") -> bool:
+        vb = self._view_box
+        state = getattr(vb, "state", None) if vb is not None else None
+        if not isinstance(state, dict):
+            return False
+        flags = state.get("autoRange") or [False, False]
+        idx = 1 if str(axis).lower().startswith("y") else 0
+        try:
+            return bool(flags[idx])
+        except (IndexError, KeyError, TypeError):
+            return False
 
     # Lines + mappables -----------------------------------------------------
     def get_lines(self) -> list[LineHandle]:

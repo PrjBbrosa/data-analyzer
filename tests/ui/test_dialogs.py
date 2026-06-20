@@ -431,7 +431,7 @@ def test_pg_chart_options_overlay_aux_axis_yscale_updates_own_curve(qapp):
 # tests/ui/test_pg_timedomain_canvas.py for the pyqtgraph canvas.
 
 
-def test_chart_options_dialog_applies_heatmap_cmap_and_range(qapp):
+def test_chart_options_dialog_applies_heatmap_range_without_cmap_control(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
     fig = Figure(figsize=(4, 3), dpi=100)
@@ -440,8 +440,7 @@ def test_chart_options_dialog_applies_heatmap_cmap_and_range(qapp):
 
     dlg = ChartOptionsDialog(None, ax)
 
-    assert dlg.combo_cmap.currentText() == "viridis"
-    dlg.combo_cmap.setCurrentText("turbo")
+    assert not hasattr(dlg, "combo_cmap")
     dlg.chk_color_auto.setChecked(False)
     dlg.spin_color_min.setValue(1.0)
     dlg.spin_color_max.setValue(5.0)
@@ -450,7 +449,7 @@ def test_chart_options_dialog_applies_heatmap_cmap_and_range(qapp):
 
     dlg.apply_changes()
 
-    assert im.get_cmap().name == "turbo"
+    assert im.get_cmap().name == "viridis"
     assert im.get_clim() == pytest.approx((1.0, 5.0))
 
     dlg.chk_color_auto.setChecked(True)
