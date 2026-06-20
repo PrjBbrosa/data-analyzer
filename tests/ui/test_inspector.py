@@ -694,7 +694,7 @@ def test_fft_time_context_builtin_presets(qtbot):
     assert params['amplitude_mode'] == 'amplitude_db'
 
     # 振动类(均衡): hanning / auto 1.5 s / 50% / dB / auto color,
-    # with a 50 dB manual fallback.
+    # with a 40 dB manual fallback.
     ctx.apply_builtin_preset('vibration')
     p_vib = ctx.get_params()
     assert p_vib['window'] == 'hanning'
@@ -704,10 +704,10 @@ def test_fft_time_context_builtin_presets(qtbot):
     assert p_vib['overlap'] == 0.50
     assert p_vib['dynamic'] == 'Auto'
     assert p_vib['z_auto'] is True
-    assert p_vib['z_floor'] == -50.0
+    assert p_vib['z_floor'] == -40.0
 
     # 启停类(时间优先): hanning / auto 0.6 s / 75% / dB / auto color,
-    # with a tighter 40 dB manual fallback.
+    # with a tighter 30 dB manual fallback.
     ctx.apply_builtin_preset('transient')
     p_tr = ctx.get_params()
     assert p_tr['window'] == 'hanning'
@@ -717,7 +717,7 @@ def test_fft_time_context_builtin_presets(qtbot):
     assert p_tr['overlap'] == 0.75
     assert p_tr['dynamic'] == 'Auto'
     assert p_tr['z_auto'] is True
-    assert p_tr['z_floor'] == -40.0
+    assert p_tr['z_floor'] == -30.0
 
 
 # ---- 紧凑化【1】同行并排：X+Y / 开始+结束 / 窗函数+NFFT / 频率下限+上限 ----
@@ -1495,7 +1495,7 @@ def test_fft_time_apply_builtin_preset_still_accepts_legacy_keys(qtbot):
     assert p['nfft_mode'] == 'auto'
     assert p['t_win_s'] == 0.6
     assert p['dynamic'] == 'Auto'
-    assert p['z_floor'] == -40.0
+    assert p['z_floor'] == -30.0
 
 
 def test_fft_time_preset_collects_explicit_xyz_axes(qtbot):
@@ -4393,9 +4393,9 @@ def test_fft_time_builtin_presets_apply_through_combos(qtbot):
     assert ctx._builtin_preset_full_params('torque')['z_auto'] is True
     assert ctx._builtin_preset_full_params('vibration')['z_auto'] is True
     assert ctx._builtin_preset_full_params('transient')['z_auto'] is True
-    assert ctx._builtin_preset_full_params('torque')['z_floor'] == -50.0
-    assert ctx._builtin_preset_full_params('vibration')['z_floor'] == -50.0
-    assert ctx._builtin_preset_full_params('transient')['z_floor'] == -40.0
+    assert ctx._builtin_preset_full_params('torque')['z_floor'] == -40.0
+    assert ctx._builtin_preset_full_params('vibration')['z_floor'] == -40.0
+    assert ctx._builtin_preset_full_params('transient')['z_floor'] == -30.0
 
     ctx.apply_builtin_preset('torque')
     assert ctx.combo_nfft.currentText() == "自动"

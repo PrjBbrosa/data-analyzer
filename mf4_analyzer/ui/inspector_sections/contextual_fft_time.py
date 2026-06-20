@@ -657,9 +657,9 @@ class FFTTimeContextual(QWidget):
         ),
     }
     _BUILTIN_Z_FALLBACK_FLOORS = {
-        'torque': -50.0,
-        'vibration': -50.0,
-        'transient': -40.0,
+        'torque': -40.0,
+        'vibration': -40.0,
+        'transient': -30.0,
     }
     _LEGACY_BUILTIN_PRESET_ALIASES = {
         'diagnostic': 'vibration',
