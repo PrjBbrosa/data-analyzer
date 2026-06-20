@@ -63,14 +63,11 @@ class _FileRow(QFrame):
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(7)
-        self._accent = QFrame(self)
-        self._accent.setObjectName("fileAccent")
-        self._accent.setFixedWidth(3)
-        outer.addWidget(self._accent)
 
         lay = QVBoxLayout()
-        lay.setContentsMargins(4, 8, 7, 8)
+        # Left inset 14 = former 3px accent stripe + 7 spacing + 4 inner pad,
+        # kept so the text column stays put now that the accent frame is gone.
+        lay.setContentsMargins(14, 8, 7, 8)
         lay.setSpacing(4)
         top = QHBoxLayout()
         top.setSpacing(8)
@@ -153,11 +150,8 @@ class _FileRow(QFrame):
     def set_active(self, active):
         self._active = active
         self.setProperty("active", "true" if active else "false")
-        self._accent.setProperty("active", "true" if active else "false")
         self.style().unpolish(self)
         self.style().polish(self)
-        self._accent.style().unpolish(self._accent)
-        self._accent.style().polish(self._accent)
 
 
 class FileNavigator(QWidget):

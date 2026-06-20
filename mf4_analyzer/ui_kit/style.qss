@@ -842,17 +842,12 @@ QLabel#paneCount {
     background-color: #ffffff;
 }
 #fileRow[active="true"] {
-    /* Selection is shown by the light-blue tint + the 3px #fileAccent stripe
-     * on the left. Keep the card outline a NEUTRAL gray here (not blue) so the
-     * left edge reads as a single blue stripe, not a border-line + a stripe. */
+    /* Selection is shown by the light-blue tint alone. Keep the card outline a
+     * NEUTRAL gray here (not blue) so the selected card reads as a soft tint
+     * rather than a hard blue frame. */
     border-color: #b7c4d3;
     background-color: #f5f8ff;
 }
-QFrame#fileAccent {
-    background-color: transparent;
-    border-radius: 2px;
-}
-QFrame#fileAccent[active="true"] { background-color: #3b82f6; }
 
 QLabel#fileRowName {
     color: #111827;
