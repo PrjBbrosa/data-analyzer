@@ -410,6 +410,25 @@ class OrderMixin:
             matrix = 20.0 * np.log10(np.clip(matrix, 1e-12, None) / db_ref)
             plot_amp_mode = 'amplitude'
             cbar_label = f'Amplitude (dB re {db_ref:g})'
+
+        z_auto = bool(order_params.get('z_auto', False))
+        z_floor = float(order_params.get('z_floor', -30.0))
+        z_ceiling = float(order_params.get('z_ceiling', 0.0))
+
+        # For the dB path: compute auto levels using the same fixed-SPAN
+        # anchor used by plot_result — [peak - AUTO_SPAN_DB, peak] in
+        # absolute dB — and pass them as explicit vmin/vmax so the canvas
+        # does not fall back to the full data range (which may span 80+ dB
+        # of noise floor).  This makes Order's auto/manual transition as
+        # jump-free as FFT-vs-Time's.
+        vmin_override = None
+        vmax_override = None
+        if z_auto and amp_mode_token == 'amplitude_db':
+            from ..pg_canvas.heatmap_canvas import _AUTO_SPAN_DB, _finite_data_bounds
+            _, data_hi = _finite_data_bounds(matrix)
+            vmin_override = data_hi - _AUTO_SPAN_DB
+            vmax_override = data_hi
+
         # Pin the amplitude mode so the slice's amplitude-axis label reads
         # 'Amplitude (dB)' vs 'Amplitude' correctly (Order renders through
         # plot_or_update_heatmap, which does not set it like plot_result does).
@@ -430,9 +449,11 @@ class OrderMixin:
             interp='bilinear',
             cbar_label=cbar_label,
             amplitude_mode=plot_amp_mode,
-            z_auto=bool(order_params.get('z_auto', False)),
-            z_floor=float(order_params.get('z_floor', -30.0)),
-            z_ceiling=float(order_params.get('z_ceiling', 0.0)),
+            z_auto=z_auto,
+            z_floor=z_floor,
+            z_ceiling=z_ceiling,
+            vmin=vmin_override,
+            vmax=vmax_override,
             x_auto=bool(order_params.get('x_auto', True)),
             x_min=float(order_params.get('x_min', 0.0)),
             x_max=float(order_params.get('x_max', 0.0)),
@@ -441,6 +462,17 @@ class OrderMixin:
             y_max=float(order_params.get('y_max', 0.0)),
             x_coords=result.times, y_coords=result.orders,
         )
+        # Write the auto-computed absolute levels back into the inspector
+        # spins (blockSignals) so that auto→manual is jump-free for Order
+        # as well (parity with FFT-vs-Time).
+        if z_auto and amp_mode_token == 'amplitude_db' and vmin_override is not None:
+            for spin, val in (
+                (ctx.spin_z_floor, vmin_override),
+                (ctx.spin_z_ceiling, vmax_override),
+            ):
+                spin.blockSignals(True)
+                spin.setValue(val)
+                spin.blockSignals(False)
         # Seed the order slice (default 按阶次 / Y is most useful, but keep the
         # current direction if the user already switched it).
         if getattr(canvas, '_slice_curve', None) is not None:

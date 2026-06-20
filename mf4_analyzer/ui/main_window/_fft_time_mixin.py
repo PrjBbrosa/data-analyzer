@@ -563,11 +563,12 @@ class FFTTimeMixin:
         # (precedes freq_range on the canvas). amplitude_mode is already
         # the canvas's lowercase token ('amplitude_db' / 'amplitude') in
         # FFTTimeContextual.get_params, so no translation needed.
+        z_auto = bool(p.get('z_auto', False))
         canvas.plot_result(
             result,
             amplitude_mode=p['amplitude_mode'],
             cmap=p['cmap'],
-            z_auto=bool(p.get('z_auto', False)),
+            z_auto=z_auto,
             z_floor=float(p.get('z_floor', -80.0)),
             z_ceiling=float(p.get('z_ceiling', 0.0)),
             freq_range=freq_range,
@@ -579,6 +580,22 @@ class FFTTimeMixin:
             y_min=float(p.get('y_min', 0.0)),
             y_max=float(p.get('y_max', 0.0)),
         )
+        # Write the auto-computed absolute levels back into the inspector
+        # spins (blockSignals so we don't trigger a recompute).  This makes
+        # the current display window the single source of truth: when the
+        # user later un-ticks "自动", the spins already hold the exact same
+        # values that are on screen, so switching auto→manual is jump-free.
+        if z_auto and p.get('amplitude_mode', 'amplitude_db') == 'amplitude_db':
+            auto_lvls = getattr(canvas, '_last_auto_levels', None)
+            if auto_lvls is not None:
+                ctx = self.inspector.fft_time_ctx
+                for spin, val in (
+                    (ctx.spin_z_floor, auto_lvls[0]),
+                    (ctx.spin_z_ceiling, auto_lvls[1]),
+                ):
+                    spin.blockSignals(True)
+                    spin.setValue(val)
+                    spin.blockSignals(False)
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
 
