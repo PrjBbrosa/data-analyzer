@@ -727,3 +727,62 @@ def test_legacy_preset_with_algorithm_silently_ignored(tmp_path):
     assert preset.params.get('z_auto') is False
     assert preset.params.get('z_floor') == -30.0
     assert preset.params.get('z_ceiling') == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Task 1: _Spectro2D + pivot-round-trip elimination (TDD-first)
+# ---------------------------------------------------------------------------
+
+
+def test_order_time_spectro_matrix_matches_long_dataframe():
+    import numpy as np
+    from mf4_analyzer.batch import BatchRunner, _Spectro2D
+    rng = np.random.default_rng(0)
+    n = 4096
+    fs = 1000.0
+    t = np.arange(n) / fs
+    sig = np.sin(2 * np.pi * 5 * t)
+    rpm = np.linspace(600, 1800, n)
+    params = {'samples_per_rev': 64, 'nfft': 256, 'max_order': 10,
+              'order_res': 0.5, 'time_res': 0.1}
+    spectro = BatchRunner._compute_order_time_spectro(sig, rpm, t, fs, params)
+    assert isinstance(spectro, _Spectro2D)
+    assert spectro.matrix.shape == (len(spectro.x), len(spectro.y))
+    df_new = spectro.to_long_dataframe()
+    df_old = BatchRunner._compute_order_time_dataframe(sig, rpm, t, fs, params)
+    pd.testing.assert_frame_equal(df_new, df_old)
+
+
+def test_write_image_heatmap_uses_transposed_matrix(tmp_path):
+    import numpy as np
+    from mf4_analyzer.batch import BatchRunner, _Spectro2D
+    x = np.array([0.0, 1.0, 2.0])           # time
+    y = np.array([1.0, 2.0])                 # order
+    matrix = np.array([[1., 2.], [3., 4.], [5., 6.]])  # (len(x), len(y))
+    spectro = _Spectro2D(x, y, matrix, 'time_s', 'order')
+    out = BatchRunner._write_image(('order_time', spectro), tmp_path / 'h.png',
+                                   params={'z_auto': True})
+    assert out.exists()
+    # Rendering matrix must be matrix.T (rows=y, cols=x), equal to old pivot
+    df = spectro.to_long_dataframe()
+    pivot = df.pivot(index='order', columns='time_s', values='amplitude')
+    np.testing.assert_allclose(pivot.to_numpy(), matrix.T)
+
+
+def test_image_only_export_skips_long_dataframe(tmp_path, monkeypatch):
+    import numpy as np
+    from mf4_analyzer.batch import BatchRunner, _Spectro2D
+    calls = {'n': 0}
+    orig = _Spectro2D.to_long_dataframe
+
+    def spy(self):
+        calls['n'] += 1
+        return orig(self)
+
+    monkeypatch.setattr(_Spectro2D, 'to_long_dataframe', spy)
+    x = np.array([0., 1.])
+    y = np.array([1., 2.])
+    sp = _Spectro2D(x, y, np.array([[1., 2.], [3., 4.]]), 'time_s', 'order')
+    BatchRunner._write_image(('order_time', sp), tmp_path / 'i.png',
+                             params={'z_auto': True})
+    assert calls['n'] == 0  # image render must not trigger long-table construction

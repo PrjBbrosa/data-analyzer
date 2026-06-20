@@ -396,29 +396,38 @@ class BatchRunner:
         method = preset.method
         stem = _safe_stem(f"{fd.short_name}_{signal_name}_{method}")
 
+        spectro = None
+        fft_df = None
         if method == 'fft':
             sig, time, _ = self._apply_time_range(sig, time, preset.params)
-            df = self._compute_fft_dataframe(sig, fs, preset.params)
-            image_payload = ('fft', df)
+            fft_df = self._compute_fft_dataframe(sig, fs, preset.params)
+            image_payload = ('fft', fft_df)
         elif method == 'fft_time':
             sig, time, _ = self._apply_time_range(sig, time, preset.params)
-            df = self._compute_fft_time_dataframe(
+            spectro = self._compute_fft_time_spectro(
                 sig, time, fs, preset.params, channel_name=signal_name,
             )
-            image_payload = ('fft_time', df)
+            image_payload = ('fft_time', spectro)
         else:
             rpm = self._rpm_values(fd, preset)
             sig, time, rpm = self._apply_time_range(sig, time, preset.params, rpm=rpm)
             if method == 'order_time':
-                df = self._compute_order_time_dataframe(sig, rpm, time, fs, preset.params)
-                image_payload = ('order_time', df)
+                spectro = self._compute_order_time_spectro(sig, rpm, time, fs, preset.params)
+                image_payload = ('order_time', spectro)
             else:  # pragma: no cover - guarded by _expand_tasks
                 raise ValueError(f"unsupported method: {method}")
 
         data_path = None
         image_path = None
         if preset.outputs.export_data:
-            data_path = self._write_dataframe(df, output_dir / f"{stem}.{preset.outputs.data_format}")
+            # Build long-table dataframe only when the caller needs it (export_data=True).
+            # Image-only export skips this allocation entirely (lesson 2026-04-26).
+            if fft_df is not None:
+                export_df = fft_df
+            else:
+                export_df = spectro.to_long_dataframe()
+            data_path = self._write_dataframe(
+                export_df, output_dir / f"{stem}.{preset.outputs.data_format}")
         if preset.outputs.export_image:
             image_path = self._write_image(
                 image_payload,
@@ -516,17 +525,14 @@ class BatchRunner:
         return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
 
     @classmethod
-    def _compute_order_time_dataframe(cls, sig, rpm, time, fs, params):
-        """Compute time-order spectrogram via Computed Order Tracking.
+    def _compute_order_time_spectro(cls, sig, rpm, time, fs, params) -> "_Spectro2D":
+        """Compute time-order spectrogram via COT and return a ``_Spectro2D``.
 
-        As of 2026-04-28 the legacy frequency-domain path
-        (``OrderAnalyzer`` time-order result builder) is no longer invoked
-        here; COT handles all RPM regimes (sweep, coast-down, steady-state)
-        without smearing. ``samples_per_rev`` defaults to 256 when absent from
-        preset params; the COT pipeline requires ``time`` to be strictly
-        monotonically increasing.
+        ``matrix`` is x-major ``(len(times), len(orders))`` so that
+        ``to_long_dataframe()`` round-trips through ``_matrix_to_long_dataframe``
+        without any transpose. The transpose needed for ``imshow`` (rows=y) is
+        applied in ``_write_image``.
         """
-        import numpy as np
         from .signal.order_cot import COTOrderAnalyzer, COTParams
 
         # Defensive: COT requires strictly monotonic t. Even microsecond
@@ -546,24 +552,38 @@ class BatchRunner:
             fs=float(fs),
         )
         result = COTOrderAnalyzer.compute(sig, rpm, time_arr, cot_params)
-        return _matrix_to_long_dataframe(
-            result.times,
-            result.orders,
-            result.amplitude,
+        return _Spectro2D(
+            x=np.asarray(result.times, dtype=float),
+            y=np.asarray(result.orders, dtype=float),
+            matrix=np.asarray(result.amplitude, dtype=float),
             x_name='time_s',
             y_name='order',
         )
 
     @classmethod
-    def _compute_fft_time_dataframe(cls, sig, time, fs, params, *, channel_name=''):
-        """Compute one-sided FFT-vs-time spectrogram and emit long format.
+    def _compute_order_time_dataframe(cls, sig, rpm, time, fs, params):
+        """Thin wrapper — delegates to ``_compute_order_time_spectro``.
+
+        As of 2026-04-28 the legacy frequency-domain path
+        (``OrderAnalyzer`` time-order result builder) is no longer invoked
+        here; COT handles all RPM regimes (sweep, coast-down, steady-state)
+        without smearing. ``samples_per_rev`` defaults to 256 when absent from
+        preset params; the COT pipeline requires ``time`` to be strictly
+        monotonically increasing.
+        """
+        return cls._compute_order_time_spectro(sig, rpm, time, fs, params).to_long_dataframe()
+
+    @classmethod
+    def _compute_fft_time_spectro(cls, sig, time, fs, params, *,
+                                  channel_name='') -> "_Spectro2D":
+        """Compute one-sided FFT-vs-time spectrogram and return a ``_Spectro2D``.
 
         ``SpectrogramAnalyzer.compute`` returns ``amplitude`` with shape
-        ``(freq_bins, frames)``. ``_matrix_to_long_dataframe`` requires
-        ``matrix.shape == (len(x_values), len(y_values))`` (x-major), so we
-        transpose to ``(frames, freq_bins)`` before flattening. The exported
-        dataframe stays in linear amplitude — the dB conversion is a
-        display-only choice in ``_write_image``.
+        ``(freq_bins, frames)``. ``_Spectro2D.matrix`` is x-major
+        ``(len(times), len(frequencies))``, so we store ``amplitude.T``
+        (``(frames, freq_bins)``). The exported dataframe stays in linear
+        amplitude — the dB conversion is a display-only choice in
+        ``_write_image``.
         """
         from .signal.spectrogram import SpectrogramAnalyzer, SpectrogramParams
         time, fs = cls._uniform_time_axis_for_spectrogram(time, fs, len(sig))
@@ -579,13 +599,28 @@ class BatchRunner:
             signal=sig, time=time, params=sp,
             channel_name=channel_name or 'signal',
         )
-        return _matrix_to_long_dataframe(
-            result.times,           # x
-            result.frequencies,     # y
-            result.amplitude.T,     # (freq_bins, frames) -> (frames, freq_bins)
+        return _Spectro2D(
+            x=np.asarray(result.times, dtype=float),
+            y=np.asarray(result.frequencies, dtype=float),
+            matrix=np.asarray(result.amplitude.T, dtype=float),
             x_name='time_s',
             y_name='frequency_hz',
         )
+
+    @classmethod
+    def _compute_fft_time_dataframe(cls, sig, time, fs, params, *, channel_name=''):
+        """Thin wrapper — delegates to ``_compute_fft_time_spectro``.
+
+        ``SpectrogramAnalyzer.compute`` returns ``amplitude`` with shape
+        ``(freq_bins, frames)``. ``_matrix_to_long_dataframe`` requires
+        ``matrix.shape == (len(x_values), len(y_values))`` (x-major), so we
+        transpose to ``(frames, freq_bins)`` before flattening. The exported
+        dataframe stays in linear amplitude — the dB conversion is a
+        display-only choice in ``_write_image``.
+        """
+        return cls._compute_fft_time_spectro(
+            sig, time, fs, params, channel_name=channel_name,
+        ).to_long_dataframe()
 
     def _rpm_values(self, fd, preset):
         if preset.rpm_signal is not None:
@@ -620,7 +655,7 @@ class BatchRunner:
 
     @staticmethod
     def _write_image(payload, path, params=None):
-        kind, df = payload
+        kind, data = payload
         from matplotlib.figure import Figure
 
         params = params or {}
@@ -644,6 +679,7 @@ class BatchRunner:
         try:
             ax = fig.subplots()
             if kind == 'fft':
+                df = data
                 ax.plot(df['frequency_hz'], df['amplitude'], lw=1.0)
                 ax.set_xlabel('Frequency (Hz)')
                 ax.set_ylabel('Amplitude')
@@ -652,10 +688,27 @@ class BatchRunner:
                 if not y_auto and y_max > y_min:
                     ax.set_ylim(y_min, y_max)
             else:
-                pivot = df.pivot(
-                    index=df.columns[1], columns=df.columns[0], values='amplitude'
-                )
-                matrix = pivot.to_numpy()
+                # Accept either a _Spectro2D (fast path, no pivot needed) or a
+                # legacy long-format DataFrame (backward-compat for existing tests
+                # that call _write_image directly with a DataFrame payload).
+                if isinstance(data, _Spectro2D):
+                    spectro = data
+                    matrix = np.asarray(spectro.matrix, dtype=float).T  # (rows=y, cols=x)
+                    x_extent = (float(spectro.x.min()), float(spectro.x.max()))
+                    y_extent = (float(spectro.y.min()), float(spectro.y.max()))
+                    x_label = spectro.x_name
+                    y_label = spectro.y_name
+                else:
+                    # Legacy DataFrame path (pivot round-trip; kept for compat).
+                    df = data
+                    pivot = df.pivot(
+                        index=df.columns[1], columns=df.columns[0], values='amplitude'
+                    )
+                    matrix = pivot.to_numpy()
+                    x_extent = (float(pivot.columns.min()), float(pivot.columns.max()))
+                    y_extent = (float(pivot.index.min()), float(pivot.index.max()))
+                    x_label = df.columns[0]
+                    y_label = df.columns[1]
                 if render_db:
                     # Display-only dB choice; exported data stays linear.
                     eps = np.finfo(float).tiny
@@ -673,19 +726,14 @@ class BatchRunner:
                     matrix,
                     aspect='auto',
                     origin='lower',
-                    extent=[
-                        float(pivot.columns.min()),
-                        float(pivot.columns.max()),
-                        float(pivot.index.min()),
-                        float(pivot.index.max()),
-                    ],
+                    extent=[x_extent[0], x_extent[1], y_extent[0], y_extent[1]],
                     interpolation='bilinear',
                     cmap='turbo',
                     vmin=vmin,
                     vmax=vmax,
                 )
-                ax.set_xlabel(df.columns[0])
-                ax.set_ylabel(df.columns[1])
+                ax.set_xlabel(x_label)
+                ax.set_ylabel(y_label)
                 if not x_auto and x_max > x_min:
                     ax.set_xlim(x_min, x_max)
                 if not y_auto and y_max > y_min:
@@ -710,6 +758,21 @@ def _guess_rpm_channel(fd):
 def _safe_stem(text):
     cleaned = re.sub(r'[^A-Za-z0-9._-]+', '_', text).strip('._')
     return cleaned or 'batch_result'
+
+
+@dataclass(frozen=True)
+class _Spectro2D:
+    """2-D analysis result kept matrix-first to avoid a long→wide pivot
+    round-trip on export. ``matrix`` is x-major: shape (len(x), len(y))."""
+    x: np.ndarray
+    y: np.ndarray
+    matrix: np.ndarray
+    x_name: str
+    y_name: str
+
+    def to_long_dataframe(self) -> pd.DataFrame:
+        return _matrix_to_long_dataframe(
+            self.x, self.y, self.matrix, self.x_name, self.y_name)
 
 
 def _matrix_to_long_dataframe(x_values, y_values, matrix, x_name, y_name):
