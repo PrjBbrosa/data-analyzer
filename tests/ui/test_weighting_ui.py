@@ -288,6 +288,40 @@ def test_analysis_cache_keys_include_weighting_for_view_switch_paths(
     assert order_none != order_a
 
 
+def test_fft_time_colorbar_drag_preserves_weighting(qapp, qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    ctx = win.inspector.fft_time_ctx
+    ctx.set_weighting_default("A")
+
+    win._on_analysis_levels_dragged("fft_time", 0, -39.03, -9.03)
+    params = ctx.get_params()
+
+    assert params["weighting"] == "A"
+    assert params["z_auto"] is False
+    assert params["z_floor"] == pytest.approx(-39.03)
+    assert params["z_ceiling"] == pytest.approx(-9.03)
+
+
+def test_order_colorbar_drag_preserves_weighting(qapp, qtbot):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    ctx = win.inspector.order_ctx
+    ctx.set_weighting_default("A")
+
+    win._on_analysis_levels_dragged("order", 0, -39.03, -9.03)
+    params = ctx.current_params()
+
+    assert params["weighting"] == "A"
+    assert params["z_auto"] is False
+    assert params["z_floor"] == pytest.approx(-39.03)
+    assert params["z_ceiling"] == pytest.approx(-9.03)
+
+
 def test_project_io_dialog_filters_include_audio_video_extensions():
     from mf4_analyzer.ui.main_window._project_io_mixin import (
         AUDIO_VIDEO_FILE_FILTER,
