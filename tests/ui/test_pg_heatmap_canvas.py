@@ -2867,3 +2867,26 @@ def test_x_slice_reranges_to_freq_after_y_slice(qapp):
     )
     c.hide()
     c.deleteLater()
+
+
+# ---- Task 6: boundary tests (Home / View All does not emit levels_changed) ----
+
+def test_heatmap_view_all_does_not_emit_levels_changed(qapp):
+    """reset_view_to_data_extents must not emit levels_changed."""
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import PgHeatmapCanvas
+
+    c = PgHeatmapCanvas()
+    seen = []
+    c.levels_changed.connect(lambda *_args: seen.append(True))
+    c.plot_or_update_heatmap(
+        np.arange(9, dtype=float).reshape(3, 3),
+        x_extent=(0.0, 3.0),
+        y_extent=(0.0, 3.0),
+        z_auto=False,
+        z_floor=0.0,
+        z_ceiling=8.0,
+    )
+
+    c.reset_view_to_data_extents()
+
+    assert seen == []

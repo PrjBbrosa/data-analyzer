@@ -736,3 +736,18 @@ def test_analysis_compare_buttons_are_compact_and_right_aligned(
         assert 0 <= right_gap <= 12
     finally:
         qapp.setStyleSheet(original_qss)
+
+
+# ---- Task 6: linked zoom boundary test ----
+
+def test_heatmap_set_linked_does_not_emit_levels_changed(page):
+    """set_linked(True/False) must not emit levels_changed on any pane canvas."""
+    page.enter_split()
+    seen = []
+    for idx in range(page.pane_count()):
+        page.pane_canvas(idx).levels_changed.connect(lambda *_args: seen.append(True))
+
+    page.set_linked(True)
+    page.set_linked(False)
+
+    assert seen == []
