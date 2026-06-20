@@ -273,6 +273,12 @@ class DataLoader:
         data = pd.DataFrame({name: col for name, col in zip(names, cols)})
         units = {name: '' for name in names}
         fs = float(fs or 0.0)
+        if fs <= 0.0:
+            # No usable sample rate from the container/codec/frames. Returning
+            # fs=0 would make FileData build a time axis as arange(n)/0 -> inf
+            # and silently corrupt every downstream analysis. Fail loudly so
+            # _load_one surfaces it instead.
+            raise ValueError("无法确定音频采样率（文件未提供有效的采样率）")
         source_metadata = {
             'source_kind': 'audio',
             'container': container_name,

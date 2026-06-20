@@ -56,3 +56,55 @@ def test_load_audio_video_no_audio_stream_raises(monkeypatch):
 
     with pytest.raises(ValueError, match="文件不含音轨"):
         DataLoader.load_audio_video("silent.mp4")
+
+
+def test_load_audio_video_invalid_sample_rate_raises(monkeypatch):
+    """An audio stream with no resolvable sample rate must raise, not return
+    fs=0 (which would make FileData build an inf time axis via arange(n)/0)."""
+    av = pytest.importorskip("av")
+
+    class _Frame:
+        sample_rate = None
+
+        def to_ndarray(self):
+            return np.zeros((1, 64), dtype=np.float32)
+
+    class _Resampler:
+        def __init__(self, **kwargs):
+            pass
+
+        def resample(self, frame):
+            return [_Frame()] if frame is not None else []
+
+    class _CodecCtx:
+        name = "pcm_s16le"
+        rate = None
+        layout = None
+
+    class _Stream:
+        rate = None
+        channels = 1
+        codec_context = _CodecCtx()
+        layout = None
+
+    class _Streams:
+        audio = [_Stream()]
+
+    class _Format:
+        name = "wav"
+
+    class _Container:
+        format = _Format()
+        streams = _Streams()
+
+        def decode(self, _stream):
+            return [_Frame()]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(av, "open", lambda _path: _Container())
+    monkeypatch.setattr(av, "AudioResampler", _Resampler)
+
+    with pytest.raises(ValueError, match="采样率"):
+        DataLoader.load_audio_video("no_rate.wav")
