@@ -27,6 +27,7 @@ from ._helpers import (
     _make_group_header,
     _make_params_card,
     _no_buttons,
+    make_db_reference_spinbox,
     recommend_preset_for_unit,
 )
 from .collapsible import _CollapsibleParamSection
@@ -203,6 +204,11 @@ class FFTContextual(QWidget):
         fl.addRow(
             "频率加权:",
             _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
+        self.spin_db_ref = make_db_reference_spinbox()
+        fl.addRow(
+            "dB 参考:",
+            _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
         g.setTitle("")
         # The section header already shows the title; drop the title band and
@@ -426,6 +432,7 @@ class FFTContextual(QWidget):
             avg_overlap=self.spin_avg_overlap.value(),
             amp_y=self.combo_amp_y.currentText(),
             weighting=self.combo_weighting.currentText(),
+            db_reference=self.spin_db_ref.value(),
             autoscale=self.chk_x_auto.isChecked(),
             x_auto=self.chk_x_auto.isChecked(),
             x_min=float(self.spin_x_min.value()),
@@ -483,6 +490,11 @@ class FFTContextual(QWidget):
             i = self.combo_amp_y.findText(str(d['amp_y']))
             if i >= 0:
                 self.combo_amp_y.setCurrentIndex(i)
+        if 'db_reference' in d:
+            try:
+                self.spin_db_ref.setValue(float(d['db_reference']))
+            except (TypeError, ValueError):
+                pass
         self._apply_weighting_value(d.get('weighting', 'None'))
 
     def _on_sig_index_changed(self):
@@ -546,6 +558,7 @@ class FFTContextual(QWidget):
             nfft_effective=None if auto else nfft,
             overlap=self.spin_overlap.value() / 100.0,
             weighting=self.combo_weighting.currentText(),
+            db_reference=self.spin_db_ref.value(),
             autoscale=self.chk_x_auto.isChecked(),
             x_auto=bool(self.chk_x_auto.isChecked()),
             x_min=float(self.spin_x_min.value()),
@@ -623,5 +636,10 @@ class FFTContextual(QWidget):
             i = self.combo_amp_y.findText(str(d['amp_y']))
             if i >= 0:
                 self.combo_amp_y.setCurrentIndex(i)
+        if 'db_reference' in d:
+            try:
+                self.spin_db_ref.setValue(float(d['db_reference']))
+            except (TypeError, ValueError):
+                pass
         if 'weighting' in d:
             self._apply_weighting_value(d['weighting'])

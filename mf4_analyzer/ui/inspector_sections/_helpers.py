@@ -121,6 +121,21 @@ def recommend_preset_for_unit(unit):
     return 'vibration'
 
 
+def make_db_reference_spinbox():
+    """Create a consistently-configured dB reference spinbox.
+
+    Range 1e-9..1e9, 6 decimals, default 1.0.  The tooltip states that this
+    is the linear amplitude that maps to 0 dB — it shifts the dB scale only,
+    not the waveform.
+    """
+    spin = _no_buttons(CompactDoubleSpinBox())
+    spin.setRange(1e-9, 1e9)
+    spin.setDecimals(6)
+    spin.setValue(1.0)
+    spin.setToolTip('0 dB 对应的线性幅值，仅平移 dB 刻度、不改波形。')
+    return spin
+
+
 def _no_buttons(spin):
     """Strip the up/down stepper from a Q(Double)SpinBox.
 

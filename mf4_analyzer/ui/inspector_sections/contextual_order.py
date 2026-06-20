@@ -29,6 +29,7 @@ from ._helpers import (
     _make_group_header,
     _make_params_card,
     _no_buttons,
+    make_db_reference_spinbox,
     recommend_preset_for_unit,
 )
 from .collapsible import _CollapsibleParamSection
@@ -141,6 +142,11 @@ class OrderContextual(QWidget):
         fl.addRow(
             "频率加权:",
             _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
+        self.spin_db_ref = make_db_reference_spinbox()
+        fl.addRow(
+            "dB 参考:",
+            _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
 
         # COT is now the only tracking algorithm (Wave 2 of the
@@ -410,6 +416,7 @@ class OrderContextual(QWidget):
                 else 'Amplitude'
             ),
             weighting=self.combo_weighting.currentText(),
+            db_reference=self.spin_db_ref.value(),
             samples_per_rev=int(self.spin_samples_per_rev.value()),
             x_auto=bool(self.chk_x_auto.isChecked()),
             x_min=float(self.spin_x_min.value()),
@@ -453,6 +460,11 @@ class OrderContextual(QWidget):
         if 'samples_per_rev' in d:
             try:
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
+            except (TypeError, ValueError):
+                pass
+        if 'db_reference' in d:
+            try:
+                self.spin_db_ref.setValue(float(d['db_reference']))
             except (TypeError, ValueError):
                 pass
         self._apply_weighting_value(d.get('weighting', 'None'))
@@ -605,6 +617,8 @@ class OrderContextual(QWidget):
         # COT is the only tracking algorithm. ``samples_per_rev`` stays
         # in the param payload because COT consumes it.
         p['samples_per_rev'] = int(self.spin_samples_per_rev.value())
+        # Display-only parameter: dB reference value.
+        p['db_reference'] = self.spin_db_ref.value()
         # Axis controls (Wave 3): explicit X/Y/Z range + auto flags.
         p['x_auto'] = bool(self.chk_x_auto.isChecked())
         p['x_min'] = float(self.spin_x_min.value())
@@ -699,6 +713,11 @@ class OrderContextual(QWidget):
         if 'samples_per_rev' in d:
             try:
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
+            except (TypeError, ValueError):
+                pass
+        if 'db_reference' in d:
+            try:
+                self.spin_db_ref.setValue(float(d['db_reference']))
             except (TypeError, ValueError):
                 pass
         if 'weighting' in d:

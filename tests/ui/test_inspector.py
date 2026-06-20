@@ -4583,3 +4583,58 @@ def test_order_param_tooltips(qtbot):
         )
     # spin_samples_per_rev must still have its original tooltip
     assert ctx.spin_samples_per_rev.toolTip(), "spin_samples_per_rev tooltip cleared"
+
+
+# ---- dB reference placement tests (Task 3) ----
+
+def _form_label_sequences(widget):
+    from PyQt5.QtWidgets import QFormLayout, QLabel
+
+    sequences = []
+    for form in widget.findChildren(QFormLayout):
+        labels = []
+        for row in range(form.rowCount()):
+            item = form.itemAt(row, QFormLayout.LabelRole)
+            if item is None:
+                continue
+            label_widget = item.widget()
+            if isinstance(label_widget, QLabel):
+                labels.append(label_widget.text())
+        if labels:
+            sequences.append(labels)
+    return sequences
+
+
+def _assert_db_reference_below_weighting(widget):
+    for labels in _form_label_sequences(widget):
+        if "频率加权:" in labels:
+            idx = labels.index("频率加权:")
+            assert idx + 1 < len(labels), labels
+            assert labels[idx + 1] == "dB 参考:", labels
+            return
+    raise AssertionError("no form row labelled 频率加权:")
+
+
+def test_db_reference_sits_below_weighting_in_all_analysis_contexts(qtbot):
+    from mf4_analyzer.ui.inspector_sections import (
+        FFTContextual,
+        FFTTimeContextual,
+        OrderContextual,
+    )
+
+    for cls in (FFTContextual, FFTTimeContextual, OrderContextual):
+        ctx = cls()
+        qtbot.addWidget(ctx)
+        _assert_db_reference_below_weighting(ctx)
+        assert hasattr(ctx, "spin_db_ref")
+        assert "dB" in ctx.spin_db_ref.toolTip()
+
+
+def test_fft_time_no_standalone_amplitude_group(qtbot):
+    from PyQt5.QtWidgets import QGroupBox
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    titles = [g.title() for g in ctx.findChildren(QGroupBox)]
+    assert "幅值" not in titles

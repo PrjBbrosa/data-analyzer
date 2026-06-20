@@ -30,6 +30,7 @@ from ._helpers import (
     _make_group_header,
     _make_params_card,
     _no_buttons,
+    make_db_reference_spinbox,
     recommend_preset_for_unit,
 )
 from .collapsible import _CollapsibleParamSection
@@ -179,6 +180,11 @@ class FFTTimeContextual(QWidget):
             "频率加权:",
             _fit_field(self.combo_weighting, max_width=_SHORT_FIELD_MAX_WIDTH),
         )
+        self.spin_db_ref = make_db_reference_spinbox()
+        fl.addRow(
+            "dB 参考:",
+            _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
         g.setTitle("")
         # The section header already shows the title; drop the title band and
         # let the body carry a hairline top divider (see style.qss
@@ -191,21 +197,6 @@ class FFTTimeContextual(QWidget):
         )
         self._tf_section.set_body(g)
         params_lay.addWidget(self._tf_section)
-
-        # ---- 幅值 (Wave 4: combo_amp_mode dropped — amplitude unit now
-        # lives on the Z row of 坐标轴设置 as combo_amp_unit. spin_db_ref
-        # stays because main_window's SpectrogramParams still consumes
-        # ``db_reference``). ----
-        g = QGroupBox("幅值")
-        fl = QFormLayout(g)
-        _configure_form(fl)
-        self.spin_db_ref = _no_buttons(CompactDoubleSpinBox())
-        self.spin_db_ref.setRange(1e-9, 1e9)
-        self.spin_db_ref.setDecimals(6)
-        self.spin_db_ref.setValue(1.0)
-        self.spin_db_ref.setToolTip('0 dB 对应的线性幅值，仅平移 dB 刻度、不改波形。')
-        fl.addRow("dB 参考:", _fit_field(self.spin_db_ref, max_width=_SHORT_FIELD_MAX_WIDTH))
-        params_lay.addWidget(g)
 
         # ---- 坐标轴设置 (2026-04-29 B polish) ----
         # The rendered FFT-vs-Time spectrogram is X = time, Y = frequency,
