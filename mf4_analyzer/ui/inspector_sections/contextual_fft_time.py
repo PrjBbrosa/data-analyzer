@@ -582,7 +582,8 @@ class FFTTimeContextual(QWidget):
                 self.spin_db_ref.setValue(float(d['db_reference']))
             except (TypeError, ValueError):
                 pass
-        self._apply_weighting_value(d.get('weighting', 'None'))
+        if 'weighting' in d:
+            self._apply_weighting_value(d['weighting'])
         # cmap 固定 turbo：无控件可应用，预设/视图状态里的 cmap 键被忽略。
 
         # amplitude_mode token → combo_amp_unit. Reverse-map on a

@@ -96,7 +96,7 @@ def test_contextual_weighting_roundtrip_and_legacy_defaults_none(qapp, factory):
 
     ctx.set_weighting_default("A")
     ctx.apply_params({})
-    assert _weighting(ctx) == "None"
+    assert _weighting(ctx) == "A"
 
 
 @pytest.mark.parametrize(
@@ -136,6 +136,42 @@ def test_set_weighting_default_is_noop_while_applying_preset(qapp, factory):
         ctx._applying_preset = False
 
     assert _weighting(ctx) == "None"
+
+
+@pytest.mark.parametrize(
+    "factory,partial",
+    [
+        pytest.param(
+            lambda: __import__(
+                "mf4_analyzer.ui.inspector_sections",
+                fromlist=["FFTContextual"],
+            ).FFTContextual(),
+            {"nfft": 4096},
+            id="fft",
+        ),
+        pytest.param(
+            lambda: __import__(
+                "mf4_analyzer.ui.inspector_sections",
+                fromlist=["FFTTimeContextual"],
+            ).FFTTimeContextual(),
+            {"z_auto": False, "z_floor": -39.03, "z_ceiling": -9.03},
+            id="fft_time",
+        ),
+        pytest.param(
+            lambda: __import__(
+                "mf4_analyzer.ui.inspector_sections",
+                fromlist=["OrderContextual"],
+            ).OrderContextual(),
+            {"z_auto": False, "z_floor": -39.03, "z_ceiling": -9.03},
+            id="order",
+        ),
+    ],
+)
+def test_partial_apply_params_preserves_weighting(qapp, factory, partial):
+    ctx = factory()
+    ctx.set_weighting_default("A")
+    ctx.apply_params(partial)
+    assert _weighting(ctx) == "A"
 
 
 def test_fft_cache_params_include_weighting():

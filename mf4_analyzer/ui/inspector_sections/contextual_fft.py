@@ -623,4 +623,5 @@ class FFTContextual(QWidget):
             i = self.combo_amp_y.findText(str(d['amp_y']))
             if i >= 0:
                 self.combo_amp_y.setCurrentIndex(i)
-        self._apply_weighting_value(d.get('weighting', 'None'))
+        if 'weighting' in d:
+            self._apply_weighting_value(d['weighting'])

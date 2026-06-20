@@ -701,7 +701,8 @@ class OrderContextual(QWidget):
                 self.spin_samples_per_rev.setValue(int(d['samples_per_rev']))
             except (TypeError, ValueError):
                 pass
-        self._apply_weighting_value(d.get('weighting', 'None'))
+        if 'weighting' in d:
+            self._apply_weighting_value(d['weighting'])
 
         self._sync_axis_enabled()
 
