@@ -399,6 +399,11 @@ class MainWindow(
         self.inspector.fft_ctx.spin_db_ref.valueChanged.connect(
             lambda _: _QTimer.singleShot(0, self._enter_fft_mode)
         )
+        # Order dB reference is display-only: changing it re-renders from cache
+        # (do_order_time hits cache, calls _render_order_on, no worker dispatch).
+        self.inspector.order_ctx.spin_db_ref.valueChanged.connect(
+            lambda _: _QTimer.singleShot(0, self.do_order_time)
+        )
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)

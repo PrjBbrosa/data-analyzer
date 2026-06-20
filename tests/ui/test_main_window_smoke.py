@@ -3067,3 +3067,78 @@ def test_fft_cache_key_excludes_db_reference_display_only():
     k1 = FFTMixin._fft_compute_cache_params(dict(base, db_reference=1.0))
     k2 = FFTMixin._fft_compute_cache_params(dict(base, db_reference=2.0))
     assert k1 == k2
+
+
+# ---- Task 5: Order dB reference render tests ----
+
+def test_order_db_display_uses_db_reference(monkeypatch, qapp):
+    import numpy as np
+    from types import SimpleNamespace
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    captured = {}
+
+    class Canvas:
+        _amplitude_mode = None
+
+        def plot_or_update_heatmap(self, **kwargs):
+            captured.update(kwargs)
+
+        def set_tick_density(self, *_args):
+            pass
+
+    result = SimpleNamespace(
+        amplitude=np.array([[1.0, 10.0]], dtype=float),  # frames x orders
+        times=np.array([0.5]),
+        orders=np.array([1.0, 2.0]),
+        params=SimpleNamespace(order_res=0.1),
+        metadata={"coverage_start": 0.0, "coverage_end": 1.0},
+    )
+    monkeypatch.setattr(
+        win.inspector.order_ctx,
+        "current_params",
+        lambda: {
+            "amplitude_mode": "Amplitude dB",
+            "db_reference": 1.0,
+            "z_auto": False,
+            "z_floor": -40.0,
+            "z_ceiling": 20.0,
+            "x_auto": True,
+            "y_auto": True,
+        },
+    )
+    monkeypatch.setattr(win.inspector.top, "tick_density", lambda: (10, 10))
+
+    win._render_order_on(Canvas(), result)
+
+    # Matrix should be pre-converted to dB: 20*log10([1,10]/1) = [0, 20]
+    # The matrix is result.amplitude.T shape=(orders, frames)=(2, 1)
+    np.testing.assert_allclose(
+        captured["matrix"],
+        np.array([[0.0], [20.0]]),
+        atol=1e-6,
+    )
+    # Canvas receives amplitude_mode='amplitude' (canvas must NOT re-normalize)
+    assert captured["amplitude_mode"] == "amplitude"
+    # cbar_label must include dB reference
+    assert "dB re 1" in captured["cbar_label"]
+
+
+def test_order_cache_key_excludes_db_reference_display_only():
+    """db_reference is display-only and must NOT affect the Order compute cache key."""
+    from mf4_analyzer.ui.main_window._order_mixin import OrderMixin
+
+    base = {
+        "nfft": 1024,
+        "max_order": 20,
+        "order_res": 0.1,
+        "time_res": 0.05,
+        "samples_per_rev": 256,
+        "rpm_factor": 1.0,
+        "fs": 1000.0,
+        "weighting": "A",
+    }
+    k1 = OrderMixin._order_compute_cache_params(dict(base, db_reference=1.0), ("f", "rpm"), None)
+    k2 = OrderMixin._order_compute_cache_params(dict(base, db_reference=2.0), ("f", "rpm"), None)
+    assert k1 == k2

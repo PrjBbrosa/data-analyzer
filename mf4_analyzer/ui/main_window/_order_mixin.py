@@ -399,12 +399,23 @@ class OrderMixin:
             if order_params.get('amplitude_mode', 'Amplitude dB') == 'Amplitude dB'
             else 'amplitude'
         )
+        # Pre-convert dB outside the canvas so the canvas does not re-normalise
+        # to its own peak (which would make the colorbar unpredictable and break
+        # z_floor/z_ceiling color mapping). In Linear mode pass the raw matrix.
+        matrix = result.amplitude.T
+        plot_amp_mode = amp_mode_token
+        cbar_label = 'Amplitude'
+        if amp_mode_token == 'amplitude_db':
+            db_ref = max(float(order_params.get('db_reference', 1.0)), 1e-12)
+            matrix = 20.0 * np.log10(np.clip(matrix, 1e-12, None) / db_ref)
+            plot_amp_mode = 'amplitude'
+            cbar_label = f'Amplitude (dB re {db_ref:g})'
         # Pin the amplitude mode so the slice's amplitude-axis label reads
         # 'Amplitude (dB)' vs 'Amplitude' correctly (Order renders through
         # plot_or_update_heatmap, which does not set it like plot_result does).
         canvas._amplitude_mode = amp_mode_token
         canvas.plot_or_update_heatmap(
-            matrix=result.amplitude.T,
+            matrix=matrix,
             x_extent=time_axis_display_extent(
                 result.times,
                 params=getattr(result, 'params', None),
@@ -417,8 +428,8 @@ class OrderMixin:
             title=title,
             cmap='turbo',
             interp='bilinear',
-            cbar_label='Amplitude',
-            amplitude_mode=amp_mode_token,
+            cbar_label=cbar_label,
+            amplitude_mode=plot_amp_mode,
             z_auto=bool(order_params.get('z_auto', False)),
             z_floor=float(order_params.get('z_floor', -30.0)),
             z_ceiling=float(order_params.get('z_ceiling', 0.0)),
