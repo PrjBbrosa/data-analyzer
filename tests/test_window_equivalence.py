@@ -1,34 +1,25 @@
-"""Window equivalence tests: verify get_analysis_window matches scipy reference.
+"""Window equivalence tests: verify get_analysis_window matches frozen golden reference.
 
-Phase 1 (this file): scipy still installed — tests compare against scipy directly.
-Phase 2: scipy removed from .venv — tests compare against frozen golden npz.
+Golden reference (tests/data/window_golden.npz) was generated from scipy
+while scipy was still installed. Tests no longer import scipy.
 """
+import os
+
 import numpy as np
 import pytest
-from scipy.signal import get_window as _scipy_get_window
 
 from mf4_analyzer.signal.fft import get_analysis_window
 
+_GOLDEN = np.load(os.path.join(os.path.dirname(__file__), "data", "window_golden.npz"))
 _CASES = ['hanning', 'hann', 'hamming', 'blackman', 'bartlett', 'kaiser', 'flattop']
 _NS = [2, 3, 4, 8, 16, 31, 64, 256, 1024]
 
 
-def _scipy_ref(name, n):
-    key = 'hanning' if name == 'hann' else name
-    if key == 'kaiser':
-        spec = ('kaiser', 14)
-    elif key == 'hanning':
-        spec = 'hann'
-    else:
-        spec = key
-    return _scipy_get_window(spec, n, fftbins=False).astype(float)
-
-
 @pytest.mark.parametrize("name", _CASES)
 @pytest.mark.parametrize("n", _NS)
-def test_window_matches_scipy(name, n):
+def test_window_matches_golden(name, n):
     got = get_analysis_window(name, n)
-    ref = _scipy_ref(name, n)
+    ref = _GOLDEN[f"{name}_{n}"]
     assert got.shape == ref.shape
     np.testing.assert_allclose(got, ref, atol=1e-12, rtol=0)
 
