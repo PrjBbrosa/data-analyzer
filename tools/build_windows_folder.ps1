@@ -158,6 +158,15 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataVendorPyxcp,
     "--runtime-hook", $RuntimeHookPyxcp,
     "--exclude-module", "pyxcp",
+    # matplotlib + scipy were dropped from the app (matplotlib->pyqtgraph,
+    # scipy->numpy windows). --collect-submodules pyqtgraph below pulls in
+    # pyqtgraph's Matplotlib* submodules (which import matplotlib) and its
+    # optional scipy use, so without these excludes PyInstaller follows those
+    # imports and re-bundles matplotlib (+ PIL/contourpy/kiwisolver/cycler/
+    # fontTools) and scipy -- dead weight the app no longer calls. Guarded by
+    # tests/test_windows_build_script.py.
+    "--exclude-module", "matplotlib",
+    "--exclude-module", "scipy",
     "--collect-submodules", "mf4_analyzer.acquisition_ui.widgets",
     "--collect-submodules", "pyqtgraph",
     "--collect-all", "qtawesome",

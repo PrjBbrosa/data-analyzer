@@ -55,6 +55,28 @@ def test_windows_folder_build_script_vendors_pyxcp_without_analysis_import():
     assert "pyxcp" in text
 
 
+def test_windows_folder_build_script_excludes_matplotlib_and_scipy():
+    """The app dropped matplotlib + scipy; the package must not re-bundle them.
+
+    ``--collect-submodules pyqtgraph`` pulls in pyqtgraph's MatplotlibWidget /
+    MatplotlibExporter submodules, which ``import matplotlib`` — so without an
+    explicit exclude PyInstaller follows that import and bundles matplotlib
+    (plus its PIL/contourpy/kiwisolver/cycler/fontTools deps), bloating the
+    package with code the app no longer uses. The exclude list mirrors the
+    matplotlib→pyqtgraph migration's local .spec.
+    """
+    script = ROOT / "tools" / "build_windows_folder.ps1"
+
+    assert script.exists()
+    text = script.read_text(encoding="utf-8")
+
+    for module in ("matplotlib", "scipy"):
+        assert f'"--exclude-module", "{module}"' in text, (
+            f"build script must --exclude-module {module} so PyInstaller does "
+            f"not re-bundle the removed dependency via collect-submodules pyqtgraph"
+        )
+
+
 def test_windows_folder_build_script_can_make_console_diagnostic_build():
     script = ROOT / "tools" / "build_windows_folder.ps1"
 
