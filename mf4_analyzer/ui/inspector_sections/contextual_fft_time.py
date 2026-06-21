@@ -1,4 +1,6 @@
 """FFTTimeContextual widget."""
+import math
+
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -95,6 +97,12 @@ class FFTTimeContextual(QWidget):
         self._applying_preset = False
         self._source_weighting_default = 'None'
         self._t_win_s = 1.5
+        # Auto-NFFT preview data hook: a callable returning the available sample
+        # count for the current FFT-vs-Time signal (or None when no data is
+        # loaded). Set by the main window so the displayed 自动(N) mirrors the
+        # data-aware ``resolve_nfft`` the spectrogram compute path uses, instead
+        # of the data-blind ``ceil_pow2(Fs * t_win)`` estimate.
+        self._auto_nfft_provider = None
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: transparent host for two
         # full-width cards (sig_card + params_card); spacing is the gutter.
@@ -440,10 +448,35 @@ class FFTTimeContextual(QWidget):
         self.spin_fs.blockSignals(False)
         self._refresh_tf_summary()
 
-    def _nfft_preview(self):
-        from ...signal import ceil_pow2
+    def set_auto_nfft_provider(self, provider):
+        """Register the available-samples hook for the auto-NFFT preview.
 
-        nfft = ceil_pow2(float(self.spin_fs.value()) * float(self._t_win_s))
+        ``provider`` is a zero-arg callable returning the sample count of the
+        current FFT-vs-Time signal (int) or ``None`` when no usable data is
+        loaded. Passing ``None`` clears the hook (reverts to the naive preview).
+        Refreshes the collapsed summary so the displayed 自动(N) updates at once.
+        """
+        self._auto_nfft_provider = provider
+        self._refresh_tf_summary()
+
+    def _nfft_preview(self):
+        from ...signal import ceil_pow2, resolve_nfft
+
+        fs = float(self.spin_fs.value())
+        t_win = float(self._t_win_s)
+        n_samples = None
+        if self._auto_nfft_provider is not None:
+            try:
+                n_samples = self._auto_nfft_provider()
+            except Exception:
+                n_samples = None
+        if n_samples is not None and int(n_samples) > 1:
+            # Data-aware: mirror _fft_time_mixin._resolve_fft_time_effective_params
+            # (same fs / t_win / overlap fraction → same shared resolver).
+            overlap = float(self.spin_overlap.value()) / 100.0
+            return int(resolve_nfft(fs, int(n_samples), t_win, overlap))
+        # No data loaded → naive estimate (data-blind, legacy fallback).
+        nfft = ceil_pow2(fs * t_win)
         return int(min(max(nfft, 64), 8192))
 
     def get_params(self):

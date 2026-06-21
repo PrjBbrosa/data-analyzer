@@ -74,24 +74,29 @@ class OrderMixin:
         return rpm
 
     @staticmethod
-    def _order_angle_sample_count(samples_per_rev, rpm, t):
-        samples_per_rev = float(samples_per_rev)
+    def _order_revolutions(rpm, t):
+        """Total revolutions over ``t`` = ∫|rpm|/60 dt (trapezoid).
+
+        Returns ``0.0`` for degenerate input (too few / non-finite samples or
+        non-increasing time). Single source of truth shared by the COT angle
+        sample count and the inspector auto-NFFT preview provider.
+        """
         rpm_arr = np.asarray(rpm, dtype=float).reshape(-1)
         t_arr = np.asarray(t, dtype=float).reshape(-1)
         n = min(rpm_arr.size, t_arr.size)
         if n < 2:
-            return 1
+            return 0.0
         rpm_arr = rpm_arr[:n]
         t_arr = t_arr[:n]
         finite = np.isfinite(rpm_arr) & np.isfinite(t_arr)
         rpm_arr = rpm_arr[finite]
         t_arr = t_arr[finite]
         if rpm_arr.size < 2:
-            return 1
+            return 0.0
         dt = np.diff(t_arr)
         valid_dt = np.isfinite(dt) & (dt > 0.0)
         if not np.any(valid_dt):
-            return 1
+            return 0.0
         abs_rpm = np.abs(rpm_arr)
         revs = np.sum(
             0.5
@@ -100,8 +105,44 @@ class OrderMixin:
             * dt[valid_dt]
         )
         if not np.isfinite(revs) or revs <= 0.0:
+            return 0.0
+        return float(revs)
+
+    @staticmethod
+    def _order_angle_sample_count(samples_per_rev, rpm, t):
+        revs = OrderMixin._order_revolutions(rpm, t)
+        if revs <= 0.0:
             return 1
-        return max(1, int(round(samples_per_rev * float(revs))))
+        return max(1, int(round(float(samples_per_rev) * revs)))
+
+    def _order_preview_revs(self):
+        """Revolution count for the inspector auto-NFFT preview, or ``None``.
+
+        Pull-based hook registered via ``OrderContextual.set_auto_nfft_provider``:
+        fetches the currently selected order signal + RPM (gated to the inspector
+        time range, mirroring ``_order_effective_params_for_source``) and returns
+        total revolutions, so the displayed 自动(N) tracks ``resolve_order_nfft``
+        instead of the data-blind ``samples_per_rev / order_res`` upper bound.
+        Returns ``None`` when no usable selection/data exists (the preview then
+        falls back to the naive estimate). Never raises — it feeds a paint path.
+        """
+        try:
+            t, sig = self._order_sig_for(self.inspector.order_ctx.current_signal())
+            if sig is None or len(sig) < 2:
+                return None
+            rpm = self._order_rpm_for(
+                self.inspector.order_ctx.current_rpm(), len(sig)
+            )
+            if rpm is None:
+                return None
+            fs = float(self.inspector.order_ctx.fs())
+            t_arr = np.asarray(t, dtype=float) if t is not None else np.array([])
+            if len(t_arr) < 2 or np.any(np.diff(t_arr) <= 0):
+                t_arr = np.arange(len(sig), dtype=float) / fs
+            revs = self._order_revolutions(rpm, t_arr)
+            return revs if revs > 0.0 else None
+        except Exception:
+            return None
 
     @staticmethod
     def _resolve_order_effective_params(p, rpm, t):

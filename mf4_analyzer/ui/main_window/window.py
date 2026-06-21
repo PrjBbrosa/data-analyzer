@@ -433,6 +433,16 @@ class MainWindow(
             self._replot_secondary_preserving_xlim
         )
         self.inspector.signal_changed.connect(self._on_inspector_signal_changed)
+        # Auto-NFFT preview data hooks: the collapsed 谱参数 headers resolve their
+        # displayed 自动(N) through the SAME data-aware resolvers the compute paths
+        # use (resolve_order_nfft / resolve_nfft), so a low-Fs / short capture no
+        # longer advertises a meaningless 8192. Pull-based: each provider reads the
+        # current selection + inspector time range on demand.
+        self.inspector.order_ctx.set_auto_nfft_provider(self._order_preview_revs)
+        self.inspector.fft_ctx.set_auto_nfft_provider(self._fft_preview_n_samples)
+        self.inspector.fft_time_ctx.set_auto_nfft_provider(
+            self._fft_time_preview_n_samples
+        )
         self.view_tabbar.switch_requested.connect(self._switch_view)
         self.view_tabbar.new_requested.connect(self._on_view_new)
         self.view_tabbar.delete_requested.connect(self._on_view_delete)

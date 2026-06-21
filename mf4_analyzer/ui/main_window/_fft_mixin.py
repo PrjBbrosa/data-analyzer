@@ -178,6 +178,28 @@ class FFTMixin:
             _t, sig = self._mask_time_range(t, sig, time_range=time_range)
         return sig, fd.fs
 
+    def _fft_preview_n_samples(self):
+        """Sample count for the FFT auto-NFFT summary, or ``None``.
+
+        Pull-based hook registered via ``FFTContextual.set_auto_nfft_provider``:
+        returns the (inspector-time-range-gated) length of the representative
+        FFT source so the collapsed 自动(N) tracks ``_resolve_fft_effective_params``
+        (whole-signal length for single-frame; the shared ``resolve_nfft`` segment
+        for averaging). Returns ``None`` when unavailable. Never raises — it feeds
+        a paint path.
+        """
+        try:
+            source = self.inspector.fft_ctx.current_signal()
+            if not source:
+                return None
+            fid, ch = source
+            sig, _fs = self._fft_fetch_signal(fid, ch)
+            if sig is None or len(sig) < 2:
+                return None
+            return int(len(sig))
+        except Exception:
+            return None
+
     def do_fft(self):
         """Compute the ACTIVE FFT view: every source of every pane.
 

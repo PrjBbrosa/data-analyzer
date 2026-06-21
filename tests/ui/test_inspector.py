@@ -4046,6 +4046,127 @@ def test_fft_time_auto_nfft_params_are_preview_only(qtbot):
     assert "自动(" in ctx._tf_summary_text()
 
 
+def test_fft_time_auto_nfft_preview_is_data_aware_when_provider_set(qtbot):
+    """FFT-vs-Time auto preview must mirror the data-aware compute resolver.
+
+    Without a provider it keeps the naive ``ceil_pow2(Fs * t_win)`` estimate.
+    Once the main window supplies the available sample count, the preview routes
+    through the same ``resolve_nfft`` (same overlap) the spectrogram compute path
+    uses, so a short capture shrinks the displayed NFFT to what actually fits.
+    """
+    from mf4_analyzer.signal import resolve_nfft
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    ctx.spin_fs.setValue(1000)
+    ctx._t_win_s = 1.5
+    ctx.spin_overlap.setValue(50)
+
+    # No provider → naive estimate, unchanged legacy behaviour.
+    assert ctx._nfft_preview() == 2048
+
+    # Provider reports only 3000 samples available.
+    ctx.set_auto_nfft_provider(lambda: 3000)
+    expected = int(resolve_nfft(1000.0, 3000, 1.5, 0.5))
+    assert expected == 128  # guards the hand-computed value
+    assert ctx._nfft_preview() == expected
+    assert f"{ctx._AUTO_NFFT_LABEL}({expected})" in ctx._tf_summary_text()
+
+    # Plenty of samples → resolver returns the full naive target (no shrink).
+    ctx.set_auto_nfft_provider(lambda: 1_000_000)
+    assert ctx._nfft_preview() == 2048
+
+
+def test_fft_auto_nfft_summary_is_data_aware_when_provider_set(qtbot):
+    """FFT auto summary gains a data-aware 自动(N), consistent with the others.
+
+    The FFT header historically showed a bare ``自动`` with no number. To unify
+    the three tabs it now shows ``自动(N)`` once data is available, mirroring
+    ``_resolve_fft_effective_params``: single-frame auto = whole-signal FFT
+    length; averaging modes = the shared ``resolve_nfft`` segment length. With no
+    data loaded it stays a bare ``自动`` (no misleading number).
+    """
+    from mf4_analyzer.signal import resolve_nfft
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.spin_fs.setValue(1000)
+    ctx._t_win_s = 1.5
+    auto = ctx._AUTO_NFFT_LABEL
+    assert ctx.combo_nfft.currentText() == auto
+
+    # No provider → bare "自动" (no parens), unchanged legacy header.
+    assert ctx._fft_nfft_preview() is None
+    assert f"{auto}(" not in ctx._fft_summary_text()
+    assert ctx._fft_summary_text().startswith(f"{auto} ·")
+
+    # Single-frame auto = whole-signal FFT → shows the full sample count.
+    ctx.combo_avg_mode.setCurrentText('单帧')
+    ctx.set_auto_nfft_provider(lambda: 3552)
+    assert ctx._fft_nfft_preview() == 3552
+    assert f"{auto}(3552)" in ctx._fft_summary_text()
+
+    # Averaging mode → segment length via the same resolver compute uses.
+    ctx.combo_avg_mode.setCurrentText('线性平均')
+    ctx.spin_avg_overlap.setValue(50)
+    ctx.set_auto_nfft_provider(lambda: 3000)
+    expected = int(resolve_nfft(1000.0, 3000, 1.5, 0.5))
+    assert expected == 128  # guards the hand-computed value
+    assert ctx._fft_nfft_preview() == expected
+    assert f"{auto}({expected})" in ctx._fft_summary_text()
+
+
+def test_order_summary_label_refreshes_on_set_fs(qtbot):
+    """set_fs (the data-source-change hook) repaints the collapsed summary.
+
+    The auto-NFFT preview is data-aware only once a signal is selected; set_fs
+    is the single point the main window calls on every source/Fs change, so it
+    must refresh the label — otherwise the header keeps a stale 自动(N) until the
+    user happens to nudge a param.
+    """
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    ctx = OrderContextual()
+    qtbot.addWidget(ctx)
+    ctx.spin_samples_per_rev.setValue(512)
+    ctx.spin_order_res.setValue(0.10)
+    ctx.set_auto_nfft_provider(lambda: 4.0)  # data-aware → 512
+    ctx._order_section.set_summary("STALE")
+    ctx.set_fs(50.0)
+    assert ctx._order_section.summary_text() == ctx._order_summary_text()
+    assert "自动(512)" in ctx._order_section.summary_text()
+
+
+def test_fft_time_summary_label_refreshes_on_set_fs(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
+
+    ctx = FFTTimeContextual()
+    qtbot.addWidget(ctx)
+    ctx._t_win_s = 1.5
+    ctx.spin_overlap.setValue(50)
+    ctx.set_auto_nfft_provider(lambda: 3000)  # data-aware → 128
+    ctx._tf_section.set_summary("STALE")
+    ctx.set_fs(1000.0)
+    assert ctx._tf_section.summary_text() == ctx._tf_summary_text()
+    assert "自动(128)" in ctx._tf_section.summary_text()
+
+
+def test_fft_summary_label_refreshes_on_set_fs(qtbot):
+    from mf4_analyzer.ui.inspector_sections import FFTContextual
+
+    ctx = FFTContextual()
+    qtbot.addWidget(ctx)
+    ctx.combo_nfft.setCurrentText(ctx._AUTO_NFFT_LABEL)
+    ctx.combo_avg_mode.setCurrentText('单帧')
+    ctx.set_auto_nfft_provider(lambda: 4096)  # single-frame → full length 4096
+    ctx._fft_section.set_summary("STALE")
+    ctx.set_fs(1000.0)
+    assert ctx._fft_section.summary_text() == ctx._fft_summary_text()
+    assert "自动(4096)" in ctx._fft_section.summary_text()
+
+
 def test_fft_time_fixed_nfft_params_still_return_int(qtbot):
     from mf4_analyzer.ui.inspector_sections import FFTTimeContextual
 
@@ -4083,6 +4204,40 @@ def test_order_auto_nfft_params_are_preview_only(qtbot):
     ctx.spin_order_res.setValue(0.25)
     assert ctx.get_params()["nfft_preview"] == 1024
     assert f"{auto}(1024)" in ctx._order_summary_text()
+
+
+def test_order_auto_nfft_preview_is_data_aware_when_provider_set(qtbot):
+    """Auto-nfft preview must mirror the data-aware compute resolver.
+
+    With no data provider the preview falls back to the naive
+    ``ceil_pow2(samples_per_rev / order_res)`` upper bound (Fs/data-blind).
+    Once the main window supplies the available revolution count, the preview
+    routes through the same ``resolve_order_nfft`` the COT compute path uses, so
+    a short / low-rev capture shrinks the displayed (and computed) NFFT instead
+    of advertising a meaningless 8192.
+    """
+    from mf4_analyzer.signal import resolve_order_nfft
+    from mf4_analyzer.ui.inspector_sections import OrderContextual
+
+    ctx = OrderContextual()
+    qtbot.addWidget(ctx)
+    ctx.spin_samples_per_rev.setValue(512)
+    ctx.spin_order_res.setValue(0.10)
+
+    # No provider → naive upper bound, unchanged legacy behaviour.
+    assert ctx._order_nfft_preview() == 8192
+
+    # Provider reports ~4 revolutions of data (n_angle = 512 * 4 = 2048): the
+    # resolver shrinks NFFT to satisfy min_frames / max_window_frac.
+    ctx.set_auto_nfft_provider(lambda: 4.0)
+    expected = int(resolve_order_nfft(512, 0.10, 2048, overlap=0.75))
+    assert expected == 512  # guards the hand-computed value
+    assert ctx._order_nfft_preview() == expected
+    assert f"{ctx._AUTO_NFFT_LABEL}({expected})" in ctx._order_summary_text()
+
+    # Plenty of revolutions → resolver returns the full naive target (no shrink).
+    ctx.set_auto_nfft_provider(lambda: 1000.0)
+    assert ctx._order_nfft_preview() == 8192
 
 
 def test_order_fixed_nfft_params_and_legacy_preset_still_return_int(qtbot):

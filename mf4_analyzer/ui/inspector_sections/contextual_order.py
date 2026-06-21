@@ -1,4 +1,6 @@
 """OrderContextual widget."""
+import math
+
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -51,6 +53,12 @@ class OrderContextual(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._applying_preset = False
         self._source_weighting_default = 'None'
+        # Auto-NFFT preview data hook: a callable returning the available
+        # revolution count for the current order signal (or None when no data
+        # is loaded). Set by the main window so the displayed 自动(N) mirrors the
+        # data-aware ``resolve_order_nfft`` the COT compute path uses, instead of
+        # the data-blind ``samples_per_rev / order_res`` upper bound.
+        self._auto_nfft_provider = None
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: transparent host for two
         # full-width cards (sig_card + params_card); spacing is the gutter.
@@ -353,14 +361,39 @@ class OrderContextual(QWidget):
         if self.spin_y_max.value() > float(val):
             self.spin_y_max.setValue(float(val))
 
-    def _order_nfft_preview(self):
-        from ...signal import ceil_pow2
+    def set_auto_nfft_provider(self, provider):
+        """Register the available-revolutions hook for the auto-NFFT preview.
 
-        target = (
-            float(self.spin_samples_per_rev.value())
-            / float(self.spin_order_res.value())
-        )
-        nfft = ceil_pow2(target)
+        ``provider`` is a zero-arg callable returning the revolution count of
+        the current order signal (float) or ``None`` when no usable data is
+        loaded. Passing ``None`` clears the hook (reverts to the naive preview).
+        Refreshes the collapsed summary so the displayed 自动(N) updates at once.
+        """
+        self._auto_nfft_provider = provider
+        self._refresh_order_summary()
+
+    def _order_nfft_preview(self):
+        from ...signal import ceil_pow2, resolve_order_nfft
+
+        samples_per_rev = float(self.spin_samples_per_rev.value())
+        order_res = float(self.spin_order_res.value())
+        revs = None
+        if self._auto_nfft_provider is not None:
+            try:
+                revs = self._auto_nfft_provider()
+            except Exception:
+                revs = None
+        if revs is not None and math.isfinite(revs) and revs > 0.0:
+            # Data-aware: mirror _order_mixin._resolve_order_effective_params —
+            # n_angle = samples_per_rev * revolutions, then the shared resolver.
+            n_angle = max(1, int(round(samples_per_rev * float(revs))))
+            return int(
+                resolve_order_nfft(
+                    samples_per_rev, order_res, n_angle, overlap=0.75
+                )
+            )
+        # No data loaded → naive upper bound (data-blind, legacy fallback).
+        nfft = ceil_pow2(samples_per_rev / order_res)
         return int(min(max(nfft, 256), 16384))
 
     # Signal-type built-in preset params (信号专家 校核定稿 — do NOT alter the
@@ -570,6 +603,10 @@ class OrderContextual(QWidget):
         self.spin_fs.blockSignals(True)
         self.spin_fs.setValue(fs)
         self.spin_fs.blockSignals(False)
+        # Source/Fs change is the data-context hook: repaint the collapsed
+        # summary so the data-aware 自动(N) tracks the new selection (mirrors
+        # FFTTimeContextual.set_fs).
+        self._refresh_order_summary()
 
     def rpm_factor(self):
         return self.spin_rf.value()

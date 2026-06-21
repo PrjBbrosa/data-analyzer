@@ -197,6 +197,32 @@ class FFTTimeMixin:
         sig = np.asarray(fd.data[ch].to_numpy(copy=False), dtype=float)
         return fid, ch, t, sig, fd
 
+    def _fft_time_preview_n_samples(self):
+        """Sample count for the FFT-vs-Time auto-NFFT summary, or ``None``.
+
+        Pull-based hook registered via
+        ``FFTTimeContextual.set_auto_nfft_provider``: returns the
+        inspector-time-range-gated length of the current spectrogram source so
+        the collapsed 自动(N) tracks ``_resolve_fft_time_effective_params`` (same
+        ``resolve_nfft``). Returns ``None`` when unavailable. Never raises — it
+        feeds a paint path.
+        """
+        try:
+            source = self.inspector.fft_time_ctx.current_signal()
+            _fid, _ch, t, sig, _fd = self._fft_time_signal_for(source)
+            if sig is None or len(sig) < 2:
+                return None
+            top = self.inspector.top
+            if top.range_enabled():
+                _t, sig = self._mask_time_range(
+                    t, sig, time_range=top.range_values()
+                )
+                if sig is None or len(sig) < 2:
+                    return None
+            return int(len(sig))
+        except Exception:
+            return None
+
     @staticmethod
     def _normalize_freq_range(p):
         """Translate the panel's ``freq_*`` fields into the canvas's

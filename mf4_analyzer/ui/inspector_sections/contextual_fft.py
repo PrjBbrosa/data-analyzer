@@ -51,6 +51,12 @@ class FFTContextual(QWidget):
         self._applying_preset = False
         self._source_weighting_default = 'None'
         self._t_win_s = 1.5
+        # Auto-NFFT preview data hook: a callable returning the available sample
+        # count for the current FFT signal (or None when no data is loaded). Set
+        # by the main window so the collapsed 自动(N) mirrors the data-aware
+        # ``_resolve_fft_effective_params`` (whole-signal length for single-frame,
+        # the shared ``resolve_nfft`` segment for averaging modes).
+        self._auto_nfft_provider = None
         root = QVBoxLayout(self)
         # 2026-06-13 分析信号/谱参数 split: the contextual is a transparent
         # host for two full-width cards (sig_card + params_card). Zero
@@ -293,9 +299,57 @@ class FFTContextual(QWidget):
     def is_fft_params_expanded(self):
         return self._fft_section.is_expanded()
 
+    def set_auto_nfft_provider(self, provider):
+        """Register the available-samples hook for the auto-NFFT summary.
+
+        ``provider`` is a zero-arg callable returning the sample count of the
+        current FFT signal (int) or ``None`` when no usable data is loaded.
+        Passing ``None`` clears the hook. Refreshes the collapsed summary so the
+        displayed 自动(N) updates at once.
+        """
+        self._auto_nfft_provider = provider
+        self._refresh_fft_summary()
+
+    def _fft_nfft_preview(self):
+        """Data-aware effective NFFT for the auto summary, or None if unknown.
+
+        Mirrors ``_fft_mixin._resolve_fft_effective_params``: single-frame auto
+        keeps whole-signal semantics (full sample count); averaging / peak-hold
+        modes resolve a segment length via the shared ``resolve_nfft``. Returns
+        None when no data provider is wired (header then shows a bare 自动).
+        """
+        if self._auto_nfft_provider is None:
+            return None
+        try:
+            n_samples = self._auto_nfft_provider()
+        except Exception:
+            return None
+        if n_samples is None or int(n_samples) <= 1:
+            return None
+        n_samples = int(n_samples)
+        if self.combo_avg_mode.currentText() in ('线性平均', '峰值保持'):
+            from ...signal import resolve_nfft
+
+            overlap = float(self.spin_avg_overlap.value()) / 100.0
+            return int(
+                resolve_nfft(
+                    float(self.spin_fs.value()),
+                    n_samples,
+                    float(self._t_win_s),
+                    overlap,
+                )
+            )
+        # 单帧 auto = whole-signal FFT → the effective length is the data length.
+        return n_samples
+
     def _fft_summary_text(self):
+        nfft_text = self.combo_nfft.currentText()
+        if nfft_text == self._AUTO_NFFT_LABEL:
+            preview = self._fft_nfft_preview()
+            if preview is not None:
+                nfft_text = f"{self._AUTO_NFFT_LABEL}({preview})"
         return (
-            f"{self.combo_nfft.currentText()} · "
+            f"{nfft_text} · "
             f"{self.combo_win.currentText()} · "
             f"{self.spin_overlap.value()}%"
         )
@@ -580,6 +634,10 @@ class FFTContextual(QWidget):
         self.spin_fs.blockSignals(True)
         self.spin_fs.setValue(fs)
         self.spin_fs.blockSignals(False)
+        # Source/Fs change is the data-context hook: repaint the collapsed
+        # summary so the data-aware 自动(N) tracks the new selection (mirrors
+        # FFTTimeContextual.set_fs).
+        self._refresh_fft_summary()
 
     # --- Wave 2 / SP2 (Task 2.1): test-friendly param accessors ---
     # current_params/apply_params extend get_params/_apply_preset with the

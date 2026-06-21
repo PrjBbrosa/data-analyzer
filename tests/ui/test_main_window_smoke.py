@@ -3269,3 +3269,127 @@ def test_fft_time_low_cache_key_excludes_db_reference_display_only():
     k1 = FFTTimeMixin._fft_time_cache_key(stub, dict(base, db_reference=1.0))
     k2 = FFTTimeMixin._fft_time_cache_key(stub, dict(base, db_reference=2.0))
     assert k1 == k2
+
+
+def test_order_nfft_preview_wired_to_loaded_data(qapp, qtbot):
+    """End-to-end: the order auto-NFFT header reflects loaded data, not 8192.
+
+    Reproduces the reported trap — Fs=50 Hz, ~71 s, slow speed → only a few
+    dozen revolutions. The naive blind preview shows 自动(8192); once the main
+    window wires the revolution-count provider, the header (and the value COT
+    actually computes) shrinks via the shared resolve_order_nfft.
+    """
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.signal import resolve_order_nfft
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    fs = 50.0
+    t = np.arange(3552, dtype=float) / fs        # ~71.0 s
+    rpm = np.full(t.shape, 30.0)                  # 0.5 rev/s → ~35 revolutions
+    sig = np.sin(2.0 * np.pi * 2.0 * t)
+    w.files["f1"] = SimpleNamespace(
+        data=pd.DataFrame({"torque": sig, "speed": rpm}),
+        time_array=t,
+        channel_units={"torque": "Nm", "speed": "rpm"},
+        fs=fs,
+    )
+    octx = w.inspector.order_ctx
+    octx.current_signal = lambda: ("f1", "torque")
+    octx.current_rpm = lambda: ("f1", "speed")
+    octx.set_fs(fs)
+    octx.spin_samples_per_rev.setValue(512)
+    octx.spin_order_res.setValue(0.10)
+
+    # The main window must have installed a revolution-count provider.
+    assert octx._auto_nfft_provider is not None
+
+    revs = w._order_preview_revs()
+    assert revs is not None
+    assert 34.0 < revs < 36.0     # 0.5 rev/s over ~71 s
+
+    n_angle = max(1, int(round(512 * revs)))
+    expected = int(resolve_order_nfft(512, 0.10, n_angle, overlap=0.75))
+    preview = octx._order_nfft_preview()
+    assert preview == expected
+    assert preview < 8192          # data-aware shrink vs the naive blind value
+    assert f"{octx._AUTO_NFFT_LABEL}({expected})" in octx._order_summary_text()
+
+
+def test_fft_time_nfft_preview_wired_to_loaded_data(qapp, qtbot):
+    """End-to-end: FFT-vs-Time auto header tracks the loaded sample count."""
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.signal import resolve_nfft
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    fs = 1000.0
+    t = np.arange(3000, dtype=float) / fs
+    sig = np.sin(2.0 * np.pi * 50.0 * t)
+    w.files["f1"] = SimpleNamespace(
+        data=pd.DataFrame({"sig": sig}),
+        time_array=t,
+        channel_units={"sig": ""},
+        fs=fs,
+    )
+    ftx = w.inspector.fft_time_ctx
+    ftx.current_signal = lambda: ("f1", "sig")
+    ftx.combo_nfft.setCurrentText(ftx._AUTO_NFFT_LABEL)
+    ftx.set_fs(fs)
+    ftx._t_win_s = 1.5
+    ftx.spin_overlap.setValue(50)
+
+    assert ftx._auto_nfft_provider is not None
+    assert w._fft_time_preview_n_samples() == 3000
+
+    expected = int(resolve_nfft(1000.0, 3000, 1.5, 0.5))
+    assert expected == 128
+    assert ftx._nfft_preview() == expected
+    assert ftx._nfft_preview() != 2048  # not the data-blind ceil_pow2(Fs*t_win)
+    assert f"{ftx._AUTO_NFFT_LABEL}({expected})" in ftx._tf_summary_text()
+
+
+def test_fft_nfft_preview_wired_to_loaded_data(qapp, qtbot):
+    """End-to-end: FFT single-frame auto header shows the whole-signal length."""
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+
+    fs = 1000.0
+    t = np.arange(3552, dtype=float) / fs
+    sig = np.sin(2.0 * np.pi * 50.0 * t)
+    w.files["f1"] = SimpleNamespace(
+        data=pd.DataFrame({"sig": sig}),
+        time_array=t,
+        channel_units={"sig": ""},
+        fs=fs,
+    )
+    fx = w.inspector.fft_ctx
+    fx.current_signal = lambda: ("f1", "sig")
+    fx.combo_nfft.setCurrentText(fx._AUTO_NFFT_LABEL)
+    fx.combo_avg_mode.setCurrentText('单帧')
+    fx.set_fs(fs)
+
+    assert fx._auto_nfft_provider is not None
+    assert w._fft_preview_n_samples() == 3552
+    # 单帧 auto = whole-signal FFT → effective length is the data length.
+    assert fx._fft_nfft_preview() == 3552
+    assert f"{fx._AUTO_NFFT_LABEL}(3552)" in fx._fft_summary_text()
