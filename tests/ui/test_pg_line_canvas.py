@@ -186,6 +186,58 @@ def test_plot_spectra_single_entry(canvas):
     assert canvas._plot_time.getAxis('bottom').labelText == 'Time (s)'
 
 
+def test_db_auto_y_range_uses_robust_visible_span(qapp):
+    c = PgLineCanvas()
+    try:
+        c.resize(640, 480)
+        c.show()
+        qapp.processEvents()
+        freq = np.linspace(0.0, 500.0, 501)
+        amp = np.full_like(freq, -110.0)
+        amp[(freq >= 80.0) & (freq <= 220.0)] = -24.0
+        amp[np.argmin(np.abs(freq - 140.0))] = -12.0
+        entry = {
+            'label': 'db',
+            'color': '#2563eb',
+            'freq': freq,
+            'amp': amp,
+            'time': np.linspace(0.0, 1.0, 64),
+            'signal': np.zeros(64),
+        }
+        c.plot_spectra(
+            [entry], xlim=(0.0, 300.0),
+            amp_label='Amplitude (dB)', title='FFT',
+        )
+        qapp.processEvents()
+
+        _x, (y0, y1) = c._plot_amp.vb.viewRange()
+        assert y0 > -60.0
+        assert y0 <= -42.0
+        assert y1 >= -12.0
+        assert y1 < 5.0
+    finally:
+        c.deleteLater()
+
+
+def test_linear_auto_y_range_still_uses_pyqtgraph_autorange(qapp):
+    c = PgLineCanvas()
+    try:
+        c.resize(640, 480)
+        c.show()
+        qapp.processEvents()
+        entry = _entry()
+        c.plot_spectra(
+            [entry], xlim=(0.0, 500.0),
+            amp_label='Amplitude', title='FFT',
+        )
+        qapp.processEvents()
+
+        assert c._last_yrange is None
+        assert bool(c._plot_amp.vb.autoRangeEnabled()[1])
+    finally:
+        c.deleteLater()
+
+
 def test_fft_line_canvas_axes_use_time_domain_chart_font(canvas):
     from mf4_analyzer.ui.pg_canvas.fonts import _pg_chart_font
 

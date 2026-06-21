@@ -54,7 +54,6 @@ from mf4_analyzer.ui.pg_canvas.remarks import (
     RemarkArtist,
     RemarkInteraction,
     RemarkPoint,
-    format_remark_label,
 )
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
 
@@ -837,7 +836,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._cmap_name = "turbo"
         # Amplitude mode of the last plot_result render (slice mode only).
         # Parity with SpectrogramCanvas._amplitude_mode (canvases.py:1622):
-        # the hover/remark readout labels values 'dB' in dB mode and the
+        # annotation/slice labels values 'dB' in dB mode and the
         # channel unit otherwise, and the slice y-label switches with it.
         self._amplitude_mode = 'amplitude_db'
         # dB conversion memo. Keyed on a STABLE per-result epoch token (see
@@ -907,8 +906,6 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._slice_marker.setVisible(False)
             self._slice_marker.sigPositionChanged.connect(
                 self._on_slice_marker_dragged)
-            # Hover readout is wired for all heatmaps at construction time; both
-            # FFT-vs-Time and Order use the same XYZ formatter.
             # Right-side info panel (sits in the colorbar column, below the
             # colorbar, beside the slice). Holds the X/Y direction switch +
             # the current fixed value / meaning. The slice plot's right edge is
@@ -1514,7 +1511,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         nanmin/nanmax when they are ``None``.
         """
         self._result = result
-        # Pin the amplitude mode so hover/remark readouts label the value
+        # Pin the amplitude mode so annotation/slice labels read the value as
         # 'dB' (not the channel unit) in dB mode, and the slice y-label
         # switches accordingly — parity with SpectrogramCanvas
         # (canvases.py:1762, 1879, 1942, 2028).
@@ -1540,8 +1537,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # computing at e.g. [27, 67] when the data lived in [-47, 6]
             # flattened the whole matrix to 27, and a later drag to [-33, 6.72]
             # could not recover any detail (the user's all-black → all-red →
-            # must-recompute report).  Slice/hover read _matrix_disp too, so an
-            # unclipped matrix also makes them show the true dB values.
+            # must-recompute report). Slice and annotation read _matrix_disp too,
+            # so an unclipped matrix also makes them show the true dB values.
             if z_auto:
                 # Use a fixed SPAN anchored at a robust high-percentile
                 # ceiling so the auto window is expressed in *absolute* dB —
@@ -1672,6 +1669,65 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._slice_toggle.set_direction('x', emit=False)
         self._apply_slice()
 
+    def _main_view_range(self, axis: str):
+        """Return the main heatmap's current visible range, clamped to data."""
+        if self._extents is None:
+            return None
+        x0, x1, y0, y1 = self._extents
+        try:
+            x_range, y_range = self._plot.vb.viewRange()
+        except Exception:
+            x_range, y_range = (x0, x1), (y0, y1)
+        if axis == 'y':
+            lo, hi = float(y_range[0]), float(y_range[1])
+            data_lo, data_hi = float(y0), float(y1)
+        else:
+            lo, hi = float(x_range[0]), float(x_range[1])
+            data_lo, data_hi = float(x0), float(x1)
+        if hi < lo:
+            lo, hi = hi, lo
+        data_lo, data_hi = sorted((data_lo, data_hi))
+        lo = max(lo, data_lo)
+        hi = min(hi, data_hi)
+        if hi < lo:
+            mid = min(max((lo + hi) / 2.0, data_lo), data_hi)
+            return mid, mid
+        return lo, hi
+
+    @staticmethod
+    def _slice_visible_mask(coords, lo: float, hi: float):
+        """Mask coordinate centers inside a visible range, with nearest fallback."""
+        arr = np.asarray(coords, dtype=float)
+        finite = np.isfinite(arr)
+        if arr.size == 0:
+            return finite
+        lo, hi = sorted((float(lo), float(hi)))
+        mask = finite & (arr >= lo) & (arr <= hi)
+        if np.any(mask):
+            return mask
+        valid = np.flatnonzero(finite)
+        if valid.size == 0:
+            return mask
+        target = (lo + hi) / 2.0
+        nearest = valid[int(np.argmin(np.abs(arr[valid] - target)))]
+        mask = np.zeros(arr.shape, dtype=bool)
+        mask[nearest] = True
+        return mask
+
+    def _set_slice_x_range(self, lo: float, hi: float, values) -> None:
+        if self._slice_plot is None:
+            return
+        lo, hi = sorted((float(lo), float(hi)))
+        if hi > lo:
+            self._slice_plot.setXRange(lo, hi, padding=0)
+            return
+        arr = np.asarray(values, dtype=float)
+        finite = arr[np.isfinite(arr)]
+        if finite.size:
+            center = float(finite[0])
+            pad = max(abs(center) * 0.01, 0.5)
+            self._slice_plot.setXRange(center - pad, center + pad, padding=0)
+
     def _apply_slice(self) -> None:
         """Render the slice curve + marker for the current direction/index."""
         m = self._matrix_disp
@@ -1687,24 +1743,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # Fix a Y position (frequency / order) → curve = amplitude vs time.
             idx = int(np.clip(self._slice_y_idx, 0, max(0, nrows - 1)))
             self._slice_y_idx = idx
-            self._slice_curve.setData(xc, m[idx, :])
-            # Top/bottom grid-line ALIGNMENT (spec FIX 3, 'y' direction only):
-            # the slice X axis is deliberately NOT XLinked to the map X (the
-            # 'x' direction plots amplitude-vs-frequency, an unrelated axis), so
-            # the slice keeps its own auto X range here. In 'y' mode the slice X
-            # IS time — the same quantity as the map's bottom X — but pyqtgraph
-            # auto-ranges the curve with its own padding, so the slice's time
-            # ticks/grid land at different positions than the map's (which uses
-            # setXRange(x0,x1,padding=0)). Pin the slice X to the FULL time
-            # extent with padding=0 to match the map exactly so the top/bottom
-            # gridlines line up vertically. Only the 'y' branch is touched; the
-            # 'x' branch (freq/order on X) is left exactly as before.
-            if self._extents is not None:
-                x0, x1, _y0, _y1 = self._extents
-                self._slice_plot.setXRange(float(x0), float(x1), padding=0)
-            elif len(xc) >= 2:
-                self._slice_plot.setXRange(
-                    float(xc[0]), float(xc[-1]), padding=0)
+            vr = self._main_view_range('x')
+            if vr is None:
+                vr = (float(xc[0]), float(xc[-1]))
+            lo, hi = vr
+            mask = self._slice_visible_mask(xc, lo, hi)
+            self._slice_curve.setData(xc[mask], m[idx, :][mask])
+            self._set_slice_x_range(lo, hi, xc[mask])
             self._slice_plot.setLabel('bottom', self._x_label or 'Time (s)')
             self._slice_marker_updating = True
             try:
@@ -1717,20 +1762,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # Fix a time → curve = amplitude vs Y (frequency / order).
             idx = int(np.clip(self._slice_x_idx, 0, max(0, ncols - 1)))
             self._slice_x_idx = idx
-            self._slice_curve.setData(yc, m[:, idx])
-            # Re-enable X auto-range so the spectrum re-fits to the
-            # frequency/order extent. The 'y' branch above pins the slice X to
-            # the TIME extent via setXRange(padding=0), which DISABLES the
-            # slice plot's X auto-range (autoRangeX → False); without this
-            # re-enable, switching y→x would leave the freq spectrum squished
-            # into the stale time extent ([0,30]) instead of re-ranging to the
-            # frequency axis. The 'y' branch's time-pin is left exactly as is.
-            self._slice_plot.enableAutoRange(axis='x')
-            try:
-                self._slice_plot.vb.autoRange()
-            except Exception:
-                pass
-            self._slice_plot.enableAutoRange(axis='x')
+            vr = self._main_view_range('y')
+            if vr is None:
+                vr = (float(yc[0]), float(yc[-1]))
+            lo, hi = vr
+            mask = self._slice_visible_mask(yc, lo, hi)
+            self._slice_curve.setData(yc[mask], m[:, idx][mask])
+            self._set_slice_x_range(lo, hi, yc[mask])
             self._slice_plot.setLabel('bottom', self._y_label or 'Frequency (Hz)')
             self._slice_marker_updating = True
             try:
@@ -2218,42 +2256,18 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return int(np.argmin(np.abs(yc - y)))
 
     def _readout_unit(self) -> str:
-        """Unit token for the hover/remark value (slice mode).
+        """Unit token for annotation values (slice mode).
 
         dB mode labels the value 'dB' (the matrix is already in dB), every
-        other mode uses the channel unit. Parity with
-        SpectrogramCanvas._on_motion / _format_remark_label
-        (canvases.py:2028, 1942).
+        other mode uses the channel unit.
         """
         if self._amplitude_mode == 'amplitude_db':
             return 'dB'
         return self._result.unit or ''
 
     def _on_scene_hover(self, scene_pos) -> None:
-        """Emit ``cursor_info`` (X / Y / Z) on hover over the map.
-
-        Works for both SpectrogramResult-backed FFT-vs-Time and Order-style
-        heatmaps rendered through plot_or_update_heatmap (no ``_result``).
-        """
-        if not self._has_result or self._matrix_disp is None:
-            return
-        if not self._plot.sceneBoundingRect().contains(scene_pos):
-            self.cursor_info.emit('')
-            return
-        p = self._plot.vb.mapSceneToView(scene_pos)
-        x, y = p.x(), p.y()
-        if self._extents is None:
-            return
-        x0, x1, y0, y1 = self._extents
-        if not (x0 <= x <= x1 and y0 <= y <= y1):
-            # Inside the plot's scene rect but outside the heatmap (e.g.
-            # the colorbar column or padding) — clear the pill.
-            self.cursor_info.emit('')
-            return
-        point = self._remark_point_at(x, y)
-        if point is None:
-            return
-        self.cursor_info.emit(format_remark_label(point))
+        """Heatmap passive XYZ hover readout is retired; clear any stale pill."""
+        self.cursor_info.emit('')
 
     # ------------------------------------------------------------------
     # remarks (annotation parity with the matplotlib canvases)
@@ -2442,13 +2456,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         if self._result is not None:
             # Slice (FFT-vs-Time) mode: the matrix rows/cols correspond
             # exactly to result.frequencies / result.times, so pick the
-            # cell by argmin-nearest over those axes — the SAME picker used
-            # by hover (_on_scene_hover) and frame selection. This keeps the
-            # hover readout and the placed remark in agreement on boundary
-            # cells, where floor-fraction and argmin-nearest disagree
-            # (caliber unification, 裁决 3). Order mode (self._result is
-            # None) keeps the floor-fraction mapping below untouched: it has
-            # no times/frequencies axis arrays and its remark tests pin the
+            # cell by argmin-nearest over those axes. This keeps annotation
+            # labels and _value_at in agreement on boundary cells, where
+            # floor-fraction and argmin-nearest disagree (caliber unification,
+            # 裁决 3). Order mode (self._result is None) keeps the
+            # floor-fraction mapping below untouched: it has no
+            # times/frequencies axis arrays and its remark tests pin the
             # floor-fraction cell.
             row = min(self._freq_index_for(y), rows - 1)
             col = min(self._time_index_for(x), cols - 1)

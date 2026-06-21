@@ -236,7 +236,7 @@ def test_cursor_pill_hidden_in_fft_mode(qapp, qtbot):
     assert not cs.cursor_pill_visible()
 
 
-def test_heatmap_cursor_info_shows_pill_in_fft_time_and_order(qapp, qtbot):
+def test_heatmap_cursor_info_does_not_show_pill_in_fft_time_or_order(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
 
     cs = ChartStack()
@@ -252,10 +252,6 @@ def test_heatmap_cursor_info_shows_pill_in_fft_time_and_order(qapp, qtbot):
         cs.set_mode(mode)
         canvas.cursor_info.emit("<div>X=1 s</div><div>Y=2 Hz</div><div>Z=3 dB</div>")
 
-        assert cs.cursor_pill_visible()
-        assert "X=1" in cs.cursor_pill_text()
-
-        canvas.cursor_info.emit("")
         assert not cs.cursor_pill_visible()
 
 
@@ -1954,12 +1950,12 @@ def test_chart_stack_exposes_fft_time_card(qtbot):
 
 # M9 retired the matplotlib SpectrogramCanvas (FFT-vs-Time moved to
 # PgHeatmapCanvas with_slice=True). The Task-5/Task-9 rendering, cursor,
-# hover and export-pixmap tests below drove matplotlib internals
+# and export-pixmap tests below drove matplotlib internals
 # (canvas.fig.axes, _ax_spec.images[0].get_clim(), MouseEvent ->
 # canvas._on_motion) on the now-deleted class. Their behaviour is
 # covered for the pyqtgraph canvas in tests/ui/test_pg_heatmap_canvas.py
 # (slice plot/update, _img.getLevels() == explicit dB window, freq-range
-# Y limits, _on_scene_hover -> cursor_info, grab_full_view/grab_main_chart),
+# Y limits, passive hover suppression, grab_full_view/grab_main_chart),
 # so they were removed rather than stubbed (see
 # pyqt-ui/2026-05-28-mpl-event-coupled-tests-survive-renderer-swap).
 

@@ -33,6 +33,8 @@ from .canvas import (
 )
 
 from .heatmap_canvas import (
+    _AUTO_CEILING_PCT,
+    _AUTO_SPAN_DB,
     _apply_axis_tick_density,
     _apply_neutral_axis_frame,
     _apply_target_bottom_ticks,
@@ -739,6 +741,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._plot_amp.setXRange(float(xlim[0]), float(xlim[1]), padding=0)
         if manual_y:
             self._plot_amp.setYRange(float(y_min), float(y_max), padding=0)
+        elif self._is_db_amp_label(amp_label):
+            yrange = self._auto_db_y_range(self._entries, xlim)
+            if yrange is not None:
+                self._plot_amp.setYRange(yrange[0], yrange[1], padding=0)
+            else:
+                self._plot_amp.enableAutoRange(axis='y')
         else:
             self._plot_amp.enableAutoRange(axis='y')
         self.manual_zoom_changed.emit(False)
@@ -1369,6 +1377,48 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         if n <= max(1, pixel_width * 2):
             return freq_arr, amp_arr
         return build_envelope(freq_arr, amp_arr, xlim=None, pixel_width=pixel_width)
+
+    @staticmethod
+    def _is_db_amp_label(label: str) -> bool:
+        return 'db' in str(label or '').lower()
+
+    @staticmethod
+    def _visible_entry_values(entry, xlim):
+        freq_arr = np.asarray(entry.get('freq', []), dtype=float)
+        amp_arr = np.asarray(entry.get('amp', []), dtype=float)
+        n = min(freq_arr.size, amp_arr.size)
+        if n == 0:
+            return np.asarray([], dtype=float)
+        freq_arr = freq_arr[:n]
+        amp_arr = amp_arr[:n]
+        lo, hi = sorted((float(xlim[0]), float(xlim[1])))
+        mask = (
+            np.isfinite(freq_arr)
+            & np.isfinite(amp_arr)
+            & (freq_arr >= lo)
+            & (freq_arr <= hi)
+        )
+        return amp_arr[mask]
+
+    def _auto_db_y_range(self, entries, xlim):
+        values = [
+            self._visible_entry_values(entry, xlim)
+            for entry in entries
+        ]
+        values = [v for v in values if v.size]
+        if not values:
+            return None
+        arr = np.concatenate(values)
+        if arr.size == 0:
+            return None
+        ceiling = float(np.percentile(arr, _AUTO_CEILING_PCT))
+        literal_hi = float(np.nanmax(arr))
+        top = max(ceiling, literal_hi)
+        bottom = ceiling - _AUTO_SPAN_DB
+        if top <= bottom:
+            center = (top + bottom) / 2.0
+            bottom, top = center - 0.5, center + 0.5
+        return bottom, top
 
     def _combined_time_bounds(self):
         bounds = []

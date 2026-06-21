@@ -1942,16 +1942,16 @@ def test_fft_time_failed_compute_keeps_old_chart(qtbot, monkeypatch):
     assert any(level == 'error' for _msg, level in captured)
 
 
-def test_fft_time_cursor_info_propagates_to_status_bar(qtbot):
-    """canvas_fft_time.cursor_info must reach the MainWindow status bar."""
+def test_fft_time_cursor_info_does_not_propagate_to_status_bar(qtbot):
+    """Passive FFT-vs-Time hover XYZ readout is retired."""
     from mf4_analyzer.ui.main_window import MainWindow
 
     win = MainWindow()
     qtbot.addWidget(win)
 
+    win.statusBar.showMessage("ready")
     win.canvas_fft_time.cursor_info.emit("t=0.123 s · f=50.0 Hz · 1.234 (V)")
-    assert "t=0.123" in win.statusBar.currentMessage()
-    assert "f=50.0" in win.statusBar.currentMessage()
+    assert win.statusBar.currentMessage() == "ready"
 
 
 def test_fft_time_normalize_freq_range_clamps_inverted_pair(qtbot):

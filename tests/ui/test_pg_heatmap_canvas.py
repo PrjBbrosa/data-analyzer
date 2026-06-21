@@ -2345,7 +2345,7 @@ def test_left_click_adds_remark_when_remark_on_not_slice(qapp):
     c.deleteLater()
 
 
-def test_hover_emits_cursor_info(qapp):
+def test_heatmap_hover_does_not_emit_xyz_readout(qapp):
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
     c.show()
@@ -2356,11 +2356,7 @@ def test_hover_emits_cursor_info(qapp):
     c.cursor_info.connect(received.append)
     sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
     c._on_scene_hover(sp)
-    assert received, "hover over the map must emit cursor_info"
-    assert 'X=' in received[-1]
-    assert 'Y=' in received[-1]
-    assert 'Z=' in received[-1]
-    assert 'Hz' in received[-1]
+    assert received == ['']
     c.hide()
     c.deleteLater()
 
@@ -2394,57 +2390,55 @@ def test_select_time_index_noop_without_slice(qapp):
     c.deleteLater()
 
 
-def test_hover_db_mode_labels_value_db_not_channel_unit(qapp):
-    # dB mode: _matrix_disp holds dB numbers, so the readout MUST label the
+def test_remark_point_db_mode_labels_value_db_not_channel_unit(qapp):
+    # dB mode: _matrix_disp holds dB numbers, so the annotation label MUST label the
     # value 'dB' — labeling it the channel unit 'g' is a unit error. Parity
     # with SpectrogramCanvas._on_motion (canvases.py:2028).
+    from mf4_analyzer.ui.pg_canvas.remarks import format_remark_label
+
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
     c.show()
     qapp.processEvents()
     r = _spec_result()  # unit='g'
     c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo', z_auto=True)
-    received = []
-    c.cursor_info.connect(received.append)
-    sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
-    c._on_scene_hover(sp)
-    assert received, "hover over the map must emit cursor_info"
-    msg = received[-1]
+    point = c._remark_point_at(1.0, 250.0)
+    assert point is not None
+    msg = format_remark_label(point)
     assert 'Z=' in msg and ' dB' in msg, (
-        f"dB-mode readout must label Z in dB, got {msg!r}"
+        f"dB-mode annotation must label Z in dB, got {msg!r}"
     )
     # The channel unit 'g' must NOT trail the value in dB mode. Guard a
     # naive substring 'g' (which appears in any value via %.4g) by anchoring
     # on the trailing token only.
-    assert ' g' not in msg, f"dB-mode readout wrongly labeled 'g': {msg!r}"
+    assert ' g' not in msg, f"dB-mode annotation wrongly labeled 'g': {msg!r}"
     c.hide()
     c.deleteLater()
 
 
-def test_hover_linear_mode_labels_value_channel_unit(qapp):
-    # Linear mode: value is in the channel unit, so the readout trails the
+def test_remark_point_linear_mode_labels_value_channel_unit(qapp):
+    # Linear mode: value is in the channel unit, so the annotation trails the
     # result unit ('g'), NOT 'dB'.
+    from mf4_analyzer.ui.pg_canvas.remarks import format_remark_label
+
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
     c.show()
     qapp.processEvents()
     r = _spec_result()  # unit='g'
     c.plot_result(r, amplitude_mode='amplitude', cmap='turbo', z_auto=True)
-    received = []
-    c.cursor_info.connect(received.append)
-    sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
-    c._on_scene_hover(sp)
-    assert received, "hover over the map must emit cursor_info"
-    msg = received[-1]
+    point = c._remark_point_at(1.0, 250.0)
+    assert point is not None
+    msg = format_remark_label(point)
     assert 'Z=' in msg and ' g' in msg, (
-        f"linear-mode readout must label Z with channel unit, got {msg!r}"
+        f"linear-mode annotation must label Z with channel unit, got {msg!r}"
     )
-    assert ' dB' not in msg, f"linear-mode readout must not say 'dB': {msg!r}"
+    assert ' dB' not in msg, f"linear-mode annotation must not say 'dB': {msg!r}"
     c.hide()
     c.deleteLater()
 
 
-def test_hover_emits_xyz_without_spectrogram_result_for_order_style_heatmap(qapp):
+def test_order_style_heatmap_hover_clears_without_xyz_readout(qapp):
     c = PgHeatmapCanvas()
     c.resize(640, 480)
     c.show()
@@ -2468,20 +2462,18 @@ def test_hover_emits_xyz_without_spectrogram_result_for_order_style_heatmap(qapp
     sp = c._plot.vb.mapViewToScene(QPointF(1.1, 1.2))
     c._on_scene_hover(sp)
 
-    assert received, "order-style heatmap hover must emit cursor_info"
-    msg = received[-1]
-    assert 'X=1 s' in msg
-    assert 'Y=1' in msg
-    assert 'Z=5 dB' in msg
+    assert received == ['']
     c.hide()
     c.deleteLater()
 
 
-def test_hover_and_remark_read_same_value_in_slice_mode(qapp):
-    # Caliber unification (裁决 3): in with_slice mode the hover readout and
-    # a placed remark must resolve the SAME cell value at the same
+def test_remark_point_and_value_at_read_same_value_in_slice_mode(qapp):
+    # Caliber unification (裁决 3): in with_slice mode the remark formatter and
+    # _value_at must resolve the SAME cell value at the same
     # coordinate. Pick a boundary coordinate where floor-fraction and
     # argmin-nearest would otherwise disagree, so the test bites.
+    from mf4_analyzer.ui.pg_canvas.remarks import format_remark_label
+
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
     c.show()
@@ -2508,21 +2500,19 @@ def test_hover_and_remark_read_same_value_in_slice_mode(qapp):
             break
     assert y is not None, "no diverging coordinate found — test would not bite"
     assert _floor_row(y) != int(np.argmin(np.abs(freqs - y)))  # precondition
-    # Hover value: parse the trailing numeric token of the cursor pill.
-    received = []
-    c.cursor_info.connect(received.append)
-    sp = c._plot.vb.mapViewToScene(QPointF(x, y))
-    c._on_scene_hover(sp)
-    assert received
-    hover_token = received[-1].split('Z=', 1)[-1].strip().split()[0]
-    # Remark value: _value_at is the remark取值器; it must agree with hover.
+    # Annotation value: parse the trailing numeric token of the same formatter
+    # used for persistent annotation labels.
+    point = c._remark_point_at(x, y)
+    assert point is not None
+    remark_token = format_remark_label(point).split('Z=', 1)[-1].strip().split()[0]
+    # Remark value: _value_at is the remark取值器; it must agree with the
+    # annotation formatter.
     remark_val = c._value_at(x, y)
-    # The hover pill formats the value via %.4g; the remark reads the same
-    # cell at full precision. Agreement means the remark value formats to the
-    # identical %.4g token the hover emitted (same cell, not the same string
-    # rounding artifact).
-    assert f"{remark_val:.4g}" == hover_token, (
-        f"hover token {hover_token!r} vs remark {remark_val} disagree on the cell"
+    # The annotation label formats the value via %.4g; _value_at reads the same
+    # cell at full precision. Agreement means _value_at formats to the
+    # identical %.4g token (same cell, not the same string rounding artifact).
+    assert f"{remark_val:.4g}" == remark_token, (
+        f"annotation token {remark_token!r} vs value {remark_val} disagree on the cell"
     )
     # And both must equal the argmin-nearest cell in the display matrix.
     t_idx = int(np.argmin(np.abs(r.times - x)))
@@ -2887,10 +2877,86 @@ def test_y_slice_x_range_matches_map_x_range(qapp):
     c.deleteLater()
 
 
+def test_x_slice_uses_visible_frequency_range(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', z_auto=True,
+        y_auto=False, y_min=100.0, y_max=300.0,
+    )
+    qapp.processEvents()
+
+    assert c._slice_dir == 'x'
+    xs, _ = c._slice_curve.getData()
+    assert np.nanmin(xs) >= 100.0 - 1e-6
+    assert np.nanmax(xs) <= 300.0 + 1e-6
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(100.0, abs=1e-6)
+    assert sx1 == pytest.approx(300.0, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
+def test_y_slice_uses_visible_time_range(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    r = _spec_result()
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', z_auto=True,
+        x_auto=False, x_min=0.5, x_max=1.5,
+    )
+    c.set_slice_direction('y')
+    qapp.processEvents()
+
+    xs, _ = c._slice_curve.getData()
+    assert np.nanmin(xs) >= 0.5 - 1e-6
+    assert np.nanmax(xs) <= 1.5 + 1e-6
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(0.5, abs=1e-6)
+    assert sx1 == pytest.approx(1.5, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
+def test_order_x_slice_uses_visible_order_range(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    times = np.linspace(0.0, 4.0, 5)
+    orders = np.array([0.0, 1.0, 2.0, 5.0, 10.0])
+    matrix = np.arange(
+        orders.size * times.size, dtype=float
+    ).reshape(orders.size, times.size)
+    c.plot_or_update_heatmap(
+        matrix, (0.0, 4.0), (0.0, 10.0),
+        x_label='Time (s)', y_label='Order',
+        x_coords=times, y_coords=orders,
+        y_auto=False, y_min=1.0, y_max=5.0,
+    )
+    c._seed_slice()
+    qapp.processEvents()
+
+    assert c._slice_dir == 'x'
+    xs, _ = c._slice_curve.getData()
+    assert np.nanmin(xs) >= 1.0 - 1e-6
+    assert np.nanmax(xs) <= 5.0 + 1e-6
+    (sx0, sx1), _ = c._slice_plot.vb.viewRange()
+    assert sx0 == pytest.approx(1.0, abs=1e-6)
+    assert sx1 == pytest.approx(5.0, abs=1e-6)
+    c.hide()
+    c.deleteLater()
+
+
 def test_x_slice_direction_unchanged_by_fix3(qapp):
     """The default 'x' direction (fixed time → amp vs frequency) must keep its
-    own frequency X axis; FIX 3 only pins the 'y' branch. Switching x→y→x leaves
-    'x' behaving exactly as before (freq-labelled bottom axis, 64-freq curve)."""
+    own visible frequency X axis. Switching x→y→x restores the x slice domain
+    and keeps the freq-labelled bottom axis."""
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
     c.show()
@@ -3074,8 +3140,7 @@ def test_view_all_on_empty_map_keeps_non_negative_range(qapp):
 # ----------------------------------------------------------------------
 def test_x_slice_reranges_to_freq_after_y_slice(qapp):
     """y→x: the 'x' slice (amp vs frequency) must re-range its X to the FREQUENCY
-    extent, NOT stay pinned to the time extent the prior 'y' slice set. Default
-    'x' is freq-autoranged; 'y' is time-pinned; back to 'x' must be freq again."""
+    visible range, NOT stay pinned to the time extent the prior 'y' slice set."""
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
     c.show()
@@ -3086,13 +3151,12 @@ def test_x_slice_reranges_to_freq_after_y_slice(qapp):
     time_lo, time_hi = c._extents[0], c._extents[1]
     freq_lo, freq_hi = float(r.frequencies[0]), float(r.frequencies[-1])
 
-    # Default 'x' = amp vs frequency; X auto-ranged to ~freq extent.
+    # Default 'x' = amp vs frequency; X pinned to the visible frequency extent.
     assert c._slice_dir == 'x'
     assert c._slice_plot.getAxis('bottom').labelText == 'Frequency (Hz)'
     (x0_x, x1_x), _ = c._slice_plot.vb.viewRange()
-    # X spans roughly the frequency extent (autorange adds a little padding).
-    assert x1_x > x0_x
-    assert x1_x == pytest.approx(freq_hi, rel=0.25)
+    assert x0_x == pytest.approx(freq_lo, abs=1e-6)
+    assert x1_x == pytest.approx(freq_hi, abs=1e-6)
     # And NOT the (much narrower) time extent.
     assert x1_x > time_hi * 2
 
@@ -3109,19 +3173,15 @@ def test_x_slice_reranges_to_freq_after_y_slice(qapp):
     qapp.processEvents()
     assert c._slice_plot.getAxis('bottom').labelText == 'Frequency (Hz)'
     (x0_b, x1_b), _ = c._slice_plot.vb.viewRange()
-    # The bug left this stuck at the time extent (~[0,2]); the fix re-fits freq.
-    assert x1_b == pytest.approx(freq_hi, rel=0.25), (
+    # The bug left this stuck at the time extent (~[0,2]); the fix re-fits the
+    # visible frequency/order coordinate domain.
+    assert x0_b == pytest.approx(freq_lo, abs=1e-6)
+    assert x1_b == pytest.approx(freq_hi, abs=1e-6), (
         f"x-after-y did not re-range to freq extent: X=({x0_b},{x1_b}), "
         f"time_hi={time_hi}, freq_hi={freq_hi}"
     )
     assert x1_b > time_hi * 2, (
         f"x-after-y slice X stuck at time extent: ({x0_b},{x1_b})"
-    )
-    # X auto-range must be re-enabled in 'x' mode. pyqtgraph stores autorange
-    # as a fractional weight (1.0 = fully enabled, False = disabled), so assert
-    # truthiness rather than identity to True.
-    assert bool(c._slice_plot.vb.autoRangeEnabled()[0]), (
-        "slice X auto-range not re-enabled in 'x' mode"
     )
     c.hide()
     c.deleteLater()

@@ -545,15 +545,6 @@ class MainWindow(
         self.inspector.fft_time_signal_changed.connect(
             self._on_fft_time_signal_changed
         )
-        # Hover readout: surface PgHeatmapCanvas.cursor_info in the
-        # status bar (reviewer Important #1; design §6.4 mouse-move
-        # readout). Pattern matches canvas_time.cursor_info → ChartStack
-        # CursorPill — the pill is gated to time mode, so the spectrogram
-        # canvas reuses the status bar instead of cloning the pill.
-        self.canvas_fft_time.cursor_info.connect(
-            self._on_fft_time_cursor_info
-        )
-
         # Populate xaxis channel candidates whenever user flips to 'channel' mode.
         self.inspector.top.combo_xaxis.currentIndexChanged.connect(
             lambda i: self._on_xaxis_mode_changed('channel' if i == 1 else 'time')

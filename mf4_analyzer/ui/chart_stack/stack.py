@@ -260,7 +260,8 @@ class ChartStack(QWidget):
         )
         card.tick_density_changed.connect(self._on_card_tick_density_changed)
         canvas = getattr(card, 'canvas', None)
-        if canvas is not None and hasattr(canvas, 'cursor_info'):
+        if (canvas is not None and hasattr(canvas, 'cursor_info')
+                and not isinstance(canvas, PgHeatmapCanvas)):
             canvas.cursor_info.connect(
                 lambda text, c=canvas: self._on_cursor_info(text, c)
             )
@@ -1018,7 +1019,7 @@ class ChartStack(QWidget):
 
     def _cursor_pill_visible_for_mode(self, mode=None):
         mode = self.current_mode() if mode is None else mode
-        return mode in {'time', 'fft_time', 'order'}
+        return mode == 'time'
 
     def _on_cursor_info(self, text, source=None):
         mode = self._cursor_mode_for_canvas(source)

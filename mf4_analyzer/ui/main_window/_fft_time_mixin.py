@@ -656,19 +656,6 @@ class FFTTimeMixin:
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
 
-    def _on_fft_time_cursor_info(self, text):
-        """Surface PgHeatmapCanvas hover readout in the status bar.
-
-        Empty text (cursor outside the heatmap scene or before a result
-        is plotted) restores the active-file summary so the bar does not
-        remain blank. Reviewer Important #1.
-        """
-        if text:
-            self.statusBar.showMessage(text)
-        else:
-            # Restore default status when the cursor leaves the plot.
-            self._update_info()
-
     # ---- FFT vs Time worker callbacks (Plan Task 7) ----
     def _on_fft_time_finished(self, result):
         """Worker reported success — cache + render on the main thread.
