@@ -495,7 +495,8 @@ class FFTContextual(QWidget):
                 self.spin_db_ref.setValue(float(d['db_reference']))
             except (TypeError, ValueError):
                 pass
-        self._apply_weighting_value(d.get('weighting', 'None'))
+        if 'weighting' in d:
+            self._apply_weighting_value(d['weighting'])
 
     def _on_sig_index_changed(self):
         self.signal_changed.emit(self.combo_sig.currentData())

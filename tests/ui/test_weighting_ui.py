@@ -92,7 +92,11 @@ def test_contextual_weighting_roundtrip_and_legacy_defaults_none(qapp, factory):
     ctx.set_weighting_default("A")
     legacy = {k: v for k, v in saved.items() if k != "weighting"}
     ctx._apply_preset_values(legacy)
-    assert _weighting(ctx) == "None"
+    # After the Task-6 fix: a preset dict without 'weighting' key must NOT
+    # reset the current weighting (mirrors apply_params guard behaviour).
+    # Old behaviour was `d.get('weighting', 'None')` which reset A → None;
+    # the guard `if 'weighting' in d:` preserves the current selection.
+    assert _weighting(ctx) == "A"
 
     ctx.set_weighting_default("A")
     ctx.apply_params({})

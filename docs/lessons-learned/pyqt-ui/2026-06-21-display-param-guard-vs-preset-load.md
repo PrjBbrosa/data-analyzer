@@ -1,7 +1,9 @@
 ---
 date: 2026-06-21
+updated: 2026-06-21
 tags: [apply_params, preset, weighting, partial-dict, display-param, colorbar]
 cause: insight
+supersedes: []
 ---
 
 # Display-param Guard vs. Preset Load in `apply_params` / `_apply_preset_values`
@@ -42,18 +44,22 @@ if 'db_reference' in d:
     self.spin_db_ref.setValue(d['db_reference'])
 ```
 
-**`_apply_preset_values`** (full blob path) — keep the `.get()` fallback
-because old presets legitimately lack the key:
+**`_apply_preset_values`** (full blob path) — also use `if 'key' in d:`
+guard for `weighting` (Task 6 correction: old presets that omit 'weighting'
+must not reset A-weighting to None):
 
 ```python
-self._apply_weighting_value(d.get('weighting', 'None'))
+if 'weighting' in d:
+    self._apply_weighting_value(d['weighting'])
 if 'db_reference' in d:
     self.spin_db_ref.setValue(d['db_reference'])
 ```
 
-`db_reference` still uses `if 'key' in d:` in both paths — a preset that
-omits it should leave the spinbox at its widget default (1.0), not reset
-to a hard-coded value on every preset load.
+Both `weighting` and `db_reference` use `if 'key' in d:` in BOTH paths.
+An old preset that omits either key leaves the current widget state unchanged,
+not reset to a hard-coded default. This is the correct contract for both
+partial-dict and legacy-full-blob cases where the user may have changed
+weighting before loading a preset that predates the weighting field.
 
 ## Display-Only Parameter Pattern (db_reference)
 

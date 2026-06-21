@@ -467,7 +467,8 @@ class OrderContextual(QWidget):
                 self.spin_db_ref.setValue(float(d['db_reference']))
             except (TypeError, ValueError):
                 pass
-        self._apply_weighting_value(d.get('weighting', 'None'))
+        if 'weighting' in d:
+            self._apply_weighting_value(d['weighting'])
         # ---- Wave 3 (2026-04-28 plan): legacy + new axis-key compat ----
         # Legacy 'dynamic' key compat — translate to z_floor/ceiling/auto.
         # Preferred path: explicit z_floor/ceiling/auto keys override the
