@@ -47,6 +47,13 @@ class FFTMixin:
         semantics, letting ``FFTAnalyzer.compute_fft`` use the signal length.
         """
         out = dict(fft_params)
+        # fs is a real compute input (FFTAnalyzer.compute_fft(sig, fs, ...)):
+        # it sets the frequency axis and PSD scaling. Stamp the effective fs
+        # (from fd.fs) onto the params here — the single point every cache-key
+        # path flows through — so _fft_compute_cache_params can key on it. In
+        # single-frame mode nfft stays None, so without fs in the key a Fs
+        # change (e.g. after 重建时间轴) would hit the stale OLD-fs result.
+        out['fs'] = float(fs)
         nfft = out.get('nfft')
         auto = (
             nfft is None
@@ -82,6 +89,10 @@ class FFTMixin:
         return {
             'window': fft_params.get('window'),
             'nfft': fft_params.get('nfft_effective', fft_params.get('nfft')),
+            # fs is a compute input (frequency axis + PSD scaling). Stamped by
+            # _resolve_fft_effective_params from fd.fs; keyed here so a Fs change
+            # in single-frame mode (nfft=None) still invalidates the cache.
+            'fs': fft_params.get('fs'),
             'avg_mode': fft_params.get('avg_mode', '单帧'),
             'avg_overlap': fft_params.get('avg_overlap', 50),
             'weighting': str(fft_params.get('weighting', 'None')),

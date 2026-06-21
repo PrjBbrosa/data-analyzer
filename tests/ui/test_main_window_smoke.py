@@ -3069,6 +3069,57 @@ def test_fft_cache_key_excludes_db_reference_display_only():
     assert k1 == k2
 
 
+def test_fft_cache_key_includes_fs_single_frame():
+    """Regression (问题①): the FFT line-chart compute key MUST include fs.
+
+    In single-frame mode the resolved nfft is None (whole-segment), so a Fs
+    change after a 重建时间轴 left every other keyed field identical and the
+    key never changed → the chart hit the stale result computed at the OLD fs
+    (wrong frequency axis + PSD scaling). fs is a real compute input
+    (FFTAnalyzer.compute_fft(sig, fs, ...)), sourced from fd.fs, so it belongs
+    in the key.
+    """
+    from mf4_analyzer.ui.main_window._fft_mixin import FFTMixin
+
+    base = {
+        "window": "hanning",
+        "nfft": None,          # single-frame / whole-segment auto
+        "nfft_mode": "auto",
+        "avg_mode": "单帧",
+        "avg_overlap": 50,
+        "weighting": "None",
+    }
+    # Resolve at two different sample rates (same n_samples, same nfft=None).
+    p_lo = FFTMixin._resolve_fft_effective_params(dict(base), 4096, 1000.0)
+    p_hi = FFTMixin._resolve_fft_effective_params(dict(base), 4096, 2000.0)
+    assert p_lo.get("nfft_effective") is None
+    assert p_hi.get("nfft_effective") is None
+    k_lo = FFTMixin._fft_compute_cache_params(p_lo)
+    k_hi = FFTMixin._fft_compute_cache_params(p_hi)
+    assert k_lo != k_hi, "single-frame FFT key did not change with fs"
+    assert k_lo["fs"] == 1000.0
+    assert k_hi["fs"] == 2000.0
+
+
+def test_fft_cache_key_includes_fs_fixed_nfft():
+    """fs also distinguishes fixed-NFFT keys (defensive: a fixed nfft + new fs
+    still changes the frequency axis)."""
+    from mf4_analyzer.ui.main_window._fft_mixin import FFTMixin
+
+    base = {
+        "window": "hanning",
+        "nfft": 1024,
+        "nfft_mode": "fixed",
+        "avg_mode": "单帧",
+        "avg_overlap": 50,
+        "weighting": "None",
+    }
+    p_lo = FFTMixin._resolve_fft_effective_params(dict(base), 4096, 1000.0)
+    p_hi = FFTMixin._resolve_fft_effective_params(dict(base), 4096, 2000.0)
+    assert FFTMixin._fft_compute_cache_params(p_lo) != \
+        FFTMixin._fft_compute_cache_params(p_hi)
+
+
 # ---- Task 5: Order dB reference render tests ----
 
 def test_order_db_display_uses_db_reference(monkeypatch, qapp):
