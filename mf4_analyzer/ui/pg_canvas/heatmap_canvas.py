@@ -246,7 +246,9 @@ def _finite_data_bounds(matrix):
 # Deliberately NOT read from the inspector's z_floor/z_ceiling: reading
 # from those fields would make the auto window depend on spin state and
 # re-introduce a feedback loop.  A fixed span is predictable and safe.
-_AUTO_SPAN_DB: float = 40.0
+# Default 30 dB — the window most noise analysis uses; high-dynamic-range data
+# may later auto-widen toward 40 dB (Phase A2 of the auto-color-span plan).
+_AUTO_SPAN_DB: float = 30.0
 
 # Percentile used to anchor the *ceiling* of the absolute-dB auto window
 # (plot_result path, FFT-vs-Time and Order).  Real measurement spectra have
@@ -275,6 +277,19 @@ def _robust_db_ceiling(matrix, pct=_AUTO_CEILING_PCT):
     if finite.size == 0:
         return _finite_data_bounds(matrix)[1]
     return float(np.percentile(finite, pct))
+
+
+def _auto_db_window(matrix):
+    """Single source for the absolute-dB auto colour window → ``(vmin, vmax)``.
+
+    ceiling = robust high-percentile (``_robust_db_ceiling``, anti-transient);
+    span = ``_AUTO_SPAN_DB`` below it. Both the heatmap ``z_auto`` path and the
+    Order render override resolve the window here, so the two can never drift
+    apart (the recurring compute-vs-display split). Display-only: callers clamp
+    COLOURS to this window, never the stored matrix.
+    """
+    ceiling = _robust_db_ceiling(matrix, _AUTO_CEILING_PCT)
+    return ceiling - _AUTO_SPAN_DB, ceiling
 
 
 
@@ -1520,8 +1535,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 # user had to drag down ~38 dB to read).  _AUTO_SPAN_DB and
                 # the percentile are intentionally NOT read from the spin
                 # widgets, to prevent a feedback loop.
-                data_hi = _robust_db_ceiling(m, _AUTO_CEILING_PCT)
-                vmin, vmax = data_hi - _AUTO_SPAN_DB, data_hi
+                vmin, vmax = _auto_db_window(m)
                 # Store the computed absolute window so the caller can
                 # write it back to the inspector spins (blockSignals),
                 # making auto→manual a seamless no-jump transition.

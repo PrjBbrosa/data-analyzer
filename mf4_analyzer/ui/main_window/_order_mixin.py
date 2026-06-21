@@ -474,11 +474,8 @@ class OrderMixin:
         vmin_override = None
         vmax_override = None
         if z_auto and amp_mode_token == 'amplitude_db':
-            from ..pg_canvas.heatmap_canvas import (
-                _AUTO_CEILING_PCT, _AUTO_SPAN_DB, _robust_db_ceiling)
-            data_hi = _robust_db_ceiling(matrix, _AUTO_CEILING_PCT)
-            vmin_override = data_hi - _AUTO_SPAN_DB
-            vmax_override = data_hi
+            from ..pg_canvas.heatmap_canvas import _auto_db_window
+            vmin_override, vmax_override = _auto_db_window(matrix)
 
         # Pin the amplitude mode so the slice's amplitude-axis label reads
         # 'Amplitude (dB)' vs 'Amplitude' correctly (Order renders through
