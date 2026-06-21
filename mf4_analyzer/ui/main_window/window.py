@@ -404,6 +404,13 @@ class MainWindow(
         self.inspector.order_ctx.spin_db_ref.valueChanged.connect(
             lambda _: _QTimer.singleShot(0, self.do_order_time)
         )
+        # FFT-vs-Time dB reference is also display-only.  Changing it should
+        # take the normal cache-hit render path (force=False) so the current
+        # SpectrogramResult is redrawn with the new render-time reference
+        # without scheduling a needless recompute.
+        self.inspector.fft_time_ctx.spin_db_ref.valueChanged.connect(
+            lambda _: _QTimer.singleShot(0, lambda: self.do_fft_time(force=False))
+        )
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)

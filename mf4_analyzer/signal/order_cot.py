@@ -29,7 +29,10 @@ class COTParams:
     max_order: float = 20.0
     order_res: float = 0.05
     time_res: float = 0.05      # in seconds, hop in time domain (mapped to angle)
-    fs: float = 0.0             # source sample rate; carried through for batch-preset capture
+    # Source sample rate carried through for preset/result/cache identity.  The
+    # COT math below works on the provided time vector and angle-domain grid, so
+    # ``compute`` intentionally does not read fs directly.
+    fs: float = 0.0
     min_rpm_floor: float = 10.0  # frames whose mean |rpm| below this are zeroed
     weighting: str = 'None'
 

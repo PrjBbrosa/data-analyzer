@@ -3221,6 +3221,31 @@ def test_order_cache_key_includes_window():
     assert k_flat["window"] == "flattop"
 
 
+def test_fft_time_db_reference_change_triggers_cached_rerender(qapp, qtbot, monkeypatch):
+    """FFT-vs-Time dB reference is display-only, but changing it must still
+    re-render the current result from cache without forcing a recompute.
+
+    The MainWindow wiring should mirror FFT/Order: valueChanged schedules
+    ``do_fft_time(force=False)`` so the normal cache-hit path redraws with the
+    new render-time ``db_reference``.
+    """
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    calls = []
+
+    def fake_do_fft_time(force=False):
+        calls.append(force)
+
+    monkeypatch.setattr(win, "do_fft_time", fake_do_fft_time)
+
+    win.inspector.fft_time_ctx.spin_db_ref.setValue(2.0)
+
+    qtbot.waitUntil(lambda: bool(calls), timeout=1000)
+    assert calls == [False]
+
+
 def test_fft_time_low_cache_key_excludes_db_reference_display_only():
     """db_reference is display-only and must NOT affect the FFT-vs-Time LRU key.
 
