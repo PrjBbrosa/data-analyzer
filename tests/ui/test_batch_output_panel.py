@@ -8,6 +8,8 @@ old unit's numeric Z range must NOT bleed into the new unit. See spec
 from __future__ import annotations
 
 import pytest
+from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtWidgets import QGroupBox, QWidget
 
 
 def _make_panel(qtbot):
@@ -15,6 +17,64 @@ def _make_panel(qtbot):
     panel = OutputPanel()
     qtbot.addWidget(panel)
     return panel
+
+
+def test_batch_output_panel_axis_settings_uses_inspector_layout(qtbot):
+    """Batch OUTPUT should use the same roomy axis layout as inspectors."""
+    panel = _make_panel(qtbot)
+
+    assert set(panel._axis_row_parts) == {"x", "y", "z"}
+    assert panel.findChild(QWidget, "axisHeaderRow") is not None
+
+    z_parts = panel._axis_row_parts["z"]
+    assert z_parts["unit"].parent().objectName() == "axisUnitLine"
+    assert z_parts["unit"].maximumWidth() == 64
+    assert panel._axis_row_parts["x"]["label"].minimumWidth() >= 72
+
+    assert z_parts["stack"].currentWidget() is z_parts["summary_page"]
+    assert z_parts["summary"].text() == "自动色阶"
+
+    panel.chk_z_auto.setChecked(False)
+
+    assert z_parts["stack"].currentWidget() is z_parts["manual_page"]
+    assert z_parts["spin_min"].isVisibleTo(panel) is True
+    assert z_parts["spin_max"].isVisibleTo(panel) is True
+
+    panel.resize(360, 420)
+    panel.show()
+    qtbot.wait(20)
+    unit_top = z_parts["unit"].parentWidget().mapTo(panel, QPoint(0, 0)).y()
+    range_top = z_parts["range_host"].mapTo(panel, QPoint(0, 0)).y()
+    assert unit_top > range_top
+
+
+def test_batch_output_panel_axis_settings_has_no_native_gray_frame(qtbot):
+    panel = _make_panel(qtbot)
+
+    group = next(
+        gb for gb in panel.findChildren(QGroupBox)
+        if gb.title() == "坐标轴设置"
+    )
+
+    style = group.styleSheet()
+    assert "border: none" in style
+    assert "background-color: #ffffff" in style
+    assert panel.testAttribute(Qt.WA_StyledBackground) is True
+    assert "QWidget#BatchOutputPanel" in panel.styleSheet()
+    assert "background-color: #ffffff" in panel.styleSheet()
+
+
+def test_batch_output_panel_order_time_axis_labels_match_inspector(qtbot):
+    panel = _make_panel(qtbot)
+
+    panel.apply_method_defaults("order_time")
+
+    x_parts = panel._axis_row_parts["x"]
+    y_parts = panel._axis_row_parts["y"]
+    assert x_parts["label"].text() == "时间 (X):"
+    assert x_parts["summary"].text() == "全时段"
+    assert y_parts["label"].text() == "阶次 (Y):"
+    assert y_parts["summary"].text() == "0 → 最大阶次"
 
 
 def test_batch_output_panel_unit_toggle_resets_z_range_db_to_linear(qtbot):

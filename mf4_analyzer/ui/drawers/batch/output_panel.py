@@ -14,30 +14,48 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QAbstractSpinBox, QCheckBox, QComboBox, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout,
-    QWidget,
+    QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+    QLineEdit, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from ....batch import BatchOutput
+from ...inspector_sections._helpers import _make_axis_settings_group
 from ..._axis_defaults import z_range_for
-from ...widgets.compact_spinbox import CompactDoubleSpinBox
 
 
 _GENERIC_DB_Z_RANGE = (-80.0, 0.0)
 _ORDER_TIME_DB_Z_RANGE = (-50.0, -10.0)
 _ORDER_TIME_METHOD = "order_time"
+_BATCH_AXIS_LABEL_W = 72
 
-
-def _axis_spin(parent, lo=-1e9, hi=1e9, value=0.0):
-    spin = CompactDoubleSpinBox(parent)
-    spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
-    spin.setRange(float(lo), float(hi))
-    spin.setDecimals(6)
-    spin.setValue(float(value))
-    return spin
+_AXIS_CONTEXTS = {
+    "fft": {
+        "x_label": "频率 (X):",
+        "x_unit": "Hz",
+        "x_summary": "自动范围",
+        "y_label": "幅值 (Y):",
+        "y_unit": "",
+        "y_summary": "自动范围",
+    },
+    "fft_time": {
+        "x_label": "时间 (X):",
+        "x_unit": "s",
+        "x_summary": "全时段",
+        "y_label": "频率 (Y):",
+        "y_unit": "Hz",
+        "y_summary": "0 → Nyquist",
+    },
+    "order_time": {
+        "x_label": "时间 (X):",
+        "x_unit": "s",
+        "x_summary": "全时段",
+        "y_label": "阶次 (Y):",
+        "y_unit": "",
+        "y_summary": "0 → 最大阶次",
+    },
+}
 
 
 class OutputPanel(QWidget):
@@ -46,6 +64,12 @@ class OutputPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("BatchOutputPanel")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("""
+QWidget#BatchOutputPanel {
+    background-color: #ffffff;
+}
+""")
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -87,46 +111,23 @@ class OutputPanel(QWidget):
         form.addRow("数据格式", self._combo_format)
         outer.addLayout(form)
 
-        axis_group = QGroupBox("坐标轴设置", self)
-        axis_form = QFormLayout(axis_group)
-        axis_form.setContentsMargins(0, 0, 0, 0)
-        axis_form.setHorizontalSpacing(6)
-        axis_form.setVerticalSpacing(4)
-
-        self.chk_x_auto = QCheckBox("自动", axis_group)
-        self.chk_x_auto.setChecked(True)
-        self.spin_x_min = _axis_spin(axis_group, value=0.0)
-        self.spin_x_max = _axis_spin(axis_group, value=0.0)
-        self._x_axis_row = self._make_axis_row(
-            self.chk_x_auto, self.spin_x_min, self.spin_x_max,
+        axis_group = _make_axis_settings_group(
+            self,
+            x_label="时间 (X):", x_unit="s",
+            x_default_min=0.0, x_default_max=0.0,
+            y_label="范围 (Y):", y_unit="",
+            y_default_min=0.0, y_default_max=0.0,
+            z_default_floor=_GENERIC_DB_Z_RANGE[0],
+            z_default_ceiling=_GENERIC_DB_Z_RANGE[1],
+            z_default_auto=True,
+            x_default_auto=True,
+            y_default_auto=True,
+            x_auto_summary="全时段",
+            y_auto_summary="自动范围",
+            z_auto_summary="自动色阶",
         )
-        axis_form.addRow("X 范围", self._x_axis_row)
-
-        self.chk_y_auto = QCheckBox("自动", axis_group)
-        self.chk_y_auto.setChecked(True)
-        self.spin_y_min = _axis_spin(axis_group, value=0.0)
-        self.spin_y_max = _axis_spin(axis_group, value=0.0)
-        self._y_axis_row = self._make_axis_row(
-            self.chk_y_auto, self.spin_y_min, self.spin_y_max,
-        )
-        axis_form.addRow("Y 范围", self._y_axis_row)
-
-        self.chk_z_auto = QCheckBox("自动", axis_group)
-        self.chk_z_auto.setChecked(True)
-        self.spin_z_floor = _axis_spin(
-            axis_group, lo=-200.0, hi=200.0, value=_GENERIC_DB_Z_RANGE[0],
-        )
-        self.spin_z_ceiling = _axis_spin(
-            axis_group, lo=-200.0, hi=200.0, value=_GENERIC_DB_Z_RANGE[1],
-        )
-        self.combo_amp_unit = QComboBox(axis_group)
-        self.combo_amp_unit.addItems(["dB", "Linear"])
-        self._z_axis_row = self._make_axis_row(
-            self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling,
-            self.combo_amp_unit,
-        )
-        axis_form.addRow("Z 色阶", self._z_axis_row)
-
+        self._widen_axis_label_column(axis_group)
+        self._flatten_axis_group_chrome(axis_group)
         outer.addWidget(axis_group)
         outer.addStretch(1)
 
@@ -141,9 +142,7 @@ class OutputPanel(QWidget):
         # preset loads do NOT re-enter this handler. Coalesce the three
         # internal mutations (chk + 2 spins) into a single ``changed``
         # emit (§5 风险 OutputPanel emits).
-        self.combo_amp_unit.currentTextChanged.connect(self._on_amp_unit_changed)
         for chk in (self.chk_x_auto, self.chk_y_auto, self.chk_z_auto):
-            chk.toggled.connect(self._sync_axis_enabled)
             chk.toggled.connect(lambda *_: self.changed.emit())
         for spin in (
             self.spin_x_min, self.spin_x_max,
@@ -151,21 +150,8 @@ class OutputPanel(QWidget):
             self.spin_z_floor, self.spin_z_ceiling,
         ):
             spin.valueChanged.connect(lambda *_: self.changed.emit())
+        self._apply_method_axis_context("fft")
         self._sync_axis_enabled()
-
-    def _make_axis_row(self, chk, spin_min, spin_max, unit_widget=None):
-        row = QWidget(self)
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        lay.addWidget(chk)
-        lay.addWidget(spin_min, 1)
-        lay.addWidget(QLabel("→", row))
-        lay.addWidget(spin_max, 1)
-        if unit_widget is not None:
-            unit_widget.setMinimumWidth(72)
-            lay.addWidget(unit_widget)
-        return row
 
     def _on_amp_unit_changed(self, text: str) -> None:
         """User toggled dB↔Linear on ``combo_amp_unit``.
@@ -199,6 +185,7 @@ class OutputPanel(QWidget):
 
     def apply_method_defaults(self, method: str) -> None:
         """Apply method-specific output defaults without clobbering edits."""
+        self._apply_method_axis_context(method)
         if not self._is_method_default_z_state():
             return
         if method == _ORDER_TIME_METHOD:
@@ -218,6 +205,76 @@ class OutputPanel(QWidget):
                 w.blockSignals(False)
         self._sync_axis_enabled()
         self.changed.emit()
+
+    def _apply_method_axis_context(self, method: str) -> None:
+        context = _AXIS_CONTEXTS.get(str(method), _AXIS_CONTEXTS["fft"])
+        for axis, suffix_key in (("x", "x_unit"), ("y", "y_unit")):
+            suffix = context[suffix_key]
+            text = f" {suffix}" if suffix else ""
+            for spin_key in ("spin_min", "spin_max"):
+                self._axis_row_parts[axis][spin_key].setSuffix(text)
+        self._axis_row_parts["x"]["label"].setText(context["x_label"])
+        self._axis_row_parts["x"]["summary"].setText(context["x_summary"])
+        self._axis_row_parts["y"]["label"].setText(context["y_label"])
+        self._axis_row_parts["y"]["summary"].setText(context["y_summary"])
+
+    def _widen_axis_label_column(self, axis_group: QWidget) -> None:
+        for parts in self._axis_row_parts.values():
+            parts["label"].setMinimumWidth(_BATCH_AXIS_LABEL_W)
+            parts["label"].setMaximumWidth(_BATCH_AXIS_LABEL_W)
+
+        header = axis_group.findChild(QWidget, "axisHeaderRow")
+        header_layout = header.layout() if header is not None else None
+        spacer_item = header_layout.itemAt(0) if header_layout is not None else None
+        if spacer_item is not None and spacer_item.spacerItem() is not None:
+            spacer_item.spacerItem().changeSize(
+                _BATCH_AXIS_LABEL_W,
+                0,
+                QSizePolicy.Fixed,
+                QSizePolicy.Minimum,
+            )
+            header_layout.invalidate()
+
+    def _flatten_axis_group_chrome(self, axis_group: QWidget) -> None:
+        axis_group.setStyleSheet("""
+QGroupBox#axisSettingsGroup {
+    margin-top: 6px;
+    padding: 18px 0 8px 0;
+    border: none;
+    border-radius: 0;
+    background-color: #ffffff;
+}
+QGroupBox#axisSettingsGroup::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 0;
+    right: 0;
+    padding: 2px 0 6px 0;
+    color: #111827;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: transparent;
+    border-bottom: 1px solid #dfe5ee;
+}
+QGroupBox#axisSettingsGroup QWidget#axisRow,
+QGroupBox#axisSettingsGroup QWidget#axisRowLine,
+QGroupBox#axisSettingsGroup QWidget#axisAutoCell,
+QGroupBox#axisSettingsGroup QWidget#axisRangeHost,
+QGroupBox#axisSettingsGroup QWidget#axisRangeSummaryPage,
+QGroupBox#axisSettingsGroup QWidget#axisManualRangePage,
+QGroupBox#axisSettingsGroup QWidget#axisUnitLine,
+QGroupBox#axisSettingsGroup QWidget#axisHeaderRow,
+QGroupBox#axisSettingsGroup QWidget#axisHeaderRange {
+    border: none;
+    background-color: transparent;
+}
+QGroupBox#axisSettingsGroup QLabel[axisHeader="true"] {
+    color: #97a1b2;
+    font-size: 11px;
+    font-weight: 500;
+    background-color: transparent;
+}
+""")
 
     def _is_method_default_z_state(self) -> bool:
         if self.combo_amp_unit.currentText() != "dB":
@@ -239,14 +296,18 @@ class OutputPanel(QWidget):
         )
 
     def _sync_axis_enabled(self) -> None:
-        for chk, lo, hi in (
-            (self.chk_x_auto, self.spin_x_min, self.spin_x_max),
-            (self.chk_y_auto, self.spin_y_min, self.spin_y_max),
-            (self.chk_z_auto, self.spin_z_floor, self.spin_z_ceiling),
-        ):
-            manual = not chk.isChecked()
-            lo.setEnabled(manual)
-            hi.setEnabled(manual)
+        for key in ("x", "y", "z"):
+            parts = self._axis_row_parts[key]
+            auto = parts["checkbox"].isChecked()
+            parts["stack"].setCurrentWidget(
+                parts["summary_page"] if auto else parts["manual_page"]
+            )
+            parts["summary_page"].setVisible(auto)
+            parts["manual_page"].setVisible(not auto)
+            parts["summary"].setVisible(auto)
+            for w in (parts["spin_min"], parts["arrow"], parts["spin_max"]):
+                w.setVisible(not auto)
+                w.setEnabled(not auto)
 
     # ------------------------------------------------------------------
     def _choose_dir(self) -> None:

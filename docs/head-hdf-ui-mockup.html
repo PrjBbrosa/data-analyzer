@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HEAD .hdf · 两级折叠（竖向）</title>
+<style>
+  :root{
+    --bg:#e9ecf0; --panel:#f4f5f7; --card:#ffffff; --line:#e3e6ea;
+    --ink:#1f2733; --muted:#8a93a0; --accent:#2f6df6; --hover:#f0f3f8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    display:flex;flex-direction:column;align-items:center;padding:26px 16px 60px;gap:14px}
+  h1{font-size:18px;margin:0}
+  .sub{color:var(--muted);font-size:13px;margin:0;max-width:380px;text-align:center;line-height:1.6}
+  .sub b{color:var(--ink)}
+
+  /* the real left rail is a narrow vertical column */
+  .rail{width:360px;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:12px;display:flex;flex-direction:column;gap:10px}
+
+  .filecard{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:12px 14px;position:relative;box-shadow:inset 3px 0 0 var(--accent)}
+  .filecard .nm{font-weight:600;font-size:14px;padding-right:26px}
+  .filecard .meta{color:var(--muted);font-size:12px;margin-top:5px}
+  .filecard .x{position:absolute;top:10px;right:10px;width:22px;height:22px;border:1px solid var(--line);
+    border-radius:7px;background:#fff;color:var(--muted);font-size:12px;line-height:20px;text-align:center;cursor:pointer}
+  .filecard .x:hover{color:#c0392b;border-color:#f3c9c4}
+
+  .filterbox{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:9px 12px;color:var(--muted);font-size:13px}
+  .btnrow{display:flex;gap:8px;align-items:center}
+  .btn{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer}
+  .btn:hover{background:var(--hover)}
+  .btn.right{margin-left:auto;display:flex;gap:5px;align-items:center}
+
+  .col{display:flex;align-items:center;color:var(--muted);font-size:12px;font-weight:600;
+    padding:6px 4px;border-bottom:1px solid var(--line)}
+  .col .pts{margin-left:auto}
+  .tree{font-size:13.5px}
+
+  .node{display:flex;align-items:center;gap:8px;padding:7px 4px;border-radius:7px;cursor:pointer;user-select:none}
+  .node:hover{background:var(--hover)}
+  .node .pts{margin-left:auto;color:#9aa3b0;font-variant-numeric:tabular-nums;font-size:12.5px}
+  .arrow{width:13px;color:#9aa3b0;font-size:10px;display:inline-block;text-align:center;transition:transform .12s}
+  .collapsed > .node > .arrow{transform:rotate(-90deg)}
+  .spacer{width:13px;display:inline-block}
+  .cb{width:16px;height:16px;border:1.6px solid #c4ccd6;border-radius:4px;flex:0 0 auto;
+    display:inline-flex;align-items:center;justify-content:center;font-size:11px;color:#fff;background:#fff}
+  .cb.on{background:var(--accent);border-color:var(--accent)}
+  .cb.on::after{content:"✓"}
+  .cb.partial{border-color:var(--accent)}
+  .cb.partial::after{content:"–";color:var(--accent);font-weight:700}
+  .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
+  .nmtxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lvl-file > .node{font-weight:700}
+  .lvl-raster > .node{font-weight:600}
+  .lvl-raster > .node .sub{color:var(--muted);font-weight:500;font-size:12px;margin-left:6px}
+  .children{display:block}
+  .collapsed > .children{display:none}
+  .ind-raster{padding-left:14px}
+  .ind-ch{padding-left:40px}
+  .note{color:var(--muted);font-size:12px;max-width:380px;text-align:center;line-height:1.6}
+  code{background:#dfe3e8;padding:1px 5px;border-radius:5px;font-size:12px}
+</style>
+</head>
+<body>
+  <h1>HEAD <code>.hdf</code> · 两级折叠（竖向左栏）</h1>
+  <p class="sub">顶部只剩 <b>1 张文件卡</b>；通道树是 <b>两级折叠</b>：外层＝文件，内层＝采样率轨道，再下面才是通道。箭头点着能折叠，复选框能勾。</p>
+
+  <div class="rail" id="rail"></div>
+
+  <p class="note">外层文件可整体折叠；内层每条轨道也可单独折叠/整轨勾选。叶子通道仍各自绑定其 fid，所以 FFT/阶次的采样率永远正确（后端仍是 2 个 FileData，不变）。</p>
+
+<script>
+const FNAME="260417-ripple-PK2C-电机加热-1";
+const FAST={rate:"129.5 kHz",rows:"1188000",ch:[
+  ["L","#2f6df6",0],["R","#1aa260",0],["MOTOR Y","#e23b3b",1],["MOTOR X","#f08a24",1],
+  ["MOTOR Z","#17a8b8",1],["输出轴 z","#9b5de5",1],["输出轴 y","#d6336c",1],
+  ["输出轴 x","#7a8595",1],["SP (rpm-injected)","#2f6df6",0]]};
+const SLOW={rate:"5.4 kHz",rows:"49500",ch:[
+  ["SP","#2f6df6",0],["Com_RPS_Speed","#1aa260",0],["Com_Motor_Torque","#e23b3b",0],
+  ["Com_TAS_Angle","#f08a24",0],["Com_MotorTemp","#17a8b8",0],["Com_RPS_Angle","#9b5de5",0]]};
+
+function cb(state){const c=state==='on'?'cb on':state==='partial'?'cb partial':'cb';return `<span class="${c}"></span>`}
+function dot(c){return `<span class="dot" style="background:${c}"></span>`}
+
+function channel([name,color,on],rows){
+  return `<div class="node ind-ch" onclick="tog(this,event)">
+    ${cb(on?'on':'off')}${dot(color)}<span class="nmtxt">${name}</span><span class="pts">${rows}</span></div>`;
+}
+function raster(g,open){
+  const anyOn=g.ch.some(c=>c[2]), allOn=g.ch.every(c=>c[2]);
+  return `<div class="lvl-raster ${open?'':'collapsed'}">
+    <div class="node ind-raster" onclick="fold(this,event)">
+      <span class="arrow">▾</span>${cb(allOn?'on':anyOn?'partial':'off')}
+      <span class="nmtxt">${g.rate}</span><span class="sub">${g.rows} 行</span><span class="pts">${g.rows}</span>
+    </div>
+    <div class="children">${g.ch.map(c=>channel(c,g.rows)).join('')}</div>
+  </div>`;
+}
+function fileNode(){
+  return `<div class="lvl-file">
+    <div class="node" onclick="fold(this,event)">
+      <span class="arrow">▾</span>${cb('partial')}<span class="nmtxt">${FNAME}</span><span class="pts">2 轨</span>
+    </div>
+    <div class="children">${raster(FAST,true)}${raster(SLOW,false)}</div>
+  </div>`;
+}
+
+document.getElementById('rail').innerHTML = `
+  <div class="filecard">
+    <div class="x">×</div>
+    <div class="nm">${FNAME}</div>
+    <div class="meta">2 轨 · 129.5k / 5.4k Hz · 9.17 s</div>
+  </div>
+  <div class="filterbox">Filter channel…</div>
+  <div class="btnrow">
+    <span class="btn">全选</span><span class="btn">全不</span><span class="btn">已选</span>
+    <span class="btn right">⚙ 编辑通道</span>
+  </div>
+  <div class="col">Channel <span class="pts">Pts</span></div>
+  <div class="tree">${fileNode()}</div>`;
+
+function fold(nodeEl,e){e.stopPropagation();nodeEl.parentElement.classList.toggle('collapsed')}
+function tog(nodeEl,e){e.stopPropagation();const c=nodeEl.querySelector('.cb');if(c)c.classList.toggle('on')}
+</script>
+</body>
+</html>

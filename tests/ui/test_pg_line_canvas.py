@@ -1480,10 +1480,9 @@ def test_format_readout_empty_when_no_entries(canvas):
 
 
 def test_fft_time_preview_default_divisions_match_standard_y_density(canvas):
-    # Standard Y tick count defaults to 8 across the app (PersistentTop
-    # spin_yt=8, TickDensityController=(10, 8)); the time-preview graticule
-    # default must match it so the preview lines up with every other Y axis.
-    assert canvas._time_divisions == 8
+    # FFT time-preview uses 10 default Y divisions so its graticule matches
+    # the FFT line canvas default framing before the user changes tick density.
+    assert canvas._time_divisions == 10
 
 
 def test_set_tick_density_accepts_inspector_counts(canvas):
@@ -1872,7 +1871,7 @@ def test_fit_y_keeps_time_axes_on_grid(canvas):
     left = canvas._plot_time.getAxis('left')
     (lo, hi) = canvas._plot_time.vb.viewRange()[1]
     fr = [round((v - lo) / (hi - lo), 6) for v in _major_tick_values(left)]
-    assert fr == pytest.approx([k / 8 for k in range(9)], abs=1e-6)
+    assert fr == pytest.approx([k / 10 for k in range(11)], abs=1e-6)
 
 
 def test_constant_signal_does_not_raise(canvas):
