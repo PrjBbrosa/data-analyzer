@@ -144,9 +144,14 @@ class OrderMixin:
         if nfft is None:
             nfft = p.get('nfft_preview') or 256
         # 规约：凡进入 COT 计算的用户可调参数都必须在此登记，否则改了不刷新。
+        # window is a COTParams field consumed by COTOrderAnalyzer.compute
+        # (it builds the analysis window from it); registering it here keeps
+        # the key field-aligned with the dataclass so a window change forces a
+        # recompute instead of reusing a result built with the old window.
         return {
             'nfft': int(nfft),
             'nfft_mode': p.get('nfft_mode', 'fixed'),
+            'window': p.get('window', 'hanning'),
             'max_order': p.get('max_order'),
             'order_res': p.get('order_res'),
             'time_res': p.get('time_res'),

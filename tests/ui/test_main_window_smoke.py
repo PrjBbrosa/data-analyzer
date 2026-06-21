@@ -3195,6 +3195,32 @@ def test_order_cache_key_excludes_db_reference_display_only():
     assert k1 == k2
 
 
+def test_order_cache_key_includes_window():
+    """问题⑨ (preventive): window IS a COTParams field consumed by compute
+    (COTOrderAnalyzer builds the analysis window from it), so changing it must
+    invalidate the Order compute cache key — otherwise a window change silently
+    reuses a result built with the old window."""
+    from mf4_analyzer.ui.main_window._order_mixin import OrderMixin
+
+    base = {
+        "nfft": 1024,
+        "max_order": 20,
+        "order_res": 0.1,
+        "time_res": 0.05,
+        "samples_per_rev": 256,
+        "rpm_factor": 1.0,
+        "fs": 1000.0,
+        "weighting": "None",
+    }
+    k_hann = OrderMixin._order_compute_cache_params(
+        dict(base, window="hanning"), ("f", "rpm"), None)
+    k_flat = OrderMixin._order_compute_cache_params(
+        dict(base, window="flattop"), ("f", "rpm"), None)
+    assert k_hann != k_flat, "Order cache key did not change with window"
+    assert k_hann["window"] == "hanning"
+    assert k_flat["window"] == "flattop"
+
+
 def test_fft_time_low_cache_key_excludes_db_reference_display_only():
     """db_reference is display-only and must NOT affect the FFT-vs-Time LRU key.
 
