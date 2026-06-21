@@ -1264,13 +1264,9 @@ QFrame#plotCollapsedRail:hover {
     background-color: #e7ecf2;
 }
 
-/* Chart toolbar — compact spacing & padding (post-i18n). Three selectors
- * to cover Qt style resolution variations: QToolBar (matplotlib subclass),
- * QWidget (object-name match), and the matplotlib subclass name. */
+/* Chart toolbar - compact spacing & padding for the pyqtgraph toolbar. */
 QToolBar#chartToolbar,
-QWidget#chartToolbar,
-NavigationToolbar2QT#chartToolbar,
-NavigationToolbar2QT {
+QWidget#chartToolbar {
     background-color: transparent;
     border: none;
     spacing: 1px;

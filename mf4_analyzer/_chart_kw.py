@@ -1,9 +1,8 @@
 """Chart-layout constants shared across layers.
 
 Lives at the package root because both the ui layer
-(`ui/canvases.py`, `ui/main_window.py`) and a non-ui layer
-(`batch.py`, which writes matplotlib PNGs without involving Qt
-canvases) consume the same compactness constants. Keeping them under
+(`ui/canvases.py`, `ui/main_window.py`) and historical non-ui export
+paths consume the same compactness constants. Keeping them under
 `ui/` would force `batch.py` to import "up" into `ui`, violating the
 package's dependency rules. See
 ``docs/lessons-learned/refactor/2026-04-22-cross-layer-constant-promote-to-package-root.md``.

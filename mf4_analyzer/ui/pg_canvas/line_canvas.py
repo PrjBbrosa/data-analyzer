@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from PyQt5.QtCore import QPointF, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QPointF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 import pyqtgraph as pg
@@ -42,6 +42,7 @@ from .heatmap_canvas import (
 )
 from .context_menu import redesign_pg_context_menu
 from .fonts import _apply_pg_axis_font
+from .remarks import RemarkArtist, RemarkInteraction, RemarkPoint
 from ._shared import show_major_grid_left_bottom_only
 from ._split_mixin import (
     _CollapsedRail,
@@ -226,6 +227,12 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._selected_time_entry_idx = None
         self._remarks = []
         self._remark_enabled = False
+        self._remark_artist = RemarkArtist()
+        self._remark_interaction = RemarkInteraction(
+            add_at_viewport_pos=lambda pos: self._add_remark_at_viewport_pos(pos),
+            remove_at_viewport_pos=lambda pos: self._remove_remark_at_viewport_pos(pos),
+            remark_at_viewport_pos=lambda pos: self._remark_item_at_viewport_pos(pos),
+        )
         self._last_xlim = None
         self._last_yrange = None
         self._mouse_mode_controller = None
@@ -272,6 +279,13 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
 
         self._glw.scene().sigMouseMoved.connect(self._on_hover)
         self._glw.scene().sigMouseClicked.connect(self._on_click)
+        try:
+            viewport = self._glw.viewport()
+            if viewport is not None:
+                viewport.setMouseTracking(True)
+                viewport.installEventFilter(self)
+        except Exception:
+            pass
         # Keep the overlay aux ViewBoxes glued to the time plot's main ViewBox
         # (geometry on resize, X range on pan/zoom) so the extra Y axes track.
         self._plot_time.vb.sigResized.connect(self._sync_time_overlay_vbs)
@@ -1638,6 +1652,34 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         return None if best is None else best[1]
 
     # ------------------------------------------------------------------
+    def _axis_label_unit(self, label: str) -> str:
+        text = str(label or "")
+        if "dB" in text:
+            return "dB"
+        if "(Hz)" in text:
+            return "Hz"
+        if "(s)" in text:
+            return "s"
+        return ""
+
+    def _amp_y_unit(self) -> str:
+        try:
+            axis = self._plot_amp.getAxis('left')
+            return self._axis_label_unit(getattr(axis, 'labelText', ''))
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _curve_color(curve, fallback="#1769e0") -> str:
+        try:
+            pen = curve.opts.get('pen')
+            color = pen.color()
+            if color.isValid():
+                return color.name()
+        except Exception:
+            pass
+        return fallback
+
     def set_remark_enabled(self, enabled: bool) -> None:
         self._remark_enabled = bool(enabled)
         # Suppress BOTH plots' default right-click ViewBox menu while annotating
@@ -1645,21 +1687,37 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         # click slot is structurally too late to block the menu (the menu is
         # raised during item dispatch, before sigMouseClicked fires) — the menu's
         # real gate is menuEnabled(). Lesson: sigmouseclicked-fires-after-viewbox-menu.
-        self._plot_amp.vb.setMenuEnabled(not self._remark_enabled)
-        self._plot_time.vb.setMenuEnabled(not self._remark_enabled)
+        self._remark_interaction.set_enabled(
+            self._remark_enabled,
+            viewport=self._glw.viewport(),
+            menu_viewboxes=(self._plot_amp.vb, self._plot_time.vb),
+        )
 
     def clear_remarks(self) -> None:
-        for r in self._remarks:
-            # Aux overlay annotations live on an aux ViewBox, not on the plot
-            # directly, so remove from the stored owner — vb if recorded
-            # (aux curves), else the plot (amp row / main time curve).
-            owner = r.get('vb') or r.get('plot')
-            try:
-                owner.removeItem(r['label'])
-                owner.removeItem(r['dot'])
-            except Exception:
-                pass
-        self._remarks = []
+        self._remark_artist.clear(self._remarks)
+
+    def _append_remark(
+        self, *, vb, x: float, y: float, color: str, unit_x: str,
+        unit_y: str = "", plot=None,
+    ) -> None:
+        point = RemarkPoint(
+            vb=vb,
+            x=float(x),
+            y=float(y),
+            color=color or "#dc2626",
+            unit_x=unit_x,
+            unit_y=unit_y,
+        )
+        remark = self._remark_artist.add(point)
+        remark['plot'] = plot
+        self._remarks.append(remark)
+
+    def _remove_remark(self, remark) -> None:
+        self._remark_artist.remove(remark)
+        try:
+            self._remarks.remove(remark)
+        except ValueError:
+            pass
 
     def add_remark_at(self, which: str, x: float, y: float) -> None:
         if not self._remark_enabled:
@@ -1679,19 +1737,85 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             sx, sy = float(freq_arr[idx]), float(amp_arr[idx])
             dy = abs(sy - y)
             if best is None or dy < best[0]:
-                best = (dy, sx, sy)
+                best = (dy, sx, sy, e.get('color', '#2563eb'))
         if best is None:
             return
-        _dy, sx, sy = best
-        label = pg.TextItem(f"({sx:.2f}, {sy:.4g})", color='#111827',
-                            fill=pg.mkBrush(255, 255, 255, 200), anchor=(0, 1))
-        label.setPos(sx, sy)
-        dot = pg.ScatterPlotItem([sx], [sy], size=7,
-                                 brush=pg.mkBrush('#dc2626'),
-                                 pen=pg.mkPen('w', width=1))
-        self._plot_amp.addItem(label)
-        self._plot_amp.addItem(dot)
-        self._remarks.append({'label': label, 'dot': dot, 'plot': self._plot_amp})
+        _dy, sx, sy, color = best
+        self._append_remark(
+            vb=self._plot_amp.vb,
+            x=sx,
+            y=sy,
+            color=color,
+            unit_x="Hz",
+            unit_y=self._amp_y_unit(),
+            plot=self._plot_amp,
+        )
+
+    def _nearest_amp_remark_candidate(self, scene_pos):
+        if scene_pos is None or not self._entries:
+            return None
+        try:
+            click_data = self._plot_amp.vb.mapSceneToView(scene_pos)
+            x_data = float(click_data.x())
+        except Exception:
+            return None
+        try:
+            x_range, _y_range = self._plot_amp.vb.viewRange()
+            rect = self._plot_amp.vb.sceneBoundingRect()
+            span = abs(float(x_range[1]) - float(x_range[0]))
+            width = max(float(rect.width()), 1.0)
+            half_window = max((span / width) * 48.0, 1e-12)
+        except Exception:
+            half_window = 0.0
+        best = None
+        for e in self._entries:
+            freq_arr = np.asarray(e['freq'], dtype=float)
+            amp_arr = np.asarray(e['amp'], dtype=float)
+            n = min(freq_arr.size, amp_arr.size)
+            if n == 0:
+                continue
+            freq_arr = freq_arr[:n]
+            amp_arr = amp_arr[:n]
+            finite = np.isfinite(freq_arr) & np.isfinite(amp_arr)
+            if not finite.any():
+                continue
+            freq_arr = freq_arr[finite]
+            amp_arr = amp_arr[finite]
+            nearest_idx = int(np.argmin(np.abs(freq_arr - x_data)))
+            lo = max(0, nearest_idx - 32)
+            hi = min(freq_arr.size, nearest_idx + 33)
+            idxs = np.arange(lo, hi, dtype=int)
+            if half_window > 0.0:
+                near_x = np.flatnonzero(np.abs(freq_arr - x_data) <= half_window)
+                if near_x.size:
+                    idxs = np.union1d(idxs, near_x)
+            for idx in idxs:
+                sx, sy = float(freq_arr[idx]), float(amp_arr[idx])
+                try:
+                    pt = self._plot_amp.vb.mapViewToScene(QPointF(sx, sy))
+                except Exception:
+                    continue
+                dx = pt.x() - scene_pos.x()
+                dy = pt.y() - scene_pos.y()
+                d2 = dx * dx + dy * dy
+                if best is None or d2 < best[0]:
+                    best = (d2, sx, sy, e.get('color', '#2563eb'))
+        return best
+
+    def _add_amp_remark_at_scene(self, scene_pos) -> None:
+        best = self._nearest_amp_remark_candidate(scene_pos)
+        if best is None:
+            return
+        _d2, sx, sy, color = best
+        self._append_remark(
+            vb=self._plot_amp.vb,
+            x=sx,
+            y=sy,
+            color=color,
+            unit_x="Hz",
+            unit_y=self._amp_y_unit(),
+            plot=self._plot_amp,
+        )
 
     def _time_curve_owners(self):
         """Yield ``(curve, vb, plot_or_none)`` for each time-preview curve.
@@ -1721,7 +1845,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             click_scene = self._plot_time.vb.mapViewToScene(QPointF(x, y))
         except Exception:
             return
-        best = None  # (dist2, sx, sy, vb, plot_or_none)
+        best = None  # (dist2, sx, sy, vb, plot_or_none, color)
         for curve, vb, plot in self._time_curve_owners():
             try:
                 xs, ys = curve.getData()
@@ -1750,21 +1874,19 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
                 dy = pt.y() - click_scene.y()
                 d2 = dx * dx + dy * dy
                 if best is None or d2 < best[0]:
-                    best = (d2, sx, sy, vb, plot)
+                    best = (d2, sx, sy, vb, plot, self._curve_color(curve))
         if best is None:
             return
-        _d2, sx, sy, vb, plot = best
-        label = pg.TextItem(f"({sx:.3g}, {sy:.4g})", color='#111827',
-                            fill=pg.mkBrush(255, 255, 255, 200), anchor=(0, 1))
-        label.setPos(sx, sy)
-        dot = pg.ScatterPlotItem([sx], [sy], size=7,
-                                 brush=pg.mkBrush('#dc2626'),
-                                 pen=pg.mkPen('w', width=1))
-        owner = plot if plot is not None else vb
-        owner.addItem(label)
-        owner.addItem(dot)
-        self._remarks.append({'label': label, 'dot': dot,
-                              'plot': plot, 'vb': vb})
+        _d2, sx, sy, vb, plot, color = best
+        self._append_remark(
+            vb=vb,
+            x=sx,
+            y=sy,
+            color=color,
+            unit_x="s",
+            unit_y="",
+            plot=plot,
+        )
 
     def remove_remark_near(self, which: str, x: float) -> None:
         if which == 'time':
@@ -1773,22 +1895,138 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             if not cands:
                 return
             nearest = min(cands, key=lambda r: abs(r['dot'].getData()[0][0] - x))
-            owner = nearest.get('vb') or nearest.get('plot')
-            owner.removeItem(nearest['label'])
-            owner.removeItem(nearest['dot'])
-            self._remarks.remove(nearest)
+            self._remove_remark(nearest)
             return
         if which != 'amp':
             return
-        cands = [r for r in self._remarks if r['plot'] is self._plot_amp]
+        cands = [
+            r for r in self._remarks
+            if r.get('plot') is self._plot_amp or r.get('vb') is self._plot_amp.vb
+        ]
         if not cands:
             return
         nearest = min(cands, key=lambda r: abs(r['dot'].getData()[0][0] - x))
-        self._plot_amp.removeItem(nearest['label'])
-        self._plot_amp.removeItem(nearest['dot'])
-        self._remarks.remove(nearest)
+        self._remove_remark(nearest)
+
+    def _remove_amp_remark_at_scene(self, scene_pos) -> None:
+        cands = [
+            r for r in self._remarks
+            if r.get('plot') is self._plot_amp or r.get('vb') is self._plot_amp.vb
+        ]
+        if not cands or scene_pos is None:
+            return
+        best = None
+        for remark in cands:
+            try:
+                xs, ys = remark['dot'].getData()
+                pt = self._plot_amp.vb.mapViewToScene(
+                    QPointF(float(xs[0]), float(ys[0])))
+            except Exception:
+                continue
+            dx = pt.x() - scene_pos.x()
+            dy = pt.y() - scene_pos.y()
+            d2 = dx * dx + dy * dy
+            if best is None or d2 < best[0]:
+                best = (d2, remark)
+        if best is not None:
+            self._remove_remark(best[1])
+
+    def _viewport_pos_to_scene(self, viewport_pos):
+        try:
+            return self._glw.mapToScene(viewport_pos)
+        except Exception:
+            return None
+
+    def _add_remark_at_viewport_pos(self, viewport_pos) -> None:
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        if scene_pos is None:
+            return
+        if self._plot_amp.vb.sceneBoundingRect().contains(scene_pos):
+            self._add_amp_remark_at_scene(scene_pos)
+            return
+        if self._plot_time.vb.sceneBoundingRect().contains(scene_pos):
+            v = self._plot_time.vb.mapSceneToView(scene_pos)
+            self.add_remark_at('time', v.x(), v.y())
+
+    def _remove_remark_at_viewport_pos(self, viewport_pos) -> None:
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        if scene_pos is None:
+            return
+        if self._plot_amp.vb.sceneBoundingRect().contains(scene_pos):
+            self._remove_amp_remark_at_scene(scene_pos)
+            return
+        if self._plot_time.vb.sceneBoundingRect().contains(scene_pos):
+            v = self._plot_time.vb.mapSceneToView(scene_pos)
+            self.remove_remark_near('time', v.x())
+
+    def _remark_item_at_viewport_pos(self, viewport_pos):
+        from PyQt5.QtCore import QPointF as _QPointF
+
+        if not self._remarks:
+            return None
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        if scene_pos is None:
+            return None
+        try:
+            scene_items = self._glw.scene().items(scene_pos)
+        except Exception:
+            scene_items = []
+        for item in scene_items:
+            for remark in self._remarks:
+                text = remark.get('text')
+                candidates = (
+                    text,
+                    getattr(text, 'textItem', None),
+                    remark.get('dot'),
+                    remark.get('leader'),
+                )
+                if any(
+                    item is candidate
+                    for candidate in candidates
+                    if candidate is not None
+                ):
+                    return remark
+        try:
+            sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
+            for remark in self._remarks:
+                vb = remark.get('vb')
+                text = remark.get('text')
+                if vb is None or text is None:
+                    continue
+                lpos = text.pos()
+                label_scene_pos = vb.mapViewToScene(_QPointF(lpos.x(), lpos.y()))
+                dist_sq = (
+                    (label_scene_pos.x() - sp.x()) ** 2
+                    + (label_scene_pos.y() - sp.y()) ** 2
+                )
+                if dist_sq <= 12 ** 2:
+                    return remark
+        except Exception:
+            return None
+        return None
+
+    def eventFilter(self, obj, event):
+        try:
+            if obj is self._glw.viewport() and self._remark_enabled:
+                if event.type() == QEvent.MouseButtonPress:
+                    result = self._remark_interaction.handle_mouse_press(event)
+                    if result is not None:
+                        return result
+                elif event.type() == QEvent.MouseMove:
+                    result = self._remark_interaction.handle_mouse_move(event)
+                    if result is not None:
+                        return result
+                elif event.type() == QEvent.MouseButtonRelease:
+                    result = self._remark_interaction.handle_mouse_release(event)
+                    if result is not None:
+                        return result
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
 
     def _on_click(self, ev) -> None:
+        if self._remark_enabled:
+            return
         scene_pos = ev.scenePos()
         # Spectrum (amp) row.
         if self._plot_amp.vb.sceneBoundingRect().contains(scene_pos):

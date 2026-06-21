@@ -6,7 +6,6 @@ from PyQt5.QtWidgets import (
     QToolButton, QVBoxLayout, QWidget,
 )
 
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 import qtawesome as qta
 
 from ...ui_kit.icons import Icons
@@ -66,8 +65,7 @@ class _ChartCard(QWidget):
         self._hint_rotation_timer = QTimer(self)
         self._hint_rotation_timer.setSingleShot(True)
         self._hint_rotation_timer.timeout.connect(self._advance_context_hint)
-        # Pick the matplotlib NavigationToolbar2QT for matplotlib canvases
-        # and the pyqtgraph-aware shim for TimeDomainCanvasPG. The shim
+        # Pick the pyqtgraph-aware shim for supported chart canvases. The shim
         # exposes the exact same six action keys + mode/pan/zoom surface so
         # downstream helpers (i18n, MDI icons, shortcuts, _find_action) keep
         # working unchanged.
@@ -96,7 +94,9 @@ class _ChartCard(QWidget):
             # flip its axis-lock chips, exactly as a toolbar-button click would.
             self.toolbar.mouse_mode_changed.connect(self._on_mouse_mode_changed)
         else:
-            self.toolbar = NavigationToolbar(canvas, self)
+            raise TypeError(
+                f"unsupported canvas type for toolbar: {type(canvas).__name__}"
+            )
         context_menu_requested = getattr(canvas, 'context_menu_requested', None)
         if context_menu_requested is not None:
             context_menu_requested.connect(
@@ -156,9 +156,8 @@ class _ChartCard(QWidget):
         _install_nav_shortcuts(self, self.toolbar)
         _apply_mdi_icons(self.toolbar, active_key='pan')
 
-        # Insert app-level chart actions right before the matplotlib Save action
-        # (or append if save action isn't found). This places them alongside the
-        # other matplotlib nav icons so they read as sibling actions.
+        # Insert app-level chart actions right before the Save action (or append
+        # if save action isn't found). This keeps them beside the nav icons.
         self._options_btn = QToolButton(self.toolbar)
         self._options_btn.setObjectName("chartOptionsButton")
         self._options_btn.setIcon(qta.icon('mdi.tune-vertical', color=_ICON_COLOR))
@@ -800,8 +799,8 @@ class TimeChartCard(_ChartCard):
         self._cursor_buttons['off'].setChecked(True)
 
         # Overlay-selection hook: when a single curve is selected in overlay
-        # mode, force the matplotlib nav toolbar OUT of pan/zoom so a blank-
-        # area click can clear the selection without being eaten by a pan
+        # mode, force the nav toolbar OUT of pan/zoom so a blank-area click can
+        # clear the selection without being eaten by a pan
         # press. Deselect intentionally does NOT restore the previous mode —
         # the user re-engages pan via Ctrl+G if they want it back.
         if hasattr(self.canvas, 'overlay_channel_selected'):
@@ -904,7 +903,7 @@ class TimeChartCard(_ChartCard):
 
     # ----- overlay-selection nav handoff -----
     def _on_overlay_channel_selected(self, name):
-        """Switch the matplotlib nav toolbar to idle while a curve is selected.
+        """Switch the nav toolbar to idle while a curve is selected.
 
         Pan / zoom would otherwise eat the next blank-area click and prevent
         deselect. We do NOT restore the previous mode on deselect — the user

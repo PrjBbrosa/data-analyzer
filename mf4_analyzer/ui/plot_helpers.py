@@ -1,8 +1,8 @@
 """Pure UI formatting helpers for pyqtgraph canvas label/cursor rendering.
 
 Extracted from ``mf4_analyzer.ui.canvases`` (Phase D, 2026-06-18) so
-pyqtgraph sub-modules do not need to import the (now-retired) matplotlib
-canvas layer to get these pure formatting functions.
+pyqtgraph sub-modules do not need to import the now-retired canvas layer
+to get these pure formatting functions.
 
 ``mf4_analyzer.ui.canvases`` re-exports all public symbols defined here
 so existing ``from mf4_analyzer.ui.canvases import _format_dual_html``

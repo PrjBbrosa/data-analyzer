@@ -3,31 +3,64 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from matplotlib import colors as mcolors
-from matplotlib.figure import Figure
 import numpy as np
 
 
-def _axes():
-    fig = Figure(figsize=(4, 3), dpi=100)
-    ax = fig.add_subplot(111)
-    ax.plot([1, 2, 3], [1, 4, 9], label="曲线1")
-    ax.set_title("原始标题")
-    ax.set_xlabel("时间 (s)")
-    ax.set_ylabel("幅值")
-    ax.set_xlim(1.0, 3.0)
-    ax.set_ylim(1.0, 10.0)
-    return ax
+def _pg_handle_with_one_curve(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(640, 360)
+    t = np.linspace(1.0, 3.0, 80)
+    canvas.plot_channels([
+        ("speed", True, t, 1.0 + np.sin(t), "#1769e0", "rpm")
+    ], mode="subplot")
+    handle = canvas.axes_list[0]
+    handle.set_title("原始标题")
+    handle.set_xlabel("时间 (s)")
+    handle.set_ylabel("幅值")
+    handle.set_xlim(1.0, 3.0)
+    handle.set_ylim(1.0, 10.0)
+    QCoreApplication.processEvents()
+    return canvas, handle
 
 
-def test_chart_options_dialog_uses_chinese_labels_and_reads_axes(qapp):
+def _pg_canvas_with_one_curve(qapp):
+    canvas, _handle = _pg_handle_with_one_curve(qapp)
+    return canvas
+
+
+def _pg_heatmap_handle(qapp):
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        PgHeatmapCanvas,
+        _HeatmapAxisHandle,
+    )
+
+    canvas = PgHeatmapCanvas(with_slice=False)
+    canvas.plot_or_update_heatmap(
+        np.arange(9, dtype=float).reshape(3, 3),
+        (0.0, 2.0),
+        (10.0, 30.0),
+        x_label="Time (s)",
+        y_label="Frequency (Hz)",
+        cmap="viridis",
+        amplitude_mode="amplitude",
+        z_auto=False,
+        z_floor=0.0,
+        z_ceiling=8.0,
+    )
+    return canvas, _HeatmapAxisHandle(canvas)
+
+
+def test_chart_options_dialog_uses_chinese_labels_and_reads_handle(qapp):
     from PyQt5.QtWidgets import QLabel
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    ax = _axes()
-    ax.set_yscale("log")
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    handle.set_yscale("log")
 
-    dlg = ChartOptionsDialog(None, ax)
+    dlg = ChartOptionsDialog(None, handle)
 
     assert dlg.objectName() == "ChartOptionsDialog"
     assert dlg.windowTitle() == "图表选项"
@@ -46,38 +79,40 @@ def test_chart_options_dialog_uses_chinese_labels_and_reads_axes(qapp):
 def test_chart_options_dialog_applies_axis_values_and_legend(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    ax = _axes()
-    dlg = ChartOptionsDialog(None, ax)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
 
     dlg.edit_title.setText("新标题")
+    dlg.chk_x_auto.setChecked(False)
     dlg.spin_x_min.setValue(1.0)
     dlg.spin_x_max.setValue(4.0)
     dlg.edit_x_label.setText("时间轴")
     dlg.combo_x_scale.setCurrentText("线性")
+    dlg.chk_y_auto.setChecked(False)
     dlg.spin_y_min.setValue(1.0)
     dlg.spin_y_max.setValue(100.0)
     dlg.edit_y_label.setText("输出")
-    dlg.combo_y_scale.setCurrentText("对数")
+    dlg.combo_y_scale.setCurrentText("线性")
     dlg.chk_grid.setChecked(False)
     dlg.chk_legend.setChecked(True)
 
     dlg.apply_changes()
 
-    assert ax.get_title() == "新标题"
-    assert ax.get_xlim() == pytest.approx((1.0, 4.0))
-    assert ax.get_xlabel() == "时间轴"
-    assert ax.get_xscale() == "linear"
-    assert ax.get_ylim() == pytest.approx((1.0, 100.0))
-    assert ax.get_ylabel() == "输出"
-    assert ax.get_yscale() == "log"
-    assert ax.get_legend() is not None
+    assert "新标题" in handle.get_title()
+    assert handle.get_xlim() == pytest.approx((1.0, 4.0))
+    assert "时间轴" in handle.get_xlabel()
+    assert handle.get_xscale() == "linear"
+    assert handle.get_ylim() == pytest.approx((1.0, 100.0))
+    assert "输出" in handle.get_ylabel()
+    assert handle.get_yscale() == "linear"
+    assert handle.plot_item.legend is not None
 
 
 def test_chart_options_dialog_reset_restores_opening_values(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    ax = _axes()
-    dlg = ChartOptionsDialog(None, ax)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
 
     dlg.edit_title.setText("临时标题")
     dlg.spin_x_min.setValue(-99.0)
@@ -93,8 +128,8 @@ def test_chart_options_dialog_reset_restores_opening_values(qapp):
 def test_chart_options_dialog_auto_range_disables_manual_fields(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    ax = _axes()
-    dlg = ChartOptionsDialog(None, ax)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
 
     dlg.chk_x_auto.setChecked(True)
     assert not dlg.spin_x_min.isEnabled()
@@ -111,8 +146,8 @@ def test_chart_options_dialog_auto_range_disables_manual_fields(qapp):
 def test_chart_options_dialog_applies_curve_color(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    ax = _axes()
-    dlg = ChartOptionsDialog(None, ax)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
 
     assert dlg.tabs.tabText(1) == "图形"
     assert dlg.combo_curve.count() == 1
@@ -120,16 +155,7 @@ def test_chart_options_dialog_applies_curve_color(qapp):
     dlg.edit_curve_color.setText("#123456")
     dlg.apply_changes()
 
-    assert ax.lines[0].get_color().lower() == "#123456"
-
-
-def _pg_canvas_with_one_curve(qapp):
-    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
-
-    canvas = TimeDomainCanvasPG()
-    t = np.linspace(0.0, 1.0, 50)
-    canvas.plot_channels([("speed", True, t, np.sin(t), "#1769e0", "rpm")])
-    return canvas
+    assert handle.get_lines()[0].get_color().lower() == "#123456"
 
 
 def test_pg_chart_options_reads_grid_initial_state(qapp):
@@ -425,20 +451,12 @@ def test_pg_chart_options_overlay_aux_axis_yscale_updates_own_curve(qapp):
     assert aux_line.opts["logMode"][1] is True
 
 
-# test_chart_options_dialog_curve_color_updates_owned_axis_and_inside_label
-# was removed in Phase D (2026-06-18) when TimeDomainCanvas (matplotlib) was
-# retired.  The equivalent behavior is covered by
-# tests/ui/test_pg_timedomain_canvas.py for the pyqtgraph canvas.
-
-
 def test_chart_options_dialog_applies_heatmap_range_without_cmap_control(qapp):
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    fig = Figure(figsize=(4, 3), dpi=100)
-    ax = fig.add_subplot(111)
-    im = ax.imshow(np.arange(9, dtype=float).reshape(3, 3), cmap="viridis")
-
-    dlg = ChartOptionsDialog(None, ax)
+    _canvas, handle = _pg_heatmap_handle(qapp)
+    mappable = handle.get_mappables()[0]
+    dlg = ChartOptionsDialog(None, handle)
 
     assert not hasattr(dlg, "combo_cmap")
     dlg.chk_color_auto.setChecked(False)
@@ -449,8 +467,8 @@ def test_chart_options_dialog_applies_heatmap_range_without_cmap_control(qapp):
 
     dlg.apply_changes()
 
-    assert im.get_cmap().name == "viridis"
-    assert im.get_clim() == pytest.approx((1.0, 5.0))
+    assert mappable.get_cmap().name == "viridis"
+    assert mappable.get_clim() == pytest.approx((1.0, 5.0))
 
     dlg.chk_color_auto.setChecked(True)
     assert not dlg.spin_color_min.isEnabled()
@@ -461,14 +479,14 @@ def test_chart_options_log_axis_rejects_non_positive(qapp):
     """Log scale + non-positive vmin/vmax must skip set_ylim and record axis."""
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    ax = _axes()
-    dlg = ChartOptionsDialog(None, ax)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
 
     set_ylim_calls = []
     set_yscale_calls = []
 
-    original_set_ylim = dlg.ax.set_ylim
-    original_set_yscale = dlg.ax.set_yscale
+    original_set_ylim = handle.set_ylim
+    original_set_yscale = handle.set_yscale
 
     def record_set_ylim(*args, **kwargs):
         set_ylim_calls.append((args, kwargs))
@@ -478,8 +496,8 @@ def test_chart_options_log_axis_rejects_non_positive(qapp):
         set_yscale_calls.append((args, kwargs))
         return original_set_yscale(*args, **kwargs)
 
-    dlg.ax.set_ylim = record_set_ylim
-    dlg.ax.set_yscale = record_set_yscale
+    handle.set_ylim = record_set_ylim
+    handle.set_yscale = record_set_yscale
 
     dlg._apply_axis(
         axis="y",
@@ -505,8 +523,8 @@ def test_chart_options_log_axis_warning_blocks_close(qapp, monkeypatch):
     from PyQt5.QtWidgets import QDialog, QMessageBox
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    ax = _axes()
-    dlg = ChartOptionsDialog(None, ax)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
 
     # Configure: Y log + manual range with vmin=-1
     dlg.combo_y_scale.setCurrentText("对数")
@@ -544,17 +562,17 @@ def test_chart_options_log_axis_positive_range_applies(qapp, monkeypatch):
     """Log + positive vmin/vmax applies set_ylim and clears _invalid_axes."""
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    ax = _axes()
-    dlg = ChartOptionsDialog(None, ax)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
 
     set_ylim_calls = []
-    original_set_ylim = dlg.ax.set_ylim
+    original_set_ylim = handle.set_ylim
 
     def record_set_ylim(*args, **kwargs):
         set_ylim_calls.append((args, kwargs))
         return original_set_ylim(*args, **kwargs)
 
-    dlg.ax.set_ylim = record_set_ylim
+    handle.set_ylim = record_set_ylim
 
     dlg.combo_y_scale.setCurrentText("对数")
     dlg.chk_y_auto.setChecked(False)
@@ -577,8 +595,8 @@ def test_chart_options_log_axis_positive_range_ok_button_accepts(qapp, monkeypat
     from PyQt5.QtWidgets import QDialog
     from mf4_analyzer.ui.dialogs import ChartOptionsDialog
 
-    ax = _axes()
-    dlg = ChartOptionsDialog(None, ax)
+    _canvas, handle = _pg_handle_with_one_curve(qapp)
+    dlg = ChartOptionsDialog(None, handle)
 
     # Configure: Y log + manual range with positive vmin/vmax (mirrors the
     # apply_changes happy-path test, but exercises _accept_with_apply instead).

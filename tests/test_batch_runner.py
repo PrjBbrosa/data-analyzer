@@ -120,65 +120,75 @@ def test_batch_order_time_csv_shape(tmp_path):
     assert len(df) > 0
 
 
-def test_batch_heatmap_image_applies_xyz_axis_params(tmp_path, monkeypatch):
+def test_batch_heatmap_image_applies_xyz_axis_params(tmp_path):
     """Batch PNG rendering must consume output X/Y/Z axis settings."""
-    from matplotlib.figure import Figure
 
     df = pd.DataFrame({
         "time_s": [0.0, 1.0, 0.0, 1.0],
         "order": [1.0, 1.0, 2.0, 2.0],
         "amplitude": [0.1, 0.2, 0.3, 0.4],
     })
-    captured = {}
-
-    def spy_savefig(self, path, *args, **kwargs):
-        ax = self.axes[0]
-        captured["xlim"] = ax.get_xlim()
-        captured["ylim"] = ax.get_ylim()
-        captured["clim"] = ax.images[0].get_clim()
-
-    monkeypatch.setattr(Figure, "savefig", spy_savefig)
-
-    BatchRunner._write_image(
+    _widget, info = BatchRunner._build_export_scene(
         ("order_time", df),
-        tmp_path / "axis.png",
-        params={
+        {
+            "cmap": "viridis",
             "x_auto": False, "x_min": 0.25, "x_max": 0.75,
             "y_auto": False, "y_min": 1.25, "y_max": 1.75,
             "z_auto": False, "z_floor": -40.0, "z_ceiling": -5.0,
         },
     )
 
-    assert captured["xlim"] == (0.25, 0.75)
-    assert captured["ylim"] == (1.25, 1.75)
-    assert captured["clim"] == (-40.0, -5.0)
+    assert info["x_range"] == (0.25, 0.75)
+    assert info["y_range"] == (1.25, 1.75)
+    assert info["levels"] == (-40.0, -5.0)
+    assert info["colormap_name"] == "turbo"
 
 
-def test_batch_heatmap_image_can_render_linear_z_scale(tmp_path, monkeypatch):
+def test_batch_heatmap_image_can_render_linear_z_scale(tmp_path):
     """Batch OUTPUT Z unit should choose between dB and Linear rendering."""
-    from matplotlib.figure import Figure
 
     df = pd.DataFrame({
         "time_s": [0.0, 1.0, 0.0, 1.0],
         "frequency_hz": [10.0, 10.0, 20.0, 20.0],
         "amplitude": [0.25, 0.5, 1.0, 2.0],
     })
-    captured = {}
-
-    def spy_savefig(self, path, *args, **kwargs):
-        captured["matrix"] = self.axes[0].images[0].get_array().copy()
-        captured["colorbar_label"] = self.axes[1].get_ylabel()
-
-    monkeypatch.setattr(Figure, "savefig", spy_savefig)
-
-    BatchRunner._write_image(
+    _widget, info = BatchRunner._build_export_scene(
         ("fft_time", df),
-        tmp_path / "linear.png",
-        params={"amplitude_mode": "amplitude", "z_auto": True},
+        {"amplitude_mode": "amplitude", "z_auto": True},
     )
 
-    assert np.asarray(captured["matrix"]).max() == 2.0
-    assert captured["colorbar_label"] == "Amplitude"
+    assert float(np.asarray(info["matrix"]).max()) == pytest.approx(2.0)
+    assert info["colorbar_label"] == "Amplitude"
+
+
+def test_write_image_exports_nonempty_png_with_fixed_size(tmp_path):
+    from PyQt5.QtGui import QImage
+
+    df = pd.DataFrame({"frequency_hz": [0.0, 1.0], "amplitude": [0.0, 1.0]})
+    out = BatchRunner._write_image(("fft", df), tmp_path / "fft.png")
+    image = QImage(str(out))
+
+    assert out.exists()
+    assert out.stat().st_size > 0
+    assert not image.isNull()
+    assert (image.width(), image.height()) == (1120, 630)
+
+
+def test_write_heatmap_image_exports_nonempty_png_with_fixed_size(tmp_path):
+    from PyQt5.QtGui import QImage
+
+    df = pd.DataFrame({
+        "time_s": [0.0, 1.0, 0.0, 1.0],
+        "frequency_hz": [10.0, 10.0, 20.0, 20.0],
+        "amplitude": [0.25, 0.5, 1.0, 2.0],
+    })
+    out = BatchRunner._write_image(("fft_time", df), tmp_path / "heatmap.png")
+    image = QImage(str(out))
+
+    assert out.exists()
+    assert out.stat().st_size > 0
+    assert not image.isNull()
+    assert (image.width(), image.height()) == (1120, 630)
 
 
 # ---------------------------------------------------------------------------
@@ -760,13 +770,15 @@ def test_write_image_heatmap_uses_transposed_matrix(tmp_path):
     y = np.array([1.0, 2.0])                 # order
     matrix = np.array([[1., 2.], [3., 4.], [5., 6.]])  # (len(x), len(y))
     spectro = _Spectro2D(x, y, matrix, 'time_s', 'order')
-    out = BatchRunner._write_image(('order_time', spectro), tmp_path / 'h.png',
-                                   params={'z_auto': True})
-    assert out.exists()
+    _widget, info = BatchRunner._build_export_scene(
+        ('order_time', spectro), {'z_auto': True}
+    )
     # Rendering matrix must be matrix.T (rows=y, cols=x), equal to old pivot
     df = spectro.to_long_dataframe()
     pivot = df.pivot(index='order', columns='time_s', values='amplitude')
     np.testing.assert_allclose(pivot.to_numpy(), matrix.T)
+    np.testing.assert_allclose(info["matrix"], pivot.to_numpy())
+    assert info["image_item"].axisOrder == "row-major"
 
 
 def test_image_only_export_skips_long_dataframe(tmp_path, monkeypatch):

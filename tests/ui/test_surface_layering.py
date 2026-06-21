@@ -75,9 +75,7 @@ def test_surface_qss_contract_has_porcelain_bars_and_flat_chart_toolbar():
 
     match = re.search(
         r"QToolBar#chartToolbar,\s*"
-        r"QWidget#chartToolbar,\s*"
-        r"NavigationToolbar2QT#chartToolbar,\s*"
-        r"NavigationToolbar2QT\s*\{(?P<body>[^}]*)\}",
+        r"QWidget#chartToolbar\s*\{(?P<body>[^}]*)\}",
         qss,
         flags=re.S,
     )

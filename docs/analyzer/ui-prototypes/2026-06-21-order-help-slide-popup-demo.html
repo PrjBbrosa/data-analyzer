@@ -1,0 +1,1484 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TraceLab 阶次面板说明弹窗 Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <style>
+    /* ===========================================
+       CSS CUSTOM PROPERTIES
+       =========================================== */
+    :root {
+      --app-bg: #f3f6fa;
+      --panel: #ffffff;
+      --panel-soft: #f8fbff;
+      --line: #dce5f0;
+      --line-strong: #c8d5e5;
+      --ink: #0f1b2d;
+      --muted: #61718a;
+      --faint: #96a6bc;
+      --blue: #0b72e7;
+      --blue-dark: #064a9f;
+      --blue-soft: #e8f2ff;
+      --red: #e31b23;
+      --green: #00a86b;
+      --stage-bg: #07111f;
+      --slide-bg: #f7fbff;
+      --font-display: "IBM Plex Sans", "Noto Sans SC", sans-serif;
+      --font-body: "Noto Sans SC", "IBM Plex Sans", sans-serif;
+      --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+      --duration-normal: 0.58s;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 100%;
+      min-height: 100vh;
+      margin: 0;
+      overflow: hidden;
+      background: var(--app-bg);
+      color: var(--ink);
+      font-family: var(--font-body);
+    }
+
+    button {
+      font-family: inherit;
+    }
+
+    /* ===========================================
+       FIXED 16:9 STAGE: MANDATORY BASE STYLES
+       Include this ENTIRE file in every presentation.
+       Slides are authored at 1920x1080 and scaled as a whole.
+       =========================================== */
+
+    .deck-viewport {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      background: var(--stage-bg, #000);
+    }
+
+    .deck-stage {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      transform-origin: 0 0;
+      background: var(--slide-bg, #fff);
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      display: block;
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
+      background: var(--slide-bg, #fff);
+    }
+
+    .slide.active,
+    .slide.visible {
+      visibility: visible;
+      opacity: 1;
+      pointer-events: auto;
+      z-index: 1;
+    }
+
+    img,
+    video,
+    canvas,
+    svg {
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    .deck-controls {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%);
+      z-index: 1000;
+    }
+
+    @media print {
+      html,
+      body {
+        width: 1920px;
+        height: auto;
+        overflow: visible;
+        background: #fff;
+      }
+
+      .deck-viewport {
+        position: static;
+        overflow: visible;
+        background: #fff;
+      }
+
+      .deck-stage {
+        position: static;
+        width: auto;
+        height: auto;
+        transform: none !important;
+        background: none;
+      }
+
+      .slide {
+        position: relative;
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        width: 1920px;
+        height: 1080px;
+        break-after: page;
+        page-break-after: always;
+      }
+
+      .slide:last-child {
+        break-after: auto;
+        page-break-after: auto;
+      }
+
+      .deck-controls {
+        display: none !important;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.2s !important;
+      }
+    }
+
+    /* ===========================================
+       APP MOCK: RIGHT INSPECTOR WITH HELP ENTRY
+       =========================================== */
+    .mock-window {
+      position: absolute;
+      inset: 28px;
+      min-width: 980px;
+      border: 1px solid #cfd9e7;
+      border-radius: 16px;
+      overflow: hidden;
+      background: #ffffff;
+      box-shadow: 0 24px 70px rgba(15, 30, 55, 0.14);
+    }
+
+    .titlebar {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+
+    .traffic {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #ff5f57;
+      box-shadow: 24px 0 #febc2e, 48px 0 #28c840;
+      margin-right: 58px;
+    }
+
+    .app-title {
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 700;
+      color: #334155;
+    }
+
+    .toolbar {
+      height: 62px;
+      display: grid;
+      grid-template-columns: 360px 1fr 420px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+    }
+
+    .toolbar-left {
+      display: flex;
+      gap: 12px;
+      padding-left: 28px;
+    }
+
+    .top-button {
+      height: 38px;
+      min-width: 92px;
+      padding: 0 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: #26364d;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .top-button.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: white;
+    }
+
+    .mode-tabs {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 34px;
+      color: #2f6fbd;
+      font-weight: 800;
+    }
+
+    .mode-tabs .active {
+      padding: 10px 18px;
+      border: 2px solid var(--blue);
+      border-radius: 10px;
+      color: var(--blue);
+      background: #f7fbff;
+    }
+
+    .brand {
+      justify-self: end;
+      padding-right: 30px;
+      color: var(--red);
+      font-family: var(--font-display);
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+    }
+
+    .body-grid {
+      position: absolute;
+      inset: 111px 0 0;
+      display: grid;
+      grid-template-columns: 360px 1fr 408px;
+      background: var(--app-bg);
+    }
+
+    .left-pane {
+      border-right: 1px solid var(--line);
+      background: #f8fbff;
+      padding: 12px;
+    }
+
+    .file-box,
+    .channel-box {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      margin-bottom: 10px;
+    }
+
+    .file-box {
+      height: 350px;
+    }
+
+    .channel-box {
+      height: calc(100% - 360px);
+    }
+
+    .center-pane {
+      position: relative;
+      background: #fff;
+      border-right: 1px solid var(--line);
+    }
+
+    .chart-tools {
+      position: absolute;
+      left: 16px;
+      top: 12px;
+      display: flex;
+      gap: 6px;
+    }
+
+    .tool-icon {
+      width: 42px;
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: #2c3d55;
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .chart-area {
+      position: absolute;
+      left: 62px;
+      right: 92px;
+      top: 86px;
+      bottom: 92px;
+      border: 1px solid #bec8d6;
+      background:
+        linear-gradient(#e8edf3 1px, transparent 1px),
+        linear-gradient(90deg, #e8edf3 1px, transparent 1px),
+        #ffffff;
+      background-size: 180px 150px;
+    }
+
+    .axis-label {
+      position: absolute;
+      color: #9aa4b2;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .axis-label.x {
+      bottom: 42px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    .axis-label.y {
+      left: 16px;
+      top: 46%;
+      transform: rotate(-90deg);
+    }
+
+    .colorbar {
+      position: absolute;
+      right: 36px;
+      top: 88px;
+      bottom: 94px;
+      width: 40px;
+      border: 1px solid #7b8798;
+      background: linear-gradient(to top, #2b1654, #2157d8, #00c7ff, #00e070, #e5ef00, #ff9200, #d00000);
+    }
+
+    .lower-slice {
+      position: absolute;
+      left: 62px;
+      right: 92px;
+      bottom: 34px;
+      height: 72px;
+      border: 1px solid #c7d1df;
+      background:
+        linear-gradient(#edf1f6 1px, transparent 1px),
+        linear-gradient(90deg, #edf1f6 1px, transparent 1px),
+        #ffffff;
+      background-size: 150px 36px;
+    }
+
+    .inspector {
+      position: relative;
+      padding: 12px 14px 18px;
+      background: #f7faff;
+      overflow: hidden;
+    }
+
+    .inspector-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+
+    .card-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      color: #182437;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .mini-rebuild {
+      width: 26px;
+      height: 26px;
+      border: 1px solid #cfe0f5;
+      border-radius: 50%;
+      color: var(--blue);
+      background: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      align-items: center;
+      gap: 10px;
+      margin: 9px 0;
+      font-size: 14px;
+      color: #20304a;
+      font-weight: 700;
+    }
+
+    .mock-input {
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: #182437;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      font-weight: 600;
+    }
+
+    .preset-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin: 12px 0 14px;
+    }
+
+    .preset-row button,
+    .calc-button {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: #122033;
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    .preset-row button {
+      height: 46px;
+    }
+
+    .axis-grid {
+      display: grid;
+      grid-template-columns: 84px 44px 1fr;
+      align-items: center;
+      row-gap: 12px;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .check {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--blue);
+      font-weight: 900;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .calc-button {
+      width: 100%;
+      height: 58px;
+      margin-top: 18px;
+      background: var(--blue);
+      border-color: var(--blue);
+      color: white;
+      box-shadow: 0 10px 22px rgba(11, 114, 231, 0.2);
+    }
+
+    .help-slot {
+      position: absolute;
+      left: 20px;
+      right: 20px;
+      bottom: 14px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      border: 2px solid rgba(227, 27, 35, 0.9);
+      border-radius: 2px;
+      padding-right: 10px;
+      pointer-events: none;
+    }
+
+    .help-button {
+      pointer-events: auto;
+      height: 32px;
+      min-width: 118px;
+      padding: 0 12px;
+      border: 1px solid #b7d4fa;
+      border-radius: 999px;
+      color: var(--blue-dark);
+      background: rgba(255, 255, 255, 0.96);
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(11, 72, 145, 0.12);
+    }
+
+    .help-button:hover {
+      background: var(--blue-soft);
+      border-color: var(--blue);
+    }
+
+    .suggestion-note {
+      position: absolute;
+      right: 22px;
+      bottom: 66px;
+      width: 332px;
+      padding: 12px 14px;
+      border: 1px solid #cfe0f5;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+      box-shadow: 0 16px 35px rgba(20, 40, 70, 0.08);
+    }
+
+    /* ===========================================
+       HELP OVERLAY AND DECK CONTROLS
+       =========================================== */
+    .help-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      visibility: hidden;
+      opacity: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 14% 18%, rgba(11, 114, 231, 0.22), transparent 30%),
+        radial-gradient(circle at 82% 82%, rgba(227, 27, 35, 0.18), transparent 32%),
+        rgba(5, 13, 26, 0.82);
+      transition: opacity 220ms ease, visibility 220ms ease;
+    }
+
+    .help-overlay.open {
+      visibility: visible;
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .deck-viewport {
+      background: transparent;
+    }
+
+    .slide {
+      font-family: var(--font-body);
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(240, 247, 255, 0.98)),
+        linear-gradient(#d9e5f3 1px, transparent 1px),
+        linear-gradient(90deg, #d9e5f3 1px, transparent 1px);
+      background-size: auto, 80px 80px, 80px 80px;
+      color: #0d1b2f;
+    }
+
+    .slide::before {
+      content: "";
+      position: absolute;
+      inset: 44px;
+      border: 2px solid rgba(11, 114, 231, 0.12);
+      border-radius: 34px;
+      pointer-events: none;
+    }
+
+    .slide::after {
+      content: "";
+      position: absolute;
+      right: -180px;
+      top: -180px;
+      width: 620px;
+      height: 620px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(11, 114, 231, 0.14), transparent 70%);
+      pointer-events: none;
+    }
+
+    .slide-kicker {
+      position: absolute;
+      left: 120px;
+      top: 88px;
+      color: var(--blue);
+      font-family: var(--font-display);
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .slide-title {
+      position: absolute;
+      left: 120px;
+      top: 136px;
+      width: 960px;
+      margin: 0;
+      color: #071a33;
+      font-family: var(--font-display);
+      font-size: 84px;
+      line-height: 1.05;
+      letter-spacing: -0.02em;
+    }
+
+    .slide-subtitle {
+      position: absolute;
+      left: 124px;
+      top: 330px;
+      width: 980px;
+      color: #516179;
+      font-size: 28px;
+      line-height: 1.38;
+      font-weight: 500;
+    }
+
+    .slide-badge {
+      position: absolute;
+      right: 118px;
+      top: 92px;
+      padding: 14px 20px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid #cfe0f5;
+      color: var(--blue-dark);
+      font-size: 24px;
+      font-weight: 800;
+      box-shadow: 0 18px 36px rgba(11, 72, 145, 0.12);
+    }
+
+    .deck-card {
+      position: absolute;
+      border: 1px solid #cfdae8;
+      border-radius: 28px;
+      background: #fff;
+      box-shadow: 0 26px 54px rgba(38, 65, 98, 0.13);
+    }
+
+    .workflow-card {
+      left: 116px;
+      right: 116px;
+      bottom: 108px;
+      height: 420px;
+      padding: 42px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 26px;
+    }
+
+    .step-card {
+      position: relative;
+      padding: 30px 28px;
+      border-radius: 24px;
+      background: #f8fbff;
+      border: 1px solid #dbe6f3;
+    }
+
+    .step-index {
+      width: 46px;
+      height: 46px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--blue);
+      font-family: var(--font-display);
+      font-size: 24px;
+      font-weight: 800;
+      margin-bottom: 22px;
+    }
+
+    .step-title {
+      margin: 0 0 14px;
+      color: #0d1b2f;
+      font-size: 30px;
+      font-weight: 800;
+    }
+
+    .step-text {
+      margin: 0;
+      color: #526176;
+      font-size: 22px;
+      line-height: 1.5;
+      font-weight: 500;
+    }
+
+    .annotated-panel {
+      position: absolute;
+      right: 118px;
+      top: 180px;
+      width: 620px;
+      height: 740px;
+      border-radius: 30px;
+      border: 1px solid #cbd8e8;
+      background: #ffffff;
+      box-shadow: 0 30px 70px rgba(20, 42, 70, 0.16);
+      padding: 34px;
+    }
+
+    .mini-section {
+      height: 112px;
+      border: 1px solid #dbe5f1;
+      border-radius: 18px;
+      background: #f9fbfe;
+      margin-bottom: 18px;
+      padding: 20px 22px;
+    }
+
+    .mini-section strong {
+      display: block;
+      margin-bottom: 8px;
+      color: #10223a;
+      font-size: 24px;
+    }
+
+    .mini-section span {
+      color: #607086;
+      font-size: 19px;
+      line-height: 1.4;
+    }
+
+    .callout-line {
+      position: absolute;
+      height: 2px;
+      background: var(--red);
+      transform-origin: left center;
+    }
+
+    .callout-label {
+      position: absolute;
+      padding: 12px 16px;
+      border-radius: 16px;
+      background: #fff5f5;
+      border: 1px solid #ffc6c9;
+      color: #991b1b;
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .reading-grid {
+      position: absolute;
+      left: 116px;
+      right: 116px;
+      top: 470px;
+      bottom: 122px;
+      display: grid;
+      grid-template-columns: 1.04fr 0.96fr;
+      gap: 34px;
+    }
+
+    .reading-grid .deck-card {
+      position: relative;
+      left: auto;
+      right: auto;
+      top: auto;
+      bottom: auto;
+    }
+
+    .spectrum-legend {
+      padding: 34px;
+    }
+
+    .legend-row {
+      display: grid;
+      grid-template-columns: 82px 1fr;
+      gap: 22px;
+      align-items: start;
+      margin-bottom: 20px;
+    }
+
+    .legend-mark {
+      height: 58px;
+      border-radius: 18px;
+      background: var(--blue-soft);
+      color: var(--blue-dark);
+      display: grid;
+      place-items: center;
+      font-size: 24px;
+      font-weight: 900;
+    }
+
+    .legend-row h3 {
+      margin: 0 0 8px;
+      color: #0c1f38;
+      font-size: 28px;
+    }
+
+    .legend-row p {
+      margin: 0;
+      color: #5c6b80;
+      font-size: 20px;
+      line-height: 1.5;
+    }
+
+    .micro-chart {
+      position: relative;
+      padding: 36px;
+      overflow: hidden;
+    }
+
+    .heatmap-demo {
+      position: absolute;
+      left: 58px;
+      right: 58px;
+      top: 96px;
+      bottom: 130px;
+      border: 2px solid #b9c7d8;
+      border-radius: 14px;
+      background:
+        linear-gradient(90deg, transparent 0 18%, rgba(255,255,255,0.32) 18% 20%, transparent 20% 42%, rgba(255,255,255,0.32) 42% 44%, transparent 44%),
+        linear-gradient(to top, #15316c, #0eb7f2 34%, #37d56f 48%, #ffe100 65%, #f36b22 76%, #c41322 100%);
+    }
+
+    .heatmap-demo::before {
+      content: "";
+      position: absolute;
+      left: 46%;
+      top: 0;
+      bottom: 0;
+      width: 14px;
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: 140px 0 rgba(255,255,255,0.45), -210px 0 rgba(255,255,255,0.32);
+    }
+
+    .slice-line {
+      position: absolute;
+      left: 54%;
+      top: 96px;
+      bottom: 130px;
+      width: 4px;
+      background: var(--red);
+      box-shadow: 0 0 0 8px rgba(227, 27, 35, 0.12);
+    }
+
+    .axis-note {
+      position: absolute;
+      color: #4f6077;
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .axis-note.x {
+      left: 44%;
+      bottom: 66px;
+    }
+
+    .axis-note.y {
+      left: 20px;
+      top: 46%;
+      transform: rotate(-90deg);
+    }
+
+    .finish-grid {
+      position: absolute;
+      left: 118px;
+      right: 118px;
+      top: 286px;
+      bottom: 122px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 28px;
+    }
+
+    .finish-card {
+      padding: 38px 34px;
+      border-radius: 30px;
+      border: 1px solid #d6e2ef;
+      background: #fff;
+      box-shadow: 0 24px 54px rgba(30, 53, 84, 0.11);
+    }
+
+    .finish-card h3 {
+      margin: 0 0 20px;
+      color: #0c1f38;
+      font-size: 36px;
+    }
+
+    .finish-card p {
+      margin: 0;
+      color: #5c6b80;
+      font-size: 24px;
+      line-height: 1.52;
+    }
+
+    .guide-grid {
+      position: absolute;
+      left: 118px;
+      right: 118px;
+      top: 470px;
+      bottom: 126px;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 28px;
+    }
+
+    .guide-card {
+      padding: 30px 32px;
+      border-radius: 28px;
+      border: 1px solid #d6e2ef;
+      background: #fff;
+      box-shadow: 0 24px 54px rgba(30, 53, 84, 0.1);
+    }
+
+    .guide-card h3 {
+      margin: 0 0 16px;
+      color: #0c1f38;
+      font-size: 30px;
+    }
+
+    .guide-card p,
+    .guide-card li {
+      color: #56677d;
+      font-size: 22px;
+      line-height: 1.48;
+      font-weight: 500;
+    }
+
+    .guide-card p {
+      margin: 0;
+    }
+
+    .guide-card ul {
+      margin: 0;
+      padding-left: 1.1em;
+    }
+
+    .param-board {
+      position: absolute;
+      left: 118px;
+      right: 118px;
+      top: 470px;
+      bottom: 116px;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 18px;
+    }
+
+    .param-row {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 16px;
+      padding: 16px 22px;
+      border-radius: 22px;
+      border: 1px solid #d6e2ef;
+      background: #fff;
+      box-shadow: 0 18px 42px rgba(30, 53, 84, 0.08);
+    }
+
+    .param-name {
+      color: #0c1f38;
+      font-size: 24px;
+      font-weight: 900;
+    }
+
+    .param-desc {
+      color: #5b6b80;
+      font-size: 18px;
+      line-height: 1.42;
+      font-weight: 500;
+    }
+
+    .preset-matrix {
+      position: absolute;
+      left: 118px;
+      right: 118px;
+      top: 470px;
+      bottom: 128px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 26px;
+    }
+
+    .preset-card {
+      padding: 30px 30px;
+      border-radius: 30px;
+      border: 1px solid #d6e2ef;
+      background: #fff;
+      box-shadow: 0 24px 54px rgba(30, 53, 84, 0.11);
+    }
+
+    .preset-card h3 {
+      margin: 0 0 10px;
+      color: #0c1f38;
+      font-size: 32px;
+    }
+
+    .preset-card .tagline {
+      display: inline-block;
+      margin-bottom: 22px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: #eaf3ff;
+      color: var(--blue-dark);
+      font-size: 18px;
+      font-weight: 900;
+    }
+
+    .preset-card p {
+      margin: 0 0 18px;
+      color: #58687d;
+      font-size: 22px;
+      line-height: 1.45;
+    }
+
+    .preset-card small {
+      color: #7a8a9f;
+      font-size: 18px;
+      line-height: 1.45;
+      font-weight: 700;
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(34px);
+      transition:
+        opacity var(--duration-normal) var(--ease-out-expo),
+        transform var(--duration-normal) var(--ease-out-expo);
+    }
+
+    .slide.visible .reveal {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .slide.visible .reveal:nth-child(1) { transition-delay: 0.06s; }
+    .slide.visible .reveal:nth-child(2) { transition-delay: 0.14s; }
+    .slide.visible .reveal:nth-child(3) { transition-delay: 0.22s; }
+    .slide.visible .reveal:nth-child(4) { transition-delay: 0.30s; }
+    .slide.visible .reveal:nth-child(5) { transition-delay: 0.38s; }
+
+    .close-help {
+      position: fixed;
+      right: 24px;
+      top: 22px;
+      z-index: 1001;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.36);
+      background: rgba(255,255,255,0.14);
+      color: #fff;
+      font-size: 24px;
+      cursor: pointer;
+      backdrop-filter: blur(12px);
+    }
+
+    .slide-nav {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      z-index: 1001;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 14px;
+      border: 1px solid rgba(255,255,255,0.26);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.18);
+      backdrop-filter: blur(16px);
+      color: #fff;
+      font-family: var(--font-display);
+      font-weight: 700;
+    }
+
+    .slide-nav button {
+      width: 36px;
+      height: 36px;
+      border: none;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.92);
+      color: #09203d;
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .dots {
+      display: flex;
+      gap: 8px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.46);
+    }
+
+    .dot.active {
+      width: 26px;
+      border-radius: 999px;
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="mock-window">
+    <div class="titlebar">
+      <div class="traffic"></div>
+      <div class="app-title">TraceLab v7.0</div>
+    </div>
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <button class="top-button primary">打开</button>
+        <button class="top-button">保存项目</button>
+        <button class="top-button">批处理</button>
+      </div>
+      <div class="mode-tabs">
+        <span>时域</span>
+        <span>FFT</span>
+        <span>FFT vs Time</span>
+        <span class="active">阶次</span>
+      </div>
+      <div class="brand">BOSCH</div>
+    </div>
+
+    <div class="body-grid">
+      <aside class="left-pane">
+        <div class="file-box"></div>
+        <div class="channel-box"></div>
+      </aside>
+
+      <main class="center-pane">
+        <div class="chart-tools">
+          <div class="tool-icon">⌂</div>
+          <div class="tool-icon">←</div>
+          <div class="tool-icon">→</div>
+          <div class="tool-icon">⌖</div>
+          <div class="tool-icon">⌕</div>
+        </div>
+        <div class="chart-area"></div>
+        <div class="colorbar"></div>
+        <div class="lower-slice"></div>
+        <div class="axis-label x">Time (s)</div>
+        <div class="axis-label y">Order</div>
+      </main>
+
+      <aside class="inspector">
+        <section class="inspector-card">
+          <div class="card-title"><span>信号源 + 时间</span><span class="mini-rebuild">↻</span></div>
+          <div class="field-row"><span>信号:</span><div class="mock-input"></div></div>
+          <div class="field-row"><span>转速:</span><div class="mock-input"></div></div>
+          <div class="field-row"><span>Fs:</span><div class="mock-input">1000.0 Hz</div></div>
+          <div class="field-row"><span>RPM系数:</span><div class="mock-input">1.0</div></div>
+        </section>
+
+        <section class="inspector-card">
+          <div class="card-title"><span>谱参数</span><span class="muted">≤20阶 · 0.1 · 自动(4096)</span></div>
+          <div class="preset-row">
+            <button>频率优先</button>
+            <button>均衡</button>
+            <button>时间优先</button>
+          </div>
+          <div class="card-title" style="font-size:14px; margin-top:10px;">坐标轴设置</div>
+          <div class="axis-grid">
+            <span>时间 (X):</span><span class="check">✓</span><span>全时段</span>
+            <span>阶次 (Y):</span><span class="check">✓</span><span>0 → 最大阶次</span>
+            <span>色阶:</span><span class="muted">□</span><span>-50.0 → -10.0 dB</span>
+          </div>
+          <button class="calc-button">计算阶次图</button>
+        </section>
+
+        <div class="suggestion-note">
+          建议把帮助入口放在每个 section 面板的右下角空白区：常驻但弱视觉，不打断参数填写；点击后再弹出完整说明。
+        </div>
+        <div class="help-slot">
+          <button class="help-button" id="openHelp">? 使用说明</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="help-overlay" id="helpOverlay" aria-hidden="true">
+    <button class="close-help" id="closeHelp" title="关闭">×</button>
+    <div class="deck-viewport">
+      <main class="deck-stage" id="deckStage">
+        <section class="slide active visible">
+          <div class="slide-kicker reveal">TraceLab Guide</div>
+          <h1 class="slide-title reveal">阶次分析什么时候用</h1>
+          <p class="slide-subtitle reveal">
+            当转速在变，普通 FFT 里的频率线会跟着漂。阶次分析把信号按转角重采样，直接看 1 阶、2 阶、齿轮啮合阶次等“跟转速同步”的成分。
+          </p>
+          <div class="slide-badge reveal">6 页 · 面板内帮助</div>
+          <div class="workflow-card deck-card">
+            <div class="step-card reveal">
+              <div class="step-index">1</div>
+              <h2 class="step-title">适合</h2>
+              <p class="step-text">启动、加速、滑行、换挡、变速扫频，或任何需要把频率换算成阶次的工况。</p>
+            </div>
+            <div class="step-card reveal">
+              <div class="step-index">2</div>
+              <h2 class="step-title">需要</h2>
+              <p class="step-text">一个待分析信号，加一个同时间轴的转速信号。转速越连续，阶次线越稳定。</p>
+            </div>
+            <div class="step-card reveal">
+              <div class="step-index">3</div>
+              <h2 class="step-title">不适合</h2>
+              <p class="step-text">没有 RPM、RPM 长时间为 0、或只关心固定频率设备噪声时，优先看 FFT / FFT vs Time。</p>
+            </div>
+            <div class="step-card reveal">
+              <div class="step-index">4</div>
+              <h2 class="step-title">先看</h2>
+              <p class="step-text">先用全时段和推荐预设跑一张图，再围绕异常时间段、目标阶次和色阶做精调。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="slide">
+          <div class="slide-kicker reveal">Input Check</div>
+          <h1 class="slide-title reveal">先把信号和转速配对</h1>
+          <p class="slide-subtitle reveal">Order 图的质量主要由输入决定：信号、RPM、时间范围三件事先确认。</p>
+          <div class="annotated-panel reveal">
+            <div class="mini-section"><strong>信号</strong><span>选择振动、扭矩、压力等要分析的通道；它决定色阶里的幅值。</span></div>
+            <div class="mini-section"><strong>转速</strong><span>选择同一段时间里的 RPM 通道；RPM 系数用于修正单位或脉冲比例。</span></div>
+            <div class="mini-section"><strong>Fs</strong><span>采样率用于缓存、显示和参数身份；通常来自文件，手动改动要谨慎。</span></div>
+            <div class="mini-section"><strong>分析时间</strong><span>默认全时段。只看启动、急加速、制动片段时，再启用选定时间范围。</span></div>
+            <button class="calc-button">计算阶次图</button>
+          </div>
+          <div class="callout-line reveal" style="left: 1010px; top: 270px; width: 260px; transform: rotate(6deg);"></div>
+          <div class="callout-label reveal" style="left: 690px; top: 232px;">信号和 RPM 必须是同一工况</div>
+          <div class="callout-line reveal" style="left: 1066px; top: 602px; width: 224px; transform: rotate(-8deg);"></div>
+          <div class="callout-label reveal" style="left: 710px; top: 580px;">RPM 长时间为 0 时不能解析阶次</div>
+        </section>
+
+        <section class="slide">
+          <div class="slide-kicker reveal">Parameters</div>
+          <h1 class="slide-title reveal">谱参数分别控制什么</h1>
+          <p class="slide-subtitle reveal">先保留“自动 FFT 点数”，主要调最大阶次、阶次分辨率和时间分辨率。</p>
+          <div class="param-board">
+            <div class="param-row reveal">
+              <div class="param-name">最大阶次</div>
+              <div class="param-desc">决定 Y 轴计算到几阶。只关心低阶问题就别开太大；高阶覆盖越宽，计算和显示越重。</div>
+            </div>
+            <div class="param-row reveal">
+              <div class="param-name">阶次分辨率</div>
+              <div class="param-desc">数值越小，阶次轴越细；但需要更多转数和更大的窗口，否则细节不一定可靠。</div>
+            </div>
+            <div class="param-row reveal">
+              <div class="param-name">时间分辨率</div>
+              <div class="param-desc">数值越小，时间帧越密，瞬态更清楚；代价是噪声更明显、计算量更高。</div>
+            </div>
+            <div class="param-row reveal">
+              <div class="param-name">FFT 点数</div>
+              <div class="param-desc">自动会按每转样本、阶次分辨率和可用转数取值。手动指定过大时，短片段可能不够一帧。</div>
+            </div>
+            <div class="param-row reveal">
+              <div class="param-name">频率加权</div>
+              <div class="param-desc">A 计权会按每帧 RPM 把阶次换算成 Hz 后加权；适合声学感知，不等于原始机械幅值。</div>
+            </div>
+            <div class="param-row reveal">
+              <div class="param-name">dB 参考</div>
+              <div class="param-desc">只影响 dB 显示换算的参考值。不同项目要可比时，保持同一参考值和同一加权方式。</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="slide">
+          <div class="slide-kicker reveal">Presets</div>
+          <h1 class="slide-title reveal">三个预设怎么选</h1>
+          <p class="slide-subtitle reveal">预设不是最终答案，是快速起点。系统会根据通道单位给推荐标记，你也可以手动切换。</p>
+          <div class="preset-matrix">
+            <div class="preset-card reveal">
+              <h3>频率优先</h3>
+              <span class="tagline">扭矩 / 压力 / 稳态量</span>
+              <p>阶次分辨率更细，时间帧相对粗。适合找稳定阶次、窄带峰值和幅值对比。</p>
+              <small>默认：≤20 阶 · 0.05 阶 · 0.10 s · 自动 FFT · 256 点/转</small>
+            </div>
+            <div class="preset-card reveal">
+              <h3>均衡</h3>
+              <span class="tagline">振动通用诊断</span>
+              <p>时间和阶次折中，覆盖阶次更高。适合大多数加速度、速度、位移类通道。</p>
+              <small>默认：≤50 阶 · 0.10 阶 · 0.05 s · 自动 FFT · 512 点/转</small>
+            </div>
+            <div class="preset-card reveal">
+              <h3>时间优先</h3>
+              <span class="tagline">启停 / 冲击 / 瞬态</span>
+              <p>时间帧最密，阶次分辨率相对粗。适合先定位异常出现在什么时刻。</p>
+              <small>默认：≤30 阶 · 0.25 阶 · 0.02 s · 自动 FFT · 256 点/转</small>
+            </div>
+          </div>
+        </section>
+
+        <section class="slide">
+          <div class="slide-kicker reveal">Axes & Levels</div>
+          <h1 class="slide-title reveal">坐标轴和色阶怎么调</h1>
+          <p class="slide-subtitle reveal">坐标轴设置只影响“怎么看”，不会改变已经算出来的阶次矩阵；需要新参数时再点计算。</p>
+          <div class="reading-grid">
+            <div class="deck-card spectrum-legend reveal">
+              <div class="legend-row">
+                <div class="legend-mark">X</div>
+                <div><h3>时间</h3><p>自动显示当前计算覆盖的时间。手动范围用于放大某段工况，不会重新计算。</p></div>
+              </div>
+              <div class="legend-row">
+                <div class="legend-mark">Y</div>
+                <div><h3>阶次</h3><p>自动显示 0 到最大阶次。只看目标阶次时手动缩窄，例如 0-10 阶。</p></div>
+              </div>
+              <div class="legend-row">
+                <div class="legend-mark">Z</div>
+                <div><h3>色阶</h3><p>拖 colorbar 或输入范围只改变亮暗映射。过暗就抬低限，过曝就降高限。</p></div>
+              </div>
+            </div>
+            <div class="deck-card micro-chart reveal">
+              <div class="heatmap-demo"></div>
+              <div class="slice-line"></div>
+              <div class="axis-note x">Time (s)</div>
+              <div class="axis-note y">Order</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="slide">
+          <div class="slide-kicker reveal">Read & Diagnose</div>
+          <h1 class="slide-title reveal">图出来以后怎么判断</h1>
+          <p class="slide-subtitle reveal">先看整张热图，再点异常位置取下方切片。不要只盯最高峰，连续性和工况位置同样重要。</p>
+          <div class="guide-grid">
+            <div class="guide-card reveal">
+              <h3>亮的水平线</h3>
+              <p>通常是跟转速同步的阶次成分。1 阶、2 阶、半阶、齿轮啮合阶次可以优先标注。</p>
+            </div>
+            <div class="guide-card reveal">
+              <h3>只在某段时间变亮</h3>
+              <p>多半和工况事件相关，例如启动、换挡、共振穿越。用时间范围或切片进一步确认。</p>
+            </div>
+            <div class="guide-card reveal">
+              <h3>大片空白或断裂</h3>
+              <p>先检查 RPM 是否掉零、时间范围是否太短、手动 FFT 点数是否超过可用转数。</p>
+            </div>
+            <div class="guide-card reveal">
+              <h3>幅值不好比较</h3>
+              <p>确认 dB / Linear、dB 参考、A 计权和色阶范围一致。显示口径不同，颜色不能直接横比。</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div class="slide-nav">
+      <button id="prevSlide" title="上一页">‹</button>
+      <span id="pageLabel">1 / 6</span>
+      <div class="dots" id="dots"></div>
+      <button id="nextSlide" title="下一页">›</button>
+    </div>
+  </div>
+
+  <script>
+    /* ===========================================
+       SLIDE PRESENTATION CONTROLLER
+       =========================================== */
+    class SlidePresentation {
+      constructor() {
+        this.overlay = document.getElementById("helpOverlay");
+        this.stage = document.getElementById("deckStage");
+        this.slides = Array.from(document.querySelectorAll(".slide"));
+        this.currentSlide = 0;
+        this.pageLabel = document.getElementById("pageLabel");
+        this.dots = document.getElementById("dots");
+        this.touchStartX = 0;
+        this.buildDots();
+        this.setupStageScale();
+        this.setupKeyboardNav();
+        this.setupTouchNav();
+        this.showSlide(0);
+      }
+
+      setupStageScale() {
+        const scale = () => {
+          const factor = Math.min(window.innerWidth / 1920, window.innerHeight / 1080) * 0.91;
+          const x = (window.innerWidth - 1920 * factor) / 2;
+          const y = (window.innerHeight - 1080 * factor) / 2;
+          this.stage.style.transform = `translate(${x}px, ${y}px) scale(${factor})`;
+        };
+        scale();
+        window.addEventListener("resize", scale);
+      }
+
+      buildDots() {
+        this.dots.innerHTML = "";
+        this.slides.forEach((_, index) => {
+          const dot = document.createElement("span");
+          dot.className = "dot";
+          dot.addEventListener("click", () => this.showSlide(index));
+          this.dots.appendChild(dot);
+        });
+      }
+
+      setupKeyboardNav() {
+        document.addEventListener("keydown", (event) => {
+          if (!this.overlay.classList.contains("open")) return;
+          if (event.key === "Escape") closeHelp();
+          if (event.key === "ArrowRight" || event.key === " " || event.key === "PageDown") this.next();
+          if (event.key === "ArrowLeft" || event.key === "PageUp") this.prev();
+        });
+      }
+
+      setupTouchNav() {
+        this.overlay.addEventListener("touchstart", (event) => {
+          this.touchStartX = event.changedTouches[0].screenX;
+        }, { passive: true });
+        this.overlay.addEventListener("touchend", (event) => {
+          const dx = event.changedTouches[0].screenX - this.touchStartX;
+          if (Math.abs(dx) < 48) return;
+          if (dx < 0) this.next();
+          if (dx > 0) this.prev();
+        }, { passive: true });
+      }
+
+      showSlide(index) {
+        const numericIndex = Number(index);
+        const safeIndex = Number.isFinite(numericIndex) ? numericIndex : 0;
+        this.currentSlide = Math.max(0, Math.min(safeIndex, this.slides.length - 1));
+        this.slides.forEach((slide, i) => {
+          slide.classList.toggle("active", i === this.currentSlide);
+          slide.classList.toggle("visible", i === this.currentSlide);
+        });
+        this.pageLabel.textContent = `${this.currentSlide + 1} / ${this.slides.length}`;
+        Array.from(this.dots.children).forEach((dot, i) => {
+          dot.classList.toggle("active", i === this.currentSlide);
+        });
+      }
+
+      next() {
+        this.showSlide(this.currentSlide + 1);
+      }
+
+      prev() {
+        this.showSlide(this.currentSlide - 1);
+      }
+    }
+
+    const deck = new SlidePresentation();
+    const overlay = document.getElementById("helpOverlay");
+
+    function openHelp(initialSlide = 0) {
+      overlay.classList.add("open");
+      overlay.setAttribute("aria-hidden", "false");
+      deck.showSlide(initialSlide);
+    }
+
+    function closeHelp() {
+      overlay.classList.remove("open");
+      overlay.setAttribute("aria-hidden", "true");
+    }
+
+    document.getElementById("openHelp").addEventListener("click", () => openHelp(0));
+    document.getElementById("closeHelp").addEventListener("click", closeHelp);
+    document.getElementById("prevSlide").addEventListener("click", () => deck.prev());
+    document.getElementById("nextSlide").addEventListener("click", () => deck.next());
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) closeHelp();
+    });
+
+    if (window.location.hash.startsWith("#help")) {
+      const match = window.location.hash.match(/^#help(?:-(\d+))?$/);
+      const slideIndex = match && match[1] ? Number(match[1]) - 1 : 0;
+      window.requestAnimationFrame(() => openHelp(slideIndex));
+    }
+  </script>
+</body>
+</html>

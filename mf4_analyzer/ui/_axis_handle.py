@@ -1,22 +1,8 @@
-"""Axis-and-line adapter protocols for the pyqtgraph TimeDomain migration.
+"""Pyqtgraph chart-axis adapter protocols.
 
-Implements design §5.3 of
-``docs/superpowers/specs/2026-05-28-pyqtgraph-timedomain-migration-design.md``.
-
-The single contract callers (``ChartOptionsDialog``,
-``_axis_interaction``) should hold after migration is ``AxisHandle``.
-``MplAxisHandle`` is the matplotlib delegation used today; ``PgAxisHandle``
-and the matching pyqtgraph ``LineHandle`` are intentionally stubs to be
-filled in by Task 5 (``TimeDomainCanvasPG`` skeleton). The stub raises
-``NotImplementedError`` rather than silently no-op'ing so a premature
-caller fails loudly.
-
-The handle layer is renderer-agnostic: it does NOT introspect
-``ax.figure``, ``axes_list``, or any canvas-private attribute. Code
-that still needs the raw matplotlib ``Axes`` during the migration
-window (e.g. ``ChartOptionsDialog._sync_curve_axis_color``) can read
-``MplAxisHandle.axes``; that escape hatch is per-design temporary and
-must shrink as pyqtgraph parity lands.
+``ChartOptionsDialog`` and ``_axis_interaction`` consume the
+``AxisHandle`` contract. Runtime callers now pass existing pyqtgraph
+handles; raw renderer objects are not wrapped here.
 """
 from __future__ import annotations
 
@@ -28,7 +14,7 @@ PG_AXIS_NEUTRAL_WIDTH = 1.0
 
 
 # ---------------------------------------------------------------------------
-# Line protocol + matplotlib wrapper
+# Line protocol + pyqtgraph wrapper
 # ---------------------------------------------------------------------------
 
 
@@ -46,43 +32,8 @@ class LineHandle(Protocol):
     def set_color(self, color: str) -> None: ...
     def get_visible(self) -> bool: ...
 
-
-class _MplLineHandle:
-    """Thin wrapper around a matplotlib ``Line2D``.
-
-    Stored at construction time; the dialog re-walks ``get_lines()`` on
-    every Apply, so we deliberately do NOT cache anything that would
-    persist past a single dialog session.
-    """
-
-    def __init__(self, line):
-        self._line = line
-
-    # Read accessors -------------------------------------------------------
-    def get_label(self) -> str:
-        return self._line.get_label()
-
-    def get_color(self):
-        return self._line.get_color()
-
-    def get_visible(self) -> bool:
-        return bool(self._line.get_visible())
-
-    # Write accessors ------------------------------------------------------
-    def set_color(self, color: str) -> None:
-        self._line.set_color(color)
-
-    # Escape hatch ---------------------------------------------------------
-    @property
-    def line(self):
-        """Raw matplotlib ``Line2D`` for code that still needs the
-        artist (e.g. ``_sync_curve_axis_color`` walking
-        ``line.axes``). Migration-temporary."""
-        return self._line
-
-
 # ---------------------------------------------------------------------------
-# Axis protocol + matplotlib wrapper
+# Axis protocol
 # ---------------------------------------------------------------------------
 
 
@@ -114,146 +65,15 @@ class AxisHandle(Protocol):
     def sync_line_axis_color(self, line: LineHandle, color: str) -> None: ...
     def request_redraw(self) -> None: ...
 
-
-class MplAxisHandle:
-    """Concrete ``AxisHandle`` that delegates to a matplotlib ``Axes``.
-
-    All read/write methods forward unchanged. ``get_lines`` wraps each
-    visible matplotlib ``Line2D`` in a ``_MplLineHandle`` so the caller
-    sees the same protocol the future pyqtgraph adapter will provide.
-    ``request_redraw`` schedules a non-blocking redraw via
-    ``figure.canvas.draw_idle`` if the canvas exists.
-    """
-
-    def __init__(self, ax):
-        self._ax = ax
-
-    # Escape hatch — temporary during migration ----------------------------
-    @property
-    def axes(self):
-        """Raw matplotlib ``Axes``. Removed once pyqtgraph parity
-        lands; until then ``ChartOptionsDialog._sync_curve_axis_color``
-        and ``_axis_side_for_line`` still need it."""
-        return self._ax
-
-    # Limits ----------------------------------------------------------------
-    def get_xlim(self) -> tuple[float, float]:
-        lo, hi = self._ax.get_xlim()
-        return float(lo), float(hi)
-
-    def set_xlim(self, lo: float, hi: float) -> None:
-        self._ax.set_xlim(lo, hi)
-
-    def get_ylim(self) -> tuple[float, float]:
-        lo, hi = self._ax.get_ylim()
-        return float(lo), float(hi)
-
-    def set_ylim(self, lo: float, hi: float) -> None:
-        self._ax.set_ylim(lo, hi)
-
-    def autoscale(self, axis: str = "both") -> None:
-        self._ax.autoscale(axis=axis)
-
-    # Scales ----------------------------------------------------------------
-    def set_xscale(self, scale: str) -> None:
-        self._ax.set_xscale(scale)
-
-    def set_yscale(self, scale: str) -> None:
-        self._ax.set_yscale(scale)
-
-    def get_xscale(self) -> str:
-        return str(self._ax.get_xscale())
-
-    def get_yscale(self) -> str:
-        return str(self._ax.get_yscale())
-
-    # Labels ----------------------------------------------------------------
-    def get_xlabel(self) -> str:
-        return self._ax.get_xlabel()
-
-    def set_xlabel(self, label: str) -> None:
-        self._ax.set_xlabel(label)
-
-    def get_ylabel(self) -> str:
-        return self._ax.get_ylabel()
-
-    def set_ylabel(self, label: str) -> None:
-        self._ax.set_ylabel(label)
-
-    def get_title(self) -> str:
-        return self._ax.get_title()
-
-    def set_title(self, title: str) -> None:
-        self._ax.set_title(title)
-
-    # Grid ------------------------------------------------------------------
-    def grid(self, enabled: bool) -> None:
-        self._ax.grid(enabled)
-
-    def is_grid_enabled(self) -> bool:
-        gridlines = list(self._ax.xaxis.get_gridlines()) + list(self._ax.yaxis.get_gridlines())
-        return any(line.get_visible() for line in gridlines)
-
-    # Lines + mappables -----------------------------------------------------
-    def get_lines(self) -> list[LineHandle]:
-        return [
-            _MplLineHandle(line)
-            for line in self._ax.get_lines()
-            if line.get_visible()
-        ]
-
-    def get_mappables(self) -> list[object]:
-        # Mirror the original ``_editable_mappables`` filter so callers
-        # see the same set of color-mappable artists as the legacy
-        # dialog path used to read directly from ``ax.images`` /
-        # ``ax.collections``.
-        found: list[object] = []
-        for obj in list(self._ax.images) + list(self._ax.collections):
-            if hasattr(obj, "set_cmap") and hasattr(obj, "set_clim"):
-                found.append(obj)
-        return found
-
-    def rebuild_legend(self) -> None:
-        handles, labels = self._ax.get_legend_handles_labels()
-        pairs = [(h, l) for h, l in zip(handles, labels) if l and not l.startswith("_")]
-        if not pairs:
-            return
-        handles, labels = zip(*pairs)
-        self._ax.legend(handles, labels)
-
-    def sync_line_axis_color(self, line: LineHandle, color: str) -> None:
-        raw_line = getattr(line, "line", line)
-        ax = getattr(raw_line, "axes", None) or self._ax
-        if ax is None:
-            return
-        label_pos = getattr(ax.yaxis, "get_label_position", lambda: "left")()
-        tick_pos = getattr(ax.yaxis, "get_ticks_position", lambda: "left")()
-        side = "right" if label_pos == "right" or tick_pos == "right" else "left"
-        ax.yaxis.label.set_color(color)
-        ax.tick_params(axis="y", colors=color)
-        if side in ax.spines:
-            ax.spines[side].set_color(color)
-
-    # Redraw ----------------------------------------------------------------
-    def request_redraw(self) -> None:
-        canvas = getattr(self._ax.figure, "canvas", None)
-        if canvas is None:
-            return
-        draw_idle = getattr(canvas, "draw_idle", None)
-        if callable(draw_idle):
-            draw_idle()
-
-
 # ---------------------------------------------------------------------------
-# pyqtgraph line + axis wrappers (filled in by T5)
+# pyqtgraph line + axis wrappers
 # ---------------------------------------------------------------------------
 
 
 class _PgLineHandle:
     """Thin wrapper around a pyqtgraph ``PlotDataItem``.
 
-    Mirrors :class:`_MplLineHandle` so ``ChartOptionsDialog`` sees one
-    Protocol surface regardless of which renderer owns the line. Read
+    ``ChartOptionsDialog`` sees the minimal ``LineHandle`` Protocol. Read
     accessors prefer ``opts['name']`` / ``opts['pen']`` over private
     artist state because the public API surface across pyqtgraph 0.14
     keeps those keys.
@@ -326,8 +146,7 @@ class _PgLineHandle:
     # Escape hatch ---------------------------------------------------------
     @property
     def plot_data_item(self):
-        """Raw pyqtgraph ``PlotDataItem`` for code that still needs the
-        artist (parity with :class:`_MplLineHandle.line`). Migration-temporary."""
+        """Raw pyqtgraph ``PlotDataItem`` for owning-canvas sync paths."""
         return self._pdi
 
 
@@ -444,7 +263,7 @@ class PgAxisHandle:
         vb = self._view_box
         if vb is None or not hasattr(vb, "setXRange"):
             return
-        # padding=0 to match matplotlib's set_xlim semantics; otherwise
+        # padding=0 keeps set_xlim as an exact range assignment; otherwise
         # pyqtgraph adds ~2 % padding on top of the requested range.
         vb.setXRange(float(lo), float(hi), padding=0)
 
@@ -466,8 +285,8 @@ class PgAxisHandle:
         if vb is None:
             return
         # ViewBox.enableAutoRange accepts axis flags ('x', 'y',
-        # 'both'/'xy'). Treat anything else as a no-op to mirror
-        # matplotlib's loose handling.
+        # 'both'/'xy'). Treat anything else as a no-op for compatibility
+        # with the dialog's loose axis argument handling.
         if not hasattr(vb, "enableAutoRange"):
             return
         if axis == "x":
@@ -792,16 +611,12 @@ class PgAxisHandle:
 # ---------------------------------------------------------------------------
 
 
-def make_handle(ax_or_handle) -> AxisHandle:
-    """Return an ``AxisHandle`` for either a raw matplotlib ``Axes`` or
-    an existing handle, without forcing callers to know which is which.
+def make_handle(axis_or_handle) -> AxisHandle:
+    """Return an existing pyqtgraph chart-axis handle.
 
-    Discrimination rule (per Plan Task 3 Step 3): a matplotlib ``Axes``
-    exposes both ``get_xlim`` AND ``figure``; an already-wrapped handle
-    has ``get_xlim`` but no ``figure`` attribute. This keeps existing
-    raw-Axes callers (``_axis_interaction.edit_chart_options_dialog``
-    and every test in ``tests/ui/test_dialogs.py``) working unchanged.
+    Callers must pass objects that already satisfy ``AxisHandle``; raw
+    renderer objects are no longer adapted here.
     """
-    if hasattr(ax_or_handle, "get_xlim") and not hasattr(ax_or_handle, "figure"):
-        return ax_or_handle  # already a handle (covers both Mpl and Pg)
-    return MplAxisHandle(ax_or_handle)
+    if isinstance(axis_or_handle, AxisHandle):
+        return axis_or_handle
+    raise TypeError(f"unsupported axis object: {type(axis_or_handle).__name__}")

@@ -631,6 +631,40 @@ def test_fft_section_switch_away_and_back_preserves_spectrum(two_file_win, qapp)
     assert compute_calls["n"] == 0, "section switch must never recompute"
 
 
+def test_fft_single_signal_survives_fft_time_weighting_drift(two_file_win, qapp):
+    """The legacy single-signal FFT path draws a visible spectrum but does not
+    populate the multi-source analysis cache. If hidden section activity changes
+    FFT params while away, returning to FFT must keep the visible result and mark
+    it stale instead of clearing the canvas."""
+    win = two_file_win
+    fid = list(win.files.keys())[0]
+    win.navigator.set_checked_channels([])
+    qapp.processEvents()
+    win.toolbar._set_mode("fft")
+    qapp.processEvents()
+    win._echo_combo_signal(win.inspector.fft_ctx.combo_sig, (fid, "speed"))
+    qapp.processEvents()
+    win.do_fft()
+    qapp.processEvents()
+
+    canvas = win.chart_stack.page_fft.pane_canvas(0)
+    assert len(canvas._amp_curves) == 1
+
+    win.toolbar._set_mode("fft_time")
+    qapp.processEvents()
+    # Mirrors the cross-section defaulting side-effect from selecting an audio
+    # source in FFT-vs-Time: FFT's weighting changes while the FFT page is hidden.
+    win.inspector.fft_ctx.combo_weighting.setCurrentText("A")
+    qapp.processEvents()
+    win.toolbar._set_mode("fft")
+    qapp.processEvents()
+    qapp.processEvents()
+
+    assert len(canvas._amp_curves) == 1
+    assert canvas.has_result()
+    assert canvas.is_spectrum_stale()
+
+
 def test_fft_signal_combo_previews_time_before_compute(two_file_win, qapp):
     win = two_file_win
     win.toolbar._set_mode("fft")

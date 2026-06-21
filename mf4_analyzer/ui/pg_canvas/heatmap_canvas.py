@@ -19,7 +19,7 @@ import math
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFontMetrics, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -50,6 +50,12 @@ from mf4_analyzer.ui.pg_canvas._split_mixin import (
     _StackedSplitMixin,
 )
 from mf4_analyzer.ui.pg_canvas.fonts import _apply_pg_axis_font, _pg_chart_font
+from mf4_analyzer.ui.pg_canvas.remarks import (
+    RemarkArtist,
+    RemarkInteraction,
+    RemarkPoint,
+    format_remark_label,
+)
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox
 
 
@@ -103,15 +109,19 @@ class _SliceDirToggle(QWidget):
 
 
 def _resolve_colormap(name: str) -> pg.ColorMap:
-    """Map the inspector's matplotlib cmap names to pg ColorMaps.
+    """Resolve heatmap colormap names without matplotlib.
 
-    matplotlib stays a dependency (batch.py), so getFromMatplotlib gives
-    exact color parity with the old canvases.
+    Runtime uses turbo, with viridis as the legacy/fallback map. Their 256-step
+    LUTs are pinned by tests/ui/test_colormap_parity.py.
     """
+    requested = str(name or "turbo")
     try:
-        return pg.colormap.getFromMatplotlib(name)
+        cm = pg.colormap.get(requested)
+        if cm is not None:
+            return cm
     except Exception:
-        return pg.colormap.get('viridis')
+        pass
+    return pg.colormap.get("viridis")
 
 
 class _AxisShim:
@@ -757,6 +767,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._split_title_width = None
         self._remarks = []
         self._remark_enabled = False
+        self._remark_artist = RemarkArtist()
+        self._remark_interaction = RemarkInteraction(
+            add_at_viewport_pos=lambda pos: self._add_remark_at_viewport_pos(pos),
+            remove_at_viewport_pos=lambda pos: self._remove_remark_at_viewport_pos(pos),
+            remark_at_viewport_pos=lambda pos: self._remark_item_at_viewport_pos(pos),
+        )
         self._empty_hint_text = ''
         self._empty_hint_item = None
         self._mouse_mode_controller = None
@@ -770,6 +786,14 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # remarks: card contract is set_remark_enabled / clear_remarks
         # (chart_stack.py:1314, 1330-1332).
         self._plot.scene().sigMouseClicked.connect(self._on_scene_click)
+        self._plot.scene().sigMouseMoved.connect(self._on_scene_hover)
+        try:
+            viewport = self._glw.viewport()
+            if viewport is not None:
+                viewport.setMouseTracking(True)
+                viewport.installEventFilter(self)
+        except Exception:
+            pass
         self._plot.vb.sigXRangeChanged.connect(self._refresh_bottom_x_ticks)
         self._plot.vb.sigResized.connect(self._refresh_bottom_x_ticks)
         self._plot.vb.sigRangeChangedManually.connect(
@@ -883,10 +907,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._slice_marker.setVisible(False)
             self._slice_marker.sigPositionChanged.connect(
                 self._on_slice_marker_dragged)
-            # Hover readout (t / freq / value) parity with
-            # SpectrogramCanvas._on_motion (canvases.py:2000). Only wired
-            # in slice mode; the Order map has no hover-readout contract.
-            self._plot.scene().sigMouseMoved.connect(self._on_scene_hover)
+            # Hover readout is wired for all heatmaps at construction time; both
+            # FFT-vs-Time and Order use the same XYZ formatter.
             # Right-side info panel (sits in the colorbar column, below the
             # colorbar, beside the slice). Holds the X/Y direction switch +
             # the current fixed value / meaning. The slice plot's right edge is
@@ -2208,14 +2230,12 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return self._result.unit or ''
 
     def _on_scene_hover(self, scene_pos) -> None:
-        """Emit ``cursor_info`` (t / freq / value) on hover over the map.
+        """Emit ``cursor_info`` (X / Y / Z) on hover over the map.
 
-        Slice-mode only (Order has no hover-readout contract). Parity
-        with SpectrogramCanvas._on_motion (canvases.py:2000): clears the
-        readout when the pointer leaves the data extents or before a
-        result is plotted.
+        Works for both SpectrogramResult-backed FFT-vs-Time and Order-style
+        heatmaps rendered through plot_or_update_heatmap (no ``_result``).
         """
-        if self._result is None or self._matrix_disp is None:
+        if not self._has_result or self._matrix_disp is None:
             return
         if not self._plot.sceneBoundingRect().contains(scene_pos):
             self.cursor_info.emit('')
@@ -2230,26 +2250,29 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             # the colorbar column or padding) — clear the pill.
             self.cursor_info.emit('')
             return
-        rows, cols = self._matrix_disp.shape
-        if rows == 0 or cols == 0:
+        point = self._remark_point_at(x, y)
+        if point is None:
             return
-        # Reuse the same argmin-nearest cell picker the slice selection and
-        # remarks use, so hover/remark/slice never disagree on which cell a
-        # coordinate maps to (M2 dedupe + caliber unification).
-        t_idx = self._time_index_for(x)
-        f_idx = self._freq_index_for(y)
-        val = float(self._matrix_disp[min(f_idx, rows - 1), min(t_idx, cols - 1)])
-        unit = self._readout_unit()
-        msg = (
-            f"t={float(self._result.times[t_idx]):.4g} s · "
-            f"f={float(self._result.frequencies[f_idx]):.4g} Hz · "
-            f"{val:.4g} {unit}"
-        ).rstrip()
-        self.cursor_info.emit(msg)
+        self.cursor_info.emit(format_remark_label(point))
 
     # ------------------------------------------------------------------
     # remarks (annotation parity with the matplotlib canvases)
     # ------------------------------------------------------------------
+    @staticmethod
+    def _axis_label_unit(label: str) -> str:
+        text = str(label or "")
+        start = text.rfind("(")
+        end = text.rfind(")")
+        if start >= 0 and end > start:
+            return text[start + 1:end].strip()
+        return ""
+
+    def _z_unit(self) -> str:
+        if self._amplitude_mode == 'amplitude_db':
+            return 'dB'
+        result = self._result
+        return str(getattr(result, 'unit', '') or '')
+
     def set_remark_enabled(self, enabled: bool) -> None:
         self._remark_enabled = bool(enabled)
         # Right-click priority (measured, pg 0.14.0): ViewBox.mouseClickEvent
@@ -2259,32 +2282,50 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # menuEnabled(), so disable the menu while annotating — right-click
         # then reaches _on_scene_click un-consumed and deletes the nearest
         # remark, mirroring the mpl tooltip contract (chart_stack.py:1263).
-        self._plot.vb.setMenuEnabled(not self._remark_enabled)
+        self._remark_interaction.set_enabled(
+            self._remark_enabled,
+            viewport=self._glw.viewport(),
+            menu_viewboxes=(self._plot.vb,),
+        )
 
     def clear_remarks(self) -> None:
-        for r in self._remarks:
-            self._plot.removeItem(r['label'])
-            self._plot.removeItem(r['dot'])
-        self._remarks = []
+        self._remark_artist.clear(self._remarks)
+
+    def _remark_point_at(self, x: float, y: float):
+        if not self._has_result or self._matrix_disp is None:
+            return None
+        if self._extents is None:
+            return None
+        x0, x1, y0, y1 = self._extents
+        if not (x0 <= x <= x1 and y0 <= y <= y1):
+            return None
+        rows, cols = self._matrix_disp.shape
+        if rows == 0 or cols == 0:
+            return None
+        t_idx = min(self._time_index_for(x), cols - 1)
+        f_idx = min(self._freq_index_for(y), rows - 1)
+        xc, yc = self._slice_coords()
+        sx = float(xc[t_idx]) if xc is not None and len(xc) > t_idx else float(x)
+        sy = float(yc[f_idx]) if yc is not None and len(yc) > f_idx else float(y)
+        val = float(self._matrix_disp[f_idx, t_idx])
+        return RemarkPoint(
+            vb=self._plot.vb,
+            x=sx,
+            y=sy,
+            z=val,
+            color="#dc2626",
+            unit_x=self._axis_label_unit(self._x_label),
+            unit_y=self._axis_label_unit(self._y_label),
+            unit_z=self._z_unit(),
+        )
 
     def add_remark_at(self, x: float, y: float) -> None:
-        if not self._remark_enabled or not self._has_result:
+        if not self._remark_enabled:
             return
-        val = self._value_at(x, y)
-        if val is None:
+        point = self._remark_point_at(x, y)
+        if point is None:
             return
-        label = pg.TextItem(
-            f"({x:.3g}, {y:.3g}, {val:.3g})", color='#111827',
-            fill=pg.mkBrush(255, 255, 255, 200), anchor=(0, 1),
-        )
-        label.setPos(x, y)
-        dot = pg.ScatterPlotItem(
-            [x], [y], size=7, brush=pg.mkBrush('#dc2626'),
-            pen=pg.mkPen('w', width=1),
-        )
-        self._plot.addItem(label)
-        self._plot.addItem(dot)
-        self._remarks.append({'label': label, 'dot': dot})
+        self._remarks.append(self._remark_artist.add(point))
 
     def remove_remark_near(self, x: float, y: float) -> None:
         if not self._remarks:
@@ -2298,9 +2339,98 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             return ((p[0][0] - x) / sx) ** 2 + ((p[1][0] - y) / sy) ** 2
 
         nearest = min(self._remarks, key=dist)
-        self._plot.removeItem(nearest['label'])
-        self._plot.removeItem(nearest['dot'])
+        self._remark_artist.remove(nearest)
         self._remarks.remove(nearest)
+
+    def _viewport_pos_to_scene(self, viewport_pos):
+        try:
+            return self._glw.mapToScene(viewport_pos)
+        except Exception:
+            return None
+
+    def _add_remark_at_viewport_pos(self, viewport_pos) -> None:
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        if scene_pos is None or not self._plot.vb.sceneBoundingRect().contains(scene_pos):
+            return
+        p = self._plot.vb.mapSceneToView(scene_pos)
+        self.add_remark_at(p.x(), p.y())
+
+    def _remove_remark_at_viewport_pos(self, viewport_pos) -> None:
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        if scene_pos is None or not self._plot.vb.sceneBoundingRect().contains(scene_pos):
+            return
+        p = self._plot.vb.mapSceneToView(scene_pos)
+        if self._extents is None:
+            return
+        x0, x1, y0, y1 = self._extents
+        if not (x0 <= p.x() <= x1 and y0 <= p.y() <= y1):
+            return
+        self.remove_remark_near(p.x(), p.y())
+
+    def _remark_item_at_viewport_pos(self, viewport_pos):
+        from PyQt5.QtCore import QPointF as _QPointF
+
+        if not self._remarks:
+            return None
+        scene_pos = self._viewport_pos_to_scene(viewport_pos)
+        if scene_pos is None:
+            return None
+        try:
+            scene_items = self._glw.scene().items(scene_pos)
+        except Exception:
+            scene_items = []
+        for item in scene_items:
+            for remark in self._remarks:
+                text = remark.get('text')
+                candidates = (
+                    text,
+                    getattr(text, 'textItem', None),
+                    remark.get('dot'),
+                    remark.get('leader'),
+                )
+                if any(
+                    item is candidate
+                    for candidate in candidates
+                    if candidate is not None
+                ):
+                    return remark
+        try:
+            sp = scene_pos.toPoint() if hasattr(scene_pos, 'toPoint') else scene_pos
+            for remark in self._remarks:
+                vb = remark.get('vb')
+                text = remark.get('text')
+                if vb is None or text is None:
+                    continue
+                lpos = text.pos()
+                label_scene_pos = vb.mapViewToScene(_QPointF(lpos.x(), lpos.y()))
+                dist_sq = (
+                    (label_scene_pos.x() - sp.x()) ** 2
+                    + (label_scene_pos.y() - sp.y()) ** 2
+                )
+                if dist_sq <= 12 ** 2:
+                    return remark
+        except Exception:
+            return None
+        return None
+
+    def eventFilter(self, obj, event):
+        try:
+            if obj is self._glw.viewport() and self._remark_enabled:
+                if event.type() == QEvent.MouseButtonPress:
+                    result = self._remark_interaction.handle_mouse_press(event)
+                    if result is not None:
+                        return result
+                elif event.type() == QEvent.MouseMove:
+                    result = self._remark_interaction.handle_mouse_move(event)
+                    if result is not None:
+                        return result
+                elif event.type() == QEvent.MouseButtonRelease:
+                    result = self._remark_interaction.handle_mouse_release(event)
+                    if result is not None:
+                        return result
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
 
     def _value_at(self, x: float, y: float):
         if self._matrix_disp is None or self._extents is None:

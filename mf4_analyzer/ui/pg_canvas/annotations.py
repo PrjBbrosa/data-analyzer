@@ -4,41 +4,16 @@ from __future__ import annotations
 
 import numpy as np
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QApplication
 
 from . import _binding  # noqa: F401
 from ._backref import _CanvasBackref
-
-import pyqtgraph as pg
-
-
-_ANNOTATION_CURSOR = None
-
-
-def _annotation_pen_cursor():
-    global _ANNOTATION_CURSOR
-    if _ANNOTATION_CURSOR is not None:
-        return _ANNOTATION_CURSOR
-    pix = QPixmap(24, 24)
-    pix.fill(Qt.transparent)
-    painter = QPainter(pix)
-    try:
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(
-            QPen(QColor("#1769e0"), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-        )
-        painter.drawLine(6, 18, 17, 7)
-        painter.drawLine(14, 6, 18, 10)
-        painter.drawLine(5, 19, 9, 19)
-        painter.setPen(
-            QPen(QColor("#1e293b"), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-        )
-        painter.drawEllipse(3, 17, 4, 4)
-    finally:
-        painter.end()
-    _ANNOTATION_CURSOR = QCursor(pix, 5, 19)
-    return _ANNOTATION_CURSOR
+from .remarks import (
+    RemarkArtist,
+    RemarkPoint,
+    _annotation_pen_cursor,
+    format_remark_label,
+)
 
 
 class AnnotationManager(_CanvasBackref):
@@ -75,6 +50,7 @@ class AnnotationManager(_CanvasBackref):
         self.remarks = []
         self.press_pos = None
         self.press_dragged = False
+        self._artist = RemarkArtist()
 
     def set_remark_enabled(self, enabled):
         """Enable or disable annotation mode; changes cursor shape."""
@@ -101,7 +77,7 @@ class AnnotationManager(_CanvasBackref):
         return self._axis_handle_at_scene_pos(scene_pos)
 
     def _nearest_data_point(self, viewport_pos):
-        """Return (ch_name, x, y, color) of the data point nearest to viewport_pos."""
+        """Return (ch_name, x, y, color, unit) nearest to viewport_pos."""
         x_data = self._cursor_data_x_from_viewport_pos(viewport_pos)
         if x_data is None or not self.channel_data:
             return None
@@ -123,7 +99,7 @@ class AnnotationManager(_CanvasBackref):
             scene_pos = None
         best = None
         best_dist = float('inf')
-        for ch, (tf, sf, color, _unit) in candidate_items:
+        for ch, (tf, sf, color, unit) in candidate_items:
             if not len(tf):
                 continue
             ax = self._channel_lines.get(ch, (None, None))[0]
@@ -184,16 +160,17 @@ class AnnotationManager(_CanvasBackref):
                             float(tf_arr[src_idx]),
                             float(sf_arr[src_idx]),
                             color,
+                            unit,
                         )
                 except Exception:
                     if best is None:
                         idx = int(np.argmin(np.abs(tf - x_data)))
-                        best = (ch, float(tf[idx]), float(sf[idx]), color)
+                        best = (ch, float(tf[idx]), float(sf[idx]), color, unit)
             else:
                 if best is None:
                     idx = int(np.argmin(np.abs(tf - x_data)))
                     sx, sy = float(tf[idx]), float(sf[idx])
-                    best = (ch, sx, sy, color)
+                    best = (ch, sx, sy, color, unit)
         return best
 
     def _add_remark(self, viewport_pos):
@@ -201,7 +178,11 @@ class AnnotationManager(_CanvasBackref):
         found = self._nearest_data_point(viewport_pos)
         if found is None:
             return
-        ch, dx, dy, color = found
+        if len(found) >= 5:
+            ch, dx, dy, color, unit = found[:5]
+        else:
+            ch, dx, dy, color = found
+            unit = ""
         try:
             ax = self._channel_lines.get(ch, (None, None))[0]
             if ax is None:
@@ -215,61 +196,27 @@ class AnnotationManager(_CanvasBackref):
             vb = None
         if vb is None:
             return
-        dot = pg.ScatterPlotItem(
-            x=[dx], y=[dy], size=8,
-            pen=pg.mkPen('#dc2626', width=1.5),
-            brush=pg.mkBrush('#dc2626'),
-            pxMode=True,
-        )
-        vb.addItem(dot)
-        try:
-            vrange = vb.viewRange()
-            ox = (vrange[0][1] - vrange[0][0]) * 0.06
-            oy = (vrange[1][1] - vrange[1][0]) * 0.08
-        except Exception:
-            ox, oy = 0, 0
-        lx, ly = dx + ox, dy + oy
-        leader = pg.PlotDataItem(
-            x=[dx, lx], y=[dy, ly],
-            pen=pg.mkPen(color, width=1.0, style=Qt.DashLine),
-        )
-        vb.addItem(leader)
-        label_text = self._format_remark_label(dx, dy, color)
-        text = pg.TextItem(
-            html=label_text,
+        point = RemarkPoint(
+            vb=vb,
+            x=float(dx),
+            y=float(dy),
             color=color,
-            fill=pg.mkBrush(255, 255, 255, 210),
-            border=pg.mkPen(color, width=0.8),
+            unit_x="s",
+            unit_y=unit or "",
         )
-        text.setPos(lx, ly)
-        text.setFlag(text.ItemIsMovable, True)
-        vb.addItem(text)
-        remark = {
-            'vb': vb, 'dot': dot, 'text': text, 'leader': leader,
-            'data_x': dx, 'data_y': dy,
-        }
+        remark = self._artist.add(point)
         self.remarks.append(remark)
-        try:
-            text.sigPositionChanged.connect(
-                lambda item, r=remark: self._update_remark_leader(r)
-            )
-        except Exception:
-            orig_item_change = text.itemChange
-
-            def patched_item_change(change, value, _r=remark, _orig=orig_item_change):
-                result = _orig(change, value)
-                if change == text.ItemPositionHasChanged:
-                    self._update_remark_leader(_r)
-                return result
-
-            text.itemChange = patched_item_change
 
     def _format_remark_label(self, x_value, y_value, color=None):
         """Return the compact coordinate label shown by point remarks."""
-        y_color = str(color or "#1769e0")
-        return (
-            f"<div>X={x_value:.4g}</div>"
-            f"<div style='color:{y_color}; font-weight:600;'>Y={y_value:.4g}</div>"
+        return format_remark_label(
+            RemarkPoint(
+                vb=None,
+                x=float(x_value),
+                y=float(y_value),
+                color=str(color or "#1769e0"),
+                unit_x="s",
+            )
         )
 
     def _remark_item_at_viewport_pos(self, viewport_pos):
@@ -375,14 +322,7 @@ class AnnotationManager(_CanvasBackref):
 
     def _update_remark_leader(self, remark):
         """Redraw leader line from data point to text label current position."""
-        try:
-            text = remark['text']
-            dx, dy = remark['data_x'], remark['data_y']
-            lpos = text.pos()
-            lx, ly = float(lpos.x()), float(lpos.y())
-            remark['leader'].setData(x=[dx, lx], y=[dy, ly])
-        except Exception:
-            pass
+        self._artist.update_leader(remark)
 
     def _remove_remark_at(self, scene_pos):
         """Remove annotation nearest to scene_pos (right-click delete)."""
@@ -408,31 +348,13 @@ class AnnotationManager(_CanvasBackref):
     def _remove_remark_by_index(self, idx):
         try:
             r = self.remarks.pop(idx)
-            vb = r.get('vb')
-            if vb:
-                for item_key in ('dot', 'text', 'leader'):
-                    item = r.get(item_key)
-                    if item is not None:
-                        try:
-                            vb.removeItem(item)
-                        except Exception:
-                            pass
+            self._artist.remove(r)
         except Exception:
             pass
 
     def clear_remarks(self):
         """Remove all annotations."""
-        for r in list(self.remarks):
-            vb = r.get('vb')
-            if vb:
-                for item_key in ('dot', 'text', 'leader'):
-                    item = r.get(item_key)
-                    if item is not None:
-                        try:
-                            vb.removeItem(item)
-                        except Exception:
-                            pass
-        self.remarks.clear()
+        self._artist.clear(self.remarks)
 
 
 __all__ = ["AnnotationManager", "_annotation_pen_cursor"]

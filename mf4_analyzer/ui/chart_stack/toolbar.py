@@ -163,9 +163,7 @@ class _TickDensityPopover(QFrame):
 
 
 class PgNavigationToolbar(QToolBar):
-    """Drop-in stand-in for ``matplotlib.backends.backend_qt5agg.NavigationToolbar2QT``
-    when the underlying canvas is a ``TimeDomainCanvasPG`` (pyqtgraph), not a
-    matplotlib ``FigureCanvas``.
+    """Navigation toolbar for pyqtgraph chart canvases.
 
     Goals (Task 7 production switch):
 
@@ -176,12 +174,12 @@ class PgNavigationToolbar(QToolBar):
     2. English action text on construction so ``apply_chinese_toolbar_labels``
        still matches by lowercased text (it calls ``act.setData(key)`` on each
        match, after which all downstream lookups use ``act.data()``).
-    3. ``mode`` string attribute that mirrors matplotlib's ``toolbar.mode``
+    3. ``mode`` string attribute that mirrors the established toolbar mode
        semantics: empty string when idle, ``'pan'`` or ``'zoom'`` when the
        respective tool is active. Mutually exclusive — selecting one drops
        the other. Tests that read ``str(toolbar.mode).lower()`` keep passing.
     4. ``pan()`` / ``zoom()`` methods that toggle the tool just like
-       matplotlib's NavigationToolbar2QT does (no-op repeat call deactivates).
+       the previous chart toolbar did (no-op repeat call deactivates).
     5. ``locLabel`` exists only as a compatibility attribute; _ChartCard
        removes toolbar coordinate readouts from the visible action row.
     6. ``home()`` triggers an autoRange on the primary view box; ``back()`` /
@@ -190,12 +188,12 @@ class PgNavigationToolbar(QToolBar):
 
     Not goals:
 
-    - Re-implementing matplotlib's full view-stack semantics (history of all
+    - Re-implementing the old renderer's full view-stack semantics (history of all
       axes, blit ghosts, etc). The minimum that keeps the contract tests AND
       the renderer-swap path functional is enough.
     """
 
-    # Match matplotlib's _Mode enum string semantics: '' when idle.
+    # Match the legacy mode string semantics: '' when idle.
     _MODE_NONE = ''
     _MODE_PAN = 'pan'
     _MODE_ZOOM = 'zoom'
@@ -210,8 +208,8 @@ class PgNavigationToolbar(QToolBar):
     def __init__(self, canvas, parent=None):
         super().__init__(parent)
         self._canvas = canvas
-        # NavigationToolbar2QT exposes `.mode` as `_Mode.NONE` (str-coercible
-        # to ''). We mirror with a plain string; tests do
+        # The retired toolbar exposed `.mode` as a str-coercible empty value.
+        # We mirror with a plain string; tests do
         # `str(toolbar.mode).lower()` so a bare str works without surprises.
         self.mode = self._MODE_NONE
         # Split-mode action routing: when set to a callable, a user toolbar-
@@ -225,7 +223,7 @@ class PgNavigationToolbar(QToolBar):
         # toolbar and any visible peer pane toolbar without changing focus.
         self._peer_toolbars_provider = None
         self._save_pixmap_provider = None
-        # View history (matplotlib NavigationToolbar2 model): a single stack
+        # View history: a single stack
         # of view snapshots plus a pointer into it. ``back()`` decrements the
         # pointer, ``forward()`` increments it, and a brand-new gesture
         # truncates everything past the pointer before appending. Each entry
@@ -253,10 +251,10 @@ class PgNavigationToolbar(QToolBar):
         # pyqtgraph hover details are surfaced elsewhere.
         self.locLabel = QLabel("", self)
 
-        # Build the six actions in matplotlib's order so _action_keys()
+        # Build the six actions in the established order so _action_keys()
         # and the ordering-pinning contract test
         # (test_time_chart_card_toolbar_action_keys_ordering_pan_before_zoom)
-        # see the same sequence as the matplotlib toolbar produced.
+        # see the same sequence as before the renderer swap.
         self._actions_by_key = {}
         for key, label in (
             ('home', 'Home'),
@@ -391,7 +389,7 @@ class PgNavigationToolbar(QToolBar):
             except Exception:
                 continue
 
-    # ----- view history (matplotlib NavigationToolbar2 parity) -------------
+    # ----- view history ----------------------------------------------------
     def rebind_history_capture(self):
         """Re-bind the manual-range capture hook to the live ViewBoxes.
 
@@ -475,7 +473,7 @@ class PgNavigationToolbar(QToolBar):
             return None
         return min(lo for lo, _hi in bounds), max(hi for _lo, hi in bounds)
 
-    # ----- public surface (matplotlib NavigationToolbar2QT parity) --------
+    # ----- public surface --------------------------------------------------
     def home(self, *_args):
         """Autoscale back to data extents using a deterministic shared-X policy.
 
@@ -485,7 +483,7 @@ class PgNavigationToolbar(QToolBar):
         """
         canvas = self._canvas
         # Home is a deliberate view change → record the resulting view as a
-        # new history entry (matplotlib pushes after the home reset). Guard
+        # new history entry after the home reset. Guard
         # the reset itself so the range signals it fires don't double-push.
         self._restoring = True
         try:
@@ -541,7 +539,7 @@ class PgNavigationToolbar(QToolBar):
         import pyqtgraph as pg
 
         if self.mode == self._MODE_PAN:
-            # Second call toggles OFF (matplotlib parity).
+            # Second call toggles OFF.
             self.mode = self._MODE_NONE
             # pyqtgraph default ViewBox.PanMode is 3; set it explicitly so
             # toggling off leaves every subplot in a sane mouse mode.

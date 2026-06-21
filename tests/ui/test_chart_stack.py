@@ -236,6 +236,29 @@ def test_cursor_pill_hidden_in_fft_mode(qapp, qtbot):
     assert not cs.cursor_pill_visible()
 
 
+def test_heatmap_cursor_info_shows_pill_in_fft_time_and_order(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 520)
+    cs.show()
+    qtbot.waitExposed(cs)
+
+    for mode, canvas in (
+        ('fft_time', cs.canvas_fft_time),
+        ('order', cs.canvas_order),
+    ):
+        cs.set_mode(mode)
+        canvas.cursor_info.emit("<div>X=1 s</div><div>Y=2 Hz</div><div>Z=3 dB</div>")
+
+        assert cs.cursor_pill_visible()
+        assert "X=1" in cs.cursor_pill_text()
+
+        canvas.cursor_info.emit("")
+        assert not cs.cursor_pill_visible()
+
+
 def test_analysis_cards_expose_annotation_toolbar_controls(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
@@ -1607,6 +1630,20 @@ def test_chart_cards_have_tick_density_popout_button(qapp, qtbot):
         layout = pop._surface.layout()
         assert layout.indexOf(pop._preset_host) < layout.indexOf(pop._x_row)
         assert layout.indexOf(pop._preset_host) < layout.indexOf(pop._y_row)
+
+
+def test_chart_cards_keep_copy_button_contract(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+
+    for card in (cs._time_card, cs._fft_card, cs._fft_time_card, cs._order_card):
+        assert card._copy_btn.text() == ""
+        assert not card._copy_btn.icon().isNull()
+        assert card._copy_btn.width() == 32
+        assert card._copy_btn.height() == 32
+        assert card._copy_btn.toolTip() == "复制为图片（含游标线和读数）"
+        with qtbot.waitSignal(card.copy_image_requested, timeout=200):
+            card._copy_btn.click()
 
 
 def test_analysis_tick_density_and_config_precede_save_on_left(qapp, qtbot):

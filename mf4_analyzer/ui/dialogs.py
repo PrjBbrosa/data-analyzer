@@ -27,11 +27,12 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
-from matplotlib import colors as mcolors
 
 from ..signal import ChannelMath
 from ..ui_kit.widgets.searchable_combo import SearchableComboBox
 from ._axis_handle import make_handle
+from ._color_utils import is_color_like as _is_color_like
+from ._color_utils import to_hex as _to_hex
 from .widgets.compact_spinbox import CompactDoubleSpinBox
 
 
@@ -483,19 +484,11 @@ class ChartOptionsDialog(QDialog):
 
     def __init__(self, parent, axis_or_handle):
         super().__init__(parent)
-        # Constructor accepts either a raw matplotlib ``Axes`` or an
-        # already-wrapped ``AxisHandle`` (design §5.3 / Plan Task 3
-        # Step 3). Existing call-sites in ``_axis_interaction`` and the
-        # whole ``tests/ui/test_dialogs.py`` suite pass raw Axes, so the
-        # wrap-on-demand branch keeps them working without an edit.
+        # Runtime callers pass an existing pyqtgraph AxisHandle. make_handle()
+        # keeps the public constructor guarded and rejects raw renderer objects.
         self.handle = make_handle(axis_or_handle)
-        # Backward-compat alias: code paths that still need the raw
-        # matplotlib ``Axes`` during the migration window (legend
-        # handles, gridline visibility introspection, line-axes/spines/
-        # tick color sync at lines 750-793) read it through ``self.ax``.
-        # ``MplAxisHandle`` exposes the underlying Axes via ``.axes``;
-        # for ``PgAxisHandle`` this will be ``None`` once T5 lands and
-        # the legacy code paths will already be gone by then.
+        # Compatibility alias for older custom handles that expose an
+        # axes-like object. Current built-in pyqtgraph handles leave this None.
         self.ax = getattr(self.handle, "axes", None)
         self._lines = self._editable_lines()
         self._mappables = self._editable_mappables()
@@ -554,10 +547,9 @@ class ChartOptionsDialog(QDialog):
         self.reset_fields()
 
     def _target_summary(self):
-        # ``get_label`` is a matplotlib-only Artist accessor (not in the
-        # ``AxisHandle`` protocol, design §5.3). Read it via the
-        # migration-temporary escape hatch when present, so pyqtgraph
-        # handles eventually fall through cleanly to the "当前图" default.
+        # ``get_label`` is intentionally outside the AxisHandle protocol.
+        # Custom handles with an axes-like object may still provide it; normal
+        # pyqtgraph handles fall through to the title or "当前图".
         title = self.handle.get_title()
         if not title and self.ax is not None:
             title = self.ax.get_label()
@@ -750,8 +742,8 @@ class ChartOptionsDialog(QDialog):
             y_scale_raw = self.handle.get_yscale()
         except AttributeError:
             y_scale_raw = "linear"
-        # Matplotlib fallback for older/custom handles that do not yet
-        # expose the full state surface.
+        # Fallbacks for older/custom handles that do not yet expose the full
+        # state surface.
         if self.ax is not None and not hasattr(self.handle, "is_grid_enabled"):
             grid_lines = list(self.ax.xaxis.get_gridlines()) + list(self.ax.yaxis.get_gridlines())
             grid_visible = any(line.get_visible() for line in grid_lines)
@@ -884,8 +876,7 @@ class ChartOptionsDialog(QDialog):
             if scale == "log" and (float(vmin) <= 0 or float(vmax) <= 0):
                 # Defer hard error to the apply() aggregator: collect axis,
                 # fall back to autoscale so the chart stays in a usable state
-                # rather than silently keeping a stale (or matplotlib-clamped)
-                # range.
+                # rather than silently keeping a stale range.
                 self._invalid_axes.append(axis)
                 self.handle.autoscale(axis=axis)
             else:
@@ -894,9 +885,7 @@ class ChartOptionsDialog(QDialog):
 
     def _editable_lines(self):
         # ``handle.get_lines()`` already filters out invisible lines and
-        # returns ``LineHandle`` wrappers. Renderer-agnostic by design
-        # §5.3 — works for both ``MplAxisHandle`` and the future
-        # ``PgAxisHandle``.
+        # returns ``LineHandle`` wrappers.
         return list(self.handle.get_lines())
 
     def _editable_mappables(self):
@@ -918,7 +907,7 @@ class ChartOptionsDialog(QDialog):
 
     def _line_color_text(self, line):
         try:
-            return mcolors.to_hex(line.get_color())
+            return _to_hex(line.get_color())
         except ValueError:
             return str(line.get_color())
 
@@ -939,8 +928,8 @@ class ChartOptionsDialog(QDialog):
     def _choose_curve_color(self):
         initial = self.edit_curve_color.text().strip()
         initial_color = (
-            QColor(mcolors.to_hex(initial))
-            if mcolors.is_color_like(initial)
+            QColor(_to_hex(initial))
+            if _is_color_like(initial)
             else QColor("#1769e0")
         )
         color = QColorDialog.getColor(
@@ -954,7 +943,7 @@ class ChartOptionsDialog(QDialog):
     def _apply_appearance(self):
         line = self._current_line()
         color = self.edit_curve_color.text().strip()
-        if line is not None and color and mcolors.is_color_like(color):
+        if line is not None and color and _is_color_like(color):
             line.set_color(color)
             self._sync_curve_axis_color(line, color)
 
@@ -979,9 +968,9 @@ class ChartOptionsDialog(QDialog):
         if callable(sync):
             sync(line, color)
 
-        # ``line`` is a ``LineHandle`` wrapper now; unwrap back to the
-        # matplotlib ``Line2D`` for the canvas/inside-label sync paths
-        # that still need the raw artist during the migration window.
+        # Older custom handles may expose an axes-like raw line for
+        # canvas/inside-label sync paths. Built-in pyqtgraph handles perform
+        # their sync in ``handle.sync_line_axis_color`` above.
         raw_line = getattr(line, "line", line)
         ax = getattr(raw_line, "axes", None) or self.ax
         if ax is None:

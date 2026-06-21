@@ -4,8 +4,7 @@ These are CHARACTERIZATION tests: they pin the CURRENT behavior of each
 helper exactly as-is. If a helper's output seems unexpected, we still
 assert the actual observed value -- do not "fix" it here.
 
-No Qt is needed for any of these helpers (matplotlib Figure is used for
-_set_series_ylabel but is a standard dep, not PyQt).
+No Qt is needed for any of these helpers.
 """
 
 import math
@@ -19,7 +18,6 @@ from mf4_analyzer.ui.plot_helpers import (
     _format_single_cursor_channel_html,
     _interp_cursor_value,
     _middle_ellipsis,
-    _set_series_ylabel,
     _split_prefixed_label,
 )
 
@@ -165,68 +163,7 @@ class TestMiddleEllipsis:
 
 
 # ---------------------------------------------------------------------------
-# 4. _set_series_ylabel
-# ---------------------------------------------------------------------------
-
-class TestSetSeriesYlabel:
-    """Uses a real matplotlib Axes (matplotlib is a declared dependency)."""
-
-    def _make_ax(self):
-        import matplotlib
-        matplotlib.use('Agg')
-        from matplotlib.figure import Figure
-        fig = Figure()
-        ax = fig.add_subplot(111)
-        return ax
-
-    def test_sets_ylabel_text(self):
-        ax = self._make_ax()
-        _set_series_ylabel(ax, 'Speed', '#ff0000')
-        assert ax.get_ylabel() == 'Speed'
-
-    def test_sets_ylabel_color(self):
-        ax = self._make_ax()
-        _set_series_ylabel(ax, 'Torque', '#00ff00')
-        import matplotlib.colors as mcolors
-        actual_color = ax.yaxis.label.get_color()
-        # Compare as RGBA tuples to avoid string format differences
-        assert mcolors.to_rgba(actual_color) == pytest.approx(
-            mcolors.to_rgba('#00ff00'), abs=1e-6
-        )
-
-    def test_no_unit_chip_added_when_unit_empty(self):
-        ax = self._make_ax()
-        texts_before = len(ax.texts)
-        _set_series_ylabel(ax, 'RPM', '#123456', unit='')
-        # No extra text artist should be added for empty unit
-        assert len(ax.texts) == texts_before
-
-    def test_unit_chip_added_when_unit_given(self):
-        ax = self._make_ax()
-        _set_series_ylabel(ax, 'RPM', '#123456', unit='r/min')
-        # One text artist should appear for the unit chip
-        assert len(ax.texts) >= 1
-        texts = [t.get_text() for t in ax.texts]
-        assert 'r/min' in texts
-
-    def test_right_side_unit_chip_anchor(self):
-        ax = self._make_ax()
-        _set_series_ylabel(ax, 'V', '#aabbcc', unit='mV', side='right')
-        # The unit text artist should have ha='right'
-        unit_text = [t for t in ax.texts if t.get_text() == 'mV']
-        assert unit_text, "Expected a unit text artist for 'mV'"
-        assert unit_text[0].get_ha() == 'right'
-
-    def test_left_side_unit_chip_anchor(self):
-        ax = self._make_ax()
-        _set_series_ylabel(ax, 'V', '#aabbcc', unit='mV', side='left')
-        unit_text = [t for t in ax.texts if t.get_text() == 'mV']
-        assert unit_text, "Expected a unit text artist for 'mV'"
-        assert unit_text[0].get_ha() == 'left'
-
-
-# ---------------------------------------------------------------------------
-# 5. _format_single_cursor_channel_html
+# 4. _format_single_cursor_channel_html
 # ---------------------------------------------------------------------------
 
 class TestFormatSingleCursorChannelHtml:

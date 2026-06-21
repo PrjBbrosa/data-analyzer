@@ -1,17 +1,4 @@
-"""Tests for ``mf4_analyzer.ui._axis_handle.MplAxisHandle``.
-
-Task 3 of the pyqtgraph TimeDomain migration plan
-(``docs/superpowers/plans/2026-05-28-pyqtgraph-timedomain-migration.md``)
-introduces an ``AxisHandle`` Protocol so ``ChartOptionsDialog`` and
-``_axis_interaction`` can target both matplotlib axes and (later) a
-pyqtgraph ViewBox/AxisItem pair.
-
-These tests pin every signature in design §5.3 against a REAL
-matplotlib ``Axes`` (no MagicMocks) per the
-``codex-phantom-api-surface-guards`` defensive gate. The pyqtgraph stub
-class is intentionally left as ``NotImplementedError`` and is exercised
-only by a "raises on use" probe so T5 can fill it later.
-"""
+"""Tests for the pyqtgraph-only chart axis handle layer."""
 from __future__ import annotations
 
 import os
@@ -20,410 +7,234 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
-from matplotlib.figure import Figure
 
 
-def _axes_with_data():
-    """Build a real Axes wired into a Figure with one visible line."""
-    fig = Figure(figsize=(4, 3), dpi=100)
-    ax = fig.add_subplot(111)
-    ax.plot([0.0, 1.0, 2.0], [0.0, 1.0, 4.0], color="#1769e0", label="curve")
-    ax.set_xlim(0.0, 2.0)
-    ax.set_ylim(0.0, 4.0)
-    ax.set_xlabel("time (s)")
-    ax.set_ylabel("value")
-    ax.set_title("title")
-    fig.canvas.draw()
-    return fig, ax
+def _pg_time_handle(qapp):
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
 
+    canvas = TimeDomainCanvasPG()
+    canvas.resize(640, 360)
+    t = np.linspace(1.0, 3.0, 50)
+    canvas.plot_channels([
+        ("speed", True, t, 1.0 + np.sin(t), "#1769e0", "rpm")
+    ], mode="subplot")
+    handle = canvas.axes_list[0]
+    handle.set_xlim(1.0, 3.0)
+    handle.set_ylim(0.0, 3.0)
+    handle.set_xlabel("time (s)")
+    handle.set_ylabel("value")
+    handle.set_title("title")
+    QCoreApplication.processEvents()
+    return handle, canvas
 
-def test_mpl_axis_handle_get_xlim_and_set_xlim():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
 
-    assert h.get_xlim() == pytest.approx((0.0, 2.0))
-    h.set_xlim(1.0, 5.0)
-    assert ax.get_xlim() == pytest.approx((1.0, 5.0))
+def _pg_heatmap_handle(qapp):
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        PgHeatmapCanvas,
+        _HeatmapAxisHandle,
+    )
 
+    canvas = PgHeatmapCanvas(with_slice=False)
+    matrix = np.arange(9, dtype=float).reshape(3, 3)
+    canvas.plot_or_update_heatmap(
+        matrix,
+        (0.0, 2.0),
+        (10.0, 30.0),
+        x_label="time_s",
+        y_label="frequency_hz",
+        cmap="viridis",
+        amplitude_mode="amplitude",
+        z_auto=False,
+        z_floor=0.0,
+        z_ceiling=8.0,
+    )
+    return _HeatmapAxisHandle(canvas), canvas
 
-def test_mpl_axis_handle_get_ylim_and_set_ylim():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
 
-    assert h.get_ylim() == pytest.approx((0.0, 4.0))
-    h.set_ylim(-1.0, 99.0)
-    assert ax.get_ylim() == pytest.approx((-1.0, 99.0))
+def test_pg_axis_handle_get_xlim_and_set_xlim(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
 
+    assert handle.get_xlim() == pytest.approx((1.0, 3.0))
+    handle.set_xlim(1.25, 2.5)
+    assert handle.get_xlim() == pytest.approx((1.25, 2.5))
 
-def test_mpl_axis_handle_xlabel_getter_setter():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
 
-    assert h.get_xlabel() == "time (s)"
-    h.set_xlabel("时间")
-    assert ax.get_xlabel() == "时间"
-
-
-def test_mpl_axis_handle_ylabel_getter_setter():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
-
-    assert h.get_ylabel() == "value"
-    h.set_ylabel("幅值")
-    assert ax.get_ylabel() == "幅值"
-
-
-def test_mpl_axis_handle_title_getter_setter():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
-
-    assert h.get_title() == "title"
-    h.set_title("新标题")
-    assert ax.get_title() == "新标题"
-
-
-def test_mpl_axis_handle_xscale_setter():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    ax.set_xlim(0.1, 10.0)  # log-safe range
-    h = MplAxisHandle(ax)
+def test_pg_axis_handle_get_ylim_and_set_ylim(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
 
-    h.set_xscale("log")
-    assert ax.get_xscale() == "log"
-    h.set_xscale("linear")
-    assert ax.get_xscale() == "linear"
-
-
-def test_mpl_axis_handle_yscale_setter():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    ax.set_ylim(0.1, 100.0)
-    h = MplAxisHandle(ax)
-
-    h.set_yscale("log")
-    assert ax.get_yscale() == "log"
-    h.set_yscale("linear")
-    assert ax.get_yscale() == "linear"
-
-
-def test_mpl_axis_handle_autoscale_both_default():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    ax.set_xlim(99.0, 100.0)  # off-data so autoscale visibly moves it
-    h = MplAxisHandle(ax)
+    assert handle.get_ylim() == pytest.approx((0.0, 3.0))
+    handle.set_ylim(-1.0, 4.0)
+    assert handle.get_ylim() == pytest.approx((-1.0, 4.0))
 
-    h.autoscale()
-    xlo, xhi = ax.get_xlim()
-    assert xlo < 99.0  # autoscale snapped to data
 
+def test_pg_axis_handle_label_and_title_roundtrip(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
 
-def test_mpl_axis_handle_autoscale_x_only():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    ax.set_xlim(99.0, 100.0)
-    h = MplAxisHandle(ax)
-
-    h.autoscale(axis="x")
-    xlo, _xhi = ax.get_xlim()
-    assert xlo < 99.0
-
-
-def test_mpl_axis_handle_grid_toggle():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
-
-    h.grid(True)
-    assert h.is_grid_enabled() is True
-    gridlines = list(ax.xaxis.get_gridlines()) + list(ax.yaxis.get_gridlines())
-    assert any(gl.get_visible() for gl in gridlines)
-
-    h.grid(False)
-    assert h.is_grid_enabled() is False
-    gridlines = list(ax.xaxis.get_gridlines()) + list(ax.yaxis.get_gridlines())
-    assert not any(gl.get_visible() for gl in gridlines)
-
-
-def test_mpl_axis_handle_get_lines_returns_line_handles():
-    """``get_lines()`` must return ``LineHandle`` wrappers, not raw
-    matplotlib ``Line2D`` artists, so callers see the same protocol on
-    matplotlib and pyqtgraph backends."""
-    from mf4_analyzer.ui._axis_handle import LineHandle, MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
-
-    lines = h.get_lines()
-    assert len(lines) == 1
-    line = lines[0]
-    # Each returned object must satisfy the LineHandle protocol.
-    assert hasattr(line, "get_label")
-    assert hasattr(line, "get_color")
-    assert hasattr(line, "set_color")
-    assert hasattr(line, "get_visible")
-    # Sanity check against the actual matplotlib artist underneath.
-    raw = ax.get_lines()[0]
-    assert line.get_label() == raw.get_label()
-    assert line.get_color() == raw.get_color()
-    assert line.get_visible() == raw.get_visible()
-
-
-def test_mpl_axis_handle_line_handle_set_color_round_trips():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
-
-    line = h.get_lines()[0]
-    line.set_color("#ef4444")
-    assert ax.get_lines()[0].get_color() == "#ef4444"
-
-
-def test_mpl_axis_handle_get_scale_and_rebuild_legend():
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
-
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    assert h.get_xscale() == "log"
-    assert h.get_yscale() == "log"
-
-    h.rebuild_legend()
-    legend = ax.get_legend()
-    assert legend is not None
-    labels = [text.get_text() for text in legend.get_texts()]
-    assert labels == ["curve"]
-
-
-def test_mpl_axis_handle_sync_line_axis_color():
-    from matplotlib import colors as mcolors
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
-    line = h.get_lines()[0]
-
-    h.sync_line_axis_color(line, "#123456")
-
-    assert ax.yaxis.label.get_color() == "#123456"
-    assert mcolors.to_hex(ax.spines["left"].get_edgecolor()) == "#123456"
-
-
-def test_mpl_axis_handle_get_mappables_empty_for_line_only_axes():
-    """An axes with only Line2D artists has no images/collections, so
-    ``get_mappables`` must return an empty list (TimeDomain case per
-    design §5.3)."""
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
-
-    assert h.get_mappables() == []
-
-
-def test_mpl_axis_handle_get_mappables_includes_images_and_collections():
-    """An axes carrying an image and a collection must expose them as
-    mappables so the ColorMap/ColorScale group of ChartOptionsDialog
-    keeps working."""
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    fig = Figure(figsize=(4, 3), dpi=100)
-    ax = fig.add_subplot(111)
-    data = np.arange(16, dtype=float).reshape(4, 4)
-    im = ax.imshow(data, cmap="viridis")
-    h = MplAxisHandle(ax)
-
-    mappables = h.get_mappables()
-    assert im in mappables
-
-
-def test_mpl_axis_handle_request_redraw_delegates_to_canvas():
-    """``request_redraw`` must invoke the underlying canvas's
-    ``draw_idle`` so the dialog can trigger a redraw after Apply."""
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    fig = Figure(figsize=(4, 3), dpi=100)
-    ax = fig.add_subplot(111)
-
-    calls = {"n": 0}
-
-    class _Probe:
-        def draw_idle(self):
-            calls["n"] += 1
-
-    fig.canvas = _Probe()  # type: ignore[assignment]
-    h = MplAxisHandle(ax)
-    h.request_redraw()
-    assert calls["n"] == 1
-
-
-def test_mpl_axis_handle_request_redraw_is_noop_when_no_canvas():
-    """If the Axes has no canvas (rare edge), ``request_redraw`` must
-    not raise."""
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    fig = Figure(figsize=(4, 3), dpi=100)
-    ax = fig.add_subplot(111)
-    fig.canvas = None  # type: ignore[assignment]
-    h = MplAxisHandle(ax)
-    h.request_redraw()  # must not raise
-
-
-def test_mpl_axis_handle_wraps_axes_property():
-    """``handle.axes`` must remain accessible for code that still
-    needs the raw matplotlib Axes during the migration window
-    (e.g. ``_sync_curve_axis_color``)."""
-    from mf4_analyzer.ui._axis_handle import MplAxisHandle
-    _fig, ax = _axes_with_data()
-    h = MplAxisHandle(ax)
-    assert h.axes is ax
-
-
-def test_pg_axis_handle_is_filled_in_after_t5(qapp):
-    """T5 replaced the ``NotImplementedError`` stub of ``PgAxisHandle``
-    with real pyqtgraph delegation. The deeper Protocol-conformance
-    tests live in ``tests/ui/test_pg_timedomain_canvas.py`` (which
-    constructs a real ``GraphicsLayoutWidget``); here we only smoke-check
-    that ``get_xlim`` no longer raises ``NotImplementedError`` when
-    invoked on a properly-constructed handle."""
-    import os
-    os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
-    import pyqtgraph as pg
-    from mf4_analyzer.ui._axis_handle import PgAxisHandle
-
-    glw = pg.GraphicsLayoutWidget()
-    plot_item = glw.addPlot(row=0, col=0)
-    h = PgAxisHandle(plot_item=plot_item)
-    # Round-trip should not raise.
-    h.set_xlim(0.0, 1.0)
-    lo, hi = h.get_xlim()
-    assert lo == pytest.approx(0.0)
-    assert hi == pytest.approx(1.0)
-
-
-def test_pg_axis_handle_state_accessors_and_legend(qapp):
-    import os
-    os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
-    import pyqtgraph as pg
-    from mf4_analyzer.ui._axis_handle import PgAxisHandle
-
-    glw = pg.GraphicsLayoutWidget()
-    plot_item = glw.addPlot(row=0, col=0)
-    plot_item.showGrid(x=True, y=True)
-    plot_item.plot([0.0, 1.0], [1.0, 2.0], pen=pg.mkPen("#1769e0"), name="speed")
-    h = PgAxisHandle(plot_item=plot_item)
-
-    assert h.is_grid_enabled() is True
-    h.set_xscale("log")
-    h.set_yscale("log")
-    assert h.get_xscale() == "log"
-    assert h.get_yscale() == "log"
-
-    h.rebuild_legend()
-    legend = plot_item.legend
-    assert legend is not None
-    assert len(legend.items) == 1
-    h.rebuild_legend()
-    assert plot_item.legend is legend
-    assert len(legend.items) == 1
+    assert "time (s)" in handle.get_xlabel()
+    assert "value" in handle.get_ylabel()
+    assert "title" in handle.get_title()
+
+    handle.set_xlabel("时间")
+    handle.set_ylabel("幅值")
+    handle.set_title("新标题")
+
+    assert "时间" in handle.get_xlabel()
+    assert "幅值" in handle.get_ylabel()
+    assert "新标题" in handle.get_title()
+
+
+def test_pg_axis_handle_scale_roundtrip(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
+
+    handle.set_xscale("log")
+    handle.set_yscale("log")
+    assert handle.get_xscale() == "log"
+    assert handle.get_yscale() == "log"
+
+    handle.set_xscale("linear")
+    handle.set_yscale("linear")
+    assert handle.get_xscale() == "linear"
+    assert handle.get_yscale() == "linear"
+
+
+def test_pg_axis_handle_autoscale_marks_requested_axis(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
+
+    handle.set_xlim(100.0, 101.0)
+    handle.autoscale(axis="x")
+
+    assert handle.is_autorange("x") is True
+
+
+def test_pg_axis_handle_grid_toggle(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
+
+    handle.grid(True)
+    assert handle.is_grid_enabled() is True
+    assert bool(handle.plot_item.getAxis("bottom").grid)
+
+    handle.grid(False)
+    assert handle.is_grid_enabled() is False
+    assert not handle.plot_item.getAxis("bottom").grid
 
 
 def test_pg_axis_handle_grid_can_disallow_y_grid(qapp):
-    import os
-    os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
-    import pyqtgraph as pg
     from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    import pyqtgraph as pg
 
-    glw = pg.GraphicsLayoutWidget()
-    plot_item = glw.addPlot(row=0, col=0)
-    h = PgAxisHandle(plot_item=plot_item, allow_y_grid=False)
+    plot_item = pg.PlotItem()
+    handle = PgAxisHandle(plot_item=plot_item, allow_y_grid=False)
 
-    h.grid(True)
+    handle.grid(True)
 
     assert bool(plot_item.getAxis("bottom").grid)
     assert not plot_item.getAxis("left").grid
 
 
-def test_pg_axis_handle_grid_uses_shared_helper_with_alpha(qapp, monkeypatch):
-    import pyqtgraph as pg
-    from mf4_analyzer.ui._axis_handle import PgAxisHandle
-    from mf4_analyzer.ui.pg_canvas import _shared
+def test_pg_axis_handle_get_lines_returns_line_handles(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
 
-    captured = {}
-
-    def _fake(plot, *, x, y, alpha=0.25):
-        captured.update(plot=plot, x=x, y=y, alpha=alpha)
-
-    monkeypatch.setattr(_shared, "show_major_grid_left_bottom_only", _fake)
-
-    plot_item = pg.PlotItem()
-    h = PgAxisHandle(plot_item=plot_item)
-    h.grid(True)
-
-    assert captured == {
-        "plot": plot_item,
-        "x": True,
-        "y": True,
-        "alpha": 0.28,
-    }
+    lines = handle.get_lines()
+    assert len(lines) == 1
+    line = lines[0]
+    assert callable(getattr(line, "get_label", None))
+    assert callable(getattr(line, "get_color", None))
+    assert callable(getattr(line, "set_color", None))
+    assert callable(getattr(line, "get_visible", None))
+    assert line.get_label() == "speed"
+    assert line.get_color().lower() == "#1769e0"
+    assert line.get_visible() is True
 
 
-def test_pg_axis_handle_is_autorange(qapp):
-    import pyqtgraph as pg
-    from mf4_analyzer.ui._axis_handle import PgAxisHandle
+def test_pg_axis_handle_line_handle_set_color_round_trips(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
 
-    plot_item = pg.PlotItem()
-    h = PgAxisHandle(plot_item=plot_item)
+    line = handle.get_lines()[0]
+    line.set_color("#ef4444")
 
-    plot_item.vb.enableAutoRange(axis="y", enable=True)
-    plot_item.vb.setXRange(0.0, 1.0, padding=0)
-
-    assert h.is_autorange("y") is True
-    assert h.is_autorange("x") is False
+    assert line.get_color().lower() == "#ef4444"
 
 
-def test_dialog_reflects_real_autorange(qapp):
-    import pyqtgraph as pg
-    from mf4_analyzer.ui._axis_handle import PgAxisHandle
-    from mf4_analyzer.ui.dialogs import ChartOptionsDialog
+def test_pg_axis_handle_rebuild_legend_idempotent(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
 
-    plot_item = pg.PlotItem()
-    plot_item.vb.enableAutoRange(axis="y", enable=True)
-    plot_item.vb.setXRange(0.0, 1.0, padding=0)
-    handle = PgAxisHandle(plot_item=plot_item)
+    handle.rebuild_legend()
+    legend = handle.plot_item.legend
+    assert legend is not None
+    assert len(legend.items) == 1
 
-    dlg = ChartOptionsDialog(None, handle)
-
-    assert dlg.chk_y_auto.isChecked() is True
-    assert dlg.chk_x_auto.isChecked() is False
+    handle.rebuild_legend()
+    assert handle.plot_item.legend is legend
+    assert len(legend.items) == 1
 
 
 def test_pg_axis_handle_sync_line_axis_color(qapp):
-    import os
-    os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
-    import pyqtgraph as pg
-    from mf4_analyzer.ui._axis_handle import PG_AXIS_NEUTRAL_COLOR, PgAxisHandle
+    from mf4_analyzer.ui._axis_handle import PG_AXIS_NEUTRAL_COLOR
 
-    glw = pg.GraphicsLayoutWidget()
-    plot_item = glw.addPlot(row=0, col=0)
-    plot_item.plot([0.0, 1.0], [1.0, 2.0], pen=pg.mkPen("#1769e0"), name="speed")
-    h = PgAxisHandle(plot_item=plot_item)
-    line = h.get_lines()[0]
-    axis = plot_item.getAxis("left")
+    handle, canvas = _pg_time_handle(qapp)
+    line = handle.get_lines()[0]
+    axis = handle.y_axis_item()
 
-    h.sync_line_axis_color(line, "#123456")
+    handle.sync_line_axis_color(line, "#123456")
 
     assert axis.pen().color().name().lower() == PG_AXIS_NEUTRAL_COLOR
     assert axis.textPen().color().name().lower() == "#123456"
+    assert canvas.channel_data["speed"][2].lower() == "#123456"
+
+
+def test_pg_axis_handle_get_mappables_empty_for_line_canvas(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
+
+    assert handle.get_mappables() == []
+
+
+def test_pg_heatmap_handle_get_mappables_and_clim_roundtrip(qapp):
+    handle, canvas = _pg_heatmap_handle(qapp)
+
+    mappables = handle.get_mappables()
+    assert len(mappables) == 1
+    mappable = mappables[0]
+    assert mappable.get_cmap().name == "viridis"
+    assert mappable.get_clim() == pytest.approx((0.0, 8.0))
+
+    mappable.set_clim(1.0, 5.0)
+
+    assert mappable.get_clim() == pytest.approx((1.0, 5.0))
+    assert canvas._img.getLevels() == pytest.approx((1.0, 5.0))
+    assert canvas._cbar.levels() == pytest.approx((1.0, 5.0))
+
+
+def test_pg_heatmap_handle_axis_labels_and_limits(qapp):
+    handle, _canvas = _pg_heatmap_handle(qapp)
+
+    assert handle.get_xlim() == pytest.approx((0.0, 2.0))
+    assert handle.get_ylim() == pytest.approx((10.0, 30.0))
+    assert "time_s" in handle.get_xlabel()
+    assert "frequency_hz" in handle.get_ylabel()
+
+
+def test_make_handle_accepts_existing_pg_handle(qapp):
+    from mf4_analyzer.ui._axis_handle import make_handle
+
+    handle, _canvas = _pg_time_handle(qapp)
+
+    assert make_handle(handle) is handle
+
+
+def test_make_handle_rejects_raw_pyqtgraph_plot_item(qapp):
+    from mf4_analyzer.ui._axis_handle import make_handle
+    import pyqtgraph as pg
+
+    with pytest.raises(TypeError, match="unsupported axis object: PlotItem"):
+        make_handle(pg.PlotItem())
 
 
 def test_pg_axis_handle_axis_item_accessors_prefer_owned_axis(qapp):
-    import os
-    os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
-    import pyqtgraph as pg
     from mf4_analyzer.ui._axis_handle import PgAxisHandle
+    import pyqtgraph as pg
 
-    glw = pg.GraphicsLayoutWidget()
-    plot_item = glw.addPlot(row=0, col=0)
+    plot_item = pg.PlotItem()
     right_axis = pg.AxisItem("right")
 
     primary = PgAxisHandle(plot_item=plot_item)
@@ -432,3 +243,9 @@ def test_pg_axis_handle_axis_item_accessors_prefer_owned_axis(qapp):
     assert primary.x_axis_item() is plot_item.getAxis("bottom")
     assert primary.y_axis_item() is plot_item.getAxis("left")
     assert aux.y_axis_item() is right_axis
+
+
+def test_pg_axis_handle_request_redraw_does_not_raise(qapp):
+    handle, _canvas = _pg_time_handle(qapp)
+
+    handle.request_redraw()

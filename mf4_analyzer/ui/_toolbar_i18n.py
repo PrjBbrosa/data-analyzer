@@ -1,4 +1,4 @@
-"""Chinese tooltip layer for matplotlib NavigationToolbar2QT.
+"""Chinese tooltip layer for the chart navigation toolbar.
 
 Replaces the english tooltips with concise Chinese text and keeps
 Back (上一视图) / Forward (下一视图) actions. Preserves the original english key on
@@ -26,7 +26,7 @@ def apply_chinese_toolbar_labels(toolbar):
     """Mutate ``toolbar``: drop native config actions; replace tooltip text
     on remaining actions (including Back/Forward); preserve the original
     english key in ``act.data()`` so downstream lookups stay stable across
-    matplotlib versions and locale changes.
+    toolbar implementations and locale changes.
     """
     for act in list(toolbar.actions()):
         key = (act.text() or '').strip().lower()

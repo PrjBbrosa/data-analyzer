@@ -64,10 +64,6 @@ def _configure_high_dpi():
 def main():
     _configure_high_dpi()
 
-    import matplotlib
-
-    matplotlib.use("Qt5Agg", force=True)
-
     from PyQt5.QtWidgets import QApplication
 
     MainWindow = _import_symbol("ui", "MainWindow")

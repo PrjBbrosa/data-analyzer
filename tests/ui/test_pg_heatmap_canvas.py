@@ -54,6 +54,33 @@ class _FakeMouseModeController:
         self.mode = "zoom"
 
 
+def _mouse_press(point, button):
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QMouseEvent
+
+    return QMouseEvent(
+        QEvent.MouseButtonPress, point, button, button, Qt.NoModifier,
+    )
+
+
+def _mouse_move(point, held_button):
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QMouseEvent
+
+    return QMouseEvent(
+        QEvent.MouseMove, point, Qt.NoButton, held_button, Qt.NoModifier,
+    )
+
+
+def _mouse_release(point, button):
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QMouseEvent
+
+    return QMouseEvent(
+        QEvent.MouseButtonRelease, point, button, Qt.NoButton, Qt.NoModifier,
+    )
+
+
 def _open_context_menu(view_box, monkeypatch):
     from PyQt5.QtWidgets import QMenu
 
@@ -648,9 +675,15 @@ def test_remark_add_and_clear(canvas):
     canvas.set_remark_enabled(True)
     canvas.add_remark_at(5.0, 4.0)
     assert len(canvas._remarks) == 1
-    # Label text carries the FULL (x, y, value) tuple: (5.0, 4.0) maps to
-    # cell [row 2, col 2] = 1.0, all rendered via %.3g.
-    assert canvas._remarks[0]['label'].toPlainText() == '(5, 4, 1)'
+    # Label text carries the full X/Y/Z coordinate contract. (5.0, 4.0) maps
+    # to cell [row 2, col 2] = 1.0, all rendered via %.4g.
+    label = canvas._remarks[0]['text'].textItem.toPlainText()
+    assert 'X=5' in label
+    assert 'Y=5.333' in label
+    assert 'Z=1' in label
+    assert canvas._remarks[0]['label'] is canvas._remarks[0]['text']
+    assert canvas._remarks[0]['leader'] is not None
+    assert canvas._remarks[0]['text'].flags() & canvas._remarks[0]['text'].ItemIsMovable
     # Dot color matches the time-domain annotation dots
     # (pg_canvas/annotations.py:221) and the mpl DANGER token
     # (canvases.py:34), not an ad hoc red.
@@ -669,7 +702,7 @@ def test_replot_clears_stale_remarks(canvas):
     )
     canvas.set_remark_enabled(True)
     canvas.add_remark_at(5.0, 4.0)
-    assert canvas._remarks[0]['label'].toPlainText() == '(5, 4, 1)'
+    assert 'Z=1' in canvas._remarks[0]['text'].textItem.toPlainText()
     canvas.plot_or_update_heatmap(
         matrix=_mat() * 7.0, x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
         amplitude_mode='amplitude', z_auto=True,
@@ -712,7 +745,7 @@ def test_remove_remark_near_deletes_nearest(canvas):
     canvas.remove_remark_near(7.5, 5.5)  # nearest is (8, 6)
     assert len(canvas._remarks) == 1
     xs, ys = canvas._remarks[0]['dot'].getData()
-    assert (xs[0], ys[0]) == (pytest.approx(2.0), pytest.approx(2.0))
+    assert (xs[0], ys[0]) == (pytest.approx(2.5), pytest.approx(8.0 / 3.0))
 
 
 def test_remark_mode_gates_viewbox_menu(canvas):
@@ -723,6 +756,90 @@ def test_remark_mode_gates_viewbox_menu(canvas):
     assert canvas._plot.vb.menuEnabled() is False
     canvas.set_remark_enabled(False)
     assert canvas._plot.vb.menuEnabled() is True
+
+
+def test_remark_mode_uses_bitmap_pen_cursor(canvas):
+    canvas.set_remark_enabled(True)
+
+    assert canvas._glw.viewport().cursor().shape() == Qt.BitmapCursor
+
+
+def test_annotation_left_click_adds_on_release_not_press(canvas, monkeypatch):
+    from PyQt5.QtCore import QPoint
+
+    canvas.set_remark_enabled(True)
+    point = QPoint(80, 90)
+    added = []
+    monkeypatch.setattr(
+        canvas,
+        "_add_remark_at_viewport_pos",
+        lambda pos: added.append(pos),
+        raising=False,
+    )
+
+    press_consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_press(point, Qt.LeftButton),
+    )
+    release_consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_release(point, Qt.LeftButton),
+    )
+
+    assert press_consumed is False
+    assert release_consumed is True
+    assert added == [point]
+
+
+def test_annotation_left_drag_does_not_add_remark(canvas, monkeypatch):
+    from PyQt5.QtCore import QPoint
+
+    canvas.set_remark_enabled(True)
+    start = QPoint(80, 90)
+    end = QPoint(140, 120)
+    added = []
+    monkeypatch.setattr(
+        canvas,
+        "_add_remark_at_viewport_pos",
+        lambda pos: added.append(pos),
+        raising=False,
+    )
+
+    canvas.eventFilter(canvas._glw.viewport(), _mouse_press(start, Qt.LeftButton))
+    move_consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_move(end, Qt.LeftButton),
+    )
+    release_consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_release(end, Qt.LeftButton),
+    )
+
+    assert move_consumed is False
+    assert release_consumed is False
+    assert added == []
+
+
+def test_annotation_right_press_deletes_nearest_remark(canvas, monkeypatch):
+    from PyQt5.QtCore import QPoint
+
+    canvas.set_remark_enabled(True)
+    point = QPoint(80, 90)
+    removed = []
+    monkeypatch.setattr(
+        canvas,
+        "_remove_remark_at_viewport_pos",
+        lambda pos: removed.append(pos),
+        raising=False,
+    )
+
+    consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_press(point, Qt.RightButton),
+    )
+
+    assert consumed is True
+    assert removed == [point]
 
 
 def test_remark_disabled_noop(canvas):
@@ -2240,7 +2357,9 @@ def test_hover_emits_cursor_info(qapp):
     sp = c._plot.vb.mapViewToScene(QPointF(1.0, 250.0))
     c._on_scene_hover(sp)
     assert received, "hover over the map must emit cursor_info"
-    assert received[-1].startswith('t=')
+    assert 'X=' in received[-1]
+    assert 'Y=' in received[-1]
+    assert 'Z=' in received[-1]
     assert 'Hz' in received[-1]
     c.hide()
     c.deleteLater()
@@ -2291,11 +2410,13 @@ def test_hover_db_mode_labels_value_db_not_channel_unit(qapp):
     c._on_scene_hover(sp)
     assert received, "hover over the map must emit cursor_info"
     msg = received[-1]
-    assert msg.endswith(' dB'), f"dB-mode readout must end with ' dB', got {msg!r}"
+    assert 'Z=' in msg and ' dB' in msg, (
+        f"dB-mode readout must label Z in dB, got {msg!r}"
+    )
     # The channel unit 'g' must NOT trail the value in dB mode. Guard a
     # naive substring 'g' (which appears in any value via %.4g) by anchoring
     # on the trailing token only.
-    assert not msg.endswith(' g'), f"dB-mode readout wrongly labeled 'g': {msg!r}"
+    assert ' g' not in msg, f"dB-mode readout wrongly labeled 'g': {msg!r}"
     c.hide()
     c.deleteLater()
 
@@ -2315,8 +2436,43 @@ def test_hover_linear_mode_labels_value_channel_unit(qapp):
     c._on_scene_hover(sp)
     assert received, "hover over the map must emit cursor_info"
     msg = received[-1]
-    assert msg.endswith(' g'), f"linear-mode readout must trail 'g', got {msg!r}"
+    assert 'Z=' in msg and ' g' in msg, (
+        f"linear-mode readout must label Z with channel unit, got {msg!r}"
+    )
     assert ' dB' not in msg, f"linear-mode readout must not say 'dB': {msg!r}"
+    c.hide()
+    c.deleteLater()
+
+
+def test_hover_emits_xyz_without_spectrogram_result_for_order_style_heatmap(qapp):
+    c = PgHeatmapCanvas()
+    c.resize(640, 480)
+    c.show()
+    qapp.processEvents()
+    c._amplitude_mode = 'amplitude_db'
+    matrix = np.arange(12, dtype=float).reshape(3, 4)
+    c.plot_or_update_heatmap(
+        matrix=matrix,
+        x_extent=(0.0, 3.0),
+        y_extent=(0.0, 2.0),
+        x_label='Time (s)',
+        y_label='Order',
+        x_coords=np.array([0.0, 1.0, 2.0, 3.0]),
+        y_coords=np.array([0.0, 1.0, 2.0]),
+        amplitude_mode='amplitude',
+        z_auto=True,
+    )
+    assert c._result is None
+    received = []
+    c.cursor_info.connect(received.append)
+    sp = c._plot.vb.mapViewToScene(QPointF(1.1, 1.2))
+    c._on_scene_hover(sp)
+
+    assert received, "order-style heatmap hover must emit cursor_info"
+    msg = received[-1]
+    assert 'X=1 s' in msg
+    assert 'Y=1' in msg
+    assert 'Z=5 dB' in msg
     c.hide()
     c.deleteLater()
 
@@ -2358,7 +2514,7 @@ def test_hover_and_remark_read_same_value_in_slice_mode(qapp):
     sp = c._plot.vb.mapViewToScene(QPointF(x, y))
     c._on_scene_hover(sp)
     assert received
-    hover_token = received[-1].rsplit('·', 1)[-1].strip().split()[0]
+    hover_token = received[-1].split('Z=', 1)[-1].strip().split()[0]
     # Remark value: _value_at is the remark取值器; it must agree with hover.
     remark_val = c._value_at(x, y)
     # The hover pill formats the value via %.4g; the remark reads the same

@@ -1,7 +1,7 @@
 """Backwards-compatibility re-export shim for mf4_analyzer.ui.canvases.
 
-Phase D (2026-06-18): the matplotlib canvas classes (TimeDomainCanvas,
-PlotCanvas) and their mpl-only helpers have been retired. Pure signal-math
+Phase D (2026-06-18): the legacy canvas classes (TimeDomainCanvas,
+PlotCanvas) and their renderer-only helpers have been retired. Pure signal-math
 helpers moved to ``mf4_analyzer.signal.envelope``; pure UI-formatting helpers
 moved to ``mf4_analyzer.ui.plot_helpers``.
 
@@ -10,9 +10,8 @@ This module re-exports all previously public symbols so any remaining
 without modification.
 
 Color constants and chart-keyword re-exports remain here because they are
-referenced directly from test_canvas_compactness and from the matplotlib
-rcParams block (kept to avoid breaking any downstream matplotlib
-configuration that may have loaded with this module in the past).
+referenced directly from test_canvas_compactness and from historical
+configuration paths that may have loaded with this module in the past.
 """
 
 from .._chart_kw import (

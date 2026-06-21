@@ -11,7 +11,7 @@ Scenario:
 
 Measurement:
     - Discard a small warmup batch (envelope cache cold-start, first
-      matplotlib draw_idle dispatch).
+      pyqtgraph/offscreen paint setup).
     - Record per-iteration wall-clock in milliseconds.
     - Report P50 and P95 (and N, mean, min, max for sanity).
 
@@ -159,26 +159,15 @@ def test_timedomain_pan_refresh_pg_canvas():
             return _orig_positions(*args, **kwargs)
         _cutils.positions = _counting_positions
 
-    # Stabilize the offscreen Qt raster paint backend BEFORE constructing
-    # the pyqtgraph GraphicsLayoutWidget. Under ``QT_QPA_PLATFORM=offscreen``
-    # the FIRST pyqtgraph widget built in a fresh process aborts in
-    # ``QWidget.__init__`` unless a matplotlib ``FigureCanvasQTAgg`` (which
-    # initializes the Agg/raster paint device the offscreen plugin shares)
-    # has been constructed first. The full perf file gets this for free
-    # because ``test_timedomain_pan_refresh_baseline`` runs earlier; we
-    # construct + discard a throwaway canvas here so the PG test is robust
-    # in isolation (``-k pg_canvas``) too. This is a test-harness ordering
-    # quirk, NOT a production path — production always has the matplotlib
-    # backend imported and a live main window before any canvas is built.
-    try:
-        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-        from matplotlib.figure import Figure
-        _warmup = FigureCanvasQTAgg(Figure())
-        _warmup.draw()
-        del _warmup
-    except Exception:
-        pass
+    # Stabilize the offscreen Qt paint path before constructing the
+    # pyqtgraph GraphicsLayoutWidget so the benchmark also runs in
+    # isolation (``-k pg_canvas``).
+    from PyQt5.QtWidgets import QWidget
+    _warmup = QWidget()
+    _warmup.resize(1, 1)
+    _warmup.show()
     QCoreApplication.processEvents()
+    _warmup.hide()
 
     try:
         cv = TimeDomainCanvasPG()

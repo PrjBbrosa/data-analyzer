@@ -579,15 +579,19 @@ class TestTimeDomainCanvasPGAnnotations:
         monkeypatch.setattr(
             canvas._annotations,
             "_nearest_data_point",
-            lambda _pos: ("speed", 1.25, 42.5, "#1769e0"),
+            lambda _pos: ("speed", 1.25, 42.5, "#1769e0", "rpm"),
         )
 
         canvas._annotations._add_remark(QPoint(120, 100))
 
         label = canvas._annotations.remarks[-1]["text"].textItem.toPlainText()
-        assert "X=1.25" in label
-        assert "Y=42.5" in label
+        assert "X=1.25 s" in label
+        assert "Y=42.5 rpm" in label
         assert "speed" not in label
+        remark = canvas._annotations.remarks[-1]
+        assert remark["label"] is remark["text"]
+        assert remark["leader"] is not None
+        assert remark["text"].flags() & remark["text"].ItemIsMovable
 
     def test_remark_label_highlights_y_value_with_channel_color(
         self, qapp, monkeypatch,
@@ -599,7 +603,7 @@ class TestTimeDomainCanvasPGAnnotations:
         monkeypatch.setattr(
             canvas._annotations,
             "_nearest_data_point",
-            lambda _pos: ("speed", 1.25, 42.5, "#00b894"),
+            lambda _pos: ("speed", 1.25, 42.5, "#00b894", "rpm"),
         )
 
         canvas._annotations._add_remark(QPoint(120, 100))
@@ -921,7 +925,7 @@ class TestTimeDomainCanvasPGContract:
         assert ax_facade is ax0
         # The line facade must satisfy the LineHandle Protocol: get/set
         # color, get_label, get_visible. (Per design §5.3 — same shape
-        # as MplAxisHandle.get_lines() entries.)
+        # as AxisHandle.get_lines() entries.)
         assert callable(getattr(line_facade, "get_color", None))
         assert callable(getattr(line_facade, "set_color", None))
         assert callable(getattr(line_facade, "get_label", None))

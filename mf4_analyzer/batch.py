@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 
 from .signal.fft import FFTAnalyzer
-from ._chart_kw import CHART_TIGHT_LAYOUT_KW
 
 
 @dataclass(frozen=True)
@@ -719,10 +718,43 @@ class BatchRunner:
         return path
 
     @staticmethod
-    def _write_image(payload, path, params=None):
-        kind, data = payload
-        from matplotlib.figure import Figure
+    def _ensure_qapp():
+        import os
 
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt5.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        return app
+
+    @staticmethod
+    def _extract_matrix(data):
+        if isinstance(data, _Spectro2D):
+            spectro = data
+            matrix = np.asarray(spectro.matrix, dtype=float).T
+            return (
+                matrix,
+                (float(spectro.x.min()), float(spectro.x.max())),
+                (float(spectro.y.min()), float(spectro.y.max())),
+                spectro.x_name,
+                spectro.y_name,
+            )
+
+        df = data
+        pivot = df.pivot(index=df.columns[1], columns=df.columns[0], values='amplitude')
+        return (
+            pivot.to_numpy(dtype=float),
+            (float(pivot.columns.min()), float(pivot.columns.max())),
+            (float(pivot.index.min()), float(pivot.index.max())),
+            df.columns[0],
+            df.columns[1],
+        )
+
+    @staticmethod
+    def _build_export_scene(payload, params=None):
+        kind, data = payload
         params = params or {}
         x_auto = bool(params.get('x_auto', True))
         x_min = float(params.get('x_min', 0.0))
@@ -740,78 +772,130 @@ class BatchRunner:
         if db_reference <= 0:
             db_reference = 1.0
 
-        fig = Figure(figsize=(8, 4.5), dpi=140)
-        try:
-            ax = fig.subplots()
-            if kind == 'fft':
-                df = data
-                ax.plot(df['frequency_hz'], df['amplitude'], lw=1.0)
-                ax.set_xlabel('Frequency (Hz)')
-                ax.set_ylabel('Amplitude')
-                if not x_auto and x_max > x_min:
-                    ax.set_xlim(x_min, x_max)
-                if not y_auto and y_max > y_min:
-                    ax.set_ylim(y_min, y_max)
-            else:
-                # Accept either a _Spectro2D (fast path, no pivot needed) or a
-                # legacy long-format DataFrame (backward-compat for existing tests
-                # that call _write_image directly with a DataFrame payload).
-                if isinstance(data, _Spectro2D):
-                    spectro = data
-                    matrix = np.asarray(spectro.matrix, dtype=float).T  # (rows=y, cols=x)
-                    x_extent = (float(spectro.x.min()), float(spectro.x.max()))
-                    y_extent = (float(spectro.y.min()), float(spectro.y.max()))
-                    x_label = spectro.x_name
-                    y_label = spectro.y_name
-                else:
-                    # Legacy DataFrame path (pivot round-trip; kept for compat).
-                    df = data
-                    pivot = df.pivot(
-                        index=df.columns[1], columns=df.columns[0], values='amplitude'
-                    )
-                    matrix = pivot.to_numpy()
-                    x_extent = (float(pivot.columns.min()), float(pivot.columns.max()))
-                    y_extent = (float(pivot.index.min()), float(pivot.index.max()))
-                    x_label = df.columns[0]
-                    y_label = df.columns[1]
-                if render_db:
-                    # Display-only dB choice; exported data stays linear.
-                    # Delegate to SpectrogramAnalyzer.amplitude_to_db — the
-                    # single authority for 20*log10(max(amp, tiny) / ref).
-                    from .signal.spectrogram import SpectrogramAnalyzer as _SA
-                    matrix = _SA.amplitude_to_db(
-                        matrix, reference=max(db_reference, 1e-12)
-                    )
-                    cbar_label = 'Amplitude (dB)'
-                else:
-                    cbar_label = 'Amplitude'
-                vmin = vmax = None
-                if not z_auto:
-                    vmin = z_floor
-                    vmax = z_ceiling
-                im = ax.imshow(
-                    matrix,
-                    aspect='auto',
-                    origin='lower',
-                    extent=[x_extent[0], x_extent[1], y_extent[0], y_extent[1]],
-                    interpolation='bilinear',
-                    cmap='turbo',
-                    vmin=vmin,
-                    vmax=vmax,
-                )
-                ax.set_xlabel(x_label)
-                ax.set_ylabel(y_label)
-                if not x_auto and x_max > x_min:
-                    ax.set_xlim(x_min, x_max)
-                if not y_auto and y_max > y_min:
-                    ax.set_ylim(y_min, y_max)
-                fig.colorbar(im, ax=ax, label=cbar_label)
-            ax.grid(True, alpha=0.25, ls='--')
-            fig.tight_layout(**CHART_TIGHT_LAYOUT_KW)
-            fig.savefig(path)
-        finally:
-            fig.clear()
+        BatchRunner._ensure_qapp()
+        import pyqtgraph as pg
+        from PyQt5.QtCore import QRectF
+
+        widget = pg.GraphicsLayoutWidget()
+        widget.resize(1120, 630)
+        plot = widget.addPlot()
+        plot.showGrid(x=True, y=True, alpha=0.25)
+        info = {
+            "plot_item": plot,
+            "image_item": None,
+            "levels": None,
+            "matrix": None,
+            "x_range": None,
+            "y_range": None,
+            "colorbar_label": None,
+            "colormap_name": None,
+        }
+
+        if kind == 'fft':
+            df = data
+            plot.plot(df['frequency_hz'].to_numpy(), df['amplitude'].to_numpy(), pen='w')
+            plot.setLabel('bottom', 'Frequency (Hz)')
+            plot.setLabel('left', 'Amplitude')
+            if not x_auto and x_max > x_min:
+                plot.setXRange(x_min, x_max, padding=0)
+                info["x_range"] = (x_min, x_max)
+            if not y_auto and y_max > y_min:
+                plot.setYRange(y_min, y_max, padding=0)
+                info["y_range"] = (y_min, y_max)
+            return widget, info
+
+        matrix, x_extent, y_extent, x_label, y_label = BatchRunner._extract_matrix(data)
+        if render_db:
+            # Display-only dB choice; exported data stays linear.
+            from .signal.spectrogram import SpectrogramAnalyzer as _SA
+
+            matrix = _SA.amplitude_to_db(matrix, reference=max(db_reference, 1e-12))
+            cbar_label = 'Amplitude (dB)'
+        else:
+            cbar_label = 'Amplitude'
+
+        display_levels = _finite_matrix_bounds(matrix)
+        levels = None
+        if not z_auto:
+            levels = (z_floor, z_ceiling)
+            display_levels = levels
+
+        image_item = pg.ImageItem()
+        image_item.setOpts(axisOrder='row-major')
+        image_item.setImage(matrix, autoLevels=False)
+        image_item.setRect(QRectF(
+            x_extent[0],
+            y_extent[0],
+            x_extent[1] - x_extent[0],
+            y_extent[1] - y_extent[0],
+        ))
+        colormap = pg.colormap.get("turbo")
+        image_item.setColorMap(colormap)
+        image_item.setLevels(display_levels)
+        plot.addItem(image_item)
+        plot.setLabel('bottom', x_label)
+        plot.setLabel('left', y_label)
+        x_view = x_extent if x_extent[1] > x_extent[0] else (x_extent[0], x_extent[0] + 1.0)
+        y_view = y_extent if y_extent[1] > y_extent[0] else (y_extent[0], y_extent[0] + 1.0)
+        plot.setXRange(*x_view, padding=0)
+        plot.setYRange(*y_view, padding=0)
+
+        colorbar = pg.ColorBarItem(
+            values=display_levels,
+            colorMap=colormap,
+            label=cbar_label,
+            interactive=False,
+            colorMapMenu=False,
+        )
+        colorbar.setImageItem(image_item, insert_in=plot)
+
+        if not x_auto and x_max > x_min:
+            plot.setXRange(x_min, x_max, padding=0)
+            info["x_range"] = (x_min, x_max)
+        if not y_auto and y_max > y_min:
+            plot.setYRange(y_min, y_max, padding=0)
+            info["y_range"] = (y_min, y_max)
+
+        info.update({
+            "image_item": image_item,
+            "levels": levels,
+            "matrix": matrix,
+            "colorbar_label": cbar_label,
+            "colormap_name": "turbo",
+        })
+        return widget, info
+
+    @staticmethod
+    def _export_png(widget, path):
+        path = Path(path)
+        BatchRunner._ensure_qapp()
+        from PyQt5.QtWidgets import QApplication
+        from pyqtgraph.exporters import ImageExporter
+
+        widget.show()
+        QApplication.processEvents()
+        exporter = ImageExporter(widget.scene())
+        exporter.parameters()['width'] = 1120
+        exporter.export(str(path))
+        widget.close()
         return path
+
+    @staticmethod
+    def _write_image(payload, path, params=None):
+        widget, _info = BatchRunner._build_export_scene(payload, params)
+        return BatchRunner._export_png(widget, path)
+
+
+def _finite_matrix_bounds(matrix):
+    values = np.asarray(matrix, dtype=float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return (0.0, 1.0)
+    lo = float(finite.min())
+    hi = float(finite.max())
+    if hi <= lo:
+        hi = lo + 1.0
+    return (lo, hi)
 
 
 def _guess_rpm_channel(fd):

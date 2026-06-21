@@ -48,6 +48,33 @@ class _FakeMouseModeController:
         self.mode = "zoom"
 
 
+def _mouse_press(point, button):
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QMouseEvent
+
+    return QMouseEvent(
+        QEvent.MouseButtonPress, point, button, button, Qt.NoModifier,
+    )
+
+
+def _mouse_move(point, held_button):
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QMouseEvent
+
+    return QMouseEvent(
+        QEvent.MouseMove, point, Qt.NoButton, held_button, Qt.NoModifier,
+    )
+
+
+def _mouse_release(point, button):
+    from PyQt5.QtCore import QEvent
+    from PyQt5.QtGui import QMouseEvent
+
+    return QMouseEvent(
+        QEvent.MouseButtonRelease, point, button, Qt.NoButton, Qt.NoModifier,
+    )
+
+
 def _open_context_menu(view_box, monkeypatch):
     from PyQt5.QtWidgets import QMenu
 
@@ -1362,8 +1389,43 @@ def test_remark_snaps_to_curve(canvas):
     # Dot color matches the time-domain annotation dots and the mpl
     # DANGER token (#dc2626), same as PgHeatmapCanvas — not an ad hoc red.
     assert canvas._remarks[0]['dot'].opts['brush'].color().name() == '#dc2626'
+    assert canvas._remarks[0]['label'] is canvas._remarks[0]['text']
+    assert canvas._remarks[0]['leader'] is not None
+    text = canvas._remarks[0]['text'].textItem.toPlainText()
+    assert 'X=' in text and 'Hz' in text
+    assert 'Y=' in text
     canvas.clear_remarks()
     assert canvas._remarks == []
+
+
+def test_spectrum_remark_picks_nearest_in_screen_space(canvas, qapp):
+    entry = {
+        'label': 'f1 · vib',
+        'color': '#2563eb',
+        'freq': np.array([0.0, 1.0, 2.0]),
+        'amp': np.array([0.0, 100.0, 0.0]),
+        'time': np.linspace(0.0, 1.0, 32),
+        'signal': np.zeros(32),
+    }
+    canvas.plot_spectra(
+        [entry], xlim=(0.0, 2.0), amp_label='Amplitude',
+        title='FFT', y_auto=False, y_min=0.0, y_max=100.0,
+    )
+    canvas.resize(640, 480)
+    canvas.show()
+    qapp.processEvents()
+    canvas.set_remark_enabled(True)
+
+    # X=1.51 is closer in data-X to the zero-amplitude sample at f=2.0, but
+    # visually the cursor is much nearer to the peak at f=1.0, amp=100.
+    near_peak_scene = canvas._plot_amp.vb.mapViewToScene(QPointF(1.51, 95.0))
+    viewport_pos = canvas._glw.mapFromScene(near_peak_scene)
+    canvas._add_remark_at_viewport_pos(viewport_pos)
+
+    assert len(canvas._remarks) == 1
+    xs, ys = canvas._remarks[-1]['dot'].getData()
+    assert float(xs[0]) == pytest.approx(1.0)
+    assert float(ys[0]) == pytest.approx(100.0)
 
 
 def test_axis_region_click_neither_adds_nor_deletes_remark(canvas, qapp):
@@ -1900,6 +1962,90 @@ def test_annotation_enabled_disables_time_menu(canvas):
     assert canvas._plot_time.vb.menuEnabled() is True
 
 
+def test_annotation_mode_uses_bitmap_pen_cursor(canvas):
+    canvas.set_remark_enabled(True)
+
+    assert canvas._glw.viewport().cursor().shape() == Qt.BitmapCursor
+
+
+def test_annotation_left_click_adds_on_release_not_press(canvas, monkeypatch):
+    from PyQt5.QtCore import QPoint
+
+    canvas.set_remark_enabled(True)
+    point = QPoint(80, 90)
+    added = []
+    monkeypatch.setattr(
+        canvas,
+        "_add_remark_at_viewport_pos",
+        lambda pos: added.append(pos),
+        raising=False,
+    )
+
+    press_consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_press(point, Qt.LeftButton),
+    )
+    release_consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_release(point, Qt.LeftButton),
+    )
+
+    assert press_consumed is False
+    assert release_consumed is True
+    assert added == [point]
+
+
+def test_annotation_left_drag_does_not_add_remark(canvas, monkeypatch):
+    from PyQt5.QtCore import QPoint
+
+    canvas.set_remark_enabled(True)
+    start = QPoint(80, 90)
+    end = QPoint(140, 120)
+    added = []
+    monkeypatch.setattr(
+        canvas,
+        "_add_remark_at_viewport_pos",
+        lambda pos: added.append(pos),
+        raising=False,
+    )
+
+    canvas.eventFilter(canvas._glw.viewport(), _mouse_press(start, Qt.LeftButton))
+    move_consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_move(end, Qt.LeftButton),
+    )
+    release_consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_release(end, Qt.LeftButton),
+    )
+
+    assert move_consumed is False
+    assert release_consumed is False
+    assert added == []
+
+
+def test_annotation_right_press_deletes_nearest_remark(canvas, monkeypatch):
+    from PyQt5.QtCore import QPoint
+
+    canvas.set_remark_enabled(True)
+    point = QPoint(80, 90)
+    removed = []
+    monkeypatch.setattr(
+        canvas,
+        "_remove_remark_at_viewport_pos",
+        lambda pos: removed.append(pos),
+        raising=False,
+    )
+
+    consumed = canvas.eventFilter(
+        canvas._glw.viewport(),
+        _mouse_press(point, Qt.RightButton),
+    )
+
+    assert consumed is True
+    assert removed == [point]
+
+
 def test_add_and_clear_remark_on_time_preview(canvas):
     canvas.plot_spectra(_overlay_entries(), xlim=(0.0, 50.0),
                         amp_label='Amplitude', title='t')
@@ -1913,6 +2059,11 @@ def test_add_and_clear_remark_on_time_preview(canvas):
     assert (last.get('plot') is canvas._plot_time
             or last.get('vb') in canvas._time_overlay_vbs
             or last.get('vb') is canvas._plot_time.vb)
+    assert last['label'] is last['text']
+    assert last['leader'] is not None
+    text = last['text'].textItem.toPlainText()
+    assert 'X=' in text and 's' in text
+    assert 'Y=' in text
     canvas.clear_remarks()
     assert len(canvas._remarks) == 0
 

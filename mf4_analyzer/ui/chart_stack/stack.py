@@ -259,6 +259,11 @@ class ChartStack(QWidget):
             lambda enabled, m=mode: self.annotation_enabled_changed.emit(m, enabled)
         )
         card.tick_density_changed.connect(self._on_card_tick_density_changed)
+        canvas = getattr(card, 'canvas', None)
+        if canvas is not None and hasattr(canvas, 'cursor_info'):
+            canvas.cursor_info.connect(
+                lambda text, c=canvas: self._on_cursor_info(text, c)
+            )
 
     def _all_cards(self):
         cards = [self._time_card]
@@ -392,6 +397,9 @@ class ChartStack(QWidget):
 
     def _card_for_canvas(self, canvas):
         """Owning time card for a cursor-emitting ``canvas`` (primary fallback)."""
+        for card in self._all_cards():
+            if getattr(card, 'canvas', None) is canvas:
+                return card
         if (canvas is not None
                 and self._secondary_card is not None
                 and canvas is self._secondary_card.canvas):
@@ -1008,16 +1016,24 @@ class ChartStack(QWidget):
             return self._pill_secondary
         return self._pill
 
+    def _cursor_pill_visible_for_mode(self, mode=None):
+        mode = self.current_mode() if mode is None else mode
+        return mode in {'time', 'fft_time', 'order'}
+
     def _on_cursor_info(self, text, source=None):
         mode = self._cursor_mode_for_canvas(source)
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
-        primary, detail = self._format_cursor_info_for_pill(text, mode)
         pill = self._pill_for_canvas(source)
+        if not text:
+            pill.clear()
+            self._reposition_pill()
+            return
+        primary, detail = self._format_cursor_info_for_pill(text, mode)
         pill.set_primary(primary)
         if mode == 'single':
             pill.set_detail_html(detail)
-        pill.setVisible(self.current_mode() == 'time')
+        pill.setVisible(self._cursor_pill_visible_for_mode())
         self._reposition_pill()
 
     def _format_cursor_info_for_pill(self, text, mode=None):
@@ -1050,10 +1066,22 @@ class ChartStack(QWidget):
         self._reposition_pill()
 
     def _reposition_pill(self):
-        if self.current_mode() != 'time':
+        current = self.current_mode()
+        if not self._cursor_pill_visible_for_mode(current):
             self._pill.setVisible(False)
             if self._pill_secondary is not None:
                 self._pill_secondary.setVisible(False)
+            return
+        if current != 'time':
+            active_mode = getattr(self._active_cursor_card, '_chart_mode', None)
+            if active_mode != current:
+                self._pill.setVisible(False)
+                if self._pill_secondary is not None:
+                    self._pill_secondary.setVisible(False)
+                return
+            if self._pill_secondary is not None:
+                self._pill_secondary.setVisible(False)
+            self._reposition_one_pill(self._pill, self._active_cursor_card)
             return
         self._reposition_one_pill(self._pill, self._time_card)
         if self._pill_secondary is not None and self._secondary_card is not None:

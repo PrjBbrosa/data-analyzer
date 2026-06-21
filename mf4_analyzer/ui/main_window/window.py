@@ -738,7 +738,12 @@ class MainWindow(
         if self._fft_any_source_cached(state):
             self._render_analysis_view_from_cache('fft', state)
         else:
-            self._refresh_fft_time_preview()
+            page = self.chart_stack.page_fft
+            canvas = page.pane_canvas(page.focused_index())
+            if getattr(canvas, 'has_result', lambda: False)():
+                self._refresh_fft_time_preview(clear_spectrum=False)
+            else:
+                self._refresh_fft_time_preview()
 
     def _fft_entry_from_cache(
         self, result, fid, ch, color, time_range=_INSPECTOR_TIME_RANGE
