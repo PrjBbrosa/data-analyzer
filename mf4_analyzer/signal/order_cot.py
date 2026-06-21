@@ -119,9 +119,23 @@ class COTOrderAnalyzer:
 
         # frame layout in angle domain
         nfft = int(params.nfft)
-        # hop in samples = time_res * (samples_per_rev * mean_rps) seconds-equivalent
-        # but in angle domain we just hop by a fixed fraction of nfft.
-        hop_angle = max(int(nfft * 0.25), 1)            # 75% overlap default
+        # Derive hop from params.time_res (seconds): how many angle-domain
+        # samples correspond to one time_res interval?
+        #
+        #   dt_angle  = average seconds per angle-domain sample
+        #             = (t_uniform[-1] - t_uniform[0]) / (N - 1)
+        #   hop_angle = round(time_res / dt_angle)
+        #
+        # Semantics: smaller time_res → smaller hop → denser frames (finer
+        # time axis).  Clamp to [1, nfft] to prevent hop=0 (infinite loop)
+        # and hop > nfft (would skip frames entirely, wasting data).
+        n_angle = len(t_uniform)
+        dt_angle = (t_uniform[-1] - t_uniform[0]) / max(n_angle - 1, 1)
+        if dt_angle > 0.0:
+            hop_angle = int(round(params.time_res / dt_angle))
+        else:
+            hop_angle = nfft  # degenerate: all samples at same time
+        hop_angle = max(1, min(hop_angle, nfft))
         starts = COTOrderAnalyzer._frame_starts(len(s_theta), nfft, hop_angle)
         n_frames = len(starts)
         if n_frames == 0:

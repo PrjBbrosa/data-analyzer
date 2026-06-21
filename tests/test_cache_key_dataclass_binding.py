@@ -197,14 +197,8 @@ def test_spectrogram_params_every_field_is_consumed_by_compute():
         )
 
 
-# Explicit COTParams consumption map (brief step 4b: where each field is read).
-# Asserting "every field is consumed" would over-reach into Task 5's territory
-# (the hop / time_res logic in order_cot.py is Task 5's, and time_res is
-# currently NOT consumed — compute hardcodes a 75% angle-domain hop; fs is a
-# carry-through field for batch-preset capture, never read by compute). So we
-# assert ONLY the fields that genuinely flow into the spectrogram math, and
-# pin the two non-consumed fields with an explicit note rather than a false
-# "consumed" assertion.
+# Explicit COTParams consumption map (updated by Task 5: time_res is now
+# genuinely read by compute() to derive the angle-domain hop).
 _COT_CONSUMED_BY_COMPUTE = {
     'samples_per_rev',  # order_cot.py: dtheta, raw_orders
     'nfft',             # frame length
@@ -213,14 +207,12 @@ _COT_CONSUMED_BY_COMPUTE = {
     'order_res',        # out_orders grid step
     'weighting',        # _validate_weighting + a-weighting gain
     'min_rpm_floor',    # per-frame rpm gate (params.min_rpm_floor)
+    'time_res',         # hop_angle = round(time_res / dt_angle); wired by Task 5
 }
 # Not consumed by compute (do NOT assert as consumed):
-#   - time_res: carried on the dataclass but compute hardcodes the hop
-#     (75% angle-domain overlap). Wiring time_res -> hop is Task 5; out of
-#     scope here, so this guard must not assert it.
 #   - fs: source sample-rate, carried through for batch-preset capture only;
 #     compute works in the angle domain and never reads it.
-_COT_NOT_CONSUMED = {'time_res', 'fs'}
+_COT_NOT_CONSUMED = {'fs'}
 
 
 def test_cot_consumption_map_partitions_every_field():

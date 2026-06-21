@@ -171,3 +171,87 @@ def test_cot_tail_frame_metadata_covers_time_end():
     assert res.metadata['coverage_start'] <= res.times[0]
     assert res.metadata['coverage_end'] >= res.times[-1]
     assert abs(float(res.metadata['coverage_end']) - float(t[-1])) < 0.02
+
+
+# ---------------------------------------------------------------------------
+# Task 5: time_res → hop mapping (兑现 tooltip "越小时间越细")
+# ---------------------------------------------------------------------------
+
+def _synth_cot_signal(fs=1000.0, dur=10.0, rpm_const=600.0):
+    """Return (t, sig, rpm) with a constant-RPM 2nd-order signal."""
+    t, sig, rpm = _synth_constant_rpm_with_2nd_order(
+        fs=fs, dur=dur, rpm_const=rpm_const, order_amp=1.0, noise=0.0
+    )
+    return t, sig, rpm
+
+
+def test_time_res_different_values_give_different_n_frames():
+    """RED until time_res → hop is wired.
+
+    Same signal; two distinct time_res values must produce strictly different
+    n_frames — proving hop is no longer hardcoded.  Under the old 75%-overlap
+    hardcode both n_frames are identical, so this test is RED until the fix.
+    """
+    t, sig, rpm = _synth_cot_signal()
+
+    p_coarse = COTParams(samples_per_rev=256, nfft=512, max_order=10.0,
+                         order_res=0.1, time_res=0.5)
+    p_fine = COTParams(samples_per_rev=256, nfft=512, max_order=10.0,
+                       order_res=0.1, time_res=0.1)
+
+    res_coarse = COTOrderAnalyzer.compute(sig, rpm, t, p_coarse)
+    res_fine = COTOrderAnalyzer.compute(sig, rpm, t, p_fine)
+
+    assert res_coarse.metadata['frames'] != res_fine.metadata['frames'], (
+        f"time_res=0.5 and time_res=0.1 produced identical n_frames="
+        f"{res_coarse.metadata['frames']}; hop must still be hardcoded."
+    )
+
+
+def test_smaller_time_res_gives_more_frames():
+    """Monotonicity: time_res ↓ → n_frames ↑ (finer time grid)."""
+    t, sig, rpm = _synth_cot_signal()
+
+    results = {}
+    for tr in (0.05, 0.1, 0.2, 0.5):
+        p = COTParams(samples_per_rev=256, nfft=512, max_order=10.0,
+                      order_res=0.1, time_res=tr)
+        results[tr] = COTOrderAnalyzer.compute(sig, rpm, t, p).metadata['frames']
+
+    time_res_sorted = sorted(results.keys())          # ascending time_res
+    frames_sorted = [results[tr] for tr in time_res_sorted]
+    # frames must be non-increasing (finer time_res → more frames)
+    for i in range(len(frames_sorted) - 1):
+        assert frames_sorted[i] >= frames_sorted[i + 1], (
+            f"monotonicity broken: time_res={time_res_sorted[i]} gave "
+            f"{frames_sorted[i]} frames but time_res={time_res_sorted[i+1]} "
+            f"gave {frames_sorted[i+1]} frames (expected >= relationship)"
+        )
+    # At least one step must be strictly fewer for the coarser resolution
+    assert frames_sorted[0] > frames_sorted[-1], (
+        "Smallest time_res must produce strictly more frames than largest; "
+        f"got {frames_sorted[0]} vs {frames_sorted[-1]}"
+    )
+
+
+def test_extreme_small_time_res_hop_is_at_least_one():
+    """Boundary: extremely small time_res → hop clamped to 1, no crash, ≥1 frame."""
+    t, sig, rpm = _synth_cot_signal()
+    p = COTParams(samples_per_rev=256, nfft=512, max_order=10.0,
+                  order_res=0.1, time_res=1e-9)
+    res = COTOrderAnalyzer.compute(sig, rpm, t, p)
+    assert res.metadata['hop'] >= 1
+    assert res.metadata['frames'] >= 1
+    assert np.all(np.isfinite(res.amplitude))
+
+
+def test_extreme_large_time_res_hop_at_most_nfft():
+    """Boundary: extremely large time_res → hop clamped to nfft, no crash, ≥1 frame."""
+    t, sig, rpm = _synth_cot_signal()
+    nfft = 512
+    p = COTParams(samples_per_rev=256, nfft=nfft, max_order=10.0,
+                  order_res=0.1, time_res=1e6)
+    res = COTOrderAnalyzer.compute(sig, rpm, t, p)
+    assert res.metadata['hop'] <= nfft
+    assert res.metadata['frames'] >= 1
+    assert np.all(np.isfinite(res.amplitude))
