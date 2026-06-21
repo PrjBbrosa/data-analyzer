@@ -2055,21 +2055,24 @@ def test_plot_result_db_vmin_vmax_not_overridden_by_internal_auto(qapp):
     c.deleteLater()
 
 
-def test_plot_result_db_auto_span_tracks_data_peak(qapp):
-    """Auto color-scale uses a fixed _AUTO_SPAN_DB anchor, NOT the z_floor
-    spin value.
+def test_plot_result_db_auto_span_tracks_robust_ceiling(qapp):
+    """Auto color-scale uses a fixed _AUTO_SPAN_DB span anchored at a robust
+    high-percentile ceiling — NOT the z_floor spin value, and NOT the literal
+    data max.
 
-    Old contract (before fix): z_floor was treated as a *peak offset*, so
-    z_floor=-50 produced lo = peak - 50 and z_floor=-40 produced lo = peak-40.
-    That made the auto and manual windows use different semantics (peak-relative
-    vs absolute), causing a 30+ dB jump when the user toggled auto off.
+    Old contract (peak-offset): z_floor was treated as a *peak offset*, so the
+    auto and manual windows used different semantics (peak-relative vs absolute),
+    causing a 30+ dB jump when the user toggled auto off.
 
-    New contract (after fix): lo = peak - _AUTO_SPAN_DB ALWAYS, regardless of
-    z_floor.  z_floor/z_ceiling now have a single meaning: absolute dB values
-    used in MANUAL mode only.  Tests that asserted the old peak-offset semantics
-    are updated to the new fixed-span contract.
+    Current contract: hi = _robust_db_ceiling(matrix) (the _AUTO_CEILING_PCT
+    percentile) and lo = hi - _AUTO_SPAN_DB ALWAYS, regardless of z_floor.
+    z_floor/z_ceiling have a single meaning: absolute dB values used in MANUAL
+    mode only.  Anchoring on a percentile (not np.nanmax) keeps a lone transient
+    peak from dragging the window up — see
+    test_plot_result_db_auto_ceiling_ignores_outlier_peak.
     """
-    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _AUTO_SPAN_DB
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _AUTO_CEILING_PCT, _AUTO_SPAN_DB, _robust_db_ceiling)
 
     c = PgHeatmapCanvas(with_slice=True)
     c.resize(640, 480)
@@ -2087,12 +2090,105 @@ def test_plot_result_db_auto_span_tracks_data_peak(qapp):
         z_auto=True, z_floor=-50.0, z_ceiling=0.0,
     )
 
-    peak = float(np.nanmax(c._matrix_disp))
+    ceiling = _robust_db_ceiling(c._matrix_disp, _AUTO_CEILING_PCT)
     lo, hi = c._img.getLevels()
-    assert hi == pytest.approx(peak)
-    # Fixed-span contract: lo = peak - _AUTO_SPAN_DB, regardless of z_floor.
-    assert lo == pytest.approx(peak - _AUTO_SPAN_DB)
-    assert peak < -100.0
+    assert hi == pytest.approx(ceiling)
+    # Fixed-span contract: lo = ceiling - _AUTO_SPAN_DB, regardless of z_floor.
+    assert lo == pytest.approx(ceiling - _AUTO_SPAN_DB)
+    assert hi < -100.0
+    # Auto window is stored for the inspector write-back (auto→manual no jump).
+    assert c._last_auto_levels == pytest.approx((ceiling - _AUTO_SPAN_DB, ceiling))
+    c.deleteLater()
+
+
+def test_plot_result_db_auto_ceiling_ignores_outlier_peak(qapp):
+    """Regression (2026-06-21): a lone transient peak must NOT drag the auto
+    ceiling up and bury the informative bulk below the floor.
+
+    Real measurement spectra have sharp peaks tens of dB above the bulk.  The
+    pre-fix auto window anchored the ceiling on np.nanmax, so the ceiling sat
+    on the outlier and the whole field fell below the floor → an all-dark image
+    the user had to drag down ~38 dB to read (the "拖色阶 vs 重算图不一样"
+    report).  The robust percentile ceiling tracks the bulk top instead, so the
+    outlier is clipped (saturated) and the bulk maps across the colormap.
+    """
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _AUTO_CEILING_PCT, _AUTO_SPAN_DB, _robust_db_ceiling)
+
+    rng = np.random.default_rng(0)
+    # Bulk spread around -30 dB; ONE +30 dB transient outlier (a 1e3x spike).
+    bulk_db = rng.normal(-30.0, 5.0, (64, 64))
+    amp = 10.0 ** (bulk_db / 20.0)
+    amp[0, 0] = 10.0 ** (30.0 / 20.0)
+
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(320, 240)
+    r = SpectrogramResult(
+        times=np.arange(64, dtype=float),
+        frequencies=np.arange(64, dtype=float),
+        amplitude=amp,
+        params=SpectrogramParams(fs=128.0, nfft=64, db_reference=1.0),
+        channel_name='spiky',
+        metadata={'frames': 64},
+    )
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', cmap='turbo',
+        z_auto=True, z_floor=-40.0, z_ceiling=0.0,
+    )
+
+    peak = float(np.nanmax(c._matrix_disp))
+    ceiling = _robust_db_ceiling(c._matrix_disp, _AUTO_CEILING_PCT)
+    lo, hi = c._img.getLevels()
+    assert peak == pytest.approx(30.0, abs=0.5)         # outlier present
+    assert hi == pytest.approx(ceiling)                 # ceiling = robust pct
+    assert hi < peak - 25.0                             # NOT pinned to the peak
+    assert -40.0 <= hi <= 0.0                           # sits in the bulk band
+    assert lo == pytest.approx(hi - _AUTO_SPAN_DB)      # fixed span preserved
+    # Old (buggy) behaviour would have put hi == peak (~+30 dB); guard it.
+    assert hi != pytest.approx(peak)
+    c.deleteLater()
+
+
+def test_plot_result_db_manual_does_not_bake_color_range_into_matrix(qapp):
+    """Regression (2026-06-21): manual color scale must be DISPLAY-only.
+
+    Computing with a manual [z_floor, z_ceiling] must NOT clip the stored
+    display matrix to that window.  Clipping destroyed every value outside
+    the window, so a later colorbar drag (display-only) could not recover the
+    detail and the user was forced to recompute inside the right range — the
+    "set [27,67] → all black; drag to [-33,6.72] → all red; recompute → image"
+    report.  The matrix must stay full-range; only the display LEVELS carry
+    [z_floor, z_ceiling].
+    """
+    rng = np.random.default_rng(3)
+    bulk_db = rng.uniform(-47.0, 6.0, (60, 40))   # data lives in [-47, 6]
+    amp = 10.0 ** (bulk_db / 20.0)
+    r = SpectrogramResult(
+        times=np.arange(40, dtype=float),
+        frequencies=np.linspace(0.0, 3000.0, 60),
+        amplitude=amp,
+        params=SpectrogramParams(fs=129500.0, nfft=8192, db_reference=1.0),
+        channel_name='L', metadata={'frames': 40},
+    )
+
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(320, 240)
+    # Compute with a window ABOVE all the data ([27, 67] vs data in [-47, 6]).
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo',
+                  z_auto=False, z_floor=27.0, z_ceiling=67.0)
+
+    md = c._matrix_disp
+    # Stored matrix must remain the FULL dB data, NOT flattened to the floor.
+    assert float(np.nanstd(md)) > 1.0, "matrix was baked/flattened by the clip"
+    assert float(np.nanmin(md)) < 0.0          # real lows preserved
+    assert float(np.nanmax(md)) <= 6.5         # not pushed up into the window
+    # Display levels still carry the manual window.
+    lo, hi = c._img.getLevels()
+    assert (lo, hi) == pytest.approx((27.0, 67.0))
+
+    # A colorbar drag to a sane window recovers detail WITHOUT a recompute.
+    c._img.setLevels((-33.28, 6.72))
+    assert float(np.nanstd(c._matrix_disp)) > 1.0
     c.deleteLater()
 
 
@@ -2991,9 +3087,11 @@ def test_plot_result_auto_decoupled_from_spin_values(qapp):
 
     Before the fix, z_auto=True used z_floor/z_ceiling as peak offsets,
     so different spin values produced different windows.  After the fix,
-    [peak - AUTO_SPAN_DB, peak] is always used regardless of spin values.
+    [ceiling - AUTO_SPAN_DB, ceiling] is always used regardless of spin
+    values, where ceiling is the robust _AUTO_CEILING_PCT percentile.
     """
-    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import _AUTO_SPAN_DB
+    from mf4_analyzer.ui.pg_canvas.heatmap_canvas import (
+        _AUTO_CEILING_PCT, _AUTO_SPAN_DB, _robust_db_ceiling)
 
     c = PgHeatmapCanvas(with_slice=False)
     c.resize(320, 240)
@@ -3013,13 +3111,14 @@ def test_plot_result_auto_decoupled_from_spin_values(qapp):
     assert hi_a == pytest.approx(hi_b, abs=0.5), (
         f"auto window hi changed with spin values: {hi_a:.3f} vs {hi_b:.3f}")
 
-    # Also verify the window is [peak - AUTO_SPAN_DB, peak].
+    # Also verify the window is [ceiling - AUTO_SPAN_DB, ceiling] where
+    # ceiling is the robust percentile (NOT np.nanmax).
     from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
     m_db = SpectrogramAnalyzer.amplitude_to_db(result.amplitude, 1.0)
-    expected_hi = float(np.nanmax(m_db))
+    expected_hi = _robust_db_ceiling(m_db, _AUTO_CEILING_PCT)
     expected_lo = expected_hi - _AUTO_SPAN_DB
     assert hi_a == pytest.approx(expected_hi, abs=0.5), (
-        f"auto hi should be peak={expected_hi:.3f}, got {hi_a:.3f}")
+        f"auto hi should be robust ceiling={expected_hi:.3f}, got {hi_a:.3f}")
     assert lo_a == pytest.approx(expected_lo, abs=0.5), (
-        f"auto lo should be peak-SPAN={expected_lo:.3f}, got {lo_a:.3f}")
+        f"auto lo should be ceiling-SPAN={expected_lo:.3f}, got {lo_a:.3f}")
     c.deleteLater()

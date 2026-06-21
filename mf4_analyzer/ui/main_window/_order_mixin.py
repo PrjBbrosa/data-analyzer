@@ -416,16 +416,20 @@ class OrderMixin:
         z_ceiling = float(order_params.get('z_ceiling', 0.0))
 
         # For the dB path: compute auto levels using the same fixed-SPAN
-        # anchor used by plot_result — [peak - AUTO_SPAN_DB, peak] in
+        # anchor used by plot_result — [ceiling - AUTO_SPAN_DB, ceiling] in
         # absolute dB — and pass them as explicit vmin/vmax so the canvas
         # does not fall back to the full data range (which may span 80+ dB
         # of noise floor).  This makes Order's auto/manual transition as
-        # jump-free as FFT-vs-Time's.
+        # jump-free as FFT-vs-Time's.  The ceiling is a robust high
+        # percentile (NOT the literal max) so a lone transient peak does not
+        # drag the window up and bury the bulk below the floor — parity with
+        # plot_result's _robust_db_ceiling.
         vmin_override = None
         vmax_override = None
         if z_auto and amp_mode_token == 'amplitude_db':
-            from ..pg_canvas.heatmap_canvas import _AUTO_SPAN_DB, _finite_data_bounds
-            _, data_hi = _finite_data_bounds(matrix)
+            from ..pg_canvas.heatmap_canvas import (
+                _AUTO_CEILING_PCT, _AUTO_SPAN_DB, _robust_db_ceiling)
+            data_hi = _robust_db_ceiling(matrix, _AUTO_CEILING_PCT)
             vmin_override = data_hi - _AUTO_SPAN_DB
             vmax_override = data_hi
 

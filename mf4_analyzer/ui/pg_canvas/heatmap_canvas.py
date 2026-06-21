@@ -234,15 +234,44 @@ def _finite_data_bounds(matrix):
 
 # Default dynamic range span used by the *absolute-dB* auto color window
 # (plot_result path, FFT-vs-Time and Order).  The canvas normalises to
-# [peak - _AUTO_SPAN_DB, peak] so the "auto" and "manual-after-write-back"
-# windows are identical — eliminating the 30+ dB jump that occurred when
-# the old code treated z_floor/z_ceiling as *peak offsets* while the
-# manual path used them as *absolute* dB values.
+# [ceiling - _AUTO_SPAN_DB, ceiling] (ceiling = _robust_db_ceiling, below)
+# so the "auto" and "manual-after-write-back" windows are identical —
+# eliminating the 30+ dB jump that occurred when the old code treated
+# z_floor/z_ceiling as *peak offsets* while the manual path used them as
+# *absolute* dB values.
 #
 # Deliberately NOT read from the inspector's z_floor/z_ceiling: reading
 # from those fields would make the auto window depend on spin state and
 # re-introduce a feedback loop.  A fixed span is predictable and safe.
 _AUTO_SPAN_DB: float = 40.0
+
+# Percentile used to anchor the *ceiling* of the absolute-dB auto window
+# (plot_result path, FFT-vs-Time and Order).  Real measurement spectra have
+# sharp transient peaks 30-40 dB above the informative bulk; anchoring the
+# auto ceiling at the literal data MAX (np.nanmax) put the whole field below
+# the floor → an all-dark image the user had to drag down ~38 dB to read.
+# Using a high percentile makes the ceiling track the top of the *bulk*
+# instead of a lone outlier, so "自动" lands where the user actually wants it.
+# For well-behaved data with no outliers, the 99th percentile ≈ max, so this
+# is a no-op there and only kicks in when there is a heavy upper tail.
+_AUTO_CEILING_PCT: float = 99.0
+
+
+def _robust_db_ceiling(matrix, pct=_AUTO_CEILING_PCT):
+    """Return a high-percentile ceiling for the absolute-dB auto window.
+
+    Robust to the outlier transient peaks common in real measurement data:
+    unlike ``np.nanmax`` it ignores the top ``(100 - pct)``% of cells, so a
+    handful of bright spikes no longer drag the whole colour window up and
+    bury the informative bulk below the floor.  NaN/inf-safe (matches
+    ``_finite_data_bounds``); falls back to that bound when the matrix has
+    no finite values.
+    """
+    arr = np.asarray(matrix, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return _finite_data_bounds(matrix)[1]
+    return float(np.percentile(finite, pct))
 
 
 def _auto_db_level_window(matrix, z_floor, z_ceiling):
@@ -1490,18 +1519,32 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 self._db_cache = (key, SpectrogramAnalyzer.amplitude_to_db(
                     result.amplitude, db_ref))
             m = self._db_cache[1]
-            if not z_auto:
-                m = np.clip(m, float(z_floor), float(z_ceiling))
+            # Do NOT clip the matrix to [z_floor, z_ceiling] in manual mode.
+            # The display LEVELS (vmin/vmax below) clamp the COLOURS, while the
+            # stored matrix must stay full-range so a colorbar drag — which only
+            # changes display levels, not the stored data — can remap it without
+            # a recompute.  Clipping baked the colour window into the data:
+            # computing at e.g. [27, 67] when the data lived in [-47, 6]
+            # flattened the whole matrix to 27, and a later drag to [-33, 6.72]
+            # could not recover any detail (the user's all-black → all-red →
+            # must-recompute report).  Slice/hover read _matrix_disp too, so an
+            # unclipped matrix also makes them show the true dB values.
             if z_auto:
-                # Use a fixed SPAN anchored at the data peak so the auto
-                # window is expressed in *absolute* dB — matching the
-                # manual-mode semantics of z_floor/z_ceiling.  This
-                # eliminates the 30-40 dB jump that occurred when the old
+                # Use a fixed SPAN anchored at a robust high-percentile
+                # ceiling so the auto window is expressed in *absolute* dB —
+                # matching the manual-mode semantics of z_floor/z_ceiling.
+                # This eliminates the 30-40 dB jump that occurred when the old
                 # code used z_floor/z_ceiling as *peak offsets* while the
                 # manual path treated them as absolute values.
-                # _AUTO_SPAN_DB is intentionally NOT read from the spin
-                # widgets to prevent a feedback loop.
-                _, data_hi = _finite_data_bounds(m)
+                #
+                # The ceiling is the _AUTO_CEILING_PCT percentile, NOT the
+                # literal max: real spectra have transient peaks tens of dB
+                # above the bulk, and anchoring on the max buried the whole
+                # informative field below the floor (an all-dark image the
+                # user had to drag down ~38 dB to read).  _AUTO_SPAN_DB and
+                # the percentile are intentionally NOT read from the spin
+                # widgets, to prevent a feedback loop.
+                data_hi = _robust_db_ceiling(m, _AUTO_CEILING_PCT)
                 vmin, vmax = data_hi - _AUTO_SPAN_DB, data_hi
                 # Store the computed absolute window so the caller can
                 # write it back to the inspector spins (blockSignals),
