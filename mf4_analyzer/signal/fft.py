@@ -5,8 +5,9 @@ are the single source of truth for window construction and one-sided
 amplitude scaling so ``FFTAnalyzer`` and the new
 ``mf4_analyzer.signal.spectrogram.SpectrogramAnalyzer`` cannot drift.
 
-Window generation delegates to ``scipy.signal.get_window`` with
-``fftbins=False`` (symmetric). The app keeps ownership of:
+Window generation uses numpy built-ins plus a hand-written ``_flattop``
+implementation (scipy's ``general_cosine`` with standard coefficients,
+symmetric branch). The app keeps ownership of:
 
   * alias normalization (``hann`` -> ``hanning``);
   * the ``kaiser`` ``beta=14`` default;
@@ -26,7 +27,6 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
-from scipy.signal import get_window as _scipy_get_window
 
 from .weighting import _validate_weighting, a_weighting_gain_linear
 
@@ -38,24 +38,51 @@ _WINDOW_ALIASES = {
 }
 
 
+def _flattop(n):
+    """Symmetric flat-top window of length ``n``.
+
+    Equivalent to ``scipy.signal.windows.flattop(n, sym=True)`` — uses the
+    same 5-term cosine-sum coefficients and the same symmetric spacing
+    (``np.linspace(-pi, pi, n)``).
+    """
+    if n < 1:
+        return np.array([], dtype=float)
+    if n == 1:
+        return np.ones(1, dtype=float)
+    a = [0.21557895, 0.41663158, 0.277263158, 0.083578947, 0.006947368]
+    fac = np.linspace(-np.pi, np.pi, n)
+    w = np.zeros(n, dtype=float)
+    for k in range(len(a)):
+        w += a[k] * np.cos(k * fac)
+    return w
+
+
+_NUMPY_WINDOWS = {
+    'hanning': np.hanning,
+    'hamming': np.hamming,
+    'blackman': np.blackman,
+    'bartlett': np.bartlett,
+}
+
+
 def get_analysis_window(name, n):
     """Return the app's symmetric analysis window of length ``n``.
 
     Single source of truth for FFT and spectrogram code so both paths
-    use identical amplitude normalization. Implementation delegates to
-    ``scipy.signal.get_window`` but keeps app ownership of:
+    use identical amplitude normalization. Implementation uses numpy
+    built-ins and a hand-written ``_flattop`` (no scipy dependency).
+    App keeps ownership of:
 
       * alias resolution (``hann`` -> ``hanning``);
       * the ``kaiser`` ``beta`` default (14);
-      * the symmetric (``fftbins=False``) policy.
+      * the symmetric (``fftbins=False``-equivalent) policy.
 
     Parameters
     ----------
     name : str
         Window name. Accepted: ``hanning``/``hann``, ``hamming``,
-        ``blackman``, ``bartlett``, ``kaiser``, ``flattop``. Any
-        unrecognised name is forwarded to ``scipy.signal.get_window``;
-        scipy will raise if it is unknown.
+        ``blackman``, ``bartlett``, ``kaiser``, ``flattop``.
+        Unrecognised names raise ``ValueError``.
     n : int
         Window length in samples.
 
@@ -67,13 +94,13 @@ def get_analysis_window(name, n):
     key = (name or 'hanning').lower()
     key = _WINDOW_ALIASES.get(key, key)
     if key == 'kaiser':
-        spec = ('kaiser', 14)
-    elif key == 'hanning':
-        # scipy uses 'hann'; map our public 'hanning' to the scipy name.
-        spec = 'hann'
-    else:
-        spec = key
-    return _scipy_get_window(spec, n, fftbins=False).astype(float, copy=False)
+        return np.kaiser(n, 14).astype(float, copy=False)
+    if key == 'flattop':
+        return _flattop(n).astype(float, copy=False)
+    fn = _NUMPY_WINDOWS.get(key)
+    if fn is None:
+        raise ValueError(f"unknown window: {name!r}")
+    return fn(n).astype(float, copy=False)
 
 
 def one_sided_amplitude(frame, fs, win='hanning', nfft=None, remove_mean=True):
