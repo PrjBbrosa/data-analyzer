@@ -234,20 +234,6 @@ def test_heatmap_plots_hide_native_auto_fit_buttons(qapp):
         c.deleteLater()
 
 
-def test_db_mode_manual_levels_clip(canvas):
-    canvas.plot_or_update_heatmap(
-        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
-        amplitude_mode='amplitude_db', z_auto=False,
-        z_floor=-30.0, z_ceiling=0.0,
-    )
-    lo, hi = canvas._img.getLevels()
-    assert (lo, hi) == (-30.0, 0.0)
-    # ref = peak → peak cell is 0 dB; ones are 20log10(1/100) = -40 → clipped to -30
-    img = canvas._img.image
-    assert img.max() == pytest.approx(0.0)
-    assert img.min() == pytest.approx(-30.0)
-
-
 def test_image_rect_matches_extents(canvas):
     canvas.plot_or_update_heatmap(
         matrix=_mat(), x_extent=(2.0, 12.0), y_extent=(1.0, 9.0),
@@ -428,38 +414,6 @@ def test_set_tick_density_also_applies_to_slice_subplot(qapp):
         assert sl._tickDensity == pytest.approx(8 / 6.0)    # y → left
     finally:
         c.deleteLater()
-
-
-def test_db_mode_z_auto_defaults_true(canvas):
-    # mpl original (canvases.py:2184) defaults z_auto=True; omitting it
-    # must NOT clip the matrix to the (-30, 0) manual window, but the displayed
-    # color scale should use that 30 dB span instead of the full data floor.
-    canvas.plot_or_update_heatmap(
-        matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
-        amplitude_mode='amplitude_db',
-    )
-    lo, hi = canvas._img.getLevels()
-    assert lo == pytest.approx(-30.0)
-    assert hi == pytest.approx(0.0)
-    # Matrix data remains unclipped: 20*log10(1/100) = -40 dB.
-    assert float(np.nanmin(canvas._matrix_disp)) == pytest.approx(-40.0)
-
-
-def test_db_auto_levels_use_configured_span_without_clipping_matrix(canvas):
-    matrix = np.array([[1.0, 1e-16], [1e-8, 1e-4]], dtype=float)
-    canvas.plot_or_update_heatmap(
-        matrix=matrix,
-        x_extent=(0.0, 2.0),
-        y_extent=(0.0, 2.0),
-        amplitude_mode='amplitude_db',
-        z_auto=True,
-        z_floor=-50.0,
-        z_ceiling=0.0,
-    )
-
-    lo, hi = canvas._img.getLevels()
-    assert (lo, hi) == (pytest.approx(-50.0), pytest.approx(0.0))
-    assert float(np.nanmin(canvas._matrix_disp)) < -200.0
 
 
 def test_interp_bilinear_enables_smooth_image_paint(canvas):
@@ -3121,4 +3075,76 @@ def test_plot_result_auto_decoupled_from_spin_values(qapp):
         f"auto hi should be robust ceiling={expected_hi:.3f}, got {hi_a:.3f}")
     assert lo_a == pytest.approx(expected_lo, abs=0.5), (
         f"auto lo should be ceiling-SPAN={expected_lo:.3f}, got {lo_a:.3f}")
+    c.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# Task-2 invariant-guard tests (structural measure B)
+# ---------------------------------------------------------------------------
+
+def test_plot_or_update_heatmap_rejects_amplitude_db_mode(canvas):
+    """Invariant: amplitude_db mode has been removed from plot_or_update_heatmap.
+
+    All callers pre-convert to dB and pass amplitude_mode='amplitude'.
+    Passing 'amplitude_db' must raise ValueError so dead-branch regressions are
+    caught immediately at the call site.
+
+    TDD: RED before dead branch is deleted; GREEN after.
+    """
+    with pytest.raises(ValueError, match="amplitude_db"):
+        canvas.plot_or_update_heatmap(
+            matrix=_mat(), x_extent=(0.0, 10.0), y_extent=(0.0, 8.0),
+            amplitude_mode='amplitude_db',
+        )
+
+
+def test_plot_result_matrix_invariant_across_window_rerenders(qapp):
+    """Invariant: _matrix_disp is byte-identical across two plot_result calls
+    with different z_floor/z_ceiling windows (manual mode, same result object).
+
+    The display LEVELS must differ; only the image colour mapping changes.
+    If the dead amplitude_db branch's np.clip were re-introduced, the matrix
+    would differ between calls — this test catches the regression.
+
+    TDD: currently GREEN (plot_result already doesn't clip); remains a
+    regression guard after the dead branch deletion.
+    """
+    rng = np.random.default_rng(42)
+    amp = rng.uniform(1e-4, 1.0, (32, 20)).astype(np.float32)
+    r = SpectrogramResult(
+        times=np.linspace(0.0, 2.0, 20),
+        frequencies=np.linspace(0.0, 500.0, 32),
+        amplitude=amp,
+        params=SpectrogramParams(fs=1000.0, nfft=64, db_reference=1.0),
+        channel_name='inv_test', metadata={'frames': 20},
+    )
+
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(320, 240)
+
+    # First render: a narrow high window (will show mostly dark)
+    c.plot_result(r, amplitude_mode='amplitude_db',
+                  z_auto=False, z_floor=-10.0, z_ceiling=0.0)
+    matrix_first = c._matrix_disp.copy()
+    levels_first = c._img.getLevels()
+
+    # Second render: a wide low window (will show different colours)
+    c.plot_result(r, amplitude_mode='amplitude_db',
+                  z_auto=False, z_floor=-80.0, z_ceiling=-20.0)
+    matrix_second = c._matrix_disp.copy()
+    levels_second = c._img.getLevels()
+
+    # The STORED matrix must be byte-identical: only the display levels differ.
+    assert np.array_equal(matrix_first, matrix_second), (
+        "plot_result baked the color window into _matrix_disp: "
+        f"first_min={matrix_first.min():.2f} second_min={matrix_second.min():.2f}"
+    )
+    # Sanity: the levels MUST differ (otherwise the test is trivial).
+    # getLevels() returns a tuple-like; compare element-wise.
+    lf0, lf1 = float(levels_first[0]), float(levels_first[1])
+    ls0, ls1 = float(levels_second[0]), float(levels_second[1])
+    assert (lf0, lf1) != (ls0, ls1), (
+        "levels should differ between the two manual windows"
+    )
+
     c.deleteLater()

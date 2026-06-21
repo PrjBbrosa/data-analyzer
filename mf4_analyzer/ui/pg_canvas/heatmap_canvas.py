@@ -6,7 +6,10 @@ with ``with_slice=True`` — ``SpectrogramCanvas`` (canvases.py:1602).
 API names/kwargs mirror the matplotlib originals so MainWindow render
 paths keep their call sites.
 
-dB semantics are a line-for-line port of canvases.py:2221-2244.
+dB conversion is done in the CALLER (plot_result / _render_order_on),
+not inside plot_or_update_heatmap. The internal amplitude_db branch was
+removed; pass amplitude_mode='amplitude' with pre-converted data and
+explicit vmin/vmax so the colour scale is purely display-only.
 NO OpenGL anywhere here: OpenGL breaks grab_pixmap exports (all-white,
 verified on the time-domain canvas history).
 """
@@ -273,28 +276,6 @@ def _robust_db_ceiling(matrix, pct=_AUTO_CEILING_PCT):
         return _finite_data_bounds(matrix)[1]
     return float(np.percentile(finite, pct))
 
-
-def _auto_db_level_window(matrix, z_floor, z_ceiling):
-    """Return a peak-relative dB display window for auto color levels.
-
-    Used by ``plot_or_update_heatmap``'s ``amplitude_db`` branch, which
-    first normalises the matrix peak to 0 dB so ``data_hi`` is always 0.
-    The result is therefore ``(z_floor, z_ceiling)`` regardless — the
-    peak-offset and absolute interpretations coincide when peak == 0.
-
-    Do NOT call this from ``plot_result`` (absolute-dB path); use
-    ``_AUTO_SPAN_DB`` there so the auto window is independent of the spin
-    values.
-    """
-    data_lo, data_hi = _finite_data_bounds(matrix)
-    floor = _finite_float(z_floor)
-    ceiling = _finite_float(z_ceiling)
-    if floor is None or ceiling is None:
-        return data_lo, data_hi
-    offset_lo, offset_hi = sorted((floor, ceiling))
-    if offset_hi <= offset_lo:
-        return data_lo, data_hi
-    return data_hi + offset_lo, data_hi + offset_hi
 
 
 def time_axis_display_extent(times, *, params=None, metadata=None, fallback=None):
@@ -1127,32 +1108,20 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         interp_mode = 'bilinear' if interp is None else str(interp).lower()
         smooth = interp_mode in {'bilinear', 'bicubic', 'hanning'}
         self._img.set_smooth_transform(smooth)
+        if amplitude_mode == 'amplitude_db':
+            raise ValueError(
+                "amplitude_db is not accepted by plot_or_update_heatmap. "
+                "Convert to dB in the caller (plot_result / _render_order_on) "
+                "and pass amplitude_mode='amplitude' with explicit vmin/vmax."
+            )
+
         m = np.asarray(matrix, dtype=float)
 
-        # -- dB conversion: line-for-line port of canvases.py:2221-2244 --
-        if amplitude_mode == 'amplitude_db':
-            ref = float(np.nanmax(m))
-            if ref <= 0:
-                m_disp = np.full_like(m, fill_value=-100.0)
-            else:
-                with np.errstate(divide='ignore'):
-                    m_disp = 20.0 * np.log10(np.clip(m, 1e-12, None) / ref)
-            if not z_auto:
-                m_disp = np.clip(m_disp, float(z_floor), float(z_ceiling))
-            m = m_disp
-            auto_vmin, auto_vmax = _auto_db_level_window(m, z_floor, z_ceiling)
-            if vmin is None:
-                vmin = float(z_floor) if not z_auto else auto_vmin
-            if vmax is None:
-                vmax = float(z_ceiling) if not z_auto else auto_vmax
-            if 'dB' not in cbar_label:
-                cbar_label = f"{cbar_label} (dB)"
-        else:
-            auto_vmin, auto_vmax = _finite_data_bounds(m)
-            if vmin is None:
-                vmin = float(z_floor) if not z_auto else auto_vmin
-            if vmax is None:
-                vmax = float(z_ceiling) if not z_auto else auto_vmax
+        auto_vmin, auto_vmax = _finite_data_bounds(m)
+        if vmin is None:
+            vmin = float(z_floor) if not z_auto else auto_vmin
+        if vmax is None:
+            vmax = float(z_ceiling) if not z_auto else auto_vmax
 
         x0, x1 = float(x_extent[0]), float(x_extent[1])
         y0, y1 = float(y_extent[0]), float(y_extent[1])
