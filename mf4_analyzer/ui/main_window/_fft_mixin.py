@@ -7,6 +7,7 @@ import numpy as np
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from ...signal import FFTAnalyzer, resolve_nfft, energy_band_fmax
+from ...signal.spectrogram import SpectrogramAnalyzer
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 
@@ -27,14 +28,15 @@ class FFTMixin:
     def _amplitude_to_db(amp, reference):
         """Convert linear amplitude to dB relative to ``reference``.
 
-        ``20 * log10(max(|amp|, eps) / max(reference, eps))`` — display-only
-        transform.  ``reference`` is the linear amplitude value that maps to
-        0 dB. ``amp_for_xlim`` (auto x-limit) is computed from the linear
-        amplitude before calling this, so it is unaffected.
+        Delegates to ``SpectrogramAnalyzer.amplitude_to_db`` — the single
+        authority for the ``20 * log10(max(amp, tiny) / ref)`` formula.
+        The caller guard ``max(reference, 1e-12)`` ensures the helper never
+        receives a non-positive reference even when the inspector supplies an
+        out-of-range value.  Display-only transform — ``amp_for_xlim`` (auto
+        x-limit) is computed from the linear amplitude before calling this.
         """
-        arr = np.asarray(amp, dtype=float)
         ref = max(float(reference), 1e-12)
-        return 20.0 * np.log10(np.clip(arr, 1e-12, None) / ref)
+        return SpectrogramAnalyzer.amplitude_to_db(amp, reference=ref)
 
     @staticmethod
     def _resolve_fft_effective_params(fft_params, n_samples, fs):

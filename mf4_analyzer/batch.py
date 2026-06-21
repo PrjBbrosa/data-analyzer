@@ -777,9 +777,11 @@ class BatchRunner:
                     y_label = df.columns[1]
                 if render_db:
                     # Display-only dB choice; exported data stays linear.
-                    eps = np.finfo(float).tiny
-                    matrix = 20.0 * np.log10(
-                        np.maximum(matrix, eps) / db_reference
+                    # Delegate to SpectrogramAnalyzer.amplitude_to_db — the
+                    # single authority for 20*log10(max(amp, tiny) / ref).
+                    from .signal.spectrogram import SpectrogramAnalyzer as _SA
+                    matrix = _SA.amplitude_to_db(
+                        matrix, reference=max(db_reference, 1e-12)
                     )
                     cbar_label = 'Amplitude (dB)'
                 else:

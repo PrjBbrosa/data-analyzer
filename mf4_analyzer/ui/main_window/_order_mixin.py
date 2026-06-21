@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import QMessageBox
 from PyQt5.QtCore import QThread
 
 from ...signal import assess_speed_for_order, resolve_order_nfft
+from ...signal.spectrogram import SpectrogramAnalyzer
 from ..compute_feedback import ComputeOutcome
 from ._sentinel import _INSPECTOR_TIME_RANGE
 
@@ -407,7 +408,7 @@ class OrderMixin:
         cbar_label = 'Amplitude'
         if amp_mode_token == 'amplitude_db':
             db_ref = max(float(order_params.get('db_reference', 1.0)), 1e-12)
-            matrix = 20.0 * np.log10(np.clip(matrix, 1e-12, None) / db_ref)
+            matrix = SpectrogramAnalyzer.amplitude_to_db(matrix, reference=db_ref)
             plot_amp_mode = 'amplitude'
             cbar_label = f'Amplitude (dB re {db_ref:g})'
 
