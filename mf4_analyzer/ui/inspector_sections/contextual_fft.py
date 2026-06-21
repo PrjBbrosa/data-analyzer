@@ -159,8 +159,11 @@ class FFTContextual(QWidget):
         self.combo_avg_mode.addItems(['单帧', '线性平均', '峰值保持'])
         self.combo_avg_mode.setCurrentText('单帧')
         self.combo_avg_mode.setToolTip(
-            "单帧：单次 FFT 快照；线性平均：Welch 多段平均（降噪）；"
-            "峰值保持：每个频率取多段最大值（保留瞬态）。"
+            "单帧：单次快照，显示瞬时幅值（峰值口径）。\n"
+            "线性平均：多段 RMS 平均（均方根口径），相比单帧约低 3 dB——\n"
+            "    对于纯正弦信号这是正常的能量等价，并非缺陷。\n"
+            "峰值保持：每个频率保留多段中的最大值（峰值口径），\n"
+            "    适合捕捉瞬态，幅值与单帧一致。"
         )
         fl.addRow(
             "平均模式:",

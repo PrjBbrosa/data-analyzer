@@ -81,6 +81,8 @@ Write protocol: `docs/lessons-learned/README.md`.
 - [display-param-guard-vs-preset-load](pyqt-ui/2026-06-21-display-param-guard-vs-preset-load.md) [apply_params][preset][weighting][partial-dict][display-param][colorbar] — Both `apply_params` AND `_apply_preset_values` must guard optional keys with `if 'key' in d:` (Task 6 correction: `.get(key,'None')` in `_apply_preset_values` resets A-weighting on legacy preset load); display-only params go in render sig + `get_params` but NOT cache keys.
 - [heatmap-auto-level-absolute-vs-relative](pyqt-ui/2026-06-21-heatmap-auto-level-absolute-vs-relative.md) [pyqtgraph][heatmap][colorbar][levels][z_auto][absolute-db][peak-relative][write-back][blocksignals][auto-manual-jump] — Absolute-dB heatmap paths must use fixed-span [peak−SPAN, peak], not z_floor/z_ceiling as peak offsets; write the result back to inspector spins under blockSignals so auto→manual is jump-free.
 
+- [tooltip-caliber-annotation-vs-numeric-change](pyqt-ui/2026-06-21-tooltip-caliber-annotation-vs-numeric-change.md) [tooltip][caliber][welch][rms][characterization-test][user-facing-text] — Algorithm caliber gap (RMS vs peak) → tooltip annotation not numeric change; characterize dB offset in tests; verify via toolTip() not source inspection.
+
 ## refactor
 
 - [cross-layer-constant-promote-to-package-root](refactor/2026-04-22-cross-layer-constant-promote-to-package-root.md) [layering][constants][dependency-rules] — When two layers forbidden from importing each other share a constant, hoist it to the package root, do not duplicate it.
