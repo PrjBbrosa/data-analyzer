@@ -150,13 +150,27 @@ def test_min_rpm_floor_is_a_fixed_default_in_the_ui_path():
     """Pin the justification for exempting min_rpm_floor: the UI's COTParams
     construction must not pass it, so it stays the dataclass default. If a
     future change starts varying it, this guard fails and forces it into the
-    cache key."""
+    cache key.
+
+    The assertion is scoped to COTParams(...) call-sites (kwarg form), NOT the
+    entire source, so that comments/docstrings that mention min_rpm_floor do
+    not cause a false positive.
+    """
     src = inspect.getsource(OrderMixin)
-    # The COTParams(...) construction in the order mixin must not set
-    # min_rpm_floor (it relies on the dataclass default).
-    assert 'min_rpm_floor' not in src, (
-        "min_rpm_floor is now used in the Order UI path; it must be registered "
-        "in _order_compute_cache_params and removed from _ORDER_FIELD_EXEMPT."
+    # Match any COTParams( ... ) constructor call that passes min_rpm_floor as
+    # a keyword argument.  We search for "COTParams(" followed (possibly across
+    # whitespace/continuations) by "min_rpm_floor=", using re.DOTALL so that
+    # multi-line constructor calls are found.
+    pattern = re.compile(
+        r'COTParams\s*\([^)]*min_rpm_floor\s*=',
+        re.DOTALL,
+    )
+    match = pattern.search(src)
+    assert match is None, (
+        "A COTParams() constructor call in OrderMixin now passes min_rpm_floor "
+        "as a keyword argument.  It must be registered in "
+        "_order_compute_cache_params and removed from _ORDER_FIELD_EXEMPT so "
+        "varying it invalidates the cache correctly."
     )
 
 

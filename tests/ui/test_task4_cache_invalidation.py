@@ -263,3 +263,106 @@ class TestFallbackKeyAlignsPrimaryKey:
             "weighting='A' and weighting='None' produce the same key — "
             "A-weighted and unweighted results would share a cache slot."
         )
+
+
+class TestAutoNfftFallbackNoTypeError:
+    """Important regression: _analysis_cache_key('fft_time', ...) must not raise
+    TypeError when the inspector is in auto-nfft mode AND the signal has < 2
+    samples (forcing the fallback branch).
+
+    Root cause (Task 4 regression): in auto-nfft mode get_params() emits
+    nfft=None AND nfft_effective=None; the key-building code does
+      int(p.get('nfft_effective', p.get('nfft')))
+    Both keys ARE present in the dict (value None), so .get() returns None
+    (not the default), giving int(None) → TypeError.
+
+    The fix patches only the fallback call-site in _analysis_mixin.py — it
+    resolves nfft via the or-chain ``nfft_effective or nfft or nfft_preview``
+    (nfft_preview is always a positive integer) before delegating to the
+    primary key function.
+    """
+
+    # Auto-nfft params exactly as emitted by contextual_fft_time.get_params()
+    # when the combo shows the AUTO_NFFT_LABEL: nfft=None, nfft_effective=None,
+    # nfft_preview=<positive int derived from the last sample-count estimate>.
+    _AUTO_PARAMS = {
+        'fs': 1000.0,
+        'nfft': None,
+        'nfft_effective': None,
+        'nfft_preview': 512,
+        'nfft_mode': 'auto',
+        't_win_s': 1.5,
+        'window': 'hann',
+        'overlap': 0.5,
+        'remove_mean': True,
+        'weighting': 'None',
+    }
+
+    def _make_stub_mw(self):
+        """Build a minimal MainWindow stub that forces the fallback branch."""
+        from mf4_analyzer.ui.main_window._analysis_mixin import AnalysisMixin
+
+        params = dict(self._AUTO_PARAMS)
+
+        class _StubCtx:
+            def get_params(self_):
+                return dict(params)
+
+            def current_signal(self_):
+                return None
+
+        class _StubInspector:
+            def __init__(self_):
+                self_.fft_time_ctx = _StubCtx()
+
+        class _StubMW(FFTTimeMixin, AnalysisMixin):
+            def __init__(self_):
+                self_.analysis_caches = {
+                    'fft': AnalysisResultCache(32),
+                    'fft_time': AnalysisResultCache(12),
+                    'order': AnalysisResultCache(12),
+                }
+                self_.inspector = _StubInspector()
+
+            def _fft_time_effective_params_for_source(self_, p, fid, ch, time_range):
+                # Simulate < 2 samples: return None to force the fallback branch.
+                return None
+
+            def _pane_time_range_for(self_, section, pane_idx):
+                return (0.0, 5.0)
+
+        return _StubMW()
+
+    def test_auto_nfft_fallback_does_not_raise_type_error(self):
+        """With auto-nfft (nfft=None, nfft_effective=None, nfft_preview=512)
+        AND signal < 2 samples (fallback branch), _analysis_cache_key must
+        return a key without raising TypeError."""
+        mw = self._make_stub_mw()
+        # Must not raise — used to raise int(None) TypeError before the fix.
+        key = mw._analysis_cache_key('fft_time', 'f1', 'ch1', pane_idx=0)
+        assert key is not None, "Fallback key must be a non-None value."
+
+    def test_auto_nfft_fallback_key_uses_nfft_preview(self):
+        """When nfft and nfft_effective are both None, the fallback key must
+        encode nfft_preview (512) as the nfft dimension — not None — so that
+        keys with different nfft_preview values are distinguishable."""
+        mw = self._make_stub_mw()
+        key_512 = mw._analysis_cache_key('fft_time', 'f1', 'ch1', pane_idx=0)
+        # Now patch nfft_preview to 1024 and verify the key changes.
+        mw.inspector.fft_time_ctx._nfft_preview_override = 1024
+
+        params_1024 = dict(self._AUTO_PARAMS, nfft_preview=1024)
+
+        class _StubCtx1024:
+            def get_params(self_):
+                return dict(params_1024)
+
+            def current_signal(self_):
+                return None
+
+        mw.inspector.fft_time_ctx = _StubCtx1024()
+        key_1024 = mw._analysis_cache_key('fft_time', 'f1', 'ch1', pane_idx=0)
+        assert key_512 != key_1024, (
+            "nfft_preview=512 and nfft_preview=1024 must produce different keys "
+            "in auto-nfft fallback mode."
+        )

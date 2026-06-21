@@ -428,7 +428,22 @@ class AnalysisMixin:
             # A synthetic params dict built here previously omitted `weighting`,
             # which caused A-weighted results to share a cache slot with
             # unweighted ones (问题④).
-            return self._fft_time_analysis_cache_key(fid, ch, p, pane_idx)
+            #
+            # Auto-nfft guard (Task 4 regression): in auto-nfft mode get_params()
+            # returns nfft=None AND nfft_effective=None because the effective value
+            # cannot be resolved without a concrete sample count.  The primary key
+            # function does int(p.get('nfft_effective', p.get('nfft'))) — both keys
+            # are PRESENT with value None, so .get() returns None and int(None)
+            # raises TypeError.  Resolve via the or-chain before delegating;
+            # nfft_preview is always a positive integer (inspector sets it from the
+            # last sample-count estimate), so it provides a stable fallback.
+            p_fb = dict(p)
+            p_fb['nfft_effective'] = (
+                p.get('nfft_effective')
+                or p.get('nfft')
+                or p.get('nfft_preview')
+            )
+            return self._fft_time_analysis_cache_key(fid, ch, p_fb, pane_idx)
         if section == 'fft':
             time_range = self._pane_time_range_for(section, pane_idx)
             params = self._fft_effective_params_for_source(

@@ -116,7 +116,15 @@ class FFTMixin:
     def _fft_effective_params_for_source(self, fft_params, fid, ch, time_range):
         sig, fs = self._fft_fetch_signal(fid, ch, time_range=time_range)
         if sig is None or fs is None or len(sig) <= 0:
-            return dict(fft_params)
+            out = dict(fft_params)
+            # Stamp fs when available so the fallback key distinguishes signals
+            # at different sample-rates (aligns with the fft_time compute-params
+            # contract where fs is always included; _analysis_compute_params('fft')
+            # omits fs, so without this stamp fs=None enters the cache key and a
+            # sample-rate change on an unavailable source goes undetected).
+            if fs is not None:
+                out['fs'] = float(fs)
+            return out
         return self._resolve_fft_effective_params(fft_params, len(sig), fs)
 
     def _fft_compute_arrays(self, sig, fs, fft_params):

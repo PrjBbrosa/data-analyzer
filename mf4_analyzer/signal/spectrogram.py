@@ -136,7 +136,10 @@ class SpectrogramAnalyzer:
         does not appear in the result. The canvas-side dB cache (Task 4
         of the FFT-vs-Time plan) is the consumer of this helper —
         callers there are expected to memoize the returned matrix
-        keyed by ``(id(result), reference)``.
+        keyed by ``(epoch_token(result), db_reference)`` where
+        ``epoch_token`` is a monotonic integer assigned at result-store
+        time (not ``id(result)``, which is reused once an LRU evicts the
+        old object).
 
         Parameters
         ----------
