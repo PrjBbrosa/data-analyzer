@@ -143,6 +143,28 @@ class FFTTimeMixin:
         for k in keys:
             self._fft_time_cache.pop(k, None)
 
+    def _invalidate_all_analysis_caches_for_fid(self, fid):
+        """Single entry point: drop ALL per-fid cache entries whenever a
+        compute input changes for that file (e.g. time-axis rebuild, channel
+        edit, file close).
+
+        Clears:
+        - ``self._fft_time_cache`` (legacy LRU, keyed by fid at position 0).
+        - Every ``AnalysisResultCache`` in ``self.analysis_caches`` ('fft',
+          'fft_time', 'order') via ``invalidate_fid``.
+
+        **All call sites that previously called ``_fft_time_cache_clear_for_fid``
+        only must be routed here instead** so that the 'fft' and 'order'
+        ``AnalysisResultCache`` caches are also cleared.  The legacy helper is
+        kept for backward-compat (batch/test code that calls it directly) but
+        callers inside main_window must use this method.
+        """
+        # 1. Legacy LRU (_fft_time_cache, an OrderedDict-like store)
+        self._fft_time_cache_clear_for_fid(fid)
+        # 2. All AnalysisResultCache instances (fft, fft_time, order, …)
+        for cache in self.analysis_caches.values():
+            cache.invalidate_fid(fid)
+
     def _get_fft_time_signal(self):
         """Resolve the (fid, channel, time, signal, file_data) tuple
         for the currently-selected fft_time signal.

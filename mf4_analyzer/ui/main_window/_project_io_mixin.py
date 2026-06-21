@@ -140,7 +140,10 @@ class ProjectIOMixin:
         self.navigator.add_file(fid, fd)
         self.canvas_time.invalidate_envelope_cache("file loaded")
         self.canvas_time.invalidate_monotonicity_cache()
-        self._fft_time_cache_clear_for_fid(fid)
+        # Unified entry point: also clears analysis_caches for this fid in
+        # case the same fid integer was previously used by a now-closed file
+        # (问题① fix).
+        self._invalidate_all_analysis_caches_for_fid(fid)
         self._refresh_channel_dependent_controls()
         is_audio_source = getattr(fd, "is_audio_source", None)
         try:
@@ -225,16 +228,11 @@ class ProjectIOMixin:
             "file closed", data_id=fid
         )
         self.canvas_time.invalidate_monotonicity_cache(custom_xaxis_fid=fid)
-        # FFT vs Time cache: per-file targeted clear — the source ndarray
-        # is about to be released, so any cached SpectrogramResult keyed
-        # under this fid is now strictly stale.
-        self._fft_time_cache_clear_for_fid(fid)
-        # Per-section analysis caches (V7) are keyed on (fid, ch, params).
-        # _fft_time_cache and analysis_caches['fft_time'] are double-written
-        # on compute, so both must be torn down for this fid here — otherwise
-        # reopening a file that reuses the same fid would hit a stale result.
-        for cache in self.analysis_caches.values():
-            cache.invalidate_fid(fid)
+        # All analysis caches (legacy LRU + per-section AnalysisResultCache)
+        # must be cleared before we release the FileData. Use the unified
+        # single entry point so the 'fft' and 'order' caches are also cleared
+        # (previously two separate calls; now one, semantically equivalent).
+        self._invalidate_all_analysis_caches_for_fid(fid)
         del self.files[fid]
         self.navigator.remove_file(fid)
         self._active = self.navigator._active_fid  # navigator picks fallback

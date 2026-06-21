@@ -422,22 +422,13 @@ class AnalysisMixin:
                 effective_p, _effective_time_range = prepared
                 return self._fft_time_analysis_cache_key(
                     fid, ch, effective_p, pane_idx)
-            # db_reference omitted: display-only, not a compute input. This
-            # fallback key must stay field-aligned with
-            # _fft_time_analysis_cache_key (the primary path).
-            params = {
-                'fs': p.get('fs'),
-                'nfft': int(
-                    p.get('nfft_effective')
-                    or p.get('nfft')
-                    or p.get('nfft_preview')
-                ),
-                'window': p.get('window'),
-                'overlap': p.get('overlap'),
-                'remove_mean': p.get('remove_mean'),
-                'time_range': time_range,
-            }
-            return cache.make_key(fid, ch, params)
+            # Fallback: signal not yet available (< 2 samples). Delegate to
+            # the primary key function so the key is always byte-identical to
+            # the one that will be stored on compute — no field-shape divergence.
+            # A synthetic params dict built here previously omitted `weighting`,
+            # which caused A-weighted results to share a cache slot with
+            # unweighted ones (问题④).
+            return self._fft_time_analysis_cache_key(fid, ch, p, pane_idx)
         if section == 'fft':
             time_range = self._pane_time_range_for(section, pane_idx)
             params = self._fft_effective_params_for_source(

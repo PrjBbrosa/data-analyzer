@@ -1226,11 +1226,14 @@ class MainWindow(
             new_max = fd.time_array[-1] if len(fd.time_array) else 0
             current_hi = self.inspector.top.spin_end.maximum()
             self.inspector.top.set_range_limits(0, max(current_hi, new_max))
-            # FFT vs Time cache: rebuilding the time axis changes both
-            # ``time_range`` and the per-frame timing of cached
-            # SpectrogramResults for this fid. Targeted clear so other
-            # files' cached entries are preserved.
-            self._fft_time_cache_clear_for_fid(target_fid)
+            # All per-fid analysis caches must be invalidated when the time axis
+            # is rebuilt: the new Fs changes the frequency-axis scale for cached
+            # FFT / Order results as well as the SpectrogramResult timing for
+            # FFT-vs-Time. Use the single unified entry point so no cache is
+            # silently left with stale data (问题① fix — previously only the
+            # legacy LRU was cleared, leaving analysis_caches['fft'] and
+            # analysis_caches['order'] with stale entries).
+            self._invalidate_all_analysis_caches_for_fid(target_fid)
             for ctx in (
                 self.inspector.fft_ctx,
                 self.inspector.fft_time_ctx,
@@ -1809,9 +1812,10 @@ class MainWindow(
         # ndarray identity may have changed (added) or vanished (removed).
         # `fd.get_prefixed_channel(...)` is what plot_channels stashes
         # under self.channel_data, so use that as the cache key.
-        # FFT vs Time cache: any cached SpectrogramResult keyed under
-        # this fid was computed against pre-edit columns; targeted clear.
-        self._fft_time_cache_clear_for_fid(fid)
+        # All analysis caches (FFT, FFT-vs-Time, Order) for this fid are
+        # stale after a column edit — clear them all via the unified entry
+        # point (问题① fix).
+        self._invalidate_all_analysis_caches_for_fid(fid)
         for name in list(new_channels.keys()) + list(removed_channels):
             prefixed = fd.get_prefixed_channel(name)
             self.canvas_time.invalidate_envelope_cache(
@@ -2097,7 +2101,10 @@ class MainWindow(
         new_max = fd.time_array[-1] if getattr(fd, 'time_array', None) is not None and len(fd.time_array) else 0.0
 
         if target_fid is not None:
-            self._fft_time_cache_clear_for_fid(target_fid)
+            # Use the unified entry point: non-uniform time-axis auto-rebuild
+            # also invalidates FFT and Order analysis caches, not just the
+            # legacy LRU (问题① fix).
+            self._invalidate_all_analysis_caches_for_fid(target_fid)
         try:
             current_hi = self.inspector.top.spin_end.maximum()
             self.inspector.top.set_range_limits(0, max(current_hi, new_max))
