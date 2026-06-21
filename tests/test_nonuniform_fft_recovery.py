@@ -150,7 +150,6 @@ def _spectrogram_params(fs: float, nfft: int = 256) -> SpectrogramParams:
         window='hanning',
         overlap=0.5,
         remove_mean=True,
-        db_reference=1.0,
     )
 
 

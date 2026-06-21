@@ -4,7 +4,10 @@ This module is the GUI-free signal-processing core of the FFT vs Time
 mode. It owns:
 
   * the ``SpectrogramParams`` cache key (fs, nfft, window, overlap,
-    remove_mean, db_reference, weighting);
+    remove_mean, weighting) — the single authority for the COMPUTE
+    parameter set; ``db_reference`` is display-only and lives render-side
+    (the canvas ``plot_result`` kwarg), NOT here, so changing it never
+    triggers a recompute;
   * the ``SpectrogramResult`` payload returned to the canvas;
   * frame construction (uniform-time validation, hop computation,
     frame center times);
@@ -19,8 +22,9 @@ is a kwarg on :meth:`SpectrogramAnalyzer.compute`, NOT a
 UI-only display changes.
 
 The dB matrix is NOT cached on the result. The canvas computes it
-lazily through :meth:`SpectrogramAnalyzer.amplitude_to_db` and keeps
-its own internal cache keyed by ``(id(result), db_reference)`` (Task 4
+lazily through :meth:`SpectrogramAnalyzer.amplitude_to_db` (passing the
+render-side ``db_reference``) and keeps its own internal cache keyed by
+``(epoch_token(result), db_reference)`` (Task 4
 in the FFT-vs-Time plan; see lesson
 ``signal-processing/2026-04-25-cache-consumer-must-be-grepped-not-just-surface``
 for the consumer-side grep discipline). Adding caching here would
@@ -67,7 +71,6 @@ class SpectrogramParams:
     window: str = 'hanning'
     overlap: float = 0.5
     remove_mean: bool = True
-    db_reference: float = 1.0
     weighting: str = 'None'
 
     def __post_init__(self):

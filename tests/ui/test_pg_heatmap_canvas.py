@@ -937,6 +937,42 @@ def _make_spec(channel, amplitude):
     )
 
 
+def test_plot_result_db_reference_comes_from_kwarg_not_params(qapp):
+    """db_reference is a render-time kwarg (display-only), NOT a field on
+    result.params.
+
+    The dB matrix must use the value passed to ``plot_result(db_reference=...)``.
+    With reference=2.0, a unit-amplitude matrix becomes 20*log10(1/2) ~= -6.02 dB
+    everywhere; with the default reference=1.0 it would be 0 dB. Proving the
+    kwarg drives the conversion confirms db_reference left the compute contract
+    (SpectrogramParams) and travels render-side only.
+    """
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(320, 240)
+    r = _make_spec('ref', np.ones((16, 4), dtype=np.float32))
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo',
+                  z_auto=False, z_floor=-80.0, z_ceiling=0.0,
+                  db_reference=2.0)
+    md = c._matrix_disp
+    np.testing.assert_allclose(md, 20.0 * np.log10(1.0 / 2.0), atol=1e-4)
+    # Colorbar label reflects the kwarg reference.
+    assert 'dB re 2' in c._cbar.getAxis('left').labelText
+    c.deleteLater()
+
+
+def test_plot_result_db_reference_defaults_to_one(qapp):
+    """Omitting the kwarg keeps the historical ``db re 1`` behaviour so existing
+    call sites (and tests) that never passed a reference are unchanged."""
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(320, 240)
+    r = _make_spec('ref', np.ones((16, 4), dtype=np.float32))
+    c.plot_result(r, amplitude_mode='amplitude_db', cmap='turbo',
+                  z_auto=False, z_floor=-80.0, z_ceiling=0.0)
+    md = c._matrix_disp
+    np.testing.assert_allclose(md, 0.0, atol=1e-4)
+    c.deleteLater()
+
+
 def test_db_memo_keys_on_epoch_token_not_id(qapp):
     """Regression for V7 commit 6d539d1c: the dB memo keys on a stamped
     monotonic epoch token, NOT ``id(result)``.
@@ -2034,7 +2070,7 @@ def test_plot_result_db_auto_span_tracks_robust_ceiling(qapp):
         times=np.array([0.0, 1.0]),
         frequencies=np.array([0.0, 10.0]),
         amplitude=np.array([[1e-16, 1e-15], [1e-12, 1e-10]], dtype=float),
-        params=SpectrogramParams(fs=100.0, nfft=64, db_reference=1.0),
+        params=SpectrogramParams(fs=100.0, nfft=64),
         channel_name='quiet',
         metadata={'frames': 2},
     )
@@ -2081,7 +2117,7 @@ def test_plot_result_db_auto_ceiling_ignores_outlier_peak(qapp):
         times=np.arange(64, dtype=float),
         frequencies=np.arange(64, dtype=float),
         amplitude=amp,
-        params=SpectrogramParams(fs=128.0, nfft=64, db_reference=1.0),
+        params=SpectrogramParams(fs=128.0, nfft=64),
         channel_name='spiky',
         metadata={'frames': 64},
     )
@@ -2121,7 +2157,7 @@ def test_plot_result_db_manual_does_not_bake_color_range_into_matrix(qapp):
         times=np.arange(40, dtype=float),
         frequencies=np.linspace(0.0, 3000.0, 60),
         amplitude=amp,
-        params=SpectrogramParams(fs=129500.0, nfft=8192, db_reference=1.0),
+        params=SpectrogramParams(fs=129500.0, nfft=8192),
         channel_name='L', metadata={'frames': 40},
     )
 
@@ -2975,7 +3011,7 @@ def _real_spec_result():
     sig = 0.02 * np.sin(2 * np.pi * 200 * t) + 0.002 * rng.standard_normal(t.size)
 
     params = SpectrogramParams(fs=fs, nfft=256, window='hann', overlap=0.75,
-                               remove_mean=True, db_reference=1.0, weighting='None')
+                               remove_mean=True, weighting='None')
     return SpectrogramAnalyzer.compute(sig, t, params, channel_name='ch', unit='Pa')
 
 
@@ -3115,7 +3151,7 @@ def test_plot_result_matrix_invariant_across_window_rerenders(qapp):
         times=np.linspace(0.0, 2.0, 20),
         frequencies=np.linspace(0.0, 500.0, 32),
         amplitude=amp,
-        params=SpectrogramParams(fs=1000.0, nfft=64, db_reference=1.0),
+        params=SpectrogramParams(fs=1000.0, nfft=64),
         channel_name='inv_test', metadata={'frames': 20},
     )
 

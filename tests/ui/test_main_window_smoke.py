@@ -3142,3 +3142,28 @@ def test_order_cache_key_excludes_db_reference_display_only():
     k1 = OrderMixin._order_compute_cache_params(dict(base, db_reference=1.0), ("f", "rpm"), None)
     k2 = OrderMixin._order_compute_cache_params(dict(base, db_reference=2.0), ("f", "rpm"), None)
     assert k1 == k2
+
+
+def test_fft_time_low_cache_key_excludes_db_reference_display_only():
+    """db_reference is display-only and must NOT affect the FFT-vs-Time LRU key.
+
+    ``_fft_time_cache_key`` reads only its ``params`` argument (no ``self``
+    state), so we bind the unbound method against a bare object stub.
+    """
+    from mf4_analyzer.ui.main_window._fft_time_mixin import FFTTimeMixin
+
+    base = {
+        "fid": "f1",
+        "channel": "sig",
+        "time_range": (0.0, 1.0),
+        "fs": 1000.0,
+        "nfft_effective": 512,
+        "window": "hanning",
+        "overlap": 0.5,
+        "remove_mean": True,
+        "weighting": "A",
+    }
+    stub = object.__new__(type("S", (FFTTimeMixin,), {}))
+    k1 = FFTTimeMixin._fft_time_cache_key(stub, dict(base, db_reference=1.0))
+    k2 = FFTTimeMixin._fft_time_cache_key(stub, dict(base, db_reference=2.0))
+    assert k1 == k2

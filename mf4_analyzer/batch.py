@@ -658,7 +658,6 @@ class BatchRunner:
             window=str(params.get('window', 'hanning')),
             overlap=float(params.get('overlap', 0.5)),
             remove_mean=bool(params.get('remove_mean', True)),
-            db_reference=float(params.get('db_reference', 1.0)),
             weighting=str(params.get('weighting', 'None')),
         )
         result = SpectrogramAnalyzer.compute(

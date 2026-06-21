@@ -168,5 +168,37 @@ class SpectrogramAnalyzerTests(unittest.TestCase):
             SpectrogramAnalyzer.compute(sig, t, params, 'huge', '')
 
 
+class SpectrogramParamsContractTests(unittest.TestCase):
+    """SpectrogramParams is the single authority for the FFT-vs-Time COMPUTE
+    parameter set. db_reference is a display-only dB normalisation reference —
+    SpectrogramAnalyzer.compute never reads it — so it must NOT live on the
+    dataclass (otherwise changing it invalidates the cache key for a recompute
+    that produces a byte-identical amplitude matrix)."""
+
+    def test_db_reference_is_not_a_field(self):
+        import dataclasses
+        names = {f.name for f in dataclasses.fields(SpectrogramParams)}
+        self.assertNotIn('db_reference', names)
+
+    def test_construction_rejects_db_reference_kwarg(self):
+        with self.assertRaises(TypeError):
+            SpectrogramParams(fs=1000.0, nfft=256, db_reference=2.0)
+
+    def test_every_field_is_consumed_by_compute(self):
+        """Each SpectrogramParams field must be an actual compute input.
+
+        Guard against re-introducing a display-only field. The set of
+        compute-relevant fields is fixed by the algorithm (fs, nfft, window,
+        overlap, remove_mean, weighting); any new field added without a
+        matching consumer in compute() is a contract violation.
+        """
+        import dataclasses
+        names = {f.name for f in dataclasses.fields(SpectrogramParams)}
+        self.assertEqual(
+            names,
+            {'fs', 'nfft', 'window', 'overlap', 'remove_mean', 'weighting'},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

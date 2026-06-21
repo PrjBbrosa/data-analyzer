@@ -385,13 +385,14 @@ class AnalysisMixin:
                 'weighting': p.get('weighting', 'None'),
             }
         if section == 'fft_time':
+            # db_reference is display-only (dB normalisation reference); compute
+            # never reads it, so it is excluded from the cache-key inputs.
             return {
                 'fs': p.get('fs'),
                 'nfft': p.get('nfft'),
                 'window': p.get('window'),
                 'overlap': p.get('overlap'),
                 'remove_mean': p.get('remove_mean'),
-                'db_reference': p.get('db_reference', 1.0),
                 'weighting': p.get('weighting', 'None'),
             }
         # order: COT params + rpm_source must both be in the key (changing the
@@ -421,6 +422,9 @@ class AnalysisMixin:
                 effective_p, _effective_time_range = prepared
                 return self._fft_time_analysis_cache_key(
                     fid, ch, effective_p, pane_idx)
+            # db_reference omitted: display-only, not a compute input. This
+            # fallback key must stay field-aligned with
+            # _fft_time_analysis_cache_key (the primary path).
             params = {
                 'fs': p.get('fs'),
                 'nfft': int(
@@ -431,7 +435,6 @@ class AnalysisMixin:
                 'window': p.get('window'),
                 'overlap': p.get('overlap'),
                 'remove_mean': p.get('remove_mean'),
-                'db_reference': p.get('db_reference', 1.0),
                 'time_range': time_range,
             }
             return cache.make_key(fid, ch, params)

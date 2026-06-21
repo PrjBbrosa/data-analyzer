@@ -53,13 +53,16 @@ class FFTTimeMixin:
 
     def _fft_time_analysis_cache_key(self, fid, ch, p, pane_idx):
         cache = self.analysis_caches['fft_time']
+        # db_reference is display-only (dB normalisation reference) — it is NOT
+        # a compute input (SpectrogramAnalyzer.compute never reads it), so it is
+        # deliberately absent from the cache key. Changing it re-renders from
+        # cache via the plot_result db_reference kwarg, never a recompute.
         params = {
             'fs': p.get('fs'),
             'nfft': int(p.get('nfft_effective', p.get('nfft'))),
             'window': p.get('window'),
             'overlap': p.get('overlap'),
             'remove_mean': p.get('remove_mean'),
-            'db_reference': p.get('db_reference', 1.0),
             'weighting': str(p.get('weighting', 'None')),
             'time_range': self._pane_time_range_for('fft_time', pane_idx),
         }
@@ -87,8 +90,12 @@ class FFTTimeMixin:
         """Build the LRU cache key from compute-relevant fields ONLY.
 
         Display options (``amplitude_mode``, ``cmap``, ``dynamic``,
-        ``freq_auto``, ``freq_min``, ``freq_max``) are deliberately
-        absent so toggling them re-renders without recomputing.
+        ``freq_auto``, ``freq_min``, ``freq_max``, ``db_reference``) are
+        deliberately absent so toggling them re-renders without recomputing.
+        ``db_reference`` in particular is a dB normalisation reference that
+        ``SpectrogramAnalyzer.compute`` never reads (it lives render-side as
+        the ``plot_result`` kwarg), so keying on it would force a recompute
+        producing a byte-identical amplitude matrix.
         """
         nfft = params.get('nfft_effective', params.get('nfft'))
         if nfft is None or str(nfft) == '自动':
@@ -102,7 +109,6 @@ class FFTTimeMixin:
             str(params.get('window')),
             float(params.get('overlap')),
             bool(params.get('remove_mean')),
-            float(params.get('db_reference', 1.0)),
             str(params.get('weighting', 'None')),
         )
 
@@ -131,7 +137,7 @@ class FFTTimeMixin:
         modified file does not see stale results from a prior open.
         Cache key shape (per ``_fft_time_cache_key``):
         ``(fid, channel, time_range_tuple, fs, nfft, window, overlap,
-        remove_mean, db_reference)`` — ``key[0]`` is the fid.
+        remove_mean, weighting)`` — ``key[0]`` is the fid.
         """
         keys = [k for k in self._fft_time_cache if k[0] == fid]
         for k in keys:
@@ -366,7 +372,6 @@ class FFTTimeMixin:
             window=str(p['window']),
             overlap=float(p['overlap']),
             remove_mean=bool(p['remove_mean']),
-            db_reference=float(p.get('db_reference', 1.0)),
             weighting=str(p.get('weighting', 'None')),
         )
         unit = ''
@@ -469,14 +474,14 @@ class FFTTimeMixin:
         analysis_key = self._fft_time_analysis_cache_key(
             fid, ch, p, pane_idx)
         # SpectrogramParams is the cache key on the analyzer side; build
-        # it from compute-relevant fields only.
+        # it from compute-relevant fields only (db_reference is display-only
+        # and lives render-side, so it is intentionally not passed here).
         params = SpectrogramParams(
             fs=float(p['fs']),
             nfft=int(p['nfft_effective']),
             window=str(p['window']),
             overlap=float(p['overlap']),
             remove_mean=bool(p['remove_mean']),
-            db_reference=float(p.get('db_reference', 1.0)),
             weighting=str(p.get('weighting', 'None')),
         )
         unit = ''
@@ -579,6 +584,10 @@ class FFTTimeMixin:
             y_auto=bool(p.get('y_auto', True)),
             y_min=float(p.get('y_min', 0.0)),
             y_max=float(p.get('y_max', 0.0)),
+            # db_reference is display-only: source it from the current inspector
+            # params at RENDER time so changing it re-renders from cache without
+            # a recompute (it is absent from SpectrogramParams + the cache key).
+            db_reference=float(p.get('db_reference', 1.0)),
         )
         # Write the auto-computed absolute levels back into the inspector
         # spins (blockSignals so we don't trigger a recompute).  This makes

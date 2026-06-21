@@ -1450,7 +1450,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         z_auto=False, z_floor=-80.0, z_ceiling=0.0, freq_range=None,
         x_auto=True, x_min=0.0, x_max=0.0,
         y_auto=True, y_min=0.0, y_max=0.0,
-        interp='bilinear',
+        interp='bilinear', db_reference=1.0,
     ):
         """Render a ``SpectrogramResult`` as a 2D heatmap + frequency slice.
 
@@ -1460,10 +1460,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         ``(freq_bins, frames)`` → rows are frequency (Y), columns are
         time (X).
 
-        dB conversion is done HERE (memoized via ``self._db_cache``,
-        keyed ``(self._result_db_token(result), db_reference)`` — a
-        monotonic epoch token stamped on each result, NOT ``id(result)``,
-        so the memo never returns a stale matrix after an
+        ``db_reference`` is a DISPLAY-only kwarg (NOT a field on
+        ``result.params``): it is the dB normalisation reference the caller
+        reads from the inspector at render time, so changing it re-renders
+        without a recompute. dB conversion is done HERE (memoized via
+        ``self._db_cache``, keyed ``(self._result_db_token(result),
+        db_reference)`` — a monotonic epoch token stamped on each result,
+        NOT ``id(result)``, so the memo never returns a stale matrix after an
         ``AnalysisResultCache`` eviction frees + reuses an id()), and the
         already-converted
         display matrix is handed to ``plot_or_update_heatmap`` with
@@ -1480,7 +1483,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # (canvases.py:1762, 1879, 1942, 2028).
         self._amplitude_mode = amplitude_mode
         unit = f" ({result.unit})" if result.unit else ""
-        db_ref = float(result.params.db_reference)
+        # db_reference is DISPLAY-only: it arrives as a kwarg (sourced from the
+        # inspector at render time), NOT from result.params — SpectrogramParams
+        # no longer carries it, so changing it never invalidates the compute
+        # cache key.
+        db_ref = float(db_reference)
         if amplitude_mode == 'amplitude_db':
             key = (self._result_db_token(result), db_ref)
             if self._db_cache is None or self._db_cache[0] != key:
