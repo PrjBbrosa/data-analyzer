@@ -1671,6 +1671,46 @@ QStatusBar#surfaceStatusBar QToolButton#surfaceVersionButton:pressed {
     background-color: #eef2f7;
 }
 
+/* 软件说明 icon, left of the version/update affordance. */
+QStatusBar#surfaceStatusBar QToolButton#surfaceHelpButton {
+    min-height: 22px;
+    padding: 1px 5px;
+    background-color: transparent;
+    border: none;
+    border-radius: 5px;
+}
+
+QStatusBar#surfaceStatusBar QToolButton#surfaceHelpButton:hover {
+    background-color: #f5f7fb;
+}
+
+QStatusBar#surfaceStatusBar QToolButton#surfaceHelpButton:pressed {
+    background-color: #eef2f7;
+}
+
+/* Right-aligned '?  使用说明' link at the bottom of each analysis panel. */
+QFrame#inspectorHelpRow {
+    background: transparent;
+}
+
+QPushButton#inspectorHelpLink {
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    color: #5b6472;
+    font-size: 12px;
+    text-align: right;
+}
+
+QPushButton#inspectorHelpLink:hover {
+    color: #2563eb;
+    text-decoration: underline;
+}
+
+QPushButton#inspectorHelpLink:pressed {
+    color: #1d4ed8;
+}
+
 /* Version tag beside the status-bar update (cloud-download) icon. */
 QStatusBar QLabel#versionTag {
     color: #8893a6;

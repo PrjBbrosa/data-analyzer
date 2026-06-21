@@ -106,6 +106,12 @@ $AddDataIcons = "$IconsDir;assets\icons"
 $BrandingDir = Join-Path $RepoRoot "assets\branding"
 $AddDataBranding = "$BrandingDir;assets\branding"
 $AddDataVendorPyxcp = "$VendorPyxcpDir;_vendor_pyxcp"
+# Help docs (panel guides + software manual) are integrated into the app and
+# opened in the browser from inside the bundle, so they ship INSIDE the package
+# (no longer copied next to the exe). help_dir() resolves to
+# _MEIPASS\mf4_analyzer\help under the frozen build.
+$HelpDir = Join-Path $RepoRoot "mf4_analyzer\help"
+$AddDataHelp = "$HelpDir;mf4_analyzer\help"
 $HiddenImports = @(
     "mf4_analyzer.ui_kit",
     "mf4_analyzer.ui_kit.fonts",
@@ -156,6 +162,7 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataIcons,
     "--add-data", $AddDataBranding,
     "--add-data", $AddDataVendorPyxcp,
+    "--add-data", $AddDataHelp,
     "--runtime-hook", $RuntimeHookPyxcp,
     "--exclude-module", "pyxcp",
     # matplotlib + scipy were dropped from the app (matplotlib->pyqtgraph,
@@ -181,28 +188,6 @@ $PyInstallerArgs += $EntryScript
 
 if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
-}
-
-# Ship the user guide + release notes alongside the exe so end users can open
-# them straight from the install folder. Matched by wildcard (the file names
-# have non-ASCII characters) to avoid embedding them in this .ps1, which Windows
-# PowerShell 5.1 would mis-decode without a BOM. The docs glob is keyed to the
-# build $Version so the bundled release notes track the build.
-Write-Step "Copying user guides next to exe"
-$UserGuideGlobs = @(
-    (Join-Path $RepoRoot "TraceLab-*.html"),
-    (Join-Path $RepoRoot "docs\TraceLab-v$Version-*.html")
-)
-$UserGuides = @($UserGuideGlobs | ForEach-Object {
-    Get-ChildItem -Path $_ -File -ErrorAction SilentlyContinue
-})
-if ($UserGuides.Count -gt 0) {
-    foreach ($Guide in $UserGuides) {
-        Copy-Item -Force -Path $Guide.FullName -Destination $OutputDir
-        Write-Host "Guide:  $(Join-Path $OutputDir $Guide.Name)"
-    }
-} else {
-    Write-Warning "No user guide found, skipping copy ($($UserGuideGlobs -join '; '))"
 }
 
 Write-Step "Build output"

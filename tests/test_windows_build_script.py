@@ -25,19 +25,28 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         assert token in text
 
 
-def test_windows_folder_build_script_copies_user_guide_next_to_exe():
+def test_windows_folder_build_script_bundles_help_docs_inside_app():
+    """Help docs (panel guides + software manual) are integrated into the app
+    and opened from inside the bundle, so they ship INSIDE the package via
+    --add-data — NOT copied next to the exe anymore.
+
+    The old "copy user guides next to exe" step was removed once the in-app
+    help system (mf4_analyzer/help/ + status-bar / per-panel buttons) replaced
+    the loose-files-beside-exe approach.
+    """
     script = ROOT / "tools" / "build_windows_folder.ps1"
 
     assert script.exists()
     text = script.read_text(encoding="utf-8")
 
-    # Both the root user manual (TraceLab-*.html) and the versioned release
-    # notes (docs\TraceLab-v$Version-*.html) are copied into the exe output
-    # folder ($OutputDir) by wildcard, keyed to the build $Version.
-    assert "Copy-Item" in text
-    assert '"TraceLab-*.html"' in text
-    assert 'TraceLab-v$Version-*.html' in text
-    assert "-Destination $OutputDir" in text
+    # Help tree is bundled into the frozen app at mf4_analyzer\help.
+    assert "mf4_analyzer\\help" in text
+    assert "$AddDataHelp" in text
+
+    # The retired copy-next-to-exe step must be gone.
+    assert "Copying user guides next to exe" not in text
+    assert '"TraceLab-*.html"' not in text
+    assert 'TraceLab-v$Version-*.html' not in text
 
 
 def test_windows_folder_build_script_vendors_pyxcp_without_analysis_import():

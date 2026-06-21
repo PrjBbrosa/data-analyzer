@@ -178,6 +178,35 @@ def _make_group_header(title, action_button=None, parent=None):
     return frame
 
 
+def _make_help_link_row(guide_name, parent=None):
+    """Build a right-aligned '?  使用说明' link row for a contextual panel.
+
+    Layout: addStretch [QPushButton(role='link')]. Clicking opens the bundled
+    HTML deck for ``guide_name`` (one of 'order'/'fft'/'fft_time'/'time') in the
+    system default browser via the shared ``mf4_analyzer.help.open_guide``
+    entry point. Returns the host QFrame; the caller adds it to the contextual
+    root after ``addStretch()`` so it sits flush at the bottom-right.
+    """
+    from PyQt5.QtWidgets import QPushButton
+    from ...help import open_guide
+
+    row = QFrame(parent)
+    row.setObjectName("inspectorHelpRow")
+    box = QHBoxLayout(row)
+    box.setContentsMargins(0, 2, 0, 0)
+    box.setSpacing(0)
+    box.addStretch(1)
+    btn = QPushButton("?  使用说明", row)
+    btn.setObjectName("inspectorHelpLink")
+    btn.setProperty("role", "link")
+    btn.setCursor(Qt.PointingHandCursor)
+    btn.setToolTip("打开本面板的使用说明")
+    btn.setFlat(True)
+    btn.clicked.connect(lambda: open_guide(guide_name))
+    box.addWidget(btn, 0)
+    return row
+
+
 def _make_params_card(owner, object_name):
     """Build the lower 谱参数 / 时频参数 panel as a standalone tinted card.
 

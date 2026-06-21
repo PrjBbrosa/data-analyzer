@@ -264,6 +264,21 @@ class MainWindow(
         from ...ui_kit.icons import Icons
         from ... import app_meta
 
+        # 软件说明 icon sits to the LEFT of the version/update affordance.
+        # Permanent widgets pack left→right in add order, so add this one
+        # FIRST and the update button SECOND.
+        import qtawesome as qta
+
+        self._help_btn = QToolButton(self)
+        self._help_btn.setObjectName("surfaceHelpButton")
+        self._help_btn.setIcon(qta.icon('mdi.book-open-variant', color='#5b6472'))
+        self._help_btn.setIconSize(QSize(18, 18))
+        self._help_btn.setAutoRaise(True)
+        self._help_btn.setCursor(Qt.PointingHandCursor)
+        self._help_btn.setToolTip("软件说明")
+        self._help_btn.clicked.connect(self._open_software_manual)
+        self.statusBar.addPermanentWidget(self._help_btn)
+
         self._update_btn = QToolButton(self)
         self._update_btn.setObjectName("surfaceVersionButton")
         self._update_btn.setIcon(Icons.cloud_download())
@@ -276,6 +291,12 @@ class MainWindow(
         self._update_btn.clicked.connect(self._open_release_page)
 
         self.statusBar.addPermanentWidget(self._update_btn)
+
+    def _open_software_manual(self):
+        """Open the whole-app TraceLab usage manual in the default browser."""
+        from ...help import open_guide
+        if not open_guide('manual'):
+            self.toast("找不到软件说明文件", 'warn')
 
     def _open_release_page(self):
         from PyQt5.QtCore import QUrl

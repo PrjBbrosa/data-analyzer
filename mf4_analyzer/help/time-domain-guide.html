@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>时域 · 操作指南</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/deck.css">
+</head>
+<body>
+<div class="deck-viewport">
+<main class="deck-stage" id="deckStage">
+
+    <section class="slide cover active">
+        <div class="frame">
+            <div class="corner reveal d1">TraceLab v7.0<br>时域 / Time</div>
+            <div class="cover-eyebrow reveal d1">操作指南 · <b>TIME DOMAIN</b></div>
+            <h1 class="reveal d2">时<em>域</em></h1>
+            <p class="sub reveal d3"><b>勾通道</b>就出曲线 —— 看信号随时间的原始波形。</p>
+            <div class="turbo-band reveal d4"></div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">先认准位置 · <b>在哪点什么</b></span><span class="turbo-rule"></span></div>
+            <div class="map-grid">
+                <div class="shot reveal d2">
+                    <img src="assets/time-panel.png" alt="时域面板">
+                    <div class="pin" style="left:41%;top:3%">1</div>
+                    <div class="pin" style="left:8%;top:47%">2</div>
+                    <div class="pin" style="left:66%;top:7%">3</div>
+                    <div class="pin" style="left:76.5%;top:7%">4</div>
+                    <div class="pin" style="left:46%;top:28%">5</div>
+                    <div class="pin" style="left:19%;top:93.5%">6</div>
+                </div>
+                <div class="legend">
+                    <div class="li reveal d2"><span class="b">1</span><p>顶部 · 切到「时域」</p></div>
+                    <div class="li reveal d3"><span class="b">2</span><p>左侧 · 勾通道 <span>（数据从这来！）</span></p></div>
+                    <div class="li reveal d3"><span class="b">3</span><p>工具栏 · 分屏 / 叠加</p></div>
+                    <div class="li reveal d4"><span class="b">4</span><p>工具栏 · 游标 <span>（读数值）</span></p></div>
+                    <div class="li reveal d4"><span class="b">5</span><p>中间 · 曲线</p></div>
+                    <div class="li reveal d5"><span class="b">6</span><p>图下 · View 标签 <span>（右键并排对比）</span></p></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">02 · <b>勾通道出数据</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">01 · 02</span><h2>在左侧勾通道就绘图</h2></div>
+            <div class="step-grid">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">①</span><p><span class="pos">顶部</span>点<span class="ui">时域</span>。</p></div>
+                    <div class="blk reveal d4"><span class="k">②</span><p><span class="pos">左侧通道列表</span>勾选一个 / 多个通道 → <b>自动绘出曲线</b>。</p></div>
+                    <div class="blk reveal d5"><span class="k">▸</span><p>取消勾选即移除该曲线；<span class="ui">全选</span> / <span class="ui">全不</span> 快速增减。</p></div>
+                </div>
+                <div class="mock reveal d3">
+                    <div class="cap"><span>通道列表</span><em>左侧</em></div>
+                    <div class="grp">
+                        <div class="chk"><span class="box">✓</span>方向盘扭矩</div>
+                        <div class="chk"><span class="box">✓</span>电机转速</div>
+                        <div class="chk"><span class="box off"></span>电机扭矩</div>
+                    </div>
+                    <div class="row" style="justify-content:flex-start;gap:14px"><span class="ui">全选</span><span class="ui">全不</span><span class="pos">已选 2 个</span></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">03 · <b>布局 + 游标</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">03</span><h2>分屏看还是叠加看</h2></div>
+            <div class="step-grid" style="grid-template-columns:1fr 1fr;align-items:center">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">▸</span><p><span class="ui">分屏</span>：每条曲线<b>各占一格</b>（多坐标轴堆叠）。</p></div>
+                    <div class="blk reveal d4"><span class="k">▸</span><p><span class="ui">叠加</span>：多条曲线<b>叠在一张图</b>（共享坐标）。</p></div>
+                    <div class="blk reveal d5"><span class="k">▸</span><p><span class="ui">单游标</span> / <span class="ui">双游标</span>：在曲线上读数值、量差值。</p></div>
+                </div>
+                <div class="reveal d3">
+                    <div class="tbar" style="margin-bottom:18px"><b class="on">分屏</b><b>叠加</b><b>单游标</b><b>双游标</b></div>
+                    <div class="viz">
+                        <div style="background:#fff;padding:14px">
+                            <svg viewBox="0 0 600 80" preserveAspectRatio="none" style="width:100%;height:70px"><polyline points="0,60 80,20 160,55 240,15 320,58 400,18 480,55 560,22 600,40" fill="none" stroke="#1769e0" stroke-width="3"/></svg>
+                            <div style="border-top:1px dashed #e3e8ef;margin:6px 0"></div>
+                            <svg viewBox="0 0 600 80" preserveAspectRatio="none" style="width:100%;height:70px"><polyline points="0,20 120,30 240,42 360,52 480,62 600,70" fill="none" stroke="#13a36b" stroke-width="3"/></svg>
+                        </div>
+                    </div>
+                    <p class="note reveal d4" style="margin-top:14px"><b>分屏</b>＝两格；<b>叠加</b>＝同一格两条线。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">04 · <b>对比两个 View</b></span><span class="turbo-rule"></span></div>
+            <div class="cmp-grid">
+                <div>
+                    <h2 class="title reveal d2" style="margin-bottom:30px">右键 View → 与此 View 并排</h2>
+                    <div class="cmp-steps">
+                        <div class="c reveal d3"><span class="k">①</span><p>底部 <span class="ui">＋</span> 新建 <span class="ui">View 2</span>，各放不同通道。</p></div>
+                        <div class="c reveal d4"><span class="k">②</span><p><b>右键</b> <span class="ui">View 1</span> 标签 → 选<span class="ui">与此 View 并排</span>。</p></div>
+                        <div class="c reveal d5"><span class="k">③</span><p>两个 View <b>左右并排</b>，各自独立缩放 / 游标。</p></div>
+                    </div>
+                    <p class="note reveal d5"><b>注：</b>退出点底部 <span class="ui">✕ 取消合并</span>。</p>
+                </div>
+                <div class="reveal d3">
+                    <div class="vscene">
+                        <div class="vtabbar"><span class="vtab">View 1</span><span class="vplus">＋</span></div>
+                        <div class="vctx">
+                            <div class="mi">重命名</div>
+                            <div class="mi">复制此 View</div>
+                            <div class="mi">改标签颜色…</div>
+                            <div class="mi sel">与此 View 并排</div>
+                            <div class="sep"></div>
+                            <div class="mi danger">删除</div>
+                        </div>
+                    </div>
+                    <div class="panes" style="margin-top:26px">
+                        <div class="pane focus"><div class="ph"><span>View 1</span><span>● 焦点</span></div><div class="lines"><svg viewBox="0 0 300 120" preserveAspectRatio="none"><polyline points="0,90 50,30 100,85 150,25 200,88 250,28 300,60" fill="none" stroke="#1769e0" stroke-width="3"/></svg></div></div>
+                        <div class="pane b"><div class="ph"><span>View 2</span><span>○</span></div><div class="lines"><svg viewBox="0 0 300 120" preserveAspectRatio="none"><polyline points="0,30 75,45 150,65 225,85 300,100" fill="none" stroke="#13a36b" stroke-width="3"/></svg></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+</main>
+</div>
+<div class="edit-hotzone"></div>
+<button class="edit-toggle" id="editToggle" title="编辑模式 (E)">✏️</button>
+<script src="assets/deck.js"></script>
+</body>
+</html>

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>阶次分析 · 操作指南</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/deck.css">
+</head>
+<body>
+<div class="deck-viewport">
+<main class="deck-stage" id="deckStage">
+
+    <section class="slide cover active">
+        <div class="frame">
+            <div class="corner reveal d1">TraceLab v7.0<br>阶次分析 / Order</div>
+            <div class="cover-eyebrow reveal d1">操作指南 · <b>ORDER ANALYSIS</b></div>
+            <h1 class="reveal d2">阶次<em>分析</em></h1>
+            <p class="sub reveal d3">认准界面 <b>6 个位置</b>，<b>5 步</b>算出阶次彩图。</p>
+            <div class="turbo-band reveal d4"></div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">先认准位置 · <b>在哪点什么</b></span><span class="turbo-rule"></span></div>
+            <div class="map-grid">
+                <div class="shot reveal d2">
+                    <img src="assets/order-panel.png" alt="阶次面板">
+                    <div class="pin" style="left:58.5%;top:3.2%">1</div>
+                    <div class="pin" style="left:88%;top:11%">2</div>
+                    <div class="pin" style="left:80%;top:41%">3</div>
+                    <div class="pin" style="left:89%;top:66.5%">4</div>
+                    <div class="pin" style="left:46%;top:40%">5</div>
+                    <div class="pin" style="left:20%;top:93%">6</div>
+                    <div class="pin x" style="left:8%;top:47%">✕</div>
+                </div>
+                <div class="legend">
+                    <div class="li reveal d2"><span class="b">1</span><p>顶部 · 切到「阶次」</p></div>
+                    <div class="li reveal d3"><span class="b">2</span><p>右栏上 · 信号源 <span>（信号 / 转速 / Fs）</span></p></div>
+                    <div class="li reveal d3"><span class="b">3</span><p>右栏中 · 谱参数 <span>（3 个预设）</span></p></div>
+                    <div class="li reveal d4"><span class="b">4</span><p>右栏下 · 计算阶次图</p></div>
+                    <div class="li reveal d4"><span class="b">5</span><p>中间 · 彩图 + colorbar</p></div>
+                    <div class="li reveal d5"><span class="b">6</span><p>图下 · View 标签 <span>（右键加对比窗格）</span></p></div>
+                    <div class="li reveal d5"><span class="b x">✕</span><p>左侧列表 <b>不在这选信号</b> <span>（时域才用）</span></p></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">02 · <b>选信号源</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">01 · 02</span><h2>切到阶次，右栏选来源</h2></div>
+            <div class="step-grid">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">①</span><p><span class="pos">顶部</span>点<span class="ui">阶次</span>。</p></div>
+                    <div class="blk reveal d4"><span class="k">②</span><p><span class="pos">右栏上部</span>选<span class="ui">信号</span>（方向盘扭矩）、<span class="ui">转速</span>（电机转速），确认 <span class="ui">Fs</span>。</p></div>
+                    <div class="warn reveal d5"><span class="ic">⚠️</span><p>信号在<b>右栏下拉</b>选，<b>不是</b>左侧列表（左侧只时域用）。</p></div>
+                </div>
+                <div class="mock reveal d3">
+                    <div class="cap"><span>信号源 + 时间</span><em>右栏上部</em></div>
+                    <div class="grp">
+                        <div class="row"><span>信号</span><span class="field hl">方向盘扭矩 ▾</span></div>
+                        <div class="row"><span>转速</span><span class="field hl">电机转速 ▾</span></div>
+                        <div class="row"><span>Fs</span><span class="field">600 Hz</span></div>
+                        <div class="row"><span>RPM系数</span><span class="field">1.0</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">03 · <b>选谱参数</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">03</span><h2>右栏中部挑一个预设</h2></div>
+            <div class="step-grid">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">③</span><p><span class="pos">右栏中部</span>的<span class="ui">谱参数</span>，点一档：<span class="ui">频率优先</span> / <span class="ui">均衡</span> / <span class="ui">时间优先</span>。</p></div>
+                    <div class="blk reveal d4"><span class="k">▸</span><p>先用预设最省事；要细调再展开。摘要 <span class="ui">≤20阶 · 0.1 · 自动</span> 一眼看配置。</p></div>
+                </div>
+                <div class="mock reveal d3">
+                    <div class="cap"><span>谱参数</span><em>右栏中部</em></div>
+                    <div class="summ">≤20阶 · 0.1 · 自动(4096)</div>
+                    <div class="seg"><b class="sel">频率优先</b><b>均衡</b><b>时间优先</b></div>
+                    <div class="grp" style="margin-top:14px">
+                        <div class="row"><span>最大阶次</span><span class="field">20</span></div>
+                        <div class="row"><span>阶次分辨率</span><span class="field">0.1</span></div>
+                        <div class="row"><span>时间分辨率</span><span class="field">0.05 s</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">04 · <b>计算 + 读图</b></span><span class="turbo-rule"></span></div>
+            <div class="step-grid" style="grid-template-columns:.8fr 1.2fr;align-items:center;padding-top:30px">
+                <div class="instr">
+                    <div class="blk reveal d2"><span class="k">④</span><p>点<span class="ui">计算阶次图</span> → 出彩图。</p></div>
+                    <div class="blk reveal d3"><span class="k">⑤</span><p><b>点彩图任意点</b> → 下方看该处剖面。</p></div>
+                    <div class="tip reveal d4"><span class="ic">💡</span><p>拖<b>右侧 colorbar</b> 调色阶，不必重算。</p></div>
+                </div>
+                <div class="viz reveal d2">
+                    <div class="omap">
+                        <div class="band b1"></div><div class="band b2"></div><div class="band b3"></div>
+                        <div class="crossh"></div><div class="cross"></div>
+                        <div class="dot"></div><div class="tag">点这取切片</div>
+                        <div class="cbar"></div>
+                    </div>
+                    <div class="slicebar">
+                        <span class="slicelab">该阶次的时间剖面</span>
+                        <div class="toggle"><b class="on">阶次</b><b>时间</b></div>
+                        <svg viewBox="0 0 600 60" preserveAspectRatio="none"><polyline points="0,45 80,40 150,20 220,30 300,8 380,28 460,18 540,38 600,42" fill="none" stroke="#1769e0" stroke-width="3"/></svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">05 · <b>一屏对比两个通道</b></span><span class="turbo-rule"></span></div>
+            <div class="cmp-grid">
+                <div>
+                    <h2 class="title reveal d2" style="margin-bottom:30px">右键 View → 添加对比窗格</h2>
+                    <div class="cmp-steps">
+                        <div class="c reveal d3"><span class="k">①</span><p><b>右键底部</b> <span class="ui">View 1</span> 标签 → 选<span class="ui">添加对比窗格</span>。</p></div>
+                        <div class="c reveal d4"><span class="k">②</span><p>点窗格 → 右栏<span class="ui">信号</span>各选<br>方向盘扭矩 / 电机扭矩。</p></div>
+                        <div class="c reveal d5"><span class="k">③</span><p>点<span class="ui">计算阶次图</span> → 左右并排比。</p></div>
+                    </div>
+                    <p class="note reveal d5"><b>注：</b>底部 <span class="ui">＋</span> 可新建一个 View（页）。</p>
+                </div>
+                <div class="reveal d3">
+                    <div class="vscene">
+                        <div class="vtabbar"><span class="vtab">View 1</span><span class="vplus">＋</span></div>
+                        <div class="vctx">
+                            <div class="mi">重命名</div>
+                            <div class="mi">复制此 View</div>
+                            <div class="mi">改标签颜色…</div>
+                            <div class="mi sel">添加对比窗格</div>
+                            <div class="sep"></div>
+                            <div class="mi danger">删除</div>
+                        </div>
+                    </div>
+                    <div class="panes" style="margin-top:26px">
+                        <div class="pane focus"><div class="ph"><span>左 · 方向盘扭矩</span><span>● 焦点</span></div><div class="pm"></div></div>
+                        <div class="pane b"><div class="ph"><span>右 · 电机扭矩</span><span>○</span></div><div class="pm"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+</main>
+</div>
+<div class="edit-hotzone"></div>
+<button class="edit-toggle" id="editToggle" title="编辑模式 (E)">✏️</button>
+<script src="assets/deck.js"></script>
+</body>
+</html>

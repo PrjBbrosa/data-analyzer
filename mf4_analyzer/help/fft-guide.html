@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FFT · 操作指南</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/deck.css">
+</head>
+<body>
+<div class="deck-viewport">
+<main class="deck-stage" id="deckStage">
+
+    <section class="slide cover active">
+        <div class="frame">
+            <div class="corner reveal d1">TraceLab v7.0<br>频谱 / FFT</div>
+            <div class="cover-eyebrow reveal d1">操作指南 · <b>FFT</b></div>
+            <h1 class="reveal d2">FF<em>T</em></h1>
+            <p class="sub reveal d3">看信号的<b>频率成分</b> —— 两个入口：多通道叠加 或 单通道。</p>
+            <div class="turbo-band reveal d4"></div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">先认准位置 · <b>在哪点什么</b></span><span class="turbo-rule"></span></div>
+            <div class="map-grid">
+                <div class="shot reveal d2">
+                    <img src="assets/fft-panel.png" alt="FFT面板">
+                    <div class="pin" style="left:46%;top:3%">1</div>
+                    <div class="pin" style="left:8%;top:47%">2</div>
+                    <div class="pin" style="left:88%;top:7%">3</div>
+                    <div class="pin" style="left:85%;top:23%">4</div>
+                    <div class="pin" style="left:90%;top:35%">5</div>
+                    <div class="pin" style="left:46%;top:28%">6</div>
+                </div>
+                <div class="legend">
+                    <div class="li reveal d2"><span class="b">1</span><p>顶部 · 切到「FFT」</p></div>
+                    <div class="li reveal d3"><span class="b">2</span><p>左侧 · 勾通道 <span>（多通道叠加入口）</span></p></div>
+                    <div class="li reveal d3"><span class="b">3</span><p>右栏 · 输入行 <span>（已选 N 个 / 单信号）</span></p></div>
+                    <div class="li reveal d4"><span class="b">4</span><p>右栏 · 谱参数 <span>（窗 / NFFT / 平均）</span></p></div>
+                    <div class="li reveal d4"><span class="b">5</span><p>右栏下 · 计算 FFT</p></div>
+                    <div class="li reveal d5"><span class="b">6</span><p>中间 · 频谱曲线</p></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">02 · <b>两个入口</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">A · B</span><h2>多通道叠加 还是 单通道</h2></div>
+            <div class="paths">
+                <div class="path reveal d3">
+                    <div class="tagA">A</div>
+                    <div class="ptxt"><b>多通道叠加</b> —— <span class="pos">左侧</span>勾<b>多个</b>通道 → 右栏显示 <span class="ui">左侧已选 N 个 · 叠加</span>（单信号下拉自动隐藏）→ 点<span class="ui">计算 FFT</span> → 多条频谱<b>叠在一张图</b>。
+                        <span class="sub">看几个信号的频率成分对比、找共同谐波。</span>
+                    </div>
+                </div>
+                <div class="path reveal d4">
+                    <div class="tagA g">B</div>
+                    <div class="ptxt"><b>单通道</b> —— <span class="pos">左侧</span><b>全不勾</b> → 右栏<span class="ui">信号</span>下拉<b>重新出现</b> → 选一个 → 点<span class="ui">计算 FFT</span> → <b>单条</b>频谱。
+                        <span class="sub">精细诊断单个信号（配合参数细调）。</span>
+                    </div>
+                </div>
+            </div>
+            <p class="note reveal d5" style="margin-top:26px;font-size:23px"><b>一句话区分：</b>左侧有勾选 → 走 A（叠加）；左侧清空 → 右栏下拉出现，走 B（单通道）。</p>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">03 · <b>谱参数</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">03</span><h2>右栏挑预设，按需细调</h2></div>
+            <div class="step-grid">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">▸</span><p>预设 <span class="ui">频率优先</span> / <span class="ui">均衡</span> / <span class="ui">时间优先</span>，先用预设。</p></div>
+                    <div class="blk reveal d4"><span class="k">▸</span><p>细调 <span class="ui">窗函数</span> / <span class="ui">NFFT</span> / <span class="ui">重叠</span> / <span class="ui">平均模式</span>；幅值可切 <span class="ui">dB</span>。</p></div>
+                </div>
+                <div class="mock reveal d3">
+                    <div class="cap"><span>谱参数</span><em>右栏中部</em></div>
+                    <div class="seg"><b class="sel">频率优先</b><b>均衡</b><b>时间优先</b></div>
+                    <div class="grp" style="margin-top:14px">
+                        <div class="row"><span>窗函数</span><span class="field">hanning ▾</span></div>
+                        <div class="row"><span>FFT点数</span><span class="field">自动 ▾</span></div>
+                        <div class="row"><span>重叠</span><span class="field">50 %</span></div>
+                        <div class="row"><span>幅值</span><span class="field">dB ▾</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">04 · <b>计算 + 读图</b></span><span class="turbo-rule"></span></div>
+            <div class="step-grid" style="grid-template-columns:.8fr 1.2fr;align-items:center;padding-top:30px">
+                <div class="instr">
+                    <div class="blk reveal d2"><span class="k">④</span><p>点<span class="ui">计算 FFT</span> → 出频谱图。</p></div>
+                    <div class="blk reveal d3"><span class="k">⑤</span><p>用<span class="ui">游标</span>在峰值上读频率 / 幅值。</p></div>
+                    <div class="tip reveal d4"><span class="ic">💡</span><p>多通道为<b>叠加</b>显示（按颜色区分），共享频率轴。</p></div>
+                </div>
+                <div class="viz reveal d2" style="background:#fff;padding:20px">
+                    <svg viewBox="0 0 600 280" preserveAspectRatio="none" style="width:100%;height:300px">
+                        <polyline points="0,260 60,255 120,180 130,90 140,180 240,250 300,235 320,150 340,235 460,255 480,200 500,255 600,258" fill="none" stroke="#1769e0" stroke-width="3"/>
+                        <polyline points="0,265 100,262 200,258 260,210 280,120 300,210 400,260 500,255 560,230 580,255 600,262" fill="none" stroke="#e8821e" stroke-width="3"/>
+                        <line x1="130" y1="0" x2="130" y2="280" stroke="#1769e0" stroke-width="1.5" stroke-dasharray="4 4" opacity=".5"/>
+                    </svg>
+                    <div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:15px;color:#94a0b0;margin-top:4px"><span>Frequency (Hz)</span><span>● 方向盘扭矩　● 电机扭矩</span></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+</main>
+</div>
+<div class="edit-hotzone"></div>
+<button class="edit-toggle" id="editToggle" title="编辑模式 (E)">✏️</button>
+<script src="assets/deck.js"></script>
+</body>
+</html>

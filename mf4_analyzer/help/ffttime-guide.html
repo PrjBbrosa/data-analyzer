@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>时频图 · 操作指南</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/deck.css">
+</head>
+<body>
+<div class="deck-viewport">
+<main class="deck-stage" id="deckStage">
+
+    <section class="slide cover active">
+        <div class="frame">
+            <div class="corner reveal d1">TraceLab v7.0<br>时频图 / FFT vs Time</div>
+            <div class="cover-eyebrow reveal d1">操作指南 · <b>FFT vs TIME</b></div>
+            <h1 class="reveal d2">时频<em>图</em></h1>
+            <p class="sub reveal d3">看<b>频率随时间</b>怎么变 —— 频率 × 时间的彩色谱图。</p>
+            <div class="turbo-band reveal d4"></div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">先认准位置 · <b>在哪点什么</b></span><span class="turbo-rule"></span></div>
+            <div class="map-grid">
+                <div class="shot reveal d2">
+                    <img src="assets/ffttime-panel.png" alt="时频图面板">
+                    <div class="pin" style="left:52%;top:3%">1</div>
+                    <div class="pin" style="left:88%;top:10%">2</div>
+                    <div class="pin" style="left:80%;top:36%">3</div>
+                    <div class="pin" style="left:89%;top:82%">4</div>
+                    <div class="pin" style="left:46%;top:40%">5</div>
+                    <div class="pin" style="left:78%;top:80%">6</div>
+                    <div class="pin x" style="left:8%;top:47%">✕</div>
+                </div>
+                <div class="legend">
+                    <div class="li reveal d2"><span class="b">1</span><p>顶部 · 切到「FFT vs Time」</p></div>
+                    <div class="li reveal d3"><span class="b">2</span><p>右栏上 · 信号 <span>（右栏下拉选）</span></p></div>
+                    <div class="li reveal d3"><span class="b">3</span><p>右栏中 · 时频参数 <span>（NFFT / 窗 / 重叠）</span></p></div>
+                    <div class="li reveal d4"><span class="b">4</span><p>右栏下 · 计算时频图</p></div>
+                    <div class="li reveal d4"><span class="b">5</span><p>中间 · 彩图 + colorbar</p></div>
+                    <div class="li reveal d5"><span class="b">6</span><p>图下 · 取切片 <span>（时间 / 频率）</span></p></div>
+                    <div class="li reveal d5"><span class="b x">✕</span><p>左侧列表 <b>不在这选</b> <span>（同阶次）</span></p></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">02 · <b>选信号 + 参数</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">01·02·03</span><h2>右栏选信号，设时频参数</h2></div>
+            <div class="step-grid">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">①</span><p><span class="pos">顶部</span>点<span class="ui">FFT vs Time</span>。</p></div>
+                    <div class="blk reveal d4"><span class="k">②</span><p><span class="pos">右栏上部</span>从<span class="ui">信号</span>下拉选一个（如方向盘扭矩），确认 <span class="ui">Fs</span>。</p></div>
+                    <div class="blk reveal d5"><span class="k">③</span><p><span class="pos">右栏中部</span>挑预设，或调 <span class="ui">NFFT</span> / <span class="ui">窗</span> / <span class="ui">重叠</span>。</p></div>
+                </div>
+                <div class="mock reveal d3">
+                    <div class="cap"><span>分析信号 · 时频参数</span><em>右栏</em></div>
+                    <div class="grp">
+                        <div class="row"><span>信号</span><span class="field hl">方向盘扭矩 ▾</span></div>
+                        <div class="row"><span>Fs</span><span class="field">600 Hz</span></div>
+                    </div>
+                    <div class="seg"><b class="sel">频率优先</b><b>均衡</b><b>时间优先</b></div>
+                    <div class="grp" style="margin-top:14px">
+                        <div class="row"><span>FFT点数</span><span class="field">自动 ▾</span></div>
+                        <div class="row"><span>窗函数</span><span class="field">hanning ▾</span></div>
+                        <div class="row"><span>重叠</span><span class="field">80 %</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">03 · <b>计算 + 读图</b></span><span class="turbo-rule"></span></div>
+            <div class="step-grid" style="grid-template-columns:.8fr 1.2fr;align-items:center;padding-top:30px">
+                <div class="instr">
+                    <div class="blk reveal d2"><span class="k">④</span><p>点<span class="ui">计算时频图</span> → 出 <b>频率 × 时间</b> 彩图。</p></div>
+                    <div class="blk reveal d3"><span class="k">⑤</span><p><b>点彩图任意点</b> → 下方看该处剖面（<span class="ui">时间</span> / <span class="ui">频率</span> 可切换）。</p></div>
+                    <div class="tip reveal d4"><span class="ic">💡</span><p>拖<b>右侧 colorbar</b> 调色阶；横亮带＝某频率持续存在。</p></div>
+                </div>
+                <div class="viz reveal d2">
+                    <div class="omap">
+                        <div class="crossh" style="top:36%"></div><div class="cross" style="left:40%"></div>
+                        <div class="dot" style="left:40%;top:36%"></div><div class="tag" style="left:40%;top:36%">点这取切片</div>
+                        <div style="position:absolute;left:0;right:30px;top:30%;height:10px;background:linear-gradient(90deg,#21c6c6,#8bd450,#f5c043,#f5683f);opacity:.85"></div>
+                        <div style="position:absolute;left:0;right:30px;top:58%;height:7px;background:linear-gradient(90deg,#1f6fe0,#21c6c6);opacity:.6"></div>
+                        <div class="cbar"></div>
+                    </div>
+                    <div class="slicebar">
+                        <span class="slicelab">该时刻的频率剖面</span>
+                        <div class="toggle"><b>时间</b><b class="on">频率</b></div>
+                        <svg viewBox="0 0 600 60" preserveAspectRatio="none"><polyline points="0,48 90,44 150,18 170,8 190,18 300,46 360,30 380,12 400,30 520,46 600,50" fill="none" stroke="#1769e0" stroke-width="3"/></svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+</main>
+</div>
+<div class="edit-hotzone"></div>
+<button class="edit-toggle" id="editToggle" title="编辑模式 (E)">✏️</button>
+<script src="assets/deck.js"></script>
+</body>
+</html>

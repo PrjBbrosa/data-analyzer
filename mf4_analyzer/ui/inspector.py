@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QPushButton,
     QScrollArea,
     QStackedWidget,
     QVBoxLayout,
@@ -86,6 +87,31 @@ class Inspector(QWidget):
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         lay.addWidget(self._scroll, 1)
+
+        # 2026-06-22 unify-help-link: one persistent '?  使用说明' link pinned
+        # to the Inspector's bottom-right, OUTSIDE the scroll area, so it sits
+        # at the same visual position in every mode regardless of how tall the
+        # current contextual content is — and never scrolls out of view. The
+        # per-contextual help rows that used to float just under each panel's
+        # last control (visibly mid-pane for the short Time mode) were removed
+        # in favour of this single link. Its target guide is rebound per mode
+        # in set_mode → _update_help_guide.
+        self._help_guide_name = 'time'
+        help_row = QFrame(self)
+        help_row.setObjectName("inspectorHelpRow")
+        help_box = QHBoxLayout(help_row)
+        help_box.setContentsMargins(0, 2, 3, 0)
+        help_box.setSpacing(0)
+        help_box.addStretch(1)
+        self._help_link = QPushButton("?  使用说明", help_row)
+        self._help_link.setObjectName("inspectorHelpLink")
+        self._help_link.setProperty("role", "link")
+        self._help_link.setCursor(Qt.PointingHandCursor)
+        self._help_link.setToolTip("打开本面板的使用说明")
+        self._help_link.setFlat(True)
+        self._help_link.clicked.connect(self._open_current_guide)
+        help_box.addWidget(self._help_link, 0)
+        lay.addWidget(help_row, 0)
 
         # 2026-04-26 R3 紧凑化 fix-1:
         # The scroll uses a *host* widget that fills the viewport horizontally,
@@ -186,6 +212,18 @@ class Inspector(QWidget):
             self.contextual_stack.setVisible(True)
             self.contextual_stack.setCurrentIndex(idx)
         self._place_range_group_for_mode(mode)
+        self._update_help_guide(mode)
+
+    def _update_help_guide(self, mode):
+        # The persistent bottom-right help link targets the current mode's
+        # guide; mode strings map 1:1 to open_guide() names.
+        self._help_guide_name = mode if mode in (
+            'time', 'fft', 'fft_time', 'order',
+        ) else 'time'
+
+    def _open_current_guide(self):
+        from ..help import open_guide
+        open_guide(self._help_guide_name)
 
     def _place_range_group_for_mode(self, mode):
         # Decouple the shared chk_range checked state per mode BEFORE the
