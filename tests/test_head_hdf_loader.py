@@ -1,6 +1,7 @@
 from __future__ import annotations
 import numpy as np
 import pandas as pd
+import pytest
 from mf4_analyzer.io.file_data import FileData
 from mf4_analyzer.io.loader import DataLoader
 from tests._helpers.head_hdf_factory import write_head_hdf
@@ -48,9 +49,12 @@ def test_load_hdf_groups_by_factor_and_drops_nan(tmp_path):
     assert any("2x" in s for s in factors)
     assert any("1x" in s for s in factors)
     fast = next(g for g in groups if "2x" in g["label_suffix"])
-    # 标定生效：MOTOR X 原值 ×2
+    # calibration 一律不乘：HEAD FLOAT32 样本本身已是物理工程值，
+    # MOTOR X 保持原始（即便 calibration=2.0）
     np.testing.assert_allclose(
-        fast["data"]["MOTOR X"].to_numpy(), acc * 2.0)
+        fast["data"]["MOTOR X"].to_numpy(), acc)
+    # calibration 仍作为元数据保留
+    assert fast["channel_metadata"]["MOTOR X"]["calibration"] == 2.0
     # CAN(全 NaN) 不在通道里
     assert "CAN" not in fast["channels"]
     # 转速注入快组
@@ -60,6 +64,47 @@ def test_load_hdf_groups_by_factor_and_drops_nan(tmp_path):
     np.testing.assert_allclose(slow["data"]["SP"].to_numpy(), spd)
     # 元数据回传
     assert fast["channel_metadata"]["MOTOR X"]["quantity"] == "acceleration"
+
+
+def test_calibration_not_applied_as_gain(tmp_path):
+    """calibration≠1 的通道加载后幅值=原始幅值（不被 calibration 放大）。"""
+    n = 8
+    # 转向扫角风格：原始 ±几百度，calibration 是大数（旧 bug 会乘到荒唐量级）
+    raw = np.linspace(-264.0, 694.0, n)
+    p = write_head_hdf(
+        tmp_path / "cal.hdf", n_scans=n, delta=1.0, start_of_data=2048,
+        channels=[
+            {"name": "Com_TAS_Angle (C", "factor": 1, "quantity": "angle",
+             "unit": "deg", "calibration": 117.40169830693, "samples": raw},
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    g = next(g for g in groups if "1x" in g["label_suffix"])
+    loaded = g["data"]["Com_TAS_Angle (C"].to_numpy()
+    np.testing.assert_allclose(loaded, raw)
+    # 量级合理：~700 级，不是 8e4
+    assert np.abs(loaded).max() < 1e3
+    # calibration 仍保留为元数据
+    assert g["channel_metadata"]["Com_TAS_Angle (C"]["calibration"] == \
+        pytest.approx(117.40169830693)
+
+
+def test_calibration_zero_channel_preserved_not_zeroed(tmp_path):
+    """calibration=0 的通道加载后非全零、等于原始（旧 bug 会 ×0 抹零）。"""
+    n = 8
+    raw = np.linspace(-311.0, 295.0, n)   # 真实非零原始数据
+    p = write_head_hdf(
+        tmp_path / "calzero.hdf", n_scans=n, delta=1.0, start_of_data=2048,
+        channels=[
+            {"name": "Com_RPS_Speed (C", "factor": 1, "quantity": "angle",
+             "unit": "deg", "calibration": 0.0, "samples": raw},
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    g = next(g for g in groups if "1x" in g["label_suffix"])
+    assert "Com_RPS_Speed (C" in g["channels"]
+    loaded = g["data"]["Com_RPS_Speed (C"].to_numpy()
+    np.testing.assert_allclose(loaded, raw)
+    assert np.any(loaded != 0)
+    assert g["channel_metadata"]["Com_RPS_Speed (C"]["calibration"] == 0.0
 
 
 def test_groups_build_multiple_filedata(tmp_path):

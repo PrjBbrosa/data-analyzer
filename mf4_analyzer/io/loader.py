@@ -328,7 +328,11 @@ class DataLoader:
                           else "no samples (unknown)")
                 dropped.append({"name": c.name, "reason": reason})
                 continue
-            s = c.samples * float(c.calibration)
+            # HEAD FLOAT32 样本本身已是物理工程值；calibration 是元数据，
+            # 不可当作对原始样本的乘法增益（旧 bug 会把转角/转速/扭矩放大到
+            # 荒唐量级，且 calibration=0 的通道被 ×0 抹零）。仅保留原始 samples，
+            # calibration 仍存入 channel_metadata 供显示/参考。
+            s = c.samples
             if np.isnan(s).all():
                 dropped.append({"name": c.name, "reason": "all-NaN"})
                 continue
