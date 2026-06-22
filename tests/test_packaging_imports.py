@@ -8,7 +8,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SPEC_PATH = REPO_ROOT / "build" / "spec" / "TraceLab7.0.spec"
+SPEC_PATH = REPO_ROOT / "build" / "spec" / "TraceLab7.1.spec"
 WINDOWS_BUILD_SCRIPT = REPO_ROOT / "tools" / "build_windows_folder.ps1"
 
 REQUIRED_HIDDEN_IMPORTS = [
