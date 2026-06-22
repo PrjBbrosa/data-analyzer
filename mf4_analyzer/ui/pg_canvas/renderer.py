@@ -39,6 +39,22 @@ _HIDPI_COPY_SCALE = 2.0
 _HIDPI_MAX_WIDTH = 2560
 
 
+# ---------------------------------------------------------------------------
+# Overlay envelope bucket-cap headroom multiplier (see _effective_pixel_width).
+#
+# The per-curve bucket cap is sized so the SUMMED displayed-point count across
+# all overlay curves lands at K × _AA_OVERLAY_SEGMENT_OFF, i.e. a comfortable
+# margin ABOVE the AA-off threshold. K must be > 1 so the summed count stays
+# reliably ABOVE the threshold for every channel count in 2..8 (integer
+# division otherwise lets the sum dip to or below the threshold and silently
+# re-enables AA in exactly the dense overlay we are trying to speed up). K=1.3
+# targets summed ≈ 1.3× budget (~9100 pts at the default 7000), comfortably
+# inside the 1.2–1.5× band while keeping bucket count far below full
+# pixel_width so most of the raster-fill speedup is preserved.
+# ---------------------------------------------------------------------------
+_OVERLAY_BUCKET_BUDGET_MULT = 1.3
+
+
 def _capped_hidpi_scale(base_width, requested=_HIDPI_COPY_SCALE):
     """Return the effective magnification for a hi-DPI render.
 
@@ -86,6 +102,7 @@ class Renderer(_CanvasBackref):
 
     _delegate_names = frozenset({
         "_current_pixel_width",
+        "_effective_pixel_width",
         "_refresh_visible_data",
         "_build_painter_path",
         "_build_painter_path_loop",
@@ -110,6 +127,77 @@ class Renderer(_CanvasBackref):
         except Exception:
             return self.MAX_PTS
 
+    def _effective_pixel_width(self, pixel_width: int) -> int:
+        """Envelope bucket count, capped by channel count in OVERLAY mode.
+
+        Background (measured, real HDF 6-channel ~129.5 kHz overlay, 1920 px
+        canvas, offscreen ``QWidget.grab()`` median synchronous paint):
+
+          full X + wide Y (auto)        13.0 ms   (~18108 displayed pts)
+          narrow Y + X zoom-in (BAD)    58.1 ms   (~19932 displayed pts)
+          BAD + buckets capped to 700   29.8 ms   (8400 pts)
+          BAD + buckets capped to 350   15.7 ms   (4200 pts)
+
+        Displayed-point count is essentially constant (~20k) across all
+        cases, yet paint cost swings 4–5×: in a narrow-Y + X-zoom regime each
+        envelope bucket's min/max pair becomes a full-height vertical stroke
+        spanning the whole canvas, so the cost is RASTER FILL, linear in the
+        NUMBER of vertical strokes (= bucket count), NOT in the data volume.
+        Y-clip (design Task 2) does NOT help: on-screen strokes are already
+        full-height and Qt clips off-screen segments, so clipping changes
+        neither the stroke count nor the on-screen height. Reducing buckets
+        (design Task 3) is the only lever that scales the cost down linearly
+        (58 → 30 → 16 ms as buckets drop 19932 → 8400 → 4200).
+
+        Overlay's aux ViewBoxes fully overlap at one full-plot rect, so all
+        curves repaint as ONE region; the cost ceiling is the SUM of strokes
+        across curves. Cap each curve to::
+
+            cap = _AA_OVERLAY_SEGMENT_OFF * K / (2 * curve_count)
+
+        buckets (×2 because positions_envelope emits ~2 samples per bucket: a
+        min and a max), with ``K = _OVERLAY_BUCKET_BUDGET_MULT = 1.3``. The
+        ``× K`` is the key correction over the original ``/ (2*curve_count)``:
+        without it the summed displayed-point count landed exactly AT the
+        AA-off threshold (and integer-division truncation could dip BELOW it),
+        so the quality gate's ``metric > off_budget`` test could flip AA back
+        ON for some channel counts — re-enabling the expensive AA compositing
+        in precisely the dense overlay this cap exists to speed up. With
+        K=1.3 the summed count sits ~1.3× the threshold for every channel
+        count in 2..8, keeping AA reliably OFF while the per-curve bucket cap
+        is still far below full ``pixel_width`` so the raster-fill speedup is
+        preserved.
+
+        Measured (real HDF, 6-channel overlay, 1920 px, offscreen grab()
+        median): uncapped narrow-Y/X-zoom 40.1 ms; original ``/(2N)`` cap
+        18.9 ms (summed 7008, AT threshold); K=1.3 cap ~20–22 ms (summed
+        ~9098, reliably > 7000) — a small, deliberate paint cost traded for a
+        guaranteed-off AA state, still ~2× faster than uncapped.
+
+        SUBPLOT / SINGLE modes keep the full ``pixel_width``: their rows are
+        disjoint short device rectangles (and carry DeviceCoordinateCache),
+        so the dense-vertical-stroke regime that motivates the cap does not
+        arise there — capping them would only coarsen those plots for no
+        paint win.
+        """
+        try:
+            pw = int(pixel_width)
+        except (TypeError, ValueError):
+            return pixel_width
+        if pw < 1:
+            pw = 1
+        if not getattr(self, "_overlay_mode", False):
+            return pw
+        curve_count = len(self._channel_lines) if self._channel_lines else 0
+        if curve_count <= 0:
+            return pw
+        try:
+            budget = int(self._AA_OVERLAY_SEGMENT_OFF)
+        except (TypeError, ValueError, AttributeError):
+            return pw
+        cap = int(budget * _OVERLAY_BUCKET_BUDGET_MULT / (2 * curve_count))
+        return max(1, min(pw, cap))
+
     def _refresh_visible_data(self):
         """Recompute and display the viewport envelope for every channel."""
         self._refresh_pending = False
@@ -120,6 +208,10 @@ class Renderer(_CanvasBackref):
         except Exception:
             return
         pixel_width = self._current_pixel_width()
+        # Overlay mode caps the bucket count by channel count so the dense
+        # narrow-Y vertical-stroke wall stays within the raster-fill budget
+        # (see _effective_pixel_width). Subplot/single keep full pixel_width.
+        effective_width = self._effective_pixel_width(pixel_width)
         positions_envelope = _legacy_positions_envelope()
 
         updated_any = False
@@ -132,7 +224,7 @@ class Renderer(_CanvasBackref):
             # Range-key gate: if the key didn't change since the last flush,
             # skip the envelope+setData work entirely. This keeps repeated
             # _flush_pending_refresh() calls with the same xlim a no-op.
-            range_key = _quantize_range_key(name, xlim, pixel_width)
+            range_key = _quantize_range_key(name, xlim, effective_width)
             if self._last_range_key.get(name) == range_key:
                 continue
 
@@ -141,7 +233,7 @@ class Renderer(_CanvasBackref):
                 env_t, env_s = positions_envelope(
                     t, sig,
                     xlim=xlim,
-                    pixel_width=pixel_width,
+                    pixel_width=effective_width,
                     is_monotonic=is_monotonic,
                 )
             except Exception as exc:
@@ -161,7 +253,7 @@ class Renderer(_CanvasBackref):
 
         # Debounced tail work: retick axes and notify listeners only once after
         # rapid drag ticks settle, instead of blocking every mouse-move event.
-        signature = (float(xlim[0]), float(xlim[1]), int(pixel_width))
+        signature = (float(xlim[0]), float(xlim[1]), int(effective_width))
         if not updated_any and signature == self._last_refresh_signature:
             return
         self._last_refresh_signature = signature

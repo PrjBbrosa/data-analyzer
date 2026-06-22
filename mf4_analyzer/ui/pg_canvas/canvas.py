@@ -1685,6 +1685,9 @@ class TimeDomainCanvasPG(QWidget):
     def _current_pixel_width(self) -> int:
         return self._renderer._current_pixel_width()
 
+    def _effective_pixel_width(self, pixel_width: int) -> int:
+        return self._renderer._effective_pixel_width(pixel_width)
+
     def _refresh_visible_data(self):
         return self._renderer._refresh_visible_data()
 

@@ -1,5 +1,52 @@
 # Time-Domain Overlay Dense Y-Zoom Performance Design
 
+> **Implementation note (2026-06-22, measured):** §1 "clip the displayed
+> envelope to the visible Y range" (the plan's *Task 2 Y-clip*) was found to
+> be INEFFECTIVE for this regime and was NOT implemented as a perf lever.
+> Clipping ±large amplitudes into the narrow Y window leaves each on-screen
+> stroke full-height, and Qt already clips off-screen segments, so it reduces
+> neither the stroke count nor the on-screen stroke height. The cost here is
+> raster fill, linear in the NUMBER of vertical strokes (= envelope bucket
+> count), NOT in data volume. The implemented lever is §4 / the plan's *Task 3*:
+> cap the per-curve envelope bucket count by channel count in overlay mode only
+> (`renderer._effective_pixel_width`). Real-HDF offscreen `grab()` medians
+> (6 acc channels ~129.5 kHz, 1920 px, narrow-Y + X-zoom):
+>
+> | case | paint | displayed pts |
+> |------|-------|---------------|
+> | overlay narrow-Y + X-zoom, uncapped | 40.1 ms | 18588 |
+> | overlay narrow-Y + X-zoom, capped `/(2N)` (initial) | 18.9 ms | 7008 |
+> | overlay narrow-Y + X-zoom, capped `×K/(2N)`, K=1.3 (current) | ~20–22 ms | ~9098 |
+> | subplot narrow-Y + X-zoom (unchanged) | 13.7 → 13.0 ms | 22308 |
+>
+> **Tightening correction (2026-06-22, measured):** the initial cap
+> `cap = _AA_OVERLAY_SEGMENT_OFF // (2*curve_count)` put the SUMMED displayed-
+> point count (≈ `2 × cap × N`) right AT the `_AA_OVERLAY_SEGMENT_OFF` (=7000)
+> threshold — and integer truncation could push it BELOW for some channel
+> counts. Since the AA quality gate flips AA OFF only when `metric > off_budget`,
+> a summed count at-or-below 7000 silently re-enables the expensive AA
+> compositing in exactly the dense overlay this cap exists to speed up. The
+> formula is now:
+>
+> ```
+> cap = int(_AA_OVERLAY_SEGMENT_OFF * K / (2 * curve_count))   # K = 1.3
+> effective_width = max(1, min(pixel_width, cap))
+> ```
+>
+> with `K = _OVERLAY_BUCKET_BUDGET_MULT = 1.3`, sizing the summed count at
+> ~1.3× the threshold (~9098 pts) so AA stays reliably OFF across 2..8 channels
+> while the per-curve bucket count stays far below full `pixel_width` (most of
+> the raster-fill speedup is preserved). Measured summed pts + AA state after
+> the flush (1920 px canvas): N=2 → 7192 (pixel-width-bound, AA OFF); N=4 →
+> 9104; N=6 → 9096; N=8 → 9088 — all > 7000, AA OFF. The slightly higher paint
+> cost (~20–22 ms vs 18.9 ms) is a deliberate trade for a guaranteed-off AA
+> state, still ~2× faster than the 40.1 ms uncapped case.
+>
+> Reducing buckets scales cost down ~linearly (separately measured 58 → 30 →
+> 16 ms as buckets drop 19932 → 8400 → 4200). Subplot/single keep full
+> `pixel_width` — their disjoint short rows never hit the full-height-stroke
+> wall, so capping them would only coarsen the plot for no paint win.
+
 ## Problem
 
 High-sample-rate time-domain data becomes sluggish in overlay mode when users
@@ -128,12 +175,20 @@ For overlay mode, compute an effective per-channel pixel width:
 ```python
 curve_count = len(self._channel_lines)
 overlay_budget = int(self._AA_OVERLAY_SEGMENT_OFF)
-effective_width = max(1, min(pixel_width, overlay_budget // max(1, 2 * curve_count)))
+K = _OVERLAY_BUCKET_BUDGET_MULT  # = 1.3
+cap = int(overlay_budget * K / (2 * max(1, curve_count)))
+effective_width = max(1, min(pixel_width, cap))
 ```
 
 Then pass `effective_width` to `positions_envelope`. Because the min/max
 envelope emits at most two points per bucket, the total drawn overlay point
-count remains within the existing overlay off-budget in normal cases.
+count is `~2 × cap × curve_count ≈ K × overlay_budget` — i.e. deliberately
+ABOVE the overlay off-budget by the headroom factor `K`. This is the corrected
+sizing: a bare `// (2*curve_count)` lands the sum AT the off-budget threshold
+(or below, via integer truncation), which lets the AA gate's
+`metric > off_budget` flip AA back ON in the dense overlay this cap is meant to
+accelerate. `K = 1.3` keeps the sum reliably above the threshold across 2..8
+channels (AA stays OFF) while the bucket count stays far below `pixel_width`.
 
 Subplot and single-channel modes continue to use the full `pixel_width`.
 
@@ -142,7 +197,10 @@ Subplot and single-channel modes continue to use the full `pixel_width`.
 `QualityManager._density_status()` can continue to read actual `PlotDataItem`
 point counts. After the overlay budget lands, the status should reflect the
 actual displayed point count, not the raw sample count. Do not increase the
-overlay AA thresholds as part of this change.
+overlay AA thresholds (`_AA_OVERLAY_SEGMENT_ON/OFF`) as part of this change —
+the thresholds stay 5000/7000. The bucket cap is sized so the displayed sum
+lands ABOVE the unchanged off-budget (≈ `K × 7000`), which makes the gate's
+existing `metric > off_budget` test deterministically drop AA in dense overlay.
 
 ## Acceptance Criteria
 

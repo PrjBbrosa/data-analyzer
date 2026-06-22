@@ -308,6 +308,153 @@ class TestPositionsEnvelopeParity:
         np.testing.assert_array_equal(got[1], ref[1])
 
 
+# -- overlay envelope bucket-cap (narrow-Y vertical-stroke wall) ---------
+
+
+class TestOverlayBucketCap:
+    """Overlay mode caps the per-curve envelope bucket count by channel
+    count so the dense narrow-Y vertical-stroke regime stays within the
+    raster-fill budget (renderer._effective_pixel_width). Subplot/single
+    keep the full viewport pixel_width — their disjoint short rows do not
+    hit the full-height-stroke wall, so capping would only coarsen them.
+
+    The per-curve cap is sized so the SUMMED displayed-point count across
+    all overlay curves lands at ``K × _AA_OVERLAY_SEGMENT_OFF`` with
+    ``K = _OVERLAY_BUCKET_BUDGET_MULT = 1.3`` — i.e. comfortably ABOVE the
+    AA-off threshold, never AT or below it. The original ``/(2N)`` cap left
+    the sum exactly at the threshold (integer truncation could even dip
+    below), which let the quality gate's ``metric > off_budget`` test flip AA
+    back ON for some channel counts — re-enabling AA in the dense overlay the
+    cap exists to speed up. These tests lock the new ">threshold and
+    <full-width" semantics and the resulting AA-off state for 2..8 channels.
+
+    Measured (real HDF, 6-channel overlay, 1920 px, offscreen grab() median):
+    uncapped narrow-Y + X-zoom paint 40.1 ms; original ``/(2N)`` cap 18.9 ms
+    (summed 7008, AT threshold); K=1.3 cap ~20–22 ms (summed ~9098, reliably
+    > 7000). See renderer._effective_pixel_width docstring.
+    """
+
+    def _make_overlay(self, qapp, n_curves):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.linspace(0.0, 10.0, 500_000, dtype=np.float64)
+        rows = [
+            (f"ch{i}", True, t, np.sin(t * (i + 1)),
+             "#1769e0", "u", f"fid-{i}")
+            for i in range(n_curves)
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        return canvas
+
+    def test_overlay_caps_bucket_count_by_channel_count(self, qapp):
+        from mf4_analyzer.ui.pg_canvas.renderer import (
+            _OVERLAY_BUCKET_BUDGET_MULT,
+        )
+
+        canvas = self._make_overlay(qapp, 6)
+        pw = canvas._current_pixel_width()
+        eff = canvas._effective_pixel_width(pw)
+        budget = int(canvas._AA_OVERLAY_SEGMENT_OFF)
+        # New formula: cap = int(budget * K / (2*N)), then clamped to pixel_width.
+        expected = max(
+            1, min(pw, int(budget * _OVERLAY_BUCKET_BUDGET_MULT / (2 * 6)))
+        )
+        assert eff == expected
+        # The cap MUST bite for a dense 6-curve overlay on a wide canvas:
+        # full pixel_width (~1900) far exceeds the per-curve budget (~758).
+        assert eff < pw
+
+    def test_overlay_summed_points_stay_above_aa_off_threshold(self, qapp):
+        # Across 2..8 channels the SUMMED displayed-point count must stay
+        # STABLY ABOVE _AA_OVERLAY_SEGMENT_OFF (so the quality gate keeps AA
+        # OFF) yet well BELOW the uncapped full-width wall (so the raster-fill
+        # speedup is preserved). This is the core of the tightening: the old
+        # /(2N) cap landed the sum AT the threshold, risking an AA flip-back.
+        #
+        # Note N=2 on a ~1920 px canvas is PIXEL-WIDTH-bound (per-curve cap
+        # ~2275 > pixel_width), so its sum ≈ 2*pw*2 is naturally just past the
+        # threshold without the cap biting — AA is still OFF, which is all
+        # that matters there (2 curves is not the dense case). The cap bites
+        # for N>=4, where we additionally assert the sum is far below the
+        # uncapped wall.
+        for n in (2, 4, 6, 8):
+            canvas = self._make_overlay(qapp, n)
+            canvas._flush_pending_refresh()
+            budget = int(canvas._AA_OVERLAY_SEGMENT_OFF)
+            pw = canvas._current_pixel_width()
+            eff = canvas._effective_pixel_width(pw)
+            total = 0
+            for _name, (_ax, line) in canvas._channel_lines.items():
+                xd, _ = line.plot_data_item.getData()
+                total += 0 if xd is None else len(xd)
+            # Stably ABOVE the AA-off threshold (never AT it / below it).
+            assert total > budget, (
+                f"N={n}: summed {total} not > AA-off budget {budget}; "
+                "AA could flip back ON in dense overlay"
+            )
+            if eff < pw:
+                # Cap is biting (N>=4): the sum must sit near ~1.3*budget,
+                # far below the uncapped full-width wall (~2*pw*N pts).
+                full_width_pts = 2 * pw * n
+                assert total < full_width_pts, (
+                    f"N={n}: summed {total} not < uncapped wall "
+                    f"{full_width_pts}; cap is not biting"
+                )
+                # Sanity: comfortably below twice the threshold (the cap
+                # targets ~1.3*budget; allow slack for envelope rounding).
+                assert total < 2 * budget, (
+                    f"N={n}: summed {total} >= 2*budget {2 * budget}; "
+                    "cap loosened beyond the ~1.3x target"
+                )
+
+    def test_overlay_aa_stays_off_for_2_to_8_channels(self, qapp):
+        # End-to-end: the quality gate's AA decision must be OFF for every
+        # channel count in 2..8 once the envelope is flushed, proving the
+        # bucket-cap keeps the summed metric above off_budget.
+        for n in (2, 4, 6, 8):
+            canvas = self._make_overlay(qapp, n)
+            canvas._flush_pending_refresh()
+            status = canvas._quality._density_status()
+            assert status["overlay"] is True
+            # metric > off_budget => AA OFF (the gate's flip-off condition).
+            assert status["metric"] > status["off_budget"], (
+                f"N={n}: metric {status['metric']} <= off_budget "
+                f"{status['off_budget']}; AA would stay ON"
+            )
+
+    def test_subplot_mode_not_capped(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.linspace(0.0, 10.0, 500_000, dtype=np.float64)
+        rows = [
+            (f"ch{i}", True, t, np.sin(t * (i + 1)),
+             "#1769e0", "u", f"fid-{i}")
+            for i in range(6)
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        pw = canvas._current_pixel_width()
+        # Subplot keeps the full viewport pixel width (no channel-count cap).
+        assert canvas._effective_pixel_width(pw) == pw
+
+    def test_single_channel_overlay_degenerate_not_capped(self, qapp):
+        # mode="overlay" with one visible row falls back to single mode
+        # (overlay_mode requires >= 2), so the cap must not engage.
+        canvas = self._make_overlay(qapp, 1)
+        assert canvas._overlay_mode is False
+        pw = canvas._current_pixel_width()
+        assert canvas._effective_pixel_width(pw) == pw
+
+
 # -- fallback-logging contract test class --------------------------------
 
 
