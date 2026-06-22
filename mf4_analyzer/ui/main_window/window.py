@@ -1816,9 +1816,22 @@ class MainWindow(
         from ..chart_stack import _STATS_STRIP_ENABLED
         collect_stats = update_primary_ui and _STATS_STRIP_ENABLED
 
-        data = self._build_time_plot_data(
-            checked, custom_x, range_enabled, range_lo, range_hi,
-        )
+        # [perf-probe] 诊断探针，定位后移除。整段绘图计时 + 子计时。
+        from ..pg_canvas import _perf_probe as _pp
+        if _pp.ENABLED:
+            _pp.install_paint_probe(canvas)
+            _pp.reset_paint_counter()
+            _pp.log(
+                f"plot_time 开始: mode={mode} checked={len(checked)} 通道"
+            )
+        _pp_section = _pp.section("plot_time 一次绘图") if _pp.ENABLED else None
+        if _pp_section is not None:
+            _pp_section.__enter__()
+
+        with _pp.timed("_build_time_plot_data 总耗时"):
+            data = self._build_time_plot_data(
+                checked, custom_x, range_enabled, range_lo, range_hi,
+            )
         st = {}
         if collect_stats:
             # Statistics are computed from the ORIGINAL (post-range-filter)
@@ -1838,19 +1851,36 @@ class MainWindow(
             canvas.draw()
             if update_primary_ui:
                 self.chart_stack.stats_strip.update_stats({})
+            if _pp_section is not None:  # [perf-probe] 关掉提前返回路径的段
+                _pp_section.__exit__(None, None, None)
             return
 
         xlabel = self._custom_xlabel or self.inspector.top.xaxis_label() or 'Time (s)'
-        canvas.plot_channels(
-            data,
-            mode,
-            xlabel=xlabel,
-            defer_first_frame=defer_first_frame,
-        )
+        with _pp.timed("plot_channels(建轴+bind+首次setData) 耗时"):
+            canvas.plot_channels(
+                data,
+                mode,
+                xlabel=xlabel,
+                defer_first_frame=defer_first_frame,
+            )
         if update_primary_ui:
             self._sync_time_range_inputs_from_visible_xlim()
         xt, yt = self.inspector.top.tick_density()
         canvas.set_tick_density(xt, yt)
+        # [perf-probe] 诊断探针，定位后移除。诊断行 + 强制同步首帧 paint
+        # （离屏 settle 后是缓存 blit，需 repaint() 触发 paintEvent hook 记真实首帧）。
+        if _pp.ENABLED:
+            _pp.log_filter_total()
+            _pp.log_canvas_diagnostics(canvas)
+            try:
+                # GraphicsView 自身被 hook（见 install_paint_probe）。repaint()
+                # 同步强制首帧光栅；离屏 settle 后的 grab 是缓存 blit，量不到墙。
+                _pp.log("强制 GraphicsView.repaint() 触发首帧光栅")
+                canvas._glw.repaint()
+            except Exception as _exc:
+                _pp.log(f"repaint 触发失败(已吞): {_exc!r}")
+        if _pp_section is not None:
+            _pp_section.__exit__(None, None, None)
         # SpanSelector intentionally not enabled — drag-to-select on the
         # chart face was retired (2026-05-27) to prevent accidental triggers.
         # If you need a per-range export tool, re-enable explicitly behind a
@@ -1886,6 +1916,9 @@ class MainWindow(
         values to avoid recomputing them.
         """
         from ...signal import filters as _filters
+        # [perf-probe] 诊断探针，定位后移除。reset 滤波 apply 累计器。
+        from ..pg_canvas import _perf_probe as _pp
+        _pp.reset_filter_accum()
 
         if checked is None:
             checked = self.channel_list.get_checked_channels()
@@ -1943,7 +1976,8 @@ class MainWindow(
                 except ValueError:
                     # band/bandstop with lo >= hi → draw original only.
                     continue
-                filtered = _filters.apply(sig, gspec, fs)
+                with _pp.filter_apply():  # [perf-probe] 累计单次滤波耗时
+                    filtered = _filters.apply(sig, gspec, fs)
                 fname = f"{name} ({self._filter_suffix(gspec)})"
                 self._time_filtered_names.add(fname)
                 # 8th field ``meta``: marks this as a display companion of the
