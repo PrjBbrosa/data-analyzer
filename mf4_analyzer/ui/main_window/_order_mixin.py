@@ -44,11 +44,23 @@ class OrderMixin:
             t, sig = self._mask_time_range(t, sig, time_range=time_range)
         return t, sig
 
-    def _order_rpm_for(self, rpm_source, n, time_range=_INSPECTOR_TIME_RANGE):
+    def _order_rpm_for(self, rpm_source, n, time_range=_INSPECTOR_TIME_RANGE,
+                       t_sig=None):
         """Fetch + range-gate + scale an explicit Order RPM source. ``n`` is
         the signal length the rpm must match. Returns the scaled rpm array or
         ``None`` (caller skips the pane). The scale factor is the current
-        inspector ``rpm_factor`` — shared across panes like the COT params."""
+        inspector ``rpm_factor`` — shared across panes like the COT params.
+
+        Multi-rate support: when the (range-gated) motor-speed channel does
+        NOT match the signal length ``n`` and a signal time axis ``t_sig`` is
+        supplied, the motor speed is interpolated onto ``t_sig`` (e.g. a 1 kHz
+        speed channel upsampled to a 48 kHz signal axis). This NEVER downsamples
+        the wideband signal — it only raises the speed to the signal's rate so
+        the COT core sees three equal-length, same-time-base arrays. The motor
+        speed's own time axis must be strictly increasing; otherwise alignment
+        is unsafe and the pane is skipped (``None``), matching the prior
+        length-mismatch behaviour. EPS: ``rpm`` is the motor speed (order base).
+        """
         if not rpm_source:
             return None
         fid, ch = rpm_source
@@ -59,6 +71,7 @@ class OrderMixin:
             return None
         factor = self.inspector.order_ctx.rpm_factor()
         rpm = fd.data[ch].values.copy() * factor
+        t_rpm = fd.time_array
         if (
             time_range is _INSPECTOR_TIME_RANGE
             and self.inspector.top.range_enabled()
@@ -66,12 +79,47 @@ class OrderMixin:
             time_range = self.inspector.top.range_values()
         if time_range is _INSPECTOR_TIME_RANGE:
             time_range = None
-        if time_range is not None and fd.time_array is not None:
-            _t, rpm = self._mask_time_range(
-                fd.time_array, rpm, time_range=time_range)
+        if time_range is not None and t_rpm is not None:
+            t_rpm, rpm = self._mask_time_range(
+                t_rpm, rpm, time_range=time_range)
         if len(rpm) != n:
-            return None
+            aligned = self._align_rpm_to_signal_axis(rpm, t_rpm, t_sig, n)
+            if aligned is None:
+                return None
+            return aligned
         return rpm
+
+    @staticmethod
+    def _align_rpm_to_signal_axis(rpm, t_rpm, t_sig, n):
+        """Interpolate motor speed ``rpm`` (on its own axis ``t_rpm``) onto the
+        signal time axis ``t_sig`` so the result is length ``n``. Returns the
+        aligned array, or ``None`` when alignment is unsafe (missing/degenerate
+        time axes, or either axis not strictly increasing). Pure upsample/
+        resample of the speed channel — the signal is never touched.
+
+        Same-source files share the time origin and overlapping span, so
+        ``np.interp`` (which clamps to endpoint values outside the range) is
+        safe without extrapolation here.
+        """
+        if t_sig is None or t_rpm is None:
+            return None
+        t_sig_arr = np.asarray(t_sig, dtype=float).reshape(-1)
+        t_rpm_arr = np.asarray(t_rpm, dtype=float).reshape(-1)
+        rpm_arr = np.asarray(rpm, dtype=float).reshape(-1)
+        if t_sig_arr.size != n or t_rpm_arr.size != rpm_arr.size:
+            return None
+        if t_rpm_arr.size < 2 or t_sig_arr.size < 2:
+            return None
+        if not np.all(np.isfinite(t_rpm_arr)) or not np.all(np.isfinite(t_sig_arr)):
+            return None
+        # Both the source (xp) and the query (x) axes must be strictly
+        # increasing for np.interp to be well-defined / monotone-safe.
+        if np.any(np.diff(t_rpm_arr) <= 0) or np.any(np.diff(t_sig_arr) <= 0):
+            return None
+        aligned = np.interp(t_sig_arr, t_rpm_arr, rpm_arr)
+        if aligned.size != n:
+            return None
+        return aligned
 
     @staticmethod
     def _order_revolutions(rpm, t):
@@ -131,7 +179,7 @@ class OrderMixin:
             if sig is None or len(sig) < 2:
                 return None
             rpm = self._order_rpm_for(
-                self.inspector.order_ctx.current_rpm(), len(sig)
+                self.inspector.order_ctx.current_rpm(), len(sig), t_sig=t
             )
             if rpm is None:
                 return None
@@ -215,7 +263,8 @@ class OrderMixin:
         t, sig = self._order_sig_for((fid, ch), time_range=time_range)
         if sig is None or len(sig) < 100:
             return None
-        rpm = self._order_rpm_for(rpm_source, len(sig), time_range=time_range)
+        rpm = self._order_rpm_for(
+            rpm_source, len(sig), time_range=time_range, t_sig=t)
         if rpm is None:
             return None
         fs = self.inspector.order_ctx.fs()
@@ -358,7 +407,8 @@ class OrderMixin:
             if outcome is not None:
                 outcome.skipped.append("信号过短")
             return False
-        rpm = self._order_rpm_for(rpm_source, len(sig), time_range=time_range)
+        rpm = self._order_rpm_for(
+            rpm_source, len(sig), time_range=time_range, t_sig=t)
         if rpm is None:
             outcome = getattr(self, '_order_outcome', None)
             if outcome is not None:
