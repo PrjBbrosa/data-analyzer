@@ -68,6 +68,7 @@ class OverlayAxisManager(_CanvasBackref):
     _delegate_names = frozenset({
         "_add_overlay_axis_handle",
         "_bind_channel",
+        "_bind_companion",
         "_overlay_axis_label",
         "_overlay_axis_label_max_chars",
         "_overlay_axis_label_available_height",
@@ -356,6 +357,75 @@ class OverlayAxisManager(_CanvasBackref):
                 _apply_pg_axis_font(axis_handle.x_axis_item())
             except Exception:
                 pass
+
+    def _bind_companion(
+        self, source_handle, name, t, sig, color, unit, data_id,
+        *, visible=True, dash=True, skip_envelope=False,
+    ):
+        """Attach a display companion curve onto ``source_handle``'s axis.
+
+        Unlike :meth:`_bind_channel` this does NOT allocate a new axis/row:
+        the companion (e.g. a filter overlay) renders on the SAME ViewBox as
+        its source channel, sharing that channel's Y axis and label. It is
+        drawn with a dashed pen so the original (solid) and the overlay are
+        distinguishable while staying in the same color family. The companion
+        IS registered in ``channel_data`` / ``_channel_lines`` under its own
+        ``name`` so the viewport envelope refresh and grab export treat it
+        like any other curve; it is tracked in ``_companion_names`` so the
+        stats / emphasis paths can tell it apart from a real channel.
+        """
+        pi = source_handle.plot_item
+        if pi is None:
+            return
+        if skip_envelope:
+            bind_t = bind_s = np.empty(0, dtype=np.float64)
+        else:
+            try:
+                from mf4_analyzer.ui import pg_canvases as legacy_pg_canvases
+                envelope_builder = legacy_pg_canvases.build_envelope
+            except Exception:
+                from mf4_analyzer.signal.envelope import build_envelope as envelope_builder
+            bind_t, bind_s = envelope_builder(
+                np.asarray(t),
+                np.asarray(sig),
+                xlim=None,
+                pixel_width=self._initial_bind_pixel_width(source_handle),
+                is_monotonic=None,
+            )
+        style = Qt.DashLine if dash else Qt.SolidLine
+        pen = pg.mkPen(
+            color=color, width=self._overlay_default_lw, style=style
+        )
+        primary_vb = pi.getViewBox() if hasattr(pi, "getViewBox") else None
+        target_vb = source_handle.view_box
+        if target_vb is not None and target_vb is not primary_vb:
+            pdi = pg.PlotDataItem(bind_t, bind_s, pen=pen, name=name)
+            try:
+                target_vb.addItem(pdi)
+            except Exception:
+                pass
+            add_line_item = getattr(source_handle, "add_line_item", None)
+            if callable(add_line_item):
+                add_line_item(pdi)
+        else:
+            pdi = pi.plot(bind_t, bind_s, pen=pen, name=name)
+        try:
+            pdi.setVisible(bool(visible))
+        except Exception:
+            pass
+        t_arr = np.asarray(t)
+        sig_arr = np.asarray(sig)
+        self.channel_data[name] = (t_arr, sig_arr, color, unit)
+        self._channel_data_id[name] = data_id
+        line_handle = _PgLineHandle(pdi, label_fallback=name)
+        self._channel_lines[name] = (source_handle, line_handle)
+        self._channel_view_state_lines[
+            _view_state_channel_key(data_id, name)
+        ] = (source_handle, line_handle)
+        self._channel_is_monotonic[name] = self._cached_is_monotonic(
+            data_id, name, t_arr
+        )
+        self._companion_names.add(name)
 
     def _cached_is_monotonic(self, data_id, name, t_arr):
         """Return monotonicity from a cheap cross-rebuild fingerprint cache."""
@@ -1049,10 +1119,15 @@ class OverlayAxisManager(_CanvasBackref):
             opts = getattr(pdi, "opts", {}) or {}
             pen = opts.get("pen")
             color = None
+            # Preserve the existing pen STYLE (e.g. companion overlays use a
+            # dashed pen): rebuilding it color+width only would silently reset
+            # a dashed curve back to solid on every emphasis re-apply.
+            style = None
             try:
                 from PyQt5.QtGui import QPen
                 if isinstance(pen, QPen):
                     color = pen.color()
+                    style = pen.style()
             except Exception:
                 color = None
             if color is None:
@@ -1060,10 +1135,12 @@ class OverlayAxisManager(_CanvasBackref):
                     color = pg.mkColor(pen)
                 except Exception:
                     color = None
-            if color is None:
-                pdi.setPen(pg.mkPen(width=float(width)))
-            else:
-                pdi.setPen(pg.mkPen(color=color, width=float(width)))
+            kwargs = {"width": float(width)}
+            if color is not None:
+                kwargs["color"] = color
+            if style is not None:
+                kwargs["style"] = style
+            pdi.setPen(pg.mkPen(**kwargs))
         except Exception:
             pass
         try:

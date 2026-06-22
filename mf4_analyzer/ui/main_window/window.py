@@ -1774,7 +1774,8 @@ class MainWindow(
             # Statistics are computed from the ORIGINAL (post-range-filter)
             # samples only — filtered overlay traces are excluded so the
             # stats strip mirrors the acquired data, never display-layer math.
-            for name, _vis, _x, sig, _color, unit, _fid in data:
+            for row in data:
+                name, _vis, _x, sig, _color, unit = row[:6]
                 if name in self._time_filtered_names:
                     continue
                 st[name] = {
@@ -1895,7 +1896,14 @@ class MainWindow(
                 filtered = _filters.apply(sig, gspec, fs)
                 fname = f"{name} ({self._filter_suffix(gspec)})"
                 self._time_filtered_names.add(fname)
-                data.append((fname, show_filt, x_axis, filtered, color, unit, fid))
+                # 8th field ``meta``: marks this as a display companion of the
+                # source channel ``name`` so the canvas overlays it (dashed) on
+                # the SAME axis/row instead of allocating a fresh subplot row.
+                # Original 7-tuple rows are unchanged → backward compatible.
+                meta = {"companion_of": name, "dash": True}
+                data.append(
+                    (fname, show_filt, x_axis, filtered, color, unit, fid, meta)
+                )
         return data
 
     def _estimate_fs(self, t):

@@ -226,6 +226,10 @@ class TimeDomainCanvasPG(QWidget):
         self.channel_data = {}
         # Parallel data_id dict (kept separate per design §4.2).
         self._channel_data_id = {}
+        # Names of display-companion curves (e.g. filter overlays) bound onto
+        # a source channel's axis. Subset of _channel_lines keys; lets the
+        # stats / emphasis paths exclude them from real-channel logic.
+        self._companion_names = set()
         # Per-channel monotonicity cache, populated once per
         # plot_channels build. Used in _refresh_visible_data so the hot
         # path skips np.diff(t).
@@ -408,18 +412,39 @@ class TimeDomainCanvasPG(QWidget):
         self.disable_interactive_quality()
         self.clear()
 
+        # Split primary channels from display companions. A companion row
+        # carries an 8th ``meta`` dict with ``companion_of`` set to the
+        # source channel's name (and ``dash=True``); the canvas overlays it
+        # on the SOURCE channel's axis/row rather than allocating a fresh
+        # subplot row. Legacy 6/7-tuple rows have no meta → always primary.
+        # Companions are kept even when their visible flag is False (so
+        # toggling "显示滤波后" off just hides the dashed curve) — only
+        # primaries follow the historical "skip invisible rows" rule.
         vis = []
+        companions = []
         for row in ch_list:
-            if not row[1]:
-                continue
-            if len(row) >= 7:
-                name, _, t, sig, color, unit, data_id = row[:7]
+            if len(row) >= 8 and isinstance(row[7], dict):
+                name, visible, t, sig, color, unit, data_id, meta = row[:8]
+            elif len(row) >= 7:
+                name, visible, t, sig, color, unit, data_id = row[:7]
+                meta = None
             else:
-                name, _, t, sig, color, unit = row[:6]
+                name, visible, t, sig, color, unit = row[:6]
                 data_id = None
+                meta = None
+            companion_of = meta.get("companion_of") if meta else None
+            if companion_of is not None:
+                companions.append(
+                    (name, bool(visible), t, sig, color, unit, data_id,
+                     companion_of, bool(meta.get("dash", True)))
+                )
+                continue
+            if not visible:
+                continue
             vis.append((name, t, sig, color, unit, data_id))
 
         if not vis:
+            # No visible primary channel → nothing to anchor companions to.
             return
 
         overlay_mode = (mode == "overlay" and len(vis) >= 2)
@@ -537,6 +562,34 @@ class TimeDomainCanvasPG(QWidget):
                 unit,
                 data_id,
                 xlabel=xlabel,
+                skip_envelope=defer_first_frame,
+            )
+
+        # Bind display companions (e.g. filter overlays) onto their source
+        # channel's axis/row — NO new subplot row/axis is allocated, so the
+        # subplot count stays equal to the primary-channel count. The dashed
+        # pen distinguishes the overlay from its solid source. Companions are
+        # registered in _channel_lines/channel_data under their own name so
+        # the viewport envelope refresh (pan/zoom) and grab export pick them
+        # up like any other curve.
+        for (cname, cvisible, ct, csig, ccolor, cunit, cdata_id,
+             companion_of, dash) in companions:
+            source_pair = self._overlay_axes._channel_lines.get(companion_of)
+            if source_pair is None:
+                # Source channel not visible/bound → skip (keeps invariant
+                # that companions never spawn their own row).
+                continue
+            source_handle = source_pair[0]
+            self._overlay_axes._bind_companion(
+                source_handle,
+                cname,
+                ct,
+                csig,
+                ccolor,
+                cunit,
+                cdata_id,
+                visible=cvisible,
+                dash=dash,
                 skip_envelope=defer_first_frame,
             )
 
@@ -1113,6 +1166,7 @@ class TimeDomainCanvasPG(QWidget):
         self._channel_view_state_lines = {}
         self.channel_data = {}
         self._channel_data_id = {}
+        self._companion_names = set()
         self._channel_is_monotonic = {}
         self._primary_xaxis_ax = None
         self._curve_path_cache.clear()
@@ -1248,7 +1302,12 @@ class TimeDomainCanvasPG(QWidget):
         contract holds.
         """
         stats = {}
+        companion_names = getattr(self, "_companion_names", set())
         for ch, (t, sig, _color, unit) in self.channel_data.items():
+            # Display companions (filter overlays) are display-only; never
+            # report stats for them — stats mirror acquired channels only.
+            if ch in companion_names:
+                continue
             if time_range is not None:
                 lo, hi = time_range
                 m = (t >= lo) & (t <= hi)

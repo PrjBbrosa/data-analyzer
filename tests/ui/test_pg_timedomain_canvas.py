@@ -6355,3 +6355,151 @@ class TestTimeDomainCanvasPGSubplotUnits:
         assert texts, "expected inside-label TextItems for long prefixed names"
         assert any("Nm" in text for text in texts), texts
         assert any("deg" in text for text in texts), texts
+
+
+# ---------------------------------------------------------------------------
+# Companion (filter-overlay) curves: a row carrying an 8th ``meta`` dict with
+# ``companion_of`` is overlaid (dashed) on its SOURCE channel's axis/row — it
+# never allocates a fresh subplot row. Toggling its visible flag just hides the
+# dashed curve; the subplot count stays equal to the primary-channel count.
+# ---------------------------------------------------------------------------
+class TestFilterCompanionOverlay:
+    def _rows_with_companion(self, *, filt_visible=True, n_sources=2):
+        """Two source channels, each with one dashed filtered companion."""
+        t = np.linspace(0.0, 1.0, 4_000, dtype=np.float64)
+        rows = []
+        palette = ["#1769e0", "#ef4444", "#00b894"]
+        for i in range(n_sources):
+            name = f"ch{i}"
+            color = palette[i % len(palette)]
+            sig = np.sin(2 * np.pi * (5 * (i + 1)) * t) + np.sin(
+                2 * np.pi * 400 * t
+            )
+            # Primary (solid) row — 7-tuple, no meta.
+            rows.append((name, True, t, sig, color, "u", "fid-1"))
+            # Companion (dashed) row — 8-tuple with meta.
+            filtered = np.sin(2 * np.pi * (5 * (i + 1)) * t)
+            meta = {"companion_of": name, "dash": True}
+            rows.append((
+                f"{name} (LP 50Hz)", filt_visible, t, filtered, color,
+                "u", "fid-1", meta,
+            ))
+        return rows
+
+    def _companion_pdi(self, canvas, source_name):
+        """Return the dashed companion PlotDataItem for ``source_name``."""
+        for name, (_ax, line) in canvas._channel_lines.items():
+            if name in canvas._companion_names and name.startswith(source_name):
+                return line.plot_data_item
+        return None
+
+    def test_subplot_count_equals_source_count_not_doubled(self, qapp):
+        """Enabling filter overlays must NOT double the subplot rows: the
+        companion renders on its source's row, so axes_list == source count."""
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_with_companion(n_sources=2),
+                             mode="subplot")
+        qapp.processEvents()
+        # 2 source channels → exactly 2 axes/rows (NOT 4).
+        assert len(canvas.axes_list) == 2
+        # Both companions ARE registered as curves (refresh/export pick them
+        # up) but tracked separately from real channels.
+        assert len(canvas._companion_names) == 2
+        # _channel_lines holds 2 sources + 2 companions.
+        assert len(canvas._channel_lines) == 4
+
+    def test_companion_shares_source_axis_and_is_dashed(self, qapp):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QPen
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_with_companion(n_sources=2),
+                             mode="subplot")
+        qapp.processEvents()
+        for i in range(2):
+            src = f"ch{i}"
+            source_handle = canvas._channel_lines[src][0]
+            comp_handle = canvas._channel_lines[f"{src} (LP 50Hz)"][0]
+            # Same axis handle → same row/ViewBox, no extra subplot.
+            assert comp_handle is source_handle
+            # Companion pen is dashed; source pen is solid, same colour family.
+            comp_pdi = self._companion_pdi(canvas, src)
+            assert comp_pdi is not None
+            pen = comp_pdi.opts.get("pen")
+            assert isinstance(pen, QPen)
+            assert pen.style() == Qt.DashLine
+
+    def test_overlay_mode_companion_dashed_same_viewbox(self, qapp):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QPen
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_with_companion(n_sources=2),
+                             mode="overlay")
+        qapp.processEvents()
+        # Overlay: 2 source channels → 2 aux axes (companions add no axis).
+        assert len(canvas.axes_list) == 2
+        assert len(canvas._companion_names) == 2
+        for i in range(2):
+            src = f"ch{i}"
+            source_handle = canvas._channel_lines[src][0]
+            comp_handle = canvas._channel_lines[f"{src} (LP 50Hz)"][0]
+            assert comp_handle is source_handle
+            comp_pdi = self._companion_pdi(canvas, src)
+            pen = comp_pdi.opts.get("pen")
+            assert isinstance(pen, QPen) and pen.style() == Qt.DashLine
+
+    def test_uncheck_show_filtered_hides_dashed_keeps_rows(self, qapp):
+        """Companion visible=False → dashed curve hidden, subplot count and
+        the solid originals unchanged (cancel = just hide)."""
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(
+            self._rows_with_companion(filt_visible=False, n_sources=2),
+            mode="subplot",
+        )
+        qapp.processEvents()
+        # Subplot count still equals source count.
+        assert len(canvas.axes_list) == 2
+        for i in range(2):
+            src = f"ch{i}"
+            comp_pdi = self._companion_pdi(canvas, src)
+            assert comp_pdi is not None
+            assert comp_pdi.isVisible() is False
+            # The solid original is still present and visible.
+            src_pdi = canvas._channel_lines[src][1].plot_data_item
+            assert src_pdi.isVisible() is True
+
+    def test_companion_excluded_from_statistics(self, qapp):
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_with_companion(n_sources=2),
+                             mode="subplot")
+        qapp.processEvents()
+        stats = canvas.get_statistics()
+        # Only the two source channels appear; no companion entries.
+        assert set(stats) == {"ch0", "ch1"}
+
+    def test_legacy_seven_tuple_rows_unchanged(self, qapp):
+        """No meta → no companions; plain subplot layout is untouched."""
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(_five_channel_rows()[:3], mode="subplot")
+        qapp.processEvents()
+        assert len(canvas.axes_list) == 3
+        assert len(canvas._companion_names) == 0
