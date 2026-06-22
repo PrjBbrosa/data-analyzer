@@ -813,6 +813,11 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._slice_dir = 'x'
         self._slice_x_idx = 0
         self._slice_y_idx = 0
+        # Last slice positions kept in COORDINATE space (time value / frequency
+        # value) so a re-render can map the cursor back to the nearest index
+        # instead of jumping to the matrix centre. None until the first seed.
+        self._slice_x_val: float | None = None
+        self._slice_y_val: float | None = None
         self._slice_marker_updating = False
         # Axis coordinate arrays + labels for the slice. Set by plot_result /
         # plot_or_update_heatmap; the slice reads these instead of the result
@@ -853,6 +858,20 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # into the inspector spins (blockSignals) — eliminating the jump
         # when the user switches from auto to manual mode.
         self._last_auto_levels: tuple[float, float] | None = None
+        # Panel-driven axis ranges for the FFT-vs-Time slice (display-only).
+        # Set by plot_result from the inspector knobs; the slice consults them
+        # instead of the live viewbox range so a manual panel min/max governs
+        # the slice axes regardless of pan/zoom. None == "auto" → the slice
+        # falls back to the live view range (heatmap pan/zoom) for that axis.
+        #   _panel_time_range: (lo, hi) for the X/time axis, or None (auto)
+        #   _panel_freq_range: (lo, hi) for the Y/frequency-order axis, or None
+        #   _panel_amp_range:  (z_floor, z_ceiling) for the amplitude axis, or
+        #                      None when z_auto (auto-fit the visible data)
+        # These stay None on the Order path (plot_or_update_heatmap clears them),
+        # preserving its existing live-view-range slice behaviour.
+        self._panel_time_range: tuple[float, float] | None = None
+        self._panel_freq_range: tuple[float, float] | None = None
+        self._panel_amp_range: tuple[float, float] | None = None
         if self._with_slice:
             # Second GraphicsLayout row: 1D frequency slice at the
             # selected frame (parity with SpectrogramCanvas._ax_slice,
@@ -1129,6 +1148,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         x_coords=None, y_coords=None,
     ):
         self.clear_empty_hint()
+        # Reset any panel-driven slice ranges. plot_result re-sets them AFTER
+        # this call from the FFT-vs-Time inspector knobs; direct callers (the
+        # Order path) leave them None so the slice keeps following the live
+        # heatmap view range.
+        self._panel_time_range = None
+        self._panel_freq_range = None
+        self._panel_amp_range = None
         # Remember the axis labels + coordinate arrays so the slice can read
         # them (the slice plots amplitude against the OTHER axis). When coords
         # are not supplied they are derived from the extents + matrix shape in
@@ -1609,6 +1635,23 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         # display matrix) in self._matrix_disp; re-pin it explicitly so
         # the slice and remarks read the same display-space values.
         self._matrix_disp = m
+        # Bind the slice axes to the inspector knobs (display-only). The X axis
+        # is TIME (panel x_*), the Y axis is FREQUENCY/ORDER (panel freq_range,
+        # carried through y_* after the freq_range block above). A None means
+        # "auto" → the slice falls back to the live heatmap view range.
+        #   slice dir 'y' (curve vs time)      → horizontal axis = time range
+        #   slice dir 'x' (curve vs frequency) → horizontal axis = freq range
+        # plot_or_update_heatmap reset these to None just above, so set them
+        # only when the corresponding axis is manual.
+        self._panel_time_range = (
+            None if x_auto else (float(x_min), float(x_max)))
+        self._panel_freq_range = (
+            None if y_auto else (float(y_min), float(y_max)))
+        # Amplitude axis: manual z (z_auto=False) clamps the slice's amplitude
+        # axis to [z_floor, z_ceiling] — same window as the colorbar. z_auto
+        # leaves it None so the slice auto-fits the (freq-range-clipped) data.
+        self._panel_amp_range = (
+            None if z_auto else (float(z_floor), float(z_ceiling)))
         if self._slice_curve is not None and len(result.times):
             self._seed_slice()
         self.layout_geometry_changed.emit()
@@ -1634,13 +1677,27 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         return xc, yc
 
     def _seed_slice(self):
-        """Place the slice at the middle of the active axis and render it."""
+        """Position the slice and render it.
+
+        On the FIRST render (no prior position) the slice lands at the matrix
+        centre. On a RE-render it maps the previous cursor position back by
+        COORDINATE value (time / frequency) to the nearest index, so changing
+        an inspector knob and re-rendering does not snap the slice to the
+        middle — it stays where the user put it (parity with a colorbar drag
+        leaving the matrix intact)."""
         m = self._matrix_disp
         if m is None or self._slice_curve is None:
             return
         nrows, ncols = m.shape[0], m.shape[1]
-        self._slice_x_idx = ncols // 2
-        self._slice_y_idx = nrows // 2
+        xc, yc = self._slice_coords()
+        if self._slice_x_val is not None and xc is not None and len(xc):
+            self._slice_x_idx = int(np.argmin(np.abs(np.asarray(xc) - self._slice_x_val)))
+        else:
+            self._slice_x_idx = ncols // 2
+        if self._slice_y_val is not None and yc is not None and len(yc):
+            self._slice_y_idx = int(np.argmin(np.abs(np.asarray(yc) - self._slice_y_val)))
+        else:
+            self._slice_y_idx = nrows // 2
         self._apply_slice()
 
     def set_slice_direction(self, direction: str) -> None:
@@ -1728,6 +1785,53 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             pad = max(abs(center) * 0.01, 0.5)
             self._slice_plot.setXRange(center - pad, center + pad, padding=0)
 
+    def _slice_axis_range(self, panel_range, view_axis: str, coords):
+        """Range for the slice's horizontal axis.
+
+        Prefer the inspector-driven ``panel_range`` (manual min/max) so the
+        slice axis tracks the panel rather than the live heatmap pan/zoom.
+        When the panel axis is auto (``panel_range is None``) fall back to the
+        live heatmap view range, then to the data extent."""
+        if panel_range is not None:
+            lo, hi = float(panel_range[0]), float(panel_range[1])
+            if hi != lo:
+                return sorted((lo, hi))
+        vr = self._main_view_range(view_axis)
+        if vr is None:
+            arr = np.asarray(coords, dtype=float)
+            return float(arr[0]), float(arr[-1])
+        return vr
+
+    def _apply_slice_amp_range(self, values) -> None:
+        """Set the slice's amplitude (vertical) axis.
+
+        Manual z (``_panel_amp_range`` set) clamps the amplitude axis to
+        ``[z_floor, z_ceiling]`` — the same window as the colorbar so the
+        slice and image share one amplitude caliber. Auto z
+        (``_panel_amp_range is None``) enables pyqtgraph auto-fit on the
+        already freq/time-range-clipped curve data."""
+        if self._slice_plot is None:
+            return
+        vb = self._slice_plot.vb
+        rng = self._panel_amp_range
+        if rng is not None:
+            lo, hi = sorted((float(rng[0]), float(rng[1])))
+            if hi > lo:
+                vb.enableAutoRange(axis=vb.YAxis, enable=False)
+                self._slice_plot.setYRange(lo, hi, padding=0)
+                return
+        # Auto: fit the visible curve data (fall back to pg auto-range).
+        arr = np.asarray(values, dtype=float)
+        finite = arr[np.isfinite(arr)]
+        if finite.size:
+            lo, hi = float(np.min(finite)), float(np.max(finite))
+            if hi > lo:
+                pad = (hi - lo) * 0.05
+                vb.enableAutoRange(axis=vb.YAxis, enable=False)
+                self._slice_plot.setYRange(lo - pad, hi + pad, padding=0)
+                return
+        vb.enableAutoRange(axis=vb.YAxis, enable=True)
+
     def _apply_slice(self) -> None:
         """Render the slice curve + marker for the current direction/index."""
         m = self._matrix_disp
@@ -1741,16 +1845,16 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                      if self._amplitude_mode == 'amplitude_db' else 'Amplitude')
         if self._slice_dir == 'y':
             # Fix a Y position (frequency / order) → curve = amplitude vs time.
+            # Horizontal axis is TIME → panel x_* range (when manual).
             idx = int(np.clip(self._slice_y_idx, 0, max(0, nrows - 1)))
             self._slice_y_idx = idx
-            vr = self._main_view_range('x')
-            if vr is None:
-                vr = (float(xc[0]), float(xc[-1]))
-            lo, hi = vr
+            self._slice_y_val = float(yc[idx])
+            lo, hi = self._slice_axis_range(self._panel_time_range, 'x', xc)
             mask = self._slice_visible_mask(xc, lo, hi)
             self._slice_curve.setData(xc[mask], m[idx, :][mask])
             self._set_slice_x_range(lo, hi, xc[mask])
             self._slice_plot.setLabel('bottom', self._x_label or 'Time (s)')
+            self._apply_slice_amp_range(m[idx, :][mask])
             self._slice_marker_updating = True
             try:
                 self._slice_marker.setAngle(0)
@@ -1760,16 +1864,16 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             fixed_val, fixed_lbl = float(yc[idx]), self._y_label
         else:
             # Fix a time → curve = amplitude vs Y (frequency / order).
+            # Horizontal axis is FREQUENCY/ORDER → panel freq_range (when manual).
             idx = int(np.clip(self._slice_x_idx, 0, max(0, ncols - 1)))
             self._slice_x_idx = idx
-            vr = self._main_view_range('y')
-            if vr is None:
-                vr = (float(yc[0]), float(yc[-1]))
-            lo, hi = vr
+            self._slice_x_val = float(xc[idx])
+            lo, hi = self._slice_axis_range(self._panel_freq_range, 'y', yc)
             mask = self._slice_visible_mask(yc, lo, hi)
             self._slice_curve.setData(yc[mask], m[:, idx][mask])
             self._set_slice_x_range(lo, hi, yc[mask])
             self._slice_plot.setLabel('bottom', self._y_label or 'Frequency (Hz)')
+            self._apply_slice_amp_range(m[:, idx][mask])
             self._slice_marker_updating = True
             try:
                 self._slice_marker.setAngle(90)
