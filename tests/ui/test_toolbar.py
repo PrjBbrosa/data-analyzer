@@ -63,8 +63,11 @@ def test_toolbar_open_save_split_and_no_export(qtbot):
     tb = Toolbar(); qtbot.addWidget(tb)
     assert tb.btn_add.text() == "打开"
     assert hasattr(tb, "btn_save_project")
-    assert tb.btn_save_project.text() == "保存项目"
+    assert tb.btn_save_project.text() == "保存"
+    assert hasattr(tb, "btn_save_project_as")
+    assert tb.btn_save_project_as.text() == "另存为"
     assert not hasattr(tb, "btn_export")
     assert hasattr(tb, "open_requested")
     assert hasattr(tb, "save_project_requested")
+    assert hasattr(tb, "save_project_as_requested")
     assert not hasattr(tb, "export_requested")

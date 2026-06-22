@@ -68,6 +68,7 @@ class Toolbar(QWidget):
     # Left segment
     open_requested = pyqtSignal()
     save_project_requested = pyqtSignal()
+    save_project_as_requested = pyqtSignal()
     batch_requested = pyqtSignal()
     # Center segment
     mode_changed = pyqtSignal(str)  # 'time' | 'fft' | 'fft_time' | 'order'
@@ -111,9 +112,12 @@ class Toolbar(QWidget):
         self.btn_add.setIcon(Icons.add_file(QColor("#ffffff")))
         self.btn_add.setProperty("role", "primary")
         self.btn_add.setToolTip("打开数据文件或项目（.tlproj）")
-        self.btn_save_project = QPushButton("保存项目", self)
+        self.btn_save_project = QPushButton("保存", self)
         self.btn_save_project.setIcon(Icons.save_disk())
-        self.btn_save_project.setToolTip("保存当前会话为 .tlproj 项目")
+        self.btn_save_project.setToolTip("保存到当前 .tlproj 项目（未保存过则提示选择路径）")
+        self.btn_save_project_as = QPushButton("另存为", self)
+        self.btn_save_project_as.setIcon(Icons.save_disk())
+        self.btn_save_project_as.setToolTip("将当前会话另存为新的 .tlproj 项目")
         self.btn_batch = QPushButton("批处理", self)
         self.btn_batch.setIcon(Icons.batch())
 
@@ -127,7 +131,8 @@ class Toolbar(QWidget):
         self.btn_mode_order = QPushButton("阶次", self)
         self.btn_mode_order.setIcon(Icons.mode_order())
 
-        for b in (self.btn_add, self.btn_save_project, self.btn_batch,
+        for b in (self.btn_add, self.btn_save_project, self.btn_save_project_as,
+                  self.btn_batch,
                   self.btn_mode_time, self.btn_mode_fft, self.btn_mode_fft_time,
                   self.btn_mode_order):
             b.setIconSize(QSize(16, 16))
@@ -139,6 +144,7 @@ class Toolbar(QWidget):
         for b in (
             self.btn_add,
             self.btn_save_project,
+            self.btn_save_project_as,
             self.btn_batch,
         ):
             left.addWidget(b)
@@ -236,6 +242,7 @@ class Toolbar(QWidget):
     def _wire(self):
         self.btn_add.clicked.connect(self.open_requested)
         self.btn_save_project.clicked.connect(self.save_project_requested)
+        self.btn_save_project_as.clicked.connect(self.save_project_as_requested)
         self.btn_batch.clicked.connect(self.batch_requested)
         # Hidden Cockpit entry: triple-click the brand logo (see _LogoLabel).
         self._logo_label.triple_clicked.connect(self.acquisition_cockpit_requested)

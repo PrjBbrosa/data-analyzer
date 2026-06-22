@@ -74,14 +74,19 @@ class ProjectIOMixin:
             self._load_one(fp)
 
     def save_project_via_dialog(self):
-        """保存项目 handler: overwrite the current .tlproj if one is open,
-        otherwise prompt Save-As."""
-        from pathlib import Path
-        from PyQt5.QtWidgets import QFileDialog
+        """「保存」handler: overwrite the current .tlproj if one is open,
+        otherwise fall back to Save-As."""
         if self._project_path is not None:
             self.save_project(self._project_path)
             return
-        fp, _ = QFileDialog.getSaveFileName(self, "保存项目", "", "TraceLab 项目 (*.tlproj)")
+        self.save_project_as_via_dialog()
+
+    def save_project_as_via_dialog(self):
+        """「另存为」handler: always prompt for a new .tlproj path."""
+        from pathlib import Path
+        from PyQt5.QtWidgets import QFileDialog
+        start = str(self._project_path) if self._project_path is not None else ""
+        fp, _ = QFileDialog.getSaveFileName(self, "另存为项目", start, "TraceLab 项目 (*.tlproj)")
         if not fp:
             return
         if not fp.lower().endswith(".tlproj"):

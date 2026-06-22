@@ -22,7 +22,7 @@ class TimeContextual(QWidget):
         super().__init__(parent)
         self.setObjectName("timeContextual")
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 0, 10, 10)
+        root.setContentsMargins(10, 8, 10, 10)
         root.setSpacing(0)
 
         self.btn_plot = QPushButton("绘图")
