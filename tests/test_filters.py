@@ -74,6 +74,24 @@ def test_nyquist_guard_clamps_and_messages():
     assert clamped.cutoff < 500.0 and msg is not None
 
 
+def test_low_cutoff_on_high_fs_not_clamped_up():
+    # High-fs vibration channel (e.g. 129.5 kHz accel), 50 Hz low-pass for
+    # low-frequency analysis must NOT be lifted by a nyquist-proportional floor.
+    spec = FilterSpec('low', cutoff=50.0)
+    clamped, msg = nyquist_guard(spec, fs=129500.0)
+    assert clamped.cutoff == 50.0
+    assert msg is None
+
+
+def test_cutoff_above_nyquist_still_clamped():
+    nyq = 500.0
+    spec = FilterSpec('low', order=4, cutoff=9999.0)
+    clamped, msg = nyquist_guard(spec, fs=1000.0)
+    assert clamped.cutoff < nyq          # below nyquist
+    assert clamped.cutoff > nyq - 1.0    # only just below (high upper clamp)
+    assert msg is not None
+
+
 def test_band_lo_ge_hi_raises():
     with pytest.raises(ValueError):
         nyquist_guard(FilterSpec('band', cutoff_lo=300.0, cutoff_hi=100.0), fs=4000.0)

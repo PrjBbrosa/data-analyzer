@@ -51,10 +51,18 @@ def nyquist_guard(spec, fs):
     """Clamp cutoffs into (0, nyquist). Returns (clamped_spec, message|None).
     Raises ValueError if band lo >= hi."""
     nyq = 0.5 * float(fs)
-    eps = nyq * 1e-3
+    # Lower bound: a tiny ABSOLUTE floor only to reject 0/negative cutoffs.
+    # Must NOT scale with nyquist — a proportional floor (old nyq*1e-3) lifted
+    # legitimate low cutoffs on high-fs channels (e.g. 50 Hz LP on a 129.5 kHz
+    # accel channel got bumped to 64.75 Hz). Cutoff need only satisfy
+    # 0 < cutoff < nyquist.
+    lo_floor = 1e-6
+    # Upper bound: keep cutoff strictly below nyquist so the mask never lands
+    # exactly on the nyquist bin.
+    hi_ceil = nyq * (1.0 - 1e-6)
 
     def clamp(v):
-        return min(max(float(v), eps), nyq - eps)
+        return min(max(float(v), lo_floor), hi_ceil)
 
     if spec.kind in ('low', 'high'):
         c = clamp(spec.cutoff)
