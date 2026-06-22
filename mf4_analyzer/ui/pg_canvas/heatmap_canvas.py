@@ -301,6 +301,37 @@ def _auto_db_window(matrix):
     return ceiling - _AUTO_SPAN_DB, ceiling
 
 
+# Widest dynamic range a real measurement slice can plausibly span. Bins more
+# than this far below the slice's top are numerically-dead artifacts: the 0 Hz
+# DC bin, zeroed by de-mean and/or A-weighting (gain == 0 at f == 0), then
+# floored by ``amplitude_to_db`` to ``20*log10(np.finfo(float).tiny)`` ≈
+# -6153 dB. A 24-bit acquisition has only ~144 dB of range, so 200 dB only ever
+# catches such dead bins, never real signal (e.g. a deep anti-resonance notch).
+_SLICE_MAX_SPAN_DB: float = 200.0
+
+
+def _slice_amp_bounds(values):
+    """Robust ``(lo, hi)`` for the slice amplitude *view* axis, or ``None``.
+
+    Display-only: the slice curve is always drawn in full (``setData`` is
+    untouched); this only picks the Y *view* range. The top is the literal max
+    (a line plot should show real peaks, unlike the colour window). The bottom
+    ignores numerically-dead bins sitting more than ``_SLICE_MAX_SPAN_DB`` below
+    the top, so a single DC bin floored to ≈ -6153 dB can no longer crush the
+    real -40..-60 dB signal into a thin band at the top of the panel. NaN/inf
+    -safe. Returns ``None`` when there is no finite spread to fit (the caller
+    then falls back to pyqtgraph auto-range)."""
+    arr = np.asarray(values, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return None
+    hi = float(np.max(finite))
+    real = finite[finite >= hi - _SLICE_MAX_SPAN_DB]
+    lo = float(np.min(real)) if real.size else hi
+    if hi <= lo:
+        return None
+    return lo, hi
+
 
 def time_axis_display_extent(times, *, params=None, metadata=None, fallback=None):
     """Return the displayed X extent for time-window heatmaps.
@@ -1820,16 +1851,16 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
                 vb.enableAutoRange(axis=vb.YAxis, enable=False)
                 self._slice_plot.setYRange(lo, hi, padding=0)
                 return
-        # Auto: fit the visible curve data (fall back to pg auto-range).
-        arr = np.asarray(values, dtype=float)
-        finite = arr[np.isfinite(arr)]
-        if finite.size:
-            lo, hi = float(np.min(finite)), float(np.max(finite))
-            if hi > lo:
-                pad = (hi - lo) * 0.05
-                vb.enableAutoRange(axis=vb.YAxis, enable=False)
-                self._slice_plot.setYRange(lo - pad, hi + pad, padding=0)
-                return
+        # Auto: fit the visible curve data, ignoring numerically-dead dB-floor
+        # bins (the 0 Hz DC artifact) so they can't crush the real signal
+        # against the top (fall back to pg auto-range when there is no spread).
+        bounds = _slice_amp_bounds(values)
+        if bounds is not None:
+            lo, hi = bounds
+            pad = (hi - lo) * 0.05
+            vb.enableAutoRange(axis=vb.YAxis, enable=False)
+            self._slice_plot.setYRange(lo - pad, hi + pad, padding=0)
+            return
         vb.enableAutoRange(axis=vb.YAxis, enable=True)
 
     def _apply_slice(self) -> None:
