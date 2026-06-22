@@ -6503,3 +6503,144 @@ class TestFilterCompanionOverlay:
         qapp.processEvents()
         assert len(canvas.axes_list) == 3
         assert len(canvas._companion_names) == 0
+
+    # --- bug B: original hidden + companion visible must KEEP the axis ------
+    def _rows_orig_off_filt_on(self, n_sources=2):
+        """Primaries visible=False (显示原始 off), companions visible=True
+        (显示滤波后 on)."""
+        rows = self._rows_with_companion(filt_visible=True, n_sources=n_sources)
+        out = []
+        for row in rows:
+            # primary rows are 7-tuples (no meta); companions are 8-tuples.
+            if len(row) >= 8 and isinstance(row[7], dict):
+                out.append(row)  # companion stays visible
+            else:
+                name, _vis, t, sig, color, unit, fid = row[:7]
+                out.append((name, False, t, sig, color, unit, fid))
+        return out
+
+    def test_orig_off_filt_on_keeps_axis_per_channel_subplot(self, qapp):
+        """显示原始 off + 显示滤波后 on: each channel still owns ONE axis (so
+        the chart is NOT blank), the original is hidden, the dashed companion
+        is visible and on the SAME axis."""
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_orig_off_filt_on(n_sources=2),
+                             mode="subplot")
+        qapp.processEvents()
+        # subplot count == source count (not 0, not doubled).
+        assert len(canvas.axes_list) == 2
+        assert len(canvas._companion_names) == 2
+        for i in range(2):
+            src = f"ch{i}"
+            src_pdi = canvas._channel_lines[src][1].plot_data_item
+            comp_pdi = self._companion_pdi(canvas, src)
+            assert src_pdi.isVisible() is False
+            assert comp_pdi is not None and comp_pdi.isVisible() is True
+            # companion shares the source's axis handle.
+            assert canvas._channel_lines[src][0] is (
+                canvas._channel_lines[f"{src} (LP 50Hz)"][0]
+            )
+
+    def test_orig_off_filt_on_keeps_axis_single_channel(self, qapp):
+        """Single channel, original off + filtered on → exactly one axis, not
+        blank; original hidden, companion visible."""
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_orig_off_filt_on(n_sources=1),
+                             mode="subplot")
+        qapp.processEvents()
+        assert len(canvas.axes_list) == 1
+        assert len(canvas._companion_names) == 1
+        src_pdi = canvas._channel_lines["ch0"][1].plot_data_item
+        comp_pdi = self._companion_pdi(canvas, "ch0")
+        assert src_pdi.isVisible() is False
+        assert comp_pdi.isVisible() is True
+
+    def test_both_off_drops_channel_axis(self, qapp):
+        """显示原始 off AND 显示滤波后 off → that channel owns no axis (nothing
+        to draw, nothing to anchor)."""
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        rows = self._rows_with_companion(filt_visible=False, n_sources=2)
+        out = []
+        for row in rows:
+            if len(row) >= 8 and isinstance(row[7], dict):
+                out.append(row)  # companion visible=False already
+            else:
+                name, _vis, t, sig, color, unit, fid = row[:7]
+                out.append((name, False, t, sig, color, unit, fid))
+        canvas.plot_channels(out, mode="subplot")
+        qapp.processEvents()
+        # No channel owns an axis → blank chart is acceptable here.
+        assert len(canvas.axes_list) == 0
+
+    def test_orig_off_one_chan_filt_on_overlay(self, qapp):
+        """Overlay mode (>=2 channels) with originals off + filtered on keeps
+        one aux axis PER channel."""
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_orig_off_filt_on(n_sources=2),
+                             mode="overlay")
+        qapp.processEvents()
+        assert len(canvas.axes_list) == 2
+        for i in range(2):
+            src = f"ch{i}"
+            assert canvas._channel_lines[src][1].plot_data_item.isVisible() is False
+            assert self._companion_pdi(canvas, src).isVisible() is True
+
+    # --- live toggle on already-built chart (no rebuild) --------------------
+    def test_live_hide_originals_keeps_axes_and_companions(self, qapp):
+        """set_original_lines_visible(False) flips primaries hidden in place;
+        axes and companions are untouched (no rebuild)."""
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_with_companion(n_sources=2),
+                             mode="subplot")
+        qapp.processEvents()
+        n = canvas.set_original_lines_visible(False)
+        assert n == 2  # two primaries toggled
+        assert len(canvas.axes_list) == 2  # axes survive
+        for i in range(2):
+            src = f"ch{i}"
+            assert canvas._channel_lines[src][1].plot_data_item.isVisible() is False
+            # companion still visible.
+            assert self._companion_pdi(canvas, src).isVisible() is True
+        # re-show restores originals.
+        canvas.set_original_lines_visible(True)
+        for i in range(2):
+            assert canvas._channel_lines[f"ch{i}"][1].plot_data_item.isVisible() is True
+
+    def test_live_hide_companions_keeps_axes_and_originals(self, qapp):
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_with_companion(n_sources=2),
+                             mode="subplot")
+        qapp.processEvents()
+        n = canvas.set_companion_lines_visible(False)
+        assert n == 2
+        assert len(canvas.axes_list) == 2
+        for i in range(2):
+            src = f"ch{i}"
+            assert self._companion_pdi(canvas, src).isVisible() is False
+            assert canvas._channel_lines[src][1].plot_data_item.isVisible() is True
+
+    def test_live_toggle_returns_zero_when_nothing_built(self, qapp):
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        assert canvas.set_original_lines_visible(False) == 0
+        assert canvas.set_companion_lines_visible(False) == 0

@@ -411,6 +411,15 @@ class MainWindow(
         # Phase 1, these are no-ops but must exist so Task 2.x edits are
         # minimal additions rather than rewrites.
         self.inspector.plot_time_requested.connect(self.plot_time)
+        # Live display toggles for the filter overlay: 显示原始 / 显示滤波后
+        # flip the visibility of the EXISTING curves on the focused time canvas
+        # without a re-plot (秒生效，不重绘). The axis/row stays put — a companion
+        # dashed trace shares its source channel's ViewBox, so hiding the
+        # original must NOT tear the axis down.
+        fp = getattr(self.inspector, "filter_panel", None)
+        if fp is not None:
+            fp.original_visibility_changed.connect(self._on_show_original_toggled)
+            fp.filtered_visibility_changed.connect(self._on_show_filtered_toggled)
         self.inspector.fft_requested.connect(self.do_fft)
         self.inspector.order_time_requested.connect(self.do_order_time)
         # dB reference is display-only: changing it while in FFT mode should
@@ -1673,6 +1682,47 @@ class MainWindow(
         self._plot_time_on_canvas(
             focused, update_primary_ui=(focused is self.canvas_time)
         )
+
+    def _time_canvases(self):
+        """Time-domain canvases to live-toggle. Includes the focused canvas
+        (primary outside split, secondary while split) plus the primary so a
+        toggle while split affects both panes that show the time domain."""
+        seen = []
+        for c in (self.chart_stack.focused_canvas(), self.canvas_time):
+            if c is not None and c not in seen and hasattr(c, "_channel_lines"):
+                seen.append(c)
+        return seen
+
+    def _on_show_original_toggled(self, visible):
+        """显示原始 live toggle: hide/show the solid originals on the built
+        chart WITHOUT a re-plot. Falls back to a full plot only if nothing was
+        toggled (e.g. nothing plotted yet) so the chart still appears."""
+        if self.chart_stack.current_mode() != 'time':
+            return
+        any_toggled = False
+        for c in self._time_canvases():
+            setter = getattr(c, "set_original_lines_visible", None)
+            if callable(setter) and setter(visible):
+                any_toggled = True
+        if not any_toggled and self.files:
+            self.plot_time()
+
+    def _on_show_filtered_toggled(self, visible):
+        """显示滤波后 live toggle: hide/show the dashed filtered companions on
+        the built chart WITHOUT a re-plot. If no companion exists yet (filter
+        just enabled but not plotted), fall back to a full plot so the overlay
+        appears."""
+        if self.chart_stack.current_mode() != 'time':
+            return
+        any_toggled = False
+        for c in self._time_canvases():
+            setter = getattr(c, "set_companion_lines_visible", None)
+            if callable(setter) and setter(visible):
+                any_toggled = True
+        if not any_toggled and visible and self.files:
+            # Turning the filtered overlay ON with no companion bound yet →
+            # need a real plot to compute + bind the dashed traces.
+            self.plot_time()
 
     def _plot_time_on_canvas(self, canvas, update_primary_ui=True, defer_first_frame=False):
         if not self.files:

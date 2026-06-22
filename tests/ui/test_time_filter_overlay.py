@@ -80,3 +80,68 @@ def test_uncheck_show_filtered_hides_trace(
     # filtered traces present but visible=False (so cancel = just hide)
     filt = [d for d in data if "Hz)" in d[0]]
     assert filt and all(d[1] is False for d in filt)
+
+
+# --- bug A: live 显示原始/显示滤波后 toggle = setVisible 秒生效, no re-plot -----
+def _plot_with_filter(w):
+    """Enable a low-pass filter and plot the time domain so the canvas has a
+    built chart with one original + one dashed companion per channel."""
+    w.chart_stack.set_mode('time')
+    w.inspector.filter_panel.set_enabled(True)
+    w.inspector.filter_panel.set_kind("低通")
+    w.inspector.filter_panel.set_cutoff(50.0)
+    w.plot_time()
+
+
+def test_live_uncheck_show_original_hides_without_replot(
+    time_window_with_two_high_low_channels, monkeypatch,
+):
+    """Unchecking 显示原始 must flip the solid original hidden IMMEDIATELY via
+    setVisible — WITHOUT triggering a full plot_time re-plot."""
+    w = time_window_with_two_high_low_channels
+    _plot_with_filter(w)
+    canvas = w.chart_stack.focused_canvas()
+    # one original + one companion (single channel → single axis).
+    src_pdi = canvas._channel_lines["MOTOR/sig" if "MOTOR/sig" in canvas._channel_lines
+                                    else next(iter(
+        n for n in canvas._channel_lines if n not in canvas._companion_names))][1]
+    src_name = next(n for n in canvas._channel_lines
+                    if n not in canvas._companion_names)
+    assert canvas._channel_lines[src_name][1].plot_data_item.isVisible() is True
+
+    replot_calls = []
+    monkeypatch.setattr(w, "plot_time",
+                        lambda *a, **k: replot_calls.append(1))
+
+    # Toggle the checkbox → fires original_visibility_changed → live setVisible.
+    w.inspector.filter_panel.chk_orig.setChecked(False)
+    assert canvas._channel_lines[src_name][1].plot_data_item.isVisible() is False
+    # No re-plot was triggered.
+    assert replot_calls == []
+    # Companion (dashed) stays visible and its axis survives.
+    comp_name = next(n for n in canvas._companion_names)
+    assert canvas._channel_lines[comp_name][1].plot_data_item.isVisible() is True
+    assert len(canvas.axes_list) >= 1
+
+    # Re-check restores the original (still no re-plot).
+    w.inspector.filter_panel.chk_orig.setChecked(True)
+    assert canvas._channel_lines[src_name][1].plot_data_item.isVisible() is True
+    assert replot_calls == []
+
+
+def test_live_uncheck_show_filtered_hides_companion_without_replot(
+    time_window_with_two_high_low_channels, monkeypatch,
+):
+    w = time_window_with_two_high_low_channels
+    _plot_with_filter(w)
+    canvas = w.chart_stack.focused_canvas()
+    comp_name = next(n for n in canvas._companion_names)
+    assert canvas._channel_lines[comp_name][1].plot_data_item.isVisible() is True
+
+    replot_calls = []
+    monkeypatch.setattr(w, "plot_time",
+                        lambda *a, **k: replot_calls.append(1))
+
+    w.inspector.filter_panel.chk_filt.setChecked(False)
+    assert canvas._channel_lines[comp_name][1].plot_data_item.isVisible() is False
+    assert replot_calls == []

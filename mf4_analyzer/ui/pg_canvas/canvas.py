@@ -417,11 +417,20 @@ class TimeDomainCanvasPG(QWidget):
         # source channel's name (and ``dash=True``); the canvas overlays it
         # on the SOURCE channel's axis/row rather than allocating a fresh
         # subplot row. Legacy 6/7-tuple rows have no meta → always primary.
-        # Companions are kept even when their visible flag is False (so
-        # toggling "显示滤波后" off just hides the dashed curve) — only
-        # primaries follow the historical "skip invisible rows" rule.
-        vis = []
+        #
+        # AXIS-OWNERSHIP RULE (subplot/single/overlay alike): a subplot row /
+        # axis belongs to the CHANNEL, not to the channel's original line. So
+        # a channel gets an axis whenever EITHER the original is visible
+        # ("显示原始") OR it has a visible companion ("显示滤波后" on the
+        # dashed filtered trace). Without this, "显示原始 off + 显示滤波后 on"
+        # skipped the (invisible) original → its axis was never built → the
+        # companion had no source axis to bind onto → the whole chart went
+        # blank. The original line is ALWAYS added when its channel keeps an
+        # axis, but hidden via ``setVisible`` per its own visible flag so the
+        # dashed companion can still anchor on the same ViewBox.
+        primaries = []
         companions = []
+        companion_visible_by_source = {}
         for row in ch_list:
             if len(row) >= 8 and isinstance(row[7], dict):
                 name, visible, t, sig, color, unit, data_id, meta = row[:8]
@@ -434,17 +443,31 @@ class TimeDomainCanvasPG(QWidget):
                 meta = None
             companion_of = meta.get("companion_of") if meta else None
             if companion_of is not None:
+                cvis = bool(visible)
                 companions.append(
-                    (name, bool(visible), t, sig, color, unit, data_id,
+                    (name, cvis, t, sig, color, unit, data_id,
                      companion_of, bool(meta.get("dash", True)))
                 )
+                if cvis:
+                    companion_visible_by_source[companion_of] = True
                 continue
-            if not visible:
-                continue
-            vis.append((name, t, sig, color, unit, data_id))
+            primaries.append(
+                (name, bool(visible), t, sig, color, unit, data_id)
+            )
+
+        # ``vis`` = primaries that own an axis this rebuild = original visible
+        # OR has a visible companion. Carry the original's own visibility as a
+        # 7th element so we can ``setVisible(False)`` it after bind while still
+        # building its axis/row for the companion to anchor onto.
+        vis = [
+            (name, t, sig, color, unit, data_id, p_visible)
+            for (name, p_visible, t, sig, color, unit, data_id) in primaries
+            if p_visible or companion_visible_by_source.get(name)
+        ]
 
         if not vis:
-            # No visible primary channel → nothing to anchor companions to.
+            # No channel owns an axis (every original hidden AND no visible
+            # companion) → nothing to draw and nothing to anchor companions to.
             return
 
         overlay_mode = (mode == "overlay" and len(vis) >= 2)
@@ -452,7 +475,7 @@ class TimeDomainCanvasPG(QWidget):
         self._overlay_mode = overlay_mode  # parity attr name with TimeDomainCanvas
 
         if subplot_mode:
-            for i, (name, t, sig, color, unit, data_id) in enumerate(vis):
+            for i, (name, t, sig, color, unit, data_id, p_visible) in enumerate(vis):
                 pi = self._add_plot_item(row=i, col=0)
                 handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
                 self.axes_list.append(handle)
@@ -461,6 +484,7 @@ class TimeDomainCanvasPG(QWidget):
                     xlabel=xlabel if i == len(vis) - 1 else None,
                     skip_envelope=defer_first_frame,
                 )
+                self._set_primary_line_visible(name, p_visible)
                 self._overlay_axes._configure_subplot_bottom_axis(
                     handle,
                     is_bottom=(i == len(vis) - 1),
@@ -513,12 +537,15 @@ class TimeDomainCanvasPG(QWidget):
             self.axes_list.append(first_handle)
             self._overlay_axes._bind_channel(
                 first_handle,
-                *vis[0],
+                *vis[0][:6],
                 xlabel=xlabel,
                 skip_envelope=defer_first_frame,
             )
+            self._set_primary_line_visible(vis[0][0], vis[0][6])
             # Channels 2..N → dedicated aux ViewBoxes bound to right axes.
-            for idx, (name, t, sig, color, unit, data_id) in enumerate(vis[1:], start=1):
+            for idx, (name, t, sig, color, unit, data_id, p_visible) in enumerate(
+                vis[1:], start=1
+            ):
                 handle = self._overlay_axes._add_overlay_axis_handle(pi, idx)
                 self.axes_list.append(handle)
                 self._overlay_axes._bind_channel(
@@ -532,6 +559,7 @@ class TimeDomainCanvasPG(QWidget):
                     xlabel=xlabel,
                     skip_envelope=defer_first_frame,
                 )
+                self._set_primary_line_visible(name, p_visible)
             # Apply default emphasis state (no selection).
             self._overlay_axes._apply_overlay_emphasis()
             # Grid: in overlay the built-in left + right axes are linked to
@@ -552,7 +580,7 @@ class TimeDomainCanvasPG(QWidget):
             pi = self._add_plot_item(row=0, col=0)
             handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
             self.axes_list.append(handle)
-            name, t, sig, color, unit, data_id = vis[0]
+            name, t, sig, color, unit, data_id, p_visible = vis[0]
             self._overlay_axes._bind_channel(
                 handle,
                 name,
@@ -564,6 +592,7 @@ class TimeDomainCanvasPG(QWidget):
                 xlabel=xlabel,
                 skip_envelope=defer_first_frame,
             )
+            self._set_primary_line_visible(name, p_visible)
 
         # Bind display companions (e.g. filter overlays) onto their source
         # channel's axis/row — NO new subplot row/axis is allocated, so the
@@ -651,6 +680,75 @@ class TimeDomainCanvasPG(QWidget):
                     "_cursor_b_items", color="#dc2626", width=1.1
                 )
                 self._set_cursor_items_pos(b_items, self._cursor.bx)
+
+    def _set_primary_line_visible(self, name, visible):
+        """Hide/show a primary (original) curve in place without rebuilding.
+
+        The channel's axis/row is kept regardless (a dashed companion may be
+        anchored on the same ViewBox), so this only flips the PlotDataItem's
+        visibility. ``name`` is the primary channel name (NOT a companion).
+        """
+        pair = self._channel_lines.get(name)
+        if pair is None:
+            return
+        line = pair[1]
+        pdi = getattr(line, "plot_data_item", None)
+        if pdi is not None:
+            try:
+                pdi.setVisible(bool(visible))
+            except Exception:
+                pass
+
+    def set_original_lines_visible(self, visible):
+        """Live toggle for "显示原始": flip every PRIMARY (non-companion)
+        curve's visibility on the already-built chart WITHOUT a re-plot.
+
+        The companion (filtered, dashed) curves and their axes are untouched,
+        so unchecking "显示原始" while a filter overlay is on just hides the
+        solid originals and leaves the dashed traces — no recompute, no axis
+        teardown. Returns the number of primary curves toggled (0 when no
+        chart is built yet, so the caller can fall back to a full plot).
+        """
+        flag = bool(visible)
+        companions = getattr(self, "_companion_names", set())
+        n = 0
+        for name, (_handle, line) in self._channel_lines.items():
+            if name in companions:
+                continue
+            pdi = getattr(line, "plot_data_item", None)
+            if pdi is not None:
+                try:
+                    pdi.setVisible(flag)
+                    n += 1
+                except Exception:
+                    pass
+        if n:
+            self.draw()
+        return n
+
+    def set_companion_lines_visible(self, visible):
+        """Live toggle for "显示滤波后": flip every COMPANION (filtered,
+        dashed) curve's visibility on the already-built chart WITHOUT a
+        re-plot. The companion's axis stays (it shares its source's row), so
+        this just hides/shows the dashed trace. Returns the number toggled.
+        """
+        flag = bool(visible)
+        companions = getattr(self, "_companion_names", set())
+        n = 0
+        for name in companions:
+            pair = self._channel_lines.get(name)
+            if pair is None:
+                continue
+            pdi = getattr(pair[1], "plot_data_item", None)
+            if pdi is not None:
+                try:
+                    pdi.setVisible(flag)
+                    n += 1
+                except Exception:
+                    pass
+        if n:
+            self.draw()
+        return n
 
     def register_replot_callback(self, callback):
         """Register a zero-arg ``callback`` invoked after every

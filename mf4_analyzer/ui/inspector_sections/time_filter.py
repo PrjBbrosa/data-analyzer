@@ -18,6 +18,11 @@ _KIND_MAP = {"低通": "low", "高通": "high", "带通": "band", "带阻": "ban
 
 class FilterPanel(QWidget):
     filter_changed = pyqtSignal()
+    # Live display toggles for the already-plotted chart. ``original_visibility_changed``
+    # / ``filtered_visibility_changed`` carry the new checked state so the host can
+    # call setVisible on the existing curve items WITHOUT a re-plot (秒生效，不重绘).
+    original_visibility_changed = pyqtSignal(bool)
+    filtered_visibility_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -113,8 +118,13 @@ class FilterPanel(QWidget):
             w.currentTextChanged.connect(lambda *_: self.filter_changed.emit())
         for s in (self.spin_cut, self.spin_lo, self.spin_hi):
             s.valueChanged.connect(lambda *_: self.filter_changed.emit())
-        for c in (self.chk_enable, self.chk_orig, self.chk_filt):
-            c.toggled.connect(lambda *_: self.filter_changed.emit())
+        self.chk_enable.toggled.connect(lambda *_: self.filter_changed.emit())
+        # 显示原始/显示滤波后 are LIVE display toggles: they emit a dedicated
+        # signal the host wires to setVisible on existing curves (秒生效，不重绘).
+        # They intentionally do NOT go through filter_changed (which is read on
+        # the next 「绘图」 submit) so unchecking takes effect immediately.
+        self.chk_orig.toggled.connect(self.original_visibility_changed.emit)
+        self.chk_filt.toggled.connect(self.filtered_visibility_changed.emit)
 
     # --- row visibility ------------------------------------------------
     def _is_band(self):
