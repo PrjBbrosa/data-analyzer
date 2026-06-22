@@ -557,6 +557,185 @@ class TestSubplotDenseBucketCap:
             assert eff * n <= bound * 1.05
 
 
+# -- universal data-amplitude vs Y-window wall guard ---------------------
+
+
+class TestYOverflowWallGuard:
+    """Renderer-layer 兜底 guard for the 满高竖线墙 (full-height vertical-stroke
+    wall) regime that the static density caps (overlay channel-count /
+    subplot decimation) do NOT see: a dense curve drawn into a Y view window
+    far smaller than its amplitude. Every trigger path (manual narrow Y,
+    box-zoom Y, scroll Y, stale narrow Y across a view switch) funnels into one
+    ``setData`` per line in ``_refresh_visible_data``; the guard compares each
+    line's window data amplitude span to its Y view span and, on overflow >
+    ``_WALL_OVERFLOW_RATIO_K``×, caps the bucket count and holds AA off.
+
+    Pure performance guard: it changes NO Y range, NO autorange, NO data — only
+    the number of drawn strokes + the AA state for the wall frame. Normal frames
+    (data hugs the window) are untouched and pay zero extra per-frame cost.
+    """
+
+    # -- pure predicate / helper unit coverage (no Qt) -------------------
+
+    def test_predicate_triggers_on_large_overflow(self):
+        from mf4_analyzer.ui.pg_canvas.renderer import (
+            Renderer, _WALL_OVERFLOW_RATIO_K,
+        )
+        # data_span/y_span = 10/0.1 = 100 >> K
+        assert Renderer._is_y_overflow_wall(10.0, 0.1) is True
+        # exactly at K is NOT a wall (strict >)
+        assert Renderer._is_y_overflow_wall(
+            _WALL_OVERFLOW_RATIO_K, 1.0) is False
+        # just above K is a wall
+        assert Renderer._is_y_overflow_wall(
+            _WALL_OVERFLOW_RATIO_K + 0.01, 1.0) is True
+
+    def test_predicate_no_trigger_when_data_fits_window(self):
+        from mf4_analyzer.ui.pg_canvas.renderer import Renderer
+        # data ±5 in a ±6 window: data_span 10, y_span 12, ratio < 1 → no wall
+        assert Renderer._is_y_overflow_wall(10.0, 12.0) is False
+        # data exactly fills window (ratio 1) → no wall
+        assert Renderer._is_y_overflow_wall(10.0, 10.0) is False
+
+    def test_predicate_degenerate_inputs_do_not_crash_or_trigger(self):
+        from mf4_analyzer.ui.pg_canvas.renderer import Renderer
+        # y_span ≈ 0 (collapsed window): no div-by-zero, no trigger
+        assert Renderer._is_y_overflow_wall(5.0, 0.0) is False
+        assert Renderer._is_y_overflow_wall(5.0, -1.0) is False
+        # data_span ≈ 0 (flat line): one horizontal stroke, NOT a wall
+        assert Renderer._is_y_overflow_wall(0.0, 0.001) is False
+        # non-finite inputs are absorbed
+        assert Renderer._is_y_overflow_wall(float("nan"), 1.0) is False
+        assert Renderer._is_y_overflow_wall(1.0, float("inf")) is False
+
+    def test_wall_capped_width_only_reduces(self):
+        from mf4_analyzer.ui.pg_canvas.renderer import (
+            Renderer, _WALL_BUCKET_BUDGET,
+        )
+        # above the budget → clamped down
+        assert Renderer._wall_capped_width(_WALL_BUCKET_BUDGET + 5000) == (
+            _WALL_BUCKET_BUDGET
+        )
+        # already below the budget → unchanged (never raised)
+        assert Renderer._wall_capped_width(500) == 500
+        # degenerate width floors at 1
+        assert Renderer._wall_capped_width(0) == 1
+
+    def test_y_span_key_changes_with_y_zoom(self):
+        from mf4_analyzer.ui.pg_canvas.renderer import _quantize_y_span_key
+        # a real Y zoom (10× narrower) must cross at least one bucket boundary
+        assert _quantize_y_span_key(10.0) != _quantize_y_span_key(1.0)
+        # sub-percent jitter on a static window stays in one bucket
+        assert _quantize_y_span_key(5.0) == _quantize_y_span_key(5.0 * 1.001)
+        # degenerate spans map to the sentinel bucket
+        assert _quantize_y_span_key(0.0) == 0
+        assert _quantize_y_span_key(-1.0) == 0
+
+    # -- end-to-end on a live canvas -------------------------------------
+
+    def _wall_canvas(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        # ONE dense channel, amplitude ±5 (data_span ~10). A single channel is
+        # below BOTH static caps (overlay needs >=2 curves; subplot dense cap
+        # needs >=2 dense rows), so only the universal wall guard can fire here.
+        t = np.linspace(0.0, 10.0, 1_000_000, dtype=np.float64)
+        sig = 5.0 * np.sin(t * 30.0)
+        rows = [("ch0", True, t, sig, "#1769e0", "u", "fid-0")]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        return canvas, t, sig
+
+    def _displayed_points(self, canvas, name):
+        _ax, line = canvas._channel_lines[name]
+        xd, _ = line.plot_data_item.getData()
+        return 0 if xd is None else len(xd)
+
+    def test_narrow_y_caps_points_and_flags_wall(self, qapp):
+        from mf4_analyzer.ui.pg_canvas.renderer import _WALL_BUCKET_BUDGET
+
+        canvas, _t, _sig = self._wall_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        # Baseline: window hugs the data (±6), no wall.
+        ax.set_ylim(-6.0, 6.0)
+        canvas._last_range_key.clear()
+        canvas._flush_pending_refresh()
+        full_pts = self._displayed_points(canvas, "ch0")
+        assert canvas._y_overflow_wall_active is False
+        assert canvas._line_wall_state.get("ch0") is False
+
+        # Now pin Y to ±0.05 (data_span/y_span ≈ 10/0.1 = 100 >> K): wall.
+        ax.set_ylim(-0.05, 0.05)
+        canvas._flush_pending_refresh()
+        wall_pts = self._displayed_points(canvas, "ch0")
+        assert canvas._y_overflow_wall_active is True
+        assert canvas._line_wall_state.get("ch0") is True
+        # Bucket count额外封顶: each bucket emits ~2 envelope samples, so the
+        # displayed count is bounded by ~2× the wall budget.
+        assert wall_pts <= 2 * _WALL_BUCKET_BUDGET + 4
+        # And it is strictly fewer strokes than the un-capped (fitting) frame.
+        assert wall_pts < full_pts
+
+    def test_fitting_window_full_resolution_no_cap(self, qapp):
+        canvas, _t, _sig = self._wall_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        pw = canvas._current_pixel_width()
+        ax.set_ylim(-6.0, 6.0)
+        canvas._last_range_key.clear()
+        canvas._flush_pending_refresh()
+        pts = self._displayed_points(canvas, "ch0")
+        # Full pixel-width resolution: ~2 samples per pixel column, far above
+        # the wall budget; no cap engaged.
+        assert canvas._y_overflow_wall_active is False
+        assert pts > pw  # not coarsened down to the wall budget
+
+    def test_wall_holds_aa_off(self, qapp):
+        canvas, _t, _sig = self._wall_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        ax.set_ylim(-0.05, 0.05)
+        canvas._flush_pending_refresh()
+        assert canvas._y_overflow_wall_active is True
+        # The idle-AA gate must hard-fail (AA stays OFF) while the wall is up,
+        # regardless of how few points the cap left.
+        assert canvas._quality._idle_aa_density_ok() is False
+
+    def test_wall_state_clears_when_window_widens_back(self, qapp):
+        canvas, _t, _sig = self._wall_canvas(qapp)
+        ax, _line = canvas._channel_lines["ch0"]
+        ax.set_ylim(-0.05, 0.05)
+        canvas._flush_pending_refresh()
+        assert canvas._y_overflow_wall_active is True
+        # Widen Y back to fit: the wall must clear so AA can re-arm later.
+        ax.set_ylim(-6.0, 6.0)
+        canvas._flush_pending_refresh()
+        assert canvas._y_overflow_wall_active is False
+        assert canvas._line_wall_state.get("ch0") is False
+
+    def test_flat_line_in_narrow_window_does_not_trigger(self, qapp):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        # A genuinely flat (constant) dense line: data_span ≈ 0. Even in a
+        # narrow Y window it is one horizontal stroke, never a fill wall.
+        t = np.linspace(0.0, 10.0, 1_000_000, dtype=np.float64)
+        sig = np.full_like(t, 2.0)
+        rows = [("ch0", True, t, sig, "#1769e0", "u", "fid-0")]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        ax, _line = canvas._channel_lines["ch0"]
+        ax.set_ylim(1.999, 2.001)
+        canvas._flush_pending_refresh()
+        assert canvas._y_overflow_wall_active is False
+        assert canvas._line_wall_state.get("ch0") in (False, None)
+
+
 # -- A: re-show original must NOT recompute the envelope -----------------
 
 

@@ -305,6 +305,12 @@ class TimeDomainCanvasPG(QWidget):
         # Per-channel "last range key" so a re-flush with no xlim change
         # is a no-op (pyqt-ui/2026-04-25-cache-invalidation-event-conditional).
         self._last_range_key: dict = {}
+        # Per-channel Y-overflow wall state (renderer._refresh_visible_data):
+        # remembers whether THIS line was last flushed in the 满高竖线墙 regime so
+        # a range-key cache-HIT (no-op refresh) can keep the frame wall flag set
+        # — AA must stay off until the user widens Y, not until the next real
+        # recompute. Cleared alongside _last_range_key on rebuild/invalidate.
+        self._line_wall_state: dict = {}
         self._last_refresh_signature = None
         self._monotonic_fingerprint_cache: dict = {}
 
@@ -351,6 +357,13 @@ class TimeDomainCanvasPG(QWidget):
         # dense-stack bucket cap engages at >= 2). Recomputed each
         # plot_channels; 0 in overlay/single/low-density layouts.
         self._subplot_dense_count = 0
+        # Y-overflow wall guard (renderer._refresh_visible_data). Set True for
+        # the current frame when ANY line's window data amplitude span overflows
+        # its Y view window by more than _WALL_OVERFLOW_RATIO_K (the dense
+        # narrow-Y "满高竖线墙" regime). While active the idle-AA gate keeps
+        # antialiasing OFF so the expensive AA compositing never re-arms over a
+        # raster-fill wall. Reset to False on every refresh that finds no wall.
+        self._y_overflow_wall_active = False
         # The X-master axis handle in overlay mode. Its ViewBox owns the
         # shared X range, the default mouse-pan, and the scene geometry
         # anchor; NO curves are attached to it (every channel — including
@@ -1395,6 +1408,8 @@ class TimeDomainCanvasPG(QWidget):
         self._primary_xaxis_ax = None
         self._curve_path_cache.clear()
         self._last_range_key.clear()
+        self._line_wall_state.clear()
+        self._y_overflow_wall_active = False
         self._last_refresh_signature = None
         self._overlay_mode = False
         self._refresh = True
@@ -1419,6 +1434,8 @@ class TimeDomainCanvasPG(QWidget):
         self._cursor.reset_all_state()
         self._curve_path_cache.clear()
         self._last_range_key.clear()
+        self._line_wall_state.clear()
+        self._y_overflow_wall_active = False
         self._last_refresh_signature = None
         self._monotonic_fingerprint_cache.clear()
         self.draw_idle()
@@ -1785,10 +1802,12 @@ class TimeDomainCanvasPG(QWidget):
         # rebuilds the cache entry.
         if channel is not None:
             self._last_range_key.pop(channel, None)
+            self._line_wall_state.pop(channel, None)
         elif data_id is not None:
             for ch_name, ch_data_id in list(self._channel_data_id.items()):
                 if ch_data_id == data_id:
                     self._last_range_key.pop(ch_name, None)
+                    self._line_wall_state.pop(ch_name, None)
 
     def invalidate_monotonicity_cache(self, custom_xaxis_fid=None, custom_xaxis_ch=None):
         """Drop per-channel monotonicity flags. Mirrors the matplotlib

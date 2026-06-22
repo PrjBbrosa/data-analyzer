@@ -88,6 +88,45 @@ _SUBPLOT_DENSE_BUCKET_BUDGET = 2600
 _SUBPLOT_DENSE_MIN_BUCKETS = 350
 
 
+# ---------------------------------------------------------------------------
+# Universal "data amplitude vs Y view window" wall guard (满高竖线墙 兜底).
+#
+# The two caps above key off STATIC density (source_len / pixel_width) or
+# channel count. They miss the GENERAL trigger of the full-height vertical
+# stroke wall: a dense curve drawn into a Y view window FAR SMALLER than the
+# curve's amplitude. In that regime every envelope bucket's min/max pair spans
+# the entire canvas height as one vertical stroke, and the per-frame raster-fill
+# cost explodes (Windows real-machine ~十几秒). This happens for paths the
+# density caps don't see: manual narrow-Y on a SINGLE dense channel, box-zoom to
+# a thin Y band, scroll-zoom Y, a stale narrow-Y carried across a view switch,
+# overlay re-pin, etc. — all of which funnel into ONE setData per line in
+# _refresh_visible_data.
+#
+# Guard: per line, compare the window data amplitude span (data_span, free from
+# the envelope's own min/max) to the line's current Y view span (y_span). When
+#
+#     data_span / y_span > _WALL_OVERFLOW_RATIO_K
+#
+# the data overflows the window by > K× → it is guaranteed to paint as a
+# full-height wall regardless of mode/density, so this line is treated EXACTLY
+# like a dense signal: its bucket count is额外封顶 to _WALL_BUCKET_BUDGET and AA
+# is held OFF for the frame (via the canvas _y_overflow_wall_active flag, which
+# the idle-AA gate respects). K is an empirical 4.0: below ~3–4× the data still
+# roughly fits the window (thin line, not a wall); 4× is a safe margin that does
+# not false-trigger on data that merely brushes the window edges. NORMAL frames
+# (data_span ≈ y_span, data hugs the window) skip the guard entirely — zero
+# behavior change and zero extra per-frame cost beyond the free min/max read.
+#
+# _WALL_BUCKET_BUDGET (1800) is a hard per-line ceiling on displayed strokes in
+# the wall regime — same order as the overlay per-curve cap (~758) scaled up for
+# the single-line case, low enough to collapse the raster cost (linear in stroke
+# count) but high enough to keep the wall's silhouette faithful (it's already a
+# solid fill, so fewer strokes lose no visible feature).
+# ---------------------------------------------------------------------------
+_WALL_OVERFLOW_RATIO_K = 4.0
+_WALL_BUCKET_BUDGET = 1800
+
+
 def _capped_hidpi_scale(base_width, requested=_HIDPI_COPY_SCALE):
     """Return the effective magnification for a hi-DPI render.
 
@@ -109,6 +148,29 @@ def _capped_hidpi_scale(base_width, requested=_HIDPI_COPY_SCALE):
         # but never downscale the source.
         return 1.0
     return min(eff, cap)
+
+
+def _quantize_y_span_key(y_span: float) -> int:
+    """Quantize a Y view span into a stable, change-sensitive bucket index.
+
+    Folded into the per-line refresh cache key so a PURE-Y narrow (box-zoom Y,
+    scroll-zoom Y, a stale narrow-Y carried across a view switch) — which leaves
+    xlim and the effective bucket width unchanged and would otherwise be gated
+    out as a no-op refresh — still invalidates the cache and lets the Y-overflow
+    wall guard re-evaluate. Uses a LOG bucket (~2.4 % per step, the natural
+    log-2 / 30 grid) so a real Y zoom always crosses a boundary while float
+    jitter on a static window stays in one bucket. y_span <= 0 (degenerate /
+    collapsed handle) maps to a single sentinel bucket.
+    """
+    try:
+        ys = float(y_span)
+    except (TypeError, ValueError):
+        return 0
+    if not np.isfinite(ys) or ys <= 0.0:
+        return 0
+    # ~30 buckets per octave: fine enough to catch any meaningful Y zoom,
+    # coarse enough to absorb sub-percent autorange jitter on a static window.
+    return int(round(np.log2(ys) * 30.0))
 
 
 def _legacy_positions_envelope():
@@ -136,6 +198,8 @@ class Renderer(_CanvasBackref):
     _delegate_names = frozenset({
         "_current_pixel_width",
         "_effective_pixel_width",
+        "_is_y_overflow_wall",
+        "_wall_capped_width",
         "_refresh_visible_data",
         "_build_painter_path",
         "_build_painter_path_loop",
@@ -273,6 +337,48 @@ class Renderer(_CanvasBackref):
         cap = max(_SUBPLOT_DENSE_MIN_BUCKETS, cap)
         return max(1, min(pw, cap))
 
+    @staticmethod
+    def _is_y_overflow_wall(data_span, y_span) -> bool:
+        """Return True when window data amplitude overflows the Y view window
+        by more than ``_WALL_OVERFLOW_RATIO_K`` — the dense narrow-Y full-height
+        vertical-stroke wall regime.
+
+        Pure, cheap, defensive: a non-finite or non-positive ``y_span``
+        (degenerate / collapsed Y window) returns False rather than dividing by
+        zero, and a non-finite / zero ``data_span`` (flat line) never triggers
+        — a flat trace is one horizontal stroke, not a fill wall, so it must NOT
+        be coarsened. The comparison is strict ``>`` so a curve that exactly
+        fits the window (ratio 1) is left untouched.
+        """
+        try:
+            ds = float(data_span)
+            ys = float(y_span)
+        except (TypeError, ValueError):
+            return False
+        if not np.isfinite(ds) or not np.isfinite(ys):
+            return False
+        if ys <= 0.0 or ds <= 0.0:
+            return False
+        return ds / ys > _WALL_OVERFLOW_RATIO_K
+
+    @staticmethod
+    def _wall_capped_width(effective_width: int) -> int:
+        """Clamp an already-computed ``effective_width`` down to the per-line
+        wall ceiling ``_WALL_BUCKET_BUDGET``.
+
+        Applied ON TOP of the mode-specific cap so the wall guard can only ever
+        REDUCE the bucket count (never raise it above what overlay/subplot
+        already chose). A width already at or below the budget is returned
+        unchanged.
+        """
+        try:
+            ew = int(effective_width)
+        except (TypeError, ValueError):
+            return effective_width
+        if ew < 1:
+            return 1
+        return min(ew, _WALL_BUCKET_BUDGET)
+
     def _refresh_visible_data(self):
         """Recompute and display the viewport envelope for every channel."""
         self._refresh_pending = False
@@ -310,6 +416,10 @@ class Renderer(_CanvasBackref):
 
         updated_any = False
         last_effective_width = overlay_effective_width
+        # Per-frame Y-overflow wall state (reset every refresh): True once ANY
+        # line is found in the data≫window full-height-stroke regime. The
+        # idle-AA gate reads this to hold AA OFF over the wall.
+        frame_wall = False
         for name, (axis_facade, line_facade) in list(self._channel_lines.items()):
             entry = self.channel_data.get(name)
             if entry is None:
@@ -322,13 +432,33 @@ class Renderer(_CanvasBackref):
                 effective_width = self._effective_pixel_width(
                     pixel_width, source_len=len(sig), dense_count=dense_count,
                 )
-            last_effective_width = effective_width
+
+            # Current Y view span for THIS line. Folded (quantized) into the
+            # range key so a pure-Y narrow (box-zoom Y / scroll Y / stale narrow
+            # Y carried across a view switch) — which leaves xlim and
+            # effective_width unchanged — still invalidates the cache and lets
+            # the wall guard re-evaluate. Defensive: a degenerate handle gives
+            # y_span 0.0, which _is_y_overflow_wall treats as "no wall".
+            try:
+                _ylo, _yhi = axis_facade.get_ylim()
+                y_span = abs(float(_yhi) - float(_ylo))
+            except Exception:
+                y_span = 0.0
+            y_key = _quantize_y_span_key(y_span)
 
             # Range-key gate: if the key didn't change since the last flush,
             # skip the envelope+setData work entirely. This keeps repeated
-            # _flush_pending_refresh() calls with the same xlim a no-op.
-            range_key = _quantize_range_key(name, xlim, effective_width)
+            # _flush_pending_refresh() calls with the same xlim/ylim a no-op.
+            # y_key is APPENDED to the x-key tuple (not nested) so range_key[0]
+            # stays the channel name for existing key-shape consumers.
+            range_key = _quantize_range_key(name, xlim, effective_width) + (y_key,)
             if self._last_range_key.get(name) == range_key:
+                # Cache hit: preserve the wall state recorded for this line at
+                # the last (un-skipped) flush so a no-op refresh does not clear
+                # a still-active wall (AA must stay off until the user widens Y).
+                if self._line_wall_state.get(name):
+                    frame_wall = True
+                last_effective_width = effective_width
                 continue
 
             is_monotonic = self._channel_is_monotonic.get(name)
@@ -346,6 +476,46 @@ class Renderer(_CanvasBackref):
                 )
                 continue
 
+            # Y-overflow wall guard (universal 兜底, see module constants). The
+            # envelope's own min/max gives data_span for FREE; compare to the
+            # line's Y view span. data≫window → guaranteed full-height stroke
+            # wall regardless of mode/density →额外封顶 the bucket count and recompute
+            # ONCE at the wall width (numpy over the visible window, ms-level;
+            # only paid in the wall case), and flag the frame so AA stays off.
+            line_wall = False
+            try:
+                _es = np.asarray(env_s, dtype=np.float64)
+                _finite = _es[np.isfinite(_es)]
+                data_span = (
+                    float(_finite.max() - _finite.min())
+                    if _finite.size else 0.0
+                )
+            except Exception:
+                data_span = 0.0
+            if self._is_y_overflow_wall(data_span, y_span):
+                wall_width = self._wall_capped_width(effective_width)
+                if wall_width < effective_width:
+                    try:
+                        env_t, env_s = positions_envelope(
+                            t, sig,
+                            xlim=xlim,
+                            pixel_width=wall_width,
+                            is_monotonic=is_monotonic,
+                        )
+                    except Exception as exc:
+                        _log.warning(
+                            "wall-capped positions_envelope failed for %r: %s",
+                            name, exc,
+                        )
+                    else:
+                        effective_width = wall_width
+                # Even when the width was already at/below the wall ceiling we
+                # still hold AA off — the wall is present, just already coarse.
+                line_wall = True
+                frame_wall = True
+
+            self._line_wall_state[name] = line_wall
+            last_effective_width = effective_width
             self._last_range_key[name] = range_key
             updated_any = True
 
@@ -353,6 +523,9 @@ class Renderer(_CanvasBackref):
                 line_facade.plot_data_item.setData(env_t, env_s)
             except Exception as exc:
                 _log.warning("PlotDataItem.setData failed for %r: %s", name, exc)
+
+        # Publish the frame's wall state for the idle-AA gate (quality.py).
+        self._y_overflow_wall_active = bool(frame_wall)
 
         # Debounced tail work: retick axes and notify listeners only once after
         # rapid drag ticks settle, instead of blocking every mouse-move event.

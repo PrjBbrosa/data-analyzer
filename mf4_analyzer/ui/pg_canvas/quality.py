@@ -177,6 +177,16 @@ class QualityManager(_CanvasBackref):
 
     def _idle_aa_density_ok(self) -> bool:
         """Hysteresis density gate, branched on overlay vs subplot economics."""
+        # Universal Y-overflow wall guard: while any line is drawn data≫window
+        # (full-height vertical-stroke 满高竖线墙, see renderer module constants)
+        # the idle timer must NOT re-arm AA — the expensive AA compositing over a
+        # raster-fill wall is exactly the cost this guard exists to avoid. The
+        # bucket cap already coarsened the strokes; holding AA off keeps the
+        # frame cheap until the user widens Y. Reuses the existing density gate
+        # (no new AA pathway) by hard-failing it for the wall frame.
+        if getattr(self, "_y_overflow_wall_active", False):
+            self.density_allowed = False
+            return False
         status = self._density_status()
         if status["error"]:
             self.density_allowed = False
