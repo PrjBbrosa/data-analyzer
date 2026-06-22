@@ -6565,6 +6565,186 @@ class TestFilterCompanionOverlay:
                 return line.plot_data_item
         return None
 
+    def _rows_big_primary_tiny_companion(self, *, filt_visible=True,
+                                          n_sources=2):
+        """Source channels with LARGE amplitude (±5) each paired with a
+        TINY-amplitude (±0.02) filtered companion — mimics a low-pass 100 Hz
+        overlay on a ±2~6 wideband channel. Used to pin the shared-axis Y
+        auto-range to the PRIMARY extent so the dense original is never drawn
+        inside a companion-narrow Y window (满屏竖线墙卡顿真因)."""
+        t = np.linspace(0.0, 1.0, 4_000, dtype=np.float64)
+        rows = []
+        palette = ["#1769e0", "#ef4444", "#00b894"]
+        for i in range(n_sources):
+            name = f"ch{i}"
+            color = palette[i % len(palette)]
+            primary = 5.0 * np.sin(2 * np.pi * (5 * (i + 1)) * t)
+            rows.append((name, True, t, primary, color, "u", "fid-1"))
+            tiny = 0.02 * np.sin(2 * np.pi * (5 * (i + 1)) * t)
+            meta = {"companion_of": name, "dash": True}
+            rows.append((
+                f"{name} (LP 100Hz)", filt_visible, t, tiny, color,
+                "u", "fid-1", meta,
+            ))
+        return rows
+
+    def test_companion_axis_y_covers_primary_not_companion(self, qapp):
+        """REGRESSION (滤波子图卡顿真因): when a tiny-amplitude (±0.02) dashed
+        companion shares a subplot ViewBox with its LARGE (±5) source, the
+        axis Y range must cover the PRIMARY extent (span ≈ 10), NOT the
+        companion's ±0.02. Otherwise the dense original gets rasterized inside
+        a narrow Y window as a full-height vertical-stroke wall (十几秒卡顿)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(n_sources=2),
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        for i in range(2):
+            src = f"ch{i}"
+            handle = canvas._channel_lines[src][0]
+            lo, hi = handle.get_ylim()
+            span = hi - lo
+            # Primary spans ~10 (±5); companion spans ~0.04 (±0.02).
+            # The shared-axis Y MUST track the primary, not collapse to the
+            # companion's tiny window.
+            assert span > 5.0, (
+                f"{src}: Y span {span:.4f} collapsed toward the tiny "
+                f"companion (±0.02) instead of covering the ±5 primary"
+            )
+            # And it must actually contain the primary's ±5 extent.
+            assert lo <= -4.5 and hi >= 4.5, (
+                f"{src}: Y=[{lo:.3f},{hi:.3f}] does not contain the "
+                f"±5 primary extent"
+            )
+
+    def test_companion_axis_y_autorange_disabled_pinned_to_primary(self, qapp):
+        """MECHANISM guard: a companion-carrying subplot ViewBox must have its
+        Y auto-range turned OFF (range pinned explicitly to the primary extent)
+        so pyqtgraph can NEVER recompute Y from the tiny companion mid-build and
+        paint the dense original inside a narrow Y window. A row WITHOUT a
+        companion keeps Y auto-range ON (unchanged default)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        rows = self._rows_big_primary_tiny_companion(n_sources=2)
+        # Append a third source with NO companion to assert it stays on auto.
+        t = rows[0][2]
+        rows.append(("solo", True, t, 4.0 * np.sin(2 * np.pi * 7 * t),
+                     "#8b5cf6", "u", "fid-1"))
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        # Companion-carrying axes: Y auto-range OFF.
+        for i in range(2):
+            vb = canvas._channel_lines[f"ch{i}"][0].view_box
+            assert vb.state["autoRange"][1] is False, (
+                f"ch{i}: Y auto-range still ON — a companion-axis must pin Y "
+                f"to the primary extent so no narrow-Y transient can paint"
+            )
+        # No-companion axis: Y auto-range untouched (still ON).
+        solo_vb = canvas._channel_lines["solo"][0].view_box
+        assert solo_vb.state["autoRange"][1] is True, (
+            "solo (no companion): Y auto-range must stay ON (no behavior "
+            "change for rows without a filtered overlay)"
+        )
+
+    def test_home_keeps_companion_axis_on_primary_extent(self, qapp):
+        """Toolbar Home (查看全部) must NOT collapse a companion-carrying axis
+        to the tiny companion: the companion shares the source ViewBox, so
+        iterating it would overwrite the primary framing. Y must stay on the
+        ±5 primary after Home."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(n_sources=2),
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        canvas.reset_view_to_data_extents()
+        QCoreApplication.processEvents()
+        for i in range(2):
+            lo, hi = canvas._channel_lines[f"ch{i}"][0].get_ylim()
+            assert (hi - lo) > 5.0 and lo <= -4.5 and hi >= 4.5, (
+                f"ch{i}: Home collapsed Y to [{lo:.3f},{hi:.3f}] (companion "
+                f"overwrote primary on the shared axis)"
+            )
+
+    def test_fit_y_keeps_companion_axis_on_primary_extent(self, qapp):
+        """Y 轴自适应 (fit_y_to_visible_x) must also skip companions so the
+        shared axis fits the ±5 primary, not the ±0.02 dashed overlay."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(n_sources=2),
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        canvas.fit_y_to_visible_x()
+        QCoreApplication.processEvents()
+        for i in range(2):
+            lo, hi = canvas._channel_lines[f"ch{i}"][0].get_ylim()
+            assert (hi - lo) > 5.0 and lo <= -4.5 and hi >= 4.5
+
+    def test_companion_axis_y_primary_extent_when_filtered_hidden(self, qapp):
+        """Even with the companion hidden at build (显示滤波后 off), the axis
+        Y must still frame the primary — the pin reads the PRIMARY data, never
+        the companion."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(
+                n_sources=2, filt_visible=False
+            ),
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        for i in range(2):
+            handle = canvas._channel_lines[f"ch{i}"][0]
+            lo, hi = handle.get_ylim()
+            assert (hi - lo) > 5.0 and lo <= -4.5 and hi >= 4.5
+
+    def test_no_companion_subplot_y_unchanged(self, qapp):
+        """A subplot row WITHOUT a companion keeps pyqtgraph's default Y
+        auto-range (the pin only engages for companion-carrying axes); the
+        single-curve extent still frames the ±5 primary."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.linspace(0.0, 1.0, 4_000, dtype=np.float64)
+        rows = [
+            ("a", True, t, 5.0 * np.sin(2 * np.pi * 5 * t), "#1769e0", "u",
+             "fid-1"),
+            ("b", True, t, 3.0 * np.sin(2 * np.pi * 9 * t), "#ef4444", "u",
+             "fid-1"),
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        lo, hi = canvas._channel_lines["a"][0].get_ylim()
+        assert (hi - lo) > 5.0 and lo <= -4.5 and hi >= 4.5
+
     def test_subplot_count_equals_source_count_not_doubled(self, qapp):
         """Enabling filter overlays must NOT double the subplot rows: the
         companion renders on its source's row, so axes_list == source count."""
