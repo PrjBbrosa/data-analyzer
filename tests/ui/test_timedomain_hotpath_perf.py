@@ -214,8 +214,18 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
             range_values=lambda: (0.0, 1.0),
             xaxis_label=lambda: "Time (s)",
             tick_density=lambda: (10, 8),
-        )
+        ),
+        filter_panel=None,
     )
+    # The data-assembly logic now lives in the extracted `_build_time_plot_data`
+    # helper; bind the real (unbound) methods onto the fake so the seam is
+    # exercised end-to-end. With no filter_panel the helper never touches the
+    # monkeypatched stats functions.
+    fake._build_time_plot_data = types.MethodType(
+        mw.MainWindow._build_time_plot_data, fake
+    )
+    fake._estimate_fs = types.MethodType(mw.MainWindow._estimate_fs, fake)
+    fake._filter_suffix = types.MethodType(mw.MainWindow._filter_suffix, fake)
     fake._overlay_primary = None
     fake._last_plot_mode = None
     fake._last_range_state = None

@@ -22,6 +22,7 @@ from .inspector_sections import (
     PersistentTop,
     TimeContextual,
 )
+from .inspector_sections.time_filter import FilterPanel
 
 
 # 2026-04-26 R3 紧凑化 fix-1: cap the Inspector's content width so
@@ -148,6 +149,13 @@ class Inspector(QWidget):
         time_card_lay.addWidget(self.top)
         self.time_ctx = TimeContextual(self._time_domain_card)
         time_card_lay.addWidget(self.time_ctx)
+        # Functional mount of the time-domain filter controls (Task 3). The
+        # final card layout / visual reorg is Task 4; for now the panel lives
+        # in the time-domain card so `_build_time_plot_data` can read its spec
+        # and a grab() picks it up. `filter_changed` is intentionally NOT wired
+        # to a replot — the filter is read on the next "绘图" submit.
+        self.filter_panel = FilterPanel(self._time_domain_card)
+        time_card_lay.addWidget(self.filter_panel)
         body_lay.addWidget(self._time_domain_card)
 
         self.contextual_stack = QStackedWidget(self._scroll_body)

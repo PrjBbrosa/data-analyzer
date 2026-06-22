@@ -28,11 +28,16 @@ class FilterPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(4)
 
-        title = QLabel("滤波")
-        title.setStyleSheet(
+        # Enable toggle doubles as the section title. Filtering is OFF by
+        # default: a freshly-opened inspector must NOT overlay filtered traces
+        # on every time-domain plot — the overlay only appears once the user
+        # explicitly turns it on (otherwise routine plots double their traces).
+        self.chk_enable = QCheckBox("滤波")
+        self.chk_enable.setChecked(False)
+        self.chk_enable.setStyleSheet(
             "font-weight:600; color:#1f2d3d; background:transparent;"
         )
-        root.addWidget(title)
+        root.addWidget(self.chk_enable)
 
         fl = QFormLayout()
         fl.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -108,7 +113,7 @@ class FilterPanel(QWidget):
             w.currentTextChanged.connect(lambda *_: self.filter_changed.emit())
         for s in (self.spin_cut, self.spin_lo, self.spin_hi):
             s.valueChanged.connect(lambda *_: self.filter_changed.emit())
-        for c in (self.chk_orig, self.chk_filt):
+        for c in (self.chk_enable, self.chk_orig, self.chk_filt):
             c.toggled.connect(lambda *_: self.filter_changed.emit())
 
     # --- row visibility ------------------------------------------------
@@ -158,6 +163,12 @@ class FilterPanel(QWidget):
                 cutoff_hi=self.spin_hi.value(),
             )
         return FilterSpec(kind, order=order, cutoff=self.spin_cut.value())
+
+    def is_enabled(self):
+        return self.chk_enable.isChecked()
+
+    def set_enabled(self, on):
+        self.chk_enable.setChecked(bool(on))
 
     def show_original(self):
         return self.chk_orig.isChecked()

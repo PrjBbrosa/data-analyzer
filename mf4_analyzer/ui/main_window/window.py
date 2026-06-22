@@ -1766,36 +1766,22 @@ class MainWindow(
         from ..chart_stack import _STATS_STRIP_ENABLED
         collect_stats = update_primary_ui and _STATS_STRIP_ENABLED
 
-        data = [];
+        data = self._build_time_plot_data(
+            checked, custom_x, range_enabled, range_lo, range_hi,
+        )
         st = {}
-        for fid, ch, color in checked:
-            fd = self.channel_list.get_file_data(fid)
-            if fd is None or ch not in fd.data.columns: continue
-
-            time_axis = fd.time_array
-            # 使用自定义横坐标或默认时间轴 — by reference; the canvas
-            # treats these arrays as read-only.
-            if custom_x is not None and len(custom_x) == len(fd.data):
-                x_axis = custom_x
-            else:
-                x_axis = time_axis
-
-            sig = fd.data[ch].to_numpy(copy=False)
-            unit = fd.channel_units.get(ch, '');
-            name = fd.get_prefixed_channel(ch)
-            # Only allocate filtered arrays when the user actually asked
-            # for range filtering. The range controls are always in
-            # acquisition time, even when the visible X axis is a channel.
-            if range_enabled:
-                m = (time_axis >= range_lo) & (time_axis <= range_hi)
-                x_axis, sig = x_axis[m], sig[m]
-            if len(sig) == 0: continue
-            # Statistics are computed from the (post-range-filter)
-            # original samples — never from envelope output.
-            data.append((name, True, x_axis, sig, color, unit, fid))
-            if collect_stats:
-                st[name] = {'min': np.min(sig), 'max': np.max(sig), 'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
-                            'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit}
+        if collect_stats:
+            # Statistics are computed from the ORIGINAL (post-range-filter)
+            # samples only — filtered overlay traces are excluded so the
+            # stats strip mirrors the acquired data, never display-layer math.
+            for name, _vis, _x, sig, _color, unit, _fid in data:
+                if name in self._time_filtered_names:
+                    continue
+                st[name] = {
+                    'min': np.min(sig), 'max': np.max(sig),
+                    'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
+                    'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit,
+                }
         if not data:
             canvas.clear()
             canvas.draw()
@@ -1822,6 +1808,102 @@ class MainWindow(
             if collect_stats:
                 self.chart_stack.stats_strip.update_stats(st);
             self.statusBar.showMessage(f"绘制: {len(checked)} 通道, {len(set(fid for fid, _, _ in checked))} 文件")
+
+    def _filter_suffix(self, spec):
+        """Short trace-name tag for a filtered overlay, e.g. ``LP 50Hz`` /
+        ``BP 100–2000Hz``. The trailing ``Hz)`` is the marker the stats path
+        uses to exclude filtered overlays from the stats strip."""
+        tag = {"low": "LP", "high": "HP", "band": "BP", "bandstop": "BS"}[spec.kind]
+        if spec.kind in ("band", "bandstop"):
+            return f"{tag} {spec.cutoff_lo:g}–{spec.cutoff_hi:g}Hz"
+        return f"{tag} {spec.cutoff:g}Hz"
+
+    def _build_time_plot_data(self, checked=None, custom_x=None,
+                              range_enabled=None, range_lo=0.0, range_hi=0.0):
+        """Assemble the time-domain plot list
+        ``data = [(name, visible, x, sig, color, unit, fid), ...]``.
+
+        Pure w.r.t. ``channel_data`` — it never mutates samples. Each checked
+        channel yields its ORIGINAL trace (``visible = show_original``) and, when
+        a filter is configured and "显示滤波后" is on, a display-layer FILTERED
+        overlay (``visible = show_filtered``) computed per-channel at the
+        channel's own ``fs`` via the pure-numpy ``signal.filters`` backend. The
+        filtered overlay is display-only; it is not written back anywhere.
+
+        Args default to live UI state so the helper is callable with no args
+        for unit tests; ``_plot_time_on_canvas`` passes its already-resolved
+        values to avoid recomputing them.
+        """
+        from ...signal import filters as _filters
+
+        if checked is None:
+            checked = self.channel_list.get_checked_channels()
+        if custom_x is None and self._custom_xaxis_fid and self._custom_xaxis_ch:
+            if self._custom_xaxis_fid in self.files:
+                xfd = self.files[self._custom_xaxis_fid]
+                if self._custom_xaxis_ch in xfd.data.columns:
+                    custom_x = xfd.data[self._custom_xaxis_ch].to_numpy(copy=False)
+        if range_enabled is None:
+            range_enabled = self.inspector.top.range_enabled()
+            range_lo, range_hi = self.inspector.top.range_values()
+
+        fp = getattr(self.inspector, "filter_panel", None)
+        spec = None
+        show_orig, show_filt = True, True
+        filt_enabled = False
+        if fp is not None and fp.is_enabled():
+            spec = fp.filter_spec()
+            show_orig, show_filt = fp.show_original(), fp.show_filtered()
+            filt_enabled = (spec.cutoff > 0) or (
+                spec.cutoff_lo > 0 and spec.cutoff_hi > 0)
+
+        # Track filtered-overlay names so the stats path can exclude them
+        # without relying on a fragile name-suffix heuristic.
+        self._time_filtered_names = set()
+
+        data = []
+        for fid, ch, color in checked:
+            fd = self.channel_list.get_file_data(fid)
+            if fd is None or ch not in fd.data.columns:
+                continue
+            time_axis = fd.time_array
+            # Custom X axis (by reference; the canvas treats arrays as
+            # read-only).
+            if custom_x is not None and len(custom_x) == len(fd.data):
+                x_axis = custom_x
+            else:
+                x_axis = time_axis
+            sig = fd.data[ch].to_numpy(copy=False)
+            unit = fd.channel_units.get(ch, '')
+            name = fd.get_prefixed_channel(ch)
+            # Range controls are always in acquisition time, even when the
+            # visible X axis is a channel.
+            if range_enabled:
+                m = (time_axis >= range_lo) & (time_axis <= range_hi)
+                x_axis, sig = x_axis[m], sig[m]
+            if len(sig) == 0:
+                continue
+            data.append((name, show_orig, x_axis, sig, color, unit, fid))
+
+            if filt_enabled:
+                fs = float(getattr(fd, "fs", 0.0)) or self._estimate_fs(time_axis)
+                try:
+                    gspec, _msg = _filters.nyquist_guard(spec, fs)
+                except ValueError:
+                    # band/bandstop with lo >= hi → draw original only.
+                    continue
+                filtered = _filters.apply(sig, gspec, fs)
+                fname = f"{name} ({self._filter_suffix(gspec)})"
+                self._time_filtered_names.add(fname)
+                data.append((fname, show_filt, x_axis, filtered, color, unit, fid))
+        return data
+
+    def _estimate_fs(self, t):
+        t = np.asarray(t, dtype=float)
+        if t.size < 2:
+            return 0.0
+        dt = np.median(np.diff(t))
+        return float(1.0 / dt) if dt > 0 else 0.0
 
     def open_editor(self):
         if not self.files or not self._active or self._active not in self.files:
