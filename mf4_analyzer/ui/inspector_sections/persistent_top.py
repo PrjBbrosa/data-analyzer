@@ -87,18 +87,37 @@ class PersistentTop(QWidget):
             pass
         root.addWidget(self.btn_collapser)
 
-        # ------- Collapser body (the three groups live here) -------
+        # ------- Collapser body (the two cards live here) -------
+        # 2026-06-22 卡片重组: the persistent-top body now hosts TWO independent
+        # white cards inside the collapser, replacing the previous single
+        # body that stacked both groups in one card:
+        #   ① _xaxis_card    — 横坐标 group + 「应用」 (semantics unchanged)
+        #   ② _range_card    — 时间范围 group; the host Inspector adds the
+        #                       FilterPanel here, below the range group, and the
+        #                       contextual 「绘图」 button submits both.
+        # The collapser still toggles both cards together. Card surfaces reuse
+        # the existing white-card QSS (objectName-keyed) so neither shows a
+        # default gray QFrame fill.
         self._collapser_body = QFrame(self)
         body_lay = QVBoxLayout(self._collapser_body)
         self._body_lay = body_lay
-        # Match the contextual cards below: the header remains full-width as
-        # the click target, while the expanded content keeps 10px breathing
-        # room on both sides.
-        body_lay.setContentsMargins(10, 0, 10, 0)
+        body_lay.setContentsMargins(0, 0, 0, 0)
         body_lay.setSpacing(6)
         root.addWidget(self._collapser_body)
 
-        # ------- Xaxis group -------
+        def _make_card(object_name):
+            card = QFrame(self._collapser_body)
+            card.setObjectName(object_name)
+            card.setAttribute(Qt.WA_StyledBackground, True)
+            card_lay = QVBoxLayout(card)
+            # 10px horizontal breathing room (matches the previous body inset)
+            # now lives inside each card so the white surface hugs the content.
+            card_lay.setContentsMargins(10, 6, 10, 8)
+            card_lay.setSpacing(6)
+            return card, card_lay
+
+        # ------- Card ①: Xaxis -------
+        self._xaxis_card, xaxis_card_lay = _make_card("timeXaxisCard")
         g = QGroupBox("横坐标")
         self._xaxis_group = g
         fl = QFormLayout(g)
@@ -119,8 +138,12 @@ class PersistentTop(QWidget):
         self.btn_apply_xaxis = QPushButton("应用")
         self.btn_apply_xaxis.setProperty("role", "primary")
         fl.addRow(self.btn_apply_xaxis)
-        body_lay.addWidget(g)
+        xaxis_card_lay.addWidget(g)
+        body_lay.addWidget(self._xaxis_card)
 
+        # ------- Card ②: Range (+ FilterPanel, mounted by Inspector) -------
+        self._range_card, range_card_lay = _make_card("timeRangeFilterCard")
+        self._range_card_lay = range_card_lay
         # ------- Range group -------
         g = QGroupBox("时间范围")
         self._range_group = g
@@ -175,7 +198,8 @@ class PersistentTop(QWidget):
             self.spin_start, "– 结束", self.spin_end,
         )
         fl.addRow("开始:", self._range_row_host)
-        body_lay.addWidget(g)
+        range_card_lay.addWidget(g)
+        body_lay.addWidget(self._range_card)
 
         # ------- Tick density compatibility state -------
         # The visible control moved to the chart toolbar popout. Keep these
@@ -284,7 +308,19 @@ class PersistentTop(QWidget):
         return self._range_group
 
     def range_group_layout(self):
-        return self._body_lay
+        # 2026-06-22 卡片重组: the range group's home in time mode is now the
+        # 时间范围·滤波 card's layout (was self._body_lay). The contextual modes
+        # still reparent the group out via inspector._place_range_group_for_mode.
+        return self._range_card_lay
+
+    def xaxis_card(self):
+        return self._xaxis_card
+
+    def range_card(self):
+        return self._range_card
+
+    def range_card_layout(self):
+        return self._range_card_lay
 
     def set_range_group_embedded(self, embedded):
         self._range_group.setTitle("分析时间" if embedded else "时间范围")

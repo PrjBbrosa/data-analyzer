@@ -147,15 +147,22 @@ class Inspector(QWidget):
         time_card_lay.setSpacing(0)
         self.top = PersistentTop(self._time_domain_card)
         time_card_lay.addWidget(self.top)
-        self.time_ctx = TimeContextual(self._time_domain_card)
-        time_card_lay.addWidget(self.time_ctx)
-        # Functional mount of the time-domain filter controls (Task 3). The
-        # final card layout / visual reorg is Task 4; for now the panel lives
-        # in the time-domain card so `_build_time_plot_data` can read its spec
-        # and a grab() picks it up. `filter_changed` is intentionally NOT wired
-        # to a replot — the filter is read on the next "绘图" submit.
-        self.filter_panel = FilterPanel(self._time_domain_card)
-        time_card_lay.addWidget(self.filter_panel)
+        # 2026-06-22 卡片重组 (Task 4): the persistent top now exposes TWO
+        # independent white cards — ① 横坐标 (xaxis + 「应用」) and ② 时间范围·滤波.
+        # Expose them on the Inspector for structural assertions and downstream
+        # use. The FilterPanel is mounted INSIDE card ②, below the time-range
+        # group, and the single contextual 「绘图」 button is the card's bottom
+        # action so range + filter submit together. `filter_changed` is
+        # intentionally NOT wired to a replot — the filter is read on the next
+        # 「绘图」 submit (avoids recompute on every keystroke). Filtering is
+        # opt-in via the panel's 「滤波」 checkbox (default OFF), placed as the
+        # filter section title row.
+        self._xaxis_card = self.top.xaxis_card()
+        self._range_filter_card = self.top.range_card()
+        self.filter_panel = FilterPanel(self._range_filter_card)
+        self.top.range_card_layout().addWidget(self.filter_panel)
+        self.time_ctx = TimeContextual(self._range_filter_card)
+        self.top.range_card_layout().addWidget(self.time_ctx)
         body_lay.addWidget(self._time_domain_card)
 
         self.contextual_stack = QStackedWidget(self._scroll_body)
@@ -248,6 +255,9 @@ class Inspector(QWidget):
             self.top.set_range_group_embedded(False)
             self.top.set_xaxis_section_visible(True)
             self.top.setVisible(True)
+            # The range card hosts [range_group, filter_panel]; re-insert the
+            # group ABOVE the filter panel (addWidget would append it below).
+            target_layout.insertWidget(0, group)
         else:
             ctx = {
                 'fft': self.fft_ctx,
@@ -257,7 +267,7 @@ class Inspector(QWidget):
             target_layout = ctx.time_range_layout()
             self.top.set_range_group_embedded(True)
             self.top.setVisible(False)
-        target_layout.addWidget(group)
+            target_layout.addWidget(group)
         self._range_group_owner_layout = target_layout
         group.setVisible(True)
 

@@ -1002,7 +1002,22 @@ Inspector QFrame#fftTimeSignalCard {
     padding: 0;
 }
 
+/* 2026-06-22 卡片重组: timeDomainSettingsCard is now a TRANSPARENT outer host
+ * that stacks the persistent top (which owns the two white cards below) and
+ * the time contextual (「绘图」). The white surfaces moved to the inner
+ * timeXaxisCard / timeRangeFilterCard so the two settings cards read as
+ * independent panels instead of one combined block. */
 Inspector QFrame#timeDomainSettingsCard {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+}
+
+/* The two independent time-domain settings cards: ① 横坐标 and
+ * ② 时间范围·滤波. Same white-card treatment as the analysis sig-cards. */
+Inspector QFrame#timeXaxisCard,
+Inspector QFrame#timeRangeFilterCard {
     background-color: #ffffff;
     border: 1px solid #dbe2eb;
     border-radius: 6px;

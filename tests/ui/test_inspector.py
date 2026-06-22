@@ -1744,9 +1744,10 @@ def test_fft_contextual_fields_fill_column_under_qss(qapp, qtbot):
 
 
 def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbot):
-    """Expanded chart settings should use the same 10px content inset as
-    the contextual cards below it, while keeping the collapsible header full
-    width as the click target."""
+    """2026-06-22 卡片重组: 横坐标 and 时间范围 now live in two independent white
+    cards (timeXaxisCard / timeRangeFilterCard). Each group should use the
+    same 10px content inset inside its own card, while the collapser header
+    stays full width as the click target."""
     from pathlib import Path
     from PyQt5.QtWidgets import QFrame, QGroupBox
     from mf4_analyzer.ui.inspector import Inspector
@@ -1767,40 +1768,37 @@ def test_persistent_top_sections_match_contextual_card_breathing_room(qapp, qtbo
         qtbot.wait(50)
 
         root = insp._scroll_body
-        card = insp.findChild(QFrame, "timeDomainSettingsCard")
-        assert card is not None
+        xaxis_card = insp.findChild(QFrame, "timeXaxisCard")
+        range_card = insp.findChild(QFrame, "timeRangeFilterCard")
+        assert xaxis_card is not None and range_card is not None
+        assert xaxis_card is not range_card
 
         def bounds(widget):
             point = widget.mapTo(root, widget.rect().topLeft())
             return point.x(), point.x() + widget.width()
 
-        card_inner_left = card.mapTo(root, card.contentsRect().topLeft()).x()
-        card_inner_right = card_inner_left + card.contentsRect().width()
-
-        header_left, header_right = bounds(insp.top.btn_collapser)
-        assert (header_left, header_right) == (card_inner_left, card_inner_right)
-
-        time_section = next(
-            group for group in insp.top.findChildren(QGroupBox)
-            if group.title() == "时间范围"
-        )
-        expected_left, expected_right = bounds(time_section)
-        top_sections = {
-            group.title(): bounds(group)
-            for group in insp.top.findChildren(QGroupBox)
-            if group.isVisible()
-        }
-        assert top_sections == {
-            "横坐标": (expected_left, expected_right),
-            "时间范围": (expected_left, expected_right),
-        }
-        assert expected_left == card_inner_left + 10
-        assert card_inner_right - expected_right == 10
+        for card, title in (
+            (xaxis_card, "横坐标"),
+            (range_card, "时间范围"),
+        ):
+            card_inner_left = card.mapTo(
+                root, card.contentsRect().topLeft()
+            ).x()
+            card_inner_right = card_inner_left + card.contentsRect().width()
+            group = next(
+                g for g in insp.top.findChildren(QGroupBox)
+                if g.title() == title
+            )
+            g_left, g_right = bounds(group)
+            assert g_left == card_inner_left + 10
+            assert card_inner_right - g_right == 10
     finally:
         qapp.setStyleSheet(old_sheet)
 
 
-def test_time_domain_settings_render_inside_single_rounded_card(qapp, qtbot):
+def test_time_domain_settings_render_inside_two_rounded_cards(qapp, qtbot):
+    """2026-06-22 卡片重组: 横坐标 is its own card; 时间范围+滤波+绘图 share a
+    second card. timeDomainSettingsCard is now a transparent outer host."""
     from pathlib import Path
     from PyQt5.QtWidgets import QFrame
     from mf4_analyzer.ui.inspector import Inspector
@@ -1820,36 +1818,56 @@ def test_time_domain_settings_render_inside_single_rounded_card(qapp, qtbot):
         qtbot.waitExposed(insp)
         qtbot.wait(50)
 
-        card = insp.findChild(QFrame, "timeDomainSettingsCard")
-        assert card is not None
-        assert card.isVisible()
-        assert insp.top.parentWidget() is card
-        assert insp.time_ctx.parentWidget() is card
-        assert card.layout().indexOf(insp.top) >= 0
-        assert card.layout().indexOf(insp.time_ctx) >= 0
+        outer = insp.findChild(QFrame, "timeDomainSettingsCard")
+        xaxis_card = insp.findChild(QFrame, "timeXaxisCard")
+        range_card = insp.findChild(QFrame, "timeRangeFilterCard")
+        assert outer is not None and outer.isVisible()
+        assert xaxis_card is not None and xaxis_card.isVisible()
+        assert range_card is not None and range_card.isVisible()
+        assert insp._xaxis_card is xaxis_card
+        assert insp._range_filter_card is range_card
+
+        # 绘图 button + filter panel are bottom of the range card (card ②).
+        assert range_card.layout().indexOf(insp.time_ctx) >= 0
+        assert range_card.layout().indexOf(insp.filter_panel) >= 0
+        # 绘图 sits below the filter panel.
+        assert (range_card.layout().indexOf(insp.time_ctx)
+                > range_card.layout().indexOf(insp.filter_panel))
 
         body_left = insp._scroll_body.mapTo(
             insp, insp._scroll_body.rect().topLeft()
         ).x()
-        card_left = card.mapTo(insp, card.rect().topLeft()).x()
-        assert card_left == body_left
-        assert card.width() == insp._scroll_body.width()
+        outer_left = outer.mapTo(insp, outer.rect().topLeft()).x()
+        assert outer_left == body_left
+        assert outer.width() == insp._scroll_body.width()
     finally:
         qapp.setStyleSheet(old_sheet)
 
 
 def test_time_domain_settings_card_qss_matches_contextual_cards():
+    """2026-06-22 卡片重组: the white-card treatment moved from the single
+    timeDomainSettingsCard to the two inner cards; the outer host is now
+    transparent."""
     from pathlib import Path
     import re
 
     qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
-    block = re.search(
+    outer = re.search(
         r"Inspector\s+QFrame#timeDomainSettingsCard\s*\{([^}]*)\}",
         qss,
         flags=re.DOTALL,
     )
-    assert block, "timeDomainSettingsCard QSS block missing"
-    text = block.group(1)
+    assert outer, "timeDomainSettingsCard QSS block missing"
+    assert "background-color: transparent" in outer.group(1)
+
+    inner = re.search(
+        r"Inspector\s+QFrame#timeXaxisCard,\s*\n"
+        r"Inspector\s+QFrame#timeRangeFilterCard\s*\{([^}]*)\}",
+        qss,
+        flags=re.DOTALL,
+    )
+    assert inner, "timeXaxisCard / timeRangeFilterCard QSS block missing"
+    text = inner.group(1)
     assert "background-color: #ffffff" in text
     assert "border: 1px solid #dbe2eb" in text
     assert "border-radius: 6px" in text
