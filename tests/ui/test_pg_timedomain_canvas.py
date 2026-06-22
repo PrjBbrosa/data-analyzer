@@ -455,6 +455,178 @@ class TestOverlayBucketCap:
         assert canvas._effective_pixel_width(pw) == pw
 
 
+# -- subplot dense-channel bucket cap (满高竖线墙 raster wall) ------------
+
+
+class TestSubplotDenseBucketCap:
+    """Subplot mode must ALSO cap the envelope bucket count for HIGH-DENSITY
+    channels (wideband, source_len/pixel_width above the dense threshold),
+    because a dense channel's per-bucket min/max pair becomes a full-height
+    vertical stroke spanning its row — the same raster-fill wall the overlay
+    cap addresses, but for disjoint subplot rows the cost is the SUM over the
+    dense rows. The cap is keyed off PER-CHANNEL density so low-density and
+    single dense channels keep full resolution (red-line fidelity).
+
+    Backward compat: ``_effective_pixel_width(pw)`` with no density kwargs is
+    the legacy no-cap-in-subplot behavior; the per-channel cap only engages
+    when ``source_len`` + ``dense_count`` are supplied (as the refresh loop
+    does).
+    """
+
+    def _subplot_canvas(self, qapp, n, npts):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1920, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.linspace(0.0, 10.0, npts, dtype=np.float64)
+        rows = [
+            (f"ch{i}", True, t, np.sin(t * (i + 1)),
+             "#1769e0", "u", f"fid-{i}")
+            for i in range(n)
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        return canvas
+
+    def test_legacy_no_kwargs_keeps_full_width_subplot(self, qapp):
+        # The legacy single-arg call (used by tests/tools) must stay no-cap
+        # in subplot mode regardless of how dense the underlying data is.
+        canvas = self._subplot_canvas(qapp, 6, 1_000_000)
+        pw = canvas._current_pixel_width()
+        assert canvas._effective_pixel_width(pw) == pw
+
+    def test_dense_multi_channel_subplot_caps_below_full_width(self, qapp):
+        # 6 dense channels (1e6 pts on ~1900 px → decimation ~500, far above
+        # the dense threshold): each row's bucket count must be capped so the
+        # summed dense-row buckets stay within the raster-fill budget.
+        canvas = self._subplot_canvas(qapp, 6, 1_000_000)
+        pw = canvas._current_pixel_width()
+        eff = canvas._effective_pixel_width(
+            pw, source_len=1_000_000, dense_count=6
+        )
+        assert eff < pw, (
+            f"dense 6-channel subplot not capped: eff {eff} == pw {pw}"
+        )
+
+    def test_low_density_channel_subplot_not_capped(self, qapp):
+        # A low-density channel (source_len comparable to pixel_width →
+        # decimation ~1, no full-height-stroke wall) must keep full
+        # resolution even with several such channels present.
+        canvas = self._subplot_canvas(qapp, 6, 2_000)
+        pw = canvas._current_pixel_width()
+        eff = canvas._effective_pixel_width(
+            pw, source_len=2_000, dense_count=0
+        )
+        assert eff == pw
+
+    def test_single_dense_channel_subplot_not_capped(self, qapp):
+        # A SINGLE dense channel keeps full resolution: one disjoint row paints
+        # one wall, which is the already-fast baseline case (red line: don't
+        # coarsen single / few dense channels).
+        canvas = self._subplot_canvas(qapp, 1, 1_000_000)
+        pw = canvas._current_pixel_width()
+        eff = canvas._effective_pixel_width(
+            pw, source_len=1_000_000, dense_count=1
+        )
+        assert eff == pw
+
+    def test_dense_cap_sum_stays_bounded_for_2_to_8(self, qapp):
+        # The summed dense-row bucket count must be bounded by the subplot
+        # dense budget (so total raster-fill cost is capped) yet each row keeps
+        # a sane minimum resolution. Cap engages for >= 2 dense channels.
+        from mf4_analyzer.ui.pg_canvas.renderer import (
+            _SUBPLOT_DENSE_BUCKET_BUDGET,
+            _SUBPLOT_DENSE_MIN_BUCKETS,
+        )
+        pw = 1900
+        canvas = self._subplot_canvas(qapp, 2, 1_000_000)
+        for n in (2, 4, 6, 8):
+            eff = canvas._effective_pixel_width(
+                pw, source_len=1_000_000, dense_count=n
+            )
+            assert eff < pw
+            # Each dense row floored at the per-row minimum so it never
+            # degenerates, and capped so the summed dense buckets stay bounded
+            # by the budget (above the floor regime) — the total raster wall
+            # cost is therefore bounded by max(budget, min*n).
+            assert eff >= _SUBPLOT_DENSE_MIN_BUCKETS
+            bound = max(_SUBPLOT_DENSE_BUCKET_BUDGET,
+                        _SUBPLOT_DENSE_MIN_BUCKETS * n)
+            assert eff * n <= bound * 1.05
+
+
+# -- A: re-show original must NOT recompute the envelope -----------------
+
+
+class TestReshowOriginalNoEnvelopeRecompute:
+    """Hiding then re-showing the original (solid) curves via
+    ``set_original_lines_visible`` must be a pure ``setVisible`` toggle:
+    it must NOT re-run ``positions_envelope`` (the envelope data computed at
+    plot time stays valid while hidden), and it must not synchronously block
+    on a full recompute. The toggle returns the count of curves flipped.
+    """
+
+    def _built_canvas(self, qapp, n=3, npts=200_000):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1280, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        t = np.linspace(0.0, 10.0, npts, dtype=np.float64)
+        rows = [
+            (f"ch{i}", True, t, np.sin(t * (i + 1)),
+             "#1769e0", "u", f"fid-{i}")
+            for i in range(n)
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        canvas._flush_pending_refresh()
+        return canvas
+
+    def test_reshow_does_not_call_positions_envelope(self, qapp, monkeypatch):
+        import mf4_analyzer.signal._envelope_cutils as envmod
+
+        canvas = self._built_canvas(qapp)
+        calls = {"n": 0}
+        orig = envmod.positions_envelope
+
+        def _spy(*a, **k):
+            calls["n"] += 1
+            return orig(*a, **k)
+
+        monkeypatch.setattr(envmod, "positions_envelope", _spy)
+
+        # Hide then re-show: neither path may recompute the envelope.
+        hidden = canvas.set_original_lines_visible(False)
+        assert hidden == 3
+        shown = canvas.set_original_lines_visible(True)
+        assert shown == 3
+        assert calls["n"] == 0, (
+            f"re-show recomputed the envelope {calls['n']}x; it must be a "
+            "pure setVisible toggle"
+        )
+
+    def test_reshow_preserves_envelope_data(self, qapp):
+        canvas = self._built_canvas(qapp)
+        name = next(n for n in canvas._channel_lines)
+        pdi = canvas._channel_lines[name][1].plot_data_item
+        before_x, before_y = pdi.getData()
+        before_len = 0 if before_x is None else len(before_x)
+        assert before_len > 0
+
+        canvas.set_original_lines_visible(False)
+        canvas.set_original_lines_visible(True)
+
+        after_x, _ = pdi.getData()
+        after_len = 0 if after_x is None else len(after_x)
+        # Same envelope data object survives the hide/show round-trip.
+        assert after_len == before_len
+        assert pdi.isVisible() is True
+
+
 # -- fallback-logging contract test class --------------------------------
 
 

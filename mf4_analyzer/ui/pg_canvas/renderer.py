@@ -55,6 +55,39 @@ _HIDPI_MAX_WIDTH = 2560
 _OVERLAY_BUCKET_BUDGET_MULT = 1.3
 
 
+# ---------------------------------------------------------------------------
+# Subplot dense-channel bucket cap (满高竖线墙 raster wall in SPLIT mode).
+#
+# The overlay cap above only governs overlay's shared-rect ViewBox stack. In
+# SUBPLOT/SINGLE mode each channel owns a disjoint short row, so a single (or
+# few) channel never hits the full-height-stroke wall and keeps full
+# pixel_width resolution. But when MANY HIGH-DENSITY wideband channels are
+# stacked (e.g. 6 × 129.5 kHz accel, ~1.2 M pts each), every row's per-bucket
+# min/max pair paints as a full-height vertical stroke spanning its row, and
+# the per-frame raster-fill cost is the SUM over the dense rows — re-showing
+# the 6 hidden originals (set_original_lines_visible) repaints all six walls
+# at once (~1.1 s baseline, ~1.8 s on the re-show in the field).
+#
+# A channel is "dense" when its decimation ratio (source_len / pixel_width)
+# exceeds _SUBPLOT_DENSE_DECIMATION — i.e. each pixel column already collapses
+# many source samples into a min/max wall, so coarsening the bucket count
+# cannot lose a visible feature (the wall stays the wall, just with fewer
+# strokes). Below that ratio the trace is a thin line, not a fill wall, and is
+# left at full resolution (fidelity red line: low-density / single dense
+# channels never coarsen).
+#
+# When >= 2 dense channels are present, each dense row's bucket count is capped
+# to _SUBPLOT_DENSE_BUCKET_BUDGET / dense_count (floored at
+# _SUBPLOT_DENSE_MIN_BUCKETS so a row never degenerates), so the summed dense
+# bucket count is bounded by the budget regardless of channel count. The budget
+# is set so a 6-channel dense stack drops from ~6×1270 buckets to ~6×420,
+# cutting the raster wall while staying far above the per-row min.
+# ---------------------------------------------------------------------------
+_SUBPLOT_DENSE_DECIMATION = 8.0
+_SUBPLOT_DENSE_BUCKET_BUDGET = 2600
+_SUBPLOT_DENSE_MIN_BUCKETS = 350
+
+
 def _capped_hidpi_scale(base_width, requested=_HIDPI_COPY_SCALE):
     """Return the effective magnification for a hi-DPI render.
 
@@ -127,7 +160,8 @@ class Renderer(_CanvasBackref):
         except Exception:
             return self.MAX_PTS
 
-    def _effective_pixel_width(self, pixel_width: int) -> int:
+    def _effective_pixel_width(self, pixel_width: int,
+                               *, source_len=None, dense_count=None) -> int:
         """Envelope bucket count, capped by channel count in OVERLAY mode.
 
         Background (measured, real HDF 6-channel ~129.5 kHz overlay, 1920 px
@@ -187,7 +221,15 @@ class Renderer(_CanvasBackref):
         if pw < 1:
             pw = 1
         if not getattr(self, "_overlay_mode", False):
-            return pw
+            # SUBPLOT / SINGLE. Legacy single-arg calls (no density kwargs)
+            # keep the full pixel_width — disjoint short rows never hit the
+            # full-height-stroke wall on their own. The per-channel
+            # dense-stack cap engages ONLY when the refresh loop supplies the
+            # channel's source_len AND the count of dense channels: >= 2 dense
+            # wideband rows stacked turn the per-frame raster-fill cost into a
+            # SUM of full-height walls (the 显示原始 re-show regression). See the
+            # _SUBPLOT_DENSE_* docstring above.
+            return self._subplot_effective_width(pw, source_len, dense_count)
         curve_count = len(self._channel_lines) if self._channel_lines else 0
         if curve_count <= 0:
             return pw
@@ -196,6 +238,39 @@ class Renderer(_CanvasBackref):
         except (TypeError, ValueError, AttributeError):
             return pw
         cap = int(budget * _OVERLAY_BUCKET_BUDGET_MULT / (2 * curve_count))
+        return max(1, min(pw, cap))
+
+    @staticmethod
+    def _subplot_effective_width(pw: int, source_len, dense_count) -> int:
+        """Per-channel subplot bucket cap for the dense-stack raster wall.
+
+        Returns ``pw`` unchanged (no cap) when:
+          * no density context was supplied (legacy single-arg call), or
+          * this channel is NOT dense (decimation ratio below the threshold —
+            it's a thin line, not a fill wall), or
+          * fewer than 2 dense channels are stacked (a single/few dense rows
+            is the already-fast baseline — coarsening it would only hurt
+            fidelity for no paint win).
+
+        Otherwise caps the dense row to
+        ``_SUBPLOT_DENSE_BUCKET_BUDGET / dense_count`` buckets, floored at
+        ``_SUBPLOT_DENSE_MIN_BUCKETS`` so a row never degenerates, so the
+        summed dense bucket count across rows is bounded.
+        """
+        if source_len is None or dense_count is None:
+            return pw
+        try:
+            slen = int(source_len)
+            n_dense = int(dense_count)
+        except (TypeError, ValueError):
+            return pw
+        if n_dense < 2:
+            return pw
+        # Is THIS channel dense? (decimation = source samples per bucket).
+        if pw <= 0 or slen / pw < _SUBPLOT_DENSE_DECIMATION:
+            return pw
+        cap = int(_SUBPLOT_DENSE_BUCKET_BUDGET / n_dense)
+        cap = max(_SUBPLOT_DENSE_MIN_BUCKETS, cap)
         return max(1, min(pw, cap))
 
     def _refresh_visible_data(self):
@@ -210,16 +285,44 @@ class Renderer(_CanvasBackref):
         pixel_width = self._current_pixel_width()
         # Overlay mode caps the bucket count by channel count so the dense
         # narrow-Y vertical-stroke wall stays within the raster-fill budget
-        # (see _effective_pixel_width). Subplot/single keep full pixel_width.
-        effective_width = self._effective_pixel_width(pixel_width)
+        # (see _effective_pixel_width). Subplot/single keep full pixel_width
+        # EXCEPT when >= 2 high-density (wideband) channels are stacked, where
+        # the per-channel dense cap (keyed off source_len + dense_count) bounds
+        # the summed full-height-stroke raster wall — the 显示原始 re-show
+        # regression. dense_count is computed up-front so every dense row gets
+        # the same per-row budget share.
+        overlay = bool(getattr(self, "_overlay_mode", False))
+        dense_count = 0
+        if not overlay and pixel_width > 0:
+            for _n, _entry in self.channel_data.items():
+                if _n not in self._channel_lines:
+                    continue
+                try:
+                    _slen = len(_entry[1])
+                except Exception:
+                    continue
+                if _slen / pixel_width >= _SUBPLOT_DENSE_DECIMATION:
+                    dense_count += 1
+        # Overlay path is channel-count capped (no per-channel kwargs needed);
+        # subplot resolves per channel inside the loop.
+        overlay_effective_width = self._effective_pixel_width(pixel_width)
         positions_envelope = _legacy_positions_envelope()
 
         updated_any = False
+        last_effective_width = overlay_effective_width
         for name, (axis_facade, line_facade) in list(self._channel_lines.items()):
             entry = self.channel_data.get(name)
             if entry is None:
                 continue
             t, sig, color, _unit = entry
+
+            if overlay:
+                effective_width = overlay_effective_width
+            else:
+                effective_width = self._effective_pixel_width(
+                    pixel_width, source_len=len(sig), dense_count=dense_count,
+                )
+            last_effective_width = effective_width
 
             # Range-key gate: if the key didn't change since the last flush,
             # skip the envelope+setData work entirely. This keeps repeated
@@ -253,7 +356,7 @@ class Renderer(_CanvasBackref):
 
         # Debounced tail work: retick axes and notify listeners only once after
         # rapid drag ticks settle, instead of blocking every mouse-move event.
-        signature = (float(xlim[0]), float(xlim[1]), int(effective_width))
+        signature = (float(xlim[0]), float(xlim[1]), int(last_effective_width))
         if not updated_any and signature == self._last_refresh_signature:
             return
         self._last_refresh_signature = signature

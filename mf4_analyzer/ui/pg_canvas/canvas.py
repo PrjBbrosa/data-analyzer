@@ -99,6 +99,7 @@ from mf4_analyzer.ui.pg_canvas.cursor import CursorController
 from mf4_analyzer.ui.pg_canvas.ticks_math import _quantize_range_key, _frame_to_nice
 from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox  # noqa: F401
+from mf4_analyzer.ui.pg_canvas import renderer as _renderer
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
 from mf4_analyzer.ui.pg_canvas.quality import QualityManager
 from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
@@ -346,6 +347,10 @@ class TimeDomainCanvasPG(QWidget):
         # Mirrors canvases.py:_apply_overlay_selection_style (lw 1.0 / 1.8;
         # alpha 0.42 / 1.0). Stored per channel so test/UI can probe.
         self._overlay_mode = False
+        # Number of axis-owning subplot channels that are HIGH-DENSITY (the
+        # dense-stack bucket cap engages at >= 2). Recomputed each
+        # plot_channels; 0 in overlay/single/low-density layouts.
+        self._subplot_dense_count = 0
         # The X-master axis handle in overlay mode. Its ViewBox owns the
         # shared X range, the default mouse-pan, and the scene geometry
         # anchor; NO curves are attached to it (every channel — including
@@ -473,6 +478,24 @@ class TimeDomainCanvasPG(QWidget):
         overlay_mode = (mode == "overlay" and len(vis) >= 2)
         subplot_mode = (mode == "subplot" and len(vis) > 1)
         self._overlay_mode = overlay_mode  # parity attr name with TimeDomainCanvas
+
+        # Subplot dense-stack bucket cap (满高竖线墙): count how many of the
+        # axis-owning channels are HIGH-DENSITY (source_len / plot_width above
+        # the dense threshold). When >= 2 such rows stack, the initial-bind
+        # envelope (and every later refresh) caps each dense row's bucket count
+        # so re-showing the hidden originals doesn't repaint N full-height
+        # vertical-stroke walls at once. Computed up-front so each bind shares
+        # the same per-row budget. Single/low-density rows keep full resolution.
+        self._subplot_dense_count = 0
+        if subplot_mode:
+            probe_w = self._overlay_axes._initial_bind_pixel_width()
+            if probe_w and probe_w > 0:
+                for _v in vis:
+                    try:
+                        if len(_v[2]) / probe_w >= _renderer._SUBPLOT_DENSE_DECIMATION:
+                            self._subplot_dense_count += 1
+                    except Exception:
+                        pass
 
         if subplot_mode:
             for i, (name, t, sig, color, unit, data_id, p_visible) in enumerate(vis):
@@ -1842,8 +1865,11 @@ class TimeDomainCanvasPG(QWidget):
     def _current_pixel_width(self) -> int:
         return self._renderer._current_pixel_width()
 
-    def _effective_pixel_width(self, pixel_width: int) -> int:
-        return self._renderer._effective_pixel_width(pixel_width)
+    def _effective_pixel_width(self, pixel_width: int,
+                               *, source_len=None, dense_count=None) -> int:
+        return self._renderer._effective_pixel_width(
+            pixel_width, source_len=source_len, dense_count=dense_count,
+        )
 
     def _refresh_visible_data(self):
         return self._renderer._refresh_visible_data()

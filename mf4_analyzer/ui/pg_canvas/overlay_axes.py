@@ -305,11 +305,14 @@ class OverlayAxisManager(_CanvasBackref):
                 envelope_builder = legacy_pg_canvases.build_envelope
             except Exception:
                 from mf4_analyzer.signal.envelope import build_envelope as envelope_builder
+            sig_arr_for_len = np.asarray(sig)
             bind_t, bind_s = envelope_builder(
                 np.asarray(t),
-                np.asarray(sig),
+                sig_arr_for_len,
                 xlim=None,
-                pixel_width=self._initial_bind_pixel_width(axis_handle),
+                pixel_width=self._initial_bind_pixel_width(
+                    axis_handle, source_len=len(sig_arr_for_len)
+                ),
                 is_monotonic=None,
             )
         pen = pg.mkPen(color=color, width=self._overlay_default_lw)
@@ -385,11 +388,14 @@ class OverlayAxisManager(_CanvasBackref):
                 envelope_builder = legacy_pg_canvases.build_envelope
             except Exception:
                 from mf4_analyzer.signal.envelope import build_envelope as envelope_builder
+            sig_arr_for_len = np.asarray(sig)
             bind_t, bind_s = envelope_builder(
                 np.asarray(t),
-                np.asarray(sig),
+                sig_arr_for_len,
                 xlim=None,
-                pixel_width=self._initial_bind_pixel_width(source_handle),
+                pixel_width=self._initial_bind_pixel_width(
+                    source_handle, source_len=len(sig_arr_for_len)
+                ),
                 is_monotonic=None,
             )
         style = Qt.DashLine if dash else Qt.SolidLine
@@ -594,8 +600,16 @@ class OverlayAxisManager(_CanvasBackref):
         except Exception:
             pass
 
-    def _initial_bind_pixel_width(self, axis_handle=None) -> int:
-        """Return a first-frame envelope width close to the visible plot width."""
+    def _initial_bind_pixel_width(self, axis_handle=None, *, source_len=None) -> int:
+        """Return a first-frame envelope width close to the visible plot width.
+
+        When the subplot dense-stack cap is active (>= 2 high-density rows,
+        recorded on the canvas as ``_subplot_dense_count`` by ``plot_channels``)
+        and ``source_len`` marks THIS channel as dense, the returned width is
+        capped via the renderer's subplot dense rule so the first painted frame
+        already holds the reduced bucket count — re-showing the hidden
+        originals then repaints capped walls, not full-resolution ones.
+        """
         widths = []
         if axis_handle is not None:
             vb = getattr(axis_handle, "view_box", None)
@@ -615,8 +629,18 @@ class OverlayAxisManager(_CanvasBackref):
         except Exception:
             pass
         if not widths:
-            return self.MAX_PTS
-        return max(1, min(self.MAX_PTS, max(widths)))
+            pw = self.MAX_PTS
+        else:
+            pw = max(1, min(self.MAX_PTS, max(widths)))
+        dense_count = getattr(self._c, "_subplot_dense_count", 0)
+        if source_len is not None and dense_count and dense_count >= 2:
+            try:
+                pw = self._renderer._subplot_effective_width(
+                    pw, source_len, dense_count
+                )
+            except Exception:
+                pass
+        return pw
 
     def _configure_subplot_bottom_axis(self, axis_handle, *, is_bottom):
         pi = axis_handle.plot_item
