@@ -57,6 +57,29 @@ def test_gpu_toggle_is_pill_switch_not_checkbox(qapp, qtbot):
     assert emitted == [False, True]
 
 
+def test_gpu_toggle_only_visible_in_time_mode(qapp, qtbot):
+    from PyQt5.QtWidgets import QFrame
+
+    insp = Inspector()
+    qtbot.addWidget(insp)
+    insp.resize(288, 720)
+    insp.show()
+    qtbot.waitExposed(insp)
+    qapp.processEvents()
+
+    gpu_row = insp.findChild(QFrame, "gpuToggleRow")
+    assert gpu_row is not None
+
+    insp.set_mode("time")
+    qapp.processEvents()
+    assert gpu_row.isVisible()
+
+    for mode in ("fft", "fft_time", "order"):
+        insp.set_mode(mode)
+        qapp.processEvents()
+        assert not gpu_row.isVisible()
+
+
 # ---- Task 2.3: PersistentTop ----
 
 def test_persistent_top_xaxis_mode_toggle(qapp):

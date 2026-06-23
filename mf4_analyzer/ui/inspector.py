@@ -248,22 +248,22 @@ class Inspector(QWidget):
         body_lay.addWidget(self.contextual_stack)
         self.contextual_stack.setVisible(False)
 
-        # GPU 加速开关：固定在右下角，所有模式常驻可见
-        gpu_row = QFrame(self._scroll_body)
-        gpu_row.setObjectName("gpuToggleRow")
-        gpu_row_lay = QHBoxLayout(gpu_row)
+        # GPU 加速开关：仅时域图使用；FFT / Order 面板不显示，避免误导。
+        self._gpu_row = QFrame(self._scroll_body)
+        self._gpu_row.setObjectName("gpuToggleRow")
+        gpu_row_lay = QHBoxLayout(self._gpu_row)
         gpu_row_lay.setContentsMargins(4, 4, 4, 4)
         gpu_row_lay.setSpacing(4)
         gpu_row_lay.addStretch(1)
-        self._gpu_switch = _GpuRenderSwitch(gpu_row)
+        self._gpu_switch = _GpuRenderSwitch(self._gpu_row)
         self._gpu_switch.setToolTip(_GPU_RENDER_TOOLTIP)
         self._gpu_switch.setChecked(False)
         self._gpu_switch.toggled.connect(self.gpu_render_toggled)
-        self._gpu_label = _GpuRenderLabel(self._gpu_switch, gpu_row)
+        self._gpu_label = _GpuRenderLabel(self._gpu_switch, self._gpu_row)
         self._gpu_label.setToolTip(_GPU_RENDER_TOOLTIP)
         gpu_row_lay.addWidget(self._gpu_label, 0)
         gpu_row_lay.addWidget(self._gpu_switch, 0)
-        body_lay.addWidget(gpu_row)
+        body_lay.addWidget(self._gpu_row)
 
         body_lay.addStretch(1)
 
@@ -317,6 +317,7 @@ class Inspector(QWidget):
             self._time_domain_card.setVisible(False)
             self.contextual_stack.setVisible(True)
             self.contextual_stack.setCurrentIndex(idx)
+        self._gpu_row.setVisible(mode == 'time')
         self._place_range_group_for_mode(mode)
         self._update_help_guide(mode)
 
