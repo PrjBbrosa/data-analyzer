@@ -155,7 +155,13 @@ class QualityManager(_CanvasBackref):
             # draw_idle repaints instead of re-rasterizing. Measured 15-30x
             # win for SUBPLOT, but no win for OVERLAY where aux ViewBoxes
             # overlap at one full-plot rect.
-            if not getattr(self, "_overlay_mode", False):
+            # GPU exception: a DeviceCoordinateCache renders each curve to an
+            # offscreen raster pixmap, and that pixmap does NOT composite onto a
+            # QOpenGLWidget viewport on many drivers — the cached curves vanish
+            # while uncached axes/labels still paint. GL repaints are already
+            # cheap, so the cache buys nothing under GL; skip it while GL is on.
+            if (not getattr(self, "_overlay_mode", False)
+                    and not getattr(self, "_gpu_render_on", False)):
                 self._set_curves_cache_mode(QGraphicsItem.DeviceCoordinateCache)
             self.aa_on = True
             try:

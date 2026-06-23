@@ -71,6 +71,8 @@ from PyQt5.QtGui import (
     QPixmap,
 )
 from PyQt5.QtWidgets import (
+    QGraphicsItem,
+    QGraphicsView,
     QVBoxLayout,
     QWidget,
 )
@@ -934,6 +936,29 @@ class TimeDomainCanvasPG(QWidget):
         try:
             self._glw.useOpenGL(want)
             self._gpu_render_on = want
+            # The GL viewport (QOpenGLWidget) does NOT preserve its
+            # framebuffer between paints, while pyqtgraph's GraphicsView ships
+            # with MinimalViewportUpdate (repaint only the dirty rect). Under
+            # GL those two combine to blank every curve outside the dirty strip
+            # on each pan tick — the "拖动时曲线消失" with GPU on. Force whole-
+            # scene repaints while GL owns the viewport (cheap on the GPU — the
+            # entire point of this mode); restore the cheap partial-repaint mode
+            # for the CPU raster path. viewportUpdateMode is a view-level
+            # property, so it persists across the export CPU↔GL viewport swap.
+            self._glw.setViewportUpdateMode(
+                QGraphicsView.FullViewportUpdate if want
+                else QGraphicsView.MinimalViewportUpdate
+            )
+            if want:
+                # If the idle-AA path already switched curves to
+                # DeviceCoordinateCache while on the CPU raster, those cached
+                # pixmaps will NOT composite onto the GL viewport (curves
+                # vanish, axes/labels stay). Drop the cache now; the idle-AA
+                # gate also refuses to re-set it while GL is on.
+                try:
+                    self._quality._set_curves_cache_mode(QGraphicsItem.NoCache)
+                except Exception:
+                    pass
             # useOpenGL() replaces the viewport widget; re-install the
             # event filter so double-click / cursor / overlay keep working.
             self._install_viewport_event_filter()
