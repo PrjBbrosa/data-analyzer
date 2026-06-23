@@ -961,11 +961,23 @@ class OverlayAxisManager(_CanvasBackref):
             return False
 
     def _handle_overlay_mouse_press(self, event):
-        """Overlay-mode left-press: select nearest channel + begin Y-drag."""
+        """Overlay-mode left-press: Alt(Option)+press selects the nearest
+        VISIBLE channel and begins a per-channel Y-drag.
+
+        方案2 — per-channel Y-drag is OPT-IN behind the Alt/Option modifier. A
+        PLAIN left-drag returns False so the ViewBox handles it (X-master pan /
+        RectMode box-zoom): a dense overlay — especially filtered curves that
+        blanket the whole plot — no longer preempts pan, and the Pan toolbar
+        button stays active (no select → no ``_on_overlay_channel_selected`` →
+        no pan toggle-off). Only VISIBLE curves are draggable targets, so with
+        显示原始 off the hidden original is excluded (and vice-versa)."""
         if not self._overlay_mode or self._cursor.visible:
             return False
         try:
             if event.button() != Qt.LeftButton:
+                return False
+            if not (event.modifiers() & Qt.AltModifier):
+                # Plain drag → let pyqtgraph pan / box-zoom.
                 return False
             viewport_pos = event.pos()
         except Exception:
@@ -976,7 +988,9 @@ class OverlayAxisManager(_CanvasBackref):
             return False
         axis_handle = self._overlay_axis_handle_at_scene_pos(scene_pos)
         if axis_handle is not None:
-            name = self._channel_name_for_handle(axis_handle)
+            # The axis may be owned by a hidden primary while a visible
+            # companion shares its ViewBox — drag the VISIBLE channel.
+            name = self._visible_channel_name_for_handle(axis_handle)
             if name is None:
                 return False
             self.select_overlay_channel(name)

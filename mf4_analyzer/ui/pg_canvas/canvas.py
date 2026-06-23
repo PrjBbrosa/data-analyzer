@@ -1354,6 +1354,31 @@ class TimeDomainCanvasPG(QWidget):
                 return name
         return None
 
+    def _overlay_channel_is_visible(self, name):
+        """Whether ``name``'s curve is currently drawn (its PlotDataItem is
+        visible). Hidden curves (显示原始 / 显示滤波后 off) are not valid
+        overlay drag/select targets."""
+        pair = self._channel_lines.get(name)
+        if pair is None:
+            return False
+        pdi = getattr(pair[1], "plot_data_item", None)
+        if pdi is None:
+            return True
+        try:
+            return bool(pdi.isVisible())
+        except Exception:
+            return True
+
+    def _visible_channel_name_for_handle(self, handle):
+        """Return a VISIBLE channel bound on ``handle`` (the dragged axis
+        owner), or None when every curve on it is hidden. A companion shares
+        its primary's handle, so with 显示原始 off this resolves to the visible
+        companion rather than the hidden primary."""
+        for name, (candidate, _line) in self._channel_lines.items():
+            if candidate is handle and self._overlay_channel_is_visible(name):
+                return name
+        return None
+
     def _sync_pg_channel_color(self, channel_name, color):
         return OverlayAxisManager._sync_pg_channel_color(
             self._overlay_axes,

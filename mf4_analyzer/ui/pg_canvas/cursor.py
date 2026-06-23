@@ -425,6 +425,14 @@ class CursorController(_CanvasBackref):
             if vb is None:
                 continue
             pdi = line.plot_data_item
+            # Skip hidden curves: 显示原始/显示滤波后 off makes the line
+            # invisible, but its data is still present — it must NOT be a
+            # selectable/draggable target (排除另外一个).
+            try:
+                if not pdi.isVisible():
+                    continue
+            except Exception:
+                pass
             try:
                 xdata, ydata = pdi.getData()
             except Exception:

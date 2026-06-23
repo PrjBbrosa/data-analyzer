@@ -2957,9 +2957,12 @@ class TestTimeDomainCanvasPGOverlayMouseInteraction:
         from PyQt5.QtCore import QCoreApplication, QEvent, Qt
         from PyQt5.QtGui import QMouseEvent
 
+        # 方案2: per-channel select / Y-drag / blank-deselect is now opt-in
+        # behind Alt(Option). Plain presses fall through to pan, so the
+        # selection-feature tests in this class drive Alt-presses.
         event = QMouseEvent(
             QEvent.MouseButtonPress, point, Qt.LeftButton, Qt.LeftButton,
-            Qt.NoModifier,
+            Qt.AltModifier,
         )
         consumed = canvas.eventFilter(canvas._glw.viewport(), event)
         QCoreApplication.processEvents()
@@ -3301,6 +3304,15 @@ class TestOverlayPressModeSplit:
             Qt.NoModifier,
         )
 
+    def _alt_press_event(self, point):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        return QMouseEvent(
+            QEvent.MouseButtonPress, point, Qt.LeftButton, Qt.LeftButton,
+            Qt.AltModifier,
+        )
+
     def _on_curve_point(self, canvas, channel="torque"):
         handle = canvas._channel_lines[channel][0]
         xdata, ydata = handle.get_lines()[0].plot_data_item.getData()
@@ -3341,8 +3353,12 @@ class TestOverlayPressModeSplit:
         assert canvas._overlay_axes.selected_channel is None
         assert canvas._overlay_axes.dragging is False
 
-    def test_panmode_press_still_selects_and_drags(self, qapp):
-        """PanMode press preserves the existing select + Y-drag behavior."""
+    def test_panmode_plain_press_falls_through_to_pan(self, qapp):
+        """NEW (方案2): a PLAIN (no-modifier) PanMode press must NOT select /
+        Y-drag — it returns False so the ViewBox X-pan runs. This is what lets
+        a dense (filtered) overlay still pan instead of grabbing one curve, and
+        keeps the Pan toolbar button active (no select → no
+        _on_overlay_channel_selected → no pan toggle-off)."""
         import pyqtgraph as pg
 
         canvas = self._overlay_canvas(qapp)
@@ -3351,9 +3367,50 @@ class TestOverlayPressModeSplit:
         point = self._on_curve_point(canvas)
         consumed = canvas._handle_overlay_mouse_press(self._press_event(point))
 
+        assert consumed is False, "plain PanMode press must fall through to pan"
+        assert canvas._overlay_axes.selected_channel is None
+        assert canvas._overlay_axes.dragging is False
+
+    def test_alt_press_selects_and_drags(self, qapp):
+        """Alt(Option)+press is the opt-in per-channel Y-drag: it selects the
+        nearest VISIBLE curve and begins the vertical reposition drag."""
+        import pyqtgraph as pg
+
+        canvas = self._overlay_canvas(qapp)
+        self._set_all_viewboxes_mode(canvas, pg.ViewBox.PanMode)
+
+        point = self._on_curve_point(canvas)
+        consumed = canvas._handle_overlay_mouse_press(self._alt_press_event(point))
+
         assert consumed is True
         assert canvas._overlay_axes.selected_channel == "torque"
         assert canvas._overlay_axes.dragging is True
+
+    def test_alt_press_skips_hidden_curve(self, qapp):
+        """排除隐藏曲线 (两种显示情况都排除另外一个): an Alt-press right on a
+        HIDDEN curve must never select it — only visible curves are draggable
+        targets. Covers 只显示原始 (companion hidden) and 只显示滤波 (original
+        hidden): whichever line is hidden is excluded from the hit test."""
+        import pyqtgraph as pg
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = self._overlay_canvas(qapp)
+        self._set_all_viewboxes_mode(canvas, pg.ViewBox.PanMode)
+
+        hidden = "torque"
+        # Resolve the on-curve point BEFORE hiding (get_lines() drops hidden
+        # lines), then hide the line and Alt-press exactly on it.
+        point = self._on_curve_point(canvas, channel=hidden)
+        pdi = canvas._channel_lines[hidden][1].plot_data_item
+        pdi.setVisible(False)
+        QCoreApplication.processEvents()
+
+        canvas._handle_overlay_mouse_press(self._alt_press_event(point))
+
+        assert canvas._overlay_axes.selected_channel != hidden, (
+            "Alt-press on a HIDDEN curve selected it — hidden curves must be "
+            "excluded from the overlay hit test"
+        )
 
 
 class _FakeDragEvent:
@@ -7024,6 +7081,37 @@ class TestFilterCompanionOverlay:
                 f"ch{i}: re-showing 显示原始 left Y on [{lo:.4f},{hi:.4f}] — "
                 f"the dense ±5 original would paint inside a narrow Y wall"
             )
+
+    def test_overlay_drag_target_is_visible_companion_not_hidden_primary(self, qapp):
+        """方案2 + 排除隐藏: in OVERLAY with 显示原始 off, the per-channel
+        Alt-drag target resolved for a companion-carrying axis must be the
+        VISIBLE companion, never the hidden primary that owns the axis (the
+        companion shares the primary's ViewBox)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(
+                n_sources=2, orig_visible=False, filt_visible=True
+            ),
+            mode="overlay",
+        )
+        QCoreApplication.processEvents()
+        for i in range(2):
+            primary = f"ch{i}"
+            handle = canvas._channel_lines[primary][0]
+            assert canvas._overlay_channel_is_visible(primary) is False, (
+                f"{primary} primary line should be hidden (显示原始 off)"
+            )
+            resolved = canvas._visible_channel_name_for_handle(handle)
+            assert resolved is not None and resolved != primary, (
+                f"drag target {resolved!r} must be the visible companion, not "
+                f"the hidden primary {primary!r}"
+            )
+            assert resolved in canvas._companion_names
 
     def test_no_companion_subplot_y_unchanged(self, qapp):
         """A subplot row WITHOUT a companion keeps pyqtgraph's default Y

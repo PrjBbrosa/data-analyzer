@@ -180,7 +180,7 @@ _HINTS = (
     ),
     Hint(
         id="overlay.drag_y",
-        text="点击曲线后拖动 → 单独调该通道 Y 轴",
+        text="拖动平移时间轴 · Option/Alt+拖曲线 → 单独调该通道 Y 轴",
         surface="context",
         modes=frozenset({"time"}),
         plot_modes=frozenset({"overlay"}),
