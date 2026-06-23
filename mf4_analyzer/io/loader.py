@@ -316,6 +316,13 @@ class DataLoader:
     def load_hdf(fp):
         hf = parse_head_hdf(fp)
         max_factor = max((f for _, f in hf.ch_order), default=1)
+        # 时间轴绝对尺度：delta 是「一个 scan 内交织浮点槽」的间隔，所以一个 scan
+        # 跨 delta×per_scan（per_scan = 每 scan 总浮点数 = Σ 所有通道 factor，含被丢的
+        # 非 FLOAT32 / 全 NaN 通道——它们仍占二进制槽位），factor-f 通道采样周期
+        # = (delta×per_scan)/factor。早先误用 max_factor 代替 per_scan，使时间轴短了
+        # per_scan/max_factor 倍、fs 同比偏大（真实文件实测应 ~50 s / 48 kHz，而非
+        # ~9 s / 129.5 kHz）。绝对尺度已对标真实文件确认，勿改回 max_factor。
+        per_scan = sum(f for _, f in hf.ch_order)
 
         # 标定 + 丢全 NaN；收集被丢通道名+原因（不静默丢弃）
         live = []
@@ -347,7 +354,7 @@ class DataLoader:
                            and np.any(s != 0)), None)
 
         def axis(factor, length):
-            period = hf.delta * (max_factor / factor)
+            period = hf.delta * (per_scan / factor)
             return hf.first_value + np.arange(length, dtype=float) * period
 
         groups = []
@@ -388,6 +395,7 @@ class DataLoader:
                 "kind": hf.kind, "scan_mode": hf.scan_mode,
                 "code_page": hf.code_page, "delta": hf.delta,
                 "n_scans": hf.n_scans, "max_factor": max_factor,
+                "per_scan": per_scan,
                 "source_filename": Path(fp).name,
                 "dropped_channels": dropped,
             }

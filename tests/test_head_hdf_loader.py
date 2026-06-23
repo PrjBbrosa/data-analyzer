@@ -128,6 +128,49 @@ def test_groups_build_multiple_filedata(tmp_path):
     suffixes = {fd.label_suffix for fd in fds}
     assert suffixes == {"2x", "1x"}
     fast = next(fd for fd in fds if fd.label_suffix == "2x")
-    # 快组 fs = 1/period, period = delta*max_factor/factor = 1*2/2 = 1 -> fs≈1
+    # 快组 fs = 1/period, period = delta*per_scan/factor = 1*3/2 = 1.5 -> fs≈0.67
     assert fast.fs > 0
     assert fast.channel_metadata["MOTOR X"]["quantity"] == "acceleration"
+
+
+def test_time_axis_scales_by_total_floats_per_scan_not_max_factor(tmp_path):
+    """时间轴绝对尺度 = delta × Σfactor（per_scan），不是 max_factor。
+
+    回归：旧公式 period = delta × max_factor/factor 把时长压短 Σfactor/max_factor
+    倍（真实文件实测应 ~50 s / 48 kHz，旧公式给 ~9 s / 129.5 kHz）。用 factor 分布
+    {4,1,1}（Σfactor=6 ≠ max_factor=4）的合成文件钉死每通道周期与跨组总时长——
+    没有这条断言，旧的「自洽于公式」用例放过了 5.4× 的绝对尺度错误。
+    """
+    n = 100
+    delta = 1e-3
+    p = write_head_hdf(
+        tmp_path / "rate.hdf", n_scans=n, delta=delta, start_of_data=4096,
+        channels=[
+            {"name": "ACC", "factor": 4, "quantity": "acceleration",
+             "unit": "m/s^2", "calibration": 1.0,
+             "samples": np.arange(n * 4, dtype=float)},
+            {"name": "T1", "factor": 1, "quantity": "temperature",
+             "unit": "degC", "calibration": 1.0,
+             "samples": np.arange(n, dtype=float) + 1.0},
+            {"name": "T2", "factor": 1, "quantity": "temperature",
+             "unit": "degC", "calibration": 1.0,
+             "samples": np.arange(n, dtype=float) + 2.0},
+        ])
+    groups = DataLoader.load_hdf(str(p))
+    per_scan = 4 + 1 + 1             # = 6（≠ max_factor 4）
+    scan_period = delta * per_scan   # 一个 scan = 6 ms
+    total = n * scan_period          # 跨组总时长 = 0.6 s
+
+    fast = next(g for g in groups if g["label_suffix"] == "4x")
+    slow = next(g for g in groups if g["label_suffix"] == "1x")
+    tf = fast["data"]["Time"].to_numpy()
+    ts = slow["data"]["Time"].to_numpy()
+
+    # 每通道周期 = scan_period / factor（旧 max_factor 公式会给 fast=1ms、slow=4ms）
+    assert (tf[1] - tf[0]) == pytest.approx(scan_period / 4)   # 1.5 ms, fs≈667 Hz
+    assert (ts[1] - ts[0]) == pytest.approx(scan_period / 1)   # 6 ms,   fs≈167 Hz
+    # 两组覆盖同一总时长（末样本 = total − 一个该通道周期）
+    assert tf[-1] == pytest.approx(total - scan_period / 4)
+    assert ts[-1] == pytest.approx(total - scan_period / 1)
+    # per_scan 落入 source_metadata 供对标 HEAD Companion
+    assert fast["source_metadata"]["per_scan"] == per_scan
