@@ -341,13 +341,17 @@ class TimeDomainCanvasPG(QWidget):
         # whereas plain QWidget ``QEvent.MouseButtonDblClick`` delivery
         # does. The filter maps the viewport pixel to a scene position so
         # the subplot hit-test stays accurate.
-        try:
-            viewport = self._glw.viewport()
-            if viewport is not None:
-                viewport.setMouseTracking(True)
-                viewport.installEventFilter(self)
-        except Exception:
-            pass
+        self._install_viewport_event_filter()
+
+        # --- GPU render state (design 2026-06-06-gpu-render-toggle) --------
+        # _gpu_render_requested: user/persistent preference (what they want).
+        # _gpu_render_on:        viewport is currently an OpenGL viewport.
+        # Two states are kept separate so a failed useOpenGL() does not
+        # pretend success; plot_channels retries _apply_gpu_viewport() so
+        # the preference is honoured on the next rebuild even if the first
+        # attempt fired before the window was realised.
+        self._gpu_render_requested = False
+        self._gpu_render_on = False
 
         # --- T6: overlay-mode selection + per-channel emphasis ----------
         # Mirrors canvases.py:_apply_overlay_selection_style (lw 1.0 / 1.8;
@@ -719,6 +723,10 @@ class TimeDomainCanvasPG(QWidget):
         if defer_first_frame:
             self._refresh_pending = True
             self._refresh_timer.start()
+        # Retry GPU viewport: useOpenGL may have been requested before the
+        # window was realised (set_gpu_render called at startup before show).
+        self._apply_gpu_viewport()
+
         # Restore cursor visual items when A/B positions survived clear().
         if self._cursor.visible and self._cursor.dual:
             if self._cursor.ax is not None:
@@ -874,6 +882,71 @@ class TimeDomainCanvasPG(QWidget):
                 handle.set_ylim(lo, hi)
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Viewport event-filter helpers
+    # ------------------------------------------------------------------
+
+    def _install_viewport_event_filter(self):
+        """Install the QWidget event filter on the current GLW viewport.
+
+        Called once during __init__ and again after every useOpenGL() call
+        (which replaces the viewport widget), so double-click / cursor /
+        overlay events keep reaching eventFilter() regardless of the render
+        backend.
+        """
+        try:
+            viewport = self._glw.viewport()
+            if viewport is not None:
+                viewport.setMouseTracking(True)
+                viewport.installEventFilter(self)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # GPU render toggle (design 2026-06-06-gpu-render-toggle)
+    # ------------------------------------------------------------------
+
+    def set_gpu_render(self, on: bool):
+        """Switch the pyqtgraph viewport between CPU raster and OpenGL.
+
+        Records the user preference in ``_gpu_render_requested`` and
+        attempts an immediate ``_apply_gpu_viewport()``; if the widget is
+        not yet realised the apply is a no-op and ``plot_channels`` will
+        retry on the next rebuild.  Idempotent: setting the same value
+        twice is a no-op.  Exception-safe: any failure is logged, the
+        applied state is left unchanged, and the canvas stays functional.
+        """
+        self._gpu_render_requested = bool(on)
+        self._apply_gpu_viewport()
+
+    def _apply_gpu_viewport(self):
+        """Apply ``_gpu_render_requested`` to the actual GLW viewport.
+
+        Separated from ``set_gpu_render`` so ``plot_channels`` can call it
+        as a retry (the viewport may not be realised at __init__ time).
+        Only walks ``useOpenGL`` / event-filter wiring when the applied
+        state genuinely needs to change.
+        """
+        want = bool(self._gpu_render_requested)
+        if want == self._gpu_render_on:
+            return
+        try:
+            self._glw.useOpenGL(want)
+            self._gpu_render_on = want
+            # useOpenGL() replaces the viewport widget; re-install the
+            # event filter so double-click / cursor / overlay keep working.
+            self._install_viewport_event_filter()
+            try:
+                self._glw.update()
+            except Exception:
+                pass
+        except Exception:
+            import logging
+            logging.getLogger("mf4_analyzer.ui.pg_canvases").warning(
+                "useOpenGL(%s) failed — staying on current render path", want,
+                exc_info=False,
+            )
 
     def register_replot_callback(self, callback):
         """Register a zero-arg ``callback`` invoked after every

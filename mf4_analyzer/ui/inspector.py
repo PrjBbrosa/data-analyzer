@@ -6,6 +6,7 @@ switching modes preserves context.
 """
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QPushButton,
@@ -46,6 +47,7 @@ class Inspector(QWidget):
     order_time_requested = pyqtSignal()
     xaxis_apply_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order')
+    gpu_render_toggled = pyqtSignal(bool)  # True = GPU on
     tick_density_changed = pyqtSignal(int, int)
     remark_toggled = pyqtSignal(bool)
     # Fs auto-sync: relayed from fft_ctx/order_ctx combo_sig change
@@ -174,6 +176,25 @@ class Inspector(QWidget):
         self.contextual_stack.addWidget(self.order_ctx)
         body_lay.addWidget(self.contextual_stack)
         self.contextual_stack.setVisible(False)
+
+        # GPU 加速开关：固定在右下角，所有模式常驻可见
+        gpu_row = QFrame(self._scroll_body)
+        gpu_row.setObjectName("gpuToggleRow")
+        gpu_row_lay = QHBoxLayout(gpu_row)
+        gpu_row_lay.setContentsMargins(4, 4, 4, 4)
+        gpu_row_lay.setSpacing(4)
+        gpu_row_lay.addStretch(1)
+        self._chk_gpu = QCheckBox("GPU 加速（时域图）", gpu_row)
+        self._chk_gpu.setObjectName("chkGpuRender")
+        self._chk_gpu.setToolTip(
+            "大图 / 多通道 / 高分屏卡顿时开启。\n"
+            "渲染效果与 CPU 一致，导出正常。"
+        )
+        self._chk_gpu.setChecked(False)
+        self._chk_gpu.toggled.connect(self.gpu_render_toggled)
+        gpu_row_lay.addWidget(self._chk_gpu, 0)
+        body_lay.addWidget(gpu_row)
+
         body_lay.addStretch(1)
 
         # Anchor the capped body to the leading edge; the trailing stretch
@@ -270,6 +291,12 @@ class Inspector(QWidget):
             target_layout.addWidget(group)
         self._range_group_owner_layout = target_layout
         group.setVisible(True)
+
+    def set_gpu_render_checked(self, on: bool):
+        """Set the GPU toggle checkbox without emitting gpu_render_toggled."""
+        self._chk_gpu.blockSignals(True)
+        self._chk_gpu.setChecked(bool(on))
+        self._chk_gpu.blockSignals(False)
 
     def current_mode(self):
         return self.contextual_widget_name()

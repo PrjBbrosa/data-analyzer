@@ -691,13 +691,34 @@ class Renderer(_CanvasBackref):
                     return pix
             return None
 
-        # Few-channel exports keep the crisp forced-AA path. Dense exports are
-        # what-you-see-is-what-you-get and avoid re-enabling AA for all curves.
-        if affordable:
-            with self._quality._curves_antialiased():
+        # GPU render: QWidget.grab() cannot read the OpenGL framebuffer and
+        # returns an all-white image.  Temporarily switch back to CPU raster
+        # for the grab, then restore the GL viewport afterwards.
+        gpu_was_on = bool(getattr(self, "_gpu_render_on", False))
+        if gpu_was_on:
+            try:
+                self._glw.useOpenGL(False)
+                self._gpu_render_on = False
+                self._install_viewport_event_filter()
+            except Exception:
+                gpu_was_on = False  # failed — stay as-is
+
+        try:
+            # Few-channel exports keep the crisp forced-AA path. Dense exports
+            # are what-you-see-is-what-you-get and avoid re-enabling AA.
+            if affordable:
+                with self._quality._curves_antialiased():
+                    pix = _grab_first_good()
+            else:
                 pix = _grab_first_good()
-        else:
-            pix = _grab_first_good()
+        finally:
+            if gpu_was_on:
+                try:
+                    self._glw.useOpenGL(True)
+                    self._gpu_render_on = True
+                    self._install_viewport_event_filter()
+                except Exception:
+                    pass
         if pix is not None:
             return pix
         # Final fallback: a 1×1 transparent pixmap. Tests gate on
