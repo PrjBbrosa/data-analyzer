@@ -38,6 +38,13 @@ from .collapsible import _CollapsibleParamSection
 from .presets import PresetBar
 
 
+_RPM_FACTOR_TOOLTIP = (
+    "把转速通道换算为电机 rpm：\n"
+    "方向盘角速度(°/s) × RPM系数 = 电机 rpm。\n"
+    "方向盘角速度信号通常填 4～5；已是电机 rpm 时填 1.0。"
+)
+
+
 class OrderContextual(QWidget):
     """Order-analysis contextual: source/params/presets + compute action."""
 
@@ -102,6 +109,7 @@ class OrderContextual(QWidget):
         self.spin_rf.setRange(0.0001, 10000)
         self.spin_rf.setDecimals(4)
         self.spin_rf.setValue(1)
+        self.spin_rf.setToolTip(_RPM_FACTOR_TOOLTIP)
         fl.addRow("RPM系数:", _fit_field(self.spin_rf, max_width=_SHORT_FIELD_MAX_WIDTH))
         sig_lay.addLayout(fl)
         self._time_range_slot = QVBoxLayout()

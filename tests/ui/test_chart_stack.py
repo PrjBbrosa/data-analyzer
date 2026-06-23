@@ -1071,6 +1071,65 @@ def test_copy_card_image_renders_at_hidpi_scale(qapp, qtbot):
     )
 
 
+@pytest.mark.parametrize("mode, card_attr", [
+    ("fft_time", "_fft_time_card"),
+    ("order", "_order_card"),
+])
+def test_analysis_copy_image_includes_slice_panel(qapp, qtbot, mode, card_attr):
+    from PyQt5.QtWidgets import QApplication
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 640)
+    cs.show()
+    qtbot.waitExposed(cs)
+    cs.set_mode(mode)
+    QApplication.processEvents()
+    card = getattr(cs, card_attr)
+    canvas = card.canvas
+    y_coords = np.linspace(0, 20, 40)
+    x_coords = np.linspace(0, 90, 60)
+    matrix = np.random.RandomState(5).rand(40, 60)
+    canvas.plot_or_update_heatmap(
+        matrix=matrix, x_extent=(0, 90), y_extent=(0, 20),
+        x_label='Time (s)',
+        y_label='Order' if mode == 'order' else 'Frequency (Hz)',
+        cbar_label='Amplitude', x_coords=x_coords, y_coords=y_coords,
+        z_auto=True,
+    )
+    canvas._seed_slice()
+    for _ in range(5):
+        QApplication.processEvents()
+    canvas._slice_panel.setStyleSheet(
+        "QWidget#slicePanel { background-color: #ff00ff; }"
+        "QLabel#sliceHint { background-color: #ff00ff; color: #ff00ff; }"
+    )
+    QApplication.processEvents()
+
+    captured = []
+    cs.image_captured.connect(captured.append)
+    cs._copy_card_image(card)
+    QApplication.processEvents()
+
+    assert captured, "copy path did not emit an analysis pixmap"
+    pix = captured[-1]
+    img = pix.toImage()
+    geo = canvas._slice_panel.geometry()
+    scale_x = img.width() / max(1, canvas.width())
+    scale_y = img.height() / max(1, canvas.height())
+    samples = []
+    for fx, fy in ((0.50, 0.50), (0.35, 0.35), (0.65, 0.65)):
+        px = int(round((geo.x() + geo.width() * fx) * scale_x))
+        py = int(round((geo.y() + geo.height() * fy) * scale_y))
+        px = min(max(px, 0), img.width() - 1)
+        py = min(max(py, 0), img.height() - 1)
+        samples.append(img.pixelColor(px, py).name().lower())
+    assert "#ff00ff" in samples, (
+        f"{mode} copy image did not include the slice info panel; "
+        f"sampled colors={samples!r}"
+    )
+
+
 def test_copy_card_image_composites_scaled_cursor_pill(qapp, qtbot, monkeypatch):
     """Spec §E: the copy path must still composite the cursor pill, and
     BOTH its position and size must scale by the same factor so it lines

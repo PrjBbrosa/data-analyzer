@@ -916,7 +916,7 @@ def test_grab_pixmap_degenerate_fallback_is_unscaled_1x1(canvas, monkeypatch):
     # test_pg_timedomain_canvas.py:4301 — force grab() null).
     from PyQt5.QtGui import QPixmap
 
-    monkeypatch.setattr(canvas._glw, "grab", lambda *a, **k: QPixmap())
+    monkeypatch.setattr(canvas, "grab", lambda *a, **k: QPixmap())
     pix = canvas.grab_pixmap(scale=2.0)
     assert pix is not None
     assert not pix.isNull(), "fallback pixmap must not be null"
@@ -1711,6 +1711,58 @@ def test_slice_aligns_with_heatmap_and_panel_in_colorbar_column(qapp):
     # panel begins at/after the aligned slice's right edge (the freed column)
     assert c._slice_panel.geometry().x() >= int(slice_r) - 6
     c.deleteLater()
+
+
+def test_grab_pixmap_includes_slice_info_panel(qapp):
+    """Copy/export should include the right-side slice panel, not only _glw.
+
+    The panel is a QWidget child over the GraphicsLayoutWidget (not a pg scene
+    item), so grabbing only ``_glw`` drops the Time/Frequency/Order readout the
+    user sees at bottom-right.
+    """
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(620, 470)
+    c.set_slice_button_labels('时间', '阶次')
+    c.set_slice_direction('y')
+    orders = np.linspace(0, 20, 40)
+    times = np.linspace(0, 90, 60)
+    mat = np.random.RandomState(5).rand(40, 60)
+    try:
+        c.show()
+        qapp.processEvents()
+        c.plot_or_update_heatmap(
+            matrix=mat, x_extent=(0, 90), y_extent=(0, 20),
+            x_label='Time (s)', y_label='Order', cbar_label='Amplitude',
+            x_coords=times, y_coords=orders, z_auto=True)
+        c._seed_slice()
+        for _ in range(5):
+            qapp.processEvents()
+        c._slice_panel.setStyleSheet(
+            "QWidget#slicePanel { background-color: #ff00ff; }"
+            "QLabel#sliceHint { background-color: #ff00ff; color: #ff00ff; }"
+        )
+        c._slice_panel.update()
+        qapp.processEvents()
+
+        pix = c.grab_pixmap(scale=2.0)
+        assert pix is not None and not pix.isNull()
+        img = pix.toImage()
+        scale_x = img.width() / max(1, c.width())
+        scale_y = img.height() / max(1, c.height())
+        geo = c._slice_panel.geometry()
+        samples = []
+        for fx, fy in ((0.50, 0.50), (0.35, 0.35), (0.65, 0.65)):
+            px = int(round((geo.x() + geo.width() * fx) * scale_x))
+            py = int(round((geo.y() + geo.height() * fy) * scale_y))
+            px = min(max(px, 0), img.width() - 1)
+            py = min(max(py, 0), img.height() - 1)
+            samples.append(img.pixelColor(px, py).name().lower())
+        assert "#ff00ff" in samples, (
+            "grab_pixmap dropped the QWidget slice panel; sampled colors="
+            f"{samples!r} at panel geometry={geo}"
+        )
+    finally:
+        c.deleteLater()
 
 
 def test_slice_right_frame_visible_after_colorbar_reserve(qapp):

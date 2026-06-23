@@ -2641,11 +2641,13 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         """Snapshot of the canvas for copy/export.
 
         Consumed by ``chart_stack._grab_pixmap_hidpi`` (chart_stack.py:30)
-        as its first-preference branch. Uses ``QWidget.grab()`` + smooth
-        magnification rather than ``QWidget.render(QPainter)`` with a
-        scale transform: a scaled render() clips to the widget rect in
-        device pixels, exporting only the top-left quadrant at 2x
-        (verified offscreen, Qt 5.15.14). grab() is also the
+        as its first-preference branch. Grabs the whole canvas widget (not just
+        ``_glw``) so QWidget overlays such as the lower-right slice info panel
+        are included in copy/export. Uses ``QWidget.grab()`` + smooth
+        magnification rather than ``QWidget.render(QPainter)`` with a scale
+        transform: a scaled render() clips to the widget rect in device pixels,
+        exporting only the top-left quadrant at 2x (verified offscreen, Qt
+        5.15.14). grab() is also the
         realizability probe (lesson
         2026-04-25-tightbbox-survives-offscreen-qt); pattern mirrors
         PgLineCanvas.grab_pixmap (line_canvas.py:209) and
@@ -2653,7 +2655,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         Callers must check ``pix.isNull()`` — the degenerate 1x1
         fallback is never scaled up.
         """
-        base = self._glw.grab()
+        base = self.grab()
         if base.isNull() or base.width() <= 0 or base.height() <= 0:
             fallback = QPixmap(1, 1)
             fallback.fill(Qt.transparent)

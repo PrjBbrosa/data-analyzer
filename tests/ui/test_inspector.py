@@ -19,6 +19,44 @@ def test_inspector_switch_mode_changes_contextual(qapp):
     assert insp.contextual_widget_name() == 'order'
 
 
+def test_gpu_toggle_is_pill_switch_not_checkbox(qapp, qtbot):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QAbstractButton, QCheckBox, QLabel
+
+    insp = Inspector()
+    qtbot.addWidget(insp)
+
+    switch = insp.findChild(QAbstractButton, "gpuRenderSwitch")
+    assert switch is not None
+    assert not isinstance(switch, QCheckBox)
+    assert switch.isCheckable()
+    assert switch.text() == ""
+    assert switch.toolTip()
+    assert switch.minimumWidth() == switch.maximumWidth() == 44
+    assert switch.minimumHeight() == switch.maximumHeight() == 24
+
+    label = insp.findChild(QLabel, "gpuRenderLabel")
+    assert label is not None
+    assert label.text() == "GPU 加速"
+    assert "时域图" not in label.text()
+    assert label.toolTip() == switch.toolTip()
+    insp.resize(288, 720)
+    insp.show()
+    qtbot.waitExposed(insp)
+    qapp.processEvents()
+    assert label.x() < switch.x()
+
+    emitted = []
+    insp.gpu_render_toggled.connect(emitted.append)
+    insp.set_gpu_render_checked(True)
+    assert switch.isChecked()
+    assert emitted == []
+    switch.click()
+    assert emitted == [False]
+    qtbot.mouseClick(label, Qt.LeftButton)
+    assert emitted == [False, True]
+
+
 # ---- Task 2.3: PersistentTop ----
 
 def test_persistent_top_xaxis_mode_toggle(qapp):
@@ -4746,6 +4784,7 @@ def test_order_param_tooltips(qtbot):
     ctx = OrderContextual()
     qtbot.addWidget(ctx)
     checks = [
+        (ctx.spin_rf, "电机 rpm"),
         (ctx.spin_mo, "阶次"),
         (ctx.spin_order_res, "细度"),
         (ctx.spin_time_res, "时间"),

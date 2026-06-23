@@ -57,6 +57,7 @@ lesson by default.
 | [Signal Time-Window Heatmap Coverage Extents](signal-time-window-heatmap-coverage-extents.md) | Touching FFT-vs-Time, Order/COT, or any heatmap that plots a matrix | See lesson |
 | [Qt Render Probes Isolate QSettings](codex-qt-render-probes-isolate-qsettings.md) | Writing or running Qt screenshot/render probes, smoke scripts, or UI | See lesson |
 | [Pyqt Heatmap Slice Curve AA Interaction Guard](pyqt-heatmap-slice-curve-aa-interaction-guard.md) | Touching `PgHeatmapCanvas` slice-curve rendering, slice marker | See lesson |
+| [Pyqt Heatmap Copy Includes Widget Overlays](pyqt-heatmap-copy-includes-widget-overlays.md) | Touching heatmap copy/export, `PgHeatmapCanvas.grab_pixmap`, or | See lesson |
 
 ## Selection Rules
 

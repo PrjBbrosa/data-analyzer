@@ -4,11 +4,13 @@ Owns the inspector_state_dict (per section 12.1 of the design spec):
 caches the user's last input on each mode's contextual widget so that
 switching modes preserves context.
 """
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
-    QCheckBox,
+    QAbstractButton,
     QFrame,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -38,6 +40,75 @@ from .inspector_sections.time_filter import FilterPanel
 # wraps to its own right-aligned line) so it shrinks with the pane instead
 # of forcing a horizontal scrollbar — see _build_axis_row.
 _INSPECTOR_CONTENT_MAX_WIDTH = 272
+
+_GPU_RENDER_TOOLTIP = (
+    "大图 / 多通道 / 高分屏卡顿时开启。\n"
+    "渲染效果与 CPU 一致，导出正常。"
+)
+
+
+class _GpuRenderSwitch(QAbstractButton):
+    """Compact pill switch used by the persistent GPU render control."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("gpuRenderSwitch")
+        self.setAccessibleName("GPU 加速")
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(44, 24)
+
+    def sizeHint(self):
+        return QSize(44, 24)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        on = self.isChecked()
+        enabled = self.isEnabled()
+        track = QColor("#1769e0" if on else "#dbe3ee")
+        border = QColor("#1769e0" if on else "#aeb9c9")
+        knob = QColor("#ffffff")
+        knob_border = QColor("#d1d9e5")
+        if not enabled:
+            track = QColor("#edf1f6")
+            border = QColor("#d5dde8")
+            knob = QColor("#f8fafc")
+            knob_border = QColor("#e2e8f0")
+
+        rect = QRectF(1.0, 2.0, self.width() - 2.0, self.height() - 4.0)
+        radius = rect.height() / 2.0
+        painter.setPen(QPen(border, 1.0))
+        painter.setBrush(track)
+        painter.drawRoundedRect(rect, radius, radius)
+
+        diameter = rect.height() - 4.0
+        knob_x = (
+            rect.right() - diameter - 2.0
+            if on else rect.left() + 2.0
+        )
+        knob_rect = QRectF(knob_x, rect.top() + 2.0, diameter, diameter)
+        painter.setPen(QPen(knob_border, 1.0))
+        painter.setBrush(knob)
+        painter.drawEllipse(knob_rect)
+
+
+class _GpuRenderLabel(QLabel):
+    """Clickable label paired with the GPU render switch."""
+
+    def __init__(self, switch: _GpuRenderSwitch, parent=None):
+        super().__init__("GPU 加速", parent)
+        self._switch = switch
+        self.setObjectName("gpuRenderLabel")
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._switch.isEnabled():
+            self._switch.click()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 class Inspector(QWidget):
@@ -184,15 +255,14 @@ class Inspector(QWidget):
         gpu_row_lay.setContentsMargins(4, 4, 4, 4)
         gpu_row_lay.setSpacing(4)
         gpu_row_lay.addStretch(1)
-        self._chk_gpu = QCheckBox("GPU 加速（时域图）", gpu_row)
-        self._chk_gpu.setObjectName("chkGpuRender")
-        self._chk_gpu.setToolTip(
-            "大图 / 多通道 / 高分屏卡顿时开启。\n"
-            "渲染效果与 CPU 一致，导出正常。"
-        )
-        self._chk_gpu.setChecked(False)
-        self._chk_gpu.toggled.connect(self.gpu_render_toggled)
-        gpu_row_lay.addWidget(self._chk_gpu, 0)
+        self._gpu_switch = _GpuRenderSwitch(gpu_row)
+        self._gpu_switch.setToolTip(_GPU_RENDER_TOOLTIP)
+        self._gpu_switch.setChecked(False)
+        self._gpu_switch.toggled.connect(self.gpu_render_toggled)
+        self._gpu_label = _GpuRenderLabel(self._gpu_switch, gpu_row)
+        self._gpu_label.setToolTip(_GPU_RENDER_TOOLTIP)
+        gpu_row_lay.addWidget(self._gpu_label, 0)
+        gpu_row_lay.addWidget(self._gpu_switch, 0)
         body_lay.addWidget(gpu_row)
 
         body_lay.addStretch(1)
@@ -293,10 +363,10 @@ class Inspector(QWidget):
         group.setVisible(True)
 
     def set_gpu_render_checked(self, on: bool):
-        """Set the GPU toggle checkbox without emitting gpu_render_toggled."""
-        self._chk_gpu.blockSignals(True)
-        self._chk_gpu.setChecked(bool(on))
-        self._chk_gpu.blockSignals(False)
+        """Set the GPU render switch without emitting gpu_render_toggled."""
+        self._gpu_switch.blockSignals(True)
+        self._gpu_switch.setChecked(bool(on))
+        self._gpu_switch.blockSignals(False)
 
     def current_mode(self):
         return self.contextual_widget_name()
