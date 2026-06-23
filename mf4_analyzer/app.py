@@ -60,6 +60,18 @@ def _configure_high_dpi():
     if policy_enum is not None and hasattr(QGuiApplication, "setHighDpiScaleFactorRoundingPolicy"):
         QGuiApplication.setHighDpiScaleFactorRoundingPolicy(policy_enum.PassThrough)
 
+    # MSAA for the OpenGL viewport (GPU render toggle). Must be set before
+    # QApplication is constructed. 4× samples gives line quality equal to or
+    # better than CPU AA at no meaningful extra cost on modern GPUs. CPU-only
+    # sessions are unaffected — QSurfaceFormat is only consumed by GL contexts.
+    try:
+        from PyQt5.QtGui import QSurfaceFormat
+        fmt = QSurfaceFormat()
+        fmt.setSamples(4)
+        QSurfaceFormat.setDefaultFormat(fmt)
+    except Exception:
+        pass
+
 
 def main():
     _configure_high_dpi()
