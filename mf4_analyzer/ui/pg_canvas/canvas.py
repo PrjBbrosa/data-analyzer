@@ -677,7 +677,9 @@ class TimeDomainCanvasPG(QWidget):
         # to the PRIMARY's data extent (which disables Y auto-range on that
         # ViewBox), so the dense original is NEVER drawn under a companion-
         # narrow Y. Axes without a companion keep the default Y auto-range.
-        self._pin_companion_axes_y_to_primary()
+        # VISIBILITY-AWARE: when 显示原始 is off the original isn't drawn (no
+        # wall risk) so the shared axis frames the visible companion instead.
+        self._pin_companion_axes_y_to_visible()
 
         for handle in self.axes_list:
             self._attach_axis_handle_callbacks(handle)
@@ -784,6 +786,12 @@ class TimeDomainCanvasPG(QWidget):
                 except Exception:
                     pass
         if n:
+            # Visibility changed → re-frame companion axes to the now-visible
+            # set BEFORE the draw (synchronous, no intermediate frame): hiding
+            # 显示原始 must drop Y onto the visible ±0.0x companion, and
+            # re-showing it must restore the ±primary framing so the dense
+            # original is never painted inside a companion-narrow Y wall.
+            self._pin_companion_axes_y_to_visible()
             self.draw()
         return n
 
@@ -808,12 +816,124 @@ class TimeDomainCanvasPG(QWidget):
                 except Exception:
                     pass
         if n:
+            # Re-frame companion axes to the now-visible set before the draw:
+            # toggling 显示滤波后 changes what the shared axis should fit (e.g.
+            # showing the companion while 显示原始 is off must drop Y onto the
+            # ±0.0x companion).
+            self._pin_companion_axes_y_to_visible()
             self.draw()
         return n
 
-    def _pin_companion_axes_y_to_primary(self):
-        """Pin every companion-carrying axis's Y range to its PRIMARY channel's
-        full data extent, disabling that ViewBox's Y auto-range.
+    def _axis_groups(self, *, companion_only=False):
+        """Map ``id(handle) -> (handle, [names on it])`` for axes in
+        ``_channel_lines``. A companion shares its source channel's ViewBox, so
+        a companion-carrying handle hosts the primary AND its companion(s).
+        With ``companion_only=True`` only handles that carry at least one
+        display companion are returned."""
+        companions = getattr(self, "_companion_names", set())
+        groups = {}
+        for name, (handle, _line) in self._channel_lines.items():
+            slot = groups.get(id(handle))
+            if slot is None:
+                groups[id(handle)] = [handle, [name], name in companions]
+            else:
+                slot[1].append(name)
+                if name in companions:
+                    slot[2] = True
+        if companion_only:
+            return {
+                k: (h, names)
+                for k, (h, names, has_comp) in groups.items()
+                if has_comp
+            }
+        return {k: (h, names) for k, (h, names, _hc) in groups.items()}
+
+    def _visible_raw_y_extent(self, names, *, xlim=None):
+        """Union ``(lo, hi)`` over the RAW ``channel_data`` of the curves in
+        ``names`` whose ``PlotDataItem`` is currently VISIBLE. Windowed to
+        ``xlim`` when given (with a full-range fallback if the window is empty).
+        Returns ``None`` when nothing visible/finite remains.
+
+        This is what makes companion-axis Y framing VISIBILITY-AWARE: when
+        显示原始 is off only the dashed companion is drawn, so the shared axis
+        frames the companion (no dense original on screen → no 满屏竖线墙 risk),
+        instead of staying pinned to the hidden primary and burying the filtered
+        waveform in a flat line near 0 (本末倒置). When the original IS visible
+        the union covers it (the larger extent), preserving the wall-avoidance
+        framing the pin was built for."""
+        lo = hi = None
+        for name in names:
+            pair = self._channel_lines.get(name)
+            if pair is None:
+                continue
+            pdi = getattr(pair[1], "plot_data_item", None)
+            if pdi is not None:
+                try:
+                    if not pdi.isVisible():
+                        continue
+                except Exception:
+                    pass
+            row = self.channel_data.get(name)
+            if row is None:
+                continue
+            try:
+                sig = np.asarray(row[1], dtype=float)
+            except Exception:
+                continue
+            finite_mask = np.isfinite(sig)
+            if xlim is not None:
+                try:
+                    t = np.asarray(row[0], dtype=float)
+                except Exception:
+                    t = None
+                if t is not None and t.shape == sig.shape:
+                    x0, x1 = xlim
+                    if x1 < x0:
+                        x0, x1 = x1, x0
+                    wmask = finite_mask & np.isfinite(t) & (t >= x0) & (t <= x1)
+                    window = sig[wmask]
+                    if window.size == 0:
+                        window = sig[finite_mask]
+                else:
+                    window = sig[finite_mask]
+            else:
+                window = sig[finite_mask]
+            if window.size == 0:
+                continue
+            wlo = float(window.min())
+            whi = float(window.max())
+            if not (np.isfinite(wlo) and np.isfinite(whi)):
+                continue
+            lo = wlo if lo is None else min(lo, wlo)
+            hi = whi if hi is None else max(hi, whi)
+        if lo is None:
+            return None
+        return lo, hi
+
+    def _frame_handle_y(self, handle, extent, n_y, *, frame_to_nice):
+        """Pad ``extent`` (lo, hi), optionally snap to nice ticks, and apply it
+        via ``set_ylim`` (which disables that ViewBox's Y auto-range). Returns
+        True on success."""
+        lo, hi = extent
+        if hi <= lo:
+            pad = abs(lo) * 0.05 or 1.0
+        else:
+            pad = (hi - lo) * 0.05
+        lo, hi = lo - pad, hi + pad
+        if frame_to_nice:
+            try:
+                lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
+            except Exception:
+                pass
+        try:
+            handle.set_ylim(lo, hi)
+            return True
+        except Exception:
+            return False
+
+    def _pin_companion_axes_y_to_visible(self):
+        """Pin every companion-carrying axis's Y to the extent of the VISIBLE
+        curves on it, disabling that ViewBox's Y auto-range.
 
         Rationale (滤波子图卡顿真因): a tiny-amplitude dashed companion (filter
         overlay) shares its source channel's ViewBox. While Y auto-range is ON,
@@ -821,69 +941,30 @@ class TimeDomainCanvasPG(QWidget):
         shared axis to the companion's tiny ±0.0x window for a transient frame;
         the dense LARGE original then rasterizes as a full-height vertical-
         stroke wall inside that narrow Y (the most expensive paint regime),
-        which is the 十几秒 stall users see before Y re-settles to the primary
-        range. Pinning Y to the primary extent up-front (an explicit
-        ``setYRange`` turns Y auto-range OFF) removes that window entirely.
+        which is the 十几秒 stall users see before Y re-settles. An explicit
+        ``set_ylim`` turns Y auto-range OFF and removes that window.
+
+        VISIBILITY-AWARE (本末倒置 fix): the framed extent is the union of the
+        curves actually VISIBLE on the axis, not always the primary. With
+        显示原始 on, the original dominates so Y covers it (wall avoided, the
+        regime this pin was built for). With 显示原始 off + 显示滤波后 on, the
+        dense original is NOT drawn — no wall can form — so Y fits the visible
+        ±0.0x companion and the filtered waveform is actually usable.
 
         Only companion-carrying axes are touched — axes whose channel has no
-        filtered overlay keep pyqtgraph's default Y auto-range, so non-filter
-        plotting is unchanged. The Y extent is read from the RAW primary
-        ``channel_data`` (NOT the decimated envelope, NOT the companion) and
-        framed with the same nice-tick padding as ``reset_view_to_data_extents``
-        so the first painted frame already matches Home's Y framing.
-        """
-        companions = getattr(self, "_companion_names", set())
-        if not companions:
-            return
-        # Resolve companion -> source by walking _channel_lines: a companion's
-        # axis handle is its source's handle. Group source names by handle.
-        source_handles = {}
-        for cname in companions:
-            pair = self._channel_lines.get(cname)
-            if pair is None:
-                continue
-            handle = pair[0]
-            # Find the primary channel sharing this handle (the non-companion
-            # entry whose axis handle is identical).
-            for name, (h, _line) in self._channel_lines.items():
-                if name in companions:
-                    continue
-                if h is handle:
-                    source_handles[name] = handle
-                    break
-        if not source_handles:
+        filtered overlay keep pyqtgraph's default Y auto-range. The extent is
+        read from RAW ``channel_data`` (NOT the decimated envelope) and framed
+        with the same nice-tick padding as ``reset_view_to_data_extents`` so the
+        first painted frame already matches Home's Y framing."""
+        groups = self._axis_groups(companion_only=True)
+        if not groups:
             return
         n_y = max(3, min(20, self._tick_density_controller.density[1]))
-        for name, handle in source_handles.items():
-            row = self.channel_data.get(name)
-            if row is None:
+        for handle, names in groups.values():
+            extent = self._visible_raw_y_extent(names)
+            if extent is None:
                 continue
-            try:
-                sig = np.asarray(row[1], dtype=float)
-                finite = sig[np.isfinite(sig)]
-            except Exception:
-                continue
-            if finite.size == 0:
-                continue
-            lo = float(finite.min())
-            hi = float(finite.max())
-            if not (np.isfinite(lo) and np.isfinite(hi)):
-                continue
-            if hi <= lo:
-                pad = abs(lo) * 0.05 or 1.0
-            else:
-                pad = (hi - lo) * 0.05
-            lo, hi = lo - pad, hi + pad
-            try:
-                lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
-            except Exception:
-                pass
-            try:
-                # set_ylim -> setYRange(..., padding=0) disables Y auto-range
-                # on this ViewBox, so no companion setData can re-narrow it.
-                handle.set_ylim(lo, hi)
-            except Exception:
-                pass
+            self._frame_handle_y(handle, extent, n_y, frame_to_nice=True)
 
     # ------------------------------------------------------------------
     # Viewport event-filter helpers
@@ -1311,45 +1392,22 @@ class TimeDomainCanvasPG(QWidget):
             # too in overlay mode).
             self._set_xrange_to_data_union()
             # (2) Set Y per handle from the RAW channel data (full, finite),
-            # not from the clipped PlotDataItem. Each handle hosts exactly
-            # one channel (subplot/single: one per row; overlay: one per aux
-            # ViewBox), so map handle -> channel via _channel_lines.
+            # not from the clipped PlotDataItem. Frame each handle to the
+            # union of the curves VISIBLE on it: a companion shares its
+            # source's ViewBox, so with 显示原始 on Y covers the dominant
+            # original (wall avoided), and with 显示原始 off + 显示滤波后 on Y
+            # fits the visible ±0.0x companion (no dense original drawn → no
+            # 满屏竖线墙 — the filtered waveform is usable). Non-companion
+            # handles host a single visible primary, so the union == that
+            # primary's full extent (unchanged behavior).
             n_y = max(3, min(20, self._tick_density_controller.density[1]))
-            companions = getattr(self, "_companion_names", set())
-            for name, (handle, _line) in self._channel_lines.items():
-                # Skip companions: a dashed filter overlay shares its source's
-                # ViewBox, and its tiny ±0.0x extent would OVERWRITE the primary
-                # framing on that shared axis (collapsing Home to the companion-
-                # narrow Y — the same满屏竖线墙 regime the bind-time pin avoids).
-                # The primary already frames the shared axis to the real range.
-                if name in companions:
+            for handle, names in self._axis_groups().values():
+                extent = self._visible_raw_y_extent(names)
+                if extent is None:
                     continue
-                row = self.channel_data.get(name)
-                if row is None:
-                    continue
-                try:
-                    sig = np.asarray(row[1], dtype=float)
-                    finite = sig[np.isfinite(sig)]
-                except Exception:
-                    continue
-                if finite.size == 0:
-                    continue
-                lo = float(finite.min())
-                hi = float(finite.max())
-                if not (np.isfinite(lo) and np.isfinite(hi)):
-                    continue
-                if hi <= lo:
-                    pad = abs(lo) * 0.05 or 1.0
-                else:
-                    pad = (hi - lo) * 0.05
-                lo, hi = lo - pad, hi + pad
-                # Snap to nice tick boundaries so Y-axis labels and grid
-                # lines start and end exactly at the viewport edges.
-                lo, hi, _ticks = _frame_to_nice(lo, hi, n_y)
-                try:
-                    handle.set_ylim(lo, hi)
-                except Exception:
-                    pass
+                # frame_to_nice=True so Y-axis labels/grid start and end exactly
+                # at the viewport edges.
+                self._frame_handle_y(handle, extent, n_y, frame_to_nice=True)
             if self._overlay_mode:
                 self._repin_overlay_channel_ticks()
             self._refresh = True
@@ -1384,18 +1442,23 @@ class TimeDomainCanvasPG(QWidget):
         self.disable_interactive_quality()
         try:
             n_y = max(3, min(20, self._tick_density_controller.density[1]))
-            companions = getattr(self, "_companion_names", set())
-            for name, (handle, _line) in self._channel_lines.items():
-                # Skip companions: fitting a shared axis to the tiny dashed
-                # overlay would collapse Y to ±0.0x and bury the primary. The
-                # primary's window fit already frames the shared axis.
-                if name in companions:
+            # Frame each handle to the union of the curves VISIBLE on it, sliced
+            # to that handle's current X window. A companion shares its
+            # source's ViewBox: with 显示原始 on Y fits the dominant original
+            # (wall avoided); with 显示原始 off + 显示滤波后 on Y fits the
+            # visible ±0.0x companion (no dense original drawn → usable filtered
+            # waveform). Non-companion handles host a single visible primary, so
+            # the union == that primary's windowed fit (unchanged behavior).
+            for handle, names in self._axis_groups().values():
+                try:
+                    xlim = handle.get_xlim()
+                except Exception:
+                    xlim = None
+                extent = self._visible_raw_y_extent(names, xlim=xlim)
+                if extent is None:
                     continue
-                self._fit_channel_y_to_visible_x(
-                    name,
-                    handle,
-                    n_y,
-                    frame_to_nice=self._overlay_mode,
+                self._frame_handle_y(
+                    handle, extent, n_y, frame_to_nice=self._overlay_mode
                 )
             if self._overlay_mode:
                 self._repin_overlay_channel_ticks()

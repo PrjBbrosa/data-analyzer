@@ -6745,12 +6745,17 @@ class TestFilterCompanionOverlay:
         return None
 
     def _rows_big_primary_tiny_companion(self, *, filt_visible=True,
-                                          n_sources=2):
+                                          orig_visible=True, n_sources=2):
         """Source channels with LARGE amplitude (±5) each paired with a
         TINY-amplitude (±0.02) filtered companion — mimics a low-pass 100 Hz
         overlay on a ±2~6 wideband channel. Used to pin the shared-axis Y
         auto-range to the PRIMARY extent so the dense original is never drawn
-        inside a companion-narrow Y window (满屏竖线墙卡顿真因)."""
+        inside a companion-narrow Y window (满屏竖线墙卡顿真因).
+
+        ``orig_visible`` flips the SOLID original's visibility (显示原始):
+        with it off, only the dashed companion is drawn, so the shared axis
+        must frame the COMPANION (no dense original → no wall risk).
+        """
         t = np.linspace(0.0, 1.0, 4_000, dtype=np.float64)
         rows = []
         palette = ["#1769e0", "#ef4444", "#00b894"]
@@ -6758,7 +6763,7 @@ class TestFilterCompanionOverlay:
             name = f"ch{i}"
             color = palette[i % len(palette)]
             primary = 5.0 * np.sin(2 * np.pi * (5 * (i + 1)) * t)
-            rows.append((name, True, t, primary, color, "u", "fid-1"))
+            rows.append((name, orig_visible, t, primary, color, "u", "fid-1"))
             tiny = 0.02 * np.sin(2 * np.pi * (5 * (i + 1)) * t)
             meta = {"companion_of": name, "dash": True}
             rows.append((
@@ -6901,6 +6906,124 @@ class TestFilterCompanionOverlay:
             handle = canvas._channel_lines[f"ch{i}"][0]
             lo, hi = handle.get_ylim()
             assert (hi - lo) > 5.0 and lo <= -4.5 and hi >= 4.5
+
+    def test_companion_axis_y_fits_companion_when_original_hidden(self, qapp):
+        """REGRESSION (本末倒置): 显示原始 OFF + 显示滤波后 ON — only the tiny
+        (±0.02) dashed companion is drawn. With NO dense original on the axis
+        there is no 满屏竖线墙 risk, so the shared Y MUST fit the COMPANION
+        (span ≈ 0.04) instead of staying pinned to the invisible ±5 primary
+        (which buries the filtered waveform in a flat line near 0)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(
+                n_sources=2, orig_visible=False, filt_visible=True
+            ),
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        for i in range(2):
+            handle = canvas._channel_lines[f"ch{i}"][0]
+            lo, hi = handle.get_ylim()
+            span = hi - lo
+            assert span < 1.0, (
+                f"ch{i}: Y span {span:.4f} still framed the hidden ±5 primary "
+                f"— the visible ±0.02 companion is buried in a flat line"
+            )
+            # The companion (±0.02) must actually fit inside the window.
+            assert lo <= -0.02 and hi >= 0.02, (
+                f"ch{i}: Y=[{lo:.4f},{hi:.4f}] does not contain the ±0.02 "
+                f"companion extent"
+            )
+
+    def test_home_fits_companion_when_original_hidden(self, qapp):
+        """Toolbar Home (查看全部) with 显示原始 OFF must fit the visible
+        companion, not the hidden ±5 primary."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(
+                n_sources=2, orig_visible=False, filt_visible=True
+            ),
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        canvas.reset_view_to_data_extents()
+        QCoreApplication.processEvents()
+        for i in range(2):
+            lo, hi = canvas._channel_lines[f"ch{i}"][0].get_ylim()
+            assert (hi - lo) < 1.0 and lo <= -0.02 and hi >= 0.02, (
+                f"ch{i}: Home framed Y to [{lo:.4f},{hi:.4f}] — the hidden "
+                f"±5 primary instead of the visible ±0.02 companion"
+            )
+
+    def test_fit_y_fits_companion_when_original_hidden(self, qapp):
+        """Y 轴自适应 (fit_y_to_visible_x) with 显示原始 OFF must fit the
+        visible companion, not the hidden ±5 primary."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(
+                n_sources=2, orig_visible=False, filt_visible=True
+            ),
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        canvas.fit_y_to_visible_x()
+        QCoreApplication.processEvents()
+        for i in range(2):
+            lo, hi = canvas._channel_lines[f"ch{i}"][0].get_ylim()
+            assert (hi - lo) < 1.0 and lo <= -0.02 and hi >= 0.02
+
+    def test_live_hide_original_refits_axis_to_companion(self, qapp):
+        """Live 显示原始 toggle: built with both visible (Y on ±5 primary),
+        unchecking 显示原始 must REFIT the shared axis to the now-only-visible
+        ±0.02 companion; re-checking must restore the ±5 primary framing (wall
+        avoidance back on now the dense original is drawn again)."""
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(n_sources=2),
+            mode="subplot",
+        )
+        QCoreApplication.processEvents()
+        # Both visible → Y frames the ±5 primary.
+        lo, hi = canvas._channel_lines["ch0"][0].get_ylim()
+        assert (hi - lo) > 5.0
+        # Hide originals → axis must refit to the ±0.02 companion.
+        canvas.set_original_lines_visible(False)
+        QCoreApplication.processEvents()
+        for i in range(2):
+            lo, hi = canvas._channel_lines[f"ch{i}"][0].get_ylim()
+            assert (hi - lo) < 1.0 and lo <= -0.02 and hi >= 0.02, (
+                f"ch{i}: hiding 显示原始 left Y on [{lo:.4f},{hi:.4f}] (the "
+                f"hidden ±5 primary) instead of refitting the ±0.02 companion"
+            )
+        # Re-show originals → axis must restore the ±5 primary framing.
+        canvas.set_original_lines_visible(True)
+        QCoreApplication.processEvents()
+        for i in range(2):
+            lo, hi = canvas._channel_lines[f"ch{i}"][0].get_ylim()
+            assert (hi - lo) > 5.0 and lo <= -4.5 and hi >= 4.5, (
+                f"ch{i}: re-showing 显示原始 left Y on [{lo:.4f},{hi:.4f}] — "
+                f"the dense ±5 original would paint inside a narrow Y wall"
+            )
 
     def test_no_companion_subplot_y_unchanged(self, qapp):
         """A subplot row WITHOUT a companion keeps pyqtgraph's default Y

@@ -81,7 +81,7 @@ dense original rasterizes inside that narrow Y as a full-height vertical-stroke
 wall (满屏竖线墙) — the most expensive raster regime — for every dense channel
 (用户实测 Windows 十几秒；Y re-settles to ±5 after). Fix: after binding all
 companions, PIN each companion-carrying axis's Y EXPLICITLY to the PRIMARY's RAW
-data extent (`_pin_companion_axes_y_to_primary`, nice-tick framed like
+data extent (`_pin_companion_axes_y_to_visible`, nice-tick framed like
 `reset_view_to_data_extents`); an explicit `setYRange`/`set_ylim` turns Y
 auto-range OFF (`vb.state['autoRange'][1] is False`) so no companion `setData`
 can ever re-narrow it. Gate to companion-carrying axes only — no-companion rows
@@ -100,3 +100,32 @@ after) and by the CONCRETE Mac-reproducible Home/fit collapse, NOT by a Mac
 paint-ms number. Distinct from the dense-bucket-cap raster cost (that wall
 persists at ~110 ms/frame on Mac cocoa regardless — same channels, both before
 and after — and is a SEPARATE cost axis already capped).
+
+## 2026-06-23 follow-up #3 — pin to the VISIBLE extent, NOT always the primary (本末倒置 correction)
+follow-up #2 over-corrected: it pinned the shared axis to the PRIMARY's extent
+**unconditionally**, ignoring whether the original is actually drawn. With
+**显示原始 OFF + 显示滤波后 ON** (a common workflow — the user only wants the
+filtered trace) the dense original is hidden via `setVisible(False)` but Y is
+still framed to its ±5 → the ±0.02 filtered companion collapses to a flat line
+near 0 → **没法用** (本末倒置: the perf fix sacrificed the actual usability).
+KEY INSIGHT: the 满屏竖线墙 only forms when the dense ORIGINAL is rasterized in a
+narrow Y. **Hidden original ⇒ no wall can form ⇒ Y MUST fit the visible
+companion.** Fix = make all three framing paths VISIBILITY-AWARE: frame each
+companion-carrying axis to the union extent of the curves whose `PlotDataItem`
+`.isVisible()` is True (`_visible_raw_y_extent` over `_axis_groups`), still via
+an explicit `set_ylim` (auto-range stays OFF). Behavior table: original visible
+→ union covers it (wall avoided, follow-up #2 regime preserved); original hidden
++ companion visible → union = companion (filtered usable, no wall). The three
+paths: (a) bind-time `_pin_companion_axes_y_to_visible`; (b) Home
+`reset_view_to_data_extents` and (c) `fit_y_to_visible_x` — both rewritten to
+iterate handle GROUPS (primary + its companions) and frame to the visible union,
+so a post-fix Home/Y-自适应 no longer snaps Y back to the hidden ±5 (which would
+re-bury the filtered data). (d) the live toggles `set_original_lines_visible` /
+`set_companion_lines_visible` now RE-PIN before their `draw()` (synchronous, no
+intermediate frame) so unchecking 显示原始 drops Y onto the companion and
+re-checking restores the ±primary framing (wall avoidance back on the instant
+the dense original is redrawn). VERIFY by mechanism (Y span < 1 when original
+hidden, > 5 when visible — RED before / GREEN after) AND a real offscreen render
+showing the filtered waveform fills each subplot's height. Don't trust "pin set +
+unit pass" — the original bug passed 19 companion tests because every one built
+with the primary VISIBLE; the missing case was orig-hidden + companion-visible.

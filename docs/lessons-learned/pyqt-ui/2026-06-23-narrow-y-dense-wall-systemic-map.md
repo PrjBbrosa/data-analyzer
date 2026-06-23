@@ -29,8 +29,12 @@ pyqtgraph 时域渲染的「满高竖线墙」不是某个功能的孤立 bug，
 ### 触发分类 (修法取决于"Y 窄是不是用户意图")
 - **A 类 = Y 本不该窄 (根治 autorange，不是渲染层)**：小幅附加曲线(滤波 companion，未来
   stats/channel-math 同理)绑到大幅 primary 的同一 ViewBox，默认 autorange 按其小范围定了
-  Y → primary 撞墙。**根治 = 把该轴 Y pin 到 PRIMARY raw extent + 在 Home/fit 循环里跳过
-  companion**(否则 Home 后收成 ±0.025)。
+  Y → primary 撞墙。**根治 = 把该轴 Y pin 到「可见曲线」的并集 extent + Home/fit 也按可见
+  并集取景**(显式 set_ylim 关 autorange)。⚠️**纠正(2026-06-23)**：早期版本是"无条件 pin 到
+  PRIMARY"，但**显示原始 OFF + 显示滤波后 ON** 时原始被隐藏、根本不画→无墙，却把 Y 钉死在
+  ±5 大范围→滤波塌成贴 0 平线**没法用**(本末倒置)。墙只在密集**原始真被画**时形成，故 pin
+  须**可见性感知**：原始可见→并集覆盖原始(防墙)；原始隐藏→并集=companion(滤波可用)。见
+  [[2026-06-22-companion-curve-shares-source-axis-not-new-row]] follow-up #3。
 - **A 残留 = 用户在别处设的窄 Y 被重新施加到一次全新密集重绘**：`restore_visible_ylims`
   跨切 view/分屏/改勾选/改时间范围；overlay `_repin_overlay_channel_ticks` 重锁当前 ylim。
   **这些 Y 是用户真实意图，不该改写语义**——只需性能兜底。
