@@ -260,3 +260,33 @@ def test_design_curated_ids_exist_in_registry():
     }
     registry_ids = {hint.id for hint in hints.all_hints()}
     assert spec_ids <= registry_ids
+
+
+def test_zoom_guard_describes_all_channel_box_zoom():
+    # c87de0fb: overlay box-zoom now scales X and Y for ALL channels (no
+    # selection needed), retiring the stale "拖框优先于选择曲线" guard framing.
+    hint = next(h for h in hints.all_hints() if h.id == "zoom.guard")
+    assert "优先" not in hint.text  # old "拖框优先于选择曲线" framing is gone
+    assert "通道" in hint.text       # now describes the all-channels Y behavior
+
+
+def test_coaxis_hints_staged_ship_later_and_hidden_on_every_surface():
+    # 共轴组 (overlay shared-axis) is designed but not yet built; its hints are
+    # pre-staged with ship="later" so they are registered (tracked) yet surface
+    # NOWHERE — not just absent from the discovery queue — until the flag flips.
+    coaxis = {h.id: h for h in hints.all_hints() if h.id.startswith("coaxis.")}
+    assert {"coaxis.merge", "coaxis.gesture"} <= set(coaxis)
+    assert all(h.ship == "later" for h in coaxis.values())
+
+    overlay = HintState(mode="time", plot_mode="overlay")
+    # discovery queue (exhausted) never offers a ship="later" hint
+    seen, state = set(), overlay
+    while (h := hints.discovery_hint(state)) is not None and h.id not in seen:
+        seen.add(h.id)
+        state = HintState(
+            mode="time", plot_mode="overlay", discovered=frozenset(seen)
+        )
+    assert "coaxis.merge" not in seen
+    # context + rotation must hide ship="later" too (the gap this guards)
+    assert "coaxis.gesture" not in {h.id for h in hints.context_hints(overlay)}
+    assert "coaxis.gesture" not in {h.id for h in hints.rotation_hints(overlay)}
