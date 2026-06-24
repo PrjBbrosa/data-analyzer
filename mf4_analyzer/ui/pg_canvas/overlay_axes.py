@@ -851,7 +851,12 @@ class OverlayAxisManager(_CanvasBackref):
         anim.start()
 
     def _apply_overlay_box_zoom_y(self):
-        """Restore fixed grid Y and redirect RectMode Y span to selected channel."""
+        """Restore fixed grid Y and redirect RectMode Y span to EVERY channel.
+
+        Each channel maps the same on-screen box fraction ``[f0, f1]`` onto its
+        own data ylim, so a rubber-band box zooms all overlaid series together
+        (units differ per channel; only the screen fraction is shared). No
+        pre-selection needed."""
         if not getattr(self, "_overlay_mode", False):
             return
         master = self._x_master_handle
@@ -871,36 +876,42 @@ class OverlayAxisManager(_CanvasBackref):
                 vb.setYRange(0.0, 1.0, padding=0)
             except Exception:
                 pass
-        sel = self._selected_overlay_axes()
-        if sel is None or already_locked:
+        if already_locked:
+            # Box never pulled the graticule Y off [0, 1] → no Y span to map.
             self._refresh = True
             self.draw_idle()
             return
         f0 = max(0.0, min(1.0, min(y0, y1)))
         f1 = max(0.0, min(1.0, max(y0, y1)))
         if f1 - f0 < 1e-6:
+            # Box too short in Y → X-only zoom; leave every channel's Y as-is.
             self._refresh = True
             self.draw_idle()
             return
-        try:
-            clo, chi = sel.get_ylim()
-        except Exception:
-            return
-        cspan = chi - clo
-        if not (math.isfinite(cspan) and cspan > 0):
-            return
-        new_lo = clo + f0 * cspan
-        new_hi = clo + f1 * cspan
         n = self._current_overlay_divisions()
-        bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
-        try:
-            sel.set_ylim(bottom, top)
-            axis = sel.y_axis_item() if hasattr(sel, "y_axis_item") else None
-            if axis is not None:
-                axis.setStyle(maxTickLevel=0)
-                axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
-        except Exception:
-            pass
+        for handle in (self.axes_list or []):
+            if handle is None:
+                continue
+            try:
+                clo, chi = handle.get_ylim()
+            except Exception:
+                continue
+            cspan = chi - clo
+            if not (math.isfinite(cspan) and cspan > 0):
+                continue
+            new_lo = clo + f0 * cspan
+            new_hi = clo + f1 * cspan
+            bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
+            try:
+                handle.set_ylim(bottom, top)
+                axis = (
+                    handle.y_axis_item() if hasattr(handle, "y_axis_item") else None
+                )
+                if axis is not None:
+                    axis.setStyle(maxTickLevel=0)
+                    axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
+            except Exception:
+                continue
         self._refresh = True
         self.draw_idle()
 

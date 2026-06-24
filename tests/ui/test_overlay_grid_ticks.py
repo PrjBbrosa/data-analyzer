@@ -373,7 +373,7 @@ class TestOverlayBoxZoom:
             canvas.select_overlay_channel(select)
         return canvas
 
-    def test_box_zoom_locks_xmaster_y_and_zooms_selected_channel(self, qapp):
+    def test_box_zoom_zooms_all_channels(self, qapp):
         from PyQt5.QtCore import QCoreApplication, QPointF, QRectF
 
         canvas = self._overlay(qapp, select="ch0")
@@ -381,7 +381,8 @@ class TestOverlayBoxZoom:
         ax1 = canvas._channel_lines["ch1"][0]
         ax0.set_ylim(0.0, 100.0)
         QCoreApplication.processEvents()
-        ch1_before = ax1.get_ylim()
+        lo1_before, hi1_before = ax1.get_ylim()
+        span1_before = hi1_before - lo1_before
         n_lines_before = len(canvas._overlay_axes.grid_lines)
 
         xm = canvas._x_master_handle.view_box
@@ -400,15 +401,17 @@ class TestOverlayBoxZoom:
         assert len(canvas._overlay_axes.grid_lines) == n_lines_before
         # X stayed zoomed (handler must not touch shared X).
         assert xm.viewRange()[0] != pytest.approx((0.0, 1.0))
-        # Selected channel zoomed into the box sub-range (~[30, 70]).
+        # ch0 zoomed into the box sub-range (~[30, 70]).
         lo0, hi0 = ax0.get_ylim()
         assert lo0 >= 0.0 - 1e-6 and hi0 <= 100.0 + 1e-6
         assert (hi0 - lo0) < 100.0 * 0.9
         assert lo0 < 35.0 and hi0 > 65.0
-        # Unselected channel untouched.
-        assert ax1.get_ylim() == pytest.approx(ch1_before)
+        # EVERY channel zooms by the same screen fraction now — not only the
+        # selected one. ch1 must have narrowed too.
+        lo1, hi1 = ax1.get_ylim()
+        assert (hi1 - lo1) < span1_before * 0.9
 
-    def test_box_zoom_no_selection_is_x_only(self, qapp):
+    def test_box_zoom_no_selection_zooms_all_channels(self, qapp):
         from PyQt5.QtCore import QCoreApplication, QPointF, QRectF
 
         canvas = self._overlay(qapp, select=None)
@@ -417,16 +420,18 @@ class TestOverlayBoxZoom:
         ax1 = canvas._channel_lines["ch1"][0]
         ax0.set_ylim(0.0, 100.0)
         QCoreApplication.processEvents()
-        c0_before, c1_before = ax0.get_ylim(), ax1.get_ylim()
+        span0_before = ax0.get_ylim()[1] - ax0.get_ylim()[0]
+        span1_before = ax1.get_ylim()[1] - ax1.get_ylim()[0]
 
         xm = canvas._x_master_handle.view_box
         xm.showAxRect(QRectF(QPointF(0.2, 0.3), QPointF(0.6, 0.7)))
         canvas._apply_overlay_box_zoom_y()
         QCoreApplication.processEvents()
 
+        # No channel selected, yet box-zoom Y now applies to ALL channels.
         assert xm.viewRange()[1] == pytest.approx((0.0, 1.0), abs=1e-6)
-        assert ax0.get_ylim() == pytest.approx(c0_before)
-        assert ax1.get_ylim() == pytest.approx(c1_before)
+        assert (ax0.get_ylim()[1] - ax0.get_ylim()[0]) < span0_before * 0.9
+        assert (ax1.get_ylim()[1] - ax1.get_ylim()[0]) < span1_before * 0.9
 
     def test_box_zoom_override_calls_y_handler_only_on_xmaster_finish(
         self, qapp, monkeypatch,
