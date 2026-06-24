@@ -12,8 +12,12 @@ look exactly as the user sees them. --platform offscreen is a headless
 fallback for layout/draft ONLY (offscreen != real render; do not treat an
 offscreen image as visually verified).
 
-Window geometry is FIXED (1280x820) so pin coordinates stay stable across
-regenerations; only move pins when a UI control actually relocates.
+Window geometry is FIXED at 1640x1010 to MATCH the shipped assets' framing
+(the original *-panel.png are 1640x1010, EPS-domain data: 方向盘扭矩 / 电机转速).
+Matching the original logical layout keeps the guides' numbered pins valid —
+they point at chrome (mode tabs / toolbar / channel list / View tabs) whose
+positions don't move. Still give the rendered guide a browser eyeball after
+promoting; only nudge pins if a control actually relocated.
 
 Usage:
     .venv/bin/python tools/gen_help_screenshots.py                 # all 4 -> staging
@@ -44,12 +48,20 @@ PANEL_FILES = {
 }
 STAGING_DIR = REPO_ROOT / "output" / "help-shots"
 ASSETS_DIR = REPO_ROOT / "mf4_analyzer" / "help" / "assets"
-WIN_W, WIN_H = 1280, 820
-GRAB_SCALE = 2
+# Match the shipped assets exactly (1640x1010): scale grab to logical size so
+# pins (which are % of the image) line up with the original framing.
+WIN_W, WIN_H = 1640, 1010
+GRAB_SCALE = 1
+
+# EPS-domain channel names (matches how the shipped *-panel.png were made and
+# the project's EPS convention: order base = 电机转速). 信号 = 方向盘扭矩.
+CH_RPM = "电机转速"
+CH_SIGNAL = "方向盘扭矩"
+CH_TORQUE = "电机扭矩"
 
 
 def build_synthetic_csv() -> Path:
-    """rpm ramp 600->3600 + vib (order1+order2) + a torque channel."""
+    """电机转速 ramp 600->3600 + 方向盘扭矩 (order1+order2) + 电机扭矩 channel."""
     fs = 8000.0
     dur = 6.0
     n = int(fs * dur)
@@ -58,11 +70,12 @@ def build_synthetic_csv() -> Path:
     revs = np.cumsum(rpm / 60.0) / fs
     phase = 2.0 * np.pi * revs
     rng = np.random.default_rng(7)
-    vib = 1.0 * np.sin(phase) + 0.6 * np.sin(2.0 * phase) + 0.05 * rng.standard_normal(n)
+    signal = 1.0 * np.sin(phase) + 0.6 * np.sin(2.0 * phase) + 0.05 * rng.standard_normal(n)
     torque = 8.0 + 2.0 * np.sin(2.0 * np.pi * 0.5 * t) + 0.02 * rng.standard_normal(n)
-    out = Path(tempfile.gettempdir()) / "_help_shots_synth.csv"
-    data = np.column_stack([t, rpm, vib, torque])
-    np.savetxt(out, data, delimiter=",", header="time,rpm,vib,torque",
+    out = Path(tempfile.gettempdir()) / "_eps_demo.csv"
+    data = np.column_stack([t, rpm, signal, torque])
+    np.savetxt(out, data, delimiter=",",
+               header=f"time,{CH_RPM},{CH_SIGNAL},{CH_TORQUE}",
                comments="", fmt="%.6g")
     return out
 
@@ -127,18 +140,18 @@ def _drive_mode(win, app, mode: str) -> None:
     win.toolbar._set_mode(mode)
     app.processEvents()
     if mode == "time":
-        _check_channels(win, {"vib", "torque"})
+        _check_channels(win, {CH_SIGNAL, CH_TORQUE})
         app.processEvents()
         return
     if mode == "fft":
-        _select_combo_by_channel(win.inspector.fft_ctx.combo_sig, "vib")
+        _select_combo_by_channel(win.inspector.fft_ctx.combo_sig, CH_SIGNAL)
         app.processEvents()
         win.do_fft()  # FFT renders synchronously
         for _ in range(5):
             app.processEvents()
         return
     if mode == "fft_time":
-        _select_combo_by_channel(win.inspector.fft_time_ctx.combo_sig, "vib")
+        _select_combo_by_channel(win.inspector.fft_time_ctx.combo_sig, CH_SIGNAL)
         app.processEvents()
         _wait(lambda: win.do_fft_time(force=True),
               "_on_fft_time_finished", "_on_fft_time_failed", win)
@@ -147,8 +160,8 @@ def _drive_mode(win, app, mode: str) -> None:
         return
     if mode == "order":
         ctx = win.inspector.order_ctx
-        _select_combo_by_channel(ctx.combo_sig, "vib")
-        _select_combo_by_channel(ctx.combo_rpm, "rpm")
+        _select_combo_by_channel(ctx.combo_sig, CH_SIGNAL)
+        _select_combo_by_channel(ctx.combo_rpm, CH_RPM)
         ctx.set_fs(8000.0)
         ctx.apply_params({"max_order": 6, "order_res": 0.05, "time_res": 0.05,
                           "nfft": 4096, "amplitude_mode": "Amplitude",

@@ -10,12 +10,13 @@ def test_panel_modes_and_files_align():
     assert PANEL_FILES["fft_time"] == "ffttime-panel.png"
 
 
-def test_synthetic_csv_has_rpm_and_signal():
+def test_synthetic_csv_has_eps_channels():
     from tools.gen_help_screenshots import build_synthetic_csv
     path = build_synthetic_csv()
     assert path.exists()
     header = path.read_text(encoding="utf-8").splitlines()[0]
-    for col in ("time", "rpm", "vib", "torque"):
+    # EPS-domain names matching the shipped assets (order base = 电机转速)
+    for col in ("time", "电机转速", "方向盘扭矩", "电机扭矩"):
         assert col in header, f"synthetic CSV missing column: {col}"
 
 
