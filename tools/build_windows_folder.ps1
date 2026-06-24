@@ -145,6 +145,14 @@ $PyInstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
     "--clean",
+    # --noupx: UPX-compressing the bundled Qt5 GL/render DLLs is a known cause
+    # of "works from source, breaks when frozen" rendering faults. The GPU
+    # render toggle blanks the chart curves ONLY in the packaged app, while the
+    # GL diagnostic proves the frozen build gets the SAME desktop GL 4.6 backend
+    # as source (AA_UseDesktopOpenGL on, openGLModuleType LibGL, isOpenGLES
+    # False). Same backend + works-unpacked/breaks-packed ⇒ the binaries are the
+    # suspect → ship Qt/GL DLLs byte-intact. Disk grows; correctness wins.
+    "--noupx",
     "--onedir"
 )
 if ($Console) {
