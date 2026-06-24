@@ -2466,6 +2466,18 @@ class MainWindow(
         s = QSettings("MF4Analyzer", "DataAnalyzer")
         s.setValue("render/use_opengl", bool(on))
         self.canvas_time.set_gpu_render(on)
+        # pyqtgraph's useOpenGL() SWAPS the viewport widget (setViewport). Curve
+        # items built on the PREVIOUS viewport do NOT re-render on the freshly
+        # swapped GL viewport — a pan / envelope refresh reuses the same stale
+        # items and stays blank; only a full rebuild (plot_channels) paints them
+        # (user-confirmed: 开 GPU 后曲线消失，pan 不回来、重新「绘图」才回来). So
+        # re-plot here, rebuilding the curves on the new viewport, instead of
+        # leaving the chart blank until the user manually re-plots. Gated to the
+        # time domain (GPU render only owns the time canvas) and to a loaded
+        # file (nothing to draw otherwise); switching back to time re-plots on
+        # its own, so an FFT-mode toggle needs no action here.
+        if self.files and self.chart_stack.current_mode() == 'time':
+            self.plot_time()
 
     def _restore_gpu_render_setting(self):
         from PyQt5.QtCore import QSettings

@@ -146,3 +146,66 @@ def test_gpu_on_clears_curve_device_cache(qapp):
         "switching to GL must drop DeviceCoordinateCache so a cache set while "
         "on CPU does not leave the curves invisible under GL"
     )
+
+
+# --- Toggling GPU must REBUILD the curves on the swapped viewport -----------
+# useOpenGL() swaps the viewport widget (setViewport); curve items built on the
+# PREVIOUS viewport do not re-render on the freshly-swapped GL viewport (a
+# pan/refresh reuses the same stale items and stays blank). User-confirmed: 开
+# GPU 后曲线消失，pan/缩放不回来、只有重新「绘图」才回来. So the window must
+# re-plot the time domain on toggle so the curves are rebuilt on the new
+# viewport instead of vanishing until a manual re-plot.
+
+def _window_with_file(qtbot):
+    from types import SimpleNamespace
+    import pandas as pd
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    t = np.arange(2048, dtype=float) / 1000.0
+    win.files["f1"] = SimpleNamespace(
+        data=pd.DataFrame({"sig": np.sin(2 * np.pi * 50.0 * t)}),
+        time_array=t,
+        fs=1000.0,
+        channel_units={"sig": ""},
+    )
+    return win
+
+
+def test_gpu_toggle_replots_time_so_curves_rebuild(qapp, qtbot, monkeypatch):
+    win = _window_with_file(qtbot)
+    monkeypatch.setattr(win.chart_stack, "current_mode", lambda: "time")
+    calls = []
+    monkeypatch.setattr(win, "plot_time", lambda: calls.append(True))
+
+    win._on_gpu_render_toggled(True)
+    assert calls, "GPU ON with a file in time mode must re-plot so curves rebuild"
+
+    calls.clear()
+    win._on_gpu_render_toggled(False)
+    assert calls, "GPU OFF also swaps the viewport → must re-plot to rebuild curves"
+
+
+def test_gpu_toggle_no_replot_without_file(qapp, qtbot, monkeypatch):
+    win = _window_with_file(qtbot)
+    win.files.clear()
+    monkeypatch.setattr(win.chart_stack, "current_mode", lambda: "time")
+    calls = []
+    monkeypatch.setattr(win, "plot_time", lambda: calls.append(True))
+
+    win._on_gpu_render_toggled(True)
+    assert not calls, "no file loaded → nothing to draw → no wasteful re-plot"
+
+
+def test_gpu_toggle_no_replot_outside_time_mode(qapp, qtbot, monkeypatch):
+    win = _window_with_file(qtbot)
+    monkeypatch.setattr(win.chart_stack, "current_mode", lambda: "fft")
+    calls = []
+    monkeypatch.setattr(win, "plot_time", lambda: calls.append(True))
+
+    win._on_gpu_render_toggled(True)
+    assert not calls, (
+        "GPU render owns the time canvas; an FFT-mode toggle should not re-plot "
+        "time (switching back to time re-plots on its own)"
+    )
