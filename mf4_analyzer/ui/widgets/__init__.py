@@ -109,6 +109,7 @@ class _CheckTolerantTree(QTreeWidget):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._consume_check_release = False
+        self._owner = None  # set by MultiFileChannelWidget; drawBranches reads it
 
     def _check_hit_rect(self, item, index):
         """Return the enlarged clickable rect for ``item``'s checkbox, or
@@ -196,6 +197,41 @@ class _CheckTolerantTree(QTreeWidget):
                     event.accept()
                     return
         super().mouseDoubleClickEvent(event)
+
+    def drawBranches(self, painter, rect, index):
+        item = self.itemFromIndex(index)
+        data = item.data(0, Qt.UserRole) if item is not None else None
+        # 文件/源/采样率行：保留默认展开箭头。
+        super().drawBranches(painter, rect, index)
+        if not (data and data[0] == 'channel'):
+            return
+        owner = self._owner
+        if owner is None:
+            return
+        gid = owner.axis_group_for(data[1], data[2])
+        if not gid:
+            return
+        self._paint_group_badge(painter, rect, gid)
+
+    def _paint_group_badge(self, painter, rect, gid):
+        """在缩进槽右端（紧贴勾选框前）画组徽标：组色圆角方块 + 白色组号。
+        画在 rect 右端，与树深度无关，规避多层缩进导致的错位。"""
+        side = 12
+        x = rect.right() - side - 2
+        y = rect.top() + (rect.height() - side) // 2
+        badge = QRect(x, y, side, side)
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(axis_group_color(gid))))
+        painter.drawRoundedRect(badge, 3, 3)
+        painter.setPen(QPen(QColor('#ffffff')))
+        f = painter.font()
+        f.setPointSizeF(7.5)
+        f.setBold(True)
+        painter.setFont(f)
+        painter.drawText(badge, Qt.AlignCenter, str(gid))
+        painter.restore()
 
 
 class MultiFileChannelWidget(QWidget):

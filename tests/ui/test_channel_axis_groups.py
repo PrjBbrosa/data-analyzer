@@ -87,3 +87,26 @@ class TestAxisGroupModel:
         assert can_split is True
         w.split_axis_group([("f1", "a")])
         assert w.axis_group_for("f1", "a") is None
+
+
+class TestChannelTreeIndent:
+    def test_indentation_is_narrowed(self, qapp):
+        w = MultiFileChannelWidget()
+        assert w.tree.indentation() == 16
+
+    def test_owner_back_reference_set(self, qapp):
+        w = MultiFileChannelWidget()
+        assert w.tree._owner is w
+
+    def test_drawbranches_smoke_renders_to_pixmap(self, qapp):
+        # 兜底冒烟：分组状态下 grab() 不抛异常（真实观感在 Task 6 真机验）
+        from PyQt5.QtCore import QCoreApplication
+        w = MultiFileChannelWidget()
+        w.resize(260, 300)
+        w.show()
+        QCoreApplication.processEvents()
+        w._axis_groups[("f1", "a")] = 1  # 直接置状态绕过 add_file
+        w.tree.viewport().update()
+        QCoreApplication.processEvents()
+        pm = w.grab()
+        assert not pm.isNull()
