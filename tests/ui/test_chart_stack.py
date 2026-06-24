@@ -2069,9 +2069,8 @@ def test_bottom_hint_bar_anchor_leads_each_section(qapp):
 
 
 def test_bottom_hint_bar_hugs_left_and_right_edges(qapp):
-    """The rotating row hugs the LEFT edge and the discovery hint hugs the RIGHT
-    edge, with the empty gap between them in the middle (no centered group, no
-    separator)."""
+    """The quickref affordance hugs the LEFT edge, the rotating row follows it,
+    and the discovery hint hugs the RIGHT edge."""
     from PyQt5.QtCore import QPoint
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
@@ -2094,10 +2093,12 @@ def test_bottom_hint_bar_hugs_left_and_right_edges(qapp):
         def _bar_left(w):
             return w.mapTo(bar, QPoint(0, 0)).x()
 
+        quickref_left = _bar_left(card._hint_quickref_btn)
         ctx_left = _bar_left(card._hint_context)
         disc_right = _bar_left(card._hint_discovery) + card._hint_discovery.width()
-        # Context hugs the left edge, discovery hugs the right edge.
-        assert ctx_left <= 6, ctx_left
+        # The visible help affordance leads the bar; context text follows it.
+        assert quickref_left <= 6, quickref_left
+        assert ctx_left > quickref_left, (quickref_left, ctx_left)
         assert disc_right >= bar.width() - 6, (disc_right, bar.width())
         # A real gap sits between them (the two are not glued in the middle).
         ctx_right = ctx_left + card._hint_context.width()
@@ -2108,8 +2109,8 @@ def test_bottom_hint_bar_hugs_left_and_right_edges(qapp):
 
 
 def test_bottom_hint_bar_context_stays_left_when_discovery_empty(qapp):
-    """When discovery is empty the lone rotating row still hugs the LEFT edge
-    (it does not recenter), so its position is stable across discovery churn."""
+    """When discovery is empty the quickref button stays left and the lone
+    rotating row remains immediately after it instead of recentering."""
     from PyQt5.QtCore import QPoint
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
@@ -2125,8 +2126,10 @@ def test_bottom_hint_bar_context_stays_left_when_discovery_empty(qapp):
         bar.layout().activate()
         qapp.processEvents()
 
+        quickref_left = card._hint_quickref_btn.mapTo(bar, QPoint(0, 0)).x()
         ctx_left = card._hint_context.mapTo(bar, QPoint(0, 0)).x()
-        assert ctx_left <= 6, ctx_left
+        assert quickref_left <= 6, quickref_left
+        assert ctx_left > quickref_left, (quickref_left, ctx_left)
     finally:
         cs.deleteLater()
 
@@ -2163,8 +2166,9 @@ def test_bottom_hint_bar_left_yields_width_right_stays_firm(qapp):
         lay = bar.layout()
         # The left rotating row owns the stretch (it absorbs the shrink and
         # elides); the right discovery row takes none.
-        assert lay.stretch(0) == 1   # context (left)
-        assert lay.stretch(1) == 0   # discovery (right)
+        assert lay.stretch(0) == 0   # quickref button (left affordance)
+        assert lay.stretch(1) == 1   # context (left, yields width)
+        assert lay.stretch(2) == 0   # discovery (right)
         # The discovery policy never shrinks below its full text, so it is never
         # clipped — the left row yields instead.
         assert card._hint_discovery.sizePolicy().horizontalPolicy() in (

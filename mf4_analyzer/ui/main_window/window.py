@@ -290,7 +290,7 @@ class MainWindow(
 
         # 软件说明 icon sits to the LEFT of the version/update affordance.
         # Permanent widgets pack left→right in add order, so add this one
-        # FIRST and the update button SECOND.
+        # FIRST and the update button SECOND. 操作速查入口在 hint bar 左侧。
         import qtawesome as qta
 
         self._help_btn = QToolButton(self)
@@ -302,17 +302,6 @@ class MainWindow(
         self._help_btn.setToolTip("软件说明")
         self._help_btn.clicked.connect(self._open_software_manual)
         self.statusBar.addPermanentWidget(self._help_btn)
-
-        # 操作速查 entry button, sits just left of the 软件说明 book icon.
-        self._quickref_btn = QToolButton(self)
-        self._quickref_btn.setObjectName("surfaceQuickrefButton")
-        self._quickref_btn.setIcon(qta.icon('mdi.keyboard-outline', color='#5b6472'))
-        self._quickref_btn.setIconSize(QSize(18, 18))
-        self._quickref_btn.setAutoRaise(True)
-        self._quickref_btn.setCursor(Qt.PointingHandCursor)
-        self._quickref_btn.setToolTip("操作速查 (?)")
-        self._quickref_btn.clicked.connect(self.toggle_quickref_panel)
-        self.statusBar.addPermanentWidget(self._quickref_btn)
 
         self._update_btn = QToolButton(self)
         self._update_btn.setObjectName("surfaceVersionButton")
@@ -490,6 +479,7 @@ class MainWindow(
         self.chart_stack.cursor_mode_changed.connect(self._on_cursor_mode_changed)
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.chart_stack.focus_changed.connect(self._on_chart_focus_changed)
+        self.chart_stack.quickref_requested.connect(self.toggle_quickref_panel)
         self.chart_stack.home_triggered.connect(
             lambda: self._hint_focused_pane("复位")
         )

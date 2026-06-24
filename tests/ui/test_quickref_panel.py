@@ -101,6 +101,13 @@ def test_card_carries_white_qss_not_translucent(panel):
     assert panel._card.testAttribute(Qt.WA_StyledBackground)
 
 
+def test_group_cards_use_white_surface_not_gray_fill(panel):
+    sheet = panel.styleSheet()
+    group_block = sheet.split("QFrame#quickrefGroup {", 1)[1].split("}", 1)[0]
+    assert "background-color: #ffffff;" in group_block
+    assert "background-color: #fafbfc;" not in group_block
+
+
 def test_soon_badge_present_for_coaxis(panel):
     """The 共轴 row renders an '即将' badge label."""
     from PyQt5.QtWidgets import QLabel

@@ -42,11 +42,11 @@ from . import quickref
 
 # --- Precision Light tokens (read from ui_kit/style.qss; do NOT hardcode the
 # mockup's approximate hexes). ---
-_TRAY = "#f2f4f7"          # backdrop / search field rest
+_TRAY = "#f7faff"          # search field rest (blue-white, not tray gray)
 _CARD = "#ffffff"          # floating card
-_SUB = "#fafbfc"           # group sub-card (inspector body tone)
-_DIVIDER = "#d3dbe6"       # card edge / strong seam
-_HAIRLINE = "#eef2f7"      # within-card soft separators
+_SUB = "#ffffff"           # group sub-card; keep panel off the old gray fill
+_DIVIDER = "#dbe5f2"       # card edge / strong seam
+_HAIRLINE = "#e9eff7"      # within-card soft separators
 _INK = "#111827"           # body / title
 _INK2 = "#475569"          # secondary text
 _INK3 = "#64748b"          # caption / meta
@@ -86,7 +86,7 @@ def _qss():
     QLineEdit#quickrefSearch {{
         min-height: 26px;
         padding: 3px 10px;
-        border: 1px solid {_HAIRLINE};
+        border: 1px solid #e2eaf5;
         border-radius: 9px;
         background-color: {_TRAY};
         color: {_INK};
@@ -122,7 +122,7 @@ def _qss():
 
     QFrame#quickrefGroup {{
         background-color: {_SUB};
-        border: 1px solid {_HAIRLINE};
+        border: 1px solid #e2eaf5;
         border-radius: 11px;
     }}
     QLabel#quickrefGroupTitle {{
@@ -181,7 +181,7 @@ def _qss():
         min-width: 3px; max-width: 3px;
     }}
     QFrame#quickrefFoot {{
-        background-color: #fcfcfd;
+        background-color: #f8fbff;
         border: none;
         border-top: 1px solid {_HAIRLINE};
         border-bottom-left-radius: {_CARD_RADIUS}px;
