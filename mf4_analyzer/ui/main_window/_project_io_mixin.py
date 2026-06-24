@@ -9,7 +9,7 @@ from ...io.loader import AUDIO_VIDEO_EXTS
 
 
 AUDIO_VIDEO_GLOB = "*.mp4 *.mov *.mkv *.m4v *.mp3 *.m4a *.aac *.wav *.flac"
-DATA_FILE_GLOB = f"*.mf4 *.mdf *.csv *.xlsx *.xls *.hdf {AUDIO_VIDEO_GLOB}"
+DATA_FILE_GLOB = f"*.mf4 *.mdf *.blf *.csv *.xlsx *.xls *.hdf {AUDIO_VIDEO_GLOB}"
 PROJECT_OR_DATA_FILTER = (
     f"所有支持的文件 ({DATA_FILE_GLOB} *.tlproj);;"
     f"项目 (*.tlproj);;数据文件 ({DATA_FILE_GLOB});;"
@@ -195,6 +195,16 @@ class ProjectIOMixin:
                     f"✅ 已加载音轨: {p.name} ({len(data)} 采样 @ {fs:.0f} Hz) | 共 {len(self.files)} 文件")
                 self.toast(f"已加载音轨 {p.name}", "success")
                 return
+            elif ext == '.blf':
+                dbc_paths = self._prompt_blf_dbc(p)
+                data, chs, units = DataLoader.load_blf(fp, dbc_paths=dbc_paths)
+                self._register_file_data(fp, data, chs, units)
+                self._update_info()
+                mode = f"DBC×{len(dbc_paths)} 解码" if dbc_paths else "原始字节"
+                self.statusBar.showMessage(
+                    f"✅ 已加载 BLF: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件")
+                self.toast(f"已加载 {p.name} · {mode}", "success")
+                return
             elif ext == '.hdf':
                 groups = DataLoader.load_hdf(fp)
                 for g in groups:
@@ -221,6 +231,23 @@ class ProjectIOMixin:
             self.toast(f"已加载 {p.name} · {len(data)} 行", "success")
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
+
+    def _prompt_blf_dbc(self, path):
+        """Chained DBC picker shown when opening a ``.blf``.
+
+        Returns the list of chosen ``.dbc`` paths, or ``[]`` if the user
+        cancels — in which case the BLF opens as raw per-CAN-id byte channels.
+        ``QFileDialog`` is resolved via ``sys.modules`` so smoke tests can patch
+        it the same way they patch the main open dialog (and so ``_load_one``
+        never pops a real dialog under test)."""
+        import sys as _sys
+        _pkg = _sys.modules.get('mf4_analyzer.ui.main_window')
+        _QFileDialog = getattr(_pkg, 'QFileDialog', QFileDialog) if _pkg is not None else QFileDialog
+        dbcs, _ = _QFileDialog.getOpenFileNames(
+            self, f"为 {path.name} 选择 DBC（取消则按原始字节打开）", "",
+            "CAN 数据库 (*.dbc);;所有文件 (*)",
+        )
+        return list(dbcs)
 
     def _close(self, fid):
         if fid not in self.files: return
