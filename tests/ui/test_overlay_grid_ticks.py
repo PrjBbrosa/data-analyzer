@@ -22,6 +22,50 @@ def _mantissa(v):
     return v / (10.0 ** exp)
 
 
+class TestFmtTick:
+    """A graticule tick that is zero-but-for-float-residue must read ``0`` —
+    not ``1.78e-15`` (2026-06-25 sci-notation zero-label fix). The residue
+    comes from wheel-pan tick accumulation (``lo - step*per_div + k*per_div``)
+    where the zero-crossing division no longer lands on an exact 0.0."""
+
+    @pytest.mark.parametrize("residue", [
+        1.78e-15,                      # the value from the user's screenshot
+        -3.55e-16,
+        1.1102230246251565e-16,
+        -2.220446049250313e-16,
+        5e-10,
+    ])
+    def test_near_zero_residue_reads_zero(self, residue):
+        assert _fmt_tick(residue) == "0"
+
+    def test_exact_zero_and_normal_values_unchanged(self):
+        assert _fmt_tick(0.0) == "0"
+        assert _fmt_tick(5.0) == "5"
+        assert _fmt_tick(-1.2) == "-1.2"
+        assert _fmt_tick(1.2) == "1.2"
+
+    def test_genuine_small_and_large_values_keep_sci_notation(self):
+        # A real tick >= 1e-9 must NOT be flattened to 0; big values still sci.
+        assert _fmt_tick(5e-5) == "5.00e-05"
+        assert _fmt_tick(1.5e7) == "1.50e+07"
+
+    def test_wheel_pan_zero_division_label_is_zero(self):
+        # Reproduce the real trigger end-to-end: snap to a clean grid, then do
+        # one plain-wheel vertical pan (overlay_axes.py:1357). The zero-crossing
+        # division accumulates float residue; its LABEL must still be "0".
+        n = 10
+        per_div = 0.1
+        step = 1
+        lo = -5 * per_div                       # snapped clean lower bound
+        bottom = lo - step * per_div            # plain-wheel pan
+        ticks = [bottom + k * per_div for k in range(n + 1)]
+        labels = [_fmt_tick(v) for v in ticks]
+        zero_like = [lab for v, lab in zip(ticks, labels) if abs(v) < 1e-9]
+        assert zero_like, "this fixture must contain a zero-crossing division"
+        assert all(lab == "0" for lab in zero_like)
+        assert not any("e-" in lab for lab in labels)
+
+
 class TestNicePerDiv:
     @pytest.mark.parametrize("raw, expected", [
         (1.0, 1.0),

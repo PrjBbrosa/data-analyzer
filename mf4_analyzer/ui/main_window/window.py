@@ -68,6 +68,10 @@ class MainWindow(
         self._fc = 0;
         self._active = None
         self._project_path = None
+        try:
+            self._blf_dbc_history = self._load_recent_blf_dbc_history()
+        except Exception:
+            self._blf_dbc_history = []
         # FFT vs Time LRU cache (Plan Task 6). Keys are produced by
         # ``_fft_time_cache_key`` from compute-relevant fields ONLY —
         # display options (amplitude_mode, cmap, dynamic, freq_*) do
@@ -255,6 +259,26 @@ class MainWindow(
         self._copy_thumbnail.clicked.connect(self._open_markup_editor)
         self._markup_editor = None
 
+        # 操作速查 panel: lazy singleton + a global "?" shortcut that toggles it.
+        self._quickref_panel = None
+        self._install_quickref_shortcut()
+
+    def _install_quickref_shortcut(self):
+        """Bind '?' (and Shift+/ on layouts where ? needs Shift) to the panel."""
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        self._quickref_shortcut = QShortcut(QKeySequence(Qt.Key_Question), self)
+        self._quickref_shortcut.setContext(Qt.ApplicationShortcut)
+        self._quickref_shortcut.activated.connect(self.toggle_quickref_panel)
+
+    def toggle_quickref_panel(self):
+        """Show/hide the 操作速查 quick-reference panel (lazy singleton)."""
+        if self._quickref_panel is None:
+            from ..quickref_panel import QuickRefPanel
+            from ...help import open_guide
+            self._quickref_panel = QuickRefPanel(self, open_guide=open_guide)
+        self._quickref_panel.toggle(anchor_widget=self)
+
     def _install_update_indicator(self):
         """Far-right status-bar update affordance: a cloud-download icon
         (no text, hover '检查更新') + the app version, linking to the release
@@ -266,7 +290,7 @@ class MainWindow(
 
         # 软件说明 icon sits to the LEFT of the version/update affordance.
         # Permanent widgets pack left→right in add order, so add this one
-        # FIRST and the update button SECOND.
+        # FIRST and the update button SECOND. 操作速查入口在 hint bar 左侧。
         import qtawesome as qta
 
         self._help_btn = QToolButton(self)
@@ -456,6 +480,7 @@ class MainWindow(
         self.chart_stack.cursor_mode_changed.connect(self._on_cursor_mode_changed)
         self.chart_stack.plot_mode_changed.connect(self._on_plot_mode_changed)
         self.chart_stack.focus_changed.connect(self._on_chart_focus_changed)
+        self.chart_stack.quickref_requested.connect(self.toggle_quickref_panel)
         self.chart_stack.home_triggered.connect(
             lambda: self._hint_focused_pane("复位")
         )

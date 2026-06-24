@@ -235,8 +235,8 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
     "version": "v7.1",
     "versionLabel": "使用说明 · V7.1",
     "subtitle": "打开数据、看图分析、导出结果 —— 一份照着做就会的使用说明",
-    "docVersion": "2.0",
-    "updated": "2026-06-20"
+    "docVersion": "2.1",
+    "updated": "2026-06-25"
   },
   "slides": [
     { "type": "cover" },
@@ -269,8 +269,8 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
             "软件自动读出里面的<b>所有通道</b>，列在左侧；同时显示文件的行数、采样率、时长。"
           ] } ],
           "right": [ { "type": "card", "accent": "teal", "no": "支持的文件", "h": "能打开哪些格式",
-            "pills": [".mf4", ".mdf", ".csv", ".xlsx", ".xls", ".hdf", ".mp4", ".mp3", ".wav"],
-            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>HEAD 声学（.hdf）</b>也能打开：软件会自动按采样率分组、把各通道列出来，照常做时域、FFT 等分析。", "<b>音视频文件（.mp4 / .mov / .mp3 / .wav 等）</b>也能拖进来：软件会取出里面的<b>声音轨道</b>当成信号通道，照常看波形、做 FFT；做声音的 FFT 时还能开 <b>A 计权</b>（见「看频率」页）。" ] } ] },
+            "pills": [".mf4", ".mdf", ".csv", ".xlsx", ".xls", ".hdf", ".mp4", ".mp3", ".wav", ".blf"],
+            "paras": [ "MF4 / MDF 是常见的测量数据文件；表格类（CSV / Excel）也能直接读。", "<b>HEAD 声学（.hdf）</b>也能打开：软件会自动按采样率分组、把各通道列出来，照常做时域、FFT 等分析。", "<b>音视频文件（.mp4 / .mov / .mp3 / .wav 等）</b>也能拖进来：软件会取出里面的<b>声音轨道</b>当成信号通道，照常看波形、做 FFT；做声音的 FFT 时还能开 <b>A 计权</b>（见「看频率」页）。", "<b>CAN 总线录制（.blf）</b>也能打开：首次选个 <b>DBC 数据库</b>翻译信号，之后同总线的 .blf 会自动推荐、随工程记住。" ] } ] },
         { "type": "tip", "label": "提示", "html": "打开多个文件后，可以同时勾选<b>不同文件</b>里的通道放在一起对比——很适合「这批和上批有什么不一样」。" }
       ] },
 
@@ -316,6 +316,24 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
         ] }
       ] },
 
+    { "id": "filter", "sec": "看波形", "kicker": "TIME DOMAIN · FILTER", "title": "看波形 · <c>滤波</c>对比", "foot": "原始实线 · 滤波虚线",
+      "blocks": [
+        { "type": "when", "html": "想滤掉高频毛刺、或只留某段频率看清趋势时用它——在时域里直接做，立刻看前后对比。" },
+        { "type": "cols", "align": "start",
+          "left": [ { "type": "steps", "items": [
+            "在右侧「时间范围 · 滤波」卡片里打开<b>滤波</b>开关。",
+            "选类型：<b>低通 / 高通 / 带通 / 带阻</b>，填截止频率（带通 / 带阻填上下两个）。",
+            "选<b>陡峭程度</b>（越大越陡），点 <span class='mono'>绘图</span>。",
+            "勾「显示原始 / 显示滤波后」做<b>前后对比</b>——滤波结果以<b>虚线</b>叠在原曲线上。"
+          ] } ],
+          "right": [ { "type": "card", "accent": "teal", "no": "放心用", "h": "不变形 · 不卡 · 可随时关",
+            "paras": [
+              "滤波<b>不会让波形前后错位</b>，峰谷的时间位置仍然准。",
+              "截止频率<b>超过该通道能表达的上限</b>时会自动收回并提示。",
+              "滤波只用于<b>时域显示对比</b>，不改 FFT / 阶次的计算，也不写进工程。"
+            ] } ] }
+      ] },
+
     { "id": "multiview", "sec": "并排比", "kicker": "MULTI-VIEW · SPLIT", "title": "多个视图<c>并排对比</c>", "foot": "拖动分屏 · 缩放联动 · Alt+1..6 切视图",
       "blocks": [
         { "type": "when", "html": "想把同一份数据的不同看法、或不同文件的同一分析<b>放在一起比</b>时用它。" },
@@ -328,6 +346,17 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           { "no": "切视图", "h": "Alt+1..6", "p": "在当前区域用快捷键在时域 / FFT / 阶次等之间快速切换。" }
         ] },
         { "type": "tip", "label": "提示", "html": "分屏布局会跟着<b>工程一起保存</b>；导出图片时也能把并排的几栏<b>拼成一张</b>。" }
+      ] },
+
+    { "id": "overlay", "sec": "叠加操作", "kicker": "OVERLAY · ZOOM", "title": "叠加图的<c>缩放</c>怎么玩", "foot": "框选 = 框啥放大啥",
+      "blocks": [
+        { "type": "when", "html": "把多条通道<b>叠在一张图</b>看时，这几招让你快速聚焦、各看各的纵向。" },
+        { "type": "cards", "cols": 2, "items": [
+          { "no": "框选放大", "h": "框啥放大啥", "p": "在叠加图上框一块，<b>所有通道</b>的纵向一起按这块放大——不用先选某条。" },
+          { "no": "Shift + 滚轮", "h": "缩时间轴", "p": "横向缩放时间轴；裸滚轮则是整图上下平移。", "accent": "teal" },
+          { "no": "Alt / Option + 滚轮", "h": "缩单条", "p": "只缩<b>当前这条</b>通道的纵向刻度，逐条调。" },
+          { "no": "GPU 加速", "h": "卡顿再开", "p": "右侧面板右下角的 <b>GPU 加速（时域图）</b>，多通道 / 高分屏卡顿时再开，导出不受影响。", "accent": "teal" }
+        ] }
       ] },
 
     { "id": "fft", "sec": "看频率", "kicker": "FREQUENCY · FFT", "title": "看频率成分 · <c>FFT</c> 分析", "foot": "峰值 = 主要频率",
@@ -374,7 +403,8 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
           "right": [ { "type": "card", "accent": "teal", "no": "「几阶」是什么意思", "h": "阶次 = 转速的倍数", "paras": [
             "「第 N 阶」指的是振动频率正好是转速的 N 倍。比如某结构每转一圈撞击一次，就体现在第 1 阶；旋转部件不平衡也常落在固定阶次上。",
             "所以即使转速一直在变，问题阶次也会稳稳地待在同一条线上。"
-          ] } ] }
+          ] } ] },
+        { "type": "tip", "label": "提示", "html": "转速与信号<b>采样率不同也没关系</b>，软件自动对齐再算阶次；分析声音时还能像 FFT 一样开 <b>A 计权</b>。" }
       ] },
 
     { "id": "spectro", "sec": "看变化", "kicker": "SPECTROGRAM · FFT vs TIME", "title": "看频率随时间变化 · <c>时频图</c>", "foot": "亮 = 能量强",
@@ -462,6 +492,11 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
   ],
 
   "changelog": [
+    { "v": "v2.2", "date": "2026-06-25", "items": [
+      "时域新增<b>滤波</b>（低通 / 高通 / 带通 / 带阻 + 陡峭度），可与原曲线做前后对比（虚线叠加）。",
+      "新增支持 <b>CAN 总线录制（.blf）</b>：首次选 DBC 翻译信号，之后同总线自动推荐、随工程记住。",
+      "叠加视图新增<b>框选放大同步所有通道</b>、Shift / Alt 滚轮分缩时间轴 / 单通道，及<b>时域图 GPU 加速</b>开关；阶次支持转速与信号不同采样率。"
+    ] },
     { "v": "v2.1", "date": "2026-06-20", "items": [
       "「打开数据」新增支持<b>音视频文件</b>（.mp4 / .mov / .mp3 / .wav 等）：自动取出里面的声音轨道作为通道，照常做时域、FFT 分析。",
       "FFT 参数新增「<b>频率加权</b>」：可选 <b>A 计权</b>（IEC 61672），按人耳听感对各频段加权，分析声音更贴切。"
@@ -471,11 +506,6 @@ body.editing [data-path]:focus{outline:2px solid var(--coral);background:rgba(25
       "「打开数据」新增支持 HEAD .hdf、MDF .mdf 两类文件。",
       "界面导览 / 导出 / 速查页随新版工具栏与快捷键同步更新（框选选段、一键最大、视图切换等）。",
       "补充说明：分析图表换用新绘图引擎，更顺滑、可随时取消；界面改为全新雪色外观。"
-    ] },
-    { "v": "v1.0", "date": "2026-06-03", "items": [
-      "首版上线：14 页面向使用者的操作指南（加载数据 / 通道 / 时域 / FFT / 阶次 / 时频 / 批处理 / 采集 / 导出 / 速查 / 场景）。",
-      "改为数据驱动结构：所有文案集中在文件顶部的数据块，页码自动生成。",
-      "新增编辑模式可「导出已编辑 HTML」，编辑改动可保存回文件。"
     ] }
   ]
 }

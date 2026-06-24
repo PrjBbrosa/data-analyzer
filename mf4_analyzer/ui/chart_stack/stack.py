@@ -42,6 +42,7 @@ class ChartStack(QWidget):
     focus_changed = pyqtSignal(bool)
     home_triggered = pyqtSignal()
     tick_density_changed = pyqtSignal(int, int)
+    quickref_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -232,6 +233,7 @@ class ChartStack(QWidget):
         self._time_card.tick_density_changed.connect(
             self._on_card_tick_density_changed
         )
+        self._time_card.quickref_requested.connect(self.quickref_requested.emit)
 
         # Initial sync: stats_strip is currently disabled at the product level.
         self.stats_strip.setVisible(
@@ -259,6 +261,7 @@ class ChartStack(QWidget):
             lambda enabled, m=mode: self.annotation_enabled_changed.emit(m, enabled)
         )
         card.tick_density_changed.connect(self._on_card_tick_density_changed)
+        card.quickref_requested.connect(self.quickref_requested.emit)
         canvas = getattr(card, 'canvas', None)
         if (canvas is not None and hasattr(canvas, 'cursor_info')
                 and not isinstance(canvas, PgHeatmapCanvas)):
@@ -327,7 +330,8 @@ class ChartStack(QWidget):
         while lay.count():
             lay.takeAt(0)
         lay.setContentsMargins(8, 1, 8, 1)
-        lay.setSpacing(0)
+        lay.setSpacing(4)
+        lay.addWidget(self._time_card._hint_quickref_btn, 0, Qt.AlignVCenter)
         lay.addWidget(self._time_card._hint_context, 1)
         lay.addWidget(self._time_card._hint_discovery, 0)
 
@@ -597,6 +601,9 @@ class ChartStack(QWidget):
             )
             self._secondary_card.tick_density_changed.connect(
                 self._on_card_tick_density_changed
+            )
+            self._secondary_card.quickref_requested.connect(
+                self.quickref_requested.emit
             )
             # Per-pane control routing (P2 Task 9 1b): the secondary card's
             # own 分屏/叠加/游标 segmented controls act on the SECONDARY canvas,

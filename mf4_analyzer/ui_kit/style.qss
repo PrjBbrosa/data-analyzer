@@ -1903,6 +1903,27 @@ QFrame#chartHintBar {
     background-color: transparent;
     border-top: 1px solid #d3dbe6;
 }
+QFrame#chartHintBar QToolButton#chartHintQuickrefButton {
+    min-width: 18px;
+    max-width: 18px;
+    min-height: 18px;
+    max-height: 18px;
+    padding: 0;
+    margin: 0 2px 0 0;
+    background-color: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 9px;
+    color: #1769e0;
+    font-size: 12px;
+    font-weight: 800;
+}
+QFrame#chartHintBar QToolButton#chartHintQuickrefButton:hover {
+    background-color: #dbeafe;
+    border-color: #60a5fa;
+}
+QFrame#chartHintBar QToolButton#chartHintQuickrefButton:pressed {
+    background-color: #bfdbfe;
+}
 QFrame#chartHintBar QLabel#chartHintPersistent {
     color: #64748b;
     font-size: 11px;

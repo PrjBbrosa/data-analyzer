@@ -93,6 +93,21 @@ def apply(sig, spec, fs):
         idx = np.arange(n0)
         xf[nan_mask] = np.interp(idx[nan_mask], idx[~nan_mask], x[~nan_mask])
 
+    finite = x[~nan_mask]
+    if finite.size:
+        base = float(finite[0])
+        const_tol = 16 * np.finfo(float).eps * max(1.0, abs(base))
+        if float(np.max(np.abs(finite - base))) <= const_tol:
+            if spec.kind in ('low', 'bandstop'):
+                y = np.full(n0, base, dtype=float)
+            elif spec.kind in ('high', 'band'):
+                y = np.zeros(n0, dtype=float)
+            else:
+                raise ValueError(f"unknown filter kind: {spec.kind!r}")
+            if nan_mask.any():
+                y[nan_mask] = np.nan
+            return y
+
     # odd-reflection pad to soften circular-convolution edge wrap
     pad = min(n0 - 1, max(16, n0 // 10))
     left = 2 * xf[0] - xf[pad:0:-1]

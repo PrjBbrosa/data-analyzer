@@ -1,5 +1,6 @@
 """DataLoader: reads MF4 / Excel / CSV inputs."""
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -118,6 +119,44 @@ AUDIO_VIDEO_EXTS = {
 }
 
 
+@dataclass(frozen=True)
+class BlfDbcProbe:
+    """Lightweight compatibility summary for one BLF against one DBC set."""
+
+    dbc_paths: tuple[str, ...]
+    total_frame_count: int
+    total_frame_id_count: int
+    matched_frame_count: int
+    matched_frame_id_count: int
+    decoded_frame_count: int
+    decoded_signal_count: int
+    signal_names: tuple[str, ...]
+
+    @property
+    def is_match(self) -> bool:
+        return self.decoded_frame_count > 0 and bool(self.signal_names)
+
+    @property
+    def decoded_frame_ratio(self) -> float:
+        if self.total_frame_count <= 0:
+            return 0.0
+        return self.decoded_frame_count / self.total_frame_count
+
+    @property
+    def matched_frame_id_ratio(self) -> float:
+        if self.total_frame_id_count <= 0:
+            return 0.0
+        return self.matched_frame_id_count / self.total_frame_id_count
+
+    @property
+    def strength(self) -> str:
+        if not self.is_match:
+            return "none"
+        if self.matched_frame_id_ratio >= 0.8 and self.decoded_frame_ratio >= 0.8:
+            return "strong"
+        return "weak"
+
+
 def _read_blf_frames(fp):
     """Read a Vector BLF into a list of ``(timestamp, arbitration_id, data)``.
 
@@ -184,8 +223,7 @@ def _assemble_blf_channels(series, units, t0):
     return pd.DataFrame(data), list(data.keys()), units
 
 
-def _decode_blf_with_dbc(frames, dbc_paths, t0):
-    """Decode raw CAN frames into named physical signals using one or more DBCs."""
+def _load_dbc_database(dbc_paths):
     try:
         import cantools
     except ImportError as exc:
@@ -195,6 +233,74 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0):
     db = cantools.database.Database()
     for path in dbc_paths:
         db.add_dbc_file(str(path))
+    return db
+
+
+def _decode_can_payload(msg, payload):
+    try:
+        return msg.decode(payload, decode_choices=False, allow_truncated=True)
+    except TypeError:
+        # older cantools without allow_truncated
+        try:
+            return msg.decode(payload, decode_choices=False)
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
+def _numeric_decoded_values(decoded):
+    values = []
+    for sig_name, value in decoded.items():
+        try:
+            fval = float(value)
+        except (TypeError, ValueError):
+            continue
+        values.append((sig_name, fval))
+    return values
+
+
+def _probe_blf_dbc_frames(frames, dbc_paths):
+    db = _load_dbc_database(dbc_paths)
+    frame_ids = {aid for _t, aid, _payload in frames}
+    matched_frame_ids = set()
+    matched_frame_count = 0
+    decoded_frame_count = 0
+    decoded_signal_count = 0
+    signal_names = set()
+
+    for _t, aid, payload in frames:
+        try:
+            msg = db.get_message_by_frame_id(aid)
+        except KeyError:
+            continue
+        matched_frame_count += 1
+        matched_frame_ids.add(aid)
+        decoded = _decode_can_payload(msg, payload)
+        if not decoded:
+            continue
+        numeric_values = _numeric_decoded_values(decoded)
+        if not numeric_values:
+            continue
+        decoded_frame_count += 1
+        decoded_signal_count += len(numeric_values)
+        signal_names.update(sig_name for sig_name, _value in numeric_values)
+
+    return BlfDbcProbe(
+        dbc_paths=tuple(str(p) for p in dbc_paths),
+        total_frame_count=len(frames),
+        total_frame_id_count=len(frame_ids),
+        matched_frame_count=matched_frame_count,
+        matched_frame_id_count=len(matched_frame_ids),
+        decoded_frame_count=decoded_frame_count,
+        decoded_signal_count=decoded_signal_count,
+        signal_names=tuple(sorted(signal_names)),
+    )
+
+
+def _decode_blf_with_dbc(frames, dbc_paths, t0):
+    """Decode raw CAN frames into named physical signals using one or more DBCs."""
+    db = _load_dbc_database(dbc_paths)
 
     # A signal name in more than one message is ambiguous; qualify only those
     # as ``<Message>.<Signal>`` so the common-case unique names stay short.
@@ -211,21 +317,10 @@ def _decode_blf_with_dbc(frames, dbc_paths, t0):
             msg = db.get_message_by_frame_id(aid)
         except KeyError:
             continue  # frame id not in this DBC
-        try:
-            decoded = msg.decode(payload, decode_choices=False, allow_truncated=True)
-        except TypeError:
-            # older cantools without allow_truncated
-            try:
-                decoded = msg.decode(payload, decode_choices=False)
-            except Exception:
-                continue
-        except Exception:
+        decoded = _decode_can_payload(msg, payload)
+        if not decoded:
             continue  # CRC/length/multiplex mismatch on this frame
-        for sig_name, value in decoded.items():
-            try:
-                fval = float(value)
-            except (TypeError, ValueError):
-                continue  # non-numeric (e.g. unresolved choice string)
+        for sig_name, fval in _numeric_decoded_values(decoded):
             disp = (
                 sig_name if len(sig_owners[sig_name]) <= 1
                 else f"{msg.name}.{sig_name}"
@@ -354,6 +449,14 @@ class DataLoader:
         if dbc_paths:
             return _decode_blf_with_dbc(frames, list(dbc_paths), t0)
         return _raw_blf_channels(frames, t0)
+
+    @staticmethod
+    def probe_blf_dbc(fp, dbc_paths):
+        """Return a lightweight compatibility probe for a BLF and DBC path list."""
+        frames = _read_blf_frames(fp)
+        if not frames:
+            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
+        return _probe_blf_dbc_frames(frames, list(dbc_paths or []))
 
     @staticmethod
     def load_audio_video(fp):

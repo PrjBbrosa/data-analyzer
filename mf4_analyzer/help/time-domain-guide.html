@@ -130,6 +130,60 @@
         </div>
     </section>
 
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">05 · <b>滤波看前后</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">05</span><h2>滤掉杂讯，原始对滤波</h2></div>
+            <div class="step-grid">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">①</span><p>右侧 <span class="ui">时间范围 · 滤波</span> 卡片里打开<span class="ui">滤波</span>开关。</p></div>
+                    <div class="blk reveal d4"><span class="k">②</span><p>选 <span class="ui">低通 / 高通 / 带通 / 带阻</span>，填截止频率，选陡峭程度，点 <span class="ui">绘图</span>。</p></div>
+                    <div class="blk reveal d5"><span class="k">▸</span><p>勾 <span class="ui">显示原始 / 显示滤波后</span> 做<b>前后对比</b>：滤波结果是<b>虚线</b>，叠在原曲线上。</p></div>
+                    <div class="blk reveal d5"><span class="k">▸</span><p>滤波<b>不让波形错位</b>、不改 FFT / 阶次结果；超出范围会自动提示。</p></div>
+                </div>
+                <div class="mock reveal d3">
+                    <div class="cap"><span>滤波</span><em>右侧卡片</em></div>
+                    <div class="row" style="justify-content:flex-start;gap:14px"><span class="ui">滤波 ●</span><span class="pos">低通 · 100 Hz</span></div>
+                    <div style="background:#fff;padding:14px;margin-top:10px">
+                        <svg viewBox="0 0 600 90" preserveAspectRatio="none" style="width:100%;height:80px">
+                            <polyline points="0,55 40,20 80,70 120,25 160,68 200,22 240,66 280,28 320,64 360,24 400,68 440,26 480,62 520,30 560,60 600,40" fill="none" stroke="#1769e0" stroke-width="2"/>
+                            <polyline points="0,55 80,48 160,44 240,42 320,42 400,43 480,45 560,48 600,50" fill="none" stroke="#13a36b" stroke-width="3" stroke-dasharray="7 6"/>
+                        </svg>
+                    </div>
+                    <p class="note" style="margin-top:10px"><b>实线</b>＝原始；<b>虚线</b>＝滤波后。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">06 · <b>叠加图怎么缩放</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">06</span><h2>叠加模式 · 框选与滚轮</h2></div>
+            <div class="step-grid" style="grid-template-columns:1fr 1fr;align-items:center">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">▸</span><p><b>框选放大</b>：在叠加图上框一块，<b>所有通道</b>的纵向一起按这块放大——<span class="pos">不用先选某条通道</span>。</p></div>
+                    <div class="blk reveal d4"><span class="k">▸</span><p><b>裸滚轮</b>＝整图上下平移；<span class="ui">Shift+滚轮</span>＝横向缩放时间轴。</p></div>
+                    <div class="blk reveal d5"><span class="k">▸</span><p><span class="ui">Alt / Option + 滚轮</span>＝只缩<b>当前这条</b>通道的纵向刻度。</p></div>
+                    <div class="blk reveal d5"><span class="k">▸</span><p>在<b>坐标轴刻度区</b>拖动＝只拖该通道的轴；在<b>图中间</b>拖＝整体平移。</p></div>
+                </div>
+                <div class="reveal d3">
+                    <div class="viz">
+                        <div style="background:#fff;padding:14px;position:relative">
+                            <svg viewBox="0 0 600 130" preserveAspectRatio="none" style="width:100%;height:120px">
+                                <polyline points="0,40 100,30 200,55 300,35 400,60 500,38 600,50" fill="none" stroke="#1769e0" stroke-width="2.5"/>
+                                <polyline points="0,90 100,80 200,100 300,85 400,105 500,88 600,98" fill="none" stroke="#13a36b" stroke-width="2.5"/>
+                                <rect x="220" y="15" width="150" height="105" fill="rgba(23,105,224,.10)" stroke="#1769e0" stroke-dasharray="5 4"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <p class="note reveal d4" style="margin-top:14px">框住的范围＝放大后看到的范围，<b>每条通道各按自己的比例缩</b>。</p>
+                    <p class="note reveal d5" style="margin-top:10px">图卡顿时，可在右侧面板右下角打开 <span class="ui">GPU 加速（时域图）</span>（默认关）。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
 </main>
 </div>
 <div class="edit-hotzone"></div>

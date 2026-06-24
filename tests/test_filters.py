@@ -105,3 +105,19 @@ def test_nan_positions_preserved():
     y = apply(x, FilterSpec('low', order=4, cutoff=50.0), fs)
     assert np.all(np.isnan(y[100:110]))
     assert np.isfinite(y[0]) and np.isfinite(y[-1])
+
+
+def test_lowpass_preserves_constant_signal_exactly():
+    x = np.ones(4096, dtype=float)
+
+    y = apply(x, FilterSpec('low', order=4, cutoff=100.0), fs=1000.0)
+
+    np.testing.assert_array_equal(y, x)
+
+
+def test_highpass_rejects_constant_signal_exactly():
+    x = np.ones(4096, dtype=float)
+
+    y = apply(x, FilterSpec('high', order=4, cutoff=100.0), fs=1000.0)
+
+    np.testing.assert_array_equal(y, np.zeros_like(x))

@@ -11,6 +11,7 @@ cantools = pytest.importorskip("cantools", reason="cantools not installed")
 
 from mf4_analyzer.io.loader import DataLoader  # noqa: E402
 from tests._helpers.blf_factory import (  # noqa: E402
+    write_engine_only_dbc,
     write_raw_blf,
     write_sample_blf,
     write_two_message_dbc,
@@ -37,6 +38,44 @@ def test_load_blf_with_dbc_decodes_named_signals(tmp_path):
     t = data["Time"].to_numpy()
     assert t[0] == pytest.approx(0.0)
     assert np.all(np.diff(t) >= 0)
+
+
+def test_probe_blf_dbc_reports_strong_match(tmp_path):
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    blf = write_sample_blf(tmp_path / "log.blf", n=5)
+
+    probe = DataLoader.probe_blf_dbc(str(blf), [str(dbc)])
+
+    assert probe.is_match is True
+    assert probe.strength == "strong"
+    assert probe.matched_frame_id_count == 2
+    assert probe.total_frame_id_count == 2
+    assert probe.decoded_frame_count == 10
+    assert set(probe.signal_names) == {"EngineSpeed", "Throttle", "Speed"}
+
+
+def test_probe_blf_dbc_reports_partial_match_as_weak(tmp_path):
+    dbc = write_engine_only_dbc(tmp_path / "engine.dbc")
+    blf = write_sample_blf(tmp_path / "log.blf", n=5)
+
+    probe = DataLoader.probe_blf_dbc(str(blf), [str(dbc)])
+
+    assert probe.is_match is True
+    assert probe.strength == "weak"
+    assert probe.matched_frame_id_count == 1
+    assert probe.total_frame_id_count == 2
+    assert probe.decoded_frame_count == 5
+
+
+def test_probe_blf_dbc_reports_no_match_without_raising(tmp_path):
+    dbc = write_two_message_dbc(tmp_path / "bus.dbc")
+    blf = write_raw_blf(tmp_path / "raw.blf")
+
+    probe = DataLoader.probe_blf_dbc(str(blf), [str(dbc)])
+
+    assert probe.is_match is False
+    assert probe.strength == "none"
+    assert probe.decoded_frame_count == 0
 
 
 def test_load_blf_zoh_holds_between_can_frames(tmp_path):

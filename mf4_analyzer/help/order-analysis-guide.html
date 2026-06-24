@@ -156,6 +156,26 @@
         </div>
     </section>
 
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">+ · <b>跨速率 + 频率加权</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">+</span><h2>转速记得稀也能算</h2></div>
+            <div class="step-grid">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">▸</span><p><b>转速通道和信号通道采样率不同也没关系</b>：比如<span class="ui">电机转速</span>记得稀、振动记得密，软件会自动对齐再算阶次。</p></div>
+                    <div class="blk reveal d4"><span class="k">▸</span><p>阶次的基准是<b>电机转速</b>——第 N 阶＝振动频率是电机转速的 N 倍。</p></div>
+                    <div class="blk reveal d5"><span class="k">▸</span><p>分析<b>声音</b>类信号时，右侧 <span class="ui">频率加权</span> 可切 <span class="ui">A 计权</span>（IEC 61672），更贴近主观响度。</p></div>
+                </div>
+                <div class="mock reveal d3">
+                    <div class="cap"><span>转速 / 信号</span><em>可不同采样率</em></div>
+                    <div class="chk"><span class="box">✓</span>电机转速 · 1 kHz</div>
+                    <div class="chk"><span class="box">✓</span>振动 · 8 kHz</div>
+                    <p class="note" style="margin-top:14px">两路采样率不同，软件自动对齐——问题阶次仍稳稳落在同一条线上。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
 </main>
 </div>
 <div class="edit-hotzone"></div>

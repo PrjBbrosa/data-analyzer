@@ -229,7 +229,7 @@ _HINTS = (
     ),
     Hint(
         id="zoom.guard",
-        text="框选缩放时，拖框优先于选择曲线",
+        text="框选 → X/Y 同缩 · 各通道按比例缩 Y",
         surface="context",
         tier="A",
         modes=frozenset({"time"}),
@@ -327,6 +327,30 @@ _HINTS = (
         requires=frozenset({"annotation_on"}),
         priority=100,
     ),
+    # ---- In-flight: staged with ship="later" (registered + width-checked, but
+    # surfaced NOWHERE until the feature lands; /update-hints flips ship→now and
+    # wires the retire event then). 共轴组 (overlay shared-axis), designed in
+    # 2026-06-24-overlay-shared-axis-and-channel-indent-design.md, not yet built.
+    Hint(
+        id="coaxis.merge",
+        text="多选通道右键可合并为共轴比幅值",
+        surface="discovery",
+        modes=frozenset({"time"}),
+        plot_modes=frozenset({"overlay"}),
+        retire_on="axis_group_menu",
+        priority=70,
+        ship="later",
+    ),
+    Hint(
+        id="coaxis.gesture",
+        text="Ctrl/Shift 多选通道，右键合并为共轴",
+        surface="context",
+        tier="A",
+        modes=frozenset({"time"}),
+        plot_modes=frozenset({"overlay"}),
+        priority=70,
+        ship="later",
+    ),
 )
 
 
@@ -364,6 +388,7 @@ def context_hints(state, scope="chart"):
         hint for hint in _HINTS
         if hint.surface == "context"
         and hint.scope == scope
+        and _is_shipped(hint)
         and hint.id not in state.recently_used
         and not _retired_by_discovery(hint, state)
         and _matches_state(hint, state)
@@ -391,6 +416,8 @@ def rotation_hints(state, scope="chart"):
         if hint.scope != scope:
             continue
         if hint.surface not in ("anchor", "context"):
+            continue
+        if not _is_shipped(hint):
             continue
         if not _matches_state(hint, state):
             continue
@@ -436,12 +463,22 @@ def _retired_by_discovery(hint, state):
     return bool(echo) and echo in state.discovered
 
 
+def _is_shipped(hint):
+    """A hint with ``ship != "now"`` is registered but surfaced nowhere yet.
+
+    Used to pre-stage hints for in-flight features: the entry lives in the
+    registry (tracked, width-checked) but is filtered out of every surface
+    (discovery, context, rotation) until its ``ship`` flips to ``"now"``.
+    """
+    return hint.ship == "now"
+
+
 def discovery_hint(state, scope="chart"):
     candidates = [
         hint for hint in _HINTS
         if hint.surface == "discovery"
         and hint.scope == scope
-        and hint.ship == "now"
+        and _is_shipped(hint)
         and hint.id not in state.discovered
         and _matches_state(hint, state)
     ]

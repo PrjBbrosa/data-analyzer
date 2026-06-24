@@ -36,6 +36,7 @@ class _ChartCard(QWidget):
     copy_image_requested = pyqtSignal()  # emitted when the toolbar copy btn is clicked
     annotation_enabled_changed = pyqtSignal(bool)
     tick_density_changed = pyqtSignal(int, int)
+    quickref_requested = pyqtSignal()
 
     def __init__(self, canvas, parent=None, annotations=False, chart_mode=''):
         super().__init__(parent)
@@ -270,10 +271,18 @@ class _ChartCard(QWidget):
         self._hint_discovery.setSizePolicy(
             QSizePolicy.Minimum, QSizePolicy.Preferred
         )
+        self._hint_quickref_btn = QToolButton(self._hint_bar)
+        self._hint_quickref_btn.setObjectName("chartHintQuickrefButton")
+        self._hint_quickref_btn.setText("?")
+        self._hint_quickref_btn.setAutoRaise(True)
+        self._hint_quickref_btn.setCursor(Qt.PointingHandCursor)
+        self._hint_quickref_btn.setToolTip("操作速查 (?)")
+        self._hint_quickref_btn.clicked.connect(self.quickref_requested.emit)
         # Two edge-anchored slots, no centered group / separator: the rotating
         # gesture row hugs the LEFT edge (stretch=1, so it owns the whole left
         # span and elides there if too long), the discovery row hugs the RIGHT
         # edge. A long left row can never squeeze the right row off the bar.
+        bar_lay.addWidget(self._hint_quickref_btn, 0, Qt.AlignVCenter)
         bar_lay.addWidget(self._hint_context, 1)
         bar_lay.addWidget(self._hint_discovery, 0)
 

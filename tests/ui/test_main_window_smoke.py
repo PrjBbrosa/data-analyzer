@@ -603,7 +603,7 @@ def test_main_window_moves_time_hints_to_status_line(qapp, qtbot):
 
 def test_main_window_keeps_single_active_hint_bar_in_status_line(qapp, qtbot):
     from PyQt5.QtCore import Qt
-    from PyQt5.QtWidgets import QFrame
+    from PyQt5.QtWidgets import QFrame, QToolButton
 
     w = MainWindow()
     qtbot.addWidget(w)
@@ -633,6 +633,22 @@ def test_main_window_keeps_single_active_hint_bar_in_status_line(qapp, qtbot):
             if not child.isHidden()
         ]
         assert status_bars == [active_bar]
+
+        help_buttons = active_bar.findChildren(
+            QToolButton, "chartHintQuickrefButton", Qt.FindDirectChildrenOnly
+        )
+        assert len(help_buttons) == 1
+        assert active_bar.layout().indexOf(help_buttons[0]) == 0
+        assert active_bar.layout().indexOf(card._hint_context) > 0
+
+    active_bar = getattr(w, "_status_hint_bar")
+    button = active_bar.findChild(
+        QToolButton, "chartHintQuickrefButton", Qt.FindDirectChildrenOnly
+    )
+    qtbot.mouseClick(button, Qt.LeftButton)
+    qapp.processEvents()
+    assert w._quickref_panel is not None
+    assert w._quickref_panel.isVisible()
 
 
 def test_fft_quality_indicator_repositions_after_first_mode_layout(qapp, qtbot):
