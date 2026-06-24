@@ -490,8 +490,9 @@ class TimeDomainCanvasPG(QWidget):
                 if cvis:
                     companion_visible_by_source[companion_of] = True
                 continue
+            axis_group = meta.get("axis_group") if meta else None
             primaries.append(
-                (name, bool(visible), t, sig, color, unit, data_id)
+                (name, bool(visible), t, sig, color, unit, data_id, axis_group)
             )
 
         # ``vis`` = primaries that own an axis this rebuild = original visible
@@ -499,8 +500,8 @@ class TimeDomainCanvasPG(QWidget):
         # 7th element so we can ``setVisible(False)`` it after bind while still
         # building its axis/row for the companion to anchor onto.
         vis = [
-            (name, t, sig, color, unit, data_id, p_visible)
-            for (name, p_visible, t, sig, color, unit, data_id) in primaries
+            (name, t, sig, color, unit, data_id, p_visible, axis_group)
+            for (name, p_visible, t, sig, color, unit, data_id, axis_group) in primaries
             if p_visible or companion_visible_by_source.get(name)
         ]
 
@@ -532,7 +533,7 @@ class TimeDomainCanvasPG(QWidget):
                         pass
 
         if subplot_mode:
-            for i, (name, t, sig, color, unit, data_id, p_visible) in enumerate(vis):
+            for i, (name, t, sig, color, unit, data_id, p_visible, _axis_group) in enumerate(vis):
                 pi = self._add_plot_item(row=i, col=0)
                 handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
                 self.axes_list.append(handle)
@@ -555,7 +556,7 @@ class TimeDomainCanvasPG(QWidget):
             # exact, so we propagate explicitly via _propagate_xlim_to_siblings
             # on every sigXRangeChanged tick from the primary.
             # Subplot labels need bbox-overlap-driven inside/outside flip.
-            # vis[i] is (name, t, sig, color, unit, data_id); color idx3, unit idx4.
+            # vis[i] is (name, t, sig, color, unit, data_id, p_visible, axis_group); color idx3, unit idx4.
             self._subplot_label_specs = [
                 (self.axes_list[i], vis[i][0], vis[i][3], vis[i][4])
                 for i in range(len(vis))
@@ -600,7 +601,7 @@ class TimeDomainCanvasPG(QWidget):
             )
             self._set_primary_line_visible(vis[0][0], vis[0][6])
             # Channels 2..N → dedicated aux ViewBoxes bound to right axes.
-            for idx, (name, t, sig, color, unit, data_id, p_visible) in enumerate(
+            for idx, (name, t, sig, color, unit, data_id, p_visible, _axis_group) in enumerate(
                 vis[1:], start=1
             ):
                 handle = self._overlay_axes._add_overlay_axis_handle(pi, idx)
@@ -637,7 +638,7 @@ class TimeDomainCanvasPG(QWidget):
             pi = self._add_plot_item(row=0, col=0)
             handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
             self.axes_list.append(handle)
-            name, t, sig, color, unit, data_id, p_visible = vis[0]
+            name, t, sig, color, unit, data_id, p_visible, _axis_group = vis[0]
             self._overlay_axes._bind_channel(
                 handle,
                 name,

@@ -203,6 +203,7 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     fake.channel_list = types.SimpleNamespace(
         get_checked_channels=lambda: [("fid", "speed", "#1769e0")],
         get_file_data=lambda fid: fake.files.get(fid),
+        checked_axis_groups=lambda: {},
     )
     fake.chart_stack = types.SimpleNamespace(
         plot_mode_for_canvas=lambda canvas: "subplot",

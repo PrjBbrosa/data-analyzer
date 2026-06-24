@@ -403,6 +403,7 @@ class MainWindow(
         self.navigator.channel_context_menu_requested.connect(
             lambda: self.chart_stack.mark_discovered("channel.right_click")
         )
+        self.channel_list.axis_groups_changed.connect(self._ch_changed)
 
         # Canvas cursor signals are owned by ChartStack; MainWindow doesn't
         # need to subscribe (ChartStack updates the pill itself).
@@ -1945,6 +1946,7 @@ class MainWindow(
         # without relying on a fragile name-suffix heuristic.
         self._time_filtered_names = set()
 
+        eff_groups = self.channel_list.checked_axis_groups()
         data = []
         for fid, ch, color in checked:
             fd = self.channel_list.get_file_data(fid)
@@ -1967,7 +1969,12 @@ class MainWindow(
                 x_axis, sig = x_axis[m], sig[m]
             if len(sig) == 0:
                 continue
-            data.append((name, show_orig, x_axis, sig, color, unit, fid))
+            gid = eff_groups.get((fid, ch))
+            if gid is not None:
+                data.append((name, show_orig, x_axis, sig, color, unit, fid,
+                             {"axis_group": gid}))
+            else:
+                data.append((name, show_orig, x_axis, sig, color, unit, fid))
 
             if filt_enabled:
                 fs = float(getattr(fd, "fs", 0.0)) or self._estimate_fs(time_axis)
