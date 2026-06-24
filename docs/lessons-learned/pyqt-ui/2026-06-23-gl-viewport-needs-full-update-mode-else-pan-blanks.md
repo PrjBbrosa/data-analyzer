@@ -61,3 +61,21 @@ QGraphicsView 的 viewport 在 macOS 上不可靠地合成曲线 QGraphicsItem**
 inspector `_GPU_RENDER_UI_SUPPORTED` 在 macOS 隐藏开关行。其它平台（Windows 真机 GL 有效）保留。
 时域性能继续由 CPU 抽稀 + 密集封顶 + 窄Y竖线墙守卫承担。**教训：viewport-GL 是 macOS 上的
 正确性负债，band-aid 修不完；GL 加速若无逐曲线/config 退路，宁可平台级关，别一直补 viewport 切换。**
+
+## 2026-06-24 收尾#2 — Windows **打包版**同病，冻结包也平台级关闭
+之前以为「Windows 真机 GL 有效」（上一段第 61 行）。用户真机实测推翻：**源码运行（dev）开 GPU 正常，
+PyInstaller 打包后开 GPU 曲线整体消失（轴/图例还在）**，与 macOS 同指纹。诊断按「先量化、别再猜」逐一
+排除外因：
+- **GL 后端不是病因**：在 `app.py` 加 `_write_gl_diagnostics`（`QOpenGLContext.openGLModuleType()` /
+  探针 ctx `isOpenGLES()`，写 `%TEMP%/tracelab_gl_diag.txt`）。打包版实测 `AA_UseDesktopOpenGL: True`、
+  `openGLModuleType: LibGL(desktop)`、`isOpenGLES: False`、version 4.6——与 dev **完全相同**的 desktop GL。
+  （配套：冻结包里 `app._configure_high_dpi` 强制 `AA_UseDesktopOpenGL`，确保不回退 ANGLE——已生效，仍失效。）
+- **UPX 不是病因**：构建脚本每次用 CLI 参数重生成 spec（改 `.spec` 无效，须在 `tools/build_windows_folder.ps1`
+  加 `--noupx`）。关掉 UPX 重打后**仍然**曲线消失。
+- 结论：后端正确 + 非 UPX + 源码正常/打包失效 ⇒ **QOpenGLWidget viewport 在冻结环境就是不合成曲线
+  QGraphicsItem**，和 macOS 同病。决策：**冻结包一并平台级关 GPU**——
+  `canvas._GPU_RENDER_PLATFORM_OK = sys.platform != "darwin" and not getattr(sys, "frozen", False)`，
+  `inspector._GPU_RENDER_UI_SUPPORTED` 同样加 `not frozen` 隐藏开关；诊断探针改 `TRACELAB_GL_DIAG=1` 按需。
+  源码运行（dev）非 macOS 仍保留 GL。**教训追加：viewport-GL 在「打包」这一维度上同样是负债——
+  `getattr(sys,'frozen')` 与 `platform=='darwin'` 是同级的「GL 不可信」判据；诊断要量化后端（openGLModuleType/
+  isOpenGLES）而不是凭「应该是 desktop」假设，且 spec 是构建脚本生成的、要改脚本参数不是改 .spec。**
