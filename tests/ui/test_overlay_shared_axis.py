@@ -18,6 +18,40 @@ def _pg_canvas(qapp):
     return canvas
 
 
+class TestOverlaySharedViewBox:
+    def test_group_members_share_one_viewbox_and_axis(self, qapp):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("a", True, t, np.sin(t),     "#f00", "Nm",  "f1", {"axis_group": 1}),
+            ("b", True, t, np.cos(t),     "#0a0", "Nm",  "f1", {"axis_group": 1}),
+            ("c", True, t, np.sin(2 * t), "#00f", "rpm", "f2"),  # ungrouped
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        # a,b 塌成一个 slot；c 自己一个 → 共 2 根轴
+        assert len(canvas.axes_list) == 2
+        # 第 0 个 slot（组 1）的 ViewBox 同时持有 a、b 两条曲线
+        shared_vb = canvas.axes_list[0].view_box
+        assert shared_vb is not None
+        assert len(shared_vb.addedItems) == 2
+        # c 自己的 ViewBox 只有一条
+        solo_vb = canvas.axes_list[1].view_box
+        assert len(solo_vb.addedItems) == 1
+
+    def test_shared_axis_union_range_covers_both(self, qapp):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("a", True, t, np.full_like(t, 1.0),  "#f00", "Nm", "f1", {"axis_group": 1}),
+            ("b", True, t, np.full_like(t, 50.0), "#0a0", "Nm", "f1", {"axis_group": 1}),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        lo, hi = canvas.axes_list[0].get_ylim()
+        # 并集量程必须同时覆盖 1 与 50（独立轴时各自只覆盖自己）
+        assert lo <= 1.0 + 1e-6 and hi >= 50.0 - 1e-6
+
+
 class TestAxisGroupMetaIsPrimary:
     def test_primary_with_axis_group_meta_not_swallowed_as_companion(self, qapp):
         canvas = _pg_canvas(qapp)

@@ -292,6 +292,7 @@ class OverlayAxisManager(_CanvasBackref):
     def _bind_channel(
         self, axis_handle, name, t, sig, color, unit, data_id,
         *, xlabel=None, skip_envelope=False,
+        axis_label=None, axis_color=None, update_axis_style=True,
     ):
         """Attach one channel to ``axis_handle``."""
         pi = axis_handle.plot_item
@@ -345,18 +346,23 @@ class OverlayAxisManager(_CanvasBackref):
             ck, name, self._cached_is_monotonic(data_id, name, t_arr)
         )
 
-        try:
+        if update_axis_style:
+            try:
+                if axis_label is not None:
+                    label = axis_label
+                elif self._overlay_mode:
+                    label = self._overlay_axis_label(axis_handle, name, unit)
+                else:
+                    label = _subplot_ylabel_text(name, unit)
+                axis_handle.set_ylabel(label)
+                _apply_pg_axis_font(axis_handle.y_axis_item())
+            except Exception:
+                pass
             if self._overlay_mode:
-                label = self._overlay_axis_label(axis_handle, name, unit)
-            else:
-                label = _subplot_ylabel_text(name, unit)
-            axis_handle.set_ylabel(label)
-            _apply_pg_axis_font(axis_handle.y_axis_item())
-        except Exception:
-            pass
-        if self._overlay_mode:
-            self._configure_overlay_axis_geometry(axis_handle)
-        self._apply_pg_axis_style(axis_handle, color)
+                self._configure_overlay_axis_geometry(axis_handle)
+            self._apply_pg_axis_style(
+                axis_handle, axis_color if axis_color is not None else color
+            )
         if xlabel is not None:
             try:
                 axis_handle.set_xlabel(xlabel)

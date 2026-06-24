@@ -103,6 +103,7 @@ from mf4_analyzer.ui.pg_canvas.tick_density import TickDensityController
 from mf4_analyzer.ui.pg_canvas.viewbox import _ModifierWheelViewBox  # noqa: F401
 from mf4_analyzer.ui.pg_canvas import renderer as _renderer
 from mf4_analyzer.ui.pg_canvas.overlay_axes import OverlayAxisManager
+from mf4_analyzer.ui.axis_group_palette import axis_group_color
 from mf4_analyzer.ui.pg_canvas.quality import QualityManager
 from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     Renderer,
@@ -590,34 +591,47 @@ class TimeDomainCanvasPG(QWidget):
                 owner_canvas=self,
                 allow_y_grid=False,
             )
-            # Channel 1 → dedicated aux ViewBox bound to the LEFT axis.
-            first_handle = self._overlay_axes._add_overlay_axis_handle(pi, 0)
-            self.axes_list.append(first_handle)
-            self._overlay_axes._bind_channel(
-                first_handle,
-                *vis[0][:6],
-                xlabel=xlabel,
-                skip_envelope=defer_first_frame,
-            )
-            self._set_primary_line_visible(vis[0][0], vis[0][6])
-            # Channels 2..N → dedicated aux ViewBoxes bound to right axes.
-            for idx, (name, t, sig, color, unit, data_id, p_visible, _axis_group) in enumerate(
-                vis[1:], start=1
-            ):
-                handle = self._overlay_axes._add_overlay_axis_handle(pi, idx)
+            # 按 axis_group 归并成「轴槽」：未分组通道各占一槽；同 group 的通道
+            # 共享一槽（一个 aux ViewBox + 一根 Y 轴，量程取并集自动）。槽序保持
+            # 通道首次出现顺序；槽 0 绑左轴，其余绑右轴。
+            slots = []
+            slot_of_gid = {}
+            for v in vis:
+                gid = v[7]
+                if gid is None:
+                    slots.append({"gid": None, "members": [v]})
+                elif gid in slot_of_gid:
+                    slots[slot_of_gid[gid]]["members"].append(v)
+                else:
+                    slot_of_gid[gid] = len(slots)
+                    slots.append({"gid": gid, "members": [v]})
+
+            for slot_idx, slot in enumerate(slots):
+                handle = self._overlay_axes._add_overlay_axis_handle(pi, slot_idx)
                 self.axes_list.append(handle)
-                self._overlay_axes._bind_channel(
-                    handle,
-                    name,
-                    t,
-                    sig,
-                    color,
-                    unit,
-                    data_id,
-                    xlabel=xlabel,
-                    skip_envelope=defer_first_frame,
-                )
-                self._set_primary_line_visible(name, p_visible)
+                members = slot["members"]
+                gid = slot["gid"]
+                if gid is None:
+                    name, t, sig, color, unit, data_id, p_visible, _ag = members[0]
+                    self._overlay_axes._bind_channel(
+                        handle, name, t, sig, color, unit, data_id,
+                        xlabel=xlabel, skip_envelope=defer_first_frame,
+                    )
+                    self._set_primary_line_visible(name, p_visible)
+                else:
+                    units = {m[4] for m in members}
+                    group_label = next(iter(units)) if len(units) == 1 else "(混合单位)"
+                    group_color = axis_group_color(gid)
+                    for j, m in enumerate(members):
+                        name, t, sig, color, unit, data_id, p_visible, _ag = m
+                        self._overlay_axes._bind_channel(
+                            handle, name, t, sig, color, unit, data_id,
+                            xlabel=xlabel, skip_envelope=defer_first_frame,
+                            axis_label=group_label if j == 0 else None,
+                            axis_color=group_color if j == 0 else None,
+                            update_axis_style=(j == 0),
+                        )
+                        self._set_primary_line_visible(name, p_visible)
             # Apply default emphasis state (no selection).
             self._overlay_axes._apply_overlay_emphasis()
             # Grid: in overlay the built-in left + right axes are linked to
