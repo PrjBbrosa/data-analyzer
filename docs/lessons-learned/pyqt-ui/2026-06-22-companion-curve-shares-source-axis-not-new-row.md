@@ -2,7 +2,7 @@
 role: pyqt-ui
 tags: [pyqtgraph, time-domain, filter-overlay, companion-curve, dash, setpen, emphasis, channel-lines, subplot-row, plot-data-item, y-autorange, narrow-y, shared-viewbox, home-fit]
 created: 2026-06-22
-updated: 2026-06-23
+updated: 2026-06-24
 cause: insight
 supersedes: []
 ---
@@ -129,3 +129,40 @@ hidden, > 5 when visible — RED before / GREEN after) AND a real offscreen rend
 showing the filtered waveform fills each subplot's height. Don't trust "pin set +
 unit pass" — the original bug passed 19 companion tests because every one built
 with the primary VISIBLE; the missing case was orig-hidden + companion-visible.
+
+## 2026-06-24 follow-up #4 — `setVisible(False)` is not enough: 3 data-iterating paths ignore visibility
+显示原始 OFF correctly flipped each primary `PlotDataItem.isVisible()` to False
+(verified subplot + overlay, before AND after pan), yet the user reported the
+原始 curve "still there", "拖动加倍曲线量", and "游标命中隐藏曲线". Root cause: the
+`setVisible` toggle is honored, but THREE other paths enumerate curves by DATA
+presence, NOT line visibility, so a hidden curve still acts live: (1) the cursor
+readout `CursorController._emit_single_cursor_html` / `_emit_dual_cursor_html`
+iterate `self.channel_data.items()` (full series, hidden or not) with NO
+`isVisible()` guard → hidden original/companion still shows in the cursor pill +
+dual-cursor stats rows + extreme markers. `_select_overlay_channel_from_scene_pos`
+was already guarded (ydrag lesson) but the value-readout was a SEPARATE,
+unguarded path. Fix: a `_hidden_channel_names()` helper that walks
+`_channel_lines.composite_items()` and collects DISPLAY names whose
+`plot_data_item.isVisible()` is False (keyed by composite so a same-named channel
+in another file is not falsely hidden), then `if ch in hidden: continue` in both
+emitters. (2) `renderer._refresh_visible_data` iterates ALL `_channel_lines` and
+re-runs `positions_envelope` + `setData` per pan/zoom tick on hidden lines too —
+that's the "拖到加倍" cost (each channel carries a hidden original AND a visible
+companion). Fix: skip `if not line_facade.plot_data_item.isVisible()` at the TOP
+of the loop (before the range-key gate). CAVEAT: skipping while hidden leaves the
+line's envelope stale for the current x-window if the user panned while it was
+off, so on RE-SHOW (`set_*_lines_visible(True)`) you MUST drop the re-shown
+lines' `_last_range_key` and call `_refresh_visible_data()` before `draw()` (the
+range-key gate then recomputes them at the current view; no-op if xlim was
+unchanged). (3) The idle-AA pass sets `DeviceCoordinateCache` on every
+`PlotCurveItem` with no visibility filter; a hidden item's cached offscreen
+raster pixmap can keep COMPOSITING after `setVisible(False)` on a GL/cached
+viewport (lesson-95 #2 fingerprint) — the most likely cause of "原始 still drawn"
+on the user's real GPU machine. Defensive GL-AGNOSTIC fix (NOT a viewport/GL
+change): clear the hidden curve's cache (`pdi.curve.setCacheMode(NoCache)`) in
+the hide branch of both setters. VERIFY: cursor exclusion + refresh-skip +
+re-show-refresh are all offscreen-testable by mechanism (isVisible flag, getData
+arrays, cacheMode); the actual painted framebuffer with a hidden item's GL cache
+is NOT — flag it for real-machine pixel verification, do not claim it fixed from
+offscreen state alone. Distinct from follow-up #3 (that was Y-framing of the
+VISIBLE set; this is hidden curves staying live in cursor/refresh/cache).

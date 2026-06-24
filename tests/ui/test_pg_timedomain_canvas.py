@@ -6863,9 +6863,15 @@ class TestFilterCompanionOverlay:
         return rows
 
     def _companion_pdi(self, canvas, source_name):
-        """Return the dashed companion PlotDataItem for ``source_name``."""
-        for name, (_ax, line) in canvas._channel_lines.items():
-            if name in canvas._companion_names and name.startswith(source_name):
+        """Return the dashed companion PlotDataItem for ``source_name``.
+
+        ``_companion_names`` is keyed by the COMPOSITE (data_id, name) identity
+        key (multi-file same-name decouple), so membership is tested against the
+        composite key while the human-readable display name is matched against
+        ``source_name``.
+        """
+        for ck, name, (_ax, line) in canvas._channel_lines.composite_items():
+            if ck in canvas._companion_names and name.startswith(source_name):
                 return line.plot_data_item
         return None
 
@@ -7179,7 +7185,11 @@ class TestFilterCompanionOverlay:
                 f"drag target {resolved!r} must be the visible companion, not "
                 f"the hidden primary {primary!r}"
             )
-            assert resolved in canvas._companion_names
+            # _companion_names is keyed by the composite (data_id, name) identity
+            # key; resolve the display name to its composite key to test
+            # membership.
+            resolved_key = canvas._channel_lines.composite_key_for(resolved)
+            assert resolved_key in canvas._companion_names
 
     def test_no_companion_subplot_y_unchanged(self, qapp):
         """A subplot row WITHOUT a companion keeps pyqtgraph's default Y
@@ -7454,3 +7464,140 @@ class TestFilterCompanionOverlay:
         qapp.processEvents()
         assert canvas.set_original_lines_visible(False) == 0
         assert canvas.set_companion_lines_visible(False) == 0
+
+
+# ---------------------------------------------------------------------------
+# 显示原始/显示滤波后 OFF: a HIDDEN curve (PlotDataItem.isVisible()==False) keeps
+# its samples in channel_data. The bug was that the cursor readout and the
+# pan/zoom envelope refresh both iterate by DATA presence, so a hidden original
+# still appeared in the cursor pill and still got re-enveloped every pan tick
+# ("游标命中隐藏曲线" + "拖动加倍曲线量"). These pin the visibility-aware paths.
+# ---------------------------------------------------------------------------
+class TestHiddenCurveCursorAndRefresh(TestFilterCompanionOverlay):
+    def _build(self, qapp, mode="subplot"):
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        qapp.processEvents()
+        canvas.plot_channels(self._rows_with_companion(n_sources=2), mode=mode)
+        qapp.processEvents()
+        return canvas
+
+    def test_single_cursor_html_excludes_hidden_original(self, qapp):
+        """显示原始 OFF → the cursor pill must NOT list the hidden solid
+        originals; only the visible dashed companions remain."""
+        canvas = self._build(qapp)
+        canvas.set_original_lines_visible(False)
+        seen = []
+        canvas._cursor.cursor_info.connect(seen.append)
+        canvas._cursor._emit_single_cursor_html(0.5)
+        html = seen[-1]
+        # hidden originals (bare "ch0"/"ch1") are gone; companions stay.
+        assert "ch0 (LP 50Hz)" in html and "ch1 (LP 50Hz)" in html
+        # the solid original token "ch0=" must NOT appear (companion uses
+        # "ch0 (LP 50Hz)=" so the bare-name "=" is unambiguous).
+        assert "ch0=" not in html and "ch1=" not in html
+
+    def test_single_cursor_html_excludes_hidden_companion(self, qapp):
+        """显示滤波后 OFF → the hidden dashed companion drops from the pill."""
+        canvas = self._build(qapp)
+        canvas.set_companion_lines_visible(False)
+        seen = []
+        canvas._cursor.cursor_info.connect(seen.append)
+        canvas._cursor._emit_single_cursor_html(0.5)
+        html = seen[-1]
+        assert "ch0=" in html and "ch1=" in html
+        assert "(LP 50Hz)" not in html
+
+    def test_dual_cursor_rows_exclude_hidden_original(self, qapp):
+        """Dual-cursor stats rows must skip the hidden originals."""
+        canvas = self._build(qapp)
+        canvas.set_dual_cursor_mode(True)
+        canvas.set_original_lines_visible(False)
+        rows = []
+        canvas._cursor.dual_cursor_rows.connect(lambda r: rows.append(r))
+        canvas._cursor._ax = 0.2
+        canvas._cursor._bx = 0.8
+        canvas._cursor._emit_dual_cursor_html()
+        emitted = rows[-1] if rows else []
+        names = {r[0] for r in emitted}
+        # only the visible companions appear; bare originals excluded.
+        assert names == {"ch0 (LP 50Hz)", "ch1 (LP 50Hz)"}
+
+    def test_refresh_skips_hidden_curve_no_setdata(self, qapp):
+        """A hidden original must NOT be re-enveloped on a pan/zoom refresh
+        (the doubled-work / 拖动加倍 root). Its PlotDataItem data stays frozen
+        while hidden, even after an xlim change + flush."""
+        canvas = self._build(qapp)
+        src_pdi = canvas._channel_lines["ch0"][1].plot_data_item
+        canvas.set_original_lines_visible(False)
+        frozen_x, _ = src_pdi.getData()
+        ax0 = canvas.axes_list[0]
+        lo, hi = ax0.get_xlim()
+        span = hi - lo
+        canvas.set_xlim(lo + span * 0.4, lo + span * 0.6)
+        qapp.processEvents()
+        canvas._flush_pending_refresh()
+        qapp.processEvents()
+        now_x, _ = src_pdi.getData()
+        assert np.array_equal(frozen_x, now_x), (
+            "hidden original was re-enveloped during pan (should be skipped)"
+        )
+        # the VISIBLE companion did track the new window.
+        comp = self._companion_pdi(canvas, "ch0")
+        cx, _ = comp.getData()
+        assert float(np.nanmax(cx)) <= lo + span * 0.6 + 1e-6
+
+    def test_reshow_after_pan_refreshes_to_current_window(self, qapp):
+        """Re-checking 显示原始 after panning while hidden must repopulate the
+        original's envelope at the CURRENT x-window (no stale data)."""
+        canvas = self._build(qapp)
+        canvas.set_original_lines_visible(False)
+        ax0 = canvas.axes_list[0]
+        lo, hi = ax0.get_xlim()
+        span = hi - lo
+        new_lo, new_hi = lo + span * 0.4, lo + span * 0.6
+        canvas.set_xlim(new_lo, new_hi)
+        qapp.processEvents()
+        canvas._flush_pending_refresh()
+        qapp.processEvents()
+        canvas.set_original_lines_visible(True)
+        qapp.processEvents()
+        src_pdi = canvas._channel_lines["ch0"][1].plot_data_item
+        assert src_pdi.isVisible() is True
+        rx, _ = src_pdi.getData()
+        # the re-shown envelope is clipped to the current window, not the full
+        # 0..1 range it had before hiding.
+        assert float(np.nanmin(rx)) >= new_lo - span * 0.1
+        assert float(np.nanmax(rx)) <= new_hi + span * 0.1
+
+    def test_overlay_refresh_skips_hidden_original(self, qapp):
+        """Same skip in overlay mode (the 拖到加倍 symptom is worst here)."""
+        canvas = self._build(qapp, mode="overlay")
+        src_pdi = canvas._channel_lines["ch0"][1].plot_data_item
+        canvas.set_original_lines_visible(False)
+        frozen_x, _ = src_pdi.getData()
+        ax0 = canvas.axes_list[0]
+        lo, hi = ax0.get_xlim()
+        span = hi - lo
+        canvas.set_xlim(lo + span * 0.3, lo + span * 0.7)
+        qapp.processEvents()
+        canvas._flush_pending_refresh()
+        qapp.processEvents()
+        now_x, _ = src_pdi.getData()
+        assert np.array_equal(frozen_x, now_x)
+
+    def test_hiding_original_clears_device_coordinate_cache(self, qapp):
+        """A hidden curve must drop its DeviceCoordinateCache so no stale
+        offscreen raster pixmap keeps compositing (lesson-95 GL fingerprint).
+        Mechanism guard: simulate the idle-AA cache, then hide and assert the
+        curve's cache mode is NoCache."""
+        from PyQt5.QtWidgets import QGraphicsItem
+
+        canvas = self._build(qapp)
+        src_pdi = canvas._channel_lines["ch0"][1].plot_data_item
+        # Simulate the idle-AA pass having cached the curve.
+        src_pdi.curve.setCacheMode(QGraphicsItem.DeviceCoordinateCache)
+        assert src_pdi.curve.cacheMode() == QGraphicsItem.DeviceCoordinateCache
+        canvas.set_original_lines_visible(False)
+        assert src_pdi.curve.cacheMode() == QGraphicsItem.NoCache

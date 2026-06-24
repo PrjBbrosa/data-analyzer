@@ -555,13 +555,55 @@ class PgAxisHandle:
             pass
         owner = getattr(self, "_owner_canvas", None)
         sync = getattr(owner, "_sync_pg_channel_color", None)
-        label = ""
+        if not callable(sync):
+            return
+        # Resolve the COMPOSITE (data_id, name) identity of the exact curve the
+        # user recolored, not the bare display label. Two files whose names
+        # truncate to the same ``[short_name]`` prefix share a display label, so
+        # a bare-name write resolves (last-bound-wins) to the WRONG file's
+        # entry; this is the same multi-file same-name collision class the
+        # canvas storage already fixes with the composite key. ``get_lines``
+        # hands back a FRESH _PgLineHandle each call, so match on the underlying
+        # PlotDataItem identity (stable), then prefer that composite key.
+        target = self._composite_key_for_line(owner, line)
+        if target is None:
+            try:
+                target = line.get_label()
+            except Exception:
+                target = ""
+        if target:
+            sync(target, color)
+
+    def _composite_key_for_line(self, owner, line):
+        """Return the composite (data_id, name) key for ``line`` on ``owner``.
+
+        Matches by the underlying ``PlotDataItem`` identity against the owner
+        canvas's ``_channel_lines`` (which stores ``(axis_handle, line_handle)``
+        under each composite key). Returns ``None`` when no match — the caller
+        then falls back to the bare display label so legacy/non-canvas hosts
+        still sync.
+        """
+        if owner is None:
+            return None
+        channel_lines = getattr(owner, "_channel_lines", None)
+        composite_items = getattr(channel_lines, "composite_items", None)
+        if not callable(composite_items):
+            return None
         try:
-            label = line.get_label()
+            target_pdi = line.plot_data_item
         except Exception:
-            label = ""
-        if label and callable(sync):
-            sync(label, color)
+            target_pdi = None
+        if target_pdi is None:
+            return None
+        try:
+            for ck, _name, pair in composite_items():
+                stored_line = pair[1] if len(pair) > 1 else None
+                stored_pdi = getattr(stored_line, "plot_data_item", None)
+                if stored_pdi is target_pdi:
+                    return ck
+        except Exception:
+            return None
+        return None
 
     def x_axis_item(self):
         return self._ax("bottom")

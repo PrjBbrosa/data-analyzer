@@ -331,15 +331,18 @@ class OverlayAxisManager(_CanvasBackref):
             pdi = pi.plot(bind_t, bind_s, pen=pen, name=name)
         t_arr = np.asarray(t)
         sig_arr = np.asarray(sig)
-        self.channel_data[name] = (t_arr, sig_arr, color, unit)
-        self._channel_data_id[name] = data_id
+        ck = _view_state_channel_key(data_id, name)
+        # IDENTITY is the composite (data_id, name) key so two same-named
+        # channels from differently-truncated files never overwrite each other
+        # (multi-file same-name root fix); the display ``name`` is recorded for
+        # iteration / bare-name lookups.
+        self.channel_data.set_with_label(ck, name, (t_arr, sig_arr, color, unit))
+        self._channel_data_id.set_with_label(ck, name, data_id)
         line_handle = _PgLineHandle(pdi, label_fallback=name)
-        self._channel_lines[name] = (axis_handle, line_handle)
-        self._channel_view_state_lines[
-            _view_state_channel_key(data_id, name)
-        ] = (axis_handle, line_handle)
-        self._channel_is_monotonic[name] = self._cached_is_monotonic(
-            data_id, name, t_arr
+        self._channel_lines.set_with_label(ck, name, (axis_handle, line_handle))
+        self._channel_view_state_lines[ck] = (axis_handle, line_handle)
+        self._channel_is_monotonic.set_with_label(
+            ck, name, self._cached_is_monotonic(data_id, name, t_arr)
         )
 
         try:
@@ -421,17 +424,18 @@ class OverlayAxisManager(_CanvasBackref):
             pass
         t_arr = np.asarray(t)
         sig_arr = np.asarray(sig)
-        self.channel_data[name] = (t_arr, sig_arr, color, unit)
-        self._channel_data_id[name] = data_id
+        ck = _view_state_channel_key(data_id, name)
+        self.channel_data.set_with_label(ck, name, (t_arr, sig_arr, color, unit))
+        self._channel_data_id.set_with_label(ck, name, data_id)
         line_handle = _PgLineHandle(pdi, label_fallback=name)
-        self._channel_lines[name] = (source_handle, line_handle)
-        self._channel_view_state_lines[
-            _view_state_channel_key(data_id, name)
-        ] = (source_handle, line_handle)
-        self._channel_is_monotonic[name] = self._cached_is_monotonic(
-            data_id, name, t_arr
+        self._channel_lines.set_with_label(ck, name, (source_handle, line_handle))
+        self._channel_view_state_lines[ck] = (source_handle, line_handle)
+        self._channel_is_monotonic.set_with_label(
+            ck, name, self._cached_is_monotonic(data_id, name, t_arr)
         )
-        self._companion_names.add(name)
+        # Track companions by COMPOSITE key so a same-named companion from a
+        # different file is distinguished (matches the channel_data identity).
+        self._companion_names.add(ck)
 
     def _cached_is_monotonic(self, data_id, name, t_arr):
         """Return monotonicity from a cheap cross-rebuild fingerprint cache."""
@@ -536,8 +540,11 @@ class OverlayAxisManager(_CanvasBackref):
     def _refresh_overlay_axis_labels(self):
         if not self._overlay_mode or not self._channel_lines:
             return
-        for name, (handle, _line) in self._channel_lines.items():
-            row = self.channel_data.get(name)
+        # Iterate by composite key so the unit/color row is read from the SAME
+        # file's channel_data entry (a bare-name lookup could resolve a
+        # same-named channel from another file).
+        for ck, name, (handle, _line) in self._channel_lines.composite_items():
+            row = self.channel_data.get(ck)
             unit = row[3] if row is not None else ""
             color = row[2] if row is not None else PG_AXIS_NEUTRAL_COLOR
             try:
@@ -568,12 +575,20 @@ class OverlayAxisManager(_CanvasBackref):
         except Exception:
             pass
 
-    def _sync_pg_channel_color(self, channel_name, color):
-        row = self.channel_data.get(channel_name)
+    def _sync_pg_channel_color(self, channel_key, color):
+        # ``channel_key`` may be a COMPOSITE (data_id, name) identity key (the
+        # precise curve the user recolored) or a bare display name (legacy
+        # callers). _ChannelKeyDict resolves both; writing by the composite key
+        # lands the color on the EXACT file's channel even when two files share
+        # a truncated display name (multi-file same-name collision class).
+        row = self.channel_data.get(channel_key)
         if row is not None:
-            self.channel_data[channel_name] = (row[0], row[1], color, row[3])
+            self.channel_data[channel_key] = (row[0], row[1], color, row[3])
+        # Inside-axis labels are matched by DISPLAY name, so resolve the
+        # composite key down to its display label for that comparison.
+        display_name = self.channel_data.display_label(channel_key, channel_key)
         for handle, item in zip(self._inside_label_handles, self._inside_label_items):
-            if self._channel_name_for_handle(handle) != channel_name:
+            if self._channel_name_for_handle(handle) != display_name:
                 continue
             try:
                 item.setColor(pg.mkColor(color))
