@@ -62,7 +62,13 @@ _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
 # 只有切回 CPU 才显示（已累计 6 类显示 bug：拖动/静止/开关/导出全白/线宽拍平/
 # 全程消失）。在 macOS 上强制走 CPU 光栅（时域性能由 CPU 抽稀 + 密集封顶 + 窄Y
 # 竖线墙守卫承担），其它平台保留 GL。详见 gl-viewport lesson。
-_GPU_RENDER_PLATFORM_OK = _sys.platform != "darwin"
+#
+# 冻结包（PyInstaller）同样不可靠：GL 诊断证明打包版拿到与源码相同的 desktop
+# GL 4.6（AA_UseDesktopOpenGL 生效 / openGLModuleType=LibGL / isOpenGLES=False），
+# 且关掉 UPX 后仍然——开 GPU 时曲线整体消失（轴/图例还在）。后端正确 + 非 UPX +
+# 源码正常/打包失效 ⇒ QOpenGLWidget viewport 在冻结环境就是不合成曲线 item，与
+# macOS 同病、band-aid 修不完。故冻结包一并强制 CPU；源码运行（dev）保留 GL。
+_GPU_RENDER_PLATFORM_OK = _sys.platform != "darwin" and not getattr(_sys, "frozen", False)
 
 from collections import OrderedDict
 from typing import Tuple

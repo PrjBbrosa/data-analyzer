@@ -111,10 +111,16 @@ def _write_gl_diagnostics():
     records whether the AA_UseDesktopOpenGL force (frozen-only, set in
     _configure_high_dpi) actually took. Writes to %TEMP%/tracelab_gl_diag.txt
     (and next to the exe, best-effort). Never raises — diagnostics must not
-    break startup. Runs in the frozen build, or from source with
-    TRACELAB_GL_DIAG=1 set (so source vs frozen can be compared).
+    break startup.
+
+    Opt-in via TRACELAB_GL_DIAG=1 (set the env var, then launch). It used to
+    auto-run in every frozen build while we were diagnosing the packaged-GPU
+    blank-curve bug; that investigation concluded (frozen GL gets correct
+    desktop GL 4.6 yet still does not composite the curve items, so GPU is now
+    disabled in frozen — see canvas._GPU_RENDER_PLATFORM_OK), so the probe no
+    longer runs on every launch. Kept behind the env var for future debugging.
     """
-    if not (getattr(sys, "frozen", False) or os.environ.get("TRACELAB_GL_DIAG")):
+    if not os.environ.get("TRACELAB_GL_DIAG"):
         return
     import tempfile
 

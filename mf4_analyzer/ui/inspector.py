@@ -47,9 +47,11 @@ _GPU_RENDER_TOOLTIP = (
     "渲染效果与 CPU 一致，导出正常。"
 )
 
-# viewport 级 GL 在 macOS 上不合成曲线（曲线整体消失），故 macOS 隐藏该开关；
-# 功能正确性由 canvas.set_gpu_render 的平台兜底强制 CPU 保证。其它平台保留。
-_GPU_RENDER_UI_SUPPORTED = sys.platform != "darwin"
+# viewport 级 GL 在 macOS 与 冻结包（PyInstaller）上都不合成曲线（曲线整体消失），
+# 故这两种情况隐藏该开关；功能正确性由 canvas.set_gpu_render 的平台兜底强制 CPU
+# 保证。冻结包实证：desktop GL 4.6 正确 + 关 UPX 仍失效（见 canvas gate 注释）。
+# 其它平台的源码运行保留。
+_GPU_RENDER_UI_SUPPORTED = sys.platform != "darwin" and not getattr(sys, "frozen", False)
 
 
 class Inspector(QWidget):
