@@ -443,7 +443,8 @@ class MainWindow(
             lambda _: _QTimer.singleShot(0, lambda: self.do_fft_time(force=False))
         )
         self.inspector.gpu_render_toggled.connect(self._on_gpu_render_toggled)
-        self._restore_gpu_render_setting()
+        # GPU 加速是会话级开关：每次启动一律关闭，不跨重启恢复（viewport-GL 累计
+        # 过多显示 bug，默认不自动开；需要时本次会话内手动开）。故不再读/写持久化。
 
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
@@ -2462,9 +2463,8 @@ class MainWindow(
     # ------------------------------------------------------------------
 
     def _on_gpu_render_toggled(self, on: bool):
-        from PyQt5.QtCore import QSettings
-        s = QSettings("MF4Analyzer", "DataAnalyzer")
-        s.setValue("render/use_opengl", bool(on))
+        # Session-only: no QSettings persistence — GPU always starts OFF on the
+        # next launch (see the connect site for rationale).
         self.canvas_time.set_gpu_render(on)
         # pyqtgraph's useOpenGL() SWAPS the viewport widget (setViewport). Curve
         # items built on the PREVIOUS viewport do NOT re-render on the freshly
@@ -2478,11 +2478,3 @@ class MainWindow(
         # its own, so an FFT-mode toggle needs no action here.
         if self.files and self.chart_stack.current_mode() == 'time':
             self.plot_time()
-
-    def _restore_gpu_render_setting(self):
-        from PyQt5.QtCore import QSettings
-        s = QSettings("MF4Analyzer", "DataAnalyzer")
-        on = bool(s.value("render/use_opengl", False, type=bool))
-        if on:
-            self.inspector.set_gpu_render_checked(True)
-            self.canvas_time.set_gpu_render(True)
