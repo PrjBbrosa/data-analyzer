@@ -1337,9 +1337,14 @@ class OverlayAxisManager(_CanvasBackref):
                     new_hi = anchor + (1.0 - frac) * framed_span
                     bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
                 else:
+                    # Plain-wheel vertical pan. Sign is NEGATED vs ``step`` so
+                    # wheel-up moves the view toward LOWER Y (content scrolls
+                    # up on screen) — the Windows-traditional wheel feel users
+                    # asked for. The earlier ``+ step`` matched macOS
+                    # natural-scroll and felt inverted on a Windows mouse.
                     per_div = span / n
-                    bottom = lo + step * per_div
-                    top = hi + step * per_div
+                    bottom = lo - step * per_div
+                    top = hi - step * per_div
                     ticks = [bottom + k * per_div for k in range(n + 1)]
                 try:
                     target.set_ylim(bottom, top)
@@ -1381,9 +1386,11 @@ class OverlayAxisManager(_CanvasBackref):
                 new_hi = c + (hi - c) * factor
                 target.set_ylim(new_lo, new_hi)
             else:
+                # Plain-wheel vertical pan — direction negated to match the
+                # Windows-traditional wheel feel (see the overlay branch above).
                 lo, hi = target.get_ylim()
                 d = (hi - lo) * 0.1 * step
-                target.set_ylim(lo + d, hi + d)
+                target.set_ylim(lo - d, hi - d)
         except Exception:
             return False
 
