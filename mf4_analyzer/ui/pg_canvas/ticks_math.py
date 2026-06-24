@@ -59,7 +59,13 @@ def _fmt_tick(value):
         return ""
     if not math.isfinite(value):
         return ""
-    if value != 0.0 and (abs(value) >= 1e6 or abs(value) < 1e-4):
+    # Wheel-pan ticks accumulate as ``lo - step*per_div + k*per_div`` (see
+    # overlay_axes._handle_wheel_dispatch); the zero-crossing division lands on
+    # a tiny float residue (~1e-15) instead of exact 0.0. Snap it so the axis
+    # reads "0" rather than "1.78e-15". No real overlay tick sits below 1e-9.
+    if abs(value) < 1e-9:
+        return "0"
+    if abs(value) >= 1e6 or abs(value) < 1e-4:
         return f"{value:.2e}"
     rounded = round(value)
     if abs(value - rounded) < 1e-9:
