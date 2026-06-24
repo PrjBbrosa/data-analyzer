@@ -7601,3 +7601,212 @@ class TestHiddenCurveCursorAndRefresh(TestFilterCompanionOverlay):
         assert src_pdi.curve.cacheMode() == QGraphicsItem.DeviceCoordinateCache
         canvas.set_original_lines_visible(False)
         assert src_pdi.curve.cacheMode() == QGraphicsItem.NoCache
+
+
+# ---------------------------------------------------------------------------
+# Companion-only (显示原始 OFF + 显示滤波后 ON) lag fix: a Qt.DashLine pen
+# rasterizes a dense min/max-envelope zigzag several× slower than a solid pen
+# on the CPU raster backend, so the dashed companion was the dominant paint
+# cost in comp-only view even though displayed-point counts matched orig-only
+# (实测 4×150万点 AA-off 交互式拖动单帧: comp-only 47ms vs orig-only 16ms; the
+# dash IS the delta). The dash is purely a visual affordance to tell the
+# companion apart from its solid source — useless when the source is hidden. So
+# the companion is drawn SOLID while its original is hidden, DASHED when it is
+# shown. These pin the style-sync MECHANISM (offscreen-stable; the actual paint
+# delta is Windows-raster-timing-only, see the slow timing test).
+# ---------------------------------------------------------------------------
+class TestCompanionDashStyleSync(TestFilterCompanionOverlay):
+    def _build(self, qapp, *, filt_visible=True, n_sources=2, mode="subplot"):
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_with_companion(filt_visible=filt_visible,
+                                      n_sources=n_sources),
+            mode=mode,
+        )
+        QCoreApplication.processEvents()
+        return canvas
+
+    @staticmethod
+    def _companion_pen_style(canvas, source_name):
+        from PyQt5.QtGui import QPen
+
+        for ck, name, (_ax, line) in canvas._channel_lines.composite_items():
+            if ck in canvas._companion_names and name.startswith(source_name):
+                pen = line.plot_data_item.opts.get("pen")
+                return pen.style() if isinstance(pen, QPen) else None
+        return None
+
+    def test_both_visible_companion_is_dashed(self, qapp):
+        """Default 全显 (原始+滤波): the companion keeps its dashed pen so it is
+        visually distinguishable from the solid original."""
+        from PyQt5.QtCore import Qt
+
+        canvas = self._build(qapp)
+        for i in range(2):
+            assert self._companion_pen_style(canvas, f"ch{i}") == Qt.DashLine
+
+    def test_original_hidden_companion_goes_solid(self, qapp):
+        """显示原始 OFF: with no solid original to distinguish from, each
+        companion drops the slow dashed pen for a solid one (the root-cause
+        comp-only lag fix). MECHANISM: pen.style() == SolidLine."""
+        from PyQt5.QtCore import Qt
+
+        canvas = self._build(qapp)
+        canvas.set_original_lines_visible(False)
+        for i in range(2):
+            assert self._companion_pen_style(canvas, f"ch{i}") == Qt.SolidLine, (
+                f"ch{i} companion stayed dashed after 显示原始 OFF — the slow "
+                "dash raster cost is the comp-only lag"
+            )
+
+    def test_reshow_original_restores_dash(self, qapp):
+        """Re-showing 显示原始 restores the companion's dash so the two traces
+        stay distinguishable again (round-trip)."""
+        from PyQt5.QtCore import Qt
+
+        canvas = self._build(qapp)
+        canvas.set_original_lines_visible(False)
+        for i in range(2):
+            assert self._companion_pen_style(canvas, f"ch{i}") == Qt.SolidLine
+        canvas.set_original_lines_visible(True)
+        for i in range(2):
+            assert self._companion_pen_style(canvas, f"ch{i}") == Qt.DashLine
+
+    def test_companion_built_with_original_off_is_solid_from_first_frame(self, qapp):
+        """Building straight into 显示原始 OFF + 显示滤波后 ON (a common entry
+        point) draws the companion SOLID on the FIRST frame — the bind-time
+        _sync_companion_dash_styles call, not only the live toggles."""
+        from PyQt5.QtCore import QCoreApplication, Qt
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(1200, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        # originals OFF, filtered ON.
+        rows = self._rows_big_primary_tiny_companion(
+            filt_visible=True, orig_visible=False, n_sources=2,
+        )
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        for i in range(2):
+            assert self._companion_pen_style(canvas, f"ch{i}") == Qt.SolidLine
+
+    def test_style_sync_preserves_color_and_width(self, qapp):
+        """The style toggle must touch ONLY the pen style — color and width of
+        the companion pen are preserved across solid↔dash flips."""
+        from PyQt5.QtGui import QPen
+
+        canvas = self._build(qapp)
+
+        def _pen(i):
+            for ck, name, (_ax, line) in canvas._channel_lines.composite_items():
+                if ck in canvas._companion_names and name.startswith(f"ch{i}"):
+                    p = line.plot_data_item.opts.get("pen")
+                    return p if isinstance(p, QPen) else None
+            return None
+
+        before = [(_pen(i).color().name(), _pen(i).widthF()) for i in range(2)]
+        canvas.set_original_lines_visible(False)  # → solid
+        after = [(_pen(i).color().name(), _pen(i).widthF()) for i in range(2)]
+        assert before == after, (
+            f"dash→solid changed color/width: {before} -> {after}"
+        )
+
+    def test_solid_pen_load_bearing_via_predicate_neutralize(self, qapp):
+        """Prove the source-visibility predicate is load-bearing: monkeypatch
+        _source_original_visible to always-True (the pre-fix behavior) and the
+        companion stays DASHED even with the original hidden — RED proof the
+        green test is not vacuous."""
+        from PyQt5.QtCore import Qt
+
+        canvas = self._build(qapp)
+        canvas._source_original_visible = lambda ck: True  # neutralize the fix
+        canvas.set_original_lines_visible(False)
+        # With the predicate forced True the companion keeps the slow dash.
+        for i in range(2):
+            assert self._companion_pen_style(canvas, f"ch{i}") == Qt.DashLine
+
+    @pytest.mark.slow
+    def test_companion_only_pan_not_slower_than_original_only(self, qapp):
+        """PERF REGRESSION (Windows CPU-raster timing): a comp-only interactive
+        pan frame must not be dramatically slower than an orig-only one. With
+        the dashed companion the comp-only frame was ~3× slower despite an equal
+        displayed-point count; the solid-when-original-hidden fix brings it back
+        to parity (实测 47ms→7ms vs orig-only 16ms).
+
+        Timed via viewport.repaint() (offscreen grab() is a cached blit ≈1ms and
+        HIDES the real raster cost — see narrow-y-dense-wall-systemic-map). The
+        threshold is generous (comp-only <= 1.5× orig-only) because absolute
+        paint-ms is machine-dependent; the load-bearing assertion is RATIO, not
+        an absolute budget. Marked slow: builds 4×~1M-point dense channels.
+        """
+        import time
+
+        from PyQt5.QtCore import QCoreApplication
+
+        from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+
+        canvas = TimeDomainCanvasPG()
+        canvas.set_gpu_render(False)
+        canvas.resize(1600, 700)
+        canvas.show()
+        QCoreApplication.processEvents()
+
+        npts = 1_000_000
+        t = np.linspace(0.0, npts / 48000.0, npts, dtype=np.float64)
+        rng = np.random.default_rng(7)
+        rows = []
+        palette = ["#1769e0", "#ef4444", "#00b894", "#8b5cf6"]
+        for i in range(4):
+            name = f"Accel_{i}"
+            primary = ((3.0 + i) * np.sin(2 * np.pi * (120 * (i + 1)) * t)
+                       + 0.8 * rng.standard_normal(npts)).astype(np.float64)
+            rows.append((name, True, t, primary, palette[i], "g", "fid-A"))
+            filtered = (0.3 * np.sin(2 * np.pi * (30 * (i + 1)) * t)).astype(np.float64)
+            meta = {"companion_of": name, "dash": True}
+            rows.append((f"{name} (LP 100Hz)", True, t, filtered,
+                         palette[i], "g", "fid-A", meta))
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        canvas._flush_pending_refresh()
+
+        def _median_pan_repaint(n=10):
+            ax = canvas._primary_xaxis_ax
+            total = float(t[-1] - t[0])
+            win = total * 0.30
+            vp = canvas._glw.viewport()
+            samples = []
+            for k in range(n):
+                canvas.disable_interactive_quality()  # drag → AA off
+                lo = total * 0.015 * k
+                ax.set_xlim(lo, lo + win)
+                canvas._flush_pending_refresh()
+                QCoreApplication.processEvents()
+                canvas._glw.update()
+                t0 = time.perf_counter()
+                vp.repaint()
+                samples.append((time.perf_counter() - t0) * 1000.0)
+            samples.sort()
+            return samples[len(samples) // 2]
+
+        canvas.set_companion_lines_visible(False)  # orig-only
+        QCoreApplication.processEvents()
+        canvas._flush_pending_refresh()
+        orig_only = _median_pan_repaint()
+
+        canvas.set_companion_lines_visible(True)
+        canvas.set_original_lines_visible(False)  # comp-only
+        QCoreApplication.processEvents()
+        canvas._flush_pending_refresh()
+        comp_only = _median_pan_repaint()
+
+        assert comp_only <= max(orig_only * 1.5, orig_only + 8.0), (
+            f"comp-only pan ({comp_only:.1f}ms) is much slower than orig-only "
+            f"({orig_only:.1f}ms) — the dashed-companion raster regression is back"
+        )
+        canvas.deleteLater()

@@ -77,6 +77,7 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QPainterPath,
+    QPen,
     QPixmap,
 )
 from PyQt5.QtWidgets import (
@@ -252,6 +253,14 @@ class TimeDomainCanvasPG(QWidget):
         # Keyed by the composite (fid, name) key so a companion never collides
         # with a same-named companion from another file.
         self._companion_names = set()
+        # Map each companion's composite key -> its SOURCE channel's composite
+        # key. Used by _sync_companion_dash_styles to draw a companion DASHED
+        # only while its solid source original is visible (otherwise SOLID): a
+        # Qt.DashLine pen rasterizes a dense min/max-envelope zigzag several×
+        # slower than a solid pen on the CPU raster backend, so a comp-only view
+        # (显示原始 off + 显示滤波后 on) must not pay the dash cost when there is
+        # no original to distinguish the filtered trace from.
+        self._companion_source = {}
         # Per-channel monotonicity cache, populated once per
         # plot_channels build. Used in _refresh_visible_data so the hot
         # path skips np.diff(t).
@@ -697,6 +706,31 @@ class TimeDomainCanvasPG(QWidget):
                 dash=dash,
                 skip_envelope=defer_first_frame,
             )
+            # Record companion -> source identity so _sync_companion_dash_styles
+            # can decide solid (no visible original to distinguish from) vs
+            # dashed (original visible) on every live visibility toggle. Only
+            # genuine dashed companions need the swap; a row that asked for a
+            # solid pen (dash=False) is left out so it always stays solid.
+            if dash:
+                companion_ck = _view_state_channel_key(cdata_id, cname)
+                resolved_companion = (
+                    self._channel_lines.composite_key_for(companion_ck)
+                    or companion_ck
+                )
+                resolved_source = (
+                    self._channel_lines.composite_key_for(source_key)
+                    or source_key
+                )
+                self._companion_source[resolved_companion] = resolved_source
+
+        # The dashed pen is purely a visual affordance to tell the filtered
+        # companion apart from its solid source. When the original is hidden
+        # (显示原始 off) there is nothing to distinguish it from, AND a Qt.DashLine
+        # pen rasterizes a dense min/max-envelope zigzag far slower than a solid
+        # pen on the CPU raster backend (实测 comp-only pan 单帧 47ms→7ms). So
+        # sync each companion's dash style to its source's CURRENT visibility:
+        # solid when the original is hidden, dashed when it is shown.
+        self._sync_companion_dash_styles()
 
         # 滤波子图 Y 自适应卡顿真因修复: a dashed filtered companion (e.g.
         # 低通 100 Hz, ±0.02) shares its source channel's ViewBox. With Y
@@ -858,6 +892,12 @@ class TimeDomainCanvasPG(QWidget):
                     self._last_range_key.pop(ck, None)
                 except Exception:
                     pass
+            # Original visibility flipped → re-sync companion dash styles BEFORE
+            # the draw: hiding 显示原始 makes each companion the only trace on its
+            # axis, so it should drop its slow dashed pen for a solid one
+            # (comp-only 单帧 47ms→7ms); re-showing the original restores the
+            # dash so the two traces stay distinguishable. Idempotent + cheap.
+            self._sync_companion_dash_styles()
             # Visibility changed → re-frame companion axes to the now-visible
             # set BEFORE the draw (synchronous, no intermediate frame): hiding
             # 显示原始 must drop Y onto the visible ±0.0x companion, and
@@ -909,6 +949,10 @@ class TimeDomainCanvasPG(QWidget):
                     self._last_range_key.pop(ck, None)
                 except Exception:
                     pass
+            # A just-re-shown companion must adopt the correct pen style for the
+            # current original visibility (solid while 显示原始 off so the dashed
+            # raster cost stays off, dashed when the original is also shown).
+            self._sync_companion_dash_styles()
             # Re-frame companion axes to the now-visible set before the draw:
             # toggling 显示滤波后 changes what the shared axis should fit (e.g.
             # showing the companion while 显示原始 is off must drop Y onto the
@@ -1028,6 +1072,72 @@ class TimeDomainCanvasPG(QWidget):
             return True
         except Exception:
             return False
+
+    def _source_original_visible(self, companion_ck):
+        """Return True when the original (solid) source of ``companion_ck`` is
+        currently a visible PlotDataItem. Unknown / unmapped companions and a
+        missing source default to True (keep the dashed look — never silently
+        drop the affordance when we can't prove the original is hidden)."""
+        source_ck = self._companion_source.get(companion_ck)
+        if source_ck is None:
+            return True
+        pair = self._channel_lines.get(source_ck)
+        if pair is None:
+            return True
+        pdi = getattr(pair[1], "plot_data_item", None)
+        if pdi is None:
+            return True
+        try:
+            return bool(pdi.isVisible())
+        except Exception:
+            return True
+
+    def _sync_companion_dash_styles(self):
+        """Set each dashed companion's pen style from its source's visibility.
+
+        ROOT-CAUSE PERF FIX (filter-overlay comp-only lag): the filtered
+        companion is drawn with a ``Qt.DashLine`` pen purely to tell it apart
+        from its solid source original. Qt's CPU raster dash-stroker walks the
+        dash phase along EVERY segment of the stroked path, and a min/max
+        envelope of a dense wideband filtered signal is a high-frequency zigzag
+        with thousands of tiny segments — so a dashed pen rasterizes that path
+        several× slower than a solid one (实测 4 通道×150万点, AA-off 交互式
+        拖动单帧: 显示滤波后 47 ms vs 显示原始 16 ms; the dash IS the 31 ms
+        delta). When the original is hidden (显示原始 off + 显示滤波后 on) there
+        is no solid trace to distinguish the companion from, so the dash is pure
+        cost with zero benefit → draw the companion SOLID (单帧降到 ~7 ms, even
+        faster than 显示原始). When the original is visible again, restore the
+        dash so the two traces stay distinguishable.
+
+        Idempotent and cheap: only flips a pen whose style actually needs to
+        change (no setPen / no repaint when already correct). Preserves the
+        companion pen's color and width — only the style toggles."""
+        companions = getattr(self, "_companion_names", set())
+        if not companions:
+            return
+        for ck in companions:
+            pair = self._channel_lines.get(ck)
+            if pair is None:
+                continue
+            pdi = getattr(pair[1], "plot_data_item", None)
+            if pdi is None:
+                continue
+            try:
+                pen = pdi.opts.get("pen")
+            except Exception:
+                pen = None
+            if not isinstance(pen, QPen):
+                continue
+            want_dash = self._source_original_visible(ck)
+            want_style = Qt.DashLine if want_dash else Qt.SolidLine
+            try:
+                if pen.style() == want_style:
+                    continue
+                new_pen = QPen(pen)
+                new_pen.setStyle(want_style)
+                pdi.setPen(new_pen)
+            except Exception:
+                pass
 
     def _pin_companion_axes_y_to_visible(self):
         """Pin every companion-carrying axis's Y to the extent of the VISIBLE
@@ -1693,6 +1803,7 @@ class TimeDomainCanvasPG(QWidget):
         self.channel_data = _ChannelKeyDict()
         self._channel_data_id = _ChannelKeyDict()
         self._companion_names = set()
+        self._companion_source = {}
         self._channel_is_monotonic = _ChannelKeyDict()
         self._primary_xaxis_ax = None
         self._curve_path_cache.clear()

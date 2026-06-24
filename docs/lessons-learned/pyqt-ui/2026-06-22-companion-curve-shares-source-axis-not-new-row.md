@@ -1,6 +1,6 @@
 ---
 role: pyqt-ui
-tags: [pyqtgraph, time-domain, filter-overlay, companion-curve, dash, setpen, emphasis, channel-lines, subplot-row, plot-data-item, y-autorange, narrow-y, shared-viewbox, home-fit]
+tags: [pyqtgraph, time-domain, filter-overlay, companion-curve, dash, setpen, emphasis, channel-lines, subplot-row, plot-data-item, y-autorange, narrow-y, shared-viewbox, home-fit, dash-pen-raster-cost, perf, comp-only, viewport-repaint-timing]
 created: 2026-06-22
 updated: 2026-06-24
 cause: insight
@@ -166,3 +166,44 @@ arrays, cacheMode); the actual painted framebuffer with a hidden item's GL cache
 is NOT — flag it for real-machine pixel verification, do not claim it fixed from
 offscreen state alone. Distinct from follow-up #3 (that was Y-framing of the
 VISIBLE set; this is hidden curves staying live in cursor/refresh/cache).
+
+## 2026-06-24 follow-up #5 — the DASHED pen itself is the comp-only paint cost
+After follow-ups #1–#4 the user STILL reported "只显示滤波后 卡得很 / 只显示原始 不卡"
+on Windows GPU-off, despite IDENTICAL data volume. PROFILE (4×~1.5M-pt dense
+channels, AA-OFF interactive pan, timed via `viewport.repaint()` NOT `grab()`):
+显示滤波后(comp-only)=47ms vs 显示原始(orig-only)=16ms — 2.9×, even though the
+displayed-point count was EQUAL (2800) and the wall guard was NOT firing
+(`_y_overflow_wall_active=False`, companion小幅 so data≈Y). The refresh (envelope
+recompute) was actually FASTER for comp-only (hidden original is correctly
+skip-enveloped per #4), so the cost was PURE RASTER. Bisecting the companion
+pen on the live PlotDataItem isolated it cleanly: forcing the companion pen to
+SOLID dropped comp-only to 3–7ms (the dash IS the entire 31–44ms delta), and a
+pen-matrix (DashLine×{1.0,1.35,1.5,2.6}, Solid×{1.0,1.5}, cosmetic) showed the
+cost is **Qt's CPU-raster dash-stroker walking the dash-phase accumulator along
+EVERY segment of the stroked path** — a min/max envelope of a dense wideband
+filtered signal is a high-frequency up/down ZIGZAG with thousands of tiny
+segments, so a `Qt.DashLine` pen rasterizes it several× slower than a solid pen
+(and erratically so: sub-pixel widths like 1.5 were the WORST, cosmetic dash was
+also slow — width-tuning is NOT a stable fix). KEY INSIGHT: the dash is a PURE
+VISUAL AFFORDANCE to distinguish the companion from its SOLID source; when 显示原始
+is OFF there is no original on the axis to distinguish it from, so the dash is
+all cost and zero benefit. FIX (small, design-aligned, NO numeric/Y/data change):
+draw the companion SOLID while its source original is hidden, DASHED when shown.
+Mechanics: a `_companion_source` dict (companion composite key → source composite
+key, recorded at `_bind_companion` time only for `dash=True` rows, reset in
+`clear()`); a `_sync_companion_dash_styles()` that flips ONLY `pen.style()`
+(preserves color+width, idempotent — skips when already correct) based on
+`_source_original_visible(ck)`; called at the SAME three sync points as the Y-pin
+(bind-time in `plot_channels`, `set_original_lines_visible`,
+`set_companion_lines_visible`) so the style is correct on the first frame AND on
+every live toggle. Result: comp-only 47→7ms (now FASTER than orig-only's 16ms),
+both-mode keeps dash (36ms, unchanged — user accepts that regime). VERIFY by
+MECHANISM (offscreen-stable): assert `pen.style()` == SolidLine when original
+hidden / DashLine when shown, round-trip on re-show, color+width preserved, and
+prove load-bearing by monkeypatching `_source_original_visible→True` (pre-fix) so
+the companion stays dashed (RED). The absolute paint-ms is Windows-raster-timing
+only (Mac/offscreen `grab()` is a cached blit ≈1ms that HIDES it), so the slow
+timing test asserts the RATIO (comp-only ≤ 1.5× orig-only), not an absolute
+budget, and is timed via `viewport.repaint()`. Distinct from #1–#4: this is the
+STROKE-STYLE raster cost of the visible companion, orthogonal to wall/Y-framing
+(both False here) and to hidden-curve liveness (#4).
