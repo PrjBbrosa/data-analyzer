@@ -118,6 +118,168 @@ AUDIO_VIDEO_EXTS = {
 }
 
 
+def _read_blf_frames(fp):
+    """Read a Vector BLF into a list of ``(timestamp, arbitration_id, data)``.
+
+    Uses python-can's ``BLFReader`` — pure file parsing, no Vector hardware or
+    driver required. Error/remote frames carry no signal payload and are dropped.
+    """
+    try:
+        from can.io import BLFReader
+    except ImportError as exc:
+        raise ImportError(
+            "python-can 未安装，无法读取 BLF 文件。请先 pip install python-can"
+        ) from exc
+    frames = []
+    reader = BLFReader(str(fp))
+    try:
+        for msg in reader:
+            if msg.is_error_frame or msg.is_remote_frame:
+                continue
+            frames.append(
+                (float(msg.timestamp), int(msg.arbitration_id), bytes(msg.data))
+            )
+    finally:
+        stop = getattr(reader, "stop", None)
+        if callable(stop):
+            try:
+                stop()
+            except Exception:
+                pass
+    return frames
+
+
+def _zoh_resample(ref_t, t, v):
+    """Zero-order-hold (previous-sample) resample of ``(t, v)`` onto ``ref_t``.
+
+    CAN signals are event-based and piecewise-constant: a signal holds its last
+    transmitted value until the next frame updates it. Linear interpolation
+    (what ``load_mf4`` uses) would invent ramps between frames and corrupt
+    status/enum signals, so we hold instead. ``ref_t`` before the first sample
+    flat-holds the first value — matching MF4's end-extrapolation rather than
+    emitting NaN. ``t`` must be sorted ascending.
+    """
+    t = np.asarray(t, dtype=np.float64)
+    v = np.asarray(v, dtype=np.float64)
+    if t.size == 0:
+        return np.full(np.shape(ref_t), np.nan, dtype=np.float64)
+    idx = np.clip(np.searchsorted(t, ref_t, side="right") - 1, 0, t.size - 1)
+    return v[idx]
+
+
+def _assemble_blf_channels(series, units, t0):
+    """Fold per-signal ``{name: (abs_t, v)}`` into the shared-time-axis frame.
+
+    Mirrors ``load_mf4``: the longest series (most samples) defines the common
+    ``Time`` axis and every other signal is ZOH-resampled onto it. All
+    timestamps are shifted to start at zero via ``t0``.
+    """
+    ref_name = max(series, key=lambda k: series[k][0].size)
+    ref_t = np.sort(series[ref_name][0] - t0, kind="stable")
+    data = {"Time": ref_t}
+    for name, (t, v) in series.items():
+        rel_t = t - t0
+        order = np.argsort(rel_t, kind="stable")
+        data[name] = _zoh_resample(ref_t, rel_t[order], v[order])
+    return pd.DataFrame(data), list(data.keys()), units
+
+
+def _decode_blf_with_dbc(frames, dbc_paths, t0):
+    """Decode raw CAN frames into named physical signals using one or more DBCs."""
+    try:
+        import cantools
+    except ImportError as exc:
+        raise ImportError(
+            "cantools 未安装，无法用 DBC 解码 BLF。请先 pip install cantools"
+        ) from exc
+    db = cantools.database.Database()
+    for path in dbc_paths:
+        db.add_dbc_file(str(path))
+
+    # A signal name in more than one message is ambiguous; qualify only those
+    # as ``<Message>.<Signal>`` so the common-case unique names stay short.
+    sig_owners = defaultdict(set)
+    for m in db.messages:
+        for s in m.signals:
+            sig_owners[s.name].add(m.name)
+
+    t_lists = defaultdict(list)
+    v_lists = defaultdict(list)
+    units = {}
+    for t, aid, payload in frames:
+        try:
+            msg = db.get_message_by_frame_id(aid)
+        except KeyError:
+            continue  # frame id not in this DBC
+        try:
+            decoded = msg.decode(payload, decode_choices=False, allow_truncated=True)
+        except TypeError:
+            # older cantools without allow_truncated
+            try:
+                decoded = msg.decode(payload, decode_choices=False)
+            except Exception:
+                continue
+        except Exception:
+            continue  # CRC/length/multiplex mismatch on this frame
+        for sig_name, value in decoded.items():
+            try:
+                fval = float(value)
+            except (TypeError, ValueError):
+                continue  # non-numeric (e.g. unresolved choice string)
+            disp = (
+                sig_name if len(sig_owners[sig_name]) <= 1
+                else f"{msg.name}.{sig_name}"
+            )
+            t_lists[disp].append(t)
+            v_lists[disp].append(fval)
+            if disp not in units:
+                sig_obj = next((s for s in msg.signals if s.name == sig_name), None)
+                units[disp] = str(getattr(sig_obj, "unit", "") or "")
+
+    if not t_lists:
+        raise ValueError(
+            "选中的 DBC 与该 BLF 不匹配：没有任何帧被解码成功。\n"
+            "请确认 DBC 是否对应这条总线，或重新打开时跳过 DBC、以原始字节查看。"
+        )
+    series = {
+        name: (
+            np.asarray(t_lists[name], dtype=np.float64),
+            np.asarray(v_lists[name], dtype=np.float64),
+        )
+        for name in t_lists
+    }
+    return _assemble_blf_channels(series, units, t0)
+
+
+def _raw_blf_channels(frames, t0):
+    """Database-free fallback: expose each CAN id's payload bytes as channels
+    (``0x1F3.byte0`` …). Values are raw bytes (0–255), not engineering units —
+    enough to eyeball traffic when no DBC is supplied."""
+    by_id_t = defaultdict(list)
+    by_id_d = defaultdict(list)
+    for t, aid, payload in frames:
+        by_id_t[aid].append(t)
+        by_id_d[aid].append(payload)
+
+    series = {}
+    units = {}
+    for aid, payloads in by_id_d.items():
+        ts = np.asarray(by_id_t[aid], dtype=np.float64)
+        width = max((len(d) for d in payloads), default=0)
+        prefix = f"0x{aid:X}"
+        for b in range(width):
+            name = f"{prefix}.byte{b}"
+            vals = np.fromiter(
+                (d[b] if b < len(d) else np.nan for d in payloads),
+                dtype=np.float64, count=len(payloads),
+            )
+            series[name] = (ts, vals)
+            units[name] = ""
+    if not series:
+        raise ValueError("BLF 帧不含可解析的数据字节")
+    return _assemble_blf_channels(series, units, t0)
+
+
 class DataLoader:
     @staticmethod
     def load_mf4(fp):
@@ -171,6 +333,27 @@ class DataLoader:
                 pass
 
         return pd.DataFrame(data), list(data.keys()), units
+
+    @staticmethod
+    def load_blf(fp, dbc_paths=None):
+        """Load a Vector BLF (raw CAN log) as ``(DataFrame, channels, units)``.
+
+        With ``dbc_paths`` (one or more ``.dbc``), frames are decoded into named
+        physical signals via cantools. Without a DBC, payload bytes are exposed
+        per CAN id (``0x1F3.byte0`` …) so traffic is still viewable. Every signal
+        is zero-order-hold resampled onto one shared ``Time`` axis, matching the
+        single-time-axis model the other loaders return.
+
+        A2L is deliberately not involved: plain CAN signals decode from a DBC,
+        which is a separate, lighter database than the XCP-measurement A2L.
+        """
+        frames = _read_blf_frames(fp)
+        if not frames:
+            raise ValueError("BLF 文件没有可读的 CAN 数据帧")
+        t0 = min(f[0] for f in frames)
+        if dbc_paths:
+            return _decode_blf_with_dbc(frames, list(dbc_paths), t0)
+        return _raw_blf_channels(frames, t0)
 
     @staticmethod
     def load_audio_video(fp):

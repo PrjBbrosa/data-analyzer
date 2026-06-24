@@ -9,6 +9,11 @@ pytest>=7.0
 pytest-qt>=4.2
 qtawesome
 
+# BLF (Vector CAN log) import — BLFReader is pure-Python file parsing (no HW);
+# cantools decodes frames into named signals via a DBC. Cross-platform.
+python-can>=4.3.0
+cantools>=39
+
 # Stage 8 - Vector/XCP backend (Windows-only)
 python-can[vector]>=4.3.0; sys_platform == "win32"
 pyxcp>=0.22.0; sys_platform == "win32"
