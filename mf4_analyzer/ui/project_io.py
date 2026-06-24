@@ -20,12 +20,19 @@ class UnsupportedProjectVersion(ValueError):
 
 
 @dataclass
+class ProjectPathRef:
+    path_abs: str
+    path_rel: str | None
+
+
+@dataclass
 class ProjectFileRef:
     fid: str
     path_abs: str
     path_rel: str | None
     fs: float
     time_source: str
+    dbc_refs: list = field(default_factory=list)  # list[ProjectPathRef]
 
 
 @dataclass
@@ -52,6 +59,13 @@ def save_project_to_json(doc: ProjectDocument, path) -> None:
                 "path_rel": r.path_rel,
                 "fs": float(r.fs),
                 "time_source": r.time_source,
+                "dbc_refs": [
+                    {
+                        "path_abs": d.path_abs,
+                        "path_rel": d.path_rel,
+                    }
+                    for d in getattr(r, "dbc_refs", [])
+                ],
             }
             for r in doc.files
         ],
@@ -87,6 +101,13 @@ def load_project_from_json(path) -> ProjectDocument:
             path_rel=f.get("path_rel"),
             fs=float(f.get("fs", 1000.0)),
             time_source=str(f.get("time_source", "generated")),
+            dbc_refs=[
+                ProjectPathRef(
+                    path_abs=str(d["path_abs"]),
+                    path_rel=d.get("path_rel"),
+                )
+                for d in f.get("dbc_refs", [])
+            ],
         )
         for f in raw.get("files", [])
     ]
@@ -108,6 +129,25 @@ def make_relative(path_abs: str, project_path) -> str | None:
         return None
 
 
+def make_path_ref(path_abs: str, project_path) -> ProjectPathRef:
+    return ProjectPathRef(
+        path_abs=str(Path(path_abs).resolve()),
+        path_rel=make_relative(str(Path(path_abs).resolve()), project_path),
+    )
+
+
+def resolve_path_ref(ref: ProjectPathRef, project_path) -> "Path | None":
+    project_dir = Path(project_path).parent
+    if ref.path_rel:
+        cand = (project_dir / ref.path_rel).resolve()
+        if cand.exists():
+            return cand
+    cand = Path(ref.path_abs)
+    if cand.exists():
+        return cand
+    return None
+
+
 def resolve_file_path(ref: ProjectFileRef, project_path) -> "Path | None":
     """Locate a referenced file: path_rel (relative to the .tlproj) first,
     then path_abs. Returns None when neither exists."""
@@ -120,6 +160,19 @@ def resolve_file_path(ref: ProjectFileRef, project_path) -> "Path | None":
     if cand.exists():
         return cand
     return None
+
+
+def resolve_dbc_paths(ref: ProjectFileRef, project_path) -> list[str]:
+    paths = []
+    refs = list(getattr(ref, "dbc_refs", []) or [])
+    if not refs:
+        return []
+    for dbc_ref in refs:
+        resolved = resolve_path_ref(dbc_ref, project_path)
+        if resolved is None:
+            return []
+        paths.append(str(resolved))
+    return paths
 
 
 def _encode_channel_key(fid: str, channel: str) -> str:

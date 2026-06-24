@@ -43,6 +43,30 @@ def write_two_message_dbc(path: Path) -> Path:
     return path
 
 
+def write_engine_only_dbc(path: Path) -> Path:
+    """Write a DBC that matches only the EngineData frames from sample BLFs."""
+    import cantools
+    from cantools.database.can import Database, Message, Signal
+    from cantools.database.conversion import BaseConversion
+
+    def sig(name: str, start: int, length: int, scale: float, unit: str) -> Signal:
+        return Signal(
+            name=name, start=start, length=length, byte_order="little_endian",
+            is_signed=False, unit=unit,
+            conversion=BaseConversion.factory(scale=scale, offset=0.0),
+        )
+
+    db = Database(messages=[
+        Message(
+            frame_id=0x123, name="EngineData", length=8, is_extended_frame=False,
+            signals=[sig("EngineSpeed", 0, 16, 0.25, "rpm"),
+                     sig("Throttle", 16, 8, 0.4, "%")],
+        ),
+    ])
+    cantools.database.dump_file(db, str(path))
+    return path
+
+
 def write_sample_blf(
     path: Path,
     *,

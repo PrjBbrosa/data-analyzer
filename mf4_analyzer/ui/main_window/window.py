@@ -68,6 +68,10 @@ class MainWindow(
         self._fc = 0;
         self._active = None
         self._project_path = None
+        try:
+            self._blf_dbc_history = self._load_recent_blf_dbc_history()
+        except Exception:
+            self._blf_dbc_history = []
         # FFT vs Time LRU cache (Plan Task 6). Keys are produced by
         # ``_fft_time_cache_key`` from compute-relevant fields ONLY —
         # display options (amplitude_mode, cmap, dynamic, freq_*) do

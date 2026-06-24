@@ -1,4 +1,6 @@
 # tests/ui/test_project_session.py
+import pytest
+
 from mf4_analyzer import app_meta
 
 
@@ -159,6 +161,68 @@ def test_open_project_multi_group_hdf_no_duplication(qapp, tmp_path):
     assert suffixes == {"2x", "1x"}, f"wrong label_suffixes after roundtrip: {suffixes}"
     for fid, fd in mw2.files.items():
         assert fd.fs > 0, f"fid {fid} has non-positive fs={fd.fs}"
+
+
+def test_project_roundtrip_restores_blf_dbc_binding_without_picker(
+        qapp, tmp_path, monkeypatch):
+    pytest.importorskip("can", reason="python-can not installed (win32-gated)")
+    pytest.importorskip("cantools", reason="cantools not installed")
+
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui import project_io as pio
+    from tests._helpers.blf_factory import write_sample_blf, write_two_message_dbc
+
+    settings = QSettings(str(tmp_path / "recent-dbc.ini"), QSettings.IniFormat)
+    settings.clear()
+    monkeypatch.setattr(
+        MainWindow,
+        "_blf_dbc_settings",
+        lambda self: settings,
+        raising=False,
+    )
+
+    dbc_dir = tmp_path / "dbc"
+    dbc_dir.mkdir()
+    dbc = write_two_message_dbc(dbc_dir / "bus.dbc")
+    blf = write_sample_blf(tmp_path / "log.blf", n=5)
+    proj = tmp_path / "s.tlproj"
+
+    mw = MainWindow()
+    monkeypatch.setattr(
+        mw,
+        "_ask_open_blf_dbc_dialog",
+        lambda *args, **kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(mw, "_prompt_blf_dbc", lambda path: [str(dbc)])
+    mw._load_one(str(blf))
+    mw.save_project(proj)
+
+    doc = pio.load_project_from_json(proj)
+    assert doc.files[0].dbc_refs
+
+    settings.clear()
+    settings.sync()
+
+    mw2 = MainWindow()
+    monkeypatch.setattr(
+        mw2,
+        "_ask_open_blf_dbc_dialog",
+        lambda *args, **kwargs: False,
+        raising=False,
+    )
+
+    def fail_if_picker_opens(path):
+        raise AssertionError("project DBC binding should load without re-picking")
+
+    monkeypatch.setattr(mw2, "_prompt_blf_dbc", fail_if_picker_opens)
+    mw2.open_project(proj)
+
+    assert len(mw2.files) == 1
+    fd = next(iter(mw2.files.values()))
+    assert "EngineSpeed" in fd.channels
+    assert fd.source_metadata["dbc_paths"] == [str(dbc.resolve())]
 
 
 def test_open_project_skips_missing(qapp, tmp_path, monkeypatch):

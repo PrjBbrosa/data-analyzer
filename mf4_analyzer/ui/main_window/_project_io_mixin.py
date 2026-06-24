@@ -1,8 +1,10 @@
 """ProjectIOMixin: file load/close and .tlproj save/open for MainWindow."""
 
+import json
 from pathlib import Path
 
-from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PyQt5.QtCore import QSettings
+from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from ...io import DataLoader, FileData, HAS_ASAMMDF
 from ...io.loader import AUDIO_VIDEO_EXTS
@@ -21,6 +23,8 @@ OPEN_FILES_FILTER = (
     f"音视频文件 ({AUDIO_VIDEO_GLOB})"
 )
 AUDIO_VIDEO_FILE_FILTER = f"音视频文件 ({AUDIO_VIDEO_GLOB})"
+BLF_DBC_RECENT_SETTINGS_KEY = "blf/recent_dbc_path_sets"
+BLF_DBC_RECENT_MAX = 20
 
 
 class ProjectIOMixin:
@@ -175,7 +179,7 @@ class ProjectIOMixin:
                 self.inspector.top.spin_end.setValue(fd.time_array[-1])
         return fd
 
-    def _load_one(self, fp):
+    def _load_one(self, fp, *, blf_dbc_paths=None):
         try:
             self.statusBar.showMessage(f"加载: {fp}");
             QApplication.processEvents()
@@ -196,11 +200,25 @@ class ProjectIOMixin:
                 self.toast(f"已加载音轨 {p.name}", "success")
                 return
             elif ext == '.blf':
-                dbc_paths = self._prompt_blf_dbc(p)
+                dbc_paths = None
+                if blf_dbc_paths:
+                    dbc_paths = self._validated_blf_dbc_paths(p, blf_dbc_paths)
+                if not dbc_paths:
+                    dbc_paths = self._resolve_blf_dbc_paths(p)
+                if not dbc_paths:
+                    self.statusBar.showMessage(f"已取消 BLF: {p.name}")
+                    return
                 data, chs, units = DataLoader.load_blf(fp, dbc_paths=dbc_paths)
-                self._register_file_data(fp, data, chs, units)
+                self._register_file_data(
+                    fp, data, chs, units,
+                    source_metadata={
+                        "source_kind": "blf",
+                        "dbc_paths": list(dbc_paths),
+                    },
+                )
+                self._remember_blf_dbc_paths(dbc_paths)
                 self._update_info()
-                mode = f"DBC×{len(dbc_paths)} 解码" if dbc_paths else "原始字节"
+                mode = f"DBC×{len(dbc_paths)} 解码"
                 self.statusBar.showMessage(
                     f"✅ 已加载 BLF: {p.name} ({len(data)} 行 · {mode}) | 共 {len(self.files)} 文件")
                 self.toast(f"已加载 {p.name} · {mode}", "success")
@@ -232,11 +250,269 @@ class ProjectIOMixin:
         except Exception as e:
             QMessageBox.critical(self, "错误", str(e))
 
+    def _canonical_blf_dbc_paths(self, dbc_paths):
+        return tuple(str(Path(p).resolve()) for p in (dbc_paths or []) if p)
+
+    def _blf_dbc_settings(self):
+        try:
+            from ..inspector_sections._helpers import _preset_settings
+            return _preset_settings()
+        except Exception:
+            return QSettings("MF4Analyzer", "DataAnalyzer")
+
+    def _clean_blf_dbc_history(self, history):
+        cleaned = []
+        seen = set()
+        for paths in history or []:
+            key = self._canonical_blf_dbc_paths(paths)
+            if not key or key in seen:
+                continue
+            if not all(Path(p).exists() for p in key):
+                continue
+            seen.add(key)
+            cleaned.append(list(key))
+        return cleaned[-BLF_DBC_RECENT_MAX:]
+
+    def _load_recent_blf_dbc_history(self):
+        raw = self._blf_dbc_settings().value(BLF_DBC_RECENT_SETTINGS_KEY, "")
+        if not raw:
+            return []
+        if isinstance(raw, (list, tuple)):
+            parsed = raw
+        else:
+            try:
+                parsed = json.loads(str(raw))
+            except (TypeError, ValueError):
+                return []
+        history = self._clean_blf_dbc_history(parsed)
+        if history != parsed:
+            self._save_recent_blf_dbc_history(history)
+        return history
+
+    def _save_recent_blf_dbc_history(self, history=None):
+        history = self._clean_blf_dbc_history(
+            history if history is not None
+            else getattr(self, "_blf_dbc_history", [])
+        )
+        settings = self._blf_dbc_settings()
+        settings.setValue(
+            BLF_DBC_RECENT_SETTINGS_KEY,
+            json.dumps(history, ensure_ascii=False),
+        )
+        settings.sync()
+        return history
+
+    def _remember_blf_dbc_paths(self, dbc_paths):
+        key = self._canonical_blf_dbc_paths(dbc_paths)
+        if not key:
+            return
+        history = list(getattr(self, "_blf_dbc_history", []))
+        history = [paths for paths in history if tuple(paths) != key]
+        history.append(list(key))
+        self._blf_dbc_history = self._save_recent_blf_dbc_history(history)
+
+    def _candidate_blf_dbc_paths(self, path):
+        candidates = []
+        seen = set()
+
+        def add(paths):
+            key = self._canonical_blf_dbc_paths(paths)
+            if not key or key in seen:
+                return
+            seen.add(key)
+            candidates.append(list(key))
+
+        for paths in reversed(getattr(self, "_blf_dbc_history", [])):
+            add(paths)
+
+        nearby = set()
+        for pattern in ("*.dbc", "*.DBC"):
+            nearby.update(Path(path).parent.glob(pattern))
+        for dbc in sorted(nearby, key=lambda p: p.name.lower()):
+            add([dbc])
+        return candidates
+
+    def _probe_blf_dbc_candidates(self, path):
+        candidates = []
+        for dbc_paths in self._candidate_blf_dbc_paths(path):
+            try:
+                probe = DataLoader.probe_blf_dbc(str(path), dbc_paths)
+            except ImportError:
+                raise
+            except ValueError as exc:
+                if "BLF 文件没有可读的 CAN 数据帧" in str(exc):
+                    raise
+                continue
+            except Exception:
+                continue
+            if probe.is_match:
+                candidates.append({"paths": list(dbc_paths), "probe": probe})
+        return candidates
+
+    def _format_blf_dbc_paths(self, dbc_paths):
+        names = [Path(p).name for p in dbc_paths]
+        if len(names) == 1:
+            return names[0]
+        return f"DBC×{len(names)}: " + ", ".join(names[:3]) + (
+            "..." if len(names) > 3 else ""
+        )
+
+    def _format_blf_dbc_candidate(self, candidate):
+        probe = candidate["probe"]
+        return (
+            f"{self._format_blf_dbc_paths(candidate['paths'])} "
+            f"· {probe.strength} · "
+            f"CAN ID {probe.matched_frame_id_count}/{probe.total_frame_id_count} · "
+            f"帧 {probe.decoded_frame_count}/{probe.total_frame_count} · "
+            f"信号 {len(probe.signal_names)}"
+        )
+
+    def _resolve_blf_dbc_paths(self, path):
+        candidates = self._probe_blf_dbc_candidates(path)
+        if not candidates:
+            message = (
+                f"未找到可自动匹配 {path.name} 的 DBC。\n"
+                "需要选择一个 DBC 后才能打开该 BLF。"
+            )
+            if not self._ask_open_blf_dbc_dialog(path, message):
+                return None
+            return self._choose_blf_dbc_with_retry(path)
+
+        if len(candidates) == 1:
+            action = self._ask_blf_dbc_candidate_action(path, candidates[0])
+            if action == "use":
+                return list(candidates[0]["paths"])
+            if action == "choose":
+                return self._choose_blf_dbc_with_retry(path)
+            return None
+
+        selected = self._ask_multiple_blf_dbc_candidates(path, candidates)
+        if selected == "choose":
+            return self._choose_blf_dbc_with_retry(path)
+        if selected:
+            return list(selected)
+        return None
+
+    def _validated_blf_dbc_paths(self, path, dbc_paths):
+        key = list(self._canonical_blf_dbc_paths(dbc_paths))
+        if not key:
+            return None
+        try:
+            probe = DataLoader.probe_blf_dbc(str(path), key)
+        except Exception:
+            return None
+        return key if probe.is_match else None
+
+    def _choose_blf_dbc_with_retry(self, path):
+        while True:
+            dbc_paths = self._prompt_blf_dbc(path)
+            if not dbc_paths:
+                return None
+            try:
+                probe = DataLoader.probe_blf_dbc(str(path), dbc_paths)
+            except Exception as exc:
+                action = self._ask_blf_dbc_mismatch_action(
+                    path, dbc_paths, detail=str(exc)
+                )
+                if action == "retry":
+                    continue
+                return None
+            if probe.is_match:
+                return list(dbc_paths)
+            action = self._ask_blf_dbc_mismatch_action(path, dbc_paths)
+            if action != "retry":
+                return None
+
+    def _ask_open_blf_dbc_dialog(
+        self, path, message, icon=QMessageBox.Information
+    ):
+        box = QMessageBox(self)
+        box.setIcon(icon)
+        box.setWindowTitle("选择 DBC")
+        box.setText(message)
+        choose = box.addButton("选择 DBC", QMessageBox.AcceptRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(choose)
+        box.exec_()
+        return box.clickedButton() is choose
+
+    def _ask_blf_dbc_candidate_action(self, path, candidate):
+        probe = candidate["probe"]
+        is_weak = probe.strength == "weak"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning if is_weak else QMessageBox.Information)
+        box.setWindowTitle("确认 DBC")
+        if is_weak:
+            box.setText(
+                f"{self._format_blf_dbc_paths(candidate['paths'])} 只能部分匹配 "
+                f"{path.name}。\n是否仍使用该 DBC 解码？"
+            )
+            use_text = "仍然使用"
+        else:
+            box.setText(
+                f"检测到 {path.name} 可使用已匹配的 "
+                f"{self._format_blf_dbc_paths(candidate['paths'])} 解码。\n"
+                "是否使用？"
+            )
+            use_text = "使用此 DBC"
+        box.setInformativeText(self._format_blf_dbc_candidate(candidate))
+        use = box.addButton(use_text, QMessageBox.AcceptRole)
+        choose = box.addButton("选择其他 DBC", QMessageBox.ActionRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(use)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is use:
+            return "use"
+        if clicked is choose:
+            return "choose"
+        return "cancel"
+
+    def _ask_multiple_blf_dbc_candidates(self, path, candidates):
+        items = [self._format_blf_dbc_candidate(c) for c in candidates]
+        other = "选择其他 DBC..."
+        items.append(other)
+        choice, ok = QInputDialog.getItem(
+            self,
+            "选择 DBC",
+            f"检测到多个可匹配 {path.name} 的 DBC，请确认：",
+            items,
+            0,
+            False,
+        )
+        if not ok:
+            return None
+        if choice == other:
+            return "choose"
+        try:
+            idx = items.index(choice)
+        except ValueError:
+            return None
+        if idx >= len(candidates):
+            return None
+        return list(candidates[idx]["paths"])
+
+    def _ask_blf_dbc_mismatch_action(self, path, dbc_paths, detail=""):
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("DBC 不匹配")
+        box.setText(
+            f"选择的 {self._format_blf_dbc_paths(dbc_paths)} 无法解码 "
+            f"{path.name}。\n请重新选择 DBC。"
+        )
+        if detail:
+            box.setInformativeText(detail)
+        retry = box.addButton("重新选择", QMessageBox.AcceptRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(retry)
+        box.exec_()
+        return "retry" if box.clickedButton() is retry else "cancel"
+
     def _prompt_blf_dbc(self, path):
         """Chained DBC picker shown when opening a ``.blf``.
 
         Returns the list of chosen ``.dbc`` paths, or ``[]`` if the user
-        cancels — in which case the BLF opens as raw per-CAN-id byte channels.
+        cancels — the BLF UI flow treats cancel as "do not open this file".
         ``QFileDialog`` is resolved via ``sys.modules`` so smoke tests can patch
         it the same way they patch the main open dialog (and so ``_load_one``
         never pops a real dialog under test)."""
@@ -293,12 +569,17 @@ class ProjectIOMixin:
         file_refs = []
         for fid, fd in self.files.items():
             abs_p = str(Path(fd.filepath).resolve())
+            dbc_refs = [
+                pio.make_path_ref(str(Path(dbc).resolve()), path)
+                for dbc in fd.source_metadata.get("dbc_paths", [])
+            ]
             file_refs.append(pio.ProjectFileRef(
                 fid=fid,
                 path_abs=abs_p,
                 path_rel=pio.make_relative(abs_p, path),
                 fs=float(fd.fs),
                 time_source=fd._time_source,
+                dbc_refs=dbc_refs,
             ))
 
         vm = {
@@ -353,7 +634,8 @@ class ProjectIOMixin:
             key = str(resolved)
             if not pending_by_path.get(key):
                 before = set(self.files.keys())
-                self._load_one(key)
+                dbc_paths = pio.resolve_dbc_paths(ref, path)
+                self._load_one(key, blf_dbc_paths=dbc_paths)
                 new_fids = [f for f in self.files.keys() if f not in before]
                 if not new_fids:
                     missing.append(ref.path_abs)
