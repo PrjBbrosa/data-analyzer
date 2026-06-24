@@ -60,6 +60,32 @@ def _configure_high_dpi():
     if policy_enum is not None and hasattr(QGuiApplication, "setHighDpiScaleFactorRoundingPolicy"):
         QGuiApplication.setHighDpiScaleFactorRoundingPolicy(policy_enum.PassThrough)
 
+    # Force desktop OpenGL in the FROZEN (PyInstaller) build only.
+    #
+    # The 「GPU 加速」 toggle swaps the chart viewport to a QOpenGLWidget
+    # (GraphicsView.useOpenGL). That viewport only composites the curve
+    # QGraphicsItems under a *desktop* GL backend; under ANGLE (D3D) or the
+    # software (opengl32sw) fallback the curves vanish while axes/legend stay —
+    # the exact failure the gl-viewport lesson documents.
+    #
+    # Running from source, Qt auto-selects the system GPU driver's desktop GL
+    # (works). The frozen build bundles libEGL/libGLESv2/d3dcompiler (ANGLE) +
+    # opengl32sw.dll, and Qt's auto-selection there can fall to ANGLE/software,
+    # which blanks the curves the moment GPU is enabled (user-confirmed: 打包后
+    # 开 GPU 曲线全没，直接跑 Python 正常). Pinning desktop GL makes the frozen
+    # build use the SAME backend as source, so GPU render behaves identically.
+    #
+    # Frozen-only on purpose: source keeps Qt's auto fallback chain untouched.
+    # Must be set before QApplication is constructed (this runs first in main).
+    # If a machine genuinely lacks desktop GL the GL context creation simply
+    # fails — set_gpu_render/_apply_gpu_viewport already wraps useOpenGL() in
+    # try/except and stays on the CPU raster path, and GPU is opt-in (session
+    # default OFF), so the rest of the (raster) UI is unaffected.
+    if getattr(sys, "frozen", False):
+        attr = getattr(Qt, "AA_UseDesktopOpenGL", None)
+        if attr is not None:
+            QCoreApplication.setAttribute(attr, True)
+
     # MSAA for the OpenGL viewport (GPU render toggle). Must be set before
     # QApplication is constructed. 4× samples gives line quality equal to or
     # better than CPU AA at no meaningful extra cost on modern GPUs. CPU-only
