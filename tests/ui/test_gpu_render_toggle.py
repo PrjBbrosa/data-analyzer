@@ -18,6 +18,15 @@ import pyqtgraph as pg
 from PyQt5.QtWidgets import QGraphicsItem, QGraphicsView
 
 from mf4_analyzer.ui.pg_canvases import TimeDomainCanvasPG
+import mf4_analyzer.ui.pg_canvas.canvas as _canvas_mod
+
+
+def _force_gpu_supported(monkeypatch):
+    """Force the platform gate ON so the GL-swap MECHANISM can be exercised on
+    any host. set_gpu_render clamps the request to False on macOS
+    (_GPU_RENDER_PLATFORM_OK), so these mechanism tests — which assert what
+    happens WHEN GL is enabled (a non-macOS concern) — must lift that clamp."""
+    monkeypatch.setattr(_canvas_mod, "_GPU_RENDER_PLATFORM_OK", True)
 
 
 class _RecordingGlw:
@@ -47,7 +56,8 @@ def _canvas_with_recording_glw():
     return c
 
 
-def test_gl_viewport_uses_full_update_mode(qapp):
+def test_gl_viewport_uses_full_update_mode(qapp, monkeypatch):
+    _force_gpu_supported(monkeypatch)
     c = _canvas_with_recording_glw()
 
     c.set_gpu_render(True)
@@ -60,7 +70,8 @@ def test_gl_viewport_uses_full_update_mode(qapp):
     )
 
 
-def test_cpu_raster_restores_minimal_update_mode(qapp):
+def test_cpu_raster_restores_minimal_update_mode(qapp, monkeypatch):
+    _force_gpu_supported(monkeypatch)
     c = _canvas_with_recording_glw()
 
     c.set_gpu_render(True)
@@ -73,7 +84,8 @@ def test_cpu_raster_restores_minimal_update_mode(qapp):
     )
 
 
-def test_idempotent_toggle_does_not_re_swap(qapp):
+def test_idempotent_toggle_does_not_re_swap(qapp, monkeypatch):
+    _force_gpu_supported(monkeypatch)
     c = _canvas_with_recording_glw()
 
     c.set_gpu_render(True)
@@ -135,7 +147,8 @@ def test_idle_aa_uses_device_cache_on_cpu(qapp):
     )
 
 
-def test_gpu_on_clears_curve_device_cache(qapp):
+def test_gpu_on_clears_curve_device_cache(qapp, monkeypatch):
+    _force_gpu_supported(monkeypatch)
     c = _canvas_with_recording_glw()
     calls = []
     c._quality._set_curves_cache_mode = lambda m: calls.append(m)
@@ -146,6 +159,24 @@ def test_gpu_on_clears_curve_device_cache(qapp):
         "switching to GL must drop DeviceCoordinateCache so a cache set while "
         "on CPU does not leave the curves invisible under GL"
     )
+
+
+# --- Platform gate: GL is FORCED OFF on macOS -------------------------------
+# viewport-level useOpenGL (QOpenGLWidget viewport) does not composite the
+# curve items on macOS — they vanish and a rebuild does not help; only CPU
+# raster shows them. set_gpu_render must clamp the request to False so GL can
+# never activate there (the single chokepoint; a persisted setting / stray
+# caller cannot blank the chart).
+
+def test_gpu_render_forced_off_when_platform_unsupported(qapp, monkeypatch):
+    monkeypatch.setattr(_canvas_mod, "_GPU_RENDER_PLATFORM_OK", False)
+    c = _canvas_with_recording_glw()
+
+    c.set_gpu_render(True)
+
+    assert c._gpu_render_on is False, "GL must stay OFF on an unsupported platform"
+    assert c._gpu_render_requested is False, "the request itself must be clamped"
+    assert c._glw.gl_calls == [], "useOpenGL must never be called when GL is gated off"
 
 
 # --- Toggling GPU must REBUILD the curves on the swapped viewport -----------
@@ -174,6 +205,7 @@ def _window_with_file(qtbot):
 
 
 def test_gpu_toggle_replots_time_so_curves_rebuild(qapp, qtbot, monkeypatch):
+    _force_gpu_supported(monkeypatch)  # exercise the real GL-swap → rebuild path
     win = _window_with_file(qtbot)
     monkeypatch.setattr(win.chart_stack, "current_mode", lambda: "time")
     calls = []

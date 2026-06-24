@@ -48,3 +48,16 @@ item** 才画得出（用户实证：重新「绘图」才回来）。这与病�
 - 无头抓不到 GL 帧缓冲（`QWidget.grab()` 对 GL 返回纯白），像素级「曲线显示/拖动不消失」
   必须真机复核；且 GL 在部分驱动 / 远程桌面 / ANGLE(DX11) 下可能根本画不出曲线，软件兜底
   之外要保留 CPU 默认与「关掉 GPU」退路。
+
+## 2026-06-24 收尾 — macOS 上 viewport-GL 根本画不出曲线，决定平台级关闭
+病因 1/2/3 全修完后，用户真机仍报「开 GPU 后曲线全消失、**重绘也救不回**、只有关 GPU 才回」。
+病因 3 的自动重绘（`_on_gpu_render_toggled` 后 `plot_time()`）反而把「手动重绘能救」退化成「都救
+不回」。结合连续 6 类显示 bug（拖动/静止/开关/导出全白/线宽拍平/全程消失）+ Explore 全链路确认
+**全仓只有 viewport 级 `useOpenGL`、无 config/逐曲线 GL 退路**，判定：**QOpenGLWidget 当
+QGraphicsView 的 viewport 在 macOS 上不可靠地合成曲线 QGraphicsItem**，再修协议步骤也救不回，
+属平台级失败。决策（用户拍板「关掉/移除」）：**macOS 上平台级关闭 GPU 加速**——
+`canvas._GPU_RENDER_PLATFORM_OK = sys.platform != "darwin"`，`set_gpu_render` 单一收口把
+`_gpu_render_requested` clamp 成 `on and _GPU_RENDER_PLATFORM_OK`（持久化设置/误触都进不了 GL）；
+inspector `_GPU_RENDER_UI_SUPPORTED` 在 macOS 隐藏开关行。其它平台（Windows 真机 GL 有效）保留。
+时域性能继续由 CPU 抽稀 + 密集封顶 + 窄Y竖线墙守卫承担。**教训：viewport-GL 是 macOS 上的
+正确性负债，band-aid 修不完；GL 加速若无逐曲线/config 退路，宁可平台级关，别一直补 viewport 切换。**

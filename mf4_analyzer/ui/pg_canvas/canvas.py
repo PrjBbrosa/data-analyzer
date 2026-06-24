@@ -53,7 +53,16 @@ from __future__ import annotations
 # (not setitem) so the user can override this from the environment when
 # debugging.
 import os as _os
+import sys as _sys
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
+
+# GPU 加速（viewport 级 GraphicsView.useOpenGL → QOpenGLWidget viewport）在
+# macOS 上不可靠：QOpenGLWidget 当 QGraphicsView 的 viewport 时不合成
+# QGraphicsScene 里的曲线 item —— 曲线整体消失（轴/图例还在），重建也救不回，
+# 只有切回 CPU 才显示（已累计 6 类显示 bug：拖动/静止/开关/导出全白/线宽拍平/
+# 全程消失）。在 macOS 上强制走 CPU 光栅（时域性能由 CPU 抽稀 + 密集封顶 + 窄Y
+# 竖线墙守卫承担），其它平台保留 GL。详见 gl-viewport lesson。
+_GPU_RENDER_PLATFORM_OK = _sys.platform != "darwin"
 
 from collections import OrderedDict
 from typing import Tuple
@@ -999,8 +1008,13 @@ class TimeDomainCanvasPG(QWidget):
         retry on the next rebuild.  Idempotent: setting the same value
         twice is a no-op.  Exception-safe: any failure is logged, the
         applied state is left unchanged, and the canvas stays functional.
+
+        On macOS the request is FORCED to False (``_GPU_RENDER_PLATFORM_OK``):
+        viewport-level GL does not composite the curve items there, so GL would
+        blank the chart. This is the single chokepoint — even a persisted
+        setting or a stray caller can never enter GL on macOS.
         """
-        self._gpu_render_requested = bool(on)
+        self._gpu_render_requested = bool(on) and _GPU_RENDER_PLATFORM_OK
         self._apply_gpu_viewport()
 
     def _apply_gpu_viewport(self):

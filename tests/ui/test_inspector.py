@@ -57,9 +57,13 @@ def test_gpu_toggle_is_pill_switch_not_checkbox(qapp, qtbot):
     assert emitted == [False, True]
 
 
-def test_gpu_toggle_only_visible_in_time_mode(qapp, qtbot):
+def test_gpu_toggle_only_visible_in_time_mode(qapp, qtbot, monkeypatch):
     from PyQt5.QtWidgets import QFrame
+    import mf4_analyzer.ui.inspector as _insp_mod
 
+    # On a GL-capable platform the row shows in time mode only. (On macOS the
+    # row is hidden in every mode — see test_gpu_toggle_hidden_on_macos.)
+    monkeypatch.setattr(_insp_mod, "_GPU_RENDER_UI_SUPPORTED", True)
     insp = Inspector()
     qtbot.addWidget(insp)
     insp.resize(288, 720)
@@ -78,6 +82,30 @@ def test_gpu_toggle_only_visible_in_time_mode(qapp, qtbot):
         insp.set_mode(mode)
         qapp.processEvents()
         assert not gpu_row.isVisible()
+
+
+def test_gpu_toggle_hidden_on_macos(qapp, qtbot, monkeypatch):
+    """macOS: viewport-GL does not composite the curve items, so the GPU
+    switch is hidden even in time mode (canvas.set_gpu_render also force-clamps
+    the request to CPU, so the feature is dead on macOS by construction)."""
+    from PyQt5.QtWidgets import QFrame
+    import mf4_analyzer.ui.inspector as _insp_mod
+
+    monkeypatch.setattr(_insp_mod, "_GPU_RENDER_UI_SUPPORTED", False)
+    insp = Inspector()
+    qtbot.addWidget(insp)
+    insp.resize(288, 720)
+    insp.show()
+    qtbot.waitExposed(insp)
+    qapp.processEvents()
+
+    gpu_row = insp.findChild(QFrame, "gpuToggleRow")
+    assert gpu_row is not None
+    insp.set_mode("time")
+    qapp.processEvents()
+    assert not gpu_row.isVisible(), (
+        "GPU switch must stay hidden on macOS even in time mode"
+    )
 
 
 # ---- Task 2.3: PersistentTop ----

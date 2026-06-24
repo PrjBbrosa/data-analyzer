@@ -4,6 +4,8 @@ Owns the inspector_state_dict (per section 12.1 of the design spec):
 caches the user's last input on each mode's contextual widget so that
 switching modes preserves context.
 """
+import sys
+
 from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
@@ -45,6 +47,10 @@ _GPU_RENDER_TOOLTIP = (
     "大图 / 多通道 / 高分屏卡顿时开启。\n"
     "渲染效果与 CPU 一致，导出正常。"
 )
+
+# viewport 级 GL 在 macOS 上不合成曲线（曲线整体消失），故 macOS 隐藏该开关；
+# 功能正确性由 canvas.set_gpu_render 的平台兜底强制 CPU 保证。其它平台保留。
+_GPU_RENDER_UI_SUPPORTED = sys.platform != "darwin"
 
 
 class _GpuRenderSwitch(QAbstractButton):
@@ -317,7 +323,8 @@ class Inspector(QWidget):
             self._time_domain_card.setVisible(False)
             self.contextual_stack.setVisible(True)
             self.contextual_stack.setCurrentIndex(idx)
-        self._gpu_row.setVisible(mode == 'time')
+        # GPU 开关仅时域显示，且 macOS 上隐藏（viewport-GL 在 macOS 画不出曲线）。
+        self._gpu_row.setVisible(mode == 'time' and _GPU_RENDER_UI_SUPPORTED)
         self._place_range_group_for_mode(mode)
         self._update_help_guide(mode)
 
