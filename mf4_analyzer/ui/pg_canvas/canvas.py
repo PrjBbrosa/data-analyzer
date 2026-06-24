@@ -53,22 +53,7 @@ from __future__ import annotations
 # (not setitem) so the user can override this from the environment when
 # debugging.
 import os as _os
-import sys as _sys
 _os.environ.setdefault("PYQTGRAPH_QT_LIB", "PyQt5")
-
-# GPU 加速（viewport 级 GraphicsView.useOpenGL → QOpenGLWidget viewport）在
-# macOS 上不可靠：QOpenGLWidget 当 QGraphicsView 的 viewport 时不合成
-# QGraphicsScene 里的曲线 item —— 曲线整体消失（轴/图例还在），重建也救不回，
-# 只有切回 CPU 才显示（已累计 6 类显示 bug：拖动/静止/开关/导出全白/线宽拍平/
-# 全程消失）。在 macOS 上强制走 CPU 光栅（时域性能由 CPU 抽稀 + 密集封顶 + 窄Y
-# 竖线墙守卫承担），其它平台保留 GL。详见 gl-viewport lesson。
-#
-# 冻结包（PyInstaller）同样不可靠：GL 诊断证明打包版拿到与源码相同的 desktop
-# GL 4.6（AA_UseDesktopOpenGL 生效 / openGLModuleType=LibGL / isOpenGLES=False），
-# 且关掉 UPX 后仍然——开 GPU 时曲线整体消失（轴/图例还在）。后端正确 + 非 UPX +
-# 源码正常/打包失效 ⇒ QOpenGLWidget viewport 在冻结环境就是不合成曲线 item，与
-# macOS 同病、band-aid 修不完。故冻结包一并强制 CPU；源码运行（dev）保留 GL。
-_GPU_RENDER_PLATFORM_OK = _sys.platform != "darwin" and not getattr(_sys, "frozen", False)
 
 from collections import OrderedDict
 from typing import Tuple
@@ -88,7 +73,6 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import (
     QGraphicsItem,
-    QGraphicsView,
     QVBoxLayout,
     QWidget,
 )
@@ -385,16 +369,6 @@ class TimeDomainCanvasPG(QWidget):
         # does. The filter maps the viewport pixel to a scene position so
         # the subplot hit-test stays accurate.
         self._install_viewport_event_filter()
-
-        # --- GPU render state (design 2026-06-06-gpu-render-toggle) --------
-        # _gpu_render_requested: user/persistent preference (what they want).
-        # _gpu_render_on:        viewport is currently an OpenGL viewport.
-        # Two states are kept separate so a failed useOpenGL() does not
-        # pretend success; plot_channels retries _apply_gpu_viewport() so
-        # the preference is honoured on the next rebuild even if the first
-        # attempt fired before the window was realised.
-        self._gpu_render_requested = False
-        self._gpu_render_on = False
 
         # --- T6: overlay-mode selection + per-channel emphasis ----------
         # Mirrors canvases.py:_apply_overlay_selection_style (lw 1.0 / 1.8;
@@ -801,9 +775,6 @@ class TimeDomainCanvasPG(QWidget):
         if defer_first_frame:
             self._refresh_pending = True
             self._refresh_timer.start()
-        # Retry GPU viewport: useOpenGL may have been requested before the
-        # window was realised (set_gpu_render called at startup before show).
-        self._apply_gpu_viewport()
 
         # Restore cursor visual items when A/B positions survived clear().
         if self._cursor.visible and self._cursor.dual:
@@ -1187,10 +1158,8 @@ class TimeDomainCanvasPG(QWidget):
     def _install_viewport_event_filter(self):
         """Install the QWidget event filter on the current GLW viewport.
 
-        Called once during __init__ and again after every useOpenGL() call
-        (which replaces the viewport widget), so double-click / cursor /
-        overlay events keep reaching eventFilter() regardless of the render
-        backend.
+        Called once during __init__, so double-click / cursor / overlay
+        events reach eventFilter() via the viewport.
         """
         try:
             viewport = self._glw.viewport()
@@ -1199,79 +1168,6 @@ class TimeDomainCanvasPG(QWidget):
                 viewport.installEventFilter(self)
         except Exception:
             pass
-
-    # ------------------------------------------------------------------
-    # GPU render toggle (design 2026-06-06-gpu-render-toggle)
-    # ------------------------------------------------------------------
-
-    def set_gpu_render(self, on: bool):
-        """Switch the pyqtgraph viewport between CPU raster and OpenGL.
-
-        Records the user preference in ``_gpu_render_requested`` and
-        attempts an immediate ``_apply_gpu_viewport()``; if the widget is
-        not yet realised the apply is a no-op and ``plot_channels`` will
-        retry on the next rebuild.  Idempotent: setting the same value
-        twice is a no-op.  Exception-safe: any failure is logged, the
-        applied state is left unchanged, and the canvas stays functional.
-
-        On macOS the request is FORCED to False (``_GPU_RENDER_PLATFORM_OK``):
-        viewport-level GL does not composite the curve items there, so GL would
-        blank the chart. This is the single chokepoint — even a persisted
-        setting or a stray caller can never enter GL on macOS.
-        """
-        self._gpu_render_requested = bool(on) and _GPU_RENDER_PLATFORM_OK
-        self._apply_gpu_viewport()
-
-    def _apply_gpu_viewport(self):
-        """Apply ``_gpu_render_requested`` to the actual GLW viewport.
-
-        Separated from ``set_gpu_render`` so ``plot_channels`` can call it
-        as a retry (the viewport may not be realised at __init__ time).
-        Only walks ``useOpenGL`` / event-filter wiring when the applied
-        state genuinely needs to change.
-        """
-        want = bool(self._gpu_render_requested)
-        if want == self._gpu_render_on:
-            return
-        try:
-            self._glw.useOpenGL(want)
-            self._gpu_render_on = want
-            # The GL viewport (QOpenGLWidget) does NOT preserve its
-            # framebuffer between paints, while pyqtgraph's GraphicsView ships
-            # with MinimalViewportUpdate (repaint only the dirty rect). Under
-            # GL those two combine to blank every curve outside the dirty strip
-            # on each pan tick — the "拖动时曲线消失" with GPU on. Force whole-
-            # scene repaints while GL owns the viewport (cheap on the GPU — the
-            # entire point of this mode); restore the cheap partial-repaint mode
-            # for the CPU raster path. viewportUpdateMode is a view-level
-            # property, so it persists across the export CPU↔GL viewport swap.
-            self._glw.setViewportUpdateMode(
-                QGraphicsView.FullViewportUpdate if want
-                else QGraphicsView.MinimalViewportUpdate
-            )
-            if want:
-                # If the idle-AA path already switched curves to
-                # DeviceCoordinateCache while on the CPU raster, those cached
-                # pixmaps will NOT composite onto the GL viewport (curves
-                # vanish, axes/labels stay). Drop the cache now; the idle-AA
-                # gate also refuses to re-set it while GL is on.
-                try:
-                    self._quality._set_curves_cache_mode(QGraphicsItem.NoCache)
-                except Exception:
-                    pass
-            # useOpenGL() replaces the viewport widget; re-install the
-            # event filter so double-click / cursor / overlay keep working.
-            self._install_viewport_event_filter()
-            try:
-                self._glw.update()
-            except Exception:
-                pass
-        except Exception:
-            import logging
-            logging.getLogger("mf4_analyzer.ui.pg_canvases").warning(
-                "useOpenGL(%s) failed — staying on current render path", want,
-                exc_info=False,
-            )
 
     def register_replot_callback(self, callback):
         """Register a zero-arg ``callback`` invoked after every
