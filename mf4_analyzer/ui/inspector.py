@@ -6,10 +6,8 @@ switching modes preserves context.
 """
 import sys
 
-from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QAbstractButton,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -28,6 +26,7 @@ from .inspector_sections import (
     TimeContextual,
 )
 from .inspector_sections.time_filter import FilterPanel
+from .widgets.pill_switch import PillSwitch, PillSwitchLabel
 
 
 # 2026-04-26 R3 紧凑化 fix-1: cap the Inspector's content width so
@@ -51,70 +50,6 @@ _GPU_RENDER_TOOLTIP = (
 # viewport 级 GL 在 macOS 上不合成曲线（曲线整体消失），故 macOS 隐藏该开关；
 # 功能正确性由 canvas.set_gpu_render 的平台兜底强制 CPU 保证。其它平台保留。
 _GPU_RENDER_UI_SUPPORTED = sys.platform != "darwin"
-
-
-class _GpuRenderSwitch(QAbstractButton):
-    """Compact pill switch used by the persistent GPU render control."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("gpuRenderSwitch")
-        self.setAccessibleName("GPU 加速")
-        self.setCheckable(True)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(44, 24)
-
-    def sizeHint(self):
-        return QSize(44, 24)
-
-    def paintEvent(self, _event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-
-        on = self.isChecked()
-        enabled = self.isEnabled()
-        track = QColor("#1769e0" if on else "#dbe3ee")
-        border = QColor("#1769e0" if on else "#aeb9c9")
-        knob = QColor("#ffffff")
-        knob_border = QColor("#d1d9e5")
-        if not enabled:
-            track = QColor("#edf1f6")
-            border = QColor("#d5dde8")
-            knob = QColor("#f8fafc")
-            knob_border = QColor("#e2e8f0")
-
-        rect = QRectF(1.0, 2.0, self.width() - 2.0, self.height() - 4.0)
-        radius = rect.height() / 2.0
-        painter.setPen(QPen(border, 1.0))
-        painter.setBrush(track)
-        painter.drawRoundedRect(rect, radius, radius)
-
-        diameter = rect.height() - 4.0
-        knob_x = (
-            rect.right() - diameter - 2.0
-            if on else rect.left() + 2.0
-        )
-        knob_rect = QRectF(knob_x, rect.top() + 2.0, diameter, diameter)
-        painter.setPen(QPen(knob_border, 1.0))
-        painter.setBrush(knob)
-        painter.drawEllipse(knob_rect)
-
-
-class _GpuRenderLabel(QLabel):
-    """Clickable label paired with the GPU render switch."""
-
-    def __init__(self, switch: _GpuRenderSwitch, parent=None):
-        super().__init__("GPU 加速", parent)
-        self._switch = switch
-        self.setObjectName("gpuRenderLabel")
-        self.setCursor(Qt.PointingHandCursor)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self._switch.isEnabled():
-            self._switch.click()
-            event.accept()
-            return
-        super().mousePressEvent(event)
 
 
 class Inspector(QWidget):
@@ -261,11 +196,18 @@ class Inspector(QWidget):
         gpu_row_lay.setContentsMargins(4, 4, 4, 4)
         gpu_row_lay.setSpacing(4)
         gpu_row_lay.addStretch(1)
-        self._gpu_switch = _GpuRenderSwitch(self._gpu_row)
+        self._gpu_switch = PillSwitch(
+            self._gpu_row,
+            object_name="gpuRenderSwitch",
+            accessible_name="GPU 加速",
+        )
         self._gpu_switch.setToolTip(_GPU_RENDER_TOOLTIP)
         self._gpu_switch.setChecked(False)
         self._gpu_switch.toggled.connect(self.gpu_render_toggled)
-        self._gpu_label = _GpuRenderLabel(self._gpu_switch, self._gpu_row)
+        self._gpu_label = PillSwitchLabel(
+            "GPU 加速", self._gpu_switch, self._gpu_row,
+            object_name="gpuRenderLabel",
+        )
         self._gpu_label.setToolTip(_GPU_RENDER_TOOLTIP)
         gpu_row_lay.addWidget(self._gpu_label, 0)
         gpu_row_lay.addWidget(self._gpu_switch, 0)

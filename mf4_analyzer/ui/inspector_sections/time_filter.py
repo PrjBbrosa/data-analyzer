@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
 
 from ._helpers import _no_buttons, _fit_field, _pair_field
 from ..widgets.compact_spinbox import CompactDoubleSpinBox
+from ..widgets.pill_switch import PillSwitch, PillSwitchLabel
 from ...signal.filters import FilterSpec
 
 _KIND_MAP = {"低通": "low", "高通": "high", "带通": "band", "带阻": "bandstop"}
@@ -33,16 +34,41 @@ class FilterPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(4)
 
-        # Enable toggle doubles as the section title. Filtering is OFF by
-        # default: a freshly-opened inspector must NOT overlay filtered traces
+        # Section title row: bold 「滤波」 label on the left, a pill toggle pinned
+        # to the right (same visual as the GPU-render switch). Filtering is OFF
+        # by default: a freshly-opened inspector must NOT overlay filtered traces
         # on every time-domain plot — the overlay only appears once the user
         # explicitly turns it on (otherwise routine plots double their traces).
-        self.chk_enable = QCheckBox("滤波")
-        self.chk_enable.setChecked(False)
-        self.chk_enable.setStyleSheet(
+        # The pill replaces the old checkbox so it is harder to flip by a stray
+        # click; the title text stays clickable for a larger hit target.
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
+        self._enable_switch = PillSwitch(
+            self, object_name="filterEnableSwitch", accessible_name="滤波"
+        )
+        self._enable_switch.setChecked(False)
+        self._title_label = PillSwitchLabel(
+            "滤波", self._enable_switch, self, object_name="filterEnableLabel"
+        )
+        self._title_label.setStyleSheet(
             "font-weight:600; color:#1f2d3d; background:transparent;"
         )
-        root.addWidget(self.chk_enable)
+        title_row.addWidget(self._title_label, 0)
+        title_row.addStretch(1)
+        title_row.addWidget(self._enable_switch, 0)
+        root.addLayout(title_row)
+
+        # All filter parameters live in one container so a single
+        # setEnabled(False) greys out 类型/截止/阶数/显示开关 together when
+        # filtering is off (Qt propagates the disabled palette to children).
+        self._settings = QWidget(self)
+        self._settings.setObjectName("timeFilterSettings")
+        self._settings.setAttribute(Qt.WA_TranslucentBackground, True)
+        settings_lay = QVBoxLayout(self._settings)
+        settings_lay.setContentsMargins(0, 0, 0, 0)
+        settings_lay.setSpacing(4)
+        root.addWidget(self._settings)
 
         fl = QFormLayout()
         fl.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -84,7 +110,7 @@ class FilterPanel(QWidget):
         self.combo_order.addItems(["2", "4", "6", "8"])
         self.combo_order.setCurrentText("4")
         fl.addRow("阶数:", _fit_field(self.combo_order, max_width=120))
-        root.addLayout(fl)
+        settings_lay.addLayout(fl)
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 2, 0, 2)
@@ -98,7 +124,7 @@ class FilterPanel(QWidget):
         row.addWidget(self.chk_orig)
         row.addWidget(self.chk_filt)
         row.addStretch()
-        root.addLayout(row)
+        settings_lay.addLayout(row)
 
         # Make every label/field transparent so no default gray surface leaks
         # through when this panel is embedded in the (tinted) time-range card.
@@ -118,7 +144,12 @@ class FilterPanel(QWidget):
             w.currentTextChanged.connect(lambda *_: self.filter_changed.emit())
         for s in (self.spin_cut, self.spin_lo, self.spin_hi):
             s.valueChanged.connect(lambda *_: self.filter_changed.emit())
-        self.chk_enable.toggled.connect(lambda *_: self.filter_changed.emit())
+        # The enable pill re-emits filter_changed (read on the next 「绘图」) AND
+        # greys out the settings block when off. Sync the initial (off) state
+        # before wiring so no spurious toggled fires during construction.
+        self._apply_enabled_state()
+        self._enable_switch.toggled.connect(lambda *_: self.filter_changed.emit())
+        self._enable_switch.toggled.connect(self._apply_enabled_state)
         # 显示原始/显示滤波后 are LIVE display toggles: they emit a dedicated
         # signal the host wires to setVisible on existing curves (秒生效，不重绘).
         # They intentionally do NOT go through filter_changed (which is read on
@@ -175,10 +206,15 @@ class FilterPanel(QWidget):
         return FilterSpec(kind, order=order, cutoff=self.spin_cut.value())
 
     def is_enabled(self):
-        return self.chk_enable.isChecked()
+        return self._enable_switch.isChecked()
 
     def set_enabled(self, on):
-        self.chk_enable.setChecked(bool(on))
+        self._enable_switch.setChecked(bool(on))
+
+    def _apply_enabled_state(self, *_):
+        """Grey out the whole settings block when filtering is off — the enable
+        pill is the only live control until the user turns filtering on."""
+        self._settings.setEnabled(self._enable_switch.isChecked())
 
     def show_original(self):
         return self.chk_orig.isChecked()
