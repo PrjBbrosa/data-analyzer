@@ -4,8 +4,6 @@ Owns the inspector_state_dict (per section 12.1 of the design spec):
 caches the user's last input on each mode's contextual widget so that
 switching modes preserves context.
 """
-import sys
-
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame,
@@ -26,7 +24,6 @@ from .inspector_sections import (
     TimeContextual,
 )
 from .inspector_sections.time_filter import FilterPanel
-from .widgets.pill_switch import PillSwitch, PillSwitchLabel
 
 
 # 2026-04-26 R3 紧凑化 fix-1: cap the Inspector's content width so
@@ -42,15 +39,6 @@ from .widgets.pill_switch import PillSwitch, PillSwitchLabel
 # of forcing a horizontal scrollbar — see _build_axis_row.
 _INSPECTOR_CONTENT_MAX_WIDTH = 272
 
-_GPU_RENDER_TOOLTIP = (
-    "大图 / 多通道 / 高分屏卡顿时开启。\n"
-    "渲染效果与 CPU 一致，导出正常。"
-)
-
-# viewport 级 GL 在 macOS 上不合成曲线（曲线整体消失），故 macOS 隐藏该开关；
-# 功能正确性由 canvas.set_gpu_render 的平台兜底强制 CPU 保证。其它平台保留。
-_GPU_RENDER_UI_SUPPORTED = sys.platform != "darwin"
-
 
 class Inspector(QWidget):
     plot_time_requested = pyqtSignal()
@@ -59,7 +47,6 @@ class Inspector(QWidget):
     order_time_requested = pyqtSignal()
     xaxis_apply_requested = pyqtSignal()
     rebuild_time_requested = pyqtSignal(object, str)  # (anchor, mode: 'fft'|'order')
-    gpu_render_toggled = pyqtSignal(bool)  # True = GPU on
     tick_density_changed = pyqtSignal(int, int)
     remark_toggled = pyqtSignal(bool)
     # Fs auto-sync: relayed from fft_ctx/order_ctx combo_sig change
@@ -189,30 +176,6 @@ class Inspector(QWidget):
         body_lay.addWidget(self.contextual_stack)
         self.contextual_stack.setVisible(False)
 
-        # GPU 加速开关：仅时域图使用；FFT / Order 面板不显示，避免误导。
-        self._gpu_row = QFrame(self._scroll_body)
-        self._gpu_row.setObjectName("gpuToggleRow")
-        gpu_row_lay = QHBoxLayout(self._gpu_row)
-        gpu_row_lay.setContentsMargins(4, 4, 4, 4)
-        gpu_row_lay.setSpacing(4)
-        gpu_row_lay.addStretch(1)
-        self._gpu_switch = PillSwitch(
-            self._gpu_row,
-            object_name="gpuRenderSwitch",
-            accessible_name="GPU 加速",
-        )
-        self._gpu_switch.setToolTip(_GPU_RENDER_TOOLTIP)
-        self._gpu_switch.setChecked(False)
-        self._gpu_switch.toggled.connect(self.gpu_render_toggled)
-        self._gpu_label = PillSwitchLabel(
-            "GPU 加速", self._gpu_switch, self._gpu_row,
-            object_name="gpuRenderLabel",
-        )
-        self._gpu_label.setToolTip(_GPU_RENDER_TOOLTIP)
-        gpu_row_lay.addWidget(self._gpu_label, 0)
-        gpu_row_lay.addWidget(self._gpu_switch, 0)
-        body_lay.addWidget(self._gpu_row)
-
         body_lay.addStretch(1)
 
         # Anchor the capped body to the leading edge; the trailing stretch
@@ -265,8 +228,6 @@ class Inspector(QWidget):
             self._time_domain_card.setVisible(False)
             self.contextual_stack.setVisible(True)
             self.contextual_stack.setCurrentIndex(idx)
-        # GPU 开关仅时域显示，且 macOS 上隐藏（viewport-GL 在 macOS 画不出曲线）。
-        self._gpu_row.setVisible(mode == 'time' and _GPU_RENDER_UI_SUPPORTED)
         self._place_range_group_for_mode(mode)
         self._update_help_guide(mode)
 
@@ -311,12 +272,6 @@ class Inspector(QWidget):
             target_layout.addWidget(group)
         self._range_group_owner_layout = target_layout
         group.setVisible(True)
-
-    def set_gpu_render_checked(self, on: bool):
-        """Set the GPU render switch without emitting gpu_render_toggled."""
-        self._gpu_switch.blockSignals(True)
-        self._gpu_switch.setChecked(bool(on))
-        self._gpu_switch.blockSignals(False)
 
     def current_mode(self):
         return self.contextual_widget_name()

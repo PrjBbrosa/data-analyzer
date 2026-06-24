@@ -442,10 +442,6 @@ class MainWindow(
         self.inspector.fft_time_ctx.spin_db_ref.valueChanged.connect(
             lambda _: _QTimer.singleShot(0, lambda: self.do_fft_time(force=False))
         )
-        self.inspector.gpu_render_toggled.connect(self._on_gpu_render_toggled)
-        # GPU 加速是会话级开关：每次启动一律关闭，不跨重启恢复（viewport-GL 累计
-        # 过多显示 bug，默认不自动开；需要时本次会话内手动开）。故不再读/写持久化。
-
         self.inspector.xaxis_apply_requested.connect(self._apply_xaxis)
         self.inspector.rebuild_time_requested.connect(self._show_rebuild_popover)
         self.inspector.tick_density_changed.connect(self._update_all_tick_density_pair)
@@ -2457,24 +2453,3 @@ class MainWindow(
         QApplication.clipboard().setPixmap(pix)
         self.statusBar.showMessage(msg, 2000)
         self.toast(msg, "success")
-
-    # ------------------------------------------------------------------
-    # GPU render toggle
-    # ------------------------------------------------------------------
-
-    def _on_gpu_render_toggled(self, on: bool):
-        # Session-only: no QSettings persistence — GPU always starts OFF on the
-        # next launch (see the connect site for rationale).
-        self.canvas_time.set_gpu_render(on)
-        # pyqtgraph's useOpenGL() SWAPS the viewport widget (setViewport). Curve
-        # items built on the PREVIOUS viewport do NOT re-render on the freshly
-        # swapped GL viewport — a pan / envelope refresh reuses the same stale
-        # items and stays blank; only a full rebuild (plot_channels) paints them
-        # (user-confirmed: 开 GPU 后曲线消失，pan 不回来、重新「绘图」才回来). So
-        # re-plot here, rebuilding the curves on the new viewport, instead of
-        # leaving the chart blank until the user manually re-plots. Gated to the
-        # time domain (GPU render only owns the time canvas) and to a loaded
-        # file (nothing to draw otherwise); switching back to time re-plots on
-        # its own, so an FFT-mode toggle needs no action here.
-        if self.files and self.chart_stack.current_mode() == 'time':
-            self.plot_time()
