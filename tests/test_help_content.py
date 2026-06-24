@@ -42,3 +42,16 @@ def test_help_has_no_developer_jargon():
         text = f.read_text(encoding="utf-8")
         for b in banned:
             assert b not in text, f"{f.name} contains dev jargon: {b}"
+
+
+def test_panel_guides_cover_new_topics():
+    checks = {
+        "time-domain-guide.html": ["滤波", "框选", "Shift"],
+        "fft-guide.html": ["A 计权"],
+        "ffttime-guide.html": ["A 计权"],
+        "order-analysis-guide.html": ["加权", "采样率"],
+    }
+    for fname, kws in checks.items():
+        text = (HELP / fname).read_text(encoding="utf-8")
+        for kw in kws:
+            assert kw in text, f"{fname} missing: {kw}"
