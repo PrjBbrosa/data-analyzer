@@ -114,6 +114,31 @@
         </div>
     </section>
 
+    <section class="slide">
+        <div class="frame">
+            <div class="topbar reveal d1"><span class="eyebrow">+ · <b>频率加权 / A 计权</b></span><span class="turbo-rule"></span></div>
+            <div class="step-head reveal d2"><span class="big">+</span><h2>分析声音 · 开 A 计权</h2></div>
+            <div class="step-grid">
+                <div class="instr">
+                    <div class="blk reveal d3"><span class="k">①</span><p>右侧面板找到 <span class="ui">频率加权</span>，默认是 <span class="ui">无</span>。</p></div>
+                    <div class="blk reveal d4"><span class="k">②</span><p>分析<b>声音</b>类信号时切到 <span class="ui">A 计权</span>：按人耳听感对各频段加权（IEC 61672 标准），更贴近主观响度。</p></div>
+                    <div class="blk reveal d5"><span class="k">▸</span><p>打开<b>音视频文件</b>时，软件会<b>自动</b>把加权预设成 A，你也可以手动改回无。</p></div>
+                    <div class="blk reveal d5"><span class="k">▸</span><p>这是<b>相对加权</b>（看各频段相对强弱），不是绝对声压级 dB。</p></div>
+                </div>
+                <div class="mock reveal d3">
+                    <div class="cap"><span>频率加权</span><em>右侧</em></div>
+                    <div class="row" style="justify-content:flex-start;gap:14px"><span class="ui">无</span><span class="ui" style="background:#13a36b;color:#fff">A 计权</span></div>
+                    <div style="background:#fff;padding:14px;margin-top:10px">
+                        <svg viewBox="0 0 600 90" preserveAspectRatio="none" style="width:100%;height:80px">
+                            <polyline points="0,80 80,40 160,30 240,28 320,32 400,40 480,52 560,66 600,74" fill="none" stroke="#13a36b" stroke-width="3"/>
+                        </svg>
+                    </div>
+                    <p class="note" style="margin-top:10px">低频和极高频被压低，中频保留——这就是 A 计权曲线。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
 </main>
 </div>
 <div class="edit-hotzone"></div>
