@@ -104,4 +104,8 @@ class TestOverlayGroupInteraction:
         ]
         canvas.plot_channels(rows, mode="overlay")
         QCoreApplication.processEvents()
+        # 触发网格重钉/强调（既有 API），mixed-unit 组不应抛异常
+        canvas._overlay_axes._apply_overlay_emphasis()
+        canvas._overlay_axes._repin_overlay_channel_ticks()
+        QCoreApplication.processEvents()
         assert len(canvas.axes_list) == 1
