@@ -13,18 +13,74 @@ _TIME_NAMES = frozenset({
     'time', 't', 'zeit', 'timestamp', 'time_s', 'time(s)', 't(s)',
 })
 
+# Display budgets for the file's short label (``short_name``). The plain
+# (no-suffix) base fits within ``_SHORT_NAME_BUDGET``; when a ``label_suffix``
+# is appended the elided base is held within ``_SHORT_NAME_BUDGET_WITH_SUFFIX``
+# so the total ``"<base> ·<suffix>"`` stays compact. These match the historical
+# ``stem[:18]`` / ``stem[:14]`` head-truncation widths so existing layouts keep
+# the same overall label length.
+_SHORT_NAME_BUDGET = 18
+_SHORT_NAME_BUDGET_WITH_SUFFIX = 14
+
+# Single code-point ellipsis used as the middle marker (NOT three dots) so the
+# elided label stays exactly ``budget`` code points wide.
+_MIDDLE_ELLIPSIS = "…"  # …
+
+
+def middle_ellipsis(text, budget):
+    """Shorten ``text`` to at most ``budget`` code points, eliding the MIDDLE.
+
+    Unlike head-truncation (``text[:budget]``), this keeps BOTH a leading and a
+    trailing segment joined by a single ``…`` so the differentiating tail of an
+    over-long, common-prefixed filename survives (the multi-file same-name root
+    cause was head-truncation collapsing two distinct files to one label).
+
+    Contract:
+        * ``len(text) <= budget`` (or a too-small budget) -> ``text`` is returned
+          BYTE-IDENTICAL (no ellipsis is ever introduced when not needed).
+        * otherwise the result is exactly ``budget`` code points: a leading
+          segment, ``…``, and a trailing segment, with the trailing segment
+          given the extra code point when ``budget - 1`` is odd so the
+          differentiating tail is favored.
+        * code-point based (``str`` slicing), so multi-byte / CJK names are
+          counted by character, never split mid-codepoint.
+
+    ``budget`` below 3 cannot hold ``head + … + tail`` meaningfully, so the
+    function degrades to plain head-truncation (``text[:budget]``) there.
+    """
+    s = str(text)
+    if budget is None or budget < 0:
+        return s
+    if len(s) <= budget:
+        return s
+    if budget < 3:
+        # Not enough room for head + ellipsis + tail; fall back to head cut.
+        return s[:budget]
+    keep = budget - 1  # code points kept around the single-char ellipsis
+    head = keep // 2
+    tail = keep - head  # favors the differentiating tail when keep is odd
+    return f"{s[:head]}{_MIDDLE_ELLIPSIS}{s[-tail:] if tail else ''}"
+
 
 class FileData:
     def __init__(self, fp, df, chs, units, idx=0, *, fs=None,
                  source_metadata=None, channel_metadata=None, label_suffix=""):
         self.filepath = Path(fp)
         self.filename = self.filepath.name
-        self.short_name = self.filepath.stem[:18]
         self.source_metadata = dict(source_metadata or {})
         self.channel_metadata = dict(channel_metadata or {})
         self.label_suffix = str(label_suffix or "")
+        # Middle-ellipsis (NOT head-truncation) so two long filenames that share
+        # a long common prefix keep their DIFFERENTIATING tail in the label. The
+        # tail matters for human disambiguation; channel IDENTITY is the
+        # composite (data_id, name) key on the canvas, so the label is display
+        # only and a collision here is now cosmetic, not a data-loss bug.
+        stem = self.filepath.stem
         if self.label_suffix:
-            self.short_name = f"{self.short_name[:14]} ·{self.label_suffix}"
+            base = middle_ellipsis(stem, _SHORT_NAME_BUDGET_WITH_SUFFIX)
+            self.short_name = f"{base} ·{self.label_suffix}"
+        else:
+            self.short_name = middle_ellipsis(stem, _SHORT_NAME_BUDGET)
         self.data = df
         self.channels = chs
         self.channel_units = units

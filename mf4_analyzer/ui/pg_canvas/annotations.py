@@ -82,16 +82,23 @@ class AnnotationManager(_CanvasBackref):
         if x_data is None or not self.channel_data:
             return None
         target_handle = self._remark_target_axis_handle(viewport_pos)
-        candidate_items = self.channel_data.items()
+        # Iterate by composite key so each curve is considered once even when
+        # two files share a channel name; (name, axis_handle) is resolved from
+        # the same composite identity (display name is what the remark shows).
+        candidate_items = [
+            (ck, name, row)
+            for ck, name, row in self.channel_data.composite_items()
+        ]
         if target_handle is not None:
-            target_names = {
-                name for name, (axis_handle, _line) in self._channel_lines.items()
+            target_keys = {
+                ck for ck, _name, (axis_handle, _line)
+                in self._channel_lines.composite_items()
                 if axis_handle is target_handle
             }
             candidate_items = [
-                (name, row)
-                for name, row in self.channel_data.items()
-                if name in target_names
+                (ck, name, row)
+                for ck, name, row in candidate_items
+                if ck in target_keys
             ]
         try:
             scene_pos = self._viewport_pos_to_scene(viewport_pos)
@@ -99,10 +106,10 @@ class AnnotationManager(_CanvasBackref):
             scene_pos = None
         best = None
         best_dist = float('inf')
-        for ch, (tf, sf, color, unit) in candidate_items:
+        for ck, ch, (tf, sf, color, unit) in candidate_items:
             if not len(tf):
                 continue
-            ax = self._channel_lines.get(ch, (None, None))[0]
+            ax = self._channel_lines.get(ck, (None, None))[0]
             if ax is None:
                 ax = target_handle or self._primary_xaxis_ax or (
                     self.axes_list[0] if self.axes_list else None

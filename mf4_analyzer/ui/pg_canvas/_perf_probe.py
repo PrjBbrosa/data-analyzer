@@ -192,14 +192,22 @@ def log_canvas_diagnostics(canvas) -> None:
         overlay = bool(getattr(canvas, "_overlay_mode", False))
         dense_count = int(getattr(canvas, "_subplot_dense_count", 0) or 0)
 
-        n_total = len(lines)
-        n_companion = sum(1 for n in lines if n in companions)
+        # _companion_names is keyed by the composite (data_id, name) identity
+        # key; count via composite_items so the membership test matches.
+        composite = getattr(lines, "composite_items", None)
+        if callable(composite):
+            line_triples = list(composite())
+        else:
+            line_triples = [(n, n, v) for n, v in lines.items()]
+        n_total = len(line_triples)
+        n_companion = sum(1 for ck, _n, _v in line_triples if ck in companions)
         n_primary = n_total - n_companion
 
         # summed displayed points: 遍历每条线的 PlotDataItem getData 长度求和。
         summed_pts = 0
         per_line_pts = []
-        for name, (_axis, line_facade) in lines.items():
+        for _ck, name, line_facade_pair in line_triples:
+            _axis, line_facade = line_facade_pair
             pdi = getattr(line_facade, "plot_data_item", None)
             n = 0
             if pdi is not None:

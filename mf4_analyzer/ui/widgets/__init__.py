@@ -77,8 +77,14 @@ class StatisticsPanel(QFrame):
     def update_stats(self, stats):
         self.tree.clear()
         for ch, s in stats.items():
+            # The stats key may be a composite (data_id, name) identity key
+            # (canvas.get_statistics, multi-file same-name decouple); prefer the
+            # human-readable display_label for the Channel column when present,
+            # else fall back to the key itself (window.py's live strip passes
+            # the plain display name as the key with no display_label).
+            header = s.get('display_label', ch) if isinstance(s, dict) else ch
             self.tree.addTopLevelItem(QTreeWidgetItem(
-                [ch, f"{s['min']:.3g}", f"{s['max']:.3g}", f"{s['mean']:.3g}", f"{s['rms']:.3g}",
+                [header, f"{s['min']:.3g}", f"{s['max']:.3g}", f"{s['mean']:.3g}", f"{s['rms']:.3g}",
                  f"{s['std']:.3g}", f"{s['p2p']:.3g}"]))
 
 

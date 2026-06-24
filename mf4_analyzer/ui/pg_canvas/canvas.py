@@ -120,6 +120,7 @@ from mf4_analyzer.ui.pg_canvas.renderer import (  # noqa: F401
     _capped_hidpi_scale,
 )
 from mf4_analyzer.ui.pg_canvas._shared import (  # noqa: F401
+    _ChannelKeyDict,
     _hide_native_auto_button,
     _subplot_ylabel_text,
     _view_state_channel_key,
@@ -228,24 +229,33 @@ class TimeDomainCanvasPG(QWidget):
         self.axes_list = []
         # _channel_lines is {name: (axis_facade, line_facade)} parity
         # with TimeDomainCanvas — used by ChartOptionsDialog and color sync.
-        self._channel_lines = {}
+        # IDENTITY is the composite (data_id, name) key (multi-file same-name
+        # root fix): _ChannelKeyDict stores per (fid, name) so two files with an
+        # identically-truncated [short_name] prefix never overwrite each other,
+        # while bare-name reads (canvas._channel_lines["torque"]) and display-
+        # name iteration still work for legacy / test call sites.
+        self._channel_lines = _ChannelKeyDict()
         # View-state range restore needs a non-colliding key when two files
         # expose the same display channel name. Keep this separate so legacy
         # hover/selection/options paths can continue using _channel_lines.
         self._channel_view_state_lines = {}
         # channel_data is the raw post-range-filter dict — STAYS RAW.
-        # get_statistics reads this; the envelope cache never feeds it.
-        self.channel_data = {}
+        # get_statistics reads this; the envelope cache never feeds it. Same
+        # composite (fid, name) identity as _channel_lines so the two iterate
+        # in lock-step and never collide across same-named files.
+        self.channel_data = _ChannelKeyDict()
         # Parallel data_id dict (kept separate per design §4.2).
-        self._channel_data_id = {}
-        # Names of display-companion curves (e.g. filter overlays) bound onto
-        # a source channel's axis. Subset of _channel_lines keys; lets the
-        # stats / emphasis paths exclude them from real-channel logic.
+        self._channel_data_id = _ChannelKeyDict()
+        # Composite keys of display-companion curves (e.g. filter overlays)
+        # bound onto a source channel's axis. Subset of _channel_lines keys;
+        # lets the stats / emphasis paths exclude them from real-channel logic.
+        # Keyed by the composite (fid, name) key so a companion never collides
+        # with a same-named companion from another file.
         self._companion_names = set()
         # Per-channel monotonicity cache, populated once per
         # plot_channels build. Used in _refresh_visible_data so the hot
         # path skips np.diff(t).
-        self._channel_is_monotonic = {}
+        self._channel_is_monotonic = _ChannelKeyDict()
         # The "primary" axis facade — its sigXRangeChanged drives the
         # viewport-aware envelope refresh. Set after plot_channels.
         self._primary_xaxis_ax = None
@@ -315,13 +325,20 @@ class TimeDomainCanvasPG(QWidget):
         self._curve_path_cache_capacity = 64
         # Per-channel "last range key" so a re-flush with no xlim change
         # is a no-op (pyqt-ui/2026-04-25-cache-invalidation-event-conditional).
-        self._last_range_key: dict = {}
+        # Keyed by the COMPOSITE (fid, name) key (NOT the display name) so two
+        # same-named channels from different files keep independent viewport
+        # caches — a per-name key would let one channel's cache-hit suppress the
+        # other's refresh (pyqt-ui/2026-06-11-cache-key-stability-id-reuse-and-
+        # param-roundtrip). Bare-name reads still resolve for legacy/test code.
+        self._last_range_key = _ChannelKeyDict()
         # Per-channel Y-overflow wall state (renderer._refresh_visible_data):
         # remembers whether THIS line was last flushed in the 满高竖线墙 regime so
         # a range-key cache-HIT (no-op refresh) can keep the frame wall flag set
         # — AA must stay off until the user widens Y, not until the next real
         # recompute. Cleared alongside _last_range_key on rebuild/invalidate.
-        self._line_wall_state: dict = {}
+        # Composite (fid, name) keyed for the same cross-file non-collision
+        # reason as _last_range_key.
+        self._line_wall_state = _ChannelKeyDict()
         self._last_refresh_signature = None
         self._monotonic_fingerprint_cache: dict = {}
 
@@ -654,7 +671,15 @@ class TimeDomainCanvasPG(QWidget):
         # up like any other curve.
         for (cname, cvisible, ct, csig, ccolor, cunit, cdata_id,
              companion_of, dash) in companions:
-            source_pair = self._overlay_axes._channel_lines.get(companion_of)
+            # Resolve the source by its COMPOSITE (data_id, name) key so a
+            # companion always anchors onto the SAME file's source channel, even
+            # when another file exposes an identically-named source.
+            source_key = _view_state_channel_key(cdata_id, companion_of)
+            source_pair = self._overlay_axes._channel_lines.get(source_key)
+            if source_pair is None:
+                # Fall back to a bare-name lookup for legacy rows that carry no
+                # data_id (companion_of resolves the unique entry when present).
+                source_pair = self._overlay_axes._channel_lines.get(companion_of)
             if source_pair is None:
                 # Source channel not visible/bound → skip (keeps invariant
                 # that companions never spawn their own row).
@@ -771,6 +796,26 @@ class TimeDomainCanvasPG(QWidget):
             except Exception:
                 pass
 
+    def _clear_hidden_line_cache(self, pdi):
+        """Drop a just-hidden curve's device-coordinate cache.
+
+        The idle-AA pass sets ``DeviceCoordinateCache`` on every curve item
+        (quality._set_curves_cache_mode). A cached offscreen raster pixmap can
+        keep compositing AFTER ``setVisible(False)`` on some viewports (the
+        lesson-95 GL fingerprint), so the hidden original/companion would still
+        appear on screen even though its PlotDataItem reports not-visible. This
+        is a generic ``QGraphicsItem`` cache reset (NOT a GL/viewport change):
+        on a CPU raster backend it is a harmless no-op (Qt already skips hidden
+        items); on a cached/GL backend it guarantees no stale pixmap lingers.
+        """
+        try:
+            from PyQt5.QtWidgets import QGraphicsItem
+            curve = getattr(pdi, "curve", None)
+            if curve is not None and hasattr(curve, "setCacheMode"):
+                curve.setCacheMode(QGraphicsItem.NoCache)
+        except Exception:
+            pass
+
     def set_original_lines_visible(self, visible):
         """Live toggle for "显示原始": flip every PRIMARY (non-companion)
         curve's visibility on the already-built chart WITHOUT a re-plot.
@@ -784,23 +829,43 @@ class TimeDomainCanvasPG(QWidget):
         flag = bool(visible)
         companions = getattr(self, "_companion_names", set())
         n = 0
-        for name, (_handle, line) in self._channel_lines.items():
-            if name in companions:
+        reshown = []
+        for ck, _name, (_handle, line) in self._channel_lines.composite_items():
+            if ck in companions:
                 continue
             pdi = getattr(line, "plot_data_item", None)
             if pdi is not None:
                 try:
                     pdi.setVisible(flag)
                     n += 1
+                    if flag:
+                        reshown.append(ck)
+                    else:
+                        # Drop any device-coordinate cache so the hidden solid
+                        # original cannot keep compositing from a stale raster
+                        # pixmap (lesson-95 GL fingerprint).
+                        self._clear_hidden_line_cache(pdi)
                 except Exception:
                     pass
         if n:
+            # Re-shown lines were SKIPPED by _refresh_visible_data while hidden
+            # (renderer hidden-curve guard), so their envelope can be stale for
+            # the current x-window if the user panned/zoomed while they were
+            # off. Drop their range-key so the next refresh recomputes them at
+            # the current view, then run the refresh synchronously before draw.
+            for ck in reshown:
+                try:
+                    self._last_range_key.pop(ck, None)
+                except Exception:
+                    pass
             # Visibility changed → re-frame companion axes to the now-visible
             # set BEFORE the draw (synchronous, no intermediate frame): hiding
             # 显示原始 must drop Y onto the visible ±0.0x companion, and
             # re-showing it must restore the ±primary framing so the dense
             # original is never painted inside a companion-narrow Y wall.
             self._pin_companion_axes_y_to_visible()
+            if reshown:
+                self._refresh_visible_data()
             self.draw()
         return n
 
@@ -813,8 +878,9 @@ class TimeDomainCanvasPG(QWidget):
         flag = bool(visible)
         companions = getattr(self, "_companion_names", set())
         n = 0
-        for name in companions:
-            pair = self._channel_lines.get(name)
+        reshown = []
+        for ck in companions:
+            pair = self._channel_lines.get(ck)
             if pair is None:
                 continue
             pdi = getattr(pair[1], "plot_data_item", None)
@@ -822,14 +888,34 @@ class TimeDomainCanvasPG(QWidget):
                 try:
                     pdi.setVisible(flag)
                     n += 1
+                    if flag:
+                        # Resolve to the stored composite key so the
+                        # range-key drop below matches the renderer's key.
+                        ckey = self._channel_lines.composite_key_for(ck) or ck
+                        reshown.append(ckey)
+                    else:
+                        # Drop any device-coordinate cache so the hidden dashed
+                        # companion cannot keep compositing from a stale raster
+                        # pixmap (lesson-95 GL fingerprint).
+                        self._clear_hidden_line_cache(pdi)
                 except Exception:
                     pass
         if n:
+            # Re-shown companions were skipped by _refresh_visible_data while
+            # hidden; drop their range-key + refresh so the dashed trace shows
+            # current-view data (see set_original_lines_visible for the rationale).
+            for ck in reshown:
+                try:
+                    self._last_range_key.pop(ck, None)
+                except Exception:
+                    pass
             # Re-frame companion axes to the now-visible set before the draw:
             # toggling 显示滤波后 changes what the shared axis should fit (e.g.
             # showing the companion while 显示原始 is off must drop Y onto the
             # ±0.0x companion).
             self._pin_companion_axes_y_to_visible()
+            if reshown:
+                self._refresh_visible_data()
             self.draw()
         return n
 
@@ -841,13 +927,16 @@ class TimeDomainCanvasPG(QWidget):
         display companion are returned."""
         companions = getattr(self, "_companion_names", set())
         groups = {}
-        for name, (handle, _line) in self._channel_lines.items():
+        # Iterate by COMPOSITE key so same-named channels on different files map
+        # to distinct group members; the names list carries composite keys
+        # (resolvable by channel_data.get / _channel_lines.get downstream).
+        for ck, _name, (handle, _line) in self._channel_lines.composite_items():
             slot = groups.get(id(handle))
             if slot is None:
-                groups[id(handle)] = [handle, [name], name in companions]
+                groups[id(handle)] = [handle, [ck], ck in companions]
             else:
-                slot[1].append(name)
-                if name in companions:
+                slot[1].append(ck)
+                if ck in companions:
                     slot[2] = True
         if companion_only:
             return {
@@ -1599,12 +1688,12 @@ class TimeDomainCanvasPG(QWidget):
             pass
 
         self.axes_list = []
-        self._channel_lines = {}
+        self._channel_lines = _ChannelKeyDict()
         self._channel_view_state_lines = {}
-        self.channel_data = {}
-        self._channel_data_id = {}
+        self.channel_data = _ChannelKeyDict()
+        self._channel_data_id = _ChannelKeyDict()
         self._companion_names = set()
-        self._channel_is_monotonic = {}
+        self._channel_is_monotonic = _ChannelKeyDict()
         self._primary_xaxis_ax = None
         self._curve_path_cache.clear()
         self._last_range_key.clear()
@@ -1739,15 +1828,28 @@ class TimeDomainCanvasPG(QWidget):
     def get_statistics(self, time_range=None):
         """Read RAW arrays from ``channel_data`` (design §4.2 invariant).
 
-        Identical to ``TimeDomainCanvas.get_statistics`` so the W0
-        contract holds.
+        Return contract (multi-file same-name decouple): the dict is keyed by
+        the COMPOSITE ``(data_id, name)`` key so two files exposing the same
+        channel name produce TWO distinct stats rows instead of one
+        overwriting the other. Each value carries a ``display_label`` field
+        (the human-readable channel name) so a header consumer can show the
+        name without parsing the key. ``StatisticsPanel.update_stats`` reads
+        ``display_label`` when present and falls back to the key otherwise.
+
+        The live stats strip (window.py ``_plot_time_on_canvas``) builds its
+        rows directly from the plot data, not from this method; ``get_statistics``
+        is the compat/contract surface (W0) plus the test/automation seam.
+
+        The result is a ``_ChannelKeyDict`` so bare-name reads
+        (``stats["speed"]``) keep working for legacy/test consumers while the
+        underlying identity stays the non-colliding composite key.
         """
-        stats = {}
+        stats = _ChannelKeyDict()
         companion_names = getattr(self, "_companion_names", set())
-        for ch, (t, sig, _color, unit) in self.channel_data.items():
+        for ck, name, (t, sig, _color, unit) in self.channel_data.composite_items():
             # Display companions (filter overlays) are display-only; never
             # report stats for them — stats mirror acquired channels only.
-            if ch in companion_names:
+            if ck in companion_names:
                 continue
             if time_range is not None:
                 lo, hi = time_range
@@ -1756,7 +1858,7 @@ class TimeDomainCanvasPG(QWidget):
             else:
                 s = sig
             if len(s):
-                stats[ch] = {
+                stats.set_with_label(ck, name, {
                     "min": float(np.min(s)),
                     "max": float(np.max(s)),
                     "mean": float(np.mean(s)),
@@ -1764,7 +1866,8 @@ class TimeDomainCanvasPG(QWidget):
                     "std": float(np.std(s)),
                     "p2p": float(np.ptp(s)),
                     "unit": unit,
-                }
+                    "display_label": name,
+                })
         return stats
 
     def enable_span_selector(self, cb):
@@ -1999,15 +2102,25 @@ class TimeDomainCanvasPG(QWidget):
         for k in keys_to_drop:
             self._curve_path_cache.pop(k, None)
         # Also drop the per-channel last-range marker so the next flush
-        # rebuilds the cache entry.
+        # rebuilds the cache entry. The per-line caches are COMPOSITE-keyed, so
+        # build the exact (data_id, name) key when both are known — this targets
+        # the precise file's channel instead of an ambiguous bare-name pop that
+        # could miss a same-named channel from another file.
         if channel is not None:
-            self._last_range_key.pop(channel, None)
-            self._line_wall_state.pop(channel, None)
+            if data_id is not None:
+                ck = _view_state_channel_key(data_id, channel)
+                self._last_range_key.pop(ck, None)
+                self._line_wall_state.pop(ck, None)
+            else:
+                self._last_range_key.pop(channel, None)
+                self._line_wall_state.pop(channel, None)
         elif data_id is not None:
-            for ch_name, ch_data_id in list(self._channel_data_id.items()):
+            for ck, _name, ch_data_id in list(
+                self._channel_data_id.composite_items()
+            ):
                 if ch_data_id == data_id:
-                    self._last_range_key.pop(ch_name, None)
-                    self._line_wall_state.pop(ch_name, None)
+                    self._last_range_key.pop(ck, None)
+                    self._line_wall_state.pop(ck, None)
 
     def invalidate_monotonicity_cache(self, custom_xaxis_fid=None, custom_xaxis_ch=None):
         """Drop per-channel monotonicity flags. Mirrors the matplotlib

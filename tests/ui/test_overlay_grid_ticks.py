@@ -279,8 +279,10 @@ class TestOverlayWheel:
         )
 
         lo1, hi1 = ax0.get_ylim()
-        assert (lo1 - lo0) == pytest.approx(per_div, rel=1e-6)
-        assert (hi1 - hi0) == pytest.approx(per_div, rel=1e-6)
+        # Wheel-up (delta>0) pans the view DOWN by one division — Windows-
+        # traditional direction (negated vs the wheel ``step``).
+        assert (lo1 - lo0) == pytest.approx(-per_div, rel=1e-6)
+        assert (hi1 - hi0) == pytest.approx(-per_div, rel=1e-6)
 
     def test_ctrl_wheel_still_zooms_x(self, qapp):
         canvas = self._overlay(qapp)

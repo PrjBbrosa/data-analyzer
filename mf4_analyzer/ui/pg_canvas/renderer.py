@@ -420,10 +420,32 @@ class Renderer(_CanvasBackref):
         # line is found in the data≫window full-height-stroke regime. The
         # idle-AA gate reads this to hold AA OFF over the wall.
         frame_wall = False
-        for name, (axis_facade, line_facade) in list(self._channel_lines.items()):
-            entry = self.channel_data.get(name)
+        # Iterate by COMPOSITE (fid, name) key: the per-line viewport caches
+        # (_last_range_key / _line_wall_state) MUST key on the composite key,
+        # never the display name, or two same-named channels from different
+        # files cross-contaminate — one channel's cache-HIT would suppress the
+        # other's refresh and the curve would freeze/vanish on un-check
+        # (pyqt-ui/2026-06-11-cache-key-stability-id-reuse-and-param-roundtrip).
+        # The display ``name`` is still passed to _quantize_range_key so
+        # range_key[0] stays the channel name for existing key-shape consumers.
+        composite_items = list(self._channel_lines.composite_items())
+        for ck, name, (axis_facade, line_facade) in composite_items:
+            entry = self.channel_data.get(ck)
             if entry is None:
                 continue
+            # Skip curves the user hid via 显示原始/显示滤波后. Their data is
+            # still in channel_data, but a hidden PlotDataItem must not be
+            # re-enveloped + setData on every pan/zoom tick — that doubled the
+            # per-frame work whenever a filter overlay was on (each channel
+            # carries a hidden original AND a visible companion, so a hidden
+            # original kept getting dragged/recomputed). Re-showing rebinds via
+            # set_original_lines_visible / a full re-plot, so nothing is lost.
+            try:
+                pdi_vis = line_facade.plot_data_item
+                if pdi_vis is not None and not pdi_vis.isVisible():
+                    continue
+            except Exception:
+                pass
             t, sig, color, _unit = entry
 
             if overlay:
@@ -452,16 +474,16 @@ class Renderer(_CanvasBackref):
             # y_key is APPENDED to the x-key tuple (not nested) so range_key[0]
             # stays the channel name for existing key-shape consumers.
             range_key = _quantize_range_key(name, xlim, effective_width) + (y_key,)
-            if self._last_range_key.get(name) == range_key:
+            if self._last_range_key.get(ck) == range_key:
                 # Cache hit: preserve the wall state recorded for this line at
                 # the last (un-skipped) flush so a no-op refresh does not clear
                 # a still-active wall (AA must stay off until the user widens Y).
-                if self._line_wall_state.get(name):
+                if self._line_wall_state.get(ck):
                     frame_wall = True
                 last_effective_width = effective_width
                 continue
 
-            is_monotonic = self._channel_is_monotonic.get(name)
+            is_monotonic = self._channel_is_monotonic.get(ck)
             try:
                 env_t, env_s = positions_envelope(
                     t, sig,
@@ -514,9 +536,9 @@ class Renderer(_CanvasBackref):
                 line_wall = True
                 frame_wall = True
 
-            self._line_wall_state[name] = line_wall
+            self._line_wall_state[ck] = line_wall
             last_effective_width = effective_width
-            self._last_range_key[name] = range_key
+            self._last_range_key[ck] = range_key
             updated_any = True
 
             try:

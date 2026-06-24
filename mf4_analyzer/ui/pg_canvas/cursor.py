@@ -488,10 +488,39 @@ class CursorController(_CanvasBackref):
             return None
         return pts[:ok]
 
+    def _hidden_channel_names(self):
+        """Return the set of DISPLAY names whose curve is currently hidden
+        (显示原始/显示滤波后 off). The cursor reads samples from
+        ``channel_data`` (which always carries the full series, hidden or
+        not), so the readout must drop a channel whose ``PlotDataItem`` is not
+        visible — otherwise a hidden original/companion still shows up in the
+        cursor pill and the dual-cursor stats (and its extreme markers paint).
+        Keyed by composite (fid, name) so a same-named channel from another
+        file is not falsely hidden."""
+        hidden = set()
+        lines = getattr(self, "_channel_lines", None)
+        if lines is None:
+            return hidden
+        try:
+            items = lines.composite_items()
+        except Exception:
+            return hidden
+        for _ck, name, value in items:
+            try:
+                pdi = value[1].plot_data_item
+                if pdi is not None and not pdi.isVisible():
+                    hidden.add(name)
+            except Exception:
+                pass
+        return hidden
+
     def _emit_single_cursor_html(self, x):
         sep = ('<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>')
         parts = [f'<span style="color:#111827;">t={x:.4f}s</span>']
+        hidden = self._hidden_channel_names()
         for ch, (tf, sf, color, u) in self.channel_data.items():
+            if ch in hidden:
+                continue
             if len(tf):
                 idx = min(np.searchsorted(tf, x), len(sf) - 1)
                 unit_s = f" {u}" if u else ""
@@ -511,7 +540,10 @@ class CursorController(_CanvasBackref):
             if abs(dx) > 1e-12:
                 info.append(f"1/ΔT={1 / abs(dx):.2f}Hz")
             xlo, xhi = min(self._ax, self._bx), max(self._ax, self._bx)
+            hidden = self._hidden_channel_names()
             for ch, (tf, sf, color, u) in self.channel_data.items():
+                if ch in hidden:
+                    continue
                 if not len(tf):
                     continue
                 m = (tf >= xlo) & (tf <= xhi)
