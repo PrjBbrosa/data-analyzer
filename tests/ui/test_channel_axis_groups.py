@@ -73,3 +73,17 @@ class TestAxisGroupModel:
         assert w._axis_group_menu_plan([("f1", "a"), ("f1", "b")]) == (True, False)
         w.merge_axis_group([("f1", "a"), ("f1", "b")])
         assert w._axis_group_menu_plan([("f1", "a"), ("f1", "b")]) == (True, True)
+
+    def test_collect_selected_channel_keys_then_merge(self, qapp):
+        # 直接驱动数据模型，模拟 _on_context_menu 收集到的 sel_keys → 合并
+        w = MultiFileChannelWidget()
+        sel_keys = [("f1", "a"), ("f1", "b"), ("f1", "c")]
+        can_merge, can_split = w._axis_group_menu_plan(sel_keys)
+        assert (can_merge, can_split) == (True, False)
+        w.merge_axis_group(sel_keys)
+        assert {w.axis_group_for("f1", c) for c in ("a", "b", "c")} == {1}
+        # 再对其中一个拆分
+        can_merge, can_split = w._axis_group_menu_plan([("f1", "a")])
+        assert can_split is True
+        w.split_axis_group([("f1", "a")])
+        assert w.axis_group_for("f1", "a") is None

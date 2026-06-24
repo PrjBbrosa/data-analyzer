@@ -433,9 +433,8 @@ class MultiFileChannelWidget(QWidget):
         self.channels_changed.emit()
 
     def _on_context_menu(self, pos):
-        """Show a per-channel right-click menu with 设为左轴 (set as the
-        overlay primary/left-axis channel). The menu only appears on a
-        channel row; file rows and empty space are ignored."""
+        """Right-click menu on a channel row: 设为左轴，以及（多选时）合并/拆分
+        共轴组。文件行与空白处忽略。"""
         item = self.tree.itemAt(pos)
         if item is None:
             return
@@ -443,6 +442,16 @@ class MultiFileChannelWidget(QWidget):
         if not data or data[0] != 'channel':
             return
         _kind, fid, ch = data
+        # 收集当前 Ctrl/Shift 多选中的通道键；若右键的行不在选区内，则只针对该行。
+        sel_keys = []
+        for it in self.tree.selectedItems():
+            d = it.data(0, Qt.UserRole)
+            if d and d[0] == 'channel':
+                sel_keys.append((d[1], d[2]))
+        if (fid, ch) not in sel_keys:
+            sel_keys = [(fid, ch)]
+        can_merge, can_split = self._axis_group_menu_plan(sel_keys)
+
         self.channel_context_menu_requested.emit()
         menu = QMenu(self.tree)
         menu.setObjectName("channelContextMenu")
@@ -453,9 +462,17 @@ class MultiFileChannelWidget(QWidget):
         )
         menu.setAttribute(Qt.WA_TranslucentBackground, True)
         act_primary = menu.addAction("设为左轴")
+        act_merge = menu.addAction("合并为共轴") if can_merge else None
+        act_split = menu.addAction("拆分共轴组") if can_split else None
         chosen = menu.exec_(self.tree.viewport().mapToGlobal(pos))
+        if chosen is None:
+            return
         if chosen is act_primary:
             self.primary_channel_requested.emit(fid, ch)
+        elif act_merge is not None and chosen is act_merge:
+            self.merge_axis_group(sel_keys)
+        elif act_split is not None and chosen is act_split:
+            self.split_axis_group(sel_keys)
 
     def remove_file(self, fid):
         # Clean up colors and files dict
