@@ -1237,8 +1237,34 @@ class OverlayAxisManager(_CanvasBackref):
         axis_handle, _line_handle = pair
         return axis_handle
 
-    def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos, view_box=None):
-        """Central wheel dispatch routed from ``_ModifierWheelViewBox``."""
+    def _overlay_cursor_y_fraction(self, scene_pos, view_box):
+        """Cursor Y as a fraction of the overlay plot rect (0 = bottom,
+        1 = top), used to anchor an all-channel Y zoom at the point under the
+        cursor (matching the X-master zoom anchor). Falls back to 0.5 (center)
+        when the position/geometry is unavailable. All overlay aux ViewBoxes
+        share the X-master's scene rect, so any of them gives the same rect."""
+        try:
+            vb = view_box
+            if vb is None and self._x_master_handle is not None:
+                vb = self._x_master_handle.view_box
+            rect = vb.sceneBoundingRect()
+            h = float(rect.height())
+            if h <= 0 or scene_pos is None:
+                return 0.5
+            frac = (float(rect.bottom()) - float(scene_pos.y())) / h
+            if not math.isfinite(frac):
+                return 0.5
+            return max(0.0, min(1.0, frac))
+        except Exception:
+            return 0.5
+
+    def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
+                               view_box=None, scene_pos=None, axis=None):
+        """Central wheel dispatch routed from ``_ModifierWheelViewBox``.
+
+        ``axis`` is set by pyqtgraph's ``AxisItem.wheelEvent`` when the wheel is
+        over a Y-axis GUTTER (``axis == 1``) rather than the plot area; in
+        overlay mode that scopes the zoom/pan to that ONE channel's axis."""
         step = 1 if delta > 0 else -1 if delta < 0 else 0
         if step == 0:
             return False
@@ -1249,64 +1275,76 @@ class OverlayAxisManager(_CanvasBackref):
         self.disable_interactive_quality()
 
         if getattr(self, "_overlay_mode", False) and not ctrl:
-            target = self._selected_overlay_axes()
-            if target is None:
-                self.overlay_y_needs_selection.emit()
+            # Wheel over ONE channel's Y-axis gutter (axis == 1) → scroll/zoom
+            # only THAT channel (its own axis is the natural per-channel
+            # control). Wheel over the plot AREA (axis is None) → act on EVERY
+            # channel together, like the shared X (Ctrl+wheel), so no
+            # pre-selection is needed. Each channel keeps its own range but
+            # scales by the SAME factor, anchored at the cursor's fractional
+            # viewport-Y. axes_list holds exactly the per-channel Y axes (the
+            # curveless X-master is not in it).
+            single = (
+                self._axis_handle_for_view_box(view_box)
+                if axis == 1 else None
+            )
+            if single is not None:
+                handles = [single]
+            else:
+                handles = [h for h in (self.axes_list or []) if h is not None]
+            if not handles:
                 self.schedule_idle_quality()
                 return True
-            try:
-                lo, hi = target.get_ylim()
-            except Exception:
-                return True
             n = self._current_overlay_divisions()
-            span = hi - lo
-            if not math.isfinite(span) or span <= 0:
-                bottom, top, ticks = _frame_to_nice(lo, hi, n)
-            elif shift:
+            frac = self._overlay_cursor_y_fraction(scene_pos, view_box)
+            changed = False
+            for target in handles:
                 try:
-                    anchor = float(y_pos)
+                    lo, hi = target.get_ylim()
                 except Exception:
-                    anchor = (lo + hi) / 2.0
-                if not math.isfinite(anchor):
-                    anchor = (lo + hi) / 2.0
-                x_master_vb = (
-                    getattr(self._x_master_handle, "view_box", None)
-                    if self._x_master_handle is not None
-                    else None
-                )
-                if (
-                    0.0 <= anchor <= 1.0
-                    and (view_box is None or view_box is x_master_vb)
-                ):
-                    anchor = lo + anchor * span
-                current_per_div = span / n
-                next_per_div = _adjacent_nice_step(
-                    current_per_div,
-                    -1 if step > 0 else 1,
-                )
-                if next_per_div is None:
-                    next_per_div = current_per_div * factor
-                ratio = max(0.0, min(1.0, (anchor - lo) / span))
-                framed_span = max(next_per_div, (n - 1) * next_per_div)
-                new_lo = anchor - ratio * framed_span
-                new_hi = anchor + (1.0 - ratio) * framed_span
-                bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
-            else:
-                per_div = span / n
-                bottom = lo + step * per_div
-                top = hi + step * per_div
-                ticks = [bottom + k * per_div for k in range(n + 1)]
-            try:
-                target.set_ylim(bottom, top)
-                axis = target.y_axis_item() if hasattr(target, "y_axis_item") else None
-                if axis is not None:
-                    axis.setStyle(maxTickLevel=0)
-                    axis.setTicks([[(value, _fmt_tick(value)) for value in ticks], []])
-            except Exception:
-                return True
-            self.visible_range_changed.emit()
-            self._refresh = True
-            self.draw_idle()
+                    continue
+                span = hi - lo
+                if not (math.isfinite(span) and span > 0):
+                    continue
+                if shift:
+                    # Step the per-division to the ADJACENT nice value (not a
+                    # raw factor) so _frame_to_nice can't snap the result back
+                    # to the original span — a guaranteed visible zoom step,
+                    # applied identically to every channel.
+                    current_per_div = span / n
+                    next_per_div = _adjacent_nice_step(
+                        current_per_div, -1 if step > 0 else 1
+                    )
+                    if next_per_div is None:
+                        next_per_div = current_per_div * factor
+                    anchor = lo + frac * span
+                    framed_span = max(next_per_div, (n - 1) * next_per_div)
+                    new_lo = anchor - frac * framed_span
+                    new_hi = anchor + (1.0 - frac) * framed_span
+                    bottom, top, ticks = _frame_to_nice(new_lo, new_hi, n)
+                else:
+                    per_div = span / n
+                    bottom = lo + step * per_div
+                    top = hi + step * per_div
+                    ticks = [bottom + k * per_div for k in range(n + 1)]
+                try:
+                    target.set_ylim(bottom, top)
+                    axis = (
+                        target.y_axis_item()
+                        if hasattr(target, "y_axis_item")
+                        else None
+                    )
+                    if axis is not None:
+                        axis.setStyle(maxTickLevel=0)
+                        axis.setTicks(
+                            [[(value, _fmt_tick(value)) for value in ticks], []]
+                        )
+                    changed = True
+                except Exception:
+                    continue
+            if changed:
+                self.visible_range_changed.emit()
+                self._refresh = True
+                self.draw_idle()
             self.schedule_idle_quality()
             return True
 

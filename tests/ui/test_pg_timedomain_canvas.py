@@ -2933,6 +2933,74 @@ class TestTimeDomainCanvasPGOverlayMode:
             x_master_before, abs=0.0, rel=0.0
         ), "first-channel Y drag must not perturb the shared X range"
 
+    def test_overlay_shift_wheel_zooms_all_channels_together(self, qapp):
+        """REGRESSION + design (655c28d 把裸点击选中改成 Alt+点击 → 叠加 Y 无法
+        缩放): overlay Y-zoom must NOT require a pre-selected channel. Like the
+        shared X (Ctrl+wheel), Shift+wheel zooms EVERY channel's Y together —
+        each by the same factor — with nothing selected."""
+        from PyQt5.QtCore import QCoreApplication, QPointF, Qt
+
+        canvas = _pg_canvas(qapp)
+        rows = _five_channel_rows()[:3]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        assert canvas._overlay_axes.selected_channel is None, (
+            "precondition: no channel selected (plain click no longer selects)"
+        )
+
+        handles = list(canvas.axes_list)
+        assert len(handles) == 3
+        # A scene position somewhere inside the plot to anchor the zoom.
+        vb0 = handles[0].view_box
+        xd, yd = handles[0].get_lines()[0].plot_data_item.getData()
+        idx = int(np.argmin(np.abs(np.asarray(xd) - 0.5)))
+        scene_pos = vb0.mapViewToScene(QPointF(float(xd[idx]), float(yd[idx])))
+
+        before = [h.get_ylim() for h in handles]
+        canvas._handle_wheel_dispatch(
+            delta=120, modifiers=Qt.ShiftModifier,
+            x_pos=0.5, y_pos=float(yd[idx]),
+            view_box=vb0, scene_pos=scene_pos,
+        )
+        QCoreApplication.processEvents()
+
+        after = [h.get_ylim() for h in handles]
+        for i, (b, a) in enumerate(zip(before, after)):
+            assert a != pytest.approx(b), (
+                f"channel {i}: Shift+wheel must zoom its Y too (all channels "
+                f"zoom together); before={b}, after={a}"
+            )
+
+    def test_overlay_plain_wheel_pans_all_channels_together(self, qapp):
+        """Plain wheel pans EVERY overlay channel's Y together (no selection
+        needed), mirroring the all-channel zoom."""
+        from PyQt5.QtCore import QCoreApplication, QPointF, Qt
+
+        canvas = _pg_canvas(qapp)
+        rows = _five_channel_rows()[:3]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+
+        handles = list(canvas.axes_list)
+        vb0 = handles[0].view_box
+        xd, yd = handles[0].get_lines()[0].plot_data_item.getData()
+        idx = int(np.argmin(np.abs(np.asarray(xd) - 0.5)))
+        scene_pos = vb0.mapViewToScene(QPointF(float(xd[idx]), float(yd[idx])))
+
+        before = [h.get_ylim() for h in handles]
+        canvas._handle_wheel_dispatch(
+            delta=120, modifiers=Qt.NoModifier,
+            x_pos=0.5, y_pos=float(yd[idx]),
+            view_box=vb0, scene_pos=scene_pos,
+        )
+        QCoreApplication.processEvents()
+
+        after = [h.get_ylim() for h in handles]
+        for i, (b, a) in enumerate(zip(before, after)):
+            assert a != pytest.approx(b), (
+                f"channel {i}: plain wheel must pan its Y too (all together)"
+            )
+
 
 class TestTimeDomainCanvasPGOverlayMouseInteraction:
     """Problem 2 + 3: overlay curve selection / Y-drag must be wired to

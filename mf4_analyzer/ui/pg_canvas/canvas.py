@@ -2242,7 +2242,8 @@ class TimeDomainCanvasPG(QWidget):
     # T6 — Modifier-aware wheel dispatch.
     # ------------------------------------------------------------------
 
-    def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos, view_box=None):
+    def _handle_wheel_dispatch(self, *, delta, modifiers, x_pos, y_pos,
+                               view_box=None, scene_pos=None, axis=None):
         return OverlayAxisManager._handle_wheel_dispatch(
             self._overlay_axes,
             delta=delta,
@@ -2250,6 +2251,8 @@ class TimeDomainCanvasPG(QWidget):
             x_pos=x_pos,
             y_pos=y_pos,
             view_box=view_box,
+            scene_pos=scene_pos,
+            axis=axis,
         )
 
     # ------------------------------------------------------------------

@@ -177,13 +177,19 @@ class TestOverlayWheel:
         canvas.plot_channels(rows, mode="overlay")
         return canvas
 
-    def test_no_selection_shift_wheel_keeps_xmaster_locked(self, qapp):
+    def test_no_selection_shift_wheel_zooms_all_keeps_xmaster_locked(self, qapp):
+        # New design (user request): overlay Y zooms ALL channels together like
+        # the shared X — no pre-selection required, no overlay_y_needs_selection.
         canvas = self._overlay(qapp)
         canvas.select_overlay_channel(None)
         emitted = []
         canvas.overlay_y_needs_selection.connect(lambda: emitted.append(1))
         xm = canvas._x_master_handle
         before_x = xm.get_xlim()
+        ax0 = canvas._channel_lines["ch0"][0]
+        ax1 = canvas._channel_lines["ch1"][0]
+        y0_before = ax0.get_ylim()
+        y1_before = ax1.get_ylim()
 
         consumed = canvas._handle_wheel_dispatch(
             delta=120.0,
@@ -193,19 +199,22 @@ class TestOverlayWheel:
         )
 
         assert consumed is True
+        assert ax0.get_ylim() != pytest.approx(y0_before)
+        assert ax1.get_ylim() != pytest.approx(y1_before)
+        # The curveless X-master keeps its locked [0,1] Y and unchanged X.
         assert xm.get_ylim() == pytest.approx((0.0, 1.0))
         assert xm.get_xlim() == pytest.approx(before_x)
-        assert emitted == [1]
+        assert emitted == []
 
-    def test_selection_shift_wheel_zooms_only_that_channel(self, qapp):
+    def test_shift_wheel_zooms_all_channels_together(self, qapp):
         canvas = self._overlay(qapp)
-        canvas.select_overlay_channel("ch0")
         ax0 = canvas._channel_lines["ch0"][0]
         ax1 = canvas._channel_lines["ch1"][0]
         y0_before = ax0.get_ylim()
         y1_before = ax1.get_ylim()
         x_before = canvas._x_master_handle.get_xlim()
         span0_before = y0_before[1] - y0_before[0]
+        span1_before = y1_before[1] - y1_before[0]
 
         canvas._handle_wheel_dispatch(
             delta=120.0,
@@ -214,10 +223,46 @@ class TestOverlayWheel:
             y_pos=1.0,
         )
 
-        span0_after = ax0.get_ylim()[1] - ax0.get_ylim()[0]
-        assert span0_after < span0_before
-        assert ax1.get_ylim() == pytest.approx(y1_before)
+        # Both channels shrink (zoom in) together.
+        assert (ax0.get_ylim()[1] - ax0.get_ylim()[0]) < span0_before
+        assert (ax1.get_ylim()[1] - ax1.get_ylim()[0]) < span1_before
         assert canvas._x_master_handle.get_xlim() == pytest.approx(x_before)
+
+    def test_axis_gutter_shift_wheel_zooms_only_that_channel(self, qapp):
+        # Wheel over ONE channel's own Y-axis gutter (pyqtgraph forwards it as
+        # axis=1) → scroll/zoom ONLY that channel; the others are untouched.
+        canvas = self._overlay(qapp)
+        ax0 = canvas._channel_lines["ch0"][0]
+        ax1 = canvas._channel_lines["ch1"][0]
+        y0_before = ax0.get_ylim()
+        y1_before = ax1.get_ylim()
+
+        canvas._handle_wheel_dispatch(
+            delta=120.0, modifiers=Qt.ShiftModifier, x_pos=0.5, y_pos=1.0,
+            view_box=ax0.view_box, axis=1,
+        )
+
+        assert ax0.get_ylim() != pytest.approx(y0_before), "ch0 axis must zoom"
+        assert ax1.get_ylim() == pytest.approx(y1_before), (
+            "axis-gutter wheel must NOT touch other channels"
+        )
+
+    def test_axis_gutter_plain_wheel_pans_only_that_channel(self, qapp):
+        canvas = self._overlay(qapp)
+        ax0 = canvas._channel_lines["ch0"][0]
+        ax1 = canvas._channel_lines["ch1"][0]
+        y0_before = ax0.get_ylim()
+        y1_before = ax1.get_ylim()
+
+        canvas._handle_wheel_dispatch(
+            delta=120.0, modifiers=Qt.NoModifier, x_pos=0.5, y_pos=0.5,
+            view_box=ax1.view_box, axis=1,
+        )
+
+        assert ax1.get_ylim() != pytest.approx(y1_before), "ch1 axis must pan"
+        assert ax0.get_ylim() == pytest.approx(y0_before), (
+            "axis-gutter wheel must NOT touch other channels"
+        )
 
     def test_selection_plain_wheel_pans_one_division(self, qapp):
         canvas = self._overlay(qapp)

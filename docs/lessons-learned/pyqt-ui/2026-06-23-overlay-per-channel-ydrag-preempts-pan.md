@@ -53,9 +53,25 @@ ViewBox.mouseDragEvent）：裸 PanMode press→`_handle_overlay_mouse_press` �
 Alt press→返回 True+`dragging is True`+选中可见通道；Alt press 落在隐藏曲线→`selected != 隐藏名`；
 overlay+companion+显示原始 OFF→`_visible_channel_name_for_handle` 返回 companion ∈ `_companion_names`。
 
+### 2026-06-24 follow-up — 改 Alt 后「叠加 Y 无法缩放」回归 + 重做成"绘图区=全部 / 坐标轴=单通道"
+把裸点击选中改成 Alt+点击，顺带打断了**所有以"已选中通道"为前提的交互**：`_handle_wheel_dispatch`
+的叠加分支用 `_selected_overlay_axes()` 当 Y 缩放/平移的 target，没选中就 `overlay_y_needs_selection`
+直接 bail → 用户裸点击不再选中 → **Shift+滚轮 Y 缩放/裸滚轮 Y 平移全失效**。教训：动一个交互的
+"选中"语义前，先 grep 谁把 `selected_*` 当前提。
+**最终设计（用户要"跟 X 一样所有 Y 一起缩放"，再要"滚坐标轴=单独滚那条"）——彻底去掉"选中"前提**：
+- **绘图区滚轮（`axis is None`）→ 对 `self.axes_list` 全部通道同倍率缩放/平移**，以光标纵向占比
+  (`_overlay_cursor_y_fraction`，来自透传的 `ev.scenePos()`) 为锚（点固定不动，跟 X-master 一致）。
+  缩放档仍走 `_adjacent_nice_step`（纯 factor + `_frame_to_nice` 会被吸附回原 span → no-op）。
+- **某通道 Y 轴 gutter 滚轮 → 只动那一条**：pyqtgraph `AxisItem.wheelEvent` 在滚轮**不在 ViewBox
+  内**时 `linkedView().wheelEvent(ev, axis=1)` 转发给该轴的 aux VB 并带 `axis=1`；`_ModifierWheelViewBox`
+  把 `axis` 透传，dispatch 里 `axis==1` 时用 `_axis_handle_for_view_box(view_box)` 锁到单通道。
+- x-master(无曲线、Y 锁 [0,1]) 不在 axes_list → 不受影响；`overlay_y_needs_selection` 不再从滚轮发。
+（注：早期试过"无选中时命中悬停通道"的中间方案，已被本"全部/单轴"模型取代。）
+
 ## How to apply
 pyqtgraph 自定义左键手势若放在 `eventFilter` press 最前并 `return True`，等于**默认抢占所有
 左键拖动**——必须留一条"放行给 ViewBox"的路（最稳是改成修饰键 opt-in，而不是靠"命中落空"
 这种几何脆弱的隐式放行）。任何"按数据找最近曲线"的命中表都要先 `isVisible()` 过滤，否则隐藏
-但数据还在的曲线会变成幽灵命中目标。承接 [[2026-06-22-companion-curve-shares-source-axis-not-new-row]]
+但数据还在的曲线会变成幽灵命中目标。**改"选中"入口前先查谁把 selected 当前提**（缩放/平移/拖动/
+高亮都可能依赖它），别只看你正在改的那条路。承接 [[2026-06-22-companion-curve-shares-source-axis-not-new-row]]
 （可见性贴满高度正是把这条隐式放行路彻底堵死的放大器）。

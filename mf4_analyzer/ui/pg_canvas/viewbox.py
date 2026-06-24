@@ -77,7 +77,7 @@ class _ModifierWheelViewBox(pg.ViewBox):
             return
         consumed = owner._handle_wheel_dispatch(
             delta=delta, modifiers=modifiers, x_pos=x_pos, y_pos=y_pos,
-            view_box=self,
+            view_box=self, scene_pos=scene_pos, axis=axis,
         )
         if consumed:
             ev.accept()
