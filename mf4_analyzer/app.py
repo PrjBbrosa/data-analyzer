@@ -99,6 +99,85 @@ def _configure_high_dpi():
         pass
 
 
+def _write_gl_diagnostics():
+    """Probe the actual OpenGL backend and write a one-shot diagnostic log.
+
+    The GPU-render toggle blanks the curves in the FROZEN build but not from
+    source. The decisive unknown is which GL backend the frozen app actually
+    gets: desktop GL (composites the curve QGraphicsItems — works) vs ANGLE
+    (OpenGL ES / D3D) or software (opengl32sw) — which do NOT composite them on
+    a QOpenGLWidget viewport. ``QOpenGLContext.openGLModuleType()`` and a probe
+    context's ``isOpenGLES()`` answer that without needing the chart. Also
+    records whether the AA_UseDesktopOpenGL force (frozen-only, set in
+    _configure_high_dpi) actually took. Writes to %TEMP%/tracelab_gl_diag.txt
+    (and next to the exe, best-effort). Never raises — diagnostics must not
+    break startup. Runs in the frozen build, or from source with
+    TRACELAB_GL_DIAG=1 set (so source vs frozen can be compared).
+    """
+    if not (getattr(sys, "frozen", False) or os.environ.get("TRACELAB_GL_DIAG")):
+        return
+    import tempfile
+
+    from PyQt5.QtCore import Qt, QCoreApplication
+
+    lines = []
+
+    def add(key, val):
+        lines.append(f"{key}: {val}")
+
+    try:
+        from PyQt5.QtGui import QOpenGLContext, QSurfaceFormat
+
+        add("marker", "GL-DIAG-v1")
+        add("frozen", getattr(sys, "frozen", False))
+        add("executable", sys.executable)
+        for name in ("AA_UseDesktopOpenGL", "AA_UseOpenGLES", "AA_UseSoftwareOpenGL"):
+            attr = getattr(Qt, name, None)
+            add(name, QCoreApplication.testAttribute(attr) if attr is not None else "n/a")
+        try:
+            mt = int(QOpenGLContext.openGLModuleType())
+            add("openGLModuleType", {0: "LibGL(desktop)", 1: "LibGLES(ANGLE)"}.get(mt, mt))
+        except Exception as exc:
+            add("openGLModuleType.error", repr(exc))
+        try:
+            df = QSurfaceFormat.defaultFormat()
+            add("defaultFormat.samples", df.samples())
+            add("defaultFormat.renderableType", int(df.renderableType()))
+        except Exception as exc:
+            add("defaultFormat.error", repr(exc))
+        # Probe a real context: did it create, and is it ES (ANGLE) or desktop?
+        try:
+            ctx = QOpenGLContext()
+            created = ctx.create()
+            add("probeContext.create()", created)
+            if created:
+                add("probeContext.isOpenGLES", ctx.isOpenGLES())
+                f = ctx.format()
+                add("probeContext.version", f"{f.majorVersion()}.{f.minorVersion()}")
+                add("probeContext.renderableType", int(f.renderableType()))
+        except Exception as exc:
+            add("probeContext.error", repr(exc))
+    except Exception as exc:  # pragma: no cover - defensive
+        add("fatal", repr(exc))
+
+    text = "\n".join(str(x) for x in lines) + "\n"
+    targets = []
+    try:
+        targets.append(os.path.join(tempfile.gettempdir(), "tracelab_gl_diag.txt"))
+    except Exception:
+        pass
+    try:
+        targets.append(os.path.join(os.path.dirname(sys.executable), "tracelab_gl_diag.txt"))
+    except Exception:
+        pass
+    for path in targets:
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except Exception:
+            pass
+
+
 def main():
     _configure_high_dpi()
 
@@ -111,6 +190,7 @@ def main():
 
     setup_chinese_font()
     app = QApplication(sys.argv)
+    _write_gl_diagnostics()
     from mf4_analyzer.ui.pg_canvas.fonts import apply_global_chart_font
     apply_global_chart_font(app)
     app.setStyle('Fusion')
