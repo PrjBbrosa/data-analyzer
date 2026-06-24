@@ -76,3 +76,32 @@ class TestAxisGroupMetaIsPrimary:
         canvas.plot_channels(rows, mode="overlay")
         # 2 个 primary（gid 1/2 各单成员）→ 2 轴；companion 不另起轴
         assert len(canvas.axes_list) == 2
+
+
+class TestOverlayGroupInteraction:
+    def test_repin_and_emphasis_run_without_error_on_grouped(self, qapp):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("a", True, t, np.sin(t), "#f00", "Nm", "f1", {"axis_group": 1}),
+            ("b", True, t, np.cos(t), "#0a0", "Nm", "f1", {"axis_group": 1}),
+            ("c", True, t, np.sin(3 * t), "#00f", "rpm", "f2"),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        # 触发网格重钉/强调（既有 API），grouped handle 不应抛异常
+        canvas._overlay_axes._apply_overlay_emphasis()
+        canvas._overlay_axes._repin_overlay_channel_ticks()
+        QCoreApplication.processEvents()
+        assert len(canvas.axes_list) == 2
+
+    def test_mixed_unit_group_does_not_crash(self, qapp):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("a", True, t, np.sin(t),  "#f00", "Nm",  "f1", {"axis_group": 1}),
+            ("b", True, t, np.cos(t),  "#0a0", "rpm", "f1", {"axis_group": 1}),
+        ]
+        canvas.plot_channels(rows, mode="overlay")
+        QCoreApplication.processEvents()
+        assert len(canvas.axes_list) == 1

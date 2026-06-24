@@ -575,14 +575,11 @@ class TimeDomainCanvasPG(QWidget):
         elif overlay_mode:
             # Overlay: one PlotItem whose MAIN ViewBox is demoted to an
             # X-master / mouse-capture-only surface (NO curves attached),
-            # plus one dedicated aux ViewBox + Y axis PER channel. This is
-            # the symmetric layout — the first/left channel is no longer
-            # special-cased onto the shared main ViewBox, so its Y drag no
-            # longer fights X-padding the way it did when it owned the
-            # geometry/X/mouse anchor simultaneously. Channel 1 binds the
-            # LEFT axis; channels 2..N bind successive right axes. Mirrors
-            # the original matplotlib twinx stack: every channel owns an
-            # independent Y axis while all share X.
+            # plus one dedicated aux ViewBox + Y axis PER AXIS SLOT. Channels
+            # that share the same axis_group collapse into a single slot (one
+            # aux ViewBox, one Y axis, union Y range); ungrouped channels each
+            # own their own independent slot. Slot 0 binds the LEFT axis;
+            # slots 1..N bind successive right axes.
             pi = self._add_plot_item(row=0, col=0)
             # X-master handle wraps the main ViewBox; never enters
             # axes_list and never carries a curve.
