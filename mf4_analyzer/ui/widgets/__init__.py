@@ -1,5 +1,8 @@
 """Reusable widgets: StatisticsPanel, MultiFileChannelWidget, Toast."""
+from collections import Counter
+
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
@@ -20,6 +23,7 @@ from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QSize, QTimer, pyqtSigna
 from PyQt5.QtGui import QColor, QBrush, QIcon, QPainter, QPen, QPixmap
 
 from ...ui_kit.icons import Icons, icon_device_pixel_ratio
+from ..axis_group_palette import axis_group_color
 
 
 def _fmt_rate(fs):
@@ -202,6 +206,8 @@ class MultiFileChannelWidget(QWidget):
     channel_context_menu_requested = pyqtSignal()
     # Emitted when 编辑通道 (moved here from the top toolbar) is clicked.
     channel_editor_requested = pyqtSignal()
+    # Emitted when overlay shared-axis groups change (merge/split).
+    axis_groups_changed = pyqtSignal()
     MAX_CHANNELS_WARNING = 8  # 超过此数量时警告
 
     def __init__(self, parent=None):
@@ -242,6 +248,9 @@ class MultiFileChannelWidget(QWidget):
         layout.addLayout(bl)
         self.tree = _CheckTolerantTree();
         self.tree.setObjectName("channelTree")
+        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree._owner = self  # _CheckTolerantTree.drawBranches reads group state
+        self.tree.setIndentation(16)  # 收窄默认~20；并复用为共轴徽标槽（Task 3）
         self.tree.setHeaderLabels(['Channel', 'Pts']);
         header = self.tree.header()
         # Channel column owns all spare width so long names aren't elided when
@@ -265,6 +274,9 @@ class MultiFileChannelWidget(QWidget):
         # NEW: for nested (HEAD .hdf) mode
         self._source_items = {}  # filepath_str -> QTreeWidgetItem (top-level file node)
         self._raster_items = {}  # fid -> QTreeWidgetItem (raster subgroup node)
+        self._axis_groups = {}      # (fid, ch) -> group_id:int
+        self._axis_group_seq = 0
+        self.axis_groups_changed.connect(self.tree.viewport().update)
 
     def add_file(self, fid, fd):
         self._files[fid] = fd
@@ -451,6 +463,9 @@ class MultiFileChannelWidget(QWidget):
             del self._colors[k]
         if fid in self._files:
             del self._files[fid]
+        for k in [k for k in self._axis_groups if k[0] == fid]:
+            del self._axis_groups[k]
+        self._prune_axis_groups()
 
         # Check if nested (raster) or flat
         if fid in self._raster_items:
@@ -493,6 +508,72 @@ class MultiFileChannelWidget(QWidget):
         for i in range(self.tree.topLevelItemCount()):
             _collect(self.tree.topLevelItem(i))
         return result
+
+    # ---- overlay shared-axis groups -------------------------------------
+    def axis_group_for(self, fid, ch):
+        return self._axis_groups.get((str(fid), str(ch)))
+
+    def _new_axis_group_id(self):
+        self._axis_group_seq += 1
+        return self._axis_group_seq
+
+    def merge_axis_group(self, keys):
+        """Put ``keys`` (iterable of (fid, ch)) on one shared axis.
+
+        If any key already belongs to a group, fold everything into the
+        smallest such group id; else allocate a fresh id. Returns the group
+        id, or None when fewer than 2 keys are given."""
+        keys = [(str(f), str(c)) for (f, c) in keys]
+        if len(keys) < 2:
+            return None
+        existing = sorted({self._axis_groups[k] for k in keys if k in self._axis_groups})
+        gid = existing[0] if existing else self._new_axis_group_id()
+        fold = set(existing[1:])
+        if fold:
+            for k, g in list(self._axis_groups.items()):
+                if g in fold:
+                    self._axis_groups[k] = gid
+        for k in keys:
+            self._axis_groups[k] = gid
+        self._prune_axis_groups()
+        self.axis_groups_changed.emit()
+        return gid
+
+    def split_axis_group(self, keys):
+        """Remove ``keys`` from their groups; dissolve any group left < 2."""
+        changed = False
+        for (f, c) in keys:
+            k = (str(f), str(c))
+            if k in self._axis_groups:
+                del self._axis_groups[k]
+                changed = True
+        if changed:
+            self._prune_axis_groups()
+            self.axis_groups_changed.emit()
+
+    def _prune_axis_groups(self):
+        counts = Counter(self._axis_groups.values())
+        for k, g in list(self._axis_groups.items()):
+            if counts[g] < 2:
+                del self._axis_groups[k]
+
+    @staticmethod
+    def _effective_groups(axis_groups, checked_keys):
+        """Restrict groups to checked channels and drop singleton groups."""
+        eff = {k: g for k, g in axis_groups.items() if k in checked_keys}
+        counts = Counter(eff.values())
+        return {k: g for k, g in eff.items() if counts[g] >= 2}
+
+    def checked_axis_groups(self):
+        checked = {(f, c) for (f, c, _color) in self.get_checked_channels()}
+        return self._effective_groups(self._axis_groups, checked)
+
+    def _axis_group_menu_plan(self, sel_keys):
+        """(can_merge, can_split) for the right-click menu (Task 2)."""
+        sel = [(str(f), str(c)) for (f, c) in sel_keys]
+        can_merge = len(sel) >= 2
+        can_split = any(k in self._axis_groups for k in sel)
+        return can_merge, can_split
 
     def set_checked_channels(self, checked):
         """Batch-restore checked channels without emitting channels_changed."""
