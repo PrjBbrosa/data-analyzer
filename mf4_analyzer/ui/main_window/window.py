@@ -259,6 +259,26 @@ class MainWindow(
         self._copy_thumbnail.clicked.connect(self._open_markup_editor)
         self._markup_editor = None
 
+        # 操作速查 panel: lazy singleton + a global "?" shortcut that toggles it.
+        self._quickref_panel = None
+        self._install_quickref_shortcut()
+
+    def _install_quickref_shortcut(self):
+        """Bind '?' (and Shift+/ on layouts where ? needs Shift) to the panel."""
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        self._quickref_shortcut = QShortcut(QKeySequence(Qt.Key_Question), self)
+        self._quickref_shortcut.setContext(Qt.ApplicationShortcut)
+        self._quickref_shortcut.activated.connect(self.toggle_quickref_panel)
+
+    def toggle_quickref_panel(self):
+        """Show/hide the 操作速查 quick-reference panel (lazy singleton)."""
+        if self._quickref_panel is None:
+            from ..quickref_panel import QuickRefPanel
+            from ...help import open_guide
+            self._quickref_panel = QuickRefPanel(self, open_guide=open_guide)
+        self._quickref_panel.toggle(anchor_widget=self)
+
     def _install_update_indicator(self):
         """Far-right status-bar update affordance: a cloud-download icon
         (no text, hover '检查更新') + the app version, linking to the release
@@ -282,6 +302,17 @@ class MainWindow(
         self._help_btn.setToolTip("软件说明")
         self._help_btn.clicked.connect(self._open_software_manual)
         self.statusBar.addPermanentWidget(self._help_btn)
+
+        # 操作速查 entry button, sits just left of the 软件说明 book icon.
+        self._quickref_btn = QToolButton(self)
+        self._quickref_btn.setObjectName("surfaceQuickrefButton")
+        self._quickref_btn.setIcon(qta.icon('mdi.keyboard-outline', color='#5b6472'))
+        self._quickref_btn.setIconSize(QSize(18, 18))
+        self._quickref_btn.setAutoRaise(True)
+        self._quickref_btn.setCursor(Qt.PointingHandCursor)
+        self._quickref_btn.setToolTip("操作速查 (?)")
+        self._quickref_btn.clicked.connect(self.toggle_quickref_panel)
+        self.statusBar.addPermanentWidget(self._quickref_btn)
 
         self._update_btn = QToolButton(self)
         self._update_btn.setObjectName("surfaceVersionButton")
