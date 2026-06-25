@@ -351,6 +351,11 @@ class MainWindow(
             return
         self._toast.show_message(msg, level=level)
 
+    def _warn_action_blocked(self, message):
+        """Surface an explicit user action that cannot proceed."""
+        self.statusBar.showMessage(message, 3000)
+        self.toast(message, "warning")
+
     def _publish_copied_pixmap(self, pix):
         """Publish a freshly captured chart-card pixmap.
 
@@ -435,7 +440,9 @@ class MainWindow(
         # Inspector signals wire up in Phase 2 when real sections land. In
         # Phase 1, these are no-ops but must exist so Task 2.x edits are
         # minimal additions rather than rewrites.
-        self.inspector.plot_time_requested.connect(self.plot_time)
+        self.inspector.plot_time_requested.connect(
+            lambda: self.plot_time(user_initiated=True)
+        )
         # Live display toggles for the filter overlay: 显示原始 / 显示滤波后
         # flip the visibility of the EXISTING curves on the focused time canvas
         # without a re-plot (秒生效，不重绘). The axis/row stays put — a companion
@@ -1696,7 +1703,7 @@ class MainWindow(
     def _restore_checked_channels(self, checked):
         self.channel_list.set_checked_channels(checked)
 
-    def plot_time(self):
+    def plot_time(self, *, user_initiated=False):
         # Route channel-check replots to the focused time card. Outside
         # side-by-side compare, focused_canvas() is the primary self.canvas_time
         # so this is byte-identical to the old behaviour; while split is active
@@ -1706,7 +1713,9 @@ class MainWindow(
         # bookkeeping only fire for the primary pane.
         focused = self.chart_stack.focused_canvas()
         self._plot_time_on_canvas(
-            focused, update_primary_ui=(focused is self.canvas_time)
+            focused,
+            update_primary_ui=(focused is self.canvas_time),
+            user_initiated=user_initiated,
         )
 
     def _time_canvases(self):
@@ -1750,12 +1759,20 @@ class MainWindow(
             # need a real plot to compute + bind the dashed traces.
             self.plot_time()
 
-    def _plot_time_on_canvas(self, canvas, update_primary_ui=True, defer_first_frame=False):
+    def _plot_time_on_canvas(
+        self,
+        canvas,
+        update_primary_ui=True,
+        defer_first_frame=False,
+        user_initiated=False,
+    ):
         if not self.files:
             canvas.clear()
             canvas.draw()
             if update_primary_ui:
                 self.chart_stack.stats_strip.update_stats({})
+            if user_initiated:
+                self._warn_action_blocked("请先打开数据文件")
             return
         checked = self.channel_list.get_checked_channels()
         if not checked:
@@ -1763,6 +1780,8 @@ class MainWindow(
             canvas.draw()
             if update_primary_ui:
                 self.chart_stack.stats_strip.update_stats({})
+            if user_initiated:
+                self._warn_action_blocked("请在左侧勾选至少一个通道")
             return
 
         # Per-pane plot mode (P2 Task 9 1b): read the layout (subplot/overlay)
@@ -1800,12 +1819,13 @@ class MainWindow(
             if self._last_plot_mode is not None and self._last_plot_mode != mode:
                 canvas.invalidate_envelope_cache("plot mode changed")
             self._last_plot_mode = mode
-        if update_primary_ui and mode == 'overlay' and len(checked) > 5:
+        if (update_primary_ui or user_initiated) and mode == 'overlay' and len(checked) > 5:
             ans = QMessageBox.question(
                 self, "确认",
                 f"overlay 下 {len(checked)} 个通道会产生 {len(checked)} 根 Y 轴，右侧可能拥挤。继续？",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if ans != QMessageBox.Yes:
+                self.statusBar.showMessage("已取消绘图", 3000)
                 return
 
         # 获取自定义横坐标数据。
@@ -1877,6 +1897,10 @@ class MainWindow(
             canvas.draw()
             if update_primary_ui:
                 self.chart_stack.stats_strip.update_stats({})
+            if user_initiated:
+                self._warn_action_blocked(
+                    "当前时间范围内无可绘制数据，请调整时间范围或点最大"
+                )
             if _pp_section is not None:  # [perf-probe] 关掉提前返回路径的段
                 _pp_section.__exit__(None, None, None)
             return

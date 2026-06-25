@@ -2260,6 +2260,41 @@ def test_plot_result_db_auto_span_tracks_robust_ceiling(qapp):
     c.deleteLater()
 
 
+def test_auto_db_window_default_span_is_30(qapp):
+    from mf4_analyzer.ui.pg_canvas import heatmap_canvas as hc
+
+    matrix = np.linspace(-50.0, 10.0, 6001).reshape(1, -1)
+
+    vmin, vmax = hc._auto_db_window(matrix)
+
+    ceiling = hc._robust_db_ceiling(matrix, hc._AUTO_CEILING_PCT)
+    assert vmax == pytest.approx(ceiling)
+    assert (vmax - vmin) == pytest.approx(30.0)
+
+
+def test_plot_result_db_z_auto_window_uses_30db_span(qapp):
+    c = PgHeatmapCanvas(with_slice=True)
+    c.resize(640, 480)
+    r = SpectrogramResult(
+        times=np.array([0.0, 1.0]),
+        frequencies=np.array([0.0, 10.0]),
+        amplitude=np.array([[1e-3, 1e-2], [1e-1, 1.0]], dtype=float),
+        params=SpectrogramParams(fs=100.0, nfft=64),
+        channel_name='wide',
+        metadata={'frames': 2},
+    )
+
+    c.plot_result(
+        r, amplitude_mode='amplitude_db', cmap='turbo',
+        z_auto=True, z_floor=-80.0, z_ceiling=0.0,
+    )
+
+    vmin, vmax = c._last_auto_levels
+    assert (vmax - vmin) == pytest.approx(30.0)
+    assert c._img.getLevels() == pytest.approx((vmin, vmax))
+    c.deleteLater()
+
+
 def test_plot_result_db_auto_ceiling_ignores_outlier_peak(qapp):
     """Regression (2026-06-21): a lone transient peak must NOT drag the auto
     ceiling up and bury the informative bulk below the floor.

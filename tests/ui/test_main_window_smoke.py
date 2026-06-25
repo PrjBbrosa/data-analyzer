@@ -1318,6 +1318,104 @@ def test_file_load_multi_file_no_autocheck_per_file(qapp, qtbot, loaded_csv, tmp
     assert w.channel_list.get_checked_channels() == []
 
 
+def test_time_plot_button_warns_when_no_file_loaded(qapp, qtbot, monkeypatch):
+    w = MainWindow()
+    qtbot.addWidget(w)
+    seen = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": seen.append((msg, level)))
+
+    w.inspector.time_ctx.btn_plot.click()
+    qapp.processEvents()
+
+    assert seen == [("请先打开数据文件", "warning")]
+
+
+def test_explicit_time_plot_warns_when_no_channel_checked(
+    qapp, qtbot, loaded_csv, monkeypatch
+):
+    from unittest.mock import patch
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        "mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames",
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+    assert w.channel_list.get_checked_channels() == []
+
+    seen = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": seen.append((msg, level)))
+
+    w.plot_time(user_initiated=True)
+    qapp.processEvents()
+
+    assert seen == [("请在左侧勾选至少一个通道", "warning")]
+
+
+def test_time_plot_warns_when_checked_data_is_empty(
+    qapp, qtbot, loaded_csv, monkeypatch
+):
+    w, _fid = _load_time_window_with_checked(qapp, qtbot, loaded_csv, ("speed",))
+    seen = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": seen.append((msg, level)))
+    monkeypatch.setattr(w, "_build_time_plot_data", lambda *args, **kwargs: [])
+
+    w.plot_time(user_initiated=True)
+    qapp.processEvents()
+
+    assert seen == [("当前时间范围内无可绘制数据，请调整时间范围或点最大", "warning")]
+
+
+def test_automatic_time_replot_does_not_warn_for_empty_selection(
+    qapp, qtbot, loaded_csv, monkeypatch
+):
+    from unittest.mock import patch
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        "mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames",
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+    seen = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": seen.append((msg, level)))
+
+    w.plot_time()
+    qapp.processEvents()
+
+    assert seen == []
+
+
+def test_user_initiated_non_primary_time_plot_still_warns(
+    qapp, qtbot, loaded_csv, monkeypatch
+):
+    from unittest.mock import patch
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    with patch(
+        "mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames",
+        return_value=([loaded_csv], ""),
+    ):
+        w.load_files()
+    qapp.processEvents()
+    seen = []
+    monkeypatch.setattr(w, "toast", lambda msg, level="info": seen.append((msg, level)))
+
+    w._plot_time_on_canvas(
+        w.canvas_time,
+        update_primary_ui=False,
+        user_initiated=True,
+    )
+    qapp.processEvents()
+
+    assert seen == [("请在左侧勾选至少一个通道", "warning")]
+
+
 def _load_time_window_with_checked(qapp, qtbot, loaded_csv, checked_names=("speed",)):
     from PyQt5.QtCore import Qt
     from unittest.mock import patch
