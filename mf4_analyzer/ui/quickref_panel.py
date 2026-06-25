@@ -59,8 +59,12 @@ _CHIP_BORDER = "#dfe5ee"
 
 # Shadow geometry: the outer window is translucent and carries an N-px margin
 # all around the inner card so the drop shadow has room to render.
-_SHADOW_MARGIN = 22
+_SHADOW_MARGIN = 14
 _CARD_RADIUS = 14
+_SHADOW_LAYERS = (
+    (5, 8, QColor(13, 20, 31, 16)),
+    (2, 3, QColor(13, 20, 31, 22)),
+)
 
 
 def _qss():
@@ -372,7 +376,10 @@ class QuickRefPanel(QWidget):
     def __init__(self, parent=None, open_guide=None):
         # Qt.Tool keeps the window off the taskbar and tied to the app without
         # being modal; FramelessWindowHint lets us draw our own header + shape.
-        super().__init__(parent, Qt.Tool | Qt.FramelessWindowHint)
+        super().__init__(
+            parent,
+            Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint,
+        )
         self._open_guide = open_guide
         self._pinned = False
         self._drag_offset = None
@@ -584,7 +591,7 @@ class QuickRefPanel(QWidget):
             self.raise_()
 
     def _apply_window_flags(self):
-        flags = Qt.Tool | Qt.FramelessWindowHint
+        flags = Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
         if self._pinned:
             flags |= Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
@@ -712,14 +719,8 @@ class QuickRefPanel(QWidget):
         p.setRenderHint(QPainter.Antialiasing, True)
         m = _SHADOW_MARGIN
         card_rect = self.rect().adjusted(m, m, -m, -m)
-        # Layered shadow: a few expanding, fading rounded rects below+around.
-        layers = [
-            (10, 26, QColor(13, 20, 31, 30)),
-            (6, 16, QColor(13, 20, 31, 34)),
-            (3, 8, QColor(13, 20, 31, 40)),
-            (1, 3, QColor(13, 20, 31, 46)),
-        ]
-        for grow, dy, color in layers:
+        # Keep the float cue subtle: no native shadow, just a small custom lift.
+        for grow, dy, color in _SHADOW_LAYERS:
             r = card_rect.adjusted(-grow, -grow + dy, grow, grow + dy)
             path = QPainterPath()
             path.addRoundedRect(

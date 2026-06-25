@@ -2,6 +2,7 @@
 import pytest
 from PyQt5.QtCore import Qt
 
+from mf4_analyzer.ui import quickref_panel as quickref_panel_module
 from mf4_analyzer.ui.quickref_panel import QuickRefPanel
 from mf4_analyzer.ui import quickref
 
@@ -24,6 +25,7 @@ def test_non_modal_flags(panel):
     flags = panel.windowFlags()
     assert flags & Qt.Tool
     assert flags & Qt.FramelessWindowHint
+    assert flags & Qt.NoDropShadowWindowHint
     # Not pinned by default → not always-on-top.
     assert not (flags & Qt.WindowStaysOnTopHint)
 
@@ -32,11 +34,23 @@ def test_pin_toggles_stay_on_top(panel):
     panel.set_pinned(True)
     assert panel.is_pinned()
     assert panel.windowFlags() & Qt.WindowStaysOnTopHint
+    assert panel.windowFlags() & Qt.NoDropShadowWindowHint
     assert panel._pin_btn.isChecked()
     panel.set_pinned(False)
     assert not panel.is_pinned()
     assert not (panel.windowFlags() & Qt.WindowStaysOnTopHint)
+    assert panel.windowFlags() & Qt.NoDropShadowWindowHint
     assert not panel._pin_btn.isChecked()
+
+
+def test_shadow_layers_stay_light_and_inside_shell_margin():
+    """Keep the quickref float shadow subtle, not a thick Windows halo."""
+    layers = getattr(quickref_panel_module, "_SHADOW_LAYERS", None)
+    assert layers is not None, "shadow layers must be a testable visual token"
+    assert len(layers) <= 2
+    for grow, dy, color in layers:
+        assert color.alpha() <= 24
+        assert grow + dy <= quickref_panel_module._SHADOW_MARGIN
 
 
 def test_search_filters_rows(panel):
