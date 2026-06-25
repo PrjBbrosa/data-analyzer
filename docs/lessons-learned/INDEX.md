@@ -58,6 +58,7 @@ lesson by default.
 | [Qt Render Probes Isolate QSettings](codex-qt-render-probes-isolate-qsettings.md) | Writing or running Qt screenshot/render probes, smoke scripts, or UI | See lesson |
 | [Pyqt Heatmap Slice Curve AA Interaction Guard](pyqt-heatmap-slice-curve-aa-interaction-guard.md) | Touching `PgHeatmapCanvas` slice-curve rendering, slice marker | See lesson |
 | [Pyqt Heatmap Copy Includes Widget Overlays](pyqt-heatmap-copy-includes-widget-overlays.md) | Touching heatmap copy/export, `PgHeatmapCanvas.grab_pixmap`, or | See lesson |
+| [Status Hint Buttons Need Rendered Geometry](codex-status-hint-button-geometry.md) | Changing the bottom status-line hint bar, the quickref `?` button, or | See lesson |
 
 ## Selection Rules
 

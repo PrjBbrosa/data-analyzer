@@ -1904,17 +1904,17 @@ QFrame#chartHintBar {
     border-top: 1px solid #d3dbe6;
 }
 QFrame#chartHintBar QToolButton#chartHintQuickrefButton {
-    min-width: 18px;
-    max-width: 18px;
-    min-height: 18px;
-    max-height: 18px;
+    min-width: 16px;
+    max-width: 16px;
+    min-height: 16px;
+    max-height: 16px;
     padding: 0;
     margin: 0 2px 0 0;
     background-color: #eff6ff;
     border: 1px solid #bfdbfe;
-    border-radius: 9px;
+    border-radius: 8px;
     color: #1769e0;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 800;
 }
 QFrame#chartHintBar QToolButton#chartHintQuickrefButton:hover {

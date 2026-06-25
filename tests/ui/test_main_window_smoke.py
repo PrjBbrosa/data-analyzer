@@ -651,6 +651,39 @@ def test_main_window_keeps_single_active_hint_bar_in_status_line(qapp, qtbot):
     assert w._quickref_panel.isVisible()
 
 
+def test_status_hint_quickref_button_stays_inside_bar_under_qss(qapp, qtbot):
+    from pathlib import Path
+
+    from PyQt5.QtWidgets import QToolButton
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        w = MainWindow()
+        qtbot.addWidget(w)
+        w.resize(1920, 1080)
+        w.show()
+        qtbot.waitExposed(w)
+        qapp.processEvents()
+
+        bar = w._status_hint_bar
+        button = bar.findChild(QToolButton, "chartHintQuickrefButton")
+        assert button is not None
+
+        button_rect = button.geometry()
+        bar_rect = bar.rect()
+        assert button_rect.top() >= bar_rect.top()
+        assert button_rect.bottom() <= bar_rect.bottom(), (
+            f"quickref button {button_rect.getRect()} must fit inside "
+            f"hint bar {bar_rect.getRect()} so its rounded bottom is not clipped"
+        )
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_fft_quality_indicator_repositions_after_first_mode_layout(qapp, qtbot):
     """First FFT entry moves its hint bar to the status line, changing the
     child canvas height after the card has already shown.
