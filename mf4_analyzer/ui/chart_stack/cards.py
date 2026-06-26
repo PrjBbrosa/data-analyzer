@@ -90,6 +90,9 @@ class _ChartCard(QWidget):
             reg_mode = getattr(canvas, 'register_mouse_mode_controller', None)
             if callable(reg_mode):
                 reg_mode(self.toolbar)
+            reg_copy = getattr(canvas, 'register_copy_image_handler', None)
+            if callable(reg_copy):
+                reg_copy(self.copy_image_requested.emit)
             # When the menu (or any path) changes the mode, refresh the
             # toolbar icon active-state + bottom hint, and let TimeChartCard
             # flip its axis-lock chips, exactly as a toolbar-button click would.

@@ -417,6 +417,7 @@ class TimeDomainCanvasPG(QWidget):
         # registers itself via register_mouse_mode_controller; until then this
         # stays None and the menu items are inert (no parallel mode path).
         self._mouse_mode_controller = None
+        self._copy_image_handler = None
 
         # Decomposition collaborators. Most keep only a canvas back-reference;
         # Phase 4.2 starts moving cohesive state into the owning collaborator.
@@ -1214,6 +1215,15 @@ class TimeDomainCanvasPG(QWidget):
         """
         self._mouse_mode_controller = controller
 
+    def register_copy_image_handler(self, handler):
+        """Register a 0-arg callable that copies the focused chart image.
+
+        ``_ChartCard`` injects ``card.copy_image_requested.emit`` here so the
+        right-click custom-action slot triggers the same copy path as the
+        toolbar button.
+        """
+        self._copy_image_handler = handler
+
     def _plot_item_for_view_box(self, view_box):
         """Return the PlotItem that owns ``view_box`` (or None).
 
@@ -1247,6 +1257,7 @@ class TimeDomainCanvasPG(QWidget):
             self._mouse_mode_controller,
             view_all_handler=self.reset_view_to_data_extents,
             y_autofit_handler=self.fit_y_to_visible_x,
+            copy_image_handler=self._copy_image_handler,
             allow_y_grid=not self._overlay_mode,
             view_box=view_box,
         )

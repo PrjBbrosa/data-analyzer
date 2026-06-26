@@ -7995,3 +7995,24 @@ def test_inline_mouse_row_slot_order_zoom_pan_custom(qapp, monkeypatch):
         < names.index("pgContextPanButton") \
         < names.index("pgContextCustomActionButton")
     settings.clear()
+
+
+def test_copy_image_handler_injected_and_invoked(qapp, monkeypatch):
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QToolButton, QWidget
+    settings = QSettings("MF4AnalyzerTest", "CopyInject")
+    settings.clear()
+    fired = {"n": 0}
+    canvas = _pg_canvas(qapp)
+    canvas.register_copy_image_handler(lambda: fired.__setitem__("n", fired["n"] + 1))
+    canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+    vb = canvas.axes_list[0].view_box
+    menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+    panel = _inline_panel(menu)
+    custom = panel.findChild(QWidget, "pgContextCustomActionButton")
+    assert custom.current_action_id() == "copy_image"
+    main = custom.findChild(QToolButton, "pgContextCustomActionMain")
+    assert main.isEnabled()
+    main.click()
+    assert fired["n"] == 1
+    settings.clear()
