@@ -543,7 +543,7 @@ class _PgContextInlinePanel(QWidget):
             pan_button, 0, 0, 1, 3,
             alignment=Qt.AlignHCenter | Qt.AlignVCenter,
         )
-        hg.addWidget(custom_button, 0, 2, alignment=Qt.AlignCenter)
+        hg.addWidget(custom_button, 0, 2)
         layout.addWidget(host, row, 0, 1, 3)
         self._add_label(layout, row, "鼠标")
 
@@ -744,7 +744,7 @@ class _PgCustomActionButton(QWidget):
         self._action_id = _load_custom_action(settings)
         self._list_host = None
 
-        lay = QHBoxLayout(self)
+        lay = QGridLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         self._main = QToolButton(self)
@@ -761,8 +761,11 @@ class _PgCustomActionButton(QWidget):
         self._caret.setCursor(Qt.PointingHandCursor)
         self._caret.setToolTip("更换动作")
         self._caret.clicked.connect(self._toggle_action_list)
-        lay.addWidget(self._main)
-        lay.addWidget(self._caret)
+        # The icon button centers in the slot (so it lines up with 全图/Y in the
+        # column below); the ▾ caret hangs at the right edge and does NOT pull
+        # the icon off-center.
+        lay.addWidget(self._main, 0, 0, alignment=Qt.AlignCenter)
+        lay.addWidget(self._caret, 0, 0, alignment=Qt.AlignRight | Qt.AlignVCenter)
         self._refresh_main()
 
     def current_action_id(self):
