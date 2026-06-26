@@ -507,7 +507,7 @@ class InputPanel(QWidget):
         form.addRow("时间范围", self._time_edit)
 
         self._filter_panel = BatchFilterPanel(form_host)
-        form.addRow("预处理", self._filter_panel)
+        form.addRow("滤波", self._filter_panel)
         outer.addWidget(form_host)
 
         # Wiring

@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ....signal.filters import FilterSpec
+from ...widgets.pill_switch import PillSwitch
 from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 
 
@@ -42,13 +43,14 @@ class BatchFilterPanel(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(6)
+        root.setSpacing(3)
 
-        self.chk_enabled = QCheckBox("启用滤波", self)
-        self.chk_enabled.setChecked(False)
-        root.addWidget(self.chk_enabled)
+        top_row = QWidget(self)
+        top_lay = QHBoxLayout(top_row)
+        top_lay.setContentsMargins(0, 0, 0, 0)
+        top_lay.setSpacing(8)
 
-        self._settings = QWidget(self)
+        self._settings = QWidget(top_row)
         form = QFormLayout(self._settings)
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(6)
@@ -94,7 +96,13 @@ class BatchFilterPanel(QWidget):
         self.combo_order.setCurrentText("4")
         form.addRow("阶数", _field(self.combo_order, 120))
 
-        root.addWidget(self._settings)
+        self._enable_switch = PillSwitch(
+            top_row, object_name="batchFilterEnableSwitch", accessible_name="滤波"
+        )
+        self._enable_switch.setChecked(False)
+        top_lay.addWidget(self._settings, 1)
+        top_lay.addWidget(self._enable_switch, 0, Qt.AlignTop | Qt.AlignRight)
+        root.addWidget(top_row)
 
         self._time_options = QWidget(self)
         time_lay = QHBoxLayout(self._time_options)
@@ -113,8 +121,8 @@ class BatchFilterPanel(QWidget):
         self._sync_kind_rows()
         self.set_method("fft")
 
-        self.chk_enabled.toggled.connect(self._sync_enabled)
-        self.chk_enabled.toggled.connect(lambda *_: self.changed.emit())
+        self._enable_switch.toggled.connect(self._sync_enabled)
+        self._enable_switch.toggled.connect(lambda *_: self.changed.emit())
         self.combo_kind.currentTextChanged.connect(self._sync_kind_rows)
         self.combo_kind.currentTextChanged.connect(lambda *_: self.changed.emit())
         self.combo_order.currentTextChanged.connect(lambda *_: self.changed.emit())
@@ -124,7 +132,7 @@ class BatchFilterPanel(QWidget):
             chk.toggled.connect(lambda *_: self.changed.emit())
 
     def _sync_enabled(self, *_args) -> None:
-        self._settings.setEnabled(self.chk_enabled.isChecked())
+        self._settings.setEnabled(self._enable_switch.isChecked())
 
     def _sync_kind_rows(self, *_args) -> None:
         is_band = self._kind_key() in {"band", "bandstop"}
@@ -147,7 +155,7 @@ class BatchFilterPanel(QWidget):
 
     def filter_params(self) -> dict:
         return {
-            "enabled": self.chk_enabled.isChecked(),
+            "enabled": self._enable_switch.isChecked(),
             "spec": self.filter_spec().to_dict(),
             "show_original": self.chk_show_original.isChecked(),
             "show_filtered": self.chk_show_filtered.isChecked(),
@@ -160,7 +168,7 @@ class BatchFilterPanel(QWidget):
             spec = FilterSpec("low", order=4, cutoff=100.0)
         else:
             spec = FilterSpec.from_dict(spec_data)
-        self.chk_enabled.setChecked(bool(data.get("enabled", False)))
+        self._enable_switch.setChecked(bool(data.get("enabled", False)))
         self.apply_filter_spec(spec)
         self.chk_show_original.setChecked(bool(data.get("show_original", True)))
         self.chk_show_filtered.setChecked(bool(data.get("show_filtered", True)))

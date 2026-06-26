@@ -584,6 +584,39 @@ def test_batch_input_filter_params_round_trip(qtbot):
     assert got["show_filtered"] is True
 
 
+def test_batch_filter_row_uses_panel_style_switch(qtbot):
+    from PyQt5.QtWidgets import QCheckBox
+
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+    from mf4_analyzer.ui.widgets.pill_switch import PillSwitch
+
+    panel = InputPanel(None, files={})
+    qtbot.addWidget(panel)
+
+    label = panel._form_ref.labelForField(panel._filter_panel)
+    assert label is not None
+    assert label.text() == "滤波"
+
+    enabled_checks = [
+        chk for chk in panel._filter_panel.findChildren(QCheckBox)
+        if chk.text() == "启用滤波"
+    ]
+    assert enabled_checks == []
+
+    assert isinstance(panel._filter_panel._enable_switch, PillSwitch)
+    assert panel._filter_panel._enable_switch.accessibleName() == "滤波"
+
+    panel.show()
+    qtbot.wait(20)
+    switch_top = panel._filter_panel._enable_switch.mapTo(
+        panel._filter_panel, panel._filter_panel._enable_switch.rect().topLeft()
+    ).y()
+    settings_top = panel._filter_panel._settings.mapTo(
+        panel._filter_panel, panel._filter_panel._settings.rect().topLeft()
+    ).y()
+    assert abs(settings_top - switch_top) <= 4
+
+
 def test_batch_filter_time_output_toggles_only_visible_for_time(qtbot):
     from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
 
