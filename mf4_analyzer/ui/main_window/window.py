@@ -4,6 +4,7 @@
 # of state; MainWindow is a router between them.
 
 import importlib
+import sys
 
 import numpy as np
 from pathlib import Path
@@ -2053,63 +2054,70 @@ class MainWindow(
         if _pp_section is not None:
             _pp_section.__enter__()
 
-        with _pp.timed("_build_time_plot_data 总耗时"):
-            data = self._build_time_plot_data(
-                checked, custom_x, range_enabled, range_lo, range_hi,
-            )
-        st = {}
-        if collect_stats:
-            # Statistics are computed from the ORIGINAL (post-range-filter)
-            # samples only — filtered overlay traces are excluded so the
-            # stats strip mirrors the acquired data, never display-layer math.
-            for row in data:
-                name, _vis, _x, sig, _color, unit = row[:6]
-                if name in self._time_filtered_names:
-                    continue
-                st[name] = {
-                    'min': np.min(sig), 'max': np.max(sig),
-                    'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
-                    'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit,
-                }
-        if not data:
-            canvas.clear()
-            canvas.draw()
-            if update_primary_ui:
-                self.chart_stack.stats_strip.update_stats({})
-            if user_initiated:
-                self._warn_action_blocked(
-                    "当前时间范围内无可绘制数据，请调整时间范围或点最大"
+        progress_token = None
+        if update_primary_ui or user_initiated:
+            progress_token = self._begin_compute_progress("时间域绘制中")
+        try:
+            with _pp.timed("_build_time_plot_data 总耗时"):
+                data = self._build_time_plot_data(
+                    checked, custom_x, range_enabled, range_lo, range_hi,
                 )
-            if _pp_section is not None:  # [perf-probe] 关掉提前返回路径的段
-                _pp_section.__exit__(None, None, None)
-            return
+            st = {}
+            if collect_stats:
+                # Statistics are computed from the ORIGINAL (post-range-filter)
+                # samples only — filtered overlay traces are excluded so the
+                # stats strip mirrors the acquired data, never display-layer math.
+                for row in data:
+                    name, _vis, _x, sig, _color, unit = row[:6]
+                    if name in self._time_filtered_names:
+                        continue
+                    st[name] = {
+                        'min': np.min(sig), 'max': np.max(sig),
+                        'mean': np.mean(sig), 'rms': np.sqrt(np.mean(sig ** 2)),
+                        'std': np.std(sig), 'p2p': np.ptp(sig), 'unit': unit,
+                    }
+            if not data:
+                canvas.clear()
+                canvas.draw()
+                if update_primary_ui:
+                    self.chart_stack.stats_strip.update_stats({})
+                if user_initiated:
+                    self._warn_action_blocked(
+                        "当前时间范围内无可绘制数据，请调整时间范围或点最大"
+                    )
+                return
 
-        xlabel = self._custom_xlabel or self.inspector.top.xaxis_label() or 'Time (s)'
-        with _pp.timed("plot_channels(建轴+bind+首次setData) 耗时"):
-            canvas.plot_channels(
-                data,
-                mode,
-                xlabel=xlabel,
-                defer_first_frame=defer_first_frame,
-            )
-        if update_primary_ui:
-            self._sync_time_range_inputs_from_visible_xlim()
-        xt, yt = self.inspector.top.tick_density()
-        canvas.set_tick_density(xt, yt)
-        # [perf-probe] 诊断探针，定位后移除。诊断行 + 强制同步首帧 paint
-        # （离屏 settle 后是缓存 blit，需 repaint() 触发 paintEvent hook 记真实首帧）。
-        if _pp.ENABLED:
-            _pp.log_filter_total()
-            _pp.log_canvas_diagnostics(canvas)
+            xlabel = self._custom_xlabel or self.inspector.top.xaxis_label() or 'Time (s)'
+            with _pp.timed("plot_channels(建轴+bind+首次setData) 耗时"):
+                canvas.plot_channels(
+                    data,
+                    mode,
+                    xlabel=xlabel,
+                    defer_first_frame=defer_first_frame,
+                )
+            if update_primary_ui:
+                self._sync_time_range_inputs_from_visible_xlim()
+            xt, yt = self.inspector.top.tick_density()
+            canvas.set_tick_density(xt, yt)
+            # [perf-probe] 诊断探针，定位后移除。诊断行 + 强制同步首帧 paint
+            # （离屏 settle 后是缓存 blit，需 repaint() 触发 paintEvent hook 记真实首帧）。
+            if _pp.ENABLED:
+                _pp.log_filter_total()
+                _pp.log_canvas_diagnostics(canvas)
+                try:
+                    # GraphicsView 自身被 hook（见 install_paint_probe）。repaint()
+                    # 同步强制首帧光栅；离屏 settle 后的 grab 是缓存 blit，量不到墙。
+                    _pp.log("强制 GraphicsView.repaint() 触发首帧光栅")
+                    canvas._glw.repaint()
+                except Exception as _exc:
+                    _pp.log(f"repaint 触发失败(已吞): {_exc!r}")
+        finally:
             try:
-                # GraphicsView 自身被 hook（见 install_paint_probe）。repaint()
-                # 同步强制首帧光栅；离屏 settle 后的 grab 是缓存 blit，量不到墙。
-                _pp.log("强制 GraphicsView.repaint() 触发首帧光栅")
-                canvas._glw.repaint()
-            except Exception as _exc:
-                _pp.log(f"repaint 触发失败(已吞): {_exc!r}")
-        if _pp_section is not None:
-            _pp_section.__exit__(None, None, None)
+                if _pp_section is not None:
+                    _pp_section.__exit__(*sys.exc_info())
+            finally:
+                if progress_token is not None:
+                    self._finish_compute_progress(token=progress_token)
         # SpanSelector intentionally not enabled — drag-to-select on the
         # chart face was retired (2026-05-27) to prevent accidental triggers.
         # If you need a per-range export tool, re-enable explicitly behind a

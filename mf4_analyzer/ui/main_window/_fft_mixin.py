@@ -259,8 +259,12 @@ class FFTMixin:
                 result = cache.get(key)
                 if result is None:
                     try:
-                        result = self._fft_compute_arrays(
-                            sig, fs, effective_params)
+                        progress_token = self._begin_compute_progress("FFT 计算中")
+                        try:
+                            result = self._fft_compute_arrays(
+                                sig, fs, effective_params)
+                        finally:
+                            self._finish_compute_progress(token=progress_token)
                     except Exception as e:
                         outcome.failed += 1
                         QMessageBox.critical(self, 'FFT错误', str(e))
@@ -322,6 +326,8 @@ class FFTMixin:
         nfft = fft_params['nfft']
         overlap = fft_params['overlap']
 
+        progress_token = self._begin_compute_progress("FFT 计算中")
+        error = None
         try:
             self.statusBar.showMessage('计算FFT...');
             QApplication.processEvents()
@@ -384,4 +390,8 @@ class FFTMixin:
             self.statusBar.showMessage(f'FFT峰值: {freq[pi]:.2f} Hz ({amp[pi]:.4f})')
             self.toast(f"FFT 完成 · 峰值 {freq[pi]:.2f} Hz", "success")
         except Exception as e:
-            QMessageBox.critical(self, 'FFT错误', str(e))
+            error = e
+        finally:
+            self._finish_compute_progress(token=progress_token)
+        if error is not None:
+            QMessageBox.critical(self, 'FFT错误', str(error))
