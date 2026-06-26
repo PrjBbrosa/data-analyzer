@@ -18,6 +18,35 @@ def _make_file(tmp_path, fs=1024.0):
     return FileData(path, df, list(df.columns), {}, idx=0)
 
 
+def test_batch_supported_methods_include_time():
+    assert "time" in BatchRunner.SUPPORTED_METHODS
+
+
+def test_batch_time_dataframe_exports_original_series(tmp_path):
+    t = np.arange(5, dtype=float) / 10.0
+    df = pd.DataFrame({
+        "Time": t,
+        "sig": np.array([0.0, 1.0, 0.0, -1.0, 0.0]),
+    })
+    fd = FileData(tmp_path / "x.csv", df, list(df.columns), {}, idx=0, fs=10.0)
+    preset = AnalysisPreset.from_current_single(
+        name="time",
+        method="time",
+        signal=(0, "sig"),
+        params={},
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    out = pd.read_csv(result.items[0].data_path)
+    assert list(out.columns) == ["time_s", "series", "value"]
+    assert out["series"].tolist() == ["original"] * 5
+    np.testing.assert_allclose(out["time_s"].to_numpy(), t)
+    np.testing.assert_allclose(out["value"].to_numpy(), df["sig"].to_numpy())
+
+
 def test_current_single_fft_preset_exports_data(tmp_path):
     fd = _make_file(tmp_path)
     preset = AnalysisPreset.from_current_single(
@@ -510,7 +539,7 @@ def test_supported_methods_excludes_removed_order_rpm_and_order_track():
     ``signal-processing/2026-04-27-plan-verbatim-source-must-reconcile-with-recent-removals.md``).
     """
     assert BatchRunner.SUPPORTED_METHODS == {
-        "fft", "order_time", "fft_time",
+        "time", "fft", "order_time", "fft_time",
     }
     assert "order_rpm" not in BatchRunner.SUPPORTED_METHODS
     assert "order_track" not in BatchRunner.SUPPORTED_METHODS

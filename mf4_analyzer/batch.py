@@ -166,7 +166,7 @@ def _default_loader(path):
 
 
 class BatchRunner:
-    SUPPORTED_METHODS = {'fft', 'order_time', 'fft_time'}
+    SUPPORTED_METHODS = {'time', 'fft', 'order_time', 'fft_time'}
 
     def __init__(self, files, loader: Callable | None = None):
         self.files = files
@@ -461,7 +461,12 @@ class BatchRunner:
 
         spectro = None
         fft_df = None
-        if method == 'fft':
+        time_df = None
+        if method == 'time':
+            sig, time, _ = self._apply_time_range(sig, time, preset.params)
+            time_df = self._compute_time_dataframe(sig, time, fs, preset.params)
+            image_payload = ('time', time_df)
+        elif method == 'fft':
             sig, time, _ = self._apply_time_range(sig, time, preset.params)
             fft_df = self._compute_fft_dataframe(sig, fs, preset.params)
             image_payload = ('fft', fft_df)
@@ -485,7 +490,9 @@ class BatchRunner:
         if preset.outputs.export_data:
             # Build long-table dataframe only when the caller needs it (export_data=True).
             # Image-only export skips this allocation entirely (lesson 2026-04-26).
-            if fft_df is not None:
+            if time_df is not None:
+                export_df = time_df
+            elif fft_df is not None:
                 export_df = fft_df
             else:
                 export_df = spectro.to_long_dataframe()
@@ -569,6 +576,26 @@ class BatchRunner:
         if not (np.isfinite(suggested) and suggested > 0):
             suggested = fs
         return np.arange(len(time_arr), dtype=float) / float(suggested), float(suggested)
+
+    @staticmethod
+    def _time_axis_or_fallback(time, fs, n_samples):
+        if time is not None:
+            arr = np.asarray(time, dtype=float)
+            if arr.size == int(n_samples):
+                return arr
+        fs = float(fs)
+        if not np.isfinite(fs) or fs <= 0:
+            raise ValueError("缺少有效采样率")
+        return np.arange(int(n_samples), dtype=float) / fs
+
+    @classmethod
+    def _compute_time_dataframe(cls, sig, time, fs, params):
+        x = cls._time_axis_or_fallback(time, fs, len(sig))
+        return pd.DataFrame({
+            "time_s": x,
+            "series": ["original"] * len(sig),
+            "value": np.asarray(sig, dtype=float),
+        })
 
     @staticmethod
     def _compute_fft_dataframe(sig, fs, params):
