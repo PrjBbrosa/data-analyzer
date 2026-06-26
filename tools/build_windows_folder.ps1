@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "7.1",
+    [string]$Version = "7.2",
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
@@ -51,7 +51,7 @@ $SpecDir = Join-Path $RepoRoot "build\spec"
 $VendorPyxcpDir = Join-Path $WorkDir "_vendor_pyxcp"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
-# Default output: dist\TraceLab7.1\TraceLab7.1.exe (override with -Version or -AppName)
+# Default output: dist\TraceLab7.2\TraceLab7.2.exe (override with -Version or -AppName)
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeHookPyxcp)) {
     if (-not (Test-Path $RequiredPath)) {
