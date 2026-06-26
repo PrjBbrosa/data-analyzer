@@ -238,6 +238,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
         self._last_xlim = None
         self._last_yrange = None
         self._mouse_mode_controller = None
+        self._copy_image_handler = None
         # Replot callbacks: the card registers the toolbar's
         # apply_current_mouse_mode + rebind_history_capture here (chart_stack
         # gates registration on register_replot_callback being present), and
@@ -514,6 +515,9 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
     def register_mouse_mode_controller(self, controller) -> None:
         self._mouse_mode_controller = controller
 
+    def register_copy_image_handler(self, handler) -> None:
+        self._copy_image_handler = handler
+
     def register_replot_callback(self, cb) -> None:
         """Register a callback fired after every chart rebuild.
 
@@ -593,6 +597,7 @@ class PgLineCanvas(_StackedSplitMixin, QWidget):
             # Per-viewbox: fit Y on whichever plot (amp / time preview) was
             # right-clicked — matches the time-domain 「Y 轴自适应」 entry.
             y_autofit_handler=lambda: self._fit_y_to_visible_x(plot),
+            copy_image_handler=self._copy_image_handler,
             allow_y_grid=True,
             # Plot Options hidden for now in the fft section (per request).
             # Default is already False; set explicitly so the intentional

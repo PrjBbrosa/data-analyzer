@@ -3487,3 +3487,20 @@ def test_plot_result_matrix_invariant_across_window_rerenders(qapp):
     )
 
     c.deleteLater()
+
+
+def test_heatmap_context_menu_custom_slot_yfit_disabled(canvas, monkeypatch):
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QToolButton, QWidget
+    settings = QSettings("MF4AnalyzerTest", "HeatmapCustomSlot")
+    settings.clear()
+    canvas.register_copy_image_handler(lambda: None)
+    menu = _open_context_menu(canvas._plot.vb, monkeypatch)
+    panel = _inline_panel(menu)
+    custom = panel.findChild(QWidget, "pgContextCustomActionButton")
+    custom.findChild(QToolButton, "pgContextCustomActionCaret").click()
+    # list host parents to the panel after expand; query items via the panel.
+    # copy usable (handler injected); y_fit disabled (heatmap passes y_autofit_handler=None)
+    assert panel.findChild(QToolButton, "pgContextActionItem_copy_image").isEnabled()
+    assert not panel.findChild(QToolButton, "pgContextActionItem_y_fit").isEnabled()
+    settings.clear()

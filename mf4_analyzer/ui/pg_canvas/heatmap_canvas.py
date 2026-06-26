@@ -806,6 +806,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._empty_hint_text = ''
         self._empty_hint_item = None
         self._mouse_mode_controller = None
+        self._copy_image_handler = None
         self._bottom_tick_target = None
         self._bottom_tick_density = None
         self._slice_aa_on = True
@@ -1355,6 +1356,9 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def register_mouse_mode_controller(self, controller) -> None:
         self._mouse_mode_controller = controller
 
+    def register_copy_image_handler(self, handler) -> None:
+        self._copy_image_handler = handler
+
     def _plot_item_for_view_box(self, view_box):
         for plot in (self._plot, self._slice_plot):
             if plot is not None and plot.vb is view_box:
@@ -1368,6 +1372,7 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
             self._mouse_mode_controller,
             view_all_handler=self.reset_view_to_data_extents,
             y_autofit_handler=None,
+            copy_image_handler=self._copy_image_handler,
             allow_y_grid=True,
             # Plot Options hidden for now in the fft_time / order sections
             # (per request). Default is already False; set explicitly so the

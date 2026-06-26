@@ -2368,3 +2368,19 @@ def test_time_preview_aa_gate_defends_against_baddata(canvas):
     canvas._time_curves = [_FakeCurve(1000), _Boom()]
     # Should not raise; conservative fallback returns the cached value.
     assert canvas._time_preview_aa_allowed() in (True, False)
+
+
+def test_fft_line_context_menu_has_custom_action_slot(canvas, monkeypatch):
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QToolButton, QWidget
+    settings = QSettings("MF4AnalyzerTest", "LineCustomSlot")
+    settings.clear()
+    canvas.register_copy_image_handler(lambda: None)
+    menu = _open_context_menu(canvas._plot_time.vb, monkeypatch)
+    panel = _inline_panel(menu)
+    custom = panel.findChild(QWidget, "pgContextCustomActionButton")
+    assert custom is not None
+    assert custom.current_action_id() == "copy_image"
+    main = custom.findChild(QToolButton, "pgContextCustomActionMain")
+    assert main.isEnabled()  # copy handler injected -> usable
+    settings.clear()
