@@ -32,6 +32,7 @@ from ....io.file_data import _TIME_NAMES
 from ....io.loader import unique_mdf_channel_locations
 from ....ui_kit.menus import apply_rounded_menu_chrome
 from ...widgets.compact_spinbox import CompactDoubleSpinBox
+from .filter_panel import BatchFilterPanel
 from .signal_picker import SignalPickerPopup
 
 
@@ -504,6 +505,9 @@ class InputPanel(QWidget):
         self._time_edit = QLineEdit(form_host)
         self._time_edit.setPlaceholderText('留空=全段；"a,b" 表示 [a,b]s')
         form.addRow("时间范围", self._time_edit)
+
+        self._filter_panel = BatchFilterPanel(form_host)
+        form.addRow("预处理", self._filter_panel)
         outer.addWidget(form_host)
 
         # Wiring
@@ -514,6 +518,7 @@ class InputPanel(QWidget):
         self._rpm_unit_combo.currentTextChanged.connect(self._on_rpm_unit_changed)
         self._rpm_factor_spin.valueChanged.connect(self._on_rpm_factor_value_changed)
         self._time_edit.textChanged.connect(lambda *_: self.changed.emit())
+        self._filter_panel.changed.connect(lambda *_: self.changed.emit())
 
         # Seed picker / RPM with initial empty intersection.
         self._refresh_signal_universe()
@@ -579,6 +584,7 @@ class InputPanel(QWidget):
         reparented to ``self`` so they survive the layout round-trip
         and can be re-inserted later.
         """
+        self._filter_panel.set_method(method)
         visible = method in _RPM_USING_METHODS
         if visible == self._rpm_row_visible:
             return
@@ -652,6 +658,9 @@ class InputPanel(QWidget):
         """
         return {"rpm_factor": float(self._rpm_factor_spin.value())}
 
+    def filter_params(self) -> dict:
+        return self._filter_panel.filter_params()
+
     def time_range(self) -> tuple[float, float] | None:
         text = self._time_edit.text().strip()
         if not text:
@@ -703,6 +712,9 @@ class InputPanel(QWidget):
         # bidirectional logic. Do NOT block signals — we want the
         # combo to follow.
         self._rpm_factor_spin.setValue(v)
+
+    def apply_filter_params(self, params: dict | None) -> None:
+        self._filter_panel.apply_filter_params(params)
 
     def apply_time_range(self, rng: tuple[float, float] | None) -> None:
         if rng is None:

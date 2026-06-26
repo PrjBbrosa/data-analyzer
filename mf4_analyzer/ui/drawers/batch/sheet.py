@@ -369,6 +369,7 @@ class BatchSheet(QDialog):
             # Restore the InputPanel-owned rpm_factor field (Step 5.4).
             if "rpm_factor" in preset.params:
                 self._input_panel.apply_rpm_factor(preset.params["rpm_factor"])
+            self._input_panel.apply_filter_params(preset.params.get("filter"))
             self._output_panel.apply_axis_params(dict(preset.params))
             self.apply_rpm_channel(preset.rpm_channel or "")
         else:
@@ -380,6 +381,7 @@ class BatchSheet(QDialog):
             # Restore the InputPanel-owned rpm_factor field (Step 5.4).
             if "rpm_factor" in preset.params:
                 self._input_panel.apply_rpm_factor(preset.params["rpm_factor"])
+            self._input_panel.apply_filter_params(preset.params.get("filter"))
             self._output_panel.apply_axis_params(dict(preset.params))
             self.apply_rpm_channel(preset.rpm_channel or "")
 
@@ -396,7 +398,7 @@ class BatchSheet(QDialog):
             set(_METHOD_FIELDS.get(method_key, ()))
             | set(self._output_panel.axis_params().keys())
             | set(self._input_panel.rpm_params().keys())
-            | {"time_range"}
+            | {"filter", "time_range"}
         )
 
     def _collect_passthrough_params(self, params: dict, method: str) -> dict:
@@ -739,6 +741,7 @@ class BatchSheet(QDialog):
         # InputPanel-owned rpm_factor (Wave 2 Task 5) — DynamicParamForm no
         # longer carries it, so we merge from the InputPanel here.
         params.update(self._input_panel.rpm_params())
+        params["filter"] = self._input_panel.filter_params()
         rng = self.time_range()
         if rng is not None:
             params["time_range"] = rng

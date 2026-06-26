@@ -553,3 +553,45 @@ def test_picker_excludes_time_column(qtbot, tmp_path):
     visible = sheet._input_panel._signal_picker.visible_items()
     assert "vibration_x" in visible
     assert "Time" not in visible and "time" not in visible
+
+
+def test_batch_input_filter_params_round_trip(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel(None, files={})
+    qtbot.addWidget(panel)
+    params = {
+        "enabled": True,
+        "spec": {
+            "kind": "band",
+            "order": 6,
+            "cutoff_lo": 20.0,
+            "cutoff_hi": 80.0,
+        },
+        "show_original": False,
+        "show_filtered": True,
+    }
+
+    panel.apply_filter_params(params)
+
+    got = panel.filter_params()
+    assert got["enabled"] is True
+    assert got["spec"]["kind"] == "band"
+    assert got["spec"]["order"] == 6
+    assert got["spec"]["cutoff_lo"] == 20.0
+    assert got["spec"]["cutoff_hi"] == 80.0
+    assert got["show_original"] is False
+    assert got["show_filtered"] is True
+
+
+def test_batch_filter_time_output_toggles_only_visible_for_time(qtbot):
+    from mf4_analyzer.ui.drawers.batch.input_panel import InputPanel
+
+    panel = InputPanel(None, files={})
+    qtbot.addWidget(panel)
+
+    panel.set_method("fft")
+    assert panel._filter_panel.time_output_options_visible() is False
+
+    panel.set_method("time")
+    assert panel._filter_panel.time_output_options_visible() is True

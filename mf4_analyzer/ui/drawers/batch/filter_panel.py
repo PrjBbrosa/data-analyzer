@@ -1,0 +1,192 @@
+"""Filter/preprocessing controls for the batch dialog."""
+from __future__ import annotations
+
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import (
+    QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+)
+
+from ....signal.filters import FilterSpec
+from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
+
+
+_KIND_LABEL_TO_KEY = {
+    "低通": "low",
+    "高通": "high",
+    "带通": "band",
+    "带阻": "bandstop",
+}
+_KIND_KEY_TO_LABEL = {value: key for key, value in _KIND_LABEL_TO_KEY.items()}
+
+
+def _field(widget: QWidget, max_width: int | None = None) -> QWidget:
+    host = QWidget()
+    lay = QHBoxLayout(host)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(6)
+    if max_width is not None:
+        widget.setMaximumWidth(max_width)
+    lay.addWidget(widget)
+    lay.addStretch(1)
+    return host
+
+
+class BatchFilterPanel(QWidget):
+    """Small filter editor shared by all batch analysis methods."""
+
+    changed = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("BatchFilterPanel")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(6)
+
+        self.chk_enabled = QCheckBox("启用滤波", self)
+        self.chk_enabled.setChecked(False)
+        root.addWidget(self.chk_enabled)
+
+        self._settings = QWidget(self)
+        form = QFormLayout(self._settings)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(6)
+        form.setVerticalSpacing(4)
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.combo_kind = QComboBox(self._settings)
+        self.combo_kind.addItems(tuple(_KIND_LABEL_TO_KEY))
+        form.addRow("类型", _field(self.combo_kind, 120))
+
+        self.spin_cutoff = no_buttons(CompactDoubleSpinBox(self._settings))
+        self.spin_cutoff.setDecimals(1)
+        self.spin_cutoff.setRange(0.0, 1e6)
+        self.spin_cutoff.setSuffix(" Hz")
+        self.spin_cutoff.setValue(100.0)
+        self._single_label = QLabel("截止", self._settings)
+        self._single_row = _field(self.spin_cutoff, 120)
+        form.addRow(self._single_label, self._single_row)
+
+        self.spin_cutoff_lo = no_buttons(CompactDoubleSpinBox(self._settings))
+        self.spin_cutoff_lo.setDecimals(1)
+        self.spin_cutoff_lo.setRange(0.0, 1e6)
+        self.spin_cutoff_lo.setSuffix(" Hz")
+        self.spin_cutoff_lo.setValue(100.0)
+        self.spin_cutoff_hi = no_buttons(CompactDoubleSpinBox(self._settings))
+        self.spin_cutoff_hi.setDecimals(1)
+        self.spin_cutoff_hi.setRange(0.0, 1e6)
+        self.spin_cutoff_hi.setSuffix(" Hz")
+        self.spin_cutoff_hi.setValue(2000.0)
+        self._band_label = QLabel("频段", self._settings)
+        self._band_row = QWidget(self._settings)
+        band_lay = QHBoxLayout(self._band_row)
+        band_lay.setContentsMargins(0, 0, 0, 0)
+        band_lay.setSpacing(6)
+        for spin in (self.spin_cutoff_lo, self.spin_cutoff_hi):
+            spin.setMaximumWidth(112)
+            band_lay.addWidget(spin)
+        band_lay.addStretch(1)
+        form.addRow(self._band_label, self._band_row)
+
+        self.combo_order = QComboBox(self._settings)
+        self.combo_order.addItems(("2", "4", "6", "8"))
+        self.combo_order.setCurrentText("4")
+        form.addRow("阶数", _field(self.combo_order, 120))
+
+        root.addWidget(self._settings)
+
+        self._time_options = QWidget(self)
+        time_lay = QHBoxLayout(self._time_options)
+        time_lay.setContentsMargins(0, 0, 0, 0)
+        time_lay.setSpacing(10)
+        self.chk_show_original = QCheckBox("导出原始", self._time_options)
+        self.chk_show_original.setChecked(True)
+        self.chk_show_filtered = QCheckBox("导出滤波后", self._time_options)
+        self.chk_show_filtered.setChecked(True)
+        time_lay.addWidget(self.chk_show_original)
+        time_lay.addWidget(self.chk_show_filtered)
+        time_lay.addStretch(1)
+        root.addWidget(self._time_options)
+
+        self._sync_enabled()
+        self._sync_kind_rows()
+        self.set_method("fft")
+
+        self.chk_enabled.toggled.connect(self._sync_enabled)
+        self.chk_enabled.toggled.connect(lambda *_: self.changed.emit())
+        self.combo_kind.currentTextChanged.connect(self._sync_kind_rows)
+        self.combo_kind.currentTextChanged.connect(lambda *_: self.changed.emit())
+        self.combo_order.currentTextChanged.connect(lambda *_: self.changed.emit())
+        for spin in (self.spin_cutoff, self.spin_cutoff_lo, self.spin_cutoff_hi):
+            spin.valueChanged.connect(lambda *_: self.changed.emit())
+        for chk in (self.chk_show_original, self.chk_show_filtered):
+            chk.toggled.connect(lambda *_: self.changed.emit())
+
+    def _sync_enabled(self, *_args) -> None:
+        self._settings.setEnabled(self.chk_enabled.isChecked())
+
+    def _sync_kind_rows(self, *_args) -> None:
+        is_band = self._kind_key() in {"band", "bandstop"}
+        self._single_label.setVisible(not is_band)
+        self._single_row.setVisible(not is_band)
+        self.spin_cutoff.setVisible(not is_band)
+        self._band_label.setVisible(is_band)
+        self._band_row.setVisible(is_band)
+        self.spin_cutoff_lo.setVisible(is_band)
+        self.spin_cutoff_hi.setVisible(is_band)
+
+    def _kind_key(self) -> str:
+        return _KIND_LABEL_TO_KEY.get(self.combo_kind.currentText(), "low")
+
+    def set_method(self, method: str) -> None:
+        self._time_options.setVisible(str(method) == "time")
+
+    def time_output_options_visible(self) -> bool:
+        return not self._time_options.isHidden()
+
+    def filter_params(self) -> dict:
+        return {
+            "enabled": self.chk_enabled.isChecked(),
+            "spec": self.filter_spec().to_dict(),
+            "show_original": self.chk_show_original.isChecked(),
+            "show_filtered": self.chk_show_filtered.isChecked(),
+        }
+
+    def apply_filter_params(self, params: dict | None) -> None:
+        data = dict(params or {})
+        spec_data = data.get("spec")
+        if spec_data is None:
+            spec = FilterSpec("low", order=4, cutoff=100.0)
+        else:
+            spec = FilterSpec.from_dict(spec_data)
+        self.chk_enabled.setChecked(bool(data.get("enabled", False)))
+        self.apply_filter_spec(spec)
+        self.chk_show_original.setChecked(bool(data.get("show_original", True)))
+        self.chk_show_filtered.setChecked(bool(data.get("show_filtered", True)))
+
+    def filter_spec(self) -> FilterSpec:
+        kind = self._kind_key()
+        order = int(self.combo_order.currentText())
+        if kind in {"band", "bandstop"}:
+            return FilterSpec(
+                kind=kind,
+                order=order,
+                cutoff_lo=float(self.spin_cutoff_lo.value()),
+                cutoff_hi=float(self.spin_cutoff_hi.value()),
+            )
+        return FilterSpec(
+            kind=kind,
+            order=order,
+            cutoff=float(self.spin_cutoff.value()),
+        )
+
+    def apply_filter_spec(self, spec: FilterSpec) -> None:
+        label = _KIND_KEY_TO_LABEL.get(spec.kind, "低通")
+        self.combo_kind.setCurrentText(label)
+        self.combo_order.setCurrentText(str(int(spec.order)))
+        if spec.kind in {"band", "bandstop"}:
+            self.spin_cutoff_lo.setValue(float(spec.cutoff_lo))
+            self.spin_cutoff_hi.setValue(float(spec.cutoff_hi))
+        else:
+            self.spin_cutoff.setValue(float(spec.cutoff))
