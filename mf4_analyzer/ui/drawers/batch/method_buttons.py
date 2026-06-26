@@ -1,6 +1,6 @@
 """Method-selector button group + dynamic per-method parameter form.
 
-Exposes exactly THREE method buttons — ``fft``, ``fft_time``,
+Exposes exactly FOUR method buttons — ``time``, ``fft``, ``fft_time``,
 ``order_time``. ``order_rpm`` was removed by upstream commit ``cfb301b``
 and ``order_track`` was removed 2026-04-28; ``batch.BatchRunner.SUPPORTED_METHODS``
 no longer accepts either, and ``fft_time`` was added in Wave 3a so the UI
@@ -25,9 +25,10 @@ from ...widgets.compact_spinbox import CompactDoubleSpinBox, no_buttons
 
 
 _METHODS: tuple[tuple[str, str], ...] = (
+    ("time", "时域"),
     ("fft", "FFT"),
     ("fft_time", "FFT vs Time"),
-    ("order_time", "order_time"),
+    ("order_time", "阶次"),
 )
 
 
@@ -82,6 +83,7 @@ _WEIGHTINGS: tuple[str, ...] = ("None", "A")
 # Per-method visible field set, taken verbatim from spec §3.3 minus the
 # removed ``order_rpm`` column.
 _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
+    "time": (),
     "fft": ("window", "nfft", "weighting"),
     "fft_time": ("window", "nfft", "overlap", "remove_mean", "weighting"),
     "order_time": (

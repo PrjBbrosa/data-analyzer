@@ -31,6 +31,14 @@ _ORDER_TIME_METHOD = "order_time"
 _BATCH_AXIS_LABEL_W = 72
 
 _AXIS_CONTEXTS = {
+    "time": {
+        "x_label": "时间 (X):",
+        "x_unit": "s",
+        "x_summary": "全时段",
+        "y_label": "幅值 (Y):",
+        "y_unit": "",
+        "y_summary": "自动范围",
+    },
     "fft": {
         "x_label": "频率 (X):",
         "x_unit": "Hz",

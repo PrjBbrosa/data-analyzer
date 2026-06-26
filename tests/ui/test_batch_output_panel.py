@@ -77,6 +77,19 @@ def test_batch_output_panel_order_time_axis_labels_match_inspector(qtbot):
     assert y_parts["summary"].text() == "0 → 最大阶次"
 
 
+def test_batch_output_panel_time_axis_labels(qtbot):
+    panel = _make_panel(qtbot)
+
+    panel.apply_method_defaults("time")
+
+    x_parts = panel._axis_row_parts["x"]
+    y_parts = panel._axis_row_parts["y"]
+    assert x_parts["label"].text() == "时间 (X):"
+    assert x_parts["summary"].text() == "全时段"
+    assert y_parts["label"].text() == "幅值 (Y):"
+    assert y_parts["summary"].text() == "自动范围"
+
+
 def test_batch_output_panel_unit_toggle_resets_z_range_db_to_linear(qtbot):
     """dB → Linear: floor/ceiling reset to (0, 1), z_auto re-enabled,
     spinboxes disabled, ``changed`` emitted exactly once.

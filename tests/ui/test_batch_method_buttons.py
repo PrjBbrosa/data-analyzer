@@ -136,3 +136,25 @@ def test_batch_sheet_pipeline_summary_uses_friendly_fft_time_label(qtbot):
     summary = sheet.strip.cards[1].summary_label.text()
     assert "FFT vs Time" in summary
     assert "fft_time" not in summary  # raw key must NOT leak through
+
+
+def test_batch_method_buttons_include_time_and_user_labels(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import MethodButtonGroup
+
+    group = MethodButtonGroup()
+    qtbot.addWidget(group)
+
+    assert set(group._buttons) == {"time", "fft", "fft_time", "order_time"}
+    assert group._buttons["time"].text() == "时域"
+    assert group._buttons["order_time"].text() == "阶次"
+
+
+def test_batch_time_method_has_no_analysis_fields(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+
+    form.set_method("time")
+
+    assert form.visible_field_names() == set()

@@ -35,9 +35,10 @@ from .task_list import TaskListWidget
 
 
 _METHOD_LABELS: dict[str, str] = {
+    "time": "时域",
     "fft": "FFT",
     "fft_time": "FFT vs Time",
-    "order_time": "order_time",
+    "order_time": "阶次",
 }
 
 _PASSTHROUGH_PARAMS_BY_METHOD: dict[str, frozenset[str]] = {
