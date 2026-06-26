@@ -2228,7 +2228,12 @@ class MainWindow(
             signal = self.inspector.fft_ctx.current_signal()
             if signal is None:
                 return None
-            params = self.inspector.fft_ctx.get_params()
+            params_getter = getattr(
+                self.inspector.fft_ctx,
+                'current_params',
+                self.inspector.fft_ctx.get_params,
+            )
+            params = params_getter()
             params['fs'] = self.inspector.fft_ctx.fs()
             if self.inspector.top.range_enabled():
                 params['time_range'] = self.inspector.top.range_values()

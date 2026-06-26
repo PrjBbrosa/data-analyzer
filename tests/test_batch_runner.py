@@ -161,6 +161,23 @@ def test_batch_heatmap_image_can_render_linear_z_scale(tmp_path):
     assert info["colorbar_label"] == "Amplitude"
 
 
+def test_batch_fft_export_scene_renders_db_display_only():
+    """FFT batch image should honor the same display-only dB reference as UI."""
+
+    df = pd.DataFrame({
+        "frequency_hz": [10.0, 20.0],
+        "amplitude": [1.0, 10.0],
+    })
+
+    _widget, info = BatchRunner._build_export_scene(
+        ("fft", df),
+        {"amp_y": "dB", "db_reference": 1.0},
+    )
+
+    np.testing.assert_allclose(info["line_y"], np.array([0.0, 20.0]), atol=1e-6)
+    assert info["y_label"] == "Amplitude (dB)"
+
+
 def test_write_image_exports_nonempty_png_with_fixed_size(tmp_path):
     from PyQt5.QtGui import QImage
 
@@ -737,6 +754,109 @@ def test_legacy_preset_with_algorithm_silently_ignored(tmp_path):
     assert preset.params.get('z_auto') is False
     assert preset.params.get('z_floor') == -30.0
     assert preset.params.get('z_ceiling') == 0.0
+
+
+def test_batch_fft_dataframe_uses_linear_average_mode(monkeypatch):
+    from mf4_analyzer.signal.fft import FFTAnalyzer
+
+    captured = {}
+
+    def fake_averaged(sig, fs, win, nfft, overlap, weighting="None"):
+        captured.update(
+            fs=fs, win=win, nfft=nfft, overlap=overlap, weighting=weighting,
+        )
+        return np.array([0.0, 1.0]), np.array([2.0, 3.0]), np.array([4.0, 9.0])
+
+    monkeypatch.setattr(
+        FFTAnalyzer, "compute_averaged_fft", staticmethod(fake_averaged)
+    )
+
+    df = BatchRunner._compute_fft_dataframe(
+        np.ones(4096),
+        1000.0,
+        {
+            "window": "blackman",
+            "nfft": 512,
+            "avg_mode": "线性平均",
+            "avg_overlap": 75,
+            "weighting": "A",
+        },
+    )
+
+    assert captured == {
+        "fs": 1000.0,
+        "win": "blackman",
+        "nfft": 512,
+        "overlap": 0.75,
+        "weighting": "A",
+    }
+    np.testing.assert_allclose(df["amplitude"].to_numpy(), np.array([2.0, 3.0]))
+
+
+def test_batch_fft_dataframe_uses_peak_hold_mode(monkeypatch):
+    from mf4_analyzer.signal.fft import FFTAnalyzer
+
+    captured = {}
+
+    def fake_peak(sig, fs, *, win, nfft, overlap, weighting="None"):
+        captured.update(
+            fs=fs, win=win, nfft=nfft, overlap=overlap, weighting=weighting,
+        )
+        return np.array([0.0, 1.0]), np.array([5.0, 6.0])
+
+    monkeypatch.setattr(
+        FFTAnalyzer, "compute_peak_hold_fft", staticmethod(fake_peak)
+    )
+
+    df = BatchRunner._compute_fft_dataframe(
+        np.ones(4096),
+        1000.0,
+        {
+            "window": "hamming",
+            "nfft": 1024,
+            "avg_mode": "峰值保持",
+            "avg_overlap": 25,
+            "weighting": "A",
+        },
+    )
+
+    assert captured == {
+        "fs": 1000.0,
+        "win": "hamming",
+        "nfft": 1024,
+        "overlap": 0.25,
+        "weighting": "A",
+    }
+    np.testing.assert_allclose(df["amplitude"].to_numpy(), np.array([5.0, 6.0]))
+
+
+def test_batch_fft_dataframe_resolves_auto_nfft_for_average_mode(monkeypatch):
+    from mf4_analyzer.signal.fft import FFTAnalyzer
+
+    captured = {}
+
+    def fake_averaged(sig, fs, win, nfft, overlap, weighting="None"):
+        captured["nfft"] = nfft
+        return np.array([0.0]), np.array([1.0]), np.array([1.0])
+
+    monkeypatch.setattr(
+        FFTAnalyzer, "compute_averaged_fft", staticmethod(fake_averaged)
+    )
+
+    BatchRunner._compute_fft_dataframe(
+        np.ones(5002),
+        96.0,
+        {
+            "window": "hanning",
+            "nfft": None,
+            "nfft_mode": "auto",
+            "t_win_s": 1.5,
+            "avg_mode": "线性平均",
+            "avg_overlap": 75,
+        },
+    )
+
+    assert captured["nfft"] == 256
 
 
 # ---------------------------------------------------------------------------

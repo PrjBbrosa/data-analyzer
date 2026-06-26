@@ -19,6 +19,7 @@ import threading
 import numpy as np
 import pandas as pd
 
+from .signal import resolve_nfft
 from .signal.fft import FFTAnalyzer
 
 
@@ -571,21 +572,58 @@ class BatchRunner:
 
     @staticmethod
     def _compute_fft_dataframe(sig, fs, params):
+        nfft = BatchRunner._resolve_fft_nfft(len(sig), fs, params)
+        win = params.get('window', params.get('win', 'hanning'))
+        weighting = str(params.get('weighting', 'None'))
+        avg_mode = str(params.get('avg_mode', '单帧'))
+        avg_overlap = BatchRunner._avg_overlap_fraction(params)
+        if avg_mode == '线性平均':
+            freq, amp, _psd = FFTAnalyzer.compute_averaged_fft(
+                sig, fs, win, int(nfft), avg_overlap, weighting=weighting,
+            )
+            return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
+        if avg_mode == '峰值保持':
+            freq, amp = FFTAnalyzer.compute_peak_hold_fft(
+                sig, fs, win=win, nfft=int(nfft), overlap=avg_overlap,
+                weighting=weighting,
+            )
+            return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
+        freq, amp = FFTAnalyzer.compute_fft(
+            sig,
+            fs,
+            win=win,
+            nfft=nfft,
+            weighting=weighting,
+        )
+        return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
+
+    @staticmethod
+    def _avg_overlap_fraction(params):
+        try:
+            value = float(params.get('avg_overlap', 50))
+        except (TypeError, ValueError):
+            value = 50.0
+        if value > 1.0:
+            value /= 100.0
+        return max(0.0, min(0.95, value))
+
+    @staticmethod
+    def _resolve_fft_nfft(n_samples, fs, params):
         nfft_raw = params.get('nfft')
+        avg_mode = str(params.get('avg_mode', '单帧'))
         if isinstance(nfft_raw, str):
             nfft = None if nfft_raw.strip() in ('', '自动', 'auto') else int(nfft_raw)
         elif nfft_raw is None or nfft_raw <= 0:
             nfft = None
         else:
             nfft = int(nfft_raw)
-        freq, amp = FFTAnalyzer.compute_fft(
-            sig,
-            fs,
-            win=params.get('window', params.get('win', 'hanning')),
-            nfft=nfft,
-            weighting=str(params.get('weighting', 'None')),
-        )
-        return pd.DataFrame({'frequency_hz': freq, 'amplitude': amp})
+        if nfft is None and avg_mode in {'线性平均', '峰值保持'}:
+            t_win_s = float(params.get('t_win_s', 1.5))
+            return int(resolve_nfft(
+                float(fs), int(n_samples), t_win_s,
+                BatchRunner._avg_overlap_fraction(params),
+            ))
+        return nfft
 
     @classmethod
     def _compute_order_time_spectro(cls, sig, rpm, time, fs, params) -> "_Spectro2D":
@@ -767,7 +805,8 @@ class BatchRunner:
         z_ceiling = float(params.get('z_ceiling', 0.0))
         default_amp_mode = 'amplitude_db' if kind == 'fft_time' else 'amplitude'
         amp_mode = str(params.get('amplitude_mode', default_amp_mode)).lower()
-        render_db = 'db' in amp_mode
+        amp_y = str(params.get('amp_y', '')).lower()
+        render_db = 'db' in amp_mode or amp_y == 'db'
         db_reference = float(params.get('db_reference', 1.0) or 1.0)
         if db_reference <= 0:
             db_reference = 1.0
@@ -793,15 +832,26 @@ class BatchRunner:
 
         if kind == 'fft':
             df = data
-            plot.plot(df['frequency_hz'].to_numpy(), df['amplitude'].to_numpy(), pen='w')
+            x = df['frequency_hz'].to_numpy()
+            y = df['amplitude'].to_numpy()
+            if render_db:
+                from .signal.spectrogram import SpectrogramAnalyzer as _SA
+
+                y = _SA.amplitude_to_db(y, reference=max(db_reference, 1e-12))
+                y_label = 'Amplitude (dB)'
+            else:
+                y_label = 'Amplitude'
+            plot.plot(x, y, pen='w')
             plot.setLabel('bottom', 'Frequency (Hz)')
-            plot.setLabel('left', 'Amplitude')
+            plot.setLabel('left', y_label)
             if not x_auto and x_max > x_min:
                 plot.setXRange(x_min, x_max, padding=0)
                 info["x_range"] = (x_min, x_max)
             if not y_auto and y_max > y_min:
                 plot.setYRange(y_min, y_max, padding=0)
                 info["y_range"] = (y_min, y_max)
+            info["line_y"] = y
+            info["y_label"] = y_label
             return widget, info
 
         matrix, x_extent, y_extent, x_label, y_label = BatchRunner._extract_matrix(data)

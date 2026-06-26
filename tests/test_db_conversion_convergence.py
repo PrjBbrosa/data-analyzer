@@ -160,6 +160,37 @@ class BatchWriteImageUsesHelperTests(unittest.TestCase):
                 "SpectrogramAnalyzer.amplitude_to_db; still using inline formula"
             )
 
+    def test_batch_write_image_fft_db_calls_helper(self):
+        """_write_image in fft+dB mode must call SpectrogramAnalyzer.amplitude_to_db."""
+        import tempfile, os
+        import pandas as pd
+        from mf4_analyzer.batch import BatchRunner
+        from mf4_analyzer.signal.spectrogram import SpectrogramAnalyzer
+
+        call_count = {'n': 0}
+        orig = SpectrogramAnalyzer.amplitude_to_db
+
+        def spy(amplitude, reference=1.0):
+            call_count['n'] += 1
+            return orig(amplitude, reference)
+
+        df = pd.DataFrame({
+            'frequency_hz': [10.0, 20.0],
+            'amplitude': [1.0, 10.0],
+        })
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, 'out.png')
+            with patch.object(SpectrogramAnalyzer, 'amplitude_to_db', spy):
+                BatchRunner._write_image(
+                    ('fft', df), out,
+                    params={'amp_y': 'dB', 'db_reference': 1.0},
+                )
+            self.assertGreater(
+                call_count['n'], 0,
+                "batch._write_image fft+dB path did not call "
+                "SpectrogramAnalyzer.amplitude_to_db; still using inline formula"
+            )
+
     def test_batch_write_image_order_time_db_calls_helper(self):
         """_write_image in order_time+dB mode must call SpectrogramAnalyzer.amplitude_to_db."""
         import tempfile, os

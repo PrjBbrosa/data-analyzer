@@ -125,6 +125,46 @@ def test_build_current_batch_preset_supports_fft_time(qtbot, monkeypatch):
     assert preset.params["time_range"] == (1.0, 2.5)
 
 
+def test_build_current_batch_preset_fft_uses_current_params(qtbot, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win.toolbar, "current_mode", lambda: "fft")
+    monkeypatch.setattr(
+        win.inspector.fft_ctx, "current_signal", lambda: ("f1", "sig")
+    )
+    monkeypatch.setattr(
+        win.inspector.fft_ctx,
+        "get_params",
+        lambda: (_ for _ in ()).throw(AssertionError("use current_params")),
+    )
+    monkeypatch.setattr(
+        win.inspector.fft_ctx,
+        "current_params",
+        lambda: {
+            "window": "flattop",
+            "nfft": 2048,
+            "avg_mode": "线性平均",
+            "avg_overlap": 75,
+            "amp_y": "dB",
+            "db_reference": 2.0,
+        },
+    )
+    monkeypatch.setattr(win.inspector.fft_ctx, "fs", lambda: 1000.0)
+    monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: False)
+
+    preset = win._build_current_batch_preset()
+
+    assert preset.method == "fft"
+    assert preset.signal == ("f1", "sig")
+    assert preset.params["avg_mode"] == "线性平均"
+    assert preset.params["avg_overlap"] == 75
+    assert preset.params["amp_y"] == "dB"
+    assert preset.params["db_reference"] == 2.0
+    assert preset.params["fs"] == 1000.0
+
+
 def test_apply_preset_marks_unavailable_signals(qtbot):
     """Imported preset whose target_signals are not in the file intersection
     must red-mark them and warn (spec §4.2 partial-missing rule)."""
