@@ -20,7 +20,7 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         "qtawesome",
         "asammdf",
         "MF4 Data Analyzer V1.py",
-        "TraceLab7.2",
+        "TraceLab7.3",
     ):
         assert token in text
 

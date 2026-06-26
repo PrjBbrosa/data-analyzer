@@ -1,7 +1,7 @@
 # GPU 加速「曲线消失」问题报告与处理
 
 日期：2026-06-24
-范围：时域图「GPU 加速」开关；TraceLab v7.2；macOS。
+范围：时域图「GPU 加速」开关；TraceLab v7.3；macOS。
 
 ## 1. 现象
 
