@@ -345,6 +345,10 @@ class FFTTimeMixin:
                 queue.append((pane_idx, fid, ch))
 
         if not queue:
+            self._fft_time_queue = []
+            self._fft_time_progress_token = None
+            self._fft_time_progress_total_jobs = 0
+            self._fft_time_progress_completed_jobs = 0
             if not any_source:
                 # No pane has a source selected → legacy single-source path
                 # so the standalone-signal UX + existing tests are unchanged.
@@ -355,6 +359,16 @@ class FFTTimeMixin:
 
         self._fft_time_queue = queue
         self._fft_time_outcome = outcome
+        n_jobs = len(self._fft_time_queue)
+        self._fft_time_progress_token = None
+        self._fft_time_progress_total_jobs = n_jobs
+        self._fft_time_progress_completed_jobs = 0
+        if n_jobs > 0:
+            self._fft_time_progress_token = self._begin_compute_progress(
+                "FFT-时间 1/%d" % n_jobs,
+                total=1000,
+                process_events=False,
+            )
         self._start_next_fft_time_job()
 
     def _do_fft_time_single(self, force=False):
@@ -453,15 +467,37 @@ class FFTTimeMixin:
                 pane_idx, fid, ch, time_range=time_range
             ):
                 return
+            self._advance_fft_time_progress_job()
         # Queue drained.
         self._finish_fft_time_outcome_feedback()
 
     def _finish_fft_time_outcome_feedback(self):
+        self._finish_fft_time_progress_if_active()
         outcome = getattr(self, '_fft_time_outcome', None)
         if outcome is None:
             return
         self._emit_compute_feedback(outcome, section_label="FFT-vs-Time")
         self._fft_time_outcome = None
+
+    def _finish_fft_time_progress_if_active(self):
+        token = getattr(self, '_fft_time_progress_token', None)
+        if token is None:
+            return
+        self._finish_compute_progress(token=token)
+        self._fft_time_progress_token = None
+
+    def _advance_fft_time_progress_job(self):
+        token = getattr(self, '_fft_time_progress_token', None)
+        if token is None:
+            return
+        total_jobs = getattr(self, '_fft_time_progress_total_jobs', 0)
+        if total_jobs <= 0:
+            return
+        completed = getattr(self, '_fft_time_progress_completed_jobs', 0)
+        self._fft_time_progress_completed_jobs = min(
+            completed + 1,
+            total_jobs,
+        )
 
     def _record_fft_time_skip(self, reason):
         outcome = getattr(self, '_fft_time_outcome', None)
@@ -580,7 +616,14 @@ class FFTTimeMixin:
         worker.failed.connect(thread.quit)
         worker.finished.connect(self._on_fft_time_finished)
         worker.failed.connect(self._on_fft_time_failed)
-        worker.progress.connect(self._on_fft_time_progress)
+        progress_token = getattr(self, '_fft_time_progress_token', None)
+        worker_progress_token = (
+            progress_token if progress_token is not None else object()
+        )
+        worker.progress.connect(
+            lambda current, total, token=worker_progress_token:
+                self._on_fft_time_progress(current, total, token=token)
+        )
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._on_fft_time_thread_done)
@@ -726,17 +769,25 @@ class FFTTimeMixin:
             self.toast(msg, "error")
         self.statusBar.showMessage(f"FFT vs Time 错误: {message}")
 
-    def _on_fft_time_progress(self, current, total):
-        """Optional per-frame progress hook.
-
-        Phase 1 has no progress dialog — this exists so future tasks
-        (T8 export, T9 progress bar) can subscribe without rewiring.
-        Signature mirrors the analyzer's ``progress_callback`` contract.
-        """
-        # Intentionally no UI updates in Phase 1. A status-bar update
-        # here would compete with ``正在计算…`` and the cursor readout,
-        # which is more user-visible noise than value.
-        pass
+    def _on_fft_time_progress(self, current, total, *, token=None):
+        """Map per-worker progress onto the whole queued FFT-vs-Time batch."""
+        active_token = getattr(self, '_fft_time_progress_token', None)
+        if active_token is None:
+            return
+        if token is not None and token is not active_token:
+            return
+        total_jobs = max(1, getattr(self, '_fft_time_progress_total_jobs', 0))
+        job_fraction = 0.0
+        if total > 0:
+            job_fraction = max(0.0, min(1.0, current / total))
+        completed = getattr(self, '_fft_time_progress_completed_jobs', 0)
+        overall = (completed + job_fraction) / total_jobs
+        value = int(round(overall * 1000))
+        job_index = min(completed + 1, total_jobs)
+        label = f"FFT-时间 {job_index}/{total_jobs}"
+        self._update_compute_progress(
+            value, 1000, label=label, token=active_token,
+        )
 
     def _on_fft_time_thread_done(self):
         """Worker thread emitted ``finished`` — clear refs, then pump the
@@ -753,6 +804,7 @@ class FFTTimeMixin:
         """
         self._fft_time_thread = None
         self._fft_time_worker = None
+        self._advance_fft_time_progress_job()
         if self._fft_time_queue:
             self._start_next_fft_time_job()
         else:
