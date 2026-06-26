@@ -407,6 +407,12 @@ class AnalysisMixin:
             'time_res': p.get('time_res'),
             'samples_per_rev': ctx.current_params().get('samples_per_rev'),
             'rpm_factor': p.get('rpm_factor'),
+            'rpm_mode': p.get('rpm_mode', 'channel'),
+            'manual_rpm': (
+                float(p.get('manual_rpm', 1000.0))
+                if p.get('rpm_mode', 'channel') == 'manual'
+                else None
+            ),
             'fs': p.get('fs'),
             'weighting': p.get('weighting', 'None'),
         }

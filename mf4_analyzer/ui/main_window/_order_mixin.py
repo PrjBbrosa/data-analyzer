@@ -61,6 +61,9 @@ class OrderMixin:
         is unsafe and the pane is skipped (``None``), matching the prior
         length-mismatch behaviour. EPS: ``rpm`` is the motor speed (order base).
         """
+        ctx = self.inspector.order_ctx
+        if getattr(ctx, 'rpm_mode', lambda: 'channel')() == 'manual':
+            return np.full(int(n), float(ctx.manual_rpm()), dtype=float)
         if not rpm_source:
             return None
         fid, ch = rpm_source
@@ -246,6 +249,12 @@ class OrderMixin:
             'time_res': p.get('time_res'),
             'samples_per_rev': p.get('samples_per_rev'),
             'rpm_factor': p.get('rpm_factor'),
+            'rpm_mode': p.get('rpm_mode', 'channel'),
+            'manual_rpm': (
+                float(p.get('manual_rpm', 1000.0))
+                if p.get('rpm_mode', 'channel') == 'manual'
+                else None
+            ),
             'fs': p.get('fs'),
             'weighting': str(p.get('weighting', 'None')),
             'rpm_source': list(rpm_source) if rpm_source else None,
