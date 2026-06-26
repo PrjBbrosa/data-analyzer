@@ -1691,6 +1691,33 @@ QStatusBar#surfaceStatusBar QLabel#plotRiskLabel[riskLevel="danger"] {
     border: 1px solid #f3a7a0;
 }
 
+QStatusBar#surfaceStatusBar QWidget#computeProgressWidget {
+    background-color: transparent;
+    margin: 0 4px;
+}
+
+QStatusBar#surfaceStatusBar QLabel#computeProgressLabel {
+    color: #4b5f78;
+    font-size: 12px;
+    font-weight: 600;
+    qproperty-alignment: AlignVCenter;
+}
+
+QStatusBar#surfaceStatusBar QProgressBar#computeProgressBar {
+    min-width: 160px;
+    max-width: 160px;
+    min-height: 8px;
+    max-height: 8px;
+    border: 1px solid #c9d8ea;
+    border-radius: 4px;
+    background-color: #eef4fb;
+}
+
+QStatusBar#surfaceStatusBar QProgressBar#computeProgressBar::chunk {
+    border-radius: 4px;
+    background-color: #1a7be8;
+}
+
 QStatusBar#surfaceStatusBar QToolButton#surfaceVersionButton {
     min-height: 22px;
     padding: 1px 7px;

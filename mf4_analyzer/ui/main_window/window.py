@@ -31,6 +31,7 @@ from ...signal import (
     resolve_order_nfft,
 )
 from ... import app_meta
+from ..compute_progress import ComputeProgressWidget
 from ..plot_risk import PlotRisk, PlotRiskLevel, estimate_time_overlay_risk
 
 from ._sentinel import _INSPECTOR_TIME_RANGE
@@ -252,6 +253,7 @@ class MainWindow(
         self.chart_stack.mode_changed.connect(self._install_status_hint_bar)
         self.statusBar.showMessage("Ready")
         self._install_plot_risk_label()
+        self._install_compute_progress()
         self._install_update_indicator()
 
         # Floating toast (constructed lazily on first use; the parent must
@@ -330,6 +332,52 @@ class MainWindow(
         )
         self._plot_risk_label.setVisible(False)
         self.statusBar.addPermanentWidget(self._plot_risk_label, 0)
+
+    def _install_compute_progress(self) -> None:
+        self._compute_progress = ComputeProgressWidget(self)
+        self._active_compute_progress_token = None
+        self.statusBar.addPermanentWidget(self._compute_progress, 0)
+
+    def _begin_compute_progress(
+        self,
+        label: str,
+        total: int | None = None,
+        token: object | None = None,
+    ) -> object:
+        active_token = token if token is not None else object()
+        self._active_compute_progress_token = active_token
+        self._compute_progress.begin(label, total)
+        QApplication.processEvents()
+        return active_token
+
+    def _update_compute_progress(
+        self,
+        current: int,
+        total: int,
+        label: str | None = None,
+        token: object | None = None,
+    ) -> None:
+        if self._active_compute_progress_token is None:
+            return
+        if (
+            token is not None
+            and token is not self._active_compute_progress_token
+        ):
+            return
+        self._compute_progress.set_progress(current, total, label)
+
+    def _finish_compute_progress(
+        self,
+        label: str | None = None,
+        token: object | None = None,
+    ) -> None:
+        if (
+            token is not None
+            and token is not self._active_compute_progress_token
+        ):
+            return
+        self._compute_progress.finish(label)
+        self._active_compute_progress_token = None
 
     def _show_plot_risk(self, risk: PlotRisk) -> None:
         label = getattr(self, "_plot_risk_label", None)
