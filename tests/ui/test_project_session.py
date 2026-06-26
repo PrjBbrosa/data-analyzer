@@ -63,6 +63,44 @@ def test_open_project_roundtrip(qapp, tmp_path):
     assert mw2.chart_stack.current_mode() == "time"
 
 
+def test_project_roundtrip_restores_time_filter_state(qapp, tmp_path):
+    from mf4_analyzer.signal.filters import FilterSpec
+    from mf4_analyzer.ui.main_window import MainWindow
+    from mf4_analyzer.ui import project_io as pio
+
+    csv_a = tmp_path / "a.csv"; _write_csv(csv_a)
+    proj = tmp_path / "s.tlproj"
+
+    mw = MainWindow()
+    mw._load_one(str(csv_a))
+    panel = mw.inspector.filter_panel
+    panel.set_enabled(True)
+    panel.set_kind("带通")
+    panel.set_band(5.0, 30.0)
+    panel.set_order(6)
+    panel.chk_orig.setChecked(False)
+    panel.chk_filt.setChecked(True)
+    mw.save_project(proj)
+
+    doc = pio.load_project_from_json(proj)
+    assert doc.filter == {
+        "enabled": True,
+        "spec": FilterSpec("band", order=6, cutoff_lo=5.0, cutoff_hi=30.0).to_dict(),
+        "show_original": False,
+        "show_filtered": True,
+    }
+
+    mw2 = MainWindow()
+    mw2.open_project(proj)
+    restored = mw2.inspector.filter_panel
+    assert restored.is_enabled() is True
+    assert restored.filter_spec() == FilterSpec(
+        "band", order=6, cutoff_lo=5.0, cutoff_hi=30.0
+    )
+    assert restored.show_original() is False
+    assert restored.show_filtered() is True
+
+
 def test_open_project_restores_non_time_mode_consistently(qapp, tmp_path):
     # Reopening a project saved in a non-time mode must leave the chart,
     # the toolbar segment, and the inspector all agreeing on that mode —

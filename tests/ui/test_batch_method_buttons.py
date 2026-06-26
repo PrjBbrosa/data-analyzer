@@ -62,7 +62,50 @@ def test_param_form_fft_time_fields(qtbot):
     qtbot.addWidget(form)
     form.set_method("fft_time")
     visible = form.visible_field_names()
-    assert {"window", "nfft", "overlap", "remove_mean"} == visible
+    assert {"window", "nfft", "overlap", "remove_mean", "weighting"} == visible
+
+
+def test_param_form_weighting_visible_for_all_methods(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+
+    for method in ("fft", "fft_time", "order_time"):
+        form.set_method(method)
+        assert "weighting" in form.visible_field_names()
+
+
+def test_param_form_weighting_round_trips(qtbot):
+    from mf4_analyzer.ui.drawers.batch.method_buttons import DynamicParamForm
+
+    form = DynamicParamForm()
+    qtbot.addWidget(form)
+    form.set_method("order_time")
+
+    assert form.get_params()["weighting"] == "None"
+    form.apply_params({"weighting": "A"})
+
+    assert form.get_params()["weighting"] == "A"
+
+
+def test_batch_sheet_weighting_options_match_main_panel(qtbot):
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    expected = [
+        win.inspector.fft_ctx.combo_weighting.itemText(i)
+        for i in range(win.inspector.fft_ctx.combo_weighting.count())
+    ]
+    sheet = BatchSheet(parent=win, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+
+    combo = sheet._analysis_panel._param_form._w_weighting
+    actual = [combo.itemText(i) for i in range(combo.count())]
+
+    assert actual == expected
 
 
 def test_param_form_fft_time_overlap_and_remove_mean_round_trip(qtbot):

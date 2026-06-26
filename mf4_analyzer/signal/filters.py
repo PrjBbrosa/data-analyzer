@@ -17,6 +17,28 @@ class FilterSpec:
     cutoff_lo: float = 0.0    # band/bandstop (Hz)
     cutoff_hi: float = 0.0    # band/bandstop (Hz)
 
+    def to_dict(self) -> dict:
+        return {
+            "kind": str(self.kind),
+            "order": int(self.order),
+            "cutoff": float(self.cutoff),
+            "cutoff_lo": float(self.cutoff_lo),
+            "cutoff_hi": float(self.cutoff_hi),
+        }
+
+    @classmethod
+    def from_dict(cls, data) -> "FilterSpec":
+        data = data or {}
+        if not isinstance(data, dict):
+            data = {}
+        return cls(
+            kind=str(data.get("kind", "low")),
+            order=int(data.get("order", 4)),
+            cutoff=float(data.get("cutoff", 0.0)),
+            cutoff_lo=float(data.get("cutoff_lo", 0.0)),
+            cutoff_hi=float(data.get("cutoff_hi", 0.0)),
+        )
+
 
 def _lp_mag(f, fc, n):
     if fc <= 0:

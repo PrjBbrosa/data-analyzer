@@ -605,6 +605,7 @@ class MainWindow(
         # active when the entry was inserted).
         self._last_range_state = None   # (enabled, lo, hi) or None
         self._last_plot_mode = None     # 'overlay' / 'subplot' / None
+        self._last_filter_state_by_canvas = {}  # id(canvas) -> filter state
         # Overlay primary-axis pick: (fid, ch) chosen via the channel
         # right-click 设为左轴 menu. When set AND still checked AND in overlay
         # mode, plot_time reorders the checked list so this channel is index 0
@@ -1859,6 +1860,19 @@ class MainWindow(
                 canvas.invalidate_envelope_cache("range filter changed")
             self._last_range_state = cur_range_state
 
+        fp = getattr(self.inspector, "filter_panel", None)
+        if fp is not None and fp.is_enabled():
+            cur_filter_state = (True, tuple(sorted(fp.filter_spec().to_dict().items())))
+        else:
+            cur_filter_state = (False,)
+        if update_primary_ui:
+            canvas_key = id(canvas)
+            last_filter_state = self._last_filter_state_by_canvas.get(canvas_key)
+            if (last_filter_state is not None
+                    and last_filter_state != cur_filter_state):
+                canvas.invalidate_envelope_cache("filter state changed")
+            self._last_filter_state_by_canvas[canvas_key] = cur_filter_state
+
         from ..chart_stack import _STATS_STRIP_ENABLED
         collect_stats = update_primary_ui and _STATS_STRIP_ENABLED
 
@@ -2221,6 +2235,20 @@ class MainWindow(
             return AnalysisPreset.from_current_single(
                 name="当前 FFT",
                 method="fft",
+                signal=signal,
+                params=params,
+            )
+        if mode == 'fft_time':
+            signal = self.inspector.fft_time_ctx.current_signal()
+            if signal is None:
+                return None
+            params = self.inspector.fft_time_ctx.get_params()
+            params['fs'] = self.inspector.fft_time_ctx.fs()
+            if self.inspector.top.range_enabled():
+                params['time_range'] = self.inspector.top.range_values()
+            return AnalysisPreset.from_current_single(
+                name="当前 FFT vs Time",
+                method="fft_time",
                 signal=signal,
                 params=params,
             )

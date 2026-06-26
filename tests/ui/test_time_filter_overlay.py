@@ -145,3 +145,26 @@ def test_live_uncheck_show_filtered_hides_companion_without_replot(
     w.inspector.filter_panel.chk_filt.setChecked(False)
     assert canvas._channel_lines[comp_name][1].plot_data_item.isVisible() is False
     assert replot_calls == []
+
+
+def test_filter_state_change_invalidates_time_canvas_cache(
+    time_window_with_two_high_low_channels, monkeypatch,
+):
+    w = time_window_with_two_high_low_channels
+    canvas = w.chart_stack.focused_canvas()
+    reasons = []
+    orig = canvas.invalidate_envelope_cache
+
+    def record(reason):
+        reasons.append(reason)
+        return orig(reason)
+
+    monkeypatch.setattr(canvas, "invalidate_envelope_cache", record)
+
+    w._plot_time_on_canvas(canvas)
+    w.inspector.filter_panel.set_enabled(True)
+    w.inspector.filter_panel.set_kind("低通")
+    w.inspector.filter_panel.set_cutoff(50.0)
+    w._plot_time_on_canvas(canvas)
+
+    assert "filter state changed" in reasons

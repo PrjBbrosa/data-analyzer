@@ -12,7 +12,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = {1, 2}
 
 
 class UnsupportedProjectVersion(ValueError):
@@ -44,6 +45,7 @@ class ProjectDocument:
     view_manager: dict = field(default_factory=dict)  # {"active": int, "split_pairs": {}}
     # {"fft"|"fft_time"|"order": {"active": int, "views": [AnalysisViewState.to_dict()]}}
     analysis_views: dict = field(default_factory=dict)
+    filter: dict | None = None
 
 
 def save_project_to_json(doc: ProjectDocument, path) -> None:
@@ -72,6 +74,7 @@ def save_project_to_json(doc: ProjectDocument, path) -> None:
         "views": doc.views,
         "view_manager": doc.view_manager,
         "analysis_views": doc.analysis_views,
+        "filter": doc.filter,
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -88,7 +91,7 @@ def load_project_from_json(path) -> ProjectDocument:
     version = raw.get("schema_version")
     if version is None:
         version = 1
-    if version != SCHEMA_VERSION:
+    if version not in SUPPORTED_SCHEMA_VERSIONS:
         raise UnsupportedProjectVersion(
             f"project schema_version={version} not supported "
             f"(this app reads v{SCHEMA_VERSION})"
@@ -118,6 +121,7 @@ def load_project_from_json(path) -> ProjectDocument:
         views=list(raw.get("views", [])),
         view_manager=dict(raw.get("view_manager", {})),
         analysis_views=dict(raw.get("analysis_views", {})),
+        filter=raw.get("filter") if version >= 2 else None,
     )
 
 

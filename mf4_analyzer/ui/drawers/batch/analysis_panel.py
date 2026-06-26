@@ -63,3 +63,6 @@ class AnalysisPanel(QWidget):
 
     def apply_params(self, params: dict) -> None:
         self._param_form.apply_params(params)
+
+    def set_weighting_options(self, options) -> None:
+        self._param_form.set_weighting_options(options)

@@ -37,6 +37,45 @@ def test_schema_version_written(tmp_path):
     assert raw["schema_version"] == pio.SCHEMA_VERSION
 
 
+def test_filter_block_roundtrips_in_schema_v2(tmp_path):
+    path = tmp_path / "s.tlproj"
+    doc = _doc()
+    doc.filter = {
+        "enabled": True,
+        "spec": {
+            "kind": "band",
+            "order": 6,
+            "cutoff": 0.0,
+            "cutoff_lo": 12.5,
+            "cutoff_hi": 345.0,
+        },
+        "show_original": False,
+        "show_filtered": True,
+    }
+
+    pio.save_project_to_json(doc, path)
+    loaded = pio.load_project_from_json(path)
+
+    assert loaded.filter == doc.filter
+
+
+def test_schema_v1_without_filter_loads_as_filter_none(tmp_path):
+    path = tmp_path / "old.tlproj"
+    raw = {
+        "schema_version": 1,
+        "active_file": None,
+        "current_mode": "time",
+        "files": [],
+        "views": [],
+        "view_manager": {},
+    }
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    loaded = pio.load_project_from_json(path)
+
+    assert loaded.filter is None
+
+
 def test_unknown_version_rejected(tmp_path):
     path = tmp_path / "s.tlproj"
     path.write_text(json.dumps({"schema_version": 999}), encoding="utf-8")

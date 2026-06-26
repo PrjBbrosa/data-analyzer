@@ -121,3 +121,22 @@ def test_highpass_rejects_constant_signal_exactly():
     y = apply(x, FilterSpec('high', order=4, cutoff=100.0), fs=1000.0)
 
     np.testing.assert_array_equal(y, np.zeros_like(x))
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        FilterSpec("low", order=2, cutoff=42.0),
+        FilterSpec("high", order=4, cutoff=55.0),
+        FilterSpec("band", order=6, cutoff_lo=12.0, cutoff_hi=345.0),
+        FilterSpec("bandstop", order=8, cutoff_lo=20.0, cutoff_hi=220.0),
+    ],
+)
+def test_filter_spec_dict_roundtrip(spec):
+    assert FilterSpec.from_dict(spec.to_dict()) == spec
+
+
+def test_filter_spec_from_dict_defaults_missing_fields():
+    assert FilterSpec.from_dict({"kind": "low", "cutoff": 80}) == FilterSpec(
+        "low", order=4, cutoff=80.0
+    )

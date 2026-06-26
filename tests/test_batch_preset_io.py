@@ -31,6 +31,25 @@ def test_round_trip_preserves_recipe(tmp_path):
     assert p2.outputs.data_format == p1.outputs.data_format
 
 
+@pytest.mark.parametrize("method", ("fft", "fft_time", "order_time"))
+def test_round_trip_preserves_weighting_for_supported_methods(tmp_path, method):
+    preset = AnalysisPreset.free_config(
+        name=f"{method} weighted",
+        method=method,
+        target_signals=("vibration_x",),
+        rpm_channel="rpm" if method == "order_time" else "",
+        params={"window": "hanning", "nfft": 1024, "weighting": "A"},
+        outputs=BatchOutput(export_data=True, export_image=True, data_format="csv"),
+    )
+    path = tmp_path / f"{method}.json"
+
+    save_preset_to_json(preset, path)
+    loaded = load_preset_from_json(path)
+
+    assert loaded.method == method
+    assert loaded.params["weighting"] == "A"
+
+
 def test_serialization_whitelist(tmp_path):
     """Even if runtime/sentinel fields are injected, JSON must not contain them."""
     from dataclasses import replace

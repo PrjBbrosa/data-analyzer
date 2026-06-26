@@ -310,6 +310,87 @@ def test_input_panel_rpm_factor_round_trips_through_preset(qtbot):
     assert abs(re_exported.params["rpm_factor"] - 1.0 / 6.0) < 1e-9
 
 
+def test_batch_sheet_preserves_hidden_preset_params(qtbot):
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    preset = AnalysisPreset.free_config(
+        name="hidden",
+        method="fft",
+        target_signals=("sig",),
+        params={
+            "window": "hamming",
+            "nfft": 2048,
+            "weighting": "A",
+            "db_reference": 2.5,
+            "avg_mode": "rms",
+            "avg_overlap": 0.25,
+        },
+    )
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+
+    sheet.apply_preset(preset)
+    out = sheet.get_preset().params
+
+    assert out["weighting"] == "A"
+    assert out["db_reference"] == 2.5
+    assert out["avg_mode"] == "rms"
+    assert out["avg_overlap"] == 0.25
+
+
+def test_batch_sheet_visible_params_override_passthrough(qtbot):
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    preset = AnalysisPreset.free_config(
+        name="override",
+        method="fft",
+        target_signals=("sig",),
+        params={"window": "hanning", "nfft": 1024, "weighting": "A"},
+    )
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+
+    sheet.apply_preset(preset)
+    sheet.apply_params({"window": "blackman", "nfft": 4096})
+    out = sheet.get_preset().params
+
+    assert out["window"] == "blackman"
+    assert out["nfft"] == 4096
+    assert out["weighting"] == "A"
+
+
+def test_batch_sheet_method_change_filters_irrelevant_passthrough(qtbot):
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    preset = AnalysisPreset.free_config(
+        name="fft hidden",
+        method="fft",
+        target_signals=("sig",),
+        params={
+            "window": "hanning",
+            "nfft": 1024,
+            "weighting": "A",
+            "db_reference": 1.0,
+            "avg_mode": "rms",
+            "avg_overlap": 0.25,
+        },
+    )
+    sheet = BatchSheet(parent=None, files={}, current_preset=None)
+    qtbot.addWidget(sheet)
+
+    sheet.apply_preset(preset)
+    sheet.apply_method("order_time")
+    out = sheet.get_preset().params
+
+    assert out["weighting"] == "A"
+    assert out["db_reference"] == 1.0
+    assert "avg_mode" not in out
+    assert "avg_overlap" not in out
+
+
 def test_input_panel_rpm_factor_is_returned_in_params(qtbot):
     """rpm_factor lives in params (existing key) so the BatchRunner
     backend (batch.py:506,516) keeps reading it unchanged.

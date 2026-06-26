@@ -87,6 +87,44 @@ def test_apply_preset_current_single_round_trip(qtbot, tmp_path, qt_app_files):
     assert sheet.time_range() == (1.0, 5.0)
 
 
+def test_build_current_batch_preset_supports_fft_time(qtbot, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    params = {
+        "window": "blackman",
+        "nfft": 2048,
+        "overlap": 0.75,
+        "remove_mean": False,
+        "weighting": "A",
+        "db_reference": 2.0,
+    }
+    monkeypatch.setattr(win.toolbar, "current_mode", lambda: "fft_time")
+    monkeypatch.setattr(
+        win.inspector.fft_time_ctx, "current_signal", lambda: ("f1", "sig")
+    )
+    monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", lambda: dict(params))
+    monkeypatch.setattr(win.inspector.fft_time_ctx, "fs", lambda: 512.0)
+    monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: True)
+    monkeypatch.setattr(win.inspector.top, "range_values", lambda: (1.0, 2.5))
+
+    preset = win._build_current_batch_preset()
+
+    assert preset.source == "current_single"
+    assert preset.name == "当前 FFT vs Time"
+    assert preset.method == "fft_time"
+    assert preset.signal == ("f1", "sig")
+    assert preset.params["window"] == "blackman"
+    assert preset.params["nfft"] == 2048
+    assert preset.params["overlap"] == 0.75
+    assert preset.params["remove_mean"] is False
+    assert preset.params["weighting"] == "A"
+    assert preset.params["db_reference"] == 2.0
+    assert preset.params["fs"] == 512.0
+    assert preset.params["time_range"] == (1.0, 2.5)
+
+
 def test_apply_preset_marks_unavailable_signals(qtbot):
     """Imported preset whose target_signals are not in the file intersection
     must red-mark them and warn (spec §4.2 partial-missing rule)."""

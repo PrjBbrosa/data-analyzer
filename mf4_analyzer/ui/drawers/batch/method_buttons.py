@@ -76,14 +76,17 @@ class MethodButtonGroup(QWidget):
 # Dynamic parameter form
 # ---------------------------------------------------------------------------
 _WINDOWS: tuple[str, ...] = ("hanning", "hamming", "blackman", "rectangular")
+_WEIGHTINGS: tuple[str, ...] = ("None", "A")
 
 
 # Per-method visible field set, taken verbatim from spec §3.3 minus the
 # removed ``order_rpm`` column.
 _METHOD_FIELDS: dict[str, tuple[str, ...]] = {
-    "fft": ("window", "nfft"),
-    "fft_time": ("window", "nfft", "overlap", "remove_mean"),
-    "order_time": ("window", "nfft", "max_order", "order_res", "time_res"),
+    "fft": ("window", "nfft", "weighting"),
+    "fft_time": ("window", "nfft", "overlap", "remove_mean", "weighting"),
+    "order_time": (
+        "window", "nfft", "max_order", "order_res", "time_res", "weighting",
+    ),
 }
 
 
@@ -109,6 +112,7 @@ class DynamicParamForm(QWidget):
             "time_res": "时间分辨率",
             "overlap": "重叠率",
             "remove_mean": "去均值",
+            "weighting": "频率加权",
         }
 
         self._widgets: dict[str, QWidget] = {}
@@ -118,6 +122,17 @@ class DynamicParamForm(QWidget):
         self._w_window.addItems(_WINDOWS)
         self._w_window.currentIndexChanged.connect(lambda *_: self.paramsChanged.emit())
         self._widgets["window"] = self._w_window
+
+        # weighting — mirrors the single-analysis contextual panels.
+        self._w_weighting = QComboBox(self)
+        self._w_weighting.addItems(_WEIGHTINGS)
+        self._w_weighting.setToolTip(
+            "A 计权（IEC 61672）：相对加权频谱，非绝对 dB SPL"
+        )
+        self._w_weighting.currentIndexChanged.connect(
+            lambda *_: self.paramsChanged.emit()
+        )
+        self._widgets["weighting"] = self._w_weighting
 
         # nfft — QSpinBox
         self._w_nfft = no_buttons(QSpinBox(self))
@@ -202,6 +217,8 @@ class DynamicParamForm(QWidget):
             params["overlap"] = float(self._w_overlap.value())
         if "remove_mean" in self.visible_field_names():
             params["remove_mean"] = bool(self._w_remove_mean.isChecked())
+        if "weighting" in self.visible_field_names():
+            params["weighting"] = self._w_weighting.currentText()
         return params
 
     def apply_params(self, params: dict) -> None:
@@ -235,6 +252,29 @@ class DynamicParamForm(QWidget):
                 pass
         if "remove_mean" in params:
             self._w_remove_mean.setChecked(bool(params["remove_mean"]))
+        if "weighting" in params:
+            txt = str(params["weighting"])
+            idx = self._w_weighting.findText(txt)
+            if idx >= 0:
+                self._w_weighting.setCurrentIndex(idx)
+
+    def set_weighting_options(self, options) -> None:
+        values = [str(item) for item in (options or ()) if str(item)]
+        if not values:
+            values = list(_WEIGHTINGS)
+        current = self._w_weighting.currentText()
+        self._w_weighting.blockSignals(True)
+        try:
+            self._w_weighting.clear()
+            self._w_weighting.addItems(values)
+            target = current if current in values else (
+                "None" if "None" in values else values[0]
+            )
+            idx = self._w_weighting.findText(target)
+            if idx >= 0:
+                self._w_weighting.setCurrentIndex(idx)
+        finally:
+            self._w_weighting.blockSignals(False)
 
     # ------------------------------------------------------------------
     def _render_for(self, method: str) -> None:

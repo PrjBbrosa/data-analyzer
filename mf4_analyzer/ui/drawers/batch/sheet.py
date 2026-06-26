@@ -27,6 +27,7 @@ from ....batch_preset_io import (
 )
 from .analysis_panel import AnalysisPanel
 from .input_panel import InputPanel, STATE_PATH_PENDING, STATE_PROBING
+from .method_buttons import _METHOD_FIELDS
 from .output_panel import OutputPanel
 from .pipeline_strip import PipelineStrip
 from .runner_thread import BatchRunnerThread
@@ -39,6 +40,18 @@ _METHOD_LABELS: dict[str, str] = {
     "order_time": "order_time",
 }
 
+_PASSTHROUGH_PARAMS_BY_METHOD: dict[str, frozenset[str]] = {
+    "fft": frozenset({
+        "weighting", "db_reference", "avg_mode", "avg_overlap",
+    }),
+    "fft_time": frozenset({
+        "weighting", "db_reference",
+    }),
+    "order_time": frozenset({
+        "weighting", "db_reference",
+    }),
+}
+
 
 class BatchSheet(QDialog):
     def __init__(self, parent, files, current_preset=None):
@@ -49,6 +62,7 @@ class BatchSheet(QDialog):
         self.resize(1080, 760)
         self._files = files or {}
         self._current_preset = current_preset
+        self._passthrough_params: dict = {}
 
         # Run-state bookkeeping (W6).
         self._running: bool = False
@@ -102,6 +116,9 @@ class BatchSheet(QDialog):
 
         self._input_panel = InputPanel(self, files=self._files)
         self._analysis_panel = AnalysisPanel(self)
+        self._analysis_panel.set_weighting_options(
+            self._weighting_options_from_parent()
+        )
         self._output_panel = OutputPanel(self)
         detail_lay.addWidget(self._input_panel, 1)
         detail_lay.addWidget(self._analysis_panel, 1)
@@ -161,6 +178,7 @@ class BatchSheet(QDialog):
         self._analysis_panel.methodChanged.connect(
             self._output_panel.apply_method_defaults
         )
+        self._analysis_panel.methodChanged.connect(self._filter_passthrough_for_method)
         self._analysis_panel.paramsChanged.connect(self._recompute_pipeline_status)
         self._output_panel.changed.connect(self._recompute_pipeline_status)
 
@@ -238,6 +256,17 @@ class BatchSheet(QDialog):
         # only adjust enabled-state in idle mode.
         if not self._running:
             self._btn_run.setEnabled(self.is_runnable())
+
+    def _weighting_options_from_parent(self) -> tuple[str, ...]:
+        parent = self.parent()
+        inspector = getattr(parent, "inspector", None)
+        for ctx_name in ("fft_ctx", "fft_time_ctx", "order_ctx"):
+            ctx = getattr(inspector, ctx_name, None)
+            combo = getattr(ctx, "combo_weighting", None)
+            count = combo.count() if combo is not None else 0
+            if count:
+                return tuple(combo.itemText(i) for i in range(count))
+        return ("None", "A")
 
     # ------------------------------------------------------------------
     # Public accessors
@@ -323,6 +352,9 @@ class BatchSheet(QDialog):
         """
         if preset is None:
             return
+        self._passthrough_params = self._collect_passthrough_params(
+            dict(preset.params), preset.method
+        )
 
         if preset.source == "current_single":
             # Narrow the file list to the captured fid first so the picker
@@ -357,6 +389,35 @@ class BatchSheet(QDialog):
         # time_range round-trip — both sources carry it through params.
         if "time_range" in preset.params:
             self.apply_time_range(preset.params["time_range"])
+
+    def _owned_param_keys(self, method: str | None = None) -> set[str]:
+        method_key = method or self.method()
+        return (
+            set(_METHOD_FIELDS.get(method_key, ()))
+            | set(self._output_panel.axis_params().keys())
+            | set(self._input_panel.rpm_params().keys())
+            | {"time_range"}
+        )
+
+    def _collect_passthrough_params(self, params: dict, method: str) -> dict:
+        allowed = _PASSTHROUGH_PARAMS_BY_METHOD.get(method, frozenset())
+        owned = self._owned_param_keys(method)
+        return {
+            key: value
+            for key, value in dict(params or {}).items()
+            if key in allowed and key not in owned
+        }
+
+    def _filter_passthrough_for_method(self, method: str) -> None:
+        if not self._passthrough_params:
+            return
+        allowed = _PASSTHROUGH_PARAMS_BY_METHOD.get(method, frozenset())
+        owned = self._owned_param_keys(method)
+        self._passthrough_params = {
+            key: value
+            for key, value in self._passthrough_params.items()
+            if key in allowed and key not in owned
+        }
 
     # ------------------------------------------------------------------
     # W7: toolbar handlers (preset import / export / fill-from-current)
@@ -672,11 +733,12 @@ class BatchSheet(QDialog):
         # Merge the user-typed time_range field into params so
         # BatchRunner._apply_time_range sees it (ultrareview bug_009).
         # Empty field → no key, so BatchRunner runs the full signal.
-        params = dict(self.params())
+        params = dict(self._passthrough_params)
+        params.update(self.params())
+        params.update(self._output_panel.axis_params())
         # InputPanel-owned rpm_factor (Wave 2 Task 5) — DynamicParamForm no
         # longer carries it, so we merge from the InputPanel here.
         params.update(self._input_panel.rpm_params())
-        params.update(self._output_panel.axis_params())
         rng = self.time_range()
         if rng is not None:
             params["time_range"] = rng

@@ -602,6 +602,7 @@ class ProjectIOMixin:
                 }
                 for sec, mgr in self.analysis_managers.items()
             },
+            filter=self._project_filter_payload(),
         )
         pio.save_project_to_json(doc, path)
         self._project_path = path
@@ -647,6 +648,8 @@ class ProjectIOMixin:
             fd.fs = float(ref.fs)
             if ref.time_source in ("generated", "manual"):
                 fd.rebuild_time_axis(float(ref.fs))
+
+        self._restore_project_filter(doc.filter)
 
         remapped = pio.remap_view_fids(doc.views, fid_map)
         states = [ViewState.from_dict(v) for v in remapped]
@@ -722,6 +725,43 @@ class ProjectIOMixin:
             return
 
         self.statusBar.showMessage(f"已打开项目: {path.name}")
+
+    def _project_filter_payload(self):
+        fp = getattr(getattr(self, "inspector", None), "filter_panel", None)
+        if fp is None:
+            return None
+        return {
+            "enabled": bool(fp.is_enabled()),
+            "spec": fp.filter_spec().to_dict(),
+            "show_original": bool(fp.show_original()),
+            "show_filtered": bool(fp.show_filtered()),
+        }
+
+    def _restore_project_filter(self, payload):
+        fp = getattr(getattr(self, "inspector", None), "filter_panel", None)
+        if fp is None:
+            return
+        if not payload:
+            fp.set_enabled(False)
+            return
+        from ...signal.filters import FilterSpec
+
+        spec = FilterSpec.from_dict(payload.get("spec"))
+        label_for_kind = {
+            "low": "低通",
+            "high": "高通",
+            "band": "带通",
+            "bandstop": "带阻",
+        }.get(spec.kind, "低通")
+        fp.set_kind(label_for_kind)
+        if spec.kind in ("band", "bandstop"):
+            fp.set_band(spec.cutoff_lo, spec.cutoff_hi)
+        else:
+            fp.set_cutoff(spec.cutoff)
+        fp.set_order(spec.order)
+        fp.chk_orig.setChecked(bool(payload.get("show_original", True)))
+        fp.chk_filt.setChecked(bool(payload.get("show_filtered", True)))
+        fp.set_enabled(bool(payload.get("enabled", False)))
 
     def close_all(self):
         if not self.files:
