@@ -2224,6 +2224,32 @@ class MainWindow(
         from ...batch import AnalysisPreset
 
         mode = self.toolbar.current_mode()
+        if mode == 'time':
+            import dataclasses
+
+            checked = self.channel_list.get_checked_channels()
+            if not checked:
+                return None
+            file_ids = tuple(dict.fromkeys(fid for fid, _ch, _color in checked))
+            target_signals = tuple(sorted({ch for _fid, ch, _color in checked}))
+            params = {}
+            if self.inspector.top.range_enabled():
+                params['time_range'] = self.inspector.top.range_values()
+            fp = getattr(self.inspector, "filter_panel", None)
+            if fp is not None:
+                params["filter"] = {
+                    "enabled": bool(fp.is_enabled()),
+                    "spec": fp.filter_spec().to_dict(),
+                    "show_original": bool(fp.show_original()),
+                    "show_filtered": bool(fp.show_filtered()),
+                }
+            preset = AnalysisPreset.free_config(
+                name="当前时域",
+                method="time",
+                target_signals=target_signals,
+                params=params,
+            )
+            return dataclasses.replace(preset, file_ids=file_ids)
         if mode == 'fft':
             signal = self.inspector.fft_ctx.current_signal()
             if signal is None:

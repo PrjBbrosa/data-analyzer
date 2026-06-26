@@ -165,6 +165,41 @@ def test_build_current_batch_preset_fft_uses_current_params(qtbot, monkeypatch):
     assert preset.params["fs"] == 1000.0
 
 
+def test_build_current_batch_preset_supports_time_domain(qtbot, monkeypatch):
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    monkeypatch.setattr(win.toolbar, "current_mode", lambda: "time")
+    monkeypatch.setattr(
+        win.channel_list,
+        "get_checked_channels",
+        lambda: [("f1", "sig_a", "#ff0000"), ("f1", "sig_b", "#00ff00")],
+    )
+    monkeypatch.setattr(win.inspector.top, "range_enabled", lambda: True)
+    monkeypatch.setattr(win.inspector.top, "range_values", lambda: (1.0, 2.0))
+    fp = win.inspector.filter_panel
+    fp.set_enabled(True)
+    fp.set_kind("低通")
+    fp.set_cutoff(50.0)
+    fp.set_order(6)
+    fp.chk_orig.setChecked(False)
+    fp.chk_filt.setChecked(True)
+
+    preset = win._build_current_batch_preset()
+
+    assert preset.source == "free_config"
+    assert preset.method == "time"
+    assert preset.target_signals == ("sig_a", "sig_b")
+    assert preset.file_ids == ("f1",)
+    assert preset.params["time_range"] == (1.0, 2.0)
+    assert preset.params["filter"]["enabled"] is True
+    assert preset.params["filter"]["spec"]["kind"] == "low"
+    assert preset.params["filter"]["spec"]["cutoff"] == 50.0
+    assert preset.params["filter"]["show_original"] is False
+    assert preset.params["filter"]["show_filtered"] is True
+
+
 def test_apply_preset_marks_unavailable_signals(qtbot):
     """Imported preset whose target_signals are not in the file intersection
     must red-mark them and warn (spec §4.2 partial-missing rule)."""
