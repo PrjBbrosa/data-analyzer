@@ -105,6 +105,112 @@ def test_batch_time_blocks_when_filter_hides_both_series(tmp_path):
     assert "至少需要原始或滤波后一项" in result.blocked[0]
 
 
+def test_batch_fft_uses_filtered_signal_when_filter_enabled(monkeypatch):
+    captured = {}
+
+    def fake_compute_fft(sig, fs, win="hanning", nfft=None, weighting="None"):
+        captured["std"] = float(np.std(sig))
+        return np.array([0.0]), np.array([1.0])
+
+    monkeypatch.setattr(
+        "mf4_analyzer.batch.FFTAnalyzer.compute_fft",
+        fake_compute_fft,
+    )
+    fs = 200.0
+    t = np.arange(400, dtype=float) / fs
+    low = np.sin(2 * np.pi * 5 * t)
+    sig = low + 0.5 * np.sin(2 * np.pi * 60 * t)
+
+    BatchRunner._compute_fft_dataframe(
+        sig,
+        fs,
+        {
+            "filter": {
+                "enabled": True,
+                "spec": {"kind": "low", "order": 4, "cutoff": 20.0},
+            }
+        },
+    )
+
+    assert captured["std"] < float(np.std(sig))
+
+
+def test_batch_fft_time_uses_filtered_signal_when_filter_enabled(monkeypatch):
+    captured = {}
+
+    def fake_compute(signal, time, params, channel_name="signal"):
+        captured["std"] = float(np.std(signal))
+        return type("SpectroResult", (), {
+            "times": np.array([0.0]),
+            "frequencies": np.array([1.0]),
+            "amplitude": np.array([[1.0]]),
+        })()
+
+    monkeypatch.setattr(
+        "mf4_analyzer.signal.spectrogram.SpectrogramAnalyzer.compute",
+        fake_compute,
+    )
+    fs = 200.0
+    t = np.arange(400, dtype=float) / fs
+    low = np.sin(2 * np.pi * 5 * t)
+    sig = low + 0.5 * np.sin(2 * np.pi * 60 * t)
+
+    BatchRunner._compute_fft_time_spectro(
+        sig,
+        t,
+        fs,
+        {
+            "filter": {
+                "enabled": True,
+                "spec": {"kind": "low", "order": 4, "cutoff": 20.0},
+            },
+            "nfft": 64,
+        },
+    )
+
+    assert captured["std"] < float(np.std(sig))
+
+
+def test_batch_order_time_filters_signal_but_not_rpm(monkeypatch):
+    captured = {}
+
+    def fake_compute(sig, rpm, time, params):
+        captured["sig_std"] = float(np.std(sig))
+        captured["rpm"] = np.asarray(rpm, dtype=float).copy()
+        return type("OrderResult", (), {
+            "times": np.array([0.0]),
+            "orders": np.array([1.0]),
+            "amplitude": np.array([[1.0]]),
+        })()
+
+    monkeypatch.setattr(
+        "mf4_analyzer.signal.order_cot.COTOrderAnalyzer.compute",
+        fake_compute,
+    )
+    fs = 200.0
+    t = np.arange(400, dtype=float) / fs
+    low = np.sin(2 * np.pi * 5 * t)
+    sig = low + 0.5 * np.sin(2 * np.pi * 60 * t)
+    rpm = 1000.0 + 10.0 * np.sin(2 * np.pi * 30 * t)
+
+    BatchRunner._compute_order_time_spectro(
+        sig,
+        rpm,
+        t,
+        fs,
+        {
+            "filter": {
+                "enabled": True,
+                "spec": {"kind": "low", "order": 4, "cutoff": 20.0},
+            },
+            "nfft": 64,
+        },
+    )
+
+    assert captured["sig_std"] < float(np.std(sig))
+    np.testing.assert_allclose(captured["rpm"], rpm)
+
+
 def test_current_single_fft_preset_exports_data(tmp_path):
     fd = _make_file(tmp_path)
     preset = AnalysisPreset.from_current_single(

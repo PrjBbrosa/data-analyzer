@@ -649,6 +649,7 @@ class BatchRunner:
 
     @staticmethod
     def _compute_fft_dataframe(sig, fs, params):
+        sig, _spec = BatchRunner._apply_filter_if_enabled(sig, fs, params)
         nfft = BatchRunner._resolve_fft_nfft(len(sig), fs, params)
         win = params.get('window', params.get('win', 'hanning'))
         weighting = str(params.get('weighting', 'None'))
@@ -713,6 +714,8 @@ class BatchRunner:
         """
         from .signal.order_cot import COTOrderAnalyzer, COTParams
 
+        sig, _spec = cls._apply_filter_if_enabled(sig, fs, params)
+
         # Defensive: COT requires strictly monotonic t. Even microsecond
         # jitter in MF4 timestamps would raise ValueError. If not strict,
         # rebuild a uniform fallback from len + fs.
@@ -765,6 +768,7 @@ class BatchRunner:
         ``_write_image``.
         """
         from .signal.spectrogram import SpectrogramAnalyzer, SpectrogramParams
+        sig, _spec = cls._apply_filter_if_enabled(sig, fs, params)
         time, fs = cls._uniform_time_axis_for_spectrogram(time, fs, len(sig))
         sp = SpectrogramParams(
             fs=float(fs),
