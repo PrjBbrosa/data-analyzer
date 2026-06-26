@@ -686,6 +686,47 @@ def test_order_progress_maps_quarter_single_job_to_quarter_total(
     assert calls == [(250, 1000, "阶次 1/1", token)]
 
 
+def test_order_rpm_for_manual_mode_returns_constant_array(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.inspector.order_ctx.set_rpm_mode("manual")
+    win.inspector.order_ctx.spin_manual_rpm.setValue(1234.0)
+
+    rpm = win._order_rpm_for(None, 5)
+
+    assert rpm.tolist() == [1234.0] * 5
+
+
+def test_order_cache_params_include_manual_rpm_mode_and_value(qapp, qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.inspector.order_ctx.set_rpm_mode("manual")
+    win.inspector.order_ctx.spin_manual_rpm.setValue(1234.0)
+    p = {
+        "nfft": 256,
+        "nfft_mode": "fixed",
+        "max_order": 20,
+        "order_res": 0.1,
+        "time_res": 0.05,
+        "samples_per_rev": 256,
+        "rpm_factor": 1.0,
+        "fs": 1000.0,
+        "weighting": "None",
+        "rpm_mode": "manual",
+        "manual_rpm": 1234.0,
+    }
+
+    params = win._order_compute_cache_params(p, ("f1", "rpm"), None)
+
+    assert params["rpm_mode"] == "manual"
+    assert params["manual_rpm"] == 1234.0
+    assert params["rpm_source"] is None
+
+    active_params = win._analysis_compute_params("order")
+    assert active_params["rpm_mode"] == "manual"
+    assert active_params["manual_rpm"] == 1234.0
+
+
 def test_order_progress_aggregates_second_job_halfway(
     qapp, qtbot, monkeypatch
 ):

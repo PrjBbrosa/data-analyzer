@@ -98,8 +98,24 @@ class OrderContextual(QWidget):
         _configure_form(fl)
         self.combo_sig = SearchableComboBox()
         fl.addRow("信号:", _fit_field(self.combo_sig, max_width=_LONG_FIELD_MAX_WIDTH))
+        self.combo_rpm_mode = QComboBox()
+        self.combo_rpm_mode.addItem("转速通道", "channel")
+        self.combo_rpm_mode.addItem("手动 RPM", "manual")
+        fl.addRow(
+            "转速来源:",
+            _fit_field(self.combo_rpm_mode, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
         self.combo_rpm = SearchableComboBox()
         fl.addRow("转速:", _fit_field(self.combo_rpm, max_width=_LONG_FIELD_MAX_WIDTH))
+        self.spin_manual_rpm = _no_buttons(CompactDoubleSpinBox())
+        self.spin_manual_rpm.setRange(1.0, 100000.0)
+        self.spin_manual_rpm.setDecimals(1)
+        self.spin_manual_rpm.setValue(1000.0)
+        self.spin_manual_rpm.setSuffix(" rpm")
+        fl.addRow(
+            "手动RPM:",
+            _fit_field(self.spin_manual_rpm, max_width=_SHORT_FIELD_MAX_WIDTH),
+        )
         self.spin_fs = _no_buttons(CompactDoubleSpinBox())
         self.spin_fs.setRange(1, 1e6)
         self.spin_fs.setValue(1000)
@@ -250,6 +266,8 @@ class OrderContextual(QWidget):
         root.addStretch()
 
         self.btn_ot.clicked.connect(self.order_time_requested)
+        self.combo_rpm_mode.currentIndexChanged.connect(self._sync_rpm_mode)
+        self._sync_rpm_mode()
         self._connect_preset_param_signals()
         self._refresh_order_summary()
 
@@ -468,6 +486,8 @@ class OrderContextual(QWidget):
             z_auto=bool(self.chk_z_auto.isChecked()),
             z_floor=float(self.spin_z_floor.value()),
             z_ceiling=float(self.spin_z_ceiling.value()),
+            rpm_mode=self.rpm_mode(),
+            manual_rpm=self.manual_rpm(),
         )
 
     def _apply_preset(self, d):
@@ -481,6 +501,13 @@ class OrderContextual(QWidget):
     def _apply_preset_values(self, d):
         if 'rpm_factor' in d:
             self.spin_rf.setValue(float(d['rpm_factor']))
+        if 'rpm_mode' in d:
+            self.set_rpm_mode(d['rpm_mode'])
+        if 'manual_rpm' in d:
+            try:
+                self.spin_manual_rpm.setValue(float(d['manual_rpm']))
+            except (TypeError, ValueError):
+                pass
         if 'max_order' in d:
             self.spin_mo.setValue(int(d['max_order']))
         if 'order_res' in d:
@@ -602,7 +629,28 @@ class OrderContextual(QWidget):
         return self.combo_sig.currentData()
 
     def current_rpm(self):
+        if self.rpm_mode() == "manual":
+            return None
         return self.combo_rpm.currentData()
+
+    def rpm_mode(self):
+        return self.combo_rpm_mode.currentData() or "channel"
+
+    def set_rpm_mode(self, mode):
+        target = "manual" if str(mode) == "manual" else "channel"
+        idx = self.combo_rpm_mode.findData(target)
+        if idx >= 0:
+            self.combo_rpm_mode.setCurrentIndex(idx)
+        self._sync_rpm_mode()
+
+    def manual_rpm(self):
+        return float(self.spin_manual_rpm.value())
+
+    def _sync_rpm_mode(self):
+        manual = self.rpm_mode() == "manual"
+        self.combo_rpm.setEnabled(not manual)
+        self.spin_rf.setEnabled(not manual)
+        self.spin_manual_rpm.setEnabled(manual)
 
     def fs(self):
         return self.spin_fs.value()
@@ -640,6 +688,8 @@ class OrderContextual(QWidget):
             nfft_preview=nfft_preview,
             nfft_effective=nfft_effective,
             rpm_factor=self.spin_rf.value(),
+            rpm_mode=self.rpm_mode(),
+            manual_rpm=self.manual_rpm(),
             fs=self.spin_fs.value(),
             weighting=self.combo_weighting.currentText(),
         )
@@ -691,6 +741,13 @@ class OrderContextual(QWidget):
         if 'time_res' in d:
             try:
                 self.spin_time_res.setValue(float(d['time_res']))
+            except (TypeError, ValueError):
+                pass
+        if 'rpm_mode' in d:
+            self.set_rpm_mode(d['rpm_mode'])
+        if 'manual_rpm' in d:
+            try:
+                self.spin_manual_rpm.setValue(float(d['manual_rpm']))
             except (TypeError, ValueError):
                 pass
         if 'nfft' in d:
