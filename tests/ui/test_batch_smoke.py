@@ -61,3 +61,40 @@ def test_batch_smoke_fft_time_fixes_combined(qtbot, tmp_path):
     # Height grows with chip count, capped by the chip-scroll's
     # MAX_VISIBLE_ROWS height (Step 2.3 sets _chip_scroll.maxHeight=96).
     assert four_h >= one_h
+
+
+def test_batch_sheet_time_filter_preset_round_trip(qtbot, tmp_path):
+    import numpy as np
+    import pandas as pd
+    from mf4_analyzer.batch import AnalysisPreset
+    from mf4_analyzer.io import FileData
+    from mf4_analyzer.ui.drawers.batch.sheet import BatchSheet
+
+    t = np.arange(64, dtype=float) / 64.0
+    df = pd.DataFrame({"Time": t, "sig": np.sin(2 * np.pi * 5 * t)})
+    fd = FileData(tmp_path / "x.csv", df, list(df.columns), {}, idx=0, fs=64.0)
+    sheet = BatchSheet(None, files={0: fd})
+    qtbot.addWidget(sheet)
+    preset = AnalysisPreset.free_config(
+        name="time",
+        method="time",
+        target_signals=("sig",),
+        params={
+            "time_range": (0.1, 0.5),
+            "filter": {
+                "enabled": True,
+                "spec": {"kind": "low", "order": 4, "cutoff": 10.0},
+                "show_original": True,
+                "show_filtered": True,
+            },
+        },
+    )
+
+    sheet.apply_preset(preset)
+    got = sheet.get_preset()
+
+    assert got.method == "time"
+    assert got.params["time_range"] == (0.1, 0.5)
+    assert got.params["filter"]["enabled"] is True
+    assert got.params["filter"]["spec"]["kind"] == "low"
+    assert got.params["filter"]["show_filtered"] is True

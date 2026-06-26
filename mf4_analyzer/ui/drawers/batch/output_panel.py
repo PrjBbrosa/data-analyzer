@@ -136,6 +136,9 @@ QWidget#BatchOutputPanel {
         )
         self._widen_axis_label_column(axis_group)
         self._flatten_axis_group_chrome(axis_group)
+        self._z_axis_row = (
+            self._axis_row_parts["z"]["label"].parentWidget().parentWidget()
+        )
         outer.addWidget(axis_group)
         outer.addStretch(1)
 
@@ -216,6 +219,7 @@ QWidget#BatchOutputPanel {
 
     def _apply_method_axis_context(self, method: str) -> None:
         context = _AXIS_CONTEXTS.get(str(method), _AXIS_CONTEXTS["fft"])
+        self._set_z_axis_visible(str(method) != "time")
         for axis, suffix_key in (("x", "x_unit"), ("y", "y_unit")):
             suffix = context[suffix_key]
             text = f" {suffix}" if suffix else ""
@@ -225,6 +229,11 @@ QWidget#BatchOutputPanel {
         self._axis_row_parts["x"]["summary"].setText(context["x_summary"])
         self._axis_row_parts["y"]["label"].setText(context["y_label"])
         self._axis_row_parts["y"]["summary"].setText(context["y_summary"])
+
+    def _set_z_axis_visible(self, visible: bool) -> None:
+        row = getattr(self, "_z_axis_row", None)
+        if row is not None:
+            row.setVisible(bool(visible))
 
     def _widen_axis_label_column(self, axis_group: QWidget) -> None:
         for parts in self._axis_row_parts.values():

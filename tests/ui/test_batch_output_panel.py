@@ -88,6 +88,7 @@ def test_batch_output_panel_time_axis_labels(qtbot):
     assert x_parts["summary"].text() == "全时段"
     assert y_parts["label"].text() == "幅值 (Y):"
     assert y_parts["summary"].text() == "自动范围"
+    assert panel._z_axis_row.isHidden() is True
 
 
 def test_batch_output_panel_unit_toggle_resets_z_range_db_to_linear(qtbot):
