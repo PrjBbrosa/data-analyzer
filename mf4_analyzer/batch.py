@@ -588,14 +588,64 @@ class BatchRunner:
             raise ValueError("缺少有效采样率")
         return np.arange(int(n_samples), dtype=float) / fs
 
+    @staticmethod
+    def _filter_state(params):
+        state = params.get("filter") or {}
+        return state if isinstance(state, dict) else {}
+
+    @classmethod
+    def _filter_enabled(cls, params):
+        return bool(cls._filter_state(params).get("enabled", False))
+
+    @classmethod
+    def _filter_spec_from_params(cls, params):
+        if not cls._filter_enabled(params):
+            return None
+        from .signal.filters import FilterSpec
+
+        return FilterSpec.from_dict(cls._filter_state(params).get("spec") or {})
+
+    @classmethod
+    def _apply_filter_if_enabled(cls, sig, fs, params):
+        spec = cls._filter_spec_from_params(params)
+        if spec is None:
+            return np.asarray(sig, dtype=float), None
+        from .signal import filters as _filters
+
+        guarded, _msg = _filters.nyquist_guard(spec, fs)
+        return _filters.apply(sig, guarded, fs), guarded
+
     @classmethod
     def _compute_time_dataframe(cls, sig, time, fs, params):
         x = cls._time_axis_or_fallback(time, fs, len(sig))
-        return pd.DataFrame({
-            "time_s": x,
-            "series": ["original"] * len(sig),
-            "value": np.asarray(sig, dtype=float),
-        })
+        filter_state = cls._filter_state(params)
+        if not cls._filter_enabled(params):
+            return pd.DataFrame({
+                "time_s": x,
+                "series": ["original"] * len(sig),
+                "value": np.asarray(sig, dtype=float),
+            })
+
+        show_original = bool(filter_state.get("show_original", True))
+        show_filtered = bool(filter_state.get("show_filtered", True))
+        if not show_original and not show_filtered:
+            raise ValueError("时域导出至少需要原始或滤波后一项")
+
+        frames = []
+        if show_original:
+            frames.append(pd.DataFrame({
+                "time_s": x,
+                "series": ["original"] * len(sig),
+                "value": np.asarray(sig, dtype=float),
+            }))
+        if show_filtered:
+            filtered, _spec = cls._apply_filter_if_enabled(sig, fs, params)
+            frames.append(pd.DataFrame({
+                "time_s": x,
+                "series": ["filtered"] * len(filtered),
+                "value": filtered,
+            }))
+        return pd.concat(frames, ignore_index=True)
 
     @staticmethod
     def _compute_fft_dataframe(sig, fs, params):

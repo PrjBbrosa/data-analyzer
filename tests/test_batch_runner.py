@@ -47,6 +47,64 @@ def test_batch_time_dataframe_exports_original_series(tmp_path):
     np.testing.assert_allclose(out["value"].to_numpy(), df["sig"].to_numpy())
 
 
+def test_batch_time_dataframe_exports_original_and_filtered_series(tmp_path):
+    fs = 200.0
+    t = np.arange(400, dtype=float) / fs
+    low = np.sin(2 * np.pi * 5 * t)
+    sig = low + 0.5 * np.sin(2 * np.pi * 60 * t)
+    df = pd.DataFrame({"Time": t, "sig": sig})
+    fd = FileData(tmp_path / "x.csv", df, list(df.columns), {}, idx=0, fs=fs)
+    preset = AnalysisPreset.from_current_single(
+        name="time filtered",
+        method="time",
+        signal=(0, "sig"),
+        params={
+            "filter": {
+                "enabled": True,
+                "spec": {"kind": "low", "order": 4, "cutoff": 20.0},
+                "show_original": True,
+                "show_filtered": True,
+            }
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "done"
+    out = pd.read_csv(result.items[0].data_path)
+    assert set(out["series"]) == {"original", "filtered"}
+    original = out[out["series"] == "original"]["value"].to_numpy()
+    filtered = out[out["series"] == "filtered"]["value"].to_numpy()
+    assert len(original) == len(filtered) == len(sig)
+    assert np.std(filtered - low) < np.std(original - low)
+
+
+def test_batch_time_blocks_when_filter_hides_both_series(tmp_path):
+    t = np.arange(8, dtype=float) / 10.0
+    df = pd.DataFrame({"Time": t, "sig": np.ones_like(t)})
+    fd = FileData(tmp_path / "x.csv", df, list(df.columns), {}, idx=0, fs=10.0)
+    preset = AnalysisPreset.from_current_single(
+        name="hidden",
+        method="time",
+        signal=(0, "sig"),
+        params={
+            "filter": {
+                "enabled": True,
+                "spec": {"kind": "low", "order": 4, "cutoff": 3.0},
+                "show_original": False,
+                "show_filtered": False,
+            }
+        },
+        outputs=BatchOutput(export_data=True, export_image=False),
+    )
+
+    result = BatchRunner({0: fd}).run(preset, tmp_path / "out")
+
+    assert result.status == "blocked"
+    assert "至少需要原始或滤波后一项" in result.blocked[0]
+
+
 def test_current_single_fft_preset_exports_data(tmp_path):
     fd = _make_file(tmp_path)
     preset = AnalysisPreset.from_current_single(
