@@ -7906,3 +7906,21 @@ def test_custom_button_disabled_when_handler_missing(qapp):
     main = btn.findChild(QToolButton, "pgContextCustomActionMain")
     assert not main.isEnabled()
     settings.clear()
+
+
+def test_custom_button_main_runs_handler_and_closes_menu(qapp):
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QToolButton
+    calls = {"copy": 0, "closed": 0}
+    settings = QSettings("MF4AnalyzerTest", "CustomBtnRun")
+    settings.clear()
+    menu, btn = _make_custom_button(
+        qapp, copy=lambda: calls.__setitem__("copy", calls["copy"] + 1),
+        settings=settings,
+    )
+    menu.close = lambda: calls.__setitem__("closed", calls["closed"] + 1)
+    main = btn.findChild(QToolButton, "pgContextCustomActionMain")
+    main.click()
+    assert calls["copy"] == 1
+    assert calls["closed"] == 1
+    settings.clear()
