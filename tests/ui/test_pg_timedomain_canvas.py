@@ -7964,3 +7964,34 @@ def test_custom_button_list_item_disabled_when_unavailable(qapp):
     home_item = btn.findChild(QToolButton, "pgContextActionItem_home")
     assert home_item.isEnabled()
     settings.clear()
+
+
+def test_inline_mouse_row_slot_order_zoom_pan_custom(qapp, monkeypatch):
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QButtonGroup, QToolButton, QWidget
+    settings = QSettings("MF4AnalyzerTest", "MouseRowOrder")
+    settings.clear()
+    canvas = _pg_canvas(qapp)
+    canvas.plot_channels(_five_channel_rows()[:1], mode="subplot")
+    vb = canvas.axes_list[0].view_box
+    menu = _assemble_and_redesign_menu(qapp, canvas, vb, monkeypatch)
+    panel = _inline_panel(menu)
+
+    custom = panel.findChild(QWidget, "pgContextCustomActionButton")
+    assert custom is not None
+    # custom main button is NOT in the zoom/pan exclusive group
+    main = custom.findChild(QToolButton, "pgContextCustomActionMain")
+    for g in panel.findChildren(QButtonGroup):
+        assert main not in g.buttons()
+    # slot order in the mouse-controls row: zoom < pan < custom
+    host = panel.findChild(QWidget, "pgContextMouseControls")
+    lay = host.layout()
+    names = [
+        lay.itemAt(i).widget().objectName()
+        for i in range(lay.count())
+        if lay.itemAt(i).widget() is not None
+    ]
+    assert names.index("pgContextZoomButton") \
+        < names.index("pgContextPanButton") \
+        < names.index("pgContextCustomActionButton")
+    settings.clear()

@@ -405,6 +405,7 @@ class _PgContextInlinePanel(QWidget):
         *,
         view_all_handler=None,
         y_autofit_handler=None,
+        copy_image_handler=None,
         allow_y_grid=True,
         view_box=None,
     ):
@@ -417,6 +418,7 @@ class _PgContextInlinePanel(QWidget):
         self._controller = controller
         self._view_all_handler = view_all_handler
         self._y_autofit_handler = y_autofit_handler
+        self._copy_image_handler = copy_image_handler
         self._allow_y_grid = bool(allow_y_grid)
         self._grid_state = {
             "x": _axis_grid_enabled(plot_item, "bottom") if plot_item else False,
@@ -490,19 +492,25 @@ class _PgContextInlinePanel(QWidget):
         return button
 
     def _build_mouse_row(self, layout, row):
+        host = QWidget(self)
+        host.setObjectName("pgContextMouseControls")
+        host.setAttribute(Qt.WA_TranslucentBackground, True)
+        host.setAutoFillBackground(False)
+        hbox = QHBoxLayout(host)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(8)
+
         zoom_button = self._make_tool_button(_PG_MOUSE_MODE_ZOOM)
         pan_button = self._make_tool_button(_PG_MOUSE_MODE_PAN)
         group = QButtonGroup(self)
         group.setExclusive(True)
         group.addButton(zoom_button)
         group.addButton(pan_button)
-
         try:
             current = self._controller.current_mouse_mode()
         except Exception:
             current = None
         _sync_mouse_mode_toggle_buttons([zoom_button, pan_button], current)
-
         zoom_button.clicked.connect(
             lambda _checked=False: self._select_mouse_mode(_PG_MOUSE_MODE_ZOOM)
         )
@@ -513,8 +521,20 @@ class _PgContextInlinePanel(QWidget):
             zoom_button.setEnabled(False)
             pan_button.setEnabled(False)
 
-        layout.addWidget(zoom_button, row, 0, alignment=Qt.AlignCenter)
-        layout.addWidget(pan_button, row, 2, alignment=Qt.AlignCenter)
+        custom_button = _PgCustomActionButton(
+            self, menu=self._menu, controller=self._controller,
+            view_all_handler=self._view_all_handler,
+            y_autofit_handler=self._y_autofit_handler,
+            copy_image_handler=self._copy_image_handler,
+            panel=self,
+        )
+
+        hbox.addStretch(1)
+        hbox.addWidget(zoom_button)
+        hbox.addWidget(pan_button)
+        hbox.addWidget(custom_button)
+        hbox.addStretch(1)
+        layout.addWidget(host, row, 0, 1, 3)
         self._add_label(layout, row, "鼠标")
 
     def _select_mouse_mode(self, mode):
@@ -697,7 +717,7 @@ class _PgCustomActionButton(QWidget):
 
     def __init__(
         self, parent, *, menu, controller, view_all_handler,
-        y_autofit_handler, copy_image_handler, settings=None,
+        y_autofit_handler, copy_image_handler, settings=None, panel=None,
     ):
         super().__init__(parent)
         self.setObjectName("pgContextCustomActionButton")
@@ -710,6 +730,7 @@ class _PgCustomActionButton(QWidget):
         self._y_autofit_handler = y_autofit_handler
         self._copy_image_handler = copy_image_handler
         self._settings = settings
+        self._panel = panel
         self._action_id = _load_custom_action(settings)
         self._list_host = None
 
@@ -776,7 +797,7 @@ class _PgCustomActionButton(QWidget):
         self._expand_action_list()
 
     def _expand_action_list(self):
-        host = QWidget(self.parent() or self)
+        host = QWidget(self._panel or self)
         host.setObjectName("pgContextActionList")
         host.setAttribute(Qt.WA_TranslucentBackground, True)
         host.setAutoFillBackground(False)
@@ -815,7 +836,7 @@ class _PgCustomActionButton(QWidget):
         host.show()
 
     def _insert_list_into_panel(self, host):
-        panel = self.parent()
+        panel = self._panel
         layout = panel.layout() if panel is not None else None
         if layout is None:
             host.setParent(self)
@@ -843,6 +864,7 @@ def _make_inline_context_panel_action(
     *,
     view_all_handler=None,
     y_autofit_handler=None,
+    copy_image_handler=None,
     allow_y_grid=True,
     view_box=None,
 ):
@@ -852,6 +874,7 @@ def _make_inline_context_panel_action(
         controller,
         view_all_handler=view_all_handler,
         y_autofit_handler=y_autofit_handler,
+        copy_image_handler=copy_image_handler,
         allow_y_grid=allow_y_grid,
         view_box=view_box,
     )
@@ -1076,6 +1099,7 @@ def redesign_pg_context_menu(
     *,
     view_all_handler=None,
     y_autofit_handler=None,
+    copy_image_handler=None,
     allow_y_grid=True,
     keep_plot_options=False,
     view_box=None,
@@ -1100,6 +1124,7 @@ def redesign_pg_context_menu(
         controller,
         view_all_handler=view_all_handler,
         y_autofit_handler=y_autofit_handler,
+        copy_image_handler=copy_image_handler,
         allow_y_grid=allow_y_grid,
         view_box=view_box,
     )
