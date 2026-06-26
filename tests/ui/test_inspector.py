@@ -2934,6 +2934,35 @@ def test_order_contextual_defaults_match_requested_screenshot(qtbot):
     assert p['z_ceiling'] == -10.0
 
 
+def test_order_contextual_manual_rpm_defaults_and_round_trip(qapp):
+    from mf4_analyzer.ui.inspector_sections.contextual_order import OrderContextual
+
+    ctx = OrderContextual()
+    assert ctx.rpm_mode() == "channel"
+    assert ctx.manual_rpm() == 1000.0
+    assert ctx.combo_rpm.isEnabled()
+    assert ctx.spin_rf.isEnabled()
+    assert not ctx.spin_manual_rpm.isEnabled()
+
+    ctx.set_rpm_mode("manual")
+    ctx.spin_manual_rpm.setValue(1350.0)
+
+    params = ctx.current_params()
+    assert params["rpm_mode"] == "manual"
+    assert params["manual_rpm"] == 1350.0
+    assert not ctx.combo_rpm.isEnabled()
+    assert not ctx.spin_rf.isEnabled()
+    assert ctx.spin_manual_rpm.isEnabled()
+
+    restored = OrderContextual()
+    restored.apply_params(params)
+    assert restored.rpm_mode() == "manual"
+    assert restored.manual_rpm() == 1350.0
+    assert not restored.combo_rpm.isEnabled()
+    assert not restored.spin_rf.isEnabled()
+    assert restored.spin_manual_rpm.isEnabled()
+
+
 def test_order_contextual_combo_amp_mode_and_dynamic_removed(qtbot):
     """combo_amp_mode and combo_dynamic widgets are gone (their values
     are now expressed via combo_amp_unit + spin_z_floor/ceiling)."""
