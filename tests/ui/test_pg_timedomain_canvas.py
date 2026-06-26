@@ -7924,3 +7924,43 @@ def test_custom_button_main_runs_handler_and_closes_menu(qapp):
     assert calls["copy"] == 1
     assert calls["closed"] == 1
     settings.clear()
+
+
+def test_custom_button_caret_expands_list_and_rebinds(qapp):
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QMenu, QToolButton, QWidget
+    settings = QSettings("MF4AnalyzerTest", "CustomBtnRebind")
+    settings.clear()
+    menu, btn = _make_custom_button(qapp, settings=settings)
+    closed = {"n": 0}
+    menu.close = lambda: closed.__setitem__("n", closed["n"] + 1)
+
+    assert btn.findChild(QWidget, "pgContextActionList") is None
+    btn.findChild(QToolButton, "pgContextCustomActionCaret").click()
+    lst = btn.findChild(QWidget, "pgContextActionList")
+    assert lst is not None
+    items = [c for c in lst.findChildren(QToolButton)
+             if c.objectName().startswith("pgContextActionItem_")]
+    assert len(items) == 7
+    home_item = btn.findChild(QToolButton, "pgContextActionItem_home")
+    home_item.click()
+    assert btn.current_action_id() == "home"
+    assert settings.value("chartContext/customAction") == "home"
+    assert btn.findChild(QWidget, "pgContextActionList") is None  # collapsed
+    assert closed["n"] == 0  # menu NOT closed on rebind
+    assert not btn.findChildren(QMenu)  # no nested QMenu
+    settings.clear()
+
+
+def test_custom_button_list_item_disabled_when_unavailable(qapp):
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QToolButton
+    settings = QSettings("MF4AnalyzerTest", "CustomBtnItemDisabled")
+    settings.clear()
+    menu, btn = _make_custom_button(qapp, copy=None, settings=settings)
+    btn.findChild(QToolButton, "pgContextCustomActionCaret").click()
+    copy_item = btn.findChild(QToolButton, "pgContextActionItem_copy_image")
+    assert not copy_item.isEnabled()
+    home_item = btn.findChild(QToolButton, "pgContextActionItem_home")
+    assert home_item.isEnabled()
+    settings.clear()

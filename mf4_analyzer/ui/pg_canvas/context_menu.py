@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QRadioButton,
     QToolButton,
+    QVBoxLayout,
     QWidget,
     QWidgetAction,
 )
@@ -769,8 +770,70 @@ class _PgCustomActionButton(QWidget):
             pass
 
     def _toggle_action_list(self, _checked=False):
-        # Implemented in Task 4.
-        pass
+        if self._list_host is not None:
+            self._collapse_action_list()
+            return
+        self._expand_action_list()
+
+    def _expand_action_list(self):
+        host = QWidget(self.parent() or self)
+        host.setObjectName("pgContextActionList")
+        host.setAttribute(Qt.WA_TranslucentBackground, True)
+        host.setAutoFillBackground(False)
+        host.setStyleSheet(
+            "QWidget#pgContextActionList { background: transparent; }"
+            "QToolButton { border: 1px solid transparent; border-radius: 6px;"
+            " background: #ffffff; color: #334155; text-align: left;"
+            " padding: 4px 8px; font-size: 13px; }"
+            "QToolButton:hover { background: #f3f7ff; }"
+            "QToolButton:checked { color: #2563eb; }"
+            "QToolButton:disabled { color: #b8c2d0; }"
+        )
+        col = QVBoxLayout(host)
+        col.setContentsMargins(6, 6, 6, 6)
+        col.setSpacing(2)
+        for action_id in _CUSTOM_ACTION_ORDER:
+            item = QToolButton(host)
+            item.setObjectName(f"pgContextActionItem_{action_id}")
+            item.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            icon_name = _CUSTOM_ACTION_ICONS.get(action_id)
+            if icon_name:
+                item.setIcon(qta.icon(icon_name, color=_PG_ICON_COLOR))
+                item.setIconSize(QSize(16, 16))
+            item.setText(_CUSTOM_ACTION_LABELS.get(action_id, action_id))
+            item.setCheckable(True)
+            item.setChecked(action_id == self._action_id)
+            item.setEnabled(self._resolve(action_id) is not None)
+            item.setCursor(Qt.PointingHandCursor)
+            item.clicked.connect(
+                lambda _c=False, aid=action_id: self._rebind(aid)
+            )
+            col.addWidget(item)
+        self._list_host = host
+        # Inline placement inside the panel's grid layout (no nested QMenu / popup).
+        self._insert_list_into_panel(host)
+        host.show()
+
+    def _insert_list_into_panel(self, host):
+        panel = self.parent()
+        layout = panel.layout() if panel is not None else None
+        if layout is None:
+            host.setParent(self)
+            return
+        row = layout.rowCount()
+        layout.addWidget(host, row, 0, 1, 3)
+
+    def _collapse_action_list(self):
+        if self._list_host is not None:
+            self._list_host.setParent(None)
+            self._list_host.deleteLater()
+            self._list_host = None
+
+    def _rebind(self, action_id):
+        self._action_id = action_id
+        _save_custom_action(action_id, self._settings)
+        self._refresh_main()
+        self._collapse_action_list()
 
 
 def _make_inline_context_panel_action(
