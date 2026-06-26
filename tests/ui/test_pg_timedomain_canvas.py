@@ -7862,3 +7862,47 @@ def test_resolve_custom_action_maps_to_handlers():
         "copy_image", controller=ctl, view_all_handler=va,
         y_autofit_handler=yf, copy_image_handler=None,
     ) is None
+
+
+def _make_custom_button(qapp, *, copy=lambda: None, settings=None):
+    from PyQt5.QtWidgets import QMenu
+    from mf4_analyzer.ui.pg_canvas import context_menu as cm
+
+    class _Ctl:
+        def home(self): pass
+        def back(self): pass
+        def forward(self): pass
+        def save_figure(self): pass
+
+    menu = QMenu()
+    btn = cm._PgCustomActionButton(
+        None, menu=menu, controller=_Ctl(),
+        view_all_handler=lambda: None, y_autofit_handler=lambda: None,
+        copy_image_handler=copy, settings=settings,
+    )
+    return menu, btn
+
+
+def test_custom_button_default_binding_and_objectnames(qapp):
+    from PyQt5.QtCore import QSettings, Qt
+    from PyQt5.QtWidgets import QToolButton
+    settings = QSettings("MF4AnalyzerTest", "CustomBtnDefault")
+    settings.clear()
+    _menu, btn = _make_custom_button(qapp, settings=settings)
+    assert btn.objectName() == "pgContextCustomActionButton"
+    assert btn.findChild(QToolButton, "pgContextCustomActionMain") is not None
+    assert btn.findChild(QToolButton, "pgContextCustomActionCaret") is not None
+    assert btn.current_action_id() == "copy_image"
+    assert btn.testAttribute(Qt.WA_TranslucentBackground)
+    settings.clear()
+
+
+def test_custom_button_disabled_when_handler_missing(qapp):
+    from PyQt5.QtCore import QSettings
+    from PyQt5.QtWidgets import QToolButton
+    settings = QSettings("MF4AnalyzerTest", "CustomBtnDisabled")
+    settings.clear()
+    _menu, btn = _make_custom_button(qapp, copy=None, settings=settings)
+    main = btn.findChild(QToolButton, "pgContextCustomActionMain")
+    assert not main.isEnabled()
+    settings.clear()

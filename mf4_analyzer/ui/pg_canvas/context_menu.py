@@ -677,6 +677,102 @@ class _PgContextInlinePanel(QWidget):
             pass
 
 
+_CUSTOM_ACTION_QSS = (
+    "QWidget#pgContextCustomActionButton { background: transparent; }"
+    "QToolButton#pgContextCustomActionMain {"
+    " border: 1px solid #d6e0ec; border-radius: 7px;"
+    " background: #ffffff; padding: 0px; }"
+    "QToolButton#pgContextCustomActionMain:hover {"
+    " border-color: #0b7af3; background: #f3f7ff; }"
+    "QToolButton#pgContextCustomActionMain:disabled {"
+    " border-color: #e5eaf2; background: #f8fafc; }"
+    "QToolButton#pgContextCustomActionCaret {"
+    " border: none; background: transparent; color: #64748b; padding: 0px; }"
+)
+
+
+class _PgCustomActionButton(QWidget):
+    """Third mouse-row slot: runs one bound execute-type action; ``▾`` rebinds."""
+
+    def __init__(
+        self, parent, *, menu, controller, view_all_handler,
+        y_autofit_handler, copy_image_handler, settings=None,
+    ):
+        super().__init__(parent)
+        self.setObjectName("pgContextCustomActionButton")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet(_CUSTOM_ACTION_QSS)
+        self._menu = menu
+        self._controller = controller
+        self._view_all_handler = view_all_handler
+        self._y_autofit_handler = y_autofit_handler
+        self._copy_image_handler = copy_image_handler
+        self._settings = settings
+        self._action_id = _load_custom_action(settings)
+        self._list_host = None
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self._main = QToolButton(self)
+        self._main.setObjectName("pgContextCustomActionMain")
+        self._main.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self._main.setIconSize(QSize(18, 18))
+        self._main.setFixedSize(32, _INLINE_CONTROL_HEIGHT)
+        self._main.setCursor(Qt.PointingHandCursor)
+        self._main.clicked.connect(self._on_main_clicked)
+        self._caret = QToolButton(self)
+        self._caret.setObjectName("pgContextCustomActionCaret")
+        self._caret.setText("▾")
+        self._caret.setFixedSize(14, _INLINE_CONTROL_HEIGHT)
+        self._caret.setCursor(Qt.PointingHandCursor)
+        self._caret.setToolTip("更换动作")
+        self._caret.clicked.connect(self._toggle_action_list)
+        lay.addWidget(self._main)
+        lay.addWidget(self._caret)
+        self._refresh_main()
+
+    def current_action_id(self):
+        return self._action_id
+
+    def _resolve(self, action_id):
+        return _resolve_custom_action(
+            action_id, controller=self._controller,
+            view_all_handler=self._view_all_handler,
+            y_autofit_handler=self._y_autofit_handler,
+            copy_image_handler=self._copy_image_handler,
+        )
+
+    def _refresh_main(self):
+        icon_name = _CUSTOM_ACTION_ICONS.get(self._action_id)
+        label = _CUSTOM_ACTION_LABELS.get(self._action_id, "")
+        handler = self._resolve(self._action_id)
+        if icon_name:
+            self._main.setIcon(qta.icon(icon_name, color=_PG_ICON_COLOR))
+            self._main.setText("")
+        else:
+            self._main.setText("+")
+        self._main.setToolTip(label)
+        self._main.setEnabled(handler is not None)
+
+    def _on_main_clicked(self, _checked=False):
+        handler = self._resolve(self._action_id)
+        if callable(handler):
+            try:
+                handler()
+            except Exception:
+                pass
+        try:
+            self._menu.close()
+        except Exception:
+            pass
+
+    def _toggle_action_list(self, _checked=False):
+        # Implemented in Task 4.
+        pass
+
+
 def _make_inline_context_panel_action(
     menu,
     plot_item,
