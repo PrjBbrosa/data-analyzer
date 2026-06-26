@@ -894,7 +894,7 @@ class BatchRunner:
 
         BatchRunner._ensure_qapp()
         import pyqtgraph as pg
-        from PyQt5.QtCore import QRectF
+        from PyQt5.QtCore import Qt, QRectF
 
         widget = pg.GraphicsLayoutWidget()
         widget.resize(1120, 630)
@@ -910,6 +910,28 @@ class BatchRunner:
             "colorbar_label": None,
             "colormap_name": None,
         }
+
+        if kind == 'time':
+            df = data
+            line_count = 0
+            for series, group in df.groupby("series", sort=False):
+                x = group["time_s"].to_numpy(dtype=float)
+                y = group["value"].to_numpy(dtype=float)
+                pen = pg.mkPen("w", width=1.5)
+                if str(series) == "filtered":
+                    pen = pg.mkPen("c", width=1.5, style=Qt.DashLine)
+                plot.plot(x, y, pen=pen, name=str(series))
+                line_count += 1
+            plot.setLabel("bottom", "Time (s)")
+            plot.setLabel("left", "Amplitude")
+            if not x_auto and x_max > x_min:
+                plot.setXRange(x_min, x_max, padding=0)
+                info["x_range"] = (x_min, x_max)
+            if not y_auto and y_max > y_min:
+                plot.setYRange(y_min, y_max, padding=0)
+                info["y_range"] = (y_min, y_max)
+            info["line_count"] = line_count
+            return widget, info
 
         if kind == 'fft':
             df = data

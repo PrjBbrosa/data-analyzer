@@ -313,6 +313,27 @@ def test_batch_order_time_csv_shape(tmp_path):
     assert len(df) > 0
 
 
+def test_batch_time_export_scene_renders_line_series():
+    df = pd.DataFrame({
+        "time_s": [0.0, 0.1, 0.0, 0.1],
+        "series": ["original", "original", "filtered", "filtered"],
+        "value": [0.0, 1.0, 0.0, 0.5],
+    })
+
+    _widget, info = BatchRunner._build_export_scene(("time", df), {
+        "x_auto": False,
+        "x_min": 0.0,
+        "x_max": 0.1,
+        "y_auto": False,
+        "y_min": -1.0,
+        "y_max": 1.0,
+    })
+
+    assert info["line_count"] == 2
+    assert info["x_range"] == (0.0, 0.1)
+    assert info["y_range"] == (-1.0, 1.0)
+
+
 def test_batch_heatmap_image_applies_xyz_axis_params(tmp_path):
     """Batch PNG rendering must consume output X/Y/Z axis settings."""
 
