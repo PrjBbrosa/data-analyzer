@@ -341,6 +341,10 @@ class OrderMixin:
                 queue.append((pane_idx, fid, ch, rpm_source))
 
         if not queue:
+            self._order_queue = []
+            self._order_progress_token = None
+            self._order_progress_total_jobs = 0
+            self._order_progress_completed_jobs = 0
             if not any_source:
                 # No captured pane source → legacy inspector-selection path so
                 # the standalone-signal UX + existing tests are unchanged.
@@ -351,6 +355,15 @@ class OrderMixin:
 
         self._order_queue = queue
         self._order_outcome = outcome
+        n_jobs = len(self._order_queue)
+        self._order_progress_token = None
+        self._order_progress_total_jobs = n_jobs
+        self._order_progress_completed_jobs = 0
+        if n_jobs > 0:
+            self._order_progress_token = self._begin_compute_progress(
+                "阶次 1/%d" % n_jobs,
+                total=1000,
+            )
         self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
         self.inspector.order_ctx.set_progress("计算中...")
         self._start_next_order_job()
@@ -379,16 +392,38 @@ class OrderMixin:
             pane_idx, fid, ch, rpm_source = self._order_queue.pop(0)
             if self._dispatch_order_job(pane_idx, fid, ch, rpm_source):
                 return
+            self._advance_order_progress_job()
         # Queue drained.
         self.inspector.order_ctx.set_progress("")
         self._finish_order_outcome_feedback()
 
     def _finish_order_outcome_feedback(self):
+        self._finish_order_progress_if_active()
         outcome = getattr(self, '_order_outcome', None)
         if outcome is None:
             return
         self._emit_compute_feedback(outcome, section_label="时间-阶次")
         self._order_outcome = None
+
+    def _finish_order_progress_if_active(self):
+        token = getattr(self, '_order_progress_token', None)
+        if token is None:
+            return
+        self._finish_compute_progress(token=token)
+        self._order_progress_token = None
+
+    def _advance_order_progress_job(self):
+        token = getattr(self, '_order_progress_token', None)
+        if token is None:
+            return
+        total_jobs = getattr(self, '_order_progress_total_jobs', 0)
+        if total_jobs <= 0:
+            return
+        completed = getattr(self, '_order_progress_completed_jobs', 0)
+        self._order_progress_completed_jobs = min(
+            completed + 1,
+            total_jobs,
+        )
 
     def _dispatch_order_job(self, pane_idx, fid, ch, rpm_source):
         """Fetch the ``(fid, ch)`` signal + ``rpm_source`` rpm, then start the
@@ -459,8 +494,14 @@ class OrderMixin:
         _QThread = getattr(_pkg, 'QThread', QThread) if _pkg is not None else QThread
 
         def job(worker, _sig=sig, _rpm=rpm, _t=t_arr, _p=p):
-            return COTOrderAnalyzer.compute(_sig, _rpm, _t, _p,
-                                            cancel_token=worker.cancelled)
+            return COTOrderAnalyzer.compute(
+                _sig,
+                _rpm,
+                _t,
+                _p,
+                progress_callback=worker.progress.emit,
+                cancel_token=worker.cancelled,
+            )
 
         worker = AnalysisComputeWorker(job)
         thread = _QThread(self)
@@ -470,6 +511,7 @@ class OrderMixin:
         worker.failed.connect(thread.quit)
         worker.finished.connect(self._on_order_finished)
         worker.failed.connect(self._on_order_failed)
+        worker.progress.connect(self._on_order_progress)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._on_order_thread_done)
@@ -652,9 +694,28 @@ class OrderMixin:
         if not self._order_queue:
             self.inspector.order_ctx.set_progress("")
 
+    def _on_order_progress(self, current, total):
+        """Map per-worker progress onto the whole queued Order batch."""
+        token = getattr(self, '_order_progress_token', None)
+        if not token:
+            return
+        total_jobs = max(1, getattr(self, '_order_progress_total_jobs', 0))
+        job_fraction = 0.0
+        if total > 0:
+            job_fraction = max(0.0, min(1.0, current / total))
+        completed = getattr(self, '_order_progress_completed_jobs', 0)
+        overall = (completed + job_fraction) / total_jobs
+        value = int(round(overall * 1000))
+        job_index = min(completed + 1, total_jobs)
+        label = f"阶次 {job_index}/{total_jobs}"
+        self._update_compute_progress(
+            value, 1000, label=label, token=token,
+        )
+
     def _on_order_thread_done(self):
         self._order_thread = None
         self._order_worker = None
+        self._advance_order_progress_job()
         if self._order_queue:
             self._start_next_order_job()
         else:

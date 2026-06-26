@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from mf4_analyzer.ui.main_window import MainWindow
+from mf4_analyzer.ui.main_window import _order_mixin as order_mod
 from mf4_analyzer.ui.main_window import _fft_mixin as fft_mod
 from mf4_analyzer.ui.plot_risk import PlotRisk, PlotRiskLevel
 
@@ -630,3 +631,434 @@ def test_fft_time_do_begins_progress_for_cache_miss_only(
     assert win._fft_time_progress_token is None
     assert win._fft_time_progress_total_jobs == 0
     assert win._fft_time_queue == []
+
+
+def test_order_progress_maps_quarter_single_job_to_quarter_total(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    calls = []
+    win._order_progress_token = token
+    win._order_progress_total_jobs = 1
+    win._order_progress_completed_jobs = 0
+
+    monkeypatch.setattr(
+        win,
+        "_update_compute_progress",
+        lambda current, total, label=None, token=None: calls.append(
+            (current, total, label, token)
+        ),
+    )
+
+    win._on_order_progress(25, 100)
+
+    assert calls == [(250, 1000, "阶次 1/1", token)]
+
+
+def test_order_progress_aggregates_second_job_halfway(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    calls = []
+    win._order_progress_token = token
+    win._order_progress_total_jobs = 2
+    win._order_progress_completed_jobs = 1
+
+    monkeypatch.setattr(
+        win,
+        "_update_compute_progress",
+        lambda current, total, label=None, token=None: calls.append(
+            (current, total, label, token)
+        ),
+    )
+
+    win._on_order_progress(50, 100)
+
+    assert calls == [(750, 1000, "阶次 2/2", token)]
+
+
+def test_order_progress_noops_after_token_clear(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    calls = []
+    win._order_progress_token = None
+    win._order_progress_total_jobs = 1
+    win._order_progress_completed_jobs = 0
+
+    monkeypatch.setattr(
+        win,
+        "_update_compute_progress",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    win._on_order_progress(50, 100)
+
+    assert calls == []
+
+
+def test_order_thread_done_keeps_progress_for_remaining_job(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    started = []
+    finished = []
+    win._order_queue = [(1, "f2", "torque", ("f2", "rpm"))]
+    win._order_progress_token = token
+    win._order_progress_total_jobs = 2
+    win._order_progress_completed_jobs = 0
+
+    monkeypatch.setattr(
+        win,
+        "_start_next_order_job",
+        lambda: started.append("next"),
+    )
+    monkeypatch.setattr(
+        win,
+        "_finish_compute_progress",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    win._on_order_thread_done()
+
+    assert win._order_progress_completed_jobs == 1
+    assert win._order_progress_token is token
+    assert finished == []
+    assert started == ["next"]
+
+
+def test_order_thread_done_finishes_progress_on_final_job(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    finished = []
+    win._order_queue = []
+    win._order_progress_token = token
+    win._order_progress_total_jobs = 2
+    win._order_progress_completed_jobs = 1
+
+    monkeypatch.setattr(
+        win,
+        "_finish_compute_progress",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    win._on_order_thread_done()
+
+    assert win._order_progress_completed_jobs == 2
+    assert finished == [((), {"token": token})]
+    assert win._order_progress_token is None
+
+
+def test_order_skipped_queue_items_advance_and_finish_progress(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    finished = []
+    win._order_queue = [
+        (0, "f1", "missing", ("f1", "rpm")),
+        (1, "f2", "short", ("f2", "rpm")),
+    ]
+    win._order_progress_token = token
+    win._order_progress_total_jobs = 2
+    win._order_progress_completed_jobs = 0
+
+    monkeypatch.setattr(win, "_dispatch_order_job", lambda *_args: False)
+    monkeypatch.setattr(
+        win,
+        "_finish_compute_progress",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    win._start_next_order_job()
+
+    assert win._order_progress_completed_jobs == 2
+    assert finished == [((), {"token": token})]
+    assert win._order_progress_token is None
+    assert win._order_queue == []
+
+
+def _make_order_dispatch_window(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    state = win.analysis_managers["order"].get(
+        win.analysis_managers["order"].active
+    )
+    state.panes[0].sources = [("f1", "torque")]
+    state.panes[0].rpm_source = ("f1", "rpm")
+    win.files["f1"] = SimpleNamespace()
+
+    monkeypatch.setattr(win, "_capture_active_analysis_view", lambda _section: None)
+    monkeypatch.setattr(
+        win,
+        "_analysis_cache_key",
+        lambda section, fid, ch, rpm_source=None, pane_idx=None: (
+            section,
+            fid,
+            ch,
+            rpm_source,
+            pane_idx,
+        ),
+    )
+    monkeypatch.setattr(win, "_render_order_on", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        win,
+        "_emit_compute_feedback",
+        lambda *_args, **_kwargs: None,
+    )
+    return win
+
+
+def test_order_do_begins_progress_for_cache_miss_only(
+    qapp, qtbot, monkeypatch
+):
+    win = _make_order_dispatch_window(qapp, qtbot, monkeypatch)
+    progress_token = object()
+    begin_calls = []
+    started = []
+
+    monkeypatch.setattr(
+        win,
+        "_begin_compute_progress",
+        lambda label, total=None, token=None: begin_calls.append((label, total))
+        or progress_token,
+    )
+    monkeypatch.setattr(win.analysis_caches["order"], "get", lambda _key: None)
+    monkeypatch.setattr(
+        win,
+        "_start_next_order_job",
+        lambda: started.append(list(win._order_queue)),
+    )
+
+    win.do_order_time()
+
+    assert begin_calls == [("阶次 1/1", 1000)]
+    assert win._order_progress_token is progress_token
+    assert win._order_progress_total_jobs == 1
+    assert win._order_progress_completed_jobs == 0
+    assert started == [[(0, "f1", "torque", ("f1", "rpm"))]]
+
+    cached_win = _make_order_dispatch_window(qapp, qtbot, monkeypatch)
+    cached_begin_calls = []
+    cached_started = []
+    cached = SimpleNamespace(metadata={"frames": 1})
+    monkeypatch.setattr(
+        cached_win,
+        "_begin_compute_progress",
+        lambda label, total=None, token=None: cached_begin_calls.append(
+            (label, total)
+        )
+        or object(),
+    )
+    monkeypatch.setattr(
+        cached_win.analysis_caches["order"],
+        "get",
+        lambda _key: cached,
+    )
+    monkeypatch.setattr(
+        cached_win,
+        "_start_next_order_job",
+        lambda: cached_started.append(list(cached_win._order_queue)),
+    )
+
+    cached_win.do_order_time()
+
+    assert cached_begin_calls == []
+    assert cached_started == []
+    assert cached_win._order_progress_token is None
+    assert cached_win._order_progress_total_jobs == 0
+    assert cached_win._order_queue == []
+
+
+class _FakeSignal:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, slot):
+        self.slots.append(slot)
+
+    def emit(self, *args):
+        for slot in list(self.slots):
+            try:
+                slot(*args)
+            except TypeError:
+                slot()
+
+
+class _FakeOrderWorker:
+    instances = []
+
+    def __init__(self, job):
+        self.job = job
+        self.progress = _FakeSignal()
+        self.finished = _FakeSignal()
+        self.failed = _FakeSignal()
+        self.cancelled_called = False
+        self.__class__.instances.append(self)
+
+    def moveToThread(self, _thread):
+        pass
+
+    def cancelled(self):
+        self.cancelled_called = True
+        return False
+
+    def cancel(self):
+        self.cancelled_called = True
+
+    def run(self):
+        result = self.job(self)
+        self.finished.emit(result)
+
+    def deleteLater(self):
+        pass
+
+
+class _FakeOrderThread:
+    instances = []
+
+    def __init__(self, *_args, **_kwargs):
+        self.started = _FakeSignal()
+        self.finished = _FakeSignal()
+        self.running = False
+        self.__class__.instances.append(self)
+
+    def start(self):
+        self.running = True
+
+    def quit(self):
+        self.running = False
+        self.finished.emit()
+
+    def isRunning(self):
+        return self.running
+
+    def deleteLater(self):
+        pass
+
+
+class _FakeFrame:
+    def __init__(self, **columns):
+        self._columns = {
+            name: np.asarray(values, dtype=float)
+            for name, values in columns.items()
+        }
+        self.columns = list(self._columns)
+
+    def __getitem__(self, name):
+        return SimpleNamespace(values=self._columns[name])
+
+
+def test_order_dispatch_passes_progress_callback_and_connects_worker_progress(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    n = 128
+    t = np.linspace(0.0, 1.0, n)
+    win.files["f1"] = SimpleNamespace(
+        time_array=t,
+        data=_FakeFrame(
+            torque=np.sin(t),
+            rpm=np.full(n, 1200.0),
+        ),
+    )
+    progress_calls = []
+    finished = []
+    fake_result = SimpleNamespace(metadata={"frames": 1})
+    _FakeOrderWorker.instances = []
+    _FakeOrderThread.instances = []
+
+    monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args: None)
+    monkeypatch.setattr(win, "_warn_if_order_speed_unsuitable", lambda _rpm: True)
+    monkeypatch.setattr(win.inspector.order_ctx, "fs", lambda: 128.0)
+    monkeypatch.setattr(win.inspector.order_ctx, "rpm_factor", lambda: 1.0)
+    monkeypatch.setattr(
+        win.inspector.order_ctx,
+        "current_params",
+        lambda: {"samples_per_rev": 16},
+    )
+    monkeypatch.setattr(
+        win.inspector.order_ctx,
+        "get_params",
+        lambda: {
+            "nfft": 16,
+            "nfft_effective": 16,
+            "window": "hanning",
+            "max_order": 8.0,
+            "order_res": 0.5,
+            "time_res": 0.1,
+            "weighting": "None",
+        },
+    )
+    monkeypatch.setattr(
+        win,
+        "_resolve_order_effective_params",
+        lambda op, _rpm, _t: dict(
+            op,
+            nfft_effective=16,
+            max_order=8.0,
+            order_res=0.5,
+            time_res=0.1,
+        ),
+    )
+    monkeypatch.setattr(
+        win,
+        "_order_analysis_cache_key",
+        lambda *_args, **_kwargs: ("order", "f1", "torque"),
+    )
+    monkeypatch.setattr(
+        win,
+        "_on_order_progress",
+        lambda *args: progress_calls.append(args),
+    )
+    monkeypatch.setattr(
+        win,
+        "_on_order_finished",
+        lambda result: finished.append(result),
+    )
+    monkeypatch.setattr(win, "_on_order_failed", lambda message: None)
+    monkeypatch.setattr(win, "_on_order_thread_done", lambda: None)
+    monkeypatch.setattr(order_mod, "QThread", _FakeOrderThread)
+
+    import mf4_analyzer.ui.analysis_worker as worker_mod
+    import mf4_analyzer.ui.main_window as main_window_pkg
+    from mf4_analyzer.signal.order_cot import COTOrderAnalyzer
+
+    monkeypatch.setattr(main_window_pkg, "QThread", _FakeOrderThread)
+    monkeypatch.setattr(worker_mod, "AnalysisComputeWorker", _FakeOrderWorker)
+
+    def fake_compute(*_args, progress_callback=None, cancel_token=None, **_kwargs):
+        assert progress_callback is not None
+        assert cancel_token is not None
+        progress_callback(1, 2)
+        return fake_result
+
+    monkeypatch.setattr(COTOrderAnalyzer, "compute", fake_compute)
+
+    assert win._dispatch_order_job(0, "f1", "torque", ("f1", "rpm"))
+
+    worker = _FakeOrderWorker.instances[-1]
+    assert win._on_order_progress in worker.progress.slots
+
+    worker.run()
+
+    assert progress_calls == [(1, 2)]
+    assert finished == [fake_result]

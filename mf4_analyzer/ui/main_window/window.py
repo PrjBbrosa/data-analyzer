@@ -113,6 +113,9 @@ class MainWindow(
         # V7b: Order split-heatmap sequential compute queue (mirrors the
         # FFT-vs-Time queue above). Jobs are ``(pane_idx, fid, ch, rpm_source)``.
         self._order_queue = []
+        self._order_progress_token = None
+        self._order_progress_total_jobs = 0
+        self._order_progress_completed_jobs = 0
         self._last_batch_preset = None
         self._acquisition_cockpit_window = None
         self._init_ui();
