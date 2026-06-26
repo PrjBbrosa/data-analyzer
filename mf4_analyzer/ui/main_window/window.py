@@ -14,8 +14,10 @@ from PyQt5.QtWidgets import (
     QDialog,
     QFileDialog,
     QColorDialog,
+    QLabel,
     QMainWindow,
     QMessageBox,
+    QSizePolicy,
     QStatusBar,
 )
 from PyQt5.QtCore import QTimer, QThread, Qt
@@ -29,6 +31,7 @@ from ...signal import (
     resolve_order_nfft,
 )
 from ... import app_meta
+from ..plot_risk import PlotRisk, PlotRiskLevel, estimate_time_overlay_risk
 
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from ._analysis_mixin import AnalysisMixin
@@ -248,6 +251,7 @@ class MainWindow(
         self._install_status_hint_bar(self.chart_stack.current_mode())
         self.chart_stack.mode_changed.connect(self._install_status_hint_bar)
         self.statusBar.showMessage("Ready")
+        self._install_plot_risk_label()
         self._install_update_indicator()
 
         # Floating toast (constructed lazily on first use; the parent must
@@ -315,6 +319,59 @@ class MainWindow(
         self._update_btn.clicked.connect(self._open_release_page)
 
         self.statusBar.addPermanentWidget(self._update_btn)
+
+    def _install_plot_risk_label(self) -> None:
+        self._plot_risk_label = QLabel(self)
+        self._plot_risk_label.setObjectName("plotRiskLabel")
+        self._plot_risk_label.setMinimumWidth(0)
+        self._plot_risk_label.setMaximumWidth(520)
+        self._plot_risk_label.setSizePolicy(
+            QSizePolicy.Maximum, QSizePolicy.Fixed
+        )
+        self._plot_risk_label.setVisible(False)
+        self.statusBar.addPermanentWidget(self._plot_risk_label, 0)
+
+    def _show_plot_risk(self, risk: PlotRisk) -> None:
+        label = getattr(self, "_plot_risk_label", None)
+        if label is None:
+            return
+        if risk.level is PlotRiskLevel.OK:
+            self._clear_plot_risk()
+            return
+        label.setProperty("riskLevel", risk.level.value)
+        label.setText(self._format_plot_risk_text(risk))
+        label.setToolTip("\n".join(risk.reasons))
+        label.style().unpolish(label)
+        label.style().polish(label)
+        label.setVisible(True)
+
+    def _clear_plot_risk(self) -> None:
+        label = getattr(self, "_plot_risk_label", None)
+        if label is None:
+            return
+        label.clear()
+        label.setToolTip("")
+        label.setProperty("riskLevel", "")
+        label.style().unpolish(label)
+        label.style().polish(label)
+        label.setVisible(False)
+
+    def _format_plot_risk_text(self, risk: PlotRisk) -> str:
+        points = self._format_count_zh(risk.sample_total, "点")
+        prefix = "滤波 + 叠加" if risk.filter_enabled else "叠加模式"
+        suffix = "风险较高" if risk.level is PlotRiskLevel.DANGER else "可能卡顿"
+        return (
+            f"{prefix}：{risk.channel_count} 个通道 / "
+            f"{risk.series_count} 条曲线 / {points}，{suffix}"
+        )
+
+    def _format_count_zh(self, value: int, unit: str) -> str:
+        value = int(value)
+        if value >= 10_000_000:
+            return f"{value / 10_000_000:.1f} 千万{unit}"
+        if value >= 10_000:
+            return f"{value / 10_000:.1f} 万{unit}"
+        return f"{value} {unit}"
 
     def _open_software_manual(self):
         """Open the whole-app TraceLab usage manual in the default browser."""
@@ -1760,6 +1817,58 @@ class MainWindow(
             # need a real plot to compute + bind the dashed traces.
             self.plot_time()
 
+    def _estimate_current_time_overlay_risk(self, mode: str, checked) -> PlotRisk:
+        if self.inspector.top.range_enabled():
+            time_range = self.inspector.top.range_values()
+        else:
+            time_range = None
+
+        filter_enabled = False
+        show_original = True
+        show_filtered = False
+        fp = getattr(self.inspector, "filter_panel", None)
+        if fp is not None and fp.is_enabled():
+            spec = fp.filter_spec()
+            show_original = fp.show_original()
+            show_filtered = fp.show_filtered()
+            filter_enabled = (spec.cutoff > 0) or (
+                spec.cutoff_lo > 0 and spec.cutoff_hi > 0
+            )
+
+        return estimate_time_overlay_risk(
+            checked=checked,
+            files=self.files,
+            mode=mode,
+            time_range=time_range,
+            filter_enabled=filter_enabled,
+            show_original=show_original,
+            show_filtered=show_filtered,
+        )
+
+    def _confirm_overlay_risk(self, risk: PlotRisk) -> bool:
+        body = (
+            f"叠加模式将绘制 {risk.channel_count} 个通道、"
+            f"{risk.series_count} 条曲线，约 "
+            f"{self._format_count_zh(risk.sample_total, '点')}。\n"
+            "这可能导致明显卡顿。是否继续？"
+        )
+        if risk.filter_enabled:
+            body += "\n当前还启用了滤波，会额外增加计算时间。"
+        result = QMessageBox.question(
+            self,
+            "叠加模式数据量较大",
+            body,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return result == QMessageBox.Yes
+
+    def _restore_previous_time_plot_mode(self, prev_mode) -> None:
+        # Best-effort v1: avoiding the expensive plot is the safety-critical
+        # behavior; mode-widget restoration is intentionally left no-op to avoid
+        # re-entering the plot_mode_changed signal chain.
+        return
+
     def _plot_time_on_canvas(
         self,
         canvas,
@@ -1816,18 +1925,26 @@ class MainWindow(
         # ownership switches between an axes-stack and a single ax with
         # twinx siblings. To keep cached envelopes from rendering on the
         # wrong axes, drop them when the layout changes.
+        prev_mode = self._last_plot_mode
         if update_primary_ui:
             if self._last_plot_mode is not None and self._last_plot_mode != mode:
                 canvas.invalidate_envelope_cache("plot mode changed")
             self._last_plot_mode = mode
-        if (update_primary_ui or user_initiated) and mode == 'overlay' and len(checked) > 5:
-            ans = QMessageBox.question(
-                self, "确认",
-                f"overlay 下 {len(checked)} 个通道会产生 {len(checked)} 根 Y 轴，右侧可能拥挤。继续？",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if ans != QMessageBox.Yes:
-                self.statusBar.showMessage("已取消绘图", 3000)
-                return
+        is_primary = update_primary_ui or user_initiated
+        risk = self._estimate_current_time_overlay_risk(mode, checked)
+        if is_primary:
+            if mode == 'overlay' and risk.level is not PlotRiskLevel.OK:
+                self._show_plot_risk(risk)
+            else:
+                self._clear_plot_risk()
+        if (
+            risk.level is PlotRiskLevel.DANGER
+            and is_primary
+            and not self._confirm_overlay_risk(risk)
+        ):
+            self._restore_previous_time_plot_mode(prev_mode)
+            self.statusBar.showMessage("已取消高风险叠加绘制", 3000)
+            return
 
         # 获取自定义横坐标数据。
         # Phase 1 item 3: avoid `.values.copy()` — `to_numpy(copy=False)`

@@ -1668,6 +1668,29 @@ QStatusBar#surfaceStatusBar {
     border-radius: 8px;
 }
 
+QStatusBar#surfaceStatusBar QLabel#plotRiskLabel {
+    min-height: 20px;
+    max-height: 22px;
+    padding: 1px 8px;
+    margin: 0 4px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 700;
+    qproperty-alignment: AlignCenter;
+}
+
+QStatusBar#surfaceStatusBar QLabel#plotRiskLabel[riskLevel="warning"] {
+    color: #8a4b00;
+    background-color: #fff7df;
+    border: 1px solid #f0c56a;
+}
+
+QStatusBar#surfaceStatusBar QLabel#plotRiskLabel[riskLevel="danger"] {
+    color: #b42318;
+    background-color: #fff1f0;
+    border: 1px solid #f3a7a0;
+}
+
 QStatusBar#surfaceStatusBar QToolButton#surfaceVersionButton {
     min-height: 22px;
     padding: 1px 7px;
