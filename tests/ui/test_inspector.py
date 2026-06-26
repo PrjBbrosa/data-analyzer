@@ -2950,6 +2950,7 @@ def test_order_contextual_manual_rpm_defaults_and_round_trip(qapp):
     params = ctx.current_params()
     assert params["rpm_mode"] == "manual"
     assert params["manual_rpm"] == 1350.0
+    assert ctx.current_rpm() is None
     assert not ctx.combo_rpm.isEnabled()
     assert not ctx.spin_rf.isEnabled()
     assert ctx.spin_manual_rpm.isEnabled()

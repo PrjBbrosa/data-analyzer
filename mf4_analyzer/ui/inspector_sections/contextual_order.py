@@ -629,6 +629,8 @@ class OrderContextual(QWidget):
         return self.combo_sig.currentData()
 
     def current_rpm(self):
+        if self.rpm_mode() == "manual":
+            return None
         return self.combo_rpm.currentData()
 
     def rpm_mode(self):

@@ -716,7 +716,7 @@ def test_order_cache_params_include_manual_rpm_mode_and_value(qapp, qtbot):
         "manual_rpm": 1234.0,
     }
 
-    params = win._order_compute_cache_params(p, None, None)
+    params = win._order_compute_cache_params(p, ("f1", "rpm"), None)
 
     assert params["rpm_mode"] == "manual"
     assert params["manual_rpm"] == 1234.0

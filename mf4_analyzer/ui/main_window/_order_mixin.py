@@ -235,6 +235,7 @@ class OrderMixin:
         nfft = p.get('nfft_effective', p.get('nfft'))
         if nfft is None:
             nfft = p.get('nfft_preview') or 256
+        rpm_mode = p.get('rpm_mode', 'channel')
         # 规约：凡进入 COT 计算的用户可调参数都必须在此登记，否则改了不刷新。
         # window is a COTParams field consumed by COTOrderAnalyzer.compute
         # (it builds the analysis window from it); registering it here keeps
@@ -249,15 +250,19 @@ class OrderMixin:
             'time_res': p.get('time_res'),
             'samples_per_rev': p.get('samples_per_rev'),
             'rpm_factor': p.get('rpm_factor'),
-            'rpm_mode': p.get('rpm_mode', 'channel'),
+            'rpm_mode': rpm_mode,
             'manual_rpm': (
                 float(p.get('manual_rpm', 1000.0))
-                if p.get('rpm_mode', 'channel') == 'manual'
+                if rpm_mode == 'manual'
                 else None
             ),
             'fs': p.get('fs'),
             'weighting': str(p.get('weighting', 'None')),
-            'rpm_source': list(rpm_source) if rpm_source else None,
+            'rpm_source': (
+                None
+                if rpm_mode == 'manual'
+                else list(rpm_source) if rpm_source else None
+            ),
             'time_range': time_range,
         }
 
