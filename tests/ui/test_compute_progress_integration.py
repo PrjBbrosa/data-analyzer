@@ -361,3 +361,272 @@ def test_fft_multi_source_progress_wraps_cache_misses_only(
 
     assert order == [("plot", 2)]
     assert token_by_label == []
+
+
+def test_fft_time_progress_maps_half_single_job_to_half_total(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    calls = []
+    win._fft_time_progress_token = token
+    win._fft_time_progress_total_jobs = 1
+    win._fft_time_progress_completed_jobs = 0
+
+    monkeypatch.setattr(
+        win,
+        "_update_compute_progress",
+        lambda current, total, label=None, token=None: calls.append(
+            (current, total, label, token)
+        ),
+    )
+
+    win._on_fft_time_progress(50, 100)
+
+    assert calls == [(500, 1000, "FFT-时间 1/1", token)]
+
+
+def test_fft_time_progress_aggregates_second_job_halfway(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    calls = []
+    win._fft_time_progress_token = token
+    win._fft_time_progress_total_jobs = 2
+    win._fft_time_progress_completed_jobs = 1
+
+    monkeypatch.setattr(
+        win,
+        "_update_compute_progress",
+        lambda current, total, label=None, token=None: calls.append(
+            (current, total, label, token)
+        ),
+    )
+
+    win._on_fft_time_progress(50, 100)
+
+    assert calls == [(750, 1000, "FFT-时间 2/2", token)]
+
+
+def test_fft_time_thread_done_keeps_progress_for_remaining_job(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    started = []
+    finished = []
+    win._fft_time_queue = [("pane1", "f2", "speed")]
+    win._fft_time_progress_token = token
+    win._fft_time_progress_total_jobs = 2
+    win._fft_time_progress_completed_jobs = 0
+
+    monkeypatch.setattr(
+        win,
+        "_start_next_fft_time_job",
+        lambda: started.append("next"),
+    )
+    monkeypatch.setattr(
+        win,
+        "_finish_compute_progress",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    win._on_fft_time_thread_done()
+
+    assert win._fft_time_progress_completed_jobs == 1
+    assert win._fft_time_progress_token is token
+    assert finished == []
+    assert started == ["next"]
+
+
+def test_fft_time_thread_done_never_finishes_while_queue_remains(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    started = []
+    finished = []
+    win._fft_time_queue = [("pane1", "f2", "speed")]
+    win._fft_time_progress_token = token
+    win._fft_time_progress_total_jobs = 1
+    win._fft_time_progress_completed_jobs = 0
+
+    monkeypatch.setattr(
+        win,
+        "_start_next_fft_time_job",
+        lambda: started.append("next"),
+    )
+    monkeypatch.setattr(
+        win,
+        "_finish_compute_progress",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    win._on_fft_time_thread_done()
+
+    assert win._fft_time_progress_completed_jobs == 1
+    assert win._fft_time_progress_token is token
+    assert finished == []
+    assert started == ["next"]
+
+
+def test_fft_time_thread_done_finishes_progress_on_final_job(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    finished = []
+    win._fft_time_queue = []
+    win._fft_time_progress_token = token
+    win._fft_time_progress_total_jobs = 2
+    win._fft_time_progress_completed_jobs = 1
+
+    monkeypatch.setattr(
+        win,
+        "_finish_compute_progress",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    win._on_fft_time_thread_done()
+
+    assert win._fft_time_progress_completed_jobs == 2
+    assert finished == [((), {"token": token})]
+    assert win._fft_time_progress_token is None
+
+
+def test_fft_time_skipped_queue_items_advance_and_finish_progress(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    token = object()
+    finished = []
+    win._fft_time_queue = [(0, "f1", "missing"), (1, "f2", "short")]
+    win._fft_time_progress_token = token
+    win._fft_time_progress_total_jobs = 2
+    win._fft_time_progress_completed_jobs = 0
+
+    monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args: None)
+    monkeypatch.setattr(win, "_dispatch_fft_time_job", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        win,
+        "_finish_compute_progress",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    win._start_next_fft_time_job()
+
+    assert win._fft_time_progress_completed_jobs == 2
+    assert finished == [((), {"token": token})]
+    assert win._fft_time_progress_token is None
+    assert win._fft_time_queue == []
+
+
+def _fft_time_progress_params():
+    return {
+        "fs": 16.0,
+        "window": "hann",
+        "nfft": 16,
+        "nfft_effective": 16,
+        "nfft_mode": "fixed",
+        "overlap": 0.0,
+        "remove_mean": False,
+        "weighting": "None",
+    }
+
+
+def _make_fft_time_dispatch_window(qapp, qtbot, monkeypatch):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    state = win.analysis_managers["fft_time"].get(
+        win.analysis_managers["fft_time"].active
+    )
+    state.panes[0].sources = [("f1", "speed")]
+    win.files["f1"] = SimpleNamespace()
+    params = _fft_time_progress_params()
+
+    monkeypatch.setattr(win, "_capture_active_analysis_view", lambda _section: None)
+    monkeypatch.setattr(win.inspector.fft_time_ctx, "get_params", lambda: params)
+    monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args: None)
+    monkeypatch.setattr(
+        win,
+        "_fft_time_effective_params_for_source",
+        lambda p, fid, ch, time_range: (dict(p), (0.0, 1.0)),
+    )
+    monkeypatch.setattr(
+        win,
+        "_fft_time_analysis_cache_key",
+        lambda fid, ch, p, pane_idx: ("analysis", fid, ch, pane_idx),
+    )
+    monkeypatch.setattr(
+        win,
+        "_fft_time_cache_key",
+        lambda key_params: ("lru", key_params["fid"], key_params["channel"]),
+    )
+    monkeypatch.setattr(win, "_render_fft_time_on", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        win,
+        "_emit_compute_feedback",
+        lambda *_args, **_kwargs: None,
+    )
+    return win
+
+
+def test_fft_time_do_begins_progress_for_cache_miss_only(
+    qapp, qtbot, monkeypatch
+):
+    win = _make_fft_time_dispatch_window(qapp, qtbot, monkeypatch)
+    progress_token = object()
+    begin_calls = []
+    started = []
+
+    monkeypatch.setattr(
+        win,
+        "_begin_compute_progress",
+        lambda label, total=None, token=None: begin_calls.append((label, total))
+        or progress_token,
+    )
+    monkeypatch.setattr(
+        win,
+        "_fft_time_cache_get",
+        lambda _key: None,
+    )
+    monkeypatch.setattr(
+        win,
+        "_start_next_fft_time_job",
+        lambda: started.append(list(win._fft_time_queue)),
+    )
+
+    win.do_fft_time()
+
+    assert begin_calls == [("FFT-时间 1/1", 1000)]
+    assert win._fft_time_progress_token is progress_token
+    assert win._fft_time_progress_total_jobs == 1
+    assert win._fft_time_progress_completed_jobs == 0
+    assert started == [[(0, "f1", "speed")]]
+
+    begin_calls.clear()
+    started.clear()
+    cached = SimpleNamespace(metadata={"frames": 1})
+    monkeypatch.setattr(win, "_fft_time_cache_get", lambda _key: cached)
+
+    win.do_fft_time()
+
+    assert begin_calls == []
+    assert started == []
+    assert win._fft_time_progress_token is None
+    assert win._fft_time_progress_total_jobs == 0
+    assert win._fft_time_queue == []

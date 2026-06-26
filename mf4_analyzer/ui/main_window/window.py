@@ -102,6 +102,9 @@ class MainWindow(
         # current job's render target; the queue drives the next dispatch
         # from ``_on_fft_time_thread_done``.
         self._fft_time_queue = []
+        self._fft_time_progress_token = None
+        self._fft_time_progress_total_jobs = 0
+        self._fft_time_progress_completed_jobs = 0
         # Order (COT) worker thread (M5). Same QObject + QThread pattern
         # as the FFT-vs-Time pair above; refs set in ``do_order_time``,
         # cleared in ``_on_order_thread_done``.
