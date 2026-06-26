@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -814,20 +815,27 @@ class _PgCustomActionButton(QWidget):
         host.setObjectName("pgContextActionList")
         host.setAttribute(Qt.WA_TranslucentBackground, True)
         host.setAutoFillBackground(False)
-        host.setStyleSheet(
-            "QWidget#pgContextActionList { background: transparent; }"
+        outer = QVBoxLayout(host)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = QFrame(host)
+        card.setObjectName("pgContextActionListCard")
+        card.setStyleSheet(
+            "QFrame#pgContextActionListCard {"
+            " background: #ffffff; border: 1px solid #d6e0ec;"
+            " border-radius: 8px; }"
             "QToolButton { border: 1px solid transparent; border-radius: 6px;"
-            " background: #ffffff; color: #334155; text-align: left;"
-            " padding: 4px 8px; font-size: 13px; }"
+            " background: transparent; color: #334155; text-align: left;"
+            " padding: 4px 10px; font-size: 13px; }"
             "QToolButton:hover { background: #f3f7ff; }"
-            "QToolButton:checked { color: #2563eb; }"
+            "QToolButton:checked { color: #2563eb; background: #eef4ff; }"
             "QToolButton:disabled { color: #b8c2d0; }"
         )
-        col = QVBoxLayout(host)
+        outer.addWidget(card)
+        col = QVBoxLayout(card)
         col.setContentsMargins(6, 6, 6, 6)
         col.setSpacing(2)
         for action_id in _CUSTOM_ACTION_ORDER:
-            item = QToolButton(host)
+            item = QToolButton(card)
             item.setObjectName(f"pgContextActionItem_{action_id}")
             item.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
             icon_name = _CUSTOM_ACTION_ICONS.get(action_id)
@@ -839,26 +847,40 @@ class _PgCustomActionButton(QWidget):
             item.setChecked(action_id == self._action_id)
             item.setEnabled(self._resolve(action_id) is not None)
             item.setCursor(Qt.PointingHandCursor)
+            item.setMinimumWidth(150)
             item.clicked.connect(
                 lambda _c=False, aid=action_id: self._rebind(aid)
             )
             col.addWidget(item)
         self._list_host = host
-        # Inline placement inside the panel's grid layout (no nested QMenu / popup).
         self._insert_list_into_panel(host)
-        host.show()
 
     def _insert_list_into_panel(self, host):
         panel = self._panel
-        layout = panel.layout() if panel is not None else None
-        if layout is None:
+        if panel is None:
+            # Detached / unit-test use: keep it as a plain child widget.
             host.setParent(self)
+            host.show()
             return
-        row = layout.rowCount()
-        layout.addWidget(host, row, 0, 1, 3)
+        # A grid row inside the QWidgetAction panel gets clipped by the QMenu
+        # and never repaints (verified on-device). Float a frameless popup
+        # anchored under the caret instead. It stays a QObject child of the
+        # panel (findable / styled); Qt.Popup nests above the open menu.
+        from PyQt5.QtCore import QPoint
+
+        host.setParent(
+            panel,
+            Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint,
+        )
+        host.adjustSize()
+        anchor = self._caret.mapToGlobal(QPoint(0, self._caret.height() + 2))
+        host.move(anchor)
+        host.show()
+        host.raise_()
 
     def _collapse_action_list(self):
         if self._list_host is not None:
+            self._list_host.hide()
             self._list_host.setParent(None)
             self._list_host.deleteLater()
             self._list_host = None
