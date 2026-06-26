@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import qtawesome as qta
-from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtCore import QSize, Qt, QSettings
 from PyQt5.QtWidgets import (
     QAction,
     QButtonGroup,
@@ -103,6 +103,69 @@ _INLINE_TRACK_WIDTH = 72
 _INLINE_MIDDLE_WIDTH = 24
 _INLINE_LABEL_WIDTH = 40
 _INLINE_CONTROL_HEIGHT = 30
+
+_DEFAULT_CUSTOM_ACTION = "copy_image"
+_CUSTOM_ACTION_SETTINGS_KEY = "chartContext/customAction"
+_CUSTOM_ACTION_ORDER = [
+    "copy_image", "home", "back", "forward", "y_fit", "view_all", "export",
+]
+_CUSTOM_ACTION_LABELS = {
+    "copy_image": "复制为图片",
+    "home": "重置视图",
+    "back": "上一步视图",
+    "forward": "下一步视图",
+    "y_fit": "Y适应",
+    "view_all": "全图",
+    "export": "导出图片",
+}
+_CUSTOM_ACTION_ICONS = {
+    "copy_image": "mdi.content-copy",
+    "home": "mdi.home",
+    "back": "mdi.arrow-left",
+    "forward": "mdi.arrow-right",
+    "y_fit": "mdi.arrow-expand-vertical",
+    "view_all": "mdi.fit-to-page-outline",
+    "export": "mdi.content-save-outline",
+}
+_CUSTOM_ACTION_CONTROLLER_METHODS = {
+    "home": "home",
+    "back": "back",
+    "forward": "forward",
+    "export": "save_figure",
+}
+
+
+def _load_custom_action(settings=None):
+    settings = settings if settings is not None else QSettings()
+    value = settings.value(_CUSTOM_ACTION_SETTINGS_KEY, _DEFAULT_CUSTOM_ACTION)
+    text = str(value or "").strip()
+    if text not in _CUSTOM_ACTION_ORDER:
+        return _DEFAULT_CUSTOM_ACTION
+    return text
+
+
+def _save_custom_action(action_id, settings=None):
+    if action_id not in _CUSTOM_ACTION_ORDER:
+        return
+    settings = settings if settings is not None else QSettings()
+    settings.setValue(_CUSTOM_ACTION_SETTINGS_KEY, action_id)
+
+
+def _resolve_custom_action(
+    action_id, *, controller, view_all_handler, y_autofit_handler, copy_image_handler
+):
+    """Return a 0-arg callable for ``action_id`` in this context, or None if unavailable."""
+    if action_id == "copy_image":
+        return copy_image_handler if callable(copy_image_handler) else None
+    if action_id == "view_all":
+        return view_all_handler if callable(view_all_handler) else None
+    if action_id == "y_fit":
+        return y_autofit_handler if callable(y_autofit_handler) else None
+    method = _CUSTOM_ACTION_CONTROLLER_METHODS.get(action_id)
+    if method is not None and controller is not None:
+        fn = getattr(controller, method, None)
+        return fn if callable(fn) else None
+    return None
 
 _MOUSE_MODE_TOGGLE_QSS = (
     "QWidget#pgMouseModeToggleRow {"

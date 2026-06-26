@@ -7810,3 +7810,55 @@ class TestCompanionDashStyleSync(TestFilterCompanionOverlay):
             f"({orig_only:.1f}ms) — the dashed-companion raster regression is back"
         )
         canvas.deleteLater()
+
+
+def test_custom_action_registry_and_persistence(monkeypatch):
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui.pg_canvas import context_menu as cm
+
+    assert cm._CUSTOM_ACTION_ORDER == [
+        "copy_image", "home", "back", "forward", "y_fit", "view_all", "export",
+    ]
+    assert cm._DEFAULT_CUSTOM_ACTION == "copy_image"
+    assert set(cm._CUSTOM_ACTION_LABELS) == set(cm._CUSTOM_ACTION_ORDER)
+    assert set(cm._CUSTOM_ACTION_ICONS) == set(cm._CUSTOM_ACTION_ORDER)
+
+    settings = QSettings("MF4AnalyzerTest", "RegistryCase")
+    settings.clear()
+    assert cm._load_custom_action(settings) == "copy_image"
+    cm._save_custom_action("home", settings)
+    assert cm._load_custom_action(settings) == "home"
+    settings.setValue(cm._CUSTOM_ACTION_SETTINGS_KEY, "bogus")
+    assert cm._load_custom_action(settings) == "copy_image"
+    settings.clear()
+
+
+def test_resolve_custom_action_maps_to_handlers():
+    from mf4_analyzer.ui.pg_canvas import context_menu as cm
+
+    class _Ctl:
+        def home(self): pass
+        def back(self): pass
+        def forward(self): pass
+        def save_figure(self): pass
+
+    ctl = _Ctl()
+    va = lambda: None
+    yf = lambda: None
+    copy = lambda: None
+
+    def resolve(aid):
+        return cm._resolve_custom_action(
+            aid, controller=ctl, view_all_handler=va,
+            y_autofit_handler=yf, copy_image_handler=copy,
+        )
+
+    assert resolve("home") == ctl.home
+    assert resolve("export") == ctl.save_figure
+    assert resolve("view_all") is va
+    assert resolve("y_fit") is yf
+    assert resolve("copy_image") is copy
+    assert cm._resolve_custom_action(
+        "copy_image", controller=ctl, view_all_handler=va,
+        y_autofit_handler=yf, copy_image_handler=None,
+    ) is None
