@@ -496,9 +496,15 @@ class _PgContextInlinePanel(QWidget):
         host.setObjectName("pgContextMouseControls")
         host.setAttribute(Qt.WA_TranslucentBackground, True)
         host.setAutoFillBackground(False)
-        hbox = QHBoxLayout(host)
-        hbox.setContentsMargins(0, 0, 0, 0)
-        hbox.setSpacing(8)
+        hg = QGridLayout(host)
+        hg.setContentsMargins(0, 0, 0, 0)
+        hg.setHorizontalSpacing(0)
+        hg.setVerticalSpacing(0)
+        hg.setColumnMinimumWidth(0, _INLINE_TRACK_WIDTH)
+        hg.setColumnMinimumWidth(1, _INLINE_MIDDLE_WIDTH)
+        hg.setColumnMinimumWidth(2, _INLINE_TRACK_WIDTH)
+        for _c in range(3):
+            hg.setColumnStretch(_c, 0)
 
         zoom_button = self._make_tool_button(_PG_MOUSE_MODE_ZOOM)
         pan_button = self._make_tool_button(_PG_MOUSE_MODE_PAN)
@@ -529,11 +535,15 @@ class _PgContextInlinePanel(QWidget):
             panel=self,
         )
 
-        hbox.addStretch(1)
-        hbox.addWidget(zoom_button)
-        hbox.addWidget(pan_button)
-        hbox.addWidget(custom_button)
-        hbox.addStretch(1)
+        # Align slots to the tracks below: zoom on the left track (col0),
+        # custom on the right track (col2); pan spans all three columns and
+        # centers on the panel midline (dash column) without widening col1.
+        hg.addWidget(zoom_button, 0, 0, alignment=Qt.AlignCenter)
+        hg.addWidget(
+            pan_button, 0, 0, 1, 3,
+            alignment=Qt.AlignHCenter | Qt.AlignVCenter,
+        )
+        hg.addWidget(custom_button, 0, 2, alignment=Qt.AlignCenter)
         layout.addWidget(host, row, 0, 1, 3)
         self._add_label(layout, row, "鼠标")
 
