@@ -1,5 +1,6 @@
 from mf4_analyzer.ui.compute_progress import ComputeProgressWidget
 from mf4_analyzer.ui.main_window import MainWindow
+from mf4_analyzer.ui.main_window import window as window_mod
 
 
 def test_progress_widget_is_hidden_when_idle(qapp, qtbot):
@@ -82,3 +83,29 @@ def test_main_window_compute_progress_token_guards_stale_updates(qapp, qtbot):
 
     window._update_compute_progress(80, 100)
     assert not window._compute_progress.isVisible()
+
+
+def test_begin_compute_progress_can_skip_process_events(qapp, qtbot, monkeypatch):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    calls = []
+
+    monkeypatch.setattr(
+        window_mod.QApplication,
+        "processEvents",
+        lambda *args, **kwargs: calls.append("process"),
+    )
+
+    token = window._begin_compute_progress(
+        "FFT-时间 1/1",
+        total=1000,
+        process_events=False,
+    )
+
+    assert calls == []
+    assert window._active_compute_progress_token is token
+
+    window._finish_compute_progress(token=token)
+    window._begin_compute_progress("时间域绘制中")
+
+    assert calls == ["process"]

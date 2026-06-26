@@ -363,6 +363,7 @@ class OrderMixin:
             self._order_progress_token = self._begin_compute_progress(
                 "阶次 1/%d" % n_jobs,
                 total=1000,
+                process_events=False,
             )
         self.statusBar.showMessage('计算时间-阶次谱 (COT)...')
         self.inspector.order_ctx.set_progress("计算中...")
@@ -511,7 +512,14 @@ class OrderMixin:
         worker.failed.connect(thread.quit)
         worker.finished.connect(self._on_order_finished)
         worker.failed.connect(self._on_order_failed)
-        worker.progress.connect(self._on_order_progress)
+        progress_token = getattr(self, '_order_progress_token', None)
+        worker_progress_token = (
+            progress_token if progress_token is not None else object()
+        )
+        worker.progress.connect(
+            lambda current, total, token=worker_progress_token:
+                self._on_order_progress(current, total, token=token)
+        )
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._on_order_thread_done)
@@ -694,10 +702,12 @@ class OrderMixin:
         if not self._order_queue:
             self.inspector.order_ctx.set_progress("")
 
-    def _on_order_progress(self, current, total):
+    def _on_order_progress(self, current, total, *, token=None):
         """Map per-worker progress onto the whole queued Order batch."""
-        token = getattr(self, '_order_progress_token', None)
-        if not token:
+        active_token = getattr(self, '_order_progress_token', None)
+        if active_token is None:
+            return
+        if token is not None and token is not active_token:
             return
         total_jobs = max(1, getattr(self, '_order_progress_total_jobs', 0))
         job_fraction = 0.0
@@ -709,7 +719,7 @@ class OrderMixin:
         job_index = min(completed + 1, total_jobs)
         label = f"阶次 {job_index}/{total_jobs}"
         self._update_compute_progress(
-            value, 1000, label=label, token=token,
+            value, 1000, label=label, token=active_token,
         )
 
     def _on_order_thread_done(self):

@@ -350,11 +350,14 @@ class MainWindow(
         label: str,
         total: int | None = None,
         token: object | None = None,
+        *,
+        process_events: bool = True,
     ) -> object:
         active_token = token if token is not None else object()
         self._active_compute_progress_token = active_token
         self._compute_progress.begin(label, total)
-        QApplication.processEvents()
+        if process_events:
+            QApplication.processEvents()
         return active_token
 
     def _update_compute_progress(

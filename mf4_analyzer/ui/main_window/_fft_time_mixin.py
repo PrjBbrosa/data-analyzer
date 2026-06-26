@@ -367,6 +367,7 @@ class FFTTimeMixin:
             self._fft_time_progress_token = self._begin_compute_progress(
                 "FFT-时间 1/%d" % n_jobs,
                 total=1000,
+                process_events=False,
             )
         self._start_next_fft_time_job()
 
@@ -615,7 +616,14 @@ class FFTTimeMixin:
         worker.failed.connect(thread.quit)
         worker.finished.connect(self._on_fft_time_finished)
         worker.failed.connect(self._on_fft_time_failed)
-        worker.progress.connect(self._on_fft_time_progress)
+        progress_token = getattr(self, '_fft_time_progress_token', None)
+        worker_progress_token = (
+            progress_token if progress_token is not None else object()
+        )
+        worker.progress.connect(
+            lambda current, total, token=worker_progress_token:
+                self._on_fft_time_progress(current, total, token=token)
+        )
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(self._on_fft_time_thread_done)
@@ -761,10 +769,12 @@ class FFTTimeMixin:
             self.toast(msg, "error")
         self.statusBar.showMessage(f"FFT vs Time 错误: {message}")
 
-    def _on_fft_time_progress(self, current, total):
+    def _on_fft_time_progress(self, current, total, *, token=None):
         """Map per-worker progress onto the whole queued FFT-vs-Time batch."""
-        token = getattr(self, '_fft_time_progress_token', None)
-        if not token:
+        active_token = getattr(self, '_fft_time_progress_token', None)
+        if active_token is None:
+            return
+        if token is not None and token is not active_token:
             return
         total_jobs = max(1, getattr(self, '_fft_time_progress_total_jobs', 0))
         job_fraction = 0.0
@@ -776,7 +786,7 @@ class FFTTimeMixin:
         job_index = min(completed + 1, total_jobs)
         label = f"FFT-时间 {job_index}/{total_jobs}"
         self._update_compute_progress(
-            value, 1000, label=label, token=token,
+            value, 1000, label=label, token=active_token,
         )
 
     def _on_fft_time_thread_done(self):

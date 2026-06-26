@@ -59,7 +59,7 @@ def _make_time_window(qapp, qtbot, monkeypatch):
 def _install_progress_spies(monkeypatch, win, order):
     active_token = object()
 
-    def begin(label, total=None, token=None):
+    def begin(label, total=None, token=None, process_events=True):
         order.append(("begin", label))
         return active_token
 
@@ -274,7 +274,7 @@ def test_fft_multi_source_progress_wraps_cache_misses_only(
     order = []
     token_by_label = []
 
-    def begin(label, total=None, token=None):
+    def begin(label, total=None, token=None, process_events=True):
         tok = object()
         token_by_label.append(tok)
         order.append(("begin", label))
@@ -412,6 +412,33 @@ def test_fft_time_progress_aggregates_second_job_halfway(
     win._on_fft_time_progress(50, 100)
 
     assert calls == [(750, 1000, "FFT-时间 2/2", token)]
+
+
+def test_fft_time_progress_ignores_stale_worker_token(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    active_token = object()
+    stale_token = object()
+    calls = []
+    win._fft_time_progress_token = active_token
+    win._fft_time_progress_total_jobs = 1
+    win._fft_time_progress_completed_jobs = 0
+
+    monkeypatch.setattr(
+        win,
+        "_update_compute_progress",
+        lambda current, total, label=None, token=None: calls.append(
+            (current, total, label, token)
+        ),
+    )
+
+    win._on_fft_time_progress(50, 100, token=stale_token)
+    win._on_fft_time_progress(50, 100, token=active_token)
+
+    assert calls == [(500, 1000, "FFT-时间 1/1", active_token)]
 
 
 def test_fft_time_thread_done_keeps_progress_for_remaining_job(
@@ -597,7 +624,8 @@ def test_fft_time_do_begins_progress_for_cache_miss_only(
     monkeypatch.setattr(
         win,
         "_begin_compute_progress",
-        lambda label, total=None, token=None: begin_calls.append((label, total))
+        lambda label, total=None, token=None, process_events=True:
+            begin_calls.append((label, total, process_events))
         or progress_token,
     )
     monkeypatch.setattr(
@@ -613,7 +641,7 @@ def test_fft_time_do_begins_progress_for_cache_miss_only(
 
     win.do_fft_time()
 
-    assert begin_calls == [("FFT-时间 1/1", 1000)]
+    assert begin_calls == [("FFT-时间 1/1", 1000, False)]
     assert win._fft_time_progress_token is progress_token
     assert win._fft_time_progress_total_jobs == 1
     assert win._fft_time_progress_completed_jobs == 0
@@ -681,6 +709,33 @@ def test_order_progress_aggregates_second_job_halfway(
     win._on_order_progress(50, 100)
 
     assert calls == [(750, 1000, "阶次 2/2", token)]
+
+
+def test_order_progress_ignores_stale_worker_token(
+    qapp, qtbot, monkeypatch
+):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    qapp.processEvents()
+    active_token = object()
+    stale_token = object()
+    calls = []
+    win._order_progress_token = active_token
+    win._order_progress_total_jobs = 1
+    win._order_progress_completed_jobs = 0
+
+    monkeypatch.setattr(
+        win,
+        "_update_compute_progress",
+        lambda current, total, label=None, token=None: calls.append(
+            (current, total, label, token)
+        ),
+    )
+
+    win._on_order_progress(25, 100, token=stale_token)
+    win._on_order_progress(25, 100, token=active_token)
+
+    assert calls == [(250, 1000, "阶次 1/1", active_token)]
 
 
 def test_order_progress_noops_after_token_clear(qapp, qtbot, monkeypatch):
@@ -836,7 +891,8 @@ def test_order_do_begins_progress_for_cache_miss_only(
     monkeypatch.setattr(
         win,
         "_begin_compute_progress",
-        lambda label, total=None, token=None: begin_calls.append((label, total))
+        lambda label, total=None, token=None, process_events=True:
+            begin_calls.append((label, total, process_events))
         or progress_token,
     )
     monkeypatch.setattr(win.analysis_caches["order"], "get", lambda _key: None)
@@ -848,7 +904,7 @@ def test_order_do_begins_progress_for_cache_miss_only(
 
     win.do_order_time()
 
-    assert begin_calls == [("阶次 1/1", 1000)]
+    assert begin_calls == [("阶次 1/1", 1000, False)]
     assert win._order_progress_token is progress_token
     assert win._order_progress_total_jobs == 1
     assert win._order_progress_completed_jobs == 0
@@ -861,9 +917,8 @@ def test_order_do_begins_progress_for_cache_miss_only(
     monkeypatch.setattr(
         cached_win,
         "_begin_compute_progress",
-        lambda label, total=None, token=None: cached_begin_calls.append(
-            (label, total)
-        )
+        lambda label, total=None, token=None, process_events=True:
+            cached_begin_calls.append((label, total, process_events))
         or object(),
     )
     monkeypatch.setattr(
@@ -982,9 +1037,11 @@ def test_order_dispatch_passes_progress_callback_and_connects_worker_progress(
     )
     progress_calls = []
     finished = []
+    active_token = object()
     fake_result = SimpleNamespace(metadata={"frames": 1})
     _FakeOrderWorker.instances = []
     _FakeOrderThread.instances = []
+    win._order_progress_token = active_token
 
     monkeypatch.setattr(win, "_pane_time_range_for", lambda *_args: None)
     monkeypatch.setattr(win, "_warn_if_order_speed_unsuitable", lambda _rpm: True)
@@ -1027,7 +1084,7 @@ def test_order_dispatch_passes_progress_callback_and_connects_worker_progress(
     monkeypatch.setattr(
         win,
         "_on_order_progress",
-        lambda *args: progress_calls.append(args),
+        lambda *args, **kwargs: progress_calls.append((args, kwargs)),
     )
     monkeypatch.setattr(
         win,
@@ -1056,9 +1113,9 @@ def test_order_dispatch_passes_progress_callback_and_connects_worker_progress(
     assert win._dispatch_order_job(0, "f1", "torque", ("f1", "rpm"))
 
     worker = _FakeOrderWorker.instances[-1]
-    assert win._on_order_progress in worker.progress.slots
+    assert worker.progress.slots
 
     worker.run()
 
-    assert progress_calls == [(1, 2)]
+    assert progress_calls == [((1, 2), {"token": active_token})]
     assert finished == [fake_result]

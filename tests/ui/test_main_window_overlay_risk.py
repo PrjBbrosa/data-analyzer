@@ -174,6 +174,59 @@ def test_low_risk_non_overlay_primary_path_clears_label(qapp, qtbot, monkeypatch
     assert w._plot_risk_label.text() == ""
 
 
+def test_status_bar_risk_progress_and_help_controls_do_not_overlap_under_qss(
+    qapp, qtbot
+):
+    from pathlib import Path
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+        w = MainWindow()
+        qtbot.addWidget(w)
+        w.resize(1100, 640)
+        w.show()
+        qtbot.waitExposed(w)
+        qapp.processEvents()
+
+        w._show_plot_risk(_risk(PlotRiskLevel.DANGER, filter_enabled=True))
+        token = w._begin_compute_progress("FFT-时间 1/2", total=1000)
+        w._update_compute_progress(500, 1000, label="FFT-时间 1/2", token=token)
+        qapp.processEvents()
+
+        widgets = [
+            w._plot_risk_label,
+            w._compute_progress,
+            w._help_btn,
+            w._update_btn,
+        ]
+        rects = [(widget.objectName(), widget.geometry()) for widget in widgets]
+        bar_rect = w.statusBar.rect()
+        for name, rect in rects:
+            assert bar_rect.contains(rect), (
+                f"{name} {rect.getRect()} must stay inside status bar "
+                f"{bar_rect.getRect()}"
+            )
+
+        for idx, (left_name, left_rect) in enumerate(rects):
+            for right_name, right_rect in rects[idx + 1:]:
+                separated = (
+                    left_rect.right() < right_rect.left()
+                    or right_rect.right() < left_rect.left()
+                    or left_rect.bottom() < right_rect.top()
+                    or right_rect.bottom() < left_rect.top()
+                )
+                assert separated, (
+                    f"{left_name} {left_rect.getRect()} overlaps "
+                    f"{right_name} {right_rect.getRect()}"
+                )
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 def test_estimate_overlay_risk_uses_checked_range_and_effective_filter(
     qapp, qtbot, monkeypatch
 ):
