@@ -42,9 +42,7 @@ class ProjectIOMixin:
     """
 
     def open_files_or_project(self):
-        """统一打开入口：文件对话框同时接受数据文件和 .tlproj。
-        数据文件追加；单个项目替换（有文件时先确认）；项目+文件先开项目再追加；≥2个项目拒绝。"""
-        from pathlib import Path
+        """统一打开入口：文件对话框同时接受数据文件和 .tlproj。"""
         import sys as _sys
         _pkg = _sys.modules.get('mf4_analyzer.ui.main_window')
         _QFileDialog = getattr(_pkg, 'QFileDialog', QFileDialog) if _pkg is not None else QFileDialog
@@ -53,8 +51,14 @@ class ProjectIOMixin:
         )
         if not fps:
             return
-        projects = [p for p in fps if Path(p).suffix.lower() == ".tlproj"]
-        data_files = [p for p in fps if Path(p).suffix.lower() != ".tlproj"]
+        self._open_paths(fps)
+
+    def _open_paths(self, paths):
+        """共享分发：数据文件追加；单个 .tlproj 替换（先确认）；项目+文件先开项目再
+        追加；≥2 个项目拒绝。由「打开」菜单和拖放共用，行为零分叉。"""
+        from pathlib import Path
+        projects = [p for p in paths if Path(p).suffix.lower() == ".tlproj"]
+        data_files = [p for p in paths if Path(p).suffix.lower() != ".tlproj"]
 
         if len(projects) >= 2:
             QMessageBox.warning(self, "无法打开", "一次只能打开一个项目（.tlproj）。")
