@@ -2,7 +2,7 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
-    QFrame, QLabel, QPushButton, QVBoxLayout,
+    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
 )
 
 from PyQt5.QtCore import QRectF
@@ -36,18 +36,34 @@ class CursorPill(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 7, 22, 8)
+        lay.setContentsMargins(10, 7, 12, 8)
         lay.setSpacing(2)
         self._primary = QLabel("", self)
         self._primary.setObjectName("cursorPillPrimary")
         self._primary.setTextFormat(Qt.RichText)
         self._primary.setTextInteractionFlags(Qt.NoTextInteraction)
+        self._toggle_btn = QPushButton("−", self)
+        self._toggle_btn.setObjectName("cursorPillToggle")
+        self._toggle_btn.setFixedSize(16, 16)
+        self._toggle_btn.setCursor(Qt.ArrowCursor)
+        self._toggle_btn.clicked.connect(self._toggle_mode)
+        # First row: primary readout, then the +/- toggle pinned a fixed gap
+        # after the text. The trailing stretch absorbs any extra width a wider
+        # detail block contributes below, so the toggle keeps a constant
+        # distance from the first line across full/mini instead of jumping with
+        # the pill's right edge.
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(10)
+        top_row.addWidget(self._primary, 0, Qt.AlignVCenter)
+        top_row.addWidget(self._toggle_btn, 0, Qt.AlignVCenter)
+        top_row.addStretch(1)
         self._detail = QLabel("", self)
         self._detail.setObjectName("cursorPillDetail")
         self._detail.setTextFormat(Qt.RichText)
         self._detail.setTextInteractionFlags(Qt.NoTextInteraction)
         self._detail.setVisible(False)
-        lay.addWidget(self._primary)
+        lay.addLayout(top_row)
         lay.addWidget(self._detail)
         self._drag_offset = None
         # User-positioned flag — true after first manual drag, so resize events
@@ -58,13 +74,7 @@ class CursorPill(QFrame):
         self._single_full_detail = ""
         self._single_mini_detail = ""
         self._single_tooltip = ""
-        self._toggle_btn = QPushButton("−", self)
-        self._toggle_btn.setObjectName("cursorPillToggle")
-        self._toggle_btn.setFixedSize(16, 16)
-        self._toggle_btn.setCursor(Qt.ArrowCursor)
-        self._toggle_btn.clicked.connect(self._toggle_mode)
         self._update_toggle_button()
-        self._toggle_btn.raise_()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -196,11 +206,6 @@ class CursorPill(QFrame):
             e.accept()
             return
         super().mouseReleaseEvent(e)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        btn_w = self._toggle_btn.width()
-        self._toggle_btn.move(self.width() - btn_w - 4, 4)
 
     def _toggle_mode(self):
         old_right = self.x() + self.width()

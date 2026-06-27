@@ -419,6 +419,55 @@ def test_cursor_pill_toggle_expand_stays_inside_parent_right_edge(qapp, qtbot):
     assert abs(new_right - old_right) <= 1
 
 
+def test_cursor_pill_toggle_keeps_constant_gap_between_primary_and_button(
+    qapp, qtbot
+):
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget()
+    parent.resize(1000, 400)
+    qtbot.addWidget(parent)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    # Short first line + long channel names: mini (one-line name+value) is wider
+    # than full (stacked), so the pill width flips between the two modes. The
+    # toggle must keep a constant gap to the first line regardless.
+    pill.set_primary("<span>A=1.0s B=2.0s ΔT=1.0s</span>")
+    pill.set_dual_rows([
+        ("very_long_dual_cursor_channel_name_to_force_width",
+         -1.0, 2.0, 0.5, 1.5, " Nm", "#ef4444"),
+        ("another_long_dual_cursor_channel_name_for_more_width",
+         -3.0, 4.0, 0.25, -0.75, " Nm", "#1769e0"),
+    ])
+    pill.show()
+    qapp.processEvents()
+
+    def settle():
+        pill.adjustSize()
+        pill.resize(pill.sizeHint())
+        qapp.processEvents()
+
+    def primary_to_button_gap():
+        settle()
+        primary_right = pill._primary.x() + pill._primary.sizeHint().width()
+        return pill._toggle_btn.x() - primary_right
+
+    settle()
+    full_width = pill.width()
+    full_gap = primary_to_button_gap()
+
+    pill._toggle_mode()
+    settle()
+    mini_width = pill.width()
+    mini_gap = primary_to_button_gap()
+
+    # The scenario must actually flip the pill width, else the test is vacuous.
+    assert mini_width != full_width
+    # ...but the toggle stays a constant distance from the first line.
+    assert abs(mini_gap - full_gap) <= 1
+
+
 def test_user_placed_primary_pill_preserves_right_edge_after_dual_rows_resize(
     qapp, qtbot
 ):
