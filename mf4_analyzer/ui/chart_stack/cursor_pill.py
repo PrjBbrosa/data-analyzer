@@ -2,7 +2,7 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+    QFrame, QLabel, QPushButton, QVBoxLayout,
 )
 
 from PyQt5.QtCore import QRectF
@@ -16,6 +16,11 @@ from ._helpers import _format_mini_html
 _CURSOR_PILL_RADIUS = 9.0
 _CURSOR_PILL_BG = QColor(255, 255, 255, 235)
 _CURSOR_PILL_BORDER = QColor("#d8e0eb")
+
+# Gap kept on the toggle's right and the clearance reserved on the first line so
+# the corner-pinned +/- button never overlaps the primary readout text.
+_TOGGLE_EDGE_GAP = 4
+_TOGGLE_FIRST_LINE_RESERVE = 24
 
 _CURSOR_HTML_SEP = '<span style="color:#cbd5e1;">  &nbsp;│&nbsp;  </span>'
 
@@ -36,34 +41,23 @@ class CursorPill(QFrame):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 7, 12, 8)
+        lay.setContentsMargins(10, 7, 10, 8)
         lay.setSpacing(2)
         self._primary = QLabel("", self)
         self._primary.setObjectName("cursorPillPrimary")
         self._primary.setTextFormat(Qt.RichText)
         self._primary.setTextInteractionFlags(Qt.NoTextInteraction)
-        self._toggle_btn = QPushButton("−", self)
-        self._toggle_btn.setObjectName("cursorPillToggle")
-        self._toggle_btn.setFixedSize(16, 16)
-        self._toggle_btn.setCursor(Qt.ArrowCursor)
-        self._toggle_btn.clicked.connect(self._toggle_mode)
-        # First row: primary readout, then the +/- toggle pinned a fixed gap
-        # after the text. The trailing stretch absorbs any extra width a wider
-        # detail block contributes below, so the toggle keeps a constant
-        # distance from the first line across full/mini instead of jumping with
-        # the pill's right edge.
-        top_row = QHBoxLayout()
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing(10)
-        top_row.addWidget(self._primary, 0, Qt.AlignVCenter)
-        top_row.addWidget(self._toggle_btn, 0, Qt.AlignVCenter)
-        top_row.addStretch(1)
+        # Reserve room on the first line's right so the corner-pinned toggle
+        # never overlaps the readout even when the primary line is the widest
+        # row (e.g. dual-cursor A·B·ΔT·1/ΔT). Only the first line is padded; the
+        # detail block below keeps the full width.
+        self._primary.setContentsMargins(0, 0, _TOGGLE_FIRST_LINE_RESERVE, 0)
         self._detail = QLabel("", self)
         self._detail.setObjectName("cursorPillDetail")
         self._detail.setTextFormat(Qt.RichText)
         self._detail.setTextInteractionFlags(Qt.NoTextInteraction)
         self._detail.setVisible(False)
-        lay.addLayout(top_row)
+        lay.addWidget(self._primary)
         lay.addWidget(self._detail)
         self._drag_offset = None
         # User-positioned flag — true after first manual drag, so resize events
@@ -74,7 +68,33 @@ class CursorPill(QFrame):
         self._single_full_detail = ""
         self._single_mini_detail = ""
         self._single_tooltip = ""
+        # Free-floating child pinned to the top-right corner. Repositioned from
+        # adjustSize() (every content/width change funnels through it) and
+        # resizeEvent, so it stays in the corner without depending on event
+        # delivery timing.
+        self._toggle_btn = QPushButton("−", self)
+        self._toggle_btn.setObjectName("cursorPillToggle")
+        self._toggle_btn.setFixedSize(16, 16)
+        self._toggle_btn.setCursor(Qt.ArrowCursor)
+        self._toggle_btn.clicked.connect(self._toggle_mode)
         self._update_toggle_button()
+        self._position_toggle()
+
+    def _position_toggle(self):
+        """Pin the +/- toggle to the pill's top-right corner."""
+        btn = self._toggle_btn
+        btn.move(self.width() - btn.width() - _TOGGLE_EDGE_GAP, _TOGGLE_EDGE_GAP)
+        btn.raise_()
+
+    def adjustSize(self):
+        # Every content/width change funnels through adjustSize(); reposition the
+        # corner toggle here so it never depends on resize-event delivery timing.
+        super().adjustSize()
+        self._position_toggle()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_toggle()
 
     def paintEvent(self, event):
         painter = QPainter(self)

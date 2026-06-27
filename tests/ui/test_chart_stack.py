@@ -419,9 +419,7 @@ def test_cursor_pill_toggle_expand_stays_inside_parent_right_edge(qapp, qtbot):
     assert abs(new_right - old_right) <= 1
 
 
-def test_cursor_pill_toggle_keeps_constant_gap_between_primary_and_button(
-    qapp, qtbot
-):
+def test_cursor_pill_toggle_stays_pinned_to_top_right_corner(qapp, qtbot):
     from PyQt5.QtWidgets import QWidget
     from mf4_analyzer.ui.chart_stack import CursorPill
 
@@ -430,10 +428,9 @@ def test_cursor_pill_toggle_keeps_constant_gap_between_primary_and_button(
     qtbot.addWidget(parent)
     pill = CursorPill(parent)
     qtbot.addWidget(pill)
-    # Short first line + long channel names: mini (one-line name+value) is wider
-    # than full (stacked), so the pill width flips between the two modes. The
-    # toggle must keep a constant gap to the first line regardless.
-    pill.set_primary("<span>A=1.0s B=2.0s ΔT=1.0s</span>")
+    # Short first line + wide detail (single-cursor-like): the toggle must stay
+    # at the pill's top-right corner, not snap left beside the short readout.
+    pill.set_primary("<span>t=216.2100s</span>")
     pill.set_dual_rows([
         ("very_long_dual_cursor_channel_name_to_force_width",
          -1.0, 2.0, 0.5, 1.5, " Nm", "#ef4444"),
@@ -443,29 +440,32 @@ def test_cursor_pill_toggle_keeps_constant_gap_between_primary_and_button(
     pill.show()
     qapp.processEvents()
 
-    def settle():
+    def corner_inset():
         pill.adjustSize()
         pill.resize(pill.sizeHint())
         qapp.processEvents()
+        btn = pill._toggle_btn
+        return pill.width() - (btn.x() + btn.width()), btn.y()
 
-    def primary_to_button_gap():
-        settle()
-        primary_right = pill._primary.x() + pill._primary.sizeHint().width()
-        return pill._toggle_btn.x() - primary_right
-
-    settle()
+    right_inset_full, top_full = corner_inset()
     full_width = pill.width()
-    full_gap = primary_to_button_gap()
-
     pill._toggle_mode()
-    settle()
+    right_inset_mini, top_mini = corner_inset()
     mini_width = pill.width()
-    mini_gap = primary_to_button_gap()
 
-    # The scenario must actually flip the pill width, else the test is vacuous.
+    # The scenario flips the pill width, yet the toggle hugs the top-right
+    # corner in both modes (never drifts left toward the short readout).
     assert mini_width != full_width
-    # ...but the toggle stays a constant distance from the first line.
-    assert abs(mini_gap - full_gap) <= 1
+    assert right_inset_full <= 6 and top_full <= 6
+    assert right_inset_mini <= 6 and top_mini <= 6
+    # Reserved first-line padding keeps the corner button off the primary text.
+    assert pill._primary.contentsMargins().right() >= 20
+    primary_text_right = (
+        pill._primary.x()
+        + pill._primary.sizeHint().width()
+        - pill._primary.contentsMargins().right()
+    )
+    assert pill._toggle_btn.x() >= primary_text_right
 
 
 def test_user_placed_primary_pill_preserves_right_edge_after_dual_rows_resize(
