@@ -555,19 +555,61 @@ class TimeDomainCanvasPG(QWidget):
                         pass
 
         if subplot_mode:
-            for i, (name, t, sig, color, unit, data_id, p_visible, _axis_group) in enumerate(vis):
-                pi = self._add_plot_item(row=i, col=0)
+            # Build ONE subplot row per axis SLOT, not per channel. Channels
+            # that share an axis_group collapse into a single row (one PlotItem,
+            # one main ViewBox, one shared Y axis whose union range comes from
+            # the ViewBox auto-range, axis pen = group color); ungrouped
+            # channels each own their own row exactly as before. The slot order
+            # (and merge rule) is the SAME helper the overlay branch uses, so
+            # subplot/overlay group identically.
+            slots = self._group_visible_into_slots(vis)
+            n_slots = len(slots)
+            # Subplot labels need bbox-overlap-driven inside/outside flip; build
+            # one spec PER SLOT (group rows carry the group color + member-name
+            # label, ungrouped rows carry the channel's own color).
+            self._subplot_label_specs = []
+            for slot_idx, slot in enumerate(slots):
+                pi = self._add_plot_item(row=slot_idx, col=0)
                 handle = PgAxisHandle(plot_item=pi, owner_canvas=self)
                 self.axes_list.append(handle)
-                self._overlay_axes._bind_channel(
-                    handle, name, t, sig, color, unit, data_id,
-                    xlabel=xlabel if i == len(vis) - 1 else None,
-                    skip_envelope=defer_first_frame,
-                )
-                self._set_primary_line_visible(name, p_visible)
+                members = slot["members"]
+                is_bottom = (slot_idx == n_slots - 1)
+                if slot["gid"] is None:
+                    name, t, sig, color, unit, data_id, p_visible, _ag = members[0]
+                    self._overlay_axes._bind_channel(
+                        handle, name, t, sig, color, unit, data_id,
+                        xlabel=xlabel if is_bottom else None,
+                        skip_envelope=defer_first_frame,
+                    )
+                    self._set_primary_line_visible(name, p_visible)
+                    self._subplot_label_specs.append((handle, name, color, unit))
+                else:
+                    # Multi-member slot: bind EVERY member curve onto the SAME
+                    # handle (same PlotItem main ViewBox) — _bind_channel already
+                    # supports multiple curves per handle (overlay does the same).
+                    # Only j==0 sets the group axis label / group color / axis
+                    # style refresh; each curve keeps its OWN channel color.
+                    gid = slot["gid"]
+                    group_color = axis_group_color(gid)
+                    units = {m[4] for m in members}
+                    group_unit = next(iter(units)) if len(units) == 1 else "(混合单位)"
+                    group_label = " · ".join(str(m[0]) for m in members)
+                    for j, m in enumerate(members):
+                        name, t, sig, color, unit, data_id, p_visible, _ag = m
+                        self._overlay_axes._bind_channel(
+                            handle, name, t, sig, color, unit, data_id,
+                            xlabel=xlabel if (is_bottom and j == 0) else None,
+                            skip_envelope=defer_first_frame,
+                            axis_label=group_label if j == 0 else None,
+                            axis_color=group_color if j == 0 else None,
+                            update_axis_style=(j == 0),
+                        )
+                        self._set_primary_line_visible(name, p_visible)
+                    self._subplot_label_specs.append(
+                        (handle, group_label, group_color, group_unit)
+                    )
                 self._overlay_axes._configure_subplot_bottom_axis(
-                    handle,
-                    is_bottom=(i == len(vis) - 1),
+                    handle, is_bottom=is_bottom,
                 )
             # NOTE: we intentionally do NOT call ``setXLink`` here.
             # Pyqtgraph's linked-view propagation uses screen-geometry
@@ -577,12 +619,6 @@ class TimeDomainCanvasPG(QWidget):
             # gutter). For an analytical app the linked range MUST be
             # exact, so we propagate explicitly via _propagate_xlim_to_siblings
             # on every sigXRangeChanged tick from the primary.
-            # Subplot labels need bbox-overlap-driven inside/outside flip.
-            # vis[i] is (name, t, sig, color, unit, data_id, p_visible, axis_group); color idx3, unit idx4.
-            self._subplot_label_specs = [
-                (self.axes_list[i], vis[i][0], vis[i][3], vis[i][4])
-                for i in range(len(vis))
-            ]
             # Apply once now; resize re-checks via resizeEvent.
             self._recheck_subplot_label_placement()
             # Each subplot's left AxisItem auto-sizes to its OWN tick-label
