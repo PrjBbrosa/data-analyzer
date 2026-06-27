@@ -227,9 +227,21 @@ def test_disabled_stats_strip_skips_full_array_statistics(monkeypatch):
     )
     fake._estimate_fs = types.MethodType(mw.MainWindow._estimate_fs, fake)
     fake._filter_suffix = types.MethodType(mw.MainWindow._filter_suffix, fake)
+    # The plot path now consults overlay-risk before drawing. Bind the real
+    # estimator (subplot mode short-circuits to OK risk without touching any np
+    # statistics, so the stats-strip assertion below still holds) plus the
+    # risk-banner clear it calls on the non-overlay branch.
+    fake._estimate_current_time_overlay_risk = types.MethodType(
+        mw.MainWindow._estimate_current_time_overlay_risk, fake
+    )
+    fake._clear_plot_risk = lambda: None
     fake._overlay_primary = None
     fake._last_plot_mode = None
     fake._last_range_state = None
+    # Per-canvas cache-invalidation bookkeeping + the progress-token seam the
+    # plot path now opens (returns None → the finally block skips finish).
+    fake._last_filter_state_by_canvas = {}
+    fake._begin_compute_progress = lambda *_a, **_k: None
     fake._custom_xaxis_fid = None
     fake._custom_xaxis_ch = None
     fake._custom_xlabel = None
