@@ -37,6 +37,7 @@ from ..plot_risk import PlotRisk, PlotRiskLevel, estimate_time_overlay_risk
 
 from ._sentinel import _INSPECTOR_TIME_RANGE
 from ._analysis_mixin import AnalysisMixin
+from ._drop_import_mixin import DropImportMixin
 from ._fft_mixin import FFTMixin
 from ._order_mixin import OrderMixin
 from ._fft_time_mixin import FFTTimeMixin
@@ -60,7 +61,7 @@ class SurfaceStatusBar(QStatusBar):
 
 
 class MainWindow(
-    AnalysisMixin, FFTMixin, OrderMixin, FFTTimeMixin, ProjectIOMixin,
+    DropImportMixin, AnalysisMixin, FFTMixin, OrderMixin, FFTTimeMixin, ProjectIOMixin,
     ViewMixin, QMainWindow,
 ):
     def __init__(self):
@@ -118,7 +119,8 @@ class MainWindow(
         self._order_progress_completed_jobs = 0
         self._last_batch_preset = None
         self._acquisition_cockpit_window = None
-        self._init_ui();
+        self._init_ui()
+        self._init_drop_import()
         self._connect()
 
     def _init_ui(self):
