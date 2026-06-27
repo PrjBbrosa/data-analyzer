@@ -104,6 +104,11 @@
       justify-items: center;
     }
 
+    .control-group.mouse-group {
+      grid-template-columns: 56px 56px 56px;
+      column-gap: 18px;
+    }
+
     .row-label {
       color: #94a3b8;
       font-size: 12px;
@@ -151,6 +156,77 @@
       border-color: var(--blue-strong);
       background: var(--blue-soft);
       color: var(--blue-strong);
+    }
+
+    .action-slot {
+      position: relative;
+      width: 56px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .action-btn {
+      width: 32px;
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #d6e0ec;
+      border-radius: 8px;
+      background: #fff;
+      color: #334155;
+      font-size: 17px;
+      cursor: pointer;
+    }
+
+    .action-btn:hover {
+      border-color: var(--blue);
+      background: var(--blue-softer);
+    }
+
+    .action-slot .caret {
+      position: absolute;
+      right: 0;
+      color: #64748b;
+      font-size: 11px;
+      line-height: 1;
+      pointer-events: none;
+    }
+
+    .action-list {
+      position: absolute;
+      left: 250px;
+      top: 92px;
+      width: 168px;
+      padding: 6px;
+      border: 1px solid #d6e0ec;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      z-index: 5;
+    }
+
+    .action-item {
+      height: 30px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border-radius: 6px;
+      color: #334155;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .action-item.active {
+      color: var(--blue-strong);
+      background: var(--blue-soft);
+    }
+
+    .action-item:hover {
+      background: var(--blue-softer);
     }
 
     .range-input {
@@ -237,10 +313,13 @@
 
     <section class="menu" aria-label="图表右键菜单原型">
       <div class="panel-row">
-        <div class="control-group">
+        <div class="control-group mouse-group">
           <div class="icon-btn" title="框选">⌕</div>
-          <div></div>
           <div class="icon-btn active" title="平移">✣</div>
+          <div class="action-slot" title="复制为图片（点 ▾ 换绑）">
+            <button class="action-btn" type="button">⧉</button>
+            <span class="caret">▾</span>
+          </div>
         </div>
         <div class="row-label">鼠标</div>
       </div>
@@ -282,9 +361,16 @@
       </div>
     </section>
 
+    <aside class="action-list" aria-label="自定义动作换绑列表">
+      <div class="action-item active">⧉&nbsp; 复制为图片</div>
+      <div class="action-item">←&nbsp; 上一步视图</div>
+      <div class="action-item">→&nbsp; 下一步视图</div>
+      <div class="action-item">▭&nbsp; 导出图片</div>
+    </aside>
+
     <aside class="callout">
       <strong>落地风格</strong>
-      范围和网格都在一级。X/Y 网格 chip 的选中态复用 pan/zoom 的浅蓝底和蓝色边框，减少菜单层级，也保留工具感。
+      鼠标行第三槽是「自定义动作按钮」：图标居中对齐下方列，点主体执行当前动作，点 ▾ 在浮层里换绑（复制为图片 / 上一步 / 下一步 / 导出）。模式型与查看行已有的动作不入池。范围、网格仍在一级。
     </aside>
 
     <aside class="hint">
