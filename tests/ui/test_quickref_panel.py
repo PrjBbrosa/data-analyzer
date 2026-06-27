@@ -122,15 +122,18 @@ def test_group_cards_use_white_surface_not_gray_fill(panel):
     assert "background-color: #fafbfc;" not in group_block
 
 
-def test_soon_badge_present_for_coaxis(panel):
-    """The 共轴 row renders an '即将' badge label."""
+def test_coaxis_row_renders_without_soon_badge(panel):
+    """共轴组 shipped 2026-06-27: the 合并为共轴 row no longer renders an '即将'
+    badge, and no card carries one (it was the catalog's only staged item)."""
     from PyQt5.QtWidgets import QLabel
     chan_card = next(
         c for c in panel._group_cards if c.group.title == "通道树（左侧）"
     )
+    assert any(r.desc == "合并为共轴比幅值" for r in chan_card.group.rows)
     soon_labels = [
-        w for w in chan_card.findChildren(QLabel)
+        w
+        for card in panel._group_cards
+        for w in card.findChildren(QLabel)
         if w.objectName() == "quickrefSoon"
     ]
-    assert len(soon_labels) == 1
-    assert soon_labels[0].text() == "即将"
+    assert soon_labels == []

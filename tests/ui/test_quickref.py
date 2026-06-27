@@ -8,7 +8,8 @@ the panel renders. These tests guard:
   source of truth for shortcut strings) — a missing key must surface, never
   silently blank;
 * the 四个分析模式 group has exactly 4 rows, each carrying a one-line ``sub``;
-* exactly the 共轴 row is flagged ``soon`` (matching ``coaxis.* ship="later"``);
+* the 共轴 row shipped 2026-06-27 — it carries no ``soon`` badge and no catalog
+  row stays ``soon`` (matching ``coaxis.* ship="now"``);
 * the 阶次 mode purpose names EPS 电机转速 (this user analyzes EPS — order base
   is motor speed, not engine).
 """
@@ -110,20 +111,21 @@ def test_order_mode_names_eps_motor_speed():
     assert "电机转速" in order_row.sub
 
 
-def test_exactly_coaxis_row_is_soon():
-    soon_rows = [(g.title, r.desc) for g, r in _all_rows() if r.soon]
-    assert len(soon_rows) == 1, soon_rows
-    title, desc = soon_rows[0]
-    assert "共轴" in desc, soon_rows
+def test_coaxis_row_released_no_soon_badge():
+    # 共轴组 shipped 2026-06-27: the 合并为共轴 row drops its 即将 badge, and it
+    # was the catalog's only staged item, so no row stays flagged ``soon``.
+    coaxis_rows = [(g.title, r) for g, r in _all_rows() if "共轴" in r.desc]
+    assert any(r.desc == "合并为共轴比幅值" for _t, r in coaxis_rows), coaxis_rows
+    assert all(not r.soon for _t, r in coaxis_rows)
+    assert [r.desc for _g, r in _all_rows() if r.soon] == []
 
 
-def test_coaxis_soon_matches_ship_later_hint():
-    """The catalog's only 'soon' item must correspond to a ship='later' hint."""
+def test_no_soon_row_and_no_ship_later_coaxis():
+    """Release invariant: a ``soon`` row mirrors a ``ship="later"`` hint. After
+    the coaxis release neither side carries coaxis — both are empty."""
     later_ids = {h.id for h in hints.all_hints() if h.ship == "later"}
-    # The coaxis hints are the staged shared-axis feature.
-    assert any(hid.startswith("coaxis.") for hid in later_ids)
-    soon_rows = [r for _g, r in _all_rows() if r.soon]
-    assert soon_rows and "共轴" in soon_rows[0].desc
+    assert not any(hid.startswith("coaxis.") for hid in later_ids)
+    assert [r.desc for _g, r in _all_rows() if r.soon] == []
 
 
 def test_dataclasses_are_frozen():

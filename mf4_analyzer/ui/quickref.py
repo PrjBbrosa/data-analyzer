@@ -179,7 +179,6 @@ QUICKREF: Tuple[QuickGroup, ...] = (
                 "合并为共轴比幅值",
                 keys=("Ctrl/Shift",),
                 gesture="多选右键",
-                soon=True,
             ),
         ),
     ),

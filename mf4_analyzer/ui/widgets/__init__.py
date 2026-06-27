@@ -19,10 +19,19 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import Qt, QPropertyAnimation, QRect, QSize, QTimer, pyqtSignal
+from PyQt5.QtCore import (
+    Qt,
+    QPropertyAnimation,
+    QRect,
+    QSettings,
+    QSize,
+    QTimer,
+    pyqtSignal,
+)
 from PyQt5.QtGui import QColor, QBrush, QIcon, QPainter, QPen, QPixmap
 
 from ...ui_kit.icons import Icons, icon_device_pixel_ratio
+from .. import hints
 from ..axis_group_palette import axis_group_color
 
 
@@ -500,6 +509,12 @@ class MultiFileChannelWidget(QWidget):
         act_primary = menu.addAction("设为左轴")
         act_merge = menu.addAction("合并为共轴") if can_merge else None
         act_split = menu.addAction("拆分共轴组") if can_split else None
+        if act_merge is not None:
+            # The axis-group menu is actually opening with the 合并为共轴 item
+            # present (multi-select) — retire the coaxis.merge discovery hint so
+            # the footer stops rotating it. Shared default QSettings, the same
+            # discovered set the chart-card hint system reads (see presets.py).
+            hints.mark_discovered(QSettings(), "coaxis.merge")
         chosen = menu.exec_(self.tree.viewport().mapToGlobal(pos))
         if chosen is None:
             return

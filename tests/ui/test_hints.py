@@ -37,14 +37,19 @@ def test_every_registry_hint_stays_within_length_budget():
 
 def test_context_hints_filter_by_mode_and_tier_priority():
     overlay = HintState(mode="time", plot_mode="overlay")
+    # coaxis.gesture (tier A) shipped 2026-06-27 and trails the tier-S drag_y.
     assert [hint.id for hint in hints.context_hints(overlay)] == [
         "overlay.drag_y",
+        "coaxis.gesture",
     ]
 
     subplot = HintState(mode="time", plot_mode="subplot")
+    # coaxis applies to subplot too (shared Y = compare amplitude); the tier-A
+    # gesture trails the subplot wheel/shift-Y tips.
     assert [hint.id for hint in hints.context_hints(subplot)] == [
         "subplot.wheel_target",
         "subplot.shift_y",
+        "coaxis.gesture",
     ]
 
     dual = HintState(mode="time", plot_mode="overlay", cursor_mode="dual")
@@ -87,6 +92,7 @@ def test_context_hints_suppress_recently_used_ids():
     )
     assert [hint.id for hint in hints.context_hints(state)] == [
         "subplot.shift_y",
+        "coaxis.gesture",
     ]
 
 
@@ -287,23 +293,90 @@ def test_zoom_guard_describes_all_channel_box_zoom():
     assert "通道" in hint.text       # now describes the all-channels Y behavior
 
 
-def test_coaxis_hints_staged_ship_later_and_hidden_on_every_surface():
-    # 共轴组 (overlay shared-axis) is designed but not yet built; its hints are
-    # pre-staged with ship="later" so they are registered (tracked) yet surface
-    # NOWHERE — not just absent from the discovery queue — until the flag flips.
+def test_coaxis_hints_shipped_and_surface_in_overlay_and_subplot():
+    # 共轴组 (shared-axis groups) shipped 2026-06-27 (designed in the overlay
+    # shared-axis spec, landed + user-verified on-device). Both hints flip
+    # ship="now" and apply to overlay AND subplot (shared Y = compare amplitude).
     coaxis = {h.id: h for h in hints.all_hints() if h.id.startswith("coaxis.")}
     assert {"coaxis.merge", "coaxis.gesture"} <= set(coaxis)
-    assert all(h.ship == "later" for h in coaxis.values())
+    assert all(h.ship == "now" for h in coaxis.values())
+    assert all(
+        h.plot_modes == frozenset({"overlay", "subplot"})
+        for h in coaxis.values()
+    )
 
-    overlay = HintState(mode="time", plot_mode="overlay")
-    # discovery queue (exhausted) never offers a ship="later" hint
-    seen, state = set(), overlay
-    while (h := hints.discovery_hint(state)) is not None and h.id not in seen:
-        seen.add(h.id)
-        state = HintState(
-            mode="time", plot_mode="overlay", discovered=frozenset(seen)
-        )
-    assert "coaxis.merge" not in seen
-    # context + rotation must hide ship="later" too (the gap this guards)
-    assert "coaxis.gesture" not in {h.id for h in hints.context_hints(overlay)}
-    assert "coaxis.gesture" not in {h.id for h in hints.rotation_hints(overlay)}
+    for plot_mode in ("overlay", "subplot"):
+        state = HintState(mode="time", plot_mode=plot_mode)
+        # coaxis.merge now appears in the discovery queue (walk until exhausted).
+        seen, walked = set(), state
+        while (h := hints.discovery_hint(walked)) is not None and h.id not in seen:
+            seen.add(h.id)
+            walked = HintState(
+                mode="time", plot_mode=plot_mode, discovered=frozenset(seen)
+            )
+        assert "coaxis.merge" in seen, plot_mode
+        # coaxis.gesture now surfaces as a context + rotation tip.
+        assert "coaxis.gesture" in {h.id for h in hints.context_hints(state)}
+        assert "coaxis.gesture" in {h.id for h in hints.rotation_hints(state)}
+
+
+class _MultiChannelStub:
+    """Minimal FileData stand-in: two signal channels so the right-click menu
+    can offer 合并为共轴 (needs >=2 selected)."""
+
+    data = [1, 2, 3]
+
+    def get_signal_channels(self):
+        return ["speed", "torque"]
+
+    def get_color_palette(self):
+        return ["#1769e0", "#f43f5e"]
+
+
+def test_axis_group_menu_open_retires_coaxis_merge_discovery(qapp, qtbot, monkeypatch):
+    # Released coaxis.merge is surface="discovery" + retire_on="axis_group_menu",
+    # but nothing fired the retire event. Opening the channel-tree context menu
+    # with >=2 channels selected (the 合并为共轴 item present) must call
+    # mark_discovered("coaxis.merge") so the footer stops rotating it. Without
+    # this wiring the released hint rotates forever.
+    from PyQt5.QtCore import QCoreApplication
+    from mf4_analyzer.ui.widgets import MultiFileChannelWidget
+
+    recorded = []
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.widgets.hints.mark_discovered",
+        lambda _settings, hint_id: recorded.append(hint_id),
+    )
+    # The menu is modal/blocking; stub exec_ so the test does not hang.
+    monkeypatch.setattr(
+        "mf4_analyzer.ui.widgets.QMenu.exec_",
+        lambda _menu, *a, **k: None,
+    )
+
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(320, 240)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _MultiChannelStub())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    file_item = widget._file_items["file-a"]
+    first, second = file_item.child(0), file_item.child(1)
+    widget.tree.scrollToItem(first)
+    QCoreApplication.processEvents()
+    first.setSelected(True)
+    second.setSelected(True)
+
+    pos = widget.tree.visualItemRect(first).center()
+    assert widget.tree.itemAt(pos) is first  # menu opens on a channel row
+    widget._on_context_menu(pos)
+    assert "coaxis.merge" in recorded  # 合并为共轴 present → discovery retired
+
+    # Single-channel right-click (no 合并为共轴 item) must NOT retire it early.
+    recorded.clear()
+    widget.tree.clearSelection()
+    solo_pos = widget.tree.visualItemRect(second).center()
+    widget._on_context_menu(solo_pos)
+    assert "coaxis.merge" not in recorded

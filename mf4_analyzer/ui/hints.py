@@ -334,19 +334,20 @@ _HINTS = (
         requires=frozenset({"annotation_on"}),
         priority=100,
     ),
-    # ---- In-flight: staged with ship="later" (registered + width-checked, but
-    # surfaced NOWHERE until the feature lands; /update-hints flips ship→now and
-    # wires the retire event then). 共轴组 (overlay shared-axis), designed in
-    # 2026-06-24-overlay-shared-axis-and-channel-indent-design.md, not yet built.
+    # ---- 共轴组 (shared-axis groups): shipped 2026-06-27. Designed in
+    # 2026-06-24-overlay-shared-axis-and-channel-indent-design.md, landed and
+    # user-verified on-device. coaxis.merge is a discovery hint retired by the
+    # channel-tree axis-group menu opening (mark_discovered("coaxis.merge") in
+    # MultiFileChannelWidget._on_context_menu); coaxis.gesture is a context tier-A
+    # tip. Both apply to overlay AND subplot (shared Y = compare amplitude).
     Hint(
         id="coaxis.merge",
         text="多选通道右键可合并为共轴比幅值",
         surface="discovery",
         modes=frozenset({"time"}),
-        plot_modes=frozenset({"overlay"}),
+        plot_modes=frozenset({"overlay", "subplot"}),
         retire_on="axis_group_menu",
         priority=70,
-        ship="later",
     ),
     Hint(
         id="coaxis.gesture",
@@ -354,9 +355,8 @@ _HINTS = (
         surface="context",
         tier="A",
         modes=frozenset({"time"}),
-        plot_modes=frozenset({"overlay"}),
+        plot_modes=frozenset({"overlay", "subplot"}),
         priority=70,
-        ship="later",
     ),
 )
 
