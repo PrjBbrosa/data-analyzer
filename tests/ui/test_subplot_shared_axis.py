@@ -116,3 +116,65 @@ class TestSubplotGroupMerge:
         QCoreApplication.processEvents()
         assert len(canvas.axes_list) == 3
         assert all(_curve_count(h.view_box) == 1 for h in canvas.axes_list)
+
+
+class TestSubplotGroupEdges:
+    def test_group_with_one_visible_member_degrades_to_single_curve(self, qapp):
+        # 组 1 两成员，但 b 未勾选(visible=False) → 该组只剩 1 可见 → 单曲线行
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("a", True,  t, np.sin(t), "#f00", "Nm", "f1", {"axis_group": 1}),
+            ("b", False, t, np.cos(t), "#0a0", "Nm", "f1", {"axis_group": 1}),
+            ("c", True,  t, np.sin(2 * t), "#00f", "rpm", "f2"),
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        # b 不可见且无 companion → 不入 vis；组 1 只剩 a → 退化单曲线
+        assert len(canvas.axes_list) == 2
+        assert _curve_count(canvas.axes_list[0].view_box) == 1
+
+    def test_mixed_unit_group_does_not_crash(self, qapp):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("a", True, t, np.sin(t), "#f00", "Nm",  "f1", {"axis_group": 1}),
+            ("b", True, t, np.cos(t), "#0a0", "rpm", "f1", {"axis_group": 1}),
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        canvas._recheck_subplot_label_placement()
+        QCoreApplication.processEvents()
+        assert len(canvas.axes_list) == 1  # 两成员同组 → 1 行
+
+    def test_subplot_and_overlay_group_into_same_slots(self, qapp):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("a", True, t, np.sin(t), "#f00", "Nm",  "f1", {"axis_group": 1}),
+            ("b", True, t, np.cos(t), "#0a0", "Nm",  "f1", {"axis_group": 1}),
+            ("c", True, t, np.sin(3 * t), "#00f", "rpm", "f2"),
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        n_sub = len(canvas.axes_list)
+        canvas.plot_channels(rows, mode="overlay")
+        n_ovl = len(canvas.axes_list)
+        assert n_sub == n_ovl == 2  # 两模式共用归槽 → 槽数一致
+
+    def test_bottom_axis_on_last_slot(self, qapp):
+        canvas = _pg_canvas(qapp)
+        t = np.linspace(0.0, 1.0, 200, dtype=np.float64)
+        rows = [
+            ("a", True, t, np.sin(t), "#f00", "Nm",  "f1", {"axis_group": 1}),
+            ("b", True, t, np.cos(t), "#0a0", "Nm",  "f1", {"axis_group": 1}),
+            ("c", True, t, np.sin(3 * t), "#00f", "rpm", "f2"),
+        ]
+        canvas.plot_channels(rows, mode="subplot")
+        QCoreApplication.processEvents()
+        # 最后一槽(c 行)底轴显示时间刻度值;非末槽隐藏刻度值。
+        # 既有契约: _configure_subplot_bottom_axis 用 setStyle(showValues=...)
+        # 切刻度值,AxisItem 本体常驻可见,故断言对齐到 style['showValues']。
+        last_ax = canvas.axes_list[-1]._ax("bottom")
+        first_ax = canvas.axes_list[0]._ax("bottom")
+        assert last_ax is not None and last_ax.style["showValues"] is True
+        assert first_ax is not None and first_ax.style["showValues"] is False
