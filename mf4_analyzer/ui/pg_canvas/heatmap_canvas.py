@@ -244,6 +244,34 @@ def _finite_data_bounds(matrix):
     return lo, hi
 
 
+# Fraction of cells that must fall inside the visible colour gradient for the
+# heatmap to read as "alive". Below this, the colour window has collapsed the
+# image to ~one flat colour (all dark / all bright) and the colorbar-reset nudge
+# should offer a way out. NOTE: perceptual threshold — tune on-device.
+_COLORBAR_DEAD_VISIBLE_FRAC = 0.01
+
+
+def _colorbar_is_dead(matrix, lo, hi):
+    """True if the colour window (lo, hi) leaves the heatmap with ~no contrast.
+
+    A healthy spectrogram keeps a meaningful fraction of cells in the mid
+    gradient (features + halos); a window dragged off the data clamps nearly
+    every cell to one end → a flat, single-colour image. Display-only: this
+    inspects the colour mapping, never the data.
+    """
+    if matrix is None:
+        return False
+    if not (hi > lo):
+        return True  # degenerate window → no contrast at all
+    m = np.asarray(matrix, dtype=float)
+    finite = m[np.isfinite(m)]
+    if finite.size == 0:
+        return False
+    norm = (finite - lo) / (hi - lo)
+    visible = int(np.count_nonzero((norm > 0.02) & (norm < 0.98)))
+    return (visible / finite.size) < _COLORBAR_DEAD_VISIBLE_FRAC
+
+
 # Default dynamic range span used by the *absolute-dB* auto color window
 # (plot_result path, FFT-vs-Time and Order).  The canvas normalises to
 # [ceiling - _AUTO_SPAN_DB, ceiling] (ceiling = _robust_db_ceiling, below)
@@ -790,6 +818,10 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self.axes_list = [_AxisShim(self._plot.vb)]
 
         self._cbar = None
+        # Levels (vmin, vmax) the last render applied. Double-click-on-colorbar
+        # resets to these (the colour window is display-only — the matrix is
+        # never clipped to it). None until the first render.
+        self._rendered_levels = None
         self._has_result = False
         self._matrix_disp = None  # display-space matrix
         self._extents = None      # (x0, x1, y0, y1)
@@ -1238,6 +1270,8 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
         self._cbar.blockSignals(True)
         self._cbar.setLevels((vmin, vmax))
         self._cbar.blockSignals(False)
+        # Remember the render window so double-click-on-colorbar can restore it.
+        self._rendered_levels = (float(vmin), float(vmax))
 
         self._plot.setLabel('bottom', self._x_label)
         self._plot.setLabel('left', self._y_label)
@@ -2569,6 +2603,14 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
 
     def eventFilter(self, obj, event):
         try:
+            if obj is self._glw.viewport():
+                # Double-click on the colorbar resets the colour window to the
+                # render's levels — independent of remark mode. Consumes the
+                # event so it does not also fall through to slice/remark clicks.
+                if event.type() == QEvent.MouseButtonDblClick:
+                    if (self._pos_on_colorbar(event.pos())
+                            and self.reset_colorbar_levels()):
+                        return True
             if obj is self._glw.viewport() and self._remark_enabled:
                 if event.type() == QEvent.MouseButtonPress:
                     result = self._remark_interaction.handle_mouse_press(event)
@@ -2640,6 +2682,51 @@ class PgHeatmapCanvas(_StackedSplitMixin, QWidget):
     def _on_cbar_levels(self, bar) -> None:
         lo, hi = bar.levels()
         self.levels_changed.emit(float(lo), float(hi))
+
+    # ------------------------------------------------------------------
+    def _pos_on_colorbar(self, viewport_pos) -> bool:
+        """True if a viewport-space point falls inside the colorbar item."""
+        if self._cbar is None:
+            return False
+        try:
+            scene_pos = self._glw.mapToScene(viewport_pos)
+            return self._cbar.sceneBoundingRect().contains(scene_pos)
+        except Exception:
+            return False
+
+    def reset_colorbar_levels(self) -> bool:
+        """Restore image + colorbar levels to the last render's window.
+
+        Wired to a double-click on the colorbar. The colour window is
+        display-only (the matrix is never clipped to it), so this re-maps
+        colour without touching data. Emits ``levels_rebased`` — the
+        programmatic-reset signal — NOT ``levels_changed`` (which the
+        analysis-page locked-levels linkage treats as a real user drag).
+        Returns True if levels were restored.
+        """
+        if self._rendered_levels is None or self._cbar is None:
+            return False
+        lo, hi = self._rendered_levels
+        self._img.setLevels((lo, hi))
+        self._cbar.blockSignals(True)
+        self._cbar.setLevels((lo, hi))
+        self._cbar.blockSignals(False)
+        self.levels_rebased.emit()
+        return True
+
+    def colorbar_dead(self) -> bool:
+        """True if the current colour window leaves the heatmap ~contrast-free."""
+        if self._matrix_disp is None:
+            return False
+        levels = self._img.getLevels()
+        if levels is None:
+            return False
+        return _colorbar_is_dead(
+            self._matrix_disp, float(levels[0]), float(levels[1]))
+
+    def nudge_signals(self) -> dict:
+        """Situational signals for the footer nudge surface (see hints.py)."""
+        return {"colorbar_dead": self.colorbar_dead()}
 
     # ------------------------------------------------------------------
     def grab_pixmap(self, scale: float = 2.0) -> QPixmap:

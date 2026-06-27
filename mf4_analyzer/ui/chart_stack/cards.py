@@ -58,6 +58,10 @@ class _ChartCard(QWidget):
         self._recent_context_hint_ids = set()
         self._context_hint_index = 0
         self._context_hint_signature = ()
+        # Round-robin start offset into the rotation lap, read once per session
+        # so a fresh open does not always lead with the same anchor. Lazily
+        # resolved (and advanced) from _hint_settings on first use.
+        self._rotation_start = None
         self._hint_rotation_paused = False
         # Variable-dwell rotation: a single-shot timer that re-arms itself with
         # the CURRENT hint's dwell after each advance (replaces the old fixed
@@ -125,6 +129,14 @@ class _ChartCard(QWidget):
         slice_hint_requested = getattr(canvas, 'slice_hint_requested', None)
         if slice_hint_requested is not None:
             slice_hint_requested.connect(self._on_slice_hint_requested)
+        # Refresh situational nudges when the data situation changes: a chart
+        # rebuild (time: channel count / units / amplitude) or a render-time
+        # colour-level rebase (heatmap: dead colour window). getattr-guarded so
+        # canvases lacking the signal are unaffected.
+        for sig_name in ('chart_rebuilt', 'levels_rebased'):
+            sig = getattr(canvas, sig_name, None)
+            if sig is not None:
+                sig.connect(self._refresh_bottom_hint)
         self.toolbar.setObjectName("chartToolbar")
         self.toolbar.setIconSize(QSize(18, 18))
         for act in self.toolbar.actions():
@@ -589,6 +601,24 @@ class _ChartCard(QWidget):
             return 'zoom'
         return ''
 
+    # HintState fields the canvas may supply as situational nudge signals.
+    _NUDGE_SIGNAL_KEYS = frozenset({
+        "channel_count", "same_unit", "has_axis_group",
+        "amp_disparate", "colorbar_dead", "clipped",
+    })
+
+    def _nudge_signals(self):
+        """Pull situational signals from the canvas (getattr-guarded), filtered
+        to the known HintState fields so an unexpected key can't break it."""
+        getter = getattr(getattr(self, "canvas", None), "nudge_signals", None)
+        if not callable(getter):
+            return {}
+        try:
+            raw = getter() or {}
+        except Exception:
+            return {}
+        return {k: v for k, v in raw.items() if k in self._NUDGE_SIGNAL_KEYS}
+
     def _hint_state(self):
         return hints.HintState(
             mode=self._chart_mode,
@@ -597,6 +627,7 @@ class _ChartCard(QWidget):
             annotation_on=self.annotation_enabled(),
             discovered=hints.load_discovered(self._hint_settings),
             recently_used=frozenset(self._recent_context_hint_ids),
+            **self._nudge_signals(),
         )
 
     def _rotation_candidates(self):
@@ -606,15 +637,33 @@ class _ChartCard(QWidget):
         return hints.rotation_hints(self._hint_state())
 
     def _refresh_bottom_hint(self, *_):
-        discovery = hints.discovery_hint(self._hint_state())
-        self._hint_discovery.setText(discovery.text if discovery else '')
+        state = self._hint_state()
+        # A situational nudge (data-condition-gated) takes the discovery slot
+        # while its condition holds; otherwise fall back to the discovery queue.
+        nudge = hints.nudge_hint(state)
+        if nudge is not None:
+            self._hint_discovery.setText(nudge.text)
+        else:
+            discovery = hints.discovery_hint(state)
+            self._hint_discovery.setText(discovery.text if discovery else '')
         self._set_context_hint(reset=True)
+
+    def _rotation_start_offset(self):
+        """The session's round-robin start offset (resolved + advanced once)."""
+        if self._rotation_start is None:
+            self._rotation_start = hints.next_rotation_start(self._hint_settings)
+        return self._rotation_start
 
     def _set_context_hint(self, reset=False):
         candidates = self._rotation_candidates()
         signature = tuple(hint.id for hint in candidates)
         if reset or signature != self._context_hint_signature:
-            self._context_hint_index = 0
+            # Enter the lap at the persisted offset instead of always index 0,
+            # so the footer does not lead with the same anchor every open.
+            self._context_hint_index = (
+                self._rotation_start_offset() % len(candidates)
+                if candidates else 0
+            )
             self._context_hint_signature = signature
         if not candidates:
             self._hint_context.setText('')
@@ -690,6 +739,8 @@ class _ChartCard(QWidget):
 
     def set_hint_settings(self, settings):
         self._hint_settings = settings
+        # New store → re-resolve the rotation start from it on next use.
+        self._rotation_start = None
         self._refresh_bottom_hint()
 
     def mark_discovered(self, hint_id):
@@ -911,6 +962,7 @@ class TimeChartCard(_ChartCard):
             annotation_on=self.annotation_enabled(),
             discovered=hints.load_discovered(self._hint_settings),
             recently_used=frozenset(self._recent_context_hint_ids),
+            **self._nudge_signals(),
         )
 
     # ----- overlay-selection nav handoff -----

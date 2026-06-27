@@ -172,6 +172,74 @@ _OVERLAY_AXIS_LABEL_FALLBACK_CHARS = 22
 _OVERLAY_AXIS_LABEL_VERTICAL_PADDING_PX = 32.0
 
 
+# ---- Situational-nudge signal detection (feeds hints.HintState). These are
+# pure helpers so the logic is unit-tested independently of rendering; the
+# thresholds themselves are perceptual and need on-device tuning. ----
+_NUDGE_PTP_MAX_SAMPLES = 2000   # subsample cap for the per-channel range probe
+_AMP_DISPARITY_RATIO = 10.0     # max/min range ratio that reads as "dwarfed"
+_CLIP_FRACTION = 0.03           # share of samples pinned to an extreme = clipped
+
+
+def _subsampled(sig):
+    arr = np.asarray(sig, dtype=float)
+    if arr.size == 0:
+        return arr
+    stride = max(1, arr.size // _NUDGE_PTP_MAX_SAMPLES)
+    s = arr[::stride]
+    return s[np.isfinite(s)]
+
+
+def _subsampled_ptp(sig):
+    """Peak-to-peak of a (subsampled, finite) signal, or None if empty."""
+    s = _subsampled(sig)
+    if s.size == 0:
+        return None
+    return float(np.max(s) - np.min(s))
+
+
+def _looks_clipped(sig):
+    """True if a meaningful share of samples sit exactly at an extreme.
+
+    A clean signal touches its max/min essentially once (fraction ≈ 1/N); a
+    saturated/clipped one has a flat top/bottom repeating the extreme value.
+    """
+    s = _subsampled(sig)
+    if s.size < 50:
+        return False
+    hi = float(np.max(s))
+    lo = float(np.min(s))
+    if hi == lo:
+        return False  # constant trace ≠ clipped
+    eps = (hi - lo) * 1e-6
+    at_top = int(np.count_nonzero(s >= hi - eps))
+    at_bot = int(np.count_nonzero(s <= lo + eps))
+    return (max(at_top, at_bot) / s.size) >= _CLIP_FRACTION
+
+
+def _compute_time_nudge_signals(vis):
+    """Derive nudge signals from the visible primary rows plot_channels built.
+
+    ``vis`` rows: (name, t, sig, color, unit, data_id, p_visible, axis_group).
+    """
+    count = len(vis)
+    units = [str(r[4]).strip() for r in vis if r[4] and str(r[4]).strip()]
+    same_unit = count >= 2 and len(units) == count and len(set(units)) == 1
+    has_axis_group = any(r[7] for r in vis)
+    ptps = [p for p in (_subsampled_ptp(r[2]) for r in vis) if p and p > 0]
+    amp_disparate = (
+        count >= 2 and len(ptps) >= 2
+        and (max(ptps) / min(ptps)) >= _AMP_DISPARITY_RATIO
+    )
+    clipped = any(_looks_clipped(r[2]) for r in vis)
+    return {
+        "channel_count": count,
+        "same_unit": same_unit,
+        "has_axis_group": has_axis_group,
+        "amp_disparate": amp_disparate,
+        "clipped": clipped,
+    }
+
+
 class TimeDomainCanvasPG(QWidget):
     """Pyqtgraph-backed drop-in for ``canvases.TimeDomainCanvas``."""
 
@@ -186,6 +254,9 @@ class TimeDomainCanvasPG(QWidget):
     xrange_changed = pyqtSignal(float, float)
     visible_range_changed = pyqtSignal()
     quality_status_changed = pyqtSignal(object)
+    # Fires after plot_channels rebuilds the chart, so the footer can refresh
+    # situational nudges (channel count / units / amplitude / clip).
+    chart_rebuilt = pyqtSignal()
 
     # Mirror TimeDomainCanvas constants so callers see the same surface.
     MAX_PTS = 8000
@@ -527,9 +598,15 @@ class TimeDomainCanvasPG(QWidget):
             if p_visible or companion_visible_by_source.get(name)
         ]
 
+        # Situational nudge signals (channel count / units / amplitude / clip)
+        # for the footer — see hints.HintState. Derived from the visible rows
+        # here so the empty-chart path below resets them to calm too.
+        self._nudge_signals = _compute_time_nudge_signals(vis)
+
         if not vis:
             # No channel owns an axis (every original hidden AND no visible
             # companion) → nothing to draw and nothing to anchor companions to.
+            self.chart_rebuilt.emit()
             return
 
         overlay_mode = (mode == "overlay" and len(vis) >= 2)
@@ -848,6 +925,12 @@ class TimeDomainCanvasPG(QWidget):
                     "_cursor_b_items", color="#dc2626", width=1.1
                 )
                 self._set_cursor_items_pos(b_items, self._cursor.bx)
+
+        self.chart_rebuilt.emit()
+
+    def nudge_signals(self) -> dict:
+        """Situational signals for the footer nudge surface (see hints.py)."""
+        return dict(getattr(self, "_nudge_signals", {}) or {})
 
     def _set_primary_line_visible(self, name, visible):
         """Hide/show a primary (original) curve in place without rebuilding.

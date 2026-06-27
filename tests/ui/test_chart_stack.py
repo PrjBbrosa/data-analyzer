@@ -2883,14 +2883,26 @@ def test_bottom_hint_bar_spectrogram_hint(qapp):
     assert "spectrogram.slice" in pool_ids
 
 
-def test_bottom_hint_bar_base_card_anchor_persists_with_no_mode(qapp):
-    """Plain _ChartCard (fft) keeps its base-gesture anchor even with no toolbar
-    mouse mode — the base gesture is mode-independent and always reachable."""
+def test_bottom_hint_bar_base_card_anchor_persists_with_no_mode(qapp, tmp_path):
+    """Plain _ChartCard (fft) keeps its base-gesture anchor reachable even with
+    no toolbar mouse mode — the base gesture is mode-independent and always
+    leads the rotation pool. (The lap now *enters* at a persisted round-robin
+    start offset so a fresh open isn't always the anchor; pin offset 0 here so
+    the deterministic head — the anchor — is what shows.)"""
+    from PyQt5.QtCore import QSettings
+    from mf4_analyzer.ui import hints
     from mf4_analyzer.ui.chart_stack import ChartStack
     cs = ChartStack()
     card = cs._fft_card
+    settings = QSettings(str(tmp_path / "hint.ini"), QSettings.IniFormat)
+    settings.setValue(hints.ROTATION_START_KEY, 0)  # lead with the pool head
+    settings.sync()
+    card.set_hint_settings(settings)
     card.toolbar.mode = ''  # type: ignore[attr-defined]
     card._refresh_bottom_hint()
+    # Anchor still leads the pool and stays reachable regardless of mouse mode…
+    assert card._rotation_candidates()[0].id == "anchor.line_wheel"
+    # …and at start offset 0 it is the hint shown.
     assert card._hint_context.full_text() == "Ctrl / Shift + 滚轮 缩放 X / Y"
 
 

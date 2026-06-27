@@ -10,6 +10,7 @@ from PyQt5.QtCore import QSettings
 
 
 DISCOVERED_SETTINGS_KEY = "chartHints/discovered"
+ROTATION_START_KEY = "chartHints/rotationStart"
 
 
 # The footer shares one bar between a left (rotating gesture) slot and a right
@@ -97,6 +98,16 @@ class HintState:
     annotation_on: bool = False
     discovered: frozenset[str] = field(default_factory=frozenset)
     recently_used: frozenset[str] = field(default_factory=frozenset)
+    # ---- Situational signals (drive the ``nudge`` surface). These describe the
+    # current DATA situation, not the page mode, so the footer can proactively
+    # point at a capability the moment it becomes useful. All default to a calm
+    # value so existing callers/tests are unaffected. ----
+    channel_count: int = 0      # plotted channels (overlay/subplot)
+    same_unit: bool = False     # all plotted channels share one unit
+    has_axis_group: bool = False  # at least one shared-axis (共轴) group exists
+    amp_disparate: bool = False  # one curve dwarfed by another (range ratio big)
+    colorbar_dead: bool = False  # heatmap colour window collapsed to ~one colour
+    clipped: bool = False        # a plotted signal looks saturated / clipped
 
 
 NAV_SHORTCUTS = {
@@ -358,7 +369,65 @@ _HINTS = (
         plot_modes=frozenset({"overlay", "subplot"}),
         priority=70,
     ),
+    # ---- Situational nudges (surface="nudge"): condition-gated, shown in the
+    # footer's discovery slot only while their data predicate (see
+    # _NUDGE_PREDICATES) holds. They self-clear when the situation clears and
+    # retire for good once the capability is discovered. ----
+    Hint(
+        id="nudge.coaxis",
+        text="通道多？多选右键合并共轴比幅值",
+        surface="nudge",
+        modes=frozenset({"time"}),
+        plot_modes=frozenset({"overlay", "subplot"}),
+        priority=80,
+        retire_when_discovered="coaxis.merge",
+    ),
+    Hint(
+        id="nudge.colorbar_dead",
+        text="画面发黑？双击 colorbar 重置色阶",
+        surface="nudge",
+        modes=frozenset({"fft_time", "order"}),
+        chart_kinds=frozenset({"fft_time", "order"}),
+        priority=75,
+        retire_when_discovered="spectrogram.colorbar",
+    ),
+    Hint(
+        id="nudge.amp_disparate",
+        text="某条太小？Alt 拖它单独调 Y",
+        surface="nudge",
+        modes=frozenset({"time"}),
+        plot_modes=frozenset({"overlay"}),
+        priority=70,
+    ),
+    Hint(
+        id="nudge.too_many",
+        text="通道太多？Ctrl+1 切分屏更清晰",
+        surface="nudge",
+        modes=frozenset({"time"}),
+        plot_modes=frozenset({"overlay"}),
+        priority=60,
+    ),
+    Hint(
+        id="nudge.clipped",
+        text="信号疑似裁剪，峰值可能失真",
+        surface="nudge",
+        modes=frozenset({"time"}),
+        priority=40,
+    ),
 )
+
+
+# Situational-nudge predicates over HintState data signals, keyed by hint id.
+# Kept beside the registry so the trigger condition lives next to the text.
+_NUDGE_PREDICATES = {
+    "nudge.coaxis": lambda s: (
+        s.channel_count >= 4 and s.same_unit and not s.has_axis_group
+    ),
+    "nudge.colorbar_dead": lambda s: s.colorbar_dead,
+    "nudge.amp_disparate": lambda s: s.amp_disparate and not s.has_axis_group,
+    "nudge.too_many": lambda s: s.channel_count >= 8,
+    "nudge.clipped": lambda s: s.clipped,
+}
 
 
 # Discovery-style tips that are surfaced by an in-app gesture (mark_discovered /
@@ -492,6 +561,54 @@ def discovery_hint(state, scope="chart"):
     if not candidates:
         return None
     return sorted(candidates, key=lambda hint: -hint.priority)[0]
+
+
+def nudge_hint(state, scope="chart"):
+    """The single highest-priority situational nudge for ``state`` (or None).
+
+    A nudge surfaces only while its data predicate holds (so it self-clears when
+    the situation clears) and it has not been retired by discovery. It is a
+    separate surface from discovery/context/rotation — see ``_NUDGE_PREDICATES``
+    for the trigger conditions.
+    """
+    candidates = [
+        hint for hint in _HINTS
+        if hint.surface == "nudge"
+        and hint.scope == scope
+        and _is_shipped(hint)
+        and hint.id not in state.discovered
+        and not _retired_by_discovery(hint, state)
+        and _matches_state(hint, state)
+        and _nudge_predicate_ok(hint, state)
+    ]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda hint: -hint.priority)[0]
+
+
+def _nudge_predicate_ok(hint, state):
+    pred = _NUDGE_PREDICATES.get(hint.id)
+    return bool(pred(state)) if pred is not None else False
+
+
+def next_rotation_start(settings):
+    """Return the persisted rotation-start offset, then advance it by one.
+
+    The footer pool still leads with the high-weight anchor, but the card enters
+    the lap at this round-robin offset so a fresh open does not always show the
+    same (wheel-zoom) anchor first. Deterministic and persisted across sessions;
+    a garbage stored value resets cleanly to 0.
+    """
+    raw = settings.value(ROTATION_START_KEY, 0)
+    try:
+        start = int(raw)
+    except (TypeError, ValueError):
+        start = 0
+    if start < 0:
+        start = 0
+    settings.setValue(ROTATION_START_KEY, start + 1)
+    settings.sync()
+    return start
 
 
 def load_discovered(settings=None):
