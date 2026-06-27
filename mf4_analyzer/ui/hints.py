@@ -155,6 +155,13 @@ _HINTS = (
         priority=90,
     ),
     Hint(
+        id="chart.custom_action_slot",
+        text="右键鼠标行▾ → 换绑常用动作",
+        surface="discovery",
+        retire_on="custom_action_rebind",
+        priority=50,
+    ),
+    Hint(
         id="channel.right_click",
         text="左侧通道右键 → 设为叠加图左轴",
         surface="discovery",

@@ -243,7 +243,12 @@ QUICKREF: Tuple[QuickGroup, ...] = (
         rows=(
             QuickRow(
                 "图表右键",
-                sub="查看全部 · 轴范围 · 鼠标模式 · 网格 · 导出",
+                sub="查看全部 · 轴范围 · 鼠标模式 · 网格 · 自定义动作",
+            ),
+            QuickRow(
+                "换绑自定义动作",
+                sub="复制 / 上一步 / 下一步 / 导出",
+                gesture="鼠标行第三槽▾",
             ),
             QuickRow("通道右键", sub="设左轴 / 共轴"),
         ),

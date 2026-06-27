@@ -130,6 +130,23 @@ def test_mark_discovered_round_trips_through_qsettings():
     assert hints.discovery_hint(state).id == "chart.right_click_menu"
 
 
+def test_custom_action_slot_discovery_surfaces_and_retires():
+    # After the higher-priority discoveries are seen, the custom-action-slot
+    # tip surfaces; rebinding (marking the id) retires it.
+    seen = {
+        "toolbar.shortcuts_exist",
+        "chart.copy_image",
+        "chart.right_click_menu",
+        "channel.right_click",
+        "view.history",
+    }
+    state = HintState(discovered=frozenset(seen))
+    assert hints.discovery_hint(state).id == "chart.custom_action_slot"
+    after = HintState(discovered=frozenset(seen | {"chart.custom_action_slot"}))
+    nxt = hints.discovery_hint(after)
+    assert nxt is None or nxt.id != "chart.custom_action_slot"
+
+
 def test_shortcut_tooltip_returns_exact_registered_key():
     assert hints.shortcut_tooltip("pan") == "Ctrl+G"
     assert hints.shortcut_tooltip("btn_overlay") == "Ctrl+2"

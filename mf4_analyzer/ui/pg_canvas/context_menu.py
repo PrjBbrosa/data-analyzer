@@ -884,6 +884,16 @@ class _PgCustomActionButton(QWidget):
     def _rebind(self, action_id):
         self._action_id = action_id
         _save_custom_action(action_id, self._settings)
+        # Retire the rotating footer discovery once the user actually rebinds.
+        try:
+            from mf4_analyzer.ui import hints
+            from PyQt5.QtCore import QSettings
+            hints.mark_discovered(
+                self._settings if self._settings is not None else QSettings(),
+                "chart.custom_action_slot",
+            )
+        except Exception:
+            pass
         self._refresh_main()
         self._collapse_action_list()
 
