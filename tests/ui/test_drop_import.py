@@ -1,7 +1,7 @@
 import mf4_analyzer.ui.main_window as mw
 from mf4_analyzer.ui.main_window import MainWindow
 from PyQt5.QtCore import QMimeData, QPoint, Qt, QUrl
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent
+from PyQt5.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent
 
 
 def _mime(paths):
@@ -154,3 +154,43 @@ def test_drop_tlproj_passes_through(qapp, qtbot, tmp_path, monkeypatch):
     w.dropEvent(_drop(_mime([proj])))
 
     assert captured == [[str(proj)]]
+
+
+def test_overlay_shows_on_enter_hides_on_leave(qapp, qtbot, tmp_path):
+    w = MainWindow()
+    qtbot.addWidget(w)
+    f = tmp_path / "a.csv"
+    f.write_text("x")
+
+    w.dragEnterEvent(_enter(_mime([f])))
+
+    assert w._drop_overlay is not None
+    assert not w._drop_overlay.isHidden()
+
+    w.dragLeaveEvent(QDragLeaveEvent())
+
+    assert w._drop_overlay.isHidden()
+
+
+def test_overlay_hidden_after_drop(qapp, qtbot, tmp_path, monkeypatch):
+    w = MainWindow()
+    qtbot.addWidget(w)
+    f = tmp_path / "a.csv"
+    f.write_text("x")
+    monkeypatch.setattr(w, "_open_paths", lambda paths: None)
+
+    w.dragEnterEvent(_enter(_mime([f])))
+    w.dropEvent(_drop(_mime([f])))
+
+    assert w._drop_overlay.isHidden()
+
+
+def test_overlay_transparent_to_mouse(qapp, qtbot, tmp_path):
+    w = MainWindow()
+    qtbot.addWidget(w)
+    f = tmp_path / "a.csv"
+    f.write_text("x")
+
+    w.dragEnterEvent(_enter(_mime([f])))
+
+    assert w._drop_overlay.testAttribute(Qt.WA_TransparentForMouseEvents)
