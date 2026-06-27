@@ -1343,11 +1343,27 @@ QPushButton#cursorPillToggle {
     max-width: 16px;
     max-height: 16px;
 }
-QPushButton#cursorPillToggle:hover {
+QPushButton#cursorPillToggle[cursorPillMode="full"] {
+    background: rgba(100, 116, 139, 0.15);
+    border: 1px solid rgba(100, 116, 139, 0.30);
+    color: #475569;
+}
+QPushButton#cursorPillToggle[cursorPillMode="mini"] {
+    background: rgba(37, 99, 235, 0.14);
+    border: 1px solid rgba(37, 99, 235, 0.52);
+    color: #2563eb;
+}
+QPushButton#cursorPillToggle[cursorPillMode="full"]:hover {
     background: rgba(100, 116, 139, 0.25);
 }
-QPushButton#cursorPillToggle:pressed {
+QPushButton#cursorPillToggle[cursorPillMode="full"]:pressed {
     background: rgba(100, 116, 139, 0.40);
+}
+QPushButton#cursorPillToggle[cursorPillMode="mini"]:hover {
+    background: rgba(37, 99, 235, 0.18);
+}
+QPushButton#cursorPillToggle[cursorPillMode="mini"]:pressed {
+    background: rgba(37, 99, 235, 0.26);
 }
 
 StatsStrip {

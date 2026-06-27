@@ -201,6 +201,29 @@ def test_cursor_pill_renders_transparent_rounded_corners(qapp, qtbot):
         qapp.setStyleSheet(old_sheet)
 
 
+def test_cursor_pill_toggle_exposes_distinct_full_and_mini_states(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    pill = CursorPill()
+    qtbot.addWidget(pill)
+
+    assert pill._toggle_btn.text() == "−"
+    assert pill._toggle_btn.toolTip() == "收起为数值"
+    assert pill._toggle_btn.property("cursorPillMode") == "full"
+
+    pill._toggle_mode()
+
+    assert pill._toggle_btn.text() == "+"
+    assert pill._toggle_btn.toolTip() == "展开通道名"
+    assert pill._toggle_btn.property("cursorPillMode") == "mini"
+
+    pill._toggle_mode()
+
+    assert pill._toggle_btn.text() == "−"
+    assert pill._toggle_btn.toolTip() == "收起为数值"
+    assert pill._toggle_btn.property("cursorPillMode") == "full"
+
+
 def test_single_cursor_pill_uses_vertical_channel_readout(qapp, qtbot):
     from mf4_analyzer.ui.chart_stack import ChartStack
 
@@ -222,10 +245,339 @@ def test_single_cursor_pill_uses_vertical_channel_readout(qapp, qtbot):
     assert cs._pill.has_detail()
     detail = cs._pill._detail.text()
     assert '<table' in detail
-    assert 'padding-top:6px' in detail
+    assert 'padding-top:6px' not in detail
+    assert 'padding-top:2px' in detail
+    assert 'line-height:1.15' in detail
     assert '424.2' in detail
     assert '-1.486' in detail
     assert '│' not in detail
+
+
+def test_single_cursor_pill_builds_mini_value_only_detail(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_mode('time')
+    cs.set_cursor_mode('single')
+
+    text = _CURSOR_HTML_SEP.join([
+        '<span style="color:#111827;">t=35.0358s</span>',
+        '<span style="color:#64748b;">[taiyaok]</span> '
+        '<span style="color:#ef4444;">Rte_ESChkPlausi_mESMotorTorque_xds16=<b>0 Nm</b></span>',
+        '<span style="color:#64748b;">[taiyaok]</span> '
+        '<span style="color:#1769e0;">Rte_InCo_mInertiaCompMotorTorque_xds16=<b>0.04395 Nm</b></span>',
+    ])
+
+    primary, full_detail, mini_detail, tooltip = (
+        cs._format_single_cursor_variants_for_pill(text)
+    )
+
+    assert primary == '<span style="color:#111827;">t=35.0358s</span>'
+    assert 'Rte_ESChkPlausi_mESMotorTorque_xds16' in full_detail
+    assert 'Rte_InCo_mInertiaCompMotorTorque_xds16' in full_detail
+    assert '0 Nm' in mini_detail
+    assert '0.04395 Nm' in mini_detail
+    assert '#ef4444' in mini_detail
+    assert '#1769e0' in mini_detail
+    assert 'Rte_ESChkPlausi_mESMotorTorque_xds16' not in mini_detail
+    assert 'Rte_InCo_mInertiaCompMotorTorque_xds16' not in mini_detail
+    assert '[taiyaok]' not in mini_detail
+    assert '=' not in cs._strip_html(mini_detail)
+    assert 'Rte_ESChkPlausi_mESMotorTorque_xds16=0 Nm' in tooltip
+    assert 'Rte_InCo_mInertiaCompMotorTorque_xds16=0.04395 Nm' in tooltip
+
+
+def test_single_cursor_pill_mini_detail_reescapes_html_entities(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_mode('time')
+    cs.set_cursor_mode('single')
+
+    text = _CURSOR_HTML_SEP.join([
+        '<span style="color:#111827;">t=35.0358s</span>',
+        '<span style="color:#22c55e;">escaped=<b>1 &lt;A&gt;&amp;</b></span>',
+    ])
+
+    _primary, _full_detail, mini_detail, tooltip = (
+        cs._format_single_cursor_variants_for_pill(text)
+    )
+
+    assert '1 &lt;A&gt;&amp;' in mini_detail
+    assert '1 <A>&' not in mini_detail
+    assert 'escaped=1 <A>&' in tooltip
+
+
+def test_single_cursor_pill_toggle_shows_value_only_mini_detail(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_mode('time')
+    cs.set_cursor_mode('single')
+
+    text = _CURSOR_HTML_SEP.join([
+        '<span style="color:#111827;">t=35.0358s</span>',
+        '<span style="color:#64748b;">[taiyaok]</span> '
+        '<span style="color:#ef4444;">Rte_PA_mAtMotorTorque_xds16=<b>-1.841 Nm</b></span>',
+    ])
+    cs.canvas_time.cursor_info.emit(text)
+
+    assert 'Rte_PA_mAtMotorTorque_xds16' in cs._pill._detail.text()
+    cs._pill._toggle_mode()
+
+    detail = cs._pill._detail.text()
+    assert '-1.841 Nm' in detail
+    assert 'Rte_PA_mAtMotorTorque_xds16' not in detail
+    assert '[taiyaok]' not in detail
+    assert '=' not in cs._strip_html(detail)
+    assert 'Rte_PA_mAtMotorTorque_xds16=-1.841 Nm' in cs._pill._detail.toolTip()
+
+
+def test_cursor_pill_empty_dual_rows_clear_single_detail_state(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    pill = CursorPill()
+    qtbot.addWidget(pill)
+    pill.set_single_detail_html(
+        "<table><tr><td>name=<b>1 Nm</b></td></tr></table>",
+        "<table><tr><td>1 Nm</td></tr></table>",
+        "name=1 Nm",
+    )
+    pill._toggle_mode()
+    assert "1 Nm" in pill._detail.text()
+    assert pill._detail.toolTip() == "name=1 Nm"
+
+    pill.set_dual_rows([])
+
+    assert pill._detail.text() == ""
+    assert pill._detail.toolTip() == ""
+    assert pill.has_detail() is False
+
+
+def test_cursor_pill_toggle_collapse_preserves_right_edge(qapp, qtbot):
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget()
+    parent.resize(900, 360)
+    qtbot.addWidget(parent)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    pill.set_primary("<span>t=1.0000s</span>")
+    pill.set_single_detail_html(
+        "<table><tr><td>long_channel_name_one=<b>1 Nm</b></td></tr>"
+        "<tr><td>long_channel_name_two=<b>2 Nm</b></td></tr></table>",
+        "<table><tr><td>1 Nm</td></tr><tr><td>2 Nm</td></tr></table>",
+        "",
+    )
+    pill.move(80, 40)
+    pill.show()
+    qapp.processEvents()
+
+    old_x = pill.x()
+    old_right = pill.x() + pill.width()
+
+    pill._toggle_mode()
+
+    new_right = pill.x() + pill.width()
+    assert pill.x() > old_x
+    assert abs(new_right - old_right) <= 1
+
+
+def test_cursor_pill_toggle_expand_stays_inside_parent_right_edge(qapp, qtbot):
+    from PyQt5.QtWidgets import QWidget
+    from mf4_analyzer.ui.chart_stack import CursorPill
+
+    parent = QWidget()
+    parent.resize(900, 360)
+    qtbot.addWidget(parent)
+    pill = CursorPill(parent)
+    qtbot.addWidget(pill)
+    pill.set_primary("<span>t=1.0000s</span>")
+    pill.set_single_detail_html(
+        "<table><tr><td>very_long_channel_name_that_needs_space=<b>1 Nm</b></td></tr>"
+        "<tr><td>another_very_long_channel_name=<b>2 Nm</b></td></tr></table>",
+        "<table><tr><td>1 Nm</td></tr><tr><td>2 Nm</td></tr></table>",
+        "",
+    )
+    pill._toggle_mode()
+    pill.move(parent.width() - pill.width() - 8, 40)
+    pill.show()
+    qapp.processEvents()
+
+    mini_x = pill.x()
+    old_right = pill.x() + pill.width()
+
+    pill._toggle_mode()
+
+    new_right = pill.x() + pill.width()
+    assert pill.x() < mini_x
+    assert new_right <= parent.width()
+    assert abs(new_right - old_right) <= 1
+
+
+def test_user_placed_primary_pill_preserves_right_edge_after_dual_rows_resize(
+    qapp, qtbot
+):
+    from mf4_analyzer.ui.chart_stack import ChartStack
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    cs.set_mode('time')
+    cs.set_cursor_mode('dual')
+    qapp.processEvents()
+
+    cs._pill.set_primary("<span>A=1.0s │ B=2.0s</span>")
+    cs._pill.set_detail_html("<table><tr><td>short</td></tr></table>")
+    cs._pill.setVisible(True)
+    cs._pill.mark_user_placed(True)
+    cs._pill.move(cs.stack.width() - cs._pill.width() - 8, 48)
+    qapp.processEvents()
+
+    old_right = cs._pill.x() + cs._pill.width()
+    rows = [
+        (
+            "very_long_channel_name_that_expands_the_dual_cursor_rows_width",
+            -1.0,
+            2.0,
+            0.5,
+            1.5,
+            " Nm",
+            "#ef4444",
+        ),
+        (
+            "another_long_channel_name_to_force_a_wider_floating_pill",
+            -3.0,
+            4.0,
+            0.25,
+            -0.75,
+            " deg",
+            "#1769e0",
+        ),
+    ]
+
+    cs.canvas_time.dual_cursor_rows.emit(rows)
+    qapp.processEvents()
+
+    new_right = cs._pill.x() + cs._pill.width()
+    assert new_right <= cs.stack.width()
+    assert abs(new_right - min(old_right, cs.stack.width())) <= 1
+
+
+def test_user_placed_primary_pill_preserves_right_edge_when_content_shrinks(
+    qapp, qtbot
+):
+    from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    cs.set_mode('time')
+    cs.set_cursor_mode('dual')
+    qapp.processEvents()
+
+    cs._pill.set_primary("<span>A=1.0s │ B=2.0s │ ΔT=1.0s</span>")
+    cs._pill.set_detail_html(
+        "<table><tr><td>"
+        "very_long_dual_cursor_channel_name_that_makes_the_pill_wide=123 Nm"
+        "</td></tr></table>"
+    )
+    cs._pill.setVisible(True)
+    cs._pill.mark_user_placed(True)
+    cs._pill.move(cs.stack.width() - cs._pill.width() - 8, 56)
+    qapp.processEvents()
+
+    old_right = cs._pill.x() + cs._pill.width()
+    old_x = cs._pill.x()
+
+    cs.set_cursor_mode('single')
+    text = _CURSOR_HTML_SEP.join([
+        '<span style="color:#111827;">t=3.0000s</span>',
+        '<span style="color:#1769e0;">speed=<b>5 rpm</b></span>',
+    ])
+    cs.canvas_time.cursor_info.emit(text)
+    qapp.processEvents()
+
+    new_right = cs._pill.x() + cs._pill.width()
+    assert cs._pill.x() > old_x
+    assert abs(new_right - old_right) <= 1
+
+
+def test_default_primary_pill_reanchors_to_canvas_after_mode_content_resize(
+    qapp, qtbot
+):
+    from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.resize(900, 420)
+    cs.show()
+    cs.set_mode('time')
+    cs.set_cursor_mode('single')
+    qapp.processEvents()
+
+    text = _CURSOR_HTML_SEP.join([
+        '<span style="color:#111827;">t=1.0000s</span>',
+        '<span style="color:#ef4444;">long_name=<b>1 Nm</b></span>',
+    ])
+    cs.canvas_time.cursor_info.emit(text)
+    qapp.processEvents()
+
+    canvas_origin = cs.canvas_time.mapTo(cs.stack, cs.canvas_time.rect().topLeft())
+    expected_right = canvas_origin.x() + cs.canvas_time.width() - 8
+    actual_right = cs._pill.x() + cs._pill.width()
+    assert abs(actual_right - expected_right) <= 2
+    assert cs._pill.is_user_placed() is False
+
+
+def test_cursor_pill_snapshot_restore_preserves_single_mini_variants(qapp, qtbot):
+    from mf4_analyzer.ui.chart_stack import ChartStack, _CURSOR_HTML_SEP
+
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_mode('time')
+    cs.set_cursor_mode('single')
+
+    text = _CURSOR_HTML_SEP.join([
+        '<span style="color:#111827;">t=35.0358s</span>',
+        '<span style="color:#64748b;">[taiyaok]</span> '
+        '<span style="color:#ef4444;">Rte_PA_mAtMotorTorque_xds16=<b>-1.841 Nm</b></span>',
+    ])
+    cs.canvas_time.cursor_info.emit(text)
+    cs._pill._toggle_mode()
+
+    snapshot = cs.cursor_pill_snapshot()
+    cs._pill.set_detail_html("<b>clobbered</b>")
+    cs._pill.set_primary("clobbered primary")
+
+    cs.restore_cursor_pill_snapshot(snapshot)
+
+    assert cs._pill._toggle_btn.text() == "+"
+    assert cs._pill._toggle_btn.property("cursorPillMode") == "mini"
+    detail = cs._pill._detail.text()
+    assert "-1.841 Nm" in detail
+    assert "Rte_PA_mAtMotorTorque_xds16" not in detail
+    assert "[taiyaok]" not in detail
+    assert "=" not in cs._strip_html(detail)
+    assert "Rte_PA_mAtMotorTorque_xds16=-1.841 Nm" in cs._pill._detail.toolTip()
+
+    cs._pill._toggle_mode()
+
+    assert cs._pill._toggle_btn.text() == "−"
+    assert "Rte_PA_mAtMotorTorque_xds16" in cs._pill._detail.text()
+
+
+def test_cursor_pill_toggle_qss_has_distinct_full_and_mini_rules():
+    qss = Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+    assert 'QPushButton#cursorPillToggle[cursorPillMode="full"]' in qss
+    assert 'QPushButton#cursorPillToggle[cursorPillMode="mini"]' in qss
+    assert '#2563eb' in qss
 
 
 def test_cursor_pill_hidden_in_fft_mode(qapp, qtbot):
@@ -1016,7 +1368,21 @@ def test_cursor_off_clears_dual_cursor_pill(qapp, qtbot):
     assert cs.cursor_pill_text() == ""
 
 
-def test_single_cursor_pill_detail_uses_row_spacing(qapp, qtbot):
+def test_dual_cursor_primary_update_preserves_existing_detail(qapp, qtbot):
+    cs = ChartStack()
+    qtbot.addWidget(cs)
+    cs.set_mode('time')
+    cs.set_cursor_mode('dual')
+
+    cs.canvas_time.cursor_info.emit("A=1.0s")
+    cs.canvas_time.dual_cursor_info.emit("<b>stats</b>")
+    cs.canvas_time.cursor_info.emit("A=1.5s")
+
+    assert cs._pill.primary_text() == "A=1.5s"
+    assert "stats" in cs._pill._detail.text()
+
+
+def test_cursor_pill_formats_single_cursor_details_for_mode(qapp, qtbot):
     cs = ChartStack()
     qtbot.addWidget(cs)
     cs.set_mode('time')
@@ -1032,7 +1398,9 @@ def test_single_cursor_pill_detail_uses_row_spacing(qapp, qtbot):
 
     assert primary == '<span>t=1.0000s</span>'
     assert '<table' in detail
-    assert 'padding-top:6px' in detail
+    assert 'padding-top:6px' not in detail
+    assert 'padding-top:2px' in detail
+    assert 'line-height:1.15' in detail
     assert 'speed=' in detail and 'torque=' in detail
 
 

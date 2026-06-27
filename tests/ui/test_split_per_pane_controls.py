@@ -368,6 +368,86 @@ def test_pill_formats_detail_using_emitting_pane_cursor_mode(
     assert cs._pill_secondary.has_detail() is True
 
 
+def test_split_secondary_single_cursor_mini_detail_stays_on_secondary_pill(
+    qtbot, qapp, loaded_csv
+):
+    from mf4_analyzer.ui.chart_stack import _CURSOR_HTML_SEP
+
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+    cs._secondary_card.set_cursor_mode("single")
+    qapp.processEvents()
+
+    cs.canvas_time.cursor_info.emit("t=9.0s | speed=1")
+    secondary_text = _CURSOR_HTML_SEP.join([
+        "<span>t=1.0000s</span>",
+        '<span style="color:#1769e0;">secondary_speed=<b>5 rpm</b></span>',
+    ])
+    cs.secondary_canvas().cursor_info.emit(secondary_text)
+    qapp.processEvents()
+
+    assert "t=9.0s" in cs.cursor_pill_text()
+    assert cs._pill_secondary is not None
+    assert "secondary_speed" in cs._pill_secondary._detail.text()
+
+    cs._pill_secondary._toggle_mode()
+
+    secondary_detail = cs._pill_secondary._detail.text()
+    assert "secondary_speed" not in secondary_detail
+    assert "5 rpm" in secondary_detail
+    assert "=" not in cs._strip_html(secondary_detail)
+    assert "secondary_speed=5 rpm" in cs._pill_secondary._detail.toolTip()
+    assert "t=9.0s" in cs.cursor_pill_text()
+
+
+def test_user_placed_secondary_pill_preserves_right_edge_after_dual_rows_resize(
+    qtbot, qapp, loaded_csv
+):
+    w, *_ = _make_speed_vs_torque_views(qtbot, qapp, loaded_csv)
+    cs = w.chart_stack
+    _enter_split(w, qapp)
+    _click_card(qapp, cs._secondary_card)
+    cs._secondary_card.set_cursor_mode("dual")
+    qapp.processEvents()
+
+    assert cs._pill_secondary is not None
+    cs.canvas_time.cursor_info.emit("t=9.0s | primary=1")
+    cs._pill_secondary.set_primary("<span>A=1.0s │ B=2.0s</span>")
+    cs._pill_secondary.set_detail_html("<table><tr><td>short</td></tr></table>")
+    cs._pill_secondary.setVisible(True)
+    cs._pill_secondary.mark_user_placed(True)
+    cs._pill_secondary.move(
+        cs.stack.width() - cs._pill_secondary.width() - 8,
+        64,
+    )
+    qapp.processEvents()
+
+    old_primary_right = cs._pill.x() + cs._pill.width()
+    old_right = cs._pill_secondary.x() + cs._pill_secondary.width()
+    rows = [
+        (
+            "secondary_long_channel_name_that_expands_the_pill_width",
+            -1.0,
+            2.0,
+            0.5,
+            1.5,
+            " Nm",
+            "#1769e0",
+        )
+    ]
+
+    cs.secondary_canvas().dual_cursor_rows.emit(rows)
+    qapp.processEvents()
+
+    new_right = cs._pill_secondary.x() + cs._pill_secondary.width()
+    assert new_right <= cs.stack.width()
+    assert abs(new_right - min(old_right, cs.stack.width())) <= 1
+    assert cs._pill.x() + cs._pill.width() == old_primary_right
+    assert "t=9.0s" in cs.cursor_pill_text()
+
+
 # ---------------------------------------------------------------------------
 # Shared toolbar pan/zoom/back/forward clicks broadcast to both panes while
 # side-by-side is active. Home/options remain focused-pane operations.

@@ -1,4 +1,8 @@
 """ChartStack — the centre-pane QWidget coordinator."""
+import re
+from html import escape
+from html import unescape
+
 from PyQt5.QtCore import QEvent, QRect, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import (
@@ -29,6 +33,11 @@ from .toolbar import PgNavigationToolbar
 
 
 class ChartStack(QWidget):
+    _COLOR_RE = re.compile(r'color:\s*([^;"\']+)')
+    _BOLD_VALUE_RE = re.compile(r'<b[^>]*>(.*?)</b>', re.S)
+    _TAG_RE = re.compile(r'<[^>]+>')
+    _CURSOR_PREFIX_COLORS = {"#64748b"}
+
     mode_changed = pyqtSignal(str)
     plot_mode_changed = pyqtSignal(str)
     cursor_mode_changed = pyqtSignal(str)
@@ -217,7 +226,9 @@ class ChartStack(QWidget):
             lambda text: self._on_dual_cursor_info(text, self.canvas_time)
         )
         if hasattr(self.canvas_time, 'dual_cursor_rows'):
-            self.canvas_time.dual_cursor_rows.connect(self._pill.set_dual_rows)
+            self.canvas_time.dual_cursor_rows.connect(
+                lambda rows: self._on_dual_cursor_rows(rows, self.canvas_time)
+            )
         self.stack.currentChanged.connect(lambda _i: self._reposition_pill())
 
         # Relay time-card control signals up to MainWindow consumers.
@@ -635,7 +646,9 @@ class ChartStack(QWidget):
                 lambda text, c=canvas: self._on_dual_cursor_info(text, c)
             )
             if hasattr(canvas, 'dual_cursor_rows'):
-                canvas.dual_cursor_rows.connect(self._pill_secondary.set_dual_rows)
+                canvas.dual_cursor_rows.connect(
+                    lambda rows, c=canvas: self._on_dual_cursor_rows(rows, c)
+                )
             self._time_split.addWidget(self._secondary_card)
             self._install_focus_filter(self._secondary_card)
         self._secondary_card.setVisible(True)
@@ -1028,21 +1041,50 @@ class ChartStack(QWidget):
         mode = self.current_mode() if mode is None else mode
         return mode == 'time'
 
+    def _update_pill_content(self, pill, card, update):
+        """Run ``update`` (a content mutation that may resize ``pill``) and then
+        settle geometry: user-placed pills keep their pre-update right edge and
+        top (clamped to the stack), default pills re-anchor to ``card``'s canvas.
+
+        This is the single seam every size-changing cursor readout must pass
+        through so single/dual switching never drifts or overflows the parent.
+        """
+        was_user_placed = pill.is_user_placed()
+        old_right = pill.x() + pill.width()
+        old_top = pill.y()
+        update()
+        if not pill.isVisible():
+            return
+        if was_user_placed:
+            pill.move_preserving_right_edge(old_right, old_top)
+            pill.raise_()
+        else:
+            self._reposition_one_pill(pill, card)
+
     def _on_cursor_info(self, text, source=None):
         mode = self._cursor_mode_for_canvas(source)
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
         pill = self._pill_for_canvas(source)
+        card = self._card_for_canvas(source)
         if not text:
             pill.clear()
             self._reposition_pill()
             return
-        primary, detail = self._format_cursor_info_for_pill(text, mode)
-        pill.set_primary(primary)
-        if mode == 'single':
-            pill.set_detail_html(detail)
-        pill.setVisible(self._cursor_pill_visible_for_mode())
-        self._reposition_pill()
+
+        def update():
+            if mode == 'single':
+                primary, detail, mini_detail, tooltip = (
+                    self._format_single_cursor_variants_for_pill(text)
+                )
+                pill.set_primary(primary)
+                pill.set_single_detail_html(detail, mini_detail, tooltip)
+            else:
+                primary, _detail = self._format_cursor_info_for_pill(text, mode)
+                pill.set_primary(primary)
+            pill.setVisible(self._cursor_pill_visible_for_mode())
+
+        self._update_pill_content(pill, card, update)
 
     def _format_cursor_info_for_pill(self, text, mode=None):
         from .cursor_pill import _CURSOR_HTML_SEP
@@ -1050,28 +1092,122 @@ class ChartStack(QWidget):
             mode = self.cursor_mode()
         if mode != 'single' or _CURSOR_HTML_SEP not in (text or ''):
             return text, ''
-        parts = [part for part in text.split(_CURSOR_HTML_SEP) if part]
+        primary, detail, _mini_detail, _tooltip = (
+            self._format_single_cursor_variants_for_pill(text)
+        )
+        return primary, detail
+
+    def _format_single_cursor_variants_for_pill(self, text):
+        from .cursor_pill import _CURSOR_HTML_SEP
+        parts = [part for part in (text or '').split(_CURSOR_HTML_SEP) if part]
         if len(parts) <= 1:
-            return text, ''
-        rows = ['<table cellspacing="0" cellpadding="0">']
+            return text, '', '', ''
+        full_rows = ['<table cellspacing="0" cellpadding="0">']
+        mini_rows = [
+            '<table cellspacing="0" cellpadding="0" '
+            'style="font-size:12px;">'
+        ]
+        tooltip_lines = []
         for i, part in enumerate(parts[1:]):
-            top_pad = '6px' if i > 0 else '0'
-            rows.append(
+            top_pad = '2px' if i > 0 else '0'
+            full_rows.append(
                 '<tr><td style="padding-top:'
-                f'{top_pad}; padding-bottom:2px; line-height:1.35;">'
+                f'{top_pad}; padding-bottom:0; line-height:1.15;">'
                 f'{part}</td></tr>'
             )
-        rows.append('</table>')
-        return parts[0], ''.join(rows)
+            mini_rows.append(self._mini_single_cursor_part(part, top_pad))
+            tooltip_line = self._plain_single_cursor_tooltip_line(part)
+            if tooltip_line:
+                tooltip_lines.append(tooltip_line)
+        full_rows.append('</table>')
+        mini_rows.append('</table>')
+        return (
+            parts[0],
+            ''.join(full_rows),
+            ''.join(mini_rows),
+            '\n'.join(tooltip_lines),
+        )
+
+    def _mini_single_cursor_part(self, part, top_pad):
+        color = self._single_cursor_channel_color(part)
+        value_match = self._BOLD_VALUE_RE.search(part or '')
+        if value_match:
+            value = self._strip_html(value_match.group(1)).strip()
+        else:
+            plain = self._strip_html(part).strip()
+            value = plain.split('=', 1)[-1].strip() if '=' in plain else plain
+        value = value or '—'
+        mono = "font-family:'SF Mono',Menlo,Consolas,monospace;"
+        value_html = escape(value)
+        return (
+            '<tr>'
+            f'<td style="padding-top:{top_pad}; padding-right:5px; '
+            'line-height:1.15;">'
+            f'<span style="color:{color};">●</span></td>'
+            f'<td style="padding-top:{top_pad}; color:{color}; '
+            f'line-height:1.15; {mono} font-weight:650;">{value_html}</td>'
+            '</tr>'
+        )
+
+    def _plain_single_cursor_tooltip_line(self, part):
+        plain = self._strip_html(part).replace('\xa0', ' ').strip()
+        plain = re.sub(r'\s+', ' ', plain)
+        if not plain:
+            return ''
+        if '=' not in plain:
+            return re.sub(r'^\[[^\]]+\]\s*', '', plain).strip()
+        name, value = plain.split('=', 1)
+        name = re.sub(r'^\[[^\]]+\]\s*', '', name).strip()
+        value = value.strip()
+        return f'{name}={value}' if name else value
+
+    def _single_cursor_channel_color(self, part):
+        colors = [m.group(1).strip() for m in self._COLOR_RE.finditer(part or '')]
+        if not colors:
+            return '#111827'
+        value_match = self._BOLD_VALUE_RE.search(part or '')
+        if value_match:
+            before_value = part[:value_match.start()]
+            value_colors = [
+                m.group(1).strip()
+                for m in self._COLOR_RE.finditer(before_value)
+            ]
+            for color in reversed(value_colors):
+                if color.lower() not in self._CURSOR_PREFIX_COLORS:
+                    return color
+        for color in reversed(colors):
+            if color.lower() not in self._CURSOR_PREFIX_COLORS:
+                return color
+        return colors[-1]
+
+    def _strip_html(self, value):
+        return unescape(self._TAG_RE.sub('', value or ''))
 
     def _on_dual_cursor_info(self, text, source=None):
         if source is not None:
             self._active_cursor_card = self._card_for_canvas(source)
         pill = self._pill_for_canvas(source)
-        pill.set_detail_html(text)
-        if self.current_mode() == 'time' and (text or pill.primary_text()):
-            pill.setVisible(True)
-        self._reposition_pill()
+        card = self._card_for_canvas(source)
+
+        def update():
+            pill.set_detail_html(text)
+            if self.current_mode() == 'time' and (text or pill.primary_text()):
+                pill.setVisible(True)
+
+        self._update_pill_content(pill, card, update)
+
+    def _on_dual_cursor_rows(self, rows, source=None):
+        if source is not None:
+            self._active_cursor_card = self._card_for_canvas(source)
+        pill = self._pill_for_canvas(source)
+        card = self._card_for_canvas(source)
+
+        def update():
+            pill.set_dual_rows(rows)
+            if self.current_mode() == 'time' and (rows or pill.primary_text()):
+                pill.setVisible(True)
+
+        self._update_pill_content(pill, card, update)
 
     def _reposition_pill(self):
         current = self.current_mode()
@@ -1137,21 +1273,21 @@ class ChartStack(QWidget):
         another view through the primary controls, so callers can use this to
         preserve the active readout across that off-screen render.
         """
-        return {
+        snapshot = self._pill.snapshot()
+        snapshot.update({
             'visible': self._pill.isVisible(),
             'primary': self._pill.primary_text(),
             'detail': self._pill._detail.text(),
             'detail_visible': self._pill.has_detail(),
             'user_placed': self._pill.is_user_placed(),
             'pos': (self._pill.x(), self._pill.y()),
-        }
+        })
+        return snapshot
 
     def restore_cursor_pill_snapshot(self, snapshot):
         if not snapshot:
             return
-        self._pill.set_primary(snapshot.get('primary') or '')
-        detail = snapshot.get('detail') if snapshot.get('detail_visible') else ''
-        self._pill.set_detail_html(detail or '')
+        self._pill.restore_snapshot(snapshot)
         self._pill.mark_user_placed(snapshot.get('user_placed', False))
         pos = snapshot.get('pos')
         if pos is not None:
