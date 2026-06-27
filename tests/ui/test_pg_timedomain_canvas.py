@@ -7817,7 +7817,7 @@ def test_custom_action_registry_and_persistence(monkeypatch):
     from mf4_analyzer.ui.pg_canvas import context_menu as cm
 
     assert cm._CUSTOM_ACTION_ORDER == [
-        "copy_image", "home", "back", "forward", "y_fit", "view_all", "export",
+        "copy_image", "back", "forward", "export",
     ]
     assert cm._DEFAULT_CUSTOM_ACTION == "copy_image"
     assert set(cm._CUSTOM_ACTION_LABELS) == set(cm._CUSTOM_ACTION_ORDER)
@@ -7826,8 +7826,8 @@ def test_custom_action_registry_and_persistence(monkeypatch):
     settings = QSettings("MF4AnalyzerTest", "RegistryCase")
     settings.clear()
     assert cm._load_custom_action(settings) == "copy_image"
-    cm._save_custom_action("home", settings)
-    assert cm._load_custom_action(settings) == "home"
+    cm._save_custom_action("back", settings)
+    assert cm._load_custom_action(settings) == "back"
     settings.setValue(cm._CUSTOM_ACTION_SETTINGS_KEY, "bogus")
     assert cm._load_custom_action(settings) == "copy_image"
     settings.clear()
@@ -7853,10 +7853,9 @@ def test_resolve_custom_action_maps_to_handlers():
             y_autofit_handler=yf, copy_image_handler=copy,
         )
 
-    assert resolve("home") == ctl.home
+    assert resolve("back") == ctl.back
+    assert resolve("forward") == ctl.forward
     assert resolve("export") == ctl.save_figure
-    assert resolve("view_all") is va
-    assert resolve("y_fit") is yf
     assert resolve("copy_image") is copy
     assert cm._resolve_custom_action(
         "copy_image", controller=ctl, view_all_handler=va,
@@ -7941,11 +7940,11 @@ def test_custom_button_caret_expands_list_and_rebinds(qapp):
     assert lst is not None
     items = [c for c in lst.findChildren(QToolButton)
              if c.objectName().startswith("pgContextActionItem_")]
-    assert len(items) == 7
-    home_item = btn.findChild(QToolButton, "pgContextActionItem_home")
-    home_item.click()
-    assert btn.current_action_id() == "home"
-    assert settings.value("chartContext/customAction") == "home"
+    assert len(items) == 4
+    exp_item = btn.findChild(QToolButton, "pgContextActionItem_export")
+    exp_item.click()
+    assert btn.current_action_id() == "export"
+    assert settings.value("chartContext/customAction") == "export"
     assert btn.findChild(QWidget, "pgContextActionList") is None  # collapsed
     assert closed["n"] == 0  # menu NOT closed on rebind
     assert not btn.findChildren(QMenu)  # no nested QMenu
@@ -7961,8 +7960,8 @@ def test_custom_button_list_item_disabled_when_unavailable(qapp):
     btn.findChild(QToolButton, "pgContextCustomActionCaret").click()
     copy_item = btn.findChild(QToolButton, "pgContextActionItem_copy_image")
     assert not copy_item.isEnabled()
-    home_item = btn.findChild(QToolButton, "pgContextActionItem_home")
-    assert home_item.isEnabled()
+    back_item = btn.findChild(QToolButton, "pgContextActionItem_back")
+    assert back_item.isEnabled()
     settings.clear()
 
 

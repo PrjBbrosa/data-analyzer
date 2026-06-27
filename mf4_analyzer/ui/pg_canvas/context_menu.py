@@ -108,29 +108,25 @@ _INLINE_CONTROL_HEIGHT = 30
 
 _DEFAULT_CUSTOM_ACTION = "copy_image"
 _CUSTOM_ACTION_SETTINGS_KEY = "chartContext/customAction"
+# v1 pool intentionally excludes home/view_all/y_fit: those already live in the
+# panel's 查看 row right below, so duplicating them here adds no value. Only
+# panel-external execute-type actions remain.
 _CUSTOM_ACTION_ORDER = [
-    "copy_image", "home", "back", "forward", "y_fit", "view_all", "export",
+    "copy_image", "back", "forward", "export",
 ]
 _CUSTOM_ACTION_LABELS = {
     "copy_image": "复制为图片",
-    "home": "重置视图",
     "back": "上一步视图",
     "forward": "下一步视图",
-    "y_fit": "Y适应",
-    "view_all": "全图",
     "export": "导出图片",
 }
 _CUSTOM_ACTION_ICONS = {
     "copy_image": "mdi.content-copy",
-    "home": "mdi.home",
     "back": "mdi.arrow-left",
     "forward": "mdi.arrow-right",
-    "y_fit": "mdi.arrow-expand-vertical",
-    "view_all": "mdi.fit-to-page-outline",
     "export": "mdi.content-save-outline",
 }
 _CUSTOM_ACTION_CONTROLLER_METHODS = {
-    "home": "home",
     "back": "back",
     "forward": "forward",
     "export": "save_figure",
