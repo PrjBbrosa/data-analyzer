@@ -432,6 +432,26 @@ class TimeDomainCanvasPG(QWidget):
     # Public surface (signal/method names frozen by W0 contract tests).
     # ------------------------------------------------------------------
 
+    def _group_visible_into_slots(self, vis):
+        """按 axis_group 把可见通道归并成「轴槽」。
+
+        未分组通道（gid is None）各占一槽；同 gid 通道合并到该组首次
+        出现位置的槽。槽序 = 通道首次出现顺序。叠加与分屏共用，保证两
+        模式归并结果一致。返回 ``[{"gid": int|None, "members": [vis...]}]``。
+        """
+        slots = []
+        slot_of_gid = {}
+        for v in vis:
+            gid = v[7]
+            if gid is None:
+                slots.append({"gid": None, "members": [v]})
+            elif gid in slot_of_gid:
+                slots[slot_of_gid[gid]]["members"].append(v)
+            else:
+                slot_of_gid[gid] = len(slots)
+                slots.append({"gid": gid, "members": [v]})
+        return slots
+
     def plot_channels(
         self, ch_list, mode="overlay", xlabel="Time (s)", defer_first_frame=False
     ):
@@ -591,18 +611,9 @@ class TimeDomainCanvasPG(QWidget):
             )
             # 按 axis_group 归并成「轴槽」：未分组通道各占一槽；同 group 的通道
             # 共享一槽（一个 aux ViewBox + 一根 Y 轴，量程取并集自动）。槽序保持
-            # 通道首次出现顺序；槽 0 绑左轴，其余绑右轴。
-            slots = []
-            slot_of_gid = {}
-            for v in vis:
-                gid = v[7]
-                if gid is None:
-                    slots.append({"gid": None, "members": [v]})
-                elif gid in slot_of_gid:
-                    slots[slot_of_gid[gid]]["members"].append(v)
-                else:
-                    slot_of_gid[gid] = len(slots)
-                    slots.append({"gid": gid, "members": [v]})
+            # 通道首次出现顺序；槽 0 绑左轴，其余绑右轴。分屏与叠加共用同一归槽
+            # helper，保证两模式归并结果绝对一致。
+            slots = self._group_visible_into_slots(vis)
 
             for slot_idx, slot in enumerate(slots):
                 handle = self._overlay_axes._add_overlay_axis_handle(pi, slot_idx)
