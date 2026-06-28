@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .combo_popup_shell import install_combo_popup_shell
 from .icons import ensure_icon_cache, render_qss_template
+from .message_box_buttons import install_message_box_button_roles
 
 
 def load_stylesheet(app):
@@ -56,3 +57,6 @@ def load_stylesheet(app):
     # that gives every combo dropdown — present and future — the
     # translucent rounded shell, so no call site has to remember to.
     install_combo_popup_shell(app)
+    # Static QMessageBox helpers build transient boxes; tag their buttons
+    # centrally so QSS can style Yes/confirm differently from No/cancel.
+    install_message_box_button_roles(app)

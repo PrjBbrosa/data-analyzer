@@ -278,6 +278,48 @@ QToolButton[role="primary"]:hover {
     border-color: #135abd;
 }
 
+QMessageBox QPushButton {
+    min-width: 58px;
+    min-height: 32px;
+    padding: 4px 16px;
+}
+QMessageBox QPushButton[messageBoxRole="neutral"] {
+    background-color: #ffffff;
+    border-color: #dfe5ee;
+    color: #111827;
+}
+QMessageBox QPushButton[messageBoxRole="neutral"]:hover {
+    background-color: #f5f7fb;
+    border-color: #b7c4d3;
+}
+QMessageBox QPushButton[messageBoxRole="primary"] {
+    background-color: #1769e0;
+    border-color: #1769e0;
+    color: #ffffff;
+}
+QMessageBox QPushButton[messageBoxRole="primary"]:hover {
+    background-color: #135abd;
+    border-color: #135abd;
+}
+QMessageBox QPushButton[messageBoxRole="warning"] {
+    background-color: #d97706;
+    border-color: #d97706;
+    color: #ffffff;
+}
+QMessageBox QPushButton[messageBoxRole="warning"]:hover {
+    background-color: #b45309;
+    border-color: #b45309;
+}
+QMessageBox QPushButton[messageBoxRole="danger"] {
+    background-color: #dc2626;
+    border-color: #dc2626;
+    color: #ffffff;
+}
+QMessageBox QPushButton[messageBoxRole="danger"]:hover {
+    background-color: #b91c1c;
+    border-color: #b91c1c;
+}
+
 /* 2026-04-26 R3 紧凑化 fix-4: tool buttons are icon-only chrome
  * around 16x16 icons; outer chrome must hug the icon, not pad to a
  * full 30x30 button. We let setFixedSize(24, 24) on the host widget
