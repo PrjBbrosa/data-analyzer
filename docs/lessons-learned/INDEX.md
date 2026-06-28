@@ -60,6 +60,7 @@ lesson by default.
 | [Pyqt Heatmap Copy Includes Widget Overlays](pyqt-heatmap-copy-includes-widget-overlays.md) | Touching heatmap copy/export, `PgHeatmapCanvas.grab_pixmap`, or | See lesson |
 | [Status Hint Buttons Need Rendered Geometry](codex-status-hint-button-geometry.md) | Changing the bottom status-line hint bar, the quickref `?` button, or | See lesson |
 | [PyQt Drag Event MimeData Lifetime](pyqt-drag-event-mimedata-lifetime.md) | Writing pytest-qt tests that manually construct `QDragEnterEvent`, | See lesson |
+| [Overlay Live Visibility Retick](codex-overlay-live-visibility-retick.md) | Touching TimeDomain overlay-mode live visibility toggles for filter | See lesson |
 
 ## Selection Rules
 

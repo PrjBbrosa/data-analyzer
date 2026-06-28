@@ -6903,6 +6903,16 @@ class TestFilterCompanionOverlay:
             ))
         return rows
 
+    def _assert_overlay_ticks_follow_ylim(self, canvas, handle):
+        lo, hi = handle.get_ylim()
+        span = hi - lo
+        assert span > 0
+        n = canvas._overlay_axes.divisions
+        axis = handle.y_axis_item()
+        major = [value for value, _label in axis._tickLevels[0]]
+        expected = [lo + span * k / n for k in range(n + 1)]
+        assert major == pytest.approx(expected, abs=1e-9)
+
     def test_companion_axis_y_covers_primary_not_companion(self, qapp):
         """REGRESSION (滤波子图卡顿真因): when a tiny-amplitude (±0.02) dashed
         companion shares a subplot ViewBox with its LARGE (±5) source, the
@@ -7155,6 +7165,42 @@ class TestFilterCompanionOverlay:
                 f"ch{i}: re-showing 显示原始 left Y on [{lo:.4f},{hi:.4f}] — "
                 f"the dense ±5 original would paint inside a narrow Y wall"
             )
+
+    def test_live_hide_original_repins_overlay_ticks_to_companion(self, qapp):
+        """Overlay live 显示原始 toggle must repin the left-axis tick labels.
+
+        The Y range already refits to the visible companion. The regression was
+        that the overlay-specific tick labels stayed on the previous ±5 range,
+        so the chart looked like the coordinate axis collapsed or disappeared.
+        """
+        from PyQt5.QtCore import QCoreApplication
+
+        canvas = _pg_canvas(qapp)
+        canvas.resize(900, 600)
+        canvas.show()
+        QCoreApplication.processEvents()
+        canvas.plot_channels(
+            self._rows_big_primary_tiny_companion(n_sources=2),
+            mode="overlay",
+        )
+        QCoreApplication.processEvents()
+        handle = canvas._channel_lines["ch0"][0]
+
+        lo, hi = handle.get_ylim()
+        assert (hi - lo) > 5.0
+        self._assert_overlay_ticks_follow_ylim(canvas, handle)
+
+        canvas.set_original_lines_visible(False)
+        QCoreApplication.processEvents()
+        lo, hi = handle.get_ylim()
+        assert (hi - lo) < 1.0 and lo <= -0.02 and hi >= 0.02
+        self._assert_overlay_ticks_follow_ylim(canvas, handle)
+
+        canvas.set_original_lines_visible(True)
+        QCoreApplication.processEvents()
+        lo, hi = handle.get_ylim()
+        assert (hi - lo) > 5.0 and lo <= -4.5 and hi >= 4.5
+        self._assert_overlay_ticks_follow_ylim(canvas, handle)
 
     def test_overlay_drag_target_is_visible_companion_not_hidden_primary(self, qapp):
         """方案2 + 排除隐藏: in OVERLAY with 显示原始 off, the per-channel

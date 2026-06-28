@@ -1023,7 +1023,7 @@ class TimeDomainCanvasPG(QWidget):
             # 显示原始 must drop Y onto the visible ±0.0x companion, and
             # re-showing it must restore the ±primary framing so the dense
             # original is never painted inside a companion-narrow Y wall.
-            self._pin_companion_axes_y_to_visible()
+            self._reframe_companion_axes_after_visibility_change()
             if reshown:
                 self._refresh_visible_data()
             self.draw()
@@ -1077,7 +1077,7 @@ class TimeDomainCanvasPG(QWidget):
             # toggling 显示滤波后 changes what the shared axis should fit (e.g.
             # showing the companion while 显示原始 is off must drop Y onto the
             # ±0.0x companion).
-            self._pin_companion_axes_y_to_visible()
+            self._reframe_companion_axes_after_visibility_change()
             if reshown:
                 self._refresh_visible_data()
             self.draw()
@@ -1109,6 +1109,11 @@ class TimeDomainCanvasPG(QWidget):
                 if has_comp
             }
         return {k: (h, names) for k, (h, names, _hc) in groups.items()}
+
+    def _reframe_companion_axes_after_visibility_change(self):
+        self._pin_companion_axes_y_to_visible()
+        if self._overlay_mode:
+            self._repin_overlay_channel_ticks()
 
     def _visible_raw_y_extent(self, names, *, xlim=None):
         """Union ``(lo, hi)`` over the RAW ``channel_data`` of the curves in
