@@ -46,8 +46,10 @@
 结构化目录 `quickref.py`，11 组（同 mockup）：开始/文件、四个分析模式（带一句
 用途）、图表手势、快捷键、通道树、游标、谱图、标注、预设、导出/复制、右键菜单。
 
-- 键盘行**复用** `hints.NAV_SHORTCUTS` / `TIME_CARD_SHORTCUTS`（单一事实源，改
-  快捷键不用两处维护）。
+- 键盘行**复用** `hints` 的快捷键解析器（默认值来自 `NAV_SHORTCUTS` /
+  `TIME_CARD_SHORTCUTS`，用户覆盖值也从同一入口读取）。改快捷键或用户自定义
+  pan 键时，QuickRef、toolbar tooltip、右键菜单键帽必须同步，不允许在 QuickRef
+  里写死 `Ctrl+G`。
 - 共轴挂「即将」徽标（对应 `coaxis.* ship="later"`）；阶次写 **EPS 电机转速**。
 - 数据结构：`group{title, rows[]}`，`row{desc, sub?, keys[]|gesture?, soon?}`。
 

@@ -54,6 +54,27 @@ class TestAxisGroupModel:
         assert w.axis_group_for("f1", "a") is None
         assert w.axis_group_for("f1", "b") is None
 
+    def test_split_allows_next_merge_to_reuse_first_group_id(self, qapp):
+        w = MultiFileChannelWidget()
+        w.merge_axis_group([("f1", "a"), ("f1", "b")])
+        w.split_axis_group([("f1", "a"), ("f1", "b")])
+
+        gid = w.merge_axis_group([("f1", "c"), ("f1", "d")])
+
+        assert gid == 1
+        assert w.axis_group_for("f1", "c") == 1
+        assert w.axis_group_for("f1", "d") == 1
+
+    def test_prune_renumbers_remaining_groups_contiguously(self, qapp):
+        w = MultiFileChannelWidget()
+        w.merge_axis_group([("f1", "a"), ("f1", "b")])
+        w.merge_axis_group([("f1", "c"), ("f1", "d")])
+
+        w.split_axis_group([("f1", "a"), ("f1", "b")])
+
+        assert w.axis_group_for("f1", "c") == 1
+        assert w.axis_group_for("f1", "d") == 1
+
     def test_merge_emits_signal(self, qapp):
         w = MultiFileChannelWidget()
         seen = []

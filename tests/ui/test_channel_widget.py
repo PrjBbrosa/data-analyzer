@@ -262,6 +262,39 @@ def test_selected_channel_checkbox_center_click_toggles_once(qapp, qtbot):
     assert channel_item.checkState(0) == Qt.Checked
 
 
+def test_checkbox_click_batches_selected_channel_rows(qapp, qtbot):
+    widget = MultiFileChannelWidget()
+    qtbot.addWidget(widget)
+    widget.resize(360, 280)
+    widget.show()
+    qtbot.waitExposed(widget)
+    widget.add_file("file-a", _MultiChannelFileData())
+    widget.tree.expandAll()
+    QCoreApplication.processEvents()
+
+    tree = widget.tree
+    file_item = widget._file_items["file-a"]
+    first = file_item.child(0)
+    second = file_item.child(1)
+    tree.clearSelection()
+    first.setSelected(True)
+    second.setSelected(True)
+    QCoreApplication.processEvents()
+
+    fired = []
+    widget.channels_changed.connect(lambda: fired.append(1))
+    hit = tree._check_hit_rect(first, tree.indexFromItem(first, 0))
+    assert hit is not None
+
+    QTest.mouseClick(tree.viewport(), Qt.LeftButton, Qt.NoModifier, hit.center())
+    QCoreApplication.processEvents()
+
+    assert first.checkState(0) == Qt.Checked
+    assert second.checkState(0) == Qt.Checked
+    assert file_item.child(2).checkState(0) == Qt.Unchecked
+    assert fired == [1]
+
+
 def test_edit_channels_button_enables_with_file_and_emits(qapp, qtbot):
     widget = MultiFileChannelWidget()
     qtbot.addWidget(widget)

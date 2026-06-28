@@ -177,7 +177,12 @@ class _CheckTolerantTree(QTreeWidget):
                     # here handles the press, and mouseReleaseEvent suppresses
                     # Qt's native indicator release toggle.
                     self._consume_check_release = True
-                    item.setCheckState(0, new_state)
+                    owner = getattr(self, "_owner", None)
+                    if not (
+                        owner is not None
+                        and owner._set_selected_channel_checks(item, new_state)
+                    ):
+                        item.setCheckState(0, new_state)
                     event.accept()
                     return
         super().mousePressEvent(event)
@@ -202,7 +207,12 @@ class _CheckTolerantTree(QTreeWidget):
                         if item.checkState(0) == Qt.Checked
                         else Qt.Checked
                     )
-                    item.setCheckState(0, new_state)
+                    owner = getattr(self, "_owner", None)
+                    if not (
+                        owner is not None
+                        and owner._set_selected_channel_checks(item, new_state)
+                    ):
+                        item.setCheckState(0, new_state)
                     event.accept()
                     return
         super().mouseDoubleClickEvent(event)
@@ -624,6 +634,18 @@ class MultiFileChannelWidget(QWidget):
         for k, g in list(self._axis_groups.items()):
             if counts[g] < 2:
                 del self._axis_groups[k]
+        self._renumber_axis_groups()
+
+    def _renumber_axis_groups(self):
+        """Keep group badges compact after split/delete operations."""
+        live = sorted(set(self._axis_groups.values()))
+        mapping = {old: idx + 1 for idx, old in enumerate(live)}
+        if mapping:
+            for k, g in list(self._axis_groups.items()):
+                self._axis_groups[k] = mapping[g]
+            self._axis_group_seq = max(mapping.values())
+        else:
+            self._axis_group_seq = 0
 
     @staticmethod
     def _effective_groups(axis_groups, checked_keys):
@@ -642,6 +664,37 @@ class MultiFileChannelWidget(QWidget):
         can_merge = len(sel) >= 2
         can_split = any(k in self._axis_groups for k in sel)
         return can_merge, can_split
+
+    def _set_selected_channel_checks(self, clicked_item, state):
+        """Batch-toggle selected channel rows when their checkbox is clicked."""
+        data = clicked_item.data(0, Qt.UserRole)
+        if not (data and data[0] == 'channel' and clicked_item.isSelected()):
+            return False
+        items = []
+        seen = set()
+        for item in self.tree.selectedItems():
+            d = item.data(0, Qt.UserRole)
+            if not (d and d[0] == 'channel'):
+                continue
+            key = (d[1], d[2])
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(item)
+        if clicked_item not in items:
+            items.append(clicked_item)
+        if len(items) < 2:
+            return False
+
+        self._updating = True
+        try:
+            for item in items:
+                item.setCheckState(0, state)
+        finally:
+            self._updating = False
+        self._apply_filters()
+        self.channels_changed.emit()
+        return True
 
     def set_checked_channels(self, checked):
         """Batch-restore checked channels without emitting channels_changed."""

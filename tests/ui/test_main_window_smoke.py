@@ -1511,6 +1511,58 @@ def test_plot_mode_toggle_preserves_xlim_overlay_to_subplot(qapp, qtbot, loaded_
     assert fhi == pytest.approx(t1, abs=1e-6)
 
 
+def test_multi_selected_channel_checkbox_plots_all_selected(qapp, qtbot, loaded_csv):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+    from unittest.mock import patch
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.resize(1500, 800)
+    w.show()
+    qtbot.waitExposed(w)
+    with patch('mf4_analyzer.ui.main_window.QFileDialog.getOpenFileNames',
+               return_value=([loaded_csv], "")):
+        w.load_files()
+    qapp.processEvents()
+
+    fid = next(iter(w.files))
+    file_item = w.channel_list._file_items[fid]
+    items = {
+        file_item.child(i).data(0, Qt.UserRole)[2]: file_item.child(i)
+        for i in range(file_item.childCount())
+        if file_item.child(i).data(0, Qt.UserRole)[0] == "channel"
+    }
+    speed = items["speed"]
+    torque = items["torque"]
+    file_item.setExpanded(True)
+    w.channel_list.tree.clearSelection()
+    speed.setSelected(True)
+    torque.setSelected(True)
+    w.channel_list.tree.scrollToItem(speed)
+    qapp.processEvents()
+
+    hit = w.channel_list.tree._check_hit_rect(
+        speed, w.channel_list.tree.indexFromItem(speed, 0)
+    )
+    assert hit is not None
+    assert w.channel_list.tree.itemAt(hit.center()) is speed
+    QTest.mouseClick(
+        w.channel_list.tree.viewport(),
+        Qt.LeftButton,
+        Qt.NoModifier,
+        hit.center(),
+    )
+    qapp.processEvents()
+
+    checked = {
+        ch for _fid, ch, _color in w.channel_list.get_checked_channels()
+    }
+    assert {"speed", "torque"} <= checked
+    assert len(w.canvas_time._channel_lines) >= 2
+
+
 def test_channel_selection_change_preserves_xlim(qapp, qtbot, loaded_csv):
     import pytest
     from PyQt5.QtCore import Qt
