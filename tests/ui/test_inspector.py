@@ -78,6 +78,45 @@ def test_time_contextual_plot_button_emits(qapp, qtbot):
         tc.btn_plot.click()
 
 
+def test_inspector_primary_buttons_share_section_width(qapp, qtbot):
+    """Inspector primary buttons should share the same section button width."""
+    from pathlib import Path
+
+    old_sheet = qapp.styleSheet()
+    try:
+        qapp.setStyle("Fusion")
+        qapp.setStyleSheet(
+            Path("mf4_analyzer/ui_kit/style.qss").read_text(encoding="utf-8")
+        )
+
+        inspector = Inspector()
+        qtbot.addWidget(inspector)
+        inspector.resize(288, 900)
+        inspector.set_mode("time")
+        inspector.show()
+        qtbot.waitExposed(inspector)
+        qapp.processEvents()
+
+        def rect_in_inspector(widget):
+            top_left = widget.mapTo(inspector, widget.rect().topLeft())
+            return top_left.x(), top_left.x() + widget.width(), widget.width()
+
+        expected = rect_in_inspector(inspector.top.btn_apply_xaxis)
+        assert rect_in_inspector(inspector.time_ctx.btn_plot) == expected
+
+        for mode, ctx_name, button_name in (
+            ("fft", "fft_ctx", "btn_fft"),
+            ("fft_time", "fft_time_ctx", "btn_compute"),
+            ("order", "order_ctx", "btn_ot"),
+        ):
+            inspector.set_mode(mode)
+            qapp.processEvents()
+            button = getattr(getattr(inspector, ctx_name), button_name)
+            assert rect_in_inspector(button) == expected
+    finally:
+        qapp.setStyleSheet(old_sheet)
+
+
 # ---- Task 2.5: FFTContextual ----
 
 def test_fft_contextual_defaults(qapp):
