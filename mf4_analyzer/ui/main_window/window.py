@@ -1923,11 +1923,21 @@ class MainWindow(
         )
         return result == QMessageBox.Yes
 
-    def _restore_previous_time_plot_mode(self, prev_mode) -> None:
-        # Best-effort v1: avoiding the expensive plot is the safety-critical
-        # behavior; mode-widget restoration is intentionally left no-op to avoid
-        # re-entering the plot_mode_changed signal chain.
-        return
+    def _restore_previous_time_plot_mode(self, prev_mode, canvas=None) -> None:
+        if prev_mode not in ('subplot', 'overlay'):
+            return
+        target = canvas or self.chart_stack.focused_canvas()
+        setter = getattr(self.chart_stack, "set_plot_mode_for_canvas", None)
+        if callable(setter):
+            setter(target, prev_mode)
+        else:
+            self.chart_stack.set_plot_mode(prev_mode)
+
+        idx = self._view_index_for_canvas(target)
+        if idx is not None and 0 <= idx < len(self.view_manager.views):
+            self.view_manager.get(idx).plot_mode = prev_mode
+        if target is self.canvas_time:
+            self._last_plot_mode = prev_mode
 
     def _plot_time_on_canvas(
         self,
@@ -2002,7 +2012,7 @@ class MainWindow(
             and is_primary
             and not self._confirm_overlay_risk(risk)
         ):
-            self._restore_previous_time_plot_mode(prev_mode)
+            self._restore_previous_time_plot_mode(prev_mode, canvas)
             self.statusBar.showMessage("已取消高风险叠加绘制", 3000)
             return
 

@@ -108,6 +108,48 @@ def test_danger_cancel_prompts_and_skips_expensive_plot(qapp, qtbot, monkeypatch
     assert w._plot_risk_label.property("riskLevel") == "danger"
 
 
+def test_danger_cancel_reverts_overlay_segment_to_previous_mode(
+    qapp, qtbot, monkeypatch
+):
+    checked = _checked(9)
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.show()
+    qtbot.waitExposed(w)
+    qapp.processEvents()
+
+    w.files["f1"] = object()
+    monkeypatch.setattr(w.channel_list, "get_checked_channels", lambda: list(checked))
+    monkeypatch.setattr(
+        window_mod,
+        "estimate_time_overlay_risk",
+        lambda **_kwargs: _risk(PlotRiskLevel.DANGER),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        window_mod.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: window_mod.QMessageBox.No,
+    )
+    monkeypatch.setattr(
+        w,
+        "_build_time_plot_data",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("canceling danger prompt must not build plot data")
+        ),
+    )
+    w._last_plot_mode = "subplot"
+    w.view_manager.get(w._primary_view_idx).plot_mode = "subplot"
+
+    w.chart_stack._time_card.btn_overlay.click()
+    qapp.processEvents()
+
+    assert w.chart_stack.plot_mode() == "subplot"
+    assert w.chart_stack._time_card.btn_subplot.isChecked()
+    assert not w.chart_stack._time_card.btn_overlay.isChecked()
+    assert w.view_manager.get(w._primary_view_idx).plot_mode == "subplot"
+
+
 def test_danger_confirm_allows_plotting(qapp, qtbot, monkeypatch):
     checked = _checked(9)
     w = _make_window(qapp, qtbot, monkeypatch, mode="overlay", checked=checked)
