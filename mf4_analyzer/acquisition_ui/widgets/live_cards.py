@@ -69,6 +69,10 @@ _CARD_TRACE_COLORS = (
     "#64748b",
 )
 
+# Below this card width the right-side current value is the more important
+# live signal; stats are restored when the card has breathing room again.
+_COMPACT_STATS_HIDE_WIDTH = 360
+
 # Spec §A: recording state collapses into the swatch — solid red fill.
 _RECORDING_SWATCH_COLOR = "#dc2626"
 
@@ -225,6 +229,7 @@ class LiveSignalCard(QFrame):
         self.setProperty("traceColor", self._trace_color.name())
         self._recording = False
         self._rec_start_ts: float | None = None
+        self._stats_full_text = "μ — · σ — · max —"
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -250,12 +255,16 @@ class LiveSignalCard(QFrame):
 
         self._name_label = QLabel(self._name, self)
         self._name_label.setObjectName("liveCardName")
+        self._name_label.setMinimumWidth(0)
+        self._name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         # QSS owns the typography weight (Spec §D: weight 700); avoid
         # forcing bold from Python so QSS wins on polish.
         header.addWidget(self._name_label)
 
         self._stats_label = QLabel("μ — · σ — · max —", self)
         self._stats_label.setObjectName("liveCardStats")
+        self._stats_label.setMinimumWidth(0)
+        self._stats_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         header.addWidget(self._stats_label)
 
         header.addStretch(1)
@@ -276,6 +285,7 @@ class LiveSignalCard(QFrame):
         self._value_label.setObjectName("liveCardValue")
         self._value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._value_label.setMinimumWidth(72)
+        self._value_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         header.addWidget(self._value_label)
         outer.addLayout(header)
 
@@ -294,6 +304,7 @@ class LiveSignalCard(QFrame):
         self.setProperty("recording", False)
         # Seed the stats tooltip so the visible label stays terse.
         self._stats_label.setToolTip(f"Stats window: {STATS_WINDOW_LABEL_IDLE}")
+        self._sync_header_compactness()
 
     def set_visual_index(self, card_index: int) -> None:
         self._trace_color = _trace_color_for_index(card_index)
@@ -337,6 +348,15 @@ class LiveSignalCard(QFrame):
 
     def reset_buffer(self) -> None:
         self._spark.reset()
+
+    def _sync_header_compactness(self) -> None:
+        compact = 0 < self.width() < _COMPACT_STATS_HIDE_WIDTH
+        self._stats_label.setText(self._stats_full_text)
+        self._stats_label.setVisible(not compact)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override.
+        super().resizeEvent(event)
+        self._sync_header_compactness()
 
     def set_recording(self, recording: bool, rec_start_ts: float | None = None) -> None:
         """Flip recording state.
@@ -389,16 +409,16 @@ class LiveSignalCard(QFrame):
 
         values = [v for _, v in list(self._spark._buffer)]  # noqa: SLF001 - sibling widget.
         if not values:
-            self._stats_label.setText("μ — · σ — · max —")
+            self._stats_full_text = "μ — · σ — · max —"
+            self._sync_header_compactness()
             return
         n = len(values)
         mean = sum(values) / n
         var = sum((v - mean) ** 2 for v in values) / n
         std = math.sqrt(var)
         peak = max(values)
-        self._stats_label.setText(
-            f"μ {mean:.2f} · σ {std:.2f} · max {peak:.2f}"
-        )
+        self._stats_full_text = f"μ {mean:.2f} · σ {std:.2f} · max {peak:.2f}"
+        self._sync_header_compactness()
 
     @property
     def name(self) -> str:

@@ -254,11 +254,16 @@ def test_replay_backend_status_and_stop():
 def test_vector_backend_raises_clear_error_off_windows():
     if sys.platform.startswith("win"):
         pytest.skip("VectorXcpRecorderBackend off-Windows error not applicable on Windows")
+    preexisting_modules = {
+        name: sys.modules.get(name)
+        for name in ("can", "pyxcp", "pyxcp.master")
+    }
     with pytest.raises(RuntimeError, match="Vector/XCP backend is Windows-only"):
         VectorXcpRecorderBackend()
-    # Importing the module did NOT pull in python-can / pyxcp.
-    assert "can" not in sys.modules or sys.modules["can"].__name__ != "can"  # not the python-can pkg
-    assert "pyxcp" not in sys.modules
+    # The off-Windows guard must not import python-can / pyxcp. The test is
+    # order-independent: another test may already have imported them.
+    for name, module in preexisting_modules.items():
+        assert sys.modules.get(name) is module
 
 
 def test_vector_backend_module_has_no_top_level_can_import():

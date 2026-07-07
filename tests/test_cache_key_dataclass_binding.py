@@ -114,6 +114,8 @@ _ORDER_KEY_EXTERNAL = {
     'rpm_source',      # which rpm channel(s)
     'time_range',      # selected time window
     'rpm_factor',      # scales the rpm INPUT array before compute (not a field)
+    'rpm_mode',        # selects rpm input construction upstream of COTParams
+    'manual_rpm',      # constant rpm input value when rpm_mode == manual
     'nfft_mode',       # auto/fixed resolution mode; drives nfft_effective
     'nfft_effective',  # resolved nfft -> maps onto COTParams.nfft
     'nfft_preview',    # last-resort nfft fallback for the key -> COTParams.nfft

@@ -174,6 +174,29 @@ def test_idle_refresh_keeps_stream_time_samples(qtbot):
     assert "max 99.00" in card._stats_label.text()
 
 
+def test_narrow_live_card_header_keeps_current_value_visible(qtbot):
+    """At the 960 px tour width, cards prefer the current value over stats."""
+    card = LiveSignalCard(
+        "Rte_ActRet_mActiveReturnMotorTorq4Check_xds16",
+        unit="Nm",
+        raster="event_100ms",
+    )
+    qtbot.addWidget(card)
+    for i in range(120):
+        card.push_sample(i * 0.5, 1234.0 + i)
+    card.refresh()
+
+    card.resize(300, 140)
+    card.show()
+    card.layout().activate()
+    qtbot.wait(0)
+
+    stats = _label(card, "liveCardStats")
+    value = _label(card, "liveCardValue")
+    assert stats.isVisible() is False
+    assert value.geometry().right() <= card.contentsRect().right()
+
+
 def test_idle_refresh_trims_to_last_60s_of_stream_time(qtbot):
     """The idle trim floor comes from the newest buffered stream timestamp."""
     card = LiveSignalCard("MotSpd")

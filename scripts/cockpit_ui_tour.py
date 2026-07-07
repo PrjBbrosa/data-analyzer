@@ -81,7 +81,7 @@ def main() -> int:
         args.shots.mkdir(parents=True, exist_ok=True)
 
     from PyQt5.QtCore import QTimer
-    from PyQt5.QtWidgets import QApplication, QCheckBox
+    from PyQt5.QtWidgets import QApplication, QCheckBox, QLabel
 
     from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
     from mf4_analyzer.acquisition_ui.review_modal import ReviewModal
@@ -97,6 +97,7 @@ def main() -> int:
 
     window = CockpitMainWindow(initial_pool=_build_pool(), allow_fake_backend=True)
     window._output_dir_label = str(out_dir)
+    window._set_selector_value(window._output_btn, "输出", window._output_dir_label)
     window.show()
 
     failures: list[str] = []
@@ -129,6 +130,11 @@ def main() -> int:
         sb = lp._list.verticalScrollBar()
         sb.setValue(sb.maximum())
         anchor = sb.value()
+        value_label = window._output_btn.findChild(QLabel, "cockpitSelectorValue")
+        check(
+            value_label is not None and value_label.text() == str(out_dir),
+            "tour output selector shows --out",
+        )
         item = lp._list.item(lp._list.count() - 1)
         cb = lp._list.itemWidget(item).findChild(QCheckBox)
         cb.click()
@@ -231,6 +237,19 @@ def main() -> int:
             not bool(window._mode_segment_widget.property("cockpitOverflowHidden")),
             "F11 mode segment remains visible",
         )
+        first_card = next(iter(window._center.cards.values()), None)
+        if first_card is not None:
+            stats = first_card.findChild(QLabel, "liveCardStats")
+            value = first_card.findChild(QLabel, "liveCardValue")
+            check(
+                stats is not None and not stats.isVisible(),
+                "polish narrow stats collapse",
+            )
+            check(
+                value is not None
+                and value.geometry().right() <= first_card.contentsRect().right(),
+                "polish narrow current value visible",
+            )
         shot(window, "07-narrow")
 
     @at(17400, "finish")
