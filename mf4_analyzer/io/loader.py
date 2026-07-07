@@ -576,6 +576,16 @@ class DataLoader:
 
     @staticmethod
     def load_csv(fp):
+        from mf4_analyzer.io.csv_format import sniff_csv_layout
+
+        layout = None
+        try:
+            layout = sniff_csv_layout(fp)
+        except Exception:
+            layout = None
+        if layout is not None and not layout.is_trivial:
+            return DataLoader._load_csv_with_layout(fp, layout)
+
         df = None
         for enc in ['utf-8', 'gbk', 'latin1']:
             for sep in [',', ';', '\t']:
@@ -588,7 +598,62 @@ class DataLoader:
         if df is None: raise ValueError("Cannot parse CSV")
         for col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
         df = df.dropna(axis=1, how='all').interpolate().dropna()
+        if df.empty or len(df.columns) < 1:
+            raise ValueError("Cannot parse CSV")
         return df, list(df.columns), {}
+
+    @staticmethod
+    def _load_csv_with_layout(fp, layout):
+        import csv as _csv
+        import io as _io
+
+        skiprows = list(range(layout.header_row))
+        if layout.units_row is not None:
+            skiprows.append(layout.units_row)
+
+        try:
+            df = pd.read_csv(
+                fp,
+                encoding=layout.encoding,
+                sep=layout.sep,
+                skiprows=skiprows,
+                header=0,
+                decimal=layout.decimal,
+            )
+        except Exception as exc:
+            raise ValueError("Cannot parse CSV") from exc
+
+        units = {}
+        if layout.units_row is not None:
+            try:
+                text = Path(fp).read_text(encoding=layout.encoding, errors="replace")
+                lines = text.splitlines()
+                header_cells = next(
+                    _csv.reader(
+                        _io.StringIO(lines[layout.header_row]),
+                        delimiter=layout.sep,
+                    )
+                )
+                unit_cells = next(
+                    _csv.reader(
+                        _io.StringIO(lines[layout.units_row]),
+                        delimiter=layout.sep,
+                    )
+                )
+                units = {
+                    header.strip(): unit.strip()
+                    for header, unit in zip(header_cells, unit_cells)
+                    if header.strip() and unit.strip()
+                }
+            except Exception:
+                units = {}
+
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df = df.dropna(axis=1, how='all').interpolate().dropna()
+        if df.empty or len(df.columns) < 1:
+            raise ValueError("Cannot parse CSV")
+        return df, list(df.columns), units
 
     @staticmethod
     def load_excel(fp):
