@@ -20,6 +20,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QDialog,
+    QLabel,
     QListWidget,
     QMessageBox,
     QScrollArea,
@@ -292,7 +294,7 @@ def test_discard_removes_mf4_and_sidecars(qapp, tmp_path):
     assert ctx.preflight_sidecar_path.exists()
     modal = ReviewModal(ctx)
     try:
-        modal.do_discard()
+        modal.do_discard(confirmed=True)
     finally:
         if modal.isVisible():
             modal.done(0)
@@ -305,6 +307,47 @@ def test_discard_removes_mf4_and_sidecars(qapp, tmp_path):
     # public save-only action is called afterward.
     modal.do_save_only()
     assert modal.is_open_in_analyzer_enabled() is False
+
+
+def test_discard_requires_confirmation(qtbot, tmp_path):
+    ctx = _finalize_and_make_context(tmp_path)
+    modal = ReviewModal(ctx)
+    qtbot.addWidget(modal)
+    mf4 = modal.context.mf4_path
+    mf4.write_bytes(b"x")
+
+    modal.do_discard()
+
+    assert mf4.exists()
+    assert modal._discard_confirm_box is not None
+
+    modal.do_discard(confirmed=True)
+
+    assert not mf4.exists()
+
+
+def test_close_button_rejects_without_action(qtbot, tmp_path):
+    ctx = _finalize_and_make_context(tmp_path)
+    modal = ReviewModal(ctx)
+    qtbot.addWidget(modal)
+
+    modal._btn_close.click()
+
+    assert modal.result() == QDialog.Rejected
+    assert modal.chosen_action is None
+
+
+def test_diagnostics_line_uses_selected_channel_count(qtbot, tmp_path):
+    ctx = _finalize_and_make_context(tmp_path)
+    modal = ReviewModal(ctx)
+    qtbot.addWidget(modal)
+
+    label = modal.findChild(QLabel, "reviewPreflight")
+
+    assert label is not None
+    assert f"已选通道 {len(modal.context.expected_channels)}" in label.text()
+    assert "缺失" in label.text()
+    assert "MDF 通道总数" in label.toolTip()
 
 
 # ---------------------------------------------------------------------------

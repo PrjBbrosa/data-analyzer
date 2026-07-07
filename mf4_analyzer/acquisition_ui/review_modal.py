@@ -141,6 +141,7 @@ class ReviewModal(QDialog):
         # dict on success or raises on failure.
         self._archive_writer: Callable[[ReviewContext], dict] | None = None
         self._archive_failure_box: QMessageBox | None = None
+        self._discard_confirm_box: QMessageBox | None = None
 
         self._build_ui()
         self._refresh_action_enabled()
@@ -223,13 +224,11 @@ class ReviewModal(QDialog):
         # context.
         pf = self._ctx.preflight
         pf_text_parts = [
-            f"诊断: rows={pf.rows} channels={len(pf.channels)} "
+            f"诊断: rows={pf.rows} · "
+            f"已选通道 {len(self._ctx.expected_channels)} · "
+            f"缺失 {len(pf.missing_channels)} · "
             f"fs≈{pf.estimated_fs_hz:.1f} Hz",
         ]
-        if pf.missing_channels:
-            pf_text_parts.append(
-                f"缺失通道 ({len(pf.missing_channels)})"
-            )
         if pf.problems:
             pf_text_parts.append(
                 "警告: " + " | ".join(pf.problems)
@@ -237,6 +236,9 @@ class ReviewModal(QDialog):
         pf_label = QLabel("\n".join(pf_text_parts), body)
         pf_label.setObjectName("reviewPreflight")
         pf_label.setWordWrap(True)
+        pf_label.setToolTip(
+            f"MDF 通道总数 {len(pf.channels)}（含时间通道）"
+        )
         body_layout.addWidget(pf_label)
 
         if pf.missing_channels:
@@ -274,7 +276,9 @@ class ReviewModal(QDialog):
 
         self._btn_discard = QPushButton(ACTION_DISCARD, self)
         self._btn_discard.setObjectName("reviewBtnDiscard")
-        self._btn_discard.clicked.connect(self.do_discard)
+        self._btn_discard.clicked.connect(
+            lambda _checked=False: self.do_discard()
+        )
         btn_row.addWidget(self._btn_discard)
 
         self._btn_save_only = QPushButton(ACTION_SAVE_ONLY, self)
@@ -291,6 +295,11 @@ class ReviewModal(QDialog):
         self._btn_open_analyzer.setObjectName("reviewBtnOpenAnalyzer")
         self._btn_open_analyzer.clicked.connect(self.do_open_in_analyzer)
         btn_row.addWidget(self._btn_open_analyzer)
+
+        self._btn_close = QPushButton("关闭", self)
+        self._btn_close.setObjectName("reviewBtnClose")
+        self._btn_close.clicked.connect(self.reject)
+        btn_row.addWidget(self._btn_close)
 
         root.addLayout(btn_row)
 
@@ -349,7 +358,7 @@ class ReviewModal(QDialog):
     # Action handlers — also callable directly from tests.
     # ------------------------------------------------------------------
 
-    def do_discard(self) -> None:
+    def do_discard(self, *, confirmed: bool = False) -> None:
         """``丢弃（不归档）`` — delete finalized MF4 + sidecar, return to idle.
 
         Spec §ReviewModal: this is always enabled. The deletion is
@@ -359,6 +368,10 @@ class ReviewModal(QDialog):
         every close back to ``ConnectedIdle`` via
         ``request_review_close``.
         """
+        if not confirmed:
+            self._show_discard_confirm()
+            return
+
         self._chosen_action = ACTION_DISCARD
         # File-policy: explicitly remove the finalized artifacts. We
         # tolerate missing files (tests sometimes drive the modal without
@@ -378,6 +391,27 @@ class ReviewModal(QDialog):
         self._archive_ok = False
         self._refresh_action_enabled()
         self.reject()
+
+    def _show_discard_confirm(self) -> None:
+        box = QMessageBox(self)
+        box.setObjectName("reviewDiscardConfirm")
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("丢弃录制")
+        box.setText(
+            f"将删除 {self._ctx.mf4_path.name} 及其 sidecar，不可恢复。"
+        )
+        confirm_btn = box.addButton("确认删除", QMessageBox.DestructiveRole)
+        box.addButton("取消", QMessageBox.RejectRole)
+        box.setWindowModality(Qt.WindowModal)
+
+        def _handle_clicked(button) -> None:
+            if button is confirm_btn:
+                self.do_discard(confirmed=True)
+
+        box.buttonClicked.connect(_handle_clicked)
+        self._discard_confirm_box = box
+        if self.isVisible():
+            box.open()
 
     def do_save_only(self) -> None:
         """``仅保存文件`` — keep MF4 + summary; mark save-complete.
