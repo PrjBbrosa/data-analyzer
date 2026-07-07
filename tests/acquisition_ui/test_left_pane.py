@@ -181,8 +181,8 @@ def test_filter_chip_row_hides_unfinished_filters(qapp):
         if chip.isVisible()
     ]
     assert chip_texts == ["只看已选", "有 DAQ"]
-    assert pane.minimumWidth() == 420
-    assert pane.maximumWidth() == 420
+    assert pane.minimumWidth() == 320
+    assert pane.maximumWidth() == 460
 
 
 def test_summary_updates_total_visible_selected_counts(qapp):
