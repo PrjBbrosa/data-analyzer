@@ -67,11 +67,13 @@ def test_ring_buffer_watermark_bridge_to_fps(qapp):
     window.close()
 
 
-def test_red_drop_sustained_emits_auto_stop(qapp):
-    """``red_drop_sustained`` ⇒ ``auto_stop_requested`` Qt signal fires."""
+def test_red_drop_sustained_only_degrades_fps(qapp):
+    """Instant watermark only degrades FPS; controller owns auto-stop."""
     window = CockpitMainWindow()
     fired = []
     window.auto_stop_requested.connect(lambda reason: fired.append(reason))
     window._ring.watermark_changed.emit("red_drop_sustained")
-    assert fired == ["ring_buffer"]
+    assert window._target_fps == thresholds.LIVE_FPS_DEGRADED
+    assert fired == []
+    assert window._review_modal is None
     window.close()

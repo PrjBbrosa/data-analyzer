@@ -140,15 +140,17 @@ class PollingMixin:
     # ------------------------------------------------------------------
 
     def _on_ring_watermark_changed(self, level: WatermarkLevel) -> None:
-        """Bridge from the non-Qt observer to Qt slots."""
-        # 30 fps for green/yellow_low; 10 fps for red/red_drop.
+        """Bridge from the non-Qt observer to Qt slots — FPS only.
+
+        Auto-stop authority (2026-07-07 spec F2): recording ring >=95%
+        for 5s is judged by CaptureController._check_auto_stop; disk
+        space is judged by _check_recording_auto_stop. An instantaneous
+        watermark level must not stop recording.
+        """
         if level in ("green", "yellow_low"):
             self.set_target_fps(thresholds.LIVE_FPS_NORMAL)
         else:
             self.set_target_fps(thresholds.LIVE_FPS_DEGRADED)
-        if level == "red_drop_sustained":
-            # Spec: ≥95% for 5 s ⇒ auto-stop.
-            self._on_auto_stop_request("ring_buffer")
 
     def set_target_fps(self, fps: int) -> None:
         """Spec §Threshold Contract Watermark wiring: 30→10 fps."""
@@ -160,86 +162,20 @@ class PollingMixin:
         self._live_timer.setInterval(interval)
 
     def _on_auto_stop_request(self, reason: str) -> None:
-        """Auto-stop entry point (spec §Threshold Contract Watermark wiring).
-
-        Two arms:
-
-        - **Mid-Recording**: route through :meth:`request_stop_and_review`
-          which runs the full stop/flush/finalize sequence. Auto-stop
-          arms ``SessionSummary.auto_stop=True`` so the review modal's
-          banner ("自动停止 · ring buffer 持续告警") is visible.
-        - **Not Recording** (e.g. ring goes red during ConnectedIdle):
-          call ``controller.stop()`` directly (synchronous, no
-          ``thread.wait()`` per lesson
-          ``2026-04-25-qthread-wait-deadlocks-queued-quit.md``), arm the
-          summary, then open the no-session placeholder modal so the cycle
-          is observable.
-
-        Both arms emit ``auto_stop_requested`` and update the status
-        bar before doing any work.
-        """
+        """Auto-stop entry point — RECORDING state only."""
         self.auto_stop_requested.emit(reason)
         self._status.showMessage(f"自动停止已请求 ({reason})")
-
-        if self._state_machine.state == CockpitState.RECORDING:
-            # Run the full stop/flush/finalize sequence. This calls
-            # ``controller.stop()`` exactly once and routes through
-            # ``_open_review_modal`` to show the real ReviewModal when
-            # the result is valid, or the placeholder when the sequence
-            # could not complete (e.g. the controller's writer path is a
-            # test stub without a real file). ``auto_stop=True`` is
-            # passed through so the banner is visible on either modal.
-            self.request_stop_and_review(auto_stop=True)
-            # ``request_stop_and_review`` already armed
-            # ``self._last_session_summary``; if it failed mid-sequence
-            # the state stays in RECORDING (the user can retry). In that
-            # case we still want the auto-stop flag armed for callers
-            # that inspect ``last_session_summary`` after the fact.
-            if self._last_session_summary is None:
-                self._last_session_summary = SessionSummary(auto_stop=True)
-            else:
-                self._last_session_summary.auto_stop = True
-            # If stop/flush/finalize raised before flipping the state
-            # (e.g. spy controller with empty output_mf4 path in an
-            # auto-stop unit test), we still need the review
-            # modal to surface so the four-state cycle terminates. Open
-            # the placeholder directly in that recovery case.
-            if (
-                self._state_machine.state == CockpitState.RECORDING
-                and self._capture_controller is not None
-            ):
-                # The sequence raised before the state machine advanced.
-                # Force the placeholder open and walk the state machine
-                # manually — this preserves the S4-fix Fix #6 contract
-                # that auto-stop always lands the user in REVIEW_MODAL
-                # even when the writer path is a stub.
-                self._state_machine.request_stop_recording(finalized=True)
+        if self._state_machine.state != CockpitState.RECORDING:
             return
-
-        # Not mid-Recording — auto-stop fired from idle/disconnected.
-        # Call controller.stop() directly so the summary is captured.
-        if self._capture_controller is not None:
-            try:
-                summary = self._capture_controller.stop()
-            except Exception:  # noqa: BLE001
-                summary = None
-            if summary is not None:
-                summary.auto_stop = True
-                self._last_session_summary = summary
-            else:
-                self._last_session_summary = SessionSummary(auto_stop=True)
-        else:
+        self.request_stop_and_review(auto_stop=True)
+        if self._last_session_summary is None:
             self._last_session_summary = SessionSummary(auto_stop=True)
-
-        if self._state_machine.state != CockpitState.REVIEW_MODAL:
-            # Out-of-Recording auto-stop: open the placeholder modal
-            # directly so the test can observe it without crossing an
-            # illegal transition through the state machine.
-            # Lazy import to avoid circular dependency (window imports mixins).
-            from .window import (  # noqa: PLC0415
-                _PlaceholderReviewModal,
-            )
-            modal = _PlaceholderReviewModal(self)
-            modal.finished.connect(self._on_review_modal_closed)
-            modal.open()
-            self._review_modal = modal
+        else:
+            self._last_session_summary.auto_stop = True
+        if (
+            self._state_machine.state == CockpitState.RECORDING
+            and self._capture_controller is not None
+        ):
+            # If stop/flush/finalize raised before flipping the state,
+            # still terminate the four-state cycle.
+            self._state_machine.request_stop_recording(finalized=True)

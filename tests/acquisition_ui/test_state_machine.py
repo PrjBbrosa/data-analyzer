@@ -510,111 +510,29 @@ def test_connection_timeout_before_deadline_does_not_tear_down(qapp):
 
 
 # ---------------------------------------------------------------------------
-# Auto-stop wiring (CR2 fix #6). Watermark ``red_drop_sustained`` must:
-# 1) call ``CaptureController.stop()`` synchronously,
-# 2) set ``SessionSummary.auto_stop = True`` for the review modal,
-# 3) open the placeholder review modal (Stage 5 owns the real modal).
+# Auto-stop wiring: controller sustain判定 is authoritative.
 # ---------------------------------------------------------------------------
 
 
-def _make_spy_controller_with_summary():
-    """Return a spy that mimics the ``CaptureController.stop()`` contract.
+class _AutoStoppedController:
+    """poll_step 后 running=False + auto_stopped=True 的最小桩。"""
 
-    We avoid building a real controller (which would require an Mf4Writer
-    + writable temp path) because the unit under test cares only about
-    the protocol: ``stop()`` is called and its return value carries the
-    ``auto_stop`` flag.
-    """
-    from mf4_analyzer.acquisition_capture.session import SessionSummary
+    running = False
+    auto_stopped = True
 
-    class _SpyController:
-        def __init__(self) -> None:
-            self.stop_called = 0
-            self.summary = SessionSummary(duration_s=42.0, rx_count=1234)
-
-        def stop(self):
-            self.stop_called += 1
-            return self.summary
-
-    return _SpyController()
+    def poll_step(self) -> int:
+        return 0
 
 
-def test_auto_stop_calls_controller_stop_and_arms_flag(qapp):
-    """``red_drop_sustained`` → controller.stop() + auto_stop=True."""
+def test_controller_auto_stop_routes_to_stop_and_review(qapp, monkeypatch):
+    """Controller sustain判定 -> stop&review(auto_stop=True)."""
     window = CockpitMainWindow()
-    spy = _make_spy_controller_with_summary()
-    window.set_capture_controller(spy)
-    # Walk to Recording so the auto-stop path is on the legal-transition
-    # arm (Recording → ReviewModal).
-    window.state_machine.request_connect(
-        HealthyPredicateResult.from_components(
-            hw_ok=True, xcp_connected=True, first_frame_received=True
-        )
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        window,
+        "request_stop_and_review",
+        lambda *, auto_stop=False: calls.append(auto_stop),
     )
-    window.state_machine.request_start_recording()
-    assert window.state_machine.state == CockpitState.RECORDING
-
-    # Emit the sustained-red watermark; the bridge routes it to
-    # ``_on_auto_stop_request``.
-    window._ring.watermark_changed.emit("red_drop_sustained")
-
-    # 1. Controller.stop() invoked exactly once.
-    assert spy.stop_called == 1
-    # 2. Auto-stop flag is armed on the surfaced summary.
-    assert window.last_session_summary is not None
-    assert window.last_session_summary.auto_stop is True
-    # 3. Placeholder review modal is open and visible.
-    assert window.state_machine.state == CockpitState.REVIEW_MODAL
-    assert window.review_modal is not None
-    assert window.review_modal.isVisible() is True
-
-    # Cleanup — close the modal explicitly to avoid leaking into the
-    # next test's GC sweep.
-    window.review_modal.done(0)
-    qapp.processEvents()
-    window.close()
-
-
-def test_auto_stop_without_controller_still_arms_flag_and_opens_modal(qapp):
-    """When Stage 5 hasn't injected a controller yet, auto-stop still
-    arms the flag and opens the placeholder modal so the four-state
-    cycle terminates."""
-    window = CockpitMainWindow()
-    # Walk to Recording.
-    window.state_machine.request_connect(
-        HealthyPredicateResult.from_components(
-            hw_ok=True, xcp_connected=True, first_frame_received=True
-        )
-    )
-    window.state_machine.request_start_recording()
-
-    window._ring.watermark_changed.emit("red_drop_sustained")
-
-    assert window.last_session_summary is not None
-    assert window.last_session_summary.auto_stop is True
-    assert window.state_machine.state == CockpitState.REVIEW_MODAL
-    assert window.review_modal is not None
-    assert window.review_modal.isVisible() is True
-
-    window.review_modal.done(0)
-    qapp.processEvents()
-    window.close()
-
-
-def test_auto_stop_emits_signal_with_reason(qapp):
-    """``auto_stop_requested`` Qt signal still fires (Stage 5 hook)."""
-    window = CockpitMainWindow()
-    fired: list[str] = []
-    window.auto_stop_requested.connect(lambda reason: fired.append(reason))
-    window.state_machine.request_connect(
-        HealthyPredicateResult.from_components(
-            hw_ok=True, xcp_connected=True, first_frame_received=True
-        )
-    )
-    window.state_machine.request_start_recording()
-    window._ring.watermark_changed.emit("red_drop_sustained")
-    assert fired == ["ring_buffer"]
-    if window.review_modal is not None:
-        window.review_modal.done(0)
-    qapp.processEvents()
+    window._poll_live_recording(_AutoStoppedController())
+    assert calls == [True]
     window.close()
