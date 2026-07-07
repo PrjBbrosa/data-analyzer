@@ -95,16 +95,17 @@ class PollingMixin:
                 self._first_frame_ts = time.monotonic()
             self._fake_last_rx_monotonic = time.monotonic()
         for channel, ts, value in samples:
-            # Canonical shape is (channel, ts, value); the ring is shared
-            # with CaptureController during recording.
-            self._ring.put((channel, ts, value))
+            # Spec 2026-07-07 F2: ring is recording-path only; idle
+            # streaming feeds cards directly.
             self._center.push_sample(channel, ts, value)
         # Repaint sparklines.
         self._center.refresh_all()
         # Update cumulative counters.
         self._cumulative_rx_count += len(samples)
-        # Sync dropped counter from ring buffer (cumulative).
-        self._cumulative_dropped = self._ring.dropped_frames
+        if self._state_machine.state == CockpitState.RECORDING:
+            # Legacy non-controller recording path only; controller
+            # recording is handled by _poll_live_recording().
+            self._cumulative_dropped = self._ring.dropped_frames
         self._update_status_bar()
         if (
             self._state_machine.state == CockpitState.RECORDING

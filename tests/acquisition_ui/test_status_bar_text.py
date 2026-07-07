@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import time
+
+from mf4_analyzer.acquisition_capture.backends import FakeRecorderBackend
+from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
 from mf4_analyzer.acquisition_ui.state import HealthyPredicateResult
 
@@ -26,7 +30,7 @@ def test_connected_idle_status_bar_text(qapp):
     window = CockpitMainWindow()
     try:
         _connect(window)
-        assert window.statusBar().currentMessage() == "streaming · 0 evt/s · buf 0.0%"
+        assert window.statusBar().currentMessage() == "streaming · 0 evt/s"
     finally:
         window.close()
 
@@ -39,5 +43,20 @@ def test_recording_status_bar_text(qapp):
         assert window.statusBar().currentMessage() == (
             "RECORDING · 00:00 · 0 samples · 0.0 MB · drop 0 · buf 0.0%"
         )
+    finally:
+        window.close()
+
+
+def test_idle_polling_does_not_fill_ring(qapp):
+    """Idle live polling feeds cards directly; ring is recording-only."""
+    backend = FakeRecorderBackend(samples_per_second=1000.0)
+    window = CockpitMainWindow(backend=backend, allow_fake_backend=True)
+    try:
+        _connect(window)
+        backend.start([SelectedMeasurement(name="DemoSignal")])
+        time.sleep(0.02)
+        for _ in range(20):
+            window._poll_live()
+        assert window.ring_buffer.level_pct == 0.0
     finally:
         window.close()

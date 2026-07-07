@@ -230,8 +230,7 @@ class SettingsMixin:
             return
         if state == CockpitState.CONNECTED_IDLE:
             self._status.showMessage(
-                f"streaming · {self._event_rate_per_s()} evt/s · "
-                f"buf {self._ring.level_pct:.1f}%"
+                f"streaming · {self._event_rate_per_s()} evt/s"
             )
             return
         if state == CockpitState.RECORDING:
