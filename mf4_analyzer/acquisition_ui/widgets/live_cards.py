@@ -416,6 +416,7 @@ class LiveCardGrid(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setMinimumWidth(300)
         # Outer shell: thin zero-margin QVBoxLayout whose sole child is
         # the scroll area. The cards/placeholder layout lives on an
         # inner host widget inside the scroll viewport so vertical

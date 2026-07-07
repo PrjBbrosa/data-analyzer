@@ -390,8 +390,18 @@ class ToolbarMixin:
             widget_natural_w[widget] = natural
 
         # Start with every design-visible eligible widget shown; demote
-        # the rightmost remaining one until the running total fits.
+        # by explicit priority until the running total fits. Menu order
+        # stays left-to-right when rebuilt below.
         shown: list[QWidget] = [w for w, _, dv in eligible if dv]
+        demote_rank = {
+            self._transport_chip: 0,
+            self._output_btn: 1,
+            self._settings_btn: 2,
+            self._segment_btn: 3,
+            self._a2l_btn: 4,
+            self._mode_segment_widget: 5,
+        }
+        shown.sort(key=lambda w: demote_rank.get(w, -1), reverse=True)
         running = always_on_w + sum(widget_natural_w[w] for w in shown)
         demoted: list[QWidget] = []
         while running > outer_w and shown:
@@ -489,5 +499,6 @@ class ToolbarMixin:
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
+        splitter.setSizes([420, 560, 300])
         layout.addWidget(splitter)
         return page

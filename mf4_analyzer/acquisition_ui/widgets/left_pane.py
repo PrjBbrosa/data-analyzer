@@ -126,7 +126,8 @@ class LeftPane(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("leftPane")
-        self.setFixedWidth(420)
+        self.setMinimumWidth(320)
+        self.setMaximumWidth(460)
         self._pool: tuple[MeasurementSummary, ...] = ()
         self._selected_names: set[str] = set()
         self._selected_events: dict[str, str] = {}
