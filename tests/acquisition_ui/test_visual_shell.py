@@ -144,6 +144,17 @@ def test_main_button_visual_action_properties_follow_state(qapp):
         window.close()
 
 
+def test_stop_button_ampersand_escaped(qapp):
+    """Qt labels need && so the visible text keeps a literal ampersand."""
+    window = CockpitMainWindow()
+    try:
+        _connect(window)
+        window.state_machine.request_start_recording()
+        assert window.main_button.text() == "■ Stop && 复盘"
+    finally:
+        window.close()
+
+
 # ---------------------------------------------------------------------------
 # P1-2 toolbar overflow + min-size — spec §S4
 # ---------------------------------------------------------------------------

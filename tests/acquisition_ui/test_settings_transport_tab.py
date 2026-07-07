@@ -32,6 +32,19 @@ def test_transport_tab_round_trips_values(qtbot):
     assert out.data_bitrate == 4_000_000
 
 
+def test_seed_key_label_ampersand_escaped(qtbot):
+    from PyQt5.QtWidgets import QLabel
+
+    from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+    from mf4_analyzer.acquisition_ui.settings_dialog import SettingsDialog
+
+    dialog = SettingsDialog(transport=TransportConfig())
+    qtbot.addWidget(dialog)
+
+    labels = [label.text() for label in dialog.transport_widget.findChildren(QLabel)]
+    assert "Seed&&Key DLL" in labels
+
+
 def test_test_connection_button_disabled_on_non_windows(qtbot):
     from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
     from mf4_analyzer.acquisition_ui.settings_dialog import SettingsDialog

@@ -341,7 +341,7 @@ class TransportTabWidget(QWidget):
         self.seed_key_browse = QPushButton("Browse", self)
         seed_layout.addWidget(self.seed_key_line, 1)
         seed_layout.addWidget(self.seed_key_browse)
-        layout.addRow("Seed&Key DLL", seed_row)
+        layout.addRow("Seed&&Key DLL", seed_row)
 
         self.test_btn = QPushButton("Test Connection", self)
         self.test_btn.setObjectName("transportTestConnectionButton")

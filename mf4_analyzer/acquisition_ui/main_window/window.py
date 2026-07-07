@@ -8,7 +8,7 @@ Current deliverables wired up here:
 
 - Toolbar with A2L/output controls, Settings, segment marker,
   mode label (`采集 / 回放 / 历史`), REC indicator, and stateful main
-  button (`连接 ECU` / `● 采集` / `■ Stop & 复盘`).
+  button (`连接 ECU` / `● 采集` / `■ Stop && 复盘`).
 - 32 px health strip beneath the toolbar driven by
   ``HealthAggregator.poll_once()`` polled on a ``QTimer`` at
   ``thresholds.HEALTH_POLL_INTERVAL_S``.
@@ -406,7 +406,7 @@ class CockpitMainWindow(
         elif new == CockpitState.RECORDING:
             if self._rec_start_ts is None:
                 self._rec_start_ts = time.monotonic()
-            self._main_btn.setText("■ Stop & 复盘")
+            self._main_btn.setText("■ Stop && 复盘")
             self._main_btn.setEnabled(True)
             self._set_visual_property(self._main_btn, "cockpitAction", "stop")
             self._rec_indicator.setText("● REC")
