@@ -291,11 +291,27 @@ class ConnectionMixin:
             last_age = thresholds.REC_LAST_RX_RED_MIN_S if self._fake_xcp_connected else 0.0
         else:
             last_age = max(0.0, time.monotonic() - self._fake_last_rx_monotonic)
+        write_rate = 0.0
+        if self._capture_controller is not None and self._fake_rec_state == "recording":
+            try:
+                count = int(self._capture_controller.writer.write_count)
+            except Exception:  # noqa: BLE001 - health probe must stay best-effort
+                count = None
+            if count is not None:
+                now = time.monotonic()
+                if self._write_rate_prev is not None:
+                    prev_count, prev_ts = self._write_rate_prev
+                    dt = now - prev_ts
+                    if dt > 0:
+                        write_rate = max(0.0, (count - prev_count) / dt)
+                self._write_rate_prev = (count, now)
+        else:
+            self._write_rate_prev = None
         return RecHealth(
             state=self._fake_rec_state,  # type: ignore[arg-type]
             ring_buffer_fill_pct=self._ring.level_pct,
             dropped_frames=self._ring.dropped_frames,
-            write_rate_bps=0.0,
+            write_rate_bps=write_rate,
             last_rx_age_s=last_age,
             writer_thread_alive=self._fake_rec_state == "recording",
             evidence=(

@@ -235,9 +235,11 @@ class SettingsMixin:
             return
         if state == CockpitState.RECORDING:
             elapsed = self._recording_elapsed_text()
+            size_mb = self._recording_file_size_mb()
+            size_part = f"{size_mb:.1f} MB" if size_mb > 0 else "缓冲中"
             self._status.showMessage(
                 f"RECORDING · {elapsed} · {self._sample_count()} samples · "
-                f"{self._recording_file_size_mb():.1f} MB · "
+                f"{size_part} · "
                 f"drop {self._cumulative_dropped} · buf {self._ring.level_pct:.1f}%"
             )
 

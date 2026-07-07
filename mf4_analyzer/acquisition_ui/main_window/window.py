@@ -234,6 +234,7 @@ class CockpitMainWindow(
         # The most recent stop/flush/finalize run, used by tests and
         # history/review flows to introspect ordering.
         self._last_stop_result: StopFlushFinalizeResult | None = None
+        self._write_rate_prev: tuple[int, float] | None = None
         # Optional Analyzer handoff sink — tests inject a spy to
         # observe ``MainWindow.load_file`` calls without spinning up a
         # real Analyzer window. When ``None`` the cockpit walks

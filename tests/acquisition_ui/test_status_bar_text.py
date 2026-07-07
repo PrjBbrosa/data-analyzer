@@ -6,6 +6,7 @@ import time
 
 from mf4_analyzer.acquisition_capture.backends import FakeRecorderBackend
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.acquisition_ui.main_window import _connection_mixin as conn_mixin
 from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
 from mf4_analyzer.acquisition_ui.state import HealthyPredicateResult
 
@@ -41,8 +42,27 @@ def test_recording_status_bar_text(qapp):
         _connect(window)
         window.state_machine.request_start_recording()
         assert window.statusBar().currentMessage() == (
-            "RECORDING · 00:00 · 0 samples · 0.0 MB · drop 0 · buf 0.0%"
+            "RECORDING · 00:00 · 0 samples · 缓冲中 · drop 0 · buf 0.0%"
         )
+    finally:
+        window.close()
+
+
+def test_probe_rec_uses_writer_write_count_delta(qapp, monkeypatch):
+    class Writer:
+        write_count = 250
+
+    class Controller:
+        writer = Writer()
+
+    window = CockpitMainWindow()
+    try:
+        window.set_capture_controller(Controller())
+        window._fake_rec_state = "recording"
+        window._write_rate_prev = (10, 100.0)
+        monkeypatch.setattr(conn_mixin.time, "monotonic", lambda: 102.0)
+        snap = window._probe_rec()
+        assert snap.write_rate_bps == 120.0
     finally:
         window.close()
 

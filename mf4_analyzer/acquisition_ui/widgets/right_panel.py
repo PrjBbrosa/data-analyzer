@@ -458,7 +458,7 @@ class RecordingQualityPage(_BasePanelPage):
         _add_header_row(self._outer, self, "实时质量监控")
 
         self._row_ring = _add_metric_section(self._outer, self, "ring buffer")
-        self._row_write = _add_metric_section(self._outer, self, "write rate")
+        self._row_write = _add_metric_section(self._outer, self, "写入速率")
         self._row_dropped = _add_metric_section(self._outer, self, "dropped frames")
         self._row_can = _add_metric_section(self._outer, self, "CAN load")
         self._row_rx_age = _add_metric_section(self._outer, self, "last frame delay")
@@ -478,9 +478,12 @@ class RecordingQualityPage(_BasePanelPage):
                 f"{rec.ring_buffer_fill_pct:.1f}%",
             )
         )
-        self._row_write.setText(
-            _format_band_value("green", f"{rec.write_rate_bps / 1024:.1f} kB/s")
-        )
+        if rec.write_rate_bps > 0:
+            self._row_write.setText(
+                _format_band_value("green", f"{rec.write_rate_bps:.0f} 样本/s")
+            )
+        else:
+            self._row_write.setText(_format_band_value("off", "—"))
         self._row_dropped.setText(
             _format_band_value(
                 band_dropped_frames(rec.dropped_frames),

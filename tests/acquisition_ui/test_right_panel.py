@@ -31,6 +31,7 @@ from mf4_analyzer.acquisition_ui.widgets import right_panel as rp_module
 from mf4_analyzer.acquisition_ui.widgets.right_panel import (
     DisconnectedPage,
     IdlePreflightPage,
+    RecordingQualityPage,
     RightPanel,
 )
 
@@ -143,7 +144,11 @@ def test_disconnected_page_localizes_status_copy(qtbot):
     assert rp_module._LEVEL_COLOR["off"] in page._row_xcp.text()
 
 
-def _snapshot(*, can_load: float | None = 42.0) -> HealthSnapshot:
+def _snapshot(
+    *,
+    can_load: float | None = 42.0,
+    write_rate_bps: float = 2048.0,
+) -> HealthSnapshot:
     return HealthSnapshot(
         hw=HwHealth(
             ok=True,
@@ -158,7 +163,7 @@ def _snapshot(*, can_load: float | None = 42.0) -> HealthSnapshot:
             state="recording",
             ring_buffer_fill_pct=71.0,
             dropped_frames=3,
-            write_rate_bps=2048.0,
+            write_rate_bps=write_rate_bps,
             last_rx_age_s=1.25,
             writer_thread_alive=True,
         ),
@@ -220,7 +225,7 @@ def test_recording_page_v3_sections_exist(qapp):
     assert "实时质量监控" in texts
     for title in (
         "ring buffer",
-        "write rate",
+        "写入速率",
         "dropped frames",
         "CAN load",
         "last frame delay",
@@ -228,6 +233,17 @@ def test_recording_page_v3_sections_exist(qapp):
     ):
         assert title in texts
     panel.close()
+
+
+def test_recording_write_rate_display(qtbot):
+    page = RecordingQualityPage()
+    qtbot.addWidget(page)
+    snap = _snapshot(write_rate_bps=123.0)
+    page.apply(snapshot=snap, disk_free_bytes=10 * 1024 ** 3)
+    assert "123 样本/s" in page._row_write.text()
+    snap0 = _snapshot(write_rate_bps=0.0)
+    page.apply(snapshot=snap0, disk_free_bytes=10 * 1024 ** 3)
+    assert "—" in page._row_write.text()
 
 
 def test_idle_page_delegates_daq_slot_usage(qapp, monkeypatch):
