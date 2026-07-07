@@ -494,22 +494,26 @@ class HistoryTab(QWidget):
         self._search_box.setPlaceholderText("搜索 name / id")
         self._search_box.textChanged.connect(self._proxy_model.set_search)
 
-        filter_row.addWidget(QLabel("vehicle", self))
+        filter_row.addWidget(QLabel("车辆", self))
         filter_row.addWidget(self._vehicle_filter)
-        filter_row.addWidget(QLabel("scenario", self))
+        filter_row.addWidget(QLabel("场景", self))
         filter_row.addWidget(self._scenario_filter)
-        filter_row.addWidget(QLabel("path_kind", self))
+        filter_row.addWidget(QLabel("存储", self))
         filter_row.addWidget(self._path_kind_filter)
-        filter_row.addWidget(QLabel("set", self))
+        filter_row.addWidget(QLabel("数据集", self))
         filter_row.addWidget(self._set_filter)
         filter_row.addWidget(self._search_box, stretch=1)
         root.addLayout(filter_row)
 
-        self._tag_row = QHBoxLayout()
+        self._tag_bar = QWidget(self)
+        self._tag_bar.setObjectName("historyTagBar")
+        self._tag_row = QHBoxLayout(self._tag_bar)
+        self._tag_row.setContentsMargins(0, 0, 0, 0)
         self._tag_row.setSpacing(6)
-        self._tag_row.addWidget(QLabel("issue_tags", self))
+        self._tag_row.addWidget(QLabel("问题标签", self._tag_bar))
         self._tag_row.addStretch(1)
-        root.addLayout(self._tag_row)
+        self._tag_bar.setVisible(False)
+        root.addWidget(self._tag_bar)
 
         self._table = QTableView(self)
         self._table.setObjectName("historyTableView")
@@ -599,11 +603,12 @@ class HistoryTab(QWidget):
         self._tag_checks.clear()
 
         for tag in tags:
-            chip = QCheckBox(tag, self)
+            chip = QCheckBox(tag, self._tag_bar)
             chip.setObjectName(f"historyTagChip_{tag}")
             chip.toggled.connect(self._on_tag_filters_changed)
             self._tag_checks[tag] = chip
             self._tag_row.insertWidget(self._tag_row.count() - 1, chip)
+        self._tag_bar.setVisible(bool(self._tag_checks))
         self._on_tag_filters_changed()
 
     def _on_tag_filters_changed(self) -> None:

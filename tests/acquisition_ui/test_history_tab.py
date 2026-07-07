@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from PyQt5.QtCore import QItemSelectionModel, Qt
+from PyQt5.QtWidgets import QLabel
 
 from mf4_analyzer.acquisition_ui.history_tab import HistoryTab
 
@@ -216,3 +217,19 @@ def test_history_tab_missing_manifest_shows_empty_state(qapp, tmp_path):
         assert tab.open_current_entry() is False
     finally:
         tab.close()
+
+
+def test_filter_labels_are_localized(qtbot):
+    tab = HistoryTab()
+    qtbot.addWidget(tab)
+    labels = [lab.text() for lab in tab.findChildren(QLabel)]
+    for cn in ("车辆", "场景", "存储", "数据集"):
+        assert cn in labels
+    for en in ("vehicle", "scenario", "path_kind", "set"):
+        assert en not in labels
+
+
+def test_issue_tags_bar_hidden_when_no_tags(qtbot):
+    tab = HistoryTab()
+    qtbot.addWidget(tab)
+    assert not tab._tag_bar.isVisible()
