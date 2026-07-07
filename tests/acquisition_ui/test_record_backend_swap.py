@@ -167,7 +167,7 @@ def test_no_swap_when_real_selection_empty(qapp):
 
         assert window._maybe_swap_to_vector_backend(selection=()) is False
         assert isinstance(window._backend, FakeRecorderBackend)
-        assert "measurement selection ä¸ºç©º" in window._status.currentMessage()
+        assert "measurement selection 为空" in window._status.currentMessage()
     finally:
         window.deleteLater()
 

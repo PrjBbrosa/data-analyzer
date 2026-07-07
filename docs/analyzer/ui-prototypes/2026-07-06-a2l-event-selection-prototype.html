@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A2L Event Selection Prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --panel-strong: #f8fafc;
+      --border: #d8e1ec;
+      --border-strong: #b9c7d8;
+      --text: #142033;
+      --muted: #63738a;
+      --soft: #edf3f9;
+      --accent: #0f766e;
+      --accent-soft: #d9f3ef;
+      --accent-border: #8fd6cb;
+      --warn: #9a5b00;
+      --warn-soft: #fff2cf;
+      --row-hover: #f3f8ff;
+      --selected: #eaf6f4;
+      --selected-border: #9fd8ce;
+      --shadow: 0 12px 32px rgba(18, 32, 51, 0.08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: minmax(420px, 470px) minmax(420px, 1fr);
+      gap: 14px;
+      min-height: 100vh;
+      padding: 14px;
+    }
+
+    .pane {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .left-pane {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+
+    .title-row,
+    .status-row,
+    .batch-row,
+    .right-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      font-size: 18px;
+      line-height: 1.25;
+      font-weight: 760;
+    }
+
+    h2 {
+      font-size: 17px;
+      line-height: 1.3;
+      font-weight: 730;
+    }
+
+    .meta,
+    .small {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .search {
+      width: 100%;
+      height: 42px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 12px;
+      outline: none;
+      color: var(--text);
+      background: #fff;
+    }
+
+    .search:focus {
+      border-color: var(--accent-border);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      min-height: 32px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 5px 10px;
+      color: #314155;
+      background: var(--panel-strong);
+      cursor: pointer;
+    }
+
+    .chip[aria-pressed="true"] {
+      border-color: var(--accent-border);
+      color: #063f39;
+      background: var(--accent-soft);
+    }
+
+    .batch-bar {
+      display: grid;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: #f9fbfd;
+    }
+
+    .batch-row label {
+      color: #2c3a4e;
+      font-size: 13px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .batch-select,
+    .row-select {
+      height: 32px;
+      min-width: 116px;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      padding: 0 28px 0 10px;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+    }
+
+    .batch-select:focus,
+    .row-select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+    }
+
+    .list {
+      flex: 1;
+      overflow: auto;
+      padding: 6px 0;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr) auto;
+      align-items: center;
+      min-height: 44px;
+      gap: 8px;
+      padding: 6px 12px;
+      border-left: 3px solid transparent;
+    }
+
+    .row:hover {
+      background: var(--row-hover);
+    }
+
+    .row.is-selected {
+      border-left-color: var(--accent);
+      background: var(--selected);
+    }
+
+    .row input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .row-main {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+
+    .name {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 620;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .sub {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .event-cell {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 150px;
+      justify-content: flex-end;
+    }
+
+    .at {
+      color: #465770;
+      font-size: 13px;
+      font-weight: 740;
+    }
+
+    .row-select {
+      width: 106px;
+      min-width: 106px;
+      height: 30px;
+      border-color: var(--border);
+      font-size: 13px;
+    }
+
+    .row:not(.is-selected) .row-select {
+      color: #8a98aa;
+      background: #f8fafc;
+    }
+
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 46px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--border);
+      background: var(--panel);
+    }
+
+    .footer strong {
+      color: #24415e;
+    }
+
+    .right-pane {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .right-header {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(110px, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--panel-strong);
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .metric-value {
+      margin-top: 3px;
+      color: var(--text);
+      font-size: 19px;
+      font-weight: 780;
+      line-height: 1.25;
+    }
+
+    .right-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+    }
+
+    .selected-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .selected-table th,
+    .selected-table td {
+      border-bottom: 1px solid var(--border);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: middle;
+      font-size: 13px;
+    }
+
+    .selected-table th {
+      color: #40506a;
+      background: #f2f6fa;
+      font-weight: 700;
+    }
+
+    .selected-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .selected-table td:first-child {
+      max-width: 420px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      border: 1px solid var(--accent-border);
+      border-radius: 8px;
+      padding: 3px 8px;
+      color: #063f39;
+      background: var(--accent-soft);
+      font-size: 12px;
+      font-weight: 720;
+      white-space: nowrap;
+    }
+
+    .badge.warn {
+      border-color: #e2bd6c;
+      color: var(--warn);
+      background: var(--warn-soft);
+    }
+
+    .empty {
+      display: grid;
+      place-items: center;
+      min-height: 280px;
+      border: 1px dashed var(--border-strong);
+      border-radius: 8px;
+      color: var(--muted);
+      background: #fbfdff;
+      font-size: 14px;
+    }
+
+    @media (max-width: 920px) {
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .summary-grid {
+        grid-template-columns: repeat(2, minmax(120px, 1fr));
+      }
+    }
+
+    @media (max-width: 520px) {
+      .app {
+        padding: 8px;
+      }
+
+      .row {
+        grid-template-columns: 30px minmax(0, 1fr);
+      }
+
+      .event-cell {
+        grid-column: 2;
+        min-width: 0;
+        justify-content: flex-start;
+      }
+
+      .summary-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="pane left-pane" aria-label="A2L measurement selection">
+      <div class="header">
+        <div class="title-row">
+          <h1>A2L Measurement</h1>
+          <div class="meta"><span id="shownCount">0</span> / 323 · 选 <span id="selectedCount">0</span></div>
+        </div>
+        <input id="search" class="search" type="search" placeholder="搜索 name / 0x40A..." autocomplete="off">
+        <div class="chips" aria-label="filters">
+          <button id="selectedOnly" class="chip" type="button" aria-pressed="false">只看已选</button>
+          <button id="daqOnly" class="chip" type="button" aria-pressed="true">有 DAQ</button>
+        </div>
+        <div class="batch-bar">
+          <div class="batch-row">
+            <label for="batchEvent">采样事件</label>
+            <select id="batchEvent" class="batch-select"></select>
+          </div>
+          <div id="batchHint" class="small">选 0 · CAN 估算 0.0%</div>
+        </div>
+      </div>
+      <div id="measurementList" class="list"></div>
+      <div class="footer">
+        <div class="small" id="footerSummary"><strong>选 0</strong> · CAN 估算 0.0%</div>
+        <div class="small">XCP on CAN · 500 kbit/s</div>
+      </div>
+    </section>
+
+    <section class="pane right-pane" aria-label="capture preview">
+      <div class="right-header">
+        <div class="right-title">
+          <h2>Capture Set</h2>
+          <span class="badge" id="batchState">未选择</span>
+        </div>
+        <div class="summary-grid">
+          <div class="metric">
+            <div class="metric-label">通道</div>
+            <div class="metric-value" id="metricChannels">0</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">最快事件</div>
+            <div class="metric-value" id="metricFastest">-</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">总采样率</div>
+            <div class="metric-value" id="metricRate">0 Hz</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">CAN 估算</div>
+            <div class="metric-value" id="metricBus">0.0%</div>
+          </div>
+        </div>
+      </div>
+      <div class="right-body">
+        <div id="selectedBody"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const eventRates = {
+      "100ms": 10,
+      "10ms": 100,
+      "5ms": 200,
+      "2ms": 500,
+      "1ms": 1000
+    };
+
+    const eventOrder = ["100ms", "10ms", "5ms", "2ms", "1ms"];
+
+    const measurements = [
+      {
+        name: "_Request_ESH_RunRequest_0_requestedMode_xdu8",
+        unit: "uint8 · Rte_Appl_OS_Task_100ms",
+        events: ["100ms", "10ms"],
+        event: "100ms",
+        selected: false
+      },
+      {
+        name: "BatteryVoltage_xdu16_Buffer_Dyn",
+        unit: "V · Rte_OsTask_BSW_10ms",
+        events: ["100ms", "10ms", "1ms"],
+        event: "10ms",
+        selected: true
+      },
+      {
+        name: "Red_cMotorTemp_gds16_Buffer_Dyn",
+        unit: "degC · Rte_OsTask_BSW_10ms",
+        events: ["100ms", "10ms"],
+        event: "10ms",
+        selected: true
+      },
+      {
+        name: "Plausi_sRPSErrCode_xdu32_Buffer_Dyn",
+        unit: "code · Rte_OsTask_BSW_10ms",
+        events: ["100ms", "10ms", "5ms"],
+        event: "10ms",
+        selected: true
+      },
+      {
+        name: "Plausi_wRelRotorPosition_xdu32_Buffer_Dyn",
+        unit: "deg · Rte_OsTask_BSW_1ms",
+        events: ["100ms", "10ms", "5ms", "1ms"],
+        event: "1ms",
+        selected: true
+      },
+      {
+        name: "RawRotorSpeed_xds32_Buffer_Dyn",
+        unit: "rpm · Rte_OsTask_BSW_1ms",
+        events: ["100ms", "10ms", "5ms", "1ms"],
+        event: "1ms",
+        selected: true
+      },
+      {
+        name: "ErrCode_xdu32_Buffer_Dyn",
+        unit: "code · Rte_Appl_OS_Task_100ms",
+        events: ["100ms", "10ms"],
+        event: "100ms",
+        selected: false
+      },
+      {
+        name: "Red_iBattCurrent_xds16_Buffer_Dyn",
+        unit: "A · Rte_OsTask_BSW_10ms",
+        events: ["100ms", "10ms", "5ms"],
+        event: "10ms",
+        selected: true
+      },
+      {
+        name: "Red_iBattNegCurrent_xds16_Buffer_Dyn",
+        unit: "A · Rte_OsTask_BSW_10ms",
+        events: ["100ms", "10ms", "5ms"],
+        event: "10ms",
+        selected: false
+      },
+      {
+        name: "Red_uSupplyVoltage_xdu16_Buffer_Dyn",
+        unit: "V · Rte_OsTask_BSW_10ms",
+        events: ["100ms", "10ms", "5ms", "2ms"],
+        event: "10ms",
+        selected: false
+      },
+      {
+        name: "AllowedMotTrq_xds16_Buffer_Dyn",
+        unit: "Nm · Rte_Appl_OS_Task_100ms",
+        events: ["100ms", "10ms"],
+        event: "100ms",
+        selected: false
+      },
+      {
+        name: "MotorTorque_xds16",
+        unit: "Nm · Rte_Appl_OS_Task_100ms",
+        events: ["100ms", "10ms", "5ms"],
+        event: "10ms",
+        selected: false
+      },
+      {
+        name: "ReturnMotorTorq_2_xds16",
+        unit: "Nm · Rte_Appl_OS_Task_100ms",
+        events: ["100ms", "10ms", "5ms"],
+        event: "10ms",
+        selected: false
+      },
+      {
+        name: "StateOem_xdu8",
+        unit: "state · Rte_Appl_OS_Task_100ms",
+        events: ["100ms"],
+        event: "100ms",
+        selected: false
+      }
+    ];
+
+    const state = {
+      query: "",
+      selectedOnly: false,
+      daqOnly: true
+    };
+
+    const listEl = document.getElementById("measurementList");
+    const searchEl = document.getElementById("search");
+    const selectedOnlyEl = document.getElementById("selectedOnly");
+    const daqOnlyEl = document.getElementById("daqOnly");
+    const batchEventEl = document.getElementById("batchEvent");
+
+    function selectedItems() {
+      return measurements.filter((item) => item.selected);
+    }
+
+    function visibleItems() {
+      const query = state.query.trim().toLowerCase();
+      return measurements.filter((item) => {
+        if (state.selectedOnly && !item.selected) return false;
+        if (state.daqOnly && item.events.length === 0) return false;
+        if (!query) return true;
+        return item.name.toLowerCase().includes(query) || item.unit.toLowerCase().includes(query);
+      });
+    }
+
+    function commonEvents(items) {
+      if (items.length === 0) return [];
+      const shared = eventOrder.filter((eventName) => items.every((item) => item.events.includes(eventName)));
+      return shared;
+    }
+
+    function eventDistribution(items) {
+      const counts = new Map();
+      items.forEach((item) => counts.set(item.event, (counts.get(item.event) || 0) + 1));
+      return eventOrder
+        .filter((eventName) => counts.has(eventName))
+        .map((eventName) => `${eventName} x ${counts.get(eventName)}`);
+    }
+
+    function totalRate(items) {
+      return items.reduce((sum, item) => sum + (eventRates[item.event] || 0), 0);
+    }
+
+    function busLoad(items) {
+      const bitsPerSample = 64;
+      const bitrate = 500000;
+      return (totalRate(items) * bitsPerSample / bitrate) * 100;
+    }
+
+    function fastestEvent(items) {
+      if (items.length === 0) return "-";
+      const fastest = [...items].sort((a, b) => (eventRates[b.event] || 0) - (eventRates[a.event] || 0))[0];
+      return fastest.event;
+    }
+
+    function renderBatchSelect(items) {
+      const options = commonEvents(items);
+      const selectedEvents = [...new Set(items.map((item) => item.event))];
+      const isMixed = items.length > 0 && selectedEvents.length > 1;
+      const disabled = items.length === 0 || options.length === 0;
+      batchEventEl.innerHTML = "";
+
+      if (items.length === 0) {
+        batchEventEl.append(new Option("未选择", ""));
+      } else if (isMixed) {
+        batchEventEl.append(new Option("混合", "mixed"));
+      }
+
+      options.forEach((eventName) => {
+        batchEventEl.append(new Option(eventName, eventName));
+      });
+
+      batchEventEl.disabled = disabled;
+      if (disabled) {
+        batchEventEl.value = "";
+      } else if (isMixed) {
+        batchEventEl.value = "mixed";
+      } else {
+        batchEventEl.value = selectedEvents[0];
+      }
+    }
+
+    function renderList() {
+      const items = visibleItems();
+      listEl.innerHTML = "";
+      items.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = `row${item.selected ? " is-selected" : ""}`;
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = item.selected;
+        checkbox.setAttribute("aria-label", `select ${item.name}`);
+        checkbox.addEventListener("change", () => {
+          item.selected = checkbox.checked;
+          render();
+        });
+
+        const main = document.createElement("div");
+        main.className = "row-main";
+        const name = document.createElement("div");
+        name.className = "name";
+        name.textContent = item.name;
+        name.title = item.name;
+        const sub = document.createElement("div");
+        sub.className = "sub";
+        sub.textContent = item.unit;
+        sub.title = item.unit;
+        main.append(name, sub);
+
+        const eventCell = document.createElement("div");
+        eventCell.className = "event-cell";
+        const at = document.createElement("span");
+        at.className = "at";
+        at.textContent = "@";
+        const select = document.createElement("select");
+        select.className = "row-select";
+        select.value = item.event;
+        item.events.forEach((eventName) => {
+          select.append(new Option(eventName, eventName));
+        });
+        select.addEventListener("change", () => {
+          item.event = select.value;
+          if (!item.selected) item.selected = true;
+          render();
+        });
+        eventCell.append(at, select);
+
+        row.append(checkbox, main, eventCell);
+        listEl.append(row);
+      });
+
+      if (items.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "没有匹配的 measurement";
+        listEl.append(empty);
+      }
+    }
+
+    function renderSelectedTable(items) {
+      const target = document.getElementById("selectedBody");
+      target.innerHTML = "";
+
+      if (items.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "未选择 measurement";
+        target.append(empty);
+        return;
+      }
+
+      const table = document.createElement("table");
+      table.className = "selected-table";
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th>Measurement</th>
+            <th>采样事件</th>
+            <th>估算频率</th>
+            <th>状态</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      `;
+
+      const tbody = table.querySelector("tbody");
+      items.forEach((item) => {
+        const tr = document.createElement("tr");
+        const rate = eventRates[item.event] || 0;
+        const fast = rate >= 1000;
+        tr.innerHTML = `
+          <td title="${item.name}">${item.name}</td>
+          <td><span class="badge${fast ? " warn" : ""}">@ ${item.event}</span></td>
+          <td>${rate} Hz</td>
+          <td>${fast ? "高频" : "DAQ"}</td>
+        `;
+        tbody.append(tr);
+      });
+
+      target.append(table);
+    }
+
+    function renderSummary() {
+      const items = selectedItems();
+      const visible = visibleItems();
+      const distribution = eventDistribution(items);
+      const bus = busLoad(items);
+      const rate = totalRate(items);
+      const batchLabel = items.length === 0
+        ? "未选择"
+        : distribution.length === 1
+          ? distribution[0]
+          : "混合";
+
+      document.getElementById("shownCount").textContent = String(visible.length);
+      document.getElementById("selectedCount").textContent = String(items.length);
+      document.getElementById("batchHint").textContent = `选 ${items.length} · ${distribution.join(" · ") || "无事件"} · CAN 估算 ${bus.toFixed(1)}%`;
+      document.getElementById("footerSummary").innerHTML = `<strong>选 ${items.length}</strong> · ${distribution.join(" · ") || "无事件"} · CAN 估算 ${bus.toFixed(1)}%`;
+      document.getElementById("batchState").textContent = batchLabel;
+      document.getElementById("batchState").className = batchLabel.includes("1ms") ? "badge warn" : "badge";
+      document.getElementById("metricChannels").textContent = String(items.length);
+      document.getElementById("metricFastest").textContent = fastestEvent(items);
+      document.getElementById("metricRate").textContent = `${rate} Hz`;
+      document.getElementById("metricBus").textContent = `${bus.toFixed(1)}%`;
+    }
+
+    function render() {
+      const items = selectedItems();
+      selectedOnlyEl.setAttribute("aria-pressed", String(state.selectedOnly));
+      daqOnlyEl.setAttribute("aria-pressed", String(state.daqOnly));
+      renderBatchSelect(items);
+      renderList();
+      renderSelectedTable(items);
+      renderSummary();
+    }
+
+    searchEl.addEventListener("input", () => {
+      state.query = searchEl.value;
+      render();
+    });
+
+    selectedOnlyEl.addEventListener("click", () => {
+      state.selectedOnly = !state.selectedOnly;
+      render();
+    });
+
+    daqOnlyEl.addEventListener("click", () => {
+      state.daqOnly = !state.daqOnly;
+      render();
+    });
+
+    batchEventEl.addEventListener("change", () => {
+      const next = batchEventEl.value;
+      if (!next || next === "mixed") return;
+      selectedItems().forEach((item) => {
+        if (item.events.includes(next)) item.event = next;
+      });
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

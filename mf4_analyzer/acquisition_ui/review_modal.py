@@ -1,4 +1,4 @@
-"""ReviewModal — Stage 5 post-record review dialog.
+"""ReviewModal — post-record review dialog.
 
 Spec: ``docs/analyzer/acquisition/specs/2026-05-15-acquisition-cockpit-ui-spec.md``
 §State Machine Contract / `ReviewModal`.
@@ -72,9 +72,9 @@ AUTO_STOP_BANNER_TEXT = "自动停止 · ring buffer 持续告警"
 
 @dataclass
 class ReviewContext:
-    """Inputs the review modal consumes; built by Stage 5 cockpit code.
+    """Inputs the review modal consumes; built by cockpit code.
 
-    The modal does NOT compute these — it only displays them. Stage 5's
+    The modal does NOT compute these — it only displays them. The
     ``CockpitMainWindow._open_review_modal`` builds the context from the
     finalized writer + session summary.
     """
@@ -96,7 +96,7 @@ class ReviewContext:
 
 
 class ReviewModal(QDialog):
-    """Stage 5 review modal.
+    """Review modal.
 
     The dialog is non-modal-friendly: it uses ``open()``-style semantics
     in production so the cockpit's event loop is not blocked, and exposes
@@ -406,7 +406,7 @@ class ReviewModal(QDialog):
         explicitly clicks Analyzer-open or dismisses the modal.
         """
         self._chosen_action = ACTION_SAVE_AND_ARCHIVE
-        # File is finalized at this point — Stage 5 sequencing guarantees
+        # File is finalized at this point — cockpit sequencing guarantees
         # so. Mark save-complete unconditionally.
         self._save_ok = True
         archive_error: Exception | None = None

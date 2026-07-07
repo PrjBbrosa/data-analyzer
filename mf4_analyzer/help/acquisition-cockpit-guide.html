@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MF4 采集 Cockpit 使用说明</title>
+<style>
+  body {
+    margin: 0;
+    background: #eef2f7;
+    color: #111827;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  main { width: min(980px, calc(100vw - 32px)); margin: 0 auto; padding: 32px 0 72px; }
+  header, section {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(15,23,42,.06);
+  }
+  header { padding: 26px 28px; margin-bottom: 16px; }
+  section { padding: 22px 24px; margin-bottom: 14px; }
+  h1, h2, h3 { margin: 0; }
+  h1 { font-size: clamp(26px, 3vw, 38px); line-height: 1.15; }
+  h2 { font-size: 19px; margin-bottom: 6px; }
+  h3 { font-size: 15px; margin-top: 16px; }
+  p { margin: 8px 0; }
+  .eyebrow { color: #1769e0; font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+  .muted { color: #64748b; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .box { border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; padding: 14px; }
+  .pill {
+    display: inline-flex;
+    min-height: 24px;
+    align-items: center;
+    border-radius: 999px;
+    padding: 2px 8px;
+    margin: 2px;
+    color: #0f4cb5;
+    background: #e7f0ff;
+    font-size: 12px;
+    font-weight: 750;
+  }
+  code { border-radius: 5px; padding: 1px 5px; background: #edf2f7; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  ol { margin: 10px 0 0 22px; padding: 0; }
+  li { margin: 8px 0; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Acquisition Cockpit</p>
+    <h1>MF4 采集 Cockpit 使用说明</h1>
+    <p class="muted">从 Analyzer 三击 logo 打开 Cockpit，完成 A2L、传输、采样事件、录制、Stop &amp; 复盘、在 Analyzer 打开 MF4 的链路。</p>
+  </header>
+
+  <section>
+    <h2>1 · 入口</h2>
+    <ol>
+      <li>打开 Analyzer 主窗口。</li>
+      <li>连续三击右上角品牌 logo，打开或唤起采集 Cockpit。</li>
+      <li>状态栏看到 <span class="pill">后端: FAKE·演示</span> 时，不要当作真实 ECU 录制证据。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>2 · 录制前准备</h2>
+    <div class="grid">
+      <div class="box"><b>A2L</b><p>点顶部 <span class="pill">A2L</span> 选择目标 ECU 的 <code>.a2l</code>。加载后左侧显示 measurement 和 DAQ event。</p></div>
+      <div class="box"><b>传输</b><p>点 <span class="pill">传输未配置</span> 或齿轮，设置 Vector App、Channel、bitrate、CAN-FD。</p></div>
+      <div class="box"><b>输出</b><p>点 <span class="pill">输出</span> 选择 MF4 保存目录。</p></div>
+      <div class="box"><b>健康条</b><p>连接后观察 HW、CAN、XCP、DAQ、REC。红色状态会阻止录制。</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3 · 选择通道和采样事件</h2>
+    <ol>
+      <li>先勾选多个 measurement。</li>
+      <li>顶部 <span class="pill">采样事件</span> 下拉会出现；若选中项采样事件不一致，显示 <span class="pill">混合</span>。</li>
+      <li>批量选择 <span class="pill">100ms</span>、<span class="pill">10ms</span>、<span class="pill">1ms</span> 等共同支持的事件。</li>
+      <li>每行右侧 <span class="pill">@ 10ms</span> 是该通道当前采样事件，可单独微调。</li>
+    </ol>
+    <p class="muted">收藏、最近、组、类型、DBC 暂时隐藏；当前主流程只保留 <span class="pill">只看已选</span> 和 <span class="pill">有 DAQ</span>。</p>
+  </section>
+
+  <section>
+    <h2>4 · 连接、录制、复盘</h2>
+    <ol>
+      <li>点 <span class="pill">连接 ECU</span>。连上后中间 live cards streaming，右侧显示录制预检。</li>
+      <li>点 <span class="pill">● 采集</span> 开始写盘。录制中 A2L 勾选和采样事件冻结。</li>
+      <li>点 <span class="pill">■ Stop &amp; 复盘</span> 停止、flush、finalize MF4，并打开复盘弹窗。</li>
+      <li>在复盘里点 <span class="pill">在 Analyzer 打开</span>，把本次 MF4 交给 Analyzer 的 load_file 链路。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>5 · 排查</h2>
+    <h3>不能选 1ms / 10ms？</h3>
+    <p>批量下拉只显示所有已选通道共同支持的 DAQ event；单行 <span class="pill">@</span> 下拉显示该 measurement 自己支持的事件。</p>
+    <h3>连接失败？</h3>
+    <p>按状态栏提示补齐 Transport、A2L IF_DATA 和 measurement selection。真实 ECU 采集不能走 FAKE 后端。</p>
+  </section>
+</main>
+</body>
+</html>

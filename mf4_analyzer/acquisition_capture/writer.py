@@ -2,7 +2,7 @@
 
 Spec §Recorder Backend channel-naming rule: every MF4 channel name MUST
 equal the A2L measurement ``name`` verbatim (no prefix, no suffix,
-no transliteration). Stage 5 ``expected_channels`` round-trips depend on
+no transliteration). Review ``expected_channels`` round-trips depend on
 this contract; the writer-spike report (sibling .md file under
 ``docs/analyzer/acquisition/reports/``) pins the rule.
 
@@ -125,7 +125,7 @@ class Mf4Writer:
                 if ts.size == 0:
                     # asammdf rejects empty Signal — emit a single
                     # placeholder sample at t=0 so the channel name is
-                    # still present (channel-naming contract). Stage 5
+                    # still present (channel-naming contract). Review
                     # diagnostics will surface "zero samples" as a
                     # post-record warning, not a writer failure.
                     ts = np.array([0.0])

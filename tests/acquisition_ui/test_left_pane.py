@@ -14,7 +14,7 @@ Verifies:
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QFrame, QLabel, QToolButton
+from PyQt5.QtWidgets import QComboBox, QLabel, QToolButton, QWidget
 
 from can_logger.p0.a2l_probe import MeasurementSummary
 from mf4_analyzer.acquisition_capture.search import search_measurements
@@ -50,6 +50,40 @@ def _pool() -> tuple[MeasurementSummary, ...]:
     )
 
 
+def _multi_event_pool() -> tuple[MeasurementSummary, ...]:
+    return (
+        MeasurementSummary(
+            name="EngSpdAvg",
+            address=0x40000000,
+            datatype="UWORD",
+            unit="rpm",
+            conversion="",
+            available_events=("event_100ms", "event_10ms", "event_1ms"),
+        ),
+        MeasurementSummary(
+            name="EngTrqAct",
+            address=0x40000004,
+            datatype="SWORD",
+            unit="Nm",
+            conversion="",
+            available_events=("event_100ms", "event_10ms"),
+        ),
+    )
+
+
+def _row_event_combo(pane: LeftPane, name: str) -> QComboBox:
+    for combo in pane.findChildren(QComboBox, "measurementEventSelect"):
+        if combo.property("measurementName") == name:
+            return combo
+    raise AssertionError(f"missing row event combo for {name!r}")
+
+
+def _row_widget(pane: LeftPane, index: int) -> QWidget:
+    widget = pane._list.itemWidget(pane._list.item(index))
+    assert widget is not None
+    return widget
+
+
 def test_pool_shows_with_daq_filter_default_on(qapp):
     pane = LeftPane()
     pane.set_pool(_pool(), a2l_has_daq_events=True)
@@ -57,10 +91,10 @@ def test_pool_shows_with_daq_filter_default_on(qapp):
     assert pane._search.placeholderText() == "搜索 name / 0x40A..."
     # 有 DAQ defaults on ⇒ OnlyCal (no available_events) is filtered.
     assert pane._list.count() == 2
-    first_row_text = pane._list.item(0).text()
-    assert "EngSpdAvg" in first_row_text
-    assert "rpm" in first_row_text
-    assert "@ 10ms" in first_row_text
+    first_row = _row_widget(pane, 0)
+    assert first_row.findChild(QLabel, "measurementName").text() == "EngSpdAvg"
+    assert "rpm" in first_row.findChild(QLabel, "measurementDetail").text()
+    assert _row_event_combo(pane, "EngSpdAvg").currentText() == "10ms"
 
 
 def test_disabled_daq_chip_on_no_daq_a2l(qapp):
@@ -117,7 +151,7 @@ def test_freeze_blocks_selection_changes(qapp):
     assert len(pane.current_selection()) == 1
 
 
-def test_filter_chip_row_has_v3_six_chips(qapp):
+def test_filter_chip_row_hides_unfinished_filters(qapp):
     pane = LeftPane()
     pane.set_pool(_pool(), a2l_has_daq_events=True)
     pane.show()
@@ -128,7 +162,9 @@ def test_filter_chip_row_has_v3_six_chips(qapp):
         for chip in pane.findChildren(QToolButton, "filterChip")
         if chip.isVisible()
     ]
-    assert chip_texts == ["只看已选", "有 DAQ", "最近", "收藏", "组: All", "类型"]
+    assert chip_texts == ["只看已选", "有 DAQ"]
+    assert pane.minimumWidth() == 420
+    assert pane.maximumWidth() == 420
 
 
 def test_summary_updates_total_visible_selected_counts(qapp):
@@ -142,21 +178,59 @@ def test_summary_updates_total_visible_selected_counts(qapp):
     assert summary.text() == "3 · 显示 2 · 选 1"
 
 
-def test_batch_bar_appears_for_common_event_selection(qapp):
+def test_batch_event_selector_applies_to_all_selected_rows(qapp):
     pane = LeftPane()
-    pane.set_pool(_pool(), a2l_has_daq_events=True)
+    pane.set_pool(_multi_event_pool(), a2l_has_daq_events=True)
     pane.show()
     qapp.processEvents()
-    batch_bar = pane.findChild(QFrame, "leftBatchBar")
+    batch_combo = pane.findChild(QComboBox, "batchEventSelect")
 
-    assert batch_bar is not None
-    assert batch_bar.isVisible() is False
+    assert batch_combo is not None
+    assert batch_combo.isVisible() is False
+
     pane._list.item(0).setCheckState(Qt.Checked)
     pane._list.item(1).setCheckState(Qt.Checked)
     qapp.processEvents()
-    assert batch_bar.isVisible() is True
-    assert "已选" in batch_bar.text()
-    assert "event_10ms" in batch_bar.text()
+
+    assert batch_combo.isVisible() is True
+    assert batch_combo.isEnabled() is True
+    assert batch_combo.minimumWidth() >= 112
+    assert [batch_combo.itemText(i) for i in range(batch_combo.count())] == [
+        "100ms",
+        "10ms",
+    ]
+
+    batch_combo.setCurrentText("10ms")
+    qapp.processEvents()
+
+    assert {m.name: m.event for m in pane.current_selection()} == {
+        "EngSpdAvg": "event_10ms",
+        "EngTrqAct": "event_10ms",
+    }
+    assert "事件 10ms × 2" in pane._footer.text()
+
+
+def test_row_event_selector_overrides_one_selected_channel(qapp):
+    pane = LeftPane()
+    pane.set_pool(_multi_event_pool(), a2l_has_daq_events=True)
+    pane.show()
+    qapp.processEvents()
+    pane._list.item(0).setCheckState(Qt.Checked)
+    pane._list.item(1).setCheckState(Qt.Checked)
+    qapp.processEvents()
+
+    _row_event_combo(pane, "EngSpdAvg").setCurrentText("1ms")
+    qapp.processEvents()
+    selected = {m.name: m.event for m in pane.current_selection()}
+    assert selected == {
+        "EngSpdAvg": "event_1ms",
+        "EngTrqAct": "event_100ms",
+    }
+
+    batch_combo = pane.findChild(QComboBox, "batchEventSelect")
+    assert batch_combo is not None
+    assert batch_combo.currentText() == "混合"
     assert "选 2" in pane._footer.text()
     assert "CAN 估算" in pane._footer.text()
-    assert "事件 10ms × 2" in pane._footer.text()
+    assert "事件 1ms × 1" in pane._footer.text()
+    assert "100ms × 1" in pane._footer.text()

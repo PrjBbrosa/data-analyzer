@@ -495,10 +495,8 @@ QLabel#cockpitTransportStatusChip[transportState="configured"] {
 
 QFrame#cockpitSelector,
 QFrame#cockpitSelectorA2l,
-QFrame#cockpitSelectorDbc,
 QFrame#cockpitSelectorOutput,
 QPushButton#cockpitSelectorA2l,
-QPushButton#cockpitSelectorDbc,
 QPushButton#cockpitSelectorOutput {
     min-height: 28px;
     max-height: 28px;
@@ -517,18 +515,15 @@ QPushButton#cockpitSelectorOutput:hover {
     background-color: #fbfdff;
 }
 QFrame#cockpitSelector:disabled,
-QFrame#cockpitSelectorDbc:disabled,
-QPushButton#cockpitSelectorDbc:disabled {
+QPushButton#cockpitSelectorOutput:disabled {
     color: #94a3b8;
     background-color: #f8fafc;
     border-color: #eef2f7;
 }
 QFrame#cockpitSelector QLabel#cockpitSelectorKey,
 QFrame#cockpitSelectorA2l QLabel#cockpitSelectorKey,
-QFrame#cockpitSelectorDbc QLabel#cockpitSelectorKey,
 QFrame#cockpitSelectorOutput QLabel#cockpitSelectorKey,
 QPushButton#cockpitSelectorA2l QLabel#cockpitSelectorKey,
-QPushButton#cockpitSelectorDbc QLabel#cockpitSelectorKey,
 QPushButton#cockpitSelectorOutput QLabel#cockpitSelectorKey {
     color: #64748b;
     font-size: 11px;
@@ -536,17 +531,14 @@ QPushButton#cockpitSelectorOutput QLabel#cockpitSelectorKey {
 }
 QFrame#cockpitSelector QLabel#cockpitSelectorValue,
 QFrame#cockpitSelectorA2l QLabel#cockpitSelectorValue,
-QFrame#cockpitSelectorDbc QLabel#cockpitSelectorValue,
 QFrame#cockpitSelectorOutput QLabel#cockpitSelectorValue,
 QPushButton#cockpitSelectorA2l QLabel#cockpitSelectorValue,
-QPushButton#cockpitSelectorDbc QLabel#cockpitSelectorValue,
 QPushButton#cockpitSelectorOutput QLabel#cockpitSelectorValue {
     color: #111827;
     font-size: 12px;
     font-weight: 600;
 }
 QPushButton#cockpitSelectorA2l QLabel#cockpitSelectorCaret,
-QPushButton#cockpitSelectorDbc QLabel#cockpitSelectorCaret,
 QPushButton#cockpitSelectorOutput QLabel#cockpitSelectorCaret {
     color: #64748b;
     font-size: 10px;
@@ -674,6 +666,46 @@ QFrame#leftPane {
     border: none;
     border-right: 1px solid #eef2f7;
     background-color: #ffffff;
+}
+QListWidget#measurementList::indicator {
+    width: 0;
+    height: 0;
+}
+QFrame#measurementRow {
+    border: none;
+    background-color: transparent;
+}
+QLabel#measurementName {
+    color: #111827;
+    font-size: 12px;
+    font-weight: 650;
+}
+QLabel#measurementDetail {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 500;
+}
+QLabel#measurementEventPrefix {
+    color: #475569;
+    font-size: 12px;
+    font-weight: 800;
+}
+QComboBox#measurementEventSelect,
+QComboBox#batchEventSelect {
+    min-height: 24px;
+    padding: 1px 6px;
+    border: 1px solid #dfe5ee;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #111827;
+    font-size: 11px;
+    font-weight: 600;
+}
+QComboBox#measurementEventSelect:disabled,
+QComboBox#batchEventSelect:disabled {
+    color: #94a3b8;
+    background-color: #f8fafc;
+    border-color: #eef2f7;
 }
 QPushButton#filterChip,
 QToolButton#filterChip,

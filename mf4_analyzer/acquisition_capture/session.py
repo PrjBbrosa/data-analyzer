@@ -28,7 +28,7 @@ class SelectedMeasurement:
     ``name`` is the A2L measurement name **verbatim** — this is the
     load-bearing channel-naming contract (spec §Recorder Backend). The
     Mf4Writer MUST use ``name`` as the MF4 channel name with no prefix or
-    suffix; Stage 5's ``expected_channels`` round-trip depends on it.
+    suffix; review ``expected_channels`` round-trips depend on it.
 
     ``event`` is the DAQ event name (e.g. ``event_10ms``) or ``None`` for
     A2Ls that lack ``IF_DATA XCP DAQ_EVENT`` nodes.

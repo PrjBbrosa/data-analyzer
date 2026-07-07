@@ -12,6 +12,11 @@ documentation.
 | UI prototypes | `docs/analyzer/ui-prototypes/` | HTML mockups, visual references, screenshots, and interaction option demos. |
 | Reviews | `docs/analyzer/reviews/` | Analyzer code reviews, re-reviews, execution reports, and follow-up audit artifacts. |
 
+Published guide entry points:
+
+- Analyzer guide: `docs/analyzer/user-guide/user-guide.html`
+- Acquisition Cockpit guide: `docs/analyzer/user-guide/acquisition-cockpit-guide.html`
+
 ## Acquisition Rule
 
 Acquisition already has its own feature area. Keep related future files there:

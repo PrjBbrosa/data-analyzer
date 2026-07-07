@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from mf4_analyzer.acquisition_capture.config_store import (
     load_or_default,
+    save_a2l_path,
     save_transport,
 )
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
@@ -133,3 +135,61 @@ def test_corrupt_yaml_keeps_cockpit_alive(qapp, tmp_path):
         assert "配置文件" in msg
     finally:
         window.deleteLater()
+
+
+def _fake_summary(a2l_path):
+    measurement = SimpleNamespace(
+        name="EngSpd",
+        unit="rpm",
+        address=0x1000,
+        available_events=("event_10ms",),
+    )
+    return SimpleNamespace(
+        path=str(a2l_path),
+        total_measurements=1,
+        measurements=[measurement],
+        event_capacity={"event_10ms": 1},
+        measurement_events={},
+        a2l_has_daq_events=True,
+    )
+
+
+def _stub_a2l_chain(window, monkeypatch, a2l_path):
+    monkeypatch.setattr(
+        "can_logger.p0.ifdata_xcp.parse_ifdata_xcp_file",
+        lambda _path: (object(),),
+    )
+    window._load_measurement_summary = (
+        lambda _path: (_fake_summary(a2l_path), None)
+    )
+
+
+def test_apply_a2l_persists_and_rehydrates(qtbot, tmp_path, monkeypatch):
+    config_path = tmp_path / "acquisition_config.yaml"
+    a2l = tmp_path / "demo.a2l"
+    a2l.write_text("stubbed", encoding="utf-8")
+
+    window1 = CockpitMainWindow(config_path=config_path, allow_fake_backend=True)
+    qtbot.addWidget(window1)
+    _stub_a2l_chain(window1, monkeypatch, a2l)
+    window1.apply_a2l_path(a2l)
+    assert str(a2l) in config_path.read_text(encoding="utf-8")
+
+    seen = []
+    window2 = CockpitMainWindow(config_path=config_path, allow_fake_backend=True)
+    qtbot.addWidget(window2)
+    window2.apply_a2l_path = lambda path: seen.append(Path(path))
+    qtbot.wait(80)
+    assert seen == [a2l]
+
+
+def test_hydrate_skips_missing_a2l(qtbot, tmp_path):
+    config_path = tmp_path / "acquisition_config.yaml"
+    save_a2l_path(tmp_path / "gone.a2l", config_path=config_path)
+
+    seen = []
+    window = CockpitMainWindow(config_path=config_path, allow_fake_backend=True)
+    qtbot.addWidget(window)
+    window.apply_a2l_path = lambda path: seen.append(path)
+    qtbot.wait(80)
+    assert seen == []

@@ -1,8 +1,7 @@
 """A2L measurement left pane.
 
-Spec §Left Pane Width target: 280 px; fixed search box, filters,
-selected-signal list, raster dropdown, and footer with selected count
-and estimated bandwidth.
+Left-pane measurement picker with a wider A2L list, selected-signal
+event controls, and footer estimates.
 
 Stage 4 consumes the existing search/filter helpers:
 
@@ -11,7 +10,7 @@ Stage 4 consumes the existing search/filter helpers:
   renders the match highlights from those spans — **never** re-runs
   substring matching on the UI side.
 - ``mf4_analyzer.acquisition_capture.a2l_events.build_event_intersection``
-  drives the batch-raster dropdown.
+  drives the batch sampling-event dropdown.
 
 A2L parsing and DAQ-event extraction live in the capture core; the
 pane stays Qt-only and consumes pre-computed measurement summaries.
@@ -19,15 +18,18 @@ pane stays Qt-only and consumes pre-computed measurement summaries.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -43,10 +45,6 @@ from PyQt5.QtWidgets import (
 from can_logger.p0.a2l_probe import MeasurementSummary
 from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.a2l_events import build_event_intersection
-from mf4_analyzer.acquisition_capture.config_store import (
-    load_or_default,
-    toggle_favorite,
-)
 from mf4_analyzer.acquisition_capture.preflight_estimates import (
     estimate_can_bus_load,
 )
@@ -62,20 +60,24 @@ from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 # row. Project palette interaction blue.
 _MATCH_BLUE = QColor("#1769E0")
 _SELECTED_ROW_BG = QColor("#EAF2FF")
+_EVENT_TIME_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(us|ms|s)", re.IGNORECASE)
 
 
 class _BatchBar(QFrame):
-    """Small batch-action strip shown when selected rows share an event."""
+    """Batch event strip for selected measurements."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("leftBatchBar")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(8)
         self._label = QLabel(self)
         layout.addWidget(self._label)
-        layout.addStretch(1)
+        self.event_combo = QComboBox(self)
+        self.event_combo.setObjectName("batchEventSelect")
+        self.event_combo.setMinimumWidth(112)
+        layout.addWidget(self.event_combo)
 
     def setText(self, text: str) -> None:
         self._label.setText(text)
@@ -104,10 +106,10 @@ class LeftPane(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("leftPane")
-        self.setFixedWidth(280)
+        self.setFixedWidth(420)
         self._pool: tuple[MeasurementSummary, ...] = ()
         self._selected_names: set[str] = set()
-        self._favorite_names: set[str] = set()
+        self._selected_events: dict[str, str] = {}
         self._config_path: Path | None = None
         self._a2l_has_daq_events: bool = False
         self._frozen: bool = False
@@ -153,25 +155,14 @@ class LeftPane(QFrame):
         self._has_daq_chip.setChecked(True)  # spec: default on.
         self._has_daq_chip.toggled.connect(self._refresh_list)
         filter_row.addWidget(self._has_daq_chip)
-        recent_chip = self._make_filter_chip("最近")
-        recent_chip.setEnabled(False)
-        recent_chip.setToolTip("此筛选将在后续版本启用")
-        filter_row.addWidget(recent_chip)
         filter_row.addStretch(1)
         filter_rows.addLayout(filter_row)
-
-        filter_row_2 = QHBoxLayout()
-        filter_row_2.setSpacing(4)
-        for label in ("收藏", "组: All", "类型"):
-            chip = self._make_filter_chip(label)
-            chip.setEnabled(False)
-            chip.setToolTip("此筛选将在后续版本启用")
-            filter_row_2.addWidget(chip)
-        filter_row_2.addStretch(1)
-        filter_rows.addLayout(filter_row_2)
         outer.addLayout(filter_rows)
 
         self._batch_bar = _BatchBar(self)
+        self._batch_bar.event_combo.currentIndexChanged.connect(
+            self._on_batch_event_changed
+        )
         self._batch_bar.setVisible(False)
         outer.addWidget(self._batch_bar)
 
@@ -222,24 +213,29 @@ class LeftPane(QFrame):
         # Drop selections that fell outside the new pool.
         pool_names = {m.name for m in self._pool}
         self._selected_names = {n for n in self._selected_names if n in pool_names}
+        self._selected_events = {
+            name: event
+            for name, event in self._selected_events.items()
+            if name in self._selected_names
+            and self._measurement_supports_event_name(name, event)
+        }
+        for name in self._selected_names:
+            measurement = self._measurement_by_name(name)
+            if measurement is not None and name not in self._selected_events:
+                event = self._default_event_for(measurement)
+                if event is not None:
+                    self._selected_events[name] = event
         self._refresh_list()
         self._refresh_footer()
         self.selection_changed.emit()
 
     def set_config_path(self, path: Path | str | None) -> None:
-        """Set the ``acquisition_config.yaml`` path used by favorites."""
+        """Set the ``acquisition_config.yaml`` path.
+
+        Favorites are currently hidden in the cockpit UI, but the path
+        is retained so settings hydration remains stable.
+        """
         self._config_path = Path(path) if path is not None else None
-        self._favorite_names.clear()
-        if self._config_path is not None and self._config_path.exists():
-            store = load_or_default(
-                project_root=self._config_path.parent,
-                cli_config_path=self._config_path,
-            )
-            self._favorite_names = {
-                str(item.get("name"))
-                for item in store.favorites
-                if item.get("name")
-            }
 
     def set_a2l_has_daq_events(self, has_events: bool) -> None:
         """Spec §Left Pane fallback: ``有 DAQ`` chip flips off + disabled
@@ -270,12 +266,14 @@ class LeftPane(QFrame):
             m = by_name.get(name)
             if m is None:
                 continue
-            event = m.available_events[0] if m.available_events else None
+            event = self._selected_event_for(m)
             out.append(
                 SelectedMeasurement(
                     name=m.name,
                     unit=m.unit,
                     event=event,
+                    event_rate_hz=_event_rate_hz(event),
+                    address_hex=f"0x{int(m.address):08X}",
                 )
             )
         return out
@@ -296,13 +294,6 @@ class LeftPane(QFrame):
             return menu
         if len(measurements) == 1:
             m = measurements[0]
-            fav_text = "取消收藏" if m.name in self._favorite_names else "⭐ 收藏"
-            fav_action = menu.addAction(fav_text)
-            fav_action.triggered.connect(
-                lambda _checked=False, measurement=m: self._toggle_favorite(
-                    measurement
-                )
-            )
             copy_name = menu.addAction("复制名字")
             copy_name.triggered.connect(
                 lambda _checked=False, name=m.name: QApplication.clipboard().setText(
@@ -319,8 +310,6 @@ class LeftPane(QFrame):
             jump.setEnabled(False)
             return menu
 
-        raster_action = menu.addAction("批量设 raster ...")
-        raster_action.setEnabled(bool(build_event_intersection(measurements)))
         copy_list = menu.addAction("复制为列表")
         copy_list.triggered.connect(
             lambda _checked=False, rows=tuple(measurements): self._copy_measurement_list(
@@ -384,6 +373,7 @@ class LeftPane(QFrame):
         for measurement, match_spans in rows:
             item = self._build_row(measurement, match_spans)
             self._list.addItem(item)
+            self._list.setItemWidget(item, self._build_row_widget(measurement))
         self._list.blockSignals(False)
         self._refresh_summary()
         self._refresh_footer()
@@ -396,15 +386,14 @@ class LeftPane(QFrame):
         parts = [m.name]
         if m.unit:
             parts.append(m.unit)
-        if m.available_events:
-            parts.append(f"@ {_format_event_label(m.available_events[0])}")
+        event = self._selected_event_for(m)
+        if event is not None:
+            parts.append(f"@ {_format_event_label(event)}")
         text = "  ·  ".join(parts)
-        item = QListWidgetItem(text)
-        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(
-            Qt.Checked if m.name in self._selected_names else Qt.Unchecked
-        )
+        item = QListWidgetItem("")
         item.setData(Qt.UserRole, m.name)
+        item.setData(Qt.UserRole + 1, text)
+        item.setSizeHint(QSize(0, 46))
         if m.name in self._selected_names:
             item.setBackground(QBrush(_SELECTED_ROW_BG))
         if match_spans:
@@ -417,6 +406,77 @@ class LeftPane(QFrame):
             spans_text = ", ".join(f"{s}:{e}" for s, e in match_spans)
             item.setToolTip(f"匹配: {spans_text}")
         return item
+
+    def _build_row_widget(
+        self,
+        m: MeasurementSummary,
+    ) -> QWidget:
+        row = QFrame(self._list)
+        row.setObjectName("measurementRow")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(4, 3, 4, 3)
+        layout.setSpacing(8)
+
+        checkbox = QCheckBox(row)
+        checkbox.setObjectName("measurementCheckBox")
+        checkbox.setChecked(m.name in self._selected_names)
+        checkbox.setEnabled(not self._frozen)
+        checkbox.stateChanged.connect(
+            lambda state, name=m.name: self._set_measurement_selected(
+                name,
+                state == Qt.Checked,
+            )
+        )
+        layout.addWidget(checkbox, 0, Qt.AlignVCenter)
+
+        text_box = QVBoxLayout()
+        text_box.setContentsMargins(0, 0, 0, 0)
+        text_box.setSpacing(1)
+        name_label = QLabel(m.name, row)
+        name_label.setObjectName("measurementName")
+        name_label.setToolTip(m.name)
+        name_label.setMinimumWidth(0)
+        detail_parts: list[str] = []
+        if m.unit:
+            detail_parts.append(m.unit)
+        datatype = getattr(m, "datatype", "")
+        if datatype:
+            detail_parts.append(str(datatype))
+        address = getattr(m, "address", None)
+        if address is not None:
+            detail_parts.append(f"0x{int(address):08X}")
+        detail_label = QLabel(" · ".join(detail_parts), row)
+        detail_label.setObjectName("measurementDetail")
+        detail_label.setToolTip(detail_label.text())
+        detail_label.setMinimumWidth(0)
+        text_box.addWidget(name_label)
+        text_box.addWidget(detail_label)
+        layout.addLayout(text_box, stretch=1)
+
+        at_label = QLabel("@", row)
+        at_label.setObjectName("measurementEventPrefix")
+        layout.addWidget(at_label, 0, Qt.AlignVCenter)
+
+        combo = QComboBox(row)
+        combo.setObjectName("measurementEventSelect")
+        combo.setProperty("measurementName", m.name)
+        combo.setMinimumWidth(84)
+        combo.setEnabled(bool(m.available_events) and not self._frozen)
+        for event_name in m.available_events:
+            combo.addItem(_format_event_label(event_name), event_name)
+        current_event = self._selected_event_for(m)
+        if current_event is not None:
+            idx = combo.findData(current_event)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.currentIndexChanged.connect(
+            lambda _idx, name=m.name, widget=combo: self._on_row_event_changed(
+                name,
+                widget.currentData(),
+            )
+        )
+        layout.addWidget(combo, 0, Qt.AlignVCenter)
+        return row
 
     def _refresh_summary(self) -> None:
         self._summary.setText(
@@ -435,7 +495,8 @@ class LeftPane(QFrame):
                 SelectedMeasurement(
                     name=m.name,
                     unit=m.unit,
-                    event=(m.available_events[0] if m.available_events else None),
+                    event=self._selected_event_for(m),
+                    event_rate_hz=_event_rate_hz(self._selected_event_for(m)),
                 )
                 for m in chosen
             ],
@@ -443,28 +504,62 @@ class LeftPane(QFrame):
         )
         parts = [f"选 {len(selected)}", f"CAN 估算 {load:.1f}%"]
         event_counts = Counter(
-            m.available_events[0] for m in chosen if m.available_events
+            event
+            for m in chosen
+            for event in (self._selected_event_for(m),)
+            if event is not None
         )
         if event_counts:
             distribution = " · ".join(
                 f"{_format_event_label(event)} × {count}"
-                for event, count in sorted(event_counts.items())
+                for event, count in sorted(
+                    event_counts.items(),
+                    key=lambda item: _event_sort_key(item[0]),
+                )
             )
             parts.append(f"事件 {distribution}")
         self._footer.setText(" · ".join(parts))
 
     def _refresh_batch_bar(self) -> None:
-        if len(self._selected_names) < 2:
+        if not self._selected_names:
             self._batch_bar.setVisible(False)
             self._batch_bar.setText("")
             return
-        common = sorted(self.common_events())
+        chosen = self._measurements_by_names(sorted(self._selected_names))
+        common = _ordered_common_events(chosen)
+        combo = self._batch_bar.event_combo
+        old = combo.blockSignals(True)
+        combo.clear()
+        selected_events = {
+            event
+            for m in chosen
+            for event in (self._selected_event_for(m),)
+            if event is not None
+        }
+        mixed = len(selected_events) > 1
+        if mixed:
+            combo.addItem("混合", None)
+        for event in common:
+            combo.addItem(_format_event_label(event), event)
         if not common:
-            self._batch_bar.setVisible(False)
-            self._batch_bar.setText("")
+            combo.addItem("无共同事件", None)
+            combo.setCurrentIndex(0)
+            combo.setEnabled(False)
+            combo.setToolTip("选中信号没有共同的 DAQ event")
+            combo.blockSignals(old)
+            self._batch_bar.setText(f"选 {len(self._selected_names)}")
+            self._batch_bar.setVisible(True)
             return
-        first_event = common[0]
-        self._batch_bar.setText(f"已选 {len(self._selected_names)} · 同 {first_event}")
+        if mixed:
+            combo.setCurrentIndex(0)
+        else:
+            event = next(iter(selected_events), common[0])
+            idx = combo.findData(event)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.setEnabled(not self._frozen)
+        combo.setToolTip("")
+        combo.blockSignals(old)
+        self._batch_bar.setText(f"选 {len(self._selected_names)}")
         self._batch_bar.setVisible(True)
 
     # ------------------------------------------------------------------
@@ -490,25 +585,6 @@ class LeftPane(QFrame):
         menu = self._build_context_menu(measurements)
         menu.exec_(self._list.mapToGlobal(pos))
 
-    def _toggle_favorite(self, measurement: MeasurementSummary) -> None:
-        address_hex = f"0x{int(measurement.address):08X}"
-        if self._config_path is not None:
-            store = toggle_favorite(
-                measurement.name,
-                config_path=self._config_path,
-                address_hex=address_hex,
-            )
-        else:
-            store = toggle_favorite(
-                measurement.name,
-                address_hex=address_hex,
-            )
-        self._favorite_names = {
-            str(item.get("name"))
-            for item in store.favorites
-            if item.get("name")
-        }
-
     @staticmethod
     def _copy_measurement_list(
         measurements: Sequence[MeasurementSummary],
@@ -523,6 +599,7 @@ class LeftPane(QFrame):
         if not self._selected_names:
             return
         self._selected_names.clear()
+        self._selected_events.clear()
         self._refresh_list()
         self.selection_changed.emit()
 
@@ -536,15 +613,132 @@ class LeftPane(QFrame):
             self._list.blockSignals(False)
             return
         name = item.data(Qt.UserRole)
-        if item.checkState() == Qt.Checked:
+        self._set_measurement_selected(name, item.checkState() == Qt.Checked)
+
+    def _set_measurement_selected(self, name: str, selected: bool) -> None:
+        if self._frozen:
+            self._refresh_list()
+            return
+        before = set(self._selected_names)
+        if selected:
             self._selected_names.add(name)
+            measurement = self._measurement_by_name(name)
+            if measurement is not None and name not in self._selected_events:
+                event = self._default_event_for(measurement)
+                if event is not None:
+                    self._selected_events[name] = event
         else:
             self._selected_names.discard(name)
+            self._selected_events.pop(name, None)
+        if before == self._selected_names:
+            return
         self._refresh_list()
         self.selection_changed.emit()
+
+    def _on_row_event_changed(self, name: str, event: object) -> None:
+        if not isinstance(event, str):
+            return
+        self._set_measurement_event(name, event, select=True)
+
+    def _on_batch_event_changed(self, _index: int) -> None:
+        event = self._batch_bar.event_combo.currentData()
+        if not isinstance(event, str):
+            return
+        if self._frozen:
+            self._refresh_list()
+            self._refresh_footer()
+            return
+        changed = False
+        for name in list(self._selected_names):
+            if self._measurement_supports_event_name(name, event):
+                if self._selected_events.get(name) != event:
+                    self._selected_events[name] = event
+                    changed = True
+        if changed:
+            self._refresh_list()
+            self.selection_changed.emit()
+
+    def _set_measurement_event(
+        self,
+        name: str,
+        event: str,
+        *,
+        select: bool,
+    ) -> None:
+        if self._frozen:
+            self._refresh_list()
+            return
+        measurement = self._measurement_by_name(name)
+        if measurement is None or event not in measurement.available_events:
+            return
+        selected_changed = False
+        if select and name not in self._selected_names:
+            self._selected_names.add(name)
+            selected_changed = True
+        event_changed = self._selected_events.get(name) != event
+        if event_changed:
+            self._selected_events[name] = event
+        if selected_changed or event_changed:
+            self._refresh_list()
+            self.selection_changed.emit()
+
+    def _default_event_for(self, measurement: MeasurementSummary) -> str | None:
+        return measurement.available_events[0] if measurement.available_events else None
+
+    def _selected_event_for(self, measurement: MeasurementSummary) -> str | None:
+        event = self._selected_events.get(measurement.name)
+        if event in measurement.available_events:
+            return event
+        return self._default_event_for(measurement)
+
+    def _measurement_supports_event_name(self, name: str, event: str) -> bool:
+        measurement = self._measurement_by_name(name)
+        return measurement is not None and event in measurement.available_events
 
 
 def _format_event_label(event_name: str) -> str:
     if event_name.startswith("event_"):
-        return event_name[len("event_") :]
+        event_name = event_name[len("event_") :]
+    matches = list(_EVENT_TIME_RE.finditer(event_name))
+    if matches:
+        match = matches[-1]
+        return f"{match.group(1)}{match.group(2).lower()}"
     return event_name
+
+
+def _event_rate_hz(event_name: str | None) -> float:
+    if event_name is None:
+        return 100.0
+    label = _format_event_label(event_name)
+    match = _EVENT_TIME_RE.fullmatch(label)
+    if match is None:
+        return 100.0
+    value = float(match.group(1))
+    unit = match.group(2).lower()
+    if value <= 0:
+        return 100.0
+    if unit == "us":
+        return 1_000_000.0 / value
+    if unit == "ms":
+        return 1_000.0 / value
+    return 1.0 / value
+
+
+def _event_sort_key(event_name: str) -> tuple[float, str]:
+    return (-_event_rate_hz(event_name), _format_event_label(event_name))
+
+
+def _ordered_common_events(
+    measurements: Sequence[MeasurementSummary],
+) -> list[str]:
+    common = build_event_intersection(measurements)
+    if not common:
+        return []
+    first = measurements[0] if measurements else None
+    ordered = [
+        event
+        for event in (first.available_events if first is not None else ())
+        if event in common
+    ]
+    remaining = sorted(common.difference(ordered), key=_event_sort_key)
+    return ordered + remaining

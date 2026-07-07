@@ -106,14 +106,14 @@ class SettingsMixin:
         self._status.showMessage("设置已保存")
 
     def _hydrate_from_config_path(self) -> None:
-        """T1-6: pull Transport + favorites from ``acquisition_config.yaml``.
+        """T1-6: pull Transport from ``acquisition_config.yaml``.
 
         ``self._config_path`` is the yaml file (typically
         ``<project_root>/acquisition_config.yaml``). When the file does
         not exist yet we still wire :meth:`LeftPane.set_config_path` so
-        future favorite toggles write to it, but we leave
-        ``self._transport_config`` at ``None`` so the toolbar chip
-        keeps showing "传输未配置".
+        the pane keeps the same settings context, but we leave
+        ``self._transport_config`` at ``None`` so the toolbar chip keeps
+        showing "传输未配置".
         """
 
         if self._config_path is None:
@@ -135,9 +135,8 @@ class SettingsMixin:
             self._status.showMessage(f"配置文件读取失败: {exc}")
             return
 
-        # Favorites wiring is independent of "pinned" — set_config_path
-        # also seeds the left pane with the favorite set, even on a
-        # fresh project.
+        # Keep the left pane bound to the same config path even when
+        # feature-specific controls such as favorites are hidden.
         if hasattr(self, "_left_pane"):
             self._left_pane.set_config_path(self._config_path)
 
@@ -149,6 +148,15 @@ class SettingsMixin:
             self._status.showMessage(
                 f"已加载配置：{self._config_path.name}"
             )
+            stored_a2l = getattr(store, "a2l_path", None)
+            if stored_a2l:
+                a2l = Path(stored_a2l)
+                if a2l.exists():
+                    # Defer until after __init__ so the window can paint
+                    # before the native-parser subprocess work starts.
+                    QTimer.singleShot(0, lambda: self.apply_a2l_path(a2l))
+                else:
+                    self._status.showMessage(f"上次的 A2L 已不存在: {a2l}")
 
     def _persist_transport(self, transport: TransportConfig) -> None:
         """Write the new transport block back to ``self._config_path``.
@@ -170,6 +178,21 @@ class SettingsMixin:
             save_transport(transport, config_path=self._config_path)
         except Exception as exc:  # noqa: BLE001 - keep UI responsive
             self._status.showMessage(f"配置保存失败: {exc}")
+
+    def _persist_a2l_path(self, a2l_path: Path) -> None:
+        """Write the last successfully loaded A2L path to config."""
+
+        if self._config_path is None:
+            return
+
+        try:
+            from mf4_analyzer.acquisition_capture.config_store import (
+                save_a2l_path,
+            )
+
+            save_a2l_path(a2l_path, config_path=self._config_path)
+        except Exception as exc:  # noqa: BLE001 - persistence must not break load
+            self._status.showMessage(f"A2L 路径持久化失败: {exc}")
 
     def _on_settings_reset(self) -> None:
         self._apply_threshold_runtime_refresh()
@@ -352,6 +375,7 @@ class SettingsMixin:
             self._status.showMessage(
                 f"A2L 已加载：{shown}/{summary.total_measurements} measurement"
             )
+        self._persist_a2l_path(a2l_path)
 
     def _warn_a2l_load_problems(self, a2l_path: Path, problems: list[str]) -> None:
         """T2-2 toast: an operator-visible warning is the only thing
@@ -445,7 +469,7 @@ class SettingsMixin:
         # the object inspectable but only paint it for a visible cockpit.
         if self.isVisible():
             box.open()
-        # Wire Stage 5 stop branch. ``继续录制`` is dismiss-only; we
+        # Wire the stop branch. ``继续录制`` is dismiss-only; we
         # just close the box (Qt's default ``buttonClicked`` slot).
         # ``停止并复盘`` runs the same stop/flush/finalize flow as the
         # toolbar Stop.
@@ -469,9 +493,8 @@ class SettingsMixin:
     def _estimate_disk_free_bytes() -> int:
         """Return free-byte estimate for the output path's filesystem.
 
-        Stage 4 demo uses ``/tmp`` for the output; we don't actually
-        write anything, but the right panel needs a number that
-        clears the green threshold so the demo doesn't flash red.
+        The right panel needs a conservative number that clears the
+        green threshold in demo/offscreen runs.
         """
         try:
             import shutil

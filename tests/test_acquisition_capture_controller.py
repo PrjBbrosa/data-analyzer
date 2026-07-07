@@ -150,6 +150,44 @@ def test_controller_drains_ring_to_writer(tmp_path):
     assert summary.write_count == summary.rx_count
 
 
+def test_sample_tap_receives_raw_backend_batches(tmp_path):
+    seen = []
+    config = SessionConfig(
+        output_mf4=tmp_path / "tap.mf4",
+        selected=(SelectedMeasurement(name="EngSpd"),),
+    )
+    ctrl = CaptureController(config, FakeRecorderBackend(), sample_tap=seen.append)
+    ctrl.start()
+    deadline = time.monotonic() + 2.0
+    while not seen and time.monotonic() < deadline:
+        ctrl.poll_step()
+        time.sleep(0.02)
+    ctrl.stop()
+    assert seen, "tap never fired"
+    channel, ts, value = seen[0][0]
+    assert channel == "EngSpd"
+    assert isinstance(ts, float)
+    assert isinstance(value, float)
+
+
+def test_sample_tap_exception_does_not_kill_capture(tmp_path):
+    def _boom(_batch):
+        raise RuntimeError("live view died")
+
+    config = SessionConfig(
+        output_mf4=tmp_path / "tap_exception.mf4",
+        selected=(SelectedMeasurement(name="EngSpd"),),
+    )
+    ctrl = CaptureController(config, FakeRecorderBackend(), sample_tap=_boom)
+    ctrl.start()
+    deadline = time.monotonic() + 2.0
+    while ctrl.writer.write_count == 0 and time.monotonic() < deadline:
+        ctrl.poll_step()
+        time.sleep(0.02)
+    summary = ctrl.stop()
+    assert summary.write_count > 0, "capture must survive a raising tap"
+
+
 def test_controller_records_segment_when_configured(tmp_path):
     config = SessionConfig(
         output_mf4=tmp_path / "seg.mf4",

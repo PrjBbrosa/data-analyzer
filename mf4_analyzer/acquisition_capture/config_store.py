@@ -251,6 +251,39 @@ def save_transport(
     return _load_config_file(path)
 
 
+def save_a2l_path(
+    a2l_path: Path | str,
+    *,
+    config_path: Path,
+) -> ConfigStore:
+    """Persist the last successfully applied A2L path.
+
+    Mirrors ``save_transport`` as a read-modify-write operation so
+    transport, favorites, selections, filter state, and thresholds
+    survive an A2L re-selection.
+    """
+
+    path = Path(config_path)
+    if path.exists():
+        store = _load_config_file(path)
+    else:
+        store = _empty_config_for_path(path)
+
+    updated = ConfigStore(
+        pinned=True,
+        source_path=path.resolve(),
+        version=CONFIG_VERSION,
+        a2l_path=str(a2l_path),
+        favorites=[dict(item) for item in store.favorites],
+        selected=[dict(item) for item in store.selected],
+        filter_state=dict(store.filter_state),
+        threshold_overrides=dict(store.threshold_overrides),
+        transport=store.transport,
+    )
+    _write_config_file(path, updated)
+    return _load_config_file(path)
+
+
 def _empty_config_for_path(path: Path) -> ConfigStore:
     return ConfigStore(
         pinned=True,

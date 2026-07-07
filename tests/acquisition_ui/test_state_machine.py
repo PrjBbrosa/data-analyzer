@@ -13,8 +13,7 @@ Plan tasks:
 - Yellow health warns but does not disable record.
 - Dropped-frames > 100 opens the in-state ``继续/停止`` prompt.
 - 回放 tab is enabled and hosts the read-only ReplayTab.
-- DBC selector setEnabled(False) with tooltip from spec Product
-  Decisions; clicking emits nothing.
+- DBC selector is removed from the XCP-focused toolbar.
 
 These tests cover both the pure-Python state machine (no Qt) and
 the Qt ``MainWindow`` button-state behavior.
@@ -37,8 +36,9 @@ from mf4_analyzer.acquisition_capture.health import (
     XcpHealth,
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from PyQt5.QtWidgets import QWidget
+
 from mf4_analyzer.acquisition_ui.main_window import (
-    DBC_DISABLED_TOOLTIP,
     REPLAY_TAB_TITLE,
     CockpitMainWindow,
 )
@@ -260,20 +260,39 @@ def test_rec_chip_red_on_last_rx_age_even_with_empty_ring(qapp):
     window.close()
 
 
-def test_dbc_selector_disabled_and_tooltip(qapp):
-    """Spec Product Decisions: DBC selector setEnabled(False), tooltip
-    verbatim, clicking emits nothing."""
+def test_dbc_selector_removed_from_xcp_toolbar(qapp):
+    """The live XCP cockpit should not show the unused DBC selector."""
     window = CockpitMainWindow()
-    btn = window.dbc_button
-    assert btn.isEnabled() is False
-    assert btn.toolTip() == DBC_DISABLED_TOOLTIP
+    try:
+        assert window.findChild(QWidget, "cockpitSelectorDbc") is None
+    finally:
+        window.close()
 
-    # Track whether ``clicked`` ever fires.
-    fired = []
-    btn.clicked.connect(lambda: fired.append(True))
-    btn.click()  # Qt suppresses click() emission while disabled.
-    assert fired == []
-    window.close()
+
+def test_disconnected_right_panel_updates_selection_count(qapp):
+    """Changing measurement selection before connecting updates the checklist."""
+    from can_logger.p0.a2l_probe import MeasurementSummary
+
+    window = CockpitMainWindow()
+    try:
+        window.left_pane.set_pool(
+            (
+                MeasurementSummary(
+                    name="EngSpdAvg",
+                    address=0x40000000,
+                    datatype="UWORD",
+                    unit="rpm",
+                    conversion="",
+                    available_events=("event_10ms",),
+                ),
+            ),
+            a2l_has_daq_events=True,
+        )
+        window.left_pane._set_measurement_selected("EngSpdAvg", True)
+
+        assert "1 项已选" in window.right_panel.disconnected_page._row_selection.text()
+    finally:
+        window.close()
 
 
 def test_replay_tab_enabled_with_replay_widget(qapp):

@@ -99,8 +99,9 @@ def test_analyzer_toolbar_opens_cockpit_when_none_open(qapp, qtbot, monkeypatch)
     class FakeCockpit(QMainWindow):
         instances: list["FakeCockpit"] = []
 
-        def __init__(self):
+        def __init__(self, **kwargs):
             super().__init__()
+            self.kwargs = kwargs
             self.shown = False
             FakeCockpit.instances.append(self)
 
@@ -121,6 +122,10 @@ def test_analyzer_toolbar_opens_cockpit_when_none_open(qapp, qtbot, monkeypatch)
 
     assert len(FakeCockpit.instances) == 1
     assert FakeCockpit.instances[0].shown
+    config_path = FakeCockpit.instances[0].kwargs.get("config_path")
+    assert config_path is not None
+    assert config_path.name == "acquisition_config.yaml"
+    assert config_path.parent.name == ".acquisition-cockpit"
     FakeCockpit.instances[0].close()
 
 
@@ -172,7 +177,7 @@ def test_analyzer_toolbar_reopens_cockpit_after_close(qapp, qtbot, monkeypatch):
     class FakeCockpit(QMainWindow):
         instances: list["FakeCockpit"] = []
 
-        def __init__(self):
+        def __init__(self, **_kwargs):
             super().__init__()
             self.show_calls = 0
             FakeCockpit.instances.append(self)

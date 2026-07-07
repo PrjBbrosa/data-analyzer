@@ -18,10 +18,7 @@ from PyQt5.QtWidgets import (
 
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 # Module-level constants mirrored from window module for convenience.
-from ._defs import (
-    DBC_DISABLED_TOOLTIP,
-    MODE_SEGMENTS,
-)
+from ._defs import MODE_SEGMENTS
 
 
 class ToolbarMixin:
@@ -46,21 +43,6 @@ class ToolbarMixin:
         )
         self._a2l_btn.clicked.connect(self._on_pick_a2l)
         layout.addWidget(self._a2l_btn)
-
-        # DBC selector — spec Product Decisions: setEnabled(False)
-        # with the verbatim tooltip. We use a QPushButton so the click
-        # signal is connectable for the test that asserts clicking
-        # emits nothing (Qt's disabled state already suppresses
-        # ``clicked`` emission).
-        self._dbc_btn = self._make_selector_button(
-            "cockpitSelectorDbc", "DBC", "可选"
-        )
-        self._dbc_btn.setEnabled(False)
-        self._dbc_btn.setToolTip(DBC_DISABLED_TOOLTIP)
-        # If a slot were connected, Qt would still not emit while
-        # disabled; we leave it unconnected to match the spec
-        # "clicking emits nothing".
-        layout.addWidget(self._dbc_btn)
 
         self._output_btn = self._make_selector_button(
             "cockpitSelectorOutput", "输出", self._output_dir_label
@@ -163,10 +145,6 @@ class ToolbarMixin:
         self._a2l_action = QAction("A2L", self)
         self._a2l_action.setObjectName("cockpitSelectorA2lAction")
         self._a2l_action.triggered.connect(self._on_pick_a2l)
-        self._dbc_action = QAction("DBC", self)
-        self._dbc_action.setObjectName("cockpitSelectorDbcAction")
-        self._dbc_action.setEnabled(False)
-        self._dbc_action.setToolTip(DBC_DISABLED_TOOLTIP)
         self._output_action = QAction("输出", self)
         self._output_action.setObjectName("cockpitSelectorOutputAction")
         self._output_action.triggered.connect(self._on_pick_output_dir)
@@ -213,7 +191,6 @@ class ToolbarMixin:
         # recompute hides right-to-left (reversed iteration).
         self._toolbar_overflow_items: list[tuple[QWidget, QAction]] = [
             (self._a2l_btn, self._a2l_action),
-            (self._dbc_btn, self._dbc_action),
             (self._output_btn, self._output_action),
             (self._transport_chip, self._transport_action),
             (self._settings_btn, self._settings_action),
@@ -247,7 +224,6 @@ class ToolbarMixin:
         # zero.
         width_bands = {
             "cockpitSelectorA2l": (90, 160),
-            "cockpitSelectorDbc": (90, 170),
             "cockpitSelectorOutput": (110, 220),
         }
         min_w, max_w = width_bands.get(object_name, (90, 160))

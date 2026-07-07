@@ -6,8 +6,7 @@ Polish wave: ``docs/analyzer/acquisition/specs/2026-05-15-cockpit-polish-wave-sp
 
 Current deliverables wired up here:
 
-- Toolbar with A2L/DBC/output controls (DBC selector is permanently
-  disabled per spec Product Decisions), Settings, segment marker,
+- Toolbar with A2L/output controls, Settings, segment marker,
   mode label (`采集 / 回放 / 历史`), REC indicator, and stateful main
   button (`连接 ECU` / `● 采集` / `■ Stop & 复盘`).
 - 32 px health strip beneath the toolbar driven by
@@ -50,6 +49,7 @@ from PyQt5.QtWidgets import (
     QSplitter,
     QStatusBar,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -82,7 +82,6 @@ from mf4_analyzer.acquisition_ui.widgets.health_strip import HealthStrip
 from mf4_analyzer.acquisition_ui.widgets.left_pane import LeftPane
 from mf4_analyzer.acquisition_ui.widgets.right_panel import RightPanel
 from ._defs import (
-    DBC_DISABLED_TOOLTIP,
     HISTORY_TAB_TITLE,
     MODE_SEGMENTS,
     REPLAY_TAB_TITLE,
@@ -91,34 +90,36 @@ from ._toolbar_mixin import ToolbarMixin
 from ._connection_mixin import ConnectionMixin
 from ._polling_mixin import PollingMixin
 from ._settings_mixin import SettingsMixin
+from ._capture_session_mixin import CaptureSessionMixin
 
 from can_logger.p0.a2l_probe import MeasurementSummary
 
 
 class _PlaceholderReviewModal(QDialog):
-    """Stage 4 stub for the review modal.
-
-    Spec §State Machine ``ReviewModal`` requires `丢弃 / 仅保存文件 /
-    保存并归档 / 在 Analyzer 打开`. Stage 5 owns that. For Stage 4 we
-    open a minimal modal that closes itself so the four-state cycle
-    is observable end-to-end.
-    """
+    """Fallback review modal for paths without a session result."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("reviewModalPlaceholder")
-        self.setWindowTitle("复盘 (Stage 5)")
+        self.setWindowTitle("复盘（无会话数据）")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(10)
-        layout.addWidget(QLabel("Stage 5 将在此显示完整的复盘流程。"))
+        layout.addWidget(QLabel("本次录制没有可复盘的会话数据。"))
         layout.addWidget(QLabel("点击「关闭」回到「已连接 · 待机」状态。"))
         close_btn = QPushButton("关闭", self)
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
 
 
-class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMixin, QMainWindow):
+class CockpitMainWindow(
+    ToolbarMixin,
+    ConnectionMixin,
+    PollingMixin,
+    SettingsMixin,
+    CaptureSessionMixin,
+    QMainWindow,
+):
     """Acquisition Cockpit window — same-process partner of Analyzer.
 
     Construction parameters:
@@ -135,13 +136,13 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         Optional list of ``MeasurementSummary`` to seed the left
         pane in demo mode.
     ``allow_fake_backend``
-        Explicit opt-in for the Stage 4 demo path. Production/vehicle
+        Explicit opt-in for the demo path. Production/vehicle
         windows should leave this false so a failed Vector swap blocks
         the connection attempt instead of silently starting synthetic
         data.
     """
 
-    # Public Qt signals — Stage 5 wires the auto-stop handler here.
+    # Public Qt signals — the auto-stop handler is wired here.
     auto_stop_requested = pyqtSignal(str)  # arg: reason ("ring_buffer" / "disk")
 
     # Re-arm gating constants for the dropped-frame prompt (B5).
@@ -208,6 +209,8 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         self._transport_config = None
         self._ifdata_xcp = None
         self._allow_fake_backend = bool(allow_fake_backend)
+        if self._allow_fake_backend:
+            self.setWindowTitle(self.windowTitle() + " · 演示模式")
         # T1-6: optional persistent config path. When set, the cockpit
         # rehydrates Transport on startup and writes it back on every
         # Settings save. ``None`` keeps the legacy in-memory-only
@@ -217,29 +220,28 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         )
         # User-supplied A2L pool for the left pane (None in pure demo).
         self._initial_pool = tuple(initial_pool or ())
-        # Stage 5 hand-off — Stage 5 owns the real CaptureController.
-        # Until then the auto-stop path can still be exercised in tests
-        # by injecting a controller via :meth:`set_capture_controller`.
+        # CaptureSessionMixin owns the real CaptureController lifecycle.
+        # Tests can still inject a controller via
+        # :meth:`set_capture_controller`.
         # ``_last_session_summary`` carries the ``auto_stop=True`` flag
-        # forward to whichever review modal Stage 5 wires (the Stage 4
-        # placeholder modal ignores it).
+        # forward to the review modal path.
         self._capture_controller: CaptureController | None = None
         self._last_session_summary: SessionSummary | None = None
         self._review_modal: QDialog | None = None
         self._settings_dialog = None
         self._connection_warning_box: QMessageBox | None = None
-        # Stage 5 hand-off: the most recent stop/flush/finalize run, used
-        # by tests (and the eventual history tab) to introspect ordering.
+        # The most recent stop/flush/finalize run, used by tests and
+        # history/review flows to introspect ordering.
         self._last_stop_result: StopFlushFinalizeResult | None = None
-        # Optional Analyzer handoff sink — Stage 5 tests inject a spy to
+        # Optional Analyzer handoff sink — tests inject a spy to
         # observe ``MainWindow.load_file`` calls without spinning up a
         # real Analyzer window. When ``None`` the cockpit walks
         # ``QApplication.topLevelWidgets()`` to find an Analyzer instance.
         self._analyzer_handoff: "Callable[[str], None] | None" = None  # type: ignore[name-defined]
-        # Stage 5: the cockpit Stage 5 review-modal action selected on
+        # The review-modal action selected on
         # the last review modal close (one of the four spec action
         # constants, or ``None`` when the modal was dismissed without
-        # an explicit click — Stage 4 placeholder path).
+        # an explicit click or the placeholder path was used).
         self._last_review_action: str | None = None
         # Optional manifest target for ``保存并归档``. Tests pass tmp_path
         # manifests via :meth:`set_manifest_target`.
@@ -274,8 +276,8 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
             self._left_pane.set_pool(self._initial_pool)
 
         # T1-6: hydrate from acquisition_config.yaml AFTER _build_ui so
-        # the toolbar chip / left-pane favorites both exist when we
-        # push values into them.
+        # the toolbar chip / left pane both exist when we push values
+        # into them.
         self._hydrate_from_config_path()
         if not self._health_timer.isActive():
             self._health_timer.start()
@@ -318,6 +320,19 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         self.setCentralWidget(central)
         self._status = QStatusBar(self)
         self.setStatusBar(self._status)
+        self._backend_badge = QLabel(self)
+        self._backend_badge.setObjectName("cockpitBackendBadge")
+        self._status.addPermanentWidget(self._backend_badge)
+        self._help_btn = QToolButton(self)
+        self._help_btn.setObjectName("cockpitHelpButton")
+        self._help_btn.setText("?")
+        self._help_btn.setToolTip("采集使用说明")
+        self._help_btn.setAutoRaise(True)
+        self._help_btn.setCursor(Qt.PointingHandCursor)
+        self._help_btn.setFixedSize(24, 24)
+        self._help_btn.clicked.connect(self._open_acquisition_guide)
+        self._status.addPermanentWidget(self._help_btn)
+        self._update_backend_badge()
         self._update_status_bar()
         if self._settings_load_error:
             self._status.showMessage(f"设置加载失败: {self._settings_load_error}")
@@ -411,15 +426,11 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         elif st == CockpitState.CONNECTED_IDLE:
             self._start_recording()
         elif st == CockpitState.RECORDING:
-            # Stage 5: run the canonical stop/flush/finalize sequence
-            # before flipping the state machine. When no controller is
-            # attached (Stage 4 demo path) we fall through to the
-            # placeholder modal so the four-state cycle still works.
             self.request_stop_and_review()
         # Review modal close is driven by the dialog's finished signal.
 
     def request_stop_and_review(self, *, auto_stop: bool = False) -> None:
-        """Stage 5 entry point: run stop/flush/finalize and open review.
+        """Run stop/flush/finalize and open review.
 
         Called from:
         - the toolbar Stop button (``_on_main_button``),
@@ -464,7 +475,7 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
                 self._status.showMessage(f"停止失败: {exc}")
                 return
         else:
-            # No controller — Stage 4 demo path. Arm a stub summary so
+            # No controller/result — arm a stub summary so
             # downstream callers can still inspect ``auto_stop``.
             self._last_session_summary = SessionSummary(auto_stop=auto_stop)
             finalized = True
@@ -473,7 +484,7 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         self._state_machine.request_stop_recording(finalized=finalized)
         # ``_apply_state_to_ui(REVIEW_MODAL)`` will open the modal in
         # response to the state change. It picks the real review modal
-        # when ``result is not None`` and falls back to the Stage 4
+        # when ``result is not None`` and falls back to the no-session
         # placeholder otherwise.
 
     def _reset_connection_attempt_state(self) -> None:
@@ -524,6 +535,8 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         levels = self._health_strip.current_levels()
         if any(level == "red" for level in levels.values()):
             return
+        if not self._begin_capture_session():
+            return
         self._rec_start_ts = time.monotonic()
         self._fake_rec_state = "recording"
         self._cumulative_rx_count = 0
@@ -534,12 +547,12 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         self._state_machine.request_start_recording()
 
     def _open_review_modal(self) -> None:
-        """Open the Stage 5 review modal when stop/flush/finalize ran,
-        otherwise fall back to the Stage 4 placeholder.
+        """Open the review modal when stop/flush/finalize ran,
+        otherwise fall back to the no-session placeholder.
 
         Spec §State Machine `ReviewModal` requires the four-action set;
         the real :class:`ReviewModal` implements it. The placeholder
-        remains for the no-controller demo path so the four-state cycle
+        remains for the no-controller fallback path so the four-state cycle
         is observable end-to-end during development.
         """
         if self._last_stop_result is not None:
@@ -574,8 +587,7 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
             modal.open()
             self._review_modal = modal
         else:
-            # Stage 4 demo / no controller — placeholder so the cycle
-            # terminates.
+            # No controller/result — placeholder so the cycle terminates.
             modal = _PlaceholderReviewModal(self)
             modal.finished.connect(self._on_review_modal_closed)
             modal.open()
@@ -601,6 +613,9 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         except ValueError:
             # Modal closed after the state moved elsewhere — ignore.
             pass
+        if self._capture_controller is not None:
+            self._teardown_capture_session()
+            self._resume_idle_stream()
 
     def _on_analyzer_open_requested(self, mf4_path: str) -> None:
         """Bridge the review modal's ``在 Analyzer 打开`` signal to the
@@ -637,7 +652,7 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
             logger.exception("could not hand off MF4 to Analyzer")
 
     # ------------------------------------------------------------------
-    # Controller injection — Stage 5 hand-off seam.
+    # Controller injection.
     # ------------------------------------------------------------------
 
     def set_capture_controller(
@@ -645,11 +660,9 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
     ) -> None:
         """Attach the live :class:`CaptureController` for auto-stop wiring.
 
-        Stage 4 keeps the controller external — the cockpit window
-        drives the simulated backend directly via ``self._backend``.
-        Stage 5 will own controller lifecycle and call this setter once
-        the controller is constructed and started. Tests inject a
-        spy/mock here to assert ``stop()`` is invoked on auto-stop.
+        CaptureSessionMixin calls this after constructing and starting
+        the controller. Tests inject a spy/mock here to assert
+        ``stop()`` is invoked on auto-stop.
         """
         self._capture_controller = controller
 
@@ -675,10 +688,16 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         if hasattr(self, "_history_tab"):
             self._history_tab.set_manifest_path(self._manifest_path)
 
+    def _open_acquisition_guide(self) -> None:
+        from mf4_analyzer.help import open_guide
+
+        if not open_guide("acquisition"):
+            self._status.showMessage("找不到采集使用说明")
+
     @property
     def last_session_summary(self) -> SessionSummary | None:
         """Most recent :class:`SessionSummary` (None until auto-stop or
-        Stage 5's normal stop path produces one). Carries the
+        the normal stop path produces one). Carries the
         ``auto_stop=True`` flag for the review modal."""
         return self._last_session_summary
 
@@ -686,7 +705,7 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
     def last_stop_result(self) -> StopFlushFinalizeResult | None:
         """Most recent :class:`StopFlushFinalizeResult`.
 
-        Stage 5 tests inspect ``last_stop_result.order`` to assert the
+        Tests inspect ``last_stop_result.order`` to assert the
         stop/flush/finalize sequence ran in the spec-mandated order.
         """
         return self._last_stop_result
@@ -744,7 +763,7 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
         if not hasattr(self, "_right_panel"):
             return
         selection = self._left_pane.current_selection()
-        # Stage 4 demo: no real A2L event capacity — fabricate a
+        # Demo mode: no real A2L event capacity — fabricate a
         # generous mapping so the DAQ row reads green when at least
         # one measurement has an event.
         event_capacity = {
@@ -775,7 +794,18 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
     # ------------------------------------------------------------------
 
     def _on_selection_changed(self) -> None:
-        if self._state_machine.state == CockpitState.CONNECTED_IDLE:
+        if self._state_machine.state == CockpitState.DISCONNECTED:
+            self._right_panel.show_disconnected(
+                snapshot=self._health_aggregator.last,
+                first_frame_received=self._first_frame_ts is not None,
+                first_failure=(
+                    self._state_machine.last_healthy_result.first_failure
+                    if self._state_machine.last_healthy_result
+                    else None
+                ),
+                selection_count=len(self._left_pane.current_selection()),
+            )
+        elif self._state_machine.state == CockpitState.CONNECTED_IDLE:
             # Update center cards for the new selection.
             self._center.set_signals(
                 [
@@ -812,10 +842,6 @@ class CockpitMainWindow(ToolbarMixin, ConnectionMixin, PollingMixin, SettingsMix
     @property
     def main_button(self) -> QPushButton:
         return self._main_btn
-
-    @property
-    def dbc_button(self) -> QPushButton:
-        return self._dbc_btn
 
     @property
     def mode_tabs(self) -> QTabWidget:

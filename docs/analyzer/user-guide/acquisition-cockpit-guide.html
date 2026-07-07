@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MF4 采集 Cockpit 使用说明</title>
+<style>
+  :root {
+    --ink: #111827;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --bg: #eef2f7;
+    --surface: #ffffff;
+    --surface-2: #f8fafc;
+    --accent: #1769e0;
+    --accent-soft: #e7f0ff;
+    --accent-deep: #0f4cb5;
+    --ok: #059669;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --radius: 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .shell {
+    width: min(1120px, calc(100vw - 32px));
+    margin: 0 auto;
+    padding: 28px 0 72px;
+  }
+  header {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: end;
+    margin-bottom: 18px;
+  }
+  .eyebrow {
+    margin: 0 0 6px;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  h1 { margin: 0; font-size: clamp(26px, 3.2vw, 38px); line-height: 1.15; }
+  .lede { margin: 10px 0 0; max-width: 760px; color: var(--muted); font-size: 15px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+  .tag {
+    border-radius: 999px;
+    padding: 4px 10px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  nav {
+    position: sticky;
+    top: 12px;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 14px 0 22px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: rgba(255,255,255,.9);
+    backdrop-filter: blur(8px);
+  }
+  nav a {
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 650;
+  }
+  nav a:hover { background: var(--surface-2); color: var(--ink); text-decoration: none; }
+  section {
+    margin-bottom: 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 22px 24px;
+    box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(15,23,42,.06);
+  }
+  h2 { margin: 0 0 4px; font-size: 18px; }
+  h3 { margin: 18px 0 8px; font-size: 14px; }
+  .sub { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px;
+    background: var(--surface-2);
+  }
+  .card b { display: block; margin-bottom: 4px; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    margin: 2px 3px 2px 0;
+    border-radius: 999px;
+    padding: 2px 8px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .ok { color: var(--ok); font-weight: 750; }
+  .warn { color: var(--warn); font-weight: 750; }
+  .danger { color: var(--danger); font-weight: 750; }
+  .steps {
+    display: grid;
+    gap: 10px;
+    counter-reset: step;
+  }
+  .step {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+  }
+  .step::before {
+    counter-increment: step;
+    content: counter(step);
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 800;
+  }
+  .step p { margin: 0; }
+  .mock {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .mock-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    background: #f2f6fb;
+    font-weight: 750;
+  }
+  .mock-body { padding: 10px 12px; }
+  .row {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    min-height: 34px;
+    border-bottom: 1px solid #eef2f7;
+  }
+  .row:last-child { border-bottom: 0; }
+  .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 650;
+  }
+  .event {
+    border: 1px solid #b9c7d8;
+    border-radius: 8px;
+    padding: 3px 8px;
+    color: #063f39;
+    background: #d9f3ef;
+    font-size: 12px;
+    font-weight: 800;
+  }
+  .callout {
+    margin-top: 12px;
+    border-left: 4px solid var(--warn);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: #fff7ed;
+    color: #7c4a03;
+  }
+  code {
+    border-radius: 5px;
+    padding: 1px 5px;
+    background: #edf2f7;
+    color: #1f2937;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+  @media (max-width: 780px) {
+    header { grid-template-columns: 1fr; }
+    .tags { justify-content: flex-start; }
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div>
+      <p class="eyebrow">Acquisition Cockpit</p>
+      <h1>MF4 采集 Cockpit 使用说明</h1>
+      <p class="lede">这份说明覆盖从 Analyzer 隐藏入口打开 Cockpit、加载 A2L、选择 measurement、批量设置采样事件，到开始录制、Stop &amp; 复盘、在 Analyzer 打开 MF4 的完整链路。</p>
+    </div>
+    <div class="tags">
+      <span class="tag">XCP on CAN</span>
+      <span class="tag">A2L</span>
+      <span class="tag">MF4</span>
+    </div>
+  </header>
+
+  <nav>
+    <a href="#entry">入口</a>
+    <a href="#prepare">准备</a>
+    <a href="#select">选择通道</a>
+    <a href="#record">录制</a>
+    <a href="#review">复盘</a>
+    <a href="#faq">FAQ</a>
+  </nav>
+
+  <section id="entry">
+    <h2>1 · 从 Analyzer 打开采集</h2>
+    <p class="sub">入口保持隐藏，不在 Analyzer 工具栏额外放按钮。</p>
+    <div class="steps">
+      <div class="step"><p>打开 Analyzer 主窗口。</p></div>
+      <div class="step"><p>在右上角品牌 logo 上连续三击。Cockpit 会作为同进程伙伴窗口打开；再次三击会唤起已存在的 Cockpit。</p></div>
+      <div class="step"><p>状态栏右侧显示后端身份。看到 <span class="pill">后端: FAKE·演示</span> 表示当前不是实车采集。</p></div>
+    </div>
+  </section>
+
+  <section id="prepare">
+    <h2>2 · 录制前准备</h2>
+    <p class="sub">真实 ECU 采集需要 A2L、输出目录、传输配置同时有效。</p>
+    <div class="grid-3">
+      <div class="card">
+        <b>A2L</b>
+        点顶部 <span class="pill">A2L</span> 选择目标 ECU 的 <code>.a2l</code>。加载成功后左侧会显示完整 measurement 池和 DAQ event。
+      </div>
+      <div class="card">
+        <b>输出</b>
+        点顶部 <span class="pill">输出</span> 选择 MF4 保存目录。每次录制会生成唯一的 <code>capture_YYYYMMDD_HHMMSS.mf4</code>。
+      </div>
+      <div class="card">
+        <b>传输</b>
+        点 <span class="pill">传输未配置</span> 或齿轮，设置 Vector App、Channel、bitrate、CAN-FD 等参数。
+      </div>
+    </div>
+    <div class="callout">真实采集不能依赖 FAKE 后端。若状态栏提示 Transport、IF_DATA 或 measurement selection 缺失，先补齐前置条件再连接 ECU。</div>
+  </section>
+
+  <section id="select">
+    <h2>3 · 选择通道和采样事件</h2>
+    <p class="sub">推荐流程：先勾选多个通道，批量设置采样事件，再调整个别通道。</p>
+    <div class="grid-2">
+      <div>
+        <div class="steps">
+          <div class="step"><p>在左侧搜索框按 name 或地址搜索 measurement。</p></div>
+          <div class="step"><p>勾选要采集的通道。左上角显示总数、显示数、选中数。</p></div>
+          <div class="step"><p>选中多个通道后，顶部 <span class="pill">采样事件</span> 下拉出现。若当前事件不一致，会显示 <span class="pill">混合</span>。</p></div>
+          <div class="step"><p>在批量下拉里选择 <span class="pill">100ms</span>、<span class="pill">10ms</span>、<span class="pill">1ms</span> 等共同事件，应用到所有已选通道。</p></div>
+          <div class="step"><p>每行右侧的 <span class="pill">@ 10ms</span> 表示该 measurement 当前采样事件，可单独改成更快或更慢。</p></div>
+        </div>
+      </div>
+      <div class="mock">
+        <div class="mock-head"><span>A2L Measurement</span><span>323 · 显示 323 · 选 3</span></div>
+        <div class="mock-body">
+          <p><span class="pill">只看已选</span><span class="pill">有 DAQ</span></p>
+          <p><b>采样事件</b> <span class="event">混合</span> <span class="event">10ms</span> <span class="event">1ms</span></p>
+          <div class="row"><span>✓</span><span class="name">BatteryVoltage_xdu16_Buffer_Dyn</span><span class="event">@ 10ms</span></div>
+          <div class="row"><span>✓</span><span class="name">RawRotorSpeed_xds32_Buffer_Dyn</span><span class="event">@ 1ms</span></div>
+          <div class="row"><span>✓</span><span class="name">Red_cMotorTemp_gds16_Buffer_Dyn</span><span class="event">@ 10ms</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="callout">左侧暂时只保留 <b>只看已选</b> 和 <b>有 DAQ</b>。收藏、最近、组、类型、DBC 已隐藏；它们在当前 XCP/A2L 主流程里还没有稳定闭环。</div>
+  </section>
+
+  <section id="record">
+    <h2>4 · 连接 ECU 并开始录制</h2>
+    <div class="steps">
+      <div class="step"><p>点 <span class="pill">连接 ECU</span>。健康条会更新 HW、CAN、XCP、DAQ、REC 状态。</p></div>
+      <div class="step"><p>连接后进入 <span class="pill">已连接 · 待机</span>，中间 live cards 开始 streaming，右侧 <b>录制预检</b> 显示 CAN 负载、DAQ slot、磁盘写速、采样事件 / 秒。</p></div>
+      <div class="step"><p>健康项没有红色时，点 <span class="pill">● 采集</span> 开始写盘。录制期间 A2L 勾选和采样事件会冻结，避免 DAQ 配置中途变化。</p></div>
+      <div class="step"><p>录制中右侧切到实时质量监控；观察 ring buffer、write rate、dropped frames、CAN load、last frame delay、disk remaining。</p></div>
+    </div>
+  </section>
+
+  <section id="review">
+    <h2>5 · Stop &amp; 复盘</h2>
+    <div class="grid-2">
+      <div class="card">
+        <b>停止录制</b>
+        点 <span class="pill">■ Stop &amp; 复盘</span>。Cockpit 会 stop backend、flush writer、finalize MF4，并生成 session summary / preflight sidecar。
+      </div>
+      <div class="card">
+        <b>交给 Analyzer</b>
+        复盘弹窗里点 <span class="pill">在 Analyzer 打开</span>，当前 MF4 会交给 Analyzer 的公开 <code>load_file</code> 链路。
+      </div>
+      <div class="card">
+        <b>归档</b>
+        点保存并归档会写入 manifest；历史页可以按最近会话回查。
+      </div>
+      <div class="card">
+        <b>继续采集</b>
+        关闭复盘后回到已连接待机，可以调整 selection 后开始下一段录制。
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <h2>6 · 常见问题</h2>
+    <h3>为什么看不到 DBC？</h3>
+    <p>当前 Cockpit 主路径是 XCP on CAN，measurement、地址、DAQ event 都来自 A2L。DBC/raw CAN 捕获还没有接入，所以入口先移除。</p>
+    <h3>为什么有的通道不能选 1ms？</h3>
+    <p>批量下拉只显示所有已选通道共同支持的 DAQ event。单行 <span class="pill">@</span> 下拉显示该 measurement 自己支持的事件。</p>
+    <h3>怎么知道当前通道用哪个采样事件？</h3>
+    <p>看变量名右侧的 <span class="pill">@ 10ms</span>。批量下拉显示的是当前多选集合的共同状态，若多种事件并存则显示 <span class="pill">混合</span>。</p>
+  </section>
+</main>
+</body>
+</html>

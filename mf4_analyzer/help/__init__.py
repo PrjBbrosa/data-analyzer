@@ -18,6 +18,7 @@ _GUIDE_FILES = {
     'fft_time': 'ffttime-guide.html',
     'time': 'time-domain-guide.html',
     'manual': 'TraceLab-使用说明.html',
+    'acquisition': 'acquisition-cockpit-guide.html',
 }
 
 

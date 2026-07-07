@@ -20,7 +20,6 @@ from PyQt5.QtWidgets import QMessageBox  # monkeypatch anchor
 
 from .window import CockpitMainWindow, _PlaceholderReviewModal
 from ._defs import (  # re-export module-level constants (tests import these from old path)
-    DBC_DISABLED_TOOLTIP,
     REPLAY_TAB_TITLE,
     HISTORY_TAB_TITLE,
     DROPPED_FRAMES_PROMPT_TITLE,
@@ -31,7 +30,6 @@ from ._defs import (  # re-export module-level constants (tests import these fro
 __all__ = [
     "CockpitMainWindow",
     "_PlaceholderReviewModal",
-    "DBC_DISABLED_TOOLTIP",
     "REPLAY_TAB_TITLE",
     "HISTORY_TAB_TITLE",
     "DROPPED_FRAMES_PROMPT_TITLE",

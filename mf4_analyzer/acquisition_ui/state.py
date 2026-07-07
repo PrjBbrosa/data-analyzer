@@ -170,10 +170,9 @@ class CockpitStateMachine:
         """Recording → ReviewModal when ``finalized`` is True.
 
         When ``finalized`` is False the state stays in ``Recording``
-        — the caller (Stage 5) shows an error toast and lets the user
-        retry stop. Stage 4 always passes ``finalized=True`` because
-        the real stop/flush/finalize sequence lives in Stage 5; the
-        Stage 4 review modal is a closes-itself placeholder.
+        — the caller shows an error toast and lets the user retry stop.
+        The real stop/flush/finalize sequence now runs before the state
+        advances; the no-session placeholder is only a fallback path.
         """
         self._require(CockpitState.RECORDING)
         if not finalized:

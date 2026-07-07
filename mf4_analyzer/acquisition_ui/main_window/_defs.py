@@ -5,9 +5,6 @@ Putting them here avoids circular imports when the mixin files are imported
 before the package __init__.py finishes.
 """
 
-# Spec Product Decisions — DBC selector tooltip (verbatim).
-DBC_DISABLED_TOOLTIP = "Reserved for raw CAN capture; XCP path uses A2L."
-
 # Spec Product Decisions — mode tabs.
 REPLAY_TAB_TITLE = "回放"
 HISTORY_TAB_TITLE = "历史"

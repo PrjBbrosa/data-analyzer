@@ -78,6 +78,14 @@ class PollingMixin:
     # ------------------------------------------------------------------
 
     def _poll_live(self) -> None:
+        controller = self._capture_controller
+        if (
+            controller is not None
+            and self._state_machine.state == CockpitState.RECORDING
+            and hasattr(controller, "poll_step")
+        ):
+            self._poll_live_recording(controller)
+            return
         try:
             samples = self._backend.poll()
         except Exception:
@@ -87,10 +95,9 @@ class PollingMixin:
                 self._first_frame_ts = time.monotonic()
             self._fake_last_rx_monotonic = time.monotonic()
         for channel, ts, value in samples:
-            # Push into ring buffer for watermark accounting; controller
-            # would normally drain on its own loop. Stage 4 keeps the
-            # ring alive so the watermark signal is exercisable.
-            self._ring.put((ts, channel, value))
+            # Canonical shape is (channel, ts, value); the ring is shared
+            # with CaptureController during recording.
+            self._ring.put((channel, ts, value))
             self._center.push_sample(channel, ts, value)
         # Repaint sparklines.
         self._center.refresh_all(now_ts=time.monotonic())
@@ -102,6 +109,27 @@ class PollingMixin:
         if (
             self._state_machine.state == CockpitState.RECORDING
             and self._cumulative_dropped > thresholds.DROPPED_FRAMES_PROMPT_TOTAL
+            and self._dropped_prompt_can_fire()
+        ):
+            self._show_dropped_frames_prompt()
+
+    def _poll_live_recording(self, controller) -> None:
+        """Recording path: controller owns backend -> ring -> writer."""
+        try:
+            controller.poll_step()
+        except Exception as exc:  # noqa: BLE001 - surface, keep UI responsive
+            logger.exception("controller poll_step failed")
+            self._status.showMessage(f"录制轮询失败: {exc}")
+        self._cumulative_dropped = self._ring.dropped_frames
+        self._center.refresh_all(now_ts=time.monotonic())
+        self._update_status_bar()
+        if not controller.running:
+            self.request_stop_and_review(
+                auto_stop=bool(getattr(controller, "auto_stopped", False))
+            )
+            return
+        if (
+            self._cumulative_dropped > thresholds.DROPPED_FRAMES_PROMPT_TOTAL
             and self._dropped_prompt_can_fire()
         ):
             self._show_dropped_frames_prompt()
@@ -143,7 +171,7 @@ class PollingMixin:
           call ``controller.stop()`` directly (synchronous, no
           ``thread.wait()`` per lesson
           ``2026-04-25-qthread-wait-deadlocks-queued-quit.md``), arm the
-          summary, then open the Stage 4 placeholder modal so the cycle
+          summary, then open the no-session placeholder modal so the cycle
           is observable.
 
         Both arms emit ``auto_stop_requested`` and update the status
@@ -153,8 +181,8 @@ class PollingMixin:
         self._status.showMessage(f"自动停止已请求 ({reason})")
 
         if self._state_machine.state == CockpitState.RECORDING:
-            # Stage 5: run the full stop/flush/finalize sequence. This
-            # calls ``controller.stop()`` exactly once and routes through
+            # Run the full stop/flush/finalize sequence. This calls
+            # ``controller.stop()`` exactly once and routes through
             # ``_open_review_modal`` to show the real ReviewModal when
             # the result is valid, or the placeholder when the sequence
             # could not complete (e.g. the controller's writer path is a
@@ -171,8 +199,8 @@ class PollingMixin:
             else:
                 self._last_session_summary.auto_stop = True
             # If stop/flush/finalize raised before flipping the state
-            # (e.g. spy controller with empty output_mf4 path in the
-            # Stage 4 auto-stop unit test), we still need the review
+            # (e.g. spy controller with empty output_mf4 path in an
+            # auto-stop unit test), we still need the review
             # modal to surface so the four-state cycle terminates. Open
             # the placeholder directly in that recovery case.
             if (

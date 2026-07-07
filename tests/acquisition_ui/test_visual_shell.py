@@ -14,10 +14,7 @@ from mf4_analyzer.acquisition_capture.health import (
     RecHealth,
     XcpHealth,
 )
-from mf4_analyzer.acquisition_ui.main_window import (
-    DBC_DISABLED_TOOLTIP,
-    CockpitMainWindow,
-)
+from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
 from mf4_analyzer.acquisition_ui.state import HealthyPredicateResult
 
 
@@ -64,7 +61,6 @@ def test_toolbar_selectors_and_mode_segment_exist(qapp):
     window = CockpitMainWindow()
     try:
         a2l = window.findChild(QWidget, "cockpitSelectorA2l")
-        dbc = window.findChild(QWidget, "cockpitSelectorDbc")
         output = window.findChild(QWidget, "cockpitSelectorOutput")
         segment = window.findChild(QWidget, "cockpitModeSegment")
         toolbar = window.findChild(QWidget, "cockpitToolbarBand")
@@ -72,7 +68,7 @@ def test_toolbar_selectors_and_mode_segment_exist(qapp):
 
         assert toolbar is not None
         assert a2l is not None
-        assert dbc is not None
+        assert window.findChild(QWidget, "cockpitSelectorDbc") is None
         assert output is not None
         assert segment is not None
         assert toolbar.minimumHeight() == 50
@@ -89,12 +85,9 @@ def test_toolbar_selectors_and_mode_segment_exist(qapp):
         assert window.main_button.maximumHeight() == 36
         assert a2l.isEnabled() is True
         assert output.isEnabled() is True
-        assert dbc.isEnabled() is False
-        assert dbc.toolTip() == DBC_DISABLED_TOOLTIP
         assert set(_mode_buttons(window)) == {"capture", "replay", "history"}
         for selector, key_text, value_text in (
             (a2l, "A2L", "未加载"),
-            (dbc, "DBC", "可选"),
             (output, "输出", window._output_dir_label),
         ):
             key_label = selector.findChild(QLabel, "cockpitSelectorKey")
@@ -376,7 +369,7 @@ def test_toolbar_mode_overflow_uses_submenu(qapp):
 
 
 def test_toolbar_selectors_not_fixed_width(qapp):
-    """Selector widgets (A2L / DBC / Output) must use a min+max width
+    """Selector widgets (A2L / Output) must use a min+max width
     range, not setFixedWidth. Qt's setFixedWidth(N) collapses
     minimumWidth() and maximumWidth() to the same value N, so asserting
     `minimumWidth() < maximumWidth()` is the precise inverse of
@@ -386,7 +379,6 @@ def test_toolbar_selectors_not_fixed_width(qapp):
     try:
         for object_name in (
             "cockpitSelectorA2l",
-            "cockpitSelectorDbc",
             "cockpitSelectorOutput",
         ):
             btn = window.findChild(QWidget, object_name)

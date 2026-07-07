@@ -1713,7 +1713,13 @@ class MainWindow(
                 window.activateWindow()
                 return
 
-        cockpit = CockpitMainWindow()
+        from mf4_analyzer.acquisition_capture.config_store import (
+            CONFIG_FILENAME,
+            default_recent_path,
+        )
+
+        config_path = default_recent_path().parent / CONFIG_FILENAME
+        cockpit = CockpitMainWindow(config_path=config_path)
         self._acquisition_cockpit_window = cockpit
         cockpit.show()
 

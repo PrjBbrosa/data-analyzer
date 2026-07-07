@@ -4,9 +4,9 @@ Wires the recorder backend to the ring buffer and the writer, watches
 the auto-stop predicates, and produces the ``SessionSummary`` sidecar
 on stop.
 
-Stays Qt-free: Stage 4 drives ``poll_step()`` from a ``QTimer``, while
-the CLI drives it from a ``while True`` loop. The hot path itself does
-no IO; ``finalize`` is the only call that touches disk.
+Stays Qt-free: the Cockpit drives ``poll_step()`` from a ``QTimer``,
+while the CLI drives it from a ``while True`` loop. The hot path itself
+does no IO; ``finalize`` is the only call that touches disk.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class CaptureController:
             ctrl.poll_step()
         summary = ctrl.stop()
 
-    The CLI honors ``config.duration_s`` and Ctrl-C; Stage 4 wires
+    The CLI honors ``config.duration_s`` and Ctrl-C; the Cockpit wires
     ``poll_step()`` to a QTimer instead.
     """
 
@@ -49,12 +49,14 @@ class CaptureController:
         writer: Mf4Writer | None = None,
         ring: RingBuffer | None = None,
         clock: Callable[[], float] = time.monotonic,
+        sample_tap: Callable[[list[tuple[str, float, float]]], None] | None = None,
     ) -> None:
         self._config = config
         self._backend = backend
         self._writer = writer or Mf4Writer(config.output_mf4, config.selected)
         self._ring = ring or RingBuffer(capacity=config.ring_capacity)
         self._clock = clock
+        self._sample_tap = sample_tap
         self._running = False
         self._auto_stop = False
         self._t_start: float | None = None
@@ -122,6 +124,11 @@ class CaptureController:
             return 0
         # 1. Drain backend into ring buffer.
         new_samples = self._backend.poll()
+        if new_samples and self._sample_tap is not None:
+            try:
+                self._sample_tap(new_samples)
+            except Exception:  # noqa: BLE001 - live tap must not kill capture
+                logger.exception("sample_tap raised; capture continues")
         for sample in new_samples:
             self._ring.put(sample)
         # 2. Drain ring into writer.
@@ -163,7 +170,7 @@ class CaptureController:
         """Stop the backend, drain the ring, finalize the writer.
 
         Returns the populated ``SessionSummary``. The sidecar JSON is
-        written by the caller (CLI / Stage 5 review modal) so callers
+        written by the caller (CLI / review modal) so callers
         can decide where it lives.
         """
         if self._running:

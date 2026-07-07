@@ -46,6 +46,21 @@ class ConnectionMixin:
         self._stop_backend_best_effort(self._backend)
         self._backend = FakeRecorderBackend()
         self._owns_vector_backend = False
+        self._update_backend_badge()
+
+    def _update_backend_badge(self) -> None:
+        badge = getattr(self, "_backend_badge", None)
+        if badge is None:
+            return
+        if self._owns_vector_backend:
+            text = "后端: Vector"
+        elif isinstance(self._backend, FakeRecorderBackend):
+            text = "后端: FAKE·演示" if self._allow_fake_backend else "后端: FAKE"
+        else:
+            text = "后端: " + type(self._backend).__name__.replace(
+                "RecorderBackend", ""
+            )
+        badge.setText(text)
 
     def _begin_connection_attempt(self) -> None:
         """Start connection attempt. Triggers backend start + live timer."""
@@ -64,6 +79,7 @@ class ConnectionMixin:
         if not self._maybe_swap_to_vector_backend(selection=selection):
             self._reset_connection_attempt_state()
             return
+        self._update_backend_badge()
         if not selection:
             # Demo seed: only allowed after preconditions resolve to a
             # non-vehicle path (demo fake or caller-injected backend).
@@ -139,7 +155,7 @@ class ConnectionMixin:
         if self._ifdata_xcp is None:
             missing.append("A2L IF_DATA 未加载")
         if not selection:
-            missing.append("measurement selection ä¸ºç©º")
+            missing.append("measurement selection 为空")
         if not hasattr(self, "_left_pane") or not self._left_pane._pool:
             missing.append("measurement pool 为空")
 
@@ -193,6 +209,7 @@ class ConnectionMixin:
 
         self._backend = new_backend
         self._owns_vector_backend = True
+        self._update_backend_badge()
         self._status.showMessage(
             f"Vector backend 已就绪 · "
             f"App={self._transport_config.app_name} · "

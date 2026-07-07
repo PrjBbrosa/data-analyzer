@@ -5,10 +5,10 @@ Stage 0 gap note: ``docs/analyzer/acquisition/reports/2026-05-15-cockpit-stage0-
 
 This package is intentionally Qt-free so capture behavior can run on
 macOS without a display. The Cockpit Qt window in
-``mf4_analyzer/acquisition_ui/`` (Stage 4) imports from here, not the
-other way around.
+``mf4_analyzer/acquisition_ui/`` imports from here, not the other way
+around.
 
-Public API (stable for Stage 4 and the CLI):
+Public API (stable for the Cockpit and CLI):
 
 - ``SessionConfig``, ``SelectedMeasurement``, ``SessionSummary`` — session data
 - ``CaptureController`` — start/stop/flush orchestrator

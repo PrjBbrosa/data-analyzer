@@ -12,6 +12,7 @@ qtawesome
 # BLF (Vector CAN log) import — BLFReader is pure-Python file parsing (no HW);
 # cantools decodes frames into named signals via a DBC. Cross-platform.
 python-can>=4.3.0
+pya2ldb>=1.0  # A2L 解析（import 名是 pya2l）— cockpit measurement summary 依赖
 cantools>=39
 
 # Stage 8 - Vector/XCP backend (Windows-only)

@@ -23,6 +23,7 @@ from mf4_analyzer.acquisition_capture.config_store import (
     ConfigStore,
     ConfigSchemaError,
     load_or_default,
+    save_a2l_path,
     write_recent,
     read_recent,
 )
@@ -272,3 +273,23 @@ def test_recent_caps_max_entries(tmp_path):
     assert any(e["name"] == "NewOne" for e in after["entries"])
     # Oldest (Sig0) should be evicted
     assert not any(e["name"] == "Sig0" for e in after["entries"])
+
+
+def test_save_a2l_path_round_trip(tmp_path):
+    cfg = tmp_path / "acquisition_config.yaml"
+    save_a2l_path(tmp_path / "demo.a2l", config_path=cfg)
+    store = load_or_default(project_root=tmp_path, cli_config_path=cfg)
+    assert store.a2l_path == str(tmp_path / "demo.a2l")
+    assert store.pinned is True
+
+
+def test_save_a2l_path_preserves_existing_transport(tmp_path):
+    from mf4_analyzer.acquisition_capture.config_store import save_transport
+    from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+
+    cfg = tmp_path / "acquisition_config.yaml"
+    save_transport(TransportConfig(channel=1), config_path=cfg)
+    save_a2l_path(tmp_path / "demo.a2l", config_path=cfg)
+    store = load_or_default(project_root=tmp_path, cli_config_path=cfg)
+    assert store.transport.channel == 1
+    assert store.a2l_path == str(tmp_path / "demo.a2l")

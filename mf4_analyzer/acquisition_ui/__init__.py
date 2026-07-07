@@ -7,10 +7,10 @@ The Cockpit is a separate same-process partner window to the Analyzer.
 This package depends on ``mf4_analyzer.acquisition_capture`` for the
 capture core (health, ring buffer, backends, thresholds) and on
 ``mf4_analyzer.ui_kit`` for shared UI primitives (stylesheet, fonts,
-icons). It MUST NOT import Analyzer internals — Stage 5 adds the single
-public handoff method on the Analyzer ``MainWindow``.
+icons). It MUST NOT import Analyzer internals except through the public
+handoff method on the Analyzer ``MainWindow``.
 
-Public surface (Stage 4):
+Public surface:
 
 - :class:`CockpitMainWindow` — the partner ``QMainWindow``.
 - :class:`CockpitState` — the four-state enum + transitions in

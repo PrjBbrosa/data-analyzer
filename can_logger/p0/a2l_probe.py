@@ -319,5 +319,12 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__":  # pragma: no cover - module entry
+    # Re-dispatch through the canonical module name: running via
+    # ``-m can_logger.p0.a2l_probe`` loads this file as ``__main__``,
+    # while pickle resolves ``A2LSummary`` from
+    # ``can_logger.p0.a2l_probe``. Without this, isinstance rejects a
+    # valid subprocess result.
+    from can_logger.p0.a2l_probe import main as _canonical_main
+
+    raise SystemExit(_canonical_main())
