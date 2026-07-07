@@ -349,6 +349,11 @@ class LiveSignalCard(QFrame):
         """
         self._recording = bool(recording)
         self._rec_start_ts = rec_start_ts if recording else None
+        if self._recording:
+            # Recording's cumulative window starts at the freshly
+            # cleared buffer. This also prevents stream-time restarts
+            # from interleaving old and new relative timestamps.
+            self._spark.reset()
         self.setProperty("recording", self._recording)
         # Force a stylesheet re-evaluation so the [recording="true"]
         # selector toggles the red left border immediately.
@@ -356,28 +361,28 @@ class LiveSignalCard(QFrame):
         style.unpolish(self)
         style.polish(self)
         self._apply_trace_color()
-        self.refresh(now_ts=None)
+        self.refresh()
 
     # ------------------------------------------------------------------
     # Refresh
     # ------------------------------------------------------------------
 
-    def refresh(self, *, now_ts: float | None = None) -> None:
+    def refresh(self) -> None:
         """Recompute stats label and trim the idle rolling window.
 
-        Spec §C: the ``· since <window>`` suffix is removed from the
-        visible stats text and migrates to the stats label's tooltip.
-        The visible label stays terse — ``μ … · σ … · max …``.
+        Time-base invariant (2026-07-07 spec F1): the trim floor is
+        derived from the buffer's own newest sample (stream time),
+        never from a wall clock. Recording mode never trims: the
+        cumulative-since-rec-start window is realised by clearing the
+        buffer in :meth:`set_recording`.
         """
         if self._recording:
             label = STATS_WINDOW_LABEL_RECORDING
-            t_min = self._rec_start_ts
+            t_min: float | None = None
         else:
             label = STATS_WINDOW_LABEL_IDLE
-            if now_ts is None:
-                t_min = None
-            else:
-                t_min = now_ts - _IDLE_WINDOW_S
+            buf = self._spark._buffer  # noqa: SLF001 - sibling widget.
+            t_min = (buf[-1][0] - _IDLE_WINDOW_S) if buf else None
         self._spark.trim_to_window(t_min)
         self._spark.request_repaint()
         self._stats_label.setToolTip(f"Stats window: {label}")
@@ -535,9 +540,14 @@ class LiveCardGrid(QWidget):
         for card in self._cards.values():
             card.set_recording(recording, rec_start_ts)
 
-    def refresh_all(self, *, now_ts: float | None = None) -> None:
+    def refresh_all(self) -> None:
         for card in self._cards.values():
-            card.refresh(now_ts=now_ts)
+            card.refresh()
+
+    def reset_buffers(self) -> None:
+        """Clear every card's sparkline buffer."""
+        for card in self._cards.values():
+            card.reset_buffer()
 
     @property
     def cards(self) -> dict[str, LiveSignalCard]:

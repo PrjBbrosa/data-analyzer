@@ -5,7 +5,10 @@ from __future__ import annotations
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QScrollArea, QWidget
 
-from mf4_analyzer.acquisition_ui.widgets.live_cards import LiveCardGrid
+from mf4_analyzer.acquisition_ui.widgets.live_cards import (
+    LiveCardGrid,
+    LiveSignalCard,
+)
 
 
 def _label(parent: QWidget, object_name: str) -> QLabel:
@@ -158,3 +161,47 @@ def test_live_card_colors_are_deterministic(qapp):
         assert card.property("traceColor") == color
         assert sparkline is not None
         assert sparkline.property("traceColor") == color
+
+
+def test_idle_refresh_keeps_stream_time_samples(qtbot):
+    """Stream-time samples must survive refresh (spec 2026-07-07 F1)."""
+    card = LiveSignalCard("MotSpd", unit="rpm", raster="event_10ms")
+    qtbot.addWidget(card)
+    for i in range(100):
+        card.push_sample(i * 0.01, float(i))
+    card.refresh()
+    assert card._spark.sample_count == 100
+    assert "max 99.00" in card._stats_label.text()
+
+
+def test_idle_refresh_trims_to_last_60s_of_stream_time(qtbot):
+    """The idle trim floor comes from the newest buffered stream timestamp."""
+    card = LiveSignalCard("MotSpd")
+    qtbot.addWidget(card)
+    for t in (0.0, 30.0, 70.0, 100.0, 119.0):
+        card.push_sample(t, 1.0)
+    card.refresh()
+    kept = [ts for ts, _ in card._spark._buffer]
+    assert kept == [70.0, 100.0, 119.0]
+
+
+def test_set_recording_true_resets_buffer(qtbot):
+    """Recording starts a cumulative window by clearing the card buffer."""
+    card = LiveSignalCard("MotSpd")
+    qtbot.addWidget(card)
+    card.push_sample(1.0, 5.0)
+    card.set_recording(True, 0.0)
+    assert card._spark.sample_count == 0
+    card.push_sample(0.1, 7.0)
+    card.set_recording(False)
+    assert card._spark.sample_count == 1
+
+
+def test_grid_reset_buffers(qtbot):
+    grid = LiveCardGrid()
+    qtbot.addWidget(grid)
+    grid.set_signals([("A", "", None), ("B", "", None)])
+    grid.push_sample("A", 0.0, 1.0)
+    grid.push_sample("B", 0.0, 2.0)
+    grid.reset_buffers()
+    assert all(card._spark.sample_count == 0 for card in grid.cards.values())

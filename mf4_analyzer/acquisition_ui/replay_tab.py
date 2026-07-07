@@ -249,7 +249,7 @@ class ReplayTab(QWidget):
             if ts >= self._last_position_s:
                 self._last_position_s = ts
         if samples:
-            self._live_cards.refresh_all(now_ts=self._last_position_s)
+            self._live_cards.refresh_all()
             self._position_slider.setValue(int(self._last_position_s * 1000))
             self._position_label.setText(self._format_position(self._last_position_s))
         self._refresh_right_panel()

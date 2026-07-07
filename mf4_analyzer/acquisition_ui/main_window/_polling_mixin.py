@@ -100,7 +100,7 @@ class PollingMixin:
             self._ring.put((channel, ts, value))
             self._center.push_sample(channel, ts, value)
         # Repaint sparklines.
-        self._center.refresh_all(now_ts=time.monotonic())
+        self._center.refresh_all()
         # Update cumulative counters.
         self._cumulative_rx_count += len(samples)
         # Sync dropped counter from ring buffer (cumulative).
@@ -121,7 +121,7 @@ class PollingMixin:
             logger.exception("controller poll_step failed")
             self._status.showMessage(f"录制轮询失败: {exc}")
         self._cumulative_dropped = self._ring.dropped_frames
-        self._center.refresh_all(now_ts=time.monotonic())
+        self._center.refresh_all()
         self._update_status_bar()
         if not controller.running:
             self.request_stop_and_review(
