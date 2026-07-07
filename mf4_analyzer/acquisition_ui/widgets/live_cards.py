@@ -480,6 +480,13 @@ class LiveCardGrid(QWidget):
         canvas_layout.addStretch(1)
         return canvas
 
+    def set_placeholder_copy(self, *, title: str, body: str, action: str) -> None:
+        """Replace the zero-card placeholder copy."""
+        canvas = self._disconnected_canvas
+        canvas.findChild(QLabel, "cockpitDisconnectedTitle").setText(title)
+        canvas.findChild(QLabel, "cockpitDisconnectedCopy").setText(body)
+        canvas.findChild(QLabel, "cockpitDisconnectedAction").setText(action)
+
     def set_signals(self, signals: list[tuple[str, str, str | None]]) -> None:
         """Replace the cards with a new ``(name, unit, raster)`` list.
 

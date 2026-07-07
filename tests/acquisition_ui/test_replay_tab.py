@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PyQt5.QtWidgets import QLabel
 
 from mf4_analyzer.acquisition_capture.backends import ReplayRecorderBackend
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
@@ -26,6 +27,20 @@ def _write_replay_mf4(path: Path) -> Path:
         writer.append("EngSpdAvg", ts, a)
         writer.append("EngTrqAct", ts, b)
     return writer.finalize()
+
+
+def test_replay_placeholder_copy_is_replay_specific(qtbot):
+    tab = ReplayTab()
+    qtbot.addWidget(tab)
+    tab.show()
+    qtbot.waitExposed(tab)
+
+    canvas = tab._live_cards._disconnected_canvas
+    title = canvas.findChild(QLabel, "cockpitDisconnectedTitle").text()
+    action = canvas.findChild(QLabel, "cockpitDisconnectedAction").text()
+    assert title == "未加载 MF4"
+    assert "连接 ECU" not in action
+    assert not tab._right_panel.isVisible()
 
 
 def test_replay_tab_loads_existing_mf4(qapp, tmp_path: Path):

@@ -68,6 +68,12 @@ class ReplayTab(QWidget):
         self._timer.timeout.connect(self.drain_once)
 
         self._build_ui()
+        self._live_cards.set_placeholder_copy(
+            title="未加载 MF4",
+            body="回放会在这里显示信号趋势与当前值。",
+            action="使用左上「选择 MF4」打开录制文件",
+        )
+        self._right_panel.setVisible(False)
         self._set_transport_enabled(False)
         self._apply_state("idle")
 
@@ -165,6 +171,7 @@ class ReplayTab(QWidget):
         source = ReplayRecorderBackend.source_from_mf4(path)
         self.stop()
         self._source = source
+        self._right_panel.setVisible(True)
         self._path_label.setText(str(source.path))
         self._last_position_s = 0.0
         self._position_slider.setMaximum(max(0, int(source.duration_s * 1000)))
