@@ -18,6 +18,7 @@ from mf4_analyzer.acquisition_capture.session import (
     SessionConfig,
 )
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+from mf4_analyzer.acquisition_ui.state import CockpitState
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,27 @@ class CaptureSessionMixin:
         self._fake_rec_state = "off"
         self._update_backend_badge()
 
+    def _restart_idle_stream_for_selection(self) -> None:
+        """Debounced idle-stream restart after a selection edit."""
+        if getattr(self, "_idle_restart_timer", None) is not None:
+            self._idle_restart_timer.stop()
+        if self._state_machine.state != CockpitState.CONNECTED_IDLE:
+            return
+        if self._capture_controller is not None:
+            return
+        selection = list(self._left_pane.current_selection())
+        if not selection:
+            selection = [SelectedMeasurement(name="DemoSignal")]
+        try:
+            self._backend.start(selection)
+        except Exception as exc:  # noqa: BLE001 - best-effort restart
+            logger.warning("idle stream restart failed: %s", exc)
+            self._status.showMessage(f"实时流重启失败: {exc}")
+            return
+        self._center.reset_buffers()
+        self._stream_start_ts = time.monotonic()
+        self._cumulative_rx_count = 0
+
     def _resume_idle_stream(self) -> None:
         """Best-effort restart of the idle live stream after review close."""
         selection = (
@@ -117,3 +139,7 @@ class CaptureSessionMixin:
         except Exception as exc:  # noqa: BLE001 - best-effort resume
             logger.warning("idle stream resume failed: %s", exc)
             self._status.showMessage(f"实时流恢复失败: {exc}")
+            return
+        self._center.reset_buffers()
+        self._stream_start_ts = time.monotonic()
+        self._cumulative_rx_count = 0

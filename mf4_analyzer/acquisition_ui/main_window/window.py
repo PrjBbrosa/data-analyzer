@@ -269,6 +269,15 @@ class CockpitMainWindow(
         self._live_timer.setInterval(int(1000 / self._target_fps))
         self._live_timer.timeout.connect(self._poll_live)
 
+        # Idle selection edits change the backend's selected stream
+        # only after a short debounce (spec 2026-07-07 F5).
+        self._idle_restart_timer = QTimer(self)
+        self._idle_restart_timer.setSingleShot(True)
+        self._idle_restart_timer.setInterval(300)
+        self._idle_restart_timer.timeout.connect(
+            self._restart_idle_stream_for_selection
+        )
+
         # ----- UI scaffolding -------------------------------------------
         self._build_ui()
         self._apply_state_to_ui(CockpitState.DISCONNECTED, CockpitState.DISCONNECTED)
@@ -814,6 +823,7 @@ class CockpitMainWindow(
                 ]
             )
             self._refresh_idle_right_panel()
+            self._idle_restart_timer.start()
 
     # ------------------------------------------------------------------
     # Test helpers / accessors

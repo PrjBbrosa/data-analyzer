@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import QComboBox
 from PyQt5.QtWidgets import QLabel
 
 from can_logger.p0.a2l_probe import MeasurementSummary
+from mf4_analyzer.acquisition_capture.backends import FakeRecorderBackend
 from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
 from mf4_analyzer.acquisition_ui.state import CockpitState
 from mf4_analyzer.io.loader import DataLoader
@@ -121,6 +122,60 @@ def test_production_window_title_has_no_demo_suffix(qtbot):
     window = CockpitMainWindow(allow_fake_backend=False)
     qtbot.addWidget(window)
     assert "演示模式" not in window.windowTitle()
+
+
+class _SpyFakeBackend(FakeRecorderBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.start_calls: list[tuple[str, ...]] = []
+
+    def start(self, selected):
+        self.start_calls.append(tuple(m.name for m in selected))
+        super().start(selected)
+
+
+def test_idle_selection_change_restarts_stream(qtbot):
+    """Idle selection edits restart the backend stream for new cards."""
+    backend = _SpyFakeBackend()
+    pool = (
+        MeasurementSummary(
+            name="A",
+            address=0x40000000,
+            datatype="UWORD",
+            unit="",
+            conversion="",
+            available_events=("event_10ms",),
+        ),
+        MeasurementSummary(
+            name="B",
+            address=0x40000004,
+            datatype="UWORD",
+            unit="",
+            conversion="",
+            available_events=("event_10ms",),
+        ),
+    )
+    window = CockpitMainWindow(
+        backend=backend,
+        initial_pool=pool,
+        allow_fake_backend=True,
+    )
+    qtbot.addWidget(window)
+    window.left_pane._set_measurement_selected("A", True)
+    window._begin_connection_attempt()
+    qtbot.wait(20)
+    window._poll_live()
+    window._poll_health()
+    assert window.state_machine.state == CockpitState.CONNECTED_IDLE
+
+    window.left_pane._set_measurement_selected("B", True)
+    assert window._idle_restart_timer.isActive()
+    window._restart_idle_stream_for_selection()
+    assert backend.start_calls[-1] == ("A", "B")
+    qtbot.wait(20)
+    window._poll_live()
+    assert window._center.cards["B"]._spark.sample_count > 0
+    window.close()
 
 
 def _pump(window, qtbot, predicate, timeout_s=8.0):
