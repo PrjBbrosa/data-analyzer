@@ -122,6 +122,8 @@ def test_disabled_daq_chip_on_no_daq_a2l(qapp):
 
 
 def test_search_uses_match_spans_from_hit(qapp):
+    from mf4_analyzer.acquisition_ui.widgets.left_pane import _highlight_name_html
+
     pane = LeftPane()
     pane.set_pool(_pool(), a2l_has_daq_events=True)
     # Drive the search.
@@ -130,13 +132,15 @@ def test_search_uses_match_spans_from_hit(qapp):
     # Only EngSpdAvg matches.
     assert pane._list.count() == 1
     item = pane._list.item(0)
-    # Tooltip carries the match spans we got from search_measurements.
+    row = pane._list.itemWidget(item)
+    name_label = row.findChild(QLabel, "measurementName")
+    # The visible label carries the match spans we got from search_measurements.
     pool = [m for m in _pool() if m.available_events]
     hits = search_measurements("Spd", pool)
     assert hits, "expected at least one hit"
     spans = hits[0].match_spans
-    expected_tt = "匹配: " + ", ".join(f"{s}:{e}" for s, e in spans)
-    assert item.toolTip() == expected_tt
+    assert name_label.text() == _highlight_name_html("EngSpdAvg", spans)
+    assert name_label.textFormat() == Qt.RichText
 
 
 def test_selection_change_emits_signal(qapp):
@@ -315,3 +319,25 @@ def test_only_selected_rebuild_restores_scroll(qtbot):
     anchor = sb.value()
     pane._set_measurement_selected("Sig_49", False)
     assert sb.value() == min(anchor, sb.maximum())
+
+
+def test_search_highlight_renders_in_name_label(qtbot):
+    pane = LeftPane()
+    qtbot.addWidget(pane)
+    pane.set_pool(_make_pool(5))
+    pane._search.setText("Sig_00")
+    item = pane._row_items["Sig_00"]
+    row = pane._list.itemWidget(item)
+    name_label = row.findChild(QLabel, "measurementName")
+    assert "<span" in name_label.text()
+    pane._search.setText("")
+    row = pane._list.itemWidget(pane._row_items["Sig_00"])
+    assert "<span" not in row.findChild(QLabel, "measurementName").text()
+
+
+def test_highlight_name_html_escapes_and_wraps():
+    from mf4_analyzer.acquisition_ui.widgets.left_pane import _highlight_name_html
+
+    out = _highlight_name_html("a<b", [(0, 1)])
+    assert out == '<span style="color:#1769E0;font-weight:600;">a</span>&lt;b'
+    assert _highlight_name_html("abc", []) == "abc"

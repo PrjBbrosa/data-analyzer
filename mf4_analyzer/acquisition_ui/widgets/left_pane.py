@@ -18,6 +18,7 @@ pane stays Qt-only and consumes pre-computed measurement summaries.
 
 from __future__ import annotations
 
+import html as _html
 import re
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -56,11 +57,30 @@ from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 
 
-# Blue match-highlight color — used to inline-decorate spans in the list
-# row. Project palette interaction blue.
-_MATCH_BLUE = QColor("#1769E0")
 _SELECTED_ROW_BG = QColor("#EAF2FF")
 _EVENT_TIME_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(us|ms|s)", re.IGNORECASE)
+_MATCH_HIGHLIGHT_STYLE = "color:#1769E0;font-weight:600;"
+
+
+def _highlight_name_html(name: str, spans: Sequence[tuple[int, int]]) -> str:
+    if not spans:
+        return name
+    chunks: list[str] = []
+    cursor = 0
+    for start, end in sorted(spans):
+        start = max(cursor, min(len(name), start))
+        end = max(start, min(len(name), end))
+        if start > cursor:
+            chunks.append(_html.escape(name[cursor:start]))
+        if end > start:
+            chunks.append(
+                f'<span style="{_MATCH_HIGHLIGHT_STYLE}">'
+                f"{_html.escape(name[start:end])}</span>"
+            )
+        cursor = end
+    if cursor < len(name):
+        chunks.append(_html.escape(name[cursor:]))
+    return "".join(chunks)
 
 
 class _BatchBar(QFrame):
@@ -381,7 +401,10 @@ class LeftPane(QFrame):
             item = self._build_row(measurement, match_spans)
             self._list.addItem(item)
             self._row_items[measurement.name] = item
-            self._list.setItemWidget(item, self._build_row_widget(measurement))
+            self._list.setItemWidget(
+                item,
+                self._build_row_widget(measurement, match_spans),
+            )
         self._list.blockSignals(old_blocked)
         scroll_bar.setValue(min(scroll_value, scroll_bar.maximum()))
         self._refresh_summary()
@@ -409,15 +432,6 @@ class LeftPane(QFrame):
         item.setCheckState(Qt.Checked if m.name in self._selected_names else Qt.Unchecked)
         if m.name in self._selected_names:
             item.setBackground(QBrush(_SELECTED_ROW_BG))
-        if match_spans:
-            # Spec: highlight matched character ranges in blue. Qt
-            # QListWidgetItem only exposes a single foreground brush,
-            # so we use a tooltip that surfaces the spans textually
-            # plus a brush color so the row visually pops. A future
-            # QStyledItemDelegate could paint per-character runs.
-            item.setForeground(QBrush(_MATCH_BLUE))
-            spans_text = ", ".join(f"{s}:{e}" for s, e in match_spans)
-            item.setToolTip(f"匹配: {spans_text}")
         return item
 
     def _update_row_for(self, name: str) -> None:
@@ -453,6 +467,7 @@ class LeftPane(QFrame):
     def _build_row_widget(
         self,
         m: MeasurementSummary,
+        match_spans: Sequence[tuple[int, int]] = (),
     ) -> QWidget:
         row = QFrame(self._list)
         row.setObjectName("measurementRow")
@@ -475,8 +490,9 @@ class LeftPane(QFrame):
         text_box = QVBoxLayout()
         text_box.setContentsMargins(0, 0, 0, 0)
         text_box.setSpacing(1)
-        name_label = QLabel(m.name, row)
+        name_label = QLabel(_highlight_name_html(m.name, match_spans), row)
         name_label.setObjectName("measurementName")
+        name_label.setTextFormat(Qt.RichText if match_spans else Qt.PlainText)
         name_label.setToolTip(m.name)
         name_label.setMinimumWidth(0)
         detail_parts: list[str] = []
