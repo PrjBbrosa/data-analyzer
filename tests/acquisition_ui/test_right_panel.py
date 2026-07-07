@@ -28,7 +28,7 @@ from mf4_analyzer.acquisition_capture.health import (
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_ui.widgets import right_panel as rp_module
-from mf4_analyzer.acquisition_ui.widgets.right_panel import RightPanel
+from mf4_analyzer.acquisition_ui.widgets.right_panel import IdlePreflightPage, RightPanel
 
 
 def _label_texts(widget) -> list[str]:
@@ -46,6 +46,24 @@ def _make_selection(events: list[str | None]) -> list[SelectedMeasurement]:
         )
         for i, ev in enumerate(events)
     ]
+
+
+def test_humanize_duration_bands():
+    from mf4_analyzer.acquisition_ui.widgets.right_panel import _humanize_duration_s
+
+    assert _humanize_duration_s(float("inf")) == "∞"
+    assert _humanize_duration_s(45 * 60) == "45.0 min"
+    assert _humanize_duration_s(5 * 3600) == "5.0 h"
+    assert _humanize_duration_s(3 * 86400) == "3.0 d"
+
+
+def test_idle_page_titles(qtbot):
+    page = IdlePreflightPage()
+    qtbot.addWidget(page)
+    titles = [lab.text() for lab in page.findChildren(QLabel, "rightMetricTitle")]
+    assert "磁盘剩余" in titles
+    assert "预计可录时长" in titles
+    assert "磁盘写速" not in titles
 
 
 def _snapshot(*, can_load: float | None = 42.0) -> HealthSnapshot:
@@ -101,9 +119,9 @@ def test_idle_page_v3_sections_exist(qapp):
     for title in (
         "CAN 总线负载",
         "DAQ slot · ECU 端容量",
-        "磁盘写速",
+        "磁盘剩余",
         "采样事件 / 秒",
-        "输出",
+        "预计可录时长",
     ):
         assert title in texts
     for name in (

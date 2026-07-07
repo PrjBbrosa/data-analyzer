@@ -69,6 +69,16 @@ def _format_band_value(level: str, text: str) -> str:
     return f'<span style="color:{color}; font-weight:600;">{text}</span>'
 
 
+def _humanize_duration_s(seconds: float) -> str:
+    if seconds == float("inf"):
+        return "∞"
+    if seconds < 90 * 60:
+        return f"{seconds / 60:.1f} min"
+    if seconds < 48 * 3600:
+        return f"{seconds / 3600:.1f} h"
+    return f"{seconds / 86400:.1f} d"
+
+
 def _new_value_label(parent: QWidget, object_name: str = "") -> QLabel:
     label = QLabel("—", parent)
     if object_name:
@@ -330,7 +340,7 @@ class IdlePreflightPage(_BasePanelPage):
         self._row_disk = _add_metric_section(
             self._outer,
             self,
-            "磁盘写速",
+            "磁盘剩余",
             value_object_name="idleDiskValue",
         )
         self._row_samples = _add_metric_section(
@@ -342,7 +352,7 @@ class IdlePreflightPage(_BasePanelPage):
         self._row_duration = _add_metric_section(
             self._outer,
             self,
-            "输出",
+            "预计可录时长",
             value_object_name="idleOutputValue",
         )
 
@@ -420,7 +430,7 @@ class IdlePreflightPage(_BasePanelPage):
             self._row_duration.setText(
                 _format_band_value(
                     band_record_duration_s(duration_s),
-                    f"{duration_s / 60:.1f} min",
+                    _humanize_duration_s(duration_s),
                 )
             )
 
