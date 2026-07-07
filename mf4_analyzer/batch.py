@@ -149,14 +149,14 @@ def _default_loader(path):
     Returns FileData. Idx -1 marks "not registered with main_window".
     """
     from mf4_analyzer.io import DataLoader, FileData
-    from mf4_analyzer.io.loader import AUDIO_VIDEO_EXTS
+    from mf4_analyzer.io.loader import AUDIO_VIDEO_EXTS, CSV_LIKE_EXTS
 
     ext = Path(path).suffix.lower()
     if ext in AUDIO_VIDEO_EXTS:
         data, chs, units, fs, smeta = DataLoader.load_audio_video(path)
         return FileData(path, data, chs, units, idx=-1, fs=fs,
                         source_metadata=smeta)
-    if ext == '.csv':
+    if ext in CSV_LIKE_EXTS:
         data, chs, units = DataLoader.load_csv(path)
     elif ext in ('.xls', '.xlsx'):
         data, chs, units = DataLoader.load_excel(path)

@@ -84,6 +84,18 @@ def test_drag_enter_accepts_supported(qapp, qtbot, tmp_path):
     assert ev.isAccepted()
 
 
+def test_drag_enter_accepts_fdc(qapp, qtbot, tmp_path):
+    w = MainWindow()
+    qtbot.addWidget(w)
+    f = tmp_path / "a.fdc"
+    f.write_text("x")
+    ev = _enter(_mime([f]))
+
+    w.dragEnterEvent(ev)
+
+    assert ev.isAccepted()
+
+
 def test_drag_enter_ignores_unsupported(qapp, qtbot, tmp_path):
     w = MainWindow()
     qtbot.addWidget(w)

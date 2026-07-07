@@ -329,6 +329,7 @@ def test_order_colorbar_drag_preserves_weighting(qapp, qtbot):
 def test_project_io_dialog_filters_include_audio_video_extensions():
     from mf4_analyzer.ui.main_window._project_io_mixin import (
         AUDIO_VIDEO_FILE_FILTER,
+        DATA_FILE_GLOB,
         OPEN_FILES_FILTER,
         PROJECT_OR_DATA_FILTER,
     )
@@ -338,3 +339,6 @@ def test_project_io_dialog_filters_include_audio_video_extensions():
     assert expected in PROJECT_OR_DATA_FILTER
     assert expected in OPEN_FILES_FILTER
     assert AUDIO_VIDEO_FILE_FILTER == f"音视频文件 ({expected})"
+    assert "*.fdc" in DATA_FILE_GLOB
+    assert "*.fdc" in PROJECT_OR_DATA_FILTER
+    assert "*.fdc" in OPEN_FILES_FILTER

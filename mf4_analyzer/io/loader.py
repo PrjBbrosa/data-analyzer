@@ -1,4 +1,4 @@
-"""DataLoader: reads MF4 / Excel / CSV inputs."""
+"""DataLoader: reads MF4 / Excel / CSV-like inputs."""
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -117,6 +117,8 @@ AUDIO_VIDEO_EXTS = {
     '.mp4', '.mov', '.mkv', '.m4v',
     '.mp3', '.m4a', '.aac', '.wav', '.flac',
 }
+
+CSV_LIKE_EXTS = {'.csv', '.fdc'}
 
 
 @dataclass(frozen=True)

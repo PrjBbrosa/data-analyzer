@@ -7,11 +7,12 @@ from PyQt5.QtCore import QSettings
 from PyQt5.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from ...io import DataLoader, FileData, HAS_ASAMMDF
-from ...io.loader import AUDIO_VIDEO_EXTS
+from ...io.loader import AUDIO_VIDEO_EXTS, CSV_LIKE_EXTS
 
 
 AUDIO_VIDEO_GLOB = "*.mp4 *.mov *.mkv *.m4v *.mp3 *.m4a *.aac *.wav *.flac"
-DATA_FILE_GLOB = f"*.mf4 *.mdf *.blf *.csv *.xlsx *.xls *.hdf {AUDIO_VIDEO_GLOB}"
+CSV_LIKE_GLOB = " ".join(f"*{ext}" for ext in sorted(CSV_LIKE_EXTS))
+DATA_FILE_GLOB = f"*.mf4 *.mdf *.blf {CSV_LIKE_GLOB} *.xlsx *.xls *.hdf {AUDIO_VIDEO_GLOB}"
 PROJECT_OR_DATA_FILTER = (
     f"所有支持的文件 ({DATA_FILE_GLOB} *.tlproj);;"
     f"项目 (*.tlproj);;数据文件 ({DATA_FILE_GLOB});;"
