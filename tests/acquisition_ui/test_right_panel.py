@@ -28,7 +28,11 @@ from mf4_analyzer.acquisition_capture.health import (
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_ui.widgets import right_panel as rp_module
-from mf4_analyzer.acquisition_ui.widgets.right_panel import IdlePreflightPage, RightPanel
+from mf4_analyzer.acquisition_ui.widgets.right_panel import (
+    DisconnectedPage,
+    IdlePreflightPage,
+    RightPanel,
+)
 
 
 def _label_texts(widget) -> list[str]:
@@ -64,6 +68,79 @@ def test_idle_page_titles(qtbot):
     assert "磁盘剩余" in titles
     assert "预计可录时长" in titles
     assert "磁盘写速" not in titles
+
+
+def test_disconnected_page_localizes_status_copy(qtbot):
+    page = DisconnectedPage()
+    qtbot.addWidget(page)
+    page.apply(
+        snapshot=_snapshot(),
+        first_frame_received=False,
+        first_failure=None,
+        selection_count=0,
+    )
+    assert "正常" in page._row_hw.text()
+    assert "已连接" in page._row_xcp.text()
+
+    page.apply(
+        snapshot=HealthSnapshot(
+            hw=HwHealth(
+                ok=False,
+                driver_version=None,
+                channel_count=0,
+                last_probe_ts=1.0,
+                error="transport not configured",
+            ),
+            can=CanHealth(bus_load_pct=None),
+            xcp=XcpHealth(connected=False),
+            daq=DaqHealth(),
+            rec=RecHealth(
+                state="off",
+                ring_buffer_fill_pct=0.0,
+                dropped_frames=0,
+                write_rate_bps=0.0,
+                last_rx_age_s=0.0,
+                writer_thread_alive=False,
+            ),
+            captured_at=1.0,
+        ),
+        first_frame_received=False,
+        first_failure=None,
+        selection_count=0,
+    )
+    assert "transport not configured" in page._row_hw.text()
+    assert "未连接" in page._row_xcp.text()
+
+    page.apply(
+        snapshot=HealthSnapshot(
+            hw=HwHealth(
+                ok=False,
+                driver_version=None,
+                channel_count=0,
+                last_probe_ts=1.0,
+                error="transport not configured",
+                probed=False,
+            ),
+            can=CanHealth(bus_load_pct=None),
+            xcp=XcpHealth(connected=False, attempted=False),
+            daq=DaqHealth(),
+            rec=RecHealth(
+                state="off",
+                ring_buffer_fill_pct=0.0,
+                dropped_frames=0,
+                write_rate_bps=0.0,
+                last_rx_age_s=0.0,
+                writer_thread_alive=False,
+                evidence=False,
+            ),
+            captured_at=1.0,
+        ),
+        first_frame_received=False,
+        first_failure=None,
+        selection_count=0,
+    )
+    assert rp_module._LEVEL_COLOR["off"] in page._row_hw.text()
+    assert rp_module._LEVEL_COLOR["off"] in page._row_xcp.text()
 
 
 def _snapshot(*, can_load: float | None = 42.0) -> HealthSnapshot:

@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from mf4_analyzer.acquisition_capture.health import HealthSnapshot
+from mf4_analyzer.acquisition_capture.health import HealthSnapshot, level_hw, level_xcp
 from mf4_analyzer.acquisition_capture.preflight_estimates import (
     band_can_load,
     band_daq_slot,
@@ -287,14 +287,14 @@ class DisconnectedPage(_BasePanelPage):
             hw_ok = snapshot.hw.ok
             self._row_hw.setText(
                 _format_band_value(
-                    "green" if hw_ok else "red",
-                    "ok" if hw_ok else (snapshot.hw.error or "未连接"),
+                    level_hw(snapshot.hw),
+                    "正常" if hw_ok else (snapshot.hw.error or "未连接"),
                 )
             )
             self._row_xcp.setText(
                 _format_band_value(
-                    "green" if snapshot.xcp.connected else "red",
-                    "connected" if snapshot.xcp.connected else "断开",
+                    level_xcp(snapshot.xcp),
+                    "已连接" if snapshot.xcp.connected else "未连接",
                 )
             )
         self._row_frame.setText(

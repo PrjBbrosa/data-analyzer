@@ -23,6 +23,7 @@ from mf4_analyzer.acquisition_capture.health import (
     RecHealth,
     XcpHealth,
 )
+from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
 from mf4_analyzer.acquisition_ui.widgets.health_strip import HealthStrip
 
 
@@ -181,6 +182,16 @@ def test_strip_off_chip_when_no_evidence(qapp):
     strip.apply_snapshot(snap)
     assert strip.current_levels()["CAN"] == "off"
     assert "no evidence yet" in strip.chip("CAN").toolTip()
+
+
+def test_fresh_cockpit_shows_all_chips_off(qtbot):
+    window = CockpitMainWindow()
+    qtbot.addWidget(window)
+    window._poll_health()
+    levels = window.health_strip.current_levels()
+    assert set(levels.values()) == {"off"}
+    assert window.health_strip._summary.text() == "5 off"
+    window.close()
 
 
 def test_threshold_constants_drive_band_boundaries():

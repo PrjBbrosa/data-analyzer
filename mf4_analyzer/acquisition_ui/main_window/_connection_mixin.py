@@ -64,6 +64,7 @@ class ConnectionMixin:
 
     def _begin_connection_attempt(self) -> None:
         """Start connection attempt. Triggers backend start + live timer."""
+        self._connection_ever_attempted = True
         selection = self._left_pane.current_selection() if hasattr(self, "_left_pane") else []
         if not selection and self._initial_pool:
             # Auto-select first measurement so the demo can start the
@@ -259,6 +260,7 @@ class ConnectionMixin:
                 channel_count=0,
                 last_probe_ts=time.monotonic(),
                 error="transport not configured",
+                probed=self._connection_ever_attempted,
             )
         from mf4_analyzer.acquisition_capture.vector_hw_probe import vector_hw_probe
 
@@ -277,6 +279,7 @@ class ConnectionMixin:
             slave_id=0x55 if self._fake_xcp_connected else None,
             last_response_age_s=0.0,
             consecutive_timeouts=0,
+            attempted=self._connection_ever_attempted,
         )
 
     def _probe_daq(self) -> DaqHealth:
@@ -295,4 +298,8 @@ class ConnectionMixin:
             write_rate_bps=0.0,
             last_rx_age_s=last_age,
             writer_thread_alive=self._fake_rec_state == "recording",
+            evidence=(
+                self._fake_last_rx_monotonic is not None
+                or self._fake_rec_state != "off"
+            ),
         )

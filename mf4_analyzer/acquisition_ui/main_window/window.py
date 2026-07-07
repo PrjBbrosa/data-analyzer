@@ -189,6 +189,7 @@ class CockpitMainWindow(
         self._ring.watermark_changed.connect(self._on_ring_watermark_changed)
         self._target_fps = thresholds.LIVE_FPS_NORMAL
         self._connection_attempt_started: float | None = None
+        self._connection_ever_attempted: bool = False
         self._first_frame_ts: float | None = None
         self._rec_start_ts: float | None = None
         self._stream_start_ts: float | None = None

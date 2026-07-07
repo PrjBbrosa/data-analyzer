@@ -46,6 +46,7 @@ class HwHealth:
     channel_count: int
     last_probe_ts: float  # monotonic seconds
     error: str | None = None
+    probed: bool = True
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class XcpHealth:
     slave_id: int | None = None
     last_response_age_s: float | None = None
     consecutive_timeouts: int = 0
+    attempted: bool = True
 
 
 @dataclass(frozen=True)
@@ -75,9 +77,10 @@ class RecHealth:
     state: Literal["off", "recording", "auto_stopped", "error"]
     ring_buffer_fill_pct: float
     dropped_frames: int
-    write_rate_bps: float
+    write_rate_bps: float  # samples/s (legacy field name kept for API stability)
     last_rx_age_s: float
     writer_thread_alive: bool
+    evidence: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +94,8 @@ def level_hw(
     now: float | None = None,
     poll_interval_s: float | None = None,
 ) -> HealthLevel:
+    if not snap.probed:
+        return "off"
     if snap.error is not None:
         return "red"
     if now is None:
@@ -128,7 +133,7 @@ def level_channel(ch: ChannelHealth) -> HealthLevel:
 
 def level_xcp(snap: XcpHealth) -> HealthLevel:
     if not snap.connected:
-        return "red"
+        return "red" if snap.attempted else "off"
     if snap.consecutive_timeouts >= thresholds.XCP_RED_TIMEOUTS:
         return "red"
     if snap.consecutive_timeouts >= thresholds.XCP_YELLOW_TIMEOUTS:
@@ -137,10 +142,16 @@ def level_xcp(snap: XcpHealth) -> HealthLevel:
 
 
 def level_daq(snap: DaqHealth) -> HealthLevel:
-    return "red" if snap.overflow else "green"
+    if snap.overflow:
+        return "red"
+    if not snap.event_capacity:
+        return "off"
+    return "green"
 
 
 def level_rec(snap: RecHealth) -> HealthLevel:
+    if snap.state == "off" and not snap.evidence:
+        return "off"
     if snap.state == "error":
         return "red"
     if snap.last_rx_age_s >= thresholds.REC_LAST_RX_RED_MIN_S:

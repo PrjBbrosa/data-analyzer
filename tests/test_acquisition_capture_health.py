@@ -123,13 +123,38 @@ def test_xcp_levels_by_timeouts():
     assert level_xcp(XcpHealth(connected=True, consecutive_timeouts=3)) == "red"
 
 
+def test_level_no_evidence_maps_to_off():
+    hw = HwHealth(
+        ok=False,
+        driver_version=None,
+        channel_count=0,
+        last_probe_ts=time.monotonic(),
+        error="transport not configured",
+        probed=False,
+    )
+    assert level_hw(hw) == "off"
+    assert level_xcp(XcpHealth(connected=False, attempted=False)) == "off"
+    assert level_xcp(XcpHealth(connected=False, attempted=True)) == "red"
+    assert level_daq(DaqHealth()) == "off"
+    rec = RecHealth(
+        state="off",
+        ring_buffer_fill_pct=0.0,
+        dropped_frames=0,
+        write_rate_bps=0.0,
+        last_rx_age_s=0.0,
+        writer_thread_alive=False,
+        evidence=False,
+    )
+    assert level_rec(rec) == "off"
+
+
 # ---------------------------------------------------------------------------
 # DaqHealth.
 # ---------------------------------------------------------------------------
 
 
 def test_daq_green_unless_overflow():
-    assert level_daq(DaqHealth(overflow=())) == "green"
+    assert level_daq(DaqHealth(event_capacity={"event_10ms": 32})) == "green"
     assert level_daq(DaqHealth(overflow=("event_10ms",))) == "red"
 
 
@@ -215,7 +240,7 @@ def test_aggregator_default_probes_return_off_state():
         assert levels["HW"] == "red"
     assert levels["CAN"] == "off"
     assert levels["XCP"] == "red"
-    assert levels["DAQ"] == "green"
+    assert levels["DAQ"] == "off"
     assert levels["REC"] == "green"  # off-state with healthy defaults
 
 
