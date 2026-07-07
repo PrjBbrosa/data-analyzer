@@ -114,6 +114,7 @@ class LeftPane(QFrame):
         self._a2l_has_daq_events: bool = False
         self._frozen: bool = False
         self._visible_count: int = 0
+        self._row_items: dict[str, QListWidgetItem] = {}
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -257,6 +258,9 @@ class LeftPane(QFrame):
         # ``_on_item_changed``.
         self._has_daq_chip.setEnabled(self._a2l_has_daq_events and not self._frozen)
         self._only_selected_chip.setEnabled(not self._frozen)
+        for name in list(self._row_items):
+            self._update_row_for(name)
+        self._refresh_batch_bar()
 
     def current_selection(self) -> list[SelectedMeasurement]:
         """Return the selected measurements as ``SelectedMeasurement``."""
@@ -360,8 +364,11 @@ class LeftPane(QFrame):
     def _refresh_list(self) -> None:
         # Block ``itemChanged`` while we rebuild — checkbox creation
         # would otherwise fire selection_changed for every row.
-        self._list.blockSignals(True)
+        scroll_bar = self._list.verticalScrollBar()
+        scroll_value = scroll_bar.value()
+        old_blocked = self._list.blockSignals(True)
         self._list.clear()
+        self._row_items = {}
         pool = self._filtered_pool()
         hits, used_search = self._hits_for_query(pool)
         rows: list[tuple[MeasurementSummary, list[tuple[int, int]]]]
@@ -373,27 +380,33 @@ class LeftPane(QFrame):
         for measurement, match_spans in rows:
             item = self._build_row(measurement, match_spans)
             self._list.addItem(item)
+            self._row_items[measurement.name] = item
             self._list.setItemWidget(item, self._build_row_widget(measurement))
-        self._list.blockSignals(False)
+        self._list.blockSignals(old_blocked)
+        scroll_bar.setValue(min(scroll_value, scroll_bar.maximum()))
         self._refresh_summary()
         self._refresh_footer()
 
-    def _build_row(
-        self,
-        m: MeasurementSummary,
-        match_spans: list[tuple[int, int]],
-    ) -> QListWidgetItem:
+    def _row_text_for(self, m: MeasurementSummary) -> str:
         parts = [m.name]
         if m.unit:
             parts.append(m.unit)
         event = self._selected_event_for(m)
         if event is not None:
             parts.append(f"@ {_format_event_label(event)}")
-        text = "  ·  ".join(parts)
+        return "  ·  ".join(parts)
+
+    def _build_row(
+        self,
+        m: MeasurementSummary,
+        match_spans: list[tuple[int, int]],
+    ) -> QListWidgetItem:
         item = QListWidgetItem("")
         item.setData(Qt.UserRole, m.name)
-        item.setData(Qt.UserRole + 1, text)
+        item.setData(Qt.UserRole + 1, self._row_text_for(m))
         item.setSizeHint(QSize(0, 46))
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Checked if m.name in self._selected_names else Qt.Unchecked)
         if m.name in self._selected_names:
             item.setBackground(QBrush(_SELECTED_ROW_BG))
         if match_spans:
@@ -406,6 +419,36 @@ class LeftPane(QFrame):
             spans_text = ", ".join(f"{s}:{e}" for s, e in match_spans)
             item.setToolTip(f"匹配: {spans_text}")
         return item
+
+    def _update_row_for(self, name: str) -> None:
+        item = self._row_items.get(name)
+        measurement = self._measurement_by_name(name)
+        if item is None or measurement is None:
+            return
+        selected = name in self._selected_names
+        old_list_blocked = self._list.blockSignals(True)
+        item.setData(Qt.UserRole + 1, self._row_text_for(measurement))
+        item.setCheckState(Qt.Checked if selected else Qt.Unchecked)
+        item.setBackground(QBrush(_SELECTED_ROW_BG) if selected else QBrush())
+        self._list.blockSignals(old_list_blocked)
+
+        row = self._list.itemWidget(item)
+        if row is None:
+            return
+        checkbox = row.findChild(QCheckBox, "measurementCheckBox")
+        if checkbox is not None:
+            old_checkbox_blocked = checkbox.blockSignals(True)
+            checkbox.setChecked(selected)
+            checkbox.setEnabled(not self._frozen)
+            checkbox.blockSignals(old_checkbox_blocked)
+        combo = row.findChild(QComboBox, "measurementEventSelect")
+        if combo is not None:
+            old_combo_blocked = combo.blockSignals(True)
+            current_event = self._selected_event_for(measurement)
+            idx = combo.findData(current_event) if current_event is not None else -1
+            combo.setCurrentIndex(idx)
+            combo.setEnabled(bool(measurement.available_events) and not self._frozen)
+            combo.blockSignals(old_combo_blocked)
 
     def _build_row_widget(
         self,
@@ -611,13 +654,14 @@ class LeftPane(QFrame):
             self._list.blockSignals(True)
             item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
             self._list.blockSignals(False)
+            self._update_row_for(name)
             return
         name = item.data(Qt.UserRole)
         self._set_measurement_selected(name, item.checkState() == Qt.Checked)
 
     def _set_measurement_selected(self, name: str, selected: bool) -> None:
         if self._frozen:
-            self._refresh_list()
+            self._update_row_for(name)
             return
         before = set(self._selected_names)
         if selected:
@@ -632,7 +676,12 @@ class LeftPane(QFrame):
             self._selected_events.pop(name, None)
         if before == self._selected_names:
             return
-        self._refresh_list()
+        if self._only_selected_chip.isChecked():
+            self._refresh_list()
+        else:
+            self._update_row_for(name)
+            self._refresh_summary()
+            self._refresh_footer()
         self.selection_changed.emit()
 
     def _on_row_event_changed(self, name: str, event: object) -> None:
@@ -645,7 +694,8 @@ class LeftPane(QFrame):
         if not isinstance(event, str):
             return
         if self._frozen:
-            self._refresh_list()
+            for name in list(self._selected_names):
+                self._update_row_for(name)
             self._refresh_footer()
             return
         changed = False
@@ -655,7 +705,9 @@ class LeftPane(QFrame):
                     self._selected_events[name] = event
                     changed = True
         if changed:
-            self._refresh_list()
+            for name in list(self._selected_names):
+                self._update_row_for(name)
+            self._refresh_footer()
             self.selection_changed.emit()
 
     def _set_measurement_event(
@@ -666,7 +718,7 @@ class LeftPane(QFrame):
         select: bool,
     ) -> None:
         if self._frozen:
-            self._refresh_list()
+            self._update_row_for(name)
             return
         measurement = self._measurement_by_name(name)
         if measurement is None or event not in measurement.available_events:
@@ -679,7 +731,9 @@ class LeftPane(QFrame):
         if event_changed:
             self._selected_events[name] = event
         if selected_changed or event_changed:
-            self._refresh_list()
+            self._update_row_for(name)
+            self._refresh_summary()
+            self._refresh_footer()
             self.selection_changed.emit()
 
     def _default_event_for(self, measurement: MeasurementSummary) -> str | None:

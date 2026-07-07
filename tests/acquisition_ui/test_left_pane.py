@@ -14,7 +14,7 @@ Verifies:
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QComboBox, QLabel, QToolButton, QWidget
+from PyQt5.QtWidgets import QCheckBox, QComboBox, QLabel, QToolButton, QWidget
 
 from can_logger.p0.a2l_probe import MeasurementSummary
 from mf4_analyzer.acquisition_capture.search import search_measurements
@@ -68,6 +68,20 @@ def _multi_event_pool() -> tuple[MeasurementSummary, ...]:
             conversion="",
             available_events=("event_100ms", "event_10ms"),
         ),
+    )
+
+
+def _make_pool(n: int) -> tuple[MeasurementSummary, ...]:
+    return tuple(
+        MeasurementSummary(
+            name=f"Sig_{i:02d}",
+            address=0x40000000 + 4 * i,
+            datatype="UWORD",
+            unit="",
+            conversion="",
+            available_events=("event_10ms", "event_100ms"),
+        )
+        for i in range(n)
     )
 
 
@@ -234,3 +248,70 @@ def test_row_event_selector_overrides_one_selected_channel(qapp):
     assert "CAN 估算" in pane._footer.text()
     assert "事件 1ms × 1" in pane._footer.text()
     assert "100ms × 1" in pane._footer.text()
+
+
+def test_checkbox_toggle_preserves_scroll_and_widgets(qtbot):
+    pane = LeftPane()
+    qtbot.addWidget(pane)
+    pane.set_pool(_make_pool(50))
+    pane.resize(420, 400)
+    pane.show()
+    qtbot.waitExposed(pane)
+    sb = pane._list.verticalScrollBar()
+    sb.setValue(sb.maximum())
+    anchor = sb.value()
+    assert anchor > 0
+    last_item = pane._list.item(pane._list.count() - 1)
+    widget_before = pane._list.itemWidget(last_item)
+    checkbox = widget_before.findChild(QCheckBox, "measurementCheckBox")
+    checkbox.click()
+    assert sb.value() == anchor
+    assert pane._list.itemWidget(pane._list.item(pane._list.count() - 1)) is widget_before
+    assert [m.name for m in pane.current_selection()] == ["Sig_49"]
+
+
+def test_batch_event_change_updates_rows_in_place(qtbot):
+    pane = LeftPane()
+    qtbot.addWidget(pane)
+    pane.set_pool(_make_pool(5))
+    for name in ("Sig_00", "Sig_01"):
+        pane._set_measurement_selected(name, True)
+    item = pane._row_items["Sig_01"]
+    widget_before = pane._list.itemWidget(item)
+    combo = pane._batch_bar.event_combo
+    idx = combo.findData("event_100ms")
+    combo.setCurrentIndex(idx)
+    assert pane._list.itemWidget(pane._row_items["Sig_01"]) is widget_before
+    row_combo = widget_before.findChild(QComboBox, "measurementEventSelect")
+    assert row_combo.currentData() == "event_100ms"
+
+
+def test_set_frozen_disables_row_controls_in_place(qtbot):
+    pane = LeftPane()
+    qtbot.addWidget(pane)
+    pane.set_pool(_make_pool(3))
+    pane.set_frozen(True)
+    for item in pane._row_items.values():
+        row = pane._list.itemWidget(item)
+        assert not row.findChild(QCheckBox, "measurementCheckBox").isEnabled()
+        assert not row.findChild(QComboBox, "measurementEventSelect").isEnabled()
+    pane.set_frozen(False)
+    row = pane._list.itemWidget(pane._row_items["Sig_00"])
+    assert row.findChild(QCheckBox, "measurementCheckBox").isEnabled()
+
+
+def test_only_selected_rebuild_restores_scroll(qtbot):
+    pane = LeftPane()
+    qtbot.addWidget(pane)
+    pane.set_pool(_make_pool(50))
+    pane.resize(420, 400)
+    pane.show()
+    qtbot.waitExposed(pane)
+    for i in range(40, 50):
+        pane._set_measurement_selected(f"Sig_{i}", True)
+    pane._only_selected_chip.setChecked(True)
+    sb = pane._list.verticalScrollBar()
+    sb.setValue(sb.maximum())
+    anchor = sb.value()
+    pane._set_measurement_selected("Sig_49", False)
+    assert sb.value() == min(anchor, sb.maximum())
