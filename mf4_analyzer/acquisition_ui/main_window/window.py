@@ -82,6 +82,7 @@ from mf4_analyzer.acquisition_ui.widgets.health_strip import HealthStrip
 from mf4_analyzer.acquisition_ui.widgets.left_pane import LeftPane
 from mf4_analyzer.acquisition_ui.widgets.right_panel import RightPanel
 from ._defs import (
+    DEFAULT_LIVE_PIN_COUNT,
     HISTORY_TAB_TITLE,
     MODE_SEGMENTS,
     REPLAY_TAB_TITLE,
@@ -221,6 +222,9 @@ class CockpitMainWindow(
         )
         # User-supplied A2L pool for the left pane (None in pure demo).
         self._initial_pool = tuple(initial_pool or ())
+        # Spec 2026-07-08 §G6 — 固定实时显示。
+        self._manual_pins: list[str] = []
+        self._pin_customized: bool = False
         # CaptureSessionMixin owns the real CaptureController lifecycle.
         # Tests can still inject a controller via
         # :meth:`set_capture_controller`.
@@ -770,6 +774,67 @@ class CockpitMainWindow(
     # Right-panel refreshers
     # ------------------------------------------------------------------
 
+    def _effective_pinned_names(self) -> list[str]:
+        """有效 pin 集（spec 2026-07-08 §G6）。
+
+        未定制 = 先勾的前 DEFAULT_LIVE_PIN_COUNT 个；已定制 = 手动名单 ∩ 当前选择。
+        """
+        order = self._left_pane.selection_order()
+        if not self._pin_customized:
+            return order[:DEFAULT_LIVE_PIN_COUNT]
+        selected = set(order)
+        return [n for n in self._manual_pins if n in selected]
+
+    def _ensure_pin_customized(self) -> None:
+        if not self._pin_customized:
+            self._manual_pins = list(self._effective_pinned_names())
+            self._pin_customized = True
+
+    def pin_channel(self, name: str) -> None:
+        self._ensure_pin_customized()
+        if name not in self._manual_pins:
+            self._manual_pins.append(name)
+        self._refresh_center_cards()
+
+    def unpin_channel(self, name: str) -> None:
+        self._ensure_pin_customized()
+        if name in self._manual_pins:
+            self._manual_pins.remove(name)
+        self._refresh_center_cards()
+
+    def reset_pins(self) -> None:
+        self._manual_pins = []
+        self._pin_customized = False
+        self._refresh_center_cards()
+
+    def _refresh_center_cards(self, explicit=None) -> None:
+        """中央卡片唯一刷新入口（spec §G6）。
+
+        ``explicit``：demo DemoSignal 兜底路径 —— 原样显示、绕过 pin。
+        pin 操作只走这里，绝不触发 `_idle_restart_timer`（纯显示层）。
+        """
+        if explicit is not None:
+            self._center.set_signals(
+                [(m.name, m.unit, m.event) for m in explicit]
+            )
+            self._center.set_monitor_summary(None)
+            return
+
+        selection = self._left_pane.current_selection()
+        by_name = {m.name: m for m in selection}
+        pinned = [n for n in self._effective_pinned_names() if n in by_name]
+        self._center.set_signals(
+            [(n, by_name[n].unit, by_name[n].event) for n in pinned]
+        )
+
+        total = len(selection)
+        if total > len(pinned):
+            self._center.set_monitor_summary(
+                f"已选 {total} · 实时显示 {len(pinned)} · 其余通道仍会录制"
+            )
+        else:
+            self._center.set_monitor_summary(None)
+
     def _refresh_idle_right_panel(self) -> None:
         if not hasattr(self, "_right_panel"):
             return
@@ -817,13 +882,7 @@ class CockpitMainWindow(
                 selection_count=len(self._left_pane.current_selection()),
             )
         elif self._state_machine.state == CockpitState.CONNECTED_IDLE:
-            # Update center cards for the new selection.
-            self._center.set_signals(
-                [
-                    (m.name, m.unit, m.event)
-                    for m in self._left_pane.current_selection()
-                ]
-            )
+            self._refresh_center_cards()
             self._refresh_idle_right_panel()
             self._idle_restart_timer.start()
 

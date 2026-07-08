@@ -499,6 +499,12 @@ class LiveCardGrid(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        # Spec 2026-07-08 §G6: 选中数 > 实时显示数时的提示条。
+        self._summary_bar = QLabel(self)
+        self._summary_bar.setObjectName("liveMonitorSummary")
+        self._summary_bar.setVisible(False)
+        outer.addWidget(self._summary_bar)
+
         self._scroll_area = QScrollArea(self)
         self._scroll_area.setObjectName("liveCardGridScroll")
         self._scroll_area.setWidgetResizable(True)
@@ -559,6 +565,14 @@ class LiveCardGrid(QWidget):
         canvas.findChild(QLabel, "cockpitDisconnectedTitle").setText(title)
         canvas.findChild(QLabel, "cockpitDisconnectedCopy").setText(body)
         canvas.findChild(QLabel, "cockpitDisconnectedAction").setText(action)
+
+    def set_monitor_summary(self, text: str | None) -> None:
+        """显示/隐藏「已选 N · 实时显示 P」计数条（spec §G6）。"""
+        if text:
+            self._summary_bar.setText(text)
+            self._summary_bar.setVisible(True)
+        else:
+            self._summary_bar.setVisible(False)
 
     def set_signals(self, signals: list[tuple[str, str, str | None]]) -> None:
         """Replace the cards with a new ``(name, unit, raster)`` list.

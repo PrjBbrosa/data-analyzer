@@ -17,3 +17,6 @@ MODE_SEGMENTS = (
 # Spec §State Machine `Disconnected` failure surface text.
 DROPPED_FRAMES_PROMPT_TITLE = "丢帧过多"
 DROPPED_FRAMES_PROMPT_TEXT = "丢帧过多 · 是否停止？"
+
+# Spec 2026-07-08 §G6 — 默认实时显示的固定通道数上限。
+DEFAULT_LIVE_PIN_COUNT = 5

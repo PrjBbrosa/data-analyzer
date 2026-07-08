@@ -822,6 +822,9 @@ QLabel#liveCardValue {
     font-weight: 800;
 }
 
+/* Live monitor pinned-count bar (2026-07-08 §G6). */
+#liveMonitorSummary { padding: 4px 12px; color: #6b7280; }
+
 QFrame#rightPanelPage {
     border: none;
     border-left: 1px solid #eef2f7;

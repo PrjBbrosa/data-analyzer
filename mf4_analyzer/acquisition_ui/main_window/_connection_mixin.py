@@ -108,10 +108,11 @@ class ConnectionMixin:
             self._health_timer.start()
         if not self._live_timer.isActive():
             self._live_timer.start()
-        # Seed the center pane with cards.
-        self._center.set_signals(
-            [(m.name, m.unit, m.event) for m in selection]
-        )
+        # Seed the center pane with cards（pin 模型见 spec §G6）。
+        if self._left_pane.current_selection():
+            self._refresh_center_cards()
+        else:
+            self._refresh_center_cards(explicit=selection)
 
     def _maybe_swap_to_vector_backend(
         self,
