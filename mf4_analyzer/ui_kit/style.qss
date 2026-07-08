@@ -278,6 +278,18 @@ QToolButton[role="primary"]:hover {
     border-color: #135abd;
 }
 
+QPushButton[role="destructive"] {
+    color: #dc2626;
+    border: 1px solid #fca5a5;
+    background: transparent;
+}
+QPushButton[role="destructive"]:hover { background: #fef2f2; }
+QPushButton[role="destructive"]:pressed { background: #fee2e2; }
+QPushButton[role="destructive"]:disabled {
+    color: #fca5a5;
+    border-color: #fecaca;
+}
+
 QMessageBox QPushButton {
     min-width: 58px;
     min-height: 32px;
@@ -2147,3 +2159,13 @@ QWidget#viewTabBar { border: none; }
 
 /* Central tray backdrop — the three rounded panels float on this. */
 QWidget#centralTray { background-color: #f2f4f7; }
+
+/* Acquisition review modal hierarchy (2026-07-08 G4). */
+#reviewTitle {
+    font-size: 15px;
+    font-weight: 700;
+}
+#reviewFileName,
+#reviewPreflight {
+    color: #6b7280;
+}

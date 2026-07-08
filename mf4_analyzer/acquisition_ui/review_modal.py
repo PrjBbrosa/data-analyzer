@@ -206,17 +206,25 @@ class ReviewModal(QDialog):
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(10)
 
-        # Header: file name + duration / channel summary.
-        header = QLabel(
-            f"录制完成: {self._ctx.mf4_path.name}\n"
+        # Header hierarchy (spec 2026-07-08 G4): title / facts / file name.
+        title = QLabel("录制完成", body)
+        title.setObjectName("reviewTitle")
+        body_layout.addWidget(title)
+
+        facts = QLabel(
             f"时长 {self._ctx.summary.duration_s:.2f} s · "
             f"接收 {self._ctx.summary.rx_count} 帧 · "
             f"丢帧 {self._ctx.summary.dropped_frames}",
             body,
         )
-        header.setObjectName("reviewHeader")
-        header.setWordWrap(True)
-        body_layout.addWidget(header)
+        facts.setObjectName("reviewFacts")
+        facts.setWordWrap(True)
+        body_layout.addWidget(facts)
+
+        file_line = QLabel(self._ctx.mf4_path.name, body)
+        file_line.setObjectName("reviewFileName")
+        file_line.setWordWrap(True)
+        body_layout.addWidget(file_line)
 
         # Preflight summary block. ``missing_channels`` is rendered as a
         # capped ``QListWidget`` so a 100-entry list does not blow up the
@@ -224,7 +232,6 @@ class ReviewModal(QDialog):
         # context.
         pf = self._ctx.preflight
         pf_text_parts = [
-            f"诊断: rows={pf.rows} · "
             f"已选通道 {len(self._ctx.expected_channels)} · "
             f"缺失 {len(pf.missing_channels)} · "
             f"fs≈{pf.estimated_fs_hz:.1f} Hz",
@@ -237,7 +244,7 @@ class ReviewModal(QDialog):
         pf_label.setObjectName("reviewPreflight")
         pf_label.setWordWrap(True)
         pf_label.setToolTip(
-            f"MDF 通道总数 {len(pf.channels)}（含时间通道）"
+            f"rows={pf.rows} · MDF 通道总数 {len(pf.channels)}（含时间通道）"
         )
         body_layout.addWidget(pf_label)
 
@@ -276,10 +283,13 @@ class ReviewModal(QDialog):
 
         self._btn_discard = QPushButton(ACTION_DISCARD, self)
         self._btn_discard.setObjectName("reviewBtnDiscard")
+        self._btn_discard.setProperty("role", "destructive")
         self._btn_discard.clicked.connect(
             lambda _checked=False: self.do_discard()
         )
         btn_row.addWidget(self._btn_discard)
+        btn_row.addSpacing(48)
+        btn_row.addStretch(1)
 
         self._btn_save_only = QPushButton(ACTION_SAVE_ONLY, self)
         self._btn_save_only.setObjectName("reviewBtnSaveOnly")

@@ -227,6 +227,29 @@ def test_review_modal_has_four_actions(qapp, tmp_path):
         modal.done(0)
 
 
+def test_review_modal_visual_hierarchy(qtbot, tmp_path):
+    """Spec 2026-07-08 G4: title/facts/secondary diagnostics + destructive action."""
+    ctx = _finalize_and_make_context(tmp_path)
+    modal = ReviewModal(ctx)
+    qtbot.addWidget(modal)
+    assert modal.findChild(QLabel, "reviewTitle").text() == "录制完成"
+    facts = modal.findChild(QLabel, "reviewFacts").text()
+    assert "时长" in facts and "接收" in facts and "丢帧" in facts
+    file_name = modal.findChild(QLabel, "reviewFileName")
+    assert file_name is not None and ctx.mf4_path.name in file_name.text()
+    pf = modal.findChild(QLabel, "reviewPreflight")
+    assert "已选通道" in pf.text() and "rows=" not in pf.text()
+    assert "rows=" in pf.toolTip()
+    assert modal._btn_discard.property("role") == "destructive"
+    modal.show()
+    qtbot.waitExposed(modal)
+    gap = modal._btn_save_only.x() - (
+        modal._btn_discard.x() + modal._btn_discard.width()
+    )
+    assert gap > 40
+    modal.done(0)
+
+
 # ---------------------------------------------------------------------------
 # Auto-stop banner — surfaces when summary.auto_stop is True
 # ---------------------------------------------------------------------------
