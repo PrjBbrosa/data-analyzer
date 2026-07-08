@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QFileDialog, QInputDialog, QMessageBox
@@ -20,6 +20,28 @@ from ._defs import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def compact_path_display(text: str, max_len: int = 32) -> str:
+    """Compact a filesystem path for the toolbar selector.
+
+    The selector needs a stable, testable string rule. The full path
+    remains in the button tooltip and in ``_output_dir_label``.
+    """
+    if len(text) <= max_len:
+        return text
+    pure = PurePath(text)
+    parts = [p for p in pure.parts if p not in ("/", "\\")]
+    if not parts:
+        return text
+    if len(parts) >= 2:
+        if not pure.is_absolute() and len(parts) >= 3:
+            candidate = f"{parts[0]}/…/{parts[-1]}"
+        else:
+            candidate = f"…/{parts[-2]}/{parts[-1]}"
+        if len(candidate) <= max_len:
+            return candidate
+    return f"…/{parts[-1]}"
 
 
 class SettingsMixin:
@@ -425,11 +447,17 @@ class SettingsMixin:
         except Exception as exc:  # noqa: BLE001 - same rationale as above
             return None, f"A2L measurement 解析失败：{exc}"
 
+    def set_output_dir(self, path) -> None:
+        """Set the recording output directory and compact toolbar display."""
+        text = str(path)
+        self._output_dir_label = text
+        self._set_selector_value(self._output_btn, "输出", compact_path_display(text))
+        self._output_btn.setToolTip(text)
+
     def _on_pick_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择输出目录", "")
         if path:
-            self._output_dir_label = path
-            self._set_selector_value(self._output_btn, "输出", self._output_dir_label)
+            self.set_output_dir(path)
             self._status.showMessage(f"输出目录: {path}")
 
     # ------------------------------------------------------------------
