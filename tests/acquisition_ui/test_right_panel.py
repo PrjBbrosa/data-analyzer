@@ -71,6 +71,20 @@ def test_idle_page_titles(qtbot):
     assert "磁盘写速" not in titles
 
 
+def test_recording_page_titles_are_localized(qtbot):
+    page = RecordingQualityPage()
+    qtbot.addWidget(page)
+    titles = [lab.text() for lab in page.findChildren(QLabel, "rightMetricTitle")]
+    assert titles == [
+        "缓冲占用",
+        "写入速率",
+        "丢帧",
+        "CAN 总线负载",
+        "最近帧延迟",
+        "磁盘剩余",
+    ]
+
+
 def test_disconnected_page_localizes_status_copy(qtbot):
     page = DisconnectedPage()
     qtbot.addWidget(page)
@@ -224,12 +238,12 @@ def test_recording_page_v3_sections_exist(qapp):
     texts = _label_texts(panel.recording_page)
     assert "实时质量监控" in texts
     for title in (
-        "ring buffer",
+        "缓冲占用",
         "写入速率",
-        "dropped frames",
-        "CAN load",
-        "last frame delay",
-        "disk remaining",
+        "丢帧",
+        "CAN 总线负载",
+        "最近帧延迟",
+        "磁盘剩余",
     ):
         assert title in texts
     panel.close()

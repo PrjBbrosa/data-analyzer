@@ -457,12 +457,12 @@ class RecordingQualityPage(_BasePanelPage):
         super().__init__(parent)
         _add_header_row(self._outer, self, "实时质量监控")
 
-        self._row_ring = _add_metric_section(self._outer, self, "ring buffer")
+        self._row_ring = _add_metric_section(self._outer, self, "缓冲占用")
         self._row_write = _add_metric_section(self._outer, self, "写入速率")
-        self._row_dropped = _add_metric_section(self._outer, self, "dropped frames")
-        self._row_can = _add_metric_section(self._outer, self, "CAN load")
-        self._row_rx_age = _add_metric_section(self._outer, self, "last frame delay")
-        self._row_disk = _add_metric_section(self._outer, self, "disk remaining")
+        self._row_dropped = _add_metric_section(self._outer, self, "丢帧")
+        self._row_can = _add_metric_section(self._outer, self, "CAN 总线负载")
+        self._row_rx_age = _add_metric_section(self._outer, self, "最近帧延迟")
+        self._row_disk = _add_metric_section(self._outer, self, "磁盘剩余")
         self._outer.addStretch(1)
 
     def apply(

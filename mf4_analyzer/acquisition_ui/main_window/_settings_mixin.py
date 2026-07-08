@@ -230,7 +230,7 @@ class SettingsMixin:
             return
         if state == CockpitState.CONNECTED_IDLE:
             self._status.showMessage(
-                f"streaming · {self._event_rate_per_s()} evt/s"
+                f"实时流 · {self._event_rate_per_s()} evt/s"
             )
             return
         if state == CockpitState.RECORDING:
@@ -238,9 +238,9 @@ class SettingsMixin:
             size_mb = self._recording_file_size_mb()
             size_part = f"{size_mb:.1f} MB" if size_mb > 0 else "缓冲中"
             self._status.showMessage(
-                f"RECORDING · {elapsed} · {self._sample_count()} samples · "
+                f"录制中 · {elapsed} · {self._sample_count()} 样本 · "
                 f"{size_part} · "
-                f"drop {self._cumulative_dropped} · buf {self._ring.level_pct:.1f}%"
+                f"丢帧 {self._cumulative_dropped} · 缓冲 {self._ring.level_pct:.1f}%"
             )
 
     def _event_rate_per_s(self) -> int:

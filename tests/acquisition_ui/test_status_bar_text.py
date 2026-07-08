@@ -31,7 +31,7 @@ def test_connected_idle_status_bar_text(qapp):
     window = CockpitMainWindow()
     try:
         _connect(window)
-        assert window.statusBar().currentMessage() == "streaming · 0 evt/s"
+        assert window.statusBar().currentMessage() == "实时流 · 0 evt/s"
     finally:
         window.close()
 
@@ -42,7 +42,7 @@ def test_recording_status_bar_text(qapp):
         _connect(window)
         window.state_machine.request_start_recording()
         assert window.statusBar().currentMessage() == (
-            "RECORDING · 00:00 · 0 samples · 缓冲中 · drop 0 · buf 0.0%"
+            "录制中 · 00:00 · 0 样本 · 缓冲中 · 丢帧 0 · 缓冲 0.0%"
         )
     finally:
         window.close()
