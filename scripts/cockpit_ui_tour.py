@@ -84,6 +84,9 @@ def main() -> int:
     from PyQt5.QtWidgets import QApplication, QCheckBox, QLabel
 
     from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
+    from mf4_analyzer.acquisition_ui.main_window._settings_mixin import (
+        compact_path_display,
+    )
     from mf4_analyzer.acquisition_ui.review_modal import ReviewModal
     from mf4_analyzer.ui_kit import load_stylesheet, setup_chinese_font
 
@@ -96,8 +99,7 @@ def main() -> int:
         print(f"[tour] stylesheet load failed: {exc!r}")
 
     window = CockpitMainWindow(initial_pool=_build_pool(), allow_fake_backend=True)
-    window._output_dir_label = str(out_dir)
-    window._set_selector_value(window._output_btn, "输出", window._output_dir_label)
+    window.set_output_dir(out_dir)
     window.show()
 
     failures: list[str] = []
@@ -132,7 +134,9 @@ def main() -> int:
         anchor = sb.value()
         value_label = window._output_btn.findChild(QLabel, "cockpitSelectorValue")
         check(
-            value_label is not None and value_label.text() == str(out_dir),
+            value_label is not None
+            and value_label.text() == compact_path_display(str(out_dir))
+            and window._output_btn.toolTip() == str(out_dir),
             "tour output selector shows --out",
         )
         item = lp._list.item(lp._list.count() - 1)
@@ -178,16 +182,37 @@ def main() -> int:
         )
         shot(window, "03-idle-added")
 
-    @at(4800, "record")
+    @at(5000, "pin-default-check")
+    def s_pin():
+        lp = window.left_pane
+        for i in range(8):
+            lp._set_measurement_selected(f"EpsDiagSig_{i:02d}", True)
+        window._restart_idle_stream_for_selection()
+        cards = window._center.cards
+        check(len(cards) == 5, f"G6 默认 5 张卡 (实测 {len(cards)})")
+        bar = window._center._summary_bar
+        check(
+            (not bar.isHidden())
+            and bar.text() == "已选 12 · 实时显示 5 · 其余通道仍会录制",
+            f"G6 计数条 (实测 '{bar.text()}')",
+        )
+        shot(window, "03b-pinned")
+
+    @at(5400, "record")
     def s_record():
         window.main_button.click()
 
-    @at(7400, "recording-check")
+    @at(8000, "recording-check")
     def s_recording():
         from mf4_analyzer.acquisition_ui.state import CockpitState
 
         check(window.state_machine.state == CockpitState.RECORDING, "recording reached")
         check(window.main_button.text() == "■ Stop && 复盘", "F4 && escaped")
+        msg = window._status.currentMessage()
+        check(
+            msg.startswith("录制中") and "丢帧" in msg and "RECORDING" not in msg,
+            f"G2 状态栏中文 (实测 '{msg}')",
+        )
         cards = window._center.cards
         check(
             all(c._spark.sample_count > 0 for c in cards.values()),
@@ -195,20 +220,25 @@ def main() -> int:
         )
         shot(window, "04-recording")
 
-    @at(7600, "stop")
+    @at(8200, "stop")
     def s_stop():
         window.main_button.click()
 
-    @at(8400, "review-check")
+    @at(9000, "review-check")
     def s_review():
         modal = window.review_modal
         check(isinstance(modal, ReviewModal), "real ReviewModal opened")
+        result = window.last_stop_result
+        check(
+            result is not None and len(result.selected_measurement_names) == 12,
+            "G6 录制含全部 12 通道",
+        )
         shot(modal if modal is not None else window, "05-review")
         if isinstance(modal, ReviewModal):
             modal.do_save_only()
             modal.reject()
 
-    @at(15400, "soak-check")
+    @at(16000, "soak-check")
     def s_soak():
         from mf4_analyzer.acquisition_ui.state import CockpitState
 
@@ -226,17 +256,20 @@ def main() -> int:
         check(window._review_modal is None, "F2 no ghost review modal")
         shot(window, "06-soak")
 
-    @at(15800, "narrow")
+    @at(16400, "narrow")
     def s_narrow():
         window.resize(960, 600)
 
-    @at(16800, "narrow-check")
+    @at(17400, "narrow-check")
     def s_narrow_check():
         check(window._center.width() >= 300, f"F11 center >=300 ({window._center.width()})")
         check(
             not bool(window._mode_segment_widget.property("cockpitOverflowHidden")),
             "F11 mode segment remains visible",
         )
+        for name, card in window._center.cards.items():
+            check(card._stats_label.isHidden(), f"G1 {name} stats 已折叠")
+            check(bool(card._name_label.visible_text()), f"G1 {name} 名称可见")
         first_card = next(iter(window._center.cards.values()), None)
         if first_card is not None:
             stats = first_card.findChild(QLabel, "liveCardStats")
@@ -252,7 +285,7 @@ def main() -> int:
             )
         shot(window, "07-narrow")
 
-    @at(17400, "finish")
+    @at(18000, "finish")
     def s_finish():
         produced = sorted(p.name for p in out_dir.glob("capture_*"))
         check(any(n.endswith(".mf4") for n in produced), "MF4 exists")
