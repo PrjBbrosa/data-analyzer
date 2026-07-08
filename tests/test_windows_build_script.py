@@ -20,7 +20,7 @@ def test_windows_folder_build_script_uses_onedir_pyinstaller_contract():
         "qtawesome",
         "asammdf",
         "MF4 Data Analyzer V1.py",
-        "TraceLab7.4",
+        "TraceLab7.5",
     ):
         assert token in text
 
@@ -49,7 +49,7 @@ def test_windows_folder_build_script_bundles_help_docs_inside_app():
     assert 'TraceLab-v$Version-*.html' not in text
 
 
-def test_windows_folder_build_script_vendors_pyxcp_without_analysis_import():
+def test_windows_folder_build_script_vendors_native_acquisition_packages_without_analysis_import():
     script = ROOT / "tools" / "build_windows_folder.ps1"
     runtime_hook = ROOT / "tools" / "pyinstaller_rthook_pyxcp_vendor.py"
 
@@ -58,10 +58,12 @@ def test_windows_folder_build_script_vendors_pyxcp_without_analysis_import():
     text = script.read_text(encoding="utf-8")
 
     assert "_vendor_pyxcp" in text
+    assert "_vendor_pya2l" in text
     assert "--runtime-hook" in text
     assert "pyinstaller_rthook_pyxcp_vendor.py" in text
     assert "--exclude-module" in text
-    assert "pyxcp" in text
+    for module in ("pyxcp", "pya2l"):
+        assert f'"--exclude-module", "{module}"' in text
 
 
 def test_windows_folder_build_script_excludes_matplotlib_and_scipy():

@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "7.4",
+    [string]$Version = "7.5",
     [string]$AppName = "",
     [switch]$Console,
     [switch]$SkipInstall,
@@ -49,9 +49,10 @@ $DistDir = Join-Path $RepoRoot "dist"
 $WorkDir = Join-Path $RepoRoot "build\pyinstaller"
 $SpecDir = Join-Path $RepoRoot "build\spec"
 $VendorPyxcpDir = Join-Path $WorkDir "_vendor_pyxcp"
+$VendorPya2lDir = Join-Path $WorkDir "_vendor_pya2l"
 $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
-# Default output: dist\TraceLab7.4\TraceLab7.4.exe (override with -Version or -AppName)
+# Default output: dist\TraceLab7.5\TraceLab7.5.exe (override with -Version or -AppName)
 
 foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeHookPyxcp)) {
     if (-not (Test-Path $RequiredPath)) {
@@ -80,12 +81,12 @@ if (-not $KeepPrevious) {
 
 New-Item -ItemType Directory -Force -Path $DistDir, $WorkDir, $SpecDir | Out-Null
 
-# pyxcp triggers a 0xC0000005 inside a PyQt-loaded process if PyInstaller's
-# analysis phase imports it (native DLL loaded twice). Vendor the package
-# into _vendor_pyxcp at build time and exclude pyxcp from analysis; the
-# runtime hook puts _vendor_pyxcp on sys.path before any acquisition code
-# runs. See docs/lessons-learned/codex-windows-native-import-guard.md.
-Write-Step "Vendoring pyxcp to _vendor_pyxcp (avoid analysis-time native import)"
+# pyxcp and pya2l trigger 0xC0000005-class failures when PyInstaller's
+# analysis phase imports their native pieces. Vendor them at build time and
+# exclude them from analysis; the runtime hook puts the vendor dirs on
+# sys.path before any acquisition code runs. See
+# docs/lessons-learned/codex-windows-native-import-guard.md.
+Write-Step "Vendoring native acquisition packages (avoid analysis-time imports)"
 if (Test-Path $VendorPyxcpDir) {
     Remove-Item -Recurse -Force $VendorPyxcpDir
 }
@@ -100,12 +101,27 @@ if (-not $PyxcpSrc -or -not (Test-Path $PyxcpSrc)) {
 }
 Copy-Item -Recurse -Force -Path $PyxcpSrc -Destination (Join-Path $VendorPyxcpDir "pyxcp")
 
+if (Test-Path $VendorPya2lDir) {
+    Remove-Item -Recurse -Force $VendorPya2lDir
+}
+New-Item -ItemType Directory -Force -Path $VendorPya2lDir | Out-Null
+$Pya2lLocateScript = @"
+import pathlib, pya2l
+print(pathlib.Path(pya2l.__file__).parent)
+"@
+$Pya2lSrc = (& $VenvPython -c $Pya2lLocateScript).Trim()
+if (-not $Pya2lSrc -or -not (Test-Path $Pya2lSrc)) {
+    throw "pya2l not found in venv: ensure pya2ldb is listed in requirements.txt"
+}
+Copy-Item -Recurse -Force -Path $Pya2lSrc -Destination (Join-Path $VendorPya2lDir "pya2l")
+
 Write-Step "Building folder-style exe with PyInstaller"
 $AddDataStyle = "$StyleQss;mf4_analyzer\ui_kit"
 $AddDataIcons = "$IconsDir;assets\icons"
 $BrandingDir = Join-Path $RepoRoot "assets\branding"
 $AddDataBranding = "$BrandingDir;assets\branding"
 $AddDataVendorPyxcp = "$VendorPyxcpDir;_vendor_pyxcp"
+$AddDataVendorPya2l = "$VendorPya2lDir;_vendor_pya2l"
 # Help docs (panel guides + software manual) are integrated into the app and
 # opened in the browser from inside the bundle, so they ship INSIDE the package
 # (no longer copied next to the exe). help_dir() resolves to
@@ -170,9 +186,11 @@ $PyInstallerArgs += @(
     "--add-data", $AddDataIcons,
     "--add-data", $AddDataBranding,
     "--add-data", $AddDataVendorPyxcp,
+    "--add-data", $AddDataVendorPya2l,
     "--add-data", $AddDataHelp,
     "--runtime-hook", $RuntimeHookPyxcp,
     "--exclude-module", "pyxcp",
+    "--exclude-module", "pya2l",
     # matplotlib + scipy were dropped from the app (matplotlib->pyqtgraph,
     # scipy->numpy windows). --collect-submodules pyqtgraph below pulls in
     # pyqtgraph's Matplotlib* submodules (which import matplotlib) and its
