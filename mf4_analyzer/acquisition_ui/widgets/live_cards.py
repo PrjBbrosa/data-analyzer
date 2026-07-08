@@ -22,12 +22,13 @@ import math
 import re
 from collections import deque
 
-from PyQt5.QtCore import QPointF, QRectF, Qt
+from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -38,6 +39,7 @@ from mf4_analyzer.acquisition_ui.widgets.live_downsampler import (
     Bin,
     downsample_minmax,
 )
+from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 
 
 # Spec §State Machine `stats window`.
@@ -486,9 +488,13 @@ class LiveCardGrid(QWidget):
     grid swaps the placeholder for the cards.
     """
 
+    unpin_requested = pyqtSignal(str)
+    pins_reset_requested = pyqtSignal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumWidth(300)
+        self._pinning_enabled = False
         # Outer shell: thin zero-margin QVBoxLayout whose sole child is
         # the scroll area. The cards/placeholder layout lives on an
         # inner host widget inside the scroll viewport so vertical
@@ -574,6 +580,33 @@ class LiveCardGrid(QWidget):
         else:
             self._summary_bar.setVisible(False)
 
+    def set_pinning_enabled(self, enabled: bool) -> None:
+        """启用卡片右键 pin 菜单（采集页开、回放页保持关闭）。"""
+        self._pinning_enabled = bool(enabled)
+        for card in self._cards.values():
+            self._install_card_menu(card)
+
+    def _install_card_menu(self, card: LiveSignalCard) -> None:
+        if not self._pinning_enabled or bool(card.property("pinMenuInstalled")):
+            return
+        card.setProperty("pinMenuInstalled", True)
+        card.setContextMenuPolicy(Qt.CustomContextMenu)
+        card.customContextMenuRequested.connect(
+            lambda pos, c=card: self._build_card_menu(c).exec_(c.mapToGlobal(pos))
+        )
+
+    def _build_card_menu(self, card: LiveSignalCard) -> QMenu:
+        menu = apply_rounded_menu_chrome(QMenu(card))
+        unpin = menu.addAction("取消固定实时显示")
+        unpin.triggered.connect(
+            lambda _checked=False, name=card.name: self.unpin_requested.emit(name)
+        )
+        reset = menu.addAction("重置固定（默认前 5）")
+        reset.triggered.connect(
+            lambda _checked=False: self.pins_reset_requested.emit()
+        )
+        return menu
+
     def set_signals(self, signals: list[tuple[str, str, str | None]]) -> None:
         """Replace the cards with a new ``(name, unit, raster)`` list.
 
@@ -618,6 +651,7 @@ class LiveCardGrid(QWidget):
                 card.update_metadata(unit=unit, raster=raster)
                 card.set_visual_index(idx)
             self._cards[name] = card
+            self._install_card_menu(card)
             self._layout.addWidget(card)
         # Spec §B: at least one card present — drop the trailing
         # stretch so vertical viewport space flows into the cards

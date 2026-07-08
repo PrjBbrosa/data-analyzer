@@ -30,6 +30,20 @@ def _pool() -> tuple[MeasurementSummary, ...]:
     )
 
 
+def _make_pool(n: int = 3) -> tuple[MeasurementSummary, ...]:
+    return tuple(
+        MeasurementSummary(
+            name=f"Sig_{i:02d}",
+            address=0x40000000 + 4 * i,
+            datatype="UWORD",
+            unit="",
+            conversion="",
+            available_events=("event_10ms",),
+        )
+        for i in range(n)
+    )
+
+
 def _action(menu, text: str):
     for action in menu.actions():
         if action.text() == text:
@@ -68,3 +82,24 @@ def test_left_pane_multi_row_menu_intersection_disabled_when_empty(qapp):
         "EngSpdAvg\trpm\t0x40000000\n"
         "EngTrqAct\tNm\t0x40000004"
     )
+
+
+def test_context_menu_offers_pin_toggle_for_selected(qtbot):
+    """spec 2026-07-08 §G6: provider 存在且已选中时出 pin 开关项。"""
+    pane = LeftPane()
+    qtbot.addWidget(pane)
+    pane.set_pool(_make_pool(3))
+    pane._set_measurement_selected("Sig_00", True)
+    pane.set_pin_state_provider(lambda name: name == "Sig_00")
+    fired = []
+    pane.pin_toggle_requested.connect(fired.append)
+
+    menu = pane._build_context_menu([pane._pool[0]])
+    labels = [a.text() for a in menu.actions()]
+    assert "取消固定实时显示" in labels
+    next(a for a in menu.actions() if a.text() == "取消固定实时显示").trigger()
+    assert fired == ["Sig_00"]
+
+    # 未选中的测量不出 pin 项。
+    menu2 = pane._build_context_menu([pane._pool[1]])
+    assert all("固定" not in a.text() for a in menu2.actions())

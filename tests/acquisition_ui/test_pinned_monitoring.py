@@ -93,3 +93,21 @@ def test_recording_config_uses_full_selection(qtbot):
     assert len(config.selected) == 12
     assert len(window._center.cards) == 5
     window.close()
+
+
+def test_card_menu_emits_unpin_and_reset(qtbot):
+    window = _idle_window(qtbot)
+    card = window._center.cards["Sig_00"]
+    menu = window._center._build_card_menu(card)
+    labels = [a.text() for a in menu.actions()]
+    assert "取消固定实时显示" in labels
+    assert "重置固定（默认前 5）" in labels
+
+    next(a for a in menu.actions() if "取消固定" in a.text()).trigger()
+    assert "Sig_00" not in window._center.cards
+
+    remaining = next(iter(window._center.cards.values()))
+    menu2 = window._center._build_card_menu(remaining)
+    next(a for a in menu2.actions() if "重置固定" in a.text()).trigger()
+    assert sorted(window._center.cards) == [f"Sig_{i:02d}" for i in range(5)]
+    window.close()

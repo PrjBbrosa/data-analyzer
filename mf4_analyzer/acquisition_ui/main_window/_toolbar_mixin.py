@@ -493,6 +493,15 @@ class ToolbarMixin:
 
         self._right_panel = RightPanel(splitter)
 
+        # Pin 接线（spec 2026-07-08 §G6b）。ReplayTab 的 grid 不启用。
+        self._left_pane.set_pin_state_provider(
+            lambda name: name in self._effective_pinned_names()
+        )
+        self._left_pane.pin_toggle_requested.connect(self._on_pin_toggle)
+        self._center.set_pinning_enabled(True)
+        self._center.unpin_requested.connect(self.unpin_channel)
+        self._center.pins_reset_requested.connect(lambda: self.reset_pins())
+
         splitter.addWidget(self._left_pane)
         splitter.addWidget(self._center)
         splitter.addWidget(self._right_panel)

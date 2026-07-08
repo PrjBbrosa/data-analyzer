@@ -796,6 +796,12 @@ class CockpitMainWindow(
             self._manual_pins.append(name)
         self._refresh_center_cards()
 
+    def _on_pin_toggle(self, name: str) -> None:
+        if name in self._effective_pinned_names():
+            self.unpin_channel(name)
+        else:
+            self.pin_channel(name)
+
     def unpin_channel(self, name: str) -> None:
         self._ensure_pin_customized()
         if name in self._manual_pins:

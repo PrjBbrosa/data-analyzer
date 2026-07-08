@@ -122,6 +122,7 @@ class LeftPane(QFrame):
     """
 
     selection_changed = pyqtSignal()
+    pin_toggle_requested = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -135,6 +136,7 @@ class LeftPane(QFrame):
         self._config_path: Path | None = None
         self._a2l_has_daq_events: bool = False
         self._frozen: bool = False
+        self._pin_state_provider = None
         self._visible_count: int = 0
         self._row_items: dict[str, QListWidgetItem] = {}
         self._build_ui()
@@ -263,6 +265,10 @@ class LeftPane(QFrame):
         """
         self._config_path = Path(path) if path is not None else None
 
+    def set_pin_state_provider(self, provider) -> None:
+        """注入「该通道当前是否已固定」查询（spec §G6）；None 关闭 pin 菜单项。"""
+        self._pin_state_provider = provider
+
     def set_a2l_has_daq_events(self, has_events: bool) -> None:
         """Spec §Left Pane fallback: ``有 DAQ`` chip flips off + disabled
         when the A2L has no DAQ events."""
@@ -348,6 +354,20 @@ class LeftPane(QFrame):
             )
             jump = menu.addAction("跳到 A2L 源行")
             jump.setEnabled(False)
+            if (
+                self._pin_state_provider is not None
+                and m.name in self._selected_names
+            ):
+                menu.addSeparator()
+                pinned = bool(self._pin_state_provider(m.name))
+                pin_action = menu.addAction(
+                    "取消固定实时显示" if pinned else "固定到实时显示"
+                )
+                pin_action.triggered.connect(
+                    lambda _checked=False, name=m.name: (
+                        self.pin_toggle_requested.emit(name)
+                    )
+                )
             return menu
 
         copy_list = menu.addAction("复制为列表")
