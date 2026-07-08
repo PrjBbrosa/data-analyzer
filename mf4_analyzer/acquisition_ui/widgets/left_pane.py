@@ -130,6 +130,7 @@ class LeftPane(QFrame):
         self.setMaximumWidth(460)
         self._pool: tuple[MeasurementSummary, ...] = ()
         self._selected_names: set[str] = set()
+        self._selection_order: list[str] = []
         self._selected_events: dict[str, str] = {}
         self._config_path: Path | None = None
         self._a2l_has_daq_events: bool = False
@@ -235,6 +236,9 @@ class LeftPane(QFrame):
         # Drop selections that fell outside the new pool.
         pool_names = {m.name for m in self._pool}
         self._selected_names = {n for n in self._selected_names if n in pool_names}
+        self._selection_order = [
+            n for n in self._selection_order if n in self._selected_names
+        ]
         self._selected_events = {
             name: event
             for name, event in self._selected_events.items()
@@ -302,6 +306,17 @@ class LeftPane(QFrame):
                 )
             )
         return out
+
+    def selection_order(self) -> list[str]:
+        """Selected names in user-click order.
+
+        Some older tests and setup paths still mutate ``_selected_names``
+        directly. Include those names at the end in sorted order so the
+        public API always covers the full selected set.
+        """
+        ordered = [n for n in self._selection_order if n in self._selected_names]
+        missing = self._selected_names.difference(ordered)
+        return ordered + sorted(missing)
 
     def common_events(self) -> set[str]:
         """Spec §Search And Filter Contract ``build_event_intersection``."""
@@ -659,6 +674,7 @@ class LeftPane(QFrame):
         if not self._selected_names:
             return
         self._selected_names.clear()
+        self._selection_order.clear()
         self._selected_events.clear()
         self._refresh_list()
         self.selection_changed.emit()
@@ -683,6 +699,8 @@ class LeftPane(QFrame):
         before = set(self._selected_names)
         if selected:
             self._selected_names.add(name)
+            if name not in self._selection_order:
+                self._selection_order.append(name)
             measurement = self._measurement_by_name(name)
             if measurement is not None and name not in self._selected_events:
                 event = self._default_event_for(measurement)
@@ -690,6 +708,8 @@ class LeftPane(QFrame):
                     self._selected_events[name] = event
         else:
             self._selected_names.discard(name)
+            if name in self._selection_order:
+                self._selection_order.remove(name)
             self._selected_events.pop(name, None)
         if before == self._selected_names:
             return
@@ -743,6 +763,8 @@ class LeftPane(QFrame):
         selected_changed = False
         if select and name not in self._selected_names:
             self._selected_names.add(name)
+            if name not in self._selection_order:
+                self._selection_order.append(name)
             selected_changed = True
         event_changed = self._selected_events.get(name) != event
         if event_changed:

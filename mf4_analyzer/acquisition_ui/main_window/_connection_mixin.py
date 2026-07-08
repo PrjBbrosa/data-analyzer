@@ -69,8 +69,9 @@ class ConnectionMixin:
         if not selection and self._initial_pool:
             # Auto-select first measurement so the demo can start the
             # backend without a real A2L click-through.
-            self._left_pane._selected_names.add(self._initial_pool[0].name)
-            self._left_pane._refresh_list()
+            self._left_pane._set_measurement_selected(
+                self._initial_pool[0].name, True
+            )
             selection = self._left_pane.current_selection()
         # T1-3: if transport + IF_DATA + a real pool are all present,
         # try to swap the default Fake backend for a real Vector one.

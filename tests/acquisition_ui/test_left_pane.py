@@ -335,6 +335,39 @@ def test_search_highlight_renders_in_name_label(qtbot):
     assert "<span" not in row.findChild(QLabel, "measurementName").text()
 
 
+def test_selection_order_tracks_click_order(qtbot):
+    """Spec 2026-07-08 G5: selection order is user-click order."""
+    pane = LeftPane()
+    qtbot.addWidget(pane)
+    pane.set_pool(_make_pool(5))
+    for name in ("Sig_02", "Sig_00", "Sig_01"):
+        pane._set_measurement_selected(name, True)
+    assert pane.selection_order() == ["Sig_02", "Sig_00", "Sig_01"]
+    pane._set_measurement_selected("Sig_00", False)
+    pane._set_measurement_selected("Sig_00", True)
+    assert pane.selection_order() == ["Sig_02", "Sig_01", "Sig_00"]
+
+
+def test_selection_order_self_heals_on_direct_set_mutation(qtbot):
+    """Legacy direct _selected_names mutation still returns all selected names."""
+    pane = LeftPane()
+    qtbot.addWidget(pane)
+    pane.set_pool(_make_pool(5))
+    pane._set_measurement_selected("Sig_03", True)
+    pane._selected_names.add("Sig_01")
+    assert pane.selection_order() == ["Sig_03", "Sig_01"]
+
+
+def test_selection_order_filtered_by_set_pool(qtbot):
+    pane = LeftPane()
+    qtbot.addWidget(pane)
+    pane.set_pool(_make_pool(5))
+    for name in ("Sig_04", "Sig_02"):
+        pane._set_measurement_selected(name, True)
+    pane.set_pool(_make_pool(3))
+    assert pane.selection_order() == ["Sig_02"]
+
+
 def test_highlight_name_html_escapes_and_wraps():
     from mf4_analyzer.acquisition_ui.widgets.left_pane import _highlight_name_html
 
