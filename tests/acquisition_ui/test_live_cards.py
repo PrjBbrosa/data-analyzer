@@ -197,6 +197,37 @@ def test_narrow_live_card_header_keeps_current_value_visible(qtbot):
     assert value.geometry().right() <= card.contentsRect().right()
 
 
+def test_narrow_card_keeps_identity_and_value(qtbot):
+    """Spec 2026-07-08 G1: stats yield first; name elides but stays visible."""
+    card = LiveSignalCard(
+        "Rte_StrWhlTrqSnsrCalib_StrWhlTrqRawFiltered",
+        unit="Nm",
+        raster="event_1ms",
+    )
+    qtbot.addWidget(card)
+    card.resize(360, 120)
+    card.show()
+    card.layout().activate()
+    qtbot.waitExposed(card)
+
+    assert card._stats_label.isHidden()
+    shown = card._name_label.visible_text()
+    assert "…" in shown
+    assert shown.startswith("Rte_")
+    assert not card._value_label.isHidden()
+    card.resize(600, 120)
+    card.layout().activate()
+    qtbot.wait(0)
+    assert not card._stats_label.isHidden()
+
+
+def test_card_name_tooltip_is_full_name(qtbot):
+    card = LiveSignalCard("MotSpd", unit="rpm")
+    qtbot.addWidget(card)
+    assert card._name_label.toolTip() == "MotSpd"
+    assert card._name_label.full_text() == "MotSpd"
+
+
 def test_idle_refresh_trims_to_last_60s_of_stream_time(qtbot):
     """The idle trim floor comes from the newest buffered stream timestamp."""
     card = LiveSignalCard("MotSpd")

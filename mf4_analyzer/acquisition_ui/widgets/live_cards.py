@@ -69,9 +69,10 @@ _CARD_TRACE_COLORS = (
     "#64748b",
 )
 
-# Below this card width the right-side current value is the more important
-# live signal; stats are restored when the card has breathing room again.
-_COMPACT_STATS_HIDE_WIDTH = 360
+# Spec 2026-07-08 G1: below this card width the stats label yields to
+# signal identity and current value. This is visual layout policy, not
+# a health threshold, so it stays in this UI module.
+_STATS_COLLAPSE_MIN_CARD_W = 430
 
 # Spec §A: recording state collapses into the swatch — solid red fill.
 _RECORDING_SWATCH_COLOR = "#dc2626"
@@ -101,6 +102,56 @@ def _format_raster_display(raster: str | None) -> str:
             return f"{match.group(1)} {match.group(2)}"
         return body
     return raster
+
+
+class _ElidedLabel(QLabel):
+    """QLabel that elides long signal names in the middle.
+
+    EPS channel names often share long prefixes; the suffix is usually
+    the distinguishing part, so middle elision preserves both ends.
+    """
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._full_text = text
+
+    def full_text(self) -> str:
+        return self._full_text
+
+    def visible_text(self) -> str:
+        return self.text()
+
+    def set_full_text(self, text: str) -> None:
+        self._full_text = text
+        self._update_elide()
+
+    def _update_elide(self) -> None:
+        width = max(16, self.width())
+        text = self.fontMetrics().elidedText(
+            self._full_text, Qt.ElideMiddle, width
+        )
+        if "…" in text and not text.startswith(self._full_text[:4]):
+            text = self._prefix_preserving_elide(width)
+        super().setText(text)
+
+    def _prefix_preserving_elide(self, width: int) -> str:
+        metrics = self.fontMetrics()
+        prefix = self._full_text[: min(4, len(self._full_text))]
+        ellipsis = "…"
+        if metrics.horizontalAdvance(prefix + ellipsis) > width:
+            return prefix + ellipsis
+        tail = ""
+        for i in range(1, len(self._full_text) - len(prefix) + 1):
+            candidate_tail = self._full_text[-i:]
+            candidate = prefix + ellipsis + candidate_tail
+            if metrics.horizontalAdvance(candidate) > width:
+                break
+            tail = candidate_tail
+        return prefix + ellipsis + tail
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override.
+        super().resizeEvent(event)
+        self._update_elide()
 
 
 class Sparkline(QWidget):
@@ -253,10 +304,11 @@ class LiveSignalCard(QFrame):
         self._swatch_label.setFixedSize(10, 10)
         header.addWidget(self._swatch_label, 0, Qt.AlignVCenter)
 
-        self._name_label = QLabel(self._name, self)
+        self._name_label = _ElidedLabel(self._name, self)
         self._name_label.setObjectName("liveCardName")
-        self._name_label.setMinimumWidth(0)
+        self._name_label.setMinimumWidth(60)
         self._name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._name_label.setToolTip(self._name)
         # QSS owns the typography weight (Spec §D: weight 700); avoid
         # forcing bold from Python so QSS wins on polish.
         header.addWidget(self._name_label)
@@ -350,7 +402,7 @@ class LiveSignalCard(QFrame):
         self._spark.reset()
 
     def _sync_header_compactness(self) -> None:
-        compact = 0 < self.width() < _COMPACT_STATS_HIDE_WIDTH
+        compact = 0 < self.width() < _STATS_COLLAPSE_MIN_CARD_W
         self._stats_label.setText(self._stats_full_text)
         self._stats_label.setVisible(not compact)
 
