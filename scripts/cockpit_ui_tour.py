@@ -80,8 +80,9 @@ def main() -> int:
     if args.shots:
         args.shots.mkdir(parents=True, exist_ok=True)
 
-    from PyQt5.QtCore import QTimer
-    from PyQt5.QtWidgets import QApplication, QCheckBox, QLabel
+    from PyQt5.QtCore import Qt, QTimer
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton
 
     from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
     from mf4_analyzer.acquisition_ui.main_window._settings_mixin import (
@@ -182,7 +183,35 @@ def main() -> int:
         )
         shot(window, "03-idle-added")
 
-    @at(5000, "pin-default-check")
+    @at(5000, "focus-card")
+    def s_focus_card():
+        card = window._center.cards.get("StrWhlTrq")
+        check(card is not None, "Focus card target exists")
+        if card is not None:
+            QTest.mouseClick(card, Qt.LeftButton)
+
+    @at(5400, "focus-card-check")
+    def s_focus_card_check():
+        cards = window._center.cards
+        bar = window._center.findChild(QLabel, "liveFocusBar")
+        check(window._center.focused_channel == "StrWhlTrq", "F12 card click focuses StrWhlTrq")
+        check(list(cards) == ["StrWhlTrq"], f"F12 only focused card visible ({list(cards)})")
+        check(
+            bar is not None and bar.isVisible() and "聚焦查看" in bar.text(),
+            f"F12 focus bar visible ({bar.text() if bar is not None else '<missing>'})",
+        )
+        shot(window, "03c-focused-card")
+
+    @at(5700, "focus-card-back")
+    def s_focus_card_back():
+        button = window._center.findChild(QPushButton, "liveFocusBackButton")
+        if button is not None:
+            button.click()
+        else:
+            window._center.clear_focus()
+        check(window._center.focused_channel is None, "F12 focus returns to all cards")
+
+    @at(6100, "pin-default-check")
     def s_pin():
         lp = window.left_pane
         for i in range(8):
@@ -198,11 +227,11 @@ def main() -> int:
         )
         shot(window, "03b-pinned")
 
-    @at(5400, "record")
+    @at(6500, "record")
     def s_record():
         window.main_button.click()
 
-    @at(8000, "recording-check")
+    @at(9500, "recording-check")
     def s_recording():
         from mf4_analyzer.acquisition_ui.state import CockpitState
 
@@ -220,11 +249,11 @@ def main() -> int:
         )
         shot(window, "04-recording")
 
-    @at(8200, "stop")
+    @at(9700, "stop")
     def s_stop():
         window.main_button.click()
 
-    @at(9000, "review-check")
+    @at(10500, "review-check")
     def s_review():
         modal = window.review_modal
         check(isinstance(modal, ReviewModal), "real ReviewModal opened")
@@ -238,7 +267,7 @@ def main() -> int:
             modal.do_save_only()
             modal.reject()
 
-    @at(16000, "soak-check")
+    @at(17500, "soak-check")
     def s_soak():
         from mf4_analyzer.acquisition_ui.state import CockpitState
 
@@ -256,11 +285,11 @@ def main() -> int:
         check(window._review_modal is None, "F2 no ghost review modal")
         shot(window, "06-soak")
 
-    @at(16400, "narrow")
+    @at(17900, "narrow")
     def s_narrow():
         window.resize(960, 600)
 
-    @at(17400, "narrow-check")
+    @at(18900, "narrow-check")
     def s_narrow_check():
         check(window._center.width() >= 300, f"F11 center >=300 ({window._center.width()})")
         check(
@@ -285,7 +314,24 @@ def main() -> int:
             )
         shot(window, "07-narrow")
 
-    @at(18000, "finish")
+    @at(19400, "collapse-panels")
+    def s_collapse_panels():
+        window.resize(1280, 760)
+        splitter = window._splitter
+        splitter.setSizes([0, 960, 0])
+
+    @at(20200, "collapse-panels-check")
+    def s_collapse_panels_check():
+        splitter = window._splitter
+        sizes = splitter.sizes()
+        check(splitter.isCollapsible(0), "F13 left panel collapsible")
+        check(not splitter.isCollapsible(1), "F13 center panel not collapsible")
+        check(splitter.isCollapsible(2), "F13 right panel collapsible")
+        check(sizes[0] == 0 and sizes[2] == 0, f"F13 side panels hidden ({sizes})")
+        check(sizes[1] >= 900, f"F13 center expands after hide ({sizes})")
+        shot(window, "08-panels-hidden")
+
+    @at(20800, "finish")
     def s_finish():
         produced = sorted(p.name for p in out_dir.glob("capture_*"))
         check(any(n.endswith(".mf4") for n in produced), "MF4 exists")

@@ -259,3 +259,37 @@ def test_grid_reset_buffers(qtbot):
     grid.push_sample("B", 0.0, 2.0)
     grid.reset_buffers()
     assert all(card._spark.sample_count == 0 for card in grid.cards.values())
+
+
+def test_single_click_focuses_card_and_back_restores_all(qtbot):
+    """Clicking a live card enlarges it by focusing the center pane."""
+    grid = LiveCardGrid()
+    qtbot.addWidget(grid)
+    grid.set_signals(
+        [
+            ("MotSpd", "rpm", "event_1ms"),
+            ("StrWhlTrq", "Nm", "event_1ms"),
+            ("BattVolt", "V", "event_10ms"),
+        ]
+    )
+    grid.resize(600, 420)
+    grid.show()
+    qtbot.waitExposed(grid)
+
+    card = grid.cards["StrWhlTrq"]
+    qtbot.mouseClick(card, Qt.LeftButton)
+
+    assert grid.focused_channel == "StrWhlTrq"
+    assert list(grid.cards) == ["StrWhlTrq"]
+    focus_bar = grid.findChild(QLabel, "liveFocusBar")
+    assert focus_bar is not None
+    assert focus_bar.isVisible()
+    assert "聚焦查看" in focus_bar.text()
+    assert "StrWhlTrq" in focus_bar.text()
+
+    back = grid.findChild(QWidget, "liveFocusBackButton")
+    assert back is not None
+    qtbot.mouseClick(back, Qt.LeftButton)
+
+    assert grid.focused_channel is None
+    assert sorted(grid.cards) == ["BattVolt", "MotSpd", "StrWhlTrq"]

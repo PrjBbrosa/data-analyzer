@@ -825,6 +825,25 @@ QLabel#liveCardValue {
 /* Live monitor pinned-count bar (2026-07-08 §G6). */
 #liveMonitorSummary { padding: 4px 12px; color: #6b7280; }
 
+QFrame#liveFocusShell {
+    border-bottom: 1px solid #dbeafe;
+    background-color: #f5f9ff;
+}
+QLabel#liveFocusBar {
+    color: #1f3f77;
+    font-size: 12px;
+    font-weight: 700;
+}
+QPushButton#liveFocusBackButton {
+    min-height: 28px;
+    padding: 3px 12px;
+    border: 1px solid #bfd4f8;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #1769e0;
+    font-weight: 700;
+}
+
 QFrame#rightPanelPage {
     border: none;
     border-left: 1px solid #eef2f7;

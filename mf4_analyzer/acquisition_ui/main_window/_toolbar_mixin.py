@@ -484,7 +484,7 @@ class ToolbarMixin:
 
         splitter = QSplitter(Qt.Horizontal, page)
         splitter.setObjectName("cockpitSplitter")
-        splitter.setChildrenCollapsible(False)
+        self._splitter = splitter
 
         self._left_pane = LeftPane(splitter)
         self._left_pane.selection_changed.connect(self._on_selection_changed)
@@ -508,6 +508,10 @@ class ToolbarMixin:
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
+        splitter.setCollapsible(0, True)
+        splitter.setCollapsible(1, False)
+        splitter.setCollapsible(2, True)
+        splitter.setHandleWidth(3)
         splitter.setSizes([420, 560, 300])
         layout.addWidget(splitter)
         return page

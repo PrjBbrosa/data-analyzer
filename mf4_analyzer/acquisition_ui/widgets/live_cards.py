@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -265,6 +266,8 @@ class LiveSignalCard(QFrame):
     - :meth:`refresh` — recompute stats label + sparkline.
     """
 
+    activated = pyqtSignal(str)
+
     def __init__(
         self,
         name: str,
@@ -412,6 +415,11 @@ class LiveSignalCard(QFrame):
         super().resizeEvent(event)
         self._sync_header_compactness()
 
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override.
+        if event.button() == Qt.LeftButton:
+            self.activated.emit(self._name)
+        super().mousePressEvent(event)
+
     def set_recording(self, recording: bool, rec_start_ts: float | None = None) -> None:
         """Flip recording state.
 
@@ -495,6 +503,8 @@ class LiveCardGrid(QWidget):
         super().__init__(parent)
         self.setMinimumWidth(300)
         self._pinning_enabled = False
+        self._all_signals: list[tuple[str, str, str | None]] = []
+        self._focused_channel: str | None = None
         # Outer shell: thin zero-margin QVBoxLayout whose sole child is
         # the scroll area. The cards/placeholder layout lives on an
         # inner host widget inside the scroll viewport so vertical
@@ -510,6 +520,21 @@ class LiveCardGrid(QWidget):
         self._summary_bar.setObjectName("liveMonitorSummary")
         self._summary_bar.setVisible(False)
         outer.addWidget(self._summary_bar)
+
+        self._focus_shell = QFrame(self)
+        self._focus_shell.setObjectName("liveFocusShell")
+        focus_layout = QHBoxLayout(self._focus_shell)
+        focus_layout.setContentsMargins(12, 6, 12, 6)
+        focus_layout.setSpacing(8)
+        self._focus_label = QLabel("", self._focus_shell)
+        self._focus_label.setObjectName("liveFocusBar")
+        focus_layout.addWidget(self._focus_label, stretch=1)
+        self._focus_back_btn = QPushButton("返回全部", self._focus_shell)
+        self._focus_back_btn.setObjectName("liveFocusBackButton")
+        self._focus_back_btn.clicked.connect(self.clear_focus)
+        focus_layout.addWidget(self._focus_back_btn)
+        self._focus_shell.setVisible(False)
+        outer.addWidget(self._focus_shell)
 
         self._scroll_area = QScrollArea(self)
         self._scroll_area.setObjectName("liveCardGridScroll")
@@ -532,6 +557,7 @@ class LiveCardGrid(QWidget):
         self._layout.addWidget(self._disconnected_canvas)
         self._layout.addStretch(1)
         self._cards: dict[str, LiveSignalCard] = {}
+        self._card_cache: dict[str, LiveSignalCard] = {}
 
     def _build_disconnected_canvas(self) -> QWidget:
         canvas = QWidget(self)
@@ -583,7 +609,7 @@ class LiveCardGrid(QWidget):
     def set_pinning_enabled(self, enabled: bool) -> None:
         """启用卡片右键 pin 菜单（采集页开、回放页保持关闭）。"""
         self._pinning_enabled = bool(enabled)
-        for card in self._cards.values():
+        for card in self._card_cache.values():
             self._install_card_menu(card)
 
     def _install_card_menu(self, card: LiveSignalCard) -> None:
@@ -620,13 +646,54 @@ class LiveCardGrid(QWidget):
         re-adds them through the signal selector.
         """
         # Spec §F: filter at the grid boundary, not per-card.
-        signals = [
+        self._all_signals = [
             (name, unit, raster)
             for (name, unit, raster) in signals
             if not _TIME_CHANNEL_RE.match(name)
         ]
+        if self._focused_channel not in {
+            name for name, _unit, _raster in self._all_signals
+        }:
+            self._focused_channel = None
+        self._render_signals()
 
-        existing = self._cards
+    def focus_channel(self, name: str) -> None:
+        """Show one enlarged live card in the center pane."""
+        if name not in {n for n, _unit, _raster in self._all_signals}:
+            return
+        self._focused_channel = name
+        self._render_signals()
+
+    def clear_focus(self) -> None:
+        """Return from focused-card view to the full live-card overview."""
+        self._focused_channel = None
+        self._render_signals()
+
+    @property
+    def focused_channel(self) -> str | None:
+        return self._focused_channel
+
+    def _visible_signals(self) -> list[tuple[str, str, str | None]]:
+        if self._focused_channel is None:
+            return list(self._all_signals)
+        return [
+            (name, unit, raster)
+            for (name, unit, raster) in self._all_signals
+            if name == self._focused_channel
+        ]
+
+    def _sync_focus_bar(self) -> None:
+        if self._focused_channel is None:
+            self._focus_label.setText("")
+            self._focus_shell.setVisible(False)
+            return
+        self._focus_label.setText(f"聚焦查看 · {self._focused_channel}")
+        self._focus_shell.setVisible(True)
+
+    def _render_signals(self) -> None:
+        signals = self._visible_signals()
+        self._sync_focus_bar()
+        existing = self._card_cache
         self._cards = {}
         # Clear layout (placeholder + previous cards + final stretch).
         while self._layout.count():
@@ -647,6 +714,8 @@ class LiveCardGrid(QWidget):
             card = existing.get(name)
             if card is None:
                 card = LiveSignalCard(name, unit=unit, raster=raster, card_index=idx)
+                card.activated.connect(self.focus_channel)
+                self._card_cache[name] = card
             else:
                 card.update_metadata(unit=unit, raster=raster)
                 card.set_visual_index(idx)
@@ -659,22 +728,22 @@ class LiveCardGrid(QWidget):
         # at the bottom of the scroll body.
 
     def push_sample(self, channel: str, timestamp_s: float, value: float) -> None:
-        card = self._cards.get(channel)
+        card = self._cards.get(channel) or self._card_cache.get(channel)
         if card is None:
             return
         card.push_sample(timestamp_s, value)
 
     def set_recording(self, recording: bool, rec_start_ts: float | None = None) -> None:
-        for card in self._cards.values():
+        for card in self._card_cache.values():
             card.set_recording(recording, rec_start_ts)
 
     def refresh_all(self) -> None:
-        for card in self._cards.values():
+        for card in self._card_cache.values():
             card.refresh()
 
     def reset_buffers(self) -> None:
         """Clear every card's sparkline buffer."""
-        for card in self._cards.values():
+        for card in self._card_cache.values():
             card.reset_buffer()
 
     @property
