@@ -25,9 +25,20 @@ from mf4_analyzer.acquisition_capture.health import (
     RecHealth,
     XcpHealth,
 )
+from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
+from mf4_analyzer.acquisition_ui.preflight_view_data import (
+    build_preflight_rows,
+    worst_preflight_level,
+)
+from mf4_analyzer.acquisition_ui.state import HealthyPredicateResult
 from mf4_analyzer.acquisition_ui.widgets.health_popover import HealthPopover
-from mf4_analyzer.acquisition_ui.widgets.health_strip import HealthChip, HealthStrip
+from mf4_analyzer.acquisition_ui.widgets.health_strip import (
+    HealthChip,
+    HealthStrip,
+    PreflightPill,
+)
+from mf4_analyzer.acquisition_ui.widgets.right_panel import IdlePreflightPage, RightPanel
 
 
 def _chip_value(strip: HealthStrip, name: str) -> str:
@@ -383,3 +394,194 @@ def test_detail_for_handles_none_snapshot(qtbot):
     # No snapshot applied yet: detail_for must not crash and returns rows.
     rows = strip.detail_for("CAN", None)
     assert isinstance(rows, list)
+
+
+# ---------------------------------------------------------------------------
+# B-2: preflight pill + aggregate popover (pure builder + widget)
+# ---------------------------------------------------------------------------
+
+GB = 1024 ** 3
+MB = 1024 ** 2
+
+
+def _sel(events, *, rate=100.0, payload=4):
+    return [
+        SelectedMeasurement(
+            name=f"s{i}",
+            unit="",
+            event=ev,
+            event_rate_hz=rate,
+            payload_bytes=payload,
+        )
+        for i, ev in enumerate(events)
+    ]
+
+
+def test_build_preflight_rows_all_green_compresses_duration():
+    rows = build_preflight_rows(
+        _sel(["event_10ms"]),
+        {"event_10ms": 32},
+        10 * GB,
+    )
+    assert len(rows) == 5
+    assert [level for _k, _v, level in rows] == ["green"] * 5
+    # `预计可录时长` green → 充足 (no 232.7 天 style number).
+    duration_key, duration_val, duration_level = rows[4]
+    assert "预计可录时长" in duration_key
+    assert duration_val == "充足" and duration_level == "green"
+    assert worst_preflight_level(rows) == "green"
+
+
+def test_build_preflight_rows_worst_band_is_yellow_on_low_disk():
+    rows = build_preflight_rows(_sel(["event_10ms"]), {"event_10ms": 32}, 3 * GB)
+    disk_key, _disk_val, disk_level = rows[2]
+    assert "磁盘剩余" in disk_key and disk_level == "yellow"
+    assert worst_preflight_level(rows) == "yellow"
+
+
+def test_build_preflight_rows_worst_band_is_red_on_critical_disk():
+    rows = build_preflight_rows(_sel(["event_10ms"]), {"event_10ms": 32}, 512 * MB)
+    assert worst_preflight_level(rows) == "red"
+
+
+def test_build_preflight_rows_empty_selection_all_off():
+    rows = build_preflight_rows([], {}, 10 * GB)
+    assert [level for _k, _v, level in rows] == ["off"] * 5
+    assert all(v == "—" for _k, v, _l in rows)
+    assert worst_preflight_level(rows) == "off"
+
+
+def test_worst_preflight_level_ranking():
+    assert worst_preflight_level([("a", "", "green"), ("b", "", "off")]) == "green"
+    assert worst_preflight_level([("a", "", "green"), ("b", "", "yellow")]) == "yellow"
+    assert worst_preflight_level([("a", "", "yellow"), ("b", "", "red")]) == "red"
+    assert worst_preflight_level([]) == "off"
+
+
+def test_preflight_pill_led_reflects_worst_band(qtbot):
+    pill = PreflightPill()
+    qtbot.addWidget(pill)
+    pill.apply(_sel(["event_10ms"]), {"event_10ms": 32}, 10 * GB, state="idle")
+    assert pill.level() == "green"
+    pill.apply(_sel(["event_10ms"]), {"event_10ms": 32}, 3 * GB, state="idle")
+    assert pill.level() == "yellow"
+    pill.apply(_sel(["event_10ms"]), {"event_10ms": 32}, 512 * MB, state="idle")
+    assert pill.level() == "red"
+
+
+def test_preflight_pill_idle_is_openable_and_visible(qtbot):
+    pill = PreflightPill()
+    qtbot.addWidget(pill)
+    pill.apply(_sel(["event_10ms"]), {"event_10ms": 32}, 10 * GB, state="idle")
+    assert pill.isVisibleTo(pill) or pill.isVisible() or not pill.isHidden()
+    assert pill.is_openable() is True
+    rows = pill.current_rows()
+    assert len(rows) == 5 and rows[4][1] == "充足"
+
+
+def test_preflight_pill_disconnected_disabled_not_openable(qtbot):
+    pill = PreflightPill()
+    qtbot.addWidget(pill)
+    pill.apply([], {}, 10 * GB, state="disconnected")
+    assert pill.is_openable() is False
+    assert not pill.isEnabled()
+    assert "连接后可用" in pill.label_text()
+
+
+def test_preflight_pill_recording_hidden(qtbot):
+    pill = PreflightPill()
+    qtbot.addWidget(pill)
+    pill.setVisible(True)
+    pill.apply(_sel(["event_10ms"]), {"event_10ms": 32}, 10 * GB, state="recording")
+    assert pill.isHidden()
+    assert pill.is_openable() is False
+
+
+def _idle_strip(qtbot, disk=10 * GB):
+    strip = HealthStrip()
+    qtbot.addWidget(strip)
+    strip.resize(900, 42)
+    strip.show()
+    strip.apply_snapshot(_snap())
+    strip.apply_preflight(
+        selection=_sel(["event_10ms"]),
+        event_capacity={"event_10ms": 32},
+        disk_free_bytes=disk,
+        state="idle",
+    )
+    return strip
+
+
+def test_preflight_pill_click_opens_aggregate_popover(qtbot):
+    strip = _idle_strip(qtbot)
+    strip.preflight_pill.clicked.emit()
+    pop = strip.detail_popover
+    assert pop is not None and pop.isVisible()
+    assert strip.active_chip() == PreflightPill.NAME
+    assert pop.row_count() == 5
+    assert pop.title_text() == PreflightPill.NAME
+    # Preflight anchor is NOT one of the five health chips.
+    assert PreflightPill.NAME not in strip.CHIP_NAMES
+
+
+def test_preflight_pill_click_toggles_closed(qtbot):
+    strip = _idle_strip(qtbot)
+    strip.preflight_pill.clicked.emit()
+    assert strip.active_chip() == PreflightPill.NAME
+    strip.preflight_pill.clicked.emit()
+    assert strip.active_chip() is None
+    assert not strip.detail_popover.isVisible()
+
+
+def test_preflight_popover_survives_snapshot_refresh(qtbot):
+    strip = _idle_strip(qtbot)
+    strip.preflight_pill.clicked.emit()
+    assert strip.active_chip() == PreflightPill.NAME
+    # A fresh health snapshot must NOT clobber the preflight popover rows.
+    strip.apply_snapshot(_snap(can=CanHealth(bus_load_pct=85.0)))
+    assert strip.active_chip() == PreflightPill.NAME
+    assert strip.detail_popover.row_count() == 5
+
+
+def test_preflight_pill_rows_equal_idle_page_rows(qtbot):
+    selection = _sel(["event_10ms", "event_10ms", "event_100ms"])
+    capacity = {"event_10ms": 8, "event_100ms": 4}
+    disk = 3 * GB
+
+    pill = PreflightPill()
+    qtbot.addWidget(pill)
+    pill.apply(selection, capacity, disk, state="idle")
+
+    page = IdlePreflightPage()
+    qtbot.addWidget(page)
+    page.apply(selection=selection, event_capacity=capacity, disk_free_bytes=disk)
+
+    expected = build_preflight_rows(selection, capacity, disk)
+    assert pill.current_rows() == expected
+    assert page.last_preflight_rows() == expected
+
+
+def test_preflight_pill_hidden_recording_keeps_center_geometry(qtbot):
+    window = CockpitMainWindow()
+    qtbot.addWidget(window)
+    window.resize(1280, 720)
+    window.show()
+    qtbot.waitExposed(window)
+    # Walk to Connected-Idle so the pill is visible and laid out.
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True, xcp_connected=True, first_frame_received=True
+        )
+    )
+    from PyQt5.QtWidgets import QApplication
+
+    QApplication.processEvents()
+    assert not window.health_strip.preflight_pill.isHidden()
+    before = window._center.geometry()
+    # Hiding the pill (recording state) must not reflow the body geometry.
+    window.health_strip.apply_preflight(state="recording")
+    QApplication.processEvents()
+    assert window.health_strip.preflight_pill.isHidden()
+    after = window._center.geometry()
+    assert before == after
+    window.close()

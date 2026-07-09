@@ -15,6 +15,7 @@ is the only mutation entry point. The Cockpit ``MainWindow`` polls
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Mapping
 
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
@@ -30,6 +31,11 @@ from PyQt5.QtWidgets import (
 from mf4_analyzer.acquisition_capture.health import (
     HealthLevel,
     HealthSnapshot,
+)
+from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.acquisition_ui.preflight_view_data import (
+    build_preflight_rows,
+    worst_preflight_level,
 )
 from mf4_analyzer.acquisition_ui.widgets.health_popover import HealthPopover
 
@@ -125,6 +131,126 @@ class HealthChip(QFrame):
         super().mousePressEvent(event)
 
 
+class PreflightPill(QFrame):
+    """Record-preflight readiness pill (Spec §B2).
+
+    Independent of the five fixed health chips: it is NOT a member of
+    ``HealthStrip.CHIP_NAMES``. Its LED shows the WORST band across the five
+    preflight rows (red > yellow > green > off) computed by the shared
+    :func:`mf4_analyzer.acquisition_ui.preflight_view_data.build_preflight_rows`,
+    so the pill and the right-pane ``IdlePreflightPage`` can never diverge.
+
+    State-gated visibility (driven by :class:`HealthStrip.apply_preflight`):
+
+    - ``idle`` — visible, enabled, clickable; LED = worst band.
+    - ``disconnected`` — visible but disabled, off LED, ``连接后可用``.
+    - ``recording`` — hidden (never reflows the body: the strip is a
+      fixed-height row above the splitter).
+
+    Clicking (only in idle) emits :attr:`clicked`; the owning strip then
+    reuses its single :class:`HealthPopover` via ``open_popover``.
+    """
+
+    #: Popover title / anchor name. Kept out of ``CHIP_NAMES`` on purpose.
+    NAME = "录制预检"
+
+    #: Emitted on a left-button press while the pill is openable (idle only).
+    clicked = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("preflightPill")
+        self.setFixedHeight(26)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setSpacing(6)
+        self._led = QLabel(self)
+        self._led.setObjectName("preflightPillLed")
+        self._led.setFixedSize(8, 8)
+        self._label = QLabel(self.NAME, self)
+        self._label.setObjectName("preflightPillLabel")
+        layout.addWidget(self._led)
+        layout.addWidget(self._label)
+
+        self._rows: list[tuple[str, str, HealthLevel]] = []
+        self._openable = False
+        self._set_led("off")
+
+    # ------------------------------------------------------------------
+    # State binding
+    # ------------------------------------------------------------------
+
+    def apply(
+        self,
+        selection: Sequence[SelectedMeasurement],
+        event_capacity: Mapping[str, int],
+        disk_free_bytes: int,
+        *,
+        state: str,
+        bitrate_bps: int | None = None,
+    ) -> None:
+        """Rebuild the pill for the current cockpit ``state``.
+
+        ``state`` is ``"idle" | "disconnected" | "recording"``.
+        """
+        if state == "recording":
+            self._openable = False
+            self.setVisible(False)
+            return
+
+        self.setVisible(True)
+        if state == "disconnected":
+            self._rows = []
+            self._openable = False
+            self._set_led("off")
+            self._label.setText("连接后可用")
+            self.setEnabled(False)
+            self.setCursor(Qt.ArrowCursor)
+            return
+
+        # Connected-idle: compute the five rows and light the worst band.
+        rows = build_preflight_rows(
+            selection,
+            event_capacity,
+            disk_free_bytes,
+            bitrate_bps=bitrate_bps,
+        )
+        self._rows = list(rows)
+        self._openable = True
+        self._set_led(worst_preflight_level(rows))
+        self._label.setText(self.NAME)
+        self.setEnabled(True)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def current_rows(self) -> list[tuple[str, str, HealthLevel]]:
+        return list(self._rows)
+
+    def is_openable(self) -> bool:
+        return self._openable
+
+    def level(self) -> HealthLevel:
+        return self.property("level") or "off"
+
+    def label_text(self) -> str:
+        return self._label.text()
+
+    def _set_led(self, level: HealthLevel) -> None:
+        bg = _LEVEL_BG.get(level, _LEVEL_BG["off"])
+        self._led.setStyleSheet(f"background-color: {bg}; border-radius: 5px;")
+        self.setProperty("level", level)
+        self._led.setProperty("level", level)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.LeftButton and self._openable:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class HealthStrip(QFrame):
     """The five-chip horizontal strip.
 
@@ -160,6 +286,11 @@ class HealthStrip(QFrame):
             chip.clicked.connect(self._on_chip_clicked)
             self._chips[name] = chip
             layout.addWidget(chip)
+        # Preflight readiness pill — sibling of the chips, not a chip.
+        self._preflight_pill = PreflightPill(self)
+        self._preflight_pill.clicked.connect(self._on_preflight_clicked)
+        self._preflight_pill.setVisible(False)
+        layout.addWidget(self._preflight_pill)
         layout.addStretch(1)
         self._summary = QLabel("--", self)
         self._summary.setObjectName("healthSummary")
@@ -221,9 +352,62 @@ class HealthStrip(QFrame):
         """The single popover instance (``None`` until first opened)."""
         return self._popover
 
+    @property
+    def preflight_pill(self) -> PreflightPill:
+        """The record-preflight readiness pill (Spec §B2)."""
+        return self._preflight_pill
+
     def active_chip(self) -> str | None:
         """Name of the chip/pill the popover is anchored to, or ``None``."""
         return self._anchor_name
+
+    # ------------------------------------------------------------------
+    # Preflight pill binding (Spec §B2)
+    # ------------------------------------------------------------------
+
+    def apply_preflight(
+        self,
+        *,
+        selection: Sequence[SelectedMeasurement] | None = None,
+        event_capacity: Mapping[str, int] | None = None,
+        disk_free_bytes: int = 0,
+        state: str,
+        bitrate_bps: int | None = None,
+    ) -> None:
+        """Feed the preflight pill and keep an open preflight popover in sync.
+
+        ``state`` is ``"idle" | "disconnected" | "recording"``. When the pill
+        leaves the openable ``idle`` state while its popover is open, the
+        popover is dismissed (the pill is no longer a valid anchor).
+        """
+        self._preflight_pill.apply(
+            selection if selection is not None else [],
+            event_capacity if event_capacity is not None else {},
+            disk_free_bytes,
+            state=state,
+            bitrate_bps=bitrate_bps,
+        )
+        if self._anchor_name == PreflightPill.NAME and self._popover_open():
+            if self._preflight_pill.is_openable():
+                self._popover.set_rows(self._preflight_pill.current_rows())
+                self._popover.show_at(self._preflight_pill)
+            else:
+                self._dismiss_popover()
+
+    def _on_preflight_clicked(self) -> None:
+        # Toggle: clicking the pill while its popover is open closes it.
+        if (
+            self._anchor_name == PreflightPill.NAME
+            and self._popover is not None
+            and self._popover.isVisible()
+        ):
+            self._dismiss_popover()
+            return
+        self.open_popover(
+            self._preflight_pill,
+            PreflightPill.NAME,
+            self._preflight_pill.current_rows(),
+        )
 
     def _ensure_popover(self) -> HealthPopover:
         """Lazily create the single popover, parented to the host window so

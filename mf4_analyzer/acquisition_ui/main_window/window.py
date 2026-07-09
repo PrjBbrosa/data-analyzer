@@ -397,6 +397,10 @@ class CockpitMainWindow(
                 if hasattr(self, "_left_pane")
                 else 0,
             )
+            # Preflight pill visible but disabled (`连接后可用`) while
+            # disconnected (Spec §B2 visibility contract).
+            if hasattr(self, "_health_strip"):
+                self._health_strip.apply_preflight(state="disconnected")
             self._update_status_bar()
             self._center.set_recording(False, None)
         elif new == CockpitState.CONNECTED_IDLE:
@@ -419,6 +423,10 @@ class CockpitMainWindow(
             self._set_visual_property(self._rec_indicator, "recState", "recording")
             self._left_pane.set_frozen(True)
             self._center.set_recording(True, self._rec_start_ts)
+            # Recording hides the preflight pill; the strip is a fixed-height
+            # row so this never reflows the body (Spec §B2 zero-shift).
+            if hasattr(self, "_health_strip"):
+                self._health_strip.apply_preflight(state="recording")
             self._update_status_bar()
             self._refresh_recording_right_panel()
         elif new == CockpitState.REVIEW_MODAL:
@@ -857,6 +865,15 @@ class CockpitMainWindow(
             event_capacity=event_capacity,
             disk_free_bytes=disk_free_bytes,
         )
+        # Same numbers feed the health-strip preflight pill (Spec §B2):
+        # connected-idle shows the pill with the worst-band LED.
+        if hasattr(self, "_health_strip"):
+            self._health_strip.apply_preflight(
+                selection=selection,
+                event_capacity=event_capacity,
+                disk_free_bytes=disk_free_bytes,
+                state="idle",
+            )
 
     def _refresh_recording_right_panel(self) -> None:
         snapshot = self._health_aggregator.last

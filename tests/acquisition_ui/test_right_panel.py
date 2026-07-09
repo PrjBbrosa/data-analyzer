@@ -27,6 +27,7 @@ from mf4_analyzer.acquisition_capture.health import (
     XcpHealth,
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
+from mf4_analyzer.acquisition_ui import preflight_view_data as pvd_module
 from mf4_analyzer.acquisition_ui.widgets import right_panel as rp_module
 from mf4_analyzer.acquisition_ui.widgets.right_panel import (
     DisconnectedPage,
@@ -275,7 +276,7 @@ def test_idle_page_delegates_daq_slot_usage(qapp, monkeypatch):
         # is identifiable.
         return 90.0 if event_name == "event_10ms" else 25.0
 
-    monkeypatch.setattr(rp_module, "daq_slot_usage", spy_daq)
+    monkeypatch.setattr(pvd_module, "daq_slot_usage", spy_daq)
 
     panel.show_idle(
         selection=selection,
@@ -310,9 +311,9 @@ def test_idle_page_delegates_can_daq_and_duration_band_helpers(qapp, monkeypatch
     daq_calls: list[float] = []
     duration_calls: list[float] = []
 
-    monkeypatch.setattr(rp_module, "estimate_can_bus_load", lambda *args: 61.0)
-    monkeypatch.setattr(rp_module, "daq_slot_usage", lambda *args: 80.0)
-    monkeypatch.setattr(rp_module, "estimate_throughput_bps", lambda *args: 2.0)
+    monkeypatch.setattr(pvd_module, "estimate_can_bus_load", lambda *args: 61.0)
+    monkeypatch.setattr(pvd_module, "daq_slot_usage", lambda *args: 80.0)
+    monkeypatch.setattr(pvd_module, "estimate_throughput_bps", lambda *args: 2.0)
 
     def spy_can(pct):
         can_calls.append(pct)
@@ -326,9 +327,9 @@ def test_idle_page_delegates_can_daq_and_duration_band_helpers(qapp, monkeypatch
         duration_calls.append(seconds)
         return "green"
 
-    monkeypatch.setattr(rp_module, "band_can_load", spy_can)
-    monkeypatch.setattr(rp_module, "band_daq_slot", spy_daq)
-    monkeypatch.setattr(rp_module, "band_record_duration_s", spy_duration)
+    monkeypatch.setattr(pvd_module, "band_can_load", spy_can)
+    monkeypatch.setattr(pvd_module, "band_daq_slot", spy_daq)
+    monkeypatch.setattr(pvd_module, "band_record_duration_s", spy_duration)
 
     panel.show_idle(
         selection=selection,
@@ -341,7 +342,9 @@ def test_idle_page_delegates_can_daq_and_duration_band_helpers(qapp, monkeypatch
     assert duration_calls == [60.0]
     assert "61.0%" in panel.idle_page._row_can.text()
     assert "80.0%" in panel.idle_page._row_daq.text()
-    assert "1.0 min" in panel.idle_page._row_duration.text()
+    # Spec §B2: a green record-duration band compresses to 充足 (both the
+    # right pane and the pill share the same builder).
+    assert "充足" in panel.idle_page._row_duration.text()
     panel.close()
 
 
@@ -357,7 +360,7 @@ def test_idle_page_uses_current_default_can_bitrate(qapp, monkeypatch):
         seen_bitrates.append(bitrate_bps)
         return 12.0
 
-    monkeypatch.setattr(rp_module, "estimate_can_bus_load", spy_can_load)
+    monkeypatch.setattr(pvd_module, "estimate_can_bus_load", spy_can_load)
 
     panel.show_idle(
         selection=selection,
@@ -387,8 +390,8 @@ def test_idle_page_delegates_disk_and_sample_band_helpers(qapp, monkeypatch):
         sample_calls.append(events_per_s)
         return "red"
 
-    monkeypatch.setattr(rp_module, "band_disk_remaining", spy_disk)
-    monkeypatch.setattr(rp_module, "band_sample_events_per_s", spy_sample)
+    monkeypatch.setattr(pvd_module, "band_disk_remaining", spy_disk)
+    monkeypatch.setattr(pvd_module, "band_sample_events_per_s", spy_sample)
 
     panel.show_idle(
         selection=selection,
@@ -468,7 +471,7 @@ def test_idle_page_delegates_sample_events_estimator(qapp, monkeypatch):
         sample_calls.append(tuple(selected))
         return 12345.0
 
-    monkeypatch.setattr(rp_module, "estimate_sample_events_per_s", spy_estimator)
+    monkeypatch.setattr(pvd_module, "estimate_sample_events_per_s", spy_estimator)
 
     panel.show_idle(
         selection=selection,

@@ -36,21 +36,16 @@ from PyQt5.QtWidgets import (
 from mf4_analyzer.acquisition_capture.health import HealthSnapshot, level_hw, level_xcp
 from mf4_analyzer.acquisition_capture.preflight_estimates import (
     band_can_load,
-    band_daq_slot,
     band_disk_remaining,
     band_dropped_frames,
     band_rec_last_rx_age_s,
-    band_record_duration_s,
     band_ring_buffer,
-    band_sample_events_per_s,
-    daq_slot_usage,
-    estimate_can_bus_load,
-    estimate_record_duration_s,
-    estimate_sample_events_per_s,
-    estimate_throughput_bps,
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
-from mf4_analyzer.acquisition_capture import thresholds
+from mf4_analyzer.acquisition_ui.preflight_view_data import (  # noqa: F401 (re-export)
+    _humanize_duration_s,
+    build_preflight_rows,
+)
 
 
 # Display tokens. Color tokens stay in this file because they are
@@ -67,16 +62,6 @@ _LEVEL_COLOR = {
 def _format_band_value(level: str, text: str) -> str:
     color = _LEVEL_COLOR.get(level, _LEVEL_COLOR["off"])
     return f'<span style="color:{color}; font-weight:600;">{text}</span>'
-
-
-def _humanize_duration_s(seconds: float) -> str:
-    if seconds == float("inf"):
-        return "∞"
-    if seconds < 90 * 60:
-        return f"{seconds / 60:.1f} min"
-    if seconds < 48 * 3600:
-        return f"{seconds / 3600:.1f} h"
-    return f"{seconds / 86400:.1f} d"
 
 
 def _new_value_label(parent: QWidget, object_name: str = "") -> QLabel:
@@ -362,6 +347,10 @@ class IdlePreflightPage(_BasePanelPage):
             value_object_name="idleVerdictBanner",
         )
         self._outer.addStretch(1)
+        # Cache of the last rows the shared builder produced, so callers /
+        # tests can assert the right pane and the preflight pill are the
+        # same source (Spec §B2 same-source contract).
+        self._preflight_rows: list[tuple[str, str, str]] = []
 
     def apply(
         self,
@@ -371,81 +360,35 @@ class IdlePreflightPage(_BasePanelPage):
         disk_free_bytes: int,
         bitrate_bps: int | None = None,
     ) -> None:
-        if bitrate_bps is None:
-            bitrate_bps = thresholds.DEFAULT_CAN_BITRATE_BPS
+        # Single source of truth for the five preflight rows — shared with
+        # the health-strip preflight pill so the numbers can never drift.
+        rows = build_preflight_rows(
+            selection,
+            event_capacity,
+            disk_free_bytes,
+            bitrate_bps=bitrate_bps,
+        )
+        self._preflight_rows = list(rows)
+        labels = (
+            self._row_can,
+            self._row_daq,
+            self._row_disk,
+            self._row_samples,
+            self._row_duration,
+        )
+        for (_key, value, level), label in zip(rows, labels):
+            label.setText(_format_band_value(level, value))
+
         if not selection:
-            for r in (
-                self._row_can,
-                self._row_daq,
-                self._row_disk,
-                self._row_duration,
-                self._row_samples,
-            ):
-                r.setText(_format_band_value("off", "—"))
             self._substatus.setText("等待选择")
             self._note.setText("尚未选择测量")
-            return
-
-        can_pct = estimate_can_bus_load(selection, bitrate_bps)
-        self._row_can.setText(
-            _format_band_value(band_can_load(can_pct), f"{can_pct:.1f}%")
-        )
-
-        # DAQ slot uses each event's own capacity. We surface the
-        # max-of-events here so a single number drives the chip; per-event
-        # detail is in the recording quality monitor. The actual usage
-        # calculation goes through the pure ``daq_slot_usage`` helper so
-        # the formula stays in one place (spec §Preflight Computation
-        # Contract).
-        worst_pct = 0.0
-        events_seen: set[str] = set()
-        for m in selection:
-            if m.event is None or m.event in events_seen:
-                continue
-            events_seen.add(m.event)
-            worst_pct = max(
-                worst_pct,
-                daq_slot_usage(m.event, selection, event_capacity),
-            )
-        if not events_seen:
-            self._row_daq.setText(_format_band_value("off", "—"))
         else:
-            self._row_daq.setText(
-                _format_band_value(band_daq_slot(worst_pct), f"{worst_pct:.1f}%")
-            )
+            self._substatus.setText("预检完成")
+            self._note.setText("数字仅供参考 · 实际录制按真实样本累计")
 
-        # Disk-remaining row delegates band selection to the pure helper.
-        self._row_disk.setText(
-            _format_band_value(
-                band_disk_remaining(disk_free_bytes),
-                f"{disk_free_bytes / (1024 ** 3):.2f} GB",
-            )
-        )
-
-        throughput = estimate_throughput_bps(selection)
-        duration_s = estimate_record_duration_s(throughput, disk_free_bytes)
-        if duration_s == float("inf"):
-            self._row_duration.setText(_format_band_value("off", "∞"))
-        else:
-            self._row_duration.setText(
-                _format_band_value(
-                    band_record_duration_s(duration_s),
-                    _humanize_duration_s(duration_s),
-                )
-            )
-
-        # Total sample events / second flows through the pure estimator
-        # plus its matching band helper — both live in
-        # ``preflight_estimates``.
-        events_per_s = estimate_sample_events_per_s(selection)
-        self._row_samples.setText(
-            _format_band_value(
-                band_sample_events_per_s(events_per_s), f"{events_per_s:.0f}"
-            )
-        )
-
-        self._substatus.setText("预检完成")
-        self._note.setText("数字仅供参考 · 实际录制按真实样本累计")
+    def last_preflight_rows(self) -> list[tuple[str, str, str]]:
+        """Rows the shared builder produced on the last :meth:`apply`."""
+        return list(self._preflight_rows)
 
 
 class RecordingQualityPage(_BasePanelPage):
