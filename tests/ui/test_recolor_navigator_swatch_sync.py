@@ -140,3 +140,37 @@ def test_recolor_updates_navigator_swatch_and_color_source(qapp, loaded_csv, qtb
     assert center.name() == new_color, (
         f"rendered swatch pixel is {center.name()!r}, expected {new_color!r}"
     )
+
+
+def test_recolor_does_not_trigger_a_replot(qapp, loaded_csv, qtbot):
+    """Perf regression guard: writing the swatch color back to the navigator
+    must NOT re-fire ``channels_changed`` (which drives a full time-domain
+    replot). Updating a tree item's icon emits QTreeWidget.itemChanged, so the
+    color write has to suppress the itemChanged→channels_changed cascade or a
+    single recolor would trigger a several-second replot on a dense overlay."""
+    from mf4_analyzer.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win._load_one(loaded_csv)
+    fid = next(iter(win.files))
+
+    win.toolbar._set_mode("time")
+    win.navigator.set_checked_channels([(fid, "speed")])
+    win.plot_time()
+    QCoreApplication.processEvents()
+
+    fired = []
+    win.navigator.channel_list.channels_changed.connect(lambda: fired.append(1))
+
+    fd = win.files[fid]
+    display_name = fd.get_prefixed_channel("speed")
+    ck = _view_state_channel_key(fid, display_name)
+    handle, line = win.canvas_time._channel_lines.get(ck)
+    handle.sync_line_axis_color(line, "#123456")
+    QCoreApplication.processEvents()
+
+    assert fired == [], (
+        "recolor re-fired channels_changed → a full replot was triggered "
+        "(the several-second lag the user reported)"
+    )

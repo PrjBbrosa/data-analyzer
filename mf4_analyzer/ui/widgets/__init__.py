@@ -771,7 +771,12 @@ class MultiFileChannelWidget(QWidget):
                 continue
             self._colors[(fid, ch)] = hex_color
 
-        # Update icons in tree
+        # Update icons in tree. ``setIcon`` mutates item data, so QTreeWidget
+        # fires ``itemChanged`` — which ``_on_item_changed`` turns into a
+        # ``channels_changed`` emit (a full time-domain replot). A color swatch
+        # is display-only and must never trigger a replot, so gate the icon
+        # writes behind ``_updating`` (the same guard the check-state cascade
+        # uses); save/restore keeps any nested caller's flag intact.
         def _update_icons(item):
             data = item.data(0, Qt.UserRole)
             if data and data[0] == 'channel':
@@ -781,8 +786,13 @@ class MultiFileChannelWidget(QWidget):
             for i in range(item.childCount()):
                 _update_icons(item.child(i))
 
-        for i in range(self.tree.topLevelItemCount()):
-            _update_icons(self.tree.topLevelItem(i))
+        prev_updating = self._updating
+        self._updating = True
+        try:
+            for i in range(self.tree.topLevelItemCount()):
+                _update_icons(self.tree.topLevelItem(i))
+        finally:
+            self._updating = prev_updating
 
     def get_file_data(self, fid):
         return self._files.get(fid)
