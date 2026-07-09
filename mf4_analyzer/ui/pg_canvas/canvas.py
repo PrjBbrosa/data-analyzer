@@ -2195,15 +2195,60 @@ class TimeDomainCanvasPG(QWidget):
         return super().eventFilter(obj, event)
 
     def _handle_viewport_double_click(self, viewport_pos):
-        """Resolve the subplot under ``viewport_pos`` (a widget-pixel
-        ``QPoint``) and open the chart-options dialog for it."""
+        """Open the chart-options dialog for the curve under ``viewport_pos``.
+
+        Overlay mode targets the EXACT curve double-clicked (its own axis
+        handle) so its color/coordinates are editable — not just the left
+        axis: a double-click on a channel's Y-axis gutter resolves that
+        channel unambiguously (gutters are laid out in separate columns),
+        and a double-click on a curve body picks the nearest visible curve.
+        The resolved curve is emphasised while its dialog is open. A miss
+        (blank plot area / subplot) falls back to the plot-area / active
+        axis so the gesture is never a dead click."""
         scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        handle = self._axis_handle_at_scene_pos(scene_pos)
+        handle, curve_name = self._resolve_double_click_target(scene_pos)
         if handle is None:
             handle = self._resolve_active_axis_handle()
         if handle is None:
             return
-        self._open_chart_options_for_handle(handle)
+        highlighted = False
+        if curve_name is not None:
+            try:
+                self.select_overlay_channel(curve_name, notify=False)
+                highlighted = True
+            except Exception:
+                highlighted = False
+        try:
+            self._open_chart_options_for_handle(handle)
+        finally:
+            if highlighted:
+                try:
+                    self.select_overlay_channel(None, notify=False)
+                except Exception:
+                    pass
+
+    def _resolve_double_click_target(self, scene_pos):
+        """Return ``(axis_handle, curve_name)`` for a double-click.
+
+        Overlay: prefer the Y-axis gutter under the cursor (that one
+        channel), else the nearest visible curve within the pick radius.
+        ``curve_name`` is None when no specific curve is resolved (blank
+        overlay area, or non-overlay/subplot) — the caller then targets the
+        plot-area ViewBox under the cursor."""
+        if scene_pos is None:
+            return (None, None)
+        if self._overlay_mode:
+            axis_handle = self._overlay_axes._overlay_axis_handle_at_scene_pos(
+                scene_pos
+            )
+            if axis_handle is not None:
+                return (axis_handle, self._visible_channel_name_for_handle(axis_handle))
+            name = self._select_overlay_channel_from_scene_pos(scene_pos)
+            if name is not None:
+                pair = self._channel_lines.get(name)
+                if pair is not None:
+                    return (pair[0], name)
+        return (self._axis_handle_at_scene_pos(scene_pos), None)
 
     def _viewport_pos_to_scene(self, viewport_pos):
         """Map a viewport-pixel ``QPoint`` to a scene ``QPointF`` via the
@@ -2511,8 +2556,10 @@ class TimeDomainCanvasPG(QWidget):
     # canvases.py:_apply_overlay_selection_style).
     # ------------------------------------------------------------------
 
-    def select_overlay_channel(self, name):
-        return OverlayAxisManager.select_overlay_channel(self._overlay_axes, name)
+    def select_overlay_channel(self, name, *, notify=True):
+        return OverlayAxisManager.select_overlay_channel(
+            self._overlay_axes, name, notify=notify
+        )
 
     def _overlay_emphasis_for_channel(self, name):
         return OverlayAxisManager._overlay_emphasis_for_channel(

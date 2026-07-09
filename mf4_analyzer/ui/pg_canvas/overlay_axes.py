@@ -993,60 +993,15 @@ class OverlayAxisManager(_CanvasBackref):
             return False
 
     def _handle_overlay_mouse_press(self, event):
-        """Overlay-mode left-press: Alt(Option)+press selects the nearest
-        VISIBLE channel and begins a per-channel Y-drag.
+        """Overlay-mode left-press is a no-op: a plain drag always falls
+        through to the ViewBox (X-master pan / RectMode box-zoom).
 
-        方案2 — per-channel Y-drag is OPT-IN behind the Alt/Option modifier. A
-        PLAIN left-drag returns False so the ViewBox handles it (X-master pan /
-        RectMode box-zoom): a dense overlay — especially filtered curves that
-        blanket the whole plot — no longer preempts pan, and the Pan toolbar
-        button stays active (no select → no ``_on_overlay_channel_selected`` →
-        no pan toggle-off). Only VISIBLE curves are draggable targets, so with
-        显示原始 off the hidden original is excluded (and vice-versa)."""
-        if not self._overlay_mode or self._cursor.visible:
-            return False
-        try:
-            if event.button() != Qt.LeftButton:
-                return False
-            if not (event.modifiers() & Qt.AltModifier):
-                # Plain drag → let pyqtgraph pan / box-zoom.
-                return False
-            viewport_pos = event.pos()
-        except Exception:
-            return False
-        self._stop_snap_anim()
-        scene_pos = self._viewport_pos_to_scene(viewport_pos)
-        if self._press_view_box_in_rect_mode(scene_pos):
-            return False
-        axis_handle = self._overlay_axis_handle_at_scene_pos(scene_pos)
-        if axis_handle is not None:
-            # The axis may be owned by a hidden primary while a visible
-            # companion shares its ViewBox — drag the VISIBLE channel.
-            name = self._visible_channel_name_for_handle(axis_handle)
-            if name is None:
-                return False
-            self.select_overlay_channel(name)
-            start_y = self._scene_y_from_viewport_pos(viewport_pos)
-            if start_y is not None:
-                self._begin_overlay_y_drag_at(start_y_px=start_y)
-                self._overlay_dragging = True
-                self.disable_interactive_quality()
-                self._set_x_master_mouse_enabled(False)
-            return True
-        name = self._select_overlay_channel_from_scene_pos(scene_pos)
-        if name is None:
-            if self._selected_overlay_channel is not None:
-                self.select_overlay_channel(None)
-                return True
-            return False
-        self.select_overlay_channel(name)
-        start_y = self._scene_y_from_viewport_pos(viewport_pos)
-        if start_y is not None:
-            self._begin_overlay_y_drag_at(start_y_px=start_y)
-            self._overlay_dragging = True
-            self.disable_interactive_quality()
-            self._set_x_master_mouse_enabled(False)
-        return True
+        The former Alt(Option)+press「选中曲线 + 单条 Y 拖动」手势被移除
+        (2026-07-09)：单条 Y 控制改由「滚轮停在该曲线自己的 Y 轴上」承担
+        (平移 / Shift 缩放)，编辑颜色/坐标改由「双击该曲线或其 Y 轴」触发
+        (见 canvas._handle_viewport_double_click)。返回 False 让 pyqtgraph
+        处理，Pan 工具按钮保持不变。"""
+        return False
 
     def _handle_overlay_mouse_move(self, event):
         """Apply a Y-drag while the left button is held in overlay mode."""
@@ -1122,15 +1077,20 @@ class OverlayAxisManager(_CanvasBackref):
                 pass
         self._overlay_view_sync_conns = []
 
-    def select_overlay_channel(self, name):
-        """Select an overlay channel as the per-series Y-drag target."""
+    def select_overlay_channel(self, name, *, notify=True):
+        """Select an overlay channel: emphasise it (bold + others dimmed).
+
+        ``notify=True`` also emits ``overlay_channel_selected`` (the nav/toolbar
+        handoff). The double-click-to-edit highlight passes ``notify=False`` so
+        merely opening a curve's 图表选项 does not toggle the pan/zoom tool."""
         if name is not None and name not in self._channel_lines:
             return
         if self._selected_overlay_channel == name:
             return
         self._selected_overlay_channel = name
         self._apply_overlay_emphasis()
-        self.overlay_channel_selected.emit(name)
+        if notify:
+            self.overlay_channel_selected.emit(name)
         self.draw_idle()
 
     def _overlay_emphasis_for_channel(self, name):

@@ -142,8 +142,12 @@ QUICKREF: Tuple[QuickGroup, ...] = (
             QuickRow("平移", gesture="直接拖动"),
             QuickRow(
                 "单独调某通道 Y（叠加）",
-                keys=("Alt",),
-                gesture="拖曲线",
+                gesture="滚轮停在该通道 Y 轴上",
+                sub="Shift+滚轮缩放，平滚轮平移",
+            ),
+            QuickRow(
+                "编辑某曲线颜色/坐标（叠加）",
+                gesture="双击曲线或其 Y 轴",
             ),
             QuickRow("复位视图", keys=(_sc("home"),), gesture="双击"),
             QuickRow("后退 / 前进视图", keys=(_sc("back"),)),

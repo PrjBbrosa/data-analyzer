@@ -198,7 +198,7 @@ _HINTS = (
     ),
     Hint(
         id="overlay.drag_y",
-        text="拖动平移时间轴 · Option/Alt+拖曲线 → 单独调该通道 Y 轴",
+        text="双击曲线或其 Y 轴 → 改颜色/范围",
         surface="context",
         modes=frozenset({"time"}),
         plot_modes=frozenset({"overlay"}),
@@ -393,7 +393,7 @@ _HINTS = (
     ),
     Hint(
         id="nudge.amp_disparate",
-        text="某条太小？Alt 拖它单独调 Y",
+        text="某条太小？滚轮停在它 Y 轴上单独放大",
         surface="nudge",
         modes=frozenset({"time"}),
         plot_modes=frozenset({"overlay"}),
