@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QScrollArea, QWidget
 
@@ -319,3 +321,152 @@ def test_single_click_focuses_card_and_back_restores_all(qtbot):
 
     assert grid.focused_channel is None
     assert sorted(grid.cards) == ["BattVolt", "MotSpd", "StrWhlTrq"]
+
+
+# ----------------------------------------------------------------------
+# Task A-3: continuous polyline + envelope render with time-based x.
+# The sparkline painter positions x by STREAM timestamp mapped onto
+# ``[t_anchor - 30s, t_anchor]`` (never a bin index), draws a connected
+# ``QPainterPath`` at low density and a min/max envelope + last-value
+# line at high density, and breaks the path at genuine gaps / non-finite
+# samples (never bridging them — cf. arraytoqpath lesson).
+# ----------------------------------------------------------------------
+
+
+def test_low_density_builds_connected_polyline():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _build_polyline
+
+    now = 10.0
+    # 60 samples spanning the WHOLE 30s window (both edges included).
+    samples = [(now - 30 + i * (30 / 59), float(i)) for i in range(60)]
+    pts = _build_polyline(
+        samples, w=600, h=64, window=30.0, t_anchor=now, ymin=0, ymax=59
+    )
+    assert len(pts) == 60  # a connected polyline, not isolated dots
+    xs = [p.x() for p in pts]
+    assert xs == sorted(xs)  # x is monotonic in time
+    # Fills the full width: newest sample hugs the right edge, oldest is
+    # inside the left boundary.
+    assert xs[-1] > 590 and xs[0] < 10
+
+
+def test_x_is_time_proportional_not_index():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _build_polyline
+
+    now = 10.0
+    # Only the most recent 5s of the 30s window carries data.
+    samples = [(now - 5.0, 0.0), (now - 2.5, 1.0), (now, 2.0)]
+    pts = _build_polyline(
+        samples, w=600, h=64, window=30.0, t_anchor=now, ymin=0, ymax=2
+    )
+    # The earliest sample sits in the right 5/30 of the width (x > 500),
+    # NOT at the left edge as it would with index-based positioning.
+    assert pts[0].x() > 480
+    assert pts[-1].x() > 590  # newest still hugs the right edge
+
+
+def test_build_polyline_y_is_value_proportional():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _build_polyline
+
+    now = 10.0
+    samples = [(now, 0.0), (now, 10.0)]
+    pts = _build_polyline(
+        samples, w=600, h=100, window=30.0, t_anchor=now, ymin=0.0, ymax=10.0
+    )
+    # y = h - (v-ymin)/(ymax-ymin)*h : v=0 -> bottom, v=10 -> top.
+    assert abs(pts[0].y() - 100.0) < 1e-6
+    assert abs(pts[1].y() - 0.0) < 1e-6
+
+
+def test_envelope_covers_only_recent_window_fraction():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _build_envelope
+
+    now = 10.0
+    n = 2000  # dense (> 2*w) but only 5s of coverage
+    samples = [
+        (now - 5.0 + i * (5.0 / (n - 1)), math.sin(i * 0.01)) for i in range(n)
+    ]
+    band, line = _build_envelope(
+        samples, w=600, h=64, window=30.0, t_anchor=now, ymin=-1.0, ymax=1.0
+    )
+    xs = [p.x() for p in line if p is not None]
+    assert xs, "envelope must emit a last-value line"
+    # 5/30 of the window is the right ~100 px; nothing on the left 70%.
+    assert min(xs) > 600 * 0.7
+    assert max(xs) <= 600 + 1e-6
+    # The band is likewise anchored to the right, not stretched [first,last].
+    assert band.boundingRect().left() > 600 * 0.7
+
+
+def test_envelope_line_connects_last_value_not_minmax():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _build_envelope
+
+    now = 10.0
+    # All samples land in the single right-most column; min 0, max 10,
+    # last 5. The connecting line must follow the LAST value (5), never
+    # the min/max — connecting min/max fabricates a full-height zigzag.
+    vals = [0.0, 10.0, 3.0, 10.0, 5.0]
+    samples = [(now - 0.04 + i * 0.01, v) for i, v in enumerate(vals)]
+    band, line = _build_envelope(
+        samples, w=600, h=100, window=30.0, t_anchor=now, ymin=0.0, ymax=10.0
+    )
+    line_pts = [p for p in line if p is not None]
+    assert len(line_pts) == 1
+    # py(5) with ymin=0 ymax=10 h=100 -> 100 - 5/10*100 = 50.
+    assert abs(line_pts[0].y() - 50.0) < 1e-6
+    # The band still spans the FULL min..max (0..10 -> y 100..0).
+    br = band.boundingRect()
+    assert br.top() < 1.0 and br.bottom() > 99.0
+
+
+def test_split_runs_breaks_on_time_gap():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _split_runs
+
+    a = [(i * 0.1, float(i)) for i in range(10)]  # 0.0 .. 0.9
+    b = [(6.0 + i * 0.1, float(i)) for i in range(10)]  # gap 6.0-0.9 = 5.1 s
+    runs = _split_runs(a + b, raster_period=0.1)
+    assert len(runs) == 2
+    assert len(runs[0]) == 10 and len(runs[1]) == 10
+
+
+def test_split_runs_breaks_on_nonfinite_value():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _split_runs
+
+    # A NaN in the middle must BREAK the path (arraytoqpath lesson:
+    # connect-finite bridging fabricates a spurious segment).
+    samples = [
+        (0.0, 1.0),
+        (0.1, 2.0),
+        (0.2, math.nan),
+        (0.3, 3.0),
+        (0.4, 4.0),
+    ]
+    runs = _split_runs(samples, raster_period=0.1)
+    assert len(runs) == 2
+    assert [v for _, v in runs[0]] == [1.0, 2.0]
+    assert [v for _, v in runs[1]] == [3.0, 4.0]
+
+
+def test_split_runs_fallback_median_without_raster():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _split_runs
+
+    # No raster metadata: fall back to > 3x median interval. Median of
+    # {0.1, 0.1, 0.7} is 0.1 -> threshold 0.3; the 0.7 gap breaks.
+    samples = [(0.0, 0.0), (0.1, 1.0), (0.2, 2.0), (0.9, 3.0)]
+    runs = _split_runs(samples, raster_period=None)
+    assert len(runs) == 2
+
+
+def test_paint_polyline_survives_low_density(qtbot):
+    """End-to-end: a live card with few samples paints without error and
+    goes through the low-density polyline branch (n <= 2*w)."""
+    card = LiveSignalCard("MotSpd", unit="rpm", raster="event_1ms")
+    qtbot.addWidget(card)
+    card.resize(400, 120)
+    card.show()
+    qtbot.waitExposed(card)
+    for i in range(30):
+        card.push_sample(i * 0.5, float(i))
+    card.refresh()
+    card._spark.repaint()  # exercise the real paintEvent
+    assert card._spark.sample_count == 30

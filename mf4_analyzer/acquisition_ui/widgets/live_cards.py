@@ -12,8 +12,11 @@ Each card also carries its own ``REC OFF`` / red-dot indicator. The
 toolbar's global REC indicator is driven by the same ``RecHealth.state``
 field via ``MainWindow``; the per-card indicator MUST not disagree.
 
-Sparkline rendering uses :func:`live_downsampler.downsample_minmax`
-exclusively.
+Sparkline rendering (2026-07-10 cockpit-live-preview §A1/A2) positions x
+by STREAM timestamp across a fixed ``[t_anchor - 30s, t_anchor]`` window
+and draws a connected polyline at low density / a min-max envelope band
+plus a last-value line at high density, breaking the trace at genuine
+gaps rather than bridging them.
 """
 
 from __future__ import annotations
@@ -22,8 +25,8 @@ import math
 import re
 from collections import deque
 
-from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QPainter, QPen
+from PyQt5.QtCore import QPointF, Qt, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -36,10 +39,6 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from mf4_analyzer.acquisition_ui.widgets.live_downsampler import (
-    Bin,
-    downsample_minmax,
-)
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 
 
@@ -112,6 +111,243 @@ def _format_raster_display(raster: str | None) -> str:
     return raster
 
 
+# Raster period parsing for the sparkline gap detector. ``event_10ms`` →
+# 0.010 s; used only to size the break threshold (below), never to
+# re-derive stream timestamps.
+_RASTER_UNIT_TO_SECONDS = {"s": 1.0, "ms": 1e-3, "us": 1e-6}
+
+# A genuine break in the trace needs a gap wider than ``3×`` the raster
+# period, floored at 1 s so a slow (e.g. 200 ms) raster's normal cadence
+# is never mistaken for a dropout. Without raster metadata the detector
+# falls back to ``3×`` the median inter-sample interval.
+_DISPLAY_MIN_GAP_S = 1.0
+
+
+def _raster_period_s(raster: str | None) -> float | None:
+    """Parse an ``event_<n><unit>`` raster string into seconds.
+
+    Returns ``None`` for unknown / missing rasters, in which case the gap
+    detector falls back to the median-interval heuristic.
+    """
+    if not raster:
+        return None
+    body = raster[len("event_") :] if raster.startswith("event_") else raster
+    match = re.fullmatch(r"(\d+)\s*([a-zA-Z]+)", body)
+    if not match:
+        return None
+    value = int(match.group(1))
+    scale = _RASTER_UNIT_TO_SECONDS.get(match.group(2).lower())
+    if scale is None or value <= 0:
+        return None
+    return value * scale
+
+
+def _finite_value_bounds(
+    samples: list[tuple[float, float]],
+) -> tuple[float | None, float | None]:
+    """Return ``(ymin, ymax)`` over finite sample values, or ``(None, None)``."""
+    ymin = math.inf
+    ymax = -math.inf
+    for _ts, v in samples:
+        if not math.isfinite(v):
+            continue
+        if v < ymin:
+            ymin = v
+        if v > ymax:
+            ymax = v
+    if not math.isfinite(ymin):
+        return None, None
+    return ymin, ymax
+
+
+def _break_threshold(
+    samples: list[tuple[float, float]], raster_period: float | None
+) -> float:
+    """Largest gap that still counts as continuous.
+
+    ``max(3×raster_period, 1s)`` when the raster is known; otherwise ``3×``
+    the median finite inter-sample interval (``inf`` if undeterminable, so
+    nothing breaks).
+    """
+    if raster_period and raster_period > 0:
+        return max(3.0 * raster_period, _DISPLAY_MIN_GAP_S)
+    finite_ts = [ts for ts, v in samples if math.isfinite(ts) and math.isfinite(v)]
+    if len(finite_ts) < 2:
+        return math.inf
+    intervals = sorted(
+        finite_ts[i + 1] - finite_ts[i] for i in range(len(finite_ts) - 1)
+    )
+    median = intervals[len(intervals) // 2]
+    return 3.0 * median if median > 0 else math.inf
+
+
+def _split_runs(
+    samples: list[tuple[float, float]], *, raster_period: float | None = None
+) -> list[list[tuple[float, float]]]:
+    """Split time-ordered samples into contiguous, all-finite runs.
+
+    A run ends where the inter-sample gap exceeds :func:`_break_threshold`
+    OR where a non-finite sample interrupts the stream. Non-finite samples
+    are dropped AND force a break, so the painter never bridges a NaN gap
+    with a spurious segment (cf. lessons-learned
+    ``arraytoqpath-not-byte-identical-to-moveto-lineto-loop``). Returns a
+    list of runs so breakpoints are representable — a single flat
+    ``list[QPointF]`` cannot express a gap.
+    """
+    threshold = _break_threshold(samples, raster_period)
+    runs: list[list[tuple[float, float]]] = []
+    cur: list[tuple[float, float]] = []
+    prev_ts: float | None = None
+    for ts, v in samples:
+        if not (math.isfinite(ts) and math.isfinite(v)):
+            if cur:
+                runs.append(cur)
+                cur = []
+            prev_ts = None
+            continue
+        if prev_ts is not None and (ts - prev_ts) > threshold:
+            if cur:
+                runs.append(cur)
+            cur = [(ts, v)]
+        else:
+            cur.append((ts, v))
+        prev_ts = ts
+    if cur:
+        runs.append(cur)
+    return runs
+
+
+def _build_polyline(
+    samples: list[tuple[float, float]],
+    w: float,
+    h: float,
+    window: float,
+    t_anchor: float,
+    ymin: float,
+    ymax: float,
+) -> list[QPointF]:
+    """Project ``(ts, value)`` samples onto the sparkline rect.
+
+    x is TIME-proportional across the visible window,
+    ``x = w * (ts - (t_anchor - window)) / window`` — never a bin index —
+    so a card that only received the last 5 s of a 30 s window draws its
+    trace hugging the right edge instead of stretched across the full
+    width. y = ``h - (v - ymin)/(ymax - ymin) * h``. Returns a flat list
+    of ``QPointF`` (one per sample); callers that must honour gaps split
+    the samples via :func:`_split_runs` first and project each run
+    separately.
+    """
+    span = ymax - ymin
+    x0 = t_anchor - window
+    inv_window = (1.0 / window) if window else 0.0
+    pts: list[QPointF] = []
+    for ts, v in samples:
+        x = w * (ts - x0) * inv_window
+        if span > 0:
+            y = h - (v - ymin) / span * h
+        else:
+            y = h * 0.5
+        pts.append(QPointF(x, y))
+    return pts
+
+
+def _build_envelope(
+    samples: list[tuple[float, float]],
+    w: float,
+    h: float,
+    window: float,
+    t_anchor: float,
+    ymin: float,
+    ymax: float,
+    *,
+    raster_period: float | None = None,
+) -> tuple[QPainterPath, list[QPointF | None]]:
+    """High-density render: a min/max band plus a last-value line.
+
+    Columns tile the FULL ``[t_anchor - window, t_anchor]`` window (one
+    per output pixel), so a 5 s slice of dense data only lights the right
+    5/30 of the band rather than being stretched across ``[first, last]``.
+    Each occupied column contributes its ``(min, max)`` to the band and
+    its LAST value to the connecting line — connecting min/max instead
+    would fabricate a full-height zig-zag that reads as noise. Returns
+    ``(band_path, line_pts)`` where ``line_pts`` uses a ``None`` element
+    to mark a genuine gap between column runs.
+    """
+    columns = max(1, int(round(w)))
+    x0 = t_anchor - window
+    inv_window = (1.0 / window) if window else 0.0
+    # Per column accumulator: [mn, mx, last_value, last_ts].
+    cols: list[list[float] | None] = [None] * columns
+    for ts, v in samples:
+        if not (math.isfinite(ts) and math.isfinite(v)):
+            continue
+        ci = int((ts - x0) * inv_window * columns)
+        if ci < 0:
+            ci = 0
+        elif ci >= columns:
+            ci = columns - 1
+        c = cols[ci]
+        if c is None:
+            cols[ci] = [v, v, v, ts]
+        else:
+            if v < c[0]:
+                c[0] = v
+            if v > c[1]:
+                c[1] = v
+            c[2] = v
+            c[3] = ts
+
+    span = ymax - ymin
+
+    def py(val: float) -> float:
+        if span > 0:
+            return h - (val - ymin) / span * h
+        return h * 0.5
+
+    col_px = w / columns
+
+    def cx(ci: float) -> float:
+        return (ci + 0.5) * col_px
+
+    threshold = _break_threshold(samples, raster_period)
+
+    # Group occupied columns into runs, breaking on a genuine time gap.
+    runs: list[list[list[float]]] = []
+    run: list[list[float]] = []
+    prev_ts: float | None = None
+    for ci in range(columns):
+        c = cols[ci]
+        if c is None:
+            continue
+        mn, mx, last, ts = c
+        if prev_ts is not None and (ts - prev_ts) > threshold:
+            if run:
+                runs.append(run)
+            run = []
+        run.append([float(ci), mn, mx, last])
+        prev_ts = ts
+    if run:
+        runs.append(run)
+
+    band_path = QPainterPath()
+    line_pts: list[QPointF | None] = []
+    for run in runs:
+        if line_pts:
+            line_pts.append(None)  # gap separator between runs
+        # Band polygon: upper edge (max) left→right, lower edge (min)
+        # right→left, then close.
+        band_path.moveTo(cx(run[0][0]), py(run[0][2]))
+        for ci, _mn, mx, _last in run[1:]:
+            band_path.lineTo(cx(ci), py(mx))
+        for ci, mn, _mx, _last in reversed(run):
+            band_path.lineTo(cx(ci), py(mn))
+        band_path.closeSubpath()
+        for ci, _mn, _mx, last in run:
+            line_pts.append(QPointF(cx(ci), py(last)))
+
+    return band_path, line_pts
+
+
 class _ElidedLabel(QLabel):
     """QLabel that elides long signal names in the middle.
 
@@ -176,6 +412,9 @@ class Sparkline(QWidget):
         self.setObjectName("liveCardSparkline")
         self.setProperty("traceColor", self._color.name())
         self._buffer: deque[tuple[float, float]] = deque(maxlen=_SPARK_MAX_POINTS)
+        # Raster period (seconds) for the gap detector; ``None`` ⇒ fall
+        # back to the median-interval heuristic in :func:`_split_runs`.
+        self._raster_period_s: float | None = None
         # Spec §B: floor the sparkline at 72px and let it absorb free
         # vertical space so cards grow the curve when N decreases.
         self.setMinimumHeight(72)
@@ -185,6 +424,10 @@ class Sparkline(QWidget):
         self._color = QColor(color)
         self.setProperty("traceColor", self._color.name())
         self.update()
+
+    def set_raster_period(self, period_s: float | None) -> None:
+        """Set the raster period (seconds) used to detect trace breaks."""
+        self._raster_period_s = period_s
 
     def push(self, timestamp_s: float, value: float) -> None:
         self._buffer.append((float(timestamp_s), float(value)))
@@ -211,54 +454,121 @@ class Sparkline(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = self.rect()
+        w = rect.width()
+        h = rect.height()
+        # Faint reference grid (unchanged); the trace draws on top.
         painter.setPen(QPen(QColor("#e5e7eb"), 0.8))
         for fraction in (0.25, 0.5, 0.75):
-            y = rect.top() + rect.height() * fraction
+            y = rect.top() + h * fraction
             painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
         for fraction in (0.25, 0.5, 0.75):
-            x = rect.left() + rect.width() * fraction
+            x = rect.left() + w * fraction
             painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
-        # Card backdrop already paints; we draw only the line.
-        target = max(8, rect.width())
-        bins = downsample_minmax(list(self._buffer), target)
-        if not bins or all(b is None for b in bins):
+
+        samples = list(self._buffer)
+        if not samples:
             painter.end()
             return
 
-        # Y-scale across the visible bins.
-        ymin = math.inf
-        ymax = -math.inf
-        for b in bins:
-            if b is None:
-                continue
-            lo, hi = b
-            if lo < ymin:
-                ymin = lo
-            if hi > ymax:
-                ymax = hi
-        if not math.isfinite(ymin) or not math.isfinite(ymax) or ymax == ymin:
+        ymin, ymax = _finite_value_bounds(samples)
+        if ymin is None:
+            painter.end()
+            return
+        if ymax == ymin:
+            # Constant signal: give it a unit span so the flat line lands
+            # at mid-height instead of dividing by zero. (A-4 replaces this
+            # with a value-aware minimum span.)
             ymax = ymin + 1.0
 
-        h = rect.height()
-        w = rect.width()
-        pen = QPen(self._color, 1.4)
-        painter.setPen(pen)
-        painter.setBrush(Qt.NoBrush)
+        # x anchor = newest STREAM timestamp, never a wall clock, so the
+        # trace's right edge tracks the data itself (spec §A1).
+        t_anchor = samples[-1][0]
+        w_target = max(8, w)
 
-        # Plot one vertical segment per bucket; gaps don't draw.
-        for idx, b in enumerate(bins):
-            if b is None:
-                continue
-            x = (idx / max(1, len(bins) - 1)) * w
-            lo, hi = b
-            y_lo = h - ((lo - ymin) / (ymax - ymin)) * h
-            y_hi = h - ((hi - ymin) / (ymax - ymin)) * h
-            if abs(y_lo - y_hi) < 0.6:
-                # Single-sample bucket: draw a dot via short vertical.
-                painter.drawPoint(QPointF(x, y_lo))
-            else:
-                painter.drawLine(QPointF(x, y_hi), QPointF(x, y_lo))
+        if len(samples) <= 2 * w_target:
+            self._paint_polyline(painter, samples, w, h, t_anchor, ymin, ymax)
+        else:
+            self._paint_envelope(painter, samples, w, h, t_anchor, ymin, ymax)
         painter.end()
+
+    def _paint_polyline(
+        self,
+        painter: QPainter,
+        samples: list[tuple[float, float]],
+        w: float,
+        h: float,
+        t_anchor: float,
+        ymin: float,
+        ymax: float,
+    ) -> None:
+        """Low-density branch: one connected ``QPainterPath`` per run."""
+        painter.setPen(QPen(self._color, 1.4))
+        painter.setBrush(Qt.NoBrush)
+        for run in _split_runs(samples, raster_period=self._raster_period_s):
+            pts = _build_polyline(
+                run, w, h, _LIVE_WINDOW_S, t_anchor, ymin, ymax
+            )
+            if not pts:
+                continue
+            if len(pts) == 1:
+                # Single point: a bare dot (a moveTo-only path draws
+                # nothing), mirroring the loop's degenerate case.
+                painter.drawPoint(pts[0])
+                continue
+            # Each run is already contiguous + all-finite, so a plain
+            # moveTo/lineTo path is safe (arraytoqpath lesson: only vector
+            # over all-finite n>=2 — here we build the path by hand).
+            path = QPainterPath()
+            path.moveTo(pts[0])
+            for p in pts[1:]:
+                path.lineTo(p)
+            painter.drawPath(path)
+
+    def _paint_envelope(
+        self,
+        painter: QPainter,
+        samples: list[tuple[float, float]],
+        w: float,
+        h: float,
+        t_anchor: float,
+        ymin: float,
+        ymax: float,
+    ) -> None:
+        """High-density branch: min/max band + last-value connecting line."""
+        band, line_pts = _build_envelope(
+            samples,
+            w,
+            h,
+            _LIVE_WINDOW_S,
+            t_anchor,
+            ymin,
+            ymax,
+            raster_period=self._raster_period_s,
+        )
+        if not band.isEmpty():
+            fill = QColor(self._color)
+            fill.setAlphaF(0.16)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(fill))
+            painter.drawPath(band)
+        painter.setPen(QPen(self._color, 1.4))
+        painter.setBrush(Qt.NoBrush)
+        seg = QPainterPath()
+        started = False
+        for p in line_pts:
+            if p is None:
+                if started:
+                    painter.drawPath(seg)
+                seg = QPainterPath()
+                started = False
+                continue
+            if not started:
+                seg.moveTo(p)
+                started = True
+            else:
+                seg.lineTo(p)
+        if started:
+            painter.drawPath(seg)
 
 
 class LiveSignalCard(QFrame):
@@ -356,6 +666,7 @@ class LiveSignalCard(QFrame):
         # the ``recording`` dynamic property on the card itself.
 
         self._spark = Sparkline(self._trace_color, self)
+        self._spark.set_raster_period(_raster_period_s(self._raster))
         # Stretch=1 so the sparkline absorbs any vertical slack inside
         # the card's QVBoxLayout (header takes its sizeHint, the rest
         # belongs to the curve).
@@ -380,6 +691,7 @@ class LiveSignalCard(QFrame):
         self._unit_label.setText(unit if unit else "")
         self._raster_pill.setText(_format_raster_display(raster))
         self._raster_pill.setToolTip(raster if raster else "")
+        self._spark.set_raster_period(_raster_period_s(raster))
 
     def _apply_trace_color(self) -> None:
         """Paint the swatch.
