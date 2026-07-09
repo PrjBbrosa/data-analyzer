@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from collections import deque
 
-from PyQt5.QtCore import QPointF, Qt, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -40,6 +41,7 @@ from PyQt5.QtWidgets import (
 )
 
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
+from mf4_analyzer.ui_kit.ticks_math import _fmt_tick, _frame_to_nice
 
 
 # Spec §State Machine `stats window`.
@@ -122,6 +124,36 @@ _RASTER_UNIT_TO_SECONDS = {"s": 1.0, "ms": 1e-3, "us": 1e-6}
 # falls back to ``3×`` the median inter-sample interval.
 _DISPLAY_MIN_GAP_S = 1.0
 
+# Honest window label painted at the bottom of every sparkline (spec §A3).
+# The stream-time trim window is ``_LIVE_WINDOW_S`` (30s) in BOTH idle and
+# recording; the label states that span truthfully instead of implying an
+# unbounded "since rec start" history.
+_WINDOW_LABEL_IDLE = "最近 30s"
+_WINDOW_LABEL_RECORDING = "最近 30s（录制中）"
+
+# Value-aware minimum y span for the sparkline scale: a near-constant
+# signal (e.g. EcuTemp hovering at 54.3) keeps a readable span rather than
+# collapsing the axis onto a single value. ``max(1.0, |center| * 0.02)``.
+_SCALE_MIN_SPAN_FRACTION = 0.02
+_SCALE_MIN_SPAN_FLOOR = 1.0
+# Head/foot headroom applied to the DATA span (before the value-aware
+# minimum) so a peak never grazes the frame. Kept small and applied by
+# widening the span, NOT by pushing the bounds symmetrically below a
+# zero baseline: under a 2-division nice grid a negative-crossing pad
+# blows a zero-anchored axis up to a half-empty ``[-3000, 0, 3000]``
+# frame (the readability regression A-4 exists to fix). The nice-snap in
+# :func:`_frame_to_nice` (floor bottom, extend top) supplies the rest of
+# the headroom while keeping the baseline anchored to the data.
+_SCALE_PADDING_FRACTION = 0.06
+
+# Sparkline paint gutters (device px): a left slot for right-aligned y-tick
+# text (spec §A3) and a bottom slot for the window label. The left gutter is
+# only reserved on wide cards — narrow cards (< _STATS_COLLAPSE_MIN_CARD_W)
+# suppress the y-tick text and give the full width back to the trace so the
+# signal name + current value stay legible (spec §A3 narrow-yield).
+_Y_TICK_GUTTER_PX = 34.0
+_WINDOW_LABEL_GUTTER_PX = 13.0
+
 
 def _raster_period_s(raster: str | None) -> float | None:
     """Parse an ``event_<n><unit>`` raster string into seconds.
@@ -140,6 +172,88 @@ def _raster_period_s(raster: str | None) -> float | None:
     if scale is None or value <= 0:
         return None
     return value * scale
+
+
+def _spark_scale(
+    ymin: float, ymax: float
+) -> tuple[float, float, list[float]]:
+    """Map a raw value range onto a nice-tick DISPLAY range.
+
+    Two regimes (spec §A3):
+
+    - **Data-dominated** (``data_span >= min_span``): pad the real data
+      bounds by ``_SCALE_PADDING_FRACTION`` head/foot so a peak never
+      grazes the frame, but clamp the low bound back to ``0`` when the
+      data is non-negative — a zero-anchored signal (rpm from 0, percent)
+      keeps its natural baseline instead of manufacturing a negative axis.
+    - **Constant / near-constant** (``data_span < min_span``): center a
+      value-aware minimum span ``max(1.0, |center| * 0.02)`` on the data so
+      the axis does NOT collapse onto a single value (``EcuTemp`` at
+      54.30–54.34 keeps a readable span).
+
+    Both regimes then snap to a nice 2-division grid via
+    :func:`_frame_to_nice`, whose floor/extend supplies the remaining
+    headroom while keeping round tick values. A symmetric pad is NOT
+    applied before the snap: under a 2-division grid a negative-crossing
+    pad degenerates ``0..2360`` into a half-empty ``[-3000, 0, 3000]``
+    frame — the readability regression A-4 exists to fix.
+
+    Returns ``(lo, hi, ticks)`` where ``lo``/``hi`` are the snapped range
+    bounds fed to the projection (``ticks[0] == lo``, ``ticks[-1] == hi``).
+    """
+    try:
+        ymin = float(ymin)
+        ymax = float(ymax)
+    except (TypeError, ValueError):
+        ymin, ymax = 0.0, 0.0
+    if not (math.isfinite(ymin) and math.isfinite(ymax)):
+        ymin, ymax = 0.0, 0.0
+    if ymax < ymin:
+        ymin, ymax = ymax, ymin
+
+    center = (ymin + ymax) / 2.0
+    raw_span = ymax - ymin
+    min_span = max(_SCALE_MIN_SPAN_FLOOR, abs(center) * _SCALE_MIN_SPAN_FRACTION)
+    if raw_span >= min_span:
+        pad = raw_span * _SCALE_PADDING_FRACTION
+        lo = ymin - pad
+        hi = ymax + pad
+        # Keep the zero baseline: a non-negative signal never gets a
+        # manufactured negative axis (which the n=2 grid blows up).
+        if ymin >= 0.0 and lo < 0.0:
+            lo = 0.0
+    else:
+        lo = center - min_span / 2.0
+        hi = center + min_span / 2.0
+    bottom, top, ticks = _frame_to_nice(lo, hi, 2)
+    return bottom, top, ticks
+
+
+def _sample_state(
+    last_arrival: float | None, now: float, raster_period: float | None
+) -> str:
+    """Classify arrival cadence off a monotonic ARRIVAL clock.
+
+    - ``"no-data"``: no sample has ever been received (``last_arrival`` is
+      ``None``).
+    - ``"stale"``: the wall-clock gap since the last arrival exceeds
+      ``max(1s, 3 × raster_period)`` — a slow raster gets a proportionally
+      longer grace window, a fast raster the 1 s floor.
+    - ``"live"``: a recent arrival (a fresh sample immediately clears
+      ``stale``).
+
+    This is decoupled from stream time on purpose: the x axis keeps using
+    the STREAM timestamp so the trace stays honest, while staleness is a
+    property of when data last *arrived*.
+    """
+    if last_arrival is None:
+        return "no-data"
+    threshold = _DISPLAY_MIN_GAP_S
+    if raster_period and raster_period > 0:
+        threshold = max(_DISPLAY_MIN_GAP_S, 3.0 * float(raster_period))
+    if (now - last_arrival) > threshold:
+        return "stale"
+    return "live"
 
 
 def _finite_value_bounds(
@@ -415,6 +529,15 @@ class Sparkline(QWidget):
         # Raster period (seconds) for the gap detector; ``None`` ⇒ fall
         # back to the median-interval heuristic in :func:`_split_runs`.
         self._raster_period_s: float | None = None
+        # A-4 paint state. ``_show_y_ticks`` reserves the left y-tick
+        # gutter (suppressed on narrow cards); ``_recording_label`` picks
+        # the honest window label; ``_sample_state`` / ``_stale_age`` drive
+        # the ``无样本`` / ``停更 x.xs`` hints (arrival-clock derived, set by
+        # the owning card — the trace x axis still uses STREAM time).
+        self._show_y_ticks = True
+        self._recording_label = False
+        self._sample_state = "no-data"
+        self._stale_age: float | None = None
         # Spec §B: floor the sparkline at 72px and let it absorb free
         # vertical space so cards grow the curve when N decreases.
         self.setMinimumHeight(72)
@@ -428,6 +551,41 @@ class Sparkline(QWidget):
     def set_raster_period(self, period_s: float | None) -> None:
         """Set the raster period (seconds) used to detect trace breaks."""
         self._raster_period_s = period_s
+
+    def set_show_y_ticks(self, show: bool) -> None:
+        """Reserve (or suppress) the left y-tick text gutter.
+
+        Suppressed on narrow cards so the signal name + current value keep
+        priority (spec §A3 narrow-yield). Idempotent + repaints on change.
+        """
+        show = bool(show)
+        if show != self._show_y_ticks:
+            self._show_y_ticks = show
+            self.update()
+
+    def y_ticks_visible(self) -> bool:
+        return self._show_y_ticks
+
+    def set_recording_label(self, recording: bool) -> None:
+        """Pick the honest window label (``最近 30s`` vs ``…（录制中）``)."""
+        recording = bool(recording)
+        if recording != self._recording_label:
+            self._recording_label = recording
+            self.update()
+
+    def window_label(self) -> str:
+        return _WINDOW_LABEL_RECORDING if self._recording_label else _WINDOW_LABEL_IDLE
+
+    def set_sample_state(self, state: str, stale_age: float | None = None) -> None:
+        """Set the arrival-cadence hint (``no-data`` / ``live`` / ``stale``).
+
+        ``stale_age`` (seconds since the last arrival) renders the low-key
+        ``停更 x.xs`` note. Only the hint + repaint change here; the trace
+        geometry and the global Health band are untouched (spec §A3).
+        """
+        self._sample_state = state
+        self._stale_age = stale_age
+        self.update()
 
     def push(self, timestamp_s: float, value: float) -> None:
         self._buffer.append((float(timestamp_s), float(value)))
@@ -450,46 +608,158 @@ class Sparkline(QWidget):
     def sample_count(self) -> int:
         return len(self._buffer)
 
+    def _small_font(self) -> QFont:
+        """A slightly smaller font for axis text than the widget default."""
+        font = QFont(self.font())
+        size = self.font().pointSizeF()
+        if size <= 0:
+            size = 9.0
+        font.setPointSizeF(max(7.0, size - 1.0))
+        return font
+
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt naming.
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = self.rect()
-        w = rect.width()
-        h = rect.height()
-        # Faint reference grid (unchanged); the trace draws on top.
+        full_w = float(rect.width())
+        full_h = float(rect.height())
+
+        # A-4: reserve a left slot for y-tick text (wide cards only) and a
+        # bottom slot for the honest window label; the trace + grid live in
+        # the remaining plot rect. Narrow cards drop the y-tick gutter so
+        # the full width goes to the curve (name/value keep priority).
+        left_gutter = _Y_TICK_GUTTER_PX if self._show_y_ticks else 0.0
+        bottom_gutter = _WINDOW_LABEL_GUTTER_PX
+        plot_w = max(1.0, full_w - left_gutter)
+        plot_h = max(1.0, full_h - bottom_gutter)
+
+        # Faint reference grid, now scoped to the plot rect so it aligns
+        # with the trace instead of the full widget.
         painter.setPen(QPen(QColor("#e5e7eb"), 0.8))
         for fraction in (0.25, 0.5, 0.75):
-            y = rect.top() + h * fraction
-            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+            y = plot_h * fraction
+            painter.drawLine(
+                QPointF(left_gutter, y), QPointF(left_gutter + plot_w, y)
+            )
         for fraction in (0.25, 0.5, 0.75):
-            x = rect.left() + w * fraction
-            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+            x = left_gutter + plot_w * fraction
+            painter.drawLine(QPointF(x, 0.0), QPointF(x, plot_h))
+
+        # The window label is honest even before any data arrives.
+        self._paint_window_label(painter, left_gutter, plot_w, plot_h, full_h)
 
         samples = list(self._buffer)
         if not samples:
+            self._paint_no_data(painter, left_gutter, plot_w, plot_h)
             painter.end()
             return
 
         ymin, ymax = _finite_value_bounds(samples)
         if ymin is None:
+            self._paint_no_data(painter, left_gutter, plot_w, plot_h)
             painter.end()
             return
-        if ymax == ymin:
-            # Constant signal: give it a unit span so the flat line lands
-            # at mid-height instead of dividing by zero. (A-4 replaces this
-            # with a value-aware minimum span.)
-            ymax = ymin + 1.0
+
+        # A-4: value-aware nice-tick scale — a constant signal keeps a
+        # readable span instead of collapsing onto a single value.
+        lo, hi, ticks = _spark_scale(ymin, ymax)
 
         # x anchor = newest STREAM timestamp, never a wall clock, so the
-        # trace's right edge tracks the data itself (spec §A1).
+        # trace's right edge tracks the data itself (spec §A1). Staleness
+        # is judged separately off the arrival clock (set_sample_state).
         t_anchor = samples[-1][0]
-        w_target = max(8, w)
+        w_target = max(8, plot_w)
 
+        painter.save()
+        painter.translate(left_gutter, 0.0)
         if len(samples) <= 2 * w_target:
-            self._paint_polyline(painter, samples, w, h, t_anchor, ymin, ymax)
+            self._paint_polyline(painter, samples, plot_w, plot_h, t_anchor, lo, hi)
         else:
-            self._paint_envelope(painter, samples, w, h, t_anchor, ymin, ymax)
+            self._paint_envelope(painter, samples, plot_w, plot_h, t_anchor, lo, hi)
+        painter.restore()
+
+        if self._show_y_ticks:
+            self._paint_y_ticks(painter, ticks, lo, hi, left_gutter, plot_h)
+        self._paint_stale_note(painter, left_gutter, plot_w)
         painter.end()
+
+    def _paint_y_ticks(
+        self,
+        painter: QPainter,
+        ticks: list[float],
+        lo: float,
+        hi: float,
+        left_gutter: float,
+        plot_h: float,
+    ) -> None:
+        """Right-align the round y-tick labels in the left gutter."""
+        span = hi - lo
+        if span <= 0 or left_gutter <= 0:
+            return
+        painter.setPen(QPen(QColor("#9aa4b2")))
+        painter.setFont(self._small_font())
+        fm = painter.fontMetrics()
+        text_h = float(fm.height())
+        gutter_w = left_gutter - 4.0
+        for value in ticks:
+            y = plot_h - (value - lo) / span * plot_h
+            top = min(max(y - text_h / 2.0, 0.0), plot_h - text_h)
+            painter.drawText(
+                QRectF(0.0, top, gutter_w, text_h),
+                int(Qt.AlignRight | Qt.AlignVCenter),
+                _fmt_tick(value),
+            )
+
+    def _paint_window_label(
+        self,
+        painter: QPainter,
+        left_gutter: float,
+        plot_w: float,
+        plot_h: float,
+        full_h: float,
+    ) -> None:
+        """Honest ``最近 30s`` label along the bottom of the plot rect."""
+        painter.setPen(QPen(QColor("#9aa4b2")))
+        painter.setFont(self._small_font())
+        painter.drawText(
+            QRectF(left_gutter, plot_h, max(1.0, plot_w - 2.0), full_h - plot_h),
+            int(Qt.AlignRight | Qt.AlignVCenter),
+            self.window_label(),
+        )
+
+    def _paint_no_data(
+        self, painter: QPainter, left_gutter: float, plot_w: float, plot_h: float
+    ) -> None:
+        """Centered ``无样本`` hint before the first sample ever arrives."""
+        if self._sample_state != "no-data":
+            return
+        painter.setPen(QPen(QColor("#9aa4b2")))
+        painter.setFont(self._small_font())
+        painter.drawText(
+            QRectF(left_gutter, 0.0, plot_w, plot_h),
+            int(Qt.AlignCenter),
+            "无样本",
+        )
+
+    def _paint_stale_note(
+        self, painter: QPainter, left_gutter: float, plot_w: float
+    ) -> None:
+        """Low-interference ``停更 x.xs`` note in the top-right corner.
+
+        Stale only annotates; it never extends or bridges the frozen trace
+        (the x anchor is the newest STREAM timestamp, so a stalled signal
+        simply stops advancing) and it does NOT touch the global Health
+        band (spec §A3).
+        """
+        if self._sample_state != "stale" or self._stale_age is None:
+            return
+        painter.setPen(QPen(QColor("#b0713a")))
+        painter.setFont(self._small_font())
+        painter.drawText(
+            QRectF(left_gutter, 1.0, max(1.0, plot_w - 4.0), 14.0),
+            int(Qt.AlignRight | Qt.AlignTop),
+            f"停更 {self._stale_age:.1f}s",
+        )
 
     def _paint_polyline(
         self,
@@ -590,6 +860,8 @@ class LiveSignalCard(QFrame):
         raster: str | None = None,
         card_index: int = 0,
         parent: QWidget | None = None,
+        *,
+        clock=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("liveSignalCard")
@@ -601,6 +873,11 @@ class LiveSignalCard(QFrame):
         self._recording = False
         self._rec_start_ts: float | None = None
         self._stats_full_text = "μ — · σ — · max —"
+        # A-4: monotonic ARRIVAL clock (injectable so tests never sleep).
+        # Records when the last sample *arrived* — orthogonal to the
+        # sample's STREAM timestamp, which still drives the trace x axis.
+        self._clock = clock if clock is not None else time.monotonic
+        self._last_arrival: float | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -719,14 +996,43 @@ class LiveSignalCard(QFrame):
     def push_sample(self, timestamp_s: float, value: float) -> None:
         self._spark.push(timestamp_s, value)
         self._value_label.setText(f"{value:.3f}")
+        # Stamp the ARRIVAL time so staleness is judged on when data last
+        # arrived, not on the sample's stream timestamp. A fresh arrival
+        # immediately clears a prior ``stale`` state (see sample_state).
+        self._last_arrival = self._clock()
 
     def reset_buffer(self) -> None:
         self._spark.reset()
+
+    def sample_state(self) -> str:
+        """Arrival-cadence state: ``no-data`` / ``live`` / ``stale``.
+
+        Derived from the injectable monotonic arrival clock; the trace x
+        axis keeps using stream time regardless (spec §A3).
+        """
+        return _sample_state(
+            self._last_arrival, self._clock(), _raster_period_s(self._raster)
+        )
+
+    def _update_sample_state(self) -> None:
+        now = self._clock()
+        state = _sample_state(
+            self._last_arrival, now, _raster_period_s(self._raster)
+        )
+        stale_age = (
+            now - self._last_arrival
+            if state == "stale" and self._last_arrival is not None
+            else None
+        )
+        self._spark.set_sample_state(state, stale_age)
 
     def _sync_header_compactness(self) -> None:
         compact = 0 < self.width() < _STATS_COLLAPSE_MIN_CARD_W
         self._stats_label.setText(self._stats_full_text)
         self._stats_label.setVisible(not compact)
+        # Same width threshold gates the sparkline's y-tick gutter so a
+        # narrow card yields the axis text to the name + current value.
+        self._spark.set_show_y_ticks(not compact)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override.
         super().resizeEvent(event)
@@ -753,6 +1059,8 @@ class LiveSignalCard(QFrame):
             # cleared buffer. This also prevents stream-time restarts
             # from interleaving old and new relative timestamps.
             self._spark.reset()
+        # Keep the honest window label in sync (``最近 30s（录制中）``).
+        self._spark.set_recording_label(self._recording)
         self.setProperty("recording", self._recording)
         # Force a stylesheet re-evaluation so the [recording="true"]
         # selector toggles the red left border immediately.
@@ -786,6 +1094,9 @@ class LiveSignalCard(QFrame):
         buf = self._spark._buffer  # noqa: SLF001 - sibling widget.
         t_min: float | None = (buf[-1][0] - _LIVE_WINDOW_S) if buf else None
         self._spark.trim_to_window(t_min)
+        # Refresh the arrival-cadence hint (no-data / live / stale) off the
+        # monotonic arrival clock before the repaint.
+        self._update_sample_state()
         self._spark.request_repaint()
         self._stats_label.setToolTip(f"Stats window: {label}")
 

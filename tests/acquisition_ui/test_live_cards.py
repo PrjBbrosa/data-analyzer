@@ -470,3 +470,110 @@ def test_paint_polyline_survives_low_density(qtbot):
     card.refresh()
     card._spark.repaint()  # exercise the real paintEvent
     assert card._spark.sample_count == 30
+
+
+# ----------------------------------------------------------------------
+# Task A-4: compact y-ticks + honest 30s window label + no-data/stale.
+# ``_spark_scale`` maps a raw value range onto a nice-tick DISPLAY range
+# that keeps a readable, value-aware minimum span so a constant signal
+# does NOT collapse the axis; ``_sample_state`` classifies arrival cadence
+# off an injectable monotonic clock (x still uses STREAM time).
+# ----------------------------------------------------------------------
+
+
+def test_constant_signal_keeps_min_span():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _spark_scale
+
+    lo, hi, ticks = _spark_scale(54.30, 54.34)
+    # Near-constant signal keeps a readable span (value-aware min span =
+    # max(1.0, |center| * 0.02)) instead of collapsing toward ~0.
+    assert (hi - lo) >= 1.0
+    assert len(ticks) >= 3
+
+
+def test_scale_uses_nice_ticks():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _spark_scale
+
+    lo, hi, ticks = _spark_scale(0.0, 2360.0)
+    assert hi >= 2360.0 and lo <= 0.0  # data covered + padding
+    assert all(t == round(t, 6) for t in ticks)  # round grid
+
+
+def test_scale_recovers_from_nonfinite_bounds():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _spark_scale
+
+    lo, hi, ticks = _spark_scale(math.nan, math.inf)
+    assert math.isfinite(lo) and math.isfinite(hi) and hi > lo
+    assert len(ticks) >= 3
+
+
+def test_sample_state_recovers_after_new_arrival():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _sample_state
+
+    assert _sample_state(None, now=10.0, raster_period=0.001) == "no-data"
+    assert _sample_state(8.0, now=10.0, raster_period=0.001) == "stale"
+    assert _sample_state(10.0, now=10.0, raster_period=0.001) == "live"
+
+
+def test_sample_state_threshold_floors_at_one_second():
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import _sample_state
+
+    # 3×raster (3×0.2 = 0.6s) is below the 1s floor, so 0.8s is still live.
+    assert _sample_state(9.2, now=10.0, raster_period=0.2) == "live"
+    # A slow 1s raster: 3× = 3s threshold, so 2s idle is still live but 4s stale.
+    assert _sample_state(8.0, now=10.0, raster_period=1.0) == "live"
+    assert _sample_state(6.0, now=10.0, raster_period=1.0) == "stale"
+
+
+def test_card_sample_state_uses_injected_clock(qtbot):
+    clock = [0.0]
+    card = LiveSignalCard("MotSpd", raster="event_1ms", clock=lambda: clock[0])
+    qtbot.addWidget(card)
+    assert card.sample_state() == "no-data"  # never received a sample
+    clock[0] = 5.0
+    card.push_sample(0.0, 1.0)  # arrival recorded at monotonic 5.0
+    assert card.sample_state() == "live"
+    clock[0] = 7.0  # 2s since arrival > max(1s, 3×1ms)
+    assert card.sample_state() == "stale"
+    clock[0] = 7.5
+    card.push_sample(0.001, 2.0)  # a fresh arrival
+    assert card.sample_state() == "live"  # recovers immediately
+
+
+def test_window_label_reflects_recording(qtbot):
+    card = LiveSignalCard("MotSpd", raster="event_1ms")
+    qtbot.addWidget(card)
+    assert card._spark.window_label() == "最近 30s"
+    card.set_recording(True, rec_start_ts=0.0)
+    assert card._spark.window_label() == "最近 30s（录制中）"
+
+
+def test_narrow_card_hides_y_tick_text(qtbot):
+    card = LiveSignalCard("MotSpd", unit="rpm", raster="event_1ms")
+    qtbot.addWidget(card)
+    card.resize(360, 120)
+    card.show()
+    card.layout().activate()
+    qtbot.waitExposed(card)
+    # Below _STATS_COLLAPSE_MIN_CARD_W the y-tick gutter yields to the
+    # signal name + current value (same width threshold as the stats row).
+    assert card._spark.y_ticks_visible() is False
+    card.resize(600, 140)
+    card.layout().activate()
+    qtbot.wait(0)
+    assert card._spark.y_ticks_visible() is True
+
+
+def test_paint_with_y_ticks_survives(qtbot):
+    """A wide card paints y-tick labels + window label without error."""
+    card = LiveSignalCard("MotSpd", unit="rpm", raster="event_1ms")
+    qtbot.addWidget(card)
+    card.resize(600, 160)
+    card.show()
+    qtbot.waitExposed(card)
+    for i in range(50):
+        card.push_sample(i * 0.5, 54.3)  # constant signal must not collapse
+    card.refresh()
+    card._spark.repaint()  # exercise the real paintEvent + y-tick text
+    assert card._spark.y_ticks_visible() is True
+    assert card._spark.sample_count == 50
