@@ -3,14 +3,34 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QLabel, QScrollArea, QWidget
+from PyQt5.QtWidgets import QApplication, QLabel, QScrollArea, QWidget
 
 from mf4_analyzer.acquisition_ui.widgets.live_cards import (
+    _SPARK_MAX_POINTS,
     LiveCardGrid,
     LiveSignalCard,
 )
+
+
+class _IterSpyDeque(deque):
+    """A deque that counts how many times it is iterated (``__iter__``).
+
+    Used to prove which code paths scan the raw sparkline buffer: the raw
+    deque is iterated only by ``list(...)`` in the low-density paint branch
+    and by the (2 Hz) stats recompute — never by the high-density paint
+    branch, which reads the display buckets instead.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.iter_count = 0
+
+    def __iter__(self):
+        self.iter_count += 1
+        return super().__iter__()
 
 
 def _label(parent: QWidget, object_name: str) -> QLabel:
@@ -596,3 +616,182 @@ def test_paint_with_y_ticks_survives(qtbot):
     card._spark.repaint()  # exercise the real paintEvent + y-tick text
     assert card._spark.y_ticks_visible() is True
     assert card._spark.sample_count == 50
+
+
+# ----------------------------------------------------------------------
+# Task A-6: 10 ms display buckets + 2 Hz stats gate. The high-density
+# paint branch merges the ≤3001 display buckets into the pixel columns
+# and NEVER scans the raw 30 s deque; the raw deque is kept only for
+# honest statistics, whose O(N) scan is rate-capped to ~2 Hz. Per-frame
+# cost is therefore bounded by the pixel width, not the raw sample volume
+# (lessons: narrow-y-overlay-cost-is-stroke-count-not-data,
+# paintevent-hook-needs-class-level-override, project-timedomain-perf).
+# ----------------------------------------------------------------------
+
+
+def test_card_buckets_bounded_and_raw_span_honest(qtbot):
+    """After 30 s @ 1 ms: raw deque keeps ≥29 s (honest stats) while the
+    display buckets stay ≤3001 regardless of raw volume."""
+    card = LiveSignalCard("MotSpd", unit="rpm", raster="event_1ms")
+    qtbot.addWidget(card)
+    for i in range(30000):  # 30 s @ 1 ms
+        card.push_sample(i / 1000.0, float(i))
+    card.refresh()
+    buf = card._spark._buffer
+    span = buf[-1][0] - buf[0][0]
+    assert span >= 29.0  # raw span honest for statistics
+    assert len(card._spark._buckets) <= 3001  # display buckets bounded
+
+
+def test_high_density_paint_does_not_scan_raw(qtbot, monkeypatch):
+    """A 30 000-sample (high-density) repaint must read the display buckets
+    (``_build_envelope_from_buckets``) and NOT iterate the raw deque."""
+    import mf4_analyzer.acquisition_ui.widgets.live_cards as lc
+
+    env_calls = {"n": 0}
+    orig_env = lc._build_envelope_from_buckets
+
+    def env_spy(*args, **kwargs):
+        env_calls["n"] += 1
+        return orig_env(*args, **kwargs)
+
+    monkeypatch.setattr(lc, "_build_envelope_from_buckets", env_spy)
+
+    card = LiveSignalCard("MotSpd", unit="rpm", raster="event_1ms")
+    qtbot.addWidget(card)
+    card.resize(600, 160)
+    card.show()
+    qtbot.waitExposed(card)
+    card.layout().activate()  # realize the sparkline's ~580 px width
+    QApplication.processEvents()  # prime the initial paint so repaint() is live
+
+    spy = _IterSpyDeque(maxlen=_SPARK_MAX_POINTS)
+    card._spark._buffer = spy
+    for i in range(30000):  # 30 s @ 1 ms → high density
+        card.push_sample(i / 1000.0, float(i))
+    card.refresh()  # stats scans raw once (that's allowed)
+
+    spy.iter_count = 0  # measure the paint frame only
+    card._spark.repaint()  # real high-density paintEvent
+    assert env_calls["n"] >= 1, "high-density paint must use the bucket envelope"
+    assert spy.iter_count == 0, "high-density paint must NOT scan the raw deque"
+
+
+def test_low_density_paint_feeds_bounded_raw(qtbot, monkeypatch):
+    """The low-density branch scans the raw deque but only with ≤ ``2×W``
+    points, and it does NOT touch the bucket envelope."""
+    import mf4_analyzer.acquisition_ui.widgets.live_cards as lc
+
+    captured: dict[str, int] = {}
+    orig_split = lc._split_runs
+
+    def split_spy(samples, **kwargs):
+        captured["n"] = len(samples)
+        return orig_split(samples, **kwargs)
+
+    env_calls = {"n": 0}
+    orig_env = lc._build_envelope_from_buckets
+
+    def env_spy(*args, **kwargs):
+        env_calls["n"] += 1
+        return orig_env(*args, **kwargs)
+
+    monkeypatch.setattr(lc, "_split_runs", split_spy)
+    monkeypatch.setattr(lc, "_build_envelope_from_buckets", env_spy)
+
+    card = LiveSignalCard("MotSpd", unit="rpm", raster="event_1ms")
+    qtbot.addWidget(card)
+    card.resize(600, 160)
+    card.show()
+    qtbot.waitExposed(card)
+    card.layout().activate()  # realize the sparkline's ~580 px width
+    QApplication.processEvents()  # prime the initial paint so repaint() is live
+
+    spark = card._spark
+    for i in range(100):  # << 2×W on a 600 px card → low density
+        card.push_sample(i * 0.001, float(i))
+    card.refresh()
+    spark.repaint()
+
+    assert "n" in captured, "low-density branch must scan raw via _split_runs"
+    assert captured["n"] == spark.sample_count
+    assert captured["n"] <= 2 * spark.width()  # bounded by 2×W
+    assert env_calls["n"] == 0, "buckets are not used at low density"
+
+
+def test_stats_recompute_capped_at_two_hz(qtbot):
+    """Over 100 refreshes advancing 10 ms each (~1 s), the O(N) stats scan
+    runs ≤ 3 times (2 Hz gate), while the buffer keeps ingesting."""
+    clock = [0.0]
+    card = LiveSignalCard("MotSpd", raster="event_1ms", clock=lambda: clock[0])
+    qtbot.addWidget(card)
+
+    # The stats recompute is the ONLY raw-iteration inside refresh(), so a
+    # spy on the raw deque's __iter__ counts exactly the recompute events.
+    spy = _IterSpyDeque(maxlen=_SPARK_MAX_POINTS)
+    card._spark._buffer = spy
+
+    ts = 0.0
+    for frame in range(100):
+        for _ in range(10):  # 10 samples/frame at 1 ms raster
+            card.push_sample(ts, float(frame))
+            ts += 0.001
+        card.refresh()
+        clock[0] += 0.010  # advance the injected clock 10 ms per refresh
+
+    assert spy.iter_count >= 1  # the first refresh always recomputes
+    assert spy.iter_count <= 3  # 2 Hz over ~1 s → at most ~3 recomputes
+
+
+def test_bucket_envelope_column_cap_bounds_stroke_count():
+    """The bucket envelope caps its output columns (stroke count) at
+    ``max_columns`` while still spanning the full width — the raster-fill
+    lever from the narrow-y-overlay lesson."""
+    from mf4_analyzer.acquisition_ui.widgets.live_cards import (
+        _build_envelope_from_buckets,
+    )
+    from mf4_analyzer.acquisition_ui.widgets.live_downsampler import (
+        RollingDisplayBuckets,
+    )
+
+    b = RollingDisplayBuckets(window_s=30.0)
+    for i in range(30000):  # 30 s @ 1 ms → ~3000 buckets
+        b.push(i / 1000.0, math.sin(i * 0.05))
+    w = 860.0
+    band, line = _build_envelope_from_buckets(
+        b.iter_summaries(),
+        w,
+        100.0,
+        30.0,
+        30.0,
+        -1.0,
+        1.0,
+        raster_period=0.001,
+        max_columns=400,
+    )
+    xs = [p.x() for p in line if p is not None]
+    # At most max_columns distinct column centres → bounded stroke count.
+    assert len({round(x, 3) for x in xs}) <= 400
+    # The band still spans (nearly) the full width, not a fraction of it —
+    # capping columns must NOT shrink the horizontal extent.
+    assert band.boundingRect().right() > w * 0.95
+    # Uncapped, the same width would use ~860 columns (far more strokes).
+    band2, line2 = _build_envelope_from_buckets(
+        b.iter_summaries(), w, 100.0, 30.0, 30.0, -1.0, 1.0, raster_period=0.001
+    )
+    xs2 = [p.x() for p in line2 if p is not None]
+    assert len({round(x, 3) for x in xs2}) > 400
+
+
+def test_current_value_updates_every_batch_despite_stats_gate(qtbot):
+    """The 2 Hz stats gate must NOT throttle the current-value readout —
+    it updates on every sample batch."""
+    clock = [0.0]
+    card = LiveSignalCard("MotSpd", raster="event_1ms", clock=lambda: clock[0])
+    qtbot.addWidget(card)
+    card.push_sample(0.0, 11.0)
+    card.refresh()
+    assert card._value_label.text() == "11.000"
+    clock[0] += 0.010  # < 0.5 s: stats gate would throttle a recompute
+    card.push_sample(0.001, 22.0)
+    assert card._value_label.text() == "22.000"  # value still fresh

@@ -41,6 +41,10 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from mf4_analyzer.acquisition_ui.widgets.live_downsampler import (
+    _DISPLAY_BUCKET_S,
+    RollingDisplayBuckets,
+)
 from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui_kit.ticks_math import _fmt_tick, _frame_to_nice
 
@@ -77,6 +81,16 @@ _LIVE_WINDOW_S = 30.0
 # deque, NOT the recording ring buffer / writer. The painter respects
 # the widget's actual width via ``self.width()``; this only bounds memory.
 _SPARK_MAX_POINTS = 32000
+
+# Stats-text recompute cadence cap (spec §A6 / plan Task A-6). The μ/σ/max
+# label scans the whole raw 30 s deque (up to 30 000 samples), so at 30 fps
+# that O(N) reduction would dominate ``refresh()``. Recompute it at most
+# every ``_STATS_REFRESH_MIN_INTERVAL_S`` (2 Hz) off the SAME injectable
+# monotonic clock the arrival cadence uses. This is a DISPLAY cadence only:
+# the current-value label still updates on every sample batch, and the
+# statistics window / values themselves are unchanged (still the honest
+# 30 s buffer) — nothing is written to disk on this cadence.
+_STATS_REFRESH_MIN_INTERVAL_S = 0.5
 
 _CARD_TRACE_COLORS = (
     "#2563eb",
@@ -161,6 +175,20 @@ _SCALE_PADDING_FRACTION = 0.06
 # signal name + current value stay legible (spec §A3 narrow-yield).
 _Y_TICK_GUTTER_PX = 34.0
 _WINDOW_LABEL_GUTTER_PX = 13.0
+
+# High-density envelope stroke-count cap (spec §A6 perf gate). The live
+# paint frame is CPU-raster / stroke-count bound (lessons
+# narrow-y-overlay-cost-is-stroke-count-not-data + project-timedomain-perf-
+# raster-bound): a band polygon with one column per pixel (~860 edges ×2 on
+# a wide card) scan-converts several× slower than a coarser one, and the
+# fill area is unchanged so the win is purely fewer edges. Capping the
+# bucket→column merge to this many columns (mapped across the FULL width so
+# the band still spans the plot) plus drawing the dense envelope with
+# antialiasing OFF took the measured 5-card ``refresh+paint`` p95 from ~81 ms
+# to well under the 30 fps (33 ms) budget. At ~2–3 px/column on a wide
+# sparkline the coarsening is imperceptible; the low-density polyline branch
+# keeps full per-sample fidelity and antialiasing.
+_ENVELOPE_MAX_COLUMNS = 400
 
 
 def _raster_period_s(raster: str | None) -> float | None:
@@ -373,52 +401,23 @@ def _build_polyline(
     return pts
 
 
-def _build_envelope(
-    samples: list[tuple[float, float]],
-    w: float,
+def _columns_to_band_line(
+    cols: list[list[float] | None],
+    columns: int,
+    col_px: float,
     h: float,
-    window: float,
-    t_anchor: float,
     ymin: float,
     ymax: float,
-    *,
-    raster_period: float | None = None,
+    threshold: float,
 ) -> tuple[QPainterPath, list[QPointF | None]]:
-    """High-density render: a min/max band plus a last-value line.
+    """Turn per-column ``[mn, mx, last, ts]`` accumulators into a min/max
+    band path + a last-value connecting line, breaking runs on a genuine
+    time gap (``ts - prev_ts > threshold``).
 
-    Columns tile the FULL ``[t_anchor - window, t_anchor]`` window (one
-    per output pixel), so a 5 s slice of dense data only lights the right
-    5/30 of the band rather than being stretched across ``[first, last]``.
-    Each occupied column contributes its ``(min, max)`` to the band and
-    its LAST value to the connecting line — connecting min/max instead
-    would fabricate a full-height zig-zag that reads as noise. Returns
-    ``(band_path, line_pts)`` where ``line_pts`` uses a ``None`` element
-    to mark a genuine gap between column runs.
+    Shared by :func:`_build_envelope` (raw samples) and
+    :func:`_build_envelope_from_buckets` (pre-reduced 10 ms buckets) so the
+    band/line geometry has ONE tested implementation regardless of source.
     """
-    columns = max(1, int(round(w)))
-    x0 = t_anchor - window
-    inv_window = (1.0 / window) if window else 0.0
-    # Per column accumulator: [mn, mx, last_value, last_ts].
-    cols: list[list[float] | None] = [None] * columns
-    for ts, v in samples:
-        if not (math.isfinite(ts) and math.isfinite(v)):
-            continue
-        ci = int((ts - x0) * inv_window * columns)
-        if ci < 0:
-            ci = 0
-        elif ci >= columns:
-            ci = columns - 1
-        c = cols[ci]
-        if c is None:
-            cols[ci] = [v, v, v, ts]
-        else:
-            if v < c[0]:
-                c[0] = v
-            if v > c[1]:
-                c[1] = v
-            c[2] = v
-            c[3] = ts
-
     span = ymax - ymin
 
     def py(val: float) -> float:
@@ -426,12 +425,8 @@ def _build_envelope(
             return h - (val - ymin) / span * h
         return h * 0.5
 
-    col_px = w / columns
-
     def cx(ci: float) -> float:
         return (ci + 0.5) * col_px
-
-    threshold = _break_threshold(samples, raster_period)
 
     # Group occupied columns into runs, breaking on a genuine time gap.
     runs: list[list[list[float]]] = []
@@ -468,6 +463,141 @@ def _build_envelope(
             line_pts.append(QPointF(cx(ci), py(last)))
 
     return band_path, line_pts
+
+
+def _build_envelope(
+    samples: list[tuple[float, float]],
+    w: float,
+    h: float,
+    window: float,
+    t_anchor: float,
+    ymin: float,
+    ymax: float,
+    *,
+    raster_period: float | None = None,
+) -> tuple[QPainterPath, list[QPointF | None]]:
+    """High-density render from RAW samples: a min/max band + last-value
+    line. Retained as the reference (unit-tested) reducer; the live paint
+    hot path feeds pre-reduced buckets via
+    :func:`_build_envelope_from_buckets` so it never scans the raw deque.
+
+    Columns tile the FULL ``[t_anchor - window, t_anchor]`` window (one
+    per output pixel), so a 5 s slice of dense data only lights the right
+    5/30 of the band rather than being stretched across ``[first, last]``.
+    Each occupied column contributes its ``(min, max)`` to the band and
+    its LAST value to the connecting line — connecting min/max instead
+    would fabricate a full-height zig-zag that reads as noise. Returns
+    ``(band_path, line_pts)`` where ``line_pts`` uses a ``None`` element
+    to mark a genuine gap between column runs.
+    """
+    columns = max(1, int(round(w)))
+    x0 = t_anchor - window
+    inv_window = (1.0 / window) if window else 0.0
+    # Per column accumulator: [mn, mx, last_value, last_ts].
+    cols: list[list[float] | None] = [None] * columns
+    for ts, v in samples:
+        if not (math.isfinite(ts) and math.isfinite(v)):
+            continue
+        ci = int((ts - x0) * inv_window * columns)
+        if ci < 0:
+            ci = 0
+        elif ci >= columns:
+            ci = columns - 1
+        c = cols[ci]
+        if c is None:
+            cols[ci] = [v, v, v, ts]
+        else:
+            if v < c[0]:
+                c[0] = v
+            if v > c[1]:
+                c[1] = v
+            c[2] = v
+            c[3] = ts
+
+    threshold = _break_threshold(samples, raster_period)
+    col_px = w / columns
+    return _columns_to_band_line(cols, columns, col_px, h, ymin, ymax, threshold)
+
+
+def _bucket_gap_threshold(
+    last_ts_list: list[float], raster_period: float | None
+) -> float:
+    """Break threshold for the bucket-fed envelope.
+
+    ``max(3×raster_period, 1s)`` when the raster is known; otherwise ``3×``
+    the median inter-bucket interval (``inf`` if undeterminable so nothing
+    breaks). Mirrors :func:`_break_threshold` but over bucket last-times.
+    """
+    if raster_period and raster_period > 0:
+        return max(3.0 * raster_period, _DISPLAY_MIN_GAP_S)
+    finite = [t for t in last_ts_list if math.isfinite(t)]
+    if len(finite) < 2:
+        return math.inf
+    intervals = sorted(finite[i + 1] - finite[i] for i in range(len(finite) - 1))
+    median = intervals[len(intervals) // 2]
+    return 3.0 * median if median > 0 else math.inf
+
+
+def _build_envelope_from_buckets(
+    buckets,
+    w: float,
+    h: float,
+    window: float,
+    t_anchor: float,
+    ymin: float,
+    ymax: float,
+    *,
+    raster_period: float | None = None,
+    max_columns: int | None = None,
+) -> tuple[QPainterPath, list[QPointF | None]]:
+    """High-density render from pre-reduced 10 ms buckets.
+
+    ``buckets`` is an iterable of ``(t_start, vmin, vmax, last, last_ts)``
+    summaries (at most ~3001 for a 30 s window) — the live paint hot path
+    passes ``RollingDisplayBuckets.iter_summaries()`` here so it NEVER
+    scans the raw 30 s deque. Each bucket already carries its slot's exact
+    ``(min, max, last)``, so this only re-buckets those summaries into the
+    output columns and hands them to :func:`_columns_to_band_line`.
+
+    ``max_columns`` caps the number of output columns (mapped across the
+    FULL ``w`` so the band still spans the plot — ``col_px = w / columns``);
+    it is the stroke-count lever the narrow-Y raster-fill lesson identifies
+    (fewer band/line edges → much cheaper scan-conversion, same fill area).
+    ``None`` ⇒ one column per pixel. The band/line stroke count therefore
+    stays bounded by ``min(W, max_columns)`` regardless of raw sample
+    volume.
+    """
+    columns = max(1, int(round(w)))
+    if max_columns is not None:
+        columns = min(columns, max(1, int(max_columns)))
+    x0 = t_anchor - window
+    inv_window = (1.0 / window) if window else 0.0
+    # Per column accumulator: [mn, mx, last_value, last_ts].
+    cols: list[list[float] | None] = [None] * columns
+    last_ts_list: list[float] = []
+    for t_start, bmn, bmx, blast, blast_ts in buckets:
+        ci = int((t_start - x0) * inv_window * columns)
+        if ci < 0:
+            ci = 0
+        elif ci >= columns:
+            ci = columns - 1
+        c = cols[ci]
+        if c is None:
+            cols[ci] = [bmn, bmx, blast, blast_ts]
+        else:
+            if bmn < c[0]:
+                c[0] = bmn
+            if bmx > c[1]:
+                c[1] = bmx
+            # Buckets arrive in time order, so the latest one in a column
+            # wins the last-value / last-ts slot.
+            c[2] = blast
+            c[3] = blast_ts
+        last_ts_list.append(blast_ts)
+
+    threshold = _bucket_gap_threshold(last_ts_list, raster_period)
+    col_px = w / columns
+    return _columns_to_band_line(cols, columns, col_px, h, ymin, ymax, threshold)
 
 
 class _ElidedLabel(QLabel):
@@ -534,6 +664,12 @@ class Sparkline(QWidget):
         self.setObjectName("liveCardSparkline")
         self.setProperty("traceColor", self._color.name())
         self._buffer: deque[tuple[float, float]] = deque(maxlen=_SPARK_MAX_POINTS)
+        # Incremental 10 ms display buckets (spec §A6). The high-density
+        # paint branch merges these (≤ 3001 for the 30 s window) into the
+        # pixel columns and NEVER scans ``_buffer``; the raw deque above is
+        # kept only for honest statistics. ``push``/``trim_to_window``/
+        # ``reset`` keep both in lock-step.
+        self._buckets = RollingDisplayBuckets(_LIVE_WINDOW_S, _DISPLAY_BUCKET_S)
         # Raster period (seconds) for the gap detector; ``None`` ⇒ fall
         # back to the median-interval heuristic in :func:`_split_runs`.
         self._raster_period_s: float | None = None
@@ -596,17 +732,28 @@ class Sparkline(QWidget):
         self.update()
 
     def push(self, timestamp_s: float, value: float) -> None:
-        self._buffer.append((float(timestamp_s), float(value)))
+        ts = float(timestamp_s)
+        v = float(value)
+        self._buffer.append((ts, v))
+        # Keep the O(1) display buckets in step with the raw deque.
+        self._buckets.push(ts, v)
 
     def trim_to_window(self, t_min: float | None) -> None:
-        """Drop samples with ``ts < t_min``. ``None`` ⇒ no trim."""
+        """Drop samples with ``ts < t_min``. ``None`` ⇒ no trim.
+
+        Trims BOTH the raw deque (exact, for statistics) and the display
+        buckets (≤10 ms boundary slack) so the painted window and the
+        honest stats window stay the same span.
+        """
         if t_min is None:
             return
         while self._buffer and self._buffer[0][0] < t_min:
             self._buffer.popleft()
+        self._buckets.trim(t_min)
 
     def reset(self) -> None:
         self._buffer.clear()
+        self._buckets.clear()
         self.update()
 
     def request_repaint(self) -> None:
@@ -656,40 +803,71 @@ class Sparkline(QWidget):
         # The window label is honest even before any data arrives.
         self._paint_window_label(painter, left_gutter, plot_w, plot_h, full_h)
 
-        samples = list(self._buffer)
-        if not samples:
+        # A-6 density decision uses ``len(self._buffer)`` (O(1) on a deque,
+        # no iteration). The raw deque is scanned ONLY in the low-density
+        # branch, where it holds ≤ ``2 × W`` points; the high-density branch
+        # reads exclusively from the ≤3001 display buckets so the per-frame
+        # cost never scales with the raw sample volume (spec §A6, lessons
+        # narrow-y-overlay-cost-is-stroke-count / timedomain-perf-raster).
+        n = len(self._buffer)
+        if n == 0:
             self._paint_no_data(painter, left_gutter, plot_w, plot_h)
             painter.end()
             return
 
-        ymin, ymax = _finite_value_bounds(samples)
-        if ymin is None:
-            self._paint_no_data(painter, left_gutter, plot_w, plot_h)
-            painter.end()
-            return
-
-        # A-4: value-aware nice-tick scale — a constant signal keeps a
-        # readable span instead of collapsing onto a single value.
-        lo, hi, ticks = _spark_scale(ymin, ymax)
-
-        # x anchor = newest STREAM timestamp, never a wall clock, so the
-        # trace's right edge tracks the data itself (spec §A1). Staleness
-        # is judged separately off the arrival clock (set_sample_state).
-        t_anchor = samples[-1][0]
         w_target = max(8, plot_w)
-
         painter.save()
         painter.translate(left_gutter, 0.0)
-        if len(samples) <= 2 * w_target:
-            self._paint_polyline(painter, samples, plot_w, plot_h, t_anchor, lo, hi)
+        if n <= 2 * w_target:
+            scale = self._paint_low_density(painter, plot_w, plot_h)
         else:
-            self._paint_envelope(painter, samples, plot_w, plot_h, t_anchor, lo, hi)
+            scale = self._paint_high_density(painter, plot_w, plot_h)
         painter.restore()
 
+        if scale is None:
+            self._paint_no_data(painter, left_gutter, plot_w, plot_h)
+            painter.end()
+            return
+
+        lo, hi, ticks = scale
         if self._show_y_ticks:
             self._paint_y_ticks(painter, ticks, lo, hi, left_gutter, plot_h)
         self._paint_stale_note(painter, left_gutter, plot_w)
         painter.end()
+
+    def _paint_low_density(
+        self, painter: QPainter, plot_w: float, plot_h: float
+    ) -> tuple[float, float, list[float]] | None:
+        """Low-density branch: scan the (≤ ``2×W``) raw deque and draw a
+        connected polyline. Returns the ``(lo, hi, ticks)`` scale, or
+        ``None`` when there is no finite data. The painter is already
+        translated by ``left_gutter``.
+        """
+        samples = list(self._buffer)  # ≤ 2×W points — cheap to scan
+        ymin, ymax = _finite_value_bounds(samples)
+        if ymin is None:
+            return None
+        lo, hi, ticks = _spark_scale(ymin, ymax)
+        # x anchor = newest STREAM timestamp (never a wall clock).
+        t_anchor = samples[-1][0]
+        self._paint_polyline(painter, samples, plot_w, plot_h, t_anchor, lo, hi)
+        return lo, hi, ticks
+
+    def _paint_high_density(
+        self, painter: QPainter, plot_w: float, plot_h: float
+    ) -> tuple[float, float, list[float]] | None:
+        """High-density branch: read the ≤3001 display buckets ONLY (never
+        the raw deque) and draw a min/max band + last-value line. Returns
+        the ``(lo, hi, ticks)`` scale, or ``None`` when the buckets are
+        empty (e.g. every sample was non-finite).
+        """
+        ymin, ymax = self._buckets.value_bounds()
+        t_anchor = self._buckets.latest_ts()
+        if ymin is None or t_anchor is None:
+            return None
+        lo, hi, ticks = _spark_scale(ymin, ymax)
+        self._paint_envelope(painter, plot_w, plot_h, t_anchor, lo, hi)
+        return lo, hi, ticks
 
     def _paint_y_ticks(
         self,
@@ -805,16 +983,26 @@ class Sparkline(QWidget):
     def _paint_envelope(
         self,
         painter: QPainter,
-        samples: list[tuple[float, float]],
         w: float,
         h: float,
         t_anchor: float,
         ymin: float,
         ymax: float,
     ) -> None:
-        """High-density branch: min/max band + last-value connecting line."""
-        band, line_pts = _build_envelope(
-            samples,
+        """High-density branch: min/max band + last-value connecting line.
+
+        Reads exclusively from the ≤3001 display buckets
+        (``iter_summaries``) so the per-frame cost is bounded by the pixel
+        width, not the raw sample volume (spec §A6). The stroke count is
+        further capped by ``_ENVELOPE_MAX_COLUMNS`` and the dense band/line
+        is drawn with antialiasing OFF — together these took the measured
+        5-card ``refresh+paint`` p95 from ~81 ms to under the 33 ms budget
+        (lesson narrow-y-overlay-cost-is-stroke-count-not-data). The caller
+        wraps this in ``painter.save()/restore()``, so turning AA off here
+        does not leak into the y-tick / label passes.
+        """
+        band, line_pts = _build_envelope_from_buckets(
+            self._buckets.iter_summaries(),
             w,
             h,
             _LIVE_WINDOW_S,
@@ -822,7 +1010,9 @@ class Sparkline(QWidget):
             ymin,
             ymax,
             raster_period=self._raster_period_s,
+            max_columns=_ENVELOPE_MAX_COLUMNS,
         )
+        painter.setRenderHint(QPainter.Antialiasing, False)
         if not band.isEmpty():
             fill = QColor(self._color)
             fill.setAlphaF(0.16)
@@ -886,6 +1076,11 @@ class LiveSignalCard(QFrame):
         # sample's STREAM timestamp, which still drives the trace x axis.
         self._clock = clock if clock is not None else time.monotonic
         self._last_arrival: float | None = None
+        # A-6: monotonic timestamp (same clock) of the last μ/σ/max
+        # recompute, used to throttle the O(N) raw-deque scan to ~2 Hz.
+        # ``None`` ⇒ never computed, so the first data-bearing refresh
+        # always recomputes.
+        self._last_stats_ts: float | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -1011,6 +1206,8 @@ class LiveSignalCard(QFrame):
 
     def reset_buffer(self) -> None:
         self._spark.reset()
+        # Force the next refresh to recompute stats over the cleared buffer.
+        self._last_stats_ts = None
 
     def sample_state(self) -> str:
         """Arrival-cadence state: ``no-data`` / ``live`` / ``stale``.
@@ -1067,6 +1264,9 @@ class LiveSignalCard(QFrame):
             # cleared buffer. This also prevents stream-time restarts
             # from interleaving old and new relative timestamps.
             self._spark.reset()
+            # Buffer just cleared → force the next refresh to recompute
+            # stats (don't let the 2 Hz gate keep stale idle μ/σ/max).
+            self._last_stats_ts = None
         # Keep the honest window label in sync (``最近 30s（录制中）``).
         self._spark.set_recording_label(self._recording)
         self.setProperty("recording", self._recording)
@@ -1093,6 +1293,13 @@ class LiveSignalCard(QFrame):
         a 4096-cap deque silently cover only ~4s while the label claimed
         the full recording, so μ/σ/max and the coordinate window lied.
         The stats below are computed over this SAME trimmed 30s buffer.
+
+        A-6 perf: the μ/σ/max reduction scans the whole raw deque (up to
+        30 000 samples), so it is throttled to ~2 Hz via the injectable
+        monotonic clock. Trim, the arrival-cadence hint and the repaint
+        request still run EVERY refresh (they are O(batch), not O(N)); only
+        the O(N) stats scan is rate-capped. The current-value label is
+        updated per-batch in :meth:`push_sample`, independent of this.
         """
         label = (
             STATS_WINDOW_LABEL_RECORDING
@@ -1107,6 +1314,17 @@ class LiveSignalCard(QFrame):
         self._update_sample_state()
         self._spark.request_repaint()
         self._stats_label.setToolTip(f"Stats window: {label}")
+
+        # 2 Hz stats gate: skip the O(N) recompute if the last one was
+        # < _STATS_REFRESH_MIN_INTERVAL_S ago. The first data-bearing
+        # refresh (``_last_stats_ts is None``) always computes.
+        now = self._clock()
+        if (
+            self._last_stats_ts is not None
+            and (now - self._last_stats_ts) < _STATS_REFRESH_MIN_INTERVAL_S
+        ):
+            return
+        self._last_stats_ts = now
 
         values = [v for _, v in list(self._spark._buffer)]  # noqa: SLF001 - sibling widget.
         if not values:
