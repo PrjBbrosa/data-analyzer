@@ -228,15 +228,41 @@ def test_card_name_tooltip_is_full_name(qtbot):
     assert card._name_label.full_text() == "MotSpd"
 
 
-def test_idle_refresh_trims_to_last_60s_of_stream_time(qtbot):
-    """The idle trim floor comes from the newest buffered stream timestamp."""
+def test_idle_refresh_trims_to_last_30s_of_stream_time(qtbot):
+    """The idle trim floor comes from the newest buffered stream timestamp.
+
+    Unified 30s live window (2026-07-10 spec §A2): the floor is
+    ``newest - _LIVE_WINDOW_S`` (30s), derived from the buffer's own
+    stream time, never a wall clock.
+    """
     card = LiveSignalCard("MotSpd")
     qtbot.addWidget(card)
-    for t in (0.0, 30.0, 70.0, 100.0, 119.0):
+    for t in (0.0, 70.0, 95.0, 100.0, 119.0):
         card.push_sample(t, 1.0)
     card.refresh()
     kept = [ts for ts, _ in card._spark._buffer]
-    assert kept == [70.0, 100.0, 119.0]
+    assert kept == [95.0, 100.0, 119.0]  # newest 119 − 30 = 89 floor
+
+
+def test_recording_trims_to_live_window(qtbot):
+    """Recording also trims to the honest 30s live window (A-2).
+
+    Old behaviour let recording run with ``t_min=None`` (no trim) while a
+    4096-cap deque only held ~4s at 1ms, so the buffer both under-trimmed
+    the intent AND lied about the window. Now both idle and recording
+    trim to ``newest - _LIVE_WINDOW_S`` and the raw deque is sized to
+    hold a full honest 30s at 1ms.
+    """
+    card = LiveSignalCard("MotSpd", unit="rpm", raster="event_1ms")
+    qtbot.addWidget(card)
+    card.set_recording(True, rec_start_ts=0.0)
+    for i in range(40000):  # 40s @ 1ms
+        card.push_sample(i / 1000.0, float(i))
+    card.refresh()
+    buf = card._spark._buffer
+    span = buf[-1][0] - buf[0][0]
+    assert span <= 30.0 + 1e-6  # 录制态也裁到 30s（旧行为 t_min=None 不裁）
+    assert span >= 29.0  # 且确实持有近 30s（buffer 容量足够）
 
 
 def test_set_recording_true_resets_buffer(qtbot):

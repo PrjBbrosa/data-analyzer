@@ -47,22 +47,27 @@ from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 STATS_WINDOW_LABEL_IDLE = "since 60s"
 STATS_WINDOW_LABEL_RECORDING = "since rec start"
 
-# Rolling-idle window length. Spec §State Machine ``stats window``:
-#   "``ConnectedIdle``: rolling 60 s window of received samples."
+# Unified live visible-window length (2026-07-10 cockpit-live-preview
+# spec §A2/A4). Idle AND recording both trim the sparkline buffer to the
+# newest sample's stream time minus this window, so the coordinate label
+# and the μ/σ/max stats describe the SAME honest 30s span. Replaces the
+# old idle-only ``_IDLE_WINDOW_S`` (60s) + recording's un-trimmed
+# ``since rec start`` buffer.
 #
-# This is a stats-window definition, NOT a threshold band, so it is
-# not exposed via ``acquisition_capture.thresholds`` (which is reserved
-# for green/yellow/red band edges per Spec §Threshold Contract). The
-# value is fixed by the state-machine contract, so keeping it here as
-# a named local constant keeps the spec citation next to the use site
-# without leaking a UI-only constant into the capture-core module.
-_IDLE_WINDOW_S = 60.0
+# This is a stats/display-window definition, NOT a threshold band, so it
+# is not exposed via ``acquisition_capture.thresholds`` (reserved for
+# green/yellow/red band edges per Spec §Threshold Contract). Keeping it
+# here as a named local constant keeps the spec citation next to the use
+# site without leaking a UI-only constant into the capture-core module.
+_LIVE_WINDOW_S = 30.0
 
-# Sparkline target width in logical pixels — fits the right pane card
-# allotment when the window is 1280 px wide. The painter respects the
-# widget's actual width via ``self.width()`` so this is just the deque
-# capacity to bound memory.
-_SPARK_MAX_POINTS = 4096
+# Raw display deque capacity. Sized so the buffer's held time span is
+# ALWAYS ≥ the honest window it advertises (spec §A2 invariant): at the
+# fastest 1ms raster, 30s = 30000 samples, so 32000 leaves ~2s of
+# boundary headroom before the trim floor. This is the DISPLAY raw
+# deque, NOT the recording ring buffer / writer. The painter respects
+# the widget's actual width via ``self.width()``; this only bounds memory.
+_SPARK_MAX_POINTS = 32000
 
 _CARD_TRACE_COLORS = (
     "#2563eb",
@@ -450,21 +455,24 @@ class LiveSignalCard(QFrame):
     # ------------------------------------------------------------------
 
     def refresh(self) -> None:
-        """Recompute stats label and trim the idle rolling window.
+        """Recompute stats label and trim to the honest live window.
 
         Time-base invariant (2026-07-07 spec F1): the trim floor is
         derived from the buffer's own newest sample (stream time),
-        never from a wall clock. Recording mode never trims: the
-        cumulative-since-rec-start window is realised by clearing the
-        buffer in :meth:`set_recording`.
+        never from a wall clock / ``time.monotonic()``. Both idle and
+        recording now trim to ``newest - _LIVE_WINDOW_S`` (2026-07-10
+        spec §A2/A4): the old recording ``t_min=None`` no-trim branch let
+        a 4096-cap deque silently cover only ~4s while the label claimed
+        the full recording, so μ/σ/max and the coordinate window lied.
+        The stats below are computed over this SAME trimmed 30s buffer.
         """
-        if self._recording:
-            label = STATS_WINDOW_LABEL_RECORDING
-            t_min: float | None = None
-        else:
-            label = STATS_WINDOW_LABEL_IDLE
-            buf = self._spark._buffer  # noqa: SLF001 - sibling widget.
-            t_min = (buf[-1][0] - _IDLE_WINDOW_S) if buf else None
+        label = (
+            STATS_WINDOW_LABEL_RECORDING
+            if self._recording
+            else STATS_WINDOW_LABEL_IDLE
+        )
+        buf = self._spark._buffer  # noqa: SLF001 - sibling widget.
+        t_min: float | None = (buf[-1][0] - _LIVE_WINDOW_S) if buf else None
         self._spark.trim_to_window(t_min)
         self._spark.request_repaint()
         self._stats_label.setToolTip(f"Stats window: {label}")
@@ -638,7 +646,7 @@ class LiveCardGrid(QWidget):
 
         Cards retain their buffer if the name still exists in the new
         list — this lets the live stream survive a transient filter
-        edit without dropping the last 60 s.
+        edit without dropping the last 30 s.
 
         Spec §F: raw bus time-channels (``t [n:m]``) are silently
         dropped from the auto-cards seed. The filter lives here at the
