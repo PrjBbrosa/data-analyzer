@@ -238,8 +238,12 @@ def main() -> int:
         check(window.state_machine.state == CockpitState.RECORDING, "recording reached")
         check(window.main_button.text() == "■ Stop && 复盘", "F4 && escaped")
         msg = window._status.currentMessage()
+        # B-3: the status bar streams neutral Chinese FACTS (时长/磁盘剩余
+        # 时长/样本/大小/写入速率). Dropped/ring anomalies moved to the
+        # escalation ladder + REC chip, so "丢帧" is no longer here.
         check(
-            msg.startswith("录制中") and "丢帧" in msg and "RECORDING" not in msg,
+            "样本" in msg and "剩余" in msg and "RECORDING" not in msg
+            and "丢帧" not in msg,
             f"G2 状态栏中文 (实测 '{msg}')",
         )
         cards = window._center.cards

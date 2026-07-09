@@ -78,6 +78,7 @@ from mf4_analyzer.acquisition_ui.state import (
     CockpitState,
     CockpitStateMachine,
 )
+from mf4_analyzer.acquisition_ui.widgets.escalation_bar import EscalationBar
 from mf4_analyzer.acquisition_ui.widgets.health_strip import HealthStrip
 from mf4_analyzer.acquisition_ui.widgets.left_pane import LeftPane
 from mf4_analyzer.acquisition_ui.widgets.right_panel import RightPanel
@@ -347,6 +348,16 @@ class CockpitMainWindow(
         self._help_btn.setFixedSize(24, 24)
         self._help_btn.clicked.connect(self._open_acquisition_guide)
         self._status.addPermanentWidget(self._help_btn)
+
+        # Escalation banner: a single-row overlay ABOVE the status bar (Spec
+        # §B6). Parented to the window and NOT added to ``outer``, so its
+        # appear/disappear never reflows the splitter / LiveCardGrid. A single
+        # ``bar.apply(state)`` drives both the banner and the strip's REC
+        # pulse via the wired ``applied`` signal.
+        self._escalation_bar = EscalationBar(self)
+        self._escalation_bar.applied.connect(self._health_strip.apply_escalation)
+        self._escalation_bar.reanchor(self._status)
+
         self._update_backend_badge()
         self._update_status_bar()
         if self._settings_load_error:
@@ -523,6 +534,17 @@ class CockpitMainWindow(
             backend.stop()
         except Exception as exc:  # noqa: BLE001 - cleanup must not mask UI flow
             logger.warning("backend cleanup failed: %s", exc)
+
+    def resizeEvent(self, event):  # noqa: N802 - Qt API name
+        """Keep the escalation overlay anchored above the status bar.
+
+        The banner is an overlay (not in the body layout), so re-anchoring it
+        on resize can never shift the splitter / ``LiveCardGrid`` geometry.
+        """
+        super().resizeEvent(event)
+        bar = getattr(self, "_escalation_bar", None)
+        if bar is not None and hasattr(self, "_status"):
+            bar.reanchor(self._status)
 
     def closeEvent(self, event):  # noqa: N802 - Qt API name
         """Drain timers and the backend before destruction (B4).

@@ -13,6 +13,7 @@ from mf4_analyzer.acquisition_ui.state import (
     CockpitState,
     HealthyPredicateResult,
 )
+from mf4_analyzer.acquisition_ui.widgets.escalation_bar import escalation_state
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class PollingMixin:
     def _poll_health(self) -> None:
         snapshot = self._health_aggregator.poll_once()
         self._health_strip.apply_snapshot(snapshot)
+        self._feed_escalation(snapshot)
         self._update_record_button_enabled()
         # Disconnected → ConnectedIdle gate.
         if self._state_machine.state == CockpitState.DISCONNECTED:
@@ -41,6 +43,21 @@ class PollingMixin:
         elif self._state_machine.state == CockpitState.RECORDING:
             self._refresh_recording_right_panel()
             self._check_recording_auto_stop()
+
+    def _feed_escalation(self, snapshot: HealthSnapshot) -> None:
+        """Compute the escalation ladder and drive the banner + REC pulse.
+
+        Disk context is passed explicitly (``HealthSnapshot`` has no disk
+        field). ``bar.apply`` also drives ``HealthStrip.apply_escalation`` via
+        the wired ``applied`` signal.
+        """
+        bar = getattr(self, "_escalation_bar", None)
+        if bar is None:
+            return
+        state = escalation_state(
+            snapshot, disk_free_bytes=self._estimate_disk_free_bytes()
+        )
+        bar.apply(state)
 
     def _evaluate_connection_attempt(self, snapshot: HealthSnapshot) -> None:
         if self._connection_attempt_started is None:

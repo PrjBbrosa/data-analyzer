@@ -18,10 +18,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Mapping
 
-from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPropertyAnimation, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
@@ -36,6 +37,10 @@ from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_ui.preflight_view_data import (
     build_preflight_rows,
     worst_preflight_level,
+)
+from mf4_analyzer.acquisition_ui.widgets.escalation_bar import (
+    EscalationState,
+    _SEVERITY,
 )
 from mf4_analyzer.acquisition_ui.widgets.health_popover import HealthPopover
 
@@ -95,11 +100,39 @@ class HealthChip(QFrame):
         layout.addWidget(self._led)
         layout.addWidget(self._label)
         layout.addWidget(self._value)
+
+        # Red-escalation entry pulse (Spec §B6): fade the LED 3 loops, then
+        # rest solid. The animation object is created up-front so the level is
+        # always introspectable (loopCount == 3) even before it runs.
+        self._led_opacity = QGraphicsOpacityEffect(self._led)
+        self._led_opacity.setOpacity(1.0)
+        self._led.setGraphicsEffect(self._led_opacity)
+        self.pulse_animation = QPropertyAnimation(self._led_opacity, b"opacity", self)
+        self.pulse_animation.setDuration(560)
+        self.pulse_animation.setKeyValueAt(0.0, 1.0)
+        self.pulse_animation.setKeyValueAt(0.5, 0.2)
+        self.pulse_animation.setKeyValueAt(1.0, 1.0)
+        self.pulse_animation.setLoopCount(3)
+        self.pulse_animation.finished.connect(
+            lambda: self._led_opacity.setOpacity(1.0)
+        )
+
         self.set_level("off")
 
     @property
     def name(self) -> str:
         return self._name
+
+    def pulse(self) -> None:
+        """Restart the 3-loop entry pulse on the LED."""
+        self.pulse_animation.stop()
+        self._led_opacity.setOpacity(1.0)
+        self.pulse_animation.start()
+
+    def stop_pulse(self) -> None:
+        """Stop pulsing and rest the LED solid."""
+        self.pulse_animation.stop()
+        self._led_opacity.setOpacity(1.0)
 
     def set_level(self, level: HealthLevel) -> None:
         """Repaint the LED for the given level. The chip label is invariant."""
@@ -298,6 +331,9 @@ class HealthStrip(QFrame):
         layout.addWidget(self._summary)
         self._last_levels: dict[str, HealthLevel] = {n: "off" for n in self.CHIP_NAMES}
         self._last_snapshot: HealthSnapshot | None = None
+        # Escalation ladder (Spec §B6): latch the current red reason so the
+        # entry pulse fires only on entry / reason change, not every poll.
+        self._esc_reason: str | None = None
 
         # Single-popover state (Spec §B1): at most one popover is open;
         # ``_anchor_name`` names the widget it is currently anchored to
@@ -342,6 +378,65 @@ class HealthStrip(QFrame):
     @property
     def last_snapshot(self) -> HealthSnapshot | None:
         return self._last_snapshot
+
+    def summary_text(self) -> str:
+        """Current right-aligned summary text (base health or escalation)."""
+        return self._summary.text()
+
+    # ------------------------------------------------------------------
+    # Escalation ladder (Spec §B6)
+    # ------------------------------------------------------------------
+
+    def apply_escalation(self, state: EscalationState) -> None:
+        """Fold an escalation state onto the chips + summary + red pulse.
+
+        Wired from ``EscalationBar.applied`` so a single ``bar.apply(state)``
+        drives both the banner and the strip. Chips are only ever *escalated*
+        (worst wins); the base color comes from :meth:`apply_snapshot`.
+        """
+        # Escalate affected chips (disk/ring/dropped/last-rx all → REC).
+        for issue in state.issues:
+            chip = self._chips.get(issue.source_chip)
+            if chip is None:
+                continue
+            current = chip.property("level") or "off"
+            if _SEVERITY.get(issue.level, 0) > _SEVERITY.get(current, 0):
+                chip.set_level(issue.level)
+
+        if state.level == "green":
+            # Recovery: revert the summary to the base counts, stop pulsing.
+            self._summary.setText(self._summary_for(self._last_levels))
+            for chip in self._chips.values():
+                chip.stop_pulse()
+            self._esc_reason = None
+            return
+
+        self._summary.setText(self._escalation_summary(state))
+
+        reason = state.reason_key
+        if state.level == "red" and reason != self._esc_reason:
+            # Pulse the worst red chip on entry / reason change only.
+            worst = next(
+                (i for i in state.top_issues(1) if i.level == "red"), None
+            )
+            if worst is not None:
+                chip = self._chips.get(worst.source_chip)
+                if chip is not None:
+                    chip.pulse()
+        self._esc_reason = reason
+
+    @staticmethod
+    def _escalation_summary(state: EscalationState) -> str:
+        """Non-green summary: worst issue + count of same-tier issues."""
+        top = state.top_issues(1)
+        if not top:
+            return ""
+        worst = top[0]
+        same = sum(1 for i in state.issues if i.level == worst.level)
+        label = "严重" if worst.level == "red" else "注意"
+        if same > 1:
+            return f"{label} · {worst.message}（+{same - 1}）"
+        return f"{label} · {worst.message}"
 
     # ------------------------------------------------------------------
     # Detail popover (Spec §B1)

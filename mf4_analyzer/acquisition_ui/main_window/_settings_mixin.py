@@ -7,11 +7,17 @@ import time
 from pathlib import Path, PurePath
 
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QFontMetrics
 from PyQt5.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from mf4_analyzer.acquisition_capture import thresholds
 from mf4_analyzer.acquisition_capture.config_store import ConfigSchemaError
+from mf4_analyzer.acquisition_capture.preflight_estimates import (
+    estimate_record_duration_s,
+    estimate_throughput_bps,
+)
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+from mf4_analyzer.acquisition_ui.preflight_view_data import _humanize_duration_s
 from mf4_analyzer.acquisition_ui.settings_dialog import SettingsDialog
 from mf4_analyzer.acquisition_ui.state import CockpitState
 from ._defs import (
@@ -256,14 +262,95 @@ class SettingsMixin:
             )
             return
         if state == CockpitState.RECORDING:
-            elapsed = self._recording_elapsed_text()
-            size_mb = self._recording_file_size_mb()
-            size_part = f"{size_mb:.1f} MB" if size_mb > 0 else "缓冲中"
-            self._status.showMessage(
-                f"录制中 · {elapsed} · {self._sample_count()} 样本 · "
-                f"{size_part} · "
-                f"丢帧 {self._cumulative_dropped} · 缓冲 {self._ring.level_pct:.1f}%"
-            )
+            # Neutral recording FACTS only (Spec §B5). Anomalies (dropped /
+            # ring / disk / last-rx) are surfaced by the escalation ladder +
+            # REC chip, not mixed into this stream.
+            parts = self._recording_fact_parts(self._status_facts_available_width())
+            self._status.showMessage(" · ".join(parts))
+
+    # ------------------------------------------------------------------
+    # Recording facts stream (Spec §B5) — priority-degraded, no mid-elide
+    # ------------------------------------------------------------------
+
+    def _recording_fact_parts(self, width_px: int) -> list[str]:
+        """Recording facts, dropped lowest-priority-first to fit ``width_px``.
+
+        Priority (kept longest): 时长 > 磁盘剩余时长 > 样本数 > 文件大小 >
+        写入速率. Fields are dropped whole (never mid-truncated) using
+        ``QFontMetrics.horizontalAdvance`` on the ` · `-joined string. A
+        non-positive ``width_px`` means "no budget" and returns all five.
+        """
+        parts = [
+            self._recording_elapsed_text(),
+            self._recording_disk_time_text(),
+            f"{self._sample_count()} 样本",
+            self._recording_size_text(),
+            self._recording_write_rate_text(),
+        ]
+        if width_px is None or width_px <= 0:
+            return parts
+        fm = QFontMetrics(self._status.font())
+        sep = " · "
+        kept = list(parts)
+        while len(kept) > 1 and fm.horizontalAdvance(sep.join(kept)) > width_px:
+            kept.pop()  # drop the lowest-priority field whole
+        return kept
+
+    def _status_facts_available_width(self) -> int:
+        """Pixel budget for the status-bar message (minus permanent widgets).
+
+        Returns 0 (no budget → show all facts) when the bar has not been laid
+        out yet, so an unshown/tiny window never spuriously drops fields.
+        """
+        if not hasattr(self, "_status"):
+            return 0
+        total = int(self._status.width())
+        if total <= 0:
+            return 0
+        reserved = 0
+        for attr in ("_backend_badge", "_help_btn"):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                reserved += widget.sizeHint().width() + 12
+        avail = total - reserved - 24  # status-bar frame + margins
+        return avail if avail > 0 else 0
+
+    def _recording_disk_duration_s(self) -> float:
+        """Remaining record time (s) from the byte throughput + disk free.
+
+        Reuses the preflight estimator; ``write_rate_bps`` (samples/s) is NEVER
+        used here as a byte rate.
+        """
+        selection = self._current_selection_for_facts()
+        throughput = estimate_throughput_bps(selection)
+        return estimate_record_duration_s(throughput, self._estimate_disk_free_bytes())
+
+    def _recording_disk_time_text(self) -> str:
+        return f"剩余 {_humanize_duration_s(self._recording_disk_duration_s())}"
+
+    def _recording_size_text(self) -> str:
+        size_mb = self._recording_file_size_mb()
+        return f"{size_mb:.1f} MB" if size_mb > 0 else "缓冲中"
+
+    def _recording_write_rate_per_s(self) -> float:
+        """Latest write rate in SAMPLES/s (from the REC health snapshot)."""
+        snap = getattr(self, "_health_aggregator", None)
+        last = snap.last if snap is not None else None
+        if last is None:
+            return 0.0
+        return float(last.rec.write_rate_bps)
+
+    def _recording_write_rate_text(self) -> str:
+        return f"{self._recording_write_rate_per_s():.0f} 样本/s"
+
+    def _current_selection_for_facts(self):
+        left = getattr(self, "_left_pane", None)
+        if left is None:
+            return []
+        try:
+            return left.current_selection()
+        except Exception:  # noqa: BLE001 - facts stream must stay best-effort
+            return []
 
     def _event_rate_per_s(self) -> int:
         if self._stream_start_ts is None:
