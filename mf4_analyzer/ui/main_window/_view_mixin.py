@@ -26,11 +26,58 @@ class ViewMixin:
                 lambda c=canvas: self._capture_canvas_ranges_for_bound_view(c)
             )
 
+    def _connect_channel_color_sync(self, canvas):
+        """Wire a time canvas's recolor signal back to the navigator so the
+        left channel-list swatch (and the color source-of-truth used by time
+        replot + FFT/order analysis) follows a 图表选项 recolor. Idempotent per
+        canvas via the ``_color_sync_connected`` guard."""
+        if canvas is None or getattr(canvas, '_color_sync_connected', False):
+            return
+        sig = getattr(canvas, 'channel_color_changed', None)
+        if sig is None:
+            return
+        sig.connect(self._on_canvas_channel_color_changed)
+        canvas._color_sync_connected = True
+
+    def _on_canvas_channel_color_changed(self, data_id, display_name, color):
+        """A curve was recolored on a canvas. Map its display name back to the
+        raw ``(fid, ch)`` and write ``navigator._colors`` so the swatch icon
+        and every replot/analysis that reads navigator colors stay in sync.
+
+        No-op when the display name resolves to no channel — e.g. a display-
+        only filtered overlay (``"[x] ch (LP 50Hz)"``) has no navigator row."""
+        resolved = self._resolve_navigator_channel_key(data_id, display_name)
+        if resolved is None:
+            return
+        fid, ch = resolved
+        setter = getattr(self.navigator, 'set_channel_colors', None)
+        if callable(setter):
+            setter({(fid, ch): str(color)})
+
+    def _resolve_navigator_channel_key(self, data_id, display_name):
+        """Invert ``fd.get_prefixed_channel(ch) == display_name`` to recover the
+        raw ``(fid, ch)`` navigator key. ``data_id`` narrows the search to the
+        exact file (multi-file same-display-name collision class); compare via
+        ``str`` because the composite key may have stringified the fid."""
+        if not display_name:
+            return None
+        for fid, fd in self.files.items():
+            if data_id is not None and str(fid) != str(data_id):
+                continue
+            columns = getattr(getattr(fd, 'data', None), 'columns', None)
+            if columns is None:
+                continue
+            for ch in columns:
+                if fd.get_prefixed_channel(ch) == display_name:
+                    return (fid, ch)
+        return None
+
     def _ensure_secondary_range_signal_connected(self):
         canvas = self.chart_stack.secondary_canvas()
         if canvas is None or getattr(canvas, '_view_range_connected', False):
             return
         self._connect_canvas_range_signals(canvas)
+        self._connect_channel_color_sync(canvas)
         xrange_changed = getattr(canvas, 'xrange_changed', None)
         if xrange_changed is not None:
             xrange_changed.connect(self._on_secondary_canvas_xrange_changed)

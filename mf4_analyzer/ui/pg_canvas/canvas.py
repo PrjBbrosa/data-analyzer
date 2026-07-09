@@ -257,6 +257,11 @@ class TimeDomainCanvasPG(QWidget):
     # Fires after plot_channels rebuilds the chart, so the footer can refresh
     # situational nudges (channel count / units / amplitude / clip).
     chart_rebuilt = pyqtSignal()
+    # Fires when a curve is recolored on the canvas (via the 图表选项 dialog),
+    # carrying (data_id, display_name, color). MainWindow maps the display name
+    # back to the raw (fid, ch) and writes navigator._colors so the left
+    # channel-list swatch AND time/FFT replot follow one color truth.
+    channel_color_changed = pyqtSignal(object, object, str)
 
     # Mirror TimeDomainCanvas constants so callers see the same surface.
     MAX_PTS = 8000
@@ -1653,11 +1658,23 @@ class TimeDomainCanvasPG(QWidget):
         return None
 
     def _sync_pg_channel_color(self, channel_name, color):
-        return OverlayAxisManager._sync_pg_channel_color(
+        result = OverlayAxisManager._sync_pg_channel_color(
             self._overlay_axes,
             channel_name,
             color,
         )
+        # Propagate the recolor to the navigator (swatch + color source-of-
+        # truth for replot/FFT). ``channel_name`` is the composite key, so
+        # recover the ORIGINAL fid + display name from the identity dicts —
+        # the composite key stringifies the fid, but ``_channel_data_id`` keeps
+        # it untouched, which is what the navigator (fid, ch) lookup needs.
+        try:
+            data_id = self._channel_data_id.get(channel_name)
+            display_name = self.channel_data.display_label(channel_name, channel_name)
+            self.channel_color_changed.emit(data_id, display_name, str(color))
+        except Exception:
+            pass
+        return result
 
     def set_xlim(self, lo, hi):
         """Apply a new xlim to the primary axis. Compatibility-only:

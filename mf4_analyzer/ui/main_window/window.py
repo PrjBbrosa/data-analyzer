@@ -738,6 +738,7 @@ class MainWindow(
         if xrange_changed is not None:
             xrange_changed.connect(self._on_time_canvas_xrange_changed)
         self._connect_canvas_range_signals(self.canvas_time)
+        self._connect_channel_color_sync(self.canvas_time)
 
         # ── Toolbar sidebar toggle buttons ───────────────────────────────────
         from ..side_panels import Ev, PanelState
