@@ -1,12 +1,13 @@
 """Center-pane live signal cards.
 
 Spec §Center Pane: each selected signal card shows sparkline, current
-value, unit, raster pill, and compact stats (``μ / σ / max``). Stats
-window follows §State Machine ``stats window``:
-
-- ``ConnectedIdle``: rolling 60 s window. Label reads ``since 60s``.
-- ``Recording``: cumulative window from recording start. Label reads
-  ``since rec start``.
+value, unit, raster pill, and compact stats (``μ / σ / max``). Per the
+2026-07-10 cockpit-live-preview honesty fix (spec §A2/A4) BOTH idle and
+recording compute μ/σ/max over the same trimmed ``_LIVE_WINDOW_S`` (30s)
+window, so the stats label reads a single honest ``最近 30s`` in both
+states — never the old idle ``since 60s`` (the window is 30s now) nor the
+recording ``since rec start`` (which implied an unbounded history the
+capped display buffer never held).
 
 Each card also carries its own ``REC OFF`` / red-dot indicator. The
 toolbar's global REC indicator is driven by the same ``RecHealth.state``
@@ -44,9 +45,16 @@ from mf4_analyzer.ui_kit.menus import apply_rounded_menu_chrome
 from mf4_analyzer.ui_kit.ticks_math import _fmt_tick, _frame_to_nice
 
 
-# Spec §State Machine `stats window`.
-STATS_WINDOW_LABEL_IDLE = "since 60s"
-STATS_WINDOW_LABEL_RECORDING = "since rec start"
+# Stats-window tooltip label (spec §State Machine `stats window`, made
+# honest by the 2026-07-10 cockpit-live-preview §A2/A4 fix). A-2 unified
+# the trim window to ``_LIVE_WINDOW_S`` (30s) in BOTH idle and recording,
+# so μ/σ/max now describe the same 30s span in both states. The label
+# therefore reads a single honest ``最近 30s`` — matching the sparkline's
+# painted window label — instead of the old idle ``since 60s`` (the
+# window is 30s now, not 60s) or the recording ``since rec start`` (which
+# implied an unbounded history the capped display buffer never held).
+STATS_WINDOW_LABEL_IDLE = "最近 30s"
+STATS_WINDOW_LABEL_RECORDING = "最近 30s"
 
 # Unified live visible-window length (2026-07-10 cockpit-live-preview
 # spec §A2/A4). Idle AND recording both trim the sparkline buffer to the

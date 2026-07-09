@@ -47,20 +47,39 @@ def test_live_card_visual_parts_exist(qapp):
     assert raster_pill.toolTip() == "event_10ms"
 
     stats = _label(card, "liveCardStats")
-    # Spec §C: the "since <window>" suffix moves from the visible text
-    # to the stats label's tooltip. The visible text must NOT carry it.
-    assert "since 60s" not in stats.text()
-    assert "since 60s" in stats.toolTip()
+    # Spec §C: the window label lives in the stats tooltip, not the
+    # visible text. Spec §A4: after the 30s unification both idle and
+    # recording advertise the same honest ``最近 30s`` span.
+    assert "最近 30s" not in stats.text()
+    assert "最近 30s" in stats.toolTip()
 
     value = _label(card, "liveCardValue")
     assert value.alignment() & Qt.AlignRight
 
     card.set_recording(True, rec_start_ts=0.0)
     # After flipping into recording state, the same tooltip relocation
-    # applies and the swatch tints solid red per Spec §A.
-    assert "since rec start" not in stats.text()
-    assert "since rec start" in stats.toolTip()
+    # applies and the swatch tints solid red per Spec §A. The recording
+    # tooltip is now the honest window span, NOT ``since rec start``.
+    assert "since rec start" not in stats.toolTip()
+    assert "最近 30s" not in stats.text()
+    assert "最近 30s" in stats.toolTip()
     assert "#dc2626" in swatch.styleSheet().lower()
+
+
+def test_recording_stats_label_is_honest(qtbot):
+    """Spec §A4: recording μ/σ/max are trimmed to the 30s window (A-2),
+    so the stats tooltip must not imply an unbounded ``since rec start``
+    / ``完整录制`` history — it states the honest ``最近 30s`` span.
+    """
+    card = LiveSignalCard("MotSpd", raster="event_1ms")
+    qtbot.addWidget(card)
+    card.set_recording(True, rec_start_ts=0.0)
+    for i in range(40000):  # 40s @ 1ms — well past the 30s window
+        card.push_sample(i / 1000.0, float(i))
+    card.refresh()
+    tip = card._stats_label.toolTip()
+    assert "rec start" not in tip and "完整" not in tip
+    assert "最近 30s" in tip
 
 
 def test_live_card_grid_scrolls_when_many_channels(qapp):
