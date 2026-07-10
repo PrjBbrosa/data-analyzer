@@ -1218,7 +1218,13 @@ class LiveSignalCard(QFrame):
         self._last_arrival = self._clock()
 
     def reset_buffer(self) -> None:
+        """Start a fresh display-data lifecycle with no arrival evidence."""
         self._spark.reset()
+        self._last_arrival = None
+        self._spark.set_sample_state("no-data")
+        self._value_label.setText("—")
+        self._stats_full_text = "μ — · σ — · max —"
+        self._sync_header_compactness()
         # Force the next refresh to recompute stats over the cleared buffer.
         self._last_stats_ts = None
 
@@ -1276,10 +1282,7 @@ class LiveSignalCard(QFrame):
             # Recording's cumulative window starts at the freshly
             # cleared buffer. This also prevents stream-time restarts
             # from interleaving old and new relative timestamps.
-            self._spark.reset()
-            # Buffer just cleared → force the next refresh to recompute
-            # stats (don't let the 2 Hz gate keep stale idle μ/σ/max).
-            self._last_stats_ts = None
+            self.reset_buffer()
         # Keep the honest window label in sync (``最近 30s（录制中）``).
         self._spark.set_recording_label(self._recording)
         self.setProperty("recording", self._recording)

@@ -328,6 +328,40 @@ def test_grid_reset_buffers(qtbot):
     assert all(card._spark.sample_count == 0 for card in grid.cards.values())
 
 
+def test_reset_buffer_returns_card_to_no_data_lifecycle(qtbot):
+    clock = [5.0]
+    card = LiveSignalCard("MotSpd", raster="event_1ms", clock=lambda: clock[0])
+    qtbot.addWidget(card)
+    card.push_sample(1.0, 2.0)
+    card.refresh()
+
+    card.reset_buffer()
+    card.refresh()
+
+    assert card._spark.sample_count == 0
+    assert card.sample_state() == "no-data"
+    assert card._spark._sample_state == "no-data"
+    assert card._value_label.text() == "—"
+    assert card._stats_full_text == "μ — · σ — · max —"
+
+
+def test_recording_reset_uses_no_data_lifecycle_until_new_arrival(qtbot):
+    clock = [5.0]
+    card = LiveSignalCard("MotSpd", raster="event_1ms", clock=lambda: clock[0])
+    qtbot.addWidget(card)
+    card.push_sample(1.0, 2.0)
+
+    card.set_recording(True, 0.0)
+
+    assert card._spark.sample_count == 0
+    assert card.sample_state() == "no-data"
+    assert card._value_label.text() == "—"
+
+    clock[0] = 5.1
+    card.push_sample(0.001, 3.0)
+    assert card.sample_state() == "live"
+
+
 def test_single_click_focuses_card_and_back_restores_all(qtbot):
     """Clicking a live card enlarges it by focusing the center pane."""
     grid = LiveCardGrid()
