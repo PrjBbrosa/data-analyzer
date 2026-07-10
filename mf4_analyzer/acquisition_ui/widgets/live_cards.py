@@ -31,6 +31,7 @@ from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt5.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -59,6 +60,18 @@ from mf4_analyzer.ui_kit.ticks_math import _fmt_tick, _frame_to_nice
 # implied an unbounded history the capped display buffer never held).
 STATS_WINDOW_LABEL_IDLE = "最近 30s"
 STATS_WINDOW_LABEL_RECORDING = "最近 30s"
+
+# Disconnected connection-checklist LED colors (B-5). The four allowed
+# states map onto the same Precision-Light severity palette the health
+# strip uses (``health_strip._LEVEL_BG``) so a green/amber/red/grey dot
+# reads identically wherever it appears. ``set_connection_checklist``
+# accepts only these keys; any other string falls back to ``off`` grey.
+_CHECKLIST_STATE_BG = {
+    "ok": "#16a34a",
+    "pending": "#d97706",
+    "error": "#dc2626",
+    "off": "#94a3b8",
+}
 
 # Unified live visible-window length (2026-07-10 cockpit-live-preview
 # spec §A2/A4). Idle AND recording both trim the sparkline buffer to the
@@ -1440,6 +1453,33 @@ class LiveCardGrid(QWidget):
         copy.setWordWrap(True)
         canvas_layout.addWidget(copy)
 
+        # B-5: structured connection checklist. Default HIDDEN so Replay's
+        # reuse of this canvas (via ``set_placeholder_copy``) never shows
+        # ECU-semantic rows. A hidden frame contributes zero layout height,
+        # so the guide copy stays vertically centered until the capture
+        # page opts in via :meth:`set_connection_checklist`.
+        self._checklist_frame = QFrame(canvas)
+        self._checklist_frame.setObjectName("cockpitConnectionChecklist")
+        # The global ``QFrame { background:#fff }`` rule (ui_kit/style.qss)
+        # would paint a white band over the canvas's tinted surface; an
+        # inline objectName override keeps the checklist blending with the
+        # guide copy above/below it (lesson qss-padding-overrides-
+        # setcontentsmargins: per-widget inline QSS is the survivable
+        # override, and this file must not touch the shared style.qss).
+        self._checklist_frame.setStyleSheet(
+            "QFrame#cockpitConnectionChecklist { background: transparent; }"
+        )
+        self._checklist_grid = QGridLayout(self._checklist_frame)
+        self._checklist_grid.setContentsMargins(0, 6, 0, 6)
+        self._checklist_grid.setHorizontalSpacing(10)
+        self._checklist_grid.setVerticalSpacing(6)
+        self._checklist_grid.setColumnStretch(1, 1)
+        self._checklist_frame.setSizePolicy(
+            QSizePolicy.Maximum, QSizePolicy.Fixed
+        )
+        self._checklist_frame.setVisible(False)
+        canvas_layout.addWidget(self._checklist_frame, alignment=Qt.AlignHCenter)
+
         action = QLabel("使用上方工具栏「连接 ECU」", canvas)
         action.setObjectName("cockpitDisconnectedAction")
         action.setAlignment(Qt.AlignCenter)
@@ -1447,6 +1487,61 @@ class LiveCardGrid(QWidget):
 
         canvas_layout.addStretch(1)
         return canvas
+
+    def set_connection_checklist(
+        self,
+        rows: list[tuple[str, str, str, str]] | None,
+    ) -> None:
+        """Show/hide the structured disconnected-state connection checklist.
+
+        ``rows`` is a list of ``(key, label, state, detail)`` tuples where
+        ``state`` is one of ``ok | pending | error | off`` (any other value
+        renders as ``off`` grey). Each row draws an LED dot + a left-aligned
+        Chinese label + a right-aligned muted detail. Passing ``None`` (the
+        default state) hides the list and reclaims its height entirely, which
+        is why Replay — which never calls this — keeps its plain
+        ``未加载 MF4`` placeholder with no ECU rows (spec §B7).
+
+        The rows are driven by explicit structured state from the caller
+        (A2L parsed / hardware available / selection feasible); this widget
+        never parses free text to decide a state.
+        """
+        grid = self._checklist_grid
+        while grid.count():
+            item = grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+        if not rows:
+            self._checklist_frame.setVisible(False)
+            return
+
+        for row_idx, (key, label, state, detail) in enumerate(rows):
+            bg = _CHECKLIST_STATE_BG.get(state, _CHECKLIST_STATE_BG["off"])
+            led = QLabel(self._checklist_frame)
+            led.setObjectName("cockpitChecklistLed")
+            led.setFixedSize(8, 8)
+            led.setStyleSheet(f"background-color: {bg}; border-radius: 4px;")
+            # Stamp the identity + state as structural properties so callers
+            # and tests introspect without scraping the stylesheet string.
+            led.setProperty("state", state)
+            led.setProperty("checklistKey", key)
+
+            name = QLabel(label, self._checklist_frame)
+            name.setObjectName("cockpitChecklistLabel")
+
+            value = QLabel(detail or "", self._checklist_frame)
+            value.setObjectName("cockpitChecklistDetail")
+            value.setStyleSheet("color: #64748b;")
+            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+            grid.addWidget(led, row_idx, 0, Qt.AlignVCenter | Qt.AlignHCenter)
+            grid.addWidget(name, row_idx, 1, Qt.AlignVCenter | Qt.AlignLeft)
+            grid.addWidget(value, row_idx, 2, Qt.AlignVCenter | Qt.AlignRight)
+
+        self._checklist_frame.setVisible(True)
 
     def set_placeholder_copy(self, *, title: str, body: str, action: str) -> None:
         """Replace the zero-card placeholder copy."""

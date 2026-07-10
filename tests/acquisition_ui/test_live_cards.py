@@ -6,7 +6,7 @@ import math
 from collections import deque
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QLabel, QScrollArea, QWidget
+from PyQt5.QtWidgets import QApplication, QFrame, QLabel, QScrollArea, QWidget
 
 from mf4_analyzer.acquisition_ui.widgets.live_cards import (
     _SPARK_MAX_POINTS,
@@ -795,3 +795,92 @@ def test_current_value_updates_every_batch_despite_stats_gate(qtbot):
     clock[0] += 0.010  # < 0.5 s: stats gate would throttle a recompute
     card.push_sample(0.001, 22.0)
     assert card._value_label.text() == "22.000"  # value still fresh
+
+
+# ---------------------------------------------------------------------------
+# B-5: disconnected connection checklist in the center guide canvas.
+# ---------------------------------------------------------------------------
+
+
+def test_connection_checklist_renders_three_structured_rows(qapp):
+    """``set_connection_checklist(rows)`` fills the disconnected canvas with a
+    structured 3-row list (LED + label + detail), driven by explicit
+    ``(key, label, state, detail)`` tuples — never parsed free text."""
+    grid = LiveCardGrid()
+    frame = grid.findChild(QFrame, "cockpitConnectionChecklist")
+    assert frame is not None
+    # Default: hidden (Replay-safe; no ECU rows until explicitly enabled).
+    assert frame.isHidden()
+
+    grid.set_connection_checklist(
+        [
+            ("a2l", "A2L 已解析", "ok", "demo.a2l"),
+            ("hw", "硬件可用", "pending", "未连接"),
+            ("selection", "当前选择可行", "error", "未选择"),
+        ]
+    )
+    assert not frame.isHidden()
+
+    labels = frame.findChildren(QLabel, "cockpitChecklistLabel")
+    details = frame.findChildren(QLabel, "cockpitChecklistDetail")
+    leds = frame.findChildren(QLabel, "cockpitChecklistLed")
+    assert [lab.text() for lab in labels] == ["A2L 已解析", "硬件可用", "当前选择可行"]
+    assert [d.text() for d in details] == ["demo.a2l", "未连接", "未选择"]
+    # State is stamped as a structural property (not scraped from text).
+    assert [led.property("state") for led in leds] == ["ok", "pending", "error"]
+
+
+def test_connection_checklist_none_hides_with_no_residual_height(qapp):
+    """``set_connection_checklist(None)`` hides the list AND reclaims its
+    vertical space — a hidden checklist must leave zero residual height so
+    the guide copy stays vertically centered."""
+    grid = LiveCardGrid()
+    canvas = grid.findChild(QWidget, "cockpitDisconnectedCanvas")
+    frame = grid.findChild(QFrame, "cockpitConnectionChecklist")
+
+    grid.set_connection_checklist(
+        [
+            ("a2l", "A2L 已解析", "ok", "demo.a2l"),
+            ("hw", "硬件可用", "ok", "正常"),
+            ("selection", "当前选择可行", "ok", "3 项已选"),
+        ]
+    )
+    canvas.layout().activate()
+    height_with_list = canvas.sizeHint().height()
+
+    grid.set_connection_checklist(None)
+    canvas.layout().activate()
+    height_without_list = canvas.sizeHint().height()
+
+    assert frame.isHidden()
+    # No leftover row widgets and no reserved height once hidden.
+    assert frame.findChildren(QLabel, "cockpitChecklistLabel") == []
+    assert height_without_list < height_with_list
+
+
+def test_connection_checklist_rebuilds_rows_on_reapply(qapp):
+    """Re-applying replaces rows in place (no stale accumulation)."""
+    grid = LiveCardGrid()
+    frame = grid.findChild(QFrame, "cockpitConnectionChecklist")
+    grid.set_connection_checklist(
+        [("hw", "硬件可用", "ok", "正常")]
+    )
+    assert len(frame.findChildren(QLabel, "cockpitChecklistLabel")) == 1
+    grid.set_connection_checklist(
+        [
+            ("a2l", "A2L 已解析", "ok", "x"),
+            ("hw", "硬件可用", "ok", "正常"),
+        ]
+    )
+    labels = frame.findChildren(QLabel, "cockpitChecklistLabel")
+    assert [lab.text() for lab in labels] == ["A2L 已解析", "硬件可用"]
+
+
+def test_disconnected_placeholder_copy_survives_checklist(qapp):
+    """The checklist is additive: enabling it must not disturb the
+    title/copy/action guide labels (Replay reuses ``set_placeholder_copy``)."""
+    grid = LiveCardGrid()
+    canvas = grid.findChild(QWidget, "cockpitDisconnectedCanvas")
+    grid.set_connection_checklist([("hw", "硬件可用", "ok", "正常")])
+    title = canvas.findChild(QLabel, "cockpitDisconnectedTitle")
+    assert title.text() == "未连接 ECU"

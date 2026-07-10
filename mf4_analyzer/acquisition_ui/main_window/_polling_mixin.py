@@ -37,6 +37,9 @@ class PollingMixin:
         self._update_record_button_enabled()
         # Disconnected → ConnectedIdle gate.
         if self._state_machine.state == CockpitState.DISCONNECTED:
+            # B-5: keep the center connection checklist's ``硬件可用`` row
+            # honest with the latest probed hardware state.
+            self._update_connection_checklist(snapshot)
             self._evaluate_connection_attempt(snapshot)
         elif self._state_machine.state == CockpitState.CONNECTED_IDLE:
             self._refresh_idle_preflight()

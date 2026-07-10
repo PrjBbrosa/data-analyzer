@@ -195,6 +195,12 @@ class CockpitMainWindow(
         self._rec_start_ts: float | None = None
         self._stream_start_ts: float | None = None
         self._a2l_name: str | None = None
+        # Last observed hardware availability (from the health poll's
+        # ``snapshot.hw.ok``). Cached so the disconnected connection
+        # checklist (B-5) can be refreshed from state transitions /
+        # selection edits without re-polling the aggregator. ``None`` =
+        # not yet probed → grey ``off`` dot.
+        self._last_hw_ok: bool | None = None
         self._output_dir_label = "data/runs"
         self._cumulative_rx_count = 0
         self._cumulative_dropped = 0
@@ -401,6 +407,9 @@ class CockpitMainWindow(
                 self._health_strip.apply_preflight(state="disconnected")
             self._update_status_bar()
             self._center.set_recording(False, None)
+            # B-5: the guide canvas hosts the connection checklist while
+            # disconnected (the removed right pane's destination, B-4).
+            self._update_connection_checklist()
         elif new == CockpitState.CONNECTED_IDLE:
             self._main_btn.setText("● 采集")
             self._set_visual_property(self._main_btn, "cockpitAction", "record")
@@ -411,6 +420,9 @@ class CockpitMainWindow(
             self._update_status_bar()
             # Update record-button enabled state based on latest health.
             self._update_record_button_enabled()
+            # B-5: leaving disconnected retires the checklist (the guide
+            # canvas is replaced by live cards anyway).
+            self._center.set_connection_checklist(None)
         elif new == CockpitState.RECORDING:
             if self._rec_start_ts is None:
                 self._rec_start_ts = time.monotonic()
@@ -426,6 +438,7 @@ class CockpitMainWindow(
             if hasattr(self, "_health_strip"):
                 self._health_strip.apply_preflight(state="recording")
             self._update_status_bar()
+            self._center.set_connection_checklist(None)
         elif new == CockpitState.REVIEW_MODAL:
             self._main_btn.setEnabled(False)
             self._set_visual_property(self._main_btn, "cockpitAction", "disabled")
@@ -434,6 +447,64 @@ class CockpitMainWindow(
             self._left_pane.set_frozen(False)
             self._status.showMessage("复盘")
             self._open_review_modal()
+
+    def _update_connection_checklist(
+        self, snapshot: "HealthSnapshot | None" = None
+    ) -> None:
+        """Refresh the disconnected-state center checklist (B-5).
+
+        The three rows are derived from STRUCTURED state — A2L parsed,
+        hardware available, current selection feasible — never by parsing
+        free text. This is a no-op destination (``None``) unless the state
+        machine is currently disconnected; :meth:`_apply_state_to_ui`
+        already hides the list on every other state.
+        """
+        if not hasattr(self, "_center"):
+            return
+        if self._state_machine.state != CockpitState.DISCONNECTED:
+            return
+        if snapshot is not None:
+            self._last_hw_ok = snapshot.hw.ok
+
+        # Row 1 — A2L parsed: a user-loaded A2L stamps ``_a2l_name``; the
+        # demo / injected path seeds ``_initial_pool`` instead.
+        a2l_loaded = self._a2l_name is not None or bool(self._initial_pool)
+        if a2l_loaded:
+            a2l_state = "ok"
+            a2l_detail = self._a2l_name or "已载入"
+        else:
+            a2l_state = "pending"
+            a2l_detail = "未载入"
+
+        # Row 2 — hardware available: cached from the last health poll.
+        hw_ok = self._last_hw_ok
+        if hw_ok is None:
+            hw_state, hw_detail = "off", "未探测"
+        elif hw_ok:
+            hw_state, hw_detail = "ok", "正常"
+        else:
+            hw_state, hw_detail = "pending", "未连接"
+
+        # Row 3 — current selection feasible: at least one measurement
+        # selected in the left pane.
+        selection = (
+            self._left_pane.current_selection()
+            if hasattr(self, "_left_pane")
+            else []
+        )
+        count = len(selection)
+        if count > 0:
+            sel_state, sel_detail = "ok", f"{count} 项已选"
+        else:
+            sel_state, sel_detail = "pending", "未选择"
+
+        self._center.set_connection_checklist(
+            [
+                ("a2l", "A2L 已解析", a2l_state, a2l_detail),
+                ("hw", "硬件可用", hw_state, hw_detail),
+                ("selection", "当前选择可行", sel_state, sel_detail),
+            ]
+        )
 
     # ------------------------------------------------------------------
     # Main button handler
@@ -887,9 +958,12 @@ class CockpitMainWindow(
     # ------------------------------------------------------------------
 
     def _on_selection_changed(self) -> None:
-        # Disconnected selection changes have no body destination now that the
-        # right pane is gone (B-4); the central connection checklist is B-5.
-        if self._state_machine.state == CockpitState.CONNECTED_IDLE:
+        # Disconnected selection changes now feed the central connection
+        # checklist (B-5) — the guide canvas is the right pane's replacement
+        # destination (B-4). Connected-idle edits still restart the stream.
+        if self._state_machine.state == CockpitState.DISCONNECTED:
+            self._update_connection_checklist()
+        elif self._state_machine.state == CockpitState.CONNECTED_IDLE:
             self._refresh_center_cards()
             self._refresh_idle_preflight()
             self._idle_restart_timer.start()

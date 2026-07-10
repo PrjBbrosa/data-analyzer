@@ -43,6 +43,33 @@ def test_replay_placeholder_copy_is_replay_specific(qtbot):
     assert not tab._right_panel.isVisible()
 
 
+def test_replay_has_no_connection_checklist(qtbot):
+    """B-5: the shared ``LiveCardGrid`` checklist API defaults to ``None``,
+    so Replay — which never calls ``set_connection_checklist`` — shows the
+    plain ``未加载 MF4`` placeholder with NO ECU-semantic checklist rows.
+
+    Calling the Replay-specific ``set_placeholder_copy`` must not surface an
+    ECU checklist either."""
+    from PyQt5.QtWidgets import QFrame
+
+    tab = ReplayTab()
+    qtbot.addWidget(tab)
+
+    frame = tab._live_cards.findChild(QFrame, "cockpitConnectionChecklist")
+    assert frame is not None
+    assert frame.isHidden()
+    assert frame.findChildren(QLabel, "cockpitChecklistLabel") == []
+
+    # Re-applying the Replay placeholder copy leaves the checklist hidden.
+    tab._live_cards.set_placeholder_copy(
+        title="未加载 MF4",
+        body="回放会在这里显示信号趋势与当前值。",
+        action="使用左上「选择 MF4」打开录制文件",
+    )
+    assert frame.isHidden()
+    assert frame.findChildren(QLabel, "cockpitChecklistLabel") == []
+
+
 def test_replay_tab_loads_existing_mf4(qapp, tmp_path: Path):
     mf4_path = _write_replay_mf4(tmp_path / "source.mf4")
     tab = ReplayTab()

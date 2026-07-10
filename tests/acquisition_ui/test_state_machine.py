@@ -544,3 +544,88 @@ def test_controller_auto_stop_routes_to_stop_and_review(qapp, monkeypatch):
     window._poll_live_recording(_AutoStoppedController())
     assert calls == [True]
     window.close()
+
+
+# ---------------------------------------------------------------------------
+# B-5: disconnected connection checklist lives in the center guide canvas.
+# ---------------------------------------------------------------------------
+
+
+def test_disconnected_shows_center_connection_checklist(qapp):
+    """The removed right pane's connection checklist (B-4) now renders in
+    the center guide canvas while disconnected, built from STRUCTURED state
+    (A2L parsed / hardware available / selection feasible)."""
+    from PyQt5.QtWidgets import QFrame, QLabel
+
+    window = CockpitMainWindow()
+    try:
+        assert window.state_machine.state == CockpitState.DISCONNECTED
+        frame = window._center.findChild(QFrame, "cockpitConnectionChecklist")
+        assert frame is not None
+        assert not frame.isHidden()
+
+        labels = frame.findChildren(QLabel, "cockpitChecklistLabel")
+        assert [lab.text() for lab in labels] == [
+            "A2L 已解析",
+            "硬件可用",
+            "当前选择可行",
+        ]
+    finally:
+        window.close()
+
+
+def test_selection_feasible_row_flips_ok_when_a_measurement_is_selected(qapp):
+    """Selecting a measurement while disconnected flips the ``当前选择可行``
+    row from ``pending`` to ``ok`` — driven by the structured selection
+    count, not by parsing any label text."""
+    from can_logger.p0.a2l_probe import MeasurementSummary
+    from PyQt5.QtWidgets import QFrame, QLabel
+
+    window = CockpitMainWindow()
+    try:
+        window.left_pane.set_pool(
+            (
+                MeasurementSummary(
+                    name="MotSpd",
+                    address=0x1000,
+                    datatype="UWORD",
+                    unit="rpm",
+                    conversion="",
+                    available_events=("event_10ms",),
+                ),
+            ),
+            a2l_has_daq_events=True,
+        )
+        frame = window._center.findChild(QFrame, "cockpitConnectionChecklist")
+
+        def _sel_led():
+            for led in frame.findChildren(QLabel, "cockpitChecklistLed"):
+                if led.property("checklistKey") == "selection":
+                    return led
+            return None
+
+        assert _sel_led().property("state") == "pending"
+
+        window.left_pane._set_measurement_selected("MotSpd", True)
+        assert _sel_led().property("state") == "ok"
+    finally:
+        window.close()
+
+
+def test_connected_idle_hides_center_connection_checklist(qapp):
+    """Leaving disconnected retires the checklist (the guide canvas is
+    replaced by live cards)."""
+    from PyQt5.QtWidgets import QFrame
+
+    window = CockpitMainWindow()
+    try:
+        window.state_machine.request_connect(
+            HealthyPredicateResult.from_components(
+                hw_ok=True, xcp_connected=True, first_frame_received=True
+            )
+        )
+        assert window.state_machine.state == CockpitState.CONNECTED_IDLE
+        frame = window._center.findChild(QFrame, "cockpitConnectionChecklist")
+        assert frame.isHidden()
+    finally:
+        window.close()
