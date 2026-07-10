@@ -56,6 +56,50 @@ def _build_pool():
     return tuple(pool)
 
 
+def _synth_snapshot(*, dropped: int = 0, ring: float = 10.0, last_rx: float = 0.1):
+    """A green baseline ``HealthSnapshot`` with overridable REC fields.
+
+    Mirrors ``tests/acquisition_ui/test_escalation.py::make_snapshot`` so the
+    tour can inject the yellow/red escalation ladder deterministically (the
+    FAKE demo backend always has a green 10 GB+ disk, so real polling never
+    reaches yellow/red on its own — Task B-6).
+    """
+    import time as _time
+
+    from mf4_analyzer.acquisition_capture.health import (
+        CanHealth,
+        DaqHealth,
+        HealthSnapshot,
+        HwHealth,
+        RecHealth,
+        XcpHealth,
+    )
+
+    return HealthSnapshot(
+        hw=HwHealth(
+            ok=True,
+            driver_version="tour",
+            channel_count=1,
+            last_probe_ts=_time.monotonic(),
+            error=None,
+        ),
+        can=CanHealth(bus_load_pct=10.0),
+        xcp=XcpHealth(connected=True, slave_id=0x55),
+        daq=DaqHealth(
+            event_capacity={"event_10ms": 32}, event_used={"event_10ms": 1}
+        ),
+        rec=RecHealth(
+            state="recording",
+            ring_buffer_fill_pct=ring,
+            dropped_frames=dropped,
+            write_rate_bps=0.0,
+            last_rx_age_s=last_rx,
+            writer_thread_alive=True,
+        ),
+        captured_at=_time.monotonic(),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Cockpit UI end-to-end tour")
     parser.add_argument(
@@ -82,7 +126,13 @@ def main() -> int:
 
     from PyQt5.QtCore import Qt, QTimer
     from PyQt5.QtTest import QTest
-    from PyQt5.QtWidgets import QApplication, QCheckBox, QLabel, QPushButton
+    from PyQt5.QtWidgets import (
+        QApplication,
+        QCheckBox,
+        QFrame,
+        QLabel,
+        QPushButton,
+    )
 
     from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
     from mf4_analyzer.acquisition_ui.main_window._settings_mixin import (
@@ -104,6 +154,9 @@ def main() -> int:
     window.show()
 
     failures: list[str] = []
+    # Cross-step scratch (e.g. idle body geometry captured for the B3 zero-shift
+    # comparison against the recording state).
+    ctx: dict[str, object] = {}
 
     def check(cond: bool, msg: str) -> None:
         tag = "PASS" if cond else "FAIL"
@@ -126,6 +179,37 @@ def main() -> int:
             return fn
 
         return deco
+
+    @at(250, "disconnected-check")
+    def s_disconnected():
+        # B-2: while disconnected the preflight pill is VISIBLE but disabled
+        # and reads ``连接后可用`` (never openable). B-5: the capture center
+        # hosts the structured connection checklist (3 structured rows), while
+        # Replay — which never calls set_connection_checklist — keeps its plain
+        # placeholder (asserted in focused pytest, not here, to avoid MF4 IO).
+        strip = window.health_strip
+        pill = strip.preflight_pill
+        check(
+            pill.isVisible() and not pill.isEnabled() and not pill.is_openable(),
+            f"B2 disconnected pill disabled (vis={pill.isVisible()} "
+            f"en={pill.isEnabled()} open={pill.is_openable()})",
+        )
+        check(
+            pill.label_text() == "连接后可用",
+            f"B2 disconnected pill label ({pill.label_text()!r})",
+        )
+        frame = window._center.findChild(QFrame, "cockpitConnectionChecklist")
+        check(
+            frame is not None and frame.isVisible(),
+            "B5 capture connection checklist visible while disconnected",
+        )
+        leds = window._center.findChildren(QLabel, "cockpitChecklistLed")
+        keys = {led.property("checklistKey") for led in leds}
+        check(
+            len(leds) == 3 and keys == {"a2l", "hw", "selection"},
+            f"B5 checklist has 3 structured rows ({sorted(keys)})",
+        )
+        shot(window, "00-disconnected")
 
     @at(400, "select-bottom")
     def s_select_bottom():
@@ -169,6 +253,26 @@ def main() -> int:
         )
         shot(window, "02-idle")
 
+    @at(3050, "idle-preflight-check")
+    def s_idle_preflight():
+        # B-2: connected-idle lights the preflight pill (visible, enabled,
+        # openable, its own name — not混入五健康 chips). Capture the idle body
+        # geometry so the recording step can prove B3 zero-shift (the pill
+        # hiding on record must not move the center).
+        from mf4_analyzer.acquisition_ui.widgets.health_strip import PreflightPill
+
+        pill = window.health_strip.preflight_pill
+        check(
+            pill.isVisible() and pill.isEnabled() and pill.is_openable(),
+            f"B2 idle pill openable (vis={pill.isVisible()} "
+            f"en={pill.isEnabled()} open={pill.is_openable()})",
+        )
+        check(
+            pill.label_text() == PreflightPill.NAME,
+            f"B2 idle pill label ({pill.label_text()!r})",
+        )
+        ctx["idle_center_geo"] = window._center.geometry()
+
     @at(3200, "idle-add-channel")
     def s_add():
         window.left_pane._set_measurement_selected("BattVolt", True)
@@ -182,6 +286,75 @@ def main() -> int:
             "F5 idle-added channel receives data",
         )
         shot(window, "03-idle-added")
+
+    @at(4650, "popover-matrix")
+    def s_popover_matrix():
+        # B-1/B-2: the health strip owns ONE HealthPopover reused across all
+        # chips and the preflight pill. Exercise the close matrix: open →
+        # same-chip toggle-close → switch chip (single instance) → Esc-close →
+        # pill aggregate popover (single instance, 5 rows).
+        from mf4_analyzer.acquisition_ui.widgets.health_strip import PreflightPill
+
+        strip = window.health_strip
+        hw_chip = strip.chip("HW")
+        can_chip = strip.chip("CAN")
+        rec_chip = strip.chip("REC")
+
+        QTest.mouseClick(hw_chip, Qt.LeftButton)
+        pop = strip.detail_popover
+        check(
+            pop is not None and pop.isVisible() and strip.active_chip() == "HW",
+            f"B1 chip click opens popover anchored HW ({strip.active_chip()})",
+        )
+        check(pop.row_count() > 0, f"B1 popover has rows ({pop.row_count()})")
+        pop_id = id(pop)
+        shot(window, "03d-popover-hw")
+
+        # Same-chip click toggles it closed.
+        QTest.mouseClick(hw_chip, Qt.LeftButton)
+        check(
+            not strip.detail_popover.isVisible() and strip.active_chip() is None,
+            "B1 same-chip toggle closes popover",
+        )
+
+        # Switching chips reuses the single instance (no second popover).
+        QTest.mouseClick(can_chip, Qt.LeftButton)
+        check(
+            strip.detail_popover.isVisible() and id(strip.detail_popover) == pop_id,
+            "B1 CAN reuses the single popover instance",
+        )
+        QTest.mouseClick(rec_chip, Qt.LeftButton)
+        check(
+            id(strip.detail_popover) == pop_id
+            and strip.active_chip() == "REC"
+            and strip.detail_popover.title_text() == "REC",
+            f"B1 REC switch reuses single instance ({strip.active_chip()})",
+        )
+
+        # Esc closes the popover (application-level event filter).
+        QTest.keyClick(window, Qt.Key_Escape)
+        check(
+            strip.active_chip() is None and not strip.detail_popover.isVisible(),
+            "B1 Esc closes popover",
+        )
+
+        # B-2: the preflight pill reuses the SAME single popover with its 5
+        # aggregate rows.
+        pill = strip.preflight_pill
+        QTest.mouseClick(pill, Qt.LeftButton)
+        check(
+            strip.detail_popover.isVisible()
+            and strip.active_chip() == PreflightPill.NAME
+            and id(strip.detail_popover) == pop_id,
+            f"B2 pill reuses single popover ({strip.active_chip()})",
+        )
+        check(
+            strip.detail_popover.row_count() == 5,
+            f"B2 preflight popover has 5 rows ({strip.detail_popover.row_count()})",
+        )
+        shot(window, "03e-preflight-popover")
+        QTest.mouseClick(pill, Qt.LeftButton)
+        check(strip.active_chip() is None, "B2 pill toggle closes popover")
 
     @at(5000, "focus-card")
     def s_focus_card():
@@ -251,7 +424,109 @@ def main() -> int:
             all(c._spark.sample_count > 0 for c in cards.values()),
             "F1 recording card buffers non-empty",
         )
+        # B-2: recording HIDES the preflight pill (the strip is a fixed-height
+        # row above the splitter, so this never reflows the body).
+        pill = window.health_strip.preflight_pill
+        check(not pill.isVisible(), "B2 recording hides preflight pill")
+        # B-3/B-4 zero-shift: the capture body geometry is identical in idle and
+        # recording (pill hide + escalation overlay must not move the center).
+        idle_geo = ctx.get("idle_center_geo")
+        rec_geo = window._center.geometry()
+        check(
+            idle_geo is not None and rec_geo == idle_geo,
+            f"B3 idle↔recording body zero-shift (idle={idle_geo}, rec={rec_geo})",
+        )
         shot(window, "04-recording")
+
+    @at(9550, "escalation-ladder")
+    def s_escalation_ladder():
+        # B-6 escalation ladder: inject synthetic snapshots (FAKE demo disk is
+        # always green, so real polling never reaches yellow/red) and walk
+        # yellow → red → ack → green → red. ``bar.apply`` drives BOTH the banner
+        # and the strip (REC chip + summary) via the wired ``applied`` signal.
+        # The banner is an off-layout overlay, so the body geometry must stay
+        # pinned across every state (proven vs a captured baseline).
+        from mf4_analyzer.acquisition_ui.widgets.escalation_bar import (
+            escalation_state,
+        )
+
+        gb = 1024 ** 3
+        mb = 1024 ** 2
+        bar = window._escalation_bar
+        strip = window.health_strip
+        rec_chip = strip.chip("REC")
+        base_geo = window._center.geometry()
+
+        def geo_pinned(tag: str) -> None:
+            g = window._center.geometry()
+            check(g == base_geo, f"B3 body zero-shift @{tag} (base={base_geo}, {tag}={g})")
+
+        # yellow entry (dropped=3 + ring=68% is a known-yellow combo).
+        yellow = escalation_state(
+            _synth_snapshot(dropped=3, ring=68.0), disk_free_bytes=10 * gb
+        )
+        bar.apply(yellow)
+        check(
+            bar.state.level == "yellow" and not bar.isHidden(),
+            f"B6 yellow banner visible ({bar.state.level})",
+        )
+        check(
+            rec_chip.property("level") == "yellow",
+            f"B6 REC chip escalates to yellow ({rec_chip.property('level')})",
+        )
+        check(bool(strip.summary_text()), "B6 yellow summary non-empty")
+        geo_pinned("yellow")
+        shot(window, "09-esc-yellow")
+
+        # red entry — pulses the REC chip 3 loops on entry / reason change.
+        red = escalation_state(_synth_snapshot(), disk_free_bytes=512 * mb)
+        bar.apply(red)
+        check(
+            bar.state.level == "red" and not bar.isHidden(),
+            f"B6 red banner visible ({bar.state.level})",
+        )
+        check(
+            rec_chip.property("level") == "red",
+            f"B6 REC chip escalates to red ({rec_chip.property('level')})",
+        )
+        check(
+            rec_chip.pulse_animation.loopCount() == 3
+            and rec_chip.pulse_animation.state()
+            == rec_chip.pulse_animation.Running,
+            "B6 red pulse runs 3 loops on entry",
+        )
+        geo_pinned("red")
+        shot(window, "10-esc-red")
+
+        # acknowledge — collapse the banner but keep the summary latched.
+        bar.acknowledge()
+        check(
+            bar.is_collapsed and bar.isHidden(),
+            "B6 ack collapses the banner",
+        )
+        check(bool(strip.summary_text()), "B6 ack keeps the strip summary")
+        geo_pinned("ack")
+        shot(window, "11-esc-ack")
+
+        # green recovery — hide, clear the ack latch, stop pulsing.
+        green = escalation_state(_synth_snapshot(), disk_free_bytes=10 * gb)
+        bar.apply(green)
+        check(
+            bar.isHidden() and not bar.is_collapsed,
+            "B6 green recovery hides the banner + clears latch",
+        )
+        geo_pinned("recovery")
+        shot(window, "12-esc-recovery")
+
+        # red re-arm — a fresh alarm re-shows after recovery.
+        bar.apply(red)
+        check(
+            not bar.is_collapsed and not bar.isHidden(),
+            "B6 red re-arms after recovery",
+        )
+        geo_pinned("re-arm")
+        # Restore green so the stop/review flow is not polluted by the inject.
+        bar.apply(green)
 
     @at(9700, "stop")
     def s_stop():
