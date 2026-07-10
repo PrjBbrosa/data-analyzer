@@ -269,12 +269,22 @@ def test_dbc_selector_removed_from_xcp_toolbar(qapp):
         window.close()
 
 
-def test_disconnected_right_panel_updates_selection_count(qapp):
-    """Changing measurement selection before connecting updates the checklist."""
+def test_capture_body_is_two_columns_without_right_panel(qapp):
+    """B-4: the capture body drops the right health pane (left + center only).
+
+    The disconnected checklist / preflight / recording health were relocated to
+    the top health strip (chips + preflight pill) and the bottom facts /
+    escalation bar (B-1/B-2/B-3), so the capture main window no longer owns a
+    ``RightPanel`` and its splitter holds exactly two columns. Selecting a
+    measurement while disconnected must still not crash.
+    """
     from can_logger.p0.a2l_probe import MeasurementSummary
 
     window = CockpitMainWindow()
     try:
+        assert not hasattr(window, "_right_panel")
+        assert window._splitter.count() == 2
+
         window.left_pane.set_pool(
             (
                 MeasurementSummary(
@@ -289,8 +299,6 @@ def test_disconnected_right_panel_updates_selection_count(qapp):
             a2l_has_daq_events=True,
         )
         window.left_pane._set_measurement_selected("EngSpdAvg", True)
-
-        assert "1 项已选" in window.right_panel.disconnected_page._row_selection.text()
     finally:
         window.close()
 

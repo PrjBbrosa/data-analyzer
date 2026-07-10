@@ -232,9 +232,9 @@ class SettingsMixin:
         )
         self._update_record_button_enabled()
         if self._state_machine.state == CockpitState.CONNECTED_IDLE:
-            self._refresh_idle_right_panel()
-        elif self._state_machine.state == CockpitState.RECORDING:
-            self._refresh_recording_right_panel()
+            self._refresh_idle_preflight()
+        # Recording health re-renders on the next _poll_health tick (REC chip /
+        # bottom facts / escalation); the right pane was removed in B-4.
 
     # ------------------------------------------------------------------
     # Segment marker + status bar

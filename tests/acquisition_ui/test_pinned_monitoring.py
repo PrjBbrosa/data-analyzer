@@ -95,6 +95,33 @@ def test_recording_config_uses_full_selection(qtbot):
     window.close()
 
 
+def test_body_zero_shift_from_idle_to_recording(qtbot):
+    """B-4 / spec B3: removing the right pane + hiding the preflight pill on
+    record must not reflow the body; the center ``LiveCardGrid`` keeps its
+    horizontal geometry across idle→recording (zero-shift)."""
+    window = _idle_window(qtbot)
+    window.resize(1200, 720)
+    window.show()
+    qtbot.waitExposed(window)
+    idle_w = window._center.geometry().width()
+
+    window.state_machine.request_start_recording()
+    qtbot.wait(20)
+    rec_w = window._center.geometry().width()
+
+    assert window.state_machine.state == CockpitState.RECORDING
+    assert rec_w == idle_w
+    window.close()
+
+
+def test_capture_splitter_has_two_columns(qtbot):
+    """B-4: capture splitter is left + center only (no right health pane)."""
+    window = _idle_window(qtbot)
+    assert not hasattr(window, "_right_panel")
+    assert window._splitter.count() == 2
+    window.close()
+
+
 def test_card_menu_emits_unpin_and_reset(qtbot):
     window = _idle_window(qtbot)
     card = window._center.cards["Sig_00"]

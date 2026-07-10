@@ -63,6 +63,33 @@ def test_replay_tab_loads_existing_mf4(qapp, tmp_path: Path):
         tab.close()
 
 
+def test_replay_right_panel_survives_capture_refactor(qapp, tmp_path: Path):
+    """B-4 boundary: dropping the *capture* right pane must NOT touch Replay.
+
+    ``ReplayTab`` still owns its own ``RightPanel`` via the public accessor,
+    shows it after loading an MF4, and play/stop keep working.
+    """
+    mf4_path = _write_replay_mf4(tmp_path / "source.mf4")
+    tab = ReplayTab()
+    try:
+        tab.show()
+        qapp.processEvents()
+        assert tab.right_panel is tab._right_panel
+
+        tab.load_file(mf4_path)
+        qapp.processEvents()
+        assert tab.right_panel.isVisible()
+
+        tab.play()
+        tab.drain_once()
+        assert tab.state == "playing"
+
+        tab.stop()
+        assert tab.state == "stopped"
+    finally:
+        tab.close()
+
+
 def test_replay_speed_control_changes_emit_rate(qapp, tmp_path: Path):
     mf4_path = _write_replay_mf4(tmp_path / "source.mf4")
     tab = ReplayTab()

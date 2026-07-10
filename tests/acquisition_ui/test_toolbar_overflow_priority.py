@@ -46,15 +46,17 @@ def test_side_panels_can_be_drag_collapsed_like_analyzer(qtbot):
 
     splitter = window.findChild(QSplitter, "cockpitSplitter")
     assert splitter is not None
+    # B-4: two-column body — left navigator + center workspace. The right
+    # health pane was relocated to the top strip / bottom facts, so only the
+    # left navigator is drag-collapsible around a fixed center.
+    assert splitter.count() == 2
     assert splitter.isCollapsible(0) is True
     assert splitter.isCollapsible(1) is False
-    assert splitter.isCollapsible(2) is True
 
-    splitter.setSizes([0, 900, 0])
+    splitter.setSizes([0, 900])
     QApplication.processEvents()
     sizes = splitter.sizes()
 
     assert sizes[0] == 0
-    assert sizes[2] == 0
     assert sizes[1] >= 900
     window.close()

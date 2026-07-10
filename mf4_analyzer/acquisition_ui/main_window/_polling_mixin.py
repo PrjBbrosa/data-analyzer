@@ -39,9 +39,10 @@ class PollingMixin:
         if self._state_machine.state == CockpitState.DISCONNECTED:
             self._evaluate_connection_attempt(snapshot)
         elif self._state_machine.state == CockpitState.CONNECTED_IDLE:
-            self._refresh_idle_right_panel()
+            self._refresh_idle_preflight()
         elif self._state_machine.state == CockpitState.RECORDING:
-            self._refresh_recording_right_panel()
+            # Recording health already fed the REC chip / escalation / bottom
+            # facts above; the removed right pane (B-4) has no refresh here.
             self._check_recording_auto_stop()
 
     def _feed_escalation(self, snapshot: HealthSnapshot) -> None:

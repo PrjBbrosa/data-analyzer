@@ -475,7 +475,6 @@ class ToolbarMixin:
 
         from mf4_analyzer.acquisition_ui.widgets.left_pane import LeftPane
         from mf4_analyzer.acquisition_ui.widgets.live_cards import LiveCardGrid
-        from mf4_analyzer.acquisition_ui.widgets.right_panel import RightPanel
 
         page = QWidget(self)
         layout = QHBoxLayout(page)
@@ -491,8 +490,6 @@ class ToolbarMixin:
 
         self._center = LiveCardGrid(splitter)
 
-        self._right_panel = RightPanel(splitter)
-
         # Pin 接线（spec 2026-07-08 §G6b）。ReplayTab 的 grid 不启用。
         self._left_pane.set_pin_state_provider(
             lambda name: name in self._effective_pinned_names()
@@ -502,16 +499,16 @@ class ToolbarMixin:
         self._center.unpin_requested.connect(self.unpin_channel)
         self._center.pins_reset_requested.connect(lambda: self.reset_pins())
 
+        # Spec B3/B4: health moved to the top strip (chips + preflight pill)
+        # and the bottom facts / escalation bar, so the capture body is a
+        # two-column left + center splitter — the right health pane is gone.
         splitter.addWidget(self._left_pane)
         splitter.addWidget(self._center)
-        splitter.addWidget(self._right_panel)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 0)
         splitter.setCollapsible(0, True)
         splitter.setCollapsible(1, False)
-        splitter.setCollapsible(2, True)
         splitter.setHandleWidth(3)
-        splitter.setSizes([420, 560, 300])
+        splitter.setSizes([420, 860])
         layout.addWidget(splitter)
         return page

@@ -291,7 +291,13 @@ def main() -> int:
 
     @at(17900, "narrow")
     def s_narrow():
+        # B-4: the body is two columns now, so at the 960px window minimum
+        # (a toolbar clamp) the lone-column cards stay ~490px wide — above the
+        # ``_STATS_COLLAPSE_MIN_CARD_W`` compact threshold. Drive the compact
+        # regime the honest way: widen the left navigator via the splitter so
+        # the center (and each full-width card) drops below the threshold.
         window.resize(960, 600)
+        window._splitter.setSizes([560, 400])
 
     @at(18900, "narrow-check")
     def s_narrow_check():
@@ -322,16 +328,18 @@ def main() -> int:
     def s_collapse_panels():
         window.resize(1280, 760)
         splitter = window._splitter
-        splitter.setSizes([0, 960, 0])
+        # B-4: two-column body (left navigator + center). The right health
+        # pane was relocated to the top strip / bottom facts.
+        splitter.setSizes([0, 960])
 
     @at(20200, "collapse-panels-check")
     def s_collapse_panels_check():
         splitter = window._splitter
         sizes = splitter.sizes()
+        check(splitter.count() == 2, f"F13 body is two columns ({splitter.count()})")
         check(splitter.isCollapsible(0), "F13 left panel collapsible")
         check(not splitter.isCollapsible(1), "F13 center panel not collapsible")
-        check(splitter.isCollapsible(2), "F13 right panel collapsible")
-        check(sizes[0] == 0 and sizes[2] == 0, f"F13 side panels hidden ({sizes})")
+        check(sizes[0] == 0, f"F13 left panel hidden ({sizes})")
         check(sizes[1] >= 900, f"F13 center expands after hide ({sizes})")
         shot(window, "08-panels-hidden")
 

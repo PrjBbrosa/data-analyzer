@@ -81,7 +81,6 @@ from mf4_analyzer.acquisition_ui.state import (
 from mf4_analyzer.acquisition_ui.widgets.escalation_bar import EscalationBar
 from mf4_analyzer.acquisition_ui.widgets.health_strip import HealthStrip
 from mf4_analyzer.acquisition_ui.widgets.left_pane import LeftPane
-from mf4_analyzer.acquisition_ui.widgets.right_panel import RightPanel
 from ._defs import (
     DEFAULT_LIVE_PIN_COUNT,
     HISTORY_TAB_TITLE,
@@ -396,18 +395,6 @@ class CockpitMainWindow(
             self._set_visual_property(self._main_btn, "cockpitAction", "connect")
             self._rec_indicator.setText("● REC OFF")
             self._set_visual_property(self._rec_indicator, "recState", "off")
-            self._right_panel.show_disconnected(
-                snapshot=self._health_aggregator.last,
-                first_frame_received=self._first_frame_ts is not None,
-                first_failure=(
-                    self._state_machine.last_healthy_result.first_failure
-                    if self._state_machine.last_healthy_result
-                    else None
-                ),
-                selection_count=len(self._left_pane.current_selection())
-                if hasattr(self, "_left_pane")
-                else 0,
-            )
             # Preflight pill visible but disabled (`连接后可用`) while
             # disconnected (Spec §B2 visibility contract).
             if hasattr(self, "_health_strip"):
@@ -420,7 +407,7 @@ class CockpitMainWindow(
             self._rec_indicator.setText("● REC OFF")
             self._set_visual_property(self._rec_indicator, "recState", "off")
             self._center.set_recording(False, None)
-            self._refresh_idle_right_panel()
+            self._refresh_idle_preflight()
             self._update_status_bar()
             # Update record-button enabled state based on latest health.
             self._update_record_button_enabled()
@@ -439,7 +426,6 @@ class CockpitMainWindow(
             if hasattr(self, "_health_strip"):
                 self._health_strip.apply_preflight(state="recording")
             self._update_status_bar()
-            self._refresh_recording_right_panel()
         elif new == CockpitState.REVIEW_MODAL:
             self._main_btn.setEnabled(False)
             self._set_visual_property(self._main_btn, "cockpitAction", "disabled")
@@ -871,9 +857,11 @@ class CockpitMainWindow(
         else:
             self._center.set_monitor_summary(None)
 
-    def _refresh_idle_right_panel(self) -> None:
-        if not hasattr(self, "_right_panel"):
-            return
+    def _refresh_idle_preflight(self) -> None:
+        # Spec §B2: connected-idle feeds the five preflight numbers to the
+        # health-strip preflight pill. The old right-hand ``IdlePreflightPage``
+        # was removed with the capture right pane (B-4); recording health now
+        # flows to the REC chip / bottom facts via ``_poll_health``.
         selection = self._left_pane.current_selection()
         # Demo mode: no real A2L event capacity — fabricate a
         # generous mapping so the DAQ row reads green when at least
@@ -882,13 +870,6 @@ class CockpitMainWindow(
             m.event: 32 for m in selection if m.event is not None
         }
         disk_free_bytes = self._estimate_disk_free_bytes()
-        self._right_panel.show_idle(
-            selection=selection,
-            event_capacity=event_capacity,
-            disk_free_bytes=disk_free_bytes,
-        )
-        # Same numbers feed the health-strip preflight pill (Spec §B2):
-        # connected-idle shows the pill with the worst-band LED.
         if hasattr(self, "_health_strip"):
             self._health_strip.apply_preflight(
                 selection=selection,
@@ -896,15 +877,6 @@ class CockpitMainWindow(
                 disk_free_bytes=disk_free_bytes,
                 state="idle",
             )
-
-    def _refresh_recording_right_panel(self) -> None:
-        snapshot = self._health_aggregator.last
-        if snapshot is None:
-            return
-        self._right_panel.show_recording(
-            snapshot=snapshot,
-            disk_free_bytes=self._estimate_disk_free_bytes(),
-        )
 
     def _check_recording_auto_stop(self) -> None:
         if self._estimate_disk_free_bytes() < thresholds.DISK_FREE_AUTO_STOP_BYTES:
@@ -915,20 +887,11 @@ class CockpitMainWindow(
     # ------------------------------------------------------------------
 
     def _on_selection_changed(self) -> None:
-        if self._state_machine.state == CockpitState.DISCONNECTED:
-            self._right_panel.show_disconnected(
-                snapshot=self._health_aggregator.last,
-                first_frame_received=self._first_frame_ts is not None,
-                first_failure=(
-                    self._state_machine.last_healthy_result.first_failure
-                    if self._state_machine.last_healthy_result
-                    else None
-                ),
-                selection_count=len(self._left_pane.current_selection()),
-            )
-        elif self._state_machine.state == CockpitState.CONNECTED_IDLE:
+        # Disconnected selection changes have no body destination now that the
+        # right pane is gone (B-4); the central connection checklist is B-5.
+        if self._state_machine.state == CockpitState.CONNECTED_IDLE:
             self._refresh_center_cards()
-            self._refresh_idle_right_panel()
+            self._refresh_idle_preflight()
             self._idle_restart_timer.start()
 
     # ------------------------------------------------------------------
@@ -950,10 +913,6 @@ class CockpitMainWindow(
     @property
     def left_pane(self) -> LeftPane:
         return self._left_pane
-
-    @property
-    def right_panel(self) -> RightPanel:
-        return self._right_panel
 
     @property
     def main_button(self) -> QPushButton:
