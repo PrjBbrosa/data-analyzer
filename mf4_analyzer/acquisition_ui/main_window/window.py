@@ -969,6 +969,7 @@ class CockpitMainWindow(
         elif self._state_machine.state == CockpitState.CONNECTED_IDLE:
             self._refresh_center_cards()
             self._refresh_idle_preflight()
+            self._update_status_bar()
             self._idle_restart_timer.start()
 
     # ------------------------------------------------------------------

@@ -257,9 +257,8 @@ class SettingsMixin:
             self._status.showMessage(f"未连接 · A2L: {a2l_name}")
             return
         if state == CockpitState.CONNECTED_IDLE:
-            self._status.showMessage(
-                f"实时流 · {self._event_rate_per_s()} evt/s"
-            )
+            selected, shown = self._idle_monitor_counts()
+            self._status.showMessage(f"已连接 · 已选 {selected} · 实时显示 {shown}")
             return
         if state == CockpitState.RECORDING:
             # Neutral recording FACTS only (Spec §B5). Anomalies (dropped /
@@ -326,7 +325,7 @@ class SettingsMixin:
         return estimate_record_duration_s(throughput, self._estimate_disk_free_bytes())
 
     def _recording_disk_time_text(self) -> str:
-        return f"剩余 {_humanize_duration_s(self._recording_disk_duration_s())}"
+        return f"磁盘剩 {_humanize_duration_s(self._recording_disk_duration_s())}"
 
     def _recording_size_text(self) -> str:
         size_mb = self._recording_file_size_mb()
@@ -352,6 +351,17 @@ class SettingsMixin:
         except Exception:  # noqa: BLE001 - facts stream must stay best-effort
             return []
 
+    def _idle_monitor_counts(self) -> tuple[int, int]:
+        """Selected / effectively pinned counts for the connected-idle facts."""
+        selection = self._current_selection_for_facts()
+        selected_names = {measurement.name for measurement in selection}
+        try:
+            pinned_names = self._effective_pinned_names()
+        except (AttributeError, TypeError):
+            pinned_names = []
+        shown = sum(1 for name in pinned_names if name in selected_names)
+        return len(selection), shown
+
     def _event_rate_per_s(self) -> int:
         if self._stream_start_ts is None:
             return 0
@@ -366,7 +376,7 @@ class SettingsMixin:
         else:
             total = int(max(0.0, time.monotonic() - self._rec_start_ts))
         minutes, seconds = divmod(total, 60)
-        return f"{minutes:02d}:{seconds:02d}"
+        return f"录制中 · {minutes:02d}:{seconds:02d}"
 
     def _sample_count(self) -> int:
         if self._capture_controller is not None:

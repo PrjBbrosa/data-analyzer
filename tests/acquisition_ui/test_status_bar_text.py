@@ -6,6 +6,7 @@ import time
 
 from PyQt5.QtGui import QFontMetrics
 
+from can_logger.p0.a2l_probe import MeasurementSummary
 from mf4_analyzer.acquisition_capture.backends import FakeRecorderBackend
 from mf4_analyzer.acquisition_capture.health import (
     CanHealth,
@@ -57,6 +58,20 @@ def _connect(window: CockpitMainWindow) -> None:
     )
 
 
+def _pool(n: int) -> tuple[MeasurementSummary, ...]:
+    return tuple(
+        MeasurementSummary(
+            name=f"Sig_{i:02d}",
+            address=0x40000000 + i * 4,
+            datatype="UWORD",
+            unit="",
+            conversion="",
+            available_events=("event_10ms",),
+        )
+        for i in range(n)
+    )
+
+
 def test_disconnected_status_bar_text(qapp):
     window = CockpitMainWindow()
     try:
@@ -69,7 +84,18 @@ def test_connected_idle_status_bar_text(qapp):
     window = CockpitMainWindow()
     try:
         _connect(window)
-        assert window.statusBar().currentMessage() == "实时流 · 0 evt/s"
+        assert window.statusBar().currentMessage() == "已连接 · 已选 0 · 实时显示 0"
+    finally:
+        window.close()
+
+
+def test_idle_status_tracks_selection_and_effective_pins(qapp):
+    window = CockpitMainWindow(initial_pool=_pool(6), allow_fake_backend=True)
+    try:
+        _connect(window)
+        for i in range(6):
+            window.left_pane._set_measurement_selected(f"Sig_{i:02d}", True)
+        assert window.statusBar().currentMessage() == "已连接 · 已选 6 · 实时显示 5"
     finally:
         window.close()
 
@@ -83,7 +109,7 @@ def test_recording_status_bar_text(qapp):
         _connect(window)
         window.state_machine.request_start_recording()
         assert window.statusBar().currentMessage() == (
-            "00:00 · 剩余 ∞ · 0 样本 · 缓冲中 · 0 样本/s"
+            "录制中 · 00:00 · 磁盘剩 ∞ · 0 样本 · 缓冲中 · 0 样本/s"
         )
     finally:
         window.close()
@@ -107,6 +133,8 @@ def test_recording_facts_degrade_by_priority_no_partial(qapp):
         window.state_machine.request_start_recording()
         full = window._recording_fact_parts(0)  # 0 == no budget -> all five
         assert len(full) == 5
+        assert full[0].startswith("录制中 · ")
+        assert full[1].startswith("磁盘剩 ")
 
         fm = QFontMetrics(window.statusBar().font())
         w3 = fm.horizontalAdvance(" · ".join(full[:3]))
