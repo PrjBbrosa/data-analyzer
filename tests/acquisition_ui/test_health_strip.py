@@ -36,6 +36,7 @@ from mf4_analyzer.acquisition_ui.widgets.health_popover import HealthPopover
 from mf4_analyzer.acquisition_ui.widgets.health_strip import (
     HealthChip,
     HealthStrip,
+    PREFLIGHT_NOTE,
     PreflightPill,
 )
 from mf4_analyzer.acquisition_ui.widgets.right_panel import IdlePreflightPage, RightPanel
@@ -555,6 +556,8 @@ def test_preflight_pill_click_opens_aggregate_popover(qtbot):
     assert strip.active_chip() == PreflightPill.NAME
     assert pop.row_count() == 5
     assert pop.title_text() == PreflightPill.NAME
+    assert pop.note_text() == PREFLIGHT_NOTE
+    assert not pop.note_label.isHidden()
     # Preflight anchor is NOT one of the five health chips.
     assert PreflightPill.NAME not in strip.CHIP_NAMES
 
@@ -566,6 +569,18 @@ def test_preflight_pill_click_toggles_closed(qtbot):
     strip.preflight_pill.clicked.emit()
     assert strip.active_chip() is None
     assert not strip.detail_popover.isVisible()
+
+
+def test_switching_preflight_to_chip_clears_trust_note(qtbot):
+    strip = _idle_strip(qtbot)
+    strip.preflight_pill.clicked.emit()
+    pop = strip.detail_popover
+    assert pop is not None and pop.note_text() == PREFLIGHT_NOTE
+
+    strip.chip("CAN").clicked.emit("CAN")
+    assert strip.active_chip() == "CAN"
+    assert pop.note_text() == ""
+    assert pop.note_label.isHidden()
 
 
 def test_preflight_popover_survives_snapshot_refresh(qtbot):

@@ -43,6 +43,7 @@ _POPOVER_MARGIN = 6
 _MARGIN_V = 21
 _TITLE_H = 24
 _ROW_H = 22
+_NOTE_H = 24
 
 # Row LED colours per health level — kept local (not imported from
 # health_strip) so this module has no back-dependency on the strip that
@@ -63,6 +64,7 @@ class HealthPopover(QFrame):
     - :meth:`set_title` — the anchor chip / pill name shown bold on top.
     - :meth:`set_rows` — ``[(key, value, level), ...]`` where ``level`` is
       one of ``"green" | "yellow" | "red" | "off"``.
+    - :meth:`set_note` — optional muted note below the detail rows.
     - :meth:`show_at` — position the popover just below an anchor widget,
       clamped inside the host window, then show + raise.
     - :meth:`dismiss` — hide the popover.
@@ -93,6 +95,13 @@ class HealthPopover(QFrame):
         self._grid.setColumnStretch(1, 0)
         self._grid.setColumnStretch(2, 1)
         outer.addLayout(self._grid)
+
+        self._note = QLabel("", self)
+        self._note.setObjectName("healthPopoverNote")
+        self._note.setWordWrap(True)
+        self._note.setStyleSheet("color: #64748b;")
+        self._note.setVisible(False)
+        outer.addWidget(self._note)
 
         self._row_count = 0
         self._anchor: QWidget | None = None
@@ -129,6 +138,14 @@ class HealthPopover(QFrame):
         self._apply_min_size()
         self._resize_to_content()
 
+    def set_note(self, text: str | None) -> None:
+        """Set or clear the optional trust/context note below the rows."""
+        note = text or ""
+        self._note.setText(note)
+        self._note.setVisible(bool(note))
+        self._apply_min_size()
+        self._resize_to_content()
+
     def _apply_min_size(self) -> None:
         """A deterministic floor so the popover never collapses/overlaps.
 
@@ -141,6 +158,8 @@ class HealthPopover(QFrame):
         n = self._row_count
         min_w = 180
         min_h = _MARGIN_V + _TITLE_H + n * _ROW_H
+        if not self._note.isHidden():
+            min_h += _NOTE_H + 7
         self.setMinimumSize(min_w, min_h)
 
     def _resize_to_content(self) -> None:
@@ -158,6 +177,14 @@ class HealthPopover(QFrame):
 
     def row_count(self) -> int:
         return self._row_count
+
+    @property
+    def note_label(self) -> QLabel:
+        """Optional note label, exposed for lifecycle/render tests."""
+        return self._note
+
+    def note_text(self) -> str:
+        return self._note.text()
 
     def _clear_grid(self) -> None:
         while self._grid.count():

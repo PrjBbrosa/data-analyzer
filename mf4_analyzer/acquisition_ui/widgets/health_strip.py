@@ -51,6 +51,9 @@ from mf4_analyzer.acquisition_ui.widgets.health_popover import HealthPopover
 # chip stays ``off`` — handled in :meth:`_tooltip_for`.
 _NO_EVIDENCE = "no evidence yet"
 
+# Spec B2: estimates remain advisory; recording facts are the authority.
+PREFLIGHT_NOTE = "数字仅供参考·实际录制按真实样本累计"
+
 
 # Visual color per chip level. Kept on the widget rather than QSS so
 # the chip background is driven by the dataclass-derived level, not a
@@ -524,6 +527,7 @@ class HealthStrip(QFrame):
         if self._anchor_name == PreflightPill.NAME and self._popover_open():
             if self._preflight_pill.is_openable():
                 self._popover.set_rows(self._preflight_pill.current_rows())
+                self._popover.set_note(PREFLIGHT_NOTE)
                 self._popover.show_at(self._preflight_pill)
             else:
                 self._dismiss_popover()
@@ -541,6 +545,7 @@ class HealthStrip(QFrame):
             self._preflight_pill,
             PreflightPill.NAME,
             self._preflight_pill.current_rows(),
+            note=PREFLIGHT_NOTE,
         )
 
     def _ensure_popover(self) -> HealthPopover:
@@ -573,6 +578,8 @@ class HealthStrip(QFrame):
         anchor: QWidget | None,
         name: str,
         rows: list[tuple[str, str, HealthLevel]],
+        *,
+        note: str | None = None,
     ) -> None:
         """Open (or switch) the single popover at ``anchor`` with ``rows``.
 
@@ -581,6 +588,7 @@ class HealthStrip(QFrame):
         popover = self._ensure_popover()
         popover.set_title(name)
         popover.set_rows(rows)
+        popover.set_note(note)
         popover.show_at(anchor)
         self._anchor_name = name
         self._anchor_widget = anchor
