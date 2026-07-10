@@ -200,6 +200,9 @@ class EscalationBar(QWidget):
     #: Emitted when the operator acknowledges (collapses) the banner.
     acknowledged = pyqtSignal()
 
+    #: Emitted when the overflow action should reveal the worst issue's chip.
+    details_requested = pyqtSignal(str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("escalationBar")
@@ -224,9 +227,17 @@ class EscalationBar(QWidget):
         self._ack_btn.setCursor(Qt.PointingHandCursor)
         self._ack_btn.setAutoRaise(True)
         self._ack_btn.clicked.connect(self.acknowledge)
+        self._details_btn = QToolButton(self)
+        self._details_btn.setObjectName("escalationBarDetails")
+        self._details_btn.setText("查看")
+        self._details_btn.setCursor(Qt.PointingHandCursor)
+        self._details_btn.setAutoRaise(True)
+        self._details_btn.setVisible(False)
+        self._details_btn.clicked.connect(self._request_details)
 
         layout.addWidget(self._dot)
         layout.addWidget(self._message, 1)
+        layout.addWidget(self._details_btn)
         layout.addWidget(self._ack_btn)
 
         self._state = EscalationState("green", ())
@@ -247,6 +258,7 @@ class EscalationBar(QWidget):
             # Recovery: stop, hide, clear the ack latch so the next alarm shows.
             self._collapsed = False
             self._latched_reason = None
+            self._details_btn.setVisible(False)
             self.setVisible(False)
             return
 
@@ -258,6 +270,7 @@ class EscalationBar(QWidget):
 
         self._message.setText(self._compose(state))
         self._apply_level_style(state.level)
+        self._details_btn.setVisible(len(state.issues) > 2)
 
         if self._collapsed:
             self.setVisible(False)
@@ -276,6 +289,7 @@ class EscalationBar(QWidget):
         self._state = EscalationState("green", ())
         self._collapsed = False
         self._latched_reason = None
+        self._details_btn.setVisible(False)
         self.setVisible(False)
 
     # ------------------------------------------------------------------
@@ -292,6 +306,11 @@ class EscalationBar(QWidget):
 
     def message_text(self) -> str:
         return self._message.text()
+
+    @property
+    def details_button(self) -> QToolButton:
+        """Overflow action used to reveal the worst affected chip."""
+        return self._details_btn
 
     # ------------------------------------------------------------------
     # Placement (overlay — never in the body layout)
@@ -320,8 +339,18 @@ class EscalationBar(QWidget):
 
     @staticmethod
     def _compose(state: EscalationState) -> str:
-        """Up to two issue messages, most-severe first, ` · `-joined."""
-        return " · ".join(issue.message for issue in state.top_issues(2))
+        """Two issue messages plus an explicit count for hidden remainder."""
+        visible = state.top_issues(2)
+        parts = [issue.message for issue in visible]
+        remaining = max(0, len(state.issues) - len(visible))
+        if remaining:
+            parts.append(f"另 {remaining} 项")
+        return " · ".join(parts)
+
+    def _request_details(self) -> None:
+        top = self._state.top_issues(1)
+        if top:
+            self.details_requested.emit(top[0].source_chip)
 
     def _apply_level_style(self, level: str) -> None:
         self.setStyleSheet(_BAR_STYLE.get(level, ""))

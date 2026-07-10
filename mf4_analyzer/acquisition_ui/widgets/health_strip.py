@@ -41,6 +41,7 @@ from mf4_analyzer.acquisition_ui.preflight_view_data import (
 from mf4_analyzer.acquisition_ui.widgets.escalation_bar import (
     EscalationState,
     _SEVERITY,
+    effective_chip_levels,
 )
 from mf4_analyzer.acquisition_ui.widgets.health_popover import HealthPopover
 
@@ -328,12 +329,15 @@ class HealthStrip(QFrame):
         self._summary = QLabel("--", self)
         self._summary.setObjectName("healthSummary")
         self._summary.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._summary.setVisible(False)
         layout.addWidget(self._summary)
         self._last_levels: dict[str, HealthLevel] = {n: "off" for n in self.CHIP_NAMES}
+        self._base_levels: dict[str, HealthLevel] = dict(self._last_levels)
         self._last_snapshot: HealthSnapshot | None = None
         # Escalation ladder (Spec §B6): latch the current red reason so the
         # entry pulse fires only on entry / reason change, not every poll.
         self._esc_reason: str | None = None
+        self._escalation_state = EscalationState("green", ())
 
         # Single-popover state (Spec §B1): at most one popover is open;
         # ``_anchor_name`` names the widget it is currently anchored to
@@ -350,23 +354,22 @@ class HealthStrip(QFrame):
     def apply_snapshot(self, snapshot: HealthSnapshot) -> None:
         """Repaint chips for the given snapshot and emit ``levels_changed``."""
         self._last_snapshot = snapshot
-        new_levels: dict[str, HealthLevel] = snapshot.levels()
+        self._base_levels = snapshot.levels()
+        new_levels = self._effective_levels()
         for name in self.CHIP_NAMES:
             level = new_levels.get(name, "off")
             chip = self._chips[name]
             chip.set_level(level)
             chip.set_value(self._value_for(name, snapshot, level))
             chip.set_tooltip(self._tooltip_for(name, snapshot))
-        self._summary.setText(self._summary_for(new_levels))
+        self._set_summary(self._summary_for(new_levels, self._escalation_state))
         # Keep an open chip popover live with the freshest snapshot fields.
         if (
             self._popover_open()
             and self._anchor_name in self.CHIP_NAMES
         ):
             self._popover.set_rows(self.detail_for(self._anchor_name, snapshot))
-        if new_levels != self._last_levels:
-            self._last_levels = dict(new_levels)
-            self.levels_changed.emit(dict(new_levels))
+        self._set_current_levels(new_levels)
 
     def chip(self, name: str) -> HealthChip:
         """Return the chip widget for a given name (test introspection)."""
@@ -394,24 +397,24 @@ class HealthStrip(QFrame):
         drives both the banner and the strip. Chips are only ever *escalated*
         (worst wins); the base color comes from :meth:`apply_snapshot`.
         """
-        # Escalate affected chips (disk/ring/dropped/last-rx all → REC).
-        for issue in state.issues:
-            chip = self._chips.get(issue.source_chip)
-            if chip is None:
-                continue
-            current = chip.property("level") or "off"
-            if _SEVERITY.get(issue.level, 0) > _SEVERITY.get(current, 0):
-                chip.set_level(issue.level)
+        self._escalation_state = state
+        levels = self._effective_levels()
+        for name in self.CHIP_NAMES:
+            level = levels.get(name, "off")
+            chip = self._chips[name]
+            chip.set_level(level)
+            if self._last_snapshot is not None:
+                chip.set_value(self._value_for(name, self._last_snapshot, level))
+        self._set_current_levels(levels)
+        self._set_summary(self._summary_for(levels, state))
 
         if state.level == "green":
-            # Recovery: revert the summary to the base counts, stop pulsing.
-            self._summary.setText(self._summary_for(self._last_levels))
+            # Recovery restores the base levels rendered above, hides a clean
+            # summary, and arms the next red entry pulse.
             for chip in self._chips.values():
                 chip.stop_pulse()
             self._esc_reason = None
             return
-
-        self._summary.setText(self._escalation_summary(state))
 
         reason = state.reason_key
         if state.level == "red" and reason != self._esc_reason:
@@ -425,18 +428,50 @@ class HealthStrip(QFrame):
                     chip.pulse()
         self._esc_reason = reason
 
+    def _effective_levels(self) -> dict[str, HealthLevel]:
+        """Base chip levels upgraded by the current escalation state."""
+        if self._last_snapshot is not None:
+            return effective_chip_levels(self._last_snapshot, self._escalation_state)
+        levels = dict(self._base_levels)
+        for issue in self._escalation_state.issues:
+            current = levels.get(issue.source_chip, "off")
+            if _SEVERITY.get(issue.level, 0) > _SEVERITY.get(current, 0):
+                levels[issue.source_chip] = issue.level
+        return levels
+
+    def _set_current_levels(self, levels: Mapping[str, HealthLevel]) -> None:
+        """Publish effective levels only when they actually changed."""
+        normalized = {name: levels.get(name, "off") for name in self.CHIP_NAMES}
+        if normalized != self._last_levels:
+            self._last_levels = normalized
+            self.levels_changed.emit(dict(normalized))
+
+    def _set_summary(self, text: str) -> None:
+        self._summary.setText(text)
+        self._summary.setVisible(bool(text))
+
     @staticmethod
-    def _escalation_summary(state: EscalationState) -> str:
-        """Non-green summary: worst issue + count of same-tier issues."""
-        top = state.top_issues(1)
-        if not top:
-            return ""
-        worst = top[0]
-        same = sum(1 for i in state.issues if i.level == worst.level)
-        label = "严重" if worst.level == "red" else "注意"
-        if same > 1:
-            return f"{label} · {worst.message}（+{same - 1}）"
-        return f"{label} · {worst.message}"
+    def _summary_for(
+        levels: Mapping[str, HealthLevel], state: EscalationState
+    ) -> str:
+        """Chinese summary: quiet when green, issue-counted when escalated."""
+        if state.level in ("yellow", "red"):
+            count = sum(1 for issue in state.issues if issue.level == state.level)
+            if count:
+                label = "严重" if state.level == "red" else "需注意"
+                return f"{count} 项{label}"
+
+        counts = {
+            level: sum(1 for value in levels.values() if value == level)
+            for level in ("red", "yellow", "off")
+        }
+        if counts["red"]:
+            return f"{counts['red']} 项严重"
+        if counts["yellow"]:
+            return f"{counts['yellow']} 项需注意"
+        if counts["off"]:
+            return f"{counts['off']} 项无证据"
+        return ""
 
     # ------------------------------------------------------------------
     # Detail popover (Spec §B1)
@@ -521,6 +556,13 @@ class HealthStrip(QFrame):
             return
         rows = self.detail_for(name, self._last_snapshot)
         self.open_popover(self._chips.get(name), name, rows)
+
+    def open_chip_detail(self, name: str) -> None:
+        """Open one chip's detail without applying the click-toggle rule."""
+        anchor = self._chips.get(name)
+        if anchor is None:
+            return
+        self.open_popover(anchor, name, self.detail_for(name, self._last_snapshot))
 
     def open_popover(
         self,
@@ -712,21 +754,6 @@ class HealthStrip(QFrame):
                 return "warn"
             return "--"
         return "--"
-
-    @staticmethod
-    def _summary_for(levels: Mapping[str, HealthLevel]) -> str:
-        ordered_levels: tuple[HealthLevel, ...] = ("red", "yellow", "off", "green")
-        counts = {
-            level: sum(1 for value in levels.values() if value == level)
-            for level in ordered_levels
-        }
-        if counts["red"]:
-            return f"{counts['red']} red"
-        if counts["yellow"]:
-            return f"{counts['yellow']} yellow"
-        if counts["off"]:
-            return f"{counts['off']} off"
-        return f"{counts['green']}/{len(levels)} green"
 
     # ------------------------------------------------------------------
     # Tooltip wiring

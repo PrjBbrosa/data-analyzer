@@ -361,6 +361,9 @@ class CockpitMainWindow(
         # pulse via the wired ``applied`` signal.
         self._escalation_bar = EscalationBar(self)
         self._escalation_bar.applied.connect(self._health_strip.apply_escalation)
+        self._escalation_bar.details_requested.connect(
+            self._health_strip.open_chip_detail
+        )
         self._escalation_bar.reanchor(self._status)
 
         self._update_backend_badge()

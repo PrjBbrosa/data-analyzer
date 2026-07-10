@@ -83,7 +83,11 @@ def make_escalation_widgets(qtbot):
     bar = EscalationBar()
     qtbot.addWidget(strip)
     qtbot.addWidget(bar)
+    strip.resize(760, 42)
+    strip.show()
+    strip.apply_snapshot(make_snapshot())
     bar.applied.connect(strip.apply_escalation)
+    bar.details_requested.connect(strip.open_chip_detail)
     return strip, bar
 
 
@@ -153,9 +157,10 @@ def test_ack_collapses_banner_but_recovery_rearms_it(qtbot):
     strip, bar = make_escalation_widgets(qtbot)
     bar.apply(red_state("disk"))
     bar.acknowledge()
-    assert bar.is_collapsed and strip.summary_text()
+    assert bar.is_collapsed and strip.summary_text() == "1 项严重"
     bar.apply(green_state())
     assert bar.isHidden()
+    assert strip._summary.isHidden()
     bar.apply(red_state("disk"))
     assert not bar.is_collapsed
 
@@ -192,4 +197,28 @@ def test_green_recovery_hides_bar_and_stops_pulse(qtbot):
     assert not bar.isHidden()
     bar.apply(green_state())
     assert bar.isHidden()
+    assert strip._summary.isHidden()
     assert rec_chip.pulse_animation.state() == rec_chip.pulse_animation.Stopped
+
+
+def test_yellow_overflow_is_counted_and_details_open_worst_chip(qtbot):
+    """B6: third+ issue remains discoverable through ``另 N 项 · 查看``."""
+    strip, bar = make_escalation_widgets(qtbot)
+    state = escalation_state(
+        make_snapshot(dropped=3, ring=60.0, last_rx=1.2),
+        disk_free_bytes=10 * GB,
+    )
+    assert len(state.issues) == 3
+
+    bar.apply(state)
+
+    assert state.level == "yellow"
+    assert strip.summary_text() == "3 项需注意"
+    assert strip.chip("REC").property("level") == "yellow"
+    assert "另 1 项" in bar.message_text()
+    assert bar.details_button.isVisible()
+
+    bar.details_button.click()
+    assert strip.active_chip() == "REC"
+    assert strip.detail_popover is not None
+    assert strip.detail_popover.isVisible()

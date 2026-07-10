@@ -92,7 +92,7 @@ def test_strip_all_green(qapp):
         assert _chip_value(strip, name).strip()
     summary = strip.findChild(QLabel, "healthSummary")
     assert summary is not None
-    assert summary.text().strip()
+    assert summary.isHidden()
 
 
 def test_strip_chip_values_come_from_snapshot_fields(qapp):
@@ -196,6 +196,15 @@ def test_strip_off_chip_when_no_evidence(qapp):
     strip.apply_snapshot(snap)
     assert strip.current_levels()["CAN"] == "off"
     assert "no evidence yet" in strip.chip("CAN").toolTip()
+    assert strip.summary_text() == "1 项无证据"
+    assert not strip._summary.isHidden()
+
+
+def test_strip_base_yellow_summary_is_chinese_attention_count(qapp):
+    strip = HealthStrip()
+    strip.apply_snapshot(_snap(can=CanHealth(bus_load_pct=70.0)))
+    assert strip.summary_text() == "1 项需注意"
+    assert not strip._summary.isHidden()
 
 
 def test_fresh_cockpit_shows_all_chips_off(qtbot):
@@ -204,7 +213,7 @@ def test_fresh_cockpit_shows_all_chips_off(qtbot):
     window._poll_health()
     levels = window.health_strip.current_levels()
     assert set(levels.values()) == {"off"}
-    assert window.health_strip._summary.text() == "5 off"
+    assert window.health_strip._summary.text() == "5 项无证据"
     window.close()
 
 
