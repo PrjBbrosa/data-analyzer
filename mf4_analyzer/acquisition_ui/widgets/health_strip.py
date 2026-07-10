@@ -491,6 +491,10 @@ class HealthStrip(QFrame):
         """Name of the chip/pill the popover is anchored to, or ``None``."""
         return self._anchor_name
 
+    def dismiss_popover(self) -> None:
+        """Close the one detail surface and remove its application filter."""
+        self._dismiss_popover()
+
     # ------------------------------------------------------------------
     # Preflight pill binding (Spec §B2)
     # ------------------------------------------------------------------

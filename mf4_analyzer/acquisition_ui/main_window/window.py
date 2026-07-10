@@ -379,6 +379,11 @@ class CockpitMainWindow(
             logger.warning("could not load acquisition settings: %s", exc)
 
     def _on_mode_tab_changed(self, index: int) -> None:
+        # B1 lifecycle rule: programmatic and keyboard page changes are not
+        # guaranteed to dispatch an outside mouse press, so close the floating
+        # health detail explicitly before the mode changes underneath it.
+        if hasattr(self, "_health_strip"):
+            self._health_strip.dismiss_popover()
         self._sync_mode_segment(index if index >= 0 else 0)
 
     # ------------------------------------------------------------------

@@ -341,6 +341,32 @@ def test_window_deactivate_dismisses(qtbot):
     assert strip.active_chip() is None
 
 
+def test_mode_page_switch_dismisses_health_popover(qtbot):
+    """B1: programmatic/keyboard mode switches do not rely on outside-click."""
+    window = CockpitMainWindow()
+    qtbot.addWidget(window)
+    window.resize(1280, 720)
+    window.show()
+    qtbot.waitExposed(window)
+
+    strip = window.health_strip
+    strip.chip("HW").clicked.emit("HW")
+    assert strip.detail_popover is not None and strip.detail_popover.isVisible()
+    assert strip._filter_installed
+
+    window._mode_tabs.setCurrentIndex(1)  # Replay
+    assert strip.active_chip() is None
+    assert not strip.detail_popover.isVisible()
+    assert not strip._filter_installed
+
+    strip.chip("CAN").clicked.emit("CAN")
+    assert strip.active_chip() == "CAN"
+    window._mode_tabs.setCurrentIndex(2)  # History
+    assert strip.active_chip() is None
+    assert not strip.detail_popover.isVisible()
+    window.close()
+
+
 def test_resize_reanchors_popover(qtbot):
     strip = _shown_strip(qtbot)
     strip.chip("HW").clicked.emit("HW")
