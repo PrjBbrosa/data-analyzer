@@ -329,7 +329,11 @@ class SettingsMixin:
 
     def _recording_size_text(self) -> str:
         size_mb = self._recording_file_size_mb()
-        return f"{size_mb:.1f} MB" if size_mb > 0 else "缓冲中"
+        # Keep this slot a size from the first recording frame onward.  The
+        # writer may not have flushed yet, but ``0.0 MB`` is an honest and
+        # stable fact; a state word here would make the five-field stream
+        # change meaning precisely when users need to scan it fastest.
+        return f"{max(0.0, size_mb):.1f} MB"
 
     def _recording_write_rate_per_s(self) -> float:
         """Latest write rate in SAMPLES/s (from the REC health snapshot)."""

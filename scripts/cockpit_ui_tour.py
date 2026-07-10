@@ -209,6 +209,10 @@ def main() -> int:
             len(leds) == 3 and keys == {"a2l", "hw", "selection"},
             f"B5 checklist has 3 structured rows ({sorted(keys)})",
         )
+        check(
+            strip.summary_text() == "5 项无证据",
+            f"B6 disconnected summary is honest ({strip.summary_text()!r})",
+        )
         shot(window, "00-disconnected")
 
     @at(400, "select-bottom")
@@ -241,16 +245,34 @@ def main() -> int:
     @at(3000, "idle-check")
     def s_idle():
         from mf4_analyzer.acquisition_ui.state import CockpitState
+        from mf4_analyzer.acquisition_ui.widgets.live_cards import LiveSignalCard
 
         check(
             window.state_machine.state == CockpitState.CONNECTED_IDLE,
             "connected idle reached",
         )
+        # The fake backend's timer may be queued behind first-show paint on a
+        # slow/offscreen host. Poll once synchronously so this validates the
+        # ingest path rather than a fixed wall-clock race.
+        window._poll_live()
         cards = window._center.cards
         check(
             bool(cards) and all(c._spark.sample_count > 0 for c in cards.values()),
             "F1 idle card buffers non-empty",
         )
+        # A3: a fresh recording window has no arrival evidence until its first
+        # new sample; neither the last value nor old stats may survive reset.
+        probe_clock = [0.0]
+        probe = LiveSignalCard("A3-tour", clock=lambda: probe_clock[0])
+        probe.push_sample(1.0, 12.0)
+        probe.set_recording(True, rec_start_ts=1.0)
+        check(
+            probe.sample_state() == "no-data"
+            and probe._value_label.text() == "—"
+            and probe._stats_label.text() == "μ — · σ — · max —",
+            "A3 recording reset clears value, stats, and arrival state",
+        )
+        probe.deleteLater()
         shot(window, "02-idle")
 
     @at(3050, "idle-preflight-check")
@@ -293,7 +315,10 @@ def main() -> int:
         # chips and the preflight pill. Exercise the close matrix: open →
         # same-chip toggle-close → switch chip (single instance) → Esc-close →
         # pill aggregate popover (single instance, 5 rows).
-        from mf4_analyzer.acquisition_ui.widgets.health_strip import PreflightPill
+        from mf4_analyzer.acquisition_ui.widgets.health_strip import (
+            PREFLIGHT_NOTE,
+            PreflightPill,
+        )
 
         strip = window.health_strip
         hw_chip = strip.chip("HW")
@@ -352,9 +377,26 @@ def main() -> int:
             strip.detail_popover.row_count() == 5,
             f"B2 preflight popover has 5 rows ({strip.detail_popover.row_count()})",
         )
+        check(
+            strip.detail_popover.note_text() == PREFLIGHT_NOTE
+            and not strip.detail_popover.note_label.isHidden(),
+            "B2 preflight note states that displayed figures are estimates",
+        )
         shot(window, "03e-preflight-popover")
         QTest.mouseClick(pill, Qt.LeftButton)
         check(strip.active_chip() is None, "B2 pill toggle closes popover")
+
+        # B1: mode changes also close a floating detail, including programmatic
+        # tab changes that bypass the normal outside-click event filter.
+        QTest.mouseClick(hw_chip, Qt.LeftButton)
+        window._mode_tabs.setCurrentIndex(1)
+        check(
+            strip.active_chip() is None
+            and not strip.detail_popover.isVisible()
+            and not strip._filter_installed,
+            "B1 mode switch dismisses health popover and event filter",
+        )
+        window._mode_tabs.setCurrentIndex(0)
 
     @at(5000, "focus-card")
     def s_focus_card():
@@ -411,11 +453,16 @@ def main() -> int:
         check(window.state_machine.state == CockpitState.RECORDING, "recording reached")
         check(window.main_button.text() == "■ Stop && 复盘", "F4 && escaped")
         msg = window._status.currentMessage()
-        # B-3: the status bar streams neutral Chinese FACTS (时长/磁盘剩余
+        # B-3: the status bar streams neutral Chinese FACTS (时长/磁盘剩
         # 时长/样本/大小/写入速率). Dropped/ring anomalies moved to the
         # escalation ladder + REC chip, so "丢帧" is no longer here.
         check(
-            "样本" in msg and "剩余" in msg and "RECORDING" not in msg
+            "录制中" in msg
+            and "磁盘剩" in msg
+            and "样本" in msg
+            and "MB" in msg
+            and "样本/s" in msg
+            and "RECORDING" not in msg
             and "丢帧" not in msg,
             f"G2 状态栏中文 (实测 '{msg}')",
         )
@@ -461,9 +508,10 @@ def main() -> int:
             g = window._center.geometry()
             check(g == base_geo, f"B3 body zero-shift @{tag} (base={base_geo}, {tag}={g})")
 
-        # yellow entry (dropped=3 + ring=68% is a known-yellow combo).
+        # yellow entry: three issues verify the compact overflow detail path.
         yellow = escalation_state(
-            _synth_snapshot(dropped=3, ring=68.0), disk_free_bytes=10 * gb
+            _synth_snapshot(dropped=3, ring=60.0, last_rx=1.2),
+            disk_free_bytes=10 * gb,
         )
         bar.apply(yellow)
         check(
@@ -474,7 +522,20 @@ def main() -> int:
             rec_chip.property("level") == "yellow",
             f"B6 REC chip escalates to yellow ({rec_chip.property('level')})",
         )
-        check(bool(strip.summary_text()), "B6 yellow summary non-empty")
+        check(
+            strip.summary_text() == "3 项需注意",
+            f"B6 yellow summary has a count ({strip.summary_text()!r})",
+        )
+        check(
+            "另 1 项" in bar.message_text() and bar.details_button.isVisible(),
+            f"B6 overflow exposes detail ({bar.message_text()!r})",
+        )
+        QTest.mouseClick(bar.details_button, Qt.LeftButton)
+        check(
+            strip.active_chip() == "REC" and strip.detail_popover.isVisible(),
+            "B6 overflow detail opens the worst affected chip",
+        )
+        strip.dismiss_popover()
         geo_pinned("yellow")
         shot(window, "09-esc-yellow")
 
@@ -488,6 +549,10 @@ def main() -> int:
         check(
             rec_chip.property("level") == "red",
             f"B6 REC chip escalates to red ({rec_chip.property('level')})",
+        )
+        check(
+            strip.summary_text() == "1 项严重",
+            f"B6 red summary has a count ({strip.summary_text()!r})",
         )
         check(
             rec_chip.pulse_animation.loopCount() == 3
@@ -504,16 +569,26 @@ def main() -> int:
             bar.is_collapsed and bar.isHidden(),
             "B6 ack collapses the banner",
         )
-        check(bool(strip.summary_text()), "B6 ack keeps the strip summary")
+        check(
+            strip.summary_text() == "1 项严重",
+            f"B6 ack keeps the strip summary ({strip.summary_text()!r})",
+        )
         geo_pinned("ack")
         shot(window, "11-esc-ack")
 
         # green recovery — hide, clear the ack latch, stop pulsing.
         green = escalation_state(_synth_snapshot(), disk_free_bytes=10 * gb)
+        # No base-health warning may remain when escalation clears; otherwise a
+        # green banner would contradict a stale strip summary.
+        strip.apply_snapshot(_synth_snapshot())
         bar.apply(green)
         check(
             bar.isHidden() and not bar.is_collapsed,
             "B6 green recovery hides the banner + clears latch",
+        )
+        check(
+            strip._summary.isHidden(),
+            "B6 all-green recovery hides the summary",
         )
         geo_pinned("recovery")
         shot(window, "12-esc-recovery")

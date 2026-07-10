@@ -109,7 +109,7 @@ def test_recording_status_bar_text(qapp):
         _connect(window)
         window.state_machine.request_start_recording()
         assert window.statusBar().currentMessage() == (
-            "录制中 · 00:00 · 磁盘剩 ∞ · 0 样本 · 缓冲中 · 0 样本/s"
+            "录制中 · 00:00 · 磁盘剩 ∞ · 0 样本 · 0.0 MB · 0 样本/s"
         )
     finally:
         window.close()
