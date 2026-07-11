@@ -114,7 +114,7 @@ class ToolbarMixin:
         # Main stateful button.
         self._main_btn = QPushButton("连接 ECU", self)
         self._main_btn.setProperty("role", "primary")
-        self._main_btn.setFixedHeight(36)
+        self._main_btn.setFixedHeight(32)
         self._main_btn.setMinimumWidth(106)
         self._main_btn.clicked.connect(self._on_main_button)
         layout.addWidget(self._main_btn)
@@ -489,6 +489,9 @@ class ToolbarMixin:
         self._left_pane.selection_changed.connect(self._on_selection_changed)
 
         self._center = LiveCardGrid(splitter)
+        # Cockpit keeps the live card flow in place while focusing one card;
+        # Replay intentionally retains LiveCardGrid's isolated default.
+        self._center.set_focus_presentation("inplace")
 
         # Pin 接线（spec 2026-07-08 §G6b）。ReplayTab 的 grid 不启用。
         self._left_pane.set_pin_state_provider(

@@ -16,6 +16,7 @@ from mf4_analyzer.acquisition_capture.health import (
 )
 from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
 from mf4_analyzer.acquisition_ui.state import HealthyPredicateResult
+from mf4_analyzer.ui_kit import load_stylesheet
 
 
 def _mode_buttons(window: CockpitMainWindow) -> dict[str, QPushButton]:
@@ -81,8 +82,8 @@ def test_toolbar_selectors_and_mode_segment_exist(qapp):
         assert segment.maximumHeight() == 32
         assert rec.minimumHeight() == 32
         assert rec.maximumHeight() == 32
-        assert window.main_button.minimumHeight() == 36
-        assert window.main_button.maximumHeight() == 36
+        assert window.main_button.minimumHeight() == 32
+        assert window.main_button.maximumHeight() == 32
         assert a2l.isEnabled() is True
         assert output.isEnabled() is True
         assert set(_mode_buttons(window)) == {"capture", "replay", "history"}
@@ -104,6 +105,30 @@ def test_toolbar_selectors_and_mode_segment_exist(qapp):
         assert tab_bar.isHidden() or tab_bar.maximumHeight() == 0
     finally:
         window.close()
+
+
+def test_toolbar_rec_and_primary_button_render_aligned(qapp):
+    """REC chip and primary action must share rendered height/baseline."""
+    previous_qss = qapp.styleSheet()
+    load_stylesheet(qapp)
+    window = CockpitMainWindow()
+    try:
+        window.resize(960, 600)
+        window.show()
+        qapp.processEvents()
+
+        rec = window.findChild(QWidget, "cockpitRecIndicator")
+        main = window.main_button
+        assert rec is not None
+
+        rec_geo = rec.geometry()
+        main_geo = main.geometry()
+        assert rec_geo.height() == main_geo.height()
+        assert rec_geo.top() == main_geo.top()
+        assert rec_geo.center().y() == main_geo.center().y()
+    finally:
+        window.close()
+        qapp.setStyleSheet(previous_qss)
 
 
 def test_mode_segment_drives_hidden_tab_widget(qapp):

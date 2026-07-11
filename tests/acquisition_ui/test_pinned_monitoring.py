@@ -114,6 +114,31 @@ def test_body_zero_shift_from_idle_to_recording(qtbot):
     window.close()
 
 
+def test_inplace_focus_survives_recording_and_pin_ops_without_restart(qtbot):
+    """Cockpit-only Focus is display state, never a backend restart trigger."""
+    backend = _SpyBackend()
+    window = _idle_window(qtbot, backend=backend)
+    window.resize(1200, 720)
+    window.show()
+    qtbot.waitExposed(window)
+
+    window._center.focus_channel("Sig_02")
+    qtbot.wait(30)
+    focus_width = window._center.width()
+    starts_before = backend.start_calls
+
+    window.state_machine.request_start_recording()
+    qtbot.wait(20)
+    assert window.state_machine.state == CockpitState.RECORDING
+    assert window._center.focused_channel == "Sig_02"
+    assert window._center.width() == focus_width
+
+    window.pin_channel("Sig_09")
+    assert backend.start_calls == starts_before
+    assert not window._idle_restart_timer.isActive()
+    window.close()
+
+
 def test_capture_splitter_has_two_columns(qtbot):
     """B-4: capture splitter is left + center only (no right health pane)."""
     window = _idle_window(qtbot)

@@ -159,3 +159,20 @@ Actual Windows W1/W2 JSON remains absent and therefore BLOCKED.
   production `--windowed` may set stdout/stderr to `None`. Text output is now
   best-effort, and W2 explicitly validates the default windowed artifact;
   `-Console` is diagnostic only.
+- Default theme: porcelain tray (`#f2f4f7`).
+- Topbar: white rounded surface, 50px.
+- Bottombar: white rounded surface, 40px, still a `QStatusBar`.
+- Vertical spacing: 5px.
+- Main panel radius: 10px.
+- Chart toolbar: flat transparent tool row; no border/radius/card background.
+
+---
+
+## 2026-07-10 Cockpit In-Place Focus Findings
+
+- The approved direction is not a separate Focus page: a selected live card expands within the existing vertical `QScrollArea` stream, while adjacent cards remain visible but de-emphasized.
+- The expanded card must contain exactly one trace. The compact trace is resized/repainted into the expanded plot rect; a second overview trace plus detail trace is forbidden.
+- Laptop-height efficiency is a first-order constraint: the selected card uses at most 80% of the card-stream viewport; the remainder exposes adjacent card context. No dedicated top slot strip or left-side management surface belongs in the Focus view.
+- Current `LiveCardGrid` already has a vertical scroll area, `focus_channel`, a focus shell, and cached cards. The next spec must refine those mechanisms rather than introduce a separate TimeDomain view.
+- Current governing `2026-07-10-cockpit-live-preview-first-principles-spec.md` explicitly leaves zoom/cursor/manual-axis Focus mechanics out of scope. This follow-up must preserve that boundary while defining the compact in-place expansion.
+- `liveFocusShell` cannot be globally removed: it remains required for the default isolated Focus used by Replay. Cockpit `inplace` hides it without layout height instead.

@@ -27,10 +27,19 @@ import re
 import time
 from collections import deque
 
-from PyQt5.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 from PyQt5.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -38,6 +47,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QShortcut,
     QVBoxLayout,
     QWidget,
 )
@@ -188,6 +198,12 @@ _SCALE_PADDING_FRACTION = 0.06
 # signal name + current value stay legible (spec §A3 narrow-yield).
 _Y_TICK_GUTTER_PX = 34.0
 _WINDOW_LABEL_GUTTER_PX = 13.0
+
+# Sparkline grid density mirrors TimeDomain's density contract without adding
+# another global chart setting: compact cards stay intentionally sparse, while
+# the focused card earns a denser 10×10 reading grid from its extra viewport.
+_COMPACT_GRID_DIVISIONS = 4
+_FOCUS_GRID_DIVISIONS = 10
 
 # High-density envelope stroke-count cap (spec §A6 perf gate). The live
 # paint frame is CPU-raster / stroke-count bound (lessons
@@ -692,6 +708,7 @@ class Sparkline(QWidget):
         # the ``无样本`` / ``停更 x.xs`` hints (arrival-clock derived, set by
         # the owning card — the trace x axis still uses STREAM time).
         self._show_y_ticks = True
+        self._grid_divisions = _COMPACT_GRID_DIVISIONS
         self._recording_label = False
         self._sample_state = "no-data"
         self._stale_age: float | None = None
@@ -722,6 +739,17 @@ class Sparkline(QWidget):
 
     def y_ticks_visible(self) -> bool:
         return self._show_y_ticks
+
+    def set_grid_divisions(self, divisions: int) -> None:
+        """Set the visual X/Y grid division target without changing data scale."""
+        divisions = max(2, int(divisions))
+        if divisions != self._grid_divisions:
+            self._grid_divisions = divisions
+            self.update()
+
+    def grid_divisions(self) -> int:
+        """Return the current visual grid division target for structural tests."""
+        return self._grid_divisions
 
     def set_recording_label(self, recording: bool) -> None:
         """Pick the honest window label (``最近 30s`` vs ``…（录制中）``)."""
@@ -804,12 +832,14 @@ class Sparkline(QWidget):
         # Faint reference grid, now scoped to the plot rect so it aligns
         # with the trace instead of the full widget.
         painter.setPen(QPen(QColor("#e5e7eb"), 0.8))
-        for fraction in (0.25, 0.5, 0.75):
+        for division in range(1, self._grid_divisions):
+            fraction = division / self._grid_divisions
             y = plot_h * fraction
             painter.drawLine(
                 QPointF(left_gutter, y), QPointF(left_gutter + plot_w, y)
             )
-        for fraction in (0.25, 0.5, 0.75):
+        for division in range(1, self._grid_divisions):
+            fraction = division / self._grid_divisions
             x = left_gutter + plot_w * fraction
             painter.drawLine(QPointF(x, 0.0), QPointF(x, plot_h))
 
@@ -1063,6 +1093,9 @@ class LiveSignalCard(QFrame):
     """
 
     activated = pyqtSignal(str)
+    focus_previous_requested = pyqtSignal()
+    focus_next_requested = pyqtSignal()
+    focus_collapse_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -1082,6 +1115,7 @@ class LiveSignalCard(QFrame):
         self._trace_color = _trace_color_for_index(card_index)
         self.setProperty("traceColor", self._trace_color.name())
         self._recording = False
+        self._focus_state = "normal"
         self._rec_start_ts: float | None = None
         self._stats_full_text = "μ — · σ — · max —"
         # A-4: monotonic ARRIVAL clock (injectable so tests never sleep).
@@ -1152,6 +1186,30 @@ class LiveSignalCard(QFrame):
         self._value_label.setMinimumWidth(72)
         self._value_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         header.addWidget(self._value_label)
+
+        # In-place Focus controls share the existing header row. They stay
+        # hidden outside the active card, so the normal card's width contract
+        # (name/current value first) is unchanged.
+        self._focus_previous_btn = QPushButton("上一", self)
+        self._focus_previous_btn.setObjectName("liveFocusPreviousButton")
+        self._focus_previous_btn.setAccessibleName("上一通道")
+        self._focus_previous_btn.setToolTip("上一通道")
+        self._focus_previous_btn.clicked.connect(self.focus_previous_requested)
+        header.addWidget(self._focus_previous_btn)
+
+        self._focus_next_btn = QPushButton("下一", self)
+        self._focus_next_btn.setObjectName("liveFocusNextButton")
+        self._focus_next_btn.setAccessibleName("下一通道")
+        self._focus_next_btn.setToolTip("下一通道")
+        self._focus_next_btn.clicked.connect(self.focus_next_requested)
+        header.addWidget(self._focus_next_btn)
+
+        self._focus_collapse_btn = QPushButton("收起", self)
+        self._focus_collapse_btn.setObjectName("liveFocusCollapseButton")
+        self._focus_collapse_btn.setAccessibleName("收起 Focus")
+        self._focus_collapse_btn.setToolTip("收起")
+        self._focus_collapse_btn.clicked.connect(self.focus_collapse_requested)
+        header.addWidget(self._focus_collapse_btn)
         outer.addLayout(header)
 
         # Spec §A: per-card REC row is removed entirely. State is
@@ -1168,9 +1226,55 @@ class LiveSignalCard(QFrame):
         # Seed the recording-state dynamic property so QSS selectors
         # keyed on ``[recording="true"]`` resolve at first polish.
         self.setProperty("recording", False)
+        self.setProperty("focusState", self._focus_state)
+        self._focus_previous_btn.setVisible(False)
+        self._focus_next_btn.setVisible(False)
+        self._focus_collapse_btn.setVisible(False)
         # Seed the stats tooltip so the visible label stays terse.
         self._stats_label.setToolTip(f"Stats window: {STATS_WINDOW_LABEL_IDLE}")
         self._sync_header_compactness()
+
+    def set_focus_state(self, state: str) -> None:
+        """Set the card-only presentation state used by in-place Focus.
+
+        This intentionally changes neither sample ingest nor the sole
+        ``Sparkline``/buffer. Context opacity is a one-time widget effect,
+        never a per-refresh operation.
+        """
+        if state not in {"normal", "context", "active"}:
+            raise ValueError(f"unsupported focus state: {state}")
+        if self._focus_state == state:
+            return
+
+        self._focus_state = state
+        self.setProperty("focusState", state)
+        if state == "context":
+            effect = QGraphicsOpacityEffect(self)
+            effect.setOpacity(0.45)
+            self.setGraphicsEffect(effect)
+        else:
+            self.setGraphicsEffect(None)
+        active = state == "active"
+        self._spark.set_grid_divisions(
+            _FOCUS_GRID_DIVISIONS if active else _COMPACT_GRID_DIVISIONS
+        )
+        self._focus_previous_btn.setVisible(active)
+        self._focus_next_btn.setVisible(active)
+        self._focus_collapse_btn.setVisible(active)
+        self._sync_header_compactness()
+        style = self.style()
+        style.unpolish(self)
+        style.polish(self)
+        self.update()
+
+    def set_focus_height(self, height: int | None) -> None:
+        """Apply or clear the grid-owned active-card height budget."""
+        if height is None:
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16777215)
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            return
+        self.setFixedHeight(max(0, height))
 
     def set_visual_index(self, card_index: int) -> None:
         self._trace_color = _trace_color_for_index(card_index)
@@ -1253,7 +1357,7 @@ class LiveSignalCard(QFrame):
     def _sync_header_compactness(self) -> None:
         compact = 0 < self.width() < _STATS_COLLAPSE_MIN_CARD_W
         self._stats_label.setText(self._stats_full_text)
-        self._stats_label.setVisible(not compact)
+        self._stats_label.setVisible(not compact and self._focus_state != "active")
         # Same width threshold gates the sparkline's y-tick gutter so a
         # narrow card yields the axis text to the name + current value.
         self._spark.set_show_y_ticks(not compact)
@@ -1378,6 +1482,11 @@ class LiveCardGrid(QWidget):
         self._pinning_enabled = False
         self._all_signals: list[tuple[str, str, str | None]] = []
         self._focused_channel: str | None = None
+        # Replay retains the historic isolated-card presentation. Cockpit
+        # explicitly opts into ``inplace`` in its assembly layer.
+        self._focus_presentation = "isolated"
+        self._inplace_scroll_restore: int | None = None
+        self._focus_geometry_queued = False
         # Outer shell: thin zero-margin QVBoxLayout whose sole child is
         # the scroll area. The cards/placeholder layout lives on an
         # inner host widget inside the scroll viewport so vertical
@@ -1431,6 +1540,9 @@ class LiveCardGrid(QWidget):
         self._layout.addStretch(1)
         self._cards: dict[str, LiveSignalCard] = {}
         self._card_cache: dict[str, LiveSignalCard] = {}
+        self._collapse_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self._collapse_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._collapse_shortcut.activated.connect(self._collapse_if_inplace)
 
     def _build_disconnected_canvas(self) -> QWidget:
         canvas = QWidget(self)
@@ -1567,6 +1679,20 @@ class LiveCardGrid(QWidget):
         for card in self._card_cache.values():
             self._install_card_menu(card)
 
+    def set_focus_presentation(self, presentation: str) -> None:
+        """Choose ``isolated`` (Replay default) or Cockpit ``inplace``."""
+        if presentation not in {"isolated", "inplace"}:
+            raise ValueError(f"unsupported focus presentation: {presentation}")
+        if self._focus_presentation == presentation:
+            return
+        self._focus_presentation = presentation
+        self._inplace_scroll_restore = None
+        self._render_signals()
+
+    def _collapse_if_inplace(self) -> None:
+        if self._focus_presentation == "inplace" and self._focused_channel is not None:
+            self.clear_focus()
+
     def _install_card_menu(self, card: LiveSignalCard) -> None:
         if not self._pinning_enabled or bool(card.property("pinMenuInstalled")):
             return
@@ -1609,13 +1735,21 @@ class LiveCardGrid(QWidget):
         if self._focused_channel not in {
             name for name, _unit, _raster in self._all_signals
         }:
+            if (
+                self._focus_presentation == "inplace"
+                and self._focused_channel is not None
+                and self._inplace_scroll_restore is None
+            ):
+                self._inplace_scroll_restore = self._scroll_area.verticalScrollBar().value()
             self._focused_channel = None
         self._render_signals()
 
     def focus_channel(self, name: str) -> None:
-        """Show one enlarged live card in the center pane."""
+        """Focus a live card using the presentation selected by its host."""
         if name not in {n for n, _unit, _raster in self._all_signals}:
             return
+        if self._focus_presentation == "inplace" and self._focused_channel is None:
+            self._inplace_scroll_restore = self._scroll_area.verticalScrollBar().value()
         self._focused_channel = name
         self._render_signals()
 
@@ -1624,12 +1758,27 @@ class LiveCardGrid(QWidget):
         self._focused_channel = None
         self._render_signals()
 
+    def focus_previous(self) -> None:
+        self._focus_adjacent(-1)
+
+    def focus_next(self) -> None:
+        self._focus_adjacent(1)
+
+    def _focus_adjacent(self, step: int) -> None:
+        if self._focus_presentation != "inplace" or self._focused_channel is None:
+            return
+        names = [name for name, _unit, _raster in self._all_signals]
+        if not names:
+            return
+        current = names.index(self._focused_channel)
+        self.focus_channel(names[(current + step) % len(names)])
+
     @property
     def focused_channel(self) -> str | None:
         return self._focused_channel
 
     def _visible_signals(self) -> list[tuple[str, str, str | None]]:
-        if self._focused_channel is None:
+        if self._focused_channel is None or self._focus_presentation == "inplace":
             return list(self._all_signals)
         return [
             (name, unit, raster)
@@ -1638,6 +1787,15 @@ class LiveCardGrid(QWidget):
         ]
 
     def _sync_focus_bar(self) -> None:
+        if self._focus_presentation == "inplace":
+            # The Replay shell remains constructed for object-name/API
+            # compatibility, but Cockpit must not leave even a stale hidden
+            # widget geometry above its card scroll viewport.
+            self._focus_shell.setMaximumHeight(0)
+            self._focus_label.setText("")
+            self._focus_shell.setVisible(False)
+            return
+        self._focus_shell.setMaximumHeight(16777215)
         if self._focused_channel is None:
             self._focus_label.setText("")
             self._focus_shell.setVisible(False)
@@ -1670,17 +1828,87 @@ class LiveCardGrid(QWidget):
             if card is None:
                 card = LiveSignalCard(name, unit=unit, raster=raster, card_index=idx)
                 card.activated.connect(self.focus_channel)
+                card.focus_previous_requested.connect(self.focus_previous)
+                card.focus_next_requested.connect(self.focus_next)
+                card.focus_collapse_requested.connect(self.clear_focus)
                 self._card_cache[name] = card
             else:
                 card.update_metadata(unit=unit, raster=raster)
                 card.set_visual_index(idx)
             self._cards[name] = card
+            if self._focus_presentation == "inplace" and self._focused_channel is not None:
+                card.set_focus_state("active" if name == self._focused_channel else "context")
+            else:
+                card.set_focus_state("normal")
+                card.set_focus_height(None)
             self._install_card_menu(card)
             self._layout.addWidget(card)
         # Spec §B: at least one card present — drop the trailing
         # stretch so vertical viewport space flows into the cards
         # themselves (Expanding/Expanding) rather than into dead slack
         # at the bottom of the scroll body.
+        self._schedule_inplace_focus_geometry()
+
+    def _schedule_inplace_focus_geometry(self) -> None:
+        """Queue one layout-settled geometry pass; never run from samples."""
+        if self._focus_presentation != "inplace" or self._focus_geometry_queued:
+            return
+        self._focus_geometry_queued = True
+        # Let outer-layout changes (notably removal of the legacy Replay
+        # shell) settle before taking the scroll viewport's height budget.
+        QTimer.singleShot(10, self._apply_inplace_focus_geometry)
+
+    def _apply_inplace_focus_geometry(self) -> None:
+        self._focus_geometry_queued = False
+        if self._focus_presentation != "inplace":
+            return
+        active = self._cards.get(self._focused_channel or "")
+        if active is None:
+            for card in self._cards.values():
+                card.set_focus_height(None)
+            if self._inplace_scroll_restore is not None:
+                self._scroll_area.verticalScrollBar().setValue(self._inplace_scroll_restore)
+                self._inplace_scroll_restore = None
+            return
+
+        viewport_height = self._scroll_area.viewport().height()
+        if viewport_height <= 0:
+            return
+        # The target is exactly 78%; the clamp documents the 80% hard cap
+        # and protects this invariant if the target changes in a later edit.
+        focus_height = min(
+            math.floor(0.78 * viewport_height),
+            math.floor(0.80 * viewport_height),
+        )
+        active.set_focus_height(focus_height)
+        for name, card in self._cards.items():
+            if name != self._focused_channel:
+                card.set_focus_height(None)
+
+        self._layout.invalidate()
+        self._scroll_body.updateGeometry()
+        # Let QScrollArea commit the body's new range before scrolling. This
+        # is a one-shot positioning follow-up, not another geometry pass.
+        QTimer.singleShot(10, self._center_inplace_active)
+
+    def _center_inplace_active(self) -> None:
+        if self._focus_presentation != "inplace":
+            return
+        active = self._cards.get(self._focused_channel or "")
+        if active is None:
+            return
+        viewport_height = self._scroll_area.viewport().height()
+        if viewport_height <= 0:
+            return
+        target_center = active.geometry().center().y()
+        bar = self._scroll_area.verticalScrollBar()
+        centered = target_center - viewport_height // 2
+        bar.setValue(max(bar.minimum(), min(centered, bar.maximum())))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override.
+        super().resizeEvent(event)
+        if self._focused_channel is not None:
+            self._schedule_inplace_focus_geometry()
 
     def push_sample(self, channel: str, timestamp_s: float, value: float) -> None:
         card = self._cards.get(channel) or self._card_cache.get(channel)

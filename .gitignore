@@ -62,3 +62,8 @@ data/snapshots/*.golden.json
 # Local-only signal mappings; example files are tracked.
 configs/signals/vehicles/*.json
 !configs/signals/vehicles/*.example.json
+
+# Local render / tour / review artifacts (screenshots, offscreen probes,
+# codex review dumps) — regenerated on demand, not part of the repo.
+output/
+codex-review-report.html

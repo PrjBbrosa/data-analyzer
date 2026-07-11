@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MF4 Cockpit：5 槽概览与 Focus 查看模型</title>
+  <style>
+    :root {
+      --ink:#162235; --muted:#63748a; --line:#d9e3ef; --shell:#f4f7fb;
+      --panel:#ffffff; --blue:#146fd6; --blue-soft:#eaf4ff; --green:#087a4a;
+      --green-soft:#ecfbf3; --amber:#a96300; --amber-soft:#fff7e8; --nav:#15253a;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--shell); font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    button { font:inherit; }
+    main { width:min(1220px,calc(100% - 40px)); margin:28px auto 56px; }
+    .intro { display:grid; grid-template-columns:minmax(0,1fr) 318px; gap:24px; padding:30px; border:1px solid #cfe0f4; border-top:5px solid var(--blue); border-radius:16px; background:linear-gradient(120deg,#fff 0%,#f5faff 100%); box-shadow:0 12px 32px rgb(22 53 92 / 7%); }
+    h1,h2,h3,p { margin:0; }
+    h1 { max-width:760px; font-size:30px; line-height:1.23; letter-spacing:-.04em; }
+    h2 { font-size:19px; letter-spacing:-.02em; }
+    h3 { font-size:14px; }
+    .eyebrow { margin-bottom:9px; color:var(--blue); font-size:12px; font-weight:800; letter-spacing:.1em; }
+    .lede { max-width:760px; margin-top:13px; color:#42536a; }
+    .rule { display:grid; grid-template-columns:36px 1fr; gap:11px; align-items:start; padding:15px; border-radius:12px; background:#fff; border:1px solid var(--line); }
+    .rule .number { width:36px; height:36px; display:grid; place-items:center; border-radius:50%; color:#fff; background:var(--nav); font-weight:800; }
+    .rule strong { display:block; font-size:15px; }
+    .rule span { display:block; margin-top:4px; color:var(--muted); font-size:13px; }
+    .state-line { display:grid; grid-template-columns:1fr 28px 1fr 28px 1fr; align-items:stretch; margin:22px 0 18px; }
+    .state { min-height:130px; padding:15px 16px; border:1px solid var(--line); background:#fff; }
+    .state:first-child { border-radius:14px 0 0 14px; }
+    .state:last-child { border-radius:0 14px 14px 0; }
+    .state strong { display:block; font-size:16px; }
+    .state small { display:block; margin-top:5px; color:var(--muted); }
+    .state.capture { border-top:4px solid var(--green); background:var(--green-soft); }
+    .state.monitor { border-top:4px solid var(--blue); background:var(--blue-soft); }
+    .state.focus { border-top:4px solid var(--amber); background:var(--amber-soft); }
+    .arrow { display:grid; place-items:center; color:#8aa0bc; font-size:22px; }
+    .key { display:inline-block; margin-top:12px; padding:3px 8px; border-radius:99px; color:#456079; background:#fff; border:1px solid #cbd9e8; font-size:12px; font-weight:700; }
+    .section { margin-top:18px; padding:24px; border:1px solid var(--line); border-radius:16px; background:#fff; box-shadow:0 3px 15px rgb(22 48 82 / 4%); }
+    .section-head { display:flex; justify-content:space-between; gap:16px; align-items:end; margin-bottom:16px; }
+    .section-head p { max-width:620px; color:var(--muted); font-size:13px; }
+    .legend { display:flex; flex-wrap:wrap; gap:7px; font-size:12px; }
+    .legend span { padding:3px 8px; border-radius:99px; border:1px solid var(--line); background:#fff; }
+    .dot { display:inline-block; width:8px; height:8px; margin-right:5px; border-radius:50%; }
+    .cockpit { overflow:hidden; border:1px solid #c6d4e5; border-radius:13px; background:#f8fafc; box-shadow:inset 0 1px #fff; }
+    .topbar { display:flex; align-items:center; min-height:44px; padding:0 14px; color:#dce8f7; background:var(--nav); font-size:13px; }
+    .topbar b { color:#fff; }
+    .topbar .right { margin-left:auto; color:#a9c7e7; }
+    .app { min-height:430px; }
+    .content { padding:15px; min-width:0; }
+    .summary { display:flex; justify-content:space-between; gap:10px; align-items:center; margin-bottom:11px; color:#50647c; font-size:12px; }
+    .summary strong { color:#172b43; }
+    .focus-hint { padding:4px 8px; border:1px solid #e5c47e; border-radius:99px; color:#875206; background:#fff8e8; font-size:11px; font-weight:700; }
+    .card-stream { height:350px; overflow-y:auto; padding:10px 12px; border:1px solid #d0ddea; border-radius:10px; background:linear-gradient(180deg,#edf4fa 0%,#f8fafc 12%,#f8fafc 88%,#edf4fa 100%); scroll-behavior:smooth; }
+    .cards { display:grid; gap:7px; padding:20px 0; }
+    .card { min-height:76px; padding:10px 12px; border:1px solid #ccd9e7; border-left:4px solid #1a76d2; border-radius:8px; background:#fff; cursor:pointer; outline:none; position:relative; }
+    .card:focus-visible { box-shadow:0 0 0 3px rgb(20 111 214 / 28%); }
+    .card-top { display:flex; align-items:center; gap:8px; }
+    .trace { height:27px; margin:8px 0 3px; background:linear-gradient(180deg,transparent 47%,#e3eaf2 48%,#e3eaf2 52%,transparent 53%); position:relative; overflow:hidden; }
+    .trace svg { position:absolute; inset:0; width:100%; height:100%; }
+    .card label { color:#6c8198; font-size:10px; }
+    .card b { font-size:13px; }
+    .card .value { margin-left:auto; color:#1c314a; font-size:14px; }
+    .cards.has-focus .card:not(.focused) { opacity:.48; filter:saturate(.62); transform:scale(.985); }
+    .cards.has-focus .card:not(.focused)::after { content:""; position:absolute; inset:0; border-radius:7px; background:rgb(242 247 252 / 34%); pointer-events:none; }
+    .cards.has-focus .card.focused { height:260px; min-height:260px; max-height:260px; overflow:hidden; border-color:#e5c47e; border-left-color:#b56a00; background:#fffaf0; box-shadow:0 10px 24px rgb(132 82 12 / 13%); cursor:default; }
+    .focus-inline { display:none; }
+    .card.focused .focus-inline { display:block; }
+    .focus-inline-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; color:#7a4800; font-size:12px; }
+    .focus-inline-head strong { margin-right:auto; }
+    .focus-inline-head button { padding:5px 8px; border:1px solid #d8b875; border-radius:6px; color:#704000; background:#fff; cursor:pointer; font-size:11px; font-weight:700; }
+    .focus-inline-chart { height:110px; margin-top:7px; padding:8px; border:1px solid #ecd8ad; border-radius:7px; background:#fff; }
+    .focus-inline-chart .axis { height:100%; border-left:1px solid #cad6e3; border-bottom:1px solid #cad6e3; background:repeating-linear-gradient(to bottom,transparent 0,transparent 36px,#e5ebf1 37px); position:relative; overflow:hidden; }
+    .focus-inline-chart svg { position:absolute; inset:8px 0 0 30px; width:calc(100% - 30px); height:calc(100% - 8px); }
+    .focus-inline-note { margin-top:5px; color:#795b32; font-size:10px; }
+    .explain { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:16px; }
+    .explain article { padding:15px; border-top:3px solid #b4c8dc; background:#f8fafc; }
+    .explain article:nth-child(1) { border-top-color:var(--green); }
+    .explain article:nth-child(2) { border-top-color:var(--blue); }
+    .explain article:nth-child(3) { border-top-color:var(--amber); }
+    .explain p { margin-top:6px; color:#52667d; font-size:13px; }
+    .footnote { margin-top:16px; color:#60758c; font-size:12px; }
+    @media (max-width:900px) { main { width:calc(100% - 24px); margin-top:12px; } .intro,.state-line,.explain { grid-template-columns:1fr; } .state { border-radius:10px!important; } .arrow { min-height:20px; transform:rotate(90deg); } .card-stream { height:330px; } }
+    @media (prefers-reduced-motion:no-preference) { .card { transition:transform .2s ease,box-shadow .2s ease,opacity .2s ease,filter .2s ease,min-height .24s ease; } .card:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgb(20 71 124 / 11%); } }
+  </style>
+</head>
+<body>
+<main>
+  <header class="intro">
+    <div>
+      <p class="eyebrow">COCKPIT INTERACTION MODEL · P1 CONCEPT</p>
+      <h1>5 张卡不是“只能看 5 个通道”，而是 5 个固定的概览渲染槽。</h1>
+      <p class="lede">概览仍是纵向、可滚动的五张卡。点击其中一张时，它只在同一条卡片流中放大；上下相邻信号仍隐约可见，避免像切进一个孤立的新页面。</p>
+    </div>
+    <aside class="rule">
+      <div class="number">5</div>
+      <div><strong>容量是界面预算，不是采集上限</strong><span>这里仅呈现五张实时卡；放大其中一张时，其他卡仍留在同一滚动流中。</span></div>
+    </aside>
+  </header>
+
+  <section class="state-line" aria-label="三层模型">
+    <div class="state capture"><strong>① 已选 12</strong><small>12 路进入采集与写盘，选择顺序也定义 Focus 的上一/下一通道。</small><span class="key">采集集合</span></div>
+    <div class="arrow" aria-hidden="true">→</div>
+    <div class="state monitor"><strong>② 实时监视 5 / 5</strong><small>只渲染五张概览卡，保护 1 ms 实时刷新和卡片宽度。</small><span class="key">概览集合</span></div>
+    <div class="arrow" aria-hidden="true">→</div>
+    <div class="state focus"><strong>③ 就地 Focus 1 路</strong><small>在中间卡片流内展开至可视区约 80%；上下相邻卡保留弱上下文。</small><span class="key">查看状态</span></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <div><h2>交互示意：点击中间卡片，就地放大；上下仍留在同一个滚动流</h2><p>点任一实时卡即可展开。被选卡最多占中间可视区约 80%，相邻卡保持可辨识但退后；点击“收起”回到等高概览。</p></div>
+      <div class="legend"><span><i class="dot" style="background:#146fd6"></i>实时卡</span><span><i class="dot" style="background:#a96300"></i>Focus</span></div>
+    </div>
+    <div class="cockpit">
+      <div class="topbar"><b>MF4 采集 · Cockpit</b><span class="right">录制中 · 已选 12 · 实时显示 5</span></div>
+      <div class="app">
+        <section class="content">
+          <div class="summary"><span><strong id="overview-label">实时监视 5 / 5</strong> · 其余 7 路继续录制</span><span id="focus-hint" class="focus-hint">点击卡片，就地放大</span></div>
+          <div id="overview">
+            <div id="card-stream" class="card-stream" aria-label="实时信号卡片流"><div class="cards" id="cards"></div></div>
+          </div>
+        </section>
+      </div>
+    </div>
+    <div class="explain">
+      <article><h3>选中，不等于一定在中心</h3><p>“已选 12”是采集契约：12 路都进 session config、都写盘。没有被放入概览卡，不表示被忽略。</p></article>
+      <article><h3>固定 5 槽，避免无限 append</h3><p>要监视新通道时，界面要求明确替换某个槽位；不会悄悄把第 6 张卡加到滚动区底部。</p></article>
+      <article><h3>Focus 是就地查看，不是切页</h3><p>展开卡只占中间可视区约 80%，上下卡淡化但不消失。Focus 不会改变 5 个监视槽，也不会停止或重启采集。</p></article>
+    </div>
+    <p class="footnote">此页是交互说明原型，不代表产品已实现。它刻意维持纵向 5 卡概览：两列网格会压缩单卡宽度，触发当前 Cockpit 的紧凑降级。</p>
+  </section>
+</main>
+<script>
+  const monitor = ['MotSpd', 'StrWhlTrq', 'MotTrq', 'BattVolt', 'EpsDiagSig_01'];
+  const unit = { MotSpd:'rpm', StrWhlTrq:'Nm', MotTrq:'Nm', BattVolt:'V', EpsDiagSig_00:'bool', EpsDiagSig_01:'bool', EcuTemp:'°C' };
+  const selectionOrder = [...monitor];
+  let focusChannel = null;
+  const traces = [
+    'M0 18 C18 2,30 29,47 13 S75 2,95 17 S123 28,148 10 S174 4,198 16 S227 30,252 12 S278 2,305 18',
+    'M0 22 L18 6 L36 23 L54 8 L72 25 L90 7 L108 22 L126 6 L144 21 L162 10 L180 26 L198 5 L216 20 L234 8 L252 23 L270 6 L305 18',
+    'M0 29 C20 28,28 3,49 8 S81 31,101 14 S133 0,151 17 S184 31,207 11 S238 4,257 21 S285 27,305 5',
+    'M0 21 C25 5,45 25,68 10 S107 3,132 19 S172 29,195 11 S236 4,258 21 S281 29,305 8',
+    'M0 23 L30 23 L45 4 L76 4 L93 26 L126 26 L145 8 L179 8 L194 25 L230 25 L251 5 L278 5 L305 21'
+  ];
+  function graph(path, color) { return `<svg viewBox="0 0 305 32" preserveAspectRatio="none"><path d="${path}" fill="none" stroke="${color}" stroke-width="2"/></svg>`; }
+  function renderOverview() {
+    const signals = monitor;
+    const cards = document.getElementById('cards');
+    cards.classList.toggle('has-focus', Boolean(focusChannel));
+    cards.innerHTML = signals.map((name,i) => {
+      const focused = name === focusChannel;
+      const palette = ['#146fd6','#05805e','#d86600','#3b79c2','#60778f','#7b6ca8'];
+      const value = {MotSpd:'1099.8',StrWhlTrq:'20.93',MotTrq:'12.90',BattVolt:'923.6',EpsDiagSig_00:'0.862',EpsDiagSig_01:'0.241',EcuTemp:'86.4'}[name] || '—';
+      const path = traces[i % traces.length];
+      const color = palette[i % palette.length];
+      return `<article class="card ${focused ? 'focused' : ''}" data-channel="${name}" tabindex="0" role="button" aria-label="${name}，点击${focused ? '收起焦点' : '就地放大'}">
+        <div class="card-top"><b>${name}</b><label>${unit[name]} · ${name === 'EcuTemp' ? '100' : i < 3 ? '1' : '10'} ms</label><strong class="value">${value}</strong></div>
+        ${focused ? '' : `<div class="trace">${graph(path, color)}</div>`}
+        <label>${focused ? 'Focus · 中间可视区 80%' : '最近 30s · 实时卡'}</label>
+        <div class="focus-inline"><div class="focus-inline-head"><strong>就地 Focus · ${name}</strong><button class="previous-focus" type="button">上一通道</button><button class="next-focus" type="button">下一通道</button><button class="exit-focus" type="button">收起</button></div><div class="focus-inline-chart"><div class="axis"><svg viewBox="0 0 700 140" preserveAspectRatio="none" aria-label="${name} 的放大趋势图"><path d="M0 86 C55 28,88 118,140 61 S230 24,280 80 S374 128,427 59 S510 20,565 80 S642 108,700 50" fill="none" stroke="${color}" stroke-width="3"/></svg></div></div><p class="focus-inline-note">上下相邻卡仍在同一滚动流内，仅退后处理；采集与录制均不改变。</p></div>
+      </article>`;
+    }).join('');
+    cards.querySelectorAll('.card').forEach(card => {
+      const open = () => showFocus(card.dataset.channel);
+      card.addEventListener('click', open);
+      card.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(); } });
+    });
+    cards.querySelectorAll('.exit-focus').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); showOverview(); }));
+    cards.querySelectorAll('.previous-focus').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); shiftFocus(-1); }));
+    cards.querySelectorAll('.next-focus').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); shiftFocus(1); }));
+    document.getElementById('focus-hint').textContent = focusChannel ? `已放大 ${focusChannel} · 上下卡保留` : '点击卡片，就地放大';
+  }
+  function showFocus(channel) {
+    focusChannel = channel;
+    renderOverview();
+    requestAnimationFrame(() => document.querySelector('.card.focused')?.scrollIntoView({ block:'center', behavior:'smooth' }));
+  }
+  function showOverview() {
+    focusChannel = null;
+    renderOverview();
+  }
+  function shiftFocus(delta) {
+    const index = selectionOrder.indexOf(focusChannel);
+    showFocus(selectionOrder[(index + delta + selectionOrder.length) % selectionOrder.length]);
+  }
+  renderOverview();
+</script>
+</body>
+</html>

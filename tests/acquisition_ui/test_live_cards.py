@@ -6,12 +6,14 @@ import math
 from collections import deque
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QFrame, QLabel, QScrollArea, QWidget
 
 from mf4_analyzer.acquisition_ui.widgets.live_cards import (
     _SPARK_MAX_POINTS,
     LiveCardGrid,
     LiveSignalCard,
+    Sparkline,
 )
 
 
@@ -362,8 +364,8 @@ def test_recording_reset_uses_no_data_lifecycle_until_new_arrival(qtbot):
     assert card.sample_state() == "live"
 
 
-def test_single_click_focuses_card_and_back_restores_all(qtbot):
-    """Clicking a live card enlarges it by focusing the center pane."""
+def test_isolated_focus_remains_default_for_replay_grid(qtbot):
+    """The default grid keeps Replay's existing isolated Focus contract."""
     grid = LiveCardGrid()
     qtbot.addWidget(grid)
     grid.set_signals(
@@ -394,6 +396,103 @@ def test_single_click_focuses_card_and_back_restores_all(qtbot):
 
     assert grid.focused_channel is None
     assert sorted(grid.cards) == ["BattVolt", "MotSpd", "StrWhlTrq"]
+
+
+def test_inplace_focus_keeps_card_order_single_trace_and_context(qtbot):
+    """Cockpit Focus expands the existing card without replacing the card flow."""
+    signals = [
+        ("MotSpd", "rpm", "event_1ms"),
+        ("StrWhlTrq", "Nm", "event_1ms"),
+        ("BattVolt", "V", "event_10ms"),
+        ("VehSpd", "kph", "event_10ms"),
+        ("SteerAng", "deg", "event_10ms"),
+    ]
+    grid = LiveCardGrid()
+    qtbot.addWidget(grid)
+    grid.set_focus_presentation("inplace")
+    grid.set_signals(signals)
+    grid.resize(600, 420)
+    grid.show()
+    qtbot.waitExposed(grid)
+
+    cards_before = grid.cards
+    sparklines_before = {
+        name: card.findChild(Sparkline) for name, card in cards_before.items()
+    }
+    scroll = grid.findChild(QScrollArea, "liveCardGridScroll")
+    assert scroll is not None
+    scroll.verticalScrollBar().setValue(24)
+    before_scroll = scroll.verticalScrollBar().value()
+    for index, card in enumerate(cards_before.values()):
+        grid.push_sample(card.name, float(index), float(index))
+
+    qtbot.mouseClick(cards_before["StrWhlTrq"], Qt.LeftButton)
+    QTest.qWait(100)
+
+    assert list(grid.cards) == [name for name, _unit, _raster in signals]
+    assert grid.focused_channel == "StrWhlTrq"
+    assert grid.cards == cards_before
+    assert all(
+        card.findChild(Sparkline) is sparklines_before[name]
+        and len(card.findChildren(Sparkline)) == 1
+        for name, card in grid.cards.items()
+    )
+    shell = grid.findChild(QWidget, "liveFocusShell")
+    assert shell is not None and shell.isHidden() and shell.height() == 0
+
+    target = grid.cards["StrWhlTrq"]
+    viewport = scroll.viewport()
+    assert target.height() <= math.floor(0.80 * viewport.height())
+    assert abs(target.height() - math.floor(0.78 * viewport.height())) <= 2
+    assert target.property("focusState") == "active"
+    assert grid.cards["MotSpd"].property("focusState") == "context"
+    assert grid.cards["BattVolt"].property("focusState") == "context"
+    assert target._spark.grid_divisions() == 10
+    assert grid.cards["MotSpd"]._spark.grid_divisions() == 4
+
+    viewport_rect = viewport.rect()
+    for name in ("MotSpd", "BattVolt"):
+        card = grid.cards[name]
+        visible = card.rect().translated(card.mapTo(viewport, card.rect().topLeft()))
+        assert viewport_rect.intersected(visible).height() >= 24, (
+            f"{name}: scroll={scroll.verticalScrollBar().value()} "
+            f"visible={visible.getRect()} viewport={viewport_rect.getRect()}"
+        )
+
+    counts_before = {name: card._spark.sample_count for name, card in grid.cards.items()}
+    for index, card in enumerate(grid.cards.values(), start=10):
+        grid.push_sample(card.name, float(index), float(index))
+    assert {
+        name: card._spark.sample_count for name, card in grid.cards.items()
+    } == {name: count + 1 for name, count in counts_before.items()}
+
+    next_button = target.findChild(QWidget, "liveFocusNextButton")
+    previous_button = target.findChild(QWidget, "liveFocusPreviousButton")
+    collapse_button = target.findChild(QWidget, "liveFocusCollapseButton")
+    assert next_button is not None and previous_button is not None and collapse_button is not None
+    qtbot.mouseClick(next_button, Qt.LeftButton)
+    assert grid.focused_channel == "BattVolt"
+    previous_button = grid.cards["BattVolt"].findChild(
+        QWidget, "liveFocusPreviousButton"
+    )
+    assert previous_button is not None
+    qtbot.mouseClick(previous_button, Qt.LeftButton)
+    assert grid.focused_channel == "StrWhlTrq"
+
+    grid.setFocus()
+    qtbot.keyClick(grid, Qt.Key_Escape)
+    qtbot.wait(20)
+    assert grid.focused_channel is None
+    assert list(grid.cards) == [name for name, _unit, _raster in signals]
+    assert all(card.property("focusState") == "normal" for card in grid.cards.values())
+    assert scroll.verticalScrollBar().value() == before_scroll
+
+    grid.focus_channel("StrWhlTrq")
+    QTest.qWait(30)
+    grid.set_signals([row for row in signals if row[0] != "StrWhlTrq"])
+    QTest.qWait(30)
+    assert grid.focused_channel is None
+    assert list(grid.cards) == [name for name, _unit, _raster in signals if name != "StrWhlTrq"]
 
 
 # ----------------------------------------------------------------------

@@ -436,9 +436,10 @@ QFrame#cockpitToolbarBand QToolButton {
     font-weight: 600;
 }
 QFrame#cockpitToolbarBand QPushButton[cockpitAction="connect"] {
-    min-height: 36px;
-    max-height: 36px;
+    min-height: 32px;
+    max-height: 32px;
     padding: 0 20px;
+    border-radius: 8px;
     background-color: #1769e0;
     border-color: #1769e0;
     color: #ffffff;
@@ -446,18 +447,20 @@ QFrame#cockpitToolbarBand QPushButton[cockpitAction="connect"] {
 }
 QFrame#cockpitToolbarBand QPushButton[cockpitAction="record"],
 QFrame#cockpitToolbarBand QPushButton[cockpitAction="stop"] {
-    min-height: 36px;
-    max-height: 36px;
+    min-height: 32px;
+    max-height: 32px;
     padding: 0 18px;
+    border-radius: 8px;
     background-color: #dc2626;
     border-color: #dc2626;
     color: #ffffff;
     font-size: 13px;
 }
 QFrame#cockpitToolbarBand QPushButton[cockpitAction="disabled"] {
-    min-height: 36px;
-    max-height: 36px;
+    min-height: 32px;
+    max-height: 32px;
     padding: 0 18px;
+    border-radius: 8px;
     color: #94a3b8;
     background-color: #f5f7fb;
     border-color: #eef2f7;
@@ -820,6 +823,29 @@ QLabel#liveCardValue {
     color: #111827;
     font-size: 16px;
     font-weight: 800;
+}
+QFrame#liveSignalCard[focusState="active"] {
+    border-color: #1769e0;
+    background-color: #f8fbff;
+}
+QFrame#liveSignalCard[focusState="context"] {
+    border-color: #e2e8f0;
+}
+QPushButton#liveFocusPreviousButton,
+QPushButton#liveFocusNextButton,
+QPushButton#liveFocusCollapseButton {
+    min-height: 22px;
+    padding: 1px 6px;
+    border: 1px solid #bfd4f8;
+    border-radius: 5px;
+    background-color: #ffffff;
+    color: #1769e0;
+    font-size: 11px;
+    font-weight: 700;
+}
+QPushButton#liveFocusCollapseButton {
+    color: #475569;
+    border-color: #d7dee8;
 }
 
 /* Live monitor pinned-count bar (2026-07-08 §G6). */

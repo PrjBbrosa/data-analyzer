@@ -64,6 +64,7 @@ lesson by default.
 | [Status Facts Preserve Their Field Semantics](b5-status-facts-preserve-field-semantics.md) | Editing the Acquisition Cockpit recording fact stream or its | See lesson |
 | [Pinned Protocol Adapters Own Vendor ABI](codex-pinned-protocol-adapters-own-vendor-abi.md) | Implementing or reviewing Seed&Key, native DLL calls, multi-part XCP | See lesson |
 | [Frozen Probes Do Not Require Console Streams](codex-frozen-probes-do-not-require-console-streams.md) | Adding a hidden child command, import probe, parser subprocess, or | See lesson |
+| [Claude Native Wrapper Stub Recovery](claude-native-wrapper-stub-recovery.md) | `claude` resolves to the global npm install but prints `claude native binary not installed` on Apple Silicon. | See lesson |
 
 ## Selection Rules
 

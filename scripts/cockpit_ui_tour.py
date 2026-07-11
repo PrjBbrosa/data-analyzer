@@ -132,6 +132,8 @@ def main() -> int:
         QFrame,
         QLabel,
         QPushButton,
+        QScrollArea,
+        QWidget,
     )
 
     from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
@@ -403,28 +405,89 @@ def main() -> int:
         card = window._center.cards.get("StrWhlTrq")
         check(card is not None, "Focus card target exists")
         if card is not None:
+            ctx["focus_card_order"] = list(window._center.cards)
             QTest.mouseClick(card, Qt.LeftButton)
 
     @at(5400, "focus-card-check")
     def s_focus_card_check():
         cards = window._center.cards
-        bar = window._center.findChild(QLabel, "liveFocusBar")
+        target = cards.get("StrWhlTrq")
+        shell = window._center.findChild(QFrame, "liveFocusShell")
+        scroll = window._center.findChild(QScrollArea, "liveCardGridScroll")
         check(window._center.focused_channel == "StrWhlTrq", "F12 card click focuses StrWhlTrq")
-        check(list(cards) == ["StrWhlTrq"], f"F12 only focused card visible ({list(cards)})")
         check(
-            bar is not None and bar.isVisible() and "聚焦查看" in bar.text(),
-            f"F12 focus bar visible ({bar.text() if bar is not None else '<missing>'})",
+            list(cards) == ctx.get("focus_card_order"),
+            f"F12 keeps card order ({list(cards)})",
         )
-        shot(window, "03c-focused-card")
+        check(
+            target is not None
+            and target.property("focusState") == "active"
+            and all(
+                card.property("focusState") == "context"
+                for name, card in cards.items()
+                if name != "StrWhlTrq"
+            ),
+            "F12 target active and sibling cards are context",
+        )
+        check(
+            target is not None
+            and len(target.findChildren(QWidget, "liveCardSparkline")) == 1,
+            "F12 active card has one Sparkline",
+        )
+        check(
+            target is not None
+            and target._spark.grid_divisions() == 10
+            and all(
+                card._spark.grid_divisions() == 4
+                for name, card in cards.items()
+                if name != "StrWhlTrq"
+            ),
+            "F12 Focus uses dense 10x10 grid; compact/context cards stay 4x4",
+        )
+        check(
+            shell is not None and shell.isHidden() and shell.height() == 0,
+            "F12 Cockpit focus shell is hidden and consumes no height",
+        )
+        if target is not None and scroll is not None:
+            viewport = scroll.viewport()
+            target_h = target.height()
+            viewport_h = viewport.height()
+            before = cards.get("MotSpd")
+            after = cards.get("MotTrq")
+            visible_band = lambda card: (  # noqa: E731 - concise geometry assertion.
+                card.rect()
+                .translated(card.mapTo(viewport, card.rect().topLeft()))
+                .intersected(viewport.rect())
+                .height()
+            )
+            check(
+                target_h <= int(0.80 * viewport_h)
+                and abs(target_h - int(0.78 * viewport_h)) <= 2
+                and before is not None
+                and after is not None
+                and visible_band(before) >= 24
+                and visible_band(after) >= 24,
+                "F12 target uses 78% viewport with both sibling context bands",
+            )
+        shot(window, "03c-inplace-focus-card")
 
     @at(5700, "focus-card-back")
     def s_focus_card_back():
-        button = window._center.findChild(QPushButton, "liveFocusBackButton")
+        target = window._center.cards.get("StrWhlTrq")
+        button = (
+            target.findChild(QPushButton, "liveFocusCollapseButton")
+            if target is not None
+            else None
+        )
         if button is not None:
             button.click()
         else:
             window._center.clear_focus()
-        check(window._center.focused_channel is None, "F12 focus returns to all cards")
+        check(
+            window._center.focused_channel is None
+            and list(window._center.cards) == ctx.get("focus_card_order"),
+            "F12 focus returns to all cards in the original order",
+        )
 
     @at(6100, "pin-default-check")
     def s_pin():

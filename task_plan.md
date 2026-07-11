@@ -45,3 +45,31 @@ reported as complete from macOS tests.
 | First broad pytest poll returned only an outer tool cell and no final summary | Integration verification | Polled the nested exec session directly, confirmed exit code 0, and collected the exact 664-test count separately. |
 | Final `MagicMock()` grep also matched two bounded callable spies, not unrestricted external modules | Independent audit | Inspected both sites and narrowed the guard to module-surface construction; structured Vector module fakes remain intact. |
 | Planning helper reported `0/0 phases` because this existing plan uses checkbox phases rather than its template status tokens | Completion | Verified every checkbox is complete directly; retained the established project plan format. |
+- Do not commit unless the user explicitly asks.
+- Do not revert unrelated dirty worktree files.
+- Preserve `self.statusBar` as a real `QStatusBar`-compatible object.
+- Treat live rendered PyQt screenshots as final truth, not QSS text alone.
+
+---
+
+## Addendum — 2026-07-10 Cockpit In-Place Focus
+
+### Goal
+
+Write a final, implementation-ready specification and plan for the approved
+Cockpit live-card Focus interaction: one expanded trace in the existing
+vertical card stream, with maximum use of laptop-height viewport and adjacent
+cards retained as weak context.
+
+### Phases
+
+- [x] Recover current Cockpit spec/plan, live-card implementation, tests, and approved HTML behavior.
+- [x] Write the acquisition spec with explicit geometry, single-trace, interaction, and non-goal contracts.
+- [x] Write the ordered implementation plan with failing tests, focused checks, and macOS on-screen acceptance.
+- [x] Cross-check doc links, stale contracts, and working-tree scope; complete planning record.
+
+### Guardrails
+
+- Documentation and the existing HTML prototype only; do not modify product source in this planning task.
+- Preserve the two-column acquisition page and the existing recording/capture contracts.
+- Offscreen tests prove structure; on-screen macOS screenshots prove the final visual geometry.

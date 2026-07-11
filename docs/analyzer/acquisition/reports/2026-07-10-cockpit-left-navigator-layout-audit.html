@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MF4 采集 Cockpit：左侧导航与横展审查</title>
+  <style>
+    :root { --ink:#172235; --muted:#65758b; --line:#d9e2ec; --tray:#f5f7fa; --blue:#0f6fdf; --green:#078650; --amber:#b96b00; --red:#c42a2a; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--tray); font:15px/1.58 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    main { width:min(1200px,calc(100% - 40px)); margin:30px auto 56px; }
+    header, section { background:#fff; border:1px solid var(--line); border-radius:14px; padding:24px; margin-top:16px; box-shadow:0 2px 8px rgb(33 54 84 / 4%); }
+    header { border-top:4px solid var(--blue); }
+    h1 { margin:0 0 8px; font-size:26px; line-height:1.25; }
+    h2 { margin:0 0 12px; font-size:19px; }
+    h3 { margin:18px 0 8px; font-size:16px; }
+    p { margin:8px 0; }
+    .meta, .note { color:var(--muted); }
+    .verdict { display:grid; grid-template-columns:144px 1fr; gap:14px; align-items:center; padding:16px; border-radius:10px; background:#edf6ff; border:1px solid #bfdbfe; }
+    .verdict b { color:#075bb8; font-size:18px; }
+    .callout { border-left:4px solid var(--amber); padding:10px 14px; background:#fff9ed; }
+    .good { border-left-color:var(--green); background:#effbf5; }
+    ul { margin:8px 0; padding-left:22px; }
+    li { margin:6px 0; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th, td { text-align:left; vertical-align:top; padding:10px; border-bottom:1px solid var(--line); }
+    th { color:#44546a; font-size:13px; background:#f8fafc; }
+    code { padding:1px 4px; background:#f1f5f9; border-radius:4px; font-size:.9em; }
+    .evidence { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+    figure { margin:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#fff; }
+    figure img { display:block; width:100%; height:auto; }
+    figcaption { padding:9px 11px; color:var(--muted); font-size:13px; }
+    .priority { display:inline-block; min-width:36px; text-align:center; padding:1px 7px; border-radius:99px; color:#fff; background:var(--red); font-size:12px; font-weight:700; }
+    .p1 { background:var(--amber); }
+    .p2 { background:#61748c; }
+    @media (max-width:800px) { main { width:min(100% - 24px,1200px); margin-top:12px; } header,section { padding:17px; } .evidence { grid-template-columns:1fr; } .verdict { grid-template-columns:1fr; gap:4px; } table { font-size:13px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>MF4 采集 Cockpit：左侧导航与横展审查</h1>
+    <p class="meta">审查日期：2026-07-10 · 范围：采集页的断连、待机、已选/实时、录制、窄窗、左栏隐藏 · 模式：运行验证 + 视觉审查，未修改产品源码。</p>
+    <div class="verdict">
+      <b>结论：不做横展</b>
+      <div>不应把测量选择器改成横向展开的主布局。应该保留纵向测量导航，但将其改为<strong>可发现的窄导航轨道（rail）+ 显式展开按钮</strong>；断连时默认收起，展开后恢复约 320 logical px 的测量面板。这样同时解决“初始过宽”和“收起后无入口”两个问题，并把更多横向空间留给实时曲线。</div>
+    </div>
+  </header>
+
+  <section>
+    <h2>本次运行证据</h2>
+    <ul>
+      <li>运行 <code>scripts/cockpit_ui_tour.py --assert</code>：16 个流程/布局断言均通过；覆盖断连、连接待机、通道选择与固定、录制、黄/红告警、复盘、960px 窄窗及完全隐藏左栏。</li>
+      <li>运行 <code>tests/acquisition_ui/test_visual_shell.py -q</code>：<strong>9 passed</strong>。</li>
+      <li>tour 使用 FAKE 演示后端与 45 个合成测量项；它证明当前 widget/状态渲染路径。用户截图中的 A2L 有 323 项、为真实界面截图；两类证据不等同。</li>
+      <li>本次 Qt 运行使用独立临时 HOME/QSettings 路径，未污染本机持久设置。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>各状态实际长相与判断</h2>
+    <table>
+      <thead><tr><th>状态</th><th>实测界面</th><th>布局判断</th></tr></thead>
+      <tbody>
+        <tr><td>断连</td><td>左侧是完整的 A2L 搜索/列表；中心只有“未连接 ECU”检查卡。</td><td>中心内容最少，完整左栏占比显得尤其重。此态最适合默认收起为 rail，但 rail 必须保留“测量项 / 展开”入口。</td></tr>
+        <tr><td>已连接待机</td><td>左栏选择 3 项，中心纵向显示 3 张实时卡；预检信息在顶端 health strip。</td><td>选择工作仍需要纵向列表；横展会牺牲列表高度且不能改善实时卡宽度。保留可展开的左栏，默认展开宽度应小于当前 420px 初始分配。</td></tr>
+        <tr><td>已选 12 / 实时 5</td><td>左栏保留批量事件选择；中心只显示最多 5 张实时卡，其他通道仍录制。</td><td>中心才是采集时的主要读数区。长时间采集中，收起或保持较窄左栏的收益最大。</td></tr>
+        <tr><td>录制</td><td>5 张实时卡纵向堆叠，左栏的选择控件被冻结；卡片要保留曲线、名称、当前值、采样间隔和单位。</td><td>不应横展左栏；横向空间应优先给实时卡。是否自动收起由用户偏好控制，避免录制开始时无预期地改变布局。</td></tr>
+        <tr><td>960px 窄窗</td><td>中心宽约 397px 时，卡片统计文本按既有规则折叠，但名称和当前值仍可见。</td><td>现有窄窗降级可用；rail 能避免用户只能精细拖 3px splitter 才获得此空间。</td></tr>
+        <tr><td>左栏完全隐藏</td><td>中心扩展为全宽，曲线最清楚。</td><td>信息密度正确，但左缘仅余浅灰 3px splitter；没有标签、图标、可点击热区或键盘提示。这是当前首要可用性缺口。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>问题定位</h2>
+    <div class="callout">
+      <p><span class="priority">P0</span> <strong>折叠状态不可发现。</strong>现行采集页把左栏设为可折叠，并在 tour 中直接设置为 <code>[0, 1277]</code>。但样式把水平 splitter handle 设为 <code>3px</code> 的浅灰色；它在视觉上就是分隔线，用户把鼠标放到边缘时只会得到 resize 行为，不能理解为“点击恢复测量面板”。这与用户第二张截图一致。</p>
+    </div>
+    <div class="callout good">
+      <p><strong>不是实时曲线的横向布局问题。</strong>测量行同时含复选框、长名称/地址、事件选择；其自然结构是纵向滚动列表。把它横向铺展只会减少可见行数、加剧长名称截断，并继续从实时卡抢宽度。</p>
+    </div>
+    <p>实现层面的根因也对应：采集页是两个 widget 的 <code>QSplitter</code>，初始调用 <code>setSizes([420, 860])</code>，左栏范围为 <code>320–460</code> logical px；而 handle 是 <code>3px</code>。在 Retina 截图中，约 320 logical px 会呈现为约 640 physical px，所以第一张截图的视觉比例并非异常 DPI，而是最小左栏宽度在中心空态下显得过重。</p>
+  </section>
+
+  <section>
+    <h2>推荐交互（不横展）</h2>
+    <table>
+      <thead><tr><th>优先级</th><th>建议</th><th>行为细节</th></tr></thead>
+      <tbody>
+        <tr><td><span class="priority">P0</span></td><td><strong>将“0px 折叠”替换为常驻导航 rail</strong></td><td>保留约 24–28 logical px 的左侧可视轨道，含左/右 chevron、竖排或旋转的“测量项”标签，以及选中计数（如“12”）。rail 是按钮，不是拖拽边缘；点击才展开/收起。保留现有 splitter 供高级用户调整展开宽度。</td></tr>
+        <tr><td><span class="priority">P0</span></td><td><strong>断连默认收起</strong></td><td>断连中心是连接检查卡，测量选择尚不能推进采集；首次进入默认 rail，立即减少空白中心旁的重面板。用户点击 rail 后，记住本次会话的展开偏好。</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td><strong>展开态设为紧凑而非宽展</strong></td><td>将初始目标从 420 logical px 降到约 300–320 logical px（需结合真实 323 项长名称复核）。保留左栏 320px 作为较安全的完整操作宽度；不要把常规展开推到 420–460px。</td></tr>
+        <tr><td><span class="priority p1">P1</span></td><td><strong>录制时只保持用户意图</strong></td><td>录制会冻结选择控件，rail 更有价值；但不建议录制开始时强制收起，以免实时曲线区域突然位移。可在首选项提供“开始录制时自动收起测量项”。</td></tr>
+        <tr><td><span class="priority p2">P2</span></td><td><strong>可访问性和提示</strong></td><td>rail 提供 tooltip（“展开测量项”/“收起测量项”）、可聚焦按钮和快捷键；展开后焦点落到搜索框，避免用户再次找输入位置。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>截图证据</h2>
+    <p class="note">以下图片由本次 tour 写入本报告同级的 <code>2026-07-10-cockpit-left-navigator-layout-audit-assets/</code>；点击可查看原图。</p>
+    <div class="evidence">
+      <figure><a href="2026-07-10-cockpit-left-navigator-layout-audit-assets/00-disconnected.png"><img src="2026-07-10-cockpit-left-navigator-layout-audit-assets/00-disconnected.png" alt="断连态：完整左侧测量列表和中心连接检查卡"></a><figcaption>断连：完整左栏在中心空态下视觉权重过高。</figcaption></figure>
+      <figure><a href="2026-07-10-cockpit-left-navigator-layout-audit-assets/02-idle.png"><img src="2026-07-10-cockpit-left-navigator-layout-audit-assets/02-idle.png" alt="已连接待机：左侧三项选择和中心三张实时卡"></a><figcaption>已连接待机：纵向列表与纵向实时卡是匹配结构。</figcaption></figure>
+      <figure><a href="2026-07-10-cockpit-left-navigator-layout-audit-assets/04-recording.png"><img src="2026-07-10-cockpit-left-navigator-layout-audit-assets/04-recording.png" alt="录制：五张实时曲线卡和冻结左栏"></a><figcaption>录制：中心曲线卡应优先获得宽度。</figcaption></figure>
+      <figure><a href="2026-07-10-cockpit-left-navigator-layout-audit-assets/07-narrow.png"><img src="2026-07-10-cockpit-left-navigator-layout-audit-assets/07-narrow.png" alt="窄窗：中心曲线卡紧凑模式"></a><figcaption>960px 窄窗：现有卡片可降级，但应避免依赖 3px 拖边来取得空间。</figcaption></figure>
+      <figure><a href="2026-07-10-cockpit-left-navigator-layout-audit-assets/08-panels-hidden.png"><img src="2026-07-10-cockpit-left-navigator-layout-audit-assets/08-panels-hidden.png" alt="左栏隐藏：中心全宽，左侧没有展开入口"></a><figcaption>左栏隐藏：中心全宽正确，但左缘缺少恢复入口；这是 P0。</figcaption></figure>
+      <figure><a href="2026-07-10-cockpit-left-navigator-layout-audit-assets/03d-popover-hw.png"><img src="2026-07-10-cockpit-left-navigator-layout-audit-assets/03d-popover-hw.png" alt="健康状态浮层"></a><figcaption>补充：顶端 health strip 与浮层无需占用右侧固定面板。</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>落地边界与验收</h2>
+    <ul>
+      <li>不要以“增大/横展左栏”作为修复；它会与五张实时卡争夺最稀缺的横向空间。</li>
+      <li>不要只把 3px handle 涂成更深颜色；它仍是拖拽 affordance，不是可发现的状态切换。</li>
+      <li>实现后应新增/更新：rail 在折叠态可见且有文字/tooltip；点击可恢复左栏；断连默认 rail；展开态和 960px 窄窗均不遮挡实时卡当前值。</li>
+      <li>需使用真实 323 项 A2L 再做一次 onscreen 截图复核，重点检查最长测量名、事件下拉框和 Retina 下 300–320 logical px 的可读性。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

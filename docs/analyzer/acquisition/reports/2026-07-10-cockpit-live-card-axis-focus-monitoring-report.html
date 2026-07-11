@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MF4 采集 Cockpit：实时卡时间轴、坐标、聚焦与多通道报告</title>
+  <style>
+    :root { --ink:#172235; --muted:#63748a; --line:#d9e2ec; --bg:#f4f7fb; --blue:#146fd6; --red:#bf3030; --amber:#a96300; --green:#087a4a; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--bg); font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+    main { width:min(1180px,calc(100% - 40px)); margin:28px auto 54px; }
+    header,section { margin-top:16px; padding:24px; border:1px solid var(--line); border-radius:14px; background:#fff; box-shadow:0 2px 10px rgb(28 49 78 / 4%); }
+    header { border-top:4px solid var(--blue); }
+    h1 { margin:0 0 8px; font-size:26px; line-height:1.28; }
+    h2 { margin:0 0 12px; font-size:19px; }
+    h3 { margin:17px 0 7px; font-size:16px; }
+    p { margin:8px 0; }
+    ul,ol { margin:8px 0; padding-left:22px; }
+    li { margin:6px 0; }
+    .meta,.muted { color:var(--muted); }
+    .decision { display:grid; grid-template-columns:150px 1fr; gap:14px; align-items:center; border:1px solid #b8d7fa; border-radius:10px; background:#edf6ff; padding:14px 16px; }
+    .decision b { color:#075cbd; font-size:17px; }
+    .finding { border-left:4px solid var(--red); background:#fff5f5; padding:10px 14px; margin:12px 0; }
+    .finding.amber { border-left-color:var(--amber); background:#fff9ed; }
+    .finding.green { border-left-color:var(--green); background:#effbf4; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th,td { text-align:left; vertical-align:top; padding:10px; border-bottom:1px solid var(--line); }
+    th { font-size:13px; color:#40516a; background:#f8fafc; }
+    code { padding:1px 4px; border-radius:4px; background:#f1f5f9; font-size:.9em; }
+    .tag { display:inline-block; min-width:35px; text-align:center; padding:1px 7px; border-radius:99px; color:#fff; background:var(--red); font-size:12px; font-weight:700; }
+    .p1 { background:var(--amber); } .p2 { background:#65788f; }
+    figure { margin:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:#fff; }
+    figure img { width:100%; display:block; }
+    figcaption { color:var(--muted); padding:9px 11px; font-size:13px; }
+    .two { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+    .evidence { font-size:13px; color:#465870; }
+    @media (max-width:800px) { main { width:calc(100% - 24px); margin-top:12px; } header,section { padding:17px; } .decision,.two { grid-template-columns:1fr; } table { font-size:13px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>MF4 采集 Cockpit：实时卡时间轴、坐标、聚焦与多通道报告</h1>
+    <p class="meta">日期：2026-07-10 · 范围：实时预览卡片的 X/Y 坐标、单击聚焦、超过 5 个通道的查看机制 · 类型：代码/渲染证据审查，未修改采集源码。</p>
+    <div class="decision"><b>结论</b><div>当前截图是既有“固定最近 30 秒、最新点贴右”的正确实现结果，但它不适合刚启动时的可读性；Y 网格与刻度确有错位；单击聚焦尚不是 TimeDomain 级查看；默认 5 卡之外的通道没有足够直接的查看入口。建议单独立项为 <strong>Live Focus &amp; Monitoring P1</strong>，不要在现有卡片绘制逻辑上零散堆控件。</div></div>
+  </header>
+
+  <section>
+    <h2>证据与边界</h2>
+    <ul>
+      <li><strong>已运行：</strong><code>tests/acquisition_ui/test_live_cards.py -q</code>，结果 <strong>46 passed in 0.62s</strong>。</li>
+      <li><strong>截图：</strong>来自当前 Cockpit tour 的 FAKE 后端/合成数据，验证 widget 及显示路径；不等同于 ECU 实车采集证据。</li>
+      <li><strong>既有 spec：</strong>固定 30 秒窗口、紧凑卡片、默认 5 张实时卡是当前 P0 契约；Focus View（缩放/游标/手动轴）被明确列为后续非目标。因此本报告的 Focus View 是建议，不是已交付功能。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>1. 为什么曲线从右侧出现</h2>
+    <div class="finding">
+      <strong>当前行为：按设计实现，非采集延迟。</strong>每张卡将最新的 stream timestamp 作为 <code>t_anchor</code>，把 X 映射到固定 <code>[t_anchor - 30s, t_anchor]</code>。当卡片刚收到 5 秒数据，曲线理应只位于右侧 5/30 区域；左侧是真实尚未收到的历史时间，不能伪造数据填充。
+    </div>
+    <table>
+      <thead><tr><th>证据</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td><code>live_cards.py:383–414</code></td><td>投影公式直接以固定 window 计算 X；文档明确说明“最近 5 秒”会贴右而非拉满。</td></tr>
+        <tr><td><code>tests/acquisition_ui/test_live_cards.py:426–438</code></td><td>测试明确断言：仅有最近 5 秒数据时，最早点 <code>x &gt; 480</code>、最新点贴近右缘。</td></tr>
+        <tr><td><code>spec …live-preview…:74–92</code></td><td>现行契约要求短数据只占右侧比例，左侧留真实空白。</td></tr>
+      </tbody>
+    </table>
+    <h3>建议：增加“预热铺满”阶段</h3>
+    <ol>
+      <li>首次样本到满 30 秒前，显示窗口为实际已接收时长（仍按真实 stream timestamp 比例映射），曲线铺满可用宽度。</li>
+      <li>文案从“最近 30s”改为<code>已接收 4.8s / 最大 30s</code>；达到 30 秒后切换为现有“最近 30s”。</li>
+      <li>不插值、不掩盖真实 gap；只有启动前的“未知历史”不再被当作可视坐标区域。</li>
+    </ol>
+    <p class="muted">代价：预热期 X 比例会随时间增长而改变；收益：启动后不再像曲线从右边“冒出”，更符合操作者的首眼预期。建议采用。</p>
+  </section>
+
+  <section>
+    <h2>2. 为什么最大/最小刻度没有网格线</h2>
+    <div class="finding">
+      <strong>根因：网格与实际 nice ticks 是两套逻辑。</strong>绘制代码在得出数据范围前，固定画 25%、50%、75% 三条内部线；随后才计算 <code>lo / hi / ticks</code> 并只绘制刻度文字。因此顶部与底部的最大/最小数值没有对应横线，截图所见属实。
+    </div>
+    <table>
+      <thead><tr><th>当前实现</th><th>应有行为</th></tr></thead>
+      <tbody>
+        <tr><td><code>paintEvent</code> 在 <code>live_cards.py:804–814</code> 画固定分数网格。</td><td>先计算 <code>_spark_scale()</code> 返回的 <code>ticks</code>，再以每个 tick 的实际 Y 位置绘制网格。</td></tr>
+        <tr><td><code>live_cards.py:845–847</code> 只调用 <code>_paint_y_ticks</code> 画标签。</td><td>每个 tick 都要有标签和同一像素位置的横线；<code>lo</code>/<code>hi</code> 的边界线应略向内 inset，避免被卡片 frame 裁掉。</td></tr>
+        <tr><td>网格与标签碰巧在中间相近，边界必然不对齐。</td><td>Y 范围、tick、网格必须由同一个 scale 对象生成。</td></tr>
+      </tbody>
+    </table>
+    <h3>TimeDomain 可复用的不是控件，而是语义</h3>
+    <p>TimeDomain 的 <code>reset_view_to_data_extents()</code> 采用真实原始数据范围、nice frame，并要求轴边界与网格一致（<code>pg_canvas/canvas.py:1688–1725</code>）。其 <code>fit_y_to_visible_x()</code> 保持当前 X 窗口，只对其中的真实有限样本做一次 Y 拟合（<code>1737–1755</code>）。Cockpit 应复用这两条语义和共享 tick math，不能直接依赖整个 TimeDomain UI。</p>
+    <div class="finding green"><strong>验收：</strong>常值、正值、跨零、负值各一例；每个可见 Y tick 都有一条网格；顶部/底部 tick 不被裁切；窄卡仍按现有规则隐藏 Y 文字但不得产生错误网格。</div>
+  </section>
+
+  <section>
+    <h2>3. 单击放大后的曲线：当前能力与建议</h2>
+    <table>
+      <thead><tr><th>项目</th><th>当前</th><th>建议的 Focus View</th></tr></thead>
+      <tbody>
+        <tr><td>单击</td><td><code>LiveSignalCard.mousePressEvent</code> 发出通道名；<code>focus_channel()</code> 只保留这一张卡。</td><td>保留此入口，但切换为专用单通道查看状态，而不是仅隐藏同级卡片。</td></tr>
+        <tr><td>X</td><td>固定最近 30 秒，无缩放/跟随状态。</td><td>默认跟随最新；用户拖动/缩放后暂停跟随；提供“返回最近 30 秒”。</td></tr>
+        <tr><td>Y</td><td>每次卡片 refresh 都按当前缓冲自动估算，用户不能固定手动范围。</td><td>默认“Y 适应当前可见 X”；提供一次性 <code>Y 适应</code>，手动改 Y 后不被下一帧覆盖。</td></tr>
+        <tr><td>操作</td><td>仅有“返回全部”。</td><td>提供 <code>Y 适应</code>、<code>全图/最近30秒</code>、跟随开关、上一通道/下一通道、返回概览。</td></tr>
+      </tbody>
+    </table>
+    <p class="evidence">代码证据：<code>live_cards.py:1265–1268</code> 只做 click→activated；<code>1591–1638</code> 只对已在 cards 集合里的通道进行 focus；现行 spec 也将完整 Focus View 标为非目标。</p>
+  </section>
+
+  <section>
+    <h2>4. 超过 5 个通道时怎么办</h2>
+    <div class="finding amber">
+      <strong>当前“5 张”是默认值，不是硬上限。</strong>默认取选择顺序前 5 个；后续通道依旧会录制。可是把一个后续通道“固定到实时显示”会直接追加至手动 pin 列表，当前代码没有 5 槽约束，因此会出现第 6、7 张卡，需要滚动才能看到；而未 pin 的后续通道不能直接被当前 Focus 机制打开。
+    </div>
+    <table>
+      <thead><tr><th>证据</th><th>结论</th></tr></thead>
+      <tbody>
+        <tr><td><code>window.py:872–892</code></td><td>未定制时取前 <code>DEFAULT_LIVE_PIN_COUNT</code>；定制后 <code>pin_channel()</code> 仅 append，不限数量。</td></tr>
+        <tr><td><code>window.py:924–935</code></td><td>中心只为 pin 建立卡片；其余通道显示“仍会录制”的提示。</td></tr>
+        <tr><td><code>left_pane.py:360–368</code></td><td>后续已选通道有“固定到实时显示”右键项，但没有“替换槽”或“聚焦查看”。</td></tr>
+      </tbody>
+    </table>
+    <h3>推荐模型：5 个概览渲染槽 + 所有已选通道可聚焦</h3>
+    <ul>
+      <li><strong>概览硬上限 5：</strong>保持现有 1ms × 5 卡 × 30fps 性能边界，不允许无意追加第 6 张卡。</li>
+      <li><strong>监视集合显式化：</strong>左栏或 summary 提供“实时监视 5/5 · 管理”；选中后续通道时可选择“替换槽位”，不使用隐式 append。</li>
+      <li><strong>聚焦不依赖 pin：</strong>后续已选通道可通过左栏“在焦点中打开”，Focus View 提供上一/下一通道，顺序来自当前 selection。</li>
+      <li><strong>数据边界：</strong>所有已选通道仍由采集/写盘路径记录；为非 pin 的已选通道保留有界、轻量的显示缓存，保证打开焦点时有最近窗口，而不是从零等待。缓存上限与性能需单列压测。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>推荐实施顺序</h2>
+    <table>
+      <thead><tr><th>优先级</th><th>批次</th><th>范围与验收</th></tr></thead>
+      <tbody>
+        <tr><td><span class="tag">P0</span></td><td>tick 驱动网格</td><td>网格/标签统一从 scale ticks 生成；截图验证顶、中、底均对齐；不改变数据、采集、写盘或窗口语义。</td></tr>
+        <tr><td><span class="tag p1">P1</span></td><td>30 秒预热窗口</td><td>0–30 秒使用真实增长窗口，满窗后进入滚动窗口；更新标签和比例测试；验证 gap 不被填充。</td></tr>
+        <tr><td><span class="tag p1">P1</span></td><td>Focus View</td><td>单击进入；带 Y 适应、最近 30 秒、跟随最新、上一/下一通道；手动轴与自动拟合互不覆盖。</td></tr>
+        <tr><td><span class="tag p1">P1</span></td><td>5 槽监视管理</td><td>pin 不再无限 append；“替换槽/聚焦后续通道”可达；测量 1ms × 5 卡性能和非 pin 缓存内存。</td></tr>
+      </tbody>
+    </table>
+    <p>由于 Focus View 与可配置监视集合超出现有 spec 的明确非目标，下一步应先更新 spec/plan，再改代码；不能把它们作为当前卡片 painter 的临时补丁。</p>
+  </section>
+
+  <section>
+    <h2>渲染证据</h2>
+    <div class="two">
+      <figure><a href="2026-07-10-cockpit-left-navigator-layout-audit-assets/02-idle.png"><img src="2026-07-10-cockpit-left-navigator-layout-audit-assets/02-idle.png" alt="已连接待机的实时卡"></a><figcaption>启动后短时间数据贴右，顶部/底部 Y 标签没有同位置横线。</figcaption></figure>
+      <figure><a href="2026-07-10-cockpit-left-navigator-layout-audit-assets/04-recording.png"><img src="2026-07-10-cockpit-left-navigator-layout-audit-assets/04-recording.png" alt="录制时的五张实时卡"></a><figcaption>录制时的 5 卡概览：该数目应成为明确的渲染槽上限，而不是可无限 append 的默认值。</figcaption></figure>
+    </div>
+  </section>
+</main>
+</body>
+</html>
