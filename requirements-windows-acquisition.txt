@@ -1,4 +1,7 @@
-# First validated Vector/XCP runtime.  Do not loosen these pins without a new
-# compatibility change that reruns API, source, package, and bench gates.
+# Pinned Vector/XCP runtime.  0.29.14 fixes the PyQt-loaded pyxcp import crash
+# (0xC0000005) present in 0.29.10 and is API-compatible (Master signatures,
+# config traits, and DAQ policy surfaces re-checked).  Do not loosen these pins
+# without a compatibility change that reruns API, source, package, and bench
+# gates; the live Vector-hardware bench gate for 0.29.14 is still pending.
 python-can[vector]==4.6.1; sys_platform == "win32"
-pyxcp==0.29.10; sys_platform == "win32"
+pyxcp==0.29.14; sys_platform == "win32"

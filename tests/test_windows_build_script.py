@@ -76,7 +76,7 @@ def test_windows_folder_build_vendors_pinned_pyxcp_metadata_and_dependencies():
     assert "-m pip install" in text
     assert "--target" in text
     assert "$AcquisitionRequirements" in text
-    assert "pyxcp-0.29.10.dist-info" in text
+    assert "pyxcp-0.29.14.dist-info" in text
     assert "import pathlib, pyxcp" not in text
     assert "Copy-Item -Recurse -Force -Path $PyxcpSrc" not in text
 

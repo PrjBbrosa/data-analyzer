@@ -1,4 +1,4 @@
-"""Pinned pyxcp 0.29.10 runtime construction for Vector XCP sessions.
+"""Pinned pyxcp 0.29.14 runtime construction for Vector XCP sessions.
 
 Only this module knows how the application maps a ``TransportConfig`` and A2L
 ``IF_DATA XCP`` facts into pyxcp's configuration object.  It intentionally has
@@ -167,7 +167,7 @@ def _build_application(factory: Any, transport: TransportConfig, ifdata: IfDataX
             f"fd_sample_point={transport.fd_sample_point})"
         )
 
-    # pyxcp 0.29.10's General.seed_n_key_dll is a non-null Unicode trait.
+    # pyxcp 0.29.14's General.seed_n_key_dll is a non-null Unicode trait.
     # Keep TransportConfig's user-facing None semantics, but never feed None to
     # the real trait/config factory.
     seed_and_key_dll = (

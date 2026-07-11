@@ -151,7 +151,7 @@ def test_windows_verifier_passes_only_after_probe_metadata_and_api_contract(
         lambda name: {
             "python-can": "4.6.1",
             "pya2ldb": "1.0.332",
-            "pyxcp": "0.29.10",
+            "pyxcp": "0.29.14",
         }[name],
     )
     monkeypatch.setattr(
@@ -166,7 +166,7 @@ def test_windows_verifier_passes_only_after_probe_metadata_and_api_contract(
     assert report["installed_versions"] == {
         "python-can": "4.6.1",
         "pya2ldb": "1.0.332",
-        "pyxcp": "0.29.10",
+        "pyxcp": "0.29.14",
     }
     assert report["import_probe"]["stdout"] == "probe ok"
     assert "FrameAcquisitionPolicy.feed" in report["checked_surfaces"]

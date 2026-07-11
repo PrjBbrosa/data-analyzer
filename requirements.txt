@@ -17,4 +17,4 @@ cantools>=39
 
 # Stage 8 - Vector/XCP backend (Windows-only)
 python-can[vector]==4.6.1; sys_platform == "win32"
-pyxcp==0.29.10; sys_platform == "win32"
+pyxcp==0.29.14; sys_platform == "win32"

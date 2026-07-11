@@ -332,7 +332,7 @@ def test_runtime_smoke_checks_metadata_master_policy_and_adapter_without_open(
         "version",
         lambda name: {
             "python-can": "4.6.1",
-            "pyxcp": "0.29.10",
+            "pyxcp": "0.29.14",
             "pya2ldb": "1.0.332",
         }[name],
     )
@@ -350,7 +350,7 @@ def test_runtime_smoke_checks_metadata_master_policy_and_adapter_without_open(
     assert report["versions"] == {
         "python-can": "4.6.1",
         "pya2ldb": "1.0.332",
-        "pyxcp": "0.29.10",
+        "pyxcp": "0.29.14",
     }
     assert "FrameAcquisitionPolicy.feed/NoOpPolicy" in report["checked_surfaces"]
     assert "pyxcp config + DAQ policies constructed (no Master/Vector)" in report[

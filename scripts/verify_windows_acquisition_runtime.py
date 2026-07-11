@@ -19,10 +19,21 @@ from pathlib import Path
 from typing import Any
 
 
+# tools/build_windows_folder.ps1 runs this file as a standalone script by
+# absolute path, so sys.path[0] is this file's directory (scripts/) and the
+# project package ``mf4_analyzer`` at the repo root is NOT importable. Put the
+# repo root on sys.path so the build-time contract gate can import the
+# production backend. (Under pytest the repo root is already on sys.path, so
+# this insert is a harmless no-op there.)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+
 EXPECTED = {
     "python-can": "4.6.1",
     "pya2ldb": "1.0.332",
-    "pyxcp": "0.29.10",
+    "pyxcp": "0.29.14",
 }
 REQUIRED_METHODS = {
     "getStatus": ("self",),

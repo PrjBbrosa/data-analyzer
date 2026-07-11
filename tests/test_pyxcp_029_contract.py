@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(
 def test_pyxcp_029_master_and_policy_contract() -> None:
     assert importlib.metadata.version("python-can") == "4.6.1"
     assert importlib.metadata.version("pya2ldb") == "1.0.332"
-    assert importlib.metadata.version("pyxcp") == "0.29.10"
+    assert importlib.metadata.version("pyxcp") == "0.29.14"
 
     from pyxcp.master import Master
     from pyxcp.transport.transport_ext import FrameAcquisitionPolicy, NoOpPolicy

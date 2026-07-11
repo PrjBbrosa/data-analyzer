@@ -17,7 +17,7 @@ from typing import Any
 EXPECTED_VERSIONS = {
     "python-can": "4.6.1",
     "pya2ldb": "1.0.332",
-    "pyxcp": "0.29.10",
+    "pyxcp": "0.29.14",
 }
 REQUIRED_MASTER_METHODS = {
     "getStatus": ("self",),
@@ -145,7 +145,10 @@ def _production_pya2l_import_probe() -> dict[str, Any]:
             command,
             capture_output=True,
             text=True,
-            timeout=5,
+            # 30s, not 5s: a frozen onedir exe's first cold subprocess launch can
+            # exceed a tight timeout (Defender scan + cold DLL load), which would
+            # spuriously fail the packaged pya2l probe.
+            timeout=30,
         )
     except subprocess.TimeoutExpired as exc:
         return {

@@ -459,7 +459,10 @@ def _run_pyxcp_import_probe() -> tuple[int, str, str]:
             _pyxcp_import_probe_command(),
             capture_output=True,
             text=True,
-            timeout=5,
+            # 30s, not 5s: a frozen onedir exe's first cold subprocess launch
+            # pays a Windows Defender scan + cold DLL load and can exceed a tight
+            # timeout, which would spuriously report Vector/XCP as unavailable.
+            timeout=30,
         )
     except subprocess.TimeoutExpired as exc:
         return 124, "", f"pyxcp import probe timed out after {exc.timeout}s"
@@ -622,7 +625,7 @@ class VectorXcpRecorderBackend(RecorderBackend):
                 # Compatibility alias for the first readiness implementation.
                 "decoded_samples": self._rx_count,
                 "bus_error_count": self._bus_error_count,
-                # pyxcp 0.29.10 swallows python-can CanError in recv(), so a
+                # pyxcp 0.29.x swallows python-can CanError in recv(), so a
                 # zero counter is not proof that the bus was error-free.
                 "bus_error_observable": False,
                 "bus_state": None,

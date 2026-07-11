@@ -107,7 +107,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to vendor pinned Vector/XCP requirements"
 }
 $PyxcpPackage = Join-Path $VendorPyxcpDir "pyxcp"
-$PyxcpMetadata = Join-Path $VendorPyxcpDir "pyxcp-0.29.10.dist-info"
+$PyxcpMetadata = Join-Path $VendorPyxcpDir "pyxcp-0.29.14.dist-info"
 foreach ($RequiredVendorPath in @($PyxcpPackage, $PyxcpMetadata)) {
     if (-not (Test-Path $RequiredVendorPath)) {
         throw "Pinned pyxcp vendor closure is incomplete: $RequiredVendorPath"
@@ -118,9 +118,13 @@ if (Test-Path $VendorPya2lDir) {
     Remove-Item -Recurse -Force $VendorPya2lDir
 }
 New-Item -ItemType Directory -Force -Path $VendorPya2lDir | Out-Null
+# Windows PowerShell 5.1 drops embedded double-quotes when building a native
+# command line, so importlib.metadata.version("pya2ldb") would reach python as
+# version(pya2ldb) -> NameError. Single-quote the package name so the arg
+# survives both Windows PowerShell 5.1 and PowerShell 7.
 $Pya2lVersionScript = @'
 import importlib.metadata
-print(importlib.metadata.version("pya2ldb"))
+print(importlib.metadata.version('pya2ldb'))
 '@
 $Pya2lVersion = (& $VenvPython -c $Pya2lVersionScript).Trim()
 if (-not $Pya2lVersion) {
@@ -153,6 +157,16 @@ $AddDataVendorPya2l = "$VendorPya2lDir;_vendor_pya2l"
 $HelpDir = Join-Path $RepoRoot "mf4_analyzer\help"
 $AddDataHelp = "$HelpDir;mf4_analyzer\help"
 $HiddenImports = @(
+    # pyxcp/pya2l are --exclude-module (vendored), so PyInstaller cannot see
+    # their import closure and does not auto-collect stdlib modules that ONLY
+    # that closure imports. Verified against PYZ-00.toc + base_library.zip that
+    # exactly these are missing yet needed by the frozen import/parse probes:
+    #   logging.config / logging.handlers -> pyxcp 0.29.14's ``rich`` dependency
+    #   timeit                            -> pya2l's SQLAlchemy dependency
+    # Without them the frozen probes fail with "No module named '<name>'".
+    "logging.config",
+    "logging.handlers",
+    "timeit",
     "mf4_analyzer.ui_kit",
     "mf4_analyzer.ui_kit.fonts",
     "mf4_analyzer.ui_kit.icons",
@@ -240,8 +254,52 @@ if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
 }
 
-& $ExePath --acquisition-runtime-smoke --json (Join-Path $EvidenceDir "packaged-runtime-smoke.json")
-if ($LASTEXITCODE -ne 0) { throw "Packaged Vector/XCP runtime smoke failed" }
+# PyQt5 bundles an old MSVC runtime at Qt5\bin\MSVCP140.dll (~14.26.28720.3), and
+# PyInstaller's PyQt5 hook puts that dir on the process DLL search path for EVERY
+# invocation of the exe -- including the Qt-free A2L parser / pya2l probe children.
+# pya2l's native a2lparser_ext.pyd is built against a newer msvcp140 and access-
+# violates (0xC0000005) when it binds to 14.26. Overwrite Qt's copy with the build
+# machine's newer system runtime so the frozen pya2l/A2L imports load a compatible
+# msvcp140. Verified: without this the packaged A2L parse child crashes with
+# 0xC0000005 (faulting module MSVCP140.dll 14.26.28720.3).
+$QtBinDir = Join-Path $OutputDir "_internal\PyQt5\Qt5\bin"
+foreach ($dllName in @("MSVCP140.dll", "MSVCP140_1.dll")) {
+    $sysDll = Join-Path $env:WINDIR "System32\$dllName"
+    $qtDll = Join-Path $QtBinDir $dllName
+    if ((Test-Path $sysDll) -and (Test-Path $qtDll)) {
+        $sysVer = [version]((Get-Item $sysDll).VersionInfo.FileVersion.Split(' ')[0])
+        $qtVer = [version]((Get-Item $qtDll).VersionInfo.FileVersion.Split(' ')[0])
+        if ($sysVer -gt $qtVer) {
+            Copy-Item -LiteralPath $sysDll -Destination $qtDll -Force
+            Write-Host "Replaced bundled $dllName ($qtVer) with system $sysVer to fix pya2l native crash"
+        }
+    }
+}
+
+# Warm the freshly-built exe once: its first launch pays a Windows Defender scan
+# and a cold load of the 500 MB+ _internal tree, which can exceed the smoke's
+# per-probe subprocess timeout. Running it once here (result discarded) means the
+# smoke's probe children below run against a warm, already-scanned binary.
+& $ExePath --pyxcp-import-probe-child | Out-Null
+
+$PackagedSmokeJson = Join-Path $EvidenceDir "packaged-runtime-smoke.json"
+# Stale evidence must not mask a crash that never writes fresh JSON.
+Remove-Item $PackagedSmokeJson -Force -ErrorAction SilentlyContinue
+# The packaged exe is --windowed (GUI subsystem); PowerShell's call operator does
+# NOT reliably surface its exit code (it reports 0 even when the app exits 2), so
+# the old `$LASTEXITCODE` check silently shipped broken packages. Launch via
+# Start-Process -Wait for a real exit code and gate on the evidence JSON's `ok`
+# flag, which runtime_smoke.run always writes.
+$smoke = Start-Process -FilePath $ExePath `
+    -ArgumentList "--acquisition-runtime-smoke --json `"$PackagedSmokeJson`"" `
+    -Wait -PassThru -NoNewWindow
+$smokeOk = $false
+if (Test-Path $PackagedSmokeJson) {
+    try { $smokeOk = [bool]((Get-Content -Raw $PackagedSmokeJson | ConvertFrom-Json).ok) } catch { $smokeOk = $false }
+}
+if (-not $smokeOk) {
+    throw "Packaged Vector/XCP runtime smoke failed (exe exit=$($smoke.ExitCode); see $PackagedSmokeJson)"
+}
 
 Write-Step "Build output"
 Write-Host "Folder: $OutputDir"
