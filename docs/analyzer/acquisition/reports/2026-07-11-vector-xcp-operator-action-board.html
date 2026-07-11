@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:,">
+  <title>Vector / XCP 上车操作行动板 · 2026-07-11</title>
+  <style>
+    :root {
+      --ink: #102a43;
+      --ink-soft: #486581;
+      --paper: #f6f8f7;
+      --panel: #ffffff;
+      --line: #bcccdc;
+      --line-dark: #829ab1;
+      --cyan: #007c91;
+      --cyan-pale: #d9f3f2;
+      --amber: #c96d08;
+      --amber-pale: #fff2d6;
+      --red: #b42318;
+      --red-pale: #fee4e2;
+      --green: #16794b;
+      --green-pale: #dcfae6;
+      --shadow: 0 20px 55px rgba(16, 42, 67, .12);
+      --radius: 14px;
+      --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+      --body: "Aptos", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      --display: "Bahnschrift", "Aptos Display", "Microsoft YaHei UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(130, 154, 177, .10) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(130, 154, 177, .10) 1px, transparent 1px),
+        var(--paper);
+      background-size: 24px 24px;
+      font-family: var(--body);
+      line-height: 1.62;
+    }
+
+    a { color: var(--cyan); text-underline-offset: 3px; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    :focus-visible { outline: 3px solid rgba(0, 124, 145, .28); outline-offset: 3px; }
+
+    .page-shell {
+      width: min(1440px, calc(100% - 32px));
+      margin: 24px auto 80px;
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .side-rail {
+      position: sticky;
+      top: 18px;
+      border: 1px solid var(--line);
+      border-top: 6px solid var(--cyan);
+      background: rgba(255, 255, 255, .94);
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+
+    .side-rail .eyebrow,
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--cyan);
+      font: 700 12px/1.2 var(--mono);
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .progress-value {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 4px 0 8px;
+      font-family: var(--display);
+    }
+    .progress-value strong { font-size: 44px; line-height: 1; }
+    .progress-value span { color: var(--ink-soft); font-size: 13px; }
+    .progress-track { height: 8px; overflow: hidden; background: #e8eef2; }
+    .progress-track i {
+      display: block;
+      width: 0;
+      height: 100%;
+      background: var(--cyan);
+      transition: width .25s ease;
+    }
+
+    nav { margin: 22px 0; }
+    nav a {
+      display: block;
+      padding: 7px 0 7px 12px;
+      border-left: 2px solid var(--line);
+      color: var(--ink-soft);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    nav a:hover { border-color: var(--cyan); color: var(--ink); }
+
+    .rail-actions { display: grid; gap: 8px; }
+    .action-button {
+      border: 1px solid var(--ink);
+      background: var(--ink);
+      color: white;
+      padding: 10px 12px;
+      font-weight: 700;
+    }
+    .action-button.secondary { background: white; color: var(--ink); }
+    .action-button.danger { border-color: var(--red); background: white; color: var(--red); }
+
+    main { min-width: 0; }
+    .hero {
+      position: relative;
+      overflow: hidden;
+      min-height: 360px;
+      padding: clamp(28px, 5vw, 66px);
+      background: var(--ink);
+      color: white;
+      box-shadow: var(--shadow);
+    }
+    .hero::after {
+      content: "DTO";
+      position: absolute;
+      right: -28px;
+      bottom: -62px;
+      color: rgba(255,255,255,.055);
+      font: 800 clamp(150px, 25vw, 340px)/1 var(--display);
+      letter-spacing: -.08em;
+    }
+    .hero h1 {
+      position: relative;
+      z-index: 1;
+      max-width: 850px;
+      margin: 0;
+      font: 700 clamp(38px, 6.4vw, 84px)/.98 var(--display);
+      letter-spacing: -.045em;
+    }
+    .hero h1 span { display: block; }
+    .hero .lede {
+      position: relative;
+      z-index: 1;
+      max-width: 760px;
+      margin: 26px 0 0;
+      color: #d9e2ec;
+      font-size: 17px;
+    }
+    .hero-meta {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 26px;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 5px 10px;
+      border: 1px solid rgba(255,255,255,.34);
+      font: 700 12px/1 var(--mono);
+    }
+    .tag.red { color: #ffb4ab; border-color: rgba(255,180,171,.62); }
+    .tag.cyan { color: #71e2df; border-color: rgba(113,226,223,.62); }
+
+    .no-go {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      margin: 18px 0 0;
+      padding: 18px 20px;
+      border-left: 7px solid var(--red);
+      background: var(--red-pale);
+      color: #7a271a;
+    }
+    .no-go strong { font: 800 24px/1 var(--display); }
+
+    section {
+      margin-top: 24px;
+      padding: clamp(22px, 4vw, 42px);
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.96);
+      box-shadow: 0 12px 34px rgba(16,42,67,.07);
+    }
+    section > header { margin-bottom: 24px; }
+    section h2 {
+      margin: 0;
+      font: 700 clamp(27px, 3.6vw, 42px)/1.08 var(--display);
+      letter-spacing: -.025em;
+    }
+    section header p { max-width: 850px; margin: 10px 0 0; color: var(--ink-soft); }
+    h3 { margin: 0 0 12px; font: 700 21px/1.2 var(--display); }
+    h4 { margin: 0 0 7px; font: 700 15px/1.2 var(--display); }
+    p { margin: 0 0 12px; }
+
+    .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .owner-card {
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-top: 5px solid var(--cyan);
+      background: #fbfcfd;
+    }
+    .owner-card.operator { border-top-color: var(--amber); }
+    .owner-card ul { padding-left: 19px; margin-bottom: 0; }
+    .owner-card li + li { margin-top: 7px; }
+
+    .doc-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    .doc-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      padding: 9px 13px;
+      border: 1px solid var(--cyan);
+      background: white;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .checklist { display: grid; gap: 10px; }
+    .check-row {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+      padding: 15px 16px;
+      border: 1px solid var(--line);
+      background: white;
+    }
+    .check-row input[type="checkbox"] {
+      width: 20px;
+      height: 20px;
+      margin: 2px 0 0;
+      accent-color: var(--green);
+    }
+    .check-row label { cursor: pointer; }
+    .check-row label strong { display: block; line-height: 1.35; }
+    .check-row label small { display: block; margin-top: 3px; color: var(--ink-soft); }
+    .check-row .gate {
+      padding: 3px 7px;
+      background: var(--amber-pale);
+      color: #884b06;
+      font: 700 11px/1.2 var(--mono);
+      white-space: nowrap;
+    }
+    .check-row:has(input:checked) { border-color: #85d3a9; background: #f5fff8; }
+    .check-row:has(input:checked) .gate { color: var(--green); background: var(--green-pale); }
+
+    .field-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+    .field.span-2 { grid-column: span 2; }
+    .field.span-3 { grid-column: 1 / -1; }
+    .field label { color: var(--ink-soft); font: 700 12px/1.3 var(--mono); }
+    .field input, .field select, .field textarea {
+      width: 100%;
+      min-height: 43px;
+      border: 1px solid var(--line-dark);
+      border-radius: 0;
+      background: #fbfcfd;
+      color: var(--ink);
+      padding: 9px 11px;
+    }
+    .field textarea { min-height: 88px; resize: vertical; }
+    .field input::placeholder, .field textarea::placeholder { color: #9aaaba; }
+    .hint {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--cyan);
+      background: var(--cyan-pale);
+      color: #155e67;
+    }
+
+    .signal-chain { position: relative; display: grid; gap: 14px; }
+    .signal-chain::before {
+      content: "";
+      position: absolute;
+      left: 25px;
+      top: 27px;
+      bottom: 28px;
+      width: 3px;
+      background: repeating-linear-gradient(to bottom, var(--cyan) 0 10px, transparent 10px 18px);
+    }
+    .stage {
+      position: relative;
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .stage-node {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      place-items: center;
+      width: 52px;
+      height: 52px;
+      border: 3px solid var(--cyan);
+      border-radius: 50%;
+      background: white;
+      color: var(--cyan);
+      font: 800 14px/1 var(--mono);
+    }
+    .stage-body { border: 1px solid var(--line); background: #fbfcfd; padding: 20px; }
+    .stage-head { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
+    .stage-status { color: var(--ink-soft); font: 700 11px/1.3 var(--mono); white-space: nowrap; }
+    .stage ul { margin: 10px 0 0; padding-left: 19px; }
+    .stage li + li { margin-top: 6px; }
+    .pass-rule {
+      margin-top: 14px;
+      padding: 11px 13px;
+      border-left: 4px solid var(--green);
+      background: var(--green-pale);
+      color: #10633d;
+      font-weight: 700;
+    }
+    .stop-rule {
+      margin-top: 10px;
+      padding: 11px 13px;
+      border-left: 4px solid var(--red);
+      background: var(--red-pale);
+      color: #7a271a;
+      font-weight: 700;
+    }
+
+    .command {
+      position: relative;
+      margin: 12px 0;
+      border: 1px solid #243b53;
+      background: #102a43;
+      color: #d9f3f2;
+    }
+    .command pre {
+      overflow: auto;
+      margin: 0;
+      padding: 16px 92px 16px 16px;
+      font: 12px/1.65 var(--mono);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .copy-button {
+      position: absolute;
+      right: 8px;
+      top: 8px;
+      border: 1px solid rgba(255,255,255,.38);
+      background: transparent;
+      color: white;
+      padding: 6px 9px;
+      font: 700 11px/1 var(--mono);
+    }
+    .copy-button.copied { color: #71e2df; border-color: #71e2df; }
+
+    .reference-table, .verdict-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .reference-table th, .reference-table td,
+    .verdict-table th, .verdict-table td {
+      border: 1px solid var(--line);
+      padding: 11px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .reference-table th, .verdict-table th { background: #eaf0f4; font-family: var(--mono); }
+    .reference-table code { font-family: var(--mono); }
+
+    details { border: 1px solid var(--line); background: white; }
+    details + details { margin-top: 9px; }
+    summary {
+      padding: 14px 16px;
+      cursor: pointer;
+      font-weight: 800;
+      list-style: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::before { content: "+"; display: inline-block; width: 24px; color: var(--cyan); font-family: var(--mono); }
+    details[open] summary::before { content: "−"; }
+    .detail-body { padding: 0 18px 18px 40px; color: var(--ink-soft); }
+    .detail-body strong { color: var(--ink); }
+
+    .evidence-tree {
+      margin: 0;
+      padding: 18px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      background: #f2f6f8;
+      font: 12px/1.7 var(--mono);
+    }
+    .evidence-list { columns: 2; column-gap: 28px; padding-left: 19px; }
+    .evidence-list li { break-inside: avoid; margin-bottom: 7px; }
+
+    .final-call {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 230px;
+      gap: 20px;
+      align-items: center;
+      margin-top: 22px;
+      padding: 22px;
+      border: 2px solid var(--ink);
+      background: #fbfcfd;
+    }
+    .final-call select { width: 100%; min-height: 48px; border: 2px solid var(--ink); background: white; padding: 8px; font-weight: 800; }
+
+    footer {
+      padding: 24px 4px 0;
+      color: var(--ink-soft);
+      font: 12px/1.6 var(--mono);
+    }
+    .only-print { display: none; }
+
+    @media (max-width: 980px) {
+      .page-shell { grid-template-columns: 1fr; }
+      .side-rail { position: static; }
+      nav { display: none; }
+      .rail-actions { grid-template-columns: repeat(3, minmax(0,1fr)); }
+      .field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .field.span-3 { grid-column: 1 / -1; }
+    }
+    @media (max-width: 680px) {
+      .page-shell { width: min(100% - 18px, 1440px); margin-top: 9px; }
+      .split, .final-call { grid-template-columns: 1fr; }
+      .field-grid { grid-template-columns: 1fr; }
+      .field.span-2, .field.span-3 { grid-column: auto; }
+      .rail-actions { grid-template-columns: 1fr; }
+      .check-row { grid-template-columns: 26px minmax(0, 1fr); }
+      .check-row .gate { grid-column: 2; justify-self: start; }
+      .stage { grid-template-columns: 42px minmax(0, 1fr); gap: 10px; }
+      .stage-node { width: 42px; height: 42px; }
+      .signal-chain::before { left: 20px; }
+      .stage-head { display: block; }
+      .stage-status { display: inline-block; margin-top: 6px; }
+      .evidence-list { columns: 1; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .progress-track i { transition: none; }
+    }
+
+    @media print {
+      body { background: white; font-size: 10pt; }
+      .page-shell { display: block; width: 100%; margin: 0; }
+      .side-rail { position: static; box-shadow: none; margin-bottom: 12px; }
+      nav, .rail-actions, .copy-button { display: none !important; }
+      .hero, section { box-shadow: none; break-inside: avoid; }
+      .hero { min-height: auto; padding: 28px; }
+      .hero h1 { font-size: 38pt; }
+      section { padding: 22px; margin-top: 12px; }
+      details { break-inside: avoid; }
+      details:not([open]) .detail-body { display: block; }
+      .only-print { display: block; }
+      input, select, textarea { border-color: #444 !important; background: white !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <aside class="side-rail" aria-label="报告导航与进度">
+      <p class="eyebrow">Bench release card · R1</p>
+      <div class="progress-value"><strong id="progressPercent">0%</strong><span id="progressCount">0 / 0 已完成</span></div>
+      <div class="progress-track" aria-hidden="true"><i id="progressBar"></i></div>
+      <nav>
+        <a href="#ownership">01 谁负责什么</a>
+        <a href="#entry">02 进入台架前</a>
+        <a href="#facts">03 填写真实配置</a>
+        <a href="#sequence">04 现场操作顺序</a>
+        <a href="#evidence">05 保存证据</a>
+        <a href="#troubleshoot">06 出错怎么停</a>
+        <a href="#verdict">07 最终结论</a>
+      </nav>
+      <div class="rail-actions">
+        <button class="action-button" type="button" id="printButton">打印 / 存 PDF</button>
+        <button class="action-button secondary" type="button" id="expandButton">展开故障说明</button>
+        <button class="action-button danger" type="button" id="resetButton">清空本页记录</button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <p class="eyebrow">Vector → XCP → DAQ → DTO → MF4</p>
+        <h1><span>上车不是“点录制”，</span><span>而是逐级放行。</span></h1>
+        <p class="lede">这份行动板只列需要你在 Windows、Vector 硬件和 ECU 现场确认或操作的事项。其他代码、测试、打包和诊断工作应由执行 agent 在占用台架前完成。</p>
+        <div class="hero-meta">
+          <span class="tag red">CURRENT · NO-GO</span>
+          <span class="tag cyan">TARGET · CLASSIC CAN FIRST</span>
+          <span class="tag">PYXCP 0.29.10</span>
+          <span class="tag">PYTHON-CAN 4.6.1</span>
+          <span class="tag">2026-07-11</span>
+        </div>
+      </header>
+
+      <div class="no-go" role="alert">
+        <strong>NO-GO</strong>
+        <div>当前代码还不能直接用于真实采集。只有执行 agent 完成 Tasks 0–10、交付 Windows 源码运行契约和打包版 smoke 证据后，才进入本页的台架步骤。<b>Test Connection 绿色也不等于采集成功；必须收到可解码首帧 DTO。</b></div>
+      </div>
+
+      <section id="ownership">
+        <header>
+          <p class="eyebrow">01 · Ownership boundary</p>
+          <h2>谁负责什么</h2>
+          <p>把软件问题留给 agent，把物理世界的事实留给你。任何一方都不要猜另一方负责的信息。</p>
+        </header>
+        <div class="split">
+          <article class="owner-card">
+            <h3>其他 agent 完成</h3>
+            <ul>
+              <li>独立 worktree、红测试、Tasks 0–10 的全部源码修改。</li>
+              <li>锁定并验证 <code>python-can==4.6.1</code>、<code>pyxcp==0.29.10</code>。</li>
+              <li>修正 Master 配置、认证、DAQ 顺序、firstPid、DTO policy、线程队列和物理转换。</li>
+              <li>保证 Record 不触发第二次 CONNECT / DAQ 分配。</li>
+              <li>完成 macOS 硬件无关测试、Windows 真实包契约、Windows 文件夹版构建与 smoke。</li>
+              <li>交付预台架 runbook、空证据模板和 <b>PROCEED TO BENCH</b> / <b>DO NOT PROCEED</b>。</li>
+            </ul>
+          </article>
+          <article class="owner-card operator">
+            <h3>你必须确认或操作</h3>
+            <ul>
+              <li>确认 A-side / B-side ECU，并提供匹配的 A2L。</li>
+              <li>确认 Vector 型号、序列号、驱动、App 名、通道、波特率、终端电阻和线束。</li>
+              <li>确认 ECU 上电/点火状态与 DAQ 保护；如有保护，提供匹配的 Seed&amp;Key DLL。</li>
+              <li>保证 CANape / CANoe / 其他程序不占同一 Vector 通道。</li>
+              <li>现场连接、断开、上电、受控断电和故障恢复。</li>
+              <li>监督 Tasks 11–12，并保存 JSON、截图、日志和 MF4。</li>
+            </ul>
+          </article>
+        </div>
+        <div class="doc-links">
+          <a class="doc-link" href="../specs/2026-07-11-pyxcp-029-vector-xcp-readiness-spec.md">打开 Spec</a>
+          <a class="doc-link" href="../plans/2026-07-11-pyxcp-029-vector-xcp-readiness-implementation.md">打开 Implementation Plan</a>
+          <a class="doc-link" href="../runbooks/stage-8-pr4-bench.md">打开 Bench Runbook</a>
+        </div>
+      </section>
+
+      <section id="entry">
+        <header>
+          <p class="eyebrow">02 · Bench entry gate</p>
+          <h2>进入台架前，先收齐 agent 交付</h2>
+          <p>以下七项全部打勾才值得连接 ECU。缺一项就把问题退回 agent，不要在车上边猜边改。</p>
+        </header>
+        <div class="checklist">
+          <div class="check-row"><input id="entry-1" data-save="check" type="checkbox"><label for="entry-1"><strong>独立任务分支与 Tasks 0–10 的可审查提交</strong><small>包含 base commit、worktree、commit 列表和 changed files。</small></label><span class="gate">P0</span></div>
+          <div class="check-row"><input id="entry-2" data-save="check" type="checkbox"><label for="entry-2"><strong>Windows 真实包 API 契约 JSON 为绿色</strong><small>必须显示 Python 位数、python-can 4.6.1、pyxcp 0.29.10 和实际接口检查。</small></label><span class="gate">P0</span></div>
+          <div class="check-row"><input id="entry-3" data-save="check" type="checkbox"><label for="entry-3"><strong>硬件无关 focused tests 与回归测试绿色</strong><small>不接受只有 MagicMock 的“接口测试”。</small></label><span class="gate">P0</span></div>
+          <div class="check-row"><input id="entry-4" data-save="check" type="checkbox"><label for="entry-4"><strong>Windows 文件夹版构建成功，exe runtime smoke 绿色</strong><small>源码 venv 能 import 不代表打包 exe 能 import。</small></label><span class="gate">P0</span></div>
+          <div class="check-row"><input id="entry-5" data-save="check" type="checkbox"><label for="entry-5"><strong>预台架 runbook 与空 evidence 模板已提交</strong><small>记录使用的 commit；现场按同一版执行。</small></label><span class="gate">P0</span></div>
+          <div class="check-row"><input id="entry-6" data-save="check" type="checkbox"><label for="entry-6"><strong>Agent handoff 明确写出 PROCEED TO BENCH</strong><small>若是 DO NOT PROCEED，先关闭软件 blocker。</small></label><span class="gate">P0</span></div>
+          <div class="check-row"><input id="entry-7" data-save="check" type="checkbox"><label for="entry-7"><strong>旧错误契约已清除</strong><small>无 DTO fetch fallback、错误 auth keyword、per-list allocDaq、宽泛 pyxcp 版本和合成生产健康值。</small></label><span class="gate">P0</span></div>
+        </div>
+      </section>
+
+      <section id="facts">
+        <header>
+          <p class="eyebrow">03 · Live configuration sheet</p>
+          <h2>填写现场真实配置</h2>
+          <p>这些输入会保存在当前浏览器本地。带“待确认”的默认值只是历史记录，不是本次现场事实。</p>
+        </header>
+        <div class="field-grid">
+          <div class="field"><label for="operator">操作人</label><input id="operator" data-save="field" placeholder="姓名"></div>
+          <div class="field"><label for="round">日期 / 轮次</label><input id="round" data-save="field" placeholder="2026-07-__ / R__"></div>
+          <div class="field"><label for="commit">使用的 commit</label><input id="commit" data-save="field" placeholder="完整或短 SHA"></div>
+
+          <div class="field"><label for="ecu-side">ECU 侧</label><select id="ecu-side" data-save="field"><option value="">请选择</option><option>A-side</option><option>B-side</option><option>其他，需重新核对 A2L</option></select></div>
+          <div class="field span-2"><label for="a2l">A2L 文件路径</label><input id="a2l" data-save="field" placeholder="Windows 上的完整路径"></div>
+          <div class="field span-2"><label for="a2l-hash">A2L SHA-256</label><input id="a2l-hash" data-save="field" placeholder="由诊断脚本生成"></div>
+          <div class="field"><label for="xcp-ids">XCP CMD / RESP ID</label><input id="xcp-ids" data-save="field" placeholder="例如 0x6C7 / 0x6C6"></div>
+
+          <div class="field"><label for="vector-model">Vector 型号</label><input id="vector-model" data-save="field" placeholder="历史：VN1630A，现场确认"></div>
+          <div class="field"><label for="vector-serial">Vector 序列号</label><input id="vector-serial" data-save="field" placeholder="历史：594136，现场确认"></div>
+          <div class="field"><label for="driver">Vector 驱动版本</label><input id="driver" data-save="field" placeholder="历史：25.20.14，现场确认"></div>
+          <div class="field"><label for="app-name">Vector App 名</label><input id="app-name" data-save="field" value="Python"></div>
+          <div class="field"><label for="channel">通道</label><input id="channel" data-save="field" value="0"></div>
+          <div class="field"><label for="bitrate">仲裁波特率</label><input id="bitrate" data-save="field" value="500000"></div>
+
+          <div class="field"><label for="can-mode">CAN 模式</label><select id="can-mode" data-save="field"><option>Classic CAN</option><option>CAN-FD（需独立验证）</option></select></div>
+          <div class="field"><label for="termination">终端 / 线束</label><input id="termination" data-save="field" placeholder="例如 60Ω 总线测量结果"></div>
+          <div class="field"><label for="ignition">ECU 电源 / 点火状态</label><input id="ignition" data-save="field" placeholder="电压、IGN 状态"></div>
+          <div class="field"><label for="security">DAQ 保护</label><select id="security" data-save="field"><option value="">未知 — 禁止进入台架</option><option>未锁</option><option>已锁，已有匹配 DLL</option><option>已锁，缺少 DLL</option></select></div>
+          <div class="field span-2"><label for="seed-key">Seed&amp;Key DLL / provider</label><input id="seed-key" data-save="field" placeholder="如不需要，明确填“不需要”"></div>
+
+          <div class="field span-2"><label for="first-signal">首帧验证信号</label><input id="first-signal" data-save="field" placeholder="名称、事件、datatype、单位、预期静态范围"></div>
+          <div class="field"><label for="first-event">首帧事件 / raster</label><input id="first-event" data-save="field" placeholder="例如已确认的 10 ms event"></div>
+          <div class="field span-3"><label for="reference-value">独立参考方式</label><textarea id="reference-value" data-save="field" placeholder="说明如何验证物理值：台架已知量、ECU 内部参考、CANape 独立会话等。CANape 不得与本程序同时占用同一通道。"></textarea></div>
+        </div>
+        <div class="hint"><b>A/B 已知参考：</b>A-side 当前解析记录为 CMD <code>0x6C7</code> / RESP <code>0x6C6</code>；B-side 为 CMD <code>0x6C8</code> / RESP <code>0x6C9</code>。必须由本轮 A2L 诊断结果重新确认。</div>
+      </section>
+
+      <section id="sequence">
+        <header>
+          <p class="eyebrow">04 · Signal-chain release</p>
+          <h2>现场操作顺序</h2>
+          <p>每一站只证明一件事。上游没有通过，就不要跳到下游点 Record。</p>
+        </header>
+
+        <div class="signal-chain">
+          <article class="stage">
+            <div class="stage-node">00</div>
+            <div class="stage-body">
+              <div class="stage-head"><h3>冻结环境与证据目录</h3><span class="stage-status">BEFORE ECU</span></div>
+              <div class="checklist">
+                <div class="check-row"><input id="stage-00-1" data-save="check" type="checkbox"><label for="stage-00-1"><strong>记录 git commit、Python 位数、两个包版本、驱动和设备</strong><small>所有版本必须出现在 JSON 中。</small></label><span class="gate">必须</span></div>
+                <div class="check-row"><input id="stage-00-2" data-save="check" type="checkbox"><label for="stage-00-2"><strong>新建本轮 evidence 目录</strong><small>不要覆盖上一轮；失败证据也保留。</small></label><span class="gate">必须</span></div>
+                <div class="check-row"><input id="stage-00-3" data-save="check" type="checkbox"><label for="stage-00-3"><strong>关闭占用同一通道的 CANape / CANoe / 其他程序</strong><small>CANape 只允许作为不并发的独立参考会话。</small></label><span class="gate">必须</span></div>
+              </div>
+              <div class="command"><pre>.\.venv\Scripts\python.exe scripts\verify_windows_acquisition_runtime.py `
+  --json evidence\vector-xcp\&lt;date&gt;-&lt;round&gt;\api-contract.json</pre><button class="copy-button" type="button">复制</button></div>
+              <div class="stop-rule">脚本不存在或 JSON 不是绿色：说明 Tasks 0–10 尚未交付，停止。</div>
+            </div>
+          </article>
+
+          <article class="stage">
+            <div class="stage-node">01</div>
+            <div class="stage-body">
+              <div class="stage-head"><h3>先加载 A2L，再配置 Transport</h3><span class="stage-status">STATIC FACTS</span></div>
+              <ul>
+                <li>确认 A-side / B-side 与文件匹配；记录 SHA-256。</li>
+                <li>确认有可用 <code>IF_DATA XCP</code>、measurement、event、CMD/RESP ID、MAX_CTO/MAX_DTO。</li>
+                <li>填入 Vector App、channel、Classic CAN / CAN-FD、bitrates 和 Seed&amp;Key provider。</li>
+              </ul>
+              <div class="checklist">
+                <div class="check-row"><input id="stage-01-1" data-save="check" type="checkbox"><label for="stage-01-1"><strong>A2L 原子加载成功</strong><small>measurement 和 IF_DATA 同时可用；不是只显示了文件名。</small></label><span class="gate">GATE</span></div>
+                <div class="check-row"><input id="stage-01-2" data-save="check" type="checkbox"><label for="stage-01-2"><strong>Transport 与现场配置逐项一致</strong><small>App、channel、mode、bitrates、ID、security 均已核对。</small></label><span class="gate">GATE</span></div>
+              </div>
+              <div class="stop-rule">A2L 缺 IF_DATA、事件、地址或 datatype：不要尝试连接，更不要手填猜测值。</div>
+            </div>
+          </article>
+
+          <article class="stage">
+            <div class="stage-node">02</div>
+            <div class="stage-body">
+              <div class="stage-head"><h3>Test Connection：只证明 CONNECT 与 DAQ 能力</h3><span class="stage-status">G5</span></div>
+              <p>在 Settings → Transport 点击 <b>Test Connection</b>。它必须通过 runtime、Vector、CONNECT、protection、DAQ info 和 cleanup 六个阶段。</p>
+              <div class="checklist">
+                <div class="check-row"><input id="stage-02-1" data-save="check" type="checkbox"><label for="stage-02-1"><strong>Test Connection 全阶段绿色</strong><small>保存 JSON 和完整截图；不要只记一个绿色 toast。</small></label><span class="gate">G5</span></div>
+                <div class="check-row"><input id="stage-02-2" data-save="check" type="checkbox"><label for="stage-02-2"><strong>DAQ protection 状态明确，cleanup 成功</strong><small>CONNECT resource availability 不是锁状态。</small></label><span class="gate">G5</span></div>
+              </div>
+              <div class="pass-rule">通过只代表“ECU 能回应并暴露兼容 DAQ 能力”，仍然不能点 Record。</div>
+              <div class="stop-rule">任何阶段红：先保存原始错误和 JSON，再改一个变量重试。不要一次改 App、通道、波特率和 A2L。</div>
+            </div>
+          </article>
+
+          <article class="stage">
+            <div class="stage-node">03</div>
+            <div class="stage-body">
+              <div class="stage-head"><h3>单信号首帧：真正的采集放行门</h3><span class="stage-status">G6</span></div>
+              <ul>
+                <li>选择一个已知 event、datatype、转换、单位和静态范围的信号。</li>
+                <li>点击 <b>Connect ECU</b>，不是 Record。</li>
+                <li>等待本次会话收到并成功解码该信号的首个 DTO。</li>
+                <li>对比独立参考，确认数值和单位合理。</li>
+              </ul>
+              <div class="checklist">
+                <div class="check-row"><input id="stage-03-1" data-save="check" type="checkbox"><label for="stage-03-1"><strong>首个可解码 DTO 在 deadline 内到达</strong><small>默认 3 s 或 5×最慢已选事件周期，取较大值。</small></label><span class="gate">G6</span></div>
+                <div class="check-row"><input id="stage-03-2" data-save="check" type="checkbox"><label for="stage-03-2"><strong>信号名称、物理值、单位和 raster 合理</strong><small>保存 raw/decoded/conversion 证据与截图。</small></label><span class="gate">G6</span></div>
+                <div class="check-row"><input id="stage-03-3" data-save="check" type="checkbox"><label for="stage-03-3"><strong>真实 backend 身份明确，无 FAKE / replay 标识</strong><small>Record 按钮只有此时才应可用。</small></label><span class="gate">G6</span></div>
+              </div>
+              <div class="stop-rule">“XCP 已连接但一直没首帧”不是部分成功。记录最后阶段：DAQ 未启动 / 无 DTO / unknown PID / malformed / selected signal absent，然后停止。</div>
+            </div>
+          </article>
+
+          <article class="stage">
+            <div class="stage-node">04</div>
+            <div class="stage-body">
+              <div class="stage-head"><h3>源码版 3 信号 / 30 秒 MF4</h3><span class="stage-status">G7</span></div>
+              <ul>
+                <li>选同一个已确认 event 上的三个信号。</li>
+                <li>Connect ECU，等首帧，再 Record 30 s、Stop。</li>
+                <li>确认 Record/Stop 没有第二次 CONNECT 或 DAQ allocation。</li>
+                <li>停止后仍实时预览；随后重新打开 MF4 做独立检查。</li>
+              </ul>
+              <div class="checklist">
+                <div class="check-row"><input id="stage-04-1" data-save="check" type="checkbox"><label for="stage-04-1"><strong>MF4 可关闭并重新打开，恰好包含三个已选通道</strong><small>名称、单位、值和时间单调。</small></label><span class="gate">G7</span></div>
+                <div class="check-row"><input id="stage-04-2" data-save="check" type="checkbox"><label for="stage-04-2"><strong>按 event 核对样本数与间隔</strong><small>不是只看文件存在或总行数。</small></label><span class="gate">G7</span></div>
+                <div class="check-row"><input id="stage-04-3" data-save="check" type="checkbox"><label for="stage-04-3"><strong>bus / queue / decode / writer drop 全部为 0</strong><small>任意非零都使本轮失败。</small></label><span class="gate">G7</span></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="stage">
+            <div class="stage-node">05</div>
+            <div class="stage-body">
+              <div class="stage-head"><h3>打包版重复同样的证据</h3><span class="stage-status">G9</span></div>
+              <p>从 Windows 文件夹版 exe 重复单信号首帧与 3 信号 / 30 秒 MF4。打包版能打开不等于 pyxcp、DAQ 和 writer 链路可用。</p>
+              <div class="checklist">
+                <div class="check-row"><input id="stage-05-1" data-save="check" type="checkbox"><label for="stage-05-1"><strong>打包版首帧通过</strong><small>保存 packaged runtime JSON 与首帧证据。</small></label><span class="gate">G9</span></div>
+                <div class="check-row"><input id="stage-05-2" data-save="check" type="checkbox"><label for="stage-05-2"><strong>打包版 3 信号 MF4 通过</strong><small>验收标准与源码版完全相同。</small></label><span class="gate">G9</span></div>
+              </div>
+            </div>
+          </article>
+
+          <article class="stage">
+            <div class="stage-node">06</div>
+            <div class="stage-body">
+              <div class="stage-head"><h3>混合事件、连续录制与 30 分钟 soak</h3><span class="stage-status">G8 / G10</span></div>
+              <ul>
+                <li>12 信号 / 两事件 / 60 s；逐 event 核对样本数与间隔。</li>
+                <li>一次 CONNECT 下 Record 30 s → Stop → 继续预览 → 再 Record 30 s。</li>
+                <li>代表性 selection 运行 30 分钟，记录内存、CPU、队列高水位和所有错误计数。</li>
+                <li>仅在台架安全并获授权时做 ECU 断电/Vector 断连恢复。</li>
+              </ul>
+              <div class="checklist">
+                <div class="check-row"><input id="stage-06-1" data-save="check" type="checkbox"><label for="stage-06-1"><strong>混合事件 60 s 通过</strong><small>实际 firstPid 不重叠，所有通道可重开。</small></label><span class="gate">G8</span></div>
+                <div class="check-row"><input id="stage-06-2" data-save="check" type="checkbox"><label for="stage-06-2"><strong>一次 CONNECT、两次录制通过</strong><small>两个 MF4 有效，实时会话时间连续。</small></label><span class="gate">G10</span></div>
+                <div class="check-row"><input id="stage-06-3" data-save="check" type="checkbox"><label for="stage-06-3"><strong>30 分钟 soak 与 cleanup 通过</strong><small>零 drop/error，MF4 可重开，通道无需重启应用即可复用。</small></label><span class="gate">G10</span></div>
+              </div>
+              <div class="stop-rule">CAN-FD 或其他 VN 型号必须重新跑本链路。Classic CAN + VN1630A 的 PASS 不能扩写为通用 Vector PASS。</div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="evidence">
+        <header>
+          <p class="eyebrow">05 · Evidence pack</p>
+          <h2>失败也要保存，改设置前先截图</h2>
+          <p>每轮使用新的目录。只有能追溯到 commit、A2L hash、硬件和配置的 MF4 才有验证价值。</p>
+        </header>
+        <pre class="evidence-tree">evidence\vector-xcp\YYYY-MM-DD-RN\
+├── README.md                       # 操作人、目标、最终 verdict
+├── configuration.json              # ECU/A2L/Vector/CAN/Seed&amp;Key 元数据
+├── api-contract.json               # 源码 venv 的真实包契约
+├── packaged-runtime-smoke.json     # 文件夹版 exe 契约
+├── test-connection.json            # 分阶段 CONNECT / DAQ info / cleanup
+├── first-dto.json                  # PID、raw、decode、conversion、arrival
+├── source-3sig-30s.mf4
+├── packaged-3sig-30s.mf4
+├── mixed-12sig-60s.mf4
+├── soak-30min.mf4
+├── counters-final.json
+├── screenshots\
+└── failures\                       # 每次失败原文，修复前保存</pre>
+        <ul class="evidence-list">
+          <li>git commit / branch</li>
+          <li>Python 位数</li>
+          <li>python-can / pyxcp 版本</li>
+          <li>Vector driver / model / serial</li>
+          <li>App / channel / CAN mode / bitrates</li>
+          <li>A2L 文件名 / SHA-256 / ECU side</li>
+          <li>CMD / RESP ID</li>
+          <li>DAQ protection / provider 状态</li>
+          <li>selected signals / events</li>
+          <li>firstPid 映射</li>
+          <li>首帧 deadline / 实际耗时</li>
+          <li>所有 drop/error/high-water counters</li>
+          <li>MF4 reopen 校验</li>
+          <li>源码版 / 打包版明确区分</li>
+        </ul>
+      </section>
+
+      <section id="troubleshoot">
+        <header>
+          <p class="eyebrow">06 · Stop by failed stage</p>
+          <h2>出错时按阶段停，不要盲调</h2>
+          <p>先保存原始错误，再只改变一个变量。以下说明是定位路径，不是“继续录制”的豁免。</p>
+        </header>
+        <details>
+          <summary>Runtime / import / 打包 smoke 失败</summary>
+          <div class="detail-body"><strong>停止位置：</strong>不要连接 ECU。核对 64 位 Python、精确版本、动态 import probe、vendor dependency closure。源码能 import 而 exe 失败，退回 Task 10。</div>
+        </details>
+        <details>
+          <summary>Vector bus open 失败</summary>
+          <div class="detail-body"><strong>只检查物理/驱动层：</strong>驱动、设备识别、App 配置、channel、通道占用和 bitrate。不要改 XCP ID 或 DAQ selection。</div>
+        </details>
+        <details>
+          <summary>XCP CONNECT timeout</summary>
+          <div class="detail-body"><strong>检查：</strong>ECU 上电/点火、终端和线束、A/B A2L、CMD/RESP ID、bitrate、标准/扩展 ID。保存 timeout 和实际使用 ID。</div>
+        </details>
+        <details>
+          <summary>DAQ locked / Seed&amp;Key 失败</summary>
+          <div class="detail-body"><strong>检查：</strong>GET_STATUS protection 结果、DLL 路径/位数/符号、是否与 ECU 软件版本匹配。不要从 CONNECT RESOURCE 位推断锁状态。</div>
+        </details>
+        <details>
+          <summary>DAQ started，但持续没有 DTO</summary>
+          <div class="detail-body"><strong>这不是连接成功。</strong>检查 event、list selection、START_STOP_DAQ_LIST、START_STOP_SYNCH、pyxcp acquisition policy 是否安装，以及 ECU 是否实际触发该事件。退回 Tasks 4–5。</div>
+        </details>
+        <details>
+          <summary>收到 DTO，但 unknown PID / malformed payload</summary>
+          <div class="detail-body"><strong>检查：</strong>ECU 返回的 firstPid、ODT 数量、MAX_DTO、timestamp mode、identification field 和 address extension。不要假设 PID 从 0 开始。</div>
+        </details>
+        <details>
+          <summary>数值不合理或单位不对</summary>
+          <div class="detail-body"><strong>检查：</strong>signedness、byte order、datatype、COMPU_METHOD、转换是否被重复/遗漏、unsupported conversion 是否被错误标成物理量。保存 raw 与 decoded 对照。</div>
+        </details>
+        <details>
+          <summary>MF4 存在但重开失败 / 样本不对 / 有 drop</summary>
+          <div class="detail-body"><strong>本轮失败。</strong>分别查看 frame overflow、sample overflow、decode drop、ring drop、writer error 和 bus error。不要用“文件生成了”作为 PASS。</div>
+        </details>
+      </section>
+
+      <section id="verdict">
+        <header>
+          <p class="eyebrow">07 · Combination-specific verdict</p>
+          <h2>只对实测组合下结论</h2>
+          <p>没有证据的单元格填 NOT TESTED。不能把一台 VN1630A 的 Classic CAN 结果推广到所有 Vector 或 CAN-FD。</p>
+        </header>
+        <div style="overflow:auto">
+          <table class="verdict-table">
+            <thead><tr><th>组合</th><th>源码首帧/MF4</th><th>打包首帧/MF4</th><th>混合事件</th><th>Soak / recovery</th><th>Verdict</th></tr></thead>
+            <tbody>
+              <tr><td><input data-save="field" aria-label="已验证组合" placeholder="版本 + driver + Vector + ECU/A2L + CAN"></td><td><input data-save="field" aria-label="源码结果" placeholder="evidence / NOT TESTED"></td><td><input data-save="field" aria-label="打包结果" placeholder="evidence / NOT TESTED"></td><td><input data-save="field" aria-label="混合事件结果" placeholder="evidence / NOT TESTED"></td><td><input data-save="field" aria-label="soak 结果" placeholder="evidence / NOT TESTED"></td><td><select data-save="field" aria-label="组合 verdict"><option>NOT TESTED</option><option>BLOCKED</option><option>PARTIAL</option><option>PASS</option></select></td></tr>
+              <tr><td>CAN-FD</td><td>独立验证</td><td>独立验证</td><td>独立验证</td><td>独立验证</td><td><select data-save="field" aria-label="CAN-FD verdict"><option>NOT TESTED</option><option>BLOCKED</option><option>PARTIAL</option><option>PASS</option></select></td></tr>
+              <tr><td><input data-save="field" aria-label="其他 Vector 型号" placeholder="其他 VN 型号"></td><td>独立验证</td><td>独立验证</td><td>独立验证</td><td>独立验证</td><td><select data-save="field" aria-label="其他型号 verdict"><option>NOT TESTED</option><option>BLOCKED</option><option>PARTIAL</option><option>PASS</option></select></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="final-call">
+          <div><h3>本轮总体建议</h3><p>只有完全填写证据路径且所有接受路径的 drop/error 为 0，才选择 PASS。PARTIAL 不能用于真实采集发布。</p></div>
+          <select id="overallVerdict" data-save="field" aria-label="总体建议"><option>DO NOT PROCEED</option><option>PROCEED TO NEXT GATE</option><option>PASS — VALIDATED COMBINATION ONLY</option></select>
+        </div>
+      </section>
+
+      <footer>
+        <div class="only-print">现场签字：____________________　日期：____________________　使用 commit：____________________</div>
+        <p>Artifact: <code>docs/analyzer/acquisition/reports/2026-07-11-vector-xcp-operator-action-board.html</code></p>
+        <p>本页数据只保存在当前浏览器的 localStorage。它是操作辅助，不替代仓库 evidence 目录、Spec、Implementation Plan 或 Bench Runbook。</p>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const prefix = "vector-xcp-action-board-r1:";
+      const savables = [...document.querySelectorAll("[data-save]")];
+      const checks = savables.filter(el => el.type === "checkbox");
+      const percent = document.getElementById("progressPercent");
+      const count = document.getElementById("progressCount");
+      const bar = document.getElementById("progressBar");
+
+      function storageKey(el, index) {
+        return prefix + (el.id || el.getAttribute("aria-label") || `field-${index}`);
+      }
+
+      function restore() {
+        savables.forEach((el, index) => {
+          const value = localStorage.getItem(storageKey(el, index));
+          if (value === null) return;
+          if (el.type === "checkbox") el.checked = value === "true";
+          else el.value = value;
+        });
+      }
+
+      function updateProgress() {
+        const done = checks.filter(el => el.checked).length;
+        const total = checks.length;
+        const value = total ? Math.round(done / total * 100) : 0;
+        percent.textContent = `${value}%`;
+        count.textContent = `${done} / ${total} 已完成`;
+        bar.style.width = `${value}%`;
+      }
+
+      savables.forEach((el, index) => {
+        const eventName = el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input";
+        el.addEventListener(eventName, () => {
+          localStorage.setItem(storageKey(el, index), el.type === "checkbox" ? String(el.checked) : el.value);
+          updateProgress();
+        });
+      });
+
+      document.querySelectorAll(".copy-button").forEach(button => {
+        button.addEventListener("click", async () => {
+          const text = button.previousElementSibling.textContent;
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch (_) {
+            const textarea = document.createElement("textarea");
+            textarea.value = text;
+            textarea.style.position = "fixed";
+            textarea.style.opacity = "0";
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand("copy");
+            textarea.remove();
+          }
+          button.textContent = "已复制";
+          button.classList.add("copied");
+          setTimeout(() => { button.textContent = "复制"; button.classList.remove("copied"); }, 1300);
+        });
+      });
+
+      document.getElementById("printButton").addEventListener("click", () => window.print());
+      document.getElementById("expandButton").addEventListener("click", event => {
+        const details = [...document.querySelectorAll("details")];
+        const shouldOpen = details.some(item => !item.open);
+        details.forEach(item => { item.open = shouldOpen; });
+        event.currentTarget.textContent = shouldOpen ? "收起故障说明" : "展开故障说明";
+      });
+      document.getElementById("resetButton").addEventListener("click", () => {
+        if (!window.confirm("清空本页所有勾选和填写内容？此操作不能撤销。")) return;
+        Object.keys(localStorage).filter(key => key.startsWith(prefix)).forEach(key => localStorage.removeItem(key));
+        savables.forEach(el => {
+          if (el.type === "checkbox") el.checked = false;
+          else if (el.tagName === "SELECT") el.selectedIndex = 0;
+          else el.value = el.defaultValue || "";
+        });
+        updateProgress();
+      });
+
+      restore();
+      updateProgress();
+    })();
+  </script>
+</body>
+</html>
