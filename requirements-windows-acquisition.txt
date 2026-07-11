@@ -1,0 +1,4 @@
+# First validated Vector/XCP runtime.  Do not loosen these pins without a new
+# compatibility change that reruns API, source, package, and bench gates.
+python-can[vector]==4.6.1; sys_platform == "win32"
+pyxcp==0.29.10; sys_platform == "win32"
