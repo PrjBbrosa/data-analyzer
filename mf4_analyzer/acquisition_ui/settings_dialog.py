@@ -316,15 +316,22 @@ class TransportTabWidget(QWidget):
         self.sample_point_spin.setDecimals(1)
         self.sample_point_spin.setSuffix(" %")
         self.sample_point_spin.setValue(transport.sample_point)
-        layout.addRow("Sample point", self.sample_point_spin)
+        self.sample_point_spin.setEnabled(False)
+        self.sample_point_spin.setToolTip(
+            "Driver automatic: 当前 Vector runtime 不应用自定义 sample point"
+        )
+        layout.addRow("Sample point (driver automatic)", self.sample_point_spin)
 
         self.fd_sample_point_spin = QDoubleSpinBox(self)
         self.fd_sample_point_spin.setRange(50.0, 90.0)
         self.fd_sample_point_spin.setDecimals(1)
         self.fd_sample_point_spin.setSuffix(" %")
         self.fd_sample_point_spin.setValue(transport.fd_sample_point)
-        self.fd_sample_point_spin.setEnabled(transport.can_fd)
-        layout.addRow("FD sample point", self.fd_sample_point_spin)
+        self.fd_sample_point_spin.setEnabled(False)
+        self.fd_sample_point_spin.setToolTip(
+            "Driver automatic: 当前 Vector runtime 不应用自定义 FD sample point"
+        )
+        layout.addRow("FD sample point (driver automatic)", self.fd_sample_point_spin)
 
         self.timeout_spin = QSpinBox(self)
         self.timeout_spin.setRange(100, 10_000)
@@ -355,7 +362,6 @@ class TransportTabWidget(QWidget):
         )
 
         self.can_fd_check.toggled.connect(self.data_bitrate_combo.setEnabled)
-        self.can_fd_check.toggled.connect(self.fd_sample_point_spin.setEnabled)
         self.seed_key_browse.clicked.connect(self._browse_seed_key)
         self._sync_test_button_enabled()
 
@@ -552,7 +558,8 @@ class SettingsDialog(QDialog):
             level="green",
             message=(
                 f"OK · driver {hw.driver_version} · "
-                f"CONNECT/GET_STATUS · {xcp.latency_ms} ms"
+                f"CONNECT/GET_STATUS · DAQ {xcp.daq_protection} · "
+                f"{xcp.latency_ms} ms"
             ),
         )
 

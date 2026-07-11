@@ -1,7 +1,7 @@
 import sys
 import time
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
 
@@ -221,18 +221,49 @@ class _ProbeRuntime:
 
 
 class _ProbeMaster:
-    def __init__(self, *, connect_error: Exception | None = None):
+    def __init__(
+        self,
+        *,
+        connect_error: Exception | None = None,
+        daq_locked: bool = False,
+        status_error: Exception | None = None,
+    ):
         self.connect_error = connect_error
+        self.daq_locked = daq_locked
+        self.status_error = status_error
         self.connect_calls = 0
+        self.status_calls = 0
 
     def connect(self):
         self.connect_calls += 1
         if self.connect_error:
             raise self.connect_error
-        return types.SimpleNamespace(resource=0x05)
+        return types.SimpleNamespace(
+            resource=types.SimpleNamespace(
+                calpag=True,
+                daq=True,
+                stim=False,
+                pgm=False,
+                dbg=False,
+            )
+        )
+
+    def getStatus(self):  # noqa: N802 - pinned pyxcp spelling
+        self.status_calls += 1
+        if self.status_error is not None:
+            raise self.status_error
+        return types.SimpleNamespace(
+            resourceProtectionStatus=types.SimpleNamespace(
+                calpag=False,
+                daq=self.daq_locked,
+                stim=False,
+                pgm=False,
+                dbg=False,
+            )
+        )
 
 
-def test_test_xcp_connection_uses_shared_runtime_and_closes_it(monkeypatch):
+def test_test_xcp_connection_accepts_real_structured_resource_and_gets_status(monkeypatch):
     from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
     from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
 
@@ -241,9 +272,13 @@ def test_test_xcp_connection_uses_shared_runtime_and_closes_it(monkeypatch):
     result = test_xcp_connection(TransportConfig(), _ifdata())
 
     assert result.ok is True
-    assert result.resource_byte == 0x05
+    assert result.resources.daq is True
+    assert result.resources.calpag is True
+    assert result.resources.stim is False
+    assert result.daq_protection == "unprotected"
     assert result.latency_ms is not None
     assert runtime.master.connect_calls == 1
+    assert runtime.master.status_calls == 1
     assert runtime.closed is True
 
 
@@ -285,7 +320,60 @@ def test_test_xcp_connection_surfaces_seed_key_failure_and_closes_runtime(monkey
     )
     result = test_xcp_connection(TransportConfig(seed_and_key_dll="seedkey.dll"), _ifdata())
     assert result.ok is False
-    assert "Seed&Key" in (result.error or "")
+    assert "protection" in (result.error or "")
+    assert result.daq_protection == "unknown"
+    assert runtime.closed is True
+
+
+def test_test_xcp_connection_reports_locked_daq_without_provider(monkeypatch):
+    from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
+    from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
+
+    runtime = _ProbeRuntime(_ProbeMaster(daq_locked=True))
+    monkeypatch.setattr(PyXcpRuntime, "open", lambda *_args: runtime)
+
+    result = test_xcp_connection(TransportConfig(), _ifdata())
+
+    assert result.ok is False
+    assert result.daq_protection == "locked"
+    assert "no seed&key DLL" in (result.error or "")
+    assert runtime.master.status_calls == 1
+    assert runtime.closed is True
+
+
+def test_test_xcp_connection_reports_get_status_failure_as_unknown(monkeypatch):
+    from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
+    from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
+
+    runtime = _ProbeRuntime(_ProbeMaster(status_error=RuntimeError("ERR_CMD_UNKNOWN")))
+    monkeypatch.setattr(PyXcpRuntime, "open", lambda *_args: runtime)
+
+    result = test_xcp_connection(TransportConfig(), _ifdata())
+
+    assert result.ok is False
+    assert result.daq_protection == "unknown"
+    assert "GET_STATUS failed" in (result.error or "")
+    assert runtime.master.status_calls == 1
+    assert runtime.closed is True
+
+
+def test_test_xcp_connection_still_gets_status_when_connect_resource_is_malformed(
+    monkeypatch,
+):
+    from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
+    from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
+
+    master = _ProbeMaster()
+    master.connect = lambda: types.SimpleNamespace(resource=types.SimpleNamespace(daq=True))
+    runtime = _ProbeRuntime(master)
+    monkeypatch.setattr(PyXcpRuntime, "open", lambda *_args: runtime)
+
+    result = test_xcp_connection(TransportConfig(), _ifdata())
+
+    assert result.ok is False
+    assert result.daq_protection == "unprotected"
+    assert "resource.calpag" in (result.error or "")
+    assert runtime.master.status_calls == 1
     assert runtime.closed is True
 
 

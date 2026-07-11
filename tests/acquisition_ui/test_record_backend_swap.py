@@ -10,22 +10,24 @@ path here. Real Vector hardware verification lives in PR-4 bench.
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QMessageBox
 
-from can_logger.p0.a2l_probe import MeasurementSummary
+from can_logger.p0.a2l_probe import A2LSummary, MeasurementSummary
 from can_logger.p0.ifdata_xcp import (
     DaqEventInfo,
     DaqProcessorInfo,
     IfDataXcp,
 )
 from mf4_analyzer.acquisition_capture.backends import FakeRecorderBackend
-from mf4_analyzer.acquisition_capture.health import HwHealth
+from mf4_analyzer.acquisition_capture.health import HwHealth, level_daq
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
 from mf4_analyzer.acquisition_ui.main_window import CockpitMainWindow
+from mf4_analyzer.acquisition_ui.state import CockpitState, HealthyPredicateResult
 
 
 def _stub_ifdata() -> IfDataXcp:
@@ -86,6 +88,51 @@ def _capture_connection_warnings(window: CockpitMainWindow) -> list[str]:
 def _select_engine_speed(window: CockpitMainWindow) -> None:
     window._left_pane._selected_names.add("EngineSpeed")
     window._left_pane._refresh_list()
+
+
+class _OwnedVectorStub:
+    def __init__(self, diagnostics: dict | None = None) -> None:
+        self.stop_called = 0
+        self._diagnostics = diagnostics or {}
+
+    def start(self, _selection):
+        pass
+
+    def poll(self):
+        return []
+
+    def stop(self):
+        self.stop_called += 1
+
+    def status(self):
+        return SimpleNamespace(started=True, bus_error_count=0)
+
+    def diagnostics(self):
+        return dict(self._diagnostics)
+
+    def last_frame_monotonic(self):
+        return None
+
+
+def _arm_owned_connected(window: CockpitMainWindow, backend: _OwnedVectorStub) -> None:
+    window.set_transport(TransportConfig(app_name="Python", channel=0))
+    window._ifdata_xcp = _stub_ifdata()
+    window._left_pane.set_pool(_stub_pool(), a2l_has_daq_events=True)
+    _select_engine_speed(window)
+    window._backend = backend  # type: ignore[assignment]
+    window._owns_vector_backend = True
+    window._connection_attempt_started = 1.0
+    window._first_frame_ts = 2.0
+    window._stream_start_ts = 1.0
+    window._fake_xcp_connected = True
+    window._fake_can_load_pct = 12.5
+    window.state_machine.request_connect(
+        HealthyPredicateResult.from_components(
+            hw_ok=True,
+            xcp_connected=True,
+            first_frame_received=True,
+        )
+    )
 
 
 def test_no_swap_when_transport_missing(qapp):
@@ -456,3 +503,231 @@ def test_swap_no_op_when_caller_injected_non_fake_backend(qapp):
         assert window._backend is before
     finally:
         window.deleteLater()
+
+
+def test_owned_vector_selection_change_stops_backend_and_requires_reconnect(qapp):
+    """Writer schema cannot drift from an already programmed Vector DAQ map."""
+
+    class _OwnedVector:
+        def __init__(self) -> None:
+            self.stop_called = 0
+
+        def start(self, _selection):
+            pass
+
+        def poll(self):
+            return []
+
+        def stop(self):
+            self.stop_called += 1
+
+        def status(self):
+            return SimpleNamespace(started=True)
+
+        def last_frame_monotonic(self):
+            return None
+
+    pool = _stub_pool() + (
+        MeasurementSummary(
+            name="BatteryVoltage",
+            address=0x40000002,
+            datatype="UWORD",
+            unit="V",
+            conversion="",
+            available_events=("evt",),
+        ),
+    )
+    owned = _OwnedVector()
+    window = CockpitMainWindow()
+    try:
+        window._left_pane.set_pool(pool, a2l_has_daq_events=True)
+        _select_engine_speed(window)
+        window._backend = owned  # type: ignore[assignment]
+        window._owns_vector_backend = True
+        window._connection_attempt_started = 1.0
+        window._fake_xcp_connected = True
+        window.state_machine.request_connect(
+            HealthyPredicateResult.from_components(
+                hw_ok=True,
+                xcp_connected=True,
+                first_frame_received=True,
+            )
+        )
+
+        window._left_pane._set_measurement_selected("BatteryVoltage", True)
+
+        assert owned.stop_called == 1
+        assert window._owns_vector_backend is False
+        assert isinstance(window._backend, FakeRecorderBackend)
+        assert window.state_machine.state == CockpitState.DISCONNECTED
+        assert window.main_button.text() == "连接 ECU"
+        assert "重新连接" in window._status.currentMessage()
+        assert window._connection_attempt_started is None
+        assert window._fake_xcp_connected is False
+
+        replacement = _OwnedVector()
+        window._backend = replacement  # type: ignore[assignment]
+        window._owns_vector_backend = True
+        window.state_machine.request_connect(
+            HealthyPredicateResult.from_components(
+                hw_ok=True,
+                xcp_connected=True,
+                first_frame_received=True,
+            )
+        )
+        assert window.state_machine.state == CockpitState.CONNECTED_IDLE
+        assert window.main_button.text() == "● 采集"
+        assert window.main_button.isEnabled() is True
+    finally:
+        window.close()
+
+
+def test_connected_transport_change_fully_disconnects_owned_vector(qapp):
+    owned = _OwnedVectorStub()
+    window = CockpitMainWindow()
+    try:
+        _arm_owned_connected(window, owned)
+        replacement = TransportConfig(app_name="PythonChanged", channel=1)
+
+        window.set_transport(replacement)
+
+        assert owned.stop_called == 1
+        assert window._transport_config == replacement
+        assert window._owns_vector_backend is False
+        assert isinstance(window._backend, FakeRecorderBackend)
+        assert window.state_machine.state == CockpitState.DISCONNECTED
+        assert window._connection_attempt_started is None
+        assert window._first_frame_ts is None
+        assert window._stream_start_ts is None
+        assert window._fake_xcp_connected is False
+        assert window._fake_can_load_pct is None
+        assert window.main_button.text() == "连接 ECU"
+    finally:
+        window.close()
+
+
+def test_unchanged_transport_keeps_connected_owned_vector(qapp):
+    """Saving threshold-only settings must not tear down a valid DAQ layout."""
+
+    owned = _OwnedVectorStub()
+    window = CockpitMainWindow()
+    try:
+        _arm_owned_connected(window, owned)
+        original_transport = window._transport_config
+
+        assert window.set_transport(original_transport) is True
+
+        assert owned.stop_called == 0
+        assert window._backend is owned
+        assert window._owns_vector_backend is True
+        assert window.state_machine.state == CockpitState.CONNECTED_IDLE
+    finally:
+        window.close()
+
+
+def test_connected_a2l_change_fully_disconnects_owned_vector(
+    qapp, monkeypatch, tmp_path
+):
+    from can_logger.p0 import a2l_probe as a2l_probe_module
+    from can_logger.p0 import ifdata_xcp as ifdata_module
+
+    owned = _OwnedVectorStub()
+    window = CockpitMainWindow()
+    replacement = _stub_pool()
+    summary = A2LSummary(
+        path=str(tmp_path / "replacement.a2l"),
+        total_measurements=1,
+        measurements=list(replacement),
+        a2l_has_daq_events=True,
+    )
+    monkeypatch.setattr(ifdata_module, "parse_ifdata_xcp_file", lambda _path: (_stub_ifdata(),))
+    monkeypatch.setattr(
+        a2l_probe_module,
+        "load_measurement_summary",
+        lambda _path, *, limit=None: summary,
+    )
+    try:
+        _arm_owned_connected(window, owned)
+        path = tmp_path / "replacement.a2l"
+        path.write_text("")
+
+        window.apply_a2l_path(path)
+
+        assert owned.stop_called == 1
+        assert window.state_machine.state == CockpitState.DISCONNECTED
+        assert window._connection_attempt_started is None
+        assert window._first_frame_ts is None
+        assert window._fake_xcp_connected is False
+        assert window.main_button.text() == "连接 ECU"
+        assert window._a2l_name == "replacement.a2l"
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize("target_state", [CockpitState.RECORDING, CockpitState.REVIEW_MODAL])
+def test_recording_and_review_reject_transport_and_a2l_mutation(
+    qapp, tmp_path, target_state
+):
+    owned = _OwnedVectorStub()
+    controller = object()
+    window = CockpitMainWindow()
+    try:
+        _arm_owned_connected(window, owned)
+        original_transport = window._transport_config
+        window._a2l_name = "original.a2l"
+        window._capture_controller = controller  # type: ignore[assignment]
+        window.state_machine.request_start_recording()
+        if target_state == CockpitState.REVIEW_MODAL:
+            window._open_review_modal = lambda: None  # type: ignore[method-assign]
+            window.state_machine.request_stop_recording(finalized=True)
+
+        assert window.state_machine.state == target_state
+        assert window._settings_action.isEnabled() is False
+        assert window._a2l_btn.isEnabled() is False
+        assert window._transport_chip.isEnabled() is False
+        assert window._left_pane._frozen is True
+
+        selection_before = window._left_pane.current_selection()
+        window._left_pane._set_measurement_selected("EngineSpeed", False)
+        assert window._left_pane.current_selection() == selection_before
+
+        window.set_transport(TransportConfig(app_name="Forbidden", channel=2))
+        window.apply_a2l_path(tmp_path / "forbidden.a2l")
+
+        assert owned.stop_called == 0
+        assert window._backend is owned
+        assert window._owns_vector_backend is True
+        assert window._capture_controller is controller
+        assert window._transport_config == original_transport
+        assert window._a2l_name == "original.a2l"
+        assert "不可修改" in window._status.currentMessage()
+        if target_state == CockpitState.REVIEW_MODAL:
+            window.state_machine.request_review_close()
+            assert window._left_pane._frozen is False
+    finally:
+        window._capture_controller = None
+        window.close()
+
+
+@pytest.mark.parametrize(
+    ("counter", "expected"),
+    [
+        ("unknown_pid_count", "unknown PID"),
+        ("decode_error_count", "DTO decode error"),
+        ("policy_error_count", "DAQ policy error"),
+    ],
+)
+def test_vector_daq_diagnostics_errors_are_red(qapp, counter, expected):
+    owned = _OwnedVectorStub({counter: 1})
+    window = CockpitMainWindow()
+    try:
+        window._backend = owned  # type: ignore[assignment]
+        window._owns_vector_backend = True
+        window._ifdata_xcp = _stub_ifdata()
+
+        health = window._probe_daq()
+
+        assert any(expected in item for item in health.overflow)
+        assert level_daq(health) == "red"
+    finally:
+        window.close()

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from can_logger.p0.a2l_probe import MeasurementSummary
+from can_logger.p0.a2l_probe import (
+    MeasurementSummary,
+    _address_extension_of,
+    _conversion_facts,
+)
 from can_logger.p0.ifdata_xcp import DaqEventInfo, DaqProcessorInfo, IfDataXcp
 from mf4_analyzer.acquisition_capture.daq_map import bind_first_pids, build_daq_map
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
@@ -154,3 +160,59 @@ def test_build_daq_map_raises_when_event_missing() -> None:
 
     with pytest.raises(ValueError, match="no event assigned"):
         build_daq_map(selected, _ifdata(), meas)
+
+
+def test_linear_conversion_and_address_extension_reach_daq_entry() -> None:
+    selected = (_sel("BatteryVoltage", 0x40001000, "10ms"),)
+    source = SimpleNamespace(
+        ecu_address_extension=SimpleNamespace(extension=0x02),
+    )
+    method = SimpleNamespace(
+        conversionType="LINEAR",
+        coeffs_linear=SimpleNamespace(a=0.015625, b=0.0),
+        unit="V",
+    )
+    scale_a, scale_b, supported, _unit = _conversion_facts(
+        "BatteryVoltageConv",
+        {"BatteryVoltageConv": method},
+    )
+    measurements = {
+        "BatteryVoltage": MeasurementSummary(
+            name="BatteryVoltage",
+            address=0x40001000,
+            datatype="UWORD",
+            unit="V",
+            conversion="BatteryVoltageConv",
+            address_extension=_address_extension_of(source),
+            scale_a=scale_a,
+            scale_b=scale_b,
+            conversion_supported=supported,
+        )
+    }
+
+    daq_map = build_daq_map(selected, _ifdata(), measurements)
+
+    entry = daq_map.entries[(0, 0)][0]
+    assert entry.address == 0x40001000
+    assert entry.address_extension == 0x02
+    assert entry.scale_a == pytest.approx(0.015625)
+    assert entry.scale_b == pytest.approx(0.0)
+    # dto_decode consumes OdtEntry.scale_a/scale_b as physical = raw*a+b.
+    assert 640 * entry.scale_a + entry.scale_b == pytest.approx(10.0)
+
+
+def test_unsupported_conversion_fails_instead_of_becoming_identity() -> None:
+    selected = (_sel("StateText", 0x40002000, "10ms"),)
+    measurements = {
+        "StateText": MeasurementSummary(
+            name="StateText",
+            address=0x40002000,
+            datatype="UBYTE",
+            unit="",
+            conversion="StateTable",
+            conversion_supported=False,
+        )
+    }
+
+    with pytest.raises(ValueError, match="unsupported conversion.*StateText"):
+        build_daq_map(selected, _ifdata(), measurements)

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Callable
 
@@ -260,6 +260,21 @@ class CaptureController:
 
     def _build_summary(self) -> SessionSummary:
         status = getattr(self, "_backend_final_status", None) or self._backend.status()
+        warnings = list(self._warnings)
+        diagnostics = getattr(self._backend, "diagnostics", None)
+        if callable(diagnostics):
+            try:
+                diagnostic_facts = diagnostics()
+            except Exception:  # noqa: BLE001 - summary must survive diagnostics
+                diagnostic_facts = {}
+            if (
+                isinstance(diagnostic_facts, Mapping)
+                and diagnostic_facts.get("bus_error_observable") is False
+            ):
+                warnings.append(
+                    "BUS_ERROR_UNKNOWN: backend cannot observe CAN bus errors; "
+                    "bus_error_count=0 is not evidence of an error-free bus"
+                )
         return SessionSummary(
             duration_s=float(self.elapsed_s),
             rx_count=int(status.rx_count),
@@ -274,5 +289,5 @@ class CaptureController:
             # Spec §Persistence Contract: diagnostic strings that used to
             # split between ``problems[]`` and ``warnings[]`` all fold
             # into ``warnings[]`` (single field, same semantics).
-            warnings=list(self._warnings),
+            warnings=warnings,
         )

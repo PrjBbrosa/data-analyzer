@@ -117,8 +117,7 @@ class CaptureSessionMixin:
             return
         if self._capture_controller is not None:
             return
-        if self._owns_vector_backend:
-            self._status.showMessage("Vector/XCP 选择已改变：请断开后重新连接以应用")
+        if self._invalidate_vector_for_selection_change():
             return
         selection = list(self._left_pane.current_selection())
         if not selection:
@@ -132,6 +131,20 @@ class CaptureSessionMixin:
         self._center.reset_buffers()
         self._stream_start_ts = time.monotonic()
         self._cumulative_rx_count = 0
+
+    def _invalidate_vector_for_selection_change(self) -> bool:
+        """Drop an owned Vector session whose programmed DAQ is now stale."""
+
+        if self._state_machine.state != CockpitState.CONNECTED_IDLE:
+            return False
+        if not self._owns_vector_backend:
+            return False
+        timer = getattr(self, "_idle_restart_timer", None)
+        if timer is not None:
+            timer.stop()
+        return self._disconnect_owned_vector_for_configuration_change(
+            "Vector/XCP measurement 或 event 已改变：已断开，请重新连接以应用"
+        )
 
     def _resume_idle_stream(self) -> None:
         """Best-effort restart of the idle live stream after review close."""

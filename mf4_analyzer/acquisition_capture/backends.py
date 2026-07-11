@@ -194,20 +194,6 @@ class FakeRecorderBackend(RecorderBackend):
     def last_frame_monotonic(self) -> float | None:
         return self._last_frame_monotonic
 
-    def diagnostics(self) -> dict[str, Any]:
-        policy = self._policy.diagnostics() if self._policy is not None else None
-        return {
-            "started": self.status().started,
-            "last_frame_monotonic_s": self._last_frame_monotonic,
-            "frame_queue_depth": getattr(policy, "frame_depth", None),
-            "frame_queue_high_water": getattr(policy, "frame_high_water", None),
-            "frame_overflow_count": getattr(policy, "frame_overflow_count", 0),
-            "sample_overflow_count": self._queue_overflow_count,
-            "decoded_samples": self._rx_count,
-            "bus_error_count": self._bus_error_count,
-            "last_error": self._last_error,
-        }
-
     # -- warning-state hooks (for tests) ------------------------------
 
     def force_bus_error(self, count: int = 1) -> None:
@@ -453,19 +439,24 @@ def _compact_probe_output(stdout: str, stderr: str) -> str:
     return detail
 
 
-def _run_pyxcp_import_probe() -> tuple[int, str, str]:
+def _pyxcp_import_probe_command() -> list[str]:
+    """Build the production pyxcp import probe command for this runtime."""
+
     qt_widgets_module = "Py" + "Qt5.QtWidgets"
     xcp_master_module = "py" + "xcp.master"
     probe_code = (
-        "try:\n"
-        f"    __import__({qt_widgets_module!r}, fromlist=['QApplication'])\n"
-        "except Exception:\n"
-        "    pass\n"
+        f"__import__({qt_widgets_module!r}, fromlist=['QApplication'])\n"
         f"__import__({xcp_master_module!r}, fromlist=['Master'])\n"
     )
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--pyxcp-import-probe-child"]
+    return [sys.executable, "-c", probe_code]
+
+
+def _run_pyxcp_import_probe() -> tuple[int, str, str]:
     try:
         result = subprocess.run(
-            [sys.executable, "-c", probe_code],
+            _pyxcp_import_probe_command(),
             capture_output=True,
             text=True,
             timeout=5,
@@ -535,15 +526,22 @@ class VectorXcpRecorderBackend(RecorderBackend):
         self._rx_count = 0
         self._bus_error_count = 0
         self._queue_overflow_count = 0
+        self._policy_error_count = 0
+        self._unknown_pid_count = 0
+        self._decode_error_count = 0
+        self._sample_queue_high_water = 0
         self._last_error: str | None = None
         self._last_frame_monotonic: float | None = None
         self._base_monotonic_s = 0.0
         self._stop_event = threading.Event()
         self._decode_thread: threading.Thread | None = None
+        self._diagnostics_lock = threading.Lock()
+        self._sample_queue_lock = threading.Lock()
 
     def start(self, selected: Sequence[SelectedMeasurement]) -> None:
         from mf4_analyzer.acquisition_capture.xcp_daq_session import XcpDaqSession
 
+        self._prepare_for_start()
         try:
             from mf4_analyzer.acquisition_capture.pyxcp_daq_policy import BoundedDaqPolicy
             from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
@@ -552,7 +550,9 @@ class VectorXcpRecorderBackend(RecorderBackend):
             self._runtime = PyXcpRuntime.open(self._transport, self._ifdata, self._policy)
             self._master = self._runtime.master
         except Exception as exc:
-            raise RecorderStartError(f"pyxcp runtime init failed: {exc}") from exc
+            message = f"pyxcp runtime init failed: {exc}"
+            self._cleanup_failed_start(message)
+            raise RecorderStartError(message) from exc
 
         self._session = XcpDaqSession(
             master=self._master,
@@ -565,82 +565,151 @@ class VectorXcpRecorderBackend(RecorderBackend):
             self._session.start(selected)
             self._start_decode_thread()
         except Exception as exc:
-            self._cleanup_failed_start()
-            raise RecorderStartError(f"Vector/XCP session start failed: {exc}") from exc
+            message = f"Vector/XCP session start failed: {exc}"
+            self._cleanup_failed_start(message)
+            raise RecorderStartError(message) from exc
 
     def poll(self) -> list[tuple[str, float, float]]:
         out: list[tuple[str, float, float]] = []
         while True:
-            try:
-                out.append(self._sample_queue.get_nowait())
-            except queue.Empty:
-                break
+            with self._sample_queue_lock:
+                try:
+                    sample = self._sample_queue.get_nowait()
+                except queue.Empty:
+                    break
+            out.append(sample)
         return out
 
     def stop(self) -> BackendStatus:
-        self._stop_event.set()
-        if self._decode_thread is not None:
-            self._decode_thread.join(timeout=1.0)
-        try:
-            if self._session is not None:
-                self._session.stop()
-        finally:
-            if self._runtime is not None:
-                self._runtime.close()
-            self._session = None
-            self._master = None
-            self._runtime = None
+        self._release_resources(clear_policy=False)
         return self.status()
 
     def status(self) -> BackendStatus:
-        return BackendStatus(
-            started=self._session is not None and self._session.is_running(),
-            rx_count=self._rx_count,
-            bus_error_count=self._bus_error_count,
-            queue_overflow_count=self._queue_overflow_count,
-            last_error=self._last_error,
-        )
+        policy = self._policy.diagnostics() if self._policy is not None else None
+        frame_overflow_count = getattr(policy, "frame_overflow_count", 0)
+        with self._diagnostics_lock:
+            return BackendStatus(
+                started=self._session is not None and self._session.is_running(),
+                rx_count=self._rx_count,
+                bus_error_count=self._bus_error_count,
+                queue_overflow_count=(
+                    self._queue_overflow_count + frame_overflow_count
+                ),
+                last_error=self._last_error,
+            )
 
     def last_frame_monotonic(self) -> float | None:
-        return self._last_frame_monotonic
+        with self._diagnostics_lock:
+            return self._last_frame_monotonic
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Return a coherent, non-destructive Vector/DAQ health snapshot."""
+
+        policy = self._policy.diagnostics() if self._policy is not None else None
+        with self._sample_queue_lock:
+            sample_queue_depth = self._sample_queue.qsize()
+        with self._diagnostics_lock:
+            return {
+                "started": self._session is not None and self._session.is_running(),
+                "last_frame_monotonic_s": self._last_frame_monotonic,
+                "last_dto_monotonic_s": getattr(
+                    policy,
+                    "last_frame_monotonic_s",
+                    None,
+                ),
+                "dto_received_count": getattr(policy, "dto_received_count", 0),
+                "samples_emitted_count": self._rx_count,
+                # Compatibility alias for the first readiness implementation.
+                "decoded_samples": self._rx_count,
+                "bus_error_count": self._bus_error_count,
+                # pyxcp 0.29.10 swallows python-can CanError in recv(), so a
+                # zero counter is not proof that the bus was error-free.
+                "bus_error_observable": False,
+                "bus_state": None,
+                "policy_error_count": self._policy_error_count,
+                "frame_queue_depth": getattr(policy, "frame_depth", 0),
+                "frame_queue_high_water": getattr(policy, "frame_high_water", 0),
+                "frame_overflow_count": getattr(policy, "frame_overflow_count", 0),
+                "sample_queue_depth": sample_queue_depth,
+                "sample_queue_high_water": self._sample_queue_high_water,
+                "sample_overflow_count": self._queue_overflow_count,
+                "unknown_pid_count": self._unknown_pid_count,
+                "decode_error_count": self._decode_error_count,
+                "last_error": self._last_error,
+            }
 
     def _start_decode_thread(self) -> None:
-        from mf4_analyzer.acquisition_capture.dto_decode import decode_dto
+        from mf4_analyzer.acquisition_capture.dto_decode import (
+            DtoDecodeStatus,
+            decode_dto_result,
+        )
 
         if self._session is None or self._policy is None:
             return
-        self._stop_event.clear()
+        session = self._session
+        policy = self._policy
+        stop_event = self._stop_event
+        base_monotonic_s = self._base_monotonic_s
 
         def decode_loop() -> None:
-            daq_map = self._session.daq_map
+            daq_map = session.daq_map
             if daq_map is None:
                 return
-            while not self._stop_event.is_set():
+            while not stop_event.is_set():
                 try:
-                    frame = self._policy.get()
+                    frame = policy.get()
                 except Exception as exc:
-                    self._bus_error_count += 1
-                    self._last_error = str(exc)
+                    with self._diagnostics_lock:
+                        self._policy_error_count += 1
+                        self._last_error = str(exc)
                     continue
-                if frame is None or not frame.payload:
+                if frame is None:
                     continue
                 arrival_monotonic = frame.arrival_monotonic_s
-                self._last_frame_monotonic = arrival_monotonic
-                for sample in decode_dto(
-                    frame=frame.payload,
-                    daq_map=daq_map,
-                    timestamp_size=self._ifdata.daq_timestamp_size,
-                    timestamp_unit_ns=self._session.timestamp_unit_ns,
-                    byte_order=self._ifdata.byte_order,
-                    base_monotonic_s=self._base_monotonic_s,
-                    frame_arrival_monotonic_s=arrival_monotonic,
-                ):
-                    try:
-                        self._sample_queue.put_nowait(sample)
-                    except queue.Full:
-                        self._queue_overflow_count += 1
+                try:
+                    result = decode_dto_result(
+                        frame=frame.payload,
+                        daq_map=daq_map,
+                        timestamp_size=self._ifdata.daq_timestamp_size,
+                        timestamp_unit_ns=session.timestamp_unit_ns,
+                        byte_order=self._ifdata.byte_order,
+                        base_monotonic_s=base_monotonic_s,
+                        frame_arrival_monotonic_s=arrival_monotonic,
+                    )
+                except Exception as exc:  # keep later valid DTOs flowing
+                    with self._diagnostics_lock:
+                        self._decode_error_count += 1
+                        self._last_error = f"DTO decode failed: {exc}"
+                    continue
+                if result.status is DtoDecodeStatus.UNKNOWN_PID:
+                    with self._diagnostics_lock:
+                        self._unknown_pid_count += 1
+                        self._last_error = result.error
+                    continue
+                if result.status is not DtoDecodeStatus.SUCCESS:
+                    with self._diagnostics_lock:
+                        self._decode_error_count += 1
+                        self._last_error = result.error or result.status.value
+                    continue
+                for sample in result.samples:
+                    with self._sample_queue_lock:
+                        try:
+                            self._sample_queue.put_nowait(sample)
+                        except queue.Full:
+                            emitted_depth = None
+                        else:
+                            emitted_depth = self._sample_queue.qsize()
+                    if emitted_depth is None:
+                        with self._diagnostics_lock:
+                            self._queue_overflow_count += 1
                     else:
-                        self._rx_count += 1
+                        with self._diagnostics_lock:
+                            self._rx_count += 1
+                            self._last_frame_monotonic = arrival_monotonic
+                            self._sample_queue_high_water = max(
+                                self._sample_queue_high_water,
+                                emitted_depth,
+                            )
 
         self._decode_thread = threading.Thread(
             target=decode_loop,
@@ -649,17 +718,68 @@ class VectorXcpRecorderBackend(RecorderBackend):
         )
         self._decode_thread.start()
 
-    def _cleanup_failed_start(self) -> None:
+    def _prepare_for_start(self) -> None:
+        self._release_resources(clear_policy=True)
+        with self._sample_queue_lock:
+            while True:
+                try:
+                    self._sample_queue.get_nowait()
+                except queue.Empty:
+                    break
+        with self._diagnostics_lock:
+            self._rx_count = 0
+            self._bus_error_count = 0
+            self._queue_overflow_count = 0
+            self._policy_error_count = 0
+            self._unknown_pid_count = 0
+            self._decode_error_count = 0
+            self._sample_queue_high_water = 0
+            self._last_error = None
+            self._last_frame_monotonic = None
+            self._base_monotonic_s = 0.0
+        # Each decode thread captures its own event. A late old thread cannot
+        # be revived when the new session starts.
+        self._stop_event = threading.Event()
+
+    def _release_resources(self, *, clear_policy: bool) -> None:
+        self._stop_event.set()
+        thread = self._decode_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+
+        session = self._session
+        runtime = self._runtime
+        policy = self._policy
+        errors: list[str] = []
         try:
-            if self._session is not None:
-                self._session.stop()
-        except Exception:
-            pass
+            if session is not None:
+                session.stop()
+        except Exception as exc:
+            errors.append(f"session stop failed: {exc}")
+        try:
+            if runtime is not None:
+                runtime.close()
+        except Exception as exc:
+            errors.append(f"runtime close failed: {exc}")
+        if clear_policy and policy is not None:
+            try:
+                finalize = getattr(policy, "finalize", None)
+                if callable(finalize):
+                    finalize()
+            except Exception as exc:
+                errors.append(f"policy finalize failed: {exc}")
+
         self._session = None
         self._master = None
-        if self._runtime is not None:
-            try:
-                self._runtime.close()
-            except Exception:
-                pass
         self._runtime = None
+        self._decode_thread = None
+        if clear_policy:
+            self._policy = None
+        if errors:
+            with self._diagnostics_lock:
+                self._last_error = "; ".join(errors)
+
+    def _cleanup_failed_start(self, message: str) -> None:
+        self._release_resources(clear_policy=True)
+        with self._diagnostics_lock:
+            self._last_error = message

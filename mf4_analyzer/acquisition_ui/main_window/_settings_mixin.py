@@ -74,8 +74,15 @@ class SettingsMixin:
         transport: TransportConfig | None,
         *,
         device_model: str | None = None,
-    ) -> None:
-        self._invalidate_owned_vector_backend()
+    ) -> bool:
+        if not self._configuration_mutation_allowed("传输设置"):
+            return False
+        transport_changed = transport != self._transport_config
+        disconnected = False
+        if transport_changed:
+            disconnected = self._disconnect_owned_vector_for_configuration_change(
+                "传输配置已改变：Vector/XCP 已断开，请重新连接"
+            )
         self._transport_config = transport
         if transport is None:
             self._transport_chip.setText("传输未配置")
@@ -85,7 +92,7 @@ class SettingsMixin:
                 "transportState",
                 "unconfigured",
             )
-            return
+            return True
 
         fd_label = "CAN-FD" if transport.can_fd else "CAN"
         rate = transport.bitrate // 1000
@@ -104,8 +111,22 @@ class SettingsMixin:
         # the previous transport's stale verdict for ~200 ms).
         if getattr(self, "_health_timer", None) is not None:
             QTimer.singleShot(0, self._poll_health)
+        if disconnected:
+            self._status.showMessage("传输配置已改变：请重新连接 ECU")
+        return True
+
+    def _configuration_mutation_allowed(self, label: str) -> bool:
+        if self._state_machine.state in (
+            CockpitState.RECORDING,
+            CockpitState.REVIEW_MODAL,
+        ):
+            self._status.showMessage(f"录制或复盘期间不可修改{label}")
+            return False
+        return True
 
     def _open_settings_dialog(self, *, initial_tab: str | None = None) -> None:
+        if not self._configuration_mutation_allowed("设置"):
+            return
         if self._settings_dialog is not None:
             if initial_tab is not None:
                 self._settings_dialog.open_tab(initial_tab)
@@ -128,7 +149,8 @@ class SettingsMixin:
     def _on_settings_changed(self, _values: dict[str, float | int]) -> None:
         if self._settings_dialog is not None:
             transport = self._settings_dialog.current_transport()
-            self.set_transport(transport)
+            if not self.set_transport(transport):
+                return
             self._persist_transport(transport)
         self._apply_threshold_runtime_refresh()
         self._status.showMessage("设置已保存")
@@ -223,6 +245,8 @@ class SettingsMixin:
             self._status.showMessage(f"A2L 路径持久化失败: {exc}")
 
     def _on_settings_reset(self) -> None:
+        if not self._configuration_mutation_allowed("设置"):
+            return
         self._apply_threshold_runtime_refresh()
         self._status.showMessage("设置已还原默认")
 
@@ -257,6 +281,12 @@ class SettingsMixin:
             self._status.showMessage(f"未连接 · A2L: {a2l_name}")
             return
         if state == CockpitState.CONNECTED_IDLE:
+            daq_no_go = tuple(getattr(self, "_daq_no_go_reasons", ()))
+            if daq_no_go:
+                self._status.showMessage(
+                    "已连接 · DAQ NO-GO · " + "; ".join(daq_no_go)
+                )
+                return
             selected, shown = self._idle_monitor_counts()
             self._status.showMessage(f"已连接 · 已选 {selected} · 实时显示 {shown}")
             return
@@ -411,13 +441,15 @@ class SettingsMixin:
     # ------------------------------------------------------------------
 
     def _on_pick_a2l(self) -> None:
+        if not self._configuration_mutation_allowed("A2L"):
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "选择 A2L 文件", "", "A2L (*.a2l);;All (*)"
         )
         if path:
             self.apply_a2l_path(Path(path))
 
-    def apply_a2l_path(self, a2l_path: Path) -> None:
+    def apply_a2l_path(self, a2l_path: Path) -> bool:
         """Load A2L summary + IF_DATA, refresh the left pane.
 
         Extracted from :meth:`_on_pick_a2l` so tests can drive A2L
@@ -439,7 +471,11 @@ class SettingsMixin:
         measurements.
         """
 
-        self._invalidate_owned_vector_backend()
+        if not self._configuration_mutation_allowed("A2L"):
+            return False
+        disconnected = self._disconnect_owned_vector_for_configuration_change(
+            "A2L 已改变：Vector/XCP 已断开，请重新连接"
+        )
         self._a2l_name = a2l_path.name
         self._set_selector_value(self._a2l_btn, "A2L", self._a2l_name)
 
@@ -485,7 +521,7 @@ class SettingsMixin:
                 f"A2L 加载失败：{'; '.join(problems)}"
             )
             self._warn_a2l_load_problems(a2l_path, problems)
-            return
+            return False
 
         self._ifdata_xcp = next_ifdata
         self._left_pane.set_pool(
@@ -494,12 +530,14 @@ class SettingsMixin:
         )
         shown = len(summary.measurements)
         if shown == summary.total_measurements:
-            self._status.showMessage(f"A2L 已加载：{shown} measurement")
+            message = f"A2L 已加载：{shown} measurement"
         else:
-            self._status.showMessage(
-                f"A2L 已加载：{shown}/{summary.total_measurements} measurement"
-            )
+            message = f"A2L 已加载：{shown}/{summary.total_measurements} measurement"
+        if disconnected:
+            message += " · 请重新连接 ECU"
+        self._status.showMessage(message)
         self._persist_a2l_path(a2l_path)
+        return True
 
     def _warn_a2l_load_problems(self, a2l_path: Path, problems: list[str]) -> None:
         """T2-2 toast: an operator-visible warning is the only thing

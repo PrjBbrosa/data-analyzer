@@ -3,10 +3,30 @@
 from __future__ import annotations
 
 import argparse
+import os
 import pickle
 import sys
 
 from can_logger.p0.a2l_probe import _load_measurement_summary_inprocess
+
+
+def _write_stdout(payload: bytes) -> None:
+    stream = getattr(sys.stdout, "buffer", None)
+    if stream is not None:
+        stream.write(payload)
+        stream.flush()
+        return
+    os.write(1, payload)
+
+
+def _write_stderr(message: str) -> None:
+    payload = message.encode("utf-8", errors="replace")
+    stream = getattr(sys.stderr, "buffer", None)
+    if stream is not None:
+        stream.write(payload)
+        stream.flush()
+        return
+    os.write(2, payload)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18,10 +38,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         summary = _load_measurement_summary_inprocess(args.a2l_path, limit=args.limit)
     except Exception as exc:  # noqa: BLE001
-        print(f"A2L parse failed: {exc}", file=sys.stderr)
+        _write_stderr(f"A2L parse failed: {exc}\n")
         return 1
 
-    sys.stdout.buffer.write(pickle.dumps(summary))
+    _write_stdout(pickle.dumps(summary))
     return 0
 
 

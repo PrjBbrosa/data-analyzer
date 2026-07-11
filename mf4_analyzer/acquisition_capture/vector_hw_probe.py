@@ -10,17 +10,41 @@ from can_logger.p0.ifdata_xcp import IfDataXcp
 from mf4_analyzer.acquisition_capture.health import HwHealth
 from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
 from mf4_analyzer.acquisition_capture.xcp_auth import (
+    DaqProtectionState,
     XcpAuthError,
     unlock_resources_if_needed,
 )
 
 
 @dataclass(frozen=True)
+class XcpResourceFacts:
+    calpag: bool
+    daq: bool
+    stim: bool
+    pgm: bool
+    dbg: bool
+
+
+@dataclass(frozen=True)
 class TestXcpConnectionResult:
     ok: bool
-    resource_byte: int | None
+    resources: XcpResourceFacts | None
+    daq_protection: DaqProtectionState
     latency_ms: int | None
     error: str | None
+
+
+def _read_connect_resource_facts(response: object) -> XcpResourceFacts:
+    resource = getattr(response, "resource", None)
+    if resource is None:
+        raise ValueError("CONNECT response does not contain resource facts")
+    values: dict[str, bool] = {}
+    for name in ("calpag", "daq", "stim", "pgm", "dbg"):
+        value = getattr(resource, name, None)
+        if not isinstance(value, bool):
+            raise ValueError(f"CONNECT response resource.{name} is not boolean")
+        values[name] = value
+    return XcpResourceFacts(**values)
 
 
 def _load_vector_canlib():
@@ -181,7 +205,8 @@ def test_xcp_connection(
         except Exception as exc:  # noqa: BLE001 - surface driver error
             return TestXcpConnectionResult(
                 ok=False,
-                resource_byte=None,
+                resources=None,
+                daq_protection="unknown",
                 latency_ms=None,
                 error=f"pyxcp Vector runtime init failed: {exc}",
             )
@@ -192,7 +217,8 @@ def test_xcp_connection(
         except TimeoutError as exc:
             return TestXcpConnectionResult(
                 ok=False,
-                resource_byte=None,
+                resources=None,
+                daq_protection="unknown",
                 latency_ms=None,
                 error=(
                     f"ECU 未在 {int(transport.timeout_s * 1000)} ms 内响应 "
@@ -202,36 +228,56 @@ def test_xcp_connection(
         except Exception as exc:  # noqa: BLE001 - pyxcp error surface
             return TestXcpConnectionResult(
                 ok=False,
-                resource_byte=None,
+                resources=None,
+                daq_protection="unknown",
                 latency_ms=None,
                 error=f"XCP CONNECT 失败：{exc}",
             )
 
         latency_ms = int((time.monotonic() - started) * 1000)
-        resource = int(getattr(response, "resource", 0) or 0)
+        resources = None
+        resource_error = None
+        try:
+            resources = _read_connect_resource_facts(response)
+        except ValueError as exc:
+            resource_error = str(exc)
 
-        if transport.seed_and_key_dll:
-            try:
-                unlock_resources_if_needed(
-                    master=master,
-                    connect_response=response,
-                    seed_and_key_dll=transport.seed_and_key_dll,
-                )
-            except XcpAuthError as exc:
-                try:
-                    master.disconnect()
-                except Exception:  # noqa: BLE001 - best-effort cleanup
-                    pass
-                return TestXcpConnectionResult(
-                    ok=False,
-                    resource_byte=resource,
-                    latency_ms=latency_ms,
-                    error=f"Seed&Key 失败：{exc}",
-                )
+        try:
+            daq_protection = unlock_resources_if_needed(
+                master=master,
+                connect_response=response,
+                seed_and_key_dll=transport.seed_and_key_dll,
+            )
+        except XcpAuthError as exc:
+            return TestXcpConnectionResult(
+                ok=False,
+                resources=resources,
+                daq_protection=exc.daq_protection,
+                latency_ms=latency_ms,
+                error=f"DAQ protection check/unlock failed: {exc}",
+            )
+
+        if resource_error is not None:
+            return TestXcpConnectionResult(
+                ok=False,
+                resources=None,
+                daq_protection=daq_protection,
+                latency_ms=latency_ms,
+                error=resource_error,
+            )
+        if resources is not None and not resources.daq:
+            return TestXcpConnectionResult(
+                ok=False,
+                resources=resources,
+                daq_protection=daq_protection,
+                latency_ms=latency_ms,
+                error="ECU CONNECT response does not advertise DAQ support",
+            )
 
         return TestXcpConnectionResult(
             ok=True,
-            resource_byte=resource,
+            resources=resources,
+            daq_protection=daq_protection,
             latency_ms=latency_ms,
             error=None,
         )

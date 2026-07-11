@@ -182,7 +182,8 @@ def _force_window_with_levels(qapp, levels: dict[str, str]) -> CockpitMainWindow
 
 def _snap_with_levels(*, hw_ok=True, xcp_connected=True,
                      can_load=10.0, rec_ring=10.0,
-                     rec_last_age=0.0, rec_state="recording") -> any:
+                     rec_last_age=0.0, rec_state="recording",
+                     daq_overflow=()) -> any:
     """Build a HealthSnapshot tuned to a desired level mix."""
     from mf4_analyzer.acquisition_capture.health import HealthSnapshot
 
@@ -201,7 +202,10 @@ def _snap_with_levels(*, hw_ok=True, xcp_connected=True,
             last_response_age_s=0.0,
             consecutive_timeouts=0,
         ),
-        daq=DaqHealth(),
+        daq=DaqHealth(
+            event_capacity={"evt": 16},
+            overflow=tuple(daq_overflow),
+        ),
         rec=RecHealth(
             state=rec_state,
             ring_buffer_fill_pct=rec_ring,
@@ -228,6 +232,71 @@ def test_red_health_disables_record_button(qapp):
     window._update_record_button_enabled()
     assert window.main_button.isEnabled() is False
     window.close()
+
+
+def test_bad_dto_then_valid_sample_never_makes_connection_healthy(qapp):
+    """A later decoded sample cannot erase a persistent DTO error counter."""
+
+    class _SpyBackend(FakeRecorderBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stop_called = 0
+
+        def stop(self):  # type: ignore[override]
+            self.stop_called += 1
+            return super().stop()
+
+    backend = _SpyBackend()
+    window = CockpitMainWindow(backend=backend)
+    try:
+        window._connection_attempt_started = time.monotonic()
+        # Represents the later valid DTO/sample observed after an earlier bad DTO.
+        window._first_frame_ts = time.monotonic()
+        snapshot = _snap_with_levels(
+            hw_ok=True,
+            xcp_connected=True,
+            daq_overflow=("DTO decode error",),
+        )
+
+        window._evaluate_connection_attempt(snapshot)
+
+        assert window.state_machine.state == CockpitState.DISCONNECTED
+        assert window.state_machine.last_healthy_result is not None
+        assert window.state_machine.last_healthy_result.healthy is False
+        assert window.state_machine.last_healthy_result.first_failure == "DAQ"
+        assert backend.stop_called == 1
+        assert window._connection_attempt_started is None
+    finally:
+        window.close()
+
+
+def test_daq_error_after_connected_blocks_record_and_stays_operator_visible(qapp):
+    window = CockpitMainWindow()
+    try:
+        window.state_machine.request_connect(
+            HealthyPredicateResult.from_components(
+                hw_ok=True,
+                xcp_connected=True,
+                first_frame_received=True,
+            )
+        )
+        snapshot = _snap_with_levels(
+            hw_ok=True,
+            xcp_connected=True,
+            daq_overflow=("unknown PID: 1",),
+        )
+        window._daq_no_go_reasons = snapshot.daq.overflow
+        window.health_strip.apply_snapshot(snapshot)
+        window._update_record_button_enabled()
+        window._update_status_bar()
+
+        assert window.state_machine.state == CockpitState.CONNECTED_IDLE
+        assert window.health_strip.current_levels()["DAQ"] == "red"
+        assert window.main_button.isEnabled() is False
+        assert "DAQ NO-GO" in window._status.currentMessage()
+        assert "unknown PID" in window._status.currentMessage()
+    finally:
+        window.close()
 
 
 def test_yellow_health_does_not_disable_record(qapp):
@@ -570,6 +639,29 @@ def test_disconnected_shows_center_connection_checklist(qapp):
             "硬件可用",
             "当前选择可行",
         ]
+    finally:
+        window.close()
+
+
+def test_failed_a2l_filename_does_not_mark_parse_checklist_ok(qapp):
+    """An attempted filename is not evidence that IF_DATA and pool committed."""
+
+    from PyQt5.QtWidgets import QFrame, QLabel
+
+    window = CockpitMainWindow()
+    try:
+        window._a2l_name = "broken.a2l"
+        window._ifdata_xcp = None
+        window._left_pane.set_pool((), a2l_has_daq_events=False)
+        window._update_connection_checklist()
+
+        frame = window._center.findChild(QFrame, "cockpitConnectionChecklist")
+        a2l_led = next(
+            led
+            for led in frame.findChildren(QLabel, "cockpitChecklistLed")
+            if led.property("checklistKey") == "a2l"
+        )
+        assert a2l_led.property("state") == "pending"
     finally:
         window.close()
 

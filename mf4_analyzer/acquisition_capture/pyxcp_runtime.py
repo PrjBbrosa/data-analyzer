@@ -107,6 +107,8 @@ class PyXcpRuntime:
             "bitrate": can.bitrate,
             "data_bitrate": can.data_bitrate if can.fd else None,
             "can_fd": bool(can.fd),
+            "sample_point_applied": False,
+            "timing_source": "driver_automatic",
             "command_id": can.can_id_master,
             "response_id": can.can_id_slave,
             "timeout_s": self.application.transport.timeout,
@@ -156,6 +158,21 @@ def _canonical_can_id(identifier: int, extended: bool) -> int:
 def _build_application(factory: Any, transport: TransportConfig, ifdata: IfDataXcp) -> Any:
     """Create one real pyxcp configuration object with explicit CAN mapping."""
 
+    if transport.sample_point != 75.0 or transport.fd_sample_point != 70.0:
+        raise PyXcpRuntimeError(
+            "custom sample points are not applied by the pinned pyxcp Vector "
+            "runtime; timing_source is driver automatic. Reset legacy values "
+            f"to sample_point=75.0/fd_sample_point=70.0 (got "
+            f"sample_point={transport.sample_point}, "
+            f"fd_sample_point={transport.fd_sample_point})"
+        )
+
+    # pyxcp 0.29.10's General.seed_n_key_dll is a non-null Unicode trait.
+    # Keep TransportConfig's user-facing None semantics, but never feed None to
+    # the real trait/config factory.
+    seed_and_key_dll = (
+        str(transport.seed_and_key_dll) if transport.seed_and_key_dll else ""
+    )
     app = factory(
         {
             "Transport": {
@@ -169,7 +186,7 @@ def _build_application(factory: Any, transport: TransportConfig, ifdata: IfDataX
                     "can_id_slave": _canonical_can_id(ifdata.resp_id, ifdata.resp_id_extended),
                 }
             },
-            "General": {"seed_n_key_dll": transport.seed_and_key_dll},
+            "General": {"seed_n_key_dll": seed_and_key_dll},
         }
     )
     # ``create_application_from_config`` builds components before applying the
@@ -184,5 +201,5 @@ def _build_application(factory: Any, transport: TransportConfig, ifdata: IfDataX
     app.transport.can.can_id_master = _canonical_can_id(ifdata.cmd_id, ifdata.cmd_id_extended)
     app.transport.can.can_id_slave = _canonical_can_id(ifdata.resp_id, ifdata.resp_id_extended)
     app.transport.can.vector.app_name = transport.app_name
-    app.general.seed_n_key_dll = transport.seed_and_key_dll
+    app.general.seed_n_key_dll = seed_and_key_dll
     return app

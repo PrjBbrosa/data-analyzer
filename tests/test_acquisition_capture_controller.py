@@ -91,6 +91,30 @@ def test_controller_summary_includes_counters(tmp_path):
         assert hasattr(summary, key)
 
 
+def test_controller_marks_unobservable_bus_errors_unknown(tmp_path):
+    class _UnobservableBusBackend(FakeRecorderBackend):
+        def diagnostics(self):
+            return {"bus_error_observable": False}
+
+    config = _config(tmp_path, duration_s=None)
+    backend = _UnobservableBusBackend(samples_per_second=1.0)
+    ctrl = CaptureController(
+        config,
+        backend,
+        writer=_NoopWriter(config.output_mf4),
+    )
+
+    ctrl.start()
+    summary = ctrl.stop()
+
+    assert summary.bus_error_count == 0
+    assert any("BUS_ERROR_UNKNOWN" in warning for warning in summary.warnings)
+    assert any(
+        "bus_error_count=0 is not evidence" in warning
+        for warning in summary.to_dict()["warnings"]
+    )
+
+
 def test_controller_double_start_raises(tmp_path):
     config = _config(tmp_path)
     ctrl = CaptureController(config, FakeRecorderBackend())

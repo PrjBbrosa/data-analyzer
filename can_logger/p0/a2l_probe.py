@@ -15,14 +15,15 @@ construction call-sites in tests continue to work.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
-from pathlib import Path
+import math
 import os
 import pickle
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from can_logger.p0.ifdata_xcp import parse_ifdata_xcp, parse_measurement_events
 
@@ -87,6 +88,89 @@ def _address_of(measurement) -> int:
         name = getattr(measurement, "name", "<unknown>")
         raise ValueError(f"measurement {name!r} has no ecu_address")
     return int(address)
+
+
+def _address_extension_of(measurement) -> int:
+    """Return the XCP address-extension byte attached to a measurement."""
+
+    extension_node = getattr(measurement, "ecu_address_extension", None)
+    extension = getattr(extension_node, "extension", extension_node)
+    if extension is None:
+        return 0
+    return int(extension)
+
+
+def _phys_unit_of(measurement) -> str:
+    """Return MEASUREMENT/PHYS_UNIT from pya2l's relationship shape."""
+
+    unit_node = getattr(measurement, "phys_unit", None)
+    unit = getattr(unit_node, "unit", unit_node)
+    if unit is None:
+        return ""
+    return str(unit)
+
+
+def _conversion_facts(
+    conversion_name: str,
+    compu_methods: Mapping[str, object],
+) -> tuple[float, float, bool, str]:
+    """Resolve the supported physical conversion subset.
+
+    The acquisition decoder currently consumes an affine ``raw * a + b``
+    contract. Only A2L conversions that state that exact shape are accepted.
+    Tables, formulae and non-affine rational functions stay visible in the
+    measurement list but are marked unsupported so DAQ construction can fail
+    closed.
+    """
+
+    name = str(conversion_name or "")
+    if not name or name == "NO_COMPU_METHOD":
+        return 1.0, 0.0, True, ""
+
+    method = compu_methods.get(name)
+    if method is None:
+        return 1.0, 0.0, False, ""
+
+    conversion_type = str(getattr(method, "conversionType", "") or "").upper()
+    unit = str(getattr(method, "unit", "") or "")
+    if conversion_type == "IDENTICAL":
+        return 1.0, 0.0, True, unit
+    if conversion_type == "LINEAR":
+        coeffs = getattr(method, "coeffs_linear", None)
+        if coeffs is None:
+            return 1.0, 0.0, False, unit
+        try:
+            scale_a = float(coeffs.a)
+            scale_b = float(coeffs.b)
+        except (AttributeError, TypeError, ValueError):
+            return 1.0, 0.0, False, unit
+    elif conversion_type == "RAT_FUNC":
+        # ASAP2 RAT_FUNC states INT=f(PHYS). Its common affine subset is
+        # INT=(b*PHYS+c)/f, whose inverse is PHYS=(f/b)*INT-c/b.
+        coeffs = getattr(method, "coeffs", None)
+        try:
+            a, b, c, d, e, f = (
+                float(coeffs.a),
+                float(coeffs.b),
+                float(coeffs.c),
+                float(coeffs.d),
+                float(coeffs.e),
+                float(coeffs.f),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return 1.0, 0.0, False, unit
+        if not all(math.isfinite(value) for value in (a, b, c, d, e, f)):
+            return 1.0, 0.0, False, unit
+        if a != 0.0 or d != 0.0 or e != 0.0 or b == 0.0 or f == 0.0:
+            return 1.0, 0.0, False, unit
+        scale_a = f / b
+        scale_b = -c / b
+    else:
+        return 1.0, 0.0, False, unit
+
+    if not (math.isfinite(scale_a) and math.isfinite(scale_b)):
+        return 1.0, 0.0, False, unit
+    return scale_a, scale_b, True, unit
 
 
 def _fill_ifdata_events(
@@ -217,16 +301,34 @@ def _load_measurement_summary_inprocess(
         )
         total = query.count()
         rows = query.all() if limit is None else query.limit(limit).all()
-        measurements = [
-            MeasurementSummary(
-                name=str(m.name),
-                address=_address_of(m),
-                datatype=str(getattr(m, "datatype", "")),
-                unit=str(getattr(m, "phys_unit", "") or ""),
-                conversion=str(getattr(m, "conversion", "") or ""),
+        compu_methods: dict[str, object] = {}
+        compu_method_model = getattr(a2l_model, "CompuMethod", None)
+        if compu_method_model is not None:
+            compu_methods = {
+                str(method.name): method
+                for method in session.query(compu_method_model).all()
+            }
+
+        measurements = []
+        for measurement in rows:
+            conversion = str(getattr(measurement, "conversion", "") or "")
+            scale_a, scale_b, conversion_supported, conversion_unit = (
+                _conversion_facts(conversion, compu_methods)
             )
-            for m in rows
-        ]
+            unit = _phys_unit_of(measurement)
+            measurements.append(
+                MeasurementSummary(
+                    name=str(measurement.name),
+                    address=_address_of(measurement),
+                    datatype=str(getattr(measurement, "datatype", "")),
+                    unit=unit or conversion_unit,
+                    conversion=conversion,
+                    address_extension=_address_extension_of(measurement),
+                    scale_a=scale_a,
+                    scale_b=scale_b,
+                    conversion_supported=conversion_supported,
+                )
+            )
     finally:
         _dispose_db(db)
 
@@ -262,14 +364,7 @@ def load_measurement_summary(
     if not path.exists():
         raise FileNotFoundError(path)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "can_logger.p0._a2l_subprocess",
-        str(path),
-    ]
-    if limit is not None:
-        cmd.extend(["--limit", str(limit)])
+    cmd = _a2l_subprocess_command(path, limit=limit)
 
     try:
         result = subprocess.run(
@@ -302,6 +397,31 @@ def load_measurement_summary(
             f"{type(summary).__name__}"
         )
     return summary
+
+
+def _a2l_subprocess_command(path: Path, *, limit: int | None) -> list[str]:
+    """Return a source- or frozen-safe crash-isolated parser command."""
+
+    if getattr(sys, "frozen", False):
+        command = [
+            sys.executable,
+            "--a2l-probe-child",
+            "--a2l-path",
+            str(path),
+        ]
+        if limit is not None:
+            command.extend(["--a2l-limit", str(limit)])
+        return command
+
+    command = [
+        sys.executable,
+        "-m",
+        "can_logger.p0._a2l_subprocess",
+        str(path),
+    ]
+    if limit is not None:
+        command.extend(["--limit", str(limit)])
+    return command
 
 
 def main() -> int:

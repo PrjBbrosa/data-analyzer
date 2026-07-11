@@ -75,6 +75,69 @@ def test_load_measurement_summary_unpickles_subprocess_result(monkeypatch, tmp_p
     assert "text" not in kwargs
 
 
+def test_load_measurement_summary_uses_hidden_child_when_frozen(monkeypatch, tmp_path):
+    a2l = tmp_path / "frozen.a2l"
+    a2l.write_text("/begin PROJECT demo demo /end PROJECT", encoding="latin-1")
+    expected = _summary(str(a2l))
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, pickle.dumps(expected), b"")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(a2l_probe_module.subprocess, "run", fake_run)
+
+    result = a2l_probe_module.load_measurement_summary(str(a2l), limit=7)
+
+    assert result == expected
+    assert calls[0][0] == [
+        sys.executable,
+        "--a2l-probe-child",
+        "--a2l-path",
+        str(a2l),
+        "--a2l-limit",
+        "7",
+    ]
+
+
+def test_a2l_hidden_child_preserves_pickle_stdout_and_exitcode(monkeypatch, tmp_path):
+    from can_logger.p0 import _a2l_subprocess
+
+    a2l = tmp_path / "child.a2l"
+    expected = _summary(str(a2l))
+    stdout: list[bytes] = []
+    stderr: list[str] = []
+    monkeypatch.setattr(
+        _a2l_subprocess,
+        "_load_measurement_summary_inprocess",
+        lambda path, limit=None: expected,
+    )
+    monkeypatch.setattr(_a2l_subprocess, "_write_stdout", stdout.append)
+    monkeypatch.setattr(_a2l_subprocess, "_write_stderr", stderr.append)
+
+    assert _a2l_subprocess.main([str(a2l), "--limit", "3"]) == 0
+    assert pickle.loads(stdout[0]) == expected
+    assert stderr == []
+
+
+def test_a2l_hidden_child_preserves_stderr_and_failure_exitcode(
+    monkeypatch,
+    tmp_path,
+):
+    from can_logger.p0 import _a2l_subprocess
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("parser exploded")
+
+    stderr: list[str] = []
+    monkeypatch.setattr(_a2l_subprocess, "_load_measurement_summary_inprocess", fail)
+    monkeypatch.setattr(_a2l_subprocess, "_write_stderr", stderr.append)
+
+    assert _a2l_subprocess.main([str(tmp_path / "bad.a2l")]) == 1
+    assert stderr == ["A2L parse failed: parser exploded\n"]
+
+
 def test_load_measurement_summary_subprocess_crash_becomes_runtime_error(
     monkeypatch, tmp_path
 ):
@@ -133,6 +196,43 @@ def _fake_measurement(name: str = "VehicleSpeed") -> SimpleNamespace:
     )
 
 
+def _fake_linear_measurement() -> SimpleNamespace:
+    return SimpleNamespace(
+        name="BatteryVoltage",
+        ecu_address=SimpleNamespace(address=0x40001000),
+        ecu_address_extension=SimpleNamespace(extension=0x02),
+        datatype="UWORD",
+        # pya2l models PHYS_UNIT as a one-to-one relationship node.
+        phys_unit=SimpleNamespace(unit="V"),
+        conversion="BatteryVoltageConv",
+    )
+
+
+def _fake_compu_method(
+    name: str,
+    conversion_type: str,
+    *,
+    a: float | None = None,
+    b: float | None = None,
+    unit: str = "",
+    coeffs: tuple[float, float, float, float, float, float] | None = None,
+) -> SimpleNamespace:
+    coeffs_linear = None
+    if a is not None and b is not None:
+        coeffs_linear = SimpleNamespace(a=a, b=b)
+    return SimpleNamespace(
+        name=name,
+        conversionType=conversion_type,
+        coeffs_linear=coeffs_linear,
+        coeffs=(
+            SimpleNamespace(**dict(zip("abcdef", coeffs, strict=True)))
+            if coeffs is not None
+            else None
+        ),
+        unit=unit,
+    )
+
+
 class _FakeQuery:
     def __init__(self, rows):
         self._rows = rows
@@ -156,6 +256,210 @@ class _FakeSession:
 
     def query(self, *_args):
         return _FakeQuery(self._rows)
+
+
+class _TypedFakeSession:
+    def __init__(self, measurement_model, compu_method_model, measurements, methods):
+        self._measurement_model = measurement_model
+        self._compu_method_model = compu_method_model
+        self._measurements = measurements
+        self._methods = methods
+
+    def query(self, model):
+        if model is self._measurement_model:
+            return _FakeQuery(self._measurements)
+        if model is self._compu_method_model:
+            return _FakeQuery(self._methods)
+        raise AssertionError(f"unexpected model query: {model!r}")
+
+
+def test_inprocess_summary_parses_address_extension_and_linear_conversion(
+    monkeypatch, tmp_path
+):
+    a2l = tmp_path / "linear.a2l"
+    a2l.write_text("/begin PROJECT demo demo /end PROJECT", encoding="latin-1")
+
+    class MeasurementModel:
+        name = "name"
+
+    class CompuMethodModel:
+        pass
+
+    fake_model = SimpleNamespace(
+        Measurement=MeasurementModel,
+        CompuMethod=CompuMethodModel,
+    )
+    session = _TypedFakeSession(
+        MeasurementModel,
+        CompuMethodModel,
+        [_fake_linear_measurement()],
+        [
+            _fake_compu_method(
+                "BatteryVoltageConv",
+                "LINEAR",
+                a=0.015625,
+                b=0.0,
+                unit="V",
+            )
+        ],
+    )
+
+    class FakeDB:
+        def import_a2l(self, _file_name, **_kwargs):
+            return session
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(a2l_probe_module, "DB", FakeDB)
+    monkeypatch.setattr(a2l_probe_module, "model", fake_model)
+
+    summary = a2l_probe_module._load_measurement_summary_inprocess(str(a2l))
+
+    assert summary.total_measurements == 1
+    measurement = summary.measurements[0]
+    assert measurement.address == 0x40001000
+    assert measurement.address_extension == 0x02
+    assert measurement.scale_a == pytest.approx(0.015625)
+    assert measurement.scale_b == pytest.approx(0.0)
+    assert measurement.conversion_supported is True
+    assert measurement.unit == "V"
+
+
+@pytest.mark.parametrize("conversion_type", ["TAB_INTP", "FORM", "TAB_VERB"])
+def test_inprocess_summary_marks_nonlinear_conversion_unsupported(
+    monkeypatch, tmp_path, conversion_type
+):
+    a2l = tmp_path / "nonlinear.a2l"
+    a2l.write_text("/begin PROJECT demo demo /end PROJECT", encoding="latin-1")
+
+    class MeasurementModel:
+        name = "name"
+
+    class CompuMethodModel:
+        pass
+
+    fake_model = SimpleNamespace(
+        Measurement=MeasurementModel,
+        CompuMethod=CompuMethodModel,
+    )
+    session = _TypedFakeSession(
+        MeasurementModel,
+        CompuMethodModel,
+        [_fake_linear_measurement()],
+        [_fake_compu_method("BatteryVoltageConv", conversion_type)],
+    )
+
+    class FakeDB:
+        def import_a2l(self, _file_name, **_kwargs):
+            return session
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(a2l_probe_module, "DB", FakeDB)
+    monkeypatch.setattr(a2l_probe_module, "model", fake_model)
+
+    summary = a2l_probe_module._load_measurement_summary_inprocess(str(a2l))
+
+    measurement = summary.measurements[0]
+    assert measurement.conversion_supported is False
+    assert measurement.scale_a == pytest.approx(1.0)
+    assert measurement.scale_b == pytest.approx(0.0)
+
+
+def test_inprocess_summary_accepts_affine_rat_func_conversion(monkeypatch, tmp_path):
+    """Many production A2Ls encode INT=f(PHYS); accept its affine inverse."""
+
+    a2l = tmp_path / "rat-linear.a2l"
+    a2l.write_text("/begin PROJECT demo demo /end PROJECT", encoding="latin-1")
+
+    class MeasurementModel:
+        name = "name"
+
+    class CompuMethodModel:
+        pass
+
+    fake_model = SimpleNamespace(
+        Measurement=MeasurementModel,
+        CompuMethod=CompuMethodModel,
+    )
+    session = _TypedFakeSession(
+        MeasurementModel,
+        CompuMethodModel,
+        [_fake_linear_measurement()],
+        [
+            _fake_compu_method(
+                "BatteryVoltageConv",
+                "RAT_FUNC",
+                # INT = 64 * PHYS, so PHYS = INT / 64.
+                coeffs=(0.0, 64.0, 0.0, 0.0, 0.0, 1.0),
+                unit="V",
+            )
+        ],
+    )
+
+    class FakeDB:
+        def import_a2l(self, _file_name, **_kwargs):
+            return session
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(a2l_probe_module, "DB", FakeDB)
+    monkeypatch.setattr(a2l_probe_module, "model", fake_model)
+
+    measurement = a2l_probe_module._load_measurement_summary_inprocess(
+        str(a2l)
+    ).measurements[0]
+
+    assert measurement.conversion_supported is True
+    assert measurement.scale_a == pytest.approx(0.015625)
+    assert measurement.scale_b == pytest.approx(0.0)
+
+
+def test_inprocess_summary_rejects_nonlinear_rat_func(monkeypatch, tmp_path):
+    a2l = tmp_path / "rat-nonlinear.a2l"
+    a2l.write_text("/begin PROJECT demo demo /end PROJECT", encoding="latin-1")
+
+    class MeasurementModel:
+        name = "name"
+
+    class CompuMethodModel:
+        pass
+
+    fake_model = SimpleNamespace(
+        Measurement=MeasurementModel,
+        CompuMethod=CompuMethodModel,
+    )
+    session = _TypedFakeSession(
+        MeasurementModel,
+        CompuMethodModel,
+        [_fake_linear_measurement()],
+        [
+            _fake_compu_method(
+                "BatteryVoltageConv",
+                "RAT_FUNC",
+                coeffs=(1.0, 64.0, 0.0, 0.0, 0.0, 1.0),
+            )
+        ],
+    )
+
+    class FakeDB:
+        def import_a2l(self, _file_name, **_kwargs):
+            return session
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(a2l_probe_module, "DB", FakeDB)
+    monkeypatch.setattr(a2l_probe_module, "model", fake_model)
+
+    measurement = a2l_probe_module._load_measurement_summary_inprocess(
+        str(a2l)
+    ).measurements[0]
+
+    assert measurement.conversion_supported is False
 
 
 def test_load_measurement_summary_import_removes_existing_sidecar(monkeypatch, tmp_path):

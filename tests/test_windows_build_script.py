@@ -69,6 +69,71 @@ def test_windows_folder_build_script_vendors_native_acquisition_packages_without
     assert "--acquisition-runtime-smoke" in text
 
 
+def test_windows_folder_build_vendors_pinned_pyxcp_metadata_and_dependencies():
+    script = ROOT / "tools" / "build_windows_folder.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    assert "-m pip install" in text
+    assert "--target" in text
+    assert "$AcquisitionRequirements" in text
+    assert "pyxcp-0.29.10.dist-info" in text
+    assert "import pathlib, pyxcp" not in text
+    assert "Copy-Item -Recurse -Force -Path $PyxcpSrc" not in text
+
+
+def test_windows_folder_build_vendors_exact_pya2ldb_metadata_and_dependencies():
+    script = ROOT / "tools" / "build_windows_folder.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    assert 'importlib.metadata.version("pya2ldb")' in text
+    assert '"pya2ldb==$Pya2lVersion"' in text
+    assert "--target $VendorPya2lDir" in text
+    assert '"pya2ldb-$Pya2lVersion.dist-info"' in text
+    assert "import pathlib, pya2l" not in text
+    assert "Copy-Item -Recurse -Force -Path $Pya2lSrc" not in text
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "pya2ldb==1.0.332" in requirements
+
+
+def test_frozen_entry_has_dedicated_pyxcp_import_probe_child():
+    entry = (ROOT / "MF4 Data Analyzer V1.py").read_text(encoding="utf-8")
+
+    assert "--pyxcp-import-probe-child" in entry
+    assert "run_import_probe_child" in entry
+    assert entry.index("if args.pyxcp_import_probe_child") < entry.index(
+        "from mf4_analyzer.app import main"
+    )
+
+
+def test_frozen_entry_has_dedicated_a2l_and_pya2l_probe_children():
+    entry = (ROOT / "MF4 Data Analyzer V1.py").read_text(encoding="utf-8")
+
+    for flag in ("--a2l-probe-child", "--pya2l-import-probe-child"):
+        assert flag in entry
+    assert "_a2l_subprocess import main as a2l_child_main" in entry
+    assert "run_pya2l_import_probe_child" in entry
+    assert entry.index("if args.a2l_probe_child") < entry.index(
+        "from mf4_analyzer.app import main"
+    )
+
+
+def test_vector_runbook_uses_default_build_name_and_separate_evidence_files():
+    runbook = (
+        ROOT / "docs/analyzer/acquisition/runbooks/stage-8-pr4-bench.md"
+    ).read_text(encoding="utf-8")
+
+    assert r".\dist\TraceLab7.5\TraceLab7.5.exe" in runbook
+    assert "build-api-contract.json" in runbook
+    assert "packaged-runtime-smoke.json" in runbook
+    assert "MF4DataAnalyzer" not in runbook
+    assert (
+        "powershell -ExecutionPolicy Bypass -File "
+        "tools\\build_windows_folder.ps1\n"
+    ) in runbook
+    assert "build_windows_folder.ps1 -Console" not in runbook
+    assert "console-build PASS does not" in runbook
+
+
 def test_windows_folder_build_script_excludes_matplotlib_and_scipy():
     """The app dropped matplotlib + scipy; the package must not re-bundle them.
 

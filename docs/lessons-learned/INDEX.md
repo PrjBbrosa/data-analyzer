@@ -62,6 +62,8 @@ lesson by default.
 | [PyQt Drag Event MimeData Lifetime](pyqt-drag-event-mimedata-lifetime.md) | Writing pytest-qt tests that manually construct `QDragEnterEvent`, | See lesson |
 | [Overlay Live Visibility Retick](codex-overlay-live-visibility-retick.md) | Touching TimeDomain overlay-mode live visibility toggles for filter | See lesson |
 | [Status Facts Preserve Their Field Semantics](b5-status-facts-preserve-field-semantics.md) | Editing the Acquisition Cockpit recording fact stream or its | See lesson |
+| [Pinned Protocol Adapters Own Vendor ABI](codex-pinned-protocol-adapters-own-vendor-abi.md) | Implementing or reviewing Seed&Key, native DLL calls, multi-part XCP | See lesson |
+| [Frozen Probes Do Not Require Console Streams](codex-frozen-probes-do-not-require-console-streams.md) | Adding a hidden child command, import probe, parser subprocess, or | See lesson |
 
 ## Selection Rules
 

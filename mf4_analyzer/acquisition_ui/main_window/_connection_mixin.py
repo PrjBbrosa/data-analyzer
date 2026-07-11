@@ -22,6 +22,7 @@ from mf4_analyzer.acquisition_capture.health import (
 )
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_capture import thresholds
+from mf4_analyzer.acquisition_ui.state import CockpitState
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,21 @@ class ConnectionMixin:
         self._backend = FakeRecorderBackend()
         self._owns_vector_backend = False
         self._update_backend_badge()
+
+    def _disconnect_owned_vector_for_configuration_change(
+        self,
+        message: str,
+    ) -> bool:
+        """Invalidate stale DAQ ownership and make reconnect explicit."""
+
+        if not self._owns_vector_backend:
+            return False
+        self._invalidate_owned_vector_backend()
+        self._reset_connection_attempt_state()
+        if self._state_machine.state == CockpitState.CONNECTED_IDLE:
+            self._state_machine.request_disconnect()
+        self._status.showMessage(message)
+        return True
 
     def _update_backend_badge(self) -> None:
         badge = getattr(self, "_backend_badge", None)
@@ -303,10 +319,17 @@ class ConnectionMixin:
         if self._owns_vector_backend:
             diagnostics = getattr(self._backend, "diagnostics", lambda: {})()
             overflow: list[str] = []
-            if diagnostics.get("frame_overflow_count", 0):
-                overflow.append("frame queue overflow")
-            if diagnostics.get("sample_overflow_count", 0):
-                overflow.append("sample queue overflow")
+            counter_labels = (
+                ("frame_overflow_count", "frame queue overflow"),
+                ("sample_overflow_count", "sample queue overflow"),
+                ("unknown_pid_count", "unknown PID"),
+                ("decode_error_count", "DTO decode error"),
+                ("policy_error_count", "DAQ policy error"),
+            )
+            for key, label in counter_labels:
+                count = int(diagnostics.get(key, 0) or 0)
+                if count:
+                    overflow.append(f"{label}: {count}")
             capacity = {}
             if self._ifdata_xcp is not None:
                 capacity = {

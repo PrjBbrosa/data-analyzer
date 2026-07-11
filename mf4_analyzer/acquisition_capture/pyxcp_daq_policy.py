@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import queue
+import threading
 import time
 from typing import Any
 
@@ -22,6 +23,9 @@ class DaqPolicyDiagnostics:
     frame_high_water: int
     frame_overflow_count: int
     last_frame_monotonic_s: float | None
+    # Default preserves compatibility with callers constructing the original
+    # four-field snapshot positionally.
+    dto_received_count: int = 0
 
 
 class BoundedDaqPolicy:
@@ -37,6 +41,8 @@ class BoundedDaqPolicy:
             raise ValueError("frame_capacity must be >= 1")
         self.xcp_master: Any | None = None
         self._frames: queue.Queue[DaqFrame] = queue.Queue(maxsize=frame_capacity)
+        self._diagnostics_lock = threading.Lock()
+        self._dto_received_count = 0
         self._frame_high_water = 0
         self._frame_overflow_count = 0
         self._last_frame_monotonic_s: float | None = None
@@ -47,6 +53,7 @@ class BoundedDaqPolicy:
             return
         arrival = time.monotonic()
         frame = DaqFrame(bytes(payload), arrival, int(counter), int(timestamp))
+        overflowed = False
         try:
             self._frames.put_nowait(frame)
         except queue.Full:
@@ -54,15 +61,23 @@ class BoundedDaqPolicy:
                 self._frames.get_nowait()
             except queue.Empty:  # another consumer won the race
                 pass
+            else:
+                overflowed = True
             try:
                 self._frames.put_nowait(frame)
             except queue.Full:
                 # A producer can win between the drain and retry.  Drop this
                 # frame rather than blocking pyxcp's listener.
-                pass
-            self._frame_overflow_count += 1
-        self._last_frame_monotonic_s = arrival
-        self._frame_high_water = max(self._frame_high_water, self._frames.qsize())
+                overflowed = True
+        depth = self._frames.qsize()
+        # The queue operations above are strictly non-blocking.  This short
+        # metadata critical section makes diagnostics snapshots coherent.
+        with self._diagnostics_lock:
+            self._dto_received_count += 1
+            if overflowed:
+                self._frame_overflow_count += 1
+            self._last_frame_monotonic_s = arrival
+            self._frame_high_water = max(self._frame_high_water, depth)
 
     def get(self, timeout_s: float = 0.25) -> DaqFrame | None:
         try:
@@ -74,12 +89,14 @@ class BoundedDaqPolicy:
         self._closed = True
 
     def diagnostics(self) -> DaqPolicyDiagnostics:
-        return DaqPolicyDiagnostics(
-            frame_depth=self._frames.qsize(),
-            frame_high_water=self._frame_high_water,
-            frame_overflow_count=self._frame_overflow_count,
-            last_frame_monotonic_s=self._last_frame_monotonic_s,
-        )
+        with self._diagnostics_lock:
+            return DaqPolicyDiagnostics(
+                dto_received_count=self._dto_received_count,
+                frame_depth=self._frames.qsize(),
+                frame_high_water=self._frame_high_water,
+                frame_overflow_count=self._frame_overflow_count,
+                last_frame_monotonic_s=self._last_frame_monotonic_s,
+            )
 
 
 def _category_name(category: Any) -> str:

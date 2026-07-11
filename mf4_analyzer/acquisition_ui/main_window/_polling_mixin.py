@@ -32,6 +32,7 @@ class PollingMixin:
 
     def _poll_health(self) -> None:
         snapshot = self._health_aggregator.poll_once()
+        self._daq_no_go_reasons = tuple(snapshot.daq.overflow)
         self._health_strip.apply_snapshot(snapshot)
         self._feed_escalation(snapshot)
         self._update_record_button_enabled()
@@ -43,6 +44,7 @@ class PollingMixin:
             self._evaluate_connection_attempt(snapshot)
         elif self._state_machine.state == CockpitState.CONNECTED_IDLE:
             self._refresh_idle_preflight()
+            self._update_status_bar()
         elif self._state_machine.state == CockpitState.RECORDING:
             # Recording health already fed the REC chip / escalation / bottom
             # facts above; the removed right pane (B-4) has no refresh here.
@@ -73,6 +75,25 @@ class PollingMixin:
             xcp_connected=snapshot.xcp.connected,
             first_frame_received=first_frame,
         )
+        if snapshot.daq.overflow:
+            verdict = HealthyPredicateResult(
+                healthy=False,
+                first_failure="DAQ",
+            )
+            self._state_machine.request_connect(verdict)
+            self._reset_connection_attempt_state()
+            if self._owns_vector_backend:
+                self._invalidate_owned_vector_backend()
+            else:
+                self._stop_backend_best_effort(self._backend)
+            self._apply_state_to_ui(
+                CockpitState.DISCONNECTED,
+                CockpitState.DISCONNECTED,
+            )
+            self._status.showMessage(
+                "连接失败 · DAQ NO-GO · " + "; ".join(snapshot.daq.overflow)
+            )
+            return
         if verdict.healthy:
             self._state_machine.request_connect(verdict)
             self._connection_attempt_started = None

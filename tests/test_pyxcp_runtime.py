@@ -98,6 +98,10 @@ def test_runtime_maps_vector_and_a2l_facts_without_caller_owned_bus(monkeypatch)
     assert runtime.application.transport.can.can_id_slave == 0x6C6
     assert "bus" not in created["input"]
 
+    diagnostics = runtime.diagnostics()
+    assert diagnostics["sample_point_applied"] is False
+    assert diagnostics["timing_source"] == "driver_automatic"
+
     runtime.connect()
     runtime.close()
     assert runtime.master.disconnect_calls == 1
@@ -129,3 +133,74 @@ def test_runtime_encodes_extended_a2l_ids(monkeypatch) -> None:
     pyxcp_runtime._build_application(lambda _config: app, TransportConfig(), _ifdata(extended=True))
     assert app.transport.can.can_id_master == 0x98DAF110
     assert app.transport.can.can_id_slave == 0x98DA10F1
+
+
+def test_runtime_normalizes_missing_seed_key_path_for_strict_pyxcp_trait() -> None:
+    from mf4_analyzer.acquisition_capture import pyxcp_runtime
+
+    class StrictGeneral:
+        def __init__(self) -> None:
+            self._seed_n_key_dll = ""
+
+        @property
+        def seed_n_key_dll(self) -> str:
+            return self._seed_n_key_dll
+
+        @seed_n_key_dll.setter
+        def seed_n_key_dll(self, value: str) -> None:
+            if not isinstance(value, str):
+                raise TypeError("seed_n_key_dll requires str")
+            self._seed_n_key_dll = value
+
+    app = SimpleNamespace(
+        general=StrictGeneral(),
+        transport=SimpleNamespace(
+            layer=None,
+            timeout=None,
+            can=SimpleNamespace(
+                interface=None,
+                channel=None,
+                bitrate=None,
+                fd=None,
+                data_bitrate=None,
+                can_id_master=None,
+                can_id_slave=None,
+                vector=SimpleNamespace(app_name=None),
+            ),
+        ),
+    )
+    received = {}
+
+    def factory(config):
+        received.update(config)
+        if config["General"]["seed_n_key_dll"] is None:
+            raise TypeError("real pyxcp Unicode trait rejects None")
+        return app
+
+    pyxcp_runtime._build_application(factory, TransportConfig(seed_and_key_dll=None), _ifdata())
+
+    assert received["General"]["seed_n_key_dll"] == ""
+    assert app.general.seed_n_key_dll == ""
+
+    received.clear()
+    pyxcp_runtime._build_application(
+        factory,
+        TransportConfig(seed_and_key_dll=r"C:\keys\ecu.dll"),
+        _ifdata(),
+    )
+    assert received["General"]["seed_n_key_dll"] == r"C:\keys\ecu.dll"
+    assert app.general.seed_n_key_dll == r"C:\keys\ecu.dll"
+
+
+def test_runtime_rejects_unapplied_legacy_sample_point_values() -> None:
+    from mf4_analyzer.acquisition_capture import pyxcp_runtime
+
+    transport = TransportConfig(sample_point=80.0, fd_sample_point=65.0)
+
+    try:
+        pyxcp_runtime._build_application(lambda _config: None, transport, _ifdata())
+    except pyxcp_runtime.PyXcpRuntimeError as exc:
+        assert "driver automatic" in str(exc)
+        assert "sample_point=80.0" in str(exc)
+    else:
+        raise AssertionError("non-default unapplied timing values must fail closed")

@@ -214,6 +214,7 @@ class CockpitMainWindow(
         self._fake_last_rx_monotonic: float | None = None
         self._fake_xcp_connected: bool = False
         self._fake_can_load_pct: float | None = None
+        self._daq_no_go_reasons: tuple[str, ...] = ()
         self._transport_config = None
         self._ifdata_xcp = None
         self._allow_fake_backend = bool(allow_fake_backend)
@@ -398,6 +399,20 @@ class CockpitMainWindow(
     def _apply_state_to_ui(
         self, old: CockpitState, new: CockpitState
     ) -> None:
+        configuration_enabled = new not in (
+            CockpitState.RECORDING,
+            CockpitState.REVIEW_MODAL,
+        )
+        for name in (
+            "_settings_action",
+            "_settings_btn",
+            "_a2l_action",
+            "_a2l_btn",
+            "_transport_chip",
+        ):
+            control = getattr(self, name, None)
+            if control is not None:
+                control.setEnabled(configuration_enabled)
         if hasattr(self, "_segment_action"):
             segment_visible = new == CockpitState.RECORDING
             self._segment_action.setVisible(segment_visible)
@@ -419,6 +434,9 @@ class CockpitMainWindow(
             # disconnected (the removed right pane's destination, B-4).
             self._update_connection_checklist()
         elif new == CockpitState.CONNECTED_IDLE:
+            # A closed ReviewModal returns here; configuration edits become
+            # legal again only after that state transition completes.
+            self._left_pane.set_frozen(False)
             self._main_btn.setText("● 采集")
             self._set_visual_property(self._main_btn, "cockpitAction", "record")
             self._rec_indicator.setText("● REC OFF")
@@ -452,7 +470,7 @@ class CockpitMainWindow(
             self._set_visual_property(self._main_btn, "cockpitAction", "disabled")
             self._rec_indicator.setText("● REC OFF")
             self._set_visual_property(self._rec_indicator, "recState", "off")
-            self._left_pane.set_frozen(False)
+            self._left_pane.set_frozen(True)
             self._status.showMessage("复盘")
             self._open_review_modal()
 
@@ -474,9 +492,14 @@ class CockpitMainWindow(
         if snapshot is not None:
             self._last_hw_ok = snapshot.hw.ok
 
-        # Row 1 — A2L parsed: a user-loaded A2L stamps ``_a2l_name``; the
-        # demo / injected path seeds ``_initial_pool`` instead.
-        a2l_loaded = self._a2l_name is not None or bool(self._initial_pool)
+        # Row 1 — A2L parsed: a filename alone is only an attempted load.
+        # Vehicle readiness needs both committed IF_DATA and a measurement
+        # pool; the demo / injected path is represented by ``_initial_pool``.
+        a2l_loaded = bool(self._initial_pool) or bool(
+            self._a2l_name is not None
+            and self._ifdata_xcp is not None
+            and getattr(self._left_pane, "_pool", ())
+        )
         if a2l_loaded:
             a2l_state = "ok"
             a2l_detail = self._a2l_name or "已载入"
@@ -976,6 +999,8 @@ class CockpitMainWindow(
             self._update_connection_checklist()
         elif self._state_machine.state == CockpitState.CONNECTED_IDLE:
             self._refresh_center_cards()
+            if self._invalidate_vector_for_selection_change():
+                return
             self._refresh_idle_preflight()
             self._update_status_bar()
             self._idle_restart_timer.start()

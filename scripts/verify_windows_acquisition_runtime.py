@@ -19,11 +19,16 @@ from pathlib import Path
 from typing import Any
 
 
-EXPECTED = {"python-can": "4.6.1", "pyxcp": "0.29.10"}
+EXPECTED = {
+    "python-can": "4.6.1",
+    "pya2ldb": "1.0.332",
+    "pyxcp": "0.29.10",
+}
 REQUIRED_METHODS = {
     "getStatus": ("self",),
     "getSeed": ("self", "first", "resource"),
     "unlock": ("self", "length", "key"),
+    "cond_unlock": ("self", "resources"),
     "allocDaq": ("self", "daq_count"),
     "allocOdt": ("self", "daq_list_number", "odt_count"),
     "allocOdtEntry": ("self", "daq_list_number", "odt_number", "odt_entries_count"),
@@ -50,6 +55,7 @@ def _report() -> dict[str, Any]:
         "machine": platform.machine(),
         "expected_versions": EXPECTED,
         "installed_versions": {},
+        "import_probe": None,
         "checked_surfaces": [],
         "error": None,
     }
@@ -62,6 +68,26 @@ def verify() -> dict[str, Any]:
         return report
     if report["python_bitness"] != 64:
         report["error"] = "Windows x64 Python is required"
+        return report
+
+    # Exercise the exact isolated probe used by the production backend.  This
+    # must happen before importing pyxcp in this process: a native crash cannot
+    # be caught by Python, so the child return code and output are evidence.
+    from mf4_analyzer.acquisition_capture import backends
+
+    probe_command = backends._pyxcp_import_probe_command()
+    returncode, stdout, stderr = backends._run_pyxcp_import_probe()
+    report["import_probe"] = {
+        "command": probe_command,
+        "returncode": returncode,
+        "stdout": stdout,
+        "stderr": stderr,
+    }
+    if returncode != 0:
+        report["error"] = (
+            "production isolated PyQt-loaded pyxcp probe failed "
+            f"(returncode={returncode})"
+        )
         return report
 
     try:
@@ -79,8 +105,7 @@ def verify() -> dict[str, Any]:
         report["error"] = f"pinned runtime mismatch: {mismatches}"
         return report
 
-    # Keep this dynamic: the normal Cockpit path must pass the subprocess probe
-    # before it imports pyxcp in a Qt-loaded process.
+    # Keep these dynamic and after the production subprocess probe.
     try:
         master_module = importlib.import_module("py" + "xcp.master")
         transport_ext = importlib.import_module("py" + "xcp.transport.transport_ext")

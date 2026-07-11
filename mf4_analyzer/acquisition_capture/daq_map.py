@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -113,6 +114,11 @@ def build_daq_map(
 
         for sel in event_selected:
             measurement = measurements[sel.name]
+            if not measurement.conversion_supported:
+                raise ValueError(
+                    f"unsupported conversion {measurement.conversion!r} for "
+                    f"measurement {sel.name!r}; cannot decode physical values"
+                )
             datatype = measurement.datatype or ""
             size = _size_from_datatype(datatype, sel.payload_bytes)
             if size > payload_budget:
@@ -123,6 +129,18 @@ def build_daq_map(
             if current and offset + size - overhead > payload_budget:
                 flush()
             address = int(sel.address_hex, 16) if sel.address_hex else measurement.address
+            address_extension = int(measurement.address_extension)
+            if not 0 <= address_extension <= 0xFF:
+                raise ValueError(
+                    f"measurement {sel.name!r} address extension out of byte "
+                    f"range: {address_extension}"
+                )
+            scale_a = float(measurement.scale_a)
+            scale_b = float(measurement.scale_b)
+            if not (math.isfinite(scale_a) and math.isfinite(scale_b)):
+                raise ValueError(
+                    f"measurement {sel.name!r} has non-finite linear conversion"
+                )
             current.append(
                 OdtEntry(
                     measurement_name=sel.name,
@@ -130,13 +148,9 @@ def build_daq_map(
                     size=size,
                     datatype=datatype,
                     address=address,
-                    address_extension=int(getattr(measurement, "address_extension", 0)),
-                    scale_a=float(getattr(measurement, "scale_a", 1.0))
-                    if bool(getattr(measurement, "conversion_supported", True))
-                    else 1.0,
-                    scale_b=float(getattr(measurement, "scale_b", 0.0))
-                    if bool(getattr(measurement, "conversion_supported", True))
-                    else 0.0,
+                    address_extension=address_extension,
+                    scale_a=scale_a,
+                    scale_b=scale_b,
                 )
             )
             offset += size

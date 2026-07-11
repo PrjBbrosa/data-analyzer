@@ -114,6 +114,10 @@ class SessionSummary:
 
     Schema pinned by spec §Persistence Contract — see that section for
     the canonical example. Field order follows the spec table.
+
+    ``bus_error_count`` is retained as an integer for schema compatibility.
+    When the active backend cannot observe CAN bus errors, ``warnings`` carries
+    ``BUS_ERROR_UNKNOWN`` and consumers must not treat a numeric zero as PASS.
     """
 
     duration_s: float = 0.0

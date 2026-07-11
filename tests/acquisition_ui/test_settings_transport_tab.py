@@ -32,6 +32,22 @@ def test_transport_tab_round_trips_values(qtbot):
     assert out.data_bitrate == 4_000_000
 
 
+def test_sample_point_controls_are_driver_automatic_and_never_editable(qtbot):
+    from mf4_analyzer.acquisition_capture.transport_config import TransportConfig
+    from mf4_analyzer.acquisition_ui.settings_dialog import SettingsDialog
+
+    dialog = SettingsDialog(transport=TransportConfig(can_fd=True))
+    qtbot.addWidget(dialog)
+
+    assert dialog.transport_widget.sample_point_spin.isEnabled() is False
+    assert dialog.transport_widget.fd_sample_point_spin.isEnabled() is False
+    assert "driver" in dialog.transport_widget.sample_point_spin.toolTip().lower()
+
+    dialog.transport_widget.can_fd_check.setChecked(False)
+    dialog.transport_widget.can_fd_check.setChecked(True)
+    assert dialog.transport_widget.fd_sample_point_spin.isEnabled() is False
+
+
 def test_seed_key_label_ampersand_escaped(qtbot):
     from PyQt5.QtWidgets import QLabel
 

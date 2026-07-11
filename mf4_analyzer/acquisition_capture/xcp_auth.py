@@ -2,37 +2,24 @@
 
 from __future__ import annotations
 
-import ctypes
 import os
-from typing import Any
+from typing import Any, Literal
 
-RESOURCE_ID_DAQ = 0x02
+RESOURCE_ID_DAQ = 0x04
+DaqProtectionState = Literal["unprotected", "locked", "unlocked", "unknown"]
 
 
 class XcpAuthError(RuntimeError):
     """Raised when the XCP Seed&Key unlock flow fails."""
 
-
-def _load_seed_key_dll(path: str) -> Any:
-    return ctypes.WinDLL(path)  # type: ignore[attr-defined]
-
-
-def _compute_key_from_seed(seed: bytes, dll: Any) -> bytes:
-    fn = dll.ASAP1A_XCP_ComputeKeyFromSeed
-    fn.restype = ctypes.c_int32
-    fn.argtypes = [
-        ctypes.c_uint8,
-        ctypes.POINTER(ctypes.c_uint8),
-        ctypes.POINTER(ctypes.c_uint8),
-        ctypes.POINTER(ctypes.c_uint8),
-    ]
-    seed_buf = (ctypes.c_uint8 * len(seed))(*seed)
-    key_buf = (ctypes.c_uint8 * 256)()
-    key_len = ctypes.c_uint8(256)
-    rc = fn(len(seed), seed_buf, ctypes.byref(key_len), key_buf)
-    if rc != 0:
-        raise XcpAuthError(f"seed&key DLL rejected seed: code={rc}")
-    return bytes(key_buf[: int(key_len.value)])
+    def __init__(
+        self,
+        message: str,
+        *,
+        daq_protection: DaqProtectionState = "unknown",
+    ) -> None:
+        super().__init__(message)
+        self.daq_protection = daq_protection
 
 
 def unlock_resources_if_needed(
@@ -40,60 +27,71 @@ def unlock_resources_if_needed(
     master: Any,
     connect_response: Any,
     seed_and_key_dll: str | None,
-) -> None:
+) -> DaqProtectionState:
     """Read current protection state and unlock *only* DAQ when required.
 
     CONNECT's resource byte advertises resource availability; it is not a
-    protection bitmap.  The pinned pyxcp path queries GET_STATUS first and uses
+    protection bitmap. The pinned pyxcp path queries GET_STATUS first and uses
     its ``resourceProtectionStatus.daq`` fact to decide whether an unlock is
-    needed.
+    needed. Locked DAQ is delegated to pyxcp's official ``cond_unlock`` path;
+    this module must not guess a vendor DLL ABI.
     """
 
     del connect_response  # kept at the public seam while callers migrate.
-    protected = _daq_protection_status(master)
-    if not protected:
-        return
+    protection = _daq_protection_status(master)
+    if protection == "unprotected":
+        return protection
     if seed_and_key_dll is None:
         raise XcpAuthError(
             "DAQ is protected but no seed&key DLL configured "
-            "(set TransportConfig.seed_and_key_dll)"
+            "(set TransportConfig.seed_and_key_dll)",
+            daq_protection="locked",
         )
     if not os.path.exists(seed_and_key_dll):
-        raise XcpAuthError(f"seed&key DLL not found: {seed_and_key_dll}")
+        raise XcpAuthError(
+            f"seed&key DLL not found: {seed_and_key_dll}",
+            daq_protection="locked",
+        )
 
     try:
-        dll = _load_seed_key_dll(seed_and_key_dll)
-    except OSError as exc:
-        message = str(exc)
-        if "193" in message or "not a valid" in message.lower():
-            raise XcpAuthError(
-                "seed&key DLL bitness mismatch "
-                f"(Python is {ctypes.sizeof(ctypes.c_void_p) * 8}-bit): {message}"
-            ) from exc
-        raise XcpAuthError(f"seed&key DLL load failed: {message}") from exc
-
-    try:
-        seed = _read_seed(master)
+        master.cond_unlock("DAQ")
     except Exception as exc:
-        raise XcpAuthError(f"getSeed failed: {exc}") from exc
+        raise XcpAuthError(
+            f"pyxcp cond_unlock('DAQ') failed: {exc}",
+            daq_protection="locked",
+        ) from exc
 
-    key = _compute_key_from_seed(seed, dll)
     try:
-        master.unlock(len(key), key)
-    except Exception as exc:
-        raise XcpAuthError(f"ECU rejected unlock: {exc}") from exc
+        post_unlock = _daq_protection_status(master)
+    except XcpAuthError as exc:
+        raise XcpAuthError(
+            f"unable to verify DAQ unlock: {exc}",
+            daq_protection="unknown",
+        ) from exc
+    if post_unlock == "locked":
+        raise XcpAuthError(
+            "ECU accepted UNLOCK but DAQ remains protected",
+            daq_protection="locked",
+        )
+    return "unlocked"
 
 
-def _daq_protection_status(master: Any) -> bool:
+def _daq_protection_status(master: Any) -> Literal["unprotected", "locked"]:
     try:
         status = master.getStatus()
     except Exception as exc:
-        raise XcpAuthError(f"GET_STATUS failed: {exc}") from exc
+        raise XcpAuthError(
+            f"GET_STATUS failed: {exc}",
+            daq_protection="unknown",
+        ) from exc
     protection = getattr(status, "resourceProtectionStatus", None)
     if protection is None:
         protection = getattr(status, "protection_status", None)
     if protection is None:
-        raise XcpAuthError("GET_STATUS returned no resource protection state")
+        raise XcpAuthError(
+            "GET_STATUS returned no resource protection state",
+            daq_protection="unknown",
+        )
     if isinstance(protection, dict):
         value = protection.get("daq")
     elif isinstance(protection, int):
@@ -101,29 +99,8 @@ def _daq_protection_status(master: Any) -> bool:
     else:
         value = getattr(protection, "daq", None)
     if value is None:
-        raise XcpAuthError("GET_STATUS protection state does not report DAQ")
-    return bool(value)
-
-
-def _read_seed(master: Any) -> bytes:
-    """Read a possibly multi-part seed using pyxcp 0.29 positional calls."""
-
-    try:
-        response = master.getSeed(0, RESOURCE_ID_DAQ)
-    except Exception as exc:
-        raise XcpAuthError(f"getSeed failed: {exc}") from exc
-    first = bytes(getattr(response, "seed", response))
-    expected = getattr(response, "length", len(first))
-    if not isinstance(expected, int) or expected < len(first):
-        return first
-    seed = bytearray(first)
-    while len(seed) < expected:
-        try:
-            part_response = master.getSeed(1, 0)
-        except Exception as exc:
-            raise XcpAuthError(f"getSeed remaining-part failed: {exc}") from exc
-        part = bytes(getattr(part_response, "seed", part_response))
-        if not part:
-            raise XcpAuthError("getSeed returned an empty remaining seed part")
-        seed.extend(part)
-    return bytes(seed[:expected])
+        raise XcpAuthError(
+            "GET_STATUS protection state does not report DAQ",
+            daq_protection="unknown",
+        )
+    return "locked" if bool(value) else "unprotected"
