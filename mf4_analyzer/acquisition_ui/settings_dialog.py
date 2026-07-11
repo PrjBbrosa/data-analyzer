@@ -547,13 +547,12 @@ class SettingsDialog(QDialog):
                 message=f"XCP 连接失败：{xcp.error}",
             )
 
-        resource = 0 if xcp.resource_byte is None else xcp.resource_byte
         return _TestConnectionResult(
             ok=True,
             level="green",
             message=(
                 f"OK · driver {hw.driver_version} · "
-                f"RESOURCE=0x{resource:02X} · {xcp.latency_ms} ms"
+                f"CONNECT/GET_STATUS · {xcp.latency_ms} ms"
             ),
         )
 

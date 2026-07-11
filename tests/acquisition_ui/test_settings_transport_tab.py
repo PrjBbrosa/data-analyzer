@@ -123,7 +123,7 @@ def test_test_connection_runs_hw_then_xcp_probe_and_reports_resource(qtbot):
 
     xcp_mock.assert_called_once()
     assert result.level == "green"
-    assert "RESOURCE=0x05" in result.message
+    assert "GET_STATUS" in result.message
     assert "12" in result.message
 
 

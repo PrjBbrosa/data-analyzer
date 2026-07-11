@@ -168,56 +168,27 @@ def vector_hw_probe(transport: TransportConfig) -> HwHealth:
     )
 
 
-def _open_vector_bus(transport: TransportConfig):
-    import can  # type: ignore[import-not-found]
-
-    kwargs = {
-        "interface": "vector",
-        "app_name": transport.app_name,
-        "channel": transport.channel,
-        "bitrate": transport.bitrate,
-        "fd": transport.can_fd,
-    }
-    if transport.can_fd:
-        kwargs["data_bitrate"] = transport.data_bitrate
-    return can.Bus(**kwargs)
-
-
-def _make_pyxcp_master(bus, transport: TransportConfig):
-    from mf4_analyzer.acquisition_capture.backends import _import_xcp_master
-
-    Master = _import_xcp_master()
-    return Master("can", config={"bus": bus, "timeout": transport.timeout_s})
-
-
 def test_xcp_connection(
     transport: TransportConfig,
     ifdata: IfDataXcp,
 ) -> TestXcpConnectionResult:
-    bus = None
+    runtime = None
     try:
         try:
-            bus = _open_vector_bus(transport)
+            from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
+
+            runtime = PyXcpRuntime.open(transport, ifdata)
         except Exception as exc:  # noqa: BLE001 - surface driver error
             return TestXcpConnectionResult(
                 ok=False,
                 resource_byte=None,
                 latency_ms=None,
-                error=f"CAN 总线打开失败：{exc}",
+                error=f"pyxcp Vector runtime init failed: {exc}",
             )
-
-        try:
-            master = _make_pyxcp_master(bus, transport)
-        except Exception as exc:  # noqa: BLE001 - surface pyxcp import/init failure
-            return TestXcpConnectionResult(
-                ok=False,
-                resource_byte=None,
-                latency_ms=None,
-                error=f"pyxcp Master init failed: {exc}",
-            )
+        master = runtime.master
         started = time.monotonic()
         try:
-            response = master.connect()
+            response = runtime.connect()
         except TimeoutError as exc:
             return TestXcpConnectionResult(
                 ok=False,
@@ -258,10 +229,6 @@ def test_xcp_connection(
                     error=f"Seed&Key 失败：{exc}",
                 )
 
-        try:
-            master.disconnect()
-        except Exception:  # noqa: BLE001 - connection already proven
-            pass
         return TestXcpConnectionResult(
             ok=True,
             resource_byte=resource,
@@ -269,8 +236,8 @@ def test_xcp_connection(
             error=None,
         )
     finally:
-        if bus is not None:
+        if runtime is not None:
             try:
-                bus.shutdown()
+                runtime.close()
             except Exception:  # noqa: BLE001 - best-effort cleanup
                 pass

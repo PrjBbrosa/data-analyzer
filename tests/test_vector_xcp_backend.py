@@ -1,11 +1,10 @@
-"""VectorXcpRecorderBackend tests with a mocked transport stack."""
+"""Structured hardware-free tests for the pyxcp 0.29 Vector backend."""
 
 from __future__ import annotations
 
-import struct
 import sys
 import time
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
 
@@ -29,229 +28,132 @@ def _ifdata() -> IfDataXcp:
         daq_timestamp_size=0,
         daq_timestamp_unit="1US",
         daq_timestamp_fixed=False,
-        available_events=(
-            DaqEventInfo(
-                number=0,
-                name="10ms",
-                cycle_time_ms=10.0,
-                max_odt_entries=8,
-                properties=("DAQ",),
-            ),
-        ),
-        daq_processor=DaqProcessorInfo(
-            min_daq=0,
-            max_event_channel=1,
-            granularity_odt_entry_size_daq=1,
-            overload_indication="EVENT",
-        ),
+        available_events=(DaqEventInfo(0, "10ms", 10.0, 8, ("DAQ",)),),
+        daq_processor=DaqProcessorInfo(0, 1, 1, "EVENT"),
     )
-
-
-def _measurements() -> dict[str, MeasurementSummary]:
-    return {
-        "a": MeasurementSummary(
-            name="a",
-            address=0x1000,
-            datatype="UWORD",
-            unit="",
-            conversion="",
-            available_events=("10ms",),
-        ),
-    }
 
 
 def _selected() -> tuple[SelectedMeasurement, ...]:
-    return (
-        SelectedMeasurement(
-            name="a",
-            address_hex="0x1000",
-            event="10ms",
-            event_rate_hz=100.0,
-            payload_bytes=2,
-        ),
-    )
+    return (SelectedMeasurement("a", event="10ms", payload_bytes=2, address_hex="0x1000"),)
 
 
-def _patch_stack():
-    return (
-        patch.object(sys, "platform", "win32"),
-        patch("mf4_analyzer.acquisition_capture.backends._import_can"),
-        patch("mf4_analyzer.acquisition_capture.backends._import_xcp_master"),
-    )
+def _measurements() -> dict[str, MeasurementSummary]:
+    return {"a": MeasurementSummary("a", 0x1000, "UWORD", "", "")}
 
 
-def test_pyxcp_import_probe_blocks_native_access_violation(monkeypatch) -> None:
-    from mf4_analyzer.acquisition_capture import backends
-    from mf4_analyzer.acquisition_capture.backends import RecorderBackendUnavailableError
+class _StrictMaster:
+    """Deliberately narrow fake: unknown pyxcp API calls fail naturally."""
 
-    monkeypatch.setattr(
-        backends,
-        "_run_pyxcp_import_probe",
-        lambda: (-1073741819, "", "Windows fatal exception: access violation"),
-    )
-    monkeypatch.setattr(backends, "_PYXCP_IMPORT_PROBE_RESULT", None)
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
 
-    with pytest.raises(RecorderBackendUnavailableError, match="0xC0000005"):
-        backends._ensure_pyxcp_import_safe()
+    def connect(self):
+        self.calls.append(("connect",))
+        return SimpleNamespace(resource=0)
 
+    def getStatus(self):  # noqa: N802 - pinned pyxcp spelling
+        self.calls.append(("getStatus",))
+        return SimpleNamespace(resourceProtectionStatus=SimpleNamespace(daq=False))
 
-def test_lifecycle_on_mock_transport() -> None:
-    from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
+    def getDaqProcessorInfo(self):  # noqa: N802
+        self.calls.append(("getDaqProcessorInfo",))
+        return SimpleNamespace(maxDaq=8)
 
-    platform_patch, can_patch, master_patch = _patch_stack()
-    with platform_patch, can_patch as import_can, master_patch as import_master:
-        mock_bus = MagicMock()
-        import_can.return_value = MagicMock(Bus=lambda **_kwargs: mock_bus)
-        mock_master = MagicMock()
-        mock_master.connect.return_value = MagicMock(resource=0x00)
-        mock_master.fetch.return_value = None
-        import_master.return_value = lambda *_args, **_kwargs: mock_master
+    def freeDaq(self):  # noqa: N802
+        self.calls.append(("freeDaq",))
 
-        backend = VectorXcpRecorderBackend(
-            transport=TransportConfig(),
-            ifdata=_ifdata(),
-            measurements=_measurements(),
-        )
-        backend.start(_selected())
-        assert mock_master.connect.called
-        assert mock_master.startStopSynch.called
+    def allocDaq(self, count):  # noqa: N802
+        self.calls.append(("allocDaq", count))
 
-        final_status = backend.stop()
+    def allocOdt(self, daq_list, count):  # noqa: N802
+        self.calls.append(("allocOdt", daq_list, count))
 
-    mock_master.disconnect.assert_called()
-    assert final_status.rx_count == 0
-    assert final_status.bus_error_count == 0
-    assert final_status.queue_overflow_count == 0
-    assert final_status.last_error is None
-    assert final_status.started is False
+    def allocOdtEntry(self, daq_list, odt, count):  # noqa: N802
+        self.calls.append(("allocOdtEntry", daq_list, odt, count))
 
+    def setDaqPtr(self, daq_list, odt, index):  # noqa: N802
+        self.calls.append(("setDaqPtr", daq_list, odt, index))
 
-def test_start_failure_shuts_down_master_and_bus() -> None:
-    from mf4_analyzer.acquisition_capture.backends import (
-        RecorderStartError,
-        VectorXcpRecorderBackend,
-    )
+    def writeDaq(self, bit_offset, size, extension, address):  # noqa: N802
+        self.calls.append(("writeDaq", bit_offset, size, extension, address))
 
-    platform_patch, can_patch, master_patch = _patch_stack()
-    with platform_patch, can_patch as import_can, master_patch as import_master:
-        mock_bus = MagicMock()
-        import_can.return_value = MagicMock(Bus=lambda **_kwargs: mock_bus)
-        mock_master = MagicMock()
-        import_master.return_value = lambda *_args, **_kwargs: mock_master
-        backend = VectorXcpRecorderBackend(
-            transport=TransportConfig(),
-            ifdata=_ifdata(),
-            measurements=_measurements(),
-        )
-        with patch(
-            "mf4_analyzer.acquisition_capture.xcp_daq_session.XcpDaqSession.start",
-            side_effect=RuntimeError("DAQ map failed"),
-        ):
-            with pytest.raises(RecorderStartError, match="DAQ map failed"):
-                backend.start(_selected())
+    def setDaqListMode(self, mode, daq_list, event, prescaler, priority):  # noqa: N802
+        self.calls.append(("setDaqListMode", mode, daq_list, event, prescaler, priority))
 
-    mock_master.disconnect.assert_called()
-    mock_bus.shutdown.assert_called()
+    def startStopDaqList(self, mode, daq_list):  # noqa: N802
+        self.calls.append(("startStopDaqList", mode, daq_list))
+        return SimpleNamespace(firstPid=0x10)
+
+    def startStopSynch(self, mode):  # noqa: N802
+        self.calls.append(("startStopSynch", mode))
+
+    def disconnect(self):
+        self.calls.append(("disconnect",))
 
 
-def test_status_shape_matches_capture_controller_summary_contract() -> None:
-    from mf4_analyzer.acquisition_capture.backends import (
-        BackendStatus,
-        VectorXcpRecorderBackend,
-    )
+class _Runtime:
+    def __init__(self, master: _StrictMaster) -> None:
+        self.master = master
+        self.closed = False
 
-    platform_patch, can_patch, master_patch = _patch_stack()
-    with platform_patch, can_patch as import_can, master_patch as import_master:
-        import_can.return_value = MagicMock(Bus=lambda **_kwargs: MagicMock())
-        import_master.return_value = lambda *_args, **_kwargs: MagicMock()
-        backend = VectorXcpRecorderBackend(
-            transport=TransportConfig(),
-            ifdata=_ifdata(),
-            measurements=_measurements(),
-        )
-
-    snap = backend.status()
-    assert isinstance(snap, BackendStatus)
-    assert isinstance(snap.queue_overflow_count, int)
-    assert isinstance(snap.bus_error_count, int)
-    assert snap.started is False
+    def close(self) -> None:
+        self.closed = True
 
 
-def test_capture_controller_round_trips_vector_backend_status(tmp_path) -> None:
-    from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
-    from mf4_analyzer.acquisition_capture.controller import CaptureController
-    from mf4_analyzer.acquisition_capture.session import SessionConfig
+def _patch_runtime(monkeypatch, master: _StrictMaster) -> _Runtime:
+    from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
 
-    platform_patch, can_patch, master_patch = _patch_stack()
-    with platform_patch, can_patch as import_can, master_patch as import_master:
-        import_can.return_value = MagicMock(Bus=lambda **_kwargs: MagicMock())
-        mock_master = MagicMock()
-        mock_master.connect.return_value = MagicMock(resource=0x00)
-        mock_master.fetch.return_value = None
-        import_master.return_value = lambda *_args, **_kwargs: mock_master
-        backend = VectorXcpRecorderBackend(
-            transport=TransportConfig(),
-            ifdata=_ifdata(),
-            measurements=_measurements(),
-        )
-        config = SessionConfig(
-            output_mf4=tmp_path / "out.mf4",
-            selected=_selected(),
-            backend="vector",
-        )
-        controller = CaptureController(config=config, backend=backend)
-
-        controller.start()
-        summary = controller.stop()
-
-    assert summary is not None
+    runtime = _Runtime(master)
+    monkeypatch.setattr(PyXcpRuntime, "open", lambda *_args, **_kwargs: runtime)
+    return runtime
 
 
-def test_poll_returns_decoded_samples_from_dto_frames() -> None:
-    from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
-
-    dto_frame = bytes([0]) + struct.pack("<H", 0x1234)
-    platform_patch, can_patch, master_patch = _patch_stack()
-    with platform_patch, can_patch as import_can, master_patch as import_master:
-        import_can.return_value = MagicMock(Bus=lambda **_kwargs: MagicMock())
-        mock_master = MagicMock()
-        mock_master.connect.return_value = MagicMock(resource=0x00)
-        frames = [dto_frame]
-
-        def fetch_once_then_idle(*_args, **_kwargs):
-            return frames.pop(0) if frames else None
-
-        mock_master.fetch.side_effect = fetch_once_then_idle
-        import_master.return_value = lambda *_args, **_kwargs: mock_master
-        backend = VectorXcpRecorderBackend(
-            transport=TransportConfig(),
-            ifdata=_ifdata(),
-            measurements=_measurements(),
-        )
-        with patch(
-            "mf4_analyzer.acquisition_capture.backends.time.monotonic",
-            side_effect=[100.0, 100.010],
-        ):
-            backend.start(_selected())
-            for _ in range(50):
-                samples = backend.poll()
-                if samples:
-                    break
-                time.sleep(0.001)
-            backend.stop()
-
-    assert [sample[0] for sample in samples] == ["a"]
-    assert samples[0][1] == pytest.approx(0.010)
-    assert samples[0][1] < 1.0
-    assert samples[0][2] == float(0x1234)
-
-
-def test_non_windows_raises_unavailable() -> None:
+def test_vector_backend_is_refused_before_native_import_on_non_windows() -> None:
     from mf4_analyzer.acquisition_capture.backends import (
         RecorderBackendUnavailableError,
         VectorXcpRecorderBackend,
     )
 
-    with patch.object(sys, "platform", "darwin"):
-        with pytest.raises(RecorderBackendUnavailableError):
-            VectorXcpRecorderBackend()
+    with pytest.raises(RecorderBackendUnavailableError):
+        VectorXcpRecorderBackend()
+
+
+def test_lifecycle_uses_one_runtime_and_policy_driven_dto_ingress(monkeypatch) -> None:
+    from mf4_analyzer.acquisition_capture.backends import VectorXcpRecorderBackend
+
+    master = _StrictMaster()
+    runtime = _patch_runtime(monkeypatch, master)
+    monkeypatch.setattr(sys, "platform", "win32")
+    backend = VectorXcpRecorderBackend(transport=TransportConfig(), ifdata=_ifdata(), measurements=_measurements())
+    backend.start(_selected())
+
+    assert ("allocDaq", 1) in master.calls
+    assert ("startStopDaqList", 0x02, 0) in master.calls
+    assert ("startStopSynch", 0x01) in master.calls
+    backend._policy.feed("DAQ", 1, 0, bytes([0x10, 0x34, 0x12]))
+    deadline = time.monotonic() + 1.0
+    samples = []
+    while time.monotonic() < deadline and not samples:
+        samples = backend.poll()
+        time.sleep(0.01)
+    assert samples and samples[0][0] == "a" and samples[0][2] == float(0x1234)
+
+    status = backend.stop()
+    assert status.started is False
+    assert runtime.closed is True
+    assert ("startStopSynch", 0x00) in master.calls
+    assert master.calls.count(("disconnect",)) >= 1
+
+
+def test_failed_daq_start_closes_runtime(monkeypatch) -> None:
+    from mf4_analyzer.acquisition_capture.backends import RecorderStartError, VectorXcpRecorderBackend
+    from mf4_analyzer.acquisition_capture.xcp_daq_session import XcpDaqSession
+
+    master = _StrictMaster()
+    runtime = _patch_runtime(monkeypatch, master)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(XcpDaqSession, "start", lambda *_args: (_ for _ in ()).throw(RuntimeError("DAQ rejected")))
+    backend = VectorXcpRecorderBackend(transport=TransportConfig(), ifdata=_ifdata(), measurements=_measurements())
+    with pytest.raises(RecorderStartError, match="DAQ rejected"):
+        backend.start(_selected())
+    assert runtime.closed is True

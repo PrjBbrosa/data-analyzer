@@ -208,105 +208,85 @@ def test_probe_reports_channel_out_of_range():
     assert "count=2" in (result.error or "")
 
 
-def test_test_xcp_connection_returns_resource_byte_on_success():
+class _ProbeRuntime:
+    def __init__(self, master):
+        self.master = master
+        self.closed = False
+
+    def connect(self):
+        return self.master.connect()
+
+    def close(self):
+        self.closed = True
+
+
+class _ProbeMaster:
+    def __init__(self, *, connect_error: Exception | None = None):
+        self.connect_error = connect_error
+        self.connect_calls = 0
+
+    def connect(self):
+        self.connect_calls += 1
+        if self.connect_error:
+            raise self.connect_error
+        return types.SimpleNamespace(resource=0x05)
+
+
+def test_test_xcp_connection_uses_shared_runtime_and_closes_it(monkeypatch):
+    from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
     from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
 
-    mock_master = MagicMock()
-    mock_master.connect.return_value = MagicMock(resource=0x05)
-    mock_bus = MagicMock()
-    with patch.object(sys, "platform", "win32"), patch(
-        "mf4_analyzer.acquisition_capture.vector_hw_probe._open_vector_bus",
-        return_value=mock_bus,
-    ), patch(
-        "mf4_analyzer.acquisition_capture.vector_hw_probe._make_pyxcp_master",
-        return_value=mock_master,
-    ):
-        result = test_xcp_connection(TransportConfig(), _ifdata())
+    runtime = _ProbeRuntime(_ProbeMaster())
+    monkeypatch.setattr(PyXcpRuntime, "open", lambda *_args: runtime)
+    result = test_xcp_connection(TransportConfig(), _ifdata())
 
     assert result.ok is True
     assert result.resource_byte == 0x05
     assert result.latency_ms is not None
-    mock_master.connect.assert_called_once()
-    mock_master.disconnect.assert_called_once()
-    mock_bus.shutdown.assert_called_once()
+    assert runtime.master.connect_calls == 1
+    assert runtime.closed is True
 
 
-def test_test_xcp_connection_reports_no_response_on_timeout():
+def test_test_xcp_connection_reports_connect_timeout_and_closes_runtime(monkeypatch):
+    from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
     from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
 
-    mock_master = MagicMock()
-    mock_master.connect.side_effect = TimeoutError("no response")
-    mock_bus = MagicMock()
-    with patch.object(sys, "platform", "win32"), patch(
-        "mf4_analyzer.acquisition_capture.vector_hw_probe._open_vector_bus",
-        return_value=mock_bus,
-    ), patch(
-        "mf4_analyzer.acquisition_capture.vector_hw_probe._make_pyxcp_master",
-        return_value=mock_master,
-    ):
-        result = test_xcp_connection(TransportConfig(), _ifdata())
-
+    runtime = _ProbeRuntime(_ProbeMaster(connect_error=TimeoutError("no response")))
+    monkeypatch.setattr(PyXcpRuntime, "open", lambda *_args: runtime)
+    result = test_xcp_connection(TransportConfig(), _ifdata())
     assert result.ok is False
     assert "0x500" in (result.error or "")
-    mock_bus.shutdown.assert_called_once()
+    assert runtime.closed is True
 
 
-def test_test_xcp_connection_reports_master_creation_failure():
+def test_test_xcp_connection_reports_runtime_construction_failure(monkeypatch):
+    from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
     from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
 
-    mock_bus = MagicMock()
-    with patch.object(sys, "platform", "win32"), patch(
-        "mf4_analyzer.acquisition_capture.vector_hw_probe._open_vector_bus",
-        return_value=mock_bus,
-    ), patch(
-        "mf4_analyzer.acquisition_capture.vector_hw_probe._make_pyxcp_master",
-        side_effect=RuntimeError("pyxcp import failed"),
-    ):
-        result = test_xcp_connection(TransportConfig(), _ifdata())
+    def fail(*_args):
+        raise RuntimeError("pyxcp import failed")
 
+    monkeypatch.setattr(PyXcpRuntime, "open", fail)
+    result = test_xcp_connection(TransportConfig(), _ifdata())
     assert result.ok is False
     assert "pyxcp" in (result.error or "").lower()
-    mock_bus.shutdown.assert_called_once()
 
 
-def test_test_xcp_connection_bus_open_failure_reports_red():
-    from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
-
-    with patch.object(sys, "platform", "win32"), patch(
-        "mf4_analyzer.acquisition_capture.vector_hw_probe._open_vector_bus",
-        side_effect=RuntimeError("vxlapi: channel busy"),
-    ):
-        result = test_xcp_connection(TransportConfig(), _ifdata())
-
-    assert result.ok is False
-    assert "总线" in (result.error or "") or "bus" in (result.error or "").lower()
-
-
-def test_test_xcp_connection_seed_key_failure_disconnects():
+def test_test_xcp_connection_surfaces_seed_key_failure_and_closes_runtime(monkeypatch):
+    from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
     from mf4_analyzer.acquisition_capture.xcp_auth import XcpAuthError
     from mf4_analyzer.acquisition_capture.vector_hw_probe import test_xcp_connection
 
-    mock_master = MagicMock()
-    mock_master.connect.return_value = MagicMock(resource=0x01)
-    mock_bus = MagicMock()
-    with patch.object(sys, "platform", "win32"), patch(
-        "mf4_analyzer.acquisition_capture.vector_hw_probe._open_vector_bus",
-        return_value=mock_bus,
-    ), patch(
-        "mf4_analyzer.acquisition_capture.vector_hw_probe._make_pyxcp_master",
-        return_value=mock_master,
-    ), patch(
+    runtime = _ProbeRuntime(_ProbeMaster())
+    monkeypatch.setattr(PyXcpRuntime, "open", lambda *_args: runtime)
+    monkeypatch.setattr(
         "mf4_analyzer.acquisition_capture.vector_hw_probe.unlock_resources_if_needed",
-        side_effect=XcpAuthError("bad key"),
-    ):
-        result = test_xcp_connection(
-            TransportConfig(seed_and_key_dll="seedkey.dll"), _ifdata()
-        )
-
+        lambda **_kwargs: (_ for _ in ()).throw(XcpAuthError("bad key")),
+    )
+    result = test_xcp_connection(TransportConfig(seed_and_key_dll="seedkey.dll"), _ifdata())
     assert result.ok is False
     assert "Seed&Key" in (result.error or "")
-    mock_master.disconnect.assert_called_once()
-    mock_bus.shutdown.assert_called_once()
+    assert runtime.closed is True
 
 
 def test_default_health_aggregator_can_bind_transport_probe():

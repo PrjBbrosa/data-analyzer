@@ -269,6 +269,13 @@ class ConnectionMixin:
         return vector_hw_probe(self._transport_config)
 
     def _probe_can(self) -> CanHealth:
+        if self._owns_vector_backend:
+            status = self._backend.status()
+            return CanHealth(
+                bus_load_pct=None,
+                channels=(),
+                bus_error_count=status.bus_error_count,
+            )
         return CanHealth(
             bus_load_pct=self._fake_can_load_pct,
             channels=(),
@@ -276,6 +283,14 @@ class ConnectionMixin:
         )
 
     def _probe_xcp(self) -> XcpHealth:
+        if self._owns_vector_backend:
+            return XcpHealth(
+                connected=self._backend.status().started,
+                slave_id=None,
+                last_response_age_s=None,
+                consecutive_timeouts=0,
+                attempted=self._connection_ever_attempted,
+            )
         return XcpHealth(
             connected=self._fake_xcp_connected,
             slave_id=0x55 if self._fake_xcp_connected else None,
@@ -285,6 +300,20 @@ class ConnectionMixin:
         )
 
     def _probe_daq(self) -> DaqHealth:
+        if self._owns_vector_backend:
+            diagnostics = getattr(self._backend, "diagnostics", lambda: {})()
+            overflow: list[str] = []
+            if diagnostics.get("frame_overflow_count", 0):
+                overflow.append("frame queue overflow")
+            if diagnostics.get("sample_overflow_count", 0):
+                overflow.append("sample queue overflow")
+            capacity = {}
+            if self._ifdata_xcp is not None:
+                capacity = {
+                    event.name: event.max_odt_entries
+                    for event in self._ifdata_xcp.available_events
+                }
+            return DaqHealth(event_capacity=capacity, overflow=tuple(overflow))
         return DaqHealth()
 
     def _probe_rec(self) -> RecHealth:

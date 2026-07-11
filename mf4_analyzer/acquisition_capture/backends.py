@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import math
 import importlib
+import queue
 import subprocess
 import sys
 import threading
@@ -192,6 +193,20 @@ class FakeRecorderBackend(RecorderBackend):
 
     def last_frame_monotonic(self) -> float | None:
         return self._last_frame_monotonic
+
+    def diagnostics(self) -> dict[str, Any]:
+        policy = self._policy.diagnostics() if self._policy is not None else None
+        return {
+            "started": self.status().started,
+            "last_frame_monotonic_s": self._last_frame_monotonic,
+            "frame_queue_depth": getattr(policy, "frame_depth", None),
+            "frame_queue_high_water": getattr(policy, "frame_high_water", None),
+            "frame_overflow_count": getattr(policy, "frame_overflow_count", 0),
+            "sample_overflow_count": self._queue_overflow_count,
+            "decoded_samples": self._rx_count,
+            "bus_error_count": self._bus_error_count,
+            "last_error": self._last_error,
+        }
 
     # -- warning-state hooks (for tests) ------------------------------
 
@@ -507,46 +522,37 @@ class VectorXcpRecorderBackend(RecorderBackend):
         if measurements is None:
             raise ValueError("VectorXcpRecorderBackend requires measurements")
 
-        self._can = _import_can()
-        self._MasterCls = _import_xcp_master()
         self._transport = transport or TransportConfig()
         self._ifdata = ifdata
         self._measurements = measurements
-        self._bus: Any | None = None
+        self._runtime: Any | None = None
         self._master: Any | None = None
         self._session: Any | None = None
-        self._poll_queue: list[tuple[str, float, float]] = []
+        self._policy: Any | None = None
+        self._sample_queue: queue.Queue[tuple[str, float, float]] = queue.Queue(
+            maxsize=16_384
+        )
         self._rx_count = 0
         self._bus_error_count = 0
         self._queue_overflow_count = 0
         self._last_error: str | None = None
         self._last_frame_monotonic: float | None = None
         self._base_monotonic_s = 0.0
-        self._stop_event: threading.Event | None = None
-        self._capture_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._decode_thread: threading.Thread | None = None
 
     def start(self, selected: Sequence[SelectedMeasurement]) -> None:
         from mf4_analyzer.acquisition_capture.xcp_daq_session import XcpDaqSession
 
-        bus_kwargs: dict[str, Any] = {
-            "interface": "vector",
-            "app_name": self._transport.app_name,
-            "channel": self._transport.channel,
-            "bitrate": self._transport.bitrate,
-            "fd": self._transport.can_fd,
-        }
-        if self._transport.can_fd:
-            bus_kwargs["data_bitrate"] = self._transport.data_bitrate
         try:
-            self._bus = self._can.Bus(**bus_kwargs)
-        except Exception as exc:
-            raise RecorderStartError(f"Vector bus open failed: {exc}") from exc
+            from mf4_analyzer.acquisition_capture.pyxcp_daq_policy import BoundedDaqPolicy
+            from mf4_analyzer.acquisition_capture.pyxcp_runtime import PyXcpRuntime
 
-        try:
-            self._master = self._MasterCls("can", config={"bus": self._bus})
+            self._policy = BoundedDaqPolicy()
+            self._runtime = PyXcpRuntime.open(self._transport, self._ifdata, self._policy)
+            self._master = self._runtime.master
         except Exception as exc:
-            self._shutdown_bus()
-            raise RecorderStartError(f"pyxcp Master init failed: {exc}") from exc
+            raise RecorderStartError(f"pyxcp runtime init failed: {exc}") from exc
 
         self._session = XcpDaqSession(
             master=self._master,
@@ -557,26 +563,33 @@ class VectorXcpRecorderBackend(RecorderBackend):
         self._base_monotonic_s = time.monotonic()
         try:
             self._session.start(selected)
-            self._start_capture_thread()
+            self._start_decode_thread()
         except Exception as exc:
             self._cleanup_failed_start()
             raise RecorderStartError(f"Vector/XCP session start failed: {exc}") from exc
 
     def poll(self) -> list[tuple[str, float, float]]:
-        out = list(self._poll_queue)
-        self._poll_queue.clear()
+        out: list[tuple[str, float, float]] = []
+        while True:
+            try:
+                out.append(self._sample_queue.get_nowait())
+            except queue.Empty:
+                break
         return out
 
     def stop(self) -> BackendStatus:
-        if self._stop_event is not None:
-            self._stop_event.set()
-        if self._capture_thread is not None:
-            self._capture_thread.join(timeout=1.0)
+        self._stop_event.set()
+        if self._decode_thread is not None:
+            self._decode_thread.join(timeout=1.0)
         try:
             if self._session is not None:
                 self._session.stop()
         finally:
-            self._shutdown_bus()
+            if self._runtime is not None:
+                self._runtime.close()
+            self._session = None
+            self._master = None
+            self._runtime = None
         return self.status()
 
     def status(self) -> BackendStatus:
@@ -591,37 +604,30 @@ class VectorXcpRecorderBackend(RecorderBackend):
     def last_frame_monotonic(self) -> float | None:
         return self._last_frame_monotonic
 
-    def _start_capture_thread(self) -> None:
+    def _start_decode_thread(self) -> None:
         from mf4_analyzer.acquisition_capture.dto_decode import decode_dto
 
-        if self._session is None or self._master is None:
+        if self._session is None or self._policy is None:
             return
-        self._stop_event = threading.Event()
+        self._stop_event.clear()
 
-        def capture_loop() -> None:
+        def decode_loop() -> None:
             daq_map = self._session.daq_map
             if daq_map is None:
                 return
-            while self._stop_event is not None and not self._stop_event.is_set():
+            while not self._stop_event.is_set():
                 try:
-                    frame = self._read_dto_frame()
+                    frame = self._policy.get()
                 except Exception as exc:
-                    self._queue_overflow_count += 1
+                    self._bus_error_count += 1
                     self._last_error = str(exc)
-                    time.sleep(0.001)
                     continue
-                if frame is None or not frame:
-                    time.sleep(0.001)
+                if frame is None or not frame.payload:
                     continue
-                arrival_monotonic = time.monotonic()
+                arrival_monotonic = frame.arrival_monotonic_s
                 self._last_frame_monotonic = arrival_monotonic
-                # T1-5: when the ECU has no DAQ timestamps (ERD6 case,
-                # ``daq_timestamp_size=0``) we must pass the host
-                # arrival time so ``decode_dto`` can synthesize a
-                # relative per-frame timestamp. Otherwise every sample shares
-                # ``_base_monotonic_s`` and the MF4 time axis collapses.
                 for sample in decode_dto(
-                    frame=bytes(frame),
+                    frame=frame.payload,
                     daq_map=daq_map,
                     timestamp_size=self._ifdata.daq_timestamp_size,
                     timestamp_unit_ns=self._session.timestamp_unit_ns,
@@ -629,41 +635,19 @@ class VectorXcpRecorderBackend(RecorderBackend):
                     base_monotonic_s=self._base_monotonic_s,
                     frame_arrival_monotonic_s=arrival_monotonic,
                 ):
-                    self._poll_queue.append(sample)
-                    self._rx_count += 1
+                    try:
+                        self._sample_queue.put_nowait(sample)
+                    except queue.Full:
+                        self._queue_overflow_count += 1
+                    else:
+                        self._rx_count += 1
 
-        self._capture_thread = threading.Thread(
-            target=capture_loop,
-            name="xcp-capture",
+        self._decode_thread = threading.Thread(
+            target=decode_loop,
+            name="xcp-daq-decode",
             daemon=True,
         )
-        self._capture_thread.start()
-
-    def _read_dto_frame(self) -> bytes | None:
-        # PR-4 integration point. pyxcp's Master DTO-reception API varies
-        # by version (``master.fetch`` on some forks, ``transport.fetch``
-        # or callback-driven on others). We try the documented seam, fall
-        # back to None so the capture loop keeps running. The bench-
-        # validation runbook (Task 19) records the exact pyxcp version
-        # observed on the target Windows host and tightens this method.
-        fetch = getattr(self._master, "fetch", None)
-        if callable(fetch):
-            return fetch(timeout=0.05)
-        transport = getattr(self._master, "transport", None)
-        transport_fetch = getattr(transport, "fetch", None)
-        if callable(transport_fetch):
-            return transport_fetch(timeout=0.05)
-        return None
-
-    def _shutdown_bus(self) -> None:
-        bus = self._bus
-        self._bus = None
-        if bus is None:
-            return
-        try:
-            bus.shutdown()
-        except Exception:
-            pass
+        self._decode_thread.start()
 
     def _cleanup_failed_start(self) -> None:
         try:
@@ -671,11 +655,11 @@ class VectorXcpRecorderBackend(RecorderBackend):
                 self._session.stop()
         except Exception:
             pass
-        try:
-            if self._master is not None:
-                self._master.disconnect()
-        except Exception:
-            pass
         self._session = None
         self._master = None
-        self._shutdown_bus()
+        if self._runtime is not None:
+            try:
+                self._runtime.close()
+            except Exception:
+                pass
+        self._runtime = None

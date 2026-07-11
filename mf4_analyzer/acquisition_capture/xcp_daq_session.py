@@ -7,7 +7,7 @@ from typing import Any
 
 from can_logger.p0.a2l_probe import MeasurementSummary
 from can_logger.p0.ifdata_xcp import IfDataXcp
-from mf4_analyzer.acquisition_capture.daq_map import DaqMap, build_daq_map
+from mf4_analyzer.acquisition_capture.daq_map import DaqMap, bind_first_pids, build_daq_map
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 from mf4_analyzer.acquisition_capture.xcp_auth import unlock_resources_if_needed
 
@@ -70,43 +70,69 @@ class XcpDaqSession:
             seed_and_key_dll=self._seed_and_key_dll,
         )
         self._check_daq_processor_info()
-        self._daq_map = build_daq_map(selected, self._ifdata, self._measurements)
+        layout = build_daq_map(selected, self._ifdata, self._measurements)
 
         try:
-            daq_lists = sorted({daq for daq, _odt in self._daq_map.entries})
+            daq_lists = sorted({daq for daq, _odt in layout.entries})
+            self._master.freeDaq()
+            self._master.allocDaq(len(daq_lists))
+            first_pid_by_daq: dict[int, int] = {}
             for daq_list in daq_lists:
                 odts = sorted(
-                    odt for daq, odt in self._daq_map.entries if daq == daq_list
+                    odt for daq, odt in layout.entries if daq == daq_list
                 )
-                self._master.allocDaq(daq_list)
                 self._master.allocOdt(daq_list, len(odts))
                 for odt in odts:
-                    entries = self._daq_map.entries[(daq_list, odt)]
+                    entries = layout.entries[(daq_list, odt)]
                     self._master.allocOdtEntry(daq_list, odt, len(entries))
                     for entry_index, entry in enumerate(entries):
                         self._master.setDaqPtr(daq_list, odt, entry_index)
-                        self._master.writeDaq(0xFF, entry.size, 0, entry.address)
+                        self._master.writeDaq(
+                            0xFF,
+                            entry.size,
+                            entry.address_extension,
+                            entry.address,
+                        )
+                mode = 0x10 if self._ifdata.daq_timestamp_size else 0x00
                 self._master.setDaqListMode(
-                    mode=0x10,
-                    daq=daq_list,
-                    event=self._daq_map.event_for_daq[daq_list],
-                    prescaler=1,
-                    priority=0,
+                    mode,
+                    daq_list,
+                    layout.event_for_daq[daq_list],
+                    1,
+                    0,
                 )
+                response = self._master.startStopDaqList(0x02, daq_list)
+                first_pid = getattr(response, "firstPid", response)
+                if not isinstance(first_pid, int):
+                    raise DaqAllocError(
+                        f"DAQ list {daq_list} returned non-integer firstPid: {first_pid!r}"
+                    )
+                first_pid_by_daq[daq_list] = first_pid
+            self._daq_map = bind_first_pids(layout, first_pid_by_daq)
         except Exception as exc:
+            self._best_effort_stop_disconnect()
             raise DaqAllocError(f"DAQ allocation failed: {exc}") from exc
 
         self._master.startStopSynch(0x01)
         self._started = True
 
     def stop(self) -> None:
-        if not self._started:
-            return
         try:
-            self._master.startStopSynch(0x00)
+            if self._started:
+                self._master.startStopSynch(0x00)
         finally:
             self._master.disconnect()
             self._started = False
+
+    def _best_effort_stop_disconnect(self) -> None:
+        try:
+            self._master.startStopSynch(0x00)
+        except Exception:
+            pass
+        try:
+            self._master.disconnect()
+        except Exception:
+            pass
 
     def _check_daq_processor_info(self) -> None:
         # Spec §5.2 step 5: cross-check ECU DAQ capability against the A2L

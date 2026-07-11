@@ -64,6 +64,9 @@ def test_windows_folder_build_script_vendors_native_acquisition_packages_without
     assert "--exclude-module" in text
     for module in ("pyxcp", "pya2l"):
         assert f'"--exclude-module", "{module}"' in text
+    assert "requirements-windows-acquisition.txt" in text
+    assert "verify_windows_acquisition_runtime.py" in text
+    assert "--acquisition-runtime-smoke" in text
 
 
 def test_windows_folder_build_script_excludes_matplotlib_and_scipy():

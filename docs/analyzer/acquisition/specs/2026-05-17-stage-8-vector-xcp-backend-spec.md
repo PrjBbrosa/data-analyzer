@@ -1,5 +1,9 @@
 # Stage 8 — Production Vector + XCP/DAQ Backend (Spec)
 
+> Historical only for real runtime, DAQ, DTO, lifecycle, packaging, and bench
+> acceptance. The approved July 11 pyxcp 0.29 readiness correction supersedes
+> those contracts; follow the current `runbooks/stage-8-pr4-bench.md`.
+
 **Author:** main Claude
 **Date:** 2026-05-17 (v2 — Codex adversarial-review errata)
 **Status:** Draft, pending user review

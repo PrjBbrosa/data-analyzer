@@ -69,7 +69,9 @@ class CaptureSessionMixin:
             self._status.showMessage(f"无法开始录制: {exc}")
             return False
 
-        self._stop_backend_best_effort(self._backend)
+        backend_started = bool(self._backend.status().started)
+        if not backend_started:
+            self._stop_backend_best_effort(self._backend)
         self._ring.drain()
         controller = CaptureController(
             config,
@@ -78,7 +80,10 @@ class CaptureSessionMixin:
             sample_tap=self._on_capture_samples,
         )
         try:
-            controller.start()
+            if backend_started:
+                controller.start_attached()
+            else:
+                controller.start()
         except Exception as exc:  # noqa: BLE001 - surface, stay idle
             logger.exception("capture session start failed")
             self._status.showMessage(f"无法开始录制: {exc}")
@@ -112,6 +117,9 @@ class CaptureSessionMixin:
             return
         if self._capture_controller is not None:
             return
+        if self._owns_vector_backend:
+            self._status.showMessage("Vector/XCP 选择已改变：请断开后重新连接以应用")
+            return
         selection = list(self._left_pane.current_selection())
         if not selection:
             selection = [SelectedMeasurement(name="DemoSignal")]
@@ -127,6 +135,8 @@ class CaptureSessionMixin:
 
     def _resume_idle_stream(self) -> None:
         """Best-effort restart of the idle live stream after review close."""
+        if self._backend.status().started:
+            return
         selection = (
             list(self._left_pane.current_selection())
             if hasattr(self, "_left_pane")

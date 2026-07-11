@@ -17,6 +17,7 @@ class OdtEntry:
     size: int
     datatype: str
     address: int
+    address_extension: int = 0
     scale_a: float = 1.0
     scale_b: float = 0.0
 
@@ -85,10 +86,12 @@ def build_daq_map(
         by_event.setdefault(sel.event, []).append(sel)
 
     event_number_by_name = {event.name: event.number for event in ifdata.available_events}
+    # PID values are assigned by the ECU only after SELECT.  Keep the packing
+    # map intentionally unbound here; decoding is impossible until
+    # ``bind_first_pids`` receives each real response.
     pid_to_odt: dict[int, tuple[int, int]] = {}
     entries: dict[tuple[int, int], tuple[OdtEntry, ...]] = {}
     event_for_daq: dict[int, int] = {}
-    next_pid = 0
 
     for daq_list, (event_name, event_selected) in enumerate(by_event.items()):
         if event_name not in event_number_by_name:
@@ -100,12 +103,10 @@ def build_daq_map(
         current: list[OdtEntry] = []
 
         def flush() -> None:
-            nonlocal current, odt_index, offset, next_pid
+            nonlocal current, odt_index, offset
             if not current:
                 return
             entries[(daq_list, odt_index)] = tuple(current)
-            pid_to_odt[next_pid] = (daq_list, odt_index)
-            next_pid += 1
             odt_index += 1
             offset = overhead
             current = []
@@ -129,6 +130,13 @@ def build_daq_map(
                     size=size,
                     datatype=datatype,
                     address=address,
+                    address_extension=int(getattr(measurement, "address_extension", 0)),
+                    scale_a=float(getattr(measurement, "scale_a", 1.0))
+                    if bool(getattr(measurement, "conversion_supported", True))
+                    else 1.0,
+                    scale_b=float(getattr(measurement, "scale_b", 0.0))
+                    if bool(getattr(measurement, "conversion_supported", True))
+                    else 0.0,
                 )
             )
             offset += size
@@ -138,4 +146,29 @@ def build_daq_map(
         pid_to_odt=pid_to_odt,
         entries=entries,
         event_for_daq=event_for_daq,
+    )
+
+
+def bind_first_pids(layout: DaqMap, first_pid_by_daq: Mapping[int, int]) -> DaqMap:
+    """Bind ECU-returned ``firstPid`` values to the pre-programmed ODT layout."""
+
+    pid_to_odt: dict[int, tuple[int, int]] = {}
+    for daq_list in sorted(layout.event_for_daq):
+        if daq_list not in first_pid_by_daq:
+            raise ValueError(f"DAQ list {daq_list} has no ECU firstPid response")
+        first_pid = int(first_pid_by_daq[daq_list])
+        if not 0 <= first_pid <= 0xFB:
+            raise ValueError(f"DAQ list {daq_list} firstPid out of DTO range: {first_pid}")
+        odts = sorted(odt for daq, odt in layout.entries if daq == daq_list)
+        for offset, odt in enumerate(odts):
+            pid = first_pid + offset
+            if pid > 0xFB:
+                raise ValueError(f"DAQ list {daq_list} PID range exceeds DTO range")
+            if pid in pid_to_odt:
+                raise ValueError(f"overlapping ECU PID assignment: {pid}")
+            pid_to_odt[pid] = (daq_list, odt)
+    return DaqMap(
+        pid_to_odt=pid_to_odt,
+        entries=layout.entries,
+        event_for_daq=layout.event_for_daq,
     )

@@ -6,7 +6,7 @@ import pytest
 
 from can_logger.p0.a2l_probe import MeasurementSummary
 from can_logger.p0.ifdata_xcp import DaqEventInfo, DaqProcessorInfo, IfDataXcp
-from mf4_analyzer.acquisition_capture.daq_map import build_daq_map
+from mf4_analyzer.acquisition_capture.daq_map import bind_first_pids, build_daq_map
 from mf4_analyzer.acquisition_capture.session import SelectedMeasurement
 
 
@@ -97,14 +97,16 @@ def test_single_event_three_measurements_pack_one_odt_when_max_dto_allows_it() -
 
     daq_map = build_daq_map(selected, _ifdata(max_dto=9), meas)
 
-    assert set(daq_map.pid_to_odt) == {0}
-    assert daq_map.pid_to_odt[0] == (0, 0)
+    assert daq_map.pid_to_odt == {}
     entries = daq_map.entries[(0, 0)]
     assert [entry.measurement_name for entry in entries] == ["a", "b", "c"]
     assert [entry.offset for entry in entries] == [3, 5, 7]
     assert entries[0].address == 0x1000
     assert entries[0].datatype == "UWORD"
     assert entries[0].size == 2
+
+    bound = bind_first_pids(daq_map, {0: 0x30})
+    assert bound.pid_to_odt == {0x30: (0, 0)}
 
 
 def test_multi_event_groups_into_separate_daq_lists() -> None:

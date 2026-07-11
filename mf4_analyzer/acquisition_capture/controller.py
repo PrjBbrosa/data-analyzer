@@ -105,6 +105,24 @@ class CaptureController:
         if self._running:
             raise RuntimeError("CaptureController already running")
         self._backend.start(self._config.selected)
+        self._start_recording(owns_backend=True)
+
+    def start_attached(self) -> None:
+        """Start MF4 recording on an already-connected live backend.
+
+        Cockpit owns the Vector/XCP session in connected-idle.  Record must
+        attach writer consumption to that stream rather than re-open CAN,
+        reconnect XCP, or reset the session time base.
+        """
+
+        if self._running:
+            raise RuntimeError("CaptureController already running")
+        if not self._backend.status().started:
+            raise RuntimeError("attached recording requires a started backend")
+        self._start_recording(owns_backend=False)
+
+    def _start_recording(self, *, owns_backend: bool) -> None:
+        self._owns_backend = owns_backend
         self._t_start = self._clock()
         self._t_stop = None
         self._running = True
@@ -194,10 +212,13 @@ class CaptureController:
         if not self._running:
             return
         self._running = False
-        try:
-            backend_status = self._backend.stop()
-        except Exception as exc:  # noqa: BLE001 - keep saving on backend error
-            self._warnings.append(f"backend.stop() failed: {exc}")
+        if self._owns_backend:
+            try:
+                backend_status = self._backend.stop()
+            except Exception as exc:  # noqa: BLE001 - keep saving on backend error
+                self._warnings.append(f"backend.stop() failed: {exc}")
+                backend_status = self._backend.status()
+        else:
             backend_status = self._backend.status()
         self._t_stop = self._clock()
         # Final drain.

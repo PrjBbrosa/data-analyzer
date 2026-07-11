@@ -55,6 +55,10 @@ class MeasurementSummary:
     unit: str
     conversion: str
     available_events: tuple[str, ...] = ()
+    address_extension: int = 0
+    scale_a: float = 1.0
+    scale_b: float = 0.0
+    conversion_supported: bool = True
 
 
 @dataclass(frozen=True)

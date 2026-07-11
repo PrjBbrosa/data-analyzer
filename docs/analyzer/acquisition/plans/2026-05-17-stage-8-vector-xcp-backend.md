@@ -1,5 +1,9 @@
 # Stage 8 — Vector + XCP/DAQ Backend Implementation Plan
 
+> Historical only for real runtime, DAQ, DTO, lifecycle, packaging, and bench
+> acceptance. The approved July 11 pyxcp 0.29 readiness correction supersedes
+> those contracts; follow the current `runbooks/stage-8-pr4-bench.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Revision history:**

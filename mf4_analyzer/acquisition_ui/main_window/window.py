@@ -942,12 +942,15 @@ class CockpitMainWindow(
         # was removed with the capture right pane (B-4); recording health now
         # flows to the REC chip / bottom facts via ``_poll_health``.
         selection = self._left_pane.current_selection()
-        # Demo mode: no real A2L event capacity — fabricate a
-        # generous mapping so the DAQ row reads green when at least
-        # one measurement has an event.
-        event_capacity = {
-            m.event: 32 for m in selection if m.event is not None
-        }
+        if self._owns_vector_backend and self._ifdata_xcp is not None:
+            event_capacity = {
+                event.name: event.max_odt_entries
+                for event in self._ifdata_xcp.available_events
+            }
+        elif self._allow_fake_backend:
+            event_capacity = {m.event: 32 for m in selection if m.event is not None}
+        else:
+            event_capacity = {}
         disk_free_bytes = self._estimate_disk_free_bytes()
         if hasattr(self, "_health_strip"):
             self._health_strip.apply_preflight(

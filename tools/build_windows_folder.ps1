@@ -39,6 +39,8 @@ if ($env:OS -ne "Windows_NT") {
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $EntryScript = Join-Path $RepoRoot "MF4 Data Analyzer V1.py"
 $Requirements = Join-Path $RepoRoot "requirements.txt"
+$AcquisitionRequirements = Join-Path $RepoRoot "requirements-windows-acquisition.txt"
+$RuntimeVerifier = Join-Path $RepoRoot "scripts\verify_windows_acquisition_runtime.py"
 $StyleQss = Join-Path $RepoRoot "mf4_analyzer\ui_kit\style.qss"
 $IconsDir = Join-Path $RepoRoot "assets\icons"
 $AppIcon = Join-Path $IconsDir "tracelab.ico"
@@ -54,7 +56,7 @@ $OutputDir = Join-Path $DistDir $AppName
 $ExePath = Join-Path $OutputDir "$AppName.exe"
 # Default output: dist\TraceLab7.5\TraceLab7.5.exe (override with -Version or -AppName)
 
-foreach ($RequiredPath in @($EntryScript, $Requirements, $StyleQss, $RuntimeHookPyxcp)) {
+foreach ($RequiredPath in @($EntryScript, $Requirements, $AcquisitionRequirements, $RuntimeVerifier, $StyleQss, $RuntimeHookPyxcp)) {
     if (-not (Test-Path $RequiredPath)) {
         throw "Required file not found: $RequiredPath"
     }
@@ -68,8 +70,13 @@ if (-not (Test-Path $VenvPython)) {
 if (-not $SkipInstall) {
     & $VenvPython -m pip install --upgrade pip setuptools wheel
     & $VenvPython -m pip install -r $Requirements
+    & $VenvPython -m pip install -r $AcquisitionRequirements
     & $VenvPython -m pip install --upgrade pyinstaller qtawesome
 }
+
+New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot "evidence\vector-xcp") | Out-Null
+& $VenvPython $RuntimeVerifier --json (Join-Path $RepoRoot "evidence\vector-xcp\build-api-contract.json")
+if ($LASTEXITCODE -ne 0) { throw "Pinned Vector/XCP runtime contract failed before packaging" }
 
 if (-not $KeepPrevious) {
     foreach ($PathToRemove in @($OutputDir, $WorkDir, $SpecDir)) {
@@ -215,6 +222,9 @@ $PyInstallerArgs += $EntryScript
 if (-not (Test-Path $ExePath)) {
     throw "Build finished but exe was not found: $ExePath"
 }
+
+& $ExePath --acquisition-runtime-smoke --json (Join-Path $RepoRoot "evidence\vector-xcp\packaged-runtime-smoke.json")
+if ($LASTEXITCODE -ne 0) { throw "Packaged Vector/XCP runtime smoke failed" }
 
 Write-Step "Build output"
 Write-Host "Folder: $OutputDir"
